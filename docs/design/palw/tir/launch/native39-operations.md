@@ -2,19 +2,24 @@
 
 Status: **procedures for a dormant lane.** Nothing here is enabled on any preset. Every fence named below is `None` on mainnet,
 testnet-10/11/12 and devnet/simnet, collapsed from `Some(never())`, hashed Some-only into both fork fingerprints, and refused
-armed by its `validate_*` function. No line in this document, and no tool it names, reports PASS. All of the code it refers to
+armed on every shipping network by its `validate_*` function. No line in this document, and no tool it names, reports PASS. All of the code it refers to
 is unverified source (no build, no run) until the consolidated validation phase.
 
 ## 1. Activation policy (explicit, OFF)
 
 | fence (Params field) | lane | refusal when armed |
 | --- | --- | --- |
-| `palw_native_execution_v39` | stage actions 41–72 (source, class, consent, Fund, Commit, filings, Final, GC 53, transport 54/55, release 71/72) | `validate_palw_native_execution_v39` |
-| `palw_native_mining_v39` | stage actions 73–79 and the `PNR9` receipt-block carriage (algo 7) | `validate_palw_native_mining_v39` (always refuses) |
+| `palw_native_execution_v39` | stage actions 41–72 (source, class, consent, Fund, Commit, filings, Final, GC 53, transport 54/55, release 71/72) | `validate_palw_native_execution_v39`: isolated calibration profile only, or a pinned `PALW_NATIVE_EXECUTION_MEASURED_RECORDS_V39` record for the exact policies (EMPTY) |
+| `palw_native_mining_v39` | stage actions 73–79 and the `PNR9` receipt-block carriage (algo 7) | `validate_palw_native_mining_v39`: every prerequisite below armed at or below it, then the isolated calibration profile or a pinned `PALW_NATIVE_MINING_MEASURED_RECORDS_V39` record for the exact policy (EMPTY) |
 | Final27 + OPV (`palw_native_final_v27`, `palw_panel_free_v1`) | prerequisites of both | their own validators |
 | RFC-0018 Gate C (`rfc0018_v1` mirror, table 136) | claim-level drawn approval for every mining claim | `validate_palw_rfc0018_v1` |
-| ADR-0176 bond budget (`palw_bond_budget_v1`, export cap 0.51 `palw_bond_budget_export_cap_v1`) | Q/B/R/F, exposure, hold, allocation clip | `validate_palw_bond_budget_v1` |
-| ADR-0179 model tier (`palw_model_tier_v1`, on integ/decisions-1015) | c_m = 1.0 genesis/annual-fork, 0.3 registered; applied once in A_m | `validate_palw_model_tier_v1` |
+| ADR-0176 bond budget (`palw_bond_budget_v1`; its policy's `export_cap_permille` ≤ 0.51) | Q/B/R/F, exposure, hold, allocation clip | `validate_palw_bond_budget_v1` |
+| ADR-0179 model tier (`palw_model_tier_v1`) | c_m = 1.0 genesis/annual-fork, 0.3 registered; applied once in A_m | `validate_palw_model_tier_v1` |
+
+**testnet-12 DAA 14,000 (release plan 2026-10-15):** both owning39 fences ship dormant unless a reviewed change pins a
+measured-value record for the exact policy before the release candidate is cut. The record carries the digests of the evidence in
+§6 and of an independent review; the validators compare the policy root and network, nothing else. With the record lists empty
+(their state at this commit) the t12 preset keeps both fences `None`, and arming them is refused.
 
 Arming requires a release that changes the presets and both fingerprints together, a drill that crosses the fence on the binary
 being shipped, and the evidence in §6. A local qualified flag, an environment variable or a fixed PASS file is **not** an input

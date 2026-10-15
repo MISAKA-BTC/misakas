@@ -18,7 +18,7 @@
 //!
 //! **User decisions 2026-10-15 (rounds 4–5).** There is no model-level review, exam, probation, renewal or promotion; a
 //! registered model is permanently tier 0.3 from registration and genesis/annual-fork models are 1.0 — decided ONLY by
-//! `palw_model_tier_v1` (being implemented on integ/decisions-1015) and applied ONCE in the allocation weight `A_m = c_m·S̄_m^1.5`
+//! `palw_model_tier_v1` (ADR-0179) and applied ONCE in the allocation weight `A_m = c_m·S̄_m^1.5`
 //! by the budget engine, never here and never per block. Drawn-verifier approval exists only per claim (RFC-0018 Gate C).
 //! Nothing in this module grants a model genesis-equivalent standing.
 use super::*;
@@ -57,19 +57,19 @@ fn route(builder: &TransitionBuilder<'_>) -> Result<&PalwKernelRouteStateV1, Pal
     builder.state.kernel_route.as_ref().ok_or_else(|| bad("mining39 kernel route absent"))
 }
 
-/// The ONE call site of a native model's tier (user decisions 2026-10-15, rounds 4–5): the tier is `palw_model_tier_v1`'s
-/// (integ/decisions-1015), consumed for reporting only — the budget engine applies it once in `A_m`. Until that function lands
-/// this pending source reads every v39 registration as a registered model (300 permille) and NEVER as genesis/annual-fork.
+/// The ONE call site of a native model's tier (user decisions 2026-10-15, rounds 4–5): ADR-0179's `palw_model_tier_v1` and its
+/// coefficient, consumed for reporting only — the budget engine applies it once in `A_m`, never here and never per block. A v39
+/// mining model id is neither a registered class nor a model line, so the tier function reads it as `Registered` (0.3 past the
+/// tier fence, 1.0 below it as for every model, A-2); only a genesis or annual-fork listing is ever the approved tier.
 pub(super) trait NativeModelTierSourceV39 {
     fn tier_permille(&self, state: &PalwChainStateV2, params: &PalwStateParamsV2, model: &Hash64) -> u16;
 }
-pub(super) struct PendingModelTierV39;
-impl NativeModelTierSourceV39 for PendingModelTierV39 {
-    fn tier_permille(&self, _: &PalwChainStateV2, _: &PalwStateParamsV2, _: &Hash64) -> u16 {
-        // Swap point (ADR-0179, origin/integ/decisions-1015 `consensus/core/src/palw_model_tier_v1.rs:314`, not yet on
-        // integ/rfc02-rfc06-12-g14): `crate::palw_model_tier_v1::palw_model_tier_v1(state, params, model)` and its permille.
-        // A v39 registration is never the approved 1.0 tier here: only a genesis or annual-fork listing is.
-        300
+pub(super) struct ModelTierV1SourceV39;
+impl NativeModelTierSourceV39 for ModelTierV1SourceV39 {
+    fn tier_permille(&self, state: &PalwChainStateV2, params: &PalwStateParamsV2, model: &Hash64) -> u16 {
+        let daa = state.last_point().map_or(0, |p| p.daa_score);
+        let tier = crate::palw_model_tier_v1::palw_model_tier_v1(state, params, model);
+        crate::palw_model_tier_v1::palw_model_tier_coefficient_permille_v1(params.model_tier_v1(), tier, daa).min(1000) as u16
     }
 }
 
@@ -641,7 +641,7 @@ pub(super) fn native_mining_claim_live_v39(state: &PalwChainStateV2, mining_clai
     let Some(r) = state.kernel_route.as_ref() else { return false };
     claim(r, &mining_claim.as_bytes()).is_ok_and(|c| c.closed.is_none() && master_final(r, &c.master).is_some_and(|f| f.root() == c.master_final))
 }
-/// Readonly view for RPC/SDK: a model, its tier as `palw_model_tier_v1` reports it (pending source until it lands), seats.
+/// Readonly view for RPC/SDK: a model and its tier coefficient (permille) as `palw_model_tier_v1` reports it.
 pub fn palw_native_mining_model_view_v39(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -649,6 +649,6 @@ pub fn palw_native_mining_model_view_v39(
 ) -> Option<(NativeMiningModelRecordV39, u16)> {
     let r = state.kernel_route.as_ref()?;
     let m = model(r, model_id).ok()?;
-    let tier = PendingModelTierV39.tier_permille(state, params, &Hash64::from_bytes(*model_id));
+    let tier = ModelTierV1SourceV39.tier_permille(state, params, &Hash64::from_bytes(*model_id));
     Some((m, tier))
 }

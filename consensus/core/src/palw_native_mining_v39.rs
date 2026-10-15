@@ -519,26 +519,73 @@ impl crate::config::params::Params {
             .is_some_and(|f| f.activation != crate::config::params::ForkActivation::never() && f.activation.is_active(daa))
             && self.palw_native_execution_active_at_v39(daa)
     }
-    /// Refused whenever armed: shipping activation needs the measured A6/A8,
-    /// independent native Final/redemption, the seven-model launch evidence
-    /// and a user decision. The isolated validation profile cannot arm it
-    /// either; a local qualified flag never bypasses this.
+    /// **The measured-value gate** (testnet-12 DAA 14,000 release plan: no fence arms on provisional values). Armed, the policy
+    /// must be well formed, every lane it rides must be armed at or below it (native39 with Final27 and funded execution, the OPV
+    /// fence, RFC-0018 Gate C, the ADR-0176 bond budget and ADR-0179's tier fence), and — on every network but the isolated
+    /// calibration profile, which exists to take the measurements — the exact policy must match a pinned
+    /// [`PALW_NATIVE_MINING_MEASURED_RECORDS_V39`] record whose evidence (A6/A8 windows, independent native Final/redemption,
+    /// Gate C m/k, ADR-0176 Q/B/R/F, the initial-seven launch run) and independent review digests are both present. That list is
+    /// EMPTY, so every shipping network refuses it armed; a reviewed source change pins a record, never a local flag.
     pub fn validate_palw_native_mining_v39(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::config::params::ForkActivation;
         use crate::palw_mode_v2::PalwModeV2Error;
-        let Some(f) =
-            self.palw_native_mining_v39.as_ref().filter(|f| f.activation != crate::config::params::ForkActivation::never())
-        else {
+        let Some(f) = self.palw_native_mining_v39.as_ref().filter(|f| f.activation != ForkActivation::never()) else {
             return Ok(());
         };
         let domain =
             crate::palw_attempt_v2::palw_network_domain_v2_for(self.net.to_string().as_bytes(), Some(self.genesis.hash)).as_bytes();
         f.policy.check(domain).map_err(|_| PalwModeV2Error::Invalid("native39 mining policy/premise is invalid"))?;
-        Err(PalwModeV2Error::Invalid(
-            "native39 mining (receipts, block opportunity, coinbase, Final weight) is not activatable: it requires measured A6/A8, \
-             independent native Final/redemption, RFC-0018 Gate C and ADR-0176 budget activation, palw_model_tier_v1, and the \
-             initial-seven launch evidence, then a user decision",
-        ))
+        let at = f.activation.daa_score();
+        let below = |a: Option<ForkActivation>| a.filter(|a| *a != ForkActivation::never()).is_some_and(|a| a.daa_score() <= at);
+        if !below(self.palw_native_execution_v39.as_ref().map(|f| f.activation))
+            || !below(self.palw_native_final_v27.as_ref().map(|f| f.activation))
+            || !below(self.palw_funded_execution_v11.as_ref().map(|f| f.activation))
+            || !below(self.palw_panel_free_v1.as_ref().map(|f| f.activation))
+            || !below(self.palw_independently_work_certified_v1)
+            || !below(self.palw_bond_budget_v1.as_ref().map(|f| f.activation))
+            || !below(self.palw_model_tier_v1.as_ref().map(|f| f.activation))
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_native_mining_v39 needs native39 (with Final27, funded execution, OPV), RFC-0018 Gate C, the ADR-0176 bond \
+                 budget and palw_model_tier_v1 armed at or below it",
+            ));
+        }
+        if self.has_isolated_native_calibration_v34() {
+            return Ok(());
+        }
+        if !palw_native_mining_policy_measured_v39(&f.policy, PALW_NATIVE_MINING_MEASURED_RECORDS_V39) {
+            return Err(PalwModeV2Error::Invalid(
+                "native39 mining (receipts, block opportunity, coinbase, Final weight) has no pinned measured-value record for this \
+                 exact policy (PALW_NATIVE_MINING_MEASURED_RECORDS_V39 is empty): it stays dormant",
+            ));
+        }
+        Ok(())
     }
+}
+
+/// **A measured-value record for the owning39 mining policy**: the exact policy (by root, on its network) the measurements selected,
+/// with the digests of the evidence (A6/A8 two-window run, independent native Final/redemption replays, Gate C m/k, ADR-0176
+/// Q/B/R/F and reservations, the initial-seven launch run) and of its independent review. Pinned only by a reviewed change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwNativeMiningMeasuredRecordV39 {
+    pub network_domain: Digest,
+    pub policy_root: Digest,
+    pub evidence_digest: [u8; 32],
+    pub review_digest: [u8; 32],
+    pub harness: &'static str,
+}
+/// **The pinned records — EMPTY.** Nothing is measured; arming `palw_native_mining_v39` on a shipping network is refused.
+pub const PALW_NATIVE_MINING_MEASURED_RECORDS_V39: &[PalwNativeMiningMeasuredRecordV39] = &[];
+/// The gate: the policy's network and root equal a pinned record whose evidence and review digests are present and distinct.
+pub fn palw_native_mining_policy_measured_v39(policy: &NativeMiningPolicyV39, records: &[PalwNativeMiningMeasuredRecordV39]) -> bool {
+    let root = policy.root();
+    records.iter().any(|r| {
+        r.network_domain == policy.network_domain
+            && r.policy_root == root
+            && r.evidence_digest != [0; 32]
+            && r.review_digest != [0; 32]
+            && r.evidence_digest != r.review_digest
+    })
 }
 
 /// Action 73 — register an ordinary native39 mining model over a registered
@@ -889,5 +936,25 @@ mod tests {
         assert!(m.admits_claims(110, 10), "no seat quorum, exam or approval gates a model");
         m.retired = Some(120);
         assert!(!m.admits_claims(130, 10));
+    }
+    #[test]
+    fn the_measured_value_gate_needs_an_exact_pinned_reviewed_record() {
+        let p = policy();
+        assert!(PALW_NATIVE_MINING_MEASURED_RECORDS_V39.is_empty(), "nothing is measured: shipping networks refuse it armed");
+        assert!(!palw_native_mining_policy_measured_v39(&p, PALW_NATIVE_MINING_MEASURED_RECORDS_V39));
+        let good = PalwNativeMiningMeasuredRecordV39 {
+            network_domain: p.network_domain,
+            policy_root: p.root(),
+            evidence_digest: [1; 32],
+            review_digest: [2; 32],
+            harness: "fixture",
+        };
+        assert!(palw_native_mining_policy_measured_v39(&p, &[good]));
+        let mut other = p.clone();
+        other.weight_per_quantum += 1;
+        assert!(!palw_native_mining_policy_measured_v39(&other, &[good]), "a different policy is not the measured one");
+        assert!(!palw_native_mining_policy_measured_v39(&p, &[PalwNativeMiningMeasuredRecordV39 { review_digest: [0; 32], ..good }]));
+        assert!(!palw_native_mining_policy_measured_v39(&p, &[PalwNativeMiningMeasuredRecordV39 { review_digest: [1; 32], ..good }]));
+        assert!(!palw_native_mining_policy_measured_v39(&p, &[PalwNativeMiningMeasuredRecordV39 { network_domain: [8; 64], ..good }]));
     }
 }
