@@ -105,6 +105,31 @@ pub fn native_kernel_parameter_auth_requests_v4(
     Ok(q.bytes_v1())
 }
 
+/// Full tensor reconstruction/commitment workspace for one actual registered
+/// immutable parameter. The owner must retain this request through the returned
+/// Tensor's lifetime; row decode/authentication and transport bytes are distinct
+/// reservations. This is a typed logical request, not physical RAM approval.
+pub fn native_kernel_parameter_tensor_requests_v4(
+    spec: &crate::palw_kernel_parameter_material_v4::PalwKernelParameterSpecV4<'_>,
+) -> Result<u64, NativeCoverageV1> {
+    let shape = &spec.declaration.shape;
+    if shape.len() > misaka_palw_tir::types::MAX_RANK || shape.iter().any(|d| *d == 0) || !matches!(spec.suite, 2 | 3) {
+        return Err(bad("parameter has no supported actual tensor geometry/commitment suite"));
+    }
+    let n = shape_product(shape.iter().copied().map(u64::from))?;
+    let last = shape.last().copied().map(u64::from);
+    let before = shape.iter().rev().nth(1).copied().map(u64::from);
+    let row_len = last.unwrap_or(n);
+    let rows = if shape.len() <= 1 { 1 } else { n / row_len };
+    let tiles = if spec.suite == 3 { row_len.div_ceil(misaka_palw_kernel::merkle3::TILE_V3) } else { 1 };
+    if spec.rows != rows || spec.row_len != row_len || spec.row_tiles != tiles {
+        return Err(bad("parameter spec does not match its actual declaration"));
+    }
+    let mut q = TirNativeRequestsV1::new();
+    tensor(&mut q, shape.len() as u64, n, last, before, spec.suite == 3)?;
+    Ok(q.bytes_v1())
+}
+
 fn occurrence_block<'a>(
     p: &'a misaka_palw_tir::program::TirProgramV1,
     occurrence: u16,
@@ -280,6 +305,20 @@ fn layout(
         q.vec_v1::<u64>(parts)?; // returned part bytes
     }
     Ok(())
+}
+
+/// One of the assembler's two independently live greedy layout constructions.
+/// Keep the private layout implementation beside its actual type inventory.
+pub(super) fn assembly_layout_requests_v4(
+    q: &mut TirNativeRequestsV1,
+    program: &misaka_palw_tir::program::TirProgramV1,
+    positions: u64,
+) -> Result<(), NativeCoverageV1> {
+    q.add_v1(
+        misaka_palw_kernel::scope::native_material_mask_requests_v4(program)
+            .ok_or_else(|| bad("actual assembly material-mask workspace overflows"))?,
+    )?;
+    layout(q, &program.blocks, &program.schedule, program.history_bound, positions, true)
 }
 
 fn selected_material_requests(ledger: &misaka_palw_kernel::ledger::KernelLedgerV1, claim: &Digest) -> Result<u64, NativeCoverageV1> {

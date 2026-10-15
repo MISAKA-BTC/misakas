@@ -132,6 +132,9 @@ pub struct IbdFlow {
     pub(super) body_only_ibd_permitted: bool,
     header_format: HeaderFormat,
     pub(super) native_palw_receive_lease_v1: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+    /// Retry on the existing bounded tick even if the peer's tip did not move.
+    /// This is a wakeup hint; every attempt redoes native negotiation/admission.
+    native_capacity_retry_v1: Option<Arc<Header>>,
 
     // Receives relay blocks from relay flow which are out of orphan resolution range and hence trigger IBD
     relay_receiver: JobReceiver<Block>,
@@ -206,6 +209,7 @@ impl IbdFlow {
             header_format,
             connection_generation: verification_trace::next_connection_generation(),
             native_palw_receive_lease_v1: None,
+            native_capacity_retry_v1: None,
             active_recovery_permit: None,
             earned_adoption_permit: Mutex::new(None),
             challenger_receiver,
@@ -238,7 +242,11 @@ impl IbdFlow {
                 _ = tokio::time::sleep(VALIDATED_CANDIDATE_RECHECK) => {
                     self.serve_pending_nomination().await;
                     self.reconsider_validated_candidates().await;
-                    continue;
+                    if let Some(header) = self.native_capacity_retry_v1.clone() {
+                        header
+                    } else {
+                        continue;
+                    }
                 }
                 block = self.relay_receiver.recv() => match block {
                     Ok(block) => block.header.clone(),
@@ -310,7 +318,8 @@ impl IbdFlow {
                     self.ctx.note_preferred_candidate_claimed();
                 }
 
-                let outcome = self.ibd(relay_header).await;
+                let outcome = self.ibd(relay_header.clone()).await;
+                self.native_capacity_retry_v1 = None;
                 // The permit covered exactly this attempt, and so did the hold on the review.
                 if self.active_recovery_permit.is_some() {
                     self.ctx.chain_participation().end_decision();
@@ -362,6 +371,17 @@ impl IbdFlow {
                         // the server returns as a matter of course — it holds one snapshot, keyed
                         // to its own pruning point, so any peer whose pruning point advanced during
                         // a multi-minute header sync answers `found: false` to an honest request.
+                        if e.is_local_native_resource_unavailable() {
+                            if self.ctx.finish_ibd_after_local_resource_failure() {
+                                return Err(e);
+                            }
+                            self.native_capacity_retry_v1 = Some(relay_header);
+                            info!(
+                                "Keeping peer {} after local native resource refusal; incomplete adopted import stays held and retryable",
+                                self.router
+                            );
+                            continue;
+                        }
                         let sidecar_shortfall = matches!(e, ProtocolError::PruningSidecarUnavailable(..));
                         if self.ctx.finish_ibd_after_failure_kind(sidecar_shortfall) {
                             warn!(
@@ -380,13 +400,6 @@ impl IbdFlow {
                                 FlowContext::SIDECAR_SHORTFALL_TOLERANCE
                             );
                             return Err(e);
-                        }
-                        if e.is_local_native_resource_unavailable() {
-                            info!(
-                                "Keeping peer {} after local native resource refusal; no verdict on its chain was produced",
-                                self.router
-                            );
-                            continue;
                         }
                         // While the chain is still under review, a failed IBD does not cost the peer
                         // its connection.

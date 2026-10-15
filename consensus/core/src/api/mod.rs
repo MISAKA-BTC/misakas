@@ -568,18 +568,26 @@ pub trait ConsensusApi: Send + Sync {
         Err("native finalized recovery clock unavailable".into())
     }
     fn palw_kernel_producer_candidate_v4(
-        &self, _checkpoint: BlockHash, _producer: crate::palw_state_v2::PalwBondKeyV2,
-        _commit: &misaka_palw_kernel::route::SaltedCommitV1, _salt: &[u8;64], _commit_daa:u64, _expires_daa:u64,
-    ) -> Result<crate::palw_kernel_producer_candidate_v4::PalwKernelProducerCandidateOwnedV4,String> {
+        &self,
+        _checkpoint: BlockHash,
+        _producer: crate::palw_state_v2::PalwBondKeyV2,
+        _commit: &misaka_palw_kernel::route::SaltedCommitV1,
+        _salt: &[u8; 64],
+        _commit_daa: u64,
+        _expires_daa: u64,
+    ) -> Result<crate::palw_kernel_producer_candidate_v4::PalwKernelProducerCandidateOwnedV4, String> {
         Err("own-node kernel producer candidate unavailable".into())
     }
-    fn palw_kernel_material_consent_accepted_v4(&self,_root:Hash64,_consent:Hash64)->Result<bool,String>{
+    fn palw_kernel_material_consent_accepted_v4(&self, _root: Hash64, _consent: Hash64) -> Result<bool, String> {
         Err("own-node current accepted kernel consent unavailable".into())
     }
     fn palw_kernel_material_admission_accepted_v4(
-        &self, _request:&crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
-        _draft:&crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
-    )->Result<bool,String>{Err("own-node exact accepted kernel material admission unavailable".into())}
+        &self,
+        _request: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+        _draft: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+    ) -> Result<bool, String> {
+        Err("own-node exact accepted kernel material admission unavailable".into())
+    }
     fn palw_kernel_material_ingress_v4(
         &self,
         _checkpoint: BlockHash,
@@ -589,14 +597,33 @@ pub trait ConsensusApi: Send + Sync {
     }
     fn palw_kernel_material_context_authority_v4(
         &self,
-        _context:&crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
-        _capsule:&crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
-        _provider:crate::palw_state_v2::PalwBondKeyV2,_pubkey:&[u8],
-    )->Result<(),String>{Err("current native kernel material authority unavailable".into())}
+        _context: &crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        _capsule: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+        _pubkey: &[u8],
+    ) -> Result<(), String> {
+        Err("current native kernel material authority unavailable".into())
+    }
     fn palw_material_generation_authority_v4(
-        &self,_root:Hash64,_consent:Hash64,_provider:crate::palw_state_v2::PalwBondKeyV2,
-        _scope:&crate::palw_material_capacity_v1::PalwMaterialScopeV1,
-    )->Result<(),String>{Err("current native material generation authority unavailable".into())}
+        &self,
+        _root: Hash64,
+        _consent: Hash64,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+        _scope: &crate::palw_material_capacity_v1::PalwMaterialScopeV1,
+    ) -> Result<(), String> {
+        Err("current native material generation authority unavailable".into())
+    }
+    fn palw_kernel_material_query_authority_v4(
+        &self,
+        _query: &crate::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        _requester: crate::palw_state_v2::PalwBondKeyV2,
+        _pubkey: &[u8],
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4>,
+        String,
+    > {
+        Err("own native material query authority unavailable".into())
+    }
     fn palw_native_recovery_session_quote_v4(
         &self,
         _checkpoint: Option<BlockHash>,

@@ -21,7 +21,13 @@ impl NativeTransitionReservationV1 {
         let requests = value_requests_v1(parent)?;
         let owner = NativeRetainedV1::try_from_clone_v1(parent)?;
         let (value, lease) = owner.into_parts_v1();
-        Ok((value, Self { lease, requests }))
+        let mut construction = Self { lease, requests };
+        // EXEC's native approval view uses one exact-size 64/65-byte lookup
+        // Vec at a time. Keep its maximum scratch live for this transition,
+        // before any admission/tick/Final-deadline read can allocate that key.
+        // Fixed prefix decoding and raw enrollment hashing allocate no body.
+        construction.grow_v1(crate::palw_exec_v2_verify::PALW_EXEC_APPROVAL_KEY_BYTES_V1 as u64)?;
+        Ok((value, construction))
     }
     pub(crate) fn grow_v1(&mut self, additional: u64) -> Result<(), NativeCoverageV1> {
         if self.lease.is_none() && !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {

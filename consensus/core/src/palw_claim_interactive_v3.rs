@@ -124,7 +124,9 @@ impl PalwPaidClaimRoundV3 {
         Ok(())
     }
     pub fn complete(&self) -> bool {
-        self.lock.as_ref().is_some_and(|l| l.source_valid && self.receipts.len() >= l.quorum as usize)
+        self.lock.as_ref().is_some_and(|l| {
+            l.source_valid && l.quorum > 0 && l.seats.len() >= l.quorum as usize && self.receipts.len() >= l.quorum as usize
+        })
     }
 }
 /// Common authenticated source adapter for initial and staged contexts. Never

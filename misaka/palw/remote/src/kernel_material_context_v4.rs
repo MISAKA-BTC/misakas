@@ -423,6 +423,29 @@ impl KernelMaterialContextArchiveV4 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct TestDir(PathBuf);
+    impl TestDir {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            loop {
+                let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!("misaka-kernel-context-v4-test-{}-{id}", std::process::id()));
+                match fs::create_dir(&path) {
+                    Ok(()) => return Self(path),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => panic!("owned test directory: {e}"),
+                }
+            }
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
     fn limits() -> PalwKernelMaterialContextLimitsV4 {
         PalwKernelMaterialContextLimitsV4 { max_encoded_bytes: 1 << 20, max_heap_bytes: 1 << 20 }
     }
@@ -443,7 +466,7 @@ mod tests {
     }
     #[test]
     fn metadata_reopen_preflights_embedded_context_before_borsh() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = TestDir::new();
         let file = dir.path().join("owned.context");
         let snapshot = Snapshot { version: 4, rows: BTreeMap::from([(Hash64::from_bytes([1; 64]), vec![0xff; 8])]) };
         fs::write(&file, borsh::to_vec(&snapshot).unwrap()).unwrap();
@@ -451,7 +474,7 @@ mod tests {
     }
     #[test]
     fn fixed_expiry_intent_reopens_without_becoming_a_gc_authority() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = TestDir::new();
         let file = dir.path().join("owned.context");
         let consent = Hash64::from_bytes([1; 64]);
         let root = Hash64::from_bytes([2; 64]);
@@ -469,7 +492,7 @@ mod tests {
     }
     #[test]
     fn metadata_never_invents_a_default_capacity() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = TestDir::new();
         assert!(
             KernelMaterialContextArchiveV4::open(
                 &dir.path().join("owned.context"),

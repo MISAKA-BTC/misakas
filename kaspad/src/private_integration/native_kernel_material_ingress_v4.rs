@@ -79,7 +79,7 @@ impl LoopbackNativeProviderV3 {
         &self,
         request: &ProviderTransportRequestV1,
     ) -> Result<(Response, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>), String> {
-        preflight_native_value_v1::<Request>(&request.body, request.body.len() as u64).map_err(|e| e.to_string())?;
+        preflight_native_value_v1::<Request>(&request.body[..], request.body.len() as u64).map_err(|e| e.to_string())?;
         let r =
             retain_native_value_decode_v1(&request.body, || borsh::from_slice::<Request>(&request.body)).map_err(|e| e.to_string())?;
         let api = self.consensus_manager.consensus().unguarded_session_blocking();
@@ -237,14 +237,14 @@ impl AuthenticatedSocketExchangeV3 {
         socket.set_write_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3)).map_err(|e| e.to_string())?;
         write_frame_v3(&mut socket, &borsh::to_vec(&signed).map_err(|e| e.to_string())?)?;
         let frame = read_frame_capped_v4(&mut socket, RESPONSE_CAP)?;
-        preflight_native_value_v1::<ProviderTransportResponseV1>(&frame, frame.len() as u64).map_err(|e| e.to_string())?;
+        preflight_native_value_v1::<ProviderTransportResponseV1>(&frame[..], frame.len() as u64).map_err(|e| e.to_string())?;
         let response = retain_native_value_decode_v1(&frame, || borsh::from_slice::<ProviderTransportResponseV1>(&frame))
             .map_err(|e| e.to_string())?;
         let responders = provider_transport_verify_response_v1(&response, &signed.header, &keys, &self.policy, now_unix_ms())?;
         if responders.iter().ne(material.intent.providers.iter()) {
             return Err("kernel ingress partial authenticated roster".into());
         }
-        preflight_native_value_v1::<Response>(&response.body, response.body.len() as u64).map_err(|e| e.to_string())?;
+        preflight_native_value_v1::<Response>(&response.body[..], response.body.len() as u64).map_err(|e| e.to_string())?;
         retain_native_value_decode_v1(&response.body, || borsh::from_slice::<Response>(&response.body)).map_err(|e| e.to_string())
     }
     pub(super) fn ingest_kernel_v4(&self, material: &Material, ingress: &Ingress) -> Result<(), String> {

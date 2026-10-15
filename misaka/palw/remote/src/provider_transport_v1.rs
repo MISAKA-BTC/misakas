@@ -50,6 +50,8 @@ pub enum ProviderTransportPurposeV1 {
     /// Producer-signed actual kernel work and full typed material, followed by
     /// atomic 240/242 FundedEnroll. Old native Ready/enrollment are unchanged.
     KernelMaterialIngressV4,
+    /// Read one already-retained complete kernel unit; no new credit or liability.
+    KernelMaterialQueryV4,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -383,6 +385,19 @@ mod tests {
     }
 
     #[test]
+    fn appended_kernel_query_preserves_previous_purpose_bytes() {
+        for (value, tag) in [
+            (ProviderTransportPurposeV1::NativeReadyV3, 0u8),
+            (ProviderTransportPurposeV1::RecoveryEnrollmentV4, 1),
+            (ProviderTransportPurposeV1::KernelMaterialIngressV4, 2),
+            (ProviderTransportPurposeV1::KernelMaterialQueryV4, 3),
+        ] {
+            assert_eq!(borsh::to_vec(&value).unwrap(), [tag]);
+            assert_eq!(borsh::from_slice::<ProviderTransportPurposeV1>(&[tag]).unwrap(), value);
+        }
+        assert!(borsh::from_slice::<ProviderTransportPurposeV1>(&[4]).is_err());
+    }
+    #[test]
     fn a_signed_request_verifies_once_and_every_tamper_or_replay_is_refused() {
         let executor = key(1);
         let policy = ProviderTransportPolicyV1::new(Hash64::from_u64_word(1), 1 << 20);
@@ -457,7 +472,7 @@ impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for Provide
     ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
         r.step()?;
         match r.byte()? {
-            0 | 1 | 2 => Ok(Default::default()),
+            0 | 1 | 2 | 3 => Ok(Default::default()),
             _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown provider transport purpose")),
         }
     }

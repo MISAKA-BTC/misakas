@@ -1050,6 +1050,7 @@ fn qwen36_row(
     weights: &dyn PalwWeightOracleV1,
     kv_len: u64,
     gather: (&PalwStepCoordinateV1, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1<'_>, &[u32]),
+    initial_gdn: Option<&[u32]>,
 ) -> Result<Vec<u32>, PalwStepRefuteError> {
     use crate::palw_base0_a16 as a16;
     use crate::palw_base0_a16::A16QuantParams;
@@ -2071,7 +2072,12 @@ fn qwen36_row(
             // Four registered triples for THIS head: read, delta, write (a shift in `zero`), out.
             let p = params(4 * vh, 4)?;
             let gdn = q36::Qwen36GdnParamsV1 { read: p[0], delta: p[1], write_shift: p[2].zero as i32, out: p[3] };
-            let mut state = q36::Qwen36GdnStateV1 { d_v: hd_v, d_k: hd_k, s: vec![0; hd_v * hd_k] };
+            let s = match initial_gdn {
+                None => vec![0; hd_v * hd_k],
+                Some(words) if words.len() == hd_v * hd_k => words.iter().map(|word| *word as i32).collect(),
+                Some(_) => return Err(PalwStepRefuteError::InputSetNotCanonical("the recurrence anchor has another head shape")),
+            };
+            let mut state = q36::Qwen36GdnStateV1 { d_v: hd_v, d_k: hd_k, s };
             let mut last = Vec::new();
             for step in inputs.chunks_exact(5) {
                 let unit_k = extract(&step[0], tiles[0], slices[0].0, slices[0].1)?;
@@ -3874,10 +3880,45 @@ fn canonical_input_leaves_anchored(
     program: KernelProgram,
     anchored: bool,
 ) -> Option<Vec<Vec<(u64, PalwStepCoordinateV1)>>> {
+    canonical_input_leaves_with_start_v2(profile, context, out_slot, out_coord, program, anchored, None)
+}
+
+// V1 always passes None and preserves its input enumeration. The versioned
+// recurrence consumer derives Some(start) only after authenticating that exact
+// checkpoint. Construct the bounded suffix directly, never a full-prefix Vec
+// followed by filtering it.
+fn canonical_input_leaves_with_start_v2(
+    profile: &PalwShapeProfileV3,
+    context: &crate::palw_v2::PalwJobContextV2,
+    out_slot: u32,
+    out_coord: &PalwStepCoordinateV1,
+    program: KernelProgram,
+    anchored: bool,
+    recurrence_start: Option<u32>,
+) -> Option<Vec<Vec<(u64, PalwStepCoordinateV1)>>> {
     let (node, layer) = profile.resolve_node_slot(out_slot)?;
     let table_first_slot = out_slot - intra_table_index(profile, out_slot)? as u32;
     let mut out = Vec::new();
-    let mut positions = required_positions(program, out_coord);
+    let mut positions = if let Some(start) = recurrence_start {
+        if anchored || !matches!(program, KernelProgram::GdnCore { .. } | KernelProgram::Qwen36(Qwen36Op::GdnStep)) {
+            return None;
+        }
+        let here = crate::palw_context_ladder::palw_absolute_position_v1(context, out_coord.call_index, out_coord.position)?;
+        if start > here {
+            return None;
+        }
+        (start..=here)
+            .map(|absolute| {
+                if absolute < context.declared_prefill_tokens {
+                    (0, absolute)
+                } else {
+                    (absolute - context.declared_prefill_tokens + 1, 0)
+                }
+            })
+            .collect()
+    } else {
+        required_positions(program, out_coord)
+    };
     // Expand the prefill markers. `(MAX, 0)` is the WHOLE prefill (the recurrence's prefix);
     // `(MAX, k)` for `k > 0` is its last `k` positions (the conv window's tail).
     if let Some(&(u32::MAX, tail)) = positions.first() {
@@ -5045,7 +5086,7 @@ fn run_program(
     };
     let row = match program {
         KernelProgram::Base0(op) => base0_row(op, node, layer, profile, inputs, weights, kv_len, gather),
-        KernelProgram::Qwen36(op) => qwen36_row(op, node, layer, profile, inputs, weights, kv_len, gather),
+        KernelProgram::Qwen36(op) => qwen36_row(op, node, layer, profile, inputs, weights, kv_len, gather, None),
         KernelProgram::Kimi(op) => kimi_row(op, node, profile, inputs, kv_len),
         KernelProgram::L2Norm => {
             let x = inputs.first().ok_or(PalwStepRefuteError::InputSetNotCanonical("l2norm needs one input row"))?;
@@ -5533,6 +5574,10 @@ fn i32_len_to_f32_bits(n: u32) -> u32 {
 // =============================================================================================
 // Tests
 // =============================================================================================
+
+/// Versioned recurrence state membership and deterministic local adjudication.
+/// No existing evidence tag, state map or root is reinterpreted by this module.
+pub mod memory_v2;
 
 #[cfg(test)]
 pub(crate) mod hostile_totality_tests;

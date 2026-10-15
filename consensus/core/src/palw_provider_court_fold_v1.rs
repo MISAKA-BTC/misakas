@@ -245,7 +245,9 @@ pub(super) fn apply_provider_answer_v1(
     let (PublicUnitV1::ClaimPosition { stage, position }, PublicUnitAnswerV1::ClaimPosition { bytes }) = (unit, answer) else {
         return Err(refused("a claim's unit is answered by its position's response"));
     };
-    let ledger = route_of(builder)?.ledger_native_projection_v9().map_err(refused)?;
+    let ledger = route_of(builder)?
+        .ledger_native_projection_checked_v9()
+        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     ledger.classify_served_position_v1(&claim.as_bytes(), *stage, *position, bytes).map_err(refused)?;
     write_challenge(builder, subject, provider, unit, Some(&ProviderChallengeRowV1 { bond: 0, answered: true, ..row }));
     // A challenge the provider answered was not free court work: its fee is burned out of the challenger's (now released) bond.
@@ -265,7 +267,9 @@ pub(super) fn apply_da_transfer_v1(
     let now = ctx.daa_score;
     let operator = active_operator(builder, producer)?;
     let route = route_of(builder)?;
-    let ledger = route.ledger_native_projection_v9().map_err(refused)?;
+    let ledger = route
+        .ledger_native_projection_checked_v9()
+        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     let row = ledger.claims.get(&claim.as_bytes()).ok_or_else(|| refused("no such kernel claim"))?;
     if route.bond_key_of(&row.producer) != Some(*producer) {
         return Err(refused("only the claim's producer moves its DA responsibility"));

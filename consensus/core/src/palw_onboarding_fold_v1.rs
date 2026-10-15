@@ -241,7 +241,9 @@ pub(super) fn apply_kernel_bound_v1(
             .beacon_source
             .filter(|f| f.activation.is_active(ctx.daa_score))
             .ok_or_else(|| refused("the opt-in source policy needs its dedicated fence"))?;
-        let ledger = route.ledger().map_err(refused)?;
+        let ledger = route
+            .ledger_checked_v1()
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
         if challenge_policy_id.as_bytes() == crate::palw_conformance_evidence_v1::palw_onboarding_paid_opt_in_policy_v5().id() {
             let fee = extras
                 .beacon_source_fee
@@ -263,7 +265,9 @@ pub(super) fn apply_kernel_bound_v1(
     } else if challenge_policy_id.as_bytes() == palw_onboarding_sealed_policy_v1().id() {
         // * the SEALED-SOURCE policy (v3, `palw_onboarding_sealed_policy_v1`): its reveal window must fit the ledger's seal TTL, so
         //   every in-window reveal is legal (`2W ≤ seal_ttl_daa`).
-        let ledger = route.ledger_native_projection_v9().map_err(refused)?;
+        let ledger = route
+            .ledger_native_projection_checked_v9()
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
         if !misaka_palw_kernel::ledger::seal_ttl_admits_beacon_window_v1(
             &ledger.policy,
             palw_onboarding_sealed_policy_v1().beacon_window_slots,
@@ -389,7 +393,9 @@ pub(super) fn apply_conformance_committed_v1(
     // conformance passed, G14-complete, live DA, bounded, a verified policy, not denied: `opv_eligible_set_v1`), never the candidate
     // under any mode. A complete check draws no beacon, so it freezes none. From genesis the only eligible classes are complete-check
     // ones: they are the bootstrap of every sampled beacon (`docs/design/palw/opv-beacon-bootstrap.md` §4).
-    let ledger = route.ledger_native_projection_v9().map_err(refused)?;
+    let ledger = route
+        .ledger_native_projection_checked_v9()
+        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     let excluded: Vec<Hash64> = {
         let mut e = vec![class];
         e.extend(route.candidate_kernel_ids_v1(&ledger, &binding));

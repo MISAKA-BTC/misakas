@@ -81,13 +81,17 @@ impl ReservedKernelLedgerV1 {
         Ok(())
     }
     pub fn try_admit_optimistic_class_v1(&mut self, class: [u8; 64]) -> Result<(), String> {
+        self.try_admit_optimistic_class_checked_v1(class).map_err(|why| why.to_string())
+    }
+    pub fn try_admit_optimistic_class_checked_v1(&mut self, class: [u8; 64]) -> Result<(), NativeDecodeErrorV1<String>> {
         // Match the kernel's refusal before reserving an insertion it cannot
         // perform. Its policy check and single admitted-set insert are audited.
         if self.ledger.opv.policy.is_none() {
-            return self.ledger.admit_optimistic_class(class).map_err(|e| e.to_string());
+            return self.ledger.admit_optimistic_class(class).map_err(|e| NativeDecodeErrorV1::Decode(e.to_string()));
         }
-        self.reserve_membership_v1::<[u8; 64], ()>(!self.ledger.opv.admitted.contains(&class)).map_err(|e| e.to_string())?;
-        self.ledger.admit_optimistic_class(class).map_err(|e| e.to_string())
+        self.reserve_membership_v1::<[u8; 64], ()>(!self.ledger.opv.admitted.contains(&class))
+            .map_err(NativeDecodeErrorV1::Resource)?;
+        self.ledger.admit_optimistic_class(class).map_err(|e| NativeDecodeErrorV1::Decode(e.to_string()))
     }
     /// Both tally implementations can insert only this existing claim's job
     /// pointer. Reserve it before the kernel mutates lifecycle/consumer state.
@@ -99,8 +103,11 @@ impl ReservedKernelLedgerV1 {
         Ok(())
     }
     pub fn try_apply_paid_claim_tally_v2(&mut self, claim: &[u8; 64]) -> Result<(), String> {
-        self.prepare_panel_tally_v1(claim).map_err(|e| e.to_string())?;
-        self.ledger.apply_paid_claim_tally_v2(claim)
+        self.try_apply_paid_claim_tally_checked_v2(claim).map_err(|why| why.to_string())
+    }
+    pub fn try_apply_paid_claim_tally_checked_v2(&mut self, claim: &[u8; 64]) -> Result<(), NativeDecodeErrorV1<String>> {
+        self.prepare_panel_tally_v1(claim).map_err(NativeDecodeErrorV1::Resource)?;
+        self.ledger.apply_paid_claim_tally_v2(claim).map_err(NativeDecodeErrorV1::Decode)
     }
     pub fn as_rebuilt_from_v1(self, rows: &LedgerRowsV1) -> Self {
         // The ticket remains alive while the derived indexes are reconstructed.
@@ -664,6 +671,21 @@ mod expansion_completion_tests {
         assert!(owner.try_admit_optimistic_class_v1([3; 64]).is_err());
         assert!(owner.opv.admitted.is_empty());
         assert_eq!(checker.outstanding(), (node, 0), "semantic refusal allocates no new membership");
+    }
+
+    #[test]
+    fn fixed_membership_refusal_keeps_capacity_distinct_from_missing_authority() {
+        let (checker, mut owner) = fixed_owner(0);
+        assert!(matches!(owner.try_admit_optimistic_class_checked_v1([3; 64]), Err(NativeDecodeErrorV1::Decode(_))));
+        // Exercise the existing policy-enabled membership mutation only; this
+        // test does not establish model eligibility or selected approval.
+        owner.ledger.opv.policy =
+            Some(crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(crate::config::params::ForkActivation::new(7)).opv_policy());
+        assert!(matches!(owner.try_admit_optimistic_class_checked_v1([3; 64]), Err(NativeDecodeErrorV1::Resource(_))));
+        assert!(owner.opv.admitted.is_empty(), "a failed reservation cannot add execution membership");
+        assert!(matches!(owner.try_apply_paid_claim_tally_checked_v2(&[4; 64]), Err(NativeDecodeErrorV1::Decode(_))));
+        assert!(owner.job_claims.is_empty(), "missing paid authority cannot create a payment right");
+        assert_eq!(checker.outstanding(), (0, 0));
     }
     #[test]
     fn actual_composite_stages_are_counted_and_shape_arithmetic_is_checked() {

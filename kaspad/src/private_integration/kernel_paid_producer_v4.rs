@@ -42,7 +42,7 @@ pub struct PrivateKernelPaidWorkSpecV4 {
     #[serde(skip)]
     _owner: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
 }
-fn bounded_funding<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+pub(super) fn bounded_funding<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
     struct Visitor;
     impl<'de> serde::de::Visitor<'de> for Visitor {
         type Value = Vec<String>;
@@ -83,7 +83,7 @@ pub(super) fn hash(raw: &str) -> Result<Hash64, String> {
     faster_hex::hex_decode(raw.as_bytes(), &mut bytes).map_err(|e| e.to_string())?;
     Ok(Hash64::from_bytes(bytes))
 }
-fn seed(path: &Path) -> Result<[u8; 32], String> {
+pub(super) fn seed(path: &Path) -> Result<[u8; 32], String> {
     regular(path)?;
     #[cfg(unix)]
     {
@@ -98,7 +98,7 @@ fn seed(path: &Path) -> Result<[u8; 32], String> {
     faster_hex::hex_decode(text.as_bytes(), &mut result).map_err(|e| e.to_string())?;
     Ok(result)
 }
-fn read_bounded(
+pub(super) fn read_bounded(
     path: &Path,
     cap: u64,
 ) -> Result<(Vec<u8>, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>), String> {
@@ -141,7 +141,7 @@ pub(super) fn owned_dir(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-pub(super) fn publish_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
+fn publish_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if path.exists() {
         return Err("kernel paid outbox already contains this immutable record".into());
     }
@@ -163,6 +163,17 @@ pub(super) fn publish_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     fs::File::open(path.parent().ok_or("outbox parent absent")?).and_then(|f| f.sync_all()).map_err(|e| e.to_string())?;
     fs::remove_file(temporary).map_err(|e| e.to_string())?;
     fs::File::open(path.parent().ok_or("outbox parent absent")?).and_then(|f| f.sync_all()).map_err(|e| e.to_string())
+}
+pub(super) fn publish_borsh<T: borsh::BorshSerialize>(path: &Path, value: &T, cap: u64) -> Result<(), String> {
+    let n = borsh::object_length(value).map_err(|e| e.to_string())? as u64;
+    if n > cap {
+        return Err("kernel paid durable record exceeds explicit input/outbox cap".into());
+    }
+    let _lease = reserve_native_requests_v1(n).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(usize::try_from(n).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    borsh::to_writer(&mut bytes, value).map_err(|e| e.to_string())?;
+    publish_new(path, &bytes)
 }
 impl PrivateKernelPaidWorkSpecV4 {
     pub fn read(path: &Path) -> Result<Self, String> {
@@ -458,9 +469,7 @@ impl PreparedKernelPaidWorkV4 {
                 let signed =
                     misaka_palw_sdk::claim_paid_v2::sign_paid_claim_object_v2(&self.key, grant.network, self.producer, &inner)?;
                 let signed = NativeRetainedV1::retain_existing_v1(signed).map_err(|e| e.to_string())?;
-                let encoded_len = borsh::object_length(&*signed).map_err(|e| e.to_string())? as u64;
-                let _encoded = reserve_native_requests_v1(encoded_len).map_err(|e| e.to_string())?;
-                publish_new(&object_path, &borsh::to_vec(&*signed).map_err(|e| e.to_string())?)?;
+                publish_borsh(&object_path, &*signed, self.spec.max_input_bytes)?;
                 object = Some(signed);
             }
             let signed = object.as_ref().ok_or("kernel signed object absent")?;
@@ -533,9 +542,7 @@ impl PreparedKernelPaidWorkV4 {
                 if fee.is_none_or(|n| n > self.spec.maximum_fee_sompi) {
                     return Err("kernel claim carrier exceeds explicit payer fee cap".into());
                 }
-                let n = borsh::object_length(&tx).map_err(|e| e.to_string())? as u64;
-                let _encoding = reserve_native_requests_v1(n).map_err(|e| e.to_string())?;
-                publish_new(&tx_path, &borsh::to_vec(&tx).map_err(|e| e.to_string())?)?;
+                publish_borsh(&tx_path, &tx, self.spec.max_input_bytes)?;
                 transaction = Some(tx);
                 transaction_lease = lease;
             }

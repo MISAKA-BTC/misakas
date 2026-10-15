@@ -34,6 +34,10 @@ pub enum ChainParticipation {
     /// An IBD holds the latch. The chain may be replaced at any moment — `staging.commit()` happens
     /// partway through, so "IBD is running" already includes "active consensus may have changed".
     IbdRunning,
+    /// A retryable resource or sidecar refusal interrupted import after adoption.
+    /// Participation remains closed across restarts until the import succeeds.
+    /// A new IBD can retry without an operator clearing quarantine.
+    ImportRecovery,
     /// An IBD finished and the chain it produced has not been weighed against the alternatives.
     /// Participation stays closed at least until `until_ms`.
     CandidateReview,
@@ -48,6 +52,7 @@ impl ChainParticipation {
         match self {
             ChainParticipation::Ready => "ready",
             ChainParticipation::IbdRunning => "ibd-running",
+            ChainParticipation::ImportRecovery => "import-recovery",
             ChainParticipation::CandidateReview => "candidate-review",
             ChainParticipation::Quarantined => "quarantined",
         }
@@ -108,6 +113,7 @@ const READY: u8 = 0;
 const IBD_RUNNING: u8 = 1;
 const CANDIDATE_REVIEW: u8 = 2;
 const QUARANTINED: u8 = 3;
+const IMPORT_RECOVERY: u8 = 4;
 
 /// The shared gate. Cheap to read — every heartbeat and every `getBlockTemplate` hits it.
 #[derive(Debug)]
@@ -216,6 +222,7 @@ impl ChainParticipationGate {
                     ChainParticipation::IbdRunning if !restored.ibd_replaced_consensus => CANDIDATE_REVIEW,
                     ChainParticipation::IbdRunning | ChainParticipation::Quarantined => QUARANTINED,
                     ChainParticipation::CandidateReview => CANDIDATE_REVIEW,
+                    ChainParticipation::ImportRecovery => IMPORT_RECOVERY,
                 },
                 Ordering::SeqCst,
             );
@@ -387,6 +394,7 @@ impl ChainParticipationGate {
             IBD_RUNNING => ChainParticipation::IbdRunning,
             CANDIDATE_REVIEW => ChainParticipation::CandidateReview,
             QUARANTINED => ChainParticipation::Quarantined,
+            IMPORT_RECOVERY => ChainParticipation::ImportRecovery,
             _ => ChainParticipation::Ready,
         }
     }
@@ -420,6 +428,10 @@ impl ChainParticipationGate {
             Some(READY)
         } else if self.state.compare_exchange(CANDIDATE_REVIEW, IBD_RUNNING, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
             Some(CANDIDATE_REVIEW)
+        } else if self.state.load(Ordering::SeqCst) == IMPORT_RECOVERY {
+            // Retain the durable hold while retrying. A crash in the retry
+            // cannot restore an expired review floor or become quarantine.
+            Some(IMPORT_RECOVERY)
         } else {
             None
         };
@@ -503,6 +515,40 @@ impl ChainParticipationGate {
         self.persist();
     }
 
+    /// Called for typed local capacity or a retryable missing sidecar after adoption.
+    /// No timeout, peer disconnect, or repeated attempt grants participation.
+    pub fn hold_for_import_recovery(&self, lease: IbdLease) -> bool {
+        if !self.enabled {
+            return true;
+        }
+        if lease.generation == 0 || lease.generation != self.ibd_generation.load(Ordering::SeqCst) {
+            return false;
+        }
+        let state = self.state.load(Ordering::SeqCst);
+        if state != IBD_RUNNING && state != IMPORT_RECOVERY {
+            return false;
+        }
+        if self.state.compare_exchange(state, IMPORT_RECOVERY, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+            return false;
+        }
+        self.mark_not_ready();
+        self.persist();
+        true
+    }
+
+    /// The actual IBD success path calls this only after all import components
+    /// completed coherently. A stale success cannot release a newer recovery.
+    pub fn finish_import_recovery(&self, lease: IbdLease, min_review_ms: u64) -> bool {
+        if !self.enabled || lease.generation == 0 || lease.generation != self.ibd_generation.load(Ordering::SeqCst) {
+            return false;
+        }
+        if self.state.compare_exchange(IMPORT_RECOVERY, IBD_RUNNING, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+            return false;
+        }
+        self.enter_candidate_review(min_review_ms);
+        true
+    }
+
     pub fn is_quarantined(&self) -> bool {
         self.state.load(Ordering::SeqCst) == QUARANTINED
     }
@@ -542,6 +588,7 @@ impl ChainParticipationGate {
     pub fn state(&self) -> ChainParticipation {
         match self.state.load(Ordering::SeqCst) {
             IBD_RUNNING => ChainParticipation::IbdRunning,
+            IMPORT_RECOVERY => ChainParticipation::ImportRecovery,
             QUARANTINED => ChainParticipation::Quarantined,
             CANDIDATE_REVIEW => {
                 // The floor holding, or a proof-backed candidate still being decided. Either keeps
@@ -949,6 +996,49 @@ mod tests {
         fn restore(&self) -> Option<ChainParticipationSnapshot> {
             *self.0.lock().unwrap()
         }
+    }
+
+    #[test]
+    fn import_recovery_survives_restart_and_retry_without_timeout_or_stale_release() {
+        let recorder = Arc::new(Recorder::default());
+        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone());
+        let first = gate.enter_ibd();
+        gate.mark_chain_replaced();
+        assert!(gate.hold_for_import_recovery(first));
+        assert_eq!(gate.state(), ChainParticipation::ImportRecovery);
+        assert!(!gate.allows_participation());
+        assert!(!gate.operator_clear_quarantine(), "resource recovery is not an operator override of chain validity");
+        let retry = gate.enter_ibd();
+        assert!(!gate.finish_import_recovery(first, 0), "stale attempt cannot authorize participation");
+        gate.release_after_noop_ibd(first);
+        assert_eq!(gate.state(), ChainParticipation::ImportRecovery);
+        gate.release_after_noop_ibd(retry);
+        assert!(!gate.allows_participation(), "an unsuccessful no-swap retry still owes the adopted import");
+        // An expired review floor cannot promote the durable import hold.
+        gate.review_until_ms.store(0, Ordering::SeqCst);
+        let _running_retry = gate.enter_ibd();
+        assert_eq!(recorder.restore().unwrap().state, ChainParticipation::ImportRecovery);
+        let restarted = ChainParticipationGate::new(true).with_persistence(recorder);
+        assert_eq!(restarted.state(), ChainParticipation::ImportRecovery);
+        assert!(!restarted.chain_settled());
+        let complete = restarted.enter_ibd();
+        assert!(restarted.finish_import_recovery(complete, 60_000));
+        assert_eq!(restarted.state(), ChainParticipation::CandidateReview);
+        assert!(!restarted.allows_participation(), "successful import still owes its normal review");
+        restarted.review_until_ms.store(0, Ordering::SeqCst);
+        assert!(restarted.allows_participation());
+        assert!(restarted.ever_ready());
+    }
+
+    #[test]
+    fn quarantine_cannot_be_downgraded_to_retryable_import() {
+        let gate = ChainParticipationGate::new(true);
+        let lease = gate.enter_ibd();
+        gate.mark_chain_replaced();
+        gate.quarantine();
+        assert!(!gate.hold_for_import_recovery(lease));
+        assert!(!gate.finish_import_recovery(lease, 0));
+        assert_eq!(gate.state(), ChainParticipation::Quarantined);
     }
 
     /// LIVE-R1 N2: the partition hold closes participation while set, reopens it when cleared, is never

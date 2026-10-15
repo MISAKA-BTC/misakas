@@ -618,10 +618,11 @@ impl crate::palw_state_v2::PalwChainStateV2 {
 // ---- the beacon's facts and the conformance read (RPC op 231) ---------------------------------------------------------------
 
 impl PalwKernelRouteStateV1 {
-    /// **The beacon's facts**: every Final the route serves (op 212) that carries an attributed `WorkFinalEventV1` — an OPV Final,
-    /// `FinalPathV1::PanelIndependent`, with its producer; a Panel-licensed Final exports none. The fold and every reader derive the
-    /// beacon from exactly these (the contract filters, sorts, de-duplicates and applies the policy's distinct source rule). `Err`
-    /// only if the stored rows do not rebuild (corruption).
+    /// Beacon facts exported only by a selected-approval-aware Final adapter.
+    /// Historical OPV timeouts remain readable at op 212 but export no event:
+    /// local replay or settlement cannot replace randomly selected approval.
+    /// The contract applies attribution, exclusion and distinct-source rules
+    /// after this authorization boundary. Malformed rows remain an error.
     pub fn beacon_events_v1(&self) -> Result<Vec<misaka_palw_challenge::AttributedWorkV1>, String> {
         let mut out = Vec::new();
         for f in self.finals_read_v1()? {
