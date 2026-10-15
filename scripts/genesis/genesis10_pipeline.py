@@ -22,14 +22,17 @@ The genesis set (user decisions 2026-10-15; ids keep the original 1..10 numberin
 
 and appends the model's record to `<work>/genesis10_results.json`.
 
-Calibration (`--calib-positions`, default 2048): the converter measures each site's activation range on the float reference
-over pinned texts of this repository (git blobs at one commit, `calibration_texts` in the registry). A recurrent (Gated
-DeltaNet) class is calibrated on one sequence as long as the context it serves (freeze-v1 §5.2), so for #2 #3 #6 the value is
-also the served context; dense classes use four 512-token texts and serve 8,192. The token file and the statistics travel in
-the artifact; the manifest records the texts, tokenizer, lengths, policy and the token file's SHA-256.
+Served context (user decision 2026-10-16): every genesis model is served at 32,768 tokens (`--context`, default the registry's
+32768). Calibration: the converter measures each site's activation range on the float reference over pinned texts of this
+repository (git blobs at one commit, `calibration_texts` in the registry). A recurrent (Gated DeltaNet) class is calibrated on
+one sequence as long as the context it serves (freeze-v1 §5.2): #2 #3 #6 calibrate on one 32,768-token sequence; dense classes
+use four 512-token texts. #1 is re-converted with the A16 converter at --n-ctx 32768. #8's published runtime serves 512 and is
+blocked until re-converted. The token file and the statistics travel in the artifact; the manifest records the texts,
+tokenizer, lengths, policy and the token file's SHA-256. `--calib-stats-in FILE` uses statistics measured elsewhere (a
+calibration-only machine) on the same token file.
 
 Usage:
-    python3 scripts/genesis/genesis10_pipeline.py run --model 2 [--stream] [--dry-run] [--calib-positions 2048]
+    python3 scripts/genesis/genesis10_pipeline.py run --model 2 [--stream] [--dry-run] [--context 32768]
     python3 scripts/genesis/genesis10_pipeline.py run --all --keep-going
     python3 scripts/genesis/genesis10_pipeline.py plan                 # disk plan and commands, nothing run
     python3 scripts/genesis/genesis10_pipeline.py manifest --model 2 --out m.json
@@ -68,8 +71,9 @@ DEFAULT_TOKENIZE_PY = "/Users/wata/Downloads/MISAKA-wt-b/tir-venv/bin/python"
 HF_API = "https://huggingface.co/api/models"
 HF_RESOLVE = "https://huggingface.co"
 STEPS = ["preflight", "download", "convert", "record", "fit", "upload", "verify", "cleanup"]
-# A recurrent class's calibration sequence and served context (registry: CALIB_POSITIONS_DEFAULT).
-DEFAULT_CALIB_POSITIONS = 2048
+# Every genesis model's served context (user decision 2026-10-16; registry: GENESIS_CONTEXT). A recurrent class is calibrated
+# on one sequence of this length.
+GENESIS_CONTEXT = 32768
 TOKENIZE_DOCS = "misaka/palw/tir/lower/tools/tokenize_docs.py"
 GB = 1_000_000_000
 LLAMA_NOTICE = "Llama 3.3 is licensed under the Llama 3.3 Community License, Copyright © Meta Platforms, Inc. All Rights Reserved."
@@ -231,6 +235,8 @@ def estimate(m: dict, variant: str | None, stream: bool, segment_gb: float) -> d
         out = m["legacy_artifact"]["bytes"]
         total_in = out  # the published legacy file is the input
         biggest = out
+    elif is_a16(m):
+        out = int(total_in / 2 * 1.17)  # the A16 file: int8 codes, i16 embedding rows, the 32K rotary table
     elif m["source_format"] == "gguf" and vf and "iq3" in vf.lower():
         out = int(54.66e9 / 2 * 1.08)  # stored integer codes are one byte a weight in the TIR section (~27B params)
     else:
@@ -241,30 +247,52 @@ def estimate(m: dict, variant: str | None, stream: bool, segment_gb: float) -> d
         # over HTTPS and never stored (`--gguf-url`, `palwart pack --from-url`): one segment and the small files.
         if m["source_format"] == "gguf" or is_legacy_wrap(m):
             peak_in = 0
+        elif is_a16(m):
+            peak_in = total_in + out  # the checkpoint is read whole and the A16 file is written before it is packed
         else:
             peak_in = biggest if len(weights) <= 1 else min(total_in, 2 * biggest)
         peak = peak_in + seg + 2 * GB
     else:
-        peak = total_in + out + 2 * GB
+        peak = total_in + out + 2 * GB + (out if is_a16(m) else 0)
     return {"input_bytes": total_in, "biggest_input_file": biggest, "output_bytes_est": out, "peak_disk_bytes_est": peak,
             "stream": stream, "segment_bytes": seg}
 
 
 # ---------------------------------------------------------------------------------------------- manifest and card
 
-def effective_options(m: dict, calib_positions: int | None) -> dict:
-    """The conversion options as run. A recurrent (Gated DeltaNet) program is calibrated on one sequence of `calib_positions`
-    tokens and served at that context (freeze-v1 §5.2: the converter refuses a context longer than the calibration); a dense
-    program keeps the registry's texts and context."""
+def is_a16(m: dict) -> bool:
+    """#1: converted with the legacy base0 A16 converter (`qwen25-convert --a16 --n-ctx N`), then carried in the container."""
+    return m["converter"] == "a16"
+
+
+def effective_options(m: dict, context: int | None) -> dict:
+    """The conversion options as run, at the served context `context` (default: the registry's, 32,768 for every genesis model).
+    A recurrent (Gated DeltaNet) program is calibrated on one sequence of that many tokens (freeze-v1 §5.2: the converter refuses
+    a context longer than the calibration); a dense program keeps its four short texts and declares the context; the A16
+    converter takes it as its width (`--n-ctx`, part of the artifact digest). A published legacy file keeps the context baked
+    into it."""
     o = json.loads(json.dumps(m.get("convert_options") or {}))
-    c = o.get("calib")
-    if c and c.get("kind") == "recurrent":
-        n = int(calib_positions or c["len"])
+    if is_legacy_wrap(m):
+        return o
+    if "context" in o or is_a16(m):
+        n = int(context or o.get("context") or o.get("n_ctx"))
         if n < 64:
-            raise SystemExit(f"--calib-positions {n}: a recurrent class is served at its calibration length; give at least 64")
-        c["len"] = n
-        o["context"] = n
+            raise SystemExit(f"--context {n}: give at least 64")
+        if is_a16(m):
+            o["n_ctx"] = n
+        else:
+            o["context"] = n
+            c = o.get("calib")
+            if c and c.get("kind") == "recurrent":
+                c["len"] = n
     return o
+
+
+def served_context(m: dict, opts: dict) -> int | None:
+    """The context the class serves: the declared one, or (a wrapped legacy file) the one baked into it."""
+    if is_legacy_wrap(m):
+        return m.get("served_context")
+    return opts.get("context") or opts.get("n_ctx")
 
 
 def calibration_record(m: dict, opts: dict, texts: dict | None, measured: dict | None = None) -> dict | None:
@@ -303,7 +331,7 @@ def calibration_record(m: dict, opts: dict, texts: dict | None, measured: dict |
     return rec
 
 
-def manifest_for(m: dict, variant: str | None, calib_positions: int | None = None, calib: dict | None = None,
+def manifest_for(m: dict, variant: str | None, context: int | None = None, calib: dict | None = None,
                  texts: dict | None = None) -> dict:
     vf = variant_file(m, variant)
     src_files = [{"path": f["path"], "bytes": f["bytes"], "sha256": f["lfs_sha256"], "git_blob": f["git_blob"]}
@@ -312,7 +340,7 @@ def manifest_for(m: dict, variant: str | None, calib_positions: int | None = Non
     if m["license"] == "llama3.3":
         lic.update({"name": "Llama 3.3 Community License Agreement", "notice": LLAMA_NOTICE, "acceptable_use_policy": LLAMA_AUP,
                     "built_with_llama": True, "name_begins_with_llama": m["stem"].startswith("Llama")})
-    opts = effective_options(m, calib_positions)
+    opts = effective_options(m, context)
     conv = {"converter": m["converter"], "options": opts}
     if opts.get("calib") and not is_legacy_wrap(m):
         conv["calibration"] = calibration_record(m, opts, texts if texts is not None else load_registry().get("calibration_texts"), calib)
@@ -321,6 +349,12 @@ def manifest_for(m: dict, variant: str | None, calib_positions: int | None = Non
         conv.update({"legacy_artifact": {k: la[k] for k in ("repo", "revision", "path", "bytes", "sha256", "artifact_digest", "xet_hash",
                                                              "converter") if k in la},
                      "requantised": False, "reconverted": False})
+    if is_a16(m):
+        conv["a16"] = {"tool": f"qwen25-convert <source> --a16 --n-ctx {opts['n_ctx']} --out {opts['a16_file']}",
+                       "calibration": "the converter's own 57-token prompt (misaka/palw/base0/src/bin/qwen25-convert.rs), fixed in source",
+                       **(calib or {})}
+        if m.get("history_artifact"):
+            conv["history_artifact"] = {**m["history_artifact"], "note": "the 8k A16 file published 2026-10-15, kept as history"}
     if vf:
         conv["gguf_variant_file"] = vf
     return {
@@ -339,6 +373,7 @@ def manifest_for(m: dict, variant: str | None, calib_positions: int | None = Non
         "adjudication": {"end_to_end_adjudicable": m["e2e_adjudicable"],
                          "method": "sampled deterministic re-execution, public localization, deterministic court (PRINCIPLES §8: no cryptographic proof of computation)"},
         "tentative": m.get("tentative", False),
+        "served_context": served_context(m, opts),
         "uncensored": m["id"] != 8,
         "scope": {"kind": "text-generation", "inputs": "token ids", "outputs": "next-token logits",
                   "out_of_scope_components": m.get("out_of_scope", []),
@@ -355,8 +390,8 @@ def attribution_line(m: dict) -> str:
 
 
 def model_card(m: dict, variant: str | None, record: dict | None, manifest: dict | None = None,
-               calib_positions: int | None = None) -> str:
-    man = manifest or manifest_for(m, variant, calib_positions)
+               context: int | None = None) -> str:
+    man = manifest or manifest_for(m, variant, context)
     lic_yaml = "license: apache-2.0" if m["license"] == "apache-2.0" else "license: other\nlicense_name: llama3.3\nlicense_link: LICENSE"
     base = m["source_repo"]
     tags = ["palw", "misaka", "palwart", m["family"]] + (["abliterated", "uncensored"] if "abliterat" in m["derivation"] else ["uncensored"])
@@ -426,6 +461,16 @@ def model_card(m: dict, variant: str | None, record: dict | None, manifest: dict
         "",
         f"- converter: `{m['converter']}`; options: `{json.dumps(man['conversion']['options'], sort_keys=True)}`",
     ]
+    if man.get("served_context"):
+        lines.append(f"- served context: {man['served_context']:,} tokens")
+    a16 = man["conversion"].get("a16")
+    if a16:
+        lines.append(f"- converted with `{a16['tool']}` (A16; calibration: {a16['calibration']})"
+                     + (f"; artifact digest `{a16['artifact_digest'][:16]}…`" if a16.get("artifact_digest") else ""))
+        if man["conversion"].get("history_artifact"):
+            h = man["conversion"]["history_artifact"]
+            lines.append(f"- history: the 8k A16 file `{h['path']}` (SHA-256 `{h['sha256']}`) published at `{h['revision'][:12]}` stays in this "
+                         "repository; it is not this artifact")
     cal = man["conversion"].get("calibration")
     if cal:
         docs = ", ".join(f"`{d['path']}` (git blob `{str(d.get('git_blob'))[:12]}`)" for d in cal["documents"])
@@ -434,13 +479,20 @@ def model_card(m: dict, variant: str | None, record: dict | None, manifest: dict
                      f"{cal['tokenizer']['revision'][:12]}` tokenizer.json; token file SHA-256 `{cal.get('tokens_sha256', '(written by the run)')}`; "
                      "the token file and the measured statistics are carried in the artifact")
         if cal["kind"] == "recurrent":
-            lines.append(f"- **served context: {cal['served_context']:,} tokens.** A Gated DeltaNet class is calibrated on one sequence "
-                         "as long as the context it serves (freeze-v1 §5.2); a longer context is outside this class")
+            lines.append(f"- A Gated DeltaNet class is calibrated on one sequence as long as the context it serves (freeze-v1 §5.2): "
+                         f"here one {cal['served_context']:,}-token sequence; a longer context is outside this class")
     fit = (record or {}).get("fit")
     if fit and fit.get("measured"):
         lines.append(f"- fit against the float reference (held-out text, {fit.get('positions', '?')} positions): mean KL "
                      f"{fit['kl_mean']:.5f}, top-1 {fit['top1_agreement']:.3f} (tolerance: KL <= {fit['tolerance']['kl_mean_max']}, "
                      f"top-1 >= {fit['tolerance']['top1_min']})")
+        lg = fit.get("long") or {}
+        if lg.get("measured"):
+            lines.append(f"- long-context fit (held-out {lg.get('positions', '?'):,} positions, every one compared): mean KL "
+                         f"{lg['kl_mean']:.5f}, top-1 {lg['top1_agreement']:.3f}, worst window mean KL {lg['window_kl_mean_max']:.5f}, "
+                         f"late/early {lg.get('drift_ratio')}")
+        elif lg:
+            lines.append(f"- long-context fit: not measured ({lg.get('reason')})")
     elif fit:
         lines.append(f"- fit against the float reference: not measured on the conversion host ({fit.get('reason')})")
     if is_legacy_wrap(m):
@@ -531,7 +583,11 @@ class Pipeline:
             dedup = self.dedup_check(m)
             st.data["dedup_check"] = dedup
             log(f"#{m['id']} Xet dedup: {dedup['summary']}")
-        needed = ["palwart"] if is_legacy_wrap(m) else ["palw-tir-convert", "palwart"]
+        if m.get("blocked") and not self.a.dry_run:
+            problems.append(f"BLOCKED: {m['blocked']}")
+        elif m.get("blocked"):
+            log(f"#{m['id']} BLOCKED (a real run stops here): {m['blocked']}")
+        needed = ["palwart"] if is_legacy_wrap(m) else ["qwen25-convert", "palwart"] if is_a16(m) else ["palw-tir-convert", "palwart"]
         if self.fit_plan(m)[0]:
             needed.append("palw-tir-fidelity")
         for t in needed:
@@ -616,7 +672,7 @@ class Pipeline:
                 if not self.a.dry_run:
                     self.check_file(p, la["bytes"], la["sha256"])
         # Streamed: sharded safetensors arrive shard by shard during conversion; a GGUF is read over HTTPS ranges, never stored.
-        weights = not self.a.stream
+        weights = not self.a.stream or is_a16(m)
         if is_legacy_wrap(m):
             weights = False
         if self.a.local_source and m["source_format"] == "gguf":
@@ -716,7 +772,7 @@ class Pipeline:
         """The manifest the converter embeds (it is part of the root); the upload ships this same file."""
         d = model_dirs(self.work, m)
         p = d["base"] / "manifest.json"
-        man = manifest_for(m, self.a.gguf_variant, self.a.calib_positions, calib, self.reg.get("calibration_texts"))
+        man = manifest_for(m, self.a.gguf_variant, self.a.context, calib, self.reg.get("calibration_texts"))
         if not self.a.dry_run:
             d["base"].mkdir(parents=True, exist_ok=True)
             p.write_text(json.dumps(man, indent=1, ensure_ascii=False) + "\n")
@@ -762,11 +818,12 @@ class Pipeline:
             work.mkdir(parents=True, exist_ok=True)
         docs = [self.pinned_text(d, work / "texts") for d in spec["docs"]]
         tok_sha = None if self.a.dry_run else sha256_file(tokenizer)
-        want = {"len": spec["len"], "chunks": spec["chunks"], "tokenizer_sha256": tok_sha, "blobs": [meta["git_blob"] for _, meta in docs]}
+        want = {"len": spec["len"], "chunks": spec["chunks"], "skip": spec.get("skip", 0), "tokenizer_sha256": tok_sha,
+                "blobs": [meta["git_blob"] for _, meta in docs]}
         if out.exists() and not self.a.dry_run:
             have = json.loads(out.read_text()).get("source", {})
-            got = {"len": have.get("len"), "chunks": have.get("chunks"), "tokenizer_sha256": (have.get("tokenizer") or {}).get("sha256"),
-                   "blobs": [f.get("git_blob") for f in have.get("files", [])]}
+            got = {"len": have.get("len"), "chunks": have.get("chunks"), "skip": have.get("skip", 0),
+                   "tokenizer_sha256": (have.get("tokenizer") or {}).get("sha256"), "blobs": [f.get("git_blob") for f in have.get("files", [])]}
             if got != want:
                 raise SystemExit(f"{out} was made with other parameters ({got}, now {want}); remove it (and calib-stats.json) to recalibrate")
         else:
@@ -780,10 +837,15 @@ class Pipeline:
                 return {}
             rawj = json.loads(raw.read_text())
             files = rawj.get("source", {}).get("files", [])
-            canon = {"source": {"tool": TOKENIZE_DOCS, "tokenizer": {"file": "tokenizer.json", "sha256": tok_sha}, "len": spec["len"],
-                                "chunks": spec["chunks"],
-                                "files": [{**meta, "tokens": f.get("tokens"), "chunks": f.get("chunks")} for (_, meta), f in zip(docs, files)]},
-                     "sequences": rawj.get("sequences", [])}
+            skip = spec.get("skip", 0)
+            if skip and len(docs) != 1:
+                raise SystemExit("a `skip` applies to one document's chunks")
+            source = {"tool": TOKENIZE_DOCS, "tokenizer": {"file": "tokenizer.json", "sha256": tok_sha}, "len": spec["len"],
+                      "chunks": spec["chunks"],
+                      "files": [{**meta, "tokens": f.get("tokens"), "chunks": f.get("chunks")} for (_, meta), f in zip(docs, files)]}
+            if skip:
+                source["skip"] = skip
+            canon = {"source": source, "sequences": rawj.get("sequences", [])[skip:]}
             out.write_text(json.dumps(canon, sort_keys=True, separators=(",", ":")) + "\n")
             raw.unlink()
         j = json.loads(out.read_text())
@@ -808,7 +870,7 @@ class Pipeline:
 
     def convert(self, m: dict, st: State) -> None:
         d = model_dirs(self.work, m)
-        opts = effective_options(m, self.a.calib_positions)
+        opts = effective_options(m, self.a.context)
         if not self.a.dry_run:
             d["out"].mkdir(parents=True, exist_ok=True)
             if any(d["out"].glob(f"{m['stem']}.*")) and not st.done("convert"):
@@ -829,6 +891,16 @@ class Pipeline:
                 argv += ["--license-file", lf]
             argv += self.hook_args(m, "--on-segment", "--on-segment-arg", "--delete-after-hook")
             argv += ["--json"]
+        elif is_a16(m):
+            a16 = d["legacy"] / opts["a16_file"]
+            info = self.a16_convert(m, opts, d, a16, st)
+            manifest = self.write_manifest(m, info)
+            argv = [self.tool("palwart"), "pack", "--from", str(a16), "--source-dir", str(d["src"]),
+                    "--out-dir", str(d["out"]), "--stem", m["stem"], "--family", m["family"], "--manifest", str(manifest), *seg]
+            for lf in self.license_files(m, d["src"]):
+                argv += ["--license-file", lf]
+            argv += self.hook_args(m, "--on-segment", "--on-segment-arg", "--delete-after-hook")
+            argv += ["--json"]
         elif m["converter"] in ("tir", "tir-gguf"):
             o = opts
             model_path = d["src"]
@@ -838,18 +910,27 @@ class Pipeline:
                 self.prepare_gguf_side_files(m, d)
             calib, cinfo = self.calibration(m, opts, d)
             stats = d["calib"] / "calib-stats.json"
-            if stats.exists() and not self.a.dry_run:
+            pinned_stats = None
+            if self.a.calib_stats_in:
+                # Statistics measured on another machine (`palw-tir-fidelity --calibrate-only --stats-out` on this token file): read,
+                # not re-measured; the converter still checks the calibration-length rule on the token file.
+                pinned_stats = Path(self.a.calib_stats_in).expanduser()
+                if not self.a.dry_run:
+                    shutil.copyfile(pinned_stats, stats)
+                    cinfo["statistics"] = {"measured": "elsewhere (--calib-stats-in)", "sha256": sha256_file(stats)}
+            elif stats.exists() and not self.a.dry_run:
                 stats.unlink()  # measured again by this run (`--stats-out`); a leftover of other parameters must not be carried
             manifest = self.write_manifest(m, cinfo)
             log(f"#{m['id']} calibration: {cinfo.get('sequences', '?')} sequence(s) of {o['calib']['len']} tokens, served context "
                 f"{o['context']} (token file SHA-256 {cinfo.get('tokens_sha256', '?')})")
             argv = [self.tool("palw-tir-convert"), str(model_path), "--out", str(d["base"] / "unused.palwtir"), "--calib", str(calib),
-                    "--context", str(o["context"]), "--stats-out", str(stats), "--json",
+                    "--context", str(o["context"]), *(["--stats-in", str(stats)] if pinned_stats else ["--stats-out", str(stats)]), "--json",
                     "--palwart-out-dir", str(d["out"]), "--palwart-stem", m["stem"], "--palwart-manifest", str(manifest),
                     "--palwart-family", m["family"], "--palwart-segment-mib", str(self.a.segment_mib),
                     "--palwart-source-dir", str(d["src"]), "--palwart-calibration-file", str(calib), "--palwart-calibration-file", str(stats)]
             if o.get("gdn_core_wide"):
                 argv.append("--gdn-core-wide")
+            argv += self.ram_args(d, "convert")
             if m["converter"] == "tir-gguf":
                 argv += ["--tokenizer", str(d["src"] / "tokenizer.json")]
                 if not self.a.local_source and (self.a.stream or not model_path.exists()):
@@ -883,6 +964,45 @@ class Pipeline:
             raise SystemExit(f"#{m['id']}: the converter exited {p.returncode}")
         report.write_text(p.stdout)
         st.mark("convert", {"report": str(report)})
+
+    def ram_args(self, d: dict, step: str) -> list[str]:
+        """RFC-0020 §2/§6: the RAM accounting file of a step (`--ram-accounting`: `<model dir>/ram-<step>.jsonl`, live and peak
+        bytes by kind and stage plus the resident set) and the opt-in carry spill."""
+        argv = []
+        if self.a.ram_accounting:
+            argv += ["--ram-accounting", str(d["base"] / f"ram-{step}.jsonl")]
+        if self.a.spill_carries_dir:
+            argv += ["--spill-carries-dir", str(Path(self.a.spill_carries_dir).expanduser()),
+                     "--spill-carries-budget-mib", str(self.a.spill_carries_budget_mib)]
+        return argv
+
+    def a16_convert(self, m: dict, opts: dict, d: dict, out: Path, st: State) -> dict:
+        """#1: `qwen25-convert <src> --a16 --n-ctx N --out FILE` (the legacy base0 A16 converter; the width is part of the
+        artifact digest). Reused when a previous run recorded this file. Returns what the manifest records."""
+        prev = st.data.get("a16") or {}
+        if not self.a.dry_run and out.exists() and prev.get("sha256") and prev.get("n_ctx") == opts["n_ctx"] \
+                and sha256_file(out) == prev["sha256"]:
+            log(f"#{m['id']} A16 file {out.name} reused ({prev['sha256'][:16]}…)")
+            return prev
+        argv = [self.tool("qwen25-convert"), str(d["src"]), "--a16", "--n-ctx", str(opts["n_ctx"]), "--out", str(out)]
+        if self.a.dry_run:
+            self.r.run(argv)
+            return {}
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.unlink(missing_ok=True)
+        log("$ " + " ".join(shlex.quote(x) for x in argv))
+        p = subprocess.run(argv, text=True, stdout=subprocess.PIPE, env=anon_env())
+        (d["base"] / "qwen25-convert.log").write_text(p.stdout)
+        if p.returncode != 0 or not out.exists():
+            raise SystemExit(f"#{m['id']}: qwen25-convert exited {p.returncode} (log: {d['base'] / 'qwen25-convert.log'})")
+        lines = p.stdout.splitlines()
+        pick = lambda key: next((ln.split(key, 1)[1].strip() for ln in lines if key in ln), None)  # noqa: E731
+        info = {"n_ctx": opts["n_ctx"], "file": out.name, "bytes": out.stat().st_size, "sha256": sha256_file(out),
+                "artifact_digest": (pick("a16 artifact") or "").split()[0] or None,
+                "faithful": {k: pick(k) for k in ("a16 top-1 agree", "a16 top-5 contains", "a16 rank corr (100)", "a16 FAITHFUL")}}
+        st.data["a16"] = info
+        st.save()
+        return info
 
     def gguf_url(self, m: dict) -> str:
         return f"{HF_RESOLVE}/{m['source_repo']}/resolve/{m['source_revision']}/{variant_file(m, self.a.gguf_variant)}"
@@ -965,6 +1085,9 @@ class Pipeline:
         """Whether the fit can be measured here: `palw-tir-fidelity` re-reads the source and holds the integer program whole."""
         if is_legacy_wrap(m):
             return False, "a wrapped legacy file: nothing was converted here"
+        if is_a16(m):
+            return False, ("the A16 route's check is qwen25-convert's own FAITHFUL report over its 57-token prompt (in the manifest); "
+                           "no long-context check exists for the A16 engine")
         if self.a.no_fit:
             return False, "--no-fit"
         if m["converter"] == "tir-gguf" and not self.a.local_source:
@@ -992,15 +1115,17 @@ class Pipeline:
                 st.data["record"]["fit"] = fit
             st.mark("fit", {"measured": False}, self.a.dry_run)
             return
-        opts = effective_options(m, self.a.calib_positions)
+        opts = effective_options(m, self.a.context)
         texts = self.reg["calibration_texts"]
         ev = self.tokens_file(texts["evaluation"], d["src"] / "tokenizer.json", d["calib"] / "eval-tokens.json")
         argv = [self.tool("palw-tir-fidelity"), str(model_path), "--calib", str(d["calib"] / "calib-tokens.json"),
                 "--stats-in", str(d["calib"] / "calib-stats.json"), "--eval", str(d["calib"] / "eval-tokens.json"), "--exec", "--json"]
         if opts.get("gdn_core_wide"):
             argv.append("--gdn-core-wide")
+        argv += self.ram_args(d, "fit")
         if self.a.dry_run:
             self.r.run(argv)
+            self.fit_long(m, opts, d, model_path)
             return
         log("$ " + " ".join(shlex.quote(x) for x in argv))
         p = subprocess.run(argv, text=True, stdout=subprocess.PIPE, env=anon_env())
@@ -1020,11 +1145,57 @@ class Pipeline:
         if st.data.get("record") is not None:
             st.data["record"]["fit"] = fit
         log(f"#{m['id']} fit: mean KL {kl}, top-1 {top1} (tolerance KL <= {tol['kl_mean_max']}, top-1 >= {tol['top1_min']})")
+        if within:
+            fit["long"] = self.fit_long(m, opts, d, model_path)
+            within = fit["long"].get("within", True)
+            fit["within"] = within
         if not within:
             st.save()
             raise SystemExit(f"#{m['id']}: FIT OUT OF TOLERANCE — the index, manifest and card are not uploaded "
-                             f"(report: {d['base'] / 'fit-report.json'})")
+                             f"(reports: {d['base'] / 'fit-report.json'}, {d['base'] / 'fit-long-report.json'})")
         st.mark("fit", {"measured": True, "within": True})
+
+    def fit_long(self, m: dict, opts: dict, d: dict, model_path: Path) -> dict:
+        """The long-context check: one held-out sequence of the served length (the next 32K tokens of RFC-0002 after the
+        calibration's), every position compared as it is made (`--exec`; no logits row is held), the mean and worst KL of
+        `drift_windows` windows along it. Costs one float pass over the sequence (about a calibration) plus the integer run."""
+        texts = self.reg["calibration_texts"]
+        spec = dict(texts["long_evaluation"])
+        spec["len"] = opts["context"]
+        if self.a.no_fit_long:
+            return {"measured": False, "reason": "--no-fit-long"}
+        ev = self.tokens_file(spec, d["src"] / "tokenizer.json", d["calib"] / "eval-long-tokens.json")
+        argv = [self.tool("palw-tir-fidelity"), str(model_path), "--calib", str(d["calib"] / "calib-tokens.json"),
+                "--stats-in", str(d["calib"] / "calib-stats.json"), "--eval", str(d["calib"] / "eval-long-tokens.json"), "--exec",
+                "--drift-windows", str(spec["drift_windows"]), "--json"]
+        if opts.get("gdn_core_wide"):
+            argv.append("--gdn-core-wide")
+        argv += self.ram_args(d, "fit-long")
+        if self.a.dry_run:
+            self.r.run(argv)
+            return {}
+        log("$ " + " ".join(shlex.quote(x) for x in argv))
+        p = subprocess.run(argv, text=True, stdout=subprocess.PIPE, env=anon_env())
+        if p.returncode != 0:
+            raise SystemExit(f"#{m['id']}: palw-tir-fidelity (long) exited {p.returncode}")
+        (d["base"] / "fit-long-report.json").write_text(p.stdout)
+        res = json.loads(p.stdout)
+        met, dr = res.get("metrics") or {}, res.get("drift") or {}
+        tol = texts["fit_tolerance"]
+        wins = dr.get("windows") or []
+        worst = max((w["kl_mean"] for w in wins), default=None)
+        ratio, late = dr.get("ratio"), dr.get("kl_late")
+        drift_ok = ratio is None or late is None or late <= tol["drift_floor_kl"] or (ratio == ratio and ratio <= tol["drift_ratio_max"])
+        within = (met.get("kl_mean") is not None and met["kl_mean"] <= tol["kl_mean_max"]
+                  and met.get("top1_agreement", 0) >= tol["top1_min"]
+                  and worst is not None and worst <= tol["window_kl_mean_max"] and drift_ok)
+        out = {"measured": True, "within": within, "positions": met.get("positions"), "kl_mean": met.get("kl_mean"),
+               "kl_max": met.get("kl_max"), "top1_agreement": met.get("top1_agreement"), "window_kl_mean_max": worst,
+               "drift_ratio": ratio, "kl_early": dr.get("kl_early"), "kl_late": late, "windows": wins,
+               "evaluation_tokens_sha256": ev.get("tokens_sha256"), "seconds": res.get("seconds")}
+        log(f"#{m['id']} long fit: {met.get('positions')} positions, mean KL {met.get('kl_mean')}, worst window {worst}, "
+            f"late/early {ratio} -> {'within' if within else 'OUT OF TOLERANCE'}")
+        return out
 
     # -- upload ------------------------------------------------------------------------------------
 
@@ -1289,9 +1460,18 @@ def main(argv=None) -> int:
     r.add_argument("--segment-mib", type=int, default=2048)
     r.add_argument("--min-free-gb", type=float, default=30.0,
                    help="free-disk floor kept for others (the validation agent stops below 30 GB)")
-    r.add_argument("--calib-positions", type=int, default=DEFAULT_CALIB_POSITIONS,
-                   help="tokens of a recurrent (GDN) class's calibration sequence = its served context (freeze-v1 §5.2); "
-                        f"default {DEFAULT_CALIB_POSITIONS}. Dense classes: four 512-token texts, context 8192")
+    r.add_argument("--context", "--calib-positions", dest="context", type=int, default=None,
+                   help=f"the served context (default: the registry's, {GENESIS_CONTEXT} for every genesis model). A recurrent (GDN) "
+                        "class is calibrated on one sequence of this length (freeze-v1 §5.2); #1's A16 width")
+    r.add_argument("--calib-stats-in", help="calibration statistics measured elsewhere on this run's token file "
+                                            "(palw-tir-fidelity --calibrate-only --stats-out): read, not re-measured")
+    r.add_argument("--no-fit-long", action="store_true", help="skip the long-context fit check (recorded as not measured)")
+    r.add_argument("--ram-accounting", action="store_true",
+                   help="RFC-0020 §2: the converter and the fit checks write live/peak bytes by kind and stage and the resident set "
+                        "to <model dir>/ram-<step>.jsonl")
+    r.add_argument("--spill-carries-dir", help="RFC-0020 §6 (opt-in): spill the float reference's carries between layers here")
+    r.add_argument("--spill-carries-budget-mib", type=int, default=0,
+                   help="spill a sequence's carries only when they would pass this many MiB (0: always, when a dir is given)")
     r.add_argument("--calib-lazy-mib", type=int, default=0,
                    help="row-streamed calibration (default off): params of at least this many MiB are read when an op asks. "
                         "A dense tensor larger than --calib-lazy-cache-mib is then read again at every position")
@@ -1314,14 +1494,14 @@ def main(argv=None) -> int:
     mf.add_argument("--model", type=int, required=True)
     mf.add_argument("--out", required=True)
     mf.add_argument("--gguf-variant")
-    mf.add_argument("--calib-positions", type=int, default=DEFAULT_CALIB_POSITIONS)
+    mf.add_argument("--context", "--calib-positions", dest="context", type=int, default=None)
 
     cd = sub.add_parser("card", help="write a model's README model card")
     cd.add_argument("--model", type=int, required=True)
     cd.add_argument("--out", required=True)
     cd.add_argument("--record", help="the palwart-record.json of a conversion")
     cd.add_argument("--gguf-variant")
-    cd.add_argument("--calib-positions", type=int, default=DEFAULT_CALIB_POSITIONS)
+    cd.add_argument("--context", "--calib-positions", dest="context", type=int, default=None)
 
     for name in ("upload-segment", "fetch-shard"):
         h = sub.add_parser(name, help="(called by the converter)")
@@ -1354,12 +1534,12 @@ def main(argv=None) -> int:
                   f"out ~{e['output_bytes_est'] / GB:5.1f} GB  peak ~{e['peak_disk_bytes_est'] / GB:6.1f} GB")
         return 0
     if a.cmd == "manifest":
-        man = manifest_for(model_by_id(reg, a.model), a.gguf_variant, a.calib_positions, None, reg.get("calibration_texts"))
+        man = manifest_for(model_by_id(reg, a.model), a.gguf_variant, a.context, None, reg.get("calibration_texts"))
         Path(a.out).write_text(json.dumps(man, indent=1, ensure_ascii=False) + "\n")
         return 0
     if a.cmd == "card":
         rec = json.loads(Path(a.record).read_text()) if a.record else None
-        Path(a.out).write_text(model_card(model_by_id(reg, a.model), a.gguf_variant, rec, None, a.calib_positions))
+        Path(a.out).write_text(model_card(model_by_id(reg, a.model), a.gguf_variant, rec, None, a.context))
         return 0
     if a.cmd == "upload-segment":
         return hook_upload_segment(a)

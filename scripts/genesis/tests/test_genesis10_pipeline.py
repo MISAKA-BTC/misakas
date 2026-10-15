@@ -91,9 +91,11 @@ class Cards(unittest.TestCase):
         self.assertIn("official-derived", gp.model_card(gp.model_by_id(self.reg, 8), None, None))
         self.assertFalse(gp.manifest_for(gp.model_by_id(self.reg, 8), None)["uncensored"])
         one = gp.manifest_for(gp.model_by_id(self.reg, 1), None)
-        self.assertFalse(one["conversion"]["requantised"])
-        self.assertEqual(one["conversion"]["legacy_artifact"]["sha256"],
-                         "894e6914294e0b225a559365914a5e4509ffcd6ac884ca77f7e0f020c4595438")
+        self.assertEqual(one["served_context"], 32768, "#1 is re-converted at 32K")
+        self.assertIn("--a16 --n-ctx 32768", one["conversion"]["a16"]["tool"])
+        self.assertEqual(one["conversion"]["history_artifact"]["sha256"],
+                         "894e6914294e0b225a559365914a5e4509ffcd6ac884ca77f7e0f020c4595438", "the 8k file stays as history")
+        self.assertEqual(gp.manifest_for(gp.model_by_id(self.reg, 8), None)["served_context"], 512, "#8 as published")
 
 
 class Plans(unittest.TestCase):
@@ -136,6 +138,11 @@ class DryRuns(unittest.TestCase):
                     self.assertNotIn("HF_TOKEN=", out)
                     if mid == 6 and stream:
                         self.assertIn("--gguf-sha256 fcddc1ff6efa4932cf4a7eb18087be39527b740cdca0810bbd3a717312d61d53", out)
+                    if mid == 1:
+                        self.assertIn("--a16 --n-ctx 32768", out)
+                        self.assertIn("model.safetensors", out, "the A16 converter reads the checkpoint")
+                    if mid == 8:
+                        self.assertIn("BLOCKED", out)
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
                 rc = gp.main(["run", "--model", "8", "--dry-run", "--stream", "--work", d, "--hf", "/nonexistent/hf"])
@@ -149,21 +156,29 @@ class Calibration(unittest.TestCase):
     def setUp(self):
         self.reg = gp.load_registry()
 
-    def test_a_recurrent_class_serves_its_calibration_length_and_a_dense_class_keeps_its_own(self):
+    def test_every_genesis_model_serves_32k_and_a_recurrent_class_calibrates_on_one_32k_sequence(self):
+        self.assertEqual(self.reg["served_context"], gp.GENESIS_CONTEXT)
+        self.assertEqual(gp.GENESIS_CONTEXT, 32768)
         for mid in (2, 3, 6):
             m = gp.model_by_id(self.reg, mid)
             self.assertEqual(m["convert_options"]["calib"]["kind"], "recurrent")
             o = gp.effective_options(m, None)
-            self.assertEqual((o["calib"]["len"], o["context"]), (gp.DEFAULT_CALIB_POSITIONS, gp.DEFAULT_CALIB_POSITIONS))
+            self.assertEqual((o["calib"]["len"], o["context"]), (32768, 32768))
             o = gp.effective_options(m, 8192)
             self.assertEqual((o["calib"]["len"], o["context"]), (8192, 8192), "freeze-v1 §5.2: the served context is the length")
-            self.assertEqual(m["convert_options"]["calib"]["len"], gp.DEFAULT_CALIB_POSITIONS, "the registry is not modified")
+            self.assertEqual(m["convert_options"]["calib"]["len"], 32768, "the registry is not modified")
             with self.assertRaises(SystemExit):
                 gp.effective_options(m, 16)
         for mid in (4, 5, 10):
             m = gp.model_by_id(self.reg, mid)
-            o = gp.effective_options(m, 1024)
-            self.assertEqual((o["calib"]["kind"], o["calib"]["len"], o["context"]), ("dense", 512, 8192))
+            o = gp.effective_options(m, None)
+            self.assertEqual((o["calib"]["kind"], o["calib"]["len"], o["context"]), ("dense", 512, 32768))
+        one = gp.model_by_id(self.reg, 1)
+        self.assertTrue(gp.is_a16(one) and not gp.is_legacy_wrap(one))
+        self.assertEqual(gp.effective_options(one, None)["n_ctx"], 32768)
+        for m in self.reg["models"]:
+            self.assertEqual(m["served_context"], 512 if m["id"] == 8 else 32768, m["id"])
+        self.assertIn("max_position 512", gp.model_by_id(self.reg, 8)["blocked"])
 
     def test_the_manifest_pins_the_texts_tokenizer_lengths_and_policy(self):
         texts = self.reg["calibration_texts"]
@@ -174,8 +189,8 @@ class Calibration(unittest.TestCase):
         for m in self.reg["models"]:
             man = gp.manifest_for(m, None, 4096, None, texts)
             cal = man["conversion"].get("calibration")
-            if gp.is_legacy_wrap(m):
-                self.assertIsNone(cal, f"#{m['id']}: nothing is calibrated for a wrapped legacy file")
+            if gp.is_legacy_wrap(m) or gp.is_a16(m):
+                self.assertIsNone(cal, f"#{m['id']}: no TIR calibration (a wrapped legacy file, or the A16 converter's own)")
                 continue
             self.assertEqual(cal["tokens_file"], "calib-tokens.json")
             self.assertEqual(cal["stats_file"], "calib-stats.json")
@@ -188,8 +203,8 @@ class Calibration(unittest.TestCase):
                 self.assertEqual(man["conversion"]["options"]["context"], 4096)
             if m.get("tokenizer_source"):
                 self.assertEqual(cal["tokenizer"]["repo"], m["tokenizer_source"]["repo"])
-        card = gp.model_card(gp.model_by_id(self.reg, 2), None, None, None, 2048)
-        self.assertIn("served context: 2,048 tokens", card)
+        card = gp.model_card(gp.model_by_id(self.reg, 2), None, None, None, None)
+        self.assertIn("served context: 32,768 tokens", card)
         measured = {"tokens_sha256": "ab" * 32, "sequences": 1}
         man = gp.manifest_for(gp.model_by_id(self.reg, 2), None, 2048, measured, texts)
         self.assertEqual(man["conversion"]["calibration"]["tokens_sha256"], "ab" * 32)
@@ -215,9 +230,21 @@ class Calibration(unittest.TestCase):
             out = buf.getvalue()
             self.assertIn("palw-tir-fidelity", out)
             self.assertIn("--stats-in", out)
-            self.assertIn("--context 2048", out)
+            self.assertIn("--context 32768", out)
+            self.assertIn("--drift-windows 32", out, "the long-context check")
+            self.assertIn("--len 32768 --chunks 2", out, "the held-out next 32K tokens")
             self.assertNotIn("--calib-lazy-mib", out, "row-streamed calibration is off by default")
             self.assertIn("cat-file blob " + p.reg["calibration_texts"]["blobs"]["docs/rfc/0002-palw-tensor-ir.md"], out)
+            self.assertNotIn("--ram-accounting", out, "accounting is opt-in")
+            # RFC-0020: the RAM accounting files and the opt-in carry spill reach the converter and both fit checks.
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = gp.main(ap + ["--ram-accounting", "--spill-carries-dir", d, "--spill-carries-budget-mib", "512", "--redo"])
+            self.assertEqual(rc, 0)
+            out = buf.getvalue()
+            for step in ("convert", "fit", "fit-long"):
+                self.assertIn(f"ram-{step}.jsonl", out)
+            self.assertEqual(out.count("--spill-carries-budget-mib 512"), 3)
 
     def test_a_measured_fit_out_of_tolerance_blocks_the_upload(self):
         with tempfile.TemporaryDirectory() as d:

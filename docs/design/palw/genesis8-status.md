@@ -8,12 +8,17 @@ deterministic re-execution and spot checks, never a cryptographic proof of compu
 Branch: `integ/genesis10`. Registry (pins, sizes, LFS SHA-256): `scripts/genesis/genesis8_models.json`. Consensus list (dormant):
 `consensus/core/src/palw_genesis8_catalog_v1.rs`.
 
-## 1. The set (user decisions 2026-10-15)
+## 1. The set (user decisions 2026-10-15 and 2026-10-16)
 
 The user chose ten models, then dropped #7 (Gemma 4 26B-A4B, overlapping #8) and #9 (Qwen3-32B, overlapping #6), then switched
 every source to the uncensored variant (huihui abliterated; Dolphin where no huihui variant exists), then fixed #5 to the BF16
 release and #6 to the bf16 GGUF of a community SFT, then made #8 the existing **official-derived** PALWQ361 runtime (the only entry
 that is not an uncensored variant). Ids keep the original numbering.
+
+**Served context: 32,768 tokens for every genesis model** (user decision 2026-10-16). The GDN classes (#2 #3 #6) are calibrated on
+one 32,768-token sequence (freeze-v1 §5.2); the dense TIR classes (#4 #5 #10) declare 32,768; #1 is re-converted with the A16
+converter at `--n-ctx 32768`; **#8's published runtime serves 512** (its PALWQ361 header) and is blocked until re-converted (§5).
+Memory design for the long context: [RFC-0020](../../rfc/0020-long-context-calibration-memory.md).
 
 **Scope: text generation only** (user policy 2026-10-15): token ids in, next-token logits out. Vision towers and projectors
 (mmproj), image/audio/video embedders and processors, and multi-token-prediction (MTP) heads are not computed, not covered, not
@@ -23,13 +28,13 @@ route (`palw_genesis8_admits_input_v1`); the pipeline never fetches mmproj or pr
 
 | # | Source @ pinned revision | Architecture | License | Route | Conversion | e2e adjudication | Artifact repository |
 |---|---|---|---|---|---|---|---|
-| 1 | `dphn/Dolphin3.0-Qwen2.5-1.5B` @ `60c996e2` | Qwen2ForCausalLM (dense) | Apache-2.0 | BASE-0 A16 (legacy step court) | **converted** (legacy `.palwart`, `qwen25-convert --a16 --n-ctx 8192` @ 0b1c11b87: 1,799,359,436 B, sha256 `894e6914…5438`, artifact digest `50e8acbe…c217`, tokenizer `c41926f5…96df`, FAITHFUL top-1 46/57 top-5 55/57); PALWART3 wrap of the same payload: implemented (unverified), not run | covered (A16 kernels in the shipped step court) | `Misakachain/Dolphin3.0-Qwen2.5-1.5B-PALW` (legacy file @ `816208c4`) |
-| 2 | `huihui-ai/Huihui-Qwen3.5-2B-abliterated` @ `b2e291a6` | Qwen3_5ForConditionalGeneration (GDN hybrid; text decoder) | Apache-2.0 | TIR (K2-TIR) | a run was started by the coordinator with an earlier pipeline (`--gdn-core-wide`, 8k calibration, PALWART3 direct); result not recorded here. **Re-run recommended** with the current pipeline: that run's token file embeds the machine's paths (part of the root), its manifest predates the scope and calibration records, and its served context (8,192) differs from the new GDN default (2,048, §4.1) | covered at the family level (K2-TIR; tests written) — kernel not active | `Misakachain/Huihui-Qwen3.5-2B-abliterated-PALW` |
+| 1 | `dphn/Dolphin3.0-Qwen2.5-1.5B` @ `60c996e2` | Qwen2ForCausalLM (dense) | Apache-2.0 | BASE-0 A16 (legacy step court) | **to re-convert at 32K**: `qwen25-convert --a16 --n-ctx 32768` (the A16 width is part of the artifact digest), then carried in PALWART3 — implemented in the pipeline (`converter: a16`), not run. History: the 8k legacy `.palwart` published 2026-10-15 (`qwen25-convert --a16 --n-ctx 8192` @ 0b1c11b87: 1,799,359,436 B, sha256 `894e6914…5438`, artifact digest `50e8acbe…c217`, FAITHFUL top-1 46/57 top-5 55/57) stays in the repository | covered (A16 kernels in the shipped step court); A16's calibration is the converter's fixed 57-token prompt — no long-context check exists for the A16 engine | `Misakachain/Dolphin3.0-Qwen2.5-1.5B-PALW` (added under `palwart/`) |
+| 2 | `huihui-ai/Huihui-Qwen3.5-2B-abliterated` @ `b2e291a6` | Qwen3_5ForConditionalGeneration (GDN hybrid; text decoder) | Apache-2.0 | TIR (K2-TIR) | a run was started by the coordinator with an earlier pipeline (`--gdn-core-wide`, 8k calibration, PALWART3 direct); result not recorded here. **Re-run with the current pipeline at 32K**: that run's token file embeds the machine's paths (part of the root), its manifest predates the scope and calibration records, and its served context (8,192) is not the genesis 32,768 | covered at the family level (K2-TIR; tests written) — kernel not active | `Misakachain/Huihui-Qwen3.5-2B-abliterated-PALW` |
 | 3 | `huihui-ai/Huihui-Qwen3.5-9B-abliterated` @ `05b9e7c9` (**tentative**: no official Qwen3.8 9B) | Qwen3_5ForConditionalGeneration | Apache-2.0 | TIR | not run | as #2 | `Misakachain/Huihui-Qwen3.5-9B-abliterated-PALW` |
 | 4 | `huihui-ai/Huihui-gemma-4-12B-it-abliterated` @ `060ea173` | Gemma4UnifiedForConditionalGeneration (dense; text decoder) | Apache-2.0 | TIR | not run (adapter added) | text path covered at the family level; image path out of scope (text generation only) | `Misakachain/Huihui-gemma-4-12B-it-abliterated-PALW` |
 | 5 | `huihui-ai/Huihui-gpt-oss-20b-BF16-abliterated` @ `b73ec897` | GptOssForCausalLM (MoE, sinks) | Apache-2.0 | TIR | not run | covered at the family level | `Misakachain/Huihui-gpt-oss-20b-BF16-abliterated-PALW` |
 | 6 | `huihui-ai/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-GGUF` @ `a0b17c71`, file `…-bf16.gguf` (54.66 GB, sha256 `fcddc1ff…1d53`); base: community SFT `nerkyor/Qwen3.8-27B-Coder390-…` | GGUF `qwen35` (GDN hybrid) | Apache-2.0 | TIR | not run; end-to-end streaming implemented (unverified) | as #2 (see the `output_gate_type` note, §6) | `Misakachain/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-PALW` |
-| 8 | `Misakachain/Qwen3.6-35B-A3B-PALW-runtime` @ `bbc2f6c3`, file `palw-runtime/qwen36-35b-a3b.palwq36` (36,492,831,232 B, sha256 `5fe1d15c…8b29`): the existing **official-derived** PALWQ361 runtime of `Qwen/Qwen3.6-35B-A3B`, not an uncensored variant | Qwen3_5MoeForConditionalGeneration (GDN hybrid + MoE; text decoder) | Apache-2.0 | PALWQ361 (legacy step court, Q36 profile) | **wrap only** (not re-converted): the file streamed anonymously at the pinned commit, its LFS SHA-256 checked before the index is written, carried byte for byte with its legacy id as the inner root (`palwart pack --from-url`); implemented (unverified), not run | the Q36 step court covers its layer kinds; GDN solo/hybrid v2 court merged from the GDN lane (unverified) | the same repository, added under `palwart/` (the runtime's own files are never replaced) |
+| 8 | `Misakachain/Qwen3.6-35B-A3B-PALW-runtime` @ `bbc2f6c3`, file `palw-runtime/qwen36-35b-a3b.palwq36` (36,492,831,232 B, sha256 `5fe1d15c…8b29`): the existing **official-derived** PALWQ361 runtime of `Qwen/Qwen3.6-35B-A3B`, not an uncensored variant | Qwen3_5MoeForConditionalGeneration (GDN hybrid + MoE; text decoder) | Apache-2.0 | PALWQ361 (legacy step court, Q36 profile) | **wrap only** (not re-converted): the file streamed anonymously at the pinned commit, its LFS SHA-256 checked before the index is written, carried byte for byte with its legacy id as the inner root (`palwart pack --from-url`); implemented (unverified), not run. **BLOCKED for 32K:** the header (bytes 0..1023 read 2026-10-16) says `max_position 512`, rotary table 512 — the PALWQ361 context is baked into the artifact (§5) | the Q36 step court covers its layer kinds; GDN solo/hybrid v2 court merged from the GDN lane (unverified) | the same repository, added under `palwart/` (the runtime's own files are never replaced) |
 | 10 | `huihui-ai/Llama-3.3-70B-Instruct-abliterated` @ `fa133346` | LlamaForCausalLM (dense) | Llama 3.3 Community License | TIR | not run | **not required** (user decision); the families are covered | `Misakachain/Llama-3.3-70B-Instruct-abliterated-PALW` (name begins with "Llama"; card says "Built with Llama"; LICENSE, USE_POLICY.md, NOTICE ship with it) |
 
 #6's `mmproj-model-bf16.gguf` (the vision projector) is listed among the registry's excluded files and never fetched (scope).
@@ -98,58 +103,56 @@ never read or printed.
 * **What it measures.** For every site of the float reference, the activation range: absmax, the maxima at position 0 and at later
   positions, per-channel maxima, sum of squares. The converter turns these into each site's fixed-point scale; weights are
   quantised per row independently of them. The integer program, and every check and court over it, is exact and deterministic
-  for **any** pinned calibration set — calibration decides only how well the integer program fits the float model (a range set
-  too low clips, too high loses resolution).
-* **The minimum.** For exactness: any pinned, non-empty token set. For fit: enough ordinary text that each site's maximum is
-  reached (the position-0 sink and the large activations ordinary prose triggers). A recurrent (Gated DeltaNet) program is the
-  exception: its state's magnitude grows with the position, so it needs one sequence as long as the context it serves (freeze-v1
-  §5.2; Jamba-tiny drifted ×193 at 4,096 positions with a 128-token calibration, ×0.45 with one 4,096-token sequence added). The
-  converter refuses a context longer than the longest calibration sequence, so for #2 #3 #6 **the calibration length is the
-  served context**.
-* **Default `--calib-positions 2048`**: recurrent classes are calibrated on one 2,048-token sequence and served at 2,048
-  (`--calib-positions 8192` serves 8,192 at about four times the calibration time). Dense classes (#4 #5 #10): four 512-token
-  texts (2,048 positions, run in parallel), served at 8,192 — unchanged.
-* **Reproducible.** The texts are git blobs at one pinned commit (`calibration_texts` in the registry; extracted with `git
-  cat-file blob` and checked, so a later edit of a document does not move a conversion). The token file is canonical JSON with
-  repository-relative names only: it travels in the artifact, so its bytes are part of the root. The manifest's
-  `conversion.calibration` records the texts (path, commit, blob, SHA-256, token count), the tokenizer (repo@revision, SHA-256),
-  the `tokenizers` version, lengths, served and calibrated context, the policy (`headroom16/32/resid`, `linear_weight_bits`,
-  `gdn_core_wide`), the token file's SHA-256 and the platform. Off that platform, rebuild from the carried statistics
-  (`palw-tir-convert --stats-in calib-stats.json`, same context, flags, manifest and calibration files); re-measured statistics can
-  differ in the last bits where `exp`/`tanh` come from another libm.
-* **All cores.** Before: one calibration sequence ran on one driver thread; only matrix rows were split across threads, each row
-  a single chain of dependent f64 adds (latency-bound), and attention and the Gated DeltaNet recurrence ran head by head on one
-  thread (#2 measured ≈330 % CPU). Now `linear_raw` runs four rows per thread with independent accumulators (x converted to f64
-  once), and attention and Gated DeltaNet run their heads on separate threads. Every row and head is the same operations in the
-  same order, so results are **bit-identical** to the one-thread kernels (`linear_raw_is_the_sequential_fold_bit_for_bit`,
-  `attention_and_gated_delta_across_threads_are_the_one_thread_result` in `misaka/palw/tir/lower/src/float_ref/tests.rs`, written,
-  not run): statistics and artifacts do not depend on the core count.
-* **Row-streamed calibration is off by default** (`--calib-lazy-mib 0`). With it on, a dense tensor larger than its cache
-  (512 MiB) is read again, whole, at every position (`ParamStore::view`); for #6's streamed GGUF that is a re-download of about
-  1 GB per position and layer. The layer-major run already holds one occurrence's params at a time (at most 5.1 GB: #6's f32
-  embedding or head), which fits 32 GB for every genesis model. The statistics are the same either way.
-* **Fit guard** (`fit` step, before the index upload): `palw-tir-fidelity --exec --stats-in` on the conversion's own statistics
-  and pinned held-out text (README.md and docs/PRINCIPLES.md, 2 × 64 tokens); tolerance mean KL ≤ 0.1 and top-1 ≥ 0.8 (the L2
-  default tolerance) against the lowering's float reference. Out of tolerance → the index, manifest and card are not uploaded.
-  It runs where the source is on disk and the integer program fits in RAM (`--fit-max-gb 20`): #2, #3, and #4 when its shard is
-  on disk. #5 (22.6 GB), #6 (streamed) and #10 are recorded as "not measured", with the reason, and need a larger host.
+  for **any** pinned calibration set — calibration decides only how well the integer program fits the float model.
+* **The length.** A recurrent (Gated DeltaNet) program needs one sequence as long as the context it serves (freeze-v1 §5.2; the
+  converter refuses a longer context). With the 32K decision, #2 #3 #6 calibrate on **one 32,768-token sequence** (the first 32K
+  tokens of RFC-0002 at the pinned blob). Dense classes (#4 #5 #10) keep four 512-token texts and declare 32,768: their sites have
+  no state growing with the position; the long fit check below tests them at 32K where it can run. `--context N` overrides the
+  served context (and a recurrent class's calibration length) for experiments.
+* **Reproducible.** Texts pinned as git blobs at one commit; a canonical token file with repository-relative names (it is in the
+  root); the manifest's `conversion.calibration` records texts, tokenizer, `tokenizers` version, lengths, served and calibrated
+  context, policy, the token file's SHA-256 and the platform. Off that platform, rebuild from the carried statistics
+  (`--stats-in`); re-measured statistics can differ in the last bits where `exp`/`tanh` come from another libm.
+* **Calibration measured elsewhere** (`--calib-stats-in FILE`): statistics from a calibration-only machine
+  (`palw-tir-fidelity <model> --calib calib-tokens.json --calibrate-only --stats-out calib-stats.json [--gdn-core-wide]` on this
+  run's token file) are read, not re-measured; the converter still checks the calibration-length rule on the token file
+  (`palw-tir-convert` now accepts `--stats-in` with `--calib`).
+* **Speed, bit for bit.** The float reference runs every block **node by node over runs of 32 positions** (each matrix read once
+  per run; `PALW_FLOAT_POSITION_BLOCK=1` for position by position), with `linear_raw` / `linear_raw_many` on independent
+  accumulators and attention / Gated DeltaNet heads on separate threads. Attention stays one query position at a time over every
+  visible key (absolute causal rule) — not chunked attention. Statistics and logits are bit-identical to the one-thread,
+  position-by-position reference (`misaka/palw/tir/lower/tests/position_blocks.rs`, `float_ref/tests.rs`; written, not run).
+* **Memory** ([RFC-0020](../../rfc/0020-long-context-calibration-memory.md)): consumed carries (one full-sequence carry instead
+  of two: #2 256 MiB, #3 512 MiB, #6 640 MiB saved at 32K); row-streamed calibration off by default (with it on, a dense tensor
+  over its cache is re-read whole at every position; a warning says so); no 32K × 32K score matrix on any genesis path (audit,
+  RFC-0020 §5.1); opt-in bit-identical carry spill (`--spill-carries-dir`); `--ram-accounting` writes live/peak bytes by kind and
+  stage and the resident set to `<model dir>/ram-<step>.jsonl`.
+* **Fit guard** (`fit` step, before the index upload): (1) `palw-tir-fidelity --exec --stats-in` on pinned held-out text
+  (README.md, docs/PRINCIPLES.md; 2 × 64 tokens): mean KL ≤ 0.1, top-1 ≥ 0.8; (2) **the long-context check**: the next 32K tokens
+  of RFC-0002 (held out from the calibration's first 32K), every position compared as it is made (`--drift-windows 32`): mean KL
+  ≤ 0.1, top-1 ≥ 0.8, every window's mean KL ≤ 0.1, late/early ≤ 1.5 (waived when the late window's KL ≤ 0.01). Out of tolerance
+  → the index, manifest and card are not uploaded. Runs where the source is on disk and the integer program fits
+  (`--fit-max-gb 20`): #2, #3, #4. #5 (22.6 GB), #6 (streamed; 29.5 GB) and #10 are recorded as not measured, with the reason.
+  `--no-fit-long` skips the long check (recorded).
 
-Estimates (unmeasured; M1 Max 8P+2E, 32 GB). Base: the 9B's measured calibration (one 8,192-token sequence, 18,360 s ≈ 3.5 GMAC/s)
-and the #2 run (7 layers × 8,192 positions in ≈1,600 s ≈ 2.1 GMAC/s); the threaded kernels are expected at 3–5× (four-row
-accumulators ≈4× per core on the dot products, bounded by memory bandwidth for #6's f32 layers; heads in parallel):
+Estimates at 32K (unmeasured; M1 Max 8P+2E, 32 GB; base: the 9B's measured 3.5 GMAC/s and #2's 2.1 GMAC/s before the kernel
+changes; ±50%; RFC-0020 §9):
 
-| | 2,048 positions, before | 2,048, after | 8,192, after |
-|---|---|---|---|
-| #2 calibration | ~20–25 min | ~6–10 min | ~25–40 min |
-| #6 calibration | ~4–4.5 h | ~1–1.5 h | ~4–6 h |
-| #6 whole streamed run (calibration, conversion pass, ≈140–165 GB of range reads, 29.5 GB of segments uploaded) | ~6 h | ~2.5–4 h | ~6–9 h |
-| #6 peak RAM (row streaming off) | — | ~8–12 GB (5.1 GB f32 embedding/head + its bf16 read + windows) | ~+0.5 GB |
+| | Calibration 32K | Conversion | Long fit (float + integer) | Peak RAM (calibration) |
+|---|---|---|---|---|
+| #2 | 1.5–2 h | ~10 min | 1.5–2 h + ~0.5 h | 2.5–3.5 GB (fit ~5–6 GB) |
+| #3 | 4.5–7 h | ~30 min | 4.5–7 h + ~1 h | 5–6 GB (fit ~16 GB) |
+| #6 (streamed GGUF) | 13–19 h | 1.5–3 h (HTTPS re-read, upload) | not on this host | 8–11 GB |
+
+#6 on this Mac: 15–22 h in all — under 24 h only just, and uncertain. Fastest correct path: a calibration-only machine (64 cores,
+≥ 64 GB, the GGUF on disk) running `palw-tir-fidelity --calibrate-only --stats-out` (≈3–4 h, also able to run the long fit),
+then this Mac converts with `--calib-stats-in` (1.5–3 h).
 
 What it needs:
 
-* binaries: `cargo build --release -p misaka-palw-tir-artifact --bin palwart` and
-  `cargo build --release -p misaka-palw-tir-lower --features remote --bin palw-tir-convert` (the `remote` feature only for #6's
-  HTTPS-streamed GGUF; both crates build without the consensus and kernel crates);
+* binaries: `cargo build --release -p misaka-palw-tir-artifact --bin palwart`,
+  `cargo build --release -p misaka-palw-tir-lower --features remote --bin palw-tir-convert --bin palw-tir-fidelity` (the `remote`
+  feature only for #6's HTTPS-streamed GGUF) and, for #1, `cargo build --release -p misaka-palw-base0 --bin qwen25-convert`;
 * `hf` CLI (`/Users/wata/Downloads/hf-upload-venv/bin/hf`) and a valid login (`hf auth login --force`) for uploads — `--stream`
   uploads during conversion, so the login must be valid before it starts;
 * a Python with `tokenizers` for the calibration tokens (`/Users/wata/Downloads/MISAKA-wt-b/tir-venv/bin/python`);
@@ -159,28 +162,36 @@ Disk plan (estimates from the registry: output ≈ 1.08 × parameters as int8 co
 
 | # | Input | Output (est.) | Peak disk, whole | Peak disk, `--stream` | Notes |
 |---|---|---|---|---|---|
-| 1 | 1.8 GB (legacy A16 file) | 1.8 GB | 5.6 GB | 5.9 GB | no re-quantisation |
+| 1 | 3.1 GB (bf16 safetensors) | ~1.8 GB (A16 at 32K) | ~8.5 GB | ~8.5 GB | `qwen25-convert` reads the checkpoint whole and writes the A16 file before packing |
 | 2 | 4.5 GB | 2.5 GB | 9.0 GB | 8.7 GB | single shard |
 | 3 | 19.3 GB | 10.4 GB | 31.7 GB | 14.9 GB | 4 shards, two resident |
 | 4 | 23.9 GB | 12.9 GB | 38.8 GB | 28.1 GB | one 24 GB shard |
 | 5 | 41.8 GB | 22.6 GB | 66.4 GB | 14.0 GB | 9 shards |
 | 6 | 54.66 GB (bf16 GGUF) | 29.5 GB | 86.2 GB | **~4 GB** | HTTPS range reads, never stored; ≈2.5–3× the file downloaded (two passes; lexicographic layer order in the file) |
-| 8 | 36.5 GB (legacy `.palwq36`) | 36.5 GB | 75.0 GB | ~4 GB | wrap only; streamed with `palwart pack --from-url` (LFS SHA-256 checked); Xet dedup expected |
+| 8 | 36.5 GB (legacy `.palwq36`) | 36.5 GB | 75.0 GB | ~4 GB | **blocked for 32K** (serves 512); the wrap path stays implemented |
 | 10 | 141.1 GB | 76.2 GB | 219.3 GB | 14.1 GB | 30 shards |
 
 The pipeline keeps a 30 GB free-disk floor (`--min-free-gb`) for the validation agent that shares the disk.
 
-RAM (unmeasured estimates): calibration runs layer by layer, one occurrence's params resident (row streaming off, §4.1); the 9B 8k
-run measured 21.4 GB RSS with an mmapped checkpoint (mapped pages count). #6 (streamed, no mmap): ~8–12 GB at 2,048 positions (the
-largest buffers: the f32 embedding / head, 5.1 GB each, and its bf16 read); calibration logits are dropped as they are made and
-attention scores exist one position at a time.
+RAM (unmeasured estimates, §4.1 table): calibration runs layer by layer, one occurrence's params resident; at 32K one
+full-sequence carry (#6 640 MiB), one attention layer's history (#6 256 MiB), per-query scores only. The 9B 8k run measured 21.4 GB
+RSS with an mmapped checkpoint (mapped pages count). Measure with `--ram-accounting`.
 
 ## 5. Open items
 
+* **#8 at 32K (blocked; needs the user):** the published `palw-runtime/qwen36-35b-a3b.palwq36` serves 512 positions — header
+  `max_position 512`, rotary table 512, and the GDN state exponents' horizon correction is sized to it; the context is baked into
+  the artifact, not a class parameter. Re-conversion: `qwen36-convert --gguf FILE --out ARTIFACT --context 32768` (or `--url URL
+  --header FIRST64MB` to stream the input) from a pinned `qwen35moe` GGUF, then `palwart pack`. Needs (a) **a source decision**:
+  no official Qwen GGUF exists (`Qwen/Qwen3.6-35B-A3B-GGUF` answers 401); `unsloth/Qwen3.6-35B-A3B-GGUF@a483e9e6` (Apache-2.0)
+  has `Qwen3.6-35B-A3B-Q8_0.gguf` (36.9 GB) and a two-shard BF16; and **provenance**: the runtime repository's own profile
+  (`config/qwen3.6-35b-a3b-claude-4.7-profile.json`) pins `huihui_ai/Qwen3.6-abliterated:35b-Claude-4.7` Q4_K_M as its inference
+  artifact and its card's `base_model` is `huihui-ai/Huihui-Qwen3.6-35B-A3B-Claude-4.7-Opus-abliterated` — the "official-derived"
+  description of the published file needs the user's confirmation; (b) **disk**: the converter writes the ~36 GB `.palwq36`
+  locally before packing (~38 GB peak with the 30 GB floor kept: more than ~64 GB free allows) unless a two-pass writer is added.
 * **The fit of #5, #6 and #10** is not measured on this host (§4.1); measure it on a host with the source on disk and RAM for the
   integer program before the index is relied on.
-* **Long-context drift of the GDN classes** at their served context is not part of the fit guard (2 × 64 held-out tokens):
-  `palw-tir-fidelity --drift` with one evaluation sequence of the served length measures it (#2 is cheap enough to try).
+* **#1 at 32K**: the A16 route has no long-context check (qwen25-convert's FAITHFUL report covers its 57-token prompt).
 * **Registration binds the PALWART3 root**: today a TIR class binds its inventory root; the next network's registration must bind the
   container root and the court must open the inner inventory leaves under the inner root it commits. Consensus work, not started.
 * **K2-TIR activation**: the kernels are implemented, not active; arming them is a fenced decision outside this lane.
@@ -195,8 +206,14 @@ attention scores exist one position at a time.
 
 ## 6. Compile and semantic risks
 
-* Nothing here was compiled. The float reference's threaded kernels (`linear_raw`, `attention`, `gated_delta_traced`) must be
-  bit-identical to the one-thread forms; the tests compare bits, not tolerances, against verbatim copies of the old kernels.
+* Nothing here was compiled. The float reference's threaded kernels (`linear_raw`, `linear_raw_many`, `attention`,
+  `gated_delta_traced`) must be bit-identical to the one-thread forms; the tests compare bits, not tolerances, against verbatim
+  copies of the old kernels.
+* The node-by-node runs of positions (`Session::eval_occurrence_run`) are the largest semantic risk: an attention must read exactly
+  the history rows a position-by-position run would have appended (`hist_rows`), and a block with any other stateful op must fall
+  back. `tests/position_blocks.rs` compares statistics digests and logits with the old two-sequence, position-by-position
+  algorithm (copied verbatim) on seven architectures, and the existing fidelity / golden tests run through the new path by default;
+  `PALW_FLOAT_POSITION_BLOCK=1` restores position by position without a rebuild.
 * The highest-risk changes: `GgufFile` now holds `Option<Arc<dyn ByteSourceV1>>` (the trait carries a
   `Debug` supertrait for the derive); `ConvertRequest`/`ConvertOutcome` gained fields (all constructors go through
   `ConvertRequest::new` / `convert_model`); new built-in adapters change `adapter::builtin::pack_hash()` (recorded by runtime packs,

@@ -4603,7 +4603,10 @@ establish that implementation, native Final or RFC02 completion.
 abliterated; Dolphin where no huihui variant exists) except #8, which is the existing **official-derived** PALWQ361 runtime of
 Qwen3.6-35B-A3B carried byte for byte (the only entry that is not an uncensored variant). Ids keep the original numbering. These
 models are the next network's genesis (RFC-0019 edition 0, the 1.0 tier); testnet-12, its preset and its DAA 14,000 release scope
-are unchanged.
+are unchanged. **Every genesis model is served at a 32K context (32,768 tokens; user decision 2026-10-16).** #8's published
+runtime bakes 512 positions into its PALWQ361 header and rotary table, so it is blocked until re-converted at 32,768 (source and
+provenance need the user, `docs/design/palw/genesis8-status.md` §5); #1 is re-converted with the A16 converter at `--n-ctx 32768`
+(the published 8k file stays as history).
 
 **Scope: text generation only** (user policy, 2026-10-15). A genesis class maps token ids to next-token logits. Vision towers and
 projectors (mmproj), image/audio/video embedders and processors, and multi-token-prediction (MTP) heads are not computed, not
@@ -4613,13 +4616,13 @@ covered, not admitted as claims and not rewarded; image paths will not be enable
 
 | # | Source (pinned revision) | Architecture | License | Route |
 | --- | --- | --- | --- | --- |
-| 1 | `dphn/Dolphin3.0-Qwen2.5-1.5B` @ `60c996e2` | Qwen2 dense | Apache-2.0 | BASE-0 A16 |
+| 1 | `dphn/Dolphin3.0-Qwen2.5-1.5B` @ `60c996e2` (re-converted at `--n-ctx 32768`) | Qwen2 dense | Apache-2.0 | BASE-0 A16 |
 | 2 | `huihui-ai/Huihui-Qwen3.5-2B-abliterated` @ `b2e291a6` | Qwen3.5 Gated-DeltaNet hybrid | Apache-2.0 | TIR |
 | 3 | `huihui-ai/Huihui-Qwen3.5-9B-abliterated` @ `05b9e7c9` (tentative: no official Qwen3.8 9B) | Qwen3.5 GDN hybrid | Apache-2.0 | TIR |
 | 4 | `huihui-ai/Huihui-gemma-4-12B-it-abliterated` @ `060ea173` | Gemma-4 Unified (dense, multimodal wrapper) | Apache-2.0 | TIR |
 | 5 | `huihui-ai/Huihui-gpt-oss-20b-BF16-abliterated` @ `b73ec897` | gpt-oss MoE (sinks, sliding window) | Apache-2.0 | TIR |
 | 6 | `huihui-ai/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-GGUF` @ `a0b17c71`, bf16 GGUF | Qwen3.8 GDN hybrid (community SFT) | Apache-2.0 | TIR |
-| 8 | `Misakachain/Qwen3.6-35B-A3B-PALW-runtime` @ `bbc2f6c3`, `palw-runtime/qwen36-35b-a3b.palwq36` (official-derived; not re-converted) | Qwen3.6 GDN hybrid + MoE | Apache-2.0 | PALWQ361 integer runtime (wrapped) |
+| 8 | `Misakachain/Qwen3.6-35B-A3B-PALW-runtime` @ `bbc2f6c3`, `palw-runtime/qwen36-35b-a3b.palwq36` (official-derived; serves 512 as published — blocked for 32K) | Qwen3.6 GDN hybrid + MoE | Apache-2.0 | PALWQ361 integer runtime |
 | 10 | `huihui-ai/Llama-3.3-70B-Instruct-abliterated` @ `fa133346` | Llama 3 dense | Llama 3.3 | TIR (not required to be end-to-end adjudicable) |
 
 Every genesis model ships as **one versioned `PALWART3` artifact** (`misaka/palw/tir/artifact/src/palwart_v3.rs`): an index and
@@ -4634,12 +4637,15 @@ the Llama 3.3 license, Acceptable Use Policy and notice ship with it); #8's cont
 Calibration measures each site's activation range on the float reference (absmax, per-position and per-channel maxima); the
 integer program, and every adjudication over it, is exact and deterministic for any pinned calibration set, so the calibration
 length is a fit choice, not a correctness one. A recurrent (Gated DeltaNet) class is calibrated on one sequence as long as the
-context it serves (freeze-v1 §5.2, enforced by the converter): for #2, #3 and #6 the calibration length (`--calib-positions`,
-default 2,048) is the served context. Dense classes use four 512-token texts and serve 8,192. The texts are git blobs at one
-pinned commit; the token file and the measured statistics travel in the artifact and the manifest records texts, tokenizer,
-lengths and policy. The float reference's threaded kernels are bit-identical to its one-thread kernels, so the statistics do not
-depend on the core count. A fit guard (`palw-tir-fidelity --exec`, held-out text, mean KL <= 0.1 and top-1 >= 0.8) withholds the
-index of a class outside the tolerance where it can be measured on the conversion host. The genesis list is
+context it serves (freeze-v1 §5.2, enforced by the converter): #2, #3 and #6 calibrate on one 32,768-token sequence. Dense classes
+use four 512-token texts and declare 32,768. The texts are git blobs at one pinned commit; the token file and the measured
+statistics travel in the artifact and the manifest records texts, tokenizer, lengths and policy. The float reference's threaded
+kernels and its node-by-node runs of positions are bit-identical to the one-thread, position-by-position reference, so the
+statistics depend neither on the core count nor on the run length. The memory design for the long context (one full-sequence
+carry, no score matrix, opt-in carry spill, RAM accounting) is [RFC-0020](0020-long-context-calibration-memory.md). A fit guard
+(`palw-tir-fidelity --exec`: held-out short text, and the held-out next 32K tokens with a 32-window drift curve; mean KL <= 0.1,
+top-1 >= 0.8, every window's KL <= 0.1) withholds the index of a class outside the tolerance where it can be measured on the
+conversion host. The genesis list is
 `consensus/core/src/palw_genesis8_catalog_v1.rs` (dormant: edition 0 is built only from supplied roots); the conversion pipeline is
 `scripts/genesis/genesis10_pipeline.py`; per-model status, coverage (architecture × layer kind) and open items are in
 `docs/design/palw/genesis8-status.md`.

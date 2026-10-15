@@ -45,15 +45,22 @@ APACHE_NOTE = "Apache License 2.0 (the full text ships in the artifact: scripts/
 # float reference; the integer program, and every adjudication over it, is exact and deterministic for ANY pinned calibration set.
 # What the length buys is fit to the float model. A recurrent program (Gated DeltaNet) carries a state whose magnitude grows with
 # the position, so it is calibrated on one sequence at least as long as the context it is served at (freeze-v1 §5.2, enforced by
-# the converter): `len` IS the served context of a recurrent class, and the pipeline's `--calib-positions` sets both (default
-# 2048). A dense program has no carried state: four 512-token documents (2,048 positions) and the served context stays 8,192.
-CALIB_POSITIONS_DEFAULT = 2048
+# the converter): `len` IS the served context of a recurrent class. A dense program has no carried state: four 512-token
+# documents (2,048 positions).
+#
+# User decision 2026-10-16: EVERY genesis model is served at a 32K context (32,768 tokens). The GDN classes (#2 #3 #6) are
+# therefore calibrated on one 32,768-token sequence (the first 32K tokens of RFC-0002); the dense TIR classes declare 32,768;
+# #1 is re-converted at --n-ctx 32768; #8's published runtime serves 512 (its header) and is blocked until re-converted.
+GENESIS_CONTEXT = 32768
+CALIB_POSITIONS_DEFAULT = GENESIS_CONTEXT
 RECURRENT_CALIB = {"kind": "recurrent", "docs": ["docs/rfc/0002-palw-tensor-ir.md"], "len": CALIB_POSITIONS_DEFAULT, "chunks": 1}
 DENSE_CALIB = {"kind": "dense", "docs": ["docs/archival.md", "docs/crescendo-guide.md", "CONTRIBUTING.md", "SECURITY.md"], "len": 512,
                "chunks": 1}
 # The texts, pinned by git blob at one commit of this repository: a document edited later does not move a conversion's tokens.
 # The pipeline extracts each blob (`git cat-file blob`), checks the id, and tokenises the extracted copy. `evaluation` is the
-# held-out text of the fit guard (`palw-tir-fidelity --exec`: mean KL <= 0.1 and top-1 >= 0.8 against the float reference).
+# held-out text of the fit guard (`palw-tir-fidelity --exec`: mean KL <= 0.1 and top-1 >= 0.8 against the float reference);
+# `long_evaluation` is its long-context check: the NEXT 32K tokens of RFC-0002 (held out from the calibration's first 32K), every
+# position compared, the mean and worst KL of 32 windows along it (the drift curve).
 CALIB_TEXTS = {
     "git_commit": "d52d6c56ff33991f1caf67db5cd426dd736d2d29",
     "blobs": {
@@ -66,7 +73,11 @@ CALIB_TEXTS = {
         "docs/PRINCIPLES.md": "1ab69ff7f2b0e72bec02d453afb9390dfff3607d",
     },
     "evaluation": {"docs": ["README.md", "docs/PRINCIPLES.md"], "len": 64, "chunks": 1},
-    "fit_tolerance": {"kl_mean_max": 0.1, "top1_min": 0.8,
+    "long_evaluation": {"docs": ["docs/rfc/0002-palw-tensor-ir.md"], "len": GENESIS_CONTEXT, "chunks": 2, "skip": 1, "drift_windows": 32},
+    "fit_tolerance": {"kl_mean_max": 0.1, "top1_min": 0.8, "window_kl_mean_max": 0.1, "drift_ratio_max": 1.5, "drift_floor_kl": 0.01,
+                      "drift": "every window's mean KL <= window_kl_mean_max; late/early mean KL <= drift_ratio_max unless the late "
+                              "window's mean KL <= drift_floor_kl (corpus-v1 §9's 1.5x criterion, with a floor so noise at tiny KL "
+                              "is not a failure)",
                       "source": "the L2 default tolerance (docs/evidence/hf-onboarding/20261010-huihui-qwen35-9b-fit-diagnosis), "
                                 "measured against the lowering's own float reference"},
 }
@@ -78,13 +89,14 @@ MODELS = [
          derivation="fine-tune (Dolphin 3.0)",
          derivation_author="Eric Hartford, Ben Gitter, BlouseJury and Cognitive Computations",
          derivation_note="No huihui 1.5B abliterated variant exists; Dolphin 3.0 is the uncensored 1.5B (user decision 2026-10-15). "
-                         "Converted 2026-10-15 with the legacy base0 qwen25-convert --a16 --n-ctx 8192 at release commit 0b1c11b87; "
-                         "the unified container wraps that A16 payload without re-quantising.",
+                         "Served at 32K (user decision 2026-10-16): re-converted with the legacy base0 qwen25-convert --a16 "
+                         "--n-ctx 32768 (the A16 width is part of the artifact digest) and carried in the unified container. The "
+                         "8k A16 file published 2026-10-15 (history_artifact) stays as history.",
          architecture="Qwen2ForCausalLM", model_type="qwen2", family="qwen2-dense",
          license="apache-2.0", target_repo="Misakachain/Dolphin3.0-Qwen2.5-1.5B-PALW", upload_prefix="palwart/",
-         stem="Dolphin3.0-Qwen2.5-1.5B-PALW", converter="a16-legacy-wrap",
-         convert_options={"n_ctx": 8192},
-         legacy_artifact={"repo": "Misakachain/Dolphin3.0-Qwen2.5-1.5B-PALW",
+         stem="Dolphin3.0-Qwen2.5-1.5B-PALW", converter="a16",
+         convert_options={"n_ctx": GENESIS_CONTEXT, "a16_file": "dolphin3.0-qwen25-1.5b-a16-32k.palwart"},
+         history_artifact={"repo": "Misakachain/Dolphin3.0-Qwen2.5-1.5B-PALW",
                           "revision": "816208c4f944a403665b94f8d55f4414aacd3ae5",
                           "path": "palw-runtime/dolphin3.0-qwen25-1.5b-a16-8k.palwart",
                           "bytes": 1799359436,
@@ -101,7 +113,7 @@ MODELS = [
          architecture="Qwen3_5ForConditionalGeneration", model_type="qwen3_5", family="qwen35-gdn-hybrid",
          license="apache-2.0", target_repo="Misakachain/Huihui-Qwen3.5-2B-abliterated-PALW",
          stem="Huihui-Qwen3.5-2B-abliterated-PALW", converter="tir",
-         convert_options={"context": CALIB_POSITIONS_DEFAULT, "gdn_core_wide": True, "calib": RECURRENT_CALIB},
+         convert_options={"context": GENESIS_CONTEXT, "gdn_core_wide": True, "calib": RECURRENT_CALIB},
          e2e_adjudicable=True, tentative=False, components=["decoder"]),
     dict(id=3, slug="huihui-qwen35-9b", source_repo="huihui-ai/Huihui-Qwen3.5-9B-abliterated",
          source_revision="05b9e7c9b978ba29bdb8f50a49c30e4b91183339", source_format="safetensors",
@@ -112,7 +124,7 @@ MODELS = [
          architecture="Qwen3_5ForConditionalGeneration", model_type="qwen3_5", family="qwen35-gdn-hybrid",
          license="apache-2.0", target_repo="Misakachain/Huihui-Qwen3.5-9B-abliterated-PALW",
          stem="Huihui-Qwen3.5-9B-abliterated-PALW", converter="tir",
-         convert_options={"context": CALIB_POSITIONS_DEFAULT, "gdn_core_wide": True, "calib": RECURRENT_CALIB},
+         convert_options={"context": GENESIS_CONTEXT, "gdn_core_wide": True, "calib": RECURRENT_CALIB},
          e2e_adjudicable=True, tentative=True, components=["decoder"]),
     dict(id=4, slug="huihui-gemma4-12b", source_repo="huihui-ai/Huihui-gemma-4-12B-it-abliterated",
          source_revision="060ea173c4d1e30b636819f5281e7791b6e9be2f", source_format="safetensors",
@@ -121,7 +133,7 @@ MODELS = [
          architecture="Gemma4UnifiedForConditionalGeneration", model_type="gemma4_unified", family="gemma4-unified-dense",
          license="apache-2.0", target_repo="Misakachain/Huihui-gemma-4-12B-it-abliterated-PALW",
          stem="Huihui-gemma-4-12B-it-abliterated-PALW", converter="tir",
-         convert_options={"context": 8192, "calib": DENSE_CALIB},
+         convert_options={"context": GENESIS_CONTEXT, "calib": DENSE_CALIB},
          e2e_adjudicable=True, tentative=False, components=["decoder"]),
     dict(id=5, slug="huihui-gpt-oss-20b", source_repo="huihui-ai/Huihui-gpt-oss-20b-BF16-abliterated",
          source_revision="b73ec897fe872d5e3fea830d516520537decdde6", source_format="safetensors",
@@ -131,7 +143,7 @@ MODELS = [
          architecture="GptOssForCausalLM", model_type="gpt_oss", family="gpt-oss-moe",
          license="apache-2.0", target_repo="Misakachain/Huihui-gpt-oss-20b-BF16-abliterated-PALW",
          stem="Huihui-gpt-oss-20b-BF16-abliterated-PALW", converter="tir",
-         convert_options={"context": 8192, "calib": DENSE_CALIB},
+         convert_options={"context": GENESIS_CONTEXT, "calib": DENSE_CALIB},
          e2e_adjudicable=True, tentative=False, components=["decoder"]),
     dict(id=6, slug="huihui-qwen38-27b-coder390", source_repo="huihui-ai/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-GGUF",
          source_revision="a0b17c71d9943529aefe88b83f494bf01c6b4d68", source_format="gguf",
@@ -145,7 +157,7 @@ MODELS = [
          architecture="Qwen3_5ForCausalLM (GGUF qwen35)", model_type="qwen35", family="qwen35-gdn-hybrid",
          license="apache-2.0", target_repo="Misakachain/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-PALW",
          stem="Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-PALW", converter="tir-gguf",
-         convert_options={"context": CALIB_POSITIONS_DEFAULT, "gdn_core_wide": True, "calib": RECURRENT_CALIB, "gguf_variant": "bf16"},
+         convert_options={"context": GENESIS_CONTEXT, "gdn_core_wide": True, "calib": RECURRENT_CALIB, "gguf_variant": "bf16"},
          gguf_variants={"bf16": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-bf16.gguf",
                         "iq3_s1": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-IQ3_S1.gguf",
                         "iq3_s2": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-IQ3_S2.gguf",
@@ -166,7 +178,14 @@ MODELS = [
          architecture="Qwen3_5MoeForConditionalGeneration", model_type="qwen3_5_moe", family="qwen35-gdn-hybrid-moe",
          license="apache-2.0", target_repo="Misakachain/Qwen3.6-35B-A3B-PALW-runtime", upload_prefix="palwart/",
          stem="Qwen3.6-35B-A3B-PALW", converter="palwq36-legacy-wrap",
-         convert_options={"n_ctx": "as published"},
+         convert_options={"n_ctx": 512},
+         served_context=512,
+         blocked="the published runtime serves 512 positions: its PALWQ361 header (read 2026-10-16, bytes 0..1023 at bbc2f6c3) says "
+                 "max_position 512 and a 512-row rotary table, and the PALWQ361 context is baked into the artifact (shape, rotary "
+                 "table, the GDN state exponents' horizon correction). Every genesis model is served at 32,768 (user decision "
+                 "2026-10-16): re-convert with qwen36-convert --context 32768 from a pinned qwen35moe GGUF of a source the user "
+                 "names (docs/design/palw/genesis8-status.md §5). The repository's own profile pins the Claude-4.7-Opus-abliterated "
+                 "Q4_K_M GGUF as its inference artifact, so the published file's provenance needs the user's confirmation too.",
          legacy_artifact={"repo": "Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
                           "revision": "bbc2f6c3dc7940efe12698a4b09a4cd983e21b38",
                           "path": "palw-runtime/qwen36-35b-a3b.palwq36",
@@ -188,7 +207,7 @@ MODELS = [
          architecture="LlamaForCausalLM", model_type="llama", family="llama-dense",
          license="llama3.3", target_repo="Misakachain/Llama-3.3-70B-Instruct-abliterated-PALW",
          stem="Llama-3.3-70B-Instruct-abliterated-PALW", converter="tir",
-         convert_options={"context": 8192, "calib": DENSE_CALIB},
+         convert_options={"context": GENESIS_CONTEXT, "calib": DENSE_CALIB},
          e2e_adjudicable=False, tentative=False, components=["decoder"]),
 ]
 
@@ -236,6 +255,7 @@ def build() -> dict:
         kept = {f["path"] for f in files}
         excluded = sorted(s["rfilename"] for s in meta["siblings"] if s["rfilename"] not in kept and s["rfilename"] != ".gitattributes")
         m2 = dict(m)
+        m2.setdefault("served_context", GENESIS_CONTEXT)
         m2.setdefault("out_of_scope", OUT_OF_SCOPE_DEFAULT.get(m["family"], []))
         m2["scope"] = SCOPE["kind"]
         m2["gated"] = bool(meta.get("gated"))
@@ -248,7 +268,8 @@ def build() -> dict:
     return {
         "schema": "misaka.genesis8.models.v2",
         "decision": "user-2026-10-15-genesis8 (uncensored variants; #5 BF16 b73ec897; #6 bf16 GGUF a0b17c71; #8 the existing "
-                    "official-derived PALWQ361 runtime bbc2f6c3; text generation only)",
+                    "official-derived PALWQ361 runtime bbc2f6c3; text generation only); user-2026-10-16 every model served at 32K",
+        "served_context": GENESIS_CONTEXT,
         "recorded_from": "anonymous Hub API /api/models/<repo>/revision/<sha>?blobs=true (metadata only; no weights read)",
         "numbering": "ids keep the user's original 1..10; 7 (Gemma 4 26B-A4B) and 9 (Qwen3-32B) were dropped",
         "scope": SCOPE,

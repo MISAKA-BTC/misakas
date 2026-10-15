@@ -60,7 +60,14 @@ pub struct PalwGenesisModelV1 {
     pub uncensored: bool,
     /// What the checkpoint carries beyond text generation: never computed, covered, admitted or rewarded.
     pub out_of_scope: &'static [&'static str],
+    /// The context the class must serve: [`PALW_GENESIS_SERVED_CONTEXT_V1`] for every genesis model (user decision 2026-10-16).
+    /// #8's published PALWQ361 runtime bakes 512 into its header and rotary table, so its root cannot be supplied until it is
+    /// re-converted at this context.
+    pub served_context: u32,
 }
+
+/// Every genesis model is served at a 32K context (user decision 2026-10-16).
+pub const PALW_GENESIS_SERVED_CONTEXT_V1: u32 = 32_768;
 
 /// The one scope of every genesis class.
 pub const PALW_GENESIS8_SCOPE_V1: &str = "text-generation";
@@ -105,6 +112,7 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
         kernel_version: 0,
         uncensored: true,
         out_of_scope: &[],
+        served_context: PALW_GENESIS_SERVED_CONTEXT_V1,
     },
     PalwGenesisModelV1 {
         genesis_id: 2,
@@ -120,6 +128,7 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
         kernel_version: 0,
         uncensored: true,
         out_of_scope: &["vision tower model.visual.*", "MTP head mtp.*"],
+        served_context: PALW_GENESIS_SERVED_CONTEXT_V1,
     },
     PalwGenesisModelV1 {
         genesis_id: 3,
@@ -135,6 +144,7 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
         kernel_version: 0,
         uncensored: true,
         out_of_scope: &["vision tower model.visual.*", "MTP head mtp.*"],
+        served_context: PALW_GENESIS_SERVED_CONTEXT_V1,
     },
     PalwGenesisModelV1 {
         genesis_id: 4,
@@ -150,6 +160,7 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
         kernel_version: 0,
         uncensored: true,
         out_of_scope: &["image embedder model.vision_embedder.* / model.embed_vision.*", "audio embedder model.embed_audio.*"],
+        served_context: PALW_GENESIS_SERVED_CONTEXT_V1,
     },
     PalwGenesisModelV1 {
         genesis_id: 5,
@@ -165,6 +176,7 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
         kernel_version: 0,
         uncensored: true,
         out_of_scope: &[],
+        served_context: PALW_GENESIS_SERVED_CONTEXT_V1,
     },
     PalwGenesisModelV1 {
         genesis_id: 6,
@@ -180,6 +192,7 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
         kernel_version: 0,
         uncensored: true,
         out_of_scope: &["vision projector mmproj-model-bf16.gguf (not fetched)", "MTP block blk.64.nextn.*"],
+        served_context: PALW_GENESIS_SERVED_CONTEXT_V1,
     },
     PalwGenesisModelV1 {
         genesis_id: 8,
@@ -195,6 +208,7 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
         kernel_version: 0,
         uncensored: false,
         out_of_scope: &["vision tower", "MTP head"],
+        served_context: PALW_GENESIS_SERVED_CONTEXT_V1,
     },
     PalwGenesisModelV1 {
         genesis_id: 10,
@@ -210,6 +224,7 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
         kernel_version: 0,
         uncensored: true,
         out_of_scope: &[],
+        served_context: PALW_GENESIS_SERVED_CONTEXT_V1,
     },
 ];
 
@@ -336,6 +351,7 @@ mod tests {
         let eight = palw_genesis8_model_v1(8).unwrap();
         assert!(!eight.uncensored && eight.route == PalwGenesisRouteV1::PalwQ361, "#8: the existing official-derived runtime");
         assert_eq!(PALW_GENESIS8_MODELS_V1.iter().filter(|m| !m.uncensored).count(), 1, "the only non-uncensored entry");
+        assert!(PALW_GENESIS8_MODELS_V1.iter().all(|m| m.served_context == 32_768), "every genesis model is served at 32K");
     }
 
     #[test]
