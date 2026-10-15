@@ -203,6 +203,9 @@ the fold means running the consensus pipeline.
 | **D. Attested root** (trusted checkpoint at a bounded lag) | per candidate: one attestation (≈ 4.9 KB, ML-DSA-87) + one opening (356 B) | §6 | sound **relative to the issuers' trust**: the issuer re-executed (it runs a full node); the client verifies the binding, the chain linkage, freshness and the comparator | **RECOMMENDED for `VERIFIED_REMOTE`** |
 | E. Bonded attestation with objective refutation | D, with the issuer's bond slashable for an attested root that disagrees with the chain's own child-header commitment | as D | as D, plus accountability | future (a court object; out of this lane) |
 
+> **除外(2026-10-15 ユーザー恒久決定、[PRINCIPLES §8](../../PRINCIPLES.md)):** 暗号学的な計算証明(ZK、zk-SNARK/STARK、zkVM、PCS ベースの succinct proof など)は使用しない。本文中のそれらを将来・研究として挙げる記述は採用候補ではない。
+
+
 **Recommendation: D for `VERIFIED_REMOTE`, A for `FULL_NODE`, C as research.** D is what the user's ruling calls a trusted checkpoint,
 generalized from "the checkpoint is the decision point" (C1r2's rule, lag ≤ 1 DAA, conflicts STOP) to: an attested root whose values
 the client opens itself, cross-checks against the chain's own child-header commitment, and feeds to the node's own decision functions.
