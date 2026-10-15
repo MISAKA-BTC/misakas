@@ -323,3 +323,16 @@ ACTIVATION_ALLOWED
 * [activation-readiness-matrix §3f/§3g/§3k](../design/palw/activation-readiness-matrix.md)（ECON round 2 gate）
 * [PALW確率・経済安全性ゲート](../design/palw/probabilistic-economic-security-gate.md)
 * code（`2e74a485b`、pre `4fb381a87`で同じ行は§3.1に明記）: `consensus/core/src/palw_model_registry_v1.rs`、`consensus/core/src/palw_panel_v2.rs`、`consensus/core/src/palw_econ_contracts_v1.rs`、`consensus/core/src/palw_econ_contracts_fold_v1.rs`、`consensus/core/src/palw_bond_budget_fold_v1.rs`、`consensus/core/src/palw_state_v2.rs`、`consensus/core/src/palw_state_v2/transition_builder.rs`、`consensus/core/src/palw_kernel_route_fold_v1.rs`、`consensus/core/src/palw_kernel_settlement_v1.rs`、`consensus/src/pipeline/virtual_processor/processor/palw.rs`
+
+## ユーザー方針 2026-10-15 による改定
+
+* 資格(モデル単位)とGate C(claim単位)は別の制限であり、両方を満たしたclaimだけが合意creditを持つ。Gate Cは本RFCの抽選・承認object(inner 75)を、exam idの代わりにcertification idで再利用する。
+* genesis classは本RFCの資格検査の対象外(U-6)だが、**Gate Cの認証は免除しない**。
+
+**ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
+
+* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
+* **認証は前提に基づく。** claim固定後の乱数でglobal poolから抽選した検証者のm-of-k肯定承認と、G14公開告発windowの異議なし経過で成立する。「抽選されたverifier stakeのうち正直な割合が閾値以上」を明示的な前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない(PRINCIPLES §8)。認証済みでもG14で反証されたclaimはvoidされ、合意creditは取り消される。
+* **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
+* **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
+* 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。
