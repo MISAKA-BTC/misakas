@@ -713,3 +713,100 @@ Float32 Constraint job only with `gates.float32` and a greedy job.
   (`PALW_STAGED_ROUTE_FORMS_V1`).
 - The A2U harness arms both new fences.
 - Object tag 168 must not collide with another lane's tag at merge.
+
+### Round 5, 2026-10-15 (unverified source only)
+
+Commits `5a00bbaff` and `ea58a730c`. Nothing was built, tested or run.
+
+**1. Float32 row-holding producer and custodian (base0).**
+- In `misaka/palw/base0/src/float_public_source.rs`, a Float32 run's retained material IS the
+  generic public sidecar. `float_public_material_v1` builds it from the run's rows and ids and
+  returns the v2 trace root the binding must commit.
+- The Base0, A16 and Qwen36 backends implement `write_float_public_source_v1`, which copies a
+  Float32 run's material to the claim's sidecar and returns `false` for integer material.
+- They also implement `open_float_public_source_v1`, which reads the producer's sidecar or a
+  custodian's FP payload range and is refused unless it is this binding's Float32 run.
+- The files ride the existing claim-scoped lease, the shared GC and the unpublished-projection
+  cleanup.
+- The core sidecar reader now reads in 16 KiB chunks, which is the node file reader's bound.
+- Caveat: no in-node executor runs a Float32 class. The integer families are the only FP
+  families, by ADR-0053/0077. A Float32 executor plugs in by retaining `float_public_material_v1`
+  as its run material.
+
+**2. TIR prefix-state: relation core implemented; family wiring specified; still refused.**
+- The core is `palw_tir_prefix_state_v1` plus `PalwTirStepSpaceV1::prefix_state_leaf_{count,}_v1`.
+- **Alignment rule.** `0 < k < prefill` and `k ≡ 0 (mod checkpoint_interval, h_tile)`, so the
+  state after `k` positions is exactly committed by step leaves: the `Fixed` checkpoints at
+  `k − 1` and the `Hist` chunks `0..k`. An unaligned `k` would need a recurrence replay, a kernel
+  court, so it stays refused.
+- **Canonical digest.** The digest is job-independent: it hashes the boundary leaves' lanes with a
+  kind/state/layer/first/position/count prelude, never the job-bound leaf hashes. The state root
+  is `palw_fp_prefix_state_root_v1(class, k, digest)`.
+- **Stream court.** It is restartable and authenticates each leaf against the claim's step root.
+  It returns `Honest` or `StateRootMismatch`. A producer-side reference digest is included.
+- Not wired, in this order (each item is code):
+  1. a native seed family `PrefixState { prefix_tokens, layout }`, where the layout is checked
+     against the record's `layout_digest` (the step space needs it);
+  2. a custodian source session with isolated slots over `PalwTirPrefixStateStreamV1`, with Flat
+     clocks and unpaid custodians collected;
+  3. a new `PalwStagedCourtRowV1` family row (about 52 match sites);
+  4. a TIR prefix family quote: moves = slots × boundary leaves + replay; bytes = leaves × lanes +
+     openings;
+  5. fold admission and moves;
+  6. a node custodian hook, `disclose_tir_state_leaf_v1(material, header, leaf_index) ->
+     (values_le, opening)` (RFC-0002), and an owner stage;
+  7. the TIR executor declaring prefix states with `palw_tir_prefix_kv_digest_v1`.
+- The quote still refuses TIR prefix-state by name.
+
+**3. Fraud filer TIR entry is native.**
+- A free-prompt candidate whose claim has an admitted TIR header is handled in
+  `fraud_filer_start_replay_v1` by `fraud_filer_tir_replay_v1`, which:
+  - reads the accepted FP job and its authenticated public input;
+  - runs the verifier's own replay through `replay_tir_generated_ids_v1`, which now returns
+    `PalwTirReplayV1 { generated_ids, full_logits_trace_root }`;
+  - settles the claim as honest when the tiled trace roots are equal (TIR is integer and
+    deterministic);
+  - otherwise records a mismatch whose own ids are the Constraint nominee.
+- The case carries its native context (`case.tir`). It skips the legacy public-context
+  bootstrap, reserves through the engine's prelude (`DisputeReservedV1`, which is claim-generic),
+  and after that runs only the staged TIR bundle: no legacy binding read, probe or descent.
+
+**4. adv/c4r4: not merged.**
+- The branch is at `162df6b16`. Its fork point is `f7ed9642c`, which is already an ancestor of
+  this branch.
+- Its patch-unique commits are:
+  - the three C4R4 fixes (F-03/-05/-10), already carried here as `8e400f014`, `10d7d8079` and
+    `660fa4fbc`;
+  - test-only PoCs: `misaka/palw/kernel/tests/c4r4.rs`, `challenge/tests/c4r4_grinding.rs` and the
+    `g14_kernel_route_e2e` c4r4 modules, all present here at their post-reorg paths, plus
+    `consensus/core/tests/c4r4_reporter_share_49.rs`, which covers ADR-0032's 49% reporter-share
+    economics;
+  - the round-4/4b adversarial-record doc sections.
+- None of it is code for the active plan (the staged legacy/TIR/Float32 route).
+- Its merges predate the 10-12 repository reorg, so merging the branch would replay
+  pre-reorg paths across hundreds of files for no active-plan gain.
+- Left for the coordinator's integration branch if wanted: the reporter-share test and the
+  record sections.
+
+**5. TIR execution backend hooks: interface contracts.** These are what the integration branch
+wires to RFC-0002's TIR executor. Full text in `consensus/core/src/palw_backend.rs`.
+
+- `disclose_tir_selected_event_v1(material, header, row, tile, maximum_leaves) ->
+  PalwSelectedTiledEventV1`:
+  - `material` is one retained payload of the claim. Parse only your own format and return
+    `Err` otherwise.
+  - Check that `material` belongs to `header` (same job context and trace root).
+  - Row `r` is the logits row that selected generated id `r`. Tiles are 4,096 lanes. Rows are the
+    `post` node's `i32` logits, tiled under the context hash.
+  - The result must equal `PalwSelectedTiledEventV1::of_public_rows_view_v1(view, rows, ids,
+    (r, t), maximum_leaves)`.
+  - Read-only. `Err` means "cannot answer", never a verdict.
+- `replay_tir_generated_ids_v1(header, job, prompt_ids) -> PalwTirReplayV1`:
+  - Run the registered TIR program from the verifier's own artifact on the job's authenticated
+    prompt ids, after checking the ids against the job and context.
+  - Select exactly `exact_decode_tokens` ids with the job's rule (greedy, constraint-masked,
+    first-index ties).
+  - Return the ids and `tiled_logits_trace_root_v1(context, own_rows, own_ids)`. Equal roots mean
+    honest. The ids are only a nominee.
+
+**Object tag 168** (`PublicCourtStreamOpenedNativeV1`) belongs to this branch.

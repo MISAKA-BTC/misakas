@@ -799,9 +799,9 @@ the claim is refused at admission (uncovered, no reward, no weight).
   - node actors: the custodian responder (generic public sidecar or backend projection),
     an owner stage in the fraud filer, and the scheduler over Flat|Float pins.
   - **Seeded Float32 is refused at every height**: there is no canonical float sampler.
-  - Open: no in-node backend retains f32 rows (seam `open/write_float_public_source_v1`,
-    default `Err`/`false`). A Float32 producer must implement the seam or write the
-    sidecar.
+  - Round 5: base0's backends implement the seam (`float_public_source`). A Float32 run's
+    retained material is the generic sidecar, answered from the producer's sidecar or a
+    custodian's retained payload. No in-node executor runs a Float32 class yet.
 - **TIR required families.** Done in source:
   - (1) the quote projection;
   - (3) authenticated tiled ids/rows/tiles through the decode view;
@@ -816,12 +816,16 @@ the claim is refused at admission (uncovered, no reward, no weight).
   - (e) the fraud filer runs TIR bundles over the view and emits native seeds.
 
   Still missing:
-  - (2) a TIR state relation for the public prefix court. TIR prefix-state stays refused
-    by name; this is a new family court.
+  - (2) the TIR prefix-state family. The relation core exists (`palw_tir_prefix_state_v1`):
+    aligned boundary `k ≡ 0 mod (checkpoint_interval, h_tile)`, a job-independent digest over
+    the boundary State/Hist lanes, and an authenticated restartable stream with a verdict
+    against the declared state root. Its seed family, source session, family row, quote, fold
+    and node actors are not wired (status.md, round 5), so TIR prefix-state stays refused by
+    name.
   - (5)/(6) the TIR FP execution backend: `disclose_tir_selected_event_v1` and
     `replay_tir_generated_ids_v1` default to `Err`. These are owned by the RFC-0002 lane.
-  - The filer's discovery/reservation of TIR claims still goes through the legacy pursuit
-    pipeline.
+  - Done in round 5: the fraud filer's TIR entry is native (own replay -> verdict -> reservation
+    -> staged TIR bundle; no legacy binding pipeline).
 
   Without a TIR replay, the owner can still nominate an id the constraint forbids, but not
   a beat.
