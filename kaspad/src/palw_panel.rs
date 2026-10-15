@@ -15143,6 +15143,9 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::MonetaryMaterialEnrolledV1 { .. } => "MonetaryMaterialEnrolledV1",
         PalwConsensusObjectV2::MonetaryMaterialReplacedV1 { .. } => "MonetaryMaterialReplacedV1",
         PalwConsensusObjectV2::MonetaryMaterialActionV1 { .. } => "MonetaryMaterialActionV1",
+        // RFC-0006 consumer v2 (tags 243, 170).
+        PalwConsensusObjectV2::GdnStepAccusedV2 { .. } => "GdnStepAccusedV2",
+        PalwConsensusObjectV2::MemoryRoutingV2 { .. } => "MemoryRoutingV2",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",

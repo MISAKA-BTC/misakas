@@ -20,7 +20,7 @@
 //!   escrow.
 //! * **It verifies only through the kernel route** (amendment 1, spec §10.1; [`sync_slice_verification_v2`]): a slice names a
 //!   kernel-route claim that binds it, and its stage follows that claim every block after the route's closing tick — `Final`
-//!   verifies it (fixing its leg cap), a conviction proves it false, a default or timeout defaults it, and either failure voids the
+//!   plus selected verifier approval verifies it (fixing its leg cap), a conviction proves it false, a default or timeout defaults it, and either failure voids the
 //!   suffix and the root ([`void_suffix_v2`]). The test-only writer [`mark_slice_verified_for_tests`] remains for the arithmetic
 //!   tests of chains with no kernel route; it is `#[cfg(test)]` and reachable by no node.
 
@@ -29,7 +29,8 @@ use crate::palw_exec_v2::PalwWorkRangeV1;
 use crate::palw_exec_v2_verify::{
     PalwExecV2PrefixInputsV1, PalwSliceVerificationV1, palw_exec_v2_claim_outcome_v1, palw_exec_v2_kernel_key_v1,
     palw_exec_v2_leg_cap_v1, palw_exec_v2_prefix_binding_v1, palw_exec_v2_real_job_v1, palw_exec_v2_retention_terms_v1,
-    palw_exec_v2_root_slice_job_nonce_v2, palw_exec_v2_route_reward_v1, palw_exec_v2_verification_binding_v2,
+    palw_exec_v2_root_slice_job_nonce_v2, palw_exec_v2_route_reward_v1, palw_exec_v2_selected_approval_v1,
+    palw_exec_v2_verification_binding_v2,
 };
 use crate::palw_work_slice_v2::{
     PALW_EXEC_V2_MAX_EXTRA_EXECUTORS, PALW_EXEC_V2_MAX_OPEN_ROOTS, PALW_EXEC_V2_MAX_OPEN_ROOTS_PER_BOND,
@@ -153,8 +154,19 @@ impl PalwChainStateV2 {
     /// this is `false` and costs one map lookup on an empty map.
     pub fn exec_v2_holds_final_v1(&self, claim_id: &Hash64) -> bool {
         self.exec_v2.roots.get(claim_id).is_some_and(|root| {
-            matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) && !root.ready_for_final()
+            matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete)
+                && (!root.ready_for_final() || !self.exec_v2_selected_approvals_v1(claim_id, root))
         })
+    }
+
+    fn exec_v2_selected_approvals_v1(&self, claim_id: &Hash64, root: &PalwWorkRootV2) -> bool {
+        let Some(route) = self.kernel_route.as_ref() else { return true };
+        palw_exec_v2_selected_approval_v1(route, &root.prefix_claim)
+            && self
+                .exec_v2
+                .slices
+                .range((*claim_id, 0)..=(*claim_id, u32::MAX))
+                .all(|(_, slice)| palw_exec_v2_selected_approval_v1(route, &slice.evidence_root))
     }
 
     /// An allow-list is not the listed workers' consent. An extra executor becomes
@@ -1170,7 +1182,7 @@ pub(super) fn settle_at_final_v2(
         PalwWorkRootPhaseV2::Settled { .. } | PalwWorkRootPhaseV2::Voided { .. } => return Ok((0, Vec::new())),
         PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete => {}
     }
-    if !root.ready_for_final() || final_daa >= root.expiry_daa {
+    if !root.ready_for_final() || !builder.state.exec_v2_selected_approvals_v1(claim_id, &root) || final_daa >= root.expiry_daa {
         return Err(PalwStateV2Error::ExecV2Refused("root Final requires complete verification before expiry".into()));
     }
     let rows: Vec<((Hash64, u32), PalwWorkSliceRowV2)> =
@@ -1354,7 +1366,13 @@ pub(super) fn release_final_hold_v2(
     claim_id: Hash64,
     now_daa: u64,
 ) -> Result<(), PalwStateV2Error> {
-    if builder.state.exec_v2.roots.get(&claim_id).is_some_and(|root| root.ready_for_final()) {
+    if builder
+        .state
+        .exec_v2
+        .roots
+        .get(&claim_id)
+        .is_some_and(|root| root.ready_for_final() && builder.state.exec_v2_selected_approvals_v1(&claim_id, root))
+    {
         builder.rearm_claim_deadline_dl1_v1(claim_id, now_daa)?;
     }
     Ok(())
@@ -1369,6 +1387,10 @@ fn dependency_outcome(
     let outcome = palw_exec_v2_claim_outcome_v1(row, daa);
     if outcome != PalwSliceVerificationV1::ProvenFalse && super::palw_kernel_route_fold_v1::exec_provider_lapsed_v1(state, id, row) {
         PalwSliceVerificationV1::Defaulted
+    } else if matches!(outcome, PalwSliceVerificationV1::Verified { .. })
+        && state.kernel_route.as_ref().is_none_or(|route| !palw_exec_v2_selected_approval_v1(route, id))
+    {
+        PalwSliceVerificationV1::Pending
     } else {
         outcome
     }
@@ -1379,8 +1401,9 @@ fn dependency_outcome(
 /// block's journal. Only dependencies named by those entries are reconsidered;
 /// the journal also captures a post-Final provider lapse with no claim-row change.
 ///
-/// A Final pending dependency becomes Verified and can release the root's Final
-/// hold. Conviction remains ProvenFalse; unavailable/forfeited dependencies and
+/// A Final pending dependency with native selected approval becomes Verified
+/// and can release the root's Final hold. An unapproved optimistic Final stays
+/// Pending. Conviction remains ProvenFalse; unavailable/forfeited dependencies and
 /// transferred provider lapses become Defaulted, including after root settlement.
 /// The root is voided and unreleased funds are burned once. Provider failure never
 /// charges an executor: the provider court settles its signed reservation.
@@ -1400,6 +1423,12 @@ pub(super) fn sync_slice_verification_v2(
         .filter_map(|entry| match entry {
             PalwDeltaEntryV2::KernelRouteRow { table, key, .. } if *table == misaka_palw_kernel::rows::TABLE_CLAIMS_V1 => {
                 Some(key.clone())
+            }
+            PalwDeltaEntryV2::KernelRouteRow { table, new: Some(bytes), .. }
+                if *table == crate::palw_claim_challenge_v2::PAID_CLAIM_FINALS_V2 =>
+            {
+                let row: crate::palw_claim_challenge_v2::PalwPaidClaimFinalV2 = borsh::from_slice(bytes).ok()?;
+                Some(palw_exec_v2_kernel_key_v1(&Hash64::from_bytes(row.base_claim)))
             }
             PalwDeltaEntryV2::KernelRouteRow { table, key, .. }
                 if *table == crate::palw_provider_court_v1::PALW_PROVIDER_COURT_TABLE_SUBJECTS_V1 =>

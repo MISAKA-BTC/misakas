@@ -84,6 +84,11 @@ fn check_enrollment(
             return Err(refused("signed material manifest belongs to another obligation"));
         }
         manifest.validate(t.max_material_bytes).map_err(|e| refused(e.to_string()))?;
+        if manifest.scopes.iter().any(|s| s.codec == crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4)
+            && builder.params.material_release_recovery_at_v2(ctx.daa_score).is_none()
+        {
+            return Err(refused("typed complete material codec is below its signed recovery fence"));
+        }
         if t.exec_plan_root.is_none()
             && manifest.scopes.iter().any(|scope| scope.claim != t.root && !t.dependencies.contains(&scope.claim))
         {
@@ -276,6 +281,14 @@ pub(super) fn replace_with_recovery_v2(
     ctx: &PalwBlockContextV2,
     r: &PalwMonetaryMaterialReplacementV1,
 ) -> Result<(), PalwStateV2Error> {
+    replace_generation_with_recovery_v4(builder, ctx, r, r.id())
+}
+pub(super) fn replace_generation_with_recovery_v4(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    r: &PalwMonetaryMaterialReplacementV1,
+    consent: Hash64,
+) -> Result<(), PalwStateV2Error> {
     let mut old = builder.state.monetary_material_row_v1(r.root).ok_or_else(|| refused("replacement has no enrolled root"))?;
     if r.root != r.enrollment.terms.root || r.previous != old.consent || old.sequence.checked_add(1) != Some(r.sequence) {
         return Err(refused("replacement replay or wrong consent generation"));
@@ -286,7 +299,7 @@ pub(super) fn replace_with_recovery_v2(
     old.providers.retain(|p| !p.charged || !p.fee_paid);
     old.providers.extend(providers(&r.enrollment, ctx.daa_score));
     old.sequence = r.sequence;
-    old.consent = r.id();
+    old.consent = consent;
     write(builder, r.root, Some(&old));
     fund(builder, ctx, &r.enrollment)?;
     Ok(())
@@ -326,10 +339,21 @@ fn action_inner_v4(
         | PalwMonetaryMaterialActionV1::HeldChallenge { root, .. }
         | PalwMonetaryMaterialActionV1::HeldAnswer { root, .. }
         | PalwMonetaryMaterialActionV1::Challenge { root, .. }
+        | PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { root, .. }
         | PalwMonetaryMaterialActionV1::Answer { root, .. }
         | PalwMonetaryMaterialActionV1::Release { root, .. } => *root,
     };
     let mut row = builder.state.monetary_material_row_v1(root).ok_or_else(|| refused("no enrolled monetary material root"))?;
+    if let PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { consent, provider, .. } = a {
+        if builder.params.material_release_recovery_at_v2(ctx.daa_score).is_none() {
+            return Err(refused("current generation challenge own fence dormant"));
+        }
+        let current = crate::palw_kernel_material_query_v4::material_provider_generation_v4(builder.state, root, *provider)
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+        if current != Some(*consent) {
+            return Err(refused("current challenge substitutes provider generation"));
+        }
+    }
     if !recovery_answer
         && builder.state.material_recovery_row_v2(root).is_some()
         && matches!(
@@ -360,7 +384,12 @@ fn action_inner_v4(
             {
                 return Err(refused("segmented material challenge is foreign, stale, replayed or outside capacity"));
             }
-            let ledger = builder.state.kernel_route().unwrap().ledger_native_projection_v9().map_err(refused)?;
+            let ledger = builder
+                .state
+                .kernel_route()
+                .unwrap()
+                .ledger_native_projection_checked_v9()
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
             let claim = ledger.claims.get(&dependency.as_bytes()).ok_or_else(|| refused("segmented material claim is missing"))?;
             let misaka_palw_kernel::ledger::ClaimBodyV1::Segmented { evidence, .. } = &claim.body else {
                 return Err(refused("material unit is not a segmented claim"));
@@ -414,7 +443,12 @@ fn action_inner_v4(
             if !super::palw_kernel_route_fold_v1::charge_route_budget_v1(builder, ctx, 0, false)? {
                 return Err(refused("segmented answer adjudication budget is spent"));
             }
-            let ledger = builder.state.kernel_route().unwrap().ledger_native_projection_v9().map_err(refused)?;
+            let ledger = builder
+                .state
+                .kernel_route()
+                .unwrap()
+                .ledger_native_projection_checked_v9()
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
             let claim = ledger.claims.get(&dependency.as_bytes()).ok_or_else(|| refused("segmented material claim is missing"))?;
             let misaka_palw_kernel::ledger::ClaimBodyV1::Segmented { evidence, segment_roots, .. } = &claim.body else {
                 return Err(refused("material unit is not a segmented claim"));
@@ -536,7 +570,8 @@ fn action_inner_v4(
             builder.slash_bond(c.challenger, u128::from(crate::palw_provider_court_v1::PALW_PROVIDER_CHALLENGE_FEE_SOMPI_V1))?;
             c.answered = true;
         }
-        PalwMonetaryMaterialActionV1::Challenge { provider, dependency, stage, position, valid_until_daa, .. } => {
+        PalwMonetaryMaterialActionV1::Challenge { provider, dependency, stage, position, valid_until_daa, .. }
+        | PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { provider, dependency, stage, position, valid_until_daa, .. } => {
             let challenger = active(builder, signer)?;
             let source = active(builder, provider)?;
             let deadline =
@@ -564,7 +599,29 @@ fn action_inner_v4(
                 .unwrap()
                 .kernel_claim_row_v1(dependency)
                 .ok_or_else(|| refused("material dependency is missing"))?;
-            if claim.body.position(*stage, *position).is_none() {
+            let scope = row.terms.material_manifest.as_ref().and_then(|m| m.scope(*dependency));
+            let typed = scope.is_some_and(|s| s.codec == crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4);
+            if typed != matches!(a, PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { .. }) {
+                return Err(refused("complete typed scope requires explicitly bound current-generation challenge"));
+            }
+            let required = if typed {
+                let ledger = builder
+                    .state
+                    .kernel_route()
+                    .unwrap()
+                    .ledger_native_projection_checked_v9()
+                    .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+                crate::palw_prospective_kernel_material_v4::typed_kernel_required_unit_v4(
+                    &ledger,
+                    &dependency.as_bytes(),
+                    *stage,
+                    *position,
+                )
+                .map_err(refused)?
+            } else {
+                claim.body.position(*stage, *position).is_some()
+            };
+            if !required {
                 return Err(refused("material challenge names no committed position"));
             }
             super::palw_material_release_recovery_fold_v2::reserve_answer_event_v4(builder, root, provider)?;
@@ -596,14 +653,33 @@ fn action_inner_v4(
             if !super::palw_kernel_route_fold_v1::charge_route_budget_v1(builder, ctx, 0, false)? {
                 return Err(refused("material answer adjudication budget spent"));
             }
-            builder
+            if bytes.len() as u64 > row.terms.max_material_bytes {
+                return Err(refused("material answer exceeds its signed capacity"));
+            }
+            let ledger = builder
                 .state
                 .kernel_route()
                 .unwrap()
-                .ledger_native_projection_v9()
-                .map_err(refused)?
-                .classify_served_position_v1(&dependency.as_bytes(), *stage, *position, bytes)
+                .ledger_native_projection_checked_v9()
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+            if row
+                .terms
+                .material_manifest
+                .as_ref()
+                .and_then(|m| m.scope(*dependency))
+                .is_some_and(|s| s.codec == crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4)
+            {
+                crate::palw_prospective_kernel_material_v4::typed_kernel_classify_unit_v4(
+                    &ledger,
+                    &dependency.as_bytes(),
+                    *stage,
+                    *position,
+                    bytes,
+                )
                 .map_err(refused)?;
+            } else {
+                ledger.classify_served_position_v1(&dependency.as_bytes(), *stage, *position, bytes).map_err(refused)?;
+            }
             builder.slash_bond(c.challenger, u128::from(crate::palw_provider_court_v1::PALW_PROVIDER_CHALLENGE_FEE_SOMPI_V1))?;
             c.answered = true;
         }

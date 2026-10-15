@@ -1,4 +1,4 @@
-//! Aux134 uses one pre-reserved cell per contract through Active -> Terminal.
+//! Aux137 (renumbered from 134) uses one pre-reserved cell per contract through Active -> Terminal.
 //! No Release can fail because a receipt/index table needs a new slot.
 use super::*;
 use crate::palw_material_release_recovery_v2::*;
@@ -78,6 +78,15 @@ pub(super) fn action(
         .ok_or_else(|| refused("release recovery own V2 gate is dormant"))?
         .clone();
     p.validate().map_err(refused)?;
+    if let PalwMaterialRecoveryActionV2::ReplaceBeforeV4 { valid_until_daa, .. } = a {
+        let monetary =
+            b.params.monetary_material_at_v1(ctx.daa_score).ok_or_else(|| refused("bounded replacement monetary gate dormant"))?;
+        if *valid_until_daa < ctx.daa_score
+            || ctx.daa_score.checked_add(monetary.max_enrollment_daa).is_none_or(|max| *valid_until_daa > max)
+        {
+            return Err(refused("bounded replacement signed admission deadline is expired or outside policy"));
+        }
+    }
     match a {
         PalwMaterialRecoveryActionV2::AnswerAndCheckpoint { answer, stream, previous, sequence, challenge_deadline_daa } => {
             let mut checkpoint =
@@ -201,7 +210,8 @@ pub(super) fn action(
             }
             write(b, terms.root, Some(&row));
         }
-        PalwMaterialRecoveryActionV2::Replace { recovery, replacement, providers, .. } => {
+        PalwMaterialRecoveryActionV2::Replace { recovery, replacement, providers, .. }
+        | PalwMaterialRecoveryActionV2::ReplaceBeforeV4 { recovery, replacement, providers, .. } => {
             let Some(PalwMaterialRecoveryRowV2::Active(mut c)) = b.state.material_recovery_row_v2(replacement.root) else {
                 return Err(refused("replacement has no active signed recovery"));
             };
@@ -214,13 +224,14 @@ pub(super) fn action(
             }
             let new_providers: Vec<_> =
                 provider_keys(providers).into_iter().filter(|p| !c.generations.iter().any(|g| g.providers.contains(p))).collect();
-            c.generations.push(PalwMaterialRecoveryGenerationV2 { consent: replacement.id(), providers: provider_keys(providers) });
+            let consent = a.bounded_replacement_consent_v4().unwrap_or_else(|| replacement.id());
+            c.generations.push(PalwMaterialRecoveryGenerationV2 { consent, providers: provider_keys(providers) });
             let row = PalwMaterialRecoveryRowV2::Active(c);
             row.validate(&p).map_err(refused)?;
             // Existing funding/fee machinery performs all capital preflight first;
             // no earned cash, old fees or physical material obligations are erased.
             let streams = plan_streams(b, &p, ctx, row.contract().id(), &new_providers)?;
-            super::palw_monetary_material_fold_v1::replace_with_recovery_v2(b, ctx, replacement)?;
+            super::palw_monetary_material_fold_v1::replace_generation_with_recovery_v4(b, ctx, replacement, consent)?;
             for stream in streams {
                 write_stream(b, &stream);
             }

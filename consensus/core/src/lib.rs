@@ -685,6 +685,11 @@ pub mod palw_step_leg;
 /// three-way verdict (convicted / NoFaultFound / unadjudicable). Land-stage, consensus-inert.
 pub mod palw_step_refute;
 pub mod palw_gdn_state_map_v2;
+pub mod palw_gdn_court_v2;
+/// RFC-0006 consumer v2 (dormant, `palw_memory_routing_court_v2`): the immutable per-reader router binding (kernel-route aux 139)
+/// and object tag 170 — the binding declaration and the checkpoint-transition / convolution-window / routed-reader accusations.
+pub mod palw_memory_routing_v2;
+pub mod palw_router_binding_v2;
 pub mod palw_task_heads_v1;
 pub mod palw_terminal;
 pub mod palw_terminal_carriage_v1;
@@ -976,8 +981,8 @@ pub mod palw_material_release_recovery_v2;
 pub mod palw_econ_contracts_v1;
 pub mod palw_monetary_material_v1;
 
-/// Codex (2026-10-15): versioned native compact admission V4 (aux 135, colliding with RFC-0016's telemetry table); dormant.
-/// Compact (sum-check / Fiat–Shamir) relation proofs await a ruling under PRINCIPLES §8 (merge sweep 2026-10-15).
+/// Codex (2026-10-15): versioned native compact admission V4 (aux 138; renumbered from 135, which is RFC-0016's telemetry).
+/// Retired under PRINCIPLES §8: kept only for wire identity; no generation, acceptance or credit path remains.
 pub mod palw_claim_compact_v4;
 /// R6-CELL round 4 (2026-10-15): the dormant `palw_cell_coverage_closure_v1` — an uncoverable legacy class (unknown map, hybrid
 /// v1/v2 recurrence, solo recurrence map, multi-router, Kimi router) refused at registration / the claim gate, convicted in court.
@@ -986,6 +991,9 @@ pub mod palw_cell_coverage_closure_v1;
 /// capacity, the pre-lottery admission quote and the outcome-first model report — behind the dormant fences
 /// `palw_model_block_rights_v1` and `palw_elastic_final_capacity_v1` (refused when armed until measured values are pinned).
 pub mod palw_rfc0016_v1;
+/// testnet-12 DAA 14,000 release plan (2026-10-15): the measured-value gate of the RFC-0006/0007/0008 fences (monetary material,
+/// release recovery V2, paid claim challenge, beacon source opt-in/fee, memory routing court V2). Pinned records EMPTY: dormant.
+pub mod palw_rfc0608_measured_v1;
 /// R6-CELL round 3 (2026-10-15): pure boundary/routing/memory coverage checker over accepted cell profiles. Below
 /// `palw_cell_coverage_closure_v1` not called by consensus; past it the closure's one predicate.
 pub mod palw_cell_coverage_v1;
@@ -993,6 +1001,8 @@ pub mod palw_claim_challenge_v2;
 /// R7-RELATION round 3 (2026-10-15): the dormant ClaimV2 gate of compact relation contracts (refused: empty review registry).
 pub mod palw_claim_compact_v1;
 pub mod palw_claim_interactive_v3;
+/// RFC-0012 acceptance (2026-10-15): the read-only paid-claim view behind RPC op 247 (`getPalwPaidClaim`). No authority.
+pub mod palw_paid_claim_read_v1;
 
 pub mod palw_material_capacity_v1;
 
@@ -1024,5 +1034,11 @@ pub mod palw_native_receipt_v39;
 
 pub mod palw_prospective_kernel_material_v4;
 
+pub mod palw_kernel_material_enrollment_v4;
 pub mod palw_kernel_parameter_material_v4;
 pub mod palw_kernel_material_context_v4;
+pub mod palw_kernel_producer_candidate_v4;
+
+pub mod palw_kernel_material_query_v4;
+
+pub mod palw_kernel_material_replacement_v4;

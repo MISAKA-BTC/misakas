@@ -121,6 +121,13 @@ class OwnedRecoveryRead(unittest.TestCase):
         with patch.object(recovery, 'observe', side_effect=views):
             self.assertIsNone(recovery.agreement(None, {}, None, stamp))
 
+    def test_observation_file_is_read_from_the_owned_appdir_network_directory(self):
+        # The drill passes --appdir=<root>/<role>/appdir and the node writes under
+        # <appdir>/misaka-testnet-12; a path beside the appdir is never written by the node.
+        root = Path('/owned/run')
+        path = recovery.observation_path(root, 'JOIN')
+        self.assertEqual(path, root / 'JOIN' / 'appdir' / 'misaka-testnet-12' / recovery.FILE)
+
 
 if __name__ == '__main__':
     unittest.main()

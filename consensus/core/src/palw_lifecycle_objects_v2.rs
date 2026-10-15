@@ -560,6 +560,15 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             }
             Ok(())
         }
+        PalwConsensusObjectV2::GdnStepAccusedV2 { accusation } => {
+            if accusation.signature.is_empty() { return Err("GDN accusation must carry its accuser's signature"); }
+            if accusation.encoded_bytes()? > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES {
+                return Err("GDN accusation exceeds the existing close-byte ceiling");
+            }
+            accusation.validate_shape(u64::MAX)
+        }
+        // RFC-0006 consumer v2 (tag 170): a signed binding declaration, or a signed accusation under the close-byte ceiling.
+        PalwConsensusObjectV2::MemoryRoutingV2 { object } => object.may_ride(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES),
         // **ADR-0100 Decision 4.** The plan and a bond's shard list ride signed — by the class's
         // registrant and by the bond, checked at acceptance against their registered keys — and
         // shaped: a count in range, a list inside it. A part rides unsigned like `ReceiptLicensed`
@@ -1181,11 +1190,12 @@ pub enum PalwLifecycleKindFenceV1 {
     /// (`crate::palw_staged_route_forms_v1`).
     StagedFloatConstraintV1 = 13,
     MaterialReleaseRecoveryV2 = 14,
+    MemoryRoutingCourtV2 = 15,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1201,6 +1211,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::StagedTirRouteV1,
         Self::StagedFloatConstraintV1,
         Self::MaterialReleaseRecoveryV2,
+        Self::MemoryRoutingCourtV2,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1219,6 +1230,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::StagedPublicCourtV1 => "palw_staged_public_court_v1",
             Self::MonetaryMaterialV1 => "palw_monetary_material_v1",
             Self::MaterialReleaseRecoveryV2 => "palw_material_release_recovery_v2",
+            Self::MemoryRoutingCourtV2 => "palw_memory_routing_court_v2",
             Self::StagedTirRouteV1 => "palw_staged_tir_route_v1",
             Self::StagedFloatConstraintV1 => "palw_staged_float_constraint_v1",
         }
@@ -1394,7 +1406,27 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         | O::LegacyHeldAnswerDeclaredV2 { .. }
         | O::LegacyHeldAnswerChunkV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2),
         // Lane BUDGET: a bond's capital assignment (140).
-        O::MonetaryMaterialActionV1 {action,..} if matches!(action.as_ref(), crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::RecoveryV2(_)) => {
+        O::MonetaryMaterialEnrolledV1 { enrollment, .. }
+            if enrollment.terms.material_manifest.as_ref().is_some_and(|m| {
+                m.scopes.iter().any(|s| s.codec == crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4)
+            }) =>
+        {
+            PalwLifecycleKindOwnerV1::Fence(F::MaterialReleaseRecoveryV2)
+        }
+        O::MonetaryMaterialReplacedV1 { replacement, .. }
+            if replacement.enrollment.terms.material_manifest.as_ref().is_some_and(|m| {
+                m.scopes.iter().any(|s| s.codec == crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4)
+            }) =>
+        {
+            PalwLifecycleKindOwnerV1::Fence(F::MaterialReleaseRecoveryV2)
+        }
+        O::MonetaryMaterialActionV1 { action, .. }
+            if matches!(
+                action.as_ref(),
+                crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::RecoveryV2(_)
+                    | crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { .. }
+            ) =>
+        {
             PalwLifecycleKindOwnerV1::Fence(F::MaterialReleaseRecoveryV2)
         }
         O::MonetaryMaterialEnrolledV1 { .. } | O::MonetaryMaterialReplacedV1 { .. } | O::MonetaryMaterialActionV1 { .. } => {
@@ -1402,6 +1434,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         }
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
         O::ClassSemanticsDeclaredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ClassSemanticsV1),
+        O::GdnStepAccusedV2 { .. } | O::MemoryRoutingV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::MemoryRoutingCourtV2),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
         O::ExecWorkRootOpenedV2 { .. } | O::ExecOriginRecordedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
         // The TIR and greedy Float32 routes' forms appended inside the staged court's kinds are owned by their own fences
@@ -1571,6 +1604,8 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (240, "MonetaryMaterialEnrolledV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
     (241, "MonetaryMaterialReplacedV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
     (242, "MonetaryMaterialActionV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
+    (243, "GdnStepAccusedV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
+    (170, "MemoryRoutingV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
     (168, "PublicCourtStreamOpenedNativeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (169, "TirClassLayoutPublishedV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
@@ -1658,7 +1693,11 @@ impl crate::config::params::Params {
                     PalwLifecycleKindFenceV1::ClassSemanticsV1 => self.palw_class_semantics_v1_fence(),
                     PalwLifecycleKindFenceV1::StagedPublicCourtV1 => self.palw_staged_public_court_v1,
                     PalwLifecycleKindFenceV1::MonetaryMaterialV1 => self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
-                    PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2 => Self::palw_later_of_v1(self.palw_material_release_recovery_v2.as_ref().map(|f|f.activation), self.palw_monetary_material_v1.as_ref().map(|f|f.activation)),
+                    PalwLifecycleKindFenceV1::MemoryRoutingCourtV2 => self.palw_memory_routing_court_v2_fence(),
+                    PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2 => Self::palw_later_of_v1(
+                        self.palw_material_release_recovery_v2.as_ref().map(|f| f.activation),
+                        self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
+                    ),
                     // In force where BOTH the route's and the staged court's fences are (the route's rows are the court's).
                     PalwLifecycleKindFenceV1::StagedTirRouteV1 => {
                         Self::palw_later_of_v1(self.palw_staged_tir_route_v1_fence(), self.palw_staged_public_court_v1)
@@ -2210,8 +2249,22 @@ const fn a2_row(slot: PalwA2SlotV1, fence: &'static str, owner: &'static str, la
 /// written). The Lead allocates; A2U keeps the table; a lane fills its row's code at merge, and the reconciliation tests hold it to the
 /// row.
 pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
-    a2_row(PalwA2SlotV1::KernelNested {what:"PalwMonetaryMaterialActionV1::RecoveryV2 (7), Enroll/Replace/Acknowledge/RetireProviderStream"},"palw_material_release_recovery_v2","RFC08 bounded signed historical release recovery",true),
-    a2_row(PalwA2SlotV1::StateEncoding {what:"kernel route aux134 root64 Active/Terminal reserved history and provider69 ACK stream checkpoint"},"palw_material_release_recovery_v2","RFC08 bounded recovery and actual ACK application",true),
+    a2_row(
+        PalwA2SlotV1::KernelNested {
+            what: "PalwMonetaryMaterialActionV1::RecoveryV2 (7), Enroll/Replace/Acknowledge/RetireProviderStream; ChallengeCurrentV4 (8)",
+        },
+        "palw_material_release_recovery_v2",
+        "RFC08 bounded signed historical release recovery",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux137 root64 Active/Terminal reserved history and provider69 ACK stream checkpoint",
+        },
+        "palw_material_release_recovery_v2",
+        "RFC08 bounded recovery and actual ACK application",
+        true,
+    ),
     // ---- top-level object tags (0x4b) ----
     a2_row(PalwA2SlotV1::ObjectTags { lo: 104, hi: 107 }, "palw_probabilistic_constraints_v1", "G14 lane D phase 3 onboarding", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 108, hi: 108 }, "palw_signed_registration_v1", "RFC-0009 signed-expiry registration", true),
@@ -2231,6 +2284,13 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::ObjectTags { lo: 240, hi: 242 },
         "palw_monetary_material_v1",
         "RFC08 explicit monetary material covenants",
+        true,
+    ),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 243, hi: 243 }, "palw_memory_routing_court_v2", "RFC06 GDN/routing court version2", true),
+    a2_row(
+        PalwA2SlotV1::ObjectTags { lo: 170, hi: 170 },
+        "palw_memory_routing_court_v2",
+        "RFC06 router binding and checkpoint/routed accusations (consumer v2)",
         true,
     ),
     a2_row(
@@ -2822,6 +2882,21 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "RFC-0006 R6-CELL round 4 coverage closure",
         true,
     ),
+    // 2026-10-15 (RFC-0006 consumer v2): past BOTH the closure and `palw_memory_routing_court_v2`, the closure's three readers re-read
+    // a profile through what that consumer reaches. Keyed exactly as the closure is (registration DAA, claim acceptance DAA), so
+    // below the fence every verdict, write and root is the round-4 one.
+    a2_row(
+        PalwA2SlotV1::Int12FoldPastFence {
+            tags: &[3, 8, 12],
+            what: "past both fences: a ClassRegistered (3) of a solo gdn v1/v2 or composed hybrid map, or of a bindable multi-router / \
+                   Kimi table, is no longer refused at registration; a claim (12, and the attempt lane) of such a class is admitted \
+                   when its recurrence is reached and its routed readers are covered by a router binding declared at or before \
+                   acceptance; a CourtClosed (8) re-reads REQ-CELL-2 the same way (adjudicate_court_close_v5)",
+        },
+        "palw_memory_routing_court_v2",
+        "RFC-0006 consumer v2 cell coverage",
+        true,
+    ),
     // 2026-10-15 (RFC-0017): model eligibility on the existing lanes. A registration keys on its own block's DAA, a claim on its
     // acceptance DAA, a Final on the pin written at acceptance — so below the fence every verdict, write and root is the live build's.
     a2_row(
@@ -2860,6 +2935,9 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     // G14 public-conviction branch and the RFC02 branch (all end at 167 / start again at 240); the kind itself is not landed yet.
     (230, 230, "D2 seat readiness digest (reserved)", &["palw_court_model_scope_v1"]),
     (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1", "palw_material_release_recovery_v2"]),
+    (243, 243, "RFC06 versioned recurrence/routing court", &["palw_memory_routing_court_v2"]),
+    // 170: the RFC06 GDN/router lane's allocation (2026-10-15) — the router binding and the checkpoint/routed accusations.
+    (170, 170, "RFC06 router binding and checkpoint/routed accusations", &["palw_memory_routing_court_v2"]),
 ];
 
 #[cfg(test)]
@@ -3878,6 +3956,8 @@ pub(crate) mod tests {
                 (240, zero_filled_kind(240)),
                 (241, zero_filled_kind(241)),
                 (242, zero_filled_kind(242)),
+                (243, zero_filled_kind(243)),
+                (170, zero_filled_kind(170)),
                 (104, O::ArtifactBoundV1 { v2_class: h, kernel_param_root: h, signer: bond(), signature: vec![1] }),
                 (
                     105,
@@ -5130,6 +5210,11 @@ pub(crate) mod tests {
             (240, 0xbc39aa6d38e7db6e),
             (241, 0xcd75cd8b043876d6),
             (242, 0xd29d0349b76c136f),
+            // New source declaration pin only; no old kind was re-pinned.
+            (243, 0x5b8caf052fb70f7d),
+            // RFC-0006 GDN/router lane (tag 170): source pin from `scripts/drills/gen_rfc06_gdn_wire_pin_v2.py MemoryRoutingV2 170`
+            // (written, not run — the consolidated test prints the authoritative value if this differs).
+            (170, 0xcd39526b2f222e96),
             // G14 TIR native seed and class layout, owned by `palw_staged_tir_route_v1`.
             (168, 0x08ee1a77654c016e),
             (169, 0xa24f46d0931b98b5),

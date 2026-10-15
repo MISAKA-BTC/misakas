@@ -1631,6 +1631,424 @@ impl ConsensusApi for Consensus {
         // The header is the native finality witness, never a wall-clock estimate.
         self.headers_store.get_daa_score(pin).map(Some).map_err(|e| e.to_string())
     }
+    fn palw_kernel_producer_candidate_v4(
+        &self,
+        checkpoint: BlockHash,
+        producer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        commit: &misaka_palw_kernel::route::SaltedCommitV1,
+        salt: &[u8; 64],
+        commit_daa: u64,
+        expires_daa: u64,
+    ) -> Result<kaspa_consensus_core::palw_kernel_producer_candidate_v4::PalwKernelProducerCandidateOwnedV4, String> {
+        let before = self.lkg_virtual_state.load();
+        let now = self.get_virtual_daa_score();
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || generation.active.is_some() {
+            return Err("kernel ingress import incomplete".into());
+        }
+        if !self.services.reachability_service.has_reachability_data(checkpoint)
+            || !self.services.reachability_service.is_chain_ancestor_of(checkpoint, before.ghostdag_data.selected_parent)
+        {
+            return Err("kernel ingress checkpoint is not on own accepted chain".into());
+        }
+        let daa = self.headers_store.get_daa_score(checkpoint).map_err(|e| e.to_string())?;
+        if daa > now || now - daa > kaspa_consensus_core::palw_prospective_kernel_material_v4::PALW_KERNEL_INGRESS_CHECKPOINT_WINDOW_V4
+        {
+            return Err("kernel ingress checkpoint outside bounded native window".into());
+        }
+        let state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(checkpoint)
+            .map_err(|e| format!("kernel ingress native state unavailable: {e:?}"))?;
+        let prepared = self.virtual_processor.palw_kernel_producer_candidate_v4_impl(
+            &state,
+            checkpoint,
+            now,
+            producer,
+            commit,
+            salt,
+            commit_daa,
+            expires_daa,
+        )?;
+        let after = self.lkg_virtual_state.load();
+        let (generation_after, stable_after) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_after
+            || generation_after.active.is_some()
+            || generation.epoch != generation_after.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+            || now != self.get_virtual_daa_score()
+        {
+            return Err("kernel ingress changed native tip/clock/import generation".into());
+        }
+        Ok(prepared)
+    }
+    fn palw_kernel_material_consent_accepted_v4(&self, root: kaspa_hashes::Hash64, consent: kaspa_hashes::Hash64) -> Result<bool, String> {
+        use kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2;
+        let before = self.lkg_virtual_state.load();
+        let now = self.get_virtual_daa_score();
+        let (epoch, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || epoch.active.is_some() {
+            return Err("kernel consent import incomplete".into());
+        }
+        let state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
+            .map_err(|e| format!("kernel consent state unavailable: {e:?}"))?;
+        let Some(row) = state.monetary_material_row_v1(root) else { return Ok(false) };
+        if row.consent != consent
+            || row.terms.native_session.is_some()
+            || row.terms.material_manifest.as_ref().is_none_or(|m| m.root != root)
+            || now > row.terms.enrollment_until_daa
+        {
+            return Ok(false);
+        }
+        let Some(PalwMaterialRecoveryRowV2::Active(recovery)) = state.material_recovery_row_v2(root) else { return Ok(false) };
+        if !recovery.generations.iter().any(|g| g.consent == consent) {
+            return Ok(false);
+        }
+        let valid = true;
+        let after = self.lkg_virtual_state.load();
+        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable
+            || end.active.is_some()
+            || end.epoch != epoch.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+            || now != self.get_virtual_daa_score()
+        {
+            return Err("kernel consent native point changed".into());
+        }
+        Ok(valid)
+    }
+    fn palw_kernel_material_admission_accepted_v4(
+        &self,
+        request: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+        draft: &kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+    ) -> Result<bool, String> {
+        use kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2;
+        let before = self.lkg_virtual_state.load();
+        let now = self.get_virtual_daa_score();
+        let (epoch, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || epoch.active.is_some() {
+            return Err("kernel admission import incomplete".into());
+        }
+        let current = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
+            .map_err(|e| format!("kernel material current state unavailable: {e:?}"))?;
+        let kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2::FundedEnroll {
+            monetary,
+            terms,
+            ..
+        } = draft
+        else {
+            return Err("kernel admission requires atomic funded enrollment".into());
+        };
+        if monetary.terms.root != request.intent.manifest.root
+            || monetary.terms.material_manifest.as_ref() != Some(&request.intent.manifest)
+            || monetary.terms.sponsor != request.intent.producer
+            || terms.initial_consent != monetary.id()
+        {
+            return Err("kernel admission draft/request mismatch".into());
+        }
+        if now > monetary.terms.enrollment_until_daa {
+            return Err("kernel funded enrollment expired before claim admission".into());
+        }
+        let rid = kaspa_hashes::Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/RELEASE-RECOVERY-CONSENT/V2", terms));
+        let matches = |state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2| {
+            state
+                .monetary_material_row_v1(monetary.terms.root)
+                .is_some_and(|row| row.consent == monetary.id() && row.terms == monetary.terms)
+                && matches!(state.material_recovery_row_v2(monetary.terms.root),Some(PalwMaterialRecoveryRowV2::Active(ref c)) if c.id()==rid&&c.generations.iter().any(|g|g.consent==monetary.id()))
+        };
+        if !matches(&current) {
+            return Ok(false);
+        }
+        let result = matches(&current);
+        let after = self.lkg_virtual_state.load();
+        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable
+            || end.active.is_some()
+            || end.epoch != epoch.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+            || now != self.get_virtual_daa_score()
+        {
+            return Err("kernel admission native point changed".into());
+        }
+        Ok(result)
+    }
+    fn palw_kernel_material_ingress_v4(
+        &self,
+        checkpoint: BlockHash,
+        request: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+    ) -> Result<kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4, String> {
+        let before = self.lkg_virtual_state.load();
+        let now = self.get_virtual_daa_score();
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || generation.active.is_some() {
+            return Err("kernel ingress import incomplete".into());
+        }
+        if !self.services.reachability_service.has_reachability_data(checkpoint)
+            || !self.services.reachability_service.is_chain_ancestor_of(checkpoint, before.ghostdag_data.selected_parent)
+        {
+            return Err("kernel ingress checkpoint is not on own accepted chain".into());
+        }
+        let daa = self.headers_store.get_daa_score(checkpoint).map_err(|e| e.to_string())?;
+        if daa > now || now - daa > kaspa_consensus_core::palw_prospective_kernel_material_v4::PALW_KERNEL_INGRESS_CHECKPOINT_WINDOW_V4
+        {
+            return Err("kernel ingress checkpoint outside bounded native window".into());
+        }
+        let state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(checkpoint)
+            .map_err(|e| format!("kernel ingress native state unavailable: {e:?}"))?;
+        let prepared = self.virtual_processor.palw_kernel_material_ingress_v4_impl(&state, checkpoint, now, request)?;
+        let after = self.lkg_virtual_state.load();
+        let (generation_after, stable_after) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_after
+            || generation_after.active.is_some()
+            || generation.epoch != generation_after.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+            || now != self.get_virtual_daa_score()
+        {
+            return Err("kernel ingress changed native tip/clock/import generation".into());
+        }
+        Ok(prepared)
+    }
+    fn palw_kernel_material_context_authority_v4(
+        &self,
+        context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        capsule: &kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+        provider: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        pubkey: &[u8],
+    ) -> Result<(), String> {
+        let before = self.lkg_virtual_state.load();
+        let now = self.get_virtual_daa_score();
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || generation.active.is_some() {
+            return Err("kernel context import incomplete".into());
+        }
+        let state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
+            .map_err(|e| format!("kernel current native state unavailable: {e:?}"))?;
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Err("kernel context needs ConsensusV2".into());
+        };
+        state.assert_monetary_material_consistency_v1(&bundle.state).map_err(|e| e.to_string())?;
+        state.assert_material_release_recovery_consistency_v2(&bundle.state).map_err(|e| e.to_string())?;
+        kaspa_consensus_core::palw_kernel_material_enrollment_v4::require_kernel_context_current_v4(
+            &state,
+            &bundle.state,
+            now,
+            context,
+            capsule,
+            &provider,
+            pubkey,
+            kaspa_consensus_core::palw_attempt_material_v3::verify_ready_signature_v3,
+        )?;
+        let after = self.lkg_virtual_state.load();
+        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable
+            || end.active.is_some()
+            || generation.epoch != end.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+            || now != self.get_virtual_daa_score()
+        {
+            return Err("kernel context native point/import changed".into());
+        }
+        Ok(())
+    }
+    fn palw_material_generation_authority_v4(
+        &self,
+        root: kaspa_hashes::Hash64,
+        consent: kaspa_hashes::Hash64,
+        provider: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        scope: &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1,
+    ) -> Result<(), String> {
+        let before = self.lkg_virtual_state.load();
+        let now = self.get_virtual_daa_score();
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || generation.active.is_some() {
+            return Err("material generation import incomplete".into());
+        }
+        let state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
+            .map_err(|e| format!("material generation native state unavailable: {e:?}"))?;
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Err("material generation needs ConsensusV2".into());
+        };
+        state.assert_monetary_material_consistency_v1(&bundle.state).map_err(|e| e.to_string())?;
+        state.assert_material_release_recovery_consistency_v2(&bundle.state).map_err(|e| e.to_string())?;
+        kaspa_consensus_core::palw_kernel_material_enrollment_v4::require_material_generation_current_v4(
+            &state,
+            &bundle.state,
+            now,
+            root,
+            consent,
+            provider,
+            scope,
+        )?;
+        let after = self.lkg_virtual_state.load();
+        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable
+            || end.active.is_some()
+            || end.epoch != generation.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+            || now != self.get_virtual_daa_score()
+        {
+            return Err("material generation native point/import changed".into());
+        }
+        Ok(())
+    }
+    fn palw_kernel_material_replacement_v4(
+        &self,
+        context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+    ) -> Result<kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4, String> {
+        let before = self.lkg_virtual_state.load();
+        let now = self.get_virtual_daa_score();
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || generation.active.is_some() {
+            return Err("replacement native import incomplete".into());
+        }
+        let state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
+            .map_err(|e| format!("replacement native state unavailable: {e:?}"))?;
+        let quote = self.virtual_processor.palw_kernel_material_replacement_v4_impl(&state, now, context, bundle, intent)?;
+        let after = self.lkg_virtual_state.load();
+        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable
+            || end.active.is_some()
+            || end.epoch != generation.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+            || now != self.get_virtual_daa_score()
+        {
+            return Err("replacement native point/clock/import changed".into());
+        }
+        Ok(quote)
+    }
+    fn palw_kernel_material_capsule_unused_finalized_v4(
+        &self,
+        capsule: &kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+    ) -> Result<bool, String> {
+        use kaspa_consensus_core::{
+            palw_kernel_material_enrollment_v4::kernel_material_capsule_identity_v4,
+            palw_kernel_material_replacement_v4::material_generation_present_v4,
+        };
+        let (enrollment, consent, until) = kernel_material_capsule_identity_v4(capsule)?;
+        let root = enrollment.terms.root;
+        let before = self.lkg_virtual_state.load();
+        let now = self.get_virtual_daa_score();
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || generation.active.is_some() {
+            return Err("generation expiry native import incomplete".into());
+        }
+        let current = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
+            .map_err(|e| format!("expiry current state unavailable: {e:?}"))?;
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Err("generation expiry needs ConsensusV2".into());
+        };
+        if bundle.state.material_release_recovery_at_v2(now).is_none() {
+            return Ok(false);
+        }
+        current.assert_monetary_material_consistency_v1(&bundle.state).map_err(|e| e.to_string())?;
+        current.assert_material_release_recovery_consistency_v2(&bundle.state).map_err(|e| e.to_string())?;
+        if material_generation_present_v4(&current, root, consent)? {
+            return Ok(false);
+        }
+        let Some((pin, finalized)) = self.palw_finalized_material_recovery_state_v2()? else { return Ok(false) };
+        let parent = self.ghostdag_store.get_data(pin).map_err(|e| e.to_string())?.selected_parent;
+        // A positive finalized parent clock, not local elapsed time. No old
+        // unbounded Replace may be represented by this bounded capsule helper.
+        if self.headers_store.get_daa_score(parent).map_err(|e| e.to_string())? <= until {
+            return Ok(false);
+        }
+        finalized.assert_monetary_material_consistency_v1(&bundle.state).map_err(|e| e.to_string())?;
+        if material_generation_present_v4(&finalized, root, consent)? {
+            return Ok(false);
+        }
+        let after = self.lkg_virtual_state.load();
+        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable
+            || end.active.is_some()
+            || end.epoch != generation.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+            || now != self.get_virtual_daa_score()
+        {
+            return Err("generation expiry native point/clock/import changed".into());
+        }
+        Ok(true)
+    }
+    fn palw_kernel_material_query_authority_v4(
+        &self,
+        query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        requester: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        pubkey: &[u8],
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+            kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4,
+        >,
+        String,
+    > {
+        let before = self.lkg_virtual_state.load();
+        let now = self.get_virtual_daa_score();
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || generation.active.is_some() {
+            return Err("material query import incomplete".into());
+        }
+        let point = before.ghostdag_data.selected_parent;
+        let state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(point)
+            .map_err(|e| format!("material query native state unavailable: {e:?}"))?;
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Err("material query needs ConsensusV2".into());
+        };
+        state.assert_monetary_material_consistency_v1(&bundle.state).map_err(|e| e.to_string())?;
+        state.assert_material_release_recovery_consistency_v2(&bundle.state).map_err(|e| e.to_string())?;
+        let authority = kaspa_consensus_core::palw_kernel_material_query_v4::kernel_material_query_authority_v4(
+            &state,
+            &bundle.state,
+            point,
+            now,
+            query,
+            requester,
+            pubkey,
+        )?;
+        let after = self.lkg_virtual_state.load();
+        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable
+            || end.active.is_some()
+            || end.epoch != generation.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+            || now != self.get_virtual_daa_score()
+        {
+            return Err("material query native point/clock/import changed".into());
+        }
+        Ok(authority)
+    }
+    fn palw_exec_origin_coverage_v1(
+        &self,
+        listed: usize,
+    ) -> Result<kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginCoverageV1, String> {
+        let before = self.lkg_virtual_state.load();
+        let state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
+            .map_err(|e| format!("historical header census state unavailable: {e:?}"))?;
+        Ok(kaspa_consensus_core::palw_work_slice_v2::palw_exec_origin_coverage_v1(&state, listed.min(4096), |block| {
+            self.headers_store.get_header(block).ok().and_then(|header| borsh::object_length(&*header).ok()).map(|n| n as u64)
+        }))
+    }
     fn palw_native_recovery_session_quote_v4(
         &self,
         checkpoint: Option<BlockHash>,
@@ -1729,6 +2147,23 @@ impl ConsensusApi for Consensus {
         if self.palw_monetary_material_covenants_v1()?.iter().any(|row| row.terms.root == root) {
             return Ok(false);
         }
+        let current_state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
+            .map_err(|e| format!("unused-offer current state unavailable: {e:?}"))?;
+        let recovery_present = |state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2| {
+            state.kernel_route().is_some_and(|route| {
+                route.aux.keys().any(|(table, key)| {
+                    *table == kaspa_consensus_core::palw_material_release_recovery_v2::PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2
+                        && key.as_slice() == root.as_byte_slice()
+                })
+            })
+        };
+        // Terminal generations need their ordinary durable GC completion and
+        // ACK path. An expiry shortcut must never erase that receipt evidence.
+        if recovery_present(&current_state) {
+            return Ok(false);
+        }
         let finality = self.virtual_processor.virtual_finality_point(&before.ghostdag_data, self.pruning_point());
         if !self.services.reachability_service.has_reachability_data(finality)
             || !self.services.reachability_service.is_chain_ancestor_of(finality, before.ghostdag_data.selected_parent)
@@ -1743,6 +2178,9 @@ impl ConsensusApi for Consensus {
             .palw_candidate_state_v2_checked(finality)
             .map_err(|e| format!("unused-offer finalized state unavailable: {e:?}"))?;
         if finalized_state.monetary_material_row_v1(root).is_some() {
+            return Ok(false);
+        }
+        if recovery_present(&finalized_state) {
             return Ok(false);
         }
         let after = self.lkg_virtual_state.load();
@@ -3133,6 +3571,13 @@ impl ConsensusApi for Consensus {
 
     fn palw_rfc0016_report_v1(&self, class: Option<kaspa_consensus_core::Hash64>) -> Result<Option<(u64, bool, String)>, String> {
         self.virtual_processor.palw_rfc0016_report_v1_impl(class)
+    }
+
+    fn palw_router_binding_v2(
+        &self,
+        class: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<(u64, bool, Option<(u64, Vec<u8>)>)>, String> {
+        self.virtual_processor.palw_router_binding_v2_impl(class)
     }
 
     fn palw_staged_preclaim_quote_v1(
@@ -4729,6 +5174,12 @@ impl Consensus {
             return Err("terminal receipt import is incomplete".into());
         }
         let finality = self.virtual_processor.virtual_finality_point(&before.ghostdag_data, self.pruning_point());
+        // Genesis commits no finalized parent state. Reading ORIGIN here would
+        // turn a normal startup boundary into an authority read failure; None
+        // still authorizes neither GC nor ACK/enrollment retirement.
+        if finality == self.config.params.genesis.hash {
+            return Ok(None);
+        }
         if !self.services.reachability_service.has_reachability_data(finality)
             || !self.services.reachability_service.is_chain_ancestor_of(finality, before.ghostdag_data.selected_parent)
         {

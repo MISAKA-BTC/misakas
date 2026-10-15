@@ -30,6 +30,25 @@ class DriverControls(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 driver.validate_factory_manifest(dict(paid, **{field: True}), 'paid-v3')
 
+    def test_paid_v4_manifest_requires_retired_compact_policy_and_unapproved_recovery(self):
+        nested = dict(privatePaidProfileVersion=4, genesis='g' * 128, consensusParamsId='c' * 64,
+            skipProofOfWork=False, releaseApproval=False,
+            compactClaimPolicy=dict(retired=True, reason='PRINCIPLES §8'),
+            releaseRecoveryPolicy=dict(id='r' * 128, approved=False))
+        paid = dict(schema='misaka.private-paid-bootstrap.v4', skipProofOfWork=False, releaseApproval=False,
+            baseArtifactsAreControlReceipts=False, paidClaimIncluded=False, nativeFinalObserved=False,
+            genesis='g' * 128, consensusParamsId='c' * 64, privateProbeProfile=nested,
+            compactContractIncluded=False, recoveryEnrollmentIncluded=False)
+        driver.validate_factory_manifest(paid, 'paid-v4')
+        for compact in (dict(id='x' * 128, approved=False), dict(retired=False, reason='armed'),
+                dict(retired=True), dict(retired=True, reason='r', id='x'), None):
+            changed = dict(paid, privateProbeProfile=dict(nested, compactClaimPolicy=compact))
+            with self.subTest(compact=compact), self.assertRaisesRegex(ValueError, 'retired'):
+                driver.validate_factory_manifest(changed, 'paid-v4')
+        approved = dict(paid, privateProbeProfile=dict(nested, releaseRecoveryPolicy=dict(id='r', approved=True)))
+        with self.assertRaisesRegex(ValueError, 'releaseRecoveryPolicy'):
+            driver.validate_factory_manifest(approved, 'paid-v4')
+
     def test_later_complete_refusal_preserves_inclusion_and_actual_prior_fees_without_pass(self):
         class FakeDrill:
             plan = dict(nodes={'A': dict(borsh='owned:1')})

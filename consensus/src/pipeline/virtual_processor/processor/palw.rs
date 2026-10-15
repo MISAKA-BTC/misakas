@@ -972,7 +972,7 @@ impl VirtualStateProcessor {
         let daa_score = self.virtual_stores.read().state.get().ok()?.daa_score;
         let step_ladder = self.palw_court_step_ladder_at(daa_score, court);
         let form = self.palw_prompt_ids_form_at(daa_score);
-        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v4(
+        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v5(
             &state,
             session_id,
             proof,
@@ -988,6 +988,8 @@ impl VirtualStateProcessor {
                 .map(|f| f.daa_score()),
             // RFC-0006 R6-CELL round 4: the coverage closure's mirror (None on every shipped network).
             state_params.cell_coverage_closure_from_daa(),
+            // RFC-0006 consumer v2: `palw_memory_routing_court_v2`'s mirror (None on every shipped network).
+            state_params.memory_routing_court_from_daa(),
         )
         .ok()
     }
@@ -1684,6 +1686,24 @@ impl VirtualStateProcessor {
     }
 
     /// **RFC-0016 op 255**: the per-model report (and the quote for `class`) at the virtual tip, rendered as JSON.
+    /// **RFC-0006 consumer v2 (op 245): a class's router binding row at the virtual tip** (read-only; aux 139 of the reader
+    /// state). `armed` is `palw_memory_routing_court_v2`'s mirror (false on every shipped preset).
+    #[allow(clippy::type_complexity)]
+    pub fn palw_router_binding_v2_impl(
+        &self,
+        class: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<(u64, bool, Option<(u64, Vec<u8>)>)>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let Some((_, state)) = self.palw_v2_reader_state(params).map_err(|e| e.to_string())? else { return Ok(None) };
+        let now = self.virtual_stores.read().state.get().map_err(|e| e.to_string())?.daa_score;
+        let armed = params.memory_routing_court_from_daa().is_some();
+        let row = match kaspa_consensus_core::palw_state_v2::palw_router_binding_row_of_v2(&state, &class) {
+            Some(row) => Some((row.bound_from_daa, borsh::to_vec(&row).map_err(|e| e.to_string())?)),
+            None => None,
+        };
+        Ok(Some((now, armed, row)))
+    }
+
     pub fn palw_rfc0016_report_v1_impl(
         &self,
         class: Option<kaspa_consensus_core::Hash64>,
@@ -8596,6 +8616,10 @@ impl VirtualStateProcessor {
     /// carries, which is `Some` exactly when this is true.
     pub(super) fn palw_shard_court_at(&self, daa_score: u64) -> bool {
         self.palw_shard_court.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    pub(super) fn palw_memory_routing_court_v2_at(&self, daa_score: u64) -> bool {
+        self.palw_memory_routing_court_v2.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **ADR-0100 Decision 4, resolved in exactly one place.**

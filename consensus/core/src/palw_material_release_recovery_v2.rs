@@ -10,7 +10,9 @@ use crate::{
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::BTreeSet;
 
-pub const PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2: u8 = 134;
+/// Kernel-route aux table 137 (renumbered 134 → 137 on 2026-10-15: 134/135 are RFC-0016's queue index and telemetry, 136 is
+/// RFC-0018's certification table; 137 grepped free across this tree, integ/decisions-1015 and integ/validation).
+pub const PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2: u8 = 137;
 pub const PALW_MATERIAL_RELEASE_RECOVERY_MAX_CONTRACTS_V2: u32 = 4096;
 pub const PALW_MATERIAL_RELEASE_RECOVERY_MAX_GENERATIONS_V2: u16 = 64;
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -132,12 +134,21 @@ pub enum PalwMaterialRecoveryActionV2 {
         sequence: u64,
         challenge_deadline_daa: u64,
     },
+    /// Appended signed native admission deadline. Old Replace (variant 1)
+    /// keeps its original wire/signature meaning and cannot imply this expiry.
+    ReplaceBeforeV4 {
+        valid_until_daa: u64,
+        recovery: Hash64,
+        replacement: Box<crate::palw_monetary_material_v1::PalwMonetaryMaterialReplacementV1>,
+        providers: Vec<PalwMaterialRecoverySignatureV2>,
+        sponsor_signature: Vec<u8>,
+    },
 }
 impl PalwMaterialRecoveryActionV2 {
     pub fn root(&self) -> Hash64 {
         match self {
             Self::Enroll { terms, .. } => terms.root,
-            Self::Replace { replacement, .. } => replacement.root,
+            Self::Replace { replacement, .. } | Self::ReplaceBeforeV4 { replacement, .. } => replacement.root,
             Self::Acknowledge { root, .. } => *root,
             Self::RetireProviderStream { stream, .. } => *stream,
             Self::FundedEnroll { terms, .. } => terms.root,
@@ -156,6 +167,14 @@ impl PalwMaterialRecoveryActionV2 {
             .unwrap(),
             Self::Replace { recovery, replacement, providers, .. } => borsh::to_vec(&(
                 b"material-recovery-replace/v2".as_slice(),
+                recovery,
+                replacement.payload(),
+                providers.iter().map(|s| s.provider).collect::<Vec<_>>(),
+            ))
+            .unwrap(),
+            Self::ReplaceBeforeV4 { valid_until_daa, recovery, replacement, providers, .. } => borsh::to_vec(&(
+                b"material-recovery-replace-before/v4".as_slice(),
+                valid_until_daa,
                 recovery,
                 replacement.payload(),
                 providers.iter().map(|s| s.provider).collect::<Vec<_>>(),
@@ -185,9 +204,17 @@ impl PalwMaterialRecoveryActionV2 {
             .unwrap(),
         }
     }
+    /// A bounded generation commits its immutable deadline. It cannot collide
+    /// with an otherwise identical offer signed for a different admission span.
+    pub fn bounded_replacement_consent_v4(&self) -> Option<Hash64> {
+        matches!(self, Self::ReplaceBeforeV4 { .. }).then(|| digest(b"MISAKA/PALW/BOUNDED-REPLACEMENT-CONSENT/V4", &self.payload()))
+    }
     pub fn provider_signatures(&self) -> &[PalwMaterialRecoverySignatureV2] {
         match self {
-            Self::Enroll { providers, .. } | Self::Replace { providers, .. } | Self::FundedEnroll { providers, .. } => providers,
+            Self::Enroll { providers, .. }
+            | Self::Replace { providers, .. }
+            | Self::ReplaceBeforeV4 { providers, .. }
+            | Self::FundedEnroll { providers, .. } => providers,
             Self::Acknowledge { .. } | Self::RetireProviderStream { .. } | Self::AnswerAndCheckpoint { .. } => &[],
         }
     }
@@ -435,7 +462,9 @@ impl Params {
         {
             return Err(PalwModeV2Error::Invalid("recovery requires the signed monetary covenant first"));
         }
-        Err(PalwModeV2Error::Invalid("release recovery cannot be armed: cost and bounded provider-ack liveness approval pending"))
+        // Cost and bounded provider-ack liveness are measured values: arming needs a pinned record for this exact policy on this
+        // network (EMPTY: dormant). testnet-12 DAA 14,000 release plan.
+        self.palw_rfc0608_measured_v1(crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::MaterialReleaseRecoveryV2, &f.policy)
     }
 }
 
@@ -458,7 +487,9 @@ pub fn material_recovery_object_v2(
         let message = palw_provider_court_message_v1(network, 240, &sponsor, &payload);
         *sponsor_signature = sign(&sponsor, message.as_byte_slice(), CONTEXT).filter(|s| !s.is_empty())?;
     }
-    if let PalwMaterialRecoveryActionV2::Replace { replacement, sponsor_signature, .. } = &mut action {
+    if let PalwMaterialRecoveryActionV2::Replace { replacement, sponsor_signature, .. }
+    | PalwMaterialRecoveryActionV2::ReplaceBeforeV4 { replacement, sponsor_signature, .. } = &mut action
+    {
         let payload = replacement.payload();
         for offer in &mut replacement.enrollment.offers {
             let message = palw_provider_court_message_v1(network, 241, &offer.provider, &payload);
@@ -472,6 +503,7 @@ pub fn material_recovery_object_v2(
     let providers = match &mut action {
         PalwMaterialRecoveryActionV2::Enroll { providers, .. }
         | PalwMaterialRecoveryActionV2::Replace { providers, .. }
+        | PalwMaterialRecoveryActionV2::ReplaceBeforeV4 { providers, .. }
         | PalwMaterialRecoveryActionV2::FundedEnroll { providers, .. } => providers.as_mut_slice(),
         PalwMaterialRecoveryActionV2::Acknowledge { .. }
         | PalwMaterialRecoveryActionV2::RetireProviderStream { .. }
@@ -638,7 +670,7 @@ pub fn material_provider_terminals_owned_v4(
             }
         }
     }
-    preflight_native_value_v1::<Vec<PalwMaterialTerminalReceiptV2>>(&encoded, encoded.len() as u64).map_err(|e| e.to_string())?;
+    preflight_native_value_v1::<Vec<PalwMaterialTerminalReceiptV2>>(&encoded[..], encoded.len() as u64).map_err(|e| e.to_string())?;
     retain_native_value_decode_v1(&encoded, || borsh::from_slice::<Vec<PalwMaterialTerminalReceiptV2>>(&encoded))
         .map_err(|e| e.to_string())
 }

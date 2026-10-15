@@ -2006,6 +2006,14 @@ impl VirtualStateProcessor {
             } else {
                 None
             },
+            memory_routing_court: if self.palw_memory_routing_court_v2_at(daa_score) {
+                self.palw_court_params_v2.as_ref().map(|court| kaspa_consensus_core::palw_gdn_court_v2::PalwGdnCourtLimitsV2 {
+                    ladder: self.palw_court_step_ladder_at(daa_score, court),
+                    max_close_bytes: court.max_close_bytes(),
+                })
+            } else {
+                None
+            },
             // ADR-0100 Decision 4: one shard's seats and quorum ride to the fold when per-shard
             // licensing is armed — the panel parameters the draw and the acceptance layer use.
             shard_licensing: if self.palw_shard_licensing_at(daa_score) {
@@ -2783,5 +2791,90 @@ impl VirtualStateProcessor {
             return Err("provider capture import generation changed".into());
         }
         Ok(PalwNativeMaterialProviderAuthorityV3 { row, material, provider_keys })
+    }
+}
+
+impl VirtualStateProcessor {
+    pub(crate) fn palw_kernel_material_ingress_v4_impl(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        checkpoint: BlockHash,
+        now: u64,
+        request: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+    ) -> Result<kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("kernel ingress state policy absent")?;
+        if params.material_release_recovery_at_v2(now).is_none() {
+            return Err("kernel ingress requires new signed recovery fence".into());
+        }
+        let policy = params.monetary_material_at_v1(now).ok_or("kernel ingress monetary fence dormant")?;
+        state.assert_monetary_material_consistency_v1(params).map_err(|e| e.to_string())?;
+        state.assert_material_release_recovery_consistency_v2(params).map_err(|e| e.to_string())?;
+        let raw_depth = self.palw_settled_anchor_depth_at(now);
+        let verified = kaspa_consensus_core::palw_prospective_kernel_material_v4::prospective_kernel_material_v4(
+            state,
+            params,
+            checkpoint,
+            now,
+            raw_depth,
+            request,
+            policy.max_bytes_per_contract,
+            kaspa_consensus_core::palw_attempt_material_v3::verify_ready_signature_v3,
+        )?;
+        kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_enrollment_v4(
+            state, params, now, raw_depth, request, verified,
+        )
+    }
+}
+
+impl VirtualStateProcessor {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn palw_kernel_producer_candidate_v4_impl(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        checkpoint: BlockHash,
+        now: u64,
+        producer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        commit: &misaka_palw_kernel::route::SaltedCommitV1,
+        salt: &[u8; 64],
+        commit_daa: u64,
+        expires_daa: u64,
+    ) -> Result<kaspa_consensus_core::palw_kernel_producer_candidate_v4::PalwKernelProducerCandidateOwnedV4, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("kernel producer state policy absent")?;
+        kaspa_consensus_core::palw_kernel_producer_candidate_v4::kernel_producer_candidate_v4(
+            state,
+            params,
+            checkpoint,
+            now,
+            producer,
+            commit,
+            salt,
+            commit_daa,
+            expires_daa,
+            self.palw_settled_anchor_depth_at(now),
+        )
+    }
+}
+
+impl VirtualStateProcessor {
+    pub(crate) fn palw_kernel_material_replacement_v4_impl(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        now: u64,
+        context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+    ) -> Result<kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("replacement native policy unavailable")?;
+        state.assert_monetary_material_consistency_v1(params).map_err(|e| e.to_string())?;
+        state.assert_material_release_recovery_consistency_v2(params).map_err(|e| e.to_string())?;
+        kaspa_consensus_core::palw_kernel_material_replacement_v4::kernel_material_replacement_v4(
+            state,
+            params,
+            now,
+            self.palw_settled_anchor_depth_at(now),
+            context,
+            bundle,
+            intent,
+        )
     }
 }

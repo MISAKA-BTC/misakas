@@ -7,7 +7,8 @@
 //! recovery. These rows must not enter the legacy Owner accounting/sweep path.
 //! Generic delta210 can carry the returned bounded changes; delta211 cannot.
 use crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1;
-use crate::palw_staged_court_state_v1::{PalwSharedCourtV1, PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+// Wire-visible fields name the canonical key type (the RFC06 shape generator resolves no `as` aliases); `Key` stays local.
+use crate::palw_staged_court_state_v1::{PalwSharedCourtV1, PalwStagedCourtKeyV1, PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
 use crate::palw_tir_public_owned_v1::{
     PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1, PalwTirPublicAcceptedBodyRefV1, PalwTirPublicChunkRecordV1, PalwTirPublicContractV1,
     PalwTirPublicOwnedActionV1, PalwTirPublicOwnedEffectV1, PalwTirPublicOwnedV1,
@@ -222,7 +223,7 @@ impl PalwTirPublicAcquisitionRowV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwTirPublicChunkRowV1 {
-    pub acquisition: Key,
+    pub acquisition: PalwStagedCourtKeyV1,
     pub source_id: Hash64,
     pub material_until_daa: u64,
     pub record: PalwTirPublicChunkRecordV1,
@@ -246,7 +247,7 @@ impl PalwTirPublicChunkRowV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwTirPublicAcceptedRowV1 {
-    pub acquisition: Key,
+    pub acquisition: PalwStagedCourtKeyV1,
     pub source_id: Hash64,
     pub material_until_daa: u64,
     pub history_index: u64,

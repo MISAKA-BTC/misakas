@@ -134,7 +134,10 @@ pub fn authorize_candidate_validation(request: RecoveryRequest<'_>) -> Result<Ca
     }
     if !matches!(
         request.state.participation,
-        ChainParticipation::IbdRunning | ChainParticipation::CandidateReview | ChainParticipation::Quarantined
+        ChainParticipation::IbdRunning
+            | ChainParticipation::ImportRecovery
+            | ChainParticipation::CandidateReview
+            | ChainParticipation::Quarantined
     ) {
         return Err(RecoveryError::AlreadyParticipating);
     }
@@ -418,7 +421,12 @@ mod tests {
 
     #[test]
     fn every_state_that_withholds_participation_qualifies() {
-        for participation in [ChainParticipation::IbdRunning, ChainParticipation::CandidateReview, ChainParticipation::Quarantined] {
+        for participation in [
+            ChainParticipation::IbdRunning,
+            ChainParticipation::ImportRecovery,
+            ChainParticipation::CandidateReview,
+            ChainParticipation::Quarantined,
+        ] {
             let mut state = reviewing();
             state.participation = participation;
             assert!(

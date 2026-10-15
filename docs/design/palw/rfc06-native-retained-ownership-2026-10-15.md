@@ -51,7 +51,7 @@ The native processor uses retained V7, pre-object and one-object rehearsal APIs.
 
 `NativeDecodeErrorV1` separates capacity from decode/state errors. The store has a Core-independent `LocalResourceUnavailable(String)` category; retained walks preserve native coverage causes. The virtual walk propagates capacity through `Result` before setting any disqualified status or reporting a reached ancestor as success. Parent-owned startup/worker/result dispatch forwards that class; ordinary corruption remains a separate failure. Source tests for split ownership, unchanged reservation on failure, local classification and default-off canonical byte parity have been added, but not run.
 
-The recovery Header/envelope/Quote roots and latest aux134 fields are included in generated native field/wire visitors. `Header` uses its actual derive layout, private compressed parent runs are visited beside their owner, and `Uint576` is the actual fixed nine-limb (72-byte) Borsh field. The 1,127-type inventory is a source closure count, not execution, cryptographic review, allocator approval or 100k acceptance evidence.
+The recovery Header/envelope/Quote roots and latest aux137 (formerly 134) fields are included in generated native field/wire visitors. `Header` uses its actual derive layout, private compressed parent runs are visited beside their owner, and `Uint576` is the actual fixed nine-limb (72-byte) Borsh field. The 1,127-type inventory is a source closure count, not execution, cryptographic review, allocator approval or 100k acceptance evidence.
 
 
 ## Class and shard writer admission (source only)

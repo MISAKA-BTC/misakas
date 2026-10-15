@@ -237,6 +237,11 @@ pub use palw_model_eligibility_fold_v1::palw_eligibility_status_of_v1;
 // `palw_independently_work_certified_v1`.
 #[path = "palw_security_certification_fold_v1.rs"]
 mod palw_security_certification_fold_v1;
+// RFC-0006 consumer v2 (object tag 170, kernel-route aux 139): the router binding declaration and the checkpoint / routed
+// accusations, past `palw_memory_routing_court_v2`.
+#[path = "palw_memory_routing_fold_v2.rs"]
+mod palw_memory_routing_fold_v2;
+pub use palw_memory_routing_fold_v2::palw_router_binding_row_of_v2;
 #[path = "palw_panel_source_fee_fold_v2.rs"]
 mod palw_panel_source_fee_fold_v2;
 #[path = "palw_panel_v3_fold_v1.rs"]
@@ -1934,6 +1939,11 @@ pub struct PalwStateParamsV2 {
     /// and the court close read it). `None` on every shipped preset, and validation refuses every armed one.
     #[borsh(skip)]
     cell_coverage_closure_from_daa: Option<u64>,
+    /// **RFC-0006: `Params::palw_memory_routing_court_v2_fence`'s height**, mirrored by `Params::sync_palw_memory_routing_court_v2`
+    /// (the routed-reader binding declaration, the v2 cell coverage at registration and at the claim gate read it; the court
+    /// carriers read the per-block extras). `None` on every shipped preset, and validation refuses every armed one.
+    #[borsh(skip)]
+    memory_routing_court_from_daa: Option<u64>,
     /// **RFC-0016: `Params::palw_model_block_rights_v1` and `palw_elastic_final_capacity_v1`, mirrored by `Params::sync_palw_rfc0016_v1`**
     /// (`crate::palw_rfc0016_v1::PalwRfc0016MirrorV1`). `None` on every shipped preset; validation refuses either fence armed.
     #[borsh(skip)]
@@ -7374,6 +7384,18 @@ pub enum PalwConsensusObjectV2 {
         signer: PalwBondKeyV2,
         signature: Vec<u8>,
     } = 242,
+    /// Versioned recurrence-state local accusation. Old step/court payloads keep
+    /// their encoding. Dormant behind palw_memory_routing_court_v2.
+    GdnStepAccusedV2 {
+        accusation: Box<crate::palw_gdn_court_v2::PalwGdnCourtAccusationV2>,
+    } = 243,
+    /// **RFC-0006 consumer v2's other carriers** (`crate::palw_memory_routing_v2`): the class registrant's immutable per-reader
+    /// router binding, and one-move accusations of a recurrence checkpoint transition, a convolution window or a routed reader
+    /// under its bound router. Tag 170 (the lane's allocation). Dormant behind `palw_memory_routing_court_v2`: below it the live
+    /// build's undecodable payload (A-2).
+    MemoryRoutingV2 {
+        object: Box<crate::palw_memory_routing_v2::PalwMemoryRoutingObjectV2>,
+    } = 170,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -18603,6 +18625,7 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         // RFC08: the mirror of `palw_monetary_material_v1` (merged 2026-10-15; this arm was missing on both parents).
         K::Fence(F::MonetaryMaterialV1) => builder.params.monetary_material_at_v1(ctx.daa_score).is_some(),
         K::Fence(F::MaterialReleaseRecoveryV2) => builder.params.material_release_recovery_at_v2(ctx.daa_score).is_some(),
+        K::Fence(F::MemoryRoutingCourtV2) => builder.extras.memory_routing_court.is_some(),
         // G14: the TIR / greedy Float32 staged routes ride inside the staged court's kinds, in force where both fences are.
         K::Fence(F::StagedTirRouteV1) => builder.extras.staged_public_court.is_some() && builder.extras.staged_tir_route_active,
         K::Fence(F::StagedFloatConstraintV1) => {
@@ -19544,6 +19567,9 @@ pub struct PalwTransitionExtrasV1 {
     /// object existed. The ladder rides here because the fold holds no bundle and must derive the
     /// same verdict the acceptance layer derived.
     pub shard_court_ladder: Option<u64>,
+    /// RFC06 version-2 recurrence/routing court, resolved per carrying block.
+    /// This is a runtime mirror, not persistent state or a credit approval.
+    pub memory_routing_court: Option<crate::palw_gdn_court_v2::PalwGdnCourtLimitsV2>,
     /// ADR-0100 Decision 4: `Some` exactly when `Params::palw_shard_licensing` is active at the
     /// block — one shard's seats and quorum, which the fold needs to slice a stratified panel and
     /// count a part, and does not otherwise hold. `None` refuses all three sharding objects and is

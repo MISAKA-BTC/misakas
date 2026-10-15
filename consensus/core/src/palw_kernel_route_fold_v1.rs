@@ -294,7 +294,13 @@ fn load_ledger_with_projection_v9(
     if let Some(route) = builder.state.kernel_route.as_ref() {
         attested.extend(route.onboarding_attested_roots_v1(ctx.daa_score));
     }
-    let mut ledger = builder.state.kernel_route.as_ref().expect("created above").ledger_native_projection_v9().map_err(refused)?;
+    let mut ledger = builder
+        .state
+        .kernel_route
+        .as_ref()
+        .expect("created above")
+        .ledger_native_projection_checked_v9()
+        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     ledger.begin_block(ctx.daa_score).map_err(|r| refused(r.to_string()))?;
     // The budget bounds the BLOCK: what the block's earlier objects already spent comes back (they were folded one at a time).
     if let Some((blue_score, adjudications, court_work)) =
@@ -608,7 +614,8 @@ pub(super) fn bind_exec_reward_v1(
 ) -> Result<(), PalwStateV2Error> {
     let route = builder.state.kernel_route.as_ref().expect("EXEC kernel binding");
     let before = route.rows.clone();
-    let mut ledger = route.ledger().map_err(refused)?;
+    let mut ledger =
+        route.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     ledger.daa = daa;
     let until = exec_liability_floor_v1(expiry, builder.params.window_court(), &ledger.policy)?;
     let row = ledger.claims.get(&claim.as_bytes()).ok_or_else(|| refused("the EXEC reward claim is missing"))?;
@@ -630,12 +637,13 @@ pub(super) fn finish_exec_rewards_v1(
 ) -> Result<Vec<u64>, PalwStateV2Error> {
     let route = builder.state.kernel_route.as_ref().expect("EXEC kernel binding");
     let before = route.rows.clone();
-    let mut ledger = route.ledger().map_err(refused)?;
+    let mut ledger =
+        route.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     ledger.daa = daa;
     let ids: Vec<_> = ledger.bonds.keys().copied().collect();
     for id in ids {
         if let Some(key) = builder.state.kernel_route.as_ref().and_then(|r| r.bond_key_of(&id)) {
-            ledger.try_sync_bond_v1(id, builder.kernel_synced_collateral(&key, daa)).map_err(|e| refused(e.to_string()))?;
+            ledger.try_sync_bond_v1(id, builder.kernel_synced_collateral(&key, daa)).map_err(PalwStateV2Error::NativeResource)?;
         }
     }
     let mut events = Vec::new();
@@ -655,7 +663,8 @@ pub(super) fn finish_exec_rewards_v1(
 pub(super) fn cancel_exec_rewards_v1(builder: &mut TransitionBuilder<'_>, root: Hash64, daa: u64) -> Result<(), PalwStateV2Error> {
     let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     let before = route.rows.clone();
-    let mut ledger = route.ledger().map_err(refused)?;
+    let mut ledger =
+        route.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     ledger.daa = daa;
     let claims: Vec<_> =
         ledger.exec_reward_holds.iter().filter(|(_, hold)| hold.owner_root == root.as_bytes()).map(|(id, _)| *id).collect();
@@ -698,7 +707,15 @@ fn apply_settlements_to_exec_vesting(
         matches!(e, LedgerEventV1::Settlement(s) if matches!(s.kind,
         SettlementKindV1::FundSourceFeeEscrow | SettlementKindV1::PaySourceFeeEscrow | SettlementKindV1::RefundSourceFeeEscrow))
     }) {
-        Some(builder.state.kernel_route.as_ref().ok_or_else(|| refused("source fee route missing"))?.ledger().map_err(refused)?)
+        Some(
+            builder
+                .state
+                .kernel_route
+                .as_ref()
+                .ok_or_else(|| refused("source fee route missing"))?
+                .ledger_checked_v1()
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
+        )
     } else {
         None
     };
@@ -1275,7 +1292,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     let original_attested = ledger.attested_artifacts.clone();
     if let Some((_, id)) = &scoped {
         let row = builder.state.kernel_route.as_ref().unwrap().model_artifact_binding_header_v2(id).unwrap();
-        ledger.try_attest_artifact_v1(row.kernel_param_root.as_bytes()).map_err(|e| refused(e.to_string()))?;
+        ledger.try_attest_artifact_v1(row.kernel_param_root.as_bytes()).map_err(PalwStateV2Error::NativeResource)?;
     }
     let object = scoped.as_ref().map(|(o, _)| o).unwrap_or(&object);
     if let KernelRouteObjectV1::RegisterClassV2 { mode, descriptor, program_bytes, plan, param_commitments } = &object
@@ -1294,7 +1311,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             )
             .is_ok()
         {
-            ledger.try_attest_artifact_v1(facts.param_root).map_err(|e| refused(e.to_string()))?;
+            ledger.try_attest_artifact_v1(facts.param_root).map_err(PalwStateV2Error::NativeResource)?;
         }
     }
     if matches!(object, KernelRouteObjectV1::Withdraw { .. })
@@ -1307,7 +1324,9 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         OpvGateV1::Drop => return Ok(()),
         OpvGateV1::Admit(classes) => {
             for class in classes {
-                ledger.try_admit_optimistic_class_v1(class).map_err(refused)?;
+                ledger
+                    .try_admit_optimistic_class_checked_v1(class)
+                    .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
             }
         }
         OpvGateV1::Pass => {}
@@ -1317,8 +1336,29 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             return Err(refused("paid checker-enrolled jobs cannot be Panel-independent beacon sources"));
         }
     }
+    // RFC-0007 R7-SOURCE acyclicity (inside the dormant palw_beacon_source_fee_v1 path; no preset arms it): the source and
+    // challenge dependency graph must stay acyclic. A paid target's own producer or its own base job never seeds that
+    // target's verification, and two producers never act as each other's live sources (a two-cycle of mutual
+    // certification). A distinct registered operator or key is identity only, not evidence of independence; that stays an
+    // explicit assumption (claim-v2 ASSUMPTIONS).
+    if let KernelRouteObjectV1::OptInPaidBeaconSource { context, producer, job, .. } = &object
+        && let Some(route) = builder.state.kernel_route.as_ref()
+        && let Ok(target) = route.paid_claim_authority_v2(context)
+    {
+        if *producer == target.enrollment.producer || *job == target.job.base_job {
+            return Err(refused("a paid target's own producer or base job cannot seed its own verification"));
+        }
+        let mutual = ledger.beacon_sources.iter().any(|((other_context, source_producer), row)| {
+            *source_producer == target.enrollment.producer
+                && row.outcome.is_none()
+                && route.paid_claim_authority_v2(other_context).is_ok_and(|other| other.enrollment.producer == *producer)
+        });
+        if mutual {
+            return Err(refused("two producers cannot be each other's live beacon sources (mutual certification)"));
+        }
+    }
     let kid = palw_kernel_bond_id_v1(signer);
-    ledger.try_sync_bond_v1(kid, builder.kernel_synced_collateral(signer, ctx.daa_score)).map_err(|e| refused(e.to_string()))?;
+    ledger.try_sync_bond_v1(kid, builder.kernel_synced_collateral(signer, ctx.daa_score)).map_err(PalwStateV2Error::NativeResource)?;
     // The other bond a slash can land on is the producer of the claim the object names: its collateral is brought up to date too, so
     // an earlier object of this block (or another lane's slash) can never leave the ledger believing the bond holds more than it does.
     if let KernelRouteObjectV1::FileProof { claim, .. }
@@ -1329,7 +1369,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     {
         ledger
             .try_sync_bond_v1(producer, builder.kernel_synced_collateral(&key, ctx.daa_score))
-            .map_err(|e| refused(e.to_string()))?;
+            .map_err(PalwStateV2Error::NativeResource)?;
     }
     // DA16 / ADR-0177 D2: past `palw_provider_court_v1` a demand names a claim-specific unit or nothing, within its requester's tally.
     let scope = match &object {
@@ -1655,7 +1695,7 @@ pub(super) fn apply_kernel_receipt_v1(
         tally.add(r, evidence);
     }
     if matches!(tally.state(), TallyStateV1::Covered) {
-        ledger.prepare_panel_tally_v1(&claim).map_err(|e| refused(e.to_string()))?;
+        ledger.prepare_panel_tally_v1(&claim).map_err(PalwStateV2Error::NativeResource)?;
         let _ = ledger.apply_panel_tally(&claim, true);
         builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key_bytes(&claim), None);
         builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key_bytes(&claim), None);
@@ -1723,7 +1763,9 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     let held: Vec<misaka_palw_kernel::hash::Digest> = ledger.bonds.keys().copied().collect();
     for kid in held {
         if let Some(key) = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&kid)) {
-            ledger.try_sync_bond_v1(kid, builder.kernel_synced_collateral(&key, ctx.daa_score)).map_err(|e| refused(e.to_string()))?;
+            ledger
+                .try_sync_bond_v1(kid, builder.kernel_synced_collateral(&key, ctx.daa_score))
+                .map_err(PalwStateV2Error::NativeResource)?;
         }
     }
     let pending_source_fees: Vec<_> =
