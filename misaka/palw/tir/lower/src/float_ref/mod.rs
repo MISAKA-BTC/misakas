@@ -1406,17 +1406,61 @@ fn operand<'v>(r: Ref, vals: &'v [Vec<Vec<f32>>], carries: &'v [Vec<f32>]) -> Re
 
 // ───────────────────────────── kernels ─────────────────────────────
 
+/// Rows a thread of [`linear_raw`] runs at once.
+const LINEAR_ROWS: usize = 4;
+
+/// The float reference's matrix-vector product `y[o] = Σ_i w[o, i]·x[i] (+ b[o])`, each row summed in f64 in index order: a left
+/// fold from the neutral element of `Iterator::sum`, exactly what the first form of this kernel (`.map(|(a, b)| a·b).sum()`)
+/// computed.
+///
+/// Rows are independent, so they are split across threads (small products stay on one thread), and a thread runs
+/// [`LINEAR_ROWS`] rows at once: independent accumulators keep the FP pipes busy where one row's chain of dependent adds left
+/// them waiting on each add's latency. Every row is still ONE sequential fold in one order, and `x` converted to f64 once is
+/// the same exact conversion, so the result is the one-row sequential result bit for bit (pinned by
+/// `linear_raw_is_the_sequential_fold_bit_for_bit`): calibration statistics, and every artifact built from them, are unchanged.
 pub fn linear_raw(x: &[f32], w: &[f32], out: usize, b: Option<&[f32]>) -> Vec<f32> {
     use rayon::prelude::*;
     let n = x.len();
-    let row = |o: usize| -> f32 {
-        let r = &w[o * n..(o + 1) * n];
-        let s: f64 = r.iter().zip(x).map(|(a, b)| *a as f64 * *b as f64).sum();
-        (s + b.map(|b| b[o] as f64).unwrap_or(0.0)) as f32
+    let xd: Vec<f64> = x.iter().map(|v| *v as f64).collect();
+    // The fold's start: the neutral element `Iterator::sum` uses for f64, read from the library rather than assumed.
+    let zero: f64 = std::iter::empty::<f64>().sum();
+    let finish = |o: usize, s: f64| -> f32 { (s + b.map(|b| b[o] as f64).unwrap_or(0.0)) as f32 };
+    let block = |c: usize, dst: &mut [f32]| {
+        let o0 = c * LINEAR_ROWS;
+        if dst.len() == LINEAR_ROWS {
+            let r0 = &w[o0 * n..(o0 + 1) * n];
+            let r1 = &w[(o0 + 1) * n..(o0 + 2) * n];
+            let r2 = &w[(o0 + 2) * n..(o0 + 3) * n];
+            let r3 = &w[(o0 + 3) * n..(o0 + 4) * n];
+            let (mut s0, mut s1, mut s2, mut s3) = (zero, zero, zero, zero);
+            for ((((a0, a1), a2), a3), xi) in r0.iter().zip(r1).zip(r2).zip(r3).zip(&xd) {
+                s0 += *a0 as f64 * *xi;
+                s1 += *a1 as f64 * *xi;
+                s2 += *a2 as f64 * *xi;
+                s3 += *a3 as f64 * *xi;
+            }
+            dst[0] = finish(o0, s0);
+            dst[1] = finish(o0 + 1, s1);
+            dst[2] = finish(o0 + 2, s2);
+            dst[3] = finish(o0 + 3, s3);
+        } else {
+            for (k, d) in dst.iter_mut().enumerate() {
+                let o = o0 + k;
+                let mut s = zero;
+                for (a, xi) in w[o * n..(o + 1) * n].iter().zip(&xd) {
+                    s += *a as f64 * *xi;
+                }
+                *d = finish(o, s);
+            }
+        }
     };
-    // Rows are independent and each is summed in one fixed order, so the parallel result is the
-    // sequential one bit for bit; small products stay on one thread.
-    if out * n >= 1 << 16 { (0..out).into_par_iter().map(row).collect() } else { (0..out).map(row).collect() }
+    let mut y = vec![0f32; out];
+    if out * n >= 1 << 16 {
+        y.par_chunks_mut(LINEAR_ROWS).enumerate().for_each(|(c, d)| block(c, d));
+    } else {
+        y.chunks_mut(LINEAR_ROWS).enumerate().for_each(|(c, d)| block(c, d));
+    }
+    y
 }
 
 fn linear(x: &[f32], w: &Tensor, b: Option<&[f32]>) -> Vec<f32> {
@@ -1627,6 +1671,11 @@ pub struct AttnShape {
 /// (`repeat_kv`). A window keeps the last `window` rows. ALiBi adds `slope_h · j` (a per-row
 /// constant away from `−slope·(i−j)`), scaled with the scores for Falcon. Sinks join the softmax
 /// and are dropped. Returns `(out, scores, probs)`; the last two only when `want_sites`.
+///
+/// Heads are independent (each reads its own query slice and writes its own output slice), so a long history runs them on
+/// separate threads; each head's arithmetic is the one-thread arithmetic in the same order and the outputs, scores and probs
+/// are assembled in head order, so the result is the one-thread result bit for bit
+/// (`attention_and_gated_delta_across_threads_are_the_one_thread_result`).
 #[allow(clippy::too_many_arguments)]
 pub fn attention(
     q: &[f32],
@@ -1644,9 +1693,7 @@ pub fn attention(
     let n = keys.len();
     let start = window.map(|w| n.saturating_sub(w)).unwrap_or(0);
     let group = heads / kv_heads;
-    let mut out = vec![0f32; heads * v_head_dim];
-    let (mut all_scores, mut all_probs) = (Vec::new(), Vec::new());
-    for h in 0..heads {
+    let head = |h: usize| -> (Vec<f32>, Vec<f32>, Vec<f32>) {
         let kvh = h / group;
         let qh = &q[h * head_dim..(h + 1) * head_dim];
         let mut sc: Vec<f64> = (start..n)
@@ -1668,16 +1715,32 @@ pub fn attention(
             sc.iter_mut().for_each(|s| *s = (*s / c).tanh() * c);
         }
         let p = softmax_with_sink(&sc, sinks.map(|s| s[h] as f64));
-        if want_sites {
-            all_scores.extend(sc.iter().map(|v| *v as f32));
-            all_probs.extend(p.iter().map(|v| *v as f32));
-        }
+        let (scores, probs): (Vec<f32>, Vec<f32>) = if want_sites {
+            (sc.iter().map(|v| *v as f32).collect(), p.iter().map(|v| *v as f32).collect())
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let mut out = vec![0f32; v_head_dim];
         for (jj, j) in (start..n).enumerate() {
             let vj = &values[j][kvh * v_head_dim..(kvh + 1) * v_head_dim];
-            for (o, vv) in out[h * v_head_dim..(h + 1) * v_head_dim].iter_mut().zip(vj) {
+            for (o, vv) in out.iter_mut().zip(vj) {
                 *o += (p[jj] * *vv as f64) as f32;
             }
         }
+        (out, scores, probs)
+    };
+    let per: Vec<(Vec<f32>, Vec<f32>, Vec<f32>)> = if heads > 1 && heads * (n - start) * head_dim.max(v_head_dim) >= 1 << 16 {
+        use rayon::prelude::*;
+        (0..heads).into_par_iter().map(head).collect()
+    } else {
+        (0..heads).map(head).collect()
+    };
+    let mut out = Vec::with_capacity(heads * v_head_dim);
+    let (mut all_scores, mut all_probs) = (Vec::new(), Vec::new());
+    for (o, sc, p) in per {
+        out.extend(o);
+        all_scores.extend(sc);
+        all_probs.extend(p);
     }
     (out, all_scores, all_probs)
 }
@@ -1879,12 +1942,15 @@ pub fn gated_delta_traced(
 ) -> Vec<f32> {
     let rep = nv / nk;
     let mut out = vec![0f32; nv * dv];
-    for vh in 0..nv {
+    // Value heads are independent: head `vh` reads its key/query head and writes only its own state slice `s[vh·dk·dv ..]`, its
+    // output slice and its delta. Large states run the heads on separate threads; each head's arithmetic is the one-thread
+    // arithmetic in the same order and the deltas are appended in head order, so the result is the one-thread result bit for
+    // bit (`attention_and_gated_delta_across_threads_are_the_one_thread_result`).
+    let head = |vh: usize, st: &mut [f32], o: &mut [f32]| -> Vec<f32> {
         let kh = match map {
             HeadMap::Group => vh / rep,
             HeadMap::Tile => vh % nk,
         };
-        let st = &mut s[vh * dk * dv..(vh + 1) * dk * dv];
         // A decay of `nv·dk` values is channel-wise (`MIXER_KDA_V1`): row `i` of the state (a key channel) decays by `exp(g[vh, i])`.
         if g.len() == nv * dk && dk > 1 {
             for i in 0..dk {
@@ -1903,15 +1969,30 @@ pub fn gated_delta_traced(
             let mem: f64 = (0..dk).map(|i| st[i * dv + j] as f64 * kv[i] as f64).sum();
             *dj = (vv[j] as f64 - mem) * beta[vh] as f64;
         }
-        deltas.extend(delta.iter().map(|d| *d as f32));
         for i in 0..dk {
             for j in 0..dv {
                 st[i * dv + j] = (st[i * dv + j] as f64 + kv[i] as f64 * delta[j]) as f32;
             }
         }
-        for j in 0..dv {
-            out[vh * dv + j] = ((0..dk).map(|i| st[i * dv + j] as f64 * qv[i] as f64).sum::<f64>() * q_scale) as f32;
+        for (j, oj) in o.iter_mut().enumerate() {
+            *oj = ((0..dk).map(|i| st[i * dv + j] as f64 * qv[i] as f64).sum::<f64>() * q_scale) as f32;
         }
+        delta.iter().map(|d| *d as f32).collect()
+    };
+    let states = &mut s[..nv * dk * dv];
+    let per: Vec<Vec<f32>> = if nv > 1 && nv * dk * dv >= 1 << 16 {
+        use rayon::prelude::*;
+        states
+            .par_chunks_mut((dk * dv).max(1))
+            .zip(out.par_chunks_mut(dv.max(1)))
+            .enumerate()
+            .map(|(vh, (st, o))| head(vh, st, o))
+            .collect()
+    } else {
+        states.chunks_mut((dk * dv).max(1)).zip(out.chunks_mut(dv.max(1))).enumerate().map(|(vh, (st, o))| head(vh, st, o)).collect()
+    };
+    for d in per {
+        deltas.extend(d);
     }
     out
 }
