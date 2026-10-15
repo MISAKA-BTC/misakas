@@ -204,6 +204,51 @@ class DriverControls(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'remaining total workflow cap'):
             driver.complete.cap_and_charge(dict(carriers=[dict(fee_sompi=2**63), dict(fee_sompi=2**63)]), dict(maximum=2**64-1, spent=0))
 
+    def test_partial_broadcast_failure_keeps_full_fee_uncertainty_without_claiming_spend(self):
+        budget = dict(maximum=100, spent=20)
+        def partial(*args):
+            raise RuntimeError('second carrier refused after the first may have been broadcast')
+        with self.assertRaisesRegex(RuntimeError, 'first may have been broadcast'):
+            driver.complete.submit_with_reserved_budget(None, None, 'PARTIAL', [], 60, budget, partial)
+        self.assertEqual(budget['spent'], 20, 'known spend is not replaced by an invented amount')
+        self.assertEqual(budget['unresolved'], 80)
+        self.assertTrue(budget['submissionOutstanding'])
+        self.assertFalse(budget['submittedFeesKnown'])
+        called = []
+        with self.assertRaisesRegex(AssertionError, 'unresolved fees'):
+            driver.complete.submit_with_reserved_budget(None, None, 'NEVER', [], 60, budget, lambda *args: called.append(True))
+        self.assertEqual(called, [], 'no later batch consumes a possibly spent allowance')
+
+    def test_complete_receipt_resolves_reservation_once_and_rejects_non_u64_fees(self):
+        budget = dict(maximum=100, spent=20)
+        receipt = dict(ok=True, submitted=True, carriers=[dict(fee_sompi=7), dict(fee_sompi=3)])
+        driver.complete.submit_with_reserved_budget(None, None, 'FULL', [], 60, budget, lambda *args: receipt)
+        self.assertEqual((budget['spent'], budget['unresolved']), (30, 0))
+        self.assertTrue(budget['submittedFeesKnown'])
+        self.assertFalse(budget['submissionOutstanding'])
+        self.assertEqual(driver.complete.remaining_budget(budget), 70)
+        with self.assertRaisesRegex(AssertionError, 'reservation differs'):
+            driver.complete.cap_and_charge(receipt, budget, outstanding=80)
+        self.assertEqual(budget['spent'], 30)
+        for invalid in (True, False, 1.0, '1', -1, 2**64):
+            rejected = dict(maximum=100, spent=0)
+            receipt = dict(ok=True, submitted=True, carriers=[dict(fee_sompi=invalid)])
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(AssertionError, 'u64'):
+                driver.complete.submit_with_reserved_budget(None, None, 'BAD', [], 60, rejected, lambda *args: receipt)
+            self.assertEqual((rejected['spent'], rejected['unresolved']), (0, 100))
+            self.assertFalse(rejected['submittedFeesKnown'])
+
+    def test_factory_costs_and_declared_caps_require_exact_canonical_money(self):
+        bootstrap = dict(bindingReservationSompi='100', completeCheckFeeSompi='1',
+            commitment='fixture.borsh', statementRoot='root', commitmentScope='scope.json')
+        for value in (True, 100.0, '100', -1, 2**64):
+            with self.subTest(cap=value), self.assertRaises(ValueError):
+                driver.complete.costs_before_nodes(bootstrap, value, 1)
+        for value in (True, 100, '0100', '+100', '100.0', '1e2', ' 100', str(2**64)):
+            changed = dict(bootstrap, bindingReservationSompi=value)
+            with self.subTest(factory=value), self.assertRaises(ValueError):
+                driver.complete.costs_before_nodes(changed, 100, 1)
+
     def test_expired_total_deadline_starts_no_actual_child(self):
         sampler = driver.OwnedResourceSampler({}, None)
         try:
