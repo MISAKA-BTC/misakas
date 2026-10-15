@@ -2889,6 +2889,10 @@ pub struct Params {
     pub palw_shard_court: Option<ForkActivation>,
     /// RFC06 versioned recurrence/routing court. Dormant on every shipped preset.
     pub palw_memory_routing_court_v2: Option<ForkActivation>,
+    /// **RFC-0006 RFC06-8: keep each class registration's registering block and admission digest in state** (kernel route
+    /// aux 141, [`crate::palw_class_registration_origin_v1`]) so a post-genesis class's original canonical identity can be
+    /// authenticated by state alone. Dormant: `None` on every preset; requires the kernel route fence at or below it.
+    pub palw_class_registration_origin_v1: Option<ForkActivation>,
 
     /// **ADR-0100 Decision 4's fence: a sharded class is licensed per shard.**
     ///
@@ -6073,6 +6077,7 @@ impl Params {
             palw_fp_decode_constraint: self.palw_fp_decode_constraint,
             palw_shard_court: self.palw_shard_court,
             palw_memory_routing_court_v2: self.palw_memory_routing_court_v2,
+            palw_class_registration_origin_v1: self.palw_class_registration_origin_v1,
             palw_shard_licensing: self.palw_shard_licensing,
             palw_token_lift: self.palw_token_lift,
             palw_kimi_k3: self.palw_kimi_k3,
@@ -7228,6 +7233,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
     palw_memory_routing_court_v2: None,
+    palw_class_registration_origin_v1: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -7578,6 +7584,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
     palw_memory_routing_court_v2: None,
+    palw_class_registration_origin_v1: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -7910,6 +7917,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
     palw_memory_routing_court_v2: None,
+    palw_class_registration_origin_v1: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -13146,6 +13154,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_cell_coverage_closure_v1();
     // RFC-0006's memory/routing court consumer v2, likewise.
     params.sync_palw_memory_routing_court_v2();
+    // RFC-0006 RFC06-8's registration origins, likewise.
+    params.sync_palw_class_registration_origin_v1();
     // RFC-0016's two dormant fences (V+ block rights, elastic Final capacity), likewise.
     params.sync_palw_rfc0016_v1();
     // RFC-0017's model eligibility, likewise.
@@ -13426,6 +13436,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
     palw_memory_routing_court_v2: None,
+    palw_class_registration_origin_v1: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,

@@ -182,6 +182,7 @@ impl PalwStateParamsV2 {
             claim_hard_deadline_v1: None,
             cell_coverage_closure_from_daa: None,
             memory_routing_court_from_daa: None,
+            class_registration_origin_from_daa: None,
             rfc0016_v1: None,
             model_eligibility_v1: None,
             rfc0018_v1: None,
@@ -685,6 +686,20 @@ impl PalwStateParamsV2 {
     /// acceptance, a binding declaration's block)? `false` on every shipped preset.
     pub fn memory_routing_court_active_at(&self, daa: u64) -> bool {
         self.memory_routing_court_from_daa.is_some_and(|from| daa >= from)
+    }
+
+    /// **RFC06-8's registration origin mirror** (`crate::palw_class_registration_origin_v1`) — written by
+    /// `Params::sync_palw_class_registration_origin_v1` and by nothing else (and by fixtures).
+    pub fn with_class_registration_origin_from(mut self, from_daa: Option<u64>) -> Self {
+        self.class_registration_origin_from_daa = from_daa;
+        self
+    }
+    pub fn class_registration_origin_from(&self) -> Option<u64> {
+        self.class_registration_origin_from_daa
+    }
+    /// Does a registration folded at `daa` record its origin row? `false` on every shipped preset.
+    pub fn class_registration_origin_active_at(&self, daa: u64) -> bool {
+        self.class_registration_origin_from_daa.is_some_and(|from| daa >= from)
     }
 
     /// **RFC-0017's mirror** (`crate::palw_model_eligibility_v1`) — written by `Params::sync_palw_model_eligibility_v1` and by
