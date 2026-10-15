@@ -3370,6 +3370,22 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_tir_public_frame_v1_impl(claim)
     }
 
+    fn palw_tir_public_conviction_preflight_v1(
+        &self,
+        filer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        claim: kaspa_consensus_core::Hash64,
+        evidence: kaspa_consensus_core::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
+    ) -> Result<Option<Result<(), String>>, String> {
+        self.virtual_processor.palw_tir_public_conviction_preflight_v1_impl(filer, claim, evidence)
+    }
+
+    fn palw_tir_public_read_v1(
+        &self,
+        read: &mut dyn FnMut(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        self.virtual_processor.palw_tir_public_read_v1_impl(read)
+    }
+
     fn palw_tir_public_original_quote_v1(
         &self,
         original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,

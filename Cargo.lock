@@ -6433,6 +6433,7 @@ dependencies = [
  "borsh",
  "misaka-palw-tir",
  "serde_json",
+ "sha2 0.10.8",
  "thiserror 1.0.64",
 ]
 

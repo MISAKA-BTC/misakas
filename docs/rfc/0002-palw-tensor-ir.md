@@ -4596,7 +4596,41 @@ The frozen v1/v2 grammar refuses TopK on symbolic `H` and cannot express the req
 contract is still needed; the v37 declarations above and standalone v8 relation do not
 establish that implementation, native Final or RFC02 completion.
 
-### II.14.61 Initial seven-model activation target (user decision, 2026-10-15)
+### II.14.61 Genesis model set: eight uncensored models in one `.palwart` format (user decisions, 2026-10-15)
+
+**This replaces the initial seven-model target below** (kept as history). The user named ten genesis models, dropped #7
+(Gemma 4 26B-A4B, overlapping #8) and #9 (Qwen3-32B, overlapping #6), and chose the uncensored variant of each (huihui
+abliterated; Dolphin where no huihui variant exists). Ids keep the original numbering. These models are the next network's
+genesis (RFC-0019 edition 0, the 1.0 tier); testnet-12, its preset and its DAA 14,000 release scope are unchanged.
+
+| # | Source (pinned revision) | Architecture | License | Route |
+| --- | --- | --- | --- | --- |
+| 1 | `dphn/Dolphin3.0-Qwen2.5-1.5B` @ `60c996e2` | Qwen2 dense | Apache-2.0 | BASE-0 A16 |
+| 2 | `huihui-ai/Huihui-Qwen3.5-2B-abliterated` @ `b2e291a6` | Qwen3.5 Gated-DeltaNet hybrid | Apache-2.0 | TIR |
+| 3 | `huihui-ai/Huihui-Qwen3.5-9B-abliterated` @ `05b9e7c9` (tentative: no official Qwen3.8 9B) | Qwen3.5 GDN hybrid | Apache-2.0 | TIR |
+| 4 | `huihui-ai/Huihui-gemma-4-12B-it-abliterated` @ `060ea173` | Gemma-4 Unified (dense, multimodal wrapper) | Apache-2.0 | TIR |
+| 5 | `huihui-ai/Huihui-gpt-oss-20b-BF16-abliterated` @ `b73ec897` | gpt-oss MoE (sinks, sliding window) | Apache-2.0 | TIR |
+| 6 | `huihui-ai/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-GGUF` @ `a0b17c71`, bf16 GGUF | Qwen3.8 GDN hybrid (community SFT) | Apache-2.0 | TIR |
+| 8 | `huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated` @ `8f0ee727` | Qwen3.6 GDN hybrid + MoE | Apache-2.0 | PALWQ361 integer runtime |
+| 10 | `huihui-ai/Llama-3.3-70B-Instruct-abliterated` @ `fa133346` | Llama 3 dense | Llama 3.3 | TIR (not required to be end-to-end adjudicable) |
+
+Every genesis model ships as **one versioned `PALWART3` artifact** (`misaka/palw/tir/artifact/src/palwart_v3.rs`): an index and
+streamed segments holding a canonical manifest (source repository and revision pin, license, attribution), the program record, the
+per-architecture weight section (A16, PALWQ361 integer, TIR inventory; MXFP4 exact integer reserved), the tokenizer, chat template,
+source configuration, license texts and calibration inputs. The legacy `.palwart`/`.palwtir`/`.palwq36` formats stay readable under
+their own magics and identities (kept as inner roots, never reinterpreted); the catalog's `artifact_root` is the `PALWART3` root.
+Published artifacts go to `Misakachain/<SourceName>-PALW` (#10's name begins with "Llama", its card says "Built with Llama", and
+the Llama 3.3 license, Acceptable Use Policy and notice ship with it). The genesis list is
+`consensus/core/src/palw_genesis8_catalog_v1.rs` (dormant: edition 0 is built only from supplied roots); the conversion pipeline is
+`scripts/genesis/genesis10_pipeline.py`; per-model status, coverage (architecture × layer kind) and open items are in
+`docs/design/palw/genesis8-status.md`.
+
+Adjudication is unchanged in kind (II.14.62): sampled deterministic re-execution, public localization and the deterministic court;
+genesis listing is economic only, and every claim still needs its own Gate C approval. Open at this writing: the safetensors→PALWQ361
+converter for #8, registration binding of the `PALWART3` root, K2-TIR kernel activation, and the image paths of the multimodal
+sources (the genesis classes are their text decoders).
+
+#### History: the initial seven-model activation target (user decision, 2026-10-15; superseded the same day)
 
 The initial rewarded set must include all seven models below: the six dense size
 tiers remain, and the 35B-A3B hybrid MoE is an additional model, not a replacement

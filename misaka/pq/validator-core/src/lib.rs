@@ -447,6 +447,7 @@ pub fn build_fp_commitment_tx_with_tir_public_original_v1(
     price: FpCommitmentPriceV1<'_>,
     header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
     pledge: &kaspa_consensus_core::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1,
+    history_pledge: Option<&kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
     declared_rent_sompi: u64,
     funding_outpoint: TransactionOutpoint,
     funding: &UtxoEntry,
@@ -466,12 +467,15 @@ pub fn build_fp_commitment_tx_with_tir_public_original_v1(
         funding,
         fee,
     )?;
-    let envelope = kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::new_v1(
+    let mut envelope = kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::new_v1(
         plain.payload.clone(),
         header.clone(),
         pledge.clone(),
         declared_rent_sompi,
     )?;
+    if let Some(history) = history_pledge {
+        envelope = envelope.with_history_pledge_v1(history.clone())?;
+    }
     build_funded_overlay_tx_with(signer, SUBNETWORK_ID_PALW_FP_COMMITMENT, envelope.encode_v1()?, funding_outpoint, funding, fee, false)
 }
 

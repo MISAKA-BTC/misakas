@@ -101,6 +101,10 @@ pub mod native_text_v29;
 /// that rebuilds the chain's conformance verdict from public reads.
 pub mod onboarding_chain;
 pub mod onboarding_snapshot;
+/// Genesis 8 (2026-10-15): the `PALWART3` checks that need the consensus crate — the A16 section's
+/// `artifact_digest` recomputed by the BASE-0 decoder, the TIR section's inventory root by the
+/// consensus function (pinning the light packer's twin).
+pub mod palwart_deep;
 pub mod panel_lifetime_v2;
 pub mod panel_source_fee_v2;
 /// RFC-0002 Part II §II.2: the header-only model preflight (`palw-class preflight <model>`).

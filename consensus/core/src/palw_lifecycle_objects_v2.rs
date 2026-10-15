@@ -5262,11 +5262,13 @@ pub(crate) mod tests {
             // G14 TIR native seed and class layout, owned by `palw_staged_tir_route_v1`.
             (168, 0x08ee1a77654c016e),
             (169, 0xa24f46d0931b98b5),
-            // G14's original paid TIR control (170, incl. the appended common `Conviction` / `Convict` filing) and the atomic Valid
-            // grant/Ready (171), owned by `palw_tir_public_conviction_v1`. UNPINNED IN SOURCE (no build in the source-only pass): the
-            // validation pass re-pins both from this test's `[a2u-pins]` listing in the same commit that first compiles them.
-            (170, 0x0000000000000000),
-            (171, 0x0000000000000000),
+            // G14's original paid TIR control (170: the appended common `Conviction` / `Convict` filing, the `ConvictionWitness` /
+            // `WitnessPart` split carriage and the job's own selection/stop doors) and the atomic Valid grant/Ready (171), owned by
+            // `palw_tir_public_conviction_v1`. Derived WITHOUT a build by `scripts/drills/a2u_new_kind_wire_pins.py` (a port of this
+            // test's manifest reader that reproduces every row pinned at fd9d6a8e4); this test stays the authority — if it disagrees,
+            // re-pin both from its `[a2u-pins]` listing in the commit that first compiles them.
+            (170, 0xb68d62123647ff28),
+            (171, 0x68623b7dc7d30b55),
             (131, 0xf970df6a8bdc323c),
         ];
 

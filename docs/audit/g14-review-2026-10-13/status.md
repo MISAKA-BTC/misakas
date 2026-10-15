@@ -903,3 +903,40 @@ route's condition table in [`g14-completion-matrix.md` §2k](../../design/palw/g
   reviewed and pinned; A-2 wire pins for 170/171 are 0x0 placeholders for the validation pass.
 - **Recommendation.** Keep `palw_tir_public_conviction_v1` dormant at DAA 14,000: producer TFP1 builder, GrantReady worker, node
   filer scheduling, V3/V4 typed receipts, semantic/sampling frame courts, owner/custodian capacity rule and R7/R8 are not done.
+
+### Continuation, 2026-10-16 (branch `integ/g14-remaining`, source only)
+
+Nothing below was built, tested or run; nothing is labelled PASS.
+
+- **Lead defaults, pending user review.** (a) K_owner = 8 outside owners per frame, each paying only its own rent and deposit, with
+  a custodian-load bound derived from the plan, excess owners refused before any duty (known residual: slot pre-emption). (b) V3/V4
+  typed receipts stay refused by name on frames; no pre-licence crediting.
+- **Seats can grant custody.** `kaspad/src/palw_tir_public_custodian.rs`: the producer and a drawn Valid seat prepare on the prepaid
+  lane slice by slice (each slice funded by an accepted `WorkDebit` permit), seal the prepared capture, then file `PreparationReady`
+  or the atomic Valid + grant + Ready. Consensus API `palw_tir_public_read_v1`.
+- **Filer scheduler.** `kaspad/src/palw_tir_public_filer_scheduler.rs` with the fold's own dry run
+  (`palw_tir_public_conviction_preflight_v1`), its own court lane and a restart journal.
+- **R4 items 3–4.** Selection and stop are judged under the original job's own rule (sampling, V4); this also closes a gap where a
+  sampled original could have been judged by the greedy primitive. Semantic stages are admitted through the ClaimBundle contract the
+  frame installs beside itself (TFP1 carries the producer's history pledge).
+- **R7.** Split carriage of witnesses larger than one control (`ConvictionWitness`/`WitnessPart`, rooted `TirWitness`).
+- **R8.** Irreversible-only GC, reopen re-authentication, write-ahead physical work with a finite recovery rule, and a fresh-node
+  import continuation test through the pruning-point carriage.
+- **Pins.** 170 = `0xb68d62123647ff28`, 171 = `0x68623b7dc7d30b55` derived by `scripts/drills/a2u_new_kind_wire_pins.py` (the Rust
+  test stays the authority). The same port shows 240–242 out of date (another lane's monetary-material codec changes).
+- **Merge fix.** Frame fold calls to writers that integ made fallible now propagate their errors.
+- **Recommendation unchanged:** keep `palw_tir_public_conviction_v1` dormant at DAA 14,000 — the custodians' demand responder and
+  the filer's finding producers are not connected, and nothing is measured.
+
+### Last two gaps, 2026-10-16 (branch `integ/g14-remaining`, source only)
+
+- **Demand responder** (`tir_public_responder_tick_v1` in `kaspad/src/palw_tir_public_custodian.rs`): the producer and every seat
+  that granted custody answer outside owners' demands from the sealed prepared capture (Begin, 16 KiB Parts, Finish), inside each
+  demand's own clock, resuming from the accepted slot after a restart.
+- **Findings feed** (`kaspad/src/palw_tir_public_owner.rs`): an outside bond replays a frame's job, opens its own acquisition on a
+  disagreement, localizes over authenticated public material, collects unanswered demands, and hands cone/logits or output findings to
+  the filer scheduler. New consensus readers: `staged_tir_frames_after_v1`, `staged_tir_acquisitions_of_v1`, `fp_claim_prompt_ids_v1`,
+  `palw_tir_public_finished_material_v1`, `palw_tir_public_output_contradiction_v1`.
+- **Tests (source, not run):** honest custodian answers in time and is not slashed (with a silent-custodian contrast that is
+  collected); an outsider detects a fault through its own acquisition and its finding is filed, convicted and slashed.
+- Fence still dormant; nothing measured.

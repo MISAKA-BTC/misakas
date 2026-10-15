@@ -49,13 +49,14 @@ pub(crate) fn palw_tir_public_output_evidence_v1(ids: &PalwTirPublicAuthenticate
     Ok(evidence)
 }
 
-/// A greedy original's tiled decode-token primitive. Refused locally for a non-greedy original (the fold would refuse it).
+/// A tiled decode-token primitive, judged by the fold under the ORIGINAL job's own selection rule. Refused locally when the frame
+/// has no selection door (a constrained job or a tail; the fold would refuse it).
 pub(crate) fn palw_tir_public_selection_evidence_v1(
     view: &PalwTirPublicFrameViewV1,
     mut proof: PalwCourtVerdictProofV2,
 ) -> Result<PalwTirPublicConvictionEvidenceV1, String> {
-    if !view.greedy_selection {
-        return Err("the original selection rule is not plain greedy; no frame court judges it".into());
+    if view.selection.is_none() {
+        return Err("the original's selection is a constraint mask or a tail; no frame selection door judges it".into());
     }
     proof.tir_strip_program_v1();
     let evidence = PalwTirPublicConvictionEvidenceV1::DecodeToken { proof: Box::new(proof) };
@@ -83,6 +84,56 @@ pub(crate) fn palw_tir_public_conviction_object_v1(
         evidence,
         view.conviction_rent_sompi,
     )?;
+    let digest = control.signing_message_v1(network_domain)?;
+    control.signature = sign(digest.as_byte_slice(), PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1);
+    control.check_v1()?;
+    Ok(PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(control) })
+}
+
+/// **G14 R7: one part of a staged conviction witness** (split carriage of an evidence whose encoding exceeds one control). The
+/// whole is the evidence's own Borsh encoding (`evidence_bytes`, at most the frame's prepaid witness ceiling); the part starts at
+/// `offset` (the bytes the fold already accepted for this filer) and carries at most 16 KiB. The part at offset 0 declares the
+/// frame's conviction rent; later parts declare zero. The fold adjudicates when the last part lands.
+pub(crate) fn palw_tir_public_witness_part_object_v1(
+    sign: impl Fn(&[u8], &[u8]) -> Vec<u8>,
+    network_domain: Hash64,
+    view: &PalwTirPublicFrameViewV1,
+    filer: PalwBondKeyV2,
+    now_daa: u64,
+    evidence_bytes: &[u8],
+    offset: u64,
+) -> Result<PalwConsensusObjectV2, String> {
+    use kaspa_consensus_core::palw_tir_public_carriage_v1::{
+        PALW_TIR_PUBLIC_WITNESS_PART_BYTES_V1, PalwTirPublicControlActionV1, PalwTirPublicControlTargetV1, PalwTirPublicWitnessPartV1,
+        palw_tir_public_witness_digest_v1,
+    };
+    palw_tir_public_may_file_v1(view, &filer, now_daa)?;
+    let total = evidence_bytes.len() as u64;
+    if total == 0 || total > view.maximum_witness_bytes {
+        return Err(format!("the witness ({total} bytes) exceeds the frame's prepaid ceiling ({})", view.maximum_witness_bytes));
+    }
+    let start = usize::try_from(offset).map_err(|_| "witness offset overflows")?;
+    if start >= evidence_bytes.len() {
+        return Err("the witness is already complete at this offset".into());
+    }
+    let end = start.saturating_add(PALW_TIR_PUBLIC_WITNESS_PART_BYTES_V1).min(evidence_bytes.len());
+    let mut control = PalwTirPublicControlV1 {
+        version: 1,
+        claim: view.claim,
+        allocation_id: view.allocation_id,
+        source_id: view.source_id,
+        target: PalwTirPublicControlTargetV1::ConvictionWitness,
+        expected_turn: 0,
+        declared_rent_sompi: if offset == 0 { view.conviction_rent_sompi } else { 0 },
+        signer: filer,
+        action: PalwTirPublicControlActionV1::WitnessPart(PalwTirPublicWitnessPartV1 {
+            total_bytes: total,
+            digest: palw_tir_public_witness_digest_v1(evidence_bytes),
+            offset,
+            bytes: evidence_bytes[start..end].to_vec(),
+        }),
+        signature: Vec::new(),
+    };
     let digest = control.signing_message_v1(network_domain)?;
     control.signature = sign(digest.as_byte_slice(), PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1);
     control.check_v1()?;
@@ -195,7 +246,15 @@ mod tests {
             material_until_daa: 300,
             conviction_rent_sompi: 777,
             maximum_witness_bytes: 1 << 20,
-            greedy_selection: true,
+            selection: Some(kaspa_consensus_core::palw_tir_court_v1::PalwTirSelectionRuleV1::Keyed {
+                sampling: kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY,
+            }),
+            owners_opened: 0,
+            custodian_load: kaspa_consensus_core::palw_tir_public_claim_v1::PalwTirPublicCustodianLoadV1 {
+                owners: 8,
+                demands_per_custodian: 64,
+                answer_bytes_per_custodian: 1 << 20,
+            },
             header,
         }
     }

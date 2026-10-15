@@ -174,6 +174,27 @@ pub fn adjudicate_flat_output_v1(
     grade_output_ids_v1(target, &view.job_context, view.vocab_size, pin.generated_ids_v1())
 }
 
+/// **G14 R4 (an outside owner's output check): what a complete authenticated ID sequence contradicts in the ORIGINAL claim** —
+/// the committed output root it does not reproduce, a token outside the vocabulary, or the job's own stop rule. `Some` is exactly
+/// the Output evidence the fold's door convicts on (it re-judges all of it); `None` for the honest answer. The node's owner worker
+/// hands `Some` to the public filer; this function decides nothing on chain.
+pub fn palw_tir_public_output_contradiction_v1(
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    job_context: &crate::palw_v2::PalwJobContextV2,
+    original_output_root: Hash64,
+    vocab: u32,
+    ids: &crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1,
+) -> Option<crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1> {
+    let list = ids.ids_v1();
+    let wrong_output = crate::palw_attempt_rules_v1::palw_attempt_output_root_v1(job_context, list) != original_output_root;
+    let outside = list.iter().any(|id| *id >= vocab);
+    let stop = original_stop_rule_fault_v1(job, vocab, list).is_some();
+    (wrong_output || outside || stop).then(|| crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::Output {
+        rows_root: ids.rows_root_v1(),
+        ids: list.to_vec(),
+    })
+}
+
 fn grade_output_ids_v1(
     target: PalwOffenceTargetV1,
     context: &crate::palw_v2::PalwJobContextV2,
@@ -262,13 +283,14 @@ pub fn adjudicate_original_v1(
     adjudicate_target_v1(target, record, proof, court, step_ladder, prompt_form, allocated_proof_bytes)
 }
 
-/// **G14 R4: the decode-SELECTION primitive of an ORIGINAL greedy job** — the tiled decode-token door
-/// (`check_tir_decode_token_tiled_v1`: the committed token at `position` against the beating lane of its own authenticated
-/// row, greedy, ties to the lower index; a token outside the vocabulary is itself refuted) over the claim's ORIGINAL roots and
-/// job, pinned exactly as [`adjudicate_original_v1`] pins them. The caller must establish that the original job's selection
-/// rule IS greedy (no sampling/mask configuration, no tail); a sampled job is never judged by this primitive.
+/// **G14 R4: the decode-SELECTION primitive of an ORIGINAL job under its own rule** — the tiled decode-token door
+/// (`check_tir_decode_token_tiled_rule_v1`: the committed token at `position` against the beating lane of its own authenticated
+/// row, compared by the job's rule over the authenticated committed prefix — greedy, seeded Decision 11 sampling, or the V4
+/// pipeline with its bans and penalties; a token outside the vocabulary or a banned token is itself refuted) over the claim's
+/// ORIGINAL roots and job, pinned exactly as [`adjudicate_original_v1`] pins them. `rule` is the ORIGINAL job's own
+/// ([`crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1`]); the caller never chooses it.
 #[allow(clippy::too_many_arguments)]
-pub fn adjudicate_original_greedy_decode_v1(
+pub fn adjudicate_original_decode_v1(
     state: &PalwChainStateV2,
     claim: Hash64,
     proof: &PalwCourtVerdictProofV2,
@@ -276,13 +298,35 @@ pub fn adjudicate_original_greedy_decode_v1(
     step_ladder: u64,
     prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     allocated_proof_bytes: u64,
+    rule: &crate::palw_tir_court_v1::PalwTirSelectionRuleV1,
 ) -> Result<PalwTirObjectiveOutcomeV1, String> {
     if !matches!(proof, PalwCourtVerdictProofV2::TirDecodeTokenTiled { .. }) {
         return Err("TIR original selection adjudication needs the tiled decode-token primitive".into());
     }
     let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(state, &claim).ok_or("TIR objective target is absent")?;
     let record = state.tir_class_v1(&target.class_id).ok_or("TIR objective target has no native registered program")?;
-    adjudicate_target_with_v1(target, record, proof, court, step_ladder, prompt_form, allocated_proof_bytes, true)
+    adjudicate_target_with_v1(target, record, proof, court, step_ladder, prompt_form, allocated_proof_bytes, Some(rule))
+}
+
+/// **G14 R4: the STOP rule of an ORIGINAL job over its complete authenticated committed answer** — `Some(why)` when the answer
+/// does not end where the job's own decoder ends it. Pure in the job, the class vocabulary and the IDs (the caller authenticates
+/// the complete ID sequence to EOF against the claim's committed trace first). The V4 pipeline's rule is
+/// [`crate::palw_decode_pipeline_v4::decode_answer_stop_v4`] (no proper prefix completes a stop sequence; the answer ends in one
+/// or runs its whole budget; no committed id is banned); the V3 rule never stops before its budget. A constrained job or a job
+/// with a tail is not judged here (`None`: the caller refuses such evidence before reaching this).
+pub fn original_stop_rule_fault_v1(
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    vocab: u32,
+    ids: &[u32],
+) -> Option<&'static str> {
+    use crate::palw_tir_court_v1::PalwTirSelectionRuleV1 as Rule;
+    match Rule::of_job_v1(job)? {
+        Rule::V4 { config, .. } => {
+            crate::palw_decode_pipeline_v4::decode_answer_stop_v4(&config, job.decode_token_limit, vocab, ids).err()
+        }
+        Rule::Keyed { .. } => (ids.is_empty() || ids.len() as u64 != u64::from(job.decode_token_limit))
+            .then_some("the V3 rule never stops before its budget; the answer's length is not the budget"),
+    }
 }
 
 fn adjudicate_target_v1(
@@ -294,7 +338,7 @@ fn adjudicate_target_v1(
     prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     allocated_proof_bytes: u64,
 ) -> Result<PalwTirObjectiveOutcomeV1, String> {
-    adjudicate_target_with_v1(target, record, carried, court, step_ladder, prompt_form, allocated_proof_bytes, false)
+    adjudicate_target_with_v1(target, record, carried, court, step_ladder, prompt_form, allocated_proof_bytes, None)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -306,13 +350,13 @@ fn adjudicate_target_with_v1(
     step_ladder: u64,
     prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     allocated_proof_bytes: u64,
-    greedy_decode: bool,
+    selection: Option<&crate::palw_tir_court_v1::PalwTirSelectionRuleV1>,
 ) -> Result<PalwTirObjectiveOutcomeV1, String> {
     let disputed_leaf = match carried {
-        PalwCourtVerdictProofV2::TirCone { refutation } if !greedy_decode => refutation.output_opening.leaf_index,
-        PalwCourtVerdictProofV2::TirLogits { accusation } if !greedy_decode => accusation.step_opening.leaf_index,
-        PalwCourtVerdictProofV2::TirDecodeTokenTiled { pin, .. } if greedy_decode => u64::from(pin.position),
-        _ => return Err("public TIR adjudication needs its own cone/logits (or greedy decode-token) primitive, not a session".into()),
+        PalwCourtVerdictProofV2::TirCone { refutation } if selection.is_none() => refutation.output_opening.leaf_index,
+        PalwCourtVerdictProofV2::TirLogits { accusation } if selection.is_none() => accusation.step_opening.leaf_index,
+        PalwCourtVerdictProofV2::TirDecodeTokenTiled { pin, .. } if selection.is_some() => u64::from(pin.position),
+        _ => return Err("public TIR adjudication needs its own cone/logits (or decode-token) primitive, not a session".into()),
     };
     if allocated_proof_bytes == 0 || borsh::object_length(carried).map_err(|e| e.to_string())? as u64 > allocated_proof_bytes {
         return Err("TIR public proof exceeds its original allocated body".into());
@@ -329,7 +373,25 @@ fn adjudicate_target_with_v1(
         return Err("TIR public proof changes native original class, artifact, execution, trace or job".into());
     }
     let step_leaf_count = binding.step_leaf_count;
-    let verdict = grade_filled_v1(&proof, court, step_ladder, prompt_form).map_err(|e| e.to_string())?;
+    let verdict = match (selection, &proof) {
+        (Some(rule), PalwCourtVerdictProofV2::TirDecodeTokenTiled { binding, pin }) => {
+            let rules = crate::palw_tir_court_v1::PalwTirCourtRulesV1 {
+                max_step_leaf_count: step_ladder,
+                prompt_form,
+                limits: crate::palw_court_v2::palw_tir_court_limits_v1(court),
+            };
+            match crate::palw_tir_court_v1::check_tir_decode_token_tiled_rule_v1(binding, pin, &rules, rule) {
+                Ok(verdict) => PrimitiveV1::Fault(verdict),
+                Err(crate::palw_step_refute::PalwStepRefuteError::NoFaultFound)
+                | Err(crate::palw_step_refute::PalwStepRefuteError::Leg(crate::palw_step_leg::PalwStepLegError::NoFaultFound)) => {
+                    PrimitiveV1::Holds
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        (Some(_), _) => return Err("TIR original selection adjudication needs the tiled decode-token primitive".into()),
+        (None, _) => grade_filled_v1(&proof, court, step_ladder, prompt_form).map_err(|e| e.to_string())?,
+    };
     let bytes = borsh::to_vec(carried).map_err(|e| e.to_string())?;
     let proof_id = Hash64::from_bytes(
         blake2b_simd::Params::new()
@@ -511,6 +573,62 @@ mod tests {
         assert!(
             adjudicate_output_target_v1(target(&bad), &bad_source, &ids).is_err(),
             "IDs from another original root are not evidence"
+        );
+    }
+
+    /// **G14 R4: the stop rule an ORIGINAL answer must end by** — the V3 rule runs its whole budget; the V4 pipeline ends at the
+    /// first completed stop sequence or the budget and never commits a banned id; a constrained job is not judged here.
+    #[test]
+    fn g14_original_stop_rule_is_the_jobs_own_decoder() {
+        use crate::palw_decode_pipeline_v4::DecodeConfigV4;
+        let mut v3 = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 4).frame.original_v1().job.clone();
+        v3.decode_token_limit = 4;
+        assert_eq!(original_stop_rule_fault_v1(&v3, 64, &[1, 2, 3, 4]), None);
+        assert!(original_stop_rule_fault_v1(&v3, 64, &[1, 2, 3]).is_some(), "a V3 answer never stops before its budget");
+        let mut v4 = v3.clone();
+        v4.version = crate::palw_freeprompt_v3::PALW_FP_V4_VERSION;
+        v4.decode =
+            Some(DecodeConfigV4 { logit_bias: vec![(7, -100 * (1 << 24))], stop_sequences: vec![vec![9]], ..DecodeConfigV4::NOOP });
+        assert_eq!(original_stop_rule_fault_v1(&v4, 64, &[1, 9]), None, "ends at its first completed stop sequence");
+        assert_eq!(original_stop_rule_fault_v1(&v4, 64, &[1, 2, 3, 4]), None, "runs its whole budget with no stop");
+        assert!(original_stop_rule_fault_v1(&v4, 64, &[9, 1]).is_some(), "continues past a completed stop sequence");
+        assert!(original_stop_rule_fault_v1(&v4, 64, &[1, 2]).is_some(), "stops short with no stop sequence");
+        assert!(original_stop_rule_fault_v1(&v4, 64, &[1, 7, 9]).is_some(), "commits a banned id");
+        let mut constrained = v3.clone();
+        constrained.version = crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION;
+        assert_eq!(original_stop_rule_fault_v1(&constrained, 64, &[1]), None, "a constraint mask is the semantic court's");
+    }
+
+    /// **G14 R4: the owner's output check reports exactly what the Output door convicts on** — nothing for the honest committed
+    /// answer; the authenticated IDs as Output evidence when the committed output root does not match them.
+    #[test]
+    fn g14_owner_output_contradiction_is_the_output_door() {
+        use crate::palw_tir_public_source_v1::{
+            PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1, PalwTirPublicIdsAssemblerV1, PalwTirPublicRequestV1, PalwTirPublicResponseV1,
+        };
+        let fx = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let source = frame.source_v1(&fx.record, &fx.layout, frame.descriptor_v1().maximum_leaves).unwrap();
+        let rows_root =
+            crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context, &fx.execution.rows).unwrap();
+        let mut assembler = PalwTirPublicIdsAssemblerV1::default();
+        let mut sealed = None;
+        let mut offset = 0u32;
+        for chunk in fx.execution.generated.chunks(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize) {
+            let request = PalwTirPublicRequestV1::Ids { offset };
+            let response = PalwTirPublicResponseV1::Ids { rows_root, ids: chunk.to_vec() };
+            sealed = assembler.push_v1(&source, &request, &response).unwrap();
+            offset += chunk.len() as u32;
+        }
+        let ids = sealed.expect("the complete IDs reach the original outer EOF");
+        let original = frame.original_v1();
+        let ctx = &frame.header_v1().job_context;
+        assert!(palw_tir_public_output_contradiction_v1(&original.job, ctx, original.output_root, source.vocab_v1(), &ids).is_none());
+        let found = palw_tir_public_output_contradiction_v1(&original.job, ctx, Hash64::from_u64_word(0xBAD), source.vocab_v1(), &ids)
+            .unwrap();
+        assert!(
+            matches!(found, crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::Output { ids: ref carried, .. }
+            if carried.as_slice() == fx.execution.generated.as_slice())
         );
     }
 }

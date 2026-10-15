@@ -1,3 +1,7 @@
+> **Superseded (user decision, 2026-10-15):** the genesis set is now eight uncensored models shipped in one `PALWART3` format —
+> see `docs/design/palw/genesis8-status.md`, `scripts/genesis/genesis8_models.json` and RFC-0002 §II.14.61. The seven-model target
+> below is kept as history.
+
 # Initial seven-model target
 
 The user selected six dense tiers and one additional hybrid MoE on 2026-10-15.

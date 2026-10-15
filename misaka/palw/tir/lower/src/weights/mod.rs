@@ -21,7 +21,12 @@ use std::sync::Arc;
 
 pub mod described;
 pub mod expr;
+/// Genesis 8: a sharded checkpoint whose shards are fetched on first read and evicted after use
+/// (shard in → chunk out → upload → delete).
+pub mod lazy;
 mod remote;
+/// Genesis 8: one remote file read by windows and hashed in order (the streamed GGUF source).
+pub mod remote_blob;
 #[cfg(feature = "remote")]
 pub use remote::CurlFetcher;
 pub use remote::{MemoryFetcher, RangeFetcher, RemoteCheckpoint};
