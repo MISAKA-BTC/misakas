@@ -333,7 +333,9 @@ pub(super) fn tick_model_verification_gate_v1(
     if let Some(epoch) = current.filter(|e| e.start_daa == now) {
         let extras = builder.extras.kernel_route.clone().expect("checked above");
         let route = builder.state.kernel_route.as_ref().expect("created above");
-        let ledger = route.ledger_native_projection_v9().map_err(refuse)?;
+        let ledger = route
+            .ledger_native_projection_checked_v9()
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?;
         let eligible: BTreeSet<Hash64> = match extras.opv.as_ref() {
             Some(opv) => route
                 .opv_eligible_set_v1(&ledger, now, &crate::palw_opv_bootstrap_v1::OpvEligibilityViewV1::of(opv))
@@ -591,7 +593,9 @@ pub(super) fn consent_horizon_extension_v1(
                 return Err(refuse("the open horizon extension capacity is exhausted"));
             }
         }
-        let mut ledger = route.ledger().map_err(refuse)?;
+        let mut ledger = route
+            .ledger_checked_v1()
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?;
         ledger.daa = now;
         {
             let claim = ledger.claims.get(&terms.claim).ok_or_else(|| refuse("the extended claim is missing"))?;
@@ -726,7 +730,9 @@ pub(super) fn sign_minimum_price_contract_v1(
                 return Err(refuse("the minimum-price contract capacity is exhausted"));
             }
         }
-        let ledger = route.ledger().map_err(refuse)?;
+        let ledger = route
+            .ledger_checked_v1()
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?;
         let escrow = ledger.job_escrows.get(&terms.job).ok_or_else(|| refuse("the contracted job has no funded escrow"))?;
         let job = ledger.jobs.get(&terms.job).ok_or_else(|| refuse("a minimum-price contract covers a posted program job"))?;
         if escrow.poster != terms.poster || job.class_binding_id != terms.class {
@@ -795,7 +801,8 @@ pub(super) fn minimum_price_commit_gate_v1(
     if ctx.daa_score > row.terms.accept_by_daa {
         return Err(refuse("the job's minimum-price contract is past its acceptance deadline"));
     }
-    let ledger = route.ledger().map_err(refuse)?;
+    let ledger =
+        route.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?;
     if ledger.job_escrows.get(&job).is_none_or(|escrow| escrow.amount < row.terms.funded_minimum_sompi) {
         return Err(refuse("the job's escrow no longer funds the contracted minimum"));
     }
@@ -850,7 +857,9 @@ pub(super) fn sweep_econ_contracts_v1(builder: &mut TransitionBuilder<'_>, ctx: 
     }
     let mut retire: Vec<(u8, Vec<u8>)> = Vec::new();
     if price {
-        let ledger = route.ledger().map_err(refuse)?;
+        let ledger = route
+            .ledger_checked_v1()
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?;
         for ((_, key), bytes) in rows_of(PALW_MINIMUM_PRICE_TABLE_V1) {
             if key.len() != 65 || key[0] != MINIMUM_PRICE_CONTRACT_PREFIX_V1 {
                 continue;

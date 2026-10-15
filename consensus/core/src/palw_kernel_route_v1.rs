@@ -39,6 +39,21 @@ use crate::Hash64;
 use crate::constants::SOMPI_PER_KASPA;
 use crate::palw_state_v2::PalwBondKeyV2;
 
+/// Local projection capacity and invalid persisted kernel rows are distinct.
+/// A local reservation refusal cannot be a verdict against a block or peer.
+pub type PalwKernelLedgerProjectionErrorV1 = crate::palw_native_resource_v1::NativeDecodeErrorV1<String>;
+
+pub(crate) fn kernel_ledger_projection_state_error_v1(
+    why: PalwKernelLedgerProjectionErrorV1,
+    invalid: impl FnOnce(String) -> crate::palw_state_v2::PalwStateV2Error,
+) -> crate::palw_state_v2::PalwStateV2Error {
+    use crate::palw_native_resource_v1::NativeDecodeErrorV1;
+    match why {
+        NativeDecodeErrorV1::Resource(why) => crate::palw_state_v2::PalwStateV2Error::NativeResource(why),
+        NativeDecodeErrorV1::Decode(why) => invalid(why),
+    }
+}
+
 /// The ML-DSA-87 context a signer's bond signs a [`KernelRouteV1`](crate::palw_state_v2::PalwConsensusObjectV2) under.
 pub const PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/kernel-route/object/v1";
 /// The domain of the signed message (network, signer, the kernel object's bytes).
@@ -397,10 +412,15 @@ impl KernelLedgerCacheV1 {
         self.0.as_ref().map(|ledger| &ledger.ledger)
     }
     pub fn get(&self) -> Result<Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1>, String> {
+        self.get_reserved_v1().map_err(|e| e.to_string())
+    }
+    fn get_reserved_v1(
+        &self,
+    ) -> Result<Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
         if self.1 {
             return Ok(None);
         }
-        self.0.as_ref().map(|ledger| ledger.try_clone_v1().map_err(|e| e.to_string())).transpose()
+        self.0.as_ref().map(|ledger| ledger.try_clone_v1()).transpose()
     }
     pub fn set(&mut self, ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1) {
         self.0 = Some(std::sync::Arc::new(ledger));
@@ -410,11 +430,13 @@ impl KernelLedgerCacheV1 {
         self.0 = None;
         self.1 = false;
     }
-    pub(crate) fn native_projection(&self) -> Result<Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1>, String> {
+    pub(crate) fn native_projection(
+        &self,
+    ) -> Result<Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
         if !self.1 {
             return Ok(None);
         }
-        self.0.as_ref().map(|ledger| ledger.try_clone_v1().map_err(|e| e.to_string())).transpose()
+        self.0.as_ref().map(|ledger| ledger.try_clone_v1()).transpose()
     }
     pub(crate) fn set_native_projection(&mut self, mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1) {
         ledger.flat_conformance_classes_v9.clear();
@@ -494,16 +516,34 @@ impl PalwKernelRouteStateV1 {
     /// row decoded, no program decoded, no gate recomputed), else rebuilt from the rows. In a debug build the cache is checked against
     /// the rows every time, so a write path that forgot to clear it fails the tests instead of a node.
     pub fn ledger(&self) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, String> {
-        let scoped = |mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1| -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, String> {
-            ledger.commitment_scope_from_daa = match self.aux.get(&(PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1, Vec::new())) {
-                Some(bytes) => Some(borsh::from_slice(bytes).map_err(|_| "malformed court-scope activation")?),
-                None => None,
-            };
-            ledger.reserve_projection_v1(self).map_err(|e| e.to_string())?;
-            self.apply_paid_claim_consumer_inputs_v2(&mut ledger)?;
+        self.ledger_checked_v1().map_err(|e| e.to_string())
+    }
+
+    fn commitment_scope_checked_v1(&self) -> Result<Option<u64>, PalwKernelLedgerProjectionErrorV1> {
+        self.aux
+            .get(&(PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1, Vec::new()))
+            .map(|bytes| {
+                borsh::from_slice(bytes).map_err(|_| {
+                    crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode("malformed court-scope activation".into())
+                })
+            })
+            .transpose()
+    }
+
+    /// Preserve the reservation cause through actual native fold consumers.
+    /// The string form remains for diagnostic/compatibility readers only.
+    pub fn ledger_checked_v1(
+        &self,
+    ) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwKernelLedgerProjectionErrorV1> {
+        use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
+        let commitment_scope = self.commitment_scope_checked_v1()?;
+        let scoped = |mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1| -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwKernelLedgerProjectionErrorV1> {
+            ledger.commitment_scope_from_daa = commitment_scope;
+            ledger.reserve_projection_v1(self).map_err(E::Resource)?;
+            self.apply_paid_claim_consumer_inputs_v2(&mut ledger).map_err(E::Decode)?;
             Ok(ledger)
         };
-        if let Some(cached) = self.ledger_cache.get()? {
+        if let Some(cached) = self.ledger_cache.get_reserved_v1().map_err(E::Resource)? {
             PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             debug_assert!(
                 cached.scalars() == self.header.scalars && cached.to_rows() == self.rows,
@@ -511,9 +551,9 @@ impl PalwKernelRouteStateV1 {
             );
             return scoped(cached);
         }
-        let lease = crate::palw_native_resource_v1::reserve_ledger_expansion_v1(self, false).map_err(|e| e.to_string())?;
+        let lease = crate::palw_native_resource_v1::reserve_ledger_expansion_v1(self, false).map_err(E::Resource)?;
         scoped(crate::palw_native_resource_v1::ReservedKernelLedgerV1::from_preflight_v1(
-            KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &self.rows)?,
+            KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &self.rows).map_err(E::Decode)?,
             lease,
         ))
     }
@@ -704,11 +744,11 @@ pub struct KernelRowsPageV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KernelFinalReadV1 {
     pub receipt: misaka_palw_kernel::opv::FinalReceiptV1,
-    /// `PanelIndependent` (an OPV Final, never anything else) or `PanelLicensed` (the interim route does not know the licensing
-    /// Panel's seed and epoch, so it exports no beacon event for it).
+    /// `OptimisticUnapproved`, `PaidClaimV2`, or `PanelLicensed`. An optimistic
+    /// timeout has no randomly selected verifier approval and exports no beacon event.
     pub final_path: &'static str,
     /// Borsh of `misaka_palw_challenge::AttributedWorkV1` (the event, then producer and recorded job payer; `Absent` only for a
-    /// historical job without a payer row). The payer survives escrow payment. `None` for a Panel-licensed Final.
+    /// historical job without a payer row). `None` unless an authenticated selected-approval adapter supplies an event.
     pub event: Option<Vec<u8>>,
     pub statement: &'static str,
     /// **RFC-0015 §9 (GAP-B3)**: the claim's standing under the one kernel settlement predicate
@@ -719,66 +759,23 @@ pub struct KernelFinalReadV1 {
 }
 
 impl PalwKernelRouteStateV1 {
-    /// **Every Final the ledger holds**, in the kernel's canonical order, each with the beacon's event where the route can state it
-    /// (RFC-0015: an OPV Final is `FinalPathV1::PanelIndependent`). Positions are DAA scores; the earliest acceptance of a work
-    /// identity is the earliest commitment of any claim of the same job (a convicted or defaulted earlier holder counts).
+    /// Every historical Final in canonical order. A lifecycle timeout is readable,
+    /// but cannot authorize beacon influence or substitute for selected approval.
     pub fn finals_read_v1(&self) -> Result<Vec<KernelFinalReadV1>, String> {
         use misaka_palw_kernel::mode::VerificationModeV1;
-        use misaka_palw_kernel::opv::WorkFinalContextV1;
         let ledger = self.ledger_native_projection_v9()?;
         let mut out = Vec::new();
         for receipt in ledger.final_receipts() {
             let settlement = crate::palw_kernel_settlement_v1::palw_kernel_row_settlement_v1(&ledger, &receipt.claim, ledger.daa)
                 .unwrap_or(crate::palw_kernel_settlement_v1::PalwKernelSettlementV1::Pending);
-            let work = ledger.claims.get(&receipt.claim).map(|r| (r.class_binding_id, r.job_id));
-            let earliest = ledger
-                .claims
-                .values()
-                .filter(|row| Some((row.class_binding_id, row.job_id)) == work)
-                .map(|row| row.committed_daa)
-                .min()
-                .unwrap_or(receipt.accepted_daa);
+            // A historical OPV Final states only that its dispute window expired.
+            // Neither zero direct payout nor a matching local replay establishes
+            // the selected-validator approval required for entropy/consensus credit.
+            // Keep the receipt and settlement available for payment/history readers;
+            // do not manufacture PanelIndependent identity from lifecycle state.
             let (final_path, event) = match (receipt.mode, ledger.paid_claim_consumers_v2.contains_key(&receipt.claim)) {
                 (_, true) => ("PaidClaimV2", None),
-                (VerificationModeV1::OptimisticPublicVerification, false) => {
-                    let ctx = WorkFinalContextV1 {
-                        accepted_position: earliest,
-                        settlement_position: receipt.final_daa,
-                        occurrence_index: 0,
-                        validity_independent: true,
-                        depends_on_profiles: Vec::new(),
-                        panel: None,
-                    };
-                    let mut event = receipt.to_work_final_event(&ctx)?;
-                    // RFC-0015 §9 (GAP-B3): the beacon reads an OPV Final through the ONE kernel settlement predicate. A conviction
-                    // (before or after Final) withdraws the fact (`claim_final = false`); a default withdraws its availability
-                    // (`da_satisfied = false`); a final-revocable or settled claim stands. No extra weight or reward: kernel claims
-                    // reserve B = F = 0, and the event is a beacon fact only.
-                    use crate::palw_kernel_settlement_v1::PalwKernelSettlementV1 as S;
-                    match settlement {
-                        S::Convicted => event.claim_final = false,
-                        S::Defaulted => event.da_satisfied = false,
-                        S::FinalRevocable { .. } | S::Settled { .. } => {}
-                        // A receipt of a claim the predicate does not see as Final is no beacon fact.
-                        S::Pending => event.claim_final = false,
-                    }
-                    debug_assert!(
-                        event.claim_final == (receipt.standing != misaka_palw_kernel::opv::FinalStandingV1::ConvictedAfterFinal)
-                            || matches!(settlement, S::Pending),
-                        "the settlement predicate and the receipt's standing agree on a conviction"
-                    );
-                    // Derive both identities from authenticated ledger rows. The job's payer is permanent even after its escrow
-                    // is paid/refunded; dropping it here would let one payer fill the distinct-consumer quorum via several producers.
-                    let producer = ledger.claims.get(&receipt.claim).map(|r| r.producer).unwrap_or([0u8; 64]);
-                    let consumer = work
-                        .and_then(|(_, job)| ledger.job_poster(&job))
-                        .map_or(misaka_palw_challenge::RootV1::Absent, misaka_palw_challenge::RootV1::Present);
-                    let attributed = misaka_palw_challenge::AttributedWorkV1 {
-                        event,
-                        attribution: misaka_palw_challenge::SourceAttributionV1 { producer_id: producer, consumer_id: consumer },
-                    };
-                    ("PanelIndependent", Some(borsh::to_vec(&attributed).map_err(|e| e.to_string())?))
-                }
+                (VerificationModeV1::OptimisticPublicVerification, false) => ("OptimisticUnapproved", None),
                 (VerificationModeV1::PanelLicensed, false) => ("PanelLicensed", None),
             };
             let statement = receipt.assurance.statement();
@@ -1440,25 +1437,33 @@ impl PalwKernelRouteStateV1 {
     /// Remote snapshot consumers use ledger()/full from_rows and an external
     /// chain anchor, never this fixed-prefix operational projection.
     pub(crate) fn ledger_native_projection_v9(&self) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, String> {
+        self.ledger_native_projection_checked_v9().map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn ledger_native_projection_checked_v9(
+        &self,
+    ) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwKernelLedgerProjectionErrorV1> {
+        use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
         use misaka_palw_kernel::{ledger::flat_candidate9::*, rows::*};
+        let commitment_scope = self.commitment_scope_checked_v1()?;
         let mut count = 0usize;
         let mut bytes = 0usize;
         for ((_, _), row) in
             self.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new()))
         {
             count += 1;
-            bytes = bytes.checked_add(row.len()).ok_or("native9 registry size overflow")?;
+            bytes = bytes.checked_add(row.len()).ok_or_else(|| E::Decode("native9 registry size overflow".into()))?;
             if count > FLAT_CANDIDATE_REGISTRY_MAX_V9
                 || row.len() > FLAT_CANDIDATE_RECORD_MAX_BYTES_V9
                 || bytes > FLAT_CANDIDATE_IMPORT_MAX_BYTES_V9
             {
-                return Err("native9 admitted registry count/raw residency cap".into());
+                return Err(E::Decode("native9 admitted registry count/raw residency cap".into()));
             }
         }
         if count == 0 {
-            return self.ledger();
+            return self.ledger_checked_v1();
         }
-        if let Some(cached) = self.ledger_cache.native_projection()? {
+        if let Some(cached) = self.ledger_cache.native_projection().map_err(E::Resource)? {
             debug_assert!(cached.scalars() == self.header.scalars);
             debug_assert!(cached.flat_conformance_classes_v9.is_empty());
             debug_assert!(cached.native_candidate_count_v9() == count);
@@ -1469,27 +1474,32 @@ impl PalwKernelRouteStateV1 {
             );
             PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut cached = cached;
-            cached.reserve_projection_v1(self).map_err(|e| e.to_string())?;
-            self.apply_paid_claim_consumer_inputs_v2(&mut cached)?;
+            cached.commitment_scope_from_daa = commitment_scope;
+            cached.reserve_projection_v1(self).map_err(E::Resource)?;
+            self.apply_paid_claim_consumer_inputs_v2(&mut cached).map_err(E::Decode)?;
             return Ok(cached);
         }
-        let lease = crate::palw_native_resource_v1::reserve_ledger_expansion_v1(self, true).map_err(|e| e.to_string())?;
+        let lease = crate::palw_native_resource_v1::reserve_ledger_expansion_v1(self, true).map_err(E::Resource)?;
         let rows: LedgerRowsV1 = self
             .rows
             .iter()
             .filter(|((table, _), _)| *table != TABLE_FLAT_CONFORMANCE_CLASSES_V9)
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let mut ledger = KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &rows)?;
+        let mut ledger = KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &rows).map_err(E::Decode)?;
         for ((_, key), row) in
             self.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new()))
         {
-            let class: Digest = borsh::from_slice(key).map_err(|e| e.to_string())?;
-            let owner: Digest =
-                row.get(..64).ok_or("native9 truncated admitted owner")?.try_into().map_err(|_| "native9 owner size")?;
-            ledger.note_native_candidate_projection_v9(owner, class)?;
+            let class: Digest = borsh::from_slice(key).map_err(|e| E::Decode(e.to_string()))?;
+            let owner: Digest = row
+                .get(..64)
+                .ok_or_else(|| E::Decode("native9 truncated admitted owner".into()))?
+                .try_into()
+                .map_err(|_| E::Decode("native9 owner size".into()))?;
+            ledger.note_native_candidate_projection_v9(owner, class).map_err(E::Decode)?;
         }
-        self.apply_paid_claim_consumer_inputs_v2(&mut ledger)?;
+        ledger.commitment_scope_from_daa = commitment_scope;
+        self.apply_paid_claim_consumer_inputs_v2(&mut ledger).map_err(E::Decode)?;
         Ok(crate::palw_native_resource_v1::ReservedKernelLedgerV1::from_preflight_v1(ledger, lease))
     }
 }
@@ -1822,3 +1832,7 @@ mod tests {
         assert!(completed_at > t0 + p.court_deadline_daa, "the fixed window would have defaulted an honest producer by size alone");
     }
 }
+
+#[cfg(test)]
+#[path = "palw_kernel_projection_capacity_tests.rs"]
+mod projection_capacity_tests;

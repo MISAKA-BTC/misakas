@@ -294,7 +294,13 @@ fn load_ledger_with_projection_v9(
     if let Some(route) = builder.state.kernel_route.as_ref() {
         attested.extend(route.onboarding_attested_roots_v1(ctx.daa_score));
     }
-    let mut ledger = builder.state.kernel_route.as_ref().expect("created above").ledger_native_projection_v9().map_err(refused)?;
+    let mut ledger = builder
+        .state
+        .kernel_route
+        .as_ref()
+        .expect("created above")
+        .ledger_native_projection_checked_v9()
+        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     ledger.begin_block(ctx.daa_score).map_err(|r| refused(r.to_string()))?;
     // The budget bounds the BLOCK: what the block's earlier objects already spent comes back (they were folded one at a time).
     if let Some((blue_score, adjudications, court_work)) =
@@ -608,7 +614,8 @@ pub(super) fn bind_exec_reward_v1(
 ) -> Result<(), PalwStateV2Error> {
     let route = builder.state.kernel_route.as_ref().expect("EXEC kernel binding");
     let before = route.rows.clone();
-    let mut ledger = route.ledger().map_err(refused)?;
+    let mut ledger =
+        route.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     ledger.daa = daa;
     let until = exec_liability_floor_v1(expiry, builder.params.window_court(), &ledger.policy)?;
     let row = ledger.claims.get(&claim.as_bytes()).ok_or_else(|| refused("the EXEC reward claim is missing"))?;
@@ -630,7 +637,8 @@ pub(super) fn finish_exec_rewards_v1(
 ) -> Result<Vec<u64>, PalwStateV2Error> {
     let route = builder.state.kernel_route.as_ref().expect("EXEC kernel binding");
     let before = route.rows.clone();
-    let mut ledger = route.ledger().map_err(refused)?;
+    let mut ledger =
+        route.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     ledger.daa = daa;
     let ids: Vec<_> = ledger.bonds.keys().copied().collect();
     for id in ids {
@@ -655,7 +663,8 @@ pub(super) fn finish_exec_rewards_v1(
 pub(super) fn cancel_exec_rewards_v1(builder: &mut TransitionBuilder<'_>, root: Hash64, daa: u64) -> Result<(), PalwStateV2Error> {
     let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     let before = route.rows.clone();
-    let mut ledger = route.ledger().map_err(refused)?;
+    let mut ledger =
+        route.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     ledger.daa = daa;
     let claims: Vec<_> =
         ledger.exec_reward_holds.iter().filter(|(_, hold)| hold.owner_root == root.as_bytes()).map(|(id, _)| *id).collect();
@@ -698,7 +707,15 @@ fn apply_settlements_to_exec_vesting(
         matches!(e, LedgerEventV1::Settlement(s) if matches!(s.kind,
         SettlementKindV1::FundSourceFeeEscrow | SettlementKindV1::PaySourceFeeEscrow | SettlementKindV1::RefundSourceFeeEscrow))
     }) {
-        Some(builder.state.kernel_route.as_ref().ok_or_else(|| refused("source fee route missing"))?.ledger().map_err(refused)?)
+        Some(
+            builder
+                .state
+                .kernel_route
+                .as_ref()
+                .ok_or_else(|| refused("source fee route missing"))?
+                .ledger_checked_v1()
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
+        )
     } else {
         None
     };

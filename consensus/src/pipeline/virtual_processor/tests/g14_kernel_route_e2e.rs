@@ -2016,13 +2016,12 @@ fn opv_view(
     (policy, view)
 }
 
-/// **An honest OPV claim finalizes with no Panel** — Challengeable from inclusion, nothing can pass it early, Final exactly when the
-/// fixed window closes (the producer paid the INTERIM reward), and the route exports the beacon's fact for it: a Final whose path is
-/// `PanelIndependent`, not a proof that the computation is correct.
+/// A historical OPV lifecycle can reach Final without a Panel. Its receipt and
+/// escrow history remain readable, but no selected approval or beacon influence
+/// can be inferred from an expired dispute window.
 #[tokio::test]
-async fn g14_opv_an_honest_claim_finalizes_with_no_panel_and_exports_a_panel_independent_beacon_fact() {
-    use misaka_palw_challenge::{FinalPathV1, WorkFinalEventV1, WorkSourceKindV1};
-    use misaka_palw_kernel::opv::{CANONICAL_WORK_DOMAIN_V1, FinalStandingV1};
+async fn g14_opv_a_legacy_final_remains_readable_without_selected_approval_or_beacon_credit() {
+    use misaka_palw_kernel::opv::FinalStandingV1;
     kaspa_core::log::try_init_logger("warn");
     let mut w = World::opv().await;
     let job = w.job().await;
@@ -2049,26 +2048,12 @@ async fn g14_opv_an_honest_claim_finalizes_with_no_panel_and_exports_a_panel_ind
     assert!(final_daa >= view.final_floor_daa && final_daa <= view.hard_deadline_daa);
     assert_eq!(w.net.owed(0), w.policy().claim_reward, "the escrow-funded Final reward is queued for the producer's payee");
 
-    // The beacon fact.
     let finals = w.net.api().unwrap().finals_read_v1().unwrap();
     assert_eq!(finals.len(), 1);
     let f = &finals[0];
-    assert_eq!((f.final_path, f.receipt.claim, f.receipt.standing), ("PanelIndependent", honest.id, FinalStandingV1::Standing));
-    let attributed: misaka_palw_challenge::AttributedWorkV1 =
-        borsh::from_slice(f.event.as_ref().expect("an OPV Final carries the beacon's event")).unwrap();
-    assert_eq!(attributed.attribution.producer_id, w.net.kid(0), "attributed to the producer bond (the distinct source rule)");
-    assert_eq!(
-        attributed.attribution.consumer_id,
-        misaka_palw_challenge::RootV1::Present(w.net.kid(1)),
-        "the Final's payer is authenticated even after the job escrow was paid"
-    );
-    let event: WorkFinalEventV1 = attributed.event;
-    assert_eq!(event.final_path, FinalPathV1::PanelIndependent);
-    assert_eq!(event.kind, WorkSourceKindV1::RealUsefulWork);
-    assert!(event.claim_final && event.da_satisfied && event.validity_independent && event.depends_on_profiles.is_empty());
-    assert_eq!((event.accepted_position, event.settlement_position), (view.admitted_daa, final_daa));
-    assert_eq!(event.source_profile_id, w.class);
-    assert_eq!(event.canonical_work_id, misaka_palw_kernel::hash::object_id(CANONICAL_WORK_DOMAIN_V1, &(w.class, job.id())));
+    assert_eq!((f.final_path, f.receipt.claim, f.receipt.standing), ("OptimisticUnapproved", honest.id, FinalStandingV1::Standing));
+    assert!(f.event.is_none(), "an optimistic timeout is never selected-verifier approval");
+    assert!(w.net.api().unwrap().beacon_events_v1().unwrap().is_empty(), "zero payout does not justify entropy influence");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
 }
@@ -2079,7 +2064,7 @@ async fn g14_opv_an_honest_claim_finalizes_with_no_panel_and_exports_a_panel_ind
 /// authenticated payer supplies a positive control. The contexts are unapproved test policies,
 /// not an on-chain conformance pass or a proof of economic independence.
 #[tokio::test]
-async fn g14_opv_beacon_sources_keep_the_known_payer_and_refuse_shared_consumer_quorums() {
+async fn g14_opv_sealed_metadata_keeps_payers_but_unapproved_finals_cannot_lock_a_beacon() {
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};
     use misaka_palw_challenge::policy::{ImplementedV1, reference_policy_v1, sealed_source_policy_v3};
     use misaka_palw_challenge::{
@@ -2160,36 +2145,24 @@ async fn g14_opv_beacon_sources_keep_the_known_payer_and_refuse_shared_consumer_
         }
         let events = api.beacon_events_v1().unwrap();
         let sources = api.beacon_sealed_sources_v1().unwrap();
-        assert_eq!((events.len(), sources.len()), (3, 3));
+        assert!(events.is_empty(), "unapproved OPV Finals export no entropy events");
+        assert_eq!(sources.len(), 3, "historical salted commitments remain discoverable");
         let same_producers = [w.net.kid(0), w.net.kid(2)];
-        let shared_events: Vec<_> = events.iter().filter(|s| same_producers.contains(&s.attribution.producer_id)).cloned().collect();
-        let shared_sources: Vec<_> = sources.iter().filter(|s| same_producers.contains(&s.attribution.producer_id)).cloned().collect();
-        assert_eq!((shared_events.len(), shared_sources.len()), (2, 2));
-        let v2 = collect_attributed_work_beacon_v1(&v2_ctx, &shared_events, w.net.daa()).unwrap();
-        assert!(
-            matches!(v2, WorkBeaconStateV1::Unavailable { have: 1, need: 2 }),
-            "two actual Finals with the same payer cannot supply the distinct-consumer v2 quorum: {v2:?}"
-        );
-        let v3 = collect_sealed_work_beacon_v3(&sealed_ctx, &shared_sources, w.net.daa()).unwrap();
-        assert!(
-            matches!(v3, SealedBeaconStateV3::Unavailable { mixed: 1, need: 2 }),
-            "two actual salted sources with the same payer cannot supply the distinct-consumer v3 quorum: {v3:?}"
-        );
-        for s in &sources {
-            let expected = if same_producers.contains(&s.attribution.producer_id) { payer } else { other_payer };
-            assert_eq!(s.attribution.consumer_id, RootV1::Present(expected), "v3 exports the recorded job payer");
-        }
-        for s in &events {
-            let expected = if same_producers.contains(&s.attribution.producer_id) { payer } else { other_payer };
-            assert_eq!(s.attribution.consumer_id, RootV1::Present(expected), "v2/op 212 exports the recorded job payer");
+        for source in &sources {
+            let expected = if same_producers.contains(&source.attribution.producer_id) { payer } else { other_payer };
+            assert_eq!(source.attribution.consumer_id, RootV1::Present(expected), "metadata keeps authenticated job payers");
+            assert!(
+                source.reveal.as_ref().is_some_and(|r| !matches!(r.fate, misaka_palw_challenge::SourceFateV3::Final(_))),
+                "local replay/lifecycle Final cannot fabricate selected approval"
+            );
         }
         assert!(
-            matches!(collect_attributed_work_beacon_v1(&v2_ctx, &events, w.net.daa()).unwrap(), WorkBeaconStateV1::Locked(_)),
-            "a distinct payer and producer supply the positive v2 control"
+            !matches!(collect_attributed_work_beacon_v1(&v2_ctx, &events, w.net.daa()).unwrap(), WorkBeaconStateV1::Locked(_)),
+            "even distinct authentic payers cannot replace selected approval"
         );
         assert!(
-            matches!(collect_sealed_work_beacon_v3(&sealed_ctx, &sources, w.net.daa()).unwrap(), SealedBeaconStateV3::Locked(_)),
-            "a distinct payer and producer supply the positive v3 control"
+            !matches!(collect_sealed_work_beacon_v3(&sealed_ctx, &sources, w.net.daa()).unwrap(), SealedBeaconStateV3::Locked(_)),
+            "authenticated salt and payer identity alone cannot lock a source beacon"
         );
         (events, sources)
     };
@@ -2433,11 +2406,10 @@ async fn g14_opv_a_lying_claim_is_convicted_by_a_fresh_outsider_before_final() {
     w.net.assert_same(&z, "replay");
 }
 
-/// A lying OPV claim nobody prosecuted in the window finalizes; the liability horizon still convicts it, and the Final then reads
-/// `ConvictedAfterFinal` with `claim_final: false` — the beacon will not take it.
+/// A legacy optimistic Final stays convictable inside liability. Its receipt
+/// records the conviction; neither standing is a selected-approval beacon fact.
 #[tokio::test]
-async fn g14_opv_a_lie_that_finalized_is_convicted_within_liability_and_its_fact_is_withdrawn() {
-    use misaka_palw_challenge::WorkFinalEventV1;
+async fn g14_opv_a_legacy_final_is_convictable_and_neither_standing_exports_approval() {
     use misaka_palw_kernel::opv::FinalStandingV1;
     kaspa_core::log::try_init_logger("warn");
     let mut w = World::opv().await;
@@ -2449,9 +2421,8 @@ async fn g14_opv_a_lie_that_finalized_is_convicted_within_liability_and_its_fact
     w.net.beat_to(view.final_floor_daa).await;
     assert!(matches!(w.net.claim_state(&lie.id), ClaimStateV1::Final { .. }), "nobody prosecuted: Final");
     let f = w.net.api().unwrap().finals_read_v1().unwrap();
-    let event: WorkFinalEventV1 =
-        borsh::from_slice::<misaka_palw_challenge::AttributedWorkV1>(f[0].event.as_ref().unwrap()).unwrap().event;
-    assert!(event.claim_final, "at Final the fact stands");
+    assert_eq!(f[0].final_path, "OptimisticUnapproved");
+    assert!(f[0].event.is_none(), "standing optimistic Final has no selected approval");
 
     let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x33);
     w.proof(outsider, &lie.id, proof).await;
@@ -2460,9 +2431,7 @@ async fn g14_opv_a_lie_that_finalized_is_convicted_within_liability_and_its_fact
     assert_eq!(w.net.collateral(0), before - slashed - policy.economics.admission_fee);
     let f = w.net.api().unwrap().finals_read_v1().unwrap();
     assert_eq!(f[0].receipt.standing, FinalStandingV1::ConvictedAfterFinal);
-    let event: WorkFinalEventV1 =
-        borsh::from_slice::<misaka_palw_challenge::AttributedWorkV1>(f[0].event.as_ref().unwrap()).unwrap().event;
-    assert!(!event.claim_final, "the withdrawn fact fails the beacon's eligibility by its own reason");
+    assert!(f[0].event.is_none(), "convicted optimistic Final also exports no approval");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
 }

@@ -365,7 +365,12 @@ fn action_inner_v4(
             {
                 return Err(refused("segmented material challenge is foreign, stale, replayed or outside capacity"));
             }
-            let ledger = builder.state.kernel_route().unwrap().ledger_native_projection_v9().map_err(refused)?;
+            let ledger = builder
+                .state
+                .kernel_route()
+                .unwrap()
+                .ledger_native_projection_checked_v9()
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
             let claim = ledger.claims.get(&dependency.as_bytes()).ok_or_else(|| refused("segmented material claim is missing"))?;
             let misaka_palw_kernel::ledger::ClaimBodyV1::Segmented { evidence, .. } = &claim.body else {
                 return Err(refused("material unit is not a segmented claim"));
@@ -419,7 +424,12 @@ fn action_inner_v4(
             if !super::palw_kernel_route_fold_v1::charge_route_budget_v1(builder, ctx, 0, false)? {
                 return Err(refused("segmented answer adjudication budget is spent"));
             }
-            let ledger = builder.state.kernel_route().unwrap().ledger_native_projection_v9().map_err(refused)?;
+            let ledger = builder
+                .state
+                .kernel_route()
+                .unwrap()
+                .ledger_native_projection_checked_v9()
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
             let claim = ledger.claims.get(&dependency.as_bytes()).ok_or_else(|| refused("segmented material claim is missing"))?;
             let misaka_palw_kernel::ledger::ClaimBodyV1::Segmented { evidence, segment_roots, .. } = &claim.body else {
                 return Err(refused("material unit is not a segmented claim"));
@@ -572,7 +582,12 @@ fn action_inner_v4(
             let scope = row.terms.material_manifest.as_ref().and_then(|m| m.scope(*dependency));
             let typed = scope.is_some_and(|s| s.codec == crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4);
             let required = if typed {
-                let ledger = builder.state.kernel_route().unwrap().ledger_native_projection_v9().map_err(refused)?;
+                let ledger = builder
+                    .state
+                    .kernel_route()
+                    .unwrap()
+                    .ledger_native_projection_checked_v9()
+                    .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
                 crate::palw_prospective_kernel_material_v4::typed_kernel_required_unit_v4(
                     &ledger,
                     &dependency.as_bytes(),
@@ -618,7 +633,12 @@ fn action_inner_v4(
             if bytes.len() as u64 > row.terms.max_material_bytes {
                 return Err(refused("material answer exceeds its signed capacity"));
             }
-            let ledger = builder.state.kernel_route().unwrap().ledger_native_projection_v9().map_err(refused)?;
+            let ledger = builder
+                .state
+                .kernel_route()
+                .unwrap()
+                .ledger_native_projection_checked_v9()
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
             if row
                 .terms
                 .material_manifest

@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! committed (Challengeable)          settlement pending          slice Pending
-//! window closed, Final               settlement final-revocable  slice Verified; beacon fact claim_final, not safe
+//! window closed, Final               settlement final-revocable  slice Verified; no selected-approval beacon fact
 //! past liability_until               settlement settled          slice Verified; safe
 //! conviction (pre-Final)             settlement convicted        slice ProvenFalse; beacon fact withdrawn
 //! demanded, unserved, deadline       settlement defaulted        slice Defaulted
@@ -61,15 +61,13 @@ async fn x8_g14_rfc15_a_slice_follows_its_opv_claims_settlement_from_pending_to_
         cw.net.chain.tip_state().1.exec_v2_slice_v1(&root_claim, 0).unwrap().stage,
         PalwWorkSliceStageV2::Verified { .. }
     ));
-    let (beacon_label, event) = beacon_fact_of(&cw, &k0).expect("an OPV Final is a beacon fact");
-    assert_eq!(beacon_label, "final-revocable");
-    assert!(event.claim_final && event.da_satisfied, "the standing fact counts for the beacon, with no weight or reward attached");
+    assert!(beacon_fact_of(&cw, &k0).is_none(), "optimistic settlement supplies no selected-verifier approval");
 
     cw.net.beat_to(liability + 1).await;
     assert_eq!(settlement_of(&cw, &k0), ("settled", Some(liability + 1)), "past the horizon, unconvicted: settled");
     // (The slice's stage past the horizon is the EXEC root's business — the REAL root claim's own Final needs the legacy channel this
     // harness cannot prove, module doc of the parent — so only the kernel claim's standing is asserted here.)
-    assert_eq!(beacon_fact_of(&cw, &k0).map(|(l, _)| l), Some("settled"));
+    assert!(beacon_fact_of(&cw, &k0).is_none(), "settlement finality does not create a selected approval");
     let z = replay_with_lane(&cw.net, &s.lane).await;
     cw.net.assert_same(&z, "replay");
 }
@@ -94,7 +92,10 @@ async fn x8_g14_rfc15_a_conviction_revokes_the_slice_through_the_settlement_pred
     let state = cw.net.chain.tip_state().1;
     assert!(matches!(state.exec_v2_slice_v1(&root_claim, 1).unwrap().stage, PalwWorkSliceStageV2::ProvenFalse { .. }));
     assert!(matches!(state.exec_v2_root_v1(&root_claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { from_index: 1, .. }));
-    assert!(beacon_fact_of(&cw, &lie.id).is_none_or(|(l, e)| l == "convicted" && !e.claim_final), "a convicted claim is no standing fact");
+    assert!(
+        beacon_fact_of(&cw, &lie.id).is_none_or(|(l, e)| l == "convicted" && !e.claim_final),
+        "a convicted claim is no standing fact"
+    );
 }
 
 /// **A default revokes**: slice 1's OPV claim is demanded by an outsider at one position and the executor never serves it; at the
