@@ -144,8 +144,9 @@ fn convicted2(ev: &[E]) -> Option<(u64, u64, bool)> {
 
 /// EXPECTED (before running): a fully colluding Panel's cover does not protect a lying claim. One ordinary bond outside the
 /// Panel, built fresh from encoded bytes + public DA, convicts it before Final (never Final, no reward) and after Final (slash,
-/// reward already paid stays paid), and a proof past the liability horizon is dismissed for a fee. Settlement accounting balances
-/// in every block. VERDICT: PASS.
+/// reward already paid stays paid), and a proof past the liability horizon is refused before any court runs, for no fee (since C4
+/// round 3, `KernelLedgerV1::proof_open`; round 1 dismissed it for a fee). Settlement accounting balances in every block.
+/// VERDICT: PASS.
 #[test]
 fn a_producer_and_every_panel_seat_colluding_lose_to_one_ordinary_bond_with_a_fresh_verifier() {
     let mut n = Net::new();
@@ -169,8 +170,10 @@ fn a_producer_and_every_panel_seat_colluding_lose_to_one_ordinary_bond_with_a_fr
     n.blk(470, vec![]);
     n.blk(700, vec![]);
     let proof = proof_of(outsider2(&n.w, id, &da));
+    let collateral = n.book.coll[&OUTSIDER];
     let ev = n.blk(701, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
-    assert!(matches!(&ev[..], [E::ProofDismissed { .. }]), "{ev:?}");
+    assert!(matches!(&ev[..], [E::Refused { why, .. }] if why.contains("past the liability horizon")), "{ev:?}");
+    assert_eq!(n.book.coll[&OUTSIDER], collateral, "refused before any court: no fee");
 }
 
 /// EXPECTED (before running): the liability promise ("a proof inside `liability_daa` slashes a Final claim even if every Panel seat
@@ -198,7 +201,9 @@ fn a_post_final_sybil_demand_default_must_not_erase_the_liability_of_a_lying_fin
 
 /// EXPECTED (before running): the same attack BEFORE Final costs the colluders nothing but also gains nothing: the claim goes
 /// Unavailable (never Final, no reward), the Sybil gets the penalty back, and the outsider who is fast enough (inside the court
-/// deadline) still convicts. VERDICT: PASS (documented: a slow outsider loses the conviction, never the money-safety).
+/// deadline) still convicts. VERDICT: PASS. Round 1 documented that a slow outsider lost the conviction; since C4 F-C4R3-02 a
+/// pre-Final default keeps the rest of the reservation liable to `daa + liability_daa`, so the slow proof convicts too (the
+/// remaining 900; the demander took its accuser share of the 100 penalty, the rest burned).
 #[test]
 fn a_pre_final_sybil_demand_default_cannot_stop_a_fast_outsider_and_never_yields_a_reward() {
     let mut n = Net::new();
@@ -218,9 +223,9 @@ fn a_pre_final_sybil_demand_default_cannot_stop_a_fast_outsider_and_never_yields
     let ev = n.blk(131, vec![]);
     assert!(matches!(&ev[..], [E::ProducerDefault { penalty: 100, .. }]), "{ev:?}");
     let ev = n.blk(132, vec![T::FileProof { accuser: OUTSIDER, claim: id2, proof: proof2 }]);
-    assert!(matches!(&ev[..], [E::ProofDismissed { .. }]), "a slow proof is dismissed: {ev:?}");
+    assert_eq!(convicted2(&ev), Some((900, 450, false)), "a slow proof still convicts inside the liability horizon: {ev:?}");
     n.blk(500, vec![]);
-    assert!(!n.w.l.claims[&id2].rewarded && !n.w.l.claims[&id2].convicted);
+    assert!(!n.w.l.claims[&id2].rewarded && n.w.l.claims[&id2].convicted);
 }
 
 // ── work plagiarism ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -496,7 +501,8 @@ fn a_proof_at_the_last_block_before_final_wins_and_one_block_after_is_a_post_fin
     let ev = n.blk(60, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
     assert_eq!(convicted2(&ev), Some((1000, 500, false)), "{ev:?}");
     assert!(!ev.iter().any(|e| matches!(e, E::Final { .. })), "{ev:?}");
-    assert_eq!(n.book.issued, 0, "no reward was issued");
+    // GAP-5: a Final reward is the job's escrow routed to the producer, never issued: none was routed here.
+    assert_eq!((n.book.issued, n.book.final_rewards), (0, 0), "no reward was paid");
 
     let (id, _, da, _) = lying_covered(&mut n, 100, 110, 2); // window end 160
     let proof = proof_of(outsider2(&n.w, id, &da));
@@ -504,7 +510,7 @@ fn a_proof_at_the_last_block_before_final_wins_and_one_block_after_is_a_post_fin
     assert!(ev.contains(&E::Final { claim: id, reward: 7 }));
     let ev = n.blk(161, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
     assert_eq!(convicted2(&ev), Some((1000, 500, true)), "{ev:?}");
-    assert_eq!(n.book.issued, 7, "the reward paid at Final stays paid");
+    assert_eq!((n.book.issued, n.book.final_rewards), (0, 7), "the reward paid at Final (the job's escrow, GAP-5) stays paid");
 }
 
 /// EXPECTED (before running): 300 junk proofs (garbage bytes, a valid-looking proof for another claim, a decode accusation of a
@@ -540,10 +546,12 @@ fn invalid_challenge_spam_is_priced_bounded_and_changes_nothing() {
     assert!(convicted2(&ev).is_some() || refused(&ev).is_some(), "{ev:?}");
 }
 
-/// EXPECTED (before running): zero-collateral bonds burning the block's adjudication budget with structurally-malformed
-/// `CommitClaim`s (free: charged before the collateral check, no fee) push the honest `FileProof` behind them in the SAME block to
-/// `OverBudget` (dropped, state untouched); the next block convicts. VERDICT: PASS with OBSERVATION O-C4-06 (the junk claim costs
-/// the attacker no ledger fee; the pricing is the consumer's mass/fee).
+/// EXPECTED (before running, round 1): bonds burning the block's adjudication budget with structurally-malformed `CommitClaim`s
+/// (charged before the collateral check) push the honest `FileProof` behind them in the SAME block to `OverBudget`; the next block
+/// convicts (OBSERVATION O-C4-06: the junk claim costs no ledger fee). Since round 1 the attack is narrower and the proof is no
+/// longer delayed: seal-then-reveal checks the seal BEFORE the budget (O-C4-14) and a claim seal is bonded (`seal_deposit`), so a
+/// junk bond must hold (and, its reveal refused, forfeit at the seal's expiry) one seal deposit; and the block budget keeps runs
+/// reserved for proofs, so junk claims exhaust only the claims' share — the proof convicts in the same block.
 #[test]
 fn a_block_budget_exhausted_by_free_junk_claims_delays_a_proof_by_one_block_and_never_loses_it() {
     let mut n = Net::new();
@@ -552,12 +560,50 @@ fn a_block_budget_exhausted_by_free_junk_claims_delays_a_proof_by_one_block_and_
     let job = n.post_job(11, &[3, 17, 9], 3, 9);
     let h = n.w.honest(&job, 3);
     let T::CommitClaim { claim, evidence, commitments } = h.tx.clone() else { unreachable!() };
-    // Malformed (fabricated segment boundary) but passing the cheap checks: it spends one adjudication and costs nothing.
+    // Malformed (fabricated segment boundary) but passing the cheap checks: it spends one adjudication.
+    let mut fabricated = evidence.clone();
+    fabricated.segments[0].exit_state_root = [1; 64];
+    let seal_deposit = n.w.l.policy.seal_deposit;
+    // Distinct bonds holding exactly one seal deposit give distinct claim ids that pass every cheap check (they can seal; their
+    // collateral cannot back a claim, which is checked after the budget is charged).
+    let junk: Vec<Digest> = (0..70u8)
+        .map(|i| {
+            let mut b = [0xE0; 64];
+            b[63] = i;
+            b
+        })
+        .collect();
+    n.blk(12, junk.iter().map(|bond| T::RegisterBond { bond: *bond, collateral: seal_deposit }).collect());
+    let mut txs = Vec::new();
+    for bond in &junk {
+        let c = KernelClaimV1 { evidence_root: fabricated.root(), producer_bond: *bond, ..claim.clone() };
+        txs.push(T::CommitClaim { claim: c, evidence: fabricated.clone(), commitments: commitments.clone() });
+    }
+    txs.push(T::FileProof { accuser: OUTSIDER, claim: id, proof: proof.clone() });
+    // The junk claims are sealed (by their bonds, at DAA 12) and revealed at 13, with the proof behind them.
+    let ev = n.blk(13, txs);
+    let over = ev.iter().filter(|e| matches!(e, E::Refused { why, .. } if why.contains("budget"))).count();
+    eprintln!("over-budget refusals in the block: {over}");
+    assert!(over >= 1, "the junk claims exhausted the claims' share of the block budget: {ev:?}");
+    assert_eq!(convicted2(&ev), Some((1000, 500, false)), "the proof's reserved run convicts in the same block: {ev:?}");
+    let ev = n.blk(14, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
+    assert!(convicted2(&ev).is_none(), "a second proof after the conviction convicts nothing again: {ev:?}");
+}
+
+/// The round-1 shape of the same attack, now closed: zero-collateral bonds cannot seal (a claim seal is bonded), so their junk
+/// claims are refused at the seal check before any budget is spent (O-C4-14) and the proof convicts in the SAME block.
+#[test]
+fn free_junk_claims_from_unsealable_bonds_spend_no_budget_and_the_proof_convicts_at_once() {
+    let mut n = Net::new();
+    let (id, _, da, _) = lying_covered(&mut n, 2, 10, 1);
+    let proof = proof_of(outsider2(&n.w, id, &da));
+    let job = n.post_job(11, &[3, 17, 9], 3, 9);
+    let h = n.w.honest(&job, 3);
+    let T::CommitClaim { claim, evidence, commitments } = h.tx.clone() else { unreachable!() };
     let mut fabricated = evidence.clone();
     fabricated.segments[0].exit_state_root = [1; 64];
     let mut txs = Vec::new();
     for i in 0..70u8 {
-        // Distinct zero-collateral bonds give distinct claim ids that pass every cheap check.
         let bond = {
             let mut b = [0xE0; 64];
             b[63] = i;
@@ -567,13 +613,11 @@ fn a_block_budget_exhausted_by_free_junk_claims_delays_a_proof_by_one_block_and_
         let c = KernelClaimV1 { evidence_root: fabricated.root(), producer_bond: bond, ..claim.clone() };
         txs.push(T::CommitClaim { claim: c, evidence: fabricated.clone(), commitments: commitments.clone() });
     }
-    txs.push(T::FileProof { accuser: OUTSIDER, claim: id, proof: proof.clone() });
+    txs.push(T::FileProof { accuser: OUTSIDER, claim: id, proof });
     let ev = n.blk(12, txs);
+    let unsealed = ev.iter().filter(|e| matches!(e, E::Refused { why, .. } if why.contains("no seal"))).count();
     let over = ev.iter().filter(|e| matches!(e, E::Refused { why, .. } if why.contains("budget"))).count();
-    eprintln!("over-budget refusals in the block: {over}");
-    assert!(convicted2(&ev).is_none() && over >= 1, "the proof was crowded out of that block: {ev:?}");
-    assert_eq!(n.w.l.bonds[&OUTSIDER].collateral, 1000, "no fee was taken for an over-budget object");
-    let ev = n.blk(13, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
+    assert_eq!((unsealed, over), (70, 0), "every junk claim is refused at its seal, none at the budget: {ev:?}");
     assert_eq!(convicted2(&ev), Some((1000, 500, false)), "{ev:?}");
 }
 
@@ -750,7 +794,9 @@ fn a_panel_covered_squatter_is_freed_by_a_demand_default_and_the_honest_producer
     n.blk(7, vec![T::FileDemand { demander: OUTSIDER, claim: sid, stage: 0, position: 1 }]);
     let ev = n.blk(27, vec![]);
     assert!(matches!(&ev[..], [E::ProducerDefault { penalty: 100, .. }]), "{ev:?}");
-    assert_eq!(n.book.paid.get(&OUTSIDER).copied().unwrap_or(0), 100, "the demander is paid for breaking the squat");
+    // Split like a slash since C4 F-C4R3-02: the demander takes the accuser share (`accuser_reward_permille`), the rest is burned.
+    let share = 100 * u64::from(n.w.l.policy.accuser_reward_permille) / 1000;
+    assert_eq!(n.book.paid.get(&OUTSIDER).copied().unwrap_or(0), share, "the demander is paid for breaking the squat");
     assert!(!n.w.l.job_claims.get(&job.id()).is_some_and(|c| n.w.l.claims[c].holds_job()), "the job is free");
     // The Panel retries the honest claim's coverage (it is still inside its check window).
     n.blk(28, vec![T::PanelCovered { claim: hid }]);
@@ -759,10 +805,12 @@ fn a_panel_covered_squatter_is_freed_by_a_demand_default_and_the_honest_producer
     assert!(ev.contains(&E::Final { claim: hid, reward: 7 }), "{ev:?}");
 }
 
-/// EXPECTED (before running): the job is freed by a CONVICTION — also a post-Final one — and a second claim then reaches Final: one job
-/// pays twice, once to the fraud (whose 1000 is slashed) and once to the honest producer. Recorded as an observation (O-C4-09):
-/// the first reward is not clawed back, only the collateral is. Nothing else about the job can be claimed twice while a holder is
-/// live: a second claim by ANY bond (including the same one) is refused while the first holds.
+/// EXPECTED (before running, round 1): the job is freed by a CONVICTION — also a post-Final one — and a second claim then reaches
+/// Final: one job pays twice, once to the fraud (whose 1000 is slashed) and once to the honest producer (O-C4-09: the first reward
+/// is not clawed back, only the collateral is). Since GAP-5 a Final reward is the job's escrow routed to the producer, and a job
+/// escrows one reward: the fraud's 7 stays paid (not clawed back) and the honest second claim finalizes with the escrow spent —
+/// the job is paid ONCE. Nothing else about the job can be claimed twice while a holder is live: a second claim by ANY bond
+/// (including the same one) is refused while the first holds.
 #[test]
 fn observation_a_post_final_conviction_frees_the_job_and_the_job_is_paid_a_second_time() {
     let mut n = Net::new();
@@ -779,7 +827,8 @@ fn observation_a_post_final_conviction_frees_the_job_and_the_job_is_paid_a_secon
     let ev = n.blk(63, vec![honest.tx, T::PanelCovered { claim: hid }]);
     assert!(ev.contains(&E::ClaimCommitted { claim: hid }), "{ev:?}");
     n.blk(120, vec![]);
-    assert_eq!(n.book.issued, 14, "O-C4-09: the fraud's reward (7) was not clawed back and the honest claim earned its own (7)");
+    assert!(matches!(state_of(&n, &hid), ClaimStateV1::Final { .. }), "the honest second claim finalizes");
+    assert_eq!(n.book.final_rewards, 7, "O-C4-09 since GAP-5: the fraud's reward (7) was not clawed back; the job's escrow paid once");
 }
 
 /// EXPECTED (before running): the one-claim-per-job rule closes the SAME-job copy but not the same-PROMPT copy: a bond posts its own
@@ -802,8 +851,8 @@ fn observation_a_copyist_answers_its_own_identical_prompt_job_with_a_published_t
     let ev = n.blk(12, vec![T::CommitClaim { claim: copy, evidence: evidence2, commitments }, T::PanelCovered { claim: cid }]);
     let accepted = ev.contains(&E::ClaimCommitted { claim: cid });
     n.blk(80, vec![]);
-    eprintln!("R-C4-10: same-prompt copy accepted={accepted}, issued={}", n.book.issued);
-    assert!(accepted && n.book.issued == 14, "residual: one computation, two rewards, two jobs");
+    eprintln!("R-C4-10: same-prompt copy accepted={accepted}, rewards={}", n.book.final_rewards);
+    assert!(accepted && n.book.final_rewards == 14, "residual: one computation, two rewards, two jobs");
 }
 
 // ── the seal-then-reveal surface ───────────────────────────────────────────────────────────────────────────────────────────
@@ -948,7 +997,8 @@ fn seal_re_seal_expiry_exit_and_signer_edges() {
     let ev = n2.blk_raw(13, vec![seal_obj(PRODUCER, &job2, &cc)]);
     assert!(refused(&ev).is_some_and(|w| w.contains("exiting")), "an exiting bond seals nothing: {ev:?}");
 
-    // Expiry and bounded state: 3,000 junk seals by 3,000 zero-collateral bonds, gone after the ttl.
+    // Expiry and bounded state: 3,000 junk seals by 3,000 bonds holding one seal deposit each (a claim seal is bonded; a
+    // zero-collateral bond seals nothing), gone after the ttl with their deposits forfeited.
     let mut n3 = Net::new();
     let job3 = n3.post_job(4, &[3, 17, 9], 3, 1);
     let before = n3.w.l.root_parts();
@@ -956,7 +1006,7 @@ fn seal_re_seal_expiry_exit_and_signer_edges() {
     for i in 0..3000u32 {
         let mut b = [0xF0; 64];
         b[..4].copy_from_slice(&i.to_le_bytes());
-        txs.push(T::RegisterBond { bond: b, collateral: 0 });
+        txs.push(T::RegisterBond { bond: b, collateral: n3.w.l.policy.seal_deposit });
         txs.push(T::SealClaim { producer: b, job: job3.id(), seal: [0x5E; 64] });
     }
     n3.blk_raw(10, txs);

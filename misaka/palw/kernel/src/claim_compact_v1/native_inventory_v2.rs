@@ -580,7 +580,8 @@ mod tests {
         match native_relation_check_v2(0, &Prim::Add, &add, &params(true)) {
             NativeRelationCheckV2::Direct { compiler, moduli, sparse, .. } => {
                 assert_eq!(compiler, CompactRelationCompilerV1::LinearEvaluationV1);
-                assert_eq!(sparse.per_repetition_miss_bits, moduli.iter().copied().min().unwrap() - 1 - 12);
+                // 4,096 elements are ν = 12 point variables; `eq` has degree ν, so the bound pays ⌈log2 12⌉ = 4 bits (not 12).
+                assert_eq!(sparse.per_repetition_miss_bits, moduli.iter().copied().min().unwrap() - 1 - 4);
             }
             NativeRelationCheckV2::Exact { reason } => assert_eq!(reason, NativeExactReasonV2::DirectCheckNotCheaper),
             other => panic!("{other:?}"),

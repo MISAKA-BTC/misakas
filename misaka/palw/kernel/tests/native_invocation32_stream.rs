@@ -8,7 +8,8 @@ fn recurrent()->TirProgramV2{
     let ty=b.blocks[pre as usize].nodes[0].out.clone();
     // Read global state inside a layer occurrence. Frozen layer-local lookup
     // would incorrectly substitute zero on every step.
-    let layer={let mut q=b.block("layer",vec![ty.clone()]);let a=q.cast(Ref::CarryIn(0),DType::I64);let z=q.cast(Ref::State(state),DType::I64);let x=q.add(a,z,DType::I64);q.finish(&[x])};
+    // The layer adds in I64 and narrows back: a layer block carries out exactly its carry-in signature (I32).
+    let layer={let mut q=b.block("layer",vec![ty.clone()]);let a=q.cast(Ref::CarryIn(0),DType::I64);let z=q.cast(Ref::State(state),DType::I64);let x=q.add(a,z,DType::I64);let y=q.cast(x,DType::I32);q.finish(&[y])};
     let carry=b.blocks[layer as usize].nodes.last().unwrap().out.clone();
     let(post,out)={let mut q=b.block("post",vec![carry]);let x=q.state_write(state,Ref::CarryIn(0));q.commit(x);let Ref::Node(out)=x else{unreachable!()};(q.finish(&[]),out)};
     TirProgramV2::from_v1_lifting_params(&b.finish(pre,vec![layer],post,out),&[(0,InputSource::External{lo:-10,hi:10})],OutputDecl::Rows{node:out}).unwrap()

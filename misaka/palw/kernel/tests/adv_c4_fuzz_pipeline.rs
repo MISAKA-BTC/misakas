@@ -166,6 +166,8 @@ impl PW {
                 T::RegisterBond { bond: PRODUCER, collateral: 5000 },
                 T::RegisterBond { bond: OUTSIDER, collateral: 1000 },
                 T::RegisterBond { bond: SPAM1, collateral: 1000 },
+                // GAP-5: jobs have a price; the harness's poster bond posts (and pays for) every job, as every world registers it.
+                T::RegisterBond { bond: common::chain::POSTER, collateral: common::chain::POSTER_COLLATERAL },
                 reg,
             ],
         );

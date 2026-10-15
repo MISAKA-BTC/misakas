@@ -69,7 +69,7 @@ fn write(dir: &std::path::Path, segment: u64, delete: bool, provenance: &str) ->
     w.put_entry("emb", None, dtype::I8, vec![1024, 1024], encoding::TIR_INSTANCE_LE, &c).unwrap();
     w.end_section(inner_scheme::TIR_INVENTORY_ROOT_V1, [7u8; 64], 123).unwrap();
     w.begin_section(section_kind::TOKENIZER, family::NONE, "tokenizer").unwrap();
-    w.put_entry("tokenizer.json", None, dtype::BYTES, vec![17], encoding::JSON, b"{\"model\":\"bpe\"} ").unwrap();
+    w.put_entry("tokenizer.json", None, dtype::BYTES, vec![16], encoding::JSON, b"{\"model\":\"bpe\"} ").unwrap();
     w.end_section(inner_scheme::NONE, [0; 64], 0).unwrap();
     w.begin_section(section_kind::LICENSE, family::NONE, "license").unwrap();
     w.put_entry("added/LICENSE", None, dtype::BYTES, vec![10], encoding::UTF8_TEXT, b"Apache-2.0").unwrap();
