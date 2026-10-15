@@ -63,13 +63,19 @@ impl Params {
 
     /// Feature-gated private factory exception for release heights only. All
     /// value, dependency and retirement checks run on the actual armed bundle.
+    /// Rule E and its commitment stay exactly at DAA 1; the retirement may be armed
+    /// at DAA 1 or at any later finite height (the RFC-0012 §4.4 private profile that
+    /// accumulates DNS-validator history first). Rule E at or below the retirement is
+    /// then enforced by the ordering validator at the end of the inner path.
     #[cfg(feature = "private-integration-config")]
     pub fn validate_palw_v2_private_rule_e_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         if self.palw_fork_choice_rule_e_v1 != Some(ForkActivation::new(1))
             || self.palw_fork_choice_commitment_v1 != Some(ForkActivation::new(1))
-            || self.palw_dns_retirement.is_none_or(|r| r.activation != ForkActivation::new(1))
+            || self.palw_dns_retirement.is_none_or(|r| r.activation == ForkActivation::never() || r.activation.daa_score() < 1)
         {
-            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid("private Rule E factory requires all three exact heights"));
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "private Rule E factory requires Rule E and its commitment at DAA 1 and a finite retirement at or after them",
+            ));
         }
         self.validate_palw_v2_inner(true)
     }

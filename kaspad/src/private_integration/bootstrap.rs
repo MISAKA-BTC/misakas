@@ -64,7 +64,8 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// files; the returned public manifest never contains them.
 pub fn export_private_complete_bootstrap_v1(config: &Config, output: &Path) -> Result<serde_json::Value, String> {
     let salt = config.palw_drill_genesis_salt.as_ref().ok_or("private export requires an explicit salt")?;
-    let expected = private_complete_check_params_v1(salt)?;
+    // RFC-0012 §4.4: the only permitted departure from the exact factory is a later private retirement height.
+    let expected = super::private_expected_retirement_v1(private_complete_check_params_v1(salt)?, config)?;
     if config.private_population.is_some()
         || config.params.consensus_params_id() != expected.consensus_params_id()
         || config.params.skip_proof_of_work

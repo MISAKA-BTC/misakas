@@ -15,13 +15,17 @@ use kaspad_lib::{
         create_private_integration_core_with_native_custody_v4, create_private_integration_core_with_runtime,
         export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3, export_private_paid_bootstrap_v4,
         export_private_paid_program_work_v3, prepare_private_integration_probe, private_complete_check_params_v1,
-        private_native_settlement_params_v1, private_paid_claim_params_v3, private_paid_claim_params_v4, private_probe_manifest,
+        private_late_retirement_params_v1, private_native_settlement_params_v1, private_paid_claim_params_v3,
+        private_paid_claim_params_v4, private_probe_manifest,
     },
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 const USAGE: &str = "misaka-rfc12-private-node (requires --features private-integration-config)
 --private-probe-profile=native-v1|population-v1|complete-v1|paid-v3|paid-v4 --private-probe-salt=HEX --testnet --netsuffix=12
 population-v1 additionally requires --private-probe-bonds=N (actual funded registry only).
+Any profile: --private-probe-retirement-daa=N (N >= 2) arms palw_dns_retirement_v1 at DAA N instead of DAA 1, so a private
+  run accumulates DNS-validator history before the fence (RFC-0012 §4.4); Rule E and its commitment stay at DAA 1. The
+  height is part of the profile's identity: every node, export and print of one run must name the same N.
 Read-only mode: --print-private-probe-profile
 Offline export: --private-probe-export-bootstrap=FRESH_DIRECTORY (complete-v1, paid-v3 or paid-v4)
 Offline actual paid Program work: --private-probe-paid-request=FILE --private-probe-export-paid-work=FRESH_DIRECTORY
@@ -94,6 +98,7 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-kernel-paid-work"
                         | "--private-probe-kernel-paid-check"
                         | "--private-probe-kernel-replace"
+                        | "--private-probe-retirement-daa"
                 ) {
                     return Err(format!("unknown private option {name}"));
                 }
@@ -127,6 +132,11 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         .values
         .remove("--private-probe-bonds")
         .map(|n| n.parse::<u32>().map_err(|_| "private bond size must be u32".to_owned()))
+        .transpose()?;
+    let retirement_daa = flags
+        .values
+        .remove("--private-probe-retirement-daa")
+        .map(|n| n.parse::<u64>().map_err(|_| "private retirement DAA must be u64".to_owned()))
         .transpose()?;
     let bootstrap = flags.values.remove("--private-probe-export-bootstrap");
     let paid_request = flags.values.remove("--private-probe-paid-request");
@@ -236,6 +246,11 @@ fn run(raw: Vec<String>) -> Result<(), String> {
             private_native_settlement_params_v1(derive_private_population_v1(&salt, population.expect("size checked"))?.params)?
         }
         _ => return Err("unallocated private profile".into()),
+    };
+    // RFC-0012 §4.4: only the retirement height moves; the DAA-1 profile is unchanged when the option is absent.
+    let params = match retirement_daa {
+        Some(daa) => private_late_retirement_params_v1(params, daa)?,
+        None => params,
     };
     if params.skip_proof_of_work {
         return Err("private fixture must retain real PoW".into());
