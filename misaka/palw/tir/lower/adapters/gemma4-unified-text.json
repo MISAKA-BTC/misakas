@@ -1,0 +1,16 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "gemma4-unified-text",
+  "doc": "Gemma-4 Unified, the text decoder (genesis 8 #4, google/gemma-4-12B-it and its abliterated derivative): Gemma-4's block — four plain-gain sandwich norms, per-head q/k norms with gains and a weightless v norm, sliding layers on the default rope and full layers with their own head width and KV heads (global_head_dim, num_global_key_value_heads) on the proportional partial rope keyed by layer type, k = v on the full layers (attention_k_eq_v: no v_proj there), the learned layer scalar, the final logit soft-cap — WITHOUT the per-layer input (PLE) tables and WITHOUT the MoE block (the unified text config sets hidden_size_per_layer_input 0 and enable_moe_block false; both are forced off here so a config that says otherwise is not silently half-read: gemma4-text reads them). use_bidirectional_attention = vision changes only the mask among image tokens: text-only prompts are plain causal, which is what this lowers. Promoted from the census adapter tools/corpus/census-adapters/gemma4_unified_text.json.",
+  "extends": ["gemma4-text"],
+  "match": {"architectures": ["Gemma4UnifiedForCausalLM"], "model_types": ["gemma4_unified_text"]},
+  "config": {"inert": ["vocab_size_per_layer_input"]},
+  "vars": [
+    {"name": "pl_off", "value": {"$check": [{"$eq": [{"$cfg?": "hidden_size_per_layer_input"}, 0]}, "a Gemma-4 Unified text config with per-layer inputs (hidden_size_per_layer_input > 0) is gemma4-text's, not this adapter's"]}},
+    {"name": "moe_off", "value": {"$check": [{"$ne": [{"$cfg?": "enable_moe_block"}, true]}, "a Gemma-4 Unified text config with the MoE block is gemma4-text's, not this adapter's"]}},
+    {"name": "d_pl", "value": 0},
+    {"name": "vocab_pl", "value": 0},
+    {"name": "moe_on", "value": false},
+    {"name": "model_type", "value": "gemma4_unified_text"}
+  ]
+}

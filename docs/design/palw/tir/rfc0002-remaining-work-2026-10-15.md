@@ -48,7 +48,22 @@
 
 専用の大型GPU測定環境は未確保。利用可能なbuild VPSは `5.104.81.23` だけで、指定script・MemoryMax=8G・nice19・`-j3`・作業後削除を守る。稼働中のt12ノードを測定に使わない。不足する元の重み、tokenizer、実行機器、独立検証者は明示的な残件として扱う。
 
-## 初期7モデル
+## genesis 8モデル(2026-10-15 ユーザー決定、初期7モデルを置き換え)
+
+初期7モデルは同日にgenesis 8モデルへ置き換えた(下の表は履歴として残す)。対象はhuihui abliterated版(1.5BはDolphin 3.0)で、番号は元の1〜10を維持する(7と9は削除)。全モデルを一つの版付き `PALWART3` `.palwart` 形式で出荷する。状態・アーキテクチャ×層種別の網羅表・未完了項目は [genesis8-status.md](../genesis8-status.md)、変換パイプラインは `scripts/genesis/genesis10_pipeline.py`、genesisリストは `consensus/core/src/palw_genesis8_catalog_v1.rs`(休眠)。
+
+| # | 対象 | 経路 | 状態 |
+| --- | --- | --- | --- |
+| 1 | dphn/Dolphin3.0-Qwen2.5-1.5B | A16 | 旧形式 `.palwart` 変換済み(コーディネータ記録)、PALWART3 包装は未実行 |
+| 2 | Huihui-Qwen3.5-2B-abliterated | TIR | 未記録(コーディネータが実行中) |
+| 3 | Huihui-Qwen3.5-9B-abliterated(暫定) | TIR | NOT_RUN |
+| 4 | Huihui-gemma-4-12B-it-abliterated | TIR | NOT_RUN |
+| 5 | Huihui-gpt-oss-20b-BF16-abliterated | TIR | NOT_RUN |
+| 6 | Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated(bf16 GGUF) | TIR | NOT_RUN(HTTPS範囲読みの完全ストリーミングは実装済み・未検証) |
+| 8 | Huihui-Qwen3.6-35B-A3B-abliterated | PALWQ361 | BLOCKED(safetensors→PALWQ361 変換器なし) |
+| 10 | Llama-3.3-70B-Instruct-abliterated | TIR | NOT_RUN(e2e 裁定は不要) |
+
+### 履歴: 初期7モデル(2026-10-15、同日に置き換え)
 
 | 規模 | 対象 | 状態 |
 | --- | --- | --- |
