@@ -153,7 +153,7 @@ impl PalwPanelService {
                             for path in payloads {
                                 let Ok(source) = Base0OriginalCaptureFileV1::open_v1(&path) else { continue };
                                 let Ok(source) = Base0OriginalCaptureRangeV1::fp_capture_v1(Arc::new(source), &job) else { continue };
-                                if let Ok(reader) = backend.open_flat_public_source_v1(source, &binding) {
+                                if let Ok(reader) = backend.open_flat_public_source_v1(Arc::new(source), &binding) {
                                     found = Some(reader);
                                     break;
                                 }

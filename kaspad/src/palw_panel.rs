@@ -10995,6 +10995,19 @@ impl PalwPanelService {
             {
                 debug!("[{PALW_PANEL}] public history custody response remains pending: {why}");
             }
+            if let Err(why) = self
+                .history_custody_grant_tick_v1(
+                    &session,
+                    bond_key,
+                    &own_receipts,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] public history custody grant remains pending: {why}");
+            }
             // --- the seat's half: answer every duty exactly once ---
             let duties = session.palw_seat_duties_v2(vec![bond_key]);
             // **RFC-0006: a seat of a layer-sharded panel answers for its shard's cells, not for the claim** — its duties leave

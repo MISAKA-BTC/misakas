@@ -346,6 +346,15 @@ impl ConsensusSessionOwned {
         self.consensus.palw_v2_accepted_daa_v1()
     }
 
+    pub fn palw_staged_history_grant_duty_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        seat: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        receipt: kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwHistoryGrantDutyV1>, String> {
+        self.consensus.palw_staged_history_grant_duty_v1(claim, seat, receipt)
+    }
+
     pub fn palw_staged_history_recovery_v1(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),

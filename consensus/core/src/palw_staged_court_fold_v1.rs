@@ -453,6 +453,15 @@ impl TransitionBuilder<'_> {
         original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
         config: crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1,
     ) -> Result<Option<PalwStagedCourtRowV1>, PalwStateV2Error> {
+        // The staged public court needs the commitment's job pin on its own claims even where
+        // `palw_offence_attribution` has not yet stamped it: every public court derives the
+        // offence target's job identity from this field. Never overwrite a different pin.
+        let pin = crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original);
+        if claim.job_identity == Hash64::default() {
+            claim.job_identity = pin;
+        } else if claim.job_identity != pin {
+            return Err(stage_refused(claim_id, "required-family claim job identity differs from its original commitment pin"));
+        }
         let header = self
             .extras
             .public_original_bindings

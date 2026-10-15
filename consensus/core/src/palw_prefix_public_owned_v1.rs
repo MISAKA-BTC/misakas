@@ -300,10 +300,22 @@ impl PalwOwnedPublicPrefixCourtV1 {
             return Ok(None);
         }
         let source = PalwPrefixPublicSourceV1::from_owned_cursor_v1(source, header, self.maximum_leaves)?;
-        let deadline = now.checked_add(self.plan.maximum_response_daa).ok_or("public prefix deadline overflow")?;
-        if now < self.terms.accepted_daa || deadline > self.terms.stream_until_daa {
-            return Err("public prefix lacks remaining paid response/collection horizon".into());
+        let span = self.plan.maximum_response_daa;
+        let earliest = now.checked_add(span).ok_or("public prefix deadline overflow")?;
+        if now < self.terms.accepted_daa || earliest > self.terms.stream_until_daa {
+            // No remaining paid response horizon: there is simply no demand to make. This is
+            // not an error that would block the owner's other stages or progress readers.
+            return Ok(None);
         }
+        // The owner signs this at its own snapshot clock; the demand must stay admissible for one
+        // more response span of inclusion delay, so the signed deadline carries that slack.
+        // `demand_v1` re-checks it against the ACCEPTING block's clock: every custodian still
+        // gets at least the full span, and the deadline never exceeds two spans or the stream.
+        let deadline = span
+            .checked_mul(2)
+            .and_then(|n| now.checked_add(n))
+            .ok_or("public prefix deadline overflow")?
+            .min(self.terms.stream_until_daa);
         let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/prefix-public/cursor/v1").to_state();
         h.update(self.claim.as_byte_slice());
         h.update(self.seed_id().as_byte_slice());
@@ -325,8 +337,16 @@ impl PalwOwnedPublicPrefixCourtV1 {
         carrier_bytes: u64,
     ) -> Result<(), String> {
         self.live_owner(now, claim, owner, reserved, seed)?;
-        if self.next_demand_v1(now)?.as_ref() != Some(demand) {
-            return Err("public demand is not the derived pending cursor/deadline".into());
+        // The cursor and coordinate are clock-free derivations; the signed deadline is checked
+        // against THIS (accepting) clock: at least one full response span from now, at most the
+        // derivation's own bound. A node's snapshot DAA never has to equal the block's.
+        let expected = self.next_demand_v1(now)?.ok_or("public prefix lacks remaining paid response horizon")?;
+        let earliest = now.checked_add(self.plan.maximum_response_daa).ok_or("public prefix deadline overflow")?;
+        if (expected.cursor_id, expected.coordinate) != (demand.cursor_id, demand.coordinate)
+            || demand.deadline_daa < earliest
+            || demand.deadline_daa > expected.deadline_daa
+        {
+            return Err("public demand is not the derived pending cursor or leaves no full response span".into());
         }
         let (source, header) = self.inner.next_public_source_hash_header_v1()?.ok_or("public source absent")?;
         let source = PalwPrefixPublicSourceV1::from_owned_cursor_v1(source, header, self.maximum_leaves)?;
@@ -655,6 +675,31 @@ pub(crate) mod tests {
         assert_eq!(row, pending);
         row.restore_checkpoint_v1(&initial.checkpoint_v1()).unwrap();
         assert_eq!(row, initial);
+    }
+    #[test]
+    fn signed_demand_survives_inclusion_delay_but_never_shortens_or_extends_the_response_span() {
+        let (row, _) = fixture();
+        let (claim, owner, reserved) = row.key();
+        let seed = row.seed_id();
+        let span = row.plan.maximum_response_daa;
+        let signed = row.next_demand_v1(100).unwrap().unwrap();
+        assert!(signed.deadline_daa >= 100 + span);
+        // Accepted one span later than the owner's snapshot: still a full span for every custodian.
+        let late = 100 + (signed.deadline_daa - 100 - span);
+        let mut accepted = row.clone();
+        accepted.demand_v1(late, claim, owner, reserved, seed, Hash64::from_u64_word(7), &signed, 6000).unwrap();
+        assert_eq!(accepted.pending_deadline_v1(), Some(signed.deadline_daa));
+        // One block later the signed deadline would leave less than the span: refused unchanged.
+        let mut too_late = row.clone();
+        assert!(too_late.demand_v1(late + 1, claim, owner, reserved, seed, Hash64::from_u64_word(7), &signed, 6000).is_err());
+        assert_eq!(too_late, row);
+        // An owner cannot buy a longer collection clock than the derivation's own bound.
+        let mut extended = signed.clone();
+        extended.deadline_daa += 1;
+        let mut refused = row.clone();
+        assert!(refused.demand_v1(100, claim, owner, reserved, seed, Hash64::from_u64_word(7), &extended, 6000).is_err());
+        // Without a full span before the stream horizon there is no demand, and that is not an error.
+        assert!(row.next_demand_v1(row.terms.stream_until_daa - span + 1).unwrap().is_none());
     }
     #[test]
     fn joint_default_only_at_literal_deadline_once_with_saved_all_signed_seats() {

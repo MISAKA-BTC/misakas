@@ -311,11 +311,125 @@ impl super::PalwPanelService {
                 }
                 Ok(None) => {}
                 Err(why) => {
-                    tracing::debug!("history responder claim {claim}: {why}");
+                    kaspa_core::debug!("history responder claim {claim}: {why}");
                 }
             }
         }
         drop(metadata);
+        Ok(())
+    }
+}
+
+/// Distinct from every other court-queue round: a seat's own signed history custody grant.
+pub(super) const HISTORY_GRANT_ROUND_V1: u32 = u32::MAX - 21;
+const HISTORY_GRANTS_QUEUED_V1: usize = 16;
+
+/// The exact grant and its carrier for one already credited own Valid receipt. Pure: the
+/// caller signs both messages with the seat's key and checks the carrier before queueing.
+pub(super) fn grant_movement_v1(
+    signer: PalwBondKeyV2,
+    receipt: &kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2,
+    duty: &kaspa_consensus_core::palw_staged_court_state_v1::PalwHistoryGrantDutyV1,
+) -> Result<(kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyGrantV1, PalwConstraintStreamMoveV1), String> {
+    use kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyGrantV1;
+    if receipt.claim != duty.claim
+        || receipt.seat_bond != signer
+        || receipt.verdict != kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid
+    {
+        return Err("history grant must bind this seat's own signed Valid receipt for the duty's claim".into());
+    }
+    let grant = PalwHistoryCustodyGrantV1 {
+        version: 1,
+        claim: duty.claim,
+        seat: signer,
+        signed_daa: receipt.signed_daa,
+        pledge_id: duty.pledge_id,
+        valid_receipt_digest: PalwHistoryCustodyGrantV1::receipt_digest_v1(receipt),
+        signature: Vec::new(),
+    };
+    let movement = PalwConstraintStreamMoveV1 {
+        version: 1,
+        claim: duty.claim,
+        reserver: signer,
+        reserved_daa: duty.accepted_daa,
+        seed_id: duty.pledge_id,
+        phase: PalwConstraintStreamPhaseV1::PrefixCourt,
+        action: PalwConstraintStreamActionV1::HistoryCustodyGrant { grant: grant.clone(), receipt: receipt.clone() },
+        signature: Vec::new(),
+    };
+    Ok((grant, movement))
+}
+
+impl super::PalwPanelService {
+    /// A Valid seat of a required-family claim opts into the producer's public history custody
+    /// with its own signed grant, once native state has credited that exact receipt. Afterwards
+    /// it answers history demands from its native archive (or the peer lane) like the producer,
+    /// and a native history default may charge it as a literal custodian.
+    pub(super) async fn history_custody_grant_tick_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        signer: PalwBondKeyV2,
+        own_receipts: &std::collections::HashMap<Hash64, (kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2, u64)>,
+        pending: &mut Vec<(Hash64, u32, bool, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2)>,
+        due: &mut std::collections::HashMap<(Hash64, u32, bool), u64>,
+        moved: &mut std::collections::HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(), String> {
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+        let Some(now) = session.palw_v2_daa_score() else { return Ok(()) };
+        if !self.consensus_config.params.palw_staged_public_court_v1_active_at(now) {
+            return Ok(());
+        }
+        // A queued grant whose duty is gone (credited, expired or another branch) is dropped.
+        pending.retain(|(claim, round, responder, object)| {
+            if (*round, *responder) != (HISTORY_GRANT_ROUND_V1, true) {
+                return true;
+            }
+            let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = object else { return false };
+            let PalwConstraintStreamActionV1::HistoryCustodyGrant { receipt, .. } = &movement.action else { return false };
+            match session.palw_staged_history_grant_duty_v1(*claim, signer, receipt.clone()) {
+                Err(_) => true,
+                Ok(duty) => duty.is_some(),
+            }
+        });
+        let mut queued = pending.iter().filter(|(_, round, responder, _)| (*round, *responder) == (HISTORY_GRANT_ROUND_V1, true)).count();
+        for (claim, (receipt, _)) in own_receipts {
+            if queued >= HISTORY_GRANTS_QUEUED_V1 {
+                break;
+            }
+            if receipt.verdict != kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid || receipt.seat_bond != signer {
+                continue;
+            }
+            let key = (*claim, HISTORY_GRANT_ROUND_V1, true);
+            if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
+                || moved.get(&key).is_some_and(|at| now < at.saturating_add(super::COURT_MOVE_REPLAN_DAA))
+            {
+                continue;
+            }
+            let duty = match session.palw_staged_history_grant_duty_v1(*claim, signer, receipt.clone()) {
+                Ok(Some(duty)) => duty,
+                Ok(None) => continue,
+                Err(why) => {
+                    kaspa_core::debug!("history grant claim {claim}: {why}");
+                    continue;
+                }
+            };
+            let (mut grant, mut movement) = grant_movement_v1(signer, receipt, &duty)?;
+            grant.signature = self
+                .sign(
+                    grant.signing_message_v1().as_byte_slice(),
+                    kaspa_consensus_core::palw_history_custody_v1::PALW_HISTORY_GRANT_CONTEXT_V1,
+                )
+                .ok_or("history grant signing key unavailable")?;
+            movement.action = PalwConstraintStreamActionV1::HistoryCustodyGrant { grant, receipt: receipt.clone() };
+            movement.signature = self
+                .sign(&movement.signing_message(), kaspa_consensus_core::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_CONTEXT_V1)
+                .ok_or("history grant carrier signing key unavailable")?;
+            movement.check()?;
+            pending.push((key.0, key.1, key.2, PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) }));
+            due.insert(key, duty.material_until_daa.saturating_sub(1));
+            moved.insert(key, now);
+            queued += 1;
+        }
         Ok(())
     }
 }
@@ -448,6 +562,33 @@ mod tests {
         progress.session = Some(Box::new(row).into());
         assert!(matches!(owner_request_v1(&progress).unwrap(), HistoryOwnerDecisionV1::Default));
         assert_ne!(queue_scope_v1(&progress, bond(8)), queue_scope_v1(&progress, bond(9)));
+    }
+    #[test]
+    fn grant_carrier_binds_own_valid_receipt_pledge_and_original_acceptance_clock() {
+        use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2};
+        let duty = kaspa_consensus_core::palw_staged_court_state_v1::PalwHistoryGrantDutyV1 {
+            snapshot_block: BlockHash::from_u64_word(1),
+            now_daa: 120,
+            claim: Hash64::from_u64_word(5),
+            pledge_id: Hash64::from_u64_word(6),
+            accepted_daa: 100,
+            material_until_daa: 900,
+        };
+        let receipt = PalwSeatReceiptV2 {
+            claim: duty.claim,
+            verdict: PalwReceiptVerdictV2::Valid,
+            seat_bond: bond(8),
+            signed_daa: 110,
+            signature: vec![3; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        };
+        let (grant, movement) = grant_movement_v1(bond(8), &receipt, &duty).unwrap();
+        assert_eq!((movement.reserver, movement.reserved_daa, movement.seed_id), (bond(8), 100, duty.pledge_id));
+        assert_eq!((grant.claim, grant.seat, grant.signed_daa, grant.pledge_id), (duty.claim, bond(8), 110, duty.pledge_id));
+        assert_eq!(movement.authorization_bond_v1(), bond(8));
+        assert!(grant_movement_v1(bond(9), &receipt, &duty).is_err(), "another seat's receipt is no grant");
+        let mut invalid = receipt.clone();
+        invalid.verdict = PalwReceiptVerdictV2::Incapable;
+        assert!(grant_movement_v1(bond(8), &invalid, &duty).is_err());
     }
     #[test]
     fn wrong_rooted_raw_or_unqualified_membership_is_not_a_response_credential() {

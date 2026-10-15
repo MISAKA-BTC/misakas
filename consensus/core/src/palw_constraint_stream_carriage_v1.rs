@@ -593,7 +593,7 @@ impl PalwConstraintStreamMoveV1 {
         }
     }
 }
-pub(crate) fn palw_staged_verify_mldsa87_v1(key: &[u8], message: &[u8], signature: &[u8], context: &[u8]) -> bool {
+pub fn palw_staged_verify_mldsa87_v1(key: &[u8], message: &[u8], signature: &[u8], context: &[u8]) -> bool {
     let Ok(key): Result<[u8; crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN], _> = key.try_into() else { return false };
     let Ok(signature): Result<[u8; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN], _> = signature.try_into() else { return false };
     let key = libcrux_ml_dsa::ml_dsa_87::MLDSA87VerificationKey::new(key);

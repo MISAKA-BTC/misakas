@@ -433,7 +433,8 @@ mod tests {
     use kaspa_consensus_core::{
         palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1},
         palw_flat_constraint_stream_v1::PalwFlatConstraintStreamV1,
-        palw_step_leg::{PalwStepCoordinateV1, PalwStepTileLeafV1, binding_commitment_root_v1},
+        palw_step::PalwStepCoordinateV1,
+        palw_step_leg::{PalwStepTileLeafV1, binding_commitment_root_v1},
         palw_step_refute::base0_logits_trace_root_v1,
     };
     use kaspa_hashes::Hash64;

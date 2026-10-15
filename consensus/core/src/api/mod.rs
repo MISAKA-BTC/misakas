@@ -1228,6 +1228,15 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    fn palw_staged_history_grant_duty_v1(
+        &self,
+        _claim: crate::Hash64,
+        _seat: crate::palw_state_v2::PalwBondKeyV2,
+        _receipt: crate::palw_panel_v2::PalwSeatReceiptV2,
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwHistoryGrantDutyV1>, String> {
+        Err("staged history grant reader unavailable".into())
+    }
+
     fn palw_history_response_duties_v1(
         &self,
         _signer: crate::palw_state_v2::PalwBondKeyV2,

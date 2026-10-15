@@ -474,7 +474,8 @@ impl super::PalwPanelService {
         court_moved: &mut std::collections::HashMap<(Hash64, u32, bool), u64>,
     ) -> Result<(), String> {
         use super::*;
-        const ROUND: u32 = u32::MAX - 6;
+        // Distinct from the replay filer's demand round (`u32::MAX - 6`), which retains by round.
+        const ROUND: u32 = u32::MAX - 20;
         let page = session.palw_prefix_response_duties_v1(signer, *cursor)?;
         *cursor = page.next;
         // Remove a stale branch/fulfilled source before spending another fee input.

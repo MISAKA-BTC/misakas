@@ -260,6 +260,54 @@ pub struct PalwStagedHistoryDutyPageV1 {
     pub keys: Vec<(Hash64, PalwBondKeyV2, Hash64)>,
     pub next: Option<(u64, Hash64, PalwBondKeyV2, Hash64)>,
 }
+/// What a Valid seat needs to sign its own history custody grant for one required-family claim.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwHistoryGrantDutyV1 {
+    pub snapshot_block: crate::BlockHash,
+    pub now_daa: u64,
+    pub claim: Hash64,
+    /// The exact accepted history contract commitment (the producer's signed pledge id).
+    pub pledge_id: Hash64,
+    /// The claim contract's original acceptance clock, carried as the grant move's reserved DAA.
+    pub accepted_daa: u64,
+    pub material_until_daa: u64,
+}
+/// A seat's grant is due only when native state has ALREADY credited exactly this signed Valid
+/// receipt in the claim's semantic custody, the seat is in the history contract's bound panel,
+/// and it is not yet a history custodian. The receipt itself comes from the seat's own signing;
+/// nothing here makes membership or a foreign receipt a credential.
+pub fn palw_staged_history_grant_duty_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    claim: Hash64,
+    seat: PalwBondKeyV2,
+    receipt: &crate::palw_panel_v2::PalwSeatReceiptV2,
+) -> Result<Option<PalwHistoryGrantDutyV1>, String> {
+    let point = state.last_point().ok_or("history grant snapshot has no accepted clock")?;
+    let Some(contract) = state.staged_bundle_contract_v1(claim) else { return Ok(None) };
+    if receipt.claim != claim
+        || receipt.seat_bond != seat
+        || receipt.verdict != crate::palw_panel_v2::PalwReceiptVerdictV2::Valid
+        || seat == contract.history_custody.producer
+        || point.daa_score >= contract.claim.terms.material_until_daa
+    {
+        return Ok(None);
+    }
+    let Some(prefix) = contract.claim.prefix_custody.as_ref() else { return Ok(None) };
+    if !prefix.matches_credited_receipt_v1(claim, receipt)
+        || contract.history_custody.custody.credited.contains_key(&seat)
+        || !contract.history_custody.custody.expected_panel.contains(&seat)
+    {
+        return Ok(None);
+    }
+    Ok(Some(PalwHistoryGrantDutyV1 {
+        snapshot_block: point.block,
+        now_daa: point.daa_score,
+        claim,
+        pledge_id: contract.history_custody.commitment_v1()?,
+        accepted_daa: contract.claim.terms.accepted_daa,
+        material_until_daa: contract.claim.terms.material_until_daa,
+    }))
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwStagedHistoryRecoveryProgressV1 {
     pub snapshot_block: crate::BlockHash,

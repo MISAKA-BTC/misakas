@@ -181,6 +181,14 @@ fn palw_fraud_filer_fp_payload_read_v1(
 /// whole commitment hash and recorded pin authenticate it; this projection is never an admission
 /// payload. No peer-declared prompt/signature vector is decoded by a metadata probe.
 fn public_fp_payload_projection(bytes: &[u8], include_witnesses: bool) -> Result<PalwFpCommitmentTxPayloadV3, std::io::Error> {
+    // Past the staged fence an original public claim rides inside its HFP1 custody envelope;
+    // the original FP payload (and its literal prompt ids) is the envelope's unchanged inner
+    // bytes. A malformed envelope is no projection at all, never a fallback to the outer bytes.
+    if bytes.starts_with(&kaspa_consensus_core::palw_history_custody_v1::PALW_HISTORY_FP_ENVELOPE_MAGIC_V1[..]) {
+        let envelope = kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(bytes)
+            .map_err(|why| std::io::Error::new(std::io::ErrorKind::InvalidData, why))?;
+        return public_fp_payload_projection(&envelope.original_payload, include_witnesses);
+    }
     if include_witnesses {
         return borsh::from_slice(bytes);
     }

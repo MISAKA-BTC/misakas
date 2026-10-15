@@ -1142,6 +1142,22 @@ impl VirtualStateProcessor {
         state.last_point().map(|point| point.daa_score)
     }
 
+    pub fn palw_staged_history_grant_duty_v1_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        seat: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        receipt: kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwHistoryGrantDutyV1>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let now = state.last_point().ok_or("history grant snapshot has no accepted clock")?.daa_score;
+        if !self.palw_staged_public_court_v1.is_some_and(|f| f.is_active(now)) {
+            return Ok(None);
+        }
+        kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_history_grant_duty_v1(&state, claim, seat, &receipt)
+    }
+
     pub fn palw_staged_history_recovery_v1_impl(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),

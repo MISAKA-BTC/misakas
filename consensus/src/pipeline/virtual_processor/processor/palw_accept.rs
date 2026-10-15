@@ -2015,7 +2015,20 @@ impl VirtualStateProcessor {
         let mut original_bindings = std::collections::HashMap::new();
         let mut history_views = Vec::new();
         if history_armed {
-            for tx in txs.iter().filter(|tx| tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT) {
+            // Every accepted transaction keeps its place. An HFP1 carrier is replaced by its
+            // original-payload view; any other carrier (a plain FP claim of a class with no
+            // required family, an evaluation or tensor claim, an external producer's claim)
+            // rides unchanged. Whether a claim NEEDS the envelope is the fold's question
+            // (`prepare_required_bundle_v1` refuses a required-family claim without its pledge),
+            // never a silent drop here after the fee was paid.
+            history_views.reserve(txs.len());
+            for tx in txs.iter() {
+                if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
+                    || !tx.payload.starts_with(&kaspa_consensus_core::palw_history_custody_v1::PALW_HISTORY_FP_ENVELOPE_MAGIC_V1[..])
+                {
+                    history_views.push(tx.clone());
+                    continue;
+                }
                 match kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(&tx.payload) {
                     Ok(envelope) => {
                         history_carriers.insert(tx.id(), envelope.pledge);
@@ -2026,6 +2039,8 @@ impl VirtualStateProcessor {
                         view.payload = envelope.original_payload;
                         history_views.push(view);
                     }
+                    // A malformed envelope carries no admissible original: its fee is the outer
+                    // transaction's and it produces no object (the walk cannot decode it).
                     Err(why) => info!("[palw-history] carrier {} has no admissible original custody envelope: {why}", tx.id()),
                 }
             }
@@ -2178,10 +2193,9 @@ impl VirtualStateProcessor {
         if history_armed {
             for objects in [&mut extraction.objects, &mut evaluation.objects] {
                 objects.retain(|carried| {
-                    let Some(pledge) = history_carriers.get(&carried.carrier) else {
-                        info!("[palw-history] original FP carrier {} has no transaction-local pledge", carried.carrier);
-                        return false;
-                    };
+                    // A plain carrier has no pledge to check; the fold alone decides whether its
+                    // claim required one.
+                    let Some(pledge) = history_carriers.get(&carried.carrier) else { return true };
                     if let Err(why) = pledge.authenticate_original_object_v1(&carried.object, Self::verify_mldsa87_with_context_bool) {
                         info!("[palw-history] original FP carrier {} pledge refused: {why}", carried.carrier);
                         return false;

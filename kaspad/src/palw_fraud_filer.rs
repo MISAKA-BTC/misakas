@@ -2837,11 +2837,12 @@ impl PalwPanelService {
                 let progress = match session.palw_staged_owned_progress_v1((claim, bond_key)) {
                     Ok(Some(progress))
                         if palw_fraud_filer_paid_progress_v1(&progress, claim, bond_key)
-                            && (
-                                progress.reserved_daa,
-                                progress.bundle.as_ref().map_or(progress.seed_id, |bundle| Some(bundle.bundle_id)),
-                                progress.bundle.as_ref().map_or(progress.terms, |bundle| bundle.plan.terms),
-                            ) == (authority.reserved_daa, Some(authority.seed_id), authority.terms) =>
+                            // Paid authority names the ACTIVE literal stage (its seed digest and terms)
+                            // once a bundle stage is open, and the bundle frame before that — exactly
+                            // what the owned progress reports. Comparing the frame forever after
+                            // activation would read as a perpetual snapshot change.
+                            && (progress.reserved_daa, progress.seed_id, progress.terms)
+                                == (authority.reserved_daa, Some(authority.seed_id), authority.terms) =>
                     {
                         progress
                     }
@@ -3618,6 +3619,9 @@ impl PalwPanelService {
             let lanes = lanes_on.then_some(PalwFraudFilerLanesV1 { now_daa: current_daa, form });
             court_pending.retain(|(held, round, responder, object)| {
                 if *held != claim || !palw_fraud_filer_queued_v1(*round, *responder) { return true; }
+                // Staged owner moves are the staged queue's own: it retires them against the
+                // accepted cursor, never against the legacy session/answer facts below.
+                if *round == PALW_FRAUD_FILER_STAGED_ROUND_V1 { return true; }
                 if *round == PALW_FRAUD_FILER_RESERVE_ROUND_V1 { return !facts.reserved; }
                 if *round == PALW_FRAUD_FILER_TERMINAL_ROUND_V2 { return !own_court_open; }
                 // Lane G14-L: a queued lane stays until it lands in this bond's session or its unit is answered.
@@ -4336,8 +4340,10 @@ impl PalwPanelService {
         let flat = session.palw_staged_flat_source_v1((claim, progress.reserver))?;
         let mut due = progress.terms.open_until_daa.saturating_sub(1);
         let action = if let Some(flat) = flat {
-            if flat.snapshot_block != progress.snapshot_block
-                || flat.now_daa != progress.now_daa
+            // A separate native read may land on a newer accepted tip (blocks arrive between the
+            // two reads). That is tolerated: the literal identity and immutable clocks below are
+            // what must match, and every decision uses this read's own clock. An older read is not.
+            if flat.now_daa < progress.now_daa
                 || (flat.session.claim, flat.session.owner, flat.session.reserved_daa, flat.session.bundle_id)
                     != (claim, progress.reserver, progress.reserved_daa, bundle.bundle_id)
                 || flat.context.binding.as_ref() != binding
@@ -4492,8 +4498,8 @@ impl PalwPanelService {
         let selected = session
             .palw_staged_selected_events_v1((claim, progress.reserver))?
             .ok_or("prospective original selected source is unavailable")?;
-        if selected.snapshot_block != progress.snapshot_block
-            || selected.now_daa != progress.now_daa
+        // Same tolerance as the Flat source: newer accepted tip, identical literal identity/clocks.
+        if selected.now_daa < progress.now_daa
             || (selected.session.claim, selected.session.owner, selected.session.reserved_daa, selected.session.bundle_id)
                 != (claim, progress.reserver, progress.reserved_daa, progress.bundle.as_ref().expect("checked").bundle_id)
             || (selected.session.respond_until_daa, selected.session.collect_until_daa)
@@ -5172,8 +5178,9 @@ impl PalwPanelService {
         let Some(history) = session.palw_staged_history_recovery_v1((claim, progress.reserver), seed)? else {
             return Ok((None, false));
         };
-        // Decide only against the same accepted snapshot as the owner's cursor.
-        if history.snapshot_block != progress.snapshot_block || history.now_daa != progress.now_daa {
+        // A newer accepted tip than the owner's cursor read is fine: the session's own native
+        // clocks decide. An older one is not decided against.
+        if history.now_daa < progress.now_daa {
             return Ok((None, false));
         }
         if history.session.is_none() && !native_needed {
