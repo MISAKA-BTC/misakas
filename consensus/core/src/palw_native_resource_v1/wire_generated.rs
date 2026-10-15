@@ -4317,8 +4317,93 @@ impl NativeWireScanV1 for misaka_palw_kernel::verify::ScopeV1 {
         }
     }
 }
+wire_struct!(misaka_palw_panel::AdmittedClaimV1; crate::Hash64, crate::Hash64, crate::Hash64, misaka_palw_panel::BondIdV1, crate::Hash64, crate::Hash64, crate::Hash64, u64);
+wire_struct!(misaka_palw_panel::BondIdV1; crate::Hash64, u32);
+impl NativeWireScanV1 for misaka_palw_panel::ClaimPhaseV3 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            3 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<misaka_palw_panel::PanelBoundV3 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            4 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            5 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<misaka_palw_panel::NonFraudReasonV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            6 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<misaka_palw_panel::PanelRetiredClaimV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
+wire_struct!(misaka_palw_panel::ClaimRecordV3; misaka_palw_panel::AdmittedClaimV1, crate::Hash64, u64, u64, u64, u32, Option<misaka_palw_panel::ClaimSealV1>, Option<misaka_palw_panel::PanelSnapshotV1>, Option<crate::Hash64>, Vec<crate::Hash64>, Vec<misaka_palw_panel::PanelBoundV3>, misaka_palw_panel::ClaimPhaseV3, Option<misaka_palw_panel::PanelStrataV1>);
+wire_struct!(misaka_palw_panel::ClaimSealV1; crate::Hash64, crate::Hash64, u64, u64, u64, u32, crate::Hash64, u64, u64, u64, u64);
+wire_struct!(misaka_palw_panel::EpochSourceSetV1; u64, Vec<crate::Hash64>);
+impl NativeWireScanV1 for misaka_palw_panel::NonFraudReasonV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            3 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            4 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
+wire_struct!(misaka_palw_panel::PanelBoundV3; crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, u64, u64, crate::Hash64, u64, u16, Vec<misaka_palw_panel::BondIdV1>, u64);
 wire_struct!(misaka_palw_panel::PanelPolicyV1; u64, u64, u64, u64, u64, u64, u64, u16, u16, u16, u64, u32, u32, u32, u32, u32, u32, u32, u32, crate::Hash64);
+wire_struct!(misaka_palw_panel::PanelPopulationArchiveV1; crate::Hash64, crate::Hash64, u64, u64, u32);
+wire_struct!(misaka_palw_panel::PanelRetiredClaimV1; u64, misaka_palw_panel::PanelRetirementAuthorityV1, crate::Hash64, Option<misaka_palw_panel::PanelPopulationArchiveV1>, crate::Hash64, u32, crate::Hash64, Option<crate::Hash64>, Option<crate::Hash64>);
+wire_struct!(misaka_palw_panel::PanelRetirementAuthorityV1; crate::Hash64, crate::Hash64);
+wire_struct!(misaka_palw_panel::PanelSnapshotV1; crate::Hash64, crate::Hash64, u64, u64, crate::Hash64, crate::Hash64, misaka_palw_panel::BondIdV1, crate::Hash64, crate::Hash64, misaka_palw_panel::PanelCandidatesV1, Vec<u64>);
+wire_struct!(misaka_palw_panel::PanelStrataV1; u16, u16, bool);
 wire_struct!(misaka_palw_panel::PermissionlessPanelStateV1; u16, crate::Hash64, crate::Hash64, misaka_palw_panel::PanelPolicyV1, crate::Hash64, u64, u64, u64, BTreeMap<crate::Hash64, misaka_palw_panel::ClaimRecordV3>, BTreeSet<crate::Hash64>, BTreeMap<u64, crate::Hash64>, BTreeMap<misaka_palw_panel::BondIdV1, u128>, BTreeMap<u64, misaka_palw_panel::EpochSourceSetV1>);
+wire_struct!(misaka_palw_panel::SeatCandidateV1; misaka_palw_panel::BondIdV1, crate::Hash64, crate::Hash64, u64, u64, crate::Hash64, crate::Hash64, u8);
 impl NativeWireScanV1 for misaka_palw_tir::pipeline::Binding {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;

@@ -301,7 +301,7 @@ code+='115 if key_bytes==65 && matches!(prefix,0x49|0x42)=>crate::palw_claim_cha
 a=code.index('let shape=match table {');b=code.index('\n   if frame.remaining()',a)
 body=code[a:b].removeprefix('let shape=').removesuffix(';').replace('&mut frame','frame')
 code=code[:a]+'let shape=scan_native_aux_row_v1(table,&key[..key_bytes as usize],&mut frame)?;'+code[b:]
-code+='\n/// One aux row\'s exact codec, dispatched on its table and FULL key (`k`) and, where two family layouts share a key shape, its row\n/// length (`n`). Tables 42–106 and 112 follow scripts/drills/rfc06_native_aux_spec.py; a key shape no fold writes fails closed.\npub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1>{let k=key;let n=frame.remaining();let key_bytes=k.len() as u64;let prefix=k.first().copied().unwrap_or(0);'+body+'}\n'
+code+='\n/// One aux row\'s exact codec, dispatched on its table and FULL key (`k`) and, where two family layouts share a key shape, its row\n/// length (`n`). Tables 42–106 and 112 follow scripts/drills/rfc06_native_aux_spec.py; a key shape no fold writes fails closed.\npub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1>{let k=key;let n=frame.remaining();let key_bytes=k.len() as u64;let prefix=k.first().copied().unwrap_or(0);Ok('+body+')}\n'
 code+=AUX_HELPERS
 (OUT.parent/'wire_kernel_aux.rs').write_text(code)
 
@@ -326,5 +326,5 @@ for tag,(field,special) in tables.items():
     if special and special.startswith('misaka_'):wirevalue=special
     elif special=='candidate':wirevalue='([u8;64],misaka_palw_kernel::state::ClassRecordV1)'
     elif special=='spec':wirevalue='misaka_palw_kernel::spec::ComputationSpecV1'
-    lines.append(str(tag)+' => <'+wirevalue+' as NativeWireScanV1>::scan_native_wire_v1(r)?.allocation(1, size_of::<typed::BTreeNodeEnvelopeV1<'+key+','+value+'>>>()),')
+    lines.append(str(tag)+' => <'+wirevalue+' as NativeWireScanV1>::scan_native_wire_v1(r)?.allocation(1, size_of::<typed::BTreeNodeEnvelopeV1<'+key+','+value+'>>()),')
 (CORE/'palw_native_resource_v1/ledger_rows_generated.rs').write_text('// Generated actual ledger-table row dispatch.\nfn scan_ledger_row_v1<R:Read>(table:u8,r:&mut NativeWireReaderV1<R>)->io::Result<NativeWireShapeV1>{match table{'+''.join(lines)+'_=>Err(wire::wire_bad("unknown persisted ledger table")),}}\n')

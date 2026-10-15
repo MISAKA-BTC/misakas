@@ -64,7 +64,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
     let n = frame.remaining();
     let key_bytes = k.len() as u64;
     let prefix = k.first().copied().unwrap_or(0);
-    match table {
+    Ok(match table {
         32 => <crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         33 => <crate::palw_kernel_route_v1::KernelAssignmentV1 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         34 => <Vec<misaka_palw_kernel::receipt::PalwConstraintReceiptV1> as NativeWireScanV1>::scan_native_wire_v1(frame)?,
@@ -711,7 +711,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
                 ),
             ));
         }
-    }
+    })
 }
 
 /// The longest aux key any fold writes is far below this; a longer key is malformed, never truncated.

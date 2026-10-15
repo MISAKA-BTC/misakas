@@ -3,6 +3,10 @@
 //! Every field/variant is exhaustive; private layouts are visited beside owners.
 use super::*;
 native_struct!(crate::palw_material_capacity_v1::PalwHeldMaterialBundleV1; claim, binding, units);
+native_struct!(misaka_palw_panel::ClaimRecordV3; claim, accepted_block, accepted_daa, accepted_height, acceptance_order, occurrence_index, seal, snapshot, entropy_output, used_operators, binding_history, phase, strata);
+native_struct!(misaka_palw_panel::BondIdV1; transaction, index);
+native_struct!(misaka_palw_panel::EpochSourceSetV1; frozen_daa, profiles);
+native_struct!(misaka_palw_panel::SeatCandidateV1; bond, operator, key, collateral, registered_daa, capability_root, readiness_root, roles);
 native_struct!(misaka_palw_kernel::state::ClassRecordV1; descriptor, program_bytes, plan, param_commitments);
 native_struct!(misaka_palw_kernel::state::PipelineClassRecordV1; descriptor, pipeline_bytes, program_bytes, plan, param_commitments, decode);
 native_struct!(misaka_palw_kernel::flat_candidate7::FlatCandidateViewV7; plan, program, encoder, scope, replay);
@@ -141,6 +145,12 @@ native_struct!(crate::palw_flat_stage_v28::NativeStagePoliciesV28; version, netw
 native_struct!(crate::palw_step_leg::PalwStepBindingV2; version, job_context, shape_profile, checkpoint_profile, state_chunk_map_id, full_logits_trace_root, activation_leg_root, step_leaf_count, step_merkle_root, checkpoint_count, checkpoint_merkle_root, committed_execution_root);
 native_enum!(crate::palw_held_da_v1::PalwHeldMissingV1; PromptIdsTile { tile }, StateChunk { checkpoint, chunk }, StepRange { first, count }, StepLeaf { leaf });
 native_enum!(crate::palw_held_da_v1::PalwHeldDisclosureV1; PromptIdsTile { opening }, StateChunk { anchor, chunk }, StepRange { opening }, StepLeaf { evidence });
+native_struct!(misaka_palw_panel::AdmittedClaimV1; claim_id, work_id, class_id, producer, producer_operator, producer_key, immutable_fields, required_exposure);
+native_struct!(misaka_palw_panel::ClaimSealV1; id, accepted_block, accepted_daa, accepted_height, acceptance_order, occurrence_index, checkpoint, checkpoint_daa, checkpoint_height, anchor_slot, beacon_epoch);
+native_struct!(misaka_palw_panel::PanelSnapshotV1; root, checkpoint, checkpoint_daa, checkpoint_height, policy_id, class_id, excluded_bond, excluded_operator, excluded_key, candidates, strata_members);
+native_struct!(misaka_palw_panel::PanelBoundV3; claim_seal_id, panel_snapshot_root, beacon_id, panel_seed_v3, entropy_ready_daa, assignment_point, binding_block, bound_daa, retry_index, seats, exposure);
+native_enum!(misaka_palw_panel::ClaimPhaseV3; PendingSeal, Sealed, EntropyReady { ready_daa, assignment_point, seed, beacon_id }, Bound(f0), Released { daa }, Voided { daa, reason }, Retired(f0));
+native_struct!(misaka_palw_panel::PanelStrataV1; count, class_seats, outsider);
 native_struct!(misaka_palw_kernel::plan::VerificationPlanV1; grammar, descriptor_digest, program_root, max_positions, relations, boundaries, declared_error_bits, budgets);
 native_struct!(misaka_palw_kernel::trace::ParamCommitmentsV1; by_instance);
 native_struct!(misaka_palw_kernel::pipeline::PipelinePlanV1; grammar, descriptor_digest, pipeline_root, stages, edges, declared_error_bits);
@@ -372,6 +382,8 @@ native_struct!(crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1; leaf, open
 native_struct!(crate::palw_attn_court_v1::PalwAttnChunkOpeningV1; chunk_index, chunk_bytes, siblings);
 native_struct!(crate::palw_step_leg::PalwStepRangeOpeningV1; first_leaf_index, leaf_hashes, siblings);
 native_struct!(crate::palw_shard_court_v1::PalwLeafEvidenceV1; refutation, artifact_openings, prompt_ids_opening);
+native_enum!(misaka_palw_panel::NonFraudReasonV1; SealUnavailable, BeaconUnavailable, NoCapablePanel, PanelUnavailable, PopulationResourceLimit);
+native_struct!(misaka_palw_panel::PanelRetiredClaimV1; daa, authority, prior_record_root, population, bindings_root, binding_count, operators_root, last_seed, last_beacon_id);
 native_struct!(misaka_palw_kernel::plan::PlanRelationV1; block, node, prim_tag, family, checker, court, repetitions, occurrences, out_dtype, out_elements, in_elements, in_dtypes, matmul);
 native_struct!(misaka_palw_kernel::plan::StateBoundaryV1; state, kind, per_layer, window);
 native_struct!(misaka_palw_kernel::plan::PlanBudgetsV1; verifier_work_per_position, evidence_bytes_per_position, artifact_bytes, probabilistic_instances_per_position, worst_court_bytes, worst_court_work);
@@ -529,6 +541,8 @@ native_struct!(crate::palw_step_leg::PalwStepOpeningV1; leaf_index, leaf_hash, s
 native_struct!(crate::palw_step_leg::PalwCheckpointLeafV2; version, checkpoint_index, covered_decode_call, prev_checkpoint_leaf_hash, state_chunk_count, state_chunks_root);
 native_struct!(crate::palw_step_refute::PalwExecutionStepRefutationV1; binding, output_opening, output_preimage, inputs, prompt_token_ids, decode_tokens, kv_checkpoint);
 native_struct!(crate::palw_artifact::PalwArtifactOpeningV1; operand, leaf_index, leaf_count, path);
+native_struct!(misaka_palw_panel::PanelRetirementAuthorityV1; native_parent_root, native_parent_checkpoint);
+native_struct!(misaka_palw_panel::PanelPopulationArchiveV1; root, checkpoint, checkpoint_height, checkpoint_daa, candidate_count);
 native_enum!(misaka_palw_kernel::family::ConstraintFamilyV1; Structure, ExactArithmetic, DenseMatrix, QuantRange, Nonlinear, Selection, RecurrentState, MediaPipeline);
 native_enum!(misaka_palw_kernel::family::CheckerIdV1; ExactRecompute, FreivaldsM127, StateContinuity, FreivaldsCrtV2, EdgeRecompute);
 native_enum!(misaka_palw_kernel::family::CourtIdV1; InstanceRecompute, MatMulScalar, EdgeRecompute, ElementRecompute);

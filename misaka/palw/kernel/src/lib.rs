@@ -142,6 +142,8 @@ pub mod hide;
 pub mod improve;
 pub mod job;
 pub mod ledger;
+/// The flat candidate records live under `ledger` (their rows are ledger tables); re-exported at the crate root where consumers name them.
+pub use ledger::{flat_candidate7, flat_candidate9};
 pub mod lifecycle;
 pub mod merkle;
 pub mod merkle3;

@@ -335,8 +335,8 @@ fn program_blob<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1<R>, cap
             + size_of::<bool>()
             + size_of::<u8>()
             + size_of::<u64>()
-            + size_of::<typed::BTreeNodeEnvelopeV1<(u8, u16, Vec<Option<u8>>), (u64, u64)>>
-            > () + inputs * size_of::<Option<u8>>(),
+            + size_of::<typed::BTreeNodeEnvelopeV1<(u8, u16, Vec<Option<u8>>), (u64, u64)>>()
+            + inputs * size_of::<Option<u8>>(),
     )?;
     // Interval analysis decodes constants into i128 lanes; the actual parsed
     // byte-vector element count bounds lane count even for 1-byte constants.
