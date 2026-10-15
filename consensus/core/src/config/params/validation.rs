@@ -185,6 +185,8 @@ impl Params {
         self.validate_palw_horizon_extension_v1()?;
         self.validate_palw_minimum_price_v1()?;
         self.validate_palw_paid_consumer_lifecycle_v1()?;
+        // **N3 (REQ-N3-3)**: new reward profiles stay dormant until an independent bootstrap holds (second lock).
+        self.validate_palw_new_reward_profiles_n3_v1()?;
         self.validate_palw_model_bond_allocation_v1()?;
         // **ADR-0032's amended reporter share** (`crate::palw_reporter_share_v2`): refused when armed.
         self.validate_palw_reporter_share_v2()?;

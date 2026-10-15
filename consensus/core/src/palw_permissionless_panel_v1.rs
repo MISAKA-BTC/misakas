@@ -108,11 +108,18 @@ impl Params {
         let network = crate::palw_attempt_v2::palw_network_domain_v2_for(self.net.to_string().as_bytes(), Some(self.genesis.hash));
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else { return };
         let mirror = self.palw_panel_v3_mirror_v1(network, palw_ruleset_id_v2(bundle));
+        // The absolute Panel consumer lifetime governs Panel consumers only: with no Panel engine mirrored there is no consumer
+        // and no lifetime (2026-10-15). Otherwise every claim lookup on a profile arming the lifetime without the Panel would
+        // refuse with "Panel policy missing". Shipped presets carry neither, so every shipped root is unchanged.
+        let lifetime = if mirror.is_some() {
+            self.palw_panel_lifetime_v2.filter(|f| f.activation != ForkActivation::never()).map(|f| {
+                crate::palw_panel_lifetime_v2::PalwPanelLifetimeMirrorV2 { from_daa: f.activation.daa_score(), policy: f.policy }
+            })
+        } else {
+            None
+        };
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
-            bundle.state = bundle.state.clone().with_panel_v3(mirror).with_panel_lifetime_v2(
-                self.palw_panel_lifetime_v2.filter(|f| f.activation != ForkActivation::never())
-                    .map(|f| crate::palw_panel_lifetime_v2::PalwPanelLifetimeMirrorV2 { from_daa: f.activation.daa_score(), policy: f.policy })
-            );
+            bundle.state = bundle.state.clone().with_panel_v3(mirror).with_panel_lifetime_v2(lifetime);
         }
     }
 

@@ -737,3 +737,32 @@ mod tests {
         assert!(matches!(palw_new_reward_profile_gate_v1(Some(&holds), &release), PalwNewRewardProfileGateV1::Dormant { .. }));
     }
 }
+
+/// The new reward profiles REQ-N3-3 keeps dormant until an independent bootstrap holds: every fence whose rules pay, weight or
+/// price sourced/attested work. A new reward fence is added here in the same change that adds it.
+pub const PALW_N3_GATED_REWARD_FENCES_V1: &[&str] = &[
+    "palw_beacon_source_opt_in_v1",
+    "palw_beacon_source_fee_v1",
+    "palw_claim_challenge_v2",
+    "palw_verifier_pay_v1",
+    "palw_model_verification_gate_v1",
+    "palw_minimum_price_v1",
+    "palw_monetary_material_v1",
+    "palw_panel_lifetime_v2",
+];
+
+impl crate::config::params::Params {
+    /// **REQ-N3-3 as a second lock in `validate_palw_v2`.** Each listed fence's own validator already refuses any real
+    /// activation; this refuses again, by the bootstrap's absence, should one of them ever stop refusing. `never()`/`None` pass.
+    /// Private integration profiles never reach it: they validate an explicitly dormant copy.
+    pub fn validate_palw_new_reward_profiles_n3_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        for (name, activation) in self.palw_fences_v1() {
+            if PALW_N3_GATED_REWARD_FENCES_V1.contains(&name)
+                && activation.is_some_and(|a| a != crate::config::params::ForkActivation::never())
+            {
+                palw_new_reward_profile_admissible_v1(name).map_err(crate::palw_mode_v2::PalwModeV2Error::InvalidOwned)?;
+            }
+        }
+        Ok(())
+    }
+}
