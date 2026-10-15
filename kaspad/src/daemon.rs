@@ -1969,9 +1969,22 @@ Do you confirm? (y/n)";
                             ),
                             None => None,
                         },
-                        class_residency: crate::palw_backends::palw_class_residency_within_share_v1(
+                        // **The same carve the producer site makes** (feat/kv-codec 69386573b, ported in the
+                        // 2026-10-15 merge sweep). The holding is process-wide (`held_artifacts`): whichever
+                        // duty maps the file first sets its residency, so a panel in a producing process
+                        // budgets the weights around this process's attempt exactly as the producer would.
+                        // A panel-only node reserves nothing.
+                        class_residency: crate::palw_backends::palw_class_residency_beside_the_attempt_v1(
                             args.palw_class_resident_bytes,
                             crate::args::palw_host_share_bytes_v1(args),
+                            if args.palw_produce {
+                                crate::palw_backends::palw_producer_attempt_reserve_v1(
+                                    &court,
+                                    palw_configured_producer_class(args, &config_for_palw_panel),
+                                )
+                            } else {
+                                0
+                            },
                         ),
                         challenge: args.palw_challenge || args.palw_drill_challenge_all,
                         public_claims: crate::args::parse_palw_public_claims_v1(&args.palw_public_claim)
