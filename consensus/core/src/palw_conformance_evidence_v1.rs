@@ -6,10 +6,14 @@
 //! an evidence id the pack wrote is the id the chain computes. On top of it: the network's INTERIM post-commit challenge policy,
 //! the payloads tag 109 carries, the fold's judgement of posted evidence and of a refutation, and the fresh verifier.
 //!
-//! # Design: optimistic, with a bounded in-fold admission (RFC-0015's pattern)
+//! # Design: bounded in-fold admission and a distinct future-source authority
+//!
+//! Historical OPV Final receipts alone do not supply an independent beacon
+//! source. The selected-approval source adapter remains a required migration;
+//! an unrefuted outcome or matching local replay cannot manufacture approval.
 //!
 //! ```text
-//! 107 commitment ─ FUTURE OPV Finals (FinalPathV1::PanelIndependent; op 212's rows) ─ PalwWorkBeaconV1 locks ─ challenge seed
+//! 107 commitment ─ selected-approval-authorized future sources ─ PalwWorkBeaconV1 locks ─ challenge seed
 //!  109 Post (registrant): evidence + scope + every selected check's outcome
 //!      in fold: bound to THIS attempt (commitment, policy, the chain's own beacon and seed, the committed scope)?  no ⇒ dropped
 //!               rebuilt EXACTLY from its material (selection from the seed, counts, status, result roots)? Passed with the

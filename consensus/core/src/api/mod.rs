@@ -613,6 +613,17 @@ pub trait ConsensusApi: Send + Sync {
     ) -> Result<(), String> {
         Err("current native material generation authority unavailable".into())
     }
+    fn palw_kernel_material_query_authority_v4(
+        &self,
+        _query: &crate::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        _requester: crate::palw_state_v2::PalwBondKeyV2,
+        _pubkey: &[u8],
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4>,
+        String,
+    > {
+        Err("own native material query authority unavailable".into())
+    }
     fn palw_native_recovery_session_quote_v4(
         &self,
         _checkpoint: Option<BlockHash>,

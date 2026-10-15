@@ -2058,11 +2058,9 @@ async fn g14_opv_a_legacy_final_remains_readable_without_selected_approval_or_be
     w.net.assert_same(&z, "replay");
 }
 
-/// Authenticated job payers must reach both beacon adapters, including after
-/// escrow payment and a DB reopen. Two distinct producers funded by one payer
-/// cannot supply the distinct-consumer quorum; a third job funded by another
-/// authenticated payer supplies a positive control. The contexts are unapproved test policies,
-/// not an on-chain conformance pass or a proof of economic independence.
+/// Authenticated payer metadata survives escrow payment and DB reopen. Even
+/// distinct payers/producers cannot turn optimistic lifecycle timeouts into
+/// selected-verifier approval or lock either beacon adapter.
 #[tokio::test]
 async fn g14_opv_sealed_metadata_keeps_payers_but_unapproved_finals_cannot_lock_a_beacon() {
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};

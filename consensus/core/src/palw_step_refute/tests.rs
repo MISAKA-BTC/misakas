@@ -412,7 +412,7 @@ pub(crate) fn skeleton_refutation() -> PalwExecutionStepRefutationV1 {
     }
 }
 
-fn honest_execution() -> (PalwStepBindingV2, crate::palw_step_leg::PalwStepLegMaterialV1, Vec<Vec<Vec<u32>>>) {
+pub(super) fn honest_execution() -> (PalwStepBindingV2, crate::palw_step_leg::PalwStepLegMaterialV1, Vec<Vec<Vec<u32>>>) {
     honest_execution_with_context(|_| {})
 }
 
@@ -1569,7 +1569,7 @@ fn tile_preimage(rows: &[Vec<Vec<u32>>], binding: &PalwStepBindingV2, coord: Pal
     }
 }
 
-fn build_refutation(
+pub(super) fn build_refutation(
     binding: &PalwStepBindingV2,
     material: &crate::palw_step_leg::PalwStepLegMaterialV1,
     rows: &[Vec<Vec<u32>>],

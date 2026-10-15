@@ -1903,6 +1903,55 @@ impl ConsensusApi for Consensus {
         }
         Ok(())
     }
+    fn palw_kernel_material_query_authority_v4(
+        &self,
+        query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        requester: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        pubkey: &[u8],
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+            kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4,
+        >,
+        String,
+    > {
+        let before = self.lkg_virtual_state.load();
+        let now = self.get_virtual_daa_score();
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || generation.active.is_some() {
+            return Err("material query import incomplete".into());
+        }
+        let point = before.ghostdag_data.selected_parent;
+        let state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(point)
+            .map_err(|e| format!("material query native state unavailable: {e:?}"))?;
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Err("material query needs ConsensusV2".into());
+        };
+        state.assert_monetary_material_consistency_v1(&bundle.state).map_err(|e| e.to_string())?;
+        state.assert_material_release_recovery_consistency_v2(&bundle.state).map_err(|e| e.to_string())?;
+        let authority = kaspa_consensus_core::palw_kernel_material_query_v4::kernel_material_query_authority_v4(
+            &state,
+            &bundle.state,
+            point,
+            now,
+            query,
+            requester,
+            pubkey,
+        )?;
+        let after = self.lkg_virtual_state.load();
+        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable
+            || end.active.is_some()
+            || end.epoch != generation.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+            || now != self.get_virtual_daa_score()
+        {
+            return Err("material query native point/clock/import changed".into());
+        }
+        Ok(authority)
+    }
     fn palw_native_recovery_session_quote_v4(
         &self,
         checkpoint: Option<BlockHash>,

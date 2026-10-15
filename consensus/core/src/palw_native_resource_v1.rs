@@ -27,7 +27,8 @@ mod kernel_ledger;
 mod kernel_material;
 mod kernel_salted;
 pub use kernel_material::{
-    native_kernel_parameter_auth_requests_v4, native_kernel_position_auth_requests_v4, native_kernel_segment_auth_requests_v4,
+    native_kernel_parameter_auth_requests_v4, native_kernel_parameter_tensor_requests_v4, native_kernel_position_auth_requests_v4,
+    native_kernel_segment_auth_requests_v4,
 };
 mod ledger_expansion;
 mod tir;

@@ -161,6 +161,19 @@ impl<'a> PalwGdnStateGeometryV2<'a> {
     pub fn layers(&self) -> impl Iterator<Item = u16> + '_ {
         (0..self.profile.layer_count).filter(|layer| self.profile.layer_kind(*layer) == PalwLayerKindV1::GatedDeltaNet)
     }
+    /// Locate a delta block without walking unrelated heads, conv state or the
+    /// full checkpoint. This is also the exact selected-layer membership order.
+    pub fn delta_chunk_index(&self, layer: u16, head: u32, block: u32) -> Option<u64> {
+        if head >= self.heads {
+            return None;
+        }
+        let per_head = self.v_dim.div_ceil(self.delta_rows_per_chunk);
+        if block >= per_head {
+            return None;
+        }
+        let ordinal = self.layers().position(|candidate| candidate == layer)? as u64;
+        Some((ordinal * u64::from(self.heads) + u64::from(head)) * u64::from(per_head) + u64::from(block))
+    }
     pub fn entry(&self, index: u64) -> Option<PalwGdnStateChunkEntryV2> {
         if index >= self.chunks {
             return None;

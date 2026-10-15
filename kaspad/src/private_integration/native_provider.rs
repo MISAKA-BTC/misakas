@@ -977,6 +977,13 @@ fn request_nonce_v3(body: &[u8]) -> [u8; 32] {
 }
 
 impl NativeReadyExchangeV3 for AuthenticatedSocketExchangeV3 {
+    fn fetch_kernel_material_unit_v4(
+        &self,
+        query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        authority: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>, String> {
+        self.fetch_kernel_v4(query, authority)
+    }
     fn ingest_kernel_material_v4(
         &self,
         material: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
@@ -1112,6 +1119,10 @@ fn handle_authenticated_v3(mut stream: TcpStream, service: &LoopbackNativeProvid
     }
     if request.header.purpose == ProviderTransportPurposeV1::KernelMaterialIngressV4 {
         kernel_ingress_v4::handle_kernel_v4(&mut stream, service, &request);
+        return;
+    }
+    if request.header.purpose == ProviderTransportPurposeV1::KernelMaterialQueryV4 {
+        kernel_query_v4::handle_query_v4(&mut stream, service, &request);
         return;
     }
     let native = match service.authenticate(&request) {
@@ -1541,3 +1552,6 @@ mod tests {
 mod kernel_ingress_v4;
 #[path = "native_recovery_runtime_v4.rs"]
 mod recovery_runtime_v4;
+
+#[path = "native_kernel_material_query_v4.rs"]
+mod kernel_query_v4;
