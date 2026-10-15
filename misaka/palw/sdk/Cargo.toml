@@ -118,6 +118,10 @@ name = "palw-native-final-audit39"
 path = "src/bin/palw-native-final-audit39.rs"
 
 [[bin]]
+name = "palw-q36-differential40"
+path = "src/bin/palw-q36-differential40.rs"
+
+[[bin]]
 name = "palw-native-receipt-live39"
 path = "src/bin/palw-native-receipt-live39.rs"
 required-features = ["native-rpc"]

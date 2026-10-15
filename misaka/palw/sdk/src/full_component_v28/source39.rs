@@ -1,6 +1,7 @@
 //! Source-backed complete Program39 compiler. Original and candidate parameter
 //! streams are separate passes. The first pass retains at most one tensor;
 //! every candidate C_v3 must match before a complete-source marker is written.
+pub mod master_request41;
 pub mod request41;
 use super::{
     decoder38::DecoderFrontendV38,
