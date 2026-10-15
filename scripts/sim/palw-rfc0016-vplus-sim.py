@@ -144,7 +144,7 @@ SCENARIOS = {
 }
 
 
-def run(world: World, sigma: int, k: int, seed: int):
+def run(world: World, sigma: int, k: int, seed: int, vplus: bool = True):
     rng = random.Random(seed)
     models = world.models
     names = sorted(models)
@@ -153,6 +153,7 @@ def run(world: World, sigma: int, k: int, seed: int):
     out = {m: {"physical": 0, "issued": 0, "unused": 0, "refused_rights": 0, "refused_capacity": 0, "finals": 0,
                "queue_wait": [], "target_ppm": 0} for m in names}
     hb_dependent = 0
+    violations = []
     unminted = 0
     total_issued = 0
     phys_share = {m: 0.0 for m in names}
@@ -181,7 +182,8 @@ def run(world: World, sigma: int, k: int, seed: int):
             rng.shuffle(order)
             for m in order:
                 rate = compute[m] * tau[m] / max(W, 1e-9) / world.epoch_length
-                verdict = admit(issued, used, m, step, world.epoch_length, sigma, world.phi, world.margin)
+                # V6 baseline: without V+ every model block the compute wins is admitted (rights do not bind).
+                verdict = admit(issued, used, m, step, world.epoch_length, sigma, world.phi, world.margin) if vplus else "Own"
                 if world.quote and verdict not in ("Own", "Reissued"):
                     continue  # C3: the quote stops the forward before it is spent
                 wins = 1 if rng.random() < min(rate, 1.0) else 0
@@ -208,6 +210,14 @@ def run(world: World, sigma: int, k: int, seed: int):
                     out[m]["finals"] += 1
             if not any_block:
                 hb_dependent += 1
+        # V6: the safety / accounting invariants of the epoch (0 violations mandatory): the hard epoch total and each σ cap.
+        if vplus:
+            if sum(used.values()) > sum(issued.values()):
+                violations.append(f"epoch {e}: used {sum(used.values())} > issued {sum(issued.values())}")
+            for m in names:
+                im = issued.get(m, 0)
+                if used[m] > im + im * sigma // 1000 and im > 0:
+                    violations.append(f"epoch {e}: {m} used {used[m]} > issued {im} · (1 + σ)")
         for m in names:
             out[m]["issued"] += issued.get(m, 0)
             out[m]["unused"] += max(0, issued.get(m, 0) - used[m])
@@ -231,10 +241,17 @@ def run(world: World, sigma: int, k: int, seed: int):
         out[m]["queue_wait_p95"] = q[int(len(q) * 0.95)] if q else None
         del out[m]["queue_wait"]
         out[m]["physical_share_ppm"] = int(1e6 * out[m]["physical"] / tot_phys)
-    return {"models": out, "heartbeat_dependent_daa": hb_dependent, "unminted_rights": unminted, "issued_rights": total_issued}
+    return {"models": out, "heartbeat_dependent_daa": hb_dependent, "unminted_rights": unminted, "issued_rights": total_issued,
+            "invariant_violations": violations}
 
 
 # ---- pass conditions and the selection rule (RFC-0016 §8.6) ----------------------------------------------------------------
+
+# V6 (user decision 2026-10-15): invariant violations 0 (mandatory); continuous REAL production vs the same world WITHOUT V+ degraded
+# by at most 50 ‰ (provisional). (The honest minimal miner's ≥ 800 ‰ cap utilization is a per-bond node measurement:
+# scripts/drills/rfc0016_sigma_k_measure.py.)
+INVARIANT_VIOLATIONS_MAX = 0
+REAL_DEGRADATION_MAX_PERMILLE = 50
 
 
 @dataclass
@@ -258,6 +275,14 @@ def evaluate(scenario, result, world, bounds: PassBounds):
                 fails.append(f"{scenario}: surging {m} stalled ({row['physical']} of {row['issued']} rights)")
     if result["issued_rights"] and result["unminted_rights"] * 1000 > result["issued_rights"] * bounds.unminted_max_permille:
         fails.append(f"{scenario}: unminted rights {result['unminted_rights']} of {result['issued_rights']}")
+    if len(result.get("invariant_violations") or []) > INVARIANT_VIOLATIONS_MAX:
+        fails.extend(f"{scenario}: invariant {v}" for v in result["invariant_violations"])
+    baseline = result.get("baseline_real_blocks")
+    real = sum(row["physical"] for row in ms.values())
+    if baseline:
+        degradation = max(0, (baseline - real) * 1000 // baseline)
+        if degradation > REAL_DEGRADATION_MAX_PERMILLE:
+            fails.append(f"{scenario}: REAL production degraded {degradation} permille vs no-V+ (> 50, provisional)")
     total_daa = world.epochs * world.epoch_length
     if result["heartbeat_dependent_daa"] * 1000 > total_daa * bounds.hb_max_permille:
         fails.append(f"{scenario}: heartbeat-dependent {result['heartbeat_dependent_daa']} of {total_daa} DAA")
@@ -279,7 +304,10 @@ def cmd_sweep(a):
             for name in a.scenarios.split(","):
                 world = replace(SCENARIOS[name](), phi=a.phi, margin=a.margin)
                 for seed in range(a.seeds):
-                    fails += evaluate(name, run(world, s, k, seed), world, bounds)
+                    result = run(world, s, k, seed)
+                    no_vplus = run(world, s, k, seed, vplus=False)
+                    result["baseline_real_blocks"] = sum(row["physical"] for row in no_vplus["models"].values())
+                    fails += evaluate(name, result, world, bounds)
             if fails:
                 conflicts[(s, k)] = sorted(set(fails))
             else:

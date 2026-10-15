@@ -202,6 +202,45 @@ def epoch_clock(lines):
     return out
 
 
+# V6 (user decision 2026-10-15): the pass thresholds the selection applies to EVERY run (calibration targets; the minimum new-model
+# opportunity and T4's final numbers are fixed later from E1–E6 measurements, not here):
+#   * safety / accounting invariant violations: 0 (mandatory);
+#   * the honest minimal miner's cap utilization: ≥ 800 ‰ (calibration target);
+#   * continuous REAL production versus the same scenario WITHOUT V+: degradation ≤ 50 ‰ (provisional).
+INVARIANT_VIOLATIONS_MAX = 0
+HONEST_CAP_UTILIZATION_MIN_PERMILLE = 800
+REAL_DEGRADATION_MAX_PERMILLE = 50
+
+
+def invariant_violations(reports, values):
+    """Pure: the safety / accounting invariants a report sequence must keep — the epoch total (Σ consumed ≤ Σ issued), each model's
+    σ cap (consumed ≤ issued · (1 + σ)), no negative unused rights, and monotone consumed coinbase / escrow payouts within an epoch."""
+    sigma = int((values or {}).get("sigma_permille") or 0)
+    out = []
+    prev = {}
+    for i, r in enumerate(reports):
+        rows = r.get("models") or []
+        num = lambda d, k: int(d.get(k) or 0)
+        issued_total = sum(int(m["targets"].get("rightsIssued") or 0) for m in rows)
+        consumed_total = sum(num(m["outcomes"], "rightsConsumed") for m in rows)
+        if consumed_total > issued_total:
+            out.append(f"report {i}: consumed {consumed_total} > issued {issued_total} (epoch total)")
+        for m in rows:
+            issued = int(m["targets"].get("rightsIssued") or 0)
+            consumed = num(m["outcomes"], "rightsConsumed")
+            if consumed > issued + issued * sigma // 1000:
+                out.append(f"report {i}: {m['model']} consumed {consumed} > issued {issued} · (1 + σ)")
+            if num(m["outcomes"], "rightsUnused") < 0:
+                out.append(f"report {i}: {m['model']} negative unused rights")
+            key = (m["model"], m.get("epoch"))
+            for field in ("payoutCoinbaseSompi", "payoutEscrowSompi"):
+                now = num(m["outcomes"], field)
+                if key in prev and now < prev[key].get(field, 0):
+                    out.append(f"report {i}: {m['model']} {field} fell within its epoch")
+            prev[key] = {f: num(m["outcomes"], f) for f in ("payoutCoinbaseSompi", "payoutEscrowSompi")}
+    return out
+
+
 def summarize(lines, manifest, bounds):
     """Pure: outcomes per model from the last report and the pass conditions (also what --self-test checks)."""
     reports = [json.loads(l["report"].get("reportJson") or "{}") if isinstance(l.get("report"), dict) else {} for l in lines]
@@ -241,11 +280,27 @@ def summarize(lines, manifest, bounds):
     unused = sum(m["rights_unused"] for m in models.values())
     if issued and unused * 1000 > issued * bounds["unminted_max_permille"]:
         fails.append(f"unminted rights {unused} of {issued}")
+    # V6: invariant violations (0 mandatory), honest cap utilization (≥ 800 ‰) and REAL degradation vs no-V+ (≤ 50 ‰, provisional).
+    violations = invariant_violations(reports, manifest.get("values")) + list(manifest.get("node_invariant_violations") or [])
+    if len(violations) > INVARIANT_VIOLATIONS_MAX:
+        fails.extend(f"invariant: {v}" for v in violations)
+    for mid, m in models.items():
+        role = manifest.get("roles", {}).get(mid, {})
+        cap = int(role.get("honest_minimal_cap_blocks") or 0)
+        if cap and m["physical_blocks"] * 1000 < cap * HONEST_CAP_UTILIZATION_MIN_PERMILLE:
+            fails.append(f"{mid}: honest minimal miner used {m['physical_blocks']} of its cap {cap} (< 800 permille)")
+    real = sum(m["physical_blocks"] for m in models.values())
+    baseline = bounds.get("baseline_real_blocks")
+    if baseline:
+        degradation = max(0, (baseline - real) * 1000 // baseline)
+        if degradation > REAL_DEGRADATION_MAX_PERMILLE:
+            fails.append(f"continuous REAL production degraded {degradation} permille vs no-V+ (> 50, provisional)")
     hb = max((int(m["heartbeat_dependent_daa"] or 0) for m in models.values()), default=0)
     span = max(1, (lines[-1]["daa"] - lines[0]["daa"]))
     if hb * 1000 > span * bounds["hb_max_permille"]:
         fails.append(f"heartbeat-dependent {hb} of {span} DAA")
     return {"models": models, "fails": fails, "values": manifest.get("values"), "scenario": manifest.get("scenario"),
+            "real_blocks": real, "invariant_violations": violations,
             "epoch_clock (V5: measured, not assumed)": epoch_clock(lines)}
 
 
@@ -254,6 +309,10 @@ def cmd_summarize(a):
     manifest = json.loads(Path(a.manifest).read_text())
     bounds = {"track_tol_ppm": a.track_tol_ppm, "unminted_max_permille": a.unminted_max_permille,
               "hb_max_permille": a.hb_max_permille, "surge_min_permille": a.surge_min_permille}
+    # V6: the same scenario's run WITHOUT V+ is the REAL-production baseline (no baseline: the degradation condition is reported
+    # as UNKNOWN by `select`, never as passed).
+    if a.baseline:
+        bounds["baseline_real_blocks"] = int(json.loads(Path(a.baseline).read_text()).get("real_blocks") or 0)
     s = summarize(lines, manifest, bounds)
     s["bounds"] = bounds
     Path(a.out).write_text(json.dumps(s, indent=1))
@@ -269,7 +328,9 @@ def cmd_select(a):
     region, conflicts = [], {}
     for key, runs in points.items():
         fails = [f"{r.get('scenario')}: {x}" for r in runs for x in (r.get("fails") or [])] + \
-                [f"{r.get('scenario')}: {r['error']}" for r in runs if r.get("error")]
+                [f"{r.get('scenario')}: {r['error']}" for r in runs if r.get("error")] + \
+                [f"{r.get('scenario')}: REAL degradation vs no-V+ UNKNOWN (no --baseline): V6 is not passed by default"
+                 for r in runs if not (r.get("bounds") or {}).get("baseline_real_blocks")]
         (conflicts.__setitem__(key, fails) if fails else region.append(json.loads(key)))
     print(json.dumps({"passing_region": region, "conflicts": conflicts}, indent=1))
     if not region:
@@ -293,6 +354,17 @@ def self_test():
     s = summarize(lines, {"roles": {"A": {"bond_heavy_with_compute": True}}},
                   {"track_tol_ppm": 300_000, "unminted_max_permille": 100, "hb_max_permille": 100, "surge_min_permille": 0})
     assert s["models"]["A"]["physical_blocks"] == 80
+    assert any("invariant" in f for f in summarize(
+        [{"daa": 0, "report": {"reportJson": json.dumps({"models": [
+            {"model": "B", "targets": {"rightsIssued": "10"}, "outcomes": {"rightsConsumed": "13"}}]})}}],
+        {"values": {"sigma_permille": 250}}, {"track_tol_ppm": 0, "unminted_max_permille": 1000, "hb_max_permille": 1000,
+                                              "surge_min_permille": 0})["fails"]), "13 > 10 · 1.25 is a violation"
+    deg = summarize(lines, {}, {"track_tol_ppm": 0, "unminted_max_permille": 1000, "hb_max_permille": 1000,
+                                "surge_min_permille": 0, "baseline_real_blocks": 100})
+    assert any("degraded 200" in f for f in deg["fails"]), deg["fails"]
+    cap = summarize(lines, {"roles": {"A": {"honest_minimal_cap_blocks": 120}}},
+                    {"track_tol_ppm": 10**9, "unminted_max_permille": 1000, "hb_max_permille": 1000, "surge_min_permille": 0})
+    assert any("honest minimal" in f for f in cap["fails"]), "80 of 120 < 800 permille"
     clock = epoch_clock([{"daa": 0, "wall": 0.0, "report": {}}, {"daa": 720, "wall": 720 * 150.0, "report": {}}])
     assert clock["observed_epoch_wall_hours"] == 30.0 and clock["drift_permille_vs_nominal"] == 250.0, clock
     assert "24 h" not in clock["label"]
@@ -325,6 +397,7 @@ def main():
     s.add_argument("--out", required=True)
     for b in ("track_tol_ppm", "unminted_max_permille", "hb_max_permille", "surge_min_permille"):
         s.add_argument("--" + b.replace("_", "-"), dest=b, type=int, required=True)
+    s.add_argument("--baseline", default=None, help="summary.json of the same scenario without V+ (V6 REAL degradation)")
     sel = sub.add_parser("select")
     sel.add_argument("--summaries", nargs="+", required=True)
     a = p.parse_args()
