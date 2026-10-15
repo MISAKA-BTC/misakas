@@ -811,7 +811,8 @@ fn credit(
     if builder.state.pending_payouts.contains_key(&queue) {
         return Err(bad("native39 original job-specific actual queue already exists"));
     }
-    let finder_payout = match finder {
+    // G14 lane closure G-14: a conviction of a drained bond may collect nothing for its finder; nothing is then paid.
+    let finder_payout = match finder.filter(|_| s.finder_credit != 0) {
         Some(f) => {
             let bond = builder.state.bonds.get(&f).ok_or_else(|| bad("native39 actual finder absent"))?;
             if bond.operator_id.as_bytes() == h.original.producer_operator || s.finder_credit == 0 {

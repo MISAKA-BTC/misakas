@@ -837,3 +837,27 @@ fold 水準の試験は署名を合成し、署名検証後の半分(`apply_veri
 7. tag 170/171 の A-2 wire pin を Rust 試験で確定し、native inventory 生成器を再実行して、手で直した 4 行(`PalwTransitionExtrasV1`、`PalwTirPublicSpentV1`)と一致させること。
 8. V1〜V7 と drill D-05 / D-06 / D-07 / D-18 を、出荷 binary で fence をまたいで実行すること(D-05 / D-06 は 1 が前提)。
 9. 能動的に demand を続ける owner による slot 占有の費用と継続時間の評価(G-T1 の残り)。
+
+## 付録 B. lane 閉鎖で変わった行列 cell(2026-10-16、branch `integ/g14-close-lanes` @ `5bdd427fb`)
+
+本文(§0〜§6)は監査時点 `f244ed92d` の記録として残し、書き換えない。この付録は §3.4〜§3.6 の「武装時」列のうち、閉鎖 commit で変わった cell だけを記す。
+DAA 14,000 の P14-min / P14-g14 列(3 lane とも OUT-OF-SCOPE)は変わらない。新しい規則は各 lane 自身の fence(`palw_probabilistic_constraints_v1`、
+`palw_exec_payload_v2`、native funded / Final27 / v39)の下だけで効き、全 preset で `None`・validation が武装を拒否する。`Params` の field は足していない
+(t12 の `palw_t12_flag_day_9000` 9 件と `shipped_presets_have_pinned_fingerprints` が通り、params id / identity は不変)。fence を DAA 0 にしても成り立つ。
+
+| lane | F | 旧(武装時) | 新(武装時) | 変更 | 試験(水準・結果) |
+|---|---|---|---|---|---|
+| Kernel / OPV | F16 | PARTIAL(seat は無傷、G-K1) | **COVERED** | 数えられた passing receipt ごとに署名者責任 lock(kernel aux 143 `0x01`、ADR-0151 の seat lock 関係)。committed に入り責任期限まで退出不可、有罪で 1 回 slash、期限・timeout で解放(`palw_g14_lane_closure_fold_v1.rs`、`palw_kernel_route_fold_v1.rs:1237`・`:2085`・`:2148`) | T-N11 `kernel_route_valid_signers_are_charged_on_conviction`(node、本番 onboarding 経路で attestation hook なし、Final 前・Final 後・正直 claim の解放、replay)PASS |
+| Kernel / OPV | F19 | COVERED | COVERED(seat にも退出保留) | 署名者 lock が V2 committed に入る(`palw_kernel_route_v1.rs:605`) | 同上 |
+| Kernel / OPV | F08(v4) | PARTIAL(v4 の material は block body のみ、pruning 規則なし、G-K4) | PARTIAL(pruning 規則あり、v4 は報酬対象外のまま) | segmented claim に最初に応答した block を記録(aux 143 `0x02`)し、claim が有罪にできる間は pruning point がそれを越えない(`processor/palw.rs:815`) | node 回帰のみ(下記)。専用試験は未作成 |
+| EXEC slice | F16 | GAP(REAL root の V2 署名者を課金しない、G-X1) | **COVERED** | REAL claim 自身の piece(prefix claim)が反証されたら V2 Valid 署名者を S4(covering-signer funnel、1 回)。後続 executor の slice は V2 seat が署名していないので課金せず、その kernel claim と receipt 署名者(G-K1)が負う(`palw_exec_v2_fold.rs:1675`) | T-N12 `exec_real_root_v2_signers_are_charged_when_a_slice_is_proven_false`(fold、EXEC fence 0)PASS。`a_pending_prefix_holds…`(fold)を新規則に更新 PASS |
+| native funded | F22 | GAP(担保不足で裁定拒否、G-14) | PARTIAL | v11 / v16 source / v29 / v39 の裁定・default は担保不足で拒否しない:void・依頼者へ escrow 返金・残る担保だけ徴収、finder は徴収額に比例(`palw_g14_lane_closure_v1.rs` の `palw_native_*`、各 fold の G-14 注記) | T-N13 `native_conviction_is_not_refused_for_short_collateral_v29` / `_v39`(book 水準)PASS。fold / node 水準は native の harness が repository に無く未作成 |
+| native funded | F18 | PARTIAL(finder ≤ 1000‰) | PARTIAL(finder ≤ 490‰) | native policy の finder 取り分を ADR-0032 の 49 % 以下に制限(`palw_flat_execution_v11.rs:1015`)。正直な finder の誘因は G-K3 と同じく未解決 | unit `g14_lane_closure_values_come_from_documented_relations` PASS |
+| native funded | F13 | GAP(4 枠の先取り、G-N1) | PARTIAL | v39:期限切れ owner が枠を返す(`palw_native_protected_fold_v39.rs:250`・`:601`)。v11 / v29 は未解決(下記) | 試験なし(native harness 無し) |
+
+集計(§3.9 の C 行、武装時の参考):Kernel / OPV 11/8/2/2/1 → 12/7/2/2/1、native funded 0/17/4/2/1 → 0/19/2/2/1、EXEC slice 13/5/3/2/1 → 14/5/2/2/1。
+
+**閉じていないもの:** G-N1 の v11 / v29(4 枠は producer が前払いした回答義務の上限でもあり、kernel quota の subject 計数と lifetime catalogue の再設計が要る)、
+G-N2(v39 mining claim の Final 後の公開告発:job quota interval を越える告発の搬送、material 保持、attestor の責任額、veto は RFC-0018 U-6 のユーザー判断)、
+G-K2(EXEC REAL root の seam `exec_v2_test_admit_class_v1` は GAP-81 のまま。kernel の Panel 許可 class は T-N11 が seam なしで通す)、
+G-K3(検証者誘因 P0:readiness matrix の案 A / B の選択はユーザー判断)、native の fold / node 試験。

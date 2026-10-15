@@ -676,11 +676,16 @@ async fn g14_k2s_a_demanded_position_served_on_chain_is_checked_from_the_blocks_
             answers.push((0usize, o));
         }
     }
+    let first_served_floor = w.net.chain.tip_state().1.last_point().map_or(0, |point| point.blue_score);
     w.net.send_all(answers).await;
     let ledger = w.net.ledger();
     for &p in &missing {
         assert!(ledger.seg_progress.get(&(lie.id, 0, p)).is_some_and(|g| g.complete_daa.is_some()), "position {p} served on chain");
     }
+    // G14 lane closure G-K4: the served parts live only in these blocks' bodies — the route records the first block that carried one,
+    // and the pruning point may not pass it while the claim can still be convicted.
+    let ceiling = w.net.api().unwrap().served_material_pruning_ceiling_v1().expect("the first serving block is recorded");
+    assert!(ceiling > first_served_floor, "the ceiling is a block that carried a response ({ceiling} > {first_served_floor})");
     assert!(ledger.demands.keys().all(|(c, _, _)| *c != lie.id), "both demands closed by service");
     // The fresh verifier: the record from the read API, the parts from the blocks.
     let mut positions = BTreeMap::new();
@@ -711,6 +716,11 @@ async fn g14_k2s_a_demanded_position_served_on_chain_is_checked_from_the_blocks_
     assert!(matches!(ledger.claims[&lie.id].life.state, ClaimStateV1::Convicted { .. }));
     assert!(w.net.slashed(0) > slashed_before, "the producer's real bond is slashed");
     assert_eq!(w.net.kernel_reserved(outsider), 0, "the demand bonds return with the conviction");
+    assert_eq!(
+        w.net.api().unwrap().served_material_pruning_ceiling_v1(),
+        None,
+        "G-K4: a decided claim no longer holds the pruning point back"
+    );
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay of a conviction from served material");
 }

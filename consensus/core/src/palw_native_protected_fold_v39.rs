@@ -247,6 +247,7 @@ fn admit(
         .and_then(|n| n.checked_add(temporal.proof_window))
         .ok_or_else(|| bad("native39 paid full stream horizon overflow"))?;
     if operator == h.original.producer_operator
+        // G14 lane closure G-N1: live owners (an expired owner's slot is freed at its expiry).
         || st.admitted >= 4
         || ctx.daa_score > latest
         || until >= h.original.deadline
@@ -468,7 +469,12 @@ fn proof_part(
     }
     let proof =
         object_id(b"misaka-palw/native/original-independent-court-verdict/v39", &(h.id, h.original.root(), o.id, o.paid, o.proof));
-    let s = book.convict(ctx.daa_score, proof, h.original.reserve, o.operator).map_err(bad)?;
+    // G14 lane closure G-14: the conviction collects what the producer's bond still holds of the reserve, never refused for less.
+    let collectible = crate::palw_g14_lane_closure_v1::palw_native_producer_collectible_v1(
+        builder.state.bonds.get(&h.original.producer).map(|b| b.collateral),
+        h.original.reserve,
+    );
+    let s = book.convict(ctx.daa_score, proof, collectible, o.operator).map_err(bad)?;
     o.spent = true;
     write_owner(builder, &o)?;
     super::credit(builder, ctx, p, &mut h, &book, &s, Some(*signer))
@@ -592,6 +598,10 @@ fn expire(
     }
     let slot = st.owners.iter().position(|v| *v == id).unwrap();
     st.owners[slot] = [0; 64];
+    // G14 lane closure G-N1: an owner that ran out its window without a conviction frees its prosecution slot — `admitted` counts the
+    // live owners, so four idle owners can no longer hold an honest outside verifier off the claim until Final. Each new owner pays its
+    // own tariff again; the expired owner's archive row (kind 39) stays.
+    st.admitted = st.admitted.checked_sub(1).ok_or_else(|| bad("native39 expiry original owner count absent"))?;
     put_rows(builder, &g, &a, &s)?;
     write_status(builder, &st)?;
     builder.write_kernel_row(TABLE, k(39, &id), Some(b(&(o.root(), o.paid, o.proof, o.job, o.claim, o.funding, o.until))))?;

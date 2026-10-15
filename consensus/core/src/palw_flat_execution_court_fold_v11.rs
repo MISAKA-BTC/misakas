@@ -276,14 +276,19 @@ pub(super) fn reveal(
         finder: actor,
         kind,
     };
-    let collateral =
-        builder.state.bonds.get(&row.header.producer).ok_or_else(|| refused("native original producer absent"))?.collateral;
-    if collateral < claim.reserved_original {
-        return Err(refused("native original slash no longer conserved"));
-    }
-    let s = book.adjudicate(class.record(), &result, claim.reserved_original).map_err(refused)?;
+    // G14 lane closure G-14: a conviction is never refused for short collateral (another lane may have drained the bond): the claim
+    // is voided and the requester refunded from its own escrow, and what the producer's bond still holds of the reserve is collected.
+    let collectible = crate::palw_g14_lane_closure_v1::palw_native_producer_collectible_v1(
+        builder.state.bonds.get(&row.header.producer).map(|b| b.collateral),
+        claim.reserved_original,
+    );
+    let s = book.adjudicate(class.record(), &result, collectible).map_err(refused)?;
     close_adjudicated_quota(builder, ctx, p, id, &class, &book, &plan, *signer)?;
-    let collected = builder.slash_bond(row.header.producer, s.collected_original_slash as u128)?;
+    let collected = if s.collected_original_slash == 0 {
+        0
+    } else {
+        builder.slash_bond(row.header.producer, s.collected_original_slash as u128)?
+    };
     if collected != s.collected_original_slash {
         return Err(refused("native court collected a different original slash"));
     }

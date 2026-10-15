@@ -418,8 +418,13 @@ impl NativeTextBookV29 {
                 || (b.terminal == NativeTextTerminalV29::Convicted
                     && (s.requester != s.escrow_debit
                         || s.producer != 0
-                        || s.actual_collected_slash != b.funded.maximum.producer_reserve
-                        || s.finder_credit != b.funded.maximum.finder_award
+                        // G14 lane closure G-14: what the bond still held (≤ the reserve, checked above), the award scaled to it.
+                        || s.finder_credit
+                            != crate::palw_g14_lane_closure_v1::palw_native_scaled_finder_award_v1(
+                                b.funded.maximum.finder_award,
+                                b.funded.maximum.producer_reserve,
+                                s.actual_collected_slash,
+                            )
                         || s.proof == [0; 64]))
             {
                 return Err("text29 restored terminal original principal and collected collateral differ".into());
@@ -530,11 +535,16 @@ impl NativeTextBookV29 {
             || proof == [0; 64]
             || finder == self.funded.request.producer
             || finder_operator == self.funded.request.producer_operator
-            || actual_collected != self.funded.maximum.producer_reserve
-            || self.funded.maximum.finder_award > actual_collected
+            // G14 lane closure G-14: never refused for short collateral — at most the reserve, whatever the bond still holds.
+            || actual_collected > self.funded.maximum.producer_reserve
         {
             return Err("text29 original independent court/default and actual collateral differ".into());
         }
+        let finder_award = crate::palw_g14_lane_closure_v1::palw_native_scaled_finder_award_v1(
+            self.funded.maximum.finder_award,
+            self.funded.maximum.producer_reserve,
+            actual_collected,
+        );
         self.settle(NativeTextSettlementV29 {
             job: self.funded.id(),
             original_funding: self.funded.root(),
@@ -545,8 +555,8 @@ impl NativeTextBookV29 {
             requester: self.escrow,
             actual_collected_slash: actual_collected,
             finder,
-            finder_credit: self.funded.maximum.finder_award,
-            burned: actual_collected - self.funded.maximum.finder_award,
+            finder_credit: finder_award,
+            burned: actual_collected - finder_award,
             proof,
         })
     }
@@ -627,6 +637,97 @@ mod tests {
         for bad in [vec![], vec![1], vec![9, 1], vec![1, 9, 9], vec![10, 9], vec![1; 11]] {
             assert!(check_generated_v29(&r, 10, &bad).is_err());
         }
+    }
+
+    /// A Challengeable text29 book (fixture: reserve 1,000, finder award 490 = 49 %).
+    fn challengeable() -> NativeTextBookV29 {
+        let d = |n: u8| [n; 64];
+        let request = request();
+        let maximum = NativeTextMaximumV29 {
+            version: 29,
+            request: request.root(),
+            program: d(10),
+            parameter: d(11),
+            inventory: d(12),
+            class_maximum_positions: 33,
+            class_scope25: d(13),
+            class_resource29: d(14),
+            maximum_positions: 33,
+            maximum_scope25: d(15),
+            maximum_resource29: d(16),
+            full_court_profile25: d(17),
+            final_policy27: d(18),
+            final_basis27: d(19),
+            source_acquisition: d(20),
+            public_pursuit: d(21),
+            physical_lease_plan: d(22),
+            original_shared_quota_plan: d(23),
+            original_fee_plan: d(24),
+            paged_proof_plan: d(25),
+            source_caller_plan: d(26),
+            queue_policy: d(27),
+            queue_plan: d(28),
+            challenge_window: 30,
+            retention_tail: 5,
+            commit_window: 10,
+            complete_job_horizon: 200,
+            producer_reserve: 1_000,
+            finder_award: 490,
+        };
+        let funded = NativeTextFundingV29 {
+            request,
+            maximum,
+            consent: d(30),
+            escrow_debit: d(31),
+            maximum_reservation: d(32),
+            original_shared_subject: d(33),
+            admitted_daa: 10,
+            admitted_interval: 0,
+            commit_deadline: 20,
+            deadline: 210,
+        };
+        let claim = NativeTextClaimV29 {
+            job: funded.id(),
+            producer: d(4),
+            vector: d(40),
+            trace: d(41),
+            final_state: d(42),
+            actual_positions: 26,
+            actual_generated: 2,
+            generated_root: d(43),
+            actual_scope25: d(44),
+            actual_resource29: d(45),
+            stop: NativeTextStopV29::FirstEos,
+            committed_daa: 15,
+            challenge_end: 45,
+            retained_until: 60,
+        };
+        let reward = funded.request.reward;
+        NativeTextBookV29 {
+            funded,
+            claim: Some(claim),
+            terminal: NativeTextTerminalV29::Challengeable,
+            escrow: reward,
+            settlement: None,
+        }
+    }
+
+    /// **T-N13 (text29 book): a conviction is never refused for short collateral** (G14 lane closure G-14).
+    #[test]
+    fn native_conviction_is_not_refused_for_short_collateral_v29() {
+        let (proof, finder, finder_operator) = ([0x51; 64], [0x61; 64], [0x71; 64]);
+        let mut full = challengeable();
+        let s = full.convict(proof, finder, finder_operator, 1_000, 40).expect("a full collection convicts");
+        assert_eq!((s.actual_collected_slash, s.finder_credit, s.burned, s.requester, s.producer), (1_000, 490, 510, 20, 0));
+        let mut short = challengeable();
+        let s = short.convict(proof, finder, finder_operator, 400, 40).expect("never refused for short collateral");
+        assert_eq!(short.terminal(), NativeTextTerminalV29::Convicted);
+        assert_eq!((s.actual_collected_slash, s.finder_credit, s.burned), (400, 196, 204), "the award scaled to what was collected");
+        assert_eq!((s.requester, s.producer), (20, 0), "the requester is refunded from its own escrow");
+        let mut empty = challengeable();
+        let s = empty.convict(proof, finder, finder_operator, 0, 40).expect("a drained bond still loses the claim");
+        assert_eq!((s.actual_collected_slash, s.finder_credit, s.requester), (0, 0, 20));
+        assert!(challengeable().convict(proof, finder, finder_operator, 1_001, 40).is_err(), "never more than the reserve");
     }
 }
 

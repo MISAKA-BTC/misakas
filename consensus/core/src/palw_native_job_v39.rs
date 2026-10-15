@@ -367,10 +367,16 @@ impl NativeJobBookV39 {
                         }
                     }
                     NativeJobTerminalV39::Convicted => {
+                        // G14 lane closure G-14: a conviction collects what the bond still held (≤ the reserve, checked above);
+                        // the finder is paid the award scaled to it.
                         if s.producer_credit != 0
                             || s.requester_credit != self.original.reward
-                            || s.actual_slash != self.original.reserve
-                            || s.finder_credit != self.original.finder
+                            || s.finder_credit
+                                != crate::palw_g14_lane_closure_v1::palw_native_scaled_finder_award_v1(
+                                    self.original.finder,
+                                    self.original.reserve,
+                                    s.actual_slash,
+                                )
                             || s.proof == [0; 64]
                             || s.established > self.original.deadline
                         {
@@ -501,7 +507,8 @@ impl NativeJobBookV39 {
             || now < self.original.admitted
             || now > self.original.deadline
             || proof == [0; 64]
-            || actual_collected != self.original.reserve
+            // G14 lane closure G-14: never refused for short collateral — at most the reserve, whatever the bond still holds.
+            || actual_collected > self.original.reserve
             || finder_operator == self.original.producer_operator
             || finder_operator == [0; 64]
         {
@@ -520,7 +527,15 @@ impl NativeJobBookV39 {
             return Err("native39 original escrow already settled".into());
         }
         let producer_credit = if terminal == NativeJobTerminalV39::Final { self.original.reward } else { 0 };
-        let finder_credit = if terminal == NativeJobTerminalV39::Convicted { self.original.finder } else { 0 };
+        let finder_credit = if terminal == NativeJobTerminalV39::Convicted {
+            crate::palw_g14_lane_closure_v1::palw_native_scaled_finder_award_v1(
+                self.original.finder,
+                self.original.reserve,
+                actual_slash,
+            )
+        } else {
+            0
+        };
         let s = NativeSettlementV39 {
             version: 39,
             job: self.id(),
@@ -1300,3 +1315,101 @@ pub fn native_consent_body_digest_v39(raw: &[u8]) -> Digest {
 // Exhaustive read-only native input allocation inventory; no consensus encoding change.
 #[path = "palw_native_resource_v1/private/palw_native_job_v39.rs"]
 mod native_resource_inventory_v1;
+
+#[cfg(test)]
+mod g14_lane_closure_tests {
+    //! T-N13 (v39 book): a conviction is never refused for short collateral (G14 lane closure G-14).
+    use super::*;
+
+    fn bond(n: u64) -> PalwBondKeyV2 {
+        PalwBondKeyV2(crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_u64_word(n), index: 0 })
+    }
+
+    fn challengeable(reserve: u64, finder: u64) -> NativeJobBookV39 {
+        let d = |n: u8| [n; 64];
+        let original = NativeJobOriginalV39 {
+            version: 39,
+            class: d(1),
+            source: d(2),
+            policy: d(3),
+            maximum: d(4),
+            class_scope: d(5),
+            class_resources: d(6),
+            maximum_scope: d(7),
+            maximum_resources: d(8),
+            maximum_positions: 16,
+            input_manifest: d(9),
+            quota: d(10),
+            shared_plan: d(11),
+            source_plan: d(12),
+            paged_plan: d(13),
+            consent: d(14),
+            maximum_contract: d(15),
+            transport: d(16),
+            queue: d(17),
+            physical: d(18),
+            final_policy: d(19),
+            final_authority: d(20),
+            final_basis: d(21),
+            requester: bond(1),
+            producer: bond(2),
+            requester_operator: d(22),
+            producer_operator: d(23),
+            nonce: d(24),
+            reward: 100,
+            reserve,
+            finder,
+            actual_debit: 100,
+            debit_receipt: d(25),
+            admitted_block: d(26),
+            admitted: 10,
+            interval: 0,
+            commit_until: 20,
+            challenge_window: 30,
+            final_tail: 5,
+            deadline: 200,
+        };
+        let claim = NativeAcceptedClaimV39 {
+            claim: d(30),
+            actual_scope: d(31),
+            actual_resources: d(32),
+            input_binding: d(33),
+            generated: d(34),
+            positions: 16,
+            committed: 15,
+            challenge_end: 45,
+            final_after: 50,
+        };
+        NativeJobBookV39 {
+            version: 39,
+            original,
+            claim: Some(claim),
+            terminal: NativeJobTerminalV39::Challengeable,
+            escrow: 100,
+            settlement: None,
+        }
+    }
+
+    #[test]
+    fn native_conviction_is_not_refused_for_short_collateral_v39() {
+        let finder_operator = [0x77; 64];
+        // Full collection: unchanged — the whole reserve, the whole finder award (≤ 490‰ of it), the rest burned.
+        let mut full = challengeable(1_000, 490);
+        let s = full.convict(40, [0x51; 64], 1_000, finder_operator).expect("a full collection convicts");
+        assert_eq!((s.actual_slash, s.finder_credit, s.burned), (1_000, 490, 510));
+        assert_eq!((s.requester_credit, s.producer_credit), (100, 0), "the requester is refunded its whole escrow");
+        // A bond another lane drained to 400: the conviction still voids the claim and refunds the requester; 400 is collected and
+        // the finder is paid the award scaled to it — never more than was collected, ≥ 51 % still burned.
+        let mut short = challengeable(1_000, 490);
+        let s = short.convict(40, [0x51; 64], 400, finder_operator).expect("never refused for short collateral");
+        assert_eq!(short.terminal(), NativeJobTerminalV39::Convicted);
+        assert_eq!((s.actual_slash, s.finder_credit, s.burned), (400, 196, 204));
+        assert_eq!((s.requester_credit, s.producer_credit), (100, 0), "the requester's refund is its own escrow, not the slash");
+        // A bond drained to nothing: still convicted and refunded; nothing to collect, nothing paid to the finder.
+        let mut empty = challengeable(1_000, 490);
+        let s = empty.convict(40, [0x51; 64], 0, finder_operator).expect("a drained bond still loses the claim");
+        assert_eq!((s.actual_slash, s.finder_credit, s.burned, s.requester_credit), (0, 0, 0, 100));
+        // Never more than the reserve.
+        assert!(challengeable(1_000, 490).convict(40, [0x51; 64], 1_001, finder_operator).is_err());
+    }
+}

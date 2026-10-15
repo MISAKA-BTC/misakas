@@ -673,14 +673,13 @@ pub(super) fn default(
         b"misaka-palw/native/text-objective-original-response-default/v29",
         &(d.id, d.claim, d.source, d.lease, d.deadline, d.proof_until, ctx.block.as_bytes(), ctx.daa_score),
     );
+    // G14 lane closure G-14: the default collects what the producer's bond still holds of the reserve, never refused for less.
+    let collectible = crate::palw_g14_lane_closure_v1::palw_native_producer_collectible_v1(
+        builder.state.bonds.get(&h.producer).map(|v| v.collateral),
+        b.funding().maximum.producer_reserve,
+    );
     let s = b
-        .convict(
-            proof,
-            palw_kernel_bond_id_v1(signer),
-            finder.operator_id.as_bytes(),
-            b.funding().maximum.producer_reserve,
-            ctx.daa_score,
-        )
+        .convict(proof, palw_kernel_bond_id_v1(signer), finder.operator_id.as_bytes(), collectible, ctx.daa_score)
         .map_err(refused)?;
     settle(builder, ctx, p, &mut h, &b, &s, Some(signer))?;
     close(builder, d)

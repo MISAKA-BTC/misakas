@@ -585,7 +585,35 @@ impl PalwKernelRouteStateV1 {
     /// What the route holds against a V2 bond — the ledger's reservations (a claim's collateral, a demand bond) and the deposits of
     /// its open chunk groups: the term V2's committed-collateral ledger adds, so no V2 gate counts it as free.
     pub fn reserved_of(&self, bond: &PalwBondKeyV2) -> u64 {
-        self.ledger_reserved_of(bond).saturating_add(self.chunk_deposits_of_v1(bond))
+        self.ledger_reserved_of(bond).saturating_add(self.chunk_deposits_of_v1(bond)).saturating_add(self.signer_locks_of_v1(bond))
+    }
+
+    /// **G14 lane closure G-K4: the lowest blue score the pruning point may reach** — the first block that served material of a
+    /// segmented claim that is still convictable (aux 143, `0x02`). `None`: no such material (every network below the route's fence).
+    pub fn served_material_pruning_ceiling_v1(&self) -> Option<u64> {
+        use crate::palw_g14_lane_closure_v1::*;
+        self.aux
+            .range((PALW_G14_LANE_CLOSURE_TABLE_V1, vec![PALW_SERVED_MATERIAL_PREFIX_V1])..)
+            .take_while(|((table, key), _)| {
+                *table == PALW_G14_LANE_CLOSURE_TABLE_V1 && key.first() == Some(&PALW_SERVED_MATERIAL_PREFIX_V1)
+            })
+            .filter_map(|(_, bytes)| borsh::from_slice::<PalwServedMaterialRowV1>(bytes).ok())
+            .map(|row| row.first_blue_score)
+            .min()
+    }
+
+    /// **G14 lane closure G-K1: the signer liability locks `bond` holds** (aux 143, `0x01 ‖ seat ‖ claim`; [`crate::palw_g14_lane_closure_v1`])
+    /// — outside the ledger, like a chunk deposit, so the ledger is synced net of them and never lends them to a claim; in V2's committed
+    /// ledger, so the bond cannot exit while one is held. 0 below the route's fence (no row is ever written there).
+    pub fn signer_locks_of_v1(&self, bond: &PalwBondKeyV2) -> u64 {
+        use crate::palw_g14_lane_closure_v1::*;
+        let prefix = palw_kernel_signer_lock_seat_prefix_v1(&palw_kernel_bond_id_v1(bond));
+        self.aux
+            .range((PALW_G14_LANE_CLOSURE_TABLE_V1, prefix.clone())..)
+            .take_while(|((table, key), _)| *table == PALW_G14_LANE_CLOSURE_TABLE_V1 && key.starts_with(&prefix))
+            .filter_map(|(_, bytes)| borsh::from_slice::<PalwKernelSignerLockRowV1>(bytes).ok())
+            .map(|row| row.amount)
+            .fold(0u64, u64::saturating_add)
     }
 
     /// What the kernel LEDGER has reserved against a V2 bond (its `BondRowV1::reserved`). The ledger is synced net of everything
