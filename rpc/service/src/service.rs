@@ -2397,6 +2397,36 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     })
                 })
                 .collect(),
+            // RFC-0019: the annual model catalog this binary carries, read at the tip (pure: Params and a height). Not scheduled on
+            // every shipped network. Readiness is never a node field (it is measured off-chain and is never a vote).
+            annual_catalog: {
+                let s = kaspa_consensus_core::palw_annual_catalog_v1::palw_annual_catalog_status_v1(&self.config.params, read.tip_daa);
+                kaspa_rpc_core::RpcPalwAnnualCatalogStatus {
+                    scheduled: s.scheduled,
+                    fence_daa: s.fence_daa,
+                    active: s.active,
+                    current_edition: s.current_edition,
+                    current_root: if s.scheduled { s.current_root.to_string() } else { String::new() },
+                    has_next: s.next_activation_daa.is_some(),
+                    next_edition: s.next_edition.unwrap_or(0),
+                    next_activation_daa: s.next_activation_daa.unwrap_or(0),
+                    next_root: s.next_root.map(|r| r.to_string()).unwrap_or_default(),
+                    editions: s
+                        .editions
+                        .iter()
+                        .map(|e| kaspa_rpc_core::RpcPalwAnnualCatalogEdition {
+                            edition: e.edition,
+                            activation_daa: e.activation_daa,
+                            previous_root: e.previous_root.to_string(),
+                            root: e.root.to_string(),
+                            models: e.models,
+                            lifecycle: e.lifecycle.name().to_string(),
+                        })
+                        .collect(),
+                    kernel_version_max: s.kernel_version_max as u32,
+                    readiness: "off-chain".to_string(),
+                }
+            },
         };
         // RFC-0002 Part II §II.7.4: what blocks each class and at which stage, read off the response the node just built
         // (one pure function, shared with the CLI, which derives the same reading for a node that serves none).

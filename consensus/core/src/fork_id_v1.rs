@@ -279,6 +279,12 @@ pub fn fork_id_gate_fences_v1(params: &Params) -> Vec<u64> {
         .map(|fence| fence.daa_score())
         .filter(|&score| score != 0 && score != u64::MAX)
         .collect();
+    // **RFC-0019 §7.3: every annual catalog edition's height gates too.** An edition is a fence an un-upgraded binary does not carry
+    // (it changes the allocation weights from its height), but it lives inside `palw_model_tier_v1`'s value, so `palw_fences_v1`
+    // names only the tier fence's own height. ORed in HERE, as the doc above asks: before the edition a peer lacking it is a warning
+    // (the identity id still matches — the edition left it in normalisation), from its height a refusal, so a node still on the
+    // old binary is cut off by name rather than silently extending the old weights.
+    fences.extend(params.palw_annual_catalog_activations_v1().into_iter().filter(|&score| score != 0 && score != u64::MAX));
     fences.sort_unstable();
     fences.dedup();
     fences

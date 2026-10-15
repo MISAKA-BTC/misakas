@@ -2119,6 +2119,33 @@ from!(item: &kaspa_rpc_core::RpcPalwClassSeating, protowire::RpcPalwClassSeating
         licensable_share_permille: item.licensable_share_permille.into(),
     }
 });
+// RFC-0019: the annual catalog (registry response v4 / proto field 41).
+from!(item: &kaspa_rpc_core::RpcPalwAnnualCatalogEdition, protowire::RpcPalwAnnualCatalogEdition, {
+    Self {
+        edition: item.edition,
+        activation_daa: item.activation_daa,
+        previous_root: item.previous_root.clone(),
+        root: item.root.clone(),
+        models: item.models,
+        lifecycle: item.lifecycle.clone(),
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwAnnualCatalogStatus, protowire::RpcPalwAnnualCatalogStatus, {
+    Self {
+        scheduled: item.scheduled,
+        fence_daa: item.fence_daa,
+        active: item.active,
+        current_edition: item.current_edition,
+        current_root: item.current_root.clone(),
+        has_next: item.has_next,
+        next_edition: item.next_edition,
+        next_activation_daa: item.next_activation_daa,
+        next_root: item.next_root.clone(),
+        editions: item.editions.iter().map(protowire::RpcPalwAnnualCatalogEdition::from).collect(),
+        kernel_version_max: item.kernel_version_max,
+        readiness: item.readiness.clone(),
+    }
+});
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelRegistryResponse>, protowire::GetPalwModelRegistryResponseMessage, {
     Self {
         available: item.available,
@@ -2161,6 +2188,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelRegistryResponse>, protowire:
         final_work_epochs: item.final_work_epochs,
         blocking: item.blocking.iter().map(protowire::RpcPalwClassBlocking::from).collect(),
         seating: item.seating.iter().map(protowire::RpcPalwClassSeating::from).collect(),
+        annual_catalog: Some((&item.annual_catalog).into()),
         error: None,
     }
 });
@@ -4673,6 +4701,43 @@ try_from!(item: &protowire::GetPalwModelRegistryResponseMessage, RpcResult<kaspa
         final_work_epochs: item.final_work_epochs,
         blocking: item.blocking.iter().map(kaspa_rpc_core::RpcPalwClassBlocking::from).collect(),
         seating: item.seating.iter().map(kaspa_rpc_core::RpcPalwClassSeating::try_from).collect::<Result<Vec<_>, _>>()?,
+        // RFC-0019 (proto field 41): absent from a node before it — read as not scheduled.
+        annual_catalog: item
+            .annual_catalog
+            .as_ref()
+            .map(kaspa_rpc_core::RpcPalwAnnualCatalogStatus::try_from)
+            .transpose()?
+            .unwrap_or_default(),
+    }
+});
+try_from!(item: &protowire::RpcPalwAnnualCatalogEdition, kaspa_rpc_core::RpcPalwAnnualCatalogEdition, {
+    Self {
+        edition: item.edition,
+        activation_daa: item.activation_daa,
+        previous_root: item.previous_root.clone(),
+        root: item.root.clone(),
+        models: item.models,
+        lifecycle: item.lifecycle.clone(),
+    }
+});
+try_from!(item: &protowire::RpcPalwAnnualCatalogStatus, kaspa_rpc_core::RpcPalwAnnualCatalogStatus, {
+    Self {
+        scheduled: item.scheduled,
+        fence_daa: item.fence_daa,
+        active: item.active,
+        current_edition: item.current_edition,
+        current_root: item.current_root.clone(),
+        has_next: item.has_next,
+        next_edition: item.next_edition,
+        next_activation_daa: item.next_activation_daa,
+        next_root: item.next_root.clone(),
+        editions: item
+            .editions
+            .iter()
+            .map(kaspa_rpc_core::RpcPalwAnnualCatalogEdition::try_from)
+            .collect::<Result<Vec<_>, _>>()?,
+        kernel_version_max: item.kernel_version_max,
+        readiness: item.readiness.clone(),
     }
 });
 try_from!(&protowire::GetPalwRegistrationTermsRequestMessage, kaspa_rpc_core::GetPalwRegistrationTermsRequest);
