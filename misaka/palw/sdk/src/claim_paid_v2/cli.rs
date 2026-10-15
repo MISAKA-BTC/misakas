@@ -4,7 +4,7 @@
 use super::*;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-const USAGE: &str = "palw-class claim-v2 CLASS|JOB|COMMIT|FUND|LOCK|VERIFY|MESSAGE|ROUND-FUND|ROUND-LOCK|ROUND-VERIFY|SIGN|INSPECT|FINAL|COMPACT-COVERAGE|COMPACT-SIGN
+const USAGE: &str = "palw-class claim-v2 CLASS|JOB|COMMIT|FUND|LOCK|VERIFY|MESSAGE|ROUND-FUND|ROUND-LOCK|ROUND-VERIFY|VERIFY-TYPED|SIGN|INSPECT|FINAL|COMPACT-COVERAGE|COMPACT-SIGN
 All commands: --snapshot FILE --ledger-root HEX --aux-root HEX --out FILE
 CLASS: --claim-policy POLICY_BORSH --source-policy SOURCE_BORSH --beacon-policy CHALLENGE_BORSH --base-class HEX --actor BOND_HEX [--rounds N --max-material-bytes N]
 JOB: --class HEX --base-job HEX --actor BOND_HEX --nonce HEX --last-commit DAA --max-consumers N
@@ -16,6 +16,9 @@ MESSAGE: --enrollment HEX --round N --material MATERIAL_BORSH
 ROUND-FUND: --enrollment HEX --round N --actor HEX --fee-policy POLICY_BORSH --fee SOMPI --max-sources N
 ROUND-LOCK: --enrollment HEX --round N
 ROUND-VERIFY: --enrollment HEX --round N --material MATERIAL_BORSH --actor HEX --height DAA
+VERIFY-TYPED: --context HEX --typed-bundle TYPED_BUNDLE_V4_BORSH --tokens TOKENS_BORSH --max-material-bytes N --max-workspace-bytes N --actor BOND_HEX --height DAA
+  (RFC08 checker: the TypedKernelV4 bundle assembled from authenticated provider pages is re-authenticated against the
+  claim's native commitments and reconstructed before the ordinary deterministic check; tokens are public job/claim data)
 SIGN: --draft KERNEL_OBJECT --network ID [--drill-salt HEX] --bond TXID:INDEX --key-file SEED
 INSPECT: --context HEX
 FINAL: --enrollment HEX
@@ -145,6 +148,33 @@ pub fn run(args: &[String]) -> Result<(), String> {
             let verified =
                 paid_claim_sources_from_kernel_rows_v2(&header, rows.clone(), &lr, &ar, &context).map_err(|e| e.to_string())?;
             let checked = verified.verify_material(&material).map_err(|e| e.to_string())?;
+            let complete =
+                checked.complete.ok_or_else(|| format!("claim did not pass complete verification: {:?}", checked.finding))?;
+            verified.receipt(&complete, hash(&mut f, "--actor")?, number(&mut f, "--height")?).map_err(|e| e.to_string())?
+        }
+        "VERIFY-TYPED" => {
+            use kaspa_consensus_core::palw_native_resource_v1::{preflight_native_value_v1, retain_native_value_decode_v1};
+            use kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwTypedKernelMaterialBundleV4;
+            let context = hash(&mut f, "--context")?;
+            let max_material_bytes: u64 = number(&mut f, "--max-material-bytes")?;
+            let max_workspace_bytes: u64 = number(&mut f, "--max-workspace-bytes")?;
+            let raw = read(&take(&mut f, "--typed-bundle")?, usize::try_from(max_material_bytes).map_err(|e| e.to_string())?)?;
+            // Exact bounded wire walk before Borsh allocates the nested unit vectors.
+            preflight_native_value_v1::<PalwTypedKernelMaterialBundleV4>(&raw[..], raw.len() as u64).map_err(|e| e.to_string())?;
+            let bundle = retain_native_value_decode_v1(&raw, || borsh::from_slice::<PalwTypedKernelMaterialBundleV4>(&raw))
+                .map_err(|e| e.to_string())?;
+            let tokens: Vec<u32> = typed(&take(&mut f, "--tokens")?, 64 << 20)?;
+            let verified =
+                paid_claim_sources_from_kernel_rows_v2(&header, rows.clone(), &lr, &ar, &context).map_err(|e| e.to_string())?;
+            let ledger = route.ledger().map_err(|e| e.to_string())?;
+            let reconstructed = typed_material_v4::reconstruct_paid_material_v4(
+                &ledger,
+                &bundle,
+                tokens,
+                typed_material_v4::TypedMaterialLimitsV4 { max_material_bytes, max_workspace_bytes },
+            )
+            .map_err(|e| e.to_string())?;
+            let checked = verified.verify_material(&reconstructed.material).map_err(|e| e.to_string())?;
             let complete =
                 checked.complete.ok_or_else(|| format!("claim did not pass complete verification: {:?}", checked.finding))?;
             verified.receipt(&complete, hash(&mut f, "--actor")?, number(&mut f, "--height")?).map_err(|e| e.to_string())?

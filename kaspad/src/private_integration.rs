@@ -46,6 +46,8 @@ pub(crate) mod recovery_ack_carrier_v4;
 mod recovery_observation_v4;
 mod kernel_paid_producer_v4;
 pub use kernel_paid_producer_v4::PrivateKernelPaidWorkSpecV4;
+mod kernel_paid_check_v4;
+pub use kernel_paid_check_v4::PrivateKernelPaidCheckSpecV4;
 pub use recovery_ack_carrier_v4::PrivateRecoveryAckFeeSpecV4;
 
 pub fn parse_private_recovery_provider_roster_v4(
@@ -456,7 +458,7 @@ pub fn create_private_integration_core_with_native_custody_v4(
     ack_fees: Option<PrivateRecoveryAckFeeSpecV4>,
     recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
-    create_private_native_custody_v4_inner(runtime, args, fd_total_budget, config, native, ack_fees, recovery_providers, None)
+    create_private_native_custody_v4_inner(runtime, args, fd_total_budget, config, native, ack_fees, recovery_providers, None, None)
 }
 
 /// Explicit all-target kernel producer entry. Its input and limits are supplied
@@ -472,10 +474,37 @@ pub fn create_private_integration_core_with_kernel_paid_work_v4(
     recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
     work: PrivateKernelPaidWorkSpecV4,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
-    if !args.palw_produce {
-        return Err("the explicit kernel paid-work consumer requires this node's configured producer key/bond".into());
+    create_private_integration_core_with_kernel_paid_roles_v4(
+        runtime,
+        args,
+        fd_total_budget,
+        config,
+        native,
+        ack_fees,
+        recovery_providers,
+        Some(work),
+        None,
+    )
+}
+
+/// Explicit all-target kernel roles of one paid-v4 node: the producer (paid work) and/or the drawn checker's material
+/// fetch. Both use this node's own configured key/bond; ordinary Args cannot activate either.
+#[allow(clippy::too_many_arguments)]
+pub fn create_private_integration_core_with_kernel_paid_roles_v4(
+    runtime: &Runtime,
+    args: &Args,
+    fd_total_budget: i32,
+    config: Config,
+    native: PrivateNativeCustodySpecV3,
+    ack_fees: Option<PrivateRecoveryAckFeeSpecV4>,
+    recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    work: Option<PrivateKernelPaidWorkSpecV4>,
+    check: Option<PrivateKernelPaidCheckSpecV4>,
+) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
+    if (work.is_some() || check.is_some()) && !args.palw_produce {
+        return Err("the explicit kernel paid roles require this node's configured producer key/bond".into());
     }
-    create_private_native_custody_v4_inner(runtime, args, fd_total_budget, config, native, ack_fees, recovery_providers, Some(work))
+    create_private_native_custody_v4_inner(runtime, args, fd_total_budget, config, native, ack_fees, recovery_providers, work, check)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -488,6 +517,7 @@ fn create_private_native_custody_v4_inner(
     ack_fees: Option<PrivateRecoveryAckFeeSpecV4>,
     recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
     kernel_work: Option<PrivateKernelPaidWorkSpecV4>,
+    kernel_check: Option<PrivateKernelPaidCheckSpecV4>,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
     paid_v4_factory::validate_private_paid_claim_relations_v4(&config.params)?;
     native.check_fixture(&config, args)?;
@@ -514,11 +544,16 @@ fn create_private_native_custody_v4_inner(
         // Prepare from this node's actual manager/config/key before the hook
         // consumes the context. An uploaded file supplies work, not authority.
         let producer = kernel_work.map(|work| work.prepare(&ctx)).transpose()?;
+        let checker = kernel_check.map(|check| check.prepare(&ctx)).transpose()?;
         recovery_observation_v4::start(&ctx)?;
         let exchange = hook(ctx)?;
         if let Some(producer) = producer {
             producer
                 .start(exchange.as_ref().ok_or("kernel paid work requires an explicit authenticated provider exchange")?.clone())?;
+        }
+        if let Some(checker) = checker {
+            checker
+                .start(exchange.as_ref().ok_or("kernel paid check requires an explicit authenticated provider exchange")?.clone())?;
         }
         Ok(exchange)
     });

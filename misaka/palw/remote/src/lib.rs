@@ -85,3 +85,6 @@ mod monetary_gc_kernel_fixture;
 pub mod native_carrier_queue_v4;
 
 pub mod kernel_material_context_v4;
+
+/// RFC08: the drawn checker's authenticated read-only paging of TypedKernelV4 material (2026-10-15).
+pub mod kernel_material_read_v4;

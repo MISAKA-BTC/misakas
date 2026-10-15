@@ -50,6 +50,9 @@ pub enum ProviderTransportPurposeV1 {
     /// Producer-signed actual kernel work and full typed material, followed by
     /// atomic 240/242 FundedEnroll. Old native Ready/enrollment are unchanged.
     KernelMaterialIngressV4,
+    /// A drawn checker's read-only page request for TypedKernelV4 material (variant 3). It creates no consensus object,
+    /// liability, GC or ACK permission; the provider answers only under its own current native authority.
+    KernelMaterialReadV4,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -457,7 +460,7 @@ impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for Provide
     ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
         r.step()?;
         match r.byte()? {
-            0 | 1 | 2 => Ok(Default::default()),
+            0 | 1 | 2 | 3 => Ok(Default::default()),
             _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown provider transport purpose")),
         }
     }

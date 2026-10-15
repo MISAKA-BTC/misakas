@@ -597,6 +597,21 @@ pub trait ConsensusApi: Send + Sync {
         &self,_root:Hash64,_consent:Hash64,_provider:crate::palw_state_v2::PalwBondKeyV2,
         _scope:&crate::palw_material_capacity_v1::PalwMaterialScopeV1,
     )->Result<(),String>{Err("current native material generation authority unavailable".into())}
+    /// RFC08 checker read authority at this node's own current tip and import generation: is `reader` a drawn seat of the
+    /// paid claim of `root`? Serving material to it grants no receipt, credit or Final.
+    fn palw_kernel_material_reader_authorized_v4(
+        &self,
+        _root: Hash64,
+        _reader: crate::palw_state_v2::PalwBondKeyV2,
+        _reader_pubkey: &[u8],
+    ) -> Result<bool, String> {
+        Err("current native kernel material reader authority unavailable".into())
+    }
+    /// The registered native key of `bond` at this node's own current tip (a checker authenticates provider responses
+    /// against it). `None` when the bond is not registered.
+    fn palw_bond_pubkey_v4(&self, _bond: crate::palw_state_v2::PalwBondKeyV2) -> Result<Option<Vec<u8>>, String> {
+        Err("current native bond key unavailable".into())
+    }
     fn palw_native_recovery_session_quote_v4(
         &self,
         _checkpoint: Option<BlockHash>,

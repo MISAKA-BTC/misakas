@@ -323,3 +323,38 @@ pub fn require_material_generation_current_v4(
     }
     Ok(())
 }
+
+/// RFC08 checker read authority: is `reader` a drawn seat of the paid claim of `root` under its current native lock (the
+/// base lock, or any interactive round's lock)? Identity/assignment only; it authorizes a provider to SERVE material to this
+/// reader, never a receipt, credit or Final (those stay with the RFC-0018 SecurityCertified predicate).
+pub fn kernel_material_reader_authorized_v4(
+    state: &PalwChainStateV2,
+    root: Hash64,
+    reader: &crate::palw_state_v2::PalwBondKeyV2,
+    reader_pubkey: &[u8],
+) -> Result<bool, String> {
+    use crate::palw_claim_challenge_v2::{PAID_CLAIM_LOCKS_V2, PalwPaidClaimLockV2};
+    // The transport key must be the reader's own registered native bond key; a seat cannot be borrowed by another key.
+    if state.bond(reader).is_none_or(|bond| bond.pubkey.as_slice() != reader_pubkey) {
+        return Ok(false);
+    }
+    let route = state.kernel_route().ok_or("kernel reader native route absent")?;
+    let Some(authority) = route.paid_claim_for_base_v2(&root.as_bytes())? else { return Ok(false) };
+    let enrollment = authority.enrollment.id();
+    let key = borsh::to_vec(&enrollment).map_err(|e| e.to_string())?;
+    if route
+        .aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &key)
+        .is_some_and(|lock| lock.enrollment == enrollment && lock.source_valid && lock.seats.contains(reader))
+    {
+        return Ok(true);
+    }
+    if let Some(plan) = authority.class.interactive_plan.as_ref() {
+        for round in 0..plan.rounds {
+            let Ok(row) = route.paid_claim_round_v3(&enrollment, round) else { continue };
+            if row.lock.as_ref().is_some_and(|lock| lock.enrollment == enrollment && lock.seats.contains(reader)) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
