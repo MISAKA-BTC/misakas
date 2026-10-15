@@ -8696,6 +8696,9 @@ impl PalwPanelService {
         let mut public_flat_response_book = flat_source_responder::FlatSourceBookV1::default();
         let mut public_float_response_book = float_source_responder::FloatSourceBookV1::default();
         let mut public_tir_prefix_response_book = tir_prefix_responder::TirPrefixBookV1::default();
+        // G14 R3: ORIGINAL TIR frames this node prepares as the producer or a drawn Valid seat, and the sealed-descriptor journal.
+        let mut tir_public_custodian =
+            palw_fraud_filer::tir_public_custodian::PalwTirPublicCustodianBookV1::load(&self.config.state_dir);
         let mut public_history_response_book = history_recovery_actor::HistoryResponderBookV1::default();
         let mut delegated_slots = PalwDelegatedSlotsV1::default();
         let mut artifact_inventory_book = artifact_inventory::ArtifactInventoryBookV1::default();
@@ -11186,6 +11189,23 @@ impl PalwPanelService {
                 .await
             {
                 debug!("[{PALW_PANEL}] public history custody grant remains pending: {why}");
+            }
+            // G14 R3: an ORIGINAL TIR frame's preparation — paid slices, the prepared capture, then the producer's Ready or a
+            // drawn Valid seat's atomic grant + Ready. A clean no-op below `palw_tir_public_conviction_v1`.
+            if let Err(why) = self
+                .tir_public_custodian_tick_v1(
+                    &session,
+                    bond_key,
+                    network_domain,
+                    &own_receipts,
+                    &mut tir_public_custodian,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] TIR frame custodian preparation remains pending: {why}");
             }
             if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa) {
                 self.delegated_slots_tick_v1(&session, bond_key, &mut delegated_slots, &mut court_pending, &mut court_due, &mut court_moved)

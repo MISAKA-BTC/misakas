@@ -366,6 +366,14 @@ impl ConsensusSessionOwned {
         self.consensus.palw_tir_public_original_quote_v1(original, header)
     }
 
+    /// G14 R3/R4: a node worker's read of the accepted native snapshot (`Ok(false)` below `palw_tir_public_conviction_v1`).
+    pub fn palw_tir_public_read_v1(
+        &self,
+        read: &mut dyn FnMut(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        self.consensus.palw_tir_public_read_v1(read)
+    }
+
     /// G14 R4: the accepted ORIGINAL TIR frame a public verifier files against.
     pub fn palw_tir_public_frame_v1(
         &self,

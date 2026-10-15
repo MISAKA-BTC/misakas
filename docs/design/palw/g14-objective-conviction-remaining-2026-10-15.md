@@ -212,8 +212,18 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
   （`preserves_credited_v1`）。
 - [ ] late grantに、完了不可能なcold preparation期限を課さない。採用した先行準備＋atomic grant／Readyを、実nodeの準備worker・carrier・元予算・実担保へ通し、固定期限内に成立させる。候補helperの存在だけでは完了しない。
   — **一部**: consensus 側の atomic grant/Ready は Codex 実装済み。node 側は 3 署名（V2 Valid・raw grant・outer）を元 domain で作る builder を追加
-  （`kaspad/src/palw_tir_public_filer.rs` `palw_tir_public_grant_ready_object_v1`、frame view に pledge id）。**blocked**: prepared descriptor を作る
-  準備 worker と投稿 scheduler が無く、固定期限内の成立は未実測。
+  （`kaspad/src/palw_tir_public_filer.rs` `palw_tir_public_grant_ready_object_v1`、frame view に pledge id）。
+  **node 準備 worker を追加（ソースのみ・未検証）**: `kaspad/src/palw_tir_public_custodian.rs`（`palw_fraud_filer` の子 module、panel loop から
+  毎 tick `tir_public_custodian_tick_v1` を呼ぶ、`palw_panel.rs` の history grant の直後）。producer（d0 の custodian、accepted index
+  `staged_tir_preparation_duties_after_v1` から duty を読む）と、Valid に署名した drawn seat（`own_receipts`）が、producer が前払いした claim 全体の
+  準備 lane で slice ごとに「backend の quote → work book が accepted state で exact debit を作る → 署名 `WorkDebit` を court queue
+  （round `u32::MAX − 24`）→ accept 後に `confirm_v1` が permit を mint → その permit で slice 実行」を繰り返し、prepared capture を seal する。
+  seal 後に producer は自分の `PreparationReady`、seat は Valid credit＋raw grant＋Ready の atomic object を投稿（round `u32::MAX − 25`）。
+  seat は seal するまで grant しないので、grant 後に cold preparation 期限を負わない（late grant）。sealed descriptor は
+  `state_dir/palw-tir-public-custodian.v1` に journal（tmp→rename）し、再起動後は再準備なしに Ready を再投稿できる。accepted state を読む
+  consensus API `palw_tir_public_read_v1`（fence 未満は `Ok(false)`、`api/mod.rs`・`consensus/mod.rs`・`processor/palw.rs`・`session.rs`）を追加。
+  **未**: 1 slice ごとに 1 carrier の往復が要り、固定 preparation 期限内に最大 profile で完走することは未実測。seat が元 capture を保持して
+  いない場合は grant しない（責任を負わない側に倒れる）。owner の demand に prepared capture から応答する responder（Begin/Part/Finish）は未接続。
 - [ ] whole-job V2に加え、実際に有効なV3/V4等のtyped receipt／grantを、元のsegment／shard署名domainのまま接続する。未対応入口の拒否を「全receipt対応」と数えない。
   — **blocked**: V3 の supplementary credit（`credit_supplementary_receipts_v3`）は `ReceiptLicensed` を要求する一方、frame の grant は licence
   前に要る。licence 前の typed credit door は新しい金銭規則で判断が要る。V4 shard receipt は RFC-0006 の shard record 経由。現状は frame の claim に
@@ -326,7 +336,8 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
 ### R8. 再開・pruning・reorgと通常node運用を閉じる
 
 - [ ] prepared descriptorと実際のnative Ready、元material TTL、保持ticket、通常worker、native権限付きGCを結ぶ。
-  — **未**（node 運用の範囲。今回は未着手）。
+  — **一部（ソースのみ・未検証）**: 準備 worker が descriptor を作り Ready まで投稿し、descriptor を journal（material horizon 到達で journal から
+  除去）。prepared file の GC（`retire_tir_prepared_capture_v1`、native irreversible DAA が horizon を超えた後のみ）と保持 ticket の接続は未。
 - [ ] Tiled reopenの全D IDs再認証が必要な場合、その時間・IO・carrier・RAMを最大条件で処理する。N再走査を避けただけで完走としない。
   — **未**（node 運用の範囲。今回は未着手）。
 - [ ] process再開・複数processのcache共有・破損・partial generation・期限前後のcleanupを扱い、正しい公開materialを早期削除しない。

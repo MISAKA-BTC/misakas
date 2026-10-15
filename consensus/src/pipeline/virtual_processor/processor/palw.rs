@@ -1295,6 +1295,24 @@ impl VirtualStateProcessor {
         Ok(kaspa_consensus_core::palw_tir_public_claim_v1::palw_tir_public_frame_view_v1(&state, claim))
     }
 
+    /// G14 R3/R4: run a node worker's read against the accepted native snapshot (`Ok(false)`, closure not run, below
+    /// `palw_tir_public_conviction_v1`). The state is the reader snapshot's `Arc`; nothing is cloned or written.
+    pub fn palw_tir_public_read_v1_impl(
+        &self,
+        read: &mut dyn FnMut(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let now = state.last_point().ok_or("TIR public reader snapshot has no accepted clock")?.daa_score;
+        if !self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(now)) {
+            return Ok(false);
+        }
+        let accepted: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2 = &state;
+        read(accepted)?;
+        Ok(true)
+    }
+
     /// G14 R1/R2: the producer's pre-signing quote of an ORIGINAL TIR frame (`None` below `palw_tir_public_conviction_v1`).
     pub fn palw_tir_public_original_quote_v1_impl(
         &self,

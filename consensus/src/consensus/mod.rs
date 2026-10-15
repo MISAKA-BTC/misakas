@@ -2932,6 +2932,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_tir_public_frame_v1_impl(claim)
     }
 
+    fn palw_tir_public_read_v1(
+        &self,
+        read: &mut dyn FnMut(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        self.virtual_processor.palw_tir_public_read_v1_impl(read)
+    }
+
     fn palw_tir_public_original_quote_v1(
         &self,
         original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
