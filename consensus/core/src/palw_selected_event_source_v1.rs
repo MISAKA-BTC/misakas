@@ -4,7 +4,7 @@ use crate::{
     Hash64,
     palw_state_v2::PalwBondKeyV2,
     palw_step_leg::{PalwStepBindingV2, PalwStepOpeningV1},
-    palw_step_refute::{PalwTraceEventDisclosureV1, tiled_row_authenticate_v1, tiled_tile_authenticate_v1},
+    palw_step_refute::{PalwTraceEventDisclosureV1, tiled_tile_authenticate_v1},
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -231,10 +231,20 @@ impl PalwSelectedTiledEventV1 {
         coordinate: PalwSelectedEventCoordinateV1,
         maximum_leaves: u64,
     ) -> Result<(), String> {
-        self.check_shape_v1()?;
         crate::palw_step_leg::verify_binding_v1(binding).map_err(|e| e.to_string())?;
-        let (context, vocab, tiles) = tiled_row_authenticate_v1(
-            binding,
+        self.authenticate_view_v1(&crate::palw_decode_view_v1::PalwDecodeViewV1::of_verified_binding_v1(binding), coordinate, maximum_leaves)
+    }
+
+    /// The same authentication over a decode view (legacy binding or native TIR header).
+    pub fn authenticate_view_v1(
+        &self,
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        coordinate: PalwSelectedEventCoordinateV1,
+        maximum_leaves: u64,
+    ) -> Result<(), String> {
+        self.check_shape_v1()?;
+        let (context, vocab, tiles) = crate::palw_step_refute::tiled_row_authenticate_view_v1(
+            view,
             &self.generated_token_ids,
             coordinate.row,
             &self.row_root,
@@ -376,12 +386,21 @@ impl PalwSelectedEventSessionV1 {
             && now.checked_add(self.minimum_response_span_daa).is_some_and(|until| until <= self.respond_until_daa)
     }
     pub fn demand_v1(&mut self, now: u64, binding: &PalwStepBindingV2, demand: &PalwSelectedEventDemandV1) -> Result<(), String> {
+        self.demand_view_v1(now, &crate::palw_decode_view_v1::PalwDecodeViewV1::of_verified_binding_v1(binding), demand)
+    }
+    /// [`Self::demand_v1`] over a decode view (legacy binding or native TIR header).
+    pub fn demand_view_v1(
+        &mut self,
+        now: u64,
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        demand: &PalwSelectedEventDemandV1,
+    ) -> Result<(), String> {
         let c = demand.coordinate;
-        let tiles = u64::from(binding.shape_profile.vocab_size).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
+        let tiles = view.tiles_v1();
         if !self.can_demand_at_v1(now)
-            || c.row >= binding.job_context.exact_decode_tokens
+            || c.row >= view.job_context.exact_decode_tokens
             || u64::from(c.tile) >= tiles
-            || binding.shape_profile.logits_scheme_id != crate::palw_step_refute::tiled_logits_scheme_id_v1()
+            || !view.is_tiled_v1()
             || self.requests.contains_key(&c)
             || self.requests.len() >= PALW_SELECTED_EVENT_MAX_REQUESTS_V1
         {
@@ -432,14 +451,44 @@ impl PalwSelectedEventSessionV1 {
         if answer.binding.resolve_v1(binding.shape_profile.shape_profile_id(), &binding.shape_profile)? != *binding {
             return Err("selected answer substitutes original binding".into());
         }
-        answer.event.authenticate_v1(binding, answer.coordinate, maximum_leaves)?;
-        if request.event.as_ref().is_some_and(|old| old != &answer.event) {
+        self.answer_event_view_v1(
+            now,
+            &crate::palw_decode_view_v1::PalwDecodeViewV1::of_verified_binding_v1(binding),
+            answer.answerer,
+            answer.demand_id,
+            answer.coordinate,
+            &answer.event,
+            maximum_leaves,
+        )
+    }
+    /// The answer core over a decode view: the native fold supplies the view (for a TIR claim,
+    /// from its admitted header and registered record), never the answer carrier.
+    #[allow(clippy::too_many_arguments)]
+    pub fn answer_event_view_v1(
+        &mut self,
+        now: u64,
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        answerer: PalwBondKeyV2,
+        demand_id: Hash64,
+        coordinate: PalwSelectedEventCoordinateV1,
+        event: &PalwSelectedTiledEventV1,
+        maximum_leaves: u64,
+    ) -> Result<(), String> {
+        if now < self.reserved_daa || now >= self.respond_until_daa || !self.custodians.contains(&answerer) {
+            return Err("selected answer has no literal custody or original response clock".into());
+        }
+        let request = self.requests.get(&coordinate).ok_or("selected answer has no accepted exact-coordinate demand")?;
+        if request.demand_id != demand_id || request.collected || request.answered.contains(&answerer) {
+            return Err("selected answer substitutes demand or repeats a paid response".into());
+        }
+        event.authenticate_view_v1(view, coordinate, maximum_leaves)?;
+        if request.event.as_ref().is_some_and(|old| old != event) {
             return Err("selected answer conflicts with the authenticated original source".into());
         }
-        let request = self.requests.get_mut(&answer.coordinate).expect("checked");
-        request.answered.insert(answer.answerer);
+        let request = self.requests.get_mut(&coordinate).expect("checked");
+        request.answered.insert(answerer);
         if request.event.is_none() {
-            request.event = Some(answer.event.clone());
+            request.event = Some(event.clone());
         }
         Ok(())
     }

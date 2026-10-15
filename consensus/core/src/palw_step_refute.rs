@@ -2956,13 +2956,33 @@ pub fn tiled_row_authenticate_v1(
     row_opening: &crate::palw_step_leg::PalwStepOpeningV1,
     max_step_leaf_count: u64,
 ) -> Result<(Hash64, usize, u64), PalwStepRefuteError> {
+    tiled_row_authenticate_view_v1(
+        &crate::palw_decode_view_v1::PalwDecodeViewV1::of_verified_binding_v1(binding),
+        generated_token_ids,
+        position,
+        row_root,
+        row_opening,
+        max_step_leaf_count,
+    )
+}
+
+/// [`tiled_row_authenticate_v1`] over the decode view (legacy binding or native TIR header): the
+/// same checks, reading only the context, the logits width/scheme and the claim's trace root.
+pub fn tiled_row_authenticate_view_v1(
+    view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+    generated_token_ids: &[u32],
+    position: u32,
+    row_root: &Hash64,
+    row_opening: &crate::palw_step_leg::PalwStepOpeningV1,
+    max_step_leaf_count: u64,
+) -> Result<(Hash64, usize, u64), PalwStepRefuteError> {
     let bad = PalwStepRefuteError::InputSetNotCanonical;
-    if binding.shape_profile.logits_scheme_id != tiled_logits_scheme_id_v1() {
+    if view.logits_scheme_id != tiled_logits_scheme_id_v1() {
         return Err(bad("this class does not commit tiled logits — the tiled form is not its scheme"));
     }
-    let ctx = &binding.job_context;
+    let ctx = &view.job_context;
     let decode = ctx.exact_decode_tokens as usize;
-    let vocab = binding.shape_profile.vocab_size as usize;
+    let vocab = view.vocab_size as usize;
     if generated_token_ids.len() != decode {
         return Err(bad("the id count is not the context's decode count"));
     }
@@ -2975,7 +2995,7 @@ pub fn tiled_row_authenticate_v1(
     if row_opening.leaf_index != position as u64 || row_opening.leaf_hash != *row_root {
         return Err(bad("the row opening does not open the named row's root"));
     }
-    if tiled_logits_outer_root_v1(ctx, row_count, &rows_root, generated_token_ids) != binding.full_logits_trace_root {
+    if tiled_logits_outer_root_v1(ctx, row_count, &rows_root, generated_token_ids) != view.full_logits_trace_root {
         return Err(bad("the carried material does not reproduce the claim's own trace root"));
     }
     Ok((ctx.context_hash(), vocab, vocab.div_ceil(PALW_LOGITS_TILE_LANES) as u64))
