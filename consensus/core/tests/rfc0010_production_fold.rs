@@ -1647,7 +1647,7 @@ fn panel_sponsor_funds_native_escrow_before_entropy_and_unused_principal_refunds
         assert!(route.panel_source_fee_authority_v2(&terms.source.context).is_err());
         assert!(!route.ledger().unwrap().beacon_source_fees.contains_key(&terms.source.context));
         assert_eq!(refused.bond(&sponsor).unwrap().collateral, native_before);
-        assert!(!delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::KernelRouteRow { table: 112, .. })));
+        assert!(!delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::KernelRouteRow { table: kaspa_consensus_core::palw_panel_source_fee_v2::PALW_PANEL_SOURCE_FEE_AUTHORITY_TABLE_V2, .. })));
         assert_eq!(revert_delta_v2(&refused, &delta, &v.c.sp).unwrap(), before);
     }
     assert_eq!(v.c.s, before, "insufficient actual collateral cannot leave a half-funded authority");
@@ -1657,7 +1657,7 @@ fn panel_sponsor_funds_native_escrow_before_entropy_and_unused_principal_refunds
     assert_eq!(v.c.s.bond(&sponsor).unwrap().collateral, native_before - 100);
     assert_eq!(ledger.source_fee_escrow_total().unwrap(), 100);
     assert_eq!(route.panel_source_fee_authority_v2(&terms.source.context).unwrap().sponsor, sponsor);
-    assert!(delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::KernelRouteRow { table: 112, old: None, new: Some(_), .. })));
+    assert!(delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::KernelRouteRow { table: kaspa_consensus_core::palw_panel_source_fee_v2::PALW_PANEL_SOURCE_FEE_AUTHORITY_TABLE_V2, old: None, new: Some(_), .. })));
     let header = borsh::to_vec(&route.header).unwrap();
     let page = route.rows_page_v1(None, usize::MAX);
     let restored = kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::from_served_rows_v1(
