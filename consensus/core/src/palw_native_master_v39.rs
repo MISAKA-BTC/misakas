@@ -195,6 +195,155 @@ impl CheckedNativeMasterSourceAuditV39 {
     }
 }
 
+/// One genuine aggregate escrow Final at the same independently anchored state
+/// as every privately checked component job. It grants no mining credit and
+/// does not replace the sampled-validator approval or UTXO redemption checks.
+pub struct CheckedNativeMasterFinalAuditV39 {
+    pub(crate) record: NativeMasterFinalRecordV39,
+    pub(crate) source: std::sync::Arc<CheckedNativeMasterSourceAuditV39>,
+}
+impl CheckedNativeMasterFinalAuditV39 {
+    pub fn record(&self) -> &NativeMasterFinalRecordV39 {
+        &self.record
+    }
+    pub fn source(&self) -> &CheckedNativeMasterSourceAuditV39 {
+        &self.source
+    }
+    pub fn state(&self) -> crate::Hash64 {
+        self.source.state()
+    }
+    pub fn auxiliary(&self) -> crate::Hash64 {
+        self.source.auxiliary()
+    }
+    pub fn daa(&self) -> u64 {
+        self.source.daa()
+    }
+}
+
+/// Derive the immutable aggregate from genuine component books at one checked
+/// state. A public aggregate DTO, absent challenge or replay success is never
+/// an input capability. Actual coinbase delivery/redemption is checked separately.
+pub fn derive_native_master_final_audit_v39<R: crate::palw_native_audit_proof_v39::NativeAuditRowReaderV39>(
+    auxiliary: &crate::palw_native_audit_proof_v39::VerifiedNativeAuxRowsV39<R>,
+    anchor: &crate::palw_native_state_anchor_v39::CheckedNativeStateAnchorV39,
+    parameters: &crate::config::params::Params,
+    source: std::sync::Arc<CheckedNativeMasterSourceAuditV39>,
+    jobs: &[crate::palw_native_job_audit_v39::CheckedNativeJobAuditV39],
+) -> Result<Option<CheckedNativeMasterFinalAuditV39>, String> {
+    let m = source.record();
+    let policy = &parameters
+        .palw_native_execution_v39
+        .as_ref()
+        .filter(|f| f.activation.is_active(anchor.daa()))
+        .ok_or("Master Final39 owning audit policy inactive")?
+        .policies;
+    if auxiliary.state_root() != anchor.inner()
+        || source.state() != anchor.inner()
+        || source.auxiliary() != auxiliary.root()
+        || source.daa() != anchor.daa()
+        || m.policy != policy.root()
+    {
+        return Err("Master Final39 source/state/own policy anchor differs".into());
+    }
+    let key = borsh::to_vec(&(39u8, 83u8, m.id)).map_err(|e| e.to_string())?;
+    let Some(raw) = auxiliary.row(112, &key, 64 << 10)? else { return Ok(None) };
+    let (root, final_record): (Digest, NativeMasterFinalRecordV39) =
+        borsh::from_slice(&raw).map_err(|_| "Master Final39 original aggregate grammar")?;
+    if root != final_record.root()
+        || final_record.version != 39
+        || final_record.master != m.id
+        || final_record.original_record != m.root()
+        || final_record.complete_source != m.complete_source
+        || final_record.request != m.request
+        || final_record.established < m.admitted
+        || final_record.established > anchor.daa()
+        || final_record.components.len() != m.components.len()
+        || jobs.len() != m.components.len()
+    {
+        return Err("Master Final39 original aggregate identity/count/clock differs".into());
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for job in jobs {
+        if !seen.insert(job.original().job()) {
+            return Err("Master Final39 duplicate original job audit".into());
+        }
+    }
+    let mut queues = std::collections::BTreeSet::new();
+    for (i, component) in final_record.components.iter().enumerate() {
+        let funded = source.funded().get(i).and_then(Option::as_ref).ok_or("Master Final39 original stage not funded")?;
+        let declared = &m.components[i];
+        let job = jobs.iter().find(|j| j.original().job() == funded.job).ok_or("Master Final39 genuine child audit missing")?;
+        let original = job.original();
+        let book = job.book();
+        let claim = book.claim().ok_or("Master Final39 child accepted claim absent")?;
+        let settlement = book.settlement().ok_or("Master Final39 child actual settlement absent")?;
+        let credit = job.credit().ok_or("Master Final39 child actual single credit absent")?;
+        let producer = &source.request().producers[i];
+        if job.state_root() != anchor.inner()
+            || job.auxiliary_root() != auxiliary.root()
+            || job.daa() != anchor.daa()
+            || job.master() != m.id
+            || job.stage() != Some(i as u16)
+            || component.original != *funded
+            || funded.stage as usize != i
+            || original.class != declared.class
+            || original.source != declared.source
+            || original.policy != m.policy
+            || original.class_scope != declared.maximum_scope
+            || original.class_resources != declared.maximum_resources
+            || original.requester != m.owner
+            || original.requester_operator != m.operator
+            || original.producer_operator != producer.operator
+            || crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&original.producer) != producer.producer
+            || original.reward != producer.reward
+            || original.admitted != funded.admitted
+            || original.deadline > m.deadline
+            || original.root() != funded.funding
+            || original.maximum != funded.maximum
+            || original.maximum_contract != funded.maximum_contract
+            || original.input_manifest != funded.input_binding
+            || book.terminal() != crate::palw_native_job_v39::NativeJobTerminalV39::Final
+            || book.escrow() != 0
+            || component.claim != claim.claim
+            || component.final_book != book.root()
+            || component.settlement != settlement.root()
+            || component.single_credit != credit.root()
+            || component.payout != credit.payout
+            || component.queue != credit.queue
+            || component.amount != credit.amount
+            || component.amount == 0
+            || component.finalized != credit.established
+            || credit.established > final_record.established
+            || credit.established < claim.final_after
+            || credit.job != funded.job
+            || credit.funding != funded.funding
+            || credit.terminal != book.root()
+            || credit.claim != Some(claim.claim)
+            || credit.settlement != settlement.root()
+            || credit.recipient != original.producer
+            || credit.amount != original.reward
+            || settlement.producer_credit != credit.amount
+            || settlement.requester_credit != 0
+            || settlement.actual_slash != 0
+            || settlement.finder_credit != 0
+            || !queues.insert(credit.queue)
+        {
+            return Err("Master Final39 child original source/Fund/claim/actual unique credit differs".into());
+        }
+    }
+    let expected = object_id(
+        b"misaka-palw/native/original-Master-single-credit-set/v39",
+        &(
+            m.id,
+            final_record.components.iter().map(|c| (c.original.job, c.single_credit, c.payout, c.queue, c.amount)).collect::<Vec<_>>(),
+        ),
+    );
+    if final_record.single_credit_set != expected {
+        return Err("Master Final39 exact aggregate single-credit set differs".into());
+    }
+    Ok(Some(CheckedNativeMasterFinalAuditV39 { record: final_record, source }))
+}
+
 /// New actions67..70 carry paid metadata for either Master65 or consent43.
 /// Source57..60 and all older source/reply grammars retain their meanings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

@@ -279,6 +279,13 @@ fn accept(
     builder.write_kernel_row(TABLE, k(18, &id), Some(b(&(h.root(), h))));
     builder.write_kernel_row(TABLE, k(26, &id), Some(b(&raw)));
     builder.write_kernel_row(TABLE, k(19, signer), Some(b(&ids)));
+    super::palw_native_source_fold_v39::retain_class(
+        builder,
+        class_id,
+        super::palw_native_source_fold_v39::HOLD_CONSENT,
+        id,
+        c.wire.expires,
+    )?;
     Ok(())
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -458,6 +465,7 @@ fn fund(
         queue: contract.record().queue,
         physical: p.physical_service,
         final_policy: p.final_policy,
+        final_authority: contract.conditions().authority_root(),
         final_basis: contract.conditions().basis_root(),
         requester: *signer,
         producer: c.producer,
@@ -587,6 +595,19 @@ fn fund(
     builder.write_kernel_row(TABLE, k(18, &c.root()), None);
     builder.write_kernel_row(TABLE, k(26, &c.root()), None);
     builder.write_kernel_row(NONCE, b(&c.wire.requester_operator), Some(b(&next)));
+    super::palw_native_source_fold_v39::retain_class(
+        builder,
+        jh.original.class,
+        super::palw_native_source_fold_v39::HOLD_JOB,
+        id,
+        jh.original.deadline,
+    )?;
+    super::palw_native_source_fold_v39::release_class(
+        builder,
+        jh.original.class,
+        super::palw_native_source_fold_v39::HOLD_CONSENT,
+        c.root(),
+    )?;
     if let Some(invocation) = &invocation {
         super::palw_native_master_fold_v39::record_funded(builder, ctx, invocation, id)?;
     }
@@ -731,7 +752,7 @@ pub(super) fn apply(
     action: u8,
     body: &[u8],
 ) -> Result<(), PalwStateV2Error> {
-    if matches!(action, 41 | 42 | 57..=60) {
+    if matches!(action, 41 | 42 | 57..=60 | 71 | 72) {
         return super::palw_native_source_fold_v39::apply(builder, ctx, signer, action, body);
     }
     let p = super::palw_native_source_fold_v39::policy(builder, ctx)?;

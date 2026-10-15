@@ -216,3 +216,78 @@ pub fn read_native_aux_stream_anchored_v39(
     }
     Ok(AnchoredNativeAuxStreamV39 { anchor, auxiliary })
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PayoutStreamRowV39 {
+    pub key: String,
+    pub value: CasObjectV39,
+}
+/// The common pending-payout collection is data identity only. Its original32
+/// format/caps are unchanged; wrapping it under a39 state anchor grants none of
+/// the old32 execution or Final authorities.
+pub struct AnchoredNativePayoutStreamV39 {
+    proof: kaspa_consensus_core::palw_state_proof_v1::PalwFactProofV1,
+    inner: Hash64,
+}
+impl AnchoredNativePayoutStreamV39 {
+    pub fn state_root(&self) -> Hash64 {
+        self.inner
+    }
+    pub fn verified_rows(&self) -> Result<kaspa_consensus_core::palw_native_audit_proof_v32::VerifiedNativePayoutRowsV32<'_>, String> {
+        kaspa_consensus_core::palw_native_audit_proof_v32::verify_native_payout_rows_v32(&self.proof, self.inner)
+    }
+}
+pub fn read_native_payout_stream_anchored_v39(
+    evidence_root: &Path,
+    index_path: &Path,
+    original: &AnchoredNativeAuxStreamV39,
+) -> Result<AnchoredNativePayoutStreamV39, String> {
+    use kaspa_consensus_core::{
+        palw_native_audit_proof_v32 as common,
+        palw_state_proof_v1::{PalwCollectionOpeningV1, PalwFactProofV1},
+    };
+    let root = evidence_root.canonicalize().map_err(|e| e.to_string())?;
+    let index = index_path.canonicalize().map_err(|e| e.to_string())?;
+    if !index.starts_with(&root) {
+        return Err("audit39 original payout index escapes evidence root".into());
+    }
+    let mut file = BufReader::new(std::fs::File::open(index).map_err(|e| e.to_string())?);
+    let header: AuxStreamHeaderV39 =
+        serde_json::from_slice(&line(&mut file, 4096)?.ok_or("audit39 original payout header missing")?).map_err(|e| e.to_string())?;
+    if header.schema != "misaka.palw.native-payout-stream.v39" || header.total_rows > common::NATIVE_AUX_PROOF_MAX_ROWS_V32 {
+        return Err("audit39 original common payout schema/unchanged row cap".into());
+    }
+    let pool = relative(&root, &header.objects)?;
+    let state = PalwStateOpeningV1 { preimage: object(&pool, &header.state, 4 << 20)? };
+    if state.root() != original.anchor().inner() {
+        return Err("audit39 payouts not same original39 pinned state".into());
+    }
+    let mut rows = Vec::new();
+    let mut bytes = state.preimage.len();
+    let mut last = None;
+    while let Some(raw) = line(&mut file, 4096)? {
+        if rows.len() >= header.total_rows {
+            return Err("audit39 extra original payout rows".into());
+        }
+        let row: PayoutStreamRowV39 = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
+        let key = hex(&row.key)?;
+        if key.len() != 64 || row.value.bytes != 72 || last.as_ref().is_some_and(|p| p >= &key) {
+            return Err("audit39 common payout exact original key/value/order".into());
+        }
+        let value = object(&pool, &row.value, 72)?;
+        bytes = bytes
+            .checked_add(136)
+            .filter(|n| *n <= common::NATIVE_AUX_PROOF_MAX_BYTES_V32)
+            .ok_or("audit39 common payout unchanged byte cap")?;
+        last = Some(key.clone());
+        rows.push((key, value));
+    }
+    if rows.len() != header.total_rows {
+        return Err("audit39 original payout collection truncated".into());
+    }
+    let proof =
+        PalwFactProofV1 { state, collection: PalwCollectionOpeningV1 { label: common::NATIVE_PAYOUT_LABEL_V32.to_vec(), rows } };
+    common::verify_native_payout_rows_v32(&proof, original.anchor().inner())?;
+    Ok(AnchoredNativePayoutStreamV39 { proof, inner: original.anchor().inner() })
+}

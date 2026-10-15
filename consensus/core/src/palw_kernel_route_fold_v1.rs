@@ -964,7 +964,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             e.native_final.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
                 || e.stage_execution_v28.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
         }
-        Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) if matches!(bytes.get(2), Some(41..=70)) => {
+        Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) if matches!(bytes.get(2), Some(41..=79)) => {
             e.native_final.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
                 || e.native_execution39.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
         }
@@ -987,7 +987,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             return super::palw_flat_execution_fold_v11::apply(builder, ctx, signer, a.action, a.body);
         }
         Ok(Some(a)) if a.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 => {
-            if (41..=70).contains(&a.action) {
+            if (41..=79).contains(&a.action) {
                 return super::palw_native_job_fold_v39::apply(builder, ctx, signer, a.action, a.body);
             }
             return super::palw_flat_stage_fold_v14::apply(builder, ctx, signer, a.action, a.body);
@@ -1053,7 +1053,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             return super::palw_flat_execution_fold_v11::apply(builder, ctx, signer, *action, body);
         }
         KernelRouteObjectV1::StageExecutionV14 { action, body } => {
-            if (41..=70).contains(action) {
+            if (41..=79).contains(action) {
                 return super::palw_native_job_fold_v39::apply(builder, ctx, signer, *action, body);
             }
             return super::palw_flat_stage_fold_v14::apply(builder, ctx, signer, *action, body);
