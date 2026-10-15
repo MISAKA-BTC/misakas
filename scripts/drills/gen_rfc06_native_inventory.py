@@ -38,6 +38,26 @@ def stripattrs(s):
 # Public names with their canonical modules. A reference already qualified by the
 # source takes precedence over the unique-name fallback.
 defs={}; byname={}; aliases={}; alias_byname={}
+CRATES=[(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_panel'),(ROOT/'misaka/palw/kernel/src','misaka_palw_kernel'),(ROOT/'misaka/palw/gen/src','misaka_palw_gen'),(ROOT/'misaka/palw/tir/core/src','misaka_palw_tir'),(ROOT/'misaka/palw/challenge/src','misaka_palw_challenge')]
+def module_of(base,crate,file):
+    module='::'.join(file.relative_to(base).with_suffix('').parts)
+    if crate=='misaka_palw_panel':module=''
+    if module in {'lib','mod'}:module=''
+    elif module.endswith('::mod'):module=module[:-5]
+    return module
+# A private `mod child;` re-exported by `pub use child::*;` publishes its pub items at the PARENT path (e.g. the kernel's
+# `flat_quota11::{sharded,protected}`): the computed file path would name a private module the generated code cannot reach.
+reexport={}
+for base,crate in CRATES:
+ for file in base.rglob('*.rs'):
+    if 'tests' in file.parts or file.name=='generated.rs':continue
+    raw=clean(file.read_text()); module=module_of(base,crate,file)
+    for m in re.finditer(r'(?m)^\s*mod\s+(\w+)\s*;',raw):
+        if re.search(r'(?m)^\s*pub\s+use\s+'+m[1]+r'\s*::\s*\*\s*;',raw):
+            reexport[(crate,'::'.join(x for x in [module,m[1]] if x))]=module
+def canonical_module(crate,module):
+    while (crate,module) in reexport:module=reexport[(crate,module)]
+    return module
 for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_panel'),(ROOT/'misaka/palw/kernel/src','misaka_palw_kernel'),(ROOT/'misaka/palw/gen/src','misaka_palw_gen'),(ROOT/'misaka/palw/tir/core/src','misaka_palw_tir'),(ROOT/'misaka/palw/challenge/src','misaka_palw_challenge')]:
  for file in base.rglob('*.rs'):
     if 'tests' in file.parts or file.name=='generated.rs':continue
@@ -55,7 +75,7 @@ for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_pan
         if pos>=len(raw) or raw[pos] not in '{(;':continue
         if raw[pos]==';':body='';end=pos+1;form='unit'
         else:body,end=brace(raw,pos);form='named' if raw[pos]=='{' else 'tuple'
-        path='::'.join(x for x in [crate,module,name] if x)
+        path='::'.join(x for x in [crate,canonical_module(crate,module) if m.group(0).startswith('pub ') or m.group(0).startswith('pub\t') else module,name] if x)
         attrs=raw[max(raw.rfind('}',0,m.start()),raw.rfind(';',0,m.start()))+1:m.start()]
         item=dict(attrs=attrs,kind=kind,name=name,path=path,body=body,form=form,module=module,type_public=m.group(0).startswith('pub'),file=str(file.relative_to(ROOT)))
         defs[path]=item;byname.setdefault(name,[]).append(item)
@@ -100,6 +120,23 @@ def fields(item):
         vis,name,typ=m.groups();result.append((name,typ,vis is not None and (item['path'].startswith('crate::') or '(' not in vis)))
     return result
 
+# Kernel-route aux row codecs for tables 42–106 and 112 (scripts/drills/rfc06_native_aux_spec.py): root every value type the
+# scanner names, and the declared field types of the fold-private structs it mirrors (never the private structs themselves).
+import importlib.util
+_spec=importlib.util.spec_from_file_location('rfc06_native_aux_spec',Path(__file__).with_name('rfc06_native_aux_spec.py'))
+AUX=importlib.util.module_from_spec(_spec);_spec.loader.exec_module(AUX)
+AUX_ORIGIN=dict(path='crate::palw_native_resource_v1::wire_kernel_aux',module='palw_native_resource_v1::wire_kernel_aux')
+def aux_root(value):
+    for alt in (value[4:].split('|') if value.startswith('any:') else [value]):
+        if alt.startswith('raw:'):continue
+        for key in re.findall(r'mirror:([\w:]+)',alt):
+            item=defs[key]
+            for part in split(item['body']):
+                if re.search(r'#\[borsh\(skip\)\]',part):continue
+                fm=re.match(r'(?:pub(?:\([^)]*\))?\s+)?\w+\s*:\s*(.*)',stripattrs(part),re.S)
+                aux_root(fm[1]) if fm[1].startswith('mirror:') else references(fm[1],item)
+        references(re.sub(r'mirror:[\w:]+','u8',alt),AUX_ORIGIN)
+for _n in AUX.NS:aux_root(_n['value'])
 while queue:
  path=queue.pop(0)
  if path in visited:continue

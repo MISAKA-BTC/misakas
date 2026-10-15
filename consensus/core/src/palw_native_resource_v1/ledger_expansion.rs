@@ -257,9 +257,7 @@ fn inventory_ledger_aux_inputs_v1(route: &crate::palw_kernel_route_v1::PalwKerne
     let mut shape = NativeWireShapeV1::default();
     for ((table, key), bytes) in &route.aux {
         let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
-        let row =
-            super::wire_kernel_aux::scan_native_aux_row_v1(*table, key.len() as u64, key.first().copied().unwrap_or(0), &mut reader)
-                .map_err(shape_error)?;
+        let row = super::wire_kernel_aux::scan_native_aux_row_v1(*table, key, &mut reader).map_err(shape_error)?;
         if reader.remaining() != 0 {
             return Err(shape_error(wire::wire_bad("consumer aux row trailing bytes")));
         }
@@ -410,7 +408,7 @@ pub fn preflight_kernel_served_row_v1(table: u8, key: &[u8], bytes: &[u8]) -> io
     let shape = if table < 32 {
         scan_ledger_row_v1(table, &mut reader)?
     } else {
-        super::wire_kernel_aux::scan_native_aux_row_v1(table, key.len() as u64, key.first().copied().unwrap_or(0), &mut reader)?
+        super::wire_kernel_aux::scan_native_aux_row_v1(table, key, &mut reader)?
     };
     if reader.remaining() != 0 {
         return Err(wire::wire_bad("served kernel row has trailing codec bytes"));

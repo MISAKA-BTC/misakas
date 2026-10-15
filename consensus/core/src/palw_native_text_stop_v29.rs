@@ -850,3 +850,7 @@ pub struct NativeTextOwnV29 {
 pub fn native_text_source_components_v29(binding: Digest, program: Digest, real_pc: Digest, inventory: Digest) -> Digest {
     object_id(b"misaka-palw/native/complete-causal-text-source-components/v29", &(29u16, binding, program, real_pc, inventory))
 }
+
+// Read-only native allocation inventory; no state/root/codec field is added.
+#[path = "palw_native_resource_v1/private/palw_native_text_stop_v29.rs"]
+mod native_resource_inventory_v1;

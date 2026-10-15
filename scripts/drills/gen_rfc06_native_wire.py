@@ -11,10 +11,22 @@ split,stripattrs,brace=(G[k] for k in ['split','stripattrs','brace'])
 OUT=CORE/'palw_native_resource_v1/wire_generated.rs'
 manual={'misaka_palw_kernel::state::ClassRecordV1','misaka_palw_kernel::state::PipelineClassRecordV1','misaka_palw_kernel::flat_candidate7::FlatCandidateRecordV7','misaka_palw_kernel::flat_candidate9::FlatCandidateRecordV9','crate::palw_state_v2::PalwStateCarriageV2','crate::palw_bond_budget_v1::PalwBondBudgetStateV1','crate::palw_model_market_v1::PalwModelMarketV1','misaka_palw_panel::PanelCandidatesV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','crate::palw_kernel_route_v1::PalwKernelRouteStateV1'}
 
+# Public constants by name (array lengths in a layout, e.g. `[u128; QUOTA_AXES_V11]`), at their canonical module path: an
+# unqualified constant is not in scope in the generated module.
+PUB_CONSTS={}
+for _base,_crate in G['CRATES']:
+    for _file in _base.rglob('*.rs'):
+        if 'tests' in _file.parts:continue
+        _module=G['canonical_module'](_crate,G['module_of'](_base,_crate,_file))
+        for _m in re.finditer(r'(?m)^\s*pub\s+const\s+([A-Z][A-Z0-9_]*)\s*:',G['clean'](_file.read_text())):
+            PUB_CONSTS.setdefault(_m[1],set()).add('::'.join(x for x in [_crate,_module,_m[1]] if x))
 def qualify(t,item):
     def token(m):
         x=m.group();name=x.split('::')[-1]
         if name=='EVM_ADDRESS_SIZE':return 'crate::evm::EVM_ADDRESS_SIZE'
+        if x==name and re.fullmatch(r'[A-Z][A-Z0-9_]*',name) and len(PUB_CONSTS.get(name,()))==1:
+            path=next(iter(PUB_CONSTS[name]))
+            return path if not path.startswith('crate::') or item['path'].startswith('crate::') else path
         if x.startswith('crate::') and not item['path'].startswith('crate::'):x=item['path'].split('::')[0]+'::'+x[7:]
         if name=='Digest':return '[u8;64]'
         if name=='Hash64':return 'crate::Hash64'
@@ -67,7 +79,11 @@ for path in sorted(G['visited']):
             next_tag=tag+1
             arms.append(str(tag)+' => {let mut sum=NativeWireShapeV1::default();'+''.join('sum=sum.merge(<'+typ+' as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;' for typ in types)+'Ok(sum)},')
         code='impl NativeWireScanV1 for '+path+' {fn scan_native_wire_v1<R:std::io::Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {reader.step()?;match reader.byte()? {'+''.join(arms)+'_=>Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant"))}}}'
-    if path.startswith('crate::') and not item['type_public']:
+    # A public type whose wire layout names a crate-private type is visited beside that type's owner (a child module may
+    # name its parent's private items; the public generated module may not).
+    hidden={defs[t]['module'] for t in re.findall(r'crate::(?:\w+::)*\w+',code) if t!=path and t in defs and not defs[t]['type_public']}
+    if hidden-{item['module']}:raise ValueError(('wire layout names another module\'s private type',path,hidden))
+    if path.startswith('crate::') and (not item['type_public'] or hidden):
         private.setdefault(item['module'],[]).append(code)
     else:public.append(code.replace('crate::palw_bond_budget_v1::material::','crate::palw_bond_budget_v1::').replace('crate::palw_bond_budget_v1::consumer::','crate::palw_bond_budget_v1::'))
 OUT.write_text('//! Generated structural Borsh visitors; manual codecs are separate adapters.\n#![allow(unused_mut)]\nuse super::*;\nuse std::collections::{BTreeMap,BTreeSet};\nuse std::sync::Arc;\nuse super::wire::wire_struct;\n'+'\n'.join(public)+'\n')
@@ -183,19 +199,108 @@ for name,source in [('consumer_service_due','consumer_contracts'),('consumer_exh
 code+='Ok(sum)}}\n'
 (OUT.parent/'wire_budget.rs').write_text(code)
 
+# Kernel-route aux tables 42–106 and 112: one arm per (table, key condition) of scripts/drills/rfc06_native_aux_spec.py.
+import importlib.util
+_aux_spec=importlib.util.spec_from_file_location('rfc06_native_aux_spec',Path(__file__).with_name('rfc06_native_aux_spec.py'))
+AUX=importlib.util.module_from_spec(_aux_spec);_aux_spec.loader.exec_module(AUX)
+# Modules included through `#[path]` (fold modules nested in palw_state_v2) cannot be named from here: their private row
+# structs are mirrored, and no generated type may name a path inside one.
+FOLD_STEMS={Path(m).stem for f in CORE.rglob('*.rs') if 'tests' not in f.parts for m in re.findall(r'#\[path\s*=\s*"([^"]+\.rs)"\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+',f.read_text()) if 'palw_native_resource_v1' not in m}
+def aux_nest(ts):
+    if len(ts)==1:return ts[0]
+    if len(ts)<=6:return '('+','.join(ts)+')'
+    return aux_nest([aux_nest(ts[i:i+6]) for i in range(0,len(ts),6)])
+def aux_mirror(key):
+    item=defs[key];types=[]
+    if item['kind']!='struct' or item['form']!='named':raise ValueError(('only named structs can be mirrored',key))
+    for part in split(item['body']):
+        if re.search(r'#\[borsh\(skip\)\]',part):continue
+        m=re.match(r'(?:pub(?:\([^)]*\))?\s+)?\w+\s*:\s*(.*)',stripattrs(part),re.S)
+        typ=m[1].strip()
+        types.append(aux_expand(typ) if typ.startswith('mirror:') else aux_expand(qualify(typ,item)))
+    return aux_nest(types)
+def aux_expand(t):
+    t=re.sub(r'mirror:([\w:]+)',lambda m:aux_mirror(m[1]),t)
+    for tok in re.findall(r'(?:[A-Za-z_]\w*::)+[A-Za-z_]\w*',t):
+        if tok.startswith('crate::') and tok.split('::')[1] in FOLD_STEMS:raise ValueError(('fold-private path leaked into a generated type',tok))
+        if tok not in defs and tok not in aliases and tok not in {'crate::Hash64','crate::BlockHash','kaspa_hashes::Hash'} and not re.search(r'::[A-Z0-9_]+$',tok):raise ValueError(('unresolved aux type',tok,t))
+    return t
+def aux_scan(value):
+    if value.startswith('raw:'):return 'raw_aux_row_v1(frame,('+value[4:]+') as u64)?'
+    if value.startswith('any:'):
+        alts=[aux_expand(a) for a in value[4:].split('|')]
+        return 'any_aux_row_v1(frame,&['+','.join('try_exact_aux_row_v1::<'+a+'>' for a in alts)+'])?'
+    return '<'+aux_expand(value)+' as NativeWireScanV1>::scan_native_wire_v1(frame)?'
+AUX_SPEC_ARMS='// Tables 42–106 and 112 (rfc06_native_aux_spec.py; inventory: docs/design/palw/native-resource-aux-inventory-2026-10-15.md).\n'
+_total=set()
+for _n in AUX.NS:
+    if _n['cond']=='true':
+        _total.add(_n['table']);AUX_SPEC_ARMS+=f"{_n['table']}=>{aux_scan(_n['value'])},\n"
+    else:AUX_SPEC_ARMS+=f"{_n['table']} if {_n['cond']}=>{aux_scan(_n['value'])},\n"
+AUX_SPEC_ARMS+=' | '.join(str(t) for t in sorted(AUX.RESERVED))+'=>return Err(wire::wire_bad("reserved aux table holds no rows")),\n'
+for _t in AUX.TABLES:
+    if _t not in AUX.RESERVED and _t not in _total:AUX_SPEC_ARMS+=f'{_t}=>return Err(wire::wire_bad("unallocated aux table {_t} row namespace")),\n'
+# The RFC07/RFC08 tables above dispatch on guarded key shapes only; a shape none of their folds writes is malformed too.
+AUX_SPEC_ARMS+='115 | 123 | 125 | 126 | 127 | 130=>return Err(wire::wire_bad("unallocated aux row namespace")),\n'
+AUX_HELPERS='''
+/// The longest aux key any fold writes is far below this; a longer key is malformed, never truncated.
+const NATIVE_AUX_KEY_MAX_BYTES_V1: u64 = 4096;
+/// A raw byte row (stored verbatim, not Borsh-framed, never decoded by restore or ledger projection): its declared bound, then
+/// one transient copy of its bytes (the outer loop already holds the stored row and its copy).
+fn raw_aux_row_v1<R: Read>(frame: &mut NativeWireReaderV1<R>, cap: u64) -> std::io::Result<NativeWireShapeV1> {
+    let n = frame.remaining();
+    if n > cap {
+        return Err(wire::wire_bad("raw aux row exceeds its declared bound"));
+    }
+    frame.step()?;
+    frame.skip(n)?;
+    NativeWireShapeV1 { byte_entries: n, ..Default::default() }.allocation(n, 1)
+}
+/// One exact layout of an ambiguous key shape over a buffered row: accepted only if it consumes every byte.
+fn try_exact_aux_row_v1<T: NativeWireScanV1>(row: &[u8]) -> Option<NativeWireShapeV1> {
+    let mut reader = NativeWireReaderV1::new(row, row.len() as u64);
+    let shape = T::scan_native_wire_v1(&mut reader).ok()?;
+    (reader.remaining() == 0).then_some(shape)
+}
+/// A key shape two families write with different layouts: buffer the bounded row, try every layout, account the LARGEST
+/// accepted shape plus the buffer (never under-count); no layout accepting fails closed.
+fn any_aux_row_v1<R: Read>(
+    frame: &mut NativeWireReaderV1<R>,
+    layouts: &[fn(&[u8]) -> Option<NativeWireShapeV1>],
+) -> std::io::Result<NativeWireShapeV1> {
+    let n = frame.remaining();
+    if n > 1 << 20 {
+        return Err(wire::wire_bad("ambiguous aux row exceeds its buffered bound"));
+    }
+    let mut row = vec![0u8; n as usize];
+    frame.step()?;
+    frame.read_exact(&mut row)?;
+    let mut best: Option<NativeWireShapeV1> = None;
+    for layout in layouts {
+        if let Some(shape) = layout(&row) {
+            best = Some(match best {
+                Some(b) if b.heap >= shape.heap => b,
+                _ => shape,
+            });
+        }
+    }
+    best.ok_or_else(|| wire::wire_bad("no audited layout accepts this ambiguous aux row"))?.allocation(n, 1)
+}
+'''
 aux={
 32:'crate::palw_state_v2::PalwBondKeyV2',33:'crate::palw_kernel_route_v1::KernelAssignmentV1',34:'Vec<misaka_palw_kernel::receipt::PalwConstraintReceiptV1>',35:'(u64,u32,u64)',
 36:'crate::palw_onboarding_v1::ArtifactBindingRowV1',37:'crate::palw_onboarding_v1::KernelBindingRowV1',38:'crate::palw_onboarding_v1::ConformanceRowV1',39:'crate::palw_onboarding_v1::ConformanceAttemptRowV1',40:'crate::palw_conformance_evidence_v1::ConformanceEvidencePostV1',41:'crate::palw_kernel_route_v1::PalwKernelChunkGroupV1',
 107:'u64',108:'misaka_palw_kernel::beacon_source::BeaconSourceTargetV1',109:'misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTargetV1',110:'crate::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1',111:'crate::palw_panel_source_snapshot_v1::PalwPanelSourceSnapshotV1',
 128:'crate::palw_panel_source_fee_v2::PalwPanelSourceFeeAuthorityV2',113:'misaka_palw_kernel::claim_paid_v2::PaidClaimClassV2',114:'misaka_palw_kernel::claim_paid_v2::PaidClaimJobV2',115:'crate::palw_claim_challenge_v2::PalwPaidClaimAuthorityV2',116:'crate::palw_claim_challenge_v2::PalwPaidClaimLockV2',117:'misaka_palw_kernel::claim_paid_v2::PaidClaimReceiptV2',118:'misaka_palw_challenge::approval_scope::LifetimeCounterV3',119:'crate::palw_claim_challenge_v2::PalwPaidClaimEvidenceV3',120:'crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1',122:'misaka_palw_challenge::approval_scope::LifetimeReviewScopeV3',123:'crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3',124:'crate::palw_claim_challenge_v2::PalwPaidClaimFinalV2',
 }
-code='//! Exact native aux codecs; no opaque row size stands for nested decoded demand.\nuse super::*;\nuse std::{io::Read,mem::size_of,collections::BTreeMap};\nimpl NativeWireScanV1 for crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {\n fn scan_native_wire_v1<R:Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {\n  let mut sum=crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1::scan_native_wire_v1(reader)?;\n  // The persisted ledger rows are native byte Vecs. State root/restore hashes\n  // them directly; later full ledger class/program expansion is a separate\n  // consumer operation, never inferred from their encoded row length here.\n  sum=sum.merge(BTreeMap::<(u8,Vec<u8>),Vec<u8>>::scan_native_wire_v1(reader)?)?;\n  let count=reader.word()? as u64;\n  for _ in 0..count {\n   let table=reader.byte()?;let key_bytes=reader.word()? as u64;\n   if key_bytes>reader.remaining() {return Err(wire::wire_bad("native aux key exceeds frame"));}\n   let prefix=if key_bytes!=0 {let p=reader.byte()?;reader.skip(key_bytes-1)?;p}else{0};\n   sum=sum.allocation(key_bytes.checked_mul(2).ok_or_else(||wire::wire_bad("native aux key allocation overflow"))?,1)?;\n   let row_bytes=reader.word()? as u64;\n   if row_bytes>reader.remaining() {return Err(wire::wire_bad("native aux row exceeds frame"));}\n   let mut frame=NativeWireReaderV1::new((&mut *reader).take(row_bytes),row_bytes);\n   let shape=match table {\n'
+code='//! Exact native aux codecs; no opaque row size stands for nested decoded demand.\nuse super::*;\nuse std::{io::Read,mem::size_of,collections::BTreeMap};\nimpl NativeWireScanV1 for crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {\n fn scan_native_wire_v1<R:Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {\n  let mut sum=crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1::scan_native_wire_v1(reader)?;\n  // The persisted ledger rows are native byte Vecs. State root/restore hashes\n  // them directly; later full ledger class/program expansion is a separate\n  // consumer operation, never inferred from their encoded row length here.\n  sum=sum.merge(BTreeMap::<(u8,Vec<u8>),Vec<u8>>::scan_native_wire_v1(reader)?)?;\n  let count=reader.word()? as u64;\n  for _ in 0..count {\n   let table=reader.byte()?;let key_bytes=reader.word()? as u64;\n   if key_bytes>reader.remaining() {return Err(wire::wire_bad("native aux key exceeds frame"));}\n   if key_bytes>NATIVE_AUX_KEY_MAX_BYTES_V1 {return Err(wire::wire_bad("native aux key exceeds the audited aux key bound"));}\n   let mut key=[0u8;NATIVE_AUX_KEY_MAX_BYTES_V1 as usize];reader.step()?;reader.read_exact(&mut key[..key_bytes as usize])?;\n   sum=sum.allocation(key_bytes.checked_mul(2).ok_or_else(||wire::wire_bad("native aux key allocation overflow"))?,1)?;\n   let row_bytes=reader.word()? as u64;\n   if row_bytes>reader.remaining() {return Err(wire::wire_bad("native aux row exceeds frame"));}\n   let mut frame=NativeWireReaderV1::new((&mut *reader).take(row_bytes),row_bytes);\n   let shape=match table {\n'
 code+=''.join(str(table)+(' if key_bytes==64' if table in (115,123) else '')+' => <'+typ+' as NativeWireScanV1>::scan_native_wire_v1(&mut frame)?,\n' for table,typ in aux.items())
-code+='115 if key_bytes==65 && matches!(prefix,0x49|0x42)=>crate::palw_claim_challenge_v2::PalwPaidClaimIndexV3::scan_native_wire_v1(&mut frame)?,\n123 if key_bytes==65 && prefix==0x49=>crate::palw_claim_challenge_v2::PalwPaidClaimIndexV3::scan_native_wire_v1(&mut frame)?,\n// RFC07/RFC08 signed economic contracts (2026-10-15): tallies keyed by a 64-byte id; extensions and contracts under their\n// 0x01 prefix; the minimum-price job index (0x02) holds a 64-byte contract id.\n125 if key_bytes==64=>crate::palw_econ_contracts_v1::PalwModelVerificationTallyV1::scan_native_wire_v1(&mut frame)?,\n126 if key_bytes==65 && prefix==crate::palw_econ_contracts_v1::HORIZON_EXTENSION_PREFIX_V1=>crate::palw_econ_contracts_v1::PalwHorizonExtensionRowV1::scan_native_wire_v1(&mut frame)?,\n127 if key_bytes==65 && prefix==crate::palw_econ_contracts_v1::MINIMUM_PRICE_CONTRACT_PREFIX_V1=>crate::palw_econ_contracts_v1::PalwMinimumPriceRowV1::scan_native_wire_v1(&mut frame)?,\n127 if key_bytes==65 && prefix==crate::palw_econ_contracts_v1::MINIMUM_PRICE_JOB_PREFIX_V1=><[u8;64] as NativeWireScanV1>::scan_native_wire_v1(&mut frame)?,\n// Round 3 (2026-10-15): the verification gate wiring rows (aux 125, 65-byte prefixed keys) and the N3\n// BootstrapExact rounds (aux 130, keyed by the 64-byte round id).\n125 if key_bytes==65 && prefix==crate::palw_econ_contracts_v1::MODEL_VERIFICATION_CONTEXT_PREFIX_V1=>crate::palw_econ_contracts_v1::PalwModelVerificationContextV1::scan_native_wire_v1(&mut frame)?,\n125 if key_bytes==65 && prefix==crate::palw_econ_contracts_v1::MODEL_VERIFICATION_DEFERRED_PREFIX_V1=>crate::palw_econ_contracts_v1::PalwModelVerificationDeferredV1::scan_native_wire_v1(&mut frame)?,\n125 if key_bytes==65 && prefix==crate::palw_econ_contracts_v1::MODEL_VERIFICATION_DECIDED_PREFIX_V1=>crate::palw_econ_contracts_v1::PalwModelVerificationDecidedV1::scan_native_wire_v1(&mut frame)?,\n130 if key_bytes==64=>crate::palw_beacon_bootstrap_v1::PalwBootstrapRoundRowV1::scan_native_wire_v1(&mut frame)?,\n121 => match (key_bytes,prefix) {\n (65,0x41)=>crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(&mut frame)?,\n (65,0x42)=>crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2::scan_native_wire_v1(&mut frame)?,\n (64,_)=>crate::palw_panel_lifetime_v2::PalwPanelLifetimeEnrollmentV2::scan_native_wire_v1(&mut frame)?,\n _=>return Err(wire::wire_bad("unallocated Panel lifetime row namespace")),},\n _=>return Err(std::io::Error::new(std::io::ErrorKind::Unsupported,NativeCoverageV1::unsupported::<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>(&format!("native aux table {table}"),"nested row codec is not in the explicit supported shape inventory"))),};\n   if frame.remaining()!=0 {return Err(wire::wire_bad("native aux row codec has trailing/mismatched bytes"));}\n   sum=sum.merge(shape.allocation(row_bytes.checked_mul(2).ok_or_else(||wire::wire_bad("native aux byte allocation overflow"))?,1)?)?;\n  }\n  sum=sum.allocation(count.checked_mul(2).ok_or_else(||wire::wire_bad("native aux Vec overflow"))?,size_of::<((u8,Vec<u8>),Vec<u8>)>())?;\n  sum=sum.allocation(count,size_of::<typed::BTreeNodeEnvelopeV1<(u8,Vec<u8>),Vec<u8>>>())?;\n  // Restore consistency builds per-job and per-producer counters from the\n  // actual aux rows. The total row count bounds both fixed-key scratch maps.\n  sum=sum.allocation(count.checked_mul(2).ok_or_else(||wire::wire_bad("native aux scratch count overflow"))?,size_of::<typed::BTreeNodeEnvelopeV1<[u8;64],u32>>())?;\n  sum.outer_entries=count;sum.collection_entries=sum.collection_entries.checked_add(count).ok_or_else(||wire::wire_bad("native aux count overflow"))?;\n  Ok(sum)\n }\n}\n'
+code+='115 if key_bytes==65 && matches!(prefix,0x49|0x42)=>crate::palw_claim_challenge_v2::PalwPaidClaimIndexV3::scan_native_wire_v1(&mut frame)?,\n123 if key_bytes==65 && prefix==0x49=>crate::palw_claim_challenge_v2::PalwPaidClaimIndexV3::scan_native_wire_v1(&mut frame)?,\n// RFC07/RFC08 signed economic contracts (2026-10-15): tallies keyed by a 64-byte id; extensions and contracts under their\n// 0x01 prefix; the minimum-price job index (0x02) holds a 64-byte contract id.\n125 if key_bytes==64=>crate::palw_econ_contracts_v1::PalwModelVerificationTallyV1::scan_native_wire_v1(&mut frame)?,\n126 if key_bytes==65 && prefix==crate::palw_econ_contracts_v1::HORIZON_EXTENSION_PREFIX_V1=>crate::palw_econ_contracts_v1::PalwHorizonExtensionRowV1::scan_native_wire_v1(&mut frame)?,\n127 if key_bytes==65 && prefix==crate::palw_econ_contracts_v1::MINIMUM_PRICE_CONTRACT_PREFIX_V1=>crate::palw_econ_contracts_v1::PalwMinimumPriceRowV1::scan_native_wire_v1(&mut frame)?,\n127 if key_bytes==65 && prefix==crate::palw_econ_contracts_v1::MINIMUM_PRICE_JOB_PREFIX_V1=><[u8;64] as NativeWireScanV1>::scan_native_wire_v1(&mut frame)?,\n// Round 3 (2026-10-15): the verification gate wiring rows (aux 125, 65-byte prefixed keys) and the N3\n// BootstrapExact rounds (aux 130, keyed by the 64-byte round id).\n125 if key_bytes==65 && prefix==crate::palw_econ_contracts_v1::MODEL_VERIFICATION_CONTEXT_PREFIX_V1=>crate::palw_econ_contracts_v1::PalwModelVerificationContextV1::scan_native_wire_v1(&mut frame)?,\n125 if key_bytes==65 && prefix==crate::palw_econ_contracts_v1::MODEL_VERIFICATION_DEFERRED_PREFIX_V1=>crate::palw_econ_contracts_v1::PalwModelVerificationDeferredV1::scan_native_wire_v1(&mut frame)?,\n125 if key_bytes==65 && prefix==crate::palw_econ_contracts_v1::MODEL_VERIFICATION_DECIDED_PREFIX_V1=>crate::palw_econ_contracts_v1::PalwModelVerificationDecidedV1::scan_native_wire_v1(&mut frame)?,\n130 if key_bytes==64=>crate::palw_beacon_bootstrap_v1::PalwBootstrapRoundRowV1::scan_native_wire_v1(&mut frame)?,\n121 => match (key_bytes,prefix) {\n (65,0x41)=>crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(&mut frame)?,\n (65,0x42)=>crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2::scan_native_wire_v1(&mut frame)?,\n (64,_)=>crate::palw_panel_lifetime_v2::PalwPanelLifetimeEnrollmentV2::scan_native_wire_v1(&mut frame)?,\n _=>return Err(wire::wire_bad("unallocated Panel lifetime row namespace")),},\n'+AUX_SPEC_ARMS+' _=>return Err(std::io::Error::new(std::io::ErrorKind::Unsupported,NativeCoverageV1::unsupported::<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>(&format!("native aux table {table}"),"nested row codec is not in the explicit supported shape inventory"))),};\n   if frame.remaining()!=0 {return Err(wire::wire_bad("native aux row codec has trailing/mismatched bytes"));}\n   sum=sum.merge(shape.allocation(row_bytes.checked_mul(2).ok_or_else(||wire::wire_bad("native aux byte allocation overflow"))?,1)?)?;\n  }\n  sum=sum.allocation(count.checked_mul(2).ok_or_else(||wire::wire_bad("native aux Vec overflow"))?,size_of::<((u8,Vec<u8>),Vec<u8>)>())?;\n  sum=sum.allocation(count,size_of::<typed::BTreeNodeEnvelopeV1<(u8,Vec<u8>),Vec<u8>>>())?;\n  // Restore consistency builds per-job and per-producer counters from the\n  // actual aux rows. The total row count bounds both fixed-key scratch maps.\n  sum=sum.allocation(count.checked_mul(2).ok_or_else(||wire::wire_bad("native aux scratch count overflow"))?,size_of::<typed::BTreeNodeEnvelopeV1<[u8;64],u32>>())?;\n  sum.outer_entries=count;sum.collection_entries=sum.collection_entries.checked_add(count).ok_or_else(||wire::wire_bad("native aux count overflow"))?;\n  Ok(sum)\n }\n}\n'
 a=code.index('let shape=match table {');b=code.index('\n   if frame.remaining()',a)
 body=code[a:b].removeprefix('let shape=').removesuffix(';').replace('&mut frame','frame')
-code=code[:a]+'let shape=scan_native_aux_row_v1(table,key_bytes,prefix,&mut frame)?;'+code[b:]
-code+='\npub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key_bytes:u64,prefix:u8,frame:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1>{'+body+'}\n'
+code=code[:a]+'let shape=scan_native_aux_row_v1(table,&key[..key_bytes as usize],&mut frame)?;'+code[b:]
+code+='\n/// One aux row\'s exact codec, dispatched on its table and FULL key (`k`) and, where two family layouts share a key shape, its row\n/// length (`n`). Tables 42–106 and 112 follow scripts/drills/rfc06_native_aux_spec.py; a key shape no fold writes fails closed.\npub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1>{let k=key;let n=frame.remaining();let key_bytes=k.len() as u64;let prefix=k.first().copied().unwrap_or(0);'+body+'}\n'
+code+=AUX_HELPERS
 (OUT.parent/'wire_kernel_aux.rs').write_text(code)
 
 # Concrete native ledger row codecs; reflected from the same KernelLedger
