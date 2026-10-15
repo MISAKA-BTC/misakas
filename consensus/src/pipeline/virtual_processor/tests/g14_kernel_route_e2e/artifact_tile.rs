@@ -156,6 +156,7 @@ async fn artifact_binding_tile_actual_weights_register_refute_and_prepare_withou
     fence.min_effective_bits = 128;
     fence.sampled_conformance_gates_reward = false;
     params.palw_panel_free_v1 = Some(fence);
+    let bundle_params = with_opv_budget(&mut params, bundle_params);
     assert!(params.validate_palw_v2().is_err(), "only activation is test-armed; shipping validation stays closed");
     let mut net = Net::over_cfg((Config::new(params), bundle_params, premine, floats), TestConsensus::new);
     net.beat_to(1).await;

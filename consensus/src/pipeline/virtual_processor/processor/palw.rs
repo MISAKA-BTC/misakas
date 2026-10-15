@@ -3436,7 +3436,9 @@ impl VirtualStateProcessor {
         // Both clocks, after the liveness escape; past the fence the gate also reads what the bond
         // still stands behind — its reservations and its live slashable locks (2026-09-24 DoS
         // audit, fix #1). One predicate for the lock and the burn beside it.
-        let duty_gate = self.palw_audit_2026_09_23_at(now_daa);
+        // RFC-0015 §8.3.3 / §13.2 (2026-10-15): on a network with an OPV policy a bond's live duties (its OPV reservation to the
+        // liability horizon, its budget window to `d + W` and liability hold) hold its collateral even below the audit fence.
+        let duty_gate = self.palw_audit_2026_09_23_at(now_daa) || self.palw_kernel_opv_fence().is_some();
         state
             .bonds_iter()
             .filter(|(key, record)| self.palw_v2_bond_is_locked(state, key, record, now_daa, duty_gate))
@@ -4043,7 +4045,9 @@ impl VirtualStateProcessor {
             return Default::default();
         };
         // The same predicate as the lock beside it — see `palw_v2_locked_bond_outpoints`.
-        let duty_gate = self.palw_audit_2026_09_23_at(now_daa);
+        // RFC-0015 §8.3.3 / §13.2 (2026-10-15): on a network with an OPV policy a bond's live duties (its OPV reservation to the
+        // liability horizon, its budget window to `d + W` and liability hold) hold its collateral even below the audit fence.
+        let duty_gate = self.palw_audit_2026_09_23_at(now_daa) || self.palw_kernel_opv_fence().is_some();
         state
             .bonds_iter()
             .filter(|(key, record)| !self.palw_v2_bond_is_locked(state, key, record, now_daa, duty_gate))
@@ -7778,6 +7782,8 @@ impl VirtualStateProcessor {
                             fence_activation_daa: fence.activation.daa_score(),
                         }
                     }),
+                    // RFC-0015 §8.3 (lead default 2026-10-15): every network with an OPV policy budgets every Panel-free claim.
+                    budget_required: true,
                 }),
                 typed_roots: self.palw_kernel_typed_roots_activation(),
                 beacon_source: self.palw_beacon_source_opt_in_v1.filter(|f| {

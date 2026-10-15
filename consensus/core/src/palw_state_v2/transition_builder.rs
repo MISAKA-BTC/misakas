@@ -2638,7 +2638,9 @@ impl<'a> TransitionBuilder<'a> {
     /// never a post-debit collateral (#10). A bond named twice is opened once.
     pub(super) fn open_conviction_v1(&self, bonds: &[PalwBondKeyV2], now_daa: u64) -> PalwConvictionV1 {
         let raw_depth = self.read().settled_anchor_depth();
-        let duty_gate = self.extras.audit_2026_09_23_active;
+        // RFC-0015 §8.3.3 (2026-10-15): the same duty gate as the processor's bond lock — also on every network with an OPV policy.
+        let duty_gate =
+            self.extras.audit_2026_09_23_active || self.extras.kernel_route.as_ref().is_some_and(|route| route.opv.is_some());
         let mut opened: Vec<(PalwBondKeyV2, u64, bool)> = Vec::with_capacity(bonds.len());
         for bond in bonds {
             if opened.iter().any(|(seen, _, _)| seen == bond) {

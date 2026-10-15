@@ -83,10 +83,16 @@ fn opv_test_eligible(classes: &[Hash64]) {
 }
 
 fn kernel_config_with(opv: Option<PalwPanelFreeFenceV1>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    kernel_config_with_budget(opv, true)
+}
+
+/// [`kernel_config_with`]; `budget = false` leaves `palw_bond_budget_v1` unarmed (only to show an unbudgeted OPV claim is refused).
+fn kernel_config_with_budget(opv: Option<PalwPanelFreeFenceV1>, budget: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (config, bundle, premine, floats) = t12_with_harness_cards();
     let mut params = config.params.clone();
     params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
     params.palw_panel_free_v1 = opv;
+    let bundle = if budget { with_opv_budget(&mut params, bundle) } else { bundle };
     // A shallow all-economic tie (a heartbeat branch against a heartbeat branch) is GHOSTDAG's, not a hash race: the reorg tests need
     // a heavier branch to win deterministically (rcore/f1-strictwin-tie).
     params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
@@ -94,6 +100,24 @@ fn kernel_config_with(opv: Option<PalwPanelFreeFenceV1>) -> (Config, PalwConsens
     // `ConfigBuilder::build` runs `validate_palw_v2`, which refuses these fences by design (module doc): construct the config directly.
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fence; only this harness bypasses it");
     (Config::new(params), bundle, premine, floats)
+}
+
+/// **RFC-0015 §8.3 (lead default 2026-10-15, pending user review): every network that declares the OPV policy budgets every
+/// Panel-free claim** — an unbudgeted OPV claim (and native funded / stage work) is refused. A harness that arms
+/// `palw_panel_free_v1` therefore arms `palw_bond_budget_v1` beside it ([`kaspa_consensus_core::config::params::Params::
+/// arm_palw_opv_mechanics_budget_v1`], an UNAPPROVED mechanics policy) and re-mirrors the bundle it hands the chain. (Before this
+/// default these worlds ran OPV claims unbudgeted.)
+fn with_opv_budget(params: &mut kaspa_consensus_core::config::params::Params, bundle: PalwConsensusParamsV2) -> PalwConsensusParamsV2 {
+    if !params.arm_palw_opv_mechanics_budget_v1() {
+        return bundle;
+    }
+    let mut tmp = params.clone();
+    tmp.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
+    tmp.sync_palw_bond_budget_v1();
+    match tmp.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b,
+        _ => unreachable!("set above"),
+    }
 }
 
 /// The class ids the OPV mechanics worlds treat as eligible (test seam): the fixture's class under `OptimisticPublicVerification`.
@@ -3490,3 +3514,6 @@ mod opv_bootstrap;
 // `g14_kernel_route_e2e/socket_rpc.rs`.
 mod recovery;
 mod socket_rpc;
+// RFC-0015 §13.2 (2026-10-15, test source): old Panel claims across the fence, the §8.3 budget on the OPV door (gate record present),
+// a direct proof over another bond's open demand: `g14_kernel_route_e2e/rfc15_panel_free.rs`.
+mod rfc15_panel_free;

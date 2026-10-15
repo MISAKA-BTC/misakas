@@ -298,17 +298,16 @@ pub enum PalwSliceVerificationV1 {
 /// route holds a Final claim's reservation in full — it is released only once the horizon has passed (`daa > liability_until`) — so a
 /// Final row reserving nothing at or before its horizon is exactly that forfeit. Past the horizon a released row is still verified.
 pub fn palw_exec_v2_claim_outcome_v1(row: &ClaimRowV1, daa: u64) -> PalwSliceVerificationV1 {
-    if row.convicted {
-        return PalwSliceVerificationV1::ProvenFalse;
-    }
-    match row.life.state {
-        ClaimStateV1::Final { .. } if row.reserved == 0 && row.liability_until.is_none_or(|until| daa <= until) => {
-            PalwSliceVerificationV1::Defaulted
-        }
-        ClaimStateV1::Final { final_daa } => PalwSliceVerificationV1::Verified { final_daa },
-        ClaimStateV1::Convicted { .. } => PalwSliceVerificationV1::ProvenFalse,
-        ClaimStateV1::Unavailable { .. } | ClaimStateV1::TimedOut { .. } => PalwSliceVerificationV1::Defaulted,
-        _ => PalwSliceVerificationV1::Pending,
+    // RFC-0015 §9 (2026-10-15): the slice follows the kernel claim through the ONE settlement predicate every reader of a kernel
+    // `Final` uses (`palw_kernel_settlement_v1`), so an OPV claim's slice verifies at its window-rule `Final`, its leg stays held to the
+    // claim's liability horizon (the EXEC horizon), and a conviction after `Final` proves it false — exactly as a Panel-licensed
+    // claim's. Behaviour-preserving: the predicate is this function's former match (the row carries no OPV forfeit flag here).
+    use crate::palw_kernel_settlement_v1::{PalwKernelSettlementV1 as K, palw_kernel_claim_settlement_v1};
+    match palw_kernel_claim_settlement_v1(&row.life.state, row.convicted, row.reserved, row.liability_until, false, daa) {
+        K::Convicted => PalwSliceVerificationV1::ProvenFalse,
+        K::Defaulted => PalwSliceVerificationV1::Defaulted,
+        K::FinalRevocable { final_daa, .. } | K::Settled { final_daa, .. } => PalwSliceVerificationV1::Verified { final_daa },
+        K::Pending => PalwSliceVerificationV1::Pending,
     }
 }
 

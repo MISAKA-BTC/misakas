@@ -491,7 +491,7 @@ drill floor (§12).
 * **GAP-B2:** table 18 already retains the payer. The 2026-10-11 correction makes `finals_read_v1` and `beacon_sealed_sources_v1`
   export it, including after escrow payment. Historical jobs with no authenticated payer remain explicitly unknown; never guess
   the producer, registrant or a genesis operator as their consumer. This closes the missing adapter connection, not economic independence.
-* **GAP-B3: RFC-0010 V3** does not read the route's OPV Finals or the derived eligible set (`ChainPanelBeaconHistoryV1` serves V2-lattice
+* **GAP-B3 — closed in code 2026-10-15 (unbuilt, unverified):** `ChainPanelBeaconHistoryV1` reads the route's OPV Finals (`beacon_events_v1`), whose standing now comes from the one kernel settlement predicate (`palw_kernel_settlement_v1`; see `rfc-0015-implementation-status-2026-10-15.md` §1c). No Panel beacon scheme is approved, so V3 stays unavailable. Historical text: **RFC-0010 V3** does not read the route's OPV Finals or the derived eligible set (`ChainPanelBeaconHistoryV1` serves V2-lattice
   Finals and `eligible_profiles = ∅`), and no panel scheme is approved: V3 stays unavailable.
 * **GAP-B4: pipelines** have no onboarding path, so no OPV pipeline class is ever derived-eligible (only the test seam names one).
 * **GAP-B5: sampled evidence carriage** — the tag-113 target kind (§8).

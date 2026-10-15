@@ -172,11 +172,16 @@ pub struct GetPalwKernelClaimResponse {
     pub opv_max_gain_sompi: u64,
     /// What a Final of this claim means (an OPV Final is never shown as a proof of correctness).
     pub final_statement: String,
+    /// RFC-0015 §9 / §11.3 (wire version 2): `pending`, `final-revocable` (Final but still convictable — not safe for an irreversible
+    /// release), `settled`, `convicted` or `defaulted`; empty from a version-1 peer.
+    pub settlement: String,
+    /// The first DAA the claim is (or, absent a conviction or default, will be) settled at; 0 before Final.
+    pub settled_from_daa: u64,
 }
 
 impl Serializer for GetPalwKernelClaimResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(bool, &self.available, writer)?;
         store!(bool, &self.found, writer)?;
         store!(u64, &self.tip_daa, writer)?;
@@ -211,14 +216,16 @@ impl Serializer for GetPalwKernelClaimResponse {
         store!(u64, &self.opv_reservation_sompi, writer)?;
         store!(u64, &self.opv_max_gain_sompi, writer)?;
         store!(String, &self.final_statement, writer)?;
+        store!(String, &self.settlement, writer)?;
+        store!(u64, &self.settled_from_daa, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwKernelClaimResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
-        Ok(Self {
+        let version = load!(u16, reader)?;
+        let mut out = Self {
             available: load!(bool, reader)?,
             found: load!(bool, reader)?,
             tip_daa: load!(u64, reader)?,
@@ -253,7 +260,14 @@ impl Deserializer for GetPalwKernelClaimResponse {
             opv_reservation_sompi: load!(u64, reader)?,
             opv_max_gain_sompi: load!(u64, reader)?,
             final_statement: load!(String, reader)?,
-        })
+            settlement: String::new(),
+            settled_from_daa: 0,
+        };
+        if version >= 2 {
+            out.settlement = load!(String, reader)?;
+            out.settled_from_daa = load!(u64, reader)?;
+        }
+        Ok(out)
     }
 }
 

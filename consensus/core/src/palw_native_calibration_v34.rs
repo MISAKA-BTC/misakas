@@ -44,6 +44,7 @@ impl NativePanelFreeSettingsV34 {
             budgets: self.budgets,
             economics: self.economics,
             carrier: self.carrier,
+            activation_gate: None,
         };
         f.validate_value().map_err(|e| format!("native calibration34 OPV terms: {e:?}"))?;
         Ok(f)
@@ -150,6 +151,7 @@ impl NativeCalibrationSnapshotV34 {
             || base.palw_probabilistic_constraints_v1.is_some()
             || base.palw_panel_free_v1.is_some()
             || base.palw_window_class_v37.is_some()
+            || base.palw_bond_budget_v1.is_some()
         {
             return Err("native calibration34 owning base/snapshot pin differs or base already overrides native rules".into());
         }
@@ -157,6 +159,14 @@ impl NativeCalibrationSnapshotV34 {
         out.genesis = isolated_native_genesis_v34(&base.genesis, self.isolation)?;
         out.palw_probabilistic_constraints_v1 = Some(ForkActivation::always());
         out.palw_panel_free_v1 = Some(self.panel.fence()?);
+        // RFC-0015 §8.3 (lead default 2026-10-15, pending user review): every network with an OPV policy budgets every Panel-free
+        // claim, this isolated genesis included (validate what ships). The mechanics policy is UNAPPROVED; it is a constant of the
+        // binary, not a snapshot field, so the snapshot encoding is unchanged (the calibration's params identity does change).
+        out.palw_bond_budget_v1 = Some(crate::palw_bond_budget_v1::PalwBondBudgetFenceV1 {
+            activation: ForkActivation::always(),
+            policy: crate::palw_bond_budget_v1::PalwBondBudgetPolicyV1::opv_mechanics_probe_v1(),
+        });
+        out.sync_palw_bond_budget_v1();
         out.palw_funded_execution_v11 = Some(crate::palw_funded_execution_v11::PalwFundedExecutionFenceV11 {
             activation: ForkActivation::always(),
             policies: self.funded.clone(),
@@ -346,6 +356,8 @@ impl Params {
         original.palw_probabilistic_constraints_v1 = base.palw_probabilistic_constraints_v1;
         original.palw_window_class_v37 = base.palw_window_class_v37;
         original.palw_audit_2026_09_11 = base.palw_audit_2026_09_11;
+        original.palw_bond_budget_v1 = base.palw_bond_budget_v1.clone();
+        original.sync_palw_bond_budget_v1();
         if *version != 34
             || *isolation == [0; 64]
             || *measurement_manifest == [0; 64]
@@ -361,6 +373,11 @@ impl Params {
             || f.activation != ForkActivation::always()
             || self.palw_probabilistic_constraints_v1 != Some(ForkActivation::always())
             || self.palw_stage_execution_v14.is_some()
+            || self.palw_bond_budget_v1
+                != Some(crate::palw_bond_budget_v1::PalwBondBudgetFenceV1 {
+                    activation: ForkActivation::always(),
+                    policy: crate::palw_bond_budget_v1::PalwBondBudgetPolicyV1::opv_mechanics_probe_v1(),
+                })
             || self.palw_window_class_v37.is_some_and(|w| w != ForkActivation::always())
             || (base.palw_audit_2026_09_11.is_none() && self.palw_audit_2026_09_11 != Some(ForkActivation::always()))
         {

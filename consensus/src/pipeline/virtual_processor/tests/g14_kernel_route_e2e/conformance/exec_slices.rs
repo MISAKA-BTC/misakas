@@ -1836,3 +1836,5 @@ async fn x8_g14_a_lying_real_run_is_convicted_through_its_prefix_claim_and_voids
 }
 
 mod native_final;
+// RFC-0015 §9 (2026-10-15, test source): a slice verified by an OPV kernel claim follows the one settlement predicate.
+mod opv_settlement;

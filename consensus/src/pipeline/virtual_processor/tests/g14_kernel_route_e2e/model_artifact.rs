@@ -22,6 +22,7 @@ fn config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (cfg, b, p, f) = kernel_config_onboarding();
     let mut params = cfg.params.clone();
     params.palw_panel_free_v1 = Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new()));
+    let b = with_opv_budget(&mut params, b);
     assert!(params.validate_palw_v2().is_err(), "shipping activation remains refused");
     (Config::new(params), b, p, f)
 }

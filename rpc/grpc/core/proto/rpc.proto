@@ -3165,6 +3165,9 @@ message GetPalwKernelClaimResponseMessage {
   uint64 opvReservationSompi = 32;
   uint64 opvMaxGainSompi = 33;
   string finalStatement = 34;
+  // RFC-0015 §9 / §11.3: pending | final-revocable | settled | convicted | defaulted.
+  string settlement = 35;
+  uint64 settledFromDaa = 36;
   RPCError error = 1000;
 }
 

@@ -31,8 +31,9 @@
 //! mempool (sent before a restart) is never queued twice, and one queued is re-offered only past [`PALW_KERNEL_VERIFIER_RESEND_DAA_V1`].
 //!
 //! **Identity arms it; the flag only supplies the model.** A node with a funded bond (`--palw-fee-outpoint`) and at least one kernel
-//! model runs it past `palw_probabilistic_constraints_v1` (which no shipped preset arms and validation refuses); everywhere else it is a
-//! clean no-op. Claims this bond produced are skipped (a producer does not prosecute itself).
+//! model runs it past `palw_probabilistic_constraints_v1` or `palw_panel_free_v1` (RFC-0015: the verifier an OPV claim relies on;
+//! no shipped preset arms either and validation refuses both); everywhere else it is a clean no-op. It treats a Panel-licensed and an
+//! OptimisticPublicVerification claim alike (`Challengeable` is open; an OPV claim has no seat to leave it to). Claims this bond produced are skipped (a producer does not prosecute itself).
 use super::*;
 use kaspa_consensus_core::palw_kernel_route_v1::{
     PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1, PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1, palw_kernel_bond_id_v1,
@@ -205,9 +206,13 @@ impl PalwPanelService {
             false
         });
         let params = &self.consensus_config.params;
+        // RFC-0015 §2 / §7.1: under Panel=0 (`palw_panel_free_v1` in force) no seat is drawn, so this public verifier is the role the
+        // network relies on for OptimisticPublicVerification claims; it runs wherever either fence is in force (the identity and the
+        // model still decide, never an opt-in). Both are dormant on every preset.
         let armed = params
             .palw_probabilistic_constraints_v1
-            .is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(current_daa));
+            .is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(current_daa))
+            || params.palw_panel_free_active_at(current_daa);
         if !(armed && self.config.fee_outpoint.is_some() && !self.config.kernel_models.is_empty()) {
             if book.last_daa.is_some() {
                 book.clear();

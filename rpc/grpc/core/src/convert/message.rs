@@ -1555,6 +1555,8 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwKernelClaimResponse>, protowire::G
         opv_reservation_sompi: item.opv_reservation_sompi,
         opv_max_gain_sompi: item.opv_max_gain_sompi,
         final_statement: item.final_statement.clone(),
+        settlement: item.settlement.clone(),
+        settled_from_daa: item.settled_from_daa,
         error: None,
     }
 });
@@ -4035,6 +4037,8 @@ try_from!(item: &protowire::GetPalwKernelClaimResponseMessage, RpcResult<kaspa_r
         opv_reservation_sompi: item.opv_reservation_sompi,
         opv_max_gain_sompi: item.opv_max_gain_sompi,
         final_statement: item.final_statement.clone(),
+        settlement: item.settlement.clone(),
+        settled_from_daa: item.settled_from_daa,
     }
 });
 try_from!(item: &protowire::RpcPalwKernelRow, kaspa_rpc_core::RpcPalwKernelRow, {
@@ -5712,6 +5716,8 @@ mod palw_kernel_route_grpc_tests {
             opv_reservation_sompi: 100_000_000_000,
             opv_max_gain_sompi: 2_000_000_000,
             final_statement: "Final under optimistic public verification".to_string(),
+            settlement: "final-revocable".to_string(),
+            settled_from_daa: 291,
         };
         let wire: protowire::GetPalwKernelClaimResponseMessage = RpcResult::Ok(&response).into();
         let back: GetPalwKernelClaimResponse = (&wire).try_into().unwrap();

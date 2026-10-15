@@ -1506,8 +1506,12 @@ impl TransitionBuilder<'_> {
         bond: PalwBondKeyV2,
         kernel_class: Hash64,
         reward: u64,
+        kernel_class_is_optimistic: bool,
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
-        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(None) };
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else {
+            // RFC-0015 §8.3: an OPV kernel claim needs a budget (`unbudgeted_panel_free_v1`); a Panel-licensed one keeps its rule.
+            return if kernel_class_is_optimistic { self.unbudgeted_panel_free_v1() } else { Ok(None) };
+        };
         let model = if mirror.allocation_at(ctx.daa_score).is_some() {
             // Use the actual native class/line which authenticated the kernel
             // binding. An ambiguous or absent binding has no allocation right.
@@ -2061,6 +2065,27 @@ pub(super) fn apply_capital_assignment_v1(
 /// Its original producer consent precedes this private, fixed Q/T reservation;
 /// actual fee income is reserved separately in role 11 to avoid double R.
 impl TransitionBuilder<'_> {
+    /// **RFC-0015 §8.3 (lead default 2026-10-15, pending user review): no Panel-free claim is admitted unbudgeted.** `true` wherever
+    /// the network declares the OPV policy (`palw_panel_free_v1`; the processor sets `budget_required` on every such network,
+    /// calibration and test-armed worlds included — validate what ships).
+    pub(super) fn panel_free_budget_required_v1(&self) -> bool {
+        self.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()).is_some_and(|o| o.budget_required)
+    }
+
+    /// What a Panel-free admission's plan answers below / without `palw_bond_budget_v1`: a refusal where the OPV policy requires a
+    /// budget, `None` (unbudgeted, the historical rule) elsewhere.
+    pub(super) fn unbudgeted_panel_free_v1(&self) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
+        if self.panel_free_budget_required_v1() {
+            Err(PalwStateV2Error::BondBudgetRefused(
+                "RFC-0015 §8.3: a Panel-free claim is admitted only with a palw_bond_budget_v1 reservation (class-independent Q/B/R/F, common hold d + W)".into(),
+            ))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl TransitionBuilder<'_> {
     pub(super) fn plan_funded_execution_budget_v13(
         &self,
         ctx: &PalwBlockContextV2,
@@ -2082,7 +2107,8 @@ impl TransitionBuilder<'_> {
                 "funded work budget lacks exact native original admission/producer/money".into(),
             ));
         }
-        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(None) };
+        // RFC-0015 §8.3: native funded work is Panel-free; unbudgeted only where no OPV policy requires a budget.
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return self.unbudgeted_panel_free_v1() };
         if mirror.allocation_at(ctx.daa_score).is_some() {
             // BindModelArtifactV2 has no V2 model-line registration. A copied
             // candidate/descriptor/inventory digest cannot manufacture one.
@@ -2145,7 +2171,8 @@ impl TransitionBuilder<'_> {
         {
             return Err(bad("text29 QT/R reservation changes original producer, policy, maximum or admission epoch"));
         }
-        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(None) };
+        // RFC-0015 §8.3: native funded work is Panel-free; unbudgeted only where no OPV policy requires a budget.
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return self.unbudgeted_panel_free_v1() };
         if mirror.allocation_at(ctx.daa_score).is_some() {
             return Err(bad("text29 has no independently authenticated native model-line allocation"));
         }

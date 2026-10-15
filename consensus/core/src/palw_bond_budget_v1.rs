@@ -365,6 +365,22 @@ impl PalwBondBudgetPolicyV1 {
         }
     }
 
+    /// **Mechanics-only policy for networks that arm `palw_panel_free_v1` without a real activation** (isolated calibration, the
+    /// private integration profiles, test-armed worlds; RFC-0015 §8.3 lead default 2026-10-15: every Panel-free claim is budgeted, so
+    /// these networks carry a budget too). UNAPPROVED and never a proposal: one-KAS capital unit, `W` at ECON's lower bound, ample
+    /// claims / open claims / Round rights, reward and Final weight one unit per unit of capital per `W`.
+    pub fn opv_mechanics_probe_v1() -> Self {
+        let mut p = Self::unapproved_probe_v1();
+        p.capital_unit_sompi = crate::constants::SOMPI_PER_KASPA;
+        p.claims_per_unit = 1_000;
+        p.block_units_per_unit = PALW_BUDGET_BLOCK_UNIT_V1;
+        p.reward_per_unit_sompi = crate::constants::SOMPI_PER_KASPA;
+        p.final_weight_per_unit = 1_000;
+        p.max_open_claims_per_bond = 1_000;
+        p.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1_000 };
+        p
+    }
+
     /// The value's own refusals: the version, every rate and quantum positive, `ρ ≥ 1`, and `q·ρ` fitting a `u64` (so every cap is an
     /// exact `u128` product).
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -656,6 +672,17 @@ impl Params {
                 "fee-only Rounds require a dedicated execution cap; B_max is for reward-bearing blocks",
             ));
         }
+        // RFC-0015 §8.3 (lead default 2026-10-15, pending user review): an isolated calibration genesis carries the mechanics budget
+        // (every Panel-free claim budgeted there too). Its two economic prerequisites below are NOT required there (calibration
+        // deviation, recorded in docs/design/palw/rfc-0015-implementation-status-2026-10-15.md): `palw_audit_2026_09_23` is
+        // genesis-only and `palw_economic_safety` brings the windowed mint, neither of which the calibration devnet base carries.
+        if self.has_isolated_native_calibration_v34() {
+            return if fence.activation == ForkActivation::always() && fence.policy == PalwBondBudgetPolicyV1::opv_mechanics_probe_v1() {
+                Ok(())
+            } else {
+                Err(PalwModeV2Error::Invalid("an isolated calibration carries exactly the always-on OPV mechanics budget"))
+            };
+        }
         // A budget-refused own attempt is SKIPPED, and only past the 2026-09-23 audit fence is a skipped attempt's carve withheld
         // (`palw_v2_skipped_own_attempt_carve`); below it the block's whole worker carve would be paid for no claim.
         let audit_below =
@@ -702,6 +729,22 @@ impl Params {
         Err(PalwModeV2Error::Invalid(
             "palw_model_bond_allocation_v1 cannot be armed: the curve f, the allocation epoch and seasoning are POLICY the user has not set, and ADR-0177 D6's open-versus-closed evaluation does not exist",
         ))
+    }
+
+    /// **RFC-0015 §8.3 (lead default 2026-10-15): a network that declares the OPV policy budgets every Panel-free claim.** Where
+    /// `palw_panel_free_v1` is armed and `palw_bond_budget_v1` is absent, arm the budget at the same height with
+    /// [`PalwBondBudgetPolicyV1::opv_mechanics_probe_v1`] and re-mirror it. For isolated calibration, private profiles and test
+    /// harnesses only: a real activation brings its reviewed policy (the activation gate binds its digest). Returns whether it armed.
+    pub fn arm_palw_opv_mechanics_budget_v1(&mut self) -> bool {
+        let Some(at) = self.palw_panel_free_v1.as_ref().map(|f| f.activation).filter(|a| *a != ForkActivation::never()) else {
+            return false;
+        };
+        if self.palw_bond_budget_v1.is_some() {
+            return false;
+        }
+        self.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: at, policy: PalwBondBudgetPolicyV1::opv_mechanics_probe_v1() });
+        self.sync_palw_bond_budget_v1();
+        true
     }
 
     /// **The fences' mirror** on the V2 bundle's state params. `None` on every shipped preset; a fixture that bypasses validation calls

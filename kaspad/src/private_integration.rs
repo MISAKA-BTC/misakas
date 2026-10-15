@@ -79,6 +79,13 @@ fn validate_private_native_relations(params: &kaspa_consensus_core::config::para
     checked.palw_probabilistic_constraints_v1 = None;
     checked.palw_signed_registration_v1 = None;
     checked.palw_panel_free_v1 = None;
+    // The OPV mechanics budget rides the Panel-free fence (RFC-0015 §8.3 lead default); its policy is checked here, its arming
+    // refusal excepted like the fence's.
+    if let Some(budget) = checked.palw_bond_budget_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
+        budget.policy.validate().map_err(str::to_owned)?;
+        checked.palw_bond_budget_v1 = None;
+        checked.sync_palw_bond_budget_v1();
+    }
     // The private entry point retains the armed commitment/Rule E/retirement
     // while running every production value and dependency validator.
     checked.validate_palw_v1().map_err(|e| e.to_string())?;
@@ -114,6 +121,9 @@ pub fn private_complete_check_params_v1(
         return Err("the complete-only private policy must retain the complete reward gate and full effective target".into());
     }
     params.palw_panel_free_v1 = Some(panel_free);
+    // RFC-0015 §8.3 (lead default 2026-10-15, pending user review): a network with an OPV policy budgets every Panel-free claim, so
+    // this private profile carries the UNAPPROVED mechanics budget (the paid profile replaces it with its own explicit policy).
+    params.arm_palw_opv_mechanics_budget_v1();
     params = private_native_settlement_params_v1(params)?;
     validate_private_complete_relations(&params)?;
     Ok(params)
