@@ -303,7 +303,7 @@ T-30 で出荷したバイナリはすでに H で切り替わる(§4.2)。LOCKE
 | B-2 | fork id: 切替前は警告、切替後は拒否、同期中の新ノードは保持 | `the_fork_id_warns_before_an_edition_and_refuses_a_build_without_it_after` |
 | C-1 | 受理 DAA と境界: RED の跨ぎは一つの epoch snapshot で一度だけ | `a_red_block_merged_across_the_activation_is_read_against_one_epoch_snapshot`(純関数)、driver `boundary`(実ノード) |
 | C-2 | 分割・多数登録で権利が増えない、0.3 は一度だけ(0.09 でない)、κ | `splitting_capital_or_registering_more_models_never_raises_rights_and_0_3_applies_once`、`c_m_is_applied_once_never_0_09`、`n_registrations_never_raise_the_registered_tier_total` |
-| C-3 | 未認証の Final は frontier・settlement・rule E を進めない(edition 0・edition 1 掲載とも) | `palw_rfc0018_v1/tests.rs` `rfc18_round5_every_tier_needs_security_certified_and_none_is_exempt` |
+| C-3 | 未認証の Final は frontier・settlement・rule E を進めない(edition 0・edition 1 掲載とも) | `palw_rfc0018_v1/tests.rs` `rfc18_round5_every_tier_needs_security_certified_and_none_is_exempt`(単体)、RFC-0018 driver `scripts/drills/rfc0018_dag_drill.py retired` / `attack`(実ノード。Gate C は本RFCの切替と独立なので RFC-0018 の driver をそのまま使う) |
 | D-1 | 再起動・IBD・reorg で同じ読み | `the_catalog_status_is_a_pure_function_of_params_and_tip_across_restart_and_reorg`、`the_tiered_roll_is_the_same_after_reorg_ibd_and_restart`、driver `restart` |
 | D-2 | カタログのモデルがいなくても BASE-0 / heartbeat が進む、掲載はブロックを gate しない | `a_catalog_naming_absent_models_never_gates_blocks_or_liveness`、driver `liveness` |
 | E-1 | lifecycle の名前、出荷できる状態、ノードは SCHEDULED / ACTIVE だけ | `the_lifecycle_names_are_operational_and_only_a_released_edition_ships` |
