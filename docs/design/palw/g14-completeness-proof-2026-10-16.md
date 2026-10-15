@@ -710,3 +710,64 @@ code は変えていない。fence の値、wire、指紋は変わらない。�
 - [activation-readiness-matrix.md](activation-readiness-matrix.md)(GAP-80・GAP-81、検証者誘因)
 - [t12-daa14000-release-plan-2026-10-15.md](t12-daa14000-release-plan-2026-10-15.md)
 - [../../PRINCIPLES.md](../../PRINCIPLES.md) §0・§6・§8・§9
+
+## 付録 B. 追記 — cross-lane gates lane が変えた cell(2026-10-16、branch `integ/g14-close-gates`)
+
+本文は書き換えない。以下は `2373782d7`(base `e71c69ff2`)で入れた変更と、それが動かす cell だけを記す。
+新 fence はすべて全 preset で `None`(Some-only hash)。testnet-12 の 3 id は base と同一(shipped: params `5ee7fd8e…` /
+identity `5de80e64…` / schedule `1678e073…`、launch: `b8564b88…` / `5de80e64…` / `93da24cc…`)。状態は「実装済み・fold 水準の
+試験が通った」で、node E2E と fence をまたぐ drill は未実施(armable ではない)。
+
+### B.1 gap ごとの処置
+
+| gap | 処置(code) | 試験(`consensus/core/tests/g14_close_gates.rs`、実行済み・PASS) |
+|---|---|---|
+| G-10 | staged court / staged TIR route / staged Float32 / TIR conviction は、その network・高さを名指しする arm-readiness record(V1〜V7 の evidence・review・source commit)が pin されるまで `cannot be armed`。`PALW_G14_ARMING_RECORDS_V1` は空(`palw_g14_gates_v1.rs`) | T-N17 `armable_g14_fences_refuse_without_a_measured_record`、`an_arming_record_admits_exactly_its_network_and_height` |
+| G-18 | staged court は `palw_legacy_public_filer_v1` が同じ高さ以下で有効であることを要求(切り離し案は不採用: 予約が Final hold と予約者ごと 1 row の上限を担うため) | T-N16 `staged_court_validation_requires_the_legacy_filer_fence` |
+| G-02(N4) | 規則は不変。無条件拒否を record gate(T-N9 fold・node E2E・D-17 drill)に置換。未 pin のため依然 `cannot be armed` | T-N9 `n4_v5_image_and_panel_da_claims_take_no_new_reward`(fold: V5 画像・PanelDa は claim gate で拒否、公開 V4 は従来どおり、fence 前は旧規則) |
+| G-01(b)・G-05 | 新休眠 fence `palw_g14_route_required_v1`(ユーザー決定 2026-10-16 で DAA 14,000 の予定 entry)。route は fence state(mirror)から読む | T-N8 `legacy_route_claim_without_a_g14_path_earns_nothing_past_14000`、T-N10 `legacy_fp_selection_and_constraint_jobs_are_refused_until_their_route_is_armed` |
+| G-08 | 新休眠 fence `palw_reward_liability_horizon_v1`: legacy FP claim の Final floor = max(従来, licence + window_challenge + window_court)(`palw_claim_final_floor_v1` 内) | T-N15 `certified_and_final_rewards_are_held_until_the_liability_horizon`(fold: licence 1,004 で Final floor 1,124 → 4,124、その間 receipt spend は拒否) |
+| G-15 | 同 fence: Gate C の certified reward は final + window_court を過ぎた sweep か、それより早い retirement 時に 1 回だけ、認証が残る場合のみ支払う。kernel route の FinalReward は kernel lane の所有で未変更 | T-N15(述語と source 検査。Gate C は武装不可のため fold 実行なし) |
+| G-09 | X3 候補 `candidate_from_horizons_v1`: T_prepare = bind + receipt、T_observe = window_challenge_at、T_resolve = disclose + court。testnet-12 @14,000 で 1,200 + 120 + 4,200 = **5,520 DAA**(既存 retention 5,400 より 120 長い)。B_cold_fetch・B_check・B_localize・B_carrier・B_reorg_slack・c_retain は未測定(0 = UNKNOWN)。武装は拒否のまま | `x3_candidate_is_derived_from_existing_horizons_and_stays_refused` |
+| G-16 | consumer v2 でも Kimi router を `RefusedAtAdmission` に統一(`palw_cell_coverage_v1.rs`) | `kimi_is_out_of_scope_in_both_coverage_dispositions` |
+
+### B.2 option (b) を testnet-12 の DAA 14,000 で武装したときに変わること
+
+DAA 14,000 以後に**受理される** claim だけが対象(それ以前の claim は旧規則で Final・receipt spend・vesting まで進む)。
+arm-readiness record の要件は T-N8・T-N10(fold)、node E2E、fence をまたぐ drill で、経済の測定値は要しない(報酬を外すだけ)。
+
+- **報酬・weight・credit を失う family(route が武装されるまで):**
+  - V2 Attempt の全 class(BASE-0 floor、genesis model class、TIR v1・gen v1・shard class の attempt)。class gate が
+    `G14_ROUTE_ABSENT` で拒否。producer の pre-check も同じ答えを返す。自 block の attempt が拒否されると、G14-for-rewards と同じく
+    block は不正になる(skip すると carve が未検証のまま払われるため)。merge された attempt は skip。復帰条件: LG14-A
+    (`palw_legacy_public_filer_v1`)と LG14-B(`palw_legacy_held_da_v2`)の両方が武装されること(現在どちらも武装不可)。
+  - Free Prompt の全 job version。frame(TFP1)の無い claim は selection の route を持たない。
+- **受理時に拒否される job version(carrier は通常 fee だけ払い、object は落ちる):**
+  - FP V6 constraint(6)、prefix state(11)、prefix inherit(12): `G14_JOB_VERSION_UNJUDGEABLE`。
+  - FP V4(7): `G14_ROUTE_ABSENT`(selection と tokenizer の route が無い)。
+  - FP V5(8)と PanelDa: `G14_ROUTE_ABSENT`。公開証拠が無いので route は存在し得ない(N4 を武装すれば N4 の code が先に出る)。
+  - FP V3(5)は DAA 5,300 から既に拒否。
+  - FP の復帰条件: `palw_tir_public_conviction_v1`(selection・計算・DA)と、staged court + legacy filer(constraint・prefix・
+    tokenizer)が武装され、かつ commitment 自身が TFP1 frame を持つこと。
+- **変わらないもの:** 評価 claim(9、利用者払い・報酬経路外)、tensor gen(10、weight なし)、heartbeat、休眠の kernel・native・EXEC。
+- **注意(drill で確認すること):** route が 1 つも武装されていない DAA 14,000 では、新しい PALW claim が 0 になり safe weight が増えない。
+  block 生成は heartbeat lane に依る。
+
+### B.3 行列で動く cell(本文 §3 の判定を、各 fence を武装した場合について上書きする)
+
+- **A 列(P14-min)に (b) を加える場合:** V2 Attempt と Free Prompt の 48 cell は、DAA 14,000 以後に受理される claim について全部
+  OUT-OF-SCOPE になる(受理時に拒否、報酬・credit なし)。n/a の 3 cell は n/a のまま。新規 claim についての集計は
+  0 / 0 / 0 / 165 / 3。14,000 前に受理された claim は、settle するまで §3.2・§3.3 の判定のまま。
+- **Free Prompt F23:** GAP → OUT-OF-SCOPE((b) か N4 を武装した場合)。
+- **Free Prompt F12(G-08):** liability fence を武装した場合、GAP → PARTIAL(支払いは旧来の反転期限の後。Final 後の反転は retirement まで残る)。
+- **B 列(P14-g14):** G-18 と G-10 の gate により、この binary で staged court・TIR conviction を武装できない
+  (record 未 pin、staged court は武装不可の legacy filer を要する)。P14-g14 は作れず、TIR frame と staged court の列は A と同じ OUT-OF-SCOPE。
+- **Gate C(G-15):** 認証済み reward の支払いが責任期限の後になる(休眠、Gate C 自体が武装不可)。
+- **G14 from genesis(test-only `palw_g14_genesis_test_params_v1`):** 隔離 genesis で validate が通る。block 0 から attempt と
+  未 frame の FP は拒否、V5・PanelDa は常に拒否。frame 付き FP は TIR route が解決する高さ(testnet-12 の前提 fence により
+  DAA 1,700)から受理される。LG14-B と X3(承認値なし)は載せていない。
+
+### B.4 残り
+
+option (b)・N4・liability の node E2E と fence をまたぐ drill(record の evidence)、G-10 の V1〜V7、Gate C を通した G-15 の fold 実行、
+kernel route の FinalReward(kernel lane)、LG14-A / LG14-B 自体の武装可能化(option (a) の経路)、X3 の未測定項目とユーザー承認。
