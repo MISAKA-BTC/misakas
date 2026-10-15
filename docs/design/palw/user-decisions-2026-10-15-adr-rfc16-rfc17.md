@@ -93,3 +93,16 @@ PRINCIPLES §0 が許容する `p=0` の残余リスクは、経済的な損失�
 * RFC-0017 U-1〜U-9: [RFC-0017](../../rfc/0017-model-eligibility-examination-and-renewal.md) §14
 
 RFC-0018への狭いinterface: 本branchのRFC-0017は`palw_model_eligibility_v1`にGate C(`palw_independently_work_certified_v1`)を同じ高さ以下で要求し、`palw_probation_security_credit_v1`・`palw_eligibility_security_credit_v1`を公開する(fork choice・safe frontier・settlement depth・rule E・認証述語そのものはRFC-0018 laneのcodeで、本branchでは編集していない)。
+
+## 7b. ユーザー判断(同日、第 4 回): モデルの二階層 — 年次指定 1.0 / 通常登録 永久 0.3
+
+ユーザー判断:「この方式にする。つまりモデル有効化の審査は追加モデルに対してのみ行い、genesis モデルと 1 年に一回ほどのソフトフォークもしくはハードフォークによって登録されるモデルにはその検証は一切しないという方針にする。」
+
+- **二階層。** `ModelTier(m, h) = 1.0`(m ∈ ApprovedModels(h))、`0.3`(その他の有効な登録モデル)。ApprovedModels(h) は genesis と有効化済みの年次フォーク(ソフト/ハード)で指定された「モデル ID + 固定 artifact root」の集合。
+- **モデル単位の審査(RFC-0017 の昇格・更新審査)は、オンチェーンで追加登録されたモデルにのみ適用する。** genesis モデルと年次フォーク指定モデルには一切適用しない(本判断で U-6 を変更: 免除は BASE-0 だけでなく genesis・年次指定モデル全体)。
+- **通常登録モデルは審査を通っても永久に 0.3。** 何年経っても自動で 1.0 にならない。1.0 になる経路は年次フォークでの指定だけ。既存の `Active` 等の状態は運用状態として残し、1.0 の資格とは別物とする。
+- **0.3 は一度だけ適用する。** α=1.5 配分の重みに掛ける(`A_m = c_m · S̄_m^1.5`)。その P_m を V+ の物理ブロック権利と coinbase 配分の両方が使う。受理ブロックの報酬にさらに 0.3 を掛けない(0.09 倍にしない)。
+- **複数登録で上限を迂回できない。** bond 総量・共通 Q/B/R/F 予算に加え、通常登録モデル全体の発行上限を設ける。モデルを多数登録しても 0.3 枠は増えない。
+- **年次フォーク。** 承認リストに追加するだけで既存モデルを上書きしない(ADR-0175 と整合)。リストへの指定は政策的決定であり、「公開されている」「独立検証可能」の技術的証明ではない。
+- **claim 単位の安全性は全階層で維持する(Lead の解釈、ユーザー確認待ちではなく貼付提案の最低条件 4 に基づく)。** genesis・年次指定・通常登録のすべてで、未認証 claim(SecurityCertified でない claim)は safe frontier・決済深度・Rule E 参加・settled anchor・weight を進めない。モデル単位の審査を外しても、claim 単位の検証・court・Gate C は廃止しない。抽選検証者の共謀可能性は残る(前提に基づく認証)。
+- 本判断は経済上の資格の設計であり、計算していない claim への対策(Gate C)とは別の合意規則として維持する。数値 0.3/1.0 は設計値。fence の有効化は承認していない。
