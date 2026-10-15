@@ -164,6 +164,60 @@ pub(super) fn restore_class(
     }
     Ok(class)
 }
+/// Read only explicitly selected, fully authenticated stream rows. This
+/// reconstructs data identity and class/resource derivation, never a grant of
+/// execution validity, Final, reward eligibility or consensus weight.
+pub(super) fn restore_audited_class<R: crate::palw_native_audit_proof_v39::NativeAuditRowReaderV39>(
+    rows: &crate::palw_native_audit_proof_v39::VerifiedNativeAuxRowsV39<R>,
+    p: &NativeExecutionPoliciesV39,
+    id: Digest,
+    remaining: &mut usize,
+) -> Result<CheckedNativeClassV39, String> {
+    let get = |kind: u8, id: Digest, cap: usize, remaining: &mut usize| -> Result<Vec<u8>, String> {
+        let raw = rows.row(TABLE, &key(kind, &id), cap.min(*remaining))?.ok_or("audit39 original source/class row absent")?;
+        *remaining = remaining.checked_sub(raw.len()).ok_or("audit39 complete source restoration budget exhausted")?;
+        Ok(raw)
+    };
+    let raw = get(2, id, 2048, remaining)?;
+    let (root, h): (Digest, ClassHeaderV39) = borsh::from_slice(&raw).map_err(|_| "audit39 original class header grammar")?;
+    if h.version != 39
+        || h.id != id
+        || h.record.root() != id
+        || h.root() != root
+        || h.source != h.record.source
+        || h.source_bytes == 0
+        || h.source_bytes as usize > SOURCE_UPLOAD_MAX_BYTES_V39
+        || h.class_bytes != 262
+    {
+        return Err("audit39 original class header identity differs".into());
+    }
+    let raw = get(0, h.source, 1024, remaining)?;
+    let (root, sh): (Digest, SourceHeaderV39) = borsh::from_slice(&raw).map_err(|_| "audit39 original source header grammar")?;
+    if sh.version != 39 || sh.id != h.source || sh.root() != root || sh.bytes != h.source_bytes {
+        return Err("audit39 original source header identity differs".into());
+    }
+    let raw = get(1, h.source, SOURCE_UPLOAD_MAX_BYTES_V39 + 4, remaining)?;
+    if raw.len() < 4 || u32::from_le_bytes(raw[..4].try_into().unwrap()) != sh.bytes || raw.len() != sh.bytes as usize + 4 {
+        return Err("audit39 original source body exact extent differs".into());
+    }
+    if object_id(b"misaka-palw/native/source-body/v39", &&raw[4..]) != sh.body {
+        return Err("audit39 original source body hash differs".into());
+    }
+    let source = FlatSourceWireV39::from_bytes(&raw[4..])?.check()?;
+    drop(raw);
+    if source.root() != h.source {
+        return Err("audit39 original source canonical identity differs".into());
+    }
+    let raw = get(3, id, 266, remaining)?;
+    if raw.len() != h.class_bytes as usize + 4 || u32::from_le_bytes(raw[..4].try_into().unwrap()) != h.class_bytes {
+        return Err("audit39 original class body exact extent differs".into());
+    }
+    let class = NativeClassWireV39::from_bytes(&raw[4..])?.check(&source, p)?;
+    if class.root() != h.id || class.record() != &h.record {
+        return Err("audit39 original complete class/resource derivation differs".into());
+    }
+    Ok(class)
+}
 pub(super) fn policy(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,

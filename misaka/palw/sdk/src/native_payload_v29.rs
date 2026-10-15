@@ -555,7 +555,7 @@ pub fn decode_native_payload_v29(
     request: Option<&NativeTextRequestV29>,
     positions: Option<u32>,
 ) -> Result<PreparedNativePayloadV29, String> {
-    if matches!(kind, "source-class39" | "source-consent39" | "source-fund39" | "source-commit39" | "source-collect39") {
+    if kind.starts_with("source-") && kind.ends_with("39") {
         return decode_native_payload_v39(kind, raw, positions);
     }
     use std::io::Cursor;
@@ -951,7 +951,7 @@ pub fn prepare_source_upload_v39(
     Ok(objects)
 }
 fn stage39_raw(action: u8, body: Vec<u8>) -> Result<PreparedNativePayloadV29, String> {
-    if !(41..=66).contains(&action) {
+    if !(41..=70).contains(&action) {
         return Err("native39 action outside owning namespace".into());
     }
     let object = K::StageExecutionV14 { action, body };
@@ -981,6 +981,61 @@ pub fn decode_native_payload_v39(kind: &str, raw: &[u8], maximum: Option<u32>) -
         "source-commit39" => {
             let w = NativeCommitWireV39::from_bytes(raw, maximum.ok_or("native39 commit requires original before-Fund maximum")?)?;
             stage39_raw(45, borsh::to_vec(&w).map_err(|e| e.to_string())?)
+        }
+        "source-owner39" => {
+            if raw.len() != 139 || raw[..2] != 39u16.to_le_bytes() || raw[138] > 1 {
+                return Err("native39 original owner framing".into());
+            }
+            prepare_owner_v39(
+                raw[2..66].try_into().map_err(|_| "owner job")?,
+                raw[66..130].try_into().map_err(|_| "owner filing")?,
+                u64::from_le_bytes(raw[130..138].try_into().map_err(|_| "owner extent")?),
+                raw[138] == 1,
+            )
+        }
+        "source-request39" => {
+            if raw.len() < 134
+                || raw.len() > 134 + misaka_palw_kernel::flat_public39::REQUEST_MAX_BYTES_V39
+                || raw[..2] != 39u16.to_le_bytes()
+                || u32::from_le_bytes(raw[130..134].try_into().map_err(|_| "request extent")?) as usize != raw.len() - 134
+            {
+                return Err("native39 public request framing".into());
+            }
+            prepare_public_request_v39(
+                raw[2..66].try_into().map_err(|_| "request job")?,
+                raw[66..130].try_into().map_err(|_| "request owner")?,
+                &misaka_palw_kernel::flat_public39::FlatDemandV39::from_bytes(&raw[134..])?,
+            )
+        }
+        "source-terminal39" => {
+            if raw.len() != 67 || raw[..2] != 39u16.to_le_bytes() || raw[2] > 1 {
+                return Err("native39 terminal framing".into());
+            }
+            prepare_terminal_v39(raw[3..67].try_into().map_err(|_| "terminal job")?, raw[2] == 1)
+        }
+        "source-default39" | "source-owner-expire39" => {
+            let n = if kind == "source-default39" { 66 } else { 130 };
+            if raw.len() != n || raw[..2] != 39u16.to_le_bytes() {
+                return Err("native39 exact original default/owner expiry framing".into());
+            }
+            stage39_raw(if n == 66 { 49 } else { 52 }, raw.to_vec())
+        }
+        "source-owner-convert39" => {
+            if raw.len() != 202 || raw[..2] != 39u16.to_le_bytes() {
+                return Err("native39 original discovery conversion framing".into());
+            }
+            let total = u64::from_le_bytes(raw[194..202].try_into().map_err(|_| "conversion extent")?);
+            if total == 0 || total > 64 << 20 || raw[130..194] == [0; 64] {
+                return Err("native39 discovery converted file extent/hash".into());
+            }
+            stage39_raw(56, raw.to_vec())
+        }
+        "source-master-close39" | "source-metadata-collect39" => {
+            let id: Digest = raw.try_into().map_err(|_| "native39 original fixed Master/metadata identity")?;
+            if id == [0; 64] {
+                return Err("native39 original identity absent".into());
+            }
+            stage39_raw(if kind == "source-master-close39" { 66 } else { 70 }, id.to_vec())
         }
         "source-collect39" => {
             let id: Digest = raw.try_into().map_err(|_| "source39 collect original fixed id width")?;
@@ -1054,4 +1109,375 @@ pub fn prepare_source_post_v39<'a>(
     }
     misaka_palw_kernel::flat_point39::CheckedPointContextV39::check(source, maximum, record.claim.root(), &record.claim, inputs)?;
     stage39_raw(45, borsh::to_vec(record).map_err(|e| e.to_string())?)
+}
+
+/// New39 material transport only. The native fold separately authenticates the
+/// prior upstream Final/once-credit; an output plan alone grants no authority.
+pub fn prepare_material_start_v39(
+    class: &kaspa_consensus_core::palw_native_execution_v39::CheckedNativeClassV39,
+    material: &misaka_palw_kernel::flat_material39::CheckedMaterialPlanV39,
+    certificate: Option<&misaka_palw_kernel::flat_material_output39::CheckedOutputCertificatePlanV39>,
+) -> Result<PreparedNativePayloadV29, String> {
+    use misaka_palw_kernel::flat_material39::MaterialOriginV39;
+    let descriptor = material.descriptor();
+    if descriptor.source != class.source().root() {
+        return Err("native39 material class differs from original source".into());
+    }
+    match (&descriptor.origin, certificate) {
+        (MaterialOriginV39::External { .. }, None) => {}
+        (MaterialOriginV39::Upstream { output, .. }, Some(c))
+            if *output == c.root()
+                && descriptor.tensor == c.record().tensor
+                && descriptor.dtype == c.record().dtype
+                && descriptor.shape == c.record().shape => {}
+        _ => return Err("native39 material requires its exact original output certificate contract".into()),
+    }
+    let raw = descriptor.to_bytes();
+    let mut body = Vec::with_capacity(79 + raw.len() + 512);
+    body.extend_from_slice(&39u16.to_le_bytes());
+    body.extend_from_slice(&class.root());
+    body.extend_from_slice(&material.record().deadline.to_le_bytes());
+    body.extend_from_slice(&(raw.len() as u32).to_le_bytes());
+    body.extend_from_slice(&raw);
+    body.push(u8::from(certificate.is_some()));
+    if let Some(c) = certificate {
+        let raw = c.record().to_bytes();
+        if raw.len() > 512 {
+            return Err("native39 certificate plan extent".into());
+        }
+        body.extend_from_slice(&(raw.len() as u32).to_le_bytes());
+        body.extend_from_slice(&raw);
+    }
+    stage39_raw(61, body)
+}
+pub fn prepare_material_part_v39(
+    material: &misaka_palw_kernel::flat_material39::CheckedMaterialPlanV39,
+    page: &misaka_palw_kernel::flat_material39::MaterialPageV39,
+    certificate: Option<&misaka_palw_kernel::flat_material_output39::CheckedOutputCertificatePlanV39>,
+) -> Result<PreparedNativePayloadV29, String> {
+    use misaka_palw_kernel::{flat_material_output39::*, flat_material39::*};
+    let descriptor = material.descriptor();
+    let (lane, pages, bytes, expected, leaf, hash): (u8, u64, usize, Digest, Digest, fn(&Digest, &Digest) -> Digest) =
+        if let Some(c) = certificate {
+            let MaterialOriginV39::Upstream { output, .. } = &descriptor.origin else {
+                return Err("native39 external material has no certificate lane".into());
+            };
+            if *output != c.root() {
+                return Err("native39 original certificate plan differs".into());
+            }
+            let remaining = c
+                .record()
+                .bytes
+                .checked_sub(page.index as u64 * MATERIAL_PAGE_BYTES_V39 as u64)
+                .ok_or("native39 certificate part index")?;
+            (
+                1,
+                c.pages() as u64,
+                remaining.min(MATERIAL_PAGE_BYTES_V39 as u64) as usize,
+                c.record().page_root,
+                output_certificate_page_leaf_v39(c.record(), page.index, &page.body),
+                output_certificate_page_node_v39,
+            )
+        } else {
+            (
+                0,
+                material.record().pages as u64,
+                material.part_bytes(page.index)?,
+                descriptor.page_root,
+                material_page_leaf_v39(descriptor, page.index, &page.body),
+                material_page_node_v39,
+            )
+        };
+    if page.index as u64 >= pages
+        || page.body.len() != bytes
+        || page.siblings.len() > 14
+        || misaka_palw_kernel::merkle3::tree_root_from_path(leaf, page.index as u64, pages, &page.siblings, hash) != Some(expected)
+    {
+        return Err("native39 part differs from original authenticated raw/certificate page".into());
+    }
+    let mut body = Vec::with_capacity(69 + bytes + 1024);
+    body.extend_from_slice(&39u16.to_le_bytes());
+    body.push(lane);
+    body.extend_from_slice(&descriptor.root());
+    body.extend_from_slice(&page.index.to_le_bytes());
+    body.extend_from_slice(&borsh::to_vec(page).map_err(|e| e.to_string())?);
+    stage39_raw(62, body)
+}
+pub fn prepare_material_close_v39(descriptor: Digest, collect: bool) -> Result<PreparedNativePayloadV29, String> {
+    if descriptor == [0; 64] {
+        return Err("native39 original material identity absent".into());
+    }
+    let mut body = Vec::with_capacity(66);
+    body.extend_from_slice(&39u16.to_le_bytes());
+    body.extend_from_slice(&descriptor);
+    stage39_raw(if collect { 64 } else { 63 }, body)
+}
+
+/// Complete source39 registration, with every class/stage retained in order.
+/// A body above the original direct packet cap MUST use new67..69 transport.
+pub fn prepare_master_registration_v39(
+    wire: &kaspa_consensus_core::palw_native_master_v39::NativeMasterRegisterV39,
+    complete: &misaka_palw_kernel::flat_component_source39::CheckedCompleteSourceV39,
+    classes: &[kaspa_consensus_core::palw_native_execution_v39::CheckedNativeClassV39],
+    now: u64,
+    interval_end: u64,
+) -> Result<PreparedNativePayloadV29, String> {
+    use kaspa_consensus_core::palw_native_master_v39::NativeMasterRegisterV39;
+    use misaka_palw_kernel::flat_invocation39::MasterPublicRequestV39;
+    let raw = borsh::to_vec(wire).map_err(|e| e.to_string())?;
+    NativeMasterRegisterV39::from_bytes(&raw)?;
+    let source_bundle = complete.wire();
+    if wire.deadline <= now
+        || wire.deadline > interval_end
+        || wire.manifest != source_bundle.manifest
+        || wire.pipeline != source_bundle.pipeline
+        || classes.len() != complete.sources().len()
+        || wire.classes.len() != classes.len()
+        || wire.producer_bonds.len() != classes.len()
+    {
+        return Err("native39 Master original complete source/class/time contract differs".into());
+    }
+    for (stage, (class, source)) in classes.iter().zip(complete.sources()).enumerate() {
+        if wire.classes[stage] != class.root()
+            || class.source().root() != source.root()
+            || class.record().max_positions != source.original_context_max()
+            || complete.pipeline().wire().stages[stage].max_trip < source.original_context_max()
+        {
+            return Err("native39 Master ordered registered source/class differs".into());
+        }
+    }
+    let request = MasterPublicRequestV39::from_bytes(&wire.request)?;
+    request.check(complete.pipeline())?;
+    if request.complete_source != complete.root() {
+        return Err("native39 Master original request binds another complete component bundle".into());
+    }
+    stage39_raw(65, raw)
+}
+
+/// Read the concrete preparation directory and construct all original paid
+/// material objects. The explicit aggregate limit applies before page reads.
+pub fn prepare_material_directory_v39(
+    class: &kaspa_consensus_core::palw_native_execution_v39::CheckedNativeClassV39,
+    directory: &std::path::Path,
+    upstream: Option<(&misaka_palw_kernel::flat_source39::CheckedSourceV39, &misaka_palw_kernel::flat_point39::FlatClaimV39)>,
+    maximum_transport_bytes: u64,
+) -> Result<Vec<PreparedNativePayloadV29>, String> {
+    use misaka_palw_kernel::{flat_material_output39::*, flat_material39::*};
+    let read = |name: &str, cap| crate::native_audit_io_v32::read_bounded_file_v32(&directory.join(name), cap);
+    let descriptor = MaterialDescriptorV39::from_bytes(&read("descriptor39.borsh", 2048)?)?;
+    let raw = read("plan39.borsh", 2048)?;
+    let record: MaterialPlanV39 = borsh::from_slice(&raw).map_err(|e| e.to_string())?;
+    let plan = CheckedMaterialPlanV39::derive(&descriptor, record.start, record.deadline)?;
+    if plan.record() != &record {
+        return Err("native39 prepared material plan differs from original derivation".into());
+    }
+    let certificate = if let Some((source, claim)) = upstream {
+        Some(CheckedOutputCertificatePlanV39::check(
+            source,
+            claim,
+            &descriptor,
+            &OutputCertificatePlanV39::from_bytes(&read("certificate-plan39.borsh", 512)?)?,
+        )?)
+    } else {
+        None
+    };
+    let count = plan.record().pages as u64 + certificate.as_ref().map_or(0, |c| c.pages() as u64);
+    let total = plan
+        .record()
+        .raw_bytes
+        .checked_add(certificate.as_ref().map_or(0, |c| c.stored_bytes()))
+        .and_then(|n| n.checked_add(count.checked_mul(2048)?))
+        .and_then(|n| n.checked_add(8192))
+        .ok_or("native39 original material transport extent overflow")?;
+    if maximum_transport_bytes == 0 || maximum_transport_bytes > 600 << 20 || total > maximum_transport_bytes {
+        return Err("native39 material transport exceeds explicit aggregate byte budget before page reads".into());
+    }
+    let mut objects = Vec::with_capacity(count as usize + 2);
+    objects.push(prepare_material_start_v39(class, &plan, certificate.as_ref())?);
+    for index in 0..plan.record().pages {
+        let page = MaterialPageV39::from_bytes(&read(&format!("page-{index:04}.borsh"), (32 << 10) + 2048)?)?;
+        if page.index != index {
+            return Err("native39 original raw page index differs".into());
+        }
+        objects.push(prepare_material_part_v39(&plan, &page, None)?);
+    }
+    if let Some(c) = certificate.as_ref() {
+        for index in 0..c.pages() {
+            let page = MaterialPageV39::from_bytes(&read(&format!("certificate-page-{index:04}.borsh"), (32 << 10) + 2048)?)?;
+            if page.index != index {
+                return Err("native39 original output certificate page index differs".into());
+            }
+            objects.push(prepare_material_part_v39(&plan, &page, Some(c))?);
+        }
+    }
+    objects.push(prepare_material_close_v39(descriptor.root(), false)?);
+    Ok(objects)
+}
+
+/// Explicit new67..69 upload, shared only by the two new owning39 metadata
+/// targets. It never reinterprets Source57, legacy chunks or a funded DA lease.
+pub fn prepare_metadata_upload_v39(
+    raw: &[u8],
+    target: kaspa_consensus_core::palw_native_master_v39::NativeMetadataTargetV39,
+    owner: PalwBondKeyV2,
+    sequence: u64,
+    now: u64,
+    deadline: u64,
+    interval_end: u64,
+) -> Result<Vec<PreparedNativePayloadV29>, String> {
+    use kaspa_consensus_core::{palw_native_job_v39::NativeConsentWireV39, palw_native_master_v39::*};
+    let object = match target {
+        NativeMetadataTargetV39::Master => NativeMasterRegisterV39::from_bytes(raw)?.root(owner),
+        NativeMetadataTargetV39::ProducerConsent => NativeConsentWireV39::from_bytes(raw)?.class,
+    };
+    let count = raw.len().div_ceil(32768);
+    let start = NativeMetadataUploadStartV39 {
+        version: 39,
+        target,
+        object,
+        bytes: u32::try_from(raw.len()).map_err(|_| "metadata39 original byte extent")?,
+        count: u16::try_from(count).map_err(|_| "metadata39 page count")?,
+        sequence,
+        deadline,
+        body: metadata_body_hash_v39(raw),
+    };
+    start.check(now, interval_end)?;
+    let id = start.id(owner);
+    let mut objects = Vec::with_capacity(count + 2);
+    objects.push(stage39_raw(67, borsh::to_vec(&start).map_err(|e| e.to_string())?)?);
+    for (index, page) in raw.chunks(32768).enumerate() {
+        let mut body = Vec::with_capacity(72 + page.len());
+        body.extend_from_slice(&39u16.to_le_bytes());
+        body.extend_from_slice(&id);
+        body.extend_from_slice(&(index as u16).to_le_bytes());
+        body.extend_from_slice(&(page.len() as u32).to_le_bytes());
+        body.extend_from_slice(page);
+        kaspa_consensus_core::palw_native_execution_v39::borrowed_source_upload_part_v39(&body)
+            .ok_or("metadata39 exact bounded page frame")?;
+        objects.push(stage39_raw(68, body)?);
+    }
+    objects.push(stage39_raw(69, id.to_vec())?);
+    Ok(objects)
+}
+
+pub fn prepare_public_request_v39(
+    job: Digest,
+    paid_owner: Digest,
+    demand: &misaka_palw_kernel::flat_public39::FlatDemandV39,
+) -> Result<PreparedNativePayloadV29, String> {
+    if job == [0; 64] {
+        return Err("native39 public request original job absent".into());
+    }
+    let raw = demand.to_bytes();
+    misaka_palw_kernel::flat_public39::FlatDemandV39::from_bytes(&raw)?;
+    let mut body = Vec::with_capacity(134 + raw.len());
+    body.extend_from_slice(&39u16.to_le_bytes());
+    body.extend_from_slice(&job);
+    body.extend_from_slice(&paid_owner);
+    body.extend_from_slice(&(raw.len() as u32).to_le_bytes());
+    body.extend_from_slice(&raw);
+    stage39_raw(47, body)
+}
+pub fn prepare_public_reply_parts_v39(pending: Digest, raw: &[u8]) -> Result<Vec<PreparedNativePayloadV29>, String> {
+    if pending == [0; 64] {
+        return Err("native39 reply original pending unit absent".into());
+    }
+    misaka_palw_kernel::flat_public39::FlatReplyV39::from_bytes(raw)?;
+    let group = misaka_palw_kernel::hash::object_id(b"misaka-palw/native/original-public-reply-file/v39", &raw.to_vec());
+    let count = raw.len().div_ceil(32768);
+    if count == 0 || count > 4 {
+        return Err("native39 public reply exceeds original four-part contract".into());
+    }
+    let mut parts = Vec::with_capacity(count);
+    for (index, page) in raw.chunks(32768).enumerate() {
+        let mut body = Vec::with_capacity(143 + page.len());
+        body.extend_from_slice(&39u16.to_le_bytes());
+        body.push(0);
+        body.extend_from_slice(&pending);
+        body.extend_from_slice(&group);
+        body.extend_from_slice(&(index as u16).to_le_bytes());
+        body.extend_from_slice(&(count as u16).to_le_bytes());
+        body.extend_from_slice(&(raw.len() as u32).to_le_bytes());
+        body.extend_from_slice(&(page.len() as u32).to_le_bytes());
+        body.extend_from_slice(page);
+        parts.push(stage39_raw(48, body)?);
+    }
+    Ok(parts)
+}
+/// Commit to a fixed filing file, or pay for discovery at the independently
+/// derived whole-file maximum. Neither path asserts correctness or conviction.
+pub fn prepare_owner_v39(job: Digest, proof: Digest, total: u64, discovery: bool) -> Result<PreparedNativePayloadV29, String> {
+    if job == [0; 64] || total == 0 || total > 64 << 20 || discovery != (proof == [0; 64]) {
+        return Err("native39 owner original proof/discovery/whole-file bound".into());
+    }
+    let mut body = Vec::with_capacity(139);
+    body.extend_from_slice(&39u16.to_le_bytes());
+    body.extend_from_slice(&job);
+    body.extend_from_slice(&proof);
+    body.extend_from_slice(&total.to_le_bytes());
+    body.push(u8::from(discovery));
+    stage39_raw(46, body)
+}
+pub fn prepare_owner_conversion_v39(job: Digest, owner: Digest, file: &[u8]) -> Result<PreparedNativePayloadV29, String> {
+    let proof = owned_file_root_v39(file)?;
+    if [job, owner].contains(&[0; 64]) {
+        return Err("native39 discovery conversion original IDs absent".into());
+    }
+    let mut body = Vec::with_capacity(202);
+    body.extend_from_slice(&39u16.to_le_bytes());
+    body.extend_from_slice(&job);
+    body.extend_from_slice(&owner);
+    body.extend_from_slice(&proof);
+    body.extend_from_slice(&(file.len() as u64).to_le_bytes());
+    stage39_raw(56, body)
+}
+pub fn owned_file_root_v39(file: &[u8]) -> Result<Digest, String> {
+    if file.len() < 68
+        || file.len() > 64 << 20
+        || u32::from_le_bytes(file[64..68].try_into().map_err(|_| "native39 owned file length")?) as usize != file.len() - 68
+    {
+        return Err("native39 original salt/filing whole-file extent differs".into());
+    }
+    Ok(misaka_palw_kernel::hash::object_id(b"misaka-palw/native/original-owned-proof-file/v39", &file.to_vec()))
+}
+pub fn prepare_protected_parts_v39(job: Digest, owner: Digest, file: &[u8]) -> Result<Vec<PreparedNativePayloadV29>, String> {
+    use kaspa_consensus_core::palw_native_job_v39::borrowed_native_proof_part_v39;
+    owned_file_root_v39(file)?;
+    if [job, owner].contains(&[0; 64]) {
+        return Err("native39 proof parts original IDs absent".into());
+    }
+    let count = file.len().div_ceil(32768);
+    let mut objects = Vec::with_capacity(count + 1);
+    let frame = |mode: u8, index: u16, page: &[u8]| {
+        let mut body = Vec::with_capacity(143 + page.len());
+        body.extend_from_slice(&39u16.to_le_bytes());
+        body.push(mode);
+        body.extend_from_slice(&job);
+        body.extend_from_slice(&owner);
+        body.extend_from_slice(&index.to_le_bytes());
+        body.extend_from_slice(&(count as u16).to_le_bytes());
+        body.extend_from_slice(&(file.len() as u32).to_le_bytes());
+        body.extend_from_slice(&(page.len() as u32).to_le_bytes());
+        body.extend_from_slice(page);
+        body
+    };
+    for (index, page) in file.chunks(32768).enumerate() {
+        let body = frame(0, index as u16, page);
+        borrowed_native_proof_part_v39(&body).ok_or("native39 original paid proof page frame")?;
+        objects.push(stage39_raw(50, body)?);
+    }
+    let body = frame(1, 0, &[]);
+    borrowed_native_proof_part_v39(&body).ok_or("native39 original paid whole-proof assembly frame")?;
+    objects.push(stage39_raw(50, body)?);
+    Ok(objects)
+}
+pub fn prepare_terminal_v39(job: Digest, refund: bool) -> Result<PreparedNativePayloadV29, String> {
+    if job == [0; 64] {
+        return Err("native39 terminal original job absent".into());
+    }
+    let mut body = Vec::with_capacity(67);
+    body.extend_from_slice(&39u16.to_le_bytes());
+    body.push(u8::from(refund));
+    body.extend_from_slice(&job);
+    stage39_raw(51, body)
 }

@@ -184,11 +184,19 @@ pub fn derive_flat_resources_v39(source: &CheckedSourceV39, positions: u32) -> R
                 let l = LayoutV3::try_of(&sh.out).ok_or("resource39 committed geometry")?;
                 let leaves = add(l.leaves(0) as u128, l.leaves(1) as u128)?;
                 let hashed = add(mul(out, 2 * node.out.dtype.width() as u128)?, mul(leaves, 512)?)?;
-                setadd(&mut q, A::TraceHashBytes, mul(hashed, positions as u128)?)?;
+                // Trace plus persisted original Merkle directory are independently
+                // checked once; public replies thereafter read only stored paths.
+                setadd(&mut q, A::TraceHashBytes, mul(mul(hashed, 2)?, positions as u128)?)?;
+                setadd(
+                    &mut q,
+                    A::RawStorageBytes,
+                    mul(add(mul(out, 3 * node.out.dtype.width() as u128)?, mul(leaves, 128)?)?, positions as u128)?,
+                )?;
+                setadd(&mut q, A::ParameterCalls, mul(mul(out, 2)?, positions as u128)?)?;
                 setadd(
                     &mut q,
                     A::StoredEvidenceBytes,
-                    mul(add(add(mul(leaves, 128)?, mul(out, node.out.dtype.width() as u128)?)?, 128)?, positions as u128)?,
+                    mul(add(add(mul(leaves, 128)?, mul(out, node.out.dtype.width() as u128)?)?, 2048)?, positions as u128)?,
                 )?;
                 tree_peak = tree_peak.max(add(131072, mul((128 - leaves.max(1).leading_zeros()) as u128, 256)?)?);
             }

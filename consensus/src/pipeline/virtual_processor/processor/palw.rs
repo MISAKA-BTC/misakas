@@ -6360,6 +6360,52 @@ impl VirtualStateProcessor {
             }
         }
         if let Some(a) = native
+            && a.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14
+            && matches!(a.action, 68 | 69)
+        {
+            let (id, index) = if a.action == 68 {
+                let part = kaspa_consensus_core::palw_native_execution_v39::borrowed_source_upload_part_v39(a.body)
+                    .ok_or_else(|| "metadata39 original bounded part metadata absent".to_string())?;
+                (part.id, Some(part.index))
+            } else {
+                (a.body.try_into().map_err(|_| "metadata39 exact original assembly id".to_string())?, None)
+            };
+            if state.kernel_route().and_then(|r| r.native_metadata_upload_owner_v39(id, index, daa_score)) != Some(*signer) {
+                return Err("metadata39 original owner/attempt/coverage/clock differs".into());
+            }
+        }
+        if let Some(a) = native
+            && a.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14
+            && a.action == 50
+        {
+            let part = kaspa_consensus_core::palw_native_job_v39::borrowed_native_proof_part_v39(a.body)
+                .ok_or_else(|| "native39 original bounded filing metadata absent".to_string())?;
+            if state
+                .kernel_route()
+                .and_then(|r| r.native_proof_owner_v39(part.job, part.seal, part.index, part.count, part.total, part.mode, daa_score))
+                != Some(*signer)
+            {
+                return Err("native39 original filing owner/attempt/phase differs".into());
+            }
+        }
+        if let Some(a) = native
+            && a.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14
+            && a.action == 48
+        {
+            // Answer39 uses the same fixed fragment frame as a filing part:
+            // its two identities denote the pending unit and answer group.
+            let part = kaspa_consensus_core::palw_native_job_v39::borrowed_native_proof_part_v39(a.body)
+                .filter(|p| p.mode == 0 && p.count <= 4 && p.total <= 128 << 10)
+                .ok_or_else(|| "native39 original bounded answer metadata absent".to_string())?;
+            if state
+                .kernel_route()
+                .and_then(|r| r.native_answer_owner_v39(part.job, part.seal, part.index, part.count, part.total, daa_score))
+                != Some(*signer)
+            {
+                return Err("native39 original answer producer/attempt/phase differs".into());
+            }
+        }
+        if let Some(a) = native
             && ((a.tag == misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 && a.action == 37)
                 || (a.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 && a.action == 32))
         {

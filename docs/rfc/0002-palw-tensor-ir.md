@@ -644,7 +644,7 @@ after the capacity steps (ADR-0160), at a height chosen when Phase F's drill pas
 | An IR that grows per model (`QwenGdn`, `Mamba2Scan`, `DeepSeekRoute` as ops) | The same problem, one level down, in a few years. Refused by freeze criterion 1 |
 | Generalise kernels one by one | Worth doing for live bugs (Phase 0), never changes the nature of the boundary |
 | A Turing-complete deterministic VM (WASM-like) | Halting and metering become runtime problems; the court must bound an arbitrary program; nothing an LLM needs requires it |
-| A zkML VM | Proving cost is orders of magnitude above re-execution; the unilateral court already gives safety |
+| Cryptographic proofs of model computation | Permanently prohibited by the user's 2026-10-15 decision and PRINCIPLES §8; use sampled replay, public localization, deterministic court and the explicit validator-approval assumptions |
 | ONNX / StableHLO as the consensus IR | Open op sets, float semantics, implementation-defined corners. Good lowerer *inputs*, not consensus |
 | ONNX importer as the primary frontend (evaluated 2026-09-28) | A new architecture reaches ONNX export later than `transformers`, sometimes never, which defeats day-one registration; exporter-specific decompositions (attention, RoPE, caches) must be pattern-matched back into composites; QDQ carries float scales and ties-to-even rounding and is re-quantized anyway. Kept as an optional secondary frontend after the freeze |
 | Upstream MLIR as the compiler infrastructure, a MISAKA dialect (evaluated 2026-09-28) | A C++/LLVM toolchain in a Rust node for an IR of ~40 primitives whose lowering is template expansion; consensus could not depend on it in any case. Allowed for third-party compilers (the encoding is the interface); revisit for Phase G code generation, outside the identity |
@@ -4614,6 +4614,13 @@ present eligibility or an instruction to bypass admission.
 | 70B | `meta-llama/Llama-3.3-70B-Instruct` |
 | 35B-A3B | `Misakachain/Qwen3.6-35B-A3B-PALW-runtime` |
 
+The user fixed the 35B-A3B target to the original **PALWQ361 integer runtime**:
+`palw-runtime/qwen36-35b-a3b.palwq36`, 36,492,831,232 bytes, SHA-256
+`5fe1d15caf0e544b718a4a2398db4f902b9a6722b266dd53824fbc9723578b29`.
+The other `.palwq36` variant and the Claude-related GGUF files do not substitute
+for this artifact. Its tokenizer, complete original context and canonical
+conversion still require their own pinned identities and execution evidence.
+
 The dated publisher revisions and Git/LFS file inventory are recorded in
 `docs/design/palw/tir/launch/initial-seven-models-v1.json`. They are preparation
 metadata: every selected runtime variant, canonical artifact/inventory, real PC,
@@ -4639,3 +4646,21 @@ A6/A8 populations and their failure denominators unchanged: this launch set is
 a separate all-required engineering gate. Activation is held until every model
 passes, including the added MoE; no shipping preset is changed merely by listing
 the target models here.
+
+### II.14.62 Verification assumptions (user decision, 2026-10-15)
+
+[PRINCIPLES §8](../PRINCIPLES.md#8-llm計算の暗号学的証明を使用しない--2026-10-15ユーザー決定)
+governs this RFC and every implementation and future plan. Use sampled replay,
+algebraic spot checks, public localization, deterministic adjudication and
+economic deterrence. Cryptographic proofs of model computation are permanently
+excluded. Merkle openings, tensor commitments, hashes and signatures authenticate
+data identity and origin; they do not establish correctness of the whole model
+computation.
+
+Consensus credit authentication requires the prescribed randomly selected
+validator approvals under an explicit honest-fraction assumption. A matching
+local replay, an expired challenge period, an optimistic component Final, a
+complete Master aggregate or a private escrow payment does not replace those
+approvals. The all-seven block/coinbase/Final-weight gate must inspect the actual
+ordinary model/claim approval path and original bond caps. Report missing
+approvals, unknown detection rates and absent execution evidence explicitly.

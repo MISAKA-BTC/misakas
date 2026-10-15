@@ -1,6 +1,7 @@
 //! Disk-backed original39 trace archive. There is no all-position/node RAM map,
 //! and a failed position remains provisional. Raw values retain original dtype
 //! widths. Public replies and independent localization use the same tree bytes.
+use crate::native_tensor_store_v39::{DiskHashTreeV39, DiskTensorV39};
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::{
     flat_detect39::{IndependentArchiveV39, PublicReadsV39},
@@ -8,12 +9,12 @@ use misaka_palw_kernel::{
     flat_source39::CheckedSourceV39,
     flat_trace39::{TraceSinkV39, TraceSummaryV39},
     hash::Digest,
-    merkle3::{LayoutV3, LeafOpeningV3},
+    merkle3::LayoutV3,
     seg::{self, NodeOpeningV1},
 };
 use misaka_palw_tir::{DType, Tensor};
 use std::{
-    io::{Read, Seek, SeekFrom, Write},
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -44,12 +45,24 @@ impl NodeHeader {
         })
     }
 }
+#[derive(BorshSerialize, BorshDeserialize)]
+struct ArchiveHeaderV39 {
+    version: u16,
+    source: Digest,
+    maximum: Digest,
+    inputs: Digest,
+    completed: u32,
+    budget: u64,
+    stored: u64,
+}
 pub struct DiskTraceArchiveV39 {
     root: PathBuf,
     source: Digest,
     offsets: Vec<u64>,
     counts: Vec<u16>,
     maximum_value_elements: u64,
+    output_node: u16,
+    output_final: bool,
     budget: u64,
     bytes: u64,
     binding: Option<(Digest, Digest)>,
@@ -80,11 +93,109 @@ impl DiskTraceArchiveV39 {
             offsets,
             counts,
             maximum_value_elements: source.profile().max_value_elements,
+            output_node: source.program().output.node(),
+            output_final: matches!(source.program().output, misaka_palw_tir::program_v2::OutputDecl::Final { .. }),
             budget: maximum_disk_bytes,
             bytes: 0,
             binding: None,
             completed: 0,
             summary: None,
+        })
+    }
+    /// Reopened archives are data responders, never fresh independent replay
+    /// tokens. Exact original maximum/actual input/claim bindings are rechecked;
+    /// every emitted leaf/path still authenticates to the accepted trace roots.
+    pub fn open_existing(
+        path: &Path,
+        source: &CheckedSourceV39,
+        maximum: &misaka_palw_kernel::flat_job39::CheckedJobMaximumV39,
+        inputs: &misaka_palw_kernel::flat_job39::ActualInputResolverV39<'_>,
+        claim: &misaka_palw_kernel::flat_point39::FlatClaimV39,
+        maximum_disk_bytes: u64,
+    ) -> Result<Self, String> {
+        let context = misaka_palw_kernel::flat_point39::CheckedPointContextV39::check(source, maximum, claim.root(), claim, inputs)?;
+        // A documentary archive counter cannot enlarge this independently
+        // derived original resource envelope. Reopening is read-only, with each
+        // requested file/path additionally checked at its exact typed extent.
+        if context.resources().vector().quantities.get(misaka_palw_kernel::flat_resources10::ResourceAxisV10::StoredEvidenceBytes)
+            > maximum_disk_bytes as u128
+        {
+            return Err("archive39 reopened budget is below original actual evidence envelope".into());
+        }
+        let root = path.canonicalize().map_err(|e| e.to_string())?;
+        let body = crate::native_audit_io_v32::read_bounded_file_v32(&root.join("archive39.borsh"), 512)?;
+        let h = ArchiveHeaderV39::try_from_slice(&body).map_err(|_| "archive39 exact fixed archival header")?;
+        if h.version != 39
+            || h.source != source.root()
+            || h.maximum != maximum.root()
+            || h.inputs != inputs.root()
+            || h.completed != claim.positions
+            || h.stored > h.budget
+            || h.stored > maximum_disk_bytes
+        {
+            return Err("archive39 original pinned archival binding/budget differs".into());
+        }
+        let mut offsets = Vec::new();
+        let mut counts = Vec::new();
+        let mut total = 0;
+        for (b, _) in source.program().occurrences() {
+            offsets.push(total);
+            let n = source.program().blocks[b as usize].nodes.len();
+            counts.push(u16::try_from(n).map_err(|_| "archive39 nodecount")?);
+            total += n as u64;
+        }
+        let final_output = matches!(source.program().output, misaka_palw_tir::program_v2::OutputDecl::Final { .. });
+        let expected_output = if final_output { 1 } else { claim.positions };
+        let encoded_claim = borsh::to_vec(claim).map_err(|e| e.to_string())?;
+        let expected_bytes = (encoded_claim.len() as u64)
+            .checked_add(8)
+            .and_then(|n| n.checked_add(claim.positions as u64 * 64))
+            .and_then(|n| n.checked_add(expected_output as u64 * 64))
+            .ok_or("archive39 original summary extent")?;
+        let summary_path = root.join("summary39.borsh");
+        let real = summary_path.canonicalize().map_err(|e| e.to_string())?;
+        if !real.starts_with(&root) {
+            return Err("archive39 summary escapes original directory".into());
+        }
+        let mut file = std::fs::File::open(real).map_err(|e| e.to_string())?;
+        if file.metadata().map_err(|e| e.to_string())?.len() != expected_bytes || expected_bytes > maximum_disk_bytes {
+            return Err("archive39 exact bounded original summary extent".into());
+        }
+        let mut prefix = vec![0; encoded_claim.len()];
+        file.read_exact(&mut prefix).map_err(|e| e.to_string())?;
+        if prefix != encoded_claim {
+            return Err("archive39 summary not original accepted claim".into());
+        }
+        let mut roots = |expected: u32| -> Result<Vec<Digest>, String> {
+            let n = u32::deserialize_reader(&mut file).map_err(|_| "archive39 summary vector length")?;
+            if n != expected {
+                return Err("archive39 original summary count before allocation".into());
+            }
+            let mut out = Vec::new();
+            out.try_reserve_exact(n as usize).map_err(|_| "archive39 bounded summary reservation")?;
+            for _ in 0..n {
+                out.push(Digest::deserialize_reader(&mut file).map_err(|_| "archive39 summary root missing")?);
+            }
+            Ok(out)
+        };
+        let position_roots = roots(claim.positions)?;
+        let output_roots = roots(expected_output)?;
+        if seg::segment_roots_of_position_roots_v1(&position_roots) != claim.segment_roots {
+            return Err("archive39 original archived position roots differ".into());
+        }
+        Ok(Self {
+            root,
+            source: source.root(),
+            offsets,
+            counts,
+            maximum_value_elements: source.profile().max_value_elements,
+            output_node: source.program().output.node(),
+            output_final: final_output,
+            budget: maximum_disk_bytes,
+            bytes: h.stored,
+            binding: Some((maximum.root(), inputs.root())),
+            completed: h.completed,
+            summary: Some(Arc::new(TraceSummaryV39 { claim: claim.clone(), position_roots, output_roots })),
         })
     }
     pub fn root_directory(&self) -> &Path {
@@ -137,28 +248,27 @@ impl DiskTraceArchiveV39 {
         }
         Ok(h)
     }
-    fn values(&self, p: u32, s: u16, n: u16, indices: &[u64]) -> Result<Vec<i128>, String> {
-        if indices.len() > 4096 {
-            return Err("archive39 leaf buffer bound".into());
-        }
+    fn tensor_store(&self, p: u32, s: u16, n: u16) -> Result<DiskTensorV39, String> {
         let h = self.header_at(p, s, n)?;
-        let mut file = std::fs::File::open(self.node_file(p, s, n, "raw39")?).map_err(|e| e.to_string())?;
-        if file.metadata().map_err(|e| e.to_string())?.len() != h.raw {
-            return Err("archive39 immutable original raw extent differs".into());
+        DiskTensorV39::open_existing(&self.node_file(p, s, n, "tensor39")?, h.commitment, self.maximum_value_elements, self.budget)
+    }
+    fn values(&self, p: u32, s: u16, n: u16, indices: &[u64]) -> Result<Vec<i128>, String> {
+        self.tensor_store(p, s, n)?.read_indices(indices)
+    }
+    pub fn read_value_range(&self, p: u32, s: u16, n: u16, offset: u64, count: usize) -> Result<Vec<i128>, String> {
+        self.tensor_store(p, s, n)?.read_value_range(offset, count)
+    }
+    fn node_tree(&self, p: u32) -> Result<DiskHashTreeV39, String> {
+        let root_raw = crate::native_audit_io_v32::read_bounded_file_v32(&self.position_dir(p, false).join("node-tree-root39"), 64)?;
+        let root: Digest = root_raw.as_slice().try_into().map_err(|_| "archive39 original node directory root extent")?;
+        let mut h = misaka_palw_kernel::hash::keyed(seg::SEG_POS_ROOT_DOMAIN_V1);
+        h.update(&p.to_le_bytes()).update(&self.nodes().to_le_bytes()).update(&root);
+        if misaka_palw_kernel::hash::finish(h)
+            != *self.summary()?.position_roots.get(p as usize).ok_or("archive39 original position absent")?
+        {
+            return Err("archive39 original node directory root differs".into());
         }
-        let width = h.dtype.width();
-        let mut word = [0u8; 16];
-        let mut out = Vec::with_capacity(indices.len());
-        for index in indices {
-            let at = index
-                .checked_mul(width as u64)
-                .filter(|n| n.checked_add(width as u64).is_some_and(|e| e <= h.raw))
-                .ok_or("archive39 original value offset")?;
-            file.seek(SeekFrom::Start(at)).map_err(|e| e.to_string())?;
-            file.read_exact(&mut word[..width]).map_err(|e| e.to_string())?;
-            out.push(h.dtype.decode_le(&word[..width]));
-        }
-        Ok(out)
+        DiskHashTreeV39::open_existing(&self.position_dir(p, false).join("node-tree39"), self.nodes(), root, self.budget)
     }
     fn summary(&self) -> Result<&TraceSummaryV39, String> {
         self.summary.as_deref().ok_or("archive39 full trace is not finished".into())
@@ -166,6 +276,7 @@ impl DiskTraceArchiveV39 {
     pub fn finish(&mut self, summary: &TraceSummaryV39) -> Result<(), String> {
         let (maximum, inputs) = self.binding.ok_or("archive39 original binding missing")?;
         if self.summary.is_some()
+            || self.completed == 0
             || summary.claim.source != self.source
             || summary.claim.maximum != maximum
             || summary.claim.input_binding != inputs
@@ -181,14 +292,48 @@ impl DiskTraceArchiveV39 {
                 return Err("archive39 promoted original position root differs".into());
             }
         }
-        let raw = borsh::to_vec(summary).map_err(|e| e.to_string())?;
-        self.charge(raw.len() as u64)?;
+        let expected_outputs = if self.output_final { 1 } else { self.completed as usize };
+        if summary.output_roots.len() != expected_outputs {
+            return Err("archive39 original output declaration count differs".into());
+        }
+        let occurrence = (self.counts.len() - 1) as u16;
+        for (i, root) in summary.output_roots.iter().enumerate() {
+            let p = if self.output_final { self.completed - 1 } else { i as u32 };
+            if self.header_at(p, occurrence, self.output_node)?.commitment != *root {
+                return Err("archive39 original output commitment differs".into());
+            }
+        }
+        let claim_bytes = borsh::to_vec(&summary.claim).map_err(|e| e.to_string())?;
+        let summary_bytes = (claim_bytes.len() as u64)
+            .checked_add(8)
+            .and_then(|n| n.checked_add(summary.position_roots.len() as u64 * 64))
+            .and_then(|n| n.checked_add(summary.output_roots.len() as u64 * 64))
+            .ok_or("archive39 summary byte charge")?;
+        self.charge(summary_bytes)?;
         let mut f = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(self.root.join("summary39.borsh"))
             .map_err(|e| e.to_string())?;
-        f.write_all(&raw).and_then(|_| f.sync_all()).map_err(|e| e.to_string())?;
+        summary.serialize(&mut f).and_then(|_| f.sync_all()).map_err(|e| e.to_string())?;
+        let mut header = ArchiveHeaderV39 {
+            version: 39,
+            source: self.source,
+            maximum,
+            inputs,
+            completed: self.completed,
+            budget: self.budget,
+            stored: 0,
+        };
+        let n = borsh::to_vec(&header).map_err(|e| e.to_string())?.len();
+        self.charge(n as u64)?;
+        header.stored = self.bytes;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(self.root.join("archive39.borsh"))
+            .map_err(|e| e.to_string())?;
+        header.serialize(&mut file).and_then(|_| file.sync_all()).map_err(|e| e.to_string())?;
         self.summary = Some(Arc::new(summary.clone()));
         Ok(())
     }
@@ -222,6 +367,13 @@ impl DiskTraceArchiveV39 {
         }
     }
     fn tree(&self, d: &DirectoryV39, first: u64, count: u64) -> Result<Digest, String> {
+        match d {
+            DirectoryV39::Nodes { opening } => return self.node_tree(opening.position)?.subtree(first, count),
+            DirectoryV39::Tensor { value: ValueKeyV39::Trace { position, occurrence, node }, axis, .. } => {
+                return self.tensor_store(*position, *occurrence, *node)?.subtree(*axis, first, count);
+            }
+            _ => {}
+        }
         if count == 0 || first.checked_add(count).is_none() {
             return Err("archive39 empty/overflow tree".into());
         }
@@ -309,28 +461,8 @@ impl DiskTraceArchiveV39 {
         let ValueKeyV39::Trace { position, occurrence, node } = *value else {
             return Err("archive39 original parameter/input reader required".into());
         };
-        let h = self.trace_header(value)?;
-        let shape = h.shape.iter().map(|d| *d as usize).collect::<Vec<_>>();
-        let layout = LayoutV3::try_of(&shape).ok_or("archive39 original leaf layout")?;
-        if axis > 1 {
-            return Err("archive39 axis".into());
-        }
-        let indices = layout.leaf_elements(axis, line, tile).ok_or("archive39 original requested leaf")?;
-        let directory = DirectoryV39::Tensor { value: value.clone(), header: h.clone(), axis };
-        let index = layout.leaf_index(axis, line, tile);
-        Ok(FlatReplyV39::Leaf {
-            node: h.node,
-            leaf: LeafOpeningV3 {
-                dtype: h.dtype,
-                shape: h.shape,
-                axis,
-                line,
-                tile,
-                values: self.values(position, occurrence, node, &indices)?,
-                siblings: self.path(&directory, index, layout.leaves(axis))?,
-                other_root: if axis == 0 { h.col_root } else { h.row_root },
-            },
-        })
+        let leaf = self.tensor_store(position, occurrence, node)?.leaf(axis, line, tile)?;
+        Ok(FlatReplyV39::Leaf { node: Some(self.node_opening(position, occurrence, node)?), leaf })
     }
     /// Trace-owned public acquisition. Parameter and input branches return None
     /// for composition with independently pinned source/material lazy readers.
@@ -413,21 +545,30 @@ impl TraceSinkV39 for DiskTraceArchiveV39 {
             return Err("archive39 original node tree roots differ".into());
         }
         let header = borsh::to_vec(&h).map_err(|e| e.to_string())?;
-        self.charge(raw.checked_add(header.len() as u64).ok_or("archive39 disk charge")?)?;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(dir.join(format!("n{slot:08x}.raw39")))
-            .map_err(|e| e.to_string())?;
-        let mut buffer = Vec::with_capacity(65536);
-        for value in &value.data {
-            h.dtype.encode_le(*value, &mut buffer);
-            if buffer.len() >= 65536 {
-                f.write_all(&buffer).map_err(|e| e.to_string())?;
-                buffer.clear();
-            }
+        let available = self
+            .budget
+            .checked_sub(self.bytes)
+            .and_then(|n| n.checked_sub(header.len() as u64))
+            .ok_or("archive39 original disk budget")?;
+        let tensor = DiskTensorV39::create(
+            &dir.join(format!("n{slot:08x}.tensor39")),
+            value.dtype,
+            &value.shape,
+            c,
+            self.maximum_value_elements,
+            available,
+            |offset, count| {
+                value
+                    .data
+                    .get(offset as usize..offset as usize + count)
+                    .map(|v| v.to_vec())
+                    .ok_or("archive39 exact original tensor range".into())
+            },
+        )?;
+        if tensor.header().row_root != row || tensor.header().col_root != col {
+            return Err("archive39 independent stored row/col tree differs".into());
         }
-        f.write_all(&buffer).and_then(|_| f.sync_all()).map_err(|e| e.to_string())?;
+        self.charge(tensor.stored_bytes().checked_add(header.len() as u64).ok_or("archive39 disk charge")?)?;
         let mut m = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -439,7 +580,42 @@ impl TraceSinkV39 for DiskTraceArchiveV39 {
         if p != self.completed || self.summary.is_some() {
             return Err("archive39 original position completion order".into());
         }
-        self.charge(64)?;
+        let dir = self.position_dir(p, true);
+        let tree_bytes = self
+            .nodes()
+            .checked_mul(2)
+            .and_then(|n| n.checked_sub(1))
+            .and_then(|n| n.checked_mul(64))
+            .ok_or("archive39 original node tree budget")?;
+        self.charge(tree_bytes.checked_add(128).ok_or("archive39 node root budget")?)?;
+        let hashes = (0..self.nodes()).map(|index| {
+            let body = crate::native_audit_io_v32::read_bounded_file_v32(&dir.join(format!("n{index:08x}.header39")), 512)?;
+            let h = NodeHeader::try_from_slice(&body).map_err(|_| "archive39 original fixed node header")?;
+            let (s, n) = self.address(index)?;
+            Ok(seg::node_leaf_v1(s, n, &h.commitment))
+        });
+        let directory = DirectoryV39::Nodes {
+            opening: NodeOpeningV1 {
+                position: p,
+                occurrence: 0,
+                node: 0,
+                commitment: [0; 64],
+                node_siblings: vec![],
+                position_root: root,
+                position_siblings: vec![],
+            },
+        };
+        let tree = DiskHashTreeV39::create_with_pair(&dir.join("node-tree39"), self.nodes(), tree_bytes, hashes, |a, b| {
+            directory_pair_v39(&directory, a, b)
+        })?;
+        let mut h = misaka_palw_kernel::hash::keyed(seg::SEG_POS_ROOT_DOMAIN_V1);
+        h.update(&p.to_le_bytes()).update(&self.nodes().to_le_bytes()).update(&tree.root());
+        if misaka_palw_kernel::hash::finish(h) != root {
+            return Err("archive39 original observed position differs from persisted nodes".into());
+        }
+        let mut tree_root =
+            std::fs::OpenOptions::new().write(true).create_new(true).open(dir.join("node-tree-root39")).map_err(|e| e.to_string())?;
+        tree_root.write_all(&tree.root()).and_then(|_| tree_root.sync_all()).map_err(|e| e.to_string())?;
         let mut f = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)

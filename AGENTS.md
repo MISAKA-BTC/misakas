@@ -28,3 +28,13 @@ MISAKA は LLM・モデル計算の正しさを暗号学的に証明する仕組
 - 旧 wire tag や履歴の読み取り互換性を保存する場合も、禁止した方式を新規生成・受理して計算 credit の根拠にしない。既存 ID の意味を新しい方式へ黙って変更しない。
 
 詳細と優先順位は [docs/PRINCIPLES.md §8](docs/PRINCIPLES.md#8-モデル計算の暗号学的証明を使用しない2026-10-15ユーザー恒久決定) に従う。
+
+## MISAKA instructions (English, Codex workspace-rfc02 version, kept at merge)
+
+### Permanent user decision — 2026-10-15
+
+MISAKA does not use, and will never use, cryptographic proofs of the correctness of LLM or model computation. Do not propose or implement zero-knowledge proofs, zk-SNARKs, zk-STARKs, zkVM, zkML, PCS-based succinct arguments or validity proofs, recursive proofs, or proof aggregation for this purpose. This restriction applies to RFCs, ADRs, designs, implementation, future plans, and research items.
+
+Use probabilistic detection through sampled deterministic re-execution and algebraic spot checks, public evidence localization, deterministic adjudication, and economic deterrence. Consensus credit authentication uses approvals from randomly selected validators under an explicitly stated honest-fraction assumption. An optimistic Final or matching local replay does not replace that approval.
+
+Hashes, signatures, Merkle commitments, and VRF/beacons may establish data identity, authentication, and randomness. They do not prove computation correctness. See [the governing principles](docs/PRINCIPLES.md#8-llm計算の暗号学的証明を使用しない--2026-10-15ユーザー決定).
