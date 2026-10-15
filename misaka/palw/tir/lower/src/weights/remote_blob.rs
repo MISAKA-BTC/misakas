@@ -87,7 +87,14 @@ fn io_err(m: impl Into<String>) -> std::io::Error {
 
 impl RemoteHashedFileV1 {
     /// `url` of `len` bytes whose SHA-256 must be `expect_sha256`, read in windows of `window` bytes, `keep` of them cached.
-    pub fn new(fetcher: Box<dyn RangeFetcher>, url: &str, len: u64, expect_sha256: [u8; 32], window: u64, keep: usize) -> Result<Self> {
+    pub fn new(
+        fetcher: Box<dyn RangeFetcher>,
+        url: &str,
+        len: u64,
+        expect_sha256: [u8; 32],
+        window: u64,
+        keep: usize,
+    ) -> Result<Self> {
         if !(1 << 20..=1 << 30).contains(&window) {
             return Err(LowerError::bad(format!("a window of {window} bytes (1 MiB .. 1 GiB)")));
         }
@@ -206,7 +213,10 @@ impl ByteSourceV1 for RemoteHashedFileV1 {
     }
 
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
-        let end = offset.checked_add(buf.len() as u64).filter(|e| *e <= self.len).ok_or_else(|| io_err("a read past the end of the file"))?;
+        let end = offset
+            .checked_add(buf.len() as u64)
+            .filter(|e| *e <= self.len)
+            .ok_or_else(|| io_err("a read past the end of the file"))?;
         let mut st = self.st.lock().map_err(|_| io_err("a poisoned lock"))?;
         let mut at = offset;
         let mut done = 0usize;

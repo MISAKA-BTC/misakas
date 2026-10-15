@@ -190,7 +190,8 @@ pub fn open_model_full_lazy(
     let r = crate::hf_schema::read_model_with(&config, None, read, reg).map_err(|f| f.error)?;
     let spec_digest = crate::model::spec_digest(&r.spec);
     let prepared = prepare_spec(r.spec.clone(), opts)?;
-    let frontend = Frontend { config, level: level_of(&r.adapter), adapter: r.adapter, assumed_defaults: r.assumed_defaults, spec_digest };
+    let frontend =
+        Frontend { config, level: level_of(&r.adapter), adapter: r.adapter, assumed_defaults: r.assumed_defaults, spec_digest };
     let ck = crate::weights::lazy::LazyShardCheckpoint::open(path, sizes, spec.clone())?;
     let source: Box<dyn crate::weights::TensorSource + Sync> = match prepared.spec.hf.quant.as_ref().filter(|q| q.fmt.is_virtual()) {
         Some(q) => {

@@ -305,7 +305,10 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     let o = convert_model(&req, &log).map_err(|e| e.to_string())?;
     if let Some(src) = &req.gguf_source {
         let (fetched, refetched) = src.fetched();
-        log(format!("streamed GGUF: {:.1} GiB fetched, {refetched} windows refetched and re-checked; whole-file SHA-256 equals the pin", fetched as f64 / (1u64 << 30) as f64));
+        log(format!(
+            "streamed GGUF: {:.1} GiB fetched, {refetched} windows refetched and re-checked; whole-file SHA-256 equals the pin",
+            fetched as f64 / (1u64 << 30) as f64
+        ));
     }
     let r = &o.report;
     if !r.stream.whole.is_empty() {

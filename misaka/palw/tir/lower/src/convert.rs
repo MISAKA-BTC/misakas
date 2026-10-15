@@ -281,7 +281,9 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         pin.verify_files(&req.model)?;
     }
     let opened = match (&req.gguf_source, &req.lazy_shards) {
-        (Some(src), _) => crate::fidelity::open_model_full_source(&req.model, src.clone(), GGUF_SOURCE_HEADER_CAP, &opts, &reg, &read)?,
+        (Some(src), _) => {
+            crate::fidelity::open_model_full_source(&req.model, src.clone(), GGUF_SOURCE_HEADER_CAP, &opts, &reg, &read)?
+        }
         (None, Some(spec)) => crate::fidelity::open_model_full_lazy(&req.model, &opts, &reg, &read, spec, &req.shard_sizes)?,
         (None, None) => crate::fidelity::open_model_full(&req.model, &opts, &reg, &read)?,
     };

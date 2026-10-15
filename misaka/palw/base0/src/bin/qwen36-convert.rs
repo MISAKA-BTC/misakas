@@ -278,7 +278,9 @@ fn main() {
     }
     for i in declared - nextn..declared {
         if !dir.tensors.keys().any(|k| k.starts_with(&format!("blk.{i}.nextn."))) {
-            die(format!("nextn_predict_layers {nextn} names block {i} a multi-token-prediction layer, and it has no `nextn.*` tensor"));
+            die(format!(
+                "nextn_predict_layers {nextn} names block {i} a multi-token-prediction layer, and it has no `nextn.*` tensor"
+            ));
         }
     }
     let declared = declared - nextn;
