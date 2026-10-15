@@ -316,7 +316,8 @@ impl Net {
     }
 
     fn ledger(&self) -> KernelLedgerV1 {
-        self.api().expect("the route exists").ledger().expect("the stored rows rebuild")
+        // A test-side owned copy of the reserved rebuild (the reservation is the node's, not the test's).
+        KernelLedgerV1::clone(&self.api().expect("the route exists").ledger().expect("the stored rows rebuild"))
     }
 
     fn collateral(&self, card: usize) -> u64 {

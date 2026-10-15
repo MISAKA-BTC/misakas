@@ -3,6 +3,7 @@
 //! hardware power-loss acceptance. Execute only in the consolidated test phase.
 use super::*;
 use kaspa_database::prelude::ConnBuilder;
+use kaspa_muhash::MuHash;
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 struct Manifest {

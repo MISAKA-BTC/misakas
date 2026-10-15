@@ -413,7 +413,8 @@ async fn g14_k2s_a_tiled_prompt_past_4096_ids_commits_as_a_multi_segment_claim_o
     let api = w.net.api().unwrap();
     let rebuilt = KernelLedgerV1::from_rows(&api.template(), api.header.scalars, &api.rows).unwrap();
     let mut cached = api.clone();
-    cached.ledger_cache.set(rebuilt.clone().as_rebuilt_from_v1(&cached.rows));
+    // The cache holds a reserved ledger: the route's own rebuild of the same rows.
+    cached.ledger_cache.set(api.ledger().unwrap().as_rebuilt_from_v1(&cached.rows));
     assert_eq!(cached.ledger().unwrap().root(), rebuilt.root(), "the cached ledger is the rebuilt one");
     // A fresh outsider: one position of every segment (and the ones they read), from public material only.
     let view = w.fresh_record(&claim.id);

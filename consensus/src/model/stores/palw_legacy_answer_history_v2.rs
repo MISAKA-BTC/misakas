@@ -102,7 +102,10 @@ mod tests {
     use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
     use kaspa_consensus_core::palw_state_v2::{PalwBlockContextV2, PalwBondKeyV2};
     use kaspa_consensus_core::tx::TransactionOutpoint;
-    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    use kaspa_database::{
+        create_temp_db,
+        prelude::{ConnBuilder, DirectDbWriter},
+    };
 
     // Synthetic journal rows test persistence/budgets only, not consensus or MLDSA acceptance.
     fn fixture() -> (BlockHash, PalwStateDeltaV2, PalwPendingLegacyAnswerV2, PalwLegacyAnswerChunkV2) {

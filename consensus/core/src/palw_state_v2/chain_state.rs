@@ -2348,6 +2348,14 @@ impl PalwChainStateV2 {
         self.tir_classes.get(class_id)
     }
 
+    /// **G14: one staged public court row** by its key (read-only).
+    pub fn staged_court_row_v1(
+        &self,
+        key: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
+    ) -> Option<&crate::palw_staged_court_state_v1::PalwStagedCourtRowV1> {
+        self.staged_courts.get(key)
+    }
+
     /// **RFC-0002 F7: a court session's IR history dissection**, if its root claim was admitted.
     pub fn tir_dissection_v1(&self, session_id: &Hash64) -> Option<&crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1> {
         self.tir_dissections.get(session_id).map(|phase| phase.as_ref())

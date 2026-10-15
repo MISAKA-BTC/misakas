@@ -3213,7 +3213,7 @@ impl KernelLedgerV1 {
                     // chain for a demand's deadline must not turn a provable fraud into a cheap default. If no valid proof arrives
                     // the outcome stays the default (availability, never fraud) and the reservation is released at the horizon.
                     // The per-class horizon (G14-B), never shortening one an EXEC hold or a source opt-in already extended.
-                    row.liability_until = Some(match self.paid_claim_consumers_v2.get(&id) {
+                    row.liability_until = Some(match self.paid_claim_consumers_v2.get(&claim) {
                         Some(paid) => paid.lifetime.liability_until,
                         None => row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)),
                     });

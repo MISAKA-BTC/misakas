@@ -104,7 +104,7 @@ impl Serializer for GetPalwMonetaryMaterialResponse {
         store!(u64, &self.start_offset, writer)?;
         store!(u64, &self.next_row, writer)?;
         store!(u64, &self.next_offset, writer)?;
-        store!(Vec<RpcPalwMonetaryAuxFragment>, &self.fragments, writer)?;
+        serialize!(Vec<RpcPalwMonetaryAuxFragment>, &self.fragments, writer)?;
         Ok(())
     }
 }
@@ -128,7 +128,7 @@ impl Deserializer for GetPalwMonetaryMaterialResponse {
             start_offset: load!(u64, reader)?,
             next_row: load!(u64, reader)?,
             next_offset: load!(u64, reader)?,
-            fragments: load!(Vec<RpcPalwMonetaryAuxFragment>, reader)?,
+            fragments: deserialize!(Vec<RpcPalwMonetaryAuxFragment>, reader)?,
         })
     }
 }

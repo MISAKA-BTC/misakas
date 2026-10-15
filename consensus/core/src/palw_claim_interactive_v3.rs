@@ -125,7 +125,7 @@ impl PalwKernelRouteStateV1 {
             return Err("paid round key/identity mismatch".into());
         }
         let a = self.paid_claim_enrollment_v3(enrollment)?;
-        row.validate(&a, &self.ledger()?)?;
+        row.validate(&a, &*self.ledger()?)?;
         Ok(row)
     }
     pub fn paid_claim_enrollment_v3(&self, enrollment: &Digest) -> Result<PalwPaidClaimAuthorityV2, String> {
@@ -146,7 +146,7 @@ impl PalwKernelRouteStateV1 {
 
     pub fn paid_claim_source_authority_v3(&self, context: &Digest) -> Result<PalwPaidClaimSourceAuthorityV3, String> {
         if let Some(a) = self.aux_row::<PalwPaidClaimAuthorityV2>(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(context).unwrap()) {
-            a.validate(&self.ledger()?)?;
+            a.validate(&*self.ledger()?)?;
             if a.class.source_policy.interactive_mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
                 return Err("staged source needs a producer message and fresh round target".into());
             }
@@ -171,7 +171,7 @@ impl PalwKernelRouteStateV1 {
         let row: PalwPaidClaimRoundV3 =
             self.aux_row(PAID_CLAIM_ROUNDS_V2, &borsh::to_vec(&index.target).unwrap()).ok_or("staged source index target missing")?;
         let a = self.paid_claim_enrollment_v3(&row.enrollment)?;
-        row.validate(&a, &self.ledger()?)?;
+        row.validate(&a, &*self.ledger()?)?;
         if row.id() != index.target || row.context.id() != *context || self.beacon_source_target_v4(context)? != row.target {
             return Err("staged source index substitutes its round/context/target".into());
         }

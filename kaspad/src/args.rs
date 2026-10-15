@@ -3381,7 +3381,7 @@ Setting to 0 prevents the preallocation and sets the maximum to {}, leading to 0
                 .help("Apply a scale factor to memory allocation bounds. Nodes with limited RAM (~4-8GB) should set this to ~0.3-0.5 respectively. Nodes with
 a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance especially for syncing peers faster"),
         )
-        .arg(
+        .args([
             Arg::new("palw-native-logical-admission-v1")
                 .long("palw-native-logical-admission-v1").action(ArgAction::SetTrue)
                 .help("Local native typed allocation-request capacity. Requires a trusted persisted point inventory; does not approve physical allocator RSS or database compaction."),
@@ -3412,7 +3412,7 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                      did not exist, took 22 of 23 GB with 14 GB of swap, and the kernel OOM-killed two of them. A budget \
                      is how a host stops promising the same bytes four times.",
                 ),
-        )
+        ])
         .arg(
             Arg::new("palw-host-memory-share")
                 .long("palw-host-memory-share")

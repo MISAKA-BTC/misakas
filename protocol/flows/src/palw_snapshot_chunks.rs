@@ -620,7 +620,7 @@ impl SnapshotReceiver {
             if reader.read(&mut extra)? != 0 || reader.read != profile.decoded || reader.inner.total_in() != self.total {
                 return Err(invalid("native preflight CRC/single-stream/exact decoded length mismatch"));
             }
-            reserve_native_wire_v1(self.point, &preflight).map_err(|why| invalid(&format!("native structural admission: {why:?}")))?
+            reserve_native_wire_v1(self.point, &preflight).map_err(|why| io::Error::new(io::ErrorKind::InvalidData, format!("native structural admission: {why:?}")))?
         } else {
             None
         };

@@ -139,7 +139,7 @@ fn route_of(chain: &Chain) -> PalwKernelRouteStateV1 {
 }
 
 fn ledger_of(chain: &Chain) -> KernelLedgerV1 {
-    route_of(chain).ledger().expect("the rows rebuild")
+    KernelLedgerV1::clone(&route_of(chain).ledger().expect("the rows rebuild"))
 }
 
 fn state_of(chain: &Chain, claim: &Digest) -> ClaimStateV1 {

@@ -161,7 +161,7 @@ pub fn bound_program_work_v3(
         class.plan.program_root,
         positions as u32,
     )
-    .map_err(|e| Refusal::new("BOOTSTRAP_RESOURCE", e.to_string()))?;
+    .map_err(|e| Refusal::new("BOOTSTRAP_RESOURCE", format!("{e:?}")))?;
     let (work, _, _) = misaka_palw_kernel::plan::reexecution_bounds_v1(&class.program, &actual_plan);
     let execution_work = mul(work, add(u128::from(job.max_new_tokens), 1)?)?;
     if workspace > 256 * 1024 * 1024 || material > 32 * 1024 * 1024 || execution_work > 100_000_000 {

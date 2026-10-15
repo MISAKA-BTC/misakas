@@ -790,7 +790,7 @@ mod tests {
         monetary.window_daa = 436;
         let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h(1), 4, 1000, 100, 1000, 0)
             .unwrap()
-            .with_bond_budget(Some(PalwBondBudgetMirrorV1 { from_daa: 1, policy: monetary, allocation: None }))
+            .with_bond_budget(Some(PalwBondBudgetMirrorV1 { from_daa: 1, policy: monetary.clone(), allocation: None }))
             .with_reporter_income_from(Some(1))
             .with_material_income_from(Some(1))
             .with_monetary_material(Some(PalwMonetaryMaterialMirrorV1 { from_daa: 1, policy: p.clone() }));

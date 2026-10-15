@@ -2356,7 +2356,7 @@ pub fn palw_check_panel_false_valid_at_v2_with_budget_closure_v1(
     let target = palw_offence_target_v1(state, &payload.claim_id).ok_or(PalwOffenceVerifyError::NoTarget)?;
     // R6-CELL round 4: the coverage closure governs a claim accepted at or past its fence (`None` on every shipped network).
     let cell_closure =
-        cell_closure_from.is_some_and(|from| state.claims.get(&target.claim_id).is_some_and(|c| c.accepted_daa >= from));
+        cell_closure_from.is_some_and(|from| state.claim(&target.claim_id).is_some_and(|c| c.accepted_daa >= from));
     if sessions.refuses(state, &target.claim_id) {
         return Err(PalwOffenceVerifyError::ClaimUnderSession);
     }

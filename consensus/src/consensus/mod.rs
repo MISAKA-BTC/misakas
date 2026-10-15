@@ -1094,7 +1094,7 @@ impl Consensus {
     /// The PALW V2 state at the tip, through the shared materialization (audit M-7) — the one
     /// snapshot every `palw_model_*` reader answers from. `None` off ConsensusV2 or before the
     /// first state was written.
-    fn palw_state_v2_tip(&self) -> Option<Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>> {
+    pub(crate) fn palw_state_v2_tip(&self) -> Option<Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>> {
         let state_params = match &self.config.params.palw_consensus_mode {
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => &bundle.state,
             _ => return None,
@@ -1532,9 +1532,9 @@ impl ConsensusApi for Consensus {
         }
         let finality = self.virtual_processor.virtual_finality_point(&before.ghostdag_data, self.pruning_point());
         for block in [tail, release_block] {
-            if !self.reachability_service.has_reachability_data(block)
-                || !self.reachability_service.is_chain_ancestor_of(block, before.ghostdag_data.selected_parent)
-                || !self.reachability_service.is_chain_ancestor_of(block, finality)
+            if !self.services.reachability_service.has_reachability_data(block)
+                || !self.services.reachability_service.is_chain_ancestor_of(block, before.ghostdag_data.selected_parent)
+                || !self.services.reachability_service.is_chain_ancestor_of(block, finality)
             {
                 return Ok(false);
             }
@@ -1565,8 +1565,8 @@ impl ConsensusApi for Consensus {
             return Ok(false);
         }
         let finality = self.virtual_processor.virtual_finality_point(&before.ghostdag_data, self.pruning_point());
-        if !self.reachability_service.has_reachability_data(finality)
-            || !self.reachability_service.is_chain_ancestor_of(finality, before.ghostdag_data.selected_parent)
+        if !self.services.reachability_service.has_reachability_data(finality)
+            || !self.services.reachability_service.is_chain_ancestor_of(finality, before.ghostdag_data.selected_parent)
             || self.headers_store.get_daa_score(finality).map_err(|e| e.to_string())? <= enrollment_until
         {
             return Ok(false);

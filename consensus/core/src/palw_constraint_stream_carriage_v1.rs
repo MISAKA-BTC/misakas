@@ -765,7 +765,15 @@ impl PalwConstraintStreamMoveV1 {
             | PalwConstraintStreamActionV1::FlatSourceOpen { .. }
             | PalwConstraintStreamActionV1::FlatSourceAnswer(_)
             | PalwConstraintStreamActionV1::FlatSourceNominate { .. }
-            | PalwConstraintStreamActionV1::FlatSourceCollect => Err("bundle control is not a semantic court action".into()),
+            | PalwConstraintStreamActionV1::FlatSourceCollect
+            | PalwConstraintStreamActionV1::FloatSourceOpen { .. }
+            | PalwConstraintStreamActionV1::FloatSourceAnswer(_)
+            | PalwConstraintStreamActionV1::FloatSourceNominate { .. }
+            | PalwConstraintStreamActionV1::FloatSourceCollect
+            | PalwConstraintStreamActionV1::NativeSelectedDemand { .. }
+            | PalwConstraintStreamActionV1::NativeSelectedAnswer(_)
+            | PalwConstraintStreamActionV1::NativeTirPrefixAnswer(_)
+            | PalwConstraintStreamActionV1::NativeTirPrefixCollect => Err("bundle control is not a semantic court action".into()),
         }
     }
 }

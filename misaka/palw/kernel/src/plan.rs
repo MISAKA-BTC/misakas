@@ -132,7 +132,8 @@ fn elements(t: &TensorType, h: usize) -> u64 {
     t.resolve(h).iter().map(|d| *d as u64).product()
 }
 
-pub(crate) fn dtype_of_tag(tag: u8) -> Option<DType> {
+/// A tensor dtype by its canonical tag (`None` for an unknown tag).
+pub fn dtype_of_tag(tag: u8) -> Option<DType> {
     DType::ALL.into_iter().find(|d| d.tag() == tag)
 }
 

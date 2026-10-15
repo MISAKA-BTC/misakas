@@ -53,7 +53,7 @@ use kaspa_database::prelude::CachePolicy;
 use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreError;
 use kaspa_database::prelude::StoreResult;
-use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, CachedDbItem, DirectDbWriter};
+use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, CachedDbItem};
 use kaspa_database::registry::DatabaseStorePrefixes;
 use kaspa_hashes::HasherBase;
 use kaspa_utils::mem_size::MemSizeEstimator;
@@ -248,7 +248,7 @@ impl DbPalwStateV2Store {
         self.deltas.delete_all(BatchDbWriter::new(&mut batch))?;
         self.clear_legacy_answer_history(&mut BatchDbWriter::new(&mut batch), None)?;
         self.clear_prefix_history_v1(&mut BatchDbWriter::new(&mut batch))?;
-        let (first, last) = rocksdb::PrefixRange(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1.as_ref()).into_bounds();
+        let (first, last) = rocksdb::IterateBounds::into_bounds(rocksdb::PrefixRange(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1.as_ref()));
         batch.delete_range(first.expect("native inventory prefix start"), last.expect("native inventory prefix end"));
         let mut next_tip = CachedDbItem::new(self.db.clone(), DatabaseStorePrefixes::PalwStateV2Tip.into());
         next_tip.remove(BatchDbWriter::new(&mut batch))?;
@@ -650,7 +650,7 @@ mod tests {
     };
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
     use kaspa_database::create_temp_db;
-    use kaspa_database::prelude::ConnBuilder;
+    use kaspa_database::prelude::{ConnBuilder, DirectDbWriter};
 
     fn params() -> PalwStateParamsV2 {
         PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0).unwrap()
@@ -1001,6 +1001,7 @@ mod tests {
 #[cfg(test)]
 mod native_inventory_tests_v1 {
     use super::*;
+    use kaspa_database::create_temp_db;
     use kaspa_database::prelude::*;
     #[test]
     fn inventory_metadata_is_atomic_fresh_point_bound_and_integrity_checked() {

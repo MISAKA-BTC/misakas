@@ -48,7 +48,7 @@ impl MonetaryMaterialProofPagerV1 {
         }
         let committed = state_root_of_pinned_header_v1(&page.header, pinned).map_err(|e| e.to_string())?;
         let parent = kaspa_consensus_core::hashing::header::hash(&page.parent_header);
-        if !page.header.parents_by_level.first().is_some_and(|parents| parents.contains(&parent)) {
+        if !page.header.parents_by_level.get(0).is_some_and(|parents| parents.contains(&parent)) {
             return Err("monetary proof parent header is not a parent of the pinned block".into());
         }
         let inner = PalwStateOpeningV1 { preimage: page.state_preimage.clone() }.root();
@@ -241,7 +241,7 @@ pub async fn fetch_monetary_material_contracts_v1(
     max_total_bytes: usize,
     max_contracts: usize,
 ) -> Result<Vec<PalwMonetaryMaterialRowV1>, String> {
-    use kaspa_rpc_core::{GetPalwMonetaryMaterialRequest, RpcApi};
+    use kaspa_rpc_core::{GetPalwMonetaryMaterialRequest, api::rpc::RpcApi};
     let mut pager: Option<MonetaryMaterialProofPagerV1> = None;
     loop {
         let (row, offset) = pager.as_ref().map(|p| p.cursor()).unwrap_or((0, 0));

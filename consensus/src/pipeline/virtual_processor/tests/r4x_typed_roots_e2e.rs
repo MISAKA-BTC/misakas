@@ -302,7 +302,7 @@ impl Net {
         let api = self.api().expect("the route exists");
         let ledger = api.ledger().expect("the stored rows rebuild");
         assert_eq!(ledger.root(), api.ledger_root().as_bytes(), "the served rows root to the committed ledger root");
-        ledger
+        KernelLedgerV1::clone(&ledger)
     }
 
     fn collateral(&self, card: usize) -> u64 {

@@ -207,7 +207,7 @@ pub fn plan_kernel_pursuit_v1(
     pursuit: &KernelPursuitV1,
     filing: Option<&KernelFilingV1<'_>>,
 ) -> Result<KernelPursuitStepV1, String> {
-    plan_kernel_pursuit_on_v1(route, &route.ledger()?, pursuit, filing)
+    plan_kernel_pursuit_on_v1(route, &*route.ledger()?, pursuit, filing)
 }
 
 /// **The consumer's view of the route's ledger** (lane G14-K): the rows rebuilt, then the terms the fold injects at every load and
@@ -220,7 +220,8 @@ pub fn kernel_consumer_ledger_v1(
     route: &PalwKernelRouteStateV1,
     provider_court: Option<u64>,
     verifier_pay: Option<u64>,
-) -> Result<KernelLedgerV1, String> {
+) -> Result<kaspa_consensus_core::palw_native_resource_v1::ReservedKernelLedgerV1, String> {
+    // The rebuilt ledger keeps its native-resource reservation (it derefs to `KernelLedgerV1`).
     let mut ledger = route.ledger()?;
     ledger.court_scope_policy =
         provider_court.map(|activation_daa| misaka_palw_kernel::court_scope::CourtScopePolicyV1 { activation_daa });

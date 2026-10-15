@@ -23,7 +23,7 @@ fn count(b: &TransitionBuilder<'_>, table: u8) -> usize {
 fn authority(b: &TransitionBuilder<'_>, id: &Digest) -> Result<PalwPaidClaimAuthorityV2, PalwStateV2Error> {
     let r = b.state.kernel_route.as_ref().ok_or_else(|| refused("paid claim route missing"))?;
     let a = r.paid_claim_enrollment_v3(id).map_err(refused)?;
-    a.validate(&r.ledger().map_err(refused)?).map_err(refused)?;
+    a.validate(&*r.ledger().map_err(refused)?).map_err(refused)?;
     Ok(a)
 }
 
@@ -478,7 +478,7 @@ fn admit_review(
     arithmetic.grinding_choices_per_beacon = 1;
     arithmetic.beacons_per_attempt = 1;
     let claimed = misaka_palw_challenge::effective_false_accept_bits_v1(&arithmetic).map_err(|e| refused(e.to_string()))?;
-    let actual = paid_claim_actual_algebraic_bound_v2(&r.ledger().map_err(refused)?, &a.enrollment.base_claim).map_err(refused)?;
+    let actual = paid_claim_actual_algebraic_bound_v2(&*r.ledger().map_err(refused)?, &a.enrollment.base_claim).map_err(refused)?;
     if claimed > actual {
         return Err(refused("review arithmetic overstates the actual registered math plan/repetitions/typed composition"));
     }
@@ -606,8 +606,8 @@ pub(super) fn tick_paid_claim_final_projection_v2(
     let Some(r) = b.state.kernel_route.as_ref() else { return Ok(()) };
     let l = r.ledger().map_err(refused)?;
     let mut projections = Vec::new();
-    for ((t, key), bytes) in &r.aux {
-        if *t != PAID_CLAIM_ENROLLMENTS_V2 || key.len() != 64 {
+    for ((t, row_key), bytes) in &r.aux {
+        if *t != PAID_CLAIM_ENROLLMENTS_V2 || row_key.len() != 64 {
             continue;
         }
         let a: PalwPaidClaimAuthorityV2 = borsh::from_slice(bytes).map_err(|e| refused(e.to_string()))?;
@@ -907,7 +907,7 @@ fn round_message(
         transcript_root: [0; 64],
         receipts: vec![],
     };
-    row.validate(&a, &r.ledger().map_err(refused)?).map_err(refused)?;
+    row.validate(&a, &*r.ledger().map_err(refused)?).map_err(refused)?;
     admit_review(b, ctx, policy, &a, row.id(), u32::from(plan.mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon))?;
     put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
     if plan.mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
@@ -1046,7 +1046,7 @@ fn round_lock(
         quorum,
         source_valid: true,
     });
-    row.validate(&a, &r.ledger().map_err(refused)?).map_err(refused)?;
+    row.validate(&a, &*r.ledger().map_err(refused)?).map_err(refused)?;
     put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
     Ok(())
 }
@@ -1070,7 +1070,7 @@ fn round_receipt(
         return Err(refused("round receipt signer/source/lifetime mismatch"));
     }
     row.receipts.push(receipt.clone());
-    row.validate(&a, &r.ledger().map_err(refused)?).map_err(refused)?;
+    row.validate(&a, &*r.ledger().map_err(refused)?).map_err(refused)?;
     put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
     let mut l = route_fold::load_ledger(b, ctx)?;
     let before = l.to_rows();

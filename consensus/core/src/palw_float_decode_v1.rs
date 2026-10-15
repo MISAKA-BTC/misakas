@@ -83,7 +83,7 @@ pub struct PalwFloatRowStreamV1 {
     job_context_hash: Hash64,
     event_index: u32,
     n_vocab: u32,
-    lanes_read: u32,
+    pub(crate) lanes_read: u32,
     hash: LeafHashContinuationV1,
     nominated: Vec<u32>,
     keys: BTreeMap<u32, i32>,

@@ -718,7 +718,7 @@ impl TransitionBuilder<'_> {
     }
 
     /// **Run `f` on the engine** with the rest of the state readable and a journal, then journal it. `None` with no engine.
-    fn bond_budget_op<R>(
+    pub(super) fn bond_budget_op<R>(
         &mut self,
         f: impl FnOnce(&mut PalwBondBudgetStateV1, &PalwChainStateV2, &mut Vec<PalwBudgetWriteV1>) -> R,
     ) -> Option<R> {
@@ -1016,18 +1016,22 @@ impl TransitionBuilder<'_> {
         })
         .expect("created above")
         .map_err(|why: PalwBudgetRefusalV1| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
-        let pending: Vec<_> = self
+        let pending: Vec<_> = match self
             .state
             .kernel_route
             .as_ref()
             .map(|route| route.ledger())
             .transpose()
             .map_err(PalwStateV2Error::BondBudgetRefused)?
-            .into_iter()
-            .flat_map(|ledger| ledger.claims.into_iter())
-            .filter(|(_, row)| !row.convicted && !row.life.state.is_terminal())
-            .map(|(claim, row)| (Hash64::from_bytes(claim), row.liability_until.unwrap_or(ctx.daa_score)))
-            .collect();
+        {
+            Some(ledger) => ledger
+                .claims
+                .iter()
+                .filter(|(_, row)| !row.convicted && !row.life.state.is_terminal())
+                .map(|(claim, row)| (Hash64::from_bytes(*claim), row.liability_until.unwrap_or(ctx.daa_score)))
+                .collect(),
+            None => Vec::new(),
+        };
         for (claim, until) in pending {
             self.hold_kernel_income_v1(ctx, claim, until)?;
         }
@@ -2119,8 +2123,7 @@ impl TransitionBuilder<'_> {
         admission: &crate::palw_native_text_stop_v29::CheckedNativeTextAdmissionV29,
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
         let bad = |why: &str| PalwStateV2Error::BondBudgetRefused(why.into());
-        admission.check_current(ctx.block.as_bytes(), ctx.daa_score, maximum, funding)
-            .map_err(|why| bad(&why))?;
+        admission.check_current(ctx.block.as_bytes(), ctx.daa_score, maximum, funding).map_err(|why| bad(&why))?;
         let m = maximum.record();
         let r = &funding.request;
         let extras = self.extras.kernel_route.as_ref().ok_or_else(|| bad("text29 budget lacks original consumer environment"))?;
@@ -2146,10 +2149,14 @@ impl TransitionBuilder<'_> {
         if mirror.allocation_at(ctx.daa_score).is_some() {
             return Err(bad("text29 has no independently authenticated native model-line allocation"));
         }
-        self.plan_bond_budget_v1(ctx, producer, None, PalwBudgetAskV1 {
-            block_units: 0, reward_sompi: 0, final_weight: 0,
-            liability_sompi: m.producer_reserve as u128,
-        }, PalwBudgetOriginV1::KernelRoute, 0)
+        self.plan_bond_budget_v1(
+            ctx,
+            producer,
+            None,
+            PalwBudgetAskV1 { block_units: 0, reward_sompi: 0, final_weight: 0, liability_sompi: m.producer_reserve as u128 },
+            PalwBudgetOriginV1::KernelRoute,
+            0,
+        )
     }
 }
 pub(super) fn native_text_budget_id_v29(job: &misaka_palw_kernel::hash::Digest) -> Hash64 {

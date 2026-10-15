@@ -98,7 +98,7 @@ impl PalwStateCarriageAssemblerV1 {
         }
         let committed = state_root_of_pinned_header_v1(&first.header, pinned).map_err(|e| e.to_string())?;
         let parent = crate::hashing::header::hash(&first.parent_header);
-        if !first.header.parents_by_level.first().is_some_and(|parents| parents.contains(&parent)) {
+        if !first.header.parents_by_level.get(0).is_some_and(|parents| parents.contains(&parent)) {
             return Err("the carriage's parent header is not a parent of the pinned block".into());
         }
         Ok(Self {

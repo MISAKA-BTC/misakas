@@ -940,7 +940,7 @@ pub(super) fn apply_root_declared_v2(
         if consent.terms.exec_plan_root != Some(declaration.plan_root)
             || !consent.terms.dependencies.contains(&declaration.prefix_claim)
         {
-            return Err(refused("monetary provider did not sign this root's complete execution plan/prefix".into()));
+            return Err(refused("monetary provider did not sign this root's complete execution plan/prefix"));
         }
     }
     // ---- writes ----

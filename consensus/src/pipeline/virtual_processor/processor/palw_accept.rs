@@ -2615,7 +2615,7 @@ impl VirtualStateProcessor {
     ) -> Result<kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3, String> {
         use kaspa_consensus_core::palw_attempt_material_v3::*;
         let (before, stable) = self.pruning_import_status().map_err(|e| e.to_string())?;
-        if !stable || before.active.is_some() || !header.parents_by_level.first().is_some_and(|p| p.contains(&checkpoint)) {
+        if !stable || before.active.is_some() || !header.parents_by_level.get(0).is_some_and(|p| p.contains(&checkpoint)) {
             return Err("provider capture checkpoint/import not admissible".into());
         }
         let params = self.palw_state_params_v2.as_ref().ok_or("provider native policy absent")?;

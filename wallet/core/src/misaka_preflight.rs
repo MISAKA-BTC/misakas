@@ -18,7 +18,7 @@
 //! A pass is a precondition for signing, never a statement that a payment is settled: settlement depth stays
 //! `getPalwSettlement(daa)`'s.
 use kaspa_consensus_core::{config::params::Params, subnets::SubnetworkId, tx::Transaction};
-use kaspa_rpc_core::{GetDnsConfirmationResponse, GetPalwNodeStatusResponse, GetPalwSettlementResponse, RpcApi};
+use kaspa_rpc_core::{GetDnsConfirmationResponse, GetPalwNodeStatusResponse, GetPalwSettlementResponse, api::rpc::RpcApi};
 use serde::{Deserialize, Serialize};
 
 pub const MISAKA_WALLET_CAPABILITY_VERSION_V1: u16 = 1;

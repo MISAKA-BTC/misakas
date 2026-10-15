@@ -1061,7 +1061,7 @@ fn a_tampered_checkpoint_is_refused_and_the_refusal_names_it() {
             let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
             for (at, leaf) in &honest.1 {
                 if let Some(slot) = leaves.get_mut(*at as usize) {
-                    *slot = step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, leaf);
+                    *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, leaf);
                 }
             }
             leaves

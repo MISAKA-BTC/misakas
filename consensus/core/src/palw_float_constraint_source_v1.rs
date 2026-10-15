@@ -680,6 +680,14 @@ pub struct PalwFloatPublicSidecarReaderV1 {
 }
 impl PalwFloatPublicSidecarReaderV1 {
     pub fn open_v1(source: std::sync::Arc<dyn crate::palw_backend::PalwOriginalCaptureReaderV1>) -> Result<Self, String> {
+        let (header, rows_offset) = Self::check_v1(source.as_ref())?;
+        Ok(Self { source, header, rows_offset })
+    }
+    /// The structural check `open_v1` makes (one committed trace, exact length), over any (borrowed) reader:
+    /// the parsed header and the rows' offset.
+    pub fn check_v1(
+        source: &dyn crate::palw_backend::PalwOriginalCaptureReaderV1,
+    ) -> Result<(PalwFloatPublicSidecarHeaderV1, u64), String> {
         let prefix = source.read_v1(0, 12)?;
         if prefix.len() != 12 || &prefix[..8] != PALW_FLOAT_PUBLIC_SIDECAR_MAGIC_V1 {
             return Err("not a Float32 public sidecar".into());
@@ -689,7 +697,7 @@ impl PalwFloatPublicSidecarReaderV1 {
             return Err("Float32 sidecar header exceeds its bound".into());
         }
         let header: PalwFloatPublicSidecarHeaderV1 =
-            borsh::from_slice(&read_span_v1(source.as_ref(), 12, length)?).map_err(|e| e.to_string())?;
+            borsh::from_slice(&read_span_v1(source, 12, length)?).map_err(|e| e.to_string())?;
         let decode = header.ids.generated_token_ids.len() as u64;
         let vocab = u64::from(header.ids.summary.vocab_size);
         let rows_offset = 12 + u64::from(length);
@@ -701,7 +709,7 @@ impl PalwFloatPublicSidecarReaderV1 {
         {
             return Err("Float32 sidecar is not one committed trace".into());
         }
-        Ok(Self { source, header, rows_offset })
+        Ok((header, rows_offset))
     }
     pub fn header_v1(&self) -> &PalwFloatPublicSidecarHeaderV1 {
         &self.header
@@ -733,7 +741,6 @@ impl crate::palw_backend::PalwFloatPublicSourceReaderV1 for PalwFloatPublicSidec
 }
 
 #[cfg(test)]
-pub(crate) mod tests {#[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::palw_float_decode_v1::palw_float32_event_phase_v1;

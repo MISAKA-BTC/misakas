@@ -53,7 +53,7 @@ impl PalwPaidClaimEvidenceV3 {
     }
     pub fn validate(&self) -> Result<(), String> {
         match self {
-            Self::Economic { version: 3, observation } => observation.validate(),
+            Self::Economic { version: 3, observation } => observation.net_receipt().map(|_| ()),
             Self::Independence { version: 3, observation } => observation.validate(),
             _ => Err("unknown paid source evidence envelope version".into()),
         }
@@ -274,7 +274,7 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     pub fn paid_claim_authority_v2(&self, context: &Digest) -> Result<PalwPaidClaimAuthorityV2, String> {
         let a: PalwPaidClaimAuthorityV2 =
             self.aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(context).unwrap()).ok_or("paid claim authority missing")?;
-        a.validate(&self.ledger()?)?;
+        a.validate(&*self.ledger()?)?;
         if a.context.id() != *context || self.beacon_source_target_v4(context)? != a.source_target {
             return Err("paid claim context/target mismatch".into());
         }
@@ -288,7 +288,7 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         }
         let a: PalwPaidClaimAuthorityV2 =
             self.aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(&index.target).unwrap()).ok_or("paid base index target missing")?;
-        a.validate(&self.ledger()?)?;
+        a.validate(&*self.ledger()?)?;
         if a.enrollment.base_claim != *claim || a.context.id() != index.target {
             return Err("paid base index substitutes immutable enrollment".into());
         }

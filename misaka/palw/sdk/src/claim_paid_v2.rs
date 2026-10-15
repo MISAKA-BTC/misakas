@@ -197,7 +197,7 @@ pub fn paid_claim_funding_object_v2(
         if a.enrollment.id() != enrollment {
             continue;
         }
-        a.validate(&route.ledger().map_err(|e| Refusal::new("CLAIM_LEDGER_INVALID", e))?)
+        a.validate(&*route.ledger().map_err(|e| Refusal::new("CLAIM_LEDGER_INVALID", e))?)
             .map_err(|e| Refusal::new("CLAIM_AUTHORITY_INVALID", e))?;
         let cap = policy.max_funded_sources.min(a.source_target.terms.max_total);
         let minimum = policy.minimum_fee_for(&a.source_target).map_err(|e| Refusal::new("CLAIM_FEE_SCOPE_INVALID", e))?;

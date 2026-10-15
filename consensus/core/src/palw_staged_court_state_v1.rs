@@ -557,7 +557,7 @@ pub fn palw_staged_selected_events_v1(
             // A TIR claim's scheme is its registered record's; a legacy claim's its shape profile's.
             let tiled = match &bundle_contract.original_binding {
                 crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(_) => {
-                    state.tir_classes.get(&target.class_id).ok_or("selected TIR source has no registered class record")?.facts.tiled
+                    state.tir_class_v1(&target.class_id).ok_or("selected TIR source has no registered class record")?.facts.tiled
                 }
                 _ => {
                     let profile = state.fp_work_profile_of(&target.class_id).ok_or("selected source has no accepted profile")?;
@@ -620,7 +620,7 @@ pub fn palw_staged_tir_view_v1(
         return Ok(None);
     };
     let record =
-        state.tir_classes.get(&header.job_context.shape_profile_id).ok_or("TIR claim's registered class record is absent")?;
+        state.tir_class_v1(&header.job_context.shape_profile_id).ok_or("TIR claim's registered class record is absent")?;
     let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(header, record, maximum_leaves)?;
     let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(state, &claim).ok_or("TIR view claim target absent")?;
     if view.committed_execution_root != target.execution_root || view.class_id != target.class_id {
@@ -634,7 +634,7 @@ pub fn palw_staged_tir_layout_v1(
     state: &crate::palw_state_v2::PalwChainStateV2,
     class_id: Hash64,
 ) -> Option<&crate::palw_tir_class_v1::PalwTirLayoutV1> {
-    match state.staged_courts.get(&PalwStagedCourtKeyV1::TirLayout(class_id)) {
+    match state.staged_court_row_v1(&PalwStagedCourtKeyV1::TirLayout(class_id)) {
         Some(PalwStagedCourtRowV1::TirLayout(layout)) => Some(layout.as_ref()),
         _ => None,
     }
@@ -725,7 +725,7 @@ pub fn palw_staged_tir_prefix_leaf_index_v1(
     let Some(native) = bundle.active_native_seed_v1() else { return Ok(None) };
     let Some(PalwStagedCourtRowV1::TirPrefix(_)) = bundle.active_v1() else { return Ok(None) };
     let class = native.header.job_context.shape_profile_id;
-    let record = state.tir_classes.get(&class).ok_or("TIR prefix class record absent")?;
+    let record = state.tir_class_v1(&class).ok_or("TIR prefix class record absent")?;
     let layout = palw_staged_tir_layout_v1(state, class).ok_or("TIR prefix class layout absent")?;
     let context = palw_tir_prefix_context_v1(record, layout, &native.header, &native.job, maximum_leaves)?;
     let crate::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::PrefixState { prefix_tokens } = native.seed.family else {

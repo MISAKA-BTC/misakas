@@ -109,7 +109,7 @@ pub fn write_float_public_source_v1(material: &[u8], out: &mut dyn std::io::Writ
         return Ok(false);
     }
     // Structural check only (one committed trace, exact length); the chain authenticates.
-    PalwFloatPublicSidecarReaderV1::open_v1(Arc::new(BorrowedV1(material)) as Arc<dyn PalwOriginalCaptureReaderV1>)?;
+    PalwFloatPublicSidecarReaderV1::check_v1(&BorrowedV1(material))?;
     for chunk in material.chunks(16_384) {
         out.write_all(chunk).map_err(|e| e.to_string())?;
     }
@@ -167,8 +167,10 @@ mod tests {
         assert!(write_float_public_source_v1(&material, &mut sidecar).unwrap());
         assert_eq!(sidecar, material);
         assert!(!write_float_public_source_v1(b"MSKFLAT1 an integer family's capture", &mut Vec::new()).unwrap());
+        // The reader is shared (`Arc<dyn …>` is `'static`): the test leaks its one sidecar.
+        let leaked: &'static [u8] = Box::leak(sidecar.clone().into_boxed_slice());
         let mut reader =
-            PalwFloatPublicSidecarReaderV1::open_v1(Arc::new(BorrowedV1(&sidecar)) as Arc<dyn PalwOriginalCaptureReaderV1>).unwrap();
+            PalwFloatPublicSidecarReaderV1::open_v1(Arc::new(BorrowedV1(leaked)) as Arc<dyn PalwOriginalCaptureReaderV1>).unwrap();
         let header = reader.header_v1().clone();
         assert_eq!(full_logits_trace_root_v2(&context.context_hash(), &header.ids.summary, &header.ids.ordered_event_commitment), root);
         let position = 1u32;
