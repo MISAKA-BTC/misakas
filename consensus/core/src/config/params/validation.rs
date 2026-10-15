@@ -211,6 +211,7 @@ impl Params {
         // **RFC-0016's two dormant fences** (`crate::palw_rfc0016_v1`): refused when armed until measured values are pinned.
         self.validate_palw_model_block_rights_v1()?;
         self.validate_palw_elastic_final_capacity_v1()?;
+        self.validate_palw_memory_routing_court_v2()?;
         // **RFC-0017's model eligibility** (`crate::palw_model_eligibility_v1`): refused when armed.
         self.validate_palw_model_eligibility_v1()?;
         // **RFC-0018's five fences** (`crate::palw_rfc0018_v1`): refused when armed; the mirror must agree.

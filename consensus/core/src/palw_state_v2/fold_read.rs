@@ -958,7 +958,13 @@ impl PalwFoldReadV1<'_> {
         // `None`: the rules below, byte for byte. GAP-E4 (2026-10-15): the RFC-0004 evaluation lane is gated alike — it earns no
         // coinbase, block or Final weight, but its executor and credited seats are paid and its score decides a line's promotion, so an
         // unexamined class is not one an evaluation may run on.
-        if matches!(incoming, PalwGatedClaimV1::Attempt | PalwGatedClaimV1::FreePrompt { .. } | PalwGatedClaimV1::Evaluation)
+        // U-9 (user decision 2026-10-15): the gated lanes are RFC-0017's one list; user-paid kernel / funded jobs stay open.
+        let lane = match incoming {
+            PalwGatedClaimV1::Attempt => crate::palw_model_eligibility_v1::PalwEligibilityLaneV1::Attempt,
+            PalwGatedClaimV1::FreePrompt { .. } => crate::palw_model_eligibility_v1::PalwEligibilityLaneV1::FreePrompt,
+            PalwGatedClaimV1::Evaluation => crate::palw_model_eligibility_v1::PalwEligibilityLaneV1::Evaluation,
+        };
+        if crate::palw_model_eligibility_v1::palw_eligibility_lane_gated_v1(lane)
             && let Some((_, why)) =
                 super::palw_model_eligibility_fold_v1::eligibility_claim_refusal_v1(self.state, self.params, class_id, now_daa)
         {

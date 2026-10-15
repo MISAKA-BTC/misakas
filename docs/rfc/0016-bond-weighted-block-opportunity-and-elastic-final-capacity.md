@@ -538,6 +538,24 @@ ACTIVATION_ALLOWED
 確定事項（`α = 1.5`、30日平均、`W_hold` 7日（Panel=0）・1日（Panel=1）、`B = F = 0`、Kernel claimへのcoinbase legなし、escrowのclip禁止）は判断対象ではない。
 個別capを引き上げて配分を使い切らせる選択肢は設けない。
 
+### 14.2 ユーザー判断 2026-10-15（V2〜V11）の実装状況
+
+数値は校正・受入試験の出発点で本番値ではない。休眠・未build・未試験（PASSではない）。行番号は[実装状況](../design/palw/rfc-0016-implementation-status-2026-10-15.md) §8。
+
+| ID | 状態 |
+| --- | --- |
+| V1 | 決定済み（D-V1）→ 実装済み（§16） |
+| V2 | 2026-10-15決定 → 実装: 校正初期値 σ=0.25・φ=0.5・pace 1.2・k=1（`PALW_RFC0016_CALIBRATION_START_V1`）、`A_m`欠損時は再発行なし（`ReissueUnavailable`、先着なし）。本番値は測定待ち |
+| V3 | 2026-10-15決定 → 実装: entrant reserve ≤ 20‰、RFC-0017 Probationと一つのpool（明示的netting）、Probationモデル上限2‰、`S_entry` = 適格な最低producer bond |
+| V4 | 測定待ち |
+| V5 | 2026-10-15決定 → 実装: 1 epoch = 720 DAA、30日窓 = 21,600 DAA（校正）、DAAと実時間のずれをRPCとharnessで報告（「24 h」と表示しない） |
+| V6 | 2026-10-15決定 → 測定・選択toolに実装（不変条件違反0、正直cap利用率≥80 %、V+なし比REAL劣化≤5 %暫定）。測定は未実施 |
+| V7 | 2026-10-15決定 → 実装: bond資本比例のqueue取り分、quoteは権利でない（決定論的な再検査）、TTL超過は中立終了。`L_queue`・`T_queue`・`h`は測定待ち |
+| V8 | 2026-10-15決定 → 実装: 署名対象を固定した容量attestationの型・検査、verifierのモデル間二重計上なし、`sigma_cap` ≤ 1、計算量・メモリ・DA・court負荷の一体評価。attestationのcarriage（object種別）は未割当 |
+| V9 | 2026-10-15決定 → 実装: 10〜30 %・基準20 %、`checked_share`と期限内完了率を別計測。傾き・`N/m`は測定待ち |
+| V10 | 2026-10-15決定 → 実装（構造上そうなっていることを試験sourceで固定）: 留保分は他へ再配分せず未発行、後日追加発行しない |
+| V11 | 2026-10-15決定 → 実装: coinbaseのPanel移行なし（`PALW_RFC0016_COINBASE_PANEL_MIGRATION_V1 = false`と試験） |
+
 ## 16. 実装（休眠、未有効化、未build）
 
 実装は採用・有効化を意味しない。行ごとのfile:lineと試験IDの対応は、[実装状況](../design/palw/rfc-0016-implementation-status-2026-10-15.md)にある。
@@ -548,7 +566,7 @@ ACTIVATION_ALLOWED
 | # | 内容 |
 | --- | --- |
 | L1 | blockへの`P_m`の適用は1回だけで、V+の権利が行う。V+をarmするとき、ADR-0177 V3の`block_opportunity`は必ずoffにする（validationが拒否する）。V+がreleaseのブロック機会の仕組みである。coinbase側の`P_m`は既存のcoinbase配分が1回だけ適用する（ADR laneのC4もこれで解決する）。単一適用のtest sourceがある |
-| L2 | 途中再発行（V2）は`A_m`加重で行う。新しいrooted状態（aux 132）を持ち、reorg・IBDで一貫する。`A_m`が得られないときだけ、先着をfallbackとして残す |
+| L2 | 途中再発行（V2）は`A_m`加重で行う。新しいrooted状態（aux 132）を持ち、reorg・IBDで一貫する。~~`A_m`が得られないときだけ、先着をfallbackとして残す~~ → **ユーザー判断 2026-10-15（V2）で置換: `A_m`が無ければ再発行しない（先着で権利を与えない）** |
 | L3 | RPCはop 255、proto 1330–1331を使う（確定済み） |
 
 ### 16.2 実装の範囲

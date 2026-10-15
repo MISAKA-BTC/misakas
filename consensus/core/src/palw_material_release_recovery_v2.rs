@@ -134,12 +134,21 @@ pub enum PalwMaterialRecoveryActionV2 {
         sequence: u64,
         challenge_deadline_daa: u64,
     },
+    /// Appended signed native admission deadline. Old Replace (variant 1)
+    /// keeps its original wire/signature meaning and cannot imply this expiry.
+    ReplaceBeforeV4 {
+        valid_until_daa: u64,
+        recovery: Hash64,
+        replacement: Box<crate::palw_monetary_material_v1::PalwMonetaryMaterialReplacementV1>,
+        providers: Vec<PalwMaterialRecoverySignatureV2>,
+        sponsor_signature: Vec<u8>,
+    },
 }
 impl PalwMaterialRecoveryActionV2 {
     pub fn root(&self) -> Hash64 {
         match self {
             Self::Enroll { terms, .. } => terms.root,
-            Self::Replace { replacement, .. } => replacement.root,
+            Self::Replace { replacement, .. } | Self::ReplaceBeforeV4 { replacement, .. } => replacement.root,
             Self::Acknowledge { root, .. } => *root,
             Self::RetireProviderStream { stream, .. } => *stream,
             Self::FundedEnroll { terms, .. } => terms.root,
@@ -158,6 +167,14 @@ impl PalwMaterialRecoveryActionV2 {
             .unwrap(),
             Self::Replace { recovery, replacement, providers, .. } => borsh::to_vec(&(
                 b"material-recovery-replace/v2".as_slice(),
+                recovery,
+                replacement.payload(),
+                providers.iter().map(|s| s.provider).collect::<Vec<_>>(),
+            ))
+            .unwrap(),
+            Self::ReplaceBeforeV4 { valid_until_daa, recovery, replacement, providers, .. } => borsh::to_vec(&(
+                b"material-recovery-replace-before/v4".as_slice(),
+                valid_until_daa,
                 recovery,
                 replacement.payload(),
                 providers.iter().map(|s| s.provider).collect::<Vec<_>>(),
@@ -187,9 +204,17 @@ impl PalwMaterialRecoveryActionV2 {
             .unwrap(),
         }
     }
+    /// A bounded generation commits its immutable deadline. It cannot collide
+    /// with an otherwise identical offer signed for a different admission span.
+    pub fn bounded_replacement_consent_v4(&self) -> Option<Hash64> {
+        matches!(self, Self::ReplaceBeforeV4 { .. }).then(|| digest(b"MISAKA/PALW/BOUNDED-REPLACEMENT-CONSENT/V4", &self.payload()))
+    }
     pub fn provider_signatures(&self) -> &[PalwMaterialRecoverySignatureV2] {
         match self {
-            Self::Enroll { providers, .. } | Self::Replace { providers, .. } | Self::FundedEnroll { providers, .. } => providers,
+            Self::Enroll { providers, .. }
+            | Self::Replace { providers, .. }
+            | Self::ReplaceBeforeV4 { providers, .. }
+            | Self::FundedEnroll { providers, .. } => providers,
             Self::Acknowledge { .. } | Self::RetireProviderStream { .. } | Self::AnswerAndCheckpoint { .. } => &[],
         }
     }
@@ -460,7 +485,9 @@ pub fn material_recovery_object_v2(
         let message = palw_provider_court_message_v1(network, 240, &sponsor, &payload);
         *sponsor_signature = sign(&sponsor, message.as_byte_slice(), CONTEXT).filter(|s| !s.is_empty())?;
     }
-    if let PalwMaterialRecoveryActionV2::Replace { replacement, sponsor_signature, .. } = &mut action {
+    if let PalwMaterialRecoveryActionV2::Replace { replacement, sponsor_signature, .. }
+    | PalwMaterialRecoveryActionV2::ReplaceBeforeV4 { replacement, sponsor_signature, .. } = &mut action
+    {
         let payload = replacement.payload();
         for offer in &mut replacement.enrollment.offers {
             let message = palw_provider_court_message_v1(network, 241, &offer.provider, &payload);
@@ -474,6 +501,7 @@ pub fn material_recovery_object_v2(
     let providers = match &mut action {
         PalwMaterialRecoveryActionV2::Enroll { providers, .. }
         | PalwMaterialRecoveryActionV2::Replace { providers, .. }
+        | PalwMaterialRecoveryActionV2::ReplaceBeforeV4 { providers, .. }
         | PalwMaterialRecoveryActionV2::FundedEnroll { providers, .. } => providers.as_mut_slice(),
         PalwMaterialRecoveryActionV2::Acknowledge { .. }
         | PalwMaterialRecoveryActionV2::RetireProviderStream { .. }

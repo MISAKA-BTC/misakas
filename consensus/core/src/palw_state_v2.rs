@@ -226,7 +226,10 @@ mod palw_beacon_bootstrap_fold_v1;
 // RFC-0017: model eligibility (inner 74/75, aux 131) and its claim-gate / probation / Final hooks, past `palw_model_eligibility_v1`.
 #[path = "palw_model_eligibility_fold_v1.rs"]
 mod palw_model_eligibility_fold_v1;
-pub use palw_model_eligibility_fold_v1::palw_eligibility_status_of_v1;
+pub use palw_model_eligibility_fold_v1::{
+    palw_eligibility_bars_security_credit_v1, palw_eligibility_security_credit_v1, palw_eligibility_status_of_v1,
+    palw_probation_security_credit_v1,
+};
 // RFC-0018 §7 (Gate C, adopted 2026-10-15): SecurityCertified — kernel-route aux 136, attestations on inner 75, past
 // `palw_independently_work_certified_v1`.
 #[path = "palw_security_certification_fold_v1.rs"]
@@ -7363,6 +7366,11 @@ pub enum PalwConsensusObjectV2 {
         signer: PalwBondKeyV2,
         signature: Vec<u8>,
     } = 242,
+    /// Versioned recurrence-state local accusation. Old step/court payloads keep
+    /// their encoding. Dormant behind palw_memory_routing_court_v2.
+    GdnStepAccusedV2 {
+        accusation: Box<crate::palw_gdn_court_v2::PalwGdnCourtAccusationV2>,
+    } = 243,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -18593,6 +18601,7 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         // RFC08: the mirror of `palw_monetary_material_v1` (merged 2026-10-15; this arm was missing on both parents).
         K::Fence(F::MonetaryMaterialV1) => builder.params.monetary_material_at_v1(ctx.daa_score).is_some(),
         K::Fence(F::MaterialReleaseRecoveryV2) => builder.params.material_release_recovery_at_v2(ctx.daa_score).is_some(),
+        K::Fence(F::MemoryRoutingCourtV2) => builder.extras.memory_routing_court.is_some(),
         // G14: the TIR / greedy Float32 staged routes ride inside the staged court's kinds, in force where both fences are.
         K::Fence(F::StagedTirRouteV1) => builder.extras.staged_public_court.is_some() && builder.extras.staged_tir_route_active,
         K::Fence(F::StagedFloatConstraintV1) => {
@@ -19529,6 +19538,9 @@ pub struct PalwTransitionExtrasV1 {
     /// object existed. The ladder rides here because the fold holds no bundle and must derive the
     /// same verdict the acceptance layer derived.
     pub shard_court_ladder: Option<u64>,
+    /// RFC06 version-2 recurrence/routing court, resolved per carrying block.
+    /// This is a runtime mirror, not persistent state or a credit approval.
+    pub memory_routing_court: Option<crate::palw_gdn_court_v2::PalwGdnCourtLimitsV2>,
     /// ADR-0100 Decision 4: `Some` exactly when `Params::palw_shard_licensing` is active at the
     /// block — one shard's seats and quorum, which the fold needs to slice a stratified panel and
     /// count a part, and does not otherwise hold. `None` refuses all three sharding objects and is
@@ -21386,6 +21398,12 @@ fn apply_attempt(
             PalwClaimStateV2 { immature_contribution: claim.immature_contribution.min(plan.reservation().final_weight), ..claim }
         }
         None => claim,
+    };
+    // RFC-0017 U-2 (user decision 2026-10-15): a weightless Probation claim contributes 0 to `bounded_immature` (and so to every
+    // provisional-weight reader) whether or not a budget plan exists; its Final weight is 0 through its F = 0 reservation.
+    let claim = match &probation_ticket {
+        Some(ticket) if ticket.weightless() => PalwClaimStateV2 { immature_contribution: 0, ..claim },
+        _ => claim,
     };
     let panel_authorization = palw_panel_lifetime_fold_v2::select_authorization(builder, &claim)?;
     if let Some(row) = &monetary_ready {
