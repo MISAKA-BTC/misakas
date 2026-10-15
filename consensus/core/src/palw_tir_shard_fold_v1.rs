@@ -29,16 +29,29 @@ fn geometry_v1(
     state: &PalwChainStateV2,
     class_id: &Hash64,
     s_l: u16,
-) -> Result<(misaka_palw_tir::TirProgramV1, u32, Vec<std::ops::Range<usize>>), PalwStateV2Error> {
+    s_p: u16,
+) -> Result<
+    (
+        crate::palw_native_resource_v1::NativeRetainedV1<misaka_palw_tir::TirProgramV1>,
+        u32,
+        Vec<std::ops::Range<usize>>,
+        crate::palw_native_resource_v1::NativeTirShardWorkspaceV1,
+    ),
+    PalwStateV2Error,
+> {
     let refused = |why: String| PalwStateV2Error::TirShardRefused(why);
     let record = state.tir_classes.get(class_id).ok_or_else(|| refused(format!("class {class_id} is not an IR class")))?;
-    let program =
-        misaka_palw_tir::TirProgramV1::decode_canonical(&record.program).map_err(|e| refused(format!("the class's program: {e}")))?;
+    let program = crate::palw_native_resource_v1::decode_native_tir_program_v1(&record.program).map_err(|e| match e {
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => PalwStateV2Error::NativeResource(why),
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => refused(format!("the class's program: {why}")),
+    })?;
+    let workspace = crate::palw_native_resource_v1::reserve_native_tir_shard_workspace_v1(&program, s_l, s_p)
+        .map_err(PalwStateV2Error::NativeResource)?;
     let max_context = record.facts.max_context;
     let weights = rules::palw_tir_shard_weights_v1(&program, max_context);
     let parts = rules::palw_tir_shard_partition_v1(&weights, s_l)
         .ok_or_else(|| refused(format!("a plan of {s_l} shards over {} layers", weights.layer_bytes.len())))?;
-    Ok((program, max_context, parts))
+    Ok((program, max_context, parts, workspace))
 }
 
 /// **`TirShardPlanDeclared`** (tag 91). The registrant's signature is the acceptance layer's; here: the fence, a registered
@@ -63,8 +76,12 @@ pub(super) fn apply_plan_declared_v1(
         return Err(PalwStateV2Error::ShardPlanAlreadyDeclared(*class_id));
     }
     let tir = builder.state.tir_classes.get(class_id).ok_or_else(|| refused(format!("class {class_id} is not an IR class")))?;
-    let program =
-        misaka_palw_tir::TirProgramV1::decode_canonical(&tir.program).map_err(|e| refused(format!("the class's program: {e}")))?;
+    let program = crate::palw_native_resource_v1::decode_native_tir_program_v1(&tir.program).map_err(|e| match e {
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => PalwStateV2Error::NativeResource(why),
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => refused(format!("the class's program: {why}")),
+    })?;
+    let _workspace = crate::palw_native_resource_v1::reserve_native_tir_shard_workspace_v1(&program, s_l, s_p)
+        .map_err(PalwStateV2Error::NativeResource)?;
     let max_context = tir.facts.max_context;
     // **Lane PA, S-1 / B-F5 (`palw_audit_1004_v1`)**: the shape that needs no derivation first, then the linear minimum — the old
     // quadratic search ran before any refusal, on a signature with no nonce, so a refused plan was a free replayable CPU burn.
@@ -384,12 +401,9 @@ pub(super) fn apply_readiness_v1(
         return Err(PalwStateV2Error::BondNotActive(*bond));
     }
     let class = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
-    let plan = builder
-        .state
-        .tir_shard_plans
-        .get(class_id)
-        .ok_or_else(|| refused(format!("class {class_id} declared no shard plan")))?
-        .clone();
+    let plan =
+        builder.state.tir_shard_plans.get(class_id).ok_or_else(|| refused(format!("class {class_id} declared no shard plan")))?;
+    let plan = crate::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(plan).map_err(PalwStateV2Error::NativeResource)?;
     if shard >= plan.s_l {
         return Err(refused(format!("shard {shard} of a plan of {}", plan.s_l)));
     }
@@ -407,7 +421,7 @@ pub(super) fn apply_readiness_v1(
     let ready_class = rules::palw_tir_shard_ready_class_v1(class_id, plan.s_l, shard);
     builder.refuse_readiness_proof_not_newer_v1(bond, &ready_class, span)?;
     // The shard's own rows: the challenge draws from exactly the leaves a shard seat holds.
-    let (program, _, parts) = geometry_v1(&builder.state, class_id, plan.s_l)?;
+    let (program, _, parts, _workspace) = geometry_v1(&builder.state, class_id, plan.s_l, plan.s_p)?;
     let layers = parts.get(usize::from(shard)).cloned().ok_or_else(|| refused("a shard of the partition".into()))?;
     let ranges = rules::palw_tir_shard_inventory_ranges_v1(&program, layers, shard == 0, shard + 1 == plan.s_l);
     let draw = rules::palw_tir_shard_readiness_leaves_v1(

@@ -179,6 +179,75 @@ pub struct PalwTirWorkShapeV1 {
     param_bytes: u128,
 }
 
+/// Owner-local scratch inventory for the actual program graph. The caller must
+/// retain the native program/validation owner through this analysis. Private
+/// BlockWork and Select-region structures are sized here beside their owner.
+pub(crate) fn palw_tir_work_native_workspace_v1(p: &TirProgramV1) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+    use crate::palw_native_resource_v1::{NativeCoverageV1, TirNativeRequestsV1};
+    use misaka_palw_tir::types::TensorType;
+    let mut q = TirNativeRequestsV1::new();
+    q.exact_v1::<BlockWorkV1>(p.blocks.len() as u64)?;
+    q.vec_v1::<Option<u32>>(p.blocks.len() as u64)?;
+    let occurrences = (p.schedule.layers.len() as u64)
+        .checked_add(2)
+        .ok_or_else(|| NativeCoverageV1::overflow::<PalwTirWorkShapeV1>("work schedule occurrences"))?;
+    q.exact_v1::<(u8, Option<u16>)>(occurrences)?;
+    q.vec_v1::<u8>(occurrences)?;
+    for block in &p.blocks {
+        let n = block.nodes.len() as u64;
+        let references = block
+            .nodes
+            .iter()
+            .try_fold(0u64, |c, node| c.checked_add(node.inputs.len() as u64))
+            .ok_or_else(|| NativeCoverageV1::overflow::<Block>("work input references"))?;
+        let edges = references
+            .checked_add(n.checked_mul(4).ok_or_else(|| NativeCoverageV1::overflow::<Block>("edge minimum capacities"))?)
+            .ok_or_else(|| NativeCoverageV1::overflow::<Block>("edge Vec capacities"))?;
+        // Classification consumers and Select uses are different graphs.
+        q.exact_v1::<Vec<usize>>(n)?;
+        q.vec_v1::<usize>(edges)?;
+        q.exact_v1::<Vec<(usize, usize)>>(n)?;
+        q.vec_v1::<(usize, usize)>(edges)?;
+        q.vec_v1::<PalwTirWorkKindV1>(n)?;
+        q.exact_v1::<BlockWorkV1>(n)?;
+        q.exact_v1::<Option<BlockWorkV1>>(n)?;
+        // normalization, from_state, to_write, traversal-seen, arm-member.
+        q.exact_v1::<bool>(n.checked_mul(5).ok_or_else(|| NativeCoverageV1::overflow::<Block>("work bitmaps"))?)?;
+        let stack = references.checked_add(1).ok_or_else(|| NativeCoverageV1::overflow::<Block>("work traversal stack"))?;
+        q.vec_v1::<usize>(stack)?;
+        q.vec_v1::<Ref>(stack)?;
+        let selects = block.nodes.iter().filter(|node| matches!(node.prim, Prim::Select)).count() as u64;
+        q.vec_v1::<(usize, [Vec<usize>; 2])>(selects)?;
+        let arm_members = TirNativeRequestsV1::product_v1(TirNativeRequestsV1::product_v1(selects, 2)?, n)?;
+        q.vec_v1::<usize>(arm_members)?;
+        // A Select with an empty arm owns no allocation; for each nonempty arm
+        // reserve Vec's minimum separately instead of applying it once to the
+        // aggregated count of all arms.
+        q.exact_v1::<usize>(TirNativeRequestsV1::product_v1(selects, 16)?)?;
+        let max_inputs = block.nodes.iter().map(|node| node.inputs.len()).max().unwrap_or(0) as u64;
+        q.vec_v1::<std::borrow::Cow<'_, TensorType>>(max_inputs)?;
+        q.vec_v1::<Dim>(TirNativeRequestsV1::product_v1(
+            max_inputs.checked_add(2).ok_or_else(|| NativeCoverageV1::overflow::<Block>("temporary operand shapes"))?,
+            misaka_palw_tir::types::MAX_RANK as u64,
+        )?)?;
+    }
+    // palw_tir_param_instances creates reader sets and instance vectors; this
+    // workspace is simultaneous with the final blocks/windows/occurrences.
+    let params = p.params.len() as u64;
+    q.exact_v1::<std::collections::BTreeSet<u8>>(params)?;
+    let references = p
+        .blocks
+        .iter()
+        .try_fold(0u64, |c, b| b.nodes.iter().try_fold(c, |c, n| c.checked_add(n.inputs.len() as u64)))
+        .ok_or_else(|| NativeCoverageV1::overflow::<TirProgramV1>("parameter reader memberships"))?;
+    q.exact_v1::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<u8, ()>>(references)?;
+    q.vec_v1::<Vec<Option<u16>>>(params)?;
+    q.vec_v1::<Option<u16>>(TirNativeRequestsV1::product_v1(params, occurrences)?)?;
+    // Every param has its own small Vec allocation (possibly a singleton None).
+    q.exact_v1::<Option<u16>>(TirNativeRequestsV1::product_v1(params, 8)?)?;
+    Ok(q.bytes_v1())
+}
+
 /// Why a program has no work shape.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PalwTirWorkError {

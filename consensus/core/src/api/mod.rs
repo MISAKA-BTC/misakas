@@ -2301,11 +2301,24 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// Native IBD selection keeps local capacity separate from absent standing.
+    fn get_palw_candidate_order_v2_checked(
+        &self,
+    ) -> Result<Option<crate::palw_fork_choice::PalwCandidateOrderV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
+        Ok(self.get_palw_candidate_order_v2())
+    }
+
     /// **ADR-0178 rule E: this consensus's standing for the IBD commit** — the PALW state at the block it is weighed at (its sink; a
     /// staging consensus's imported pruning point, exactly as [`Self::get_palw_candidate_order_v2`] chooses) and that block's DAA
     /// score. `None` off a ConsensusV2 network or where the state cannot be read; the IBD flow fails closed on it.
     fn get_palw_rule_e_weighing_v1(&self) -> Option<crate::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1> {
         None
+    }
+
+    fn get_palw_rule_e_weighing_v1_checked(
+        &self,
+    ) -> Result<Option<crate::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
+        Ok(self.get_palw_rule_e_weighing_v1())
     }
 
     /// Returns the antipast of block `hash` from the POV of `context`, i.e. `antipast(hash) ∩ past(context)`.

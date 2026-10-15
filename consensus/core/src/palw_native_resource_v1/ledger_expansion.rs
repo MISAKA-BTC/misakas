@@ -366,7 +366,18 @@ fn program_blob<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1<R>, cap
         types::{Dim, MAX_RANK, TensorType},
         validate::BlockInfo,
     };
+    let before = r.remaining();
     let mut shape = nested_blob::<T, R>(r, cap)?;
+    let encoded = before
+        .checked_sub(r.remaining())
+        .and_then(|n| n.checked_sub(4))
+        .ok_or_else(|| wire::wire_bad("program canonical frame accounting"))?;
+    // decode_canonical re-encodes for exact equality. Pinned Borsh 1.x to_vec
+    // starts with DEFAULT_SERIALIZER_CAPACITY=1024, then grows geometrically.
+    shape = shape.allocation(
+        encoded.max(1024).checked_mul(2).ok_or_else(|| wire::wire_bad("canonical program re-encoding capacity overflow"))?,
+        1,
+    )?;
     let n = shape.collection_entries.checked_add(1).ok_or_else(|| wire::wire_bad("program workspace count overflow"))?;
     let twice = n.checked_mul(2).ok_or_else(|| wire::wire_bad("program Vec growth overflow"))?;
     let occurrences = (MAX_LAYERS as u64).checked_add(2).ok_or_else(|| wire::wire_bad("program schedule overflow"))?;
@@ -416,6 +427,25 @@ fn program_blob<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1<R>, cap
     // retain up to four typed codec/analysis passes plus their parsed program.
     shape.heap = shape.heap.checked_mul(4).ok_or_else(|| wire::wire_bad("coexisting program analysis overflow"))?;
     Ok(shape)
+}
+
+/// Borrowed standalone adapter to the same audited program codec/analysis walk
+/// used by ledger restoration. The stack prefix supplies only Borsh framing;
+/// the actual program bytes are scanned directly without a concatenated Vec.
+pub(crate) fn standalone_tir_program_requests_v1(bytes: &[u8]) -> io::Result<u64> {
+    use misaka_palw_tir::program::{MAX_PROGRAM_BYTES, TirProgramV1};
+    let len = u32::try_from(bytes.len()).map_err(|_| wire::wire_bad("TIR program frame exceeds u32"))?;
+    let prefix = len.to_le_bytes();
+    let source = std::io::Cursor::new(prefix).chain(bytes);
+    let mut reader = NativeWireReaderV1::new(source, u64::from(len) + 4);
+    let shape = program_blob::<TirProgramV1, _>(&mut reader, MAX_PROGRAM_BYTES as u64)?;
+    if reader.remaining() != 0 {
+        return Err(wire::wire_bad("standalone TIR program trailing bytes"));
+    }
+    shape
+        .heap
+        .checked_add(size_of::<NativeRetainedV1<TirProgramV1>>() as u64)
+        .ok_or_else(|| wire::wire_bad("standalone TIR owner framing overflow"))
 }
 
 fn class_record_copies_v1(mut shape: NativeWireShapeV1) -> io::Result<NativeWireShapeV1> {

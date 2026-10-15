@@ -758,10 +758,17 @@ impl VirtualStateProcessor {
     /// fork-choice decision reading it is P0-5. The fallback fires only where the sink is not a
     /// block at all.
     pub(crate) fn palw_weighing_point_v2(&self, sink: BlockHash) -> Option<BlockHash> {
+        self.palw_weighing_point_v2_checked(sink).ok().flatten()
+    }
+
+    pub(crate) fn palw_weighing_point_v2_checked(
+        &self,
+        sink: BlockHash,
+    ) -> Result<Option<BlockHash>, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         if self.reachability_service.has_reachability_data(sink) {
-            return Some(sink);
+            return Ok(Some(sink));
         }
-        let state_params = self.palw_state_params_v2.as_ref()?;
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
         // **`load_tip`, not `tip_record`** — fail CLOSED on a snapshot that cannot be read, and
         // the raw row cannot tell you that. `set_tip_batch` derives the root from the state it is
         // handed, so a tampered carriage is detected only by rebuilding it and demanding the
@@ -770,13 +777,16 @@ impl VirtualStateProcessor {
         // promoted to the only opinion this consensus has.
         let tip = match self.palw_state_v2_store.read().load_tip_retained_v1(state_params) {
             Ok(Some((block, _))) => block,
-            Ok(None) => return None,
+            Ok(None) => return Ok(None),
+            Err(kaspa_database::prelude::StoreError::LocalResourceUnavailable(_)) => {
+                return Err(Self::palw_selection_capacity_unavailable_v1());
+            }
             Err(e) => {
                 warn!("PALW state fault: the V2 tip snapshot is unreadable ({e}); this consensus offers no weighing point");
-                return None;
+                return Ok(None);
             }
         };
-        self.reachability_service.has_reachability_data(tip).then_some(tip)
+        Ok(self.reachability_service.has_reachability_data(tip).then_some(tip))
     }
 
     /// Unit D, site 3: whether a proposed pruning point respects the safe frontier.

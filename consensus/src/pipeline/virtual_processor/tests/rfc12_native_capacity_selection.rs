@@ -55,6 +55,9 @@ async fn capacity_selection_worker() {
     // its refusal belongs to the consensus rule or the candidate's identity.
     arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 }));
     assert!(vp.palw_candidate_order_v2_checked(sink).is_err());
+    assert!(ctx.consensus.get_palw_candidate_order_v2_checked().is_err());
+    assert!(ctx.consensus.get_palw_rule_e_weighing_v1_checked().is_err());
+    assert!(vp.palw_weighing_point_v2_checked(blockhash::NONE).is_err(), "sinkless staging must preserve capacity too");
     assert!(vp.dns_reorg_outcome_checked(ancestor, sink, &bonds).is_err());
     assert!(vp.palw_rule_e_gate_v1(ancestor, sink, daa).is_err());
     assert!(vp.palw_frontier_provenance_outcome_checked(sink, ancestor).is_err());

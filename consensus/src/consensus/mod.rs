@@ -3773,17 +3773,34 @@ impl ConsensusApi for Consensus {
     /// every peer forever. `palw_weighing_point_v2` supplies the answer that IS available there:
     /// the pruning point whose PALW carriage the flow imported and root-verified one line earlier.
     fn get_palw_candidate_order_v2(&self) -> Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1> {
-        let point = self.virtual_processor.palw_weighing_point_v2(self.get_sink())?;
-        self.virtual_processor.palw_candidate_order_v2(point)
+        self.get_palw_candidate_order_v2_checked().ok().flatten()
     }
 
-    /// ADR-0178 rule E: the state at the same weighing point as [`Self::get_palw_candidate_order_v2`], for the IBD commit's
-    /// claim-set comparison.
+    fn get_palw_candidate_order_v2_checked(
+        &self,
+    ) -> Result<
+        Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1>,
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    > {
+        let Some(point) = self.virtual_processor.palw_weighing_point_v2_checked(self.get_sink())? else { return Ok(None) };
+        self.virtual_processor.palw_candidate_order_v2_checked(point)
+    }
+
+    /// Same authenticated weighing point for the IBD exclusive-claim comparison.
     fn get_palw_rule_e_weighing_v1(&self) -> Option<kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1> {
-        let point = self.virtual_processor.palw_weighing_point_v2(self.get_sink())?;
-        let state = self.virtual_processor.palw_candidate_state_v2(point)?;
-        let daa_score = self.headers_store.get_daa_score(point).ok()?;
-        Some(kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1 { state, block: point, daa_score })
+        self.get_palw_rule_e_weighing_v1_checked().ok().flatten()
+    }
+
+    fn get_palw_rule_e_weighing_v1_checked(
+        &self,
+    ) -> Result<
+        Option<kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1>,
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    > {
+        let Some(point) = self.virtual_processor.palw_weighing_point_v2_checked(self.get_sink())? else { return Ok(None) };
+        let Some(state) = self.virtual_processor.palw_candidate_state_for_selection_v2(point)? else { return Ok(None) };
+        let Ok(daa_score) = self.headers_store.get_daa_score(point) else { return Ok(None) };
+        Ok(Some(kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1 { state, block: point, daa_score }))
     }
 
     fn get_antipast_from_pov(
