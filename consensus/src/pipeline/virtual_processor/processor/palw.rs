@@ -6390,6 +6390,27 @@ impl VirtualStateProcessor {
         }
         if let Some(a) = native
             && a.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14
+            && matches!(a.action, 54 | 55)
+        {
+            // Owning39 producer compact-post transport: only the original
+            // Funded producer, inside its commit window and two attempts.
+            let owner = if a.action == 54 {
+                let part = kaspa_consensus_core::palw_native_job_v39::borrowed_native_commit_metadata_v39(a.body)
+                    .ok_or_else(|| "native39 original bounded commit page metadata absent".to_string())?;
+                state.kernel_route().and_then(|r| {
+                    r.native_commit_owner_v39(part.job, part.group, part.index, part.count, part.total, daa_score)
+                })
+            } else {
+                let (job, group) = kaspa_consensus_core::palw_native_job_v39::borrowed_native_commit_assembly_v39(a.body)
+                    .ok_or_else(|| "native39 exact original commit assembly frame".to_string())?;
+                state.kernel_route().and_then(|r| r.native_commit_assemble_owner_v39(job, group, daa_score))
+            };
+            if owner != Some(*signer) {
+                return Err("native39 original commit transport producer/attempt/phase differs".into());
+            }
+        }
+        if let Some(a) = native
+            && a.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14
             && a.action == 48
         {
             // Answer39 uses the same fixed fragment frame as a filing part:

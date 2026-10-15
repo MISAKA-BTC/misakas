@@ -174,6 +174,11 @@ fn stage_action_cap(action: u8) -> usize {
         72 => 64 + 7,
         65 => (46 << 20) + 7,
         57 | 67 => 256 + 7,
+        // Owning39 collection53 (`39u16 ‖ job`), producer page54 (proof-part
+        // frame) and assembly55 (`39u16 ‖ job ‖ group`).
+        53 => 66 + 7,
+        54 => (32 << 10) + 143 + 7,
+        55 => 130 + 7,
         50 => (32 << 10) + 143 + 7,
         58 | 68 => (32 << 10) + 72 + 7,
         59 | 60 | 66 | 69 | 70 => 64 + 7,
@@ -190,7 +195,9 @@ fn stage_action_extent(action: u8, encoded: usize) -> bool {
             42 => encoded == 262 + 7,
             71 => encoded == 67 + 7,
             72 => encoded == 64 + 7,
-            50 => encoded >= 143 + 7,
+            50 | 54 => encoded >= 143 + 7,
+            53 => encoded == 66 + 7,
+            55 => encoded == 130 + 7,
             58 | 68 => encoded >= 72 + 7,
             59 | 60 | 66 | 69 | 70 => encoded == 64 + 7,
             _ => true,

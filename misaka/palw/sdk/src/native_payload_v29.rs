@@ -951,7 +951,7 @@ pub fn prepare_source_upload_v39(
     Ok(objects)
 }
 fn stage39_raw(action: u8, body: Vec<u8>) -> Result<PreparedNativePayloadV29, String> {
-    if !(41..=70).contains(&action) {
+    if !(41..=79).contains(&action) {
         return Err("native39 action outside owning namespace".into());
     }
     let object = K::StageExecutionV14 { action, body };
@@ -1040,6 +1040,14 @@ pub fn decode_native_payload_v39(kind: &str, raw: &[u8], maximum: Option<u32>) -
         "source-collect39" => {
             let id: Digest = raw.try_into().map_err(|_| "source39 collect original fixed id width")?;
             stage39_raw(60, id.to_vec())
+        }
+        "source-collect-job39" => {
+            let id: Digest = raw.try_into().map_err(|_| "native39 collection original fixed job width")?;
+            prepare_collect_v39(id)
+        }
+        "source-commit-assemble39" => {
+            let (job, group) = borrowed_native_commit_assembly_v39(raw).ok_or("native39 exact commit assembly frame")?;
+            prepare_commit_assembly_v39(job, group)
         }
         _ => Err("unknown owning39 native transport kind".into()),
     }
@@ -1480,4 +1488,55 @@ pub fn prepare_terminal_v39(job: Digest, refund: bool) -> Result<PreparedNativeP
     body.push(u8::from(refund));
     body.extend_from_slice(&job);
     stage39_raw(51, body)
+}
+/// Collection53 of a settled job past its complete original retention. The
+/// fold decides eligibility from original rows; this frame asserts nothing.
+pub fn prepare_collect_v39(job: Digest) -> Result<PreparedNativePayloadV29, String> {
+    if job == [0; 64] {
+        return Err("native39 collection original job absent".into());
+    }
+    let mut body = Vec::with_capacity(66);
+    body.extend_from_slice(&39u16.to_le_bytes());
+    body.extend_from_slice(&job);
+    stage39_raw(kaspa_consensus_core::palw_native_job_v39::NATIVE_COLLECT_ACTION_V39, body)
+}
+pub fn prepare_commit_assembly_v39(job: Digest, group: Digest) -> Result<PreparedNativePayloadV29, String> {
+    if [job, group].contains(&[0; 64]) {
+        return Err("native39 commit assembly original identities absent".into());
+    }
+    let mut body = Vec::with_capacity(130);
+    body.extend_from_slice(&39u16.to_le_bytes());
+    body.extend_from_slice(&job);
+    body.extend_from_slice(&group);
+    stage39_raw(kaspa_consensus_core::palw_native_job_v39::NATIVE_COMMIT_ASSEMBLE_ACTION_V39, body)
+}
+/// Producer compact-post transport54/55 for a canonical Commit wire that is
+/// too large for one carrier. `maximum` is the job's ORIGINAL before-Fund
+/// maximum positions; the wire is re-decoded under it before paging, and the
+/// group never exceeds the bound the fold derives from the same maximum.
+pub fn prepare_commit_parts_v39(raw: &[u8], maximum: u32) -> Result<Vec<PreparedNativePayloadV29>, String> {
+    use kaspa_consensus_core::palw_native_job_v39::*;
+    let wire = NativeCommitWireV39::from_bytes(raw, maximum)?;
+    if raw.len() as u64 > native_commit_bytes_bound_v39(maximum)? as u64 {
+        return Err("native39 compact Commit exceeds its original maximum transport bound".into());
+    }
+    let group = native_commit_group_v39(wire.job, raw);
+    let count = raw.len().div_ceil(NATIVE_COMMIT_PAGE_BYTES_V39);
+    let mut objects = Vec::with_capacity(count + 1);
+    for (index, page) in raw.chunks(NATIVE_COMMIT_PAGE_BYTES_V39).enumerate() {
+        let mut body = Vec::with_capacity(NATIVE_COMMIT_PART_PREFIX_V39 + page.len());
+        body.extend_from_slice(&39u16.to_le_bytes());
+        body.push(0);
+        body.extend_from_slice(&wire.job);
+        body.extend_from_slice(&group);
+        body.extend_from_slice(&(index as u16).to_le_bytes());
+        body.extend_from_slice(&(count as u16).to_le_bytes());
+        body.extend_from_slice(&(raw.len() as u32).to_le_bytes());
+        body.extend_from_slice(&(page.len() as u32).to_le_bytes());
+        body.extend_from_slice(page);
+        borrowed_native_commit_part_v39(&body).ok_or("native39 original commit page exact frame")?;
+        objects.push(stage39_raw(NATIVE_COMMIT_PART_ACTION_V39, body)?);
+    }
+    objects.push(prepare_commit_assembly_v39(wire.job, group)?);
+    Ok(objects)
 }
