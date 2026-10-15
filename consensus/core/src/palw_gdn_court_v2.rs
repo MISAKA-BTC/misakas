@@ -134,7 +134,25 @@ impl crate::config::params::Params {
                 "palw_memory_routing_court_v2 cannot be armed: capture/router/resource calibration and consolidated acceptance remain incomplete",
             ));
         }
+        // The state-params mirror (the registration / claim-gate / binding readers) must agree with the effective fence.
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && bundle.state.memory_routing_court_from_daa() != self.palw_memory_routing_court_v2_fence().map(|f| f.daa_score())
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "palw_memory_routing_court_v2 disagrees with the V2 bundle's mirror: Params::sync_palw_memory_routing_court_v2",
+            ));
+        }
         Ok(())
+    }
+
+    /// **The fence's mirror** on the V2 bundle's state params (`memory_routing_court_from_daa`): the EFFECTIVE height
+    /// ([`Self::palw_memory_routing_court_v2_fence`], which waits for the one-move court's own fence). Written here and nothing
+    /// else; `None` where the fence is not armed (or is `never()`), so every shipped preset's bundle is unchanged.
+    pub fn sync_palw_memory_routing_court_v2(&mut self) {
+        let from = self.palw_memory_routing_court_v2_fence().map(|f| f.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_memory_routing_court_from_daa(from);
+        }
     }
 }
 

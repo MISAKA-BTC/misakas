@@ -1931,6 +1931,11 @@ pub struct PalwStateParamsV2 {
     /// and the court close read it). `None` on every shipped preset, and validation refuses every armed one.
     #[borsh(skip)]
     cell_coverage_closure_from_daa: Option<u64>,
+    /// **RFC-0006: `Params::palw_memory_routing_court_v2_fence`'s height**, mirrored by `Params::sync_palw_memory_routing_court_v2`
+    /// (the routed-reader binding declaration, the v2 cell coverage at registration and at the claim gate read it; the court
+    /// carriers read the per-block extras). `None` on every shipped preset, and validation refuses every armed one.
+    #[borsh(skip)]
+    memory_routing_court_from_daa: Option<u64>,
     /// **RFC-0016: `Params::palw_model_block_rights_v1` and `palw_elastic_final_capacity_v1`, mirrored by `Params::sync_palw_rfc0016_v1`**
     /// (`crate::palw_rfc0016_v1::PalwRfc0016MirrorV1`). `None` on every shipped preset; validation refuses either fence armed.
     #[borsh(skip)]
