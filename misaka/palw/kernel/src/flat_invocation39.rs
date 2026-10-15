@@ -439,3 +439,292 @@ pub fn check_component_invocation_v39(
     }
     Ok(CheckedComponentInvocationV39 { master, stage, maximum: max.root(), input_manifest: max.input_manifest().root(), projections })
 }
+
+// ---- The request composer (RFC-0002 §II.14, "real request composer") ----
+//
+// The exact inverse of `check_component_invocation_v39`, written with the SAME
+// private helpers (`rule`, `scalar`, `expected_tensor`, `source_ids`) so the
+// producer side and the native check cannot drift. It derives each stage's
+// original maximum length, stop rule and every input's material shape from the
+// complete public request and the genuinely Final upstream components the
+// caller authenticated (the native reader passes the same `prior`). It never
+// assumes an unknown upstream output or a future decoded token: a stage whose
+// tokens come from a decoder that is not yet Final, or whose input is an
+// upstream output that is not Final, is refused, not guessed.
+
+/// One composed input, in the source program's declared input order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ComposedInputV39 {
+    /// Fully determined by the request seed and the declaration.
+    Random { seed: [u8; 32], domain: u16, per_step: bool },
+    /// Values derivable from the public request alone (scalars, token
+    /// templates, token counts, upstream row counts). `values` are the exact
+    /// elements of the declared tensor; `tensor` is their C_v3 commitment.
+    Public { input: u8, dtype: DType, shape: Vec<u32>, values: Vec<i128>, tensor: Digest },
+    /// A request image: the request carries only its commitment and raw source.
+    Image { input: u8, dtype: DType, shape: Vec<u32>, tensor: Digest, raw_source: Digest },
+    /// An earlier genuinely Final component's output, under `projection`.
+    Upstream { input: u8, from: u16, projection: OutputProjectionV39 },
+}
+/// The composed, not yet material-bound, invocation of one component.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposedComponentV39 {
+    pub master: Digest,
+    pub stage: u16,
+    pub source: Digest,
+    pub original_task: Digest,
+    pub requester: Digest,
+    pub requester_operator: Digest,
+    pub producer: Digest,
+    pub nonce: Digest,
+    pub stop: RequestStopV39,
+    pub maximum_positions: u32,
+    pub inputs: Vec<ComposedInputV39>,
+}
+/// Identity of a composed public input's raw source (not checked by the native
+/// rule for non-image inputs, but deterministic so two composers agree).
+pub fn composed_public_raw_source_v39(request: &MasterPublicRequestV39, stage: u16, input: u8) -> Digest {
+    object_id(b"misaka-palw/kernel/composed-public-request-input/v39", &(request.root(), stage, input))
+}
+pub fn compose_component_request_v39(
+    master: Digest,
+    r: &MasterPublicRequestV39,
+    p: &CheckedPipelineV39,
+    source: &CheckedSourceV39,
+    stage: u16,
+    prior: &[PriorComponentV39<'_>],
+) -> Result<ComposedComponentV39, String> {
+    r.check(p)?;
+    let wire = p.wire();
+    let s = wire.stages.get(stage as usize).ok_or("compose39 original component absent")?;
+    let producer = r.producers.get(stage as usize).ok_or("compose39 original component producer absent")?;
+    if master == [0; 64] || s.program != stage {
+        return Err("compose39 original Master/component order differs".into());
+    }
+    for q in prior {
+        if q.stage >= stage || prior.iter().filter(|o| o.stage == q.stage).count() != 1 {
+            return Err("compose39 prior components must be distinct earlier genuine Finals".into());
+        }
+    }
+    let (stop, maximum_positions) = match s.trip {
+        TripRule::TextStream | TripRule::Decode => {
+            let stop = RequestStopV39::Decode { prompt: r.prompt.clone(), requested_new_tokens: r.requested_new_tokens, eos: r.eos.clone() };
+            let n = stop.maximum_positions()?;
+            (stop, n)
+        }
+        TripRule::Fixed { n } => (RequestStopV39::Fixed { positions: n, tokens: vec![0; n as usize] }, n),
+        TripRule::JobSteps => (RequestStopV39::Fixed { positions: r.steps, tokens: vec![0; r.steps as usize] }, r.steps),
+        TripRule::TokenCount => {
+            let t = s.tokens.as_ref().ok_or("compose39 original token template absent")?;
+            // A Generated template exists only once its decoder is Final.
+            let (seq, _) = rule(r, t, prior, wire)?;
+            if matches!(t.source, TokenSource::Generated) {
+                let original =
+                    t.pad.map_or(t.prefix.len() + r.requested_new_tokens as usize + t.suffix.len(), |pad| pad.to_len as usize);
+                let n = u32::try_from(original).map_err(|_| "compose39 original requested template extent")?;
+                if seq.len() == n as usize {
+                    (RequestStopV39::Fixed { positions: n, tokens: seq }, n)
+                } else {
+                    (RequestStopV39::Derived { maximum_positions: n, tokens: seq }, n)
+                }
+            } else {
+                let n = u32::try_from(seq.len()).map_err(|_| "compose39 template extent")?;
+                (RequestStopV39::Fixed { positions: n, tokens: seq }, n)
+            }
+        }
+    };
+    if maximum_positions == 0 || maximum_positions > s.max_trip || maximum_positions > source.original_context_max() {
+        return Err("compose39 original requested component trip exceeds the Master or source context".into());
+    }
+    let mut inputs = Vec::with_capacity(source.program().inputs.len());
+    let mut external = s.bind.iter();
+    for (i, declaration) in source.program().inputs.iter().enumerate() {
+        let input = u8::try_from(i).map_err(|_| "compose39 input index extent")?;
+        match &declaration.source {
+            InputSource::Random { domain, per_step, .. } => {
+                inputs.push(ComposedInputV39::Random { seed: r.seed, domain: *domain, per_step: *per_step })
+            }
+            InputSource::External { .. } => {
+                let binding = external.next().ok_or("compose39 canonical external binding absent")?;
+                let public = |values: Vec<i128>| -> Result<ComposedInputV39, String> {
+                    let t = Tensor::new(declaration.dtype, declaration.shape.iter().map(|d| *d as usize).collect(), values.clone())
+                        .map_err(|e| e.to_string())?;
+                    Ok(ComposedInputV39::Public {
+                        input,
+                        dtype: declaration.dtype,
+                        shape: declaration.shape.clone(),
+                        values,
+                        tensor: crate::merkle3::tensor_commitment_v3(&t),
+                    })
+                };
+                inputs.push(match binding {
+                    Binding::JobScalar { index } => {
+                        let v = *r.scalars.get(*index as usize).ok_or("compose39 scalar absent")? as i128;
+                        // Same commitment as the native rule's `scalar`.
+                        let c = public(vec![v])?;
+                        if let ComposedInputV39::Public { tensor, .. } = &c {
+                            if *tensor != scalar(declaration.dtype, v)? {
+                                return Err("compose39 scalar declaration is not rank-0".into());
+                            }
+                        }
+                        c
+                    }
+                    Binding::JobTokens { rule: t } => {
+                        let (seq, _) = rule(r, t, prior, wire)?;
+                        let c = public(seq.iter().map(|v| *v as i128).collect())?;
+                        if let ComposedInputV39::Public { tensor, .. } = &c {
+                            if *tensor != expected_tensor(declaration.dtype, &declaration.shape, &seq)? {
+                                return Err("compose39 token tensor differs from the native rule".into());
+                            }
+                        }
+                        c
+                    }
+                    Binding::JobTokenCount { rule: t } => public(vec![rule(r, t, prior, wire)?.1 as i128])?,
+                    Binding::JobImage { index } => {
+                        let image = r.images.get(*index as usize).ok_or("compose39 original image absent")?;
+                        if declaration.dtype != DType::I16 || declaration.shape != vec![image.height, image.width, 3] {
+                            return Err("compose39 original image declaration differs".into());
+                        }
+                        ComposedInputV39::Image {
+                            input,
+                            dtype: declaration.dtype,
+                            shape: declaration.shape.clone(),
+                            tensor: image.tensor,
+                            raw_source: image.raw_source,
+                        }
+                    }
+                    Binding::StageRowCount { stage: from, drop } => {
+                        let q = prior.iter().find(|p| p.stage == *from as u16).ok_or("compose39 upstream row count is not Final yet")?;
+                        let rows_from = if matches!(wire.stages[*from as usize].trip, TripRule::Decode) {
+                            r.prompt.len().saturating_sub(1) as u32
+                        } else {
+                            0
+                        };
+                        public(vec![q.positions.saturating_sub(rows_from).saturating_sub(*drop) as i128])?
+                    }
+                    Binding::StageRows { stage: from, drop, pad_to } => {
+                        prior.iter().find(|p| p.stage == *from as u16).ok_or("compose39 upstream rows are not Final yet")?;
+                        let rows_from = if matches!(wire.stages[*from as usize].trip, TripRule::Decode) {
+                            r.prompt.len().saturating_sub(1) as u32
+                        } else {
+                            0
+                        };
+                        ComposedInputV39::Upstream {
+                            input,
+                            from: *from as u16,
+                            projection: OutputProjectionV39::Rows { rows_from, drop: *drop, pad_to: Some(*pad_to) },
+                        }
+                    }
+                    Binding::StageFinal { stage: from } => {
+                        prior.iter().find(|p| p.stage == *from as u16).ok_or("compose39 upstream output is not Final yet")?;
+                        ComposedInputV39::Upstream { input, from: *from as u16, projection: OutputProjectionV39::Whole }
+                    }
+                });
+            }
+        }
+    }
+    if external.next().is_some() {
+        return Err("compose39 unused original external binding".into());
+    }
+    Ok(ComposedComponentV39 {
+        master,
+        stage,
+        source: source.root(),
+        original_task: source.original_task_metadata(),
+        requester: r.requester,
+        requester_operator: r.requester_operator,
+        producer: producer.producer,
+        nonce: r.stage_nonce(stage)?,
+        stop,
+        maximum_positions,
+        inputs,
+    })
+}
+impl ComposedComponentV39 {
+    /// The external origin a composed public input's material must carry.
+    pub fn public_origin(&self, request: &MasterPublicRequestV39, input: u8) -> MaterialOriginV39 {
+        MaterialOriginV39::External {
+            original_task: self.original_task,
+            raw_source: composed_public_raw_source_v39(request, self.stage, input),
+        }
+    }
+    /// Bind actual material descriptors (built from files/upstream
+    /// certificates) to the composition, in declared input order. Every
+    /// descriptor is checked against what the request implies; the result is
+    /// the exact maximum and manifest the native rule then re-checks.
+    pub fn finish(&self, descriptors: &[MaterialDescriptorV39]) -> Result<(JobMaximumV39, MaterialManifestV39), String> {
+        let mut next = descriptors.iter();
+        let mut bindings = Vec::with_capacity(self.inputs.len());
+        for c in &self.inputs {
+            let (input, expected) = match c {
+                ComposedInputV39::Random { seed, domain, per_step } => {
+                    bindings.push(InputBindingV39::Random { seed: *seed, domain: *domain, per_step: *per_step });
+                    continue;
+                }
+                ComposedInputV39::Public { input, tensor, .. } | ComposedInputV39::Image { input, tensor, .. } => (*input, Some(*tensor)),
+                ComposedInputV39::Upstream { input, .. } => (*input, None),
+            };
+            let d = next.next().ok_or("compose39 material descriptor absent")?;
+            if d.version != 39
+                || d.input != input
+                || d.source != self.source
+                || d.master != self.master
+                || d.requester != self.requester
+                || d.requester_operator != self.requester_operator
+                || d.nonce != self.nonce
+            {
+                return Err("compose39 descriptor identity/principal/nonce/input differs".into());
+            }
+            match (c, &d.origin) {
+                (ComposedInputV39::Public { dtype, shape, .. }, MaterialOriginV39::External { original_task, .. }) => {
+                    if d.dtype != *dtype || d.shape != *shape || Some(d.tensor) != expected || *original_task != self.original_task {
+                        return Err("compose39 public material differs from the request-derived tensor".into());
+                    }
+                }
+                (ComposedInputV39::Image { dtype, shape, raw_source, .. }, MaterialOriginV39::External { original_task, raw_source: r }) => {
+                    if d.dtype != *dtype || d.shape != *shape || Some(d.tensor) != expected || r != raw_source || *original_task != self.original_task {
+                        return Err("compose39 image material differs from the request commitment".into());
+                    }
+                }
+                (ComposedInputV39::Upstream { from, .. }, MaterialOriginV39::Upstream { master, stage, .. }) => {
+                    if *master != self.master || stage != from {
+                        return Err("compose39 upstream material names another Master/stage".into());
+                    }
+                }
+                _ => return Err("compose39 material origin kind differs from the composed input".into()),
+            }
+            bindings.push(InputBindingV39::Material { descriptor: d.clone(), selection: MaterialSelectionV39::Whole });
+        }
+        if next.next().is_some() {
+            return Err("compose39 surplus material descriptor".into());
+        }
+        let manifest = MaterialManifestV39 { version: 39, source: self.source, master: self.master, bindings };
+        let maximum = JobMaximumV39 {
+            version: 39,
+            source: self.source,
+            requester: self.requester,
+            producer: self.producer,
+            nonce: self.nonce,
+            stop: self.stop.clone(),
+            input_manifest: manifest.root(),
+        };
+        Ok((maximum, manifest))
+    }
+}
+/// Compose, bind and re-check with the native rule in one call. Returns the
+/// checked maximum only if `check_component_invocation_v39` accepts it.
+pub fn compose_and_check_component_v39(
+    master: Digest,
+    r: &MasterPublicRequestV39,
+    p: &CheckedPipelineV39,
+    source: &CheckedSourceV39,
+    stage: u16,
+    prior: &[PriorComponentV39<'_>],
+    descriptors: &[MaterialDescriptorV39],
+) -> Result<(CheckedJobMaximumV39, CheckedComponentInvocationV39), String> {
+    let composed = compose_component_request_v39(master, r, p, source, stage, prior)?;
+    let (maximum, manifest) = composed.finish(descriptors)?;
+    let checked = CheckedJobMaximumV39::check(source, &maximum, &manifest)?;
+    let invocation = check_component_invocation_v39(master, r, p, source, stage, &checked, prior)?;
+    Ok((checked, invocation))
+}

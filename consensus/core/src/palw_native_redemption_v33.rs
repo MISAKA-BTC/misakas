@@ -276,6 +276,121 @@ pub fn derive_native_redemption_v33(
     })
 }
 
+// ---- Owning39 payout and redemption (RFC-0002 §II.14 "real payout and redemption") ----
+//
+// Four separate facts, never inferred from one another:
+//   1. independent Final settlement and its single credit — `CheckedNativeJobAuditV39`;
+//   2. the pending payout row at one anchored state — `native_payout_status_v39`;
+//   3. actual coinbase delivery — `derive_native_redemption_v39` over the two
+//      states bracketing the delivering block plus its real coinbase leaf;
+//   4. an actual UTXO spend — `verify_native_accepted_spend_v35` over the
+//      redemption this returns (unchanged).
+// If an auditor first meets the Final after the pending row is already gone,
+// the status is `ConsumedDeliveryWitnessRequired`: delivery is never presumed
+// from absence; a genuine bracketing witness must be supplied.
+
+/// Where the original single credit stands in ONE anchored state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativePayoutStatusV39 {
+    /// No settlement yet: no credit exists.
+    NotSettled,
+    /// The exact unique credit row is pending in this state's payout queue.
+    Pending { rank: usize, amount: u64 },
+    /// Settled, but the unique queue row is absent here: consumed by some
+    /// earlier block. A genuine delivery witness is required.
+    ConsumedDeliveryWitnessRequired,
+}
+fn credit_row_v39(
+    credit: &crate::palw_native_job_v39::NativeSingleCreditV39,
+    rows: &VerifiedNativePayoutRowsV32<'_>,
+) -> Result<Option<(usize, crate::palw_state_v2::PalwPayoutV2)>, String> {
+    let key = borsh::to_vec(&credit.queue).map_err(|e| e.to_string())?;
+    let Some(rank) = rows.rows().iter().position(|(k, _)| *k == key) else { return Ok(None) };
+    let raw = &rows.rows()[rank].1;
+    if raw.len() != 72 {
+        return Err("native39 payout row fixed extent differs".into());
+    }
+    let row: crate::palw_state_v2::PalwPayoutV2 = borsh::from_slice(raw).map_err(|_| "native39 payout row grammar")?;
+    if row.payload != credit.payout || row.amount != credit.amount {
+        return Err("native39 pending payout differs from the original single credit".into());
+    }
+    Ok(Some((rank, row)))
+}
+pub fn native_payout_status_v39(
+    job: &crate::palw_native_job_audit_v39::CheckedNativeJobAuditV39,
+    rows: &VerifiedNativePayoutRowsV32<'_>,
+) -> Result<NativePayoutStatusV39, String> {
+    if rows.state_root() != job.state_root() {
+        return Err("native39 payout rows and job audit are not the same anchored state".into());
+    }
+    let Some(credit) = job.credit() else { return Ok(NativePayoutStatusV39::NotSettled) };
+    Ok(match credit_row_v39(credit, rows)? {
+        Some((rank, row)) => NativePayoutStatusV39::Pending { rank, amount: row.amount },
+        None => NativePayoutStatusV39::ConsumedDeliveryWitnessRequired,
+    })
+}
+/// Actual coinbase delivery of an owning39 single credit. `before` is the
+/// job audit at the selected-parent state immediately preceding the paying
+/// block (its credit row must be the same immutable credit the Final audit
+/// names), with that state's complete payout queue; `after` is the queue of
+/// the paying block's own post-state. Only the unique original credit key
+/// must be consumed; the whole canonical drain prefix must match the coinbase
+/// outputs in order. Returns the shared private redemption, so the unchanged
+/// spend35 verifier proves a real UTXO spend of exactly this outpoint.
+pub fn derive_native_redemption_v39(
+    final_audit: &crate::palw_native_job_audit_v39::CheckedNativeJobAuditV39,
+    before_audit: &crate::palw_native_job_audit_v39::CheckedNativeJobAuditV39,
+    before: &VerifiedNativePayoutRowsV32<'_>,
+    after: &VerifiedNativePayoutRowsV32<'_>,
+    coinbase: &VerifiedNativeCoinbaseV33<'_>,
+    output_index: u32,
+) -> Result<CheckedNativeRedemptionV33, String> {
+    let credit = final_audit.credit().ok_or("native39 redemption requires the original single credit")?;
+    let witness = before_audit.credit().ok_or("native39 delivery witness state lacks the original single credit")?;
+    if witness != credit
+        || final_audit.original() != before_audit.original()
+        || before.state_root() != before_audit.state_root()
+        || before.state_root() == after.state_root()
+        || credit.amount == 0
+        || credit.established > coinbase.daa()
+        || before_audit.daa() >= coinbase.daa()
+    {
+        return Err("native39 delivery witness is not the bracketing state of the same immutable credit".into());
+    }
+    let (rank, row) = credit_row_v39(credit, before)?.ok_or("native39 original credit was not pending before the paying block")?;
+    let key = borsh::to_vec(&credit.queue).map_err(|e| e.to_string())?;
+    if rank >= crate::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK || after.rows().iter().any(|(k, _)| *k == key) {
+        return Err("native39 credit not in the original drain prefix or not consumed by the paying block".into());
+    }
+    let start = (output_index as usize).checked_sub(rank).ok_or("native39 output does not preserve original queue order")?;
+    for (offset, (_, raw)) in before.rows().iter().take(crate::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK).enumerate() {
+        if raw.len() != 72 {
+            return Err("native39 bounded original drain prefix differs".into());
+        }
+        let queued: crate::palw_state_v2::PalwPayoutV2 = borsh::from_slice(raw).map_err(|_| "native39 drain prefix grammar")?;
+        let actual = coinbase.transaction.outputs.get(start + offset).ok_or("native39 complete drain output prefix absent")?;
+        if actual.value != queued.amount
+            || actual.script_public_key != crate::mldsa87_primitives::p2pkh_mldsa87_spk(&queued.payload.as_bytes())
+        {
+            return Err("native39 complete original drain output prefix differs".into());
+        }
+    }
+    let output = coinbase.transaction.outputs.get(output_index as usize).ok_or("native39 real output index absent")?;
+    if output.value != row.amount || output.script_public_key != crate::mldsa87_primitives::p2pkh_mldsa87_spk(&row.payload.as_bytes()) {
+        return Err("native39 original payout script/value differs".into());
+    }
+    Ok(CheckedNativeRedemptionV33 {
+        block: coinbase.block,
+        outpoint: TransactionOutpoint::new(coinbase.transaction.id(), output_index),
+        job: credit.job,
+        credit: credit.root(),
+        amount: row.amount,
+        payload: credit.payout.as_bytes(),
+        before: before.state_root(),
+        after: after.state_root(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

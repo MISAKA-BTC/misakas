@@ -233,6 +233,11 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             PalwHeaderFormFenceV1::ReceiptSpendV4 => params.palw_receipt_spend_v4 = Some(at),
             // The PAV3 attempt carriage shares `palw_monetary_material_v1` (armed above through `MonetaryMaterialV1`).
             PalwHeaderFormFenceV1::NativeMaterialV3 => {}
+            // RFC-0002 §II.14: the PNR9 native receipt carriage's own (never armable) fence.
+            PalwHeaderFormFenceV1::NativeReceiptV39 => {
+                params.palw_native_mining_v39 =
+                    Some(kaspa_consensus_core::palw_native_mining_v39::PalwNativeMiningFenceV39::unapproved_probe_at(at, [0; 64]))
+            }
             // The PXE2 header form shares the lifecycle kind's fence (armed above, the same field).
             PalwHeaderFormFenceV1::ExecPayloadV2 => params.palw_exec_payload_v2 = Some(at),
         }

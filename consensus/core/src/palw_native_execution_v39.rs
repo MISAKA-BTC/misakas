@@ -26,6 +26,13 @@ pub const SOURCE_UPLOAD_MAX_PARTS_V39: usize = SOURCE_UPLOAD_MAX_BYTES_V39.div_c
 pub trait NativeOriginalSourceArchiveV39 {
     fn source(&self, id: Digest, maximum: usize) -> Result<Option<Vec<u8>>, String>;
     fn class(&self, id: Digest, maximum: usize) -> Result<Option<Vec<u8>>, String>;
+    /// The exact stored consent row 27 of a job collected by action 53. The
+    /// auditor authenticates it against the immutable collection record
+    /// (consent root, byte length and stored-body digest); none is authority.
+    fn consent(&self, job: Digest, maximum: usize) -> Result<Option<Vec<u8>>, String> {
+        let _ = (job, maximum);
+        Ok(None)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -180,14 +187,51 @@ impl crate::config::params::Params {
         let domain =
             crate::palw_attempt_v2::palw_network_domain_v2_for(self.net.to_string().as_bytes(), Some(self.genesis.hash)).as_bytes();
         f.policies.check(domain).map_err(|_| PalwModeV2Error::Invalid("native39 owning network/source/quota policy is invalid"))?;
-        if !self.has_isolated_native_calibration_v34() || f.activation != ForkActivation::always() {
+        if self.has_isolated_native_calibration_v34() {
+            if f.activation != ForkActivation::always() {
+                return Err(PalwModeV2Error::Invalid("native39 isolated validation profile arms the owning lane from genesis only"));
+            }
+            return self
+                .validate_isolated_native_calibration_v34()
+                .map_err(|_| PalwModeV2Error::Invalid("native39 isolated original policies differ"));
+        }
+        // Shipping networks (testnet-12 DAA 14,000 release plan): the measured-value gate. The exact policies must match a pinned
+        // record carrying the independent full-task court/Final/redemption and launch evidence and its review. EMPTY: refused.
+        if !palw_native_execution_policies_measured_v39(&f.policies, PALW_NATIVE_EXECUTION_MEASURED_RECORDS_V39) {
             return Err(PalwModeV2Error::Invalid(
-                "native39 shipping activation requires independent full-task court/Final/redemption and launch evidence; only the isolated owning validation profile is currently allowed",
+                "native39 shipping activation has no pinned measured-value record for these exact policies \
+                 (PALW_NATIVE_EXECUTION_MEASURED_RECORDS_V39 is empty): independent full-task court/Final/redemption and launch \
+                 evidence are required; it stays dormant",
             ));
         }
-        self.validate_isolated_native_calibration_v34()
-            .map_err(|_| PalwModeV2Error::Invalid("native39 isolated original policies differ"))
+        Ok(())
     }
+}
+
+/// **A measured-value record for the owning39 execution policies** (by root, on their network) with the digests of the
+/// independent full-task court/Final/redemption and launch evidence and of its review. Pinned only by a reviewed change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwNativeExecutionMeasuredRecordV39 {
+    pub network_domain: Digest,
+    pub policies_root: Digest,
+    pub evidence_digest: [u8; 32],
+    pub review_digest: [u8; 32],
+    pub harness: &'static str,
+}
+/// **The pinned records — EMPTY.** Arming `palw_native_execution_v39` on a shipping network is refused.
+pub const PALW_NATIVE_EXECUTION_MEASURED_RECORDS_V39: &[PalwNativeExecutionMeasuredRecordV39] = &[];
+pub fn palw_native_execution_policies_measured_v39(
+    policies: &NativeExecutionPoliciesV39,
+    records: &[PalwNativeExecutionMeasuredRecordV39],
+) -> bool {
+    let root = policies.root();
+    records.iter().any(|r| {
+        r.network_domain == policies.network_domain
+            && r.policies_root == root
+            && r.evidence_digest != [0; 32]
+            && r.review_digest != [0; 32]
+            && r.evidence_digest != r.review_digest
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

@@ -162,6 +162,36 @@ pub fn palw_independently_work_certified_v1(claim_id: &Hash64, claim: &PalwClaim
     }
 }
 
+/// **Gate C for an owning39 MINING claim** (RFC-0002 §II.14) — the same rule as [`palw_independently_work_certified_v1`] for the
+/// second subject kind, inside this one module:
+///
+/// * a NEW lane has no released behaviour, so where no mirror governs the claim's acceptance DAA the answer is `false` (never the
+///   legacy `true`): no private-job escrow Final, source identity or local flag earns consensus credit;
+/// * otherwise the `'V'` certification row's decided outcome (m-of-k drawn positive attestations, prosecution window elapsed).
+///
+/// User decision 2026-10-15 (round 5): model-level review is abolished for every model; drawn-verifier approval exists ONLY per
+/// claim, here. A model's tier (genesis/annual-fork 1.0, registered 0.3) is `palw_model_tier_v1`'s, applied once in the
+/// allocation weight, never by this predicate.
+///
+/// Premise-based (the honest fraction of drawn verifier stake ≥ k/m), never a computation proof.
+pub fn palw_native_independently_work_certified_v39(
+    params: &PalwStateParamsV2,
+    chain: &PalwChainStateV2,
+    mining_claim: &Hash64,
+    accepted_daa: u64,
+) -> bool {
+    let Some(mirror) = palw_rfc0018_mirror_v1(params) else { return false };
+    if !mirror.gate_c_governs(accepted_daa) {
+        return false;
+    }
+    match mirror.gate_c_rule {
+        PalwGateCRuleV1::SecurityCertifiedV1 => {
+            crate::palw_security_certification_v1::palw_native_mining_security_certified_v39(chain, mining_claim)
+        }
+        PalwGateCRuleV1::FailClosedV1 => false,
+    }
+}
+
 /// **Gate C's provisional-weight site** (`bounded_immature` / `live_total`): past the fence 0 — a claim is never `SecurityCertified`
 /// while live (certification commits at `Final`), and `bounded_immature` is maintained incrementally, so it must read ONE number over a
 /// claim's life. Consensus credit arrives at certification, through the final-weight path. Below the fence: `weight`, unchanged.

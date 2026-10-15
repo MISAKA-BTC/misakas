@@ -1,6 +1,9 @@
-//! Checked readonly job projection. The streaming derivation factory is still
-//! pending; public wire values cannot construct this capability. Data identity,
-//! escrow settlement and mining approval are separate verification questions.
+//! Checked readonly job projection. Its only factory is
+//! `PalwChainStateV2::native_job_audit_from_stream_v39` (the job fold's audit
+//! module), which re-derives every field from one fully authenticated original
+//! aux stream under the auditor's own Params; public wire values cannot
+//! construct this capability. Data identity, escrow settlement and mining
+//! approval are separate verification questions.
 use crate::{Hash64, palw_native_job_v39::*};
 use misaka_palw_kernel::{flat_job39::CheckedJobMaximumV39, hash::Digest};
 
