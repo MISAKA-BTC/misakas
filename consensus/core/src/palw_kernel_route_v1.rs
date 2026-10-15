@@ -711,6 +711,11 @@ pub struct KernelFinalReadV1 {
     /// historical job without a payer row). The payer survives escrow payment. `None` for a Panel-licensed Final.
     pub event: Option<Vec<u8>>,
     pub statement: &'static str,
+    /// **RFC-0015 §9 (GAP-B3)**: the claim's standing under the one kernel settlement predicate
+    /// ([`crate::palw_kernel_settlement_v1`]) at the route's DAA: `final-revocable`, `settled`, `convicted` or `defaulted`. The
+    /// beacon event's `claim_final` / `da_satisfied` are derived from it, so RFC-0010 V3 (`ChainPanelBeaconHistoryV1`), the v3
+    /// sealed sources and every other reader see exactly what the EXEC slice and the RPC see.
+    pub settlement: &'static str,
 }
 
 impl PalwKernelRouteStateV1 {
@@ -723,6 +728,8 @@ impl PalwKernelRouteStateV1 {
         let ledger = self.ledger_native_projection_v9()?;
         let mut out = Vec::new();
         for receipt in ledger.final_receipts() {
+            let settlement = crate::palw_kernel_settlement_v1::palw_kernel_row_settlement_v1(&ledger, &receipt.claim, ledger.daa)
+                .unwrap_or(crate::palw_kernel_settlement_v1::PalwKernelSettlementV1::Pending);
             let work = ledger.claims.get(&receipt.claim).map(|r| (r.class_binding_id, r.job_id));
             let earliest = ledger
                 .claims
@@ -742,7 +749,24 @@ impl PalwKernelRouteStateV1 {
                         depends_on_profiles: Vec::new(),
                         panel: None,
                     };
-                    let event = receipt.to_work_final_event(&ctx)?;
+                    let mut event = receipt.to_work_final_event(&ctx)?;
+                    // RFC-0015 §9 (GAP-B3): the beacon reads an OPV Final through the ONE kernel settlement predicate. A conviction
+                    // (before or after Final) withdraws the fact (`claim_final = false`); a default withdraws its availability
+                    // (`da_satisfied = false`); a final-revocable or settled claim stands. No extra weight or reward: kernel claims
+                    // reserve B = F = 0, and the event is a beacon fact only.
+                    use crate::palw_kernel_settlement_v1::PalwKernelSettlementV1 as S;
+                    match settlement {
+                        S::Convicted => event.claim_final = false,
+                        S::Defaulted => event.da_satisfied = false,
+                        S::FinalRevocable { .. } | S::Settled { .. } => {}
+                        // A receipt of a claim the predicate does not see as Final is no beacon fact.
+                        S::Pending => event.claim_final = false,
+                    }
+                    debug_assert!(
+                        event.claim_final == (receipt.standing != misaka_palw_kernel::opv::FinalStandingV1::ConvictedAfterFinal)
+                            || matches!(settlement, S::Pending),
+                        "the settlement predicate and the receipt's standing agree on a conviction"
+                    );
                     // Derive both identities from authenticated ledger rows. The job's payer is permanent even after its escrow
                     // is paid/refunded; dropping it here would let one payer fill the distinct-consumer quorum via several producers.
                     let producer = ledger.claims.get(&receipt.claim).map(|r| r.producer).unwrap_or([0u8; 64]);
@@ -758,7 +782,7 @@ impl PalwKernelRouteStateV1 {
                 (VerificationModeV1::PanelLicensed, false) => ("PanelLicensed", None),
             };
             let statement = receipt.assurance.statement();
-            out.push(KernelFinalReadV1 { receipt, final_path, event, statement });
+            out.push(KernelFinalReadV1 { receipt, final_path, event, statement, settlement: settlement.label() });
         }
         Ok(out)
     }
