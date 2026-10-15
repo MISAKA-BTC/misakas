@@ -2313,6 +2313,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     eligibility_final_weight: class.eligibility.final_weight,
                     eligibility_exams_passed: class.eligibility.exams_passed,
                     eligibility_lineage_attempts: class.eligibility.lineage_attempts,
+                    // ADR-0179: "not-governed" below `palw_model_tier_v1` (every shipped network).
+                    model_tier: class.eligibility.model_tier.clone(),
+                    model_tier_permille: class.eligibility.model_tier_permille,
                 }
             })
             .collect();

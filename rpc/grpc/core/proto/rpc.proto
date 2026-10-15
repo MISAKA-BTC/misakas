@@ -2246,6 +2246,10 @@ message RpcPalwModelLifecycle {
   bool eligibilityFinalWeight = 43;
   uint32 eligibilityExamsPassed = 44;
   uint32 eligibilityLineageAttempts = 45;
+  // ADR-0179 (dormant `palw_model_tier_v1`): the model's tier ("not-governed" below the fence; "approved" = genesis or an annual
+  // fork listing, 1.0; "registered" = fixed 0.3 from registration) and its allocation coefficient in permille. Local field numbers.
+  string modelTier = 46;
+  uint32 modelTierPermille = 47;
 }
 
 message RpcPalwSeatReadiness {

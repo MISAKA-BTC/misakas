@@ -644,3 +644,16 @@ ACTIVATION_ALLOWED
 * **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
 * **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
 * 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。
+
+## ユーザー方針 2026-10-15 第4回 — `P_m` は階層係数 `c_m` を含み、一度だけ適用する
+
+> **統治する前提:** [PRINCIPLES §9](../PRINCIPLES.md)(凍結前提)。規則は [ADR-0179](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md) が定める。
+
+* V+ が発行に使う `P_m = A_m / ΣA` は、`A_m = c_m · S̄_m^1.5` である。
+  * genesis・年次フォーク指定モデルは `c_m = 1.0`、登録モデルは固定の `0.3`(ADR-0177 の改定)。
+  * 係数は配分の重みで一度だけ適用し、物理ブロック権利と coinbase 配分が同じ `P_m` を使う。
+  * 受理ブロックの報酬に重ねて掛けない。
+* **entrant reserve(V3)と RFC-0017 の Probation 予算は、fence `palw_model_tier_v1` の下では無意味になる。**
+  * モデル単位の審査は全廃した(第 5 回)。審査も昇格もなく、entrant が存在しない。
+  * そのため `ε = 0` とし(`palw_rfc0016_rights_epoch_v1`)、登録 tier 全体の発行上限 `κ`(配分の重みで適用)を tier の唯一の上限とする。
+  * fence 未満の V3 の規則(entrant reserve ≤ 20‰、Probation との明示的 netting)は、休眠のまま残る。

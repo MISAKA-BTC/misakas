@@ -317,8 +317,8 @@ GHOSTDAGの`k`、parentsの上限、mergesetの上限は、GHOSTDAG managerとhe
 ## 9. 他RFC・ADRとの関係
 
 * **RFC-0016 V+:** モデルのblock権利の消費は、同じmergesetのsibling間で**merge順に依存してはならない**(MUST)。§4のcanonical順は、権利の消費をstep 4bの採用順と同じ集合関数にする。V+の権利は合意creditではなく生成機会であり、Gate Cとは独立(権利を消費しても、認証されるまでcreditはない)。
-* **RFC-0017(U-2、P0):** `Probation`で受理されたclaim(probation pinを持つclaim)は、m-of-kの承認を得ても`SecurityCertified`にならない。この禁止は単一の述語`palw_independently_work_certified_v1`の中で`palw_eligibility_bars_security_credit_v1`を問うので、全てのGate C読み取り箇所(frontier、settlement depth、rule E participation、settled anchor、provisional/final weight、coinbase credit leg)が自動的に従う。pinは`Final`後も残り、claimがstateを離れるかvoidされるまで凍結される。certification sweepはそのclaimに検証者を抽選しない。Registered/Lapsedはclaim gateで拒否されるのでclaimが存在しない。モデルが`Eligible`になった後に受理されたclaimは通常どおり認証される(試験 `rfc18_u2_a_probation_claim_never_earns_security_credit_and_an_eligible_one_does`)。
-* **RFC-0017:** 資格(Registered/Probation/Eligible/Lapsed)はモデル単位の生成・報酬の制限で、Gate Cはclaim単位の合意creditの制限。両方を満たしたものだけがcreditを持つ。Gate Cは同じ抽選・承認objectを再利用するので、`palw_model_eligibility_v1`がGate Cのfence以下で必要(validation)。
+* ~~**RFC-0017(U-2、P0):** Probation の claim を `SecurityCertified` にしない bar~~ — **2026-10-15 第 5 回で削除した。** モデル単位の審査はすべてのモデルで廃止され([PRINCIPLES §9](../PRINCIPLES.md)、[ADR-0179](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md))、bar の対象が存在しない。Gate C の claim 単位認証が、genesis・年次指定・登録のすべての階層で唯一の安全性 gate である(Gate C 自体は不変)。
+* **RFC-0017(2026-10-15 第 5 回で改定):** モデル階層(genesis・年次フォーク 1.0、登録 0.3)は経済上の権利だけを決める。モデル単位の審査はない。claim 単位の合意 credit は Gate C だけが決め、どの階層も免除しない。`palw_model_eligibility_v1` は inner 74/75 の A-2 gate として残り、tier fence `palw_model_tier_v1` が同じ高さ以下にあるときだけ arm できる。
 * **ADR-0176:** participation v2のcreditは担保`C`、予算engineの`F_max(C, W)`と同じ`C`。Gate Cは予算の予約を変えない(予約は受理時、creditは認証時)。
 * **ADR-0178:** rule E v2が§10/§11の二つの未解決問題を閉じる。v1の意味は変えない。
 * **RFC-0012:** DNS退役後のsettlementは認証遷移を証拠とする(§7.8)。
