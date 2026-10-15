@@ -15,6 +15,23 @@ spec.loader.exec_module(drill)
 
 
 class Oracle(unittest.TestCase):
+    def test_scenario_thresholds_refuse_rounded_unbounded_or_vacuous_plans_before_launch(self):
+        plan = dict(minimum_isolated_daa_span=5400, minimum_claims=100_000,
+            minimum_depth=3, minimum_work=str(2**100), maximum_probe_ms=200,
+            workflow_timeout_s=600, probe_timeout_s=10)
+        drill.validate_scenario_bounds(plan)
+        for key, values in {
+            'minimum_claims': (99_999, 100_000.0, True, float('inf'), 2**64),
+            'minimum_isolated_daa_span': (5399, 5400.0),
+            'minimum_depth': (0, True, 3.0),
+            'minimum_work': ('0', '01', 2**100, float(2**100), str(2**128)),
+            'workflow_timeout_s': (0, -1, 600.0, float('inf')),
+            'maximum_probe_ms': (0, True, 200.0),
+        }.items():
+            for value in values:
+                with self.subTest(key=key, value=value), self.assertRaises(AssertionError):
+                    drill.validate_scenario_bounds(dict(plan, **{key: value}))
+
     def test_completed_scenarios_cannot_hide_an_unobserved_cold_reopen(self):
         limits = dict(maximumProbeMs=200, maximumOwnedDatabaseLogicalBytes=1000)
         launches = dict(A=['A_LAUNCH_1'], B=['B_LAUNCH_1'], JOIN=['JOIN_LAUNCH_1', 'JOIN_LAUNCH_2'])

@@ -70,6 +70,26 @@ def decimal_u128(value):
     return number
 
 
+def exact_u64(value, name, minimum=0):
+    if type(value) is not int or not minimum <= value < 2**64:
+        raise AssertionError(name + ' must be an exact u64 at or above ' + str(minimum))
+    return value
+
+
+def validate_scenario_bounds(plan):
+    """Freeze meaningful exact thresholds before starting any child process."""
+    exact_u64(plan['minimum_isolated_daa_span'], 'minimum_isolated_daa_span', 5400)
+    exact_u64(plan['minimum_claims'], 'minimum_claims', 100_000)
+    exact_u64(plan['minimum_depth'], 'minimum_depth', 1)
+    if decimal_u128(plan['minimum_work']) == 0:
+        raise AssertionError('minimum_work must be positive canonical u128 decimal text')
+    exact_u64(plan['maximum_probe_ms'], 'maximum_probe_ms', 1)
+    exact_u64(plan['workflow_timeout_s'], 'workflow_timeout_s', 1)
+    for key in ('scenario_timeout_s', 'command_timeout_s', 'probe_timeout_s'):
+        if key in plan:
+            exact_u64(plan[key], key, 1)
+
+
 def coherent(observation, plan, require_work=True, require_finalized=False):
     settlement = observation.get('settlement') or {}
     native = settlement.get('nativeSettlement')
@@ -89,9 +109,8 @@ def coherent(observation, plan, require_work=True, require_finalized=False):
     assert readiness['safe'] == native['safe'] and readiness['finalized']['finalized'] == native['finalized']
     if require_work:
         assert native['safe'] is not None, 'no genuine useful-work covered Safe prefix'
-        assert decimal_u128(native['uniqueWork']) >= int(plan['minimum_work']), 'unique mature work below the predeclared bound'
-        assert type(native['depth']) is int and 0 <= native['depth'] < 2 ** 64, 'native anchor depth is not an exact u64'
-        assert native['depth'] >= plan['minimum_depth'], 'Final anchor depth below the predeclared bound'
+        assert decimal_u128(native['uniqueWork']) >= decimal_u128(plan['minimum_work']), 'unique mature work below the predeclared bound'
+        assert exact_u64(native['depth'], 'native anchor depth') >= exact_u64(plan['minimum_depth'], 'minimum_depth', 1), 'Final anchor depth below the predeclared bound'
     if require_finalized:
         assert native['finalized'] is not None, 'pruned join/restart has no native Finalized head'
         pruning = normalized(observation['dag']['pruningPointHash'])
@@ -385,6 +404,7 @@ class Drill:
         self.fixture('prune')
         def pruned_source():
             row = self.probe('A', old)
+            coherent(row, self.plan, require_finalized=True)
             return row if row['oldBodyAvailable'] is False else None
         source = self.wait(pruned_source, 'actual old-body garbage collection')
         coherent(source, self.plan, require_finalized=True)
@@ -407,7 +427,7 @@ class Drill:
         row = self.probe('JOIN')
         coherent(row, self.plan, require_finalized=True)
         assert import_stamp(row['node'])[0] == joined_epoch, 'completed import epoch did not survive cold restart'
-        count = (row.get('shadow') or {}).get('claimsTotal', 0)
+        count = exact_u64((row.get('shadow') or {}).get('claimsTotal'), 'native capacity claimsTotal')
         assert count >= self.plan['minimum_claims'], '100k-scale fixture was not reached'
         assert max(self.latencies) <= self.plan['maximum_probe_ms'], 'predeclared release probe latency limit exceeded'
 
@@ -516,8 +536,7 @@ def main():
         endpoints.extend((node['wrpc'], node['p2p'], node['eth'].split('//', 1)[1].rstrip('/')))
     assert len(endpoints) == len(set(endpoints)), 'roles/listeners need distinct owned ports'
     assert plan['fork_winner'] in ('A', 'B') and plan['partition_winner'] in ('A', 'B')
-    assert plan['minimum_isolated_daa_span'] >= 5400, 'a short fork cannot satisfy the actual maturity/long-range drill'
-    assert plan['minimum_claims'] >= 100_000 and int(plan['minimum_work']) > 0 and plan['minimum_depth'] > 0
+    validate_scenario_bounds(plan)
     root = Path(tempfile.mkdtemp(prefix='misaka-rfc12-p2p-'))
     drill = MeasuredDrill(plan, root, limits)
     result = {'planSha256': hashlib.sha256(raw).hexdigest(), 'artifactDirectory': str(root),
