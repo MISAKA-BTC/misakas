@@ -3867,6 +3867,17 @@ impl<'a> TransitionBuilder<'a> {
         self.license_claim(claim_id, staged, now_daa)
     }
 
+    /// **Lane g14-close-legacy (audit G-13): the life a `Valid` lock on `claim_id` dated at `now_daa` gets** —
+    /// [`PalwStateParamsV2::valid_lock_life_for_claim_v1`] of the claim's acceptance: the claim's liability horizon (`window_court`)
+    /// for a claim accepted past `palw_legacy_public_filer_v1`, lane V02's `final_lock_life_at` otherwise (and for a claim the state no
+    /// longer holds), byte for byte.
+    pub(super) fn valid_lock_life_v1(&self, claim_id: &Hash64, now_daa: u64) -> u64 {
+        match self.state.claims.get(claim_id) {
+            Some(claim) => self.params.valid_lock_life_for_claim_v1(claim.accepted_daa, now_daa),
+            None => self.params.final_lock_life_at(now_daa),
+        }
+    }
+
     /// **ADR-0152 L-1 / L-3: a backed `Valid` signer's lock** past `palw_rcore_plus` — the set's
     /// price, the signer's attested mask and the claim's segment cut, dated like every lock. Backing
     /// was established by the caller on the one ledger, so the 100% `slashable_available` ledger is
@@ -3887,7 +3898,8 @@ impl<'a> TransitionBuilder<'a> {
             self.valid_lock_anchor_v1(&claim_id, now_daa),
             // Lane V02 (post-launch): the seat lock's life is `window_court` below the fence, shortened
             // to `PALW_FINAL_LOCK_LIFE_DAA_V1` past it (keyed on the dating DAA — the `Final` re-dates it).
-            self.params.final_lock_life_at(now_daa),
+            // G-13 (lane g14-close-legacy): a claim accepted past `palw_legacy_public_filer_v1` keeps `window_court`.
+            self.valid_lock_life_v1(&claim_id, now_daa),
         );
         self.write_slashable_lock(
             (seat, claim_id),
@@ -4185,7 +4197,8 @@ impl<'a> TransitionBuilder<'a> {
             self.valid_lock_anchor_v1(&claim_id, now_daa),
             // Lane V02 (post-launch): the seat lock's life is `window_court` below the fence, shortened
             // to `PALW_FINAL_LOCK_LIFE_DAA_V1` past it (keyed on the dating DAA — the `Final` re-dates it).
-            self.params.final_lock_life_at(now_daa),
+            // G-13 (lane g14-close-legacy): a claim accepted past `palw_legacy_public_filer_v1` keeps `window_court`.
+            self.valid_lock_life_v1(&claim_id, now_daa),
         );
         self.write_slashable_lock(
             (seat, claim_id),
@@ -4320,8 +4333,12 @@ impl<'a> TransitionBuilder<'a> {
         // withdrawal gate and its duty backing (all `is_live`) release `window_court − 1,000` sooner.
         // `lock_expiry_daa ≤ expiry_daa` keeps the sweep's group-prune invariant (a lock's expiry is
         // at most its liability's), so lock and record still prune together at the record's horizon.
-        let lock_expiry_daa =
-            crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.params.final_lock_life_at(now_daa));
+        // G-13 (lane g14-close-legacy): a claim accepted past `palw_legacy_public_filer_v1` dates its locks to the record's own
+        // horizon (`F + window_court`), so a conviction anywhere inside the liability window finds every relied-on lock live.
+        let lock_expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(
+            now_daa,
+            self.params.valid_lock_life_for_claim_v1(claim.accepted_daa, now_daa),
+        );
         // Lane F2-lock (post-launch, `Params::palw_final_lock_life_retro`): past its height an honest
         // `Final` dates its seat locks to EXACTLY `F + final_lock_life_at(F)` — a lock stamped
         // `L + window_court` at a licence below lane V02's fence is shortened, not kept — so such a claim
@@ -4930,6 +4947,20 @@ impl<'a> TransitionBuilder<'a> {
         // to prune with its record — and the claim's legs below (the `Final` reversed, `E` burned
         // with S3) run unchanged. Read on the pre-state; `row_lock` itself below the fence.
         let lock = row_lock.filter(|lock| self.false_valid_lock_slashable_v1(&claim_id, lock, now));
+        // **G-13 (lane g14-close-legacy): no conviction of a relied-on Valid seat that collects nothing.** On a claim accepted past
+        // `palw_legacy_public_filer_v1` every relied-on `Valid` lock lives to the claim's liability horizon (`valid_lock_life_v1`), so a
+        // seat the chain relied on — it holds a lock, or the liability row was built from locks (`locked_sompi > 0`) and lists it — must
+        // still hold a SLASHABLE lock here. One that does not is refused, as the TIR frame refuses a default whose S4 lock is gone,
+        // rather than recorded as a conviction that took nothing. Every other claim — and the fallback listing of a panel no licence
+        // locked — keeps the old rule (convicted for 0). The one predicate: `palw_g13_relied_lock_lost_v1`.
+        if palw_g13_relied_lock_lost_v1(&self.state, self.params, &claim_id, &accused, now, self.second_clock_depth(now)) {
+            return Err(PalwStateV2Error::ObjectiveOffenceRefused(
+                offence_id,
+                "G-13: a relied-on Valid seat of a claim accepted past palw_legacy_public_filer_v1 lost its slashable lock before the \
+                 claim's liability horizon (no conviction that collects nothing)"
+                    .into(),
+            ));
+        }
         let conv = self.open_conviction_v1(&[accused, producer], now);
         let gains = self.claim_g_v1(&claim_id).unwrap_or_default();
         let live = self.claim_is_live_before_final_v1(&claim_id);
@@ -8412,7 +8443,8 @@ impl<'a> TransitionBuilder<'a> {
         }
         // Lane V02 (post-launch): a supplementary Valid's lock takes the same shortened life as a
         // panel Valid's — `window_court` below the fence, `PALW_FINAL_LOCK_LIFE_DAA_V1` past it.
-        let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.params.final_lock_life_at(now_daa));
+        // G-13 (lane g14-close-legacy): `window_court` for a claim accepted past `palw_legacy_public_filer_v1`.
+        let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.valid_lock_life_v1(&claim_id, now_daa));
         self.write_slashable_lock(
             (seat, claim_id),
             Some(crate::palw_panel_var_v1::PalwSlashableLockV1 {

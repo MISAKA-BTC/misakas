@@ -294,6 +294,16 @@ fn set(p: &mut Params, fence: PalwG14GatedFenceV1, at: Option<ForkActivation>) {
         }
         PalwG14GatedFenceV1::G14RouteRequiredV1 => p.palw_g14_route_required_v1 = at,
         PalwG14GatedFenceV1::RewardLiabilityHorizonV1 => p.palw_reward_liability_horizon_v1 = at,
+        // Lane g14-close-legacy: LG14-A / LG14-B ride the same record gate (LG14-B with LG14-A at or below it).
+        PalwG14GatedFenceV1::LegacyPublicFilerV1 => {
+            p.palw_legacy_public_filer_v1 = at;
+            p.sync_palw_legacy_public_filer_v1();
+        }
+        PalwG14GatedFenceV1::LegacyHeldDaV2 => {
+            p.palw_legacy_public_filer_v1 = at;
+            p.sync_palw_legacy_public_filer_v1();
+            p.palw_legacy_held_da_v2 = at;
+        }
     }
     p.sync_palw_g14_gates_v1();
 }
@@ -786,7 +796,9 @@ fn g14_genesis_ruleset_validates_and_its_exception_reaches_no_shipped_preset() {
         assert_eq!(fence.armed(&g), Some(ForkActivation::new(0)), "{fence:?}");
     }
     assert_eq!(g.palw_legacy_public_filer_v1, Some(ForkActivation::new(0)));
-    assert_eq!(g.palw_legacy_held_da_v2, None, "LG14-B is not armed: the legacy Panel route has no complete G14 route here");
+    // Lane g14-close-legacy: LG14-B is armable behind its record now, so G14-from-genesis arms it too (the legacy Panel route's G14
+    // route is complete from block 0).
+    assert_eq!(g.palw_legacy_held_da_v2, Some(ForkActivation::new(0)), "LG14-B from block 0");
     assert_eq!(g.palw_claim_hard_deadline_v1, None, "X3 has no approved value");
     let mirror = sp_of(&g).g14_route_required_v1().expect("mirrored");
     assert_eq!(mirror.from_daa, 0);
@@ -795,22 +807,34 @@ fn g14_genesis_ruleset_validates_and_its_exception_reaches_no_shipped_preset() {
     assert_eq!(sp_of(&g).public_evidence_reward_from_daa(), Some(0));
 }
 
-/// **From block 0 on g14-genesis**: the legacy Panel route never pays (an attempt is refused at DAA 1), non-public material never pays
-/// (V5 image, PanelDa), an unframed FP job never pays, and only a family whose G14 route is armed (a framed FP job once the TIR route has
-/// resolved) is admitted. Nothing reads pre-fence history: at fence 0 every claim is governed.
+/// **From block 0 on g14-genesis**: the legacy Panel route pays from block 0 because its G14 route (LG14-A + LG14-B, lane
+/// g14-close-legacy) is armed there; non-public material never pays (V5 image, PanelDa), an unframed FP job never pays, and only a
+/// family whose G14 route is armed (a framed FP job once the TIR route has resolved) is admitted. Nothing reads pre-fence history: at
+/// fence 0 every claim is governed.
 #[test]
 fn g14_genesis_from_block_zero_only_families_with_an_armed_route_earn() {
     let g = palw_g14_genesis_test_params_v1();
     let sp = sp_of(&g);
     let mirror = sp.g14_route_required_v1().expect("armed");
     assert!(mirror.governs(0), "fence 0: no claim is pre-fence");
-    // The legacy Panel route never pays.
+    assert_eq!((mirror.legacy_filer_from, mirror.legacy_held_da_from), (Some(0), Some(0)), "the legacy route's G14 path from block 0");
+    // The legacy Panel route pays: its family has an armed route at every height.
     for daa in [0, 1, 1_000, u64::MAX / 2] {
-        assert!(palw_g14_route_attempt_refusal_v1(&sp, daa).is_some(), "an attempt at {daa}");
+        assert!(palw_g14_route_attempt_refusal_v1(&sp, daa).is_none(), "an attempt at {daa}");
     }
     let s = genesis_state(&g);
     let (floor, ..) = genesis_classes(&g)[0];
-    let pre = palw_class_admits_claim_v1(&s, &sp, &extras(&g, 1), &floor, 1).expect_err("the producer's pre-check at DAA 1");
+    palw_class_admits_claim_v1(&s, &sp, &extras(&g, 1), &floor, 1).expect("the producer's pre-check at DAA 1");
+    // The same ruleset WITHOUT LG14-B (its gates-lane form): the legacy Panel route never pays.
+    let mut half = g.clone();
+    half.palw_legacy_held_da_v2 = None;
+    half.sync_palw_g14_gates_v1();
+    half.validate_palw_v2().unwrap_or_else(|e| panic!("g14-genesis without LG14-B validates: {e:?}"));
+    let half_sp = sp_of(&half);
+    for daa in [0, 1, 1_000, u64::MAX / 2] {
+        assert!(palw_g14_route_attempt_refusal_v1(&half_sp, daa).is_some(), "an attempt at {daa} without LG14-B");
+    }
+    let pre = palw_class_admits_claim_v1(&s, &half_sp, &extras(&half, 1), &floor, 1).expect_err("the producer's pre-check at DAA 1");
     assert_eq!(refusal_code(&pre), Some(PALW_G14_ROUTE_ABSENT_CODE_V1), "{pre:?}");
     // Non-public material never pays; an unframed public job never pays.
     for c in [v5_image(), panel_da(), public_v4(), constraint_v6(), prefix_v11()] {

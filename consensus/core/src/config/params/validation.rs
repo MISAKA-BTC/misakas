@@ -9,6 +9,15 @@ impl Params {
     /// `None` and `Some(never())` pass. The rules exist as dormant, unverified source (`crate::palw_ruling_fences_v1`, 2026-10-15);
     /// the refusal stays until they are verified and the user approves the X3 policy values.
     pub fn validate_palw_2026_10_12_ruling_fences_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        self.validate_palw_2026_10_12_ruling_fences_in_v1(crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1)
+    }
+
+    /// [`Self::validate_palw_2026_10_12_ruling_fences_v1`] against `records` in place of the pinned arm-readiness list
+    /// ([`Self::validate_palw_v2_with_arming_records_v1`]).
+    pub fn validate_palw_2026_10_12_ruling_fences_in_v1(
+        &self,
+        records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
+    ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         for (fence, why) in [
             (
                 self.palw_court_model_scope_v1,
@@ -25,7 +34,7 @@ impl Params {
         }
         // N4's rule is built (`crate::palw_ruling_fences_v1`) and its tests exist (T-N9): it is refused when armed until its
         // arm-readiness record is pinned (`crate::palw_g14_gates_v1`, audit G-02), never by name alone.
-        self.validate_palw_g14_fence_record_v1(crate::palw_g14_gates_v1::PalwG14GatedFenceV1::PublicEvidenceRewardV1)?;
+        self.validate_palw_g14_fence_record_in_v1(crate::palw_g14_gates_v1::PalwG14GatedFenceV1::PublicEvidenceRewardV1, records)?;
         // D2's first half is LG14-B's StepLeaf rule (a StepLeaf answer owes no model rows; the accuser supplies them), so the scope
         // fence needs `palw_legacy_held_da_v2` in force at or below it. Checked even though arming is refused above, so the ordering
         // is already pinned when the refusal is lifted.
@@ -58,7 +67,20 @@ impl Params {
     }
 
     pub fn validate_palw_v2(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        self.validate_palw_v2_inner(false)
+        self.validate_palw_v2_inner(false, crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1)
+    }
+
+    /// **The whole V2 validation with `records` in place of the binary's pinned arm-readiness list**
+    /// (`crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1`, lane g14-close-legacy 2026-10-16). Every other refusal, mirror and
+    /// prerequisite is [`Self::validate_palw_v2`]'s, byte for byte: only WHICH records exist differs. A test arms a gated fence on a
+    /// ruleset that passes this with a record for its exact (fence, genesis, height) — never by skipping validation (audit G-19). The
+    /// node never calls it: `ConfigBuilder::build` runs [`Self::validate_palw_v2`], so a real network arms a gated fence only once a
+    /// reviewed change pins the record in the binary.
+    pub fn validate_palw_v2_with_arming_records_v1(
+        &self,
+        records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
+    ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        self.validate_palw_v2_inner(false, records)
     }
 
     /// Feature-gated private factory exception for release heights only. All
@@ -77,10 +99,14 @@ impl Params {
                 "private Rule E factory requires Rule E and its commitment at DAA 1 and a finite retirement at or after them",
             ));
         }
-        self.validate_palw_v2_inner(true)
+        self.validate_palw_v2_inner(true, crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1)
     }
 
-    fn validate_palw_v2_inner(&self, private_rule_e: bool) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+    fn validate_palw_v2_inner(
+        &self,
+        private_rule_e: bool,
+        records: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1],
+    ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         // The overlay's bond collateral has one gate left: the acceptance-time skip, in force from
         // `bond_spend_gate_mergeset_activation_daa_score`. The own-body gate that covered the blocks
         // below that fence could not run on any network (every overlay ships the fence at the
@@ -185,7 +211,7 @@ impl Params {
         // **RFC-0006 per-segment pricing** (`crate::palw_tir_shard_segment_v2`): refused when armed.
         self.validate_palw_tir_shard_segment_v2()?;
         self.validate_palw_provider_court_v1()?;
-        self.validate_palw_legacy_held_da_v2()?;
+        self.validate_palw_legacy_held_da_v2_in(records)?;
         // **ADR-0176 / ADR-0177's dormant fences** (`crate::palw_bond_budget_v1`): refused when armed.
         self.validate_palw_bond_budget_v1()?;
         // ADR-0176 amendment (ユーザー判断 2026-10-15: bond式の再設計): dormant, refused when armed.
@@ -212,9 +238,9 @@ impl Params {
         // **ADR-0032's amended reporter share** (`crate::palw_reporter_share_v2`): refused when armed.
         self.validate_palw_reporter_share_v2()?;
         // **Lane LG14-A's public filer** (`crate::palw_legacy_public_filer_v1`): refused when armed.
-        self.validate_palw_legacy_public_filer_v1()?;
+        self.validate_palw_legacy_public_filer_in_v1(records)?;
         // **The three fences of the 2026-10-12 rulings** (register §3): refused when armed until their rules are built.
-        self.validate_palw_2026_10_12_ruling_fences_v1()?;
+        self.validate_palw_2026_10_12_ruling_fences_in_v1(records)?;
         // **RFC-0006 R6-CELL round 4's coverage closure** (`crate::palw_cell_coverage_closure_v1`): refused when armed.
         self.validate_palw_cell_coverage_closure_v1()?;
         // **RFC-0016's two dormant fences** (`crate::palw_rfc0016_v1`): refused when armed until measured values are pinned.
@@ -256,7 +282,7 @@ impl Params {
         self.validate_palw_staged_route_extensions_v1()?;
         // **The cross-lane G14 gates** (`crate::palw_g14_gates_v1`): G-18's legacy-filer prerequisite of the staged court, and the
         // arm-readiness record of every gated fence (G-10, N4, G-01 option (b), the reward liability horizon).
-        self.validate_palw_g14_gates_v1()?;
+        self.validate_palw_g14_gates_in_v1(records)?;
         // **RFC-0003 decision 22: the held leaf challenge's refusals** (`crate::palw_held_close_v1`).
         self.validate_palw_held_close_chunks_v1()?;
         // **RFC-0007 Part I: the verification vertex's refusals** (`crate::palw_vertex_v1`).

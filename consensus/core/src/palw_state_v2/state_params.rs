@@ -1970,6 +1970,16 @@ impl PalwStateParamsV2 {
         if self.final_lock_life_active_at(now_daa) { PALW_FINAL_LOCK_LIFE_DAA_V1.min(self.window_court) } else { self.window_court }
     }
 
+    /// **Lane g14-close-legacy (audit G-13): the life a `Valid` seat's slashable lock on a claim accepted at `accepted_daa` gets when it
+    /// is dated at `now_daa`.** For a claim accepted at or past `palw_legacy_public_filer_v1` (keyed on the CLAIM's acceptance, as every
+    /// claim rule of the G14 lanes) it is `window_court` — the claim's liability horizon: the window in which a conviction may still
+    /// reverse its `Final` and its vesting row stays unmatured, which is also the window in which the public filer may reserve it — so a
+    /// conviction anywhere inside that horizon finds every relied-on `Valid` lock live, never lane V02's shorter
+    /// `PALW_FINAL_LOCK_LIFE_DAA_V1`. Every other claim: [`Self::final_lock_life_at`], byte for byte (`false` on every shipped preset).
+    pub fn valid_lock_life_for_claim_v1(&self, accepted_daa: u64, now_daa: u64) -> u64 {
+        if self.legacy_public_filer_active_at(accepted_daa) { self.window_court } else { self.final_lock_life_at(now_daa) }
+    }
+
     /// **Lane V02 (post-launch): is `Params::palw_final_lock_life` in force at `now_daa`?** The one
     /// key both halves of the fence read, each at its own block's DAA: the block that DATES a `Valid`
     /// lock ([`Self::final_lock_life_at`]) and the block that CONVICTS on one (a lock the fold no
