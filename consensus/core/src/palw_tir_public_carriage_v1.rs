@@ -722,4 +722,43 @@ mod tests {
         trailing.push(0);
         assert!(PalwTirPublicGrantReadyV1::decode_bounded_v1(&trailing, PALW_TIR_PUBLIC_CONTROL_MAX_BYTES_V1).is_err());
     }
+
+    /// G14 R2/R4 (source only, not run): the common conviction filing is a bounded, role-free, signed object — the evidence is
+    /// inside the signed message, its ID count is refused before allocation, unknown forms fail closed, it always declares a
+    /// rent, and it cannot ride another lane's target.
+    #[test]
+    fn the_common_conviction_filing_is_bounded_signed_and_role_free() {
+        let evidence = PalwTirPublicConvictionEvidenceV1::Output { rows_root: h(30), ids: vec![4, 5, 6] };
+        let mut c = PalwTirPublicControlV1::conviction_unsigned_v1(h(1), h(2), h(3), bond(9), evidence.clone(), 77).unwrap();
+        c.signature = sig();
+        c.check_v1().unwrap();
+        assert_eq!((c.target, c.expected_turn, c.declared_rent_sompi), (PalwTirPublicControlTargetV1::Conviction, 0, 77));
+        let encoded = borsh::to_vec(&c).unwrap();
+        assert_eq!(PalwTirPublicControlV1::decode_bounded_v1(&encoded, PALW_TIR_PUBLIC_CONTROL_MAX_BYTES_V1).unwrap(), c);
+        // The evidence is signed: another ID sequence is another message.
+        let digest = c.signing_message_v1(h(99)).unwrap();
+        let mut other = c.clone();
+        other.action =
+            PalwTirPublicControlActionV1::Convict(PalwTirPublicConvictionEvidenceV1::Output { rows_root: h(30), ids: vec![4, 5, 7] });
+        assert_ne!(other.signing_message_v1(h(99)).unwrap(), digest);
+        // A filing always declares its rent; a zero rent is not a prepaid continuation here.
+        assert!(PalwTirPublicControlV1::conviction_unsigned_v1(h(1), h(2), h(3), bond(9), evidence.clone(), 0).is_err());
+        // It cannot borrow a turn or another target.
+        let mut turned = c.clone();
+        turned.expected_turn = 1;
+        assert!(turned.check_v1().is_err());
+        let mut retargeted = c.clone();
+        retargeted.target = PalwTirPublicControlTargetV1::OwnerOpen { owner: bond(9) };
+        assert!(retargeted.check_v1().is_err());
+        // Pre-allocation bounds: an empty or oversized ID vector, and an unknown evidence form, fail before allocation.
+        assert!(PalwTirPublicConvictionEvidenceV1::Output { rows_root: h(30), ids: vec![] }.check_v1().is_err());
+        assert!(PalwTirPublicConvictionEvidenceV1::Output { rows_root: Hash64::default(), ids: vec![1] }.check_v1().is_err());
+        let mut bomb = vec![1u8];
+        bomb.extend(borsh::to_vec(&h(30)).unwrap());
+        bomb.extend((PALW_TIR_PUBLIC_CONVICTION_MAX_IDS_V1 as u32 + 1).to_le_bytes());
+        assert!(borsh::from_slice::<PalwTirPublicConvictionEvidenceV1>(&bomb).is_err());
+        assert!(borsh::from_slice::<PalwTirPublicConvictionEvidenceV1>(&[3u8]).is_err());
+        let round = borsh::to_vec(&evidence).unwrap();
+        assert_eq!(borsh::from_slice::<PalwTirPublicConvictionEvidenceV1>(&round).unwrap(), evidence);
+    }
 }
