@@ -1139,13 +1139,27 @@ fn named_prefix_job_keeps_its_immutable_registered_tokenizer_statement() {
     assert!(palw_tokenizer_statement_v1(&wrong_class, &binding, &job).is_err());
 }
 
+/// One accepted signed step of a paid owner court: an ordinary move or a constraint leaf opening.
+enum PaidStepV1 {
+    Move(PalwConstraintStreamMoveV1),
+    Leaf(crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamLeafV1),
+}
+fn paid_move_v1(step: &PaidStepV1) -> &PalwConstraintStreamMoveV1 {
+    match step {
+        PaidStepV1::Move(movement) => movement,
+        PaidStepV1::Leaf(_) => panic!("this check needs an ordinary signed move"),
+    }
+}
 fn continue_paid_case_after_sibling_default(row: PalwStagedCourtRowV1, moves: Vec<PalwConstraintStreamMoveV1>, root: Hash64) {
+    continue_paid_steps_after_sibling_default(row, moves.into_iter().map(PaidStepV1::Move).collect(), root)
+}
+fn continue_paid_steps_after_sibling_default(row: PalwStagedCourtRowV1, moves: Vec<PaidStepV1>, root: Hash64) {
     use crate::palw_da_rcore_v1::{PalwDaClaimV1, PalwDaSessionV1, PalwDaStageV1, PalwDaUnitV1};
     let (mut state, p, mut extras, old_claim, _) = state();
     let p = p.with_legacy_public_filer_from_daa(Some(0));
     extras.objective_offence_daa = Some(0);
     extras.offence_attribution_active = true;
-    let first = moves.first().unwrap();
+    let first = paid_move_v1(moves.first().unwrap());
     let (claim, owner, reserved, seed) = (first.claim, first.reserver, first.reserved_daa, first.seed_id);
     let terms = match &row {
         PalwStagedCourtRowV1::Constraint(c) => c.terms,
@@ -1221,20 +1235,28 @@ fn continue_paid_case_after_sibling_default(row: PalwStagedCourtRowV1, moves: Ve
             .any(|candidate| candidate.claim_id == claim),
         "paid pursuit survives a restart without explicit target"
     );
-    let mut wrong = moves[1].clone();
+    let mut wrong = paid_move_v1(&moves[1]).clone();
     wrong.reserved_daa += 1;
     let before = builder.state.state_root();
     assert!(palw_staged_court_fold_v1::movement(&mut builder, &ctx(4, 103, 103), &wrong).is_err());
     assert_eq!(builder.state.state_root(), before);
     assert!(
-        palw_staged_court_fold_v1::movement(&mut builder, &ctx(4, terms.stream_until_daa, terms.stream_until_daa), &moves[1]).is_err()
+        palw_staged_court_fold_v1::movement(
+            &mut builder,
+            &ctx(4, terms.stream_until_daa, terms.stream_until_daa),
+            paid_move_v1(&moves[1])
+        )
+        .is_err()
     );
     assert_eq!(builder.state.state_root(), before);
-    for movement in moves.iter().skip(1) {
-        palw_staged_court_fold_v1::movement(&mut builder, &ctx(4, 103, 103), movement).unwrap();
+    for step in moves.iter().skip(1) {
+        match step {
+            PaidStepV1::Move(movement) => palw_staged_court_fold_v1::movement(&mut builder, &ctx(4, 103, 103), movement).unwrap(),
+            PaidStepV1::Leaf(leaf) => palw_staged_court_fold_v1::leaf(&mut builder, &ctx(4, 103, 103), leaf).unwrap(),
+        }
     }
     reference.resolve_fault_v1(&builder.state, root).unwrap();
-    let last = moves.last().unwrap();
+    let last = paid_move_v1(moves.last().unwrap());
     let before = builder.state.state_root();
     assert!(palw_staged_court_fold_v1::movement(&mut builder, &ctx(5, 104, 104), last).is_err());
     assert_eq!(builder.state.state_root(), before);
@@ -1392,7 +1414,7 @@ fn every_paid_family_continues_and_convicts_after_actual_sibling_da_default() {
             signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         };
         completed.movement(100, &m).unwrap();
-        moves.push(m);
+        moves.push(PaidStepV1::Move(m));
     };
     add(Action::EogPart { offset: 0, ids: accusation.eog.ids.clone() });
     add(Action::EogFinish);
@@ -1403,12 +1425,22 @@ fn every_paid_family_continues_and_convicts_after_actual_sibling_da_default() {
             vec![Action::EogTokenFinish]
         } else {
             let o = accusation.renderings.iter().find(|o| o.id == id).unwrap();
-            let mut actions = vec![Action::StreamLeafOpened {
+            // The rendering leaf opens through its own signed leaf object, not a move action.
+            let leaf = crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamLeafV1 {
+                version: 1,
+                claim: row.claim,
+                reserver: row.reserver,
+                reserved_daa: row.reserved_daa,
+                seed_id: row.seed_id(),
                 id,
                 present: o.rendering.is_some(),
                 length: o.rendering.as_ref().map_or(0, Vec::len) as u32,
                 opening: o.opening.clone(),
-            }];
+                signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+            };
+            completed.leaf(100, &leaf).unwrap();
+            moves.push(PaidStepV1::Leaf(leaf));
+            let mut actions = vec![];
             if let Some(bytes) = &o.rendering {
                 actions.push(Action::RenderingPart { offset: 0, bytes: bytes.clone() });
             }
@@ -1427,10 +1459,10 @@ fn every_paid_family_continues_and_convicts_after_actual_sibling_da_default() {
                 signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
             };
             completed.movement(100, &m).unwrap();
-            moves.push(m);
+            moves.push(PaidStepV1::Move(m));
         }
     }
-    continue_paid_case_after_sibling_default(PalwStagedCourtRowV1::Constraint(Box::new(row).into()), moves, root);
+    continue_paid_steps_after_sibling_default(PalwStagedCourtRowV1::Constraint(Box::new(row).into()), moves, root);
 }
 
 #[test]

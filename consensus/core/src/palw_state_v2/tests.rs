@@ -28274,6 +28274,9 @@ mod evm_market {
     fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
             merged_reds: Default::default(),
+            history_custody_pledges: Default::default(),
+            public_original_bindings: Default::default(),
+            producer_custody_delegations: Default::default(),
             audit_1004_draw_seed_source: None,
             economic_safety: None,
             work_target: None,
@@ -28539,6 +28542,9 @@ mod evm_market {
         // Below the fence the same actions write nothing.
         let dormant = PalwTransitionExtrasV1 {
             merged_reds: Default::default(),
+            history_custody_pledges: Default::default(),
+            public_original_bindings: Default::default(),
+            producer_custody_delegations: Default::default(),
             audit_1004_draw_seed_source: None,
             economic_safety: None,
             work_target: None,

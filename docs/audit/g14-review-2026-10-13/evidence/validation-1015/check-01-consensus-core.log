@@ -1,0 +1,179 @@
+    Checking serde_core v1.0.228
+    Checking byteorder v1.5.0
+    Checking futures-core v0.3.31
+    Checking futures-io v0.3.31
+    Checking num-traits v0.2.19
+    Checking generic-array v0.14.7
+    Checking zerocopy v0.7.35
+    Checking futures-lite v2.3.0
+    Checking futures-sink v0.3.31
+    Checking tracing-core v0.1.36
+    Checking ppv-lite86 v0.2.20
+    Checking futures-channel v0.3.31
+    Checking tracing v0.1.44
+    Checking rustix v0.38.37
+    Checking async-channel v2.3.1
+    Checking subtle v2.6.1
+    Checking futures-task v0.3.31
+    Checking piper v0.2.4
+    Checking futures-util v0.3.31
+    Checking crypto-common v0.1.6
+    Checking block-buffer v0.10.4
+    Checking lazy_static v1.5.0
+    Checking console v0.15.8
+    Checking serde v1.0.228
+    Checking serde_json v1.0.151
+    Checking log v0.4.22
+    Checking smallvec v1.13.2
+    Checking polling v3.7.3
+    Checking wasm-bindgen v0.2.100
+    Checking chrono v0.4.38
+    Checking async-io v2.3.4
+    Checking digest v0.10.7
+    Checking rand_chacha v0.9.0
+    Checking js-sys v0.3.77
+    Checking blocking v1.6.1
+    Checking async-executor v1.13.1
+    Checking rand_chacha v0.3.1
+    Checking bytes v1.11.1
+    Checking workflow-log v0.18.0
+    Checking rand v0.8.6
+    Checking async-global-executor v2.4.1
+    Checking futures-executor v0.3.31
+    Checking rand v0.9.4
+    Checking tokio v1.42.1
+    Checking parking_lot_core v0.9.10
+    Checking kv-log-macro v1.0.7
+    Checking async-channel v1.9.0
+    Checking arrayvec v0.7.6
+    Checking async-std v1.13.0
+    Checking blake2b_simd v1.0.2
+    Checking parking_lot v0.12.3
+    Checking futures v0.3.31
+    Checking faster-hex v0.9.0
+    Checking hash32 v0.3.1
+    Checking heapless v0.8.0
+    Checking web-sys v0.3.77
+    Checking serde-wasm-bindgen v0.6.5
+    Checking wasm-bindgen-futures v0.4.50
+    Checking faster-hex v0.10.1
+    Checking sha2 v0.10.8
+    Checking uuid v1.18.1
+    Checking ahash v0.8.11
+    Checking kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/utils)
+    Checking rand v0.10.1
+    Checking libm v0.2.8
+    Checking hashbrown v0.14.5
+    Checking ordered-float v2.10.1
+    Checking serde_yaml v0.9.34+deprecated
+    Checking malachite-base v0.4.16
+    Checking serde-value v0.7.0
+    Checking libcrux-traits v0.0.8
+    Checking derive_more v2.1.1
+    Checking half v2.4.1
+    Checking regex-syntax v0.8.5
+    Checking ciborium-io v0.2.2
+    Checking ciborium-ll v0.2.2
+    Checking log4rs v1.4.0
+    Checking regex-automata v0.4.8
+    Checking clap_builder v4.5.51
+    Checking workflow-panic-hook v0.18.0
+    Checking workflow-core v0.18.0
+    Checking password-hash v0.5.0
+    Checking libcrux-sha3 v0.0.10
+    Checking misaka-palw-gen v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/gen)
+    Checking workflow-wasm v0.18.0
+    Checking misaka-palw-challenge v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/challenge)
+    Checking blake2 v0.10.6
+    Checking kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/hashes)
+    Checking itertools v0.10.5
+    Checking cast v0.3.0
+    Checking same-file v1.0.6
+    Checking walkdir v2.5.0
+    Checking misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/panel)
+    Checking kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/merkle)
+    Checking libcrux-ml-dsa v0.0.10
+    Checking criterion-plot v0.5.0
+    Checking malachite-nz v0.4.16
+    Checking kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/muhash)
+    Checking misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/kernel)
+    Checking argon2 v0.5.3
+    Checking kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/addresses)
+    Checking kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/core)
+    Checking misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/exec)
+    Checking clap v4.5.51
+    Checking regex v1.11.0
+    Checking ciborium v0.2.2
+    Checking sha3 v0.10.8
+    Checking workflow-serializer v0.18.0
+    Checking tinytemplate v1.2.1
+    Checking is-terminal v0.4.13
+    Checking oorandom v11.1.4
+    Checking anes v0.1.6
+    Checking misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/sketch)
+    Checking criterion v0.5.1
+    Checking wasm-bindgen-test v0.3.50
+    Checking bincode v1.3.3
+    Checking kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/math)
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/core)
+error[E0616]: field `staged_courts` of struct `palw_state_v2::PalwChainStateV2` is private
+   --> consensus/core/src/palw_staged_court_state_v1.rs:281:29
+    |
+281 |     for (key, row) in state.staged_courts.range((start, std::ops::Bound::Unbounded)) {
+    |                             ^^^^^^^^^^^^^ private field
+
+error[E0614]: type `kaspa_hashes::Hash64` cannot be dereferenced
+   --> consensus/core/src/palw_staged_court_state_v1.rs:287:21
+    |
+287 |         last = Some(*claim);
+    |                     ^^^^^^ can't be dereferenced
+
+error[E0614]: type `kaspa_hashes::Hash64` cannot be dereferenced
+   --> consensus/core/src/palw_staged_court_state_v1.rs:292:23
+    |
+292 |             out.push((*claim, contract.claim.producer));
+    |                       ^^^^^^ can't be dereferenced
+
+error[E0599]: no variant named `StreamLeafOpened` found for enum `palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1`
+    --> consensus/core/src/palw_state_v2/tests/public_prefix_fold_v1.rs:1406:44
+     |
+1406 |             let mut actions = vec![Action::StreamLeafOpened {
+     |                                            ^^^^^^^^^^^^^^^^ variant not found in `palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1`
+     |
+    ::: consensus/core/src/palw_constraint_stream_carriage_v1.rs:100:1
+     |
+ 100 | pub enum PalwConstraintStreamActionV1 {
+     | ------------------------------------- variant `StreamLeafOpened` not found here
+
+error[E0502]: cannot borrow `bundle` as mutable because it is also borrowed as immutable
+    --> consensus/core/src/palw_staged_court_fold_v1.rs:1696:19
+     |
+1689 |     let context = bundle
+     |                   ------ immutable borrow occurs here
+...
+1696 |     let session = bundle.selected.as_mut().ok_or_else(|| stage_refused(movement.claim, "selected source session disappeared"))?;
+     |                   ^^^^^^ mutable borrow occurs here
+...
+1699 |             session.demand_v1(ctx.daa_score, &context.binding, demand).map_err(|e| stage_refused(movement.claim, e))?;
+     |                                               ------- immutable borrow later used here
+
+error[E0063]: missing fields `history_custody_pledges`, `producer_custody_delegations` and `public_original_bindings` in initializer of `palw_state_v2::PalwTransitionExtrasV1`
+     --> consensus/core/src/palw_state_v2/tests.rs:28275:9
+      |
+28275 |         PalwTransitionExtrasV1 {
+      |         ^^^^^^^^^^^^^^^^^^^^^^ missing `history_custody_pledges`, `producer_custody_delegations` and `public_original_bindings`
+
+error[E0063]: missing fields `history_custody_pledges`, `producer_custody_delegations` and `public_original_bindings` in initializer of `palw_state_v2::PalwTransitionExtrasV1`
+     --> consensus/core/src/palw_state_v2/tests.rs:28540:23
+      |
+28540 |         let dormant = PalwTransitionExtrasV1 {
+      |                       ^^^^^^^^^^^^^^^^^^^^^^ missing `history_custody_pledges`, `producer_custody_delegations` and `public_original_bindings`
+
+Some errors have detailed explanations: E0502, E0614, E0616.
+For more information about an error, try `rustc --explain E0502`.
+error: could not compile `kaspa-consensus-core` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+Some errors have detailed explanations: E0063, E0502, E0599, E0614, E0616.
+For more information about an error, try `rustc --explain E0063`.
+error: could not compile `kaspa-consensus-core` (lib test) due to 7 previous errors
+exit 101

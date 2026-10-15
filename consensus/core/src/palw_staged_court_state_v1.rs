@@ -271,25 +271,18 @@ pub fn palw_staged_custody_delegations_to_v1(
     visit: usize,
 ) -> Result<(Vec<(Hash64, PalwBondKeyV2)>, Option<Hash64>), String> {
     let point = state.last_point().ok_or("custody delegation page has no accepted clock")?;
-    let start = match after {
-        Some(claim) => std::ops::Bound::Excluded(PalwStagedCourtKeyV1::Claim(claim)),
-        None => std::ops::Bound::Unbounded,
-    };
     let mut out = Vec::new();
     let mut last = None;
-    let mut visited = 0usize;
-    for (key, row) in state.staged_courts.range((start, std::ops::Bound::Unbounded)) {
-        let PalwStagedCourtKeyV1::Claim(claim) = key else { return Ok((out, None)) };
+    for (visited, (claim, row)) in state.staged_claim_rows_after_v1(after).enumerate() {
         if visited >= visit.clamp(1, 256) {
             return Ok((out, last));
         }
-        visited += 1;
-        last = Some(*claim);
+        last = Some(claim);
         if let PalwStagedCourtRowV1::ClaimBundle(contract) = row
             && contract.producer_custodian == Some(custodian)
             && point.daa_score < contract.claim.terms.material_until_daa
         {
-            out.push((*claim, contract.claim.producer));
+            out.push((claim, contract.claim.producer));
         }
     }
     Ok((out, None))

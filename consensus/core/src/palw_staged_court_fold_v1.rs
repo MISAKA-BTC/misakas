@@ -4,6 +4,17 @@ use crate::palw_staged_court_state_v1::*;
 impl PalwChainStateV2 {
     /// Native verified-state import only. No rooted row or dynamic material is
     /// cloned, and this iterator is not an anonymous request-facing reader.
+    /// Claim-contract rows strictly after `after`, in key order; owner/inventory rows end the walk.
+    pub fn staged_claim_rows_after_v1(&self, after: Option<Hash64>) -> impl Iterator<Item = (Hash64, &PalwStagedCourtRowV1)> {
+        let start = match after {
+            Some(claim) => std::ops::Bound::Excluded(PalwStagedCourtKeyV1::Claim(claim)),
+            None => std::ops::Bound::Unbounded,
+        };
+        self.staged_courts.range((start, std::ops::Bound::Unbounded)).map_while(|(key, row)| match key {
+            PalwStagedCourtKeyV1::Claim(claim) => Some((*claim, row)),
+            _ => None,
+        })
+    }
     pub fn staged_cache_lease_rows_v1(&self) -> impl Iterator<Item = (PalwStagedCourtKeyV1, &PalwStagedCourtRowV1)> {
         self.staged_courts.iter().map(|(key, row)| (*key, row))
     }
@@ -389,11 +400,6 @@ impl PalwChainStateV2 {
     }
 }
 impl TransitionBuilder<'_> {
-    fn maximum_prefix_custodian_slots_v1(&self, claim: &PalwClaimStateV2) -> Result<usize, PalwStateV2Error> {
-        let maximum = self.state.staged_maximum_custodians_v1(claim.class_id, claim.accepted_daa, self.params, self.extras)?;
-        usize::try_from(maximum.checked_add(1).ok_or(PalwStateV2Error::Overflow("prospective owner slot"))?)
-            .map_err(|_| PalwStateV2Error::Overflow("prospective platform slots"))
-    }
     /// Pure preflight: checked clocks are established before even an attempt's first write.
     pub(super) fn prepare_staged_claim_v1(
         &self,
@@ -1686,9 +1692,11 @@ fn selected_control_v1(
             .into(),
         );
     }
+    // A shared (COW) handle: cloning it is a reference count, and it frees `bundle` for the
+    // session's mutable borrow below.
     let context = bundle
         .selected_context
-        .as_ref()
+        .clone()
         .ok_or_else(|| stage_refused(movement.claim, "selected source authenticated context disappeared"))?;
     if supplied.as_ref().is_some_and(|binding| binding != context.binding.as_ref()) {
         return Err(stage_refused(movement.claim, "selected movement substitutes frozen signed binding"));
