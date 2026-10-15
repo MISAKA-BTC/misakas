@@ -203,6 +203,13 @@ impl PalwChainStateV2 {
             })
         })
     }
+    /// **G14 R1/R7: outside owner acquisitions opened on `claim`** (every live `TirAcquisition` row; rows leave at the material
+    /// horizon). The K_owner cap reads this count before any duty is created.
+    pub fn staged_tir_owner_count_v1(&self, claim: &Hash64) -> u64 {
+        self.staged_tir_by_claim.get(claim).map_or(0, |rows| {
+            rows.iter().filter(|(_, key)| matches!(key, PalwStagedCourtKeyV1::TirAcquisition(..))).count() as u64
+        })
+    }
     /// **G14 R6: an ORIGINAL TIR frame's d0 conviction door is still open at `now`** — `[accepted, collect_until)` of the frame's
     /// own terms. Gate C waits on it (never a deadline failure), and the claim's `Final` floor is its close.
     pub fn palw_tir_public_prosecution_open_v1(&self, claim: &Hash64, now: u64) -> bool {

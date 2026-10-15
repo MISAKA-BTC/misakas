@@ -373,6 +373,12 @@ fn open_v1(
     owner: PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
     independent(b, frame, owner)?;
+    // **K_owner (Lead default, pending user review): refuse an excess owner before ANY custodian duty is created.** The frame's
+    // liable custodians answer at most `custodian_load_bound_v1` across all owners; each owner below pays only its own rent and
+    // deposit (`owner_terms_v1`), never the producer's prepaid preparation pool.
+    if b.state.staged_tir_owner_count_v1(&frame.plan_v1().original_claim) >= Frame::MAXIMUM_OWNERS_V1 {
+        return Err(refused("TIR original frame already carries its K_owner outside owners; custodian load is bounded"));
+    }
     let c = owner_contract(frame, owner, ctx.daa_score)?;
     let key = owner_key(frame, owner, ctx.daa_score)?;
     let allowance = rules(b)?.config.maximum_owned_rows_per_reserver;

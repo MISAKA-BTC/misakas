@@ -130,6 +130,21 @@ impl PalwTirPublicClaimV1 {
     pub fn original_custody_v1(&self) -> &PalwTirPublicOriginalCustodyV1 {
         &self.custody
     }
+    /// **G14 R1/R7 owner capacity (Lead default 2026-10-15, PENDING USER REVIEW):** at most this many outside owner acquisitions
+    /// per ORIGINAL frame over its life. Excess owners are refused at Open, before any custodian duty exists.
+    pub const MAXIMUM_OWNERS_V1: u64 = PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1;
+    /// The custodian load this frame can impose, derived from the plan's per-owner acquisition capacity and the owner cap: every
+    /// liable custodian answers at most `owners × maximum_turns` demands of at most `maximum_unit_bytes` each. Nodes provision
+    /// for this bound; the fold never lets a further owner raise it.
+    pub fn custodian_load_bound_v1(&self) -> PalwTirPublicCustodianLoadV1 {
+        let owners = PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1;
+        let turns = owners.saturating_mul(self.plan.acquisition.maximum_turns);
+        PalwTirPublicCustodianLoadV1 {
+            owners,
+            demands_per_custodian: turns,
+            answer_bytes_per_custodian: turns.saturating_mul(self.plan.acquisition.maximum_unit_bytes),
+        }
+    }
     /// **G14 R4: what one public conviction filing burns** — the frame's own native terminal envelope rent (the price of one
     /// bounded adjudication), at least one sompi so the filing is always a declared, burned payment. Derived from the frozen
     /// original plan, never from the filer's carrier; a refused filing burns it all the same (no free adjudication CPU).
@@ -255,6 +270,20 @@ impl PalwTirPublicClaimV1 {
     }
 }
 
+/// **K_owner — outside owners per ORIGINAL TIR frame** (Lead default 2026-10-15, pending user review). Each owner pays its own
+/// rent and deposit (never the producer's prepaid pool); the cap bounds what the frame's liable custodians must answer. Known
+/// residual: a colluder can pre-empt the slots by paying K owners' rent and deposit; slot recycling for idle owners is a
+/// follow-up decision (recorded in the remaining-work document).
+pub const PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1: u64 = 8;
+
+/// The bound on what one liable custodian of a frame can be asked to answer (see [`PalwTirPublicClaimV1::custodian_load_bound_v1`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirPublicCustodianLoadV1 {
+    pub owners: u64,
+    pub demands_per_custodian: u64,
+    pub answer_bytes_per_custodian: u64,
+}
+
 /// **G14 R4: what one public bonded verifier reads to file against an ORIGINAL frame** — from the accepted state only (never
 /// the producer's capture or a Panel's word). `liable` is the literal set the fold refuses as filers and charges on a verdict:
 /// the producer and every credited exact Valid custodian; a drawn seat outside it files exactly as an outside bond does.
@@ -278,10 +307,13 @@ pub struct PalwTirPublicFrameViewV1 {
     pub maximum_witness_bytes: u64,
     /// The original selection rule is plain greedy (the only one the frame's selection door judges).
     pub greedy_selection: bool,
+    /// Outside owners already opened on the frame, and the custodian load bound (K_owner).
+    pub owners_opened: u64,
+    pub custodian_load: PalwTirPublicCustodianLoadV1,
     pub header: PalwPublicTirBindingHeaderV1,
 }
 impl PalwTirPublicClaimV1 {
-    pub fn view_v1(&self) -> PalwTirPublicFrameViewV1 {
+    pub fn view_v1(&self, owners_opened: u64) -> PalwTirPublicFrameViewV1 {
         let terms = self.plan.terms;
         PalwTirPublicFrameViewV1 {
             claim: self.plan.original_claim,
@@ -297,13 +329,15 @@ impl PalwTirPublicClaimV1 {
             conviction_rent_sompi: self.conviction_rent_v1(),
             maximum_witness_bytes: self.plan.terminal.maximum_witness_bytes,
             greedy_selection: self.original.job.decode.is_none() && self.original.job.tail.is_none(),
+            owners_opened,
+            custodian_load: self.custodian_load_bound_v1(),
             header: self.header.clone(),
         }
     }
 }
 /// The accepted-state reader behind the consensus API's `palw_tir_public_frame_v1`.
 pub fn palw_tir_public_frame_view_v1(state: &crate::palw_state_v2::PalwChainStateV2, claim: Hash64) -> Option<PalwTirPublicFrameViewV1> {
-    palw_tir_public_claim_v1(state, claim).map(PalwTirPublicClaimV1::view_v1)
+    palw_tir_public_claim_v1(state, claim).map(|frame| frame.view_v1(state.staged_tir_owner_count_v1(&claim)))
 }
 
 /// No fallback to ClaimBundle: callers must distinguish the new original

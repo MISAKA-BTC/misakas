@@ -196,6 +196,12 @@ mod tests {
             conviction_rent_sompi: 777,
             maximum_witness_bytes: 1 << 20,
             greedy_selection: true,
+            owners_opened: 0,
+            custodian_load: kaspa_consensus_core::palw_tir_public_claim_v1::PalwTirPublicCustodianLoadV1 {
+                owners: 8,
+                demands_per_custodian: 64,
+                answer_bytes_per_custodian: 1 << 20,
+            },
             header,
         }
     }
