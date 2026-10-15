@@ -653,6 +653,25 @@ pub fn write_float_public_sidecar_v1(
     Ok(())
 }
 
+/// Capture readers bound one read (a node's file reader: 16 KiB); larger spans are read in
+/// such chunks into one bounded buffer.
+const SIDECAR_READ_CHUNK_V1: u32 = 16_384;
+fn read_span_v1(source: &dyn crate::palw_backend::PalwOriginalCaptureReaderV1, offset: u64, length: u32) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(length as usize).map_err(|_| "Float32 sidecar read allocation refused")?;
+    let mut done = 0u32;
+    while done < length {
+        let part = (length - done).min(SIDECAR_READ_CHUNK_V1);
+        let bytes = source.read_v1(offset.checked_add(u64::from(done)).ok_or("Float32 sidecar offset overflow")?, part)?;
+        if bytes.len() != part as usize {
+            return Err("Float32 sidecar read returned a short span".into());
+        }
+        out.extend_from_slice(&bytes);
+        done += part;
+    }
+    Ok(out)
+}
+
 /// Bounded reader over the generic sidecar (no vocabulary-sized buffer beyond one part).
 pub struct PalwFloatPublicSidecarReaderV1 {
     source: std::sync::Arc<dyn crate::palw_backend::PalwOriginalCaptureReaderV1>,
@@ -669,7 +688,8 @@ impl PalwFloatPublicSidecarReaderV1 {
         if length > SIDECAR_HEADER_MAX_V1 {
             return Err("Float32 sidecar header exceeds its bound".into());
         }
-        let header: PalwFloatPublicSidecarHeaderV1 = borsh::from_slice(&source.read_v1(12, length)?).map_err(|e| e.to_string())?;
+        let header: PalwFloatPublicSidecarHeaderV1 =
+            borsh::from_slice(&read_span_v1(source.as_ref(), 12, length)?).map_err(|e| e.to_string())?;
         let decode = header.ids.generated_token_ids.len() as u64;
         let vocab = u64::from(header.ids.summary.vocab_size);
         let rows_offset = 12 + u64::from(length);
@@ -699,7 +719,7 @@ impl crate::palw_backend::PalwFloatPublicSourceReaderV1 for PalwFloatPublicSidec
                 }
                 let lanes = (vocab - offset).min(PALW_FLOAT_SOURCE_PART_LANES_V1);
                 let at = self.rows_offset + (u64::from(position) * u64::from(vocab) + u64::from(offset)) * 4;
-                Some(PalwFloatSourceActionV1::RowPart { offset, bytes: self.source.read_v1(at, lanes * 4)? })
+                Some(PalwFloatSourceActionV1::RowPart { offset, bytes: read_span_v1(self.source.as_ref(), at, lanes * 4)? })
             }
             PalwFloatSourceCursorV1::RowFinish => {
                 let position = position.ok_or("Float32 row finish before the accepted nomination")?;

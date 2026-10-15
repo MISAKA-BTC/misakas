@@ -792,6 +792,20 @@ impl PalwExecutionBackendV1 for Base0Backend {
         crate::flat_public_source::write_flat_public_source_v1(material, out)
     }
 
+    // Greedy Float32 Constraint source (behind `palw_staged_float_constraint_v1`): a Float32 run's
+    // retained material is the generic public sidecar; this integer family never writes one.
+    fn open_float_public_source_v1(
+        &self,
+        source: std::sync::Arc<dyn kaspa_consensus_core::palw_backend::PalwOriginalCaptureReaderV1>,
+        binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    ) -> Result<Box<dyn kaspa_consensus_core::palw_backend::PalwFloatPublicSourceReaderV1>, String> {
+        crate::float_public_source::open_float_public_source_v1(source, binding)
+    }
+
+    fn write_float_public_source_v1(&self, material: &[u8], out: &mut dyn std::io::Write) -> Result<bool, String> {
+        crate::float_public_source::write_float_public_source_v1(material, out)
+    }
+
     fn public_execution_binding_header_v1(&self,material:&[u8])->Result<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,String> {
         crate::flat_public_source::original_public_binding_header_v1(material)
     }

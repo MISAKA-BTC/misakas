@@ -551,11 +551,33 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this family has no prospective full-width selected source responder".into())
     }
 
-    /// **A TIR claim's selected tiled event** (Constraint source behind `palw_staged_tir_route_v1`):
-    /// the row/tile of the producer's own retained TIR capture (its executor's committed logits
-    /// rows) under the claim's admitted public header. No binding is produced. Only a backend that
-    /// executes TIR FP jobs and retains their logits rows answers (none in-node today: the TIR FP
-    /// execution backend is the RFC-0002 lane's).
+    /// **A TIR claim's selected tiled event** (Constraint source behind `palw_staged_tir_route_v1`).
+    /// Default `Err`: no in-node backend executes TIR FP jobs. RFC-0002's TIR executor implements it.
+    ///
+    /// **Interface contract** (the node's selected responder and the fold rely on every point):
+    /// * `material` is one retained payload of THIS claim, as the node stores it under
+    ///   `fp_retained_payload_paths(claim)`: the producer's own retained capture, or the copy a
+    ///   Panel custodian received. The responder tries every retained path in turn, so the
+    ///   implementor parses only its own capture format and returns `Err` for anything else, never
+    ///   a guess.
+    /// * `header` is the claim's admitted TIR public header, read from native state. The
+    ///   implementor checks that `material` is this header's run: same `job_context`, same
+    ///   `full_logits_trace_root`. Otherwise it returns `Err`.
+    /// * `row` is the decode-call row `r` (`0 <= r < exact_decode_tokens`). Row `r` is the logits
+    ///   row that selected generated id `r`: the last prefill position for `r = 0`, decode step
+    ///   `r - 1` after that. `tile` indexes `PALW_LOGITS_TILE_LANES` (4,096) lane tiles of that row.
+    /// * Rows are the class's committed `i32` logits, the TIR program's `post` node output, one per
+    ///   decode call, with the full registered vocabulary per row. They are tiled under the claim's
+    ///   context hash: `tiled_logits_row_root_v1` / `tiled_logits_tile_leaf_v1`, rows tree over
+    ///   `exact_decode_tokens` rows, outer root `tiled_logits_trace_root_v1` == the header's
+    ///   `full_logits_trace_root`.
+    /// * The result must equal
+    ///   [`crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1::of_public_rows_view_v1`]
+    ///   `(view, rows, generated_ids, (row, tile), maximum_leaves)`, which is the reference
+    ///   construction. It must pass `authenticate_view_v1` against the view derived from `header`
+    ///   and the registered record. `generated_token_ids` are all of the run's ids.
+    /// * Read-only: no execution, no network. An `Err` means "cannot answer", never a verdict.
+    ///   An unanswered duty is collected by the native fold.
     fn disclose_tir_selected_event_v1(
         &self,
         _material: &[u8],
@@ -567,9 +589,24 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this family has no TIR capture with committed logits rows".into())
     }
 
-    /// **An outside verifier's own TIR replay** of a constrained FP job (the beat nominee's
-    /// source): the generated ids the verifier's own registered program selects under the claim's
-    /// admitted header. Only a backend that executes TIR FP jobs answers (none in-node today).
+    /// **An outside verifier's own TIR replay** of a constrained FP job: the beat nominee's source.
+    /// Default `Err`: no in-node backend executes TIR FP jobs. RFC-0002's TIR executor implements it.
+    ///
+    /// **Interface contract:**
+    /// * Run the TIR program the chain registered for `header.job_context.shape_profile_id`, from
+    ///   the verifier's OWN registered artifact (never the producer's material), on
+    ///   `prompt_token_ids`. Check first that those ids are the job's (`prompt_tokens`,
+    ///   `prompt_token_ids_hash` and `max_context_tokens` against `job` and `header.job_context`);
+    ///   otherwise return `Err`.
+    /// * Select exactly `header.job_context.exact_decode_tokens` ids with the job's own decode
+    ///   rule: greedy for a constrained job, masked by the job's constraint, first-index ties.
+    ///   This is the rule the Constraint court applies to the committed logits.
+    /// * Return those ids. They are only a NOMINEE: the fraud filer compares them with the
+    ///   claim's authenticated ids to pick a position and a beating lane. The court decides from
+    ///   the producer's authenticated logits alone, so floating-point or kernel nondeterminism
+    ///   here can cost the verifier a wasted demand but can never convict an honest producer.
+    /// * An `Err` means "no replay". The filer then nominates only ids the constraint forbids,
+    ///   which needs no logits.
     fn replay_tir_generated_ids_v1(
         &self,
         _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,

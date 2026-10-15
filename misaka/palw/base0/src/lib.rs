@@ -78,6 +78,7 @@ pub mod plan;
 pub mod prefix_cache;
 pub mod produce;
 pub mod flat_public_source;
+pub mod float_public_source;
 pub mod qwen25_a16_backend;
 pub mod qwen36;
 pub mod qwen36_backend;
