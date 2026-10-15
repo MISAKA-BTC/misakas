@@ -1345,13 +1345,15 @@ fn every_paid_family_continues_and_convicts_after_actual_sibling_da_default() {
         ]),
     });
     public_moves.push(movement.clone());
-    for action in std::iter::once(PrefixAction::FinishTile).chain(tiles.iter().skip(1).flat_map(|tile| {
+    // The authenticated public answer is consumed as the whole Begin/Part/Finish of tile 0;
+    // the owner continues with the next tile, never a second Finish of the consumed one.
+    for action in tiles.iter().skip(1).flat_map(|tile| {
         [
             PrefixAction::BeginTile { opening: tile.opening.clone() },
             PrefixAction::TilePart { offset: 0, bytes: tile.preimage.values_le.clone() },
             PrefixAction::FinishTile,
         ]
-    })) {
+    }) {
         movement.action = Action::Prefix(action);
         public_moves.push(movement.clone());
     }

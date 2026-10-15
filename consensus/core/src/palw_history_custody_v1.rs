@@ -251,7 +251,6 @@ impl PalwHistoryCustodyPledgeV1 {
             || self.claim == Hash64::default()
             || self.execution_root == Hash64::default()
             || self.job_identity == Hash64::default()
-            || self.cu_ruleset_id == Hash64::default()
             || self.resource_plan_id == Hash64::default()
             || self.maximum_records == 0
             || self.maximum_custodians == 0
