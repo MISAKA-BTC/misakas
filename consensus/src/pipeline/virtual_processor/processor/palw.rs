@@ -6307,6 +6307,12 @@ impl VirtualStateProcessor {
             misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 => Some(match bytes.get(2).copied() {
                 Some(0..=18) => self.palw_kernel_inner_fence_at(PalwKernelInnerFenceV1::StageExecutionV14, daa),
                 Some(19..=40) => self.palw_stage_execution_v28.as_ref().is_some_and(|f| active(f.activation)) && final27(),
+                // Owning39 mining needs its own fence besides native39 (RFC-0002 §II.14, dormant).
+                Some(73..=79) => {
+                    self.palw_native_mining_v39.as_ref().is_some_and(|f| active(f.activation))
+                        && self.palw_native_execution_v39.as_ref().is_some_and(|f| active(f.activation))
+                        && final27()
+                }
                 Some(41..=79) => self.palw_native_execution_v39.as_ref().is_some_and(|f| active(f.activation)) && final27(),
                 _ => false,
             }),
@@ -6319,6 +6325,15 @@ impl VirtualStateProcessor {
     /// know it). The predicate is exactly the one that leaves `PalwKernelRouteExtrasV1::native_final`
     /// `None` (Final27 active AND the OPV fence active), and the core fold returns before any state read
     /// or write when that field is `None`, so skipping the signature here can never apply an unsigned body.
+    /// Owning39 mining's prerequisite lanes at `daa`: native39 AND Final27 AND the OPV fence (the same conjunction that leaves
+    /// `PalwKernelRouteExtrasV1::native_execution39` `Some`). Every preset: `false`.
+    pub(super) fn palw_native_mining_v39_lanes_at(&self, daa: u64) -> bool {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        self.palw_native_execution_v39.as_ref().is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa))
+            && self.palw_native_final_v27.as_ref().is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa))
+            && self.palw_kernel_opv_at(daa)
+    }
+
     pub(super) fn palw_native_action_unjudged_at_v1(&self, bytes: &[u8], daa: u64) -> bool {
         use kaspa_consensus_core::config::params::ForkActivation;
         let final27 = self
@@ -6348,6 +6363,12 @@ impl VirtualStateProcessor {
                         .palw_native_execution_v39
                         .as_ref()
                         .is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa))
+                    // Mining actions 73–79 also ride unjudged below their own fence (mirrors the fold's early return).
+                    || matches!(bytes.get(2), Some(73..=79))
+                        && !self
+                            .palw_native_mining_v39
+                            .as_ref()
+                            .is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa))
             }
             _ => false,
         }
@@ -8225,6 +8246,16 @@ impl VirtualStateProcessor {
                             })
                     })
                     .cloned(),
+                // Owning39 mining: its own fence AND native39 AND Final27 AND OPV (every preset: None).
+                native_mining39: self
+                    .palw_native_mining_v39
+                    .as_ref()
+                    .filter(|f| {
+                        f.activation != kaspa_consensus_core::config::params::ForkActivation::never()
+                            && f.activation.is_active(daa_score)
+                            && self.palw_native_mining_v39_lanes_at(daa_score)
+                    })
+                    .cloned(),
                 stage_execution: self
                     .palw_stage_execution_v14
                     .as_ref()
@@ -9737,6 +9768,44 @@ impl VirtualStateProcessor {
         use kaspa_consensus_core::palw_freeprompt_v3::{PalwReceiptSpendEnvelopeV3, fp_draw_slot_v3};
         if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3 {
             return Ok(None);
+        }
+        // **RFC-0002 §II.14: the owning39 native receipt block (`PNR9`).** Valid only past `palw_native_mining_v39` with its lanes;
+        // the full stateful gate (live certified receipt, unspent quantum, the producer's key and signature, the strict budget draw
+        // under this block's carve and the 0.51 export) runs here against the PARENT state, and again in the fold. The shared
+        // receipt-spend view it returns names the receipt as `claim_id` and carries fold version 39, so the B-5 dedup, the
+        // entitlement and the coinbase's worker share treat it exactly as any receipt block.
+        if kaspa_consensus_core::palw_native_receipt_v39::palw_native_receipt_carriage_is_v39(&header.palw_commitment) {
+            use kaspa_consensus_core::config::params::ForkActivation;
+            if !self
+                .palw_native_mining_v39
+                .as_ref()
+                .is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(header.daa_score))
+                || !self.palw_native_mining_v39_lanes_at(header.daa_score)
+            {
+                return Err("a PNR9 native receipt block below palw_native_mining_v39".to_string());
+            }
+            let envelope =
+                kaspa_consensus_core::palw_native_receipt_v39::PalwNativeReceiptSpendEnvelopeV39::decode(&header.palw_commitment)?;
+            let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                self.network_id_bytes.as_slice(),
+                Some(self.genesis.hash),
+            );
+            let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+            let carve =
+                state_params.worker_carve_at(point.subsidy, self.palw_escrow_for_carrier_at(point.block, point.daa_score, point.daa_score));
+            kaspa_consensus_core::palw_native_receipt_v39::check_native_receipt_spend_admission_v39(
+                state,
+                state_params,
+                point,
+                network_domain,
+                pre_pow_hash,
+                header.timestamp,
+                header.nonce,
+                carve,
+                &envelope,
+                |key, message, sig, context| kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
+            )?;
+            return Ok(Some(envelope.to_fold_envelope()));
         }
         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
             return Err("a receipt-lane block on a network with no free-prompt bundle".to_string());

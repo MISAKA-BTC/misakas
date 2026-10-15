@@ -2428,7 +2428,19 @@ impl TransitionBuilder<'_> {
             ctx,
             producer,
             None,
-            PalwBudgetAskV1 { block_units: 0, reward_sompi: 0, final_weight: 0, liability_sompi: original.reserve as u128 },
+            PalwBudgetAskV1 {
+                block_units: 0,
+                reward_sompi: 0,
+                final_weight: 0,
+                // ADR-0176 bond formula v2 (user decision 2026-10-15): the producer's liability for a Panel-free native funded
+                // job, never below the original collectible reserve the producer signed.
+                liability_sompi: self.bond_formula_producer_liability_v2(
+                    ctx,
+                    crate::palw_bond_formula_v2::PalwClaimTypeV2::NativeFunded,
+                    original.reward,
+                    original.reserve as u128,
+                ),
+            },
             PalwBudgetOriginV1::KernelRoute,
             0,
         )
@@ -2436,4 +2448,122 @@ impl TransitionBuilder<'_> {
 }
 pub(super) fn native_job_budget_id_v39(job: &misaka_palw_kernel::hash::Digest) -> Hash64 {
     Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"misaka-palw/native/original-owning-job-budget/v39", job))
+}
+
+// ---- Owning39 mining receipts on the shared bond budget (ADR-0176 Q/B/R/F, ADR-0177 allocation, PESG §6 0.51 export) ----
+//
+// A mining claim is a receipt-type claim (origin `FreePrompt`, the FP receipt lane's accounting): at acceptance it reserves
+// B = quanta block units, R = quanta x the acceptance block's worker carve, F = quanta x weight-per-quantum and the bond formula
+// v2 liability over its exposure, against the producer's common caps and the model's ADR-0177 allocation (`model = native model
+// line`, so P_m clips and the per-model block opportunity binds; the tier coefficient c_m is the allocation's, applied once there,
+// never here). Each receipt block then draws ONE block unit and its own carve strictly and its weight clipped. The original
+// escrow credit of the components' jobs (origin KernelRoute, B = F = 0) is a different row and is never a receipt.
+impl PalwChainStateV2 {
+    /// The native receipt block's strict draw, asked against any state: a budget is REQUIRED (no unbudgeted native receipt), one
+    /// block unit and `carve` must remain, and the exports so far plus `carve` stay within `floor(0.51 x liability)` while the
+    /// liability holds.
+    pub fn bond_budget_native_receipt_fits_v39(&self, params: &PalwStateParamsV2, budget_id: &Hash64, now_daa: u64, carve: u64) -> bool {
+        let Some(mirror) = params.bond_budget().filter(|m| m.active_at(now_daa)) else { return false };
+        let Some(budget) = self.bond_budget.as_ref() else { return false };
+        let Some(row) = budget.claim_row(budget_id).filter(|r| r.open && r.origin == PalwBudgetOriginV1::FreePrompt) else {
+            return false;
+        };
+        let blocks = budget.remaining(budget_id, PalwBudgetDimV1::BlockUnits).unwrap_or(0);
+        let reward = budget.remaining(budget_id, PalwBudgetDimV1::Reward).unwrap_or(0);
+        let cap = palw_bond_budget_export_cap_v1(&mirror.policy, row.liability_sompi) as u128;
+        blocks >= PALW_BUDGET_BLOCK_UNIT_V1 as u128
+            && reward >= carve as u128
+            && (row.consumed.reward_sompi as u128).saturating_add(carve as u128) <= cap
+    }
+}
+impl TransitionBuilder<'_> {
+    /// Plan a native mining claim's reservation. Refused (never unbudgeted) below the budget fence.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn plan_native_mining_budget_v39(
+        &self,
+        ctx: &PalwBlockContextV2,
+        producer: PalwBondKeyV2,
+        model: Hash64,
+        quanta: u64,
+        weight_per_quantum: u128,
+        exposure_sompi: u128,
+    ) -> Result<PalwBudgetPlanV1, PalwStateV2Error> {
+        let bad = |why: &str| PalwStateV2Error::BondBudgetRefused(why.into());
+        if self.bond_budget_mirror_at(ctx.daa_score).is_none() {
+            return Err(bad("native39 mining requires the ADR-0176 bond budget in force"));
+        }
+        let carve = self.params.worker_carve_at(ctx.subsidy, self.extras.escrow_carve);
+        let block_units = PALW_BUDGET_BLOCK_UNIT_V1.checked_mul(quanta).ok_or_else(|| bad("native39 block units overflow"))?;
+        let reward_sompi = carve.checked_mul(quanta).ok_or_else(|| bad("native39 reward ask overflow"))?;
+        let final_weight = weight_per_quantum.checked_mul(quanta as u128).ok_or_else(|| bad("native39 weight ask overflow"))?;
+        let liability_sompi = self.bond_formula_native_mining_liability_v39(ctx, reward_sompi, final_weight, block_units, exposure_sompi);
+        self.plan_bond_budget_v1(
+            ctx,
+            producer,
+            Some(model),
+            PalwBudgetAskV1 { block_units, reward_sompi, final_weight, liability_sompi },
+            PalwBudgetOriginV1::FreePrompt,
+            0,
+        )?
+        .ok_or_else(|| bad("native39 mining reservation could not be planned"))
+    }
+    /// ADR-0176 bond formula v2 over the claim's whole ask and its slash exposure (type `NativeFunded`, the Panel-free mode);
+    /// below the formula's fence the exposure itself.
+    fn bond_formula_native_mining_liability_v39(
+        &self,
+        ctx: &PalwBlockContextV2,
+        reward: u64,
+        final_weight: u128,
+        block_units: u64,
+        exposure: u128,
+    ) -> u128 {
+        use crate::palw_bond_formula_v2::{PalwBondFormulaInputV2, PalwClaimTypeV2, palw_bond_formula_split_v2};
+        if !self.params.bond_formula_v2_applies_at(ctx.daa_score) {
+            return exposure;
+        }
+        let (Some(formula), Some(budget)) = (self.params.bond_formula_v2(), self.params.bond_budget()) else { return exposure };
+        let input = PalwBondFormulaInputV2 {
+            claim_type: PalwClaimTypeV2::NativeFunded,
+            accepted_daa: ctx.daa_score,
+            reward_ask_sompi: reward,
+            final_weight_ask: final_weight,
+            block_units_ask: block_units,
+            pwu_exposure_sompi: exposure,
+            reduction_allowed: false,
+        };
+        palw_bond_formula_split_v2(&formula.policy, &budget.policy, &input).map_or(u128::MAX, |split| split.total().max(exposure))
+    }
+    /// One receipt block's draw: strict B and R (the coinbase pays this block's worker share whole), the 0.51 export cap, and F
+    /// clipped. Returns the weight to credit. Closes the row with the receipt's last quantum.
+    pub(super) fn bond_budget_native_receipt_spend_v39(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        budget_id: &Hash64,
+        bond: PalwBondKeyV2,
+        per_quantum: u128,
+        last_quantum: bool,
+    ) -> Result<u128, PalwStateV2Error> {
+        let carve = self.params.worker_carve_at(ctx.subsidy, self.extras.escrow_carve);
+        if !self.state.bond_budget_native_receipt_fits_v39(self.params, budget_id, ctx.daa_score, carve) {
+            return Err(PalwStateV2Error::BondBudgetExhausted {
+                bond,
+                why: "a native receipt block exceeds its reservation or the 0.51 export of its liability (PESG §6)".to_string(),
+            });
+        }
+        let hold_until = self.bond_budget_liability_hold_until_v1(ctx.daa_score);
+        let granted = self
+            .bond_budget_op(|budget, _, j| {
+                let blocks = budget.consume(budget_id, PalwBudgetDimV1::BlockUnits, PALW_BUDGET_BLOCK_UNIT_V1 as u128, true, j);
+                let reward = budget.consume(budget_id, PalwBudgetDimV1::Reward, carve as u128, true, j);
+                debug_assert!(matches!((blocks, reward), (Some(Ok(_)), Some(Ok(_)))), "checked whole above");
+                let weight =
+                    budget.consume(budget_id, PalwBudgetDimV1::FinalWeight, per_quantum, false, j).and_then(Result::ok).unwrap_or(0);
+                if last_quantum {
+                    budget.close_at(budget_id, Some(hold_until), j);
+                }
+                weight
+            })
+            .ok_or(PalwStateV2Error::BondBudgetRefused("native39 receipt budget engine absent".into()))?;
+        Ok(granted)
+    }
 }

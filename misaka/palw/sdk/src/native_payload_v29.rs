@@ -1489,6 +1489,78 @@ pub fn prepare_terminal_v39(job: Digest, refund: bool) -> Result<PreparedNativeP
     body.extend_from_slice(&job);
     stage39_raw(51, body)
 }
+// ---- Owning39 mining (stage actions 73–77/79) and the PNR9 receipt-block carriage ----
+// Frames only: the dormant fold re-derives everything (economic class, work, price, budget, Gate C) from original rows.
+// There is no model-level approval action (user decision 2026-10-15, round 5).
+pub fn prepare_mining_register_v39(template_master: Digest, sequence: u64, share_permille: u16) -> Result<PreparedNativePayloadV29, String> {
+    use kaspa_consensus_core::palw_native_mining_v39::*;
+    let w = NativeMiningModelWireV39 { version: 39, template_master, sequence, share_permille };
+    let raw = borsh::to_vec(&w).map_err(|e| e.to_string())?;
+    NativeMiningModelWireV39::from_bytes(&raw)?;
+    stage39_raw(REGISTER_MODEL_ACTION_V39, raw)
+}
+/// `kind`: 0 seat (action 74), 1 seat exit / 2 model retirement (action 76).
+pub fn prepare_mining_seat_v39(model: Digest, kind: u8) -> Result<PreparedNativePayloadV29, String> {
+    use kaspa_consensus_core::palw_native_mining_v39::*;
+    let w = NativeMiningSeatWireV39 { version: 39, model, kind };
+    let raw = borsh::to_vec(&w).map_err(|e| e.to_string())?;
+    NativeMiningSeatWireV39::from_bytes(&raw)?;
+    stage39_raw(if kind == 0 { MODEL_SEAT_ACTION_V39 } else { MODEL_RETIRE_ACTION_V39 }, raw)
+}
+pub fn prepare_mining_commit_v39(model: Digest, master: Digest, sequence: u64) -> Result<PreparedNativePayloadV29, String> {
+    use kaspa_consensus_core::palw_native_mining_v39::*;
+    let w = NativeMiningCommitWireV39 { version: 39, model, master, sequence };
+    let raw = borsh::to_vec(&w).map_err(|e| e.to_string())?;
+    NativeMiningCommitWireV39::from_bytes(&raw)?;
+    stage39_raw(MINING_COMMIT_ACTION_V39, raw)
+}
+/// Action 77 (`kind 0`, a claim) or 79 (`kind 0` claim / `kind 1` receipt).
+pub fn prepare_mining_subject_v39(action: u8, kind: u8, id: Digest) -> Result<PreparedNativePayloadV29, String> {
+    use kaspa_consensus_core::palw_native_mining_v39::*;
+    if !matches!(action, ISSUE_RECEIPT_ACTION_V39 | COLLECT_MINING_ACTION_V39) {
+        return Err("mining39 subject frames are actions 77 and 79".into());
+    }
+    let w = NativeMiningSubjectWireV39 { version: 39, kind, id };
+    let raw = borsh::to_vec(&w).map_err(|e| e.to_string())?;
+    NativeMiningSubjectWireV39::from_bytes(&raw)?;
+    stage39_raw(action, raw)
+}
+/// The unsigned PNR9 spend for one header position and the exact message the
+/// receipt producer's ML-DSA-87 key signs (context
+/// `PALW_NATIVE_RECEIPT_MLDSA87_CONTEXT_V39`). The miner signs; no key is held here.
+#[allow(clippy::too_many_arguments)]
+pub fn native_receipt_spend_unsigned_v39(
+    network_domain: kaspa_consensus_core::Hash64,
+    pre_pow_hash: kaspa_consensus_core::Hash64,
+    timestamp: u64,
+    nonce: u64,
+    receipt: kaspa_consensus_core::Hash64,
+    quantum_index: u32,
+    producer_bond: kaspa_consensus_core::tx::TransactionOutpoint,
+    producer_pubkey: Vec<u8>,
+) -> (kaspa_consensus_core::palw_native_receipt_v39::PalwNativeReceiptSpendV39, kaspa_consensus_core::Hash64) {
+    use kaspa_consensus_core::palw_native_receipt_v39::*;
+    let spend = PalwNativeReceiptSpendV39 {
+        version: 39,
+        network_domain,
+        challenge: native_receipt_spend_challenge_v39(network_domain, pre_pow_hash, timestamp, nonce, receipt, quantum_index, &producer_bond),
+        receipt,
+        quantum_index,
+        producer_bond,
+        producer_pubkey,
+    };
+    let message = native_receipt_spend_id_v39(&spend);
+    (spend, message)
+}
+pub fn encode_native_receipt_carriage_v39(
+    spend: kaspa_consensus_core::palw_native_receipt_v39::PalwNativeReceiptSpendV39,
+    signature: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    use kaspa_consensus_core::palw_native_receipt_v39::*;
+    let bytes = PalwNativeReceiptSpendEnvelopeV39 { spend, signature }.encode();
+    PalwNativeReceiptSpendEnvelopeV39::decode(&bytes)?;
+    Ok(bytes)
+}
 /// Collection53 of a settled job past its complete original retention. The
 /// fold decides eligibility from original rows; this frame asserts nothing.
 pub fn prepare_collect_v39(job: Digest) -> Result<PreparedNativePayloadV29, String> {
