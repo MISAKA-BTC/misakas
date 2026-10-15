@@ -952,6 +952,10 @@ pub mod palw_cell_coverage_v1;
 /// R6-CELL round 4 (2026-10-15): the dormant `palw_cell_coverage_closure_v1` — an uncoverable legacy class (unknown map, hybrid
 /// v1/v2 recurrence, solo recurrence map, multi-router, Kimi router) refused at registration / the claim gate, convicted in court.
 pub mod palw_cell_coverage_closure_v1;
+/// RFC-0016 (2026-10-15, V+ adopted as design; values pending measurement): pre-issued per-model block rights, elastic Final
+/// capacity, the pre-lottery admission quote and the outcome-first model report — behind the dormant fences
+/// `palw_model_block_rights_v1` and `palw_elastic_final_capacity_v1` (refused when armed until measured values are pinned).
+pub mod palw_rfc0016_v1;
 
 pub mod palw_material_capacity_v1;
 

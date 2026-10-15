@@ -177,6 +177,7 @@ impl PalwStateParamsV2 {
             public_evidence_reward_from_daa: None,
             claim_hard_deadline_v1: None,
             cell_coverage_closure_from_daa: None,
+            rfc0016_v1: None,
         })
     }
 

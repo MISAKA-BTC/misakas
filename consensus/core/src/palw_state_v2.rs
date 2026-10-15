@@ -194,6 +194,14 @@ pub use palw_legacy_public_filer_fold_v1::{
 // 140), the per-block clock and the reservation / consumption hooks. A child module for the same reason as the others.
 #[path = "palw_bond_budget_fold_v1.rs"]
 mod palw_bond_budget_fold_v1;
+// RFC-0016 (dormant): V+ block rights and the elastic Final capacity in the fold — a child module for the same reason (it reads the
+// epoch counters, the readiness predicate and the panel demand terms the fold reads).
+#[path = "palw_rfc0016_fold_v1.rs"]
+mod palw_rfc0016_fold_v1;
+pub use palw_rfc0016_fold_v1::{
+    palw_rfc0016_model_of_v1, palw_rfc0016_model_report_v1, palw_rfc0016_quote_v1, palw_rfc0016_rights_consumed_now_v1,
+    palw_rfc0016_rights_epoch_v1,
+};
 // RFC-0001 §2.10 (ADR-0163): the adapter class listing's fold arm — a child module for the same reason.
 #[path = "palw_adapter_class_fold_v1.rs"]
 mod palw_adapter_class_fold_v1;
@@ -1895,6 +1903,10 @@ pub struct PalwStateParamsV2 {
     /// and the court close read it). `None` on every shipped preset, and validation refuses every armed one.
     #[borsh(skip)]
     cell_coverage_closure_from_daa: Option<u64>,
+    /// **RFC-0016: `Params::palw_model_block_rights_v1` and `palw_elastic_final_capacity_v1`, mirrored by `Params::sync_palw_rfc0016_v1`**
+    /// (`crate::palw_rfc0016_v1::PalwRfc0016MirrorV1`). `None` on every shipped preset; validation refuses either fence armed.
+    #[borsh(skip)]
+    pub(crate) rfc0016_v1: Option<crate::palw_rfc0016_v1::PalwRfc0016MirrorV1>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**

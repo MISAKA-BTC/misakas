@@ -621,6 +621,13 @@ impl Params {
         if self.palw_cell_coverage_closure_v1 == Some(ForkActivation::never()) {
             self.palw_cell_coverage_closure_v1 = None;
         }
+        // RFC-0016's two dormant fences, likewise.
+        if self.palw_model_block_rights_v1 == Some(ForkActivation::never()) {
+            self.palw_model_block_rights_v1 = None;
+        }
+        if self.palw_elastic_final_capacity_v1 == Some(ForkActivation::never()) {
+            self.palw_elastic_final_capacity_v1 = None;
+        }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
         }
@@ -1083,6 +1090,8 @@ impl Params {
             palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
+            palw_model_block_rights_v1,
+            palw_elastic_final_capacity_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -1396,6 +1405,8 @@ impl Params {
             ("palw_public_evidence_reward_v1", *palw_public_evidence_reward_v1),
             ("palw_claim_hard_deadline_v1", palw_claim_hard_deadline_v1.as_ref().map(|f| f.activation)),
             ("palw_cell_coverage_closure_v1", *palw_cell_coverage_closure_v1),
+            ("palw_model_block_rights_v1", *palw_model_block_rights_v1),
+            ("palw_elastic_final_capacity_v1", *palw_elastic_final_capacity_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -1843,6 +1854,15 @@ impl Params {
         // RFC-0006 R6-CELL round 4's coverage closure, NAMED likewise. Some-only.
         if let Some(at) = self.palw_cell_coverage_closure_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_cell_coverage_closure_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // RFC-0016's two dormant fences, NAMED likewise. Some-only.
+        if let Some(at) = self.palw_model_block_rights_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_model_block_rights_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_elastic_final_capacity_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_elastic_final_capacity_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, NAMED likewise.
@@ -2575,6 +2595,8 @@ impl Params {
             palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
+            palw_model_block_rights_v1,
+            palw_elastic_final_capacity_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -3463,6 +3485,13 @@ impl Params {
         if let Some(activation) = palw_cell_coverage_closure_v1.as_mut() {
             fork(activation, visit);
         }
+        // RFC-0016's two dormant fences. Some-only.
+        if let Some(activation) = palw_model_block_rights_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_elastic_final_capacity_v1.as_mut() {
+            fork(activation, visit);
+        }
         // palw_fp_prefix_inherit. Some-only.
         if let Some(activation) = palw_fp_prefix_inherit.as_mut() {
             fork(activation, visit);
@@ -3994,6 +4023,8 @@ impl Params {
             palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
+            palw_model_block_rights_v1,
+            palw_elastic_final_capacity_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -4986,6 +5017,15 @@ impl Params {
         // RFC-0006 R6-CELL round 4's coverage closure, Some-only for the same reason.
         if let Some(activation) = palw_cell_coverage_closure_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_cell_coverage_closure_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // RFC-0016's two dormant fences, Some-only for the same reason.
+        if let Some(activation) = palw_model_block_rights_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_model_block_rights_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_elastic_final_capacity_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_elastic_final_capacity_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, Some-only for the same reason.

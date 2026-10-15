@@ -967,6 +967,12 @@ impl PalwFoldReadV1<'_> {
             }
         };
         self.check_class_verify_admits_v1(class_id, now_daa, shape, false)?;
+        // **RFC-0016 V+ (`palw_model_block_rights_v1`, dormant)**: a model-class Attempt needs one of its model's pre-issued block
+        // rights. Asked here, so the producer's pre-check (`palw_class_admits_claim_v1`) answers it before the forward. `Ok` below
+        // the fence and for the floor class.
+        if incoming == PalwGatedClaimV1::Attempt {
+            self.rfc0016_rights_admit_v1(class_id, now_daa)?;
+        }
         // What the lifecycle let through without a row to read — the base class, and a class
         // without a row below the work target — has no room to check either.
         if *class_id == self.params.base_class_id() {
@@ -996,6 +1002,12 @@ impl PalwFoldReadV1<'_> {
             // every gated object in step 3 is refused rather than taking it (below). Step 4 then
             // asks only the lifecycle for it. The re-charges take effect for the next block.
             let exempt = audited && incoming == PalwGatedClaimV1::Attempt && self.room_exempt_class == Some(*class_id);
+            // **RFC-0016 elastic Final capacity (`palw_elastic_final_capacity_v1`, dormant)**: past it the per-verifier water-filled
+            // room (each verifier counted once, no cross-model subtraction; capacity 0 admits nothing; C7 concurrency derived from
+            // capacity) decides instead of the rate room and the static C7 cap below. `None` below the fence.
+            if !exempt && let Some(verdict) = self.rfc0016_elastic_room_v1(class_id, row, fold, now_daa, whole, incoming) {
+                return verdict;
+            }
             // **A class held to Final is held to its static cap past the fence too** (the review's
             // item 1, ADR-0152 T-2(b)): c_2M = 1 until ADR-0153. The rate room alone lets such a
             // class run as many claims as the panel's replay holds, which is exactly what the hold

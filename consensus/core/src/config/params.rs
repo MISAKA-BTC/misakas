@@ -3148,6 +3148,18 @@ pub struct Params {
     /// fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_cell_coverage_closure_v1`]) until its
     /// rule is verified.
     pub palw_cell_coverage_closure_v1: Option<ForkActivation>,
+    /// **palw_model_block_rights_v1** — RFC-0016 V+ ([`crate::palw_rfc0016_v1`]): past it a model-class Attempt is admitted only
+    /// when it consumes one of its model's pre-issued per-epoch block rights (`⌊P_m · N_exp⌋`, the entrant reserve deducted from
+    /// the fixed total; σ-capped mid-epoch reissue). **Dormant, with no activation height**: `None` on every preset and in no
+    /// flag-day list, hashed Some-only in both fingerprints, collapsed from `Some(never())`, refused when armed
+    /// ([`Self::validate_palw_model_block_rights_v1`]) until every RFC-0016 value has a pinned measured-value record.
+    /// Implemented dormant, NOT activated.
+    pub palw_model_block_rights_v1: Option<ForkActivation>,
+    /// **palw_elastic_final_capacity_v1** — RFC-0016 §10 ([`crate::palw_rfc0016_v1`]): past it a model class's verification
+    /// capacity is the per-verifier water-filled share of its ready verifiers (each verifier counted once, no cross-model
+    /// subtraction), capacity 0 admits nothing, and the long-window (C7) concurrency is derived from measured capacity.
+    /// **Dormant** exactly like [`Self::palw_model_block_rights_v1`] ([`Self::validate_palw_elastic_final_capacity_v1`]).
+    pub palw_elastic_final_capacity_v1: Option<ForkActivation>,
 
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
@@ -5999,6 +6011,8 @@ impl Params {
             palw_public_evidence_reward_v1: self.palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1: self.palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1: self.palw_cell_coverage_closure_v1,
+            palw_model_block_rights_v1: self.palw_model_block_rights_v1,
+            palw_elastic_final_capacity_v1: self.palw_elastic_final_capacity_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -7136,6 +7150,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
+    palw_model_block_rights_v1: None,
+    palw_elastic_final_capacity_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -7469,6 +7485,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
+    palw_model_block_rights_v1: None,
+    palw_elastic_final_capacity_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -7784,6 +7802,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
+    palw_model_block_rights_v1: None,
+    palw_elastic_final_capacity_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -12952,6 +12972,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_2026_10_12_ruling_fences_v1();
     // RFC-0006 R6-CELL round 4's coverage closure, likewise.
     params.sync_palw_cell_coverage_closure_v1();
+    // RFC-0016's two dormant fences (V+ block rights, elastic Final capacity), likewise.
+    params.sync_palw_rfc0016_v1();
     // RFC-0001 §2.10's adapter class listing, likewise.
     params.sync_palw_adapter_class_v1();
     // ADR-0096's decode constraint, likewise.
@@ -13265,6 +13287,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
+    palw_model_block_rights_v1: None,
+    palw_elastic_final_capacity_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
