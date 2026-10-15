@@ -264,11 +264,12 @@ Publication is the means by which other miners can join; equal capital is treate
   profit, below the individual caps.
 - Large-capital concentration, including adversarial capital, is accepted as residual risk. Inflating small capital
   (double counting, epoch-edge moves, key or claim splitting) stays forbidden.
-- **`p = 0` compute-skipping is a separate, unresolved safety gate.** The curve is never its evidence. Reports split "honest
+- **`p = 0` compute-skipping is a separate, unresolved safety gate.** The curve is never its evidence. **Amended 2026-10-14 (PRINCIPLES §0): no longer a gate — a residual risk bounded by the per-bond Block / Reward / Final Weight caps.** Reports split "honest
   verifiers function" from "every owner closes, p = 0".
 - Unchanged: Q/B/R/F individual caps, the total budget, distinct capital and the common hold. Block issuance, beacon, Final
   weight and fork choice are not scaled by bond aggregation.
 - The verification-attestation gate (ECON round 2) may continue as a dormant subsidy condition. It is not a p = 0 resolution.
+  **Amended 2026-10-14 (§3k):** the gate is kept and is one of the two ways closure becomes uneconomic: a model nobody else holds cannot be attested, so its model-epoch gets no allocation. The reason stays "verification was not attested", never "the model was not served".
 - **α = 1.5 is the interim policy value (user, 2026-10-10, on ECON round 3).** It passes 52/54 cells against the fixed 2× bar and
   never caps in the 4–30× range. Concentration is 1.4–1.8× reward share per capital share; after migration the top model has 55% of
   capital and 81% of rewards. The value is unapproved for production.
@@ -333,6 +334,16 @@ Recorded in [rfc-adr-review-resolution-2026-10-12.md](rfc-adr-review-resolution-
 - **Proposals (undecided):** Panel=1 interim mode with bounded replacement and positive-evidence Final; ADR-0176 rolling Bond/time ledger;
   Miner+Panel claim-bond aggregation with a 1.3–2× coefficient (its relation to the interim α = 1.5 curve, the Panel-bond inclusion and the
   block-opportunity scope are recorded as open, not silently adopted). Acceptance tests B01–M01 and C01–C18 are specified, not run.
+
+## 3k. Final goal: closure is uneconomic, fraud is bounded not eliminated (user, 2026-10-14)
+
+`docs/PRINCIPLES.md` §0. MISAKA's final goal is that keeping a model closed is economically worse; eliminating fraud is not a goal.
+- PESG conditions 2 (proven detection lower bound) and 4 (negative attack EV) are reported metrics, not activation gates. Counter-example A no longer blocks by itself; B and C still do.
+- If a model is shared with even one party who can stand up a correct Panel, its fraud is localized from claim evidence, convicted in objective court and slashed. That is required.
+- A closed model's `p = 0` is a residual risk bounded by ADR-0176's per-bond caps, the common hold and no payout before Final.
+- Acceptance adds ADR-0177's two-stage evaluation: (a) the model's total bond / allocation share / scale, closed vs shared; (b) whether the original owner's own share rises, including the self-funding alternative.
+- **Allocation finalized later the same day (user, 2026-10-14; RFC-0015 §8.5.5, ADR-0177):** α = 1.5 adopted (the μ proposal kept for comparison only); `S_m` = miner + claim-bound permissionless verifier capital, deduplicated; a 30-day-DAA average; `P_m = S̄^1.5 / Σ S̄^1.5` sets both each model's block opportunity and its coinbase budget, applied once; `W` = 7 days of DAA for the per-bond Q/B/R/F caps. **Miner rewards are never paid to the model registrant**: the registrant earns the 5 % ModelPosition trade fee (ADR-0114, past `palw_model_leg_v2`; it was 1 % under ADR-0087), and the 5 % reward buyback (ADR-0091) pays no leg. Required before activation: new models are not starved of block opportunity under α = 1.5; verifier participation, liability, hold and reward rules, including bond-without-checking, are defined.
+- Closure is made uneconomic in two ways, with no judgement of whether a model was shared: bond gathers on shared models, and the verification-attestation gate (§3f) pays no allocation to a model-epoch nobody could attest.
 
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 
