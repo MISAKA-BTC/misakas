@@ -4,7 +4,8 @@
 //! * **A-2 at the door:** below `palw_model_eligibility_v1` an exam commit (inner 74) is refused by the processor's inner-kind gate
 //!   — the mempool takes no carrier for it — and the chain runs on with no aux 131 row.
 //! * **Genesis classes are ungoverned past the fence** (user decision U-6): an armed node and an unarmed twin fed the same script of
-//!   heartbeats and attempts admit the same claims and commit the same PALW state roots block by block, and the registry read reports
+//!   heartbeats and attempts admit the same claims with the same phase, reservation, escrow and collateral (not the same state
+//!   roots: the fence is in the armed network's fingerprint, so its block hashes differ), and the registry read reports
 //!   every genesis class `not-governed` with the old rule's three rights.
 //! * **An exam of a genesis class is refused** through the node: no exam, no attempt, no fee.
 //!
@@ -85,13 +86,28 @@ async fn rfc17_genesis_classes_stay_ungoverned_past_the_fence_byte_for_byte() {
     for net in [&mut armed, &mut twin] {
         net.beat_to(FENCE + 2).await;
     }
+    // The two PALW state roots cannot be equal byte for byte: the armed network's fingerprint names the fence, so its blocks hash
+    // differently, and every row that binds a block differs with them (measured on this fixture: before any attempt the two
+    // preimages differ only in `last_point`'s block hash; after one, in the claim rows that carry their block's anchor). What U-6
+    // asks is that the fence changes nothing a genesis class is judged by: the same admission, phase, reservation and escrow, the
+    // same collateral on every card, and no eligibility row.
+    let collateral = |net: &Net| (0..net.chain.bonds.len()).map(|card| net.collateral(card)).collect::<Vec<_>>();
+    assert_eq!(collateral(&armed), collateral(&twin), "the same collateral before any attempt");
     for card in [0usize, 1, 0] {
         let (armed_ttpb, twin_ttpb) = (armed.ttpb(), twin.ttpb());
         let (_, a) = armed.chain.attempt(card, armed_ttpb, Vec::new(), &|_| true).await;
         let (_, b) = twin.chain.attempt(card, twin_ttpb, Vec::new(), &|_| true).await;
         let (sa, sb) = (armed.chain.tip_state().1, twin.chain.tip_state().1);
         assert_eq!(sa.claim(&a).is_some(), sb.claim(&b).is_some(), "card {card}: the same admission on both nodes");
-        assert_eq!(sa.state_root(), sb.state_root(), "card {card}: the same PALW state root (genesis classes are ungoverned)");
+        if let (Some(ra), Some(rb)) = (sa.claim(&a), sb.claim(&b)) {
+            assert_eq!(
+                (format!("{:?}", ra.phase), ra.reserved, ra.escrowed_reward),
+                (format!("{:?}", rb.phase), rb.reserved, rb.escrowed_reward),
+                "card {card}: the same phase, reservation and escrow (genesis classes are ungoverned)"
+            );
+        }
+        assert_eq!(collateral(&armed), collateral(&twin), "card {card}: the same collateral on every card");
+        assert_eq!(eligibility_rows(&armed), 0, "card {card}: no eligibility row");
     }
     let read = armed.chain.ctx.consensus.palw_model_registry_v1();
     if let Some(read) = read {

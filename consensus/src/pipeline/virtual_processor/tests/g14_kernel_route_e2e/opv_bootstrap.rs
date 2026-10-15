@@ -1989,6 +1989,12 @@ async fn paid_sources(
 
 #[tokio::test]
 async fn g14_opv_bootstrap_source_fee_prepaid_final_horizon_db_replay_and_two_reorgs_pay_once() {
+    // The body's future is larger than the 2 MiB test thread in a debug build (it aborted at its first poll once the
+    // ADR-0176/0177 and RFC-0016/0017 state joined the world): poll it from the heap.
+    Box::pin(source_fee_prepaid_final_horizon_db_replay_and_two_reorgs_pay_once_body()).await
+}
+
+async fn source_fee_prepaid_final_horizon_db_replay_and_two_reorgs_pay_once_body() {
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};
     use misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeOutcomeV1 as F;
     kaspa_core::log::try_init_logger("warn");
