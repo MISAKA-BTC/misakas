@@ -432,6 +432,33 @@ impl NativeRetainedV1<Store> {
             value.admit_prospective_kernel_v4(consent, material, bundle, max_bytes, total_capacity)
         })
     }
+    pub fn provider_admit_replacement_kernel_v4(
+        &self,
+        material: &crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
+        bundle: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        max_bytes: u64,
+        total_capacity: u64,
+    ) -> Result<Self, String> {
+        let consent = material.proposal.bounded_replacement_consent_v4().ok_or("replacement grant lacks bounded generation")?;
+        let mut requests = growth(material.manifest(), &[], &[], &[], Some(material.candidate_ledger()))?;
+        requests = add(requests, prospective_kernel_bundle_requests_v4(bundle)?);
+        requests = add(requests, prospective_kernel_bundle_auth_requests_v4(bundle, material.candidate_ledger())?);
+        self.try_mutate_owner_v1(requests, |value| {
+            value.admit_replacement_kernel_v4(consent, material, bundle, max_bytes, total_capacity)
+        })
+    }
+    pub fn provider_discard_expired_kernel_capsule_v4(
+        &self,
+        capsule: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+        witness: impl FnMut(&crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2) -> Result<bool, String>,
+    ) -> Result<(Self, bool), String> {
+        let mut expired = false;
+        let next = self.try_mutate_owner_v1(C::zero(), |value| {
+            expired = value.discard_expired_kernel_capsule_v4(capsule, witness)?;
+            Ok::<_, PalwMaterialCapacityErrorV1>(())
+        })?;
+        Ok((next, expired))
+    }
     pub fn recover_provider_verified_v1(
         encoded: &[u8],
         max_bytes: u64,

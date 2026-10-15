@@ -470,6 +470,9 @@ impl Params {
         if self.palw_shard_court == Some(ForkActivation::never()) {
             self.palw_shard_court = None;
         }
+        if self.palw_memory_routing_court_v2 == Some(ForkActivation::never()) {
+            self.palw_memory_routing_court_v2 = None;
+        }
         // ADR-0100 Decision 4, likewise.
         if self.palw_shard_licensing == Some(ForkActivation::never()) {
             self.palw_shard_licensing = None;
@@ -1075,6 +1078,7 @@ impl Params {
             palw_fp_derived_work,
             palw_fp_decode_constraint,
             palw_shard_court,
+            palw_memory_routing_court_v2,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -1400,6 +1404,7 @@ impl Params {
             ("palw_fp_derived_work", *palw_fp_derived_work),
             ("palw_fp_decode_constraint", *palw_fp_decode_constraint),
             ("palw_shard_court", *palw_shard_court),
+            ("palw_memory_routing_court_v2", *palw_memory_routing_court_v2),
             ("palw_shard_licensing", *palw_shard_licensing),
             ("palw_token_lift", *palw_token_lift),
             ("palw_kimi_k3", *palw_kimi_k3),
@@ -1668,6 +1673,10 @@ impl Params {
         // ADR-0099 Decision 5's fence, NAMED for the same reason: it changes what convicts.
         if let Some(court) = self.palw_shard_court {
             h.write(b"palw_shard_court");
+            h.write(court.daa_score().to_le_bytes());
+        }
+        if let Some(court) = self.palw_memory_routing_court_v2 {
+            h.write(b"palw_memory_routing_court_v2");
             h.write(court.daa_score().to_le_bytes());
         }
         // ADR-0100 Decision 4's fence, NAMED likewise: it changes what licenses a claim.
@@ -2640,6 +2649,7 @@ impl Params {
             palw_fp_derived_work,
             palw_fp_decode_constraint,
             palw_shard_court,
+            palw_memory_routing_court_v2,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -3434,6 +3444,9 @@ impl Params {
         if let Some(activation) = palw_shard_court.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_memory_routing_court_v2.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0100 Decision 4. Some-only, likewise.
         if let Some(activation) = palw_shard_licensing.as_mut() {
             fork(activation, visit);
@@ -4107,6 +4120,7 @@ impl Params {
             palw_fp_derived_work,
             palw_fp_decode_constraint,
             palw_shard_court,
+            palw_memory_routing_court_v2,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -4935,6 +4949,10 @@ impl Params {
         // to a build without the field.
         if let Some(activation) = palw_shard_court {
             h.write(b"palw_shard_court");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_memory_routing_court_v2 {
+            h.write(b"palw_memory_routing_court_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0100 Decision 4, Some-only for the same reason: every shipped preset leaves it

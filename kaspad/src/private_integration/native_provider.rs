@@ -977,6 +977,16 @@ fn request_nonce_v3(body: &[u8]) -> [u8; 32] {
 }
 
 impl NativeReadyExchangeV3 for AuthenticatedSocketExchangeV3 {
+    fn fetch_kernel_material_unit_classified_v4(
+        &self,
+        query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        authority: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>,
+        kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialFetchErrorV4,
+    > {
+        self.fetch_kernel_classified_v4(query, authority)
+    }
     fn fetch_kernel_material_unit_v4(
         &self,
         query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,

@@ -281,6 +281,14 @@ pub(super) fn replace_with_recovery_v2(
     ctx: &PalwBlockContextV2,
     r: &PalwMonetaryMaterialReplacementV1,
 ) -> Result<(), PalwStateV2Error> {
+    replace_generation_with_recovery_v4(builder, ctx, r, r.id())
+}
+pub(super) fn replace_generation_with_recovery_v4(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    r: &PalwMonetaryMaterialReplacementV1,
+    consent: Hash64,
+) -> Result<(), PalwStateV2Error> {
     let mut old = builder.state.monetary_material_row_v1(r.root).ok_or_else(|| refused("replacement has no enrolled root"))?;
     if r.root != r.enrollment.terms.root || r.previous != old.consent || old.sequence.checked_add(1) != Some(r.sequence) {
         return Err(refused("replacement replay or wrong consent generation"));
@@ -291,7 +299,7 @@ pub(super) fn replace_with_recovery_v2(
     old.providers.retain(|p| !p.charged || !p.fee_paid);
     old.providers.extend(providers(&r.enrollment, ctx.daa_score));
     old.sequence = r.sequence;
-    old.consent = r.id();
+    old.consent = consent;
     write(builder, r.root, Some(&old));
     fund(builder, ctx, &r.enrollment)?;
     Ok(())
@@ -331,10 +339,21 @@ fn action_inner_v4(
         | PalwMonetaryMaterialActionV1::HeldChallenge { root, .. }
         | PalwMonetaryMaterialActionV1::HeldAnswer { root, .. }
         | PalwMonetaryMaterialActionV1::Challenge { root, .. }
+        | PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { root, .. }
         | PalwMonetaryMaterialActionV1::Answer { root, .. }
         | PalwMonetaryMaterialActionV1::Release { root, .. } => *root,
     };
     let mut row = builder.state.monetary_material_row_v1(root).ok_or_else(|| refused("no enrolled monetary material root"))?;
+    if let PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { consent, provider, .. } = a {
+        if builder.params.material_release_recovery_at_v2(ctx.daa_score).is_none() {
+            return Err(refused("current generation challenge own fence dormant"));
+        }
+        let current = crate::palw_kernel_material_query_v4::material_provider_generation_v4(builder.state, root, *provider)
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+        if current != Some(*consent) {
+            return Err(refused("current challenge substitutes provider generation"));
+        }
+    }
     if !recovery_answer
         && builder.state.material_recovery_row_v2(root).is_some()
         && matches!(
@@ -551,7 +570,8 @@ fn action_inner_v4(
             builder.slash_bond(c.challenger, u128::from(crate::palw_provider_court_v1::PALW_PROVIDER_CHALLENGE_FEE_SOMPI_V1))?;
             c.answered = true;
         }
-        PalwMonetaryMaterialActionV1::Challenge { provider, dependency, stage, position, valid_until_daa, .. } => {
+        PalwMonetaryMaterialActionV1::Challenge { provider, dependency, stage, position, valid_until_daa, .. }
+        | PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { provider, dependency, stage, position, valid_until_daa, .. } => {
             let challenger = active(builder, signer)?;
             let source = active(builder, provider)?;
             let deadline =
@@ -581,6 +601,9 @@ fn action_inner_v4(
                 .ok_or_else(|| refused("material dependency is missing"))?;
             let scope = row.terms.material_manifest.as_ref().and_then(|m| m.scope(*dependency));
             let typed = scope.is_some_and(|s| s.codec == crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4);
+            if typed != matches!(a, PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { .. }) {
+                return Err(refused("complete typed scope requires explicitly bound current-generation challenge"));
+            }
             let required = if typed {
                 let ledger = builder
                     .state
