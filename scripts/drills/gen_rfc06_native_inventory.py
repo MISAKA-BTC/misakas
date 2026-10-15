@@ -108,7 +108,9 @@ queue=['crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMate
        'crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1','crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1',
        # RFC-0018 (2026-10-15): the SecurityCertified rows of kernel route aux 136.
        'crate::palw_security_certification_v1::PalwClaimCertificationRowV1','crate::palw_security_certification_v1::PalwCertificationClassRowV1',
-       'crate::palw_security_certification_v1::PalwCertificationNetworkRowV1']; visited=set(); generated=[]; unresolved=[]
+       'crate::palw_security_certification_v1::PalwCertificationNetworkRowV1',
+       # RFC-0006 consumer v2 (2026-10-15): the router binding rows of kernel route aux 139.
+       'crate::palw_router_binding_v2::PalwRouterBindingRowV2']; visited=set(); generated=[]; unresolved=[]
 
 # Resolve dependency types; concrete names, aliases/primitive containers are left
 # to Rust's existing type system, so there is no byte-size inference from codec.

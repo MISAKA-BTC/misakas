@@ -7254,6 +7254,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ModelSeed { .. } => "ModelSeed",
         O::ShardCourtAccused { .. } => "ShardCourtAccused",
         O::GdnStepAccusedV2 { .. } => "GdnStepAccusedV2",
+        O::MemoryRoutingV2 { .. } => "MemoryRoutingV2",
         O::ClassShardPlanDeclared { .. } => "ClassShardPlanDeclared",
         O::BondShardsDeclared { .. } => "BondShardsDeclared",
         O::ShardReceiptLicensed { .. } => "ShardReceiptLicensed",

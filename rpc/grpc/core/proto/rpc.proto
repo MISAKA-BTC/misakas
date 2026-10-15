@@ -3421,6 +3421,21 @@ message GetPalwRfc0016ReportResponseMessage {
   RPCError error = 1000;
 }
 
+// RFC-0006 consumer v2 (op 245): a class's immutable per-reader router binding; rowHex is the borsh hex of the stored row.
+message GetPalwRouterBindingV2RequestMessage {
+  string classHex = 1;
+}
+
+message GetPalwRouterBindingV2ResponseMessage {
+  bool available = 1;
+  bool armed = 2;
+  uint64 nowDaa = 3;
+  bool found = 4;
+  uint64 boundFromDaa = 5;
+  string rowHex = 6;
+  RPCError error = 1000;
+}
+
 message GetPalwStagedPreclaimQuoteRequestMessage {
   string commitmentHex = 1;
   string bindingHex = 2;

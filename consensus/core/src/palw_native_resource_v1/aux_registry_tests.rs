@@ -279,6 +279,8 @@ fn renumbered_codex_aux_tables_never_collide_with_rfc0016_or_rfc0018() {
         crate::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_TABLE_V1,
         recovery,
         compact,
+        // RFC-0006 consumer v2: the router binding rows.
+        crate::palw_router_binding_v2::PALW_ROUTER_BINDING_TABLE_V2,
     ];
     let mut unique = all.to_vec();
     unique.sort_unstable();

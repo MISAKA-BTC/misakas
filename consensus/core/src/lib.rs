@@ -680,6 +680,10 @@ pub mod palw_step_leg;
 pub mod palw_step_refute;
 pub mod palw_gdn_state_map_v2;
 pub mod palw_gdn_court_v2;
+/// RFC-0006 consumer v2 (dormant, `palw_memory_routing_court_v2`): the immutable per-reader router binding (kernel-route aux 139)
+/// and object tag 170 — the binding declaration and the checkpoint-transition / convolution-window / routed-reader accusations.
+pub mod palw_memory_routing_v2;
+pub mod palw_router_binding_v2;
 pub mod palw_task_heads_v1;
 pub mod palw_terminal;
 pub mod palw_terminal_carriage_v1;

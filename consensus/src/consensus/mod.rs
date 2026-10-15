@@ -3573,6 +3573,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_rfc0016_report_v1_impl(class)
     }
 
+    fn palw_router_binding_v2(
+        &self,
+        class: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<(u64, bool, Option<(u64, Vec<u8>)>)>, String> {
+        self.virtual_processor.palw_router_binding_v2_impl(class)
+    }
+
     fn palw_staged_preclaim_quote_v1(
         &self,
         original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,

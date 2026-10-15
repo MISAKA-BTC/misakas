@@ -3740,6 +3740,37 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         }
     }
 
+    async fn get_palw_router_binding_v2_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwRouterBindingV2Request,
+    ) -> RpcResult<GetPalwRouterBindingV2Response> {
+        // Bounded before any decode: a class id is 64 bytes (128 hex digits).
+        if request.class_hex.len() != 128 {
+            return Err(RpcError::General("class hex must be 128 hex digits (a 64-byte class id)".into()));
+        }
+        let mut bytes = [0u8; 64];
+        faster_hex::hex_decode(request.class_hex.as_bytes(), &mut bytes).map_err(|e| RpcError::General(format!("class hex: {e}")))?;
+        let class = kaspa_consensus_core::Hash64::from_bytes(bytes);
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwRouterBindingV2Response::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let answer = session.spawn_blocking(move |c| c.palw_router_binding_v2(class)).await;
+        Ok(match answer {
+            Ok(Some((now_daa, armed, row))) => GetPalwRouterBindingV2Response {
+                available: true,
+                armed,
+                now_daa,
+                found: row.is_some(),
+                bound_from_daa: row.as_ref().map_or(0, |(from, _)| *from),
+                row_hex: row.map(|(_, bytes)| faster_hex::hex_string(&bytes)).unwrap_or_default(),
+            },
+            Ok(None) => GetPalwRouterBindingV2Response::default(),
+            Err(refusal) => return Err(RpcError::General(refusal)),
+        })
+    }
+
     async fn get_palw_rfc_0016_report_call(
         &self,
         _connection: Option<&DynRpcConnection>,

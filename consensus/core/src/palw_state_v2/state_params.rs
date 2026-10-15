@@ -180,6 +180,7 @@ impl PalwStateParamsV2 {
             public_evidence_reward_from_daa: None,
             claim_hard_deadline_v1: None,
             cell_coverage_closure_from_daa: None,
+            memory_routing_court_from_daa: None,
             rfc0016_v1: None,
             model_eligibility_v1: None,
             rfc0018_v1: None,
@@ -665,6 +666,24 @@ impl PalwStateParamsV2 {
     /// `Params::palw_cell_coverage_closure_v1`'s height, if the network arms it (the mirror).
     pub fn cell_coverage_closure_from_daa(&self) -> Option<u64> {
         self.cell_coverage_closure_from_daa
+    }
+
+    /// **RFC-0006's memory/routing court mirror** (`crate::palw_gdn_court_v2`) — written by `Params::sync_palw_memory_routing_court_v2`
+    /// and by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_memory_routing_court_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.memory_routing_court_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_memory_routing_court_v2_fence`'s height, if the network arms it (the mirror).
+    pub fn memory_routing_court_from_daa(&self) -> Option<u64> {
+        self.memory_routing_court_from_daa
+    }
+
+    /// **Is the memory/routing court consumer v2 in force for something dated `daa`** (a registration's block, a claim's
+    /// acceptance, a binding declaration's block)? `false` on every shipped preset.
+    pub fn memory_routing_court_active_at(&self, daa: u64) -> bool {
+        self.memory_routing_court_from_daa.is_some_and(|from| daa >= from)
     }
 
     /// **RFC-0017's mirror** (`crate::palw_model_eligibility_v1`) — written by `Params::sync_palw_model_eligibility_v1` and by

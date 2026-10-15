@@ -1380,6 +1380,58 @@ fn native_compact_coverage_binds_typed_memory_steps_and_exact_snapshot_boundarie
     assert!(empty.validate_against(&w.l).is_err());
 }
 
+/// **RFC-0007 item 1 source control (written, not run here)**: the per-class inventory walks the class exactly as the coverage
+/// compiler does — same boundaries in the same order, the same exact work, one row per plan relation, the memory class's eight
+/// steps — states a single-element miss bound for every direct check, and puts history and gather on routes with a finite bound
+/// and a named measured constant that is still UNKNOWN.
+#[test]
+fn native_check_inventory_matches_the_class_walk_and_states_its_bounds() {
+    use misaka_palw_kernel::claim_compact_v1::{
+        CompactCompileParamsV1, CompactCoverageV1,
+        native_inventory_v2::{NativeRefutationRouteV2 as R, NativeRelationCheckV2, native_class_inventory_v2},
+        native_v2::compile_native_class_v2,
+        relation_bound_v1,
+    };
+    let params = CompactCompileParamsV1 { compact_exact_arithmetic: true, arithmetic_repetitions: 2, fs_query_bits: 64 };
+    let m = Mem::new(memory_v1(3));
+    let coverage = compile_native_class_v2(&m.w.l, m.class, params).unwrap();
+    let inventory = native_class_inventory_v2(&m.w.l, m.class, params).unwrap();
+    assert_eq!(inventory.target, coverage.target);
+    assert_eq!(inventory.boundaries.iter().map(|b| b.boundary.clone()).collect::<Vec<_>>(), coverage.exact_boundaries);
+    assert_eq!(inventory.boundaries.iter().map(|b| b.exact_work).sum::<u128>(), coverage.exact_verifier_work_upper);
+    assert_eq!(inventory.stages.len(), coverage.parts.len());
+    for (stage, part) in inventory.stages.iter().zip(&coverage.parts) {
+        assert_eq!((stage.stage, stage.maximum_executions), (part.stage, part.maximum_executions));
+        assert_eq!(stage.relations.len(), part.coverage.entries.len());
+        for (row, entry) in stage.relations.iter().zip(&part.coverage.entries) {
+            match (&row.check, entry) {
+                (NativeRelationCheckV2::Direct { sparse, .. }, CompactCoverageV1::Compact(p)) => {
+                    assert!(sparse.per_repetition_miss_bits > 0, "a direct check states a bounded single-element miss");
+                    assert_eq!(relation_bound_v1(p).per_repetition_bits, Some(sparse.per_repetition_miss_bits));
+                }
+                (NativeRelationCheckV2::Exact { .. }, _) => {}
+                (other, entry) => panic!("relation {}: {other:?} against {entry:?}", row.relation),
+            }
+        }
+    }
+    assert_eq!(inventory.stages[0].maximum_executions, 8, "every step of the memory stage carries the same inventory");
+    assert!(inventory.gaps().is_empty(), "{:?}", inventory.gaps());
+    let routes = inventory.route_bounds();
+    let history = routes.get(&R::History).expect("memory continuity is on the history route");
+    assert!(history.worst_court_work > 0 && history.measured_us.is_none(), "derived bound, UNKNOWN measured cost");
+
+    let data = SnapshotDataV1::new(corpus(8, 2), 2, 2, 4).unwrap();
+    let (spec, _) = retrieval_spec(&data, 2);
+    let mut w = W::new(true);
+    let (class, _) = w.register(spec, Some(data.snapshot.root()));
+    let retrieval = native_class_inventory_v2(&w.l, class, params).unwrap();
+    assert!(retrieval.stages.is_empty());
+    let gather = retrieval.route_bounds()[&R::Gather];
+    assert_eq!(gather.subjects, 1);
+    assert!(gather.worst_court_work > 0 && gather.measured_us.is_none());
+    assert!(native_class_inventory_v2(&w.l, [0u8; 64], params).is_err(), "no class, no inventory");
+}
+
 #[test]
 fn native_compact_v4_registration_binds_budget_and_retains_canonical_proof_carriage() {
     use misaka_palw_challenge::InteractiveModeV1;
