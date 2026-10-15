@@ -668,6 +668,7 @@ pub mod palw_step_leg;
 /// one-step conviction — canonical-input derivation, the kernel-program catalog, and the
 /// three-way verdict (convicted / NoFaultFound / unadjudicable). Land-stage, consensus-inert.
 pub mod palw_step_refute;
+pub mod palw_gdn_state_map_v2;
 pub mod palw_task_heads_v1;
 pub mod palw_terminal;
 pub mod palw_terminal_carriage_v1;
