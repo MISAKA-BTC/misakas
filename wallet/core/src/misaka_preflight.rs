@@ -293,7 +293,7 @@ pub async fn preflight(
     evaluate_preflight_v1(&capabilities, expectations, &subnetworks)
 }
 
-fn check_read_bracket_v1(
+pub(crate) fn check_read_bracket_v1(
     before: &Result<GetPalwNodeStatusResponse, String>,
     after: &Result<GetPalwNodeStatusResponse, String>,
 ) -> Result<(), MisakaPreflightRefusalV1> {

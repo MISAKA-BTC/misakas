@@ -22,6 +22,7 @@ The surface is in the public wallet SDK crate `kaspa-wallet-core`, module
 | `preflight(&dyn RpcApi, &expectations, &[Transaction])` | **The single call to make before signing.** Brackets settlement/DNS reads with node identity and durable import epoch. |
 | `evaluate_preflight_v1` / `evaluate_preflight_json_v1` | The same verdict on reads the caller already holds (native / JSON). |
 | JS: `misakaCapabilitiesFromReadsV1(statusJson, settlementJson, dnsJson)`, `misakaPreflightV1(capabilitiesJson, expectationsJson, subnetworkIdsJson)` | The WASM form. Pass `""` for a read that failed. |
+| JS: `misakaCapabilitiesFromBracketedReadsV1(statusBeforeJson, settlementJson, dnsJson, statusAfterJson)` | The signing-oriented WASM constructor, enforcing the same identity/import bracket as native `preflight`. |
 
 ## Refusals
 
