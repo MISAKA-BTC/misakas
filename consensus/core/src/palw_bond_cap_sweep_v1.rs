@@ -98,7 +98,7 @@ pub struct PalwCapSimReportV1 {
 pub const PALW_CAP_SWEEP_UTILIZATION_FLOOR_PERMILLE_V1: u64 = 800;
 
 fn bond_key(n: u8) -> PalwBondKeyV2 {
-    PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::Hash::from_bytes([n; 32]), 0))
+    PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::Hash64::from_bytes([n; 64]), 0))
 }
 
 fn claim_id(lane: u8, n: u64) -> Hash64 {

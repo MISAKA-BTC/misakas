@@ -1256,6 +1256,29 @@ async fn fresh_public_service(case: PublicCase) {
 }
 
 async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Option<recovery::RecoveryMode>) {
+    // In a debug build the service's call depth overflowed the 2 MiB libtest thread that polls it
+    // (`fresh_public_bond_service_carries_reserved_da_to_objective_default`, SIGABRT for the whole binary). Run it on a dedicated
+    // thread and runtime with the stack a node's own threads have; a panic inside is re-raised here unchanged.
+    const STACK: usize = 64 << 20;
+    let worker = std::thread::Builder::new()
+        .name("palw-public-service-e2e".into())
+        .stack_size(STACK)
+        .spawn(move || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .thread_stack_size(STACK)
+                .enable_all()
+                .build()
+                .expect("a test runtime")
+                .block_on(Box::pin(fresh_public_service_with_recovery_inner(case, recovery_mode)))
+        })
+        .expect("the service test thread starts");
+    if let Err(panic) = tokio::task::spawn_blocking(move || worker.join()).await.expect("the join task completes") {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mode: Option<recovery::RecoveryMode>) {
     let automatic_recovery = recovery_mode.is_some();
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info,kaspad_lib::palw_panel::palw_fraud_filer=debug");
     let (mut config, bundle, premine, mut floats) = fixture_config_with(

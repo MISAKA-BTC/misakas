@@ -3329,7 +3329,7 @@ mod mockery {
                 required_ready_seats: mock(),
                 registration_bond_sompi: mock(),
                 recommended_pool_sompi: mock(),
-                eligibility_stage: mock(),
+                eligibility_stage: "Probation".to_string(),
                 eligibility_next_renewal_daa: mock(),
                 eligibility_subsidy: mock(),
                 eligibility_block_right: mock(),

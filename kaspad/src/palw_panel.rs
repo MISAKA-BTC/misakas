@@ -18792,9 +18792,10 @@ impl PalwPanelService {
     }
 }
 
-/// Where the production code ends: `seat_s_tests` pins read the source before it.
+/// Where the production code ends: `seat_s_tests` pins read the source before it. Since 87f93cd14 split the inline
+/// test module out, that is the out-of-line `mod tests;` declaration below.
 #[cfg(test)]
-const MARKER_SEAT_S: &str = "mod tests {\n    use super::*;";
+const MARKER_SEAT_S: &str = "#[cfg(test)]\nmod tests;";
 
 #[cfg(test)]
 mod tests;
@@ -19135,10 +19136,12 @@ mod held_class_form_pin {
         let whole = include_str!("palw_panel.rs");
         let source = &whole[..whole.find("#[cfg(test)]\nmod tests").expect("the unit tests follow the code")];
         let uses: Vec<&str> = source.lines().filter(|l| l.contains("self.config.prompt_ids_form")).map(str::trim).collect();
-        // Five: the node registry's one constructor (`PalwBackendRegistry::for_node_v1`, which read it
+        // Six: the node registry's one constructor (`PalwBackendRegistry::for_node_v1`, which read it
         // twice before the producer and the panel shared it), the two class-form doors, the
-        // canonical claim's carrier and a bisection's close.
-        assert_eq!(uses.len(), 5, "a new reader of the network's form — read the class's instead (ADR-0118 D3): {uses:#?}");
+        // canonical claim's carrier — built by two builders since G14's original public pledge
+        // (`build_fp_commitment_tx_original_public_v1` beside `build_fp_commitment_tx_under_params_v1`;
+        // both feed the chain's stateless check, which holds no class) — and a bisection's close.
+        assert_eq!(uses.len(), 6, "a new reader of the network's form — read the class's instead (ADR-0118 D3): {uses:#?}");
         assert!(source.contains("fn class_prompt_ids_form(&self, class_id: Hash64)"), "the one door");
         for callee in [
             "palw_fp_capture_decode_v1(",

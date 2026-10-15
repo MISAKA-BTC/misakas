@@ -315,12 +315,20 @@ mod tests {
         assert!((0.84..0.90).contains(&gib(&w32)), "W=32: {}", w32.describe());
         assert!((0.42..0.48).contains(&gib(&w16)), "W=16: {}", w16.describe());
         assert!(w16.describe().contains("at a prefill run of 16"), "{}", w16.describe());
+        // The trace scratch's run copies scale with the width; the job's output material (d3ff09371's host bound: the decoded
+        // logits, ids and context held while the run is live) is one fixed term beside them.
+        let material = {
+            use misaka_palw_base0::classes::{A16_GRAPH_V7_8K_MODEL_ID, a16_graph_v7_row_v1};
+            let row = a16_graph_v7_row_v1(8_192, A16_GRAPH_V7_8K_MODEL_ID).expect("the 8k row");
+            let job = kaspa_consensus_core::palw_base0_profile::rc_job_context(&row.profile, row.canonical_job.0, row.canonical_job.1);
+            kaspa_consensus_core::palw_resource_profile_v1::palw_output_material_bytes_v1(&row.profile, &job)
+        };
         for width in [32u32, 16, 8, 4, 2, 1] {
             let (wide, narrow) = (eight_k_full_seat(64, true).profile.unwrap(), eight_k_full_seat(width, true).profile.unwrap());
             assert_eq!(
-                narrow.trace_scratch_bytes * 64,
-                wide.trace_scratch_bytes * u64::from(width),
-                "{width}: the trace scratch is the width's"
+                (narrow.trace_scratch_bytes - material) * 64,
+                (wide.trace_scratch_bytes - material) * u64::from(width),
+                "{width}: the trace scratch's run copies are the width's"
             );
             assert_eq!(
                 narrow.working_set_bytes() - narrow.trace_scratch_bytes,
@@ -329,7 +337,13 @@ mod tests {
             );
         }
         let one = eight_k_full_seat(1, true);
-        assert!(gib(&one) < 0.06, "one position at a time the 8k replay is its K/V and a trace: {}", one.describe());
+        // 0.07 GiB under d3ff09371's host bound (the fixed output material in the trace scratch and the eight-hash fold); it was
+        // under 0.06 GiB before that bound.
+        assert!(
+            (0.06..0.08).contains(&gib(&one)),
+            "one position at a time the 8k replay is its K/V and a trace: {}",
+            one.describe()
+        );
         for width in palw_prefill_run_candidates_v1(64) {
             eprintln!(
                 "8k full seat at a prefill run of {width:>2}: unpinned {:.3} GiB, pinned {:.3} GiB",
@@ -396,9 +410,13 @@ mod tests {
     /// Every grant's need is the need OF the width the instance is left at — the one value a run spends.
     #[test]
     fn a_reservation_takes_the_widest_width_the_ledger_grants_and_leaves_the_instance_there() {
+        // 3,712 MiB (was 3,584): under d3ff09371's host bound (output material, eight-hash fold) one position of the third
+        // replay needs 0.07 GiB, more than the 0.04 GiB the 3,584 MiB share left beside two replays at the cap. The share keeps
+        // the case the test is about — the third fits only narrowed — and still holds one unpinned 3.37 GiB replay.
+        const SHARE: u64 = 3_712 * MIB;
         let ledger = PalwMemoryLedgerV1::new_with_proof_carve(
             PalwMemoryPoolV1::Host,
-            Some(3_584 * MIB),
+            Some(SHARE),
             crate::palw_memory_ledger::PALW_READINESS_PROOF_CARVE_BYTES_V1,
             || None,
         );
@@ -419,7 +437,7 @@ mod tests {
         assert_eq!(c.need, eight_k_full_seat(width, true), "and the need reserved is that width's");
         assert_eq!(c.need_at_cap.as_ref().map(|n| n.total_bytes()), Some(eight_k_full_seat(64, true).total_bytes()));
         let left =
-            3_584 * MIB - crate::palw_memory_ledger::PALW_READINESS_PROOF_CARVE_BYTES_V1 - a.need.total_bytes() - b.need.total_bytes();
+            SHARE - crate::palw_memory_ledger::PALW_READINESS_PROOF_CARVE_BYTES_V1 - a.need.total_bytes() - b.need.total_bytes();
         assert!(c.need.total_bytes() <= left, "it fits what was left");
         assert!(eight_k_full_seat(width * 2, true).total_bytes() > left, "and twice the width would not have");
         assert!(prefill_run_status_v1().contains("run_cap="));

@@ -1019,10 +1019,10 @@ pub trait RpcApi: Sync + Send + AnySync {
     /// same planner at the accepting block, so a caller pins nothing on this answer's word.
     /// **RFC-0016 (op 255): the per-model report** — targets apart from outcomes, node-local observations labelled — and the
     /// pre-lottery quote for one class where asked. Read-only; an improvement is never to be read from a target alone.
-    async fn get_palw_rfc0016_report(&self, request: GetPalwRfc0016ReportRequest) -> RpcResult<GetPalwRfc0016ReportResponse> {
-        self.get_palw_rfc0016_report_call(None, request).await
+    async fn get_palw_rfc_0016_report(&self, request: GetPalwRfc0016ReportRequest) -> RpcResult<GetPalwRfc0016ReportResponse> {
+        self.get_palw_rfc_0016_report_call(None, request).await
     }
-    async fn get_palw_rfc0016_report_call(
+    async fn get_palw_rfc_0016_report_call(
         &self,
         connection: Option<&DynRpcConnection>,
         request: GetPalwRfc0016ReportRequest,
