@@ -1262,28 +1262,100 @@ impl Qwen36Backend {
         head: u32,
         index: u32,
     ) -> Result<kaspa_consensus_core::palw_step_refute::memory_v2::PalwGdnTransitionRefutationV2, String> {
-        let plan =
-            self.plan.as_ref().ok_or_else(|| "this backend serves no registered plan, so it recomputes no state".to_string())?;
+        self.with_gdn_material_v2(material, carried, |evidence, plan| {
+            crate::gdn_evidence_v2::base0_gdn_transition_evidence_v2(evidence, node_slot, head, index, || {
+                crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan)
+            })
+        })
+    }
+
+    /// **The held DA units to demand for a forged checkpoint `index`** of a served capture — the per-position (held) route of the
+    /// genesis hybrids, whose retention serves no checkpoint state (`crate::gdn_evidence_v2::base0_gdn_forged_checkpoint_demands_v2`).
+    pub fn gdn_forged_checkpoint_demands_v2(
+        &self,
+        material: &[u8],
+        carried: Option<&[u32]>,
+        court: crate::gdn_evidence_v2::Base0GdnCheckpointCourtV2,
+        index: u32,
+    ) -> Result<Vec<kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1>, String> {
+        self.with_gdn_material_v2(material, carried, |evidence, plan| {
+            crate::gdn_evidence_v2::base0_gdn_forged_checkpoint_demands_v2(evidence, court, index, || {
+                crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan)
+            })
+        })
+    }
+
+    /// **The transition evidence against a forged checkpoint `index`, from the producer's held DA answers** (`answers[i]` answers
+    /// `demands[i]`, as accepted on chain) — the end of the held route.
+    #[allow(clippy::too_many_arguments)]
+    pub fn gdn_transition_evidence_from_disclosures_v2(
+        &self,
+        material: &[u8],
+        carried: Option<&[u32]>,
+        node_slot: u32,
+        head: u32,
+        index: u32,
+        demands: &[kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1],
+        answers: &[kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1],
+    ) -> Result<kaspa_consensus_core::palw_step_refute::memory_v2::PalwGdnTransitionRefutationV2, String> {
+        self.with_gdn_material_v2(material, carried, |evidence, plan| {
+            crate::gdn_evidence_v2::base0_gdn_transition_evidence_from_disclosures_v2(
+                evidence,
+                node_slot,
+                head,
+                index,
+                demands,
+                answers,
+                || crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan),
+            )
+        })
+    }
+
+    /// **The accuser's decoded view of a served capture** — the claim's binding, its committed step tiles (a fold re-executed by
+    /// this tier and checked against the binding), the leg as served, the ids and this network's form and ladder. Owned, so a
+    /// caller can hold it across several evidence builds (`crate::gdn_evidence_v2`).
+    pub fn gdn_accuser_view_v2(
+        &self,
+        material: &[u8],
+        carried: Option<&[u32]>,
+    ) -> Result<crate::gdn_evidence_v2::Base0GdnOwnedMaterialV2, String> {
         let prepared = self.prepare_whole_capture_v1(material, carried, None)?;
         let retention =
             crate::produce::base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
-        let leaves: &[kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2] = match &retention {
-            crate::produce::Base0RetentionV1::Folded(m) => m.checkpoint_leaves.as_slice(),
-            crate::produce::Base0RetentionV1::Dense(_) => &[],
+        let checkpoint_leaves = match &retention {
+            crate::produce::Base0RetentionV1::Folded(m) => m.checkpoint_leaves.clone(),
+            crate::produce::Base0RetentionV1::Dense(_) => Vec::new(),
         };
-        let evidence = crate::gdn_evidence_v2::Base0GdnMaterialV2 {
-            binding: &prepared.binding,
-            tiles: &prepared.step_tiles,
-            checkpoint_leaves: leaves,
-            served_chunks: retention.checkpoint_chunks(),
-            prompt_token_ids: &prepared.prompt_token_ids,
-            output_token_ids: retention.generated_token_ids(),
+        Ok(crate::gdn_evidence_v2::Base0GdnOwnedMaterialV2 {
+            binding: prepared.binding,
+            tiles: prepared.step_tiles,
+            checkpoint_leaves,
+            served_chunks: retention.checkpoint_chunks().to_vec(),
+            prompt_token_ids: prepared.prompt_token_ids,
+            output_token_ids: retention.generated_token_ids().to_vec(),
             prompt_ids_form: self.prompt_ids_form,
             max_leaves: self.network_ladder,
-        };
-        crate::gdn_evidence_v2::base0_gdn_transition_evidence_v2(&evidence, node_slot, head, index, || {
-            crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan)
         })
+    }
+
+    /// **Fresh recompute kernels over this tier's registered plan** — what the accuser's own anchor states are computed with.
+    pub fn gdn_recompute_kernels_v2(&self) -> Result<crate::fp_recompute::Qwen36RecomputeKernelsV1<'_>, String> {
+        let plan =
+            self.plan.as_ref().ok_or_else(|| "this backend serves no registered plan, so it recomputes no state".to_string())?;
+        Ok(crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan))
+    }
+
+    /// Decode a served capture once into the accuser's view of it and run `f` over it with this tier's registered plan.
+    fn with_gdn_material_v2<R>(
+        &self,
+        material: &[u8],
+        carried: Option<&[u32]>,
+        f: impl FnOnce(&crate::gdn_evidence_v2::Base0GdnMaterialV2<'_>, &crate::qwen36_plan::Qwen36ProfilePlanV1) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let plan =
+            self.plan.as_ref().ok_or_else(|| "this backend serves no registered plan, so it recomputes no state".to_string())?;
+        let owned = self.gdn_accuser_view_v2(material, carried)?;
+        f(&owned.view(), plan)
     }
 }
 

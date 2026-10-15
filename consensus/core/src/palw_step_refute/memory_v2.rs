@@ -20,8 +20,10 @@ pub mod transition;
 pub use transition::{
     PALW_GDN_CHECKPOINT_EVIDENCE_VERSION_V2, PALW_GDN_CONV_WINDOW_EVIDENCE_KIND_V2, PALW_GDN_TRANSITION_EVIDENCE_KIND_V2,
     PalwGdnCheckpointVerdictV2, PalwGdnConvWindowRefutationV2, PalwGdnMismatchV2, PalwGdnTransitionRefutationV2,
-    check_gdn_conv_window_refutation_v2, check_gdn_transition_refutation_v2, gdn_conv_window_refutation_from_capture_v2,
-    gdn_conv_window_required_v2, gdn_transition_refutation_from_capture_v2,
+    check_gdn_conv_window_refutation_v2, check_gdn_transition_refutation_v2, gdn_checkpoint_witness_from_disclosures_v2,
+    gdn_conv_window_demands_v2, gdn_conv_window_refutation_from_capture_v2, gdn_conv_window_refutation_with_accused_v2,
+    gdn_conv_window_required_v2, gdn_transition_demands_v2, gdn_transition_refutation_from_capture_v2,
+    gdn_transition_refutation_with_accused_v2,
 };
 
 pub const PALW_GDN_STEP_EVIDENCE_VERSION_V2: u16 = 2;

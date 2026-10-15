@@ -233,3 +233,46 @@ fn the_v2_checkpoint_count_reads_only_the_maps_consumer_v2_owns() {
         assert_eq!(super::super::gdn_checkpoint_chunk_count_v2(&p, 3), None, "{map}");
     }
 }
+
+/// **The held route, consensus half**: the demands are exactly the accused witness's chunks, as held-DA `StateChunk` units of the
+/// accused checkpoint; a witness rebuilt from held-DA answers carrying the producer's bytes and paths is the assembled witness, and
+/// the accusation built on it convicts identically. Answers that are short, of another unit, or under two different checkpoint
+/// leaves are refused.
+#[test]
+fn the_held_da_route_rebuilds_the_same_transition_accusation() {
+    use crate::palw_attn_court_v1::{PalwAttnCheckpointAnchorV1, PalwAttnChunkOpeningV1};
+    use crate::palw_held_da_v1::{PalwHeldDisclosureV1, PalwHeldMissingV1};
+    let r = transition_fixture(true);
+    let demands = gdn_transition_demands_v2(&r.binding, GDN_SLOT, 0, 0).expect("the transition's units");
+    assert_eq!(demands.len(), r.accused.chunks.len());
+    for (d, c) in demands.iter().zip(&r.accused.chunks) {
+        assert_eq!(*d, PalwHeldMissingV1::StateChunk { checkpoint: 0, chunk: c.chunk_index });
+    }
+    let anchor = PalwAttnCheckpointAnchorV1 { leaf: r.accused.leaf.clone(), opening: r.accused.opening.clone() };
+    let answers: Vec<PalwHeldDisclosureV1> = r
+        .accused
+        .chunks
+        .iter()
+        .map(|c| PalwHeldDisclosureV1::StateChunk {
+            anchor: anchor.clone(),
+            chunk: PalwAttnChunkOpeningV1 { chunk_index: c.chunk_index, chunk_bytes: c.bytes.clone(), siblings: c.siblings.clone() },
+        })
+        .collect();
+    let rebuilt = gdn_checkpoint_witness_from_disclosures_v2(&demands, &answers).expect("the answers rebuild the witness");
+    assert_eq!(rebuilt, r.accused);
+    let mut via = r.clone();
+    via.accused = rebuilt;
+    assert_eq!(check(&via).expect("convicts").mismatch, check(&r).expect("convicts").mismatch);
+    // Refusals.
+    assert!(gdn_checkpoint_witness_from_disclosures_v2(&demands[..demands.len() - 1], &answers).is_err(), "one answer per unit");
+    let mut other_unit = demands.clone();
+    other_unit[0] = PalwHeldMissingV1::StateChunk { checkpoint: 0, chunk: u32::MAX };
+    assert!(gdn_checkpoint_witness_from_disclosures_v2(&other_unit, &answers).is_err(), "an answer of another unit");
+    if answers.len() > 1 {
+        let mut split = answers.clone();
+        if let PalwHeldDisclosureV1::StateChunk { anchor, .. } = &mut split[1] {
+            anchor.leaf.state_chunk_count += 1;
+        }
+        assert!(gdn_checkpoint_witness_from_disclosures_v2(&demands, &split).is_err(), "answers under two different leaves");
+    }
+}
