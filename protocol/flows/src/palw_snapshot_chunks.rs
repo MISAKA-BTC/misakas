@@ -19,9 +19,19 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum NativeSnapshotDecodeErrorV1 {
     #[error("{0}")]
-    Encoding(#[from] io::Error),
+    Encoding(io::Error),
     #[error("{0}")]
     Capacity(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1),
+    #[error("local snapshot spill: {0}")]
+    LocalStorage(io::Error),
+}
+
+impl From<io::Error> for NativeSnapshotDecodeErrorV1 {
+    fn from(error: io::Error) -> Self {
+        // Nested File -> BufReader -> zlib -> Borsh errors retain their OS
+        // cause. Format/CRC/count failures use synthetic InvalidData/EOF.
+        if error.raw_os_error().is_some() { Self::LocalStorage(error) } else { Self::Encoding(error) }
+    }
 }
 
 pub(crate) const CHUNK_BYTES: usize = 4 << 20;
@@ -566,7 +576,7 @@ impl SnapshotReceiver {
         index: u32,
         hash: Hash64,
         bytes: &[u8],
-    ) -> io::Result<()> {
+    ) -> Result<(), NativeSnapshotDecodeErrorV1> {
         if self.spill.expired()
             || point != self.point
             || root != self.root
@@ -579,9 +589,9 @@ impl SnapshotReceiver {
             || bytes.len() as u64 != (self.total - self.received).min(CHUNK_BYTES as u64)
             || chunk_hash_profile(point, root, total, count, index, bytes, self.profile) != hash
         {
-            return Err(invalid("invalid snapshot chunk identity/order/size/hash"));
+            return Err(invalid("invalid snapshot chunk identity/order/size/hash").into());
         }
-        self.spill.file.write_all(bytes)?;
+        self.spill.file.write_all(bytes).map_err(NativeSnapshotDecodeErrorV1::LocalStorage)?;
         self.hash.write(bytes);
         self.received += bytes.len() as u64;
         self.next += 1;
@@ -609,6 +619,39 @@ impl SnapshotReceiver {
         }
         self.decode_with(|reader, _| T::deserialize_reader(reader))
     }
+    /// Verify the actual owned file against the already checked network stream.
+    /// A disk write/read fault must not turn valid peer bytes into a bad proof.
+    fn verify_local_spill_v1(&mut self) -> Result<(), NativeSnapshotDecodeErrorV1> {
+        if !self.complete() || self.hash.clone().finalize() != self.root {
+            return Err(invalid("snapshot EOF/stream hash mismatch").into());
+        }
+        let _buffer_lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(
+            (COMPRESSION_INPUT_BYTES + std::mem::size_of::<MerkleBranchHash64>()) as u64,
+        )
+        .map_err(NativeSnapshotDecodeErrorV1::Capacity)?;
+        self.spill.file.flush().map_err(NativeSnapshotDecodeErrorV1::LocalStorage)?;
+        self.spill.file.seek(SeekFrom::Start(0)).map_err(NativeSnapshotDecodeErrorV1::LocalStorage)?;
+        let mut hash = stream_hasher_profile(self.point, self.profile);
+        let mut bytes = [0u8; COMPRESSION_INPUT_BYTES];
+        let mut total = 0u64;
+        loop {
+            let count = self.spill.file.read(&mut bytes).map_err(NativeSnapshotDecodeErrorV1::LocalStorage)?;
+            if count == 0 {
+                break;
+            }
+            total = total
+                .checked_add(count as u64)
+                .ok_or_else(|| NativeSnapshotDecodeErrorV1::LocalStorage(invalid("local spill size overflow")))?;
+            if total > self.total {
+                return Err(NativeSnapshotDecodeErrorV1::LocalStorage(invalid("local spill grew after authenticated transfer")));
+            }
+            hash.write(&bytes[..count]);
+        }
+        if total != self.total || hash.finalize() != self.root {
+            return Err(NativeSnapshotDecodeErrorV1::LocalStorage(invalid("local spill differs from authenticated transfer bytes")));
+        }
+        Ok(())
+    }
     pub(crate) fn decode_snapshot_with_native_lease(
         self,
     ) -> Result<(Snapshot, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>), NativeSnapshotDecodeErrorV1>
@@ -632,6 +675,7 @@ impl SnapshotReceiver {
     ) -> Result<(Snapshot, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>), NativeSnapshotDecodeErrorV1>
     {
         use kaspa_consensus_core::palw_native_resource_v1::*;
+        self.verify_local_spill_v1()?;
         let lease = if enabled {
             if !self.complete() || self.hash.clone().finalize() != self.root {
                 return Err(invalid("native preflight stream hash/EOF mismatch").into());
@@ -639,8 +683,8 @@ impl SnapshotReceiver {
             let profile = self
                 .profile
                 .ok_or_else(|| invalid("explicit native receive admission requires negotiated protocol 107 compressed profile"))?;
-            self.spill.file.flush()?;
-            self.spill.file.seek(SeekFrom::Start(0))?;
+            self.spill.file.flush().map_err(NativeSnapshotDecodeErrorV1::LocalStorage)?;
+            self.spill.file.seek(SeekFrom::Start(0)).map_err(NativeSnapshotDecodeErrorV1::LocalStorage)?;
             let decoder = flate2::bufread::ZlibDecoder::new(BufReader::new(&mut self.spill.file));
             let mut reader =
                 DecodedLimitReader { inner: decoder, expected: profile.decoded, read: 0, created: self.spill.created, checked_at: 0 };
@@ -872,6 +916,35 @@ mod tests {
         assert!(matches!(result, Err(NativeSnapshotDecodeErrorV1::Encoding(_))));
         assert!(!admitted.get(), "malformed wire has no native reconstruction permission");
         assert_eq!(budget.available_permits(), 1);
+    }
+
+    #[test]
+    fn actual_spill_corruption_is_local_and_precedes_native_reconstruction() {
+        let budget = Arc::new(Semaphore::new(1));
+        let carriage = native_carriage();
+        let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &[] }).unwrap();
+        let stream = zlib(&raw);
+        let profile = SnapshotCompressionV1 { nonce: [9; 32], decoded: raw.len() as u64 };
+        for truncate in [true, false] {
+            let mut receiver = receive_compressed_raw(&budget, &stream, profile);
+            if truncate {
+                receiver.spill.file.set_len(0).unwrap();
+            } else {
+                receiver.spill.file.seek(SeekFrom::Start(0)).unwrap();
+                receiver.spill.file.write_all(&[stream[0] ^ 1]).unwrap();
+            }
+            let admitted = std::cell::Cell::new(false);
+            let result = receiver.decode_snapshot_with_admission_v1(true, |_, _| {
+                admitted.set(true);
+                Ok(None)
+            });
+            assert!(
+                matches!(result, Err(NativeSnapshotDecodeErrorV1::LocalStorage(_))),
+                "local file failure cannot condemn valid network bytes"
+            );
+            assert!(!admitted.get());
+            assert_eq!(budget.available_permits(), 1);
+        }
     }
 
     #[test]

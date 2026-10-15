@@ -8,13 +8,42 @@ No clock, maturity, PoW, quorum, claim or Final is injected.
 def costs_before_nodes(bootstrap, maximum_binding, maximum_check):
     if maximum_binding is None or maximum_check is None:
         raise ValueError('complete-check requires explicit binding-reservation and complete-check-fee maxima')
-    if not 0 <= maximum_binding <= 2**64 - 1 or not 0 <= maximum_check <= 2**64 - 1:
+    if type(maximum_binding) is not int or type(maximum_check) is not int \
+            or not 0 <= maximum_binding <= 2**64 - 1 or not 0 <= maximum_check <= 2**64 - 1:
         raise ValueError('bond-cost maxima must fit u64')
-    if int(bootstrap['bindingReservationSompi']) > maximum_binding or int(bootstrap['completeCheckFeeSompi']) > maximum_check:
+    if canonical_u64_text(bootstrap['bindingReservationSompi']) > maximum_binding or canonical_u64_text(bootstrap['completeCheckFeeSompi']) > maximum_check:
         raise ValueError('the factory bond reservation/check fee exceeds the predeclared cap; no node was started')
     for name in ('commitment', 'statementRoot', 'commitmentScope'):
         if not bootstrap.get(name):
             raise ValueError('the exporter did not supply actual bounded code-fixture statement metadata')
+
+
+def canonical_u64_text(value):
+    if not isinstance(value, str) or not value or len(value) > 20 or (value != '0' and value.startswith('0')) \
+            or any(c not in '0123456789' for c in value) or int(value) > 2**64 - 1:
+        raise ValueError('factory money must be canonical u64 decimal text')
+    return int(value)
+
+
+def remaining_budget(budget):
+    if budget.get('unresolved', 0) or budget.get('submissionOutstanding', False):
+        raise AssertionError('a prior broadcast has unresolved fees; no further carrier may be submitted')
+    if any(type(budget.get(field)) is not int or not 0 <= budget[field] <= 2**64 - 1 for field in ('maximum', 'spent')) \
+            or budget['spent'] > budget['maximum']:
+        raise AssertionError('workflow fee budget is not an exact u64 ledger')
+    return budget['maximum'] - budget['spent']
+
+
+def submit_with_reserved_budget(drill, sampler, label, argv, timeout, budget, command):
+    # A CLI may broadcast part of a batch before a timeout or refusal. Hold
+    # its complete predeclared remaining cap until a full receipt resolves it.
+    remaining = remaining_budget(budget)
+    budget.update(unresolved=remaining, submissionOutstanding=True, submittedFeesKnown=False)
+    sent = command(drill, sampler, label, argv, timeout)
+    if sent.get('ok') is not True or sent.get('submitted') is not True:
+        raise AssertionError('broadcast did not return a complete success receipt')
+    cap_and_charge(sent, budget, outstanding=remaining)
+    return sent
 
 
 def cli_prefix(drill, cli, salt, role='A'):
@@ -22,27 +51,30 @@ def cli_prefix(drill, cli, salt, role='A'):
         '--palw-drill-genesis-salt=' + salt, '--output=json']
 
 
-def cap_and_charge(sent, budget):
+def cap_and_charge(sent, budget, outstanding=None):
     fees = [entry['fee_sompi'] for entry in sent['carriers']]
-    if not fees or any(not isinstance(fee, int) or fee < 0 or fee > 2**64 - 1 for fee in fees):
+    if not fees or any(type(fee) is not int or fee < 0 or fee > 2**64 - 1 for fee in fees):
         raise AssertionError('the submitted carrier fees are not u64 deductions')
+    remaining = remaining_budget(budget) if outstanding is None else outstanding
+    if outstanding is not None and (budget.get('unresolved') != outstanding or budget.get('submissionOutstanding') is not True):
+        raise AssertionError('broadcast reservation differs from this exact pending submission')
     total = sum(fees)
-    if total > 2**64 - 1 or total > budget['maximum'] - budget['spent']:
+    if total > 2**64 - 1 or total > remaining:
         raise AssertionError('the actual submitted fees exceed the remaining total workflow cap')
     budget['spent'] += total
+    budget.update(unresolved=0, submissionOutstanding=False, submittedFeesKnown=True)
     return total
 
 
 def submit(drill, sampler, cli, salt, fixture, bootstrap, object_path, label, budget, command):
-    remaining = budget['maximum'] - budget['spent']
+    remaining = remaining_budget(budget)
     argv = cli_prefix(drill, cli, salt) + ['palw', 'submit-object',
         '--key-file=' + str(fixture / bootstrap['fundingKeyFile']),
         '--maximum-total-fee-sompi=' + str(remaining), '--object', str(object_path)]
     preview = command(drill, sampler, label + '_PREVIEW', argv, 60)
-    assert preview['dry_run'] is True and 0 <= preview['total_fee_sompi'] <= remaining
-    sent = command(drill, sampler, label + '_SUBMIT', argv + ['--yes'], 60)
+    assert preview['dry_run'] is True and type(preview['total_fee_sompi']) is int and 0 <= preview['total_fee_sompi'] <= remaining
+    sent = submit_with_reserved_budget(drill, sampler, label + '_SUBMIT', argv + ['--yes'], 60, budget, command)
     assert sent['ok'] is True and sent['submitted'] is True and len(sent['carriers']) == 1
-    cap_and_charge(sent, budget)
     return dict(preview=preview, submission=sent, cumulativeCarrierFeeSompi=budget['spent'])
 
 

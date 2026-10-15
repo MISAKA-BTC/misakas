@@ -1004,3 +1004,5 @@ pub mod palw_tir_public_custody_v1;
 pub mod palw_native_state_anchor_v39;
 
 pub mod palw_native_master_v39;
+
+pub mod palw_prospective_kernel_material_v4;

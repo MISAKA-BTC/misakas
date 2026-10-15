@@ -494,19 +494,22 @@ def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee, complete_che
         str(fixture / bootstrap['signedRegistration']), str(fixture / bootstrap['artifactBinding'])]
     window = registration_window(bootstrap, rpc_read(drill, 'A', 'getBlockDagInfo')['virtualDaaScore'])
     preview = command(drill, sampler, 'CARRIER_PREVIEW', argv, 60)
-    assert preview['dry_run'] is True and preview['total_fee_sompi'] <= maximum_fee
+    assert preview['dry_run'] is True and type(preview['total_fee_sompi']) is int and 0 <= preview['total_fee_sompi'] <= maximum_fee
     # Queue the factory-priced registration before enabling the producer's
     # first peer, so no earlier floor production can retarget the live price.
     registration_window(bootstrap, rpc_read(drill, 'A', 'getBlockDagInfo')['virtualDaaScore'])
-    sent = command(drill, sampler, 'CARRIER_SUBMIT', argv + ['--yes'], 60)
-    assert sent['ok'] is True and sent['submitted'] is True and len(sent['carriers']) == 2
-    budget = dict(maximum=maximum_fee, spent=0)
-    complete.cap_and_charge(sent, budget)
+    budget = dict(maximum=maximum_fee, spent=0, unresolved=0, submissionOutstanding=False, submittedFeesKnown=True)
+    evidence = dict(registrationWindow=window, preview=preview, submission=None, included=None,
+        cumulativeCarrierFeeSompi=0, carrierBudget=budget, completeCheck=None)
+    if progress:
+        progress(evidence, False)
+    sent = complete.submit_with_reserved_budget(drill, sampler, 'CARRIER_SUBMIT', argv + ['--yes'], 60, budget, command)
+    assert len(sent['carriers']) == 2
+    evidence['submission'] = sent
     for role in ('B', 'JOIN'):
         drill.join_link(role, 'A')
     included = drill.wait(lambda: agreement(drill, bootstrap), 'actual native registration/binding across ordinary P2P')
-    evidence = dict(registrationWindow=window, preview=preview, submission=sent, included=included,
-        cumulativeCarrierFeeSompi=budget['spent'], carrierBudget=budget, completeCheck=None)
+    evidence.update(included=included, cumulativeCarrierFeeSompi=budget['spent'])
     # Retain completed observations even if a later maturity/check/reopen fails.
     # The live budget records deductions made by later batches before a refusal;
     # neither this checkpoint nor carrier inclusion is a complete-check PASS.
@@ -575,7 +578,7 @@ def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee, complete_che
 
 
 def record_observed_progress(result, evidence, cold_reopened):
-    result.update(nativeRegistrationBindingMeasured=True, coldReopenMeasured=cold_reopened, evidence=evidence,
+    result.update(nativeRegistrationBindingMeasured=bool(evidence.get('included')), coldReopenMeasured=cold_reopened, evidence=evidence,
         nativeSessionRowObserved=bool(evidence.get('nativeSession')),
         nativeCustodyStoreObserved=bool((evidence.get('nativeCustody') or {}).get('custodyStoreObserved')))
 
@@ -618,7 +621,8 @@ def main():
         completeCheckRequested=args.complete_check, maximumBindingReservationSompi=args.maximum_binding_reservation_sompi,
         maximumCompleteCheckFeeSompi=args.maximum_complete_check_fee_sompi, totalWorkflowTimeoutSeconds=args.timeout,
         completeCheckMeasured=False, matureUsefulWorkMeasured=False, prunedIbdMeasured=False,
-        marketFillsMeasured=False, release100kMeasured=False, fullRfc12SecurityApproval=False)
+        marketFillsMeasured=False, nativeCarrierFeePaymentsMeasured=False,
+        carrierFeeObservationScope='cli-submission-fee-exposure', release100kMeasured=False, fullRfc12SecurityApproval=False)
     try:
         validate_workflow_options(args.private_profile, args.native_session, args.complete_check)
         if args.native_session and not (args.native_loopback_provider and args.private_profile in ('paid-v3', 'paid-v4')):
@@ -658,7 +662,10 @@ def main():
                     result['lastNodeStatuses'][role] = {'error': str(status_error)}
     finally:
         if 'evidence' in result:
-            result['evidence']['cumulativeCarrierFeeSompi'] = result['evidence']['carrierBudget']['spent']
+            fee_budget = result['evidence']['carrierBudget']
+            result['evidence']['cumulativeCarrierFeeSompi'] = fee_budget['spent']
+            result['submittedCarrierFeeTotalKnown'] = fee_budget.get('submittedFeesKnown', False) is True and not fee_budget.get('submissionOutstanding', False)
+            result['unresolvedCarrierFeeUpperSompi'] = fee_budget.get('unresolved', 0)
         result['sampledOwnedResources'] = sampler.stop()
         if drill:
             drill.close()
