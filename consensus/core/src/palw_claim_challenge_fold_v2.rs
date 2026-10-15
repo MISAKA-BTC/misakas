@@ -754,7 +754,8 @@ fn receipt_fold(
     let mut l = route_fold::load_ledger(b, ctx)?;
     let before = l.to_rows();
     if l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
-        l.try_apply_paid_claim_tally_v2(&a.enrollment.base_claim).map_err(refused)?;
+        l.try_apply_paid_claim_tally_checked_v2(&a.enrollment.base_claim)
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     }
     route_fold::flush(b, &l, &before);
     Ok(())
@@ -1266,7 +1267,8 @@ fn round_receipt(
     let mut l = route_fold::load_ledger(b, ctx)?;
     let before = l.to_rows();
     if l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
-        l.try_apply_paid_claim_tally_v2(&a.enrollment.base_claim).map_err(refused)?;
+        l.try_apply_paid_claim_tally_checked_v2(&a.enrollment.base_claim)
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     }
     route_fold::flush(b, &l, &before);
     Ok(())
