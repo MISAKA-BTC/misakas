@@ -499,6 +499,15 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                     builder.arm_deadline(at, claim_id)?;
                     continue;
                 }
+                // G-15 (`palw_reward_liability_horizon_v1`, dormant): a certified reward still deferred to the liability horizon is
+                // named now — a retired claim can no longer be convicted, so retirement closes its liability window too. A no-op below
+                // the fence, for a voided claim, and once the Gate C sweep has named it.
+                super::palw_security_certification_fold_v1::release_deferred_certified_reward_at_retirement_v1(
+                    builder,
+                    ctx.daa_score,
+                    &claim_id,
+                    &claim,
+                )?;
                 builder.retire_claim(claim_id, &claim)?;
             }
             PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {

@@ -95,8 +95,8 @@ pub fn palw_cell_closure_legacy_refusal_v1(profile: &PalwShapeProfileV3) -> Opti
 
 /// **The one predicate under RFC-0006's consumer v2** (`palw_memory_routing_court_v2`): [`palw_cell_closure_legacy_refusal_v1`]
 /// over [`crate::palw_cell_coverage_v1::palw_legacy_cell_coverage_v2`] — the solo gdn v1/v2 recurrence, the composed hybrid maps and
-/// (with a covering binding, or bindable at registration) the multi-router / Kimi tables are covered; every other gap refuses as in
-/// round 4.
+/// (with a covering binding, or bindable at registration) the multi-router q36 tables are covered; every other gap — a Kimi router
+/// included (G-16: Kimi is out of scope) — refuses as in round 4.
 pub fn palw_cell_closure_refusal_v2(
     profile: &PalwShapeProfileV3,
     consumers: crate::palw_cell_coverage_v1::PalwCellConsumersV2<'_>,
