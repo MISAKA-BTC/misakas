@@ -2200,18 +2200,10 @@ impl PalwBondBudgetStateV1 {
         if after > palw_bond_budget_caps_v1(policy, capital).reward_sompi {
             return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
         }
-        self.reserve(
-            policy,
-            capital,
-            income_id,
-            bond,
-            None,
-            accepted_daa,
-            PalwBudgetVectorV1 { reward_sompi: maximum, ..PalwBudgetVectorV1::ZERO },
-            origin,
-            false,
-            j,
-        )?;
+        let vector = PalwBudgetVectorV1 { reward_sompi: maximum, ..PalwBudgetVectorV1::ZERO };
+        // ADR-0176 C3 (user decision 2026-10-15): the per-day rate and the burst cap beside the 7-day total (V3 policy only).
+        self.hold_rate_admit_v1(policy, capital, &bond, &vector)?;
+        self.reserve(policy, capital, income_id, bond, None, accepted_daa, vector, origin, false, j)?;
         let grant = self.consume(&income_id, PalwBudgetDimV1::Reward, u128::from(actual), true, j);
         debug_assert!(matches!(grant, Some(Ok(amount)) if amount == u128::from(actual)));
         self.close(&income_id, j);
@@ -2345,6 +2337,12 @@ impl PalwBondBudgetStateV1 {
         {
             return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
         }
+        // ADR-0176 C3 (user decision 2026-10-15): the NEW part of the hold (`extra`; moved kernel credits were counted when reserved)
+        // takes the per-day rate and the burst cap beside the 7-day total (V3 policy only), and is written into the day / burst views.
+        let extra_vector = PalwBudgetVectorV1 { reward_sompi: extra, ..PalwBudgetVectorV1::ZERO };
+        if check_cap && extra > 0 {
+            self.hold_rate_admit_v1(policy, capital, &bond, &extra_vector)?;
+        }
         // Preflight ends here. Reclassification leaves Q/B/F/T and open slots
         // exactly as they were, and cannot release aggregate monetary quota.
         for (id, mut row) in credits {
@@ -2387,6 +2385,18 @@ impl PalwBondBudgetStateV1 {
         row.reserved.reward_sompi = held;
         self.put_claim(&income_id, Some(row), j);
         self.put_release((row.reuse_not_before, income_id), true, j);
+        if extra > 0 {
+            let growth = palw_bond_hold_rate_growth_id_v1(&income_id, accepted_daa, prior);
+            self.write_hold_shadows_v1(
+                policy,
+                &growth,
+                &bond,
+                accepted_daa,
+                &extra_vector,
+                PalwBudgetOriginV1::NativeIncome,
+                j,
+            )?;
+        }
         Ok(())
     }
 
@@ -2747,6 +2757,11 @@ impl PalwBondBudgetStateV1 {
         let held = row.window.reward_sompi.checked_add(fee).ok_or(PalwBudgetRefusalV1::Overflow)?;
         if check_cap && (self.has_unattributed_income_v1() || held > palw_bond_budget_caps_v1(policy, capital).reward_sompi) {
             return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
+        }
+        // ADR-0176 C3 (user decision 2026-10-15): the per-day rate and the burst cap beside the 7-day total (V3 policy only). A migrated
+        // pre-fence promise (`check_cap = false`) is counted in the views (its shadows) but never refused.
+        if check_cap {
+            self.hold_rate_admit_v1(policy, capital, &bond, &PalwBudgetVectorV1 { reward_sompi: fee, ..PalwBudgetVectorV1::ZERO })?;
         }
         self.reserve(
             policy,
@@ -3287,6 +3302,9 @@ impl PalwBondBudgetStateV1 {
         if let Some(dim) = window.checked_add(vector).ok_or(PalwBudgetRefusalV1::Overflow)?.first_excess(&caps) {
             return Err(PalwBudgetRefusalV1::Exhausted { dim });
         }
+        // ADR-0176 C3 (user decision 2026-10-15): the per-day rate and the burst cap beside the 7-day total (V3 policy only); the
+        // draw's candidates were capped at `round_rights_remaining_rated_v1`, so this refuses only a caller that skipped it.
+        self.hold_rate_admit_v1(policy, capital, &bond, &vector)?;
         self.reserve(policy, capital, id, bond, None, draw_daa, vector, PalwBudgetOriginV1::RoundRights, false, j)?;
         let mut row = *self.claims.get(&id).expect("reserved above");
         row.consumed = row.reserved;

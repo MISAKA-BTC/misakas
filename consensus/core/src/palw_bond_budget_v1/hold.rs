@@ -315,8 +315,10 @@ pub fn palw_bond_hold_shadow_claim_v1(view: PalwHoldViewV1, claim: &Hash64) -> H
     keyed64(PALW_BOND_HOLD_SHADOW_CLAIM_DOMAIN_V1, &[&[view as u8], claim.as_byte_slice()])
 }
 
-/// Whether an origin writes shadow rows: claims (and old claims seeded at the fence). Monetary income rows (fees, native income,
-/// reporter debt) and Round rights are bounded by the long view alone (decision doc: per-day Round-rights / income rates).
+/// Whether an origin writes shadow rows: claims (and old claims seeded at the fence) and — ADR-0176 C3 (user decision 2026-10-15) —
+/// Round rights and the monetary income rows ([`palw_bond_hold_rate_origin_v1`]), so a bond's day and burst views are ONE short-period
+/// ledger over every path (the same principal is never used twice across claims and income paths). Reporter debt stays outside the
+/// window until a tranche enters its own native queue (unchanged).
 pub fn palw_bond_hold_shadows_origin_v1(origin: PalwBudgetOriginV1) -> bool {
     matches!(
         origin,
@@ -325,7 +327,7 @@ pub fn palw_bond_hold_shadows_origin_v1(origin: PalwBudgetOriginV1) -> bool {
             | PalwBudgetOriginV1::FreePrompt
             | PalwBudgetOriginV1::Legacy
             | PalwBudgetOriginV1::KernelRoute
-    )
+    ) || palw_bond_hold_rate_origin_v1(origin)
 }
 
 impl PalwBondBudgetStateV1 {

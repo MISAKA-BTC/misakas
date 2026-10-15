@@ -10,6 +10,9 @@
 //! C2  the exit (withdrawal) hold stays 7-day-equivalent DAA for every bond, a Panel=1-only bond included; Panel=1's ISSUANCE
 //!     capacity recovers after 1 day, but exit, re-registration or a mode switch never resets a long liability or capacity: the long
 //!     view (every reservation, 7 days), the liability view (terminal + H_L) and the liability hold only ever extend
+//! C3  Round rights and the monetary income rows get rate / burst caps BESIDE the 7-day total: they write the bond's day and burst
+//!     shadows like claims (one short-period ledger per bond across every path, so one principal is never used twice) and are admitted
+//!     against the day view at a named per-day rate and against the burst view. The rates are calibration starting points.
 //! ```
 //!
 //! Nothing in this module is built or run by the lane that wrote it (a separate validation agent compiles). No line is a PASS.
@@ -53,12 +56,231 @@ pub fn palw_bond_exit_hold_daa_v1(hold: &PalwBondHoldPolicyV1) -> u64 {
     hold.window_daa(PalwHoldModeV1::PanelZero)
 }
 
+/// **C3 (user decision 2026-10-15): the per-day rate of Round rights**, permille of the bond's per-day Round-rights cap
+/// (`daily(C).round_rights`). CALIBRATION STARTING POINT, UNAPPROVED (the measured rate replaces it; RFC-0016 §3.6 Stage 1).
+pub const PALW_BOND_HOLD_ROUND_RIGHTS_DAY_RATE_CALIBRATION_PERMILLE_V1: u32 = 1_000;
+/// **C3: the per-day rate of the monetary income rows** (market / Round fees, source fees, native income), permille of the bond's
+/// per-day `R` (`daily(C).reward_sompi`) — the SAME day view the bond's claims fill. CALIBRATION STARTING POINT, UNAPPROVED.
+pub const PALW_BOND_HOLD_INCOME_DAY_RATE_CALIBRATION_PERMILLE_V1: u32 = 1_000;
+
+/// **C3: the origins the rate / burst caps govern beside the long view** — Round rights and the monetary income rows.
+pub fn palw_bond_hold_rate_origin_v1(origin: PalwBudgetOriginV1) -> bool {
+    matches!(
+        origin,
+        PalwBudgetOriginV1::RoundRights
+            | PalwBudgetOriginV1::MarketFee
+            | PalwBudgetOriginV1::RoundFee
+            | PalwBudgetOriginV1::SourceFee
+            | PalwBudgetOriginV1::NativeIncome
+    )
+}
+
+fn permille_of_u64(x: u64, permille: u32) -> u64 {
+    u64::try_from((x as u128).saturating_mul(permille as u128) / 1_000).unwrap_or(u64::MAX)
+}
+
+/// **C3: the day-view caps an income row or a Round-rights draw is admitted against** — the bond's per-day caps with `R` and the Round
+/// rights at their named rates (every other dimension as the day view's own). Linear with floors, so sub-additive over a split.
+pub fn palw_bond_hold_rate_caps_v1(policy: &PalwBondBudgetPolicyV1, capital: u64) -> PalwBudgetVectorV1 {
+    let daily = palw_bond_hold_daily_caps_v1(policy, capital);
+    PalwBudgetVectorV1 {
+        reward_sompi: permille_of_u64(daily.reward_sompi, PALW_BOND_HOLD_INCOME_DAY_RATE_CALIBRATION_PERMILLE_V1),
+        round_rights: permille_of_u64(daily.round_rights, PALW_BOND_HOLD_ROUND_RIGHTS_DAY_RATE_CALIBRATION_PERMILLE_V1),
+        ..daily
+    }
+}
+
+/// The derived shadow id of one growth of a native income hold (a hold grows in place; each growth's short-period use is its own row).
+const PALW_BOND_HOLD_RATE_GROWTH_DOMAIN_V1: &[u8] = b"misaka-palw/bond-budget/hold-rate-growth/v1";
+
+/// **C3: the shadow id of a native income hold's growth** at `accepted_daa` from `prior` held (unique per growth event).
+pub fn palw_bond_hold_rate_growth_id_v1(income_id: &Hash64, accepted_daa: u64, prior: u64) -> Hash64 {
+    keyed64(PALW_BOND_HOLD_RATE_GROWTH_DOMAIN_V1, &[income_id.as_byte_slice(), &accepted_daa.to_le_bytes(), &prior.to_le_bytes()])
+}
+
+impl PalwBondBudgetStateV1 {
+    /// **C3: the rate / burst admission of an income row or a Round-rights draw** (beside the long view the caller checks): the bond's
+    /// day view — which its claims fill too — within [`palw_bond_hold_rate_caps_v1`], and its burst view within the burst caps. A
+    /// no-op for a V2 policy. Refuses before any write.
+    pub fn hold_rate_admit_v1(
+        &self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        bond: &PalwBondKeyV2,
+        reservation: &PalwBudgetVectorV1,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        let Some(hold) = policy.hold.as_ref() else { return Ok(()) };
+        let rate = palw_bond_hold_rate_caps_v1(policy, capital);
+        if let Some(dim) = palw_bond_hold_first_excess_v1(&self.hold_view_v1(PalwHoldViewV1::Day, bond), reservation, &rate) {
+            return Err(PalwBudgetRefusalV1::Exhausted { dim });
+        }
+        let burst = palw_bond_hold_burst_caps_v1(policy, hold, capital);
+        if let Some(dim) = palw_bond_hold_first_excess_v1(&self.hold_view_v1(PalwHoldViewV1::Burst, bond), reservation, &burst) {
+            return Err(PalwBudgetRefusalV1::Burst { dim });
+        }
+        Ok(())
+    }
+
+    /// **C3: a bond's remaining Round rights just before a draw** — the long view's [`palw_round_rights_remaining_v1`], further bounded
+    /// by the day view's rate and the burst view (V3 policy). The draw's candidate set reads this, so its reservation always fits.
+    pub fn round_rights_remaining_rated_v1(&self, policy: &PalwBondBudgetPolicyV1, capital: u64, bond: &PalwBondKeyV2) -> u64 {
+        let long = palw_round_rights_remaining_v1(policy, capital, self.bonds.get(bond));
+        let Some(hold) = policy.hold.as_ref() else { return long };
+        let rate = palw_bond_hold_rate_caps_v1(policy, capital);
+        let burst = palw_bond_hold_burst_caps_v1(policy, hold, capital);
+        let day = self.hold_view_v1(PalwHoldViewV1::Day, bond);
+        let short = self.hold_view_v1(PalwHoldViewV1::Burst, bond);
+        let mut n =
+            long.min(rate.round_rights.saturating_sub(day.round_rights)).min(burst.round_rights.saturating_sub(short.round_rights));
+        if matches!(policy.round_rights, PalwRoundRightsPolicyV1::CountAgainstBlocks) {
+            n = n
+                .min(rate.block_units.saturating_sub(day.block_units) / PALW_BUDGET_BLOCK_UNIT_V1)
+                .min(burst.block_units.saturating_sub(short.block_units) / PALW_BUDGET_BLOCK_UNIT_V1);
+        }
+        n
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn mirror(policy: PalwBondBudgetPolicyV1) -> PalwBondBudgetMirrorV1 {
         PalwBondBudgetMirrorV1 { from_daa: 100, policy, allocation: None }
+    }
+
+    const KAS: u64 = 100_000_000;
+
+    fn bond(n: u8) -> PalwBondKeyV2 {
+        PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::Hash::from_bytes([n; 32]), 0))
+    }
+
+    fn h(n: u64) -> Hash64 {
+        let mut b = [0u8; 64];
+        b[..8].copy_from_slice(&n.to_le_bytes());
+        Hash64::from_bytes(b)
+    }
+
+    /// TEST policy (V3): per 1,000 BILI per DAY — 3 claims, 3 blocks, 30 BILI of R, 3,000 weight, 1,000 Round rights.
+    fn v3() -> PalwBondBudgetPolicyV1 {
+        let mut p = PalwBondBudgetPolicyV1::hold_baseline_unapproved_v1();
+        p.capital_unit_sompi = 1_000 * KAS;
+        p.claims_per_unit = 3;
+        p.block_units_per_unit = 3 * PALW_BUDGET_BLOCK_UNIT_V1;
+        p.reward_per_unit_sompi = 30 * KAS;
+        p.final_weight_per_unit = 3_000;
+        p.max_open_claims_per_bond = 1_000_000;
+        p.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1_000 };
+        p.validate().expect("a well-formed V3 test policy");
+        p
+    }
+
+    const CAPITAL: u64 = 1_000 * KAS;
+
+    #[test]
+    fn c3_income_rows_take_a_day_rate_and_a_burst_cap_beside_the_week() {
+        // daily R = 30 BILI; burst R = ⌈30 · 72 · 4000 / (720 · 1000)⌉ = 12 BILI per 72 DAA (TEST values).
+        let p = v3();
+        let mut s = PalwBondBudgetStateV1::new(0, &p);
+        let mut j = Vec::new();
+        let fee = |s: &mut PalwBondBudgetStateV1, id: u64, now: u64, amount: u64, j: &mut Vec<PalwBudgetWriteV1>| {
+            s.release_due(now, j);
+            s.reserve_income_v1(&p, CAPITAL, h(id), bond(1), now, amount, amount, PalwBudgetOriginV1::MarketFee, j)
+        };
+        fee(&mut s, 1, 10, 10 * KAS, &mut j).expect("10 BILI fits the burst");
+        assert_eq!(fee(&mut s, 2, 11, 10 * KAS, &mut j), Err(PalwBudgetRefusalV1::Burst { dim: PalwBudgetDimV1::Reward }));
+        let w_burst = p.hold.unwrap().burst_window_daa;
+        fee(&mut s, 3, 10 + w_burst, 10 * KAS, &mut j).expect("the burst window passed");
+        fee(&mut s, 4, 10 + 2 * w_burst, 10 * KAS, &mut j).expect("30 BILI in the day");
+        assert_eq!(
+            fee(&mut s, 5, 10 + 3 * w_burst, KAS, &mut j),
+            Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward }),
+            "the day's rate is used although the 7-day total (210 BILI) has room"
+        );
+        let day = PALW_BOND_HOLD_DAA_PER_DAY_V1;
+        fee(&mut s, 6, 10 + day, 10 * KAS, &mut j).expect("the next day");
+        s.check_consistency().expect("the shadows are ordinary rows");
+    }
+
+    #[test]
+    fn c3_claims_and_income_share_one_principal_in_the_short_views() {
+        // A Panel=1 claim's 10 BILI of R fills the same day view an income row reads: the principal is never used twice.
+        let p = v3();
+        let mut s = PalwBondBudgetStateV1::new(0, &p);
+        let mut j = Vec::new();
+        s.release_due(10, &mut j);
+        let ask =
+            PalwBudgetAskV1 { block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 10 * KAS, final_weight: 0, liability_sompi: 0 };
+        s.reserve_claim_moded_v1(
+            &p,
+            CAPITAL,
+            h(100),
+            bond(1),
+            None,
+            10,
+            ask,
+            PalwBudgetOriginV1::Attempt,
+            PalwHoldModeV1::PanelOne,
+            &mut j,
+        )
+        .unwrap();
+        assert_eq!(
+            s.reserve_income_v1(&p, CAPITAL, h(101), bond(1), 10, 3 * KAS, 3 * KAS, PalwBudgetOriginV1::RoundFee, &mut j),
+            Err(PalwBudgetRefusalV1::Burst { dim: PalwBudgetDimV1::Reward }),
+            "10 + 3 > 12: the claim's R is in the burst view the income reads"
+        );
+        s.reserve_income_v1(&p, CAPITAL, h(102), bond(1), 10, 2 * KAS, 2 * KAS, PalwBudgetOriginV1::RoundFee, &mut j)
+            .expect("10 + 2 ≤ 12");
+        // And the other way round: the income's R is in the day view a Panel=1 claim checks.
+        assert_eq!(s.hold_view_v1(PalwHoldViewV1::Day, &bond(1)).reward_sompi, 12 * KAS);
+    }
+
+    #[test]
+    fn c3_round_rights_are_rated_and_the_draw_reads_the_same_bound() {
+        // daily Round rights 1,000; burst ⌈1000 · 72 · 4000 / 720 000⌉ = 400; the 7-day total 7,000 (TEST values).
+        let p = v3();
+        let mut s = PalwBondBudgetStateV1::new(0, &p);
+        let mut j = Vec::new();
+        s.release_due(10, &mut j);
+        assert_eq!(s.round_rights_remaining_rated_v1(&p, CAPITAL, &bond(1)), 400);
+        assert_eq!(palw_round_rights_remaining_v1(&p, CAPITAL, s.bond_row(&bond(1))), 7_000, "the week alone would allow 7,000");
+        assert_eq!(
+            s.reserve_round_rights_v1(&p, CAPITAL, 1, bond(1), 10, 401, &mut j),
+            Err(PalwBudgetRefusalV1::Burst { dim: PalwBudgetDimV1::RoundRights })
+        );
+        s.reserve_round_rights_v1(&p, CAPITAL, 1, bond(1), 10, 400, &mut j).unwrap();
+        assert_eq!(s.round_rights_remaining_rated_v1(&p, CAPITAL, &bond(1)), 0);
+        let w_burst = p.hold.unwrap().burst_window_daa;
+        s.release_due(10 + w_burst, &mut j);
+        assert_eq!(s.round_rights_remaining_rated_v1(&p, CAPITAL, &bond(1)), 400);
+        s.reserve_round_rights_v1(&p, CAPITAL, 2, bond(1), 10 + w_burst, 400, &mut j).unwrap();
+        s.release_due(10 + 2 * w_burst, &mut j);
+        assert_eq!(s.round_rights_remaining_rated_v1(&p, CAPITAL, &bond(1)), 200, "the day's rate: 1,000 − 800");
+    }
+
+    #[test]
+    fn c3_a_native_income_growth_is_rated_and_written_once() {
+        let p = v3();
+        let mut s = PalwBondBudgetStateV1::new(0, &p);
+        let mut j = Vec::new();
+        s.release_due(10, &mut j);
+        s.hold_native_income_v1(&p, CAPITAL, h(7), bond(1), 10, 500, 10 * KAS, &[], true, &mut j).unwrap();
+        assert_eq!(s.hold_view_v1(PalwHoldViewV1::Burst, &bond(1)).reward_sompi, 10 * KAS);
+        // Growing the same hold by 10 more within the burst window: 20 > 12.
+        assert_eq!(
+            s.hold_native_income_v1(&p, CAPITAL, h(7), bond(1), 11, 500, 20 * KAS, &[], true, &mut j),
+            Err(PalwBudgetRefusalV1::Burst { dim: PalwBudgetDimV1::Reward })
+        );
+        assert!(palw_bond_hold_rate_origin_v1(PalwBudgetOriginV1::NativeIncome));
+        assert!(!palw_bond_hold_rate_origin_v1(PalwBudgetOriginV1::DeferredReporterIncome), "reporter debt stays outside the window");
+        // A V2 policy: no short views at all (the long view alone, unchanged).
+        let mut v2 = PalwBondBudgetPolicyV1::opv_mechanics_probe_v1();
+        v2.max_open_claims_per_bond = 1_000;
+        let s2 = PalwBondBudgetStateV1::new(0, &v2);
+        assert_eq!(
+            s2.hold_rate_admit_v1(&v2, CAPITAL, &bond(1), &PalwBudgetVectorV1 { reward_sompi: u64::MAX, ..PalwBudgetVectorV1::ZERO }),
+            Ok(())
+        );
     }
 
     #[test]

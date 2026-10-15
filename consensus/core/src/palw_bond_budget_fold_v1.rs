@@ -1831,8 +1831,10 @@ impl TransitionBuilder<'_> {
         {
             let budget = self.state.bond_budget.as_ref().expect("created above");
             let bonds = &self.state.bonds;
+            // ADR-0176 C3 (user decision 2026-10-15): the long view, the day view's rate and the burst view (V3 policy; the long view
+            // alone for V2, which is `palw_round_rights_remaining_v1` unchanged).
             let remaining = |bond: &PalwBondKeyV2| {
-                palw_round_rights_remaining_v1(&policy, bonds.get(bond).map(|r| r.collateral).unwrap_or(0), budget.bond_row(bond))
+                budget.round_rights_remaining_rated_v1(&policy, bonds.get(bond).map(|r| r.collateral).unwrap_or(0), bond)
             };
             crate::palw_execution_lane_v1::palw_execution_schedule_assign_quanta_windowed_capped_v1(
                 schedule,
