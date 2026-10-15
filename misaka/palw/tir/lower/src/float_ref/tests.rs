@@ -623,3 +623,26 @@ fn attention_and_gated_delta_across_threads_are_the_one_thread_result() {
         }
     }
 }
+
+#[test]
+fn linear_raw_many_is_linear_raw_per_input_bit_for_bit() {
+    // Input counts on and off the four-input groups, rows on and off the row blocks, below and above the threaded threshold.
+    for (m, out, n) in [(1, 5, 33), (2, 7, 64), (3, 4, 1), (4, 9, 300), (5, 257, 300), (9, 64, 129), (33, 31, 70)] {
+        let xs: Vec<Vec<f32>> = (0..m).map(|j| spread(n, 500 + j as u64)).collect();
+        let refs: Vec<&[f32]> = xs.iter().map(Vec::as_slice).collect();
+        let w = spread(out * n, 77 + n as u64);
+        let b = spread(out, 5);
+        for bias in [None, Some(b.as_slice())] {
+            let many = linear_raw_many(&refs, &w, out, bias);
+            assert_eq!(many.len(), m);
+            for (j, x) in refs.iter().enumerate() {
+                assert_eq!(bits(&many[j]), bits(&linear_raw(x, &w, out, bias)), "m {m} out {out} n {n}: input {j}");
+            }
+        }
+    }
+    // Inputs of unequal length are run one by one.
+    let (a, c) = (spread(8, 1), spread(9, 2));
+    let w = spread(3 * 9, 3);
+    let both = linear_raw_many(&[a.as_slice(), c.as_slice()], &w, 3, None);
+    assert_eq!(bits(&both[1]), bits(&linear_raw(&c, &w, 3, None)));
+}

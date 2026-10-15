@@ -27,8 +27,10 @@ struct Args {
     #[arg(long)]
     out: PathBuf,
     /// Calibration statistics written by `--stats-out` (`misaka.palw.calib-stats.v1`, bit-exact: the
-    /// input a runtime pack pins by digest).
-    #[arg(long, conflicts_with = "calib")]
+    /// input a runtime pack pins by digest). With `--calib` as well, the statistics are read, not re-measured, and the
+    /// sequences they were measured on give the calibrated context and the calibration-length rule (statistics measured
+    /// on another machine: `palw-tir-fidelity --calibrate-only --stats-out`).
+    #[arg(long)]
     stats_in: Option<PathBuf>,
     /// Calibrate on these sequences (JSON token file) instead.
     #[arg(long)]
@@ -89,6 +91,15 @@ struct Args {
     /// (`artifact::TOKENIZER_FILES_V1`), zero when it has none).
     #[arg(long)]
     tokenizer: Option<PathBuf>,
+    /// RFC-0020 §2: append RAM accounting (live and peak bytes by kind and stage, the resident set) as JSON lines to this file.
+    #[arg(long)]
+    ram_accounting: Option<PathBuf>,
+    /// RFC-0020 §6 (opt-in): spill the carries between occurrences to this directory when a sequence's carries would exceed
+    /// `--spill-carries-budget-mib` (bit-identical to the in-RAM run; trades RAM for disk I/O).
+    #[arg(long)]
+    spill_carries_dir: Option<PathBuf>,
+    #[arg(long, default_value_t = 0)]
+    spill_carries_budget_mib: u64,
     /// The math the tables and scales are computed with: `libm-v1` (pure-Rust libm; the same bytes on
     /// every platform — the default) or `std` (the platform's libm: reproduces an artifact built
     /// before libm-v1, on the platform that built it).
@@ -270,6 +281,16 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     let t0 = Instant::now();
     let log = |m: String| eprintln!("[{:>7.1}s] {m}", t0.elapsed().as_secs_f64());
     let math = MathMode::parse(&a.math).ok_or_else(|| format!("--math {}: libm-v1 or std", a.math))?;
+    if let Some(p) = &a.ram_accounting {
+        misaka_palw_tir_lower::ram_account::enable(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        misaka_palw_tir_lower::ram_account::stage("open");
+    }
+    if let Some(dir) = &a.spill_carries_dir {
+        misaka_palw_tir_lower::float_ref::stream::set_carry_spill(Some(misaka_palw_tir_lower::float_ref::stream::SpillCfg {
+            dir: dir.clone(),
+            budget_bytes: a.spill_carries_budget_mib << 20,
+        }));
+    }
     let mut req = ConvertRequest::new(&a.model, &a.out);
     req.stats_in = a.stats_in.clone();
     req.calib = match &a.calib {
@@ -303,6 +324,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     genesis_options(a, &mut req)?;
     req.gguf_source = gguf_source(a)?;
     let o = convert_model(&req, &log).map_err(|e| e.to_string())?;
+    misaka_palw_tir_lower::ram_account::finish();
     if let Some(src) = &req.gguf_source {
         let (fetched, refetched) = src.fetched();
         log(format!(

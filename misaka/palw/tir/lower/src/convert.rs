@@ -410,6 +410,7 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
                 calibrated = Some((longest, context));
             }
             log(format!("calibrating on {} sequences, {} positions", seqs.len(), seqs.iter().map(Vec::len).sum::<usize>()));
+            crate::ram_account::stage("calibration");
             let s = crate::fidelity::calibrate(&prep.hl, &loader, &seqs, &progress("calibration"))?;
             (s, c.source.clone())
         }
@@ -493,6 +494,7 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         math,
     };
     log("converting".into());
+    crate::ram_account::stage("conversion");
     let (report, palwart) = match &req.palwart {
         // Genesis 8: straight into a PALWART3 artifact, segment by segment (no PALWTIR1, no chunk store).
         Some(out) => {
