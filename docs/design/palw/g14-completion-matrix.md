@@ -879,6 +879,31 @@ meas/opv-timings. `adv/c4r4` is not merged.
 | 81 | closed in source | `a7464a450`, `69d0e31a3` | OPVB | no |
 | 82 | code still missing | Chain-path E2E of `--palw-tir-shard-watch` with every seat colluding, and its V2 Final hold. Only the core reference test exists. | G14C | partly (only if legacy TIR shard claims stay in G14 scope beyond the staged set) |
 
+## 2k. Original TIR frame route — the common public conviction (2026-10-15, branch `integ/g14-remaining`)
+
+Codex's original paid TIR frame (`codex/integration-followup` `65c799ee3`, merged into `integ/g14-remaining`) plus this round's
+conviction, hold and Gate C wiring. **Source only: nothing below was compiled, run or measured.** The route is owned by
+`palw_tir_public_conviction_v1` (`None` on every preset; the fence now also requires `palw_rcore_plus` and
+`palw_capacity_aggregate_liability`). **Recommendation for DAA 14,000: keep this fence dormant** (blockers in the last row).
+
+Scope admitted by the route: FP V3 TIR jobs with no registered semantic stage, a plain greedy selection rule and no job tail
+(`prepare_original_v1` refuses everything else by name, so no unprosecutable layer is admitted).
+
+| Condition (§0 columns) | Original frame route at `integ/g14-remaining` |
+|---|---|
+| C1 ordinary entry | Filer = any Active, above-floor bond that is not liable on the claim (not the producer, no credited Valid grant). A drawn seat without a Valid and an outside bond file the SAME object (`TirPublicControlV1` target `Conviction`). Source only. |
+| C2 fresh verifier | Consensus reader `palw_tir_public_frame_v1` (accepted snapshot) and the node builder `kaspad/src/palw_tir_public_filer.rs`. No scheduler / queue / restart journal yet. |
+| C3 authenticated material | Evidence is a cone/logits primitive, a greedy decode-token primitive, or the complete original ID sequence; every byte opens against the claim's original roots; the registered program is filled natively (a carried program is refused). |
+| C4 bounded localization | The primitive is bounded by the frame's prepaid terminal witness ceiling and the 90,000-byte control; larger witnesses are refused, never truncated (split carriage not built). |
+| C5 objective verdict | Native re-adjudication in the fold (`adjudicate_original_v1`, `adjudicate_original_greedy_decode_v1`, `adjudicate_original_output_v1`). A holding predicate or any error refuses the filing and changes nothing. |
+| C6 real sanction | Credited Valid custodians: S4 (lock + S3/S4 tier) once per seat; producer: `convict_by_court_verdict_v1` (void / Final reversal, `CourtConviction` once, reporter reward to the filer, ADR-0160 intent-class forfeiture + freeze). Every liable bond must hold its original exit hold, so the debit is collectible. DA: outside owner Collect / PreparationCollect → `staged_selected_default_charge_v1`, with the same exit-hold assertion. |
+| C7 refusal of standing | A frame's claim is floored to `Final` at the frame's `collect_until` (`palw_claim_final_floor_v1`): no spend weight, Final weight, escrow, model allocation, Gate C credit or coinbase leg before the door closes; Gate C certification waits while the door is open; a convicted claim is voided, so receipt spends are refused by validation (Final required) and by the template's spendable list; execution-proving faults forfeit by root; the convicted producer is frozen (admission `ProducerFrozen`, producer readiness). |
+| C8 once / reorg | Consumed-offence keys shared with the kind-3 and DA routes; second filing refused; journal reverts the verdict (fold-level E2E source checks the root). |
+| C9 (OPVB) | Not scored here. |
+| C10 maximum profile / deadline | **Open**: no measured maximum, no owner-count / custodian-load capacity rule, CPU of repeated signature checks not budgeted natively. |
+| Tests | `palw_tir_public_fold_v1.rs` `conviction_e2e_tests` (4 source tests: full collusion → outside conviction → slash → refusal, honest twin, output identity, outside preparation default), `kaspad/src/palw_tir_public_filer.rs` (real ML-DSA signing). **Not run.** |
+| Blockers before arming | producer-side TFP1 envelope (quote-before-sign RPC), Valid-seat GrantReady worker, node filer scheduling, V3/V4 typed receipts (refused by name), semantic / sampling courts for frames, owner-count and custodian-load capacity rule, R7/R8 measurement and recovery, A-2 wire re-pin for tags 170/171, V1–V7. |
+
 ## 3. Family matrices (milestone baseline)
 
 ### 3.1 F1 — K2-TIR v1/v2 single-program classes (Panel-licensed with every interim seat colluding, and OPV)
@@ -1441,3 +1466,7 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
 2026-10-11 public constrained-selection follow-up: the fresh service tests for forbidden token, premature stop and beaten admitted token all PASS (3 tests, 444.71 s), including producer and all five Valid signers' conviction, positive collection and reporter commit/offence/reveal. False-Valid preflight now reads the gate/fold's block-context session rule. The node tiled planner requests at most two selected public tiles and authenticates them through the existing court predicate; its builder/book/engine regressions PASS, while a registered tiled family's actual service remains unverified. This round's node checks total 62 unique PASS (30 filer, 16 LG14-B, 12 False-Valid, 1 history, 3 service); normal node check PASS. Fresh core filing (5), attribution (19), and decode-constraint (19) regressions add 43 unique PASS, for 105 unique PASS in this round. The initial core build failed for disk capacity; the retry reduced only core test debug symbols and passed. Shipping harvest was not rerun. Maximum terminal carriage, model/tokenizer/table association, remaining active families, initial/prefix state, network recovery and full resource/economic guarantees remain open. ADR-0177 D7 and shipping activation refusal are retained. See [evidence and remaining work](../../audit/g14-review-2026-10-10/tiled-constraint-public-status.md).
 * 2026-10-11 — G14-K (§2g): the kernel route's public verifier inside kaspad's `PalwPanelService` (`palw_kernel_verifier`, `--palw-kernel-model`), driving `misaka-palw-remote::pursuit` (extended: consumer ledger, program / segmented / typed checks, block material, step sends). V-node(svc) for K2-TIR-v2 Panel-licensed with every seat colluding: gather / MatMul / clamp convicted pre- and post-Final, honest twin Final, restart mid-pursuit without a second seal (kaspad 2 PASS); the class registered through the production onboarding path (no test hook). v4 segmented (demand + Respond → conviction; withheld → DA default) and typed memory at V-node(harness) through the same library functions. No consensus change, nothing armed.
 * 2026-10-11 — G14-L (§2h): parallel reserved sessions (lanes, ≤ 64 a session, ≤ 128 extra a reservation, a DA-6 price a lane, deadline + 1 DAA a lane) and the k-ary authenticated descent on the legacy held route, behind both dormant legacy fences (no wire change). Legacy held 8k (2^27 leaves) fits in 4 sessions `[1, 36, 16, 1]`, filed 4,906 of 5,400; height ≥ 30, 2^40 and 2M refused by name (`PARALLEL_SESSIONS`). V-fold: 8k-shaped pursuit on the t12 lattice convicts / defaults on the derived schedule; coalition bounded; restart mid-round. Nothing armed.
+* 2026-10-15 — `integ/g14-remaining` (§2k): Codex's original paid TIR frame merged onto integ; the common public conviction (tag 170
+  `Conviction`/`Convict`: arithmetic, greedy selection, output identity), the payout hold (Final floored at the frame's collect door,
+  Gate C waits), the exit-hold assertion before any collection, frame reader API and node filing builder, regenerated native
+  inventory / wire scanners. Source only; nothing compiled or run; fence recommended dormant at DAA 14,000.
