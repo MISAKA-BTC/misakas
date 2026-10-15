@@ -177,6 +177,7 @@ impl PalwStateParamsV2 {
             public_evidence_reward_from_daa: None,
             claim_hard_deadline_v1: None,
             cell_coverage_closure_from_daa: None,
+            model_eligibility_v1: None,
         })
     }
 
@@ -658,6 +659,26 @@ impl PalwStateParamsV2 {
     /// `Params::palw_cell_coverage_closure_v1`'s height, if the network arms it (the mirror).
     pub fn cell_coverage_closure_from_daa(&self) -> Option<u64> {
         self.cell_coverage_closure_from_daa
+    }
+
+    /// **RFC-0017's mirror** (`crate::palw_model_eligibility_v1`) — written by `Params::sync_palw_model_eligibility_v1` and by
+    /// nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_model_eligibility_v1(
+        mut self,
+        mirror: Option<crate::palw_model_eligibility_v1::PalwModelEligibilityMirrorV1>,
+    ) -> Self {
+        self.model_eligibility_v1 = mirror;
+        self
+    }
+
+    /// `Params::palw_model_eligibility_v1`'s height and policy, if the network arms it (the mirror).
+    pub fn model_eligibility_v1(&self) -> Option<&crate::palw_model_eligibility_v1::PalwModelEligibilityMirrorV1> {
+        self.model_eligibility_v1.as_ref()
+    }
+
+    /// The mirror if it governs `daa` (A-2: `None` below the fence and on every shipped network).
+    pub fn model_eligibility_v1_at(&self, daa: u64) -> Option<&crate::palw_model_eligibility_v1::PalwModelEligibilityMirrorV1> {
+        self.model_eligibility_v1.as_ref().filter(|m| m.governs(daa))
     }
 
     /// **RFC-0010: the permissionless Panel's mirror** — written by `Params::sync_palw_permissionless_panel_v1` and by nothing else

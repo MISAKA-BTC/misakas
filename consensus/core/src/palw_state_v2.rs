@@ -1895,6 +1895,11 @@ pub struct PalwStateParamsV2 {
     /// and the court close read it). `None` on every shipped preset, and validation refuses every armed one.
     #[borsh(skip)]
     cell_coverage_closure_from_daa: Option<u64>,
+    /// **RFC-0017: `Params::palw_model_eligibility_v1`'s height and (unapproved design) policy**, mirrored by
+    /// `Params::sync_palw_model_eligibility_v1` (`crate::palw_model_eligibility_v1`: the claim gate, the probation grant, the Final
+    /// weight pin, the exam fold and the registry RPC read it). `None` on every shipped preset, and validation refuses every armed one.
+    #[borsh(skip)]
+    model_eligibility_v1: Option<crate::palw_model_eligibility_v1::PalwModelEligibilityMirrorV1>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
