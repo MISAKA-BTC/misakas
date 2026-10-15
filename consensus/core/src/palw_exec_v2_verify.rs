@@ -787,7 +787,7 @@ pub fn palw_exec_v2_observation_with_retention_v2(
             accepted_work: root.accepted_work,
             verified_work: root.verified_work,
             pending: root.pending,
-            ready_for_final: root.ready_for_final(),
+            ready_for_final: root.ready_for_final() && !state.exec_v2_holds_final_v1(&id),
             expiry_daa: root.expiry_daa,
             root_bond: bond_name(&root.root_bond),
             extra_executors: root.extra_executors.iter().map(bond_name).collect(),
