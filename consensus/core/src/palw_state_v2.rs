@@ -10029,6 +10029,14 @@ pub enum PalwStateV2Error {
     /// onboarding/G14 path, so it earns no reward and no consensus work weight — no claim of it is admitted on any lane.
     #[error("class {class} earns no reward or consensus work weight: {code} ({why})")]
     ClassNotRewardable { class: Hash64, code: &'static str, why: String },
+    /// **RFC-0016 V+** (`palw_model_block_rights_v1`, dormant): the model holds no block right for this Attempt now (own, reissued or
+    /// within the epoch total). Checked before any write; the block's own attempt is skipped on it, never the block refused.
+    #[error("class {class} has no block right now: {why} ({code})")]
+    ModelBlockRightsRefused { class: Hash64, code: &'static str, why: String },
+    /// **RFC-0016 elastic Final capacity** (`palw_elastic_final_capacity_v1`, dormant): the pending queue refuses the claim (the bond's
+    /// share of the queue, or the OPV route's check supply). Checked before any write; skippable like the room.
+    #[error("class {class}: the pending Final queue refuses the claim: {why} ({code})")]
+    FinalQueueRefused { class: Hash64, code: &'static str, why: String },
     /// **R6-CELL round 4** (`palw_cell_coverage_closure_v1`, REQ-CELL-1): past the fence a class whose legacy cell coverage has a
     /// gap (an unknown state chunk map, or an uncovered kind) is refused at registration — explicitly uncovered and unrewarded.
     #[error("class {class} is refused at registration: {code} ({why})")]
@@ -13646,6 +13654,8 @@ pub fn palw_v2_pre_object_base_v1(
     //      rights, readiness §3e), the sweeps and the objects. Mirrored in `palw_v2_pre_object_base_v1`. A no-op below
     //      `palw_bond_budget_v1`, which no network can arm.
     palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx)?;
+    // RFC-0016 (dormant): the reissue snapshot at φ, the pending queue's TTL voids and dequeues, the heartbeat-dependent counter.
+    palw_rfc0016_fold_v1::tick_rfc0016_v1(&mut builder, ctx)?;
     for income in &extras.round_fee_incomes {
         builder.reserve_round_income_v1(ctx, *income)?;
     }
@@ -14115,6 +14125,8 @@ fn apply_palw_transition_v7_inner(
     //      rights, readiness §3e), the sweeps and the objects. Mirrored in `palw_v2_pre_object_base_v1`. A no-op below
     //      `palw_bond_budget_v1`, which no network can arm.
     palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx)?;
+    // RFC-0016 (dormant): the reissue snapshot at φ, the pending queue's TTL voids and dequeues, the heartbeat-dependent counter.
+    palw_rfc0016_fold_v1::tick_rfc0016_v1(&mut builder, ctx)?;
     for income in &extras.round_fee_incomes {
         builder.reserve_round_income_v1(ctx, *income)?;
     }
@@ -14413,7 +14425,11 @@ fn apply_palw_transition_v7_inner(
                     // registers the bond's demand for the class).
                     | PalwStateV2Error::NetworkRoomExhausted { .. }
                     // Lane BUDGET (ADR-0176 D1): the bond's budget window — `apply_attempt`'s last check before its first write.
-                    | PalwStateV2Error::BondBudgetExhausted { .. }),
+                    | PalwStateV2Error::BondBudgetExhausted { .. }
+                    // RFC-0016 (dormant): V+ block rights and the pending queue's bond share — checked in the class gate and beside the
+                    // per-bond share, before `apply_attempt`'s first write; another block may take the last right or queue slot.
+                    | PalwStateV2Error::ModelBlockRightsRefused { .. }
+                    | PalwStateV2Error::FinalQueueRefused { .. }),
                 ) => {
                     builder.register_network_demand_on_v1(&refused, &envelope.attempt, ctx.daa_score);
                     merged_skips.push((ctx.block, refused.to_string()));
@@ -17117,6 +17133,11 @@ pub fn palw_provisional_bind_deadline_v1(
     // "never"), and the re-verification window's end once the class has left it.
     if let Some(row) = state.vertex.mesh.capped.get(claim_id) {
         return Ok(row.window_end_daa.unwrap_or(u64::MAX));
+    }
+    // **RFC-0016 (dormant)**: a claim waiting in a pending Final queue owes no bind deadline (`u64::MAX` is "never"); it leaves with
+    // its bind base set to the DAA it left (`rebound_daa`), and the window is measured from there.
+    if state.rfc0016_claim_queued_v1(claim_id) {
+        return Ok(u64::MAX);
     }
     let base = if palw_claim_awaits_ncp_retry_v1(state, params, claim_id, claim) { claim.accepted_daa } else { claim.bind_base_daa() };
     base.checked_add(params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))
@@ -20806,6 +20827,8 @@ fn apply_attempt(
     // step 4 may skip the own attempt on it (`BondClassShareExceeded` joins the finding-17 skip
     // arm) and step 4b's restore has nothing to undo.
     builder.check_bond_class_share(&bond_key, &attempt.class_id, ctx.daa_score)?;
+    // **RFC-0016 (dormant)**: an Attempt that would be queued is refused when its bond holds its capital share of the class's queue.
+    builder.read().rfc0016_queue_bond_share_v1(&bond_key, &attempt.class_id, ctx.daa_score)?;
     // **ADR-0145: past the fence the collateral is priced on the DERIVED work of one draw**, not on
     // the step-leaf count the class's registrant declared. `None` — every shipped preset — leaves
     // the reservation byte-identical.
@@ -21101,6 +21124,9 @@ fn apply_attempt(
     // **RFC-0007 Part IV.1**: the claim's audit draw, past `palw_audit_mesh_v1` (infallible: a write above this line must not be
     // stranded by a refusal below it).
     palw_mesh_fold_v1::on_claim_accepted_v1(builder, ctx, &claim_id);
+    // **RFC-0016 (dormant)**: past `palw_elastic_final_capacity_v1` the claim takes its class's verifier-share slope and, when its class's
+    // demand exceeds capacity, joins the class's pending queue (no bind deadline while queued). Infallible, like the mesh draw.
+    palw_rfc0016_fold_v1::on_attempt_accepted_rfc0016_v1(builder, ctx, claim_id);
 
     // Epoch production counter (ADR-0039 D5 as a counter; the budget PREDICATE reads it in PR-04).
     let epoch_index = ctx.daa_score / builder.params.epoch_length;

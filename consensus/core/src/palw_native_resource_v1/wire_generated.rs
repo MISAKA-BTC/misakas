@@ -130,6 +130,18 @@ impl NativeWireScanV1 for crate::palw_bond_budget_v1::PalwBudgetOriginV1 {
                 let mut sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
+            13 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            14 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            15 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }

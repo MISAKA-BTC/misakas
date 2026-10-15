@@ -589,7 +589,7 @@ native_struct!(crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1; 
 native_enum!(crate::palw_tir_prefix_state_v1::PalwTirPrefixStateVerdictV1; Honest, StateRootMismatch { derived });
 native_struct!(crate::palw_bond_budget_v1::PalwAllocationEpochV1; index, start_daa, sum_a, accrued_sompi);
 native_struct!(crate::palw_bond_budget_v1::PalwBudgetVectorV1; claims, block_units, reward_sompi, final_weight, round_rights);
-native_enum!(crate::palw_bond_budget_v1::PalwBudgetOriginV1; Attempt, Rider, FreePrompt, Legacy, KernelRoute, RoundRights, MarketFee, RoundFee, SourceFee, NativeIncome, NativeIncomeQueued, NativeIncomePartial, DeferredReporterIncome);
+native_enum!(crate::palw_bond_budget_v1::PalwBudgetOriginV1; Attempt, Rider, FreePrompt, Legacy, KernelRoute, RoundRights, MarketFee, RoundFee, SourceFee, NativeIncome, NativeIncomeQueued, NativeIncomePartial, DeferredReporterIncome, HoldDay, HoldBurst, HoldLiability);
 native_enum!(crate::palw_bond_budget_v1::PalwMaterialPaymentV1; Pending { income }, Queued { income, queue, queued_daa, paid_daa, release_daa }, Historical { until }, UnprovenPhysicalPayment { until });
 native_struct!(crate::palw_bond_budget_v1::PalwPaidConsumerTermsV1; accepted_daa, service_until, backstop_until, material_until, policy);
 native_enum!(crate::palw_bond_budget_v1::PalwPaidConsumerStatusV1; Live, Exhausted { daa }, Terminal { daa });

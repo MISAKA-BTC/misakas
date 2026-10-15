@@ -19,8 +19,12 @@ import sys
 
 OUTCOME_FIELDS = [
     "physical_blocks", "rights_consumed", "rights_unused", "finals", "payout_coinbase_sompi", "payout_escrow_sompi",
-    "refused_for_capacity", "refused_for_rights", "queue_wait_p50_daa", "queue_wait_p95_daa", "real_gap_daa",
-    "heartbeat_dependent_daa", "capacity_shortfall_per_span",
+    "queue_wait_mean_daa", "queue_wait_max_daa", "queue_len", "real_gap_daa", "heartbeat_dependent_daa",
+    "capacity_shortfall_per_span",
+]
+# NODE-LOCAL observations (not consensus; they differ between nodes): shown apart, never as an outcome.
+NODE_LOCAL_FIELDS = [
+    "refused_for_capacity", "refused_for_rights",
 ]
 
 
@@ -52,6 +56,7 @@ def report(before, after):
             "model": m,
             "verdict": verdict(rb, ra),
             "outcomes_delta": out,
+            "node_local (not consensus)": {f: delta(rb.get(f), ra.get(f)) for f in NODE_LOCAL_FIELDS},
             "target (not an outcome)": {"P_m_ppm": [rb.get("target_p_ppm"), ra.get("target_p_ppm")],
                                          "rights_issued": [rb.get("rights_issued"), ra.get("rights_issued")]},
         })

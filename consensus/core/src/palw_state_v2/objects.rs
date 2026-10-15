@@ -1711,6 +1711,11 @@ pub(super) fn apply_object(
             // state, for a 10,000-sompi relay fee. Past it the object is inert: the claim stays
             // `Provisional`, a later eligible `PanelBound` may still bind it, and otherwise
             // `window_bind` voids it exactly as if nobody had published a panel at all.
+            // **RFC-0016 (dormant)**: a claim waiting in a pending Final queue binds no panel — the object is inert, as above; its
+            // verification starts when it leaves the queue (its anchor slot then moves with its bind base).
+            if builder.state.rfc0016_claim_queued_v1(claim_id) {
+                return Ok(());
+            }
             match builder.require_panel_lock_eligible(*claim_id, &claim, seats, ctx.daa_score) {
                 Ok(()) => {}
                 Err(_) if builder.extras.audit_2026_09_23_active => return Ok(()),

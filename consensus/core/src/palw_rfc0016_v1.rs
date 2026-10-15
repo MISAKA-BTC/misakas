@@ -19,6 +19,8 @@
 //! The fold side (reading `PalwChainStateV2`) is `palw_state_v2::palw_rfc0016_fold_v1` (a child module of the state machine).
 
 pub mod capacity;
+pub mod ledger;
+pub mod metrics;
 pub mod report;
 pub mod rights;
 pub mod values;

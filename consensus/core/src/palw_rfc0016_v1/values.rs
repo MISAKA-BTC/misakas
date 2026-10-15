@@ -48,6 +48,8 @@ pub struct PalwRfc0016ValuesV1 {
     pub verifier_util_target_permille: u32,
     /// The OPV route's checks per claim (the per-model check budget scales with the claim rate).
     pub opv_checks_per_claim_permille: u32,
+    /// The checks one ready verifier of a model performs per epoch on the OPV route (measured): the model's check supply.
+    pub opv_checks_per_verifier_epoch: u32,
 }
 
 impl PalwRfc0016ValuesV1 {
@@ -64,6 +66,7 @@ impl PalwRfc0016ValuesV1 {
             || self.capacity_safety_permille > 1_000
             || self.queue_len_per_class == 0
             || self.queue_ttl_daa == 0
+            || self.opv_checks_per_verifier_epoch == 0
             || self.verifier_share_base_permille < PALW_RFC0016_VERIFIER_SHARE_MIN_PERMILLE_V1
             || self.verifier_share_base_permille > PALW_RFC0016_VERIFIER_SHARE_MAX_PERMILLE_V1
     }
@@ -93,6 +96,7 @@ pub const PALW_RFC0016_VALUES_V1: PalwRfc0016ValuesV1 = PalwRfc0016ValuesV1 {
     verifier_slope_gamma_permille: 0,
     verifier_util_target_permille: 0,
     opv_checks_per_claim_permille: 0,
+    opv_checks_per_verifier_epoch: 0,
 };
 
 /// σ, named (placeholder until measured).
@@ -186,6 +190,10 @@ impl Params {
         }
     }
 
+    fn palw_rfc0016_below_v1(fence: Option<ForkActivation>, at: u64) -> bool {
+        fence.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= at)
+    }
+
     fn validate_palw_rfc0016_mirror_v1(&self) -> Result<(), PalwModeV2Error> {
         if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
             && bundle.state.rfc0016_v1() != self.palw_rfc0016_mirror_v1()
@@ -229,6 +237,12 @@ impl Params {
                 "palw_model_block_rights_v1 and the allocation's block_opportunity would apply P_m to blocks twice: arm one",
             ));
         }
+        // The reissue snapshot and the telemetry are kernel-route aux rows (131, 134): the route must exist at or below.
+        if !Self::palw_rfc0016_below_v1(self.palw_probabilistic_constraints_v1, at) {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_model_block_rights_v1 requires palw_probabilistic_constraints_v1 (the kernel route whose rows hold its ledger) at or below it",
+            ));
+        }
         let rights_epoch = bundle.state.epoch_length().max(1);
         if allocation.policy.epoch_daa == 0 || allocation.policy.epoch_daa % rights_epoch != 0 {
             return Err(PalwModeV2Error::Invalid(
@@ -258,6 +272,12 @@ impl Params {
         if self.palw_model_registry.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at) {
             return Err(PalwModeV2Error::Invalid(
                 "palw_elastic_final_capacity_v1 requires palw_model_registry at or below it: it replaces the registry's room",
+            ));
+        }
+        // The pending queue and its telemetry are kernel-route aux rows (132–134): the route must exist at or below.
+        if !Self::palw_rfc0016_below_v1(self.palw_probabilistic_constraints_v1, at) {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_elastic_final_capacity_v1 requires palw_probabilistic_constraints_v1 (the kernel route whose rows hold its queue) at or below it",
             ));
         }
         if !palw_rfc0016_values_measured_v1(&PALW_RFC0016_VALUES_V1, PALW_RFC0016_MEASURED_RECORDS_V1) {
@@ -295,6 +315,7 @@ mod tests {
             verifier_slope_gamma_permille: 100,
             verifier_util_target_permille: 700,
             opv_checks_per_claim_permille: 500,
+            opv_checks_per_verifier_epoch: 10,
         }
     }
 

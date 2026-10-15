@@ -856,6 +856,8 @@ fn apply_settlements_to_exec_vesting(
                     let payload =
                         builder.state.bonds.get(&bond).ok_or_else(|| refused("a Final fee recipient is missing"))?.payout_payload;
                     builder.consume_kernel_final_reward_v1(&claim, bond, payload, now, amount)?;
+                    // RFC-0016 (dormant): the escrow payout telemetry of the claim's model (consensus-derived, never coinbase).
+                    super::palw_rfc0016_fold_v1::rfc0016_note_escrow_payout_v1(builder, now, &claim, amount);
                 }
                 let payee = key.and_then(|key| builder.state.bonds.get(&key).map(|b| b.payout_payload));
                 match payee {
@@ -1400,6 +1402,38 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             let reward = ledger.job_escrows.get(&row.job_id).map_or(0, |escrow| escrow.amount);
             let optimistic =
                 ledger.mode_of_claim(claim) == Some(misaka_palw_kernel::mode::VerificationModeV1::OptimisticPublicVerification);
+            // **RFC-0016 (dormant)**: past `palw_elastic_final_capacity_v1` an OPV claim is refused before acceptance while its model's
+            // open OPV claims need more checks than its ready verifiers give; an admitted one notes its model for the escrow telemetry.
+            if optimistic {
+                let kernel_class = Hash64::from_bytes(row.class_binding_id);
+                let mut natives: Vec<Hash64> = builder
+                    .state
+                    .kernel_route
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|route| route.kernel_bindings_v1())
+                    .filter(|(_, binding)| binding.kernel_class == kernel_class)
+                    .map(|(class, _)| class)
+                    .collect();
+                natives.sort();
+                natives.dedup();
+                let native = (natives.len() == 1).then(|| natives[0]);
+                let open = ledger
+                    .claims
+                    .iter()
+                    .filter(|(id, other)| {
+                        *id != claim
+                            && other.class_binding_id == row.class_binding_id
+                            && !other.life.state.is_terminal()
+                            && ledger.mode_of_claim(id)
+                                == Some(misaka_palw_kernel::mode::VerificationModeV1::OptimisticPublicVerification)
+                    })
+                    .count() as u64;
+                if super::palw_rfc0016_fold_v1::rfc0016_opv_claim_committed_v1(builder, ctx.daa_score, claim, native, open).is_err() {
+                    persist_budget(builder, ctx, &ledger);
+                    return Ok(());
+                }
+            }
             match builder.plan_kernel_claim_budget_v1(ctx, *signer, Hash64::from_bytes(row.class_binding_id), reward, optimistic) {
                 Ok(Some(plan)) => {
                     builder.state.require_kernel_monetary_material_scope_v1(

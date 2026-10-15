@@ -13,7 +13,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{ForkActivation, palw_t12_shipped_params};
-use kaspa_consensus_core::palw_bond_budget_v1::{PalwAllocationCurveV1, PalwAllocationWeightV1};
+use kaspa_consensus_core::palw_bond_budget_v1::{
+    PalwAllocationAverageV1, PalwAllocationCurveV1, PalwAllocationWeightV1, PalwBondBudgetFenceV1, PalwModelAllocationPolicyV1,
+    PalwModelBondAllocationFenceV1,
+};
 use kaspa_consensus_core::palw_rfc0016_v1::capacity::*;
 use kaspa_consensus_core::palw_rfc0016_v1::report::*;
 use kaspa_consensus_core::palw_rfc0016_v1::rights::*;
@@ -49,6 +52,7 @@ fn vals(sigma: u32) -> PalwRfc0016ValuesV1 {
         verifier_slope_gamma_permille: 100,
         verifier_util_target_permille: 700,
         opv_checks_per_claim_permille: 500,
+        opv_checks_per_verifier_epoch: 10,
     }
 }
 
@@ -368,4 +372,28 @@ fn fences_are_dormant_and_refused_when_armed() {
     cap.sync_palw_rfc0016_v1();
     assert!(cap.validate_palw_elastic_final_capacity_v1().is_err());
     assert!(PALW_RFC0016_MEASURED_RECORDS_V1.is_empty());
+}
+
+/// **Lead decision 2026-10-15 (pending user review): `P_m` is applied to blocks ONCE, by V+.** With V+ armed, an ADR-0177 V3 allocation
+/// whose `block_opportunity` is on is refused (two block gates); with it off, the refusal is some other gate's, never "twice".
+/// Coinbase-side `P_m` stays the existing coinbase allocation's: V+'s functions never take or return a reward.
+#[test]
+fn lead_decision_p_m_is_applied_to_blocks_once() {
+    let arm = |block_opportunity: bool| {
+        let mut p = palw_t12_shipped_params();
+        p.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1::at(ForkActivation::new(100)));
+        let mut policy = PalwModelAllocationPolicyV1::decided_unapproved_v3();
+        policy.average = Some(PalwAllocationAverageV1 { block_opportunity, ..PalwAllocationAverageV1::decided_v1() });
+        p.palw_model_bond_allocation_v1 = Some(PalwModelBondAllocationFenceV1 { activation: ForkActivation::new(100), policy });
+        p.palw_model_block_rights_v1 = Some(ForkActivation::new(200));
+        p.sync_palw_bond_budget_v1();
+        p.sync_palw_rfc0016_v1();
+        format!("{:?}", p.validate_palw_model_block_rights_v1().unwrap_err())
+    };
+    assert!(arm(true).contains("twice"), "V+ and the V3 block_opportunity together are refused: {}", arm(true));
+    assert!(!arm(false).contains("twice"));
+    // One application per block: a right is one physical block, its reward is the claim's own carve (no P_m factor here).
+    let v = vals(0);
+    let e = issue(&[(1, 1_000), (2, 3_000)], 100, &v);
+    assert!(e.total_issued() <= e.n_exp);
 }

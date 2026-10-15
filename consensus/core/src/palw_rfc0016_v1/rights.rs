@@ -306,6 +306,115 @@ pub fn palw_rights_admit_v1(
     Ok(PalwRightsUseV1::Reissued)
 }
 
+/// One model's row of the epoch's reissue snapshot: its allowance for the rest of the epoch and the reissued part of it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwRightsAllowanceV1 {
+    pub allowance: u64,
+    pub reissued: u64,
+}
+
+/// **The `A_m`-weighted reissue snapshot at the checkpoint φ** (RFC-0016 §8.1 step 4, lead decision 2026-10-15 pending user
+/// review). Taken ONCE per epoch, at the first block past φ, from the consumption so far:
+///
+/// * an under-demand model (`used · length ≤ issued · elapsed`: on or below its own pace) keeps `min(issued, used + protected)`;
+///   the rest of its rights is released;
+/// * an over-demand model may take released rights up to `min(σ · issued, ⌈used · length / elapsed⌉ − issued)`;
+/// * the released pool is water-filled over the over-demand models by `A_m` (`⌊pool · A_m / ΣA_active⌋`, rounds until no
+///   progress); whatever no over-demand model can take expires unminted.
+///
+/// `Σ allowance ≤ Σ issued` by construction. `None` where no weights are available (then the first-come rule stands).
+pub fn palw_rights_reissue_snapshot_v1(
+    epoch: &PalwRightsEpochV1,
+    consumed: &BTreeMap<Hash64, u64>,
+    weights: Option<&(BTreeMap<Hash64, PalwAllocationWeightV1>, PalwAllocationWeightV1)>,
+    elapsed: u64,
+    values: &PalwRfc0016ValuesV1,
+) -> Option<BTreeMap<Hash64, PalwRightsAllowanceV1>> {
+    let (weights, _) = weights?;
+    let length = epoch.length.max(1);
+    let elapsed = elapsed.clamp(1, length);
+    let mut out: BTreeMap<Hash64, PalwRightsAllowanceV1> = BTreeMap::new();
+    let mut pool: u64 = 0;
+    let mut want: BTreeMap<Hash64, u64> = BTreeMap::new();
+    for (model, issued) in &epoch.issued {
+        let used = consumed.get(model).copied().unwrap_or(0);
+        let over = (used as u128).saturating_mul(length as u128) > (*issued as u128).saturating_mul(elapsed as u128);
+        if over {
+            let projected = ((used as u128).saturating_mul(length as u128)).div_ceil(elapsed as u128).min(u64::MAX as u128) as u64;
+            let cap = mul_div_u64(*issued, values.sigma_permille as u64, 1_000).min(projected.saturating_sub(*issued));
+            if cap > 0 && weights.get(model).is_some_and(|a| !a.is_zero()) {
+                want.insert(*model, cap);
+            }
+            out.insert(*model, PalwRightsAllowanceV1 { allowance: *issued, reissued: 0 });
+        } else {
+            let keep = (*issued).min(used.saturating_add(palw_rights_protected_v1(*issued, used, elapsed, length, values)));
+            pool = pool.saturating_add(issued.saturating_sub(keep));
+            out.insert(*model, PalwRightsAllowanceV1 { allowance: keep, reissued: 0 });
+        }
+    }
+    // Water-fill the pool over the over-demand models by A_m.
+    let mut remaining = pool;
+    loop {
+        let active: Vec<(Hash64, u64)> =
+            want.iter().filter(|(m, cap)| out.get(*m).map(|r| r.reissued).unwrap_or(0) < **cap).map(|(m, cap)| (*m, *cap)).collect();
+        if remaining == 0 || active.is_empty() {
+            break;
+        }
+        let mut sum_a = PalwAllocationWeightV1::from_u64(0);
+        for (m, _) in &active {
+            sum_a = sum_a + weights[m];
+        }
+        let mut given_this_round: u64 = 0;
+        for (m, cap) in &active {
+            let share = palw_model_available_v1(remaining, &weights[m], &sum_a, 0);
+            let row = out.get_mut(m).expect("an over-demand model has a row");
+            let take = share.min(cap.saturating_sub(row.reissued)).min(remaining.saturating_sub(given_this_round));
+            row.reissued = row.reissued.saturating_add(take);
+            row.allowance = row.allowance.saturating_add(take);
+            given_this_round = given_this_round.saturating_add(take);
+        }
+        if given_this_round == 0 {
+            break;
+        }
+        remaining = remaining.saturating_sub(given_this_round);
+    }
+    Some(out)
+}
+
+/// **Admission with the epoch's reissue snapshot** (past φ, where one was taken): a model admits while `used < allowance` and the
+/// epoch total holds; below φ, or with no snapshot, [`palw_rights_admit_v1`] decides (the first-come fallback).
+pub fn palw_rights_admit_with_snapshot_v1(
+    epoch: &PalwRightsEpochV1,
+    consumed: &BTreeMap<Hash64, u64>,
+    model: &Hash64,
+    now_daa: u64,
+    values: &PalwRfc0016ValuesV1,
+    snapshot: Option<&BTreeMap<Hash64, PalwRightsAllowanceV1>>,
+) -> Result<PalwRightsUseV1, PalwRightsRefusalV1> {
+    let elapsed = now_daa.saturating_sub(epoch.start_daa).min(epoch.length);
+    let Some(snapshot) = snapshot.filter(|_| palw_rights_past_checkpoint_v1(elapsed, epoch.length, values)) else {
+        return palw_rights_admit_v1(epoch, consumed, model, now_daa, values);
+    };
+    let total = epoch.total_issued();
+    let total_used = consumed.values().fold(0u64, |a, b| a.saturating_add(*b));
+    if total_used >= total {
+        return Err(if total == 0 { PalwRightsRefusalV1::NoRightsIssued } else { PalwRightsRefusalV1::EpochTotalReached });
+    }
+    let issued = epoch.issued_of(model);
+    let used = consumed.get(model).copied().unwrap_or(0);
+    let allowance = snapshot.get(model).map(|r| r.allowance).unwrap_or(0);
+    if used < allowance {
+        return Ok(if used < issued { PalwRightsUseV1::Own } else { PalwRightsUseV1::Reissued });
+    }
+    Err(if issued == 0 {
+        PalwRightsRefusalV1::NoRightsIssued
+    } else if used >= issued.saturating_add(mul_div_u64(issued, values.sigma_permille as u64, 1_000)) {
+        PalwRightsRefusalV1::SigmaCapReached
+    } else {
+        PalwRightsRefusalV1::NoReleasedRights
+    })
+}
+
 /// **The pre-Attempt rights quote** (RFC-0016 §8.1 step 7): what the producer reads BEFORE spending a forward.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwRightsQuoteV1 {
@@ -498,5 +607,32 @@ mod tests {
         assert_eq!(palw_bplus_psi_permille_v1(5, 10, 0), 500);
         assert_eq!(palw_bplus_psi_permille_v1(5, 10, 100), 1_000);
         assert_eq!(palw_bplus_psi_permille_v1(5, 0, 0), 1_000);
+    }
+
+    /// V2 (lead decision): the released pool goes to the over-demand models by A_m, each within σ; Σ allowance ≤ Σ issued.
+    #[test]
+    fn the_reissue_snapshot_is_weighted_capped_and_conserving() {
+        let e = epoch(&[(1, 10), (2, 10), (3, 10)]);
+        // At half the epoch: 1 and 2 are over pace (used 10 > 5), 3 used nothing (releases all 10).
+        let used: BTreeMap<Hash64, u64> = [(h(1), 10), (h(2), 10), (h(3), 0)].into_iter().collect();
+        let weights: BTreeMap<_, _> = [(h(1), w(3)), (h(2), w(1)), (h(3), w(1))].into_iter().collect();
+        let both = (weights, w(5));
+        let snap = palw_rights_reissue_snapshot_v1(&e, &used, Some(&both), 50, &v(1_000, 500)).unwrap();
+        let total: u64 = snap.values().map(|r| r.allowance).sum();
+        assert!(total <= e.total_issued(), "conserving");
+        assert_eq!(snap[&h(3)].allowance, 0, "a model at zero by φ releases everything");
+        assert!(snap[&h(1)].reissued > snap[&h(2)].reissued, "A_m-weighted: 3:1");
+        assert!(snap[&h(1)].reissued <= 10 && snap[&h(2)].reissued <= 10, "within σ = 1");
+        // No weights: no snapshot (the first-come fallback).
+        assert_eq!(palw_rights_reissue_snapshot_v1(&e, &used, None, 50, &v(1_000, 500)), None);
+        // Admission follows the snapshot past φ.
+        let mut u = used.clone();
+        let a1 = snap[&h(1)].allowance;
+        u.insert(h(1), a1);
+        assert!(palw_rights_admit_with_snapshot_v1(&e, &u, &h(1), 60, &v(1_000, 500), Some(&snap)).is_err());
+        assert_eq!(
+            palw_rights_admit_with_snapshot_v1(&e, &used, &h(1), 60, &v(1_000, 500), Some(&snap)),
+            Ok(PalwRightsUseV1::Reissued)
+        );
     }
 }

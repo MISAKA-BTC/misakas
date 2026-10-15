@@ -30,16 +30,21 @@ pub struct PalwModelReportRowV1 {
     pub finals: Option<u64>,
     /// Coinbase-derived reward actually consumed by the model's claims (the budget engine's ledger); `None` without the engine.
     pub payout_coinbase_sompi: Option<u128>,
-    /// User-paid escrow paid to the model's kernel claims; UNKNOWN in this reader (kept apart from coinbase, never summed with it).
+    /// User-paid escrow paid to the model's kernel claims this epoch (consensus-derived, aux 134; kept apart from coinbase, never
+    /// summed with it); `None` below the fences.
     pub payout_escrow_sompi: Option<u128>,
-    /// Attempts refused for capacity / rights (node counters, not consensus state): UNKNOWN here.
+    /// **NODE-LOCAL observations, not consensus** (`palw_rfc0016_v1::metrics`): refusals this process saw for capacity / for rights.
     pub refused_for_capacity: Option<u64>,
     pub refused_for_rights: Option<u64>,
-    /// Pending-queue wait (DAA) median and p95; UNKNOWN until the queue is wired.
-    pub queue_wait_p50_daa: Option<u64>,
-    pub queue_wait_p95_daa: Option<u64>,
-    /// DAA since the network's last REAL (model) block, and DAA the clock depended on the heartbeat/floor; UNKNOWN in this reader.
+    /// Pending-queue wait of the claims that left the queue this epoch: mean and max DAA (consensus-derived, aux 134).
+    pub queue_wait_mean_daa: Option<u64>,
+    pub queue_wait_max_daa: Option<u64>,
+    /// Claims waiting in the model's queues now (consensus-derived).
+    pub queue_len: u64,
+    /// DAA since the last BLUE REAL block while REAL work flows (the floor state's `Normal { last_blue }`); `None` when the floor is
+    /// Idle (no REAL work flowing) or below the fences.
     pub real_gap_daa: Option<u64>,
+    /// DAA this epoch during which the floor was Idle — the clock carried by the floor and the heartbeat (consensus-derived, aux 134).
     pub heartbeat_dependent_daa: Option<u64>,
     /// Elastic capacity per span and the shortfall, where the capacity fence reads them.
     pub capacity_per_span: Option<u128>,
