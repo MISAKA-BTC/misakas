@@ -7,6 +7,29 @@ pub(super) fn apply_object(
     ctx: &PalwBlockContextV2,
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
+    let paired = matches!(object, PalwConsensusObjectV2::FreePromptCommitted { claim, .. }
+        if builder.extras.tir_public_originals.contains_key(claim));
+    if !paired {
+        return apply_object_inner(builder, ctx, object);
+    }
+    // A prospective original is ONE native object. Failure after the ordinary
+    // FP reservation/budget writes cannot leave an accepted unprotected claim.
+    let saved = builder.checkpoint();
+    let result = (|| {
+        palw_tir_public_fold_v1::check_paired_original_v1(builder, object)?;
+        apply_object_inner(builder, ctx, object)
+    })();
+    if result.is_err() {
+        builder.restore(saved);
+    }
+    result
+}
+
+fn apply_object_inner(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
     object_preconditions_v1(&builder.state, builder.params, builder.extras, ctx, object, |class_id| {
         builder
             .entries
@@ -3434,7 +3457,15 @@ pub(super) fn apply_object(
             };
             let mut claim = claim;
             let public_job_wire = builder.public_fp_job_wire_v1(claim_id, &claim, public_job.as_deref())?;
-            let staged_contract = builder.prepare_staged_claim_with_job_v1(*claim_id, &mut claim, public_job.as_deref())?;
+            let tir_original = palw_tir_public_fold_v1::prepare_paired_original_v1(builder, ctx, object, public_job.as_deref())?;
+            let staged_contract = if let Some(frame) = &tir_original {
+                // This is an ORIGINAL prospective allocation, not a repricing
+                // of an old claim or a second old required-family bundle.
+                claim.trace_retention_daa = claim.trace_retention_daa.max(frame.plan_v1().terms.material_until_daa);
+                None
+            } else {
+                builder.prepare_staged_claim_with_job_v1(*claim_id, &mut claim, public_job.as_deref())?
+            };
             // **Lane BUDGET (ADR-0176 D3): the commitment's reservation** — Q 1, B `quanta` receipt blocks, R `quanta` carves of this
             // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
             builder.state.require_native_monetary_material_scope_v1(builder.params, *claim_id, &claim)?;
@@ -3494,6 +3525,9 @@ pub(super) fn apply_object(
             if let Some(authorization) = panel_authorization {
                 palw_panel_lifetime_fold_v2::capture(builder, *claim_id, authorization)
                     .expect("a prevalidated native claim must have its immutable Panel consent fields");
+            }
+            if let Some(frame) = tir_original {
+                palw_tir_public_fold_v1::install_original_v1(builder, ctx, frame)?;
             }
         }
     }

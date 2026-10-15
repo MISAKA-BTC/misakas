@@ -46,6 +46,78 @@ fn independent(b: &TransitionBuilder<'_>, frame: &Frame, actor: PalwBondKeyV2) -
     Ok(())
 }
 
+fn paired_claim(
+    object: &PalwConsensusObjectV2,
+) -> Result<(Hash64, &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3), PalwStateV2Error> {
+    let PalwConsensusObjectV2::FreePromptCommitted { claim, public_job: Some(original), eval: None, .. } = object else {
+        return Err(refused("TFP1 must be paired with the same ordinary public FP object, not evaluation or missing job"));
+    };
+    Ok((*claim, original))
+}
+
+pub(super) fn check_paired_original_v1(b: &TransitionBuilder<'_>, object: &PalwConsensusObjectV2) -> Result<(), PalwStateV2Error> {
+    rules(b)?;
+    b.extras.tir_public_network_domain_v1.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
+    let (claim, original) = paired_claim(object)?;
+    let envelope =
+        b.extras.tir_public_originals.get(&claim).ok_or_else(|| refused("TFP1 has no transaction-local original pairing"))?;
+    envelope.matches_object_v1(object).map_err(refused)?;
+    if envelope.original_fp_v1().map_err(refused)?.commitment != *original {
+        return Err(refused("TFP1 original bytes differ from the actual accepted public FP commitment"));
+    }
+    Ok(())
+}
+
+pub(super) fn prepare_paired_original_v1(
+    b: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+    public_job: Option<&crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
+) -> Result<Option<Frame>, PalwStateV2Error> {
+    let PalwConsensusObjectV2::FreePromptCommitted { claim, .. } = object else { return Ok(None) };
+    let Some(envelope) = b.extras.tir_public_originals.get(claim) else { return Ok(None) };
+    check_paired_original_v1(b, object)?;
+    let original = envelope.original_fp_v1().map_err(refused)?.commitment;
+    if public_job != Some(&original) {
+        return Err(refused("TFP1 cannot install a frame without this object's exact public job"));
+    }
+    let frame = prepare_original_v1(b, ctx, object, &original, &envelope.header, &envelope.pledge)?;
+    if envelope.declared_rent_sompi != frame.plan_v1().terms.plan.rent_sompi {
+        return Err(refused("TFP1 declared burn differs from the exact original native full-SUM rent"));
+    }
+    Ok(Some(frame))
+}
+
+/// Native price derivation on the actual pre-object state. The object must be
+/// the ordinary extractor's projection of these SAME original bytes; callers
+/// must not duplicate its version/consumed-prefix-state conversion. This reads
+/// state only: no reservation, payment, receipt credit or admission marker is
+/// produced, and all ordinary FP validation is still mandatory at acceptance.
+/// The native caller supplies block context/extras, not a wire-advertised cap.
+pub fn palw_tir_public_preclaim_quote_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    extras: &PalwTransitionExtrasV1,
+    object: &PalwConsensusObjectV2,
+    envelope: &crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1,
+) -> Result<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1, PalwStateV2Error> {
+    let builder = TransitionBuilder::new(base, params, false, false, false, false, extras);
+    rules(&builder)?;
+    extras.tir_public_network_domain_v1.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
+    let (_, original) = paired_claim(object)?;
+    envelope.matches_object_v1(object).map_err(refused)?;
+    let payload = envelope.original_fp_v1().map_err(refused)?;
+    if payload.commitment != *original {
+        return Err(refused("TFP1 quote changes the actual original public job"));
+    }
+    let frame = prepare_original_v1(&builder, ctx, object, original, &envelope.header, &envelope.pledge)?;
+    if envelope.declared_rent_sompi != frame.plan_v1().terms.plan.rent_sompi {
+        return Err(refused("TFP1 quote declaration differs from exact native full-SUM rent"));
+    }
+    Ok(frame.plan_v1().clone())
+}
+
 /// All inputs are transaction-local original material or resolved native state.
 /// The ordinary FP signature/price/admission path must also accept that SAME
 /// original object. No row is written by this preparation step.
@@ -302,8 +374,16 @@ fn apply_control_inner_v1(
     control.validate_native_signature_v1(network_domain, &b.state).map_err(refused)?;
     let maximum_leaves = frame.descriptor_v1().maximum_leaves;
     let transition = match (&control.target, &control.action) {
-        (T::OwnerOpen { owner }, A::Open) => return open_v1(b, ctx, &frame, *owner),
+        (T::OwnerOpen { owner }, A::Open) => {
+            if control.declared_rent_sompi != owner_terms_v1(&frame)?.plan.rent_sompi {
+                return Err(refused("TIR Open declared burn differs from this separately paid native owner rent"));
+            }
+            return open_v1(b, ctx, &frame, *owner);
+        }
         (T::Preparation { .. }, A::Preparation(action)) => {
+            if control.declared_rent_sompi != 0 {
+                return Err(refused("TIR preparation continuation cannot invent a second upfront rent"));
+            }
             let Some(Row::TirPreparation(prep)) = b.state.staged_court_row_v1(&frame.preparation_key_v1()) else {
                 return Err(refused("TIR preparation control has no original funded row"));
             };
@@ -329,6 +409,9 @@ fn apply_control_inner_v1(
             .map_err(refused)?
         }
         (T::Acquisition { owner, reserved_daa }, A::Acquisition(action)) => {
+            if control.declared_rent_sompi != 0 {
+                return Err(refused("TIR acquisition continuation cannot change its prepaid rent"));
+            }
             let key = owner_key(&frame, *owner, *reserved_daa)?;
             let Some(Row::TirAcquisition(row)) = b.state.staged_court_row_v1(&key) else {
                 return Err(refused("TIR control has no separately paid owner acquisition"));

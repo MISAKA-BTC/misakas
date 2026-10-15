@@ -972,3 +972,4 @@ pub mod palw_tir_objective_v1;
 pub mod palw_tir_public_custody_v1;
 pub mod palw_tir_public_carriage_v1;
 pub mod palw_tir_public_claim_v1;
+pub mod palw_tir_public_fp_envelope_v1;

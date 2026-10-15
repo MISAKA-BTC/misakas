@@ -350,6 +350,32 @@ impl<'a> BondSpendFilter<'a> {
 }
 
 impl VirtualStateProcessor {
+    /// Height-resolved outer-carrier rent declaration. It is burned whether the
+    /// native allocation is later accepted or refused. Native admission must
+    /// separately require this declaration to equal its own derived plan rent.
+    fn palw_tir_public_declared_rent_v1(&self, tx: &Transaction, daa: u64) -> u64 {
+        if !self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(daa)) {
+            return 0;
+        }
+        if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            return kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(&tx.payload)
+                .map(|envelope| envelope.declared_rent_sompi).unwrap_or(0);
+        }
+        if tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE {
+            use kaspa_consensus_core::palw_tir_public_carriage_v1::{PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T};
+            return kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx))
+                .objects.first().and_then(|carried| {
+                    if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::TirPublicControlV1 { control } = &carried.object {
+                        if matches!((&control.target, &control.action), (T::OwnerOpen { .. }, A::Open)) && control.check_v1().is_ok() {
+                            return Some(control.declared_rent_sompi);
+                        }
+                    }
+                    None
+                }).unwrap_or(0);
+        }
+        0
+    }
+
     /// The amount the recipient can actually collect, shared by Round fee
     /// admission, template preflight and the final coinbase reward calculation.
     pub(super) fn palw_collectible_transaction_fee_v1(&self, tx: &Transaction, fee: u64, bond_burned: u64, daa: u64) -> u64 {
@@ -374,7 +400,7 @@ impl VirtualStateProcessor {
         } else {
             0
         };
-        fee.saturating_sub(bond_burned.saturating_add(rent))
+        fee.saturating_sub(bond_burned.saturating_add(rent).saturating_add(self.palw_tir_public_declared_rent_v1(tx, daa)))
     }
 
     /// Calculates UTXO state and transaction acceptance data relative to the selected parent state
@@ -550,7 +576,8 @@ impl VirtualStateProcessor {
             // ADR-0088 Decision 11: the registry's three rent-priced objects burn their rent the
             // same way, behind their own fence; the map is collected when either fence is armed.
             let collect_carrier_fees =
-                self.palw_certification_rent_at(pov_daa_score) || self.palw_model_lines_active_at(pov_daa_score);
+                self.palw_certification_rent_at(pov_daa_score) || self.palw_model_lines_active_at(pov_daa_score)
+                    || self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score));
             let mut block_fee = 0u64;
             let mut finality_fee = 0u64;
             for (validated_tx, _) in validated_transactions.iter() {

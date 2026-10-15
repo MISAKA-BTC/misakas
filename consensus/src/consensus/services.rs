@@ -226,6 +226,7 @@ impl ConsensusServices {
         // ADR-0096 Decision 8 and RFC-0001 §2.5: the constrained claim's fences. `None` on every shipped preset.
         .with_fp_decode_constraint_fence(params.palw_fp_decode_constraint_fence())
         .with_staged_public_court_fence(params.palw_staged_public_court_v1_fence())
+        .with_tir_public_conviction_fence(params.palw_tir_public_conviction_v1_fence())
         .with_fp_constraint_v2_fence(params.palw_fp_constraint_v2_fence());
 
         let pruning_point_manager = PruningPointManager::new(

@@ -7,6 +7,31 @@
 本書は新経路の本番有効化や`pre`へのpushを許可するものではない。
 正式なnative設定の下で経路が実行可能になることと、shipping presetのfenceを有効化する判断は区別する。
 
+## 停止時点の引継ぎ
+
+2026-10-15、ユーザーの「ここまでで作業を完了して残作業をmdに残してpush」の指示により、ここで実装作業を停止する。
+**完了したのは今回の保存・引継ぎであり、G14全体ではない。** 全担当の編集を凍結し、未検証のWIPとして作業ブランチへ保存する。
+`pre`への反映・本番fence有効化・未統合branchの取込みは行わない。
+
+### 今回追加したソース（未検証）
+
+- `49794e9a7`では、元claim frame、署名付きcontrol／grant、atomic Valid＋S4＋raw grant＋Ready、producer exposure／保持／復元索引、native Rules／network domainの接続候補を保存した。
+- その後の保存対象は、元FPを包む`TFP1` bounded envelope、isolation／header-contextの元FP view、実carrierとの対応付け、元FPの通常予約後に同じatomic objectでframeを保存する経路、旧bundleの二重要求回避である。
+- 新しいoriginal／owner Openのrentをnative planから照合し、外側transactionの実feeで不足・未価格sentinelを拒否するソースを追加した。rent宣言をUTXOのcollectible feeから控除し、self-miningでその宣言額がそのまま戻らないよう接続する候補も追加した。
+- canonical foldには、受理に成功した元FPのcompanionだけを渡す。別の同claim transaction、拒否されたcarrier、後続の重複carrierのpledgeを貸し借りしないための処理である。
+- 上記はコンパイルも実行もしていない。構文／書式と差分検査だけであり、実料金の徴収・native受理・経済結果・期限内完走の証拠ではない。
+
+### 再開時に先に確認する具体的な穴
+
+1. 追加一式の型・全struct literal・enum／wire manifest pin・通常fee consumerをソース段階で揃える。G14の残りのコード実装を終えるまでは、ユーザー指定どおりbuild／testを始めない。
+2. `TFP1`のrent宣言、実UTXO fee、burn、producer／owner deposit、同一transactionのnative受理を通しで監査する。現時点では実徴収済みとは扱わない。
+3. `utxo_validation.rs`の`finality_fee += validated_tx.calculated_fee`は控除前額の分類である。新rent控除後のcollectible totalとの整合、EVM depositを併せ持つcarrier、他transactionの通常feeを巻き込む配分がないことを、template／Round／coinbaseと同じ規則で解決する。総feeから控除しただけで全配分の整合まで証明したことにはしない。
+4. 新envelopeは通常FP payloadのstrict decoderであり、Evalの追加tail等の別codecをまだ扱わない。全nested job-tail Vecの割当前上限も未監査である。外側48 KiB上限と一部preflightだけで全nested allocationが安全とはしない。
+5. context再導出helperのD=0拒否と、既存native routeが許す元FP形式・job種別・decode countの範囲を照合する。新carrierが合法な元形式を黙って落とす場合、対象を狭めて完成扱いせず対応を足す。
+6. V3/V4のtyped grant、共通filerからnative terminal、小さいrooted裁定参照／大witness搬送、実slash、生成資格と受信block拒否、全報酬consumerを完成させる。
+7. native worker／queue／inclusion、実CPU予約・反復上限、最大profile、GC、IBD／pruned import、再編で孤立した物理workのjournalを閉じる。
+8. R1〜R8の実装を全対象で揃えた後にV1〜V7をまとめて実行する。追加した未実行テストソースや別branchの結果を、今回の完成証拠に置き換えない。
+
 ## 1. 到達すべき状態
 
 > producerとPanel全員が共謀しても、active planがcoverする計算不正・job/input/output/state/DA違反について、
@@ -43,8 +68,8 @@
 | FullSUM allocation planner | `Complete`は部品の資源導出だけ。実際の料金徴収・担保確保・native admissionの成立ではない |
 | claim単位の準備期限、Ready、literal defaultのkernel | 署名付きcarrier、native資格、通常nodeキュー、実際の徴収が未接続 |
 | 再開用のprepared capture／索引 | native lease・Ready・GCとの運用接続、最大サイズと再開期限の実測は未完 |
-| 新しい元claim frame、保持・producer exposure・復元索引の候補実装 | `0909ad5ad`後のWIP。構造検査や署名検査だけで支払い済みstandingにはしない。元FPのtransaction pairingと実料金検査が未接続 |
-| bounded署名付きcontrol／grant carrier、tag 170／171、独立fence・native foldの候補実装 | nativeネットワーク設定・通常入口・料金・enum全体の整合と回帰は未検証。元FP envelopeは未実装で、稼働する受理経路の完成ではない |
+| 新しい元claim frame、保持・producer exposure・復元索引、元FPとのatomic受理の候補実装 | `0909ad5ad`後のWIP。transaction pairingと実料金検査をソースで接続した段階で、支払い済みstandingの実動作は未検証 |
+| bounded署名付きcontrol／grant carrier、tag 170／171、TFP1、独立fence・native foldの候補実装 | nativeネットワーク設定・通常入口・料金・burn・enum全体の整合と回帰は未検証。稼働する受理経路の完成ではない |
 | 追加した回帰テストのソース | 未実行。syntax／差分検査を、コンパイル・試験・実ネットワークの証拠に数えない |
 
 過去の別commit・別branchの試験結果は、この保存点と作業中差分の通し検証ではない。
@@ -194,7 +219,7 @@ R7の予算・期限条件はR1の元契約に必要なので、後付けで元h
 - [これまでの実装記録と未検証境界](g14-integration-followup-2026-10-15.md)
 - [activation readiness matrix](activation-readiness-matrix.md): 過去の結果・他laneの状況を含む。新経路の完了証拠として無条件に転用しない。
 - Source／work／Ready: `consensus/core/src/palw_tir_public_{source,owned,state,allocation}_v1.rs`
-- 元claim frame／署名搬送／native fold候補: `consensus/core/src/palw_tir_public_{claim,carriage,fold}_v1.rs`（WIP）
+- 元claim frame／署名搬送／元FP envelope／native fold候補: `consensus/core/src/palw_tir_public_{claim,carriage,fp_envelope,fold}_v1.rs`（WIP）
 - Custody: `consensus/core/src/palw_tir_public_custody_v1.rs`
 - 局所裁定: `consensus/core/src/palw_tir_objective_v1.rs`
 - Native状態・terminal: `consensus/core/src/palw_state_v2.rs`、`palw_staged_court_fold_v1.rs`、`palw_terminal_carriage_fold_v1.rs`

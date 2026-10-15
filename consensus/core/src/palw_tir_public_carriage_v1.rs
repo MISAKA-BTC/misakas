@@ -72,6 +72,9 @@ pub struct PalwTirPublicControlV1 {
     pub source_id: Hash64,
     pub target: PalwTirPublicControlTargetV1,
     pub expected_turn: u64,
+    /// Burned from the OUTER carrier fee. Native Open requires the exact
+    /// separately derived owner rent; prepaid continuation actions carry zero.
+    pub declared_rent_sompi: u64,
     pub signer: PalwBondKeyV2,
     pub action: PalwTirPublicControlActionV1,
     pub signature: Vec<u8>,
@@ -85,6 +88,7 @@ impl BorshDeserialize for PalwTirPublicControlV1 {
             source_id: BorshDeserialize::deserialize_reader(r)?,
             target: BorshDeserialize::deserialize_reader(r)?,
             expected_turn: BorshDeserialize::deserialize_reader(r)?,
+            declared_rent_sompi: BorshDeserialize::deserialize_reader(r)?,
             signer: BorshDeserialize::deserialize_reader(r)?,
             action: BorshDeserialize::deserialize_reader(r)?,
             signature: crate::palw_public_binding_v1::read_signature_v1(r)?,
@@ -95,6 +99,10 @@ impl PalwTirPublicControlV1 {
     fn check_payload_v1(&self) -> Result<(), String> {
         use PalwTirPublicControlActionV1 as A;
         use PalwTirPublicControlTargetV1 as T;
+        let opens = matches!((&self.target, &self.action), (T::OwnerOpen { .. }, A::Open));
+        if opens != (self.declared_rent_sompi != 0) {
+            return Err("TIR Open requires declared rent and prepaid continuations require zero new rent".into());
+        }
         if self.version != 1
             || self.claim == Hash64::default()
             || self.allocation_id == Hash64::default()
@@ -187,6 +195,7 @@ impl PalwTirPublicControlV1 {
                 self.source_id,
                 self.target,
                 self.expected_turn,
+                self.declared_rent_sompi,
                 self.signer,
                 &self.action,
             ),
@@ -383,6 +392,7 @@ mod tests {
             source_id: h(3),
             target: PalwTirPublicControlTargetV1::Acquisition { owner: bond(7), reserved_daa: 10 },
             expected_turn: 4,
+            declared_rent_sompi: 0,
             signer: bond(8),
             action: PalwTirPublicControlActionV1::Acquisition(OwnedAction::Part {
                 demand_id: h(4),
@@ -485,12 +495,14 @@ mod tests {
         let mut c = control();
         c.target = PalwTirPublicControlTargetV1::OwnerOpen { owner: c.signer };
         c.action = PalwTirPublicControlActionV1::Open;
+        c.declared_rent_sompi = 1;
         assert!(c.check_v1().is_err(), "Open cannot borrow an existing turn");
         c.expected_turn = 0;
         c.check_v1().unwrap();
         c.target = PalwTirPublicControlTargetV1::Preparation { original_accepted_daa: 10 };
         assert!(c.check_v1().is_err());
         c.action = PalwTirPublicControlActionV1::Preparation(OwnedAction::PreparationReady { descriptor: descriptor() });
+        c.declared_rent_sompi = 0;
         c.check_v1().unwrap();
         c.action = PalwTirPublicControlActionV1::Acquisition(OwnedAction::Demand { request: Request::StepLeaf { index: 0 } });
         assert!(c.check_v1().is_err(), "turn zero is not a substitute for the correct claim-wide lane");

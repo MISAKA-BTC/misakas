@@ -186,6 +186,7 @@ mod palw_legacy_public_filer_fold_v1;
 mod palw_staged_court_fold_v1;
 #[path = "palw_tir_public_fold_v1.rs"]
 mod palw_tir_public_fold_v1;
+pub use palw_tir_public_fold_v1::palw_tir_public_preclaim_quote_v1;
 #[path = "palw_terminal_carriage_fold_v1.rs"]
 mod palw_terminal_carriage_fold_v1;
 pub use palw_legacy_public_filer_fold_v1::{
@@ -19365,6 +19366,10 @@ pub struct PalwTransitionExtrasV1 {
     pub tir_public_allocation_rules_v1: Option<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1>,
     /// Native network/genesis domain, never a field supplied by a control carrier.
     pub tir_public_network_domain_v1: Option<Hash64>,
+    /// Transaction-paired TFP1 originals, keyed only after the accepted outer
+    /// transaction was decoded into this exact original FP object by native ingress.
+    /// A matching claim found elsewhere must never lend a pledge to another TX.
+    pub tir_public_originals: BTreeMap<Hash64, crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1>,
     /// `palw_staged_float_constraint_v1` at this block: greedy Float32 Constraint claims are
     /// admitted with the rooted f32 row court. False below it: refused.
     pub staged_float_constraint_active: bool,

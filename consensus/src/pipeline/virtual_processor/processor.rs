@@ -1112,6 +1112,7 @@ pub(super) struct PalwCarriedObjectV1 {
     pub(super) carrier_fee: u64,
     /// Original transaction-local companion, never borrowed from another carrier.
     pub(super) history_pledge: Option<kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
+    pub(super) tir_public_original: Option<kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1>,
     pub(super) original_binding: Option<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>,
     /// The same carrier's optional producer custody delegation (HFP1 version 2).
     pub(super) custody_delegation: Option<kaspa_consensus_core::palw_history_custody_v1::PalwProducerCustodyDelegationV1>,
@@ -2429,7 +2430,7 @@ impl VirtualStateProcessor {
                                 // its MSK in the sink** (the 2026-09-23 Position route matrix,
                                 // P-B1), so past `palw_audit_2026_09_23` the filter also names what
                                 // each such carrier is owed and the transition pays it back.
-                                let (objects, folded, carrier_refunds) = self.palw_v2_accepted_objects_and_refunds(
+                                let (objects, folded, carrier_refunds, tir_public_originals) = self.palw_v2_accepted_objects_and_originals(
                                     state,
                                     state_params,
                                     &point,
@@ -2596,6 +2597,7 @@ impl VirtualStateProcessor {
                                     &{
                                         let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);
                                         extras.history_custody_pledges = history_custody_pledges;
+                                        extras.tir_public_originals = tir_public_originals;
                                         extras.public_original_bindings = public_original_bindings;
                                         extras.producer_custody_delegations = producer_custody_delegations;
                                         if state_params.exec_v2_active_at(point.daa_score) || state_params.monetary_material_at_v1(point.daa_score).is_some() {
@@ -3787,7 +3789,7 @@ impl VirtualStateProcessor {
     ) -> Vec<PalwCarriedObjectV1> {
         objects
             .into_iter()
-            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, history_pledge: None, original_binding: None, custody_delegation: None, refund: None, unrefundable: None })
+            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, history_pledge: None, tir_public_original: None, original_binding: None, custody_delegation: None, refund: None, unrefundable: None })
             .collect()
     }
 
