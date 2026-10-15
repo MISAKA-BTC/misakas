@@ -3337,6 +3337,8 @@ mod mockery {
                 eligibility_final_weight: mock(),
                 eligibility_exams_passed: mock(),
                 eligibility_lineage_attempts: mock(),
+                model_tier: "registered".to_string(),
+                model_tier_permille: mock(),
                 admission_claims_per_span_milli: mock(),
                 probes_passed: mock(),
                 probes_failed: mock(),

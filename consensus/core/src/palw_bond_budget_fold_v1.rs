@@ -2104,10 +2104,34 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
                     });
                     crate::palw_model_eligibility_v1::palw_eligibility_allocation_capital_v1(stage, capital)
                 };
-                if policy.average.is_some() {
-                    budget.roll_epoch_v3(&policy, epoch, now, capital_of, &verifier, eligible_capital, j)
-                } else {
-                    budget.roll_epoch(&policy, epoch, now, capital_of, j)
+                // ADR-0179 (user decisions 2026-10-15 rounds 4–5, `palw_model_tier_v1`): past the tier fence each live row's weight is
+                // `c_m · S̄_m^α` — 1.0 for `ApprovedModels(h)`, the fixed 0.3 for every registered model — applied ONCE here, with the
+                // registered tier's aggregate cap κ (RFC-0016's entrant reserve and RFC-0017's Probation are moot past it: κ is the
+                // one tier bound). Below it: the untiered roll, byte for byte.
+                let tier_mirror = params.model_tier_v1().filter(|mirror| mirror.active_at(now));
+                match (policy.average.is_some(), tier_mirror) {
+                    (true, Some(mirror)) => {
+                        let tier = |model: &Hash64| {
+                            let tier = crate::palw_model_tier_v1::palw_model_tier_of_model_v1(state, params, model, now);
+                            (
+                                !tier.is_approved(),
+                                crate::palw_model_tier_v1::palw_model_tier_coefficient_permille_v1(Some(mirror), tier, now),
+                            )
+                        };
+                        budget.roll_epoch_v3_tiered(
+                            &policy,
+                            epoch,
+                            now,
+                            capital_of,
+                            &verifier,
+                            eligible_capital,
+                            tier,
+                            Some(mirror.registered_cap_permille),
+                            j,
+                        )
+                    }
+                    (true, None) => budget.roll_epoch_v3(&policy, epoch, now, capital_of, &verifier, eligible_capital, j),
+                    (false, _) => budget.roll_epoch(&policy, epoch, now, capital_of, j),
                 }
             });
         }

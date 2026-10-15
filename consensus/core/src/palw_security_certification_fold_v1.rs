@@ -304,11 +304,9 @@ pub(super) fn sweep_security_certification_v1(
             continue;
         }
         let mut changed = false;
-        // U-2 (P0): a claim RFC-0017 accepted under Probation can never be SecurityCertified — no verifier is drawn for it (it expires
-        // at `certify_by`, counted as a failed attempt), and the predicate refuses it whatever its row says.
-        let barred = crate::palw_state_v2::palw_eligibility_bars_security_credit_v1(&builder.state, &claim_id);
+        // (Round 5, user decision 2026-10-15: U-2's Probation bar has no subject — model review is abolished — and is removed; every
+        // tier's claim is drawn and certified alike.)
         if row.anchor.is_none()
-            && !barred
             && !palw_certification_public_check_v1(&row.class_id)
             && network.draws < policy.draws_per_epoch
             && let Some(a) = anchor.as_ref()

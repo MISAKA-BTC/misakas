@@ -183,6 +183,7 @@ impl PalwStateParamsV2 {
             rfc0016_v1: None,
             model_eligibility_v1: None,
             rfc0018_v1: None,
+            model_tier_v1: None,
         })
     }
 

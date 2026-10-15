@@ -152,12 +152,8 @@ pub fn palw_independently_work_certified_v1(claim_id: &Hash64, claim: &PalwClaim
     if matches!(claim.phase, PalwClaimPhaseV2::Voided { .. }) {
         return false;
     }
-    // **U-2 (P0, user decision 2026-10-15): a claim RFC-0017 accepted under `Probation` never earns `SecurityCertified` credit**,
-    // whatever its m-of-k approvals — checked HERE, in the one predicate, so every Gate C read site inherits it. Frozen per claim (the
-    // probation pin outlives `Final`); a claim of the class accepted once it is `Eligible` carries no pin and certifies normally.
-    if crate::palw_state_v2::palw_eligibility_bars_security_credit_v1(state.chain, claim_id) {
-        return false;
-    }
+    // (Round 5, user decision 2026-10-15: model-level review is abolished, so U-2's Probation bar has no subject and is removed —
+    // this per-claim drawn certification is the one safety gate, the same for every model tier.)
     match mirror.gate_c_rule {
         PalwGateCRuleV1::SecurityCertifiedV1 => {
             crate::palw_security_certification_v1::palw_claim_security_certified_v1(state.chain, claim_id)
