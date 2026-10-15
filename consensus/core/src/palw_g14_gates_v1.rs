@@ -50,6 +50,10 @@ pub enum PalwG14GatedFenceV1 {
     PublicEvidenceRewardV1,
     G14RouteRequiredV1,
     RewardLiabilityHorizonV1,
+    /// LG14-A `palw_legacy_public_filer_v1` (lane g14-close-legacy, 2026-10-16): its unconditional refusal is replaced by this gate.
+    LegacyPublicFilerV1,
+    /// LG14-B `palw_legacy_held_da_v2` (lane g14-close-legacy, 2026-10-16): likewise, and it needs LG14-A at or below it.
+    LegacyHeldDaV2,
 }
 
 /// The G14 validation steps V1–V7 (`g14-objective-conviction-remaining-2026-10-15.md` §5), one evidence digest each.
@@ -86,8 +90,40 @@ pub const PALW_REWARD_LIABILITY_ARMING_REQUIREMENTS_V1: &[&str] = &[
     "drill: the shipped binary crosses the fence; Panel capacity under the longer pre-Final hold measured and reported",
 ];
 
+/// **LG14-A's arm-readiness requirements** (the legacy route's common filer, reservation, Final hold, direct proofs over open
+/// sessions, reserved further dissection and the Valid lock held to the liability horizon). It changes WHEN a V2 claim may end and
+/// how long a Valid seat's collateral stays locked, so V5 is a measurement: the hard-deadline envelope per class and the Panel
+/// capacity under the longer lock. Nothing here is a value this binary pins.
+pub const PALW_LEGACY_FILER_ARMING_REQUIREMENTS_V1: &[&str] = &[
+    "V1 build, existing regressions and boundary decode (lg14a_legacy_dispute_fold, g14_close_legacy fold suite)",
+    "V2/V3 node E2E legacy_v2_attempt_full_collusion_outside_bond_convicts: producer and every seat Valid on a forged leaf, a bond \
+     registered after genesis convicts from public material, producer and every Valid seat slashed, coinbase / weight / safe weight \
+     refused, Final held while the pursuit is open",
+    "V4 every legacy V2 Attempt violation family and its honest twin (lg14a_* node E2E: before and after Final, dismissal, Sybil \
+     reservation, decoy court)",
+    "V5 measured: the hard-deadline envelope (start + B_cold_fetch + B_check + B_localize + B_disclose + B_court + B_carrier + \
+     B_reorg_slack <= trace_retention - W_disclose) per class at its maximum profile (GAP-07), and Panel capacity under the Valid lock \
+     held to final + window_court (G-13)",
+    "V6 real network and economic accounting with the shipped binary (node / mempool / block acceptance)",
+    "V7 restart / IBD / pruned / reorg mid-pursuit (lg14a_the_pursuit_survives_a_node_restart, g14r_resume)",
+    "drill D-02 / D-13 / D-16: the shipped binary crosses the fence; claims admitted before it settle under the old rules",
+];
+
+/// **LG14-B's arm-readiness requirements** (the legacy route's public descent, CKW, held units and the leaf recompute).
+pub const PALW_LEGACY_HELD_DA_ARMING_REQUIREMENTS_V1: &[&str] = &[
+    "V1 build, regressions and boundary decode (tags 157-159 dropped by name below the fence)",
+    "V2/V3 node E2E legacy_v2_attempt_held_da_withholding_ends_in_da_default (withheld held unit: DA default, never a computation \
+     fault) and the fused-tile lie convicted by a fresh outsider",
+    "V4 every held unit family and its honest twin (lg14b_* suite)",
+    "V5 measured: descent rounds, answer bytes and the 34-session reservation budget at each class's maximum profile, and the court \
+     session cap under contention (G-07 residual)",
+    "V6 real network and economic accounting with the shipped binary",
+    "V7 restart / reorg mid-descent (lg14b_a_restarted_outsider_reacquires_answered_units_without_replaying_old_accusations)",
+    "drill D-02 / D-11: the shipped binary crosses the fence; a withheld unit defaults on the real network",
+];
+
 impl PalwG14GatedFenceV1 {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::StagedPublicCourtV1,
         Self::StagedTirRouteV1,
         Self::StagedFloatConstraintV1,
@@ -95,6 +131,8 @@ impl PalwG14GatedFenceV1 {
         Self::PublicEvidenceRewardV1,
         Self::G14RouteRequiredV1,
         Self::RewardLiabilityHorizonV1,
+        Self::LegacyPublicFilerV1,
+        Self::LegacyHeldDaV2,
     ];
 
     /// The `Params` field's name.
@@ -107,6 +145,8 @@ impl PalwG14GatedFenceV1 {
             Self::PublicEvidenceRewardV1 => "palw_public_evidence_reward_v1",
             Self::G14RouteRequiredV1 => "palw_g14_route_required_v1",
             Self::RewardLiabilityHorizonV1 => "palw_reward_liability_horizon_v1",
+            Self::LegacyPublicFilerV1 => "palw_legacy_public_filer_v1",
+            Self::LegacyHeldDaV2 => "palw_legacy_held_da_v2",
         }
     }
 
@@ -119,13 +159,24 @@ impl PalwG14GatedFenceV1 {
             Self::PublicEvidenceRewardV1 => PALW_N4_ARMING_REQUIREMENTS_V1,
             Self::G14RouteRequiredV1 => PALW_G14_ROUTE_REQUIRED_ARMING_REQUIREMENTS_V1,
             Self::RewardLiabilityHorizonV1 => PALW_REWARD_LIABILITY_ARMING_REQUIREMENTS_V1,
+            Self::LegacyPublicFilerV1 => PALW_LEGACY_FILER_ARMING_REQUIREMENTS_V1,
+            Self::LegacyHeldDaV2 => PALW_LEGACY_HELD_DA_ARMING_REQUIREMENTS_V1,
         }
     }
 
-    /// **Does arming need a measured value?** The four G-10 fences do (V5's maximum profile, deadlines and resources). Option (b), N4
-    /// and the liability horizon only remove or delay reward: their records are tests and drills.
+    /// **Does arming need a measured value?** The four G-10 fences do (V5's maximum profile, deadlines and resources), and so do
+    /// LG14-A / LG14-B (the hard-deadline envelope, the descent's budget, Panel capacity under the longer lock). Option (b), N4 and
+    /// the liability horizon only remove or delay reward: their records are tests and drills.
     pub fn needs_measured_value(self) -> bool {
-        matches!(self, Self::StagedPublicCourtV1 | Self::StagedTirRouteV1 | Self::StagedFloatConstraintV1 | Self::TirPublicConvictionV1)
+        matches!(
+            self,
+            Self::StagedPublicCourtV1
+                | Self::StagedTirRouteV1
+                | Self::StagedFloatConstraintV1
+                | Self::TirPublicConvictionV1
+                | Self::LegacyPublicFilerV1
+                | Self::LegacyHeldDaV2
+        )
     }
 
     /// The fence's raw height on `p` (`Some(never())` reads as `None`).
@@ -138,6 +189,8 @@ impl PalwG14GatedFenceV1 {
             Self::PublicEvidenceRewardV1 => p.palw_public_evidence_reward_v1,
             Self::G14RouteRequiredV1 => p.palw_g14_route_required_v1,
             Self::RewardLiabilityHorizonV1 => p.palw_reward_liability_horizon_v1,
+            Self::LegacyPublicFilerV1 => p.palw_legacy_public_filer_v1,
+            Self::LegacyHeldDaV2 => p.palw_legacy_held_da_v2,
         };
         raw.filter(|f| *f != ForkActivation::never())
     }
@@ -172,6 +225,15 @@ impl PalwG14GatedFenceV1 {
             Self::RewardLiabilityHorizonV1 => {
                 "palw_reward_liability_horizon_v1 cannot be armed: no arm-readiness record (T-N15 fold, node E2E, fence-crossing \
                  drill) is pinned for this network and height (PALW_G14_ARMING_RECORDS_V1 is empty; audit G-08 / G-15)"
+            }
+            Self::LegacyPublicFilerV1 => {
+                "palw_legacy_public_filer_v1 cannot be armed: no arm-readiness record (LG14-A: fold suite, node E2E, measured hard-deadline \
+                 envelope and lock-life capacity, fence-crossing drill) is pinned for this network and height (PALW_G14_ARMING_RECORDS_V1 \
+                 is empty; audit G-01 option (a) / G-06 / G-07 / G-13)"
+            }
+            Self::LegacyHeldDaV2 => {
+                "palw_legacy_held_da_v2 cannot be armed: no arm-readiness record (LG14-B: held-DA node E2E, measured descent budget, \
+                 fence-crossing drill) is pinned for this network and height (PALW_G14_ARMING_RECORDS_V1 is empty; audit G-01 option (a))"
             }
         }
     }
@@ -310,11 +372,23 @@ impl Params {
     /// **One gated fence's record gate**: `Ok` when the fence is not armed (`None`, `never()`), on an isolated G14 test genesis, or when
     /// a pinned record authorizes exactly this network and height; otherwise the fence's own refusal.
     pub fn validate_palw_g14_fence_record_v1(&self, fence: PalwG14GatedFenceV1) -> Result<(), PalwModeV2Error> {
+        self.validate_palw_g14_fence_record_in_v1(fence, PALW_G14_ARMING_RECORDS_V1)
+    }
+
+    /// [`Self::validate_palw_g14_fence_record_v1`] against `records` in place of the binary's pinned list — the one path
+    /// [`Params::validate_palw_v2_with_arming_records_v1`] takes, so a test (or arm-readiness tooling) can show that a ruleset passes
+    /// the WHOLE validation once a record for its exact (fence, network, height) exists. The node never calls it: `ConfigBuilder`
+    /// validates with [`PALW_G14_ARMING_RECORDS_V1`], so a record only arms a real network once a reviewed change pins it.
+    pub fn validate_palw_g14_fence_record_in_v1(
+        &self,
+        fence: PalwG14GatedFenceV1,
+        records: &[PalwG14ArmingRecordV1],
+    ) -> Result<(), PalwModeV2Error> {
         let Some(at) = fence.armed(self) else { return Ok(()) };
         if self.has_isolated_g14_genesis_v1() {
             return Ok(());
         }
-        match palw_g14_arming_record_admits_v1(fence, self.genesis.hash, at.daa_score(), PALW_G14_ARMING_RECORDS_V1) {
+        match palw_g14_arming_record_admits_v1(fence, self.genesis.hash, at.daa_score(), records) {
             Ok(()) => Ok(()),
             Err(PalwG14ArmingRefusalV1::NoRecord) => Err(PalwModeV2Error::Invalid(fence.no_record_refusal())),
             Err(other) => Err(PalwModeV2Error::Invalid(other.reason())),
@@ -330,6 +404,11 @@ impl Params {
     ///   gate so the ordering is already pinned when a record is;
     /// * **G-10 / N4 / option (b) / liability**: every gated fence armed at a real height needs its pinned record.
     pub fn validate_palw_g14_gates_v1(&self) -> Result<(), PalwModeV2Error> {
+        self.validate_palw_g14_gates_in_v1(PALW_G14_ARMING_RECORDS_V1)
+    }
+
+    /// [`Self::validate_palw_g14_gates_v1`] against `records` (see [`Self::validate_palw_g14_fence_record_in_v1`]).
+    pub fn validate_palw_g14_gates_in_v1(&self, records: &[PalwG14ArmingRecordV1]) -> Result<(), PalwModeV2Error> {
         if self.palw_g14_route_required_v1_mirror() != self.palw_bundle_g14_route_mirror_v1() {
             return Err(PalwModeV2Error::Invalid(
                 "palw_g14_route_required_v1 disagrees with the V2 bundle's mirror: Params::sync_palw_g14_gates_v1",
@@ -354,7 +433,7 @@ impl Params {
         }
         palw_g14_staged_court_needs_legacy_filer_v1(self)?;
         for fence in PalwG14GatedFenceV1::ALL {
-            self.validate_palw_g14_fence_record_v1(fence)?;
+            self.validate_palw_g14_fence_record_in_v1(fence, records)?;
         }
         Ok(())
     }
@@ -602,10 +681,11 @@ pub const PALW_G14_GENESIS_TEST_ISOLATION_V1: u64 = 0x0614_6E45_5E15_0001;
 
 /// **"g14-genesis": a TEST-ONLY ruleset with every G14 fence in force from block 0** (user decision 2026-10-16) — testnet-12's ruleset on
 /// an isolated G14 genesis ([`palw_isolated_g14_genesis_v1`]), with option (b), the reward liability horizon, N4, the staged public
-/// court with its legacy-filer prerequisite, the staged TIR and Float32 routes and the TIR public conviction route at DAA 0. NOT armed:
-/// X3 (`palw_claim_hard_deadline_v1`: no approved value exists, only an unmeasured candidate), LG14-B (`palw_legacy_held_da_v2`: the
-/// legacy Panel route has no complete G14 route, so it never pays here), and every fence whose own lane refuses it (Gate C, kernel route,
-/// EXEC, native, rule E). Never a network: its genesis is isolated, and only such a genesis skips the record pins.
+/// court with its legacy-filer prerequisite, the staged TIR and Float32 routes, the TIR public conviction route and — since lane
+/// g14-close-legacy (2026-10-16) made it armable behind its record — LG14-B (`palw_legacy_held_da_v2`) at DAA 0, so the legacy Panel
+/// route's G14 route (LG14-A + LG14-B) is complete from block 0 and V2 Attempt pays there. NOT armed: X3 (`palw_claim_hard_deadline_v1`:
+/// no approved value exists, only an unmeasured candidate), and every fence whose own lane refuses it (Gate C, kernel route, EXEC,
+/// native, rule E). Never a network: its genesis is isolated, and only such a genesis skips the record pins.
 pub fn palw_g14_genesis_test_params_v1() -> Params {
     let mut p = crate::config::params::palw_t12_shipped_params();
     p.genesis = palw_isolated_g14_genesis_v1(&p.genesis, Hash64::from_u64_word(PALW_G14_GENESIS_TEST_ISOLATION_V1))
@@ -613,6 +693,7 @@ pub fn palw_g14_genesis_test_params_v1() -> Params {
     let at = Some(ForkActivation::new(0));
     p.palw_legacy_public_filer_v1 = at;
     p.sync_palw_legacy_public_filer_v1();
+    p.palw_legacy_held_da_v2 = at;
     p.palw_staged_public_court_v1 = at;
     p.palw_staged_tir_route_v1 = at;
     p.palw_staged_float_constraint_v1 = at;

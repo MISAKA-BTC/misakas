@@ -2787,6 +2787,33 @@ pub fn palw_false_valid_lock_slashable_v1(
         || palw_lock_is_committed_v1(state, claim_id, lock, now_daa, escaped_depth, params.window_court)
 }
 
+/// **Lane g14-close-legacy (audit G-13): would a `PanelFalseValidV2` conviction of `seat` on `claim_id` at `now_daa` collect nothing
+/// from a `Valid` seat the chain relied on?** Only on a claim accepted at or past `palw_legacy_public_filer_v1`, whose relied-on locks
+/// live to the claim's liability horizon (`PalwStateParamsV2::valid_lock_life_for_claim_v1`): the seat holds a lock that is no longer
+/// slashable ([`palw_false_valid_lock_slashable_v1`] at the fold's escaped depth), or holds none while the liability row — built from
+/// locks (`locked_sompi > 0`) — lists it. The fold refuses such a conviction rather than record one that took nothing (the TIR frame's
+/// DA-side assert, `palw_tir_public_fold_v1`). `false` for every other claim, for the fallback listing of a panel no licence locked,
+/// and on every shipped preset (no claim is accepted past a dormant fence), so every verdict there is unchanged.
+pub fn palw_g13_relied_lock_lost_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    seat: &PalwBondKeyV2,
+    now_daa: u64,
+    escaped_depth: Option<u64>,
+) -> bool {
+    if !state.claims.get(claim_id).is_some_and(|claim| params.legacy_public_filer_active_at(claim.accepted_daa)) {
+        return false;
+    }
+    match state.slashable_locks.get(&(*seat, *claim_id)) {
+        Some(lock) => !palw_false_valid_lock_slashable_v1(state, params, claim_id, lock, now_daa, escaped_depth),
+        None => state
+            .panel_liabilities
+            .get(claim_id)
+            .is_some_and(|row| row.locked_sompi > 0 && row.valid_signers.iter().any(|(listed, _)| *listed == seat.0)),
+    }
+}
+
 // ---- lane F2-lock (post-launch, 2026-09-27): the F + 1,000 seat-lock life, applied retroactively ----
 
 /// **Lane F2-lock: is the block at `now_daa`, whose parent chain block stood at `parent_daa`, the
@@ -2855,6 +2882,11 @@ pub fn palw_final_lock_retro_expiry_v1(
     life: u64,
 ) -> u64 {
     let Some(final_daa) = palw_lock_final_daa_retro_v1(state, params, claim_id) else { return lock.expiry_daa };
+    // G-13 (lane g14-close-legacy): a claim accepted past `palw_legacy_public_filer_v1` keeps its locks to its liability horizon
+    // (`PalwStateParamsV2::valid_lock_life_for_claim_v1`); the retroactive shortening never reaches it. No claim on a shipped preset.
+    if state.claims.get(claim_id).is_some_and(|claim| params.legacy_public_filer_active_at(claim.accepted_daa)) {
+        return lock.expiry_daa;
+    }
     if lock.expiry_daa > final_daa.saturating_add(params.window_court) {
         return lock.expiry_daa;
     }
@@ -15768,6 +15800,14 @@ fn da_answer_recorded_v1(
 /// (a decoy the producer's own Sybil opened holds off no seat). Two sessions at one leaf do not
 /// collide: the session id binds the challenger. One spelling for the legacy one-move court and the
 /// IR one (RFC-0002 F7).
+///
+/// **Lane g14-close-legacy (audit G-06): a bond whose OWN dispute reservation on the claim is live is admitted like a seat** — one
+/// further dissection per reserver, at any leaf — so a decoy court the producer's Sybil opened first cannot hold off the public filer
+/// that LG14-A's reservation already protects from the clocks (RFC-0014 §7.4: no session pre-empts the outside pursuit). A
+/// reservation exists only past `palw_legacy_public_filer_v1` (tag 154's arm refuses below it), so below the fence every verdict here is
+/// int-12's, byte for byte. A reserver's session never takes a seat's room (the `1 + seat_count` bound counts the others), and every
+/// session — a reserver's included — still counts against the network's court capacity
+/// ([`palw_max_concurrent_court_sessions_v1`], checked where the session opens).
 fn check_further_held_dissection_v1(
     state: &PalwChainStateV2,
     claim_id: Hash64,
@@ -15775,16 +15815,33 @@ fn check_further_held_dissection_v1(
 ) -> Result<(), PalwStateV2Error> {
     let refused = |why| PalwStateV2Error::HeldDissectionFurtherSessionRefused { claim: claim_id, why };
     let seats = state.panels.get(&claim_id).map(|panel| panel.seats.clone()).unwrap_or_default();
-    if !seats.iter().any(|seat| seat.bond == accuser) {
+    let is_seat = seats.iter().any(|seat| seat.bond == accuser);
+    // G-06: a non-seat with a live reservation on THIS claim (the table is empty below the LG14-A fence).
+    let is_reserver = !is_seat && state.legacy_dispute_reservation_v1(&claim_id, &accuser).is_some();
+    if !is_seat && !is_reserver {
         return Err(refused("only a seat of the claim's panel opens a further dissection while one is open"));
     }
     let on_claim: Vec<&PalwCourtSessionStateV2> = state.court_sessions.values().filter(|s| s.claim == claim_id).collect();
     if on_claim.iter().any(|s| s.challenger_bond == accuser) {
-        return Err(refused("this seat already holds a session on the claim"));
+        return Err(refused(if is_seat {
+            "this seat already holds a session on the claim"
+        } else {
+            "this reserver already holds a session on the claim"
+        }));
     }
-    // `1 + seat_count` sessions at most: the first, and one per seat.
-    if on_claim.len() > seats.len() {
-        return Err(refused("the claim already holds one session and one per seat"));
+    // `1 + seat_count` sessions at most: the first, and one per seat. A non-seat reserver's own session is not counted against the
+    // seats' room (zero below the fence, where no reservation exists).
+    if is_seat {
+        let reservers = on_claim
+            .iter()
+            .filter(|s| {
+                !seats.iter().any(|seat| seat.bond == s.challenger_bond)
+                    && state.legacy_dispute_reservation_v1(&claim_id, &s.challenger_bond).is_some()
+            })
+            .count();
+        if on_claim.len() - reservers > seats.len() {
+            return Err(refused("the claim already holds one session and one per seat"));
+        }
     }
     Ok(())
 }
