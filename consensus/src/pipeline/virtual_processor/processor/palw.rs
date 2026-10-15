@@ -3672,7 +3672,7 @@ impl VirtualStateProcessor {
         if !self.palw_audit_2026_09_11_deep_at(point.daa_score) {
             return withheld;
         }
-        let (works, _skips) = self.palw_v2_merged_works(ghostdag_data, state, state_params, mergeset_non_daa, point);
+        let (works, skips) = self.palw_v2_merged_works(ghostdag_data, state, state_params, mergeset_non_daa, point);
         for work in &works {
             if let PalwMergedOwnedWorkV1::Attempt(blue, _, subsidy, carve, _, _) = work {
                 withheld.insert(
@@ -3681,7 +3681,49 @@ impl VirtualStateProcessor {
                 );
             }
         }
+        // ADR-0176 C1 (user decision 2026-10-15): a merged attempt-lane block whose attempt the state refused (a skip) is paid no
+        // subsidy past a V3 budget — its whole worker base is withheld and never minted (0 elsewhere, so the map is unchanged there).
+        for (blue, _) in &skips {
+            let base = self.palw_r_cap_base_withheld_at(*blue, point.daa_score, 0);
+            if base > 0 {
+                withheld.entry(*blue).or_insert(base);
+            }
+        }
         withheld
+    }
+
+    /// **ADR-0176 C1 (user decision 2026-10-15): the attempt-lane worker base under the per-bond `R` cap.** Past a V3 bond budget
+    /// ([`kaspa_consensus_core::palw_bond_budget_v1::palw_r_cap_covers_worker_base_v1`]) an attempt-algo carrier's WHOLE
+    /// subsidy-derived worker base (`split_block_subsidy(its subsidy, the paying block's split).worker_base_sompi`, exactly the term
+    /// the coinbase pays it) is withheld: `max(recorded, base)`. The claim's escrow — its `R` reservation — is the only subsidy that
+    /// carrier is ever paid (at `Final`); the uncarved remainder, and the whole base of a budget-refused attempt, are never minted.
+    /// The fee-derived worker shares are user-paid and stay outside `R` (separate accounting): the withheld amount never exceeds the
+    /// subsidy-derived share. `recorded` on every network without such a budget — every shipped preset.
+    pub(in crate::pipeline::virtual_processor) fn palw_r_cap_base_withheld_at(
+        &self,
+        carrier: BlockHash,
+        paying_daa: u64,
+        recorded: u64,
+    ) -> u64 {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
+            return recorded;
+        };
+        let covers = kaspa_consensus_core::palw_bond_budget_v1::palw_r_cap_covers_worker_base_v1(state_params.bond_budget(), paying_daa);
+        if !covers {
+            return recorded;
+        }
+        let Ok(header) = self.headers_store.get_header(carrier) else {
+            return recorded;
+        };
+        if !kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id) {
+            return recorded;
+        }
+        let subsidy = self.coinbase_manager.calc_block_subsidy(header.daa_score);
+        let base = match self.fee_split_at(paying_daa) {
+            Some(split) => kaspa_consensus_core::dns_finality::split_block_subsidy(subsidy, &split).worker_base_sompi,
+            None => subsidy,
+        };
+        kaspa_consensus_core::palw_bond_budget_v1::palw_r_cap_withheld_base_v1(true, recorded, base)
     }
 
     /// **Launch blockers §8: which merged blues this block's coinbase may not pay.**

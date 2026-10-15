@@ -98,6 +98,10 @@ pub use hold::*;
 mod allocation_v3;
 pub use allocation_v3::*;
 
+/// The user's rulings of 2026-10-15 on ADR-0176/0177 (C1–C5), dormant.
+mod decisions_1015;
+pub use decisions_1015::*;
+
 mod material;
 pub use material::{
     PALW_BOND_BUDGET_STATE_VERSION_V3, PALW_BUDGET_TABLE_MATERIAL_INCOME_V1, PalwMaterialIncomeV1, PalwMaterialPaymentV1,
@@ -848,6 +852,17 @@ impl Params {
         if !audit_below {
             return Err(PalwModeV2Error::Invalid(
                 "palw_bond_budget_v1 requires palw_audit_2026_09_23 at or below it: a budget-refused attempt's carve is withheld only there",
+            ));
+        }
+        // ADR-0176 C1 (user decision 2026-10-15): newly issued attempt-lane subsidy never bypasses R on any path — a MERGED
+        // attempt block's worker base is withheld (and escrowed into its claim) only past the deep audit fence
+        // (`palw_v2_merged_escrow_withheld`); below it every merged carve would be paid at acceptance, outside R.
+        let deep_below = self
+            .palw_audit_2026_09_11_deep
+            .is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.activation.daa_score());
+        if !deep_below {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_bond_budget_v1 requires palw_audit_2026_09_11_deep at or below it: a merged attempt's worker base is withheld (C1, R on every path) only there",
             ));
         }
         // Readiness §3e: the Round rights are capped in the windowed mint, which is ADR-0151's (`palw_economic_safety`).
