@@ -360,7 +360,7 @@ pub fn sign_paid_claim_object_v2(
     object: &KernelRouteObjectV1,
 ) -> Result<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2, String> {
     let KernelRouteObjectV1::PaidClaimV2 { object: inner } = object else {
-        return Err("paid claim signer accepts inner64 only".into());
+        return Err("paid claim signer accepts inner71 only".into());
     };
     let actor = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&bond);
     let named = match inner {

@@ -653,6 +653,45 @@ pub fn palw_verify_objective_offence_v1<F>(
 where
     F: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
+    palw_verify_objective_offence_closure_v1(
+        kind,
+        accused,
+        evidence_id,
+        evidence,
+        palw_pubkey,
+        palw_bond_active,
+        network_id,
+        max_step_leaf_count,
+        verify_signature,
+        false,
+    )
+}
+
+/// [`palw_verify_objective_offence_v1`] under RFC-0006 R6-CELL round 4's coverage closure: `cell_closure` is the caller's (the
+/// closure governs the accused claim). It reaches only `PanelFalseValid`'s structural step check, where an uncoverable profile is a
+/// shape fault instead of "no fault". `false`: byte for byte the V1 gate.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_verify_objective_offence_closure_v1<F>(
+    kind: PalwOffenceKindV1,
+    accused: &TransactionOutpoint,
+    evidence_id: &Hash64,
+    evidence: &[u8],
+    palw_pubkey: &[u8],
+    palw_bond_active: bool,
+    network_id: &[u8],
+    // **The RULESET's step ladder, ADR-0084 U-08** — `bundle.court.max_step_leaf_count()`, never the
+    // executor's `PALW_STEP_MAX_LEAVES`. A `PanelFalseValid` whose contradiction is a step refutation
+    // is adjudicated here, and an adjudicator walking a shallower ladder than the class was admitted
+    // at refuses honest evidence: on a network with the held 2M row (step space ≈2^37.6) against the
+    // default 2^22, EVERY structural refutation of that class is `PanelFalseValidNeedsContradiction`,
+    // so a seat that voted Valid on a lie it could see cannot be convicted through this route at all.
+    max_step_leaf_count: u64,
+    verify_signature: F,
+    cell_closure: bool,
+) -> Result<(), PalwOffenceVerifyError>
+where
+    F: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
     if evidence.is_empty() {
         return Err(PalwOffenceVerifyError::EvidenceEmpty);
     }
@@ -671,6 +710,7 @@ where
             network_id,
             max_step_leaf_count,
             verify_signature,
+            cell_closure,
         ),
         PalwOffenceKindV1::CourtExecutorGuilty => Err(PalwOffenceVerifyError::CourtGuiltyIsNotStandalone),
         // Never through this gate: past `palw_offence_attribution` the processor sends kind 3 to
@@ -686,6 +726,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn verify_palw_panel_false_valid_v1<F>(
     accused: &TransactionOutpoint,
     evidence: &[u8],
@@ -694,6 +735,7 @@ fn verify_palw_panel_false_valid_v1<F>(
     network_id: &[u8],
     max_step_leaf_count: u64,
     verify_signature: F,
+    cell_closure: bool,
 ) -> Result<(), PalwOffenceVerifyError>
 where
     F: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
@@ -785,7 +827,7 @@ where
         }
         PalwPanelContradictionV1::StepStructural(refutation) => {
             // ADR-0084 U-08: the RULESET's ladder, so a class admitted deep can be prosecuted deep.
-            crate::palw_step_leg::check_step_refutation_capped_v1(refutation, max_step_leaf_count)
+            crate::palw_step_leg::check_step_refutation_closure_capped_v1(refutation, max_step_leaf_count, cell_closure)
                 .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
             if refutation.binding.job_context.job_id != payload.claim_id {
                 return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
@@ -833,6 +875,24 @@ pub fn palw_panel_contradiction_convicts_execution_v1(
     class_artifact_root: Hash64,
     step_ladder: u64,
 ) -> Result<(), PalwOffenceVerifyError> {
+    palw_panel_contradiction_convicts_execution_closure_v1(
+        contradiction,
+        claim_execution_root,
+        class_artifact_root,
+        step_ladder,
+        false,
+    )
+}
+
+/// [`palw_panel_contradiction_convicts_execution_v1`] under the R6-CELL coverage closure: with `cell_closure` the structural step
+/// check is the closure-aware one (an uncoverable profile convicts as a shape fault). `false`: byte for byte the V1 function.
+pub fn palw_panel_contradiction_convicts_execution_closure_v1(
+    contradiction: &PalwPanelContradictionV1,
+    claim_execution_root: Hash64,
+    class_artifact_root: Hash64,
+    step_ladder: u64,
+    cell_closure: bool,
+) -> Result<(), PalwOffenceVerifyError> {
     match contradiction {
         PalwPanelContradictionV1::ExecutorEquivocation(_)
         | PalwPanelContradictionV1::CourtExecutorGuilty { .. }
@@ -854,7 +914,7 @@ pub fn palw_panel_contradiction_convicts_execution_v1(
             if refutation.binding.committed_execution_root != claim_execution_root {
                 return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
             }
-            crate::palw_step_leg::check_step_refutation_capped_v1(refutation, step_ladder)
+            crate::palw_step_leg::check_step_refutation_closure_capped_v1(refutation, step_ladder, cell_closure)
                 .map(|_| ())
                 .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)
         }

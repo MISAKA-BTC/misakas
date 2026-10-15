@@ -1320,7 +1320,7 @@ only where an existing record justifies it.
    scope, input/state/output/trace commitments and openings. A receipt for one subject, scope, policy, class or job
    MUST NOT count for another; a missing or narrower scope contributes no coverage. Inapplicable roots use typed
    absence, never a wildcard zero.
-2. **Paid ClaimVerification V2** (signed kernel inner 64 `PaidClaimV2`, fence `palw_claim_challenge_v2`, dormant)
+2. **Paid ClaimVerification V2** (signed kernel inner71 (renumbered from 64) `PaidClaimV2`, fence `palw_claim_challenge_v2`, dormant)
    has three separate signed authorities — class registrant, job payer, claim producer — plus an optional source
    sponsor who can sign only its own fee/capacity/context. New identities use new domains. An already committed V1
    claim MUST NOT be enrolled; after a job is enrolled, an ordinary V1 reveal of it is refused, and V1 receipts/tallies
@@ -1333,7 +1333,7 @@ only where an existing record justifies it.
 4. **Checker snapshot.** Eligible source profiles and checker bond/operator candidates are frozen at producer
    commitment; seats are selected from that snapshot with the verified future seed. Joining after entropy adds no
    candidate. Distinct operators are enforced but are not proof of independent economic control.
-5. **Panel target.** Panel inner 63 freezes the epoch snapshot, exact request, source/cost policy and named sponsor
+5. **Panel target.** Panel inner 70 (renumbered from 63) freezes the epoch snapshot, exact request, source/cost policy and named sponsor
    before entropy; assigned work remains excluded as a source after it becomes terminal. The source-contract `H`
    derived there is **not** the last possible Panel consumer position (retries, paused receipt clocks, bounded draw
    queues and sparse DAA can defer it). The absolute consumer expiry is specified by the signed Panel lifetime V2

@@ -118,20 +118,22 @@ pub const MAX_OPT_IN_BEACON_SOURCE_BYTES_V1: usize = 384;
 // 61–62: codex RFC-7 final prepaid source fees (lane R6781-F merge, 2026-10-12): codex numbered them 22 / 23 (RFC-02's here).
 pub const TAG_FUND_BEACON_SOURCE_FEE_V1: u8 = 61;
 pub const TAG_OPT_IN_PAID_BEACON_SOURCE_V1: u8 = 62;
-/// Native-owned, signed Panel sponsor permit and atomic funding.
-pub const TAG_FUND_PANEL_BEACON_SOURCE_FEE_V2: u8 = 63;
-pub const TAG_PAID_CLAIM_V2: u8 = 64;
+/// Native-owned, signed Panel sponsor permit and atomic funding. Renumbered 63 → 70 and 64 → 71 (2026-10-15, lead decision): the
+/// RFC02 branch owns 63 (`FundedExecutionV11`) and 64 (`StageExecutionV14`); neither number was ever live on this branch.
+pub const TAG_FUND_PANEL_BEACON_SOURCE_FEE_V2: u8 = 70;
+pub const TAG_PAID_CLAIM_V2: u8 = 71;
 pub const TAG_ENROLL_PANEL_CONSUMER_LIFETIME_V2: u8 = 65;
 pub const TAG_AUTHORIZE_PANEL_LIFETIME_V2: u8 = 66;
 /// G14R's reserved verifier-pay slot 39 (M\*-49, `palw_verifier_pay_v1`): a drawn slot holder's attestation of one claim's check.
 pub const TAG_ATTEST_DRAWN_CHECK_V1: u8 = 39;
-// 67–69: RFC07/RFC08 signed economic contracts (2026-10-15, inside the RFC07 reservation 64–73; consumer-owned, each past its own
+// 67–69: RFC07/RFC08 signed economic contracts (2026-10-15, inside the RFC07 reservation 65–73; consumer-owned, each past its own
 // dormant fence): the model-epoch verification attestation, the consented horizon extension and the minimum-price contract.
 pub const TAG_ATTEST_MODEL_VERIFICATION_V1: u8 = 67;
 pub const TAG_CONSENT_HORIZON_EXTENSION_V1: u8 = 68;
 pub const TAG_SIGN_MINIMUM_PRICE_CONTRACT_V1: u8 = 69;
-// 73: N3's BootstrapExact source contribution (2026-10-15 round 3; the top of the RFC07 reservation 64–73, consumer-owned past
-// `palw_beacon_bootstrap_v1`). 70–72 stay unallocated.
+// 73: N3's BootstrapExact source contribution (2026-10-15 round 3; the top of the RFC07 reservation 65–73, consumer-owned past
+// `palw_beacon_bootstrap_v1`). 70/71: the renumbered Panel sponsor funding and paid ClaimV2 (above). 72 stays unallocated; 63/64
+// belong to the RFC02 branch.
 pub const TAG_BOOTSTRAP_EXACT_V1: u8 = 73;
 /// version, tag, verifier, claim.
 pub const MAX_ATTEST_DRAWN_CHECK_BYTES_V1: usize = 1 + 1 + 64 + 64;
@@ -619,10 +621,16 @@ pub enum KernelRouteObjectV1 {
     FundPanelBeaconSourceFeeV2 {
         epoch: u64,
         terms: crate::beacon_source_fee::BeaconSourceFeeTermsV1,
-    } = 63,
-    PaidClaimV2 { object: crate::claim_paid_v2::PaidClaimObjectV2 } = 64,
-    EnrollPanelConsumerLifetimeV2 { terms: crate::panel_lifetime_v2::PanelConsumerLifetimeTermsV2 } = 65,
-    AuthorizePanelLifetimeV2 { authorization:crate::panel_lifetime_v2::PanelLifetimeAuthorizationV2 } = 66,
+    } = 70,
+    PaidClaimV2 {
+        object: crate::claim_paid_v2::PaidClaimObjectV2,
+    } = 71,
+    EnrollPanelConsumerLifetimeV2 {
+        terms: crate::panel_lifetime_v2::PanelConsumerLifetimeTermsV2,
+    } = 65,
+    AuthorizePanelLifetimeV2 {
+        authorization: crate::panel_lifetime_v2::PanelLifetimeAuthorizationV2,
+    } = 66,
     /// **M\*-49 (`palw_verifier_pay_v1`, G14R's reserved 39)**: a drawn slot holder attests its check of `claim`; the ledger pays its
     /// unpaid slots `check_fee` out of the poster's escrow before the attestation deadline. Signed by `verifier`.
     AttestDrawnCheckV1 {
@@ -1255,11 +1263,14 @@ mod tests {
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
         assert!(max_encoded_bytes_of_tag(38).is_none(), "38 stays reserved for G14R, not allocated");
-        // 39: G14R's M*-49 drawn-check attestation (2026-10-15). 61–66: prepaid sources, native Panel authority and prospective V2
-        // claim/Panel consent. 67–69: RFC07/RFC08 signed economic contracts (2026-10-15). 73: N3's BootstrapExact contribution
-        // (2026-10-15 round 3). 70–72 are unallocated.
-        assert!((70..=72).all(|t| max_encoded_bytes_of_tag(t).is_none()), "70–72 are not allocated");
-        for tag in (22..=37).chain(39..=69).chain(73..=73) {
+        // 39: G14R's M*-49 drawn-check attestation (2026-10-15). 61–62: prepaid sources. 65–66: prospective Panel consent.
+        // 67–69: RFC07/RFC08 signed economic contracts (2026-10-15). 70–71: native Panel authority and paid ClaimV2 (renumbered from
+        // 63/64, which the RFC02 branch owns). 73: N3's BootstrapExact contribution (2026-10-15 round 3). 72 is unallocated.
+        assert!(
+            [63u8, 64, 72].iter().all(|t| max_encoded_bytes_of_tag(*t).is_none()),
+            "63/64 (RFC02's) and 72 are not allocated here"
+        );
+        for tag in (22..=37).chain(39..=62).chain(65..=71).chain(73..=73) {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
         for o in [

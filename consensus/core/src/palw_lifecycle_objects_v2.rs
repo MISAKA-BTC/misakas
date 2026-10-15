@@ -1894,8 +1894,8 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     // codex RFC-7 final (R6781-F merge): codex numbered these 22 / 23 — RFC-02's on the integration line — so they follow 41–60.
     (61, "FundBeaconSourceFee", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
     (62, "OptInPaidBeaconSource", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
-    (63, "FundPanelBeaconSourceFeeV2", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
-    (64, "PaidClaimV2", Some(PalwKernelInnerFenceV1::ClaimChallengeV2)),
+    (70, "FundPanelBeaconSourceFeeV2", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
+    (71, "PaidClaimV2", Some(PalwKernelInnerFenceV1::ClaimChallengeV2)),
     (65, "EnrollPanelConsumerLifetimeV2", Some(PalwKernelInnerFenceV1::PanelLifetimeV2)),
     (66, "AuthorizePanelLifetimeV2", Some(PalwKernelInnerFenceV1::PanelLifetimeV2)),
     (39, "AttestDrawnCheckV1", Some(PalwKernelInnerFenceV1::VerifierPayV1)),
@@ -2195,12 +2195,15 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::KernelInner { lo: 53, hi: 60 }, "palw_panel_free_v1", "RFC-0002 ordinary-point mixed candidate v9", true),
     // codex RFC-7 final (lane R6781-F): prepaid source fees under their own dormant monetary fence (codex used 22 / 23; renumbered).
     a2_row(
-        PalwA2SlotV1::KernelInner { lo: 61, hi: 63 },
+        PalwA2SlotV1::KernelInner { lo: 61, hi: 62 },
         "palw_beacon_source_fee_v1",
-        "RFC-7 FundBeaconSourceFee / OptInPaidBeaconSource / FundPanelBeaconSourceFeeV2",
+        "RFC-7 FundBeaconSourceFee / OptInPaidBeaconSource",
         true,
     ),
-    a2_row(PalwA2SlotV1::KernelInner { lo:64,hi:64 }, "palw_claim_challenge_v2", "RFC07 prospective signed paid ClaimVerification", true),
+    // 2026-10-15 renumbering (lead decision): 63/64 belong to the RFC02 branch; this branch's Panel sponsor funding and paid ClaimV2
+    // moved to 70/71 (checked free on this, the G14 and the RFC02 branches).
+    a2_row(PalwA2SlotV1::KernelInner { lo: 70, hi: 70 }, "palw_beacon_source_fee_v1", "RFC-7 FundPanelBeaconSourceFeeV2", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 71, hi: 71 }, "palw_claim_challenge_v2", "RFC07 prospective signed paid ClaimVerification", true),
     a2_row(PalwA2SlotV1::KernelInner { lo:65,hi:66 }, "palw_panel_lifetime_v2", "RFC07 signed absolute Panel consumer lifetime", true),
     // 2026-10-15 (R7-ECON / R8-WINDOW / R8-ECON): G14R's reserved verifier-pay slot 39 (38 stays reserved), and 67–69 inside the
     // RFC07 reservation 64–73 (70–73 stay unallocated). Each is consumer-owned past its own dormant fence.
@@ -2288,7 +2291,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         true,
     ),
     a2_row(
-        PalwA2SlotV1::StateEncoding { what: "kernel route aux table 112 native signed Panel sponsor authority v2" },
+        PalwA2SlotV1::StateEncoding { what: "kernel route aux table 128 native signed Panel sponsor authority v2 (renumbered from 112, the RFC02 branch's)" },
         "palw_beacon_source_fee_v1",
         "RFC-7 Panel prepaid sponsor authority v2",
         true,

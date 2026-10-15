@@ -2705,7 +2705,7 @@ fn checkpoint_fault(
 // =============================================================================================
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     #[test]
     fn bounded_leaf_source_opens_ragged_trees_without_a_whole_tree_buffer() {
         for count in [1usize, 2, 3, 5, 8, 13, 31, 64, 100] {
@@ -2982,7 +2982,7 @@ mod tests {
     }
 
     /// Builds the honest full commitment for the tiny job, returning everything a test needs.
-    fn honest() -> (PalwStepBindingV2, PalwStepLegMaterialV1, Vec<Hash64>, Vec<PalwCheckpointLeafV2>) {
+    pub(crate) fn honest() -> (PalwStepBindingV2, PalwStepLegMaterialV1, Vec<Hash64>, Vec<PalwCheckpointLeafV2>) {
         let p = profile();
         // Honest material declares the profile it was produced under — the equality the verifier
         // now enforces. A fixture that leaves them inconsistent is not honest material.

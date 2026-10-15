@@ -88,7 +88,7 @@ binds completed round count and last transcript root.
 
 CLI commands include MESSAGE, ROUND-FUND, ROUND-LOCK and ROUND-VERIFY; the latter
 executes actual math and opens the exact committed public material. Original V1
-wire/codecs remain unchanged; the new, unshipped inner64 sub-enum and class/receipt
+wire/codecs remain unchanged; the new, unshipped inner71 (renumbered from 64) sub-enum and class/receipt
 formats are versioned integration work. Public presets and approval registries
 remain disabled. Compact proof compiler families beyond full-material opening
 require separate explicit contracts, implementations and review before they can

@@ -3802,10 +3802,7 @@ impl<'a> TransitionBuilder<'a> {
         evidence: &[u8],
         evidence_budget: crate::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_offence_v1::{
-            PalwConsumedOffenceV1, PalwOffenceKindV1, PalwPanelFalseValidEvidenceV1, palw_offence_id_v1,
-            palw_panel_contradiction_convicts_execution_v1,
-        };
+        use crate::palw_offence_v1::{PalwConsumedOffenceV1, PalwOffenceKindV1, PalwPanelFalseValidEvidenceV1, palw_offence_id_v1};
         if !self.extras.objective_offence_at(ctx.daa_score) {
             return Err(PalwStateV2Error::ObjectiveOffenceDormant);
         }
@@ -3922,8 +3919,19 @@ impl<'a> TransitionBuilder<'a> {
                 let (execution_root, artifact_root) = self.false_valid_execution_roots(&payload)?;
                 convicted_execution_root = execution_root;
                 convicted_claim = Some(payload.claim_id);
-                palw_panel_contradiction_convicts_execution_v1(&payload.contradiction, execution_root, artifact_root, ladder)
-                    .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(offence_id, e.to_string()))?;
+                // R6-CELL round 4: the coverage closure governs a claim accepted at or past its fence (None on shipped networks).
+                let cell_closure =
+                    self.state.claims.get(&payload.claim_id).is_some_and(|c| {
+                        crate::palw_cell_coverage_closure_v1::palw_cell_closure_governs_v1(self.params, c.accepted_daa)
+                    });
+                crate::palw_offence_v1::palw_panel_contradiction_convicts_execution_closure_v1(
+                    &payload.contradiction,
+                    execution_root,
+                    artifact_root,
+                    ladder,
+                    cell_closure,
+                )
+                .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(offence_id, e.to_string()))?;
                 if let Some(lock) = self.state.slashable_locks.get(&(accused, payload.claim_id)).copied() {
                     if self.false_valid_lock_slashable_v1(&payload.claim_id, &lock, ctx.daa_score) {
                         self.write_slashable_lock((accused, payload.claim_id), None);
@@ -4097,7 +4105,7 @@ impl<'a> TransitionBuilder<'a> {
         evidence: &[u8],
         evidence_budget: crate::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_offence_attribution_v1::{palw_check_panel_false_valid_at_v2_with_budget_v1, palw_false_valid_offence_id_v2};
+        use crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2;
         use crate::palw_offence_v1::{PalwConsumedOffenceV1, PalwOffenceKindV1};
         if crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != evidence_id {
             return Err(PalwStateV2Error::ObjectiveOffenceRefused(
@@ -4127,7 +4135,7 @@ impl<'a> TransitionBuilder<'a> {
             evidence_budget,
         )?;
         // The reporter slot is F7's; until its fence arms it the adjudicator refuses a filled one.
-        let finding = palw_check_panel_false_valid_at_v2_with_budget_v1(
+        let finding = crate::palw_offence_attribution_v1::palw_check_panel_false_valid_at_v2_with_budget_closure_v1(
             &self.state,
             &accused,
             evidence,
@@ -4137,6 +4145,7 @@ impl<'a> TransitionBuilder<'a> {
             None,
             self.session_rule_v1(ctx.daa_score),
             evidence_budget,
+            self.params.cell_coverage_closure_from_daa(),
         )
         .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
         let claim_id = finding.target.claim_id;

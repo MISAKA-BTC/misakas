@@ -2405,6 +2405,12 @@ impl PalwChainStateV2 {
         crate::palw_fp_job_v5::palw_fp_v5_resolve_class_v1(job, self.gen_classes.get(&job.v4.class_id), armed)
     }
 
+    /// A test's way to replace an open court session (its ladder walked to `Terminal` off-fold) — R6-CELL round 4's court-v4 fixture.
+    #[cfg(test)]
+    pub(crate) fn test_replace_court_session_v2(&mut self, session_id: Hash64, session: PalwCourtSessionStateV2) {
+        self.court_sessions.insert(session_id, session);
+    }
+
     /// A test's way to stand a `tir_classes` row in (the fold writes rows only through a registration).
     #[cfg(test)]
     pub(crate) fn test_insert_tir_class_v1(&mut self, class_id: Hash64, record: crate::palw_tir_admission_v1::PalwTirClassRecordV1) {

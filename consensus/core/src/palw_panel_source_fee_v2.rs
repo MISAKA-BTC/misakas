@@ -10,7 +10,8 @@ use misaka_palw_kernel::beacon_source::{BeaconSourceTargetV1, BeaconSourceTermsV
 use misaka_palw_panel::{BeaconRequestV1, PanelPolicyV1};
 
 /// New optional aux authority; 108/109/110 retain their source/fee/cost schemas.
-pub const PALW_PANEL_SOURCE_FEE_AUTHORITY_TABLE_V2: u8 = 112;
+/// Renumbered 112 → 128 (2026-10-15, lead decision): the RFC02 branch owns aux 112 (`STAGE_TABLE_V14`).
+pub const PALW_PANEL_SOURCE_FEE_AUTHORITY_TABLE_V2: u8 = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwPanelSourceRequestV2 {
@@ -243,7 +244,7 @@ mod tests {
 }
 
 impl crate::palw_state_v2::PalwChainStateV2 {
-    /// Restore/IBD consistency of aux table 112: every row is keyed by exactly its 64-byte source context, decodes, re-binds the
+    /// Restore/IBD consistency of aux table 128: every row is keyed by exactly its 64-byte source context, decodes, re-binds the
     /// frozen epoch snapshot, source/fee targets and named monetary sponsor through the same reader admission and payment use, and
     /// was authorized no later than the carried state's own point. A substituted, future or orphaned authority refuses the import
     /// rather than later steering paid beacon material. Absent kernel route or an empty table: nothing to check, roots unchanged.

@@ -1816,28 +1816,31 @@ impl VirtualStateProcessor {
                                 {
                                     return Err("a Windowed receipt below palw_capacity_batch_licence (ADR-0160 F-B)".to_string());
                                 }
-                                let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_panel_false_valid_at_v2(
-                                    state,
-                                    accused,
-                                    evidence,
-                                    state_params.fp_decode_rules_at(point.daa_score),
-                                    // F7's reporter slot: empty until its own fence arms it.
-                                    false,
-                                    self.palw_identity_rules_v1(point.daa_score),
-                                    Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidSigCheckV1 {
-                                        chain_domain: domain,
-                                        seat_pubkey: &record.pubkey,
-                                        seat_active: matches!(
-                                            record.status,
-                                            kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active
-                                                | kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring { .. }
-                                        ),
-                                        verify: &Self::verify_mldsa87_with_context_bool,
-                                    }),
-                                    // Lane LG14-A (RFC-0014 §7.4): the fold's session rule at this block.
-                                    self.palw_session_rule_at(point.daa_score),
-                                )
-                                .map_err(|e| e.to_string())?;
+                                // R6-CELL round 4: the coverage closure's mirrored height (None on every shipped network).
+                                let finding =
+                                    kaspa_consensus_core::palw_offence_attribution_v1::palw_check_panel_false_valid_at_v2_closure_v1(
+                                        state,
+                                        accused,
+                                        evidence,
+                                        state_params.fp_decode_rules_at(point.daa_score),
+                                        // F7's reporter slot: empty until its own fence arms it.
+                                        false,
+                                        self.palw_identity_rules_v1(point.daa_score),
+                                        Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidSigCheckV1 {
+                                            chain_domain: domain,
+                                            seat_pubkey: &record.pubkey,
+                                            seat_active: matches!(
+                                                record.status,
+                                                kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active
+                                                    | kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring { .. }
+                                            ),
+                                            verify: &Self::verify_mldsa87_with_context_bool,
+                                        }),
+                                        // Lane LG14-A (RFC-0014 §7.4): the fold's session rule at this block.
+                                        self.palw_session_rule_at(point.daa_score),
+                                        state_params.cell_coverage_closure_from_daa(),
+                                    )
+                                    .map_err(|e| e.to_string())?;
                                 let offence_id = kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(
                                     &accused.0,
                                     &finding.target.claim_id,
@@ -1933,7 +1936,16 @@ impl VirtualStateProcessor {
                     ) {
                         return Err(kaspa_consensus_core::palw_offence_v1::PalwOffenceVerifyError::AttributionDormant.to_string());
                     }
-                    kaspa_consensus_core::palw_offence_v1::palw_verify_objective_offence_v1(
+                    // R6-CELL round 4: whether the coverage closure governs the accused claim (a `PanelFalseValid`'s named claim
+                    // accepted at or past the closure's mirrored height); `false` on every shipped network and for every other kind.
+                    let cell_closure = matches!(kind, kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid)
+                        && borsh::from_slice::<kaspa_consensus_core::palw_offence_v1::PalwPanelFalseValidEvidenceV1>(evidence)
+                            .ok()
+                            .and_then(|p| state.claim(&p.claim_id).map(|c| c.accepted_daa))
+                            .is_some_and(|daa| {
+                                kaspa_consensus_core::palw_cell_coverage_closure_v1::palw_cell_closure_governs_v1(state_params, daa)
+                            });
+                    kaspa_consensus_core::palw_offence_v1::palw_verify_objective_offence_closure_v1(
                         *kind,
                         &accused.0,
                         evidence_id,
@@ -1954,6 +1966,7 @@ impl VirtualStateProcessor {
                         // not be convicted through this route at all.
                         self.palw_max_step_leaf_count_v1(),
                         Self::verify_mldsa87_with_context_bool,
+                        cell_closure,
                     )
                     .map_err(|e| e.to_string())?;
                     if let kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid = kind {
@@ -1991,11 +2004,12 @@ impl VirtualStateProcessor {
                             }
                         }
                         let ladder = state.class_step_ladder_v1(&class_id, 64);
-                        kaspa_consensus_core::palw_offence_v1::palw_panel_contradiction_convicts_execution_v1(
+                        kaspa_consensus_core::palw_offence_v1::palw_panel_contradiction_convicts_execution_closure_v1(
                             &payload.contradiction,
                             execution_root,
                             artifact_root,
                             ladder,
+                            cell_closure,
                         )
                         .map_err(|e| e.to_string())?;
                     }

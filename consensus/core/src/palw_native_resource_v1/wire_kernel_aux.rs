@@ -76,7 +76,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         109 => <misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTargetV1 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         110 => <crate::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         111 => <crate::palw_panel_source_snapshot_v1::PalwPanelSourceSnapshotV1 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
-        112 => <crate::palw_panel_source_fee_v2::PalwPanelSourceFeeAuthorityV2 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        128 => <crate::palw_panel_source_fee_v2::PalwPanelSourceFeeAuthorityV2 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         113 => <misaka_palw_kernel::claim_paid_v2::PaidClaimClassV2 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         114 => <misaka_palw_kernel::claim_paid_v2::PaidClaimJobV2 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         115 if key_bytes == 64 => {
