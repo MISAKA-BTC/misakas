@@ -277,6 +277,8 @@ pub fn palw_bond_hold_first_excess_v1(
 pub enum PalwHoldViewV1 {
     Day = 1,
     Burst = 2,
+    /// ユーザー判断 2026-10-15 (`palw_bond_formula_v2`): terminal claims' liability until it ends.
+    Liability = 3,
 }
 
 impl PalwHoldViewV1 {
@@ -284,6 +286,7 @@ impl PalwHoldViewV1 {
         match self {
             Self::Day => PalwBudgetOriginV1::HoldDay,
             Self::Burst => PalwBudgetOriginV1::HoldBurst,
+            Self::Liability => PalwBudgetOriginV1::HoldLiability,
         }
     }
 
@@ -291,6 +294,8 @@ impl PalwHoldViewV1 {
         match self {
             Self::Day => hold.window_daa(PalwHoldModeV1::PanelOne),
             Self::Burst => hold.burst_window_daa,
+            // Event-driven (terminal + H_L); never written through the window path.
+            Self::Liability => 0,
         }
     }
 }
@@ -343,7 +348,13 @@ impl PalwBondBudgetStateV1 {
     ) -> Result<(), PalwBudgetRefusalV1> {
         let Some(hold) = policy.hold.as_ref() else { return Ok(()) };
         let row = self.bonds.get(bond).copied().unwrap_or_default();
-        let open = row.open_liability_sompi.checked_add(liability_sompi).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        // The terminal claims whose liability has not ended (the formula's liability view; empty below `palw_bond_formula_v2`).
+        let kept = self.bonds.get(&palw_bond_hold_shadow_bond_v1(PalwHoldViewV1::Liability, bond)).map_or(0, |r| r.open_liability_sompi);
+        let open = row
+            .open_liability_sompi
+            .checked_add(kept)
+            .and_then(|v| v.checked_add(liability_sompi))
+            .ok_or(PalwBudgetRefusalV1::Overflow)?;
         if open > (capital as u128).saturating_mul(hold.concurrent_liability_permille as u128) / 1_000 {
             return Err(PalwBudgetRefusalV1::LiabilityExceedsCapital);
         }
@@ -407,6 +418,51 @@ impl PalwBondBudgetStateV1 {
             self.put_release((release, id), true, j);
         }
         Ok(())
+    }
+
+    /// **ユーザー判断 2026-10-15 (`palw_bond_formula_v2`): close a claim and keep its liability until it ends.** The claim closes as
+    /// [`Self::close_at`] does (its issuance capacity still leaves only at its own `d + W`); its liability collateral moves to the bond's
+    /// liability view until `liability_until` (terminal + `H_L`, at least the court/DA/retention span), where the concurrent-collateral
+    /// check keeps counting it — a reservation is released only when the liability ends, never at a licence or a Final.
+    pub fn close_keeping_liability_v1(&mut self, claim_id: &Hash64, liability_until: u64, j: &mut Vec<PalwBudgetWriteV1>) {
+        let Some(claim) = self.claims.get(claim_id).copied().filter(|c| c.open) else { return };
+        self.close_at(claim_id, Some(liability_until), j);
+        if claim.liability_sompi == 0 {
+            return;
+        }
+        let id = palw_bond_hold_shadow_claim_v1(PalwHoldViewV1::Liability, claim_id);
+        if self.claims.contains_key(&id) {
+            return;
+        }
+        let key = palw_bond_hold_shadow_bond_v1(PalwHoldViewV1::Liability, &claim.bond);
+        let mut row = self.bonds.get(&key).copied().unwrap_or_default();
+        row.open_claims = row.open_claims.saturating_add(1);
+        row.open_liability_sompi = row.open_liability_sompi.saturating_add(claim.liability_sompi);
+        row.latest_release_daa = row.latest_release_daa.max(liability_until);
+        self.put_bond(&key, row, j);
+        self.put_claim(
+            &id,
+            Some(PalwBudgetClaimRowV1 {
+                bond: key,
+                model: None,
+                accepted_daa: claim.accepted_daa,
+                reuse_not_before: liability_until,
+                reserved: PalwBudgetVectorV1::ZERO,
+                consumed: PalwBudgetVectorV1::ZERO,
+                open: true,
+                in_window: true,
+                live: false,
+                origin: PalwHoldViewV1::Liability.origin(),
+                liability_sompi: claim.liability_sompi,
+            }),
+            j,
+        );
+        self.put_release((liability_until, id), true, j);
+    }
+
+    /// **The liability view of a bond**: the collateral its terminal claims still hold (`palw_bond_formula_v2`; 0 below it).
+    pub fn kept_liability_v1(&self, bond: &PalwBondKeyV2) -> u128 {
+        self.bonds.get(&palw_bond_hold_shadow_bond_v1(PalwHoldViewV1::Liability, bond)).map_or(0, |r| r.open_liability_sompi)
     }
 
     /// **Follow a same-block shrink or a block-unit transfer into the shadows** (riders re-attribute their lead's block and escrow in

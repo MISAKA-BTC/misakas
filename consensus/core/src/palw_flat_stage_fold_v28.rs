@@ -115,7 +115,9 @@ fn fund(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwB
     if builder.bond_budget_mirror_at(ctx.daa_score).is_some_and(|mirror|mirror.allocation_at(ctx.daa_score).is_some()){return Err(refused("stage28 budget lacks independently authenticated native model-line allocation"));}
     // RFC-0015 §8.3 (lead default 2026-10-15): Panel-free stage28 work is refused unbudgeted where the OPV policy requires a budget.
     if builder.bond_budget_mirror_at(ctx.daa_score).is_none(){builder.unbudgeted_panel_free_v1()?;}
-    let budget=builder.plan_bond_budget_v1(ctx,request.producer,None,crate::palw_bond_budget_v1::PalwBudgetAskV1{block_units:0,reward_sompi:0,final_weight:0,liability_sompi:book.reserve() as u128},crate::palw_bond_budget_v1::PalwBudgetOriginV1::KernelRoute,0)?;
+    // ADR-0176 amendment (ユーザー判断 2026-10-15): the producer's liability past `palw_bond_formula_v2` is at least the formula's.
+    let liability=builder.bond_formula_producer_liability_v2(ctx,crate::palw_bond_formula_v2::PalwClaimTypeV2::NativeFunded,request.reward,book.reserve() as u128);
+    let budget=builder.plan_bond_budget_v1(ctx,request.producer,None,crate::palw_bond_budget_v1::PalwBudgetAskV1{block_units:0,reward_sompi:0,final_weight:0,liability_sompi:liability},crate::palw_bond_budget_v1::PalwBudgetOriginV1::KernelRoute,0)?;
     // Every fallible identity/quote/collateral/quota/lease preflight completed.
     // Native money failures abort the complete transition, not a caught refusal.
     builder.hold_native_recipient_v1(crate::Hash64::from_bytes(id),request.producer,14,ctx.daa_score,deadline,request.reward,&[])?;

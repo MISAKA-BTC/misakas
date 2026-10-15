@@ -295,6 +295,10 @@ pub fn palw_claim_weight_reservation_of_v1(
     raw_w: u128,
     accepted_daa: u64,
 ) -> u128 {
+    // ADR-0176 amendment (ユーザー判断 2026-10-15): past `palw_bond_formula_v2` the weight part is the formula's, never divided by ρ.
+    if let Some(weight) = params.bond_formula_weight_part_v2(accepted_daa, raw_w) {
+        return weight;
+    }
     if !params.capacity_weight_cap_applies_at(accepted_daa) {
         return raw_w;
     }
@@ -318,12 +322,19 @@ pub struct PalwCapacityGainScaleV1 {
     liability_from: Option<u64>,
     steps: [(u64, u32); crate::palw_aggregate_liability_v1::PALW_CAPACITY_MAX_STEPS_V1],
     len: u8,
+    /// ADR-0176 amendment: `palw_bond_formula_v2`'s height where it prices claims (its weight part is never divided by ρ, so `G`
+    /// reads it unscaled).
+    formula_from: Option<u64>,
 }
 
 impl PalwCapacityGainScaleV1 {
     /// The scale `params` define (the identity where F-W or F-L is not armed).
     pub fn of(params: &PalwStateParamsV2) -> Self {
-        let mut scale = Self { weight_cap_from: params.capacity_weight_cap_from_daa(), ..Self::default() };
+        let mut scale = Self {
+            weight_cap_from: params.capacity_weight_cap_from_daa(),
+            formula_from: params.bond_formula_v2().map(|m| m.from_daa).filter(|from| params.bond_formula_v2_applies_at(*from)),
+            ..Self::default()
+        };
         if let Some(value) = params.capacity_liability()
             && value.activation != crate::config::params::ForkActivation::never()
         {
@@ -340,6 +351,9 @@ impl PalwCapacityGainScaleV1 {
     /// accepted past F-W ([`palw_claim_weight_reservation_of_v1`]'s own condition and ρ), 1 otherwise.
     pub fn scale_of(&self, claim: &PalwClaimStateV2) -> u32 {
         let accepted = claim.accepted_daa;
+        if self.formula_from.is_some_and(|from| accepted >= from) {
+            return 1;
+        }
         if !matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::Attempt)
             || self.weight_cap_from.is_none_or(|from| accepted < from)
             || self.liability_from.is_none_or(|from| accepted < from)

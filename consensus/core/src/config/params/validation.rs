@@ -180,6 +180,8 @@ impl Params {
         self.validate_palw_legacy_held_da_v2()?;
         // **ADR-0176 / ADR-0177's dormant fences** (`crate::palw_bond_budget_v1`): refused when armed.
         self.validate_palw_bond_budget_v1()?;
+        // ADR-0176 amendment (ユーザー判断 2026-10-15: bond式の再設計): dormant, refused when armed.
+        self.validate_palw_bond_formula_v2()?;
         self.validate_palw_reporter_income_v2()?;
         self.validate_palw_material_income_v3()?;
         self.validate_palw_panel_lifetime_v2()?;

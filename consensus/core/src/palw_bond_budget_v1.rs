@@ -246,6 +246,10 @@ pub enum PalwBudgetOriginV1 {
     HoldDay = 13,
     /// ユーザー方針 2026-10-15: a claim's shadow in its bond's **burst view** (released at `accepted + W_burst`).
     HoldBurst = 14,
+    /// ユーザー判断 2026-10-15 (bond式の再設計, `palw_bond_formula_v2`): a terminal claim's liability kept in its bond's **liability
+    /// view** until its liability ends (terminal + `H_L`, at least the court/DA/retention span) — open, never live, zero reservation;
+    /// the concurrent-collateral check counts it.
+    HoldLiability = 15,
 }
 
 /// Why the engine refused.
@@ -839,6 +843,8 @@ impl Params {
     /// **The fences' mirror** on the V2 bundle's state params. `None` on every shipped preset; a fixture that bypasses validation calls
     /// this after arming the fences.
     pub fn sync_palw_bond_budget_v1(&mut self) {
+        // ADR-0176 amendment: the bond formula's mirror rides every budget sync (fixtures arm both, then sync once).
+        self.sync_palw_bond_formula_v2();
         let mirror =
             self.palw_bond_budget_v1.as_ref().filter(|f| f.activation != ForkActivation::never()).map(|f| PalwBondBudgetMirrorV1 {
                 from_daa: f.activation.daa_score(),
@@ -1943,6 +1949,12 @@ impl PalwBondBudgetStateV1 {
             let Some(mut claim) = self.claims.get(&claim_id).copied() else { continue };
             let mut bond = self.bonds.get(&claim.bond).copied().unwrap_or_default();
             bond.window = bond.window.checked_sub(claim.reserved).unwrap_or(PalwBudgetVectorV1::ZERO);
+            // A liability-view row ends its liability here (the only place it ends): its open count and collateral leave the view.
+            if claim.origin == PalwBudgetOriginV1::HoldLiability && claim.open {
+                bond.open_claims = bond.open_claims.saturating_sub(1);
+                bond.open_liability_sompi = bond.open_liability_sompi.saturating_sub(claim.liability_sompi);
+                claim.open = false;
+            }
             self.put_bond(&claim.bond.clone(), bond, j);
             claim.in_window = false;
             self.put_claim(&claim_id, claim.live.then_some(claim), j);

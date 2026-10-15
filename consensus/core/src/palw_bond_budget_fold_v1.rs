@@ -1558,11 +1558,18 @@ impl TransitionBuilder<'_> {
         };
         // ユーザー方針 2026-10-15: an OPV claim holds Panel=0's 7-day span; a Panel-licensed kernel claim Panel=1's day.
         let mode = if kernel_class_is_optimistic { PalwHoldModeV1::PanelZero } else { PalwHoldModeV1::PanelOne };
+        // ユーザー判断 2026-10-15 item 6: the producer's liability is reserved beside the user's escrow (never replaced by it).
+        let claim_type = if kernel_class_is_optimistic {
+            crate::palw_bond_formula_v2::PalwClaimTypeV2::KernelPanelZero
+        } else {
+            crate::palw_bond_formula_v2::PalwClaimTypeV2::KernelPanelOne
+        };
+        let liability = self.bond_formula_producer_liability_v2(ctx, claim_type, reward, 0);
         self.plan_bond_budget_moded_v1(
             ctx,
             bond,
             model,
-            PalwBudgetAskV1 { block_units: 0, reward_sompi: reward, final_weight: 0, liability_sompi: 0 },
+            PalwBudgetAskV1 { block_units: 0, reward_sompi: reward, final_weight: 0, liability_sompi: liability },
             PalwBudgetOriginV1::KernelRoute,
             0,
             mode,
@@ -1667,7 +1674,7 @@ impl TransitionBuilder<'_> {
             block_units: budget_block_units,
             reward_sompi: claim.escrowed_reward,
             final_weight: crate::palw_weight_cap_v1::palw_weight_final_safe_v1(self.params, claim, contribution),
-            liability_sompi: claim.reserved,
+            liability_sompi: self.bond_formula_liability_v2(ctx, claim),
         };
         let origin = if rider { PalwBudgetOriginV1::Rider } else { PalwBudgetOriginV1::Attempt };
         let model = self.bond_budget_model_of(&claim.class_id, Some(artifact_root));
@@ -1690,7 +1697,7 @@ impl TransitionBuilder<'_> {
             block_units: PALW_BUDGET_BLOCK_UNIT_V1.saturating_mul(quanta as u64),
             reward_sompi: carve.saturating_mul(quanta as u64),
             final_weight: per_quantum.saturating_mul(quanta as u128),
-            liability_sompi: claim.reserved,
+            liability_sompi: self.bond_formula_liability_v2(ctx, claim),
         };
         let model = self.bond_budget_model_of(&claim.class_id, None);
         self.plan_bond_budget_v1(ctx, claim.bond, Some(model), ask, PalwBudgetOriginV1::FreePrompt, 0)
@@ -1852,6 +1859,25 @@ impl TransitionBuilder<'_> {
     /// the bond's liability hold runs to `now + H_L` (PESG §6).
     pub(super) fn bond_budget_close_v1(&mut self, claim_id: &Hash64, now: u64) {
         let hold_until = self.bond_budget_liability_hold_until_v1(now);
+        // ADR-0176 amendment (ユーザー判断 2026-10-15): a claim priced by `palw_bond_formula_v2` keeps its liability collateral counted
+        // until its liability ends — terminal + H_L, and at least its court/DA/retention span — not merely its withdrawal.
+        let formula = self
+            .state
+            .bond_budget
+            .as_ref()
+            .and_then(|budget| budget.claim_row(claim_id))
+            .map(|row| (row.accepted_daa, row.origin))
+            .filter(|(accepted, _)| self.params.bond_formula_v2_applies_at(*accepted));
+        if let Some((accepted, origin)) = formula {
+            let retention = self
+                .params
+                .bond_formula_v2()
+                .map(|m| m.policy.pricing(crate::palw_bond_formula_v2::palw_claim_type_of_origin_v2(origin)).retention_hold_daa)
+                .unwrap_or(0);
+            let until = hold_until.max(accepted.saturating_add(retention));
+            self.bond_budget_op(|budget, _, j| budget.close_keeping_liability_v1(claim_id, until, j));
+            return;
+        }
         self.bond_budget_op(|budget, _, j| budget.close_at(claim_id, Some(hold_until), j));
     }
 
@@ -2092,6 +2118,44 @@ impl TransitionBuilder<'_> {
     /// **RFC-0015 §8.3 (lead default 2026-10-15, pending user review): no Panel-free claim is admitted unbudgeted.** `true` wherever
     /// the network declares the OPV policy (`palw_panel_free_v1`; the processor sets `budget_required` on every such network,
     /// calibration and test-armed worlds included — validate what ships).
+    /// **A V2 claim's liability collateral for the budget** (PESG §6 `K`): `claim.reserved` (its weight term) below
+    /// `palw_bond_formula_v2`; past it the formula's whole decomposed reservation — weight + right + collectable-loss top-up +
+    /// court/DA/retention + a free prompt's priced receipt rights ([`crate::palw_state_v2::palw_claim_bond_reservation_v1`], the V2
+    /// ledger's ONE expression).
+    pub(super) fn bond_formula_liability_v2(&self, ctx: &PalwBlockContextV2, claim: &PalwClaimStateV2) -> u128 {
+        if !self.params.bond_formula_v2_applies_at(ctx.daa_score) {
+            return claim.reserved;
+        }
+        crate::palw_state_v2::palw_claim_bond_reservation_v1(self.params, claim).unwrap_or(u128::MAX)
+    }
+
+    /// **A kernel / native claim's producer liability** (ユーザー判断 2026-10-15 item 6): `below` under the old rule; past
+    /// `palw_bond_formula_v2` at least the formula's total for the type (collectable loss on the reward the user escrowed + court/DA/
+    /// retention) — the user's prepayment never removes it.
+    pub(super) fn bond_formula_producer_liability_v2(
+        &self,
+        ctx: &PalwBlockContextV2,
+        claim_type: crate::palw_bond_formula_v2::PalwClaimTypeV2,
+        reward: u64,
+        below: u128,
+    ) -> u128 {
+        use crate::palw_bond_formula_v2::{PalwBondFormulaInputV2, palw_bond_formula_split_v2};
+        if !self.params.bond_formula_v2_applies_at(ctx.daa_score) {
+            return below;
+        }
+        let (Some(formula), Some(budget)) = (self.params.bond_formula_v2(), self.params.bond_budget()) else { return below };
+        let input = PalwBondFormulaInputV2 {
+            claim_type,
+            accepted_daa: ctx.daa_score,
+            reward_ask_sompi: reward,
+            final_weight_ask: 0,
+            block_units_ask: 0,
+            pwu_exposure_sompi: 0,
+            reduction_allowed: false,
+        };
+        palw_bond_formula_split_v2(&formula.policy, &budget.policy, &input).map_or(u128::MAX, |split| split.total().max(below))
+    }
+
     pub(super) fn panel_free_budget_required_v1(&self) -> bool {
         self.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()).is_some_and(|o| o.budget_required)
     }
@@ -2148,7 +2212,12 @@ impl TransitionBuilder<'_> {
                 block_units: 0,
                 reward_sompi: 0,
                 final_weight: 0,
-                liability_sompi: class.record().required_producer_reserve as u128,
+                liability_sompi: self.bond_formula_producer_liability_v2(
+                    ctx,
+                    crate::palw_bond_formula_v2::PalwClaimTypeV2::NativeFunded,
+                    job.reward,
+                    class.record().required_producer_reserve as u128,
+                ),
             },
             PalwBudgetOriginV1::KernelRoute,
             0,
@@ -2204,7 +2273,17 @@ impl TransitionBuilder<'_> {
             ctx,
             producer,
             None,
-            PalwBudgetAskV1 { block_units: 0, reward_sompi: 0, final_weight: 0, liability_sompi: m.producer_reserve as u128 },
+            PalwBudgetAskV1 {
+                block_units: 0,
+                reward_sompi: 0,
+                final_weight: 0,
+                liability_sompi: self.bond_formula_producer_liability_v2(
+                    ctx,
+                    crate::palw_bond_formula_v2::PalwClaimTypeV2::NativeFunded,
+                    r.reward,
+                    m.producer_reserve as u128,
+                ),
+            },
             PalwBudgetOriginV1::KernelRoute,
             0,
         )

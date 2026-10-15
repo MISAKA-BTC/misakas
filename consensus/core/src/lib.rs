@@ -215,6 +215,9 @@ pub mod palw_block_commitment;
 /// `accepted_daa + W`) and the model-bond allocation — fences `palw_bond_budget_v1` and `palw_model_bond_allocation_v1` (dormant, refused
 /// when armed).
 pub mod palw_bond_budget_v1;
+/// **ADR-0176 amendment (ユーザー判断 2026-10-15: bond式の再設計)** — the decomposed, rights-derived bond reservation; fence
+/// `palw_bond_formula_v2` (dormant, refused when armed).
+pub mod palw_bond_formula_v2;
 /// **ADR-0145 §1–§5: a claim's work is DERIVED from the graph and the execution, never declared.**
 /// The 2026-09-19 reward audit measured 7.8× the fork-choice weight for identical arithmetic
 /// because `pwu_per_inference` counts a canonical job the registrant writes while an attempt past
