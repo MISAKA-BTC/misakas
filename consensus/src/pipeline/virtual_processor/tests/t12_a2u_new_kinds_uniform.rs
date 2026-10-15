@@ -291,8 +291,11 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 params.palw_beacon_bootstrap_v1 =
                     Some(kaspa_consensus_core::palw_beacon_bootstrap_v1::PalwBeaconBootstrapFenceV1::unapproved_probe_at(at))
             }
+            // RFC-0017 (inner 74/75): a bare height, mirrored below.
+            PalwKernelInnerFenceV1::ModelEligibilityV1 => params.palw_model_eligibility_v1 = Some(at),
         }
     }
+    params.sync_palw_model_eligibility_v1();
     params.sync_palw_claim_challenge_v2();
     params.sync_palw_econ_contracts_v1();
     params.sync_palw_permissionless_panel_v1();
@@ -365,6 +368,13 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             "palw_cell_coverage_closure_v1" => {
                 params.palw_cell_coverage_closure_v1 = Some(at);
                 params.sync_palw_cell_coverage_closure_v1();
+            }
+            // RFC-0017's model eligibility: a bare height, mirrored onto the V2 bundle the fold and the gates read. Every gate keys on a
+            // claim's acceptance DAA or a class's registration DAA (a class registered below the fence reads as grandfathered
+            // `Eligible`), so far above the chain it judges nothing here; inner 74/75 ride the kernel route's A-2 gate.
+            "palw_model_eligibility_v1" => {
+                params.palw_model_eligibility_v1 = Some(at);
+                params.sync_palw_model_eligibility_v1();
             }
             // ADR-0175 needs model lines at or below it (`validate_palw_model_immutable_v1`); artifact root ownership is t12's.
             // testnet-12 runs model lines from genesis: never move them (a later height would disarm the live registry below it).

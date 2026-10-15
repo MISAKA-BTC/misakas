@@ -208,6 +208,8 @@ impl Params {
         // **RFC-0016's two dormant fences** (`crate::palw_rfc0016_v1`): refused when armed until measured values are pinned.
         self.validate_palw_model_block_rights_v1()?;
         self.validate_palw_elastic_final_capacity_v1()?;
+        // **RFC-0017's model eligibility** (`crate::palw_model_eligibility_v1`): refused when armed.
+        self.validate_palw_model_eligibility_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
         // **A-2 uniformity** (`crate::palw_lifecycle_objects_v2`): every lifecycle kind's owning fence needs the audit fence declared.
         self.validate_palw_lifecycle_kind_fences_v1()?;

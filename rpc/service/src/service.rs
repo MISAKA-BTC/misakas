@@ -2268,6 +2268,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     reason: class.reason.clone(),
                     // The floor takes no top-up (F3), so nothing is recommended for it.
                     recommended_pool_sompi: if class.is_base_class { 0 } else { recommended_pool_sompi },
+                    // RFC-0017: "not-governed" below `palw_model_eligibility_v1` (every shipped network).
+                    eligibility_stage: class.eligibility.stage.clone(),
+                    eligibility_next_renewal_daa: class.eligibility.next_renewal_daa,
+                    eligibility_subsidy: class.eligibility.subsidy,
+                    eligibility_block_right: class.eligibility.block_right,
+                    eligibility_final_weight: class.eligibility.final_weight,
+                    eligibility_exams_passed: class.eligibility.exams_passed,
+                    eligibility_lineage_attempts: class.eligibility.lineage_attempts,
                 }
             })
             .collect();

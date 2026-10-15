@@ -14,7 +14,7 @@
 //! * [`palw_rfc0016_quote_v1`] / [`palw_rfc0016_model_report_v1`] — the pre-lottery quote and the report rows.
 //!
 //! Interfaces assumed from other lanes (not edited here): `P_m` through `PalwRightsWeightsSourceV1`, eligibility through
-//! [`palw_rfc0016_eligibility_v1`] (the one swap point; the stand-in `PalwAllEligibleV1` until RFC-0017's gates are consumable).
+//! [`palw_rfc0016_eligibility_v1`] (the one swap point: RFC-0017's eligibility, merged).
 
 use super::*;
 use crate::palw_rfc0016_v1::capacity::{
@@ -25,7 +25,7 @@ use crate::palw_rfc0016_v1::ledger::*;
 use crate::palw_rfc0016_v1::metrics::{PalwRfc0016ObservationV1, palw_rfc0016_observe_v1, palw_rfc0016_observed_v1};
 use crate::palw_rfc0016_v1::report::{PalwMinerRevenueRowV1, PalwModelReportRowV1};
 use crate::palw_rfc0016_v1::rights::{
-    PalwAllEligibleV1, PalwModelEligibilitySourceV1, PalwRightsAllowanceV1, PalwRightsEpochV1, PalwRightsWeightsSourceV1,
+    PalwModelEligibilitySourceV1, PalwRightsAllowanceV1, PalwRightsEpochV1, PalwRightsWeightsSourceV1,
     palw_rights_admit_with_snapshot_v1, palw_rights_consumed_v1, palw_rights_issue_v1, palw_rights_n_exp_v1,
     palw_rights_past_checkpoint_v1, palw_rights_quote_v1, palw_rights_reissue_snapshot_v1,
 };
@@ -34,10 +34,57 @@ use crate::palw_rfc0016_v1::values::{PALW_RFC0016_VALUES_V1, PalwRfc0016ValuesV1
 /// Telemetry rows older than this many epochs are dropped (bounded state).
 pub const PALW_RFC0016_TELEMETRY_EPOCHS_KEPT_V1: u64 = 8;
 
-/// **The one swap point for RFC-0017's eligibility.** `origin/integ/rfc0017-model-eligibility` was not on origin when this was
-/// written; when it lands, this returns its source (Registered / Probation / Eligible / Lapsed) and nothing else changes.
-pub fn palw_rfc0016_eligibility_v1(_state: &PalwChainStateV2) -> PalwAllEligibleV1 {
-    PalwAllEligibleV1
+/// **RFC-0017's eligibility, as V+ reads it** (merged from `integ/rfc0017-model-eligibility`): a model is issued normal V+ rights
+/// when any of its classes carries a reward-bearing block right outside probation (or is not governed by RFC-0017: the old rule);
+/// a `Probation` class draws on RFC-0017's own probation budget instead (V+ lets its Attempts through, never issuing it rights from
+/// `P_m` too); a `Registered` / `Lapsed` class is refused by RFC-0017's claim gate. The entrant clock is the DAA a class was
+/// promoted to `Eligible`.
+pub struct PalwRfc0017EligibilityV1<'a> {
+    state: &'a PalwChainStateV2,
+    params: &'a PalwStateParamsV2,
+    ownership: bool,
+}
+
+impl PalwRfc0017EligibilityV1<'_> {
+    fn classes_of(&self, model: &Hash64) -> Vec<Hash64> {
+        self.state
+            .model_lifecycles
+            .keys()
+            .filter(|class| palw_rfc0016_model_of_v1(self.state, self.ownership, class) == *model)
+            .copied()
+            .collect()
+    }
+}
+
+impl PalwModelEligibilitySourceV1 for PalwRfc0017EligibilityV1<'_> {
+    fn block_rights_eligible_v1(&self, model: &Hash64, daa: u64) -> bool {
+        let classes = self.classes_of(model);
+        classes.is_empty()
+            || classes.iter().any(|class| {
+                match super::palw_model_eligibility_fold_v1::eligibility_of_v1(self.state, self.params, class, daa) {
+                    None => true,
+                    Some((_, rights)) => rights.block_right && !rights.probation_bounded,
+                }
+            })
+    }
+
+    fn eligible_since_daa_v1(&self, model: &Hash64) -> Option<u64> {
+        self.classes_of(model)
+            .iter()
+            .filter_map(|class| super::palw_model_eligibility_fold_v1::eligibility_class_view_v1(self.state, class)?.row)
+            .filter(|row| row.stage == crate::palw_model_eligibility_v1::PalwEligibilityStageV1::Eligible)
+            .map(|row| row.stage_since_daa)
+            .max()
+    }
+}
+
+/// **The one swap point for eligibility** — RFC-0017's (merged), replacing the earlier all-eligible stand-in.
+pub fn palw_rfc0016_eligibility_v1<'a>(
+    state: &'a PalwChainStateV2,
+    params: &'a PalwStateParamsV2,
+    ownership: bool,
+) -> PalwRfc0017EligibilityV1<'a> {
+    PalwRfc0017EligibilityV1 { state, params, ownership }
 }
 
 /// A class's model (its artifact line, as the budget engine keys models; the class itself where it has none).
@@ -159,8 +206,15 @@ impl PalwFoldReadV1<'_> {
             return Ok(());
         }
         let Some(mirror) = self.params.rfc0016_v1() else { return Ok(()) };
+        // RFC-0017: a Probation class's right is RFC-0017's probation grant (not V+'s), and a Registered / Lapsed class is refused
+        // by RFC-0017's own claim gate — one gate, one refusal.
+        if let Some((_, rights)) = super::palw_model_eligibility_fold_v1::eligibility_of_v1(self.state, self.params, class_id, now_daa)
+            && (rights.probation_bounded || !rights.block_right)
+        {
+            return Ok(());
+        }
         let ownership = self.extras.artifact_root_ownership_active;
-        let eligibility = palw_rfc0016_eligibility_v1(self.state);
+        let eligibility = palw_rfc0016_eligibility_v1(self.state, self.params, ownership);
         let epoch = palw_rfc0016_rights_epoch_v1(self.state, self.params, &eligibility, now_daa, &mirror.values);
         let consumed = palw_rfc0016_rights_consumed_now_v1(self.state, self.params, ownership, epoch.epoch_index);
         let model = palw_rfc0016_model_of_v1(self.state, ownership, class_id);
@@ -402,7 +456,7 @@ fn rfc0016_snapshot_tick_v1(
     values: &PalwRfc0016ValuesV1,
     ownership: bool,
 ) -> Result<(), PalwStateV2Error> {
-    let eligibility = palw_rfc0016_eligibility_v1(&builder.state);
+    let eligibility = palw_rfc0016_eligibility_v1(&builder.state, builder.params, ownership);
     let epoch = palw_rfc0016_rights_epoch_v1(&builder.state, builder.params, &eligibility, now, values);
     let elapsed = now.saturating_sub(epoch.start_daa);
     if !palw_rights_past_checkpoint_v1(elapsed, epoch.length, values) || builder.state.rfc0016_snapshot_v1(epoch.epoch_index).is_some()
@@ -578,7 +632,7 @@ pub fn palw_rfc0016_quote_v1(
     let mirror = params.rfc0016_v1()?;
     let ownership = extras.artifact_root_ownership_active;
     let rights = params.rfc0016_rights_active_at(now_daa).then(|| {
-        let eligibility = palw_rfc0016_eligibility_v1(state);
+        let eligibility = palw_rfc0016_eligibility_v1(state, params, ownership);
         let epoch = palw_rfc0016_rights_epoch_v1(state, params, &eligibility, now_daa, &mirror.values);
         let consumed = palw_rfc0016_rights_consumed_now_v1(state, params, ownership, epoch.epoch_index);
         let model = palw_rfc0016_model_of_v1(state, ownership, class_id);
@@ -614,7 +668,7 @@ pub fn palw_rfc0016_model_report_v1(
 ) -> (Vec<PalwModelReportRowV1>, Vec<PalwMinerRevenueRowV1>) {
     let values = params.rfc0016_v1().map(|m| m.values).unwrap_or(PALW_RFC0016_VALUES_V1);
     let ownership = extras.artifact_root_ownership_active;
-    let eligibility = palw_rfc0016_eligibility_v1(state);
+    let eligibility = palw_rfc0016_eligibility_v1(state, params, ownership);
     let epoch = palw_rfc0016_rights_epoch_v1(state, params, &eligibility, now_daa, &values);
     let consumed = palw_rfc0016_rights_consumed_now_v1(state, params, ownership, epoch.epoch_index);
     let weights = state.bond_budget.as_ref().and_then(|b| b.rights_weights_v1());

@@ -1068,6 +1068,13 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         KernelRouteObjectV1::BootstrapExactV1 { contribution } => {
             return super::palw_beacon_bootstrap_fold_v1::apply_bootstrap_exact_v1(builder, ctx, signer, contribution);
         }
+        // RFC-0017 (inner 74/75): an eligibility exam's commit or a drawn verifier's attestation, past `palw_model_eligibility_v1`.
+        KernelRouteObjectV1::CommitEligibilityExamV1 { commit } => {
+            return super::palw_model_eligibility_fold_v1::apply_commit_eligibility_exam_v1(builder, ctx, signer, commit);
+        }
+        KernelRouteObjectV1::AttestEligibilityExamV1 { attestation } => {
+            return super::palw_model_eligibility_fold_v1::apply_attest_eligibility_exam_v1(builder, ctx, signer, attestation);
+        }
         KernelRouteObjectV1::FundPanelBeaconSourceFeeV2 { epoch, terms } => {
             return super::palw_panel_source_fee_fold_v2::fund_panel_sources_v2(builder, ctx, signer, *epoch, terms);
         }
@@ -1649,6 +1656,9 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     super::palw_econ_contracts_fold_v1::sweep_econ_contracts_v1(builder, ctx)?;
     // N3 (round 3): due BootstrapExact rounds are judged (facts derived here, never asserted) and old judgements retire.
     super::palw_beacon_bootstrap_fold_v1::sweep_beacon_bootstrap_v1(builder, ctx)?;
+    // RFC-0017: committed eligibility exams are drawn once a later seed anchor exists, decided at k positives or their deadline;
+    // eligible models past their grace lapse; terminal claims' pins retire. A no-op below `palw_model_eligibility_v1`.
+    super::palw_model_eligibility_fold_v1::sweep_model_eligibility_v1(builder, ctx)?;
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     // Anything the tick moves: claims and demands, and (G14-R4) bonded seals that expire, escrows that return and served demands'
     // bonds — a route whose only rows are a seal or an escrow must still forfeit or return it on time.

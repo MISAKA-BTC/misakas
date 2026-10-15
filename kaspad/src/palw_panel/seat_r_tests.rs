@@ -204,6 +204,7 @@ fn class_read(class_id: Hash64, row: Option<PalwModelLifecycleRowV1>) -> PalwMod
         inflight_now: 0,
         share_permille: None,
         no_capable_panel_voids: 0,
+        eligibility: Default::default(),
         reason: String::new(),
     }
 }

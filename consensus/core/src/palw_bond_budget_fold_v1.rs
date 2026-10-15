@@ -287,6 +287,16 @@ impl PalwBudgetPlanV1 {
     pub(super) fn reservation(&self) -> &PalwBudgetVectorV1 {
         &self.reservation
     }
+
+    /// **RFC-0017 (`palw_model_eligibility_v1`, an additive call-site hook — not a change to the engine's rules):** the same plan
+    /// with no Final weight asked or reserved, for a claim of a `Probation` model whose Final creates no consensus credit. Every
+    /// reader of the claim's F (`bond_budget_final_weight_v1`, `bond_budget_weight_or`, the immature clip) then reads 0
+    /// consistently. Only `palw_model_eligibility_fold_v1`'s ticket asks for it, and only past its dormant fence.
+    pub(super) fn without_final_weight_v1(mut self) -> Self {
+        self.ask.final_weight = 0;
+        self.reservation.final_weight = 0;
+        self
+    }
 }
 
 fn budget_refused(bond: PalwBondKeyV2, why: PalwBudgetRefusalV1) -> PalwStateV2Error {
@@ -2077,13 +2087,23 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
             } else {
                 BTreeMap::new()
             };
+            // RFC-0017 GAP-E1: a Registered / Lapsed model's capital counts 0 in the allocation (denominator, numerator and block
+            // opportunity) past `palw_model_eligibility_v1`; below it (no mirror) every model counts as before.
+            let params = builder.params;
             builder.bond_budget_op(|budget, state, j| {
                 let capital_of = |bond: &PalwBondKeyV2| match state.bonds.get(bond) {
                     Some(record) => (record.collateral, matches!(record.status, PalwBondStatusV2::Active)),
                     None => (0, false),
                 };
+                let eligible_capital = |model: &Hash64, capital: u128| {
+                    let class = if state.class(model).is_some() { Some(*model) } else { state.model_line(model).map(|line| line.class_id) };
+                    let stage = class.and_then(|class| {
+                        super::palw_model_eligibility_fold_v1::eligibility_of_v1(state, params, &class, now).map(|(stage, _)| stage)
+                    });
+                    crate::palw_model_eligibility_v1::palw_eligibility_allocation_capital_v1(stage, capital)
+                };
                 if policy.average.is_some() {
-                    budget.roll_epoch_v3(&policy, epoch, now, capital_of, &verifier, j)
+                    budget.roll_epoch_v3(&policy, epoch, now, capital_of, &verifier, eligible_capital, j)
                 } else {
                     budget.roll_epoch(&policy, epoch, now, capital_of, j)
                 }

@@ -935,6 +935,8 @@ mod tests {
             // RFC-0016's two dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_model_block_rights_v1" => params.palw_model_block_rights_v1 = Some(at),
             "palw_elastic_final_capacity_v1" => params.palw_elastic_final_capacity_v1 = Some(at),
+            // RFC-0017's model eligibility: a bare height, refused when armed by `validate_palw_v2`.
+            "palw_model_eligibility_v1" => params.palw_model_eligibility_v1 = Some(at),
             // RFC-0012's coordinated retirement: the height, with a complete settlement policy beside it (its values only ride
             // along; the probe asks the hashers and the schedule, never `validate_palw_v2`).
             "palw_dns_retirement_v1" => {

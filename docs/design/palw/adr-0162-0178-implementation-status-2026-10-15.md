@@ -70,7 +70,7 @@ Status words: **live** (in force on testnet-12 — several older fences are arme
 | Round rights / fee-only Rounds | `reserve_round_rights_v1` (ExecutionCap T, 7-day long view) | used at the draw | — | per-day Round-rights rate = user decision (no day view for T) |
 | Income rows (market fee, Round fee, source fee, native income, reporter) | R only | at payment, held `payment + W` | long view | per-day income rate = user decision |
 | Final weight readers | fold `bond_budget_final_weight_v1`; **rule E** `PalwRuleEBudgetEngineV1` | — | — | the leaf v2 window and the node's sides read the same engine |
-| Allocation (ADR-0177) | model R clip (coinbase-derived origins only, RFC-0016 P4) + **per-model reward-bearing block rights** (this round) | — | — | P_m applied once: reconcile the two (decision C4); physical opportunity (RFC-0016 D-Q1 / V+) not implemented |
+| Allocation (ADR-0177) | model R clip (coinbase-derived origins only, RFC-0016 P4) + **per-model reward-bearing block rights** (this round); Registered / Lapsed models excluded past `palw_model_eligibility_v1` (RFC-0017 GAP-E1, this round) | — | — | P_m once on blocks (RFC-0016 V+ when armed, which refuses this `block_opportunity`) and once on the coinbase (lead decision; C4 resolved) |
 
 ## Other ADRs — decision items
 

@@ -50,10 +50,10 @@ fn a_version_6_peer_reads_as_no_refusal() {
     assert_eq!((back.burn_permille, back.leg_permille, back.leg_v2_activation_daa), (50, 50, 3_500));
 }
 
-/// **The Activation Pool's P4 on the registry's wire**: a class row is version 2 and carries the
-/// non-binding `recommended_pool_sompi` after every version-1 field; a version-1 peer's row — the
-/// same bytes without it — reads as no recommendation, and the deprecated
-/// `registration_bond_sompi` keeps its bytes and its meaning.
+/// **The Activation Pool's P4 on the registry's wire**: a class row carries the non-binding `recommended_pool_sompi` after every
+/// version-1 field (version 2); a version-1 peer's row — the same bytes without it — reads as no recommendation, and the deprecated
+/// `registration_bond_sompi` keeps its bytes and its meaning. Since RFC-0017 the row is version 3 (the eligibility fields follow);
+/// a version-2 peer's row is the version-3 bytes without them and reads as ungoverned.
 #[test]
 fn a_version_1_registry_row_reads_as_no_recommended_pool() {
     let row = RpcPalwModelLifecycle {
@@ -61,16 +61,47 @@ fn a_version_1_registry_row_reads_as_no_recommended_pool() {
         registration_bond_sompi: 279_900_000_000_000,
         recommended_pool_sompi: 240_000_000_000,
         reason: "candidate".to_string(),
+        // What a version-1 or version-2 row decodes the RFC-0017 fields as.
+        eligibility_stage: "not-governed".to_string(),
+        eligibility_subsidy: true,
+        eligibility_block_right: true,
+        eligibility_final_weight: true,
         ..Default::default()
     };
     let mut bytes = Vec::new();
     Serializer::serialize(&row, &mut bytes).unwrap();
-    assert_eq!(&bytes[..2], &2u16.to_le_bytes());
+    assert_eq!(&bytes[..2], &3u16.to_le_bytes());
+    // Version 3's suffix: the stage (borsh: u32 length + 12 bytes), the renewal DAA, three bools, two u32s — 35 bytes.
+    let suffix = 4 + "not-governed".len() + 8 + 3 + 4 + 4;
+    bytes.truncate(bytes.len() - suffix);
+    bytes[..2].copy_from_slice(&2u16.to_le_bytes());
     let back = <RpcPalwModelLifecycle as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+    assert_eq!(format!("{back:?}"), format!("{row:?}"), "a version-2 row reads as ungoverned");
     assert_eq!((back.registration_bond_sompi, back.recommended_pool_sompi), (279_900_000_000_000, 240_000_000_000));
     assert_eq!(&bytes[bytes.len() - 8..], &240_000_000_000u64.to_le_bytes());
     bytes.truncate(bytes.len() - 8);
     bytes[..2].copy_from_slice(&1u16.to_le_bytes());
     let v1 = <RpcPalwModelLifecycle as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
     assert_eq!(format!("{v1:?}"), format!("{:?}", RpcPalwModelLifecycle { recommended_pool_sompi: 0, ..row }));
+}
+
+/// **RFC-0017 on the registry's wire (version 3)**: the stage, the next renewal, the three rights separately, the exams passed and
+/// the lineage's attempts survive the round trip — non-default values, so a lost field cannot pass as a carried one.
+#[test]
+fn a_version_3_registry_row_carries_the_eligibility_stage() {
+    let row = RpcPalwModelLifecycle {
+        class_id: "cd".repeat(64),
+        eligibility_stage: "probation".to_string(),
+        eligibility_next_renewal_daa: 1_234_567,
+        eligibility_subsidy: true,
+        eligibility_block_right: true,
+        eligibility_final_weight: false,
+        eligibility_exams_passed: 2,
+        eligibility_lineage_attempts: 5,
+        ..Default::default()
+    };
+    let mut bytes = Vec::new();
+    Serializer::serialize(&row, &mut bytes).unwrap();
+    let back = <RpcPalwModelLifecycle as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+    assert_eq!(format!("{back:?}"), format!("{row:?}"));
 }

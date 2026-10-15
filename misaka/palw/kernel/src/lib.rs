@@ -203,3 +203,6 @@ pub mod panel_lifetime_v2;
 pub mod econ_contracts_v1;
 /// N3 (2026-10-15 round 3): BootstrapExact source contributions (inner 73), consumer-owned past `palw_beacon_bootstrap_v1`.
 pub mod beacon_bootstrap_v1;
+/// RFC-0017 (2026-10-15): model eligibility exam commits and attestations (inner 74/75), consumer-owned past
+/// `palw_model_eligibility_v1`; dormant.
+pub mod model_eligibility_v1;
