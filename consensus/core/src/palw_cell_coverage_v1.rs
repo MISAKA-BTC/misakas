@@ -497,9 +497,12 @@ pub fn palw_legacy_cell_coverage_v2(
                 kind: PalwCellUncoveredKindV1::SoloRecurrenceMap,
                 ..
             } if recurrence => covered.push((boundary.clone(), PalwCellVerifierV1::LegacyAnchoredRecurrenceV2)),
+            // G-16 (2026-10-16): Kimi is OUT OF SCOPE (the user's decision; `palw_kimi_k3` is `None` everywhere and class admission and
+            // the attempt rules refuse it), so a Kimi router stays an uncovered gap here as in round 4 — only a multi-router q36 table
+            // is re-routed through the binding.
             PalwCellCoverageGapV1::Uncovered {
                 boundary: boundary @ PalwCellBoundaryV1::LegacyRouter { .. },
-                kind: PalwCellUncoveredKindV1::MultiRouterTable | PalwCellUncoveredKindV1::KimiRouter,
+                kind: PalwCellUncoveredKindV1::MultiRouterTable,
                 ..
             } if routing => {
                 if !covered.iter().any(|(b, _)| b == boundary) {
@@ -528,14 +531,13 @@ pub fn palw_legacy_cell_coverage_v2(
 }
 
 /// **Consumer v2's disposition of each uncovered kind** — the round-4 matrix with the two kinds this consumer actually reaches moved
-/// to `Covered` (a solo recurrence map: only gdn v1/v2, see [`palw_recurrence_reached_v2`]; a multi-router / Kimi table: only under
-/// a covering binding). Everything else stays refused at admission.
+/// to `Covered` (a solo recurrence map: only gdn v1/v2, see [`palw_recurrence_reached_v2`]; a multi-router q36 table: only under a
+/// covering binding). Everything else stays refused at admission — a Kimi router included (G-16: Kimi is out of scope, as in
+/// round 4's [`palw_cell_uncovered_disposition_v1`]).
 pub fn palw_cell_uncovered_disposition_v2(kind: PalwCellUncoveredKindV1) -> PalwCellDispositionV1 {
     match kind {
         PalwCellUncoveredKindV1::SoloRecurrenceMap => PalwCellDispositionV1::Covered(PalwCellVerifierV1::LegacyAnchoredRecurrenceV2),
-        PalwCellUncoveredKindV1::MultiRouterTable | PalwCellUncoveredKindV1::KimiRouter => {
-            PalwCellDispositionV1::Covered(PalwCellVerifierV1::LegacyRouterBindingV2)
-        }
+        PalwCellUncoveredKindV1::MultiRouterTable => PalwCellDispositionV1::Covered(PalwCellVerifierV1::LegacyRouterBindingV2),
         other => palw_cell_uncovered_disposition_v1(other),
     }
 }

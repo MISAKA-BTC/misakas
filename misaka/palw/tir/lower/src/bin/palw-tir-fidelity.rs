@@ -74,6 +74,15 @@ struct Args {
     /// Print the result as JSON.
     #[arg(long)]
     json: bool,
+    /// RFC-0020 §2: append RAM accounting (live and peak bytes by kind and stage, the resident set) as JSON lines to this file.
+    #[arg(long)]
+    ram_accounting: Option<PathBuf>,
+    /// RFC-0020 §6 (opt-in): spill the float reference's carries between occurrences to this directory when a sequence's carries
+    /// would exceed `--spill-carries-budget-mib` (bit-identical to the in-RAM run).
+    #[arg(long)]
+    spill_carries_dir: Option<PathBuf>,
+    #[arg(long, default_value_t = 0)]
+    spill_carries_budget_mib: u64,
     /// Run the integer program on the typed backend (`misaka-palw-tir-exec`, byte-identical to the
     /// reference evaluator and far faster) instead of the reference evaluator.
     #[arg(long)]
@@ -90,6 +99,10 @@ struct Args {
     /// (corpus-v1 §9: at 4,096 positions, within 1.5×).
     #[arg(long)]
     drift: bool,
+    /// With `--exec`: also report the mean and worst KL of N equal windows along the evaluation (implies `--drift`): the
+    /// long-context drift curve, every position compared as it is made (a 32,768-position evaluation holds no logits row).
+    #[arg(long, default_value_t = 0)]
+    drift_windows: usize,
     /// Diagnose: the N sites with the largest relative error (‖int − float‖ / ‖float‖ over the
     /// first `--site-positions` positions of the first evaluation sequence), from a traced float
     /// run and the reference evaluator. Loads every weight as f32: small models.
@@ -177,6 +190,19 @@ fn tokens(path: &Option<PathBuf>, vocab: usize, count: usize, seed: u64) -> Resu
 fn run(a: &Args) -> Result<serde_json::Value, String> {
     let t0 = Instant::now();
     let log = |m: String| eprintln!("[{:>7.1}s] {m}", t0.elapsed().as_secs_f64());
+    if a.drift_windows > 0 && !a.exec {
+        return Err("--drift-windows compares every position as it is made: it needs --exec".into());
+    }
+    if let Some(p) = &a.ram_accounting {
+        misaka_palw_tir_lower::ram_account::enable(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        misaka_palw_tir_lower::ram_account::stage("open");
+    }
+    if let Some(dir) = &a.spill_carries_dir {
+        misaka_palw_tir_lower::float_ref::stream::set_carry_spill(Some(misaka_palw_tir_lower::float_ref::stream::SpillCfg {
+            dir: dir.clone(),
+            budget_bytes: a.spill_carries_budget_mib << 20,
+        }));
+    }
     let opts = LowerOpts { max_window: a.max_window, gdn_core_wide: a.gdn_core_wide, ..LowerOpts::default() };
     misaka_palw_tir_lower::detmath::set_mode(
         misaka_palw_tir_lower::detmath::MathMode::parse(&a.math).ok_or_else(|| format!("--math {}: libm-v1 or std", a.math))?,
@@ -234,6 +260,15 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     let calib = cut(calib, a.calib_seqs);
     let (eval, eval_src) = tokens(&a.eval, vocab, 2, 29)?;
     let eval = cut(eval, a.eval_seqs);
+    // Without --exec both sides' logits are kept for every evaluated position (f32 and f64 rows): at 32,768 positions of a
+    // 248,320-entry vocabulary that is ~97 GB. The --exec path compares each position as it is made and holds no row.
+    let rows_bytes = eval.iter().map(Vec::len).sum::<usize>() as u64 * vocab as u64 * 12;
+    if !a.exec && rows_bytes > 8 << 30 {
+        return Err(format!(
+            "without --exec this evaluation would hold {:.1} GiB of logits (positions × vocabulary × 12 bytes): use --exec",
+            rows_bytes as f64 / (1u64 << 30) as f64
+        ));
+    }
     if let Some(w) = a.max_window
         && let Some(n) = eval.iter().map(Vec::len).max().filter(|n| *n > w as usize)
     {
@@ -279,6 +314,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         }
         (None, None) => {
             log(format!("calibrating on {} sequences, {} positions", calib.len(), calib.iter().map(Vec::len).sum::<usize>()));
+            misaka_palw_tir_lower::ram_account::stage("calibration");
             fidelity::calibrate(&prep.hl, &loader, &calib, &progress("calibration")).map_err(|e| e.to_string())?
         }
         (None, Some(c)) => {
@@ -307,10 +343,12 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         std::fs::write(p, misaka_palw_tir_lower::calib::stats_to_json(&stats)).map_err(|e| e.to_string())?;
     }
     if a.calibrate_only {
+        misaka_palw_tir_lower::ram_account::finish();
         return Ok(serde_json::json!({ "architecture": prep.spec.architecture, "sites": stats.len(), "metrics": {} }));
     }
     let policy = QuantPolicy { headroom16: a.headroom16, headroom32: a.headroom32, headroom_resid: a.headroom_resid };
     log("materialising the integer artifact".into());
+    misaka_palw_tir_lower::ram_account::stage("materialise");
     let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &policy, &progress("materialise")).map_err(|e| e.to_string())?;
     log(format!(
         "artifact: {} tensors, {:.1} MiB; residual scale {:.3e}, logit scale {:.3e}",
@@ -411,6 +449,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         return Ok(serde_json::json!({ "architecture": prep.spec.architecture, "site_windows": windows, "metrics": {} }));
     }
     log(format!("float reference on {} sequences", eval.len()));
+    misaka_palw_tir_lower::ram_account::stage("fidelity.float");
     // On the typed backend both sides are compared a position at a time: the float reference runs
     // to the post block's inputs and the post block (stateless) is evaluated per position.
     let (fl, post_in) = if a.exec {
@@ -424,7 +463,12 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     // would otherwise hold both sides' rows); on the reference evaluator they are kept.
     let (m, drift) = if a.exec {
         log("integer program on the typed backend (misaka-palw-tir-exec)".into());
+        misaka_palw_tir_lower::ram_account::stage("fidelity.int");
         let mut acc = fidelity::Accumulator::new((64, 192), 128);
+        if a.drift_windows > 0 {
+            let longest = eval.iter().map(Vec::len).max().unwrap_or(0);
+            acc = acc.with_windows(longest.div_ceil(a.drift_windows).max(1));
+        }
         let mut first: Vec<Vec<f64>> = Vec::new();
         let mut dump: Option<(Vec<f32>, Vec<f32>)> = a.logits_out.as_ref().map(|_| (Vec::new(), Vec::new()));
         let post_store = loader.load(prep.hl.post, None).map_err(|e| e.to_string())?;
@@ -445,6 +489,9 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
                 }
                 if si == 0 && p < a.cross_check {
                     first.push(row.to_vec());
+                }
+                if (p + 1) % 1024 == 0 {
+                    misaka_palw_tir_lower::ram_account::snapshot(&format!("integer seq {si} position {}", p + 1));
                 }
                 if (p + 1) % 64 == 0 || p + 1 == s.len() {
                     eprintln!("[{:>7.1}s]   integer seq {si}: {}/{}", t0.elapsed().as_secs_f64(), p + 1, s.len());
@@ -471,7 +518,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             }
             log(format!("cross-check: the first {} positions equal on the reference evaluator", r.len()));
         }
-        (acc.metrics(), a.drift.then(|| acc.drift()))
+        (acc.metrics(), (a.drift || a.drift_windows > 0).then(|| acc.drift()))
     } else {
         log("integer program on the reference evaluator".into());
         let pool = rayon::ThreadPoolBuilder::new().num_threads(a.jobs.max(1)).build().map_err(|e| e.to_string())?;
@@ -506,6 +553,9 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             "drift: mean KL {:.5} over positions {}..{}, {:.5} over {}..{} (×{:.2})",
             d.kl_early, d.early_window.0, d.early_window.1, d.kl_late, d.late_window.0, d.late_window.1, d.ratio
         ));
+        for w in &d.windows {
+            log(format!("  window {:>6}..{:<6} mean KL {:.5}  max {:.4}", w.start, w.end, w.kl_mean, w.kl_max));
+        }
     }
     log(format!(
         "top-1 {:.4}  KL mean {:.5} max {:.4}  ppl float {:.3} int {:.3} (Δ {:+.2}%)",
@@ -516,6 +566,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         m.ppl_int,
         m.ppl_delta * 100.0
     ));
+    misaka_palw_tir_lower::ram_account::finish();
     Ok(serde_json::json!({
         "architecture": prep.spec.architecture,
         "program_bytes": prep.lowered.program.encode().len(),

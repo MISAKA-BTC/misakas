@@ -2732,6 +2732,10 @@ impl<'a> TransitionBuilder<'a> {
             "only a first-panel S2 licence redraws"
         );
         for (key, _) in self.claim_locks_v1(&claim_id) {
+            // G14 G-13: a frame-credited lock stays for the ORIGINAL frame's own conviction while its door is open (no frame → as before).
+            if crate::palw_tir_public_claim_v1::palw_tir_public_frame_keeps_lock_v1(&self.state, &key.0, claim_id, now_daa) {
+                continue;
+            }
             self.write_slashable_lock(key, None)?;
         }
         self.cancel_panel_recipients_v1(claim_id)?;

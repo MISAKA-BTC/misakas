@@ -9,18 +9,18 @@
 //!
 //! Written, not run here (the validation lane compiles and runs it).
 
+use kaspa_consensus_core::palw_artifact::{PalwArtifactMerkleFrontierV1, artifact_leaf_parts_v1};
 use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q, encode_artifact_file_v1};
 use misaka_palw_base0::engine_a16::derived_a16_store;
 use misaka_palw_base0::tir_a16::convert_a16_to_tir;
-use kaspa_consensus_core::palw_artifact::{PalwArtifactMerkleFrontierV1, artifact_leaf_parts_v1};
 use misaka_palw_sdk::palwart_deep::verify_deep_v3;
 use misaka_palw_sdk::tir_stream::palw_tir_inventory_root_of_file_v1;
+use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
 use misaka_palw_tir_artifact::PalwTirContainerV1;
 use misaka_palw_tir_artifact::palwart_pack::{
-    PalwArtPackInputsV3, TwinFrontierV1, extract_legacy_v3, pack_legacy_v3, tir_inventory_root_twin_v1, twin_graph_ir_root_v1, twin_leaf_v1,
-    verify_v3,
+    PalwArtPackInputsV3, TwinFrontierV1, extract_legacy_v3, pack_legacy_v3, tir_inventory_root_twin_v1, twin_graph_ir_root_v1,
+    twin_leaf_v1, verify_v3,
 };
-use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
 use misaka_palw_tir_artifact::palwart_v3::{self as v3, PalwArtSegmentDoneV3, PalwArtV3, section_kind};
 use std::path::{Path, PathBuf};
 
@@ -196,4 +196,77 @@ fn the_packer_twin_is_the_consensus_inventory_root() {
         }
         assert_eq!(a.root(), b.root().map(|h| h.as_bytes()), "{n} leaves");
     }
+}
+
+/// The genesis text scope refuses BY NAME anything below it: a job-input param (`input.image_rows`), an out-of-scope tensor or
+/// file, a pipeline program — in the check itself and when a pack declares the scope in its manifest.
+#[test]
+fn the_text_scope_refuses_image_and_mtp_components_by_name() {
+    use misaka_palw_tir_artifact::palwart_v3::{
+        PalwArtEntryV3, PalwArtProgramV3, PalwArtSectionV3, check_text_scope_v3, encoding, family, inner_scheme, program_kind,
+    };
+    let src = tmp("scope-src");
+    let legacy = src.join("model.palwtir");
+    convert_a16_to_tir(&artifact(1, 17), HISTORY_BOUND_V1_SMALL, &legacy, "{}".into()).expect("converted");
+    let c = PalwTirContainerV1::open(&legacy).unwrap();
+    let ok = PalwArtProgramV3 { kind: program_kind::TIR_V1, bytes: c.header.program.clone(), ..PalwArtProgramV3::none() };
+    check_text_scope_v3(&ok, &[]).expect("a text decoder is in scope");
+    let mut p = c.program.clone();
+    p.params[0].name = "input.image_rows".into();
+    let image = PalwArtProgramV3 { kind: program_kind::TIR_V1, bytes: p.encode(), ..PalwArtProgramV3::none() };
+    assert!(check_text_scope_v3(&image, &[]).unwrap_err().starts_with("SCOPE_JOB_INPUT_REFUSED"));
+    let mut p = c.program.clone();
+    p.params[0].name = "mtp.layers.0.q".into();
+    let mtp = PalwArtProgramV3 { kind: program_kind::TIR_V1, bytes: p.encode(), ..PalwArtProgramV3::none() };
+    assert!(check_text_scope_v3(&mtp, &[]).unwrap_err().starts_with("SCOPE_OUT_OF_SCOPE_PARAM"));
+    let pipeline = PalwArtProgramV3 { kind: program_kind::TIR_V2_PIPELINE, ..PalwArtProgramV3::none() };
+    assert!(check_text_scope_v3(&pipeline, &[]).unwrap_err().starts_with("SCOPE_PROGRAM_KIND_REFUSED"));
+    let entry = |name: &str| PalwArtEntryV3 {
+        name: name.into(),
+        layer: None,
+        dtype: 0,
+        shape: vec![1],
+        encoding: encoding::RAW_LE,
+        offset: 0,
+        bytes: 1,
+        digest: [0; 32],
+    };
+    let section = |kind: u16, names: &[&str]| PalwArtSectionV3 {
+        kind,
+        family: family::NONE,
+        name: "s".into(),
+        inner_root_scheme: inner_scheme::NONE,
+        inner_root: [0; 64],
+        inner_leaf_count: 0,
+        entries: names.iter().map(|n| entry(n)).collect(),
+    };
+    let engine = PalwArtProgramV3 { kind: program_kind::PALWQ361_ENGINE, ..PalwArtProgramV3::none() };
+    assert!(check_text_scope_v3(&engine, &[section(section_kind::PALWQ361_INT, &["qwen36.palwq36"])]).is_ok());
+    assert!(
+        check_text_scope_v3(&engine, &[section(section_kind::TIR_INVENTORY, &["model.visual.blocks.0.attn"])])
+            .unwrap_err()
+            .starts_with("SCOPE_OUT_OF_SCOPE_TENSOR")
+    );
+    assert!(
+        check_text_scope_v3(&engine, &[section(section_kind::SOURCE_METADATA, &["preprocessor_config.json"])])
+            .unwrap_err()
+            .starts_with("SCOPE_OUT_OF_SCOPE_FILE")
+    );
+    assert!(check_text_scope_v3(&engine, &[section(section_kind::SOURCE_METADATA, &["mmproj-model-bf16.gguf"])]).is_err());
+    // A pack that declares the scope refuses a legacy TIR file whose program reads a job input, before any index exists.
+    let mut bad = c.program.clone();
+    bad.params[0].name = "input.image_rows".into();
+    let bad_file = src.join("bad.palwtir");
+    misaka_palw_tir_artifact::write_container_v1(&bad_file, &bad, Vec::new(), [0; 64], "{}".into(), &mut |j, l| {
+        c.read_tensor_bytes(j, l).map_err(|e| e.to_string())
+    })
+    .expect("a legacy file with the renamed param");
+    let out = tmp("scope-out");
+    let mut i = inputs(&src, &out, v3::family::QWEN2_DENSE);
+    i.manifest["scope"] = serde_json::json!({"kind": "text-generation"});
+    let e = pack_legacy_v3(&bad_file, &i, no_hook()).unwrap_err();
+    assert!(e.starts_with("SCOPE_JOB_INPUT_REFUSED"), "{e}");
+    assert!(!out.join("Example-PALW.palwart").exists(), "no index was written");
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&out);
 }

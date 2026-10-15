@@ -505,6 +505,70 @@ pub fn check_header_v3(h: &PalwArtHeaderV3) -> ResultV3<()> {
     Ok(())
 }
 
+/// **The genesis scope** (user policy 2026-10-15): text generation only — token ids in, next-token logits out. A manifest that
+/// declares `"scope": {"kind": "text-generation"}` is held to [`check_text_scope_v3`].
+pub const PALWART_TEXT_SCOPE_V3: &str = "text-generation";
+
+/// Names of what is OUT of the text scope: vision towers and projectors, image/audio/video embedders, multi-token-prediction heads.
+/// Matched case-insensitively against TIR param names and weight-entry names.
+pub const PALWART_OUT_OF_SCOPE_MARKERS_V3: &[&str] =
+    &["visual", "vision", "mmproj", "image", "patch_embed", "embed_vision", "embed_audio", "audio", "video", "mtp", "nextn"];
+
+/// Source files of the image/video/audio paths, never carried by a text-scope artifact.
+pub const PALWART_OUT_OF_SCOPE_FILES_V3: &[&str] =
+    &["preprocessor_config.json", "video_preprocessor_config.json", "processor_config.json"];
+
+/// **Refuse by name anything below the text scope**: a program that is not a single text decoder (a pipeline), a TIR param that is
+/// a job input (`input.*`, e.g. `input.image_rows`, an encoder's `input.ids`), and any weight entry, TIR param or carried file
+/// whose name marks a vision, image, audio, video or multi-token-prediction component. The refusal names the offending item.
+pub fn check_text_scope_v3(program: &PalwArtProgramV3, sections: &[PalwArtSectionV3]) -> std::result::Result<(), String> {
+    let marked = |name: &str| {
+        let l = name.to_ascii_lowercase();
+        PALWART_OUT_OF_SCOPE_MARKERS_V3.iter().find(|m| l.contains(*m)).copied()
+    };
+    match program.kind {
+        program_kind::TIR_V1 => {
+            let p = misaka_palw_tir::TirProgramV1::decode_canonical(&program.bytes)
+                .map_err(|e| format!("SCOPE_PROGRAM_UNREADABLE: {e}"))?;
+            for d in &p.params {
+                if d.name.starts_with("input.") {
+                    return Err(format!(
+                        "SCOPE_JOB_INPUT_REFUSED: param `{}` is a job input; a text-generation class reads token ids only",
+                        d.name
+                    ));
+                }
+                if let Some(m) = marked(&d.name) {
+                    return Err(format!("SCOPE_OUT_OF_SCOPE_PARAM: param `{}` ({m}) is not part of text generation", d.name));
+                }
+            }
+        }
+        program_kind::BASE0_A16_ENGINE | program_kind::PALWQ361_ENGINE => {}
+        other => return Err(format!("SCOPE_PROGRAM_KIND_REFUSED: program kind {other} is not a single text decoder")),
+    }
+    for s in sections {
+        for e in &s.entries {
+            let file = e.name.rsplit('/').next().unwrap_or(&e.name);
+            if PALWART_OUT_OF_SCOPE_FILES_V3.contains(&file) || file.to_ascii_lowercase().starts_with("mmproj") {
+                return Err(format!("SCOPE_OUT_OF_SCOPE_FILE: `{}` belongs to an image/video/audio path", e.name));
+            }
+            if section_kind::is_weights(s.kind)
+                && let Some(m) = marked(&e.name)
+            {
+                return Err(format!("SCOPE_OUT_OF_SCOPE_TENSOR: `{}` ({m}) is not part of text generation", e.name));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether a manifest (canonical JSON bytes) declares the text scope.
+pub fn manifest_declares_text_scope_v3(manifest: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(manifest)
+        .ok()
+        .and_then(|v| v.get("scope").and_then(|s| s.get("kind")).and_then(|k| k.as_str()).map(|k| k == PALWART_TEXT_SCOPE_V3))
+        .unwrap_or(false)
+}
+
 /// What a finished segment is, handed to the segment hook.
 #[derive(Clone, Debug)]
 pub struct PalwArtSegmentDoneV3 {
@@ -621,6 +685,11 @@ impl<'a> PalwArtWriterV3<'a> {
         self.at
     }
 
+    /// The sections closed so far (a scope check reads them before the index is written).
+    pub fn sections(&self) -> &[PalwArtSectionV3] {
+        &self.sections
+    }
+
     fn close_segment(&mut self) -> ResultV3<()> {
         let Some(mut s) = self.seg.take() else { return Ok(()) };
         s.file.flush()?;
@@ -641,9 +710,13 @@ impl<'a> PalwArtWriterV3<'a> {
                 let k = self.segments.len() as u32;
                 let path = self.dir.join(segment_file_name_v3(&self.stem, k));
                 let f = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e| {
-                    PalwArtErrorV3::Writer(format!("{}: {e} (a segment is never overwritten; start in an empty directory)", path.display()))
+                    PalwArtErrorV3::Writer(format!(
+                        "{}: {e} (a segment is never overwritten; start in an empty directory)",
+                        path.display()
+                    ))
                 })?;
-                self.seg = Some(OpenSegment { file: std::io::BufWriter::with_capacity(8 << 20, f), path, sha: Sha256::new(), written: 0 });
+                self.seg =
+                    Some(OpenSegment { file: std::io::BufWriter::with_capacity(8 << 20, f), path, sha: Sha256::new(), written: 0 });
             }
             let s = self.seg.as_mut().expect("just opened");
             let n = ((self.segment_bytes - s.written) as usize).min(buf.len());
@@ -928,7 +1001,8 @@ impl PalwArtV3 {
             let within = at % sb;
             let n = ((sb - within) as usize).min(out.len() - done);
             let path = self.segment_path(k);
-            let f = std::fs::File::open(&path).map_err(|e| PalwArtErrorV3::Segment { index: k, why: format!("{}: {e}", path.display()) })?;
+            let f = std::fs::File::open(&path)
+                .map_err(|e| PalwArtErrorV3::Segment { index: k, why: format!("{}: {e}", path.display()) })?;
             read_exact_at(&f, &mut out[done..done + n], within)
                 .map_err(|e| PalwArtErrorV3::Segment { index: k, why: format!("{}: {e}", path.display()) })?;
             done += n;
@@ -1169,9 +1243,8 @@ impl<'c> PalwArtTirParamsV3<'c> {
     /// order (occurrence by occurrence); both are deterministic, and the entry table (order included)
     /// is in the root. The inner root is always the inventory-order root.
     pub fn bind(art: &'c PalwArtV3, program: &misaka_palw_tir::TirProgramV1) -> ResultV3<Self> {
-        let (section, s) = art
-            .section(section_kind::TIR_INVENTORY)
-            .ok_or_else(|| PalwArtErrorV3::Header("no TIR inventory section".into()))?;
+        let (section, s) =
+            art.section(section_kind::TIR_INVENTORY).ok_or_else(|| PalwArtErrorV3::Header("no TIR inventory section".into()))?;
         let mut by_name: std::collections::BTreeMap<&str, u16> = std::collections::BTreeMap::new();
         for (j, d) in program.params.iter().enumerate() {
             if by_name.insert(d.name.as_str(), j as u16).is_some() {
@@ -1190,7 +1263,9 @@ impl<'c> PalwArtTirParamsV3<'c> {
                 .ok_or_else(|| PalwArtErrorV3::Entry { name: e.name.clone(), why: "not a param of the program".into() })?;
             let l = match e.layer {
                 None => None,
-                Some(l) => Some(u16::try_from(l).map_err(|_| PalwArtErrorV3::Entry { name: e.name.clone(), why: format!("layer {l}") })?),
+                Some(l) => {
+                    Some(u16::try_from(l).map_err(|_| PalwArtErrorV3::Entry { name: e.name.clone(), why: format!("layer {l}") })?)
+                }
             };
             let bytes = crate::tensor_bytes_v1(program, j);
             if !want.contains(&(j, l)) || e.bytes != bytes || e.encoding != encoding::TIR_INSTANCE_LE {

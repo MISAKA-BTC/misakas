@@ -74,7 +74,13 @@ fn write(dir: &std::path::Path, segment: u64, delete: bool, provenance: &str) ->
     w.begin_section(section_kind::LICENSE, family::NONE, "license").unwrap();
     w.put_entry("added/LICENSE", None, dtype::BYTES, vec![10], encoding::UTF8_TEXT, b"Apache-2.0").unwrap();
     w.end_section(inner_scheme::NONE, [0; 64], 0).unwrap();
-    let program = PalwArtProgramV3 { kind: program_kind::TIR_V1, bytes: vec![1, 2, 3], kernel_id: [9; 64], kernel_version: 0, tokenizer_id: [5; 64] };
+    let program = PalwArtProgramV3 {
+        kind: program_kind::TIR_V1,
+        bytes: vec![1, 2, 3],
+        kernel_id: [9; 64],
+        kernel_version: 0,
+        tokenizer_id: [5; 64],
+    };
     let written = w.finish(manifest(), program, Vec::new(), String::new(), provenance.as_bytes().to_vec()).unwrap();
     (written, seen)
 }

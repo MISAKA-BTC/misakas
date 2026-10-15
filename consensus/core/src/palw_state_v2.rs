@@ -201,7 +201,8 @@ mod palw_staged_court_fold_v1;
 #[path = "palw_tir_public_fold_v1.rs"]
 mod palw_tir_public_fold_v1;
 pub use palw_tir_public_fold_v1::{
-    palw_tir_public_conviction_preflight_v1, palw_tir_public_original_quote_v1, palw_tir_public_preclaim_quote_v1,
+    PALW_G03_FRAMELESS_TIR_ORIGINAL_CODE_V1, palw_tir_public_conviction_preflight_v1, palw_tir_public_original_quote_v1,
+    palw_tir_public_preclaim_quote_v1,
 };
 #[path = "palw_terminal_carriage_fold_v1.rs"]
 mod palw_terminal_carriage_fold_v1;
@@ -1956,6 +1957,13 @@ pub struct PalwStateParamsV2 {
     public_evidence_reward_from_daa: Option<u64>,
     #[borsh(skip)]
     claim_hard_deadline_v1: Option<crate::palw_ruling_fences_v1::PalwClaimHardDeadlineMirrorV1>,
+    /// **The cross-lane G14 gates' mirrors** (`crate::palw_g14_gates_v1`), written by `Params::sync_palw_g14_gates_v1`: G-01 option
+    /// (b)'s height with the route fences it reads, and the reward liability horizon's height (G-08 / G-15). `None` on every shipped
+    /// preset, and validation refuses every armed one without a pinned arm-readiness record.
+    #[borsh(skip)]
+    g14_route_required_v1: Option<crate::palw_g14_gates_v1::PalwG14RouteMirrorV1>,
+    #[borsh(skip)]
+    reward_liability_horizon_from_daa: Option<u64>,
     /// **RFC-0006 R6-CELL round 4: `Params::palw_cell_coverage_closure_v1`'s height**, mirrored by
     /// `Params::sync_palw_cell_coverage_closure_v1` (`crate::palw_cell_coverage_closure_v1`: the registration refusal, the claim gate
     /// and the court close read it). `None` on every shipped preset, and validation refuses every armed one.
@@ -3642,8 +3650,17 @@ pub fn palw_claim_final_floor_v1(
     // land, and no clawback is ever assumed. The frame row exists only past that fence (no row: the floor is unchanged on every
     // shipped network). An honest claim is delayed, never voided or charged for the wait; its receipt draws are anchored at its
     // own `final_daa`, so none expires.
-    Ok(match crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, *claim_id) {
+    let floor = match crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, *claim_id) {
         Some(frame) => floor.max(frame.plan_v1().terms.collect_until_daa),
+        None => floor,
+    };
+    // **G-08 (`palw_reward_liability_horizon_v1`): a legacy free-prompt claim reaches `Final` only at its liability horizon**
+    // (`licence + window_challenge + window_court`, the old rule's last reversal day), so its receipt spends — the coinbase leg — start
+    // only after every conviction the old rule allowed past Final has had its window, and such a conviction now VOIDS a licensed claim
+    // instead of reversing a paid one. Keyed on the claim's acceptance; `None` below the fence (every shipped network: unchanged).
+    let is_eval = state.improvement_eval_claims.contains_key(claim_id);
+    Ok(match crate::palw_g14_gates_v1::palw_legacy_fp_liability_floor_v1(params, claim, is_eval, licensed_daa) {
+        Some(horizon) => floor.max(horizon),
         None => floor,
     })
 }
@@ -19894,6 +19911,11 @@ pub struct PalwTransitionExtrasV1 {
     /// transaction was decoded into this exact original FP object by native ingress.
     /// A matching claim found elsewhere must never lend a pledge to another TX.
     pub tir_public_originals: BTreeMap<Hash64, crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1>,
+    /// **G14 G-03: `Params::palw_tir_public_conviction_v1` is in force at this block** (its own fence, read from the params, NOT
+    /// from whether [`Self::tir_public_allocation_rules_v1`] resolved). Past it a Free Prompt commitment on a registered TIR class
+    /// is admitted only WITH its transaction-paired `TFP1` ORIGINAL frame: a frameless one is refused at acceptance, so it earns
+    /// no reward, weight or credit. `false` by `Default` and below the fence — byte-identical to before it.
+    pub tir_public_conviction_active: bool,
     /// `palw_staged_float_constraint_v1` at this block: greedy Float32 Constraint claims are
     /// admitted with the rooted f32 row court. False below it: refused.
     pub staged_float_constraint_active: bool,

@@ -168,8 +168,8 @@ fn an_honest_genesis_claim_passes_and_a_lie_in_every_family_is_localized_and_con
             let (v, court) = c.verify_with(&lie, &material);
             let ClaimVerdictV1::Fault(proof) = v else { panic!("{} / {}: a lie at {at:?} passed: {v:?}", a.genesis, family.name()) };
             assert_eq!((proof.position, proof.occurrence, proof.node), at, "{} / {}: localized elsewhere", a.genesis, family.name());
-            let conviction =
-                court(&proof).unwrap_or_else(|e| panic!("{} / {}: the public court dismissed a true fault: {e:?}", a.genesis, family.name()));
+            let conviction = court(&proof)
+                .unwrap_or_else(|e| panic!("{} / {}: the public court dismissed a true fault: {e:?}", a.genesis, family.name()));
             assert_eq!((conviction.position, conviction.occurrence, conviction.node), at);
             // The same accusation against the honest claim is dismissed (a dense-matrix scalar recomputes; any other relation
             // recomputes from the honest openings).
@@ -201,7 +201,9 @@ fn the_gdn_hybrid_carries_recurrent_state_and_its_lie_is_convicted() {
         let (v, court) = c.verify_with(&lie, &material);
         let ClaimVerdictV1::Fault(proof) = v else { panic!("{}: {v:?}", a.genesis) };
         court(&proof).unwrap_or_else(|e| panic!("{}: {e:?}", a.genesis));
-        assert!(matches!(c.program.blocks[c.program.occurrences()[at.1 as usize].0 as usize].nodes[at.2 as usize].prim,
-            Prim::StateWrite { .. } | Prim::HistAppend { .. }));
+        assert!(matches!(
+            c.program.blocks[c.program.occurrences()[at.1 as usize].0 as usize].nodes[at.2 as usize].prim,
+            Prim::StateWrite { .. } | Prim::HistAppend { .. }
+        ));
     }
 }

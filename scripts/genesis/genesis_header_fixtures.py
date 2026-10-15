@@ -138,6 +138,8 @@ def write_fixture(model: dict, out: Path, force: bool, dry: bool) -> str:
     repo, rev = model["source_repo"], model["source_revision"]
     if model.get("source_format") == "gguf":
         return write_gguf_fixture(model, out, force, dry)
+    if model.get("source_format") == "palwq361":
+        return "skip: a published legacy runtime file, carried whole (no safetensors header to fixture)"
     if repo in EXISTING and fixture_ok(EXISTING[repo], model):
         return f"reuse {EXISTING[repo].relative_to(ROOT)}"
     dest = out / model["slug"]

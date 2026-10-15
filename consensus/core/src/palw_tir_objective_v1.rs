@@ -195,6 +195,105 @@ pub fn palw_tir_public_output_contradiction_v1(
     })
 }
 
+/// **G14 G-T2: where an outside verifier's selection localization stands** (see [`palw_tir_public_selection_probe_v1`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwTirSelectionProbeV1 {
+    /// The complete committed ID sequence equals the independent replay's: no decode-selection disagreement to localize.
+    Agrees,
+    /// Acquire these trace tiles of the first disagreeing row (one or two `TraceTile` requests: the committed token's tile and the
+    /// replay's token's tile).
+    Need(Vec<crate::palw_tir_public_source_v1::PalwTirPublicRequestV1>),
+    /// The committed token at `position` is refuted by the ORIGINAL job's own rule over its own committed row: the `DecodeToken`
+    /// evidence the frame's selection door convicts on (program stripped; the fold fills the registered one).
+    Ready { position: u32, evidence: crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1 },
+    /// The committed row at `position` does NOT refute its committed token under the job's rule — the committed logits differ from
+    /// the replay's there, so the disagreement is upstream arithmetic (localize it through the step tree), not selection.
+    Upstream { position: u32 },
+}
+
+/// **G14 G-T2: localize a decode-SELECTION fault from public material alone** — the node-side twin of the frame's selection door.
+///
+/// Inputs: the ORIGINAL binding with its REGISTERED program (resolved from the frame's header and the registered class, never a
+/// carried program), the class vocabulary, the ORIGINAL job's own selection rule ([`crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1`]),
+/// the court rules, the complete committed ID sequence (EOF-authenticated against the claim's trace root by the caller), an
+/// independent replay's IDs of the same job from the kept public prompt ids, and the `TraceTile` answers acquired so far. The first
+/// position where the committed IDs and the replay's differ is the candidate; the replay's token there is the beating lane. The
+/// pin is assembled from the acquired tiles and checked with the fold's own primitive
+/// ([`crate::palw_tir_court_v1::check_tir_decode_token_tiled_rule_v1`]), which re-authenticates the row and both tiles against the
+/// claim's committed trace root — so nothing here trusts the tiles' source. Greedy, seeded Decision 11 sampling and the V4
+/// pipeline (penalties, bias, bans) are all the job's rule; the stop rule is the Output door's ([`palw_tir_public_output_contradiction_v1`]).
+/// Decides nothing on chain: the filer's preflight and the fold adjudicate.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_tir_public_selection_probe_v1(
+    binding: &crate::palw_tir_step_v1::PalwTirStepBindingV1,
+    vocab: u32,
+    rule: &crate::palw_tir_court_v1::PalwTirSelectionRuleV1,
+    rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
+    committed_ids: &[u32],
+    replay_ids: &[u32],
+    tiles: &[(crate::palw_tir_public_source_v1::PalwTirPublicRequestV1, crate::palw_tir_public_source_v1::PalwTirPublicResponseV1)],
+) -> Result<PalwTirSelectionProbeV1, String> {
+    use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Req, PalwTirPublicResponseV1 as Resp};
+    let lanes = crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u32;
+    let Some(position) = committed_ids.iter().zip(replay_ids).position(|(c, r)| c != r) else {
+        return Ok(PalwTirSelectionProbeV1::Agrees);
+    };
+    let position = u32::try_from(position).map_err(|_| "TIR selection position overflows")?;
+    let (committed, beat) = (committed_ids[position as usize], replay_ids[position as usize]);
+    if beat >= vocab {
+        return Err("the replay's own token is outside the class vocabulary; the replay is not of this class".into());
+    }
+    // A committed token outside the vocabulary has no tile: the door refutes it before reading one, so the beat tile serves both.
+    let committed_tile = if committed < vocab { committed / lanes } else { beat / lanes };
+    let beat_tile = beat / lanes;
+    let tile = |want: u32| {
+        tiles.iter().find_map(|(request, response)| match (request, response) {
+            (Req::TraceTile { row, tile }, Resp::TraceTile { row_root, row_opening, lanes, opening })
+                if *row == position && *tile == want =>
+            {
+                Some((*row_root, row_opening.clone(), lanes.clone(), opening.clone()))
+            }
+            _ => None,
+        })
+    };
+    let (have_committed, have_beat) = (tile(committed_tile), tile(beat_tile));
+    let mut need: Vec<Req> = Vec::new();
+    if have_committed.is_none() {
+        need.push(Req::TraceTile { row: position, tile: committed_tile });
+    }
+    if have_beat.is_none() && beat_tile != committed_tile {
+        need.push(Req::TraceTile { row: position, tile: beat_tile });
+    }
+    let (Some(c), Some(b)) = (have_committed, have_beat.clone().or_else(|| tile(committed_tile))) else {
+        return Ok(PalwTirSelectionProbeV1::Need(need));
+    };
+    if c.0 != b.0 || c.1 != b.1 {
+        return Err("the two acquired tiles of one row name different row roots".into());
+    }
+    let pin = crate::palw_step_refute::PalwTiledDecodePinV1 {
+        position,
+        generated_token_ids: committed_ids.to_vec(),
+        row_root: c.0,
+        row_opening: c.1,
+        committed_tile_lanes: c.2,
+        committed_opening: c.3,
+        beat_tile_lanes: b.2,
+        beat_opening: b.3,
+        beat_lane: beat,
+    };
+    match crate::palw_tir_court_v1::check_tir_decode_token_tiled_rule_v1(binding, &pin, rules, rule) {
+        Ok(_) => {
+            let mut proof = PalwCourtVerdictProofV2::TirDecodeTokenTiled { binding: Box::new(binding.clone()), pin };
+            proof.tir_strip_program_v1();
+            let evidence = crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::DecodeToken { proof: Box::new(proof) };
+            evidence.check_v1()?;
+            Ok(PalwTirSelectionProbeV1::Ready { position, evidence })
+        }
+        Err(crate::palw_step_refute::PalwStepRefuteError::NoFaultFound) => Ok(PalwTirSelectionProbeV1::Upstream { position }),
+        Err(error) => Err(format!("the assembled selection pin does not authenticate against the claim: {error}")),
+    }
+}
+
 fn grade_output_ids_v1(
     target: PalwOffenceTargetV1,
     context: &crate::palw_v2::PalwJobContextV2,

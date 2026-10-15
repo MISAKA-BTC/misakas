@@ -232,12 +232,45 @@ impl PalwChainStateV2 {
                 .collect()
         })
     }
-    /// **G14 R1/R7: outside owner acquisitions opened on `claim`** (every live `TirAcquisition` row; rows leave at the material
-    /// horizon). The K_owner cap reads this count before any duty is created.
-    pub fn staged_tir_owner_count_v1(&self, claim: &Hash64) -> u64 {
-        self.staged_tir_by_claim.get(claim).map_or(0, |rows| {
-            rows.iter().filter(|(_, key)| matches!(key, PalwStagedCourtKeyV1::TirAcquisition(..))).count() as u64
+    /// The live `TirAcquisition` rows of `claim`, with their keys (at most the rows of one frame: K_owner slot holders plus the
+    /// retired ones that wait for the material horizon).
+    fn staged_tir_owner_rows_v1(
+        &self,
+        claim: &Hash64,
+    ) -> Vec<(PalwStagedCourtKeyV1, &crate::palw_tir_public_state_v1::PalwTirPublicAcquisitionRowV1)> {
+        self.staged_tir_by_claim.get(claim).map_or_else(Vec::new, |rows| {
+            rows.iter()
+                .filter_map(|(_, key)| match key {
+                    PalwStagedCourtKeyV1::TirAcquisition(c, owner, allocation) => {
+                        self.staged_tir_acquisition_v1(*c, *owner, *allocation).map(|row| (*key, row))
+                    }
+                    _ => None,
+                })
+                .collect()
         })
+    }
+    /// **G14 R1/R7: outside owners holding one of `claim`'s K_owner slots** — every live `TirAcquisition` row that can still demand
+    /// or still has an unpaid demand open ([`crate::palw_tir_public_owned_v1::PalwTirPublicOwnedV1::holds_owner_slot_v1`]). A row
+    /// that spent its turns, or whose idle slot a later Open reclaimed, stays in state to its horizon but holds no slot. The K_owner
+    /// cap reads this count before any duty is created.
+    pub fn staged_tir_owner_count_v1(&self, claim: &Hash64) -> u64 {
+        self.staged_tir_owner_rows_v1(claim).into_iter().filter(|(_, row)| row.owned.holds_owner_slot_v1()).count() as u64
+    }
+    /// **G14 R1 / G-T1: the slot an Open at DAA `now` reclaims when the frame is at K_owner** — the slot holder that has been idle
+    /// longest ([`crate::palw_tir_public_owned_v1::PalwTirPublicOwnedV1::owner_idle_at_v1`]; ties by key), or `None` when every
+    /// holder is still making progress.
+    pub fn staged_tir_idle_owner_v1(&self, claim: &Hash64, now: u64) -> Option<(PalwStagedCourtKeyV1, PalwBondKeyV2)> {
+        self.staged_tir_owner_rows_v1(claim)
+            .into_iter()
+            .filter(|(_, row)| row.owned.owner_idle_at_v1(now))
+            .min_by_key(|(key, row)| (row.owned.idle_since_v1(), *key))
+            .map(|(key, row)| (key, row.owned.contract_v1().owner))
+    }
+    /// **G14 R1 / G-T1: can an independent bond Open an owner acquisition on `claim` at DAA `now`?** — a free slot under K_owner, or
+    /// an idle holder whose slot the Open reclaims. Metadata for the node's owner worker; the fold decides.
+    pub fn staged_tir_owner_slot_open_v1(&self, claim: &Hash64, now: u64) -> bool {
+        self.staged_tir_owner_count_v1(claim) < crate::palw_tir_public_claim_v1::PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1
+            || self.staged_tir_idle_owner_v1(claim, now).is_some()
     }
     /// **G14 R6: an ORIGINAL TIR frame's d0 conviction door is still open at `now`** — `[accepted, collect_until)` of the frame's
     /// own terms. Gate C waits on it (never a deadline failure), and the claim's `Final` floor is its close.
