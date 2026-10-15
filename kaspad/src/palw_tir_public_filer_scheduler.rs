@@ -26,7 +26,9 @@
 #![allow(dead_code)] // `queue_finding_v1` is the hook the finding producers call once they are wired; the tick runs every panel tick.
 
 use super::super::{COURT_MOVE_REPLAN_DAA, PalwPanelService};
-use super::tir_public_filer::{palw_tir_public_conviction_object_v1, palw_tir_public_may_file_v1};
+use super::tir_public_filer::{
+    palw_tir_public_conviction_object_v1, palw_tir_public_may_file_v1, palw_tir_public_witness_part_object_v1,
+};
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_consensus_core::{
     Hash64,
@@ -55,6 +57,8 @@ pub(crate) struct PalwTirPublicPendingFilingV1 {
     pub evidence: PalwTirPublicConvictionEvidenceV1,
     pub found_daa: u64,
     pub sends: u8,
+    /// G14 R7: for a witness carried in parts, the offset of the part last sent (sends restart when the fold accepts it).
+    pub staged_offset: u64,
 }
 
 /// **The filer's book**: the pending findings by claim, persisted.
@@ -142,7 +146,7 @@ impl PalwTirPublicFilerBookV1 {
         {
             return false;
         }
-        self.filings.insert(claim, PalwTirPublicPendingFilingV1 { claim, evidence, found_daa: now_daa, sends: 0 });
+        self.filings.insert(claim, PalwTirPublicPendingFilingV1 { claim, evidence, found_daa: now_daa, sends: 0, staged_offset: 0 });
         self.dirty = true;
         self.persist();
         true
@@ -219,10 +223,6 @@ impl PalwPanelService {
                 continue;
             }
             let Some(entry) = book.filings.get(&claim).cloned() else { continue };
-            if entry.sends >= PALW_TIR_PUBLIC_FILER_SENDS_V1 {
-                book.drop_v1(&claim, "sent its bounded number of times");
-                continue;
-            }
             match session.palw_tir_public_conviction_preflight_v1(filer, claim, entry.evidence.clone()) {
                 Ok(Some(Ok(()))) => {}
                 Ok(Some(Err(why))) => {
@@ -237,20 +237,77 @@ impl PalwPanelService {
                     continue;
                 }
             }
-            let object = match palw_tir_public_conviction_object_v1(
-                |message, context| self.sign(message, context).unwrap_or_default(),
-                network_domain,
-                &view,
-                filer,
-                current_daa,
-                entry.evidence,
-            ) {
+            // G14 R7: an evidence whose encoding does not fit one control rides in 16 KiB parts (split carriage, never truncated);
+            // the fold adjudicates when the last part lands. The next part starts where the fold's row says it stopped.
+            let encoded = match borsh::to_vec(&entry.evidence) {
+                Ok(encoded) => encoded,
+                Err(why) => {
+                    book.drop_v1(&claim, &why.to_string());
+                    continue;
+                }
+            };
+            let staged =
+                encoded.len() as u64 + 4096 > kaspa_consensus_core::palw_tir_public_carriage_v1::PALW_TIR_PUBLIC_CONTROL_MAX_BYTES_V1;
+            let built = if staged {
+                let digest = kaspa_consensus_core::palw_tir_public_carriage_v1::palw_tir_public_witness_digest_v1(&encoded);
+                let mut accepted: Option<(u64, Hash64)> = None;
+                let mut read = |state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2| -> Result<(), String> {
+                    use kaspa_consensus_core::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+                    accepted = match state.staged_court_row_v1(&Key::TirWitness(claim, filer)) {
+                        Some(Row::TirWitness(row)) => Some((row.received.len() as u64, row.digest)),
+                        _ => None,
+                    };
+                    Ok(())
+                };
+                if !matches!(session.palw_tir_public_read_v1(&mut read), Ok(true)) {
+                    continue;
+                }
+                let offset = match accepted {
+                    None => 0,
+                    Some((offset, row_digest)) if row_digest == digest => offset,
+                    Some(_) => {
+                        book.drop_v1(&claim, "this filer already stages another witness on the claim");
+                        continue;
+                    }
+                };
+                if offset != entry.staged_offset
+                    && let Some(e) = book.filings.get_mut(&claim)
+                {
+                    e.staged_offset = offset;
+                    e.sends = 0;
+                    book.dirty = true;
+                }
+                palw_tir_public_witness_part_object_v1(
+                    |message, context| self.sign(message, context).unwrap_or_default(),
+                    network_domain,
+                    &view,
+                    filer,
+                    current_daa,
+                    &encoded,
+                    offset,
+                )
+            } else {
+                palw_tir_public_conviction_object_v1(
+                    |message, context| self.sign(message, context).unwrap_or_default(),
+                    network_domain,
+                    &view,
+                    filer,
+                    current_daa,
+                    entry.evidence,
+                )
+            };
+            let object = match built {
                 Ok(object) => object,
                 Err(why) => {
                     book.drop_v1(&claim, &why);
                     continue;
                 }
             };
+            // Sends are bounded per carried part: a part the fold accepted restarts the count (above).
+            if book.filings.get(&claim).is_some_and(|e| e.sends >= PALW_TIR_PUBLIC_FILER_SENDS_V1) {
+                book.drop_v1(&claim, "sent its bounded number of times");
+                continue;
+            }
             pending.push((key.0, key.1, key.2, object));
             due.insert(key, view.collect_until_daa.saturating_sub(1));
             moved.insert(key, current_daa);

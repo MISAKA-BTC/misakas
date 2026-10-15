@@ -366,7 +366,8 @@ impl VirtualStateProcessor {
             return kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx))
                 .objects.first().and_then(|carried| {
                     if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::TirPublicControlV1 { control } = &carried.object {
-                        if matches!((&control.target, &control.action), (T::OwnerOpen { .. }, A::Open) | (T::Conviction, A::Convict(_)))
+                        if (matches!((&control.target, &control.action), (T::OwnerOpen { .. }, A::Open) | (T::Conviction, A::Convict(_)))
+                            || matches!((&control.target, &control.action), (T::ConvictionWitness, A::WitnessPart(_))))
                             && control.check_v1().is_ok()
                         {
                             return Some(control.declared_rent_sompi);

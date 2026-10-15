@@ -2230,7 +2230,9 @@ impl VirtualStateProcessor {
                 }
                 return Ok(Some(frame.plan_v1().owner_terms_v1()?.plan.rent_sompi));
             }
-            if matches!((&control.target, &control.action), (T::Conviction, A::Convict(_))) {
+            if matches!((&control.target, &control.action), (T::Conviction, A::Convict(_)))
+                || matches!((&control.target, &control.action), (T::ConvictionWitness, A::WitnessPart(part)) if part.offset == 0)
+            {
                 let frame = kaspa_consensus_core::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, control.claim)
                     .ok_or("public conviction has no paid original TIR frame")?;
                 if frame.plan_v1().allocation_id != control.allocation_id || frame.plan_v1().source_id != control.source_id {

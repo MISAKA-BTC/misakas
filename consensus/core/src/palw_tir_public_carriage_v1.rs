@@ -63,6 +63,10 @@ pub enum PalwTirPublicControlTargetV1 {
     /// Panel seat that signed no Valid and a bond outside the Panel use the SAME object and reach the SAME
     /// native verdict. No vote, quorum or Panel co-signature is read.
     Conviction,
+    /// **G14 R7: the split carriage of ONE conviction witness larger than a control** (appended). The literal signer is the
+    /// filer, under exactly [`Self::Conviction`]'s filer rule; its parts assemble in order into a per-(claim, filer) rooted row and
+    /// the part that completes the declared bytes adjudicates them as one conviction, atomically.
+    ConvictionWitness,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwTirPublicControlActionV1 {
@@ -71,6 +75,98 @@ pub enum PalwTirPublicControlActionV1 {
     Preparation(crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1),
     /// Appended with [`PalwTirPublicControlTargetV1::Conviction`]; never carries rent.
     Convict(PalwTirPublicConvictionEvidenceV1),
+    /// Appended with [`PalwTirPublicControlTargetV1::ConvictionWitness`]: one in-order part of a staged conviction witness. The
+    /// part at offset 0 declares (and burns) the frame's conviction rent — the terminal envelope that already prices a witness of
+    /// the frame's ceiling carried in 16 KiB parts — and every later part declares zero.
+    WitnessPart(PalwTirPublicWitnessPartV1),
+}
+
+/// One part of a staged conviction witness carries at most this many bytes — the terminal plan's own part size
+/// (`maximum_witness_bytes.div_ceil(16_384)` parts are priced per attempt).
+pub const PALW_TIR_PUBLIC_WITNESS_PART_BYTES_V1: usize = 16_384;
+
+/// **The identity of a complete staged witness**: a keyed BLAKE2b-512 over its exact bytes (the evidence's own Borsh encoding).
+pub fn palw_tir_public_witness_digest_v1(bytes: &[u8]) -> Hash64 {
+    Hash64::from_bytes(
+        blake2b_simd::Params::new()
+            .hash_length(64)
+            .key(b"misaka-palw/tir-conviction-witness/v1")
+            .hash(bytes)
+            .as_bytes()
+            .try_into()
+            .expect("64"),
+    )
+}
+
+/// **G14 R7: one in-order part of a staged conviction witness.** `total_bytes` and `digest` name the complete witness (the same
+/// on every part); `offset` must equal the bytes already accepted for this (claim, filer). Decoding refuses a part longer than
+/// [`PALW_TIR_PUBLIC_WITNESS_PART_BYTES_V1`] before allocating it.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+pub struct PalwTirPublicWitnessPartV1 {
+    pub total_bytes: u64,
+    pub digest: Hash64,
+    pub offset: u64,
+    pub bytes: Vec<u8>,
+}
+impl BorshDeserialize for PalwTirPublicWitnessPartV1 {
+    fn deserialize_reader<R: std::io::Read>(r: &mut R) -> std::io::Result<Self> {
+        let total_bytes = u64::deserialize_reader(r)?;
+        let digest = Hash64::deserialize_reader(r)?;
+        let offset = u64::deserialize_reader(r)?;
+        let count = u32::deserialize_reader(r)? as usize;
+        if count == 0 || count > PALW_TIR_PUBLIC_WITNESS_PART_BYTES_V1 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "TIR witness part exceeds its native part bound before allocation",
+            ));
+        }
+        let mut bytes = vec![0u8; count];
+        r.read_exact(&mut bytes)?;
+        Ok(Self { total_bytes, digest, offset, bytes })
+    }
+}
+impl PalwTirPublicWitnessPartV1 {
+    /// Shape only: a non-empty bounded part inside its declared whole. Not an assembly or an adjudication.
+    pub fn check_v1(&self) -> Result<(), String> {
+        let end = self.offset.checked_add(self.bytes.len() as u64);
+        if self.bytes.is_empty()
+            || self.bytes.len() > PALW_TIR_PUBLIC_WITNESS_PART_BYTES_V1
+            || self.total_bytes == 0
+            || self.digest == Hash64::default()
+            || end.is_none_or(|end| end > self.total_bytes)
+        {
+            return Err("TIR witness part is empty, oversized or outside its declared witness".into());
+        }
+        Ok(())
+    }
+}
+
+/// **G14 R7: a staged conviction witness being assembled** — rooted per (claim, filer) under `TirWitness`, swept at the frame's
+/// door close (`until_daa = collect_until`). `received` is the exact accepted prefix of the declared witness.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirPublicWitnessRowV1 {
+    pub claim: Hash64,
+    pub filer: PalwBondKeyV2,
+    pub allocation_id: Hash64,
+    pub total_bytes: u64,
+    pub digest: Hash64,
+    pub until_daa: u64,
+    pub received: Vec<u8>,
+}
+impl PalwTirPublicWitnessRowV1 {
+    pub fn check_structure_v1(&self, claim: Hash64, filer: PalwBondKeyV2) -> Result<(), String> {
+        if (self.claim, self.filer) != (claim, filer)
+            || self.claim == Hash64::default()
+            || self.allocation_id == Hash64::default()
+            || self.total_bytes == 0
+            || self.digest == Hash64::default()
+            || self.received.is_empty()
+            || self.received.len() as u64 >= self.total_bytes
+        {
+            return Err("TIR staged witness row changes its key or is empty/complete (a complete witness is adjudicated, never kept)".into());
+        }
+        Ok(())
+    }
 }
 
 /// The most original IDs one conviction may carry before allocation-bounded decoding refuses it. The
@@ -144,6 +240,34 @@ impl BorshDeserialize for PalwTirPublicConvictionEvidenceV1 {
 impl PalwTirPublicConvictionEvidenceV1 {
     /// Shape only: the primitive kind, a stripped program and bounded IDs. Not an adjudication.
     pub fn check_v1(&self) -> Result<(), String> {
+        self.check_shape_v1(PALW_TIR_PUBLIC_CONVICTION_MAX_IDS_V1)
+    }
+    /// **G14 R7: the evidence a complete staged witness encodes** — its own Borsh form (tag 0/1/2), decoded from the assembled
+    /// bytes whose total the frame's witness ceiling already bounds; an Output's ID count is bounded by those bytes rather than by
+    /// the single-control preflight. Complete EOF is required (no ignored tail).
+    pub fn decode_staged_v1(bytes: &[u8]) -> Result<Self, String> {
+        let (tag, rest) = bytes.split_first().ok_or("TIR staged witness is empty")?;
+        let evidence = match tag {
+            0 => Self::Arithmetic { proof: Box::new(borsh::from_slice(rest).map_err(|e| e.to_string())?) },
+            2 => Self::DecodeToken { proof: Box::new(borsh::from_slice(rest).map_err(|e| e.to_string())?) },
+            1 => {
+                if rest.len() < 68 || (rest.len() - 68) % 4 != 0 {
+                    return Err("TIR staged output witness is not a root and a whole ID vector".into());
+                }
+                let rows_root: Hash64 = borsh::from_slice(&rest[..64]).map_err(|e| e.to_string())?;
+                let count = u32::from_le_bytes(rest[64..68].try_into().expect("4")) as usize;
+                if count == 0 || count.checked_mul(4) != Some(rest.len() - 68) {
+                    return Err("TIR staged output witness declares another ID count than it carries".into());
+                }
+                let ids = rest[68..].chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().expect("4"))).collect();
+                Self::Output { rows_root, ids }
+            }
+            _ => return Err("unknown TIR conviction evidence form".into()),
+        };
+        evidence.check_shape_v1(usize::MAX)?;
+        Ok(evidence)
+    }
+    fn check_shape_v1(&self, maximum_ids: usize) -> Result<(), String> {
         use crate::palw_court_v2::PalwCourtVerdictProofV2 as P;
         match self {
             Self::Arithmetic { proof } => {
@@ -157,7 +281,7 @@ impl PalwTirPublicConvictionEvidenceV1 {
                 }
             }
             Self::Output { rows_root, ids } => {
-                if *rows_root == Hash64::default() || ids.is_empty() || ids.len() > PALW_TIR_PUBLIC_CONVICTION_MAX_IDS_V1 {
+                if *rows_root == Hash64::default() || ids.is_empty() || ids.len() > maximum_ids {
                     return Err("TIR public output conviction has no bounded authenticated ID sequence".into());
                 }
             }
@@ -212,7 +336,8 @@ impl PalwTirPublicControlV1 {
         use PalwTirPublicControlTargetV1 as T;
         // An Open buys an owner's acquisition; a conviction filing buys one native adjudication (the frame's terminal rent).
         // Both declare an exact rent burned from the OUTER carrier fee; prepaid continuations declare zero.
-        let paid = matches!((&self.target, &self.action), (T::OwnerOpen { .. }, A::Open) | (T::Conviction, A::Convict(_)));
+        let paid = matches!((&self.target, &self.action), (T::OwnerOpen { .. }, A::Open) | (T::Conviction, A::Convict(_)))
+            || matches!((&self.target, &self.action), (T::ConvictionWitness, A::WitnessPart(part)) if part.offset == 0);
         if paid != (self.declared_rent_sompi != 0) {
             return Err("TIR Open/conviction requires declared rent and prepaid continuations require zero new rent".into());
         }
@@ -245,6 +370,7 @@ impl PalwTirPublicControlV1 {
                 self.check_action_bounds_v1(action)?;
             }
             (T::Conviction, A::Convict(evidence)) if self.expected_turn == 0 => evidence.check_v1()?,
+            (T::ConvictionWitness, A::WitnessPart(part)) if self.expected_turn == 0 => part.check_v1()?,
             (T::Preparation { original_accepted_daa }, A::Preparation(action)) if self.expected_turn == 0 => {
                 match action {
                     OwnedAction::WorkDebit(debit)

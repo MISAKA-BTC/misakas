@@ -653,6 +653,13 @@ fn apply_verified_control_v1(
             }
             return apply_conviction_v1(b, ctx, &frame, control.signer, evidence);
         }
+        (T::ConvictionWitness, A::WitnessPart(part)) => {
+            let rent = if part.offset == 0 { frame.conviction_rent_v1() } else { 0 };
+            if control.declared_rent_sompi != rent || control.expected_turn != 0 {
+                return Err(refused("TIR staged witness burns the conviction rent at its first part only, and carries no turn"));
+            }
+            return apply_witness_part_v1(b, ctx, &frame, control.signer, part);
+        }
         _ => return Err(refused("TIR control substitutes preparation/open/owner namespaces")),
     };
     // Pure effects are not sanctions. Only the native literal default after its
@@ -915,6 +922,73 @@ fn apply_conviction_v1(
         b.forfeit_minted_round_rights(&root)?;
     }
     Ok(())
+}
+
+/// **G14 R7: one in-order part of a staged conviction witness** — the split carriage of a witness larger than one control, never
+/// a truncation. Same window and filer rule as a direct filing; the declared whole is bounded by the frame's own prepaid witness
+/// ceiling (`terminal.maximum_witness_bytes`, the envelope the conviction rent already prices in 16 KiB parts). Parts append in
+/// order to the (claim, filer) row; the part that completes the declared bytes authenticates the assembly against its digest,
+/// decodes it ([`crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::decode_staged_v1`]) and adjudicates it
+/// through [`apply_conviction_v1`] exactly as a direct filing — atomically: a holding or refused witness rolls the whole part
+/// back (the incomplete row then waits, rent already burned, until the door's close sweeps it).
+fn apply_witness_part_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    frame: &Frame,
+    filer: PalwBondKeyV2,
+    part: &crate::palw_tir_public_carriage_v1::PalwTirPublicWitnessPartV1,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_tir_public_carriage_v1::{PalwTirPublicWitnessRowV1 as Witness, palw_tir_public_witness_digest_v1};
+    part.check_v1().map_err(refused)?;
+    let claim_id = frame.plan_v1().original_claim;
+    let terms = frame.plan_v1().terms;
+    if ctx.daa_score < terms.accepted_daa || ctx.daa_score >= terms.collect_until_daa {
+        return Err(refused("TIR staged witness is outside the frame's original collection door"));
+    }
+    conviction_filer_v1(b, frame, filer)?;
+    if part.total_bytes > frame.plan_v1().terminal.maximum_witness_bytes {
+        return Err(refused("TIR staged witness exceeds the frame's prepaid witness ceiling"));
+    }
+    let key = Key::TirWitness(claim_id, filer);
+    let existing = match b.state.staged_court_row_v1(&key) {
+        Some(Row::TirWitness(row)) => Some(row.as_ref().clone()),
+        Some(_) => return Err(refused("TIR staged witness key holds another row")),
+        None => None,
+    };
+    let mut row = match (existing.clone(), part.offset) {
+        (None, 0) => Witness {
+            claim: claim_id,
+            filer,
+            allocation_id: frame.plan_v1().allocation_id,
+            total_bytes: part.total_bytes,
+            digest: part.digest,
+            until_daa: terms.collect_until_daa,
+            received: Vec::new(),
+        },
+        (Some(row), offset) if offset != 0 => row,
+        _ => return Err(refused("TIR staged witness part is out of order (a witness opens once, at offset 0)")),
+    };
+    if (row.total_bytes, row.digest, row.allocation_id, row.received.len() as u64)
+        != (part.total_bytes, part.digest, frame.plan_v1().allocation_id, part.offset)
+    {
+        return Err(refused("TIR staged witness part changes its declared whole or skips accepted bytes"));
+    }
+    row.received.extend_from_slice(&part.bytes);
+    if (row.received.len() as u64) < row.total_bytes {
+        row.check_structure_v1(claim_id, filer).map_err(refused)?;
+        b.write_staged_row_v1(key, Some(Row::TirWitness(Box::new(row).into())))?;
+        return Ok(());
+    }
+    // Complete: the assembly must be exactly the declared witness, then it is ONE conviction filing.
+    if palw_tir_public_witness_digest_v1(&row.received) != row.digest {
+        return Err(refused("TIR staged witness does not assemble to its declared digest"));
+    }
+    let evidence =
+        crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::decode_staged_v1(&row.received).map_err(refused)?;
+    if existing.is_some() {
+        b.write_staged_row_v1(key, None)?;
+    }
+    apply_conviction_v1(b, ctx, frame, filer, &evidence)
 }
 
 /// Ordinary Valid validation, backing/credit/S4, new grant and Ready all commit
@@ -1485,5 +1559,57 @@ mod conviction_e2e_tests {
         for seat in drawn() {
             assert_eq!(b.state.bonds.get(&seat).unwrap().collateral, COLLATERAL);
         }
+    }
+
+    /// **G14 R7: a witness carried in parts is assembled in order and adjudicated once, by the part that completes it** — the
+    /// first part burns the conviction rent, nothing is judged before the declared whole lands, an out-of-order or rent-free first
+    /// part is refused, and the completed witness convicts exactly as the same evidence filed directly (the row is consumed).
+    #[test]
+    fn g14_staged_witness_assembles_in_order_and_convicts_once() {
+        use crate::palw_tir_public_carriage_v1::{PalwTirPublicWitnessPartV1 as Part, palw_tir_public_witness_digest_v1};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let ids = fx.execution.generated.clone();
+        let rows_root =
+            crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context, &fx.execution.rows).unwrap();
+        let lying = credited_frame(&fx).with_original_output_root_for_tests_v1(h(0xBAD));
+        let (state, params, extras) = world(&fx, &lying);
+        let encoded = borsh::to_vec(&Evidence::Output { rows_root, ids }).unwrap();
+        assert!(encoded.len() as u64 <= lying.plan_v1().terminal.maximum_witness_bytes);
+        let digest = palw_tir_public_witness_digest_v1(&encoded);
+        let split = encoded.len() / 2;
+        let part = |offset: usize, end: usize| {
+            let plan = lying.plan_v1();
+            Control {
+                version: 1,
+                claim: plan.original_claim,
+                allocation_id: plan.allocation_id,
+                source_id: plan.source_id,
+                target: T::ConvictionWitness,
+                expected_turn: 0,
+                declared_rent_sompi: if offset == 0 { lying.conviction_rent_v1() } else { 0 },
+                signer: outsider(),
+                action: A::WitnessPart(Part {
+                    total_bytes: encoded.len() as u64,
+                    digest,
+                    offset: offset as u64,
+                    bytes: encoded[offset..end].to_vec(),
+                }),
+                signature: vec![5; SIG],
+            }
+        };
+        let claim_id = lying.plan_v1().original_claim;
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &part(split, encoded.len())).is_err());
+        let mut free = part(0, split);
+        free.declared_rent_sompi = 0;
+        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &free).is_err());
+        apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &part(0, split)).unwrap();
+        assert!(b.state.staged_court_row_v1(&Key::TirWitness(claim_id, outsider())).is_some());
+        assert!(matches!(b.state.claims.get(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        apply_verified_control_v1(&mut b, &at(&lying, 6), lying.clone(), &part(split, encoded.len())).unwrap();
+        let (phase, _, consumed) = outcome(&b.state, &lying);
+        assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
+        assert_eq!(consumed, vec![true, true, true, false]);
+        assert!(b.state.staged_court_row_v1(&Key::TirWitness(claim_id, outsider())).is_none(), "a complete witness is never kept");
     }
 }

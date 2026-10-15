@@ -340,7 +340,10 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
 - [ ] 固定された元preparation期限と、warm response／WorkDebit／part搬送の局所期限を両方満たす。colluderの合法な最大遅延を積み重ねても全体horizonを超えないようにする。
   — **未**（今回の範囲外。Codex の FullSUM 部品はある。実測・配線は未）。
 - [ ] 実nodeのキュー、backpressure、inclusion容量、bonded verifierの参加枠を配線し、他owner・他claim・悪性送信者の負荷で完走が壊れない条件を定める。
-  — **blocked**: owner 数・custodian 負荷の容量規則が未決（R1 最終項）。node の queue・backpressure も未。fence 休眠の理由。
+  — **一部（ソースのみ・未検証）**: owner 容量は K_owner と custodian 負荷上限（R1、Lead 既定・ユーザー確認待ち、先取りの穴あり）。
+  staged witness は (claim, filer) ごと 1 row、rent 前払いで door 閉鎖時に sweep。node 側 lane はすべて有界: custodian 準備は同時 4 frame・
+  各 lane claim ごと 1 件（`u32::MAX − 24/−25`）、filer は最大 16 件・claim ごと 1 件・part は逐次（`u32::MAX − 26`）、court queue の EDF と
+  carrier の in-flight 上限に従う。**未**: block あたりの TIR control の inclusion 上限と、Panel が外部 verifier の lane を消費しない保証の実測。
 - [ ] 全体mapのclone／state root／GCの増幅、複数active claimの同時RAM・disk、native sweepの処理量を扱う。1rowや64件pageの上限だけで全体有界とはしない。
   — **未**（今回の範囲外。Codex の FullSUM 部品はある。実測・配線は未）。
 - [ ] 新frame、元public commitment、後続grant、delta／journalの実際のfootprintを13資源次元と照合する。新しいrowを追加した後も、以前のquoteで全量を払えたと仮定しない。
@@ -348,7 +351,15 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
 - [ ] admission／rehearsal／canonical foldで繰り返す署名検査・frame再検査を実際に予算化する。宣言した検査回数の上限をnative処理で守り、CPU料金／最悪処理時間が不明な部分を0扱いせず、期限条件の不足として残す。
   — **未**（今回の範囲外。Codex の FullSUM 部品はある。実測・配線は未）。
 - [ ] 大きなwitnessを既存の小さいterminal上限へ黙って切り詰めない。明示的に資金化した分割搬送、またはnative incremental courtから小さいrooted certificateを作る経路を完成する。
-  — **未**: conviction は prepaid terminal witness 上限と control 90,000 B を超える primitive を拒否する（切り詰めない）。分割搬送・incremental court は未。
+  — **実装（ソースのみ・未検証、2026-10-16）: 明示的に資金化した分割搬送**。tag 170 に `ConvictionWitness` target と `WitnessPart`
+  action を追加（`palw_tir_public_carriage_v1.rs`、part は 16 KiB 以下で decode 前に上限検査、`PalwTirPublicWitnessPartV1`）。最初の part
+  （offset 0）が frame の conviction rent を宣言・burn し（terminal plan は witness 上限を 16 KiB part で価格付け済み）、以後の part は 0。part は
+  (claim, filer) の rooted row `TirWitness`（`PalwTirPublicWitnessRowV1`、door 閉鎖で sweep）に順番どおり追記され、宣言 bytes を満たした
+  part が digest を照合し `decode_staged_v1` で復号して `apply_conviction_v1` で直接 filing と同じ裁定を原子的に行う（holds/拒否なら part ごと
+  巻き戻り、row は rent 消費済みのまま door 閉鎖まで残る）。全体は frame の `terminal.maximum_witness_bytes` 以下。切り詰めは無い。node の
+  filer scheduler は control に入らない証拠を自動で part 分割し、accepted row の offset から再開する（`palw_tir_public_witness_part_object_v1`）。
+  E2E ソース `g14_staged_witness_assembles_in_order_and_convicts_once`。**未**: incremental court（rooted 参照で小さい certificate にする方式）は
+  採らず分割搬送で閉じた。flat scheme の selection pin（行全体）は witness 上限内なら同じ搬送で運べるが、flat の frame 受理は未解禁（R4 注記）。
 - [ ] `Incomplete`、overflow、サイズ拒否を「そのfamilyは完成」に数えず、元の対象範囲を満たす経路を実装する。
   — **一部（範囲を明記）**: `Incomplete`、job tail、flat logits scheme は frame 受理を拒否する（sampling / V4 / semantic は受理に拡張済み、
   ソースのみ・未検証）。flat scheme は分割搬送（本節の上の項）待ち。

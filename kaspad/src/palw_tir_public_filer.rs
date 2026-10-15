@@ -90,6 +90,56 @@ pub(crate) fn palw_tir_public_conviction_object_v1(
     Ok(PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(control) })
 }
 
+/// **G14 R7: one part of a staged conviction witness** (split carriage of an evidence whose encoding exceeds one control). The
+/// whole is the evidence's own Borsh encoding (`evidence_bytes`, at most the frame's prepaid witness ceiling); the part starts at
+/// `offset` (the bytes the fold already accepted for this filer) and carries at most 16 KiB. The part at offset 0 declares the
+/// frame's conviction rent; later parts declare zero. The fold adjudicates when the last part lands.
+pub(crate) fn palw_tir_public_witness_part_object_v1(
+    sign: impl Fn(&[u8], &[u8]) -> Vec<u8>,
+    network_domain: Hash64,
+    view: &PalwTirPublicFrameViewV1,
+    filer: PalwBondKeyV2,
+    now_daa: u64,
+    evidence_bytes: &[u8],
+    offset: u64,
+) -> Result<PalwConsensusObjectV2, String> {
+    use kaspa_consensus_core::palw_tir_public_carriage_v1::{
+        PALW_TIR_PUBLIC_WITNESS_PART_BYTES_V1, PalwTirPublicControlActionV1, PalwTirPublicControlTargetV1, PalwTirPublicWitnessPartV1,
+        palw_tir_public_witness_digest_v1,
+    };
+    palw_tir_public_may_file_v1(view, &filer, now_daa)?;
+    let total = evidence_bytes.len() as u64;
+    if total == 0 || total > view.maximum_witness_bytes {
+        return Err(format!("the witness ({total} bytes) exceeds the frame's prepaid ceiling ({})", view.maximum_witness_bytes));
+    }
+    let start = usize::try_from(offset).map_err(|_| "witness offset overflows")?;
+    if start >= evidence_bytes.len() {
+        return Err("the witness is already complete at this offset".into());
+    }
+    let end = start.saturating_add(PALW_TIR_PUBLIC_WITNESS_PART_BYTES_V1).min(evidence_bytes.len());
+    let mut control = PalwTirPublicControlV1 {
+        version: 1,
+        claim: view.claim,
+        allocation_id: view.allocation_id,
+        source_id: view.source_id,
+        target: PalwTirPublicControlTargetV1::ConvictionWitness,
+        expected_turn: 0,
+        declared_rent_sompi: if offset == 0 { view.conviction_rent_sompi } else { 0 },
+        signer: filer,
+        action: PalwTirPublicControlActionV1::WitnessPart(PalwTirPublicWitnessPartV1 {
+            total_bytes: total,
+            digest: palw_tir_public_witness_digest_v1(evidence_bytes),
+            offset,
+            bytes: evidence_bytes[start..end].to_vec(),
+        }),
+        signature: Vec::new(),
+    };
+    let digest = control.signing_message_v1(network_domain)?;
+    control.signature = sign(digest.as_byte_slice(), PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1);
+    control.check_v1()?;
+    Ok(PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(control) })
+}
+
 /// **G14 R3: a drawn seat's atomic Valid + raw custody grant + Ready** (node side; builds and signs, nothing else). The three
 /// signatures are the seat's own, each in its ORIGINAL domain: the whole-job V2 receipt under the receipt context, the raw grant
 /// over its id under the source-grant context, and the outer object under the grant-Ready context. `descriptor` is the backend's

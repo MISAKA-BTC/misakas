@@ -3060,6 +3060,8 @@ pub(super) fn index_rows(
         // This dormant row is a source lease, not proof of a funded pledge or
         // qualified Valid grant. Native admission must establish signer holds.
         PalwStagedCourtRowV1::TirPreparation(row) => (row.preparation.contract_v1().material_until_daa, Vec::new()),
+        // A staged witness leaves at the frame's door close; it holds no bond (its filer is not liable on the claim).
+        PalwStagedCourtRowV1::TirWitness(row) => (row.until_daa, Vec::new()),
         PalwStagedCourtRowV1::TirClaim(frame) => {
             if key != frame.key_v1() { return (0, Vec::new()); }
             let terms = frame.plan_v1().terms;
@@ -3369,6 +3371,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::TirAcceptedBody(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::TirPreparation(row) => Some(row.preparation.contract_v1().material_until_daa),
             PalwStagedCourtRowV1::TirClaim(frame) => Some(frame.plan_v1().terms.material_until_daa),
+            PalwStagedCourtRowV1::TirWitness(row) => Some(row.until_daa),
             _ => None,
         };
         if let Some(until) = tir_until {
