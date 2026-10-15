@@ -731,6 +731,9 @@ pub mod palw_tir_court_v1;
 pub mod palw_tir_dissect_v1;
 /// RFC-0002 Phase F: the second IR fence (`palw_tir_fence2`) — H7's box-demand row, the `Select`-arm work credit and the IR DA units `TirStepLeaf` and `TirStepNode`.
 pub mod palw_tir_fence2_v1;
+/// RFC-0002 Phase H: the Free Prompt lane of an IR class — work derived from the admitted program, lane authenticated by coverage,
+/// open only where the TIR public frame is (`palw_tir_public_conviction_v1`).
+pub mod palw_tir_fp_lane_v1;
 /// RFC-0002 Phase F step F6: the IR one-move court — an IR claim accused at a named leaf and decided in one move.
 pub mod palw_tir_one_move_v1;
 /// RFC-0002 Phase H (mainnet): `palw_tir_only_v1` — the IR is the admission path for new classes; implemented, dormant, armed nowhere.

@@ -287,6 +287,10 @@ pub enum PalwFpDerivedWorkCapV1<'a> {
     /// permissionless `ClassLaneCertified` naming the class (see
     /// `PalwStateV2Error::FreePromptClassHasNoWorkProfile`).
     Unpublished,
+    /// **RFC-0002 Phase H: an IR class past `palw_tir_public_conviction_v1`** — its graph is its admitted program under its
+    /// published layout (`crate::palw_tir_fp_lane_v1`). The walk counts the run's leaves over the IR step space and skips a
+    /// carrier that disagrees, exactly as [`Self::Derived`] does for a legacy class.
+    Tir(&'a crate::palw_tir_admission_v1::PalwTirClassRecordV1, &'a crate::palw_tir_class_v1::PalwTirLayoutV1),
 }
 
 /// The walk **with each commitment bounded by its own class** (ADR-0119 Decision 5).
@@ -436,6 +440,29 @@ where
             PalwFpDerivedWorkCapV1::Unpublished => {
                 out.skipped.push((id, "the class has published no shape profile, so this commitment's work cannot be derived"));
                 continue;
+            }
+            PalwFpDerivedWorkCapV1::Tir(record, layout) => {
+                let commitment = &payload.commitment;
+                let counted = crate::palw_tir_fp_lane_v1::palw_tir_fp_class_v1(record, layout).and_then(|class| {
+                    let space = crate::palw_tir_step_v1::PalwTirStepSpaceV1::new(&class).map_err(|e| e.to_string())?;
+                    crate::palw_tir_fp_lane_v1::palw_tir_fp_leaf_count_v1(
+                        &space,
+                        commitment.job.prompt_tokens,
+                        commitment.decode_tokens_executed,
+                        caps.step_ladder,
+                    )
+                });
+                match counted {
+                    Ok(derived) if derived == commitment.work_leaves => {}
+                    Ok(_) => {
+                        out.skipped.push((id, "the declared work leaves are not the leaves the IR class's step space counts for this run"));
+                        continue;
+                    }
+                    Err(_) => {
+                        out.skipped.push((id, "the IR class's step space cannot count this run's leaves at the class's ladder"));
+                        continue;
+                    }
+                }
             }
             PalwFpDerivedWorkCapV1::Derived(profile) => {
                 let commitment = &payload.commitment;
