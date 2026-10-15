@@ -164,3 +164,17 @@ fn below_consumer_v2_the_closure_readers_are_round_4() {
         assert!(!c::PalwCellClosureModeV1::from(false).refuses_profile(p));
     }
 }
+
+/// **RFC-0007 item 1**: routing, history and gather each name the court they reach for both kinds of class, and every measured
+/// adjudication cost is a named constant that is still UNKNOWN — never a default a rule could read as measured.
+#[test]
+fn every_public_refutation_route_reaches_a_court_with_a_named_unknown_cost() {
+    use crate::palw_claim_compact_v1::PALW_PUBLIC_REFUTATION_ROUTES_V2 as ROUTES;
+    use misaka_palw_kernel::claim_compact_v1::native_inventory_v2::NativeRefutationRouteV2;
+    assert_eq!(ROUTES.map(|r| r.route), NativeRefutationRouteV2::ALL);
+    for r in ROUTES {
+        assert!(!r.native_court.is_empty() && !r.profile_court.is_empty());
+        assert_eq!((r.native_measured_us, r.profile_measured_us), (None, None), "{}: UNKNOWN until measured", r.route.name());
+        assert_eq!(r.native_measured_us, r.route.measured_us());
+    }
+}

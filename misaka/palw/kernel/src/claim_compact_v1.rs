@@ -35,6 +35,7 @@ use crate::field::{F89, F107, FieldElemV1, Fp, MODULI_V2};
 use crate::hash::{Digest, object_id};
 use crate::plan::{PlanRelationV1, VerificationPlanV1, dtype_of_tag, relation_moduli};
 
+pub mod native_inventory_v2;
 pub mod native_v2;
 pub mod native_v4;
 

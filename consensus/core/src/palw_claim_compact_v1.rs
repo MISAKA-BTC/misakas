@@ -5,7 +5,9 @@
 //! **Retired (PRINCIPLES §8, 2026-10-15).** A compact relation contract is a producer-side admission object. Both registration
 //! entry points below refuse unconditionally: no new compact contract is generated, accepted or used as a credit authority.
 //! Only the deterministic coverage read API ([`palw_native_compact_coverage_v2`]) remains, as an inventory of which relations a
-//! verifier can check directly (Freivalds/linear evaluation over operands the verifier itself reads).
+//! verifier can check directly (Freivalds/linear evaluation over operands the verifier itself reads), beside RFC-0007 item 1's
+//! per-class check inventory ([`palw_native_check_inventory_v2`]: exact / direct with its sparse-error bound / refused, per
+//! relation, stage and step) and the public refutation routes ([`PALW_PUBLIC_REFUTATION_ROUTES_V2`]).
 
 use crate::config::params::Params;
 use misaka_palw_challenge::PostCommitChallengePolicyV1;
@@ -72,6 +74,63 @@ pub fn palw_native_compact_coverage_v2(
     let ledger = route.ledger()?;
     misaka_palw_kernel::claim_compact_v1::native_v2::compile_native_class_v2(&ledger, class, compile)
 }
+
+/// **RFC-0007 item 1: the per-class check inventory** from authenticated route rows — for every relation of every stage (every
+/// step of a memory stage), exact recomputation, a direct check with its stated single-element (sparse) miss bound, or a listed
+/// refusal; every exact boundary; and the routing / history / gather routes with their derived court bounds. A read API: it
+/// grants no receipt, credit, weight, Final or activation, and it is not a computation proof (PRINCIPLES §8).
+pub fn palw_native_check_inventory_v2(
+    route: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1,
+    class: misaka_palw_kernel::hash::Digest,
+    compile: misaka_palw_kernel::claim_compact_v1::CompactCompileParamsV1,
+) -> Result<misaka_palw_kernel::claim_compact_v1::native_inventory_v2::NativeClassInventoryV2, String> {
+    let ledger = route.ledger()?;
+    misaka_palw_kernel::claim_compact_v1::native_inventory_v2::native_class_inventory_v2(&ledger, class, compile)
+}
+
+/// One public refutation route (RFC-0007 item 1) and the court it reaches for each kind of class, with its named measured cost.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwPublicRefutationRouteV2 {
+    pub route: misaka_palw_kernel::claim_compact_v1::native_inventory_v2::NativeRefutationRouteV2,
+    /// Native (TIR) classes: where a refutation is filed; its derived bound is the authenticated plan's worst court filing.
+    pub native_court: &'static str,
+    /// UNKNOWN until measured (`None`).
+    pub native_measured_us: Option<u64>,
+    /// Legacy PALW shape profiles: the carrier and terminal; bounded by the court close ceiling and the terminal's typed reservation.
+    pub profile_court: &'static str,
+    /// UNKNOWN until measured (`None`).
+    pub profile_measured_us: Option<u64>,
+}
+
+/// **The three routes and their courts.** The profile side of routing and gather is served only under a class's immutable router
+/// binding (aux 139) past `palw_memory_routing_court_v2` — dormant on every shipped preset; a Kimi card as declared is not
+/// bindable and stays unadjudicable. No route chooses a router, and no route is a credit path.
+pub const PALW_PUBLIC_REFUTATION_ROUTES_V2: [PalwPublicRefutationRouteV2; 3] = {
+    use misaka_palw_kernel::claim_compact_v1::native_inventory_v2 as inv;
+    [
+        PalwPublicRefutationRouteV2 {
+            route: inv::NativeRefutationRouteV2::Routing,
+            native_court: "the plan's court for TopK/compare/select/reduce-max (element or instance recompute)",
+            native_measured_us: inv::NATIVE_ROUTE_MEASURED_US_ROUTING_V2,
+            profile_court: "object tag 170 RoutedStep: the step court's routing appendix under the bound router row",
+            profile_measured_us: crate::palw_memory_routing_v2::PALW_ROUTE_COST_ROUTING_US_V2,
+        },
+        PalwPublicRefutationRouteV2 {
+            route: inv::NativeRefutationRouteV2::History,
+            native_court: "the plan's court for state write / history append, state boundaries and memory step continuity",
+            native_measured_us: inv::NATIVE_ROUTE_MEASURED_US_HISTORY_V2,
+            profile_court: "object tag 243 anchored GDN step; tag 170 GdnTransition / GdnConvWindow; the step court's KV anchors",
+            profile_measured_us: crate::palw_memory_routing_v2::PALW_ROUTE_COST_HISTORY_US_V2,
+        },
+        PalwPublicRefutationRouteV2 {
+            route: inv::NativeRefutationRouteV2::Gather,
+            native_court: "the plan's court for index gather; exact snapshot retrieval re-execution",
+            native_measured_us: inv::NATIVE_ROUTE_MEASURED_US_GATHER_V2,
+            profile_court: "object tag 170 RoutedStep: the routed expert reader recomputed under its bound router",
+            profile_measured_us: crate::palw_memory_routing_v2::PALW_ROUTE_COST_GATHER_US_V2,
+        },
+    ]
+};
 
 /// Whole-class reviewed preflight. This API checks native authority and the
 /// compiled ClaimV2 fence, but is not an inclusion path or a receipt/Final grant.
