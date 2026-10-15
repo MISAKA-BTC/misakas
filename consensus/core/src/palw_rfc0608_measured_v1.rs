@@ -28,6 +28,8 @@ pub enum PalwRfc0608FenceV1 {
     BeaconSourceFeeV1 = 5,
     /// RFC-0006: anchored GDN step court and per-reader router binding (`palw_memory_routing_court_v2`, tags 170/243, aux 139).
     MemoryRoutingCourtV2 = 6,
+    /// RFC-0008: the once-only settlement registry across settlement consumers (`palw_settlement_once_v1`, aux 140).
+    SettlementOnceV1 = 7,
 }
 impl PalwRfc0608FenceV1 {
     pub const fn name(self) -> &'static str {
@@ -38,6 +40,7 @@ impl PalwRfc0608FenceV1 {
             Self::BeaconSourceOptInV1 => "palw_beacon_source_opt_in_v1",
             Self::BeaconSourceFeeV1 => "palw_beacon_source_fee_v1",
             Self::MemoryRoutingCourtV2 => "palw_memory_routing_court_v2",
+            Self::SettlementOnceV1 => "palw_settlement_once_v1",
         }
     }
 }
@@ -67,6 +70,16 @@ pub const PALW_RFC0608_OPEN_BLOCKERS_V1: &[(PalwRfc0608FenceV1, &str)] = &[
     (
         PalwRfc0608FenceV1::MemoryRoutingCourtV2,
         "RFC06-4: one offence-attribution path still uses the older coverage-closure rules",
+    ),
+    (
+        PalwRfc0608FenceV1::SettlementOnceV1,
+        "RFC08-1: verifier slot fee legs, free-prompt receipt spends and journal_bond_budget slots are not on the once-only \
+         registry",
+    ),
+    (
+        PalwRfc0608FenceV1::SettlementOnceV1,
+        "RFC08-2: the combined liability predicate (palw_settlement_liability_admits_v1) is not wired into admission or \
+         settlement",
     ),
 ];
 
@@ -147,13 +160,14 @@ impl crate::config::params::Params {
 mod tests {
     use super::*;
     use crate::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, Params, SIMNET_PARAMS, TESTNET_PARAMS};
-    const ALL: [PalwRfc0608FenceV1; 6] = [
+    const ALL: [PalwRfc0608FenceV1; 7] = [
         PalwRfc0608FenceV1::MonetaryMaterialV1,
         PalwRfc0608FenceV1::MaterialReleaseRecoveryV2,
         PalwRfc0608FenceV1::ClaimChallengeV2,
         PalwRfc0608FenceV1::BeaconSourceOptInV1,
         PalwRfc0608FenceV1::BeaconSourceFeeV1,
         PalwRfc0608FenceV1::MemoryRoutingCourtV2,
+        PalwRfc0608FenceV1::SettlementOnceV1,
     ];
     fn record(fence: PalwRfc0608FenceV1, domain: Digest, root: Digest) -> PalwRfc0608MeasuredRecordV1 {
         PalwRfc0608MeasuredRecordV1 {
@@ -177,6 +191,7 @@ mod tests {
             assert!(p.palw_beacon_source_opt_in_v1.is_none());
             assert!(p.palw_beacon_source_fee_v1.is_none());
             assert!(p.palw_memory_routing_court_v2.is_none());
+            assert!(p.palw_settlement_once_v1.is_none());
             for fence in ALL {
                 assert!(p.palw_rfc0608_measured_v1(fence, &0u8).is_err(), "{} armed without a record", fence.name());
             }

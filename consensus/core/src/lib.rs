@@ -996,7 +996,8 @@ pub mod palw_cell_coverage_closure_v1;
 /// `palw_model_block_rights_v1` and `palw_elastic_final_capacity_v1` (refused when armed until measured values are pinned).
 pub mod palw_rfc0016_v1;
 /// testnet-12 DAA 14,000 release plan (2026-10-15): the measured-value gate of the RFC-0006/0007/0008 fences (monetary material,
-/// release recovery V2, paid claim challenge, beacon source opt-in/fee, memory routing court V2). Pinned records EMPTY: dormant.
+/// release recovery V2, paid claim challenge, beacon source opt-in/fee, memory routing court V2, settlement once). Pinned records
+/// EMPTY: dormant.
 pub mod palw_rfc0608_measured_v1;
 /// R6-CELL round 3 (2026-10-15): pure boundary/routing/memory coverage checker over accepted cell profiles. Below
 /// `palw_cell_coverage_closure_v1` not called by consensus; past it the closure's one predicate.

@@ -175,9 +175,10 @@ impl Params {
         if !self.palw_probabilistic_constraints_v1.is_some_and(|k| k != ForkActivation::never() && k.daa_score() <= at.daa_score()) {
             return Err(PalwModeV2Error::Invalid("palw_settlement_once_v1 requires the kernel route fence at or below it"));
         }
-        Err(PalwModeV2Error::Invalid(
-            "palw_settlement_once_v1 cannot be armed: cross-consumer settlement, reorg and restore controls have not been executed",
-        ))
+        // Cross-consumer settlement, reorg and restore controls are evidence: arming needs a pinned measured-value record and no
+        // open blocker (`palw_rfc0608_measured_v1`; records EMPTY: dormant). The fence has no policy, so the record pins its
+        // activation height. testnet-12 DAA 14,000 release plan.
+        self.palw_rfc0608_measured_v1(crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::SettlementOnceV1, &at.daa_score())
     }
 
     /// Mirror the fence into the V2 bundle's state params (the fold holds only those). `None` where unarmed.
