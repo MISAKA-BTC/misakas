@@ -947,6 +947,8 @@ impl Params {
                 .with_material_income_from(
                     self.palw_material_income_v3.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score()),
                 )
+                .with_material_release_recovery_v2(self.palw_material_release_recovery_v2.as_ref().filter(|f| f.activation != ForkActivation::never())
+                    .map(|f| crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryMirrorV2 { from_daa: f.activation.daa_score(), policy: f.policy.clone() }))
                 .with_monetary_material(self.palw_monetary_material_v1.as_ref().filter(|f| f.activation != ForkActivation::never())
                     .map(|f| crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1 { from_daa: f.activation.daa_score(), policy: f.policy.clone() }))
                 .with_paid_consumer_lifecycle(

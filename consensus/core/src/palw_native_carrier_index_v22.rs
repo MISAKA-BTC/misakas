@@ -23,7 +23,13 @@ impl NativeCarrierCandidateV22 {
     /// unit in a block, never many variants against an immutable old counter.
     pub fn key(&self) -> (u8, u8, [u8; 64], u16) {
         let (kind, id, part) = match self.request {
+            NativePaidCarrierRequestV22::ProofPartV39 {seal,index,mode,..}=>(if mode==0 {7} else if mode==1 {8} else {12},seal,index),
+            NativePaidCarrierRequestV22::AnswerPartV39 {pending,index,..}=>(9,pending,index),
+            NativePaidCarrierRequestV22::CommitPartV39 {job,index,..}=>(10,job,index),
+            NativePaidCarrierRequestV22::CommitAssembleV39 {job,..}=>(11,job,0),
             NativePaidCarrierRequestV22::ProducerAnswerPartV29 {pending,index,..}=>(4,pending,index),
+            NativePaidCarrierRequestV22::FundedCommitPartV32 {job,index,..}=>(5,job,index),
+            NativePaidCarrierRequestV22::FundedCommitAssembleV32 {job,..}=>(6,job,0),
             NativePaidCarrierRequestV22::SourceAnswer { pending } => (0, pending, 0),
             NativePaidCarrierRequestV22::TraceAnswer { pending } => (1, pending, 0),
             NativePaidCarrierRequestV22::OwnProofPart { seal, index, .. } => (2, seal, index as u16),
@@ -71,6 +77,14 @@ pub fn native_carrier_candidate_v22(tx: &Transaction) -> Option<NativeCarrierCan
                         index: part.index,
                         count: part.count,
                     }
+                }
+                (misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14,39)=>{
+                    let p=crate::palw_flat_stage_v28::borrowed_invocation_commit_metadata_v32(a.body)?;
+                    NativePaidCarrierRequestV22::FundedCommitPartV32{job:p.job,group:p.group,index:p.index,count:p.count,total:p.total}
+                }
+                (misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14,40)=>{
+                    if a.body.len()!=130||a.body[..2]!=32u16.to_le_bytes(){return None;}
+                    NativePaidCarrierRequestV22::FundedCommitAssembleV32{job:a.body[2..66].try_into().ok()?,group:a.body[66..130].try_into().ok()?}
                 }
                 (misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11,37)
                 |(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14,32)=>{
@@ -124,13 +138,13 @@ pub struct NativeCarriageSnapshotV22 {
     pub mass: NativeCarriageMassParamsV22,
     pub service: NativeCarriageServiceV22,
     pub queue_policy: Option<crate::palw_native_queue_v30::NativeQueuePolicyV30>,
-    state: Arc<PalwChainStateV2>,
+    state: Arc<crate::palw_native_resource_v1::NativeChainStateV1>,
 }
 impl NativeCarriageSnapshotV22 {
     pub fn from_consumer_state(
         now: u64,
         selected_parent_daa: u64,
-        state: Arc<PalwChainStateV2>,
+        state: Arc<crate::palw_native_resource_v1::NativeChainStateV1>,
         mass: NativeCarriageMassParamsV22,
         service: NativeCarriageServiceV22,
     ) -> Result<Self, String> {
@@ -168,6 +182,10 @@ impl NativeCarriageSnapshotV22 {
                     route.stage_paid_answer_eligibility_v28(*pending,self.now,&self.mass,&self.service)?,
                 NativePaidCarrierRequestV22::ProducerAnswerPartV29 {pending,group,index,count,total}=>
                     route.stage_paid_reply_eligibility_v28(*pending,*group,*index,*count,*total,self.now,&self.mass,&self.service)?,
+                NativePaidCarrierRequestV22::FundedCommitPartV32 {job,group,index,count,total}=>
+                    route.native_paid_invocation_commit_eligibility_v32(*job,*group,*index,*count,*total,self.now,&self.mass,&self.service)?,
+                NativePaidCarrierRequestV22::FundedCommitAssembleV32 {job,group}=>
+                    route.native_paid_invocation_assemble_eligibility_v32(*job,*group,self.now,&self.mass,&self.service)?,
                 _=>return None,
             },
             _=>return None,
@@ -183,7 +201,9 @@ impl NativeCarriageSnapshotV22 {
                 return None;
             }
         } else if matches!(c.request, NativePaidCarrierRequestV22::OwnProofPartV29 { .. }
-            |NativePaidCarrierRequestV22::ProducerAnswerPartV29 { .. }) {
+            |NativePaidCarrierRequestV22::ProducerAnswerPartV29 { .. }
+            |NativePaidCarrierRequestV22::FundedCommitPartV32 { .. }
+            |NativePaidCarrierRequestV22::FundedCommitAssembleV32 { .. }) {
             return None;
         }
         Some(e)
@@ -212,6 +232,17 @@ mod tests {
             0,
             borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap(),
         )
+    }
+    #[test]
+    fn compact_commit32_metadata_keeps_one_original_part_identity(){
+        let mut body=Vec::new();body.extend_from_slice(&32u16.to_le_bytes());body.push(0);body.extend_from_slice(&[21;64]);body.extend_from_slice(&[22;64]);body.extend_from_slice(&0u16.to_le_bytes());body.extend_from_slice(&1u16.to_le_bytes());body.extend_from_slice(&3u32.to_le_bytes());body.extend_from_slice(&u32::MAX.to_le_bytes());body.extend_from_slice(&[1,2,3]);
+        let frame=|b:Vec<u8>|{let mut x=vec![1,misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14,39];x.extend_from_slice(&(b.len() as u32).to_le_bytes());x.extend(b);x};
+        let candidate=|b:Vec<u8>|native_carrier_candidate_v22(&tx(PalwConsensusObjectV2::KernelRouteV1{bytes:frame(b),signer:owner(),signature:vec![1]})).unwrap();
+        let a=candidate(body.clone());assert_eq!(a.key(),(64,5,[21;64],0));
+        // Hostile nested part length is left for original paid predebit.
+        body[67..131].fill(23);let b=candidate(body);assert_eq!(a.key(),b.key());
+        let assembly=NativeCarrierCandidateV22{namespace:64,owner:owner(),request:NativePaidCarrierRequestV22::FundedCommitAssembleV32{job:[21;64],group:[22;64]}};
+        assert_ne!(a.key(),assembly.key());
     }
     #[test]
     fn native_source_metadata_is_versioned_exact_and_cannot_decode_unrelated_objects() {

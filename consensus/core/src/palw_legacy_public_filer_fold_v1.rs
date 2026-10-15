@@ -535,6 +535,21 @@ pub(super) fn apply_dispute_reacquired_v1(
     let session_binding = match (&request.unit, &request.binding) {
         (U::Event { .. }, None) => None,
         (U::Held(_), Some(binding)) => Some(binding),
+        (U::TirStepLeaf { .. } | U::TirStepNode { .. } | U::TirStepRun { .. } | U::TirRowNode { .. }, None) => {
+            if !builder.params.tir_fence2_active_at(now) {
+                return Err(PalwStateV2Error::TirFence2Refused("a move before palw_tir_fence2 is in force"));
+            }
+            if request.unit.is_tir_shard_v1() && !builder.params.tir_shard_active_at(now) {
+                return Err(PalwStateV2Error::TirShardDormant);
+            }
+            if !builder.state.tir_classes.contains_key(&claim.class_id) {
+                return Err(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "the claim's class is not an IR program" });
+            }
+            let ladder = builder.tir_da_ladder_v1(&claim.class_id, now);
+            crate::palw_da_rcore_v1::palw_tir_step_unit_is_admissible_v1(&request.unit, ladder)
+                .map_err(PalwStateV2Error::TirFence2Refused)?;
+            None
+        }
         (U::LegacyHeldV2(unit), Some(binding)) => {
             if !builder.extras.legacy_held_da_v2_active || builder.state.tir_classes.contains_key(&claim.class_id) {
                 return Err(refused("this claim has no legacy held reacquisition route"));
@@ -740,7 +755,7 @@ pub fn palw_legacy_dispute_reservation_check_v1(
     reservation: &PalwDisputeReservationV1,
     now_daa: u64,
 ) -> Result<u128, PalwStateV2Error> {
-    let mut builder = TransitionBuilder::new(state, params, false, false, false, true, extras);
+    let mut builder = TransitionBuilder::try_new(state, params, false, false, false, true, extras)?;
     let ctx = PalwBlockContextV2 { block: Hash64::default(), daa_score: now_daa, blue_score: 0, subsidy: 0 };
     apply_dispute_reserved_v1(&mut builder, &ctx, reservation)?;
     Ok(builder.state.legacy_dispute_reservation_v1(&reservation.claim, &reservation.reserver).map(|row| row.deposit).unwrap_or(0))

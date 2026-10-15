@@ -729,7 +729,7 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     let staged_contract = builder.prepare_staged_claim_v1(&mut claim)?;
     let public_job_wire = builder.public_fp_job_wire_v1(c.claim_id, &claim, c.public_job)?;
     builder.reserve_for_claim(&claim)?;
-    builder.write_claim(*c.claim_id, Some(claim));
+    builder.write_claim(*c.claim_id, Some(claim))?;
     builder.stamp_staged_claim_v1(*c.claim_id, staged_contract);
     if let Some(wire) = public_job_wire {
         builder.write_public_fp_job_v1(*c.claim_id, Some(wire));
@@ -2148,7 +2148,7 @@ mod tests {
         // Licensed, then Final: the funnel runs as the sweep runs it.
         let licensed = PalwClaimStateV2 { phase: PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1_620 }, ..live.clone() };
         let (s2, _) = at(&s1, &p, 1_700, |b| {
-            b.write_claim(id, Some(licensed.clone()));
+            b.write_claim(id, Some(licensed.clone())).unwrap();
             b.finalize_claim(id, &licensed, 1_700).expect("the claim finalizes");
         });
         assert!(matches!(s2.claims.get(&id).unwrap().phase, PalwClaimPhaseV2::Final { final_daa: 1_700 }));
@@ -2664,7 +2664,7 @@ mod tests {
             let licensed =
                 PalwClaimStateV2 { phase: PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: daa - 1 }, ..s.claims[&id].clone() };
             at(s, &p, daa, |b| {
-                b.write_claim(id, Some(licensed.clone()));
+                b.write_claim(id, Some(licensed.clone())).unwrap();
                 b.finalize_claim(id, &licensed, daa).expect("the claim finalizes");
             })
             .0
@@ -3192,7 +3192,7 @@ mod tests {
         let retaken = s3.claims[&h(0xB8)].clone();
         let licensed = PalwClaimStateV2 { phase: PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1_710 }, ..retaken };
         let (s4, _) = at(&s3, &p, 1_720, |b| {
-            b.write_claim(h(0xB8), Some(licensed.clone()));
+            b.write_claim(h(0xB8), Some(licensed.clone())).unwrap();
             b.finalize_claim(h(0xB8), &licensed, 1_720).expect("the honest claim finalizes");
         });
         let recorded = s4
@@ -3333,7 +3333,7 @@ mod tests {
         let (s1, _) = at(&s, &p, 1_600, |b| apply_object(b, &ctx(1_600), &run.object).expect("an honest claim"));
         let licensed = PalwClaimStateV2 { phase: PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1_620 }, ..s1.claims[&id].clone() };
         let (s2, _) = at(&s1, &p, 1_700, |b| {
-            b.write_claim(id, Some(licensed.clone()));
+            b.write_claim(id, Some(licensed.clone())).unwrap();
             b.finalize_claim(id, &licensed, 1_700).expect("the claim finalizes");
         });
         let scored = |s: &PalwChainStateV2| {

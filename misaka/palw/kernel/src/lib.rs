@@ -92,42 +92,41 @@ pub mod evidence;
 pub mod exec_reward;
 pub mod family;
 pub mod field;
+pub mod flat_component_source28;
+pub mod flat_court25;
 /// Staged flat-profile dependency-leaf courts; no shipping descriptor selects them.
 pub mod flat_court4;
 /// Staged flat-v5 complete court-kind set, not selected by a shipping route.
 pub mod flat_court5;
 pub mod flat_court7;
 pub mod flat_court9;
-pub mod flat_court25;
+pub mod flat_detect25;
 pub mod flat_detect5;
 pub mod flat_detect7;
 pub mod flat_detect9;
-pub mod flat_detect25;
 pub mod flat_execution11;
 pub mod flat_history8;
 pub mod flat_inputs12;
-pub mod flat_lengths7;
 pub mod flat_lengths36;
-pub mod flat_window37;
-pub mod flat_point9;
+pub mod flat_lengths7;
 pub mod flat_point25;
+pub mod flat_point9;
 pub mod flat_price15;
 pub mod flat_price20;
 /// RFC-0002 item 3 (RFC02-T): a flat-v5 candidate's worst-case public pursuit on G14-B's clock and carriage.
 pub mod flat_pursuit5;
 pub mod flat_quota11;
+pub mod flat_replay25;
 pub mod flat_replay6;
 pub mod flat_replay7;
 pub mod flat_replay9;
-pub mod flat_replay25;
 pub mod flat_resources10;
 pub mod flat_resources29;
+pub mod flat_scope25;
 /// Staged complete flat-v5 court resource admission.
 pub mod flat_scope5;
 pub mod flat_scope7;
 pub mod flat_scope9;
-pub mod flat_scope25;
-pub mod flat_component_source28;
 /// Staged actor-bound sealed flat evidence; not a consensus route or payout.
 pub mod flat_seal6;
 pub mod flat_seal7;
@@ -136,6 +135,7 @@ pub mod flat_seal7;
 pub mod flat_topk7;
 pub mod flat_topk_locator21;
 pub mod flat_topk_locator25;
+pub mod flat_window37;
 pub mod gate;
 pub mod hash;
 pub mod hide;
@@ -194,15 +194,44 @@ pub use verify::{
 
 pub mod flat_seal9;
 
-pub mod claim_paid_v2;
-pub mod claim_interactive_v3;
-/// R7-RELATION (2026-10-15 round 3): compact relation proof compilers under the dormant ClaimV2 contract; unreviewed.
-pub mod claim_compact_v1;
-pub mod panel_lifetime_v2;
-/// RFC07/RFC08 signed economic contracts (inner 67–69), 2026-10-15; dormant.
-pub mod econ_contracts_v1;
+// `claim_circuit_v5` (Codex e34b201c9 / beba0dba4 / ee8757fd5 / 82daa585e / ac19fe860: Boolean/hash circuits and R1CS
+// "required by a polynomial IOP" for a future proof contract) is EXCLUDED from the integration line by the permanent user
+// decision of 2026-10-15 (docs/PRINCIPLES.md §8: no cryptographic proofs of computation). Removed in the 2026-10-15 merge sweep.
 /// N3 (2026-10-15 round 3): BootstrapExact source contributions (inner 73), consumer-owned past `palw_beacon_bootstrap_v1`.
 pub mod beacon_bootstrap_v1;
 /// RFC-0017 (2026-10-15): model eligibility exam commits and attestations (inner 74/75), consumer-owned past
 /// `palw_model_eligibility_v1`; dormant.
 pub mod model_eligibility_v1;
+/// R7-RELATION (2026-10-15 round 3): compact relation proof compilers under the dormant ClaimV2 contract; unreviewed.
+pub mod claim_compact_v1;
+pub mod claim_interactive_v3;
+pub mod claim_paid_v2;
+/// RFC07/RFC08 signed economic contracts (inner 67–69), 2026-10-15; dormant.
+pub mod econ_contracts_v1;
+pub mod panel_lifetime_v2;
+
+/// Owning full source39 grammar; no legacy source promotion.
+pub mod flat_source39;
+
+pub mod flat_prepared39;
+
+pub mod flat_resources39;
+
+pub mod flat_detect39;
+pub mod flat_point39;
+pub mod flat_public39;
+
+pub mod flat_material39;
+pub mod flat_material_output39;
+
+pub mod flat_job39;
+
+mod flat_codec39;
+
+pub mod flat_pipeline39;
+
+pub mod flat_component_source39;
+
+pub mod flat_trace39;
+
+pub mod flat_invocation39;

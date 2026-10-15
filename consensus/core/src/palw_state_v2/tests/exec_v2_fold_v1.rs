@@ -1684,7 +1684,7 @@ fn exec_v2_origin_is_rooted_bounded_by_live_claims_and_retires_through_the_same_
     let extras = xx();
     let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
     // Removal uses the native claim's sole writer; rollback restores both claim and immutable origin.
-    builder.write_claim(claim, None);
+    builder.write_claim(claim, None).unwrap();
     assert!(builder.state.exec_v2_origin_v1(&claim).is_none());
     assert!(
         builder

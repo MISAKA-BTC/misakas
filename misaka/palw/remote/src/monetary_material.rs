@@ -20,7 +20,7 @@ pub struct DurableMonetaryMaterialProviderV1 {
     file: PathBuf,
     max_contract_bytes: u64,
     total_capacity: u64,
-    store: PalwMonetaryMaterialProviderStoreV1,
+    store: kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialProviderStoreV1>,
 }
 impl DurableMonetaryMaterialProviderV1 {
     /// Prospective consent is immutable. Ready binds the actual one-claim capture
@@ -43,17 +43,17 @@ impl DurableMonetaryMaterialProviderV1 {
         {
             return Err("provider prospective session or exact ready differs".into());
         }
-        let mut candidate = self.store.clone();
-        candidate
-            .admit_held(
-                row.consent,
-                &ready.binding.manifest,
-                row.terms.max_material_bytes,
-                self.total_capacity,
-                std::slice::from_ref(bundle),
-                |id| (id == bundle.claim).then_some(authority),
-            )
-            .map_err(|e| e.to_string())?;
+        let candidate = self.store.provider_admit_material_v1(
+            row.consent,
+            &ready.binding.manifest,
+            row.terms.max_material_bytes,
+            self.total_capacity,
+            std::slice::from_ref(bundle),
+            &[],
+            &[],
+            None,
+            |id| (id == bundle.claim).then_some(authority),
+        )?;
         self.publish(candidate)?;
         Ok(ready.id())
     }
@@ -74,20 +74,17 @@ impl DurableMonetaryMaterialProviderV1 {
         if manifest.root != enrollment.terms.root {
             return Err("material manifest obligation was substituted".into());
         }
-        let mut candidate = self.store.clone();
-        candidate
-            .admit_material(
-                enrollment.id(),
-                manifest,
-                enrollment.terms.max_material_bytes,
-                self.total_capacity,
-                held,
-                positions,
-                segmented,
-                ledger,
-                authority,
-            )
-            .map_err(|e| e.to_string())?;
+        let candidate = self.store.provider_admit_material_v1(
+            enrollment.id(),
+            manifest,
+            enrollment.terms.max_material_bytes,
+            self.total_capacity,
+            held,
+            positions,
+            segmented,
+            ledger,
+            authority,
+        )?;
         self.publish(candidate)?;
         Ok(enrollment.id())
     }
@@ -99,7 +96,19 @@ impl DurableMonetaryMaterialProviderV1 {
         provider: PalwBondKeyV2,
         demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
     ) -> Result<PalwMonetaryMaterialActionV1, String> {
-        self.store.answer_action(consent, root, dependency, provider, demand).map_err(|e| e.to_string())
+        self.answer_material_owned_v1(consent, root, dependency, provider, demand)?
+            .into_unreserved_legacy_v1()
+            .map_err(|e| e.to_string())
+    }
+    pub fn answer_material_owned_v1(
+        &self,
+        consent: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+        provider: PalwBondKeyV2,
+        demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, String> {
+        self.store.provider_answer_action_v1(consent, root, dependency, provider, demand)
     }
     pub fn open(
         file: &Path,
@@ -116,17 +125,29 @@ impl DurableMonetaryMaterialProviderV1 {
         let name = file.file_name().and_then(|name| name.to_str()).ok_or("provider file name is not UTF-8")?;
         let lease = acquire_provider_lease(&parent.join(format!("{name}.lock")))?;
         let store = match File::open(file) {
-            Ok(mut source) => {
+            Ok(source) => {
                 let limit = total_capacity.checked_add(1 << 20).ok_or("provider persistence cap overflow")?;
                 if source.metadata().map_err(|e| e.to_string())?.len() > limit {
                     return Err("provider snapshot exceeds its byte cap".into());
                 }
+                let expected = source.metadata().map_err(|e| e.to_string())?.len();
+                let _raw_lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(
+                    expected.checked_add(1).and_then(|n| n.checked_mul(2)).ok_or("provider raw snapshot request overflow")?,
+                )
+                .map_err(|e| e.to_string())?;
                 let mut bytes = Vec::new();
-                source.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-                PalwMonetaryMaterialProviderStoreV1::recover_verified(&bytes, max_contract_bytes, total_capacity, ledger, authority)
-                    .map_err(|e| e.to_string())?
+                source.take(expected + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                if bytes.len() as u64 != expected {
+                    return Err("provider snapshot changed extent during read".into());
+                }
+                kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::<PalwMonetaryMaterialProviderStoreV1>::recover_provider_verified_v1(&bytes,max_contract_bytes,total_capacity,ledger,authority)?
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => PalwMonetaryMaterialProviderStoreV1::default(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::retain_existing_v1(
+                    PalwMonetaryMaterialProviderStoreV1::default(),
+                )
+                .map_err(|e| e.to_string())?
+            }
             Err(error) => return Err(error.to_string()),
         };
         // Pending snapshots were never signature-authorized: the signing API
@@ -146,8 +167,11 @@ impl DurableMonetaryMaterialProviderV1 {
         }
         Ok(Self { _lease: lease, file: file.to_path_buf(), max_contract_bytes, total_capacity, store })
     }
-    fn publish(&mut self, candidate: PalwMonetaryMaterialProviderStoreV1) -> Result<(), String> {
-        let encoded = candidate.encoded().map_err(|e| e.to_string())?;
+    fn publish(
+        &mut self,
+        candidate: kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialProviderStoreV1>,
+    ) -> Result<(), String> {
+        let encoded = candidate.provider_encoded_v1()?;
         let parent = self.file.parent().ok_or("provider file has no parent directory")?;
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         let name = self.file.file_name().and_then(|name| name.to_str()).ok_or("provider filename is not UTF-8")?;
@@ -185,10 +209,17 @@ impl DurableMonetaryMaterialProviderV1 {
         }
         let manifest: &PalwMaterialManifestV1 =
             enrollment.terms.material_manifest.as_ref().ok_or("signed enrollment lacks a material manifest")?;
-        let mut candidate = self.store.clone();
-        candidate
-            .admit_held(enrollment.id(), manifest, enrollment.terms.max_material_bytes, self.total_capacity, bundles, authority)
-            .map_err(|e| e.to_string())?;
+        let candidate = self.store.provider_admit_material_v1(
+            enrollment.id(),
+            manifest,
+            enrollment.terms.max_material_bytes,
+            self.total_capacity,
+            bundles,
+            &[],
+            &[],
+            None,
+            authority,
+        )?;
         self.publish(candidate)?;
         Ok(enrollment.id())
     }
@@ -200,7 +231,15 @@ impl DurableMonetaryMaterialProviderV1 {
         provider: PalwBondKeyV2,
         missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1,
     ) -> Result<PalwMonetaryMaterialActionV1, String> {
-        self.store.held_answer_action(consent, root, dependency, provider, missing).map_err(|e| e.to_string())
+        self.answer_material_owned_v1(
+            consent,
+            root,
+            dependency,
+            provider,
+            kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1::Held(missing),
+        )?
+        .into_unreserved_legacy_v1()
+        .map_err(|e| e.to_string())
     }
     pub fn prepare_replacement_held(
         &mut self,
@@ -217,14 +256,24 @@ impl DurableMonetaryMaterialProviderV1 {
             return Err("replacement substituted its provider/root/capacity".into());
         }
         let manifest = e.terms.material_manifest.as_ref().ok_or("replacement lacks its exact material manifest")?;
-        let mut candidate = self.store.clone();
-        candidate
-            .admit_held(replacement.id(), manifest, e.terms.max_material_bytes, self.total_capacity, bundles, authority)
-            .map_err(|e| e.to_string())?;
+        let candidate = self.store.provider_admit_material_v1(
+            replacement.id(),
+            manifest,
+            e.terms.max_material_bytes,
+            self.total_capacity,
+            bundles,
+            &[],
+            &[],
+            None,
+            authority,
+        )?;
         self.publish(candidate)?;
         Ok(replacement.id())
     }
     /// `(stored consent, root)` of every retained obligation (read-only; see `monetary_material_gc`).
+    pub fn held_native_authorities(&self) -> std::collections::BTreeMap<Hash64, std::collections::BTreeSet<Hash64>> {
+        self.store.held_native_authorities_v1()
+    }
     pub fn held_contracts(&self) -> Vec<(Hash64, Hash64)> {
         self.store.held_contracts_v1()
     }
@@ -241,11 +290,9 @@ impl DurableMonetaryMaterialProviderV1 {
         release_block: kaspa_consensus_core::BlockHash,
         native_witness: impl FnMut(Hash64, Hash64, Hash64, kaspa_consensus_core::BlockHash) -> Result<bool, String>,
     ) -> Result<bool, String> {
-        let mut candidate = self.store.clone();
-        if !candidate
-            .release_if_finalized(root, stored_consent, release_consent, tail, release_block, native_witness)
-            .map_err(|e| e.to_string())?
-        {
+        let (candidate, released) =
+            self.store.provider_release_finalized_v1(root, stored_consent, release_consent, tail, release_block, native_witness)?;
+        if !released {
             return Ok(false);
         }
         self.publish(candidate)?;
@@ -256,8 +303,8 @@ impl DurableMonetaryMaterialProviderV1 {
         enrollment: &PalwMonetaryMaterialEnrollmentV1,
         native_expiry: impl FnMut(Hash64, u64) -> Result<bool, String>,
     ) -> Result<bool, String> {
-        let mut candidate = self.store.clone();
-        if !candidate.discard_expired_offer(enrollment, native_expiry).map_err(|e| e.to_string())? {
+        let (candidate, expired) = self.store.provider_discard_expired_offer_v1(enrollment, native_expiry)?;
+        if !expired {
             return Ok(false);
         }
         self.publish(candidate)?;
@@ -266,7 +313,7 @@ impl DurableMonetaryMaterialProviderV1 {
 }
 
 #[cfg(unix)]
-fn acquire_provider_lease(path: &Path) -> Result<File, String> {
+pub(crate) fn acquire_provider_lease(path: &Path) -> Result<File, String> {
     use std::os::fd::AsRawFd;
     let lease = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| e.to_string())?;
     // SAFETY: flock uses the live File's descriptor; no pointers or aliasing.
@@ -276,6 +323,6 @@ fn acquire_provider_lease(path: &Path) -> Result<File, String> {
     Ok(lease)
 }
 #[cfg(not(unix))]
-fn acquire_provider_lease(_path: &Path) -> Result<File, String> {
+pub(crate) fn acquire_provider_lease(_path: &Path) -> Result<File, String> {
     Err("durable monetary material provider needs a kernel file lease on this platform".into())
 }

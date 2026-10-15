@@ -151,6 +151,32 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         135 if key_bytes == 73 && prefix == 0x02 => <u64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         135 if key_bytes == 65 && prefix == 0x03 => <crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         135 if key_bytes == 73 && prefix == 0x04 => <(u64, u64, u64) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        // COLLISION (merge sweep 2026-10-15, reported, NOT renumbered): Codex `palw_material_release_recovery_v2`
+        // (PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2 = 134) and `palw_claim_compact_v4` (PAID_CLAIM_COMPACT_V4 = 135) were
+        // allocated without seeing RFC-0016's 132..=135. Both fences are dormant; the RFC-0016 arms above win for the
+        // overlapping 64-byte 134 key. One side must move before either is armed (docs/design/palw/unmerged-inventory-2026-10-15.md).
+        134 if key_bytes == 64 => {
+            let shape = crate::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2::scan_native_wire_v1(frame)?;
+            let count =
+                shape.collection_entries.checked_add(1).ok_or_else(|| wire::wire_bad("recovery restore membership overflow"))?;
+            shape.allocation(
+                count,
+                size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::palw_state_v2::PalwBondKeyV2, u64>>()
+                    + size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::palw_state_v2::PalwBondKeyV2, ()>>(),
+            )?
+        }
+        134 if key_bytes == 69 && prefix == 0xA1 => {
+            crate::palw_material_release_recovery_v2::PalwMaterialProviderAckCheckpointV2::scan_native_wire_v1(frame)?.allocation(
+                1,
+                size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::palw_state_v2::PalwBondKeyV2, u64>>(),
+            )?
+        }
+        134 => return Err(wire::wire_bad("unallocated material recovery row namespace")),
+        135 if key_bytes == 64 => crate::palw_claim_compact_v4::PalwPaidCompactContractV4::scan_native_wire_v1(frame)?,
+        135 if key_bytes == 65 && prefix == 0x50 => {
+            crate::palw_claim_compact_v4::PalwPaidCompactProofBindingV4::scan_native_wire_v1(frame)?
+        }
+        135 => return Err(wire::wire_bad("unallocated compact V4 row namespace")),
         // RFC-0018 (2026-10-15): SecurityCertified rows (aux 136, 65-byte keys: prefix ‖ 64-byte id).
         136 if key_bytes == 65 && prefix == crate::palw_security_certification_v1::CERTIFICATION_CLAIM_PREFIX_V1 => {
             crate::palw_security_certification_v1::PalwClaimCertificationRowV1::scan_native_wire_v1(frame)?
@@ -673,6 +699,32 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         112 if k.len() == 2 && k[0] == 28 && k[1] == 4 => {
             <crate::palw_flat_stage_v28::NativeStagePoliciesV28 as NativeWireScanV1>::scan_native_wire_v1(frame)?
         }
+        // Explicit Master32 original before-Fund/actual projection records.
+        112 if k.len() == 66 && k[0] == 28 && k[1] == 32 => <(
+            (u16,[u8;64],u16,[u8;64],[u8;64],[u8;64],[u8;64]),
+            ([u8;64],[u8;64],[u8;64],[u8;64],[u8;64],[u8;64],[u8;64],[u8;64],u32),
+        ) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        112 if k.len() == 66 && k[0] == 32 && k[1] == 3 => <(
+            (u16,[u8;64],u16,[u8;64],[u8;64],[u8;64],[u8;64],[u8;64],[u8;64]),
+            (crate::palw_state_v2::PalwBondKeyV2,crate::palw_state_v2::PalwBondKeyV2,u64),
+        ) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        112 if k.len() == 66 && k[0] == 32 && k[1] == 4 => <Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        112 if k.len() == 66 && k[0] == 32 && k[1] == 5 => <(
+            (u16,[u8;64],[u8;64],[u8;64]),
+            (u16,[u8;64],[u8;64],[u8;64],[u8;64],(u32,u32,u32),u32,Vec<[u8;64]>),
+            (Vec<u32>,[u8;64],u64),
+        ) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        112 if k.len() == 66 && k[0] == 32 && k[1] == 6 => <(u16,[u8;64],Vec<[u8;64]>,Vec<[u8;64]>,Option<[u8;64]>,bool) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        112 if k.len() == 66 && k[0] == 32 && k[1] == 8 => <(
+            [u8;64],(u16,[u8;64],[u8;64],[u8;64],crate::palw_state_v2::PalwBondKeyV2),
+            (u16,[u8;64],[u8;64],[u8;64],[u8;64],[u8;64],u32,u32,u16,u64),
+            (u64,[u8;64],u8,[u8;64],u16,u32,u16,u32,bool,bool),
+        ) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        112 if k.len() == 69 && k[0] == 32 && k[1] == 9 => raw_aux_row_v1(frame,32<<10)?,
+        112 if k.len() == 66 && k[0] == 32 && k[1] == 7 => <(
+            (u16,[u8;64],[u8;64],[u8;64],crate::palw_state_v2::PalwBondKeyV2,[u8;64],[u8;64],[u8;64],Vec<[u8;64]>),
+            (u16,[u8;64],Vec<[u8;64]>,Vec<[u8;64]>,Option<[u8;64]>,bool),
+        ) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         112 if k.len() == 66 && k[0] == 32 && k[1] == 0 => <(
             (u16, [u8; 64], crate::palw_state_v2::PalwBondKeyV2, [u8; 64], [u8; 64], [u8; 64]),
             ([u8; 64], [u8; 64], u64, u32, Vec<[u8; 64]>, Vec<[u8; 64]>),

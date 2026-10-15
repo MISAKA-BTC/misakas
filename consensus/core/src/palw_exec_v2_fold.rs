@@ -1010,7 +1010,7 @@ pub(super) fn apply_covered_slices_v2(
             palw_settled_anchor_depth_v1(builder.extras),
         ) {
             Ok(admission) => {
-                let checkpoint = builder.checkpoint();
+                let checkpoint = builder.try_checkpoint()?;
                 match builder.hold_exec_recipient_v1(
                     carrier.slice.root_claim_id,
                     carrier.slice.executor_bond,

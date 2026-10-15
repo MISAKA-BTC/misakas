@@ -96,6 +96,65 @@ struct Taint {
     copy: bool,
 }
 
+/// Allocation requests of this module's material/mask projection, derived
+/// without constructing the projection. Native owners use this before calling
+/// the helpers above; the private Taint layout is deliberately sized here.
+/// This is a logical allocation bound, not an arithmetic-verification result.
+pub fn native_material_mask_requests_v4(program: &TirProgramV1) -> Option<u64> {
+    native_material_mask_parts_requests_v4(&program.blocks, &program.schedule, program.states.len())
+}
+/// The same projection for an actual V2 stage before its V1 view is allocated.
+/// Blocks, schedule and state count must belong to the selected program.
+pub fn native_material_mask_parts_requests_v4(
+    blocks: &[misaka_palw_tir::program::Block],
+    schedule: &misaka_palw_tir::program::Schedule,
+    states: usize,
+) -> Option<u64> {
+    fn vec_bytes<T>(n: u64) -> Option<u64> {
+        if n == 0 {
+            return Some(0);
+        }
+        let width = std::mem::size_of::<T>() as u64;
+        let minimum = if width == 1 {
+            8
+        } else if width <= 1024 {
+            4
+        } else {
+            1
+        };
+        n.max(minimum).checked_mul(2)?.checked_mul(width)
+    }
+    let occurrences = (schedule.layers.len() as u64).checked_add(2)?;
+    let mut nodes = 0u64;
+    let mut max_nodes = 0u64;
+    let mut max_inputs = 0u64;
+    let mut max_carry = 0u64;
+    for b in std::iter::once(&schedule.pre).chain(&schedule.layers).chain(std::iter::once(&schedule.post)) {
+        let block = blocks.get(*b as usize)?;
+        nodes = nodes.checked_add(block.nodes.len() as u64)?;
+        max_nodes = max_nodes.max(block.nodes.len() as u64);
+        max_carry = max_carry.max(block.carry_out.len() as u64);
+        for node in &block.nodes {
+            max_inputs = max_inputs.max(node.inputs.len() as u64);
+        }
+    }
+    let mut bytes = vec_bytes::<(u8, Option<u16>)>(occurrences)?;
+    // states and written coexist across each fixed-point iteration. Iteration
+    // count changes CPU cost, not the simultaneous live-array cardinality.
+    bytes = bytes.checked_add(vec_bytes::<Taint>(states as u64)?.checked_mul(2)?)?;
+    bytes = bytes.checked_add(vec_bytes::<Taint>(max_carry)?.checked_mul(2)?)?;
+    bytes = bytes.checked_add(vec_bytes::<Taint>(max_nodes)?)?;
+    bytes = bytes.checked_add(vec_bytes::<Taint>(max_inputs)?)?;
+    bytes = bytes.checked_add(vec_bytes::<Vec<NodeMaterialV1>>(occurrences)?)?;
+    bytes = bytes.checked_add(vec_bytes::<NodeMaterialV1>(nodes)?)?;
+    // Each returned inner collection has its own pinned Vec minimum.
+    bytes = bytes.checked_add(occurrences.checked_mul(4 * std::mem::size_of::<NodeMaterialV1>() as u64)?)?;
+    bytes = bytes.checked_add(vec_bytes::<Vec<bool>>(occurrences)?)?;
+    bytes = bytes.checked_add(vec_bytes::<bool>(nodes)?)?;
+    bytes = bytes.checked_add(occurrences.checked_mul(8)?)?;
+    Some(bytes)
+}
+
 impl Taint {
     const PUBLIC: Taint = Taint { model: false, claim: false, copy: false };
     const CLAIM: Taint = Taint { model: false, claim: true, copy: false };

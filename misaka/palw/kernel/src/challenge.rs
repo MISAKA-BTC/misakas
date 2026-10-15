@@ -145,27 +145,40 @@ mod tests {
 /// post-commit contract; it is never placed in V1's beacon slot and hashed again.
 /// A single budget is shared by every relation, repetition and pipeline stage.
 pub struct CheckerRandomnessV2 {
-    seed: Digest,
+    pub(crate) seed: Digest,
     remaining_blocks: std::rc::Rc<std::cell::Cell<u64>>,
+    pub(crate) compact: Option<std::rc::Rc<dyn crate::claim_compact_v1::native_v4::CompactRelationConsumerV4>>,
+    pub(crate) stage: u32,
 }
 impl CheckerRandomnessV2 {
     pub fn new(seed: Digest, maximum_blocks: u64) -> Result<Self, String> {
         if maximum_blocks == 0 {
             return Err("a checker stream needs a finite nonzero block budget".into());
         }
-        Ok(Self { seed, remaining_blocks: std::rc::Rc::new(std::cell::Cell::new(maximum_blocks)) })
+        Ok(Self { seed, remaining_blocks: std::rc::Rc::new(std::cell::Cell::new(maximum_blocks)), compact: None, stage: 0 })
     }
     pub fn for_scope(&self, scope: Digest) -> Self {
         Self {
             seed: crate::hash::object_id(b"misaka-palw/kernel/checker-scope/v2", &(self.seed, scope)),
             remaining_blocks: self.remaining_blocks.clone(),
+            compact: self.compact.clone(),
+            stage: self.stage,
         }
     }
     pub fn for_stage(&self, stage: u32) -> Self {
         Self {
             seed: crate::hash::object_id(b"misaka-palw/kernel/checker-stage/v2", &(self.seed, stage)),
             remaining_blocks: self.remaining_blocks.clone(),
+            compact: self.compact.clone(),
+            stage,
         }
+    }
+    pub(crate) fn with_compact(
+        mut self,
+        consumer: std::rc::Rc<dyn crate::claim_compact_v1::native_v4::CompactRelationConsumerV4>,
+    ) -> Self {
+        self.compact = Some(consumer);
+        self
     }
     pub fn remaining_blocks(&self) -> u64 {
         self.remaining_blocks.get()

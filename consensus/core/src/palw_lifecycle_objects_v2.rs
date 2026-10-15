@@ -1180,11 +1180,12 @@ pub enum PalwLifecycleKindFenceV1 {
     /// `Params::palw_staged_float_constraint_v1` — the greedy Float32 Constraint source forms appended inside tags 165 and 167
     /// (`crate::palw_staged_route_forms_v1`).
     StagedFloatConstraintV1 = 13,
+    MaterialReleaseRecoveryV2 = 14,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1199,6 +1200,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::MonetaryMaterialV1,
         Self::StagedTirRouteV1,
         Self::StagedFloatConstraintV1,
+        Self::MaterialReleaseRecoveryV2,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1216,6 +1218,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::ClassSemanticsV1 => "palw_class_semantics_v1",
             Self::StagedPublicCourtV1 => "palw_staged_public_court_v1",
             Self::MonetaryMaterialV1 => "palw_monetary_material_v1",
+            Self::MaterialReleaseRecoveryV2 => "palw_material_release_recovery_v2",
             Self::StagedTirRouteV1 => "palw_staged_tir_route_v1",
             Self::StagedFloatConstraintV1 => "palw_staged_float_constraint_v1",
         }
@@ -1391,6 +1394,9 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         | O::LegacyHeldAnswerDeclaredV2 { .. }
         | O::LegacyHeldAnswerChunkV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2),
         // Lane BUDGET: a bond's capital assignment (140).
+        O::MonetaryMaterialActionV1 {action,..} if matches!(action.as_ref(), crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::RecoveryV2(_)) => {
+            PalwLifecycleKindOwnerV1::Fence(F::MaterialReleaseRecoveryV2)
+        }
         O::MonetaryMaterialEnrolledV1 { .. } | O::MonetaryMaterialReplacedV1 { .. } | O::MonetaryMaterialActionV1 { .. } => {
             PalwLifecycleKindOwnerV1::Fence(F::MonetaryMaterialV1)
         }
@@ -1652,6 +1658,7 @@ impl crate::config::params::Params {
                     PalwLifecycleKindFenceV1::ClassSemanticsV1 => self.palw_class_semantics_v1_fence(),
                     PalwLifecycleKindFenceV1::StagedPublicCourtV1 => self.palw_staged_public_court_v1,
                     PalwLifecycleKindFenceV1::MonetaryMaterialV1 => self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
+                    PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2 => Self::palw_later_of_v1(self.palw_material_release_recovery_v2.as_ref().map(|f|f.activation), self.palw_monetary_material_v1.as_ref().map(|f|f.activation)),
                     // In force where BOTH the route's and the staged court's fences are (the route's rows are the court's).
                     PalwLifecycleKindFenceV1::StagedTirRouteV1 => {
                         Self::palw_later_of_v1(self.palw_staged_tir_route_v1_fence(), self.palw_staged_public_court_v1)
@@ -2203,6 +2210,8 @@ const fn a2_row(slot: PalwA2SlotV1, fence: &'static str, owner: &'static str, la
 /// written). The Lead allocates; A2U keeps the table; a lane fills its row's code at merge, and the reconciliation tests hold it to the
 /// row.
 pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
+    a2_row(PalwA2SlotV1::KernelNested {what:"PalwMonetaryMaterialActionV1::RecoveryV2 (7), Enroll/Replace/Acknowledge/RetireProviderStream"},"palw_material_release_recovery_v2","RFC08 bounded signed historical release recovery",true),
+    a2_row(PalwA2SlotV1::StateEncoding {what:"kernel route aux134 root64 Active/Terminal reserved history and provider69 ACK stream checkpoint"},"palw_material_release_recovery_v2","RFC08 bounded recovery and actual ACK application",true),
     // ---- top-level object tags (0x4b) ----
     a2_row(PalwA2SlotV1::ObjectTags { lo: 104, hi: 107 }, "palw_probabilistic_constraints_v1", "G14 lane D phase 3 onboarding", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 108, hi: 108 }, "palw_signed_registration_v1", "RFC-0009 signed-expiry registration", true),
@@ -2844,7 +2853,7 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     // 230: reserved 2026-10-15 for the D2 replacement route's seat readiness digest (R-D2-READY). Checked free on this branch, the
     // G14 public-conviction branch and the RFC02 branch (all end at 167 / start again at 240); the kind itself is not landed yet.
     (230, 230, "D2 seat readiness digest (reserved)", &["palw_court_model_scope_v1"]),
-    (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1"]),
+    (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1", "palw_material_release_recovery_v2"]),
 ];
 
 #[cfg(test)]

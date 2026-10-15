@@ -45,6 +45,8 @@ const MLDSA87_PUBKEY_LEN: usize = kaspa_consensus_core::mldsa87_primitives::MLDS
 pub enum ProviderTransportPurposeV1 {
     /// Body: borsh `PalwNativeReadyRequestV3` (request) / `PalwNativeReadyResponseV3` (response).
     NativeReadyV3,
+    /// Independent V4 canonical prospective enrollment, never reinterprets Ready V3.
+    RecoveryEnrollmentV4,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -443,3 +445,29 @@ mod tests {
         assert!(provider_transport_response_v1(&req.header, NOW, vec![], vec![(bond(6), sa)]).is_err(), "not a recipient");
     }
 }
+
+// The transport's owner supplies its exact external codec to the native
+// allocation scanner; semantic authentication still follows this preflight.
+impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for ProviderTransportPurposeV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(
+        r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
+    ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
+        r.step()?;
+        match r.byte()? {
+            0 | 1 => Ok(Default::default()),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown provider transport purpose")),
+        }
+    }
+}
+macro_rules! transport_wire_v1 {($ty:ty;$($field:ty),+)=>{
+    impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for $ty {
+        fn scan_native_wire_v1<R:std::io::Read>(r:&mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>)->std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1>{
+            use kaspa_consensus_core::palw_native_resource_v1::{NativeWireShapeV1,NativeWireScanV1};
+            r.step()?;let shape=NativeWireShapeV1::default();$(let shape=shape.merge(<$field>::scan_native_wire_v1(r)?)?;)+Ok(shape)
+        }
+    }
+};}
+transport_wire_v1!(ProviderTransportRequestHeaderV1;u16,ProviderTransportPurposeV1,Hash64,PalwBondKeyV2,Vec<u8>,Vec<PalwBondKeyV2>,[u8;32],u64,u64,u64,Hash64);
+transport_wire_v1!(ProviderTransportRequestV1;ProviderTransportRequestHeaderV1,Vec<u8>,Vec<u8>);
+transport_wire_v1!(ProviderTransportResponseHeaderV1;u16,ProviderTransportPurposeV1,Hash64,Hash64,Vec<PalwBondKeyV2>,u64,u64,Hash64);
+transport_wire_v1!(ProviderTransportResponseV1;ProviderTransportResponseHeaderV1,Vec<Vec<u8>>,Vec<u8>);

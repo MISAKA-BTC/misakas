@@ -105,7 +105,7 @@ pub(super) fn fund_panel_sources_v2(
     };
     let fee_target =
         BeaconSourceFeeTargetV1 { target: target.clone(), sponsor: terms.sponsor, minimum_fee: minimum, max_sources: cap };
-    let checkpoint = builder.checkpoint();
+    let checkpoint = builder.try_checkpoint()?;
     for (table, bytes) in [
         (crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4, borsh::to_vec(&target).unwrap()),
         (crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_FEE_TARGETS_V5, borsh::to_vec(&fee_target).unwrap()),

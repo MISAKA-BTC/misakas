@@ -14,7 +14,7 @@ use thiserror::Error;
 /// dynamically grow as needed, but this figure is intended to provide
 /// enough space for vast majority of scripts without needing to grow the
 /// backing array multiple times.
-const DEFAULT_SCRIPT_ALLOC: usize = 512;
+pub const DEFAULT_SCRIPT_ALLOC: usize = 512;
 
 #[derive(Error, PartialEq, Eq, Debug, Clone, Copy)]
 pub enum ScriptBuilderError {

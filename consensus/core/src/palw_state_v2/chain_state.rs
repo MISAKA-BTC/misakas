@@ -148,6 +148,10 @@ impl PalwChainStateV2 {
             staged_due: BTreeSet::new(),
             staged_by_owner: BTreeSet::new(),
             staged_inventory_by_owner: BTreeSet::new(),
+            staged_tir_by_owner: BTreeSet::new(),
+            staged_tir_by_claim: BTreeMap::new(),
+            staged_tir_responders: BTreeSet::new(),
+            staged_tir_preparers: BTreeSet::new(),
             staged_prefix_responders: BTreeSet::new(),
             staged_selected_responders: BTreeSet::new(),
             staged_flat_responders: BTreeSet::new(),
@@ -2356,6 +2360,67 @@ impl PalwChainStateV2 {
         self.staged_courts.get(key)
     }
 
+    /// Derived lifecycle consistency only, not proof of a new paid acquisition
+    /// or raw-source grant. Admission remains disabled until the full native
+    /// allocation and distinct custody pledge/grants are wired.
+    pub(super) fn assert_tir_acquisition_indices_v1(&self) -> Result<(), PalwStateV2Error> {
+        use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+        let mut owners = BTreeSet::new();
+        let mut claims = BTreeMap::<Hash64, BTreeSet<(u64, Key)>>::new();
+        let mut responders = BTreeSet::new();
+        let mut preparers = BTreeSet::new();
+        let mut due = BTreeSet::new();
+        let mut holds = BTreeSet::new();
+        let now = self.last_point().map(|p| p.daa_score).unwrap_or(0);
+        for (key, row) in &self.staged_courts {
+            if matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..)) {
+                let (at, row_holds) = palw_staged_court_fold_v1::index_rows(*key, row);
+                due.insert((at, *key));
+                holds.extend(row_holds);
+            }
+            if let Some((owner, claim, allocation, _)) = palw_staged_court_fold_v1::tir_index_metadata_v1(*key, row) {
+                owners.insert((owner, claim, allocation));
+                responders.extend(palw_staged_court_fold_v1::tir_response_index_rows_v1(*key, row));
+            }
+            preparers.extend(palw_staged_court_fold_v1::tir_preparation_index_rows_v1(*key, row));
+            if let Some((claim, until)) = palw_staged_court_fold_v1::tir_source_index_metadata_v1(*key, row) {
+                claims.entry(claim).or_default().insert((until, *key));
+                if now < until && self.staged_claim_contract_v1(&claim).is_none_or(|contract| contract.terms.material_until_daa < until) {
+                    return Err(PalwStateV2Error::CarriageInconsistent(
+                        "live TIR acquisition lost its original claim/public-source retention hold".into(),
+                    ));
+                }
+            }
+            let material = match row {
+                Row::TirRawChunk(row) => Some((row.acquisition, row.source_id, row.material_until_daa)),
+                Row::TirAcceptedBody(row) => Some((row.acquisition, row.source_id, row.material_until_daa)),
+                _ => None,
+            };
+            if let Some((acquisition, source, until)) = material.filter(|(_, _, until)| now < *until) {
+                let Some(Row::TirAcquisition(owner)) = self.staged_courts.get(&acquisition) else {
+                    return Err(PalwStateV2Error::CarriageInconsistent("live TIR public material lost its acquisition scope".into()));
+                };
+                let c = owner.owned.contract_v1();
+                if c.source_id != source || c.terms.material_until_daa != until {
+                    return Err(PalwStateV2Error::CarriageInconsistent("TIR public material changed original source/TTL".into()));
+                }
+            }
+        }
+        let actual_due: BTreeSet<_> = self.staged_due.iter().filter(|(_, key)| {
+            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..))
+        }).copied().collect();
+        let actual_holds: BTreeSet<_> = self.staged_holds.iter().filter(|(_, _, key)| {
+            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..))
+        }).copied().collect();
+        if owners != self.staged_tir_by_owner || claims != self.staged_tir_by_claim || responders != self.staged_tir_responders
+            || preparers != self.staged_tir_preparers
+            || due != actual_due || holds != actual_holds
+        {
+            return Err(PalwStateV2Error::CarriageInconsistent("TIR acquisition lifecycle indexes differ from rooted rows".into()));
+        }
+        Ok(())
+    }
+
     /// **RFC-0002 F7: a court session's IR history dissection**, if its root claim was admitted.
     pub fn tir_dissection_v1(&self, session_id: &Hash64) -> Option<&crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1> {
         self.tir_dissections.get(session_id).map(|phase| phase.as_ref())
@@ -3153,6 +3218,7 @@ impl PalwChainStateV2 {
         self.assert_vertex_consistency_v1()?;
         self.assert_exec_v2_consistency_v1(params)?;
         self.assert_monetary_material_consistency_v1(params)?;
+        self.assert_material_release_recovery_consistency_v2(params)?;
         self.assert_mesh_consistency_v1()?;
         // RFC-0010: the permissionless Panel's engine is internally consistent and agrees with the claims, panels and duty rows.
         self.assert_panel_v3_consistency_v1(params)?;
@@ -3764,6 +3830,7 @@ impl PalwChainStateV2 {
         if inventory != self.staged_inventory_by_owner {
             return Err(PalwStateV2Error::CarriageInconsistent("artifact inventory owner index differs from paid attempts".into()));
         }
+        self.assert_tir_acquisition_indices_v1()?;
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;
         self.assert_held_forfeits_consistency_v1()?;

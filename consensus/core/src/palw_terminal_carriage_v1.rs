@@ -56,6 +56,41 @@ pub struct PalwTerminalProgressV1 {
     pub accepted_parts: u32,
 }
 
+/// Every field, including the clock, comes from one accepted native snapshot.
+/// Feature activation remains the native reader's responsibility. This does not
+/// grant retained staged rows a new terminal allowance or extend a reservation.
+pub fn palw_terminal_progress_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: &PalwTerminalKeyV1,
+    court_maximum: u64,
+) -> Result<Option<PalwTerminalProgressV1>, String> {
+    let now_daa = state.last_point().ok_or("terminal progress snapshot has no accepted clock")?.daa_score;
+    let Some(reservation) = state.legacy_dispute_reservation_v1(&key.0, &key.1) else { return Ok(None) };
+    let record = state.legacy_dispute_v1(&key.0).ok_or("reservation has no dispute record")?;
+    let row = state.terminal_pending_v1(key);
+    if row.is_some_and(|row| {
+        row.declaration.key() != *key
+            || row.declaration.reserved_daa != reservation.reserved_daa
+            || row.deadline_daa != record.hard_deadline_daa
+    }) {
+        return Err("terminal progress changes accepted reservation ownership or deadline".into());
+    }
+    let accepted_parts = row.map_or(Ok(0u32), |row| {
+        row.parts.keys().try_fold(0u32, |bits, index| {
+            let bit = 1u32.checked_shl(u32::from(*index)).ok_or("terminal progress part index exceeds its native bitmap")?;
+            Ok::<u32, String>(bits | bit)
+        })
+    })?;
+    Ok(Some(PalwTerminalProgressV1 {
+        now_daa,
+        court_maximum,
+        reserved_daa: reservation.reserved_daa,
+        hard_deadline_daa: record.hard_deadline_daa,
+        declaration: row.map(|row| row.declaration.clone()),
+        accepted_parts,
+    }))
+}
+
 /// Extracts the claim without changing the offence's original byte identity. Callers bound bytes first.
 pub fn palw_terminal_claim_v1(kind: PalwOffenceKindV1, evidence: &[u8]) -> Result<Hash64, String> {
     use crate::palw_offence_attribution_v1::*;

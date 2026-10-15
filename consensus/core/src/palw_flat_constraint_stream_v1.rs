@@ -7,7 +7,7 @@ use crate::{
     palw_rendering_resources_v1::{PalwRenderingResourcePlanV1, PalwRenderingResourcePricesV1},
     palw_rendering_stream_v1::LeafHashContinuationV1,
     palw_state_v2::PalwBondKeyV2,
-    palw_step_leg::{PalwStepBindingV2, verify_binding_v1},
+    palw_step_leg::PalwStepBindingV2,
     palw_step_refute::{PALW_BASE0_DOMAIN_LOGITS_TRACE, flat_logits_scheme_id_v1},
 };
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -126,13 +126,18 @@ impl PalwFlatConstraintPinV1 {
         self.beat
     }
     pub fn matches_binding_v1(&self, binding: &PalwStepBindingV2) -> bool {
-        binding.shape_profile.logits_scheme_id == flat_logits_scheme_id_v1()
-            && binding.shape_profile.lane == crate::palw_step::PalwStepLaneV1::Int32
-            && binding.committed_execution_root == self.binding_root
-            && binding.job_context.context_hash() == self.job_context
-            && binding.full_logits_trace_root == self.logits_root
-            && binding.shape_profile.vocab_size == self.vocab
-            && binding.job_context.exact_decode_tokens as usize == self.generated.len()
+        self.matches_view_v1(&crate::palw_decode_view_v1::PalwDecodeViewV1::of_verified_binding_v1(binding))
+    }
+    /// The native caller derives this view from the accepted original header and
+    /// registered class. A deserialized/private pin is not admission authority.
+    pub fn matches_view_v1(&self, view: &crate::palw_decode_view_v1::PalwDecodeViewV1) -> bool {
+        view.logits_scheme_id == flat_logits_scheme_id_v1()
+            && view.lane == crate::palw_step::PalwStepLaneV1::Int32
+            && view.committed_execution_root == self.binding_root
+            && view.job_context.context_hash() == self.job_context
+            && view.full_logits_trace_root == self.logits_root
+            && view.vocab_size == self.vocab
+            && view.job_context.exact_decode_tokens as usize == self.generated.len()
     }
 }
 impl PalwFlatConstraintStreamV1 {
@@ -141,7 +146,15 @@ impl PalwFlatConstraintStreamV1 {
         binding: &PalwStepBindingV2,
         prices: PalwRenderingResourcePricesV1,
     ) -> Result<Self, String> {
-        let mut row = Self::new_v1(context, binding, 0, None, None, prices)?;
+        let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_binding_v1(binding)?;
+        Self::new_deferred_view_v1(context, &view, prices)
+    }
+    pub fn new_deferred_view_v1(
+        context: Hash64,
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        prices: PalwRenderingResourcePricesV1,
+    ) -> Result<Self, String> {
+        let mut row = Self::new_view_v1(context, view, 0, None, None, prices)?;
         row.deferred = true;
         row.position = u32::MAX;
         Ok(row)
@@ -154,20 +167,30 @@ impl PalwFlatConstraintStreamV1 {
         beat: Option<u32>,
         prices: PalwRenderingResourcePricesV1,
     ) -> Result<Self, String> {
-        verify_binding_v1(binding).map_err(|e| e.to_string())?;
-        if binding.shape_profile.logits_scheme_id != flat_logits_scheme_id_v1()
-            || binding.shape_profile.lane != crate::palw_step::PalwStepLaneV1::Int32
-        {
+        let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_binding_v1(binding)?;
+        Self::new_view_v1(context, &view, position, guessed_committed, beat, prices)
+    }
+    /// Uses the actual Flat trace domain for both legacy and TIR executions. The
+    /// view must be derived natively; no legacy execution root is synthesized.
+    pub fn new_view_v1(
+        context: Hash64,
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        position: u32,
+        guessed_committed: Option<u32>,
+        beat: Option<u32>,
+        prices: PalwRenderingResourcePricesV1,
+    ) -> Result<Self, String> {
+        if view.logits_scheme_id != flat_logits_scheme_id_v1() || view.lane != crate::palw_step::PalwStepLaneV1::Int32 {
             return Err("flat acquisition cannot reinterpret a registered tiled or floating scheme".into());
         }
         Self::new_inner(
             context,
-            binding.committed_execution_root,
-            binding.job_context.context_hash(),
-            binding.full_logits_trace_root,
-            binding.job_context.declared_prefill_tokens,
-            binding.job_context.exact_decode_tokens,
-            binding.shape_profile.vocab_size,
+            view.committed_execution_root,
+            view.job_context.context_hash(),
+            view.full_logits_trace_root,
+            view.job_context.declared_prefill_tokens,
+            view.job_context.exact_decode_tokens,
+            view.vocab_size,
             position,
             guessed_committed,
             beat,
@@ -499,6 +522,39 @@ impl PalwFlatConstraintSourceSessionV1 {
         collect_until_daa: u64,
         prices: PalwRenderingResourcePricesV1,
     ) -> Result<Self, String> {
+        let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_binding_v1(binding)?;
+        Self::new_view_v1(
+            claim,
+            owner,
+            reserved_daa,
+            bundle_id,
+            producer,
+            custodians,
+            &view,
+            position,
+            guessed_committed,
+            beat,
+            respond_until_daa,
+            collect_until_daa,
+            prices,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_view_v1(
+        claim: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        bundle_id: Hash64,
+        producer: PalwBondKeyV2,
+        custodians: BTreeSet<PalwBondKeyV2>,
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        position: u32,
+        guessed_committed: Option<u32>,
+        beat: Option<u32>,
+        respond_until_daa: u64,
+        collect_until_daa: u64,
+        prices: PalwRenderingResourcePricesV1,
+    ) -> Result<Self, String> {
         if !custodians.contains(&producer)
             || custodians.contains(&owner)
             || reserved_daa >= respond_until_daa
@@ -513,11 +569,11 @@ impl PalwFlatConstraintSourceSessionV1 {
             bundle_id,
             producer,
             &custodians,
-            binding.committed_execution_root,
-            binding.job_context.context_hash(),
-            binding.full_logits_trace_root,
+            view.committed_execution_root,
+            view.job_context.context_hash(),
+            view.full_logits_trace_root,
             position,
-            guessed_committed.filter(|id| *id < binding.shape_profile.vocab_size),
+            guessed_committed.filter(|id| *id < view.vocab_size),
             beat,
             respond_until_daa,
             collect_until_daa,
@@ -533,7 +589,7 @@ impl PalwFlatConstraintSourceSessionV1 {
                 .try_into()
                 .expect("64"),
         );
-        let template = PalwFlatConstraintStreamV1::new_v1(source_id, binding, position, guessed_committed, beat, prices)?;
+        let template = PalwFlatConstraintStreamV1::new_view_v1(source_id, view, position, guessed_committed, beat, prices)?;
         let mut slots = custodians.iter().map(|key| (*key, None)).collect::<BTreeMap<_, _>>();
         slots.insert(owner, None);
         Ok(Self {
@@ -568,14 +624,43 @@ impl PalwFlatConstraintSourceSessionV1 {
         collect_until_daa: u64,
         prices: PalwRenderingResourcePricesV1,
     ) -> Result<Self, String> {
-        let mut session = Self::new_v1(
+        let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_binding_v1(binding)?;
+        Self::new_deferred_view_v1(
             claim,
             owner,
             reserved_daa,
             bundle_id,
             producer,
             custodians,
-            binding,
+            &view,
+            respond_until_daa,
+            collect_until_daa,
+            prices,
+        )
+    }
+    /// Same immutable slots and two-pass clock as the legacy constructor, using
+    /// the natively derived original decode view rather than a synthetic binding.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_deferred_view_v1(
+        claim: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        bundle_id: Hash64,
+        producer: PalwBondKeyV2,
+        custodians: BTreeSet<PalwBondKeyV2>,
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        respond_until_daa: u64,
+        collect_until_daa: u64,
+        prices: PalwRenderingResourcePricesV1,
+    ) -> Result<Self, String> {
+        let mut session = Self::new_view_v1(
+            claim,
+            owner,
+            reserved_daa,
+            bundle_id,
+            producer,
+            custodians,
+            view,
             0,
             None,
             None,
@@ -586,11 +671,11 @@ impl PalwFlatConstraintSourceSessionV1 {
         session.template.deferred = true;
         session.template.position = u32::MAX;
         let slots = session.custodians.len() as u128 + 1;
-        let d = u128::from(binding.job_context.exact_decode_tokens);
-        let per_pass = d * (1 + u128::from(binding.shape_profile.vocab_size).div_ceil(PALW_FLAT_CONSTRAINT_PART_WORDS_V1 as u128))
+        let d = u128::from(view.job_context.exact_decode_tokens);
+        let per_pass = d * (1 + u128::from(view.vocab_size).div_ceil(PALW_FLAT_CONSTRAINT_PART_WORDS_V1 as u128))
             + d.div_ceil(PALW_FLAT_CONSTRAINT_PART_WORDS_V1 as u128)
             + 1;
-        let index = (u128::from(binding.step_leaf_count) + d + 4)
+        let index = (u128::from(view.step_leaf_count) + d + 4)
             .div_ceil(64)
             .checked_mul(u128::from(prices.reorg_replay_moves) + 1)
             .ok_or("Flat second-pass index budget overflow")?;
@@ -963,6 +1048,204 @@ mod tests {
             PalwFlatConstraintCursorV1::Finish { .. } => PalwFlatConstraintActionV1::Finish,
             _ => panic!("no movement after complete"),
         }
+    }
+
+    #[test]
+    fn native_decode_view_constructors_preserve_legacy_flat_source_bytes() {
+        let (binding, _, position) = fixture();
+        let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_binding_v1(&binding).unwrap();
+        let context = Hash64::from_u64_word(0xF1A7);
+        assert_eq!(
+            borsh::to_vec(&PalwFlatConstraintStreamV1::new_deferred_v1(context, &binding, prices()).unwrap()).unwrap(),
+            borsh::to_vec(&PalwFlatConstraintStreamV1::new_deferred_view_v1(context, &view, prices()).unwrap()).unwrap()
+        );
+        let key = |n| PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(n), 0));
+        for deferred in [false, true] {
+            let legacy = if deferred {
+                PalwFlatConstraintSourceSessionV1::new_deferred_v1(
+                    context,
+                    key(1),
+                    10,
+                    context,
+                    key(2),
+                    BTreeSet::from([key(2), key(3)]),
+                    &binding,
+                    1_000_000_000,
+                    1_000_000_100,
+                    prices(),
+                )
+            } else {
+                PalwFlatConstraintSourceSessionV1::new_v1(
+                    context,
+                    key(1),
+                    10,
+                    context,
+                    key(2),
+                    BTreeSet::from([key(2), key(3)]),
+                    &binding,
+                    position,
+                    None,
+                    None,
+                    1_000_000_000,
+                    1_000_000_100,
+                    prices(),
+                )
+            }
+            .unwrap();
+            let native = if deferred {
+                PalwFlatConstraintSourceSessionV1::new_deferred_view_v1(
+                    context,
+                    key(1),
+                    10,
+                    context,
+                    key(2),
+                    BTreeSet::from([key(2), key(3)]),
+                    &view,
+                    1_000_000_000,
+                    1_000_000_100,
+                    prices(),
+                )
+            } else {
+                PalwFlatConstraintSourceSessionV1::new_view_v1(
+                    context,
+                    key(1),
+                    10,
+                    context,
+                    key(2),
+                    BTreeSet::from([key(2), key(3)]),
+                    &view,
+                    position,
+                    None,
+                    None,
+                    1_000_000_000,
+                    1_000_000_100,
+                    prices(),
+                )
+            }
+            .unwrap();
+            assert_eq!(borsh::to_vec(&legacy).unwrap(), borsh::to_vec(&native).unwrap());
+            native.check_v1().unwrap();
+        }
+    }
+
+    #[test]
+    fn tir_flat_view_authenticates_original_eof_before_exposing_invalid_output_to_the_court() {
+        use crate::palw_constraint_stream_court_v1::PalwConstraintStreamCourtV1;
+        use crate::palw_freeprompt_v3::{PalwFpStopReasonV3, PalwFreePromptCommitmentV3, fp_claim_id_v3};
+        // Native header/decode geometry fixture, not class-registration or node E2E evidence.
+        let mut case = crate::palw_decode_constraint_v1::tests::public_tir_constrained_case_for_tests_v1();
+        case.record.facts.tiled = false;
+        case.ids[case.position as usize] = case.record.logits_vocab;
+        let source = PalwBase0DecodeTokensV1 { logits_rows: case.rows, generated_token_ids: case.ids };
+        case.header.full_logits_trace_root = crate::palw_step_refute::base0_logits_trace_root_v1(
+            &case.header.job_context,
+            &source.logits_rows,
+            &source.generated_token_ids,
+        );
+        case.header.committed_execution_root = crate::palw_tir_step_v1::palw_tir_execution_root_v1(
+            &case.header.job_context.context_hash(),
+            &case.header.full_logits_trace_root,
+            &case.record.facts.class_id,
+            case.header.step_leaf_count,
+            &case.header.step_merkle_root,
+        );
+        let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(&case.header, &case.record, 1 << 20).unwrap();
+        let context = Hash64::from_u64_word(0xF1A8);
+        let key = |n| PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(n), 0));
+        let (outside, producer, panel) = (key(1), key(2), key(3));
+        let withheld = PalwFlatConstraintSourceSessionV1::new_view_v1(
+            context,
+            outside,
+            10,
+            context,
+            producer,
+            BTreeSet::from([producer, panel]),
+            &view,
+            case.position,
+            None,
+            None,
+            1_000_000_000,
+            1_000_000_100,
+            prices(),
+        )
+        .unwrap();
+        let mut withheld: PalwFlatConstraintSourceSessionV1 = borsh::from_slice(&borsh::to_vec(&withheld).unwrap()).unwrap();
+        withheld.check_v1().unwrap();
+        assert!(withheld.collect_v1(999_999_999).is_err());
+        assert_eq!(
+            withheld.collect_v1(1_000_000_000).unwrap().into_iter().collect::<BTreeSet<_>>(),
+            BTreeSet::from([producer, panel])
+        );
+        assert!(withheld.collect_v1(1_000_000_000).is_err());
+        assert_eq!(withheld.respond_until_daa, 1_000_000_000);
+        let mut row = PalwFlatConstraintStreamV1::new_deferred_view_v1(context, &view, prices()).unwrap();
+        assert!(row.authenticated_generated_ids_v1().is_err());
+        row.movement_v1(context, &next(&row, &source)).unwrap();
+        let saved = borsh::to_vec(&row).unwrap();
+        let mut row: PalwFlatConstraintStreamV1 = borsh::from_slice(&saved).unwrap();
+        row.check_v1().unwrap();
+        while row.cursor_v1() != PalwFlatConstraintCursorV1::Nominate {
+            assert!(row.authenticated_generated_ids_v1().is_err());
+            row.movement_v1(context, &next(&row, &source)).unwrap();
+        }
+        assert_eq!(row.authenticated_generated_ids_v1().unwrap(), source.generated_token_ids);
+        row.movement_v1(context, &PalwFlatConstraintActionV1::Nominate { position: view.job_context.exact_decode_tokens, beat: None })
+            .unwrap();
+        let pin = row.authenticated_pin_v1().unwrap();
+        assert!(pin.matches_view_v1(&view));
+        let mut foreign = view.clone();
+        foreign.full_logits_trace_root = Hash64::default();
+        assert!(!pin.matches_view_v1(&foreign));
+        let mut tiled = view.clone();
+        tiled.logits_scheme_id = crate::palw_step_refute::tiled_logits_scheme_id_v1();
+        assert!(PalwFlatConstraintStreamV1::new_deferred_view_v1(context, &tiled, prices()).is_err());
+        let mut floating = view.clone();
+        floating.lane = crate::palw_step::PalwStepLaneV1::Float32;
+        assert!(PalwFlatConstraintStreamV1::new_deferred_view_v1(context, &floating, prices()).is_err());
+        let original = PalwFreePromptCommitmentV3 {
+            job: case.job.clone(),
+            trace_root: view.full_logits_trace_root,
+            output_root: Hash64::default(),
+            schedule_root: Hash64::default(),
+            execution_root: view.committed_execution_root,
+            decode_tokens_executed: view.job_context.exact_decode_tokens,
+            stop_reason: PalwFpStopReasonV3::EndOfGeneration,
+            work_leaves: view.step_leaf_count,
+            trace_manifest_root: Hash64::default(),
+            trace_chunk_count: 1,
+            trace_retention_daa: 100_000,
+        };
+        let owner = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(context, 0));
+        let make = |original: &PalwFreePromptCommitmentV3| {
+            PalwConstraintStreamCourtV1::new_from_flat_view_with_original_stop_context_v1(
+                fp_claim_id_v3(&original),
+                owner,
+                10,
+                view.committed_execution_root,
+                &view,
+                &borsh::to_vec(&case.header).unwrap(),
+                &case.job,
+                &pin,
+                None,
+                case.eog.ids.len() as u32,
+                &case.eog.opening,
+                original,
+                None,
+            )
+        };
+        let court = make(&original).unwrap();
+        assert_eq!(court.fault().unwrap().unwrap().position, case.position);
+        let mut forged_stop = original.clone();
+        forged_stop.stop_reason = PalwFpStopReasonV3::ExactBudgetReached;
+        assert!(make(&forged_stop).is_err());
+        let mut corrupted = source.clone();
+        corrupted.logits_rows[0][0] ^= 1;
+        let mut forged = PalwFlatConstraintStreamV1::new_deferred_view_v1(context, &view, prices()).unwrap();
+        while !matches!(forged.cursor_v1(), PalwFlatConstraintCursorV1::Finish { .. }) {
+            forged.movement_v1(context, &next(&forged, &corrupted)).unwrap();
+        }
+        assert!(forged.movement_v1(context, &PalwFlatConstraintActionV1::Finish).is_err());
+        assert!(forged.authenticated_generated_ids_v1().is_err());
     }
 
     #[test]

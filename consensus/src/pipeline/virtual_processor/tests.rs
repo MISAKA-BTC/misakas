@@ -13777,7 +13777,7 @@ async fn an_exhausted_sink_search_holds_at_the_previous_sink() {
 
     // No tips at all: the heap is empty before the first pop, which is the exhaustion path.
     let (sink, candidates) =
-        vp.sink_search_algorithm(&virtual_read, &mut diff, &mut bond_view, prev_sink, vec![], finality_point, pruning_point);
+        vp.sink_search_algorithm(&virtual_read, &mut diff, &mut bond_view, prev_sink, vec![], finality_point, pruning_point).unwrap();
 
     assert_eq!(sink, prev_sink, "an exhausted search must hold virtual where it was");
     assert!(candidates.is_empty(), "and merge nothing while it holds");
@@ -17678,3 +17678,6 @@ async fn rfc12_utxo_import_target_and_completion_are_generation_bound() {
     assert_eq!(vp.pruning_meta_stores.read().utxoset_position().unwrap(), original_position);
     assert_eq!(vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect::<Vec<_>>(), before_utxos);
 }
+
+// Local native capacity is retryable, never a branch preference or invalidity.
+mod rfc12_native_capacity_selection;

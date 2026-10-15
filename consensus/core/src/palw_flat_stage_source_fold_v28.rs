@@ -20,6 +20,8 @@ fn served(r:&PalwKernelRouteStateV1,unit:Digest)->Option<Vec<u8>>{let raw=r.aux.
 fn node_request(q:&NativeStageRequestV28)->NativeStageRequestV28{let mut n=q.clone();n.kind=3;n.axis=0;n.level=0;n.index&=65535;n}
 fn node_from_cache(builder:&TransitionBuilder<'_>,h:&JobHeader,claim:Digest,q:&NativeStageRequestV28)->Result<misaka_palw_kernel::seg::NodeOpeningV1,PalwStateV2Error>{let n=node_request(q);let raw=served(builder.state.kernel_route.as_ref().unwrap(),unit(h,claim,&n)).ok_or_else(||refused("stage28 original trace node header not publicly acquired"))?;if raw.first()!=Some(&3){return Err(refused("stage28 trace cache namespace differs"));}decode_stage_node_opening_v28(&raw[1..]).map_err(refused)}
 fn check_coordinate(builder:&TransitionBuilder<'_>,h:&JobHeader,class:&CheckedStageClassV28,actual:&CheckedStageJobV28,book:&StageJobBookV28,q:&NativeStageRequestV28)->Result<Digest,PalwStateV2Error>{
+    let actual32=master32::actual_job_fixed(builder,h,class)?;
+    let actual=actual32.as_ref().unwrap_or(actual);
     if q.kind<=2 {
         if q.layer_code>65536||q.kind==0&&(q.axis!=0||q.level!=0||q.index!=0)||q.kind>0&&q.axis!=AXIS_ROW&&q.axis!=AXIS_COL||q.kind==2&&q.level!=0{return Err(refused("stage28 original real-PC coordinate grammar differs"));}
         let layer=if q.layer_code==0{None}else{Some((q.layer_code-1) as u16)};let pc=*class.source().parameters().by_instance.get(&(q.param,layer)).ok_or_else(||refused("stage28 cannot request actual external inputs as original source weights"))?;
@@ -36,7 +38,7 @@ fn check_coordinate(builder:&TransitionBuilder<'_>,h:&JobHeader,class:&CheckedSt
             else {if values<64||q.axis!=0{return Err(refused("stage28 flat trace value grammar differs"));}let shape=geometry.shape.iter().map(|n|*n as u64).collect::<Vec<_>>();let l=misaka_palw_kernel::merkle5::FlatLayoutV5::of(&shape).ok_or_else(||refused("stage28 original trace flat layout"))?;if leaf>=l.leaves(){return Err(refused("stage28 trace flat leaf coordinate exceeded"));}}
             Ok(node_from_cache(builder,h,book.claim().unwrap(),q)?.commitment)
         }else{
-            let data:JobData=read(builder.state.kernel_route.as_ref().unwrap(),6,&h.id,(1<<20)+(2<<20)+16384).ok_or_else(||refused("stage28 original trace body absent"))?;let trace=StageTraceV14::from_bytes(&data.trace,h.positions).map_err(refused)?;let index=q.layer_code/misaka_palw_kernel::seg::SEG_LEN_V4;trace.segment_roots.get(index as usize).copied().ok_or_else(||refused("stage28 original trace segment absent"))
+            let data:JobData=read(builder.state.kernel_route.as_ref().unwrap(),6,&h.id,(1<<20)+(2<<20)+16384).ok_or_else(||refused("stage28 original trace body absent"))?;let trace=StageTraceV14::from_invocation_bytes_v32(&data.trace,master32::actual_positions(builder.state.kernel_route.as_ref().unwrap(),h.id,h.positions)?).map_err(refused)?;let index=q.layer_code/misaka_palw_kernel::seg::SEG_LEN_V4;trace.segment_roots.get(index as usize).copied().ok_or_else(||refused("stage28 original trace segment absent"))
         }
     }
 }
@@ -54,7 +56,7 @@ fn authenticate_answer(class:&CheckedStageClassV28,actual:&CheckedStageJobV28,da
     }else{
         if raw.first()!=Some(&q.kind){return Err(refused("stage28 original trace answer kind differs"));}let node=(q.index&65535) as u16;let leaf=q.index>>16;let g=actual.trace_geometry(q.layer_code,q.param,node).map_err(refused)?;
         match q.kind {
-            3=>{let o=decode_stage_node_opening_v28(&raw[1..]).map_err(refused)?;let trace=StageTraceV14::from_bytes(&data.trace,g.positions).map_err(refused)?;if o.position!=q.layer_code||o.occurrence!=q.param||o.node!=node||!o.authenticates(&trace.segment_roots,g.positions,g.node_index,g.node_count){return Err(refused("stage28 original trace node not authenticated"));}},
+            3=>{let o=decode_stage_node_opening_v28(&raw[1..]).map_err(refused)?;let trace=StageTraceV14::from_invocation_bytes_v32(&data.trace,g.positions).map_err(refused)?;if o.position!=q.layer_code||o.occurrence!=q.param||o.node!=node||!o.authenticates(&trace.segment_roots,g.positions,g.node_index,g.node_count){return Err(refused("stage28 original trace node not authenticated"));}},
             4=>{let o=misaka_palw_kernel::merkle5::decode_flat_hash_v5(&raw[1..]).map_err(|e|refused(e.to_string()))?;if o.index!=leaf||!o.authenticates(&d.pc){return Err(refused("stage28 original trace hash leaf not authenticated"));}},
             5=>{let o=misaka_palw_kernel::merkle5::decode_flat_value_v5(&raw[1..]).map_err(|e|refused(e.to_string()))?;if o.opening.index!=leaf||!o.authenticates(&d.pc){return Err(refused("stage28 original trace value leaf not authenticated"));}},
             6=>{let a=opening::decode_answer_v16(&raw[1..]).map_err(refused)?;let opening::AnswerV16::Leaf(o)=a else{return Err(refused("stage28 legacy trace exact leaf grammar"));};let dims=o.shape.iter().map(|n|*n as usize).collect::<Vec<_>>();let l=LayoutV3::try_of(&dims).ok_or_else(||refused("stage28 legacy trace leaf geometry"))?;let index=if o.axis==AXIS_ROW{o.line.checked_mul(l.row_tiles).and_then(|n|n.checked_add(o.tile))}else{o.line.checked_mul(l.col_tiles).and_then(|n|n.checked_add(o.tile))};if index!=Some(leaf)||o.axis!=q.axis||!o.authenticates(&d.pc){return Err(refused("stage28 original legacy trace leaf not authenticated"));}},
@@ -118,7 +120,8 @@ pub(super) fn answer(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
 }
 fn finish_answer(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,p:&NativeStagePoliciesV28,h:&JobHeader,d:&mut NativeStagePendingV28,answer:&[u8])->Result<(),PalwStateV2Error>{
     let(class,actual,plan,book,data)=restore_job(builder,p,h)?;if contract(builder,p,&class,&actual,&plan)?.record()!=&h.contract||book.claim()!=Some(d.claim)||book.producer_operator()!=d.producer_operator{return Err(refused("stage28 answer rebinds original source/claim/operator"));}
-    authenticate_answer(&class,&actual,&data,d,answer)?;
+    let actual32=master32::actual_job_fixed(builder,h,&class)?;
+    authenticate_answer(&class,actual32.as_ref().unwrap_or(&actual),&data,d,answer)?;
     let row=closed_pursuit(builder,h,d)?;if builder.state.bonds.get(&d.requester).is_none_or(|b|b.collateral<d.bond||b.operator_id.as_bytes()!=d.requester_operator){return Err(refused("stage28 original actual requester delivery fee unavailable"));}
     if h.contract.producer_delivery_fee_cap!=0{return Err(refused("stage28 original burn-only delivery terms differ"));}
     if builder.slash_bond(d.requester,d.bond as u128)?!=d.bond{return Err(PalwStateV2Error::BondBudgetRefused("stage28 actual delivery fee collection changed after preflight".into()));}

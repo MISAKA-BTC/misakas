@@ -536,7 +536,7 @@ pub(super) fn invalidate_final(
         builder.cancel_native_recipient_v1(root, row.producer_bond, 0);
         let mut c = builder.state.vesting_counters;
         c.burned = c.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("EXEC native vesting burned"))?;
-        builder.write_vesting(root, None);
+        builder.write_vesting(root, None)?;
         builder.write_vesting_counters(c);
         builder.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::ExecDependencyBurned {
             claim_id: root,
@@ -546,7 +546,7 @@ pub(super) fn invalidate_final(
         });
     }
     burn(builder, root)?;
-    builder.mark_liability_convicted(root, ctx.daa_score, reason);
+    builder.mark_liability_convicted(root, ctx.daa_score, reason)?;
     Ok(())
 }
 

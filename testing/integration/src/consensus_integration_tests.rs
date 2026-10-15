@@ -804,7 +804,7 @@ async fn json_test(file_path: &str, concurrency: bool) {
     let (_external_db_lifetime, external_storage) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
     let external_block_store = DbBlockTransactionsStore::new(external_storage, CachePolicy::Count(config.perf.block_data_cache_size));
     let (_utxoindex_db_lifetime, utxoindex_db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
-    let consensus_manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(tc.clone()))));
+    let consensus_manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(tc.clone()))).unwrap());
     let utxoindex = UtxoIndex::new(consensus_manager.clone(), utxoindex_db).unwrap();
     let index_service = Arc::new(IndexService::new(
         &notify_service.notifier(),
@@ -1470,13 +1470,13 @@ async fn staging_consensus_test() {
         None,
         None,
     ));
-    let consensus_manager = Arc::new(ConsensusManager::new(consensus_factory));
+    let consensus_manager = Arc::new(ConsensusManager::new(consensus_factory).unwrap());
 
     let core = Arc::new(Core::new());
     core.bind(consensus_manager.clone());
     let joins = core.start();
 
-    let staging = consensus_manager.new_staging_consensus();
+    let staging = consensus_manager.new_staging_consensus().unwrap();
     staging.commit();
 
     core.shutdown();

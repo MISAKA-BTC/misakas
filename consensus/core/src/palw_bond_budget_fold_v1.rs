@@ -575,7 +575,7 @@ impl TransitionBuilder<'_> {
             || self.state.panel_v3.as_ref().and_then(|engine| engine.claim(&root)).is_some_and(|record| record.strata.is_some());
         let maximum = if shard { pool } else { pool / bonds.len().max(1) as u64 };
         let until = super::palw_exec_v2_rewards_v1::horizon(&self.state, self.params, &root)?.unwrap_or(claim.trace_retention_daa);
-        let checkpoint = self.checkpoint();
+        let checkpoint = self.try_checkpoint()?;
         for bond in bonds {
             if let Err(error) = self.hold_native_recipient_v1(root, bond, 1, now, until, maximum, &[]) {
                 self.restore(checkpoint);
@@ -1335,7 +1335,7 @@ impl TransitionBuilder<'_> {
         if maximum == 0 && actual == 0 {
             return Ok(());
         }
-        let checkpoint = self.checkpoint();
+        let checkpoint = self.try_checkpoint()?;
         let reserved = (|| {
             let capital = self.state.bond(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.collateral;
             if self.state.bond_budget.is_none() {
@@ -1819,13 +1819,13 @@ impl TransitionBuilder<'_> {
         open_round: u64,
         window_rounds: u64,
         forfeited: &std::collections::BTreeSet<Hash64>,
-    ) -> bool {
-        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return false };
+    ) -> Result<bool, PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(false) };
         if self.state.bond_budget.is_none() {
             // The pre-object clock creates and validates the book. Without it
             // no ticket may escape into the old uncapped fallback.
             schedule.quanta.clear();
-            return true;
+            return Ok(true);
         }
         let policy = mirror.policy;
         {
@@ -1851,7 +1851,7 @@ impl TransitionBuilder<'_> {
         }
         let span = schedule.span_index;
         let now = ctx.daa_score;
-        let checkpoint = self.checkpoint();
+        let checkpoint = self.try_checkpoint()?;
         let reserved = self.bond_budget_op(|budget, state, j| {
             for (bond, n) in allocated {
                 let capital = state.bonds.get(&bond).map(|r| r.collateral).unwrap_or(0);
@@ -1866,7 +1866,7 @@ impl TransitionBuilder<'_> {
             self.restore(checkpoint);
             schedule.quanta.clear();
         }
-        true
+        Ok(true)
     }
 
     /// **A Final's weight under the budget** (`finalize_claim`): the grant, clipped to the claim's reservation; the input unchanged for
@@ -2372,4 +2372,68 @@ impl TransitionBuilder<'_> {
 }
 pub(super) fn native_text_budget_id_v29(job: &misaka_palw_kernel::hash::Digest) -> Hash64 {
     Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"misaka-palw/native/original-text-maximum-budget/v29", job))
+}
+
+impl TransitionBuilder<'_> {
+    /// Owning39 funded work shares the original bond Q/T reservation. A paid
+    /// escrow job itself grants zero block, coinbase or Final-weight units;
+    /// actual recipient income is held separately under original role 11.
+    pub(super) fn plan_native_job_budget_v39(
+        &self,
+        ctx: &PalwBlockContextV2,
+        producer: PalwBondKeyV2,
+        class: &crate::palw_native_execution_v39::CheckedNativeClassV39,
+        maximum: &misaka_palw_kernel::flat_job39::CheckedJobMaximumV39,
+        quota: &misaka_palw_kernel::flat_quota11::owning39::CheckedQuotaV39,
+        admission: &crate::palw_native_job_v39::CheckedNativeFundingV39,
+    ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
+        let bad = |why: &str| PalwStateV2Error::BondBudgetRefused(why.into());
+        let extras = self.extras.kernel_route.as_ref().ok_or_else(|| bad("native39 budget lacks original native environment"))?;
+        let owning = extras
+            .native_execution39
+            .as_ref()
+            .filter(|f| f.activation != crate::config::params::ForkActivation::never() && f.activation.is_active(ctx.daa_score))
+            .ok_or_else(|| bad("native39 budget lacks active owning policy"))?;
+        let final27 = extras
+            .native_final
+            .as_ref()
+            .filter(|f| f.activation != crate::config::params::ForkActivation::never() && f.activation.is_active(ctx.daa_score))
+            .ok_or_else(|| bad("native39 budget lacks independent Final policy"))?;
+        let funded = extras
+            .funded_execution
+            .as_ref()
+            .filter(|f| f.activation != crate::config::params::ForkActivation::never() && f.activation.is_active(ctx.daa_score))
+            .ok_or_else(|| bad("native39 budget lacks original shared execution policy"))?;
+        let original = admission.original();
+        original.check(class, maximum, quota, &owning.policies).map_err(|why| bad(&why))?;
+        let bond = self.state.bonds.get(&producer).ok_or_else(|| bad("native39 original producer bond absent"))?;
+        if !matches!(bond.status, PalwBondStatusV2::Active)
+            || original.producer != producer
+            || original.producer_operator != bond.operator_id.as_bytes()
+            || original.requester_operator == original.producer_operator
+            || original.admitted_block != ctx.block.as_bytes()
+            || original.admitted != ctx.daa_score
+            || original.reserve == 0
+            || owning.policies.execution != funded.policies
+            || owning.policies.final_policy != final27.policy.root()
+            || extras.native_carriage_service.as_ref().map(|s| s.root()) != Some(owning.policies.physical_service)
+        {
+            return Err(bad("native39 original producer/current admission/shared terms/Final/physical policy differs"));
+        }
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return self.unbudgeted_panel_free_v1() };
+        if mirror.allocation_at(ctx.daa_score).is_some() {
+            return Err(bad("native39 funded work has no authenticated native model-line allocation"));
+        }
+        self.plan_bond_budget_v1(
+            ctx,
+            producer,
+            None,
+            PalwBudgetAskV1 { block_units: 0, reward_sompi: 0, final_weight: 0, liability_sompi: original.reserve as u128 },
+            PalwBudgetOriginV1::KernelRoute,
+            0,
+        )
+    }
+}
+pub(super) fn native_job_budget_id_v39(job: &misaka_palw_kernel::hash::Digest) -> Hash64 {
+    Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"misaka-palw/native/original-owning-job-budget/v39", job))
 }

@@ -259,16 +259,16 @@ pub fn derive_stage_source_caller_plan_v28(
     quota:&QuotaPolicyV11,execution:&ExecutionPolicyV11,discovery:&discovery13::DiscoveryPolicyV13,
 )->Result<CheckedStageSourcePlanV26,String>{
     execution.check(quota)?;discovery.check(quota)?;
-    let own=super::bounded28::derive_stage_quota_v28(class,job)?;
+    let own=if stage.is_invocation_v32(){super::bounded28::derive_stage_quota_v32(class,job)?}else{super::bounded28::derive_stage_quota_v28(class,job)?};
     if own.root()!=stage.root(){return Err("stage28 source caller changes independent maximum/actual quotation".into());}
     let source=stage.source_plan(class,quota,discovery)?;
     let requests=stage.requests_per_owner();
     let attempts=requests.checked_mul(2).ok_or("stage28 source caller attempt overflow")?;
     let required_horizon=(requests as u64).checked_mul(execution.horizons.da_answer).and_then(|n|n.checked_add(execution.horizons.proof_grace)).ok_or("stage28 acquisition horizon overflow")?;
-    let bytes=class.source_restore_bytes()
+    let bytes=if stage.is_invocation_v32(){stage.restore_bytes().checked_add(32768)}else{class.source_restore_bytes()
         .checked_add(borsh::to_vec(class.wire()).map_err(|e|e.to_string())?.len() as u64)
         .and_then(|n|n.checked_add(u64::try_from(job.input_raw_bytes()).ok()?))
-        .and_then(|n|n.checked_add(32768)).ok_or("stage28 source caller original restore extent overflow")?;
+        .and_then(|n|n.checked_add(32768))}.ok_or("stage28 source caller original restore extent overflow")?;
     let work=bytes.checked_mul(bytes).and_then(|n|n.checked_mul(64)).and_then(|n|n.checked_add(bytes.checked_mul(1024)?)).ok_or("stage28 caller restore work overflow")?;
     let mut request=action_envelope(work as u128,bytes,None)?;
     include_source_court_io_v11(&mut request,class.source().parameters())?;
@@ -422,4 +422,12 @@ pub fn check_text_source_owner_v29(
     let own=derive_text_source_caller_plan_v29(program,pc,text,quota,execution,discovery)?;
     if own.root()!=plan.root()||n.original_caller_plan!=plan.root()||n.original_plan!=text.root()||n.job!=anchor.job||n.funding!=anchor.funding||n.consent!=anchor.consent||n.claim==[0;64]||n.claim!=n.original_claim||n.actor==anchor.producer||n.actor_operator==n.producer_operator||n.actor_operator==[0;64]||n.producer_operator!=anchor.producer_operator||n.original_paid==[0;64]||n.seal==[0;64]||n.actual_debit==0||n.actual_receipt==[0;64]||n.paid_at!=epoch.block_daa||n.horizon>anchor.deadline||n.paid_at.checked_add(plan.required_horizon()).is_none_or(|x|x>n.horizon){return Err("text29 caller lacks exact original funding/source/claim/independent paid operator/epoch/full horizon".into());}
     Ok(CheckedStageSourceOwnerV26{binding,seal:n.seal,actor:n.actor,operator:n.actor_operator,original:n.original_paid,quote:plan.root(),epoch:epoch.clone(),horizon:n.horizon})
+}
+
+// Generated source26 native inventory bridge; private fields remain private.
+impl StageSourcePlanRecordV26 {
+ pub fn native_inventory_parts_v1(&self)->((&u16,&Digest,&Digest,&Digest,&Digest,&Digest,),(&Digest,&Digest,&Digest,&Digest,&Digest,&u32,),(&u32,&u64,&QuotaQuantitiesV11,&QuotaQuantitiesV11,&QuotaQuantitiesV11,),) {
+ let Self { version,class,source,real_parameters,inventory,admission,stage_quota,producer_source,trace_restore,quota_policy,execution_policy,requests,attempts,required_horizon,request,admission_cost,guarantee }=self;
+ ((version,class,source,real_parameters,inventory,admission,),(stage_quota,producer_source,trace_restore,quota_policy,execution_policy,requests,),(attempts,required_horizon,request,admission_cost,guarantee,),)
+ }
 }

@@ -73,11 +73,38 @@ impl PalwOwnedPublicPrefixCourtV1 {
     pub(crate) fn admit(
         inner: PalwOwnedPrefixCourtV1,
         producer: PalwBondKeyV2,
+        custody: PalwPrefixCustodyContractV1,
+        plan: PalwPrefixPublicAcquisitionPlanV1,
+        terms: PalwRenderingClaimTermsV1,
+        maximum_leaves: u64,
+        available_capital: u64,
+    ) -> Result<Self, String> {
+        Self::admit_v1(inner, producer, custody, plan, terms, maximum_leaves, available_capital, false)
+    }
+    /// A Bundle has already purchased the entire immutable descriptor, including
+    /// recovery and the native custody upper bound. Keep those terms verbatim;
+    /// the private actual plan remains the only semantic/source execution cap.
+    pub(crate) fn admit_with_allocation_v1(
+        inner: PalwOwnedPrefixCourtV1,
+        producer: PalwBondKeyV2,
+        custody: PalwPrefixCustodyContractV1,
+        plan: PalwPrefixPublicAcquisitionPlanV1,
+        allocation: PalwRenderingClaimTermsV1,
+        maximum_leaves: u64,
+        available_capital: u64,
+    ) -> Result<Self, String> {
+        Self::admit_v1(inner, producer, custody, plan, allocation, maximum_leaves, available_capital, true)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn admit_v1(
+        inner: PalwOwnedPrefixCourtV1,
+        producer: PalwBondKeyV2,
         mut custody: PalwPrefixCustodyContractV1,
         plan: PalwPrefixPublicAcquisitionPlanV1,
         mut terms: PalwRenderingClaimTermsV1,
         maximum_leaves: u64,
         available_capital: u64,
+        preserve_allocation: bool,
     ) -> Result<Self, String> {
         if !custody.public_qualified_v1()
             || custody.execution_root != inner.execution_root_v1()
@@ -91,28 +118,28 @@ impl PalwOwnedPublicPrefixCourtV1 {
         {
             return Err("public prefix court lacks exact qualified prospective custody/immutable opening clock".into());
         }
-        let need = plan.envelope.rent_sompi.checked_add(plan.envelope.deposit_sompi).ok_or("public prefix funding overflow")?;
+        if preserve_allocation && (PalwRenderingClaimTermsV1 { plan: inner.terms.plan, ..terms }) != inner.terms {
+            return Err("public prefix allocation changes the inner court's immutable clocks".into());
+        }
+        if preserve_allocation
+            && terms.open_until_daa.checked_add(terms.plan.inclusion_daa).is_none_or(|until| until > terms.stream_until_daa)
+        {
+            return Err("public prefix allocation has no full original execution/recovery inclusion window".into());
+        }
+        if !terms.plan.covers_v1(plan.envelope) || !plan.envelope.covers_v1(inner.terms.plan) {
+            return Err("public prefix execution exceeds a dimension of its paid allocation".into());
+        }
+        let funding = if preserve_allocation { terms.plan } else { plan.envelope };
+        let need = funding.rent_sompi.checked_add(funding.deposit_sompi).ok_or("public prefix funding overflow")?;
         if available_capital < need {
             return Err("public prefix complete hostile acquisition work is not funded".into());
-        }
-        for (actual, required) in [
-            (terms.plan.maximum_moves, plan.envelope.maximum_moves),
-            (terms.plan.maximum_stream_bytes, plan.envelope.maximum_stream_bytes),
-            (terms.plan.maximum_stream_leaves, plan.envelope.maximum_stream_leaves),
-            (terms.plan.maximum_parser_steps, plan.envelope.maximum_parser_steps),
-            (terms.plan.maximum_blake_blocks, plan.envelope.maximum_blake_blocks),
-            (terms.plan.inclusion_daa, plan.envelope.inclusion_daa),
-            (terms.plan.row_bytes, plan.envelope.row_bytes),
-            (terms.plan.resident_ram_bytes, plan.envelope.resident_ram_bytes),
-        ] {
-            if actual < required {
-                return Err("public prefix complete plan exceeds paid extended claim terms".into());
-            }
         }
         // Only actual current qualified custodians are liable for this fixed seed;
         // earlier drawn credited seats remain in the claim's separate historic holds.
         custody.credited.retain(|seat, _| custody.expected_panel.contains(seat));
-        terms.plan = plan.envelope;
+        if !preserve_allocation {
+            terms.plan = plan.envelope;
+        }
         let row = Self {
             claim: inner.claim,
             reserver: inner.reserver,
@@ -141,6 +168,9 @@ impl PalwOwnedPublicPrefixCourtV1 {
     }
     pub fn key(&self) -> (Hash64, PalwBondKeyV2, u64) {
         (self.claim, self.reserver, self.reserved_daa)
+    }
+    pub fn execution_plan_v1(&self) -> &PalwPrefixPublicAcquisitionPlanV1 {
+        &self.plan
     }
     pub fn seed_id(&self) -> Hash64 {
         self.inner.seed_id()
@@ -221,13 +251,25 @@ impl PalwOwnedPublicPrefixCourtV1 {
             || self.history_count > self.plan.envelope.maximum_moves
             || self.custody.execution_root != self.inner.execution_root_v1()
             || self.key() != self.inner.key()
-            || self.terms.plan != self.plan.envelope
+            || !self.terms.plan.covers_v1(self.plan.envelope)
+            || !self.plan.envelope.covers_v1(self.inner.terms.plan)
+            || self.plan.maximum_public_moves > self.plan.envelope.maximum_moves
+            || self.plan.maximum_sources > self.plan.envelope.maximum_stream_leaves
+            || u128::from(self.plan.maximum_public_carrier_bytes)
+                + u128::from(self.plan.maximum_archive_bytes)
+                + u128::from(self.inner.terms.plan.maximum_stream_bytes)
+                > u128::from(self.plan.envelope.maximum_stream_bytes)
             || self.rent_paid != self.plan.envelope.rent_sompi
             || self.deposit_locked != self.plan.envelope.deposit_sompi
             || self.public_moves_used > self.plan.maximum_public_moves
             || self.public_carriers_used > self.plan.maximum_public_moves
             || self.public_carrier_bytes_used > self.plan.maximum_public_carrier_bytes
             || self.sources_opened > self.plan.maximum_sources
+            || self
+                .terms
+                .open_until_daa
+                .checked_add(self.terms.plan.inclusion_daa)
+                .is_none_or(|until| until > self.terms.stream_until_daa)
             || self.terms.stream_until_daa > self.terms.collect_until_daa
             || self.terms.collect_until_daa > self.terms.material_until_daa
             || self.terms.material_until_daa > self.terms.bond_exit_after_daa
@@ -426,9 +468,7 @@ impl PalwOwnedPublicPrefixCourtV1 {
         self.pending.as_ref().map(|p| p.progress_v1())
     }
     pub fn pending_deadline_v1(&self) -> Option<u64> {
-        (!self.default_collected && !self.collection_expired && !self.claim_closed)
-            .then(|| self.pending.as_ref().map(|p| p.deadline_daa_v1()))
-            .flatten()
+        (!self.default_collected && !self.collection_expired).then(|| self.pending.as_ref().map(|p| p.deadline_daa_v1())).flatten()
     }
     pub fn pending_response_deadline_v1(&self) -> Option<u64> {
         (!self.default_collected && !self.collection_expired).then(|| self.pending.as_ref().map(|p| p.deadline_daa_v1())).flatten()
@@ -439,7 +479,7 @@ impl PalwOwnedPublicPrefixCourtV1 {
     }
     pub(crate) fn joint_default_v1(&self, now: u64) -> Result<Option<PalwPrefixJointDefaultV1>, String> {
         self.check()?;
-        if self.default_collected || self.collection_expired || self.claim_closed || now >= self.terms.collect_until_daa {
+        if self.default_collected || self.collection_expired || now >= self.terms.collect_until_daa {
             return Ok(None);
         }
         let Some(pending) = &self.pending else { return Ok(None) };
@@ -473,8 +513,8 @@ impl PalwOwnedPublicPrefixCourtV1 {
         self.collection_expired = true;
         self.check()
     }
-    /// Only the native fold's independently terminal claim edge authorizes this.
-    /// The literal unpaid/default material survives until its purchased retention.
+    /// Records an independent semantic/economic close, not this paid demand's
+    /// collection. Its unconsumed literal signer obligations and material survive.
     pub(crate) fn mark_claim_closed_v1(&mut self) -> Result<(), String> {
         self.claim_closed = true;
         self.check()
@@ -545,6 +585,84 @@ impl PalwOwnedPublicPrefixCourtV1 {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn immutable_allocation_keeps_recovery_separate_from_actual_execution_and_requires_full_funding() {
+        let (row, _) = fixture();
+        let config = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
+        let recovery =
+            crate::palw_history_custody_v1::history_recovery_resource_plan_with_wait_v1(1, 6, config.acquisition_daa, config.prices)
+                .unwrap();
+        let allocation = PalwRenderingClaimTermsV1::derive(
+            row.terms.accepted_daa,
+            row.plan.envelope.checked_sum_v1(recovery).unwrap(),
+            100,
+            100,
+            20,
+        )
+        .unwrap();
+        let mut inner = row.inner.clone();
+        inner.terms = PalwRenderingClaimTermsV1 { plan: inner.terms.plan, ..allocation };
+        let funding = allocation.plan.rent_sompi.checked_add(allocation.plan.deposit_sompi).unwrap();
+        let admit = |terms, capital| {
+            PalwOwnedPublicPrefixCourtV1::admit_with_allocation_v1(
+                inner.clone(),
+                row.producer,
+                row.custody.clone(),
+                row.plan.clone(),
+                terms,
+                row.maximum_leaves,
+                capital,
+            )
+        };
+        let mut admitted = admit(allocation, funding).unwrap();
+        assert_eq!(admitted.terms, allocation);
+        assert_eq!(admitted.plan, row.plan);
+        assert_eq!(admitted.inner.terms.plan, row.inner.terms.plan);
+        assert_eq!(admitted.rent_paid, row.rent_paid);
+        assert_eq!(admitted.deposit_locked, row.deposit_locked);
+        assert!(admit(allocation, funding - 1).is_err());
+        let mut altered = allocation;
+        altered.material_until_daa += 1;
+        altered.bond_exit_after_daa += 1;
+        assert!(admit(altered, funding).is_err(), "a funded owner cannot alter a frozen inner clock");
+        macro_rules! reject_deficit {($($field:ident),+ $(,)?)=>{$(
+            let mut short=allocation;short.plan.$field=row.plan.envelope.$field-1;
+            assert!(admit(short,funding).is_err(),"{} is not optional",stringify!($field));
+        )+};}
+        reject_deficit!(
+            prefix_tokens,
+            vocab,
+            maximum_stream_bytes,
+            maximum_stream_leaves,
+            maximum_moves,
+            maximum_parser_steps,
+            maximum_blake_blocks,
+            inclusion_daa,
+            rent_sompi,
+            deposit_sompi,
+            row_bytes,
+            resident_ram_bytes
+        );
+        let before = admitted.clone();
+        let checkpoint = admitted.checkpoint_v1();
+        let demand = admitted.next_demand_v1(100).unwrap().unwrap();
+        let (claim, owner, reserved) = admitted.key();
+        let seed = admitted.seed_id();
+        admitted.demand_v1(100, claim, owner, reserved, seed, Hash64::from_u64_word(991), &demand, 6000).unwrap();
+        assert_eq!(admitted.terms, allocation);
+        admitted.restore_checkpoint_v1(&checkpoint).unwrap();
+        assert_eq!(admitted, before);
+        let encoded = borsh::to_vec(&admitted).unwrap();
+        let restored: PalwOwnedPublicPrefixCourtV1 = borsh::from_slice(&encoded).unwrap();
+        restored.check().unwrap();
+        assert_eq!(restored, admitted);
+        let mut corrupt = restored.clone();
+        corrupt.terms.plan.rent_sompi = row.plan.envelope.rent_sompi - 1;
+        assert!(corrupt.check().is_err());
+        let mut corrupt = restored;
+        corrupt.plan.maximum_public_carrier_bytes = corrupt.plan.envelope.maximum_stream_bytes;
+        assert!(corrupt.check().is_err(), "carrier and archive storage are independently charged");
+    }
     use super::*;
     pub(crate) fn bond(n: u64) -> PalwBondKeyV2 {
         PalwBondKeyV2(crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_u64_word(n), index: 0 })

@@ -23,6 +23,14 @@ use tokio::time::timeout;
 
 pub const IBD_BATCH_SIZE: usize = 99;
 
+/// Upper bound on the number of hashes a peer may put in a SINGLE inbound block/body
+/// request (RequestRelayBlocks / RequestIbdBlocks / RequestBlockBodies). Honest senders
+/// ask for 1 (block relay, flow.rs) or chunk at [`IBD_BATCH_SIZE`] (99); a larger count
+/// is a malicious amplification attempt (one frame → N DB reads + N responses), so the
+/// receiver rejects it with a `ProtocolError` (which disconnects the peer). Kept a margin
+/// above `IBD_BATCH_SIZE` for cross-version batching variance.
+pub const MAX_REQUEST_HASHES: usize = 128;
+
 pub struct TrustedEntryStream<'a, 'b> {
     router: &'a Router,
     incoming_route: &'b mut IncomingRoute,

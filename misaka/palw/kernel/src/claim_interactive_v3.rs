@@ -37,7 +37,7 @@ impl CompiledClaimProofPlanV3 {
         Ok(plan)
     }
     pub fn id(&self) -> Digest {
-        object_id(b"MISAKA/PALW/CLAIM-PROOF-PLAN/V3", self)
+        object_id(if self.version == 4 { b"MISAKA/PALW/CLAIM-PROOF-PLAN/V4" } else { b"MISAKA/PALW/CLAIM-PROOF-PLAN/V3" }, self)
     }
     pub fn validate(&self, target: PaidClaimTargetV2, mode: InteractiveModeV1, rounds: u32, blocks: u64) -> Result<(), String> {
         // R7-RELATION (2026-10-15): a compact family's compiler id is recognized and refused by name, never read as an unknown plan.
@@ -48,8 +48,7 @@ impl CompiledClaimProofPlanV3 {
         if crate::claim_compact_v1::is_compact_relation_compiler_v1(&self.compiler) {
             return Err(crate::claim_compact_v1::COMPACT_RELATION_NOT_A_V3_PLAN_V1.into());
         }
-        if self.version != 3
-            || self.compiler != full_material_compiler_v3()
+        if !((self.version == 3 && self.compiler == full_material_compiler_v3()) || (self.version == 4 && self.compiler != [0; 64]))
             || self.target != target
             || self.mode != mode
             || mode == InteractiveModeV1::NonInteractive
@@ -72,18 +71,22 @@ impl CompiledClaimProofPlanV3 {
         if bytes.len() as u64 > self.maximum_material_bytes {
             return Err("proof opening exceeds signed byte capacity".into());
         }
-        Ok(object_id(b"MISAKA/PALW/CLAIM-PROOF-OPENING/V3", &(self.id(), bytes)))
+        Ok(object_id(
+            if self.version == 4 { b"MISAKA/PALW/CLAIM-PROOF-OPENING/V4" } else { b"MISAKA/PALW/CLAIM-PROOF-OPENING/V3" },
+            &(self.id(), bytes),
+        ))
     }
 }
-/// **R7-RELATION (RFC-0007 2026-10-15, item 5): compact proof families need their own versioned contracts.** The relation families
-/// a compact contract could cover; each has its own compiler identity, distinct from [`full_material_compiler_v3`].
+/// Historical family wire IDs, retained for explicit rejection and archive
+/// identification. Computation validity proofs are permanently prohibited by
+/// PRINCIPLES §8; this is not a list of future implementation candidates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum CompactProofFamilyV1 {
-    /// A sum-check reduction over the committed relation's multilinear extension.
+    /// Prohibited historical validity-proof family.
     SumCheckV1 = 0,
-    /// A layered-circuit (GKR-style) interactive proof.
+    /// Prohibited historical validity-proof family.
     GkrV1 = 1,
     /// A Freivalds-style randomized matrix-product check with an encoded query.
     FreivaldsV1 = 2,
@@ -93,10 +96,9 @@ impl CompactProofFamilyV1 {
     pub const ALL: [Self; 3] = [Self::SumCheckV1, Self::GkrV1, Self::FreivaldsV1];
 }
 
-/// **The versioned compact proof family contract — a STUB.** It names what such a contract must bind (the family, the exact target
-/// and relation encoding, the reviewed soundness statement and its bits, and finite proof/verifier bounds), so it can be reviewed and
-/// versioned apart from the full-material-opening compiler. No compact verifier exists in this tree: registration refuses every
-/// contract with [`COMPACT_PROOF_FAMILY_REFUSAL_V1`] — never silently accepted, never a fallback to the full-material plan.
+/// Historical contract grammar only. Registration is always refused. Direct
+/// Freivalds checks use authenticated operands and their own direct-check
+/// contract; no family-level validity proof can receive computation credit.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct CompactProofFamilyContractV1 {
     pub version: u16,
@@ -113,9 +115,7 @@ pub struct CompactProofFamilyContractV1 {
 }
 
 /// Why registration refuses every compact family contract today.
-pub const COMPACT_PROOF_FAMILY_REFUSAL_V1: &str = "family-level compact proof contracts are refused: they carry no relation coverage \
-     map, and no GKR/PCS verifier or independent soundness review exists (RFC-0007 2026-10-15 R7-RELATION); relation-level compact \
-     compilers use their own contract (claim_compact_v1, round 3, unreviewed)";
+pub const COMPACT_PROOF_FAMILY_REFUSAL_V1: &str = "computation validity-proof family contracts are permanently prohibited by PRINCIPLES section 8; historical wire IDs cannot be activated or relabelled as direct checks";
 
 /// The compiler identity of a compact family (distinct per family; never [`full_material_compiler_v3`]).
 pub fn compact_proof_family_compiler_v1(family: CompactProofFamilyV1) -> Digest {
@@ -278,4 +278,63 @@ mod tests {
         }
         assert!(!is_compact_proof_family_compiler_v1(&full_material_compiler_v3()));
     }
+}
+
+/// V4 retains the V3 field layout but names a registered whole-native contract.
+/// The native own fence and exact registration row authenticate this constructor.
+pub fn compact_plan_v4(
+    contract: &crate::claim_compact_v1::native_v2::NativeCompactContractV2,
+    coverage: &crate::claim_compact_v1::native_v2::NativeCompactCoverageV2,
+    adversary: crate::claim_compact_v1::native_v4::CompactAdversaryBudgetV4,
+    mode: InteractiveModeV1,
+    rounds: u32,
+    maximum_material_bytes: u64,
+    maximum_stream_blocks: u64,
+) -> Result<CompiledClaimProofPlanV3, String> {
+    let plan = CompiledClaimProofPlanV3 {
+        version: 4,
+        compiler: crate::claim_compact_v1::native_v4::compact_suite_id_v4(contract, coverage, adversary),
+        target: coverage.target,
+        mode,
+        rounds,
+        maximum_material_bytes,
+        maximum_stream_blocks,
+    };
+    plan.validate(coverage.target, mode, rounds, maximum_stream_blocks)?;
+    Ok(plan)
+}
+/// Bind previous direct-check records before drawing the next audit challenge.
+/// Hashes authenticate audit history only; no validity argument is accepted.
+/// No V3 domain or byte encoding changes.
+pub fn fs_round_seed_v4(
+    plan: &CompiledClaimProofPlanV3,
+    statement: Digest,
+    policy: Digest,
+    source: &VerifiedWorkBeaconV1,
+    round: u32,
+    prior: Digest,
+    message: Digest,
+    prior_rounds: &[(Digest, Digest, Digest)],
+) -> Result<Digest, String> {
+    if plan.version != 4
+        || plan.mode != InteractiveModeV1::TranscriptBoundFiatShamir
+        || round >= plan.rounds
+        || message == [0; 64]
+        || (round == 0) != (prior == [0; 64])
+        || prior_rounds.len() != round as usize
+    {
+        return Err("compact FS round order/statement mismatch".into());
+    }
+    let mut transcript = misaka_palw_challenge::FiatShamirTranscriptV1::new(
+        object_id(b"MISAKA/PALW/CLAIM-PROOF-FS-STATEMENT/V4", &(plan.id(), statement)),
+        policy,
+        source,
+    );
+    for (message, expected, proof) in prior_rounds {
+        if *proof == [0; 64] || transcript.absorb(plan.mode, *message).map_err(|e| e.to_string())? != *expected {
+            return Err("compact FS previous material/challenge/proof missing or substituted".into());
+        }
+        transcript.absorb(plan.mode, object_id(b"MISAKA/PALW/CLAIM-PROOF-FS-POST-PROOF/V4", proof)).map_err(|e| e.to_string())?;
+    }
+    transcript.absorb(plan.mode, message).map_err(|e| e.to_string())
 }

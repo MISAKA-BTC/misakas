@@ -10,26 +10,32 @@ use kaspad_lib::{
     args::Args,
     daemon::{DESIRED_DAEMON_SOFT_FD_LIMIT, MINIMUM_DAEMON_SOFT_FD_LIMIT, Runtime},
     private_integration::{
-        PrivateNativeCustodySpecV3, create_private_integration_core_with_native_custody_v3,
-        create_private_integration_core_with_runtime, export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3,
+        PrivateNativeCustodySpecV3, PrivateRecoveryAckFeeSpecV4, create_private_integration_core_with_native_custody_v3,
+        create_private_integration_core_with_native_custody_v4, create_private_integration_core_with_runtime,
+        export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3, export_private_paid_bootstrap_v4,
         export_private_paid_program_work_v3, prepare_private_integration_probe, private_complete_check_params_v1,
-        private_native_settlement_params_v1, private_paid_claim_params_v3, private_probe_manifest,
+        private_native_settlement_params_v1, private_paid_claim_params_v3, private_paid_claim_params_v4, private_probe_manifest,
     },
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 const USAGE: &str = "misaka-rfc12-private-node (requires --features private-integration-config)
---private-probe-profile=native-v1|population-v1|complete-v1|paid-v3 --private-probe-salt=HEX --testnet --netsuffix=12
+--private-probe-profile=native-v1|population-v1|complete-v1|paid-v3|paid-v4 --private-probe-salt=HEX --testnet --netsuffix=12
 population-v1 additionally requires --private-probe-bonds=N (actual funded registry only).
 Read-only mode: --print-private-probe-profile
-Offline export: --private-probe-export-bootstrap=FRESH_DIRECTORY (complete-v1 or paid-v3 only)
+Offline export: --private-probe-export-bootstrap=FRESH_DIRECTORY (complete-v1, paid-v3 or paid-v4)
 Offline actual paid Program work: --private-probe-paid-request=FILE --private-probe-export-paid-work=FRESH_DIRECTORY
-paid-v3 node mode, RFC-0008 PAV3 native custody (unverified, unapproved mechanics):
+paid-v3/paid-v4 node mode, RFC-0008 PAV3 native custody (unverified, unapproved mechanics):
   --private-probe-native-provider-keys=SEED_FILE@TXID:INDEX,SEED_FILE@TXID:INDEX[,...] (fixture seats, >=2 operators)
   --private-probe-native-provider-listen=ADDR:PORT (serve them to other private nodes; omit to serve this producer)
   --private-probe-native-exchange=ADDR:PORT (this node's producer seals through that provider service, signing each
     request with its --palw-producer-key; responses are verified with the chain's registered roster keys)
   --private-probe-native-network=loopback|remote (default loopback; remote admits separate hosts — every frame is
     ML-DSA-87 authenticated, nothing is encrypted: the exchanged material is public)
+paid-v4 hosted providers additionally require an explicit ACK carrier fee payer:
+  --private-probe-recovery-ack-key=ABSOLUTE_SEED_FILE
+  --private-probe-recovery-ack-funding=TXID:INDEX[,TXID:INDEX,...]
+  --private-probe-recovery-ack-fee-cap=SOMPI (maximum per carrier; same-key confirmed change may fund later ACKs)
+  --private-probe-native-recovery-providers=TXID:INDEX,TXID:INDEX[,...] (v4 producing custody nodes; sorted distinct 2..8)
 Node mode additionally needs explicit loopback P2P/gRPC/wRPC listeners, absolute owned --appdir,
 --nodnsseed --outpeers=0 --disable-upnp. Ordinary node flags are parsed by the shipped Args parser.
 The manifest exposes exact policy/monetary identity and releaseApproval=false; it does not prove
@@ -73,6 +79,10 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-native-provider-listen"
                         | "--private-probe-native-exchange"
                         | "--private-probe-native-network"
+                        | "--private-probe-recovery-ack-key"
+                        | "--private-probe-recovery-ack-funding"
+                        | "--private-probe-recovery-ack-fee-cap"
+                        | "--private-probe-native-recovery-providers"
                 ) {
                     return Err(format!("unknown private option {name}"));
                 }
@@ -116,8 +126,30 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         flags.values.remove("--private-probe-native-exchange").as_deref(),
         flags.values.remove("--private-probe-native-network").as_deref(),
     )?;
-    if native.is_some() && (profile != "paid-v3" || flags.print || bootstrap.is_some() || paid_output.is_some()) {
-        return Err("the PAV3 native custody options are paid-v3 node mode only".into());
+    let ack_fees = PrivateRecoveryAckFeeSpecV4::parse(
+        flags.values.remove("--private-probe-recovery-ack-key").as_deref(),
+        flags.values.remove("--private-probe-recovery-ack-funding").as_deref(),
+        flags.values.remove("--private-probe-recovery-ack-fee-cap").as_deref(),
+    )?;
+    let recovery_providers = flags
+        .values
+        .remove("--private-probe-native-recovery-providers")
+        .map(|raw| kaspad_lib::private_integration::parse_private_recovery_provider_roster_v4(&raw))
+        .transpose()?
+        .unwrap_or_default();
+    if !recovery_providers.is_empty()
+        && (profile != "paid-v4" || native.is_none() || flags.print || bootstrap.is_some() || paid_output.is_some())
+    {
+        return Err("recovery provider roster requires paid-v4 custody node mode".into());
+    }
+    if ack_fees.is_some() && (profile != "paid-v4" || native.is_none() || flags.print || bootstrap.is_some() || paid_output.is_some())
+    {
+        return Err("recovery ACK fee options require paid-v4 hosted provider node mode".into());
+    }
+    if native.is_some()
+        && (!matches!(profile.as_str(), "paid-v3" | "paid-v4") || flags.print || bootstrap.is_some() || paid_output.is_some())
+    {
+        return Err("the PAV3 native custody options require paid-v3 or paid-v4 node mode".into());
     }
     if !flags.values.is_empty() {
         return Err("unconsumed private option".into());
@@ -144,6 +176,7 @@ fn run(raw: Vec<String>) -> Result<(), String> {
     let params = match profile.as_str() {
         "complete-v1" => private_complete_check_params_v1(&salt)?,
         "paid-v3" => private_paid_claim_params_v3(&salt)?,
+        "paid-v4" => private_paid_claim_params_v4(&salt)?,
         "native-v1" => private_native_settlement_params_v1(palw_chain_params_v1(palw_drill_network_v1(), Some(&salt))?)?,
         "population-v1" => {
             private_native_settlement_params_v1(derive_private_population_v1(&salt, population.expect("size checked"))?.params)?
@@ -164,7 +197,8 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         let exported = match profile.as_str() {
             "complete-v1" => export_private_complete_bootstrap_v1(&config, Path::new(&output))?,
             "paid-v3" => export_private_paid_bootstrap_v3(&config, Path::new(&output))?,
-            _ => return Err("bootstrap export requires complete-v1 or paid-v3".into()),
+            "paid-v4" => export_private_paid_bootstrap_v4(&config, Path::new(&output))?,
+            _ => return Err("bootstrap export requires complete-v1, paid-v3 or paid-v4".into()),
         };
         println!("{}", serde_json::to_string_pretty(&exported).map_err(|e| e.to_string())?);
         return Ok(());
@@ -195,6 +229,15 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         .ok_or("private file descriptor budget exhausted")?;
     let runtime = Runtime::from_args(&args);
     let (core, rpc) = match native {
+        Some(native) if profile == "paid-v4" => create_private_integration_core_with_native_custody_v4(
+            &runtime,
+            &args,
+            budget,
+            config,
+            native,
+            ack_fees,
+            recovery_providers,
+        )?,
         Some(native) => create_private_integration_core_with_native_custody_v3(&runtime, &args, budget, config, native)?,
         None => create_private_integration_core_with_runtime(&runtime, &args, budget, config)?,
     };

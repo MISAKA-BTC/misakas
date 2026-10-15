@@ -27,7 +27,7 @@ pub(super) fn palw_lifecycle_carrier_rent_v2(
 /// A standard carrier's largest relay fee plus this object's rent and a positive change output.
 /// Keep the legacy float floor for ordinary moves; do not make cheap moves reserve a heavy proof's
 /// rent. The caller rechecks the actual signed carrier's price before it spends.
-pub(super) fn palw_lifecycle_funding_minimum_v2(
+pub(crate) fn palw_lifecycle_funding_minimum_v2(
     params: &kaspa_consensus_core::config::params::Params,
     object: &PalwConsensusObjectV2,
     daa: u64,
@@ -41,7 +41,7 @@ pub(super) fn palw_lifecycle_funding_minimum_v2(
 /// Shared production signer. Factored from the panel service so its real signed fee/change and
 /// signature can be checked without injecting a consensus service or a running mempool.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn build_lifecycle_carrier_v2(
+pub(crate) fn build_lifecycle_carrier_v2(
     config: &Config,
     kp: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair,
     object: &PalwConsensusObjectV2,
@@ -79,8 +79,12 @@ pub(super) fn build_lifecycle_carrier_v2(
             addr(&signable)
         ));
     }
-    let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() })
-        .map_err(|e| format!("the lifecycle payload does not serialize: {e}"))?;
+    // The derived struct serializer is exactly its two consecutive fields.
+    // Borrow the object rather than deep-cloning a proof before serialization.
+    let fields = (PALW_LIFECYCLE_TX_VERSION_V2, object);
+    let length = borsh::object_length(&fields).map_err(|e| format!("the lifecycle payload does not serialize: {e}"))?;
+    let mut payload = Vec::with_capacity(length);
+    borsh::to_writer(&mut payload, &fields).map_err(|e| format!("the lifecycle payload does not serialize: {e}"))?;
     let params = &config.params;
     let mass_calculator = MassCalculator::new(
         params.mass_per_tx_byte,

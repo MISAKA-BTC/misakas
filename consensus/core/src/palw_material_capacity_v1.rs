@@ -2,9 +2,9 @@
 //! canonical bytes it actually holds, including repeated checkpoint/opening
 //! bytes. Unsupported layouts never acquire a capacity certificate.
 use crate::{
-    Hash64,
     palw_held_da_v1::{PalwHeldDisclosureV1, PalwHeldMissingV1},
     palw_step_leg::PalwStepBindingV2,
+    Hash64,
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,6 +17,8 @@ pub enum PalwMaterialCodecV1 {
     NativeHeldComplete,
     KernelPositions,
     SegmentedParts,
+    /// Versioned complete typed court inventory, including snapshot slices and entries.
+    TypedKernelV4,
 }
 
 /// The full original and each continuation occupy separate signed scopes.
@@ -490,6 +492,27 @@ impl PalwMonetaryMaterialProviderStoreV1 {
         }
         self.admit_verified(consent, manifest, max_bytes, total_capacity, checked)
     }
+    /// Prospective work is checked by the native read-only replay before this
+    /// call. Its retained candidate remains the verifier context; no caller's
+    /// boolean or wire ledger can replace that authority.
+    fn admit_prospective_kernel_v4(
+        &mut self,
+        consent: Hash64,
+        material: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialOwnedV4,
+        bundle: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        max_bytes: u64,
+        total_capacity: u64,
+    ) -> Result<(), PalwMaterialCapacityErrorV1> {
+        use crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4 as B;
+        let scope = bundle.verify(material.candidate_ledger(), max_bytes)?;
+        let bytes = match bundle {
+            B::KernelPositions(b) => borsh::to_vec(b),
+            B::SegmentedParts(b) => borsh::to_vec(b),
+            B::TypedKernelV4(b) => borsh::to_vec(b),
+        }
+        .map_err(|_| PalwMaterialCapacityErrorV1::Capacity)?;
+        self.admit_verified(consent, material.manifest(), max_bytes, total_capacity, vec![(scope, bytes)])
+    }
     pub fn answer_action(
         &self,
         consent: Hash64,
@@ -512,19 +535,29 @@ impl PalwMonetaryMaterialProviderStoreV1 {
         match demand {
             PalwMonetaryMaterialDemandV1::Held(missing) => self.held_answer_action(consent, root, dependency, provider, missing),
             PalwMonetaryMaterialDemandV1::Kernel { stage, position } => {
-                if scope.codec != PalwMaterialCodecV1::KernelPositions {
-                    return Err(E::Substitution);
-                }
-                let bundle: PalwKernelMaterialBundleV1 = borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
-                if bundle.claim != dependency || digest(b"MISAKA/PALW/MONETARY-KERNEL-BUNDLE/V1", &bundle) != scope.content {
-                    return Err(E::Substitution);
-                }
-                let bytes = bundle
-                    .positions
-                    .into_iter()
-                    .find(|(s, p, _)| (*s, *p) == (stage, position))
-                    .map(|(_, _, b)| b)
-                    .ok_or(E::Incomplete)?;
+                let positions = match scope.codec {
+                    PalwMaterialCodecV1::KernelPositions => {
+                        let bundle: PalwKernelMaterialBundleV1 =
+                            borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
+                        if bundle.claim != dependency || digest(b"MISAKA/PALW/MONETARY-KERNEL-BUNDLE/V1", &bundle) != scope.content {
+                            return Err(E::Substitution);
+                        }
+                        bundle.positions
+                    }
+                    PalwMaterialCodecV1::TypedKernelV4 => {
+                        let bundle: crate::palw_prospective_kernel_material_v4::PalwTypedKernelMaterialBundleV4 =
+                            borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
+                        if bundle.claim != dependency
+                            || digest(b"MISAKA/PALW/MONETARY-TYPED-KERNEL-BUNDLE/V4", &bundle) != scope.content
+                        {
+                            return Err(E::Substitution);
+                        }
+                        bundle.units
+                    }
+                    _ => return Err(E::Substitution),
+                };
+                let bytes =
+                    positions.into_iter().find(|(s, p, _)| (*s, *p) == (stage, position)).map(|(_, _, b)| b).ok_or(E::Incomplete)?;
                 Ok(A::Answer { root, provider, dependency, stage, position, bytes })
             }
             PalwMonetaryMaterialDemandV1::Segmented { position, part } => {
@@ -567,6 +600,24 @@ impl PalwMonetaryMaterialProviderStoreV1 {
     }
     /// Every retained obligation as `(stored consent, signed root)`, in key order, for a provider janitor that asks the
     /// native GC witness about each one. Reading it authorizes nothing: deletion stays [`Self::release_if_finalized`]'s.
+    /// Exact retained native codec claims, grouped by stored consent. Metadata
+    /// GC uses the pre-delete set and only a verified native GC completion.
+    pub fn held_native_authorities_v1(&self) -> BTreeMap<Hash64, BTreeSet<Hash64>> {
+        self.contracts
+            .iter()
+            .map(|(consent, (_, manifest, _))| {
+                (
+                    *consent,
+                    manifest
+                        .scopes
+                        .iter()
+                        .filter(|scope| scope.codec == PalwMaterialCodecV1::NativeHeldComplete)
+                        .map(|scope| scope.claim)
+                        .collect(),
+                )
+            })
+            .collect()
+    }
     pub fn held_contracts_v1(&self) -> Vec<(Hash64, Hash64)> {
         self.contracts.iter().map(|(consent, (_, manifest, _))| (*consent, manifest.root)).collect()
     }
@@ -578,7 +629,34 @@ impl PalwMonetaryMaterialProviderStoreV1 {
         max_contract_bytes: u64,
         total_capacity: u64,
         ledger: Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,
+        authority: impl FnMut(Hash64) -> Option<PalwMaterialNativeAuthorityV1>,
+    ) -> Result<Self, PalwMaterialCapacityErrorV1> {
+        crate::palw_native_resource_v1::NativeRetainedV1::<Self>::recover_provider_verified_v1(
+            encoded,
+            max_contract_bytes,
+            total_capacity,
+            ledger,
+            authority,
+        )
+        .and_then(|owner| owner.into_unreserved_legacy_v1().map_err(|e| e.to_string()))
+        .map_err(PalwMaterialCapacityErrorV1::Authentication)
+    }
+    fn recover_verified_inner_v1(
+        encoded: &[u8],
+        max_contract_bytes: u64,
+        total_capacity: u64,
+        ledger: Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,
         mut authority: impl FnMut(Hash64) -> Option<PalwMaterialNativeAuthorityV1>,
+    ) -> Result<Self, PalwMaterialCapacityErrorV1> {
+        Self::recover_inner_v4(encoded, max_contract_bytes, total_capacity, ledger, &mut authority, None)
+    }
+    fn recover_inner_v4(
+        encoded: &[u8],
+        max_contract_bytes: u64,
+        total_capacity: u64,
+        ledger: Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,
+        mut authority: impl FnMut(Hash64) -> Option<PalwMaterialNativeAuthorityV1>,
+        mut retain_kernel: Option<&mut dyn FnMut(Hash64, &PalwMaterialScopeV1, &[u8]) -> Result<(), String>>,
     ) -> Result<Self, PalwMaterialCapacityErrorV1> {
         use PalwMaterialCapacityErrorV1 as E;
         if encoded.len() as u64 > total_capacity.saturating_add(1 << 20) {
@@ -593,22 +671,48 @@ impl PalwMonetaryMaterialProviderStoreV1 {
             let mut checked = Vec::new();
             for scope in &manifest.scopes {
                 let bytes = data.get(&scope.claim).ok_or(E::Incomplete)?;
-                let actual = match scope.codec {
-                    PalwMaterialCodecV1::NativeHeldComplete => {
-                        let bundle: PalwHeldMaterialBundleV1 =
-                            borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
-                        let native = authority(scope.claim).ok_or(E::Incomplete)?;
-                        bundle.verify(native, max_contract_bytes)?
+                let actual = if scope.codec != PalwMaterialCodecV1::NativeHeldComplete && retain_kernel.is_some() {
+                    // A signed identity frame can be kept without pretending a
+                    // historical claim is still present. This grants no answer
+                    // authority; that needs a fresh native-positive replay.
+                    let domain: &[u8] = match scope.codec {
+                        PalwMaterialCodecV1::KernelPositions => b"MISAKA/PALW/MONETARY-KERNEL-BUNDLE/V1",
+                        PalwMaterialCodecV1::SegmentedParts => b"MISAKA/PALW/MONETARY-SEGMENTED-BUNDLE/V1",
+                        PalwMaterialCodecV1::TypedKernelV4 => b"MISAKA/PALW/MONETARY-TYPED-KERNEL-BUNDLE/V4",
+                        PalwMaterialCodecV1::NativeHeldComplete => unreachable!(),
+                    };
+                    if bytes.len() as u64 != scope.bytes
+                        || bytes.get(..64) != Some(scope.claim.as_byte_slice())
+                        || bytes.get(64..68).is_none_or(|b| u32::from_le_bytes(b.try_into().unwrap()) != scope.units)
+                        || Hash64::from_bytes(misaka_palw_kernel::hash::id(domain, bytes)) != scope.content
+                    {
+                        return Err(E::Substitution);
                     }
-                    PalwMaterialCodecV1::KernelPositions => {
-                        let bundle: PalwKernelMaterialBundleV1 =
-                            borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
-                        bundle.verify(ledger.ok_or(E::Incomplete)?, max_contract_bytes)?
-                    }
-                    PalwMaterialCodecV1::SegmentedParts => {
-                        let bundle: PalwSegmentedMaterialBundleV1 =
-                            borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
-                        bundle.verify(ledger.ok_or(E::Incomplete)?, max_contract_bytes)?
+                    retain_kernel.as_mut().unwrap()(consent, scope, bytes).map_err(E::Authentication)?;
+                    scope.clone()
+                } else {
+                    match scope.codec {
+                        PalwMaterialCodecV1::NativeHeldComplete => {
+                            let bundle: PalwHeldMaterialBundleV1 =
+                                borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
+                            let native = authority(scope.claim).ok_or(E::Incomplete)?;
+                            bundle.verify(native, max_contract_bytes)?
+                        }
+                        PalwMaterialCodecV1::KernelPositions => {
+                            let bundle: PalwKernelMaterialBundleV1 =
+                                borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
+                            bundle.verify(ledger.ok_or(E::Incomplete)?, max_contract_bytes)?
+                        }
+                        PalwMaterialCodecV1::SegmentedParts => {
+                            let bundle: PalwSegmentedMaterialBundleV1 =
+                                borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
+                            bundle.verify(ledger.ok_or(E::Incomplete)?, max_contract_bytes)?
+                        }
+                        PalwMaterialCodecV1::TypedKernelV4 => {
+                            let bundle: crate::palw_prospective_kernel_material_v4::PalwTypedKernelMaterialBundleV4 =
+                                borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
+                            bundle.verify(ledger.ok_or(E::Incomplete)?, max_contract_bytes)?
+                        }
                     }
                 };
                 checked.push((actual, bytes.clone()));
@@ -619,6 +723,25 @@ impl PalwMonetaryMaterialProviderStoreV1 {
             recovered.admit_verified(consent, &manifest, max_contract_bytes, total_capacity, checked)?;
         }
         Ok(recovered)
+    }
+    /// Reading a retained generation does not authorize using it. The caller
+    /// must check current native generation/provider/exact scope before answer.
+    pub fn material_generation_scope_v4(
+        &self,
+        preferred: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+    ) -> Option<(Hash64, &PalwMaterialScopeV1)> {
+        if let Some((_, m, _)) = self.contracts.get(&preferred) {
+            if m.root == root {
+                if let Some(s) = m.scope(dependency) {
+                    return Some((preferred, s));
+                }
+            }
+        }
+        self.contracts.iter().find_map(|(consent, (_, manifest, _))| {
+            (manifest.root == root).then(|| manifest.scope(dependency).map(|scope| (*consent, scope))).flatten()
+        })
     }
     fn admit_verified(
         &mut self,
@@ -798,14 +921,12 @@ mod tests {
         assert_eq!(store, before);
         assert!(store.release_if_finalized(h(9), h(4), h(6), h(7), h(8), |_, _, _, _| Ok(true)).is_err());
         assert_eq!(store, before);
-        assert!(
-            store
-                .release_if_finalized(h(1), h(4), h(6), h(7), h(8), |root, consent, tail, block| {
-                    assert_eq!((root, consent, tail, block), (h(1), h(6), h(7), h(8)));
-                    Ok(true)
-                })
-                .unwrap()
-        );
+        assert!(store
+            .release_if_finalized(h(1), h(4), h(6), h(7), h(8), |root, consent, tail, block| {
+                assert_eq!((root, consent, tail, block), (h(1), h(6), h(7), h(8)));
+                Ok(true)
+            })
+            .unwrap());
         assert!(store.contracts.is_empty());
     }
     #[test]
@@ -817,3 +938,13 @@ mod tests {
         assert!(PalwMonetaryMaterialProviderStoreV1::recover_verified(&persisted, 1000, 1004, None, |_| None).is_err());
     }
 }
+
+// Owner-local exact private provider layout; no codec or visibility change.
+#[path = "palw_native_resource_v1/private/palw_material_capacity_v1.rs"]
+mod native_resource_inventory_v1;
+
+#[path = "palw_material_capacity_owner_v1.rs"]
+mod material_capacity_owner_v1;
+
+pub use material_capacity_owner_v1::prospective_kernel_bundle_auth_requests_v4;
+pub use material_capacity_owner_v1::prospective_kernel_bundle_requests_v4;

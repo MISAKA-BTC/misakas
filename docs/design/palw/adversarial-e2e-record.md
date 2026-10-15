@@ -241,3 +241,186 @@ lead; the honest race-loss cost `(n − 1)·d` per won claim is sized in `g14-no
 Round 3 is closed on this branch: **F-C4R3-01(b)** was fixed by OB-P0 on the integration line (the envelope signs the fork-id fired
 digest, not `consensus_params_id`) and its PoC passes after the merge of `claude/g14-public-prosecution-integration-9bee39`; **F-C4R3-04**
 is moot with no DAA-9,000 flag day.
+
+---
+
+# Round 4 — Agent C4R4 (2026-10-09)
+
+Branch `adv/c4r4`. Attacked (merged into the branch, commits recorded): `g14/r4-fixes` @ `eea63a130` (escrow GAP-5, bonded claim seals,
+served demand bonds, accuser seals GAP-R7, reserved proof runs F-C4R3-05 round 2), `opv/bootstrap-beacon` @ `410d430e5` (effective
+false-accept accounting, distinct source rules, complete-check policy shape — the challenge-crate half; derived eligibility E1–E7, the
+complete-check bootstrap and the sealed-source beacon v3 are not on any branch yet), `fix/partition-rejoin` @ `2d6d77f7c` (N2 watchdog,
+N3 readers, `--palw-verified-resync`; F-C4R4-09's PoC and fix were then committed there, at the Lead's request, and merged back), and
+the integration line @ `eb75f568e` (PRINCIPLES, registry). Read, not merged: `fix/a2-uniform-new-tags`
+@ `37676d2c2` (A2U, WIP), `k2/real-scale` @ `a492011ec` (conflicts with `g14/r4-fixes` in `ledger.rs`/`rows.rs`/`route.rs`/`processor.rs`; an
+integration step, not this lane's).
+
+Every target here is dormant (`palw_probabilistic_constraints_v1` / `palw_panel_free_v1` are refused at every real height) or node-local
+and not deployed: **nothing in this round affects live int-12**, and no t12 id moves (tests and dormant-fence code only). Convention as in
+rounds 1–3: a defect's test asserts the SAFE property and is `#[ignore = "FAIL F-C4R4-nn …"]` until its fix; `obs` tests pin by-design
+behaviour, quantified.
+
+## How to run
+
+```text
+export CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0
+cargo test --offline -p misaka-palw-kernel --test c4r4 -- --include-ignored
+cargo test --offline -p misaka-palw-challenge --test c4r4_grinding
+cargo test --offline -p kaspa-p2p-flows --lib --test partition_watch_front_runner -- partition_watch front_running first_deliverer genuine_minority
+cargo test --offline -p kaspa-consensus --lib g14_c4r4 -- --include-ignored
+```
+
+## Findings
+
+| id | sev | what | PoC | root cause | status |
+|---|---|---|---|---|---|
+| F-C4R4-03 | **P1 where armed** | **A squatter's claim seal froze a poster's escrow — and its whole bond's exit — indefinitely.** GAP-5 returns an idle escrow only while no producer seal of the job is live; a seal is an unbacked promise any bond may make on any unclaimed job, and a re-seal keeps its one deposit and restarts its clock. `Withdraw` needs `reserved == 0` (V2's exit gates read the same row on the node), so one locked seal deposit (1 BILI interim) held the harness poster's whole 1,000,000-unit bond, exit requested, for as long as the squatter re-sealed every < 100 DAA. | kernel `c4r4::f_c4r4_03_a_squatter_seal_never_holds_a_posters_escrow_or_exit_past_the_ttl_and_one_seal_ttl` (+ control: a producer that sealed before the TTL is still paid) | `misaka-palw-kernel/src/ledger.rs` `release_idle_job_escrows` (any live seal blocks the return; re-seal restarts it) | **FIXED `a1473a3d9`**: a seal holds an escrow at most until `posted + job_escrow_ttl + seal_ttl` (a seal placed by the escrow's TTL has one seal TTL to reveal, and expires then anyway) |
+| F-C4R4-05 | **P1 where armed** | **One dismissed filing per block holds every valid proof out of the court.** `charge` debits a `FileProof` its class's DECLARED worst court work, before the court runs, from ONE per-block court budget all classes share; registration refuses only a class whose worst court is ABOVE the block's. One junk filing against any proof-open claim of the heaviest class (the attacker's own honest claim serves) spends the block's court work, and every later `FileProof` in the block is `OverBudget` (dropped, free). Cost: ONE `dismissed_proof_fee` per block, not the `max_adjudications × fee` (6.4 BILI a block, ~1,600 BILI over window + liability) of G14-R4's bound and RFC-0015 §6.3's `censorship_cost`. The prosecution reserve reserves runs, not court work, and `censorship_cost` is evaluated per class with that class's own worst court, so a LIGHT class passes it while a heavy class registered beside it (Panel mode: no economics check) makes its prosecution censorable at one fee per block. The court-work cap binds before the run cap for any class whose worst court exceeds `max_court_work_per_block / max_adjudications_per_block` (2^30 / 64 ≈ 1.7·10^7 interim). No crafted class is needed: the test fixture's own class, with its declared long-context history window, has a worst court of 2^27, so 8 filings fill a 2^30 block. Unlike a run flood, which needs ≥ 64 carriers of ~5–10 KB in one block (more than a block holds), this needs one to eight carriers. Measured before the fix (block budget = the class's worst court): 49 blocks censored for 245 in fees (5 a block) against the 320 a block the relation prices; the lie reached Final unconvicted. | kernel `c4r4::f_c4r4_05_one_junk_filing_must_not_buy_a_whole_blocks_court` | `ledger.rs` `charge` / `file_proof` (fee flat, work at the declared worst); `opv.rs` `censorship_cost` (per class) | **FIXED `2dfcee86e`**: a dismissal forfeits `dismissed_proof_fee × ⌈worst_court × max_adjudications / max_court_work_per_block⌉` (at least one fee) — `LedgerPolicyV1::dismissal_fee_v1`; saturating a block's court now costs ≈ `max_adjudications × fee` whichever class the junk names (after the fix the attacker's three scaled fees are 960 = 3 × 320, and the lie is convicted in the fourth block). Unchanged where every class is light (the multiplier is 1: no golden moves). **Owner follow-up (G14-R4):** `censorship_cost` should take the per-block lower bound `fee × max(1, ⌊A·(B − W)/B⌋)` (cross-class), and the end-of-lane item 12 should cite this |
+| F-C4R4-10 | P2 (P1 where a block carries ≥ cap − reserve refutations) | **The onboarding court spends the runs reserved for proofs.** A tag-109 `Refute` (any Active bond of another operator; a refutation that proves nothing is dismissed with NO fee) and a `Post` charge the block's budget through `charge_route_budget_v1`, which compares with `max_adjudications_per_block` — the whole block — while the kernel's own `charge` stops every object but a `FileProof` short of `prosecution_reserved_runs()` (G14-R4's round-2 fix). Measured in the four-run harness: four free junk refutations spend all four runs, two of them reserved. At the interim 64-run cap a full bypass needs ≥ 64 refutation carriers in one block, more than a 500,000-mass block of ML-DSA-signed carriers holds; the guarantee the reserve states is nevertheless conditional on that capacity. | node `g14_c4r4_junk_conformance_refutations_must_not_spend_the_runs_reserved_for_proofs` | `consensus/core/src/palw_kernel_route_fold_v1.rs` `charge_route_budget_v1` | **FIXED `63da18025`**: onboarding objects stop at `max − reserved`, as every kernel object but a `FileProof` does; the lane's hostile-evidence test now reads 2 of 4 runs spent (it asserted 4 of 4 before) |
+| F-C4R4-11 | P2 (P1 where a block carries ≥ cap refutations) | **Free junk refutations can carry forged conformance evidence through its window.** For the same reason (a dismissed refutation is free), junk refutations ahead of a valid one in every block of the 80-DAA window keep the valid refutation over budget until the forgery passes. The reserve fix does not change it (honest and junk refutations share the runs left). Not reachable at the interim 64-run cap with ~5–10 KB carriers (a block holds fewer refutations than runs); the four-run harness shows the mechanism. | node `g14_c4r4_free_junk_refutations_must_not_carry_forged_evidence_through_its_window` | `consensus/core/src/palw_onboarding_fold_v1.rs` (the dismissed-refutation path charges the budget and nobody) | **OPEN**, routed by the Lead to OPVB (sketch items 1–3; item 4 deferred to a doc follow-up). Measured in the four-run harness: 80 blocks of four junk refutations plus one valid one, and the forged evidence ends `G14Eligible`. Fix sketch: (1) a `Refute` is a proof and may spend the reserve; (2) one judged refutation per (attempt, refuter bond) per window — censoring then needs a fresh Active bond for every run of every block (64 × 80 at interim); (3) a refutation that proves nothing forfeits `dismissed_proof_fee`; (4) optionally, a refutation dropped over budget in the window's last block extends it by one block. A fee alone only prices the attack |
+| F-C4R4-09 | **P1 for shipping N2 to any live network** (node-local, not deployed) | **One outbound peer holds a node on its own chain.** The relay flow notes a peer only when it is the FIRST to deliver a block (a known or already-requested inv is skipped before `observe_relay_for_partition`), and "ours" is `is_chain_ancestor_of(sink, block)`, so a DAG sibling (an attempt beside the slot's heartbeat) is noted `Other` even from an honest peer. One attacker-run outbound peer, ten minutes connected, that announces every new chain block first (relaying invs before validating wins every race) collects all `ExtendsOurs` notes; the honest outbound peers are noted only for the siblings they deliver first; given any refusal run the node holds. The module's threat model assumes an eclipse (most long-lived outbound peers); one slot suffices, and an attacker with one outbound slot on many nodes holds them all. The same peer keeps a `--palw-verified-resync` pending forever (it needs two peers noted ours). With no attacker, a systematically fastest honest peer has the same effect. | flows `partition_watch_front_runner` (on `fix/partition-rejoin`; PoC `2180fd2bb`, ignored FAIL there) | `protocol/flows/src/v7/blockrelay/flow.rs` (known/requested inv skipped; `observe_relay_for_partition` after a processed block), `protocol/flows/src/flow_context.rs` `observe_relay_for_partition` (chain-ancestor relation) | **FIXED `d8db65082` on `fix/partition-rejoin`** (the Lead's assignment): `BlockPlace` — ours on this node's selected chain either side of the sink, Other only extending the refused tip's chain, a sibling notes nobody; every announcer is credited (`note_announced` for an in-flight block, bounded 4,096; `observe_relay_for_partition` also for an inv of a known block). The PoC is un-ignored; the old crediting stays pinned in the test (it holds); a genuine minority still holds. The refusal half is not described here |
+| F-C4R4-01 | P2 (design; dormant) | **The distinct source rules tell bonds apart, not parties.** Two Sybil producer bonds and two Sybil poster bonds, one work on each of two eligible classes, settled first, own EVERY position of a `Distinct` and a `DistinctClassCapped` beacon; honest Finals settled later are never read, and since every input is the attacker's, all of them are ground offline (4,096 nonce pairs → 4,096 beacons, an 8-bit target hit). The rule prices capture (k producer bonds, k jobs, k OPV reservations; a tiny complete-check class makes the second class cheap); it does not stop it. | challenge `c4r4_grinding::f_c4r4_01_…` | `misaka-palw-challenge/src/beacon.rs` `canonical_attributed_sources_v1` (first-k by settlement) | OPEN (OPV-BOOT, SG-01a): mix every eligible Final of the window, or v3 with a seal window that closes before any reveal; account the distinct rules as a cost |
+| F-C4R4-08 | P2 (cross-lane accounting) | **The grinding bound reads a live cap that no longer bounds the Finals of a beacon window, and no state names a Final job's poster.** OPV-BOOT's `beacon_grinding_choices_bound_v1(k, live_cap, F)` takes `live_cap = max_live_claims_total` because "every work that can settle in one window is live at once"; since F-C4R3-05 only pre-Final claims hold slots, a slot frees at Final and refills. Measured (example policy: total 5, fresh 2, window 50; a 120-slot beacon window): 14 OPV Finals, `P(14,2) = 182` lists, not `P(5,2) = 20`; at the interim 32 + 16 / 50 / 120: 96 Finals, 14 bits not 10. And the only state naming a job's poster is its escrow row, removed when its Final is paid (`KernelJobV1` has no poster): a node deriving `consumer_id` from state sees `Absent` for every Final source, so "distinct consumers where known" never binds. | kernel `c4r4::f_c4r4_08_…` | `misaka-palw-challenge/src/soundness.rs` (live-cap premise), `misaka-palw-kernel/src/opv.rs` `opv_admission` (pre-Final caps), `ledger.rs` `pay_from_job_escrow` | OPEN (OPV-BOOT): `C = hard × ⌈(beacon_window − window)/window + 1⌉`; record the poster on the claim or job row (a ledger table change, G14-R4) |
+| C4R4-A2-113 | pin (known in-flight A-2 member) | Tag 113 (`KernelRouteChunkV1`, G14-R4) runs its may-ride arm at isolation: an unsigned / out-of-range chunk is `ObjectMayNotRide` where int-12 tolerates undecodable bytes (A2U's member #3 shape). A2U §3.4 names it; its exhaustive owner match forces the row at merge. | node lib `g14_c4r4_a2_a_tag_113_carrier_below_its_fence_is_judged_as_undecodable_bytes` (ignored FAIL until A2U and G14-R4 meet) | `consensus/core/src/palw_lifecycle_objects_v2.rs` (113's may-ride arm) | in A2U's queue |
+
+## Observations (quantified; no new defect)
+
+| id | what |
+|---|---|
+| O-C4R4-02 | **Watcher absence** (`c4r4::f_c4r4_02_obs_…`): with no honest verifier through window + liability, a provable OPV lie is paid the escrow (7), keeps its whole reservation (1,000) and is permanent; producer profit = reward − admission fee (4), consumer loss = reward + job fee (9), nothing slashed. The honest-verifier assumption is load-bearing (PRINCIPLES §5), not enforced. |
+| O-C4R4-06 | **The served-demand-bond rule sets the verifier's cost** (`f_c4r4_06_obs_…`): nothing obliges a producer to publish; against one that serves only on demand, checking an honest claim costs the verifier one burned demand bond per position (5 positions, 50 of the test bond), the producer nothing. Combined with O-C4R4-02, PRINCIPLES §6 condition 6 (verifier incentive) is not met by the bounty alone. |
+| O-C4R4-07 | **The producer's Sybil takes the bounty of its own conviction** (`f_c4r4_07_obs_…`): it seals its own proof at once; a verifier's `SealProof` names the claim in clear a seal-delay before the filing, so the Sybil files first: verifier 0, Sybil 500, colluders −500 of 1,000 (deterrence holds as G14-R4 priced it). Measured: the proof bytes do NOT depend on the verifier's salt (the producer's and the outsider's proofs are byte-equal), so the pre-seal captures the bounty passively, with no race at all. Against a rational liar a verifier's expected bounty is zero: a verifier incentive must come from something the accused cannot capture (or blind seals that do not name the claim). |
+| O-C4R4-12 | **The losing sealer of a job race forfeits its deposit** (`f_c4r4_12_obs_…`): once another claim holds the job, a sealer can never reveal, and its seal expires as if it had withheld (1 BILI). v3 should not read such a forfeit as a withheld source; a deposit whose reveal another claim made impossible could be returned when the job is taken. |
+| O-C4R4-capture | **F-C4R3-05 round 2's capture price is an upper bound** (`f_c4r4_obs_capture_…`: a slot held 50 DAA plainly, 78 with a self-demand served late). The end-of-lane formula holds each slot for one window; a colluder's own demand filed at the window's last DAA and served at the deadline's last stretches a slot's pre-Final life to `window + deadline + grace` (`OpvPolicyV1::hard_deadline`, 80 DAA interim), cutting the locked collateral of a continuous capture from `48 × 1,000 × 250/50 = 240,000` to `48 × 1,000 × 280/80 = 168,000` BILI (−30 %) for one burned demand bond per slot-cycle. |
+| O-C4R4-respond | **O-C4R3-respond after the reserve.** A rejected `Respond` (any bond) still spends a run for free; the reserve halves the runs it competes for (32). Forcing an honest producer's default this way (a valid response kept `OverBudget` until the demand's deadline, the demander then taking its share of the penalty) needs ≥ 32 junk carriers per block — near a block's capacity of ML-DSA-signed carriers. G14-R4's end-of-lane item 9 (producer-only `Respond`, or a fee) closes it. |
+| O-C4R4-Q | **The adaptive term `Q` is stated, not enforced.** Effective bits subtract `⌈log2 Q⌉` for the subjects an adversary may commit; the chain keys conformance attempts by `(class, artifact)` (`apply_conformance_committed_v1`), so a new V2 class over the same artifact gets a fresh `retry_limit + 1`. Nothing caps attempts per artifact (or per program), so `Q` is the adversary's budget over the registration price. E6 needs a per-artifact attempt counter (or the tuple must state `Q` against that price). E6 must also read the approved tuple's reviewed relation soundness, never a scope's declared fault density (round 1's GAP-C4-D). |
+| O-C4R4-A2-2 | **A-2 two levels down, after the full activation.** A2U's inner table owns kernel-route inner kinds by TAG; a new variant nested inside an existing inner kind (K2S's `ProsecutionV1::Segmented = 3` inside `FileProof`, R4X's `ProsecutionV1` 4) is owned by neither that table nor the int-12 manifest (int-12 decodes no kernel type). Both ship in the one full-activation release, so no two builds differ on them today; the first release AFTER it needs a frozen kernel wire-type manifest (the int-12 manifest's mechanism) so a later nested variant rides unjudged below its fence. |
+
+## Held
+
+| attack | evidence | verdict |
+|---|---|---|
+| pre-Final-default liability horizon edge (F-C4R3-02) | `c4r4::f_c4r4_04_…`: a proof at `default + liability_daa` convicts (900 held, 500 bounty); one DAA later refused free | holds |
+| escrow double pay / mint | read: `pay_from_job_escrow` removes the row; a later Final of the same job pays 0; no `FinalReward` outside it (G14-R4's tests) | holds |
+| demand-bond fate ordering at the horizon | read: a conviction at `liability_until` refunds (inclusive); the tick burns only at `liability_until + 1`, after the same block's objects | holds |
+| A2U's inner-kind gate vs a build without the kind | read: both drop in the acceptance walk's gate (`palw_kernel_route_object_is_signed`), before the fold writes a header or budget row | holds |
+
+## Results (milestone 1 on `adv/c4r4`, one slot)
+
+* Kernel PoCs on the UNFIXED ledger (PoC commit `e57e81bb9`): F-C4R4-03 and F-C4R4-05 FAIL as asserted; every observation passes with the
+  numbers above.
+* With the fixes: kernel `c4r4` 9/9; `k2_ledger` / `k2_ledger_route` / `k2_opv` filtered to escrow, seal, dismissal and self-inflicted
+  tests: pass; challenge `c4r4_grinding` 1/1; flows `partition_watch` unit tests 5/5 and `partition_watch_front_runner` 4/4 (the N2 fix on
+  `fix/partition-rejoin`); the node `g14_` suite 71 pass, including F-C4R4-10's PoC and OB-P0's conformance suite.
+* Still failing, as asserted: F-C4R4-11 and the tag-113 pin (`--ignored`).
+* One `g14_` failure that is not this round's: `g14_kernel_route_a_chunked_object_is_signature_checked_at_the_completing_chunk` asserts
+  "reserves nothing" after a tampered chunked claim, but the unrevealed claim's seal deposit (1 BILI, G14-R4's bonded seals `00b2491cc`)
+  is reserved until its TTL — a stale expectation, routed to G14-R4 by the Lead.
+
+## Commits (C4R4)
+
+`e57e81bb9` PoCs · `a1473a3d9` fix(F-C4R4-03) · `2dfcee86e` fix(F-C4R4-05) · `63da18025` fix(F-C4R4-10) · on `fix/partition-rejoin`:
+`2180fd2bb` PoC and `d8db65082` fix(F-C4R4-09), merged back, and into the integration line at `b5678e4ff` · this record.
+
+## Not attacked in round 4
+
+OPV-BOOT's derived eligibility E1–E7, the complete-check bootstrap (`PostComplete`) and the sealed-source beacon v3 — not on any branch
+at `410d430e5` (design reviewed: F-C4R4-01/08, O-C4R4-Q; `PostComplete` will charge `charge_route_budget_v1`, which now respects the
+reserve). N3's sink readers (RPC-only). K2S's real-scale route (`k2/real-scale` @ `a492011ec` does not merge cleanly with `g14/r4-fixes`).
+
+---
+
+# Round 4b — Agent C4R4, successor (2026-10-10)
+
+Branch `adv/c4r4` after merging `g14/r4-fixes` @ `0ef5084d1`, `opv/bootstrap-beacon` @ `6e9dfa065` (its fix of the merge's 3-argument
+DA16 call made the branch compile again) and, through both, the integration head `b8ae9412b` (the user's `pre`: ADR-0175/0176/0177,
+ADR-0032 49%), then INTF's `int/rs49-fence` @ `f7ed9642c` (the 49% behind `palw_reporter_share_v2`). The round-4 fixes `a1473a3d9`, `2dfcee86e`, `63da18025` are
+unchanged. Priority (user, 2026-10-10): **G14 under full collusion** — the producer and every Panel seat collude; one public bonded
+verifier outside the Panel must reach a conviction, the correct DA default, or the dismissal of an honest claim, from public
+authenticated material only. Then ADR-0032's 49% as self-dealing, then ADR-0177 non-interference.
+
+Every target is dormant (the kernel route, OPV, the provider court: validation refuses arming) or a pure function: **nothing here
+affects live int-12**, and no t12 id is moved by this round (tests only). `pre` had made R-core's share 49% unfenced (moving the t12
+ids); INTF's merged fence restores the historical 10% below `palw_reporter_share_v2`, and the 49% tests below use its `*_v2` functions.
+Cross-references to G14C's matrix (`g14/completion` @ `82a176a77`): F-C4R4-19 is its GAP-05 with a PoC, F-C4R4-17 its GAP-06 with a
+PoC; F-C4R4-13 is the kernel analogue of the t12 note that a bystander's accusation is outrun by the timeouts (C8).
+
+## How to run (round 4b)
+
+```text
+cargo test --offline -p misaka-palw-kernel --test c4r4 -- --include-ignored
+cargo test --offline -p kaspa-consensus-core --test c4r4_reporter_share_49 -- --include-ignored
+cargo test --offline -p kaspa-consensus --lib -- --include-ignored g14_c4r4
+cargo test --offline -p kaspa-p2p-flows --lib --test partition_watch_front_runner -- partition_watch front_running first_deliverer genuine_minority
+```
+
+## N2 verification (F-C4R4-09)
+
+Merged tree, one batched run with `--no-fail-fast`: flows `partition_watch` 5/5, `partition_watch_front_runner` 4/4 — F-C4R4-09's PoC
+(a front-running outbound peer neither holds the node on its own chain nor keeps a `--palw-verified-resync` pending) passes, the
+first-deliverer crediting of `2d6d77f7c` stays pinned (it held), a genuine minority still holds. **Verified** (node-local; not armable:
+no live deployment decision).
+
+## G14 under full collusion — the five questions
+
+| # | question | result |
+|---|---|---|
+| 1 | pre-empt / censor the outsider's filing | **Held** at the kernel: a self-conviction still convicts (the bounty is captured, O-C4R4-07); filings and refutations that take a run pay a fee (F-C4R4-05, OPVB's F-C4R4-11 fix), so censoring a block costs about `max_adjudications × fee` for the whole window + liability; the chunk lane is per opener (F-C4R3-03). |
+| 2 | force a timeout, or withhold so the case ends in no default | **Broken on the Panel route: F-C4R4-13.** Withholding ends in a default (held, F-C4R3-02); a demand holds a `Checking` claim; but a service one DAA past the receipts' deadline times the claim out in the serving block. |
+| 3 | reach Final before the outsider can file | **Held**: proof grace after a service, post-Final liability with the reservation held, the horizon edge inclusive (F-C4R4-04). |
+| 4 | make the outsider need secret state | **Conditional (ADR-0177)**: a kernel fault proof opens a weight column; the chain never serves weights, so without the model p = 0 (O-C4R4-Q4). The only on-chain route to the weights is the cumulative scope ADR-0177 forbids (F-C4R4-17). |
+| 5 | exhaust the shared court budget | **Broken for the honest-claim leg: F-C4R4-14** — a rejected `Respond` is the last free run consumer. Proof runs are priced (row 1). |
+
+## Findings (round 4b)
+
+| id | sev | what | PoC | status / owner |
+|---|---|---|---|---|
+| F-C4R4-13 | P2 where armed | **A Panel-route claim served past its receipts' deadline times out in the serving block**; the proof the service enables is refused ("ended without passing"). The colluding Panel never covers; the producer serves the TRUE values one DAA past the deadline: no conviction, no default, collateral 5,000 → 5,000. A fraud caught in `Checking` is free. `ProofGrace` holds Final, not the timeout. | kernel `c4r4::f_c4r4_13_…` (ignored FAIL) | OPEN → G14R. Fix sketch: `Checking` times out only at `daa ≥ final_hold_until` (lifecycle, two arms: `Tick` and the late `Tally`) |
+| F-C4R4-14 | **P1 where armed** | **Free rejected responses force an honest producer's default.** A rejected `Respond` pays nothing but spends a non-reserved run before classification. 32 junk a block × 20 DAA keeps the valid response `OverBudget`; at the deadline the honest producer pays the default (100), the griefer-demander takes 50, the claim is voided. (b) works with the junk signed by the griefer AS THE PRODUCER of its own self-demanded claim, so a producer-only `Respond` does not fix it. Needs ordering (a mining griefer, or fee priority) over 20 DAA. | kernel `c4r4::f_c4r4_14_…` (ignored FAIL; (a) and (b) both: 640 free junk over 20 DAA, default 100, griefer paid 50) | OPEN → G14R (its end-of-lane item 9). Fix sketch: a rejected response pays `dismissed_proof_fee` (checked free before the charge), a serving response may spend the proof reserve, and `validate()` requires `(A − r) × court_deadline × fee > accuser_share × default_penalty` |
+| F-C4R4-15 | P2 where armed (ADR-0032) | **A default then a self-conviction recycles more than 49% of what they collected.** F-C4R3-02 pays the bounty "as if no default came first", but the default's demander share was already paid from the same reservation. At 490‰: collected 1,000 (default 100 + slash 900), colluders recovered 514 (24 demander share + 490 bounty) = 51.4%; net loss 48.6% < 51%; up to 53.9% with many Sybil demanders. No profit (the claim earns nothing). | kernel `c4r4::f_c4r4_15_…` (ignored FAIL) + control (plain self-conviction: exactly `⌊49%⌋`, holds) | OPEN → G14R. Fix: hold the pre-Final default's demander share to the horizon and burn it on a later conviction (or cap share + bounty at `s × collected`) |
+| F-C4R4-16 | P2 (dormant) | The kernel route's interim `accuser_reward_permille` is **500**, above ADR-0032's 49%: a self-reporter nets −50%. | core `c4r4_reporter_share_49::the_kernel_routes_interim_…` (ignored FAIL) | OPEN → G14R / INTF (one constant + the kernel tests' bounty figures) |
+| F-C4R4-17 (= GAP-06) | P2 design conflict (dormant) | **Claim-specific demands rebuild the registered model.** 20 position demands of ONE claim (200 BILI of demand bonds) made an honest producer serve what rebuilds 11 of 13 MatMul weight instances exactly (2,256 of 9,506 weight elements), each opening the registered commitment. ADR-0177 D2 forbids the cumulative scope and asks existing units to be restricted in the new ruleset; G14 needs the faulty position demandable. | kernel `c4r4::f_c4r4_17_…` (ignored FAIL) | OPEN → G14C (matrix) + G14R + POLICY: either a closed model is p = 0 (and earns as such) or a demand scope that cannot reach rank |
+| F-C4R4-18 | P3 (exactness) | R-5's `X = min(lock, ⌊G_res/k⌋)` floors the DEDUCTION, so a post-Final self-conviction can net up to `0.49 × (k−1)` sompi above ADR-0032's `−51% × (ΣS − G_res)` (G_res 2, k 3, lock 1, action 99: −151 vs −151.98). Per conviction R-1 holds exactly (below). | core `…::r_core_the_post_final_…` (ignored FAIL) | OPEN → INTF (with the 49% fence): `div_ceil` |
+| F-C4R4-19 (= GAP-05) | P2 (dormant; ADR-0177 D1/D2) | **The provider court as it stands interferes with model acquisition**: an artifact binding needs two availability leases; a challenge naming a weight leaf is accepted; leaving it unanswered slashes the lease (150 KAS each); with both charged the pair lapses and the binding attests nothing. | node `da16::c4r4::g14_c4r4_adr0177_…` (ignored FAIL, 4 violations listed) | OPEN → DA16's ADR-0177 re-scope |
+
+## Results (round 4b, on the merged tree with INTF's fence)
+
+* Kernel `c4r4` with `--include-ignored`: 11 pass (round-4 tests, the 49% control, O-C4R4-Q4), 4 FAIL exactly as asserted
+  (F-C4R4-13, -14 (a)+(b), -15, -17).
+* `kaspa-consensus-core --test c4r4_reporter_share_49`: R-1 at 49% and the DA-6 observation pass; F-C4R4-16 and -18 FAIL as asserted.
+* Node `g14_c4r4` with `--include-ignored`: **F-C4R4-11's PoC passes** (OPVB's `b5d4ba90c`: a refutation is a proof, judged once per
+  bond per window, pays the fee — verified here) and F-C4R4-10's restatement passes; the tag-113 pin (A2U) and F-C4R4-19 FAIL as asserted.
+* Node `g14_` + `partition_rejoin` + `live_r1` (before the INTF merge): 97 pass, 1 FAIL that is G14R's (below).
+
+## ADR-0032 49% — held
+
+* **R-1 per conviction (verified):** `R = ⌊4,900 × max(0, collected − X)/10,000⌋ ≤ ⌊49% × collected⌋`, so a self-reporter's loss is
+  ≥ `⌈51% × collected⌉` over 198 `(collected, X)` pairs, rounding, `X > collected` and `u64::MAX` included. One offence pays one reward
+  and a DA default rewards only the producer's debit (signers' S4 burned), so funding one's own reporter Sybil recycles ≤ 49% per slash.
+* **DA-6 at 49% (observation):** a refuted session now burns `⌈49% × S_P⌉` — 1,568.49 MSK at the floor's `Live` base, ×4.9 the 10%
+  figure; with ADR-0177 (nothing published proactively) that is the honest verifier's price of asking for material, so the 49% share
+  does not improve PRINCIPLES §6 condition 6. The doc's "the refuted cost never exceeds the reward" holds only up to rounding
+  (cost 1,568.49 vs reward 1,568.4655 MSK on the ADR's example).
+
+## ADR-0177 non-interference
+
+* Kernel route: a demand is a committed POSITION (node values, stage inputs) — no weight unit, no weight is ever served; a court reads
+  the registered commitments; a peer that refuses to serve a model triggers nothing. **But** the union of position demands is a
+  cumulative scope (F-C4R4-17).
+* Provider court (DA16, not yet re-scoped): F-C4R4-19.
+* Armed t12 courts: DA units are claim material (event tiles, held state/prompt/step ranges, step leaves/nodes, row nodes) — no weight
+  unit; a third party's refusal to serve a model is no input. The cumulative-scope concern applies in principle to step leaves, bounded
+  on t12 by DA-6's price and DA-8's caps (16 non-seat sessions per claim, three drawn units each); ADR-0177 asks the NEW ruleset to fix it.
+
+## Next round
+
+ADR-0176's bypasses — bond split, exit/re-register, key change or collateral transfer resetting the `d + W` clock or the consumption
+history (ADR-0176 lines on "bond分割・再登録・鍵変更・担保移転") — once lane BUDGET's engine (`palw_bond_budget_v1`) exists; nothing to
+attack yet (`budget/adr176-177` = the integration head).
+
+## Not this round's (routed)
+
+* G14R's `g14_opv_the_salted_seal_rows_roll_back_and_reapply_identically_across_a_reorg` fails on the merged tree (the reorg does not
+  happen; internal) and `k2_opv::past_the_fence_a_withheld_seal_is_kept_as_forfeited_…` expects two beacon seals where its own S1 fix
+  now keeps three (stale expectation).
+* The tag-113 A-2 pin stays A2U's (still an ignored FAIL here).

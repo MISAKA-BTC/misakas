@@ -12,6 +12,7 @@ use misaka_palw_tir_ref2::codec::decode_canonical;
 use misaka_palw_tir_ref2::demand::{Ctx, Limits, Target, eval_demanded};
 use misaka_palw_tir_ref2::dissect::{
     Fold, RootClaim, Verdict, admit_root, bottom, check_round, closure, cut, finalize, history_tiles, partials, positions, site,
+    value_bound,
 };
 use misaka_palw_tir_ref2::eval::Params;
 use misaka_palw_tir_ref2::{Program, Tensor};
@@ -54,7 +55,8 @@ fn dissect_vectors() {
     for f in &files {
         let d = read_json(f);
         assert_eq!(d["format"], "palw-tir-v1/dissect-vectors/1");
-        // A vector names its program's file, or carries the program inline (the H-series' own: H1, H2).
+        // The program: a program vector's, or carried inline (`program: null`, `inline` =
+        // `{program_borsh_hex, params}` in the program vectors' form, §9.5.8).
         let pv = match d["program"].as_str() {
             Some(path) => read_json(&vectors_dir().join(path)),
             None => d["inline"].clone(),
@@ -105,6 +107,21 @@ fn dissect_vectors() {
                 || st.h_tile != u64_of(&vs["h_tile"])
             {
                 bad.push(format!("site {st:?} vs {vs}"));
+            }
+            // O-5's V at the node's tile length (the length of its first, full tile).
+            if let Some(want_v) = c.get("value_bound") {
+                let tl = d["cases"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|x| u64_of(&x["leaf"]["node"]) == n as u64 && u64_of(&x["leaf"]["first_element"]) == 0)
+                    .map(|x| u64_of(&x["leaf"]["values"]))
+                    .next()
+                    .unwrap_or(u64_of(&leaf["values"]));
+                let v = value_bound(&prog, st.block, n, tl);
+                if v != u64_of(want_v) {
+                    bad.push(format!("value_bound {v} vs {want_v} (tile_len {tl})"));
+                }
             }
             // The honest totals, every element of every reduction, from the run itself (no supply).
             let mut all_t: Vec<Vec<i128>> = Vec::new();

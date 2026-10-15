@@ -273,3 +273,7 @@ mod tests {
         assert_eq!(borsh::to_vec(&forged).unwrap()[0], 2, "the new variant is appended");
     }
 }
+
+// Exhaustive read-only native input allocation inventory; no consensus encoding change.
+#[path = "palw_native_resource_v1/private/palw_onboarding_tile_v3.rs"]
+mod native_resource_inventory_v1;

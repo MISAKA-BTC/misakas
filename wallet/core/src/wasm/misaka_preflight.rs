@@ -5,6 +5,25 @@
 use crate::imports::*;
 use crate::misaka_preflight::{MISAKA_WALLET_CAPABILITY_SCHEMA_V1, capabilities_from_reads_v1, evaluate_preflight_json_v1};
 
+/// Build signing capabilities from reads bracketed by the same identity and
+/// durable import epoch. Read order is statusBefore, settlement, DNS, statusAfter.
+/// A failure returns an error object, which misakaPreflightV1 refuses to parse
+/// as capabilities. This is still a precondition, not a payment settlement proof.
+/// @category Wallet SDK
+#[wasm_bindgen(js_name = "misakaCapabilitiesFromBracketedReadsV1")]
+pub fn js_misaka_capabilities_from_bracketed_reads_v1(
+    statusBeforeJson: String,
+    settlementJson: String,
+    dnsJson: String,
+    statusAfterJson: String,
+) -> String {
+    let parse = |json: &str| serde_json::from_str::<kaspa_rpc_core::GetPalwNodeStatusResponse>(json).map_err(|e| e.to_string());
+    if let Err(refusal) = crate::misaka_preflight::check_read_bracket_v1(&parse(&statusBeforeJson), &parse(&statusAfterJson)) {
+        return serde_json::json!({"error":refusal.to_string(), "refusal":refusal}).to_string();
+    }
+    js_misaka_capabilities_from_reads_v1(statusBeforeJson, settlementJson, dnsJson)
+}
+
 /// Build the versioned capability from the three node reads (`getPalwNodeStatus`, `getPalwSettlement`,
 /// `getDnsConfirmation`) as JSON strings; pass an empty string for a read that failed.
 /// @returns The capability JSON (schema `misaka.wallet.capability.v1`).

@@ -366,7 +366,15 @@ impl VirtualStateProcessor {
     ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
         let objects = objects
             .into_iter()
-            .map(|(object, carrier_fee)| PalwCarriedObjectV1 { object, carrier_fee, history_pledge: None, original_binding: None, custody_delegation: None, refund: None, unrefundable: None })
+            .map(|(object, carrier_fee)| PalwCarriedObjectV1 {
+                object,
+                carrier_fee,
+                history_pledge: None,
+                original_binding: None,
+                custody_delegation: None,
+                refund: None,
+                unrefundable: None,
+            })
             .collect();
         self.palw_v2_accepted_objects(state, state_params, point, objects, block, None)
     }
@@ -392,9 +400,19 @@ impl VirtualStateProcessor {
     ) {
         let objects = objects
             .into_iter()
-            .map(|(object, refund)| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, history_pledge: None, original_binding: None, custody_delegation: None, refund, unrefundable: None })
+            .map(|(object, refund)| PalwCarriedObjectV1 {
+                object,
+                carrier_fee: PALW_RENT_UNPRICED,
+                history_pledge: None,
+                original_binding: None,
+                custody_delegation: None,
+                refund,
+                unrefundable: None,
+            })
             .collect();
-        self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block, None, &[])
+        let (objects, state, refunds) =
+            self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block, None, &[]).unwrap();
+        (objects, state.into_unreserved_legacy_v1().unwrap(), refunds)
     }
 
     /// [`Self::palw_v2_accepted_objects_and_refunds`] without the refunds — every caller but the
@@ -413,8 +431,8 @@ impl VirtualStateProcessor {
         own_attempt_class: Option<kaspa_hashes::Hash64>,
     ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
         let (accepted, folded, _refunds) =
-            self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block, own_attempt_class, &[]);
-        (accepted, folded)
+            self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block, own_attempt_class, &[]).unwrap();
+        (accepted, folded.into_unreserved_legacy_v1().unwrap())
     }
 
     /// The acceptance filter, and — the 2026-09-23 Position route matrix, P-B1 — the refunds owed to
@@ -431,11 +449,14 @@ impl VirtualStateProcessor {
         // rehearsal must refuse the commitments the fold will (2026-09-24 DoS audit review of #11).
         own_attempt_class: Option<kaspa_hashes::Hash64>,
         round_fee_incomes: &[kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1],
-    ) -> (
-        Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
-        kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
-        Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
-    ) {
+    ) -> Result<
+        (
+            Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+            Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+        ),
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    > {
         kaspa_consensus_core::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(point.block, || {
             self.palw_v2_accepted_objects_and_refunds_inner(
                 state,
@@ -461,11 +482,14 @@ impl VirtualStateProcessor {
         // rehearsal must refuse the commitments the fold will (2026-09-24 DoS audit review of #11).
         own_attempt_class: Option<kaspa_hashes::Hash64>,
         round_fee_incomes: &[kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1],
-    ) -> (
-        Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
-        kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
-        Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
-    ) {
+    ) -> Result<
+        (
+            Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+            Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+        ),
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    > {
         // **RFC-0007 §I.6: watch the vertices go by** (past the fence only). Every vertex whose signature verifies under its seat's key
         // is remembered, taken by the fold or not, so a second root of one `(round, seat)` — which the fold drops as the round's second
         // vertex — becomes evidence for the node to carry. A vertex already seen is not verified again.
@@ -550,7 +574,7 @@ impl VirtualStateProcessor {
         let mut fee_extras = self.palw_transition_extras_for(point);
         fee_extras.round_fee_incomes = round_fee_incomes.to_vec();
         let mut folded = if audit_active {
-            match kaspa_consensus_core::palw_state_v2::palw_v2_pre_object_base_v1(
+            match kaspa_consensus_core::palw_state_v2::palw_v2_pre_object_base_retained_v1(
                 state,
                 state_params,
                 point,
@@ -563,15 +587,20 @@ impl VirtualStateProcessor {
                 Ok(base) => base,
                 // The pre-object steps are what the real fold runs before any object; if they error
                 // the block is disqualified whatever it carries, so the filter accepts nothing.
+                Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why),
                 Err(why) => {
                     info!(
                         "Block {block}: no PALW object is accepted; the pre-object fold fails and the block will be disqualified: {why}"
                     );
-                    return (Vec::new(), state.clone(), Vec::new());
+                    return Ok((
+                        Vec::new(),
+                        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(state)?,
+                        Vec::new(),
+                    ));
                 }
             }
         } else {
-            state.clone()
+            kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(state)?
         };
         let mut accepted = Vec::with_capacity(objects.len());
         let mut model_classes_registered_in_block = std::collections::BTreeSet::new();
@@ -655,12 +684,29 @@ impl VirtualStateProcessor {
                 &mut refunds,
                 block,
             );
-            let PalwCarriedObjectV1 { object, carrier_fee, history_pledge, original_binding, custody_delegation, refund, unrefundable } = carried;
-            let public_original_bindings = history_pledge.as_ref().zip(original_binding).map(|(pledge, header)| (pledge.claim, header))
-                .into_iter().collect::<std::collections::BTreeMap<_, _>>();
-            let producer_custody_delegations = history_pledge.as_ref().zip(custody_delegation).map(|(pledge, delegation)| (pledge.claim, delegation))
-                .into_iter().collect::<std::collections::BTreeMap<_, _>>();
-            let history_custody_pledges = history_pledge.into_iter().map(|pledge| (pledge.claim, pledge)).collect::<std::collections::BTreeMap<_, _>>();
+            let PalwCarriedObjectV1 {
+                object,
+                carrier_fee,
+                history_pledge,
+                original_binding,
+                custody_delegation,
+                refund,
+                unrefundable,
+            } = carried;
+            let public_original_bindings = history_pledge
+                .as_ref()
+                .zip(original_binding)
+                .map(|(pledge, header)| (pledge.claim, header))
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let producer_custody_delegations = history_pledge
+                .as_ref()
+                .zip(custody_delegation)
+                .map(|(pledge, delegation)| (pledge.claim, delegation))
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let history_custody_pledges =
+                history_pledge.into_iter().map(|pledge| (pledge.claim, pledge)).collect::<std::collections::BTreeMap<_, _>>();
             refund_owed = (refund.is_some() || unrefundable.is_some()).then_some(PalwPendingCarrierRefundV1 {
                 accepted_before: accepted.len(),
                 refund,
@@ -1420,7 +1466,7 @@ impl VirtualStateProcessor {
                     continue;
                 }
                 if audit_active {
-                    match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+                    match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_retained_v1(
                         &folded,
                         state_params,
                         point,
@@ -1439,6 +1485,7 @@ impl VirtualStateProcessor {
                         },
                     ) {
                         Ok(next) => rehearsed_registration = Some(next),
+                        Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why),
                         Err(why) => {
                             info!("Block {block}: a class registration was dropped, and the block stands: {why}");
                             continue;
@@ -1619,7 +1666,7 @@ impl VirtualStateProcessor {
                     let applied = if let Some(next) = rehearsed_registration.take() {
                         Ok(next)
                     } else if audit_active {
-                        kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+                        kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_retained_v1(
                             &folded,
                             state_params,
                             point,
@@ -1632,7 +1679,7 @@ impl VirtualStateProcessor {
                                 own_attempt_class,
                                 history_custody_pledges: history_custody_pledges.clone(),
                                 public_original_bindings: public_original_bindings.clone(),
-                            producer_custody_delegations: producer_custody_delegations.clone(),
+                                producer_custody_delegations: producer_custody_delegations.clone(),
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
                                 ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
                             },
@@ -1641,7 +1688,7 @@ impl VirtualStateProcessor {
                         // The pre-audit path: rehearse the object through a whole-block transition
                         // at a synthetic point one blue score along. Byte-identical to before the
                         // audit fence existed.
-                        kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_extras(
+                        kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v2_with_extras(
                             &folded,
                             state_params,
                             &rehearsal,
@@ -1654,7 +1701,7 @@ impl VirtualStateProcessor {
                             &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                                 history_custody_pledges: history_custody_pledges.clone(),
                                 public_original_bindings: public_original_bindings.clone(),
-                            producer_custody_delegations: producer_custody_delegations.clone(),
+                                producer_custody_delegations: producer_custody_delegations.clone(),
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
                                 ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
                             },
@@ -1735,6 +1782,7 @@ impl VirtualStateProcessor {
                             }
                             accepted.push(object);
                         }
+                        Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why),
                         Err(why) => {
                             info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
                         }
@@ -1781,7 +1829,7 @@ impl VirtualStateProcessor {
         // defect ADR-0064 exists to remove. Only bond records are read out of it: every field of
         // one is a function of the objects and `daa_score`, never of the synthetic blue score the
         // rehearsal advances.
-        (accepted, folded, refunds)
+        Ok((accepted, folded, refunds))
     }
 
     /// The extras every production fold and every acceptance rehearsal carry (ADR-0088 D11,
@@ -2228,7 +2276,8 @@ impl VirtualStateProcessor {
         extraction.objects.extend(tensor.objects);
         let mut evaluation = evaluation;
         let mut history_pledges = std::collections::BTreeMap::<
-            kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1
+            kaspa_consensus_core::Hash64,
+            kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1,
         >::new();
         if history_armed {
             for objects in [&mut extraction.objects, &mut evaluation.objects] {
@@ -2421,6 +2470,25 @@ impl VirtualStateProcessor {
         collection: &[u8],
     ) -> Result<(kaspa_consensus_core::header::Header, kaspa_consensus_core::palw_state_proof_v1::PalwFactProofV1), String> {
         use kaspa_consensus_core::palw_state_proof_v1 as proof;
+        let page39 = collection.starts_with(kaspa_consensus_core::palw_native_audit_page_v39::AUX_PAGE_PREFIX_V39.as_bytes());
+        let anchor39 = collection == kaspa_consensus_core::palw_native_state_anchor_v39::NATIVE_ANCHOR_LABEL_V39;
+        if page39 {
+            kaspa_consensus_core::palw_native_audit_page_v39::parse_aux_cursor_v39(collection)?;
+        }
+        let import_before = if page39 || anchor39 {
+            let (generation, stable) = self.pruning_import_status().map_err(|e| e.to_string())?;
+            if !stable || generation.active.is_some() {
+                return Err("audit39 original import generation is incomplete".into());
+            }
+            Some(generation)
+        } else {
+            None
+        };
+        if (page39 || anchor39)
+            && self.statuses_store.read().get(block).ok() != Some(kaspa_consensus_core::blockstatus::BlockStatus::StatusUTXOValid)
+        {
+            return Err("audit39 requires an immutable fully UTXO-validated original child".into());
+        }
         if self.palw_state_params_v2.is_none() {
             return Err("this network has no PALW V2 state".to_string());
         }
@@ -2443,7 +2511,9 @@ impl VirtualStateProcessor {
             .palw_v2_state_at(parent)
             .ok_or_else(|| format!("this node cannot establish the PALW state as-of {parent}, the selected parent of {block}"))?;
         if (collection == kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_AUX_LABEL_V32
-            || collection == kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32)
+            || collection == kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32
+            || page39
+            || anchor39)
             && at != parent
         {
             return Err("native audit32 requires the exact selected-parent anchor, not a store-tip fallback".into());
@@ -2456,6 +2526,46 @@ impl VirtualStateProcessor {
                 self.palw_committed_root_v1(&state),
                 header.palw_state_root
             ));
+        }
+        if anchor39 {
+            let active = kaspa_consensus_core::palw_fork_choice_commitment_v1::palw_fork_choice_committed_at_v1(
+                self.palw_fork_choice_commitment_v1,
+                state.last_point().map(|p| p.daa_score),
+            );
+            let leaf = if active {
+                kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceLeafV1::of(&state)
+                    .ok_or("anchor39 original post-state point absent")?
+                    .encode()
+            } else {
+                vec![]
+            };
+            let capsule = kaspa_consensus_core::palw_native_state_anchor_v39::NativeStateEnvelopeV39 { version: 39, leaf };
+            let opening = proof::PalwStateOpeningV1::of(&state);
+            if opening.preimage.len() > 4 << 20 {
+                return Err("anchor39 original state preimage profile exceeded".into());
+            }
+            let (after, stable) = self.pruning_import_status().map_err(|e| e.to_string())?;
+            if !stable || after.active.is_some() || import_before.as_ref().is_none_or(|before| before.epoch != after.epoch) {
+                return Err("anchor39 original import generation changed".into());
+            }
+            return Ok((
+                (*header).clone(),
+                proof::PalwFactProofV1 {
+                    state: opening,
+                    collection: proof::PalwCollectionOpeningV1 {
+                        label: collection.to_vec(),
+                        rows: vec![(vec![], borsh::to_vec(&capsule).map_err(|e| e.to_string())?)],
+                    },
+                },
+            ));
+        }
+        if page39 {
+            let page = kaspa_consensus_core::palw_native_audit_page_v39::prove_native_aux_page_v39(&state, collection)?;
+            let (after, stable) = self.pruning_import_status().map_err(|e| e.to_string())?;
+            if !stable || after.active.is_some() || import_before.as_ref().is_none_or(|before| before.epoch != after.epoch) {
+                return Err("audit39 original pinned import generation changed".into());
+            }
+            return Ok(((*header).clone(), page));
         }
         let fact = match collection {
             c if c == kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_AUX_LABEL_V32 => {
@@ -2643,8 +2753,9 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(network, pre_pow, a.class_id, &a.executor_bond, header.nonce);
         // Each provider produces ITS Ready signature from this answer; the signature check here
         // is deliberately vacuous and the real one runs at admission with the same prior view.
-        ready.verify_prior(&state, anchor, header.daa_score, |_, _, _, _| true)?;
+        ready.verify_prior_with_recovery_v4(&state, params, anchor, header.daa_score, |_, _, _, _| true)?;
         let row = state.monetary_material_row_v1(ready.ready.session).ok_or("provider session absent")?;
+        state.require_material_recovery_v2(params, ready.ready.session, header.daa_score).map_err(|e| e.to_string())?;
         let provider_keys = ready
             .ready
             .providers

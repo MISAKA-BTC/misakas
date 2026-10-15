@@ -158,6 +158,7 @@ impl Params {
         self.validate_palw_stage_execution_v14()?;
         self.validate_palw_native_final_v27()?;
         self.validate_palw_stage_execution_v28()?;
+        self.validate_palw_native_execution_v39()?;
         // **RFC-0004 Part II's dormant fence** (`crate::palw_typed_roots_v1`): refused when armed.
         self.validate_palw_typed_roots_v1()?;
         // **RFC-0009 L2's dormant fence** (`crate::palw_fork_choice_commitment_v1`): refused when armed.
@@ -186,7 +187,9 @@ impl Params {
         self.validate_palw_material_income_v3()?;
         self.validate_palw_panel_lifetime_v2()?;
         self.validate_palw_claim_challenge_v2()?;
+        self.validate_palw_claim_compact_v4()?;
         self.validate_palw_monetary_material_v1()?;
+        self.validate_palw_material_release_recovery_v2()?;
         // RFC07/RFC08 signed economic contracts (`crate::palw_econ_contracts_v1`): each refused when armed.
         self.validate_palw_model_verification_gate_v1()?;
         self.validate_palw_horizon_extension_v1()?;
@@ -2849,11 +2852,12 @@ impl Params {
             ("palw_staged_float_constraint_v1", self.palw_staged_float_constraint_v1, self.palw_staged_float_constraint_v1_fence()),
         ] {
             let Some(fence) = fence.filter(|f| *f != ForkActivation::never()) else { continue };
-            if armed.is_none()
-                || !self.palw_staged_public_court_v1_fence().is_some_and(|court| court.daa_score() <= fence.daa_score())
+            if armed.is_none() || !self.palw_staged_public_court_v1_fence().is_some_and(|court| court.daa_score() <= fence.daa_score())
             {
                 let _ = name;
-                return Err(InvalidParams("a staged route extension requires ConsensusV2 and palw_staged_public_court_v1 at or below it"));
+                return Err(InvalidParams(
+                    "a staged route extension requires ConsensusV2 and palw_staged_public_court_v1 at or below it",
+                ));
             }
         }
         Ok(())

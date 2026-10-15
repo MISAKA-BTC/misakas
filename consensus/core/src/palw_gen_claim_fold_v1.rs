@@ -259,7 +259,7 @@ pub(super) fn apply_gen_tensor_commitment_v1(
         });
     }
     builder.reserve_for_claim(&claim)?;
-    builder.write_claim(*c.claim_id, Some(claim));
+    builder.write_claim(*c.claim_id, Some(claim))?;
     let deadline = daa.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
     // RFC-0010: a claim accepted under the permissionless Panel's rule is clocked by its engine, not by V2's bind window.
     if !builder.params.panel_v3_rule_at(daa) {

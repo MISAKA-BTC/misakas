@@ -635,7 +635,7 @@ pub(super) fn finish_exec_rewards_v1(
     let ids: Vec<_> = ledger.bonds.keys().copied().collect();
     for id in ids {
         if let Some(key) = builder.state.kernel_route.as_ref().and_then(|r| r.bond_key_of(&id)) {
-            ledger.sync_bond(id, builder.kernel_synced_collateral(&key, daa));
+            ledger.try_sync_bond_v1(id, builder.kernel_synced_collateral(&key, daa)).map_err(|e| refused(e.to_string()))?;
         }
     }
     let mut events = Vec::new();
@@ -955,14 +955,23 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     // Funded actions 25..=40 below Final27 (native_final absent) are opaque: validation did not check
     // their signature, so they must have ZERO state effect — no bond, budget, row or fee read/write.
     // Mirrors `palw_native_action_unjudged_at_v1` in the processor exactly.
-    if bytes.get(1).copied() == Some(misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11)
-        && builder.extras.kernel_route.as_ref().is_some_and(|e| match bytes.get(2) {
+    if builder.extras.kernel_route.as_ref().is_some_and(|e| match bytes.get(1).copied() {
+        Some(misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11) => match bytes.get(2) {
             Some(25..=40) => e.native_final.is_none(),
             // Typed window class (§II.14.60): its own fence AND Final27.
             Some(45 | 46) => e.native_final.is_none() || e.window_class_v37.is_none_or(|at| ctx.daa_score < at),
             _ => false,
-        })
-    {
+        },
+        Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) if matches!(bytes.get(2), Some(19..=40)) => {
+            e.native_final.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
+                || e.stage_execution_v28.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
+        }
+        Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) if matches!(bytes.get(2), Some(41..=79)) => {
+            e.native_final.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
+                || e.native_execution39.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
+        }
+        _ => false,
+    }) {
         return Ok(());
     }
     // A malformed or over-size encoding, or a signer that is no Active bond, is a dropped object.
@@ -980,6 +989,9 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             return super::palw_flat_execution_fold_v11::apply(builder, ctx, signer, a.action, a.body);
         }
         Ok(Some(a)) if a.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 => {
+            if (41..=79).contains(&a.action) {
+                return super::palw_native_job_fold_v39::apply(builder, ctx, signer, a.action, a.body);
+            }
             return super::palw_flat_stage_fold_v14::apply(builder, ctx, signer, a.action, a.body);
         }
         Err(_) => return Ok(()),
@@ -1043,6 +1055,9 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             return super::palw_flat_execution_fold_v11::apply(builder, ctx, signer, *action, body);
         }
         KernelRouteObjectV1::StageExecutionV14 { action, body } => {
+            if (41..=79).contains(action) {
+                return super::palw_native_job_fold_v39::apply(builder, ctx, signer, *action, body);
+            }
             return super::palw_flat_stage_fold_v14::apply(builder, ctx, signer, *action, body);
         }
         KernelRouteObjectV1::AuthorizePanelLifetimeV2 { authorization } => {
@@ -1257,7 +1272,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     let original_attested = ledger.attested_artifacts.clone();
     if let Some((_, id)) = &scoped {
         let row = builder.state.kernel_route.as_ref().unwrap().model_artifact_binding_header_v2(id).unwrap();
-        ledger.attest_artifact(row.kernel_param_root.as_bytes());
+        ledger.try_attest_artifact_v1(row.kernel_param_root.as_bytes()).map_err(|e| refused(e.to_string()))?;
     }
     let object = scoped.as_ref().map(|(o, _)| o).unwrap_or(&object);
     if let KernelRouteObjectV1::RegisterClassV2 { mode, descriptor, program_bytes, plan, param_commitments } = &object
@@ -1276,7 +1291,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             )
             .is_ok()
         {
-            ledger.attest_artifact(facts.param_root);
+            ledger.try_attest_artifact_v1(facts.param_root).map_err(|e| refused(e.to_string()))?;
         }
     }
     if matches!(object, KernelRouteObjectV1::Withdraw { .. })
@@ -1289,13 +1304,18 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         OpvGateV1::Drop => return Ok(()),
         OpvGateV1::Admit(classes) => {
             for class in classes {
-                ledger.admit_optimistic_class(class).map_err(|r| refused(r.to_string()))?;
+                ledger.try_admit_optimistic_class_v1(class).map_err(refused)?;
             }
         }
         OpvGateV1::Pass => {}
     }
+    if let KernelRouteObjectV1::OptInBeaconSource { job, .. } | KernelRouteObjectV1::OptInPaidBeaconSource { job, .. } = object {
+        if builder.state.kernel_route.as_ref().is_some_and(|r| r.paid_claim_job_is_enrolled_v3(job).unwrap_or(true)) {
+            return Err(refused("paid checker-enrolled jobs cannot be Panel-independent beacon sources"));
+        }
+    }
     let kid = palw_kernel_bond_id_v1(signer);
-    ledger.sync_bond(kid, builder.kernel_synced_collateral(signer, ctx.daa_score));
+    ledger.try_sync_bond_v1(kid, builder.kernel_synced_collateral(signer, ctx.daa_score)).map_err(|e| refused(e.to_string()))?;
     // The other bond a slash can land on is the producer of the claim the object names: its collateral is brought up to date too, so
     // an earlier object of this block (or another lane's slash) can never leave the ledger believing the bond holds more than it does.
     if let KernelRouteObjectV1::FileProof { claim, .. }
@@ -1304,7 +1324,9 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         && let Some(producer) = ledger.claims.get(claim).map(|row| row.producer)
         && let Some(key) = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&producer))
     {
-        ledger.sync_bond(producer, builder.kernel_synced_collateral(&key, ctx.daa_score));
+        ledger
+            .try_sync_bond_v1(producer, builder.kernel_synced_collateral(&key, ctx.daa_score))
+            .map_err(|e| refused(e.to_string()))?;
     }
     // DA16 / ADR-0177 D2: past `palw_provider_court_v1` a demand names a claim-specific unit or nothing, within its requester's tally.
     let scope = match &object {
@@ -1391,7 +1413,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         if *producer != kid || promise.accepted_daa != ctx.daa_score {
             return Err(refused("paid source recipient or acceptance position differs"));
         }
-        let checkpoint = builder.checkpoint();
+        let checkpoint = builder.try_checkpoint()?;
         if builder
             .reserve_source_income_v1(
                 ctx,
@@ -1630,6 +1652,7 @@ pub(super) fn apply_kernel_receipt_v1(
         tally.add(r, evidence);
     }
     if matches!(tally.state(), TallyStateV1::Covered) {
+        ledger.prepare_panel_tally_v1(&claim).map_err(|e| refused(e.to_string()))?;
         let _ = ledger.apply_panel_tally(&claim, true);
         builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key_bytes(&claim), None);
         builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key_bytes(&claim), None);
@@ -1697,7 +1720,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     let held: Vec<misaka_palw_kernel::hash::Digest> = ledger.bonds.keys().copied().collect();
     for kid in held {
         if let Some(key) = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&kid)) {
-            ledger.sync_bond(kid, builder.kernel_synced_collateral(&key, ctx.daa_score));
+            ledger.try_sync_bond_v1(kid, builder.kernel_synced_collateral(&key, ctx.daa_score)).map_err(|e| refused(e.to_string()))?;
         }
     }
     let pending_source_fees: Vec<_> =

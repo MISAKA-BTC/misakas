@@ -315,9 +315,12 @@ pub(crate) fn decode_bounds_program(
 }
 /// Dispatch all terminal court kinds under the explicitly bound v5 profile.
 pub fn verify_flat_fault_v5(c: &FlatSegContextV5<'_>, f: &FlatFaultV5) -> Result<FlatConvictionV5, DismissalV1> {
+    let pr=common::prepare(c)?;
+    verify_flat_fault_prepared_v32(c,f,&pr)
+}
+pub(crate) fn verify_flat_fault_prepared_v32(c:&FlatSegContextV5<'_>,f:&FlatFaultV5,pr:&crate::element::PreparedV1<'_>)->Result<FlatConvictionV5,DismissalV1>{
     f.check_structure().map_err(|_| na("malformed bounded flat-v5 fault"))?;
     let wire = common::size_with_limit(f, common::FLAT_FAULT_MAX_BYTES_V4 - 2).map_err(|_| na("oversized flat-v5 fault"))? + 2;
-    let pr = common::prepare(c)?;
     let b = fault_bounds_prepared(c, &pr, f)?;
     if wire > b.filing_bytes {
         return Err(na("fault exceeds derived court bound"));

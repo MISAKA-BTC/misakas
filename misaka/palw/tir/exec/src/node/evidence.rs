@@ -47,6 +47,74 @@ use super::inventory::TirParamOpenerV1;
 use super::run::{TirClassRunnerV1, TirResumePointV1};
 use super::tree::TirStepTreeV1;
 
+/// Observes the SAME evaluator's requests, never supplies guessed operands.
+struct DependencyProbe<'a> {
+    source: &'a dyn PalwTirEvidenceStoreV1,
+    missing: RefCell<Option<kaspa_consensus_core::palw_backend::PalwTirPublicConeNeedV1>>,
+}
+
+impl DependencyProbe<'_> {
+    fn read<T>(
+        &self,
+        need: kaspa_consensus_core::palw_backend::PalwTirPublicConeNeedV1,
+        get: impl FnOnce() -> Option<T>,
+    ) -> Option<T> {
+        if self.missing.borrow().is_some() {
+            return None;
+        }
+        let result = get();
+        if result.is_none() {
+            *self.missing.borrow_mut() = Some(need);
+        }
+        result
+    }
+}
+
+impl PalwTirEvidenceStoreV1 for DependencyProbe<'_> {
+    fn begin_builder_move_v1(&self) {
+        self.source.begin_builder_move_v1();
+    }
+    fn step_leaf(&self, index: u64) -> Option<PalwStepTileLeafV1> {
+        self.read(kaspa_consensus_core::palw_backend::PalwTirPublicConeNeedV1::StepPreimage { index }, || self.source.step_leaf(index))
+    }
+    fn step_opening(&self, index: u64) -> Option<PalwStepOpeningV1> {
+        self.read(kaspa_consensus_core::palw_backend::PalwTirPublicConeNeedV1::StepOpening { index }, || {
+            self.source.step_opening(index)
+        })
+    }
+    fn step_range_siblings(&self, first: u64, count: u64) -> Option<Vec<Hash64>> {
+        self.read(kaspa_consensus_core::palw_backend::PalwTirPublicConeNeedV1::StepRange { first, count }, || {
+            self.source.step_range_siblings(first, count)
+        })
+    }
+    fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
+        self.read(kaspa_consensus_core::palw_backend::PalwTirPublicConeNeedV1::RegisteredArtifact, || self.source.param_opening(leaf))
+    }
+    fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+        self.read(kaspa_consensus_core::palw_backend::PalwTirPublicConeNeedV1::RegisteredArtifact, || {
+            self.source.param_multiproof(leaves)
+        })
+    }
+    fn param_carriage(&self, leaves: &[u32]) -> Option<kaspa_consensus_core::palw_tir_court_v1::PalwTirParamOpeningV1> {
+        self.read(kaspa_consensus_core::palw_backend::PalwTirPublicConeNeedV1::RegisteredArtifact, || {
+            self.source.param_carriage(leaves)
+        })
+    }
+    fn prompt_token_ids(&self) -> Option<Vec<u32>> {
+        self.read(kaspa_consensus_core::palw_backend::PalwTirPublicConeNeedV1::Prompt { tile: None }, || {
+            self.source.prompt_token_ids()
+        })
+    }
+    fn prompt_ids_opening(&self, tile: u32) -> Option<PalwPromptIdsOpeningV1> {
+        self.read(kaspa_consensus_core::palw_backend::PalwTirPublicConeNeedV1::Prompt { tile: Some(tile) }, || {
+            self.source.prompt_ids_opening(tile)
+        })
+    }
+    fn decode_pin(&self) -> Option<PalwDecodeTokenPinV1> {
+        self.read(kaspa_consensus_core::palw_backend::PalwTirPublicConeNeedV1::DecodePin, || self.source.decode_pin())
+    }
+}
+
 /// **A job as its executor retains it**: the binding it committed, the job's prompt, the committed
 /// logits trace, every leaf hash, and a resume point after every checkpoint position.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -208,6 +276,7 @@ pub struct TirEvidenceV1<'a> {
     replay_positions_used: Cell<u64>,
     replay_cost: Option<super::cost::TirReplayCostBudgetV1>,
     copies: super::copies::TirCarriedCopiesV1,
+    copy_refused: Cell<bool>,
     inventory: PalwTirInventoryIndexV1,
 }
 
@@ -242,6 +311,7 @@ impl<'a> TirEvidenceV1<'a> {
             replay_positions_used: Cell::new(0),
             replay_cost: Some(replay_cost),
             copies: super::copies::TirCarriedCopiesV1::new(),
+            copy_refused: Cell::new(false),
             inventory: Self::inventory_index(runner)?,
         })
     }
@@ -285,6 +355,7 @@ impl<'a> TirEvidenceV1<'a> {
             replay_positions_used: Cell::new(0),
             replay_cost: None,
             copies: super::copies::TirCarriedCopiesV1::new(),
+            copy_refused: Cell::new(false),
             inventory: Self::inventory_index(runner)?,
         })
     }
@@ -320,6 +391,109 @@ impl<'a> TirEvidenceV1<'a> {
             replay_positions_used: Cell::new(0),
             replay_cost: None,
             copies: super::copies::TirCarriedCopiesV1::new(),
+            copy_refused: Cell::new(false),
+            inventory: Self::inventory_index(runner)?,
+        })
+    }
+
+    /// Sparse authenticated PUBLIC originals, without a producer capture or an
+    /// N-leaf tree. The native original header is rehydrated from this registered
+    /// program; each range already authenticates under its exact step root. The
+    /// committed ID summary is independently authenticated under the trace root.
+    /// Missing operands/pins remain unavailable to the existing refutation kernel.
+    #[allow(clippy::too_many_arguments)]
+    pub fn public_runs_v1(
+        runner: &'a TirClassRunnerV1<'a>,
+        binding: &'a PalwTirStepBindingV1,
+        prompt: &'a [u32],
+        trace: TirTraceV1<'a>,
+        inputs: &'a super::cell::TirRunInputsV1,
+        params: &'a dyn TirParamOpenerV1,
+        prompt_form: PalwPromptIdsFormV1,
+        cap: u64,
+    ) -> Result<Self, String> {
+        Self::check_binding(runner, binding)?;
+        kaspa_consensus_core::palw_tir_step_v1::verify_tir_binding_v1(binding, cap).map_err(|e| e.to_string())?;
+        if prompt.len() as u64 != u64::from(binding.job_context.declared_prefill_tokens)
+            || !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+                prompt_form,
+                prompt,
+                &binding.job_context.prompt_token_ids_hash,
+            )
+            || prompt.iter().any(|id| *id >= runner.space.program.token_bound)
+        {
+            return Err("the public TIR operand source changes original prompt identity".into());
+        }
+        let program = &runner.space.program;
+        let logits_lanes = program.blocks[program.schedule.post as usize].nodes[program.logits as usize].out.elements_at(1);
+        let check_ids = |generated: &[u32]| -> Result<(), String> {
+            if generated.iter().any(|id| u64::from(*id) >= logits_lanes)
+                || generated.iter().take(generated.len().saturating_sub(1)).any(|id| *id >= program.token_bound)
+            {
+                return Err("public TIR IDs need their separate output-validity predicate, not an arithmetic acquittal".into());
+            }
+            Ok(())
+        };
+        match trace {
+            TirTraceV1::Summary { rows_root, generated, pins } => {
+                // Sparse arithmetic needs only the authenticated ID summary. A
+                // caller-supplied row/tile pin is not authenticated by this summary;
+                // dedicated native logits/decode predicates must authenticate it.
+                if !pins.is_empty() {
+                    return Err("public sparse TIR source does not import unauthenticated trace pins".into());
+                }
+                if Hash64::from_bytes(runner.space.program.logits_scheme_id) != tiled_logits_scheme_id_v1()
+                    || generated.len() as u64 != u64::from(binding.job_context.exact_decode_tokens)
+                    || kaspa_consensus_core::palw_step_refute::tiled_logits_outer_root_v1(
+                        &binding.job_context,
+                        generated.len() as u64,
+                        &rows_root,
+                        generated,
+                    ) != binding.full_logits_trace_root
+                {
+                    return Err("the public TIR ID summary does not authenticate original trace".into());
+                }
+                check_ids(generated)?;
+            }
+            TirTraceV1::Rows { rows, generated } => {
+                if rows.len() as u64 != u64::from(binding.job_context.exact_decode_tokens)
+                    || rows.len() != generated.len()
+                    || rows.iter().any(|row| row.len() as u64 != logits_lanes)
+                {
+                    return Err("the public TIR rows change original decode count or registered logits width".into());
+                }
+                check_ids(generated)?;
+                let root = if Hash64::from_bytes(runner.space.program.logits_scheme_id) == tiled_logits_scheme_id_v1() {
+                    kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(&binding.job_context, rows, generated)
+                } else {
+                    Some(kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(&binding.job_context, rows, generated))
+                };
+                if root != Some(binding.full_logits_trace_root) {
+                    return Err("the public TIR rows do not authenticate original trace".into());
+                }
+            }
+            TirTraceV1::Absent => {}
+        }
+        let tree = inputs.proof_tree_for_binding_v1(binding, runner.class_id, cap)?;
+        Ok(Self {
+            runner,
+            binding,
+            prompt,
+            trace,
+            tree: Box::new(tree),
+            _tree_memory: None,
+            leaves: Leaves::Sparse(inputs.preimages_v1()),
+            params,
+            prompt_form,
+            cap,
+            cache: RefCell::new(BTreeMap::new()),
+            cache_memory: RefCell::new(None),
+            cache_budget: 0,
+            max_replay_positions: 0,
+            replay_positions_used: Cell::new(0),
+            replay_cost: None,
+            copies: super::copies::TirCarriedCopiesV1::new(),
+            copy_refused: Cell::new(false),
             inventory: Self::inventory_index(runner)?,
         })
     }
@@ -393,6 +567,7 @@ impl<'a> TirEvidenceV1<'a> {
             replay_positions_used: Cell::new(0),
             replay_cost: Some(replay_cost),
             copies: super::copies::TirCarriedCopiesV1::new(),
+            copy_refused: Cell::new(false),
             inventory: Self::inventory_index(runner)?,
         })
     }
@@ -402,7 +577,11 @@ impl<'a> TirEvidenceV1<'a> {
     }
 
     fn admit_copy(&self, bytes: u64) -> Option<()> {
-        self.copies.admit(self.runner.class_id, &self.binding.job_context, bytes)
+        let admitted = self.copies.admit(self.runner.class_id, &self.binding.job_context, bytes);
+        if admitted.is_none() {
+            self.copy_refused.set(true);
+        }
+        admitted
     }
     fn copy_leaf(&self, leaf: &PalwStepTileLeafV1) -> Option<PalwStepTileLeafV1> {
         let bytes = (leaf.values_le.len() as u64)
@@ -440,8 +619,15 @@ impl<'a> TirEvidenceV1<'a> {
         Some(bytes)
     }
     fn param_scratch(&self, leaves: &[u32]) -> Option<Option<super::memory::TirMemoryLeaseV1>> {
-        let need = self.params.param_scratch_storage_v1(leaves)?;
-        self.copies.scratch(self.runner.class_id, &self.binding.job_context, need)
+        let Some(need) = self.params.param_scratch_storage_v1(leaves) else {
+            self.copy_refused.set(true);
+            return None;
+        };
+        let admitted = self.copies.scratch(self.runner.class_id, &self.binding.job_context, need);
+        if admitted.is_none() {
+            self.copy_refused.set(true);
+        }
+        admitted
     }
     fn trace_scratch_need(&self) -> Option<u64> {
         match self.trace {
@@ -533,6 +719,28 @@ impl<'a> TirEvidenceV1<'a> {
     pub fn cone_refutation(&self, leaf: u64, rules: &PalwTirCourtRulesV1) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
         build_tir_cone_refutation_bounded_v1(self.binding, leaf, self, rules, super::backend::tir_court_builder_limits_v1(rules))
             .map(|(object, _)| object)
+    }
+
+    pub fn probe_cone_v1(
+        &self,
+        leaf: u64,
+        rules: &PalwTirCourtRulesV1,
+        limits: kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+    ) -> kaspa_consensus_core::palw_backend::PalwTirPublicConeProbeV1 {
+        use kaspa_consensus_core::palw_backend::PalwTirPublicConeProbeV1;
+        let probe = DependencyProbe { source: self, missing: RefCell::new(None) };
+        let result = build_tir_cone_refutation_bounded_v1(self.binding, leaf, &probe, rules, limits);
+        if self.copy_refused.get() {
+            return PalwTirPublicConeProbeV1::Refused { reason: "public TIR carried-copy or scratch admission refused".into() };
+        }
+        match (result, probe.missing.into_inner()) {
+            (_, Some(need)) => PalwTirPublicConeProbeV1::Need(need),
+            (Ok((refutation, meter)), None) => PalwTirPublicConeProbeV1::Ready {
+                proof: kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) },
+                meter,
+            },
+            (Err(error), None) => PalwTirPublicConeProbeV1::Refused { reason: error.to_string() },
+        }
     }
 
     /// **The logits-consistency accusation over logits step leaf `leaf`**: the step tile and the
@@ -741,6 +949,7 @@ impl<'a> TirEvidenceV1<'a> {
 
 impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
     fn begin_builder_move_v1(&self) {
+        self.copy_refused.set(false);
         self.replay_positions_used.set(0);
         if let Some(cost) = self.replay_cost.as_ref() {
             cost.reset();

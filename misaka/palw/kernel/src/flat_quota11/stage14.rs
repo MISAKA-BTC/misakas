@@ -1321,6 +1321,16 @@ impl StageTraceV14 {
         object_id(b"misaka-palw/kernel/stage-trace/v14", self)
     }
     pub fn from_bytes(raw: &[u8], positions: u32) -> Result<Self, String> {
+        Self::read_trace(raw, positions, false)
+    }
+    /// Explicit compact invocation32 grammar. A compact post authenticates the
+    /// original whole trace through segment roots; output openings are later
+    /// supplied as separate certificates against THESE roots. The old14
+    /// parser and every old Commit retain their original output-count rule.
+    pub fn from_invocation_bytes_v32(raw: &[u8], positions: u32) -> Result<Self, String> {
+        Self::read_trace(raw, positions, true)
+    }
+    fn read_trace(raw: &[u8], positions: u32, invocation32: bool) -> Result<Self, String> {
         const PREFIX: usize = 2 + 5 * 64;
         if positions == 0
             || positions > misaka_palw_tir::program::HISTORY_BOUND_V1_HELD
@@ -1336,7 +1346,8 @@ impl StageTraceV14 {
         let at = PREFIX + 4 + a * 64;
         let b =
             u32::from_le_bytes(raw.get(at..at + 4).ok_or("truncated stage output count")?.try_into().expect("checked count")) as usize;
-        if b != 1 && b != positions as usize {
+        let compact = invocation32 && raw[..2] == 32u16.to_le_bytes();
+        if compact && b != 0 || !compact && b != 1 && b != positions as usize {
             return Err("stage output count exceeds immutable job".into());
         }
         let mut r = Cursor::new(&raw[at + 4..]);
@@ -1361,7 +1372,7 @@ impl StageTraceV14 {
             segment_roots,
             output_openings,
         };
-        if trace.version != 14 {
+        if trace.version != 14 && !(compact && trace.version == 32) {
             return Err("unknown stage trace version".into());
         }
         Ok(trace)

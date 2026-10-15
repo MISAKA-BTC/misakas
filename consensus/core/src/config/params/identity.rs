@@ -506,6 +506,9 @@ impl Params {
         if self.palw_stage_execution_v28.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_stage_execution_v28 = None;
         }
+        if self.palw_native_execution_v39.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_native_execution_v39 = None;
+        }
         if self.palw_native_final_v27.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_native_final_v27 = None;
         }
@@ -577,6 +580,8 @@ impl Params {
         }
         if self.palw_panel_lifetime_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_panel_lifetime_v2 = None; }
         if self.palw_claim_challenge_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_claim_challenge_v2 = None; }
+        if self.palw_claim_compact_v4.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_claim_compact_v4 = None; }
+        if self.palw_material_release_recovery_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_material_release_recovery_v2 = None; }
         if self.palw_monetary_material_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_monetary_material_v1 = None; }
         if self.palw_model_verification_gate_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_model_verification_gate_v1 = None;
@@ -1083,6 +1088,7 @@ impl Params {
             palw_stage_execution_v14,
             palw_native_final_v27,
             palw_stage_execution_v28,
+            palw_native_execution_v39,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
@@ -1101,7 +1107,9 @@ impl Params {
             palw_material_income_v3,
             palw_panel_lifetime_v2,
             palw_claim_challenge_v2,
+            palw_claim_compact_v4,
             palw_monetary_material_v1,
+            palw_material_release_recovery_v2,
             palw_model_verification_gate_v1,
             palw_horizon_extension_v1,
             palw_minimum_price_v1,
@@ -1405,6 +1413,7 @@ impl Params {
             ("palw_stage_execution_v14", palw_stage_execution_v14.as_ref().map(|f| f.activation)),
             ("palw_native_final_v27", palw_native_final_v27.as_ref().map(|f| f.activation)),
             ("palw_stage_execution_v28", palw_stage_execution_v28.as_ref().map(|f| f.activation)),
+            ("palw_native_execution_v39", palw_native_execution_v39.as_ref().map(|f| f.activation)),
             ("palw_fork_choice_rule_e_v1", *palw_fork_choice_rule_e_v1),
             ("palw_typed_roots_v1", *palw_typed_roots_v1),
             ("palw_fork_choice_commitment_v1", *palw_fork_choice_commitment_v1),
@@ -1423,7 +1432,9 @@ impl Params {
             ("palw_material_income_v3", *palw_material_income_v3),
             ("palw_panel_lifetime_v2", palw_panel_lifetime_v2.as_ref().map(|f| f.activation)),
             ("palw_claim_challenge_v2", palw_claim_challenge_v2.as_ref().map(|f| f.activation)),
+            ("palw_claim_compact_v4", palw_claim_compact_v4.as_ref().map(|f| f.activation)),
             ("palw_monetary_material_v1", palw_monetary_material_v1.as_ref().map(|f| f.activation)),
+            ("palw_material_release_recovery_v2", palw_material_release_recovery_v2.as_ref().map(|f| f.activation)),
             ("palw_model_verification_gate_v1", palw_model_verification_gate_v1.as_ref().map(|f| f.activation)),
             ("palw_horizon_extension_v1", palw_horizon_extension_v1.as_ref().map(|f| f.activation)),
             ("palw_minimum_price_v1", palw_minimum_price_v1.as_ref().map(|f| f.activation)),
@@ -1717,6 +1728,11 @@ impl Params {
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policies.root());
         }
+        if let Some(fence) = &self.palw_native_execution_v39 {
+            h.write(b"palw_native_execution_v39");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policies.root());
+        }
         if let Some(fence) = &self.palw_funded_execution_v11 {
             h.write(b"palw_funded_execution_v11");
             h.write(fence.activation.daa_score().to_le_bytes());
@@ -1828,6 +1844,8 @@ impl Params {
         }
         if let Some(f) = &self.palw_panel_lifetime_v2 { h.write(b"palw_panel_lifetime_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
         if let Some(f) = &self.palw_claim_challenge_v2 { h.write(b"palw_claim_challenge_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id()); }
+        if let Some(f) = &self.palw_claim_compact_v4 { h.write(b"palw_claim_compact_v4"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id()); }
+        if let Some(f) = &self.palw_material_release_recovery_v2 { h.write(b"palw_material_release_recovery_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
         if let Some(f) = &self.palw_monetary_material_v1 { h.write(b"palw_monetary_material_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
         if let Some(f) = &self.palw_model_verification_gate_v1 {
             h.write(b"palw_model_verification_gate_v1");
@@ -2635,6 +2653,7 @@ impl Params {
             palw_stage_execution_v14,
             palw_native_final_v27,
             palw_stage_execution_v28,
+            palw_native_execution_v39,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
@@ -2653,7 +2672,9 @@ impl Params {
             palw_material_income_v3,
             palw_panel_lifetime_v2,
             palw_claim_challenge_v2,
+            palw_claim_compact_v4,
             palw_monetary_material_v1,
+            palw_material_release_recovery_v2,
             palw_model_verification_gate_v1,
             palw_horizon_extension_v1,
             palw_minimum_price_v1,
@@ -3455,6 +3476,9 @@ impl Params {
         if let Some(fence) = palw_stage_execution_v28.as_mut() {
             fork(&mut fence.activation, visit);
         }
+        if let Some(fence) = palw_native_execution_v39.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         if let Some(fence) = palw_funded_execution_v11.as_mut() {
             fork(&mut fence.activation, visit);
         }
@@ -3519,6 +3543,8 @@ impl Params {
         }
         if let Some(f) = palw_panel_lifetime_v2.as_mut() { fork(&mut f.activation, visit); }
         if let Some(f) = palw_claim_challenge_v2.as_mut() { fork(&mut f.activation, visit); }
+        if let Some(f) = palw_claim_compact_v4.as_mut() { fork(&mut f.activation, visit); }
+        if let Some(f) = palw_material_release_recovery_v2.as_mut() { fork(&mut f.activation, visit); }
         if let Some(f) = palw_monetary_material_v1.as_mut() { fork(&mut f.activation, visit); }
         if let Some(f) = palw_model_verification_gate_v1.as_mut() {
             fork(&mut f.activation, visit);
@@ -4094,6 +4120,7 @@ impl Params {
             palw_stage_execution_v14,
             palw_native_final_v27,
             palw_stage_execution_v28,
+            palw_native_execution_v39,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
@@ -4112,7 +4139,9 @@ impl Params {
             palw_material_income_v3,
             palw_panel_lifetime_v2,
             palw_claim_challenge_v2,
+            palw_claim_compact_v4,
             palw_monetary_material_v1,
+            palw_material_release_recovery_v2,
             palw_model_verification_gate_v1,
             palw_horizon_extension_v1,
             palw_minimum_price_v1,
@@ -4976,6 +5005,11 @@ impl Params {
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policies.root());
         }
+        if let Some(fence) = palw_native_execution_v39 {
+            h.write(b"palw_native_execution_v39");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policies.root());
+        }
         if let Some(fence) = palw_funded_execution_v11 {
             h.write(b"palw_funded_execution_v11");
             h.write(fence.activation.daa_score().to_le_bytes());
@@ -5052,6 +5086,8 @@ impl Params {
         }
         if let Some(f) = &palw_panel_lifetime_v2 { h.write(b"palw_panel_lifetime_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
         if let Some(f) = &palw_claim_challenge_v2 { h.write(b"palw_claim_challenge_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id()); }
+        if let Some(f) = &palw_claim_compact_v4 { h.write(b"palw_claim_compact_v4"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id()); }
+        if let Some(f) = &palw_material_release_recovery_v2 { h.write(b"palw_material_release_recovery_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
         if let Some(f) = &palw_monetary_material_v1 { h.write(b"palw_monetary_material_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
         if let Some(f) = &palw_model_verification_gate_v1 {
             h.write(b"palw_model_verification_gate_v1");

@@ -153,7 +153,7 @@ pub(super) fn open_da_session_v2(
         accuser_exposure: exposure,
         resumed: Box::new(claim.phase.clone()),
     };
-    builder.write_claim(claim_id, Some(disputed));
+    builder.write_claim(claim_id, Some(disputed))?;
     builder.disarm_deadline(claim_id);
     builder.arm_deadline(deadline_daa, claim_id);
     Ok(())
@@ -790,7 +790,7 @@ pub(super) fn open_dissection_at_named_leaf_v1(
         if deadline_daa > claim.trace_retention_daa {
             let mut extended_claim = claim.clone();
             extended_claim.trace_retention_daa = deadline_daa;
-            builder.write_claim(claim_id, Some(extended_claim));
+            builder.write_claim(claim_id, Some(extended_claim))?;
         }
     }
     let first_deadline_daa =

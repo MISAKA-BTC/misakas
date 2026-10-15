@@ -19,14 +19,20 @@ The surface is in the public wallet SDK crate `kaspa-wallet-core`, module
 | `MisakaNodeCapabilitiesV1` (schema `misaka.wallet.capability.v1`, version 1) | What the node reports: genesis, durable import status, `dnsRetiredAt`, native settlement availability, DNS authority availability, the resulting `finalityAuthority` (`native` / `dns` / `unknown`), the sink DAA, and which reads failed. |
 | `MisakaWalletExpectationsV1::for_params(&Params)` | What the wallet knows from its own chain params: the expected genesis and the scheduled retirement DAA. These values never come from the node. |
 | `fetch_capabilities_v1(&dyn RpcApi)` | Reads `getPalwNodeStatus`, `getPalwSettlement(0)` and `getDnsConfirmation`. |
-| `preflight(&dyn RpcApi, &expectations, &[Transaction])` | **The single call to make before signing.** |
+| `preflight(&dyn RpcApi, &expectations, &[Transaction])` | **The single call to make before signing.** Brackets settlement/DNS reads with node identity and durable import epoch. |
 | `evaluate_preflight_v1` / `evaluate_preflight_json_v1` | The same verdict on reads the caller already holds (native / JSON). |
 | JS: `misakaCapabilitiesFromReadsV1(statusJson, settlementJson, dnsJson)`, `misakaPreflightV1(capabilitiesJson, expectationsJson, subnetworkIdsJson)` | The WASM form. Pass `""` for a read that failed. |
+| JS: `misakaCapabilitiesFromBracketedReadsV1(statusBeforeJson, settlementJson, dnsJson, statusAfterJson)` | The signing-oriented WASM constructor, enforcing the same identity/import bracket as native `preflight`. |
 
 ## Refusals
 
 A refusal means the wallet does not choose funds and does not sign. These are the
 refusal codes:
+
+* `invalidCapabilities`: the native capability has another schema/version, or
+  its displayed authority contradicts its underlying retirement/DNS facts.
+  The native and JSON/WASM evaluators apply the same check. A serialized `dns`
+  or `native` label cannot turn failed reads into authority.
 
 1. `genesisMismatch`: the node runs a genesis other than the one in the wallet's params.
    A drill and the public network can share a network name.
@@ -66,3 +72,24 @@ treated as unsupported under retirement.
   Third-party migration is still EXTERNAL.
 * The 1,000 DAA retirement signing margin is a proposal and needs USER REVIEW.
 * The JSON and WASM forms have not been built for wasm32 here.
+
+The follow-up consistency controls cover native callers with an unsupported
+version and both native/JSON callers whose authority label was substituted after
+failed reads. They are source only and have not been executed. The authority
+check does not assert Safe/Final availability or payment settlement.
+
+The asynchronous signing preflight now rejects an identity/import epoch change
+between its two status reads, including stable → import → stable. Ordinary
+producer counters may advance without invalidating the bracket. A legacy node
+that lacks both status reads still goes through the existing genesis/import
+expectations; this does not certify missing native import diagnostics. The
+three-read advisory capability fetch and caller-supplied JSON reads do not by
+themselves establish this bracket. Callers supplying reads own their coherence.
+
+The server's settlement RPC separately brackets the sink, pruning boundary and
+durable import state around all settlement/readiness queries. It derives the
+retirement decision and reported DAA from the captured sink header, requires any
+native snapshot to name that generation, and returns a retry error on movement.
+A read crossing the retirement fence cannot publish old DNS authority with new
+native heads. New source controls cover epoch, sink and pruning changes; these
+are not executed concurrency or real-node acceptance results.

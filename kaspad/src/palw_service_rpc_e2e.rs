@@ -16,7 +16,7 @@ pub(super) async fn verify_socket_evidence(
     claim: Hash64,
     floor: u64,
 ) {
-    let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))));
+    let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))).unwrap());
     let context = SubscriptionContext::default();
     // This read-only test does not request notification subscriptions. The normal notifier/core
     // service lifecycle still runs; all RPC data comes from the independently validated database.

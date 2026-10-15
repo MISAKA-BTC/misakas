@@ -68,7 +68,9 @@ mod dsv4;
 pub mod encdec;
 pub mod fill;
 mod generic;
+pub mod pixtral_processor41;
 pub mod qlinear;
+pub mod source39;
 pub mod stream;
 pub mod vision;
 
@@ -405,6 +407,12 @@ pub fn program_summary(p: &TirProgramV1) -> String {
 
 /// Lower an HL program.
 pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
+    lower_recipe(hl, opts, None)
+}
+pub(crate) fn lower_recipe(hl: &HlProgram, opts: &LowerOpts, profile: Option<&tir::program_v39::SourceProfileV39>) -> Result<Lowered> {
+    if let Some(profile) = profile {
+        profile.check().map_err(LowerError::bad)?;
+    }
     if !matches!(opts.linear_weight_bits, 8 | 16) {
         return Err(LowerError::bad(format!("linear_weight_bits {}: expected 8 or 16", opts.linear_weight_bits)));
     }
@@ -477,7 +485,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         table_chunk: i64::from(opts.table_chunk_rows.unwrap_or(1 << 24).clamp(1, 1 << 24)),
         conv_weight_bits: 8,
         linear_weight_bits: opts.linear_weight_bits,
-        out_major_rows: false,
+        out_major_rows: profile.is_some(),
         gdn_core_wide: opts.gdn_core_wide,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
@@ -513,7 +521,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
             cx.split_max_readers = readers;
             quiet_budget_hook();
             QUIET_BUDGET.with(|q| q.set(true));
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lower_block(&mut pb, &mut cx, hbk)));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lower_block(&mut pb, &mut cx, hbk, profile)));
             QUIET_BUDGET.with(|q| q.set(false));
             match r {
                 Ok(v) => {
@@ -540,7 +548,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
                     cx.logits_key = snap.8;
                     cx.carry_keys = snap.9;
                     cx.row_params = snap.10;
-                    if !msg.contains("exceeds") || readers == 0 {
+                    if profile.is_some() || !msg.contains("exceeds") || readers == 0 {
                         return Err(LowerError::not_lowerable(format!("block `{}`: {msg}", hl.blocks[hbk].name)));
                     }
                 }
@@ -556,8 +564,10 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     let layers: Vec<u8> = hl.schedule.iter().map(|k| block_map[*k as usize]).collect();
     let program = pb.finish(block_map[hl.pre], layers, block_map[hl.post], logits);
     // `prim_set_id` is the builder's default, `misaka_palw_tir::prim::PRIM_SET_ID_V1` (NF-1).
-    tir::validate::validate(&program)
-        .map_err(|e| LowerError::eval(format!("internal: lowered program is not in normal form: {e}")))?;
+    if profile.is_none() {
+        tir::validate::validate(&program)
+            .map_err(|e| LowerError::eval(format!("internal: lowered program is not in normal form: {e}")))?;
+    }
     let fills: Vec<FillFn> = cx.fills;
     if fills.len() != program.params.len() {
         return Err(LowerError::eval("internal: fills do not match params"));
@@ -753,7 +763,12 @@ struct Lb {
     gx: generic::Shared,
 }
 
-fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(u8, Option<u16>)> {
+fn lower_block(
+    pb: &mut ProgramBuilder,
+    cx: &mut Cx<'_>,
+    hbk: usize,
+    profile: Option<&tir::program_v39::SourceProfileV39>,
+) -> Result<(u8, Option<u16>)> {
     let hl = cx.hl;
     let blk = &hl.blocks[hbk];
     // The residual (`i32`), then any KV slot's key and value rows (`i16` codes).
@@ -820,7 +835,12 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
     }
     w16_inputs_unsplit(blk, &mut lb);
     let tb = pb.blocks.len() as u8;
-    let mut b = pb.block(&blk.name, if blk.role == BlockRole::Pre { vec![] } else { carry_sig });
+    let carry = if blk.role == BlockRole::Pre { vec![] } else { carry_sig };
+    let mut b = if let Some(profile) = profile {
+        pb.block_for_program_v39(&blk.name, carry, profile).map_err(LowerError::bad)?
+    } else {
+        pb.block(&blk.name, carry)
+    };
     for (i, node) in blk.nodes.iter().enumerate() {
         let out = lower_node(&mut b, cx, &mut lb, i, node).map_err(|e| match e {
             LowerError::NotLowerable(m) => {

@@ -302,6 +302,14 @@ impl AdmitTally {
         self.record_outcomes(what, bytes, inputs, &a, &f)
     }
 
+    /// Under `palw_tir_fence2`'s `TopK` row (ref2's H7) on both sides.
+    fn record_h7(&mut self, what: &str, bytes: &[u8], inputs: &AdmitInputs) {
+        self.cases += 1;
+        let a = admit_mine_rules(bytes, inputs, ref2::admit::TopkRow::Fence2);
+        let f = admit_first_rules(bytes, inputs, true);
+        self.record_outcomes(what, bytes, inputs, &a, &f)
+    }
+
     fn record_outcomes(&mut self, what: &str, bytes: &[u8], inputs: &AdmitInputs, a: &AdmitOutcome, f: &AdmitOutcome) {
         match (a, f) {
             (AdmitOutcome::Admitted(x), AdmitOutcome::Admitted(y)) => {
@@ -656,4 +664,39 @@ fn a_state_written_by_two_layer_blocks() {
         }
         assert_eq!(a, f);
     }
+}
+
+/// Admission under `palw_tir_fence2`'s `TopK` row (ref2's H7), on both implementations: random and
+/// range-safe programs under random inputs, and the release's rule unchanged below the fence.
+#[test]
+fn h7_rules_random_programs() {
+    let n = 600 * scale() as u64;
+    let mut t = AdmitTally::default();
+    let mut rel = AdmitTally::default();
+    let mut priced_higher = 0usize;
+    for seed in 0..n {
+        let mut rng = R::seed_from_u64(0x4870_0000 + seed);
+        let safe = seed % 2 == 0;
+        let g = gen_program(&mut rng, GenCfg { range_safe: safe, ..GenCfg::default() });
+        let bytes = ref2::codec::encode(&g.prog);
+        for k in 0..3 {
+            let inputs = rand_inputs(&mut rng);
+            t.record_h7(&format!("seed {seed} (range-safe {safe}) inputs #{k} {inputs:?}"), &bytes, &inputs);
+            // The release's rule (below the fence) is the same function as before.
+            let a = admit_mine_rules(&bytes, &inputs, ref2::admit::TopkRow::Release);
+            let f = admit_first_rules(&bytes, &inputs, false);
+            rel.cases += 1;
+            rel.record_outcomes(&format!("release rule, seed {seed}"), &bytes, &inputs, &a, &f);
+            if let (AdmitOutcome::Admitted(x), AdmitOutcome::Admitted(y)) =
+                (&a, &admit_mine_rules(&bytes, &inputs, ref2::admit::TopkRow::Fence2))
+                && x != y
+            {
+                priced_higher += 1;
+            }
+        }
+    }
+    t.report("admission under palw_tir_fence2's TopK row (H7)");
+    rel.report("admission under the release rule (tir_admit_with_rules_v1 Release2000)");
+    println!("    admitted programs whose admission changes under the H7 row: {priced_higher}");
+    assert!(t.disagreements.is_empty() && rel.disagreements.is_empty());
 }

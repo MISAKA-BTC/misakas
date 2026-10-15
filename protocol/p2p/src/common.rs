@@ -81,6 +81,13 @@ pub enum ProtocolError {
     #[error("{0}")]
     OtherOwned(String),
 
+    /// A local quota does not judge the peer's proof, chain or availability.
+    #[error("local native capacity unavailable: {0}")]
+    LocalNativeCapacityUnavailable(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1),
+
+    #[error("local native transfer resource unavailable: {0}")]
+    LocalNativeResourceUnavailable(String),
+
     #[error("misbehaving peer: {0}")]
     MisbehavingPeer(String),
 
@@ -116,6 +123,18 @@ const LOOPBACK_CONNECTION_MESSAGE: &str = "LOOPBACK_CONNECTION";
 const DUPLICATE_CONNECTION_MESSAGE: &str = "DUPLICATE_CONNECTION";
 
 impl ProtocolError {
+    /// Local RAM/disk/session admission is neither a proof verdict nor a
+    /// failed source conversation and must not permanently condemn a chain.
+    pub fn is_local_native_resource_unavailable(&self) -> bool {
+        matches!(
+            self,
+            Self::LocalNativeCapacityUnavailable(_)
+                | Self::LocalNativeResourceUnavailable(_)
+                | Self::RuleError(RuleError::LocalNativeCapacityUnavailable(_))
+                | Self::PruningImportError(PruningImportError::PruningImportRuleError(RuleError::LocalNativeCapacityUnavailable(_)))
+        )
+    }
+
     pub fn is_connection_closed_error(&self) -> bool {
         matches!(self, Self::ConnectionClosed)
     }

@@ -195,9 +195,10 @@ Built on the live files of 10-03 (snapshot commits eaaf35c6b, 1eaacc626), so the
 
 **RPC it needs.** Nothing new: it runs on today's nodes with `getPalwRoundLane`, `getPalwClaims`, `getPalwModel`, `getPalwPanelSeats`,
 `getPalwPanelAssignments`, `getPalwModelRegistry` (every one is read through `palwRead`, which falls back with a note when a node lacks the op).
-How the join works today: a round block's header carries the PXR1 envelope (round, permit, producing bond). The page reads `getPalwClaims(bond, executor)`
-and assigns the block to the claim whose ticket range `[execFirstRound, execLastRound]` holds its round; two claims of one bond with overlapping ranges are shown
-under the bond ("2 claims (overlap)"). Lane STALE today = no round block in this page's window for 10 min while the lane is open (the card says so).
+The PXR1 header supplies round, permit and producing bond. A bond's claim ticket range is only a candidate:
+lottery permits and other claims can share the round. The page now treats `verboseData.exec.claimId/classId`
+from the node's judged lineage as the exact attribution; without it the row shows its envelope and an
+unverified candidate count. Lane STALE today = no round block in this page's window for 10 min while the lane is open (the card says so).
 
 **Lights up with the next node release** (branch scan/exec-views, node-only, fingerprint unchanged): `getBlock.verboseData.laneClass` (BLUE/EXEC/RED/ROUND) and
 `.exec {round, permitIndex, bond, claimId, classId, quantumIndex, verdict, refusal}` (exact claim join and "Round 001/120" labels);
@@ -231,3 +232,21 @@ over JSON and the updated gRPC schema. Older nodes, missing headers and wRPC bin
 the view: show unknown, never infer ordinary RED counts from the raw red array.
 
 Local regression: node --test test/classification.test.mjs. No public-site deployment is performed.
+### 10e. Live model and panel inventory (2026-10-04, staged)
+`#/llm` enumerates every class from `getPalwModelRegistry`, then reads `getPalwPanelSeats` for bonded
+seats, fresh proofs, eligibility and seat assignment counts. It merges registry readiness rows that an
+older panel view omits; those rows say eligibility *unreported*, not eligible. The optional genesis
+host labels are explicitly operator notes. Each class links to `#/models/<class id>`, which reads
+`getPalwPanelAssignments` to show each in-flight claim's drawn seats and receipt status.
+
+The node's panel view previously filtered seats solely by `bond.capable_classes`. Under the registry's
+readiness policy a new class may have a valid possession proof without that older declaration;
+the view now includes those proof-bearing seats. This makes the node's class panel status and seat list
+track permissionless registrations. Deploy the node update before expecting new classes to show
+eligible seats from `getPalwPanelSeats`.
+
+The int-12 RPC model already exposes `getBlock/getBlocks` `verboseData.exec.claimId` and `classId`
+for a judged claim-backed permit. The public node observed at DAA 4539 did not expose `exec` yet.
+A domain-lottery permit has no claim or class by design. The judgement ledger is bounded and
+in-memory, so historical round blocks after a node restart cannot be attributed exactly by this
+RPC without a persistent execution index; the explorer shows the PXR1 round, permit and bond.

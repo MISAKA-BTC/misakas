@@ -2074,7 +2074,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // ADR-0127 Decision 3: one read of the sink's PALW state. Unavailable is not unsettled — a
         // node with no V2 state, or one that cannot date its frontier, says so.
         let session = self.consensus_manager.consensus().session().await;
-        let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
+        let import_before = session.async_pruning_import_status().await.map_err(|e| RpcError::General(e.to_string()))?;
+        if !import_before.1 || import_before.0.active.is_some() {
+            return Err(RpcError::General("settlement is unavailable during pruning import".into()));
+        }
+        let sink = session.async_get_sink().await;
+        let pruning = session.async_pruning_point().await;
+        let sink_daa = session.async_get_header(sink).await.map_err(|e| RpcError::General(e.to_string()))?.daa_score;
         let dns_retired_at =
             self.config.params.palw_dns_retirement.filter(|r| r.activation.is_active(sink_daa)).map(|r| r.activation.daa_score());
         let native_settlement = session.async_get_native_settlement_snapshot().await.map_err(|e| RpcError::General(e.to_string()))?;
@@ -2098,9 +2104,32 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         } else {
             false
         };
-        let Some(settlement) = session.async_palw_settlement_v1(request.daa_score).await else {
-            let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
-            return Ok(GetPalwSettlementResponse {
+        let response = if let Some(settlement) = session.async_palw_settlement_v1(request.daa_score).await {
+            if settlement.sink_daa != sink_daa {
+                return Err(RpcError::General("settlement sink changed during the read; retry".into()));
+            }
+            let depth = if dns_retired_at.is_some() { native_settlement.as_ref().map_or(0, |s| s.depth) } else { settlement.depth };
+            GetPalwSettlementResponse {
+                dns_retired_at,
+                native_settlement,
+                native_readiness,
+                available: true,
+                sink_daa,
+                daa_score: request.daa_score,
+                settled: if dns_retired_at.is_some() { native_settled } else { settlement.settled },
+                depth,
+                pending_anchors: settlement.pending,
+                depth_is_lower_bound: dns_retired_at.is_some() || settlement.depth_is_lower_bound,
+                safe_frontier_blue_score: settlement.safe_frontier_blue_score,
+                safe_frontier_daa: settlement.safe_frontier_daa,
+                // RFC-0018: the premise-based SecurityCertified reading (integ/rfc0018-dag).
+                uncertified_final_anchors: settlement.uncertified_final,
+                security_certification_premise: settlement
+                    .gate_c_in_force
+                    .then(|| kaspa_consensus_core::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_PREMISE_V1.to_string()),
+            }
+        } else {
+            GetPalwSettlementResponse {
                 available: native_settlement.is_some(),
                 settled: native_settled,
                 depth: native_settlement.as_ref().map_or(0, |s| s.depth),
@@ -2110,27 +2139,26 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 native_settlement,
                 native_readiness,
                 ..Default::default()
-            });
+            }
         };
-        let depth = if dns_retired_at.is_some() { native_settlement.as_ref().map_or(0, |s| s.depth) } else { settlement.depth };
-        Ok(GetPalwSettlementResponse {
-            dns_retired_at,
-            native_settlement,
-            native_readiness,
-            available: true,
-            sink_daa: settlement.sink_daa,
-            daa_score: request.daa_score,
-            settled: if dns_retired_at.is_some() { native_settled } else { settlement.settled },
-            depth,
-            pending_anchors: settlement.pending,
-            depth_is_lower_bound: dns_retired_at.is_some() || settlement.depth_is_lower_bound,
-            safe_frontier_blue_score: settlement.safe_frontier_blue_score,
-            safe_frontier_daa: settlement.safe_frontier_daa,
-            uncertified_final_anchors: settlement.uncertified_final,
-            security_certification_premise: settlement
-                .gate_c_in_force
-                .then(|| kaspa_consensus_core::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_PREMISE_V1.to_string()),
-        })
+        // The session guards the consensus instance, not all virtual-state
+        // mutations between awaits. In particular a fence-crossing reorg or a
+        // completed import can otherwise pair legacy authority with new heads.
+        let pruning_after = session.async_pruning_point().await;
+        let sink_after = session.async_get_sink().await;
+        let import_after = session.async_pruning_import_status().await.map_err(|e| RpcError::General(e.to_string()))?;
+        if !palw_settlement_read_agrees_v1(
+            sink,
+            pruning,
+            &import_before,
+            sink_after,
+            pruning_after,
+            &import_after,
+            response.native_settlement.as_ref().map(|s| s.generation),
+        ) {
+            return Err(RpcError::General("settlement authority/import generation changed during the read; retry".into()));
+        }
+        Ok(response)
     }
 
     async fn get_precommit_duty_call(
@@ -3206,6 +3234,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     ) -> RpcResult<GetPalwStateProofResponse> {
         // Everything the caller sent is parsed before a byte of chain state is read: a malformed request is free, and an error.
         let collection = request.collection.trim().to_ascii_lowercase();
+        let page39 = collection.starts_with(kaspa_consensus_core::palw_native_audit_page_v39::AUX_PAGE_PREFIX_V39);
+        if page39 {
+            kaspa_consensus_core::palw_native_audit_page_v39::parse_aux_cursor_v39(request.collection.as_bytes())
+                .map_err(RpcError::General)?;
+        }
         let redemption = collection.starts_with("native-redemption-v33:");
         let audit_job = collection
             .strip_prefix("native-audit-v27:")
@@ -3213,6 +3246,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             .map(|id| parse_hash64(id, "nativeAuditJob"))
             .transpose()?;
         if audit_job.is_none()
+            && !page39
+            && collection.as_bytes() != kaspa_consensus_core::palw_native_state_anchor_v39::NATIVE_ANCHOR_LABEL_V39
             && !matches!(collection.as_str(), "bonds" | "classes" | "claims" | "kernel-aux-v32" | "pending-payouts-v32")
         {
             return Err(RpcError::General(format!("collection '{}' is not one of bonds, classes, claims", request.collection)));
@@ -3263,7 +3298,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 block_hash: block.to_string(),
                 header: Some(RpcHeader::from(&header)),
                 state_preimage: proof.state.preimage,
-                collection: if audit.is_some() { "kernel-aux-v32".into() } else { collection },
+                collection: if audit.is_some() {
+                    "kernel-aux-v32".into()
+                } else if page39 {
+                    String::from_utf8(proof.collection.label).map_err(|e| RpcError::General(e.to_string()))?
+                } else {
+                    collection
+                },
                 rows: proof.collection.rows.into_iter().map(|(key, value)| RpcPalwProofRow { key, value }).collect(),
                 native_audit_record: audit,
                 native_coinbase_proof: coinbase,
@@ -6125,6 +6166,49 @@ fn rpc_palw_model_version(
         work_leaves: row.usage.work_leaves.to_string(),
         first_used_daa: row.usage.first_used_daa,
         last_used_daa: row.usage.last_used_daa,
+    }
+}
+
+fn palw_settlement_read_agrees_v1(
+    before_sink: kaspa_consensus_core::BlockHash,
+    before_pruning: kaspa_consensus_core::BlockHash,
+    before_import: &(kaspa_consensus_core::pruning::PruningImportSessionStateV1, bool),
+    after_sink: kaspa_consensus_core::BlockHash,
+    after_pruning: kaspa_consensus_core::BlockHash,
+    after_import: &(kaspa_consensus_core::pruning::PruningImportSessionStateV1, bool),
+    native_generation: Option<kaspa_consensus_core::BlockHash>,
+) -> bool {
+    before_sink == after_sink
+        && before_pruning == after_pruning
+        && before_import.1
+        && after_import.1
+        && before_import.0.active.is_none()
+        && after_import.0.active.is_none()
+        && before_import.0.epoch == after_import.0.epoch
+        && before_import.0.utxos_started == after_import.0.utxos_started
+        && before_import.0.utxos_imported == after_import.0.utxos_imported
+        && native_generation.is_none_or(|generation| generation == before_sink)
+}
+
+#[cfg(test)]
+mod palw_settlement_read_tests {
+    use super::*;
+    use kaspa_consensus_core::{BlockHash, pruning::PruningImportSessionStateV1};
+
+    #[test]
+    fn native_and_legacy_settlement_reads_cannot_cross_import_or_pruning_generations() {
+        let sink = BlockHash::from_u64_word(1);
+        let pruning = BlockHash::from_u64_word(2);
+        let base = (PruningImportSessionStateV1 { epoch: 7, ..Default::default() }, true);
+        for generation in [None, Some(sink)] {
+            assert!(palw_settlement_read_agrees_v1(sink, pruning, &base, sink, pruning, &base, generation));
+            let mut completed_again = base.clone();
+            completed_again.0.epoch += 1;
+            assert!(!palw_settlement_read_agrees_v1(sink, pruning, &base, sink, pruning, &completed_again, generation));
+            assert!(!palw_settlement_read_agrees_v1(sink, pruning, &base, pruning, pruning, &base, generation));
+            assert!(!palw_settlement_read_agrees_v1(sink, pruning, &base, sink, sink, &base, generation));
+        }
+        assert!(!palw_settlement_read_agrees_v1(sink, pruning, &base, sink, pruning, &base, Some(pruning)));
     }
 }
 

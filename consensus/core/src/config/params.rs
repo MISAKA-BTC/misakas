@@ -2990,6 +2990,8 @@ pub struct Params {
     pub palw_native_final_v27: Option<crate::palw_native_final_v27::PalwNativeFinalFenceV27>,
     /// Original stage28 book/source/court/Final consent, independent of frozen14.
     pub palw_stage_execution_v28: Option<crate::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
+    /// Owning39 source, class, large material and whole native execution. Dormant on all presets.
+    pub palw_native_execution_v39: Option<crate::palw_native_execution_v39::PalwNativeExecutionFenceV39>,
 
     /// **ADR-0178: rule E, the fork choice that heals a partition on bonded participation** ([`crate::palw_fork_choice_rule_e_v1`]):
     /// past it the sink search weighs every valid tip, the deep-reorg gate and the IBD commit compare the two tips' EXCLUSIVE pasts
@@ -3078,8 +3080,11 @@ pub struct Params {
     pub palw_panel_lifetime_v2: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2>,
     /// Signed Claim V2 seed/checker/lifetime contract; dormant without scoped review.
     pub palw_claim_challenge_v2: Option<crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2>,
+    /// Versioned compact native contract and proof capability; dormant on every public preset.
+    pub palw_claim_compact_v4: Option<crate::palw_claim_compact_v4::PalwClaimCompactFenceV4>,
     /// Explicit signed payment-relative material covenants; dormant without cost approval.
     pub palw_monetary_material_v1: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialFenceV1>,
+    pub palw_material_release_recovery_v2: Option<crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2>,
     /// **RFC07 R7-ECON: the optional verification-attestation gate on the model allocation** ([`crate::palw_econ_contracts_v1`]):
     /// inner 67 / aux 125. Dormant; Some-only; needs `palw_model_bond_allocation_v1` at or below it; refused when armed.
     pub palw_model_verification_gate_v1: Option<crate::palw_econ_contracts_v1::PalwModelVerificationGateFenceV1>,
@@ -6024,6 +6029,7 @@ impl Params {
             palw_stage_execution_v14: self.palw_stage_execution_v14.clone(),
             palw_native_final_v27: self.palw_native_final_v27.clone(),
             palw_stage_execution_v28: self.palw_stage_execution_v28.clone(),
+            palw_native_execution_v39: self.palw_native_execution_v39.clone(),
             palw_fork_choice_rule_e_v1: self.palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1: self.palw_typed_roots_v1,
             palw_fork_choice_commitment_v1: self.palw_fork_choice_commitment_v1,
@@ -6043,7 +6049,9 @@ impl Params {
             palw_material_income_v3: self.palw_material_income_v3,
             palw_panel_lifetime_v2: self.palw_panel_lifetime_v2,
             palw_claim_challenge_v2: self.palw_claim_challenge_v2,
+            palw_claim_compact_v4: self.palw_claim_compact_v4.clone(),
             palw_monetary_material_v1: self.palw_monetary_material_v1.clone(),
+            palw_material_release_recovery_v2: self.palw_material_release_recovery_v2.clone(),
             palw_model_verification_gate_v1: self.palw_model_verification_gate_v1,
             palw_horizon_extension_v1: self.palw_horizon_extension_v1,
             palw_minimum_price_v1: self.palw_minimum_price_v1.clone(),
@@ -7170,6 +7178,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_stage_execution_v14: None,
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
+    palw_native_execution_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -7189,7 +7198,9 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_material_income_v3: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
+    palw_claim_compact_v4: None,
     palw_monetary_material_v1: None,
+    palw_material_release_recovery_v2: None,
     palw_model_verification_gate_v1: None,
     palw_horizon_extension_v1: None,
     palw_minimum_price_v1: None,
@@ -7512,6 +7523,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_stage_execution_v14: None,
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
+    palw_native_execution_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -7531,7 +7543,9 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_material_income_v3: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
+    palw_claim_compact_v4: None,
     palw_monetary_material_v1: None,
+    palw_material_release_recovery_v2: None,
     palw_model_verification_gate_v1: None,
     palw_horizon_extension_v1: None,
     palw_minimum_price_v1: None,
@@ -7836,6 +7850,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_stage_execution_v14: None,
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
+    palw_native_execution_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -7855,7 +7870,9 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_material_income_v3: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
+    palw_claim_compact_v4: None,
     palw_monetary_material_v1: None,
+    palw_material_release_recovery_v2: None,
     palw_model_verification_gate_v1: None,
     palw_horizon_extension_v1: None,
     palw_minimum_price_v1: None,
@@ -8938,15 +8955,23 @@ fn palw_seed_attempt_targets_v1(
     bundle: &mut crate::palw_mode_v2::PalwConsensusParamsV2,
 ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
     use crate::palw_state_v2::{
-        PalwBlockContextV2, PalwChainStateV2, PalwConsensusObjectV2, apply_palw_transition_v2, palw_max_exposure_pwu_of_rule_v1,
+        PalwBlockContextV2, PalwChainStateV2, PalwConsensusObjectV2, apply_palw_transition_retained_v2,
+        palw_max_exposure_pwu_of_rule_v1,
     };
     let invalid = crate::palw_mode_v2::PalwModeV2Error::Invalid;
     // The genesis block's own context. Only the share table is read out of the fold, and no
     // grant's arithmetic depends on the block, its DAA or its subsidy — so these are the genesis
     // values rather than a placeholder that would have to be explained.
     let ctx = PalwBlockContextV2 { block: Default::default(), daa_score: 0, blue_score: 0, subsidy: 0 };
-    let (state, _delta) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &bundle.state, &ctx, &bundle.genesis_objects, None)
-        .map_err(|_| invalid("the genesis registrations do not apply, so no share table can be read from them"))?;
+    let (state, _delta) =
+        apply_palw_transition_retained_v2(&PalwChainStateV2::genesis(), &bundle.state, &ctx, &bundle.genesis_objects, None).map_err(
+            |error| match error {
+                capacity @ crate::palw_state_v2::PalwStateV2Error::NativeResource(_) => {
+                    crate::palw_mode_v2::PalwModeV2Error::State(capacity)
+                }
+                _ => invalid("the genesis registrations do not apply, so no share table can be read from them"),
+            },
+        )?;
 
     let mut rows: Vec<(usize, u16, u64)> = Vec::new();
     for (index, object) in bundle.genesis_objects.iter().enumerate() {
@@ -13332,6 +13357,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_stage_execution_v14: None,
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
+    palw_native_execution_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -13351,7 +13377,9 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_material_income_v3: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
+    palw_claim_compact_v4: None,
     palw_monetary_material_v1: None,
+    palw_material_release_recovery_v2: None,
     palw_model_verification_gate_v1: None,
     palw_horizon_extension_v1: None,
     palw_minimum_price_v1: None,
@@ -13757,3 +13785,7 @@ mod post_launch_fence_arming_tests;
 
 #[cfg(test)]
 mod funded_execution_fence_tests;
+
+// Exhaustive read-only native input allocation inventory; no consensus encoding change.
+#[path = "../palw_native_resource_v1/private/config_params.rs"]
+mod native_resource_inventory_v1;

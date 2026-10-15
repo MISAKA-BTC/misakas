@@ -111,7 +111,8 @@ impl PalwChainStateV2 {
     }
     pub(super) fn staged_retirement_floor_v1(&self, claim: &Hash64, ordinary: u64) -> u64 {
         if self.claims.get(claim).is_some_and(|c| c.phase.is_terminal()) {
-            self.staged_claim_contract_v1(claim).map(|c| ordinary.max(c.terms.material_until_daa)).unwrap_or(ordinary)
+            let original = self.staged_claim_contract_v1(claim).map(|c| ordinary.max(c.terms.material_until_daa)).unwrap_or(ordinary);
+            original.max(self.staged_tir_source_until_v1(*claim).unwrap_or(0))
         } else {
             ordinary
         }
@@ -129,15 +130,52 @@ impl PalwChainStateV2 {
             _ => None,
         }
     }
-    fn staged_owner_allowance_used_v1(&self, owner: PalwBondKeyV2, limit: usize) -> usize {
+    pub(super) fn staged_owner_allowance_used_v1(&self, owner: PalwBondKeyV2, limit: usize) -> usize {
         let regular = self.staged_by_owner.range((owner, ZERO_HASH64)..).take_while(|(bond, _)| *bond == owner).take(limit).count();
-        regular
-            + self
+        let inventory = self
                 .staged_inventory_by_owner
                 .range((owner, ZERO_HASH64)..)
                 .take_while(|(bond, _)| *bond == owner)
                 .take(limit.saturating_sub(regular))
-                .count()
+                .count();
+        regular + inventory + self.staged_tir_acquisition_count_v1(owner, limit.saturating_sub(regular + inventory))
+    }
+    /// Separate allocation keys: one claim's old Owner row and multiple paid
+    /// sidecars cannot overwrite each other's quota or collateral exposure.
+    pub fn staged_tir_acquisition_v1(
+        &self,
+        claim: Hash64,
+        owner: PalwBondKeyV2,
+        allocation: Hash64,
+    ) -> Option<&crate::palw_tir_public_state_v1::PalwTirPublicAcquisitionRowV1> {
+        match self.staged_courts.get(&PalwStagedCourtKeyV1::TirAcquisition(claim, owner, allocation)) {
+            Some(PalwStagedCourtRowV1::TirAcquisition(row)) => Some(row.as_ref()),
+            _ => None,
+        }
+    }
+    pub fn staged_tir_acquisition_count_v1(&self, owner: PalwBondKeyV2, limit: usize) -> usize {
+        self.staged_tir_by_owner.range((owner, ZERO_HASH64, ZERO_HASH64)..)
+            .take_while(|(bond, _, _)| *bond == owner).take(limit).count()
+    }
+    pub fn staged_tir_acquisition_exposure_v1(&self, owner: &PalwBondKeyV2) -> u128 {
+        self.staged_tir_by_owner.range((*owner, ZERO_HASH64, ZERO_HASH64)..)
+            .take_while(|(bond, _, _)| bond == owner)
+            .filter_map(|(_, claim, allocation)| self.staged_tir_acquisition_v1(*claim, *owner, *allocation))
+            .map(|row| u128::from(row.owned.contract_v1().terms.plan.deposit_sompi))
+            .fold(0u128, u128::saturating_add)
+    }
+    pub fn staged_tir_source_until_v1(&self, claim: Hash64) -> Option<u64> {
+        self.staged_tir_by_claim.get(&claim).and_then(|rows| rows.last().map(|(until, _)| *until))
+    }
+    pub fn staged_tir_preparation_v1(
+        &self,
+        claim: Hash64,
+        allocation: Hash64,
+    ) -> Option<&crate::palw_tir_public_state_v1::PalwTirPublicPreparationRowV1> {
+        match self.staged_courts.get(&PalwStagedCourtKeyV1::TirPreparation(claim, allocation)) {
+            Some(PalwStagedCourtRowV1::TirPreparation(row)) => Some(row.as_ref()),
+            _ => None,
+        }
     }
     pub fn staged_original_job_v1(
         &self,
@@ -417,6 +455,90 @@ impl PalwChainStateV2 {
             }
             page.push((*claim, *owner, *seed));
             cursor = Some((*at, *claim, *owner, *seed));
+        }
+        Ok((page, None))
+    }
+    /// Fixed original preparation duties, independent of owner Opens. This is
+    /// metadata discovery only, not an admission, work or sanction credential.
+    pub fn staged_tir_preparation_duties_after_v1(
+        &self,
+        signer: PalwBondKeyV2,
+        now: u64,
+        after: Option<(u64, Hash64, Hash64)>,
+        limit: usize,
+    ) -> Result<(Vec<(Hash64, Hash64)>, Option<(u64, Hash64, Hash64)>), String> {
+        use std::ops::Bound;
+        if self.last_point().is_none_or(|p| p.daa_score != now) || limit == 0 {
+            return Err("TIR preparation page changes accepted snapshot clock or finite capacity".into());
+        }
+        let Some(first_live) = now.checked_add(1) else { return Ok((Vec::new(), None)) };
+        let lower = match after {
+            Some((at, claim, allocation)) if at >= first_live => Bound::Excluded((signer, at, claim, allocation)),
+            _ => Bound::Included((signer, first_live, ZERO_HASH64, ZERO_HASH64)),
+        };
+        let cap = limit.min(64);
+        let mut page = Vec::with_capacity(cap);
+        let mut cursor = None;
+        for (_, at, claim, allocation) in self.staged_tir_preparers.range((lower, Bound::Unbounded))
+            .take_while(|(bond, ..)| *bond == signer).take(cap + 1)
+        {
+            if page.len() == cap { return Ok((page, cursor)); }
+            let row = self.staged_tir_preparation_v1(*claim, *allocation)
+                .ok_or("TIR preparation index lost its original claim-wide row")?;
+            let c = row.preparation.contract_v1();
+            if c.preparation_until_daa != *at || now < c.original_accepted_daa || now >= c.material_until_daa
+                || !row.preparation.pending_signers_v1().contains(&signer)
+            {
+                return Err("TIR preparation index differs from original unpaid literal duty".into());
+            }
+            page.push((*claim, *allocation));
+            cursor = Some((*at, *claim, *allocation));
+        }
+        Ok((page, None))
+    }
+    /// Accepted-snapshot EDF page over TIR acquisition's exact outstanding
+    /// literal slots. Metadata only, at most64 rows plus one indexed lookahead.
+    /// This reader cannot create a grant, paid allocation or collection right.
+    pub fn staged_tir_duties_after_v1(
+        &self,
+        signer: PalwBondKeyV2,
+        now: u64,
+        after: Option<(u64, Hash64, PalwBondKeyV2, Hash64, u64, Hash64)>,
+        limit: usize,
+    ) -> Result<
+        (Vec<(Hash64, PalwBondKeyV2, Hash64, u64, Hash64)>, Option<(u64, Hash64, PalwBondKeyV2, Hash64, u64, Hash64)>),
+        String,
+    > {
+        use std::ops::Bound;
+        if self.last_point().is_none_or(|p| p.daa_score != now) || limit == 0 {
+            return Err("TIR duty page changes accepted snapshot clock or finite capacity".into());
+        }
+        let Some(first_live) = now.checked_add(1) else { return Ok((Vec::new(), None)) };
+        let lower = match after {
+            Some((at, claim, owner, allocation, turn, demand)) if at >= first_live => {
+                Bound::Excluded((signer, at, claim, owner, allocation, turn, demand))
+            }
+            _ => Bound::Included((signer, first_live, ZERO_HASH64, PALW_BOND_KEY_V2_MIN, ZERO_HASH64, 0, ZERO_HASH64)),
+        };
+        let cap = limit.min(64);
+        let mut page = Vec::with_capacity(cap);
+        let mut cursor = None;
+        for (_, at, claim, owner, allocation, turn, demand) in self.staged_tir_responders
+            .range((lower, Bound::Unbounded)).take_while(|(bond, ..)| *bond == signer).take(cap + 1)
+        {
+            if page.len() == cap { return Ok((page, cursor)); }
+            let row = self.staged_tir_acquisition_v1(*claim, *owner, *allocation)
+                .ok_or("TIR duty index has no literal allocation row")?;
+            let c = row.owned.contract_v1();
+            let pending = row.owned.active_v1().ok_or("TIR duty index lost its accepted demand")?;
+            if pending.collected || pending.respond_until_daa != *at || pending.turn != *turn || pending.demand_id != *demand
+                || !row.owned.response_custodians_v1().contains(&signer) || pending.slots.get(&signer).is_some_and(|slot| slot.finished.is_some())
+                || now < c.reserved_daa || now >= c.terms.material_until_daa
+            {
+                return Err("TIR duty index differs from exact unpaid signer/source/turn/clock".into());
+            }
+            page.push((*claim, *owner, *allocation, *turn, *demand));
+            cursor = Some((*at, *claim, *owner, *allocation, *turn, *demand));
         }
         Ok((page, None))
     }
@@ -942,7 +1064,11 @@ pub(super) fn open(
         if bundle.is_none() {
             b.check_accuser_room(seed.reserver, u128::from(plan.deposit_sompi), "staged prefix court", ctx.daa_score)?;
         }
-        let funded = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or(PalwStateV2Error::Overflow("staged prefix funding"))?;
+        let funding_plan = if bundle.is_some() { extended_terms.plan } else { plan };
+        let funded = funding_plan
+            .rent_sompi
+            .checked_add(funding_plan.deposit_sompi)
+            .ok_or(PalwStateV2Error::Overflow("staged prefix funding"))?;
         let exits = vec![extended_terms.bond_exit_after_daa; contract.panel.len()];
         let encoded = borsh::to_vec(seed).map_err(|e| stage_refused(seed.claim, e.to_string()))?;
         let message = seed.signing_message();
@@ -969,21 +1095,17 @@ pub(super) fn open(
         .map_err(|e| stage_refused(seed.claim, e))?;
         let row = if let Some(acquisition) = acquisition {
             let custody = public_custody.expect("checked above");
-            PalwStagedCourtRowV1::PublicPrefix(
-                Box::new(
-                    crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1::admit(
-                        row,
-                        contract.producer,
-                        custody,
-                        acquisition,
-                        extended_terms,
-                        ladder,
-                        funded,
-                    )
-                    .map_err(|e| stage_refused(seed.claim, e))?,
+            let row = if bundle.is_some() {
+                crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1::admit_with_allocation_v1(
+                    row, contract.producer, custody, acquisition, extended_terms, ladder, funded,
                 )
-                .into(),
-            )
+            } else {
+                crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1::admit(
+                    row, contract.producer, custody, acquisition, extended_terms, ladder, funded,
+                )
+            }
+            .map_err(|e| stage_refused(seed.claim, e))?;
+            PalwStagedCourtRowV1::PublicPrefix(Box::new(row).into())
         } else {
             PalwStagedCourtRowV1::Prefix(Box::new(row).into())
         };
@@ -993,7 +1115,7 @@ pub(super) fn open(
                 PalwStagedCourtKeyV1::Claim(seed.claim),
                 Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 { terms: extended_terms, ..contract.clone() })),
             );
-            b.write_claim(seed.claim, Some(extended_claim));
+            b.write_claim(seed.claim, Some(extended_claim))?;
             if let Some(mut dispute) = b.state.legacy_disputes.get(&seed.claim).cloned() {
                 dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
                 b.write_legacy_dispute(seed.claim, Some(dispute));
@@ -1005,7 +1127,7 @@ pub(super) fn open(
                 && liability.expiry_daa < until
             {
                 liability.expiry_daa = until;
-                b.write_panel_liability(seed.claim, Some(liability));
+                b.write_panel_liability(seed.claim, Some(liability))?;
             }
             for (lock_key, mut lock) in b.claim_locks_v1(&seed.claim) {
                 if lock.expiry_daa < until {
@@ -1098,7 +1220,7 @@ pub(super) fn open(
                 PalwStagedCourtKeyV1::Claim(seed.claim),
                 Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 { terms: extended_terms, ..contract.clone() })),
             );
-            b.write_claim(seed.claim, Some(extended_claim));
+            b.write_claim(seed.claim, Some(extended_claim))?;
             if let Some(mut dispute) = b.state.legacy_disputes.get(&seed.claim).cloned() {
                 dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
                 b.write_legacy_dispute(seed.claim, Some(dispute));
@@ -1110,7 +1232,7 @@ pub(super) fn open(
                 && liability.expiry_daa < until
             {
                 liability.expiry_daa = until;
-                b.write_panel_liability(seed.claim, Some(liability));
+                b.write_panel_liability(seed.claim, Some(liability))?;
             }
             // The initial prospective holds keep these locks economically attributed even if
             // an older ordinary lock expiry has passed. Extend the actual saved locked rows.
@@ -2704,7 +2826,7 @@ fn bundle_control_v1(
         bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
         b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(Box::new(bundle).into())));
         b.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(movement.claim), Some(PalwStagedCourtRowV1::ClaimBundle(extended)));
-        b.write_claim(movement.claim, Some(claim));
+        b.write_claim(movement.claim, Some(claim))?;
         if let Some(mut dispute) = b.state.legacy_disputes.get(&movement.claim).cloned() {
             dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
             b.write_legacy_dispute(movement.claim, Some(dispute));
@@ -2716,7 +2838,7 @@ fn bundle_control_v1(
             && liability.expiry_daa < until
         {
             liability.expiry_daa = until;
-            b.write_panel_liability(movement.claim, Some(liability));
+            b.write_panel_liability(movement.claim, Some(liability))?;
         }
         for (lock_key, mut lock) in b.claim_locks_v1(&movement.claim) {
             if lock.expiry_daa < until {
@@ -2830,6 +2952,18 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::ArtifactInventoryOpen(c) => (c.until_daa, vec![(c.offer.opener, c.until_daa, key)]),
         PalwStagedCourtRowV1::ArtifactInventory(_) | PalwStagedCourtRowV1::TirLayout(_) => (u64::MAX, Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
+        PalwStagedCourtRowV1::TirAcquisition(row) => {
+            let c = row.owned.contract_v1();
+            // Owner escrow only. The literal list is NOT a substitute for a
+            // distinct native qualified custody grant; no signer hold or DA
+            // sanction is created from mere membership in a drawn Panel.
+            (c.terms.material_until_daa, vec![(c.owner, c.terms.material_until_daa, key)])
+        }
+        PalwStagedCourtRowV1::TirRawChunk(row) => (row.material_until_daa, Vec::new()),
+        PalwStagedCourtRowV1::TirAcceptedBody(row) => (row.material_until_daa, Vec::new()),
+        // This dormant row is a source lease, not proof of a funded pledge or
+        // qualified Valid grant. Native admission must establish signer holds.
+        PalwStagedCourtRowV1::TirPreparation(row) => (row.preparation.contract_v1().material_until_daa, Vec::new()),
     }
 }
 pub(super) fn update_indices(
@@ -2839,6 +2973,7 @@ pub(super) fn update_indices(
     new: Option<&PalwStagedCourtRowV1>,
 ) {
     if let Some(row) = old {
+        update_tir_indices_v1(state, key, row, false);
         for entry in history_response_index_rows_v1(row) {
             state.staged_history_responders.remove(&entry);
         }
@@ -2865,6 +3000,7 @@ pub(super) fn update_indices(
         }
     }
     if let Some(row) = new {
+        update_tir_indices_v1(state, key, row, true);
         state.staged_history_responders.extend(history_response_index_rows_v1(row));
         state.staged_flat_responders.extend(flat_response_index_rows_v1(row));
         state.staged_selected_responders.extend(selected_response_index_rows_v1(row));
@@ -2890,7 +3026,19 @@ pub(super) fn rebuild_indices(state: &mut PalwChainStateV2) {
     state.staged_selected_responders.clear();
     state.staged_flat_responders.clear();
     state.staged_history_responders.clear();
+    state.staged_tir_by_owner.clear();
+    state.staged_tir_by_claim.clear();
+    state.staged_tir_responders.clear();
+    state.staged_tir_preparers.clear();
     for (key, row) in &state.staged_courts {
+        if let Some((owner, claim, allocation, _)) = tir_index_metadata_v1(*key, row) {
+            state.staged_tir_by_owner.insert((owner, claim, allocation));
+            state.staged_tir_responders.extend(tir_response_index_rows_v1(*key, row));
+        }
+        if let Some((claim, until)) = tir_source_index_metadata_v1(*key, row) {
+            state.staged_tir_by_claim.entry(claim).or_default().insert((until, *key));
+        }
+        state.staged_tir_preparers.extend(tir_preparation_index_rows_v1(*key, row));
         state.staged_history_responders.extend(history_response_index_rows_v1(row));
         state.staged_flat_responders.extend(flat_response_index_rows_v1(row));
         state.staged_selected_responders.extend(selected_response_index_rows_v1(row));
@@ -2905,6 +3053,78 @@ pub(super) fn rebuild_indices(state: &mut PalwChainStateV2) {
             }
         }
         state.staged_holds.extend(holds);
+    }
+}
+
+pub(super) fn tir_index_metadata_v1(
+    key: PalwStagedCourtKeyV1,
+    row: &PalwStagedCourtRowV1,
+) -> Option<(PalwBondKeyV2, Hash64, Hash64, u64)> {
+    let (PalwStagedCourtKeyV1::TirAcquisition(claim, owner, allocation), PalwStagedCourtRowV1::TirAcquisition(row)) = (key, row) else {
+        return None;
+    };
+    let c = row.owned.contract_v1();
+    if (c.claim, c.owner) != (claim, owner) { return None; }
+    Some((owner, claim, allocation, c.terms.material_until_daa))
+}
+pub(super) fn tir_source_index_metadata_v1(
+    key: PalwStagedCourtKeyV1,
+    row: &PalwStagedCourtRowV1,
+) -> Option<(Hash64, u64)> {
+    match (key, row) {
+        (PalwStagedCourtKeyV1::TirPreparation(claim, allocation), PalwStagedCourtRowV1::TirPreparation(row)) => {
+            let c = row.preparation.contract_v1();
+            ((claim, allocation) == (c.claim, c.allocation_id)).then_some((claim, c.material_until_daa))
+        }
+        _ => tir_index_metadata_v1(key, row).map(|(_, claim, _, until)| (claim, until)),
+    }
+}
+pub(super) fn tir_preparation_index_rows_v1(
+    key: PalwStagedCourtKeyV1,
+    row: &PalwStagedCourtRowV1,
+) -> Vec<(PalwBondKeyV2, u64, Hash64, Hash64)> {
+    let (PalwStagedCourtKeyV1::TirPreparation(claim, allocation), PalwStagedCourtRowV1::TirPreparation(row)) = (key, row) else {
+        return Vec::new();
+    };
+    let c = row.preparation.contract_v1();
+    if (claim, allocation) != (c.claim, c.allocation_id) { return Vec::new(); }
+    row.preparation.pending_signers_v1().into_iter()
+        .map(|signer| (signer, c.preparation_until_daa, claim, allocation)).collect()
+}
+/// Exact current unpaid literal slots, not a Panel draw and not an admission or
+/// collection credential. Native versioned admission still owes grant checks.
+pub(super) fn tir_response_index_rows_v1(
+    key: PalwStagedCourtKeyV1,
+    row: &PalwStagedCourtRowV1,
+) -> Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2, Hash64, u64, Hash64)> {
+    let Some((owner, claim, allocation, _)) = tir_index_metadata_v1(key, row) else { return Vec::new() };
+    let PalwStagedCourtRowV1::TirAcquisition(row) = row else { return Vec::new() };
+    let Some(pending) = row.owned.active_v1().filter(|p| !p.collected) else { return Vec::new() };
+    row.owned.response_custodians_v1().iter().filter(|signer| {
+        pending.slots.get(signer).is_none_or(|slot| slot.finished.is_none())
+    }).map(|signer| (*signer, pending.respond_until_daa, claim, owner, allocation, pending.turn, pending.demand_id)).collect()
+}
+fn update_tir_indices_v1(state: &mut PalwChainStateV2, key: PalwStagedCourtKeyV1, row: &PalwStagedCourtRowV1, insert: bool) {
+    if let Some((owner, claim, allocation, _)) = tir_index_metadata_v1(key, row) {
+        if insert {
+            state.staged_tir_by_owner.insert((owner, claim, allocation));
+            state.staged_tir_responders.extend(tir_response_index_rows_v1(key, row));
+        } else {
+            state.staged_tir_by_owner.remove(&(owner, claim, allocation));
+            for entry in tir_response_index_rows_v1(key, row) { state.staged_tir_responders.remove(&entry); }
+        }
+    }
+    if let Some((claim, until)) = tir_source_index_metadata_v1(key, row) {
+        if insert {
+            state.staged_tir_by_claim.entry(claim).or_default().insert((until, key));
+        } else if let Some(rows) = state.staged_tir_by_claim.get_mut(&claim) {
+            rows.remove(&(until, key));
+            if rows.is_empty() { state.staged_tir_by_claim.remove(&claim); }
+        }
+    }
+    for entry in tir_preparation_index_rows_v1(key, row) {
+        if insert { state.staged_tir_preparers.insert(entry); }
+        else { state.staged_tir_preparers.remove(&entry); }
     }
 }
 pub(super) fn selected_response_index_rows_v1(row: &PalwStagedCourtRowV1) -> Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)> {
@@ -3019,6 +3239,20 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
     let due: Vec<_> = b.state.staged_due.iter().take_while(|(at, _)| *at <= ctx.daa_score).take(64).map(|(_, key)| *key).collect();
     for key in due {
         let Some(mut saved) = b.state.staged_courts.get(&key).cloned() else { continue };
+        // Acquisition metadata and immutable public bytes have their own exact
+        // paid material TTL, not an old mutable court checkpoint or DA default.
+        // No semantic close, sibling default, or expired response erases them.
+        let tir_until = match &saved {
+            PalwStagedCourtRowV1::TirAcquisition(row) => Some(row.owned.contract_v1().terms.material_until_daa),
+            PalwStagedCourtRowV1::TirRawChunk(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::TirAcceptedBody(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::TirPreparation(row) => Some(row.preparation.contract_v1().material_until_daa),
+            _ => None,
+        };
+        if let Some(until) = tir_until {
+            if ctx.daa_score >= until { b.write_staged_row_v1(key, None); }
+            continue;
+        }
         let material = saved.owner_accounting_v1().map(|(_, _, _, until)| until);
         if material.is_none_or(|until| ctx.daa_score >= until) {
             b.write_staged_row_v1(key, None);
@@ -3031,10 +3265,11 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
         let row_key = (row.claim, row.reserver);
         let closed =
             b.state.claim(&row.claim).is_some_and(|c| c.phase.is_terminal() && !matches!(c.phase, PalwClaimPhaseV2::Final { .. }));
-        let default = if closed { None } else { row.joint_default_v1(ctx.daa_score).map_err(|e| stage_refused(row.claim, e))? };
         if closed {
             row.mark_claim_closed_v1().map_err(|e| stage_refused(row.claim, e))?;
-        } else if let Some(default) = &default {
+        }
+        let default = row.joint_default_v1(ctx.daa_score).map_err(|e| stage_refused(row.claim, e))?;
+        if let Some(default) = &default {
             row.mark_default_collected_v1(ctx.daa_score).map_err(|e| stage_refused(row.claim, e))?;
             collect_prefix_default(b, ctx, default)?;
         } else {
@@ -3057,19 +3292,9 @@ fn collect_prefix_default(
     default: &crate::palw_prefix_public_owned_v1::PalwPrefixJointDefaultV1,
 ) -> Result<(), PalwStateV2Error> {
     let claim = b.state.claim(&default.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(default.claim))?;
-    let stage = match claim.phase {
-        PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } => crate::palw_da_rcore_v1::PalwDaStageV1::Live,
-        PalwClaimPhaseV2::ReceiptLicensed { .. } => crate::palw_da_rcore_v1::PalwDaStageV1::Licensed,
-        PalwClaimPhaseV2::Final { .. } => crate::palw_da_rcore_v1::PalwDaStageV1::FinalRow,
-        _ => return Err(stage_refused(default.claim, "public collection has no live economic claim")),
-    };
-    let charge = PalwDaDefaultChargeV1 {
-        claim_id: default.claim,
-        producer: default.producer,
-        stage,
-        g: b.claim_g_v1(&default.claim).map(|g| g.g()).unwrap_or(0),
-        covering: default.panel.iter().copied().collect(),
-        winner: default.owner,
-    };
-    b.da_default_charge_v1(ctx, &claim, &charge)
+    // The expired pending source proves these exact frozen signers, not a new
+    // Panel draw. A sibling close cannot discharge an unconsumed Valid signer;
+    // the existing economic helper skips an already charged producer and S4 key.
+    let unpaid = default.panel.iter().copied().chain(std::iter::once(default.producer)).collect();
+    b.staged_selected_default_charge_v1(ctx, default.claim, &claim, default.producer, &unpaid, default.owner)
 }

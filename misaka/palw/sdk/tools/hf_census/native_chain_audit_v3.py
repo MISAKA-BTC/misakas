@@ -71,7 +71,16 @@ def owning_args(a) -> tuple[list[str], list[str], list[str]]:
 def lifecycle(a, scope: dict, ptr: dict, work: Path, out: Path) -> int:
     """Register (class on a mature unrefuted source) / seat (job funded with the
     producer's original consent), re-derived offline from the own node's opening."""
-    ident, child, parent, start = (hex128(ptr.get(k)) for k in ("id", "anchor_child", "anchor_selected_parent", "provenance_start"))
+    master_mode=ptr.get("namespace")==32
+    ident, child, parent, start = (hex128(ptr.get(k)) for k in
+        (("master", "anchor_child", "anchor_selected_parent", "provenance_start") if master_mode else
+         ("id", "anchor_child", "anchor_selected_parent", "provenance_start")))
+    jobs=ptr.get("master_jobs", []) if master_mode else []
+    if master_mode and (not isinstance(jobs,list) or len(jobs)>64 or len(set(jobs))!=len(jobs)
+            or a.stage=="register" and jobs or a.stage=="seat" and not jobs):
+        raise ValueError("Master32 original lifecycle stage-ordered jobs required")
+    for job in jobs:
+        hex128(job)
     fetch = pinned_exe(a.audit_fetch, a.audit_fetch_sha256)
     klass = pinned_exe(a.palw_class, a.palw_class_sha256)
     own, own_sha_fetch, own_sha_class = owning_args(a)
@@ -85,12 +94,24 @@ def lifecycle(a, scope: dict, ptr: dict, work: Path, out: Path) -> int:
             or collection.get("pinned_child_on_own_node_selected_chain") is not True):
         raise ValueError("own-node collection differs from the predeclared network/genesis/chain")
     report_path = work / "lifecycle-audit.json"
-    run([klass, "audit-native-lifecycle32", "--stage", a.stage, "--network", a.network, *own, *own_sha_class,
+    run([klass, "audit-master-lifecycle32" if master_mode else "audit-native-lifecycle32", "--stage", a.stage, "--network", a.network, *own, *own_sha_class,
          "--child-header-json", str(collected / "child-header.json"),
          "--selected-parent-header-json", str(collected / "selected-parent-header.json"),
-         "--pinned-child", child, "--pinned-selected-parent", parent, "--id", ident,
-         "--aux-proof32", str(collected / "aux-proof32.borsh"), "--out", str(report_path)], work / "audit.log", a.timeout_seconds)
+         "--pinned-child", child, "--pinned-selected-parent", parent, "--master" if master_mode else "--id", ident,
+         *(["--jobs", ",".join(jobs)] if master_mode else []), "--aux-proof32", str(collected / "aux-proof32.borsh"), "--out", str(report_path)], work / "audit.log", a.timeout_seconds)
     report = json.loads(report_path.read_text())
+    if master_mode:
+        components=report.get("components", [])
+        if (report.get("schema")!="misaka.palw.pinned-native-master-lifecycle-audit.v32" or report.get("master")!=ident
+                or report.get("all_original_components_verified") is not True or not 1<=len(components)<=64
+                or a.stage=="seat" and [c.get("job") for c in components]!=jobs):
+            raise ValueError("complete original Master32 lifecycle proof refused")
+        # Compatibility anchor remains one genuine component; aggregate bindings
+        # have their own explicit names and never masquerade as an ordinary Fund.
+        c=components[0]
+        report={**report,"class":c["class"],"source":c["source"],"maximum_scope":c["maximum_scope"],
+            "maximum_resource":c["maximum_resource"],"job":c["job"],"original_funding":c["original_funding"],
+            "initial_consent":c["initial_consent"]}
     ok = report.get("pinned_headers_and_original_rows_verified") is True and report.get("stage") == a.stage
     seat_ok = a.stage == "register" or all(report.get(k) not in (None, "0" * 128) for k in ("job", "original_funding", "initial_consent"))
     qualified = report.get("qualified_native_profile") is True
@@ -115,6 +136,7 @@ def lifecycle(a, scope: dict, ptr: dict, work: Path, out: Path) -> int:
         "own_seal_and_public_da_verified": ok,
         "anchor_from_validated_consensus_database": True,
         "qualified_native_profile": qualified,
+        "local_qualified_validation_network": report.get("local_qualified_validation_network") is True,
         "isolated_calibration": not qualified,
         "chain_objects": objects,
         "validated_anchor": {
@@ -127,6 +149,146 @@ def lifecycle(a, scope: dict, ptr: dict, work: Path, out: Path) -> int:
             "claim": "", "final": "", "single_credit": "", "redemption_transaction": "", "redemption_utxo": "",
         },
     }
+    if master_mode:
+        doc["validated_master_anchor"]={k:report[k] for k in ("master","native_class_set","complete_source","manifest","complete_inventory","program_set","real_parameter_set","class_scope_set","class_resource_set","components")}
+        doc["complete_model_lifecycle_evidence"]={"path":str(report_path.resolve().relative_to(evidence_root)),"sha256":sha256(report_path)}
+    with out.open("x") as f:
+        json.dump(doc, f, indent=2)
+    return 0
+
+
+def complete_model_identity(report: dict) -> dict | None:
+    """Identity from the freshly executed offline proof verifier only.
+
+    A Stage28 component never stands in for its complete original model. Master32
+    needs its own checked composite report; until that adapter exists it remains
+    explicitly unproven, including when one component has a genuine Final.
+    """
+    if (report.get("schema") != "misaka.palw.pinned-native-final-audit.v32"
+            or report.get("namespace") != 29
+            or report.get("pinned_headers_and_original_rows_verified") is not True):
+        return None
+    fields = {"native_class": "class", "native_source": "source", "program_root": "program_root",
+              "inventory_root": "inventory", "real_parameter_root": "real_parameter_root"}
+    identity = {}
+    for key, source in fields.items():
+        value = hex128(report.get(source))
+        if value == "0" * 128:
+            raise ValueError("offline complete-model identity has a zero original root")
+        identity[key] = value
+    return identity
+
+
+def master(a, scope: dict, ptr: dict, work: Path, out: Path) -> int:
+    """Every component is collected from this auditor's own DB, then matched to
+    one independently verified original Master32 record. No new master credit.
+    """
+    from copy import copy
+    evidence = Path(a.evidence_root).resolve()
+    master_id, child, parent, start = (hex128(ptr.get(k)) for k in
+        ("master", "master_child", "master_selected_parent", "provenance_start"))
+    jobs = ptr.get("master_jobs")
+    pointers = ptr.get("component_redemptions")
+    if (not isinstance(jobs, list) or not 1 <= len(jobs) <= 64 or len(set(jobs)) != len(jobs)
+            or not isinstance(pointers, list) or len(pointers) != len(jobs)):
+        raise ValueError("every original Master32 component pointer required in stage order")
+    for j in jobs:
+        hex128(j)
+    public = {}
+    for k in ("master_outputs", "master_generated"):
+        value = ptr.get(k)
+        if not isinstance(value, str):
+            raise ValueError("bounded original public Master32 witness path required")
+        p = (Path(a.stage_result).parent / value).resolve()
+        if not p.is_relative_to(evidence) or not p.is_file() or p.is_symlink():
+            raise ValueError("Master32 witness escapes original evidence root")
+        public[k] = p
+    fetch = pinned_exe(a.audit_fetch, a.audit_fetch_sha256)
+    klass = pinned_exe(a.palw_class, a.palw_class_sha256)
+    own, own_fetch, own_class = owning_args(a)
+    collected = work / "master-collected"
+    run([fetch, "--rpc", a.rpc, "--pinned-child", child, "--pinned-selected-parent", parent,
+        "--pinned-provenance-start", start, "--job", jobs[0], "--network", a.network, "--genesis", a.genesis,
+        "--operator-id", a.operator_id, "--node-database-id", a.node_database, *own_fetch, *own,
+        "--lifecycle-only", "true", "--out", str(collected), "--timeout-seconds", "60"],
+        work / "master-fetch.log", a.timeout_seconds)
+    collection = json.loads((collected / "collection.json").read_text())
+    if (collection.get("network") != a.network or collection.get("genesis") != a.genesis
+            or collection.get("pinned_child_on_own_node_selected_chain") is not True):
+        raise ValueError("Master32 own validated chain pin changed")
+    report_path = work / "master-proof-audit.json"
+    run([klass, "audit-master-composite32", "--network", a.network, *own, *own_class,
+        "--child-header-json", str(collected / "child-header.json"),
+        "--selected-parent-header-json", str(collected / "selected-parent-header.json"),
+        "--pinned-child", child, "--pinned-selected-parent", parent,
+        "--aux-proof32", str(collected / "aux-proof32.borsh"), "--master", master_id,
+        "--jobs", ",".join(jobs), "--outputs", str(public["master_outputs"]),
+        "--generated-json", str(public["master_generated"]), "--out", str(report_path)],
+        work / "master-proof-audit.log", a.timeout_seconds)
+    report = json.loads(report_path.read_text())
+    if (report.get("schema") != "misaka.palw.pinned-native-master-execution-audit.v32"
+            or report.get("namespace") != 32 or report.get("master") != master_id
+            or report.get("pinned_headers_and_original_rows_verified") is not True
+            or report.get("all_original_component_finals_and_credits_verified") is not True
+            or report.get("master_mints_extra_credit") is not False
+            or [c.get("job") for c in report.get("components", [])] != jobs):
+        raise ValueError("independent complete original Master32 proof refused")
+    binding = report.get("complete_model_binding", {})
+    required = {"native_class_set", "complete_source", "manifest", "complete_inventory", "program_set",
+        "real_parameter_set", "maximum_scope_set", "maximum_resource_set"}
+    if binding.get("namespace") != 32 or set(binding) != required | {"namespace"}:
+        raise ValueError("explicit original Master32 set identity unavailable")
+    for k in required:
+        if hex128(binding[k]) == "0" * 128:
+            raise ValueError("zero original Master32 binding")
+    objects, component_evidence, docs = [], [], []
+    # Cross-report equality is meaningful only after BOTH reports were freshly
+    # produced by pinned proof checkers from the same own node's actual rows.
+    fields = {"class":"class", "program":"program_root", "source":"source", "inventory":"inventory",
+        "real_parameter":"real_parameter_root", "job":"job", "original_funding":"original_funding",
+        "initial_consent":"initial_consent", "maximum_scope":"original_maximum_scope",
+        "maximum_resource":"original_maximum_resource", "claim":"claim", "final_book":"final_book",
+        "single_credit":"single_credit", "payout_queue":"payout_queue", "settlement":"settlement",
+        "requester_operator":"requester_operator", "producer_operator":"producer_operator", "established_daa":"established_daa", "reward":"producer_credit"}
+    for i, (job, pointer, original) in enumerate(zip(jobs, pointers, report["components"])):
+        if not isinstance(pointer, dict) or pointer.get("job") != job:
+            raise ValueError("original Master32 component job order substituted")
+        folder = work / f"component-{i:03}"
+        folder.mkdir()
+        component_out = folder / "independent-final.json"
+        sub = copy(a)
+        # Final-only proof is useful before redemption; public launch requires
+        # redemption stage and exact spend35 for EVERY component below.
+        doc = ordinary_final(sub, scope, pointer, folder, component_out)
+        proof_e = doc["complete_model_identity_evidence"]
+        final_report = json.loads((evidence / proof_e["path"]).read_text())
+        if (final_report.get("namespace") != 28 or final_report.get("network") != report.get("network")
+                or final_report.get("genesis") != report.get("genesis")
+                or doc.get("local_qualified_validation_network") != report.get("local_qualified_validation_network")
+                or any(final_report.get(dst) != original.get(src) for src, dst in fields.items())):
+            raise ValueError("component genuine Final/credit differs from original Master32 receipt")
+        if a.stage == "redemption" and not all(doc.get(k) is True for k in
+                ("redemption_authenticated", "single_credit_verified", "utxo_spend_verified")):
+            raise ValueError("every original Master32 component must actually redeem its own credit")
+        docs.append(doc); objects.extend(doc["chain_objects"]); component_evidence.append(proof_e)
+    def artifact(p):
+        return {"path": str(p.resolve().relative_to(evidence)), "sha256": sha256(p)}
+    objects.extend(artifact(p) for p in sorted(collected.iterdir()) if p.is_file())
+    objects.extend(artifact(p) for p in [report_path, *public.values()])
+    qualified = report.get("qualified_native_profile") is True and report.get("final_receipt_class") == "qualified-final"
+    if any(d.get("qualified_native_profile") != qualified for d in docs):
+        raise ValueError("Master32 component owning qualification differs")
+    doc = {**docs[0], "scope": scope, "complete_model_identity": report["complete_model_identity"],
+        "complete_model_identity_status": "PROOF_DERIVED_COMPLETE_MASTER32",
+        "complete_model_identity_evidence": artifact(report_path), "complete_model_binding": binding,
+        "complete_model_binding_evidence": artifact(report_path), "component_redemption_evidence": component_evidence,
+        "chain_objects": objects, "validated_anchor": docs[0]["validated_anchor"],
+        "validated_master_anchor": {"namespace": 32, "master": master_id, "child": child,
+            "selected_parent": parent, "composite": report["composite"],
+            "single_credit_set": report["single_credit_set"], "complete_model_binding": binding,
+            "components": report["components"]}}
+    # Keep the ordinary compatibility anchor as a genuine component anchor.
+    # Set roots live ONLY in explicit Master fields, never in single-job fields.
     with out.open("x") as f:
         json.dump(doc, f, indent=2)
     return 0
@@ -134,29 +296,49 @@ def lifecycle(a, scope: dict, ptr: dict, work: Path, out: Path) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    for name in ("stage", "scope", "stage-result", "run-plan-sha256", "audit-result", "node-database", "operator-id",
+    for name in ("stage", "stage-result", "run-plan-sha256", "audit-result", "node-database", "operator-id",
                  "genesis", "network", "rpc", "palw-class", "palw-class-sha256", "audit-fetch", "audit-fetch-sha256",
                  "work-dir", "evidence-root"):
         ap.add_argument(f"--{name}", required=True)
+    ap.add_argument("--scope")
+    ap.add_argument("--receipt-audit")
+    ap.add_argument("--receipt-audit-sha256")
+    ap.add_argument("--receipt-collect")
+    ap.add_argument("--receipt-collect-sha256")
+    ap.add_argument("--receipt-live-collected")
     # Isolated calibration34 owning snapshot (all three) or none: the shipped preset.
     for name in ("own-params-snapshot34", "own-params-snapshot-root", "own-params-sha256"):
         ap.add_argument(f"--{name}")
     ap.add_argument("--timeout-seconds", type=int, default=600)
     a = ap.parse_args()
-    if a.stage not in ("register", "seat", "final", "redemption"):
+    if a.stage not in ("register", "seat", "final", "redemption", "receipt-windows"):
         return 2
     out = Path(a.audit_result)
     work = Path(a.work_dir)
     if out.exists() or work.exists():
         raise ValueError("fresh audit result and work directory required")
     work.mkdir(parents=True)
-    scope = json.loads(Path(a.scope).read_text())
     result = json.loads(Path(a.stage_result).read_text())
+    if a.stage == "receipt-windows":
+        from native_receipt_window_audit_v1 import audit
+        if not all((a.receipt_audit, a.receipt_audit_sha256, a.receipt_collect, a.receipt_collect_sha256)):
+            raise ValueError("pinned independent receipt proof checker required")
+        return audit(a, result, work, out)
+    if not a.scope:
+        raise ValueError("original lifecycle scope required")
+    scope = json.loads(Path(a.scope).read_text())
     if result.get("schema") != RESULT_SCHEMA or result.get("stage") != a.stage:
         raise ValueError("stage result pointer document differs")
     ptr = result.get("native_pointers") or {}
     if a.stage in ("register", "seat"):
         return lifecycle(a, scope, ptr, work, out)
+    if ptr.get("namespace") == 32:
+        return master(a, scope, ptr, work, out)
+    ordinary_final(a, scope, ptr, work, out)
+    return 0
+
+
+def ordinary_final(a, scope: dict, ptr: dict, work: Path, out: Path) -> dict:
     job, child, parent, start = (hex128(ptr.get(k)) for k in ("job", "final_child", "final_selected_parent", "provenance_start"))
     fetch = pinned_exe(a.audit_fetch, a.audit_fetch_sha256)
     klass = pinned_exe(a.palw_class, a.palw_class_sha256)
@@ -204,6 +386,7 @@ def main() -> int:
                  "--pinned-spend-selected-parent", hex128(ptr.get("spend_selected_parent"))]
     run(argv, work / "audit.log", a.timeout_seconds)
     report = json.loads(report_path.read_text())
+    identity = complete_model_identity(report)
     delivery = report.get("coinbase_delivery") or {}
     spend = delivery.get("accepted_spend") or {}
     qualified = report.get("qualified_native_profile") is True and report.get("final_receipt_class") == "qualified-final"
@@ -231,12 +414,16 @@ def main() -> int:
         "own_seal_and_public_da_verified": final_ok,
         "anchor_from_validated_consensus_database": True,
         "qualified_native_profile": qualified,
+        "local_qualified_validation_network": report.get("local_qualified_validation_network") is True,
         "isolated_calibration": not qualified,
         "final_authenticated": final_ok,
         "court_window_closed": final_ok,
         "redemption_authenticated": redemption and redeemed,
         "single_credit_verified": redemption and redeemed,
         "utxo_spend_verified": redemption and redeemed,
+        "complete_model_identity": identity,
+        "complete_model_identity_status": "PROOF_DERIVED_TEXT29" if identity else "NOT_PROVEN_COMPLETE_MODEL",
+        "complete_model_identity_evidence": {"path": str(report_path.resolve().relative_to(evidence_root)), "sha256": sha256(report_path)},
         "chain_objects": objects,
         "validated_anchor": {
             "network": a.network, "genesis": a.genesis, "anchor_block": child,
@@ -253,7 +440,7 @@ def main() -> int:
     }
     with out.open("x") as f:
         json.dump(doc, f, indent=2)
-    return 0
+    return doc
 
 
 if __name__ == "__main__":

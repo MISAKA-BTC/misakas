@@ -381,6 +381,13 @@ impl IbdFlow {
                             );
                             return Err(e);
                         }
+                        if e.is_local_native_resource_unavailable() {
+                            info!(
+                                "Keeping peer {} after local native resource refusal; no verdict on its chain was produced",
+                                self.router
+                            );
+                            continue;
+                        }
                         // While the chain is still under review, a failed IBD does not cost the peer
                         // its connection.
                         //
@@ -630,22 +637,32 @@ impl IbdFlow {
                 //
                 // Transport failures leave the candidate where it was, so the ordinary retry and
                 // source-rotation machinery gets its turn. The lease bounds how long that can go on.
-                let proof_was_judged =
-                    !matches!(e, ProtocolError::ConnectionClosed | ProtocolError::Timeout(_) | ProtocolError::UnexpectedMessage(..))
-                        && !matches!(&e, ProtocolError::Other(m) if m.contains("lease was revoked"));
+                let local_resource = e.is_local_native_resource_unavailable();
+                let proof_was_judged = !local_resource
+                    && !matches!(
+                        e,
+                        ProtocolError::ConnectionClosed | ProtocolError::Timeout(_) | ProtocolError::UnexpectedMessage(..)
+                    )
+                    && !matches!(&e, ProtocolError::Other(m) if m.contains("lease was revoked"));
                 warn!(
                     "Candidate {} from {} could not be backed by a valid pruning proof: {} ({})",
                     id.virtual_selected_parent,
                     self.router,
                     e,
-                    if proof_was_judged { "refusing the chain" } else { "transport failure — the chain keeps its turn" }
+                    if local_resource {
+                        "local resource refusal — no chain or source fault"
+                    } else if proof_was_judged {
+                        "refusing the chain"
+                    } else {
+                        "transport failure — the chain keeps its turn"
+                    }
                 );
                 if proof_was_judged {
                     self.ctx.set_ibd_candidate_validation(
                         id,
                         CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof },
                     );
-                } else {
+                } else if !local_resource {
                     // Transport failure, not a verdict on the chain. It stays retryable — but it is
                     // charged an attempt so a source that keeps flapping cannot re-arm
                     // `ProofRequested { since: now }` on every reconnect and pin the candidate at
@@ -1607,7 +1624,8 @@ impl IbdFlow {
             }
             IbdType::DownloadHeadersProof => {
                 drop(session); // Avoid holding the previous consensus throughout the staging IBD
-                let staging = self.ctx.consensus_manager.new_staging_consensus();
+                let staging =
+                    self.ctx.consensus_manager.new_staging_consensus().map_err(ProtocolError::LocalNativeCapacityUnavailable)?;
                 match self.ibd_with_headers_proof(&staging, negotiation_output.syncer_virtual_selected_parent, &relay_header).await {
                     Ok(proof_pruning_point) => {
                         // The commit barrier. Everything above this line is reversible by
@@ -2005,8 +2023,16 @@ impl IbdFlow {
         if self.ctx.config.params.palw_fork_choice_rule_e_active_at(incumbent_daa) {
             return self.validate_staging_palw_rule_e(consensus, staging_consensus).await;
         }
-        let incumbent = consensus.clone().spawn_blocking(|c| c.get_palw_candidate_order_v2()).await;
-        let challenger = staging_consensus.clone().spawn_blocking(|c| c.get_palw_candidate_order_v2()).await;
+        let incumbent = consensus
+            .clone()
+            .spawn_blocking(|c| c.get_palw_candidate_order_v2_checked())
+            .await
+            .map_err(ProtocolError::LocalNativeCapacityUnavailable)?;
+        let challenger = staging_consensus
+            .clone()
+            .spawn_blocking(|c| c.get_palw_candidate_order_v2_checked())
+            .await
+            .map_err(ProtocolError::LocalNativeCapacityUnavailable)?;
         // **Fail CLOSED.** This used to be a let-else returning `Ok(())`, and the challenger was
         // always `None`, so the gate never once fired: an attacker who piled blue work on a private
         // fork was refused by `decide_deep_reorg_v2` on the relay path and could install the whole
@@ -2058,8 +2084,16 @@ impl IbdFlow {
         staging_consensus: &ConsensusProxy,
     ) -> Result<(), ProtocolError> {
         use kaspa_consensus_core::palw_fork_authority_v2::PalwIbdCommitV2;
-        let incumbent = consensus.clone().spawn_blocking(|c| c.get_palw_rule_e_weighing_v1()).await;
-        let challenger = staging_consensus.clone().spawn_blocking(|c| c.get_palw_rule_e_weighing_v1()).await;
+        let incumbent = consensus
+            .clone()
+            .spawn_blocking(|c| c.get_palw_rule_e_weighing_v1_checked())
+            .await
+            .map_err(ProtocolError::LocalNativeCapacityUnavailable)?;
+        let challenger = staging_consensus
+            .clone()
+            .spawn_blocking(|c| c.get_palw_rule_e_weighing_v1_checked())
+            .await
+            .map_err(ProtocolError::LocalNativeCapacityUnavailable)?;
         let (incumbent, challenger) = match (incumbent, challenger) {
             (Some(i), Some(c)) => (i, c),
             (Some(_), None) => {
@@ -2823,15 +2857,20 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             && (kaspa_consensus_core::palw_native_resource_v1::native_resource_admission_enabled_v1()
                 || kaspa_consensus_core::palw_native_resource_v1::native_logical_admission_enabled_v1())
         {
-            return Err(ProtocolError::Other(
-                "explicit native receive admission requires negotiated protocol 107 structural preflight",
+            return Err(ProtocolError::LocalNativeCapacityUnavailable(
+                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                    kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+                >(
+                    "native snapshot receive capability",
+                    "explicit local admission requires negotiated protocol 107 structural preflight",
+                ),
             ));
         }
         if self.router.properties().protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
             return self.request_pruning_point_palw_chunks(pruning_point).await;
         }
         let _snapshot_lease = crate::palw_snapshot_chunks::SnapshotSpill::new()
-            .map_err(|_| ProtocolError::PruningSidecarUnavailable("PALW snapshot session budget", pruning_point.to_string()))?;
+            .map_err(|why| ProtocolError::LocalNativeResourceUnavailable(format!("PALW snapshot spill/session: {why}")))?;
         self.router
             .enqueue(make_message!(
                 Payload::RequestPruningPointPalwState,

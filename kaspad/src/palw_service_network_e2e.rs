@@ -98,7 +98,7 @@ impl NetworkRun {
         assert!(receiver.tc.get_block(commitment_block).is_err());
         assert!(receiver.view(claim).public_fp_job.is_none());
         let config = Arc::new(chain.config.clone());
-        let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(receiver.tc.clone()))));
+        let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(receiver.tc.clone()))).unwrap());
         let tick = Arc::new(TickService::new());
         let (metadata, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let (addresses, _) = kaspa_addressmanager::AddressManager::new(config.clone(), db, tick.clone());

@@ -33,6 +33,9 @@ impl HandleIbdBlockRequests {
         loop {
             let (msg, request_id) = dequeue_with_request_id!(self.incoming_route, Payload::RequestIbdBlocks)?;
             let hashes: Vec<_> = msg.try_into()?;
+            if hashes.len() > crate::ibd::MAX_REQUEST_HASHES {
+                return Err(ProtocolError::Other("RequestIbdBlocks: number of requested hashes exceeds the limit"));
+            }
 
             debug!("got request for {} IBD blocks", hashes.len());
             let session = self.ctx.consensus().unguarded_session();
