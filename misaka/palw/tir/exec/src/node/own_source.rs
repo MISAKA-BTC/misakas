@@ -739,8 +739,24 @@ mod tests {
             let mut reader = backend.open_tir_public_capture_v1(&header, original, directory.path()).unwrap();
             let request = kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: 3 };
             let mut answered = None;
+            let mut charged = kaspa_consensus_core::palw_backend::PalwTirPublicCaptureWorkV1::default();
+            let mut saw_ids_eof = false;
             for _ in 0..100_000 {
-                match reader.poll_v1(&request) {
+                let quote = reader.slice_quote_v1(&request).unwrap();
+                assert_eq!(quote.sequence, reader.progress_v1().sequence);
+                if quote.phase == 9 {
+                    assert_eq!(quote.work.replay_positions, 1, "one poll never hides a whole-job replay");
+                }
+                if quote.phase == 6 {
+                    saw_ids_eof |= quote.work.hash_bytes >= u64::from(job.exact_decode_tokens) * 4;
+                }
+                charged = charged.checked_add_v1(quote.work).unwrap();
+                let result = reader.poll_quoted_v1(&request, &quote);
+                let after = reader.progress_v1();
+                assert_eq!(after.sequence, quote.sequence + 1);
+                assert_eq!(after.charged, charged, "None and terminal refusal retain the full pre-debit");
+                assert_eq!(after.last_slice, Some(quote));
+                match result {
                     Ok(None) => continue,
                     result => {
                         answered = Some(result);
@@ -748,6 +764,11 @@ mod tests {
                     }
                 }
             }
+            assert!(saw_ids_eof, "the original full-ID hash is included before replay");
+            assert_eq!(charged.replay_positions, u64::from(job.declared_prefill_tokens) + u64::from(job.exact_decode_tokens) - 1);
+            assert_eq!(charged.replay_leaves, header.step_leaf_count);
+            assert!(charged.arithmetic_work > 0);
+            assert!(charged.traffic_bytes > 0, "registered parameter traffic has an independent cumulative dimension");
             let answer = answered.expect("fold must reach response or explicit original-root refusal");
             if fault {
                 assert!(answer.is_err());

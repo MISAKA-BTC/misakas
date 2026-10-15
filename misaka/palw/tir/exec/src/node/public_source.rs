@@ -3,7 +3,10 @@
 use super::own_source::{DiskTree, Trace, tree_disk_bytes_v1};
 use kaspa_consensus_core::{
     Hash64,
-    palw_backend::{PalwOriginalCaptureReaderV1, PalwTirPublicCaptureNeedV1, PalwTirPublicCaptureReaderV1},
+    palw_backend::{
+        PalwOriginalCaptureReaderV1, PalwTirPublicCaptureNeedV1, PalwTirPublicCaptureProgressV1, PalwTirPublicCaptureReaderV1,
+        PalwTirPublicCaptureSliceV1, PalwTirPublicCaptureWorkV1,
+    },
     palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_match_v1},
     palw_step::PALW_STEP_MAX_TILE_LEN,
     palw_step_leg::{PalwStepTileLeafV1, step_tile_leaf_hash_v1},
@@ -23,6 +26,12 @@ use std::{
 const READ: u32 = 16_384;
 const MAX_LEAF: u64 = PALW_STEP_MAX_TILE_LEN as u64 * 4;
 const LEAF_HEAD: u64 = 26;
+
+fn hash_scope(domain: &[u8], value: &impl borsh::BorshSerialize) -> Result<Hash64, String> {
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(domain).to_state();
+    state.update(&borsh::to_vec(value).map_err(|e| e.to_string())?);
+    Ok(Hash64::from_bytes(state.finalize().as_bytes().try_into().expect("64")))
+}
 
 pub(crate) fn need_v1(
     binding: &PalwTirStepBindingV1,
@@ -126,6 +135,10 @@ pub(crate) struct CaptureReader {
     replay_trace: Option<Trace>,
     spool: Option<Arc<Spool>>,
     directory: std::path::PathBuf,
+    need: PalwTirPublicCaptureNeedV1,
+    metadata_bytes: u64,
+    replay_work: Option<kaspa_consensus_core::palw_tir_work_v1::PalwTirWorkShapeV1>,
+    progress: PalwTirPublicCaptureProgressV1,
 }
 
 pub(crate) struct FoldReplayV1 {
@@ -169,6 +182,15 @@ impl CaptureReader {
         directory: &Path,
         replay: Option<FoldReplayV1>,
     ) -> Result<Self, String> {
+        let replay_ram = replay
+            .as_ref()
+            .map_or(Ok(0), |r| super::memory::tir_executor_storage_need_v1(&r.space, r.artifact.plan(), &binding.job_context))?;
+        let need = need_v1(&binding, &public, source.len_v1(), replay_ram)?;
+        let metadata_bytes = borsh::object_length(&binding).map_err(|e| e.to_string())? as u64;
+        let replay_work = replay
+            .as_ref()
+            .map(|r| kaspa_consensus_core::palw_tir_work_v1::palw_tir_work_shape_v1(&r.space.program).map_err(|e| e.to_string()))
+            .transpose()?;
         std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
         let n = public.leaf_count_v1();
         let mut expected = super::backend::TIR_CAPTURE_MAGIC_V1.to_vec();
@@ -226,7 +248,199 @@ impl CaptureReader {
             replay_trace: None,
             spool: None,
             directory: directory.to_path_buf(),
+            need,
+            metadata_bytes,
+            replay_work,
+            progress: PalwTirPublicCaptureProgressV1::default(),
         })
+    }
+
+    fn slice_quote(&self, request: &Request) -> Result<PalwTirPublicCaptureSliceV1, String> {
+        self.public.check_request_v1(request)?;
+        let add = |a: u64, b: u64| a.checked_add(b).ok_or_else(|| "TIR capture slice work overflow".to_string());
+        let mul = |a: u64, b: u64| a.checked_mul(b).ok_or_else(|| "TIR capture slice work overflow".to_string());
+        let depth = |n: u64| u64::from(64 - n.saturating_sub(1).leading_zeros());
+        let d = u64::from(self.public.decode_count_v1());
+        let p = u64::from(self.binding.job_context.declared_prefill_tokens);
+        let tiles = u64::from(self.public.vocab_v1()).div_ceil(PALW_LOGITS_TILE_LANES as u64);
+        let hs = depth(self.public.leaf_count_v1()) + 1;
+        let hr = depth(d) + 1;
+        let ht = depth(tiles) + 1;
+        let mut work = PalwTirPublicCaptureWorkV1::default();
+        let phase = match self.phase {
+            Phase::Prefix(first) => {
+                work.io_bytes = (self.expected.len() - first).min(READ as usize) as u64;
+                0
+            }
+            Phase::PromptCount => {
+                work.io_bytes = 4;
+                1
+            }
+            Phase::Prompt => {
+                let words = (p - self.prompt.len() as u64).min(u64::from(READ) / 4);
+                work.io_bytes = mul(words, 8)?; // Input plus provisional ID copy.
+                if self.prompt.len() as u64 + words == p {
+                    work.hash_bytes = add(mul(p, 4)?, self.metadata_bytes)?;
+                }
+                2
+            }
+            Phase::RowCount => {
+                work.io_bytes = 4;
+                3
+            }
+            Phase::Rows => {
+                let first = mul(u64::from(self.tile), PALW_LOGITS_TILE_LANES as u64)?;
+                let lanes = (u64::from(self.public.vocab_v1()) - first).min(PALW_LOGITS_TILE_LANES as u64);
+                work.io_bytes = add(mul(lanes, 8)?, 4)?;
+                work.hash_bytes = add(mul(lanes, 4)?, self.metadata_bytes)?;
+                if self.public.supports_tiled_trace_v1() {
+                    // Includes push and ragged finish of both the tile and row tree.
+                    work.tree_hashes = mul(add(ht, hr)?, 8)?;
+                }
+                4
+            }
+            Phase::IdCount => {
+                work.io_bytes = 4;
+                5
+            }
+            Phase::Ids => {
+                let words = (d - self.ids.len() as u64).min(1024);
+                work.io_bytes = mul(words, 8)?;
+                if self.ids.len() as u64 + words == d {
+                    work.hash_bytes = add(mul(d, 4)?, self.metadata_bytes)?;
+                }
+                6
+            }
+            Phase::LeavesCount => {
+                // Dense/fold discriminator is read in this slice. Conservatively
+                // cover the fold branch's ID scan/copy and trace initialization too.
+                work.io_bytes = add(4, add(mul(add(p, d)?, 4)?, mul(d, 8)?)?)?;
+                work.replay_id_words = mul(d, 2)?;
+                work.hash_bytes = self.metadata_bytes;
+                7
+            }
+            Phase::Leaves => {
+                work.io_bytes = add(MAX_LEAF + LEAF_HEAD, 8)?;
+                work.hash_bytes = add(MAX_LEAF + LEAF_HEAD, self.metadata_bytes)?;
+                work.tree_hashes = mul(hs, 8)?;
+                8
+            }
+            Phase::Replay => {
+                let replay = self.replay.as_ref().ok_or("TIR public replay provider absent")?;
+                let job = replay.space.job_shape(&self.binding.job_context).map_err(|e| e.to_string())?;
+                let position = self.next_replay_position()?;
+                if position >= job.positions {
+                    return Err("TIR capture replay quote is past original job".into());
+                }
+                let first = replay.space.running_total(&job, position);
+                let end = replay.space.running_total(&job, position + 1);
+                work.replay_leaves = u64::try_from(end.checked_sub(first).ok_or("TIR replay leaf quote runs backwards")?)
+                    .map_err(|_| "TIR replay leaf quote overflow")?;
+                work.replay_positions = 1;
+                // Restoration, generated prefix, last-state snapshot and comparison.
+                work.replay_id_words = mul(d, 4)?;
+                let shape = self.replay_work.as_ref().ok_or("TIR registered work shape absent")?;
+                let vector = shape
+                    .work_cell_v1(
+                        0..usize::MAX,
+                        u128::from(position)..u128::from(position + 1),
+                        &kaspa_consensus_core::palw_canonical_work_v1::PalwCanonicalExecutionFactsV1::uncached(
+                            self.binding.job_context.declared_prefill_tokens,
+                            self.public.decode_count_v1(),
+                        ),
+                    )
+                    .map_err(|e| e.to_string())?;
+                work.arithmetic_work = vector.arithmetic_mac_eq();
+                if work.arithmetic_work == u128::MAX {
+                    return Err("TIR arithmetic slice quote saturated".into());
+                }
+                work.traffic_bytes = vector.traffic_bytes();
+                let traffic = u64::try_from(work.traffic_bytes).map_err(|_| "TIR replay traffic quote overflow")?;
+                let leaf_bytes = mul(work.replay_leaves, MAX_LEAF + LEAF_HEAD)?;
+                work.io_bytes =
+                    add(traffic, add(mul(self.need.resident_ram_bytes, 8)?, add(leaf_bytes, mul(work.replay_leaves, 8)?)?)?)?;
+                work.hash_bytes = mul(work.replay_leaves, add(MAX_LEAF + LEAF_HEAD, self.metadata_bytes)?)?;
+                work.tree_hashes = mul(add(work.replay_leaves, 1)?, mul(hs, 8)?)?;
+                if job.runs_post(position) {
+                    work.io_bytes = add(work.io_bytes, mul(u64::from(self.public.vocab_v1()), 32)?)?;
+                    work.hash_bytes =
+                        add(work.hash_bytes, add(mul(u64::from(self.public.vocab_v1()), 4)?, mul(tiles, self.metadata_bytes)?)?)?;
+                    work.tree_hashes = add(work.tree_hashes, mul(add(tiles, hr)?, 8)?)?;
+                }
+                if position + 1 == job.positions {
+                    work.hash_bytes = add(work.hash_bytes, add(mul(d, 4)?, mul(self.metadata_bytes, 4)?)?)?;
+                    work.tree_hashes = add(work.tree_hashes, mul(hr, 8)?)?;
+                }
+                9
+            }
+            Phase::Ready => {
+                let path = |checks: u64, h: u64| mul(mul(checks, h)?, 2);
+                let frontier = |level: u8| 1u64 << level.min(10);
+                match *request {
+                    Request::StepLeaf { .. } => {
+                        work.io_bytes = MAX_LEAF + LEAF_HEAD + 8;
+                        work.tree_hashes = path(add(hs, 4)?, hs)?;
+                        work.hash_bytes = add(MAX_LEAF + LEAF_HEAD, self.metadata_bytes)?;
+                    }
+                    Request::StepRun { count, .. } => {
+                        work.io_bytes = mul(u64::from(count), MAX_LEAF + LEAF_HEAD + 8)?;
+                        work.tree_hashes = path(add(mul(u64::from(count), 2)?, add(mul(hs, 2)?, 4)?)?, hs)?;
+                        work.hash_bytes = mul(u64::from(count), add(MAX_LEAF + LEAF_HEAD, self.metadata_bytes)?)?;
+                    }
+                    Request::StepNode { level, .. } => {
+                        work.tree_hashes = path(add(frontier(level), add(hs, 4)?)?, hs)?;
+                    }
+                    Request::RowsNode { level, .. } => {
+                        work.tree_hashes = path(add(frontier(level), add(hr, 4)?)?, hr)?;
+                    }
+                    Request::TileNode { level, .. } => {
+                        work.tree_hashes = add(path(add(hr, 4)?, hr)?, path(add(frontier(level), add(ht, 4)?)?, ht)?)?;
+                    }
+                    Request::TraceTile { .. } => {
+                        work.io_bytes = PALW_LOGITS_TILE_LANES as u64 * 8;
+                        work.hash_bytes = add(PALW_LOGITS_TILE_LANES as u64 * 4, self.metadata_bytes)?;
+                        work.tree_hashes = add(path(add(hr, 4)?, hr)?, path(add(ht, 5)?, ht)?)?;
+                    }
+                    Request::Ids { offset } => {
+                        work.io_bytes = mul((d - u64::from(offset)).min(1024), 4)?;
+                    }
+                }
+                10
+            }
+            Phase::Failed => 11,
+        };
+        // Each tree operation includes the 64-byte indexed leaf/node hashing and
+        // disk read/write traffic. Bounds include final promoted-odd paths.
+        work.hash_bytes = add(add(work.hash_bytes, mul(work.tree_hashes, 160)?)?, 1024)?;
+        work.io_bytes = add(work.io_bytes, mul(work.tree_hashes, 128)?)?;
+        let request_id = hash_scope(b"misaka-palw/tir-capture-request/v1", request)?;
+        let cursor_id = hash_scope(
+            b"misaka-palw/tir-capture-cursor/v1",
+            &(
+                self.public.source_id_v1(),
+                request_id,
+                self.progress.sequence,
+                phase,
+                self.at,
+                self.row,
+                self.tile,
+                self.leaf,
+                self.next_replay_position()?,
+            ),
+        )?;
+        Ok(PalwTirPublicCaptureSliceV1 {
+            source_id: self.public.source_id_v1(),
+            request_id,
+            sequence: self.progress.sequence,
+            phase,
+            cursor_id,
+            work,
+            resident_ram_bytes: self.need.resident_ram_bytes,
+        })
+    }
+
+    fn next_replay_position(&self) -> Result<u32, String> {
+        self.replay_point.as_ref().map_or(Ok(0), |p| p.position.checked_add(1).ok_or_else(|| "TIR replay position overflow".into()))
     }
 
     fn read(&self, at: u64, length: u32) -> Result<Vec<u8>, String> {
@@ -612,8 +826,22 @@ impl CaptureReader {
     }
 }
 impl PalwTirPublicCaptureReaderV1 for CaptureReader {
-    fn poll_v1(&mut self, request: &Request) -> Result<Option<Response>, String> {
-        self.public.check_request_v1(request)?;
+    fn slice_quote_v1(&self, request: &Request) -> Result<PalwTirPublicCaptureSliceV1, String> {
+        self.slice_quote(request)
+    }
+    fn progress_v1(&self) -> PalwTirPublicCaptureProgressV1 {
+        self.progress
+    }
+    fn poll_quoted_v1(&mut self, request: &Request, quote: &PalwTirPublicCaptureSliceV1) -> Result<Option<Response>, String> {
+        let expected = self.slice_quote(request)?;
+        if *quote != expected {
+            return Err("TIR capture preparation permit names another source/request/cursor/work slice".into());
+        }
+        let charged = self.progress.charged.checked_add_v1(quote.work)?;
+        let sequence = self.progress.sequence.checked_add(1).ok_or("TIR capture slice sequence exhausted")?;
+        // Pre-debit even if a source/disk/evaluator fails after partial work. No
+        // hidden retry refunds and no interpretation as a native DA verdict.
+        self.progress = PalwTirPublicCaptureProgressV1 { sequence, charged, last_slice: Some(*quote) };
         if !matches!(self.phase, Phase::Ready) {
             if let Err(error) = self.advance() {
                 self.phase = Phase::Failed;
@@ -622,6 +850,10 @@ impl PalwTirPublicCaptureReaderV1 for CaptureReader {
             return Ok(None);
         }
         self.answer(request).map(Some)
+    }
+    fn poll_v1(&mut self, request: &Request) -> Result<Option<Response>, String> {
+        let quote = self.slice_quote(request)?;
+        self.poll_quoted_v1(request, &quote)
     }
 }
 
@@ -779,5 +1011,78 @@ mod tests {
         original.bytes.lock().unwrap().truncate(8);
         let mut reader = CaptureReader::open_v1(original, binding, public, PalwPromptIdsFormV1::Flat, directory.path(), None).unwrap();
         assert!(reader.poll_v1(&Request::StepLeaf { index: 0 }).is_err());
+    }
+
+    #[test]
+    fn slice_predebits_are_cursor_bound_and_survive_none_and_source_failure() {
+        let (binding, public, original) = fixture(true);
+        let directory = tempfile::tempdir().unwrap();
+        let mut reader =
+            CaptureReader::open_v1(original.clone(), binding, public, PalwPromptIdsFormV1::Flat, directory.path(), None).unwrap();
+        let request = Request::StepLeaf { index: 0 };
+        let first = reader.slice_quote_v1(&request).unwrap();
+        assert_eq!(first, reader.slice_quote_v1(&request).unwrap(), "quote does not mutate progress");
+        assert_eq!(first.phase, 0);
+        assert!(first.work.io_bytes <= u64::from(READ));
+        assert!(first.work.io_bytes < reader.need.maximum_prepare_io_bytes);
+        let mut forged = first;
+        forged.work.io_bytes = 0;
+        assert!(reader.poll_quoted_v1(&request, &forged).is_err());
+        assert_eq!(reader.progress_v1(), PalwTirPublicCaptureProgressV1::default());
+        assert!(reader.poll_quoted_v1(&request, &first).unwrap().is_none());
+        let consumed = reader.progress_v1();
+        assert_eq!(consumed.sequence, 1);
+        assert_eq!(consumed.charged, first.work);
+        assert!(reader.poll_quoted_v1(&request, &first).is_err(), "one reader cannot reuse a paid cursor");
+        assert_eq!(reader.progress_v1(), consumed);
+        let next = reader.slice_quote_v1(&request).unwrap();
+        assert_ne!(next.cursor_id, first.cursor_id);
+        original.bytes.lock().unwrap().truncate(reader.at as usize);
+        assert!(reader.poll_quoted_v1(&request, &next).is_err());
+        let failed = reader.progress_v1();
+        assert_eq!(failed.sequence, 2);
+        assert_eq!(failed.charged, first.work.checked_add_v1(next.work).unwrap());
+        assert_eq!(failed.last_slice, Some(next));
+        assert!(matches!(reader.phase, Phase::Failed));
+        let failure = reader.slice_quote_v1(&request).unwrap();
+        assert_eq!(failure.work.replay_positions, 0);
+        assert!(reader.poll_quoted_v1(&request, &failure).is_err());
+        assert_eq!(reader.progress_v1().sequence, 3, "even a terminal retry has a new charged attempt");
+    }
+
+    #[test]
+    fn preparation_quotes_include_prompt_ids_and_dense_eof_without_whole_job_rebilling() {
+        let (binding, public, original) = fixture(true);
+        let directory = tempfile::tempdir().unwrap();
+        let mut reader =
+            CaptureReader::open_v1(original, binding.clone(), public, PalwPromptIdsFormV1::Flat, directory.path(), None).unwrap();
+        let request = Request::StepLeaf { index: 0 };
+        let mut phases = [false; 11];
+        loop {
+            let quote = reader.slice_quote_v1(&request).unwrap();
+            phases[quote.phase as usize] = true;
+            match quote.phase {
+                2 => assert!(quote.work.hash_bytes >= u64::from(binding.job_context.declared_prefill_tokens) * 4),
+                6 => assert!(quote.work.hash_bytes >= u64::from(binding.job_context.exact_decode_tokens) * 4),
+                8 => {
+                    assert_eq!(quote.work.replay_positions, 0);
+                    assert_eq!(quote.work.traffic_bytes, 0, "dense capture reads are IO, not model weight/KV traffic");
+                    assert!(quote.work.tree_hashes > 0, "dense final tree authentication is included");
+                }
+                _ => {}
+            }
+            if reader.poll_quoted_v1(&request, &quote).unwrap().is_some() {
+                break;
+            }
+        }
+        assert!(phases[..9].iter().all(|seen| *seen));
+        assert!(phases[10]);
+        assert!(!phases[9], "dense preparation never bills registered-model replay");
+        let ids = reader.slice_quote_v1(&Request::Ids { offset: 0 }).unwrap();
+        assert_eq!(ids.work.traffic_bytes, 0);
+        assert!(ids.work.io_bytes < reader.need.maximum_response_io_bytes, "small ID answers do not pay a 256-leaf response");
+        let before = reader.progress_v1();
+        assert!(reader.poll_quoted_v1(&request, &ids).is_err(), "a different request cannot consume this quote");
+        assert_eq!(reader.progress_v1(), before);
     }
 }

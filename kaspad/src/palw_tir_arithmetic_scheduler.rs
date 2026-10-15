@@ -251,6 +251,8 @@ fn lower_cone_need_v1(
 /// no runtime activation is wired until that reader also restores spent totals.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn continue_cone_v1(
+    native: &super::tir_acquisition_driver::BorrowedPaidSnapshotV1<'_>,
+    native_work: &mut super::tir_acquisition_driver::OperationalLedgerV1,
     budget: &mut ConeContinuationBudgetV1,
     source: &PalwTirPublicSourceV1,
     registered: &kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1,
@@ -265,6 +267,24 @@ pub(super) fn continue_cone_v1(
     now_daa: u64,
 ) -> Result<ConeContinuationV1, String> {
     let scope = budget.scope;
+    native_work.require_current_v1(
+        native,
+        source,
+        kaspa_consensus_core::palw_tir_public_owned_v1::PalwTirPublicWorkPhaseV1::ConeProbe,
+        PalwTirPublicRequestV1::StepLeaf { index: scope.leaf_index },
+    )?;
+    let paid = *native_work.scope_v1()?;
+    let (count, root) = native.material_revision_v1();
+    if paid.claim != scope.claim
+        || paid.owner != scope.owner
+        || paid.reserved_daa != scope.reserved_daa
+        || paid.bundle_id != scope.bundle_id
+        || paid.input_head != root
+        || paid.input_offset != count
+        || native.original_clock_v1() != (scope.reserved_daa, scope.acquisition_until_daa, now_daa)
+    {
+        return Err("TIR cone work changes native original paid scope/clock/material revision".into());
+    }
     if scope.source_id != source.source_id_v1()
         || scope.leaf_index >= source.leaf_count_v1()
         || now_daa < scope.reserved_daa
@@ -274,6 +294,14 @@ pub(super) fn continue_cone_v1(
     {
         return Err("TIR cone wave changes its original source, clock or material allocation".into());
     }
+    native_work.debit_v1(
+        source.source_id_v1(),
+        kaspa_consensus_core::palw_tir_public_owned_v1::PalwTirPublicWorkV1 {
+            attempts: 1,
+            parser_steps: (material.len() as u64).checked_mul(16).ok_or("TIR native material scan overflow")?,
+            ..Default::default()
+        },
+    )?;
     if let Some(pending) = budget.pending {
         source.check_request_v1(&pending)?;
         if !material.iter().any(|unit| unit.source_id_v1() == source.source_id_v1() && unit.request_v1() == pending) {
@@ -282,6 +310,33 @@ pub(super) fn continue_cone_v1(
             return Ok(ConeContinuationV1::Acquire(pending));
         }
     }
+    let logical_bytes = material.iter().try_fold(0u64, |bytes, unit| {
+        let bound = source.unit_bound_v1(&unit.request_v1())?;
+        bytes.checked_add(bound.maximum_response_bytes).ok_or_else(|| "TIR native material byte quote overflow".to_string())
+    })?;
+    let preparation_bytes = logical_bytes
+        .checked_add(registered.program.len() as u64)
+        .and_then(|n| n.checked_add(u64::from(source.decode_count_v1()) * 4))
+        .ok_or("TIR native context preparation overflow")?;
+    // Full pre-allocation debit, including preparation and every failed probe.
+    // A restored local continuation budget cannot renew this accepted permit.
+    native_work.debit_v1(
+        source.source_id_v1(),
+        kaspa_consensus_core::palw_tir_public_owned_v1::PalwTirPublicWorkV1 {
+            attempts: 1,
+            parser_steps: preparation_bytes.checked_mul(16).ok_or("TIR native preparation work overflow")?,
+            hash_bytes: preparation_bytes.checked_mul(16).ok_or("TIR native preparation hash work overflow")?,
+            copy_bytes: copy_budget_bytes
+                .checked_mul(2)
+                .and_then(|n| n.checked_add(preparation_bytes.checked_mul(8)?))
+                .ok_or("TIR native probe copy work overflow")?,
+            eval_elements: limits.evaluation.max_elements,
+            eval_terms: limits.evaluation.max_terms,
+            source_reads: limits.max_source_reads,
+            target_requests: limits.max_target_requests,
+            ..Default::default()
+        },
+    )?;
     let units = material.len() as u64;
     let sort_levels = u64::from(64 - units.max(1).leading_zeros());
     budget.charge_plan_v1(units.checked_mul(sort_levels + 8).ok_or("TIR planning work overflow")?)?;

@@ -999,3 +999,4 @@ pub mod palw_native_audit_proof_v39;
 pub mod palw_native_calibration_v39;
 pub mod palw_material_recovery_observation_v4;
 pub mod palw_material_session_enrollment_v4;
+pub mod palw_tir_public_custody_v1;

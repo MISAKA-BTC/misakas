@@ -9,57 +9,109 @@ use kaspa_consensus_core::{
     palw_step_leg::{PalwStepOpeningV1, step_opening_root_capped_v1},
     palw_tir_public_owned_v1::{
         PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1, PalwTirPublicAcceptedBodyRefV1, PalwTirPublicChunkRecordV1, PalwTirPublicFinishedV1,
-        PalwTirPublicOwnedActionV1, PalwTirPublicOwnedV1, palw_tir_public_body_hash_v1, request_body_bound_v1,
+        PalwTirPublicOwnedActionV1, PalwTirPublicOwnedV1, PalwTirPublicWorkPhaseV1, PalwTirPublicWorkScopeV1, PalwTirPublicWorkV1,
+        palw_tir_public_body_hash_v1, request_body_bound_v1,
     },
     palw_tir_public_source_v1::{
         PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1, PalwTirPublicAuthenticatedIdsV1, PalwTirPublicAuthenticatedUnitV1, PalwTirPublicRequestV1,
         PalwTirPublicResponseV1, PalwTirPublicSourceV1,
     },
+    palw_tir_public_state_v1::PalwTirPublicWorkPermitV1,
 };
 use std::sync::Arc;
 
 /// Local operational accounting only. Dropping/recreating this ledger is NOT a
 /// native refund, restart checkpoint or proof of paid authority. Runtime use
 /// still requires an accepted native pre-debit for the same literal work scope.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct OperationalWorkV1 {
-    pub attempts: u64,
-    pub io_bytes: u64,
-    pub hash_bytes: u64,
-    pub parser_steps: u64,
-    pub id_copy_words: u64,
-    pub replay_leaves: u64,
-    pub replay_positions: u64,
-    pub replay_id_words: u64,
-}
+pub(super) type OperationalWorkV1 = PalwTirPublicWorkV1;
 
 pub(super) struct OperationalLedgerV1 {
     source_id: Hash64,
     maximum: OperationalWorkV1,
     spent: OperationalWorkV1,
+    permit: Option<PalwTirPublicWorkPermitV1>,
 }
 
 impl OperationalLedgerV1 {
-    pub(super) fn new_v1(source_id: Hash64, maximum: OperationalWorkV1) -> Self {
-        Self { source_id, maximum, spent: OperationalWorkV1::default() }
+    #[cfg(test)]
+    fn new_v1(source_id: Hash64, maximum: OperationalWorkV1) -> Self {
+        Self { source_id, maximum, spent: OperationalWorkV1::default(), permit: None }
+    }
+
+    pub(super) fn from_native_permit_v1(
+        permit: PalwTirPublicWorkPermitV1,
+        expected: PalwTirPublicWorkScopeV1,
+    ) -> Result<Self, String> {
+        if *permit.scope_v1() != expected {
+            return Err("TIR work permit changes exact accepted execution scope".into());
+        }
+        Ok(Self { source_id: expected.source_id, maximum: permit.work_v1(), spent: Default::default(), permit: Some(permit) })
+    }
+
+    pub(super) fn require_current_v1(
+        &mut self,
+        snapshot: &BorrowedPaidSnapshotV1<'_>,
+        source: &PalwTirPublicSourceV1,
+        phase: PalwTirPublicWorkPhaseV1,
+        request: PalwTirPublicRequestV1,
+    ) -> Result<(), String> {
+        self.debit_v1(
+            source.source_id_v1(),
+            OperationalWorkV1 { attempts: 1, hash_bytes: 8192, parser_steps: 1024, ..Default::default() },
+        )?;
+        let permit = self.permit.as_ref().ok_or("TIR execution requires an accepted fresh native work permit")?;
+        let scope = permit.scope_v1();
+        let c = snapshot.owned.contract_v1();
+        if matches!(phase, PalwTirPublicWorkPhaseV1::Capture | PalwTirPublicWorkPhaseV1::Response | PalwTirPublicWorkPhaseV1::Ids) {
+            let pending = snapshot.owned.active_v1().ok_or("TIR prepared work has no current native demand")?;
+            let logical = if matches!(request, PalwTirPublicRequestV1::Ids { .. }) {
+                PalwTirPublicRequestV1::Ids { offset: 0 }
+            } else {
+                request
+            };
+            if pending.collected
+                || pending.request != logical
+                || snapshot.now_daa < pending.opened_daa
+                || snapshot.now_daa >= pending.respond_until_daa
+            {
+                return Err("TIR preparation permit is collected or outside its original response clock".into());
+            }
+        }
+        let work = snapshot.owned.work_v1().ok_or("TIR current snapshot lost native work allocation")?;
+        let receipt = work.actors.get(&scope.actor).and_then(|a| a.last.as_ref()).ok_or("TIR work actor receipt disappeared")?;
+        if scope.source_id != source.source_id_v1()
+            || scope.claim != c.claim
+            || scope.owner != c.owner
+            || scope.reserved_daa != c.reserved_daa
+            || scope.bundle_id != c.bundle_id
+            || scope.phase != phase
+            || scope.request != request
+            || receipt.hash_v1()? != permit.receipt_id_v1()
+            || scope.turn != snapshot.owned.active_v1().map_or(snapshot.owned.spent_v1().turns, |p| p.turn)
+            || snapshot.now_daa < c.reserved_daa
+            || snapshot.now_daa >= c.terms.stream_until_daa
+        {
+            return Err("TIR work permit is stale on current native source/actor/turn/phase/receipt/clock".into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn scope_v1(&self) -> Result<&PalwTirPublicWorkScopeV1, String> {
+        self.permit.as_ref().map(|p| p.scope_v1()).ok_or_else(|| "TIR work has no native permit".into())
     }
 
     pub(super) fn spent_v1(&self) -> OperationalWorkV1 {
         self.spent
     }
 
-    fn debit_v1(&mut self, source_id: Hash64, work: OperationalWorkV1) -> Result<(), String> {
+    pub(super) fn debit_v1(&mut self, source_id: Hash64, work: OperationalWorkV1) -> Result<(), String> {
         if source_id != self.source_id {
             return Err("TIR operational work changes source".into());
         }
-        let mut next = self.spent;
-        macro_rules! debit {
-            ($($field:ident),+ $(,)?) => { $(
-                next.$field = next.$field.checked_add(work.$field).filter(|n| *n <= self.maximum.$field)
-                    .ok_or("TIR cumulative local operational work is exhausted")?;
-            )+ };
+        let next = self.spent.checked_add_v1(work)?;
+        if !self.maximum.covers_v1(&next) {
+            return Err("TIR cumulative local operational work is exhausted".into());
         }
-        debit!(attempts, io_bytes, hash_bytes, parser_steps, id_copy_words, replay_leaves, replay_positions, replay_id_words);
         self.spent = next;
         Ok(())
     }
@@ -98,6 +150,13 @@ pub(super) struct BorrowedPaidSnapshotV1<'a> {
 }
 
 impl<'a> BorrowedPaidSnapshotV1<'a> {
+    pub(super) fn original_clock_v1(&self) -> (u64, u64, u64) {
+        (self.owned.contract_v1().reserved_daa, self.owned.contract_v1().terms.stream_until_daa, self.now_daa)
+    }
+    pub(super) fn material_revision_v1(&self) -> (u64, Hash64) {
+        let (count, root) = self.owned.history_v1();
+        (count, root.unwrap_or_default())
+    }
     pub(super) fn from_native_v1(
         snapshot: &'a kaspa_consensus_core::palw_tir_public_state_v1::PalwTirPublicSnapshotV1,
     ) -> Result<Self, String> {
@@ -106,7 +165,7 @@ impl<'a> BorrowedPaidSnapshotV1<'a> {
         Ok(view)
     }
 
-    pub(super) fn borrowed_v1(snapshot_block: BlockHash, now_daa: u64, owned: &'a PalwTirPublicOwnedV1) -> Self {
+    fn borrowed_v1(snapshot_block: BlockHash, now_daa: u64, owned: &'a PalwTirPublicOwnedV1) -> Self {
         Self { snapshot_block, now_daa, owned }
     }
 
@@ -140,6 +199,7 @@ impl<'a> BorrowedPaidSnapshotV1<'a> {
 fn action_turn_v1(spent_turns: u64, active_turn: Option<u64>, action: &PalwTirPublicOwnedActionV1) -> Result<u64, String> {
     match action {
         PalwTirPublicOwnedActionV1::Demand { .. } | PalwTirPublicOwnedActionV1::Reacquire { .. } => Ok(spent_turns),
+        PalwTirPublicOwnedActionV1::WorkDebit(debit) => Ok(debit.scope.turn),
         PalwTirPublicOwnedActionV1::Begin { .. }
         | PalwTirPublicOwnedActionV1::Part { .. }
         | PalwTirPublicOwnedActionV1::Finish { .. }
@@ -258,6 +318,15 @@ pub(super) fn owner_next_v1(
     intent: Option<OwnerIntentV1<'_>>,
     ledger: &mut OperationalLedgerV1,
 ) -> Result<OwnerPlanV1, String> {
+    let request = match intent.as_ref() {
+        Some(OwnerIntentV1::Fresh(r)) => *r,
+        Some(OwnerIntentV1::Reacquire { previous, .. }) => previous.request,
+        None => snapshot.owned.active_v1().map_or(ledger.scope_v1()?.request, |p| p.request),
+    };
+    ledger.require_current_v1(snapshot, source, PalwTirPublicWorkPhaseV1::Planning, request)?;
+    if ledger.scope_v1()?.actor != snapshot.owned.contract_v1().owner {
+        return Err("TIR planning permit belongs to another actor".into());
+    }
     ledger.debit_v1(source.source_id_v1(), metadata_work_v1(source)?)?;
     snapshot.source_v1(source)?;
     let owned = snapshot.owned;
@@ -405,7 +474,13 @@ impl PreparedResponseUnitV1 {
         &self.authentication
     }
 
-    pub(super) fn into_body_v1(self, ledger: &mut OperationalLedgerV1) -> Result<PreparedLogicalBodyV1, String> {
+    pub(super) fn into_body_v1(
+        self,
+        snapshot: &BorrowedPaidSnapshotV1<'_>,
+        source: &PalwTirPublicSourceV1,
+        ledger: &mut OperationalLedgerV1,
+    ) -> Result<PreparedLogicalBodyV1, String> {
+        ledger.require_current_v1(snapshot, source, PalwTirPublicWorkPhaseV1::Response, self.request)?;
         let UnitAuthenticationV1::OriginalRoot(authenticated) = self.authentication else {
             return Err("a provisional ID chunk is not a completed owned logical body".into());
         };
@@ -454,11 +529,13 @@ pub(super) struct IdsBodyPreparationV1 {
 
 impl IdsBodyPreparationV1 {
     pub(super) fn start_v1(
+        snapshot: &BorrowedPaidSnapshotV1<'_>,
         source: &PalwTirPublicSourceV1,
         claim: Hash64,
         maximum_body_ram_bytes: u64,
         ledger: &mut OperationalLedgerV1,
     ) -> Result<Self, String> {
+        ledger.require_current_v1(snapshot, source, PalwTirPublicWorkPhaseV1::Ids, PalwTirPublicRequestV1::Ids { offset: 0 })?;
         ledger.debit_v1(source.source_id_v1(), metadata_work_v1(source)?)?;
         source.check_request_v1(&PalwTirPublicRequestV1::Ids { offset: 0 })?;
         let (maximum_bytes, ram) = request_body_bound_v1(source, PalwTirPublicRequestV1::Ids { offset: 0 })?;
@@ -502,12 +579,19 @@ impl IdsBodyPreparationV1 {
 
     pub(super) fn push_v1(
         &mut self,
+        snapshot: &BorrowedPaidSnapshotV1<'_>,
         source: &PalwTirPublicSourceV1,
         chunk: PreparedResponseUnitV1,
         ledger: &mut OperationalLedgerV1,
     ) -> Result<(), String> {
         let mut failed = self.failed;
-        let result = run_fail_closed_v1(&mut failed, || self.push_inner_v1(source, chunk, ledger));
+        let result = run_fail_closed_v1(&mut failed, || {
+            ledger.require_current_v1(snapshot, source, PalwTirPublicWorkPhaseV1::Ids, chunk.request)?;
+            if ledger.scope_v1()?.input_offset != u64::from(self.offset) {
+                return Err("TIR ID work permit changes exact assembly offset".into());
+            }
+            self.push_inner_v1(source, chunk, ledger)
+        });
         self.failed = failed;
         result
     }
@@ -561,9 +645,11 @@ impl IdsBodyPreparationV1 {
 
     pub(super) fn finish_v1(
         self,
+        snapshot: &BorrowedPaidSnapshotV1<'_>,
         source: &PalwTirPublicSourceV1,
         ledger: &mut OperationalLedgerV1,
     ) -> Result<PreparedLogicalBodyV1, String> {
+        ledger.require_current_v1(snapshot, source, PalwTirPublicWorkPhaseV1::Response, PalwTirPublicRequestV1::Ids { offset: 0 })?;
         if self.failed {
             return Err("TIR ID preparation is poisoned after a failed attempt".into());
         }
@@ -609,6 +695,10 @@ pub(super) fn responder_next_v1(
     body: &PreparedLogicalBodyV1,
     ledger: &mut OperationalLedgerV1,
 ) -> Result<ResponderPlanV1, String> {
+    ledger.require_current_v1(snapshot, source, PalwTirPublicWorkPhaseV1::Response, body.request)?;
+    if ledger.scope_v1()?.actor != signer {
+        return Err("TIR response work permit changes literal signer".into());
+    }
     ledger.debit_v1(source.source_id_v1(), metadata_work_v1(source)?)?;
     snapshot.source_v1(source)?;
     let c = snapshot.owned.contract_v1();
@@ -697,6 +787,8 @@ impl RecoveredBodyV1 {
         history: Option<&PalwStepOpeningV1>,
         ledger: &mut OperationalLedgerV1,
     ) -> Result<&PreparedLogicalBodyV1, String> {
+        let scope = *ledger.scope_v1()?;
+        ledger.require_current_v1(snapshot, source, scope.phase, scope.request)?;
         check_body_reference_v1(snapshot, source, &self.reference, history, ledger)?;
         Ok(&self.body)
     }
@@ -751,6 +843,14 @@ impl AcceptedBodyRecoveryV1 {
         maximum_body_ram_bytes: u64,
         ledger: &mut OperationalLedgerV1,
     ) -> Result<Self, String> {
+        ledger.require_current_v1(snapshot, source, PalwTirPublicWorkPhaseV1::BodyRead, reference.request)?;
+        let scope = ledger.scope_v1()?;
+        if scope.input_head != reference.hash_v1()?
+            || scope.cursor_id != reference.chunk_head
+            || scope.input_offset != reference.total_bytes
+        {
+            return Err("TIR recovery start changes exact native accepted body cursor".into());
+        }
         check_body_reference_v1(snapshot, source, reference, history, ledger)?;
         let (_, ram) = request_body_bound_v1(source, reference.request)?;
         if ram > maximum_body_ram_bytes {
@@ -797,7 +897,21 @@ impl AcceptedBodyRecoveryV1 {
         ledger: &mut OperationalLedgerV1,
     ) -> Result<BodyRecoveryPollV1, String> {
         let mut failed = self.failed;
-        let result = run_fail_closed_v1(&mut failed, || self.poll_inner_v1(snapshot, source, history, ids, reader, ledger));
+        let result = run_fail_closed_v1(&mut failed, || {
+            let phase =
+                if self.remaining == 0 { PalwTirPublicWorkPhaseV1::BodyAuthenticate } else { PalwTirPublicWorkPhaseV1::BodyRead };
+            ledger.require_current_v1(snapshot, source, phase, self.reference.request)?;
+            let scope = ledger.scope_v1()?;
+            let (cursor, offset) = if self.remaining == 0 {
+                (self.reference.chunk_head, self.reference.total_bytes)
+            } else {
+                (self.head, self.remaining)
+            };
+            if scope.input_head != self.reference.hash_v1()? || scope.cursor_id != cursor || scope.input_offset != offset {
+                return Err("TIR recovery permit changes exact accepted body/chunk/native cursor".into());
+            }
+            self.poll_inner_v1(snapshot, source, history, ids, reader, ledger)
+        });
         self.failed = failed;
         result
     }
@@ -845,9 +959,9 @@ impl AcceptedBodyRecoveryV1 {
             self.head = record.previous;
             self.remaining = record.offset;
             self.records += 1;
-            if self.remaining != 0 {
-                return Ok(BodyRecoveryPollV1::Pending);
-            }
+            // EOF copy is not authentication. A separate accepted final-auth
+            // debit is required on the next invocation, even for the last part.
+            return Ok(BodyRecoveryPollV1::Pending);
         }
         ledger.debit_v1(
             source.source_id_v1(),
@@ -979,44 +1093,74 @@ fn check_ids_chunk_v1(source: &PalwTirPublicSourceV1, offset: u32, response: &Pa
 /// In particular, provisional ID chunks require the complete all-D owned codec.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prepare_response_v1(
+    snapshot: &BorrowedPaidSnapshotV1<'_>,
     source: &PalwTirPublicSourceV1,
     request: PalwTirPublicRequestV1,
     ids: Option<&PalwTirPublicAuthenticatedIdsV1>,
     reader: &mut dyn PalwTirPublicCaptureReaderV1,
+    quote: &kaspa_consensus_core::palw_backend::PalwTirPublicCaptureSliceV1,
     capture_need: &PalwTirPublicCaptureNeedV1,
     limits: &ResponsePreparationLimitsV1,
     claim: Hash64,
     ledger: &mut OperationalLedgerV1,
 ) -> Result<ResponsePreparationV1, String> {
+    let phase = ledger.scope_v1()?.phase;
+    if !matches!(phase, PalwTirPublicWorkPhaseV1::Capture | PalwTirPublicWorkPhaseV1::Response) {
+        return Err("TIR capture slice has another native work phase".into());
+    }
+    ledger.require_current_v1(snapshot, source, phase, request)?;
+    let scope = ledger.scope_v1()?;
+    if scope.claim != claim
+        || scope.cursor_id != quote.cursor_id
+        || scope.slice != quote.sequence
+        || quote.source_id != source.source_id_v1()
+        || scope.input_head != source.source_id_v1()
+        || quote.resident_ram_bytes > capture_need.resident_ram_bytes
+    {
+        return Err("TIR capture quote changes exact native paid source/sequence/cursor/holding".into());
+    }
     let bound = source.unit_bound_v1(&request)?;
-    let work = response_work_v1(capture_need, limits, bound.resident_ram_bytes)?;
-    // Conservatively debit a whole quoted preparation attempt on EVERY poll,
-    // including None/Err. A future native slice API can avoid this overcharge;
-    // resetting this to a fresh max quote per poll is never allowed.
+    response_work_v1(capture_need, limits, bound.resident_ram_bytes)?;
+    let work = ResponseAttemptWorkV1 {
+        preparation_io_upper: quote.work.io_bytes,
+        replay_leaves_upper: quote.work.replay_leaves,
+        replay_positions_upper: quote.work.replay_positions,
+        replay_id_words_upper: quote.work.replay_id_words,
+        response_io_upper: quote.work.io_bytes,
+        response_tree_hashes_upper: quote.work.tree_hashes,
+    };
+    // Exact bounded slice + local codec/authentication work, before poll. The
+    // FULL grant was already consumed in native state; None/Err never refund it.
     ledger.debit_v1(
         source.source_id_v1(),
         OperationalWorkV1 {
             attempts: 1,
-            io_bytes: capture_need
-                .maximum_prepare_io_bytes
-                .checked_add(capture_need.maximum_response_io_bytes)
-                .and_then(|n| n.checked_add(bound.maximum_response_bytes.checked_mul(2)?))
+            io_bytes: quote
+                .work
+                .io_bytes
+                .checked_add(bound.maximum_response_bytes.checked_mul(2).ok_or("TIR response I/O work overflow")?)
                 .ok_or("TIR response I/O work overflow")?,
-            hash_bytes: capture_need
-                .maximum_response_tree_hashes
-                .checked_mul(128)
+            hash_bytes: quote
+                .work
+                .hash_bytes
+                .checked_add(quote.work.tree_hashes.checked_mul(128).ok_or("TIR response hash work overflow")?)
                 .and_then(|n| n.checked_add(bound.maximum_hash_input_bytes))
-                .and_then(|n| n.checked_add(capture_need.maximum_prepare_io_bytes.checked_mul(16)?))
                 .ok_or("TIR response hash work overflow")?,
-            parser_steps: capture_need
-                .maximum_prepare_io_bytes
+            parser_steps: quote
+                .work
+                .io_bytes
                 .checked_mul(16)
                 .and_then(|n| n.checked_add(bound.maximum_parser_steps))
                 .ok_or("TIR response parser work overflow")?,
-            replay_leaves: capture_need.maximum_replay_leaves,
-            replay_positions: capture_need.maximum_replay_positions,
-            replay_id_words: capture_need.maximum_replay_id_words,
-            id_copy_words: u64::from(source.decode_count_v1()),
+            tree_hashes: quote.work.tree_hashes,
+            replay_leaves: quote.work.replay_leaves,
+            replay_positions: quote.work.replay_positions,
+            replay_id_words: quote.work.replay_id_words,
+            arithmetic_work: quote.work.arithmetic_work,
+            traffic_bytes: quote.work.traffic_bytes,
+            id_copy_words: quote.work.replay_id_words,
+            copy_bytes: bound.maximum_response_bytes.checked_mul(4).ok_or("TIR response copy work overflow")?,
+            ..Default::default()
         },
     )?;
     let reservation = host_ledger_v1()
@@ -1029,7 +1173,7 @@ pub(super) fn prepare_response_v1(
             bound.resident_ram_bytes,
         )
         .map_err(|e| e.to_string())?;
-    let Some(response) = reader.poll_v1(&request)? else {
+    let Some(response) = reader.poll_quoted_v1(&request, quote)? else {
         return Ok(ResponsePreparationV1::AwaitSource { work });
     };
     if borsh::object_length(&response).map_err(|e| e.to_string())? as u64 > bound.maximum_response_bytes {

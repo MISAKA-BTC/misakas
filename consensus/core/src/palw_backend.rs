@@ -57,7 +57,70 @@ pub struct PalwTirPublicCaptureNeedV1 {
     pub maximum_response_tree_hashes: u64,
 }
 
+/// Operational upper bound for ONE reader invocation, not a native paid permit.
+/// IO includes executor traffic/restoration as well as capture and index bytes.
+/// Arithmetic is the registered canonical MAC-equivalent work, not CPU cycles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwTirPublicCaptureWorkV1 {
+    pub io_bytes: u64,
+    pub hash_bytes: u64,
+    pub tree_hashes: u64,
+    pub replay_leaves: u64,
+    pub replay_positions: u64,
+    pub replay_id_words: u64,
+    pub arithmetic_work: u128,
+    /// Registered weight/KV traffic, independently budgeted from arithmetic and IO.
+    pub traffic_bytes: u128,
+}
+impl PalwTirPublicCaptureWorkV1 {
+    pub fn checked_add_v1(self, other: Self) -> Result<Self, String> {
+        let overflow = || "TIR capture cumulative operational work overflow".to_string();
+        Ok(Self {
+            io_bytes: self.io_bytes.checked_add(other.io_bytes).ok_or_else(overflow)?,
+            hash_bytes: self.hash_bytes.checked_add(other.hash_bytes).ok_or_else(overflow)?,
+            tree_hashes: self.tree_hashes.checked_add(other.tree_hashes).ok_or_else(overflow)?,
+            replay_leaves: self.replay_leaves.checked_add(other.replay_leaves).ok_or_else(overflow)?,
+            replay_positions: self.replay_positions.checked_add(other.replay_positions).ok_or_else(overflow)?,
+            replay_id_words: self.replay_id_words.checked_add(other.replay_id_words).ok_or_else(overflow)?,
+            arithmetic_work: self.arithmetic_work.checked_add(other.arithmetic_work).ok_or_else(overflow)?,
+            traffic_bytes: self.traffic_bytes.checked_add(other.traffic_bytes).ok_or_else(overflow)?,
+        })
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirPublicCaptureSliceV1 {
+    pub source_id: Hash64,
+    pub request_id: Hash64,
+    /// Monotonic for this reader, including unsuccessful invocations.
+    pub sequence: u64,
+    pub phase: u8,
+    /// Exact input cursor, including original offset, row/tile/leaf and replay position.
+    pub cursor_id: Hash64,
+    pub work: PalwTirPublicCaptureWorkV1,
+    /// The reader's persistent ticket remains held; this is not additional RAM.
+    pub resident_ram_bytes: u64,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwTirPublicCaptureProgressV1 {
+    pub sequence: u64,
+    /// Full pre-debit, not a refundable measurement. None/Err consume their slice too.
+    pub charged: PalwTirPublicCaptureWorkV1,
+    pub last_slice: Option<PalwTirPublicCaptureSliceV1>,
+}
+
 pub trait PalwTirPublicCaptureReaderV1: Send {
+    fn slice_quote_v1(
+        &self,
+        request: &crate::palw_tir_public_source_v1::PalwTirPublicRequestV1,
+    ) -> Result<PalwTirPublicCaptureSliceV1, String>;
+    fn progress_v1(&self) -> PalwTirPublicCaptureProgressV1;
+    /// Rejects a stale or substituted quote before doing preparation/response work.
+    /// Caller must first consume its independently checked native work permit.
+    fn poll_quoted_v1(
+        &mut self,
+        request: &crate::palw_tir_public_source_v1::PalwTirPublicRequestV1,
+        quote: &PalwTirPublicCaptureSliceV1,
+    ) -> Result<Option<crate::palw_tir_public_source_v1::PalwTirPublicResponseV1>, String>;
     /// None is bounded preparation in progress, never a DA or semantic verdict.
     /// Caller additionally holds this exact request's native unit memory permit.
     fn poll_v1(

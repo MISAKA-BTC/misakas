@@ -33,6 +33,7 @@ pub struct PalwTirPublicSourceDescriptorV1 {
     pub maximum_leaves: u64,
     pub native_config: PalwStagedPublicCourtConfigV1,
     pub native_custodian_upper: u64,
+    pub work_rules: Option<crate::palw_tir_public_owned_v1::PalwTirPublicWorkRulesV1>,
 }
 impl PalwTirPublicSourceDescriptorV1 {
     pub fn allocation_id_v1(&self, contract: &PalwTirPublicContractV1) -> Result<Hash64, String> {
@@ -63,6 +64,7 @@ impl PalwTirPublicAcquisitionRowV1 {
             || c.plan.config != self.descriptor.native_config
             || c.plan.maximum_custodians != self.descriptor.native_custodian_upper
             || self.descriptor.maximum_leaves == 0
+            || self.descriptor.work_rules != self.owned.work_v1().map(|w| w.allocation.rules)
             || c.reserved_daa < c.terms.accepted_daa
             || c.reserved_daa >= c.terms.open_until_daa
             || c.terms.stream_until_daa >= c.terms.collect_until_daa
@@ -167,6 +169,17 @@ pub fn palw_tir_public_source_for_row_v1(
     }
     let source = PalwTirPublicSourceV1::new_v1(record, layout, header, original.execution_root, original.trace_root, maximum_leaves)?;
     check_source(row, &source)?;
+    if let Some(work) = row.owned.work_v1() {
+        let rules = row.descriptor.work_rules.ok_or("TIR work allocation lost frozen native rules")?;
+        if rules.max_step_leaf_count != maximum_leaves
+            || work.allocation
+                != crate::palw_tir_public_owned_v1::derive_tir_public_work_allocation_v1(
+                    record, layout, header, &source, &c.plan, rules,
+                )?
+        {
+            return Err("TIR rooted work allocation differs from original registered full-source quote".into());
+        }
+    }
     Ok(source)
 }
 
@@ -204,6 +217,151 @@ pub fn palw_tir_public_snapshot_v1(
     row.check_structure_v1(&key)?;
     let source = palw_tir_public_source_for_row_v1(state, row, maximum_leaves)?;
     Ok(Some(PalwTirPublicSnapshotV1 { snapshot_block: point.block, now_daa: point.daa_score, row: row.clone(), source }))
+}
+
+/// Single-process claim book. No Clone/Deserialize implementation: an ordinary
+/// snapshot or a deserialized receipt cannot recreate a work permit. A restart
+/// burns all pre-existing grants and must buy a NEW finite debit. This does not
+/// make off-chain execution atomic with consensus or prove that work happened.
+/// Canonical spends revert on reorg; orphaned physical work does not. Across a
+/// restart that also forgets the local high-water mark, this is NOT a bound on
+/// orphan work. A durable orphan-attempt journal or an explicit bounded-reorg
+/// assumption remains necessary before claiming restart/resource completion.
+pub struct PalwTirPublicWorkBookV1 {
+    key: Key,
+    actor: PalwBondKeyV2,
+    baseline_nonce: u64,
+    highest_prepared: Option<u64>,
+    restart_required: bool,
+    pending: Option<PendingWork>,
+}
+struct PendingWork {
+    debit: crate::palw_tir_public_owned_v1::PalwTirPublicWorkDebitV1,
+    actor_spent: crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1,
+    actor_grants: u64,
+}
+
+/// Minted only by confirming this process's fresh debit against current native
+/// state. Receipt/host-ticket/unsigned-DTO deserialization cannot construct it.
+pub struct PalwTirPublicWorkPermitV1 {
+    scope: crate::palw_tir_public_owned_v1::PalwTirPublicWorkScopeV1,
+    work: crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1,
+    receipt_id: Hash64,
+    snapshot_block: crate::BlockHash,
+}
+impl PalwTirPublicWorkPermitV1 {
+    pub fn scope_v1(&self) -> &crate::palw_tir_public_owned_v1::PalwTirPublicWorkScopeV1 {
+        &self.scope
+    }
+    pub fn work_v1(&self) -> crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1 {
+        self.work
+    }
+    pub fn receipt_id_v1(&self) -> Hash64 {
+        self.receipt_id
+    }
+    pub fn snapshot_block_v1(&self) -> crate::BlockHash {
+        self.snapshot_block
+    }
+}
+
+pub fn palw_tir_public_work_book_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: Key,
+    actor: PalwBondKeyV2,
+    maximum_leaves: u64,
+) -> Result<PalwTirPublicWorkBookV1, String> {
+    let snapshot = palw_tir_public_snapshot_v1(state, key, maximum_leaves)?.ok_or("TIR work book has no accepted sidecar")?;
+    let c = snapshot.row.owned.contract_v1();
+    if actor != c.owner && !c.custodians.contains(&actor) {
+        return Err("TIR work book actor has no protected literal lane".into());
+    }
+    let work = snapshot.row.owned.work_v1().ok_or("TIR work book has no original full paid work allocation")?;
+    Ok(PalwTirPublicWorkBookV1 {
+        key,
+        actor,
+        baseline_nonce: work.actors.get(&actor).map_or(0, |a| a.grants),
+        highest_prepared: None,
+        restart_required: work.actors.get(&actor).is_some_and(|a| a.grants != 0),
+        pending: None,
+    })
+}
+impl PalwTirPublicWorkBookV1 {
+    pub fn pending_action_v1(&self) -> Option<PalwTirPublicOwnedActionV1> {
+        self.pending.as_ref().map(|p| PalwTirPublicOwnedActionV1::WorkDebit(p.debit.clone()))
+    }
+
+    pub fn prepare_v1(
+        &mut self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        scope: crate::palw_tir_public_owned_v1::PalwTirPublicWorkScopeV1,
+        work: crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1,
+        history: Option<crate::palw_step_leg::PalwStepOpeningV1>,
+        maximum_leaves: u64,
+    ) -> Result<PalwTirPublicOwnedActionV1, String> {
+        if self.pending.is_some() {
+            return Err("TIR work book already has an unconfirmed debit; retry its exact action".into());
+        }
+        let snapshot = palw_tir_public_snapshot_v1(state, self.key, maximum_leaves)?.ok_or("TIR work sidecar disappeared")?;
+        let paid = snapshot.row.owned.work_v1().ok_or("TIR work allocation disappeared")?;
+        let actor = paid.actors.get(&self.actor).cloned().unwrap_or_default();
+        if scope.actor != self.actor
+            || actor.grants < self.baseline_nonce
+            || self.highest_prepared.is_some_and(|issued| actor.grants <= issued)
+        {
+            return Err("TIR work book refuses an old actor/nonce after replay or rollback".into());
+        }
+        let debit = crate::palw_tir_public_owned_v1::PalwTirPublicWorkDebitV1 {
+            expected_nonce: actor.grants,
+            previous_head: actor.last.as_ref().map(|r| r.hash_v1()).transpose()?.unwrap_or_default(),
+            scope,
+            work,
+            restart: self.restart_required,
+            history,
+        };
+        check_work_input(&snapshot.row, &snapshot.source, &debit, &|k| state.staged_court_row_v1(k))?;
+        let mut preview = snapshot.row.owned.as_ref().clone();
+        preview.work_debit_v1(&snapshot.source, self.actor, snapshot.now_daa, &debit)?;
+        self.highest_prepared = Some(actor.grants);
+        self.pending = Some(PendingWork { debit: debit.clone(), actor_spent: actor.spent, actor_grants: actor.grants });
+        Ok(PalwTirPublicOwnedActionV1::WorkDebit(debit))
+    }
+
+    /// None means the exact debit is not yet accepted. No permit is minted by
+    /// preparing/signing/submitting a request or by trusting a returned receipt.
+    pub fn confirm_v1(
+        &mut self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        maximum_leaves: u64,
+    ) -> Result<Option<PalwTirPublicWorkPermitV1>, String> {
+        let pending = self.pending.as_ref().ok_or("TIR work book has no fresh process-local debit intent")?;
+        let snapshot = palw_tir_public_snapshot_v1(state, self.key, maximum_leaves)?.ok_or("TIR work sidecar disappeared")?;
+        let owned = &snapshot.row.owned;
+        let work = owned.work_v1().ok_or("TIR work allocation disappeared")?;
+        let Some(actor) = work.actors.get(&self.actor) else { return Ok(None) };
+        if actor.grants <= pending.debit.expected_nonce {
+            return Ok(None);
+        }
+        let receipt = actor.last.as_ref().ok_or("TIR accepted actor work has no rooted receipt")?;
+        if receipt.debit != pending.debit
+            || actor.grants != pending.actor_grants.checked_add(1).ok_or("TIR actor grant overflow")?
+            || actor.spent != pending.actor_spent.checked_add_v1(pending.debit.work)?
+            || !work.spent.covers_v1(&receipt.cumulative)
+            || snapshot.now_daa >= owned.contract_v1().terms.stream_until_daa
+            || pending.debit.scope.turn != owned.active_v1().map_or(owned.spent_v1().turns, |p| p.turn)
+        {
+            return Err("TIR work confirmation changes current accepted debit/actor/spent/original turn/clock".into());
+        }
+        check_work_input(&snapshot.row, &snapshot.source, &pending.debit, &|k| state.staged_court_row_v1(k))?;
+        let permit = PalwTirPublicWorkPermitV1 {
+            scope: pending.debit.scope,
+            work: pending.debit.work,
+            receipt_id: receipt.hash_v1()?,
+            snapshot_block: snapshot.snapshot_block,
+        };
+        self.pending = None;
+        self.restart_required = false;
+        Ok(Some(permit))
+    }
 }
 
 fn material_scope<'a>(
@@ -389,7 +547,13 @@ fn transition<'a>(
 ) -> Result<PalwTirPublicTransitionV1, String> {
     check_source(old, source)?;
     let contract = old.owned.contract_v1();
-    let turn = if matches!(action, PalwTirPublicOwnedActionV1::Demand { .. } | PalwTirPublicOwnedActionV1::Reacquire { .. }) {
+    let turn = if let PalwTirPublicOwnedActionV1::WorkDebit(debit) = action {
+        let turn = old.owned.active_v1().map_or(old.owned.spent_v1().turns, |p| p.turn);
+        if debit.scope.turn != turn {
+            return Err("TIR work action changes native turn".into());
+        }
+        turn
+    } else if matches!(action, PalwTirPublicOwnedActionV1::Demand { .. } | PalwTirPublicOwnedActionV1::Reacquire { .. }) {
         old.owned.spent_v1().turns
     } else {
         old.owned.active_v1().ok_or("TIR action has no current accepted demand")?.turn
@@ -402,6 +566,9 @@ fn transition<'a>(
         return Err("TIR signed action has stale source/turn/original clock".into());
     }
     let key = old.key_v1()?;
+    if let PalwTirPublicOwnedActionV1::WorkDebit(debit) = action {
+        check_work_input(old, source, debit, &lookup)?;
+    }
     if let PalwTirPublicOwnedActionV1::Reacquire { previous, .. } = action {
         let hash = previous.hash_v1()?;
         let Some(Row::TirAcceptedBody(accepted)) = lookup(&Key::TirAcceptedBody(hash)) else {
@@ -505,6 +672,71 @@ fn transition<'a>(
     Ok(PalwTirPublicTransitionV1 { changes, effect })
 }
 
+fn check_work_input<'a>(
+    owner: &PalwTirPublicAcquisitionRowV1,
+    source: &PalwTirPublicSourceV1,
+    debit: &crate::palw_tir_public_owned_v1::PalwTirPublicWorkDebitV1,
+    lookup: &impl Fn(&Key) -> Option<&'a Row>,
+) -> Result<(), String> {
+    use crate::palw_tir_public_owned_v1::PalwTirPublicWorkPhaseV1 as P;
+    let scope = &debit.scope;
+    let key = owner.key_v1()?;
+    match scope.phase {
+        P::BodyRead | P::BodyAuthenticate => {
+            let Some(Row::TirAcceptedBody(body)) = lookup(&Key::TirAcceptedBody(scope.input_head)) else {
+                return Err("TIR body work has no exact native accepted reference".into());
+            };
+            check_reference(owner, source, body, debit.history.as_ref())?;
+            if scope.request != body.reference.request || scope.input_offset > body.reference.total_bytes {
+                return Err("TIR body work changes original accepted request/offset".into());
+            }
+            if scope.phase == P::BodyRead && scope.input_offset != 0 {
+                let Some(Row::TirRawChunk(chunk)) = lookup(&Key::TirRawChunk(scope.cursor_id)) else {
+                    return Err("TIR body work has no exact rooted chunk cursor".into());
+                };
+                chunk.check_structure_v1(scope.cursor_id)?;
+                if chunk.acquisition != key
+                    || chunk.source_id != source.source_id_v1()
+                    || chunk.record.demand_id != body.reference.demand_id
+                    || chunk.record.answerer != body.reference.answerer
+                    || chunk.record.offset.checked_add(chunk.record.bytes.len() as u64) != Some(scope.input_offset)
+                {
+                    return Err("TIR body work substitutes another source/signer/turn/chunk offset".into());
+                }
+            }
+            if scope.phase == P::BodyAuthenticate
+                && (scope.cursor_id != body.reference.chunk_head || scope.input_offset != body.reference.total_bytes)
+            {
+                return Err("TIR body authentication changes original full-body head/size".into());
+            }
+        }
+        P::ConeProbe => {
+            let (count, root) = owner.owned.history_v1();
+            if scope.input_head != root.unwrap_or_default() || scope.input_offset != count {
+                return Err("TIR cone work changes current authenticated material revision".into());
+            }
+        }
+        P::Capture | P::Response | P::Ids => {
+            let p = owner.owned.active_v1().ok_or("TIR response preparation has no accepted demand")?;
+            let request = match scope.request {
+                crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::Ids { .. } => {
+                    crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::Ids { offset: 0 }
+                }
+                other => other,
+            };
+            if p.request != request || scope.input_head != source.source_id_v1() {
+                return Err("TIR response preparation changes current original request/source".into());
+            }
+        }
+        P::Planning | P::OwnReplay => {
+            if scope.input_head != source.source_id_v1() || scope.actor != owner.owned.contract_v1().owner {
+                return Err("TIR independent replay/planning is not the outside owner's original source".into());
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -579,6 +811,7 @@ mod tests {
                 maximum_leaves,
                 native_config: config,
                 native_custodian_upper: 3,
+                work_rules: None,
             },
             owned: Box::new(owned).into(),
         };
