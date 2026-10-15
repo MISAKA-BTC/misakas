@@ -284,3 +284,65 @@ given a blanket 2.88MB entitlement: future large TIR proofs need a specifically
 funded original allocation, or an incremental native court producing an ordinary
 small rooted certificate. The whole-family, maximum-profile, collusion and
 real-network acceptance requirements remain outstanding.
+
+### Native Lifecycle and Work Continuation (Unverified)
+
+Starting from WIP `f85a3e68e`, the following source changes supersede the earlier
+statement that acquisition rows have no lifecycle accounting:
+
+- Dedicated owner/allocation, claim/retention and responder EDF indexes now
+  participate in actual native delta-210 apply/revert, rebuild and carriage
+  consistency checks. Old Owner rows and multiple new allocations for the same
+  claim/owner are counted separately for quota and escrow exposure. Raw/ref rows
+  carry no duplicate escrow. Original source metadata survives terminal claim
+  retirement until the indexed original horizon; native sweep removes expired
+  acquisition/chunk/reference rows in bounded batches, not by semantic court CP.
+- A bounded metadata reader returns at most 64 current outstanding literal TIR
+  duties plus one indexed lookahead, with the accepted snapshot clock. These
+  rows are not proof of a new custody signature or a right to slash. Only owner
+  holds/exposure are added here; producer/Valid raw-source authority still needs
+  a separately admitted signed contract. Global admission/GC throughput and
+  population-wide clone/root costs are not established by the bounded batch.
+- The original capture reader exposes deterministic per-phase slice quotes and
+  cumulative progress before execution. Quotes bind request and cursor and cover
+  dense input, prompt/ID/trace EOF, tree/spool work and individual Fold positions.
+  Canonical MAC-equivalent work and traffic are distinct dimensions, not measured
+  CPU cycles. Pending/error slices keep their pre-debit. Reopening cannot turn a
+  reset local meter into a new native allowance.
+- An independent work component is derived from the registered program/layout,
+  original job/source, native frozen work rules and finite restart allowance.
+  Its envelope is ADDITIONAL to acquisition, not a reinterpretation of historical
+  payment. Rooted spent, actor lanes, receipt heads/nonces and checkpoints are
+  intended to authorize each future local slice only after accepted pre-debit.
+  Host tickets and uncommitted transition effects remain non-authoritative.
+- New TIR-source pledge/grant domains bind original claim/class/geometry, source,
+  complete resource-plan identity and horizon. Literal grants require the exact
+  already-native-credited signed Valid receipt AND a separate raw-source grant
+  signature. Membership, Sampled, a history grant or an uncredited receipt cannot
+  create raw-source liability. The native adapter reads frozen original bundle
+  terms, not a later active owner's terms. This contract is not yet persisted or
+  admitted and does not itself prove full-SUM payment.
+
+All new regression bodies remain unexecuted. Versioned full-SUM preclaim/carrier
+admission, custody storage and producer/Valid collection, native objective
+certificates/terminal continuation, explicit inclusion capacity and full-family
+maximum-profile/network qualification still need completion. The work component
+does not prove native coverage of executor/artifact/index resident memory or the
+complete sparse/dissection proof sum merely by counting canonical operations.
+No new fence is armed and no existing claim gains new duties or clocks from this
+batch.
+
+The deadline audit found an additional mandatory coupling: the present owned
+response span prices Begin/Part/Finish, not N cold-capture preparation slices or
+their native pre-debit transactions. A global work SUM does not repair that
+per-demand clock. Charging the entire remaining preparation allowance on every
+turn would also let colluding responders repeatedly wait until the last legal
+moment and exhaust the original horizon. The prospective acceptance protocol
+therefore still needs an explicitly priced original preparation/readiness phase
+and retention of the prepared responder indexes, followed by per-response
+slice/pre-debit capacity in the fixed DA spans. This must precede activation; an
+operationally cold but honest responder must not be falsely treated as a DA
+defaulter by an underpriced clock. Canonical WorkSpent also reverts on reorg:
+it is not proof of at-most-once orphaned physical computation across a lost local
+journal. Durable verifier recovery and the finite reorg/restart allowance remain
+separate obligations.

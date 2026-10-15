@@ -968,3 +968,4 @@ pub mod palw_state_carriage_rpc_v1;
 pub mod palw_attempt_material_v3;
 
 pub mod palw_tir_objective_v1;
+pub mod palw_tir_public_custody_v1;

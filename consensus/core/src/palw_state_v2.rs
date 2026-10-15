@@ -3091,6 +3091,7 @@ pub fn palw_accuser_exposure_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) 
     courts
         .saturating_add(da)
         .saturating_add(state.legacy_dispute_exposure_v1(bond))
+        .saturating_add(state.staged_tir_acquisition_exposure_v1(bond))
         .saturating_add(
             state
                 .staged_by_owner
@@ -10742,6 +10743,11 @@ pub struct PalwChainStateV2 {
     /// Derived owner-local allowance/exposure index: other reservers cannot occupy this lane.
     staged_by_owner: BTreeSet<(PalwBondKeyV2, Hash64)>,
     staged_inventory_by_owner: BTreeSet<(PalwBondKeyV2, Hash64)>,
+    /// Versioned acquisition allocations are independent of the legacy Owner key.
+    staged_tir_by_owner: BTreeSet<(PalwBondKeyV2, Hash64, Hash64)>,
+    /// Source/public-job retention for each exact acquisition allocation.
+    staged_tir_by_claim: BTreeMap<Hash64, BTreeSet<(u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>>,
+    staged_tir_responders: BTreeSet<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2, Hash64, u64, Hash64)>,
     /// Rebuildable signer/EDF queue over exact live public-prefix obligations.
     staged_prefix_responders: BTreeSet<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)>,
     staged_selected_responders: BTreeSet<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)>,
@@ -23892,6 +23898,9 @@ impl PalwStateCarriageV2 {
             staged_due: BTreeSet::new(),
             staged_by_owner: BTreeSet::new(),
             staged_inventory_by_owner: BTreeSet::new(),
+            staged_tir_by_owner: BTreeSet::new(),
+            staged_tir_by_claim: BTreeMap::new(),
+            staged_tir_responders: BTreeSet::new(),
             staged_prefix_responders: BTreeSet::new(),
             staged_selected_responders: BTreeSet::new(),
             staged_flat_responders: BTreeSet::new(),
@@ -24523,6 +24532,259 @@ mod audit_1004_a1_dissolved_line_carriage {
 mod staged_court_state_tests_v1 {
     use super::*;
     use crate::palw_staged_court_state_v1::*;
+
+    // Lifecycle fixtures are deliberately preadmitted. They exercise the REAL
+    // native delta/index/sweep/import path, not a new grant or paid admission.
+    fn tir_lifecycle_fixture(
+        claim: Hash64,
+        owner: PalwBondKeyV2,
+    ) -> (
+        crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
+        crate::palw_tir_public_state_v1::PalwTirPublicAcquisitionRowV1,
+        Vec<u8>,
+    ) {
+        use crate::palw_tir_public_owned_v1::{PalwTirPublicContractV1, PalwTirPublicOwnedPlanV1, PalwTirPublicOwnedV1};
+        let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&x.binding.class, &x.binding.artifact_root).unwrap();
+        let header = crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1::of_binding_v1(&x.binding);
+        let maximum_leaves = 1 << 40;
+        let source = crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_v1(
+            &record, &x.binding.class.layout, &header, header.committed_execution_root, header.full_logits_trace_root, maximum_leaves,
+        ).unwrap();
+        let config = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
+        let plan = PalwTirPublicOwnedPlanV1::derive_v1(&source, 3, config).unwrap();
+        let terms = crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1::derive(
+            100, plan.envelope, config.acquisition_daa, config.collection_daa, config.reorg_retention_daa,
+        ).unwrap();
+        let producer = PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(99100), 0));
+        let contract = PalwTirPublicContractV1 {
+            claim, owner, reserved_daa: 100, bundle_id: Hash64::from_u64_word(99101), source_id: source.source_id_v1(),
+            terms, plan, producer, custodians: BTreeSet::from([producer]),
+        };
+        let capital = terms.plan.rent_sompi.checked_add(terms.plan.deposit_sompi).unwrap();
+        let row = crate::palw_tir_public_state_v1::PalwTirPublicAcquisitionRowV1 {
+            descriptor: crate::palw_tir_public_state_v1::PalwTirPublicSourceDescriptorV1 {
+                class_id: record.facts.class_id, layout_digest: record.layout_digest,
+                header_digest: Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64)
+                    .key(b"misaka-palw/tir-source-header/v1").hash(&borsh::to_vec(&header).unwrap()).as_bytes().try_into().unwrap()),
+                source_id: source.source_id_v1(), maximum_leaves, native_config: config, native_custodian_upper: 3,
+                work_rules: None,
+            },
+            owned: Box::new(PalwTirPublicOwnedV1::admit_native_v1(contract, &source, &BTreeSet::new(), config, 3, 101, capital).unwrap()).into(),
+        };
+        let response = crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
+            preimage: x.preimages[0].clone(), opening: crate::palw_step_leg::step_opening_v1(&x.hashes, 0).unwrap(),
+        };
+        (source, row, borsh::to_vec(&response).unwrap())
+    }
+    fn insert_tir_lifecycle_claim(state: &mut PalwChainStateV2, row: &crate::palw_tir_public_state_v1::PalwTirPublicAcquisitionRowV1) {
+        let c = row.owned.contract_v1();
+        apply_delta_entry(state, &PalwDeltaEntryV2::StagedCourtSeed {
+            key: PalwStagedCourtKeyV1::Claim(c.claim), old: None,
+            new: Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {
+                terms: c.terms, producer: c.producer, panel: BTreeSet::new(), prefix_custody: None,
+            })),
+        }, false).unwrap();
+    }
+
+    #[test]
+    fn tir_lifecycle_exposure_does_not_alias_old_owner_and_rebuilds_on_import_reorg() {
+        let (old, _) = crate::palw_constraint_stream_owned_v1::tests::completed_row(true);
+        let claim = old.claim;
+        let owner = old.reserver;
+        let old_deposit = old.deposit_locked;
+        let (source, row, _) = tir_lifecycle_fixture(claim, owner);
+        let key = row.key_v1().unwrap();
+        let contract = row.owned.contract_v1();
+        let deposit = contract.terms.plan.deposit_sompi;
+        let until = contract.terms.material_until_daa;
+        let mut state = PalwChainStateV2::genesis();
+        insert_tir_lifecycle_claim(&mut state, &row);
+        let old_entry = PalwDeltaEntryV2::StagedCourtSeed {
+            key: PalwStagedCourtKeyV1::Owner(claim, owner), old: None,
+            new: Some(PalwStagedCourtRowV1::Constraint(Box::new(old).into())),
+        };
+        apply_delta_entry(&mut state, &old_entry, false).unwrap();
+        let entry = PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new: Some(PalwStagedCourtRowV1::TirAcquisition(Box::new(row.clone()).into())) };
+        let before = state.state_root();
+        apply_delta_entry(&mut state, &entry, false).unwrap();
+        assert_eq!(state.staged_by_owner, BTreeSet::from([(owner, claim)]));
+        assert_eq!(state.staged_tir_acquisition_count_v1(owner, 100), 1);
+        assert_eq!(state.staged_owner_allowance_used_v1(owner, 100), 2);
+        assert_eq!(palw_accuser_exposure_v1(&state, &owner), u128::from(old_deposit) + u128::from(deposit));
+        assert_eq!(state.staged_tir_source_until_v1(claim), Some(until));
+        assert!(state.staged_holds.contains(&(owner, until, key)));
+        assert!(!state.staged_holds.contains(&(contract.producer, until, key)), "no raw-custody pledge is inferred from a literal list");
+        let mut second_contract = contract.clone();
+        second_contract.reserved_daa += 1;
+        let capital = second_contract.terms.plan.rent_sompi.checked_add(second_contract.terms.plan.deposit_sompi).unwrap();
+        let mut second = row.clone();
+        second.owned = Box::new(crate::palw_tir_public_owned_v1::PalwTirPublicOwnedV1::admit_native_v1(
+            second_contract, &source, &BTreeSet::new(), contract.plan.config, 3, 102, capital,
+        ).unwrap()).into();
+        let second_key = second.key_v1().unwrap();
+        assert_ne!(second_key, key);
+        let second_entry = PalwDeltaEntryV2::StagedCourtSeed {
+            key: second_key, old: None, new: Some(PalwStagedCourtRowV1::TirAcquisition(Box::new(second).into())),
+        };
+        apply_delta_entry(&mut state, &second_entry, false).unwrap();
+        assert_eq!(state.staged_tir_acquisition_count_v1(owner, 100), 2);
+        assert_eq!(state.staged_owner_allowance_used_v1(owner, 100), 3);
+        assert_eq!(palw_accuser_exposure_v1(&state, &owner), u128::from(old_deposit) + 2 * u128::from(deposit));
+        apply_delta_entry(&mut state, &second_entry, true).unwrap();
+        assert_eq!(state.staged_tir_source_until_v1(claim), Some(until));
+        assert_eq!(state.staged_tir_by_claim[&claim], BTreeSet::from([(until, key)]));
+        let after = state.state_root();
+        let expected = (state.staged_holds.clone(), state.staged_due.clone(), state.staged_tir_by_owner.clone(), state.staged_tir_by_claim.clone());
+        state.staged_tir_by_owner.clear();
+        state.staged_tir_by_claim.clear();
+        state.staged_holds.clear();
+        state.staged_due.clear();
+        palw_staged_court_fold_v1::rebuild_indices(&mut state);
+        assert_eq!((state.staged_holds.clone(), state.staged_due.clone(), state.staged_tir_by_owner.clone(), state.staged_tir_by_claim.clone()), expected);
+        state.assert_tir_acquisition_indices_v1().unwrap();
+        let params = PalwStateParamsV2::new(100, 10, 40, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0).unwrap();
+        let restored = borsh::from_slice::<PalwStateCarriageV2>(&borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap())
+            .unwrap().into_state(&params, Some(after)).unwrap();
+        assert_eq!(restored.staged_tir_by_owner, state.staged_tir_by_owner);
+        assert_eq!(restored.staged_tir_by_claim, state.staged_tir_by_claim);
+        assert_eq!(palw_accuser_exposure_v1(&restored, &owner), u128::from(old_deposit) + u128::from(deposit));
+        apply_delta_entry(&mut state, &entry, true).unwrap();
+        assert_eq!(state.state_root(), before);
+        assert_eq!(palw_accuser_exposure_v1(&state, &owner), u128::from(old_deposit));
+        assert!(state.staged_tir_by_owner.is_empty());
+        assert!(state.staged_tir_by_claim.is_empty());
+        assert_eq!(state.staged_owner_allowance_used_v1(owner, 100), 1);
+        apply_delta_entry(&mut state, &entry, false).unwrap();
+        apply_delta_entry(&mut state, &old_entry, true).unwrap();
+        assert_eq!(palw_accuser_exposure_v1(&state, &owner), u128::from(deposit));
+        assert_eq!(state.staged_owner_allowance_used_v1(owner, 100), 1);
+    }
+
+    #[test]
+    fn tir_lifecycle_edf_is_literal_bounded_and_updates_on_collect_and_reverse() {
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedV1;
+        use crate::palw_tir_public_source_v1::PalwTirPublicRequestV1;
+        let owner = PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(99200), 0));
+        let (source, template, _) = tir_lifecycle_fixture(Hash64::from_u64_word(99201), owner);
+        let base = template.owned.contract_v1().clone();
+        let mut state = PalwChainStateV2::genesis();
+        state.last_point = Some(PalwBlockContextV2 { block: BlockHash::from_u64_word(99202), daa_score: 101, blue_score: 101, subsidy: 0 });
+        let mut entries = Vec::new();
+        for i in 0..65 {
+            let mut c = base.clone();
+            c.claim = Hash64::from_u64_word(99300 + i);
+            let capital = c.terms.plan.rent_sompi.checked_add(c.terms.plan.deposit_sompi).unwrap();
+            let owned = PalwTirPublicOwnedV1::admit_native_v1(c, &source, &BTreeSet::new(), base.plan.config, 3, 101, capital).unwrap();
+            let mut row = template.clone();
+            row.owned = Box::new(owned).into();
+            row.owned.demand_v1(&source, owner, 101, PalwTirPublicRequestV1::StepLeaf { index: 0 }).unwrap();
+            insert_tir_lifecycle_claim(&mut state, &row);
+            let entry = PalwDeltaEntryV2::StagedCourtSeed {
+                key: row.key_v1().unwrap(), old: None, new: Some(PalwStagedCourtRowV1::TirAcquisition(Box::new(row).into())),
+            };
+            apply_delta_entry(&mut state, &entry, false).unwrap();
+            entries.push(entry);
+        }
+        let (first, cursor) = state.staged_tir_duties_after_v1(base.producer, 101, None, usize::MAX).unwrap();
+        assert_eq!(first.len(), 64);
+        let (second, next) = state.staged_tir_duties_after_v1(base.producer, 101, cursor, 64).unwrap();
+        assert_eq!(second.len(), 1);
+        assert!(next.is_none());
+        assert!(!first.contains(&second[0]));
+        assert!(state.staged_tir_duties_after_v1(owner, 101, None, 64).unwrap().0.is_empty());
+        assert!(state.staged_tir_duties_after_v1(base.producer, 102, None, 64).is_err());
+        let (claim, owner, allocation, _, demand) = second[0];
+        let key = PalwStagedCourtKeyV1::TirAcquisition(claim, owner, allocation);
+        let old = state.staged_courts[&key].clone();
+        let PalwStagedCourtRowV1::TirAcquisition(mut row) = old.clone() else { unreachable!() };
+        let due = row.owned.active_v1().unwrap().respond_until_daa;
+        let default = row.owned.collect_v1(owner, demand, due).unwrap();
+        assert_eq!(default.missing_custodians, BTreeSet::from([base.producer]));
+        let collect = PalwDeltaEntryV2::StagedCourtSeed { key, old: Some(old), new: Some(PalwStagedCourtRowV1::TirAcquisition(row)) };
+        apply_delta_entry(&mut state, &collect, false).unwrap();
+        assert_eq!(state.staged_tir_responders.len(), 64);
+        let index = state.staged_tir_responders.clone();
+        state.staged_tir_responders.clear();
+        palw_staged_court_fold_v1::rebuild_indices(&mut state);
+        assert_eq!(state.staged_tir_responders, index);
+        state.assert_tir_acquisition_indices_v1().unwrap();
+        apply_delta_entry(&mut state, &collect, true).unwrap();
+        assert_eq!(state.staged_tir_responders.len(), 65);
+        state.last_point.as_mut().unwrap().daa_score = due;
+        assert!(state.staged_tir_duties_after_v1(base.producer, due, None, 64).unwrap().0.is_empty());
+        for entry in entries.iter().rev() { apply_delta_entry(&mut state, entry, true).unwrap(); }
+        assert!(state.staged_tir_responders.is_empty());
+        assert!(state.staged_tir_by_owner.is_empty());
+    }
+
+    #[test]
+    fn tir_lifecycle_sweeps_metadata_chunks_refs_only_at_original_material_and_reverts() {
+        use crate::palw_tir_public_owned_v1::{PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1, palw_tir_public_body_hash_v1};
+        use crate::palw_tir_public_source_v1::PalwTirPublicRequestV1;
+        let owner = PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(99400), 0));
+        let (source, mut row, body) = tir_lifecycle_fixture(Hash64::from_u64_word(99401), owner);
+        let key = row.key_v1().unwrap();
+        let c = row.owned.contract_v1().clone();
+        let demand = row.owned.demand_v1(&source, owner, 101, PalwTirPublicRequestV1::StepLeaf { index: 0 }).unwrap();
+        row.owned.begin_v1(&source, c.producer, demand, 102, body.len() as u64, palw_tir_public_body_hash_v1(&body)).unwrap();
+        let mut records = Vec::new();
+        for (i, bytes) in body.chunks(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1).enumerate() {
+            records.push(row.owned.part_v1(c.producer, demand, 102, (i * PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1) as u64, bytes).unwrap());
+        }
+        records.reverse();
+        let finish = row.owned.finish_v1(&source, c.producer, demand, 102, &records, None).unwrap();
+        let mut state = PalwChainStateV2::genesis();
+        state.last_point = Some(PalwBlockContextV2 { block: BlockHash::from_u64_word(99402), daa_score: 102, blue_score: 102, subsidy: 0 });
+        insert_tir_lifecycle_claim(&mut state, &row);
+        apply_delta_entry(&mut state, &PalwDeltaEntryV2::StagedCourtSeed {
+            key, old: None, new: Some(PalwStagedCourtRowV1::TirAcquisition(Box::new(row).into())),
+        }, false).unwrap();
+        for record in records {
+            let head = record.head_v1().unwrap();
+            apply_delta_entry(&mut state, &PalwDeltaEntryV2::StagedCourtSeed {
+                key: PalwStagedCourtKeyV1::TirRawChunk(head), old: None,
+                new: Some(PalwStagedCourtRowV1::TirRawChunk(Box::new(crate::palw_tir_public_state_v1::PalwTirPublicChunkRowV1 {
+                    acquisition: key, source_id: c.source_id, material_until_daa: c.terms.material_until_daa, record,
+                }).into())),
+            }, false).unwrap();
+        }
+        let reference = finish.body.hash_v1().unwrap();
+        apply_delta_entry(&mut state, &PalwDeltaEntryV2::StagedCourtSeed {
+            key: PalwStagedCourtKeyV1::TirAcceptedBody(reference), old: None,
+            new: Some(PalwStagedCourtRowV1::TirAcceptedBody(Box::new(crate::palw_tir_public_state_v1::PalwTirPublicAcceptedRowV1 {
+                acquisition: key, source_id: c.source_id, material_until_daa: c.terms.material_until_daa,
+                history_index: finish.history_index, reference: finish.body,
+            }).into())),
+        }, false).unwrap();
+        state.assert_tir_acquisition_indices_v1().unwrap();
+        let params = PalwStateParamsV2::new(100, 10, 40, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0).unwrap();
+        let extras = PalwTransitionExtrasV1::default();
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let mut ctx = PalwBlockContextV2 { block: BlockHash::from_u64_word(99403), daa_score: c.terms.material_until_daa - 1, blue_score: 103, subsidy: 0 };
+        let before = state.state_root();
+        palw_staged_court_fold_v1::sweep(&mut b, &ctx).unwrap();
+        assert!(b.state.staged_courts.contains_key(&key));
+        assert!(b.state.staged_courts.contains_key(&PalwStagedCourtKeyV1::TirAcceptedBody(reference)));
+        assert_eq!(b.state.state_root(), before);
+        assert_eq!(palw_accuser_exposure_v1(&b.state, &owner), u128::from(c.terms.plan.deposit_sompi));
+        ctx.daa_score += 1;
+        b.state.last_point = Some(ctx.clone());
+        palw_staged_court_fold_v1::sweep(&mut b, &ctx).unwrap();
+        assert!(!b.state.staged_courts.contains_key(&key));
+        assert!(!b.state.staged_courts.contains_key(&PalwStagedCourtKeyV1::TirAcceptedBody(reference)));
+        assert!(!b.state.staged_courts.values().any(|row| matches!(row, PalwStagedCourtRowV1::TirRawChunk(_))));
+        assert_eq!(palw_accuser_exposure_v1(&b.state, &owner), 0);
+        assert!(b.entries.len() <= 64);
+        b.state.assert_tir_acquisition_indices_v1().unwrap();
+        for entry in b.entries.iter().rev() { apply_delta_entry(&mut b.state, entry, true).unwrap(); }
+        b.state.last_point = state.last_point;
+        assert_eq!(b.state.state_root(), before);
+        assert_eq!(b.state.staged_tir_by_owner, state.staged_tir_by_owner);
+        assert_eq!(b.state.staged_tir_by_claim, state.staged_tir_by_claim);
+        assert_eq!(b.state.staged_due, state.staged_due);
+        assert_eq!(b.state.staged_holds, state.staged_holds);
+    }
 
     #[test]
     fn staged_progress_uses_one_accepted_snapshot_and_never_copies_parser_state() {

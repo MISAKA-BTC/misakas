@@ -38,6 +38,373 @@ fn logical(request: PalwTirPublicRequestV1) -> u64 {
     if let PalwTirPublicRequestV1::StepRun { count, .. } = request { u64::from(count) } else { 1 }
 }
 
+/// Typed cumulative work, not interchangeable with a host-memory reservation.
+/// Arithmetic is the registered canonical MAC-equivalent dimension, not CPU
+/// time; traffic is kept separately instead of treating a byte as an operation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirPublicWorkV1 {
+    pub attempts: u64,
+    pub io_bytes: u64,
+    pub hash_bytes: u64,
+    pub copy_bytes: u64,
+    pub parser_steps: u64,
+    pub id_copy_words: u64,
+    pub tree_hashes: u64,
+    pub replay_leaves: u64,
+    pub replay_positions: u64,
+    pub replay_id_words: u64,
+    pub arithmetic_work: u128,
+    pub traffic_bytes: u128,
+    pub eval_elements: u64,
+    pub eval_terms: u64,
+    pub source_reads: u64,
+    pub target_requests: u64,
+}
+impl PalwTirPublicWorkV1 {
+    pub fn checked_mul_v1(self, count: u64) -> Result<Self, String> {
+        let mut next = Self::default();
+        macro_rules! mul { ($($f:ident),+ $(,)?) => { $(next.$f = self.$f.checked_mul(count).ok_or("TIR cumulative work multiplication overflow")?;)+ }; }
+        mul!(
+            attempts,
+            io_bytes,
+            hash_bytes,
+            copy_bytes,
+            parser_steps,
+            id_copy_words,
+            tree_hashes,
+            replay_leaves,
+            replay_positions,
+            replay_id_words,
+            eval_elements,
+            eval_terms,
+            source_reads,
+            target_requests
+        );
+        next.arithmetic_work = self.arithmetic_work.checked_mul(u128::from(count)).ok_or("TIR arithmetic multiplication overflow")?;
+        next.traffic_bytes = self.traffic_bytes.checked_mul(u128::from(count)).ok_or("TIR traffic multiplication overflow")?;
+        Ok(next)
+    }
+    pub fn checked_add_v1(self, other: Self) -> Result<Self, String> {
+        let mut next = self;
+        macro_rules! add { ($($f:ident),+ $(,)?) => { $(next.$f = next.$f.checked_add(other.$f).ok_or("TIR cumulative work overflow")?;)+ }; }
+        add!(
+            attempts,
+            io_bytes,
+            hash_bytes,
+            copy_bytes,
+            parser_steps,
+            id_copy_words,
+            tree_hashes,
+            replay_leaves,
+            replay_positions,
+            replay_id_words,
+            arithmetic_work,
+            traffic_bytes,
+            eval_elements,
+            eval_terms,
+            source_reads,
+            target_requests
+        );
+        Ok(next)
+    }
+    pub fn covers_v1(&self, used: &Self) -> bool {
+        macro_rules! covers { ($($f:ident),+ $(,)?) => { true $(&& self.$f >= used.$f)+ }; }
+        covers!(
+            attempts,
+            io_bytes,
+            hash_bytes,
+            copy_bytes,
+            parser_steps,
+            id_copy_words,
+            tree_hashes,
+            replay_leaves,
+            replay_positions,
+            replay_id_words,
+            arithmetic_work,
+            traffic_bytes,
+            eval_elements,
+            eval_terms,
+            source_reads,
+            target_requests
+        )
+    }
+}
+
+/// Frozen by a future native full-SUM quote. These are not operational defaults
+/// provided by the backend, nor an extension of historical court acceptance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirPublicWorkRulesV1 {
+    pub max_step_leaf_count: u64,
+    pub prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    pub max_eval_elements: u64,
+    pub max_eval_terms: u64,
+    pub max_target_requests: u64,
+    pub max_source_reads: u64,
+    pub maximum_probe_copy_bytes: u64,
+}
+impl BorshSerialize for PalwTirPublicWorkRulesV1 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.max_step_leaf_count.serialize(writer)?;
+        let form = match self.prompt_form {
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat => 0u8,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1 => 1u8,
+        };
+        form.serialize(writer)?;
+        self.max_eval_elements.serialize(writer)?;
+        self.max_eval_terms.serialize(writer)?;
+        self.max_target_requests.serialize(writer)?;
+        self.max_source_reads.serialize(writer)?;
+        self.maximum_probe_copy_bytes.serialize(writer)
+    }
+}
+impl BorshDeserialize for PalwTirPublicWorkRulesV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let max_step_leaf_count = BorshDeserialize::deserialize_reader(reader)?;
+        let prompt_form = match u8::deserialize_reader(reader)? {
+            0 => crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            1 => crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "TIR work prompt form is not canonical")),
+        };
+        Ok(Self {
+            max_step_leaf_count,
+            prompt_form,
+            max_eval_elements: BorshDeserialize::deserialize_reader(reader)?,
+            max_eval_terms: BorshDeserialize::deserialize_reader(reader)?,
+            max_target_requests: BorshDeserialize::deserialize_reader(reader)?,
+            max_source_reads: BorshDeserialize::deserialize_reader(reader)?,
+            maximum_probe_copy_bytes: BorshDeserialize::deserialize_reader(reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirPublicWorkAllocationV1 {
+    pub source_id: Hash64,
+    pub rules: PalwTirPublicWorkRulesV1,
+    pub maximum: PalwTirPublicWorkV1,
+    /// Independent prepaid actor lanes. A colluding responder cannot spend the
+    /// outside owner's preparation/probe allowance or another literal slot's.
+    pub per_actor: PalwTirPublicWorkV1,
+    pub maximum_custodians: u64,
+    pub maximum_restarts: u64,
+    /// ADDITIONAL work/carrier storage. Admission must buy acquisition + this
+    /// envelope as a SUM, not reinterpret an old acquisition allocation.
+    pub envelope: PalwRenderingResourcePlanV1,
+}
+
+/// Registered-program/source-derived quote component only. It does not admit a
+/// sidecar, obtain custody grants or establish the full semantic/terminal SUM.
+pub fn derive_tir_public_work_allocation_v1(
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    source: &PalwTirPublicSourceV1,
+    plan: &PalwTirPublicOwnedPlanV1,
+    rules: PalwTirPublicWorkRulesV1,
+) -> Result<PalwTirPublicWorkAllocationV1, String> {
+    if source.header_v1() != header
+        || source.source_id_v1() != plan.source_id
+        || rules.max_step_leaf_count < source.leaf_count_v1()
+        || rules.maximum_probe_copy_bytes == 0
+        || *plan != PalwTirPublicOwnedPlanV1::derive_v1(source, plan.maximum_custodians, plan.config)?
+    {
+        return Err("TIR work quote changes native source/geometry/frozen rules".into());
+    }
+    let binding = header.resolve_registered_layout_v1(record, layout, header.committed_execution_root, rules.max_step_leaf_count)?;
+    let verified = crate::palw_tir_step_v1::verify_tir_binding_v1(&binding, rules.max_step_leaf_count).map_err(|e| e.to_string())?;
+    let shape = crate::palw_tir_work_v1::palw_tir_work_shape_v1(&verified.space.program).map_err(|e| e.to_string())?;
+    let facts = crate::palw_canonical_work_v1::PalwCanonicalExecutionFactsV1::uncached(
+        header.job_context.declared_prefill_tokens,
+        header.job_context.exact_decode_tokens,
+    );
+    let model = shape.work_v1(&facts).map_err(|e| e.to_string())?;
+    let passes = plan.config.prices.reorg_replay_moves.checked_add(1).ok_or("TIR restart allowance overflow")?;
+    let slots = plan.maximum_custodians.checked_add(1).ok_or("TIR work slots overflow")?;
+    let preparations = product(slots, passes)?;
+    let n = source.leaf_count_v1();
+    let d = u64::from(source.decode_count_v1());
+    let p = u64::from(header.job_context.declared_prefill_tokens);
+    let positions = p.checked_add(d).and_then(|v| v.checked_sub(1)).ok_or("TIR work positions overflow")?;
+    let tiles = u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
+    let probes = product(n.checked_add(1).ok_or("TIR work probes overflow")?, passes)?;
+    let body_records = plan.envelope.maximum_stream_bytes.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64);
+    let attempts = product(
+        16,
+        sum(&[
+            plan.envelope.maximum_moves,
+            product(preparations, sum(&[n, product(d, tiles)?, positions, d, 32])?)?,
+            product(body_records, passes)?,
+            product(probes, 4)?,
+        ])?,
+    )?;
+    let arithmetic_work = model.arithmetic_mac_eq().checked_mul(u128::from(preparations)).ok_or("TIR arithmetic work overflow")?;
+    let traffic_bytes = model.traffic_bytes().checked_mul(u128::from(preparations)).ok_or("TIR traffic work overflow")?;
+    let io = sum(&[product(plan.envelope.maximum_stream_bytes, passes)?, exact(traffic_bytes)?])?;
+    let program_parse = product(probes, record.program.len() as u64)?;
+    let copy = sum(&[product(io, 8)?, product(product(probes, rules.maximum_probe_copy_bytes)?, 2)?, product(program_parse, 8)?])?;
+    let replay_id_words = product(product(positions, p.checked_add(d).ok_or("TIR replay IDs overflow")?)?, preparations)?;
+    let per_actor = PalwTirPublicWorkV1 {
+        attempts,
+        io_bytes: io,
+        copy_bytes: copy,
+        hash_bytes: sum(&[product(io, 16)?, product(program_parse, 16)?])?,
+        parser_steps: sum(&[product(io, 16)?, product(attempts, 65_536)?, product(program_parse, 16)?])?,
+        id_copy_words: sum(&[product(product(d, plan.maximum_turns)?, product(slots, 8)?)?, product(replay_id_words, 4)?])?,
+        tree_hashes: io.div_ceil(64),
+        replay_leaves: product(n, preparations)?,
+        replay_positions: product(positions, preparations)?,
+        replay_id_words,
+        arithmetic_work,
+        traffic_bytes,
+        eval_elements: product(probes, rules.max_eval_elements)?,
+        eval_terms: product(probes, rules.max_eval_terms)?,
+        source_reads: product(probes, rules.max_source_reads)?,
+        target_requests: product(probes, rules.max_target_requests)?,
+    };
+    let maximum = per_actor.checked_mul_v1(slots)?;
+    let parser = sum(&[
+        maximum.parser_steps,
+        maximum.io_bytes,
+        maximum.copy_bytes,
+        exact(maximum.arithmetic_work)?,
+        maximum.eval_elements,
+        maximum.eval_terms,
+        maximum.source_reads,
+        maximum.target_requests,
+        product(maximum.id_copy_words, 4)?,
+    ])?;
+    // One global last receipt plus allocation/aggregate fields, and one spent
+    // record + last receipt per protected actor. Each receipt may contain a full
+    // 64-sibling history path (>4KiB); 512-byte actor estimates are insufficient.
+    let row = sum(&[8192, product(slots, 8192)?])?;
+    let bytes = product(maximum.attempts, sum(&[16_384, product(row, 8)?])?)?;
+    let envelope = PalwRenderingResourcePlanV1 {
+        prefix_tokens: 0,
+        vocab: source.vocab_v1(),
+        maximum_stream_bytes: bytes,
+        maximum_stream_leaves: maximum.attempts,
+        maximum_eog_bytes: 0,
+        maximum_moves: maximum.attempts,
+        maximum_parser_steps: parser,
+        maximum_blake_blocks: maximum.hash_bytes.div_ceil(128),
+        inclusion_daa: product(maximum.attempts, plan.config.prices.inclusion_margin_daa)?,
+        rent_sompi: sum(&[
+            product(bytes, plan.config.prices.rent_per_stream_byte)?,
+            product(row, plan.config.prices.rent_per_row_byte)?,
+            product(parser, plan.config.prices.rent_per_parser_step)?,
+        ])?,
+        deposit_sompi: product(maximum.attempts, plan.config.prices.deposit_per_move)?,
+        row_bytes: row,
+        resident_ram_bytes: sum(&[product(row, 8)?, product(rules.maximum_probe_copy_bytes, 2)?])?,
+    };
+    Ok(PalwTirPublicWorkAllocationV1 {
+        source_id: source.source_id_v1(),
+        rules,
+        maximum,
+        per_actor,
+        maximum_custodians: plan.maximum_custodians,
+        maximum_restarts: plan.config.prices.reorg_replay_moves,
+        envelope,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwTirPublicWorkPhaseV1 {
+    Capture,
+    Response,
+    Ids,
+    BodyRead,
+    BodyAuthenticate,
+    ConeProbe,
+    Planning,
+    OwnReplay,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirPublicWorkScopeV1 {
+    pub claim: Hash64,
+    pub owner: PalwBondKeyV2,
+    pub reserved_daa: u64,
+    pub bundle_id: Hash64,
+    pub source_id: Hash64,
+    pub turn: u64,
+    pub request: PalwTirPublicRequestV1,
+    pub actor: PalwBondKeyV2,
+    pub phase: PalwTirPublicWorkPhaseV1,
+    pub input_head: Hash64,
+    pub input_offset: u64,
+    pub slice: u64,
+    /// Local preparation cursor commitment, not an authenticated source fact.
+    pub cursor_id: Hash64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+pub struct PalwTirPublicWorkDebitV1 {
+    pub expected_nonce: u64,
+    pub previous_head: Hash64,
+    pub scope: PalwTirPublicWorkScopeV1,
+    pub work: PalwTirPublicWorkV1,
+    pub restart: bool,
+    pub history: Option<PalwStepOpeningV1>,
+}
+impl BorshDeserialize for PalwTirPublicWorkDebitV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let expected_nonce = BorshDeserialize::deserialize_reader(reader)?;
+        let previous_head = BorshDeserialize::deserialize_reader(reader)?;
+        let scope = BorshDeserialize::deserialize_reader(reader)?;
+        let work = BorshDeserialize::deserialize_reader(reader)?;
+        let restart = BorshDeserialize::deserialize_reader(reader)?;
+        let history = match u8::deserialize_reader(reader)? {
+            0 => None,
+            1 => {
+                let leaf_index = BorshDeserialize::deserialize_reader(reader)?;
+                let leaf_hash = BorshDeserialize::deserialize_reader(reader)?;
+                let count = u32::deserialize_reader(reader)?;
+                if count > 64 {
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "TIR work history path exceeds u64 tree"));
+                }
+                let mut siblings = Vec::with_capacity(count as usize);
+                for _ in 0..count {
+                    siblings.push(BorshDeserialize::deserialize_reader(reader)?);
+                }
+                Some(PalwStepOpeningV1 { leaf_index, leaf_hash, siblings })
+            }
+            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "TIR work history option is noncanonical")),
+        };
+        Ok(Self { expected_nonce, previous_head, scope, work, restart, history })
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirPublicWorkReceiptV1 {
+    pub debit: PalwTirPublicWorkDebitV1,
+    pub accepted_daa: u64,
+    pub cumulative: PalwTirPublicWorkV1,
+    /// Derived aggregate ordinal, NOT a signed shared-lane precondition.
+    pub ordinal: u64,
+}
+impl PalwTirPublicWorkReceiptV1 {
+    pub fn hash_v1(&self) -> Result<Hash64, String> {
+        Ok(digest(b"misaka-palw/tir-work-receipt/v1", &borsh::to_vec(self).map_err(|e| e.to_string())?))
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirPublicWorkStateV1 {
+    pub allocation: PalwTirPublicWorkAllocationV1,
+    pub spent: PalwTirPublicWorkV1,
+    pub nonce: u64,
+    pub head: Hash64,
+    pub restarts: u64,
+    pub last: Option<PalwTirPublicWorkReceiptV1>,
+    pub actors: BTreeMap<PalwBondKeyV2, PalwTirPublicActorWorkV1>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirPublicActorWorkV1 {
+    pub spent: PalwTirPublicWorkV1,
+    pub grants: u64,
+    pub restarts: u64,
+    /// Another actor's grant cannot overwrite this actor's unclaimed receipt.
+    pub last: Option<PalwTirPublicWorkReceiptV1>,
+}
+
 /// Conservative full-source acquisition, NOT a proof of the canonical sparse
 /// closure or generic terminal bound. Checked overflow is an explicit missing
 /// coverage case, never an activation/profile restriction disguised as success.
@@ -415,6 +782,7 @@ pub struct PalwTirPublicOwnedV1 {
     pending: Option<PalwSharedCourtV1<PalwTirPublicPendingV1>>,
     spent: PalwTirPublicSpentV1,
     history: History,
+    work: Option<PalwTirPublicWorkStateV1>,
 }
 /// No raw bytes, growing chunk list, or deserialized authenticated marker.
 /// Only native authenticated journal apply/revert may restore a checkpoint.
@@ -424,6 +792,7 @@ pub struct PalwTirPublicOwnedCheckpointV1 {
     pending: Option<PalwSharedCourtV1<PalwTirPublicPendingV1>>,
     spent: PalwTirPublicSpentV1,
     history: History,
+    work: Option<PalwTirPublicWorkStateV1>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwTirPublicDefaultV1 {
@@ -454,6 +823,7 @@ pub enum PalwTirPublicOwnedActionV1 {
     Part { demand_id: Hash64, answerer: PalwBondKeyV2, offset: u64, bytes: Vec<u8> },
     Finish { demand_id: Hash64, answerer: PalwBondKeyV2 },
     Collect { demand_id: Hash64 },
+    WorkDebit(PalwTirPublicWorkDebitV1),
 }
 impl BorshDeserialize for PalwTirPublicOwnedActionV1 {
     fn deserialize_reader<R: std::io::Read>(r: &mut R) -> std::io::Result<Self> {
@@ -494,6 +864,7 @@ impl BorshDeserialize for PalwTirPublicOwnedActionV1 {
                 answerer: BorshDeserialize::deserialize_reader(r)?,
             },
             5 => Self::Collect { demand_id: BorshDeserialize::deserialize_reader(r)? },
+            6 => Self::WorkDebit(BorshDeserialize::deserialize_reader(r)?),
             _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown TIR acquisition action")),
         })
     }
@@ -504,8 +875,137 @@ pub enum PalwTirPublicOwnedEffectV1 {
     Chunk(PalwTirPublicChunkRecordV1),
     Finished(PalwTirPublicFinishEffectV1),
     Default(PalwTirPublicDefaultV1),
+    WorkDebited(PalwTirPublicWorkReceiptV1),
 }
 impl PalwTirPublicOwnedV1 {
+    /// A future native full-SUM admission may install this ONCE before any
+    /// source movement. This is not a public action or a live admission door.
+    /// State-aware readers must rederive it from the retained registered class.
+    pub fn install_work_v1(
+        &mut self,
+        source: &PalwTirPublicSourceV1,
+        allocation: PalwTirPublicWorkAllocationV1,
+    ) -> Result<(), String> {
+        self.source(source)?;
+        let c = &self.contract;
+        let full = c.plan.envelope.checked_sum_v1(allocation.envelope)?;
+        if self.work.is_some()
+            || self.pending.is_some()
+            || self.spent.moves != 1
+            || allocation.source_id != c.source_id
+            || allocation.maximum.attempts == 0
+            || allocation.maximum_restarts != c.plan.config.prices.reorg_replay_moves
+            || !c.terms.plan.covers_v1(full)
+            || c.terms.open_until_daa.checked_add(full.inclusion_daa).is_none_or(|end| end > c.terms.stream_until_daa)
+        {
+            return Err("TIR work requires an original independent fully funded SUM before first movement".into());
+        }
+        self.work = Some(PalwTirPublicWorkStateV1 {
+            allocation,
+            spent: Default::default(),
+            nonce: 0,
+            head: Hash64::default(),
+            restarts: 0,
+            last: None,
+            actors: BTreeMap::new(),
+        });
+        Ok(())
+    }
+
+    fn work_scope_v1(
+        &self,
+        source: &PalwTirPublicSourceV1,
+        signer: PalwBondKeyV2,
+        scope: &PalwTirPublicWorkScopeV1,
+    ) -> Result<(), String> {
+        let c = &self.contract;
+        source.check_request_v1(&scope.request)?;
+        if scope.claim != c.claim
+            || scope.owner != c.owner
+            || scope.reserved_daa != c.reserved_daa
+            || scope.bundle_id != c.bundle_id
+            || scope.source_id != c.source_id
+            || scope.actor != signer
+            || (signer != c.owner && !c.custodians.contains(&signer))
+        {
+            return Err("TIR work changes literal source/owner/actor/request/reservation scope".into());
+        }
+        Ok(())
+    }
+
+    /// Only an independently authenticated native carrier may call this fold.
+    /// The receipt records a debit, never proof that the off-chain work ran or
+    /// that its local output authenticated. None/error cannot refund it.
+    pub fn work_debit_v1(
+        &mut self,
+        source: &PalwTirPublicSourceV1,
+        signer: PalwBondKeyV2,
+        now: u64,
+        debit: &PalwTirPublicWorkDebitV1,
+    ) -> Result<PalwTirPublicWorkReceiptV1, String> {
+        self.source(source)?;
+        self.original_clock(now)?;
+        self.work_scope_v1(source, signer, &debit.scope)?;
+        if matches!(
+            debit.scope.phase,
+            PalwTirPublicWorkPhaseV1::Capture | PalwTirPublicWorkPhaseV1::Response | PalwTirPublicWorkPhaseV1::Ids
+        ) {
+            let p = self.active_v1().ok_or("TIR preparation work has no original native demand")?;
+            let request = if matches!(debit.scope.request, PalwTirPublicRequestV1::Ids { .. }) {
+                PalwTirPublicRequestV1::Ids { offset: 0 }
+            } else {
+                debit.scope.request
+            };
+            if p.collected || now < p.opened_daa || now >= p.respond_until_daa || p.request != request {
+                return Err("TIR preparation work changes current request or original response deadline".into());
+            }
+        }
+        let turn = self.active_v1().map_or(self.spent.turns, |p| p.turn);
+        let state = self.work.as_ref().ok_or("TIR work has no original funded native allocation")?;
+        let actor = state.actors.get(&signer).cloned().unwrap_or_default();
+        let actor_head = actor.last.as_ref().map(|r| r.hash_v1()).transpose()?.unwrap_or_default();
+        if debit.scope.turn != turn
+            || debit.expected_nonce != actor.grants
+            || debit.previous_head != actor_head
+            || debit.work.attempts == 0
+            || debit.work.attempts > state.allocation.maximum.attempts
+        {
+            return Err("TIR work debit is stale, repeated or unbound to the exact native turn/head/nonce".into());
+        }
+        let cumulative = state.spent.checked_add_v1(debit.work)?;
+        let nonce = state.nonce.checked_add(1).ok_or("TIR work nonce overflow")?;
+        let restarts = state.restarts.checked_add(u64::from(debit.restart)).ok_or("TIR work restart overflow")?;
+        let mut actor = PalwTirPublicActorWorkV1 {
+            spent: actor.spent.checked_add_v1(debit.work)?,
+            grants: actor.grants.checked_add(1).ok_or("TIR actor work nonce overflow")?,
+            restarts: actor.restarts.checked_add(u64::from(debit.restart)).ok_or("TIR actor restart overflow")?,
+            last: None,
+        };
+        if !state.allocation.maximum.covers_v1(&cumulative)
+            || nonce > state.allocation.envelope.maximum_moves
+            || restarts
+                > product(
+                    state.allocation.maximum_restarts,
+                    state.allocation.maximum_custodians.checked_add(1).ok_or("TIR work slots overflow")?,
+                )?
+            || !state.allocation.per_actor.covers_v1(&actor.spent)
+            || actor.grants > state.allocation.per_actor.attempts
+            || actor.restarts > state.allocation.maximum_restarts
+        {
+            return Err("TIR original cumulative native work/restart allocation is exhausted".into());
+        }
+        let receipt = PalwTirPublicWorkReceiptV1 { debit: debit.clone(), accepted_daa: now, cumulative, ordinal: nonce };
+        actor.last = Some(receipt.clone());
+        let head = receipt.hash_v1()?;
+        let state = self.work.as_mut().ok_or("TIR work allocation disappeared")?;
+        state.spent = cumulative;
+        state.nonce = nonce;
+        state.head = head;
+        state.restarts = restarts;
+        state.last = Some(receipt.clone());
+        state.actors.insert(signer, actor);
+        Ok(receipt)
+    }
     /// Native integration must obtain config/upper from accepted native state,
     /// not forward those fields from the incoming owner contract.
     pub fn admit_native_v1(
@@ -547,6 +1047,7 @@ impl PalwTirPublicOwnedV1 {
             pending: None,
             spent: PalwTirPublicSpentV1 { moves: 1, ..Default::default() },
             history: History { count: 0, peaks: [None; 64] },
+            work: None,
         })
     }
     pub fn contract_v1(&self) -> &PalwTirPublicContractV1 {
@@ -561,6 +1062,9 @@ impl PalwTirPublicOwnedV1 {
     pub fn spent_v1(&self) -> PalwTirPublicSpentV1 {
         self.spent
     }
+    pub fn work_v1(&self) -> Option<&PalwTirPublicWorkStateV1> {
+        self.work.as_ref()
+    }
     pub fn history_v1(&self) -> (u64, Option<Hash64>) {
         (self.history.count, self.history.root())
     }
@@ -570,6 +1074,7 @@ impl PalwTirPublicOwnedV1 {
             pending: self.pending.clone(),
             spent: self.spent,
             history: self.history.clone(),
+            work: self.work.clone(),
         })
     }
     pub fn restore_checkpoint_v1(
@@ -584,6 +1089,10 @@ impl PalwTirPublicOwnedV1 {
         candidate.pending = cp.pending.clone();
         candidate.spent = cp.spent;
         candidate.history = cp.history.clone();
+        if candidate.work.as_ref().map(|w| &w.allocation) != cp.work.as_ref().map(|w| &w.allocation) {
+            return Err("TIR checkpoint changes immutable work allocation".into());
+        }
+        candidate.work = cp.work.clone();
         candidate.check_v1(source)?;
         *self = candidate;
         Ok(())
@@ -592,7 +1101,14 @@ impl PalwTirPublicOwnedV1 {
     /// large metadata vector from being decoded under a small owner's permit;
     /// the checkpoint itself still is NOT a public admission credential.
     pub fn decode_checkpoint_v1(&self, bytes: &[u8]) -> Result<PalwTirPublicOwnedCheckpointV1, String> {
-        if bytes.len() as u64 > self.contract.plan.envelope.row_bytes {
+        let row_bytes = self
+            .contract
+            .plan
+            .envelope
+            .row_bytes
+            .checked_add(self.work.as_ref().map_or(0, |w| w.allocation.envelope.row_bytes))
+            .ok_or("TIR work checkpoint byte allocation overflow")?;
+        if bytes.len() as u64 > row_bytes {
             return Err("TIR checkpoint exceeds immutable metadata allocation before decoding".into());
         }
         let checkpoint: PalwTirPublicOwnedCheckpointV1 = borsh::from_slice(bytes).map_err(|e| e.to_string())?;
@@ -625,6 +1141,11 @@ impl PalwTirPublicOwnedV1 {
         Ok(())
     }
     pub fn response_span_v1(&self, source: &PalwTirPublicSourceV1, request: PalwTirPublicRequestV1) -> Result<u64, String> {
+        // NOT an activation-ready paid-work deadline: this legacy component
+        // prices source carriers, not the new WorkDebit carriers or N-slice cold
+        // capture preparation. Native Open must first fix a preparation/Ready
+        // phase with its original clock, then price response work and inclusion
+        // in each short DA turn. A global SUM alone does not close that gap.
         self.source(source)?;
         let (bytes, _) = request_bound(source, request)?;
         let slots = (self.contract.custodians.len() as u64).checked_add(1).ok_or("TIR slot count overflow")?;
@@ -633,6 +1154,68 @@ impl PalwTirPublicOwnedV1 {
     }
     pub fn check_v1(&self, source: &PalwTirPublicSourceV1) -> Result<(), String> {
         self.contract.check_v1(source)?;
+        if let Some(work) = &self.work {
+            let full = self.contract.plan.envelope.checked_sum_v1(work.allocation.envelope)?;
+            if work.allocation.source_id != self.contract.source_id
+                || !self.contract.terms.plan.covers_v1(full)
+                || !work.allocation.maximum.covers_v1(&work.spent)
+                || work.nonce > work.allocation.envelope.maximum_moves
+                || work.allocation.maximum_custodians != self.contract.plan.maximum_custodians
+                || work.allocation.maximum
+                    != work
+                        .allocation
+                        .per_actor
+                        .checked_mul_v1(work.allocation.maximum_custodians.checked_add(1).ok_or("TIR work slot overflow")?)?
+                || work.restarts
+                    > product(
+                        work.allocation.maximum_restarts,
+                        work.allocation.maximum_custodians.checked_add(1).ok_or("TIR work slots overflow")?,
+                    )?
+                || work.actors.len() > self.contract.custodians.len() + 1
+                || (work.nonce == 0) != (work.head == Hash64::default())
+                || (work.nonce == 0) != work.last.is_none()
+            {
+                return Err("TIR rooted work allocation/spent/head is inconsistent".into());
+            }
+            let mut total = PalwTirPublicWorkV1::default();
+            let mut grants = 0u64;
+            let mut restarts = 0u64;
+            for (actor, paid) in &work.actors {
+                if (*actor != self.contract.owner && !self.contract.custodians.contains(actor))
+                    || !work.allocation.per_actor.covers_v1(&paid.spent)
+                    || paid.grants > work.allocation.per_actor.attempts
+                    || paid.restarts > work.allocation.maximum_restarts
+                    || paid.last.as_ref().is_none_or(|last| {
+                        last.debit.scope.actor != *actor
+                            || last.debit.expected_nonce.checked_add(1) != Some(paid.grants)
+                            || last.ordinal == 0
+                            || last.ordinal > work.nonce
+                            || !work.spent.covers_v1(&last.cumulative)
+                    })
+                {
+                    return Err("TIR protected work lane changes literal actor or exceeds its allocation".into());
+                }
+                total = total.checked_add_v1(paid.spent)?;
+                grants = grants.checked_add(paid.grants).ok_or("TIR actor grants overflow")?;
+                restarts = restarts.checked_add(paid.restarts).ok_or("TIR actor restarts overflow")?;
+            }
+            if total != work.spent || grants != work.nonce || restarts != work.restarts {
+                return Err("TIR protected work lanes do not sum to rooted spent".into());
+            }
+            if let Some(last) = &work.last {
+                self.work_scope_v1(source, last.debit.scope.actor, &last.debit.scope)?;
+                if last.hash_v1()? != work.head
+                    || last.cumulative != work.spent
+                    || last.ordinal != work.nonce
+                    || last.accepted_daa < self.contract.reserved_daa
+                    || last.accepted_daa >= self.contract.terms.stream_until_daa
+                {
+                    return Err("TIR rooted work receipt changes original scope/nonce/clock/spent".into());
+                }
+            } else if work.spent != PalwTirPublicWorkV1::default() || work.restarts != 0 {
+                return Err("TIR empty work journal has nonzero spent".into());
+            }
+        }
         if self.spent.moves == 0
             || self.spent.moves > self.contract.plan.envelope.maximum_moves
             || self.spent.fresh_logical > self.contract.plan.maximum_fresh_logical_units
@@ -993,6 +1576,7 @@ impl PalwTirPublicOwnedV1 {
         self.source(source)?;
         use PalwTirPublicOwnedActionV1 as A;
         match action {
+            A::WorkDebit(debit) => Ok(PalwTirPublicOwnedEffectV1::WorkDebited(self.work_debit_v1(source, signer, now, debit)?)),
             A::Demand { request } => Ok(PalwTirPublicOwnedEffectV1::Demanded(self.demand_v1(source, signer, now, *request)?)),
             A::Reacquire { previous, proof, nonce } => {
                 Ok(PalwTirPublicOwnedEffectV1::Demanded(self.reacquire_v1(source, signer, now, previous, proof, *nonce)?))
@@ -1019,6 +1603,164 @@ mod tests {
     use crate::palw_step_leg::{step_merkle_root_v1, step_opening_v1};
     fn bond(n: u64) -> PalwBondKeyV2 {
         PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(n), 0))
+    }
+    fn work_fixture() -> (PalwTirPublicSourceV1, PalwTirPublicOwnedV1, PalwTirPublicRequestV1) {
+        // Pure preadmitted kernel fixture, not a full native admission test.
+        let (source, old, request, _) = fixture();
+        let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&x.binding.class, &x.binding.artifact_root).unwrap();
+        let rules = PalwTirPublicWorkRulesV1 {
+            max_step_leaf_count: 1 << 40,
+            prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            max_eval_elements: 1024,
+            max_eval_terms: 1024,
+            max_target_requests: 64,
+            max_source_reads: 1024,
+            maximum_probe_copy_bytes: 65_536,
+        };
+        let allocation = derive_tir_public_work_allocation_v1(
+            &record,
+            &x.binding.class.layout,
+            source.header_v1(),
+            &source,
+            &old.contract.plan,
+            rules,
+        )
+        .unwrap();
+        let mut contract = old.contract.as_ref().clone();
+        contract.terms = PalwRenderingClaimTermsV1::derive(
+            10,
+            contract.plan.envelope.checked_sum_v1(allocation.envelope).unwrap(),
+            contract.plan.config.acquisition_daa,
+            contract.plan.config.collection_daa,
+            contract.plan.config.reorg_retention_daa,
+        )
+        .unwrap();
+        let capital = contract.terms.plan.rent_sompi.checked_add(contract.terms.plan.deposit_sompi).unwrap();
+        let mut row = PalwTirPublicOwnedV1::admit_v1(contract, &source, &BTreeSet::from([bond(2), bond(3)]), 11, capital).unwrap();
+        row.install_work_v1(&source, allocation).unwrap();
+        (source, row, request)
+    }
+    fn work_debit(
+        row: &PalwTirPublicOwnedV1,
+        source: &PalwTirPublicSourceV1,
+        actor: PalwBondKeyV2,
+        request: PalwTirPublicRequestV1,
+        phase: PalwTirPublicWorkPhaseV1,
+    ) -> PalwTirPublicWorkDebitV1 {
+        let c = row.contract_v1();
+        let lane = row.work_v1().unwrap().actors.get(&actor);
+        PalwTirPublicWorkDebitV1 {
+            expected_nonce: lane.map_or(0, |a| a.grants),
+            previous_head: lane.and_then(|a| a.last.as_ref()).map(|r| r.hash_v1().unwrap()).unwrap_or_default(),
+            scope: PalwTirPublicWorkScopeV1 {
+                claim: c.claim,
+                owner: c.owner,
+                reserved_daa: c.reserved_daa,
+                bundle_id: c.bundle_id,
+                source_id: c.source_id,
+                turn: row.active_v1().map_or(row.spent.turns, |p| p.turn),
+                request,
+                actor,
+                phase,
+                input_head: source.source_id_v1(),
+                input_offset: 0,
+                slice: 0,
+                cursor_id: Hash64::from_u64_word(7),
+            },
+            work: PalwTirPublicWorkV1 { attempts: 1, parser_steps: 1, ..Default::default() },
+            restart: false,
+            history: None,
+        }
+    }
+
+    #[test]
+    fn work_actor_nonce_survives_responder_interleaving_without_shared_head_preconditions() {
+        let (source, mut row, request) = work_fixture();
+        let owner = row.contract.owner;
+        row.demand_v1(&source, owner, 12, request).unwrap();
+        let outside = work_debit(&row, &source, owner, request, PalwTirPublicWorkPhaseV1::Planning);
+        let responder = work_debit(&row, &source, bond(1), request, PalwTirPublicWorkPhaseV1::Response);
+        row.work_debit_v1(&source, bond(1), 13, &responder).unwrap();
+        let receipt = row.work_debit_v1(&source, owner, 13, &outside).unwrap();
+        assert_eq!(receipt.ordinal, 2);
+        assert_eq!(receipt.debit.expected_nonce, 0);
+        assert_eq!(row.work_v1().unwrap().actors[&owner].grants, 1);
+        let before = row.clone();
+        assert!(row.work_debit_v1(&source, owner, 13, &outside).is_err());
+        assert_eq!(row, before);
+        row.check_v1(&source).unwrap();
+    }
+
+    #[test]
+    fn rooted_work_spent_restores_exactly_and_cannot_refund_none_or_errors() {
+        let (source, mut row, request) = work_fixture();
+        let owner = row.contract.owner;
+        let before = row.checkpoint_v1().unwrap();
+        let debit = work_debit(&row, &source, owner, request, PalwTirPublicWorkPhaseV1::Planning);
+        row.work_debit_v1(&source, owner, 12, &debit).unwrap();
+        // The external operation may now return None or Err: neither is a fold
+        // action, and neither can subtract from this rooted cumulative debit.
+        let after = row.checkpoint_v1().unwrap();
+        let encoded = borsh::to_vec(&after).unwrap();
+        assert_eq!(row.decode_checkpoint_v1(&encoded).unwrap(), after);
+        assert_eq!(row.work_v1().unwrap().spent, debit.work);
+        row.restore_checkpoint_v1(&before, &source).unwrap();
+        assert_eq!(row.work_v1().unwrap().nonce, 0, "native reorg restores canonical spends, NOT orphaned physical work");
+        row.restore_checkpoint_v1(&after, &source).unwrap();
+        assert_eq!(row.work_v1().unwrap().spent, debit.work);
+        let mut forged = after;
+        forged.work.as_mut().unwrap().spent.parser_steps = 0;
+        let snapshot = row.clone();
+        assert!(row.restore_checkpoint_v1(&forged, &source).is_err());
+        assert_eq!(row, snapshot);
+    }
+
+    #[test]
+    fn protected_work_lane_exhaustion_does_not_spend_outside_owner_allocation() {
+        let (source, mut row, request) = work_fixture();
+        let owner = row.contract.owner;
+        row.demand_v1(&source, owner, 12, request).unwrap();
+        let mut responder = work_debit(&row, &source, bond(1), request, PalwTirPublicWorkPhaseV1::Response);
+        responder.work = row.work_v1().unwrap().allocation.per_actor;
+        row.work_debit_v1(&source, bond(1), 13, &responder).unwrap();
+        let next = work_debit(&row, &source, bond(1), request, PalwTirPublicWorkPhaseV1::Response);
+        let snapshot = row.clone();
+        assert!(row.work_debit_v1(&source, bond(1), 13, &next).is_err());
+        assert_eq!(row, snapshot);
+        let outside = work_debit(&row, &source, owner, request, PalwTirPublicWorkPhaseV1::Planning);
+        row.work_debit_v1(&source, owner, 13, &outside).unwrap();
+        assert_eq!(row.work_v1().unwrap().actors[&owner].spent, outside.work);
+    }
+
+    #[test]
+    fn maximum_history_receipts_fit_every_actor_and_full_checkpoint_metadata_quote() {
+        let (source, mut row, request) = work_fixture();
+        let owner = row.contract.owner;
+        row.demand_v1(&source, owner, 12, request).unwrap();
+        let actors: Vec<_> = row.contract.custodians.iter().copied().chain(std::iter::once(owner)).collect();
+        for actor in actors {
+            let mut debit = work_debit(&row, &source, actor, request, PalwTirPublicWorkPhaseV1::Response);
+            // Maximum codec geometry only. These siblings are NOT claimed to
+            // authenticate a body; Response does not interpret a history path.
+            debit.history = Some(PalwStepOpeningV1 {
+                leaf_index: 0,
+                leaf_hash: Hash64::from_u64_word(3),
+                siblings: vec![Hash64::from_u64_word(4); 64],
+            });
+            row.work_debit_v1(&source, actor, 13, &debit).unwrap();
+        }
+        let work = row.work_v1().unwrap();
+        for actor in work.actors.values() {
+            assert!(borsh::object_length(actor).unwrap() <= 8192);
+            assert_eq!(actor.last.as_ref().unwrap().debit.history.as_ref().unwrap().siblings.len(), 64);
+        }
+        let cp = row.checkpoint_v1().unwrap();
+        let bytes = borsh::to_vec(&cp).unwrap();
+        let bound = row.contract.plan.envelope.row_bytes.checked_add(work.allocation.envelope.row_bytes).unwrap();
+        assert!(bytes.len() as u64 <= bound);
+        assert_eq!(row.decode_checkpoint_v1(&bytes).unwrap(), cp);
+        row.check_v1(&source).unwrap();
     }
     fn fixture() -> (PalwTirPublicSourceV1, PalwTirPublicOwnedV1, PalwTirPublicRequestV1, Vec<u8>) {
         let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
