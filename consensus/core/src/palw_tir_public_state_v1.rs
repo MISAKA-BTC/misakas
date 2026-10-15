@@ -8,7 +8,7 @@
 //! Generic delta210 can carry the returned bounded changes; delta211 cannot.
 use crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1;
 // Wire-visible fields name the canonical key type (the RFC06 shape generator resolves no `as` aliases); `Key` stays local.
-use crate::palw_staged_court_state_v1::{PalwSharedCourtV1, PalwStagedCourtKeyV1, PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+use crate::palw_staged_court_state_v1::{PalwSharedCourtV1, PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
 use crate::palw_tir_public_owned_v1::{
     PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1, PalwTirPublicAcceptedBodyRefV1, PalwTirPublicChunkRecordV1, PalwTirPublicContractV1,
     PalwTirPublicOwnedActionV1, PalwTirPublicOwnedEffectV1, PalwTirPublicOwnedV1,
@@ -59,6 +59,29 @@ pub fn palw_tir_public_source_for_preparation_row_v1(
 ) -> Result<PalwTirPublicSourceV1, String> {
     row.check_structure_v1(&row.key_v1())?;
     let c = row.preparation.contract_v1();
+    if let Some(frame) = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, c.claim) {
+        let plan = frame.plan_v1();
+        let custody = frame.custody_v1();
+        if row.key_v1() != frame.preparation_key_v1()
+            || row.descriptor != *frame.descriptor_v1()
+            || c.original_accepted_daa != plan.terms.accepted_daa
+            || c.preparation_until_daa != plan.preparation_until_daa
+            || c.collect_until_daa != plan.terms.collect_until_daa
+            || c.material_until_daa != plan.terms.material_until_daa
+            || c.producer != custody.pledge_v1().producer
+            || &c.drawn_panel != custody.drawn_panel_v1()
+            || !c.custodians.is_subset(&custody.liable_signers_v1())
+            || c.plan != plan.preparation
+            || row.preparation.work_v1().allocation != plan.preparation_work
+        {
+            return Err("TIR preparation substitutes original full allocation or qualified frozen source scope".into());
+        }
+        let source = source_for_frame(state, frame, maximum_leaves)?;
+        row.preparation.check_source_v1(&source, &plan.acquisition)?;
+        return Ok(source);
+    }
+    // Old dormant rows may still reconstruct their original context. This does
+    // not fund a new full allocation, create a raw grant or authorize admission.
     let bundle = state.staged_bundle_contract_v1(c.claim).ok_or("TIR preparation original full frame/context is not connected")?;
     let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header) = &bundle.original_binding else {
         return Err("TIR preparation cannot reinterpret a legacy original binding".into());
@@ -223,7 +246,7 @@ impl PalwTirPublicAcquisitionRowV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwTirPublicChunkRowV1 {
-    pub acquisition: PalwStagedCourtKeyV1,
+    pub acquisition: crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
     pub source_id: Hash64,
     pub material_until_daa: u64,
     pub record: PalwTirPublicChunkRecordV1,
@@ -247,7 +270,7 @@ impl PalwTirPublicChunkRowV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwTirPublicAcceptedRowV1 {
-    pub acquisition: PalwStagedCourtKeyV1,
+    pub acquisition: crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
     pub source_id: Hash64,
     pub material_until_daa: u64,
     pub history_index: u64,
@@ -284,6 +307,27 @@ pub fn palw_tir_public_source_for_row_v1(
 ) -> Result<PalwTirPublicSourceV1, String> {
     row.check_structure_v1(&row.key_v1()?)?;
     let c = row.owned.contract_v1();
+    if let Some(frame) = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, c.claim) {
+        let plan = frame.plan_v1();
+        let custody = frame.custody_v1();
+        if row.descriptor != *frame.descriptor_v1()
+            || c.bundle_id != plan.allocation_id
+            || c.plan != plan.acquisition
+            || c.terms != plan.owner_terms_v1()?
+            || c.producer != custody.pledge_v1().producer
+            || custody.drawn_panel_v1().contains(&c.owner)
+            || !c.custodians.is_subset(&custody.liable_signers_v1())
+            || row.owned.work_v1().is_none_or(|work| work.allocation != plan.owner_work)
+        {
+            return Err("TIR owner substitutes original full allocation or frozen qualified source scope".into());
+        }
+        // Exact membership at Open is a native admission duty. Later qualified
+        // grants cannot retroactively enlarge or erase this already-paid row's
+        // protected slots. Membership here is never inferred from drawn Panel.
+        let source = source_for_frame(state, frame, maximum_leaves)?;
+        check_source(row, &source)?;
+        return Ok(source);
+    }
     let bundle = state.staged_bundle_contract_v1(c.claim).ok_or("TIR sidecar has no retained original ClaimBundle")?;
     let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header) = &bundle.original_binding else {
         return Err("TIR sidecar cannot reinterpret a legacy binding".into());
@@ -325,6 +369,17 @@ pub fn palw_tir_public_source_for_row_v1(
         }
     }
     Ok(source)
+}
+
+fn source_for_frame(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+    maximum_leaves: u64,
+) -> Result<PalwTirPublicSourceV1, String> {
+    let record = state.tir_class_v1(&frame.descriptor_v1().class_id).ok_or("original TIR full frame lost registered class")?;
+    let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, record.facts.class_id)
+        .ok_or("original TIR full frame lost authenticated layout")?;
+    frame.source_v1(record, layout, maximum_leaves)
 }
 
 fn check_source(row: &PalwTirPublicAcquisitionRowV1, source: &PalwTirPublicSourceV1) -> Result<(), String> {
@@ -510,8 +565,9 @@ pub fn palw_tir_public_work_book_v1(
             palw_tir_public_preparation_snapshot_v1(state, key, maximum_leaves)?.ok_or("TIR original preparation row is absent")?;
         let c = snapshot.row.preparation.contract_v1();
         let work = snapshot.row.preparation.work_v1();
-        if !c.custodians.contains(&actor)
+        if (actor != c.producer && !c.drawn_panel.contains(&actor))
             || snapshot.row.preparation.ready_v1(&actor).is_some()
+            || snapshot.row.preparation.defaulted_v1(&actor)
             || snapshot.now_daa >= c.preparation_until_daa
         {
             return Err("TIR preparation book has no pending literal original duty".into());
@@ -916,7 +972,32 @@ fn transition<'a>(
         }
     }
     let mut next = old.clone();
-    let effect = next.owned.apply_v1(source, signer, now, action, &records, ids)?;
+    let effect = if let PalwTirPublicOwnedActionV1::Finish { demand_id, .. } = action {
+        let rows_anchor = if let Some(rows) = old.owned.accepted_rows_v1() {
+            let hash = rows.body.hash_v1()?;
+            let Some(Row::TirAcceptedBody(accepted)) = lookup(&Key::TirAcceptedBody(hash)) else {
+                return Err("TIR rows anchor lost its rooted original all-ID body".into());
+            };
+            accepted.check_structure_v1(hash)?;
+            if accepted.acquisition != key
+                || accepted.source_id != contract.source_id
+                || accepted.material_until_daa != contract.terms.material_until_daa
+                || accepted.reference != rows.body
+                || accepted.history_index >= old.owned.history_v1().0
+                || rows.body.request != (crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::Ids { offset: 0 })
+            {
+                return Err("TIR rows anchor substitutes acquisition, source, TTL or accepted history".into());
+            }
+            // Only this native accepted pointer and rooted immutable body row
+            // authorize the O(1) anchor. Wire/checkpoint values alone do not.
+            Some(crate::palw_tir_public_source_v1::PalwTirPublicRowsAnchorV1::from_native_v1(source, rows.rows_root))
+        } else { None };
+        PalwTirPublicOwnedEffectV1::Finished(next.owned.finish_with_rows_v1(
+            source, signer, *demand_id, now, &records, ids, rows_anchor.as_ref(),
+        )?)
+    } else {
+        next.owned.apply_v1(source, signer, now, action, &records, ids)?
+    };
     check_source(&next, source)?;
     if next.descriptor != old.descriptor || next.owned.contract_v1() != contract {
         return Err("TIR transition changes immutable descriptor or paid contract".into());

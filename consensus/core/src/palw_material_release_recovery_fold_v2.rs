@@ -5,8 +5,9 @@ use crate::palw_material_release_recovery_v2::*;
 fn refused(s: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::ExecV2Refused(s.into())
 }
-fn write(b: &mut TransitionBuilder<'_>, root: Hash64, row: Option<&PalwMaterialRecoveryRowV2>) {
-    b.write_kernel_row(PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, root.as_byte_slice().to_vec(), row.map(|r| borsh::to_vec(r).unwrap()));
+fn write(b: &mut TransitionBuilder<'_>, root: Hash64, row: Option<&PalwMaterialRecoveryRowV2>) -> Result<(), PalwStateV2Error> {
+    b.write_kernel_row(PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, root.as_byte_slice().to_vec(), row.map(|r| borsh::to_vec(r).unwrap()))?;
+    Ok(())
 }
 fn provider_keys(signatures: &[PalwMaterialRecoverySignatureV2]) -> Vec<PalwBondKeyV2> {
     signatures.iter().map(|s| s.provider).collect()
@@ -58,12 +59,13 @@ fn plan_streams(
     }
     Ok(planned)
 }
-fn write_stream(b: &mut TransitionBuilder<'_>, s: &PalwMaterialProviderAckCheckpointV2) {
+fn write_stream(b: &mut TransitionBuilder<'_>, s: &PalwMaterialProviderAckCheckpointV2) -> Result<(), PalwStateV2Error> {
     b.write_kernel_row(
         PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2,
         material_provider_stream_key_v2(&s.provider),
         Some(borsh::to_vec(s).unwrap()),
-    );
+    )?;
+    Ok(())
 }
 
 pub(super) fn action(
@@ -132,7 +134,7 @@ pub(super) fn action(
             checkpoint.sequence = *sequence;
             checkpoint.last_receipt = event;
             checkpoint.reserved_answer_events -= 1;
-            write_stream(b, &checkpoint);
+            write_stream(b, &checkpoint)?;
         }
         PalwMaterialRecoveryActionV2::FundedEnroll { monetary, terms, providers, .. } => {
             if *signer != terms.sponsor
@@ -167,9 +169,9 @@ pub(super) fn action(
             let streams = plan_streams(b, &p, ctx, row.contract().id(), &provider_keys(providers))?;
             super::palw_monetary_material_fold_v1::enroll(b, ctx, monetary)?;
             for stream in streams {
-                write_stream(b, &stream);
+                write_stream(b, &stream)?;
             }
-            write(b, terms.root, Some(&row));
+            write(b, terms.root, Some(&row))?;
         }
         PalwMaterialRecoveryActionV2::Enroll { terms, providers } => {
             let m =
@@ -206,9 +208,9 @@ pub(super) fn action(
             }
             let streams = plan_streams(b, &p, ctx, row.contract().id(), &provider_keys(providers))?;
             for stream in streams {
-                write_stream(b, &stream);
+                write_stream(b, &stream)?;
             }
-            write(b, terms.root, Some(&row));
+            write(b, terms.root, Some(&row))?;
         }
         PalwMaterialRecoveryActionV2::Replace { recovery, replacement, providers, .. }
         | PalwMaterialRecoveryActionV2::ReplaceBeforeV4 { recovery, replacement, providers, .. } => {
@@ -233,9 +235,9 @@ pub(super) fn action(
             let streams = plan_streams(b, &p, ctx, row.contract().id(), &new_providers)?;
             super::palw_monetary_material_fold_v1::replace_generation_with_recovery_v4(b, ctx, replacement, consent)?;
             for stream in streams {
-                write_stream(b, &stream);
+                write_stream(b, &stream)?;
             }
-            write(b, replacement.root, Some(&row));
+            write(b, replacement.root, Some(&row))?;
         }
         PalwMaterialRecoveryActionV2::Acknowledge { root, receipt, stream, previous, sequence } => {
             let mut checkpoint = b.state.material_provider_ack_checkpoint_v2(signer).ok_or_else(|| refused("ACK stream absent"))?;
@@ -255,11 +257,11 @@ pub(super) fn action(
             checkpoint.sequence = *sequence;
             checkpoint.reserved_acks -= 1;
             checkpoint.last_receipt = *receipt;
-            write_stream(b, &checkpoint);
+            write_stream(b, &checkpoint)?;
             if r.acknowledged == r.providers() {
-                write(b, *root, None)
+                write(b, *root, None)?
             } else {
-                write(b, *root, Some(&PalwMaterialRecoveryRowV2::Terminal(r)))
+                write(b, *root, Some(&PalwMaterialRecoveryRowV2::Terminal(r)))?
             }
         }
         PalwMaterialRecoveryActionV2::RetireProviderStream { provider, stream, sequence } => {
@@ -285,7 +287,7 @@ pub(super) fn action(
             if pending || checkpoint.reserved_acks != 0 || checkpoint.reserved_answer_events != 0 {
                 return Err(refused("provider stream has pending accepted obligations"));
             }
-            b.write_kernel_row(PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, material_provider_stream_key_v2(provider), None);
+            b.write_kernel_row(PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, material_provider_stream_key_v2(provider), None)?;
         }
     }
     Ok(())
@@ -313,7 +315,7 @@ pub(super) fn released(
         unused_native_session,
         acknowledged: BTreeSet::new(),
     };
-    write(b, root, Some(&PalwMaterialRecoveryRowV2::Terminal(r)));
+    write(b, root, Some(&PalwMaterialRecoveryRowV2::Terminal(r)))?;
     Ok(())
 }
 
@@ -332,7 +334,7 @@ pub(super) fn reserve_answer_event_v4(
         .checked_add(1)
         .filter(|n| c.sequence.checked_add(c.reserved_acks).and_then(|seq| seq.checked_add(*n)).is_some())
         .ok_or_else(|| refused("challenge answer sequence capacity unavailable before admission"))?;
-    write_stream(b, &c);
+    write_stream(b, &c)?;
     Ok(())
 }
 pub(super) fn release_answer_event_v4(
@@ -348,6 +350,6 @@ pub(super) fn release_answer_event_v4(
         .material_provider_ack_checkpoint_v2(provider)
         .ok_or_else(|| refused("expired challenge provider checkpoint absent"))?;
     c.reserved_answer_events = c.reserved_answer_events.checked_sub(1).ok_or_else(|| refused("expired answer credit missing"))?;
-    write_stream(b, &c);
+    write_stream(b, &c)?;
     Ok(())
 }

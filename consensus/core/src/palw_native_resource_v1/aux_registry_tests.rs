@@ -298,3 +298,35 @@ fn renumbered_codex_aux_tables_never_collide_with_rfc0016_or_rfc0018() {
     super::wire_kernel_aux::scan_native_aux_row_v1(PALW_RFC0016_QUEUE_INDEX_TABLE_V1, &[1u8; 64], &mut reader).unwrap();
     assert_eq!(reader.remaining(), 0);
 }
+
+/// RFC-0008 once-only settlement markers (aux 140, dormant): a 64-byte obligation key reaches the marker's derive codec exactly;
+/// any other key shape in the table fails closed as malformed; 140 collides with no other aux table. Source only, not executed.
+#[test]
+fn settlement_once_markers_have_their_own_exact_aux_codec() {
+    use crate::palw_settlement_once_v1::*;
+    assert_eq!(PALW_SETTLEMENT_ONCE_TABLE_V1, 140);
+    for other in [
+        crate::palw_material_release_recovery_v2::PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2,
+        crate::palw_claim_compact_v4::PAID_CLAIM_COMPACT_V4,
+        crate::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_TABLE_V1,
+        crate::palw_model_eligibility_v1::PALW_MODEL_ELIGIBILITY_TABLE_V1,
+    ] {
+        assert_ne!(other, PALW_SETTLEMENT_ONCE_TABLE_V1);
+    }
+    let obligation = PalwSettlementObligationV1::of(PalwSettlementLegV1::EscrowFinalReward, [5; 64]);
+    let row = PalwSettlementOnceRowV1 {
+        version: PALW_SETTLEMENT_ONCE_ROW_VERSION_V1,
+        obligation,
+        consumer: PalwSettlementConsumerV1::KernelTick,
+        amount: 3,
+        debit: PalwSettlementDebitV1::Escrow { poster: [6; 64], amount: 3 },
+        settled_daa: 9,
+    };
+    let bytes = borsh::to_vec(&row).unwrap();
+    let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+    super::wire_kernel_aux::scan_native_aux_row_v1(PALW_SETTLEMENT_ONCE_TABLE_V1, &obligation.id_v1(), &mut reader).unwrap();
+    assert_eq!(reader.remaining(), 0);
+    let mut empty = NativeWireReaderV1::new(&[][..], 0);
+    let error = super::wire_kernel_aux::scan_native_aux_row_v1(PALW_SETTLEMENT_ONCE_TABLE_V1, &[0xEE; 65], &mut empty).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+}

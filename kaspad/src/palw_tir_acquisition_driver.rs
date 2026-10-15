@@ -241,7 +241,9 @@ impl OperationalLedgerV1 {
     }
 }
 
-fn preparation_slice_work_v1(
+/// The quoted slice's work as the native debit counts it (G14 R3: the custodian worker debits exactly this plus the fixed
+/// per-slice overhead `require_preparation_v1` charges first).
+pub(super) fn preparation_slice_work_v1(
     q: &kaspa_consensus_core::palw_backend::PalwTirPublicCaptureSliceV1,
 ) -> Result<OperationalWorkV1, String> {
     Ok(OperationalWorkV1 {

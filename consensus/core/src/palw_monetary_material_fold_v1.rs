@@ -16,8 +16,9 @@ fn policy(builder: &TransitionBuilder<'_>, now: u64) -> Result<PalwMonetaryMater
     }
     Ok(p)
 }
-fn write(builder: &mut TransitionBuilder<'_>, root: Hash64, row: Option<&PalwMonetaryMaterialRowV1>) {
-    builder.write_kernel_row(PALW_MONETARY_MATERIAL_TABLE_V1, root.as_byte_slice().to_vec(), row.map(|r| borsh::to_vec(r).unwrap()));
+fn write(builder: &mut TransitionBuilder<'_>, root: Hash64, row: Option<&PalwMonetaryMaterialRowV1>) -> Result<(), PalwStateV2Error> {
+    builder.write_kernel_row(PALW_MONETARY_MATERIAL_TABLE_V1, root.as_byte_slice().to_vec(), row.map(|r| borsh::to_vec(r).unwrap()))?;
+    Ok(())
 }
 fn active(builder: &TransitionBuilder<'_>, key: &PalwBondKeyV2) -> Result<PalwBondStateV2, PalwStateV2Error> {
     builder
@@ -181,6 +182,24 @@ fn fund(
     e: &PalwMonetaryMaterialEnrollmentV1,
 ) -> Result<(), PalwStateV2Error> {
     let fees: u64 = e.offers.iter().map(|o| o.prepaid_fee_sompi).sum();
+    // RFC-0008 once-only settlement (dormant): a consent's sponsor prepaid funding is debited once across every consumer (an
+    // enrollment and any replacement path that would fund the same consent). A second funding is refused; nothing moves.
+    {
+        use crate::palw_settlement_once_v1::{
+            PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+        };
+        let sponsor = crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&e.terms.sponsor);
+        let once = builder.settle_once_v1(
+            ctx.daa_score,
+            PalwSettlementObligationV1::of(PalwSettlementLegV1::MaterialFunding, e.id().as_bytes()),
+            PalwSettlementConsumerV1::MonetaryMaterial,
+            fees,
+            PalwSettlementDebitV1::Prepaid { sponsor, amount: fees },
+        )?;
+        if !once.pays() {
+            return Err(refused("material consent funding was already settled"));
+        }
+    }
     // Same native backing path as a funded source escrow: debit once, then
     // settle the provider's separately reserved R through a physical coinbase.
     if builder.slash_bond(e.terms.sponsor, u128::from(fees))? != fees {
@@ -262,7 +281,7 @@ pub(super) fn enroll(
     };
     append_service_fee_history(&mut row, e)?;
     super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
-    write(builder, e.terms.root, Some(&row));
+    write(builder, e.terms.root, Some(&row))?;
     fund(builder, ctx, e)?;
     Ok(())
 }
@@ -300,7 +319,7 @@ pub(super) fn replace_generation_with_recovery_v4(
     old.providers.extend(providers(&r.enrollment, ctx.daa_score));
     old.sequence = r.sequence;
     old.consent = consent;
-    write(builder, r.root, Some(&old));
+    write(builder, r.root, Some(&old))?;
     fund(builder, ctx, &r.enrollment)?;
     Ok(())
 }
@@ -694,11 +713,11 @@ fn action_inner_v4(
                 return Err(refused("material covenant has unspent rights or a substituted tail"));
             }
             super::palw_material_release_recovery_fold_v2::released(builder, ctx, root, *consent, *tail_block)?;
-            write(builder, root, None);
+            write(builder, root, None)?;
             return Ok(());
         }
     }
-    write(builder, root, Some(&row));
+    write(builder, root, Some(&row))?;
     Ok(())
 }
 fn raw_hold(state: &PalwChainStateV2, params: &PalwStateParamsV2, row: &PalwMonetaryMaterialRowV1, now: u64) -> Option<u64> {
@@ -758,6 +777,29 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
                     .map_or(0, |p| p.amount)
                     .checked_add(provider.prepaid_fee_sompi)
                     .ok_or_else(|| refused("material fee queue aggregate overflows"))?;
+                // RFC-0008 once-only settlement (dormant): one provider's prepaid fee of one consent is paid once across every
+                // consumer; a fee another consumer settled is marked queued here without moving value again.
+                let once = {
+                    use crate::palw_settlement_once_v1::{
+                        PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+                    };
+                    builder.settle_once_v1(
+                        ctx.daa_score,
+                        PalwSettlementObligationV1::with_party(
+                            PalwSettlementLegV1::MaterialProviderFee,
+                            provider.fee_context.as_bytes(),
+                            crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&provider.provider),
+                            0,
+                        ),
+                        PalwSettlementConsumerV1::MonetaryMaterial,
+                        provider.prepaid_fee_sompi,
+                        PalwSettlementDebitV1::Held { amount: provider.prepaid_fee_sompi },
+                    )?
+                };
+                if !once.pays() {
+                    provider.fee_queued = true;
+                    continue;
+                }
                 builder.settle_source_income_v1(
                     ctx,
                     provider.fee_context,
@@ -783,7 +825,23 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
         }
         for provider in failed {
             if let Some(p) = row.providers.iter_mut().find(|p| p.provider == provider && !p.charged) {
-                builder.slash_bond(provider, u128::from(p.collateral_sompi))?;
+                // RFC-0008 once-only settlement (dormant): one provider's default on one root is charged once across consumers.
+                let kid = crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&provider);
+                let once = {
+                    use crate::palw_settlement_once_v1::{
+                        PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+                    };
+                    builder.settle_once_v1(
+                        ctx.daa_score,
+                        PalwSettlementObligationV1::with_party(PalwSettlementLegV1::MaterialProviderDefault, row.terms.root.as_bytes(), kid, 0),
+                        PalwSettlementConsumerV1::MonetaryMaterial,
+                        p.collateral_sompi,
+                        PalwSettlementDebitV1::Collateral { bond: kid, amount: p.collateral_sompi },
+                    )?
+                };
+                if once.pays() {
+                    builder.slash_bond(provider, u128::from(p.collateral_sompi))?;
+                }
                 p.charged = true;
             }
             row.challenges.retain(|c| c.provider != provider);
@@ -823,22 +881,22 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
             }
         }
         if row != before {
-            write(builder, row.terms.root, Some(&row));
+            write(builder, row.terms.root, Some(&row))?;
         }
     }
     Ok(())
 }
 
 /// Bind receipt authority before the monetary engine forgets a drained income.
-pub(super) fn observe_payment(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, income: Hash64, queue: Hash64) {
+pub(super) fn observe_payment(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, income: Hash64, queue: Hash64) -> Result<(), PalwStateV2Error> {
     if builder.params.monetary_material_at_v1(ctx.daa_score).is_none() {
-        return;
+        return Ok(());
     }
     let Some(coinbase_queue_amount) = builder.entries.iter().find_map(|entry| match entry {
         PalwDeltaEntryV2::Payout { key, old: Some(payout), new: None } if *key == queue => Some(payout.amount),
         _ => None,
     }) else {
-        return;
+        return Ok(());
     };
     let observations: Vec<_> = builder
         .state
@@ -884,9 +942,10 @@ pub(super) fn observe_payment(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                     row.service_fee_paid_sompi.checked_add(u128::from(observation.amount)).unwrap_or(u128::MAX);
             }
             row.last_payment = Some(observation.clone());
-            write(builder, row.terms.root, Some(&row));
+            write(builder, row.terms.root, Some(&row))?;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1041,7 +1100,7 @@ mod tests {
         // Exercise only the journal's Release->Terminal transformation. This
         // direct helper is NOT a native finality witness or payout simulation.
         recovery::released(&mut b, &ctx(1000), e.terms.root, e.id(), h(75)).unwrap();
-        write(&mut b, e.terms.root, None);
+        write(&mut b, e.terms.root, None).unwrap();
         b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
         let Some(PalwMaterialRecoveryRowV2::Terminal(receipt)) = b.state.material_recovery_row_v2(e.terms.root) else { panic!() };
         let id = receipt.id();
@@ -1098,7 +1157,7 @@ mod tests {
         let first = builder.state.monetary_material_row_v1(h(9)).unwrap();
         let mut failed = first.clone();
         failed.providers.iter_mut().for_each(|p| p.charged = true);
-        write(&mut builder, h(9), Some(&failed));
+        write(&mut builder, h(9), Some(&failed)).unwrap();
         let earned_before = builder.state.pending_payouts.clone();
         let mut renewed = e.clone();
         renewed.offers.iter_mut().zip([4, 5]).for_each(|(p, n)| p.provider = bond(n));
@@ -1138,8 +1197,8 @@ mod tests {
             let payload = builder.state.bond(&bond(n)).unwrap().payout_payload;
             let queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload);
             let income = super::super::palw_bond_budget_fold_v1::native_queued_income_id_v1(queue, &bond(n));
-            builder.write_payout(queue, None);
-            observe_payment(&mut builder, &ctx(1_000), income, queue);
+            builder.write_payout(queue, None).unwrap();
+            observe_payment(&mut builder, &ctx(1_000), income, queue).unwrap();
             builder
                 .bond_budget_op(|b, _, j| b.confirm_native_income_payment_v1(&params.bond_budget().unwrap().policy, &income, 1_000, j))
                 .unwrap()
@@ -1229,7 +1288,7 @@ fn capture_queue_entitlements(builder: &mut TransitionBuilder<'_>) -> Result<(),
                 return Err(refused("material queue entitlement substitution"));
             }
             if row.queued_entitlements.insert(receipt, source) != Some(source) {
-                write(builder, row.terms.root, Some(&row));
+                write(builder, row.terms.root, Some(&row))?;
             }
         }
     }
@@ -1256,6 +1315,7 @@ pub(super) fn plan_native_ready(
     row.root_seen = true;
     Ok(Some(row))
 }
-pub(super) fn bind_native_ready(builder: &mut TransitionBuilder<'_>, row: &PalwMonetaryMaterialRowV1) {
-    write(builder, row.terms.root, Some(row));
+pub(super) fn bind_native_ready(builder: &mut TransitionBuilder<'_>, row: &PalwMonetaryMaterialRowV1) -> Result<(), PalwStateV2Error> {
+    write(builder, row.terms.root, Some(row))?;
+    Ok(())
 }

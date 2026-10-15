@@ -1,4 +1,4 @@
-//! **Object tag 170: RFC-0006 memory/routing consumer v2's other carriers** — owned by `palw_memory_routing_court_v2` beside Codex's
+//! **Object tag 244 (moved from 170, which G14 took first on integ): RFC-0006 memory/routing consumer v2's other carriers** — owned by `palw_memory_routing_court_v2` beside Codex's
 //! tag 243 (`GdnStepAccusedV2`, the anchored recurrence STEP accusation, `crate::palw_gdn_court_v2`).
 //!
 //! One tag, one owning fence, two kinds of payload:
@@ -17,7 +17,7 @@
 //!     (`palw_step_refute::check_execution_step_refutation_routed_v2`); refused for a reader the binding does not name, or a claim
 //!     accepted before the binding's block.
 //!
-//! Below the fence every tag-170 object is the live build's undecodable payload (A-2: skipped, charged nothing). Hashes, Merkle
+//! Below the fence every tag-244 object is the live build's undecodable payload (A-2: skipped, charged nothing). Hashes, Merkle
 //! paths and signatures here authenticate data identity, membership and authorship only; every verdict is deterministic
 //! recomputation (PRINCIPLES §8), and a matching recomputation confers no validator approval or consensus credit.
 use crate::Hash64;
@@ -35,7 +35,7 @@ use crate::palw_step_refute::{
 };
 
 /// The object tag this module's carrier rides at (the lane's allocation; `PALW_A2_TAG_ALLOCATIONS_V1`).
-pub const PALW_MEMORY_ROUTING_OBJECT_TAG_V2: u8 = 170;
+pub const PALW_MEMORY_ROUTING_OBJECT_TAG_V2: u8 = 244;
 pub const PALW_MEMORY_ROUTING_ACCUSATION_VERSION_V2: u16 = 2;
 pub const PALW_MEMORY_ROUTING_SESSION_DOMAIN_V2: &[u8] = b"misaka-palw/memory-routing-court/session/v2";
 /// The accuser's signature role is the existing objective one-move accuser's; the versioned session domain above keeps an old
@@ -54,7 +54,7 @@ pub const PALW_ROUTE_COST_HISTORY_US_V2: Option<u64> = None;
 /// UNKNOWN: the expert/index gather route verifier time (the routed reader under a binding).
 pub const PALW_ROUTE_COST_GATHER_US_V2: Option<u64> = None;
 
-/// What a tag-170 accusation claims, and the evidence that decides it.
+/// What a tag-244 accusation claims, and the evidence that decides it.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
@@ -130,7 +130,7 @@ impl PalwMemoryRoutingAccusationV2 {
     }
 }
 
-/// **Tag 170's payload.**
+/// **Tag 244's payload.**
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]

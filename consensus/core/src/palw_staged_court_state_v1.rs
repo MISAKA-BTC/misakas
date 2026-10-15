@@ -53,6 +53,10 @@ pub enum PalwStagedCourtKeyV1 {
     TirAcceptedBody(Hash64),
     /// Claim-wide preparation is fixed at original acceptance, not owner Open.
     TirPreparation(Hash64, Hash64),
+    /// Original versioned full-allocation TIR frame; never an old ClaimBundle.
+    TirClaim(Hash64),
+    /// G14 R7: a staged conviction witness being assembled, per (claim, filer).
+    TirWitness(Hash64, PalwBondKeyV2),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedClaimContractV1 {
@@ -83,13 +87,16 @@ pub enum PalwStagedCourtRowV1 {
     TirRawChunk(PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicChunkRowV1>),
     TirAcceptedBody(PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicAcceptedRowV1>),
     TirPreparation(PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicPreparationRowV1>),
+    TirClaim(PalwSharedCourtV1<crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1>),
+    TirWitness(PalwSharedCourtV1<crate::palw_tir_public_carriage_v1::PalwTirPublicWitnessRowV1>),
 }
 impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
         match self {
             Self::OwnerBundle(bundle) => bundle.active_v1(),
             Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
-            | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) => None,
+            | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
+            | Self::TirWitness(_) => None,
             _ => Some(self),
         }
     }
@@ -97,7 +104,8 @@ impl PalwStagedCourtRowV1 {
         match self {
             Self::OwnerBundle(bundle) => bundle.active_mut_v1(),
             Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
-            | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) => None,
+            | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
+            | Self::TirWitness(_) => None,
             _ => Some(self),
         }
     }
@@ -211,6 +219,8 @@ impl PalwStagedCourtRowV1 {
             (PalwStagedCourtKeyV1::TirRawChunk(head), Self::TirRawChunk(row)) => row.check_structure_v1(*head),
             (PalwStagedCourtKeyV1::TirAcceptedBody(hash), Self::TirAcceptedBody(row)) => row.check_structure_v1(*hash),
             (PalwStagedCourtKeyV1::TirPreparation(..), Self::TirPreparation(row)) => row.check_structure_v1(key),
+            (PalwStagedCourtKeyV1::TirClaim(..), Self::TirClaim(frame)) => frame.check_structure_v1(key),
+            (PalwStagedCourtKeyV1::TirWitness(claim, filer), Self::TirWitness(row)) => row.check_structure_v1(*claim, *filer),
             _ => Err("staged rooted row has inconsistent key/immutable contract".into()),
         }
     }

@@ -13,7 +13,7 @@ pub use restore::restore_native_carriage_v1;
 pub(crate) use retained::value_requests_v1 as native_value_requests_v1;
 mod transition;
 pub use retained::{
-    NativeDecodeErrorV1, NativeRetainedV1, NativeStateMutationErrorV1, native_delta_replay_requests_v1,
+    NativeDecodeErrorV1, NativeOwnerMutationErrorV1, NativeRetainedV1, NativeStateMutationErrorV1, native_delta_replay_requests_v1,
     retain_native_carriage_decode_classified_v1, retain_native_carriage_decode_v1, retain_native_value_decode_classified_v1,
     retain_native_value_decode_v1,
 };
@@ -33,6 +33,9 @@ pub use kernel_material::{
 };
 pub use kernel_segment_assembly::native_kernel_segment_assembly_requests_v4;
 mod ledger_expansion;
+// RFC-0006: the kernel ledger's consensus mutations, admitted from the real typed values (replaces `DerefMut`).
+mod kernel_ledger_mutation;
+pub use kernel_ledger_mutation::{PALW_KERNEL_LEDGER_APPLY_MEMBERSHIP_CEILING_V1, PALW_KERNEL_LEDGER_EVENTS_PER_ROW_CEILING_V1};
 mod tir;
 pub use demand::reserve_native_requests_v1;
 pub use ledger_expansion::{ReservedKernelLedgerV1, inventory_ledger_expansion_v1, preflight_kernel_served_row_v1};

@@ -751,7 +751,7 @@ fn freeze_source_epochs_v1(
             deadline_daa: deadline,
         };
         snapshot.validate_for(&request, policy).map_err(|e| inconsistent("new source subject", e))?;
-        builder.write_kernel_row(TABLE, key, Some(borsh::to_vec(&snapshot).expect("snapshot serializes")));
+        builder.write_kernel_row(TABLE, key, Some(borsh::to_vec(&snapshot).expect("snapshot serializes")))?;
         retained += count;
     }
     Ok(())
@@ -855,7 +855,7 @@ fn bind_v2(
         // reached `Final`; a lock kept would hold a seat's room for a Panel it no longer sits on — Q-5's redraw rule).
         if strata.is_some() {
             for (key, _) in builder.claim_locks_v1(claim_id) {
-                builder.write_slashable_lock(key, None);
+                builder.write_slashable_lock(key, None)?;
             }
         }
         // The previous round's seats leave duty with their exposure; the redraw deals different ones.
@@ -864,7 +864,7 @@ fn bind_v2(
     builder.write_panel(
         *claim_id,
         Some(PalwPanelStateV2 { anchor: binding.panel_seed_v3, seats: seats.clone(), bound_daa: ctx.daa_score }),
-    );
+    )?;
     builder.reserve_seat_duties_with(*claim_id, &seats, binding.exposure as u128, ctx.daa_score)?;
     if let Some(strata) = strata {
         // RFC-0006's per-shard record: the plan frozen, the outsider flag, each seat's share — the armed machinery runs from here.
@@ -887,7 +887,7 @@ fn bind_v2(
     builder.write_claim(*claim_id, Some(bound))?;
     if !retry {
         // ADR-0164 F-K (K4's denominator): a claim that reached its Panel.
-        builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound);
+        builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound)?;
     }
     Ok(())
 }

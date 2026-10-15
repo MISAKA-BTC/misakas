@@ -48,8 +48,9 @@ pub(super) fn pending(r: &PalwKernelRouteStateV1, id: Digest) -> Result<Pending,
     }
     Ok(p)
 }
-fn write_pending(builder: &mut TransitionBuilder<'_>, p: &Pending) {
-    builder.write_kernel_row(TABLE, k(40, &p.id), Some(b(&(p.root(), p))));
+fn write_pending(builder: &mut TransitionBuilder<'_>, p: &Pending) -> Result<(), PalwStateV2Error> {
+    builder.write_kernel_row(TABLE, k(40, &p.id), Some(b(&(p.root(), p))))?;
+    Ok(())
 }
 fn source(
     builder: &TransitionBuilder<'_>,
@@ -204,7 +205,7 @@ fn request(
     let e = epoch(p, ctx)?;
     let mut source = source(builder, ctx, p, &h, &q)?;
     source.admit_valid_unit(&p.execution.quota, &e, &q, job).map_err(bad)?;
-    write_source(builder, &source, job);
+    write_source(builder, &source, job)?;
     let v = Pending {
         version: 39,
         id,
@@ -231,18 +232,18 @@ fn request(
     st.pending.push(id);
     if let Some(o) = &mut owner {
         o.pending += 1;
-        protected::set_owner(builder, o);
+        protected::set_owner(builder, o)?;
     } else {
         st.ordinary += 1;
     }
     actor_ids.push(id);
     // Collection53 erases every unit ever opened for this job from this index.
     super::collect::note_opened(builder, job, id)?;
-    write_pending(builder, &v);
-    protected::write_status(builder, &st);
-    builder.write_kernel_row(TABLE, k(41, &unit), Some(b(&id)));
-    builder.write_kernel_row(TABLE, k(44, signer), Some(b(&actor_ids)));
-    builder.note_kernel_bond(signer);
+    write_pending(builder, &v)?;
+    protected::write_status(builder, &st)?;
+    builder.write_kernel_row(TABLE, k(41, &unit), Some(b(&id)))?;
+    builder.write_kernel_row(TABLE, k(44, signer), Some(b(&actor_ids)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 fn settle_pending(
@@ -264,17 +265,17 @@ fn settle_pending(
             return Err(bad("native39 original owner pending count differs"));
         }
         o.pending -= 1;
-        protected::set_owner(builder, &o);
+        protected::set_owner(builder, &o)?;
     }
     st.pending.retain(|id| *id != v.id);
     let mut ids = list(builder.state.kernel_route.as_ref().unwrap(), 44, &v.requester)?;
     ids.retain(|id| *id != v.id);
     v.settled = true;
     v.delivered = delivered;
-    write_pending(builder, v);
-    protected::write_status(builder, &st);
-    builder.write_kernel_row(TABLE, k(44, &v.requester), Some(b(&ids)));
-    builder.write_kernel_row(TABLE, k(41, &v.unit), None);
+    write_pending(builder, v)?;
+    protected::write_status(builder, &st)?;
+    builder.write_kernel_row(TABLE, k(44, &v.requester), Some(b(&ids)))?;
+    builder.write_kernel_row(TABLE, k(41, &v.unit), None)?;
     Ok(())
 }
 // Answer=39:u16,kind0,pending64,group64,indexu16,countu16,totalu32,len:u32,bytes.
@@ -323,7 +324,7 @@ fn answer(
         v.total = total;
         v.count = count;
         v.accepted = 0;
-        write_pending(builder, &v);
+        write_pending(builder, &v)?;
     } else if v.group != group || v.total != total || v.count != count {
         return Err(bad("native39 answer cannot rebind original partial group"));
     }
@@ -334,9 +335,9 @@ fn answer(
     if n != raw.len() - 143 || n != expected {
         return Ok(());
     }
-    builder.write_kernel_row(TABLE, k(43, &(v.id, v.attempts, index)), Some(raw[143..].to_vec()));
+    builder.write_kernel_row(TABLE, k(43, &(v.id, v.attempts, index)), Some(raw[143..].to_vec()))?;
     v.accepted |= 1 << index;
-    write_pending(builder, &v);
+    write_pending(builder, &v)?;
     if (0..count).any(|i| v.accepted & (1 << i) == 0) {
         return Ok(());
     }
@@ -359,11 +360,11 @@ fn answer(
     if !result {
         v.group = [0; 64];
         v.accepted = 0;
-        write_pending(builder, &v);
+        write_pending(builder, &v)?;
         return Ok(());
     }
     settle_pending(builder, &h, &mut v, true)?;
-    builder.write_kernel_row(TABLE, k(42, &v.unit), Some(b(&(v.root(), &v.demand, &reply))));
+    builder.write_kernel_row(TABLE, k(42, &v.unit), Some(b(&(v.root(), &v.demand, &reply))))?;
     Ok(())
 }
 fn default(
@@ -472,7 +473,7 @@ pub(super) fn debit_cached_answer(
         bytes,
     )
     .map_err(bad)?;
-    write_source(builder, &updated, h.id);
+    write_source(builder, &updated, h.id)?;
     Ok(())
 }
 /// Genuine terminal closure returns original outstanding demand holds without

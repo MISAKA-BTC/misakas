@@ -111,8 +111,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         O::CourtEvalRootClaimed { .. } => true,
         // ADR-0152 §4-ter: the held dissection's opening and step 6's checkpoint conviction.
         O::ShardCourtAccused { .. } | O::CheckpointAccused { .. } => true,
-        // RFC-0006 consumer v2: the versioned one-move recurrence accusation (tag 243) and tag 170's accusations are court openings
-        // like the two above; tag 170's router binding declaration is registration traffic.
+        // RFC-0006 consumer v2: the versioned one-move recurrence accusation (tag 243) and tag 244's accusations are court openings
+        // like the two above; tag 244's router binding declaration is registration traffic.
         O::GdnStepAccusedV2 { .. } => true,
         O::MemoryRoutingV2 { object } => {
             matches!(object.as_ref(), crate::palw_memory_routing_v2::PalwMemoryRoutingObjectV2::Accused { .. })
@@ -129,6 +129,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::PublicCourtStreamLeafV1 { .. }
         | O::PublicCourtStreamMoveV1 { .. }
         | O::PublicCourtStreamOpenedNativeV1 { .. }
+        | O::TirPublicControlV1 { .. }
+        | O::TirPublicGrantReadyV1 { .. }
         | O::TirClassLayoutPublishedV1 { .. } => true,
         O::BondRegistered { .. }
         | O::BondCapabilityDeclared { .. }

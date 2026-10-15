@@ -632,11 +632,13 @@ impl TransitionBuilder<'_> {
         key: K,
         new: Option<V>,
         map: fn(&mut PalwChainStateV2) -> &mut BTreeMap<K, V>,
-    ) -> Option<V>
+    ) -> Result<Option<V>, PalwStateV2Error>
     where
-        K: Ord + Clone + borsh::BorshSerialize,
-        V: Clone + PartialEq + borsh::BorshSerialize,
+        K: Ord + Clone + borsh::BorshSerialize + crate::palw_native_resource_v1::NativeHeapV1,
+        V: Clone + PartialEq + borsh::BorshSerialize + crate::palw_native_resource_v1::NativeHeapV1,
     {
+        // RFC-0006: the typed map clone, key clone, absent membership and the three canonical journal buffers.
+        self.reserve_encoded_row_v1(&key, &new, map, "native exec v2 row writer")?;
         let rows = map(&mut self.state);
         let old = match new.clone() {
             Some(row) => rows.insert(key.clone(), row),
@@ -651,37 +653,63 @@ impl TransitionBuilder<'_> {
                 new: new.as_ref().map(encode),
             });
         }
-        old
+        Ok(old)
     }
 
     /// The one writer of `RootWorkBudget` rows.
-    pub(super) fn write_exec_root(&mut self, key: Hash64, new: Option<PalwWorkRootV2>) {
+    pub(super) fn write_exec_root(&mut self, key: Hash64, new: Option<PalwWorkRootV2>) -> Result<(), PalwStateV2Error> {
+        // RFC-0006: the previous-row clone and the two clones `root_changed` re-reads, plus its one job-use deadline node.
+        if self.native_writers_tracking_v1() {
+            let mut q = super::native_writers::NativeWriteQuoteV1::new("native exec root clones and job-use deadline index");
+            if let Some(previous) = self.state.exec_v2.roots.get(&key) {
+                q.copy(previous)?;
+            }
+            q.copy(&new)?.member::<(u64, Hash64), ()>(1)?;
+            self.admit_native_write_v1(q)?;
+        }
         let previous = self.state.exec_v2.roots.get(&key).cloned();
-        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_ROOTS_V1, key, new, |s| &mut s.exec_v2.roots);
+        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_ROOTS_V1, key, new, |s| &mut s.exec_v2.roots)?;
         if let Some(root) = previous {
             super::palw_exec_v2_history_v1::root_changed(&mut self.state, &root, false);
         }
         if let Some(root) = self.state.exec_v2.roots.get(&key).cloned() {
             super::palw_exec_v2_history_v1::root_changed(&mut self.state, &root, true);
         }
+        Ok(())
     }
 
     /// The one writer of `WorkSliceUse` rows.
-    pub(super) fn write_exec_slice(&mut self, key: (Hash64, u32), new: Option<PalwWorkSliceRowV2>) {
-        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_SLICES_V1, key, new, |s| &mut s.exec_v2.slices);
+    pub(super) fn write_exec_slice(&mut self, key: (Hash64, u32), new: Option<PalwWorkSliceRowV2>) -> Result<(), PalwStateV2Error> {
+        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_SLICES_V1, key, new, |s| &mut s.exec_v2.slices).map(drop)
     }
 
     /// The one writer of `JobWorkUse` rows.
-    pub(super) fn write_exec_job(&mut self, key: Hash64, new: Option<Hash64>) {
-        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_JOBS_V1, key, new, |s| &mut s.exec_v2.jobs);
+    pub(super) fn write_exec_job(&mut self, key: Hash64, new: Option<Hash64>) -> Result<(), PalwStateV2Error> {
+        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_JOBS_V1, key, new, |s| &mut s.exec_v2.jobs).map(drop)
     }
 
     /// The one writer of the anchored-block set.
-    pub(super) fn write_exec_anchored(&mut self, key: Hash64, new: Option<u64>) {
-        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_ANCHORED_V1, key, new, |s| &mut s.exec_v2.anchored);
+    pub(super) fn write_exec_anchored(&mut self, key: Hash64, new: Option<u64>) -> Result<(), PalwStateV2Error> {
+        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_ANCHORED_V1, key, new, |s| &mut s.exec_v2.anchored).map(drop)
     }
 
-    pub(super) fn write_exec_reward(&mut self, key: Hash64, new: Option<crate::palw_work_slice_v2::PalwExecV2RewardRowV1>) {
+    pub(super) fn write_exec_reward(
+        &mut self,
+        key: Hash64,
+        new: Option<crate::palw_work_slice_v2::PalwExecV2RewardRowV1>,
+    ) -> Result<(), PalwStateV2Error> {
+        // RFC-0006: the old-row clone, the removed-payee scratch set and the payee index nodes, from the actual legs.
+        if self.native_writers_tracking_v1() {
+            let mut q = super::native_writers::NativeWriteQuoteV1::new("native exec reward clone, scratch and payee index");
+            let old_legs = self.state.exec_v2_rewards.get(&key).map_or(0, |row| row.legs.len() as u64);
+            if let Some(previous) = self.state.exec_v2_rewards.get(&key) {
+                q.copy(previous)?;
+            }
+            let new_legs = new.as_ref().map_or(0, |row| row.legs.len() as u64);
+            q.member::<PalwBondKeyV2, ()>(old_legs)?;
+            q.member::<PalwBondKeyV2, BTreeSet<Hash64>>(new_legs)?.member::<Hash64, ()>(new_legs)?;
+            self.admit_native_write_v1(q)?;
+        }
         let old = self.state.exec_v2_rewards.get(&key).cloned();
         if let Some(previous) = &old {
             let removed: BTreeSet<_> = previous
@@ -692,16 +720,17 @@ impl TransitionBuilder<'_> {
                 .collect();
             for bond in removed {
                 if self.state.exec_v2_reward_holds.contains_key(&(key, bond)) {
-                    self.write_exec_reward_hold((key, bond), None);
+                    self.write_exec_reward_hold((key, bond), None)?;
                 }
             }
         }
         super::palw_exec_v2_rewards_v1::index_replace(&mut self.state, key, old.as_ref(), new.as_ref());
-        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_REWARDS_V1, key, new, |s| &mut s.exec_v2_rewards);
+        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_REWARDS_V1, key, new, |s| &mut s.exec_v2_rewards)?;
+        Ok(())
     }
 
-    pub(super) fn write_exec_reward_hold(&mut self, key: (Hash64, PalwBondKeyV2), new: Option<u64>) {
-        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_REWARD_HOLDS_V1, key, new, |s| &mut s.exec_v2_reward_holds);
+    pub(super) fn write_exec_reward_hold(&mut self, key: (Hash64, PalwBondKeyV2), new: Option<u64>) -> Result<(), PalwStateV2Error> {
+        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_REWARD_HOLDS_V1, key, new, |s| &mut s.exec_v2_reward_holds).map(drop)
     }
 }
 
@@ -965,8 +994,8 @@ pub(super) fn apply_root_declared_v2(
             daa,
         )?;
     }
-    builder.write_exec_job(job_work_id, Some(claim_id));
-    builder.write_exec_job_use(job_work_id, Some(job_use));
+    builder.write_exec_job(job_work_id, Some(claim_id))?;
+    builder.write_exec_job_use(job_work_id, Some(job_use))?;
     builder.write_exec_root(
         claim_id,
         Some(PalwWorkRootV2 {
@@ -994,7 +1023,7 @@ pub(super) fn apply_root_declared_v2(
             prefix_claim: declaration.prefix_claim,
             prefix,
         }),
-    );
+    )?;
     Ok(())
 }
 
@@ -1079,7 +1108,7 @@ fn accept_slice_v2(
     {
         let held = builder.state.reserved_exposure.get(&slice.executor_bond).copied().unwrap_or(0);
         let next = held.checked_add(root.executor_exposure).ok_or(PalwStateV2Error::Overflow("exec v2 executor exposure"))?;
-        builder.write_exposure(slice.executor_bond, Some(next));
+        builder.write_exposure(slice.executor_bond, Some(next))?;
     }
     builder.write_exec_slice(
         (slice.root_claim_id, slice.slice_index),
@@ -1102,7 +1131,7 @@ fn accept_slice_v2(
                 None => PalwWorkSliceStageV2::Pending,
             },
         }),
-    );
+    )?;
     root.next_index += 1;
     root.last_state_root = slice.result_state_root;
     root.accepted_work = root.accepted_work.saturating_add(admission.work);
@@ -1115,7 +1144,7 @@ fn accept_slice_v2(
         root.phase = PalwWorkRootPhaseV2::Complete;
     }
     let ready = root.ready_for_final();
-    builder.write_exec_root(slice.root_claim_id, Some(root));
+    builder.write_exec_root(slice.root_claim_id, Some(root))?;
     if ready {
         // The last slice arrived verified: the claim's `Final` hold is released now, as a verification in a later block would.
         release_final_hold_v2(builder, slice.root_claim_id, ctx.daa_score)?;
@@ -1142,7 +1171,7 @@ pub(super) fn record_exec_anchor_v2(
         .map(|(block, _)| *block)
         .collect();
     for block in stale {
-        builder.write_exec_anchored(block, None);
+        builder.write_exec_anchored(block, None)?;
     }
     for (block, span) in &fold.members {
         if !crate::palw_exec_v2_anchor::palw_exec_v2_window_ok(*span, fold.span_now) {
@@ -1151,7 +1180,7 @@ pub(super) fn record_exec_anchor_v2(
         if builder.state.exec_v2.anchored.contains_key(block) {
             return Err(refused(format!("{block} was covered by an earlier anchor")));
         }
-        builder.write_exec_anchored(*block, Some(*span));
+        builder.write_exec_anchored(*block, Some(*span))?;
     }
     Ok(())
 }
@@ -1232,7 +1261,7 @@ pub(super) fn settle_at_final_v2(
             if let PalwWorkSliceStageV2::Verified { route_reward, .. } = &mut row.stage {
                 *route_reward = fee;
             }
-            builder.write_exec_slice(key, Some(row));
+            builder.write_exec_slice(key, Some(row))?;
         }
     }
     settlement.slice_legs.retain(|(_, leg)| *leg > 0);
@@ -1252,7 +1281,7 @@ pub(super) fn settle_at_final_v2(
     }
     release_executor_exposure_v2(builder, claim_id, &root)?;
     root.phase = PalwWorkRootPhaseV2::Settled { settled_daa: final_daa };
-    builder.write_exec_root(*claim_id, Some(root));
+    builder.write_exec_root(*claim_id, Some(root))?;
     Ok((settlement.root_leg, settlement.slice_legs))
 }
 
@@ -1266,7 +1295,7 @@ fn release_executor_exposure_v2(
         let held = builder.state.reserved_exposure.get(&bond).copied().unwrap_or(0);
         let next =
             held.checked_sub(root.executor_exposure).ok_or(PalwStateV2Error::Overflow("exec v2 executor exposure underflow"))?;
-        builder.write_exposure(bond, if next == 0 { None } else { Some(next) });
+        builder.write_exposure(bond, if next == 0 { None } else { Some(next) })?;
     }
     Ok(())
 }
@@ -1305,7 +1334,7 @@ pub(super) fn on_claim_voided_v2(
         .collect();
     for (key, mut row) in pending {
         row.stage = PalwWorkSliceStageV2::Voided { voided_daa };
-        builder.write_exec_slice(key, Some(row));
+        builder.write_exec_slice(key, Some(row))?;
     }
     if matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) {
         release_executor_exposure_v2(builder, claim_id, &root)?;
@@ -1314,29 +1343,30 @@ pub(super) fn on_claim_voided_v2(
     }
     let mut voided = root;
     voided.phase = PalwWorkRootPhaseV2::Voided { from_index, voided_daa };
-    builder.write_exec_root(*claim_id, Some(voided));
+    builder.write_exec_root(*claim_id, Some(voided))?;
     Ok(())
 }
 
 /// **The claim retired**: remove its active root, slices and job index. The authenticated job-use history
 /// remains independently until the original REAL header's finite authorization closes; retirement never renews it.
 /// A no-op for a claim with no root.
-pub(super) fn on_claim_retired_v2(builder: &mut TransitionBuilder<'_>, claim_id: &Hash64) {
-    let Some(root) = builder.state.exec_v2.roots.get(claim_id).cloned() else { return };
+pub(super) fn on_claim_retired_v2(builder: &mut TransitionBuilder<'_>, claim_id: &Hash64) -> Result<(), PalwStateV2Error> {
+    let Some(root) = builder.state.exec_v2.roots.get(claim_id).cloned() else { return Ok(()) };
     let keys: Vec<(Hash64, u32)> =
         builder.state.exec_v2.slices.range((*claim_id, 0)..=(*claim_id, u32::MAX)).map(|(key, _)| *key).collect();
     for key in keys {
-        builder.write_exec_slice(key, None);
+        builder.write_exec_slice(key, None)?;
     }
-    builder.write_exec_job(root.job_work_id, None);
-    builder.write_exec_root(*claim_id, None);
+    builder.write_exec_job(root.job_work_id, None)?;
+    builder.write_exec_root(*claim_id, None)?;
+    Ok(())
 }
 
 /// **Every open root expires, including a ready root whose REAL Final is delayed.**
 /// Run before objects; release job escrows without reward or debit. This bounds reservation retention
 /// independently of court progress. Bounded by [`PALW_EXEC_V2_MAX_OPEN_ROOTS`].
 pub(super) fn sweep_expired_roots_v2(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
-    super::palw_exec_v2_history_v1::sweep(builder, ctx.daa_score);
+    super::palw_exec_v2_history_v1::sweep(builder, ctx.daa_score)?;
     if builder.state.exec_v2.roots.is_empty() {
         return Ok(());
     }
@@ -1482,7 +1512,7 @@ pub(super) fn sync_slice_verification_v2(
                 let route_reward = claim_row.as_ref().map(|claim| palw_exec_v2_route_reward_v1(claim, claim_reward)).unwrap_or(0);
                 let mut next = root;
                 next.prefix = PalwWorkPrefixStageV2::Verified { verified_daa: ctx.daa_score, route_reward };
-                builder.write_exec_root(root_id, Some(next));
+                builder.write_exec_root(root_id, Some(next))?;
                 release_final_hold_v2(builder, root_id, ctx.daa_score)?;
             }
             PalwSliceVerificationV1::ProvenFalse => {
@@ -1533,11 +1563,11 @@ pub(super) fn sync_slice_verification_v2(
                 let route_reward = claim_row.as_ref().map(|claim| palw_exec_v2_route_reward_v1(claim, claim_reward)).unwrap_or(0);
                 let mut verified = row;
                 verified.stage = PalwWorkSliceStageV2::Verified { verified_daa: ctx.daa_score, leg_cap, route_reward };
-                builder.write_exec_slice((root_id, index), Some(verified));
+                builder.write_exec_slice((root_id, index), Some(verified))?;
                 let mut next = root;
                 next.pending = next.pending.checked_sub(1).ok_or(PalwStateV2Error::Overflow("exec v2 pending"))?;
                 next.verified_work = next.verified_work.checked_add(work).ok_or(PalwStateV2Error::Overflow("exec v2 verified"))?;
-                builder.write_exec_root(root_id, Some(next));
+                builder.write_exec_root(root_id, Some(next))?;
                 release_final_hold_v2(builder, root_id, ctx.daa_score)?;
             }
             PalwSliceVerificationV1::ProvenFalse => {
@@ -1582,14 +1612,14 @@ pub(super) fn void_suffix_v2(
         .collect();
     for ((_, index), mut row) in suffix {
         row.stage = if index == from_index { cause } else { PalwWorkSliceStageV2::Voided { voided_daa: daa } };
-        builder.write_exec_slice((root_id, index), Some(row));
+        builder.write_exec_slice((root_id, index), Some(row))?;
     }
     if !settled {
         release_executor_exposure_v2(builder, &root_id, &root)?;
     }
     let mut voided = root;
     voided.phase = PalwWorkRootPhaseV2::Voided { from_index, voided_daa: daa };
-    builder.write_exec_root(root_id, Some(voided));
+    builder.write_exec_root(root_id, Some(voided))?;
     let reason = match cause {
         PalwWorkSliceStageV2::ProvenFalse { .. } => PalwVoidReasonV2::WorkSliceProvenFalse,
         _ => PalwVoidReasonV2::WorkSliceDefaulted,
@@ -1629,7 +1659,7 @@ pub(super) fn void_prefix_v2(
         builder.state.exec_v2.slices.range((root_id, 0)..=(root_id, u32::MAX)).map(|(key, row)| (*key, row.clone())).collect();
     for (key, mut row) in slices {
         row.stage = PalwWorkSliceStageV2::Voided { voided_daa: daa };
-        builder.write_exec_slice(key, Some(row));
+        builder.write_exec_slice(key, Some(row))?;
     }
     if !settled {
         release_executor_exposure_v2(builder, &root_id, &root)?;
@@ -1637,7 +1667,7 @@ pub(super) fn void_prefix_v2(
     let mut voided = root;
     voided.prefix = cause;
     voided.phase = PalwWorkRootPhaseV2::Voided { from_index: 0, voided_daa: daa };
-    builder.write_exec_root(root_id, Some(voided));
+    builder.write_exec_root(root_id, Some(voided))?;
     let reason = match cause {
         PalwWorkPrefixStageV2::ProvenFalse { .. } => PalwVoidReasonV2::WorkSliceProvenFalse,
         _ => PalwVoidReasonV2::WorkSliceDefaulted,
@@ -1670,10 +1700,10 @@ pub(crate) fn mark_slice_verified_for_tests(
     let work = row.range.work().ok_or_else(|| refused("empty range"))?;
     // No kernel claim backs a test-door verification: the cap is unbounded, and settlement caps only where a kernel route exists.
     row.stage = PalwWorkSliceStageV2::Verified { verified_daa, leg_cap: u64::MAX, route_reward: 0 };
-    builder.write_exec_slice((claim_id, index), Some(row));
+    builder.write_exec_slice((claim_id, index), Some(row))?;
     let mut root = builder.state.exec_v2.roots.get(&claim_id).cloned().ok_or_else(|| refused("no such root"))?;
     root.pending = root.pending.checked_sub(1).ok_or(PalwStateV2Error::Overflow("exec v2 pending"))?;
     root.verified_work = root.verified_work.checked_add(work).ok_or(PalwStateV2Error::Overflow("exec v2 verified"))?;
-    builder.write_exec_root(claim_id, Some(root));
+    builder.write_exec_root(claim_id, Some(root))?;
     release_final_hold_v2(builder, claim_id, verified_daa)
 }

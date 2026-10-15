@@ -123,10 +123,10 @@ pub enum PalwCellVerifierV1 {
     LegacyLongForm,
     /// **RFC-0006 consumer v2** (past `palw_memory_routing_court_v2`): the recurrence state of a solo gdn v1/v2 map or of a composed
     /// hybrid map, adjudicated by the checkpoint-anchored replay (`memory_v2::check_gdn_step_refutation_v2`, tag 243) and kept sound
-    /// by the checkpoint terminals (`memory_v2::check_gdn_transition_refutation_v2` / `_conv_window_`, tag 170).
+    /// by the checkpoint terminals (`memory_v2::check_gdn_transition_refutation_v2` / `_conv_window_`, tag 244).
     LegacyAnchoredRecurrenceV2,
     /// **RFC-0006 consumer v2**: a multi-router or Kimi-routed table's routed readers, each read under the class registrant's
-    /// immutable per-reader router binding (`crate::palw_router_binding_v2`, tag 170 / aux 139).
+    /// immutable per-reader router binding (`crate::palw_router_binding_v2`, tag 244 / aux 139).
     LegacyRouterBindingV2,
 }
 

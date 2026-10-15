@@ -67,6 +67,17 @@ mod tokenizer;
 mod tokenizer_scheduler;
 #[path = "palw_tir_arithmetic_scheduler.rs"]
 mod tir_arithmetic_scheduler;
+/// G14 R4: the common public-conviction filing of an ORIGINAL TIR frame (build + sign; node policy, dormant below its fence).
+#[path = "palw_tir_public_filer.rs"]
+pub(super) mod tir_public_filer;
+/// G14 R3: an ORIGINAL TIR frame's custodian preparation (the producer and a drawn Valid seat), the prepared capture and Ready
+/// (node policy, dormant below its fence).
+#[path = "palw_tir_public_custodian.rs"]
+pub(super) mod tir_public_custodian;
+/// G14 R4: when to file a public conviction against an ORIGINAL TIR frame, its queue lane and its restart journal (node policy,
+/// dormant below its fence).
+#[path = "palw_tir_public_filer_scheduler.rs"]
+pub(super) mod tir_public_filer_scheduler;
 #[cfg(test)] // the in-process e2e tests read the fp input the filer builds
 pub(super) use input::palw_fraud_filer_fp_input_v1;
 pub(super) use input::{palw_fraud_filer_fp_metadata_v1, palw_fraud_filer_fp_payload_v1};

@@ -408,7 +408,9 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             | PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { .. } | PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { .. }
             | PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. } | PalwConsensusObjectV2::PublicCourtStreamLeafV1 { .. }
             | PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } | PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { .. }
-            | PalwConsensusObjectV2::TirClassLayoutPublishedV1 { .. } => Ok(()),
+            | PalwConsensusObjectV2::TirClassLayoutPublishedV1 { .. }
+            | PalwConsensusObjectV2::TirPublicControlV1 { .. }
+            | PalwConsensusObjectV2::TirPublicGrantReadyV1 { .. } => Ok(()),
         // LG14-B (tags 157–159): the legacy held DA objects ride at every height, refused nowhere at isolation (A-2 rule 5: the live
         // build cannot decode them); the fence, the signature, the bonds, the claim's roots and the units are the gate's and the fold's.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
@@ -567,7 +569,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             }
             accusation.validate_shape(u64::MAX)
         }
-        // RFC-0006 consumer v2 (tag 170): a signed binding declaration, or a signed accusation under the close-byte ceiling.
+        // RFC-0006 consumer v2 (tag 244): a signed binding declaration, or a signed accusation under the close-byte ceiling.
         PalwConsensusObjectV2::MemoryRoutingV2 { object } => object.may_ride(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES),
         // **ADR-0100 Decision 4.** The plan and a bond's shard list ride signed — by the class's
         // registrant and by the bond, checked at acceptance against their registered keys — and
@@ -1190,12 +1192,17 @@ pub enum PalwLifecycleKindFenceV1 {
     /// (`crate::palw_staged_route_forms_v1`).
     StagedFloatConstraintV1 = 13,
     MaterialReleaseRecoveryV2 = 14,
-    MemoryRoutingCourtV2 = 15,
+    /// `Params::palw_tir_public_conviction_v1` — G14's original paid public TIR allocations, controls and exact Valid grants.
+    /// The index is the local activation-table slot (not wire): RFC-0008's material-release recovery took 14 first on integ.
+    TirPublicConvictionV1 = 15,
+    /// `Params::palw_memory_routing_court_v2` — RFC-0006's anchored GDN step court (tag 243) and router binding/routed accusations.
+    /// Local activation-table slot (not wire): G14's public conviction took 15 first on integ.
+    MemoryRoutingCourtV2 = 16,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1211,6 +1218,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::StagedTirRouteV1,
         Self::StagedFloatConstraintV1,
         Self::MaterialReleaseRecoveryV2,
+        Self::TirPublicConvictionV1,
         Self::MemoryRoutingCourtV2,
     ];
 
@@ -1233,6 +1241,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::MemoryRoutingCourtV2 => "palw_memory_routing_court_v2",
             Self::StagedTirRouteV1 => "palw_staged_tir_route_v1",
             Self::StagedFloatConstraintV1 => "palw_staged_float_constraint_v1",
+            Self::TirPublicConvictionV1 => "palw_tir_public_conviction_v1",
         }
     }
 }
@@ -1453,6 +1462,9 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::PublicCourtStreamOpenedNativeV1 { .. } | O::TirClassLayoutPublishedV1 { .. } => {
             PalwLifecycleKindOwnerV1::Fence(F::StagedTirRouteV1)
         }
+        O::TirPublicControlV1 { .. } | O::TirPublicGrantReadyV1 { .. } => {
+            PalwLifecycleKindOwnerV1::Fence(F::TirPublicConvictionV1)
+        }
         // Lane LG14-A: the dispute reservation and its release (154, 155).
         O::DisputeReservedV1 { .. }
         | O::DisputeReleasedV1 { .. }
@@ -1605,9 +1617,11 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (241, "MonetaryMaterialReplacedV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
     (242, "MonetaryMaterialActionV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
     (243, "GdnStepAccusedV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
-    (170, "MemoryRoutingV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
+    (244, "MemoryRoutingV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
     (168, "PublicCourtStreamOpenedNativeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (169, "TirClassLayoutPublishedV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
+    (170, "TirPublicControlV1", PalwLifecycleKindFenceV1::TirPublicConvictionV1),
+    (171, "TirPublicGrantReadyV1", PalwLifecycleKindFenceV1::TirPublicConvictionV1),
     (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
 ];
 
@@ -1705,6 +1719,7 @@ impl crate::config::params::Params {
                     PalwLifecycleKindFenceV1::StagedFloatConstraintV1 => {
                         Self::palw_later_of_v1(self.palw_staged_float_constraint_v1_fence(), self.palw_staged_public_court_v1)
                     }
+                    PalwLifecycleKindFenceV1::TirPublicConvictionV1 => self.palw_tir_public_conviction_v1_fence(),
                 },
             )
         })
@@ -2288,7 +2303,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     ),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 243, hi: 243 }, "palw_memory_routing_court_v2", "RFC06 GDN/routing court version2", true),
     a2_row(
-        PalwA2SlotV1::ObjectTags { lo: 170, hi: 170 },
+        PalwA2SlotV1::ObjectTags { lo: 244, hi: 244 },
         "palw_memory_routing_court_v2",
         "RFC06 router binding and checkpoint/routed accusations (consumer v2)",
         true,
@@ -2316,6 +2331,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::ObjectTags { lo: 168, hi: 169 },
         "palw_staged_tir_route_v1",
         "G14 TIR native seed and layout publication",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::ObjectTags { lo: 170, hi: 171 },
+        "palw_tir_public_conviction_v1",
+        "G14 original paid TIR control and atomic Valid grant/Ready",
         true,
     ),
     // ---- kernel-route inner kinds (inside tag 110) ----
@@ -2547,6 +2568,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::StateEncoding { what: "bond budget table 7 root-exact material income v3 rows (physical payment plus W holds)" },
         "palw_material_income_v3",
         "RFC-8 root-exact material income v3",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel route aux 140 once-only settlement markers (one row per exact obligation id)" },
+        "palw_settlement_once_v1",
+        "RFC-8 once-only settlement across all consumers",
         true,
     ),
     a2_row(
@@ -2931,13 +2958,15 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (165, 167, "G14 owned public court stream", &["palw_staged_public_court_v1"]),
     // 168–169: the G14 TIR staged route (native seed opening, TIR class layout publication), merged 2026-10-15.
     (168, 169, "G14 TIR staged route", &["palw_staged_tir_route_v1"]),
+    (170, 171, "G14 original paid TIR conviction", &["palw_tir_public_conviction_v1"]),
     // 230: reserved 2026-10-15 for the D2 replacement route's seat readiness digest (R-D2-READY). Checked free on this branch, the
     // G14 public-conviction branch and the RFC02 branch (all end at 167 / start again at 240); the kind itself is not landed yet.
     (230, 230, "D2 seat readiness digest (reserved)", &["palw_court_model_scope_v1"]),
     (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1", "palw_material_release_recovery_v2"]),
     (243, 243, "RFC06 versioned recurrence/routing court", &["palw_memory_routing_court_v2"]),
-    // 170: the RFC06 GDN/router lane's allocation (2026-10-15) — the router binding and the checkpoint/routed accusations.
-    (170, 170, "RFC06 router binding and checkpoint/routed accusations", &["palw_memory_routing_court_v2"]),
+    // 244: the RFC06 GDN/router lane's allocation (2026-10-15; moved from 170, which G14's public conviction took first on integ)
+    // — the router binding and the checkpoint/routed accusations.
+    (244, 244, "RFC06 router binding and checkpoint/routed accusations", &["palw_memory_routing_court_v2"]),
 ];
 
 #[cfg(test)]
@@ -3931,9 +3960,17 @@ pub(crate) mod tests {
         /// `None`, every nested enum its first variant). Generic over the enum, so a kind a lane adds is in every sweep the moment its
         /// table row exists; a kind whose zero-filled body does not decode needs a hand-built sample here instead (the panic says so).
         pub(crate) fn zero_filled_kind(tag: u8) -> PalwConsensusObjectV2 {
-            let object: PalwConsensusObjectV2 = minimal_decode(&[tag]).unwrap_or_else(|| {
+            let object: PalwConsensusObjectV2 = match tag {
+                170 => PalwConsensusObjectV2::TirPublicControlV1 {
+                    control: Box::new(crate::palw_tir_public_carriage_v1::palw_tir_public_control_fixture_v1()),
+                },
+                171 => PalwConsensusObjectV2::TirPublicGrantReadyV1 {
+                    grant: Box::new(crate::palw_tir_public_carriage_v1::palw_tir_public_grant_fixture_v1()),
+                },
+                _ => minimal_decode(&[tag]).unwrap_or_else(|| {
                 panic!("kind {tag} decodes from no near-zero body; give it a hand-built sample in the A2U sweeps instead")
-            });
+                }),
+            };
             assert_eq!(borsh::to_vec(&object).unwrap()[0], tag);
             object
         }
@@ -3957,7 +3994,7 @@ pub(crate) mod tests {
                 (241, zero_filled_kind(241)),
                 (242, zero_filled_kind(242)),
                 (243, zero_filled_kind(243)),
-                (170, zero_filled_kind(170)),
+                (244, zero_filled_kind(244)),
                 (104, O::ArtifactBoundV1 { v2_class: h, kernel_param_root: h, signer: bond(), signature: vec![1] }),
                 (
                     105,
@@ -5212,12 +5249,20 @@ pub(crate) mod tests {
             (242, 0xd29d0349b76c136f),
             // New source declaration pin only; no old kind was re-pinned.
             (243, 0x5b8caf052fb70f7d),
-            // RFC-0006 GDN/router lane (tag 170): source pin from `scripts/drills/gen_rfc06_gdn_wire_pin_v2.py MemoryRoutingV2 170`
-            // (written, not run — the consolidated test prints the authoritative value if this differs).
-            (170, 0xcd39526b2f222e96),
+            // RFC-0006 GDN/router lane (tag 244, moved from 170 which G14 took first on integ): source pin from
+            // `scripts/drills/gen_rfc06_gdn_wire_pin_v2.py MemoryRoutingV2 244` (the same generator reproduces tag 243's pin; the
+            // consolidated test prints the authoritative value if this differs).
+            (244, 0xe3c3708bdefde0c0),
             // G14 TIR native seed and class layout, owned by `palw_staged_tir_route_v1`.
             (168, 0x08ee1a77654c016e),
             (169, 0xa24f46d0931b98b5),
+            // G14's original paid TIR control (170: the appended common `Conviction` / `Convict` filing, the `ConvictionWitness` /
+            // `WitnessPart` split carriage and the job's own selection/stop doors) and the atomic Valid grant/Ready (171), owned by
+            // `palw_tir_public_conviction_v1`. Derived WITHOUT a build by `scripts/drills/a2u_new_kind_wire_pins.py` (a port of this
+            // test's manifest reader that reproduces every row pinned at fd9d6a8e4); this test stays the authority — if it disagrees,
+            // re-pin both from its `[a2u-pins]` listing in the commit that first compiles them.
+            (170, 0xb68d62123647ff28),
+            (171, 0x68623b7dc7d30b55),
             (131, 0xf970df6a8bdc323c),
         ];
 

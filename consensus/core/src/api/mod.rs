@@ -1462,6 +1462,49 @@ pub trait ConsensusApi: Send + Sync {
         Err("staged TIR prefix reader unavailable".into())
     }
 
+    /// G14 R4: an ORIGINAL TIR frame as one public verifier reads it to file a conviction (accepted snapshot; `None` below
+    /// `palw_tir_public_conviction_v1` or for a claim with no frame).
+    fn palw_tir_public_frame_v1(
+        &self,
+        _claim: crate::Hash64,
+    ) -> Result<Option<crate::palw_tir_public_claim_v1::PalwTirPublicFrameViewV1>, String> {
+        Err("TIR public frame reader unavailable".into())
+    }
+
+    /// **G14 R3/R4: the node workers' read of the accepted native snapshot of ORIGINAL TIR frames.** Runs `read` once against
+    /// the same accepted state every PALW reader uses, iff `palw_tir_public_conviction_v1` is active there; `Ok(false)` below it
+    /// (the closure is not run). Read-only. The seat preparation worker and the filer scheduler need it because the frame's
+    /// preparation/acquisition snapshots and the work book's debit preparation and permit confirmation
+    /// (`palw_tir_public_state_v1`) all take the accepted state — a work permit is minted only by confirming against it.
+    fn palw_tir_public_read_v1(
+        &self,
+        _read: &mut dyn FnMut(&crate::palw_state_v2::PalwChainStateV2) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        Err("TIR public accepted-state reader unavailable".into())
+    }
+
+    /// **G14 R4: the filer scheduler's preflight** — whether the fold would accept `filer`'s public conviction of `claim` with
+    /// `evidence` at the next DAA on the accepted snapshot (a discarded dry run of the native path). `Ok(None)` below
+    /// `palw_tir_public_conviction_v1`; `Ok(Some(Err(reason)))` for a filing the fold would refuse. Never a verdict.
+    fn palw_tir_public_conviction_preflight_v1(
+        &self,
+        _filer: crate::palw_state_v2::PalwBondKeyV2,
+        _claim: crate::Hash64,
+        _evidence: crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
+    ) -> Result<Option<Result<(), String>>, String> {
+        Err("TIR public conviction preflight unavailable".into())
+    }
+
+    /// G14 R1/R2: the producer's pre-signing quote of an ORIGINAL TIR frame on the accepted snapshot — `(snapshot DAA, plan)`;
+    /// `None` below `palw_tir_public_conviction_v1` or for an original the frame route does not admit.
+    fn palw_tir_public_original_quote_v1(
+        &self,
+        _original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        _header: crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    ) -> Result<Option<(u64, crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1)>, String> {
+        Err("TIR public original quote unavailable".into())
+    }
+
     fn palw_staged_tir_prefix_leaf_index_v1(
         &self,
         _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),

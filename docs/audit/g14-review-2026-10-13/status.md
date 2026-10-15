@@ -876,3 +876,54 @@ Nothing was built, tested or run.
   - checkpoint and restore round-trip;
   - honest completion waits for collection.
 - **Object tags 168 and 169 belong to this branch.**
+
+## Takeover of Codex's G14 remaining work, 2026-10-15 night (branch `integ/g14-remaining`, source only)
+
+Nothing below was built, tested or run; nothing is labelled PASS. The per-checkbox status is in
+[`g14-objective-conviction-remaining-2026-10-15.md`](../../design/palw/g14-objective-conviction-remaining-2026-10-15.md) and the
+route's condition table in [`g14-completion-matrix.md` §2k](../../design/palw/g14-completion-matrix.md).
+
+- **Merge.** `codex/integration-followup` (`65c799ee3`) into `integ/rfc02-rfc06-12-g14` (`9fad35323`, then `10cbaeda6`). The local
+  fence slot 14 collided (RFC08 `MaterialReleaseRecoveryV2`); `TirPublicConvictionV1` moved to 15. The acceptance filter keeps integ's
+  `Result`/`NativeChainStateV1` contract and returns Codex's accepted TFP1 originals. Codex's fold used the test-only
+  `checkpoint()`/`new()`; production now uses `try_checkpoint()?`/`try_new()?`.
+- **Common conviction (R4/R6).** Tag 170 gains a `Conviction` target and `Convict` action. Any non-liable Active above-floor bond
+  files; the fold re-adjudicates a cone/logits primitive, a greedy decode-token primitive or the complete authenticated ID sequence
+  against the ORIGINAL roots, then charges every credited Valid custodian (S4) and the producer through `convict_by_court_verdict_v1`,
+  forfeiting by root for execution-proving faults. A filing burns the frame's terminal rent.
+- **Hold and Gate C (R6).** A frame's claim cannot be `Final` before the frame's `collect_until`; Gate C waits while the door is open;
+  an owner's open demand is a pending accusation; RPC certification of a voided claim reads `revoked`/`withdrawn`.
+- **Collection (R5).** Every liable bond must still hold its original exit hold when a default or a conviction is collected, so no
+  unlocked skip is recorded as collection.
+- **Fees (R2).** Only TIR carriers read actual fees when certification rent is off; a declared TIR rent never enters the finality
+  split; node carriers add the declared rent on top of relay.
+- **Narrowing.** Originals with a registered semantic stage, a non-greedy selection rule or a job tail are refused at admission
+  until their courts are connected to frames.
+- **Generated sources.** Native inventory and wire scanners regenerated (they predated the merged TIR rows); 15 handwritten TIR codecs
+  reviewed and pinned; A-2 wire pins for 170/171 are 0x0 placeholders for the validation pass.
+- **Recommendation.** Keep `palw_tir_public_conviction_v1` dormant at DAA 14,000: producer TFP1 builder, GrantReady worker, node
+  filer scheduling, V3/V4 typed receipts, semantic/sampling frame courts, owner/custodian capacity rule and R7/R8 are not done.
+
+### Continuation, 2026-10-16 (branch `integ/g14-remaining`, source only)
+
+Nothing below was built, tested or run; nothing is labelled PASS.
+
+- **Lead defaults, pending user review.** (a) K_owner = 8 outside owners per frame, each paying only its own rent and deposit, with
+  a custodian-load bound derived from the plan, excess owners refused before any duty (known residual: slot pre-emption). (b) V3/V4
+  typed receipts stay refused by name on frames; no pre-licence crediting.
+- **Seats can grant custody.** `kaspad/src/palw_tir_public_custodian.rs`: the producer and a drawn Valid seat prepare on the prepaid
+  lane slice by slice (each slice funded by an accepted `WorkDebit` permit), seal the prepared capture, then file `PreparationReady`
+  or the atomic Valid + grant + Ready. Consensus API `palw_tir_public_read_v1`.
+- **Filer scheduler.** `kaspad/src/palw_tir_public_filer_scheduler.rs` with the fold's own dry run
+  (`palw_tir_public_conviction_preflight_v1`), its own court lane and a restart journal.
+- **R4 items 3–4.** Selection and stop are judged under the original job's own rule (sampling, V4); this also closes a gap where a
+  sampled original could have been judged by the greedy primitive. Semantic stages are admitted through the ClaimBundle contract the
+  frame installs beside itself (TFP1 carries the producer's history pledge).
+- **R7.** Split carriage of witnesses larger than one control (`ConvictionWitness`/`WitnessPart`, rooted `TirWitness`).
+- **R8.** Irreversible-only GC, reopen re-authentication, write-ahead physical work with a finite recovery rule, and a fresh-node
+  import continuation test through the pruning-point carriage.
+- **Pins.** 170 = `0xb68d62123647ff28`, 171 = `0x68623b7dc7d30b55` derived by `scripts/drills/a2u_new_kind_wire_pins.py` (the Rust
+  test stays the authority). The same port shows 240–242 out of date (another lane's monetary-material codec changes).
+- **Merge fix.** Frame fold calls to writers that integ made fallible now propagate their errors.
+- **Recommendation unchanged:** keep `palw_tir_public_conviction_v1` dormant at DAA 14,000 — the custodians' demand responder and
+  the filer's finding producers are not connected, and nothing is measured.

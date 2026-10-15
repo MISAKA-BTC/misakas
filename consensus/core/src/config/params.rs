@@ -2427,6 +2427,9 @@ pub struct Params {
     /// G14 TIR required-family staged route (native-context seeds/answers over the decode view).
     /// Dormant everywhere; requires `palw_staged_public_court_v1` at or below it.
     pub palw_staged_tir_route_v1: Option<ForkActivation>,
+    /// Original paid TIR public-conviction allocations and signed controls.
+    /// Independent and dormant on every shipped preset; never reprices old claims.
+    pub palw_tir_public_conviction_v1: Option<ForkActivation>,
     /// G14 greedy Float32 Constraint staged route (rooted f32 row court and Float32 sources).
     /// Dormant everywhere; requires `palw_staged_public_court_v1` at or below it.
     pub palw_staged_float_constraint_v1: Option<ForkActivation>,
@@ -3081,6 +3084,11 @@ pub struct Params {
     /// Root-exact physical monetary payment/material retention, schema v3.
     /// Separate dormant fence; requires budget and reporter schemas at/below it.
     pub palw_material_income_v3: Option<ForkActivation>,
+    /// RFC-0008: the once-only settlement registry (kernel route aux 140). Every settlement consumer (native Final, kernel
+    /// Final, paid claim Final, EXEC root/legs, gate/certification releases, vesting moves, material funding/fees/defaults)
+    /// checks and writes one marker per exact obligation in the same transition. Dormant: `None` on every preset; validation
+    /// refuses arming it; requires the kernel route fence at or below it.
+    pub palw_settlement_once_v1: Option<ForkActivation>,
     /// Prospective producer-signed absolute Panel service lifetime. Dormant.
     pub palw_panel_lifetime_v2: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2>,
     /// Signed Claim V2 seed/checker/lifetime contract; dormant without scoped review.
@@ -4964,6 +4972,42 @@ impl Params {
         }
     }
 
+    /// **G14's original paid TIR public-conviction route** — in force only where every rule its verdicts consume is in force too
+    /// (the later of them): the staged TIR route and public court it extends, the objective-offence funnel it convicts through,
+    /// R-core+ (the conviction tiers, vesting and the exit-lock lattice a collectible debit needs) and ADR-0160's aggregate
+    /// liability (the intent-class forfeiture and freeze that take a convicted producer's block opportunity, so admission and the
+    /// producer's readiness refuse it). `None` on every shipped preset (the field is `None` there).
+    pub fn palw_tir_public_conviction_v1_fence(&self) -> Option<ForkActivation> {
+        let never = ForkActivation::never();
+        match (
+            &self.palw_consensus_mode,
+            self.palw_tir_public_conviction_v1,
+            self.palw_staged_tir_route_v1_fence(),
+            self.palw_staged_public_court_v1_fence(),
+            self.palw_objective_offence.filter(|f| *f != never),
+            self.palw_rcore_plus_fence().filter(|f| *f != never),
+            self.palw_capacity_aggregate_liability.as_ref().map(|liability| liability.activation).filter(|f| *f != never),
+        ) {
+            (
+                crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_),
+                Some(own),
+                Some(tir),
+                Some(staged),
+                Some(offence),
+                Some(rcore),
+                Some(liability),
+            ) if own != never => Some(ForkActivation::new(
+                own.daa_score()
+                    .max(tir.daa_score())
+                    .max(staged.daa_score())
+                    .max(offence.daa_score())
+                    .max(rcore.daa_score())
+                    .max(liability.daa_score()),
+            )),
+            _ => None,
+        }
+    }
+
     pub fn palw_staged_float_constraint_v1_fence(&self) -> Option<ForkActivation> {
         match (&self.palw_consensus_mode, self.palw_staged_float_constraint_v1) {
             (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) if f != ForkActivation::never() => Some(f),
@@ -5995,6 +6039,7 @@ impl Params {
             palw_court_commitment_scope_v1: self.palw_court_commitment_scope_v1,
             palw_staged_public_court_v1: self.palw_staged_public_court_v1,
             palw_staged_tir_route_v1: self.palw_staged_tir_route_v1,
+            palw_tir_public_conviction_v1: self.palw_tir_public_conviction_v1,
             palw_staged_float_constraint_v1: self.palw_staged_float_constraint_v1,
             palw_model_benefits: self.palw_model_benefits,
             palw_model_leg_v2: self.palw_model_leg_v2,
@@ -6060,6 +6105,7 @@ impl Params {
             palw_bond_formula_v2: self.palw_bond_formula_v2,
             palw_reporter_income_v2: self.palw_reporter_income_v2,
             palw_material_income_v3: self.palw_material_income_v3,
+            palw_settlement_once_v1: self.palw_settlement_once_v1,
             palw_panel_lifetime_v2: self.palw_panel_lifetime_v2,
             palw_claim_challenge_v2: self.palw_claim_challenge_v2,
             palw_claim_compact_v4: self.palw_claim_compact_v4.clone(),
@@ -7151,6 +7197,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_tir_public_conviction_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7212,6 +7259,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,
@@ -7499,6 +7547,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_tir_public_conviction_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7560,6 +7609,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,
@@ -7829,6 +7879,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_tir_public_conviction_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7890,6 +7941,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,
@@ -13325,6 +13377,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_tir_public_conviction_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -13404,6 +13457,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,

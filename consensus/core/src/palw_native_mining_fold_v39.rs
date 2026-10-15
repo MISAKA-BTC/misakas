@@ -81,15 +81,17 @@ fn model(r: &PalwKernelRouteStateV1, id: &Digest) -> Result<NativeMiningModelRec
     }
     Ok(m)
 }
-fn write_model(builder: &mut TransitionBuilder<'_>, m: &NativeMiningModelRecordV39) {
-    builder.write_kernel_row(TABLE, k(MINING_MODEL_KIND_V39, &m.model), Some(b(&(m.root(), m))));
+fn write_model(builder: &mut TransitionBuilder<'_>, m: &NativeMiningModelRecordV39) -> Result<(), PalwStateV2Error> {
+    builder.write_kernel_row(TABLE, k(MINING_MODEL_KIND_V39, &m.model), Some(b(&(m.root(), m))))?;
+    Ok(())
 }
 fn seat(r: &PalwKernelRouteStateV1, model: &Digest, bond: &PalwBondKeyV2) -> Option<NativeMiningSeatRecordV39> {
     let (root, s): (Digest, NativeMiningSeatRecordV39) = read(r, MINING_SEAT_KIND_V39, &(model, bond), 2048)?;
     (root == s.root() && s.version == 39 && s.model == *model && s.bond == *bond).then_some(s)
 }
-fn write_seat(builder: &mut TransitionBuilder<'_>, s: &NativeMiningSeatRecordV39) {
-    builder.write_kernel_row(TABLE, k(MINING_SEAT_KIND_V39, &(s.model, s.bond)), Some(b(&(s.root(), s))));
+fn write_seat(builder: &mut TransitionBuilder<'_>, s: &NativeMiningSeatRecordV39) -> Result<(), PalwStateV2Error> {
+    builder.write_kernel_row(TABLE, k(MINING_SEAT_KIND_V39, &(s.model, s.bond)), Some(b(&(s.root(), s))))?;
+    Ok(())
 }
 fn claim(r: &PalwKernelRouteStateV1, id: &Digest) -> Result<NativeMiningClaimRecordV39, PalwStateV2Error> {
     let (root, c): (Digest, NativeMiningClaimRecordV39) =
@@ -99,11 +101,13 @@ fn claim(r: &PalwKernelRouteStateV1, id: &Digest) -> Result<NativeMiningClaimRec
     }
     Ok(c)
 }
-fn write_claim(builder: &mut TransitionBuilder<'_>, c: &NativeMiningClaimRecordV39) {
-    builder.write_kernel_row(TABLE, k(MINING_CLAIM_KIND_V39, &c.id), Some(b(&(c.root(), c))));
+fn write_claim(builder: &mut TransitionBuilder<'_>, c: &NativeMiningClaimRecordV39) -> Result<(), PalwStateV2Error> {
+    builder.write_kernel_row(TABLE, k(MINING_CLAIM_KIND_V39, &c.id), Some(b(&(c.root(), c))))?;
+    Ok(())
 }
-fn write_receipt(builder: &mut TransitionBuilder<'_>, r: &NativeMiningReceiptRecordV39) {
-    builder.write_kernel_row(TABLE, k(MINING_RECEIPT_KIND_V39, &r.id), Some(b(&(r.root(), r))));
+fn write_receipt(builder: &mut TransitionBuilder<'_>, r: &NativeMiningReceiptRecordV39) -> Result<(), PalwStateV2Error> {
+    builder.write_kernel_row(TABLE, k(MINING_RECEIPT_KIND_V39, &r.id), Some(b(&(r.root(), r))))?;
+    Ok(())
 }
 fn master_final(r: &PalwKernelRouteStateV1, master: &Digest) -> Option<NativeMasterFinalRecordV39> {
     let raw = r.aux.get(&(TABLE, borsh::to_vec(&(39u8, 83u8, master)).ok()?)).filter(|raw| raw.len() <= 64 << 10)?;
@@ -166,7 +170,7 @@ fn prepay(
     let mut s =
         super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &e, palw_kernel_bond_id_v1(signer), [0; 64])?;
     s.debit_ordinary(&p.execution.quota, &e, &DerivedOrdinaryMetadataV11::from_native_envelope(q)).map_err(bad)?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &s, [0; 64]);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &s, [0; 64])?;
     Ok(true)
 }
 fn matured(builder: &TransitionBuilder<'_>, signer: &PalwBondKeyV2, p: &NativeExecutionPoliciesV39, now: u64) -> Result<Digest, PalwStateV2Error> {
@@ -261,10 +265,10 @@ fn register(
         )?;
     }
     let count = counter(route(builder)?, MINING_MODEL_COUNT_KIND_V39, &()) + 1;
-    write_model(builder, &record);
-    builder.write_kernel_row(TABLE, k(MINING_MODEL_SOURCE_KIND_V39, &record.complete_source), Some(b(&id)));
-    builder.write_kernel_row(TABLE, k(MINING_MODEL_SEQUENCE_KIND_V39, signer), Some(b(&(next + 1))));
-    builder.write_kernel_row(TABLE, k(MINING_MODEL_COUNT_KIND_V39, &()), Some(b(&count)));
+    write_model(builder, &record)?;
+    builder.write_kernel_row(TABLE, k(MINING_MODEL_SOURCE_KIND_V39, &record.complete_source), Some(b(&id)))?;
+    builder.write_kernel_row(TABLE, k(MINING_MODEL_SEQUENCE_KIND_V39, signer), Some(b(&(next + 1))))?;
+    builder.write_kernel_row(TABLE, k(MINING_MODEL_COUNT_KIND_V39, &()), Some(b(&count)))?;
     Ok(())
 }
 
@@ -326,10 +330,10 @@ fn seat_or_retire(
             let mut seats = seats;
             seats.push(*signer);
             m.seats = m.seats.saturating_add(1);
-            write_seat(builder, &s);
-            builder.write_kernel_row(TABLE, k(MINING_SEAT_LIST_KIND_V39, &w.model), Some(b(&seats)));
-            write_model(builder, &m);
-            builder.note_kernel_bond(signer);
+            write_seat(builder, &s)?;
+            builder.write_kernel_row(TABLE, k(MINING_SEAT_LIST_KIND_V39, &w.model), Some(b(&seats)))?;
+            write_model(builder, &m)?;
+            builder.note_kernel_bond(signer)?;
             Ok(())
         }
         (MODEL_RETIRE_ACTION_V39, 1) => {
@@ -344,9 +348,9 @@ fn seat_or_retire(
             let mut seats = seats;
             seats.retain(|b| b != signer);
             m.seats = m.seats.saturating_sub(1);
-            builder.write_kernel_row(TABLE, k(MINING_SEAT_KIND_V39, &(w.model, *signer)), None);
-            builder.write_kernel_row(TABLE, k(MINING_SEAT_LIST_KIND_V39, &w.model), Some(b(&seats)));
-            write_model(builder, &m);
+            builder.write_kernel_row(TABLE, k(MINING_SEAT_KIND_V39, &(w.model, *signer)), None)?;
+            builder.write_kernel_row(TABLE, k(MINING_SEAT_LIST_KIND_V39, &w.model), Some(b(&seats)))?;
+            write_model(builder, &m)?;
             Ok(())
         }
         (MODEL_RETIRE_ACTION_V39, 2) => {
@@ -365,7 +369,7 @@ fn seat_or_retire(
                 )?;
             }
             m.retired = Some(ctx.daa_score);
-            write_model(builder, &m);
+            write_model(builder, &m)?;
             Ok(())
         }
         _ => Err(bad("mining39 seat/retire action and kind differ")),
@@ -479,17 +483,17 @@ fn commit(
         fin.established,
     )?;
     for (stage, _, _) in &stages {
-        builder.write_kernel_row(TABLE, k(MINING_MASTER_USED_KIND_V39, &(w.master, *stage)), Some(b(&id)));
+        builder.write_kernel_row(TABLE, k(MINING_MASTER_USED_KIND_V39, &(w.master, *stage)), Some(b(&id)))?;
     }
     m.live_claims += 1;
     s.live_claims += 1;
     s.last_use = ctx.daa_score;
-    write_claim(builder, &record);
-    write_model(builder, &m);
-    write_seat(builder, &s);
-    builder.write_kernel_row(TABLE, k(MINING_PRODUCER_SEQUENCE_KIND_V39, signer), Some(b(&(next + 1))));
-    builder.write_kernel_row(TABLE, k(MINING_EPOCH_KIND_V39, &(w.model, epoch)), Some(b(&(epoch_count + 1))));
-    builder.note_kernel_bond(signer);
+    write_claim(builder, &record)?;
+    write_model(builder, &m)?;
+    write_seat(builder, &s)?;
+    builder.write_kernel_row(TABLE, k(MINING_PRODUCER_SEQUENCE_KIND_V39, signer), Some(b(&(next + 1))))?;
+    builder.write_kernel_row(TABLE, k(MINING_EPOCH_KIND_V39, &(w.model, epoch)), Some(b(&(epoch_count + 1))))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 
@@ -545,16 +549,16 @@ fn issue(
         };
         m.live_receipts += 1;
         c.closed = Some((ctx.daa_score, true));
-        write_receipt(builder, &receipt);
+        write_receipt(builder, &receipt)?;
     } else {
         // Not certified (or not certifiable): no receipt, no weight, no coinbase; the reservation closes (nothing returns).
         c.closed = Some((ctx.daa_score, false));
         builder.bond_budget_close_v1(&native_mining_budget_id_v39(&c.id), ctx.daa_score);
     }
-    write_claim(builder, &c);
-    write_model(builder, &m);
+    write_claim(builder, &c)?;
+    write_model(builder, &m)?;
     if let Some(s) = s {
-        write_seat(builder, &s);
+        write_seat(builder, &s)?;
     }
     Ok(())
 }
@@ -594,13 +598,13 @@ fn collect(
     if let Some(rc) = &receipt {
         m.live_receipts = m.live_receipts.saturating_sub(1);
         builder.bond_budget_close_v1(&native_mining_budget_id_v39(&c.id), ctx.daa_score);
-        builder.write_kernel_row(TABLE, k(MINING_RECEIPT_KIND_V39, &rc.id), None);
+        builder.write_kernel_row(TABLE, k(MINING_RECEIPT_KIND_V39, &rc.id), None)?;
     }
     // A permanent tombstone keeps the claim id (and its used Master stages) from ever being re-credited.
-    builder.write_kernel_row(TABLE, k(MINING_COLLECTED_KIND_V39, &c.id), Some(b(&(c.root(), c.closed, ctx.daa_score))));
-    builder.write_kernel_row(TABLE, k(MINING_CLAIM_KIND_V39, &c.id), None);
-    super::palw_security_certification_fold_v1::retire_native_mining_v39(builder, &c.claim_hash());
-    write_model(builder, &m);
+    builder.write_kernel_row(TABLE, k(MINING_COLLECTED_KIND_V39, &c.id), Some(b(&(c.root(), c.closed, ctx.daa_score))))?;
+    builder.write_kernel_row(TABLE, k(MINING_CLAIM_KIND_V39, &c.id), None)?;
+    super::palw_security_certification_fold_v1::retire_native_mining_v39(builder, &c.claim_hash())?;
+    write_model(builder, &m)?;
     Ok(())
 }
 
@@ -631,7 +635,7 @@ pub(super) fn apply_native_receipt_block_v39(
     builder.state.safe_weight = builder.state.safe_weight.checked_add(granted).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
     rc.spent[spend.quantum_index as usize / 8] |= 1 << (spend.quantum_index % 8);
     rc.spent_quanta += 1;
-    write_receipt(builder, &rc);
+    write_receipt(builder, &rc)?;
     Ok(())
 }
 

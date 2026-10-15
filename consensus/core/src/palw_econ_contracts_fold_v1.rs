@@ -92,7 +92,7 @@ pub(super) fn open_model_verification_tally_v1(
         policy: policy.id(),
     };
     super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
-    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, id.to_vec(), Some(encode(&row)));
+    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, id.to_vec(), Some(encode(&row)))?;
     Ok(row)
 }
 
@@ -143,7 +143,7 @@ pub(super) fn attest_model_verification_v1(
     if !filled {
         return Err(refuse("the signer holds no open drawn slot of this tally"));
     }
-    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, attestation.tally.to_vec(), Some(encode(&row)));
+    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, attestation.tally.to_vec(), Some(encode(&row)))?;
     Ok(())
 }
 
@@ -167,7 +167,7 @@ pub(super) fn take_model_verification_outcome_v1(
     };
     let outcome = row.outcome(policy.threshold, ctx.daa_score);
     if outcome != PalwModelVerificationOutcomeV1::Pending {
-        take_decided_v1(builder, &row, outcome, ctx.daa_score);
+        take_decided_v1(builder, &row, outcome, ctx.daa_score)?;
     }
     Ok(Some(outcome))
 }
@@ -178,11 +178,12 @@ fn take_decided_v1(
     row: &PalwModelVerificationTallyV1,
     outcome: PalwModelVerificationOutcomeV1,
     now: u64,
-) {
+) -> Result<(), PalwStateV2Error> {
     let id = palw_model_verification_tally_id_v1(&row.model, row.epoch);
     let decided = PalwModelVerificationDecidedV1 { model: row.model, epoch: row.epoch, outcome, decided_daa: now };
-    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, id.to_vec(), None);
-    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, palw_model_verification_decided_key_v1(&id), Some(encode(&decided)));
+    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, id.to_vec(), None)?;
+    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, palw_model_verification_decided_key_v1(&id), Some(encode(&decided)))?;
+    Ok(())
 }
 
 // ---- A′. the gate's wiring: OPVB beacon → tally, Final payout → outcome (2026-10-15 round 3) -----------------------------------
@@ -260,7 +261,7 @@ pub(super) fn gate_final_reward_v1(
     {
         let outcome = tally.outcome(policy.threshold, final_daa);
         if outcome != PalwModelVerificationOutcomeV1::Pending {
-            take_decided_v1(builder, &tally, outcome, final_daa);
+            take_decided_v1(builder, &tally, outcome, final_daa)?;
         }
     }
     let gated = palw_model_verification_subsidy_v1(model_epoch_outcome_v1(builder, &policy, &model, epoch, final_daa), escrow);
@@ -283,7 +284,7 @@ pub(super) fn gate_final_reward_v1(
             PALW_MODEL_VERIFICATION_TABLE_V1,
             palw_model_verification_deferred_key_v1(&claim_id.as_bytes()),
             Some(encode(&deferred)),
-        );
+        )?;
     }
     Ok(gated.payable)
 }
@@ -379,7 +380,7 @@ pub(super) fn tick_model_verification_gate_v1(
             frozen.push((palw_model_verification_context_key_v1(&id), encode(&row)));
         }
         for (key, bytes) in frozen {
-            builder.write_kernel_row(table, key, Some(bytes));
+            builder.write_kernel_row(table, key, Some(bytes))?;
         }
     }
     // 2. Open the tallies whose beacon locked.
@@ -397,7 +398,7 @@ pub(super) fn tick_model_verification_gate_v1(
                 Ok(B::Locked(beacon)) => beacon.output,
                 Ok(B::Unavailable { .. } | B::Vetoed { .. }) | Err(_) => {
                     context.unavailable_daa = Some(now);
-                    builder.write_kernel_row(table, key, Some(encode(&context)));
+                    builder.write_kernel_row(table, key, Some(encode(&context)))?;
                     continue;
                 }
                 Ok(_) => continue,
@@ -444,7 +445,7 @@ pub(super) fn tick_model_verification_gate_v1(
             pool.dedup_by(|a, b| a.0 == b.0);
             if pool.is_empty() {
                 context.unavailable_daa = Some(now);
-                builder.write_kernel_row(table, key, Some(encode(&context)));
+                builder.write_kernel_row(table, key, Some(encode(&context)))?;
                 continue;
             }
             // Capacity: the undecided tallies held at once. A context past capacity waits (its beacon stays locked).
@@ -468,7 +469,7 @@ pub(super) fn tick_model_verification_gate_v1(
                 &final_claims,
                 &pool,
             )?;
-            builder.write_kernel_row(table, key, None);
+            builder.write_kernel_row(table, key, None)?;
         }
     }
     // 3. Take the decided tallies.
@@ -493,7 +494,7 @@ pub(super) fn tick_model_verification_gate_v1(
     for (key, row) in &deferred {
         match model_epoch_outcome_v1(builder, &policy, &row.model, row.epoch, now) {
             PalwModelVerificationOutcomeV1::Pending => {}
-            PalwModelVerificationOutcomeV1::Unattested => builder.write_kernel_row(table, key.clone(), None),
+            PalwModelVerificationOutcomeV1::Unattested => builder.write_kernel_row(table, key.clone(), None)?,
             PalwModelVerificationOutcomeV1::Attested | PalwModelVerificationOutcomeV1::NoFinalClaim => {
                 let queue = palw_model_verification_deferred_payout_key_v1(&row.claim);
                 if builder.state.pending_payouts.len() >= PALW_V2_MAX_PENDING_PAYOUTS
@@ -501,8 +502,23 @@ pub(super) fn tick_model_verification_gate_v1(
                 {
                     continue; // the queue drains first; the release waits (never dropped, never doubled)
                 }
-                builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.payload, amount: row.amount }));
-                builder.write_kernel_row(table, key.clone(), None);
+                // RFC-0008 once-only settlement (dormant): the deferral of this claim is released once across every consumer.
+                {
+                    use crate::palw_settlement_once_v1::{
+                        PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+                    };
+                    let once = builder.settle_once_v1(
+                        now,
+                        PalwSettlementObligationV1::of(PalwSettlementLegV1::GateDeferredRelease, row.claim),
+                        PalwSettlementConsumerV1::VerificationGate,
+                        row.amount,
+                        PalwSettlementDebitV1::Held { amount: row.amount },
+                    )?;
+                    if once.pays() {
+                        builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.payload, amount: row.amount }))?;
+                    }
+                }
+                builder.write_kernel_row(table, key.clone(), None)?;
             }
         }
     }
@@ -535,7 +551,7 @@ pub(super) fn tick_model_verification_gate_v1(
         out
     };
     for key in retired {
-        builder.write_kernel_row(table, key, None);
+        builder.write_kernel_row(table, key, None)?;
     }
     Ok(())
 }
@@ -596,7 +612,7 @@ pub(super) fn consent_horizon_extension_v1(
         let mut ledger = route
             .ledger_checked_v1()
             .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?;
-        ledger.daa = now;
+        ledger.set_daa_v1(now);
         {
             let claim = ledger.claims.get(&terms.claim).ok_or_else(|| refuse("the extended claim is missing"))?;
             let poster =
@@ -677,10 +693,10 @@ pub(super) fn consent_horizon_extension_v1(
             .ok_or_else(|| refuse("the extended claim's worker has no native bond"))?;
         // The hold first (it may refuse, journaling nothing); then the ledger rows.
         builder.extend_exec_income_hold_v1(Hash64::from_bytes(terms.root), bond, now, terms.new_liability_until_daa)?;
-        super::palw_kernel_route_fold_v1::flush(builder, &ledger, &before);
+        super::palw_kernel_route_fold_v1::flush(builder, &ledger, &before)?;
         row.applied_daa = Some(now);
     }
-    builder.write_kernel_row(PALW_HORIZON_EXTENSION_TABLE_V1, key, Some(encode(&row)));
+    builder.write_kernel_row(PALW_HORIZON_EXTENSION_TABLE_V1, key, Some(encode(&row)))?;
     Ok(())
 }
 
@@ -760,8 +776,8 @@ pub(super) fn sign_minimum_price_contract_v1(
         row.signed_daa = Some(now);
     }
     super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
-    builder.write_kernel_row(PALW_MINIMUM_PRICE_TABLE_V1, key, Some(encode(&row)));
-    builder.write_kernel_row(PALW_MINIMUM_PRICE_TABLE_V1, job_key, Some(id.to_vec()));
+    builder.write_kernel_row(PALW_MINIMUM_PRICE_TABLE_V1, key, Some(encode(&row)))?;
+    builder.write_kernel_row(PALW_MINIMUM_PRICE_TABLE_V1, job_key, Some(id.to_vec()))?;
     Ok(())
 }
 
@@ -885,7 +901,7 @@ pub(super) fn sweep_econ_contracts_v1(builder: &mut TransitionBuilder<'_>, ctx: 
         }
     }
     for (table, key) in retire {
-        builder.write_kernel_row(table, key, None);
+        builder.write_kernel_row(table, key, None)?;
     }
     Ok(())
 }

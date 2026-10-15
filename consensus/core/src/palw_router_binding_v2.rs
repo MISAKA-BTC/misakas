@@ -1,5 +1,5 @@
 //! **RFC-0006 routed-reader consumer v2: the immutable per-reader router binding** (kernel-route aux table 139, declared on object
-//! tag 170 past `palw_memory_routing_court_v2`).
+//! tag 244 past `palw_memory_routing_court_v2`).
 //!
 //! # What was missing
 //!
@@ -49,7 +49,7 @@ pub struct PalwRoutedReaderBindingV2 {
     pub router: u16,
 }
 
-/// **The registrant's declaration** (carried on tag 170, signed by the class's registrant bond).
+/// **The registrant's declaration** (carried on tag 244, signed by the class's registrant bond).
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwRouterBindingDeclarationV2 {
     pub version: u16,

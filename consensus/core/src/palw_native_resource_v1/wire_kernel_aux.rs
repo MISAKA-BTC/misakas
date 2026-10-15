@@ -102,6 +102,9 @@ pub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut Nativ
 // RFC-0006 consumer v2 (2026-10-15): the immutable per-reader router binding rows (aux 139, keyed by the 64-byte class id).
 139 if key_bytes==64=>crate::palw_router_binding_v2::PalwRouterBindingRowV2::scan_native_wire_v1(frame)?,
 139=>return Err(wire::wire_bad("unallocated router binding row namespace")),
+// RFC-0008 (2026-10-15): the once-only settlement markers (aux 140, keyed by the 64-byte obligation id; dormant fence).
+140 if key_bytes==64=>crate::palw_settlement_once_v1::PalwSettlementOnceRowV1::scan_native_wire_v1(frame)?,
+140=>return Err(wire::wire_bad("unallocated settlement-once row namespace")),
 // RFC-0018 (2026-10-15): SecurityCertified rows (aux 136, 65-byte keys: prefix ‖ 64-byte id).
 136 if key_bytes==65 && prefix==crate::palw_security_certification_v1::CERTIFICATION_CLAIM_PREFIX_V1=>crate::palw_security_certification_v1::PalwClaimCertificationRowV1::scan_native_wire_v1(frame)?,
 136 if key_bytes==65 && prefix==crate::palw_security_certification_v1::CERTIFICATION_CLASS_PREFIX_V1=>crate::palw_security_certification_v1::PalwCertificationClassRowV1::scan_native_wire_v1(frame)?,

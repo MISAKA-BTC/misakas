@@ -169,6 +169,7 @@ impl PalwStateParamsV2 {
             bond_formula_v2: None,
             reporter_income_from_daa: None,
             material_income_from_daa: None,
+            settlement_once_from_daa: None,
             monetary_material: None,
             material_release_recovery_v2: None,
             econ_contracts_v1: Default::default(),
@@ -760,6 +761,18 @@ impl PalwStateParamsV2 {
     }
     pub fn material_income_active_at(&self, daa: u64) -> bool {
         self.reporter_income_active_at(daa) && self.material_income_from_daa.is_some_and(|from| daa >= from)
+    }
+
+    /// RFC-0008 once-only settlement registry mirror (`Params::palw_settlement_once_v1`).
+    pub fn with_settlement_once_from(mut self, from: Option<u64>) -> Self {
+        self.settlement_once_from_daa = from;
+        self
+    }
+    pub fn settlement_once_from(&self) -> Option<u64> {
+        self.settlement_once_from_daa
+    }
+    pub fn settlement_once_active_at(&self, daa: u64) -> bool {
+        self.settlement_once_from_daa.is_some_and(|from| daa >= from)
     }
 
     pub fn with_paid_consumer_lifecycle(

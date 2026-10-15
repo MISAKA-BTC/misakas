@@ -14,8 +14,9 @@ fn refused(s: impl Into<String>) -> PalwStateV2Error {
 fn key(id: &Digest) -> Vec<u8> {
     borsh::to_vec(id).unwrap()
 }
-fn put<T: borsh::BorshSerialize>(b: &mut TransitionBuilder<'_>, table: u8, id: &Digest, v: &T) {
-    b.write_kernel_row(table, key(id), Some(borsh::to_vec(v).unwrap()));
+fn put<T: borsh::BorshSerialize>(b: &mut TransitionBuilder<'_>, table: u8, id: &Digest, v: &T) -> Result<(), PalwStateV2Error> {
+    b.write_kernel_row(table, key(id), Some(borsh::to_vec(v).unwrap()))?;
+    Ok(())
 }
 fn count(b: &TransitionBuilder<'_>, table: u8) -> usize {
     b.state.kernel_route.as_ref().map_or(0, |r| r.aux.keys().filter(|(t, _)| *t == table).count())
@@ -159,7 +160,7 @@ fn apply_inner(
             if b.state.kernel_route.as_ref().unwrap().aux.contains_key(&(PAID_CLAIM_CLASSES_V2, key(&class.id()))) {
                 return Err(refused("paid class already enrolled"));
             }
-            put(b, PAID_CLAIM_CLASSES_V2, &class.id(), class);
+            put(b, PAID_CLAIM_CLASSES_V2, &class.id(), class)?;
         }
         PaidClaimObjectV2::EnrollJob { job } => {
             let l = route_fold::load_ledger(b, ctx)?;
@@ -186,7 +187,7 @@ fn apply_inner(
             {
                 return Err(refused("paid job needs its actual payer's prospective consent before any claim"));
             }
-            put(b, PAID_CLAIM_JOBS_V2, &job.id(), job);
+            put(b, PAID_CLAIM_JOBS_V2, &job.id(), job)?;
         }
         PaidClaimObjectV2::Commit { enrollment: e, commit, salt } => {
             let l = route_fold::load_ledger(b, ctx)?;
@@ -284,15 +285,19 @@ fn apply_inner(
             };
             a.validate(&l).map_err(refused)?;
             let before = l.to_rows();
-            let row = l.claims.get_mut(&e.base_claim).unwrap();
-            row.life.state = misaka_palw_kernel::lifecycle::ClaimStateV1::Checking {
-                anchor_daa: ctx.daa_score,
-                deadline_daa: e.lifetime.checking_until,
-            };
-            row.life.final_hold_until = e.lifetime.dispute_until;
-            row.liability_until = Some(e.lifetime.liability_until);
+            // RFC-0006: the row's fixed-size lifetime fields change in place through the typed setter (no `DerefMut`).
+            let present = l.set_claim_lifetime_v1(
+                &e.base_claim,
+                misaka_palw_kernel::lifecycle::ClaimStateV1::Checking {
+                    anchor_daa: ctx.daa_score,
+                    deadline_daa: e.lifetime.checking_until,
+                },
+                e.lifetime.dispute_until,
+                Some(e.lifetime.liability_until),
+            );
+            assert!(present, "the base claim row was read above");
             extend_signed_kernel_income_v2(b, ctx, e.base_claim, *signer, e.lifetime.liability_until)?;
-            put(b, PAID_CLAIM_ENROLLMENTS_V2, &a.context.id(), &a);
+            put(b, PAID_CLAIM_ENROLLMENTS_V2, &a.context.id(), &a)?;
             for (prefix, kind, owner) in [
                 (PAID_CLAIM_ID_INDEX_PREFIX_V3, PalwPaidClaimIndexKindV3::Enrollment, e.id()),
                 (PAID_CLAIM_BASE_INDEX_PREFIX_V3, PalwPaidClaimIndexKindV3::BaseClaim, e.base_claim),
@@ -301,12 +306,12 @@ fn apply_inner(
                     PAID_CLAIM_ENROLLMENTS_V2,
                     paid_claim_index_key_v3(prefix, &owner),
                     Some(borsh::to_vec(&PalwPaidClaimIndexV3 { version: 3, kind, owner, target: a.context.id() }).unwrap()),
-                );
+                )?;
             }
             // Interim V1 receipts cannot cover this new verification identity.
-            b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key(&e.base_claim), None);
-            b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key(&e.base_claim), None);
-            route_fold::flush(b, &l, &before);
+            b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key(&e.base_claim), None)?;
+            b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key(&e.base_claim), None)?;
+            route_fold::flush(b, &l, &before)?;
             admit_review(
                 b,
                 ctx,
@@ -337,8 +342,8 @@ fn apply_inner(
             }
             a.sponsor = Some(*signer);
             let id = a.context.id();
-            put(b, PAID_CLAIM_ENROLLMENTS_V2, &id, &a);
-            put(b, crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4, &id, &a.source_target);
+            put(b, PAID_CLAIM_ENROLLMENTS_V2, &id, &a)?;
+            put(b, crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4, &id, &a.source_target)?;
             put(
                 b,
                 crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_FEE_TARGETS_V5,
@@ -349,13 +354,13 @@ fn apply_inner(
                     minimum_fee: minimum,
                     max_sources: cap,
                 },
-            );
+            )?;
             put(
                 b,
                 crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_COST_BOUNDS_V5,
                 &id,
                 &ff.policy.cost_bounds.ok_or_else(|| refused("paid claim cost scope missing"))?,
-            );
+            )?;
             let inner = KernelRouteObjectV1::FundBeaconSourceFee { terms: *terms };
             route_fold::apply_kernel_route_object_v1(b, ctx, &inner.encode(), signer)?;
             let l = b
@@ -401,7 +406,7 @@ fn apply_inner(
             if r.aux.contains_key(&(PAID_CLAIM_REVIEW_SCOPES_V2, key(&scope.id()))) {
                 return Err(refused("immutable review scope cannot be replaced/reset"));
             }
-            put(b, PAID_CLAIM_REVIEW_SCOPES_V2, &scope.id(), scope);
+            put(b, PAID_CLAIM_REVIEW_SCOPES_V2, &scope.id(), scope)?;
         }
         PaidClaimObjectV2::IndependenceEvidence { observation } => {
             observation.validate().map_err(refused)?;
@@ -417,7 +422,7 @@ fn apply_inner(
                 PAID_CLAIM_EVIDENCE_V2,
                 &observation.id(),
                 &PalwPaidClaimEvidenceV3::Independence { version: 3, observation: observation.clone() },
-            );
+            )?;
         }
         PaidClaimObjectV2::EconomicEvidence { observation, payment } => {
             observation.net_receipt().map_err(refused)?;
@@ -451,7 +456,7 @@ fn apply_inner(
                 PAID_CLAIM_EVIDENCE_V2,
                 &observation.id(),
                 &PalwPaidClaimEvidenceV3::Economic { version: 3, observation: observation.clone() },
-            );
+            )?;
         }
         PaidClaimObjectV2::StageMessage { enrollment, round, prior_transcript, message_root } => {
             round_message(b, ctx, signer, &p, enrollment, *round, *prior_transcript, *message_root)?
@@ -460,7 +465,7 @@ fn apply_inner(
         PaidClaimObjectV2::LockRound { enrollment, round } => round_lock(b, ctx, enrollment, *round)?,
         PaidClaimObjectV2::RoundReceipt { receipt } => round_receipt(b, ctx, signer, receipt)?,
     }
-    b.note_kernel_bond(signer);
+    b.note_kernel_bond(signer)?;
     Ok(())
 }
 fn r_has_job(b: &TransitionBuilder<'_>, base: &Digest) -> Result<bool, PalwStateV2Error> {
@@ -520,7 +525,7 @@ fn admit_review(
             beacons,
         )
         .map_err(refused)?;
-    put(b, PAID_CLAIM_REVIEW_COUNTERS_V2, &counter_id, &counter);
+    put(b, PAID_CLAIM_REVIEW_COUNTERS_V2, &counter_id, &counter)?;
     Ok(())
 }
 fn lock(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, enrollment: &Digest) -> Result<(), PalwStateV2Error> {
@@ -573,7 +578,7 @@ fn lock(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, enrollment: &Di
         quorum,
         source_valid: true,
     };
-    put(b, PAID_CLAIM_LOCKS_V2, enrollment, &row);
+    put(b, PAID_CLAIM_LOCKS_V2, enrollment, &row)?;
     Ok(())
 }
 fn receipt_fold(
@@ -612,14 +617,14 @@ fn receipt_fold(
     if r.aux.contains_key(&(PAID_CLAIM_RECEIPTS_V2, key(&id))) {
         return Err(refused("paid receipt signer already counted"));
     }
-    put(b, PAID_CLAIM_RECEIPTS_V2, &id, receipt);
+    put(b, PAID_CLAIM_RECEIPTS_V2, &id, receipt)?;
     let mut l = route_fold::load_ledger(b, ctx)?;
     let before = l.to_rows();
     if l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
         l.try_apply_paid_claim_tally_checked_v2(&a.enrollment.base_claim)
             .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     }
-    route_fold::flush(b, &l, &before);
+    route_fold::flush(b, &l, &before)?;
     Ok(())
 }
 pub(super) fn tick_paid_claim_final_projection_v2(
@@ -672,7 +677,7 @@ pub(super) fn tick_paid_claim_final_projection_v2(
         }
     }
     for p in projections {
-        put(b, PAID_CLAIM_FINALS_V2, &p.enrollment, &p);
+        put(b, PAID_CLAIM_FINALS_V2, &p.enrollment, &p)?;
     }
     let _ = ctx;
     Ok(())
@@ -856,10 +861,10 @@ pub(super) fn refresh_pending_paid_source_locks_v2(
         }
     }
     for (key, row) in invalid_rounds {
-        b.write_kernel_row(PAID_CLAIM_ROUNDS_V2, key, Some(borsh::to_vec(&row).unwrap()));
+        b.write_kernel_row(PAID_CLAIM_ROUNDS_V2, key, Some(borsh::to_vec(&row).unwrap()))?;
     }
     for (key, row) in invalid {
-        b.write_kernel_row(PAID_CLAIM_LOCKS_V2, key, Some(borsh::to_vec(&row).unwrap()));
+        b.write_kernel_row(PAID_CLAIM_LOCKS_V2, key, Some(borsh::to_vec(&row).unwrap()))?;
     }
     Ok(())
 }
@@ -947,7 +952,7 @@ fn round_message(
     )
     .map_err(refused)?;
     admit_review(b, ctx, policy, &a, row.id(), u32::from(plan.mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon))?;
-    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
+    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row)?;
     if plan.mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
         b.write_kernel_row(
             PAID_CLAIM_ROUNDS_V2,
@@ -961,7 +966,7 @@ fn round_message(
                 })
                 .unwrap(),
             ),
-        );
+        )?;
     }
     Ok(())
 }
@@ -996,8 +1001,8 @@ fn round_fund(
     }
     row.sponsor = Some(*signer);
     let id = row.context.id();
-    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
-    put(b, crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4, &id, &row.target);
+    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row)?;
+    put(b, crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4, &id, &row.target)?;
     put(
         b,
         crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_FEE_TARGETS_V5,
@@ -1008,13 +1013,13 @@ fn round_fund(
             minimum_fee: minimum,
             max_sources: cap,
         },
-    );
+    )?;
     put(
         b,
         crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_COST_BOUNDS_V5,
         &id,
         &ff.policy.cost_bounds.ok_or_else(|| refused("round cost scope missing"))?,
-    );
+    )?;
     route_fold::apply_kernel_route_object_v1(b, ctx, &KernelRouteObjectV1::FundBeaconSourceFee { terms: *terms }.encode(), signer)?;
     let l = b
         .state
@@ -1096,7 +1101,7 @@ fn round_lock(
         &*r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
     )
     .map_err(refused)?;
-    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
+    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row)?;
     Ok(())
 }
 fn round_receipt(
@@ -1125,13 +1130,13 @@ fn round_receipt(
         &*r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
     )
     .map_err(refused)?;
-    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
+    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row)?;
     let mut l = route_fold::load_ledger(b, ctx)?;
     let before = l.to_rows();
     if l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
         l.try_apply_paid_claim_tally_checked_v2(&a.enrollment.base_claim)
             .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     }
-    route_fold::flush(b, &l, &before);
+    route_fold::flush(b, &l, &before)?;
     Ok(())
 }

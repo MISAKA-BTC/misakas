@@ -27,12 +27,13 @@ fn row_of<T: borsh::BorshDeserialize>(state: &PalwChainStateV2, key: &[u8]) -> O
     state.kernel_route.as_ref()?.aux_row::<T>(PALW_SECURITY_CERTIFICATION_TABLE_V1, key)
 }
 
-fn write_row<T: borsh::BorshSerialize>(builder: &mut TransitionBuilder<'_>, key: Vec<u8>, row: Option<&T>) {
+fn write_row<T: borsh::BorshSerialize>(builder: &mut TransitionBuilder<'_>, key: Vec<u8>, row: Option<&T>) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(
         PALW_SECURITY_CERTIFICATION_TABLE_V1,
         key,
         row.map(|r| borsh::to_vec(r).expect("a certification row serializes")),
-    );
+    )?;
+    Ok(())
 }
 
 fn policy_governing_claim(builder: &TransitionBuilder<'_>, claim: &PalwClaimStateV2) -> Option<PalwSecurityCertificationPolicyV1> {
@@ -78,11 +79,11 @@ pub(super) fn commit_at_final_v1(
         payout_payload: bond.payout_payload.as_bytes(),
         outcome: None,
     };
-    write_row(builder, key, Some(&row));
+    write_row(builder, key, Some(&row))?;
     let class_key = certification_class_key_v1(&row.class_id);
     let mut counters = row_of::<PalwCertificationClassRowV1>(&builder.state, &class_key).unwrap_or_default();
     counters.committed = counters.committed.saturating_add(1);
-    write_row(builder, class_key, Some(&counters));
+    write_row(builder, class_key, Some(&counters))?;
     Ok(())
 }
 
@@ -126,20 +127,21 @@ pub(super) fn commit_native_mining_v39(
         payout_payload: bond.payout_payload.as_bytes(),
         outcome: None,
     };
-    write_row(builder, key, Some(&row));
+    write_row(builder, key, Some(&row))?;
     let class_key = certification_class_key_v1(&row.class_id);
     let mut counters = row_of::<PalwCertificationClassRowV1>(&builder.state, &class_key).unwrap_or_default();
     counters.committed = counters.committed.saturating_add(1);
-    write_row(builder, class_key, Some(&counters));
+    write_row(builder, class_key, Some(&counters))?;
     Ok(())
 }
 
 /// The native fold's collection of a decided mining claim retires its `'V'` row (its receipt no longer reads it).
-pub(super) fn retire_native_mining_v39(builder: &mut TransitionBuilder<'_>, mining_claim: &Hash64) {
+pub(super) fn retire_native_mining_v39(builder: &mut TransitionBuilder<'_>, mining_claim: &Hash64) -> Result<(), PalwStateV2Error> {
     let key = certification_native_key_v39(&palw_native_certification_id_v39(mining_claim));
     if row_of::<PalwClaimCertificationRowV1>(&builder.state, &key).is_some_and(|row| row.outcome.is_some()) {
-        write_row::<PalwClaimCertificationRowV1>(builder, key, None);
+        write_row::<PalwClaimCertificationRowV1>(builder, key, None)?;
     }
+    Ok(())
 }
 
 /// **The coinbase site at `Final`**: past the fence the issuance-funded reward leg (the attempt escrow carved from block subsidy)
@@ -157,7 +159,7 @@ pub(super) fn hold_issuance_reward_at_final_v1(
     let mut row: PalwClaimCertificationRowV1 =
         row_of(&builder.state, &key).ok_or_else(|| refuse("a governed Final has no certification row (commit_at_final_v1 runs first)"))?;
     row.held_reward = row.held_reward.checked_add(escrow).ok_or(PalwStateV2Error::Overflow("held certification reward"))?;
-    write_row(builder, key, Some(&row));
+    write_row(builder, key, Some(&row))?;
     Ok(0)
 }
 
@@ -215,7 +217,7 @@ pub(super) fn try_attest_claim_certification_v1(
             transcript: if positive { attestation.transcript } else { [0u8; 64] },
             attested_daa: now,
         });
-        write_row(builder, key.clone(), Some(&row));
+        write_row(builder, key.clone(), Some(&row))?;
         Ok(())
     })())
 }
@@ -265,7 +267,7 @@ pub(super) fn ensure_frontier_floor_v1(
     }
     super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
     let floor = PalwCertifiedFrontierFloorV1 { blue_score: frontier.0, block: frontier.1.as_bytes() };
-    write_row(builder, certification_frontier_floor_key_v1(), Some(&floor));
+    write_row(builder, certification_frontier_floor_key_v1(), Some(&floor))?;
     Ok(())
 }
 
@@ -283,7 +285,7 @@ pub(super) fn note_retirement_frontier_floor_v1(
         return Ok(());
     }
     let raised = PalwCertifiedFrontierFloorV1 { blue_score: claim.accepted_blue_score, block: claim.accepted_block.as_bytes() };
-    write_row(builder, certification_frontier_floor_key_v1(), Some(&raised));
+    write_row(builder, certification_frontier_floor_key_v1(), Some(&raised))?;
     Ok(())
 }
 
@@ -316,11 +318,27 @@ fn credit_certified_v1(
     if matches!(claim.source, PalwClaimSourceV2::Attempt) {
         builder.settle_anchor(now, true)?;
     }
-    if row.held_reward > 0 {
+    // RFC-0008 once-only settlement (dormant): the held issuance reward is named once across every consumer. This guards the
+    // PAYMENT only; the weight credit above is Gate C's own (SecurityCertified) and is neither added nor read here.
+    let releases = row.held_reward > 0 && {
+        use crate::palw_settlement_once_v1::{
+            PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+        };
+        builder
+            .settle_once_v1(
+                now,
+                PalwSettlementObligationV1::of(PalwSettlementLegV1::CertificationRelease, claim_id.as_bytes()),
+                PalwSettlementConsumerV1::SecurityCertification,
+                row.held_reward,
+                PalwSettlementDebitV1::Held { amount: row.held_reward },
+            )?
+            .pays()
+    };
+    if releases {
         let key = palw_certification_payout_key_v1(claim_id);
         let held = builder.state.pending_payouts.get(&key).map(|p| p.amount).unwrap_or(0);
         let amount = held.checked_add(row.held_reward).ok_or(PalwStateV2Error::Overflow("certified reward"))?;
-        builder.write_payout(key, Some(PalwPayoutV2 { payload: Hash64::from_bytes(row.payout_payload), amount }));
+        builder.write_payout(key, Some(PalwPayoutV2 { payload: Hash64::from_bytes(row.payout_payload), amount }))?;
     }
     Ok(())
 }
@@ -362,7 +380,7 @@ pub(super) fn sweep_security_certification_v1(
         if row.outcome.is_some() {
             // A decided native row is retired by the native fold's own collection (its receipt reads it), never here.
             if claim.is_none() && !native {
-                write_row::<PalwClaimCertificationRowV1>(builder, key, None);
+                write_row::<PalwClaimCertificationRowV1>(builder, key, None)?;
             }
             continue;
         }
@@ -396,7 +414,10 @@ pub(super) fn sweep_security_certification_v1(
             } else {
                 PalwCertificationClaimFactsV1 {
                     still_final: claim.as_ref().is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::Final { .. })),
-                    accusation_pending: builder.state.palw_accusation_pending_v1(&claim_id),
+                    // G14 R6: an ORIGINAL TIR frame's conviction door is a pending prosecution for Gate C until it closes — the
+                    // decision waits (never a deadline failure), so no SecurityCertified credit precedes the last possible verdict.
+                    accusation_pending: builder.state.palw_accusation_pending_v1(&claim_id)
+                        || builder.state.palw_tir_public_prosecution_open_v1(&claim_id, now),
                 }
             };
             if let Some(outcome) = palw_certification_verdict_v1(&policy, &row, facts, now) {
@@ -408,7 +429,7 @@ pub(super) fn sweep_security_certification_v1(
             if outcome.certifies() {
                 // Write the decided row FIRST: the credit's own reads (`palw_independently_work_certified_v1` in any re-derivation
                 // this block runs) then see the claim certified.
-                write_row(builder, key.clone(), Some(&row));
+                write_row(builder, key.clone(), Some(&row))?;
                 // Credit only what the ONE predicate certifies (the U-2 bar, a void, the fence — all inside it), so the credit and every
                 // re-derivation read the same answer.
                 if let Some(claim) = claim.as_ref()
@@ -429,14 +450,14 @@ pub(super) fn sweep_security_certification_v1(
                 // The held issuance-funded reward is never named (burned: never minted), as a voided escrow's.
                 counters.failed = counters.failed.saturating_add(1);
             }
-            write_row(builder, class_key, Some(&counters));
+            write_row(builder, class_key, Some(&counters))?;
         }
         if changed {
-            write_row(builder, key, Some(&row));
+            write_row(builder, key, Some(&row))?;
         }
     }
     if network != network_before {
-        write_row(builder, certification_network_key_v1(), Some(&network));
+        write_row(builder, certification_network_key_v1(), Some(&network))?;
     }
     Ok(())
 }

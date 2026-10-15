@@ -490,6 +490,36 @@ impl NativeRetainedV1<Store> {
             value.admit_material(consent, manifest, max_bytes, total_capacity, held, positions, segmented, ledger, authority)
         })
     }
+    /// **RFC-0008: [`Self::provider_admit_material_v1`] with the refusing capacity class kept** (`crate::palw_capacity_classes_v1`):
+    /// the owner's typed-RAM reservation is `Local { TypedRam }`; the store's local raw byte total is `Local { RawMaterial }`; its
+    /// retained-contract count is `Local { Metadata }`; the signed per-consent cap, substitution, incompleteness and
+    /// authentication are `Semantic`. No class's refusal is reported as another's, and none is a string to be re-parsed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn provider_admit_material_classified_v1(
+        &self,
+        consent: Hash64,
+        manifest: &PalwMaterialManifestV1,
+        max_bytes: u64,
+        total_capacity: u64,
+        held: &[PalwHeldMaterialBundleV1],
+        positions: &[PalwKernelMaterialBundleV1],
+        segmented: &[PalwSegmentedMaterialBundleV1],
+        ledger: Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,
+        authority: impl FnMut(Hash64) -> Option<PalwMaterialNativeAuthorityV1>,
+    ) -> Result<Self, crate::palw_capacity_classes_v1::PalwCapacityRefusalV1> {
+        use crate::palw_capacity_classes_v1::{PalwCapacityClassV1 as Class, PalwCapacityRefusalV1 as Refusal};
+        use crate::palw_native_resource_v1::NativeOwnerMutationErrorV1 as M;
+        const PATH: &str = "provider material admission";
+        let quote = growth(manifest, held, positions, segmented, ledger).map_err(|why| Refusal::local(Class::TypedRam, PATH, why))?;
+        self.try_mutate_owner_classified_v1(quote, |value| {
+            value.admit_material(consent, manifest, max_bytes, total_capacity, held, positions, segmented, ledger, authority)
+        })
+        .map_err(|error| match error {
+            M::TypedRam(why) => Refusal::local(Class::TypedRam, PATH, why),
+            M::Bound(why) => Refusal::local(Class::TypedRam, PATH, why),
+            M::Rejected(why) => Refusal::of_material_v1(PATH, &why),
+        })
+    }
     pub fn provider_release_finalized_v1(
         &self,
         root: Hash64,

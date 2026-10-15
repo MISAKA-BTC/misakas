@@ -443,7 +443,7 @@ impl KernelLedgerCacheV1 {
         self.0.as_ref().map(|ledger| ledger.try_clone_v1()).transpose()
     }
     pub(crate) fn set_native_projection(&mut self, mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1) {
-        ledger.flat_conformance_classes_v9.clear();
+        ledger.clear_flat_conformance_classes_v9();
         self.0 = Some(std::sync::Arc::new(ledger));
         self.1 = true;
     }
@@ -542,9 +542,9 @@ impl PalwKernelRouteStateV1 {
         use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
         let commitment_scope = self.commitment_scope_checked_v1()?;
         let scoped = |mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1| -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwKernelLedgerProjectionErrorV1> {
-            ledger.commitment_scope_from_daa = commitment_scope;
+            ledger.set_commitment_scope_from_daa_v1(commitment_scope);
             ledger.reserve_projection_v1(self).map_err(E::Resource)?;
-            self.apply_paid_claim_consumer_inputs_v2(&mut ledger).map_err(E::Decode)?;
+            self.apply_paid_claim_consumer_inputs_v2(ledger.paid_consumer_projection_mut_v1()).map_err(E::Decode)?;
             Ok(ledger)
         };
         if let Some(cached) = self.ledger_cache.get_reserved_v1().map_err(E::Resource)? {
@@ -1478,9 +1478,10 @@ impl PalwKernelRouteStateV1 {
             );
             PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut cached = cached;
-            cached.commitment_scope_from_daa = commitment_scope;
+            // RFC-0006: the reserved ledger is mutated only through its typed methods (no `DerefMut`).
+            cached.set_commitment_scope_from_daa_v1(commitment_scope);
             cached.reserve_projection_v1(self).map_err(E::Resource)?;
-            self.apply_paid_claim_consumer_inputs_v2(&mut cached).map_err(E::Decode)?;
+            self.apply_paid_claim_consumer_inputs_v2(cached.paid_consumer_projection_mut_v1()).map_err(E::Decode)?;
             return Ok(cached);
         }
         let lease = crate::palw_native_resource_v1::reserve_ledger_expansion_v1(self, true).map_err(E::Resource)?;

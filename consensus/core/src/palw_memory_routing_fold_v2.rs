@@ -1,9 +1,9 @@
-//! **The fold of object tag 170** (RFC-0006 memory/routing consumer v2, `crate::palw_memory_routing_v2`). A child module of
+//! **The fold of object tag 244** (RFC-0006 memory/routing consumer v2, `crate::palw_memory_routing_v2`). A child module of
 //! `palw_state_v2`, so it reaches the builder's one writers (the claim conviction, the seat slash, the kernel-route aux row) and
 //! nothing else.
 //!
 //! Every entry refuses without the per-block extras `memory_routing_court` (the fence's runtime mirror — absent on every shipped
-//! network, where the A-2 gate never lets a tag-170 object reach the fold at all), and a refusal writes nothing.
+//! network, where the A-2 gate never lets a tag-244 object reach the fold at all), and a refusal writes nothing.
 use super::*;
 use crate::palw_memory_routing_v2::{PalwMemoryRoutingObjectV2, palw_memory_routing_verdict_v2};
 use crate::palw_router_binding_v2::{
@@ -50,7 +50,7 @@ pub(super) fn apply_memory_routing_v2(
                 readers: declaration.readers.clone(),
             };
             let bytes = borsh::to_vec(&row).map_err(|_| PalwStateV2Error::ImmutableModelUpdate("router binding row encoding"))?;
-            builder.write_kernel_row(PALW_ROUTER_BINDING_TABLE_V2, palw_router_binding_key_v2(&declaration.class_id), Some(bytes));
+            builder.write_kernel_row(PALW_ROUTER_BINDING_TABLE_V2, palw_router_binding_key_v2(&declaration.class_id), Some(bytes))?;
             Ok(())
         }
         // The one-move accusation: the framing checks of tag 243's arm, then consumer v2's terminal, then the same settlement.
