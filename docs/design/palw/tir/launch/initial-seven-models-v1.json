@@ -22,7 +22,25 @@
       "status": "NOT_RUN",
       "runtime_variant": null,
       "complete_artifact_pin": null,
-      "source_declared_context_max": null
+      "source_declared_context_max": 32768,
+      "source_weight_files": [
+        "model.safetensors"
+      ],
+      "publisher_metadata_files": [
+        "config.json",
+        "generation_config.json",
+        "merges.txt",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "vocab.json"
+      ],
+      "publisher_configuration_metadata": {
+        "path": "publisher-metadata/dense-1p5b/config.json",
+        "sha256": "98d2ff8cc47488d08a2b0b3acf4eb99ef210779b42bd48605f6b8e36acdbf670",
+        "publisher_repository": "Qwen/Qwen2.5-1.5B-Instruct",
+        "publisher_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+        "publisher_path": "config.json"
+      }
     },
     {
       "id": "dense-8b",
@@ -43,7 +61,20 @@
       "status": "NOT_RUN",
       "runtime_variant": null,
       "complete_artifact_pin": null,
-      "source_declared_context_max": null
+      "source_declared_context_max": null,
+      "source_weight_files": [
+        "model-00001-of-00004.safetensors",
+        "model-00002-of-00004.safetensors",
+        "model-00003-of-00004.safetensors",
+        "model-00004-of-00004.safetensors"
+      ],
+      "publisher_metadata_files": [
+        "config.json",
+        "generation_config.json",
+        "model.safetensors.index.json",
+        "tokenizer.json",
+        "tokenizer_config.json"
+      ]
     },
     {
       "id": "dense-14b",
@@ -64,7 +95,33 @@
       "status": "NOT_RUN",
       "runtime_variant": null,
       "complete_artifact_pin": null,
-      "source_declared_context_max": null
+      "source_declared_context_max": 40960,
+      "source_weight_files": [
+        "model-00001-of-00008.safetensors",
+        "model-00002-of-00008.safetensors",
+        "model-00003-of-00008.safetensors",
+        "model-00004-of-00008.safetensors",
+        "model-00005-of-00008.safetensors",
+        "model-00006-of-00008.safetensors",
+        "model-00007-of-00008.safetensors",
+        "model-00008-of-00008.safetensors"
+      ],
+      "publisher_metadata_files": [
+        "config.json",
+        "generation_config.json",
+        "merges.txt",
+        "model.safetensors.index.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "vocab.json"
+      ],
+      "publisher_configuration_metadata": {
+        "path": "publisher-metadata/dense-14b/config.json",
+        "sha256": "e73c3664ca09b10a673fef0c22e8a6b456201d49bd4713c9691f775720e8857a",
+        "publisher_repository": "Qwen/Qwen3-14B",
+        "publisher_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+        "publisher_path": "config.json"
+      }
     },
     {
       "id": "dense-24b",
@@ -87,7 +144,33 @@
       "status": "NOT_RUN",
       "runtime_variant": null,
       "complete_artifact_pin": null,
-      "source_declared_context_max": null
+      "source_declared_context_max": 131072,
+      "source_weight_files": [
+        "model-00001-of-00010.safetensors",
+        "model-00002-of-00010.safetensors",
+        "model-00003-of-00010.safetensors",
+        "model-00004-of-00010.safetensors",
+        "model-00005-of-00010.safetensors",
+        "model-00006-of-00010.safetensors",
+        "model-00007-of-00010.safetensors",
+        "model-00008-of-00010.safetensors",
+        "model-00009-of-00010.safetensors",
+        "model-00010-of-00010.safetensors"
+      ],
+      "publisher_metadata_files": [
+        "config.json",
+        "generation_config.json",
+        "model.safetensors.index.json",
+        "params.json",
+        "tekken.json"
+      ],
+      "publisher_configuration_metadata": {
+        "path": "publisher-metadata/dense-24b/config.json",
+        "sha256": "01ab910a5dda7995709cc355d094eabb8094b78d49240cd167188606c3ff5edb",
+        "publisher_repository": "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+        "publisher_revision": "95a6d26c4bfb886c58daf9d3f7332c857cb27b43",
+        "publisher_path": "config.json"
+      }
     },
     {
       "id": "dense-32b",
@@ -108,7 +191,42 @@
       "status": "NOT_RUN",
       "runtime_variant": null,
       "complete_artifact_pin": null,
-      "source_declared_context_max": null
+      "source_declared_context_max": 40960,
+      "source_weight_files": [
+        "model-00001-of-00017.safetensors",
+        "model-00002-of-00017.safetensors",
+        "model-00003-of-00017.safetensors",
+        "model-00004-of-00017.safetensors",
+        "model-00005-of-00017.safetensors",
+        "model-00006-of-00017.safetensors",
+        "model-00007-of-00017.safetensors",
+        "model-00008-of-00017.safetensors",
+        "model-00009-of-00017.safetensors",
+        "model-00010-of-00017.safetensors",
+        "model-00011-of-00017.safetensors",
+        "model-00012-of-00017.safetensors",
+        "model-00013-of-00017.safetensors",
+        "model-00014-of-00017.safetensors",
+        "model-00015-of-00017.safetensors",
+        "model-00016-of-00017.safetensors",
+        "model-00017-of-00017.safetensors"
+      ],
+      "publisher_metadata_files": [
+        "config.json",
+        "generation_config.json",
+        "merges.txt",
+        "model.safetensors.index.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "vocab.json"
+      ],
+      "publisher_configuration_metadata": {
+        "path": "publisher-metadata/dense-32b/config.json",
+        "sha256": "97e295b63283935788fac5e4f8860862a56d4089538cafc93f0431f2ebe483bb",
+        "publisher_repository": "Qwen/Qwen3-32B",
+        "publisher_revision": "9216db5781bf21249d130ec9da846c4624c16137",
+        "publisher_path": "config.json"
+      }
     },
     {
       "id": "dense-70b",
@@ -129,7 +247,46 @@
       "status": "NOT_RUN",
       "runtime_variant": null,
       "complete_artifact_pin": null,
-      "source_declared_context_max": null
+      "source_declared_context_max": null,
+      "source_weight_files": [
+        "model-00001-of-00030.safetensors",
+        "model-00002-of-00030.safetensors",
+        "model-00003-of-00030.safetensors",
+        "model-00004-of-00030.safetensors",
+        "model-00005-of-00030.safetensors",
+        "model-00006-of-00030.safetensors",
+        "model-00007-of-00030.safetensors",
+        "model-00008-of-00030.safetensors",
+        "model-00009-of-00030.safetensors",
+        "model-00010-of-00030.safetensors",
+        "model-00011-of-00030.safetensors",
+        "model-00012-of-00030.safetensors",
+        "model-00013-of-00030.safetensors",
+        "model-00014-of-00030.safetensors",
+        "model-00015-of-00030.safetensors",
+        "model-00016-of-00030.safetensors",
+        "model-00017-of-00030.safetensors",
+        "model-00018-of-00030.safetensors",
+        "model-00019-of-00030.safetensors",
+        "model-00020-of-00030.safetensors",
+        "model-00021-of-00030.safetensors",
+        "model-00022-of-00030.safetensors",
+        "model-00023-of-00030.safetensors",
+        "model-00024-of-00030.safetensors",
+        "model-00025-of-00030.safetensors",
+        "model-00026-of-00030.safetensors",
+        "model-00027-of-00030.safetensors",
+        "model-00028-of-00030.safetensors",
+        "model-00029-of-00030.safetensors",
+        "model-00030-of-00030.safetensors"
+      ],
+      "publisher_metadata_files": [
+        "config.json",
+        "generation_config.json",
+        "model.safetensors.index.json",
+        "tokenizer.json",
+        "tokenizer_config.json"
+      ]
     },
     {
       "id": "moe-35b-a3b",
@@ -153,7 +310,16 @@
       "status": "NOT_RUN",
       "runtime_variant": null,
       "complete_artifact_pin": null,
-      "source_declared_context_max": null
+      "source_declared_context_max": null,
+      "source_weight_files": null,
+      "publisher_metadata_files": [],
+      "publisher_configuration_metadata": {
+        "path": "publisher-metadata/moe-35b-a3b/qwen3.6-35b-a3b-claude-4.7-profile.json",
+        "sha256": "6262302208656f3b22936272e148378c71f7de6e8e90b28f67138629137ca48a",
+        "publisher_repository": "Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
+        "publisher_revision": "bbc2f6c3dc7940efe12698a4b09a4cd983e21b38",
+        "publisher_path": "config/qwen3.6-35b-a3b-claude-4.7-profile.json"
+      }
     }
   ],
   "publisher_repositories": [
