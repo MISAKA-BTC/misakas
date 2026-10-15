@@ -20,7 +20,13 @@ async fn execution11_native_unknown_seal_chunk64_drops_before_allocation_with_or
         signature.clear();
         let before = net.api().map(|r|r.aux).unwrap_or_default();
         let collateral = net.collateral(7);
-        net.send(vec![(7, unsigned), (7, signed)]).await;
+        // An unsigned chunk never reaches a block: the ride rule refuses it at the mempool
+        // (anyone could otherwise open a group as any bond). Only the signed one is carried.
+        let saved = net.funding[7].clone();
+        let tx = net.carrier(7, &unsigned);
+        assert!(net.mempool(&tx).is_err(), "an unsigned native chunk is refused before any fold");
+        net.funding[7] = saved;
+        net.send(vec![(7, signed)]).await;
         let after = net.api();
         let after_aux = after.as_ref().map(|r|r.aux.clone()).unwrap_or_default();
         for table in [EXECUTION_QUOTA_TABLE_V11, EXECUTION_SEAL_TABLE_V11, EXECUTION_DEMAND_TABLE_V11] {

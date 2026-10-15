@@ -20,6 +20,24 @@ fn native_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
 async fn action(net: &mut Net, actor: usize, kind: u8, body: Vec<u8>) {
     send(net, actor, &K::FundedExecutionV11 { action: kind, body }).await;
 }
+/// The node's own mempool refuses this signed object (the processor's fixed preflight
+/// rejects it before any fold). The card's funding chain is restored afterwards.
+fn mempool_refuses(net: &mut Net, actor: usize, kind: u8, body: Vec<u8>) -> bool {
+    let saved = net.funding[actor].clone();
+    let object = net.route(actor, &K::FundedExecutionV11 { action: kind, body });
+    let tx = net.carrier(actor, &object);
+    let refused = net.mempool(&tx).is_err();
+    net.funding[actor] = saved;
+    refused
+}
+/// Minted outputs plus EVERY pending queue owed to the card's payee — the v13 design keeps
+/// original principal refunds in a per-job queue, not the pooled kernel payout key.
+fn payee_minted_and_owed_all_queues(net: &Net, card: usize) -> u64 {
+    let (minted, _) = minted_and_owed(net, &net.chain, card);
+    let state = net.chain.tip_state().1;
+    let payload = state.bond(&net.bond(card)).expect("the bond").payout_payload;
+    minted + state.pending_payouts_iter().filter(|(_, p)| p.payload == payload).map(|(_, p)| p.amount).sum::<u64>()
+}
 async fn funded(
     net: &mut Net,
     f: &Sparse9,
@@ -87,13 +105,11 @@ async fn execution11_native_original_escrow_monotone_nonce_unclaimed_refund_once
         net.api().unwrap().aux_row(EXECUTION_CREDIT_TABLE_V11, &borsh::to_vec(&id).unwrap()).unwrap();
     assert_eq!(credit.requester_refund, 20);
     assert_eq!(credit.producer_credit, 0);
-    let paid = minted_and_owed(&net, &net.chain, 2);
-    assert_eq!(paid.0 + paid.1, 20);
+    assert_eq!(payee_minted_and_owed_all_queues(&net, 2), 20);
     action(&mut net, 2, EXECUTION_ACTION_CLOSE_V11, borsh::to_vec(&id).unwrap()).await;
     let replay = net.replay().await;
     net.assert_same(&replay, "native original funded nonce, escrow and once-only unclaimed refund");
-    let paid = minted_and_owed(&net, &net.chain, 2);
-    assert_eq!(paid.0 + paid.1, 20);
+    assert_eq!(payee_minted_and_owed_all_queues(&net, 2), 20, "the refund is paid exactly once");
 }
 #[tokio::test]
 async fn execution11_native_commit_binds_original_job_input_and_reserves_producer_but_incomplete_final_cannot_pay() {
@@ -136,15 +152,11 @@ async fn execution11_native_commit_binds_original_job_input_and_reserves_produce
 #[tokio::test]
 async fn native_final27_actions_below_their_fence_are_neither_rejected_nor_applied() {
     let mut net = Net::over_cfg(native_config(), TestConsensus::new);
-    assert!(net.api().is_some(), "kernel route in force");
+    // The route's state may not exist before its first folded object: absent = no native rows.
     let native = |net: &Net| -> Vec<((u8, Vec<u8>), Vec<u8>)> {
         net.api()
-            .unwrap()
-            .aux
-            .iter()
-            .filter(|((table, _), _)| (87..=112).contains(table))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
+            .map(|r| r.aux.iter().filter(|((table, _), _)| (87..=112).contains(table)).map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default()
     };
     let before = native(&net);
     let bonds_before = net.chain.tip_state().1.bond(&net.bond(0)).map(|b| b.collateral);

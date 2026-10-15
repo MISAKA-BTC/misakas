@@ -344,12 +344,25 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, signature } => {
             if signature.is_empty() {
                 Err("a kernel route chunk must carry its opener's signature — unsigned, anyone could open a group as any bond")
-            } else if chunk.count == 0
-                || chunk.count > crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT
-                || chunk.index >= chunk.count
-                || chunk.bytes.is_empty()
-                || chunk.bytes.len() > crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES
-            {
+            } else if {
+                // Native targets 6/7 own their paid protected lane: up to 64 fragments of
+                // 32 KiB (`palw_kernel_chunks_v1`, the funded/stage folds); all others keep 16.
+                let native = matches!(
+                    chunk.target,
+                    crate::palw_kernel_route_v1::PalwKernelChunkTargetV1::FundedProofV11 { .. }
+                        | crate::palw_kernel_route_v1::PalwKernelChunkTargetV1::StageProofV14 { .. }
+                );
+                let (count_cap, byte_cap) = if native {
+                    (64u8, misaka_palw_kernel::flat_quota11::PROTECTED_FRAGMENT_BYTES_V11 as usize)
+                } else {
+                    (crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT, crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES)
+                };
+                chunk.count == 0
+                    || chunk.count > count_cap
+                    || chunk.index >= chunk.count
+                    || chunk.bytes.is_empty()
+                    || chunk.bytes.len() > byte_cap
+            } {
                 Err("a kernel route chunk's index, count or part is out of range")
             } else {
                 Ok(())

@@ -73,8 +73,8 @@ async fn execution11_native_source15_signed_nested_failures_spend_original_attem
     let before = source_row(&net, job);
     let mut hostile = pending.to_vec();
     hostile.extend_from_slice(&u32::MAX.to_le_bytes());
-    // Wrong owner is rejected by fixed preflight before source reservation.
-    action(&mut net, 6, EXECUTION_ACTION_SOURCE_ANSWER_V16, hostile.clone()).await;
+    // Wrong owner is rejected by fixed preflight before source reservation (never carried).
+    assert!(mempool_refuses(&mut net, 6, EXECUTION_ACTION_SOURCE_ANSWER_V16, hostile.clone()));
     assert_eq!(source_row(&net, job), before);
     let requester_before = net.collateral(7);
     let producer_before = minted_and_owed(&net, &net.chain, 0);
@@ -88,7 +88,8 @@ async fn execution11_native_source15_signed_nested_failures_spend_original_attem
         assert!(!net.api().unwrap().execution_source_demand_v16(&pending).unwrap().settled);
     }
     let exhausted = source_row(&net, job);
-    action(&mut net, 0, EXECUTION_ACTION_SOURCE_ANSWER_V16, hostile).await;
+    // Both original attempts are spent: the owner preflight refuses a third packet outright.
+    assert!(mempool_refuses(&mut net, 0, EXECUTION_ACTION_SOURCE_ANSWER_V16, hostile));
     assert_eq!(source_row(&net, job), exhausted, "third invalid packet gets no fresh original attempt");
     assert_eq!(net.collateral(7), requester_before, "malformed producer callbacks do not collect the requester's delivery bond");
     assert_eq!(minted_and_owed(&net, &net.chain, 0), producer_before, "undelivered PC bytes earn no producer DA fee");
@@ -122,7 +123,8 @@ async fn execution11_native_original_pc_header_delivery_capped_income_once_and_i
     assert!(fees.earned + fees.plan.reward <= 100);
     let now = minted_and_owed(&net, &net.chain, 0);
     assert_eq!(now.0 + now.1 - producer.0 - producer.1, fees.earned);
-    action(&mut net, 0, EXECUTION_ACTION_SOURCE_ANSWER_V16, body).await;
+    // A settled unit has no live owner: the duplicate is refused before any fold.
+    assert!(mempool_refuses(&mut net, 0, EXECUTION_ACTION_SOURCE_ANSWER_V16, body));
     assert_eq!(source_row(&net, job).answers_used, old.answers_used + 1);
     assert_eq!(minted_and_owed(&net, &net.chain, 0), now);
     let replay = net.replay().await;
