@@ -229,6 +229,17 @@ pub enum PalwMonetaryMaterialActionV1 {
     },
     /// Appended version, independently fenced. Existing variant bytes do not change.
     RecoveryV2(Box<crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2>),
+    /// Explicit generation binding for new complete material acquisition.
+    /// Old Challenge (variant 4) retains its original bytes/meaning.
+    ChallengeCurrentV4 {
+        root: Hash64,
+        consent: Hash64,
+        provider: PalwBondKeyV2,
+        dependency: Hash64,
+        stage: u8,
+        position: u32,
+        valid_until_daa: u64,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwMonetaryMaterialProviderV1 {

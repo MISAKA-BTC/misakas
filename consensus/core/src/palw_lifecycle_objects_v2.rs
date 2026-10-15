@@ -560,6 +560,13 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             }
             Ok(())
         }
+        PalwConsensusObjectV2::GdnStepAccusedV2 { accusation } => {
+            if accusation.signature.is_empty() { return Err("GDN accusation must carry its accuser's signature"); }
+            if accusation.encoded_bytes()? > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES {
+                return Err("GDN accusation exceeds the existing close-byte ceiling");
+            }
+            accusation.validate_shape(u64::MAX)
+        }
         // **ADR-0100 Decision 4.** The plan and a bond's shard list ride signed — by the class's
         // registrant and by the bond, checked at acceptance against their registered keys — and
         // shaped: a count in range, a list inside it. A part rides unsigned like `ReceiptLicensed`
@@ -1181,11 +1188,12 @@ pub enum PalwLifecycleKindFenceV1 {
     /// (`crate::palw_staged_route_forms_v1`).
     StagedFloatConstraintV1 = 13,
     MaterialReleaseRecoveryV2 = 14,
+    MemoryRoutingCourtV2 = 15,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1201,6 +1209,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::StagedTirRouteV1,
         Self::StagedFloatConstraintV1,
         Self::MaterialReleaseRecoveryV2,
+        Self::MemoryRoutingCourtV2,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1219,6 +1228,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::StagedPublicCourtV1 => "palw_staged_public_court_v1",
             Self::MonetaryMaterialV1 => "palw_monetary_material_v1",
             Self::MaterialReleaseRecoveryV2 => "palw_material_release_recovery_v2",
+            Self::MemoryRoutingCourtV2 => "palw_memory_routing_court_v2",
             Self::StagedTirRouteV1 => "palw_staged_tir_route_v1",
             Self::StagedFloatConstraintV1 => "palw_staged_float_constraint_v1",
         }
@@ -1409,7 +1419,11 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
             PalwLifecycleKindOwnerV1::Fence(F::MaterialReleaseRecoveryV2)
         }
         O::MonetaryMaterialActionV1 { action, .. }
-            if matches!(action.as_ref(), crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::RecoveryV2(_)) =>
+            if matches!(
+                action.as_ref(),
+                crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::RecoveryV2(_)
+                    | crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::ChallengeCurrentV4 { .. }
+            ) =>
         {
             PalwLifecycleKindOwnerV1::Fence(F::MaterialReleaseRecoveryV2)
         }
@@ -1418,6 +1432,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         }
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
         O::ClassSemanticsDeclaredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ClassSemanticsV1),
+        O::GdnStepAccusedV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::MemoryRoutingCourtV2),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
         O::ExecWorkRootOpenedV2 { .. } | O::ExecOriginRecordedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
         // The TIR and greedy Float32 routes' forms appended inside the staged court's kinds are owned by their own fences
@@ -1587,6 +1602,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (240, "MonetaryMaterialEnrolledV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
     (241, "MonetaryMaterialReplacedV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
     (242, "MonetaryMaterialActionV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
+    (243, "GdnStepAccusedV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
     (168, "PublicCourtStreamOpenedNativeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (169, "TirClassLayoutPublishedV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
@@ -1674,6 +1690,7 @@ impl crate::config::params::Params {
                     PalwLifecycleKindFenceV1::ClassSemanticsV1 => self.palw_class_semantics_v1_fence(),
                     PalwLifecycleKindFenceV1::StagedPublicCourtV1 => self.palw_staged_public_court_v1,
                     PalwLifecycleKindFenceV1::MonetaryMaterialV1 => self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
+                    PalwLifecycleKindFenceV1::MemoryRoutingCourtV2 => self.palw_memory_routing_court_v2_fence(),
                     PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2 => Self::palw_later_of_v1(
                         self.palw_material_release_recovery_v2.as_ref().map(|f| f.activation),
                         self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
@@ -2231,7 +2248,7 @@ const fn a2_row(slot: PalwA2SlotV1, fence: &'static str, owner: &'static str, la
 pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(
         PalwA2SlotV1::KernelNested {
-            what: "PalwMonetaryMaterialActionV1::RecoveryV2 (7), Enroll/Replace/Acknowledge/RetireProviderStream",
+            what: "PalwMonetaryMaterialActionV1::RecoveryV2 (7), Enroll/Replace/Acknowledge/RetireProviderStream; ChallengeCurrentV4 (8)",
         },
         "palw_material_release_recovery_v2",
         "RFC08 bounded signed historical release recovery",
@@ -2266,6 +2283,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "RFC08 explicit monetary material covenants",
         true,
     ),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 243, hi: 243 }, "palw_memory_routing_court_v2", "RFC06 GDN/routing court version2", true),
     a2_row(
         PalwA2SlotV1::ObjectTags { lo: 230, hi: 230 },
         "palw_court_model_scope_v1",
@@ -2887,6 +2905,7 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     // G14 public-conviction branch and the RFC02 branch (all end at 167 / start again at 240); the kind itself is not landed yet.
     (230, 230, "D2 seat readiness digest (reserved)", &["palw_court_model_scope_v1"]),
     (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1", "palw_material_release_recovery_v2"]),
+    (243, 243, "RFC06 versioned recurrence/routing court", &["palw_memory_routing_court_v2"]),
 ];
 
 #[cfg(test)]
@@ -3905,6 +3924,7 @@ pub(crate) mod tests {
                 (240, zero_filled_kind(240)),
                 (241, zero_filled_kind(241)),
                 (242, zero_filled_kind(242)),
+                (243, zero_filled_kind(243)),
                 (104, O::ArtifactBoundV1 { v2_class: h, kernel_param_root: h, signer: bond(), signature: vec![1] }),
                 (
                     105,
@@ -5157,6 +5177,8 @@ pub(crate) mod tests {
             (240, 0xbc39aa6d38e7db6e),
             (241, 0xcd75cd8b043876d6),
             (242, 0xd29d0349b76c136f),
+            // New source declaration pin only; no old kind was re-pinned.
+            (243, 0x5b8caf052fb70f7d),
             // G14 TIR native seed and class layout, owned by `palw_staged_tir_route_v1`.
             (168, 0x08ee1a77654c016e),
             (169, 0xa24f46d0931b98b5),

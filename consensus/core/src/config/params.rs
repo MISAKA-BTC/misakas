@@ -2884,6 +2884,8 @@ pub struct Params {
     /// §3 named: a network that wants the court states V3 at genesis through
     /// `palw_signature_contexts_v2`, and no shipped preset does.
     pub palw_shard_court: Option<ForkActivation>,
+    /// RFC06 versioned recurrence/routing court. Dormant on every shipped preset.
+    pub palw_memory_routing_court_v2: Option<ForkActivation>,
 
     /// **ADR-0100 Decision 4's fence: a sharded class is licensed per shard.**
     ///
@@ -5975,6 +5977,7 @@ impl Params {
             palw_fp_derived_work: self.palw_fp_derived_work,
             palw_fp_decode_constraint: self.palw_fp_decode_constraint,
             palw_shard_court: self.palw_shard_court,
+            palw_memory_routing_court_v2: self.palw_memory_routing_court_v2,
             palw_shard_licensing: self.palw_shard_licensing,
             palw_token_lift: self.palw_token_lift,
             palw_kimi_k3: self.palw_kimi_k3,
@@ -7117,6 +7120,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_memory_routing_court_v2: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -7454,6 +7458,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_memory_routing_court_v2: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -7773,6 +7778,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_memory_routing_court_v2: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -13268,6 +13274,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_memory_routing_court_v2: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
