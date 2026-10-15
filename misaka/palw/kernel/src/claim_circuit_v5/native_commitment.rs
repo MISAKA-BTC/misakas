@@ -314,6 +314,11 @@ pub fn native_tensor_root_v5(
     let col = if suite == NativeTensorCommitmentV5::HidingFlatV1 { None } else { Some(root(crate::merkle::AXIS_COL)?) };
     keyed_512_v5(b, commit_domain, &RootPreimage { dtype, shape, row: &row, col: col.as_ref() })
 }
+/// Maximum simultaneously live typed Merkle accumulator. The hash compressor
+/// has fixed-size stack arrays and does not allocate a heap per block.
+pub fn native_tensor_workspace_bytes_v5() -> u64 {
+    std::mem::size_of::<MerkleStack>() as u64
+}
 /// Endpoint compilation reserves the full typed graph before emission. The
 /// stack frame and witness have independent retained allocation authorities.
 pub fn compile_native_tensor_v5(
@@ -325,7 +330,7 @@ pub fn compile_native_tensor_v5(
     memory: CircuitMemoryBudgetV5,
 ) -> Result<ReservedCircuitV5, String> {
     let plan = native_tensor_cost_v5(suite, dtype, shape)?;
-    let scratch = std::mem::size_of::<MerkleStack>() as u64;
+    let scratch = native_tensor_workspace_bytes_v5();
     let _scratch = memory.reserve(scratch)?;
     let mut builder = CircuitBuilderV5::new_planned(limits, plan, memory)?;
     let bytes = usize::try_from(plan.input_bits / 8).map_err(|_| "native circuit input bytes not addressable")?;

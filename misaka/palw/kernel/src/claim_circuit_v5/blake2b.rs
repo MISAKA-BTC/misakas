@@ -42,9 +42,15 @@ pub fn compression_blocks_v5(message_bytes: u64, key_bytes: usize) -> Result<u64
 }
 pub fn graph_cost_v5(input_bits: u64, blocks: u64, assertions: u64) -> Result<CircuitCostV5, String> {
     let xor = blocks.checked_mul(BLAKE2B_XOR_GATES_PER_BLOCK_V5).ok_or("hash circuit XOR count overflow")?;
-    let and = blocks.checked_mul(BLAKE2B_AND_GATES_PER_BLOCK_V5).ok_or("hash circuit AND count overflow")?;
+    let and = blocks
+        .checked_mul(BLAKE2B_AND_GATES_PER_BLOCK_V5)
+        .and_then(|n| n.checked_add(input_bits))
+        .ok_or("hash circuit AND count overflow")?;
+    let not = input_bits;
+    let assertions = assertions.checked_add(input_bits).ok_or("input Booleanity assertion count overflow")?;
     let gates = xor
         .checked_add(and)
+        .and_then(|n| n.checked_add(not))
         .and_then(|n| n.checked_add(input_bits))
         .and_then(|n| n.checked_add(2))
         .ok_or("hash circuit total gates overflow")?;
@@ -60,7 +66,7 @@ pub fn graph_cost_v5(input_bits: u64, blocks: u64, assertions: u64) -> Result<Ci
         witness_bytes: gates,
         xor_gates: xor,
         and_gates: and,
-        not_gates: 0,
+        not_gates: not,
     })
 }
 fn rotate(x: Word, n: usize) -> Word {

@@ -432,3 +432,39 @@ requested by the implementation-first order. Consolidated validation must cover
 new native registration, signed all-target work, source funding/lock, proof
 inclusion, assigned receipts, Final, cold restore and reorg; old V3 bytes and
 private fingerprints require regression checks in that later phase.
+
+### V5 semantic circuit source boundary (2026-10-15; uncompiled)
+
+`claim_circuit_v5` now lowers the twenty-five native TIR primitives into actual
+Boolean gates. Scalar arithmetic checks signed i128 overflow, the three exact
+rounding rules and dtype ranges. The frozen Q24 Exp/Rsqrt/Ln algorithms are
+lowered through integer gates rather than witness-provided function results.
+Tensor indexing reuses public shapes; dynamic Gather, TopK and comparisons use
+selectors. Reductions enforce positive and negative partial-sum extremes.
+HistAppend reuses the supplied prior-row wires, and StateWrite applies the
+native saturation interval. The existing reference type checker is exported
+without changing its rules, so this constructor uses the same accepted dtype
+and shape relations as native TIR (including signed Gather indices).
+
+The native primitive constructor calculates each existing input/prior/output
+tensor commitment from these same wires, including BLAKE2b compression and
+native dual/tiled/hiding leaf and tree preimages. An output digest supplied as
+a public constraint is not substituted for the computation. Explicit input
+Booleanity constraints `b * (1-b) = 0` are included for a later field proof;
+the Boolean evaluator alone would not establish this for a PCS witness.
+
+A counting pass runs the same emitter without allocating gate/witness/tensor
+wire vectors. It computes exact gate/assertion counts, then a retained owner
+reserves the typed graph before allocation. Output wire vectors and bounded
+reference type-check metadata have separate reservations before allocation.
+The evaluator reserves its witness while the graph owner remains live. These
+are deterministic typed allocation bounds, not an approval of process RSS,
+allocator overhead, cryptographic security or native network resource limits.
+
+Source tests cover reference indexing/ranking/reduction, signed Gather indices,
+state/history, altered outputs, altered native inputs, rounding and overflow.
+They have not been compiled or run. This boundary does not yet implement a
+whole-trace/program constructor, a PCS/GKR argument, a V5 native claim or
+activation. Consequently it does not close the missing argument-family rows,
+claim a compact verifier cost, or establish the required independent 128-bit
+review. Old V3/V4 bytes, roots and dormant gates remain separate.

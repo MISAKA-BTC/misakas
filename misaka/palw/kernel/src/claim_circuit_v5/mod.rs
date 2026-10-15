@@ -7,6 +7,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub mod bits;
 pub mod blake2b;
 pub mod native_commitment;
+pub mod scalar;
+pub mod tensor;
 pub type WireV5 = u32;
 pub type ByteV5 = [WireV5; 8];
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -180,7 +182,7 @@ impl CircuitBuilderV5 {
         self.circuit.gates.push(gate);
         Ok(id)
     }
-    pub fn input(&mut self) -> Result<WireV5, String> {
+    fn input(&mut self) -> Result<WireV5, String> {
         let ordinal = self.circuit.input_bits;
         if ordinal >= self.limits.maximum_input_bits {
             return Err("circuit input capacity exhausted".into());
@@ -412,14 +414,26 @@ impl CircuitByteStreamV5 for InputByteSpanV5 {
 impl CircuitBuilderV5 {
     pub fn input_byte_span(&mut self, count: usize) -> Result<InputByteSpanV5, String> {
         let bits = count.checked_mul(8).ok_or("circuit input span bit overflow")?;
+        let gates = (bits as u64).checked_mul(3).ok_or("input Booleanity gate count overflow")?;
+        let assertions = self.counting.map_or(self.circuit.assertions.len() as u64, |c| c.assertions);
         if bits > self.limits.maximum_input_bits.saturating_sub(self.circuit.input_bits) as usize
-            || self.gate_count().checked_add(bits as u64).is_none_or(|n| n > u64::from(self.limits.maximum_gates))
+            || self.gate_count().checked_add(gates).is_none_or(|n| n > u64::from(self.limits.maximum_gates))
+            || assertions.checked_add(bits as u64).is_none_or(|n| n > u64::from(self.limits.maximum_assertions))
         {
-            return Err("circuit input span exceeds preflight".into());
+            return Err("circuit input span/Booleanity constraints exceed preflight".into());
         }
         let first = u32::try_from(self.gate_count()).map_err(|_| "input span wire overflow")?;
         for _ in 0..bits {
             self.input()?;
+        }
+        // Explicit field-compatible b*(1-b)=0 constraints. Merely assuming a
+        // PCS witness's input values are bits would not bind the native hash.
+        for i in 0..bits {
+            let wire =
+                first.checked_add(u32::try_from(i).map_err(|_| "input bit ordinal overflow")?).ok_or("input bit wire overflow")?;
+            let inverted = self.not(wire)?;
+            let non_boolean = self.and(wire, inverted)?;
+            self.assert(non_boolean, false)?;
         }
         Ok(InputByteSpanV5 { first, bytes: count })
     }
