@@ -773,6 +773,7 @@ from!(item: &kaspa_rpc_core::RpcPalwClaimRow, protowire::RpcPalwClaimRow, {
         vesting_eta_estimated: item.vesting_eta_estimated,
         committed_sompi: item.committed_sompi.clone(),
         reservation_split: item.reservation_split.clone(),
+        security_certification: item.security_certification.clone(),
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwClaimsRequest, protowire::GetPalwClaimsRequestMessage, {
@@ -943,6 +944,9 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwSettlementResponse>, protowire::Ge
         depth_is_lower_bound: item.depth_is_lower_bound,
         safe_frontier_blue_score: item.safe_frontier_blue_score,
         safe_frontier_daa: item.safe_frontier_daa,
+        // RFC-0018 Gate C (fields 13/14).
+        uncertified_final_anchors: item.uncertified_final_anchors,
+        security_certification_premise: item.security_certification_premise.clone(),
         error: None,
     }
 });
@@ -3260,6 +3264,7 @@ try_from!(item: &protowire::RpcPalwClaimRow, kaspa_rpc_core::RpcPalwClaimRow, {
         vesting_eta_estimated: item.vesting_eta_estimated,
         committed_sompi: item.committed_sompi.clone(),
         reservation_split: item.reservation_split.clone(),
+        security_certification: item.security_certification.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwClaimsRequestMessage, kaspa_rpc_core::GetPalwClaimsRequest, {
@@ -3444,9 +3449,9 @@ try_from!(item: &protowire::GetPalwSettlementResponseMessage, RpcResult<kaspa_rp
         depth_is_lower_bound: item.depth_is_lower_bound,
         safe_frontier_blue_score: item.safe_frontier_blue_score,
         safe_frontier_daa: item.safe_frontier_daa,
-        // RFC-0018 GAP-R6: not on the gRPC wire.
-        uncertified_final_anchors: 0,
-        security_certification_premise: None,
+        // RFC-0018 Gate C (proto fields 13/14).
+        uncertified_final_anchors: item.uncertified_final_anchors,
+        security_certification_premise: item.security_certification_premise.clone(),
     }
 });
 try_from!(item: &protowire::GetPrecommitDutyRequestMessage, kaspa_rpc_core::GetPrecommitDutyRequest, {

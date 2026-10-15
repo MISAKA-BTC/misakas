@@ -1826,6 +1826,8 @@ message RpcPalwClaimRow {
   string committedSompi = 37;
   // Version 5 (ADR-0176 amendment, user ruling 2026-10-15): the reservation's decomposition, JSON; empty below palw_bond_formula_v2.
   string reservationSplit = 38;
+  // RFC-0018 Gate C: the claim's certification state; empty below the fence.
+  string securityCertification = 39;
 }
 
 // Testnet-12 lifecycle audit T12-058: one live Valid lock on a bond.
@@ -2029,6 +2031,10 @@ message GetPalwSettlementResponseMessage {
   optional string nativeSettlementJson = 11;
   // RFC-0012 D1: the `safe` readiness explanation (`NativeSafeReadinessV1`) as JSON; absent before the retirement fence.
   optional string nativeReadinessJson = 12;
+  // RFC-0018 Gate C: `Final` attempts at or after `daaScore` that are not SecurityCertified (no consensus or settlement credit).
+  uint64 uncertifiedFinalAnchors = 13;
+  // RFC-0018 Gate C: present where Gate C is in force — certification is premise-based, not an unconditional proof.
+  optional string securityCertificationPremise = 14;
   RPCError error = 1000;
 }
 

@@ -330,6 +330,21 @@ pub struct PalwRuleEClaimRecordV1 {
     pub bond_collateral: Option<u64>,
     /// ADR-0176 D3: the allocation's terms where one governs the claim ([`PalwRuleEBondBudgetV1`]); `None` otherwise.
     pub budget: Option<PalwRuleEBudgetTermsV1>,
+    /// **RFC-0018 Gate C: the claim's certification state at this state** — committed in the leaf-v2 window, so a header-verified
+    /// client applies Gate C exactly as the node does (and counts the uncertified `Final`s). `NotGoverned` below the fence.
+    pub certification: PalwRuleECertificationV1,
+}
+
+/// **RFC-0018 Gate C, as rule E reads a claim** (Borsh-appended to the record; a client reads it from the leaf-v2 window).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwRuleECertificationV1 {
+    /// Accepted below `palw_independently_work_certified_v1`: the released rule (every record on every shipped network).
+    #[default]
+    NotGoverned,
+    /// SecurityCertified: counts — frontier for an attempt only (RFC-0018 §7.5), participation for an attempt, its weights.
+    Certified,
+    /// Governed and not certified: no participation, no frontier, its weights 0 (the state credited none).
+    Uncertified,
 }
 
 impl PalwChainStateV2 {
@@ -366,20 +381,19 @@ impl PalwChainStateV2 {
                       capped: bool,
                       bond_collateral: Option<u64>,
                       budget: Option<PalwRuleEBudgetTermsV1>| {
-            let (status, safe_weight) = match (certified, status) {
-                (false, PalwRuleEClaimStatusV1::Final) => (PalwRuleEClaimStatusV1::Voided, 0),
-                // RFC-0018 §7.5's one rule: past the fence a certified Free-Prompt `Final` keeps its spends' weight but never stands as
-                // the frontier (frontier and settlement credit are certified ATTEMPTS only) — resolved, weight kept, no frontier.
-                (true, PalwRuleEClaimStatusV1::Final) if governed && !matches!(claim.source, PalwClaimSourceV2::Attempt) => {
-                    (PalwRuleEClaimStatusV1::Voided, safe_weight)
-                }
-                _ => (status, safe_weight),
+            let certification = match (governed, certified) {
+                (false, _) => PalwRuleECertificationV1::NotGoverned,
+                (true, true) => PalwRuleECertificationV1::Certified,
+                (true, false) => PalwRuleECertificationV1::Uncertified,
             };
+            // An uncertified claim's state credit is 0 (the fold added none), so its record says 0.
+            let safe_weight = if certification == PalwRuleECertificationV1::Uncertified { 0 } else { safe_weight };
             PalwRuleEClaimRecordV1 {
                 claim_id,
                 accepted_blue_score: claim.accepted_blue_score,
                 bond: claim.bond,
-                attempt: certified && matches!(claim.source, PalwClaimSourceV2::Attempt),
+                attempt: matches!(claim.source, PalwClaimSourceV2::Attempt),
+                certification,
                 status,
                 safe_weight,
                 live_weight,
@@ -519,28 +533,36 @@ impl PalwRuleESideAccV1 {
     /// `common_capital`: `Some(capital in the common past)` for a common bond, `None` otherwise (v1 reads only `is_some`).
     fn push(&mut self, record: &PalwRuleEClaimRecordV1, common_capital: Option<u64>) -> Result<(), PalwRuleEErrorV1> {
         self.count = self.count.saturating_add(1);
-        if record.attempt && common_capital.is_some() {
+        // RFC-0018 Gate C: an uncertified claim is no participation (v1 and v2) — the bond enters the set only after this check.
+        let counted = record.certification != PalwRuleECertificationV1::Uncertified;
+        if record.attempt && counted && common_capital.is_some() {
             self.bonds.insert(record.bond);
         }
-        // RFC-0018 §6 (v2): a voided — or Gate-C-uncertified, which the record maps to `Voided` — attempt does not count.
-        self.capital_v2.push(record.bond, record.attempt, record.status != PalwRuleEClaimStatusV1::Voided, common_capital);
+        // RFC-0018 §6 (v2): a voided or uncertified attempt does not count; the check precedes the insertion.
+        self.capital_v2.push(record.bond, record.attempt, counted && record.status != PalwRuleEClaimStatusV1::Voided, common_capital);
+        // RFC-0018 §7.5's one rule: past Gate C only a certified ATTEMPT stands as the frontier (a certified free-prompt `Final` keeps
+        // its spends' weight, an uncertified `Final` is resolved and stands as nothing); below it any `Final`, as released.
+        let frontier_ok = match record.certification {
+            PalwRuleECertificationV1::NotGoverned => true,
+            PalwRuleECertificationV1::Certified => record.attempt,
+            PalwRuleECertificationV1::Uncertified => false,
+        };
         match record.status {
             PalwRuleEClaimStatusV1::Final => {
-                self.finals.insert(record.accepted_blue_score);
+                if frontier_ok {
+                    self.finals.insert(record.accepted_blue_score);
+                }
             }
             PalwRuleEClaimStatusV1::Live => {
                 self.oldest_live = Some(self.oldest_live.map_or(record.accepted_blue_score, |o| o.min(record.accepted_blue_score)));
             }
-            // A `Voided` record holds no prefix and stands as no frontier. Its weights are 0 (the record prices a void at 0) except
-            // RFC-0018's certified Free-Prompt `Final` past Gate C, which keeps its spends' safe weight — credited below as safe.
-            PalwRuleEClaimStatusV1::Voided if record.safe_weight == 0 && record.live_weight == 0 => return Ok(()),
-            PalwRuleEClaimStatusV1::Voided => {}
+            PalwRuleEClaimStatusV1::Voided => return Ok(()),
         }
         let add = |sum: &mut u128, weight: u128| -> Result<(), PalwRuleEErrorV1> {
             *sum = sum.checked_add(weight).ok_or(PalwRuleEErrorV1::Overflow)?;
             Ok(())
         };
-        let is_final = record.status != PalwRuleEClaimStatusV1::Live;
+        let is_final = record.status == PalwRuleEClaimStatusV1::Final;
         if let Some(terms) = record.budget {
             let group = self.budgeted.entry((record.bond, terms.version, terms.window)).or_insert((0, 0, terms.final_weight_ceiling));
             group.2 = group.2.min(terms.final_weight_ceiling);
@@ -1154,6 +1176,7 @@ mod tests {
                 capped,
                 bond_collateral: if capped { Some(13_000 * 100_000_000) } else { None },
                 budget: None,
+                certification: PalwRuleECertificationV1::NotGoverned,
             }
         };
         use PalwRuleEClaimStatusV1::{Final, Live, Voided};
@@ -1200,6 +1223,7 @@ mod tests {
             capped: false,
             bond_collateral: None,
             budget: Some(PalwRuleEBudgetTermsV1 { version: 1, window, final_weight_ceiling: ceiling }),
+            certification: PalwRuleECertificationV1::NotGoverned,
         }
     }
 

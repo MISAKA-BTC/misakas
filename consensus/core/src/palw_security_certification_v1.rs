@@ -360,6 +360,35 @@ pub fn palw_claim_security_certified_v1(state: &PalwChainStateV2, claim_id: &Has
         .is_some_and(|(outcome, _)| outcome.certifies())
 }
 
+/// **A claim's certification state as the RPC names it** (`not-governed`, `pending`, `certified`, `public-check-certified`,
+/// `not-certified`, `vetoed`, `no-population`, `expired`, `withdrawn`). `not-governed` below the fence (every shipped network);
+/// `pending` for a governed claim with no decided row (not yet `Final`, or committed and undecided).
+pub fn palw_claim_certification_status_v1(
+    state: &PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    claim_id: &Hash64,
+    claim: &crate::palw_state_v2::PalwClaimStateV2,
+) -> &'static str {
+    if !crate::palw_rfc0018_v1::palw_gate_c_governs_v1(params, claim) {
+        return "not-governed";
+    }
+    let key = certification_claim_key_v1(&palw_certification_id_v1(claim_id));
+    let outcome = state
+        .kernel_route_state_v1()
+        .and_then(|route| route.aux_row::<PalwClaimCertificationRowV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key))
+        .and_then(|row| row.outcome);
+    match outcome.map(|(o, _)| o) {
+        None => "pending",
+        Some(PalwCertificationOutcomeV1::Certified) => "certified",
+        Some(PalwCertificationOutcomeV1::PublicCheckCertified) => "public-check-certified",
+        Some(PalwCertificationOutcomeV1::NotCertified) => "not-certified",
+        Some(PalwCertificationOutcomeV1::Vetoed) => "vetoed",
+        Some(PalwCertificationOutcomeV1::NoPopulation) => "no-population",
+        Some(PalwCertificationOutcomeV1::Expired) => "expired",
+        Some(PalwCertificationOutcomeV1::Withdrawn) => "withdrawn",
+    }
+}
+
 /// **The one consensus-credit rule for frontier AND settlement depth (RFC-0018 §7.5)**: past the fence a claim earns frontier and
 /// settlement credit iff it is a SecurityCertified **attempt** in `Final`. A free-prompt claim's consensus credit is its certified
 /// spends' weight only; it never moves the frontier or the settlement depth (the "only a Free-Prompt Final exists" case: no frontier,
