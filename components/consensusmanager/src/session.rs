@@ -357,6 +357,14 @@ impl ConsensusSessionOwned {
         self.consensus.palw_staged_tir_prefix_v1(key)
     }
 
+    /// G14 R4: the accepted ORIGINAL TIR frame a public verifier files against.
+    pub fn palw_tir_public_frame_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_tir_public_claim_v1::PalwTirPublicFrameViewV1>, String> {
+        self.consensus.palw_tir_public_frame_v1(claim)
+    }
+
     pub fn palw_staged_tir_prefix_leaf_index_v1(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),

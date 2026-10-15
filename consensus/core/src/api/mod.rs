@@ -1386,6 +1386,15 @@ pub trait ConsensusApi: Send + Sync {
         Err("staged TIR prefix reader unavailable".into())
     }
 
+    /// G14 R4: an ORIGINAL TIR frame as one public verifier reads it to file a conviction (accepted snapshot; `None` below
+    /// `palw_tir_public_conviction_v1` or for a claim with no frame).
+    fn palw_tir_public_frame_v1(
+        &self,
+        _claim: crate::Hash64,
+    ) -> Result<Option<crate::palw_tir_public_claim_v1::PalwTirPublicFrameViewV1>, String> {
+        Err("TIR public frame reader unavailable".into())
+    }
+
     fn palw_staged_tir_prefix_leaf_index_v1(
         &self,
         _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),

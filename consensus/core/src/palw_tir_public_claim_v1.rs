@@ -255,6 +255,54 @@ impl PalwTirPublicClaimV1 {
     }
 }
 
+/// **G14 R4: what one public bonded verifier reads to file against an ORIGINAL frame** — from the accepted state only (never
+/// the producer's capture or a Panel's word). `liable` is the literal set the fold refuses as filers and charges on a verdict:
+/// the producer and every credited exact Valid custodian; a drawn seat outside it files exactly as an outside bond does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwTirPublicFrameViewV1 {
+    pub claim: Hash64,
+    pub allocation_id: Hash64,
+    pub source_id: Hash64,
+    pub producer: PalwBondKeyV2,
+    pub liable: BTreeSet<PalwBondKeyV2>,
+    pub drawn_panel: BTreeSet<PalwBondKeyV2>,
+    pub accepted_daa: u64,
+    /// The d0 conviction door closes here (exclusive); the claim's `Final` floor.
+    pub collect_until_daa: u64,
+    pub material_until_daa: u64,
+    /// Exact rent one filing declares and burns ([`PalwTirPublicClaimV1::conviction_rent_v1`]).
+    pub conviction_rent_sompi: u64,
+    /// The prepaid terminal witness ceiling a carried primitive must fit.
+    pub maximum_witness_bytes: u64,
+    /// The original selection rule is plain greedy (the only one the frame's selection door judges).
+    pub greedy_selection: bool,
+    pub header: PalwPublicTirBindingHeaderV1,
+}
+impl PalwTirPublicClaimV1 {
+    pub fn view_v1(&self) -> PalwTirPublicFrameViewV1 {
+        let terms = self.plan.terms;
+        PalwTirPublicFrameViewV1 {
+            claim: self.plan.original_claim,
+            allocation_id: self.plan.allocation_id,
+            source_id: self.plan.source_id,
+            producer: self.custody_v1().pledge_v1().producer,
+            liable: self.custody_v1().liable_signers_v1(),
+            drawn_panel: self.custody_v1().drawn_panel_v1().clone(),
+            accepted_daa: terms.accepted_daa,
+            collect_until_daa: terms.collect_until_daa,
+            material_until_daa: terms.material_until_daa,
+            conviction_rent_sompi: self.conviction_rent_v1(),
+            maximum_witness_bytes: self.plan.terminal.maximum_witness_bytes,
+            greedy_selection: self.original.job.decode.is_none() && self.original.job.tail.is_none(),
+            header: self.header.clone(),
+        }
+    }
+}
+/// The accepted-state reader behind the consensus API's `palw_tir_public_frame_v1`.
+pub fn palw_tir_public_frame_view_v1(state: &crate::palw_state_v2::PalwChainStateV2, claim: Hash64) -> Option<PalwTirPublicFrameViewV1> {
+    palw_tir_public_claim_v1(state, claim).map(PalwTirPublicClaimV1::view_v1)
+}
+
 /// No fallback to ClaimBundle: callers must distinguish the new original
 /// full-allocation protocol from the old context-only dormant path.
 pub fn palw_tir_public_claim_v1(state: &crate::palw_state_v2::PalwChainStateV2, claim: Hash64) -> Option<&PalwTirPublicClaimV1> {

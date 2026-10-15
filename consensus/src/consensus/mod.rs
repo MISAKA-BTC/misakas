@@ -2925,6 +2925,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_staged_tir_prefix_v1_impl(key)
     }
 
+    fn palw_tir_public_frame_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_tir_public_claim_v1::PalwTirPublicFrameViewV1>, String> {
+        self.virtual_processor.palw_tir_public_frame_v1_impl(claim)
+    }
+
     fn palw_staged_tir_prefix_leaf_index_v1(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
