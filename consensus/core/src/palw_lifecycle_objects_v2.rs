@@ -5249,10 +5249,13 @@ pub(crate) mod tests {
             (165, 0x5de7603f27fce089),
             (166, 0x1d9abdb5bb45bba5),
             (167, 0x20ad01dbaf70d51a),
-            // RFC08 PAV3 wiring (4d049b7cd) changed the monetary material types; dormant `palw_monetary_material_v1`.
-            (240, 0xbc39aa6d38e7db6e),
-            (241, 0xcd75cd8b043876d6),
-            (242, 0xd29d0349b76c136f),
+            // RFC08 PAV3 wiring (4d049b7cd) changed the monetary material types; dormant `palw_monetary_material_v1`. Re-taken
+            // 2026-10-16 from this test's `[a2u-pins]` listing (0xbc39aa6d38e7db6e / 0xcd75cd8b043876d6 / 0xd29d0349b76c136f before):
+            // the RFC06-12 monetary material / release-recovery commits 0cdf53c48, 506fb2ffb, a1ad9d633 and ccc065dff changed the
+            // types these kinds carry, still under the same dormant fence (and `palw_material_release_recovery_v2` for the v2 rows).
+            (240, 0x91362a7791c31616),
+            (241, 0x5a27c8d5601adf8e),
+            (242, 0x3afba613f2ab70a6),
             // New source declaration pin only; no old kind was re-pinned.
             (243, 0x5b8caf052fb70f7d),
             // RFC-0006 GDN/router lane (tag 244, moved from 170 which G14 took first on integ): source pin from
