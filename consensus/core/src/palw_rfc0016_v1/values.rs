@@ -99,6 +99,53 @@ pub const PALW_RFC0016_VALUES_V1: PalwRfc0016ValuesV1 = PalwRfc0016ValuesV1 {
     opv_checks_per_verifier_epoch: 0,
 };
 
+// ---- User decisions 2026-10-15 (RFC-0016 §14.1): CALIBRATION STARTING POINTS — never production values; production approval is
+// ---- withheld and the measured-value gate below still refuses every non-calibration network. ----------------------------------
+
+/// **V2: σ's calibration starting point** (0.25). The sweep still measures every §8.6 candidate.
+pub const PALW_RFC0016_SIGMA_CALIBRATION_PERMILLE_V1: u32 = 250;
+/// **V2: φ's calibration starting point** (0.5).
+pub const PALW_RFC0016_REISSUE_CHECKPOINT_CALIBRATION_PERMILLE_V1: u32 = 500;
+/// **V2: the pace margin's calibration starting point** (1.2).
+pub const PALW_RFC0016_PACE_MARGIN_CALIBRATION_PERMILLE_V1: u32 = 1_200;
+/// **V2: k = 1** — the auxiliary ticket tilt stays OFF (it is not wired into the lottery; a calibration build may not arm another k).
+pub const PALW_RFC0016_TILT_K_CALIBRATION_PERMILLE_V1: u32 = 1_000;
+
+/// **The calibration starting set** (user decisions 2026-10-15). The decided terms are the named constants above (and, as their
+/// decisions land, V3 / V5 / V8 / V9's); the terms the user left to measurement (`L_queue`, `T_queue`, `h`, `γ`, `u*`, the OPV check
+/// supply) are PROBES the harness sweeps — never decided values. An isolated calibration network runs this set unless its build
+/// carries `MISAKA_RFC0016_CALIBRATION_VALUES`. Not armable anywhere else (no measured record).
+pub const PALW_RFC0016_CALIBRATION_START_V1: PalwRfc0016ValuesV1 = PalwRfc0016ValuesV1 {
+    sigma_permille: PALW_RFC0016_SIGMA_CALIBRATION_PERMILLE_V1,
+    tilt_k_permille: PALW_RFC0016_TILT_K_CALIBRATION_PERMILLE_V1,
+    reissue_checkpoint_permille: PALW_RFC0016_REISSUE_CHECKPOINT_CALIBRATION_PERMILLE_V1,
+    pace_margin_permille: PALW_RFC0016_PACE_MARGIN_CALIBRATION_PERMILLE_V1,
+    // PROBES (measured, not decided):
+    entrant_reserve_permille: 20,
+    entrant_max_per_model_permille: 2,
+    entrant_min_capital_sompi: 0,
+    entrant_age_daa: 21_600,
+    capacity_safety_permille: 1_000,
+    c7_measured_concurrency: 0,
+    queue_len_per_class: 8,
+    queue_ttl_daa: 720,
+    quote_margin_h: 2,
+    verifier_share_base_permille: 200,
+    verifier_slope_gamma_permille: 100,
+    verifier_util_target_permille: 700,
+    opv_checks_per_claim_permille: 500,
+    opv_checks_per_verifier_epoch: 10,
+};
+
+/// **The decided calibration terms a calibration build must keep** (user decisions 2026-10-15): `k = 1` (V2: the tilt is not wired,
+/// so no build may pretend to measure another `k`). `Err` names the first term that strays; the swept terms (σ, φ, pace) are free.
+pub fn palw_rfc0016_calibration_conforms_v1(values: &PalwRfc0016ValuesV1) -> Result<(), &'static str> {
+    if values.tilt_k_permille != PALW_RFC0016_TILT_K_CALIBRATION_PERMILLE_V1 {
+        return Err("RFC-0016 V2: k = 1 (tilt_k_permille = 1000) — the auxiliary tilt is not wired into the lottery");
+    }
+    Ok(())
+}
+
 /// σ, named (placeholder until measured).
 pub const PALW_RFC0016_SIGMA_PERMILLE_V1: u32 = PALW_RFC0016_VALUES_V1.sigma_permille;
 /// k, named (placeholder until measured; 1000 = the tilt is off).
@@ -215,7 +262,8 @@ impl Params {
         // An isolated calibration network runs the values its build was made for (the σ/k measurement); every other network runs
         // the binary's named constants.
         let values = if self.has_isolated_native_calibration_v34() {
-            palw_rfc0016_calibration_values_v1().unwrap_or(PALW_RFC0016_VALUES_V1)
+            // User decisions 2026-10-15: without a build-time value set the calibration network runs the calibration starting set.
+            palw_rfc0016_calibration_values_v1().unwrap_or(PALW_RFC0016_CALIBRATION_START_V1)
         } else {
             PALW_RFC0016_VALUES_V1
         };
@@ -240,12 +288,13 @@ impl Params {
         if !self.has_isolated_native_calibration_v34() {
             return None;
         }
-        Some(match palw_rfc0016_calibration_values_v1() {
-            Some(values) if !values.is_placeholder() => Ok(()),
-            _ => Err(PalwModeV2Error::Invalid(
-                "an RFC-0016 calibration run needs a build with MISAKA_RFC0016_CALIBRATION_VALUES (18 non-placeholder integers)",
-            )),
-        })
+        let values = palw_rfc0016_calibration_values_v1().unwrap_or(PALW_RFC0016_CALIBRATION_START_V1);
+        if values.is_placeholder() {
+            return Some(Err(PalwModeV2Error::Invalid(
+                "an RFC-0016 calibration run needs non-placeholder values (MISAKA_RFC0016_CALIBRATION_VALUES, or the calibration starting set)",
+            )));
+        }
+        Some(palw_rfc0016_calibration_conforms_v1(&values).map_err(PalwModeV2Error::Invalid))
     }
 
     fn palw_rfc0016_below_v1(fence: Option<ForkActivation>, at: u64) -> bool {
@@ -397,6 +446,23 @@ mod tests {
         assert!(PALW_RFC0016_MEASURED_RECORDS_V1.is_empty());
         assert!(!palw_rfc0016_values_measured_v1(&PALW_RFC0016_VALUES_V1, PALW_RFC0016_MEASURED_RECORDS_V1));
         assert_eq!(PALW_RFC0016_TILT_K_PERMILLE_V1, 1_000, "k = 1: the auxiliary tilt is off");
+    }
+
+    /// User decisions 2026-10-15 (V2): the calibration starting set is σ = 0.25, φ = 0.5, pace margin 1.2, k = 1 — runnable in
+    /// calibration, never a measured record (so never armable elsewhere).
+    #[test]
+    fn v2_the_calibration_starting_set_is_the_decided_one() {
+        let v = PALW_RFC0016_CALIBRATION_START_V1;
+        assert_eq!(
+            (v.sigma_permille, v.reissue_checkpoint_permille, v.pace_margin_permille, v.tilt_k_permille),
+            (250, 500, 1_200, 1_000)
+        );
+        assert!(!v.is_placeholder(), "a calibration run can arm it");
+        assert!(palw_rfc0016_calibration_conforms_v1(&v).is_ok());
+        assert!(!palw_rfc0016_values_measured_v1(&v, PALW_RFC0016_MEASURED_RECORDS_V1), "not a measured record");
+        let mut tilted = v;
+        tilted.tilt_k_permille = 1_500;
+        assert!(palw_rfc0016_calibration_conforms_v1(&tilted).is_err(), "k stays 1");
     }
 
     #[test]

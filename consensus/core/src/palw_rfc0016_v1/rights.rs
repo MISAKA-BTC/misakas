@@ -7,8 +7,9 @@
 //! issue                                            Rt_m  = ⌊(N_exp − Ent) · A_m / ΣA⌋  (+ the entrant grant, linear, capped)
 //! consume                                          one right per accepted model-class Attempt (the state's epoch counter)
 //! admit                                            own right (used_m < Rt_m)                                   → Own
-//!                                                  past φ, used_m < Rt_m·(1+σ) and the others' protected pace
-//!                                                  leaves room in the epoch total                               → Reissued
+//!                                                  past φ, within the epoch's A_m-weighted reissue snapshot      → Reissued
+//!                                                  (V2, 2026-10-15: no snapshot — A_m missing — reissues NOTHING; the first-come
+//!                                                  σ rule of `palw_rights_admit_v1` is a pure reference, never a fallback)
 //!                                                  never past Σ Rt (the hard epoch total)
 //! expire                                           whatever is not consumed by the epoch's end is never minted; the floor and the
 //!                                                  heartbeat fill that cadence under their own unchanged rules
@@ -238,6 +239,9 @@ pub enum PalwRightsRefusalV1 {
     NoReleasedRights,
     /// The epoch's hard total is consumed.
     EpochTotalReached,
+    /// **V2 (user decision 2026-10-15): past φ the model's own rights are used and no `A_m`-weighted reissue snapshot exists** (no
+    /// allocation weights): nothing is reissued — never a first-come grant of released rights.
+    ReissueUnavailable,
 }
 
 impl PalwRightsRefusalV1 {
@@ -249,6 +253,7 @@ impl PalwRightsRefusalV1 {
             Self::SigmaCapReached => "RFC0016_SIGMA_CAP_REACHED",
             Self::NoReleasedRights => "RFC0016_NO_RELEASED_RIGHTS",
             Self::EpochTotalReached => "RFC0016_EPOCH_TOTAL_REACHED",
+            Self::ReissueUnavailable => "RFC0016_REISSUE_UNAVAILABLE",
         }
     }
 
@@ -261,6 +266,9 @@ impl PalwRightsRefusalV1 {
             Self::SigmaCapReached => "the model reached its sigma cap on reissued block rights (RFC-0016 V+)",
             Self::NoReleasedRights => "no released block right is left beside the other models' protected pace (RFC-0016 V+)",
             Self::EpochTotalReached => "the epoch's block rights are all consumed (RFC-0016 V+)",
+            Self::ReissueUnavailable => {
+                "no A_m-weighted reissue snapshot exists this epoch: nothing is reissued, never first-come (RFC-0016 V2, 2026-10-15)"
+            }
         }
     }
 }
@@ -382,7 +390,12 @@ pub fn palw_rights_reissue_snapshot_v1(
 }
 
 /// **Admission with the epoch's reissue snapshot** (past φ, where one was taken): a model admits while `used < allowance` and the
-/// epoch total holds; below φ, or with no snapshot, [`palw_rights_admit_v1`] decides (the first-come fallback).
+/// epoch total holds; below φ [`palw_rights_admit_v1`] decides (own rights only there).
+///
+/// **V2 (user decision 2026-10-15): past φ WITHOUT a snapshot** (`A_m` missing: no allocation weights to weigh the reissue by) the
+/// model's OWN rights still admit, and nothing is reissued ([`PalwRightsRefusalV1::ReissueUnavailable`]) — the first-come σ rule of
+/// [`palw_rights_admit_v1`] is never used as a fallback: a grant must not go to whoever wins the lottery first. The deterministic,
+/// neutral outcome is that the released rights expire unminted, as every unused right does.
 pub fn palw_rights_admit_with_snapshot_v1(
     epoch: &PalwRightsEpochV1,
     consumed: &BTreeMap<Hash64, u64>,
@@ -392,8 +405,12 @@ pub fn palw_rights_admit_with_snapshot_v1(
     snapshot: Option<&BTreeMap<Hash64, PalwRightsAllowanceV1>>,
 ) -> Result<PalwRightsUseV1, PalwRightsRefusalV1> {
     let elapsed = now_daa.saturating_sub(epoch.start_daa).min(epoch.length);
-    let Some(snapshot) = snapshot.filter(|_| palw_rights_past_checkpoint_v1(elapsed, epoch.length, values)) else {
+    if !palw_rights_past_checkpoint_v1(elapsed, epoch.length, values) {
+        // Below φ the first-come rule never reissues: it admits own rights only.
         return palw_rights_admit_v1(epoch, consumed, model, now_daa, values);
+    }
+    let Some(snapshot) = snapshot else {
+        return palw_rights_admit_own_only_v1(epoch, consumed, model);
     };
     let total = epoch.total_issued();
     let total_used = consumed.values().fold(0u64, |a, b| a.saturating_add(*b));
@@ -413,6 +430,28 @@ pub fn palw_rights_admit_with_snapshot_v1(
     } else {
         PalwRightsRefusalV1::NoReleasedRights
     })
+}
+
+/// **V2: own rights only** — the epoch total holds and `used < issued`; otherwise refused, never a reissue.
+pub fn palw_rights_admit_own_only_v1(
+    epoch: &PalwRightsEpochV1,
+    consumed: &BTreeMap<Hash64, u64>,
+    model: &Hash64,
+) -> Result<PalwRightsUseV1, PalwRightsRefusalV1> {
+    let total = epoch.total_issued();
+    let total_used = consumed.values().fold(0u64, |a, b| a.saturating_add(*b));
+    if total_used >= total {
+        return Err(if total == 0 { PalwRightsRefusalV1::NoRightsIssued } else { PalwRightsRefusalV1::EpochTotalReached });
+    }
+    let issued = epoch.issued_of(model);
+    if issued == 0 {
+        return Err(PalwRightsRefusalV1::NoRightsIssued);
+    }
+    if consumed.get(model).copied().unwrap_or(0) < issued {
+        Ok(PalwRightsUseV1::Own)
+    } else {
+        Err(PalwRightsRefusalV1::ReissueUnavailable)
+    }
 }
 
 /// **The pre-Attempt rights quote** (RFC-0016 §8.1 step 7): what the producer reads BEFORE spending a forward.
@@ -477,6 +516,45 @@ pub fn palw_bplus_psi_permille_v1(budget: u64, demand: u64, spill_in: u64) -> u3
     }
     let paid = budget.min(demand).saturating_add(spill_in).min(demand);
     (paid as u128 * 1_000 / demand as u128) as u32
+}
+
+#[cfg(test)]
+mod v2_decision_tests {
+    use super::*;
+
+    fn h(n: u8) -> Hash64 {
+        Hash64::from_bytes([n; 64])
+    }
+
+    /// V2 (user decision 2026-10-15): past φ with `A_m` missing (no snapshot), a model past its own rights is refused —
+    /// never a first-come reissue — while its own rights still admit.
+    #[test]
+    fn v2_no_snapshot_past_phi_reissues_nothing() {
+        let values = crate::palw_rfc0016_v1::values::PALW_RFC0016_CALIBRATION_START_V1;
+        let epoch = PalwRightsEpochV1 {
+            epoch_index: 0,
+            start_daa: 0,
+            length: 1_000,
+            n_exp: 100,
+            entrant_reserve: 0,
+            issued: [(h(1), 10u64), (h(2), 90u64)].into_iter().collect(),
+        };
+        let mut consumed: BTreeMap<Hash64, u64> = [(h(1), 10u64)].into_iter().collect();
+        // Past φ (500 ‰): the first-come reference rule WOULD reissue to model 1 (model 2 used nothing, so protects nothing)…
+        assert_eq!(palw_rights_admit_v1(&epoch, &consumed, &h(1), 600, &values), Ok(PalwRightsUseV1::Reissued));
+        // …the admission the fold runs does not.
+        assert_eq!(
+            palw_rights_admit_with_snapshot_v1(&epoch, &consumed, &h(1), 600, &values, None),
+            Err(PalwRightsRefusalV1::ReissueUnavailable)
+        );
+        assert_eq!(palw_rights_admit_with_snapshot_v1(&epoch, &consumed, &h(2), 600, &values, None), Ok(PalwRightsUseV1::Own));
+        // Below φ: own rights only, as before.
+        consumed.insert(h(1), 10);
+        assert_eq!(
+            palw_rights_admit_with_snapshot_v1(&epoch, &consumed, &h(1), 100, &values, None),
+            Err(PalwRightsRefusalV1::OwnRightsExhausted)
+        );
+    }
 }
 
 #[cfg(test)]

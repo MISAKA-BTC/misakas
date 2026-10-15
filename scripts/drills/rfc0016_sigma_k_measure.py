@@ -25,8 +25,8 @@ Prerequisites the operator owns (see docs/design/palw/rfc-0016-implementation-st
   * a launch command template that starts / stops one miner: --launch-cmd "… {miner} {bond} {model} {action}".
 
 Usage (python -I):
-  rfc0016_sigma_k_measure.py plan --sigmas 0,100,250,500,1000,2000 --ks 1000,1250,1500,2000 --phis 250,500,750 \
-      --paces 1000,1200,1500 --base-values "<18 ints for the non-swept terms>" --scenarios E1,E2,E3,E4,E5,E6 --out plan.json
+  rfc0016_sigma_k_measure.py plan [--sigmas 0,100,250,500,1000,2000] [--ks 1000] [--phis 250,500,750] [--paces 1000,1200,1500] \
+      [--base-values "<18 ints>"  (default: the 2026-10-15 calibration starting set)] --scenarios E1,E2,E3,E4,E5,E6 --out plan.json
   rfc0016_sigma_k_measure.py run --manifest run.json --duration-daa 4320 --out DIR [--port 26314] [--poll-secs 30]
       --launch-cmd "scripts/ops/start-miner.sh {miner} {bond} {model} {action}"
   rfc0016_sigma_k_measure.py summarize --events DIR/events.jsonl --manifest run.json --track-tol-ppm N \
@@ -51,6 +51,19 @@ FIELDS = [
     "verifier_slope_gamma_permille", "verifier_util_target_permille", "opv_checks_per_claim_permille",
     "opv_checks_per_verifier_epoch",
 ]
+
+# User decisions 2026-10-15 (RFC-0016 §14.1): the CALIBRATION STARTING SET — mirrors `PALW_RFC0016_CALIBRATION_START_V1`
+# (consensus/core/src/palw_rfc0016_v1/values.rs). V2: σ = 0.25, φ = 0.5, pace margin 1.2, k = 1 (the tilt stays off). The terms the
+# user left to measurement (queue length / TTL, h, γ, u*, OPV checks) are PROBES the sweep moves. Never production values.
+CALIBRATION_START = {
+    "sigma_permille": 250, "tilt_k_permille": 1000, "reissue_checkpoint_permille": 500, "pace_margin_permille": 1200,
+    "entrant_reserve_permille": 20, "entrant_max_per_model_permille": 2, "entrant_min_capital_sompi": 0, "entrant_age_daa": 21600,
+    "capacity_safety_permille": 1000, "c7_measured_concurrency": 0, "queue_len_per_class": 8, "queue_ttl_daa": 720,
+    "quote_margin_h": 2, "verifier_share_base_permille": 200, "verifier_slope_gamma_permille": 100,
+    "verifier_util_target_permille": 700, "opv_checks_per_claim_permille": 500, "opv_checks_per_verifier_epoch": 10,
+}
+# V2: the sweep still measures every §8.6 candidate; k is pinned to 1 (a calibration build refuses another k).
+DEFAULT_SWEEP = {"sigmas": "0,100,250,500,1000,2000", "ks": "1000", "phis": "250,500,750", "paces": "1000,1200,1500"}
 
 # Scenario templates: which miners run where, in relative terms. `ref` is the reference model (Qwen2.5-1.5B A16), `alt` a model of a
 # different CCU. `capital` is the bond weight of the model's miners (relative), `compute` the miners' count (each at the reference
@@ -95,7 +108,9 @@ def parse_values(text):
 
 
 def cmd_plan(a):
-    base = parse_values(a.base_values)
+    base = parse_values(a.base_values) if a.base_values else dict(CALIBRATION_START)
+    if any(int(k) != 1000 for k in a.ks.split(",")):
+        raise SystemExit("RFC-0016 V2 (2026-10-15): k = 1 — the auxiliary tilt is not wired; a calibration build refuses another k")
     runs = []
     for s, k, phi, pace in itertools.product(*(map(int, x.split(",")) for x in (a.sigmas, a.ks, a.phis, a.paces))):
         v = dict(base, sigma_permille=s, tilt_k_permille=k, reissue_checkpoint_permille=phi, pace_margin_permille=pace)
@@ -227,6 +242,9 @@ def cmd_select(a):
 def self_test():
     v = dict(zip(FIELDS, range(18)))
     assert parse_values(values_string(v)) == v
+    assert set(CALIBRATION_START) == set(FIELDS)
+    assert (CALIBRATION_START["sigma_permille"], CALIBRATION_START["reissue_checkpoint_permille"],
+            CALIBRATION_START["pace_margin_permille"], CALIBRATION_START["tilt_k_permille"]) == (250, 500, 1200, 1000)
     lines = [
         {"daa": 0, "report": {"reportJson": json.dumps({"models": [
             {"model": "A", "targets": {"pPpm": "800000", "rightsIssued": "100"}, "outcomes": {"physicalBlocks": "0"}}]})}},
@@ -248,8 +266,11 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     pl = sub.add_parser("plan")
-    for name in ("sigmas", "ks", "phis", "paces", "base_values", "scenarios", "out"):
-        pl.add_argument("--" + name.replace("_", "-"), dest=name, required=True)
+    for name in ("sigmas", "ks", "phis", "paces"):
+        pl.add_argument("--" + name, dest=name, default=DEFAULT_SWEEP[name])
+    pl.add_argument("--base-values", dest="base_values", default=None, help="18 ints; default: the calibration starting set")
+    for name in ("scenarios", "out"):
+        pl.add_argument("--" + name, dest=name, required=True)
     r = sub.add_parser("run")
     r.add_argument("--manifest", required=True)
     r.add_argument("--duration-daa", type=int, required=True)

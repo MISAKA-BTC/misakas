@@ -4,7 +4,8 @@
 //!
 //! * [`PalwFoldReadV1::rfc0016_rights_admit_v1`] — V+: a model-class Attempt is admitted only with a block right of its model (asked by
 //!   `check_class_admits_claim`, so the producer's pre-check `palw_class_admits_claim_v1` answers it BEFORE the forward). Past φ the
-//!   epoch's `A_m`-weighted reissue snapshot (aux 132) decides; the first-come rule is the fallback where `A_m` is unavailable.
+//!   epoch's `A_m`-weighted reissue snapshot (aux 132) decides; where `A_m` is unavailable nothing is reissued (V2, user decision
+//!   2026-10-15: never a first-come grant).
 //! * [`PalwFoldReadV1::rfc0016_elastic_room_v1`] — the per-verifier water-filled room; capacity 0 admits nothing; a claim the
 //!   capacity cannot take now is admitted into the class's bounded pending queue (aux 133/134) while it has room.
 //! * [`on_attempt_accepted_rfc0016_v1`] — the accepted claim is queued when its class's demand exceeds capacity (no bind deadline
@@ -198,8 +199,8 @@ impl PalwChainStateV2 {
 
 impl PalwFoldReadV1<'_> {
     /// **V+ admission** (RFC-0016 §8.1 step 2): past `palw_model_block_rights_v1`, a model-class Attempt finds one of its model's block
-    /// rights — own, or (past φ) within the epoch's `A_m`-weighted reissue snapshot, or the first-come σ rule where no snapshot could
-    /// be taken — never past the epoch total; otherwise it is refused before acceptance (`ModelBlockRightsRefused`, skippable for the
+    /// rights — own, or (past φ) within the epoch's `A_m`-weighted reissue snapshot (none where no snapshot could be taken: V2, user
+    /// decision 2026-10-15, no first-come fallback) — never past the epoch total; otherwise it is refused before acceptance (`ModelBlockRightsRefused`, skippable for the
     /// block's own attempt). `Ok` below the fence and for the floor class (the floor and the heartbeat keep their own rules).
     pub(super) fn rfc0016_rights_admit_v1(&self, class_id: &Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
         if !self.params.rfc0016_rights_active_at(now_daa) || *class_id == self.params.base_class_id() {
