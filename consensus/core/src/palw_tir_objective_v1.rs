@@ -96,6 +96,29 @@ pub fn adjudicate_authenticated_output_v1(
     adjudicate_output_target_v1(target, source, ids)
 }
 
+/// **G14 R4: the ORIGINAL frame's output adjudication.** The claim record of a free-prompt claim may not retain its output root
+/// (`PalwOffenceTargetV1::output_root` is zero where only a liability/vesting row is left); the frame retains the literal original
+/// public FP commitment, whose `output_root` the producer signed at acceptance. It is used only when it agrees with whatever the
+/// native target retained — never to replace a retained value — and an unknown (zero) original commitment convicts nobody.
+pub fn adjudicate_original_output_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    original_output_root: Hash64,
+    source: &crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
+    ids: &crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1,
+) -> Result<PalwTirOutputOutcomeV1, String> {
+    let mut target =
+        crate::palw_offence_attribution_v1::palw_offence_target_v1(state, &claim).ok_or("TIR original output target is absent")?;
+    state.tir_class_v1(&target.class_id).ok_or("TIR original output target has no native registered program")?;
+    if original_output_root == Hash64::default()
+        || (target.output_root != Hash64::default() && target.output_root != original_output_root)
+    {
+        return Err("TIR original output commitment is unknown or differs from the native claim record".into());
+    }
+    target.output_root = original_output_root;
+    adjudicate_output_target_v1(target, source, ids)
+}
+
 fn original_job_matches_v1(target: &PalwOffenceTargetV1, context: &crate::palw_v2::PalwJobContextV2) -> bool {
     target.job_identity != Hash64::default()
         && match target.lane {

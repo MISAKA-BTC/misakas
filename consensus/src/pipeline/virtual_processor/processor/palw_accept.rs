@@ -2218,6 +2218,14 @@ impl VirtualStateProcessor {
                 }
                 return Ok(Some(frame.plan_v1().owner_terms_v1()?.plan.rent_sompi));
             }
+            if matches!((&control.target, &control.action), (T::Conviction, A::Convict(_))) {
+                let frame = kaspa_consensus_core::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, control.claim)
+                    .ok_or("public conviction has no paid original TIR frame")?;
+                if frame.plan_v1().allocation_id != control.allocation_id || frame.plan_v1().source_id != control.source_id {
+                    return Err("conviction rent substitutes the original allocation or source".into());
+                }
+                return Ok(Some(frame.conviction_rent_v1()));
+            }
         }
         Ok(None)
     }
@@ -2519,8 +2527,15 @@ impl VirtualStateProcessor {
         // certification a permanent halt on that network. Below the fence `PALW_RENT_UNPRICED`
         // makes the whole rule read as absent rather than as "everyone underpaid".
         let priced = self.palw_certification_rent_at(block_daa);
-        let fee_of = |carrier: TransactionId| {
-            if priced || tir_public_armed { carrier_fees.get(&carrier).copied().unwrap_or(0) } else { PALW_RENT_UNPRICED }
+        // G14 R2: past `palw_tir_public_conviction_v1` the TIR route's own carriers (a TFP1 original, a TIR control) read their
+        // actual fee whatever the certification-rent fence says; every OTHER carrier keeps exactly the reading it had (priced or
+        // `PALW_RENT_UNPRICED`), so arming this route moves no other object's rent rule.
+        let fee_of = |carrier: TransactionId, tir_route: bool| {
+            if priced || (tir_public_armed && tir_route) {
+                carrier_fees.get(&carrier).copied().unwrap_or(0)
+            } else {
+                PALW_RENT_UNPRICED
+            }
         };
         // **The 2026-09-23 Position route matrix, P-B1: a carrier-borne buy or seed names, here, who
         // it is paid back to if acceptance refuses it** — the one place the carrier transaction is
@@ -2566,7 +2581,9 @@ impl VirtualStateProcessor {
                     _ => None,
                 };
                 PalwCarriedObjectV1 {
-                    carrier_fee: fee_of(carried.carrier), history_pledge, original_binding: original_bindings.get(&carried.carrier).cloned(),
+                    carrier_fee: fee_of(carried.carrier, tir_public_carriers.contains_key(&carried.carrier)),
+                    history_pledge,
+                    original_binding: original_bindings.get(&carried.carrier).cloned(),
                     tir_public_original: tir_public_carriers.get(&carried.carrier).cloned(),
                     custody_delegation: custody_delegations.get(&carried.carrier).cloned(),
                     object: carried.object, refund: None, unrefundable: None,
@@ -2574,7 +2591,21 @@ impl VirtualStateProcessor {
             }))
             .chain(lifecycle_objects.into_iter().map(|carried| {
                 let (refund, unrefundable) = refund_of(&carried);
-                PalwCarriedObjectV1 { carrier_fee: fee_of(carried.carrier), history_pledge: None, tir_public_original: None, original_binding: None, custody_delegation: None, refund, unrefundable, object: carried.object }
+                let tir_route = matches!(
+                    carried.object,
+                    kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::TirPublicControlV1 { .. }
+                        | kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::TirPublicGrantReadyV1 { .. }
+                );
+                PalwCarriedObjectV1 {
+                    carrier_fee: fee_of(carried.carrier, tir_route),
+                    history_pledge: None,
+                    tir_public_original: None,
+                    original_binding: None,
+                    custody_delegation: None,
+                    refund,
+                    unrefundable,
+                    object: carried.object,
+                }
             }))
             .collect()
     }

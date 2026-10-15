@@ -5155,6 +5155,11 @@ pub(crate) mod tests {
             // G14 TIR native seed and class layout, owned by `palw_staged_tir_route_v1`.
             (168, 0x08ee1a77654c016e),
             (169, 0xa24f46d0931b98b5),
+            // G14's original paid TIR control (170, incl. the appended common `Conviction` / `Convict` filing) and the atomic Valid
+            // grant/Ready (171), owned by `palw_tir_public_conviction_v1`. UNPINNED IN SOURCE (no build in the source-only pass): the
+            // validation pass re-pins both from this test's `[a2u-pins]` listing in the same commit that first compiles them.
+            (170, 0x0000000000000000),
+            (171, 0x0000000000000000),
             (131, 0xf970df6a8bdc323c),
         ];
 

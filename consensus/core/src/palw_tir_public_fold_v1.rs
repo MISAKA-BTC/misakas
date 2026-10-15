@@ -102,7 +102,7 @@ pub fn palw_tir_public_preclaim_quote_v1(
     object: &PalwConsensusObjectV2,
     envelope: &crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1,
 ) -> Result<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1, PalwStateV2Error> {
-    let builder = TransitionBuilder::new(base, params, false, false, false, false, extras);
+    let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
     rules(&builder)?;
     extras.tir_public_network_domain_v1.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
     let (_, original) = paired_claim(object)?;
@@ -230,6 +230,14 @@ pub(super) fn install_original_v1(
     if u128::from(p.terms.plan.deposit_sompi) > room {
         return Err(refused("TIR original full deposit exceeds producer native work room"));
     }
+    // **G14 R1/R6: the frame's absolute clocks are fixed with the claim's own (d0).** The claim reaches `Final` no earlier than
+    // the frame's collection door closes (`palw_claim_final_floor_v1`), so a claim whose X3 hard deadline is fixed before that door
+    // would have two incompatible d0 contracts; it is refused here rather than extended later (X3: no extension past d0).
+    if let Some(hard) = crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(b.params, c) {
+        if hard < p.terms.collect_until_daa {
+            return Err(refused("TIR original collection door outlives the claim's fixed X3 hard deadline"));
+        }
+    }
     let original_source = source(b, &frame)?;
     let preparation = PalwTirPublicPreparationV1::new_v1(
         PalwTirPublicPreparationContractV1 {
@@ -356,7 +364,7 @@ pub(super) fn apply_control_v1(
     network_domain: Hash64,
     control: &crate::palw_tir_public_carriage_v1::PalwTirPublicControlV1,
 ) -> Result<(), PalwStateV2Error> {
-    let saved = b.checkpoint();
+    let saved = b.try_checkpoint()?;
     let result = apply_control_inner_v1(b, ctx, network_domain, control);
     if result.is_err() {
         b.restore(saved);
@@ -433,6 +441,12 @@ fn apply_control_inner_v1(
             )
             .map_err(refused)?
         }
+        (T::Conviction, A::Convict(evidence)) => {
+            if control.declared_rent_sompi != frame.conviction_rent_v1() || control.expected_turn != 0 {
+                return Err(refused("TIR public conviction must burn exactly the frame's native terminal rent and carry no turn"));
+            }
+            return apply_conviction_v1(b, ctx, &frame, control.signer, evidence);
+        }
         _ => return Err(refused("TIR control substitutes preparation/open/owner namespaces")),
     };
     // Pure effects are not sanctions. Only the native literal default after its
@@ -454,6 +468,14 @@ fn apply_control_inner_v1(
             let offence = crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &control.claim);
             if !b.state.consumed_offences.contains_key(&offence) && !b.state.slashable_locks.contains_key(&(*seat, control.claim)) {
                 return Err(refused("TIR qualified default lost its unconsumed native S4 lock"));
+            }
+        }
+        // G14 R5: every literal liable defaulter must still hold its original exit hold, so the conviction opens with its
+        // collateral LOCKED and `conviction_collected_v1` counts a real debit. A lapsed hold is refused here — the helper's
+        // skip of an unlocked bond is never recorded as a successful collection.
+        for bond in unpaid.iter() {
+            if !b.state.staged_bond_exit_held_v1(bond, ctx.daa_score) {
+                return Err(refused("TIR default names a liable bond whose original exit hold lapsed; no fictitious collection"));
             }
         }
     }
@@ -479,6 +501,165 @@ fn apply_control_inner_v1(
     Ok(())
 }
 
+/// **G14 R4: who may file a public conviction against an ORIGINAL frame** — any Active bond at or above the floor that is not
+/// liable on this claim: not its producer and not a seat holding a credited exact Valid custody grant. A drawn Panel seat that
+/// signed no Valid and a bond outside the Panel are the SAME filer; neither a vote nor a co-signature is read.
+fn conviction_filer_v1(b: &TransitionBuilder<'_>, frame: &Frame, filer: PalwBondKeyV2) -> Result<(), PalwStateV2Error> {
+    let record = b.state.bond(&filer).ok_or(PalwStateV2Error::MissingBond(filer))?;
+    if filer == frame.custody_v1().pledge_v1().producer
+        || frame.original_custody_v1().credit_v1(&filer).is_some()
+        || frame.original_custody_v1().grant_v1(&filer).is_some()
+        || !matches!(record.status, PalwBondStatusV2::Active)
+        || record.collateral < b.params.min_collateral_sompi()
+    {
+        return Err(refused("TIR public conviction filer is liable on this claim, inactive or below the floor"));
+    }
+    Ok(())
+}
+
+/// The complete original ID sequence, re-chunked natively into the canonical 1024-ID requests and EOF-authenticated against the
+/// claim's committed logits trace root. Partial sequences authenticate nothing.
+fn authenticated_original_ids_v1(
+    source: &crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
+    rows_root: Hash64,
+    ids: &[u32],
+) -> Result<crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1, PalwStateV2Error> {
+    use crate::palw_tir_public_source_v1::{
+        PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1, PalwTirPublicIdsAssemblerV1, PalwTirPublicRequestV1, PalwTirPublicResponseV1,
+    };
+    if ids.len() as u64 != u64::from(source.decode_count_v1()) {
+        return Err(refused("TIR public output conviction does not carry the complete original ID sequence"));
+    }
+    let mut assembler = PalwTirPublicIdsAssemblerV1::default();
+    let mut offset = 0usize;
+    for chunk in ids.chunks(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize) {
+        let request = PalwTirPublicRequestV1::Ids { offset: u32::try_from(offset).map_err(|_| refused("TIR ID offset overflow"))? };
+        let response = PalwTirPublicResponseV1::Ids { rows_root, ids: chunk.to_vec() };
+        offset += chunk.len();
+        if let Some(done) = assembler.push_v1(source, &request, &response).map_err(refused)? {
+            if offset != ids.len() {
+                return Err(refused("TIR authenticated IDs reached EOF before the carried sequence ended"));
+            }
+            return Ok(done);
+        }
+    }
+    Err(refused("TIR public output conviction never reached the original authenticated EOF"))
+}
+
+/// **G14 R4/R6: one public bonded verifier convicts an ORIGINAL frame from authenticated public material alone.**
+///
+/// 1. The filer is any non-liable Active above-floor bond ([`conviction_filer_v1`]); the window is the frame's own original
+///    collection door `[accepted, collect_until)` — fixed at d0, never extended — inside which the claim cannot reach `Final`
+///    (`palw_claim_final_floor_v1` floors it at `collect_until`), so no Final weight, receipt spend, escrow, Gate C credit or
+///    coinbase leg can escape before this door closes.
+/// 2. The evidence is adjudicated natively ([`crate::palw_tir_objective_v1`]): the registered program filled from state, the
+///    original class/artifact/execution/trace/job pinned from the claim, the court rules and the step ladder the native ones,
+///    the proof body bounded by the producer-prepaid terminal witness ceiling. `PredicateHolds` / `OutputHolds` refuse the object
+///    (nothing changes; it is neither guilt nor a certificate of honesty). Errors (`Need`, missing material, oversize, EOF short)
+///    refuse it too — none of them is read as a finding.
+/// 3. The sanction reuses the established economic funnels, never a new tariff: every credited Valid custodian's S4 (its native
+///    lock plus the S3/S4 action tier, keyed `palw_false_valid_offence_id_v2(seat, claim)`, so once only across this route, the
+///    kind-3 route and the DA route), then the producer through `convict_by_court_verdict_v1` (void a live claim `CourtFraud`,
+///    or reverse a `Final` one — which revokes its RFC-0018 Gate C weight and frontier/settlement credit by the one predicate —
+///    and record `CourtConviction` once, the filer's reporter reward, by-claim round-right forfeiture and ADR-0160's intent-class
+///    funnel). An execution-proving fault also forfeits every minted right by ROOT, so a sibling claim sharing the convicted
+///    execution (and an EXEC root's dependent slices, through `void_claim`) loses its standing too.
+/// 4. Every liable bond must still hold its original exit hold (the frame's `staged_holds`), so its collateral is locked when the
+///    conviction opens and the debit is actually collectible (`conviction_collected_v1`); a liable bond without it refuses the
+///    filing instead of recording a fictitious collection.
+fn apply_conviction_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    frame: &Frame,
+    filer: PalwBondKeyV2,
+    evidence: &crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_tir_objective_v1::{PalwTirObjectiveOutcomeV1 as Arith, PalwTirOutputFaultV1 as OutFault, PalwTirOutputOutcomeV1 as Out};
+    use crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1 as E;
+    let claim_id = frame.plan_v1().original_claim;
+    let terms = frame.plan_v1().terms;
+    if ctx.daa_score < terms.accepted_daa || ctx.daa_score >= terms.collect_until_daa {
+        return Err(refused("TIR public conviction is outside the frame's original collection door"));
+    }
+    conviction_filer_v1(b, frame, filer)?;
+    let claim = b.state.claim(&claim_id).cloned().ok_or(PalwStateV2Error::MissingClaim(claim_id))?;
+    let producer = frame.custody_v1().pledge_v1().producer;
+    if claim.bond != producer || claim.execution_root != frame.original_v1().execution_root {
+        return Err(refused("TIR public conviction target changes the original claim's producer or execution"));
+    }
+    if b.state.consumed_offences.contains_key(&palw_court_conviction_offence_id_v1(&producer.0, &claim_id)) {
+        return Err(refused("TIR original claim is already convicted; a conviction is recorded once"));
+    }
+    let native = rules(b)?;
+    // `Some(root)`: execution-proving (forfeit by root); `None`: claim-proving only (by claim, in the funnel's record).
+    let by_root = match evidence {
+        E::Arithmetic { proof } => {
+            match crate::palw_tir_objective_v1::adjudicate_original_v1(
+                &b.state,
+                claim_id,
+                proof,
+                &native.court,
+                frame.descriptor_v1().maximum_leaves,
+                native.prompt_form,
+                frame.plan_v1().terminal.maximum_witness_bytes,
+            )
+            .map_err(refused)?
+            {
+                Arith::Convicts(finding) => {
+                    if finding.target_v1().claim_id != claim_id || finding.target_v1().execution_root != claim.execution_root {
+                        return Err(refused("TIR arithmetic finding names another claim or execution"));
+                    }
+                    Some(claim.execution_root)
+                }
+                Arith::PredicateHolds { .. } => {
+                    return Err(refused("TIR nominated arithmetic primitive holds: no conviction, and no finding of claim honesty"));
+                }
+            }
+        }
+        E::Output { rows_root, ids } => {
+            let original_source = source(b, frame)?;
+            let authenticated = authenticated_original_ids_v1(&original_source, *rows_root, ids)?;
+            match crate::palw_tir_objective_v1::adjudicate_original_output_v1(
+                &b.state,
+                claim_id,
+                frame.original_v1().output_root,
+                &original_source,
+                &authenticated,
+            )
+            .map_err(refused)?
+            {
+                Out::Fault(found) => match found.fault_v1() {
+                    OutFault::OutputRootMismatch => None,
+                    OutFault::IdOutsideVocabulary { .. } => Some(claim.execution_root),
+                },
+                Out::OutputHolds { .. } => {
+                    return Err(refused("TIR original output identity holds: no conviction, and no finding of claim honesty"));
+                }
+            }
+        }
+    };
+    // Liable = the producer and every exact credited Valid custodian (a drawn uncredited seat is not liable and is never charged).
+    let credited: Vec<PalwBondKeyV2> = frame.original_custody_v1().credits_v1().map(|(seat, _)| *seat).collect();
+    for bond in std::iter::once(&producer).chain(credited.iter()) {
+        if !b.state.staged_bond_exit_held_v1(bond, ctx.daa_score) {
+            return Err(refused("TIR liable bond lost its original exit hold; refusing a fictitious collection"));
+        }
+    }
+    // 1. Each credited Valid custodian: S4, lock first (consumed keys skip — once across every route).
+    if !credited.is_empty() {
+        let conv = b.open_conviction_v1(&credited, ctx.daa_score);
+        let g = b.claim_g_v1(&claim_id).map(|gains| gains.g()).unwrap_or(0);
+        b.charge_covering_signers_v1(&conv, claim_id, &credited, g)?;
+    }
+    // 2. The producer, through the one funnel for a proven verdict (void / Final reversal, Gate C revocation, CourtConviction).
+    b.convict_by_court_verdict_v1(ctx, claim_id, &claim, filer, None)?;
+    // 3. An execution-proving fault forfeits by ROOT (siblings sharing the convicted execution).
+    if let Some(root) = by_root {
+        b.forfeit_minted_round_rights(&root);
+    }
+    Ok(())
+}
+
 /// Ordinary Valid validation, backing/credit/S4, new grant and Ready all commit
 /// in ONE native object. Any failure rolls every intermediate write back, not
 /// just the new frame. No other object may pre-credit this raw promise.
@@ -488,7 +669,7 @@ pub(super) fn apply_grant_ready_v1(
     network_domain: Hash64,
     movement: &crate::palw_tir_public_carriage_v1::PalwTirPublicGrantReadyV1,
 ) -> Result<(), PalwStateV2Error> {
-    let saved = b.checkpoint();
+    let saved = b.try_checkpoint()?;
     let result = apply_grant_ready_inner_v1(b, ctx, network_domain, movement);
     if result.is_err() {
         b.restore(saved);

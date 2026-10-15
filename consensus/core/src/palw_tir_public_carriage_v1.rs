@@ -57,12 +57,104 @@ pub enum PalwTirPublicControlTargetV1 {
     Preparation {
         original_accepted_daa: u64,
     },
+    /// **G14 R4: the one common public-conviction door of an ORIGINAL frame** (appended; tag 170 is owned by
+    /// `palw_tir_public_conviction_v1`, so no live byte moves). The filer is the literal signer: any Active,
+    /// above-floor bond that is neither the producer nor a credited Valid custodian of this claim — a drawn
+    /// Panel seat that signed no Valid and a bond outside the Panel use the SAME object and reach the SAME
+    /// native verdict. No vote, quorum or Panel co-signature is read.
+    Conviction,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwTirPublicControlActionV1 {
     Open,
     Acquisition(OwnedAction),
     Preparation(OwnedAction),
+    /// Appended with [`PalwTirPublicControlTargetV1::Conviction`]; never carries rent.
+    Convict(PalwTirPublicConvictionEvidenceV1),
+}
+
+/// The most original IDs one conviction may carry before allocation-bounded decoding refuses it. The
+/// total control bound ([`PALW_TIR_PUBLIC_CONTROL_MAX_BYTES_V1`]) is the binding limit; this is the
+/// element preflight so a declared length cannot reserve more than the carrier holds.
+pub const PALW_TIR_PUBLIC_CONVICTION_MAX_IDS_V1: usize = 20_000;
+
+/// **Public conviction evidence over the frame's AUTHENTICATED original material only.** Each variant is
+/// adjudicated natively against the original claim's committed roots (execution, trace, step, output),
+/// its registered class/program and its frozen native court rules — never against a producer capture,
+/// checkpoint or any party's declaration. A finding that the nominated predicate HOLDS convicts nobody
+/// and certifies nothing; the object is then refused (it changes no state). PRINCIPLES §8: these are
+/// Merkle/identity openings and deterministic recomputation of one localized primitive, never a
+/// cryptographic proof of the whole computation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwTirPublicConvictionEvidenceV1 {
+    /// An arithmetic or logits primitive over the original roots (`TirCone` / `TirLogits`), its operands
+    /// opened against the class artifact root and the claim's committed step tree. The registered program
+    /// is filled natively; a carried program is refused.
+    Arithmetic { proof: Box<crate::palw_court_v2::PalwCourtVerdictProofV2> },
+    /// The complete original generated-ID sequence, EOF-authenticated natively against the committed
+    /// logits trace root by `rows_root` (the canonical 1024-ID chunks are re-derived by the fold).
+    Output { rows_root: Hash64, ids: Vec<u32> },
+}
+impl BorshSerialize for PalwTirPublicConvictionEvidenceV1 {
+    fn serialize<W: std::io::Write>(&self, w: &mut W) -> std::io::Result<()> {
+        match self {
+            Self::Arithmetic { proof } => {
+                0u8.serialize(w)?;
+                proof.serialize(w)
+            }
+            Self::Output { rows_root, ids } => {
+                1u8.serialize(w)?;
+                rows_root.serialize(w)?;
+                ids.serialize(w)
+            }
+        }
+    }
+}
+impl BorshDeserialize for PalwTirPublicConvictionEvidenceV1 {
+    fn deserialize_reader<R: std::io::Read>(r: &mut R) -> std::io::Result<Self> {
+        let invalid = |why: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, why.to_string());
+        match u8::deserialize_reader(r)? {
+            0 => Ok(Self::Arithmetic { proof: Box::new(BorshDeserialize::deserialize_reader(r)?) }),
+            1 => {
+                let rows_root = Hash64::deserialize_reader(r)?;
+                let count = u32::deserialize_reader(r)? as usize;
+                if count == 0 || count > PALW_TIR_PUBLIC_CONVICTION_MAX_IDS_V1 {
+                    return Err(invalid("TIR conviction ID vector exceeds its native preflight bound before allocation"));
+                }
+                let mut ids = Vec::new();
+                ids.try_reserve_exact(count).map_err(|_| invalid("TIR conviction ID allocation failed"))?;
+                for _ in 0..count {
+                    ids.push(u32::deserialize_reader(r)?);
+                }
+                Ok(Self::Output { rows_root, ids })
+            }
+            _ => Err(invalid("unknown TIR conviction evidence form")),
+        }
+    }
+}
+impl PalwTirPublicConvictionEvidenceV1 {
+    /// Shape only: the primitive kind, a stripped program and bounded IDs. Not an adjudication.
+    pub fn check_v1(&self) -> Result<(), String> {
+        use crate::palw_court_v2::PalwCourtVerdictProofV2 as P;
+        match self {
+            Self::Arithmetic { proof } => {
+                if !matches!(proof.as_ref(), P::TirCone { .. } | P::TirLogits { .. }) {
+                    return Err("TIR public conviction carries no original cone/logits primitive".into());
+                }
+                let mut stripped = proof.as_ref().clone();
+                stripped.tir_strip_program_v1();
+                if stripped != **proof {
+                    return Err("TIR public conviction carries its own program; the registered program is filled natively".into());
+                }
+            }
+            Self::Output { rows_root, ids } => {
+                if *rows_root == Hash64::default() || ids.is_empty() || ids.len() > PALW_TIR_PUBLIC_CONVICTION_MAX_IDS_V1 {
+                    return Err("TIR public output conviction has no bounded authenticated ID sequence".into());
+                }
+            }
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
 pub struct PalwTirPublicControlV1 {
@@ -99,9 +191,11 @@ impl PalwTirPublicControlV1 {
     fn check_payload_v1(&self) -> Result<(), String> {
         use PalwTirPublicControlActionV1 as A;
         use PalwTirPublicControlTargetV1 as T;
-        let opens = matches!((&self.target, &self.action), (T::OwnerOpen { .. }, A::Open));
-        if opens != (self.declared_rent_sompi != 0) {
-            return Err("TIR Open requires declared rent and prepaid continuations require zero new rent".into());
+        // An Open buys an owner's acquisition; a conviction filing buys one native adjudication (the frame's terminal rent).
+        // Both declare an exact rent burned from the OUTER carrier fee; prepaid continuations declare zero.
+        let paid = matches!((&self.target, &self.action), (T::OwnerOpen { .. }, A::Open) | (T::Conviction, A::Convict(_)));
+        if paid != (self.declared_rent_sompi != 0) {
+            return Err("TIR Open/conviction requires declared rent and prepaid continuations require zero new rent".into());
         }
         if self.version != 1
             || self.claim == Hash64::default()
@@ -131,6 +225,7 @@ impl PalwTirPublicControlV1 {
                 }
                 self.check_action_bounds_v1(action)?;
             }
+            (T::Conviction, A::Convict(evidence)) if self.expected_turn == 0 => evidence.check_v1()?,
             (T::Preparation { original_accepted_daa }, A::Preparation(action)) if self.expected_turn == 0 => {
                 match action {
                     OwnedAction::WorkDebit(debit)
@@ -258,6 +353,33 @@ impl PalwTirPublicControlV1 {
             }
         }
         Ok(())
+    }
+    /// **The unsigned common conviction filing** (G14 R4): the frame's ORIGINAL allocation and source ids,
+    /// the literal filer and the evidence. The caller signs [`Self::signing_message_v1`] under
+    /// [`PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1`] with the filer bond's key. Identical for a Panel seat and an
+    /// outside bond: neither field names a role.
+    pub fn conviction_unsigned_v1(
+        claim: Hash64,
+        allocation_id: Hash64,
+        source_id: Hash64,
+        filer: PalwBondKeyV2,
+        evidence: PalwTirPublicConvictionEvidenceV1,
+        conviction_rent_sompi: u64,
+    ) -> Result<Self, String> {
+        let control = Self {
+            version: 1,
+            claim,
+            allocation_id,
+            source_id,
+            target: PalwTirPublicControlTargetV1::Conviction,
+            expected_turn: 0,
+            declared_rent_sompi: conviction_rent_sompi,
+            signer: filer,
+            action: PalwTirPublicControlActionV1::Convict(evidence),
+            signature: Vec::new(),
+        };
+        control.check_payload_v1()?;
+        Ok(control)
     }
 }
 

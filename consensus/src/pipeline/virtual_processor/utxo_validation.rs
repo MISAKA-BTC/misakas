@@ -366,7 +366,9 @@ impl VirtualStateProcessor {
             return kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx))
                 .objects.first().and_then(|carried| {
                     if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::TirPublicControlV1 { control } = &carried.object {
-                        if matches!((&control.target, &control.action), (T::OwnerOpen { .. }, A::Open)) && control.check_v1().is_ok() {
+                        if matches!((&control.target, &control.action), (T::OwnerOpen { .. }, A::Open) | (T::Conviction, A::Convict(_)))
+                            && control.check_v1().is_ok()
+                        {
                             return Some(control.declared_rent_sompi);
                         }
                     }
@@ -619,7 +621,11 @@ impl VirtualStateProcessor {
                 if finality_fee_active
                     && validated_tx.tx.outputs.iter().any(|o| parse_evm_deposit_lock(&o.script_public_key).is_some())
                 {
-                    finality_fee += validated_tx.calculated_fee;
+                    // G14 R2: a TIR rent declaration is BURNED, never re-classified into the finality split (0 below
+                    // `palw_tir_public_conviction_v1`, so every shipped network classifies exactly as before).
+                    finality_fee += validated_tx
+                        .calculated_fee
+                        .saturating_sub(self.palw_tir_public_declared_rent_v1(validated_tx.tx, pov_daa_score));
                 }
             }
 

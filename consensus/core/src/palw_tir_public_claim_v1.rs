@@ -130,6 +130,12 @@ impl PalwTirPublicClaimV1 {
     pub fn original_custody_v1(&self) -> &PalwTirPublicOriginalCustodyV1 {
         &self.custody
     }
+    /// **G14 R4: what one public conviction filing burns** — the frame's own native terminal envelope rent (the price of one
+    /// bounded adjudication), at least one sompi so the filing is always a declared, burned payment. Derived from the frozen
+    /// original plan, never from the filer's carrier; a refused filing burns it all the same (no free adjudication CPU).
+    pub fn conviction_rent_v1(&self) -> u64 {
+        self.plan.terminal.envelope.rent_sompi.max(1)
+    }
 
     /// Structural consistency is deliberately weaker than native admission.
     /// In particular neither this check nor an allocation checksum establishes
