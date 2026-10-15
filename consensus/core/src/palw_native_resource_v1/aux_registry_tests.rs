@@ -258,3 +258,41 @@ fn ambiguous_and_raw_rows_are_bounded_and_never_under_counted() {
     let mut reader = NativeWireReaderV1::new(odd.as_slice(), odd.len() as u64);
     assert!(super::wire_kernel_aux::scan_native_aux_row_v1(106, &key, &mut reader).is_err());
 }
+
+/// 2026-10-15 renumbering: Codex's material release recovery V2 (134 → 137) and retired compact V4 (135 → 138) no longer share
+/// a table with RFC-0016 (132–135) or RFC-0018 (136). Each renumbered table's own key grammar reaches its own codec arm.
+#[test]
+fn renumbered_codex_aux_tables_never_collide_with_rfc0016_or_rfc0018() {
+    use crate::palw_rfc0016_v1::ledger::{
+        PALW_RFC0016_QUEUE_INDEX_TABLE_V1, PALW_RFC0016_QUEUE_TABLE_V1, PALW_RFC0016_RIGHTS_TABLE_V1, PALW_RFC0016_TELEMETRY_TABLE_V1,
+    };
+    let recovery = crate::palw_material_release_recovery_v2::PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2;
+    let compact = crate::palw_claim_compact_v4::PAID_CLAIM_COMPACT_V4;
+    assert_eq!((recovery, compact), (137, 138));
+    let all = [
+        crate::palw_beacon_bootstrap_v1::PALW_BEACON_BOOTSTRAP_TABLE_V1,
+        crate::palw_model_eligibility_v1::PALW_MODEL_ELIGIBILITY_TABLE_V1,
+        PALW_RFC0016_RIGHTS_TABLE_V1,
+        PALW_RFC0016_QUEUE_TABLE_V1,
+        PALW_RFC0016_QUEUE_INDEX_TABLE_V1,
+        PALW_RFC0016_TELEMETRY_TABLE_V1,
+        crate::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_TABLE_V1,
+        recovery,
+        compact,
+    ];
+    let mut unique = all.to_vec();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), all.len(), "aux table numbers collide: {all:?}");
+    // An unallocated key shape inside either renumbered table fails closed as malformed (never as Unsupported).
+    for table in [recovery, compact] {
+        let mut empty = NativeWireReaderV1::new(&[][..], 0);
+        let error = super::wire_kernel_aux::scan_native_aux_row_v1(table, &[0xEE; 7], &mut empty).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "table {table}");
+    }
+    // A 64-byte RFC-0016 queue-index key under 134 still reaches RFC-0016's (Hash64, u64) codec, not the recovery codec.
+    let row = borsh::to_vec(&(crate::Hash64::default(), 7u64)).unwrap();
+    let mut reader = NativeWireReaderV1::new(row.as_slice(), row.len() as u64);
+    super::wire_kernel_aux::scan_native_aux_row_v1(PALW_RFC0016_QUEUE_INDEX_TABLE_V1, &[1u8; 64], &mut reader).unwrap();
+    assert_eq!(reader.remaining(), 0);
+}

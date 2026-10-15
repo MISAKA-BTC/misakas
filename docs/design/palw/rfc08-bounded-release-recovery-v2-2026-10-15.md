@@ -14,7 +14,7 @@ A second issue arises after the last provider ACK: the terminal receipt disappea
 
 Recovery enrollment requires a fresh, unused, sequence-zero monetary covenant, sponsor and all provider signatures over a distinct recovery domain. It cannot backfill unavailable historical generations for an old used covenant. New work after this gate requires explicit enrollment before the first consumer. Replacement preserves existing paid/earned rights and requires both ordinary V1 replacement signatures and the additional recovery signatures of all new providers.
 
-Aux134 has two exact key grammars:
+Aux137 (renumbered from 134 on 2026-10-15; 134/135 are RFC-0016's) has two exact key grammars:
 
 * Root64: `PalwMaterialRecoveryRowV2::Active/Terminal`, including bounded signed generation/provider history.
 * `0xA1 || Borsh(PalwBondKeyV2)` (69 bytes): `PalwMaterialProviderAckCheckpointV2`, one current ACK stream checkpoint per consenting provider identity.
@@ -27,7 +27,7 @@ Each ACK binds exact stream, previous receipt, receipt id and checked next seque
 
 The local Consensus API reconstructs the parent-state committed by a current native-finalized header, checks its committed root and strong consistency, and refuses incomplete/moving pruning imports or changed virtual tips. A terminal receipt present in this state authorizes only its exact root and recorded stored generation. It does not need the old Release header/delta. Missing/reconstruction-unknown facts retain material.
 
-Op242 already authenticates the complete aux table. The proof pager now retains and structurally preflights aux134 rows as well as aux120; `finish_with_recovery_v2` alone constructs `ProvenMonetarySnapshotV2`. The V2 remote GC oracle requires this complete proof plus the separately configured native finality authority. Intermediate pages and RPC availability booleans are not release authority.
+Op242 already authenticates the complete aux table. The proof pager now retains and structurally preflights aux137 rows as well as aux120; `finish_with_recovery_v2` alone constructs `ProvenMonetarySnapshotV2`. The V2 remote GC oracle requires this complete proof plus the separately configured native finality authority. Intermediate pages and RPC availability booleans are not release authority.
 
 The provider GC janitor tries the current finalized terminal receipt even if it never observed the active covenant. Its deletion intent and exact native authority-index cleanup receipts remain fsynced/replayable across crashes. The provider signs an ACK only after every generation it served has a verified durable deletion receipt and authority metadata cleanup is fsynced. Its outbox uses an exclusive kernel lease, bounded structural preflight and atomic publication. Exactly one ACK per provider may be signed/in flight. The next ACK cannot be signed until exact current-finalized stream/sequence/receipt presence retires the preceding outbox entry durably. This prevents a later local ACK from overwriting the one checkpoint needed after a long offline interval.
 

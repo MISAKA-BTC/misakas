@@ -1,11 +1,19 @@
-//! Versioned native compact admission. Never armed by a shipped preset.
+//! Versioned native compact admission — **retired under PRINCIPLES §8 (2026-10-15)**. Never armed by any preset.
 //! V3 full-material policies do not authorize this contract or its new proof binding.
+//!
+//! Retirement boundary: the fence validator refuses any configured value, the fold refuses both object kinds and any V4
+//! interactive plan, [`PalwKernelRouteStateV1::validate_paid_round_v4`] refuses a V4 plan, and the state consistency check
+//! refuses any row in this table. The types, the table number and the decoders remain only so historical wire bytes keep their
+//! identity (PRINCIPLES §8.5); no history holds a row because the fence was never armed.
+//!
+//! Aux table renumbered 135 → 138 (2026-10-15): 134/135 belong to RFC-0016 (queue index, telemetry) and 136 to RFC-0018.
 use crate::config::params::{ForkActivation, Params};
 use crate::palw_mode_v2::PalwModeV2Error;
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::hash::{Digest, object_id};
 
-pub const PAID_CLAIM_COMPACT_V4: u8 = 135;
+/// Kernel-route aux table 138 (grepped free: ≤136 allocated, 137 is material release recovery V2). Retired, read-only.
+pub const PAID_CLAIM_COMPACT_V4: u8 = 138;
 pub const COMPACT_PROOF_BINDING_PREFIX_V4: u8 = 0x50;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwClaimCompactPolicyV4 {
@@ -44,9 +52,8 @@ impl Params {
     pub fn validate_palw_claim_compact_v4(&self) -> Result<(), PalwModeV2Error> {
         if let Some(f) = self.palw_claim_compact_v4 {
             f.policy.validate().map_err(PalwModeV2Error::InvalidOwned)?;
-            if f.activation != ForkActivation::never() {
-                return Err(PalwModeV2Error::InvalidOwned("compact V4 remains dormant pending native acceptance, independent cumulative soundness/source and economic review".into()));
-            }
+            // Retired (PRINCIPLES §8): no network, private profile or calibration world configures this fence again.
+            return Err(PalwModeV2Error::InvalidOwned(crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACT_RETIRED_REASON_V1.into()));
         }
         Ok(())
     }
@@ -111,7 +118,7 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         Ok(Some(row))
     }
     /// Structural row verification never draws entropy. Exact post-seed proof
-    /// roots are authenticated from aux135 rather than supplied by a caller.
+    /// roots are authenticated from aux138 rather than supplied by a caller.
     pub fn validate_paid_round_v4(
         &self,
         row: &crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3,
@@ -125,6 +132,10 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
                 return Err("V3 round cannot have a V4 proof binding".into());
             }
             return row.validate(a, l);
+        }
+        // PRINCIPLES §8: a V4 compact plan never validates a round, so it never completes, receipts or earns.
+        if crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACTS_RETIRED_V1 {
+            return Err(crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACT_RETIRED_REASON_V1.into());
         }
         let contract = self.paid_compact_contract_v4(&plan.id())?;
         contract.registration.validate(l)?;
@@ -162,6 +173,10 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let mut rows = route.aux.range((PAID_CLAIM_COMPACT_V4, Vec::new())..(PAID_CLAIM_COMPACT_V4 + 1, Vec::new())).peekable();
         if rows.peek().is_none() {
             return Ok(());
+        }
+        // Retired (PRINCIPLES §8): the fold never writes this table, so any row is inconsistent carriage.
+        if crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACTS_RETIRED_V1 {
+            return Err(refuse("retired compact V4 table holds a row".into()));
         }
         let now = self.last_point().map_or(0, |p| p.daa_score);
         let policy = params.claim_compact_v4_at(now).ok_or_else(|| refuse("rows without active compiled V4 capability".into()))?;

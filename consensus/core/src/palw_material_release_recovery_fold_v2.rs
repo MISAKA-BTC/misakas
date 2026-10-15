@@ -1,4 +1,4 @@
-//! Aux134 uses one pre-reserved cell per contract through Active -> Terminal.
+//! Aux137 (renumbered from 134) uses one pre-reserved cell per contract through Active -> Terminal.
 //! No Release can fail because a receipt/index table needs a new slot.
 use super::*;
 use crate::palw_material_release_recovery_v2::*;

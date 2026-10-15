@@ -2239,7 +2239,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     ),
     a2_row(
         PalwA2SlotV1::StateEncoding {
-            what: "kernel route aux134 root64 Active/Terminal reserved history and provider69 ACK stream checkpoint",
+            what: "kernel route aux137 root64 Active/Terminal reserved history and provider69 ACK stream checkpoint",
         },
         "palw_material_release_recovery_v2",
         "RFC08 bounded recovery and actual ACK application",

@@ -10,7 +10,9 @@ use crate::{
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::BTreeSet;
 
-pub const PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2: u8 = 134;
+/// Kernel-route aux table 137 (renumbered 134 → 137 on 2026-10-15: 134/135 are RFC-0016's queue index and telemetry, 136 is
+/// RFC-0018's certification table; 137 grepped free across this tree, integ/decisions-1015 and integ/validation).
+pub const PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2: u8 = 137;
 pub const PALW_MATERIAL_RELEASE_RECOVERY_MAX_CONTRACTS_V2: u32 = 4096;
 pub const PALW_MATERIAL_RELEASE_RECOVERY_MAX_GENERATIONS_V2: u16 = 64;
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
