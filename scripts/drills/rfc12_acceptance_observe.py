@@ -237,10 +237,12 @@ class AnchorReorged(NotObservable):
 
 
 def accepted_transactions(rpc, anchor, wanted, scan):
-    """Locate wanted transaction ids accepted on the selected chain after `anchor`, with their full bodies."""
-    wanted = {norm(txid) for txid in wanted}
+    """Locate wanted transaction ids accepted on the selected chain after `anchor`, with their full bodies.
+    `wanted=None` collects every accepted transaction of the window (bounded by the plan's scan bounds)."""
+    collect_all = wanted is None
+    wanted = set() if collect_all else {norm(txid) for txid in wanted}
     found, start, blocks, reads = {}, anchor, 0, 0
-    while wanted - set(found):
+    while collect_all or wanted - set(found):
         chain = rpc.call('getVirtualChainFromBlock', {'startHash': start, 'includeAcceptedTransactionIds': True,
                                                       'minConfirmationCount': None})
         if chain.get('removedChainBlockHashes'):
@@ -250,7 +252,8 @@ def accepted_transactions(rpc, anchor, wanted, scan):
         if blocks > scan['maximumScannedChainBlocks']:
             raise NotObservable('the accepted-transaction scan exceeds its predeclared chain-block bound')
         for entry in chain.get('acceptedTransactionIds') or []:
-            hits = {norm(txid) for txid in entry.get('acceptedTransactionIds') or []} & (wanted - set(found))
+            accepted = {norm(txid) for txid in entry.get('acceptedTransactionIds') or []}
+            hits = accepted - set(found) if collect_all else accepted & (wanted - set(found))
             if hits:
                 reads = _bodies(rpc, entry['acceptingBlockHash'], hits, found, reads, scan)
         if not added:
@@ -309,6 +312,27 @@ def outbox_records(root, role, kind, files):
         if names:
             records[str(record.relative_to(base))] = names
     return records
+
+
+COVERAGE_FILE = 'rfc06-exec-origin-coverage-v1.json'
+
+
+def coverage_file(root, role, maximum_bytes=16 << 20):
+    """The owned RFC-0006 coverage observation (written by custody/kernel-consumer paid-v4 nodes every 60 s)."""
+    path = network_dir(root, role) / COVERAGE_FILE
+    try:
+        with path.open('rb') as source:
+            raw = source.read(maximum_bytes + 1)
+    except FileNotFoundError:
+        return None
+    if len(raw) > maximum_bytes:
+        raise NotObservable('the coverage observation exceeds its bounded framing')
+    return json.loads(raw)
+
+
+def coverage_row(drill, root, role, label):
+    """The coverage file inside the role's own generation bracket; the judgement requires its DAA to match."""
+    return bracketed(drill, role, label, lambda rpc, dag, node: dict(coverage=coverage_file(root, role)))
 
 
 def provider_stores(root, role):

@@ -76,7 +76,7 @@ CAPACITY_FLAGS = {
 }
 TOP_KEYS = ('schemaVersion', 'kind', 'commit', 'network', 'salt', 'binaries', 'identity', 'bounds',
             'observationBoundsFile', 'fees', 'scan', 'settlement', 'usefulWork', 'topology', 'scale', 'crash',
-            'capacity', 'evm', 'bridge', 'market', 'accounting', 'reconciliation')
+            'capacity', 'evm', 'bridge', 'market', 'accounting', 'reconciliation', 'coverage')
 
 
 class PlanError(ValueError):
@@ -510,6 +510,15 @@ def _reconciliation(value):
                 maximumBondPages=_int(value['maximumBondPages'], 'reconciliation.maximumBondPages', 1, 100_000))
 
 
+def _coverage(value):
+    # RFC-0006 EXEC origin header coverage (rfc06-exec-origin-coverage-v1.json): written only by custody/kernel-consumer
+    # paid-v4 nodes. The archive role is launched with --archival; the pruned role is the producer, the GC source.
+    _keys(value, ('archiveRole', 'maximumWaitSeconds'), 'coverage')
+    return dict(archiveRole=_enum(value['archiveRole'], 'coverage.archiveRole', ('provider', 'checker')),
+                prunedRole='producer',
+                maximumWaitSeconds=_int(value['maximumWaitSeconds'], 'coverage.maximumWaitSeconds', 1))
+
+
 def parse_plan(raw):
     """Parse exact plan bytes. Returns a normalized dict carrying the bytes' SHA-256."""
     if not isinstance(raw, (bytes, bytearray)):
@@ -547,6 +556,7 @@ def parse_plan(raw):
         market=_market(plan['market'], allowed),
         accounting=_accounting(plan['accounting']),
         reconciliation=_reconciliation(plan['reconciliation']),
+        coverage=_coverage(plan['coverage']),
     )
     payers = [out['usefulWork']['kernelPayerSeat']] + out['usefulWork']['checker']['payerSeats']
     if set(payers) & set(out['accounting']['incomeSeats']):
@@ -555,6 +565,8 @@ def parse_plan(raw):
                       ('bridge.refund.lockFeeSompi', out['bridge']['refund']['lockFeeSompi'])):
         if fee > out['fees']['maximumDepositLockFeeSompi']:
             raise PlanError(name + ' exceeds fees.maximumDepositLockFeeSompi')
+    if out['coverage']['archiveRole'] == 'checker' and 'checker' not in out['usefulWork']['checker']['hosts']:
+        raise PlanError('an archive coverage role must be a custody node; the checker role hosts no selected checker')
     for point in out['crash']['points']:
         if point['trigger']['kind'] == 'checker-outbox' and point['role'] not in out['usefulWork']['checker']['hosts']:
             raise PlanError('crash point %s watches a checker outbox on a role that hosts no checker' % point['name'])

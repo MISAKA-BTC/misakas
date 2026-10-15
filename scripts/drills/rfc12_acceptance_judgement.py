@@ -33,7 +33,12 @@ CHECKBOXES = {
     5: 'bridge debit/backing/refund/withdrawal exactly once, both ledger roots, once-only settlement, market fill',
     6: 'CLI fee exposure vs accepted native fee, provider carrier cost in the workflow budget beside real income',
     7: 'old entitlements, DNS reward stop, reserve/exit/liability history across the retirement boundary',
+    # Folded into this lane (lead, 2026-10-15); reported as their own checkboxes.
+    8: 'RFC-0008: costs, minimum price inputs, capital cost and collection floor for small/large classes, '
+       'before/after the bond-budget cap and with the W_budget window saturated',
+    9: 'RFC-0006: EXEC origin header coverage from an archive role and a pruned role at one native generation',
 }
+COVERAGE_KIND = 'rfc06-private-exec-origin-coverage-v1'
 
 
 class Violation(Exception):
@@ -98,9 +103,12 @@ def judge(checkbox, predicate, function, *args, **kwargs):
     return finding(checkbox, predicate, OBSERVED, '', facts)
 
 
-def aggregate(findings):
-    by_box = {number: [] for number in CHECKBOXES}
+def aggregate(findings, boxes=None):
+    """Per-checkbox and overall status over the checkboxes this driver owns (a box with no finding is BLOCKED)."""
+    by_box = {number: [] for number in (boxes or CHECKBOXES)}
     for item in findings:
+        if item['checkbox'] not in by_box:
+            raise ValueError('finding for checkbox %r outside this driver' % item['checkbox'])
         by_box[item['checkbox']].append(item)
     boxes = {}
     for number, items in by_box.items():
@@ -747,6 +755,51 @@ def real_income(income):
     if income.get('vestingAvailable') is not True:
         raise NotObservable('reward vesting reads are unavailable; real reward income is unmeasured')
     return income
+
+
+# ---- RFC-0006 EXEC origin header coverage (checkbox 9) ------------------------------------------
+
+def coverage_envelope(row, consensus_params_id):
+    """One owned rfc06-exec-origin-coverage-v1.json, read inside a generation bracket of the same role."""
+    require_real([row])
+    envelope = row['value'].get('coverage')
+    if envelope is None:
+        raise Pending('%s has not written its coverage observation at this generation' % row['role'])
+    if envelope.get('schemaVersion') != 1 or envelope.get('kind') != COVERAGE_KIND:
+        raise NotObservable('unknown coverage observation schema')
+    if envelope.get('activationApproval') is not False:
+        raise Violation('a coverage observation claims activation approval')
+    if norm(envelope.get('consensusParamsId')) != norm(consensus_params_id):
+        raise Violation('the coverage observation names another consensus ruleset')
+    if envelope.get('virtualDaaScore') != row['dag']['virtualDaaScore']:
+        raise Pending('the coverage file predates this generation (written every 60 s)')
+    if envelope.get('census') is None:
+        raise NotObservable('%s could not take the census: %s' % (row['role'], envelope.get('error')))
+    return envelope['census']
+
+
+def coverage_same_generation(archive, pruned):
+    if norm(archive['dag']['sink']) != norm(pruned['dag']['sink']) \
+            or archive['dag']['virtualDaaScore'] != pruned['dag']['virtualDaaScore']:
+        raise Pending('archive and pruned coverage were not read at one native generation')
+    return dict(sink=norm(archive['dag']['sink']), virtualDaaScore=archive['dag']['virtualDaaScore'])
+
+
+def archive_coverage(archive, pruned, consensus_params_id):
+    """The archive role covers every eligible original header: oversized_total == 0 and unavailable_total == 0.
+    Field names follow PalwExecOriginCoverageV1's serde (snake_case; only the envelope is camelCase).
+    The pruned role's census is reported beside it and never judged ("not here" is not "nowhere")."""
+    generation = coverage_same_generation(archive, pruned)
+    census = coverage_envelope(archive, consensus_params_id)
+    pruned_census = coverage_envelope(pruned, consensus_params_id)
+    facts = dict(generation=generation, archive=census, prunedReportedNotJudged=pruned_census)
+    oversized, unavailable = exact_int(census['oversized_total'], 'oversized_total'), exact_int(census['unavailable_total'], 'unavailable_total')
+    if census['eligible'] != pruned_census['eligible']:
+        raise Violation('archive and pruned roles count different eligible claims at one generation')
+    if oversized or unavailable:
+        raise NotObservable('archive coverage incomplete: oversized_total=%d unavailable_total=%d oversized=%r unavailable=%r'
+                            % (oversized, unavailable, census['oversized'], census['unavailable']))
+    return facts
 
 
 # ---- retirement reconciliation (checkbox 7) -----------------------------------------------------

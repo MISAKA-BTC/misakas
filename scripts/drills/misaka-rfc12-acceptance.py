@@ -54,6 +54,8 @@ smoke = bootstrap.smoke
 EVIDENCE_KIND = 'rfc12-acceptance-evidence'
 EVIDENCE_VERSION = 1
 PRIMARY = ('A', 'B', 'JOIN')
+# The checkboxes this driver owns; checkbox 8 (RFC-0008 costs) belongs to misaka-rfc08-cost-measure.py.
+BOXES = (1, 2, 3, 4, 5, 6, 7, 9)
 SOURCE_OF = {'B': 'A', 'JOIN': 'A'}
 MARKER = 'rfc12-private-probe-v1.json'
 # Reads this harness needs that no node serves in this tree. Each is reported in the evidence;
@@ -129,7 +131,9 @@ class AcceptanceRun:
         self.last_finalized, self.moved_sink, self.crash_records, self.checker_bond_of = {}, {}, {}, {}
         self.armed, self.in_crash, self.expected_exit, self.counter = [], False, set(), 0
         self.work, self.bridge, self.accounting, self.identity_facts, self.reconciliation = {}, {}, {}, {}, {}
-        self.stopped, self.last_log_scan = None, 0.0
+        self.stopped, self.last_log_scan, self.current_work_dir = None, 0.0, None
+        # Checkbox numbers the shared steps report under; a subclass driver owning other boxes overrides them.
+        self.boxes, self.identity_box, self.work_box, self.resource_box = BOXES, 1, 1, 2
         self.evidence = dict(kind=EVIDENCE_KIND, schemaVersion=EVIDENCE_VERSION, status=J.BLOCKED,
                              artifactDirectory=str(root), planSha256=plan['sha256'], plan=plan, nodeGaps=NODE_GAPS,
                              passLabelUsed=False, releaseApproval=False, fullRfc12SecurityApproval=False)
@@ -171,6 +175,7 @@ class AcceptanceRun:
             self.remaining()
             self.check_processes()
             self.poll_crash_points()
+            self.tick()
             try:
                 value = predicate()
                 if value is not None and value is not False:
@@ -220,7 +225,7 @@ class AcceptanceRun:
 
     def values(self):
         values = {'ROOT': str(self.root), 'SALT': self.plan['salt'], 'CLI': self.plan['binaries']['cli'],
-                  'WORK_DIR': str(self.root / 'useful-work')}
+                  'WORK_DIR': str(self.current_work_dir or self.root / 'useful-work')}
         if self.fixture:
             values['FIXTURE'] = str(self.fixture)
         if self.old_block:
@@ -279,6 +284,7 @@ class AcceptanceRun:
                         break
                     self.sampler.check()
                     self.check_processes()
+                    self.tick()
                     if sum(path.stat().st_size for path in folder.glob('*.std*')) > self.limits['maximumFixtureOutputBytes']:
                         raise ResourceLimitExceeded('owned command output exceeded its predeclared byte bound')
                     time.sleep(.2)
@@ -300,6 +306,9 @@ class AcceptanceRun:
     def fixtures(self, name, templates):
         for template in templates:
             self.run_owned(name, P.fill_argv(template, self.values()), self.bounds['commandTimeoutSeconds'])
+
+    def tick(self):
+        """Periodic hook for subclasses that sample while waiting or while an owned command runs."""
 
     def ensure_private(self, path):
         mode = path.stat().st_mode & 0o777
@@ -391,7 +400,8 @@ class AcceptanceRun:
                                    self.bounds['factoryTimeoutSeconds'])
         bootstrap.validate_factory_manifest(manifest, 'paid-v4')
         self.identity_facts = J.retirement_armed(network, manifest, identity)
-        self.findings.append(J.finding(1, 'retirement-armed-by-private-profile', J.OBSERVED, '', self.identity_facts))
+        self.findings.append(J.finding(self.identity_box, 'retirement-armed-by-private-profile', J.OBSERVED, '',
+                                       self.identity_facts))
         complete.costs_before_nodes(manifest, self.fees['maximumBindingReservationSompi'],
                                     self.fees['maximumCompleteCheckFeeSompi'])
         seats = manifest.get('seats') or []
@@ -458,6 +468,9 @@ class AcceptanceRun:
                                        self.bounds['phaseTimeoutSeconds'], 'paid-v4', True,
                                        self.fees['maximumProviderAckFeePerCarrierSompi'])
         self.add_observers(node_plan)
+        # The coverage archive role keeps every header (no pruning); the producer stays the pruned GC source.
+        if self.plan.get('coverage'):
+            node_plan['nodes'][P.ROLE_KEYS[self.plan['coverage']['archiveRole']]]['argv'].append('--archival')
         node_plan.update(scenario_timeout_s=self.bounds['phaseTimeoutSeconds'], probe_timeout_s=self.bounds['probeTimeoutSeconds'],
                          command_timeout_s=self.bounds['commandTimeoutSeconds'])
         (self.root / 'node-plan.json').write_text(json.dumps(node_plan, indent=2) + '\n')
@@ -474,7 +487,8 @@ class AcceptanceRun:
         self.payer_start = initial
         self.evidence['initialMoney'] = initial
         # The pre-fence legacy view, read while the virtual DAA is still below the retirement fence if it is.
-        self.reconciliation['pre'] = self.legacy_view('JOIN', 'legacy-pre-fence')
+        if self.plan.get('reconciliation'):
+            self.reconciliation['pre'] = self.legacy_view('JOIN', 'legacy-pre-fence')
         self.flags.add('nodes')
 
     def phase_bootstrap(self):
@@ -522,8 +536,8 @@ class AcceptanceRun:
         elif role in SOURCE_OF:
             self.drill.join_link(role, SOURCE_OF[role])
 
-    def paid_claim_set(self, roles, label):
-        base, round_number = self.work['baseClaim'], self.plan['usefulWork']['checker']['round']
+    def paid_claim_set(self, roles, label, base=None):
+        base, round_number = base or self.work['baseClaim'], self.plan['usefulWork']['checker']['round']
         rows = self.parallel(roles, lambda role: O.bracketed(self.drill, role, label,
                                                              lambda rpc, dag, node: O.paid_claim_value(rpc, base, round_number)))
         return self.same_sink(rows, label)
@@ -535,11 +549,16 @@ class AcceptanceRun:
         paths = [path for role in roles for path in self.drill.log_paths.get(role, [])]
         J.checker_outcome(O.log_lines(paths))
 
-    def phase_useful_work(self):
-        uw, drill, manifest, fixture = self.plan['usefulWork'], self.drill, self.manifest, self.fixture
+    def phase_useful_work(self, uw=None, work_dir=None):
+        """One real paid useful-work cycle; repeatable (each cycle owns a fresh work directory and replaces the
+        producer/checker spec flags rather than stacking them)."""
+        uw = uw or self.plan['usefulWork']
+        drill, manifest, fixture = self.drill, self.manifest, self.fixture
         node = self.plan['binaries']['node']
-        work_dir = self.root / 'useful-work'
-        work_dir.mkdir(exist_ok=True)
+        work_dir = work_dir or self.root / 'useful-work'
+        work_dir.mkdir(parents=True, exist_ok=False)
+        self.current_work_dir = work_dir
+        self.checker_bond_of = {}
         self.fixtures('USEFUL_REQUEST', [uw['requestCommand']])
         request = Path(P.fill(uw['requestFile'], self.values())).resolve()
         if not request.is_file() or self.root not in request.parents:
@@ -557,27 +576,30 @@ class AcceptanceRun:
             raise transport.Blocked('the exported work file is missing')
         self.work['export'] = export
         kernel_seat = manifest['seats'][uw['kernelPayerSeat']]
-        self.require_indexed_funding(kernel_seat, 'kernel claim payer')
+        kernel_funding = self.payer_funding(kernel_seat, 'kernel claim payer')
         self.ensure_private(fixture / kernel_seat['keyFile'])
         point = self.wait(lambda: O.bracketed(drill, 'A', 'kernel-checkpoint', lambda rpc, dag, node: None), 'checkpoint read')
         daa = point['dag']['virtualDaaScore']
         spec = dict(version=4, work_path=str(work_path), checkpoint=J.norm(point['dag']['sink']),
                     paid_class=J.norm(export['paidClass']), paid_job=J.norm(export['paidJob']), salt=uw['claimSalt'],
                     commit_daa=daa + uw['commitDaaOffset'], expires_daa=daa + uw['commitDaaOffset'] + uw['expiresDaaSpan'],
-                    payer_key=str(fixture / kernel_seat['keyFile']), funding_outpoints=[kernel_seat['feeOutpoint']],
+                    payer_key=str(fixture / kernel_seat['keyFile']), funding_outpoints=kernel_funding,
                     maximum_fee_sompi=self.fees['maximumKernelClaimFeeSompi'], max_input_bytes=uw['maxInputBytes'],
                     max_material_bytes=uw['maxMaterialBytes'], max_workspace_bytes=uw['maxWorkspaceBytes'],
                     max_units=uw['maxUnits'])
         spec_path = self.write_private_json(work_dir / 'kernel-paid-work-v4.json', spec)
         self.work['producerSpec'] = spec
-        self.restart('A', ['--private-probe-kernel-paid-work=' + str(spec_path)])
+        seen = set(O.outbox_records(self.root, 'A', 'kernel-outbox', P.OUTBOX_FILES))
+        self.set_flag('A', '--private-probe-kernel-paid-work=', '--private-probe-kernel-paid-work=' + str(spec_path))
+        self.restart('A')
 
         def outbox():
             self.scan_diagnostics(['A'])
             records = O.outbox_records(self.root, 'A', 'kernel-outbox', P.OUTBOX_FILES)
-            return records or None
+            fresh = sorted(set(records) - seen)
+            return fresh or None
         records = self.wait(outbox, 'the producer durably signs its paid commit (owned outbox)')
-        base = sorted(records)[0].split('/')[-1]
+        base = records[0].split('/')[-1]
         self.work['baseClaim'] = J.norm(base)
         expected = dict(producerBond=manifest['seats'][0]['bond'], classId=export['paidClass'], jobId=export['paidJob'])
 
@@ -588,7 +610,7 @@ class AcceptanceRun:
             return rows
         rows = self.wait(accepted, 'paid claim accepted on every process')
         self.rows.extend(rows)
-        facts = self.judge(1, 'paid-claim-accepted', J.paid_claim_accepted, rows, expected)
+        facts = self.judge(self.work_box, 'paid-claim-accepted', J.paid_claim_accepted, rows, expected)
         self.flags.add('workAccepted')
         self.start_checkers(rows[0]['value'], work_path)
         bonds = list(self.checker_bond_of.values())
@@ -600,7 +622,7 @@ class AcceptanceRun:
             return rows
         rows = self.wait(receipts, 'selected checker receipts accepted everywhere')
         self.rows.extend(rows)
-        self.judge(1, 'checker-receipts', J.checker_receipts, rows, bonds)
+        self.judge(self.work_box, 'checker-receipts', J.checker_receipts, rows, bonds)
 
         def final():
             rows = self.paid_claim_set(self.live(PRIMARY), 'paid-claim-final')
@@ -608,7 +630,7 @@ class AcceptanceRun:
             return rows
         rows = self.wait(final, 'paid claim Final on every process')
         self.rows.extend(rows)
-        self.judge(1, 'paid-claim-final', J.paid_claim_final, rows)
+        self.judge(self.work_box, 'paid-claim-final', J.paid_claim_final, rows)
         self.flags.add('workFinal')
         pins = self.plan['settlement']
 
@@ -619,15 +641,29 @@ class AcceptanceRun:
             return rows
         rows = self.wait(settled, 'native safe covered by the useful work on every process')
         for row in rows:
-            self.judge(1, 'useful-work-settles/%s' % P.ROLE_NAMES[row['role']], J.settled_with_work, row, pins)
+            self.judge(self.work_box, 'useful-work-settles/%s' % P.ROLE_NAMES[row['role']], J.settled_with_work, row, pins)
         self.work['enrollment'] = (facts or {}).get('enrollment')
         self.flags.add('workSettled')
 
-    def require_indexed_funding(self, seat, label):
-        points = set(O.amounts_of(self.payer_start['value']['entries']))
-        if seat['feeOutpoint'] not in points:
-            raise transport.Blocked('%s funding %s is not indexed at its seat address; its carrier cost is unmeasurable'
+    def payer_funding(self, seat, label):
+        """The dedicated payer's current non-coinbase outputs at its own seat address (at most 64, the spec bound).
+        Funding that is not indexed there could not be attributed, so it is refused rather than guessed."""
+        row = self.wait(lambda: self.money_read('JOIN', 'payer-funding', [seat['payAddress']]), label + ' funding read')
+        points = sorted(J.outpoint_key(entry) for entry in row['value']['entries'] if not entry['utxoEntry']['isCoinbase'])
+        if self.payer_start and seat['feeOutpoint'] not in set(O.amounts_of(self.payer_start['value']['entries'])):
+            raise transport.Blocked('%s fee float %s is not indexed at its seat address; its carrier cost is unmeasurable'
                                     % (label, seat['feeOutpoint']))
+        if not points:
+            raise transport.Blocked('%s holds no spendable output at its seat address' % label)
+        return points[:64]
+
+    def set_flag(self, role, prefix, argument):
+        """Replace a flag: a prefix ending in '=' matches the option with any value, otherwise the exact word only
+        (so '--palw-produce' never removes '--palw-producer-key=...')."""
+        argv = self.drill.plan['nodes'][role]['argv']
+        argv[:] = [item for item in argv if not (item.startswith(prefix) if prefix.endswith('=') else item == prefix)]
+        if argument is not None:
+            argv.append(argument)
 
     def start_checkers(self, claim, work_path):
         uw, manifest, fixture = self.plan['usefulWork'], self.manifest, self.fixture
@@ -648,21 +684,22 @@ class AcceptanceRun:
         specs = []
         for host, seat_index, payer_index in zip(hosts, assigned[:quorum], checker['payerSeats']):
             seat, payer = manifest['seats'][seat_index], manifest['seats'][payer_index]
-            self.require_indexed_funding(payer, 'checker receipt payer')
+            funding = self.payer_funding(payer, 'checker receipt payer')
             for key in (seat['keyFile'], payer['keyFile']):
                 self.ensure_private(fixture / key)
             span = checker['challengeValidUntilDaaSpan']
             spec = dict(version=4, work_path=str(work_path), enrollment=J.norm(claim['enrollment']), round=checker['round'],
                         checker_bond=seat['bond'], checker_key=str(fixture / seat['keyFile']), provider_bond=provider['bond'],
                         provider_address=listen, payer_key=str(fixture / payer['keyFile']),
-                        funding_outpoints=[payer['feeOutpoint']], maximum_fee_sompi=self.fees['maximumCheckerReceiptFeeSompi'],
+                        funding_outpoints=funding, maximum_fee_sompi=self.fees['maximumCheckerReceiptFeeSompi'],
                         max_input_bytes=uw['maxInputBytes'], max_unit_bytes=checker['maxUnitBytes'],
                         max_total_fetch_bytes=checker['maxTotalFetchBytes'], max_workspace_bytes=checker['maxWorkspaceBytes'],
                         max_requests=checker['maxRequests'], challenge_valid_until_daa=None if span is None else daa + span)
-            path = self.write_private_json(self.root / 'useful-work' / ('kernel-paid-check-%s.json' % host), spec)
+            path = self.write_private_json(self.current_work_dir / ('kernel-paid-check-%s.json' % host), spec)
             specs.append(dict(host=host, seat=seat_index, spec=spec))
             self.checker_bond_of[host] = seat['bond']
-            self.restart(host, ['--private-probe-kernel-paid-check=' + str(path)])
+            self.set_flag(host, '--private-probe-kernel-paid-check=', '--private-probe-kernel-paid-check=' + str(path))
+            self.restart(host)
         self.work['checkers'] = specs
 
     def consumer_set(self, roles, label):
@@ -1328,6 +1365,34 @@ class AcceptanceRun:
         self.block(7, 'old-entitlements-and-reserve-history',
                    'no node read exposes pre-fence DNS entitlements or reserve history; see nodeGaps')
 
+    def phase_coverage(self):
+        """RFC-0006 EXEC origin coverage: freeze production, then read the archive and pruned roles' own minute-cadence
+        census files at the one frozen generation. The pruned census is reported, never judged."""
+        coverage = self.plan['coverage']
+        archive, pruned = P.ROLE_KEYS[coverage['archiveRole']], P.ROLE_KEYS[coverage['prunedRole']]
+        for flag in ('--palw-produce', '--private-probe-kernel-paid-work=', '--private-probe-kernel-replace='):
+            self.set_flag('A', flag, None)  # paid work/replacement need a producer, so they stop with it
+        self.restart('A')
+        self.set_flag('B', '--palw-heartbeat-miner-address=', None)
+        self.restart('B')
+        self.flags.add('frozen')
+        roles = self.live(PRIMARY + ('FRESH', 'CRASHJOIN'))
+        self.wait(lambda: self.same_sink(self.parallel(roles, lambda role: O.bracketed(
+            self.drill, role, 'frozen', lambda rpc, dag, node: None)), 'frozen'), 'every process at one frozen sink')
+        params = self.plan['identity']['consensusParamsId']
+
+        def read():
+            rows = self.parallel([archive, pruned], lambda role: O.coverage_row(self.drill, self.root, role, 'coverage'))
+            J.coverage_same_generation(rows[0], rows[1])
+            for row in rows:
+                J.coverage_envelope(row, params)
+            return rows
+        rows = self.wait(read, 'coverage observations at the frozen generation', seconds=coverage['maximumWaitSeconds'])
+        self.rows.extend(rows)
+        self.evidence['execOriginCoverage'] = dict(archive=rows[0], pruned=rows[1],
+                                                   prunedUnavailableReportedNotJudged=rows[1]['value']['coverage']['census'])
+        self.judge(9, 'archive-covers-every-eligible-original-header', J.archive_coverage, rows[0], rows[1], params)
+
     def phase_judgement(self):
         rows = self.consumer_rows + self.rows
         self.judge(4, 'one-sink-one-root-set (all recorded rows)', J.root_consistency, rows)
@@ -1474,12 +1539,26 @@ class AcceptanceRun:
             after = self.crash_state(point, role, observed)
             record['after'] = after if point['trigger']['kind'] not in ('import-phase', 'after-convergence') else \
                 (rows[0]['node'] if rows else {})
-            if point['trigger']['kind'] in ('kernel-outbox', 'checker-outbox') and 'baseClaim' in self.work:
+            if point['trigger']['kind'] in ('kernel-outbox', 'checker-outbox'):
+                # The kernel record directory is named by its base claim; a checker record belongs to the current claim.
+                base = J.norm(observed['record'].split('/')[-1]) if point['trigger']['kind'] == 'kernel-outbox' \
+                    else self.work.get('baseClaim')
+                bond = self.checker_bond_of.get(role)
+                record['checkerBond'] = bond
+
+                def accepted():
+                    rows = self.paid_claim_set(self.live(PRIMARY), 'crash-claim:' + point['name'], base)
+                    if not all(row['value'].get('found') for row in rows):
+                        raise J.Pending('the restarted WAL record is not accepted yet')
+                    if point['trigger']['kind'] == 'checker-outbox' and not all(bond in row['value'].get('receipts', [])
+                                                                                for row in rows):
+                        raise J.Pending('the restarted checker receipt is not accepted yet')
+                    return rows
                 try:
-                    record['claimRows'] = self.paid_claim_set(self.live(PRIMARY), 'crash-claim:' + point['name'])
-                except (J.NotObservable, J.Pending, O.ContextMoved, OSError, RuntimeError):
+                    record['claimRows'] = self.wait(accepted, 'WAL record accepted after ' + point['name'],
+                                                    seconds=point['maximumWaitSeconds'], optional=True) or [] if base else []
+                except J.NotObservable:
                     record['claimRows'] = []
-                record['checkerBond'] = self.checker_bond_of.get(role)
             armed['state'] = 'recovered' if record['recovered'] else 'unrecovered'
         finally:
             self.in_crash = False
@@ -1534,7 +1613,7 @@ class AcceptanceRun:
         return dict(maximumProbeMs=max(latencies), databaseBytes=sizes)
 
     def write_evidence(self):
-        verdict = J.aggregate(self.findings)
+        verdict = J.aggregate(self.findings, self.boxes)
         self.evidence.update(status=verdict['status'], checkboxes=verdict['checkboxes'], phases=self.phases,
                              flags=sorted(self.flags), stopped=self.stopped, identityFacts=self.identity_facts,
                              usefulWork=self.work, bridge=self.bridge, accounting=self.accounting,
@@ -1551,7 +1630,7 @@ class AcceptanceRun:
 
     def execute(self):
         steps = [
-            ('identity', (1, 7), (), self.phase_identity),
+            ('identity', (1, 7, 9), (), self.phase_identity),
             ('launch', (1,), ('identity',), self.phase_launch),
             ('bootstrap', (1,), ('nodes',), self.phase_bootstrap),
             ('usefulWork', (1, 3), ('custody',), self.phase_useful_work),
@@ -1568,6 +1647,7 @@ class AcceptanceRun:
             ('coldReopen', (2, 3), ('freshJoined',), self.phase_cold_reopen),
             ('generationMismatch', (3,), ('nodes',), self.phase_generation_mismatch),
             ('reconciliation', (7,), ('nodes',), self.phase_reconciliation),
+            ('coverage', (9,), ('pruned',), self.phase_coverage),
             ('judgement', (1, 3, 4, 5), ('nodes',), self.phase_judgement),
         ]
         for name, boxes, requires, function in steps:
@@ -1583,7 +1663,7 @@ class AcceptanceRun:
             self.evidence['ownedDatabaseLogicalBytes'] = {role: sum(file.stat().st_size for file in (self.root / role).rglob('*')
                                                                     if file.is_file()) for role in roles}
             if self.drill:
-                self.judge(2, 'predeclared-observation-bounds', self.resource_bounds)
+                self.judge(self.resource_box, 'predeclared-observation-bounds', self.resource_bounds)
 
 
 def print_identity(binary, salt):
