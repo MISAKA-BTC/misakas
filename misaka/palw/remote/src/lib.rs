@@ -65,6 +65,12 @@ pub(crate) fn put_len(state: &mut blake2b_simd::State, bytes: &[u8]) {
 
 pub mod monetary_material;
 
+/// RFC-0008 covenant (2026-10-15 round 3): the provider-side GC janitor over the native finality witness.
+pub mod monetary_material_gc;
+
 pub mod monetary_material_rpc;
 
 pub mod native_ready_v3;
+
+/// RFC-0008 PAV3 (2026-10-15 round 3): the integrity-authenticated producer↔provider envelope between hosts.
+pub mod provider_transport_v1;

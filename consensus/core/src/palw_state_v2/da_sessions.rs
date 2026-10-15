@@ -713,19 +713,37 @@ pub(super) fn open_dissection_at_named_leaf_v1(
     leaf_index: u64,
     ladder: u64,
     opening_turn: u64,
+    published: crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1<'_>,
 ) -> Result<Hash64, PalwStateV2Error> {
     let refused = |why: String| PalwStateV2Error::HeldDissectionRefused { claim: claim_id, leaf: leaf_index, why };
-    // **D2 (REQ-T6-3, restricted; `palw_court_model_scope_v1`)**: every dissection opened at a named leaf is answered by the
-    // producer's root claim, which carries model operands (`AttnRootClaimOperands`: an attention site's quantization rows;
-    // `TirGenRootClaimParams`: the parameter leaves an IR / generative tile reads). On a claim accepted past the fence neither is
-    // admissible, so the dissection is not opened (refused BEFORE any write; the accusation's one-move verdict, whose openings the
-    // accuser supplies from its own copy, stays the route). A claim accepted below the fence keeps the dissection (the OLD rule).
-    for kind in [
-        crate::palw_court_scope_v1::CourtUnitKindV1::AttnRootClaimOperands,
-        crate::palw_court_scope_v1::CourtUnitKindV1::TirGenRootClaimParams,
-    ] {
-        crate::palw_ruling_fences_v1::palw_court_model_scope_admits_v1(builder.params, claim, kind)
-            .map_err(|refusal| refused(refusal.why().to_string()))?;
+    // **D2 (REQ-T6-3 restricted, REQ-T6-4 replaced; `palw_court_model_scope_v1`)**: every dissection opened at a named leaf is
+    // answered by the producer's root claim, whose object carries model operands (`AttnRootClaimOperands`: an attention site's
+    // quantization rows; `TirGenRootClaimParams`: the parameter leaves an IR / generative tile reads). On a claim accepted past the
+    // fence the accused is never compelled to supply them from its own copy: the dissection opens only if the object opening it
+    // PUBLISHES them (the challenger's own copy, authenticated against the registered root; for attention, deriving the site), and
+    // the accused's root claim — which signs coordinates and claim values only — relays those public bytes
+    // (`palw_court_model_scope_routes_v1`). Refused BEFORE any write. A claim accepted below the fence keeps the OLD rule:
+    // `published` is not read.
+    if crate::palw_ruling_fences_v1::palw_court_model_scope_governs_claim_v1(builder.params, claim) {
+        let class_root =
+            builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.artifact_root;
+        let proven_root = builder.state.claim_roots.get(&claim_id).copied().unwrap_or(class_root);
+        let gen_root = builder.state.gen_classes.get(&claim.class_id).map(|row| row.artifact_root);
+        let opening_cap = crate::palw_court_v2::palw_attn_opening_cap_v1(
+            &builder.state,
+            &claim.class_id,
+            builder.extras.held_context_ladder.unwrap_or(crate::palw_step::PALW_STEP_MAX_LEAVES),
+            builder.extras.held_context_ladder.is_some(),
+        );
+        crate::palw_court_model_scope_routes_v1::palw_d2_named_leaf_operands_admit_v1(
+            claim,
+            leaf_index,
+            &published,
+            proven_root,
+            gen_root,
+            opening_cap,
+        )
+        .map_err(|e| refused(e.to_string()))?;
     }
     // **X3 (REQ-X3-4, `palw_claim_hard_deadline_v1`)**: a court pursuit on a claim accepted past the fence starts only at or before
     // the claim's open cutoff and only if `start + B_remaining <= hard`. `Ok` below the fence.

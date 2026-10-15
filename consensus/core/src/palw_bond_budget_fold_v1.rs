@@ -2004,6 +2004,10 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
         let carve = builder.params.worker_carve_at(ctx.subsidy, builder.extras.escrow_carve);
         builder.bond_budget_op(|budget, _, j| budget.accrue(carve, j));
     }
+    // RFC07 R7-ECON (`palw_model_verification_gate_v1`, round 3): the closed epochs' OPVB contexts frozen, locked beacons' tallies
+    // opened, decided tallies taken and deferred Final rewards released or withheld — after the roll, before the sweeps that Final
+    // claims. A no-op below the gate's fence.
+    super::palw_econ_contracts_fold_v1::tick_model_verification_gate_v1(builder, ctx)?;
     Ok(())
 }
 

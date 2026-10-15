@@ -15261,6 +15261,7 @@ fn open_held_dissection_v1(
         }
         _ => builder.params.turn_deadline_daa(),
     };
+    // D2 (REQ-T6-4): the accusation's own rows are what it publishes for the root claim to relay (read only on a new claim).
     open_dissection_at_named_leaf_v1(
         builder,
         ctx,
@@ -15270,6 +15271,10 @@ fn open_held_dissection_v1(
         accusation.leaf_index,
         ladder,
         opening_turn,
+        crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::Attn {
+            binding: &accusation.refutation.binding,
+            openings: &accusation.artifact_openings,
+        },
     )
     .map(|_| ())
 }

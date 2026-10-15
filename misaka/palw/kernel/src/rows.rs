@@ -496,6 +496,7 @@ impl KernelLedgerV1 {
         self.beacon_source_inputs = Default::default();
         self.beacon_source_fee_inputs = Default::default();
         self.consumer_final_reward_caps.clear();
+        self.consumer_minimum_payouts_v1.clear();
         self
     }
 }

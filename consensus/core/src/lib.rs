@@ -264,6 +264,10 @@ pub mod palw_context_ladder;
 /// shipped class row of every preset that carries a V2 bundle is asserted against it. Changes no
 /// shipped constant; it relates two numbers that had never appeared in one expression.
 pub mod palw_court_deadline;
+/// D2's replacement routes (REQ-T6-4, DA16 design §7.5 items 1–2): every restricted court unit's conviction path from public
+/// authenticated material — the claim part with the accuser's rows, root claims relaying the challenger's published operands, and the
+/// readiness digest. Behind the dormant `palw_court_model_scope_v1`.
+pub mod palw_court_model_scope_routes_v1;
 /// Lane DA16: the court scope (ADR-0177 D2, RFC-0014 §16.4) — what a court may demand (claim-specific units only), what a verifier
 /// supplies from its own copy against the registered root, the node-level model-bytes masks and the cumulative bound.
 pub mod palw_court_scope_v1;

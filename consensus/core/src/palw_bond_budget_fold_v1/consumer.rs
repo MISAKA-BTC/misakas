@@ -44,9 +44,20 @@ impl TransitionBuilder<'_> {
         }
         let policy = &self.params.paid_consumer_lifecycle().expect("active mirror").policy;
         let terms = policy.terms(claim.accepted_daa).map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
-        if claim.trace_retention_daa < terms.material_until {
+        // X3 (REQ-X3-6): the claim may be planned before the writer raises its retention to the hard deadline, so the obligation is
+        // read through the one helper (the claim's own retention below the fence, byte for byte).
+        if crate::palw_ruling_fences_v1::palw_claim_retention_obligation_v1(self.params, claim) < terms.material_until {
             return Err(PalwStateV2Error::ExecV2Refused(
                 "paid consumer requires already authorized material through its immutable contract".into(),
+            ));
+        }
+        // X3 (REQ-X3-6): an X3 claim's material hold must cover its claim-fixed hard deadline — prosecution may start from public
+        // material any time X3 admits it, and the material is what it reads. `None` below the fence.
+        if let Some(hard) = crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(self.params, claim)
+            && terms.material_until < hard
+        {
+            return Err(PalwStateV2Error::ExecV2Refused(
+                "X3: a paid consumer's material must be held through the claim's hard deadline (palw_claim_hard_deadline_v1)".into(),
             ));
         }
         let receipt = self.params.receipt_window_for_claim_v1(

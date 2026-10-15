@@ -36,7 +36,8 @@ pub const PALW_PROVIDER_TRANSPORT_DAA_WINDOW_V1: u64 = 600;
 /// Live `(sender, nonce)` entries a provider keeps; past it new requests are refused until entries age out.
 pub const PALW_PROVIDER_TRANSPORT_REPLAY_CAPACITY_V1: usize = 65_536;
 /// At most the PAV3 roster size.
-pub const PALW_PROVIDER_TRANSPORT_MAX_PARTIES_V1: usize = kaspa_consensus_core::palw_attempt_material_v3::PALW_MATERIAL_MAX_PROVIDERS_V3;
+pub const PALW_PROVIDER_TRANSPORT_MAX_PARTIES_V1: usize =
+    kaspa_consensus_core::palw_attempt_material_v3::PALW_MATERIAL_MAX_PROVIDERS_V3;
 const MLDSA87_PUBKEY_LEN: usize = kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN;
 
 /// What the body is. One purpose today; a new one is a new variant, never a reinterpretation.
@@ -425,9 +426,13 @@ mod tests {
         let req = request(&executor, 9);
         let (sa, sb) = (signer(&a), signer(&b));
         let (sa, sb): (ProviderTransportSignerV1<'_>, ProviderTransportSignerV1<'_>) = (&sa, &sb);
-        let response = provider_transport_response_v1(&req.header, NOW, b"signed".to_vec(), vec![(bond(5), sb), (bond(4), sa)]).unwrap();
+        let response =
+            provider_transport_response_v1(&req.header, NOW, b"signed".to_vec(), vec![(bond(5), sb), (bond(4), sa)]).unwrap();
         let roster = vec![(bond(4), a.verification_key.as_ref().to_vec()), (bond(5), b.verification_key.as_ref().to_vec())];
-        assert_eq!(provider_transport_verify_response_v1(&response, &req.header, &roster, &policy, NOW).unwrap(), vec![bond(4), bond(5)]);
+        assert_eq!(
+            provider_transport_verify_response_v1(&response, &req.header, &roster, &policy, NOW).unwrap(),
+            vec![bond(4), bond(5)]
+        );
         let swapped = vec![(bond(4), b.verification_key.as_ref().to_vec()), (bond(5), a.verification_key.as_ref().to_vec())];
         assert!(provider_transport_verify_response_v1(&response, &req.header, &swapped, &policy, NOW).is_err());
         let mut tampered = response.clone();

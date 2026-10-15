@@ -814,6 +814,11 @@ pub struct KernelLedgerV1 {
     pub schedule: KernelScheduleV1,
     /// Trusted native consumer caps for standalone Final fees. Not rows or transaction inputs.
     pub consumer_final_reward_caps: BTreeMap<Digest, u64>,
+    /// **RFC08 R8-ECON (`palw_minimum_price_v1`)**: trusted native consumer floors — claim → the signed minimum-price contract's
+    /// funded minimum. A Final paid out of its job's escrow below its floor is NOT paid less: the contract outcome is neutral (the
+    /// escrow returns whole to its poster, the producer is paid nothing from it). Re-injected on every load like the caps; not rows,
+    /// never carried, empty below the consumer's fence (every rule above is then byte-identical).
+    pub consumer_minimum_payouts_v1: BTreeMap<Digest, u64>,
     /// Descriptors this binary implements (never bytes from a transaction).
     pub known: Vec<KernelDescriptorV1>,
     pub daa: u64,
@@ -951,6 +956,7 @@ impl KernelLedgerV1 {
             policy,
             schedule,
             consumer_final_reward_caps: BTreeMap::new(),
+            consumer_minimum_payouts_v1: BTreeMap::new(),
             known,
             daa: 0,
             bonds: BTreeMap::new(),
@@ -1622,6 +1628,16 @@ impl KernelLedgerV1 {
         let collateral = self.bonds.get(&row.poster).map_or(0, |b| b.collateral);
         // Never instruct more than the poster's bond still holds (another subsystem may have slashed it since).
         let paid = row.amount.min(collateral).min(cap);
+        // R8-ECON: a contracted Final the escrow (or its cap, or the poster's remaining bond) cannot fund at the contract's minimum
+        // is never paid less — its outcome is neutral: the escrow is released whole to the poster and the producer is paid nothing
+        // out of it. No floor (every claim below the consumer's fence): unchanged.
+        if self.consumer_minimum_payouts_v1.get(claim).is_some_and(|minimum| paid < *minimum) {
+            if let Some(b) = self.bonds.get_mut(&row.poster) {
+                b.reserved = b.reserved.saturating_sub(row.amount);
+            }
+            settle(out, row.poster, row.amount, SettlementKindV1::ReleaseJobEscrow, Some(*claim));
+            return 0;
+        }
         if let Some(b) = self.bonds.get_mut(&row.poster) {
             b.reserved = b.reserved.saturating_sub(row.amount);
             b.collateral -= paid;

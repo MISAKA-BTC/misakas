@@ -438,6 +438,20 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn write_claim(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) {
+        // **X3 × retention (REQ-X3-6; Lead default 2026-10-15 round 3; `palw_claim_hard_deadline_v1`)**: a claim CREATED past the
+        // fence owes its material — trace, DA units, every hold that reads the record — through its hard deadline, fixed at
+        // acceptance, so a pursuit X3 admits can start from public material any time before `hard − B_remaining`. Raised once, here,
+        // the one site every creation passes; never moved after (REQ-X3-3). Below the fence (every shipped ruleset) `None`: the record
+        // is written byte for byte.
+        let new = match new {
+            Some(mut claim) if !self.state.claims.contains_key(&key) => {
+                if let Some(retention) = crate::palw_ruling_fences_v1::palw_claim_x3_retention_daa_v1(self.params, &claim) {
+                    claim.trace_retention_daa = retention;
+                }
+                Some(claim)
+            }
+            other => other,
+        };
         // Stamp once, at creation. A later prospective descriptor never changes an old claim.
         if self.extras.class_semantics_active
             && !self.state.claims.contains_key(&key)
@@ -8836,6 +8850,10 @@ impl<'a> TransitionBuilder<'a> {
             // **Lane BUDGET (ADR-0176 D3, design §2.6): the reward under the budget**, before the buyback and the panel split, so every
             // leg derives from it; the rest is never named — never minted. Unchanged for an unbudgeted claim.
             let escrow = self.bond_budget_final_reward_v1(&id, escrow);
+            // **RFC07 R7-ECON (`palw_model_verification_gate_v1`, round 3): the allocation payout reads its model-epoch's
+            // verification** — paid whole when attested (or no Final claim existed to sample), withheld when unattested, deferred while
+            // undecided; before every leg below. Unchanged below the fence and for every claim the allocation did not reserve for.
+            let escrow = palw_econ_contracts_fold_v1::gate_final_reward_v1(self, &id, claim, escrow, final_daa)?;
             // **Lane BUDGET, PESG §6: the external export cap.** What leaves the chain's books at Final — a leg written straight into the
             // payout queue (no vesting), or a buyback slice in a market reserve a holder can sell out of — is at most 0.51 of the
             // collateral the claim's liability still holds; a vesting leg is not an export (it moves once the lock has ended). The rest

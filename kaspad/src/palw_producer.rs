@@ -2200,7 +2200,7 @@ impl PalwProducerService {
                     capture,
                     prompt,
                 };
-                let signatures = exchange.0.request_signatures(&request)?;
+                let signatures = exchange.0.request_signatures_authenticated(&request, &authority.provider_keys)?;
                 palw_native_check_signatures_v3(&ready, &authority.provider_keys, &signatures)?;
                 Ok::<_, String>((ready, signatures, request.envelope.base))
             }),

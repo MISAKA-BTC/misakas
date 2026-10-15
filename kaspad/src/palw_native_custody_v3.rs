@@ -18,7 +18,9 @@
 //!
 //! Ordinary kaspad has no Args path that configures an exchange: its producer keeps
 //! [`crate::palw_producer::PALW_PRODUCER_NATIVE_CUSTODY_HOLD`]. The only wiring is the feature-gated private-integration
-//! constructor's (`private_integration::native_provider`), whose transport is loopback only.
+//! constructor's (`private_integration::native_provider`): in-process, or the ML-DSA-87 authenticated provider envelope
+//! (`misaka_palw_remote::provider_transport_v1`) over a loopback socket by default or between hosts with
+//! `--private-probe-native-network=remote` (2026-10-15 round 3).
 use kaspa_consensus_core::{
     BlockHash,
     header::Header,
@@ -69,6 +71,17 @@ pub trait NativeReadyExchangeV3: Send + Sync {
     /// For logs and the hold sentence.
     fn describe(&self) -> String;
     fn request_signatures(&self, request: &PalwNativeReadyRequestV3) -> Result<BTreeMap<PalwBondKeyV2, Vec<u8>>, String>;
+    /// The producer's call: `roster_keys` are the registered provider keys its own Consensus API authority returned, which an
+    /// authenticated network transport verifies the provider responses with (2026-10-15 round 3). The in-process service
+    /// needs none and keeps [`Self::request_signatures`].
+    fn request_signatures_authenticated(
+        &self,
+        request: &PalwNativeReadyRequestV3,
+        roster_keys: &[(PalwBondKeyV2, Vec<u8>)],
+    ) -> Result<BTreeMap<PalwBondKeyV2, Vec<u8>>, String> {
+        let _ = roster_keys;
+        self.request_signatures(request)
+    }
 }
 
 /// The configured exchange, as [`crate::palw_producer::PalwProducerConfig`] carries it.

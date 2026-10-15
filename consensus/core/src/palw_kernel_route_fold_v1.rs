@@ -349,6 +349,9 @@ fn load_ledger_with_projection_v9(
     }
     builder.state.kernel_route.as_ref().expect("created").apply_paid_claim_consumer_inputs_v2(&mut ledger).map_err(refused)?;
     ledger.consumer_final_reward_caps = builder.kernel_final_reward_caps_v1(&ledger);
+    // RFC08 R8-ECON (`palw_minimum_price_v1`): every governed job's contracted claim carries its signed funded minimum as a payout
+    // floor (a Final the escrow cannot fund at it is neutral, never paid less). Empty below the fence.
+    ledger.consumer_minimum_payouts_v1 = super::palw_econ_contracts_fold_v1::minimum_price_payout_floors_v1(builder, ctx, &ledger);
     // RFC-0015 admission is no longer a list read here: a class is admitted to the mode at its own registration, and only while
     // DERIVED-eligible (`opv_gate_v1`), so the ledger's admitted rows are exactly the classes that were eligible when they registered.
     Ok(ledger)
@@ -1568,6 +1571,9 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // so a claim whose last provider was charged this block is void before its demands are swept.
     super::palw_provider_court_fold_v1::tick_provider_court_v1(builder, ctx)?;
     super::palw_claim_challenge_fold_v2::refresh_pending_paid_source_locks_v2(builder, ctx)?;
+    // RFC08 R8-ECON / R8-WINDOW (round 3): stale consents and expired, unused or settled contracts retire, whatever the ledger is
+    // doing (a no-op below both fences).
+    super::palw_econ_contracts_fold_v1::sweep_econ_contracts_v1(builder, ctx)?;
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     // Anything the tick moves: claims and demands, and (G14-R4) bonded seals that expire, escrows that return and served demands'
     // bonds — a route whose only rows are a seal or an escrow must still forfeit or return it on time.

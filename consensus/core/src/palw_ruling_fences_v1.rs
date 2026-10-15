@@ -5,7 +5,9 @@
 //! ```text
 //! palw_claim_hard_deadline_v1     X3   a claim accepted at/after the fence has ONE absolute dispute deadline, fixed at acceptance (d0):
 //!                                      receipt_deadline = d0 + T_prepare, open_cutoff = receipt_deadline + T_observe,
-//!                                      hard = min(open_cutoff + T_resolve, trace_retention_daa)            (REQ-X3-1)
+//!                                      hard = open_cutoff + T_resolve                                      (REQ-X3-1)
+//!                                      its material is owed through hard: retention = max(retention, hard),
+//!                                      raised once at creation (Lead default 2026-10-15 round 3)          (REQ-X3-6)
 //!                                      its Final deadline is min(proposed, hard)                           (REQ-X3-2)
 //!                                      nothing re-grants or extends it: no held-decoy re-arm, no DA pause credit, no staged-court
 //!                                      or model-window retention extension                                  (REQ-X3-3)
@@ -15,10 +17,13 @@
 //!                                      (PanelDa prompt ids, FP Job V5 images / source ids) takes no new reward or Final weight:
 //!                                      the claim gate refuses it, as G14-for-rewards refuses a non-onboarded class  (REQ-N4-1)
 //!                                      a claim accepted before the fence keeps its old ruleset                (REQ-N4-2)
+//!                                      a weightless tensor claim (tag 87) is asked the same question at the one site a later
+//!                                      fence would grant it reward or weight (the grant guard)               (REQ-N4-3)
 //! palw_court_model_scope_v1       D2   the four ARMED t12 routes that compel model bytes (`HeldStepLeaf`, `AttnRootClaimOperands`,
 //!                                      `TirGenRootClaimParams`, `SeatReadinessLeaves`) are not admissible for a claim accepted
 //!                                      at/after the fence (readiness: for a class registered at/after it); old claims keep them
-//!                                      (REQ-T6-3, restricted)
+//!                                      (REQ-T6-3, restricted); each has a replacement route that compels no model bytes
+//!                                      (`palw_court_model_scope_routes_v1`, REQ-T6-4)
 //! ```
 //!
 //! **A-2 uniformity.** Every predicate here answers "old rule" for a claim accepted below its fence, and every fence's mirror on the
@@ -29,10 +34,12 @@
 //! **Not built here (named, not invented):** the X3 policy terms (`T_prepare`, `T_observe`, `T_resolve`, and the `B_*` budget terms
 //! with no existing source) are fields of the fence's policy with NO production value — only [`PalwClaimHardDeadlineFenceV1::
 //! unapproved_probe_at`]'s structural fixture values exist, and validation refuses every real activation. `B_disclose` is the
-//! network's DA disclose window and `B_court` its court window (the existing sources REQ-T12-3 names). D2's replacement routes
-//! (a dissection whose root claim names coordinates only, the challenger supplying the openings — DA16 design §7.5 items 1–2) are not
-//! built: past the fence a held dissection on a new claim is simply not opened, and a one-move verdict with accuser-supplied openings
-//! stays the route.
+//! network's DA disclose window and `B_court` its court window (the existing sources REQ-T12-3 names). X3's retention cost term
+//! (`retention_cost_per_daa_sompi`) is a named policy field with no production value; the pricing callers add
+//! [`palw_x3_retention_cost_sompi_v1`] to their material term. D2's replacement routes (DA16 design §7.5 items 1–2) are
+//! [`crate::palw_court_model_scope_routes_v1`]'s: the claim part of a leaf with the accuser's own rows in the one move, and a named-leaf
+//! dissection whose root claim's model operands the CHALLENGER publishes in the accusation that opens it (the accused signs coordinates
+//! and claim values only, and relays public bytes).
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -75,6 +82,11 @@ pub struct PalwClaimHardDeadlinePolicyV1 {
     pub carrier_daa: u64,
     /// `B_reorg_slack`: reorg slack.
     pub reorg_slack_daa: u64,
+    /// **`c_retain`: the provider/material hold cost of one DAA of retention past the claim's own obligation** (sompi per DAA), the
+    /// price of REQ-X3-6's extension (`retention = max(retention, hard)`). A named input of the material term the pricing contracts
+    /// read ([`palw_x3_retention_cost_sompi_v1`]); `0` is UNMEASURED, never free — a caller pricing a positive extension at `0` is
+    /// refused (the econ rule: unknown costs are no bound, not zero).
+    pub retention_cost_per_daa_sompi: u64,
 }
 
 impl PalwClaimHardDeadlinePolicyV1 {
@@ -125,9 +137,59 @@ impl PalwClaimHardDeadlineFenceV1 {
                 localize_daa: 8,
                 carrier_daa: 2,
                 reorg_slack_daa: 2,
+                retention_cost_per_daa_sompi: 1,
             },
         }
     }
+}
+
+/// **The hard deadline as a function of acceptance alone** (REQ-X3-1): `d0 + T_prepare + T_observe + T_resolve`, saturating. Pure, so
+/// a pricing caller can size the retention extension before the claim exists.
+pub fn palw_x3_hard_deadline_at_v1(policy: &PalwClaimHardDeadlinePolicyV1, accepted_daa: u64) -> u64 {
+    accepted_daa.saturating_add(policy.prepare_daa).saturating_add(policy.observe_daa).saturating_add(policy.resolve_daa)
+}
+
+/// **REQ-X3-6's extension, in numbers**: the obligation a claim was accepted with (`base_retention_daa`), the obligation X3 makes it
+/// owe (`retention_daa = max(base, hard)`), and the DAA between them that the material term prices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwX3RetentionExtensionV1 {
+    pub base_retention_daa: u64,
+    pub retention_daa: u64,
+    pub extra_daa: u64,
+}
+
+/// [`PalwX3RetentionExtensionV1`] of a claim accepted at `accepted_daa` with retention `base_retention_daa` under `policy`.
+pub fn palw_x3_retention_extension_at_v1(
+    policy: &PalwClaimHardDeadlinePolicyV1,
+    accepted_daa: u64,
+    base_retention_daa: u64,
+) -> PalwX3RetentionExtensionV1 {
+    let retention_daa = base_retention_daa.max(palw_x3_hard_deadline_at_v1(policy, accepted_daa));
+    PalwX3RetentionExtensionV1 { base_retention_daa, retention_daa, extra_daa: retention_daa - base_retention_daa }
+}
+
+/// **The retention cost term** `extra_daa × c_retain` (sompi): what a provider/material hold costs for REQ-X3-6's extension. `Err`
+/// when the extension is positive and `c_retain` is unmeasured (`0`), or the product overflows — never a silent zero.
+pub fn palw_x3_retention_cost_sompi_v1(policy: &PalwClaimHardDeadlinePolicyV1, extra_daa: u64) -> Result<u64, &'static str> {
+    if extra_daa == 0 {
+        return Ok(0);
+    }
+    if policy.retention_cost_per_daa_sompi == 0 {
+        return Err("X3: the retention cost per DAA is unmeasured; a positive retention extension cannot be priced");
+    }
+    extra_daa.checked_mul(policy.retention_cost_per_daa_sompi).ok_or("X3: the retention cost overflows")
+}
+
+/// **A material term with X3's retention priced in**: `material_sompi + extra_daa × c_retain` — the input a minimum-price `C_upper`
+/// (`palw_econ_contracts_v1::palw_minimum_price_c_upper_v1`'s class cost) and a beacon source's `material_sompi`
+/// (`PalwBeaconSourceCostBoundsV1`) must carry for an X3 claim. `extension` is `None` under the old ruleset (the term unchanged).
+pub fn palw_x3_material_term_with_retention_v1(
+    material_sompi: u64,
+    policy: &PalwClaimHardDeadlinePolicyV1,
+    extension: Option<&PalwX3RetentionExtensionV1>,
+) -> Result<u64, &'static str> {
+    let Some(extension) = extension else { return Ok(material_sompi) };
+    material_sompi.checked_add(palw_x3_retention_cost_sompi_v1(policy, extension.extra_daa)?).ok_or("X3: the material term overflows")
 }
 
 /// **The X3 mirror** the fold reads (`PalwStateParamsV2::claim_hard_deadline_v1`), written only by
@@ -138,8 +200,9 @@ pub struct PalwClaimHardDeadlineMirrorV1 {
     pub policy: PalwClaimHardDeadlinePolicyV1,
 }
 
-/// **One X3 claim's fixed deadlines** — a pure function of the claim's acceptance DAA, the fence's policy and the claim's retention
-/// obligation (which nothing extends for an X3 claim, REQ-X3-3).
+/// **One X3 claim's fixed deadlines** — a pure function of the claim's acceptance DAA and the fence's policy (REQ-X3-1). The claim's
+/// retention obligation follows the hard deadline, never the reverse (REQ-X3-6), and nothing extends either after acceptance
+/// (REQ-X3-3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwClaimDeadlinesV1 {
     pub accepted_daa: u64,
@@ -149,8 +212,13 @@ pub struct PalwClaimDeadlinesV1 {
 }
 
 /// **REQ-X3-1: a claim's deadlines, fixed at acceptance (d0)** — `None` for a claim accepted below the fence (or where no network
-/// arms it: every shipped one), which keeps every old rule. The hard deadline never exceeds the claim's retention obligation: no
-/// pursuit can be resolved on material the producer no longer owes.
+/// arms it: every shipped one), which keeps every old rule.
+///
+/// **Lead default (2026-10-15, round 3): retention EXTENDS to the hard deadline** (REQ-X3-6). The first source capped `hard` at the
+/// claim's retention (`bind + receipt + challenge + court`), so under most policies a pursuit could barely start after licensing. Now
+/// `hard` is the policy's alone, and the claim's material obligation is raised to it once, at creation
+/// ([`palw_claim_x3_retention_daa_v1`], written by the fold's one claim writer): every pursuit X3 admits runs on material the producer
+/// still owes, and prosecution may start from public material any time before `hard − B_remaining`.
 pub fn palw_claim_deadlines_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> Option<PalwClaimDeadlinesV1> {
     let mirror = params.claim_hard_deadline_v1()?;
     if claim.accepted_daa < mirror.from_daa {
@@ -159,7 +227,7 @@ pub fn palw_claim_deadlines_v1(params: &PalwStateParamsV2, claim: &PalwClaimStat
     let p = mirror.policy;
     let receipt_deadline_daa = claim.accepted_daa.saturating_add(p.prepare_daa);
     let open_cutoff_daa = receipt_deadline_daa.saturating_add(p.observe_daa);
-    let hard_deadline_daa = open_cutoff_daa.saturating_add(p.resolve_daa).min(claim.trace_retention_daa);
+    let hard_deadline_daa = palw_x3_hard_deadline_at_v1(&p, claim.accepted_daa);
     Some(PalwClaimDeadlinesV1 {
         accepted_daa: claim.accepted_daa,
         receipt_deadline_daa,
@@ -177,6 +245,20 @@ pub fn palw_claim_hard_deadline_of_v1(params: &PalwStateParamsV2, claim: &PalwCl
 /// **Does X3 govern this claim?** (Accepted at/after the fence.) Every REQ-X3-3 guard asks this one question.
 pub fn palw_claim_x3_governs_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> bool {
     palw_claim_deadlines_v1(params, claim).is_some()
+}
+
+/// **REQ-X3-6: an X3 claim's retention obligation** — `max(trace_retention_daa, hard)`; `None` under the old ruleset. The fold's claim
+/// writer applies it once, when it CREATES the record (`TransitionBuilder::write_claim`), so the claim trace, the DA material units
+/// (`palw_da_rcore_v1`'s availability, the DA and court retention checks) and every material hold that reads the record are owed
+/// through the hard deadline. Applied at creation it is part of the deadline fixed at d0, not an extension (REQ-X3-3).
+pub fn palw_claim_x3_retention_daa_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> Option<u64> {
+    palw_claim_deadlines_v1(params, claim).map(|d| claim.trace_retention_daa.max(d.hard_deadline_daa))
+}
+
+/// **The retention a claim's material holds must cover**: X3's obligation (REQ-X3-6), else the claim's own — the one spelling for a
+/// caller that reads a claim BEFORE the writer raised it (a contract planned beside the claim's creation).
+pub fn palw_claim_retention_obligation_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> u64 {
+    palw_claim_x3_retention_daa_v1(params, claim).unwrap_or(claim.trace_retention_daa)
 }
 
 /// **REQ-X3-2: `effective = min(proposed, hard)`** — `proposed` unchanged where there is no hard deadline (the old ruleset).
@@ -253,11 +335,55 @@ pub fn palw_public_evidence_reward_refusal_v1(
     }
 }
 
+/// **Can a generative (tensor, tag 87) job's required evidence be public?** The same two non-public routes as a free-prompt job's:
+/// `PanelDa` (the ids ride only the capture served to the Panel) and image inputs (they travel only to the worker and the Panel, as
+/// FP Job V5's do).
+pub fn palw_gen_job_evidence_public_v1(job: &crate::palw_gen_job_v1::PalwGenAcceptedJobV1) -> Result<(), &'static str> {
+    if !job.public_da {
+        return Err("PanelDa: the tensor job's ids ride only the capture served to the Panel, never the chain");
+    }
+    if !job.images.is_empty() {
+        return Err("image inputs: the tensor job's images travel only to the worker and the Panel");
+    }
+    Ok(())
+}
+
+/// **Does a claim record carry any reward or Final weight?** Quanta, pwu, escrowed reward, receipt rights or an immature weight
+/// contribution — what N4 forbids a non-public route to TAKE. A tensor claim (tag 87) and an evaluation claim carry none.
+pub fn palw_claim_earns_reward_or_weight_v1(claim: &PalwClaimStateV2) -> bool {
+    let quanta = match &claim.source {
+        crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { quanta, .. } => *quanta > 0,
+        _ => false,
+    };
+    quanta || claim.pwu > 0 || claim.escrowed_reward > 0 || claim.rights_reserved > 0 || claim.immature_contribution > 0
+}
+
+/// **REQ-N4-3: N4 on a weightless tensor claim (tag 87) — the grant guard.** A tensor claim is created weightless (RFC-0003 §I.4.6:
+/// weight for tensor claims is a later fence), so N4 refuses nothing today. The tensor fold asks THIS at the one site that writes the
+/// claim (`palw_gen_claim_fold_v1`), together with [`palw_claim_earns_reward_or_weight_v1`] of the record it writes: the day a fence
+/// grants a tensor claim reward or Final weight there, a non-public-evidence job accepted past N4 is refused exactly as REQ-N4-1
+/// refuses a free-prompt one. `None` below the fence (REQ-N4-2) or for a job whose evidence can be public.
+pub fn palw_public_evidence_tensor_refusal_v1(
+    params: &PalwStateParamsV2,
+    accepted_daa: u64,
+    job: &crate::palw_gen_job_v1::PalwGenAcceptedJobV1,
+) -> Option<&'static str> {
+    if !params.public_evidence_reward_active_at(accepted_daa) {
+        return None;
+    }
+    palw_gen_job_evidence_public_v1(job).err()
+}
+
 // =================================================================================================================================
 // D2 — `palw_court_model_scope_v1`
 // =================================================================================================================================
 
-/// **The four ARMED t12 routes that compel model bytes** (`palw_court_scope_v1`'s inventory test pins exactly these).
+/// **The four ARMED t12 routes that compel model bytes** (`palw_court_scope_v1`'s inventory test pins exactly these). Each has a
+/// replacement route that convicts the same lie from public authenticated material
+/// ([`crate::palw_court_model_scope_routes_v1::PALW_D2_REPLACEMENT_ROUTES_V1`], REQ-T6-4): the held `StepLeaf` by the claim part and
+/// the accuser's rows; the two root-claim units by a root claim that signs coordinates and claim values only and relays operands
+/// the challenger published at opening (the named-leaf opening checks them, `open_dissection_at_named_leaf_v1`); readiness by a
+/// keyed digest.
 pub const PALW_D2_RESTRICTED_UNITS_V1: [CourtUnitKindV1; 4] = [
     CourtUnitKindV1::HeldStepLeaf,
     CourtUnitKindV1::AttnRootClaimOperands,

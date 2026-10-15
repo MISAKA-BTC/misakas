@@ -23,10 +23,13 @@ population-v1 additionally requires --private-probe-bonds=N (actual funded regis
 Read-only mode: --print-private-probe-profile
 Offline export: --private-probe-export-bootstrap=FRESH_DIRECTORY (complete-v1 or paid-v3 only)
 Offline actual paid Program work: --private-probe-paid-request=FILE --private-probe-export-paid-work=FRESH_DIRECTORY
-paid-v3 node mode, RFC-0008 PAV3 loopback native custody (unverified, unapproved mechanics):
+paid-v3 node mode, RFC-0008 PAV3 native custody (unverified, unapproved mechanics):
   --private-probe-native-provider-keys=SEED_FILE@TXID:INDEX,SEED_FILE@TXID:INDEX[,...] (fixture seats, >=2 operators)
-  --private-probe-native-provider-listen=127.0.0.1:PORT (serve them to other private nodes; omit to serve this producer)
-  --private-probe-native-exchange=127.0.0.1:PORT (this node's producer seals through that provider service)
+  --private-probe-native-provider-listen=ADDR:PORT (serve them to other private nodes; omit to serve this producer)
+  --private-probe-native-exchange=ADDR:PORT (this node's producer seals through that provider service, signing each
+    request with its --palw-producer-key; responses are verified with the chain's registered roster keys)
+  --private-probe-native-network=loopback|remote (default loopback; remote admits separate hosts — every frame is
+    ML-DSA-87 authenticated, nothing is encrypted: the exchanged material is public)
 Node mode additionally needs explicit loopback P2P/gRPC/wRPC listeners, absolute owned --appdir,
 --nodnsseed --outpeers=0 --disable-upnp. Ordinary node flags are parsed by the shipped Args parser.
 The manifest exposes exact policy/monetary identity and releaseApproval=false; it does not prove
@@ -69,6 +72,7 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-native-provider-keys"
                         | "--private-probe-native-provider-listen"
                         | "--private-probe-native-exchange"
+                        | "--private-probe-native-network"
                 ) {
                     return Err(format!("unknown private option {name}"));
                 }
@@ -110,6 +114,7 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         flags.values.remove("--private-probe-native-provider-keys").as_deref(),
         flags.values.remove("--private-probe-native-provider-listen").as_deref(),
         flags.values.remove("--private-probe-native-exchange").as_deref(),
+        flags.values.remove("--private-probe-native-network").as_deref(),
     )?;
     if native.is_some() && (profile != "paid-v3" || flags.print || bootstrap.is_some() || paid_output.is_some()) {
         return Err("the PAV3 native custody options are paid-v3 node mode only".into());

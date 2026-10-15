@@ -163,14 +163,29 @@ pub fn export_private_paid_bootstrap_v3(config: &Config, output: &Path) -> Resul
     manifest["networkDomain"] = serde_json::json!(domain.to_string());
     manifest["saltId"] = serde_json::json!(salt.id());
     let mut seats = base_manifest["seats"].as_array().ok_or("base artifact has no exact funded seat list")?.clone();
-    for seat in &mut seats {
+    let cards = kaspa_consensus_core::config::drill::palw_t12_drill_cards_v1(salt);
+    for (index, seat) in seats.iter_mut().enumerate() {
         let key = seat["keyFile"].as_str().ok_or("base seat key file missing")?;
         if key.contains('/') || key.contains('\\') || key == "." || key == ".." {
             return Err("base seat key file is not a canonical fixture basename".into());
         }
         seat["keyFile"] = serde_json::json!(format!("base-material/{key}"));
+        // RFC-0008 PAV3 (2026-10-15 round 3): the seat's card operator, which a prospective native session names for its
+        // executor and the fold compares against every provider's operator. Derived from the same salt card as the bond.
+        let card = cards.get(index).ok_or("a base seat has no salt card")?;
+        seat["operatorId"] =
+            serde_json::json!(kaspa_consensus_core::palw_state_v2::palw_operator_id_v2(&card.operator.pubkey).to_string());
     }
     manifest["seats"] = serde_json::json!(seats);
+    // The paid factory's monetary-material policy terms a native session enrollment must sign (`check_enrollment`). Copied
+    // from the exact factory params this exporter validated above; values, not an approval.
+    let material = &expected.palw_monetary_material_v1.as_ref().ok_or("paid factory monetary material policy missing")?.policy;
+    manifest["monetaryMaterialPolicy"] = serde_json::json!({
+        "id": material.id().to_string(), "windowDaa": material.window_daa,
+        "minimumCollateralSompi": material.minimum_collateral_sompi, "minimumFeeSompi": material.minimum_fee_sompi,
+        "maxEnrollmentDaa": material.max_enrollment_daa, "maxBytesPerContract": material.max_bytes_per_contract,
+        "nativeSessionMaxUnits": kaspa_consensus_core::palw_material_capacity_v1::PALW_MATERIAL_MAX_UNITS_V1,
+        "approval": false});
     let provenance = serde_json::json!({"schema":"misaka.private-paid-bootstrap-provenance.v3",
         "actualConsensusParamsId":expected.consensus_params_id().to_string(),"actualRulesetId":faster_hex::hex_string(&ruleset),
         "source":"unchanged complete-v1 primitive artifact, revalidated native scope and fresh paid-v3 statement/envelope",

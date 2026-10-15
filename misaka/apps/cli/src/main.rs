@@ -50,6 +50,8 @@ mod palw_fp;
 mod palw_gen;
 /// ADR-0088 Decision 12: `palw line-… / version-… / proposal-… / evaluate` — the model registry.
 mod palw_line;
+/// RFC-0008 PAV3 (2026-10-15 round 3): `palw material-session draft|sign|seal` — a prospective native session enrollment.
+mod palw_material_session;
 mod palw_model;
 mod palw_model_ops;
 mod palw_panel;
@@ -1422,6 +1424,11 @@ enum PalwCmd {
     /// assignment, retries and terminal reason, and the engine's overview. Read-only (`getPalwPanelV3Status`, op 220: a node
     /// built before it drops the connection). On today's chain no beacon source is approved: `BEACON_UNAVAILABLE`.
     PanelV3(palw_panel_v3::PanelV3Args),
+    /// **RFC-0008 PAV3: a prospective native material session** (`MonetaryMaterialEnrolledV1` with `native_session`) —
+    /// draft it from a JSON spec, sign it as the sponsor and each provider (offline), seal the borsh object. Nothing is
+    /// submitted: file it with `misaka palw submit-object --object <out> --yes`.
+    #[command(subcommand)]
+    MaterialSession(palw_material_session::MaterialSessionCmd),
     /// Submit a free-prompt commitment built by `misaka-palw-fp-rail` (dry-run unless --yes).
     FpSubmit {
         /// The rail's `*.commitment-tx.borsh`.
@@ -3453,6 +3460,7 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Palw(PalwCmd::Panel(PalwPanelCmd::Readiness(PalwPanelReadinessCmd::Prove { class, bond }))) => {
             Box::pin(async move { palw_panel::readiness_prove(ctx, &class, &bond).await })
         }
+        Command::Palw(PalwCmd::MaterialSession(cmd)) => Box::pin(async move { palw_material_session::run(cmd) }),
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => Box::pin(async move {
             palw_fp::submit(ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }),

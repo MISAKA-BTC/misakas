@@ -297,6 +297,91 @@ pub fn palw_model_verification_subsidy_v1(outcome: PalwModelVerificationOutcomeV
     }
 }
 
+// ---- A′. the gate's wiring rows (2026-10-15 round 3): beacon context, deferred Final reward, decided outcome --------------------
+
+/// Aux 125, key `0x01 ‖ tally id`: a closed model-epoch's frozen beacon context, waiting for its Work Beacon to lock.
+pub const MODEL_VERIFICATION_CONTEXT_PREFIX_V1: u8 = 0x01;
+/// Aux 125, key `0x02 ‖ claim id`: a Final reward deferred while its model-epoch's verification is undecided.
+pub const MODEL_VERIFICATION_DEFERRED_PREFIX_V1: u8 = 0x02;
+/// Aux 125, key `0x03 ‖ tally id`: a decided model-epoch's outcome, kept while a claim of it may still be paid.
+pub const MODEL_VERIFICATION_DECIDED_PREFIX_V1: u8 = 0x03;
+
+pub fn palw_model_verification_context_key_v1(tally: &Digest) -> Vec<u8> {
+    prefixed(MODEL_VERIFICATION_CONTEXT_PREFIX_V1, tally)
+}
+
+pub fn palw_model_verification_deferred_key_v1(claim: &Digest) -> Vec<u8> {
+    prefixed(MODEL_VERIFICATION_DEFERRED_PREFIX_V1, claim)
+}
+
+pub fn palw_model_verification_decided_key_v1(tally: &Digest) -> Vec<u8> {
+    prefixed(MODEL_VERIFICATION_DECIDED_PREFIX_V1, tally)
+}
+
+/// **A closed model-epoch's beacon context** (aux 125, `0x01 ‖ tally id`). Frozen at the allocation epoch's roll (the block that
+/// closes `epoch`): the OPVB v3 sealed-source `ClaimVerification` context whose commitment is the tally id, at that block's position,
+/// with the OPV classes eligible then (the model itself excluded). The tally opens from this context's verified beacon once it locks;
+/// a beacon that becomes unavailable or is vetoed leaves verification unattested (`unavailable_daa`).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwModelVerificationContextV1 {
+    pub model: Digest,
+    pub epoch: u64,
+    pub model_root: Digest,
+    pub context: misaka_palw_challenge::BeaconContextV1,
+    pub frozen_daa: u64,
+    pub unavailable_daa: Option<u64>,
+    pub policy: Hash64,
+}
+
+impl PalwModelVerificationContextV1 {
+    pub fn validate(&self, policy: &PalwModelVerificationGatePolicyV1) -> Result<(), &'static str> {
+        let tally = palw_model_verification_tally_id_v1(&self.model, self.epoch);
+        if self.policy != policy.id()
+            || self.context.commitment_root != tally
+            || self.context.subject_kind != misaka_palw_challenge::SubjectKindV1::ClaimVerification
+            || self.context.commitment_position != self.frozen_daa
+            || self.context.challenge_epoch != self.epoch
+            || self.context.candidate_profile_id != misaka_palw_challenge::RootV1::Absent
+            || !self.context.excluded_profiles.contains(&self.model)
+            || self.context.eligible_profiles.contains(&self.model)
+            || [self.model, self.model_root].contains(&[0; 64])
+            || self.unavailable_daa.is_some_and(|at| at < self.frozen_daa)
+        {
+            return Err("a verification context is not its model-epoch's frozen ClaimVerification context");
+        }
+        Ok(())
+    }
+}
+
+/// **A Final reward deferred by the gate** (aux 125, `0x02 ‖ claim id`): the amount the claim's Final would have named while its
+/// model-epoch was undecided. Released to `payload` once the tally is Attested (or had no Final claim to sample); withheld — never
+/// named, never minted — once it is Unattested.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwModelVerificationDeferredV1 {
+    pub model: Digest,
+    pub epoch: u64,
+    pub claim: Digest,
+    pub bond: crate::palw_state_v2::PalwBondKeyV2,
+    pub payload: Hash64,
+    pub amount: u64,
+    pub deferred_daa: u64,
+}
+
+/// **A decided model-epoch** (aux 125, `0x03 ‖ tally id`): the outcome a decided tally left when it was taken, kept while any claim of
+/// the model-epoch may still be paid or a deferred reward still waits on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwModelVerificationDecidedV1 {
+    pub model: Digest,
+    pub epoch: u64,
+    pub outcome: PalwModelVerificationOutcomeV1,
+    pub decided_daa: u64,
+}
+
+/// The payout queue key of a released deferred reward (distinct from every claim-id payout key).
+pub fn palw_model_verification_deferred_payout_key_v1(claim: &Digest) -> Hash64 {
+    Hash64::from_bytes(object_id(b"MISAKA/PALW/MODEL-VERIFICATION-DEFERRED-PAYOUT/V1", claim))
+}
+
 // ---- B. the consented horizon extension ------------------------------------------------------------------------------------------
 
 /// **The extension's policy** — every value POLICY, none approved.
@@ -598,6 +683,68 @@ pub fn palw_minimum_price_job_key_v1(job: &Digest) -> Vec<u8> {
     prefixed(MINIMUM_PRICE_JOB_PREFIX_V1, job)
 }
 
+// ---- C′. R8-ECON at settlement and the contracts' retirement (2026-10-15 round 3) ------------------------------------------------
+
+/// **The contract's settlement rule (R8-ECON at Final).** While a signed contract governs a job, the contracted worker's claim carries
+/// the funded minimum as a payout floor into the kernel ledger (`KernelLedgerV1::consumer_minimum_payouts_v1`). The ledger pays the
+/// Final out of the job's escrow as always — `min(escrow, poster's remaining bond, consumer cap)` — and when that amount is below the
+/// floor it pays NOTHING out of the escrow and releases it whole to the poster: the contract outcome is neutral, never a smaller
+/// payment. Pure: the floor a contract row sets for `claim` (`None`: no floor).
+pub fn palw_minimum_price_floor_v1(
+    row: &PalwMinimumPriceRowV1,
+    ledger: &misaka_palw_kernel::ledger::KernelLedgerV1,
+) -> Option<(Digest, u64)> {
+    row.signed_daa?;
+    let claim = ledger.job_claims.get(&row.terms.job)?;
+    ledger.claims.get(claim).filter(|c| c.producer == row.terms.worker).map(|_| (*claim, row.terms.funded_minimum_sompi))
+}
+
+/// Why a minimum-price row leaves aux 127 at the sweep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwMinimumPriceRetirementV1 {
+    /// Not every party signed by `accept_by_daa`: the partial consent is stale.
+    StaleConsent,
+    /// Past `retention_until_daa`: the priced retention is over.
+    Expired,
+    /// Past `accept_by_daa` with no claim of the contracted worker on the job: the contract was never used.
+    Unused,
+    /// The job's escrow is gone (paid, released neutral, or returned idle): nothing is left to govern.
+    Settled,
+}
+
+/// **The deterministic retirement rule** of one contract row at `now` against the route's ledger (`None`: it stays).
+pub fn palw_minimum_price_retirement_v1(
+    row: &PalwMinimumPriceRowV1,
+    ledger: &misaka_palw_kernel::ledger::KernelLedgerV1,
+    now: u64,
+) -> Option<PalwMinimumPriceRetirementV1> {
+    use PalwMinimumPriceRetirementV1 as R;
+    if row.signed_daa.is_none() {
+        return (now > row.terms.accept_by_daa).then_some(R::StaleConsent);
+    }
+    if now > row.terms.retention_until_daa {
+        return Some(R::Expired);
+    }
+    let worker_claim = ledger
+        .job_claims
+        .get(&row.terms.job)
+        .and_then(|claim| ledger.claims.get(claim))
+        .is_some_and(|claim| claim.producer == row.terms.worker);
+    if now > row.terms.accept_by_daa && !worker_claim {
+        return Some(R::Unused);
+    }
+    (!ledger.job_escrows.contains_key(&row.terms.job)).then_some(R::Settled)
+}
+
+/// **The extension rows' retirement** at `now` (`true`: it leaves aux 126): an unapplied extension past its consent window is a stale
+/// consent; an applied one is retired once the consented horizon has passed.
+pub fn palw_horizon_extension_retired_v1(row: &PalwHorizonExtensionRowV1, now: u64) -> bool {
+    match row.applied_daa {
+        None => now > row.terms.consent_by_daa,
+        Some(_) => now > row.terms.new_liability_until_daa,
+    }
+}
+
 // ---- the fences, their mirror and refusal ------------------------------------------------------------------------------------------
 
 /// **The three fences, mirrored on the V2 bundle's state params** (the fold reads them). Not Borsh-carried and not hashed — the fences
@@ -675,9 +822,15 @@ impl Params {
                 "palw_model_verification_gate_v1 requires palw_model_bond_allocation_v1 (the allocation it gates) at or below it",
             ));
         }
+        // Round 3: the gate's contexts, tallies, decided rows and deferred rewards are kernel-route aux rows.
+        if self.palw_probabilistic_constraints_v1.and_then(armed).is_none_or(|r| r > at) {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_model_verification_gate_v1 requires palw_probabilistic_constraints_v1 (the kernel route holding its rows) at or below it",
+            ));
+        }
         Err(PalwModeV2Error::Invalid(
-            "palw_model_verification_gate_v1 cannot be armed: the gate size, verifier-pool A-BFT premise, beacon wiring and the ADR-0177 \
-             D1 reading remain unapproved",
+            "palw_model_verification_gate_v1 cannot be armed: the gate size, verifier-pool A-BFT premise, the beacon policy the tally \
+             contexts use, the deferral release rule and the ADR-0177 D1 reading remain unapproved",
         ))
     }
 
@@ -729,15 +882,48 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let Some(route) = self.kernel_route() else { return Ok(()) };
         let mirror = params.econ_contracts_v1();
         let mut applied = Vec::new();
+        // Rows the round-3 sweep must already have retired (checked against the route ledger's own DAA below).
+        let mut swept: Vec<(Option<PalwHorizonExtensionRowV1>, Option<PalwMinimumPriceRowV1>)> = Vec::new();
         for ((table, key), bytes) in &route.aux {
             match *table {
                 PALW_MODEL_VERIFICATION_TABLE_V1 => {
                     let (_, policy) =
                         mirror.model_verification_gate.as_ref().ok_or_else(|| refuse("a tally without its fence".into()))?;
-                    let row: PalwModelVerificationTallyV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
-                    row.validate(policy).map_err(|e| refuse(e.into()))?;
-                    if key.as_slice() != palw_model_verification_tally_id_v1(&row.model, row.epoch).as_slice() {
-                        return Err(refuse("a tally under another key".into()));
+                    let has = |key: Vec<u8>| route.aux.contains_key(&(PALW_MODEL_VERIFICATION_TABLE_V1, key));
+                    match (key.len(), key.first()) {
+                        (64, _) => {
+                            let row: PalwModelVerificationTallyV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                            row.validate(policy).map_err(|e| refuse(e.into()))?;
+                            let id = palw_model_verification_tally_id_v1(&row.model, row.epoch);
+                            if key.as_slice() != id.as_slice()
+                                || has(palw_model_verification_context_key_v1(&id))
+                                || has(palw_model_verification_decided_key_v1(&id))
+                            {
+                                return Err(refuse("a tally under another key, or beside its context or decided row".into()));
+                            }
+                        }
+                        (65, Some(&MODEL_VERIFICATION_CONTEXT_PREFIX_V1)) => {
+                            let row: PalwModelVerificationContextV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                            row.validate(policy).map_err(|e| refuse(e.into()))?;
+                            let id = palw_model_verification_tally_id_v1(&row.model, row.epoch);
+                            if *key != palw_model_verification_context_key_v1(&id) || has(palw_model_verification_decided_key_v1(&id)) {
+                                return Err(refuse("a verification context under another key or beside its decided row".into()));
+                            }
+                        }
+                        (65, Some(&MODEL_VERIFICATION_DEFERRED_PREFIX_V1)) => {
+                            let row: PalwModelVerificationDeferredV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                            if *key != palw_model_verification_deferred_key_v1(&row.claim) || row.amount == 0 || row.model == [0; 64] {
+                                return Err(refuse("a deferred reward under another key, or of nothing".into()));
+                            }
+                        }
+                        (65, Some(&MODEL_VERIFICATION_DECIDED_PREFIX_V1)) => {
+                            let row: PalwModelVerificationDecidedV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                            let id = palw_model_verification_tally_id_v1(&row.model, row.epoch);
+                            if *key != palw_model_verification_decided_key_v1(&id) || row.outcome == PalwModelVerificationOutcomeV1::Pending {
+                                return Err(refuse("a decided row under another key, or undecided".into()));
+                            }
+                        }
+                        _ => return Err(refuse("an unallocated verification row namespace".into())),
                     }
                 }
                 PALW_HORIZON_EXTENSION_TABLE_V1 => {
@@ -751,6 +937,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                     if row.applied_daa.is_some() {
                         applied.push(row.terms);
                     }
+                    swept.push((Some(row), None));
                 }
                 PALW_MINIMUM_PRICE_TABLE_V1 => {
                     mirror.minimum_price.as_ref().ok_or_else(|| refuse("a contract without its fence".into()))?;
@@ -758,6 +945,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                         Some(&MINIMUM_PRICE_CONTRACT_PREFIX_V1) if key.len() == 65 => {
                             let row: PalwMinimumPriceRowV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                             row.validate().map_err(|e| refuse(e.into()))?;
+                            swept.push((None, Some(row.clone())));
                             let index = route.aux.get(&(PALW_MINIMUM_PRICE_TABLE_V1, palw_minimum_price_job_key_v1(&row.terms.job)));
                             if *key != palw_minimum_price_contract_key_v1(&row.terms.id())
                                 || index.is_none_or(|id| id.as_slice() != row.terms.id().as_slice())
@@ -775,6 +963,24 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                     }
                 }
                 _ => {}
+            }
+        }
+        if !swept.is_empty() {
+            // The sweep runs at the start of every block's kernel-route closing step, at that block's DAA, before any row of the block
+            // is written; the ledger's DAA is a block the sweep already ran at, so no row it retires at that DAA may remain. Contract
+            // retirements that read the ledger (Unused, Settled) are not re-derived here: the ledger has moved past the sweep's view.
+            let ledger = route.ledger().map_err(refuse)?;
+            for (extension, contract) in swept {
+                let stale = extension.is_some_and(|row| palw_horizon_extension_retired_v1(&row, ledger.daa))
+                    || contract.is_some_and(|row| {
+                        matches!(
+                            palw_minimum_price_retirement_v1(&row, &ledger, ledger.daa),
+                            Some(PalwMinimumPriceRetirementV1::StaleConsent | PalwMinimumPriceRetirementV1::Expired)
+                        )
+                    });
+                if stale {
+                    return Err(refuse("a stale consent or an expired contract the sweep retires is still held".into()));
+                }
             }
         }
         if !applied.is_empty() {

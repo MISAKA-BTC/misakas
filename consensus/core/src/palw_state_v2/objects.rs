@@ -284,7 +284,18 @@ pub(super) fn apply_object(
                 }
                 let ladder = builder.state.class_step_ladder_v1(&claim.class_id, held);
                 let turn = builder.params.turn_deadline_daa();
-                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn)?;
+                // D2 (REQ-T6-4): the cone accusation's params are what it publishes for the root claim's finalize to relay (read
+                // only on a new claim).
+                let published = match &accusation.proof {
+                    crate::palw_court_v2::PalwCourtVerdictProofV2::TirCone { refutation } => {
+                        crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::TirParams(&refutation.params)
+                    }
+                    crate::palw_court_v2::PalwCourtVerdictProofV2::EvalCone { .. } => {
+                        crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::CarriedUnchecked
+                    }
+                    _ => crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::None,
+                };
+                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn, published)?;
             } else {
                 match accusation.verdict {
                     PalwCourtVerdictV2::ExecutorGuilty => builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?,
@@ -352,7 +363,15 @@ pub(super) fn apply_object(
                 }
                 let ladder = builder.state.class_step_ladder_v1(&claim.class_id, held);
                 let turn = builder.params.turn_deadline_daa();
-                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn)?;
+                // D2 (REQ-T6-4): the cone accusation's params are what it publishes for the root claim's finalize to relay (read
+                // only on a new claim).
+                let published = match &accusation.proof {
+                    crate::palw_court_v2::PalwCourtVerdictProofV2::GenCone { close } => {
+                        crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::GenParams(&close.params)
+                    }
+                    _ => crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::None,
+                };
+                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn, published)?;
             } else {
                 match accusation.verdict {
                     PalwCourtVerdictV2::ExecutorGuilty => builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?,
