@@ -360,6 +360,11 @@ pub enum PalwModelLifecycleV1 {
     ActiveLimited {
         stable_epochs: u32,
     },
+    /// **`Active` is an operational state, never a tier** (RFC-0019 §6.2, PRINCIPLES §9.2). A registered class that reaches `Active`
+    /// stays at the registered tier (0.3) for ever; only membership of the annual catalog active at the height — `ApprovedModels(h)`,
+    /// [`crate::palw_annual_catalog_v1`] — makes a model 1.0, and a catalog model in any other state (`Held`, `Probation`, …) is
+    /// still 1.0 in the allocation weight. The tier API ([`crate::palw_model_tier_v1::palw_model_tier_of_v1`]) takes no lifecycle
+    /// argument, which is what keeps the two apart; RPC reports them in separate fields (`state`, `modelTier`).
     Active,
     /// A class whose panel cannot be drawn or whose utilization passed one: its own new claims
     /// hold; nothing else stops.

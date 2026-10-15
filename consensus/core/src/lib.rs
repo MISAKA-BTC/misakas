@@ -534,6 +534,10 @@ pub mod palw_model_eligibility_v1;
 /// **ADR-0179 — model tiers** (user decision 2026-10-15, round 4; dormant fence `palw_model_tier_v1`): `ApprovedModels(h)` (genesis +
 /// annual fork lists, add-only) at 1.0, every other registered model permanently 0.3, applied once in the allocation weight.
 pub mod palw_model_tier_v1;
+/// **RFC-0019 — the annual model catalog** (the value of `palw_model_tier_v1`, dormant): `ApprovedModels(h)` is an add-only chain of
+/// catalogs (genesis = edition 0) chained by `previous_catalog_root`, each edition activating at its own DAA; canonical encoding and
+/// root, chain validation, `annual_catalog_active_at`, `model_tier_permille` and the node's catalog status.
+pub mod palw_annual_catalog_v1;
 /// RFC-0015: the Panel=0 (`OptimisticPublicVerification`) fence `palw_panel_free_v1` — dormant, no height, refused when armed.
 pub mod palw_panel_free_v1;
 pub mod palw_panel_lifetime_v2;
