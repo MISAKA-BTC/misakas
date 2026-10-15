@@ -14,11 +14,12 @@ pub(super) fn apply_object(
     }
     // A prospective original is ONE native object. Failure after the ordinary
     // FP reservation/budget writes cannot leave an accepted unprotected claim.
-    let saved = builder.checkpoint();
-    let result = (|| {
-        palw_tir_public_fold_v1::check_paired_original_v1(builder, object)?;
-        apply_object_inner(builder, ctx, object)
-    })();
+    // `checkpoint()` is test-only on the integration line; production rollback goes through the native resource reservation.
+    let saved = builder.try_checkpoint()?;
+    let result = match palw_tir_public_fold_v1::check_paired_original_v1(builder, object) {
+        Ok(()) => apply_object_inner(builder, ctx, object),
+        Err(why) => Err(why),
+    };
     if result.is_err() {
         builder.restore(saved);
     }
