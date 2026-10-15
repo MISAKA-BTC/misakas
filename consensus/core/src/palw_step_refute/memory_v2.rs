@@ -13,7 +13,16 @@ use crate::palw_state_chunk_map as maps;
 use crate::palw_step_leg as leg;
 
 mod capture;
-pub use capture::gdn_refutation_from_capture_v2;
+pub use capture::{PalwGdnCaptureV2, gdn_refutation_from_capture_v2};
+// RFC-0006 consumer v2: the checkpoint's own two facts (delta transition, convolution window), the court that keeps an anchored
+// replay sound — see the module's docs.
+mod transition;
+pub use transition::{
+    PALW_GDN_CHECKPOINT_EVIDENCE_VERSION_V2, PALW_GDN_CONV_WINDOW_EVIDENCE_KIND_V2, PALW_GDN_TRANSITION_EVIDENCE_KIND_V2,
+    PalwGdnCheckpointVerdictV2, PalwGdnConvWindowRefutationV2, PalwGdnMismatchV2, PalwGdnTransitionRefutationV2,
+    check_gdn_conv_window_refutation_v2, check_gdn_transition_refutation_v2, gdn_conv_window_refutation_from_capture_v2,
+    gdn_conv_window_required_v2, gdn_transition_refutation_from_capture_v2,
+};
 
 pub const PALW_GDN_STEP_EVIDENCE_VERSION_V2: u16 = 2;
 
@@ -87,9 +96,11 @@ pub fn gdn_replay_start_v2(
     let id = p.state_chunk_map_id;
     // Legacy hybrid1/2 name a composition but do not serialize its recurrence.
     // Solo key-head v3 likewise has no production capture consumer yet.
+    // RFC-0006 consumer v2's composed hybrid maps (new ids) DO serialize both halves (`capture::gdn_recurrence_section_v2`).
     if id != maps::gdn_state_chunk_map_id_v1()
         && id != maps::gdn_state_chunk_map_id_v2()
         && id != maps::hybrid_state_chunk_map_id_v3()
+        && !maps::palw_map_is_hybrid_composed_v2(&id)
         && !maps::palw_profile_is_held_v4(p)
     {
         return Err(evidence("this map has no authentic recurrence capture consumer"));
@@ -183,31 +194,9 @@ fn authenticate_anchor_v2<'a>(
     }
     let (_, layer) = binding.shape_profile.resolve_node_slot(coord.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)?;
     let layer = layer.ok_or(PalwStepRefuteError::Unadjudicable)?;
-    let held = maps::palw_profile_is_held_v4(&binding.shape_profile);
-    let composition = binding.shape_profile.state_chunk_map_id == maps::hybrid_state_chunk_map_id_v3() || held;
-    let layout = if held {
-        Some(
-            maps::palw_state_layout_v4(&binding.shape_profile, start.first_position)
-                .map_err(|_| evidence("held checkpoint has no recurrence layout"))?,
-        )
-    } else {
-        None
-    };
-    let (offset, expected_count) = if let Some(layout) = &layout {
-        if layout.gdn_layers.is_empty() {
-            return Err(evidence("this held checkpoint does not carry recurrence state"));
-        }
-        (layout.attn.chunk_count(), layout.chunk_count())
-    } else if composition {
-        let layout = maps::hybrid_state_geometry_for_covered_v1(&binding.shape_profile, start.first_position)
-            .map_err(|_| evidence("hybrid checkpoint has no recurrence layout"))?;
-        if layout.gdn_layers.is_empty() {
-            return Err(evidence("this hybrid checkpoint does not carry recurrence state"));
-        }
-        (layout.attn.chunk_count(), layout.chunk_count())
-    } else {
-        (0, geometry.chunk_count())
-    };
+    // One spelling of "where the recurrence half lives" (held, v3 composition, consumer v2's composed maps, solo), shared with the
+    // assembler and the checkpoint terminals.
+    let (offset, expected_count, layout) = capture::gdn_recurrence_section_v2(&binding.shape_profile, start.first_position)?;
     if expected_count != u64::from(leaf.state_chunk_count) {
         return Err(evidence("checkpoint count differs from its registered state layout"));
     }
