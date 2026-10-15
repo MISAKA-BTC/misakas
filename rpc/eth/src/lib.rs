@@ -1521,6 +1521,11 @@ async fn handle_one(provider: &Arc<dyn EthProvider>, item: Value) -> Option<RpcR
 
 /// Defensive cap on a single JSON-RPC request body.
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
+/// Defensive cap on the HTTP REQUEST HEADERS block (audit #6). Separate from (and far
+/// smaller than) the body cap, so a connection cannot buffer up to `MAX_BODY_BYTES` of
+/// headers before the `\r\n\r\n` terminator. 32 KiB comfortably fits real headers plus
+/// the read-chunk overshoot.
+const MAX_HEADER_BYTES: usize = 32 * 1024;
 /// Max JSON-RPC batch items per request (audit H-02).
 const MAX_BATCH_ITEMS: usize = 100;
 /// Max concurrent connections served at once (audit H-02). Excess connections
@@ -1620,7 +1625,7 @@ async fn serve_conn(mut stream: TcpStream, provider: Arc<dyn EthProvider>) -> st
                 if let Some(pos) = find_subslice(&buf, b"\r\n\r\n") {
                     return Ok::<HeaderRead, std::io::Error>(HeaderRead::Done(pos + 4));
                 }
-                if buf.len() > MAX_BODY_BYTES {
+                if buf.len() > MAX_HEADER_BYTES {
                     return Ok(HeaderRead::TooLarge);
                 }
                 let n = stream.read(&mut tmp).await?;
