@@ -17516,7 +17516,8 @@ fn delta_entry_discriminants_are_the_ones_on_disk() {
             },
         ),
         (203, PalwDeltaEntryV2::TerminalEvidence { key: (key, bond_key(1)), old: None, new: None }),
-        (205, PalwDeltaEntryV2::TerminalPart { key: (key, bond_key(1)), index: 0, old: None, new: None }),
+        // Moved 205 -> 212 by the 2026-10-11 registry reconciliation (9ace6032f) to preserve the LG14-B reserve.
+        (212, PalwDeltaEntryV2::TerminalPart { key: (key, bond_key(1)), index: 0, old: None, new: None }),
         // Lane BUDGET (the bond budget, 190–199), declared explicitly.
         (190, PalwDeltaEntryV2::BondBudgetRow { table: 1, key: Vec::new(), old: None, new: None }),
         (191, PalwDeltaEntryV2::BondBudgetHeader { old: None, new: None }),

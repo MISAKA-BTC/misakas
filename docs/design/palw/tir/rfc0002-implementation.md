@@ -3540,3 +3540,51 @@ job; decoder ceiling 46; pre-gate/fold unjudged predicate covers 45|46. SDK
 Test sources: kernel `tests/flat_window37.rs` (envelope, selection-job determinism, program
 binding refusal); node below-fence test now sends 45 and 46. No code item of RFC02 remains;
 RFC03 patch/audio stays spec + fenced refusing codec.
+
+## Validation (2026-10-15) — paused 10-15 by user order
+
+**Paused 10-15 by user order; results so far apply only to the recorded source commits and
+will be rerun in the consolidated phase** (after every RFC stream finishes coding). Logs are
+under the checkout's `target/rfc02-validation/` (local, not committed). Toolchain 1.93.0,
+`-j 6`, own `./target`.
+
+| Step | Command | Source commit | Result |
+| --- | --- | --- | --- |
+| lock | `cargo update --offline --workspace` (SDK workspace-internal deps only) | e92a74c95 | lock updated |
+| 1 | `cargo check --locked -p misaka-palw-tir -p misaka-palw-kernel` | e92a74c95 | PASS after 13 compile fixes |
+| 1 | `cargo check --locked -p kaspa-consensus-core` | 9a102af21 | PASS after 33 compile fixes |
+| 1 | `cargo check --locked -p kaspa-consensus -p kaspa-mining -p kaspa-rpc-service` | 9a102af21 | PASS |
+| 1 | `cargo check --locked -p misaka-palw-sdk --bins --lib` | 9a102af21 | PASS |
+| 1 | `cargo check --locked -p kaspad` | 9a102af21 | PASS |
+| 2 | `cargo test -p misaka-palw-kernel --test flat_lengths36 --test flat_window37 --test flat_history8 --test flat_lengths7` | 9a102af21 | PASS 20/20 (3+4+8+5) |
+| 2 | `cargo test -p kaspa-consensus-core --lib -- palw_native_calibration_v34 palw_native_spend_v35 palw_window_class_v37 palw_native_paged_proof_v29 palw_native_redemption_v33 funded_execution_fence_tests` | 08c8081f3 | PASS 12/12 after one code fix |
+| 2 | `cargo test -p kaspa-consensus --lib -- native_final27_actions_below_their_fence_are_neither_rejected_nor_applied execution11_native` | 9b33500ff | PASS 6/6 after one code fix and four test-expectation corrections |
+| 2 | `python3 -m unittest test_acceptance_cohort.py` / `test_checkpoint_cohort_runner.py test_rfc02_acceptance_batch.py` | 9b33500ff | PASS 12/12, 8/8 |
+| 3 | `cargo test -p kaspa-consensus-core --lib` (whole lib) | 9b33500ff | 3926 passed, 5 failed, 13 ignored — NOT PASS |
+| 3 | full `cargo test -p kaspa-consensus-core` (309 integration binaries) | — | stopped: the debug target grew to 86 GB and free disk fell to 33 GB |
+
+Code fixes made during validation (all committed): kernel trait/visibility/metadata-wrapper
+and interval `consume` fixes; consensus-core field names, ordinary-metadata envelope
+constructor, `LayoutV3` leaf `Option`, canonical TIR decode, layout accessor,
+comparable/serializable source binding; calibration34 declares the A-2 audit fence on its
+isolated genesis (no snapshot could load before); the stateless ride rule accepts the native
+64×32 KiB chunk lanes (targets 6/7).
+
+The five whole-lib failures, classified against the RFC02 workspace base `64699e960`
+(same five tests built from that tree in a separate target):
+- `delta_entry_discriminants_are_the_ones_on_disk` — also fails on the base: the test pins
+  `TerminalPart` at 205, the registry reconciliation `9ace6032f` moved it to 212. Test pin
+  corrected (uncommitted-at-run, committed below; not yet rerun).
+- `the_intent_class_is_the_court_fraud_and_contradictions_…` — also fails on the base: tags
+  16/17 were added to the intent class by `b31278797`/`da63ea284` without updating the test.
+  Left as a pre-existing open item for the consolidated phase (decision on the tag list).
+- `public_filer_targeting_v1::explicit_lookup_reconstructs_…` — also fails on the base
+  (`AccusationExposureCeiling`, accuser room 0 for a bond registered in the same block).
+  Pre-existing, not RFC02; open.
+- `a2u::every_landed_kind_is_pinned_to_its_wire_form` — passes on the base; RFC02's native
+  chunk targets 6/7 changed tag 113's wire form. Re-pinned with the reason (not yet rerun).
+- `only_this_module_may_ask_the_pre_fence_slot_rule` — passes on the base; it failed here only
+  because this checkout nests other agents' worktrees under `.claude/`. The scan now skips
+  `.claude` (not yet rerun).
+
+Step 4 (devnet / real-checkpoint cohort) was not prepared or launched.

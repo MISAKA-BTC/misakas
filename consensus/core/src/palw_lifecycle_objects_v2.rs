@@ -4705,7 +4705,8 @@ pub(crate) mod tests {
             (109, 0xcd35f41524be4a4f), // OPVB: PostComplete and the derived-eligibility forms of tag 109 (under palw_probabilistic_constraints_v1)
             (110, 0xb15fb011723ebbe0),
             (111, 0x27999d2df751e9c6),
-            (113, 0x2fb1aa3e7e627952), // FlatProofV9 (5) appends its own authenticated actor/maturity lane under the same dormant fence.
+            (113, 0x8f19418d98449cce), // FlatProofV9 (5); RFC02 native FundedProofV11 (6) / StageProofV14 (7) append their own paid
+            // protected lanes, each judged only past palw_funded_execution_v11 / palw_stage_execution_v14 (re-pinned 2026-10-15).
             (120, 0x0811fa945c751a68),
             // X8R's RFC-0008 v2 work-root declaration, under `palw_exec_payload_v2` (lifecycle kind fence 6).
             (130, 0x5774ef35c9a3fdaa),
