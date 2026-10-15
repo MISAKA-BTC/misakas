@@ -12,7 +12,7 @@
 * **Baseline:** 設計根拠は`pre` = `4fb381a87`（2026-10-14のα=1.5確定とattestation gate維持を含む）、実装は統合branch `integ/rfc02-rfc06-12-g14` = `2e74a485b`の上。`pre`の文書commit 4件（`640b7c242`〜`4fb381a87`）はこのbranchに無く、このbranchは`pre`より182 commit進んだcodeを持つ（merge-base `64699e960`）。本文のcode行番号は`2e74a485b`のもので、`pre`で同じ行のもの・`pre`に無いものは§3で明記した（`scripts/ci/check-doc-citations.sh`で両treeを照合）。
 * **Not activated by:** 本RFCのmerge、設計値表（§11）、単体試験sourceの存在、simulation driverの出力。
 * **Normative language:** MUST / MUST NOTは本fence有効化後の規則。設計値は名前付きの未承認値であり本番承認ではない。
-* **RFC-0016:** 本branchの`docs/rfc/`には存在しない（他branchで予約中と扱う）。本RFCは0015の書式に揃えた。
+* **RFC-0016との関係:** 統合branchの[RFC-0016](0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)（2026-10-15のユーザー判断: Kernel claimはB = 0・F = 0・利用者払いescrowのみでcoinbase legなし・escrowはclipしない、拘束期間はPanel=0 7日相当 / Panel=1 1日相当、mode切替で能力を再取得しない）を拘束条件として扱い、再審しない。本RFCは物理block機会（RFC-0016 §7–§8）を変えず、その上に「モデル単位の資格」を重ねる。書式はRFC-0015/0016に揃えた。
 
 ## 0. 原則
 
@@ -213,12 +213,12 @@ subsidyだけを止めるのは不十分である（G-3）。三つを別々にg
 | `transition_builder.rs` `finalize_claim` | `eligibility_final_weight_v1` | pin退役（weightは予約F = 0で既に0） |
 | `palw_kernel_route_fold_v1.rs` dispatch / closing tick | inner 74/75、`sweep_model_eligibility_v1` | — |
 | processor `palw.rs` A-2 gate | `PalwKernelInnerFenceV1::ModelEligibilityV1` | fence未満は落とす |
-| モデル配分（ADR-0177、`palw_bond_budget_v1`の`roll_epoch`） | `palw_eligibility_allocation_capital_v1`を提供 | **未接続（GAP-E1）**: 当該fileは別laneが改定中のため編集しない |
+| モデル配分（ADR-0177 V3: `palw_allocation_snapshot_v3` / `roll_epoch_v3`、`palw_bond_budget_fold_v1.rs:2096`） | `palw_eligibility_allocation_capital_v1`を提供 | **未接続（GAP-E1）**: 当該fileは別laneが改定中のため編集しない |
 | RPC `GetPalwModelRegistry` | `palw_eligibility_status_of_v1` → row fields | stage、次回更新DAA、三権利、合格数、lineage試行数 |
 
 ## 9. 未解決のgap
 
-* **GAP-E1（coinbase配分の分母）:** Registered/Lapsedの資本を配分の分母・分子から外す呼出（`roll_epoch`の入力）を未接続。ADR-0176/0177 lane（`integ/adr-0162-0178`）が`palw_bond_budget_v1.rs`を改定中のため、提供関数`palw_eligibility_allocation_capital_v1`を合流後に呼ぶ。未接続の間、駐車資本による他モデルの希釈が残る（支払自体はclaim gateで止まる）。
+* **GAP-E1（coinbase配分の分母）:** Registered/Lapsedの資本を配分の分母・分子から外す呼出を未接続。2026-10-15に合流したADR-0177 V3配分では、モデル別`S_m(k)`は`palw_allocation_snapshot_v3`（`consensus/core/src/palw_bond_budget_v1/allocation_v3.rs:135`）、epoch rollは`roll_epoch_v3`（同 :173）、呼出は`palw_bond_budget_fold_v1.rs:2096`。これらはADR-0176/0177 lane（`integ/adr-0162-0178`）の改定対象のため編集せず、snapshotの各モデル値を`palw_eligibility_allocation_capital_v1`に通す接続を同laneへ依頼する。未接続の間、駐車資本による他モデルの希釈と、`P_m`によるblock機会の割当が残る（報酬付きclaimそのものはclaim gateで止まる）。
 * **GAP-E2（Panel=0とkernel route）:** OPV/kernel claimはB = F = 0なので対象外とした。将来kernel claimに報酬legが付くなら同じhookが要る。
 * **GAP-E3（試行手数料）:** policyに手数料はない。network試行枠のgriefing（§5）への費用は未設計。新規発行はしない。
 * **GAP-E4（evaluation lane）:** RFC-0004のevaluation claim（`PalwGatedClaimV1::Evaluation`）はgateしていない。

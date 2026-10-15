@@ -942,12 +942,12 @@ pub fn palw_eligibility_status_v1(
     }
 }
 
-/// **The model-allocation input a stage admits** (RFC-0017 §6, the coinbase leg): the 30-day capital `S̄_m` the ADR-0177 allocation
-/// (`palw_bond_budget_v1`, owned by the ADR-0176/0177 lane and NOT edited here) should count for a model in its denominator and its
-/// numerator. `Registered` / `Lapsed` count 0 (no allocation, and no dilution of other models by parked capital); `Probation` counts
+/// **The model-allocation input a stage admits** (RFC-0017 §6, the coinbase leg): the capital the ADR-0177 V3 allocation
+/// (`palw_allocation_snapshot_v3` / `roll_epoch_v3` in `palw_bond_budget_v1`, owned by the ADR-0176/0177 lane and NOT edited here)
+/// should count for a model in its denominator and its numerator. `Registered` / `Lapsed` count 0 (no allocation, and no dilution of other models by parked capital); `Probation` counts
 /// its capital but its payment is bounded by the probation grant; `Eligible` and ungoverned models count all of it. The allocation's
-/// call site must pass every model's capital through this function before the `α` curve — the hook this module offers; wiring it into
-/// `roll_epoch` is the coordination item RFC-0017 §9 GAP-E1 records.
+/// call site must pass every model's snapshot `S_m(k)` through this function before the `α` curve — the hook this module offers;
+/// wiring it into `roll_epoch_v3` (`palw_bond_budget_fold_v1.rs`) is the coordination item RFC-0017 §9 GAP-E1 records.
 pub fn palw_eligibility_allocation_capital_v1(stage: Option<PalwEligibilityStageV1>, capital: u128) -> u128 {
     match stage {
         Some(PalwEligibilityStageV1::Registered) | Some(PalwEligibilityStageV1::Lapsed) => 0,
