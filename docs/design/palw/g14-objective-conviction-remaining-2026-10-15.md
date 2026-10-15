@@ -51,7 +51,12 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
   `kernel_ledger.rs`・`wire_budget.rs`・`wire_jobs.rs` は他 lane の手書き arm があるため再生成結果を採らない）。TIR 経路の手書き codec 15 件を宣言と
   照合し `rfc06_native_manual_wire_review_v1.py` に `reviewed-field-layout` で pin。新しい owner-local visitor（`palw_mode_v2`、
   `palw_tir_public_{claim,custody,owned}_v1`）を `#[path] mod` で接続。
-- A-2 wire pin: tag 170/171 は `PALW_A2_NEW_KIND_WIRE_V1` に **0x0 の仮 pin** を置いた。検証段で `[a2u-pins]` 出力から pin し直す。
+- A-2 wire pin: tag 170/171 は `PALW_A2_NEW_KIND_WIRE_V1` に **build なしで導出した値**を pin した（170 = `0xb68d62123647ff28`、
+  171 = `0x68623b7dc7d30b55`、2026-10-16）。導出は `scripts/drills/a2u_new_kind_wire_pins.py`（a2u テストの manifest reader の移植。
+  fd9d6a8e4 の木で pin 済み 36 行をすべて再現、現 HEAD で integ の 243/244 も一致）。権威は Rust の
+  `every_landed_kind_is_pinned_to_its_wire_form` で、食い違えば検証段がその `[a2u-pins]` 出力から pin し直す。**別 lane の注意**: 同じ移植で
+  240–242（MonetaryMaterial*）の pin が現 HEAD の source と一致しない（fd9d6a8e4 以降の `PalwMaterialCodecV1` / `PalwMonetaryMaterialActionV1`
+  の変更、0cdf53c48・506fb2ffb・a1ad9d633・ccc065dff）。G14 の範囲外なので pin は変えていない。
 
 ### 休眠時の同一性（A-2）
 - 新しい行（TirClaim / TirPreparation / TirAcquisition）は fence 後にしか書かれない。Final floor（`palw_claim_final_floor_v1`）、
