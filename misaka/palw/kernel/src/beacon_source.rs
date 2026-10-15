@@ -145,6 +145,17 @@ impl KernelLedgerV1 {
     }
 
     /// Internal shared admission; only the prepaid route may call this for v5.
+    /// Exact native source job identity, shared by admission and cold restore.
+    /// This adds no alternative seal, claim, deposit or settlement identity.
+    pub fn beacon_source_job_profile_v1(&self, job: &Digest) -> Option<Digest> {
+        self.jobs
+            .get(job)
+            .map(|j| j.class_binding_id)
+            .or_else(|| self.pipeline_jobs.get(job).map(|j| j.class_binding_id))
+            .or_else(|| self.tiled_jobs.get(job).map(|j| j.job.class_binding_id))
+            .or_else(|| self.typed.jobs.get(job).map(|j| j.class()))
+    }
+
     pub(crate) fn admit_beacon_source(
         &mut self,
         producer: Digest,
@@ -180,13 +191,11 @@ impl KernelLedgerV1 {
         {
             return Err("source seal is outside its target window, expired, or does not match".into());
         }
-        // These are the two source job forms currently exported by the node. Other forms require their own adapter.
-        let profile = self
-            .jobs
-            .get(&job)
-            .map(|j| j.class_binding_id)
-            .or_else(|| self.pipeline_jobs.get(&job).map(|j| j.class_binding_id))
-            .ok_or("unsupported source job form")?;
+        // Resolve the same native job forms accepted by SealClaim and the
+        // all-target salted reveal. A source is still admitted only against the
+        // target's pre-entropy frozen OPV profile set; a job codec is no evidence
+        // of independent ownership, work validity or collection.
+        let profile = self.beacon_source_job_profile_v1(&job).ok_or("source native job missing")?;
         if !self.opv.classes.contains(&profile)
             || !target.context.eligible_profiles.contains(&profile)
             || target.context.excluded_profiles.contains(&profile)
@@ -373,11 +382,7 @@ impl KernelLedgerV1 {
             {
                 return Err("corrupt source binding, clocks or reservation".into());
             }
-            let profile = self
-                .jobs
-                .get(&row.job)
-                .map(|j| j.class_binding_id)
-                .or_else(|| self.pipeline_jobs.get(&row.job).map(|j| j.class_binding_id));
+            let profile = self.beacon_source_job_profile_v1(&row.job);
             if profile != Some(row.profile) {
                 return Err("source job profile mismatch".into());
             }

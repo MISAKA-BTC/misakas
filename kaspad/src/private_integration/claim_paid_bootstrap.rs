@@ -3,7 +3,7 @@
 use kaspa_consensus_core::{config::Config, palw_state_v2::PalwBondKeyV2};
 use kaspa_hashes::Hash64;
 use misaka_palw_kernel::{hash::Digest, public::TensorWireV1};
-use misaka_palw_sdk::claim_paid_v2::private_bootstrap::produce_program_work_v3;
+use misaka_palw_sdk::claim_paid_v2::all_target_bootstrap::{NativePaidProducerInputsV3, produce_native_work_with_resident_v3};
 use std::{
     collections::BTreeMap,
     fs::OpenOptions,
@@ -30,6 +30,24 @@ pub struct PrivatePaidProgramRequestV3 {
     pub producer_card: u32,
     pub parameters: BTreeMap<(u16, Option<u16>), TensorWireV1>,
 }
+/// All-target request. The original V3 Program request layout remains readable.
+#[derive(Clone, Debug, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PrivatePaidNativeRequestV4 {
+    pub version: u16,
+    pub header: Vec<u8>,
+    pub rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    pub ledger_root: Hash64,
+    pub aux_root: Hash64,
+    pub base_job: Digest,
+    pub paid_class: Digest,
+    pub paid_job: Digest,
+    pub material_consent: Digest,
+    pub not_before_daa: u64,
+    pub salt: Digest,
+    pub producer_card: u32,
+    pub inputs: NativePaidProducerInputsV3,
+}
+
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -60,11 +78,32 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
     if file.read(&mut trailing).map_err(|e| e.to_string())? != 0 {
         return Err("paid work request changed length during bounded read".into());
     }
-    preflight_request_v3(&bytes)?;
-    let request: PrivatePaidProgramRequestV3 = borsh::from_slice(&bytes).map_err(|e| e.to_string())?;
-    if request.version != 3 {
-        return Err("unknown private paid work contract".into());
-    }
+    let resident = preflight_request_v4(&bytes)?;
+    let request: PrivatePaidNativeRequestV4 = match bytes.get(..2) {
+        Some([3, 0]) => {
+            let old: PrivatePaidProgramRequestV3 = borsh::from_slice(&bytes).map_err(|e| e.to_string())?;
+            PrivatePaidNativeRequestV4 {
+                version: 3,
+                header: old.header,
+                rows: old.rows,
+                ledger_root: old.ledger_root,
+                aux_root: old.aux_root,
+                base_job: old.base_job,
+                paid_class: old.paid_class,
+                paid_job: old.paid_job,
+                material_consent: old.material_consent,
+                not_before_daa: old.not_before_daa,
+                salt: old.salt,
+                producer_card: old.producer_card,
+                inputs: NativePaidProducerInputsV3 {
+                    parameters: old.parameters.into_iter().map(|((p, l), v)| ((0, p, l), v)).collect(),
+                    ..Default::default()
+                },
+            }
+        }
+        Some([4, 0]) => borsh::from_slice(&bytes).map_err(|e| e.to_string())?,
+        _ => return Err("unknown private paid request codec".into()),
+    };
     let route = kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::from_served_rows_v1(
         &request.header,
         request.rows,
@@ -82,7 +121,8 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
     let bond = PalwBondKeyV2(kaspa_consensus_core::config::drill::palw_t12_drill_premine_outpoint_v1(salt, card.premine_index));
     let producer = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&bond);
     let key = kaspa_pq_validator_core::ValidatorKey::from_seed(card.bond.seed);
-    let work = produce_program_work_v3(&route, request.base_job, producer, request.parameters).map_err(|e| e.to_string())?;
+    let work = produce_native_work_with_resident_v3(&route, request.base_job, producer, request.inputs, resident)
+        .map_err(|e| e.to_string())?;
     let enrollment = work
         .signed_enrollment(
             &route,
@@ -106,7 +146,7 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
     write_new(&output.join("salted-commit-v1.borsh"), &borsh::to_vec(&work.commit).map_err(|e| e.to_string())?)?;
     write_new(&output.join("public-material-v2.borsh"), &borsh::to_vec(&work.material).map_err(|e| e.to_string())?)?;
     write_new(&output.join("signed-paid-enrollment-v2.borsh"), &borsh::to_vec(&enrollment).map_err(|e| e.to_string())?)?;
-    let manifest = serde_json::json!({"schema":"misaka.private-paid-program-work.v3","baseJob":faster_hex::hex_string(&request.base_job),
+    let manifest = serde_json::json!({"schema":"misaka.private-paid-native-work.v4","requestVersion":request.version,"nativeCommitTag":work.commit.commit_tag(),"baseJob":faster_hex::hex_string(&request.base_job),
         "paidClass":faster_hex::hex_string(&request.paid_class),"paidJob":faster_hex::hex_string(&request.paid_job),
         "ledgerRoot":request.ledger_root.to_string(),"auxRoot":request.aux_root.to_string(),
         "producer":faster_hex::hex_string(&producer),"work":"program-work-v3.borsh","material":"public-material-v2.borsh",
@@ -125,7 +165,7 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
 /// row uses the native codec scanner, including nested class/program and aux
 /// rows. This bounds restoration; root membership and execution workspace are
 /// checked separately after restoration by the pinned route and producer.
-fn preflight_request_v3(bytes: &[u8]) -> Result<(), String> {
+fn preflight_request_v4(bytes: &[u8]) -> Result<u128, String> {
     use kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteHeaderV1;
     use kaspa_consensus_core::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, preflight_kernel_served_row_v1};
     use std::io::Read;
@@ -152,7 +192,8 @@ fn preflight_request_v3(bytes: &[u8]) -> Result<(), String> {
         Ok(u32::from_le_bytes(take(r, 4)?.try_into().unwrap()) as usize)
     }
     let mut r = bytes;
-    if take(&mut r, 2)? != 3u16.to_le_bytes() {
+    let version = u16::from_le_bytes(take(&mut r, 2)?.try_into().unwrap());
+    if version != 3 && version != 4 {
         return Err("unknown private request version".into());
     }
     let header = blob(&mut r, 1024 * 1024)?;
@@ -188,16 +229,17 @@ fn preflight_request_v3(bytes: &[u8]) -> Result<(), String> {
     }
     let mut previous = None;
     for _ in 0..tensors {
+        let program = if version == 4 { u16::from_le_bytes(take(&mut r, 2)?.try_into().unwrap()) } else { 0 };
         let param = u16::from_le_bytes(take(&mut r, 2)?.try_into().unwrap());
         let layer = match take(&mut r, 1)?[0] {
             0 => None,
             1 => Some(u16::from_le_bytes(take(&mut r, 2)?.try_into().unwrap())),
             _ => return Err("private artifact has invalid option tag".into()),
         };
-        if previous.is_some_and(|p| p >= (param, layer)) {
+        if previous.is_some_and(|p| p >= (program, param, layer)) {
             return Err("private artifact keys are not strictly canonical".into());
         }
-        previous = Some((param, layer));
+        previous = Some((program, param, layer));
         let dtype = misaka_palw_kernel::plan::dtype_of_tag(take(&mut r, 1)?[0]).ok_or("unknown tensor dtype")?;
         let rank = word(&mut r)?;
         if rank > 12 {
@@ -222,8 +264,66 @@ fn preflight_request_v3(bytes: &[u8]) -> Result<(), String> {
             return Err("private artifact and restored rows exceed 256 MiB decode workspace".into());
         }
     }
+    if version == 4 {
+        let prompt = word(&mut r)?;
+        if prompt > 65_536 {
+            return Err("private tiled prompt exceeds 65536 ids".into());
+        }
+        take(&mut r, prompt.checked_mul(4).ok_or("prompt size overflow")?)?;
+        heap += prompt as u128 * 8;
+        let snapshots = word(&mut r)?;
+        if snapshots > 8 {
+            return Err("private snapshots exceed eight roots".into());
+        }
+        let mut previous_root = None;
+        for _ in 0..snapshots {
+            let root = <[u8; 64]>::try_from(take(&mut r, 64)?).map_err(|_| "snapshot root width")?;
+            if previous_root.is_some_and(|p| p >= root) {
+                return Err("snapshot roots not strictly canonical".into());
+            }
+            previous_root = Some(root);
+            let items = word(&mut r)?;
+            if items > 65_536 {
+                return Err("private snapshot item cap exceeded".into());
+            }
+            heap += items as u128 * 128;
+            for _ in 0..items {
+                for _ in 0..2 {
+                    let n = word(&mut r)?;
+                    if n > 4096 {
+                        return Err("private snapshot key/payload shape cap exceeded".into());
+                    }
+                    take(&mut r, n * 4)?;
+                    heap += n as u128 * 8;
+                }
+                if heap > 256 * 1024 * 1024 {
+                    return Err("private snapshot decode workspace cap exceeded".into());
+                }
+            }
+        }
+    }
     if !r.is_empty() {
         return Err("private request has trailing bytes".into());
     }
-    Ok(())
+    if heap > 256 * 1024 * 1024 {
+        return Err("private restored request workspace cap exceeded".into());
+    }
+    Ok(heap)
+}
+
+#[cfg(test)]
+mod request_preflight_tests {
+    use super::*;
+    #[test]
+    fn a_tiny_request_cannot_allocate_an_attacker_declared_header() {
+        for version in [3u16, 4] {
+            let mut bytes = version.to_le_bytes().to_vec();
+            bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+            assert!(preflight_request_v4(&bytes).is_err());
+        }
+        assert!(preflight_request_v4(&[5, 0]).is_err(), "unknown codec");
+        for n in 0..6 {
+            assert!(preflight_request_v4(&[4, 0, 0, 0, 0, 0][..n]).is_err());
+        }
+    }
 }

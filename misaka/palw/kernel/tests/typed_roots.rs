@@ -1262,3 +1262,85 @@ fn commitment_scope_memory_serves_no_model_values_and_convicts_from_public_inher
     assert!(m.w.l.bonds[&P1].collateral < before);
     assert_eq!(m.w.l.typed.lines[&m.class].head_source, Some(first_id));
 }
+
+/// New dormant source adapter: real registered retrieval work can opt in using
+/// its existing native job/seal/reveal identity. Each target reserves a separate
+/// deposit even when both targets consume the same computation.
+#[test]
+fn typed_retrieval_sources_reserve_per_target_and_restore_through_final_refund() {
+    use misaka_palw_challenge::{BeaconContextV1, RootV1, SubjectKindV1, sealed_source_policy_v3};
+    use misaka_palw_kernel::beacon_source::{BeaconSourceInputsV1, BeaconSourceTargetV1, BeaconSourceTermsV1};
+    let data = SnapshotDataV1::new(corpus(8, 2), 2, 2, 4).unwrap();
+    let (spec, root) = retrieval_spec(&data, 2);
+    let mut w = W::new(true);
+    let (class, events) = w.register(spec, Some(data.snapshot.root()));
+    assert_eq!(events.last(), Some(&E::ClassRegistered { class }));
+    let j = RetrievalJobV1 { class, query: vec![2, 1], nonce: [0x77; 64] };
+    let job = w.post(SpecJobV1::Retrieval(j.clone()));
+    let claim =
+        SpecClaimV1::Retrieval(RetrievalClaimV1 { job_id: job, producer_bond: P1, result: data.retrieve(&root, &j.query).unwrap() });
+    let id = claim.id();
+    let salt = [0xAB; 64];
+    let seal = misaka_palw_kernel::route::claim_seal_v2(&id, &salt);
+    let targets: Vec<_> = (0..2)
+        .map(|i| {
+            let context = BeaconContextV1 {
+                chain_genesis: w.l.policy.network_domain,
+                ruleset_id: w.l.policy.ruleset_digest,
+                policy: sealed_source_policy_v3(2, 2, 4, 1, 1),
+                subject_kind: SubjectKindV1::ModelConformance,
+                commitment_root: [0xA0 + i; 64],
+                commitment_position: w.l.daa,
+                challenge_epoch: 0,
+                eligible_profiles: [class].into_iter().collect(),
+                excluded_profiles: Default::default(),
+                candidate_profile_id: RootV1::Present([0xEF; 64]),
+            };
+            let terms = BeaconSourceTermsV1 {
+                context: context.id(),
+                seal_start: context.start(),
+                seal_end: context.window_end(),
+                reveal_end: context.window_end() + 4,
+                final_by: 180,
+                hold_until: 400,
+                deposit: 100,
+                max_per_producer: 2,
+                max_total: 2,
+            };
+            BeaconSourceTargetV1 { context, terms }
+        })
+        .collect();
+    w.l.set_beacon_source_inputs(BeaconSourceInputsV1 {
+        activation_daa: Some(0),
+        targets: targets.iter().cloned().map(|t| (t.terms.context, t)).collect(),
+    })
+    .unwrap();
+    w.beat_to(targets[0].terms.seal_start);
+    w.block(vec![obj(P1, O::SealClaim { producer: P1, job, seal })]);
+    let before = w.l.bonds[&P1].reserved;
+    for t in &targets {
+        let events =
+            w.block(vec![obj(P1, O::OptInBeaconSource { producer: P1, job, seal, context: t.terms.context, terms: t.terms.id() })]);
+        assert!(refused(&events).is_none(), "{events:?}");
+    }
+    assert_eq!(w.l.bonds[&P1].reserved, before + 200, "one independently funded deposit per context");
+    let mut restored = w.rebuilt();
+    restored.validate_beacon_sources().unwrap();
+    let duplicate = O::OptInBeaconSource { producer: P1, job, seal, context: targets[0].terms.context, terms: targets[0].terms.id() };
+    let rows = restored.to_rows();
+    assert!(restored.apply_object(&duplicate, &AuthV1 { signer_bond: P1 }).is_err());
+    assert_eq!(rows, restored.to_rows());
+    w.beat_to(targets[0].terms.seal_end - 1);
+    let events =
+        w.block(vec![obj(P1, O::CommitClaimSalted { salt, commit: misaka_palw_kernel::route::SaltedCommitV1::Spec { claim } })]);
+    assert!(events.contains(&E::ClaimCommitted { claim: id }), "{events:?}");
+    assert!(w.l.beacon_sources.values().all(|s| s.revealed == Some((id, w.l.daa))));
+    w.beat_to(401);
+    assert!(
+        w.l.beacon_sources
+            .values()
+            .all(|s| s.held == 0
+                && matches!(s.outcome, Some(misaka_palw_kernel::beacon_source::BeaconSourceOutcomeV1::Refunded { .. })))
+    );
+    w.rebuilt().validate_beacon_sources().unwrap();
+}

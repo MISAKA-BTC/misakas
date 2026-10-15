@@ -263,3 +263,66 @@ Each compiler has a distinct identity (`compact_relation_compiler_id_v1`).
 3. External review of the bounds and the transform.
 4. A PCS/GKR suite.
 5. Wiring into paid rounds and receipts.
+
+
+## All-target private producer/exporter (2026-10-15 integration workspace)
+
+Source only; no build, test or node run has been performed for this checkpoint.
+`claim_paid_v2/all_target_bootstrap.rs` adds real generation for Pipeline,
+Segmented v4 decoder and v5 encoder, and every TypedSpec form (Memory, Retrieval,
+Composite). Program continues through its existing implementation. Artifact
+parameters must match the registered native commitments (v3 tensor commitments
+for segmented classes); tiled prompts are authenticated against the job root;
+retrieval snapshots are rebuilt against the registered item count, dimensions,
+slice size and Merkle root. Memory uses the chain-authenticated current line head
+and actual step StateWrite outputs. Composite uses actual preceding generated
+ids, payloads and last logits to construct later stages. Each result carries the
+same native salted commit, public material, producer-signed enrollment and rooted
+receipt builder as Program. This extends generation and adapters, and does not
+assert that these paths have been accepted by a live node.
+
+Every stage is bounded before its TIR execution. Bounds include retained traces,
+external/random input copies, aggregate composite/memory steps, snapshot sort and
+Merkle data, encoded artifact, public material and serialization. The private
+hard caps remain 256 MiB workspace, 32 MiB material and 100M execution work;
+these are fixture refusal bounds, not measured network policy values. The
+exporter adds the entire restored request/route and file buffer to the workspace
+bound before running a producer. An oversized registered class is refused by this
+finite private generator even when a smaller input might fit.
+
+The feature-only private exporter retains the old Program request codec V3 and
+accepts `PrivatePaidNativeRequestV4` for all targets. V4 has the same independently
+pinned LR/AR, native class/job/enrollment terms and private signing card, plus
+stage-indexed parameters, a tiled prompt and public snapshot items. The existing
+`--request` invocation dispatches by the leading version. The manifest names the
+request version and native commit kind; the work file name stays
+`program-work-v3.borsh` for existing consumers, and its salted commit discriminant
+identifies the actual target. No file is an inclusion, source payment or Final
+receipt. Before Borsh allocates collections, the exact request schema scanner
+checks the header, every ledger/aux row using the native row codec scanner,
+canonical sorted map keys, tensor rank/product/dtype byte width, bounded snapshot
+item/key/payload counts, exact EOF and the combined decode heap. A 64 MiB input
+file bound is checked independently. Program V3 requests retain their layout and
+are normalized to the same bounded all-target input contract.
+
+Deferred acceptance source must cover honest work and an altered opening for
+Program, Pipeline, segmented decoder/encoder, Memory, Retrieval and Composite;
+both interactive modes; actual source funding/lock and assigned receipts; native
+Final/payment; restart and journal/reorg. Pure schema/resource tests added here do
+not substitute for those end-to-end cases. Compact family compilation and its
+native consensus contract remain a separate open implementation boundary; the
+all-target producer does not turn a full-material V3 plan into a compact proof.
+
+
+The native source opt-in adapter now resolves Program, Pipeline, Tiled/Segmented
+and TypedSpec jobs through one `beacon_source_job_profile_v1` function at both
+admission and cold restore. The old two-form lookup rejected otherwise valid
+salted typed/segmented work, despite the shared native claim admission and Final
+adapter already supporting those forms. The resolver grants no eligibility:
+the frozen target, candidate exclusion, OPV eligibility, exact live ordinary seal,
+registered payer, distinct per-target reservation and concurrency/horizon rules
+still apply. No ordinary seal acquires a source deposit implicitly. The added
+unrun typed-retrieval source test exercises real registration/job/retrieval,
+two target reservations against one ordinary seal, duplicate refusal, cold row
+rebuild, actual salted reveal, native Final and post-horizon refunds. Separate
+funded v5 fee collection and native-process acceptance remain required validation.

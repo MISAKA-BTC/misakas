@@ -31,7 +31,7 @@ use std::{
 mod bootstrap;
 pub use bootstrap::export_private_complete_bootstrap_v1;
 mod claim_paid_bootstrap;
-pub use claim_paid_bootstrap::{PrivatePaidProgramRequestV3, export_private_paid_program_work_v3};
+pub use claim_paid_bootstrap::{PrivatePaidNativeRequestV4, PrivatePaidProgramRequestV3, export_private_paid_program_work_v3};
 mod paid_claim_factory;
 pub use paid_claim_factory::private_paid_claim_params_v3;
 mod paid_bootstrap;

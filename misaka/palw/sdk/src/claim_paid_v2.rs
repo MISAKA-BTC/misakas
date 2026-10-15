@@ -403,6 +403,7 @@ pub fn sign_paid_claim_object_v2(
 pub mod cli;
 pub mod private_bootstrap;
 pub mod producer_resources;
+pub mod all_target_bootstrap;
 
 /// Portable public material for the all-target CLI verifier. Every value is
 /// authenticated by the mathematical verifier against the anchored commitments.
