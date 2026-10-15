@@ -534,3 +534,31 @@ found compile-level and route-breaking defects; these are now repaired in source
 Left as found (not route-breaking): an alternative uncalled FP extraction helper
 (`palw_fp_objects_from_accepted_txs_by_class_and_history_v1`) and an uncalled
 `recover_pages_v1` wrapper.
+
+### Lead defaults pending user review, 2026-10-15 (unverified source only)
+
+Recorded as "lead default pending user review" (reversible):
+
+1. History custody grants stay automatic for Valid Panel seats on required-family
+   claims (signing Valid attests holding the material; 10-12 ruling).
+2. External producers: read-only preclaim quote RPC (op 242, same planner as
+   admission) and a custody delegation carried in an HFP1 version-2 envelope. Both
+   the producer and its node custodian sign a standing window; admission refuses an
+   invalid delegation; the custodian may sign the producer's literal answer slot and
+   the producer stays liable. Node custodians run delegated responder passes on
+   separate queue rounds. The gateway rail refuses a required-family claim without
+   `--custody-delegation`.
+3. Float32 Constraint stays refused at admission; recorded as an explicit uncovered
+   lane in `docs/design/palw/g14-completion-matrix.md` §2i/§4.
+4. TIR required families: a full projection is not feasible in this phase; the
+   design and the six missing items are in the matrix §2i; TIR required-family
+   claims stay refused at admission (uncovered, unrewarded).
+5. No per-block consensus cap; the fee/prepaid-plan/per-owner bound and its
+   derivation are in §2i and `palw_staged_load_bound_v1` (measured inputs are named
+   placeholders read by no consensus rule).
+
+Also added: a fold-level regression source for the new default-charging roles
+(producer withholds and is charged; producer answers and only the silent seat is
+charged; the winner can never be in its own unpaid set). Removed the two uncalled
+helpers (`palw_fp_objects_from_accepted_txs_by_class_and_history_v1`,
+`recover_pages_v1`). Delegation envelope/signature test sources added. None run.

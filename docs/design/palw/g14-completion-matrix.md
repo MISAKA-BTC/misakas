@@ -755,6 +755,54 @@ Tests: `palw_legacy_parallel_v1::tests::the_legacy_profile_table_on_the_t12_latt
   on the fixture (`palw_fraud_filer_bootstrap_step_v2` is wired; the existing bootstrap fixture was not re-run with lanes), the actual
   `PalwPanelService` tick with lanes (V-svc), reacquisition of a pruned round's answers (codex), and a live drill: **not done**.
 
+## 2i. Staged public verifier route: coverage, delegation and load (2026-10-15, branch `codex/g14-public-conviction`)
+
+Source-only (nothing below is built or verified). Records the lead defaults pending user review.
+
+**Route.** Required-family FP claims (prefix state, Constraint, raw tokenizer) are admitted under the dormant
+`palw_staged_public_court_v1` fence only with the producer's HFP1 envelope: a signed custody pledge over the
+native preclaim quote (same planner the producer reads before publishing and admission re-runs) and the original
+public binding header. The outside owner opens a prepaid required-family bundle and walks the fixed stage
+windows; source demands (PublicPrefix, selected Tiled, Flat, history) give every literal custodian a full response
+span from the accepting block; a native default charges the producer only when it is itself unpaid and silent
+Valid signers their covering charge.
+
+**External producers (lead default).** A producer without a node publishes a version-2 envelope that carries a
+standing custody delegation: producer and node custodian both sign `(producer, custodian, window)`; admission
+requires the window to cover acceptance and the pledged material horizon and the custodian to be an active
+distinct bond, and refuses an invalid one. The custodian may sign the producer's literal answer slot; the slot,
+its deadlines and its liability remain the producer's. RPC op 242 serves the read-only quote; the gateway rail
+builds the envelope and refuses a required-family claim without a delegation.
+
+**History custody grants (lead default).** Valid Panel seats of required-family claims sign their history custody
+grant automatically once native state credits their exact Valid receipt (signing Valid attests holding the
+material, per the 10-12 ruling that Miner and Panel hold the registered model).
+
+**Explicitly uncovered lanes (refused at admission, no reward, no weight):**
+- **Float32 Constraint.** The base Float32 lane has no decode-token adjudicator (`check_base0_decode_token_refutation_v2`
+  refuses Float32; `PalwDecodeTokenPinV1::FloatV2` authenticates ids but adjudicates no selection), and the Flat
+  constraint stream requires the Int32 lane. A required-family Constraint claim of a Float32 class is refused by
+  `staged_preclaim_quote_v1`. Missing: a deterministic Float32 selection adjudicator, the FloatV2 event source and
+  its semantic projection into the constraint court, and Float32 Flat/Tiled source sessions.
+- **TIR required families.** `staged_preclaim_quote_v1` refuses a TIR header. Missing, exactly:
+  (1) a quote projection from the registered TIR class/layout to family geometry (vocabulary, logits scheme, lane,
+  prefix-state relation dims) replacing `fp_work_profiles`; (2) a TIR state relation for the prefix-state court
+  (the PublicPrefix family consumes `PalwStepBindingV2` + the Qwen36 hybrid-cache relation; TIR state openings come
+  from the TIR step Merkle tree); (3) authenticated generated-id and logits row/tile openings from the TIR trace
+  commitment for the Constraint courts and the selected/Flat sources; (4) generated-id authentication from the TIR
+  output commitment for the tokenizer court; (5) TIR capture readers for the node responders; (6) TIR execution
+  backends in the fraud filer stages. Until all six exist the lane is uncovered and unrewarded.
+
+**Inclusion pressure without a consensus cap (lead default).** No per-block cap on staged moves (it would let a
+coalition fill the cap). Load is bounded by fees (every move is an ordinary fee-paying transaction), by prepaid
+per-owner plans (an owner's moves and bytes come only from its own deposit and rent; a coalition cannot spend or
+occupy them), by `maximum_owned_rows_per_reserver`, and by per-move inclusion margins. Delaying one outsider move
+past its margin costs the coalition at least `inclusion_margin_daa x block_mass_per_daa x outsider_feerate`
+(`palw_staged_load_bound_v1`); the measured inputs are named placeholders
+(`PALW_STAGED_MEASURED_BLOCK_MASS_PER_DAA_V1`, `PALW_STAGED_MEASURED_CARRIER_MASS_V1`,
+`PALW_STAGED_OUTSIDER_FEERATE_HEADROOM_V1`) and read by no consensus rule. Whether the margin suffices is a
+measurement item, not a proof.
+
 ## 3. Family matrices (milestone baseline)
 
 ### 3.1 F1 — K2-TIR v1/v2 single-program classes (Panel-licensed with every interim seat colluding, and OPV)
@@ -984,6 +1032,10 @@ same job, the way slices are), or give the V2 claim a G14 path.
    per-claim reward gate (OPVB implements).
 9. **K2-TIR v1/v2 single-program classes** until GAP-00, -01, -02, -03, -04, -05, -06 and -10. This is the nearest family.
 10. **EXEC slice legs** until GAP-60 to -63 and F1's items. Pipeline-class slices are refused.
+11. **Float32 Constraint claims on the staged public route**: refused at admission; no decode-token adjudicator
+    exists for the Float32 lane (§2i).
+12. **TIR required-family claims on the staged public route**: refused at admission until the six TIR projection
+    items in §2i exist.
 
 Economics are outside the G14 columns, but they block reward under PRINCIPLES §6.5 and §6.6:
 - the verifier incentive / bounty capture (ECON);
