@@ -49,6 +49,25 @@ impl BorshDeserialize for PalwTirPublicCustodyPledgeV1 {
     }
 }
 impl PalwTirPublicCustodyPledgeV1 {
+    /// **The accept path's transaction-local screen** (what a carrier can be checked against before any native state is read):
+    /// the pledge names exactly its paired original commitment (claim, producer bond, execution root, job pin) and is signed by
+    /// that commitment's executor key — as [`crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1`]'s screen. The source,
+    /// the recomputed complete native plan and the custodian upper are checked by the fold
+    /// ([`Self::authenticate_original_object_v1`], through the custody contract), which alone has the class state.
+    pub fn authenticate_transaction_local_v1<F>(&self, object: &crate::palw_state_v2::PalwConsensusObjectV2, verify: F) -> Result<(), String>
+    where
+        F: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    {
+        let crate::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted { claim, bond, execution_root, job_pin, executor_pubkey, .. } =
+            object
+        else {
+            return Err("TIR source pledge is not transaction-paired with an original FP commitment".into());
+        };
+        if (self.claim, self.producer, self.execution_root, self.job_identity) != (*claim, *bond, *execution_root, *job_pin) {
+            return Err("TIR source pledge changes its exact transaction-local original commitment".into());
+        }
+        self.validate_signature_v1(executor_pubkey, verify)
+    }
     pub fn authenticate_original_object_v1<F>(
         &self,
         object: &crate::palw_state_v2::PalwConsensusObjectV2,

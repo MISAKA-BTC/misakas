@@ -72,7 +72,8 @@ impl MaterialDescriptorV39 {
 pub fn material_page_leaf_v39(descriptor: &MaterialDescriptorV39, index: u16, body: &[u8]) -> Digest {
     object_id(b"misaka-palw/kernel/material-page/v39", &(descriptor.content_binding(), index, body))
 }
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+// Deserialize: the SDK re-reads the plan it prepared and requires it equal to `CheckedMaterialPlanV39::derive` (no consensus reader).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct MaterialPlanV39 {
     pub version: u16,
     pub descriptor: Digest,
@@ -303,7 +304,7 @@ impl MaterialProgressV39 {
         Ok(())
     }
 }
-fn material_page_node_v39(a: &Digest, b: &Digest) -> Digest {
+pub fn material_page_node_v39(a: &Digest, b: &Digest) -> Digest {
     object_id(b"misaka-palw/kernel/material-page-node/v39", &(a, b))
 }
 struct Frontier {
@@ -415,6 +416,8 @@ pub fn check_material_image_v39(
     Ok(CheckedMaterialImageV39 { plan: plan.root() })
 }
 
+/// Serialized with Borsh by the SDK's page writer; read back only by the bounded [`MaterialPageV39::from_bytes`] (same layout).
+#[derive(BorshSerialize)]
 pub struct MaterialPageV39 {
     pub index: u16,
     pub body: Vec<u8>,

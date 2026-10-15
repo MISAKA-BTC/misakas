@@ -913,9 +913,10 @@ pub fn palw_rule_e_sides_by_claim_set_v1(
 
 /// **A consensus instance's standing, as the IBD flow hands it to rule E**: the state at the block the instance is weighed at
 /// (its sink; a staging consensus's imported pruning point) and that block's DAA score.
-#[derive(Clone, Debug)]
+/// The state is the retained owner the consensus read returned (its native allocation ticket lives as long as the weighing).
+#[derive(Debug)]
 pub struct PalwRuleEWeighingV1 {
-    pub state: PalwChainStateV2,
+    pub state: crate::palw_native_resource_v1::NativeChainStateV1,
     pub block: Hash64,
     pub daa_score: u64,
 }

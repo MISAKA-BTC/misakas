@@ -1481,7 +1481,7 @@ impl VirtualStateProcessor {
             // bond, each bond holding 1 MSK plus the reservation it does not lose. That is a
             // capital price, not a burn — a refused object never reaches the fold, so no rule here
             // can charge it — and it is stated rather than hidden.
-            let mut rehearsed_registration: Option<kaspa_consensus_core::palw_state_v2::PalwChainStateV2> = None;
+            let mut rehearsed_registration: Option<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1> = None;
             let bought_registration = if self.palw_audit_2026_09_23_at(point.daa_score) {
                 kaspa_consensus_core::palw_state_v2::palw_class_registration_buyer_v1(&object)
             } else {
@@ -2420,7 +2420,7 @@ impl VirtualStateProcessor {
         let mut extraction = extraction;
         extraction.objects.retain(|carried| {
             let Some(envelope) = tir_public_carriers.get(&carried.carrier) else { return true };
-            if let Err(why) = envelope.pledge.authenticate_original_object_v1(&carried.object, Self::verify_mldsa87_with_context_bool) {
+            if let Err(why) = envelope.pledge.authenticate_transaction_local_v1(&carried.object, Self::verify_mldsa87_with_context_bool) {
                 info!("[palw-tir-public] original carrier {} pledge refused: {why}", carried.carrier);
                 return false;
             }

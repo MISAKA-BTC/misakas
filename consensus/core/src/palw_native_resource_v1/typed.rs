@@ -203,6 +203,11 @@ pub(crate) struct BTreeNodeEnvelopeV1<K, V> {
     values: [V; 16],
     edges: [usize; 17],
 }
+/// The request bytes one [`BTreeNodeEnvelopeV1`] of `BTreeMap<K, V>` stands for: what an outside consumer (the remote's metadata
+/// RAM budget) charges per map entry, without naming the crate-private envelope.
+pub const fn btree_node_envelope_bytes_v1<K, V>() -> usize {
+    std::mem::size_of::<BTreeNodeEnvelopeV1<K, V>>()
+}
 impl<K: NativeHeapV1, V: NativeHeapV1> NativeHeapV1 for BTreeMap<K, V> {
     fn native_members_v1(&self) -> Option<u64> {
         self.iter().try_fold(self.len() as u64, |n, (k, v)| n.checked_add(k.native_members_v1()?)?.checked_add(v.native_members_v1()?))

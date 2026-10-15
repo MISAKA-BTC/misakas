@@ -806,6 +806,9 @@ mod tests {
             "palw_court_commitment_scope_v1" => params.palw_court_commitment_scope_v1 = Some(at),
             "palw_staged_public_court_v1" => params.palw_staged_public_court_v1 = Some(at),
             "palw_staged_tir_route_v1" => params.palw_staged_tir_route_v1 = Some(at),
+            // G14 original paid TIR conviction: a bare height; `palw_tir_public_conviction_v1_fence` resolves it only with the staged
+            // TIR route, the staged court, the objective-offence ledger, R-core+ and the aggregate liability, which the probe does not ask.
+            "palw_tir_public_conviction_v1" => params.palw_tir_public_conviction_v1 = Some(at),
             "palw_staged_float_constraint_v1" => params.palw_staged_float_constraint_v1 = Some(at),
             // codex RFC-8 / RFC-12 final's monetary fences (R6781-F): bare heights, and the paid consumer lifecycle with its
             // unapproved probe terms (its values only ride along).
