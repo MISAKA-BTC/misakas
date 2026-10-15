@@ -939,8 +939,8 @@ fn credit(
         established_daa: ctx.daa_score,
     };
     let original = Hash64::from_bytes(row.header.job_id);
-    builder.cancel_native_recipient_v1(original, row.header.producer, 19);
-    builder.bond_budget_close_v1(&super::palw_bond_budget_fold_v1::funded_execution_budget_id_v13(&row.header.job_id), ctx.daa_score);
+    builder.cancel_native_recipient_v1(original, row.header.producer, 19)?;
+    builder.bond_budget_close_v1(&super::palw_bond_budget_fold_v1::funded_execution_budget_id_v13(&row.header.job_id), ctx.daa_score)?;
     if s.producer_credit > 0 {
         let unique27 = s.terminal == ExecutionTerminalV11::Final
             && builder
@@ -970,7 +970,7 @@ fn credit(
             builder.add_kernel_payout(row.header.producer_payout, s.producer_credit)?;
         }
     } else {
-        builder.cancel_native_recipient_v1(original, row.header.producer, 11);
+        builder.cancel_native_recipient_v1(original, row.header.producer, 11)?;
     }
     // This is original requester principal, not producer/reporter income.
     // Keep its per-job queue independent of pooled fee-income queue identities.

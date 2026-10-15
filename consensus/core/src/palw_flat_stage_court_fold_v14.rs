@@ -656,12 +656,12 @@ pub(super) fn reveal(
             builder.add_kernel_payout(payout, outcome.finder_credit)?;
         }
     }
-    builder.cancel_native_recipient_v1(Hash64::from_bytes(own.job), h.producer, 14);
-    builder.cancel_native_recipient_v1(Hash64::from_bytes(own.job), h.producer, 19);
+    builder.cancel_native_recipient_v1(Hash64::from_bytes(own.job), h.producer, 14)?;
+    builder.cancel_native_recipient_v1(Hash64::from_bytes(own.job), h.producer, 19)?;
     builder.bond_budget_close_v1(
         &Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"misaka-palw/native/stage-original-fixed-budget/v20", &own.job)),
         ctx.daa_score,
-    );
+    )?;
     original.header.book_root = book.root();
     original.header.terminal = book.terminal();
     original.header.producer_reserved = 0;

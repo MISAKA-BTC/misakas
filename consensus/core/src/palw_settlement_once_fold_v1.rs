@@ -13,12 +13,15 @@ pub(super) enum PalwSettleOnceV1 {
     First,
     /// Another consumer (or this one, earlier) already settled this exact obligation: the consumer must not pay.
     AlreadySettled(PalwSettlementOnceRowV1),
+    /// RFC08-2: the combined liability predicate refused the leg (`settle_once_liable_v1`); the obligation is closed with a
+    /// zero-amount marker and the consumer must not pay.
+    Refused(crate::palw_settlement_liability_v1::PalwSettlementLiabilityRefusalV1),
 }
 
 impl PalwSettleOnceV1 {
     /// Whether the consumer may move value for this obligation now.
     pub(super) fn pays(&self) -> bool {
-        !matches!(self, Self::AlreadySettled(_))
+        !matches!(self, Self::AlreadySettled(_) | Self::Refused(_))
     }
 }
 
@@ -52,11 +55,7 @@ impl TransitionBuilder<'_> {
             q.exact::<u8>(id.len() as u64)?;
             self.admit_native_write_v1(q)?;
         }
-        let existing = self.state.kernel_route.as_ref().and_then(|route| route.aux.get(&(PALW_SETTLEMENT_ONCE_TABLE_V1, id.to_vec())));
-        if let Some(bytes) = existing {
-            let row: PalwSettlementOnceRowV1 =
-                borsh::from_slice(bytes).map_err(|_| refused("an undecodable settlement-once marker (fail closed)"))?;
-            row.validate_v1(&id).map_err(refused)?;
+        if let Some(row) = settled_row_v1(&self.state, &obligation)? {
             return Ok(PalwSettleOnceV1::AlreadySettled(row));
         }
         let row = PalwSettlementOnceRowV1 {
@@ -73,6 +72,21 @@ impl TransitionBuilder<'_> {
     }
 }
 
+/// **The settled marker of `obligation`**, validated under its own key — `Err` (fail closed) for an undecodable or foreign row,
+/// `Ok(None)` when the obligation is open (or there is no route).
+pub(super) fn settled_row_v1(
+    state: &PalwChainStateV2,
+    obligation: &PalwSettlementObligationV1,
+) -> Result<Option<PalwSettlementOnceRowV1>, PalwStateV2Error> {
+    let id = obligation.id_v1();
+    let Some(bytes) = state.kernel_route.as_ref().and_then(|route| route.aux.get(&(PALW_SETTLEMENT_ONCE_TABLE_V1, id.to_vec()))) else {
+        return Ok(None);
+    };
+    let row: PalwSettlementOnceRowV1 = borsh::from_slice(bytes).map_err(|_| refused("an undecodable settlement-once marker (fail closed)"))?;
+    row.validate_v1(&id).map_err(refused)?;
+    Ok(Some(row))
+}
+
 /// The settled marker of `obligation` in `state`, if any (source controls read the journal through this).
 #[cfg(test)]
 pub(super) fn palw_settled_once_v1(state: &PalwChainStateV2, obligation: &PalwSettlementObligationV1) -> Option<PalwSettlementOnceRowV1> {
@@ -83,8 +97,9 @@ pub(super) fn palw_settled_once_v1(state: &PalwChainStateV2, obligation: &PalwSe
 
 /// **The kernel GAP-5 producer reward triple** at `index`: `PayJobEscrow(poster, paid)`, `ReleaseJobEscrow(poster, rest)`,
 /// `FinalReward(producer, paid)` for one claim, with NO `CheckFeePaid` for that recipient after it — a verifier check fee emits the
-/// same triple followed by `CheckFeePaid`, and is a separate per-slot obligation the kernel's own `paid` flag settles. Returns
-/// `(claim, poster, producer, paid)` for a producer reward; `None` for anything else.
+/// same triple followed by `CheckFeePaid`, and is a separate per-slot obligation ([`kernel_check_fee_at_v1`],
+/// `PalwSettlementLegV1::VerifierCheckFee`). Returns `(claim, poster, producer, paid)` for a producer reward; `None` for anything
+/// else.
 pub(super) fn kernel_producer_reward_at_v1(
     events: &[misaka_palw_kernel::ledger::LedgerEventV1],
     index: usize,
@@ -101,4 +116,30 @@ pub(super) fn kernel_producer_reward_at_v1(
     let reward = settlement(index + 2).filter(|s| s.kind == K::FinalReward && s.claim == Some(claim) && s.amount == pay.amount)?;
     let check_fee = matches!(events.get(index + 3), Some(E::CheckFeePaid { claim: c, verifier, .. }) if *c == claim && *verifier == reward.bond);
     (!check_fee).then_some((claim, pay.bond, reward.bond, pay.amount))
+}
+
+/// **A verifier's drawn-slot check-fee quad** at `index` (`palw_verifier_pay_v1::settle_draw_slots_v1`): `PayJobEscrow(poster, fee)`,
+/// `ReleaseJobEscrow(poster, rest)`, `FinalReward(verifier, fee)`, then `CheckFeePaid { claim, verifier, fee }` naming exactly that
+/// verifier and amount. Returns `(claim, poster, verifier, fee)`; `None` for anything else (a producer reward, a fee returned unpaid —
+/// which emits no `FinalReward` — or a malformed sequence). Pure.
+pub(super) fn kernel_check_fee_at_v1(
+    events: &[misaka_palw_kernel::ledger::LedgerEventV1],
+    index: usize,
+) -> Option<([u8; 64], [u8; 64], [u8; 64], u64)> {
+    use misaka_palw_kernel::ledger::LedgerEventV1 as E;
+    use misaka_palw_kernel::settle::SettlementKindV1 as K;
+    let settlement = |i: usize| match events.get(i) {
+        Some(E::Settlement(s)) => Some(*s),
+        _ => None,
+    };
+    let pay = settlement(index).filter(|s| s.kind == K::PayJobEscrow)?;
+    let claim = pay.claim?;
+    settlement(index + 1).filter(|s| s.kind == K::ReleaseJobEscrow && s.claim == Some(claim) && s.bond == pay.bond)?;
+    let reward = settlement(index + 2).filter(|s| s.kind == K::FinalReward && s.claim == Some(claim) && s.amount == pay.amount)?;
+    match events.get(index + 3) {
+        Some(E::CheckFeePaid { claim: c, verifier, amount }) if *c == claim && *verifier == reward.bond && *amount == pay.amount => {
+            Some((claim, pay.bond, reward.bond, pay.amount))
+        }
+        _ => None,
+    }
 }

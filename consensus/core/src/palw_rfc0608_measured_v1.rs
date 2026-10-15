@@ -65,13 +65,16 @@ pub const PALW_RFC0608_OPEN_BLOCKERS_V1: &[(PalwRfc0608FenceV1, &str)] = &[
     ),
     (
         PalwRfc0608FenceV1::SettlementOnceV1,
-        "RFC08-1: verifier slot fee legs, free-prompt receipt spends and journal_bond_budget slots are not on the once-only \
-         registry",
+        "RFC08-1 (coverage audit): reporter award tranches (award_native_reporter_v1 / write_reporter_reward), mesh reserve \
+         payments (mesh_pay_from_reserve), improvement earnings (credit_improvement_earnings_v1) and source-fee promise \
+         payouts still rely on their own guards, not the once-only registry",
     ),
     (
         PalwRfc0608FenceV1::SettlementOnceV1,
-        "RFC08-2: the combined liability predicate (palw_settlement_liability_admits_v1) is not wired into admission or \
-         settlement",
+        "RFC08-2 (unsourced terms): past the fence the combined liability predicate refuses, by name, every leg whose terms \
+         have no authenticated source: verifier check fees (RFC07-5: no verifier liability horizon), material provider fees \
+         (event-relative covenant, no finite horizon), native mining receipts and native funded/text/job/mining admissions (no \
+         signed hard deadline) and kernel claims outside a paid V2 enrollment (no producer-signed lifetime)",
     ),
 ];
 

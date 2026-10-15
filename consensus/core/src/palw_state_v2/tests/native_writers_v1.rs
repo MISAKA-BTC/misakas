@@ -103,3 +103,57 @@ fn lenient_consumers_drop_semantic_refusals_but_never_local_capacity() {
     assert!(matches!(local_capacity_or_v1::<()>(Err(PalwStateV2Error::Overflow("semantic"))), Ok(Err(PalwStateV2Error::Overflow(_)))));
     assert!(matches!(local_capacity_or_v1(Ok(5u64)), Ok(Ok(5))));
 }
+
+// ---- RFC06-1: the bond-budget engine's growth is admitted before the op runs ----
+
+fn with_budget(mut state: PalwChainStateV2) -> PalwChainStateV2 {
+    let policy = crate::palw_bond_budget_v1::PalwBondBudgetPolicyV1::unapproved_probe_v1();
+    state.bond_budget = Some(crate::palw_bond_budget_v1::PalwBondBudgetStateV1::new(0, &policy));
+    state
+}
+
+#[test]
+fn a_bond_budget_op_is_refused_locally_before_the_engine_runs() {
+    use super::super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1;
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let parent = with_budget(PalwChainStateV2::genesis());
+    let mut builder = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    let checker = zero_capacity(&mut builder);
+    let ran = std::cell::Cell::new(false);
+    let out = builder.bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, j| {
+        ran.set(true);
+        budget.activate_reporter_income_v2(j)
+    });
+    assert!(matches!(out, Err(PalwStateV2Error::NativeResource(_))), "a local capacity refusal, never a verdict");
+    assert!(!ran.get(), "the engine op never ran: nothing was allocated past the refusal");
+    assert_eq!(builder.state, parent);
+    assert!(builder.entries.is_empty());
+    assert_eq!(checker.outstanding(), (0, 0));
+    // A swept op is admitted for its rows too (a larger bound than a point op, never a smaller one).
+    assert!(matches!(
+        builder.bond_budget_op(PalwBudgetGrowthV1::rows(3), |budget, _, j| budget.release_due(0, j)),
+        Err(PalwStateV2Error::NativeResource(_))
+    ));
+}
+
+#[test]
+fn a_bond_budget_op_with_tracking_off_is_the_historical_op_byte_for_byte() {
+    use super::super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1;
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    // No engine: nothing is admitted, read or run.
+    let bare = PalwChainStateV2::genesis();
+    let mut builder = TransitionBuilder::new(&bare, &p, false, false, false, false, &extras);
+    assert!(matches!(builder.bond_budget_op(PalwBudgetGrowthV1::point(), |_, _, _| ()), Ok(None)));
+    // An engine, tracking off: the op runs and its journal becomes the same deltas as before RFC06-1.
+    let parent = with_budget(PalwChainStateV2::genesis());
+    let mut builder = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    assert!(!builder.native_reservation.is_tracking_v1());
+    builder.bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, j| budget.activate_reporter_income_v2(j)).unwrap().unwrap();
+    let mut expected = parent.bond_budget.clone().unwrap();
+    let mut journal = Vec::new();
+    expected.activate_reporter_income_v2(&mut journal);
+    assert_eq!(builder.state.bond_budget.as_ref(), Some(&expected));
+    assert_eq!(builder.entries.len(), journal.len());
+}
