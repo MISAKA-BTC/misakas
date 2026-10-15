@@ -77,6 +77,16 @@ pub trait NativeReadyExchangeV3: Send + Sync {
     fn recovery_provider_roster_v4(&self) -> &[PalwBondKeyV2] {
         &[]
     }
+    /// Complete actual kernel material must be durable at every named provider
+    /// before its atomic monetary/recovery carrier can be signed and queued.
+    /// The caller still waits for its own positive native admission afterwards.
+    fn ingest_kernel_material_v4(
+        &self,
+        _material: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+        _ingress: &kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4,
+    ) -> Result<(), String> {
+        Err("explicit V4 kernel material ingress unavailable".into())
+    }
     /// Queue a fully signed prospective contract; the caller must wait for its
     /// OWN coherent native prior-state admission before any execution/draw.
     fn ensure_recovery_session_v4(

@@ -10,7 +10,8 @@ use kaspad_lib::{
     args::Args,
     daemon::{DESIRED_DAEMON_SOFT_FD_LIMIT, MINIMUM_DAEMON_SOFT_FD_LIMIT, Runtime},
     private_integration::{
-        PrivateNativeCustodySpecV3, PrivateRecoveryAckFeeSpecV4, create_private_integration_core_with_native_custody_v3,
+        PrivateKernelPaidWorkSpecV4, PrivateNativeCustodySpecV3, PrivateRecoveryAckFeeSpecV4,
+        create_private_integration_core_with_kernel_paid_work_v4, create_private_integration_core_with_native_custody_v3,
         create_private_integration_core_with_native_custody_v4, create_private_integration_core_with_runtime,
         export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3, export_private_paid_bootstrap_v4,
         export_private_paid_program_work_v3, prepare_private_integration_probe, private_complete_check_params_v1,
@@ -36,6 +37,8 @@ paid-v4 hosted providers additionally require an explicit ACK carrier fee payer:
   --private-probe-recovery-ack-funding=TXID:INDEX[,TXID:INDEX,...]
   --private-probe-recovery-ack-fee-cap=SOMPI (maximum per carrier; same-key confirmed change may fund later ACKs)
   --private-probe-native-recovery-providers=TXID:INDEX,TXID:INDEX[,...] (v4 producing custody nodes; sorted distinct 2..8)
+  --private-probe-kernel-paid-work=ABSOLUTE_JSON (explicit all-target producer work, owned outbox,
+    separate producer carrier payer/funding and input/material/workspace/fee limits; never native acceptance by itself)
 Node mode additionally needs explicit loopback P2P/gRPC/wRPC listeners, absolute owned --appdir,
 --nodnsseed --outpeers=0 --disable-upnp. Ordinary node flags are parsed by the shipped Args parser.
 The manifest exposes exact policy/monetary identity and releaseApproval=false; it does not prove
@@ -83,6 +86,7 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-recovery-ack-funding"
                         | "--private-probe-recovery-ack-fee-cap"
                         | "--private-probe-native-recovery-providers"
+                        | "--private-probe-kernel-paid-work"
                 ) {
                     return Err(format!("unknown private option {name}"));
                 }
@@ -137,6 +141,21 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         .map(|raw| kaspad_lib::private_integration::parse_private_recovery_provider_roster_v4(&raw))
         .transpose()?
         .unwrap_or_default();
+    let kernel_work_file = flags.values.remove("--private-probe-kernel-paid-work");
+    if kernel_work_file.is_some()
+        && (profile != "paid-v4" || native.is_none() || flags.print || bootstrap.is_some() || paid_output.is_some())
+    {
+        return Err("kernel paid-work options require an explicit paid-v4 custody producer node".into());
+    }
+    let kernel_work = kernel_work_file
+        .map(|file| {
+            let path = Path::new(&file);
+            if !path.is_absolute() {
+                return Err("kernel paid-work specification path must be absolute".into());
+            }
+            PrivateKernelPaidWorkSpecV4::read(path)
+        })
+        .transpose()?;
     if !recovery_providers.is_empty()
         && (profile != "paid-v4" || native.is_none() || flags.print || bootstrap.is_some() || paid_output.is_some())
     {
@@ -229,6 +248,16 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         .ok_or("private file descriptor budget exhausted")?;
     let runtime = Runtime::from_args(&args);
     let (core, rpc) = match native {
+        Some(native) if kernel_work.is_some() => create_private_integration_core_with_kernel_paid_work_v4(
+            &runtime,
+            &args,
+            budget,
+            config,
+            native,
+            ack_fees,
+            recovery_providers,
+            kernel_work.ok_or("kernel paid-work specification disappeared before construction")?,
+        )?,
         Some(native) if profile == "paid-v4" => create_private_integration_core_with_native_custody_v4(
             &runtime,
             &args,

@@ -1394,7 +1394,23 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         | O::LegacyHeldAnswerDeclaredV2 { .. }
         | O::LegacyHeldAnswerChunkV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2),
         // Lane BUDGET: a bond's capital assignment (140).
-        O::MonetaryMaterialActionV1 {action,..} if matches!(action.as_ref(), crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::RecoveryV2(_)) => {
+        O::MonetaryMaterialEnrolledV1 { enrollment, .. }
+            if enrollment.terms.material_manifest.as_ref().is_some_and(|m| {
+                m.scopes.iter().any(|s| s.codec == crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4)
+            }) =>
+        {
+            PalwLifecycleKindOwnerV1::Fence(F::MaterialReleaseRecoveryV2)
+        }
+        O::MonetaryMaterialReplacedV1 { replacement, .. }
+            if replacement.enrollment.terms.material_manifest.as_ref().is_some_and(|m| {
+                m.scopes.iter().any(|s| s.codec == crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4)
+            }) =>
+        {
+            PalwLifecycleKindOwnerV1::Fence(F::MaterialReleaseRecoveryV2)
+        }
+        O::MonetaryMaterialActionV1 { action, .. }
+            if matches!(action.as_ref(), crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::RecoveryV2(_)) =>
+        {
             PalwLifecycleKindOwnerV1::Fence(F::MaterialReleaseRecoveryV2)
         }
         O::MonetaryMaterialEnrolledV1 { .. } | O::MonetaryMaterialReplacedV1 { .. } | O::MonetaryMaterialActionV1 { .. } => {
@@ -1658,7 +1674,10 @@ impl crate::config::params::Params {
                     PalwLifecycleKindFenceV1::ClassSemanticsV1 => self.palw_class_semantics_v1_fence(),
                     PalwLifecycleKindFenceV1::StagedPublicCourtV1 => self.palw_staged_public_court_v1,
                     PalwLifecycleKindFenceV1::MonetaryMaterialV1 => self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
-                    PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2 => Self::palw_later_of_v1(self.palw_material_release_recovery_v2.as_ref().map(|f|f.activation), self.palw_monetary_material_v1.as_ref().map(|f|f.activation)),
+                    PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2 => Self::palw_later_of_v1(
+                        self.palw_material_release_recovery_v2.as_ref().map(|f| f.activation),
+                        self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
+                    ),
                     // In force where BOTH the route's and the staged court's fences are (the route's rows are the court's).
                     PalwLifecycleKindFenceV1::StagedTirRouteV1 => {
                         Self::palw_later_of_v1(self.palw_staged_tir_route_v1_fence(), self.palw_staged_public_court_v1)
@@ -2210,8 +2229,22 @@ const fn a2_row(slot: PalwA2SlotV1, fence: &'static str, owner: &'static str, la
 /// written). The Lead allocates; A2U keeps the table; a lane fills its row's code at merge, and the reconciliation tests hold it to the
 /// row.
 pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
-    a2_row(PalwA2SlotV1::KernelNested {what:"PalwMonetaryMaterialActionV1::RecoveryV2 (7), Enroll/Replace/Acknowledge/RetireProviderStream"},"palw_material_release_recovery_v2","RFC08 bounded signed historical release recovery",true),
-    a2_row(PalwA2SlotV1::StateEncoding {what:"kernel route aux134 root64 Active/Terminal reserved history and provider69 ACK stream checkpoint"},"palw_material_release_recovery_v2","RFC08 bounded recovery and actual ACK application",true),
+    a2_row(
+        PalwA2SlotV1::KernelNested {
+            what: "PalwMonetaryMaterialActionV1::RecoveryV2 (7), Enroll/Replace/Acknowledge/RetireProviderStream",
+        },
+        "palw_material_release_recovery_v2",
+        "RFC08 bounded signed historical release recovery",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux134 root64 Active/Terminal reserved history and provider69 ACK stream checkpoint",
+        },
+        "palw_material_release_recovery_v2",
+        "RFC08 bounded recovery and actual ACK application",
+        true,
+    ),
     // ---- top-level object tags (0x4b) ----
     a2_row(PalwA2SlotV1::ObjectTags { lo: 104, hi: 107 }, "palw_probabilistic_constraints_v1", "G14 lane D phase 3 onboarding", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 108, hi: 108 }, "palw_signed_registration_v1", "RFC-0009 signed-expiry registration", true),

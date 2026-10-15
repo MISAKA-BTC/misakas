@@ -2720,3 +2720,49 @@ impl VirtualStateProcessor {
         Ok(PalwNativeMaterialProviderAuthorityV3 { row, material, provider_keys })
     }
 }
+
+impl VirtualProcessor {
+    pub(crate) fn palw_kernel_material_ingress_v4_impl(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        checkpoint: BlockHash,
+        now: u64,
+        request: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+    ) -> Result<kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("kernel ingress state policy absent")?;
+        if params.material_release_recovery_at_v2(now).is_none() {
+            return Err("kernel ingress requires new signed recovery fence".into());
+        }
+        let policy = params.monetary_material_at_v1(now).ok_or("kernel ingress monetary fence dormant")?;
+        state.assert_monetary_material_consistency_v1(params).map_err(|e| e.to_string())?;
+        state.assert_material_release_recovery_consistency_v2(params).map_err(|e| e.to_string())?;
+        let raw_depth = self.palw_settled_anchor_depth_at(now);
+        let verified = kaspa_consensus_core::palw_prospective_kernel_material_v4::prospective_kernel_material_v4(
+            state,
+            params,
+            checkpoint,
+            now,
+            raw_depth,
+            request,
+            policy.max_bytes_per_contract,
+            kaspa_consensus_core::palw_attempt_material_v3::verify_ready_signature_v3,
+        )?;
+        kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_enrollment_v4(
+            state, params, now, raw_depth, request, verified,
+        )
+    }
+}
+
+impl VirtualProcessor {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn palw_kernel_producer_candidate_v4_impl(
+        &self,state:&kaspa_consensus_core::palw_state_v2::PalwChainStateV2,checkpoint:BlockHash,now:u64,
+        producer:kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,commit:&misaka_palw_kernel::route::SaltedCommitV1,
+        salt:&[u8;64],commit_daa:u64,expires_daa:u64,
+    )->Result<kaspa_consensus_core::palw_kernel_producer_candidate_v4::PalwKernelProducerCandidateOwnedV4,String>{
+        let params=self.palw_state_params_v2.as_ref().ok_or("kernel producer state policy absent")?;
+        kaspa_consensus_core::palw_kernel_producer_candidate_v4::kernel_producer_candidate_v4(
+            state,params,checkpoint,now,producer,commit,salt,commit_daa,expires_daa,self.palw_settled_anchor_depth_at(now),
+        )
+    }
+}
