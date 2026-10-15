@@ -117,6 +117,12 @@ pub const PALW_RFC0016_ENTRANT_RESERVE_MAX_PERMILLE_V1: u32 = 20;
 /// **V3: one entrant's (and one Probation model's) calibration cap** — 2 ‰ (RFC-0017's `probation_model_permille` design value).
 pub const PALW_RFC0016_ENTRANT_MAX_PER_MODEL_CALIBRATION_PERMILLE_V1: u32 = 2;
 
+/// **V5: the calibration epoch, in DAA** — 720 DAA = ONE epoch (the nominal day at the 120 s clock slot). It is a DAA count: its
+/// wall-clock span is MEASURED and reported (the report's epoch clock, the harness's drift), never labelled "24 h".
+pub const PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1: u64 = 720;
+/// **V5: the 30-day average's nominal window, in DAA** — 30 calibration epochs (21,600 DAA); a DAA count, not a wall-clock month.
+pub const PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1: u64 = 30 * PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1;
+
 /// **The calibration starting set** (user decisions 2026-10-15). The decided terms are the named constants above (and, as their
 /// decisions land, V3 / V5 / V8 / V9's); the terms the user left to measurement (`L_queue`, `T_queue`, `h`, `γ`, `u*`, the OPV check
 /// supply) are PROBES the harness sweeps — never decided values. An isolated calibration network runs this set unless its build
@@ -130,8 +136,9 @@ pub const PALW_RFC0016_CALIBRATION_START_V1: PalwRfc0016ValuesV1 = PalwRfc0016Va
     entrant_max_per_model_permille: PALW_RFC0016_ENTRANT_MAX_PER_MODEL_CALIBRATION_PERMILLE_V1,
     // V3: `S_entry` is the network's eligible minimum producer bond (the fold takes `max(this, min_collateral_sompi)`); 0 adds nothing.
     entrant_min_capital_sompi: 0,
+    // V5: an entrant is a model younger than the 30-day window (21,600 DAA).
+    entrant_age_daa: PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1,
     // PROBES (measured, not decided):
-    entrant_age_daa: 21_600,
     capacity_safety_permille: 1_000,
     c7_measured_concurrency: 0,
     queue_len_per_class: 8,
@@ -379,6 +386,18 @@ impl Params {
                 "palw_model_block_rights_v1: the allocation epoch must be a whole number of rights epochs (P_m constant within one)",
             ));
         }
+        // V5 (user decision 2026-10-15): a calibration run measures ONE epoch = 720 DAA and the 30-day window = 21,600 DAA.
+        if self.has_isolated_native_calibration_v34() {
+            let span = allocation.policy.average.map(|a| a.span_daa());
+            if rights_epoch != PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1
+                || allocation.policy.epoch_daa != PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1
+                || span.is_some_and(|span| span != PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1)
+            {
+                return Err(PalwModeV2Error::Invalid(
+                    "an RFC-0016 calibration run uses one epoch = 720 DAA (rights and allocation) and the 21,600-DAA 30-day window (V5)",
+                ));
+            }
+        }
         if let Some(verdict) = self.palw_rfc0016_calibration_allows_v1() {
             return verdict;
         }
@@ -486,6 +505,18 @@ mod tests {
         let mut tilted = v;
         tilted.tilt_k_permille = 1_500;
         assert!(palw_rfc0016_calibration_conforms_v1(&tilted).is_err(), "k stays 1");
+    }
+
+    /// V5 (user decision 2026-10-15): one calibration epoch is 720 DAA and the 30-day window 21,600 DAA — the same DAA counts the
+    /// ADR-0177 allocation's decided policy uses (one day-equivalent epoch, 30 of them per average).
+    #[test]
+    fn v5_one_epoch_is_720_daa_and_the_window_21_600() {
+        assert_eq!(PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1, 720);
+        assert_eq!(PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1, 21_600);
+        let decided = crate::palw_bond_budget_v1::PalwModelAllocationPolicyV1::decided_unapproved_v3();
+        assert_eq!(decided.epoch_daa, PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1);
+        assert_eq!(decided.average.unwrap().span_daa(), PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1);
+        assert_eq!(PALW_RFC0016_CALIBRATION_START_V1.entrant_age_daa, PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1);
     }
 
     #[test]

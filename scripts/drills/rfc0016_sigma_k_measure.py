@@ -165,6 +165,43 @@ def cmd_run(a):
             launch(a.launch_cmd, m, "stop")
 
 
+# V5 (user decision 2026-10-15): one calibration epoch = 720 DAA; the 30-day window = 21,600 DAA. An epoch is a DAA count — its
+# wall-clock span is MEASURED here (DAA vs wall clock, and DAA vs the chain's own timestamps), never labelled "24 h".
+EPOCH_DAA = 720
+AVERAGE_WINDOW_DAA = 30 * EPOCH_DAA
+NOMINAL_MS_PER_DAA = 120_000
+
+
+def epoch_clock(lines):
+    """Pure: DAA vs wall-clock drift over the recorded polls (and vs the sink timestamps the report carries, where present)."""
+    if len(lines) < 2 or lines[-1]["daa"] <= lines[0]["daa"] or "wall" not in lines[0] or "wall" not in lines[-1]:
+        return {"epoch_daa": EPOCH_DAA, "note": "too few timed polls to measure the epoch's wall-clock span"}
+    ddaa = lines[-1]["daa"] - lines[0]["daa"]
+    wall_ms_per_daa = (lines[-1]["wall"] - lines[0]["wall"]) * 1000.0 / ddaa
+    out = {
+        "epoch_daa": EPOCH_DAA,
+        "average_window_daa": AVERAGE_WINDOW_DAA,
+        "nominal_ms_per_daa": NOMINAL_MS_PER_DAA,
+        "observed_wall_ms_per_daa": round(wall_ms_per_daa, 1),
+        "observed_epoch_wall_hours": round(EPOCH_DAA * wall_ms_per_daa / 3_600_000.0, 3),
+        "drift_permille_vs_nominal": round((wall_ms_per_daa - NOMINAL_MS_PER_DAA) * 1000.0 / NOMINAL_MS_PER_DAA, 1),
+        "label": f"epoch = {EPOCH_DAA} DAA (wall-clock span measured; never assumed)",
+    }
+
+    def sink(line):
+        try:
+            clock = json.loads(line["report"].get("reportJson") or "{}").get("epochClock") or {}
+            value = clock.get("sinkTimestampMs")
+            return int(value) if value not in (None, "null") else None
+        except (AttributeError, KeyError, ValueError, TypeError):
+            return None
+
+    t0, t1 = sink(lines[0]), sink(lines[-1])
+    if t0 is not None and t1 is not None:
+        out["observed_chain_ms_per_daa"] = round((t1 - t0) / ddaa, 1)
+    return out
+
+
 def summarize(lines, manifest, bounds):
     """Pure: outcomes per model from the last report and the pass conditions (also what --self-test checks)."""
     reports = [json.loads(l["report"].get("reportJson") or "{}") if isinstance(l.get("report"), dict) else {} for l in lines]
@@ -208,7 +245,8 @@ def summarize(lines, manifest, bounds):
     span = max(1, (lines[-1]["daa"] - lines[0]["daa"]))
     if hb * 1000 > span * bounds["hb_max_permille"]:
         fails.append(f"heartbeat-dependent {hb} of {span} DAA")
-    return {"models": models, "fails": fails, "values": manifest.get("values"), "scenario": manifest.get("scenario")}
+    return {"models": models, "fails": fails, "values": manifest.get("values"), "scenario": manifest.get("scenario"),
+            "epoch_clock (V5: measured, not assumed)": epoch_clock(lines)}
 
 
 def cmd_summarize(a):
@@ -255,6 +293,9 @@ def self_test():
     s = summarize(lines, {"roles": {"A": {"bond_heavy_with_compute": True}}},
                   {"track_tol_ppm": 300_000, "unminted_max_permille": 100, "hb_max_permille": 100, "surge_min_permille": 0})
     assert s["models"]["A"]["physical_blocks"] == 80
+    clock = epoch_clock([{"daa": 0, "wall": 0.0, "report": {}}, {"daa": 720, "wall": 720 * 150.0, "report": {}}])
+    assert clock["observed_epoch_wall_hours"] == 30.0 and clock["drift_permille_vs_nominal"] == 250.0, clock
+    assert "24 h" not in clock["label"]
     assert any("unminted" in f for f in s["fails"]), s["fails"]
     print("self-test: plan/summarize logic holds (no node contacted, no value decided)")
 

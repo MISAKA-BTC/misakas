@@ -1598,8 +1598,21 @@ impl VirtualStateProcessor {
         let (rows, miners) = kaspa_consensus_core::palw_state_v2::palw_rfc0016_model_report_v1(&state, params, &extras, now);
         let quote = class.and_then(|c| kaspa_consensus_core::palw_state_v2::palw_rfc0016_quote_v1(&state, params, &extras, &c, now));
         let armed = params.rfc0016_v1().is_some();
-        let json =
-            kaspa_consensus_core::palw_rfc0016_v1::report::palw_rfc0016_report_json_v1(now, armed, &rows, &miners, quote.as_ref());
+        // RFC-0016 V5 (user decision 2026-10-15): the epoch is a DAA count; the sink's own timestamp lets a reader measure the
+        // DAA-versus-wall-clock drift (never assumed 24 h).
+        let clock = kaspa_consensus_core::palw_rfc0016_v1::report::PalwRfc0016EpochClockV1::at(
+            params.epoch_length(),
+            now,
+            self.headers_store.get_header(chain_point).ok().map(|header| header.timestamp),
+        );
+        let json = kaspa_consensus_core::palw_rfc0016_v1::report::palw_rfc0016_report_json_with_clock_v1(
+            now,
+            armed,
+            &rows,
+            &miners,
+            quote.as_ref(),
+            &clock,
+        );
         Ok(Some((now, armed, json)))
     }
 

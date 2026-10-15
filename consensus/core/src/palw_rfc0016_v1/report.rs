@@ -60,6 +60,70 @@ pub struct PalwMinerRevenueRowV1 {
     pub claims: u64,
 }
 
+/// **V5 (user decision 2026-10-15): the epoch clock the report carries** — an epoch is a DAA count, and its wall-clock span is
+/// measured, never assumed: the report gives the epoch's DAA terms, the nominal slot and the sink block's own timestamp, so a reader
+/// (the measurement harness) reports DAA versus wall-clock drift. No field or label says "24 h".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwRfc0016EpochClockV1 {
+    pub epoch_daa: u64,
+    pub epoch_index: u64,
+    pub epoch_start_daa: u64,
+    /// The protocol's nominal clock slot (120 s); `epoch_daa · nominal_ms_per_daa` is the NOMINAL span, never the measured one.
+    pub nominal_ms_per_daa: u64,
+    /// The sink block's header timestamp (ms), read by the node serving the report; `None` where unavailable.
+    pub sink_timestamp_ms: Option<u64>,
+}
+
+impl PalwRfc0016EpochClockV1 {
+    pub fn at(epoch_daa: u64, now_daa: u64, sink_timestamp_ms: Option<u64>) -> Self {
+        let epoch_daa = epoch_daa.max(1);
+        let epoch_index = now_daa / epoch_daa;
+        Self {
+            epoch_daa,
+            epoch_index,
+            epoch_start_daa: epoch_index.saturating_mul(epoch_daa),
+            nominal_ms_per_daa: crate::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS,
+            sink_timestamp_ms,
+        }
+    }
+
+    /// The label a reader shows: a DAA count, with the wall-clock span stated as measured.
+    pub fn label(&self) -> String {
+        format!("epoch = {} DAA (wall-clock span measured from DAA vs time; never assumed to be 24 h)", self.epoch_daa)
+    }
+
+    pub fn json(&self) -> String {
+        format!(
+            concat!(
+                "{{\"epochDaa\":\"{}\",\"epochIndex\":\"{}\",\"epochStartDaa\":\"{}\",\"nominalMsPerDaa\":\"{}\",",
+                "\"sinkTimestampMs\":{},\"label\":\"{}\"}}"
+            ),
+            self.epoch_daa,
+            self.epoch_index,
+            self.epoch_start_daa,
+            self.nominal_ms_per_daa,
+            json_opt(self.sink_timestamp_ms),
+            self.label()
+        )
+    }
+}
+
+/// [`palw_rfc0016_report_json_v1`] with the V5 epoch clock appended (`"epochClock"`).
+pub fn palw_rfc0016_report_json_with_clock_v1(
+    now_daa: u64,
+    armed: bool,
+    rows: &[PalwModelReportRowV1],
+    miners: &[PalwMinerRevenueRowV1],
+    quote: Option<&super::capacity::PalwAdmissionQuoteV1>,
+    clock: &PalwRfc0016EpochClockV1,
+) -> String {
+    let body = palw_rfc0016_report_json_v1(now_daa, armed, rows, miners, quote);
+    match body.strip_suffix('}') {
+        Some(open) => format!("{open},\"epochClock\":{}}}", clock.json()),
+        None => body,
+    }
+}
+
 /// What a before/after comparison may claim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwReportClaimV1 {
@@ -171,6 +235,17 @@ mod tests {
             payout_coinbase_sompi: Some(payout),
             ..Default::default()
         }
+    }
+
+    /// V5: the epoch clock is a DAA count with the measured wall-clock span; nothing asserts 24 h.
+    #[test]
+    fn v5_the_epoch_clock_never_says_24_hours() {
+        let clock = PalwRfc0016EpochClockV1::at(720, 1_500, Some(1_700_000_000_000));
+        assert_eq!((clock.epoch_index, clock.epoch_start_daa), (2, 1_440));
+        assert!(clock.label().contains("never assumed to be 24 h"));
+        let json = palw_rfc0016_report_json_with_clock_v1(1_500, false, &[], &[], None, &clock);
+        assert!(json.ends_with("}}") && json.contains("\"epochClock\":{\"epochDaa\":\"720\""));
+        assert!(!json.contains("\"epochHours\""), "no wall-clock length is asserted");
     }
 
     /// R6: a target increase alone is never reported as an improvement (T2 without compute).
