@@ -1528,6 +1528,8 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         Ok(kaspa_consensus_core::palw_backend::PalwTirReplayV1 {
             generated_ids: run.generated,
             full_logits_trace_root: run.trace_root,
+            execution_root: run.execution_root,
+            output_root: run.output_root,
         })
     }
 

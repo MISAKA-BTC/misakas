@@ -7825,25 +7825,26 @@ impl PalwPanelService {
             kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(&job, &shape.job_context, &run, retention)
                 .map_err(|e| format!("the run does not assemble into a commitment: {e}"))?;
         let claim_id = fp_claim_id_v3(&commitment);
-        let (run, original_header) = if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa) {
-            let directory = self.config.retention_dir.clone();
-            let (_, projected) = offload(_backend, move |backend| {
-                crate::palw_flat_public_source::retain_v1(&directory, claim_id, backend, &run.outcome.material)?;
-                // A Float32 family's public rows (no in-node backend retains them today: `false`).
-                crate::palw_flat_public_source::retain_float_v1(&directory, claim_id, backend, &run.outcome.material)?;
-                let header = backend.public_execution_binding_header_v1(&run.outcome.material)?;
-                Ok::<_, String>((run, Some(header)))
-            })
-            .await?;
-            projected?
-        } else {
-            (run, None)
-        };
+        let (run, original_header, mut unpublished_projection) =
+            if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa) {
+                let directory = self.config.retention_dir.clone();
+                let (_, projected) = offload(_backend, move |backend| {
+                    // Keep cleanup with the blocking writer, including partial projection or header
+                    // failures before this task can return ownership to the carrier builder.
+                    let projection = crate::palw_flat_public_source::UnpublishedProjectionV1::new(&directory, claim_id);
+                    crate::palw_flat_public_source::retain_v1(&directory, claim_id, backend, &run.outcome.material)?;
+                    // A Float32 family's public rows (no in-node backend retains them today: `false`).
+                    crate::palw_flat_public_source::retain_float_v1(&directory, claim_id, backend, &run.outcome.material)?;
+                    let header = backend.public_execution_binding_header_v1(&run.outcome.material)?;
+                    Ok::<_, String>((run, Some(header), Some(projection)))
+                })
+                .await?;
+                projected?
+            } else {
+                (run, None, None)
+            };
         // Until this carrier is built, the projection is not yet anyone's custody: a refusal
         // below removes it instead of leaving an orphan no accepted lease will ever retire.
-        let mut unpublished_projection = original_header
-            .as_ref()
-            .map(|_| crate::palw_flat_public_source::UnpublishedProjectionV1::new(&self.config.retention_dir, claim_id));
         let material = palw_fp_capture_encode_v1(&job, &ids, &run.outcome.material);
 
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =

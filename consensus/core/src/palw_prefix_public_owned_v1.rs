@@ -426,9 +426,7 @@ impl PalwOwnedPublicPrefixCourtV1 {
         self.pending.as_ref().map(|p| p.progress_v1())
     }
     pub fn pending_deadline_v1(&self) -> Option<u64> {
-        (!self.default_collected && !self.collection_expired && !self.claim_closed)
-            .then(|| self.pending.as_ref().map(|p| p.deadline_daa_v1()))
-            .flatten()
+        (!self.default_collected && !self.collection_expired).then(|| self.pending.as_ref().map(|p| p.deadline_daa_v1())).flatten()
     }
     pub fn pending_response_deadline_v1(&self) -> Option<u64> {
         (!self.default_collected && !self.collection_expired).then(|| self.pending.as_ref().map(|p| p.deadline_daa_v1())).flatten()
@@ -439,7 +437,7 @@ impl PalwOwnedPublicPrefixCourtV1 {
     }
     pub(crate) fn joint_default_v1(&self, now: u64) -> Result<Option<PalwPrefixJointDefaultV1>, String> {
         self.check()?;
-        if self.default_collected || self.collection_expired || self.claim_closed || now >= self.terms.collect_until_daa {
+        if self.default_collected || self.collection_expired || now >= self.terms.collect_until_daa {
             return Ok(None);
         }
         let Some(pending) = &self.pending else { return Ok(None) };
@@ -473,8 +471,8 @@ impl PalwOwnedPublicPrefixCourtV1 {
         self.collection_expired = true;
         self.check()
     }
-    /// Only the native fold's independently terminal claim edge authorizes this.
-    /// The literal unpaid/default material survives until its purchased retention.
+    /// Records an independent semantic/economic close, not this paid demand's
+    /// collection. Its unconsumed literal signer obligations and material survive.
     pub(crate) fn mark_claim_closed_v1(&mut self) -> Result<(), String> {
         self.claim_closed = true;
         self.check()

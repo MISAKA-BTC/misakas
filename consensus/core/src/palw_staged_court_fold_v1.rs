@@ -3031,10 +3031,11 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
         let row_key = (row.claim, row.reserver);
         let closed =
             b.state.claim(&row.claim).is_some_and(|c| c.phase.is_terminal() && !matches!(c.phase, PalwClaimPhaseV2::Final { .. }));
-        let default = if closed { None } else { row.joint_default_v1(ctx.daa_score).map_err(|e| stage_refused(row.claim, e))? };
         if closed {
             row.mark_claim_closed_v1().map_err(|e| stage_refused(row.claim, e))?;
-        } else if let Some(default) = &default {
+        }
+        let default = row.joint_default_v1(ctx.daa_score).map_err(|e| stage_refused(row.claim, e))?;
+        if let Some(default) = &default {
             row.mark_default_collected_v1(ctx.daa_score).map_err(|e| stage_refused(row.claim, e))?;
             collect_prefix_default(b, ctx, default)?;
         } else {
@@ -3057,19 +3058,9 @@ fn collect_prefix_default(
     default: &crate::palw_prefix_public_owned_v1::PalwPrefixJointDefaultV1,
 ) -> Result<(), PalwStateV2Error> {
     let claim = b.state.claim(&default.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(default.claim))?;
-    let stage = match claim.phase {
-        PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } => crate::palw_da_rcore_v1::PalwDaStageV1::Live,
-        PalwClaimPhaseV2::ReceiptLicensed { .. } => crate::palw_da_rcore_v1::PalwDaStageV1::Licensed,
-        PalwClaimPhaseV2::Final { .. } => crate::palw_da_rcore_v1::PalwDaStageV1::FinalRow,
-        _ => return Err(stage_refused(default.claim, "public collection has no live economic claim")),
-    };
-    let charge = PalwDaDefaultChargeV1 {
-        claim_id: default.claim,
-        producer: default.producer,
-        stage,
-        g: b.claim_g_v1(&default.claim).map(|g| g.g()).unwrap_or(0),
-        covering: default.panel.iter().copied().collect(),
-        winner: default.owner,
-    };
-    b.da_default_charge_v1(ctx, &claim, &charge)
+    // The expired pending source proves these exact frozen signers, not a new
+    // Panel draw. A sibling close cannot discharge an unconsumed Valid signer;
+    // the existing economic helper skips an already charged producer and S4 key.
+    let unpaid = default.panel.iter().copied().chain(std::iter::once(default.producer)).collect();
+    b.staged_selected_default_charge_v1(ctx, default.claim, &claim, default.producer, &unpaid, default.owner)
 }

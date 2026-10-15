@@ -69,6 +69,10 @@ pub struct PalwTirReplayV1 {
     pub generated_ids: Vec<u32>,
     /// `tiled_logits_trace_root_v1` over the replay's own `post` logits rows and ids.
     pub full_logits_trace_root: Hash64,
+    /// Composite over this replay's own job, step tree and logits, never copied from the claim.
+    pub execution_root: Hash64,
+    /// Output commitment derived from this replay's generated IDs and job context.
+    pub output_root: Hash64,
 }
 
 /// The roots an attempt carries, and the bytes that answer for them.
