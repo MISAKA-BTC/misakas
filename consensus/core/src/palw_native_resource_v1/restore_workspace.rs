@@ -104,9 +104,42 @@ pub(crate) fn native_restore_consistency_requests_v1(c: &PalwStateCarriageV2) ->
     Ok(q.bytes_v1())
 }
 
+/// Some-only root blocks (the kernel route, the bond budget, ...) add their own fixed 64-byte collection roots to the preimage;
+/// their count is bounded by the preimage writer's block list. A structural slack, not a measured value.
+const NATIVE_ROOT_SOME_ONLY_SLACK_BYTES_V1: u64 = 64 * 128;
+
+/// The empty-state root preimage length (every fixed collection root and scalar), computed once per process.
+fn genesis_root_preimage_len_v1() -> u64 {
+    static LEN: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *LEN.get_or_init(|| crate::palw_state_v2::PalwChainStateV2::genesis().state_root_preimage().len() as u64)
+}
+
+/// **The state root's own serialization workspace during restoration** (`into_state_v3` recomputes the root to compare it with
+/// the expected one). Per entry, `collection_root` encodes one key and one value with `borsh::to_vec` (pinned 1,024-byte start,
+/// geometric growth), one entry at a time; no single entry's encoding exceeds the carriage's whole canonical length. The preimage
+/// Vec holds every collection's 64-byte root, the fixed scalars and the small inline blocks: at most the empty-state preimage,
+/// plus the carriage's canonical bytes (every inline block is part of them), plus the Some-only roots' slack, grown geometrically.
+/// Sound from the actual canonical length; conservative (a single entry is usually far smaller than the whole carriage).
+pub(crate) fn native_restore_root_workspace_requests_v1(canonical_bytes: u64) -> Result<u64, NativeCoverageV1> {
+    let mut q = TirNativeRequestsV1::new();
+    let entry = canonical_bytes.max(1024);
+    q.vec_v1::<u8>(entry)?; // the key buffer
+    q.vec_v1::<u8>(entry)?; // the value buffer
+    let preimage = add(add(genesis_root_preimage_len_v1(), canonical_bytes)?, NATIVE_ROOT_SOME_ONLY_SLACK_BYTES_V1)?;
+    q.vec_v1::<u8>(preimage)?;
+    Ok(q.bytes_v1())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_root_workspace_is_derived_from_the_actual_canonical_length_and_checked() {
+        let small = native_restore_root_workspace_requests_v1(10).unwrap();
+        let large = native_restore_root_workspace_requests_v1(1 << 20).unwrap();
+        assert!(small > 0 && large > small, "a larger carriage needs larger entry and preimage buffers");
+        assert!(native_restore_root_workspace_requests_v1(u64::MAX).is_err(), "arithmetic overflow refuses");
+    }
     #[test]
     fn native_consistency_tree_arithmetic_rejects_overflow_before_allocating() {
         let mut q = TirNativeRequestsV1::new();
