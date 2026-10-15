@@ -284,7 +284,7 @@ ACTIVATION_ALLOWED
 
 | 名前 | 設計値（未承認） | 意味 |
 | --- | --- | --- |
-| `PALW_ELIG_EXAM_M_DESIGN_V1` / `_K_` | 7 / 4 | 抽選位置数と必要承認数（kは過半） |
+| `PALW_ELIG_EXAM_M_DESIGN_V1` / `_K_` | **47 / 24**（U-1、2026-10-15: ECON整合の校正候補。7 / 4は`_TEST_ONLY_`の試験専用） | 抽選位置数と必要承認数（kは過半） |
 | `PALW_ELIG_EXAM_CLAIMS_DESIGN_V1` | 4 | 1検査で再実行するclaim数 |
 | `PALW_ELIG_ANCHOR_DELAY_SPANS_DESIGN_V1` | 1 | commit後、何span後のanchorから抽選できるか |
 | `PALW_ELIG_ATTEST_WINDOW_DAYS_DESIGN_V1` | 2日 | 抽選後の承認期限 |
@@ -299,12 +299,15 @@ ACTIVATION_ALLOWED
 | `probation_final_weight` | false | 初期提案（Probation FinalはFinal weightなし） |
 | `day_daa` | networkのblock時間から導出 | 日数→DAA換算 |
 | 正直なverifier stake `V_honest`、正直検査率 | 決めない | §1の別仮定。driverでは名前付き入力 |
-| `PALW_ELIG_ATTEMPT_FEE_DESIGN_V1` | 100,000 BILI（sompi、**仮置き**） | 返還しない試行手数料、commit時に焼却（GAP-E3、値はU-4） |
-| 検査者報酬 | 決めない | 新規発行なし |
+| `PALW_ELIG_ATTEMPT_BURN_FEE_PROBE_V1`（旧名`PALW_ELIG_ATTEMPT_FEE_DESIGN_V1`） | 1 BILI（**probe**。100,000 BILIは既定値ではない、U-4） | (a) 返還しないspam防止のburn、commit時に焼却（GAP-E3） |
+| `PALW_ELIG_INSPECTION_FEE_PER_POSITION_PROBE_V1` | 1 BILI / 抽選位置（**probe**、U-4） | (b) 申請者負担のescrow。承認期限内にattestした位置へ支払い、残りは申請者へ返す。新規発行なし |
+| `PALW_ELIG_REPEAT_ATTEMPTS_NETWORK_SHARE_DESIGN_V1` | 500‰（U-4、公平な待ち行列） | lineageのepoch内2回目以降の試行が使えるnetwork枠の割合 |
 
 未確定の値を任意の件数・日数・倍率で埋めて安全性の根拠にしない。
 
 ## 12. ユーザー判断が必要な事項
+
+> **2026-10-15: U-1〜U-9はユーザーが判断した**（[ユーザー判断](../design/palw/user-decisions-2026-10-15-adr-rfc16-rfc17.md) §3・§6）。実装状況は§14。下の一覧は判断前の問いとして残す。
 
 * **U-1** §11の設計値（m/k、予算、試行上限、更新期間）。
 * **U-2** Probation FinalのFinal weightを0とする初期提案の確定。
@@ -336,3 +339,19 @@ ACTIVATION_ALLOWED
 * **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
 * **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
 * 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。
+
+## 14. ユーザー判断 2026-10-15（U-1〜U-9）の実装状況（branch `integ/decisions-1015`）
+
+休眠・未build・未試験（PASSではない）。値は校正・受入試験の出発点で本番値ではない。validationは本fenceの有効化を拒否し続ける。
+
+| ID | 状態 | 場所 |
+| --- | --- | --- |
+| U-1 | 2026-10-15決定 → 実装: 既定の候補を24-of-47（ECON整合）へ。7/4は試験専用。他の設計値は試験用のまま | `consensus/core/src/palw_model_eligibility_v1.rs:81`, `:85`; test `consensus/core/src/palw_model_eligibility_v1/tests.rs:166`; driver `scripts/sim/misaka-palw-rfc0017-eligibility-sim.py:54` |
+| U-2 | 2026-10-15決定 → 実装: Probation claimはFinal weight 0・`bounded_immature`寄与0。本fenceはRFC-0018 Gate C（`palw_independently_work_certified_v1`）を同じ高さ以下に要求し（RFC-0018側の規則と合わせて同じ高さ）、safe frontier・settled anchor深度・rule E参加数はGate Cの認証なしに進まない。狭いinterface `palw_probation_security_credit_v1` / `palw_eligibility_security_credit_v1`をexport。pinはFinal後もclaimがstateから消えるか無効化されるまで残る。Probation REAL blockのGHOSTDAG/DAA影響の有界性を試験 | `consensus/core/src/palw_model_eligibility_v1.rs:1344`; `consensus/core/src/palw_model_eligibility_fold_v1.rs:266`, `:300`, `:627`; `consensus/core/src/palw_state_v2.rs:21168`; tests `consensus/core/src/palw_model_eligibility_v1/tests.rs:93`, `:113` |
+| U-3 | 2026-10-15決定（同日補足）→ 実装: 抽選検証者のm-of-k承認は認証の柱で、明示的な前提に基づく認証（無条件の証明ではない）。表示文言`PALW_ELIG_CERTIFICATION_PREMISE_V1`、RPC fieldの説明、f = 1/3・0.6・最悪ケース（f = 1）の影響報告をdriverへ | `consensus/core/src/palw_model_eligibility_v1.rs:172`; `rpc/core/src/model/message/palw_operator_reads.rs:1919`; driver `scripts/sim/misaka-palw-rfc0017-eligibility-sim.py:270`; test `consensus/core/src/palw_model_eligibility_v1/tests.rs:178` |
+| U-4 | 2026-10-15決定 → 実装: 試行費用を(a) 返還しないburnと(b) 申請者負担の検査escrow（attestした位置へ支払い、残りは返還、新規発行なし）に分離。どちらも名前付きprobeで未承認、測定値記録gate（記録なし）。lineage上限・network上限・cooldownに公平な待ち行列（epoch内の再試行はnetwork枠の500‰まで）を追加。値は**測定待ち** | `consensus/core/src/palw_model_eligibility_v1.rs:127`, `:133`, `:137`, `:154`, `:831`, `:914`; `consensus/core/src/palw_model_eligibility_fold_v1.rs:383`, `:533`; tests `consensus/core/src/palw_model_eligibility_v1/tests.rs:196`, `consensus/core/src/palw_state_v2/tests/model_eligibility_fold_v1.rs:326` |
+| U-5 | 2026-10-15決定 → 実装: pre-fenceモデルに1更新期間の猶予。猶予中も未認証のsecurity creditは出ない（Gate Cが全claimを統治、`palw_eligibility_security_credit_needs_certification_v1`）。更新に通らなければLapsed | `consensus/core/src/palw_model_eligibility_v1.rs:631`, `:648`; test `consensus/core/src/palw_model_eligibility_v1/tests.rs:296` |
+| U-6 | 2026-10-15決定 → 実装: 永久免除は非報酬のBASE-0 liveness floorだけ（`base_floor`）。報酬付きgenesisモデルは移行（猶予）と更新審査を受ける | `consensus/core/src/palw_model_eligibility_v1.rs:580`, `:602`; tests `consensus/core/src/palw_model_eligibility_v1/tests.rs:273`; node E2E `consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/rfc17_eligibility.rs:84` |
+| U-7 | 2026-10-15決定 → 実装: ECON gateと併存。支払はすべての必要gateが成立したときだけ解放（未決は保留、不成立は留保）。同じ検査を二重計上・二重請求しない | `consensus/core/src/palw_model_eligibility_v1.rs:693`; test `consensus/core/src/palw_model_eligibility_v1/tests.rs:324` |
+| U-8 | 2026-10-15決定 → 試験追加: `roll_epoch`が読む資格snapshotがreorg・IBD・restartで同じ | `consensus/core/src/palw_state_v2/tests/model_eligibility_fold_v1.rs:278` |
+| U-9 | 2026-10-15決定 → 実装: Registered/Lapsedは報酬・昇格を生む評価経路（attempt・free prompt・evaluation）で拒否、利用者払いのKernel/Funded jobは維持 | `consensus/core/src/palw_model_eligibility_v1.rs:672`; `consensus/core/src/palw_state_v2/fold_read.rs:967`; test `consensus/core/src/palw_model_eligibility_v1/tests.rs:345` |

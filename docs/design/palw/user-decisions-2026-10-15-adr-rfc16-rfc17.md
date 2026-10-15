@@ -83,3 +83,13 @@ PRINCIPLES §0 が許容する `p=0` の残余リスクは、経済的な損失�
 - 「抽選された検証者 stake のうち正直な割合が閾値以上である」ことを **明示的な前提(安全性の仮定)** として置く。U-3 の趣旨はこの前提を隠さないことであり、認証は前提に基づくもので無条件の数学的証明ではないと RPC・文書で表示する。
 - f=1/3・f=0.6・最悪ケースの評価は、この前提が崩れた場合の影響範囲の報告として行う(認証方式の変更条件ではない)。
 - G14 の公開告発で反証された claim は、認証済みでも従来どおり conviction・void の対象であり、合意 credit も取り消される。
+
+## 7. 実装状況(branch `integ/decisions-1015`、休眠・未build・未試験)
+
+各項目は「2026-10-15決定 → 実装(file:line)」または「測定待ち」として、次に記録した。数値は校正の出発点で本番値ではなく、新規fenceの有効化はしていない(全presetで`None`、t12の挙動は不変)。
+
+* ADR C1〜C5: [ADR判断事項](adr-0162-0178-user-decisions-2026-10-15.md) §D
+* RFC-0016 V2〜V11: [RFC-0016実装状況](rfc-0016-implementation-status-2026-10-15.md) §8、[RFC-0016](../../rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md) §14.2
+* RFC-0017 U-1〜U-9: [RFC-0017](../../rfc/0017-model-eligibility-examination-and-renewal.md) §14
+
+RFC-0018への狭いinterface: 本branchのRFC-0017は`palw_model_eligibility_v1`にGate C(`palw_independently_work_certified_v1`)を同じ高さ以下で要求し、`palw_probation_security_credit_v1`・`palw_eligibility_security_credit_v1`を公開する(fork choice・safe frontier・settlement depth・rule E・認証述語そのものはRFC-0018 laneのcodeで、本branchでは編集していない)。
