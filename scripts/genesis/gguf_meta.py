@@ -126,7 +126,17 @@ class Reader:
         raise GgufError(f"value type {t}")
 
 
-def parse(src: Source) -> dict:
+def parse_full(src: Source, keep_arrays: set[str] = frozenset(), keep_strings: set[str] = frozenset()) -> dict:
+    """`parse` plus the full values of the named arrays and strings (each still bounded by the caps):
+    `{"summary": <parse result>, "arrays": {key: [...]}, "strings": {key: str}}`."""
+    kept: dict = {}
+    summary = parse(src, keep=kept, keep_keys=set(keep_arrays) | set(keep_strings))
+    return {"summary": summary,
+            "arrays": {k: v for k, v in kept.items() if k in keep_arrays and isinstance(v, list)},
+            "strings": {k: v for k, v in kept.items() if k in keep_strings and isinstance(v, str)}}
+
+
+def parse(src: Source, keep: dict | None = None, keep_keys: set[str] = frozenset()) -> dict:
     r = Reader(src)
     if r.take(4) != MAGIC:
         raise GgufError("not a GGUF file")
@@ -145,6 +155,8 @@ def parse(src: Source) -> dict:
         t = r.scalar(T_U32)
         v = r.value(t)
         meta[k] = (t, v)
+        if keep is not None and k in keep_keys:
+            keep[k] = v["items"] if isinstance(v, dict) else v
     alignment = 32
     if "general.alignment" in meta:
         alignment = int(meta["general.alignment"][1])
