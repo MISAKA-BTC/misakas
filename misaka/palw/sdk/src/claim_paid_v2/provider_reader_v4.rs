@@ -426,20 +426,14 @@ impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> Reader<'_, 
             parts.push(bytes);
         }
         let row = self.ledger.claims.get(&self.claim).ok_or_else(|| bad("segmented checker claim absent"))?;
-        let misaka_palw_kernel::ledger::ClaimBodyV1::Segmented { evidence, .. } = &row.body else {
+        let misaka_palw_kernel::ledger::ClaimBodyV1::Segmented { evidence, segment_roots, .. } = &row.body else {
             return Err(bad("not a segmented checker claim"));
         };
         let class = self.ledger.classes.get(&row.class_binding_id).ok_or_else(|| bad("segmented checker class absent"))?;
         let requests = native_kernel_segment_assembly_requests_v4(&class.program, position, &parts).map_err(bad)?;
         self.charge(requests)?;
-        misaka_palw_kernel::seg_da::assemble_position_full_v1(
-            &class.program,
-            &evidence.segment_roots,
-            evidence.positions,
-            position,
-            &parts,
-        )
-        .ok_or_else(|| bad("authenticated segmented parts do not form the native full position"))
+        misaka_palw_kernel::seg_da::assemble_position_full_v1(&class.program, segment_roots, evidence.positions, position, &parts)
+            .ok_or_else(|| bad("authenticated segmented parts do not form the native full position"))
     }
 }
 impl<F: FnMut(u8, u32) -> Result<NativeRetainedV1<Vec<u8>>, String>> misaka_palw_kernel::element::SegMaterialV1 for Reader<'_, F> {

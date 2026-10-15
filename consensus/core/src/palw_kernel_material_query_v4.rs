@@ -123,6 +123,11 @@ pub fn kernel_material_query_authority_v4(
         query.provider,
         scope,
     )?;
+    // A provider may continue its own generation while other providers change,
+    // but a newly funded re-enrollment supersedes its earlier read/challenge ID.
+    if material_provider_generation_v4(state, query.root, query.provider).map_err(|e| e.to_string())? != Some(query.consent) {
+        return Err("query does not name provider's latest accepted generation".into());
+    }
     let count = (std::mem::size_of::<PalwKernelMaterialQueryAuthorityV4>() as u64)
         .checked_add(sender.pubkey.len() as u64)
         .and_then(|v| v.checked_add(provider.pubkey.len() as u64))
@@ -261,4 +266,104 @@ mod tests {
         invalid.version = 3;
         assert!(invalid.validate().is_err());
     }
+}
+
+/// Build an explicitly funded public availability challenge, never arithmetic
+/// guilt or a successful approval. The caller must retain its acquisition cause
+/// (including local capacity), use its own key, and rehearse/submit with its own
+/// fee payer. Native admission establishes the exact bounded answer obligation.
+pub fn monetary_material_challenge_object_v4(
+    network: Hash64,
+    query: &PalwKernelMaterialUnitQueryV4,
+    valid_until_daa: u64,
+    challenger: PalwBondKeyV2,
+    mut sign: impl FnMut(&[u8], &[u8]) -> Option<Vec<u8>>,
+) -> Result<NativeRetainedV1<crate::palw_state_v2::PalwConsensusObjectV2>, String> {
+    use crate::{
+        palw_monetary_material_v1::PalwMonetaryMaterialActionV1 as A,
+        palw_provider_court_v1::{PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, palw_provider_court_message_v1},
+        palw_state_v2::PalwConsensusObjectV2 as O,
+    };
+    query.validate()?;
+    if valid_until_daa == 0 || challenger == query.provider {
+        return Err("availability challenge deadline/identity differs".into());
+    }
+    let count = std::mem::size_of::<O>() as u64
+        + std::mem::size_of::<A>() as u64
+        + 16384
+        + 2 * crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64;
+    let lease = reserve_native_requests_v1(count).map_err(|e| e.to_string())?;
+    let action = A::ChallengeCurrentV4 {
+        root: query.root,
+        consent: query.consent,
+        provider: query.provider,
+        dependency: query.dependency,
+        stage: query.stage,
+        position: query.position,
+        valid_until_daa,
+    };
+    let bytes = borsh::to_vec(&action).map_err(|e| e.to_string())?;
+    let message = palw_provider_court_message_v1(network, 242, &challenger, &bytes);
+    let signature = sign(message.as_byte_slice(), PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1)
+        .ok_or("availability challenge own signer unavailable")?;
+    if signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
+        return Err("availability challenge signature length differs".into());
+    }
+    Ok(NativeRetainedV1::from_owner_reserved_v1(
+        O::MonetaryMaterialActionV1 { action: Box::new(action), signer: challenger, signature },
+        lease,
+    ))
+}
+
+/// Off-chain acquisition cause. None is arithmetic guilt or a successful
+/// verifier approval. Legacy unclassified adapters map to Unknown, never infer
+/// provider fault from an error string.
+#[derive(Debug, thiserror::Error)]
+pub enum PalwKernelMaterialFetchErrorV4 {
+    #[error("local material capacity: {0}")]
+    LocalCapacity(String),
+    #[error("material unavailable: {0}")]
+    Unavailable(String),
+    #[error("material authentication/framing: {0}")]
+    InvalidMaterial(String),
+    #[error("material acquisition unclassified: {0}")]
+    Unknown(String),
+}
+
+/// Typed native read used by admission as well as off-chain read permission.
+/// Resource exhaustion retains its cause and cannot convict a valid carrier.
+pub fn material_provider_generation_v4(
+    state: &PalwChainStateV2,
+    root: Hash64,
+    provider: PalwBondKeyV2,
+) -> Result<Option<Hash64>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    use crate::{
+        palw_material_release_recovery_v2::{PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, PalwMaterialRecoveryRowV2},
+        palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1 as E, retain_native_value_decode_classified_v1},
+    };
+    let Some(route) = state.kernel_route() else { return Ok(None) };
+    let Some(raw) = route
+        .aux
+        .iter()
+        .find(|((t, k), _)| *t == PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2 && k.as_slice() == root.as_byte_slice())
+        .map(|(_, b)| b.as_slice())
+    else {
+        return Ok(None);
+    };
+    preflight_native_value_v1::<PalwMaterialRecoveryRowV2>(raw, raw.len() as u64).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::Unsupported {
+            E::Resource(NativeCoverageV1::unsupported::<PalwMaterialRecoveryRowV2>("current material generation", &e.to_string()))
+        } else {
+            E::Decode(e.to_string())
+        }
+    })?;
+    let row =
+        retain_native_value_decode_classified_v1(raw, || borsh::from_slice::<PalwMaterialRecoveryRowV2>(raw)).map_err(
+            |e| match e {
+                E::Resource(e) => E::Resource(e),
+                E::Decode(e) => E::Decode(e.to_string()),
+            },
+        )?;
+    let PalwMaterialRecoveryRowV2::Active(contract) = &*row else { return Ok(None) };
+    Ok(contract.generations.iter().rev().find(|g| g.providers.contains(&provider)).map(|g| g.consent))
 }

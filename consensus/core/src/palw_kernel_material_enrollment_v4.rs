@@ -16,7 +16,7 @@ pub struct PalwKernelMaterialIngressOwnedV4 {
     pub network: Hash64,
     pub context: NativeRetainedV1<crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4>,
 }
-fn hash<T: BorshSerialize>(domain: &[u8], value: &T) -> Result<Hash64, String> {
+pub(crate) fn hash<T: BorshSerialize>(domain: &[u8], value: &T) -> Result<Hash64, String> {
     struct Sink(blake2b_simd::State);
     impl std::io::Write for Sink {
         fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
@@ -169,8 +169,28 @@ pub fn kernel_material_enrollment_v4(
     Ok(PalwKernelMaterialIngressOwnedV4 { verified, enrollment, network, context })
 }
 
-/// Identity authentication only. This does not establish computation correctness
-/// or native acceptance. The caller supplies its actual configured provider key.
+/// Extract only explicitly bounded material generations. Legacy Replace has no
+/// signed native deadline and cannot be expired as an initial enrollment.
+pub fn kernel_material_capsule_identity_v4(
+    capsule: &PalwMaterialRecoveryActionV2,
+) -> Result<(&PalwMonetaryMaterialEnrollmentV1, Hash64, u64), String> {
+    let wire = borsh::object_length(capsule).map_err(|e| e.to_string())? as u64;
+    let _scratch = reserve_native_requests_v1(wire.max(1024).checked_mul(8).ok_or("kernel capsule identity workspace overflow")?)
+        .map_err(|e| e.to_string())?;
+    match capsule {
+        PalwMaterialRecoveryActionV2::FundedEnroll { monetary, .. } => {
+            Ok((monetary, monetary.id(), monetary.terms.enrollment_until_daa))
+        }
+        PalwMaterialRecoveryActionV2::ReplaceBeforeV4 { replacement, valid_until_daa, .. } => Ok((
+            &replacement.enrollment,
+            capsule.bounded_replacement_consent_v4().ok_or("bounded replacement id absent")?,
+            *valid_until_daa,
+        )),
+        _ => Err("kernel capsule lacks a signed native admission deadline".into()),
+    }
+}
+/// Identity authentication only. This establishes no computation credit or
+/// native acceptance. The caller supplies its actual configured provider key.
 pub fn verify_kernel_context_capsule_v4(
     context: &crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
     capsule: &PalwMaterialRecoveryActionV2,
@@ -180,35 +200,53 @@ pub fn verify_kernel_context_capsule_v4(
     verify: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 ) -> Result<(Hash64, Hash64), String> {
     use crate::palw_provider_court_v1::{PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1 as DOMAIN, palw_provider_court_message_v1 as message};
-    let PalwMaterialRecoveryActionV2::FundedEnroll { monetary, terms, providers, .. } = capsule else {
-        return Err("kernel context has no funded identity capsule".into());
-    };
     let n = borsh::object_length(capsule).map_err(|e| e.to_string())? as u64;
-    let _scratch = reserve_native_requests_v1(n.max(1024).checked_mul(6).ok_or("kernel capsule identity scratch overflow")?)
+    let _scratch = reserve_native_requests_v1(n.max(1024).checked_mul(8).ok_or("kernel capsule identity scratch overflow")?)
         .map_err(|e| e.to_string())?;
+    let (monetary, consent, _) = kernel_material_capsule_identity_v4(capsule)?;
     let intent = &context.intent;
+    let (recovery, tag, ordinary, providers) = match capsule {
+        PalwMaterialRecoveryActionV2::FundedEnroll { terms, providers, .. } => {
+            if terms.root != monetary.terms.root
+                || terms.initial_consent != monetary.id()
+                || terms.sponsor != intent.producer
+                || terms.nonce != monetary.terms.nonce
+                || monetary.terms.nonce
+                    != hash(b"MISAKA/PALW/KERNEL-RECOVERY-NONCE/V4", &(network, context.request, monetary.terms.policy, terms.policy))?
+                || providers.iter().map(|p| &p.provider).ne(intent.providers.iter())
+            {
+                return Err("kernel initial capsule substitutes original signed work/nonce/roster".into());
+            }
+            (hash(b"MISAKA/PALW/RELEASE-RECOVERY-CONSENT/V2", terms)?, 240, monetary.payload(), providers)
+        }
+        PalwMaterialRecoveryActionV2::ReplaceBeforeV4 { recovery, replacement, providers, valid_until_daa, .. } => {
+            if *recovery == Hash64::default()
+                || replacement.root != monetary.terms.root
+                || replacement.previous == Hash64::default()
+                || replacement.sequence == 0
+                || *valid_until_daa == 0
+            {
+                return Err("kernel bounded replacement identity differs".into());
+            }
+            // The new roster consents under fresh 241/242 signatures. Original
+            // producer work bytes/roster are never rewritten to impersonate it.
+            (*recovery, 241, replacement.payload(), providers)
+        }
+        _ => unreachable!(),
+    };
     if context.version != 4
         || monetary.terms.root != intent.manifest.root
         || monetary.terms.material_manifest.as_ref() != Some(&intent.manifest)
         || monetary.terms.native_session.is_some()
         || monetary.terms.sponsor != intent.producer
-        || terms.root != monetary.terms.root
-        || terms.initial_consent != monetary.id()
-        || terms.sponsor != intent.producer
-        || terms.nonce != monetary.terms.nonce
-        || monetary.terms.nonce
-            != hash(b"MISAKA/PALW/KERNEL-RECOVERY-NONCE/V4", &(network, context.request, monetary.terms.policy, terms.policy))?
-        || providers.iter().map(|s| &s.provider).ne(intent.providers.iter())
-        || monetary.offers.iter().map(|o| &o.provider).ne(intent.providers.iter())
+        || providers.iter().map(|p| p.provider).ne(monetary.offers.iter().map(|o| o.provider))
     {
-        return Err("kernel context capsule substitutes signed work/nonce/manifest/roster".into());
+        return Err("kernel context capsule substitutes signed root/manifest/sponsor/roster".into());
     }
     let offer = monetary.offers.iter().find(|p| &p.provider == provider).ok_or("kernel context provider did not consent")?;
-    let recovery = providers.iter().find(|p| &p.provider == provider).ok_or("kernel context recovery consent absent")?;
-    let ordinary = monetary.payload();
-    let recovery_payload = capsule.payload();
-    if !verify(pubkey, message(network, 240, provider, &ordinary).as_byte_slice(), &offer.signature, DOMAIN)
-        || !verify(pubkey, message(network, 242, provider, &recovery_payload).as_byte_slice(), &recovery.signature, DOMAIN)
+    let recovery_signature = providers.iter().find(|p| &p.provider == provider).ok_or("kernel context recovery consent absent")?;
+    if !verify(pubkey, message(network, tag, provider, &ordinary).as_byte_slice(), &offer.signature, DOMAIN)
+        || !verify(pubkey, message(network, 242, provider, &capsule.payload()).as_byte_slice(), &recovery_signature.signature, DOMAIN)
         || !verify(
             &context.producer_pubkey,
             intent.signing_message(network).as_byte_slice(),
@@ -216,9 +254,9 @@ pub fn verify_kernel_context_capsule_v4(
             crate::palw_prospective_kernel_material_v4::PALW_PROSPECTIVE_KERNEL_MATERIAL_CONTEXT_V4,
         )
     {
-        return Err("kernel context original producer/provider signatures invalid".into());
+        return Err("kernel context producer/provider signatures invalid".into());
     }
-    Ok((monetary.id(), hash(b"MISAKA/PALW/RELEASE-RECOVERY-CONSENT/V2", terms)?))
+    Ok((consent, recovery))
 }
 /// Only a current positive native contract/generation authorizes replay for an
 /// answer. Absence, a saved checkpoint and a local completion flag never do.
@@ -260,7 +298,7 @@ pub fn require_kernel_context_current_v4(
     preflight_native_value_v1::<PalwMonetaryMaterialRowV1>(raw, raw.len() as u64).map_err(|e| e.to_string())?;
     let monetary =
         retain_native_value_decode_v1(raw, || borsh::from_slice::<PalwMonetaryMaterialRowV1>(raw)).map_err(|e| e.to_string())?;
-    let PalwMaterialRecoveryActionV2::FundedEnroll { monetary: original, .. } = capsule else { unreachable!() };
+    let (original, _, _) = kernel_material_capsule_identity_v4(capsule)?;
     if monetary.terms != original.terms || !monetary.providers.iter().any(|p| p.provider == *provider && !p.charged) {
         return Err("current kernel covenant terms/provider differ".into());
     }
@@ -270,7 +308,13 @@ pub fn require_kernel_context_current_v4(
     let PalwMaterialRecoveryRowV2::Active(contract) = &*row else {
         return Err("kernel context is terminal; no answers authorized".into());
     };
-    if contract.id() != recovery || !contract.generations.iter().any(|g| g.consent == consent && g.providers.contains(provider)) {
+    if monetary.terms.nonce
+        != hash(b"MISAKA/PALW/KERNEL-RECOVERY-NONCE/V4", &(network, context.request, monetary.terms.policy, contract.terms.policy))?
+        || contract.terms.sponsor != context.intent.producer
+        || contract.terms.nonce != monetary.terms.nonce
+        || contract.id() != recovery
+        || !contract.generations.iter().any(|g| g.consent == consent && g.providers.contains(provider))
+    {
         return Err("current kernel recovery does not cover stored provider generation".into());
     }
     Ok(())

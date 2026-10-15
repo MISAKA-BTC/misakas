@@ -282,14 +282,42 @@ impl KernelMaterialContextArchiveV4 {
             .map_err(|e| e.to_string())?;
         Ok(Some(KernelMaterialContextRecordOwnedV4 { owner, _ram: ram }))
     }
+    /// At most one immutable pending replacement for a root/previous/sequence.
+    /// A later explicit deadline cannot silently extend an earlier signature.
+    pub fn check_replacement_slot_v4(&self, capsule: &PalwMaterialRecoveryActionV2) -> Result<(), String> {
+        let PalwMaterialRecoveryActionV2::ReplaceBeforeV4 { replacement, .. } = capsule else { return Ok(()) };
+        let coverage = capsule.native_heap_v1("replacement slot borrowed capsule");
+        let count = coverage
+            .bytes()
+            .ok_or_else(|| coverage.to_string())?
+            .checked_add(std::mem::size_of::<PalwMaterialRecoveryActionV2>() as u64)
+            .ok_or("replacement slot size overflow")?;
+        let _ram = self.ram.reserve(count)?;
+        let wire = borsh::object_length(capsule).map_err(|e| e.to_string())? as u64;
+        let _native = reserve_native_requests_v1(
+            count.checked_add(canonical_buffers_v4(wire, 2)?).ok_or("replacement slot workspace overflow")?,
+        )
+        .map_err(|e| e.to_string())?;
+        let _identity = self.ram.reserve(canonical_buffers_v4(wire, 2)?)?;
+        let consent = capsule.bounded_replacement_consent_v4().ok_or("bounded replacement identity absent")?;
+        for id in self.rows.keys() {
+            if *id == consent {
+                continue;
+            }
+            let old = self.get(*id)?.ok_or("replacement slot row vanished")?;
+            if let PalwMaterialRecoveryActionV2::ReplaceBeforeV4 { replacement: prior, .. } = &old.capsule {
+                if prior.root == replacement.root && prior.previous == replacement.previous && prior.sequence == replacement.sequence {
+                    return Err("root/previous/sequence already has an immutable signed replacement deadline".into());
+                }
+            }
+        }
+        Ok(())
+    }
     pub fn insert(
         &mut self,
         context: &PalwProspectiveKernelMaterialContextV4,
         capsule: &PalwMaterialRecoveryActionV2,
     ) -> Result<Hash64, String> {
-        let PalwMaterialRecoveryActionV2::FundedEnroll { monetary, .. } = capsule else {
-            return Err("kernel metadata capsule must be atomic FundedEnroll".into());
-        };
         let borrowed = context.native_heap_v1("kernel metadata borrowed context").add::<KernelMaterialContextRecordV4>(
             capsule.native_heap_v1("kernel metadata borrowed capsule"),
             "kernel metadata borrowed input",
@@ -303,13 +331,15 @@ impl KernelMaterialContextArchiveV4 {
         let capsule_bytes = borsh::object_length(capsule).map_err(|e| e.to_string())? as u64;
         let _identity_ram = self.ram.reserve(canonical_buffers_v4(capsule_bytes, 2)?)?;
         let _identity = reserve_native_requests_v1(canonical_buffers_v4(capsule_bytes, 2)?).map_err(|e| e.to_string())?;
-        let consent = monetary.id();
+        let (monetary, consent, _) =
+            kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_capsule_identity_v4(capsule)?;
         if monetary.terms.root != context.intent.manifest.root
             || monetary.terms.material_manifest.as_ref() != Some(&context.intent.manifest)
             || monetary.terms.native_session.is_some()
         {
             return Err("kernel metadata capsule substitutes exact manifest".into());
         }
+        self.check_replacement_slot_v4(capsule)?;
         let len = borsh::object_length(&(context, capsule)).map_err(|e| e.to_string())? as u64;
         if len > self.limits.max_encoded_bytes / 2 {
             return Err("kernel metadata row exceeds declared DB cap before publication".into());
@@ -331,16 +361,12 @@ impl KernelMaterialContextArchiveV4 {
             if previous.context.request != context.request || previous.capsule.payload() != capsule.payload() {
                 return Err("kernel metadata consent replay substitutes context/capsule".into());
             }
-            let PalwMaterialRecoveryActionV2::FundedEnroll { monetary: old, providers: old_providers, .. } = &previous.capsule else {
-                unreachable!()
-            };
-            let PalwMaterialRecoveryActionV2::FundedEnroll { monetary: new, providers: new_providers, .. } = capsule else {
-                unreachable!()
-            };
-            let old_complete =
-                old.offers.iter().all(|o| !o.signature.is_empty()) && old_providers.iter().all(|p| !p.signature.is_empty());
-            let new_complete =
-                new.offers.iter().all(|o| !o.signature.is_empty()) && new_providers.iter().all(|p| !p.signature.is_empty());
+            let (old, _, _) =
+                kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_capsule_identity_v4(&previous.capsule)?;
+            let old_complete = old.offers.iter().all(|o| !o.signature.is_empty())
+                && previous.capsule.provider_signatures().iter().all(|p| !p.signature.is_empty());
+            let new_complete = monetary.offers.iter().all(|o| !o.signature.is_empty())
+                && capsule.provider_signatures().iter().all(|p| !p.signature.is_empty());
             if old_complete || !new_complete {
                 return Ok(consent);
             }

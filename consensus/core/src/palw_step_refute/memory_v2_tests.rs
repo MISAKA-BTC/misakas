@@ -122,7 +122,7 @@ fn genesis_and_legacy_hybrid_missing_serializer_are_explicit() {
     assert!(gdn_replay_start_v2(&b, &out).is_err());
 }
 
-fn genesis_evidence(fault: bool) -> PalwGdnStepRefutationV2 {
+pub(crate) fn genesis_evidence(fault: bool) -> PalwGdnStepRefutationV2 {
     let (mut b, _, mut rows) = fixtures::honest_execution();
     b.shape_profile.state_chunk_map_id = maps::gdn_state_chunk_map_id_v2();
     b.state_chunk_map_id = b.shape_profile.state_chunk_map_id;

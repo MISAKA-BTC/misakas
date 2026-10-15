@@ -8543,6 +8543,10 @@ impl VirtualStateProcessor {
         self.palw_shard_court.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    pub(super) fn palw_memory_routing_court_v2_at(&self, daa_score: u64) -> bool {
+        self.palw_memory_routing_court_v2.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     /// **ADR-0100 Decision 4, resolved in exactly one place.**
     pub(super) fn palw_shard_licensing_at(&self, daa_score: u64) -> bool {
         self.palw_shard_licensing.is_some_and(|fence| fence.is_active(daa_score))
