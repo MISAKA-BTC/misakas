@@ -25,8 +25,8 @@ Prerequisites the operator owns (see docs/design/palw/rfc-0016-implementation-st
   * a launch command template that starts / stops one miner: --launch-cmd "… {miner} {bond} {model} {action}".
 
 Usage (python -I):
-  rfc0016_sigma_k_measure.py plan --sigmas 0,100,250,500,1000,2000 --ks 1000,1250,1500,2000 --phis 250,500,750 \
-      --paces 1000,1200,1500 --base-values "<18 ints for the non-swept terms>" --scenarios E1,E2,E3,E4,E5,E6 --out plan.json
+  rfc0016_sigma_k_measure.py plan [--sigmas 0,100,250,500,1000,2000] [--ks 1000] [--phis 250,500,750] [--paces 1000,1200,1500] \
+      [--base-values "<18 ints>"  (default: the 2026-10-15 calibration starting set)] --scenarios E1,E2,E3,E4,E5,E6 --out plan.json
   rfc0016_sigma_k_measure.py run --manifest run.json --duration-daa 4320 --out DIR [--port 26314] [--poll-secs 30]
       --launch-cmd "scripts/ops/start-miner.sh {miner} {bond} {model} {action}"
   rfc0016_sigma_k_measure.py summarize --events DIR/events.jsonl --manifest run.json --track-tol-ppm N \
@@ -51,6 +51,19 @@ FIELDS = [
     "verifier_slope_gamma_permille", "verifier_util_target_permille", "opv_checks_per_claim_permille",
     "opv_checks_per_verifier_epoch",
 ]
+
+# User decisions 2026-10-15 (RFC-0016 §14.1): the CALIBRATION STARTING SET — mirrors `PALW_RFC0016_CALIBRATION_START_V1`
+# (consensus/core/src/palw_rfc0016_v1/values.rs). V2: σ = 0.25, φ = 0.5, pace margin 1.2, k = 1 (the tilt stays off). The terms the
+# user left to measurement (queue length / TTL, h, γ, u*, OPV checks) are PROBES the sweep moves. Never production values.
+CALIBRATION_START = {
+    "sigma_permille": 250, "tilt_k_permille": 1000, "reissue_checkpoint_permille": 500, "pace_margin_permille": 1200,
+    "entrant_reserve_permille": 20, "entrant_max_per_model_permille": 2, "entrant_min_capital_sompi": 0, "entrant_age_daa": 21600,
+    "capacity_safety_permille": 1000, "c7_measured_concurrency": 0, "queue_len_per_class": 8, "queue_ttl_daa": 720,
+    "quote_margin_h": 2, "verifier_share_base_permille": 200, "verifier_slope_gamma_permille": 100,
+    "verifier_util_target_permille": 700, "opv_checks_per_claim_permille": 500, "opv_checks_per_verifier_epoch": 10,
+}
+# V2: the sweep still measures every §8.6 candidate; k is pinned to 1 (a calibration build refuses another k).
+DEFAULT_SWEEP = {"sigmas": "0,100,250,500,1000,2000", "ks": "1000", "phis": "250,500,750", "paces": "1000,1200,1500"}
 
 # Scenario templates: which miners run where, in relative terms. `ref` is the reference model (Qwen2.5-1.5B A16), `alt` a model of a
 # different CCU. `capital` is the bond weight of the model's miners (relative), `compute` the miners' count (each at the reference
@@ -95,7 +108,9 @@ def parse_values(text):
 
 
 def cmd_plan(a):
-    base = parse_values(a.base_values)
+    base = parse_values(a.base_values) if a.base_values else dict(CALIBRATION_START)
+    if any(int(k) != 1000 for k in a.ks.split(",")):
+        raise SystemExit("RFC-0016 V2 (2026-10-15): k = 1 — the auxiliary tilt is not wired; a calibration build refuses another k")
     runs = []
     for s, k, phi, pace in itertools.product(*(map(int, x.split(",")) for x in (a.sigmas, a.ks, a.phis, a.paces))):
         v = dict(base, sigma_permille=s, tilt_k_permille=k, reissue_checkpoint_permille=phi, pace_margin_permille=pace)
@@ -150,6 +165,82 @@ def cmd_run(a):
             launch(a.launch_cmd, m, "stop")
 
 
+# V5 (user decision 2026-10-15): one calibration epoch = 720 DAA; the 30-day window = 21,600 DAA. An epoch is a DAA count — its
+# wall-clock span is MEASURED here (DAA vs wall clock, and DAA vs the chain's own timestamps), never labelled "24 h".
+EPOCH_DAA = 720
+AVERAGE_WINDOW_DAA = 30 * EPOCH_DAA
+NOMINAL_MS_PER_DAA = 120_000
+
+
+def epoch_clock(lines):
+    """Pure: DAA vs wall-clock drift over the recorded polls (and vs the sink timestamps the report carries, where present)."""
+    if len(lines) < 2 or lines[-1]["daa"] <= lines[0]["daa"] or "wall" not in lines[0] or "wall" not in lines[-1]:
+        return {"epoch_daa": EPOCH_DAA, "note": "too few timed polls to measure the epoch's wall-clock span"}
+    ddaa = lines[-1]["daa"] - lines[0]["daa"]
+    wall_ms_per_daa = (lines[-1]["wall"] - lines[0]["wall"]) * 1000.0 / ddaa
+    out = {
+        "epoch_daa": EPOCH_DAA,
+        "average_window_daa": AVERAGE_WINDOW_DAA,
+        "nominal_ms_per_daa": NOMINAL_MS_PER_DAA,
+        "observed_wall_ms_per_daa": round(wall_ms_per_daa, 1),
+        "observed_epoch_wall_hours": round(EPOCH_DAA * wall_ms_per_daa / 3_600_000.0, 3),
+        "drift_permille_vs_nominal": round((wall_ms_per_daa - NOMINAL_MS_PER_DAA) * 1000.0 / NOMINAL_MS_PER_DAA, 1),
+        "label": f"epoch = {EPOCH_DAA} DAA (wall-clock span measured; never assumed)",
+    }
+
+    def sink(line):
+        try:
+            clock = json.loads(line["report"].get("reportJson") or "{}").get("epochClock") or {}
+            value = clock.get("sinkTimestampMs")
+            return int(value) if value not in (None, "null") else None
+        except (AttributeError, KeyError, ValueError, TypeError):
+            return None
+
+    t0, t1 = sink(lines[0]), sink(lines[-1])
+    if t0 is not None and t1 is not None:
+        out["observed_chain_ms_per_daa"] = round((t1 - t0) / ddaa, 1)
+    return out
+
+
+# V6 (user decision 2026-10-15): the pass thresholds the selection applies to EVERY run (calibration targets; the minimum new-model
+# opportunity and T4's final numbers are fixed later from E1–E6 measurements, not here):
+#   * safety / accounting invariant violations: 0 (mandatory);
+#   * the honest minimal miner's cap utilization: ≥ 800 ‰ (calibration target);
+#   * continuous REAL production versus the same scenario WITHOUT V+: degradation ≤ 50 ‰ (provisional).
+INVARIANT_VIOLATIONS_MAX = 0
+HONEST_CAP_UTILIZATION_MIN_PERMILLE = 800
+REAL_DEGRADATION_MAX_PERMILLE = 50
+
+
+def invariant_violations(reports, values):
+    """Pure: the safety / accounting invariants a report sequence must keep — the epoch total (Σ consumed ≤ Σ issued), each model's
+    σ cap (consumed ≤ issued · (1 + σ)), no negative unused rights, and monotone consumed coinbase / escrow payouts within an epoch."""
+    sigma = int((values or {}).get("sigma_permille") or 0)
+    out = []
+    prev = {}
+    for i, r in enumerate(reports):
+        rows = r.get("models") or []
+        num = lambda d, k: int(d.get(k) or 0)
+        issued_total = sum(int(m["targets"].get("rightsIssued") or 0) for m in rows)
+        consumed_total = sum(num(m["outcomes"], "rightsConsumed") for m in rows)
+        if consumed_total > issued_total:
+            out.append(f"report {i}: consumed {consumed_total} > issued {issued_total} (epoch total)")
+        for m in rows:
+            issued = int(m["targets"].get("rightsIssued") or 0)
+            consumed = num(m["outcomes"], "rightsConsumed")
+            if consumed > issued + issued * sigma // 1000:
+                out.append(f"report {i}: {m['model']} consumed {consumed} > issued {issued} · (1 + σ)")
+            if num(m["outcomes"], "rightsUnused") < 0:
+                out.append(f"report {i}: {m['model']} negative unused rights")
+            key = (m["model"], m.get("epoch"))
+            for field in ("payoutCoinbaseSompi", "payoutEscrowSompi"):
+                now = num(m["outcomes"], field)
+                if key in prev and now < prev[key].get(field, 0):
+                    out.append(f"report {i}: {m['model']} {field} fell within its epoch")
+            prev[key] = {f: num(m["outcomes"], f) for f in ("payoutCoinbaseSompi", "payoutEscrowSompi")}
+    return out
+
+
 def summarize(lines, manifest, bounds):
     """Pure: outcomes per model from the last report and the pass conditions (also what --self-test checks)."""
     reports = [json.loads(l["report"].get("reportJson") or "{}") if isinstance(l.get("report"), dict) else {} for l in lines]
@@ -173,6 +264,9 @@ def summarize(lines, manifest, bounds):
             "rights_issued": int(row["targets"].get("rightsIssued") or 0),
             "queue_wait_max_daa": o.get("queueWaitMaxDaa"),
             "heartbeat_dependent_daa": o.get("heartbeatDependentDaa"),
+            # V9 (2026-10-15): measured SEPARATELY — the share actually checked, and the share completed within its deadline.
+            "checked_share_permille": o.get("checkedSharePermille"),
+            "completed_within_deadline_permille": o.get("completedWithinDeadlinePermille"),
             "node_local (not consensus)": row.get("nodeLocal"),
         }
     tot = sum(m["physical_blocks"] for m in models.values()) or 1
@@ -189,11 +283,28 @@ def summarize(lines, manifest, bounds):
     unused = sum(m["rights_unused"] for m in models.values())
     if issued and unused * 1000 > issued * bounds["unminted_max_permille"]:
         fails.append(f"unminted rights {unused} of {issued}")
+    # V6: invariant violations (0 mandatory), honest cap utilization (≥ 800 ‰) and REAL degradation vs no-V+ (≤ 50 ‰, provisional).
+    violations = invariant_violations(reports, manifest.get("values")) + list(manifest.get("node_invariant_violations") or [])
+    if len(violations) > INVARIANT_VIOLATIONS_MAX:
+        fails.extend(f"invariant: {v}" for v in violations)
+    for mid, m in models.items():
+        role = manifest.get("roles", {}).get(mid, {})
+        cap = int(role.get("honest_minimal_cap_blocks") or 0)
+        if cap and m["physical_blocks"] * 1000 < cap * HONEST_CAP_UTILIZATION_MIN_PERMILLE:
+            fails.append(f"{mid}: honest minimal miner used {m['physical_blocks']} of its cap {cap} (< 800 permille)")
+    real = sum(m["physical_blocks"] for m in models.values())
+    baseline = bounds.get("baseline_real_blocks")
+    if baseline:
+        degradation = max(0, (baseline - real) * 1000 // baseline)
+        if degradation > REAL_DEGRADATION_MAX_PERMILLE:
+            fails.append(f"continuous REAL production degraded {degradation} permille vs no-V+ (> 50, provisional)")
     hb = max((int(m["heartbeat_dependent_daa"] or 0) for m in models.values()), default=0)
     span = max(1, (lines[-1]["daa"] - lines[0]["daa"]))
     if hb * 1000 > span * bounds["hb_max_permille"]:
         fails.append(f"heartbeat-dependent {hb} of {span} DAA")
-    return {"models": models, "fails": fails, "values": manifest.get("values"), "scenario": manifest.get("scenario")}
+    return {"models": models, "fails": fails, "values": manifest.get("values"), "scenario": manifest.get("scenario"),
+            "real_blocks": real, "invariant_violations": violations,
+            "epoch_clock (V5: measured, not assumed)": epoch_clock(lines)}
 
 
 def cmd_summarize(a):
@@ -201,6 +312,10 @@ def cmd_summarize(a):
     manifest = json.loads(Path(a.manifest).read_text())
     bounds = {"track_tol_ppm": a.track_tol_ppm, "unminted_max_permille": a.unminted_max_permille,
               "hb_max_permille": a.hb_max_permille, "surge_min_permille": a.surge_min_permille}
+    # V6: the same scenario's run WITHOUT V+ is the REAL-production baseline (no baseline: the degradation condition is reported
+    # as UNKNOWN by `select`, never as passed).
+    if a.baseline:
+        bounds["baseline_real_blocks"] = int(json.loads(Path(a.baseline).read_text()).get("real_blocks") or 0)
     s = summarize(lines, manifest, bounds)
     s["bounds"] = bounds
     Path(a.out).write_text(json.dumps(s, indent=1))
@@ -216,7 +331,9 @@ def cmd_select(a):
     region, conflicts = [], {}
     for key, runs in points.items():
         fails = [f"{r.get('scenario')}: {x}" for r in runs for x in (r.get("fails") or [])] + \
-                [f"{r.get('scenario')}: {r['error']}" for r in runs if r.get("error")]
+                [f"{r.get('scenario')}: {r['error']}" for r in runs if r.get("error")] + \
+                [f"{r.get('scenario')}: REAL degradation vs no-V+ UNKNOWN (no --baseline): V6 is not passed by default"
+                 for r in runs if not (r.get("bounds") or {}).get("baseline_real_blocks")]
         (conflicts.__setitem__(key, fails) if fails else region.append(json.loads(key)))
     print(json.dumps({"passing_region": region, "conflicts": conflicts}, indent=1))
     if not region:
@@ -227,6 +344,9 @@ def cmd_select(a):
 def self_test():
     v = dict(zip(FIELDS, range(18)))
     assert parse_values(values_string(v)) == v
+    assert set(CALIBRATION_START) == set(FIELDS)
+    assert (CALIBRATION_START["sigma_permille"], CALIBRATION_START["reissue_checkpoint_permille"],
+            CALIBRATION_START["pace_margin_permille"], CALIBRATION_START["tilt_k_permille"]) == (250, 500, 1200, 1000)
     lines = [
         {"daa": 0, "report": {"reportJson": json.dumps({"models": [
             {"model": "A", "targets": {"pPpm": "800000", "rightsIssued": "100"}, "outcomes": {"physicalBlocks": "0"}}]})}},
@@ -237,6 +357,20 @@ def self_test():
     s = summarize(lines, {"roles": {"A": {"bond_heavy_with_compute": True}}},
                   {"track_tol_ppm": 300_000, "unminted_max_permille": 100, "hb_max_permille": 100, "surge_min_permille": 0})
     assert s["models"]["A"]["physical_blocks"] == 80
+    assert any("invariant" in f for f in summarize(
+        [{"daa": 0, "report": {"reportJson": json.dumps({"models": [
+            {"model": "B", "targets": {"rightsIssued": "10"}, "outcomes": {"rightsConsumed": "13"}}]})}}],
+        {"values": {"sigma_permille": 250}}, {"track_tol_ppm": 0, "unminted_max_permille": 1000, "hb_max_permille": 1000,
+                                              "surge_min_permille": 0})["fails"]), "13 > 10 · 1.25 is a violation"
+    deg = summarize(lines, {}, {"track_tol_ppm": 0, "unminted_max_permille": 1000, "hb_max_permille": 1000,
+                                "surge_min_permille": 0, "baseline_real_blocks": 100})
+    assert any("degraded 200" in f for f in deg["fails"]), deg["fails"]
+    cap = summarize(lines, {"roles": {"A": {"honest_minimal_cap_blocks": 120}}},
+                    {"track_tol_ppm": 10**9, "unminted_max_permille": 1000, "hb_max_permille": 1000, "surge_min_permille": 0})
+    assert any("honest minimal" in f for f in cap["fails"]), "80 of 120 < 800 permille"
+    clock = epoch_clock([{"daa": 0, "wall": 0.0, "report": {}}, {"daa": 720, "wall": 720 * 150.0, "report": {}}])
+    assert clock["observed_epoch_wall_hours"] == 30.0 and clock["drift_permille_vs_nominal"] == 250.0, clock
+    assert "24 h" not in clock["label"]
     assert any("unminted" in f for f in s["fails"]), s["fails"]
     print("self-test: plan/summarize logic holds (no node contacted, no value decided)")
 
@@ -248,8 +382,11 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     pl = sub.add_parser("plan")
-    for name in ("sigmas", "ks", "phis", "paces", "base_values", "scenarios", "out"):
-        pl.add_argument("--" + name.replace("_", "-"), dest=name, required=True)
+    for name in ("sigmas", "ks", "phis", "paces"):
+        pl.add_argument("--" + name, dest=name, default=DEFAULT_SWEEP[name])
+    pl.add_argument("--base-values", dest="base_values", default=None, help="18 ints; default: the calibration starting set")
+    for name in ("scenarios", "out"):
+        pl.add_argument("--" + name, dest=name, required=True)
     r = sub.add_parser("run")
     r.add_argument("--manifest", required=True)
     r.add_argument("--duration-daa", type=int, required=True)
@@ -263,6 +400,7 @@ def main():
     s.add_argument("--out", required=True)
     for b in ("track_tol_ppm", "unminted_max_permille", "hb_max_permille", "surge_min_permille"):
         s.add_argument("--" + b.replace("_", "-"), dest=b, type=int, required=True)
+    s.add_argument("--baseline", default=None, help="summary.json of the same scenario without V+ (V6 REAL degradation)")
     sel = sub.add_parser("select")
     sel.add_argument("--summaries", nargs="+", required=True)
     a = p.parse_args()

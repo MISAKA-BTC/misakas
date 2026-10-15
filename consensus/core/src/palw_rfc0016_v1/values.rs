@@ -99,6 +99,83 @@ pub const PALW_RFC0016_VALUES_V1: PalwRfc0016ValuesV1 = PalwRfc0016ValuesV1 {
     opv_checks_per_verifier_epoch: 0,
 };
 
+// ---- User decisions 2026-10-15 (RFC-0016 §14.1): CALIBRATION STARTING POINTS — never production values; production approval is
+// ---- withheld and the measured-value gate below still refuses every non-calibration network. ----------------------------------
+
+/// **V2: σ's calibration starting point** (0.25). The sweep still measures every §8.6 candidate.
+pub const PALW_RFC0016_SIGMA_CALIBRATION_PERMILLE_V1: u32 = 250;
+/// **V2: φ's calibration starting point** (0.5).
+pub const PALW_RFC0016_REISSUE_CHECKPOINT_CALIBRATION_PERMILLE_V1: u32 = 500;
+/// **V2: the pace margin's calibration starting point** (1.2).
+pub const PALW_RFC0016_PACE_MARGIN_CALIBRATION_PERMILLE_V1: u32 = 1_200;
+/// **V2: k = 1** — the auxiliary ticket tilt stays OFF (it is not wired into the lottery; a calibration build may not arm another k).
+pub const PALW_RFC0016_TILT_K_CALIBRATION_PERMILLE_V1: u32 = 1_000;
+
+/// **V3: the entrant reserve's calibration cap** — 20 ‰ of the network's total block opportunity, as ONE pool shared with RFC-0017's
+/// Probation budget (explicit netting in `palw_rights_shared_pool_left_v1`; never reserved twice).
+pub const PALW_RFC0016_ENTRANT_RESERVE_MAX_PERMILLE_V1: u32 = 20;
+/// **V3: one entrant's (and one Probation model's) calibration cap** — 2 ‰ (RFC-0017's `probation_model_permille` design value).
+pub const PALW_RFC0016_ENTRANT_MAX_PER_MODEL_CALIBRATION_PERMILLE_V1: u32 = 2;
+
+/// **V5: the calibration epoch, in DAA** — 720 DAA = ONE epoch (the nominal day at the 120 s clock slot). It is a DAA count: its
+/// wall-clock span is MEASURED and reported (the report's epoch clock, the harness's drift), never labelled "24 h".
+pub const PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1: u64 = 720;
+/// **V5: the 30-day average's nominal window, in DAA** — 30 calibration epochs (21,600 DAA); a DAA count, not a wall-clock month.
+pub const PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1: u64 = 30 * PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1;
+
+/// **V9: the verifier share's calibration baseline** — 20 % (200 ‰), inside ADR-0132 C's 10–30 % clamp which the slope never leaves.
+/// A split of the SAME claim pay: no new issuance pays verifiers.
+pub const PALW_RFC0016_VERIFIER_SHARE_BASE_CALIBRATION_PERMILLE_V1: u32 = 200;
+
+/// **The calibration starting set** (user decisions 2026-10-15). The decided terms are the named constants above (and, as their
+/// decisions land, V3 / V5 / V8 / V9's); the terms the user left to measurement (`L_queue`, `T_queue`, `h`, `γ`, `u*`, the OPV check
+/// supply) are PROBES the harness sweeps — never decided values. An isolated calibration network runs this set unless its build
+/// carries `MISAKA_RFC0016_CALIBRATION_VALUES`. Not armable anywhere else (no measured record).
+pub const PALW_RFC0016_CALIBRATION_START_V1: PalwRfc0016ValuesV1 = PalwRfc0016ValuesV1 {
+    sigma_permille: PALW_RFC0016_SIGMA_CALIBRATION_PERMILLE_V1,
+    tilt_k_permille: PALW_RFC0016_TILT_K_CALIBRATION_PERMILLE_V1,
+    reissue_checkpoint_permille: PALW_RFC0016_REISSUE_CHECKPOINT_CALIBRATION_PERMILLE_V1,
+    pace_margin_permille: PALW_RFC0016_PACE_MARGIN_CALIBRATION_PERMILLE_V1,
+    entrant_reserve_permille: PALW_RFC0016_ENTRANT_RESERVE_MAX_PERMILLE_V1,
+    entrant_max_per_model_permille: PALW_RFC0016_ENTRANT_MAX_PER_MODEL_CALIBRATION_PERMILLE_V1,
+    // V3: `S_entry` is the network's eligible minimum producer bond (the fold takes `max(this, min_collateral_sompi)`); 0 adds nothing.
+    entrant_min_capital_sompi: 0,
+    // V5: an entrant is a model younger than the 30-day window (21,600 DAA).
+    entrant_age_daa: PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1,
+    // PROBES (measured, not decided):
+    capacity_safety_permille: 1_000,
+    c7_measured_concurrency: 0,
+    queue_len_per_class: 8,
+    queue_ttl_daa: 720,
+    quote_margin_h: 2,
+    verifier_share_base_permille: PALW_RFC0016_VERIFIER_SHARE_BASE_CALIBRATION_PERMILLE_V1,
+    verifier_slope_gamma_permille: 100,
+    verifier_util_target_permille: 700,
+    opv_checks_per_claim_permille: 500,
+    opv_checks_per_verifier_epoch: 10,
+};
+
+/// **The decided calibration terms a calibration build must keep** (user decisions 2026-10-15): `k = 1` (V2: the tilt is not wired,
+/// so no build may pretend to measure another `k`). `Err` names the first term that strays; the swept terms (σ, φ, pace) are free.
+pub fn palw_rfc0016_calibration_conforms_v1(values: &PalwRfc0016ValuesV1) -> Result<(), &'static str> {
+    if values.tilt_k_permille != PALW_RFC0016_TILT_K_CALIBRATION_PERMILLE_V1 {
+        return Err("RFC-0016 V2: k = 1 (tilt_k_permille = 1000) — the auxiliary tilt is not wired into the lottery");
+    }
+    if values.entrant_reserve_permille > PALW_RFC0016_ENTRANT_RESERVE_MAX_PERMILLE_V1 {
+        return Err("RFC-0016 V3: the entrant reserve (shared with RFC-0017's Probation budget) is at most 20 permille");
+    }
+    if values.entrant_max_per_model_permille > values.entrant_reserve_permille {
+        return Err("RFC-0016 V3: one entrant's cap cannot exceed the shared pool");
+    }
+    Ok(())
+}
+
+/// **V11 (user decision 2026-10-15): the coinbase-receiving mining route is NOT migrated off the Panel this round.** The V2 Attempt
+/// route keeps its existing Panel (Panel=1 hold, coinbase-derived escrow); the Kernel/OPV route's Panel=0 is a different, user-paid
+/// route and never makes the coinbase route Panel-free (D-P5). A migration needs real-node tests of verification, rotation,
+/// liability and Final first, then a separate decision — flipping this is that decision, never a value.
+pub const PALW_RFC0016_COINBASE_PANEL_MIGRATION_V1: bool = false;
+
 /// σ, named (placeholder until measured).
 pub const PALW_RFC0016_SIGMA_PERMILLE_V1: u32 = PALW_RFC0016_VALUES_V1.sigma_permille;
 /// k, named (placeholder until measured; 1000 = the tilt is off).
@@ -159,6 +236,7 @@ pub fn palw_rfc0016_parse_values_v1(text: &str) -> Option<PalwRfc0016ValuesV1> {
 /// are both non-zero and distinct.
 pub fn palw_rfc0016_values_measured_v1(values: &PalwRfc0016ValuesV1, records: &[PalwRfc0016MeasuredRecordV1]) -> bool {
     !values.is_placeholder()
+        && palw_rfc0016_calibration_conforms_v1(values).is_ok()
         && records.iter().any(|r| {
             r.values == *values
                 && r.evidence_digest != [0u8; 32]
@@ -215,7 +293,8 @@ impl Params {
         // An isolated calibration network runs the values its build was made for (the σ/k measurement); every other network runs
         // the binary's named constants.
         let values = if self.has_isolated_native_calibration_v34() {
-            palw_rfc0016_calibration_values_v1().unwrap_or(PALW_RFC0016_VALUES_V1)
+            // User decisions 2026-10-15: without a build-time value set the calibration network runs the calibration starting set.
+            palw_rfc0016_calibration_values_v1().unwrap_or(PALW_RFC0016_CALIBRATION_START_V1)
         } else {
             PALW_RFC0016_VALUES_V1
         };
@@ -240,12 +319,13 @@ impl Params {
         if !self.has_isolated_native_calibration_v34() {
             return None;
         }
-        Some(match palw_rfc0016_calibration_values_v1() {
-            Some(values) if !values.is_placeholder() => Ok(()),
-            _ => Err(PalwModeV2Error::Invalid(
-                "an RFC-0016 calibration run needs a build with MISAKA_RFC0016_CALIBRATION_VALUES (18 non-placeholder integers)",
-            )),
-        })
+        let values = palw_rfc0016_calibration_values_v1().unwrap_or(PALW_RFC0016_CALIBRATION_START_V1);
+        if values.is_placeholder() {
+            return Some(Err(PalwModeV2Error::Invalid(
+                "an RFC-0016 calibration run needs non-placeholder values (MISAKA_RFC0016_CALIBRATION_VALUES, or the calibration starting set)",
+            )));
+        }
+        Some(palw_rfc0016_calibration_conforms_v1(&values).map_err(PalwModeV2Error::Invalid))
     }
 
     fn palw_rfc0016_below_v1(fence: Option<ForkActivation>, at: u64) -> bool {
@@ -302,10 +382,31 @@ impl Params {
             ));
         }
         let rights_epoch = bundle.state.epoch_length().max(1);
+        // V3 (user decision 2026-10-15): the entrant reserve and RFC-0017's Probation budget are ONE pool netted per epoch, so the
+        // two must count the same epoch where both are armed.
+        if let Some(eligibility) = bundle.state.model_eligibility_v1()
+            && eligibility.policy.probation_epoch_daa != rights_epoch
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_model_block_rights_v1: the shared new-model pool (V3) needs RFC-0017's probation epoch equal to the rights epoch",
+            ));
+        }
         if allocation.policy.epoch_daa == 0 || allocation.policy.epoch_daa % rights_epoch != 0 {
             return Err(PalwModeV2Error::Invalid(
                 "palw_model_block_rights_v1: the allocation epoch must be a whole number of rights epochs (P_m constant within one)",
             ));
+        }
+        // V5 (user decision 2026-10-15): a calibration run measures ONE epoch = 720 DAA and the 30-day window = 21,600 DAA.
+        if self.has_isolated_native_calibration_v34() {
+            let span = allocation.policy.average.map(|a| a.span_daa());
+            if rights_epoch != PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1
+                || allocation.policy.epoch_daa != PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1
+                || span.is_some_and(|span| span != PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1)
+            {
+                return Err(PalwModeV2Error::Invalid(
+                    "an RFC-0016 calibration run uses one epoch = 720 DAA (rights and allocation) and the 21,600-DAA 30-day window (V5)",
+                ));
+            }
         }
         if let Some(verdict) = self.palw_rfc0016_calibration_allows_v1() {
             return verdict;
@@ -397,6 +498,49 @@ mod tests {
         assert!(PALW_RFC0016_MEASURED_RECORDS_V1.is_empty());
         assert!(!palw_rfc0016_values_measured_v1(&PALW_RFC0016_VALUES_V1, PALW_RFC0016_MEASURED_RECORDS_V1));
         assert_eq!(PALW_RFC0016_TILT_K_PERMILLE_V1, 1_000, "k = 1: the auxiliary tilt is off");
+    }
+
+    /// User decisions 2026-10-15 (V2): the calibration starting set is σ = 0.25, φ = 0.5, pace margin 1.2, k = 1 — runnable in
+    /// calibration, never a measured record (so never armable elsewhere).
+    #[test]
+    fn v2_the_calibration_starting_set_is_the_decided_one() {
+        let v = PALW_RFC0016_CALIBRATION_START_V1;
+        assert_eq!(
+            (v.sigma_permille, v.reissue_checkpoint_permille, v.pace_margin_permille, v.tilt_k_permille),
+            (250, 500, 1_200, 1_000)
+        );
+        assert!(!v.is_placeholder(), "a calibration run can arm it");
+        assert!(palw_rfc0016_calibration_conforms_v1(&v).is_ok());
+        assert!(!palw_rfc0016_values_measured_v1(&v, PALW_RFC0016_MEASURED_RECORDS_V1), "not a measured record");
+        let mut tilted = v;
+        tilted.tilt_k_permille = 1_500;
+        assert!(palw_rfc0016_calibration_conforms_v1(&tilted).is_err(), "k stays 1");
+    }
+
+    /// V5 (user decision 2026-10-15): one calibration epoch is 720 DAA and the 30-day window 21,600 DAA — the same DAA counts the
+    /// ADR-0177 allocation's decided policy uses (one day-equivalent epoch, 30 of them per average).
+    #[test]
+    fn v5_one_epoch_is_720_daa_and_the_window_21_600() {
+        assert_eq!(PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1, 720);
+        assert_eq!(PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1, 21_600);
+        let decided = crate::palw_bond_budget_v1::PalwModelAllocationPolicyV1::decided_unapproved_v3();
+        assert_eq!(decided.epoch_daa, PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1);
+        assert_eq!(decided.average.unwrap().span_daa(), PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1);
+        assert_eq!(PALW_RFC0016_CALIBRATION_START_V1.entrant_age_daa, PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1);
+    }
+
+    /// V11 (user decision 2026-10-15): no coinbase Panel migration — the coinbase-derived origins stay on the Panel (Panel=1) route;
+    /// only the user-paid kernel route is Panel=0, and it carries no coinbase leg.
+    #[test]
+    fn v11_the_coinbase_route_keeps_its_panel() {
+        use crate::palw_bond_budget_v1::{PalwBudgetOriginV1 as O, PalwHoldModeV1, palw_budget_origin_is_user_escrow_v1};
+        assert!(!PALW_RFC0016_COINBASE_PANEL_MIGRATION_V1);
+        for coinbase in [O::Attempt, O::Rider, O::FreePrompt] {
+            assert_eq!(PalwHoldModeV1::for_origin(coinbase), PalwHoldModeV1::PanelOne, "{coinbase:?} stays on the Panel route");
+            assert!(!palw_budget_origin_is_user_escrow_v1(coinbase), "{coinbase:?} is coinbase-derived");
+        }
+        assert_eq!(PalwHoldModeV1::for_origin(O::KernelRoute), PalwHoldModeV1::PanelZero);
+        assert!(palw_budget_origin_is_user_escrow_v1(O::KernelRoute), "Panel=0 is the user-paid route, no coinbase leg");
     }
 
     #[test]
