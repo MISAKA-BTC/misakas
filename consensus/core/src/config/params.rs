@@ -2990,6 +2990,8 @@ pub struct Params {
     pub palw_native_final_v27: Option<crate::palw_native_final_v27::PalwNativeFinalFenceV27>,
     /// Original stage28 book/source/court/Final consent, independent of frozen14.
     pub palw_stage_execution_v28: Option<crate::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
+    /// Owning39 source, class, large material and whole native execution. Dormant on all presets.
+    pub palw_native_execution_v39: Option<crate::palw_native_execution_v39::PalwNativeExecutionFenceV39>,
 
     /// **ADR-0178: rule E, the fork choice that heals a partition on bonded participation** ([`crate::palw_fork_choice_rule_e_v1`]):
     /// past it the sink search weighs every valid tip, the deep-reorg gate and the IBD commit compare the two tips' EXCLUSIVE pasts
@@ -5997,6 +5999,7 @@ impl Params {
             palw_stage_execution_v14: self.palw_stage_execution_v14.clone(),
             palw_native_final_v27: self.palw_native_final_v27.clone(),
             palw_stage_execution_v28: self.palw_stage_execution_v28.clone(),
+            palw_native_execution_v39: self.palw_native_execution_v39.clone(),
             palw_fork_choice_rule_e_v1: self.palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1: self.palw_typed_roots_v1,
             palw_fork_choice_commitment_v1: self.palw_fork_choice_commitment_v1,
@@ -7138,6 +7141,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_stage_execution_v14: None,
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
+    palw_native_execution_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -7475,6 +7479,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_stage_execution_v14: None,
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
+    palw_native_execution_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -7794,6 +7799,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_stage_execution_v14: None,
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
+    palw_native_execution_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -13283,6 +13289,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_stage_execution_v14: None,
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
+    palw_native_execution_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,

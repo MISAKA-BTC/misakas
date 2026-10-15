@@ -3197,6 +3197,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     ) -> RpcResult<GetPalwStateProofResponse> {
         // Everything the caller sent is parsed before a byte of chain state is read: a malformed request is free, and an error.
         let collection = request.collection.trim().to_ascii_lowercase();
+        let page39 = collection.starts_with(kaspa_consensus_core::palw_native_audit_page_v39::AUX_PAGE_PREFIX_V39);
+        if page39 {
+            kaspa_consensus_core::palw_native_audit_page_v39::parse_aux_cursor_v39(request.collection.as_bytes())
+                .map_err(RpcError::General)?;
+        }
         let redemption = collection.starts_with("native-redemption-v33:");
         let audit_job = collection
             .strip_prefix("native-audit-v27:")
@@ -3204,6 +3209,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             .map(|id| parse_hash64(id, "nativeAuditJob"))
             .transpose()?;
         if audit_job.is_none()
+            && !page39
             && !matches!(collection.as_str(), "bonds" | "classes" | "claims" | "kernel-aux-v32" | "pending-payouts-v32")
         {
             return Err(RpcError::General(format!("collection '{}' is not one of bonds, classes, claims", request.collection)));
@@ -3254,7 +3260,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 block_hash: block.to_string(),
                 header: Some(RpcHeader::from(&header)),
                 state_preimage: proof.state.preimage,
-                collection: if audit.is_some() { "kernel-aux-v32".into() } else { collection },
+                collection: if audit.is_some() {
+                    "kernel-aux-v32".into()
+                } else if page39 {
+                    String::from_utf8(proof.collection.label).map_err(|e| RpcError::General(e.to_string()))?
+                } else {
+                    collection
+                },
                 rows: proof.collection.rows.into_iter().map(|(key, value)| RpcPalwProofRow { key, value }).collect(),
                 native_audit_record: audit,
                 native_coinbase_proof: coinbase,

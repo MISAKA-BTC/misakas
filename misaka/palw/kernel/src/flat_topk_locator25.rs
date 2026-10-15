@@ -70,6 +70,9 @@ pub fn locate_selected_topk_v25(
         Ok(p) => p,
         Err(e) => return error(e),
     };
+    locate_selected_topk_prepared_v32(c,public,unit,expected,own,scan,&pr,false)
+}
+pub(crate) fn locate_selected_topk_prepared_v32(c:&FlatContextV25<'_>,public:&dyn FlatPublicReadsV25,unit:FlatReadV5,expected:&Tensor,own:&dyn Fn()->Result<Vec<Tensor>,String>,scan:&mut TopKScanBudgetV7,pr:&crate::element::PreparedV1<'_>,original32:bool)->FlatFindingV25{
     if unit.leaf.is_some() || unit.position >= c.base.claim.positions || !pr.valid(unit.occurrence, unit.node) {
         return error("invalid selected TopK coordinate");
     }
@@ -158,5 +161,5 @@ pub fn locate_selected_topk_v25(
         return error("authenticated different root has no differing selected value");
     };
     let _ = k; // K remains charged in the independently supplied scan/read budget.
-    topk_relation_rows_v25(c, &c.scope.root(), &pr, public, unit, expected, own, scan, Some(row), Some(output))
+    if original32{crate::flat_detect25::topk_relation_rows_checked_v32(c,&c.scope.root(),pr,public,unit,expected,own,scan,Some(row),Some(output),&|f|crate::flat_detect25::checked_prepared_v32(c,pr,f))}else{topk_relation_rows_v25(c, &c.scope.root(), &pr, public, unit, expected, own, scan, Some(row), Some(output))}
 }

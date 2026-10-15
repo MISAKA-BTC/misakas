@@ -833,6 +833,11 @@ pub struct Args {
     pub palw_native_calibration_snapshot: Option<String>,
     #[serde(skip)]
     pub palw_native_calibration_root: Option<String>,
+    /// Separately versioned owning39 wrapper; never extends snapshot34.
+    #[serde(skip)]
+    pub palw_native_calibration39_snapshot: Option<String>,
+    #[serde(skip)]
+    pub palw_native_calibration39_root: Option<String>,
 
     pub rocksdb_preset: Option<String>,
     pub rocksdb_wal_dir: Option<String>,
@@ -1070,6 +1075,8 @@ impl Default for Args {
             override_params_file: None,
             palw_native_calibration_snapshot: None,
             palw_native_calibration_root: None,
+            palw_native_calibration39_snapshot: None,
+            palw_native_calibration39_root: None,
             rocksdb_preset: None,
             rocksdb_wal_dir: None,
             rocksdb_cache_size: None,
@@ -1606,6 +1613,47 @@ impl Args {
             .unwrap_or_else(|e| panic!("native calibration34 owning snapshot: {e}"));
         } else if self.palw_native_calibration_root.is_some() {
             panic!("native calibration34 root supplied without its snapshot");
+        }
+
+        if let Some(path) = &self.palw_native_calibration39_snapshot {
+            use kaspa_consensus_core::palw_native_calibration_v39::NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V39;
+            use std::io::Read;
+            if self.network().network_type() != NetworkType::Devnet
+                || self.override_params_file.is_some()
+                || self.palw_drill_genesis_salt.is_some()
+                || self.palw_native_calibration_snapshot.is_some()
+                || self.palw_native_calibration_root.is_some()
+            {
+                panic!("native39 owning wrapper requires the original devnet base without generic overrides or snapshot34 flags");
+            }
+            #[cfg(feature = "devnet-prealloc")]
+            if self.num_prealloc_utxos.is_some() {
+                panic!("native39 owning wrapper uses pinned original devnet UTXOs");
+            }
+            let pin: kaspa_consensus_core::Hash64 = self
+                .palw_native_calibration39_root
+                .as_deref()
+                .expect("native39 needs explicit wrapper root")
+                .parse()
+                .unwrap_or_else(|e| panic!("native39 wrapper root: {e}"));
+            let file = fs::File::open(path).unwrap_or_else(|e| panic!("native39 wrapper snapshot: {e}"));
+            if file.metadata().unwrap_or_else(|e| panic!("native39 snapshot metadata: {e}")).len()
+                > NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V39 as u64
+            {
+                panic!("native39 snapshot byte cap");
+            }
+            let mut bytes = Vec::new();
+            file.take(NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V39 as u64 + 1)
+                .read_to_end(&mut bytes)
+                .unwrap_or_else(|e| panic!("native39 bounded snapshot read: {e}"));
+            config.params = kaspa_consensus_core::palw_native_calibration_v39::load_isolated_native_calibration_v39(
+                &config.params,
+                &bytes,
+                pin.as_bytes(),
+            )
+            .unwrap_or_else(|e| panic!("native39 owning wrapper snapshot: {e}"));
+        } else if self.palw_native_calibration39_root.is_some() {
+            panic!("native39 root supplied without owning wrapper snapshot");
         }
 
         // A malformed checkpoint is fatal on purpose. Continuing without one would leave the node
@@ -3532,6 +3580,23 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                 .help("The number of total days of data to keep.")
         )
         .arg(
+            Arg::new("palw-native-calibration39-snapshot")
+                .long("palw-native-calibration39-snapshot")
+                .value_name("file")
+                .value_parser(clap::value_parser!(String))
+                .requires("palw-native-calibration39-root")
+                .conflicts_with("palw-native-calibration-snapshot")
+                .help("Pinned owning39 wrapper on a distinct local devnet. Does not qualify shipping Final or A6/A8.")
+        )
+        .arg(
+            Arg::new("palw-native-calibration39-root")
+                .long("palw-native-calibration39-root")
+                .value_name("128-hex")
+                .value_parser(clap::value_parser!(String))
+                .requires("palw-native-calibration39-snapshot")
+                .help("Explicit object root of the separately versioned owning39 wrapper.")
+        )
+        .arg(
             Arg::new("palw-native-calibration-snapshot")
                 .long("palw-native-calibration-snapshot")
                 .value_name("file")
@@ -4013,6 +4078,8 @@ impl Args {
             override_params_file: m.get_one::<String>("override-params-file").cloned(),
             palw_native_calibration_snapshot: m.get_one::<String>("palw-native-calibration-snapshot").cloned(),
             palw_native_calibration_root: m.get_one::<String>("palw-native-calibration-root").cloned(),
+            palw_native_calibration39_snapshot: m.get_one::<String>("palw-native-calibration39-snapshot").cloned(),
+            palw_native_calibration39_root: m.get_one::<String>("palw-native-calibration39-root").cloned(),
             rocksdb_preset: m.get_one::<String>("rocksdb-preset").cloned().or(defaults.rocksdb_preset),
             rocksdb_wal_dir: m.get_one::<String>("rocksdb-wal-dir").cloned().or(defaults.rocksdb_wal_dir),
             rocksdb_cache_size: m.get_one::<usize>("rocksdb-cache-size").cloned().or(defaults.rocksdb_cache_size),

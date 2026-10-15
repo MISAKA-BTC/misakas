@@ -36,7 +36,15 @@ pub struct NativePagedCarriageRecordV29 {
 }
 impl NativePagedCarriageRecordV29 {
     pub fn root(&self) -> Digest {
-        object_id(b"misaka-palw/native/original-full-court-carriage/v29", self)
+        if self.version == 39 {
+            object_id(b"misaka-palw/native/original-complete-source-carriage/v39", self)
+        } else {
+            if self.version == 32 {
+                object_id(b"misaka-palw/native/original-phase-exclusive-producer-carriage/v32", self)
+            } else {
+                object_id(b"misaka-palw/native/original-full-court-carriage/v29", self)
+            }
+        }
     }
 }
 pub struct CheckedNativePagedCarriagePlanV29 {
@@ -69,6 +77,126 @@ fn density(n: u32, window: u64, period: u64) -> Result<u64, String> {
 impl CheckedNativePagedCarriagePlanV29 {
     pub fn record(&self) -> &NativePagedCarriageRecordV29 {
         &self.record
+    }
+    /// Explicit32 phase-exclusive producer Commit lane. Before a claim exists
+    /// no source unit/proof owner can be admitted; once Commit succeeds this
+    /// lane becomes ineligible. Queue30 reserves the larger complete burst and
+    /// physical22 reserves the smaller service window conservatively. Neither
+    /// an old29 record nor an ordinary carrier receives this interpretation.
+    pub fn derive_invocation_v32(
+        program: &TirProgramV1,
+        real_pc: &ParamCommitmentsV1,
+        real_params: usize,
+        paid: &CheckedNativePagedProofPlanV29,
+        class: Digest,
+        job_plan: Digest,
+        pursuit: Digest,
+        answer_window: u64,
+        proof_window: u64,
+        maximum_positions: u32,
+        commit_window: u64,
+        service: &NativeCarriageServiceV22,
+        mass: &NativeCarriageMassParamsV22,
+    ) -> Result<Self, String> {
+        use misaka_palw_kernel::flat_quota11::stage14::bounded28::{
+            invocation_commit_bytes_bound_v32, invocation_commit_parts_bound_v32,
+        };
+        let mut p =
+            Self::derive(program, real_pc, real_params, paid, class, job_plan, pursuit, answer_window, proof_window, service, mass)?;
+        let bytes = invocation_commit_bytes_bound_v32(maximum_positions)?;
+        let parts = invocation_commit_parts_bound_v32(maximum_positions)?;
+        if commit_window <= service.period_daa {
+            return Err("invocation32 producer Commit has no complete service window".into());
+        }
+        let r = &mut p.record;
+        r.version = 32;
+        r.pursuit = object_id(
+            b"misaka-palw/native/original-commit-source-phase-contract/v32",
+            &(pursuit, maximum_positions, bytes, parts, commit_window),
+        );
+        r.answer_packets =
+            r.answer_packets.max((parts as u32 + 1).checked_mul(2).ok_or("invocation32 original producer attempt burst overflow")?);
+        r.answer_window = r.answer_window.min(commit_window);
+        r.density = density(r.answer_packets, r.answer_window, service.period_daa)?
+            .checked_add(density(r.proof_packets, r.proof_window, service.period_daa)?)
+            .ok_or("invocation32 combined original carriage density overflow")?;
+        r.minimum_deadline = r.answer_window.min(r.proof_window);
+        Ok(p)
+    }
+    /// Owning39 resource/court/source profile. No old25scope or512-part proof
+    /// token is fabricated: all counts come from the private checked39 quota.
+    pub fn derive_v39(
+        source: &misaka_palw_kernel::flat_source39::CheckedSourceV39,
+        maximum: &misaka_palw_kernel::flat_job39::CheckedJobMaximumV39,
+        quota: &misaka_palw_kernel::flat_quota11::owning39::CheckedQuotaV39,
+        pursuit: Digest,
+        answer_window: u64,
+        proof_window: u64,
+        commit_window: u64,
+        service: &NativeCarriageServiceV22,
+        mass: &NativeCarriageMassParamsV22,
+    ) -> Result<Self, String> {
+        let s = quota.source();
+        let p = quota.paged();
+        let max_post = quota.plan().record().native_post_carrier_cap;
+        if quota.maximum() != maximum.root()
+            || maximum.request().source != source.root()
+            || s.source != source.root()
+            || p.source != source.root()
+            || s.maximum != maximum.root()
+            || p.maximum != maximum.root()
+            || s.answer_parts != 4
+            || s.answer_attempts != 2
+            || p.pages == 0
+            || p.pages > 2048
+            || p.part_attempts != 2
+            || p.retained_owners != 4
+            || p.part_bytes != 32 << 10
+            || p.maximum_bytes > 64 << 20
+            || [answer_window, proof_window, commit_window].iter().any(|w| *w <= service.period_daa)
+            || !service.implemented
+            || service.check(mass).is_err()
+            || pursuit == [0; 64]
+        {
+            return Err("carriage39 original checked source/maximum/quota/service/windows differ".into());
+        }
+        let answer_envelope = envelope((32 << 10) + 143 + 7)?;
+        let proof_envelope = envelope((32 << 10) + 202 + 7)?;
+        if mass.packet_mass(&answer_envelope)? > service.slot_mass || mass.packet_mass(&proof_envelope)? > service.slot_mass {
+            return Err("carriage39 complete native packet exceeds original block room".into());
+        }
+        let commit_packets = u32::try_from(max_post.div_ceil(32 << 10))
+            .ok()
+            .and_then(|n| n.checked_add(1))
+            .and_then(|n| n.checked_mul(2))
+            .ok_or("carriage39 complete producer transport burst overflow")?;
+        let answer_packets = (11u32 * 2 * 4).max(commit_packets);
+        let proof_packets = (p.pages as u32).checked_mul(4 * 2).ok_or("carriage39 complete paid proof burst overflow")?;
+        let answer_window = answer_window.min(commit_window);
+        let density = density(answer_packets, answer_window, service.period_daa)?
+            .checked_add(density(proof_packets, proof_window, service.period_daa)?)
+            .ok_or("carriage39 original shared density overflow")?;
+        Ok(Self {
+            record: NativePagedCarriageRecordV29 {
+                version: 39,
+                class: quota.class(),
+                original_job_plan: quota.plan().record().root(),
+                parameter: source.parameters().root(),
+                pursuit,
+                paid_paged_plan: p.root(),
+                service: service.root(),
+                answer_envelope,
+                proof_envelope,
+                answer_packets,
+                original_answer_bytes: s.answer_bytes,
+                answer_parts: s.answer_parts,
+                proof_packets,
+                answer_window,
+                proof_window,
+                density,
+                minimum_deadline: answer_window.min(proof_window),
+            },
+        })
     }
     pub fn derive(
         program: &TirProgramV1,

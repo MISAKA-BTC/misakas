@@ -224,6 +224,7 @@ fn register(
     Ok(())
 }
 struct Quote {
+    original_history_bound:u32,
     maximum: CheckedNativeTextMaximumV29,
     basis: NativeFinalClassBasisV27,
     quota: CheckedTextQuotaV29,
@@ -474,7 +475,7 @@ fn quote(
         &conditions,
     )
     .map_err(refused)?;
-    Ok(Quote { maximum, basis, quota, source, paged, queue, conditions, caller, complete_path: complete, proof_window })
+    Ok(Quote { original_history_bound:program.history_bound,maximum, basis, quota, source, paged, queue, conditions, caller, complete_path: complete, proof_window })
 }
 fn prepare(
     builder: &mut TransitionBuilder<'_>,
@@ -914,6 +915,7 @@ fn commit(
         return Err(refused("text29 stopped post rebinds original producer/nonce/max/source/evidence identity"));
     }
     let actual = q.maximum.check_actual(&program, &registered.real_parameters, &b.request, &post.generated).map_err(refused)?;
+    check_bound_window_lengths(r,&h,program.history_bound,actual.positions())?;
     if actual.scope_root() != post.actual_scope25
         || actual.resource_root() != post.actual_resource29
         || actual.positions() != post.evidence.positions
@@ -1535,6 +1537,7 @@ fn close(
     let q = quote(builder, p, &prep.wire)?;
     let f = b.funding().clone();
     let claim = b.claim().unwrap();
+    check_bound_window_lengths(r,&h,q.original_history_bound,claim.actual_positions)?;
     let status = paid_status(r, id)?;
     let (open, latest) = public::open(r, id)?;
     if q.maximum.record() != &f.maximum
@@ -2177,6 +2180,7 @@ pub(super) fn audit_record_from_rows_v29(
         .map_err(|_| "text29 audit original class grammar")?;
     let f = b.funding();
     let claim = b.claim().ok_or("text29 audit Final lacks claim")?;
+    check_bound_window_lengths_from_rows(rows, &h, &b, None, claim.actual_positions)?;
     let s = b.settlement().ok_or("text29 audit Final lacks settlement")?;
     let credit_key = k(0, &id);
     let (credited, queue, established): (NativeTextSettlementV29, Hash64, u64) =
@@ -2370,6 +2374,7 @@ pub(super) fn register_window37(
     }
     let wire = NativeWindowClassRegisterV37::from_bytes(body).map_err(refused)?;
     let (h, _, program) = class(builder, text_class)?;
+    misaka_palw_kernel::flat_window37::check_window_graph_program_v37(&wire.graph, &program).map_err(refused)?;
     let record = wire.derive(&h.class, program.history_bound).map_err(refused)?;
     let id = record.id();
     let r = builder.state.kernel_route.as_ref().unwrap();
@@ -2436,6 +2441,8 @@ pub(super) fn attach_window37(
         return Err(refused("window37 attach needs the producer's own Funded uncommitted job of the window's Text29 class"));
     }
     misaka_palw_kernel::flat_window37::check_window_graph_program_v37(&wire.graph, &program).map_err(refused)?;
+    wire.check_text_extent(program.history_bound,b.funding().request.maximum_positions().map_err(refused)?)
+        .map_err(refused)?;
     // Both window courts must fit the job's ORIGINAL paid filing bound.
     let prep: Prepared = read(builder.state.kernel_route.as_ref().unwrap(), EXECUTION_POLICY_TABLE_V11, 0, &job, (1 << 20) + 8192)
         .ok_or_else(|| refused("window37 attach original preparation absent"))?;
@@ -2443,14 +2450,70 @@ pub(super) fn attach_window37(
     let cap = q.paged.record().maximum_bytes as u64;
     let gs = wire.graph.scope().map_err(refused)?;
     let ss = wire.graph.selection.scope().map_err(refused)?;
-    if gs.filing_bytes + 7 > cap || ss.filing_bytes + 7 > cap {
-        return Err(refused("window37 courts exceed the job's original paid filing bound"));
+    let paid = q.paged.record();
+    let extra_restore = raw.len() as u64 + 512;
+    let extra_work = extra_restore.checked_mul(extra_restore).and_then(|n| n.checked_mul(64))
+        .ok_or_else(|| refused("window37 court restore work overflow"))?;
+    if gs.filing_bytes + 7 > cap || ss.filing_bytes + 7 > cap
+        || gs.court_work.max(ss.court_work).checked_add(extra_work).is_none_or(|n| n > paid.court_work)
+        || gs.court_scratch_bytes.max(ss.court_scratch_bytes).checked_add(extra_restore)
+            .is_none_or(|n| n > paid.court_scratch)
+    {
+        return Err(refused("window37 full court/restore envelope exceeds the job's original paid maximum"));
     }
     let binding = NativeWindowJobBindingV37 { version: 37, job, window_class: window, graph: wire.graph.root(), attached_daa: ctx.daa_score };
     builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&(37u8, 3u8, job)), Some(key(&binding)));
     builder.note_kernel_bond(signer);
     Ok(())
 }
+/// Re-derive both maximum and actual length commitments from the original
+/// registered window class. The job header/book already commits the request
+/// and stopped positions; no caller-supplied actual length or quote is used.
+fn check_bound_window_lengths(
+    r:&PalwKernelRouteStateV1,h:&JobHeader,program_history_bound:u32,actual_positions:u32,
+)->Result<(),PalwStateV2Error>{
+    if !r.aux.contains_key(&(EXECUTION_JOB_TABLE_V11,key(&(37u8,3u8,h.job)))){return Ok(());}
+    let book=original_book(r,h)?;
+    check_bound_window_lengths_from_rows(&r.aux,h,&book,Some(program_history_bound),actual_positions)
+        .map_err(refused)
+}
+/// Shared with independent Final/receipt extraction. When a window is present,
+/// the history bound comes from the original canonical class, never a report.
+fn check_bound_window_lengths_from_rows(
+    rows:&std::collections::BTreeMap<(u8,Vec<u8>),Vec<u8>>,h:&JobHeader,book:&NativeTextBookV29,
+    program_history_bound:Option<u32>,actual_positions:u32,
+)->Result<(),String>{
+    use crate::palw_window_class_v37::*;
+    let original_key=key(&(37u8,3u8,h.job));
+    let Some(raw_binding)=rows.get(&(EXECUTION_JOB_TABLE_V11,original_key)) else{return Ok(());};
+    if raw_binding.len()>512{return Err("window37 original binding byte cap".into());}
+    let binding:NativeWindowJobBindingV37=borsh::from_slice(raw_binding)
+        .map_err(|_|"window37 original binding grammar")?;
+    let raw=rows.get(&(EXECUTION_CLASS_TABLE_V11,key(&(37u8,1u8,binding.window_class))))
+        .ok_or("window37 original length contract absent")?;
+    let wire=NativeWindowClassRegisterV37::from_bytes(raw)?;
+    if binding.version!=37||binding.job!=h.job||binding.graph!=wire.graph.root()||wire.text_class!=h.class{
+        return Err("window37 original length/graph/job binding differs".into());
+    }
+    let history=match program_history_bound{
+        Some(n)=>n,
+        None=>{
+            let raw=rows.get(&(EXECUTION_CLASS_TABLE_V11,k(1,&h.class)))
+                .ok_or("window37 original canonical text registration absent")?;
+            let original=decode_register(raw).map_err(|e|format!("{e:?}"))?;
+            let program=TirProgramV1::decode_canonical(&original.program_bytes).map_err(|e|e.to_string())?;
+            if misaka_palw_kernel::public::program_root_v1(&program.encode())!=wire.graph.program_root{
+                return Err("window37 original canonical program root differs".into());
+            }
+            misaka_palw_kernel::flat_window37::check_window_graph_program_v37(&wire.graph,&program)?;
+            program.history_bound
+        }
+    };
+    wire.check_text_extent(history,book.funding().request.maximum_positions()?)?;
+    wire.check_text_extent(history,actual_positions)?;
+    Ok(())
+}
+
 /// Window court verification for a paid paged filing of a window-bound job. Returns
 /// Ok(()) only on an objective continuity/append (kind 3) or v8 selection (kind 4) fault.
 fn window_court(
@@ -2495,5 +2558,38 @@ fn window_court(
             verify_history_selection_fault_v8(&c, &fault).map_err(|e| refused(format!("{e:?}")))
         }
         _ => Err(refused("window37 unknown court")),
+    }
+}
+
+// Readonly receipt-window projection. Only audit32-authenticated original rows
+// enter this adapter; no returned observation is a consensus authority.
+impl crate::palw_state_v2::PalwChainStateV2 {
+    pub(crate) fn native_text_receipt_from_rows_v1(
+        rows:&std::collections::BTreeMap<(u8,Vec<u8>),Vec<u8>>,id:Digest,
+    )->Result<crate::palw_native_receipt_windows_v1::NativeReceiptJobV1,String>{
+        use crate::palw_native_audit_proof_v32::NativeLifecycleStageV32;
+        let a=Self::native_text_lifecycle_from_rows_v29(rows,NativeLifecycleStageV32::Seat,id)?;
+        let header=rows.get(&(EXECUTION_JOB_TABLE_V11,k(0,&id))).ok_or("receipt original text header absent")?;
+        if header.len()>8192{return Err("receipt original text header cap".into());}
+        let h:JobHeader=borsh::from_slice(header).map_err(|_|"receipt original text header grammar")?;
+        let raw=rows.get(&(EXECUTION_JOB_TABLE_V11,k(1,&id))).ok_or("receipt original text book absent")?;
+        if raw.len()!=h.book_bytes as usize||raw.len()>TEXT_STOP_BOOK_BYTES_V29{return Err("receipt original text book cap".into());}
+        let b=NativeTextBookV29::restore(raw,h.funding,h.book)?;let f=b.funding();
+        let actual_positions=match b.claim(){Some(c)=>c.actual_positions,None=>f.request.maximum_positions()?};
+        check_bound_window_lengths_from_rows(rows,&h,&b,None,actual_positions)?;
+        if b.terminal()!=h.terminal{return Err("receipt text original terminal mismatch".into());}
+        Ok(crate::palw_native_receipt_windows_v1::NativeReceiptJobV1{
+            namespace:29,complete_model:true,job:id,class:a.class,source:a.source,inventory:f.maximum.inventory,real_parameter:f.maximum.parameter,
+            funding:a.funding,consent:a.consent,maximum_contract:f.maximum.root(),maximum_scope:a.maximum_scope,maximum_resource:a.maximum_resource,
+            queue_plan:f.maximum.queue_plan,queue_policy:f.maximum.queue_policy,source_plan:f.maximum.source_acquisition,
+            physical_plan:f.maximum.physical_lease_plan,carriage_version:29,
+            physical_service:{let raw=rows.get(&(EXECUTION_QUOTA_TABLE_V11,key(&(29u8,id,22u8)))).ok_or("receipt text original physical journal absent")?;
+                if raw.len()>2048{return Err("receipt physical journal cap".into());}
+                let(root,j):(Digest,NativePagedLeaseJournalV29)=borsh::from_slice(raw).map_err(|_|"receipt physical journal grammar")?;
+                if j.root()!=root||j.job!=id||j.funding!=f.root(){return Err("receipt physical journal original differs".into());}j.service},
+            requester_operator:a.requester_operator,producer_operator:a.producer_operator,nonce:f.request.nonce,
+            admitted:f.admitted_daa,commit_deadline:f.commit_deadline,deadline:f.deadline,
+            claim:b.claim().map(|c|c.root()),committed:b.claim().map(|c|c.committed_daa),challenge_end:b.claim().map(|c|c.challenge_end),terminal:a.terminal,
+        })
     }
 }

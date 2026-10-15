@@ -4501,8 +4501,14 @@ declaration per modality axis:
 | `token { maximum, unit_bytes = 4, profile = 0 }` | exact u32-id axis, `maximum ≤ maximum_positions` |
 | `patch` / `audio { maximum, unit_bytes, profile }` | RFC03 axes: committed bytes per patch / audio frame and the RFC03 encoding/preprocessing profile root |
 
-A job commits its actual lengths before Fund (`check_actual`): every present axis is
-`1..=maximum`, every absent axis is 0, and no claim or later slice can enlarge them. The
+A job commits its maximum lengths before Fund: every present axis is
+`1..=maximum`, every absent axis is 0, and no claim or later slice can enlarge them.
+For an unknown stopping point, Commit fixes the actual lengths and applies `check_actual`
+against that original maximum; Fund never requires the future generated ids. A window
+Text job's token axis counts evaluated positions (prompt plus generated ids fed back into
+the decoder, excluding the final returned id that is not evaluated again). Attachment
+checks the original request maximum, and Commit, Final and independent extraction check
+the actual extent against the same Length36 contract. The
 RFC03 patch/audio axes decode (so their bytes ride unjudged below their fence) but are refused
 by name until their typed stage contract and fence ship (`MEDIA_LENGTHS_ARMABLE_V36 = false`).
 A Text/Stage class that adopts contract 36 is itself a new class version; existing
@@ -4578,3 +4584,58 @@ settlement, a filing in its own envelope (`u16 37, kind, len, body`; the frozen 
 keeps kinds 0..=2): kind 3 = `WindowFaultV37` (append/KV binding or continuity), kind 4 = the
 job's deterministic v8 `HistorySelectionFaultV8` (`window_selection_job_v37`). Actions 45/46
 ride unjudged below `palw_window_class_v37` or Final27 (A-2); the route decoder ceiling is 46.
+
+**Source-audit correction (2026-10-15; implementation unverified).** Coordinates and
+history/writer shapes alone do not bind a selection court. Registration and attachment
+must additionally bind the program root, actual HistAppend state and input writer, the
+actual selection input, and its Idx dtype and position-specific output shape. All court
+work/scratch/restoration must fit the original paid envelope as well as filing bytes.
+The frozen v1/v2 grammar refuses TopK on symbolic `H` and cannot express the required
+`min(H, selection_cap)` output. Accordingly the source guard is a defensive refusal,
+**not a completed positive window execution path**. A separate versioned execution/source
+contract is still needed; the v37 declarations above and standalone v8 relation do not
+establish that implementation, native Final or RFC02 completion.
+
+### II.14.61 Initial seven-model activation target (user decision, 2026-10-15)
+
+The initial rewarded set must include all seven models below: the six dense size
+tiers remain, and the 35B-A3B hybrid MoE is an additional model, not a replacement
+for 32B dense. All seven target block production, coinbase and Final weight from
+the start of the new network. This is a completion requirement, not evidence of
+present eligibility or an instruction to bypass admission.
+
+| Tier | Selected model repository |
+| --- | --- |
+| 1.5B | `Misakachain/Qwen2.5-1.5B-PALW-A16-runtime` (original `Qwen/Qwen2.5-1.5B-Instruct`) |
+| 8B | `meta-llama/Llama-3.1-8B-Instruct` |
+| 14B | `Qwen/Qwen3-14B` |
+| 24B | `mistralai/Mistral-Small-3.2-24B-Instruct-2506` |
+| 32B | `Qwen/Qwen3-32B` |
+| 70B | `meta-llama/Llama-3.3-70B-Instruct` |
+| 35B-A3B | `Misakachain/Qwen3.6-35B-A3B-PALW-runtime` |
+
+The dated publisher revisions and Git/LFS file inventory are recorded in
+`docs/design/palw/tir/launch/initial-seven-models-v1.json`. They are preparation
+metadata: every selected runtime variant, canonical artifact/inventory, real PC,
+tokenizer, context, random/decode rule and source conversion must still be pinned
+before execution. Existing A16 and Qwen36 runtime formats do not automatically
+become Source28/TIR artifacts or inherit a new class's rights. Missing pins remain
+`NOT_RUN`, not a silently substituted checkpoint or a successful release gate.
+
+The launch gate requires **7/7**, with independently reproduced full advertised
+tasks, honest and corrupted-trace courts, native registration/funding, genuine
+Final, coinbase delivery and accepted redemption under the target ruleset. Mistral's
+vision encoder/projector are part of complete-model coverage; the MoE routing,
+expert weights and recurrent state remain included in the 35B model. A nominal
+4-bit weight size is neither verifier RAM nor an admissible cost quote. For 70B,
+measure complete preparation, verification and evidence carriage within the
+owning Panel=1 one-day DAA opportunity; no unmeasured smaller context may stand
+for the full requested class.
+
+The existing qualified-bond allocation (`alpha = 1.5`, 30-day average) and shared
+Q/B/R/F caps apply. Seven entries do not imply equal one-seventh coinbase shares,
+synthetic founding bonds or a model-specific multiplier. Keep the statistical
+A6/A8 populations and their failure denominators unchanged: this launch set is
+a separate all-required engineering gate. Activation is held until every model
+passes, including the added MoE; no shipping preset is changed merely by listing
+the target models here.

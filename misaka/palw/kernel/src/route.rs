@@ -149,6 +149,46 @@ pub const TAG_FUNDED_EXECUTION_V11: u8 = 63;
 pub const MAX_FUNDED_EXECUTION_BYTES_V11: usize = (1 << 20) + (16 << 10);
 pub const TAG_STAGE_EXECUTION_V14: u8 = 64;
 pub const MAX_STAGE_EXECUTION_BYTES_V14: usize = 2 << 20;
+/// Only the explicitly versioned Master32 invocation actions 34..=36 use this
+/// larger envelope (bounded public upstream material plus the old typed body).
+/// The frozen stage actions 0..=33 retain their original 2MiB ceiling.
+pub const MAX_STAGE_INVOCATION_BYTES_V32: usize = (4 << 20) + (256 << 10) + 8192 + 7;
+/// Version32 compact whole Commit body is at most 9 MiB. Its paid part
+/// transport uses 143-byte metadata and at most 32 KiB of body per carrier.
+/// These are new inner64 actions; no old action acquires the larger ceiling.
+pub const MAX_STAGE_COMPACT_COMMIT_BYTES_V32: usize = (9 << 20) + 7;
+pub const MAX_STAGE_COMMIT_PART_BYTES_V32: usize = (32 << 10) + 143 + 7;
+/// Owning39 source body; large bodies travel through its separately paid source upload.
+pub const MAX_STAGE_SOURCE_BYTES_V39: usize = crate::flat_source39::SOURCE39_MAX_BYTES + 7;
+
+fn stage_action_cap(action: u8) -> usize {
+    match action {
+        34..=36 => MAX_STAGE_INVOCATION_BYTES_V32,
+        37 => 64 + 7,
+        38 => MAX_STAGE_COMPACT_COMMIT_BYTES_V32,
+        39 => MAX_STAGE_COMMIT_PART_BYTES_V32,
+        40 => 130 + 7,
+        41 => MAX_STAGE_SOURCE_BYTES_V39,
+        42 => 262 + 7,
+        57 => 256 + 7,
+        58 => (32 << 10) + 72 + 7,
+        59 | 60 | 66 => 64 + 7,
+        _ => MAX_STAGE_EXECUTION_BYTES_V14,
+    }
+}
+
+fn stage_action_extent(action: u8, encoded: usize) -> bool {
+    encoded <= stage_action_cap(action)
+        && match action {
+            37 => encoded == 71,
+            39 => encoded >= 143 + 7,
+            40 => encoded == 130 + 7,
+            42 => encoded == 262 + 7,
+            58 => encoded >= 72 + 7,
+            59 | 60 | 66 => encoded == 64 + 7,
+            _ => true,
+        }
+}
 
 /// Per-variant ceilings on the encoded object (version byte included), in bytes. A consumer's mass limit is tighter; these only
 /// bound what the kernel will ever parse.
@@ -770,7 +810,7 @@ pub fn borrowed_native_action_v1(bytes: &[u8]) -> Result<Option<BorrowedNativeAc
     };
     let (cap, last) = match tag {
         TAG_FUNDED_EXECUTION_V11 => (MAX_FUNDED_EXECUTION_BYTES_V11, 46),
-        TAG_STAGE_EXECUTION_V14 => (MAX_STAGE_EXECUTION_BYTES_V14, 33),
+        TAG_STAGE_EXECUTION_V14 => (stage_action_cap(bytes.get(2).copied().unwrap_or(0)), 66),
         _ => return Ok(None),
     };
     let bad = |why: &str| KernelRefusalV1::new("NativeAction", RefusalKindV1::Malformed, why);
@@ -778,6 +818,9 @@ pub fn borrowed_native_action_v1(bytes: &[u8]) -> Result<Option<BorrowedNativeAc
         return Err(bad("native route version/byte cap"));
     }
     let action = *bytes.get(2).ok_or_else(|| bad("native action absent"))?;
+    if tag == TAG_STAGE_EXECUTION_V14 && !stage_action_extent(action, bytes.len()) {
+        return Err(bad("Master32 action-specific bounded extent differs"));
+    }
     if tag == TAG_FUNDED_EXECUTION_V11 && matches!(action, 41..=44) && bytes.len() > (32 << 10) + 79 {
         return Err(bad("initial31 complete bounded wire packet cap"));
     }
@@ -945,7 +988,7 @@ impl KernelRouteObjectV1 {
         }
         if tag == TAG_STAGE_EXECUTION_V14 {
             let count = rest.get(2..6).ok_or_else(|| bad(RefusalKindV1::Malformed, "truncated stage14 action frame".into()))?;
-            if rest.get(1).is_none_or(|a| *a > 33)
+            if rest.get(1).is_none_or(|a| *a > 66 || !stage_action_extent(*a, bytes.len()))
                 || u32::from_le_bytes(count.try_into().unwrap()) as usize != rest.len().saturating_sub(6)
             {
                 return Err(bad(RefusalKindV1::Malformed, "stage14 action/count differs from exact bounded carrier".into()));
@@ -1228,7 +1271,7 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         }
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1,
         TAG_FUNDED_EXECUTION_V11 => MAX_FUNDED_EXECUTION_BYTES_V11,
-        TAG_STAGE_EXECUTION_V14 => MAX_STAGE_EXECUTION_BYTES_V14,
+        TAG_STAGE_EXECUTION_V14 => MAX_STAGE_SOURCE_BYTES_V39,
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1,
         TAG_POST_TILED_JOB_V1 => MAX_POST_TILED_JOB_BYTES_V1,
         TAG_POST_PROMPT_TILE_V1 => MAX_POST_PROMPT_TILE_BYTES_V1,
@@ -1244,6 +1287,51 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn new_master_carriers_do_not_enlarge_frozen_stage_actions() {
+        let body = vec![0u8; MAX_STAGE_EXECUTION_BYTES_V14];
+        let old = KernelRouteObjectV1::StageExecutionV14 { action: 33, body: body.clone() }.encode();
+        assert!(borrowed_native_action_v1(&old).is_err());
+        assert!(KernelRouteObjectV1::decode(&old).is_err());
+        let new = KernelRouteObjectV1::StageExecutionV14 { action: 34, body }.encode();
+        assert!(borrowed_native_action_v1(&new).is_ok());
+        assert!(KernelRouteObjectV1::decode(&new).is_ok());
+        let mut oversized = new;
+        oversized.resize(MAX_STAGE_INVOCATION_BYTES_V32 + 1, 0);
+        let size = (oversized.len() - 7) as u32;
+        oversized[3..7].copy_from_slice(&size.to_le_bytes());
+        assert!(borrowed_native_action_v1(&oversized).is_err());
+        assert!(KernelRouteObjectV1::decode(&oversized).is_err());
+        let collect = KernelRouteObjectV1::StageExecutionV14 { action: 37, body: vec![7; 64] }.encode();
+        assert!(borrowed_native_action_v1(&collect).is_ok());
+        assert!(KernelRouteObjectV1::decode(&collect).is_ok());
+        let mut unknown = collect;
+        unknown[2] = 67;
+        assert!(borrowed_native_action_v1(&unknown).is_err());
+        assert!(KernelRouteObjectV1::decode(&unknown).is_err());
+    }
+    #[test]
+    fn compact_commit_transport_has_its_own_whole_part_and_assembly_limits() {
+        let whole = KernelRouteObjectV1::StageExecutionV14 { action: 38, body: vec![0; MAX_STAGE_INVOCATION_BYTES_V32] }.encode();
+        assert!(borrowed_native_action_v1(&whole).is_ok());
+        assert!(KernelRouteObjectV1::decode(&whole).is_ok());
+        let mut wrong_action = whole;
+        wrong_action[2] = 36;
+        assert!(borrowed_native_action_v1(&wrong_action).is_err());
+        assert!(KernelRouteObjectV1::decode(&wrong_action).is_err());
+        for (action, sizes) in [(39, vec![143, 143 + (32 << 10)]), (40, vec![130])] {
+            for size in sizes {
+                let packet = KernelRouteObjectV1::StageExecutionV14 { action, body: vec![0; size] }.encode();
+                assert!(borrowed_native_action_v1(&packet).is_ok());
+                assert!(KernelRouteObjectV1::decode(&packet).is_ok());
+            }
+        }
+        for (action, size) in [(39, 142), (39, 144 + (32 << 10)), (40, 129), (40, 131)] {
+            let packet = KernelRouteObjectV1::StageExecutionV14 { action, body: vec![0; size] }.encode();
+            assert!(borrowed_native_action_v1(&packet).is_err());
+            assert!(KernelRouteObjectV1::decode(&packet).is_err());
+        }
+    }
     #[test]
     fn native_action_borrowed_frame_has_exact_count_and_preserves_old_owned_bytes() {
         for object in [
@@ -1264,10 +1352,10 @@ mod tests {
         }
         assert!(borrowed_native_action_v1(&KernelRouteObjectV1::Withdraw { bond: [1; 64] }.encode()).unwrap().is_none());
         // Funded actions run to 46: 45/46 are the typed window class v37 register/attach (RFC02 §II.14.60), as the decoder admits.
-        for (tag, last) in [(TAG_FUNDED_EXECUTION_V11, 46), (TAG_STAGE_EXECUTION_V14, 33)] {
+        for (tag, last, unknown) in [(TAG_FUNDED_EXECUTION_V11, 46, 47), (TAG_STAGE_EXECUTION_V14, 38, 67)] {
             let mut raw = vec![1, tag, last, 0, 0, 0, 0];
             assert_eq!(borrowed_native_action_v1(&raw).unwrap().unwrap().action, last);
-            raw[2] = last + 1;
+            raw[2] = unknown;
             assert!(borrowed_native_action_v1(&raw).is_err());
             raw[2] = last;
             raw[0] = 2;

@@ -3538,8 +3538,93 @@ courts 3/4 in `reveal_paged` via `window_court` (own v37 filing envelope
 job; decoder ceiling 46; pre-gate/fold unjudged predicate covers 45|46. SDK
 `prepare_window_attach_v37`, `window_filing_v37`, `native-payload --kind window-attach37`.
 Test sources: kernel `tests/flat_window37.rs` (envelope, selection-job determinism, program
-binding refusal); node below-fence test now sends 45 and 46. No code item of RFC02 remains;
-RFC03 patch/audio stays spec + fenced refusing codec.
+binding refusal); node below-fence test now sends 45 and 46. The earlier assertion that no
+RFC02 code remained was incorrect; the source audit below supersedes it. RFC03 patch/audio
+stays spec + fenced refusing codec.
+
+### Source audit of integrated pre `5aa52b886` (2026-10-15)
+
+This is a source-level assessment, not a new compilation or measurement result. The
+five gaps below were found in the integrated `pre` source. Work continues on
+`codex/workspace-rfc02-completion`, based on that exact commit. Code must be completed
+before the consolidated validation phase starts, as requested by the user.
+
+| Gap | Required correction | Current evidence |
+| --- | --- | --- |
+| Complete native components | Master acceptance/funding/commit, Logits, position-specific Random and post-state continuity must use the actual canonical source, maximum reservation and full courts | Implementation in progress; no new build or execution |
+| Length36 token maximum | Original requested maximum and stopped extent must both pass the token axis, including independent Final/receipt extraction | Guards and regression source added; unverified |
+| Window37 program binding | Actual history state/writer operand and selection source, primitive, dtype and shape must match their court | Defensive registration/attachment guards and regression source added; **positive history-selection execution remains open** |
+| A6 receipt windows | Audit consecutive independently pinned states, original jobs and joint queue/physical accounting at the frozen sustained issuance rate across two windows | Proof-derived auditor and runner integration in progress; no measurement |
+| Complete frontend artifacts | Actual source and real weights must produce complete-component Source28 artifacts without a preconstructed tensor callback bundle | Importer/CLI implementation in progress; no conversion run |
+
+The window issue is deeper than a missing dtype comparison. Frozen TIR v1 (and the v1
+view of v2) explicitly refuses `TopK` along symbolic history dimension `H`; its output
+type cannot express `min(H, selection_cap)` either. Thus a same-shaped node is not a
+history-selection implementation. The new guards reject such a class before registration,
+preserve the frozen primitive semantics, and do **not** establish an executable positive
+window path. An explicitly versioned execution/source contract is still required before
+that feature, or all RFC02 code, may be called complete.
+
+The defensive window attachment also checks court work, scratch and original-class
+restoration against the original paid envelope, in addition to filing bytes. It never
+grants additional work from an after-Fund declaration. No shipping fence or preset changes.
+
+**Additional user scope (2026-10-15):** initial simultaneous block/coinbase/Final support
+for 1.5B, 8B, 14B, 24B, 32B and 70B dense tiers plus the Qwen3.6-35B-A3B hybrid MoE.
+The all-required launch target and publisher file/revision metadata are recorded in
+`launch/initial-seven-models-v1.json` and RFC §II.14.61. No runtime variant, model
+conversion, full-task fidelity, Final or eligibility is established by this metadata.
+This requirement adds work; it does not remove the five gaps above or replace A6/A8.
+
+### Completion-branch source checkpoint (2026-10-15; unverified)
+
+The source audit of `pre` remains valid for its recorded commit. The subsequent
+completion branch is **not code-complete**. `f934a787b` saves native invocation
+replay, genuine original Master component records, source-backed Pixtral/decoder
+frontends, bounded integer PALWQ361 reading, consecutive-state receipt auditing
+and CAS evidence collection. These are implementation checkpoints, not new test
+results. No build, conversion, node execution or measurement has run for them.
+
+The next unverified source checkpoint adds compact Commit32 whole/parts/assembly
+with original reservation bindings, owning Program/Source39 with independent
+real-PC/inventory equality, last-use execution and all-node streaming observation,
+and an integer Q36 full-forward source mirror. Source39 includes an explicitly
+versioned history selection primitive and permits its own larger parameter and
+input geometry; it does not reinterpret frozen V1/V2 bytes. The new source/class
+registration actors and paged source upload charge shared21 resources before
+restoration or allocation. An explicit local snapshot39 wraps the unchanged
+snapshot34 and is reconstructed by the node and SDK under the same pins.
+
+Audit39 adds full ordered aux authentication from bounded CAS streams and a
+pinned-state page RPC (1024 rows / 32 MiB per page, exact selected-parent root and
+stable import generation). A page alone is not a proof. The existing node's
+4000-DAA historical reconstruction cap remains in force: collecting two complete
+receipt windows only after both finish is not implemented by this single-state
+collector. Contemporaneous collection or a separately bounded archival mechanism
+and the owning39 receipt/window audit integration remain required code.
+
+Other remaining implementation includes the owning39 job fold's shared nonce,
+actual debit, protected source/trace delivery, court, independent Final and
+component credit closure; the cold independent detector/filer; and genuine
+complete-Master39 to ordinary FP eligibility for block production, coinbase and
+Final weight. A privately paid job's escrow Final grants none of those rights by
+itself. Source registration and local qualification flags likewise grant none.
+The frontend39 source writers are connected, while publisher task preprocessing,
+variable image geometry/token expansion and exact original request metadata
+still require explicit implementation and fidelity checks. Every large-model
+source, tokenizer, context and runtime variant must be pinned before measuring.
+
+The initial-seven gate separately requires exact precommitted native identity,
+all original component credits, coinbase inclusion and accepted redemption.
+Mistral's token-only Text29 identity cannot substitute for its complete
+vision/projector/decoder Master identity under its owning grammar. All seven remain `NOT_RUN`; the release gate
+does not activate a shipping preset or assign founding bonds. The original
+A6/A8 populations and failure denominators remain unchanged.
+
+After all implementation is complete, the consolidated validation must cover
+compilation, relevant regressions and adversarial courts, independently replayed
+native Final/coinbase/redemption, original checkpoint/context measurements, A6/A8
+and all seven initial models. Historical passes below do not validate this source.
 
 ## Validation (2026-10-15) — paused 10-15 by user order
 

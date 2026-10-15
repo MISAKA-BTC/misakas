@@ -196,9 +196,9 @@ pub mod palw_base0_profile;
 /// ADR-0160 lane verify V1: the batch licence (F-B, `Params::palw_capacity_batch_licence`) — one
 /// signature per seat window, a Merkle path per claim, the coverage funnel unchanged.
 pub mod palw_batch_licence_v1;
+/// N3 (REQ-N3-1/2/3): the Work Beacon's independent bootstrap, apart from the ordinary Beacon and Panel=0 — dormant.
+pub mod palw_beacon_bootstrap_v1;
 pub mod palw_beacon_source_fee_v1;
-pub mod palw_panel_source_fee_v2;
-pub mod palw_panel_lifetime_v2;
 pub mod palw_beacon_source_opt_in_v1;
 /// MISAKA PALW bisection ladder (ADR-0027 §1's degraded path): the pure state machine that
 /// forces incremental disclosure when a miner withholds state — pinned midpoints, monotonic
@@ -254,7 +254,6 @@ pub mod palw_class_seating_fence_v1;
 /// RFC-0001 §2.9: the job's tokenizer must be the class's listed one; dormant behind `palw_fp_tokenizer_match`.
 pub mod palw_class_semantics_v1;
 pub mod palw_class_sync_v1;
-pub mod palw_native_resource_v1;
 /// ADR-0152 §4-quater — class-derived verification deadlines behind
 /// `Params::palw_class_verify_deadline`: the constants, the measured-row type and the two pure
 /// derivations of `D(c)` (the state-reading half is in `palw_state_v2`). `None` on every preset but
@@ -349,7 +348,6 @@ pub mod palw_fork_choice_rule_e_v1;
 pub mod palw_fp_admission_v3;
 pub mod palw_fp_beacon_v3;
 pub mod palw_fp_constraint_job_v1;
-pub mod palw_public_token_table_v1;
 /// RFC-0001 §2.5: the decode constraint's second subset and automaton bounds; dormant behind `palw_fp_constraint_v2`.
 pub mod palw_fp_constraint_v2;
 pub mod palw_fp_devnet_v3;
@@ -440,6 +438,8 @@ pub mod palw_job_panel;
 pub mod palw_job_state;
 /// G14 lane D: the kernel route's consensus state, messages and interim policy (fence `palw_probabilistic_constraints_v1`).
 pub mod palw_kernel_route_v1;
+/// RFC-0015 §9 / §11.3: the one settlement predicate of a kernel-route claim (pending / final-revocable / settled / convicted / defaulted).
+pub mod palw_kernel_settlement_v1;
 /// Kimi K3 native geometry, integer ops, tokenizer and artifact identity. Not a genesis class.
 /// Its kernels sit in the fenced catalog so `court_catalog_root` does not move.
 pub mod palw_kimi_k3_artifact_v1;
@@ -490,6 +490,7 @@ pub mod palw_model_registration_v1;
 pub mod palw_model_registry_v1;
 pub mod palw_model_vector_da_v2;
 pub mod palw_model_vector_v2;
+pub mod palw_native_resource_v1;
 pub mod palw_network_room_v1;
 /// ADR-0152 v2 F2: one adjudicator for a false `Valid`, bound to the claim's committed root —
 /// called by the processor and the fold alike. Consensus-inert until
@@ -514,8 +515,6 @@ pub mod palw_optimistic_licence_v2;
 /// The OPV ↔ PALW Work Beacon startup cycle, closed: the complete-check bootstrap, derived OPV eligibility, the effective bits of a
 /// passed attempt, and the dependency graph (`docs/design/palw/opv-beacon-bootstrap.md`) — dormant with the kernel route's fences.
 pub mod palw_opv_bootstrap_v1;
-/// N3 (REQ-N3-1/2/3): the Work Beacon's independent bootstrap, apart from the ordinary Beacon and Panel=0 — dormant.
-pub mod palw_beacon_bootstrap_v1;
 /// ADR-0077 Decision 16 (P-16): `PanelDa`, the privacy mode whose prompt stays off chain — and
 /// ADR-0077 SA-5, which says what arming it does NOT buy.
 pub mod palw_panel_da_v1;
@@ -523,15 +522,16 @@ pub mod palw_panel_da_v1;
 /// judges, and a claim is paid for the compute it certifies: the three pure rules, and nothing
 /// that reads a fence.
 pub mod palw_panel_economy_v1;
-/// RFC-0015: the Panel=0 (`OptimisticPublicVerification`) fence `palw_panel_free_v1` — dormant, no height, refused when armed.
-pub mod palw_panel_free_v1;
 /// RFC-0015 §13.3 as code: the authenticated activation gate record `palw_panel_free_v1` needs to be armed (no record is pinned).
 pub mod palw_panel_free_gate_v1;
 /// RFC-0015 §9 / §11.3: the one settlement predicate of a kernel-route claim (pending / final-revocable / settled / convicted / defaulted).
-pub mod palw_kernel_settlement_v1;
 /// RFC-0017: model eligibility — registration free, rights examined (commit-then-draw), bounded in probation and renewed; dormant
 /// fence `palw_model_eligibility_v1` (kernel inner 74/75, aux 131).
 pub mod palw_model_eligibility_v1;
+/// RFC-0015: the Panel=0 (`OptimisticPublicVerification`) fence `palw_panel_free_v1` — dormant, no height, refused when armed.
+pub mod palw_panel_free_v1;
+pub mod palw_panel_lifetime_v2;
+pub mod palw_panel_source_fee_v2;
 pub mod palw_panel_v2;
 /// ADR-0144 §9: slashable panel VAR that cannot be counted twice. Pure functions of consensus
 /// facts; the fold in `palw_state_v2` is the writer, behind the same fence.
@@ -567,6 +567,7 @@ pub mod palw_provider_court_v1;
 /// against (always the chain's root), the artifact manifest, and a binding confirmed or refuted from the bytes. Since ADR-0177 the
 /// ARTIFACT half is NON-CONSENSUS (optional off-chain tooling; no fold arm reads it); only `ClaimPosition` is a court unit.
 pub mod palw_public_material_v1;
+pub mod palw_public_token_table_v1;
 pub mod palw_pwu;
 pub mod palw_qwen25_profile;
 pub mod palw_qwen36_ops;
@@ -893,74 +894,69 @@ pub mod palw_json_key_set_v1;
 
 pub mod palw_prefix_state_stream_v1;
 
-pub mod palw_prefix_custody_v1;
-pub mod palw_prefix_public_owned_v1;
-pub mod palw_prefix_history_v1;
-pub mod palw_history_custody_v1;
-pub mod palw_prefix_public_source_v1;
-pub mod palw_reward_vesting_read_v2;
-pub mod palw_staged_court_state_v1;
-pub mod palw_staged_bundle_v1;
-pub mod palw_flat_constraint_stream_v1;
-pub mod palw_selected_event_source_v1;
-pub mod palw_tokenizer_artifact_inventory_v1;
-pub mod palw_public_binding_v1;
-pub mod palw_staged_preclaim_v1;
-pub mod palw_staged_load_bound_v1;
-pub mod palw_float_decode_v1;
-pub mod palw_float_constraint_source_v1;
-pub mod palw_staged_route_forms_v1;
-pub mod palw_tir_prefix_state_v1;
-pub mod palw_tir_prefix_owned_v1;
 pub mod palw_tir_public_source_v1;
 pub mod palw_tir_public_owned_v1;
 pub mod palw_tir_public_state_v1;
 pub mod palw_decode_view_v1;
+pub mod palw_flat_constraint_stream_v1;
+pub mod palw_float_constraint_source_v1;
+pub mod palw_float_decode_v1;
+pub mod palw_history_custody_v1;
+pub mod palw_prefix_custody_v1;
+pub mod palw_prefix_history_v1;
+pub mod palw_prefix_public_owned_v1;
+pub mod palw_prefix_public_source_v1;
+pub mod palw_public_binding_v1;
+pub mod palw_reward_vesting_read_v2;
+pub mod palw_selected_event_source_v1;
+pub mod palw_staged_bundle_v1;
+pub mod palw_staged_court_state_v1;
+pub mod palw_staged_load_bound_v1;
+pub mod palw_staged_preclaim_v1;
+pub mod palw_staged_route_forms_v1;
+pub mod palw_tir_prefix_owned_v1;
+pub mod palw_tir_prefix_state_v1;
+pub mod palw_tokenizer_artifact_inventory_v1;
 
 pub mod palw_tokenizer_table_stream_v1;
 
-pub mod palw_flat_execution_v11;
-pub mod palw_flat_execution_pursuit_v19;
 pub mod palw_flat_execution_capacity_v22;
-pub mod palw_native_carriage_v22;
-pub mod palw_native_carrier_index_v22;
-pub mod palw_native_final_v27;
-pub mod palw_native_text_stop_v29;
-pub mod palw_native_paged_proof_v29;
-pub mod palw_native_paged_carriage_v29;
-pub mod palw_native_paged_quota_v29;
-pub mod palw_native_queue_v30;
-pub mod palw_native_initial_v31;
-pub mod palw_native_audit_v27;
-pub mod palw_native_audit_proof_v32;
-pub mod palw_native_redemption_v33;
-pub mod palw_native_calibration_v34;
-pub mod palw_native_spend_v35;
-pub mod palw_window_class_v37;
-pub mod palw_native_trace_da_v29;
-pub mod palw_native_reply_parts_v29;
-pub mod palw_native_source_proof_v25;
-pub mod palw_native_final_fence_v27;
+pub mod palw_flat_execution_pursuit_v19;
+pub mod palw_flat_execution_v11;
 pub mod palw_flat_model_vector_da_v9;
 pub mod palw_flat_model_vector_v9;
 pub mod palw_flat_stage_v14;
 pub mod palw_flat_stage_v28;
 pub mod palw_funded_execution_v11;
+pub mod palw_native_audit_proof_v32;
+pub mod palw_native_audit_v27;
+pub mod palw_native_calibration_v34;
+pub mod palw_native_carriage_v22;
+pub mod palw_native_carrier_index_v22;
+pub mod palw_native_execution_v39;
+pub mod palw_native_final_fence_v27;
+pub mod palw_native_final_v27;
+pub mod palw_native_initial_v31;
+pub mod palw_native_paged_carriage_v29;
+pub mod palw_native_paged_proof_v29;
+pub mod palw_native_paged_quota_v29;
+pub mod palw_native_queue_v30;
+pub mod palw_native_receipt_windows_v1;
+pub mod palw_native_redemption_v33;
+pub mod palw_native_reply_parts_v29;
+pub mod palw_native_source_proof_v25;
+pub mod palw_native_spend_v35;
+pub mod palw_native_text_stop_v29;
+pub mod palw_native_trace_da_v29;
 pub mod palw_stage_execution_v14;
 pub mod palw_stage_execution_v28;
 pub mod palw_tokenizer_owned_court_v1;
+pub mod palw_window_class_v37;
 
-pub mod palw_monetary_material_v1;
 /// RFC07 R7-ECON / RFC08 R8-WINDOW / R8-ECON signed economic contracts (inner 67–69, aux 125–127; 2026-10-15). Dormant.
 pub mod palw_econ_contracts_v1;
+pub mod palw_monetary_material_v1;
 
-pub mod palw_claim_challenge_v2;
-pub mod palw_claim_interactive_v3;
-/// R7-RELATION round 3 (2026-10-15): the dormant ClaimV2 gate of compact relation contracts (refused: empty review registry).
-pub mod palw_claim_compact_v1;
-/// R6-CELL round 3 (2026-10-15): pure boundary/routing/memory coverage checker over accepted cell profiles. Below
-/// `palw_cell_coverage_closure_v1` not called by consensus; past it the closure's one predicate.
-pub mod palw_cell_coverage_v1;
 /// R6-CELL round 4 (2026-10-15): the dormant `palw_cell_coverage_closure_v1` — an uncoverable legacy class (unknown map, hybrid
 /// v1/v2 recurrence, solo recurrence map, multi-router, Kimi router) refused at registration / the claim gate, convicted in court.
 pub mod palw_cell_coverage_closure_v1;
@@ -968,6 +964,13 @@ pub mod palw_cell_coverage_closure_v1;
 /// capacity, the pre-lottery admission quote and the outcome-first model report — behind the dormant fences
 /// `palw_model_block_rights_v1` and `palw_elastic_final_capacity_v1` (refused when armed until measured values are pinned).
 pub mod palw_rfc0016_v1;
+/// R6-CELL round 3 (2026-10-15): pure boundary/routing/memory coverage checker over accepted cell profiles. Below
+/// `palw_cell_coverage_closure_v1` not called by consensus; past it the closure's one predicate.
+pub mod palw_cell_coverage_v1;
+pub mod palw_claim_challenge_v2;
+/// R7-RELATION round 3 (2026-10-15): the dormant ClaimV2 gate of compact relation contracts (refused: empty review registry).
+pub mod palw_claim_compact_v1;
+pub mod palw_claim_interactive_v3;
 
 pub mod palw_material_capacity_v1;
 
@@ -981,3 +984,8 @@ pub mod palw_state_carriage_rpc_v1;
 pub mod palw_attempt_material_v3;
 
 pub mod palw_tir_objective_v1;
+pub mod palw_native_job_v39;
+
+pub mod palw_native_audit_page_v39;
+pub mod palw_native_audit_proof_v39;
+pub mod palw_native_calibration_v39;

@@ -165,7 +165,12 @@ pub fn native_paged_file_v29(
 }
 /// Action 32: the exact 32-KiB parts of one paid file. The last part's assembly
 /// reveals it; there is no separate reveal action (34 is closed).
-pub fn prepare_paged_parts_v29(job: &Digest, seal: &Digest, owner: &Digest, file: &[u8]) -> Result<Vec<PreparedNativePayloadV29>, String> {
+pub fn prepare_paged_parts_v29(
+    job: &Digest,
+    seal: &Digest,
+    owner: &Digest,
+    file: &[u8],
+) -> Result<Vec<PreparedNativePayloadV29>, String> {
     let count = file.len().div_ceil(TEXT_STOP_PART_BYTES_V29);
     if file.is_empty() || count > TEXT_STOP_MAX_PARTS_V29 as usize {
         return Err("paged29 part count".into());
@@ -375,6 +380,156 @@ pub fn prepare_stage_post_v28(
     }
     stage(23, trace)
 }
+/// Explicit Master32 carrier. Nested objects retain their old wire formats;
+/// invocation32 owns their new master/input binding. This is a signed payload,
+/// not a certificate that the upstream jobs have finalized.
+fn master_invocation_v32(
+    action: u8,
+    envelope: &kaspa_consensus_core::palw_flat_stage_v28::NativeStageInvocationEnvelopeV32,
+    positions: Option<u32>,
+) -> Result<PreparedNativePayloadV29, String> {
+    use kaspa_consensus_core::palw_flat_stage_v28::NativeStageInvocationEnvelopeV32;
+    let raw = borsh::to_vec(envelope).map_err(|e| e.to_string())?;
+    let checked = NativeStageInvocationEnvelopeV32::from_bytes(&raw)?;
+    if checked.master == [0; 64] || checked.upstream_jobs.len() != checked.stage as usize {
+        return Err("master32 carrier must include every earlier original component".into());
+    }
+    if checked.stage == 0 {
+        if !checked.upstream_outputs.is_empty() {
+            return Err("master32 first stage has no upstream outputs".into());
+        }
+    } else {
+        let outputs = kaspa_consensus_core::palw_native_audit_proof_v32::decode_native_master_outputs_v32(&checked.upstream_outputs)?;
+        if outputs.len() != checked.upstream_jobs.len() {
+            return Err("master32 upstream outputs differ from original stage catalogue".into());
+        }
+    }
+    match action {
+        34 => {
+            kaspa_consensus_core::palw_flat_stage_v28::StageAcceptSourceV28::from_bytes(&checked.body)?;
+        }
+        35 => {
+            kaspa_consensus_core::palw_flat_stage_v14::StageFundRequestV14::from_bytes(&checked.body)?;
+        }
+        36 => {
+            misaka_palw_kernel::flat_quota11::stage14::StageTraceV14::from_invocation_bytes_v32(
+                &checked.body,
+                positions.ok_or("master32 Commit requires exact actual positions")?,
+            )?;
+        }
+        _ => return Err("master32 invocation action must be34/35/36".into()),
+    }
+    stage(action, &checked)
+}
+pub fn prepare_master_acceptance_v32(
+    envelope: &kaspa_consensus_core::palw_flat_stage_v28::NativeStageInvocationEnvelopeV32,
+) -> Result<PreparedNativePayloadV29, String> {
+    master_invocation_v32(34, envelope, None)
+}
+pub fn prepare_master_funding_v32(
+    envelope: &kaspa_consensus_core::palw_flat_stage_v28::NativeStageInvocationEnvelopeV32,
+) -> Result<PreparedNativePayloadV29, String> {
+    master_invocation_v32(35, envelope, None)
+}
+/// Check the exact actual invocation and ORIGINAL maximum quota before signing.
+/// Same-length generated-token substitutions change trace_input_root.
+pub fn prepare_master_post_v32(
+    envelope: &kaspa_consensus_core::palw_flat_stage_v28::NativeStageInvocationEnvelopeV32,
+    actual: &misaka_palw_kernel::flat_inputs12::composition32::CheckedStageInvocationV32<'_>,
+    maximum_job: &misaka_palw_kernel::flat_inputs12::bounded28::CheckedStageJobV28,
+    job_id: Digest,
+) -> Result<PreparedNativePayloadV29, String> {
+    use misaka_palw_kernel::flat_quota11::stage14::{StageTraceV14, bounded28::derive_stage_quota_v32};
+    let trace = StageTraceV14::from_invocation_bytes_v32(&envelope.body, actual.positions())?;
+    let quota = derive_stage_quota_v32(actual.class(), maximum_job)?;
+    if envelope.master != actual.master_root()
+        || envelope.stage != actual.class().wire().stage
+        || envelope.generated != actual.generated()
+        || trace.class != actual.class().root()
+        || trace.job_id != job_id
+        || trace.job_input != actual.trace_input_root()
+        || trace.admission != actual.job().admission().root()
+        || trace.quota != quota.root()
+    {
+        return Err("master32 Commit changes original maximum quota or actual invocation/input/decode".into());
+    }
+    master_invocation_v32(36, envelope, Some(actual.positions()))
+}
+
+/// Compact Commit32 fixes actual stopped IDs once, after original Fund. Output
+/// openings are delivered with the separate authenticated output certificate.
+pub fn prepare_master_compact_post_v32(
+    record: &kaspa_consensus_core::palw_flat_stage_v28::NativeInvocationCompactCommitV32,
+    actual: &misaka_palw_kernel::flat_inputs12::composition32::CheckedStageInvocationV32<'_>,
+    maximum_job: &misaka_palw_kernel::flat_inputs12::bounded28::CheckedStageJobV28,
+    job_id: Digest,
+) -> Result<PreparedNativePayloadV29, String> {
+    use kaspa_consensus_core::palw_flat_stage_v28::NativeInvocationCompactCommitV32;
+    let raw = borsh::to_vec(record).map_err(|e| e.to_string())?;
+    NativeInvocationCompactCommitV32::from_bytes(&raw, maximum_job.job().positions)?;
+    let trace =
+        misaka_palw_kernel::flat_quota11::stage14::StageTraceV14::from_invocation_bytes_v32(&record.trace, actual.positions())?;
+    let quota = misaka_palw_kernel::flat_quota11::stage14::bounded28::derive_stage_quota_v32(actual.class(), maximum_job)?;
+    if record.job != job_id
+        || record.generated != actual.generated()
+        || trace.version != 32
+        || !trace.output_openings.is_empty()
+        || trace.class != actual.class().root()
+        || trace.job_id != job_id
+        || trace.job_input != actual.trace_input_root()
+        || trace.admission != actual.job().admission().root()
+        || trace.quota != quota.root()
+    {
+        return Err("master32 compact post changes original job/maximum or actual stopped invocation".into());
+    }
+    stage(38, record)
+}
+/// Prepares the dedicated before-claim paid page lane; it cannot carry an
+/// arbitrary initial registration or reuse the old u8 fragment contract.
+pub fn prepare_master_compact_parts_v32(
+    record: &kaspa_consensus_core::palw_flat_stage_v28::NativeInvocationCompactCommitV32,
+    maximum_positions: u32,
+) -> Result<Vec<PreparedNativePayloadV29>, String> {
+    use kaspa_consensus_core::palw_flat_stage_v28::*;
+    let raw = borsh::to_vec(record).map_err(|e| e.to_string())?;
+    NativeInvocationCompactCommitV32::from_bytes(&raw, maximum_positions)?;
+    let group = invocation_commit_group_v32(record.job, &raw);
+    let count = raw.len().div_ceil(32 << 10);
+    let bound = misaka_palw_kernel::flat_quota11::stage14::bounded28::invocation_commit_bytes_bound_v32(maximum_positions)?;
+    let part_bound = misaka_palw_kernel::flat_quota11::stage14::bounded28::invocation_commit_parts_bound_v32(maximum_positions)?;
+    if raw.len() as u64 > bound || count > part_bound as usize {
+        return Err("master32 compact post exceeds original maximum-derived reservation".into());
+    }
+    if count == 0 || count > 512 {
+        return Err("master32 compact original page bound".into());
+    }
+    let mut parts = Vec::with_capacity(count + 1);
+    for (index, bytes) in raw.chunks(32 << 10).enumerate() {
+        let mut body = Vec::with_capacity(INVOCATION_COMMIT_PART_PREFIX_V32 + bytes.len());
+        body.extend_from_slice(&32u16.to_le_bytes());
+        body.push(0);
+        body.extend_from_slice(&record.job);
+        body.extend_from_slice(&group);
+        body.extend_from_slice(&(index as u16).to_le_bytes());
+        body.extend_from_slice(&(count as u16).to_le_bytes());
+        body.extend_from_slice(&(raw.len() as u32).to_le_bytes());
+        body.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        body.extend_from_slice(bytes);
+        borrowed_invocation_commit_part_v32(&body).ok_or("master32 compact page framing differs")?;
+        let object = K::StageExecutionV14 { action: 39, body };
+        if object.encoded_len() > object.max_encoded_bytes() {
+            return Err("master32 page outer carrier cap".into());
+        }
+        parts.push(PreparedNativePayloadV29 { object });
+    }
+    let mut body = Vec::with_capacity(130);
+    body.extend_from_slice(&32u16.to_le_bytes());
+    body.extend_from_slice(&record.job);
+    body.extend_from_slice(&group);
+    parts.push(PreparedNativePayloadV29 { object: K::StageExecutionV14 { action: 40, body } });
+    Ok(parts)
+}
+
 pub fn sign_native_payload_v29(
     key: &dyn MessageSigner,
     domain: Hash64,
@@ -575,7 +730,10 @@ pub fn decode_native_payload_v29(
         }
         "text-collect29" => {
             let d = |at: usize| -> Result<Digest, String> {
-                raw.get(at..at + 64).ok_or("text29 collection digest absent")?.try_into().map_err(|_| "text29 collection digest".to_string())
+                raw.get(at..at + 64)
+                    .ok_or("text29 collection digest absent")?
+                    .try_into()
+                    .map_err(|_| "text29 collection digest".to_string())
             };
             let kind = match (raw.first(), raw.len()) {
                 (Some(0), 129) => NativeTextCollectV29::Owner { job: d(1)?, owner: d(65)? },
@@ -591,9 +749,9 @@ pub fn decode_native_payload_v29(
             }
             prepare_window_attach_v37(&raw[..64].try_into().unwrap(), &raw[64..].try_into().unwrap())
         }
-        "window-class37" => prepare_window_class_v37(
-            &kaspa_consensus_core::palw_window_class_v37::NativeWindowClassRegisterV37::from_bytes(raw)?,
-        ),
+        "window-class37" => {
+            prepare_window_class_v37(&kaspa_consensus_core::palw_window_class_v37::NativeWindowClassRegisterV37::from_bytes(raw)?)
+        }
         "stage-bundle28" => {
             let b = kaspa_consensus_core::palw_flat_stage_v28::NativeStageSourceBundleV28::from_bytes(raw)?;
             prepare_stage_bundle_v28(&b)
@@ -616,6 +774,20 @@ pub fn decode_native_payload_v29(
                 positions.ok_or("--positions exact original funded stage extent required")?,
             )?;
             stage(23, &t)
+        }
+        "stage-compact-commit32" => {
+            let cap = positions.ok_or("--positions original maximum positions required")?;
+            let record = kaspa_consensus_core::palw_flat_stage_v28::NativeInvocationCompactCommitV32::from_bytes(raw, cap)?;
+            stage(38, &record)
+        }
+        "stage-invocation-accept32" | "stage-invocation-fund32" | "stage-invocation-commit32" => {
+            let envelope = kaspa_consensus_core::palw_flat_stage_v28::NativeStageInvocationEnvelopeV32::from_bytes(raw)?;
+            let action = match kind {
+                "stage-invocation-accept32" => 34,
+                "stage-invocation-fund32" => 35,
+                _ => 36,
+            };
+            master_invocation_v32(action, &envelope, positions)
         }
         _ => Err("unknown explicit native29/28 payload kind".into()),
     }
@@ -701,6 +873,26 @@ mod initial_tests {
         let K::FundedExecutionV11 { action: 43, body } = plan.carriers.last().unwrap().object() else { panic!("missing assemble") };
         assert_eq!(body, &plan.id.to_vec());
         assert!(prepare_initial_transport_v31(&payload, &owner, 8, 10, 100, 100).is_err());
+    }
+    #[test]
+    fn master_invocation_cannot_omit_prior_component_catalogue_or_substitute_raw_body() {
+        use kaspa_consensus_core::palw_flat_stage_v28::NativeStageInvocationEnvelopeV32;
+        let mut e = NativeStageInvocationEnvelopeV32 {
+            version: 32,
+            master: [1; 64],
+            stage: 1,
+            generated: vec![],
+            upstream_jobs: vec![],
+            upstream_outputs: vec![],
+            body: vec![],
+        };
+        assert!(prepare_master_acceptance_v32(&e).is_err());
+        e.stage = 0;
+        assert!(prepare_master_acceptance_v32(&e).is_err());
+        assert!(prepare_master_funding_v32(&e).is_err());
+        assert!(master_invocation_v32(36, &e, None).is_err());
+        e.version = 31;
+        assert!(prepare_master_acceptance_v32(&e).is_err());
     }
     #[test]
     fn initial_registration_cannot_transport_money_or_final_actions() {
