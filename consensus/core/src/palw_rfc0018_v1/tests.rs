@@ -523,6 +523,73 @@ fn rfc18_anchor_contributions_are_committed_fold_output() {
 }
 
 // =================================================================================================================================
+// U-2 (P0): Probation claims never earn SecurityCertified credit
+// =================================================================================================================================
+
+/// RFC-0017's probation pin for `claim` (as `eligibility_probation_commit_v1` writes it at acceptance).
+fn pin_probation(state: &mut PalwChainStateV2, claim: &Hash64) {
+    use crate::palw_model_eligibility_v1::{
+        PALW_MODEL_ELIGIBILITY_TABLE_V1, PalwEligibilityProbationClaimRowV1, eligibility_probation_claim_key_v1,
+    };
+    let pin = PalwEligibilityProbationClaimRowV1 { class_id: class(1).as_bytes(), accepted_daa: FENCE, units: 1, final_weight: false };
+    state.set_kernel_aux_row_for_tests(
+        PALW_MODEL_ELIGIBILITY_TABLE_V1,
+        eligibility_probation_claim_key_v1(&claim.as_bytes()),
+        Some(borsh::to_vec(&pin).unwrap()),
+    );
+}
+
+/// A Probation claim that reaches `Final` AND passes the m-of-k draw advances nothing — frontier, settlement depth, rule-E
+/// participation, settled anchors, provisional/final weight, the coinbase credit leg — because the bar is inside the one predicate.
+/// The same flow for a claim accepted once the model is `Eligible` (no pin) certifies normally.
+#[test]
+fn rfc18_u2_a_probation_claim_never_earns_security_credit_and_an_eligible_one_does() {
+    use crate::palw_fork_choice_rule_e_v1::{PalwRuleECertificationV1, PalwRuleENoBondBudgetV1};
+    let p = with_mirror(PalwGateCRuleV1::SecurityCertifiedV1);
+    let policy = p.rfc0018_v1().unwrap().certification;
+    // The m-of-k flow decides Certified for both claims (k positives, prosecution window elapsed, nothing pending).
+    let (k, m) = (policy.k as usize, policy.m as usize);
+    let ok = PalwCertificationClaimFactsV1 { still_final: true, accusation_pending: false };
+    let elapsed = 1_000 + policy.prosecution_window_daa;
+    assert_eq!(palw_certification_verdict_v1(&policy, &drawn_row(k, 0, m), ok, elapsed), Some(PalwCertificationOutcomeV1::Certified));
+    for probation in [true, false] {
+        let tag = if probation { "Probation" } else { "Eligible" };
+        let mut state = PalwChainStateV2::genesis();
+        let id = claim_id(77);
+        let claim = final_attempt(60);
+        state.set_false_valid_rows_for_tests(id, Some(claim.clone()), None, None, 0);
+        certify(&mut state, &id, Some(PalwCertificationOutcomeV1::Certified));
+        if probation {
+            pin_probation(&mut state, &id);
+        }
+        let earns = !probation;
+        let view = PalwGateCViewV1::of(&p, &state);
+        assert_eq!(palw_independently_work_certified_v1(&id, &claim, &view), earns, "{tag}: the single predicate");
+        assert_eq!(palw_gate_c_weight_v1(&p, &state, &id, &claim, 500), if earns { 500 } else { 0 }, "{tag}: final weight / reward leg");
+        assert_eq!(palw_claim_provisional_weight_v1(&p, &claim), 0, "{tag}: provisional weight is 0 past the fence either way");
+        assert!(!palw_gate_c_settles_anchor_v1(&p, &claim), "{tag}: no licence/Final tick; the tick is the certification's");
+        assert_eq!(palw_gate_c_advances_frontier_v1(&p, &state, &id, &claim), earns, "{tag}: safe frontier");
+        assert_eq!(palw_gate_c_frontier_v1(&state, &p, u64::MAX).0, if earns { 60 } else { 0 }, "{tag}: recomputed frontier");
+        assert_eq!(palw_frontier_rollback_bound_v1(&state, &p), if earns { Some(60) } else { None }, "{tag}: rollback bound");
+        let settlement = crate::palw_settlement_v1::palw_settlement_v1(&state, &p, None, 0).unwrap();
+        assert_eq!(settlement.uncertified_final, if earns { 0 } else { 1 }, "{tag}: reported uncertified");
+        let record = state
+            .palw_rule_e_record_v1(&p, false, None, &Default::default(), &PalwRuleENoBondBudgetV1, id, &claim)
+            .unwrap();
+        assert_eq!(
+            record.certification,
+            if earns { PalwRuleECertificationV1::Certified } else { PalwRuleECertificationV1::Uncertified },
+            "{tag}: rule E reads the same predicate"
+        );
+        let side = crate::palw_fork_choice_rule_e_v1::palw_rule_e_side_from_records_with_capital_v2([&record], |_| Some(13_000))
+            .unwrap();
+        assert_eq!(side.participation, earns as u32, "{tag}: rule-E participation (v1)");
+        assert_eq!(side.participation_capital_v2, if earns { 13_000 } else { 0 }, "{tag}: rule-E participation (v2)");
+        assert_eq!(side.safe_frontier_blue_score, if earns { 60 } else { 0 }, "{tag}: rule E's frontier key");
+    }
+}
+
+// =================================================================================================================================
 // Frontier rollback (RFC-0018 §7.5a)
 // =================================================================================================================================
 

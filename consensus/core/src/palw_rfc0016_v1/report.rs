@@ -46,6 +46,12 @@ pub struct PalwModelReportRowV1 {
     pub real_gap_daa: Option<u64>,
     /// DAA this epoch during which the floor was Idle — the clock carried by the floor and the heartbeat (consensus-derived, aux 135).
     pub heartbeat_dependent_daa: Option<u64>,
+    /// **V9 (user decision 2026-10-15), measured SEPARATELY:** of the model's claims that ended this epoch, the share a verifier
+    /// actually CHECKED (a verdict, a court or a proven fault — not a timeout)…
+    pub checked_share_permille: Option<u32>,
+    /// …and the share that COMPLETED verification within its deadline (`Final`). A checked claim voided by a court is checked but not
+    /// completed; a timeout is neither.
+    pub completed_within_deadline_permille: Option<u32>,
     /// Elastic capacity per span and the shortfall, where the capacity fence reads them.
     pub capacity_per_span: Option<u128>,
     pub capacity_shortfall_per_span: Option<u128>,
@@ -58,6 +64,113 @@ pub struct PalwMinerRevenueRowV1 {
     pub model: Hash64,
     pub payout_coinbase_sompi: u128,
     pub claims: u64,
+}
+
+/// **V5 (user decision 2026-10-15): the epoch clock the report carries** — an epoch is a DAA count, and its wall-clock span is
+/// measured, never assumed: the report gives the epoch's DAA terms, the nominal slot and the sink block's own timestamp, so a reader
+/// (the measurement harness) reports DAA versus wall-clock drift. No field or label says "24 h".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwRfc0016EpochClockV1 {
+    pub epoch_daa: u64,
+    pub epoch_index: u64,
+    pub epoch_start_daa: u64,
+    /// The protocol's nominal clock slot (120 s); `epoch_daa · nominal_ms_per_daa` is the NOMINAL span, never the measured one.
+    pub nominal_ms_per_daa: u64,
+    /// The sink block's header timestamp (ms), read by the node serving the report; `None` where unavailable.
+    pub sink_timestamp_ms: Option<u64>,
+}
+
+impl PalwRfc0016EpochClockV1 {
+    pub fn at(epoch_daa: u64, now_daa: u64, sink_timestamp_ms: Option<u64>) -> Self {
+        let epoch_daa = epoch_daa.max(1);
+        let epoch_index = now_daa / epoch_daa;
+        Self {
+            epoch_daa,
+            epoch_index,
+            epoch_start_daa: epoch_index.saturating_mul(epoch_daa),
+            nominal_ms_per_daa: crate::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS,
+            sink_timestamp_ms,
+        }
+    }
+
+    /// The label a reader shows: a DAA count, with the wall-clock span stated as measured.
+    pub fn label(&self) -> String {
+        format!("epoch = {} DAA (wall-clock span measured from DAA vs time; never assumed to be 24 h)", self.epoch_daa)
+    }
+
+    pub fn json(&self) -> String {
+        format!(
+            concat!(
+                "{{\"epochDaa\":\"{}\",\"epochIndex\":\"{}\",\"epochStartDaa\":\"{}\",\"nominalMsPerDaa\":\"{}\",",
+                "\"sinkTimestampMs\":{},\"label\":\"{}\"}}"
+            ),
+            self.epoch_daa,
+            self.epoch_index,
+            self.epoch_start_daa,
+            self.nominal_ms_per_daa,
+            json_opt(self.sink_timestamp_ms),
+            self.label()
+        )
+    }
+}
+
+/// [`palw_rfc0016_report_json_v1`] with the V5 epoch clock appended (`"epochClock"`).
+pub fn palw_rfc0016_report_json_with_clock_v1(
+    now_daa: u64,
+    armed: bool,
+    rows: &[PalwModelReportRowV1],
+    miners: &[PalwMinerRevenueRowV1],
+    quote: Option<&super::capacity::PalwAdmissionQuoteV1>,
+    clock: &PalwRfc0016EpochClockV1,
+) -> String {
+    let body = palw_rfc0016_report_json_v1(now_daa, armed, rows, miners, quote);
+    match body.strip_suffix('}') {
+        Some(open) => format!("{open},\"epochClock\":{}}}", clock.json()),
+        None => body,
+    }
+}
+
+/// **V9: how an ended claim counts** toward `checked_share` and the within-deadline completion rate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwVerificationOutcomeV1 {
+    /// Checked and completed within its deadline (`Final`).
+    CheckedCompleted,
+    /// Checked but not completed (a court, a proven fault, a forfeiture).
+    CheckedNotCompleted,
+    /// Never checked: its deadline passed without a verdict (a timeout, no capable panel, unavailable verifiers, …).
+    NotChecked,
+}
+
+/// **V9: the outcome of a claim phase** — `None` while the claim is live. Unknown future void reasons count as `NotChecked` (the
+/// conservative side: a reason not known to carry a verdict never raises `checked_share`).
+pub fn palw_rfc0016_verification_outcome_v1(phase: &crate::palw_state_v2::PalwClaimPhaseV2) -> Option<PalwVerificationOutcomeV1> {
+    use crate::palw_state_v2::{PalwClaimPhaseV2, PalwVoidReasonV2};
+    match phase {
+        PalwClaimPhaseV2::Final { .. } => Some(PalwVerificationOutcomeV1::CheckedCompleted),
+        PalwClaimPhaseV2::Voided { reason, .. } => Some(match reason {
+            PalwVoidReasonV2::CourtFraud
+            | PalwVoidReasonV2::CourtDefault
+            | PalwVoidReasonV2::CourtHeldVerdict
+            | PalwVoidReasonV2::ProducerWithholding
+            | PalwVoidReasonV2::AggregateForfeit
+            | PalwVoidReasonV2::WorkSliceProvenFalse
+            | PalwVoidReasonV2::WorkSliceDefaulted => PalwVerificationOutcomeV1::CheckedNotCompleted,
+            _ => PalwVerificationOutcomeV1::NotChecked,
+        }),
+        _ => None,
+    }
+}
+
+/// **V9: `(checked_share, completed_within_deadline)` in permille** over `outcomes` (`None` with no ended claim: UNKNOWN, never 0 or
+/// 1000).
+pub fn palw_rfc0016_verification_shares_v1(outcomes: &[PalwVerificationOutcomeV1]) -> (Option<u32>, Option<u32>) {
+    if outcomes.is_empty() {
+        return (None, None);
+    }
+    let n = outcomes.len() as u64;
+    let checked = outcomes.iter().filter(|o| !matches!(o, PalwVerificationOutcomeV1::NotChecked)).count() as u64;
+    let completed = outcomes.iter().filter(|o| matches!(o, PalwVerificationOutcomeV1::CheckedCompleted)).count() as u64;
+    (Some((checked * 1_000 / n) as u32), Some((completed * 1_000 / n) as u32))
 }
 
 /// What a before/after comparison may claim.
@@ -117,7 +230,8 @@ pub fn palw_rfc0016_report_json_v1(
                     "\"targets\":{{\"pPpm\":{},\"rightsIssued\":\"{}\"}},",
                     "\"outcomes\":{{\"physicalBlocks\":\"{}\",\"rightsConsumed\":\"{}\",\"rightsUnused\":\"{}\",\"finals\":{},",
                     "\"payoutCoinbaseSompi\":{},\"payoutEscrowSompi\":{},\"queueLen\":\"{}\",\"queueWaitMeanDaa\":{},",
-                    "\"queueWaitMaxDaa\":{},\"realGapDaa\":{},\"heartbeatDependentDaa\":{}}},",
+                    "\"queueWaitMaxDaa\":{},\"realGapDaa\":{},\"heartbeatDependentDaa\":{},",
+                    "\"checkedSharePermille\":{},\"completedWithinDeadlinePermille\":{}}},",
                     "\"nodeLocal\":{{\"refusedForCapacity\":{},\"refusedForRights\":{}}}}}"
                 ),
                 r.model,
@@ -135,6 +249,8 @@ pub fn palw_rfc0016_report_json_v1(
                 json_opt(r.queue_wait_max_daa),
                 json_opt(r.real_gap_daa),
                 json_opt(r.heartbeat_dependent_daa),
+                json_opt(r.checked_share_permille),
+                json_opt(r.completed_within_deadline_permille),
                 json_opt(r.refused_for_capacity),
                 json_opt(r.refused_for_rights),
             )
@@ -171,6 +287,35 @@ mod tests {
             payout_coinbase_sompi: Some(payout),
             ..Default::default()
         }
+    }
+
+    /// V9: `checked_share` and the within-deadline completion are measured apart (a court void is checked, not completed).
+    #[test]
+    fn v9_checked_share_and_completion_are_separate() {
+        use PalwVerificationOutcomeV1::*;
+        assert_eq!(palw_rfc0016_verification_shares_v1(&[]), (None, None), "UNKNOWN, never a number");
+        let (checked, completed) =
+            palw_rfc0016_verification_shares_v1(&[CheckedCompleted, CheckedNotCompleted, NotChecked, CheckedCompleted]);
+        assert_eq!((checked, completed), (Some(750), Some(500)));
+        let final_phase = crate::palw_state_v2::PalwClaimPhaseV2::Final { final_daa: 1 };
+        assert_eq!(palw_rfc0016_verification_outcome_v1(&final_phase), Some(CheckedCompleted));
+        let timeout = crate::palw_state_v2::PalwClaimPhaseV2::Voided {
+            voided_daa: 1,
+            reason: crate::palw_state_v2::PalwVoidReasonV2::BindTimeout,
+        };
+        assert_eq!(palw_rfc0016_verification_outcome_v1(&timeout), Some(NotChecked));
+        assert_eq!(palw_rfc0016_verification_outcome_v1(&crate::palw_state_v2::PalwClaimPhaseV2::Provisional), None);
+    }
+
+    /// V5: the epoch clock is a DAA count with the measured wall-clock span; nothing asserts 24 h.
+    #[test]
+    fn v5_the_epoch_clock_never_says_24_hours() {
+        let clock = PalwRfc0016EpochClockV1::at(720, 1_500, Some(1_700_000_000_000));
+        assert_eq!((clock.epoch_index, clock.epoch_start_daa), (2, 1_440));
+        assert!(clock.label().contains("never assumed to be 24 h"));
+        let json = palw_rfc0016_report_json_with_clock_v1(1_500, false, &[], &[], None, &clock);
+        assert!(json.ends_with("}}") && json.contains("\"epochClock\":{\"epochDaa\":\"720\""));
+        assert!(!json.contains("\"epochHours\""), "no wall-clock length is asserted");
     }
 
     /// R6: a target increase alone is never reported as an improvement (T2 without compute).

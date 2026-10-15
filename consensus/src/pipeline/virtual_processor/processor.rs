@@ -3930,6 +3930,9 @@ impl VirtualStateProcessor {
     }
 
     fn native_base_withheld_at(&self, carrier: BlockHash, paying_daa: u64, recorded: u64) -> u64 {
+        // ADR-0176 C1 (user decision 2026-10-15): past a V3 bond budget the attempt-lane carrier's whole subsidy-derived worker base
+        // is withheld (the claim's R-capped escrow is the only subsidy it is ever paid). `recorded` unchanged on every shipped network.
+        let recorded = self.palw_r_cap_base_withheld_at(carrier, paying_daa, recorded);
         if !self.dns_retired_at(paying_daa) {
             return recorded;
         }
