@@ -76,6 +76,8 @@ pub mod lora;
 pub mod layout_pass15;
 pub mod lower;
 pub mod model;
+/// Genesis 8: a streaming conversion written straight into a `PALWART3` artifact.
+pub mod palwart_out;
 pub mod ngram;
 pub mod prequant;
 pub mod quant;

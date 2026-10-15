@@ -2571,6 +2571,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         true,
     ),
     a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel route aux 141 class registration origins (one row per class registered past the fence)" },
+        "palw_class_registration_origin_v1",
+        "RFC06-8 registering block and admission digest of each class",
+        true,
+    ),
+    a2_row(
         PalwA2SlotV1::StateEncoding { what: "kernel route aux 140 once-only settlement markers (one row per exact obligation id)" },
         "palw_settlement_once_v1",
         "RFC-8 once-only settlement across all consumers",
