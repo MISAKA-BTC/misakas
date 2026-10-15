@@ -304,10 +304,9 @@ impl PalwHoldViewV1 {
 /// `u32::MAX − view`. No registration outpoint can equal it (no transaction has 2³²−2 outputs, and the id is a keyed hash), so the
 /// view's aggregate row never meets a real bond's row.
 pub fn palw_bond_hold_shadow_bond_v1(view: PalwHoldViewV1, bond: &PalwBondKeyV2) -> PalwBondKeyV2 {
+    // A transaction id is 64 bytes on this chain (`Hash64`): the whole keyed digest is the id.
     let digest = keyed64(PALW_BOND_HOLD_SHADOW_BOND_DOMAIN_V1, &[&[view as u8], &enc(bond)]);
-    let mut id = [0u8; 32];
-    id.copy_from_slice(&digest.as_byte_slice()[..32]);
-    PalwBondKeyV2(TransactionOutpoint::new(crate::Hash::from_bytes(id), u32::MAX - view as u32))
+    PalwBondKeyV2(TransactionOutpoint::new(digest, u32::MAX - view as u32))
 }
 
 /// The shadow row id of a claim in a view.
