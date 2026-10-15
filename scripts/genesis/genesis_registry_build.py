@@ -102,8 +102,11 @@ MODELS = [
          base_model="nerkyor/Qwen3.8-27B-Coder390-EfficientThink-Opus5.5-GPT6Astra-Grok4.7-DSV4Pro-K3-SFT-RLOO-MTP-DFlash2",
          base_author="nerkyor (community SFT of Qwen/Qwen3.8-27B by the Qwen team, Alibaba Cloud)",
          derivation="abliteration of a community SFT, GGUF", derivation_author="huihui-ai",
-         derivation_note="GGUF only. Choose bf16 (same integer path as safetensors) or one IQ3_S file (exact codebook integers). "
-                         "The vision projector (mmproj) is not converted (text decoder).",
+         derivation_note="GGUF only. User decision 2026-10-15: converted from the bf16 GGUF, streamed end to end (HTTPS range "
+                         "reads at the pinned revision, whole-file SHA-256 over the streamed bytes). The IQ3_S files stay "
+                         "registered as an alternative. The vision projector (mmproj-model-bf16.gguf) is pinned here but not "
+                         "converted: the genesis class is the text decoder (the image path is a separate prefix stage).",
+         aux_files={"mmproj-model-bf16.gguf": "vision-projector (pinned, not converted)"},
          architecture="Qwen3_5ForCausalLM (GGUF qwen35)", model_type="qwen35", family="qwen35-gdn-hybrid",
          license="apache-2.0", target_repo="Misakachain/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-PALW",
          stem="Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-PALW", converter="tir-gguf",
@@ -163,11 +166,12 @@ def build() -> dict:
                 is_weight = name in variants
             else:
                 is_weight = name.endswith(".safetensors") and "/" not in name
-            if not is_weight and name not in SMALL_KEEP:
+            is_aux = name in (m.get("aux_files") or {})
+            if not is_weight and not is_aux and name not in SMALL_KEEP:
                 continue
             lfs = s.get("lfs") or {}
-            files.append({"path": name, "bytes": s.get("size"), "kind": "weight" if is_weight else "metadata",
-                          "lfs_sha256": lfs.get("sha256"), "git_blob": s.get("blobId")})
+            kind = "weight" if is_weight else (m["aux_files"][name] if is_aux else "metadata")
+            files.append({"path": name, "bytes": s.get("size"), "kind": kind, "lfs_sha256": lfs.get("sha256"), "git_blob": s.get("blobId")})
         kept = {f["path"] for f in files}
         excluded = sorted(s["rfilename"] for s in meta["siblings"] if s["rfilename"] not in kept and s["rfilename"] != ".gitattributes")
         m2 = dict(m)

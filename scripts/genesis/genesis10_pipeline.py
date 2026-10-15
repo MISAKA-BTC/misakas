@@ -109,6 +109,14 @@ def anon_env() -> dict:
     return env
 
 
+def upload_env() -> dict:
+    """The environment for Hub writes: the stored login (`hf auth login`) is used; it is never read or printed here. The
+    converter runs anonymously (`anon_env`), so a hook it starts restores the default."""
+    env = dict(os.environ)
+    env.pop("HF_HUB_DISABLE_IMPLICIT_TOKEN", None)
+    return env
+
+
 class Runner:
     def __init__(self, dry: bool):
         self.dry = dry
@@ -133,8 +141,22 @@ class State:
     def mark(self, step: str, info: dict | None = None, dry: bool = False) -> None:
         if dry:
             return
+        self.merge_disk()
         self.data["steps"][step] = {"at": now(), **(info or {})}
         self.save()
+
+    def merge_disk(self) -> None:
+        """Keep what another process (the converter's segment hook) recorded since this one read the file."""
+        if not self.path.exists():
+            return
+        disk = json.loads(self.path.read_text())
+        for k, v in disk.items():
+            if k == "steps":
+                self.data["steps"] = {**v, **self.data.get("steps", {})}
+            elif k == "uploaded_segments":
+                self.data[k] = {**v, **self.data.get(k, {})}
+            elif k not in self.data:
+                self.data[k] = v
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -191,8 +213,12 @@ def estimate(m: dict, variant: str | None, stream: bool, segment_gb: float) -> d
         out = int(total_in / 2 * 1.08)  # bf16 in → int8 codes (+ i16 embeddings, scales)
     seg = int(segment_gb * GB)
     if stream:
-        # one input shard (two resident, `--shard-keep 2`) + one segment; a single-file source is whole.
-        peak_in = biggest if m["source_format"] == "gguf" or len(weights) <= 1 else min(total_in, 2 * biggest)
+        # Sharded safetensors: two resident shards (`--shard-keep 2`) + one segment. A GGUF is read over HTTPS ranges and
+        # never stored (`--gguf-url`): one segment and the small files.
+        if m["source_format"] == "gguf":
+            peak_in = 0
+        else:
+            peak_in = biggest if len(weights) <= 1 else min(total_in, 2 * biggest)
         peak = peak_in + seg + 2 * GB
     else:
         peak = total_in + out + 2 * GB
@@ -350,7 +376,7 @@ def remote_files(repo: str, revision: str = "main", hf: str | None = None) -> di
     code = ("import json,sys\nfrom huggingface_hub import HfApi\n"
             "info=HfApi().model_info(sys.argv[1],revision=sys.argv[2],files_metadata=True)\n"
             "print(json.dumps({s.rfilename:{'size':s.size,'sha256':(s.lfs.sha256 if s.lfs else None),'blob':s.blob_id} for s in info.siblings}))")
-    out = subprocess.run([py, "-I", "-c", code, repo, revision], check=True, text=True, capture_output=True).stdout
+    out = subprocess.run([py, "-I", "-c", code, repo, revision], check=True, text=True, capture_output=True, env=upload_env()).stdout
     return json.loads(out)
 
 
@@ -398,8 +424,10 @@ class Pipeline:
         if not self.a.dry_run and not Path(self.hf).is_file():
             problems.append(f"hf CLI not found at {self.hf}")
         # Authentication for the upload: the exit status only; the token is never read or shown.
+        if self.a.stream and self.a.no_upload and m["converter"] != "a16-legacy-wrap":
+            problems.append("--stream hands every segment to the uploader and deletes it: it cannot run with --no-upload")
         if not self.a.dry_run and not self.a.no_upload:
-            p = subprocess.run([self.hf, "auth", "whoami"], text=True, capture_output=True)
+            p = subprocess.run([self.hf, "auth", "whoami"], text=True, capture_output=True, env=upload_env())
             if p.returncode != 0:
                 problems.append("`hf auth whoami` failed: run `hf auth login --force` (uploads need a valid login)")
             else:
@@ -435,9 +463,12 @@ class Pipeline:
                 self.r.run([self.hf, "download", la["repo"], la["path"], "--revision", la["revision"], "--local-dir", str(d["legacy"])], env=env)
                 if not self.a.dry_run:
                     self.check_file(p, la["bytes"], la["sha256"])
-        weights = not self.a.stream or m["source_format"] == "gguf"
+        # Streamed: sharded safetensors arrive shard by shard during conversion; a GGUF is read over HTTPS ranges, never stored.
+        weights = not self.a.stream
         if m["converter"] == "a16-legacy-wrap":
             weights = False
+        if self.a.local_source and m["source_format"] == "gguf":
+            weights = True  # the local copy is used in place (checked against its pin, linked)
         files = needed_files(m, self.a.gguf_variant, weights=weights)
         fetch = list(files)
         if self.a.local_source:
@@ -600,6 +631,15 @@ class Pipeline:
                 argv.append("--gdn-core-wide")
             if m["converter"] == "tir-gguf":
                 argv += ["--tokenizer", str(d["src"] / "tokenizer.json")]
+                if not self.a.local_source and (self.a.stream or not model_path.exists()):
+                    # End to end: every tensor by HTTPS range at the pinned revision, the whole-file SHA-256 computed over the
+                    # streamed bytes in order and compared with the LFS id before the index is written.
+                    gw = self.gguf_weight(m)
+                    argv += ["--gguf-url", self.gguf_url(m), "--gguf-bytes", str(gw["bytes"]), "--gguf-sha256", gw["lfs_sha256"],
+                             "--gguf-window-mib", "64", "--gguf-cache-windows", "8"]
+            if self.a.calib_lazy_mib:
+                # Layer-by-layer calibration with large params bound lazily (rows read when an op asks): bounded RAM.
+                argv += ["--calib-lazy-mib", str(self.a.calib_lazy_mib), "--calib-lazy-cache-mib", "512"]
             for lf in self.license_files(m, d["src"]):
                 argv += ["--palwart-license-file", lf]
             argv += self.hook_args(m, "--palwart-on-segment", "--palwart-on-segment-arg", "--palwart-delete-after-hook")
@@ -614,11 +654,19 @@ class Pipeline:
         if self.a.dry_run:
             self.r.run(argv)
             return
-        p = subprocess.run(argv, text=True, stdout=subprocess.PIPE)
+        # The converter's reads are anonymous: no token reaches it (a public source), so none can be printed or sent.
+        p = subprocess.run(argv, text=True, stdout=subprocess.PIPE, env=anon_env())
         if p.returncode != 0:
             raise SystemExit(f"#{m['id']}: the converter exited {p.returncode}")
         report.write_text(p.stdout)
         st.mark("convert", {"report": str(report)})
+
+    def gguf_url(self, m: dict) -> str:
+        return f"{HF_RESOLVE}/{m['source_repo']}/resolve/{m['source_revision']}/{variant_file(m, self.a.gguf_variant)}"
+
+    def gguf_weight(self, m: dict) -> dict:
+        vf = variant_file(m, self.a.gguf_variant)
+        return next(f for f in m["files"] if f["path"] == vf)
 
     def prepare_gguf_side_files(self, m: dict, d: dict) -> None:
         """For a GGUF source: check the calibration tokenizer token by token against the GGUF's own vocabulary, and
@@ -631,7 +679,11 @@ class Pipeline:
         import gguf_meta  # noqa: PLC0415
 
         g = d["src"] / variant_file(m, self.a.gguf_variant)
-        src = gguf_meta.Source(path=str(g))
+        if g.exists():
+            src = gguf_meta.Source(path=str(g))
+        else:
+            # The streamed file: its header (metadata and tensor table, ~11 MB) by bounded anonymous range reads.
+            src = gguf_meta.Source(url=self.gguf_url(m))
         meta = gguf_meta.parse_full(src, keep_arrays={"tokenizer.ggml.tokens"}, keep_strings={"tokenizer.chat_template"})
         tokens = meta["arrays"].get("tokenizer.ggml.tokens") or []
         tj = json.loads((d["src"] / "tokenizer.json").read_text())
@@ -712,7 +764,7 @@ class Pipeline:
     def ensure_repo(self, m: dict) -> None:
         argv = [self.hf, "repos", "create", m["target_repo"], "--type", "model", "--exist-ok"]
         argv.append("--private" if self.a.private else "--no-private")
-        self.r.run(argv)
+        self.r.run(argv, env=upload_env())
 
     def upload_file(self, m: dict, path: Path, name: str, sha256: str | None) -> None:
         """One file, skipped when the remote already holds the same bytes."""
@@ -724,7 +776,8 @@ class Pipeline:
         if r and ((sha256 and r.get("sha256") == sha256) or (not sha256 and r.get("blob") == git_blob_sha1(path))):
             log(f"{name}: already uploaded")
             return
-        self.r.run([self.hf, "upload", m["target_repo"], str(path), name, "--commit-message", f"genesis8 #{m['id']}: {name}"])
+        self.r.run([self.hf, "upload", m["target_repo"], str(path), name, "--commit-message", f"genesis8 #{m['id']}: {name}"],
+                   env=upload_env())
 
     def upload(self, m: dict, st: State) -> None:
         if self.a.no_upload:
@@ -737,6 +790,7 @@ class Pipeline:
             return
         self.ensure_repo(m)
         d = model_dirs(self.work, m)
+        st.merge_disk()  # the segments the converter's hook uploaded
         for s in rec.get("segments", []):
             p = d["out"] / s["file"]
             if p.exists():
@@ -745,7 +799,7 @@ class Pipeline:
                 raise SystemExit(f"#{m['id']}: segment {s['file']} is neither local nor recorded as uploaded")
         stage = self.stage_files(m, rec)
         self.r.run([self.hf, "upload", m["target_repo"], str(stage), ".", "--exclude", "source-card/*",
-                    "--commit-message", f"genesis8 #{m['id']}: PALWART3 index, manifest, model card, license"])
+                    "--commit-message", f"genesis8 #{m['id']}: PALWART3 index, manifest, model card, license"], env=upload_env())
         st.mark("upload", {"repo": m["target_repo"]})
 
     # -- verify ------------------------------------------------------------------------------------
@@ -839,14 +893,15 @@ def hook_upload_segment(a: argparse.Namespace) -> int:
         print(f"upload-segment: {path} does not match what the writer reported", file=sys.stderr)
         return 3
     hf = a.hf or DEFAULT_HF
-    subprocess.run([hf, "repos", "create", m["target_repo"], "--type", "model", "--exist-ok"], check=False, capture_output=True)
+    subprocess.run([hf, "repos", "create", m["target_repo"], "--type", "model", "--exist-ok"], check=False, capture_output=True,
+                   env=upload_env())
     try:
         remote = remote_files(m["target_repo"], "main", hf)
     except Exception:  # noqa: BLE001
         remote = {}
     if (remote.get(path.name) or {}).get("sha256") != sha:
         subprocess.run([hf, "upload", m["target_repo"], str(path), path.name, "--commit-message", f"genesis8 #{m['id']}: segment {path.name}"],
-                       check=True)
+                       check=True, env=upload_env())
         remote = remote_files(m["target_repo"], "main", hf)
         r = remote.get(path.name) or {}
         if r.get("sha256") != sha or r.get("size") != size:
@@ -903,7 +958,10 @@ def main(argv=None) -> int:
     r.add_argument("--private", action="store_true", help="create the target repositories private")
     r.add_argument("--gguf-variant", help="#6: bf16 (default), iq3_s1, iq3_s2 or iq3_s3")
     r.add_argument("--segment-mib", type=int, default=2048)
-    r.add_argument("--min-free-gb", type=float, default=8.0)
+    r.add_argument("--min-free-gb", type=float, default=30.0,
+                   help="free-disk floor kept for others (the validation agent stops below 30 GB)")
+    r.add_argument("--calib-lazy-mib", type=int, default=64,
+                   help="row-streamed calibration: params of at least this many MiB are read when an op asks (0: off)")
     r.add_argument("--local-source", help="a copy of the source already downloaded at the pinned revision (one --model only); "
                                           "its files are checked against the pins and linked, never modified or deleted")
     r.add_argument("--local-legacy", help="#1: the legacy A16 .palwart already on disk (checked against its pinned SHA-256)")

@@ -154,6 +154,56 @@ struct Args {
     /// The most shards on disk at once.
     #[arg(long, default_value_t = 2)]
     shard_keep: usize,
+
+    // ---- genesis 8: a GGUF streamed over HTTPS range reads, never stored (needs the `remote` feature) ----
+    /// The pinned `resolve` URL of a GGUF file (`https://huggingface.co/<repo>/resolve/<sha>/<file>.gguf`); `model` is then only
+    /// its label (a path beside the tokenizer and metadata files the container carries).
+    #[arg(long)]
+    gguf_url: Option<String>,
+    /// Its length in bytes (the registry's).
+    #[arg(long)]
+    gguf_bytes: Option<u64>,
+    /// Its LFS SHA-256 (hex): the whole-file hash of the streamed bytes, in order, must equal it before the index is written.
+    #[arg(long)]
+    gguf_sha256: Option<String>,
+    /// Bytes per range read, in MiB.
+    #[arg(long, default_value_t = 64)]
+    gguf_window_mib: u64,
+    /// Windows kept in memory.
+    #[arg(long, default_value_t = 8)]
+    gguf_cache_windows: usize,
+}
+
+#[cfg(feature = "remote")]
+fn gguf_source(a: &Args) -> Result<Option<std::sync::Arc<dyn misaka_palw_tir_lower::weights::remote_blob::ByteSourceV1>>, String> {
+    let Some(url) = &a.gguf_url else { return Ok(None) };
+    let bytes = a.gguf_bytes.ok_or("--gguf-url needs --gguf-bytes")?;
+    let hex = a.gguf_sha256.as_deref().ok_or("--gguf-url needs --gguf-sha256")?;
+    if hex.len() != 64 || !hex.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err("--gguf-sha256: 64 hex digits".into());
+    }
+    let mut sha = [0u8; 32];
+    for (i, o) in sha.iter_mut().enumerate() {
+        *o = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())?;
+    }
+    let src = misaka_palw_tir_lower::weights::remote_blob::RemoteHashedFileV1::new(
+        Box::new(misaka_palw_tir_lower::weights::CurlFetcher::new()),
+        url,
+        bytes,
+        sha,
+        a.gguf_window_mib << 20,
+        a.gguf_cache_windows,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(Some(std::sync::Arc::new(src)))
+}
+
+#[cfg(not(feature = "remote"))]
+fn gguf_source(a: &Args) -> Result<Option<std::sync::Arc<dyn misaka_palw_tir_lower::weights::remote_blob::ByteSourceV1>>, String> {
+    if a.gguf_url.is_some() {
+        return Err("--gguf-url reads over the network: build palw-tir-convert with `--features remote`".into());
+    }
+    Ok(None)
 }
 
 fn read_json_file(p: &std::path::Path) -> Result<serde_json::Value, String> {
@@ -251,7 +301,12 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     req.quant_formats = a.quant_format.clone();
     req.adapter = a.adapter.clone();
     genesis_options(a, &mut req)?;
+    req.gguf_source = gguf_source(a)?;
     let o = convert_model(&req, &log).map_err(|e| e.to_string())?;
+    if let Some(src) = &req.gguf_source {
+        let (fetched, refetched) = src.fetched();
+        log(format!("streamed GGUF: {:.1} GiB fetched, {refetched} windows refetched and re-checked; whole-file SHA-256 equals the pin", fetched as f64 / (1u64 << 30) as f64));
+    }
     let r = &o.report;
     if !r.stream.whole.is_empty() {
         log(format!("loaded whole after deferral (no row-wise form): {:?}", r.stream.whole));

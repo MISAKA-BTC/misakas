@@ -199,6 +199,7 @@ pub fn write_palwart_v1(
     tokenizer_id: [u8; 64],
     meta: &dyn Fn(&StreamMaterialised) -> serde_json::Value,
     progress: &dyn Fn(usize, usize),
+    validate_source: &dyn Fn() -> Result<()>,
 ) -> Result<PalwartReportV1> {
     let program = &prep.lowered.program;
     let hook = command_segment_hook_v3(out.on_segment.clone(), out.delete_after_hook);
@@ -207,6 +208,9 @@ pub fn write_palwart_v1(
     let mut sink = PalwartSink::new(&mut w, program);
     let m = crate::lower::materialise_stream(&prep.lowered, &prep.hl, loader, calib, policy, stream, &mut sink, progress)?;
     let (root, leaves, tensor_bytes) = sink.finish()?;
+    // The source vouches for every byte it served (a streamed remote file: its whole-file SHA-256 against the pin) BEFORE the
+    // index — the artifact's identity — is written. Segments already handed off carry no identity without it.
+    validate_source()?;
     w.end_section(inner_scheme::TIR_INVENTORY_ROOT_V1, root, leaves).map_err(w_err)?;
     pack_common_v3(&mut w, &out.inputs).map_err(LowerError::Io)?;
     let weights = PalwArtWeightsV3 {

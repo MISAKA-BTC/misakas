@@ -143,6 +143,30 @@ pub struct Opened {
     pub gguf: bool,
 }
 
+/// **Genesis 8:** [`open_model_full`] for a GGUF read from a byte source — the streamed remote file
+/// (`weights::remote_blob::RemoteHashedFileV1`), parsed with the local reader's bounds; `label` names it in errors.
+pub fn open_model_full_source(
+    label: &std::path::Path,
+    src: std::sync::Arc<dyn crate::weights::remote_blob::ByteSourceV1>,
+    header_cap: u64,
+    opts: &LowerOpts,
+    reg: &crate::quantfmt::QuantRegistry,
+    read: &crate::hf_schema::ReadOptions,
+) -> Result<Opened> {
+    let m = crate::gguf::GgufModel::open_source(src, label, reg, header_cap)?;
+    let prepared = m.prepare(opts)?;
+    let r = crate::hf_schema::read_model_with(&m.config, None, read, reg).map_err(|f| f.error)?;
+    let level = if matches!(r.adapter, crate::model::AdapterSource::None) { crate::model::Level::A } else { crate::model::Level::B };
+    let frontend = Frontend {
+        config: m.config.clone(),
+        level,
+        adapter: r.adapter,
+        assumed_defaults: r.assumed_defaults,
+        spec_digest: crate::model::spec_digest(&prepared.spec),
+    };
+    Ok(Opened { prepared, source: Box::new(m), frontend, gguf: true })
+}
+
 /// **Genesis 8:** [`open_model_full`] over a [`crate::weights::lazy::LazyShardCheckpoint`] — the
 /// checkpoint directory holds `config.json`, the shard index and each shard's header stub; shard data
 /// is fetched on first read and evicted after use. A GGUF (one file) is refused here: it has no shards.

@@ -108,6 +108,9 @@ pub fn convert_to_container(
     Ok(report)
 }
 
+/// The most header bytes read from a streamed GGUF (its metadata and tensor table; a 248k-token vocabulary is ~11 MB).
+pub const GGUF_SOURCE_HEADER_CAP: u64 = 256 << 20;
+
 /// Calibration sequences and where they came from (a JSON record, e.g. `{"source": "random (seed 11)"}`).
 #[derive(Clone, Debug)]
 pub struct CalibInput {
@@ -185,6 +188,9 @@ pub struct ConvertRequest {
     /// **Genesis 8: write a `PALWART3` artifact** (streamed segments, `palwart_out`) instead of the
     /// `PALWTIR1` container at `out` (which is then not written).
     pub palwart: Option<crate::palwart_out::PalwartOutV1>,
+    /// **Genesis 8: a GGUF read from a byte source** (the remote file read by HTTP range and hashed in order); `model` is then
+    /// only its label. Its whole-file check completes before the `PALWART3` index is written.
+    pub gguf_source: Option<std::sync::Arc<dyn crate::weights::remote_blob::ByteSourceV1>>,
 }
 
 impl ConvertRequest {
@@ -217,6 +223,7 @@ impl ConvertRequest {
             lazy_shards: None,
             shard_sizes: BTreeMap::new(),
             palwart: None,
+            gguf_source: None,
         }
     }
 }
@@ -273,13 +280,18 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
     if let Some(pin) = &req.full_court_source_pin {
         pin.verify_files(&req.model)?;
     }
-    let opened = match &req.lazy_shards {
-        Some(spec) => crate::fidelity::open_model_full_lazy(&req.model, &opts, &reg, &read, spec, &req.shard_sizes)?,
-        None => crate::fidelity::open_model_full(&req.model, &opts, &reg, &read)?,
+    let opened = match (&req.gguf_source, &req.lazy_shards) {
+        (Some(src), _) => crate::fidelity::open_model_full_source(&req.model, src.clone(), GGUF_SOURCE_HEADER_CAP, &opts, &reg, &read)?,
+        (None, Some(spec)) => crate::fidelity::open_model_full_lazy(&req.model, &opts, &reg, &read, spec, &req.shard_sizes)?,
+        (None, None) => crate::fidelity::open_model_full(&req.model, &opts, &reg, &read)?,
     };
     let prep = &opened.prepared;
     let ck = opened.source.as_ref();
-    let descriptors = crate::fidelity::quant_descriptors_used(&req.model, prep, &reg)?;
+    let descriptors = match &req.gguf_source {
+        // The header again, through the same source (its first windows are still cached): no local path to open.
+        Some(src) => crate::gguf::GgufFile::open_source(src.clone(), &req.model, &reg, GGUF_SOURCE_HEADER_CAP)?.quant_descriptors(),
+        None => crate::fidelity::quant_descriptors_used(&req.model, prep, &reg)?,
+    };
     log(format!("{} — {}", prep.spec.architecture, crate::lower::program_summary(&prep.lowered.program).lines().next().unwrap_or("")));
     log(format!(
         "frontend: {} (level {}), spec {}",
@@ -493,6 +505,7 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
                 tokenizer_id,
                 &meta,
                 &progress("materialise"),
+                &|| ck.validate_snapshot(),
             )?;
             let report = ConvertReport {
                 file_digest: hex(&p.written.root),
@@ -521,6 +534,13 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         }
         None => {
             let report = convert_to_container(prep, &loader, &stats, &policy, &store_dir, &req.out, &copts, &progress("materialise"))?;
+            if req.gguf_source.is_some() {
+                // A streamed GGUF: the file the container was made from is the pinned one, or the container is not kept.
+                if let Err(e) = ck.validate_snapshot() {
+                    let _ = std::fs::remove_file(&req.out);
+                    return Err(e);
+                }
+            }
             log(format!(
                 "{}: {} tensors, {:.1} MiB in the tensors, {:.1} MiB file; {} chunks ({} distinct); file digest {}",
                 req.out.display(),
