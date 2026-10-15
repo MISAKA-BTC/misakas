@@ -74,3 +74,161 @@ fn every_recurrence_leaf_of_an_honest_held_v8_capture_yields_evidence_the_court_
     // Whether any leaf stands on a checkpoint depends on the derived recurrence spacing at this context; recorded, not assumed.
     let _ = anchored;
 }
+
+/// **The held-hybrid forged checkpoint, end to end** (the gap this route closes). A producer of the genesis held hybrid commits ONE
+/// recurrence-carrying checkpoint whose selected delta chunk is not the job's state (its leg, checkpoint root and execution root
+/// re-committed over the forged leaf, every later leaf re-chained). Then:
+///
+/// 1. the step evidence for a recurrence leaf standing on it names it `ForgedCheckpoint` (the accuser's own recompute disagrees);
+/// 2. the accuser's demands are exactly the transition terminal's units, as held-DA `StateChunk` units of that checkpoint;
+/// 3. the producer's answers (its own forged bytes and paths) pass the EXISTING held DA court's hash check
+///    (`palw_held_da_check_disclosure_v1`) — no new object is involved;
+/// 4. the transition evidence built from those answers convicts at consensus (`check_gdn_transition_refutation_v2`).
+#[test]
+fn a_forged_held_checkpoint_is_demanded_answered_and_convicted() {
+    use kaspa_consensus_core::palw_attn_court_v1::{PalwAttnCheckpointAnchorV1, PalwAttnChunkOpeningV1};
+    use kaspa_consensus_core::palw_context_ladder::{palw_checkpoint_leaf_carries_recurrence_v1, palw_checkpoint_positions_at_v1};
+    use kaspa_consensus_core::palw_held_da_v1::{PalwHeldDisclosureV1, PalwHeldMissingV1, palw_held_da_check_disclosure_v1};
+    use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+    use kaspa_consensus_core::palw_step_leg::{binding_commitment_root_v1, checkpoint_leaf_hash_v2, step_opening_capped_v1};
+    use kaspa_consensus_core::palw_step_refute::memory_v2::{check_gdn_transition_refutation_v2, gdn_transition_demands_v2};
+    use misaka_palw_base0::gdn_evidence_v2::{
+        Base0GdnCheckpointCourtV2, base0_gdn_forged_checkpoint_demands_v2, base0_gdn_step_evidence_v2,
+        base0_gdn_transition_evidence_from_disclosures_v2,
+    };
+
+    let (artifact, mut geometry) = qwen36_fixture();
+    geometry.n_ctx = 32;
+    let profile = qwen36_profile_v8(geometry).expect("graph-v8 projects");
+    let backend = qwen36_backend(&artifact, &profile, qwen36_held_canonical_v1(32)).with_attempt_rules(PalwAttemptRulesV1::CoreV1);
+    let (canonical, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x6D_6E02)).expect("a job");
+    let out = backend.execute(&palw_attempt_job_v1(canonical, true), &prompt).expect("the honest attempt runs");
+    let honest = backend.gdn_accuser_view_v2(&out.material, None).expect("the accuser's view of the served capture");
+    let kernels = || backend.gdn_recompute_kernels_v2().expect("the registered plan");
+    let (b, ctx) = (&honest.binding, &honest.binding.job_context);
+
+    // The recurrence node and the first recurrence-carrying checkpoint.
+    let gdn_step = kernel_semantics_id_v1(KDESC_Q36_GDN_STEP);
+    let node_slot = (0..u32::MAX)
+        .take_while(|s| b.shape_profile.resolve_node_slot(*s).is_some())
+        .find(|s| b.shape_profile.resolve_node_slot(*s).is_some_and(|(n, l)| l.is_some() && n.kernel_semantics_id == gdn_step))
+        .expect("a recurrence step node");
+    let (index, positions) = honest
+        .checkpoint_leaves
+        .iter()
+        .map(|leaf| (leaf.checkpoint_index, palw_checkpoint_positions_at_v1(&b.shape_profile, ctx, leaf.covered_decode_call)))
+        .find(|(_, positions)| palw_checkpoint_leaf_carries_recurrence_v1(&b.shape_profile, *positions))
+        .expect("the job reaches a recurrence-carrying checkpoint (spacing 16 at this context)");
+
+    // The producer's forged state at that checkpoint: the honest chunks, one byte of the first demanded chunk flipped.
+    let demands = gdn_transition_demands_v2(b, node_slot, 0, index).expect("the transition's units");
+    let PalwHeldMissingV1::StateChunk { chunk: first, .. } = demands[0] else { panic!("state-chunk units") };
+    let mut state = misaka_palw_base0::fp_recompute::base0_fp_recompute_state_at_covered_v1(
+        &b.shape_profile,
+        ctx,
+        &honest.prompt_token_ids,
+        &honest.output_token_ids,
+        honest.checkpoint_leaves[index as usize].covered_decode_call,
+        &mut kernels(),
+        honest.prompt_ids_form,
+    )
+    .expect("the honest state");
+    state.chunks[first as usize][0] ^= 0x01;
+    let forged_root = misaka_palw_base0::fp_interval::base0_state_chunks_root_for_v1(&b.shape_profile, positions, &state.chunks)
+        .expect("the forged state roots");
+
+    // Re-commit the leg over the forged leaf (and re-chain every later leaf), then the binding.
+    let mut forged = honest.clone();
+    let (ctx_hash, profile_hash, map) =
+        (ctx.context_hash(), forged.binding.checkpoint_profile.profile_hash(), forged.binding.state_chunk_map_id);
+    forged.checkpoint_leaves[index as usize].state_chunks_root = forged_root;
+    for j in index as usize + 1..forged.checkpoint_leaves.len() {
+        let prev = checkpoint_leaf_hash_v2(&ctx_hash, &profile_hash, &map, &forged.checkpoint_leaves[j - 1]);
+        forged.checkpoint_leaves[j].prev_checkpoint_leaf_hash = prev;
+    }
+    let leg = misaka_palw_base0::legs::Base0CheckpointCaptureV1::from_leaves_v1(
+        ctx,
+        &forged.binding.shape_profile,
+        &forged.binding.checkpoint_profile,
+        &forged.checkpoint_leaves,
+    )
+    .expect("the forged leg rebuilds");
+    forged.binding.checkpoint_merkle_root = leg.merkle_root;
+    forged.binding.committed_execution_root = binding_commitment_root_v1(&forged.binding);
+
+    // 1. A recurrence leaf standing on the forged checkpoint is not adjudicated on it.
+    let standing =
+        (0..forged.binding.step_leaf_count).filter_map(|i| canonical_step_coordinates(&forged.binding.shape_profile, ctx, i)).find(
+            |c| c.node_slot == node_slot && gdn_replay_start_v2(&forged.binding, c).is_ok_and(|s| s.checkpoint_index == Some(index)),
+        );
+    if let Some(coord) = standing {
+        assert!(matches!(
+            base0_gdn_step_evidence_v2(&forged.view(), coord, kernels),
+            Ok(Base0GdnEvidenceV2::ForgedCheckpoint { index: at }) if at == index
+        ));
+    }
+
+    // 2. The demands are the terminal's units.
+    let asked = base0_gdn_forged_checkpoint_demands_v2(
+        &forged.view(),
+        Base0GdnCheckpointCourtV2::Transition { node_slot, head: 0 },
+        index,
+        kernels,
+    )
+    .expect("a forged checkpoint is demandable");
+    assert_eq!(asked, demands);
+
+    // 3. The producer's answers pass the existing held DA court.
+    let opening = step_opening_capped_v1(&leg.leaf_hashes, u64::from(index), PALW_STEP_LEG_MAX_LEAVES).expect("an opening");
+    let anchor = PalwAttnCheckpointAnchorV1 { leaf: forged.checkpoint_leaves[index as usize].clone(), opening };
+    let answers: Vec<PalwHeldDisclosureV1> = demands
+        .iter()
+        .map(|d| {
+            let PalwHeldMissingV1::StateChunk { chunk, .. } = *d else { unreachable!() };
+            let siblings = kaspa_consensus_core::palw_state_chunk_map::palw_state_chunk_path_for_map_v1(
+                &forged.binding.shape_profile,
+                positions,
+                &state.chunks,
+                chunk,
+            )
+            .expect("the producer's path");
+            PalwHeldDisclosureV1::StateChunk {
+                anchor: anchor.clone(),
+                chunk: PalwAttnChunkOpeningV1 { chunk_index: chunk, chunk_bytes: state.chunks[chunk as usize].clone(), siblings },
+            }
+        })
+        .collect();
+    for (d, a) in demands.iter().zip(&answers) {
+        palw_held_da_check_disclosure_v1(
+            &forged.binding.committed_execution_root,
+            d,
+            &forged.binding,
+            a,
+            PALW_STEP_LEG_MAX_LEAVES,
+            PalwPromptIdsFormV1::MerkleV1,
+        )
+        .expect("the held DA court accepts the producer's own answer");
+    }
+
+    // 4. The evidence from the answers convicts.
+    let refutation =
+        base0_gdn_transition_evidence_from_disclosures_v2(&forged.view(), node_slot, 0, index, &demands, &answers, kernels)
+            .expect("the transition evidence assembles from the answers");
+    let inventory = misaka_palw_base0::inventory::qwen36_inventory_v1(&artifact, &profile).expect("an inventory");
+    let openings: Vec<_> = (0..inventory.operands().len())
+        .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).unwrap())
+        .collect();
+    let oracle = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root()).unwrap();
+    let verdict = check_gdn_transition_refutation_v2(
+        &refutation,
+        forged.binding.committed_execution_root,
+        profile.shape_profile_id(),
+        &oracle,
+        PALW_STEP_LEG_MAX_LEAVES,
+    )
+    .expect("the forged checkpoint convicts");
+    assert!(matches!(
+        verdict.mismatch,
+        kaspa_consensus_core::palw_step_refute::memory_v2::PalwGdnMismatchV2::DeltaState { head: 0, .. }
+    ));
+}

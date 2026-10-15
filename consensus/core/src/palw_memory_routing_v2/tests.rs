@@ -232,3 +232,27 @@ fn every_blame_path_judges_the_claim_like_the_claim_gate_and_the_court() {
     assert_eq!(c::PalwCellClosureModeV1::Legacy.bound_router_slot(&q35, 0), None);
     assert_eq!(c::PalwCellClosureModeV1::MemoryRoutingV2 { router_binding: None }.bound_router_slot(&q35, 0), None);
 }
+
+/// **Genesis family pin — id 8, Qwen3.6-35B-A3B on the legacy Qwen3.6 integer runtime** (the one genesis GDN family on the legacy
+/// step court; ids 2, 3 and 6 are TIR programs, judged by the native TIR courts). Its registrable row is graph-v8: profile version
+/// 3 on the held composition whose recurrence half spells the 16 key / 32 value heads (v5), per-position cadence. Past consumer
+/// v2 it is covered with NO router binding (one q36 router per layer table, the legacy routing appendix), its recurrence geometry
+/// derives under the key-head layout, and its recurrence leaves enter the anchored court's replay gate.
+#[test]
+fn the_genesis_qwen36_moe_row_is_covered_by_consumer_v2_without_a_binding() {
+    use crate::palw_cell_coverage_closure_v1 as c;
+    let p = crate::palw_context_ladder::palw_qwen36_context_row_profile_v8(8192).expect("the 8k graph-v8 row projects");
+    assert!(maps::palw_profile_is_held_v4(&p) && maps::palw_profile_spells_key_heads_v1(&p), "held v5, key heads spelled");
+    let claim_time = PalwCellConsumersV2 { router_binding: None, registration: false };
+    assert!(c::palw_cell_closure_refusal_v2(&p, claim_time).is_none(), "covered at the claim gate with no binding");
+    assert!(palw_legacy_cell_coverage_v2(&p, claim_time).is_ok());
+    let geometry = crate::palw_gdn_state_map_v2::PalwGdnStateGeometryV2::of(&p).expect("the key-head recurrence layout derives");
+    assert!(geometry.key_heads < geometry.heads, "16 key heads grouped over 32 value heads");
+    assert!(
+        crate::palw_context_ladder::palw_checkpoint_leaf_carries_recurrence_v1(
+            &p,
+            crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4
+        ),
+        "a recurrence checkpoint every history tile — the held route's demand unit"
+    );
+}

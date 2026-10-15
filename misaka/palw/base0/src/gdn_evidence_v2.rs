@@ -16,23 +16,29 @@
 //!   committed leaf, the step terminal has nothing honest to stand on, and the answer is [`Base0GdnEvidenceV2::ForgedCheckpoint`] —
 //!   the transition terminal's case, not an approximation.
 //!
-//! What this module cannot do, said rather than papered over: a forged checkpoint of a **per-position** (held) class is convicted
-//! by the transition terminal only with the producer's own bytes for it, and a per-position retention serves none (its chunks are
-//! re-derived, `Base0FpMaterialV2::checkpoint_chunks` is empty). Those bytes reach an accuser only through a chunk demand the
-//! producer answers; [`base0_gdn_transition_evidence_v2`] refuses by name until one is carried.
+//! **A forged checkpoint of a per-position (held) class** — the genesis Qwen3.6 hybrid's cadence — is convicted by the transition
+//! terminal only with the producer's own bytes for it, and a per-position retention serves none (its chunks are re-derived,
+//! `Base0FpMaterialV2::checkpoint_chunks` is empty). Those bytes come through the EXISTING held data-availability court, no new
+//! object: the accuser demands the exact chunks the terminal reads ([`base0_gdn_forged_checkpoint_demands_v2`] →
+//! `PalwDaUnitV1::Held(StateChunk)` sessions), the producer answers them (`MaterialDisclosedV2`, hash-checked against the claim's
+//! roots) or defaults (that court's DA-7 conviction), and an answer becomes the evidence
+//! ([`base0_gdn_transition_evidence_from_disclosures_v2`], [`base0_gdn_conv_window_evidence_from_disclosures_v2`]). The served-bytes
+//! builders ([`base0_gdn_transition_evidence_v2`]) stay the per-decode-call route.
 //!
 //! Nothing here is a proof of computation (PRINCIPLES §8): every output authenticates data membership, and the verdict is the
 //! court's deterministic recomputation over it. Nothing here grants credit.
 use crate::fp_recompute::{Base0FpRecomputeKernelsV1, base0_fp_recompute_state_at_covered_v1};
 use crate::legs::{Base0CheckpointCaptureV1, Base0CheckpointsV1, Base0StepTilesV1};
 use kaspa_consensus_core::palw_context_ladder::{PalwCheckpointCadenceV1, palw_checkpoint_cadence_v1};
+use kaspa_consensus_core::palw_held_da_v1::{PalwHeldDisclosureV1, PalwHeldMissingV1};
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, canonical_step_leaf_index};
 use kaspa_consensus_core::palw_step_leg::{PalwCheckpointLeafV2, PalwStepBindingV2, PalwStepTileLeafV1};
 use kaspa_consensus_core::palw_step_refute::memory_v2::{
     PalwGdnCaptureV2, PalwGdnConvWindowRefutationV2, PalwGdnStepRefutationV2, PalwGdnTransitionRefutationV2,
-    gdn_conv_window_refutation_from_capture_v2, gdn_refutation_from_capture_v2, gdn_replay_start_v2,
-    gdn_transition_refutation_from_capture_v2,
+    gdn_checkpoint_witness_from_disclosures_v2, gdn_conv_window_demands_v2, gdn_conv_window_refutation_from_capture_v2,
+    gdn_conv_window_refutation_with_accused_v2, gdn_refutation_from_capture_v2, gdn_replay_start_v2, gdn_transition_demands_v2,
+    gdn_transition_refutation_from_capture_v2, gdn_transition_refutation_with_accused_v2,
 };
 
 /// **What an accuser holds of one claim's execution.**
@@ -53,6 +59,35 @@ pub struct Base0GdnMaterialV2<'a> {
     pub prompt_ids_form: PalwPromptIdsFormV1,
     /// The ruleset's step ladder (the path depth every opening is cut at).
     pub max_leaves: u64,
+}
+
+/// **The accuser's decoded view of one served capture, owned** — what a family's backend builds once from material bytes
+/// (`Qwen36Backend::gdn_accuser_view_v2`); [`Self::view`] lends it as [`Base0GdnMaterialV2`].
+#[derive(Clone)]
+pub struct Base0GdnOwnedMaterialV2 {
+    pub binding: PalwStepBindingV2,
+    pub tiles: Base0StepTilesV1,
+    pub checkpoint_leaves: Vec<PalwCheckpointLeafV2>,
+    pub served_chunks: Vec<Vec<Vec<u8>>>,
+    pub prompt_token_ids: Vec<u32>,
+    pub output_token_ids: Vec<u32>,
+    pub prompt_ids_form: PalwPromptIdsFormV1,
+    pub max_leaves: u64,
+}
+
+impl Base0GdnOwnedMaterialV2 {
+    pub fn view(&self) -> Base0GdnMaterialV2<'_> {
+        Base0GdnMaterialV2 {
+            binding: &self.binding,
+            tiles: &self.tiles,
+            checkpoint_leaves: &self.checkpoint_leaves,
+            served_chunks: &self.served_chunks,
+            prompt_token_ids: &self.prompt_token_ids,
+            output_token_ids: &self.output_token_ids,
+            prompt_ids_form: self.prompt_ids_form,
+            max_leaves: self.max_leaves,
+        }
+    }
 }
 
 /// What the step-evidence builder found.
@@ -155,8 +190,8 @@ pub fn base0_gdn_step_evidence_v2<K: Base0FpRecomputeKernelsV1>(
 fn served_v2<'m>(material: &'m Base0GdnMaterialV2<'_>, leg: &Base0CheckpointsV1, index: u32) -> Result<&'m Vec<Vec<u8>>, String> {
     if leg.chunks.is_empty() && material.served_chunks.is_empty() {
         return Err(format!(
-            "checkpoint {index} of a per-position class has no served state: its bytes reach an accuser only through a chunk demand \
-             the producer answers (not carried by this builder)"
+            "checkpoint {index} of a per-position class has no served state: demand its chunks through the held DA court \
+             (base0_gdn_forged_checkpoint_demands_v2) and build from the answers (base0_gdn_transition_evidence_from_disclosures_v2)"
         ));
     }
     material.served_chunks.get(index as usize).ok_or_else(|| format!("the producer served no chunks for checkpoint {index}"))
@@ -261,4 +296,118 @@ pub fn base0_gdn_first_forged_checkpoint_v2<K: Base0FpRecomputeKernelsV1>(
         }
     }
     Ok(None)
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// The per-position (held) route: the forged checkpoint's bytes through the existing held DA court
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/// What an accuser of a forged checkpoint demands, by which terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Base0GdnCheckpointCourtV2 {
+    /// The delta state of the recurrence at `node_slot` (`head`'s slice of a Q36 step; every head of the fused float core).
+    Transition { node_slot: u32, head: u32 },
+    /// `head`'s convolution window of the layer whose Q36 convolution is `conv_slot`.
+    ConvWindow { conv_slot: u32, head: u32 },
+}
+
+/// **The held DA units to demand of the producer for checkpoint `index`** — exactly the chunks `court`'s terminal reads, derived
+/// from the binding as the terminal derives them (`memory_v2::gdn_transition_demands_v2` / `gdn_conv_window_demands_v2`). The
+/// accuser opens one `PalwDaUnitV1::Held` session per unit (the existing court's budgets, clock and DA-7 default apply unchanged).
+/// Refused when the accuser's own recompute finds checkpoint `index` honest (nothing to demand) or an earlier one forged.
+pub fn base0_gdn_forged_checkpoint_demands_v2<K: Base0FpRecomputeKernelsV1>(
+    material: &Base0GdnMaterialV2<'_>,
+    court: Base0GdnCheckpointCourtV2,
+    index: u32,
+    kernels: impl FnMut() -> K,
+) -> Result<Vec<PalwHeldMissingV1>, String> {
+    let leg = base0_gdn_leg_v2(material)?;
+    confirm_first_forged_v2(material, &leg, index, kernels)?;
+    let demands = match court {
+        Base0GdnCheckpointCourtV2::Transition { node_slot, head } => {
+            gdn_transition_demands_v2(material.binding, node_slot, head, index)
+        }
+        Base0GdnCheckpointCourtV2::ConvWindow { conv_slot, head } => {
+            gdn_conv_window_demands_v2(material.binding, conv_slot, head, index)
+        }
+    };
+    demands.map_err(|e| e.to_string())
+}
+
+/// Checkpoint `index` is not the job's state and (for the transition terminal's induction) its predecessor is.
+fn confirm_first_forged_v2<K: Base0FpRecomputeKernelsV1>(
+    material: &Base0GdnMaterialV2<'_>,
+    leg: &Base0CheckpointsV1,
+    index: u32,
+    mut kernels: impl FnMut() -> K,
+) -> Result<(), String> {
+    let accused = leg.leaves.get(index as usize).ok_or("the leg has no such checkpoint")?;
+    if honest_chunks_v2(material, accused, kernels())?.is_some() {
+        return Err(format!("checkpoint {index} is the state the job reaches: there is nothing to accuse"));
+    }
+    Ok(())
+}
+
+/// **The transition evidence against a forged checkpoint `index` of a per-position class, from the producer's held DA answers** —
+/// `answers[i]` the producer's `StateChunk` answer to `demands[i]` (as accepted on chain). The predecessor checkpoint, if the
+/// induction needs one, is the accuser's OWN recompute, authenticated against its committed leaf (refused when the predecessor is
+/// itself forged: accuse the first forged checkpoint). The court authenticates the answered chunks against the committed root.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_gdn_transition_evidence_from_disclosures_v2<K: Base0FpRecomputeKernelsV1>(
+    material: &Base0GdnMaterialV2<'_>,
+    node_slot: u32,
+    head: u32,
+    index: u32,
+    demands: &[PalwHeldMissingV1],
+    answers: &[PalwHeldDisclosureV1],
+    kernels: impl FnMut() -> K,
+) -> Result<PalwGdnTransitionRefutationV2, String> {
+    let leg = base0_gdn_leg_v2(material)?;
+    if demands != gdn_transition_demands_v2(material.binding, node_slot, head, index).map_err(|e| e.to_string())?.as_slice() {
+        return Err("the answered demands are not the units this transition reads".to_string());
+    }
+    let accused = gdn_checkpoint_witness_from_disclosures_v2(demands, answers).map_err(|e| e.to_string())?;
+    // The predecessor is whichever checkpoint the assembler derives (the cadence's exact predecessor, as the terminal derives it);
+    // it is served lazily from the accuser's OWN recompute, and a predecessor that is itself forged refuses the accusation by name.
+    let kernels = std::cell::RefCell::new(kernels);
+    let failure: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
+    let checkpoint = |i: u32| -> Option<(PalwCheckpointLeafV2, Vec<Vec<u8>>)> {
+        let leaf = leg.leaves.get(i as usize)?;
+        let fresh = (&mut *kernels.borrow_mut())();
+        match honest_chunks_v2(material, leaf, fresh) {
+            Ok(Some(chunks)) => Some((leaf.clone(), chunks)),
+            Ok(None) => {
+                *failure.borrow_mut() =
+                    Some(format!("checkpoint {i} is already not the job's state: accuse the first forged checkpoint"));
+                None
+            }
+            Err(why) => {
+                *failure.borrow_mut() = Some(why);
+                None
+            }
+        }
+    };
+    let tile = tile_source_v2(material);
+    gdn_transition_refutation_with_accused_v2(&capture_v2(material, &leg), node_slot, head, index, accused, &tile, &checkpoint)
+        .map_err(|e| failure.borrow_mut().take().unwrap_or_else(|| e.to_string()))
+}
+
+/// **The convolution-window evidence against a forged checkpoint `index` of a per-position class, from the producer's held DA
+/// answers** — `answers[i]` answers `demands[i]`; the window's expected rows are the claim's committed projection rows.
+pub fn base0_gdn_conv_window_evidence_from_disclosures_v2(
+    material: &Base0GdnMaterialV2<'_>,
+    conv_slot: u32,
+    head: u32,
+    index: u32,
+    demands: &[PalwHeldMissingV1],
+    answers: &[PalwHeldDisclosureV1],
+) -> Result<PalwGdnConvWindowRefutationV2, String> {
+    let leg = base0_gdn_leg_v2(material)?;
+    if demands != gdn_conv_window_demands_v2(material.binding, conv_slot, head, index).map_err(|e| e.to_string())?.as_slice() {
+        return Err("the answered demands are not the units this window reads".to_string());
+    }
+    let accused = gdn_checkpoint_witness_from_disclosures_v2(demands, answers).map_err(|e| e.to_string())?;
+    let tile = tile_source_v2(material);
+    gdn_conv_window_refutation_with_accused_v2(&capture_v2(material, &leg), conv_slot, head, index, accused, &tile)
+        .map_err(|e| e.to_string())
 }
