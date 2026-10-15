@@ -10,7 +10,7 @@ use crate::palw_freeprompt_v3::{PalwFpStopReasonV3, PalwFreePromptCommitmentV3, 
 use crate::palw_rendering_stream_v1::PalwRenderingStreamV1;
 use crate::palw_state_v2::PalwBondKeyV2;
 use crate::palw_step_leg::{PalwStepBindingV2, PalwStepFaultV1, PalwStepOpeningV1, verify_binding_v1};
-use crate::palw_step_refute::{PALW_LOGITS_TILE_LANES, PalwTiledDecodePinV1, tiled_row_authenticate_v1, tiled_tile_authenticate_v1};
+use crate::palw_step_refute::{PALW_LOGITS_TILE_LANES, PalwTiledDecodePinV1, tiled_tile_authenticate_v1};
 use borsh::{BorshDeserialize, BorshSerialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwConstraintStreamPhaseV1 {
@@ -168,15 +168,60 @@ impl PalwConstraintStreamCourtV1 {
             return Err("stream binding is not the actual claim root".into());
         }
         verify_binding_v1(binding).map_err(|e| e.to_string())?;
-        if !job.is_constraint() || fp_job_id_v3(job) != binding.job_context.job_id {
+        Self::new_from_tiled_view_v1(
+            claim_id,
+            owner,
+            reserved_daa,
+            expected_root,
+            &crate::palw_decode_view_v1::PalwDecodeViewV1::of_verified_binding_v1(binding),
+            &borsh::to_vec(binding).map_err(|e| e.to_string())?,
+            job,
+            pin,
+            witness,
+            eog_count,
+            eog_opening,
+            ladder,
+            signed_context,
+        )
+    }
+    /// The tiled seed over a decode view. The caller derives `view` natively (a verified legacy
+    /// binding, or a TIR claim's admitted header and registered record) and passes the exact
+    /// bytes that identified it at admission as `view_identity` (the legacy binding's borsh, or
+    /// the TIR header's), which enter the canonical seed identity unchanged.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_from_tiled_view_v1(
+        claim_id: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        expected_root: Hash64,
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        view_identity: &[u8],
+        job: &PalwFreePromptJobV3,
+        pin: &PalwTiledDecodePinV1,
+        witness: Option<u32>,
+        eog_count: u32,
+        eog_opening: &PalwStepOpeningV1,
+        ladder: u64,
+        signed_context: Option<Hash64>,
+    ) -> Result<Self, String> {
+        if view.committed_execution_root != expected_root {
+            return Err("stream binding is not the actual claim root".into());
+        }
+        if !job.is_constraint() || fp_job_id_v3(job) != view.job_context.job_id {
             return Err("stream job is not the job authenticated by the claim".into());
         }
         if pin.generated_token_ids.len() > crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS {
             return Err("stream seed exceeds authenticated trace format".into());
         }
-        let (ctx, vocab, tiles) =
-            tiled_row_authenticate_v1(binding, &pin.generated_token_ids, pin.position, &pin.row_root, &pin.row_opening, ladder)
-                .map_err(|e| e.to_string())?;
+        let (ctx, vocab, tiles) = crate::palw_step_refute::tiled_row_authenticate_view_v1(
+            view,
+            &pin.generated_token_ids,
+            pin.position,
+            &pin.row_root,
+            &pin.row_opening,
+            ladder,
+        )
+        .map_err(|e| e.to_string())?;
         let committed = pin.generated_token_ids[pin.position as usize];
         if committed as usize >= vocab || witness.is_some_and(|w| w as usize >= vocab) {
             return Err("stream selected token is outside registered vocabulary".into());
@@ -212,12 +257,13 @@ impl PalwConstraintStreamCourtV1 {
                 committed as usize,
             );
         }
-        Self::from_authenticated_selection_v1(
+        Self::from_authenticated_selection_view_v1(
             claim_id,
             owner,
             reserved_daa,
             expected_root,
-            binding,
+            view,
+            view_identity,
             job,
             &pin.generated_token_ids,
             pin.position,
@@ -408,14 +454,55 @@ impl PalwConstraintStreamCourtV1 {
         terminal_stop: Option<PalwFpStopReasonV3>,
     ) -> Result<Self, String> {
         verify_binding_v1(binding).map_err(|e| e.to_string())?;
-        if binding.committed_execution_root != expected_root
+        Self::from_authenticated_selection_view_v1(
+            claim_id,
+            owner,
+            reserved_daa,
+            expected_root,
+            &crate::palw_decode_view_v1::PalwDecodeViewV1::of_verified_binding_v1(binding),
+            &borsh::to_vec(binding).map_err(|e| e.to_string())?,
+            job,
+            generated,
+            position,
+            witness,
+            beat,
+            beats,
+            eog_count,
+            eog_opening,
+            signed_context,
+            canonical_pin,
+            terminal_stop,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn from_authenticated_selection_view_v1(
+        claim_id: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        expected_root: Hash64,
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        view_identity: &[u8],
+        job: &PalwFreePromptJobV3,
+        generated: &[u32],
+        position: u32,
+        witness: Option<u32>,
+        beat: Option<u32>,
+        beats: bool,
+        eog_count: u32,
+        eog_opening: &PalwStepOpeningV1,
+        signed_context: Option<Hash64>,
+        canonical_pin: &[u8],
+        terminal_stop: Option<PalwFpStopReasonV3>,
+    ) -> Result<Self, String> {
+        let vocab_size = view.vocab_size;
+        if view.committed_execution_root != expected_root
             || !job.is_constraint()
-            || fp_job_id_v3(job) != binding.job_context.job_id
-            || generated.len() != binding.job_context.exact_decode_tokens as usize
+            || fp_job_id_v3(job) != view.job_context.job_id
+            || generated.len() != view.job_context.exact_decode_tokens as usize
             || generated.len() > crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS
             || (generated.get(position as usize).is_none() && !(position as usize == generated.len() && terminal_stop.is_some()))
-            || witness.is_some_and(|id| id >= binding.shape_profile.vocab_size)
-            || beat.is_some_and(|id| id >= binding.shape_profile.vocab_size)
+            || witness.is_some_and(|id| id >= vocab_size)
+            || beat.is_some_and(|id| id >= vocab_size)
         {
             return Err("authenticated semantic selection changes original claim/job/position/vocabulary".into());
         }
@@ -428,7 +515,7 @@ impl PalwConstraintStreamCourtV1 {
         h.update(&borsh::to_vec(&owner).map_err(|e| e.to_string())?);
         h.update(&reserved_daa.to_le_bytes());
         // Canonical seed identity retains the actual pin, job and binding, not a caller-reencoded fault.
-        h.update(&borsh::to_vec(binding).map_err(|e| e.to_string())?);
+        h.update(view_identity);
         h.update(&borsh::to_vec(job).map_err(|e| e.to_string())?);
         h.update(canonical_pin);
         h.update(&borsh::to_vec(&witness).map_err(|e| e.to_string())?);
@@ -441,14 +528,14 @@ impl PalwConstraintStreamCourtV1 {
         // An original selected ID outside the registered vocabulary cannot be output by
         // the same selection kernel. No rendering, EOG membership or logit is required.
         let invalid = if terminal_stop.is_some() {
-            generated.iter().position(|id| *id >= binding.shape_profile.vocab_size).map(|p| p as u32)
+            generated.iter().position(|id| *id >= vocab_size).map(|p| p as u32)
         } else {
-            generated.get(position as usize).filter(|id| **id >= binding.shape_profile.vocab_size).map(|_| position)
+            generated.get(position as usize).filter(|id| **id >= vocab_size).map(|_| position)
         };
         let eog = if invalid.is_some() {
             None
         } else {
-            Some(PalwEogStreamV1::new(context, table_root, binding.shape_profile.vocab_size, eog_count, &relevant, eog_opening)?)
+            Some(PalwEogStreamV1::new(context, table_root, vocab_size, eog_count, &relevant, eog_opening)?)
         };
         let prefix_state = constraint_start_state_v1(&constraint);
         Ok(Self {
@@ -456,10 +543,10 @@ impl PalwConstraintStreamCourtV1 {
             owner,
             reserved_daa,
             root: expected_root,
-            job_id: binding.job_context.job_id,
+            job_id: view.job_context.job_id,
             context,
             table_root,
-            vocab: binding.shape_profile.vocab_size,
+            vocab: vocab_size,
             constraint,
             generated: generated.to_vec(),
             position,
