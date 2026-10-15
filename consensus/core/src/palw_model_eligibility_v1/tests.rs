@@ -318,6 +318,27 @@ fn u5_the_pre_fence_grace_is_one_period_and_needs_certification() {
     assert!(palw_eligibility_security_credit_needs_certification_v1(Some(&m), &probation, None, FENCE + 6));
 }
 
+/// **U-7 (user decision 2026-10-15): RFC-0017 and the ECON gate coexist** — payment is released only when every required gate holds,
+/// deferred while one is undecided, withheld when one fails; the two gates never double-count or double-bill one check.
+#[test]
+fn u7_payment_needs_every_gate_and_nothing_is_counted_twice() {
+    use crate::palw_econ_contracts_v1::PalwModelVerificationOutcomeV1 as E;
+    use PalwPaymentReleaseV1::*;
+    assert_eq!(palw_eligibility_payment_release_v1(true, None, None), Release, "no gate in force: the old rule");
+    assert_eq!(palw_eligibility_payment_release_v1(true, Some(E::Attested), None), Release);
+    assert_eq!(palw_eligibility_payment_release_v1(true, Some(E::NoFinalClaim), None), Release);
+    assert_eq!(palw_eligibility_payment_release_v1(false, Some(E::Attested), None), Withhold, "RFC-0017: no subsidy right");
+    assert_eq!(palw_eligibility_payment_release_v1(true, Some(E::Unattested), None), Withhold, "ECON: unattested");
+    assert_eq!(palw_eligibility_payment_release_v1(true, Some(E::Pending), None), Defer);
+    assert_eq!(palw_eligibility_payment_release_v1(true, Some(E::Attested), Some(None)), Defer, "certification undecided");
+    assert_eq!(palw_eligibility_payment_release_v1(true, Some(E::Attested), Some(Some(false))), Withhold);
+    assert_eq!(palw_eligibility_payment_release_v1(true, Some(E::Attested), Some(Some(true))), Release);
+    // No double billing: an exam's inspection is paid from the applicant's escrow once (per commit), and ECON's tally is not an exam.
+    let p = policy();
+    assert_eq!(palw_eligibility_inspection_escrow_v1(&p), p.inspection_fee_per_position_sompi * p.exam_m as u64);
+    assert_ne!(PALW_MODEL_ELIGIBILITY_TABLE_V1, crate::palw_econ_contracts_v1::PALW_MODEL_VERIFICATION_TABLE_V1, "separate ledgers");
+}
+
 #[test]
 fn req_elig_1_a_new_registration_is_a_job_only_model() {
     let m = mirror();

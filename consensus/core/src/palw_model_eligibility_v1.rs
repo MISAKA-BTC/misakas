@@ -655,6 +655,41 @@ pub fn palw_eligibility_security_credit_needs_certification_v1(
         || palw_eligibility_in_pre_fence_grace_v1(mirror, class, row, daa)
 }
 
+/// **U-7 (user decision 2026-10-15): what releases a reward-bearing claim's issuance-funded payment** while RFC-0017 and the ECON
+/// round-2 gate coexist. RFC-0017 is the MODEL's eligibility / renewal gate (read at the claim's acceptance: a Registered / Lapsed
+/// class takes no reward-bearing claim at all); ECON is the per-epoch verification-and-payment gate (`palw_model_verification_gate_v1`);
+/// U-2 / U-5 add certification (RFC-0018 Gate C) where a class's claims need it. The payment is released only when EVERY required
+/// gate holds; one undecided gate defers it; one failed gate withholds it (never minted). Neither gate re-counts or re-bills the
+/// other's check: an RFC-0017 exam is paid from the applicant's inspection escrow (U-4) and is never an ECON tally; an ECON tally is
+/// never charged to an applicant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwPaymentReleaseV1 {
+    Release,
+    Defer,
+    Withhold,
+}
+
+/// **U-7: the release decision** — `subsidy_at_acceptance`: RFC-0017's subsidy right at the claim's acceptance (`true` where
+/// ungoverned); `econ`: the ECON gate's model-epoch outcome (`None` where that gate is not in force); `certified`: `None` where no
+/// certification is required, else `Some(None)` undecided / `Some(Some(certified))`.
+pub fn palw_eligibility_payment_release_v1(
+    subsidy_at_acceptance: bool,
+    econ: Option<crate::palw_econ_contracts_v1::PalwModelVerificationOutcomeV1>,
+    certified: Option<Option<bool>>,
+) -> PalwPaymentReleaseV1 {
+    use crate::palw_econ_contracts_v1::PalwModelVerificationOutcomeV1 as E;
+    if !subsidy_at_acceptance {
+        return PalwPaymentReleaseV1::Withhold;
+    }
+    if matches!(econ, Some(E::Unattested)) || matches!(certified, Some(Some(false))) {
+        return PalwPaymentReleaseV1::Withhold;
+    }
+    if matches!(econ, Some(E::Pending)) || matches!(certified, Some(None)) {
+        return PalwPaymentReleaseV1::Defer;
+    }
+    PalwPaymentReleaseV1::Release
+}
+
 /// **The one gate every path reads** (RFC-0017 §6): the rights of the class for a claim accepted at `accepted_daa`. Keyed on the
 /// CLAIM's acceptance DAA, so a claim accepted below the fence, or while the class was eligible, keeps the rights it was accepted
 /// with (no retroactivity); the caller passes the class's row as of the acceptance (the fold reads it at acceptance and pins
