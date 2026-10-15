@@ -986,6 +986,9 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) if matches!(bytes.get(2), Some(41..=79)) => {
             e.native_final.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
                 || e.native_execution39.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
+                // Mining actions 73–79: their own dormant fence too (A-2: unjudged below it, no state effect).
+                || matches!(bytes.get(2), Some(73..=79))
+                    && e.native_mining39.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
         }
         _ => false,
     }) {

@@ -270,6 +270,55 @@ fn commit_then_draw_on_the_real_anchor_promotes_on_k_of_m() {
     }
 }
 
+/// The dormant review's fixture with ADR-0179's tier fence armed at the same height (round 5: the tier fence retires the review).
+fn tiered() -> PalwStateParamsV2 {
+    armed().with_model_tier_v1(Some(
+        crate::palw_model_tier_v1::PalwModelTierFenceV1::at(crate::config::params::ForkActivation::new(FENCE)).mirror(),
+    ))
+}
+
+/// **Round 5 (user decision 2026-10-15): no model-level review for any model.** Under `palw_model_tier_v1` a class registered past the
+/// fence is admitted on every lane at once (no Registered / Probation stage), reads `not-governed` with the tier `registered` (0.3)
+/// from its registration, takes no exam, and is still `registered` however long after; the genesis floor is `approved` (1.0). The
+/// tier read is the same after a restart (the carriage) and for a second node replaying the chain (IBD).
+#[test]
+fn round5_no_model_review_under_the_tier_fence_and_a_registered_model_stays_0_3() {
+    let p = tiered();
+    let mut s = world(&p);
+    // A bare registration: no eligibility row at all.
+    s.kernel_route
+        .as_mut()
+        .unwrap()
+        .aux
+        .remove(&(PALW_MODEL_ELIGIBILITY_TABLE_V1, eligibility_model_key_v1(&h64(ENTRANT).as_bytes())));
+    let x = extras();
+    let read = PalwFoldReadV1::outside(&s, &p, &x);
+    for lane in [PalwGatedClaimV1::Attempt, PalwGatedClaimV1::FreePrompt { quanta: 1 }, PalwGatedClaimV1::Evaluation] {
+        assert!(read.check_class_admits_claim(&h64(ENTRANT), PROMOTE, lane).is_ok(), "no review gate: {lane:?}");
+    }
+    for daa in [FENCE + 10, PROMOTE, PROMOTE + 10_000 * DAY] {
+        let status = palw_eligibility_status_of_v1(&s, &p, &h64(ENTRANT), daa);
+        assert_eq!(status.stage, "not-governed", "no stage at {daa}");
+        assert_eq!((status.model_tier.as_str(), status.model_tier_permille), ("registered", 300), "0.3 at {daa}");
+    }
+    let floor = palw_eligibility_status_of_v1(&s, &p, &h64(1), PROMOTE);
+    assert_eq!((floor.model_tier.as_str(), floor.model_tier_permille), ("approved", 1_000));
+    // No exam is taken (inner 74 refused) — nothing to promote to.
+    let s2 = anchored(s.clone(), 7);
+    let c = commit(ENTRANT, EligibilityExamPurposeV1::Promotion, 16, 0, 1);
+    assert!(step(&s2, &p, PROMOTE, &[route(1, KernelRouteObjectV1::CommitEligibilityExamV1 { commit: c })]).is_err());
+    // Restart and IBD: the same tier.
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s)).unwrap();
+    let back = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&p, Some(s.state_root())).expect("a restart");
+    let ibd = world(&p);
+    for state in [&back, &ibd] {
+        assert_eq!(
+            crate::palw_model_tier_v1::palw_model_tier_at_v1(state, &p, &h64(ENTRANT), PROMOTE),
+            crate::palw_model_tier_v1::PalwModelTierV1::Registered
+        );
+    }
+}
+
 /// **U-8 (user decision 2026-10-15): the deterministic eligibility snapshot** — the rows `roll_epoch` reads through the allocation's
 /// eligible-capital hook (stages, exams, lineage / principal / network counters, pins) are a function of the chain alone: the same
 /// after a reorg (the block's delta reverts to its parent, another branch differs, re-applying it comes back), an IBD (a second node

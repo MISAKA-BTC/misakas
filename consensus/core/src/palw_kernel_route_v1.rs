@@ -192,6 +192,9 @@ pub struct PalwKernelRouteExtrasV1 {
     /// New stage book and full-source/temporal/court contract, independent of14.
     pub stage_execution_v28: Option<crate::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
     pub native_execution39: Option<crate::palw_native_execution_v39::PalwNativeExecutionFenceV39>,
+    /// Owning39 mining (stage actions 73–79), where `Params::palw_native_mining_v39` is in force at the block (with native39 and
+    /// Final27). `None` on every preset: below it actions 73–79 ride unjudged and fold nothing.
+    pub native_mining39: Option<crate::palw_native_mining_v39::PalwNativeMiningFenceV39>,
     /// Actual physical mass constants, resolved from Params only where a new
     /// native namespace is active. They do not assert reserved-lane readiness.
     pub native_carriage_mass: Option<crate::palw_native_carriage_v22::NativeCarriageMassParamsV22>,

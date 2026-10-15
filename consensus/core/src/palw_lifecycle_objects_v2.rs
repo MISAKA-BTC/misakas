@@ -2614,6 +2614,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::HeaderForm { algo_id: 7, magic: *b"PFS4" }, "palw_receipt_spend_v4", "RFC-0009 V4 receipt carriage", true),
     a2_row(PalwA2SlotV1::HeaderForm { algo_id: 10, magic: *b"PXE2" }, "palw_exec_payload_v2", "X8R EXEC envelope", true),
     a2_row(
+        PalwA2SlotV1::HeaderForm { algo_id: 7, magic: *b"PNR9" },
+        "palw_native_mining_v39",
+        "RFC-0002 owning39 native receipt block",
+        true,
+    ),
+    a2_row(
         PalwA2SlotV1::HeaderForm { algo_id: 6, magic: *b"PAV3" },
         "palw_monetary_material_v1",
         "signed native custody capture",

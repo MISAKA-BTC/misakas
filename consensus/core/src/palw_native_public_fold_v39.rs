@@ -236,6 +236,8 @@ fn request(
         st.ordinary += 1;
     }
     actor_ids.push(id);
+    // Collection53 erases every unit ever opened for this job from this index.
+    super::collect::note_opened(builder, job, id)?;
     write_pending(builder, &v);
     protected::write_status(builder, &st);
     builder.write_kernel_row(TABLE, k(41, &unit), Some(b(&id)));

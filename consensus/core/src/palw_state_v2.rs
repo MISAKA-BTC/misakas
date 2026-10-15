@@ -176,8 +176,14 @@ mod palw_native_initial_fold_v31;
 mod palw_native_job_fold_v39;
 #[path = "palw_native_master_fold_v39.rs"]
 mod palw_native_master_fold_v39;
+// RFC-0002 §II.14: owning39 ordinary mining (stage actions 73–79, the PNR9 receipt block), dormant behind
+// `palw_native_mining_v39` (absent on every preset, refused when armed).
+#[path = "palw_native_mining_fold_v39.rs"]
+mod palw_native_mining_fold_v39;
+pub use palw_native_mining_fold_v39::palw_native_mining_model_view_v39;
 #[path = "palw_native_source_fold_v39.rs"]
 mod palw_native_source_fold_v39;
+pub use palw_native_source_fold_v39::native_consent_hold_expiry_v39;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
 #[path = "palw_material_release_recovery_fold_v2.rs"]
 mod palw_material_release_recovery_fold_v2;
@@ -226,10 +232,7 @@ mod palw_beacon_bootstrap_fold_v1;
 // RFC-0017: model eligibility (inner 74/75, aux 131) and its claim-gate / probation / Final hooks, past `palw_model_eligibility_v1`.
 #[path = "palw_model_eligibility_fold_v1.rs"]
 mod palw_model_eligibility_fold_v1;
-pub use palw_model_eligibility_fold_v1::{
-    palw_eligibility_bars_security_credit_v1, palw_eligibility_security_credit_v1, palw_eligibility_status_of_v1,
-    palw_probation_security_credit_v1,
-};
+pub use palw_model_eligibility_fold_v1::palw_eligibility_status_of_v1;
 // RFC-0018 §7 (Gate C, adopted 2026-10-15): SecurityCertified — kernel-route aux 136, attestations on inner 75, past
 // `palw_independently_work_certified_v1`.
 #[path = "palw_security_certification_fold_v1.rs"]
@@ -1944,6 +1947,11 @@ pub struct PalwStateParamsV2 {
     /// `Params::sync_palw_rfc0018_v1`. `None` on every shipped preset, and validation refuses every armed one.
     #[borsh(skip)]
     rfc0018_v1: Option<crate::palw_rfc0018_v1::PalwRfc0018MirrorV1>,
+    /// **ADR-0179 (user decision 2026-10-15, round 4): `Params::palw_model_tier_v1`'s mirror** — `ApprovedModels` (genesis list and
+    /// annual lists) and the two design values, written by `Params::sync_palw_model_tier_v1`. `None` on every shipped preset, and
+    /// validation refuses every armed one.
+    #[borsh(skip)]
+    pub(crate) model_tier_v1: Option<crate::palw_model_tier_v1::PalwModelTierMirrorV1>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -19178,6 +19186,11 @@ fn apply_receipt_spend(
     ctx: &PalwBlockContextV2,
     spend: &PalwReceiptSpendUnsignedV3,
 ) -> Result<(), PalwStateV2Error> {
+    // RFC-0002 §II.14: a `PNR9` native receipt block reaches this shared site as fold-envelope version 39 (the processor admits
+    // it only past `palw_native_mining_v39`); it never reads a free-prompt claim.
+    if spend.version == crate::palw_native_receipt_v39::PALW_NATIVE_RECEIPT_FOLD_VERSION_V39 {
+        return palw_native_mining_fold_v39::apply_native_receipt_block_v39(builder, ctx, spend);
+    }
     let claim_id = spend.claim_id;
     let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
     let PalwClaimSourceV2::FreePrompt { quanta, spent } = &claim.source else {

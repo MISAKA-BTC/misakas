@@ -750,6 +750,10 @@ pub struct VirtualStateProcessor {
     pub(super) palw_stage_execution_v14: Option<kaspa_consensus_core::palw_flat_stage_v14::PalwStageExecutionFenceV14>,
     pub(super) palw_native_final_v27: Option<kaspa_consensus_core::palw_native_final_v27::PalwNativeFinalFenceV27>,
     pub(super) palw_stage_execution_v28: Option<kaspa_consensus_core::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
+    /// `Params::palw_native_execution_v39` (owning39 source/class/job lanes, stage actions 41–72).
+    pub(super) palw_native_execution_v39: Option<kaspa_consensus_core::palw_native_execution_v39::PalwNativeExecutionFenceV39>,
+    /// `Params::palw_native_mining_v39` (stage actions 73–79 and the `PNR9` receipt-block carriage). Dormant everywhere.
+    pub(super) palw_native_mining_v39: Option<kaspa_consensus_core::palw_native_mining_v39::PalwNativeMiningFenceV39>,
     pub(super) native_carriage_mass: kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22,
     /// Immutable owning ruleset for independent native proof exporters.
     pub(super) native_redemption_params_v33: Arc<Params>,
@@ -1460,6 +1464,8 @@ impl VirtualStateProcessor {
             palw_stage_execution_v14: params.palw_stage_execution_v14.clone(),
             palw_native_final_v27: params.palw_native_final_v27.clone(),
             palw_stage_execution_v28: params.palw_stage_execution_v28.clone(),
+            palw_native_execution_v39: params.palw_native_execution_v39.clone(),
+            palw_native_mining_v39: params.palw_native_mining_v39.clone(),
             native_redemption_params_v33: Arc::new(params.clone()),
             native_carriage_mass: kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22::from_consensus_params(
                 params,
