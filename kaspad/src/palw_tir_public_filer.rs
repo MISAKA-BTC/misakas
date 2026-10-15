@@ -89,6 +89,59 @@ pub(crate) fn palw_tir_public_conviction_object_v1(
     Ok(PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(control) })
 }
 
+/// **G14 R3: a drawn seat's atomic Valid + raw custody grant + Ready** (node side; builds and signs, nothing else). The three
+/// signatures are the seat's own, each in its ORIGINAL domain: the whole-job V2 receipt under the receipt context, the raw grant
+/// over its id under the source-grant context, and the outer object under the grant-Ready context. `descriptor` is the backend's
+/// prepared descriptor of the seat's retained original source (the preparation worker that produces it is remaining work).
+pub(crate) fn palw_tir_public_grant_ready_object_v1(
+    sign: impl Fn(&[u8], &[u8]) -> Vec<u8>,
+    network_domain: Hash64,
+    view: &PalwTirPublicFrameViewV1,
+    seat: PalwBondKeyV2,
+    signed_daa: u64,
+    descriptor: kaspa_consensus_core::palw_backend::PalwTirPublicPreparedDescriptorV1,
+) -> Result<PalwConsensusObjectV2, String> {
+    use kaspa_consensus_core::palw_panel_v2::{PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2};
+    use kaspa_consensus_core::palw_tir_public_carriage_v1::{PALW_TIR_PUBLIC_GRANT_READY_CONTEXT_V1, PalwTirPublicGrantReadyV1};
+    use kaspa_consensus_core::palw_tir_public_custody_v1::{PALW_TIR_SOURCE_GRANT_CONTEXT_V1, PalwTirPublicCustodyGrantV1};
+    if !view.drawn_panel.contains(&seat) || view.liable.contains(&seat) {
+        return Err("only a drawn seat that holds no custody grant yet can grant raw custody".into());
+    }
+    let message = palw_receipt_message_v2(network_domain, view.claim, PalwReceiptVerdictV2::Valid, signed_daa);
+    let receipt = PalwSeatReceiptV2 {
+        claim: view.claim,
+        verdict: PalwReceiptVerdictV2::Valid,
+        seat_bond: seat,
+        signed_daa,
+        signature: sign(message.as_byte_slice(), PALW_RECEIPT_V2_MLDSA87_CONTEXT),
+    };
+    let mut grant = PalwTirPublicCustodyGrantV1 {
+        version: 1,
+        claim: view.claim,
+        seat,
+        signed_daa,
+        pledge_id: view.pledge_id,
+        valid_receipt_digest: PalwTirPublicCustodyGrantV1::receipt_digest_v1(&receipt),
+        signature: Vec::new(),
+    };
+    grant.signature = sign(grant.id_v1().as_byte_slice(), PALW_TIR_SOURCE_GRANT_CONTEXT_V1);
+    let mut object = PalwTirPublicGrantReadyV1 {
+        version: 1,
+        claim: view.claim,
+        allocation_id: view.allocation_id,
+        source_id: view.source_id,
+        signer: seat,
+        receipt,
+        grant,
+        descriptor,
+        signature: Vec::new(),
+    };
+    let digest = object.signing_message_v1(network_domain)?;
+    object.signature = sign(digest.as_byte_slice(), PALW_TIR_PUBLIC_GRANT_READY_CONTEXT_V1);
+    object.check_v1()?;
+    Ok(PalwConsensusObjectV2::TirPublicGrantReadyV1 { grant: Box::new(object) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,6 +187,7 @@ mod tests {
             allocation_id: h(101),
             source_id: h(102),
             producer: bond(1),
+            pledge_id: h(103),
             liable: BTreeSet::from([bond(1), bond(2)]),
             drawn_panel: BTreeSet::from([bond(2), bond(3)]),
             accepted_daa: 100,

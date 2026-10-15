@@ -264,6 +264,8 @@ pub struct PalwTirPublicFrameViewV1 {
     pub allocation_id: Hash64,
     pub source_id: Hash64,
     pub producer: PalwBondKeyV2,
+    /// The producer's signed source pledge id a Valid seat's raw custody grant binds.
+    pub pledge_id: Hash64,
     pub liable: BTreeSet<PalwBondKeyV2>,
     pub drawn_panel: BTreeSet<PalwBondKeyV2>,
     pub accepted_daa: u64,
@@ -286,6 +288,7 @@ impl PalwTirPublicClaimV1 {
             allocation_id: self.plan.allocation_id,
             source_id: self.plan.source_id,
             producer: self.custody_v1().pledge_v1().producer,
+            pledge_id: self.custody_v1().pledge_v1().id_v1(),
             liable: self.custody_v1().liable_signers_v1(),
             drawn_panel: self.custody_v1().drawn_panel_v1().clone(),
             accepted_daa: terms.accepted_daa,
