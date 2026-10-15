@@ -5,6 +5,7 @@
 mod descriptor;
 pub mod program;
 mod source;
+pub mod source39;
 pub mod stage28;
 mod stream;
 pub use source::{FrontendSource, checkpoint_inputs, checkpoint_path, is_gguf_checkpoint, source_dir};

@@ -3585,24 +3585,39 @@ frontends, bounded integer PALWQ361 reading, consecutive-state receipt auditing
 and CAS evidence collection. These are implementation checkpoints, not new test
 results. No build, conversion, node execution or measurement has run for them.
 
-The remaining implementation includes:
+The next unverified source checkpoint adds compact Commit32 whole/parts/assembly
+with original reservation bindings, owning Program/Source39 with independent
+real-PC/inventory equality, last-use execution and all-node streaming observation,
+and an integer Q36 full-forward source mirror. Source39 includes an explicitly
+versioned history selection primitive and permits its own larger parameter and
+input geometry; it does not reinterpret frozen V1/V2 bytes. The new source/class
+registration actors and paged source upload charge shared21 resources before
+restoration or allocation. An explicit local snapshot39 wraps the unchanged
+snapshot34 and is reconstructed by the node and SDK under the same pins.
 
-- Paid compact native Commit carriage and its exact original queue/consent
-  binding, followed by complete SDK and native audit integration.
-- An explicit new program/source grammar for history selection and large
-  parameters, values and inputs. The old grammar's limits remain in force;
-  refusing invalid windows or increasing an offline report buffer does not
-  implement their positive native execution and courts.
-- The exact Q36 grouped-quantization, routing/expert and recurrent-state forward
-  mirror. Reading its source format alone does not establish runtime equivalence.
-- Complete Master32 component delivery/redemption exports and the Python
-  two-window stream/CAS integration. A local qualified devnet is validation
-  evidence; it cannot become public A6/A8 evidence by carrying a qualified flag.
+Audit39 adds full ordered aux authentication from bounded CAS streams and a
+pinned-state page RPC (1024 rows / 32 MiB per page, exact selected-parent root and
+stable import generation). A page alone is not a proof. The existing node's
+4000-DAA historical reconstruction cap remains in force: collecting two complete
+receipt windows only after both finish is not implemented by this single-state
+collector. Contemporaneous collection or a separately bounded archival mechanism
+and the owning39 receipt/window audit integration remain required code.
+
+Other remaining implementation includes the owning39 job fold's shared nonce,
+actual debit, protected source/trace delivery, court, independent Final and
+component credit closure; the cold independent detector/filer; and genuine
+complete-Master39 to ordinary FP eligibility for block production, coinbase and
+Final weight. A privately paid job's escrow Final grants none of those rights by
+itself. Source registration and local qualification flags likewise grant none.
+The frontend39 source writers are connected, while publisher task preprocessing,
+variable image geometry/token expansion and exact original request metadata
+still require explicit implementation and fidelity checks. Every large-model
+source, tokenizer, context and runtime variant must be pinned before measuring.
 
 The initial-seven gate separately requires exact precommitted native identity,
 all original component credits, coinbase inclusion and accepted redemption.
 Mistral's token-only Text29 identity cannot substitute for its complete
-vision/projector/decoder Master32. All seven remain `NOT_RUN`; the release gate
+vision/projector/decoder Master identity under its owning grammar. All seven remain `NOT_RUN`; the release gate
 does not activate a shipping preset or assign founding bonds. The original
 A6/A8 populations and failure denominators remain unchanged.
 

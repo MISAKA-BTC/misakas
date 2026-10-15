@@ -5,6 +5,7 @@ use crate::quantfmt::QuantRegistry;
 use crate::weights::{Checkpoint, Tensor, TensorMeta, TensorSource};
 use crate::{LowerError, Result};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -97,6 +98,12 @@ impl FrontendSource {
         matches!(self.raw, RawSource::Gguf(_))
     }
     pub fn open(path: &Path, pack: &FrontendPack) -> Result<Self> {
+        Self::open_formats(path, &pack.formats)
+    }
+    pub fn open_v39(path: &Path, pack: &super::source39::FrontendPackV39) -> Result<Self> {
+        Self::open_formats(path, &pack.formats)
+    }
+    fn open_formats(path: &Path, formats: &BTreeMap<String, std::sync::Arc<crate::quantfmt::QuantFormat>>) -> Result<Self> {
         let selected = checkpoint_path(path)?;
         let raw = if selected.extension().is_some_and(|x| x == "palwq36") {
             RawSource::PalwQ36(Box::new(palwq36::PalwQ36::open(&selected)?))
@@ -104,7 +111,7 @@ impl FrontendSource {
             // Registry lookup computes storage extent only. The binding's pinned local key selects
             // the decoder. Unknown types can supply a self-tested block descriptor and public ID.
             let mut registry = QuantRegistry::builtin().clone();
-            for format in pack.formats.values().filter(|f| f.ggml_id().is_some()) {
+            for format in formats.values().filter(|f| f.ggml_id().is_some()) {
                 if format.as_blocks().is_none() || format.ids().iter().filter(|i| i.scheme == "ggml").count() != 1 {
                     return Err(bad("FRONTEND_GGUF_FORMAT: exactly one GGML ID on a block layout required"));
                 }

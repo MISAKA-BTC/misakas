@@ -176,6 +176,7 @@ pub struct PalwKernelRouteExtrasV1 {
     pub native_final: Option<crate::palw_native_final_v27::PalwNativeFinalFenceV27>,
     /// New stage book and full-source/temporal/court contract, independent of14.
     pub stage_execution_v28: Option<crate::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
+    pub native_execution39: Option<crate::palw_native_execution_v39::PalwNativeExecutionFenceV39>,
     /// Actual physical mass constants, resolved from Params only where a new
     /// native namespace is active. They do not assert reserved-lane readiness.
     pub native_carriage_mass: Option<crate::palw_native_carriage_v22::NativeCarriageMassParamsV22>,

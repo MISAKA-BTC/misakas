@@ -6111,6 +6111,7 @@ impl VirtualStateProcessor {
             misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 => Some(match bytes.get(2).copied() {
                 Some(0..=18) => self.palw_kernel_inner_fence_at(PalwKernelInnerFenceV1::StageExecutionV14, daa),
                 Some(19..=40) => self.palw_stage_execution_v28.as_ref().is_some_and(|f| active(f.activation)) && final27(),
+                Some(41..=66) => self.palw_native_execution_v39.as_ref().is_some_and(|f| active(f.activation)) && final27(),
                 _ => false,
             }),
             _ => None,
@@ -6142,6 +6143,13 @@ impl VirtualStateProcessor {
                 !final27
                     || !self
                         .palw_stage_execution_v28
+                        .as_ref()
+                        .is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa))
+            }
+            Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) if matches!(bytes.get(2), Some(41..=66)) => {
+                !final27
+                    || !self
+                        .palw_native_execution_v39
                         .as_ref()
                         .is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa))
             }
@@ -6192,6 +6200,22 @@ impl VirtualStateProcessor {
             };
             if owner != Some(*signer) {
                 return Err("native Commit32 original Funded producer/attempt/phase differs".into());
+            }
+        }
+        if let Some(action) = native
+            && action.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14
+            && matches!(action.action, 58 | 59)
+        {
+            let (id, index) = if action.action == 58 {
+                let part = kaspa_consensus_core::palw_native_execution_v39::borrowed_source_upload_part_v39(action.body)
+                    .ok_or_else(|| "source39 original bounded part metadata absent".to_string())?;
+                (part.id, Some(part.index))
+            } else {
+                let id = action.body.try_into().map_err(|_| "source39 exact original assembly id".to_string())?;
+                (id, None)
+            };
+            if state.kernel_route().and_then(|r| r.native_source_upload_owner_v39(id, index, daa_score)) != Some(*signer) {
+                return Err("source39 original owner/attempt/coverage/clock differs".into());
             }
         }
         if let Some(a) = native
@@ -7760,6 +7784,19 @@ impl VirtualStateProcessor {
                 native_final,
                 stage_execution_v28: self
                     .palw_stage_execution_v28
+                    .as_ref()
+                    .filter(|f| {
+                        f.activation != kaspa_consensus_core::config::params::ForkActivation::never()
+                            && f.activation.is_active(daa_score)
+                            && self.palw_kernel_opv_at(daa_score)
+                            && self.palw_native_final_v27.as_ref().is_some_and(|n| {
+                                n.activation != kaspa_consensus_core::config::params::ForkActivation::never()
+                                    && n.activation.is_active(daa_score)
+                            })
+                    })
+                    .cloned(),
+                native_execution39: self
+                    .palw_native_execution_v39
                     .as_ref()
                     .filter(|f| {
                         f.activation != kaspa_consensus_core::config::params::ForkActivation::never()

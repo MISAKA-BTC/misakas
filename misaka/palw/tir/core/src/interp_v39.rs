@@ -317,6 +317,7 @@ impl<'p> InterpreterV39<'p> {
         needed: &[bool],
         base: u32,
         capture: Option<u16>,
+        all_nodes: bool,
         observe: &mut dyn FnMut(CommitPointV39<'_>) -> TirResult<()>,
     ) -> TirResult<(BTreeMap<u8, Arc<Tensor>>, Option<Arc<Tensor>>, Vec<(StateKey, Arc<Tensor>)>, Vec<(StateKey, u32, Arc<Tensor>)>)>
     {
@@ -421,7 +422,7 @@ impl<'p> InterpreterV39<'p> {
                 check(&v, &node.out, h, p.profile.max_value_elements)?;
                 Arc::new(v)
             };
-            if node.commit {
+            if all_nodes || node.commit {
                 observe(CommitPointV39 { slot: base + i as u32, block, layer: env.layer, node: i as u16, value: &value })?;
             }
             // Supplied cone points are authenticated operands, not effects.
@@ -467,6 +468,30 @@ impl<'p> InterpreterV39<'p> {
         token: u32,
         observe: &mut dyn FnMut(CommitPointV39<'_>) -> TirResult<()>,
     ) -> TirResult<Tensor> {
+        self.step_observed(params, inputs, state, token, false, observe)
+    }
+    /// Observe every evaluated node at its original slot, including non-commit
+    /// intermediates. The trace and all state writes remain provisional until
+    /// the whole step succeeds. This does not change the commit-flag subset.
+    pub fn step_with_trace_observer(
+        &self,
+        params: &dyn ParamSourceV39,
+        inputs: &dyn InputProvider,
+        state: &mut RunState,
+        token: u32,
+        observe: &mut dyn FnMut(CommitPointV39<'_>) -> TirResult<()>,
+    ) -> TirResult<Tensor> {
+        self.step_observed(params, inputs, state, token, true, observe)
+    }
+    fn step_observed(
+        &self,
+        params: &dyn ParamSourceV39,
+        inputs: &dyn InputProvider,
+        state: &mut RunState,
+        token: u32,
+        all_nodes: bool,
+        observe: &mut dyn FnMut(CommitPointV39<'_>) -> TirResult<()>,
+    ) -> TirResult<Tensor> {
         let p = self.program;
         let pos = state.pos;
         if pos >= p.history_bound {
@@ -484,7 +509,8 @@ impl<'p> InterpreterV39<'p> {
         for (block, layer) in p.occurrences() {
             let b = &p.blocks[block as usize];
             let env = Occurrence { token: Some(token), pos, layer, carry: &carry, states: StateView::Run(state), supplied: &empty };
-            let (next, out, w, a) = self.occurrence(block, &env, params, inputs, &vec![true; b.nodes.len()], base, None, observe)?;
+            let (next, out, w, a) =
+                self.occurrence(block, &env, params, inputs, &vec![true; b.nodes.len()], base, None, all_nodes, observe)?;
             carry = next;
             if out.is_some() {
                 output = out;
@@ -564,7 +590,7 @@ impl<'p> InterpreterV39<'p> {
             Occurrence { token: env.token, pos: env.pos, layer, carry: &carry, states: StateView::Cone(env), supplied: &env.supplied };
         // A target need not be committed. Capture it as an explicit local root
         // without changing the canonical program or its commit flags.
-        let (_, out, _, _) = self.occurrence(block, &occ, params, inputs, &needed, 0, Some(target), &mut |_| Ok(()))?;
+        let (_, out, _, _) = self.occurrence(block, &occ, params, inputs, &needed, 0, Some(target), false, &mut |_| Ok(()))?;
         out.map(|t| (*t).clone()).ok_or_else(|| TirError::new(TirErrorKind::Missing, "cone39 target was not evaluated"))
     }
 }

@@ -9,7 +9,7 @@ use misaka_palw_kernel::{
 };
 
 pub const NATIVE_ACTION_FIRST_V39: u8 = 41;
-pub const NATIVE_ACTION_LAST_V39: u8 = 64;
+pub const NATIVE_ACTION_LAST_V39: u8 = 66;
 pub const REGISTER_SOURCE_ACTION_V39: u8 = 41;
 pub const REGISTER_CLASS_ACTION_V39: u8 = 42;
 pub const SOURCE_START_ACTION_V39: u8 = 57;
@@ -18,6 +18,64 @@ pub const SOURCE_ASSEMBLE_ACTION_V39: u8 = 59;
 pub const SOURCE_COLLECT_ACTION_V39: u8 = 60;
 pub const SOURCE_PART_BYTES_V39: usize = 32 << 10;
 pub const SOURCE_UPLOAD_MAX_BYTES_V39: usize = misaka_palw_kernel::flat_source39::SOURCE39_MAX_BYTES;
+pub const SOURCE_UPLOAD_MAX_PARTS_V39: usize = SOURCE_UPLOAD_MAX_BYTES_V39.div_ceil(SOURCE_PART_BYTES_V39);
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeSourceUploadStartV39 {
+    pub version: u16,
+    pub source: Digest,
+    pub bytes: u32,
+    pub count: u16,
+    pub sequence: u64,
+    pub deadline: u64,
+    pub body: Digest,
+}
+impl NativeSourceUploadStartV39 {
+    pub fn from_bytes(raw: &[u8]) -> Result<Self, String> {
+        if raw.len() != 152 {
+            return Err("source upload39 fixed Start extent".into());
+        }
+        borsh::from_slice(raw).map_err(|_| "source upload39 exact Start grammar".into())
+    }
+    pub fn check(&self, now: u64, until: u64) -> Result<(), String> {
+        if self.version != 39
+            || self.source == [0; 64]
+            || self.body == [0; 64]
+            || self.bytes == 0
+            || self.bytes as usize > SOURCE_UPLOAD_MAX_BYTES_V39
+            || self.count as usize != (self.bytes as usize).div_ceil(SOURCE_PART_BYTES_V39)
+            || self.count as usize > SOURCE_UPLOAD_MAX_PARTS_V39
+            || self.deadline <= now
+            || self.deadline > until
+        {
+            return Err("source upload39 original byte/part/clock reservation differs".into());
+        }
+        Ok(())
+    }
+    pub fn id(&self, owner: crate::palw_state_v2::PalwBondKeyV2) -> Digest {
+        object_id(b"misaka-palw/native/source-upload-original/v39", &(owner, self))
+    }
+}
+#[derive(Clone, Copy)]
+pub struct BorrowedSourceUploadPartV39<'a> {
+    pub id: Digest,
+    pub index: u16,
+    pub bytes: &'a [u8],
+}
+pub fn borrowed_source_upload_part_v39(raw: &[u8]) -> Option<BorrowedSourceUploadPartV39<'_>> {
+    if raw.len() < 72 || raw.len() > 72 + SOURCE_PART_BYTES_V39 || raw[..2] != 39u16.to_le_bytes() {
+        return None;
+    }
+    let n = u32::from_le_bytes(raw[68..72].try_into().ok()?) as usize;
+    if n != raw.len() - 72 {
+        return None;
+    }
+    Some(BorrowedSourceUploadPartV39 {
+        id: raw[2..66].try_into().ok()?,
+        index: u16::from_le_bytes(raw[66..68].try_into().ok()?),
+        bytes: &raw[72..],
+    })
+}
 
 pub fn source_protocol_root_v39() -> Digest {
     object_id(
@@ -76,6 +134,47 @@ impl NativeExecutionPoliciesV39 {
 pub struct PalwNativeExecutionFenceV39 {
     pub activation: ForkActivation,
     pub policies: NativeExecutionPoliciesV39,
+}
+impl PalwNativeExecutionFenceV39 {
+    pub fn unapproved_probe_at(activation: ForkActivation, network_domain: Digest) -> Self {
+        let old = crate::palw_funded_execution_v11::PalwFundedExecutionFenceV11::unapproved_probe_at(activation, network_domain);
+        Self {
+            activation,
+            policies: NativeExecutionPoliciesV39 {
+                version: 39,
+                network_domain,
+                execution: old.policies,
+                final_policy: [0; 64],
+                physical_service: [0; 64],
+                source_protocol39: source_protocol_root_v39(),
+                maximum_horizon: 900,
+                catalog_cap: 8,
+            },
+        }
+    }
+}
+impl crate::config::params::Params {
+    pub fn palw_native_execution_active_at_v39(&self, daa: u64) -> bool {
+        self.palw_native_execution_v39.as_ref().is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa))
+            && self.palw_native_final_active_at_v27(daa)
+            && self.palw_funded_execution_active_at_v11(daa)
+    }
+    pub fn validate_palw_native_execution_v39(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error;
+        let Some(f) = self.palw_native_execution_v39.as_ref().filter(|f| f.activation != ForkActivation::never()) else {
+            return Ok(());
+        };
+        let domain =
+            crate::palw_attempt_v2::palw_network_domain_v2_for(self.net.to_string().as_bytes(), Some(self.genesis.hash)).as_bytes();
+        f.policies.check(domain).map_err(|_| PalwModeV2Error::Invalid("native39 owning network/source/quota policy is invalid"))?;
+        if !self.has_isolated_native_calibration_v34() || f.activation != ForkActivation::always() {
+            return Err(PalwModeV2Error::Invalid(
+                "native39 shipping activation requires independent full-task court/Final/redemption and launch evidence; only the isolated owning validation profile is currently allowed",
+            ));
+        }
+        self.validate_isolated_native_calibration_v34()
+            .map_err(|_| PalwModeV2Error::Invalid("native39 isolated original policies differ"))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

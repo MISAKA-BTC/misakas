@@ -154,6 +154,8 @@ pub const MAX_STAGE_INVOCATION_BYTES_V32: usize = (4 << 20) + (256 << 10) + 8192
 /// These are new inner64 actions; no old action acquires the larger ceiling.
 pub const MAX_STAGE_COMPACT_COMMIT_BYTES_V32: usize = (9 << 20) + 7;
 pub const MAX_STAGE_COMMIT_PART_BYTES_V32: usize = (32 << 10) + 143 + 7;
+/// Owning39 source body; large bodies travel through its separately paid source upload.
+pub const MAX_STAGE_SOURCE_BYTES_V39: usize = crate::flat_source39::SOURCE39_MAX_BYTES + 7;
 
 fn stage_action_cap(action: u8) -> usize {
     match action {
@@ -162,6 +164,11 @@ fn stage_action_cap(action: u8) -> usize {
         38 => MAX_STAGE_COMPACT_COMMIT_BYTES_V32,
         39 => MAX_STAGE_COMMIT_PART_BYTES_V32,
         40 => 130 + 7,
+        41 => MAX_STAGE_SOURCE_BYTES_V39,
+        42 => 262 + 7,
+        57 => 256 + 7,
+        58 => (32 << 10) + 72 + 7,
+        59 | 60 | 66 => 64 + 7,
         _ => MAX_STAGE_EXECUTION_BYTES_V14,
     }
 }
@@ -172,6 +179,9 @@ fn stage_action_extent(action: u8, encoded: usize) -> bool {
             37 => encoded == 71,
             39 => encoded >= 143 + 7,
             40 => encoded == 130 + 7,
+            42 => encoded == 262 + 7,
+            58 => encoded >= 72 + 7,
+            59 | 60 | 66 => encoded == 64 + 7,
             _ => true,
         }
 }
@@ -788,7 +798,7 @@ pub fn borrowed_native_action_v1(bytes: &[u8]) -> Result<Option<BorrowedNativeAc
     };
     let (cap, last) = match tag {
         TAG_FUNDED_EXECUTION_V11 => (MAX_FUNDED_EXECUTION_BYTES_V11, 46),
-        TAG_STAGE_EXECUTION_V14 => (stage_action_cap(bytes.get(2).copied().unwrap_or(0)), 40),
+        TAG_STAGE_EXECUTION_V14 => (stage_action_cap(bytes.get(2).copied().unwrap_or(0)), 66),
         _ => return Ok(None),
     };
     let bad = |why: &str| KernelRefusalV1::new("NativeAction", RefusalKindV1::Malformed, why);
@@ -964,7 +974,7 @@ impl KernelRouteObjectV1 {
         }
         if tag == TAG_STAGE_EXECUTION_V14 {
             let count = rest.get(2..6).ok_or_else(|| bad(RefusalKindV1::Malformed, "truncated stage14 action frame".into()))?;
-            if rest.get(1).is_none_or(|a| *a > 40 || !stage_action_extent(*a, bytes.len()))
+            if rest.get(1).is_none_or(|a| *a > 66 || !stage_action_extent(*a, bytes.len()))
                 || u32::from_le_bytes(count.try_into().unwrap()) as usize != rest.len().saturating_sub(6)
             {
                 return Err(bad(RefusalKindV1::Malformed, "stage14 action/count differs from exact bounded carrier".into()));
@@ -1242,7 +1252,7 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_BOOTSTRAP_EXACT_V1 => crate::beacon_bootstrap_v1::MAX_BOOTSTRAP_EXACT_OBJECT_BYTES_V1,
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1,
         TAG_FUNDED_EXECUTION_V11 => MAX_FUNDED_EXECUTION_BYTES_V11,
-        TAG_STAGE_EXECUTION_V14 => MAX_STAGE_COMPACT_COMMIT_BYTES_V32,
+        TAG_STAGE_EXECUTION_V14 => MAX_STAGE_SOURCE_BYTES_V39,
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1,
         TAG_POST_TILED_JOB_V1 => MAX_POST_TILED_JOB_BYTES_V1,
         TAG_POST_PROMPT_TILE_V1 => MAX_POST_PROMPT_TILE_BYTES_V1,
@@ -1277,7 +1287,7 @@ mod tests {
         assert!(borrowed_native_action_v1(&collect).is_ok());
         assert!(KernelRouteObjectV1::decode(&collect).is_ok());
         let mut unknown = collect;
-        unknown[2] = 41;
+        unknown[2] = 67;
         assert!(borrowed_native_action_v1(&unknown).is_err());
         assert!(KernelRouteObjectV1::decode(&unknown).is_err());
     }
@@ -1323,7 +1333,7 @@ mod tests {
         }
         assert!(borrowed_native_action_v1(&KernelRouteObjectV1::Withdraw { bond: [1; 64] }.encode()).unwrap().is_none());
         // Funded actions run to 46: 45/46 are the typed window class v37 register/attach (RFC02 §II.14.60), as the decoder admits.
-        for (tag, last, unknown) in [(TAG_FUNDED_EXECUTION_V11, 46, 47), (TAG_STAGE_EXECUTION_V14, 38, 41)] {
+        for (tag, last, unknown) in [(TAG_FUNDED_EXECUTION_V11, 46, 47), (TAG_STAGE_EXECUTION_V14, 38, 67)] {
             let mut raw = vec![1, tag, last, 0, 0, 0, 0];
             assert_eq!(borrowed_native_action_v1(&raw).unwrap().unwrap().action, last);
             raw[2] = unknown;

@@ -1,9 +1,10 @@
 //! Immutable whole-component pipeline writer for explicitly checked Stage28 classes.
 //! No metadata-only assertion promotes an old partial pipeline into full-source eligibility.
-pub mod frontend;
-pub mod vision38;
 pub mod decoder38;
+pub mod frontend;
 pub mod q36mirror40;
+pub mod source39;
+pub mod vision38;
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::{
     flat_component_source28::CheckedComponentManifestV28,

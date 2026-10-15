@@ -68,6 +68,7 @@ mod dsv4;
 pub mod encdec;
 pub mod fill;
 mod generic;
+pub mod pixtral_processor41;
 pub mod qlinear;
 pub mod source39;
 pub mod stream;

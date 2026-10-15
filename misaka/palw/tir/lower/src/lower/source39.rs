@@ -34,6 +34,9 @@ pub fn lower_source_v39(
 ) -> Result<LoweredSourceV39> {
     profile.check().map_err(LowerError::bad)?;
     let recipe = lower_recipe(hl, opts, Some(&profile))?;
+    if lifts.len() > tir::program_v2::MAX_INPUTS_V2 {
+        return Err(LowerError::bad("SOURCE39_EXTERNAL_INPUT_COUNT"));
+    }
     let mut lifted = Vec::new();
     let mut inputs = Vec::new();
     for (name, source) in lifts {
@@ -77,7 +80,7 @@ pub fn lower_source_v39(
                     for r in &mut node.inputs {
                         if let tir::Ref::Param(j) = *r {
                             *r = if let Some(i) = lifted.iter().position(|v| *v == j) {
-                                tir::Ref::Input(FIRST_INPUT_REF_V2 + i as u16)
+                                tir::Ref::Input(FIRST_INPUT_REF_V2 + i as u8)
                             } else {
                                 tir::Ref::Param(remap[&j])
                             };

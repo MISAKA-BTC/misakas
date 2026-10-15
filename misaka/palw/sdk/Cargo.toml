@@ -103,3 +103,12 @@ required-features = ["native-rpc"]
 name = "palw-native-receipt-collect"
 path = "src/bin/palw-native-receipt-collect.rs"
 required-features = ["native-rpc"]
+
+[[bin]]
+name = "palw-native-audit-stream39"
+path = "src/bin/palw-native-audit-stream39.rs"
+required-features = ["native-rpc"]
+
+[[bin]]
+name = "palw-native-snapshot39"
+path = "src/bin/palw-native-snapshot39.rs"

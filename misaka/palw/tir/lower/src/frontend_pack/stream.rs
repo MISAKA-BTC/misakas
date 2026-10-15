@@ -225,7 +225,7 @@ impl Compiled {
     }
 }
 
-fn integer(dtype: &str, bytes: &[u8]) -> i128 {
+pub(super) fn integer(dtype: &str, bytes: &[u8]) -> i128 {
     let mut raw = [0u8; 8];
     raw[..bytes.len()].copy_from_slice(bytes);
     let u = u64::from_le_bytes(raw);

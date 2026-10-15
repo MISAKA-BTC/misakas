@@ -199,3 +199,30 @@ fn large_parameter_reads_only_the_selected_authenticated_ranges() {
     let bad = HugeEmbedding { calls: RefCell::new(vec![]), wrong_descriptor: false, bad_value: true };
     assert!(interpreter.step(&bad, &MapInputs::default(), &mut RunState::default(), 0).is_err());
 }
+
+#[test]
+fn complete_trace_observer_includes_noncommit_nodes_at_original_slots() {
+    let p = selected_history();
+    let interpreter = InterpreterV39::new(&p).unwrap();
+    let mut inputs = MapInputs::default();
+    inputs.constant.insert(0, scalar(5));
+    let mut state = RunState::default();
+    let mut points = Vec::new();
+    let output = interpreter
+        .step_with_trace_observer(&Empty, &inputs, &mut state, 0, &mut |c| {
+            points.push((c.slot, c.block, c.layer, c.node, c.value.clone()));
+            Ok(())
+        })
+        .unwrap();
+    let expected: usize = p.occurrences().map(|(b, _)| p.blocks[b as usize].nodes.len()).sum();
+    assert_eq!(points.len(), expected);
+    assert_eq!(points.iter().map(|p| p.0).collect::<Vec<_>>(), (0..expected as u32).collect::<Vec<_>>());
+    assert!(points.iter().any(|p| p.1 == 1 && p.3 == 3));
+    assert!(points.iter().any(|p| p.1 == 1 && p.3 == 4));
+    let reference = interpreter.step(&Empty, &inputs, &mut RunState::default(), 0).unwrap();
+    assert_eq!(reference.output, output);
+    assert!(reference.commits.len() < points.len());
+    for c in reference.commits {
+        assert_eq!(points[c.slot as usize].4, c.value);
+    }
+}

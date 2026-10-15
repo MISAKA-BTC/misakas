@@ -878,6 +878,10 @@ mod tests {
                 params.palw_stage_execution_v28 =
                     Some(crate::palw_flat_stage_v28::PalwStageExecutionFenceV28::unapproved_probe_at(at, [0; 64]));
             }
+            "palw_native_execution_v39" => {
+                params.palw_native_execution_v39 =
+                    Some(crate::palw_native_execution_v39::PalwNativeExecutionFenceV39::unapproved_probe_at(at, [0; 64]));
+            }
             "palw_funded_execution_v11" => {
                 params.palw_funded_execution_v11 =
                     Some(crate::palw_funded_execution_v11::PalwFundedExecutionFenceV11::unapproved_probe_at(at, [0; 64]));

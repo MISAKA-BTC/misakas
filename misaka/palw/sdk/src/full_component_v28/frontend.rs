@@ -101,7 +101,7 @@ pub struct TokenDescription {
     pub pad: Option<(u32, u32)>,
 }
 impl TokenDescription {
-    fn compile(&self) -> Result<TokenRule, String> {
+    pub(super) fn compile(&self) -> Result<TokenRule, String> {
         let source = match self.source.as_str() {
             "prompt" => TokenSource::Prompt,
             "negative" => TokenSource::Negative,
@@ -142,7 +142,7 @@ pub enum BindingDescription {
     JobImage { index: u8 },
 }
 impl BindingDescription {
-    fn compile(&self) -> Result<Binding, String> {
+    pub(super) fn compile(&self) -> Result<Binding, String> {
         Ok(match self {
             Self::JobScalar { index } => Binding::JobScalar { index: *index },
             Self::JobTokens { rule } => Binding::JobTokens { rule: rule.compile()? },

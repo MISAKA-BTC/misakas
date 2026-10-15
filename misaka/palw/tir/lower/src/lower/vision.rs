@@ -1250,13 +1250,14 @@ pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
 /// reads contiguous weight rows — the layout a tower declared as a pipeline class's stage needs for its closes to be carriable;
 /// the same integers either way).
 pub fn lower_vision_with(hl: &HlProgram, s: &VisionSpec, out_major: bool) -> Result<Lowered> {
-    lower_vision_recipe(hl, s, out_major, None)
+    lower_vision_recipe(hl, s, out_major, None, 0)
 }
 fn lower_vision_recipe(
     hl: &HlProgram,
     s: &VisionSpec,
     out_major: bool,
     profile: Option<&tir::program_v39::SourceProfileV39>,
+    pixel_shift: u8,
 ) -> Result<Lowered> {
     let hb = tir::program::HISTORY_BOUND_V1_SMALL;
     let mut pb = ProgramBuilder::new(1, hb);
@@ -1295,7 +1296,7 @@ fn lower_vision_recipe(
     order.push(hl.post);
     let mut out_node = None;
     for &hbk in &order {
-        let (tb, o) = vision_block(&mut pb, &mut cx, hbk, s, profile)?;
+        let (tb, o) = vision_block(&mut pb, &mut cx, hbk, s, profile, pixel_shift)?;
         block_map[hbk] = tb;
         if o.is_some() {
             out_node = o;
@@ -1348,12 +1349,26 @@ impl LoweredVisionV39 {
     }
 }
 pub fn lower_vision_v39(hl: &HlProgram, s: &VisionSpec, profile: tir::program_v39::SourceProfileV39) -> Result<LoweredVisionV39> {
+    lower_vision_pixels_v39(hl, s, profile, 0)
+}
+/// Explicit processor41 output carries fractional RGB pixel codes. The old
+/// profile keeps integer pixels and its exact parameter bytes.
+pub fn lower_vision_pixels_v39(
+    hl: &HlProgram,
+    s: &VisionSpec,
+    profile: tir::program_v39::SourceProfileV39,
+    pixel_shift: u8,
+) -> Result<LoweredVisionV39> {
     use tir::program_v2::{InputDecl, InputSource, OutputDecl};
     use tir::program_v39::{BlockV39, NodeV39, TensorTypeV39, TirProgramV39};
     profile.check().map_err(LowerError::bad)?;
     s.validate()?;
-    let recipe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lower_vision_recipe(hl, s, true, Some(&profile))))
-        .map_err(|_| LowerError::not_lowerable("SOURCE39_VISION_RECIPE_PROFILE_BOUND"))??;
+    if pixel_shift > 6 || (pixel_shift != 0 && (!s.is_pixtral_v38() || s.downscale != 1)) {
+        return Err(LowerError::not_lowerable("SOURCE39_FRACTIONAL_PIXEL_PROFILE"));
+    }
+    let recipe =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lower_vision_recipe(hl, s, true, Some(&profile), pixel_shift)))
+            .map_err(|_| LowerError::not_lowerable("SOURCE39_VISION_RECIPE_PROFILE_BOUND"))??;
     let lifted = recipe
         .program
         .params
@@ -1365,7 +1380,10 @@ pub fn lower_vision_v39(hl: &HlProgram, s: &VisionSpec, profile: tir::program_v3
         name: image.name.clone(),
         dtype: image.dtype,
         shape: image.shape.clone(),
-        source: InputSource::External { lo: 0, hi: 255 },
+        source: InputSource::External {
+            lo: if pixel_shift == 0 { 0 } else { i16::MIN as i64 },
+            hi: if pixel_shift == 0 { 255 } else { i16::MAX as i64 },
+        },
     }];
     let params = recipe.program.params.iter().enumerate().filter(|(i, _)| *i != lifted as usize).map(|(_, p)| p.clone()).collect();
     let blocks = recipe
@@ -1577,6 +1595,7 @@ fn vision_block(
     hbk: usize,
     s: &VisionSpec,
     profile: Option<&tir::program_v39::SourceProfileV39>,
+    pixel_shift: u8,
 ) -> Result<(u8, Option<u16>)> {
     let hl = cx.hl;
     let role = hl.blocks[hbk].role;
@@ -1682,7 +1701,8 @@ fn vision_block(
                             for i in 0..ps {
                                 for j in 0..ps {
                                     let wv = wv[o * raw + ((ch * t + tt) * ps + i) * ps + j] as f64;
-                                    wf[o * ps * ps * 3 + (i * ps + j) * 3 + ch] += (wv / (255.0 * std[ch])) as f32;
+                                    wf[o * ps * ps * 3 + (i * ps + j) * 3 + ch] +=
+                                        (wv / (255.0 * std[ch] * 2f64.powi(pixel_shift as i32))) as f32;
                                     bias -= wv * mean[ch] / std[ch];
                                 }
                             }

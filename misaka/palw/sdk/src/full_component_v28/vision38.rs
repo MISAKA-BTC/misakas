@@ -109,8 +109,18 @@ pub(super) fn write_materialised_stage_v38(
             lowered.program.params.iter().position(|p| p.name == name).map(|i| i as u16).ok_or("SOURCE38_DECLARED_INPUT_ABSENT")
         })
         .transpose()?;
-    let mut sink =
-        DirectorySink { directory: directory.into(), stage, lifted, remaining: 0, total: 0, total_cap, current: None, skip: false };
+    let mut sink = DirectorySink {
+        directory: directory.into(),
+        stage,
+        lifted: lifted.into_iter().collect(),
+        remaining: 0,
+        total: 0,
+        total_cap,
+        current: None,
+        skip: false,
+        audit: None,
+        current_key: None,
+    };
     let stream = materialise_stream(
         lowered,
         hl,
@@ -173,12 +183,14 @@ impl TensorSource for TrackedSource<'_> {
 struct DirectorySink {
     directory: PathBuf,
     stage: u16,
-    lifted: Option<u16>,
+    lifted: Vec<u16>,
     remaining: u64,
     total: u64,
     total_cap: u64,
     current: Option<(std::fs::File, PathBuf, PathBuf)>,
     skip: bool,
+    audit: Option<(misaka_palw_tir::program_v39::TirProgramV39, u64, Vec<misaka_palw_kernel::flat_source39::OriginalTensorV39>)>,
+    current_key: Option<(u16, Option<u16>)>,
 }
 impl TensorSink for DirectorySink {
     fn begin(&mut self, param: u16, layer: Option<u16>, bytes: u64) -> misaka_palw_tir_lower::Result<()> {
@@ -188,7 +200,7 @@ impl TensorSink for DirectorySink {
             drop(file);
             std::fs::remove_file(partial).map_err(|e| misaka_palw_tir_lower::LowerError::Io(e.to_string()))?;
         }
-        self.skip = self.lifted == Some(param);
+        self.skip = self.lifted.contains(&param);
         self.remaining = bytes;
         if self.skip {
             return Ok(());
@@ -196,7 +208,8 @@ impl TensorSink for DirectorySink {
         if self.total.checked_add(bytes).is_none_or(|v| v > self.total_cap) {
             return Err(misaka_palw_tir_lower::LowerError::weights("PIXTRAL38_AGGREGATE_CONVERTED_BYTE_BUDGET"));
         }
-        let param = if self.lifted.is_some_and(|lifted| param > lifted) { param - 1 } else { param };
+        let param = param - self.lifted.iter().filter(|j| **j < param).count() as u16;
+        self.current_key = Some((param, layer));
         let final_path = self.directory.join(super::frontend::tensor_name(self.stage, param, layer));
         let partial = final_path.with_extension("partial");
         if final_path.exists() {
@@ -233,8 +246,87 @@ impl TensorSink for DirectorySink {
         if let Some((mut file, partial, final_path)) = self.current.take() {
             file.flush().map_err(|e| misaka_palw_tir_lower::LowerError::Io(e.to_string()))?;
             drop(file);
-            std::fs::rename(partial, final_path).map_err(|e| misaka_palw_tir_lower::LowerError::Io(e.to_string()))?;
+            std::fs::rename(partial, &final_path).map_err(|e| misaka_palw_tir_lower::LowerError::Io(e.to_string()))?;
+            if let Some((program, workspace, records)) = &mut self.audit {
+                use std::io::{Read, Seek, SeekFrom};
+                let (param, layer) =
+                    self.current_key.take().ok_or_else(|| misaka_palw_tir_lower::LowerError::bad("SOURCE39_AUDIT_KEY"))?;
+                let d = program
+                    .params
+                    .get(param as usize)
+                    .ok_or_else(|| misaka_palw_tir_lower::LowerError::bad("SOURCE39_AUDIT_PARAM"))?;
+                let shape = d.shape.iter().map(|n| *n as usize).collect::<Vec<_>>();
+                let mut file = std::fs::File::open(&final_path).map_err(|e| misaka_palw_tir_lower::LowerError::Io(e.to_string()))?;
+                let (root, bound) =
+                    misaka_palw_kernel::merkle3_stream::tensor_commitment_streamed_v3(d.dtype, &shape, *workspace, &mut |at, out| {
+                        file.seek(SeekFrom::Start(at)).map_err(|e| e.to_string())?;
+                        file.read_exact(out).map_err(|e| e.to_string())
+                    })
+                    .map_err(misaka_palw_tir_lower::LowerError::bad)?;
+                if file.metadata().map_err(|e| misaka_palw_tir_lower::LowerError::Io(e.to_string()))?.len() != bound.tensor_bytes {
+                    return Err(misaka_palw_tir_lower::LowerError::bad("SOURCE39_AUDIT_EXTENT"));
+                }
+                records.push(misaka_palw_kernel::flat_source39::OriginalTensorV39 {
+                    param,
+                    layer,
+                    dtype: d.dtype,
+                    shape: d.shape.clone(),
+                    raw_bytes: bound.tensor_bytes,
+                    source_tensor: root,
+                });
+                drop(file);
+                std::fs::remove_file(final_path).map_err(|e| misaka_palw_tir_lower::LowerError::Io(e.to_string()))?;
+            }
         }
         Ok(())
     }
+}
+
+/// New39 uses the exact source loader and bounded physical sink, but its own
+/// lowering owns the program. This function never validates a V1/V2 proxy.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn write_materialised_stage_v39(
+    hl: &HlProgram,
+    binding: &Binding,
+    checkpoint: &Path,
+    allowed: &BTreeSet<String>,
+    directory: &Path,
+    stage: u16,
+    block_bytes: usize,
+    total_cap: u64,
+    lifted: &[u16],
+    original: Option<(&misaka_palw_tir::program_v39::TirProgramV39, u64)>,
+    materialise: &dyn Fn(
+        &dyn misaka_palw_tir_lower::float_ref::stream::OccParams,
+        &mut dyn TensorSink,
+    ) -> misaka_palw_tir_lower::Result<misaka_palw_tir_lower::lower::StreamMaterialised>,
+) -> Result<(serde_json::Value, Vec<misaka_palw_kernel::flat_source39::OriginalTensorV39>), String> {
+    if block_bytes < 8 || block_bytes > 16 << 20 {
+        return Err("SOURCE39_MATERIALISER_BLOCK_BOUND".into());
+    }
+    let source = Checkpoint::open(checkpoint).map_err(|e| e.to_string())?;
+    let source = TrackedSource { source: &source, allowed, touched: Mutex::new(BTreeSet::new()) };
+    let loader = Streamed::new(hl, binding, &source).with_lazy((block_bytes / 4).max(1), block_bytes);
+    let mut sink = DirectorySink {
+        directory: directory.into(),
+        stage,
+        lifted: lifted.to_vec(),
+        remaining: 0,
+        total: 0,
+        total_cap,
+        current: None,
+        skip: false,
+        audit: original.map(|(p, w)| (p.clone(), w, Vec::new())),
+        current_key: None,
+    };
+    let stream = materialise(&loader, &mut sink).map_err(|e| e.to_string())?;
+    if sink.current.is_some() || sink.remaining != 0 || *source.touched.lock().map_err(|_| "SOURCE39_TRACKING_LOCK")? != *allowed {
+        return Err("SOURCE39_INCOMPLETE_ORIGINAL_TENSOR_MATERIALISATION".into());
+    }
+    let mut records = sink.audit.take().map(|(_, _, r)| r).unwrap_or_default();
+    records.sort_by_key(|r| (r.param, r.layer));
+    Ok((
+        serde_json::json!({"schema":"misaka.palw.actual-source-materialisation.v39","stage":stage,"real_tensor_bytes":sink.total,"residual_scale":stream.resid_scale,"output_scale":stream.logits_scale,"quant_inexact":stream.quant_inexact,"source_fidelity":"NOT_RUN"}),
+        records,
+    ))
 }
