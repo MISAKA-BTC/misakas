@@ -202,7 +202,7 @@ fn the_producer_reward_triple_is_told_apart_from_a_verifier_check_fee() {
 }
 
 #[test]
-fn applying_the_same_producer_settlement_batch_twice_debits_and_pays_once() {
+fn applying_the_same_producer_settlement_batch_twice_debits_and_pays_at_most_once() {
     let p = armed();
     let extras = PalwTransitionExtrasV1::default();
     let mut parent = with_route(PalwChainStateV2::genesis());
@@ -217,12 +217,16 @@ fn applying_the_same_producer_settlement_batch_twice_debits_and_pays_once() {
         settlement(poster, 0, SettlementKindV1::ReleaseJobEscrow, claim),
         settlement(producer, 10, SettlementKindV1::FinalReward, claim),
     ];
-    // The closing tick (lenient) applies it, then a second consumer re-applies the same batch.
+    // The closing tick (lenient) applies it, then a second consumer re-applies the same batch. Past the fence the combined
+    // liability predicate (RFC08-2) reads the kernel claim's own row; this fixture's route has none, so the leg is unsourced: it
+    // is refused, the obligation closes at zero and NOTHING is debited or paid (the fail-closed side of "at most once").
     super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, false, 100).unwrap();
-    let paid_once = b.state.clone();
-    assert_eq!(paid_once.bonds[&bond_key(1)].collateral, 990, "the poster's escrow was debited once");
+    let first = b.state.clone();
+    assert_eq!(first.bonds[&bond_key(1)].collateral, 1_000, "an unsourced leg moves nothing");
+    let o = PalwSettlementObligationV1::of(PalwSettlementLegV1::EscrowFinalReward, claim);
+    assert_eq!(palw_settled_once_v1(&first, &o).map(|row| row.amount), Some(0), "the refusal is journaled at zero");
     super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, false, 101).unwrap();
-    assert_eq!(b.state, paid_once, "the lenient second application debits and pays nothing");
+    assert_eq!(b.state, first, "the lenient second application debits and pays nothing");
     // A strict object arm reaching the same claim is refused (the object is dropped).
     assert!(super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, true, 102).is_err());
     assert_eq!(markers(&b.state), 1);
@@ -257,7 +261,7 @@ fn the_check_fee_quad_is_matched_exactly_and_never_as_a_producer_reward() {
 }
 
 #[test]
-fn a_verifiers_slot_fees_are_paid_once_per_slot_across_the_tick_the_object_arm_and_the_exec_route() {
+fn a_verifiers_slot_fees_are_marked_once_per_slot_across_the_tick_and_the_object_arm() {
     let p = armed();
     let extras = PalwTransitionExtrasV1::default();
     let mut parent = with_route(PalwChainStateV2::genesis());
@@ -267,21 +271,23 @@ fn a_verifiers_slot_fees_are_paid_once_per_slot_across_the_tick_the_object_arm_a
     let poster = b.note_kernel_bond(&bond_key(1)).unwrap();
     let verifier = b.note_kernel_bond(&bond_key(3)).unwrap();
     let claim = [7; 64];
-    // The verifier holds two drawn slots of the claim: the kernel pays both in one batch — two distinct obligations.
+    // The verifier holds two drawn slots of the claim: the kernel pays both in one batch, two distinct obligations.
     let mut batch = check_fee_quad(poster, verifier, 5, claim);
     batch.extend(check_fee_quad(poster, verifier, 5, claim));
     super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, false, 100).unwrap();
-    let paid_once = b.state.clone();
-    assert_eq!(paid_once.bonds[&bond_key(1)].collateral, 990, "both slots' fees were debited once each");
+    let first = b.state.clone();
+    // RFC08-2: a drawn verifier's own liability horizon is undefined (RFC07-5), so past the fence its fee is refused, never
+    // defaulted: each slot's obligation is closed at zero and the poster's escrow is not debited.
+    assert_eq!(first.bonds[&bond_key(1)].collateral, 1_000);
     for slot in 0..2 {
         let o = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, claim, verifier, slot);
-        let row = palw_settled_once_v1(&paid_once, &o).expect("each slot has its own marker");
-        assert_eq!((row.consumer, row.amount), (PalwSettlementConsumerV1::KernelTick, 5));
+        let row = palw_settled_once_v1(&first, &o).expect("each slot has its own marker");
+        assert_eq!((row.consumer, row.amount), (PalwSettlementConsumerV1::KernelTick, 0));
     }
-    assert_eq!(markers(&paid_once), 2);
-    // The same batch again — the kernel's per-slot `paid` flag is NOT what stops it past the fence: the markers are.
+    assert_eq!(markers(&first), 2);
+    // The same batch again: past the fence the markers, not the kernel's per-slot paid flag, stop it.
     super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, false, 101).unwrap();
-    assert_eq!(b.state, paid_once, "the lenient repeat debits and pays nothing");
+    assert_eq!(b.state, first, "the lenient repeat debits and pays nothing");
     // A strict object arm naming the first slot again is refused (the object is dropped).
     let one = check_fee_quad(poster, verifier, 5, claim);
     assert!(super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &one, true, 102).is_err());

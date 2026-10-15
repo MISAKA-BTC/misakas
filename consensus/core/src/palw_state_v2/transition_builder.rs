@@ -68,6 +68,7 @@ impl<'a> TransitionBuilder<'a> {
             heavy_prompt_ids_charged: 0,
             heavy_prompt_claims: BTreeSet::new(),
             panel_v3_beacons: Vec::new(),
+            paid_lifetime_admission_v1: None,
         })
     }
 
@@ -9525,21 +9526,51 @@ impl<'a> TransitionBuilder<'a> {
         // draw, every reward leg below, its buyback slice and its EXEC root split — settles once, whichever consumer reaches it. The
         // marker is written here, in this transition, before any of them moves value; a repeated Final of the same claim pays
         // nothing and changes nothing. `Dormant` below the fence: the historical path, byte for byte.
-        {
+        //
+        // **RFC08-2: under the combined liability predicate** (`palw_settlement_liability_fold_v1`): the draw is what the budget
+        // can grant (the escrow within the claim's remaining R), its at-once part what this Final exports (the whole, capped at
+        // the PESG export cap, where nothing vests; the buyback slice where it vests), the rest vesting at the panel liability's
+        // expiry. A refusal closes the obligation at zero and the Final proceeds with its reward withheld — never named, never
+        // minted — exactly as the existing caps leave an unbudgeted remainder.
+        // Below the fence nothing here is computed or read (the historical path, byte for byte).
+        let liability_withheld = self.params.settlement_once_active_at(final_daa) && {
+            use super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1;
             use crate::palw_settlement_once_v1::{
                 PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
             };
-            let once = self.settle_once_v1(
+            let vests_at_final = self.params.rcore_plus_active_at(final_daa) || self.state.exec_v2.roots.contains_key(&id);
+            let draw = self.issuance_draw_v1(&id, claim.escrowed_reward);
+            let cap = self.bond_budget_export_cap_v1(&id, claim, final_daa);
+            let (draw, paid_now, vest_until) = if vests_at_final {
+                let slice = crate::palw_model_market_v1::palw_model_buyback_slice_v1(draw);
+                let slice = if cap.is_some_and(|cap| slice > cap) { 0 } else { slice };
+                (draw, slice, Some(crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(final_daa, self.params.window_court())))
+            } else {
+                let paid = cap.map_or(draw, |cap| draw.min(cap));
+                (paid, paid, None)
+            };
+            let once = self.settle_once_liable_v1(
                 final_daa,
                 PalwSettlementObligationV1::of(PalwSettlementLegV1::IssuanceFinal, id.as_bytes()),
                 PalwSettlementConsumerV1::NativeFinal,
-                claim.escrowed_reward,
+                draw,
                 PalwSettlementDebitV1::Issuance { carve: claim.escrowed_reward },
+                PalwLegLiabilityV1::V2Claim {
+                    claim: id,
+                    final_daa: Some(final_daa),
+                    horizon: None,
+                    draw,
+                    paid_now,
+                    exported_before: Some(0),
+                    vest_until,
+                },
             )?;
-            if !once.pays() {
-                return Ok(());
+            match once {
+                super::palw_settlement_once_fold_v1::PalwSettleOnceV1::AlreadySettled(_) => return Ok(()),
+                super::palw_settlement_once_fold_v1::PalwSettleOnceV1::Refused(_) => true,
+                _ => false,
             }
-        }
+        };
         self.mark_paid_consumer_terminal_v1(id, final_daa)?;
         // **RFC-0018 Gate C (adopted 2026-10-15)**: a governed claim's `Final` completes the procedure only; its certification is
         // committed here (claim, producer and pool cut fixed now; the draw waits for later randomness). A no-op below the fence.
@@ -9641,6 +9672,8 @@ impl<'a> TransitionBuilder<'a> {
             };
             // **Lane BUDGET (ADR-0176 D3, design §2.6): the reward under the budget**, before the buyback and the panel split, so every
             // leg derives from it; the rest is never named — never minted. Unchanged for an unbudgeted claim.
+            // RFC08-2: a leg the combined liability predicate refused draws nothing and names nothing.
+            let escrow = if liability_withheld { 0 } else { escrow };
             let escrow = self.bond_budget_final_reward_v1(&id, escrow);
             // **RFC07 R7-ECON (`palw_model_verification_gate_v1`, round 3): the allocation payout reads its model-epoch's
             // verification** — paid whole when attested (or no Final claim existed to sample), withheld when unattested, deferred while
@@ -10461,12 +10494,32 @@ impl<'a> TransitionBuilder<'a> {
                 .iter()
                 .try_fold(0u64, |sum, leg| sum.checked_add(leg.amount))
                 .ok_or(PalwStateV2Error::Overflow("vesting move total"))?;
-            self.settle_once_v1(
+            // RFC08-2: a vesting row is its claim's held reward (its own expiry is the horizon it vested past); a reporter
+            // entitlement is a slash-funded award that stands behind no claim.
+            let leg = match &next.source {
+                PalwVestingSourceV1::Row { claim_id } => match self.state.vesting.get(claim_id) {
+                    Some(row) => super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::V2Claim {
+                        claim: *claim_id,
+                        final_daa: Some(row.final_daa),
+                        horizon: Some(row.expiry_daa.saturating_sub(1)),
+                        draw: 0,
+                        paid_now: total,
+                        exported_before: None,
+                        vest_until: Some(row.expiry_daa),
+                    },
+                    None => super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced("the vesting row of the move"),
+                },
+                PalwVestingSourceV1::Reporter { .. } => super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim(
+                    "a reporter's slash-funded award stands behind no claim",
+                ),
+            };
+            self.settle_once_liable_v1(
                 now,
                 PalwSettlementObligationV1::of(PalwSettlementLegV1::VestingRelease, subject),
                 PalwSettlementConsumerV1::VestingMaturity,
                 total,
                 PalwSettlementDebitV1::Held { amount: total },
+                leg,
             )?
             .pays()
         };

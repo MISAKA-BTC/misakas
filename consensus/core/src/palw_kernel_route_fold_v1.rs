@@ -823,10 +823,24 @@ fn apply_settlements_to_exec_vesting(
             let slot = check_fee_slots.entry((claim, verifier)).or_insert(0);
             let obligation = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, claim, verifier, *slot);
             *slot = slot.checked_add(1).ok_or(PalwStateV2Error::Overflow("check fee slot ordinal"))?;
-            let once = builder.settle_once_v1(now, obligation, consumer, fee, PalwSettlementDebitV1::Escrow { poster, amount: fee })?;
+            // RFC08-2: a drawn verifier stands behind no claim of its own for its attestation (RFC07-5: lazy-verifier deterrence is
+            // unresolved), so its fee has no liability terms to source — refused past the fence, never defaulted.
+            let once = builder.settle_once_liable_v1(
+                now,
+                obligation,
+                consumer,
+                fee,
+                PalwSettlementDebitV1::Escrow { poster, amount: fee },
+                super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
+                    "RFC07-5: a drawn verifier's own liability horizon for its attestation is undefined",
+                ),
+            )?;
             if !once.pays() {
                 if strict {
-                    return Err(refused("the verifier's check fee for this slot was already settled by another consumer"));
+                    return Err(refused(match once {
+                        super::palw_settlement_once_fold_v1::PalwSettleOnceV1::Refused(why) => why.name(),
+                        _ => "the verifier's check fee for this slot was already settled by another consumer",
+                    }));
                 }
                 already_settled.extend([ordinal + 1, ordinal + 2]);
                 continue;
@@ -849,16 +863,41 @@ fn apply_settlements_to_exec_vesting(
                 (false, true) => C::KernelObject,
                 (false, false) => C::KernelTick,
             };
-            let once = builder.settle_once_v1(
+            // RFC08-2: paid straight to the producer's queue at once — or, on the EXEC kernel-fee route, held in the root's
+            // reward row until its own horizon (that release is the ExecLegPayment leg, under the predicate again).
+            let leg = match exec_root {
+                Some(root) => match builder.state.exec_v2_rewards.get(&root) {
+                    Some(row) => super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::KernelClaim {
+                        claim,
+                        draw: paid,
+                        paid_now: 0,
+                        vest_until: Some(row.liability_until.saturating_add(1)),
+                    },
+                    None => super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
+                        "the EXEC root's reward row (the kernel fee's holding horizon)",
+                    ),
+                },
+                None => super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::KernelClaim {
+                    claim,
+                    draw: paid,
+                    paid_now: paid,
+                    vest_until: None,
+                },
+            };
+            let once = builder.settle_once_liable_v1(
                 now,
                 PalwSettlementObligationV1::of(PalwSettlementLegV1::EscrowFinalReward, claim),
                 consumer,
                 paid,
                 PalwSettlementDebitV1::Escrow { poster, amount: paid },
+                leg,
             )?;
             if !once.pays() {
                 if strict {
-                    return Err(refused("the claim's escrow reward was already settled by another consumer"));
+                    return Err(refused(match once {
+                        super::palw_settlement_once_fold_v1::PalwSettleOnceV1::Refused(why) => why.name(),
+                        _ => "the claim's escrow reward was already settled by another consumer",
+                    }));
                 }
                 already_settled.extend([ordinal + 1, ordinal + 2]);
                 continue;
@@ -1647,6 +1686,18 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             }
             match builder.plan_kernel_claim_budget_v1(ctx, *signer, Hash64::from_bytes(row.class_binding_id), reward, optimistic) {
                 Ok(Some(plan)) => {
+                    // RFC-0008 RFC08-2 (dormant `palw_settlement_once_v1`): the combined liability predicate at admission — a
+                    // refused claim is dropped with its object, exactly as a refused plan is.
+                    if super::native_writers::local_capacity_or_v1(builder.admit_claim_liability_v1(
+                        ctx.daa_score,
+                        &plan,
+                        super::palw_settlement_liability_fold_v1::PalwAdmissionLiabilityV1::KernelClaim { claim: *claim },
+                    ))?
+                    .is_err()
+                    {
+                        persist_budget(builder, ctx, &ledger)?;
+                        return Ok(());
+                    }
                     builder.state.require_kernel_monetary_material_scope_v1(
                         builder.params,
                         Hash64::from_bytes(*claim),

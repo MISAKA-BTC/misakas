@@ -191,6 +191,15 @@ impl Params {
         if !self.palw_probabilistic_constraints_v1.is_some_and(|k| k != ForkActivation::never() && k.daa_score() <= at.daa_score()) {
             return Err(PalwModeV2Error::Invalid("palw_settlement_once_v1 requires the kernel route fence at or below it"));
         }
+        // RFC08-2: the combined liability predicate reads the ADR-0176 reservation rows and X3's hard deadline of every claim
+        // admitted under it — both fences must be in force no later than this one, or every new claim's terms are unsourced.
+        let at_or_below = |activation: ForkActivation| activation != ForkActivation::never() && activation.daa_score() <= at.daa_score();
+        if !self.palw_bond_budget_v1.as_ref().is_some_and(|f| at_or_below(f.activation)) {
+            return Err(PalwModeV2Error::Invalid("palw_settlement_once_v1 requires the ADR-0176 bond budget fence at or below it"));
+        }
+        if !self.palw_claim_hard_deadline_v1.as_ref().is_some_and(|f| at_or_below(f.activation)) {
+            return Err(PalwModeV2Error::Invalid("palw_settlement_once_v1 requires the X3 hard-deadline fence at or below it"));
+        }
         // Cross-consumer settlement, reorg and restore controls are evidence: arming needs a pinned measured-value record and no
         // open blocker (`palw_rfc0608_measured_v1`; records EMPTY: dormant). The fence has no policy, so the record pins its
         // activation height. testnet-12 DAA 14,000 release plan.

@@ -288,6 +288,11 @@ impl PalwBudgetPlanV1 {
         &self.reservation
     }
 
+    /// RFC-0008 RFC08-2's admission terms of the plan: `(bond, capital, accepted_daa, K, reserved R)`.
+    pub(super) fn liability_terms_v1(&self) -> (PalwBondKeyV2, u64, u64, u128, u64) {
+        (self.bond, self.capital, self.accepted_daa, self.ask.liability_sompi, self.reservation.reward_sompi)
+    }
+
     /// **RFC-0017 (`palw_model_eligibility_v1`, an additive call-site hook — not a change to the engine's rules):** the same plan
     /// with no Final weight asked or reserved, for a claim of a `Probation` model whose Final creates no consensus credit. Every
     /// reader of the claim's F (`bond_budget_final_weight_v1`, `bond_budget_weight_or`, the immature clip) then reads 0
@@ -1713,7 +1718,16 @@ impl TransitionBuilder<'_> {
         };
         let origin = if rider { PalwBudgetOriginV1::Rider } else { PalwBudgetOriginV1::Attempt };
         let model = self.bond_budget_model_of(&claim.class_id, Some(artifact_root));
-        self.plan_bond_budget_v1(ctx, claim.bond, Some(model), ask, origin, budget_block_units)
+        let plan = self.plan_bond_budget_v1(ctx, claim.bond, Some(model), ask, origin, budget_block_units)?;
+        // RFC-0008 RFC08-2 (dormant `palw_settlement_once_v1`): the combined liability predicate at admission.
+        if let Some(plan) = &plan {
+            self.admit_claim_liability_v1(
+                ctx.daa_score,
+                plan,
+                super::palw_settlement_liability_fold_v1::PalwAdmissionLiabilityV1::V2Claim,
+            )?;
+        }
+        Ok(plan)
     }
 
     /// **A free-prompt commitment's plan**: Q 1, B `quanta` blocks, R `quanta` carves of this block, F `quanta` per-quantum weights.
@@ -1735,7 +1749,16 @@ impl TransitionBuilder<'_> {
             liability_sompi: self.bond_formula_liability_v2(ctx, claim),
         };
         let model = self.bond_budget_model_of(&claim.class_id, None);
-        self.plan_bond_budget_v1(ctx, claim.bond, Some(model), ask, PalwBudgetOriginV1::FreePrompt, 0)
+        let plan = self.plan_bond_budget_v1(ctx, claim.bond, Some(model), ask, PalwBudgetOriginV1::FreePrompt, 0)?;
+        // RFC-0008 RFC08-2 (dormant `palw_settlement_once_v1`): the combined liability predicate at admission.
+        if let Some(plan) = &plan {
+            self.admit_claim_liability_v1(
+                ctx.daa_score,
+                plan,
+                super::palw_settlement_liability_fold_v1::PalwAdmissionLiabilityV1::V2Claim,
+            )?;
+        }
+        Ok(plan)
     }
 
     /// **A receipt spend's draw** (design §2.6): one block and this block's carve, strict — the coinbase pays the worker share whole, so
@@ -2287,6 +2310,8 @@ impl TransitionBuilder<'_> {
         job: &misaka_palw_kernel::flat_execution11::ExecutionJobRecordV11,
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
         use misaka_palw_kernel::flat_execution11::ExecutionClassContextV11;
+        // RFC-0008 RFC08-2 (dormant `palw_settlement_once_v1`): no signed hard deadline or material TTL to source for this type.
+        self.refuse_unsourced_admission_v1(ctx.daa_score, "a native funded execution claim carries no signed hard deadline")?;
         if !class.can_admit()
             || class.native_admission_epoch() != Some((ctx.block.as_bytes(), ctx.daa_score))
             || job.class_id != class.record().id()
@@ -2347,6 +2372,8 @@ impl TransitionBuilder<'_> {
         admission: &crate::palw_native_text_stop_v29::CheckedNativeTextAdmissionV29,
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
         let bad = |why: &str| PalwStateV2Error::BondBudgetRefused(why.into());
+        // RFC-0008 RFC08-2 (dormant `palw_settlement_once_v1`): no signed hard deadline or material TTL to source for this type.
+        self.refuse_unsourced_admission_v1(ctx.daa_score, "a native text claim carries no signed hard deadline")?;
         admission.check_current(ctx.block.as_bytes(), ctx.daa_score, maximum, funding).map_err(|why| bad(&why))?;
         let m = maximum.record();
         let r = &funding.request;
@@ -2412,6 +2439,8 @@ impl TransitionBuilder<'_> {
         admission: &crate::palw_native_job_v39::CheckedNativeFundingV39,
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
         let bad = |why: &str| PalwStateV2Error::BondBudgetRefused(why.into());
+        // RFC-0008 RFC08-2 (dormant `palw_settlement_once_v1`): no signed hard deadline or material TTL to source for this type.
+        self.refuse_unsourced_admission_v1(ctx.daa_score, "a native job claim carries no signed hard deadline")?;
         let extras = self.extras.kernel_route.as_ref().ok_or_else(|| bad("native39 budget lacks original native environment"))?;
         let owning = extras
             .native_execution39
@@ -2513,6 +2542,8 @@ impl TransitionBuilder<'_> {
         exposure_sompi: u128,
     ) -> Result<PalwBudgetPlanV1, PalwStateV2Error> {
         let bad = |why: &str| PalwStateV2Error::BondBudgetRefused(why.into());
+        // RFC-0008 RFC08-2 (dormant `palw_settlement_once_v1`): no signed hard deadline or material TTL to source for this type.
+        self.refuse_unsourced_admission_v1(ctx.daa_score, "a native mining claim carries no signed hard deadline")?;
         if self.bond_budget_mirror_at(ctx.daa_score).is_none() {
             return Err(bad("native39 mining requires the ADR-0176 bond budget in force"));
         }

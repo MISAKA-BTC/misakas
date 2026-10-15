@@ -242,7 +242,12 @@ fn apply_inner(
                 None => Default::default(),
             };
             let inner = KernelRouteObjectV1::CommitClaimSalted { commit: commit.clone(), salt: *salt };
-            route_fold::apply_kernel_route_object_authorized_v2(b, ctx, &inner.encode(), signer, true)?;
+            // RFC-0008 RFC08-2: the inner commit's admission reads the producer-signed lifetime validated above (its authority
+            // row is written only after the commit).
+            b.paid_lifetime_admission_v1 = Some((e.base_claim, e.lifetime.liability_until));
+            let applied = route_fold::apply_kernel_route_object_authorized_v2(b, ctx, &inner.encode(), signer, true);
+            b.paid_lifetime_admission_v1 = None;
+            applied?;
             let mut l = route_fold::load_ledger(b, ctx)?;
             let base = l.claim_challenge_subject(&e.base_claim).ok_or_else(|| refused("native base claim admission refused"))?;
             let producer_operator = b.state.bonds.get(signer).map(|v| v.operator_id);

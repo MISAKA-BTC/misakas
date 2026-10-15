@@ -489,8 +489,14 @@ pub(super) fn mature(builder: &mut TransitionBuilder<'_>, daa: u64) -> Result<()
                 Fund::NativeSlice => 0,
                 Fund::KernelFee => 1,
             };
+            // RFC08-2: a leg held in the root's reward row past the row's own liability horizon — no new R draw.
+            let horizon = builder.state.exec_v2_rewards.get(&root).map(|row| row.liability_until);
+            let final_daa = builder.state.claims.get(&root).and_then(|c| match c.phase {
+                PalwClaimPhaseV2::Final { final_daa } => Some(final_daa),
+                _ => None,
+            });
             builder
-                .settle_once_v1(
+                .settle_once_liable_v1(
                     daa,
                     PalwSettlementObligationV1::with_party(
                         PalwSettlementLegV1::ExecLegPayment,
@@ -501,6 +507,15 @@ pub(super) fn mature(builder: &mut TransitionBuilder<'_>, daa: u64) -> Result<()
                     PalwSettlementConsumerV1::ExecLegMaturity,
                     leg.amount,
                     PalwSettlementDebitV1::Held { amount: leg.amount },
+                    super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::V2Claim {
+                        claim: root,
+                        final_daa,
+                        horizon,
+                        draw: 0,
+                        paid_now: leg.amount,
+                        exported_before: None,
+                        vest_until: None,
+                    },
                 )?
                 .pays()
         };

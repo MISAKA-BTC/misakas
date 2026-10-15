@@ -642,15 +642,26 @@ pub(super) fn apply_native_receipt_block_v39(
             [0; 64],
             u64::from(spend.quantum_index),
         );
-        let once = builder.settle_once_v1(
+        // RFC08-2: a native mining claim is not a V2 claim — X3 defines no hard deadline for it and it carries no signed lifetime
+        // — so its receipt quantum has no liability terms to source: refused past the fence, never defaulted.
+        let once = builder.settle_once_liable_v1(
             ctx.daa_score,
             obligation,
             PalwSettlementConsumerV1::ReceiptBlock,
             carve,
             PalwSettlementDebitV1::Issuance { carve },
+            super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
+                "a native mining receipt: its mining claim carries no signed hard deadline (X3 governs V2 claims only)",
+            ),
         )?;
-        if !once.pays() {
-            return Err(bad("mining39 receipt quantum already settled by another consumer"));
+        match once {
+            super::palw_settlement_once_fold_v1::PalwSettleOnceV1::AlreadySettled(_) => {
+                return Err(bad("mining39 receipt quantum already settled by another consumer"));
+            }
+            super::palw_settlement_once_fold_v1::PalwSettleOnceV1::Refused(why) => {
+                return Err(super::palw_settlement_liability_fold_v1::liability_refused_v1(why));
+            }
+            _ => {}
         }
     }
     let last = rc.spent_quanta + 1 >= rc.price.quanta;

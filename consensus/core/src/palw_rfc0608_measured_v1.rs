@@ -79,8 +79,10 @@ pub const PALW_RFC0608_OPEN_BLOCKERS_V1: &[(PalwRfc0608FenceV1, &str)] = &[
     ),
     (
         PalwRfc0608FenceV1::SettlementOnceV1,
-        "RFC08-2: the combined liability predicate (palw_settlement_liability_admits_v1) is not wired into admission or \
-         settlement",
+        "RFC08-2 (unsourced terms): past the fence the combined liability predicate refuses, by name, every leg whose terms \
+         have no authenticated source: verifier check fees (RFC07-5: no verifier liability horizon), material provider fees \
+         (event-relative covenant, no finite horizon), native mining receipts and native funded/text/job/mining admissions (no \
+         signed hard deadline) and kernel claims outside a paid V2 enrollment (no producer-signed lifetime)",
     ),
 ];
 

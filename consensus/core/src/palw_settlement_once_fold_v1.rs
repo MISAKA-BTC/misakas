@@ -13,12 +13,15 @@ pub(super) enum PalwSettleOnceV1 {
     First,
     /// Another consumer (or this one, earlier) already settled this exact obligation: the consumer must not pay.
     AlreadySettled(PalwSettlementOnceRowV1),
+    /// RFC08-2: the combined liability predicate refused the leg (`settle_once_liable_v1`); the obligation is closed with a
+    /// zero-amount marker and the consumer must not pay.
+    Refused(crate::palw_settlement_liability_v1::PalwSettlementLiabilityRefusalV1),
 }
 
 impl PalwSettleOnceV1 {
     /// Whether the consumer may move value for this obligation now.
     pub(super) fn pays(&self) -> bool {
-        !matches!(self, Self::AlreadySettled(_))
+        !matches!(self, Self::AlreadySettled(_) | Self::Refused(_))
     }
 }
 
@@ -52,11 +55,7 @@ impl TransitionBuilder<'_> {
             q.exact::<u8>(id.len() as u64)?;
             self.admit_native_write_v1(q)?;
         }
-        let existing = self.state.kernel_route.as_ref().and_then(|route| route.aux.get(&(PALW_SETTLEMENT_ONCE_TABLE_V1, id.to_vec())));
-        if let Some(bytes) = existing {
-            let row: PalwSettlementOnceRowV1 =
-                borsh::from_slice(bytes).map_err(|_| refused("an undecodable settlement-once marker (fail closed)"))?;
-            row.validate_v1(&id).map_err(refused)?;
+        if let Some(row) = settled_row_v1(&self.state, &obligation)? {
             return Ok(PalwSettleOnceV1::AlreadySettled(row));
         }
         let row = PalwSettlementOnceRowV1 {
@@ -71,6 +70,21 @@ impl TransitionBuilder<'_> {
         self.write_kernel_row_encoded_v1(PALW_SETTLEMENT_ONCE_TABLE_V1, &id, Some(&row))?;
         Ok(PalwSettleOnceV1::First)
     }
+}
+
+/// **The settled marker of `obligation`**, validated under its own key — `Err` (fail closed) for an undecodable or foreign row,
+/// `Ok(None)` when the obligation is open (or there is no route).
+pub(super) fn settled_row_v1(
+    state: &PalwChainStateV2,
+    obligation: &PalwSettlementObligationV1,
+) -> Result<Option<PalwSettlementOnceRowV1>, PalwStateV2Error> {
+    let id = obligation.id_v1();
+    let Some(bytes) = state.kernel_route.as_ref().and_then(|route| route.aux.get(&(PALW_SETTLEMENT_ONCE_TABLE_V1, id.to_vec()))) else {
+        return Ok(None);
+    };
+    let row: PalwSettlementOnceRowV1 = borsh::from_slice(bytes).map_err(|_| refused("an undecodable settlement-once marker (fail closed)"))?;
+    row.validate_v1(&id).map_err(refused)?;
+    Ok(Some(row))
 }
 
 /// The settled marker of `obligation` in `state`, if any (source controls read the journal through this).
