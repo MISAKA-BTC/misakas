@@ -533,12 +533,22 @@ fn rfc18_anchor_contributions_are_committed_fold_output() {
 #[test]
 fn rfc18_round5_every_tier_needs_security_certified_and_none_is_exempt() {
     use crate::palw_fork_choice_rule_e_v1::{PalwRuleECertificationV1, PalwRuleENoBondBudgetV1};
-    use crate::palw_model_tier_v1::{PalwApprovedModelV1, PalwModelTierFenceV1, palw_model_tier_of_v1};
+    use crate::palw_annual_catalog_v1::{ApprovedModelV1, PalwAnnualCatalogChainV1};
+    use crate::palw_model_tier_v1::{PalwModelTierFenceV1, palw_model_tier_of_v1};
     let root = Hash64::from_u64_word(0xA11);
+    // RFC-0019: listed in the genesis catalog (edition 0) …
     let mut listed = PalwModelTierFenceV1::at(crate::config::params::ForkActivation::new(FENCE));
-    listed.genesis.push(PalwApprovedModelV1 { model_id: class(1), artifact_root: root });
+    listed.catalogs = PalwAnnualCatalogChainV1::genesis_only(vec![ApprovedModelV1::of(class(1), root)]);
+    // … or by an annual catalog edition at the fence's next DAA: neither exempts a claim from Gate C.
+    let mut annual = PalwModelTierFenceV1::at(crate::config::params::ForkActivation::new(FENCE));
+    annual.catalogs = annual.catalogs.clone().with_edition(FENCE + 1, vec![ApprovedModelV1::of(class(1), root)]);
     let unlisted = PalwModelTierFenceV1::at(crate::config::params::ForkActivation::new(FENCE));
-    for (tag, tier) in [("approved", Some(listed.mirror())), ("registered", Some(unlisted.mirror())), ("untiered", None)] {
+    for (tag, tier) in [
+        ("approved", Some(listed.mirror())),
+        ("approved", Some(annual.mirror())),
+        ("registered", Some(unlisted.mirror())),
+        ("untiered", None),
+    ] {
         let p = with_mirror(PalwGateCRuleV1::SecurityCertifiedV1).with_model_tier_v1(tier.clone());
         if let Some(mirror) = tier.as_ref() {
             let t = palw_model_tier_of_v1(Some(mirror), &class(1), &root, false, FENCE + 1);

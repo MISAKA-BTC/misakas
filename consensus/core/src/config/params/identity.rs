@@ -509,6 +509,9 @@ impl Params {
         if self.palw_native_execution_v39.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_native_execution_v39 = None;
         }
+        if self.palw_native_mining_v39.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_native_mining_v39 = None;
+        }
         if self.palw_native_final_v27.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_native_final_v27 = None;
         }
@@ -644,6 +647,15 @@ impl Params {
         // ADR-0179's model tiers, likewise.
         if self.palw_model_tier_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_model_tier_v1 = None;
+        }
+        // **RFC-0019 §7.2: an annual catalog edition not yet in force leaves the identity WITH ITS CONTENTS.** `for_each_fence` has
+        // rewritten every edition's height to `u64::MAX` unless it is genesis-active; left in place, the edition's number, height and
+        // root would be hashed by `write_value_into`, a build carrying the NEXT edition would differ from every build that does not,
+        // and the handshake would refuse it at deploy — the rolling upgrade RFC-0019 exists for would be a deploy-day partition.
+        // Dropped here, old and new builds share the identity until the edition activates; from its height the fork id (which gates
+        // on every edition's height) refuses the build that lacks it. Edition 0 (DAA 0, the genesis catalog) stays.
+        if let Some(fence) = self.palw_model_tier_v1.as_mut() {
+            fence.catalogs.drop_unscheduled_for_identity();
         }
         // RFC-0018's five dormant fences, likewise.
         if self.palw_dag_sibling_attribution_v1 == Some(ForkActivation::never()) {
@@ -1093,6 +1105,7 @@ impl Params {
             palw_native_final_v27,
             palw_stage_execution_v28,
             palw_native_execution_v39,
+            palw_native_mining_v39,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
@@ -1419,6 +1432,7 @@ impl Params {
             ("palw_native_final_v27", palw_native_final_v27.as_ref().map(|f| f.activation)),
             ("palw_stage_execution_v28", palw_stage_execution_v28.as_ref().map(|f| f.activation)),
             ("palw_native_execution_v39", palw_native_execution_v39.as_ref().map(|f| f.activation)),
+            ("palw_native_mining_v39", palw_native_mining_v39.as_ref().map(|f| f.activation)),
             ("palw_fork_choice_rule_e_v1", *palw_fork_choice_rule_e_v1),
             ("palw_typed_roots_v1", *palw_typed_roots_v1),
             ("palw_fork_choice_commitment_v1", *palw_fork_choice_commitment_v1),
@@ -1739,6 +1753,11 @@ impl Params {
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policies.root());
         }
+        if let Some(fence) = &self.palw_native_mining_v39 {
+            h.write(b"palw_native_mining_v39");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.root());
+        }
         if let Some(fence) = &self.palw_funded_execution_v11 {
             h.write(b"palw_funded_execution_v11");
             h.write(fence.activation.daa_score().to_le_bytes());
@@ -1938,7 +1957,9 @@ impl Params {
             h.write(b"palw_model_eligibility_v1");
             h.write(at.daa_score().to_le_bytes());
         }
-        // ADR-0179's model tiers, NAMED with their lists and values. Some-only.
+        // ADR-0179's model tiers, NAMED with their values and RFC-0019's catalog chain — EVERY edition's number, height and root, the
+        // scheduled ones included: this id is a report, not a gate, so two builds that carry different next editions (or one carries
+        // none) read as different schedules in the handshake's warning before the edition activates. Some-only.
         if let Some(fence) = self.palw_model_tier_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
             h.write(b"palw_model_tier_v1");
             h.write(fence.activation.daa_score().to_le_bytes());
@@ -2666,6 +2687,7 @@ impl Params {
             palw_native_final_v27,
             palw_stage_execution_v28,
             palw_native_execution_v39,
+            palw_native_mining_v39,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
@@ -3492,6 +3514,9 @@ impl Params {
         if let Some(fence) = palw_native_execution_v39.as_mut() {
             fork(&mut fence.activation, visit);
         }
+        if let Some(fence) = palw_native_mining_v39.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         if let Some(fence) = palw_funded_execution_v11.as_mut() {
             fork(&mut fence.activation, visit);
         }
@@ -3617,11 +3642,12 @@ impl Params {
         if let Some(activation) = palw_model_eligibility_v1.as_mut() {
             fork(activation, visit);
         }
-        // ADR-0179's model tiers: the fence and every annual list's activation. Some-only.
+        // ADR-0179's model tiers: the fence and every RFC-0019 annual catalog edition's activation (edition 1 onward — edition 0 is
+        // the genesis catalog at DAA 0, not a fence). Some-only.
         if let Some(fence) = palw_model_tier_v1.as_mut() {
             fork(&mut fence.activation, visit);
-            for list in fence.annual.iter_mut() {
-                fork(&mut list.activation, visit);
+            for catalog in fence.catalogs.editions.iter_mut().skip(1) {
+                visit(&mut catalog.activation_daa);
             }
         }
         // RFC-0018's five fences. Some-only.
@@ -4141,6 +4167,7 @@ impl Params {
             palw_native_final_v27,
             palw_stage_execution_v28,
             palw_native_execution_v39,
+            palw_native_mining_v39,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
@@ -5030,6 +5057,11 @@ impl Params {
             h.write(b"palw_native_execution_v39");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policies.root());
+        }
+        if let Some(fence) = palw_native_mining_v39 {
+            h.write(b"palw_native_mining_v39");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.root());
         }
         if let Some(fence) = palw_funded_execution_v11 {
             h.write(b"palw_funded_execution_v11");

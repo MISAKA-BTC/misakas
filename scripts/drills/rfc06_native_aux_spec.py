@@ -70,6 +70,8 @@ FENCES = {
     'v37': 'palw_window_class_v37 + palw_native_final_v27',
     's14': 'palw_stage_execution_v14 (with palw_panel_free_v1)',
     's28': 'palw_stage_execution_v28 + palw_native_final_v27',
+    'n39': 'palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1)',
+    'm39': 'palw_native_mining_v39 + palw_native_execution_v39 (with palw_native_final_v27, palw_panel_free_v1)',
 }
 
 NS = []
@@ -143,7 +145,7 @@ ns(88, P2(66, 29, 0), 'mirror:crate::palw_native_text_fold_v29::JobHeader', [(T2
 ns(88, P2(66, 29, 1), f'{T29}::NativeTextBookV29', [(T29F, r'^k\(1, &h\.job\)$')], 'v27', 'Text29 book (Borsh, ≤ TEXT_STOP_BOOK_BYTES_V29)')
 ns(88, P2(66, 37, 3), f'{W37}::NativeWindowJobBindingV37', [(T29F, r'key\(&\(37u8, 3u8, job\)\)')], 'v37')
 # ---- 89 requester nonce counters ---------------------------------------------------------------------------------------------
-ns(89, L(64), f'{X11}::NativeRequesterNonceRowV11', [(ANY, r'(key|bytes)\(&(requester_operator|a\.requester_operator|w\.requester_operator)\)')], 'v11', 'requester operator → counter (text11/stage14/stage28/text29)')
+ns(89, L(64), f'{X11}::NativeRequesterNonceRowV11', [(ANY, r'(key|bytes)\(&(requester_operator|a\.requester_operator|w\.requester_operator)\)|^b\(&c\.wire\.requester_operator\)$')], 'v11', 'requester operator → counter (text11/stage14/stage28/text29)')
 ns(89, P(65, 13), f'{X11}::NativeRequesterNonceRowV11', [(V11F, r'counter_key')], 'v11', 'v13 discovery counter key (13, operator)')
 ns(89, P(65, 29), 'u64', [(T29F, r'nonce_key')], 'v27', 'Text29 own-ticket counter key (29, operator)')
 # ---- 90 vector → job ---------------------------------------------------------------------------------------------------------
@@ -153,15 +155,15 @@ ns(91, L(64), f'raw:{OBJ}', [(V11F, r'key\(&id\)')], 'v11', 'funded post carrier
 ns(91, P2(66, 29, 0), f'raw:{OBJ}', [(T29F, r'^k\(0, &id\)$')], 'v27', 'Text29 compact post')
 # ---- 92 quota / capacity / paged / queue / initial31 ---------------------------------------------------------------------------
 ns(92, L(1) + ' && k[0]==0', f'({D},{Q}::QuotaGlobalRowV11)', [(ANY, r'^vec!\[0\]$')], 'v11', 'shared quota global (fixed framing)')
-ns(92, P(65, 1), f'({D},{Q}::QuotaActorRowV11)', [(ANY, r'quota_key\(1,|bytes\(&\(1u8, owner\.actor\)\)|^actor$'), (S28F, r'^k$', r'a\.root\(\),a')], 'v11', 'quota actor (1 ‖ actor)')
-ns(92, P(65, 2), f'({D},{Q}::QuotaSubjectSummaryV11)', [(ANY, r'quota_key\(2,|bytes\(&\(2u8,h\.id\)\)')], 'v11', 'quota subject (2 ‖ job)')
+ns(92, P(65, 1), f'({D},{Q}::QuotaActorRowV11)', [(ANY, r'quota_key\(1,|bytes\(&\(1u8, owner\.actor\)\)|^actor$|^b\(&\(1u8, a\.actor\)\)$'), (S28F, r'^k$', r'a\.root\(\),a')], 'v11', 'quota actor (1 ‖ actor)')
+ns(92, P(65, 2), f'({D},{Q}::QuotaSubjectSummaryV11)', [(ANY, r'quota_key\(2,|bytes\(&\(2u8,h\.id\)\)|^b\(&\(2u8, (h\.id|s\.binding\.job_id)\)\)$')], 'v11', 'quota subject (2 ‖ job)')
 ns(92, P(65, 3), f'({D},{Q}::ProtectedSealSummaryV11)', [(ANY, r'quota_key\(3,')], 'v11', 'protected seal summary (3 ‖ seal)')
 ns(92, P(65, 4), f'({D},{Q}::discovery13::DiscoveryRowV13)', [(ANY, r'quota_key\(4,')], 'v11', 'discovery row (4 ‖ id)')
 ns(92, P(65, 16), f'({D},{Q}::source16::SourceObligationV16)', [(ANY, r'key\(&\(16u8, job\)\)|bytes\(&\(16u8,id\)\)')], 'v11', 'source obligation (16, job)')
 ns(92, PL(66, 16, 1), f'{Q}::source16::SourcePlanRecordV16', [(ANY, r'\(16u8, ?(job_id|id), ?1u8\)')], 'v11', 'source plan record (16, job, 1)')
 ns(92, P(66, 17), f'({D},{Q}::trace17::TraceSupplementV17)', [(V11F, r'trace_row_key')], 'v11', 'trace supplement (17, role, entitlement)')
 ns(92, P2(2, 22, 0), f'({D},{CAP}::NativeCarriageGlobalV22)', [(ANY, r'global_key|\(22u8, ?0u8\)')], 'v11', 'physical carriage global (22, 0)')
-ns(92, P(65, 22), f'({D},{CAP}::NativeCarriageLeaseV22)', [(ANY, r'lease_key\(job\)|key\(&\(22u8, id\)\)')], 'v11', 'carriage lease (22, job)')
+ns(92, P(65, 22), f'({D},{CAP}::NativeCarriageLeaseV22)', [(ANY, r'lease_key\(job\)|key\(&\(22u8, id\)\)|^b\(&\(22u8, id\)\)$')], 'v11', 'carriage lease (22, job)')
 ns(92, PL(66, 22, 1), f'{CAP}::NativeCarriagePlanV22', [(ANY, r'plan_key\(job\)')], 'v11', 'carriage plan (22, job, 1)')
 ns(92, PL(66, 22, 2), f'({D},{CAP}::NativePhysicalSlotsV22)', [(ANY, r'\(22u8, ?(job|id|h\.id), ?2u8\)|slotkey')], 'v11', 'physical slotbook (22, job, 2)')
 ns(92, P2(2, 30, 0), f'({D},{QV30}::NativeQueueGlobalV30)', [(ANY, r'\(30u8, ?0u8\)|queue_key')], 'v27', 'queue30 global (30, 0)')
@@ -180,6 +182,14 @@ ns(92, L(129) + ' && k[0]==29', f'({D},{P29}::NativePagedSealV29)', [(ANY, r'own
 ns(92, P2(2, 31, 0), 'mirror:crate::palw_native_initial_fold_v31::InitialGlobalV31', [(r'palw_native_initial_fold_v31', r'key\(&0u8\)')], 'v27', 'initial31 global (31, 0) (fold-private)')
 ns(92, PL(66, 31, 1), f'({D},crate::palw_native_initial_v31::NativeInitialHeaderV31)', [(r'palw_native_initial_fold_v31', r'key\(&\(h\.id, 1u8\)\)')], 'v27', 'initial31 header (31, (id, 1))')
 ns(92, L(68) + ' && k[0]==31 && k[65]==2', 'raw:crate::palw_native_initial_v31::INITIAL_PART_BYTES_V31', [(r'palw_native_initial_fold_v31', r'key\(&\(id, 2u8, part\.index\)\)')], 'v27', 'initial31 part (31, (id, 2, u16))')
+# Owning39 (RFC-0002 §II.14): `(39, 0, job)` (the producer source39 obligation) and `(39, job, j)` j = 0..4 (the job's original
+# contract, source plan, paged plan, cached quota policy, carriage record) share the 66-byte shape and k[0]; neither k[1] nor k[65]
+# separates them for every job id. One buffered `any:` arm, every layout tried, the largest accepted accounted.
+ns(92, L(66) + ' && k[0]==39',
+   f'any:({D},{Q}::owning39::source::SourceObligationV39)|crate::palw_native_job_v39::NativeMaximumContractV39|{Q}::owning39::SourcePlanRecordV39'
+   f'|{Q}::owning39::PagedProofPlanRecordV39|{Q}::QuotaPolicyV11|({D},crate::palw_native_paged_carriage_v29::NativePagedCarriageRecordV29)',
+   [(r'palw_native_job_fold_v39', r'^b\(&\(39u8, (0u8, id|id, [0-4]u8)\)\)$')], 'n39',
+   'AMBIGUOUS by key: owning39 source obligation (39, 0, job) vs the job\'s five original records (39, job, 0..4)')
 # ---- 93 policies / pursuit / consents ----------------------------------------------------------------------------------------
 ns(93, L(0), f'{X11}::NativeExecutionPoliciesV11', [(ANY, r'^(Vec::new\(\))$')], 'v11', 'immutable shared native policies (text11 / stage14 / stage28)')
 ns(93, P(65, 19), 'crate::palw_flat_execution_pursuit_v19::NativePublicPursuitV19', [(V11F, r'\(19u8, job\)')], 'v11')
@@ -285,6 +295,115 @@ ns(112, P2(2, 28, 4), f'{S28}::NativeStagePoliciesV28', [(S28F, r'key\(4,&\(\)\)
 ns(112, P2(66, 32, 0), 'mirror:crate::palw_flat_stage_master_fold_v32::NativeMasterHeaderV32', [(r'palw_flat_stage_master_fold_v32', r'master_key\(0,')], 's28', 'master32 header')
 ns(112, P2(66, 32, 1), 'Vec<u8>', [(r'palw_flat_stage_master_fold_v32', r'master_key\(1,')], 's28', 'master32 body')
 ns(112, P2(BK + 2, 32, 2), VD, [(r'palw_flat_stage_master_fold_v32', r'master_key\(2,')], 's28', 'master32 catalogue')
+M32 = r'palw_flat_stage_master_fold_v32'
+ns(112, P2(66, 32, 3), 'mirror:crate::palw_flat_stage_master_fold_v32::InvocationConsentV32', [(M32, r'master_key\(3,')], 's28', 'master32 invocation consent')
+ns(112, P2(66, 32, 4), 'Vec<u8>', [(M32, r'master_key\(4,')], 's28', 'master32 invocation (Borsh bytes of the invocation)')
+ns(112, P2(66, 32, 5), 'mirror:crate::palw_flat_stage_master_fold_v32::InvocationActualV32', [(M32, r'master_key\(5,')], 's28', 'master32 actual invocation')
+ns(112, P2(66, 32, 6), 'mirror:crate::palw_flat_stage_master_fold_v32::MasterProgressV32', [(M32, r'master_key\(6,')], 's28', 'master32 progress')
+ns(112, P2(66, 32, 7), f'((u16,{D},{D},{D},{B},{D}),({D},{D},{VD},mirror:crate::palw_flat_stage_master_fold_v32::MasterProgressV32))',
+   [(M32, r'master_key\(7,')], 's28', 'master32 collected tombstone')
+ns(112, P2(66, 32, 8), f'({D},mirror:crate::palw_flat_stage_master_fold_v32::InvocationCommitJournalV32)', [(M32, r'master_key\(8,')], 's28', 'master32 producer commit journal')
+ns(112, P2(69, 32, 9), 'raw:32<<10', [(M32, r'^commit_part_key\(')], 's28', 'master32 producer commit page (32, 9, job, u8, u16)')
+ns(112, P2(66, 28, 32), 'mirror:crate::palw_flat_stage_master_fold_v32::NativeInvocationBindingV32', [(M32, r'^binding_key\(')], 's28', 'master32 invocation binding (28, 32, job)')
+
+# ---- 112 owning39 (RFC-0002 §II.14): key borsh(39u8, kind, id) — every native39 fold module, then mining39 -----------------------
+S39 = r'palw_native_source_fold_v39'
+J39 = r'palw_native_job_fold_v39'
+C39 = r'palw_native_collect_fold_v39'
+PR39 = r'palw_native_protected_fold_v39'
+PU39 = r'palw_native_public_fold_v39'
+MT39 = r'palw_native_material_fold_v39'
+MA39 = r'palw_native_master_fold_v39'
+MI39 = r'palw_native_mining_fold_v39'
+J = 'crate::palw_native_job_v39'
+MV = 'crate::palw_native_master_v39'
+NM = 'crate::palw_native_mining_v39'
+OWN39 = [
+    # source/class journal (palw_native_source_fold_v39.rs: `key(kind, id)`)
+    (66, 0, f'({D},mirror:crate::palw_native_source_fold_v39::SourceHeaderV39)', S39, r'^key\(0, ', 'source39 header'),
+    (66, 1, 'Vec<u8>', S39, r'^key\(1, ', 'source39 live body'),
+    (66, 2, f'({D},mirror:crate::palw_native_source_fold_v39::ClassHeaderV39)', S39, r'^key\(2, ', 'class39 header'),
+    (66, 3, 'Vec<u8>', S39, r'^key\(3, ', 'class39 live body'),
+    (BK + 2, 5, 'mirror:crate::palw_native_source_fold_v39::CatalogV39', S39, r'^key\(5, ', 'retention payer catalogue (39, 5, bond)'),
+    (66, 6, f'({D},mirror:crate::palw_native_source_fold_v39::UploadHeaderV39)', S39, r'^key\(6, ', 'source39 upload progress'),
+    (68, 7, 'Vec<u8>', S39, r'^key\(7, ', 'source39 upload page (39, 7, (id, u16))'),
+    (66, 94, f'({D},mirror:crate::palw_native_source_fold_v39::ClassHold)', S39, r'^key\(94, ', 'class retention hold'),
+    (66, 95, 'u64', S39, r'^key\(95, ', 'class hold count'),
+    (66, 96, B, S39, r'^key\(96, ', 'source retention payer'),
+    (66, 97, B, S39, r'^key\(97, ', 'class retention payer'),
+    (66, 98, 'u64', S39, r'^key\(98, ', 'active classes per source'),
+    # jobs (palw_native_job_fold_v39.rs: `k(kind, id)`)
+    (66, 16, f'({D},mirror:crate::palw_native_job_fold_v39::JobHeader)', J39, r'^k\(16, ', 'original funded job header'),
+    (66, 17, f'{J}::NativeJobBookV39', J39, r'^k\(17, ', 'original job book'),
+    (66, 18, f'({D},mirror:crate::palw_native_job_fold_v39::ConsentHeader)', J39, r'^k\(18, ', 'live producer consent header'),
+    (BK + 2, 19, VD, J39, r'^k\(19, ', 'producer consent list'),
+    (66, 20, f'({D},{D},{D})', J39, r'^k\(20, ', 'consumed consent tombstone (job, funding, consent)'),
+    (BK + 2, 21, VD, J39, r'^k\(21, |^21$|^k\(kind, &who\)$', 'requester active jobs (the terminal loop writes 21 and 22 through `k(kind, &who)`)'),
+    (BK + 2, 22, VD, J39, r'^k\(22, |^22$', 'producer active jobs'),
+    (66, 23, f'({D},{J}::NativeSingleCreditV39)', J39, r'^k\(23, ', 'single credit'),
+    (66, 25, f'({D},{D},{D},u64)', J39, r'^k\(25, ', 'original debit receipt (nonce root, receipt, block, daa)'),
+    (66, 26, 'Vec<u8>', J39, r'^k\(26, ', 'live consent body'),
+    (66, 27, f'{J}::NativeConsentV39', J39, r'^k\(27, ', 'consumed original consent'),
+    (66, 28, f'{J}::NativeCommitWireV39', J39, r'^k\(28, ', 'accepted Commit post'),
+    # termination / producer transport (palw_native_collect_fold_v39.rs)
+    (66, 29, f'({D},mirror:crate::palw_native_collect_fold_v39::CommitJournalV39)', C39, r'^k\(COMMIT_JOURNAL, ', 'commit transport journal'),
+    (69, 30, f'raw:{J}::NATIVE_COMMIT_PAGE_BYTES_V39', C39, r'^k\(COMMIT_PAGE, ', 'commit transport page (39, 30, (job, u8, u16))'),
+    (66, 31, f'({D},{J}::NativeCollectedJobV39)', C39, r'^k\(COLLECTED, ', 'collection53 tombstone'),
+    (66, 33, VD, C39, r'^k\(OPENED, ', 'public pending ids opened per job'),
+    # paid discovery/proof (palw_native_protected_fold_v39.rs)
+    (66, 36, f'({D},mirror:crate::palw_native_protected_fold_v39::Status)', PR39, r'^k\(36, ', 'public status'),
+    (66, 37, f'({D},mirror:crate::palw_native_protected_fold_v39::Owner)', PR39, r'^k\(37, ', 'paid discovery/proof owner'),
+    (68, 38, 'raw:32<<10', PR39, r'^k\(38, ', 'proof fragment (39, 38, (owner, u16))'),
+    (66, 39, f'(({D},{D},{D},{D},{D},{D}),u64)', PR39, r'^k\(39, ', 'retired owner anchor'),
+    # public acquisition (palw_native_public_fold_v39.rs)
+    (66, 40, f'({D},mirror:crate::palw_native_public_fold_v39::Pending)', PU39, r'^k\(40, ', 'public pending unit'),
+    (66, 41, D, PU39, r'^k\(41, ', 'unit -> pending id'),
+    (66, 42, f'({D},Vec<u8>,Vec<u8>)', PU39, r'^k\(42, ', 'settled reply (root, demand, reply)'),
+    (69, 43, 'raw:32<<10', PU39, r'^k\(43, ', 'answer fragment (39, 43, (pending, u8, u16))'),
+    (BK + 2, 44, VD, PU39, r'^k\(44, ', 'requester pending list'),
+    # requester material (palw_native_material_fold_v39.rs)
+    (66, 60, f'({D},mirror:crate::palw_native_material_fold_v39::MaterialHeader)', MT39, r'^k\(60, ', 'material header'),
+    (66, 61, 'misaka_palw_kernel::flat_material39::MaterialProgressV39', MT39, r'^k\(61, ', 'material progress'),
+    (68, 62, f'raw:{OBJ}', MT39, r'^k\(62, ', 'material page (39, 62, (id, u16)): the carrier tail'),
+    (BK + 2, 63, VD, MT39, r'^k\(63, ', 'requester material list'),
+    (66, 64, f'({D},{D},u64)', MT39, r'^k\(64, ', 'collected material anchor'),
+    (66, 65, f'({D},mirror:crate::palw_native_material_fold_v39::CertificateProgress)', MT39, r'^k\(65, ', 'output certificate progress'),
+    (68, 66, f'raw:{OBJ}', MT39, r'^k\(66, ', 'output certificate page (39, 66, (plan, u16))'),
+    (66, 67, D, MT39, r'^k\(67, ', 'certificate plan root'),
+    # Masters and metadata (palw_native_master_fold_v39.rs)
+    (66, 80, f'({D},{MV}::NativeMasterRecordV39)', MA39, r'^k\(80, ', 'Master record'),
+    (66, 81, f'(u16,{D},u32,u16,{D})', MA39, r'^k\(81, ', 'Master body directory'),
+    (66, 82, f'({D},mirror:crate::palw_native_master_fold_v39::Progress)', MA39, r'^k\(82, ', 'Master component progress'),
+    (66, 83, f'({D},{MV}::NativeMasterFinalRecordV39)', MA39, r'^k\(83, ', 'Master Final'),
+    (66, 84, f'({D},{MV}::NativeMasterFundedComponentV39)', MA39, r'^k\(84, ', 'job -> Master component binding'),
+    (BK + 2, 85, VD, MA39, r'^k\(85, ', 'owner Master list'),
+    (BK + 2, 86, 'u64', MA39, r'^k\(86, ', 'owner Master sequence'),
+    (66, 87, f'({D},u64)', MA39, r'^k\(87, ', 'closed Master anchor'),
+    (66, 88, f'({D},mirror:crate::palw_native_master_fold_v39::MetadataUpload)', MA39, r'^k\(88, ', 'metadata upload progress'),
+    (68, 89, f'raw:{OBJ}', MA39, r'^k\(89, ', 'metadata upload page (39, 89, (id, u16))'),
+    (BK + 2, 90, 'u64', MA39, r'^k\(90, ', 'owner metadata sequence'),
+    (BK + 2, 91, VD, MA39, r'^k\(91, ', 'owner metadata uploads'),
+    (70, 92, f'({D},u16,{D},{D})', MA39, r'^k\(92, ', 'upstream edge (39, 92, (Master, u16 stage, u16 input))'),
+    (68, 93, 'raw:32<<10', MA39, r'^k\(93, ', 'Master body page (39, 93, (id, u16))'),
+]
+for n, kind, value, f, kr, note in OWN39:
+    ns(112, P2(n, 39, kind), value, [(f, kr)], 'n39', note)
+MINING39 = [
+    (66, 100, f'({D},{NM}::NativeMiningModelRecordV39)', r'^k\(MINING_MODEL_KIND_V39, ', 'mining model'),
+    (66, 101, D, r'^k\(MINING_MODEL_SOURCE_KIND_V39, ', 'complete source -> model'),
+    (2 + 64 + BK, 102, f'({D},{NM}::NativeMiningSeatRecordV39)', r'^k\(MINING_SEAT_KIND_V39, ', 'seat (39, 102, (model, bond))'),
+    (66, 103, f'({D},{NM}::NativeMiningClaimRecordV39)', r'^k\(MINING_CLAIM_KIND_V39, ', 'mining claim'),
+    (66, 104, f'({D},{NM}::NativeMiningReceiptRecordV39)', r'^k\(MINING_RECEIPT_KIND_V39, ', 'mining receipt'),
+    (74, 106, 'u64', r'^k\(MINING_EPOCH_KIND_V39, ', 'per-model epoch count (39, 106, (model, u64))'),
+    (66, 107, f'Vec<{B}>', r'^k\(MINING_SEAT_LIST_KIND_V39, ', 'model seat list'),
+    (68, 108, D, r'^k\(MINING_MASTER_USED_KIND_V39, ', 'credited Master stage (39, 108, (Master, u16)) -> claim'),
+    (BK + 2, 109, 'u64', r'^k\(MINING_MODEL_SEQUENCE_KIND_V39, ', 'registrant sequence'),
+    (BK + 2, 110, 'u64', r'^k\(MINING_PRODUCER_SEQUENCE_KIND_V39, ', 'producer claim sequence'),
+    (2, 113, 'u64', r'^k\(MINING_MODEL_COUNT_KIND_V39, ', 'registered model count (39, 113, ())'),
+    (66, 114, f'({D},Option<(u64,bool)>,u64)', r'^k\(MINING_COLLECTED_KIND_V39, ', 'collected claim tombstone'),
+]
+for n, kind, value, kr, note in MINING39:
+    ns(112, P2(n, 39, kind), value, [(MI39, kr)], 'm39', note)
 
 RESERVED = {42: 'reserved by the chunk lane (41–42); no fold writes it', 101: 'EXECUTION_SEAL_COUNT_TABLE_V11: allocated, never written'}
 TABLES = sorted(set(n['table'] for n in NS) | set(RESERVED))
@@ -337,8 +456,15 @@ def write_sites():
             out.append(s[st:].strip())
         return out
 
-    def resolve(name, short, body):
+    def resolve(name, short, body, text=''):
         n = name.split('::')[-1].lstrip('*')
+        local = re.search(r'\bconst\s+' + re.escape(n) + r'\s*:\s*u8\s*=\s*([^;]+);', text)
+        if local:
+            v = local[1].strip()
+            return int(v) if v.isdigit() else consts.get(v.split('::')[-1])
+        alias = re.search(r'\b([A-Z][A-Z0-9_]*)\s+as\s+' + re.escape(n) + r'\b', text)
+        if alias:
+            return consts.get(alias[1])
         if n in consts:
             return consts[n]
         if f'{n}@{short}' in consts:
@@ -369,7 +495,7 @@ def write_sites():
             if any(a <= m.start() < b and (k in names or t in names) for a, b, names in loops):
                 continue  # a loop over (table, key, row) tuples: its tuples are the sites, below
             fstart = max(s.rfind('\nfn ', 0, m.start()), s.rfind(' fn ', 0, m.start()))
-            table = resolve(t, short, s[fstart:m.start()])
+            table = resolve(t, short, s[fstart:m.start()], s)
             sites.append((table, short, s.count('\n', 0, m.start()) + 1, k, v))
         for m in re.finditer(r'for\s*\(\s*(\w+)\s*,\s*(\w+)\s*(?:,\s*(\w+)\s*)?\)\s*in\s*\[', s):
             e = bal(s, m.end())
@@ -379,7 +505,7 @@ def write_sites():
             if not wm:
                 continue
             ln = s.count('\n', 0, m.start()) + 1
-            fixed = None if wm[1] == m[1] else resolve(wm[1], short, s[:m.start()])
+            fixed = None if wm[1] == m[1] else resolve(wm[1], short, s[:m.start()], s)
             for tup in split(' '.join(s[m.end():e - 1].split())):
                 if not tup.startswith('('):
                     continue
@@ -387,7 +513,7 @@ def write_sites():
                 if fixed is not None:
                     table, k, v = fixed, parts[0], (parts[1] if len(parts) > 1 else 'None')
                 else:
-                    table, k = resolve(parts[0], short, s[:m.start()]), parts[1]
+                    table, k = resolve(parts[0], short, s[:m.start()], s), parts[1]
                     v = parts[2] if len(parts) > 2 else 'None'
                 if 'Some(' not in body and len(parts) < 3 and fixed is None:
                     v = 'None'
@@ -430,7 +556,12 @@ def doc(claimed, nsites=0):
            f'- {nsites} value-writing sites into these tables, {len(NS)} namespaces; every site is claimed by exactly one namespace and '
            'every namespace by at least one site (the generator run fails otherwise).',
            '- Ambiguous key shapes (handled conservatively, see `any:`): table 92 `(29, job, 23)` (Text29 rooted carriage record vs '
-           'Stage28 bare record) and table 106 `(29, 4, id)` (discovery replacement vs collected credit; told apart by fixed length).',
+           'Stage28 bare record), table 106 `(29, 4, id)` (discovery replacement vs collected credit; told apart by fixed length) '
+           'and table 92 `(39, …)` 66-byte keys (owning39 source obligation `(39, 0, job)` vs the job\'s original records '
+           '`(39, job, 0..4)`).',
+           '- Owning39 (RFC-0002 §II.14) rows in table 112 are keyed `borsh(39u8, kind, id)`; mining39 kinds 100–114 ride their own '
+           'fence. Regenerating the scanner arms needs the native wire generator to run (blocked on this branch until the shape-review '
+           'pins of integ/rfc06-12-remaining reach integ).',
            '- Table 105 `(14, job, ordinal)` carries a 64-byte v11 demand id or a 65-byte `(16, source16 pending)` pair; dispatched '
            'on the exact row length.',
            '- Registry completeness is enforced by `palw_native_resource_v1::aux_registry_tests` (source-discovered tables must reach '

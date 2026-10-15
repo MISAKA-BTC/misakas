@@ -2286,6 +2286,34 @@ message RpcPalwClassSeating {
   uint32 licensableSharePermille = 7;
 }
 
+// RFC-0019: one annual catalog edition this node's binary carries (state SCHEDULED or ACTIVE; the release lifecycle
+// PROPOSED … LOCKED_IN lives in the signed release manifest, never in a node read).
+message RpcPalwAnnualCatalogEdition {
+  uint32 edition = 1;
+  uint64 activationDaa = 2;
+  string previousRoot = 3;
+  string root = 4;
+  uint32 models = 5;
+  string state = 6;
+}
+
+// RFC-0019: the annual model catalog at this node's tip. `readiness` is always "off-chain": readiness is
+// measured by operators' tooling, never voted and never a consensus input.
+message RpcPalwAnnualCatalogStatus {
+  bool scheduled = 1;
+  uint64 fenceDaa = 2;
+  bool active = 3;
+  uint32 currentEdition = 4;
+  string currentRoot = 5;
+  bool hasNext = 6;
+  uint32 nextEdition = 7;
+  uint64 nextActivationDaa = 8;
+  string nextRoot = 9;
+  repeated RpcPalwAnnualCatalogEdition editions = 10;
+  uint32 kernelVersionMax = 11;
+  string readiness = 12;
+}
+
 message GetPalwModelRegistryResponseMessage {
   bool available = 1;
   uint64 tipDaa = 2;
@@ -2331,6 +2359,8 @@ message GetPalwModelRegistryResponseMessage {
   repeated RpcPalwClassBlocking blocking = 39;
   // RFC-0002 Part II §II.7.5 Proposal A: the seating of every class the fence reads.
   repeated RpcPalwClassSeating seating = 40;
+  // RFC-0019: the annual model catalog (editions carried, root in force, next activation).
+  RpcPalwAnnualCatalogStatus annualCatalog = 41;
   RPCError error = 1000;
 }
 

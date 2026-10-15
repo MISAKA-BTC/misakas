@@ -13,8 +13,9 @@ Every row the scanner meets in these tables is dispatched by its full key (`k`) 
 
 ## Coverage
 
-- 375 value-writing sites into these tables, 194 namespaces; every site is claimed by exactly one namespace and every namespace by at least one site (the generator run fails otherwise).
-- Ambiguous key shapes (handled conservatively, see `any:`): table 92 `(29, job, 23)` (Text29 rooted carriage record vs Stage28 bare record) and table 106 `(29, 4, id)` (discovery replacement vs collected credit; told apart by fixed length).
+- 502 value-writing sites into these tables, 274 namespaces; every site is claimed by exactly one namespace and every namespace by at least one site (the generator run fails otherwise).
+- Ambiguous key shapes (handled conservatively, see `any:`): table 92 `(29, job, 23)` (Text29 rooted carriage record vs Stage28 bare record), table 106 `(29, 4, id)` (discovery replacement vs collected credit; told apart by fixed length) and table 92 `(39, …)` 66-byte keys (owning39 source obligation `(39, 0, job)` vs the job's original records `(39, job, 0..4)`).
+- Owning39 (RFC-0002 §II.14) rows in table 112 are keyed `borsh(39u8, kind, id)`; mining39 kinds 100–114 ride their own fence. Regenerating the scanner arms needs the native wire generator to run (blocked on this branch until the shape-review pins of integ/rfc06-12-remaining reach integ).
 - Table 105 `(14, job, ordinal)` carries a 64-byte v11 demand id or a 65-byte `(16, source16 pending)` pair; dispatched on the exact row length.
 - Registry completeness is enforced by `palw_native_resource_v1::aux_registry_tests` (source-discovered tables must reach an explicit arm).
 
@@ -56,7 +57,7 @@ Reserved: reserved by the chunk lane (41–42); no fold writes it. Any row fails
 
 | key condition | value codec | owning fence | write sites | note |
 |---|---|---|---|---|
-| `k.len()==64` | `H` | palw_panel_free_v1 (kernel-route OPV) | palw_kernel_route_fold_v1.rs:1426, palw_model_conformance_fold_v2.rs:107 | class → authoritative binding id |
+| `k.len()==64` | `H` | palw_panel_free_v1 (kernel-route OPV) | palw_kernel_route_fold_v1.rs:1502, palw_model_conformance_fold_v2.rs:107 | class → authoritative binding id |
 
 ## Table 49 — `MODEL_CONFORMANCE_TABLE_V2`
 
@@ -293,9 +294,9 @@ Reserved: reserved by the chunk lane (41–42); no fold writes it. Any row fails
 | `k.len()==64` | `palw_flat_execution_v11::NativeExecutionClassRowV11` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:380 |  |
 | `k.len()==66 && k[0]==29 && k[1]==0` | `mirror:palw_native_text_fold_v29::ClassHeader` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:220 | Text29 class header (fold-private) |
 | `k.len()==66 && k[0]==29 && k[1]==1` | `raw:1<<20` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:221 | Text29 register body, decoded only by its fold (≤ 1 MiB) |
-| `k.len()==66 && k[0]==37 && k[1]==0` | `(palw_window_class_v37::NativeWindowClassV37,B,u64)` | palw_window_class_v37 + palw_native_final_v27 | palw_native_text_fold_v29.rs:2387 |  |
-| `k.len()==66 && k[0]==37 && k[1]==1` | `raw:palw_window_class_v37::WINDOW_CLASS_MAX_BODY_BYTES_V37` | palw_window_class_v37 + palw_native_final_v27 | palw_native_text_fold_v29.rs:2388 | window37 register body |
-| `k.len()==70 && k[0]==37 && k[1]==2` | `Vec<D>` | palw_window_class_v37 + palw_native_final_v27 | palw_native_text_fold_v29.rs:2389 | owner catalogue key (37, 2, bond) |
+| `k.len()==66 && k[0]==37 && k[1]==0` | `(palw_window_class_v37::NativeWindowClassV37,B,u64)` | palw_window_class_v37 + palw_native_final_v27 | palw_native_text_fold_v29.rs:2392 |  |
+| `k.len()==66 && k[0]==37 && k[1]==1` | `raw:palw_window_class_v37::WINDOW_CLASS_MAX_BODY_BYTES_V37` | palw_window_class_v37 + palw_native_final_v27 | palw_native_text_fold_v29.rs:2393 | window37 register body |
+| `k.len()==70 && k[0]==37 && k[1]==2` | `Vec<D>` | palw_window_class_v37 + palw_native_final_v27 | palw_native_text_fold_v29.rs:2394 | owner catalogue key (37, 2, bond) |
 
 ## Table 88 — `EXECUTION_JOB_TABLE_V11`
 
@@ -304,15 +305,15 @@ Reserved: reserved by the chunk lane (41–42); no fold writes it. Any row fails
 | `k.len()==64` | `palw_flat_execution_v11::NativeExecutionJobRowV11` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:731, palw_flat_execution_fold_v11.rs:901, palw_flat_execution_fold_v11.rs:1006 | book Vec ≤ EXECUTION_STATE_MAX_BYTES_V11, prompt Vec<u32> |
 | `k.len()==66 && k[0]==29 && k[1]==0` | `mirror:palw_native_text_fold_v29::JobHeader` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:92 | Text29 job header (fold-private) |
 | `k.len()==66 && k[0]==29 && k[1]==1` | `palw_native_text_stop_v29::NativeTextBookV29` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:91 | Text29 book (Borsh, ≤ TEXT_STOP_BOOK_BYTES_V29) |
-| `k.len()==66 && k[0]==37 && k[1]==3` | `palw_window_class_v37::NativeWindowJobBindingV37` | palw_window_class_v37 + palw_native_final_v27 | palw_native_text_fold_v29.rs:2450 |  |
+| `k.len()==66 && k[0]==37 && k[1]==3` | `palw_window_class_v37::NativeWindowJobBindingV37` | palw_window_class_v37 + palw_native_final_v27 | palw_native_text_fold_v29.rs:2465 |  |
 
 ## Table 89 — `EXECUTION_REQUEST_INDEX_TABLE_V11`
 
 | key condition | value codec | owning fence | write sites | note |
 |---|---|---|---|---|
-| `k.len()==64` | `palw_flat_execution_v11::NativeRequesterNonceRowV11` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:730, palw_flat_stage_fold_v14.rs:543, palw_flat_stage_fold_v28.rs:126, palw_native_text_fold_v29.rs:823 | requester operator → counter (text11/stage14/stage28/text29) |
+| `k.len()==64` | `palw_flat_execution_v11::NativeRequesterNonceRowV11` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:730, palw_flat_stage_fold_v14.rs:551, palw_flat_stage_fold_v28.rs:136, palw_native_job_fold_v39.rs:597, palw_native_text_fold_v29.rs:824 | requester operator → counter (text11/stage14/stage28/text29) |
 | `k.len()==65 && k[0]==13` | `palw_flat_execution_v11::NativeRequesterNonceRowV11` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_discovery_fold_v13.rs:173 | v13 discovery counter key (13, operator) |
-| `k.len()==65 && k[0]==29` | `u64` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:1246 | Text29 own-ticket counter key (29, operator) |
+| `k.len()==65 && k[0]==29` | `u64` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:1248 | Text29 own-ticket counter key (29, operator) |
 
 ## Table 90 — `EXECUTION_VECTOR_JOB_TABLE_V11`
 
@@ -325,39 +326,40 @@ Reserved: reserved by the chunk lane (41–42); no fold writes it. Any row fails
 | key condition | value codec | owning fence | write sites | note |
 |---|---|---|---|---|
 | `k.len()==64` | `raw:palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:902 | funded post carrier, ≤ stored_post_cap ≤ the route object bound |
-| `k.len()==66 && k[0]==29 && k[1]==0` | `raw:palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:943 | Text29 compact post |
+| `k.len()==66 && k[0]==29 && k[1]==0` | `raw:palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:945 | Text29 compact post |
 
 ## Table 92 — `EXECUTION_QUOTA_TABLE_V11`
 
 | key condition | value codec | owning fence | write sites | note |
 |---|---|---|---|---|
-| `k.len()==1 && k[0]==0` | `(D,flat_quota11::QuotaGlobalRowV11)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_discovery_fold_v13.rs:53, palw_flat_execution_fold_v11.rs:212, palw_flat_execution_fold_v11.rs:275, palw_flat_execution_fold_v11.rs:296, palw_flat_stage_fold_v28.rs:184, palw_flat_stage_fold_v28.rs:185, palw_native_paged_fold_v29.rs:90, palw_native_text_fold_v29.rs:1009 | shared quota global (fixed framing) |
-| `k.len()==65 && k[0]==1` | `(D,flat_quota11::QuotaActorRowV11)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_discovery_fold_v13.rs:54, palw_flat_execution_fold_v11.rs:213, palw_flat_execution_fold_v11.rs:276, palw_flat_execution_fold_v11.rs:297, palw_flat_execution_gc_fold_v24.rs:432, palw_flat_execution_gc_fold_v24.rs:531, palw_flat_stage_court_fold_v14.rs:853, palw_flat_stage_fold_v28.rs:184, palw_flat_stage_fold_v28.rs:185, palw_native_paged_fold_v29.rs:91, palw_native_text_fold_v29.rs:1010 | quota actor (1 ‖ actor) |
-| `k.len()==65 && k[0]==2` | `(D,flat_quota11::QuotaSubjectSummaryV11)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_discovery_fold_v13.rs:55, palw_flat_execution_fold_v11.rs:215, palw_flat_stage_fold_v28.rs:179, palw_flat_stage_fold_v28.rs:255, palw_native_text_fold_v29.rs:1342 | quota subject (2 ‖ job) |
+| `k.len()==1 && k[0]==0` | `(D,flat_quota11::QuotaGlobalRowV11)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_discovery_fold_v13.rs:53, palw_flat_execution_fold_v11.rs:212, palw_flat_execution_fold_v11.rs:275, palw_flat_execution_fold_v11.rs:296, palw_flat_stage_fold_v28.rs:195, palw_flat_stage_fold_v28.rs:196, palw_native_job_fold_v39.rs:361, palw_native_paged_fold_v29.rs:90, palw_native_protected_fold_v39.rs:161, palw_native_text_fold_v29.rs:1011 | shared quota global (fixed framing) |
+| `k.len()==65 && k[0]==1` | `(D,flat_quota11::QuotaActorRowV11)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_discovery_fold_v13.rs:54, palw_flat_execution_fold_v11.rs:213, palw_flat_execution_fold_v11.rs:276, palw_flat_execution_fold_v11.rs:297, palw_flat_execution_gc_fold_v24.rs:432, palw_flat_execution_gc_fold_v24.rs:531, palw_flat_stage_court_fold_v14.rs:853, palw_flat_stage_fold_v28.rs:195, palw_flat_stage_fold_v28.rs:196, palw_native_job_fold_v39.rs:362, palw_native_paged_fold_v29.rs:91, palw_native_protected_fold_v39.rs:162, palw_native_text_fold_v29.rs:1012 | quota actor (1 ‖ actor) |
+| `k.len()==65 && k[0]==2` | `(D,flat_quota11::QuotaSubjectSummaryV11)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_discovery_fold_v13.rs:55, palw_flat_execution_fold_v11.rs:215, palw_flat_stage_fold_v28.rs:190, palw_flat_stage_fold_v28.rs:266, palw_native_job_fold_v39.rs:885, palw_native_protected_fold_v39.rs:163, palw_native_text_fold_v29.rs:1344 | quota subject (2 ‖ job) |
 | `k.len()==65 && k[0]==3` | `(D,flat_quota11::ProtectedSealSummaryV11)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_discovery_fold_v13.rs:319, palw_flat_execution_fold_v11.rs:218 | protected seal summary (3 ‖ seal) |
 | `k.len()==65 && k[0]==4` | `(D,flat_quota11::discovery13::DiscoveryRowV13)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_discovery_fold_v13.rs:56 | discovery row (4 ‖ id) |
-| `k.len()==65 && k[0]==16` | `(D,flat_quota11::source16::SourceObligationV16)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:298, palw_flat_stage_fold_v28.rs:291 | source obligation (16, job) |
-| `k.len()==66 && k[0]==16 && k[65]==1` | `flat_quota11::source16::SourcePlanRecordV16` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:723, palw_flat_stage_fold_v14.rs:535, palw_flat_stage_fold_v28.rs:123, palw_native_text_fold_v29.rs:779 | source plan record (16, job, 1) |
+| `k.len()==65 && k[0]==16` | `(D,flat_quota11::source16::SourceObligationV16)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:298, palw_flat_stage_fold_v28.rs:306 | source obligation (16, job) |
+| `k.len()==66 && k[0]==16 && k[65]==1` | `flat_quota11::source16::SourcePlanRecordV16` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:723, palw_flat_stage_fold_v14.rs:543, palw_flat_stage_fold_v28.rs:133, palw_native_text_fold_v29.rs:780 | source plan record (16, job, 1) |
 | `k.len()==66 && k[0]==17` | `(D,flat_quota11::trace17::TraceSupplementV17)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:277 | trace supplement (17, role, entitlement) |
-| `k.len()==2 && k[0]==22 && k[1]==0` | `(D,palw_flat_execution_capacity_v22::NativeCarriageGlobalV22)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_capacity_fold_v23.rs:215, palw_flat_execution_gc_fold_v24.rs:316, palw_flat_stage_fold_v28.rs:123, palw_flat_stage_fold_v28.rs:301, palw_native_text_fold_v29.rs:2091, palw_native_text_fold_v29.rs:779 | physical carriage global (22, 0) |
-| `k.len()==65 && k[0]==22` | `(D,palw_flat_execution_capacity_v22::NativeCarriageLeaseV22)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_capacity_fold_v23.rs:216, palw_native_text_fold_v29.rs:779 | carriage lease (22, job) |
+| `k.len()==2 && k[0]==22 && k[1]==0` | `(D,palw_flat_execution_capacity_v22::NativeCarriageGlobalV22)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_capacity_fold_v23.rs:215, palw_flat_execution_gc_fold_v24.rs:316, palw_flat_stage_fold_v28.rs:133, palw_flat_stage_fold_v28.rs:316, palw_native_collect_fold_v39.rs:512, palw_native_job_fold_v39.rs:553, palw_native_text_fold_v29.rs:2094, palw_native_text_fold_v29.rs:780 | physical carriage global (22, 0) |
+| `k.len()==65 && k[0]==22` | `(D,palw_flat_execution_capacity_v22::NativeCarriageLeaseV22)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_capacity_fold_v23.rs:216, palw_native_job_fold_v39.rs:553, palw_native_text_fold_v29.rs:780 | carriage lease (22, job) |
 | `k.len()==66 && k[0]==22 && k[65]==1` | `palw_flat_execution_capacity_v22::NativeCarriagePlanV22` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_capacity_fold_v23.rs:217 | carriage plan (22, job, 1) |
-| `k.len()==66 && k[0]==22 && k[65]==2` | `(D,palw_flat_execution_capacity_v22::NativePhysicalSlotsV22)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_capacity_fold_v23.rs:214, palw_flat_execution_capacity_fold_v23.rs:246, palw_flat_stage_fold_v28.rs:125, palw_flat_stage_fold_v28.rs:212, palw_flat_stage_fold_v28.rs:233, palw_flat_stage_fold_v28.rs:244, palw_flat_stage_source_fold_v28.rs:92, palw_native_text_da_fold_v29.rs:370, palw_native_text_fold_v29.rs:1244, palw_native_text_fold_v29.rs:1700, palw_native_text_fold_v29.rs:1808, palw_native_text_fold_v29.rs:779 | physical slotbook (22, job, 2) |
-| `k.len()==2 && k[0]==30 && k[1]==0` | `(D,palw_native_queue_v30::NativeQueueGlobalV30)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_execution_capacity_fold_v23.rs:210, palw_flat_execution_gc_fold_v24.rs:313, palw_flat_stage_fold_v28.rs:123, palw_flat_stage_fold_v28.rs:301, palw_native_text_fold_v29.rs:2090, palw_native_text_fold_v29.rs:779 | queue30 global (30, 0) |
-| `k.len()==66 && k[0]==30 && k[65]==1` | `(D,palw_native_queue_v30::NativeQueueLeaseV30)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_execution_capacity_fold_v23.rs:211, palw_flat_stage_fold_v28.rs:123, palw_native_text_fold_v29.rs:779 | queue30 lease (30, job, 1) |
-| `k.len()==66 && k[0]==30 && k[65]==2` | `palw_native_queue_v30::NativeQueuePlanRecordV30` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:123 | queue30 plan record (30, job, 2) |
-| `k.len()==129 && k[0]==26` | `(D,flat_quota11::stage14::source26::StageSourceCallerRowV26)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:185, palw_native_text_fold_v29.rs:1012 | caller26 row (26, job, owner digest) |
-| `k.len()==66 && k[0]==26 && k[65]==0` | `flat_quota11::stage14::source26::StageSourcePlanRecordV26` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:123, palw_native_text_fold_v29.rs:779 | caller26 plan record (26, job, 0) |
-| `k.len()==66 && k[0]==28 && k[65]==29` | `(D,palw_native_reply_parts_v29::NativeReplyProgressV29)` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:211 | stage28 reply progress (28, pending, 29) |
-| `k.len()==66 && k[0]==29 && k[65]==0` | `(D,palw_native_paged_proof_v29::NativePagedJobStatusV29)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:148, palw_flat_stage_fold_v28.rs:165, palw_flat_stage_fold_v28.rs:184, palw_native_paged_fold_v29.rs:92, palw_native_text_fold_v29.rs:963, palw_native_text_fold_v29.rs:1348 | paged29 job status (29, job, 0) |
-| `k.len()==66 && k[0]==29 && k[65]==1` | `palw_native_paged_proof_v29::NativePagedProofPlanRecordV29` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:123, palw_native_text_fold_v29.rs:779 | paged29 plan record (29, job, 1) |
-| `k.len()==66 && k[0]==29 && k[65]==3` | `flat_quota11::QuotaPolicyV11` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:123, palw_native_text_fold_v29.rs:779 | cached quota policy (29, job, 3) |
-| `k.len()==66 && k[0]==29 && k[65]==22` | `(D,palw_native_paged_proof_v29::NativePagedLeaseJournalV29)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:124, palw_native_text_fold_v29.rs:779 | paged29 lease journal (29, job, 22) |
-| `k.len()==66 && k[0]==29 && k[65]==23` | `any:(D,palw_native_paged_carriage_v29::NativePagedCarriageRecordV29) \| palw_native_paged_carriage_v29::NativePagedCarriageRecordV29` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:123, palw_native_text_fold_v29.rs:779 | AMBIGUOUS: Text29 stores (root, record), Stage28 stores the bare record under the same key shape |
-| `k.len()==129 && k[0]==29` | `(D,palw_native_paged_proof_v29::NativePagedSealV29)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:184, palw_native_paged_fold_v29.rs:94, palw_native_text_fold_v29.rs:1501 | paged29 own seal (29, job, seal) |
+| `k.len()==66 && k[0]==22 && k[65]==2` | `(D,palw_flat_execution_capacity_v22::NativePhysicalSlotsV22)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_capacity_fold_v23.rs:214, palw_flat_execution_capacity_fold_v23.rs:246, palw_flat_stage_fold_v28.rs:135, palw_flat_stage_fold_v28.rs:223, palw_flat_stage_fold_v28.rs:244, palw_flat_stage_fold_v28.rs:255, palw_flat_stage_source_fold_v28.rs:94, palw_native_text_da_fold_v29.rs:370, palw_native_text_fold_v29.rs:1246, palw_native_text_fold_v29.rs:1703, palw_native_text_fold_v29.rs:1811, palw_native_text_fold_v29.rs:780 | physical slotbook (22, job, 2) |
+| `k.len()==2 && k[0]==30 && k[1]==0` | `(D,palw_native_queue_v30::NativeQueueGlobalV30)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_execution_capacity_fold_v23.rs:210, palw_flat_execution_gc_fold_v24.rs:313, palw_flat_stage_fold_v28.rs:133, palw_flat_stage_fold_v28.rs:316, palw_native_collect_fold_v39.rs:511, palw_native_job_fold_v39.rs:553, palw_native_text_fold_v29.rs:2093, palw_native_text_fold_v29.rs:780 | queue30 global (30, 0) |
+| `k.len()==66 && k[0]==30 && k[65]==1` | `(D,palw_native_queue_v30::NativeQueueLeaseV30)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_execution_capacity_fold_v23.rs:211, palw_flat_stage_fold_v28.rs:133, palw_native_job_fold_v39.rs:553, palw_native_text_fold_v29.rs:780 | queue30 lease (30, job, 1) |
+| `k.len()==66 && k[0]==30 && k[65]==2` | `palw_native_queue_v30::NativeQueuePlanRecordV30` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:133 | queue30 plan record (30, job, 2) |
+| `k.len()==129 && k[0]==26` | `(D,flat_quota11::stage14::source26::StageSourceCallerRowV26)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:196, palw_native_text_fold_v29.rs:1014 | caller26 row (26, job, owner digest) |
+| `k.len()==66 && k[0]==26 && k[65]==0` | `flat_quota11::stage14::source26::StageSourcePlanRecordV26` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:133, palw_native_text_fold_v29.rs:780 | caller26 plan record (26, job, 0) |
+| `k.len()==66 && k[0]==28 && k[65]==29` | `(D,palw_native_reply_parts_v29::NativeReplyProgressV29)` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:214 | stage28 reply progress (28, pending, 29) |
+| `k.len()==66 && k[0]==29 && k[65]==0` | `(D,palw_native_paged_proof_v29::NativePagedJobStatusV29)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:159, palw_flat_stage_fold_v28.rs:176, palw_flat_stage_fold_v28.rs:195, palw_flat_stage_master_fold_v32.rs:393, palw_native_paged_fold_v29.rs:92, palw_native_text_fold_v29.rs:965, palw_native_text_fold_v29.rs:1350 | paged29 job status (29, job, 0) |
+| `k.len()==66 && k[0]==29 && k[65]==1` | `palw_native_paged_proof_v29::NativePagedProofPlanRecordV29` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:133, palw_native_text_fold_v29.rs:780 | paged29 plan record (29, job, 1) |
+| `k.len()==66 && k[0]==29 && k[65]==3` | `flat_quota11::QuotaPolicyV11` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:133, palw_native_text_fold_v29.rs:780 | cached quota policy (29, job, 3) |
+| `k.len()==66 && k[0]==29 && k[65]==22` | `(D,palw_native_paged_proof_v29::NativePagedLeaseJournalV29)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:134, palw_native_text_fold_v29.rs:780 | paged29 lease journal (29, job, 22) |
+| `k.len()==66 && k[0]==29 && k[65]==23` | `any:(D,palw_native_paged_carriage_v29::NativePagedCarriageRecordV29) \| palw_native_paged_carriage_v29::NativePagedCarriageRecordV29` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:133, palw_native_text_fold_v29.rs:780 | AMBIGUOUS: Text29 stores (root, record), Stage28 stores the bare record under the same key shape |
+| `k.len()==129 && k[0]==29` | `(D,palw_native_paged_proof_v29::NativePagedSealV29)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:195, palw_native_paged_fold_v29.rs:94, palw_native_text_fold_v29.rs:1503 | paged29 own seal (29, job, seal) |
 | `k.len()==2 && k[0]==31 && k[1]==0` | `mirror:palw_native_initial_fold_v31::InitialGlobalV31` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_initial_fold_v31.rs:123, palw_native_initial_fold_v31.rs:177 | initial31 global (31, 0) (fold-private) |
 | `k.len()==66 && k[0]==31 && k[65]==1` | `(D,palw_native_initial_v31::NativeInitialHeaderV31)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_initial_fold_v31.rs:48 | initial31 header (31, (id, 1)) |
 | `k.len()==68 && k[0]==31 && k[65]==2` | `raw:palw_native_initial_v31::INITIAL_PART_BYTES_V31` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_initial_fold_v31.rs:226 | initial31 part (31, (id, 2, u16)) |
+| `k.len()==66 && k[0]==39` | `any:(D,flat_quota11::owning39::source::SourceObligationV39) \| palw_native_job_v39::NativeMaximumContractV39 \| flat_quota11::owning39::SourcePlanRecordV39 \| flat_quota11::owning39::PagedProofPlanRecordV39 \| flat_quota11::QuotaPolicyV11 \| (D,palw_native_paged_carriage_v29::NativePagedCarriageRecordV29)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_job_fold_v39.rs:364, palw_native_job_fold_v39.rs:553, palw_native_job_fold_v39.rs:553, palw_native_job_fold_v39.rs:553, palw_native_job_fold_v39.rs:553, palw_native_job_fold_v39.rs:553 | AMBIGUOUS by key: owning39 source obligation (39, 0, job) vs the job's five original records (39, job, 0..4) |
 
 ## Table 93 — `EXECUTION_POLICY_TABLE_V11`
 
@@ -367,7 +369,7 @@ Reserved: reserved by the chunk lane (41–42); no fold writes it. Any row fails
 | `k.len()==65 && k[0]==19` | `palw_flat_execution_pursuit_v19::NativePublicPursuitV19` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_capacity_fold_v23.rs:218 |  |
 | `k.len()==65 && k[0]==23` | `palw_flat_execution_capacity_v22::NativeExecutionConsentV23` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_capacity_fold_v23.rs:219 |  |
 | `k.len()==65 && k[0]==27` | `(D,mirror:palw_flat_execution_final_fold_v27::NativeFinalConsentV27)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_execution_final_fold_v27.rs:231 | Final27 consent (fold-private) |
-| `k.len()==66 && k[0]==29 && k[1]==0` | `mirror:palw_native_text_fold_v29::Prepared` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:830 | Text29 preparation (fold-private) |
+| `k.len()==66 && k[0]==29 && k[1]==0` | `mirror:palw_native_text_fold_v29::Prepared` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:831 | Text29 preparation (fold-private) |
 
 ## Table 94 — `EXECUTION_SOURCE_FACT_TABLE_V11`
 
@@ -375,7 +377,7 @@ Reserved: reserved by the chunk lane (41–42); no fold writes it. Any row fails
 |---|---|---|---|---|
 | `k.len()==64` | `palw_flat_execution_v11::NativeVerifiedSourceFactV11` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_court_fold_v11.rs:322 | proof bytes Vec |
 | `k.len()==65 && k[0]==16` | `palw_flat_execution_v11::NativeVerifiedHeaderFactV16` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_court_fold_v11.rs:303 | header fact (16, binding) |
-| `k.len()==66 && k[0]==29 && k[1]==0` | `(D,D,u64)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:1503 | Text29 refuted source relation |
+| `k.len()==66 && k[0]==29 && k[1]==0` | `(D,D,u64)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:1505 | Text29 refuted source relation |
 
 ## Table 95 — `EXECUTION_CLASS_OWNER_TABLE_V11`
 
@@ -390,8 +392,8 @@ Reserved: reserved by the chunk lane (41–42); no fold writes it. Any row fails
 |---|---|---|---|---|
 | `k.len()==68` | `Vec<D>` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:748, palw_flat_execution_gc_fold_v24.rs:321 |  |
 | `k.len()==69 && k[0]==1` | `Vec<D>` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:729, palw_flat_execution_gc_fold_v24.rs:322 |  |
-| `k.len()==70 && k[0]==29 && k[1]==0` | `Vec<D>` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:824, palw_native_text_fold_v29.rs:2092 |  |
-| `k.len()==70 && k[0]==29 && k[1]==1` | `Vec<D>` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:825, palw_native_text_fold_v29.rs:2093 |  |
+| `k.len()==70 && k[0]==29 && k[1]==0` | `Vec<D>` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:825, palw_native_text_fold_v29.rs:2095 |  |
+| `k.len()==70 && k[0]==29 && k[1]==1` | `Vec<D>` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:826, palw_native_text_fold_v29.rs:2096 |  |
 
 ## Table 97 — `EXECUTION_JOB_COUNT_TABLE_V11`
 
@@ -405,32 +407,32 @@ Reserved: reserved by the chunk lane (41–42); no fold writes it. Any row fails
 |---|---|---|---|---|
 | `k.len()==64` | `palw_flat_execution_v11::NativeExecutionPreparationV11` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:442 |  |
 | `k.len()==68` | `Vec<D>` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:443, palw_flat_execution_fold_v11.rs:754 |  |
-| `k.len()==69 && k[0]==13` | `Vec<D>` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:753, palw_flat_execution_fold_v11.rs:1414 | producer consent catalogue (13, bond) |
-| `k.len()==65 && k[0]==13` | `(D,palw_flat_execution_v11::NativeExecutionConsentV13)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:1413 |  |
-| `k.len()==65 && k[0]==18` | `(D,palw_flat_execution_v11::NativeExecutionConsentV18)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:1411 |  |
+| `k.len()==69 && k[0]==13` | `Vec<D>` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:753, palw_flat_execution_fold_v11.rs:1415 | producer consent catalogue (13, bond) |
+| `k.len()==65 && k[0]==13` | `(D,palw_flat_execution_v11::NativeExecutionConsentV13)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:1414 |  |
+| `k.len()==65 && k[0]==18` | `(D,palw_flat_execution_v11::NativeExecutionConsentV18)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:1412 |  |
 | `k.len()==65 && k[0]==23` | `(D,palw_flat_execution_capacity_v22::NativeExecutionConsentV23)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_capacity_fold_v23.rs:108 |  |
 | `k.len()==65 && k[0]==27` | `(D,mirror:palw_flat_execution_final_fold_v27::NativeFinalConsentV27)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_flat_execution_final_fold_v27.rs:184 |  |
-| `k.len()==70 && k[0]==29 && k[1]==0` | `Vec<D>` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:529, palw_native_text_fold_v29.rs:827 |  |
-| `k.len()==66 && k[0]==29 && k[1]==1` | `mirror:palw_native_text_fold_v29::Prepared` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:528 |  |
-| `k.len()==70 && k[0]==29 && k[1]==2` | `Vec<D>` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:588, palw_native_text_fold_v29.rs:826 |  |
-| `k.len()==66 && k[0]==29 && k[1]==3` | `palw_native_text_stop_v29::NativeTextConsentV29` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:587 |  |
+| `k.len()==70 && k[0]==29 && k[1]==0` | `Vec<D>` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:530, palw_native_text_fold_v29.rs:828 |  |
+| `k.len()==66 && k[0]==29 && k[1]==1` | `mirror:palw_native_text_fold_v29::Prepared` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:529 |  |
+| `k.len()==70 && k[0]==29 && k[1]==2` | `Vec<D>` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:589, palw_native_text_fold_v29.rs:827 |  |
+| `k.len()==66 && k[0]==29 && k[1]==3` | `palw_native_text_stop_v29::NativeTextConsentV29` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:588 |  |
 
 ## Table 99 — `EXECUTION_SEAL_TABLE_V11`
 
 | key condition | value codec | owning fence | write sites | note |
 |---|---|---|---|---|
 | `k.len()==64` | `palw_flat_execution_v11::NativeExecutionSealV11` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_court_fold_v11.rs:149, palw_flat_execution_court_fold_v11.rs:331, palw_flat_execution_discovery_fold_v13.rs:320 |  |
-| `k.len()==65 && k[0]==12` | `palw_flat_execution_v11::NativeExecutionProofGroupV11` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:1268 | own proof group (12, seal) |
+| `k.len()==65 && k[0]==12` | `palw_flat_execution_v11::NativeExecutionProofGroupV11` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:1269 | own proof group (12, seal) |
 | `k.len()==65 && k[0]==13` | `palw_flat_execution_v11::NativeExecutionDiscoveryV13` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_discovery_fold_v13.rs:172, palw_flat_execution_discovery_fold_v13.rs:321 | discovery ticket (13, ticket) |
-| `k.len()==66 && k[0]==15` | `raw:flat_quota11::PROTECTED_FRAGMENT_BYTES_V11` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:1269 | protected fragment (15, seal, u8 index) |
-| `k.len()==68 && k[0]==28` | `raw:32<<10` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:234 | stage28 reply part (28, pending, u8, u16) |
+| `k.len()==66 && k[0]==15` | `raw:flat_quota11::PROTECTED_FRAGMENT_BYTES_V11` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:1270 | protected fragment (15, seal, u8 index) |
+| `k.len()==68 && k[0]==28` | `raw:32<<10` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:237 | stage28 reply part (28, pending, u8, u16) |
 | `k.len()==131 && k[0]==29` | `raw:palw_native_text_stop_v29::TEXT_STOP_PART_BYTES_V29` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_paged_fold_v29.rs:121 | paged29 part (29, job, seal, u16) |
 
 ## Table 100 — `EXECUTION_SEAL_ACTOR_TABLE_V11`
 
 | key condition | value codec | owning fence | write sites | note |
 |---|---|---|---|---|
-| `k.len()==66 && k[0]==29 && k[1]==0` | `Vec<D>` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:1245, palw_native_text_fold_v29.rs:1803 | Text29 discovery lifetime catalogue |
+| `k.len()==66 && k[0]==29 && k[1]==0` | `Vec<D>` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:1247, palw_native_text_fold_v29.rs:1806 | Text29 discovery lifetime catalogue |
 
 ## Table 101 — `EXECUTION_SEAL_COUNT_TABLE_V11`
 
@@ -443,7 +445,7 @@ Reserved: EXECUTION_SEAL_COUNT_TABLE_V11: allocated, never written. Any row fail
 | `k.len()==64` | `palw_flat_execution_v11::NativeExecutionDemandV11` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_da_fold_v11.rs:225, palw_flat_execution_da_fold_v11.rs:239 |  |
 | `k.len()==65 && k[0]==16` | `palw_flat_execution_v11::NativeSourceDemandV16` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_source_fold_v16.rs:294, palw_flat_execution_source_fold_v16.rs:315, palw_flat_execution_source_fold_v16.rs:355, palw_flat_stage_source_fold_v14.rs:283, palw_flat_stage_source_fold_v14.rs:294, palw_flat_stage_source_fold_v14.rs:337, palw_flat_stage_source_fold_v14.rs:403, palw_flat_stage_source_fold_v14.rs:598 | source16 pending (16, id) (also stage14) |
 | `k.len()==65 && k[0]==22` | `u8` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_capacity_fold_v23.rs:290, palw_flat_execution_capacity_fold_v23.rs:314 | trace attempt counter byte |
-| `k.len()==65 && k[0]==28` | `palw_flat_stage_v28::NativeStagePendingV28` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:92, palw_flat_stage_source_fold_v28.rs:102, palw_flat_stage_source_fold_v28.rs:115, palw_flat_stage_source_fold_v28.rs:226 |  |
+| `k.len()==65 && k[0]==28` | `palw_flat_stage_v28::NativeStagePendingV28` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:94, palw_flat_stage_source_fold_v28.rs:104, palw_flat_stage_source_fold_v28.rs:117, palw_flat_stage_source_fold_v28.rs:229 |  |
 | `k.len()==66 && k[0]==29 && k[1]==0` | `mirror:palw_native_text_da_fold_v29::Demand` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_da_fold_v29.rs:523, palw_native_text_da_fold_v29.rs:569, palw_native_text_da_fold_v29.rs:370 | Text29 public demand (fold-private) |
 | `k.len()==66 && k[0]==29 && k[1]==1` | `D` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_da_fold_v29.rs:370 |  |
 | `k.len()==70 && k[0]==29 && k[1]==2` | `(D,D)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_da_fold_v29.rs:370 |  |
@@ -455,7 +457,7 @@ Reserved: EXECUTION_SEAL_COUNT_TABLE_V11: allocated, never written. Any row fail
 |---|---|---|---|---|
 | `k.len()==69` | `D` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_da_fold_v11.rs:226 | key (bond, slot) |
 | `k.len()==70 && k[0]==16` | `D` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_source_fold_v16.rs:295, palw_flat_stage_source_fold_v14.rs:285 | key (16, bond, slot) |
-| `k.len()==70 && k[0]==28` | `D` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:92 | key (28, bond, slot) |
+| `k.len()==70 && k[0]==28` | `D` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:94 | key (28, bond, slot) |
 | `k.len()==71 && k[0]==29 && k[1]==0` | `D` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_da_fold_v29.rs:370 | key (29, 0, (bond, slot)) |
 
 ## Table 104 — `EXECUTION_SERVED_TABLE_V11`
@@ -464,7 +466,7 @@ Reserved: EXECUTION_SEAL_COUNT_TABLE_V11: allocated, never written. Any row fail
 |---|---|---|---|---|
 | `(k.len()==73 || k.len()==81)` | `palw_flat_model_vector_da_v9::FlatVectorServedRowV9` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_da_fold_v11.rs:308 | key (vector, FlatVectorUnitV9) |
 | `k.len()==65 && k[0]==16` | `raw:palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_source_fold_v16.rs:395, palw_flat_stage_source_fold_v14.rs:401 | source16 answer body |
-| `k.len()==65 && k[0]==28` | `raw:128<<10` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:125 | stage28 assembled answer |
+| `k.len()==65 && k[0]==28` | `raw:128<<10` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:128 | stage28 assembled answer |
 | `k.len()==66 && k[0]==29 && k[1]==0` | `raw:128<<10` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_da_fold_v29.rs:636 | Text29 assembled answer |
 | `k.len()==69 && k[0]==29 && k[1]==3` | `raw:32<<10` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_da_fold_v29.rs:579 | Text29 reply part (29, 3, (id, u8, u16)) |
 
@@ -483,60 +485,139 @@ Reserved: EXECUTION_SEAL_COUNT_TABLE_V11: allocated, never written. Any row fail
 | key condition | value codec | owning fence | write sites | note |
 |---|---|---|---|---|
 | `k.len()==64` | `palw_flat_execution_v11::NativeExecutionCreditV11` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:1007 |  |
-| `k.len()==65 && k[0]==19` | `palw_flat_execution_v11::NativeExecutionFeesV19` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:736, palw_flat_execution_fold_v11.rs:1510 |  |
+| `k.len()==65 && k[0]==19` | `palw_flat_execution_v11::NativeExecutionFeesV19` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_fold_v11.rs:736, palw_flat_execution_fold_v11.rs:1511 |  |
 | `k.len()==65 && k[0]==24` | `mirror:palw_flat_execution_gc_fold_v24::NativeCollectedV24` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_gc_fold_v24.rs:324 | GC tombstone (fold-private, serialize-only) |
 | `k.len()==129 && k[0]==24` | `(D,D,u64)` | palw_funded_execution_v11 (with palw_panel_free_v1) | palw_flat_execution_gc_fold_v24.rs:443, palw_flat_execution_gc_fold_v24.rs:537 | retired own-seal anchor |
-| `k.len()==66 && k[0]==29 && k[1]==0` | `(palw_native_text_stop_v29::NativeTextSettlementV29,H,u64)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:1344 |  |
-| `k.len()==66 && k[0]==29 && k[1]==3` | `(D,D,D)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:829 |  |
-| `k.len()==66 && k[0]==29 && k[1]==4` | `any:(D,D,D,D,u64) \| (D,D,D,u64)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:1809, palw_native_text_fold_v29.rs:2094 | AMBIGUOUS by key: discovery replacement (job, new, receipt, ticket, horizon) vs collected credit (book, credit, source, daa); both fixed-size |
+| `k.len()==66 && k[0]==29 && k[1]==0` | `(palw_native_text_stop_v29::NativeTextSettlementV29,H,u64)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:1346 |  |
+| `k.len()==66 && k[0]==29 && k[1]==3` | `(D,D,D)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:830 |  |
+| `k.len()==66 && k[0]==29 && k[1]==4` | `any:(D,D,D,D,u64) \| (D,D,D,u64)` | palw_funded_execution_v11 + palw_native_final_v27 | palw_native_text_fold_v29.rs:1812, palw_native_text_fold_v29.rs:2097 | AMBIGUOUS by key: discovery replacement (job, new, receipt, ticket, horizon) vs collected credit (book, credit, source, daa); both fixed-size |
 
 ## Table 112 — `STAGE_TABLE_V14`
 
 | key condition | value codec | owning fence | write sites | note |
 |---|---|---|---|---|
-| `k.len()==65 && k[0]==0` | `palw_flat_stage_v14::NativeStageSourceRowV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:1031 | source row |
-| `k.len()==65 && k[0]==2` | `palw_flat_stage_v14::NativeStageClassRowV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:1096 | class row |
-| `k.len()==65 && k[0]==5` | `palw_flat_stage_v14::NativeStageJobRowV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_court_fold_v14.rs:671, palw_flat_stage_fold_v14.rs:548, palw_flat_stage_fold_v14.rs:870, palw_flat_stage_fold_v14.rs:963, palw_flat_stage_source_fold_v14.rs:580 | job row |
-| `k.len()==65 && k[0]==9` | `palw_flat_stage_v14::NativeStageAcceptanceV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:694 |  |
-| `k.len()==65 && k[0]==10` | `palw_flat_stage_v14::NativeStageAcceptanceV18` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:788 |  |
-| `k.len()==65 && k[0]==11` | `palw_flat_stage_v14::NativeStagePrincipalRefundV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_court_fold_v14.rs:675, palw_flat_stage_fold_v14.rs:962, palw_flat_stage_source_fold_v14.rs:594 |  |
-| `k.len()==65 && k[0]==12` | `palw_flat_stage_v14::NativeStageFeesV20` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:569, palw_flat_stage_source_fold_v14.rs:400 |  |
+| `k.len()==65 && k[0]==0` | `palw_flat_stage_v14::NativeStageSourceRowV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:1039 | source row |
+| `k.len()==65 && k[0]==2` | `palw_flat_stage_v14::NativeStageClassRowV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:1104 | class row |
+| `k.len()==65 && k[0]==5` | `palw_flat_stage_v14::NativeStageJobRowV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_court_fold_v14.rs:671, palw_flat_stage_fold_v14.rs:556, palw_flat_stage_fold_v14.rs:878, palw_flat_stage_fold_v14.rs:971, palw_flat_stage_source_fold_v14.rs:580 | job row |
+| `k.len()==65 && k[0]==9` | `palw_flat_stage_v14::NativeStageAcceptanceV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:702 |  |
+| `k.len()==65 && k[0]==10` | `palw_flat_stage_v14::NativeStageAcceptanceV18` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:796 |  |
+| `k.len()==65 && k[0]==11` | `palw_flat_stage_v14::NativeStagePrincipalRefundV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_court_fold_v14.rs:675, palw_flat_stage_fold_v14.rs:970, palw_flat_stage_source_fold_v14.rs:594 |  |
+| `k.len()==65 && k[0]==12` | `palw_flat_stage_v14::NativeStageFeesV20` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:577, palw_flat_stage_source_fold_v14.rs:400 |  |
 | `k.len()==65 && k[0]==13` | `flat_quota11::stage14::StageSettlementV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_court_fold_v14.rs:672, palw_flat_stage_source_fold_v14.rs:581 | court outcome |
-| `k.len()==65 && k[0]==14` | `palw_flat_stage_v14::NativeStageNegativeSourceFactV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_court_fold_v14.rs:566, palw_flat_stage_fold_v14.rs:1163, palw_flat_stage_fold_v28.rs:180 | refuted relation (also written by stage28) |
-| `k.len()==65 && k[0]==16` | `palw_flat_stage_v14::NativeStagePursuitV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_court_fold_v14.rs:240, palw_flat_stage_court_fold_v14.rs:867, palw_flat_stage_fold_v14.rs:549, palw_flat_stage_source_fold_v14.rs:286, palw_flat_stage_source_fold_v14.rs:295, palw_flat_stage_source_fold_v14.rs:404, palw_flat_stage_source_fold_v14.rs:599 |  |
-| `k.len()==65 && k[0]==17` | `palw_flat_stage_v14::NativeStageCollectedV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:1351 |  |
+| `k.len()==65 && k[0]==14` | `palw_flat_stage_v14::NativeStageNegativeSourceFactV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_court_fold_v14.rs:566, palw_flat_stage_fold_v14.rs:1171, palw_flat_stage_fold_v28.rs:191 | refuted relation (also written by stage28) |
+| `k.len()==65 && k[0]==16` | `palw_flat_stage_v14::NativeStagePursuitV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_court_fold_v14.rs:240, palw_flat_stage_court_fold_v14.rs:867, palw_flat_stage_fold_v14.rs:557, palw_flat_stage_source_fold_v14.rs:286, palw_flat_stage_source_fold_v14.rs:295, palw_flat_stage_source_fold_v14.rs:404, palw_flat_stage_source_fold_v14.rs:599 |  |
+| `k.len()==65 && k[0]==17` | `palw_flat_stage_v14::NativeStageCollectedV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:1359 |  |
 | `k.len()==65 && k[0]==18` | `mirror:palw_flat_stage_source_fold_v14::StageSourcePendingV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_source_fold_v14.rs:284 | fold-private |
 | `k.len()==65 && k[0]==19` | `palw_flat_stage_v14::NativeStageSealV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_court_fold_v14.rs:239, palw_flat_stage_court_fold_v14.rs:673 |  |
 | `k.len()==65 && k[0]==20` | `palw_flat_execution_v11::NativeExecutionProofGroupV11` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_court_fold_v14.rs:345 | own proof group (20, seal) |
 | `k.len()==66 && k[0]==23` | `raw:flat_quota11::PROTECTED_FRAGMENT_BYTES_V11` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_court_fold_v14.rs:346 | protected fragment (23, seal, u8 index) |
-| `k.len()==69 && k[0]==1` | `Vec<D>` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:1032 | owner catalogue (kind, bond) |
-| `k.len()==69 && k[0]==3` | `Vec<D>` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:1097 | owner catalogue (kind, bond) |
-| `k.len()==69 && k[0]==6` | `Vec<D>` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:581, palw_flat_stage_fold_v14.rs:1352 | owner catalogue (kind, bond) |
-| `k.len()==69 && k[0]==7` | `Vec<D>` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:582, palw_flat_stage_fold_v14.rs:1353 | owner catalogue (kind, bond) |
-| `k.len()==69 && k[0]==8` | `Vec<D>` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:584, palw_flat_stage_fold_v14.rs:695, palw_flat_stage_fold_v14.rs:789 | owner catalogue (kind, bond) |
+| `k.len()==69 && k[0]==1` | `Vec<D>` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:1040 | owner catalogue (kind, bond) |
+| `k.len()==69 && k[0]==3` | `Vec<D>` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:1105 | owner catalogue (kind, bond) |
+| `k.len()==69 && k[0]==6` | `Vec<D>` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:589, palw_flat_stage_fold_v14.rs:1360 | owner catalogue (kind, bond) |
+| `k.len()==69 && k[0]==7` | `Vec<D>` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:590, palw_flat_stage_fold_v14.rs:1361 | owner catalogue (kind, bond) |
+| `k.len()==69 && k[0]==8` | `Vec<D>` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:592, palw_flat_stage_fold_v14.rs:703, palw_flat_stage_fold_v14.rs:797 | owner catalogue (kind, bond) |
 | `k.len()==1 && k[0]==4` | `palw_flat_stage_v14::NativeStagePoliciesV14` | palw_stage_execution_v14 (with palw_panel_free_v1) | palw_flat_stage_fold_v14.rs:66 | immutable stage14 policies |
-| `k.len()==66 && k[0]==28 && k[1]==0` | `mirror:palw_flat_stage_fold_v28::BundleHeader` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:353 | stage28 (28, kind, id) |
-| `k.len()==66 && k[0]==28 && k[1]==1` | `Vec<u8>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:353 | stage28 (28, kind, id) |
-| `k.len()==66 && k[0]==28 && k[1]==2` | `mirror:palw_flat_stage_fold_v28::ClassHeader` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:361 | stage28 (28, kind, id) |
-| `k.len()==66 && k[0]==28 && k[1]==3` | `Vec<u8>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:361 | stage28 (28, kind, id) |
-| `k.len()==66 && k[0]==28 && k[1]==5` | `mirror:palw_flat_stage_fold_v28::JobHeader` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:128, palw_flat_stage_fold_v28.rs:138 | stage28 (28, kind, id) |
-| `k.len()==66 && k[0]==28 && k[1]==6` | `mirror:palw_flat_stage_fold_v28::JobData` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:128, palw_flat_stage_fold_v28.rs:138 | stage28 (28, kind, id) |
-| `k.len()==70 && k[0]==28 && k[1]==7` | `Vec<D>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:353 | stage28 (28, kind, bond) |
-| `k.len()==70 && k[0]==28 && k[1]==8` | `Vec<D>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:361 | stage28 (28, kind, bond) |
-| `k.len()==70 && k[0]==28 && k[1]==9` | `Vec<D>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:83, palw_flat_stage_fold_v28.rs:128 | stage28 (28, kind, bond) |
-| `k.len()==66 && k[0]==28 && k[1]==10` | `palw_flat_stage_v28::NativeStageConsentV28` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:83 | stage28 (28, kind, id) |
-| `k.len()==66 && k[0]==28 && k[1]==11` | `(D,D,D)` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:128 | stage28 (28, kind, id) |
-| `k.len()==70 && k[0]==28 && k[1]==12` | `Vec<D>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:128, palw_flat_stage_fold_v28.rs:301 | stage28 (28, kind, bond) |
-| `k.len()==70 && k[0]==28 && k[1]==13` | `Vec<D>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:128, palw_flat_stage_fold_v28.rs:301 | stage28 (28, kind, bond) |
-| `k.len()==66 && k[0]==28 && k[1]==14` | `(flat_quota11::stage14::bounded28::StageSettlementV28,H,H)` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:179, palw_flat_stage_fold_v28.rs:255 | stage28 (28, kind, id) |
-| `k.len()==66 && k[0]==28 && k[1]==15` | `(D,D,D,D)` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:212, palw_flat_stage_fold_v28.rs:233, palw_flat_stage_fold_v28.rs:233 | stage28 (28, kind, id) |
-| `k.len()==66 && k[0]==28 && k[1]==16` | `mirror:palw_flat_stage_source_fold_v28::Pursuit` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:92, palw_flat_stage_source_fold_v28.rs:102 | stage28 (28, kind, id) |
-| `k.len()==66 && k[0]==28 && k[1]==18` | `mirror:palw_flat_stage_source_fold_v28::Collection` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:203 | stage28 (28, kind, id) |
-| `k.len()==66 && k[0]==28 && k[1]==19` | `Vec<D>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:212, palw_flat_stage_fold_v28.rs:233 | stage28 (28, kind, id) |
-| `k.len()==66 && k[0]==28 && k[1]==20` | `((D,D,D,D,Option<D>,flat_quota11::stage14::bounded28::StageSettlementV28),D)` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:301 | stage28 (28, kind, id) |
-| `k.len()==70 && k[0]==28 && k[1]==17` | `(D,D,B,u8)` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:90 | stage28 collection index (28, 17, (job, u32)) |
+| `k.len()==66 && k[0]==28 && k[1]==0` | `mirror:palw_flat_stage_fold_v28::BundleHeader` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:373 | stage28 (28, kind, id) |
+| `k.len()==66 && k[0]==28 && k[1]==1` | `Vec<u8>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:373 | stage28 (28, kind, id) |
+| `k.len()==66 && k[0]==28 && k[1]==2` | `mirror:palw_flat_stage_fold_v28::ClassHeader` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:381 | stage28 (28, kind, id) |
+| `k.len()==66 && k[0]==28 && k[1]==3` | `Vec<u8>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:381 | stage28 (28, kind, id) |
+| `k.len()==66 && k[0]==28 && k[1]==5` | `mirror:palw_flat_stage_fold_v28::JobHeader` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:138, palw_flat_stage_fold_v28.rs:148 | stage28 (28, kind, id) |
+| `k.len()==66 && k[0]==28 && k[1]==6` | `mirror:palw_flat_stage_fold_v28::JobData` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:138, palw_flat_stage_fold_v28.rs:148 | stage28 (28, kind, id) |
+| `k.len()==70 && k[0]==28 && k[1]==7` | `Vec<D>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:373 | stage28 (28, kind, bond) |
+| `k.len()==70 && k[0]==28 && k[1]==8` | `Vec<D>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:381 | stage28 (28, kind, bond) |
+| `k.len()==70 && k[0]==28 && k[1]==9` | `Vec<D>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:86, palw_flat_stage_fold_v28.rs:138 | stage28 (28, kind, bond) |
+| `k.len()==66 && k[0]==28 && k[1]==10` | `palw_flat_stage_v28::NativeStageConsentV28` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:86 | stage28 (28, kind, id) |
+| `k.len()==66 && k[0]==28 && k[1]==11` | `(D,D,D)` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:138 | stage28 (28, kind, id) |
+| `k.len()==70 && k[0]==28 && k[1]==12` | `Vec<D>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:138, palw_flat_stage_fold_v28.rs:316 | stage28 (28, kind, bond) |
+| `k.len()==70 && k[0]==28 && k[1]==13` | `Vec<D>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:138, palw_flat_stage_fold_v28.rs:316 | stage28 (28, kind, bond) |
+| `k.len()==66 && k[0]==28 && k[1]==14` | `(flat_quota11::stage14::bounded28::StageSettlementV28,H,H)` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:190, palw_flat_stage_fold_v28.rs:266 | stage28 (28, kind, id) |
+| `k.len()==66 && k[0]==28 && k[1]==15` | `(D,D,D,D)` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:223, palw_flat_stage_fold_v28.rs:244, palw_flat_stage_fold_v28.rs:244 | stage28 (28, kind, id) |
+| `k.len()==66 && k[0]==28 && k[1]==16` | `mirror:palw_flat_stage_source_fold_v28::Pursuit` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:94, palw_flat_stage_source_fold_v28.rs:104 | stage28 (28, kind, id) |
+| `k.len()==66 && k[0]==28 && k[1]==18` | `mirror:palw_flat_stage_source_fold_v28::Collection` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:206 | stage28 (28, kind, id) |
+| `k.len()==66 && k[0]==28 && k[1]==19` | `Vec<D>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:223, palw_flat_stage_fold_v28.rs:244 | stage28 (28, kind, id) |
+| `k.len()==66 && k[0]==28 && k[1]==20` | `((D,D,D,D,Option<D>,flat_quota11::stage14::bounded28::StageSettlementV28),D)` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:316 | stage28 (28, kind, id) |
+| `k.len()==70 && k[0]==28 && k[1]==17` | `(D,D,B,u8)` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_source_fold_v28.rs:92 | stage28 collection index (28, 17, (job, u32)) |
 | `k.len()==2 && k[0]==28 && k[1]==4` | `palw_flat_stage_v28::NativeStagePoliciesV28` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_fold_v28.rs:28 | immutable stage28 policies |
-| `k.len()==66 && k[0]==32 && k[1]==0` | `mirror:palw_flat_stage_master_fold_v32::NativeMasterHeaderV32` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_master_fold_v32.rs:65 | master32 header |
-| `k.len()==66 && k[0]==32 && k[1]==1` | `Vec<u8>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_master_fold_v32.rs:65 | master32 body |
-| `k.len()==70 && k[0]==32 && k[1]==2` | `Vec<D>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_master_fold_v32.rs:65 | master32 catalogue |
+| `k.len()==66 && k[0]==32 && k[1]==0` | `mirror:palw_flat_stage_master_fold_v32::NativeMasterHeaderV32` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_master_fold_v32.rs:85, palw_flat_stage_master_fold_v32.rs:453 | master32 header |
+| `k.len()==66 && k[0]==32 && k[1]==1` | `Vec<u8>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_master_fold_v32.rs:85 | master32 body |
+| `k.len()==70 && k[0]==32 && k[1]==2` | `Vec<D>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_master_fold_v32.rs:85, palw_flat_stage_master_fold_v32.rs:500 | master32 catalogue |
+| `k.len()==66 && k[0]==32 && k[1]==3` | `mirror:palw_flat_stage_master_fold_v32::InvocationConsentV32` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_master_fold_v32.rs:320 | master32 invocation consent |
+| `k.len()==66 && k[0]==32 && k[1]==4` | `Vec<u8>` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_master_fold_v32.rs:344 | master32 invocation (Borsh bytes of the invocation) |
+| `k.len()==66 && k[0]==32 && k[1]==5` | `mirror:palw_flat_stage_master_fold_v32::InvocationActualV32` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_master_fold_v32.rs:391 | master32 actual invocation |
+| `k.len()==66 && k[0]==32 && k[1]==6` | `mirror:palw_flat_stage_master_fold_v32::MasterProgressV32` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_master_fold_v32.rs:339, palw_flat_stage_master_fold_v32.rs:453, palw_flat_stage_master_fold_v32.rs:478 | master32 progress |
+| `k.len()==66 && k[0]==32 && k[1]==7` | `((u16,D,D,D,B,D),(D,D,Vec<D>,mirror:palw_flat_stage_master_fold_v32::MasterProgressV32))` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_master_fold_v32.rs:496 | master32 collected tombstone |
+| `k.len()==66 && k[0]==32 && k[1]==8` | `(D,mirror:palw_flat_stage_master_fold_v32::InvocationCommitJournalV32)` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_master_fold_v32.rs:539 | master32 producer commit journal |
+| `k.len()==69 && k[0]==32 && k[1]==9` | `raw:32<<10` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_master_fold_v32.rs:609 | master32 producer commit page (32, 9, job, u8, u16) |
+| `k.len()==66 && k[0]==28 && k[1]==32` | `mirror:palw_flat_stage_master_fold_v32::NativeInvocationBindingV32` | palw_stage_execution_v28 + palw_native_final_v27 | palw_flat_stage_master_fold_v32.rs:344, palw_flat_stage_master_fold_v32.rs:391 | master32 invocation binding (28, 32, job) |
+| `k.len()==66 && k[0]==39 && k[1]==0` | `(D,mirror:palw_native_source_fold_v39::SourceHeaderV39)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_source_fold_v39.rs:371 | source39 header |
+| `k.len()==66 && k[0]==39 && k[1]==1` | `Vec<u8>` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_source_fold_v39.rs:357, palw_native_source_fold_v39.rs:372 | source39 live body |
+| `k.len()==66 && k[0]==39 && k[1]==2` | `(D,mirror:palw_native_source_fold_v39::ClassHeaderV39)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_source_fold_v39.rs:431 | class39 header |
+| `k.len()==66 && k[0]==39 && k[1]==3` | `Vec<u8>` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_source_fold_v39.rs:433 | class39 live body |
+| `k.len()==70 && k[0]==39 && k[1]==5` | `mirror:palw_native_source_fold_v39::CatalogV39` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_source_fold_v39.rs:359, palw_native_source_fold_v39.rs:374, palw_native_source_fold_v39.rs:436, palw_native_source_fold_v39.rs:581, palw_native_source_fold_v39.rs:632, palw_native_source_fold_v39.rs:686 | retention payer catalogue (39, 5, bond) |
+| `k.len()==66 && k[0]==39 && k[1]==6` | `(D,mirror:palw_native_source_fold_v39::UploadHeaderV39)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_source_fold_v39.rs:622 | source39 upload progress |
+| `k.len()==68 && k[0]==39 && k[1]==7` | `Vec<u8>` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_source_fold_v39.rs:739 | source39 upload page (39, 7, (id, u16)) |
+| `k.len()==66 && k[0]==39 && k[1]==94` | `(D,mirror:palw_native_source_fold_v39::ClassHold)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_source_fold_v39.rs:502 | class retention hold |
+| `k.len()==66 && k[0]==39 && k[1]==95` | `u64` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_source_fold_v39.rs:503, palw_native_source_fold_v39.rs:520 | class hold count |
+| `k.len()==66 && k[0]==39 && k[1]==96` | `B` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_source_fold_v39.rs:358, palw_native_source_fold_v39.rs:373 | source retention payer |
+| `k.len()==66 && k[0]==39 && k[1]==97` | `B` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_source_fold_v39.rs:434 | class retention payer |
+| `k.len()==66 && k[0]==39 && k[1]==98` | `u64` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_source_fold_v39.rs:435, palw_native_source_fold_v39.rs:577 | active classes per source |
+| `k.len()==66 && k[0]==39 && k[1]==16` | `(D,mirror:palw_native_job_fold_v39::JobHeader)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_job_fold_v39.rs:345 | original funded job header |
+| `k.len()==66 && k[0]==39 && k[1]==17` | `palw_native_job_v39::NativeJobBookV39` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_job_fold_v39.rs:344 | original job book |
+| `k.len()==66 && k[0]==39 && k[1]==18` | `(D,mirror:palw_native_job_fold_v39::ConsentHeader)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_job_fold_v39.rs:279 | live producer consent header |
+| `k.len()==70 && k[0]==39 && k[1]==19` | `Vec<D>` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_job_fold_v39.rs:281, palw_native_job_fold_v39.rs:589 | producer consent list |
+| `k.len()==66 && k[0]==39 && k[1]==20` | `(D,D,D)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_job_fold_v39.rs:590 | consumed consent tombstone (job, funding, consent) |
+| `k.len()==70 && k[0]==39 && k[1]==21` | `Vec<D>` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_job_fold_v39.rs:587, palw_native_job_fold_v39.rs:908, palw_native_job_fold_v39.rs:905 | requester active jobs (the terminal loop writes 21 and 22 through `k(kind, &who)`) |
+| `k.len()==70 && k[0]==39 && k[1]==22` | `Vec<D>` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_job_fold_v39.rs:588, palw_native_job_fold_v39.rs:905 | producer active jobs |
+| `k.len()==66 && k[0]==39 && k[1]==23` | `(D,palw_native_job_v39::NativeSingleCreditV39)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_job_fold_v39.rs:900 | single credit |
+| `k.len()==66 && k[0]==39 && k[1]==25` | `(D,D,D,u64)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_job_fold_v39.rs:591 | original debit receipt (nonce root, receipt, block, daa) |
+| `k.len()==66 && k[0]==39 && k[1]==26` | `Vec<u8>` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_job_fold_v39.rs:280 | live consent body |
+| `k.len()==66 && k[0]==39 && k[1]==27` | `palw_native_job_v39::NativeConsentV39` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_job_fold_v39.rs:594 | consumed original consent |
+| `k.len()==66 && k[0]==39 && k[1]==28` | `palw_native_job_v39::NativeCommitWireV39` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_job_fold_v39.rs:740 | accepted Commit post |
+| `k.len()==66 && k[0]==39 && k[1]==29` | `(D,mirror:palw_native_collect_fold_v39::CommitJournalV39)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_collect_fold_v39.rs:94 | commit transport journal |
+| `k.len()==69 && k[0]==39 && k[1]==30` | `raw:palw_native_job_v39::NATIVE_COMMIT_PAGE_BYTES_V39` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_collect_fold_v39.rs:222 | commit transport page (39, 30, (job, u8, u16)) |
+| `k.len()==66 && k[0]==39 && k[1]==31` | `(D,palw_native_job_v39::NativeCollectedJobV39)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_collect_fold_v39.rs:543 | collection53 tombstone |
+| `k.len()==66 && k[0]==39 && k[1]==33` | `Vec<D>` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_collect_fold_v39.rs:283 | public pending ids opened per job |
+| `k.len()==66 && k[0]==39 && k[1]==36` | `(D,mirror:palw_native_protected_fold_v39::Status)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_protected_fold_v39.rs:57 | public status |
+| `k.len()==66 && k[0]==39 && k[1]==37` | `(D,mirror:palw_native_protected_fold_v39::Owner)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_protected_fold_v39.rs:133 | paid discovery/proof owner |
+| `k.len()==68 && k[0]==39 && k[1]==38` | `raw:32<<10` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_protected_fold_v39.rs:409 | proof fragment (39, 38, (owner, u16)) |
+| `k.len()==66 && k[0]==39 && k[1]==39` | `((D,D,D,D,D,D),u64)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_protected_fold_v39.rs:594 | retired owner anchor |
+| `k.len()==66 && k[0]==39 && k[1]==40` | `(D,mirror:palw_native_public_fold_v39::Pending)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_public_fold_v39.rs:52 | public pending unit |
+| `k.len()==66 && k[0]==39 && k[1]==41` | `D` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_public_fold_v39.rs:243 | unit -> pending id |
+| `k.len()==66 && k[0]==39 && k[1]==42` | `(D,Vec<u8>,Vec<u8>)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_public_fold_v39.rs:366 | settled reply (root, demand, reply) |
+| `k.len()==69 && k[0]==39 && k[1]==43` | `raw:32<<10` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_public_fold_v39.rs:337 | answer fragment (39, 43, (pending, u8, u16)) |
+| `k.len()==70 && k[0]==39 && k[1]==44` | `Vec<D>` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_public_fold_v39.rs:244, palw_native_public_fold_v39.rs:276 | requester pending list |
+| `k.len()==66 && k[0]==39 && k[1]==60` | `(D,mirror:palw_native_material_fold_v39::MaterialHeader)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_material_fold_v39.rs:60, palw_native_material_fold_v39.rs:401, palw_native_material_fold_v39.rs:413 | material header |
+| `k.len()==66 && k[0]==39 && k[1]==61` | `flat_material39::MaterialProgressV39` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_material_fold_v39.rs:59 | material progress |
+| `k.len()==68 && k[0]==39 && k[1]==62` | `raw:palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_material_fold_v39.rs:253 | material page (39, 62, (id, u16)): the carrier tail |
+| `k.len()==70 && k[0]==39 && k[1]==63` | `Vec<D>` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_material_fold_v39.rs:218, palw_native_material_fold_v39.rs:329 | requester material list |
+| `k.len()==66 && k[0]==39 && k[1]==64` | `(D,D,u64)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_material_fold_v39.rs:330 | collected material anchor |
+| `k.len()==66 && k[0]==39 && k[1]==65` | `(D,mirror:palw_native_material_fold_v39::CertificateProgress)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_material_fold_v39.rs:215, palw_native_material_fold_v39.rs:607, palw_native_material_fold_v39.rs:624 | output certificate progress |
+| `k.len()==68 && k[0]==39 && k[1]==66` | `raw:palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_material_fold_v39.rs:623 | output certificate page (39, 66, (plan, u16)) |
+| `k.len()==66 && k[0]==39 && k[1]==67` | `D` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_material_fold_v39.rs:291 | certificate plan root |
+| `k.len()==66 && k[0]==39 && k[1]==80` | `(D,palw_native_master_v39::NativeMasterRecordV39)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_master_fold_v39.rs:467 | Master record |
+| `k.len()==66 && k[0]==39 && k[1]==81` | `(u16,D,u32,u16,D)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_master_fold_v39.rs:469 | Master body directory |
+| `k.len()==66 && k[0]==39 && k[1]==82` | `(D,mirror:palw_native_master_fold_v39::Progress)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_master_fold_v39.rs:482, palw_native_master_fold_v39.rs:636 | Master component progress |
+| `k.len()==66 && k[0]==39 && k[1]==83` | `(D,palw_native_master_v39::NativeMasterFinalRecordV39)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_master_fold_v39.rs:747 | Master Final |
+| `k.len()==66 && k[0]==39 && k[1]==84` | `(D,palw_native_master_v39::NativeMasterFundedComponentV39)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_master_fold_v39.rs:637 | job -> Master component binding |
+| `k.len()==70 && k[0]==39 && k[1]==85` | `Vec<D>` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_master_fold_v39.rs:483, palw_native_master_fold_v39.rs:766 | owner Master list |
+| `k.len()==70 && k[0]==39 && k[1]==86` | `u64` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_master_fold_v39.rs:484 | owner Master sequence |
+| `k.len()==66 && k[0]==39 && k[1]==87` | `(D,u64)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_master_fold_v39.rs:752 | closed Master anchor |
+| `k.len()==66 && k[0]==39 && k[1]==88` | `(D,mirror:palw_native_master_fold_v39::MetadataUpload)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_master_fold_v39.rs:838 | metadata upload progress |
+| `k.len()==68 && k[0]==39 && k[1]==89` | `raw:palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_master_fold_v39.rs:967 | metadata upload page (39, 89, (id, u16)) |
+| `k.len()==70 && k[0]==39 && k[1]==90` | `u64` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_master_fold_v39.rs:914 | owner metadata sequence |
+| `k.len()==70 && k[0]==39 && k[1]==91` | `Vec<D>` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_master_fold_v39.rs:848, palw_native_master_fold_v39.rs:913 | owner metadata uploads |
+| `k.len()==70 && k[0]==39 && k[1]==92` | `(D,u16,D,D)` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_master_fold_v39.rs:460 | upstream edge (39, 92, (Master, u16 stage, u16 input)) |
+| `k.len()==68 && k[0]==39 && k[1]==93` | `raw:32<<10` | palw_native_execution_v39 + palw_native_final_v27 (with palw_panel_free_v1) | palw_native_master_fold_v39.rs:471 | Master body page (39, 93, (id, u16)) |
+| `k.len()==66 && k[0]==39 && k[1]==100` | `(D,palw_native_mining_v39::NativeMiningModelRecordV39)` | palw_native_mining_v39 + palw_native_execution_v39 (with palw_native_final_v27, palw_panel_free_v1) | palw_native_mining_fold_v39.rs:85 | mining model |
+| `k.len()==66 && k[0]==39 && k[1]==101` | `D` | palw_native_mining_v39 + palw_native_execution_v39 (with palw_native_final_v27, palw_panel_free_v1) | palw_native_mining_fold_v39.rs:265 | complete source -> model |
+| `k.len()==134 && k[0]==39 && k[1]==102` | `(D,palw_native_mining_v39::NativeMiningSeatRecordV39)` | palw_native_mining_v39 + palw_native_execution_v39 (with palw_native_final_v27, palw_panel_free_v1) | palw_native_mining_fold_v39.rs:92 | seat (39, 102, (model, bond)) |
+| `k.len()==66 && k[0]==39 && k[1]==103` | `(D,palw_native_mining_v39::NativeMiningClaimRecordV39)` | palw_native_mining_v39 + palw_native_execution_v39 (with palw_native_final_v27, palw_panel_free_v1) | palw_native_mining_fold_v39.rs:103 | mining claim |
+| `k.len()==66 && k[0]==39 && k[1]==104` | `(D,palw_native_mining_v39::NativeMiningReceiptRecordV39)` | palw_native_mining_v39 + palw_native_execution_v39 (with palw_native_final_v27, palw_panel_free_v1) | palw_native_mining_fold_v39.rs:106 | mining receipt |
+| `k.len()==74 && k[0]==39 && k[1]==106` | `u64` | palw_native_mining_v39 + palw_native_execution_v39 (with palw_native_final_v27, palw_panel_free_v1) | palw_native_mining_fold_v39.rs:491 | per-model epoch count (39, 106, (model, u64)) |
+| `k.len()==66 && k[0]==39 && k[1]==107` | `Vec<B>` | palw_native_mining_v39 + palw_native_execution_v39 (with palw_native_final_v27, palw_panel_free_v1) | palw_native_mining_fold_v39.rs:330, palw_native_mining_fold_v39.rs:348 | model seat list |
+| `k.len()==68 && k[0]==39 && k[1]==108` | `D` | palw_native_mining_v39 + palw_native_execution_v39 (with palw_native_final_v27, palw_panel_free_v1) | palw_native_mining_fold_v39.rs:482 | credited Master stage (39, 108, (Master, u16)) -> claim |
+| `k.len()==70 && k[0]==39 && k[1]==109` | `u64` | palw_native_mining_v39 + palw_native_execution_v39 (with palw_native_final_v27, palw_panel_free_v1) | palw_native_mining_fold_v39.rs:266 | registrant sequence |
+| `k.len()==70 && k[0]==39 && k[1]==110` | `u64` | palw_native_mining_v39 + palw_native_execution_v39 (with palw_native_final_v27, palw_panel_free_v1) | palw_native_mining_fold_v39.rs:490 | producer claim sequence |
+| `k.len()==2 && k[0]==39 && k[1]==113` | `u64` | palw_native_mining_v39 + palw_native_execution_v39 (with palw_native_final_v27, palw_panel_free_v1) | palw_native_mining_fold_v39.rs:267 | registered model count (39, 113, ()) |
+| `k.len()==66 && k[0]==39 && k[1]==114` | `(D,Option<(u64,bool)>,u64)` | palw_native_mining_v39 + palw_native_execution_v39 (with palw_native_final_v27, palw_panel_free_v1) | palw_native_mining_fold_v39.rs:600 | collected claim tombstone |
 

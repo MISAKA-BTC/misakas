@@ -951,7 +951,7 @@ pub fn prepare_source_upload_v39(
     Ok(objects)
 }
 fn stage39_raw(action: u8, body: Vec<u8>) -> Result<PreparedNativePayloadV29, String> {
-    if !(41..=70).contains(&action) {
+    if !(41..=79).contains(&action) {
         return Err("native39 action outside owning namespace".into());
     }
     let object = K::StageExecutionV14 { action, body };
@@ -1040,6 +1040,24 @@ pub fn decode_native_payload_v39(kind: &str, raw: &[u8], maximum: Option<u32>) -
         "source-collect39" => {
             let id: Digest = raw.try_into().map_err(|_| "source39 collect original fixed id width")?;
             stage39_raw(60, id.to_vec())
+        }
+        "source-release39" => {
+            if raw.len() != 65 || raw[0] > 1 {
+                return Err("native39 release exact kind/id frame".into());
+            }
+            prepare_retention_release_v39(raw[0] == 1, raw[1..].try_into().unwrap())
+        }
+        "source-hold-reap39" => {
+            let id: Digest = raw.try_into().map_err(|_| "native39 hold reap original fixed id width")?;
+            prepare_consent_hold_reap_v39(id)
+        }
+        "source-collect-job39" => {
+            let id: Digest = raw.try_into().map_err(|_| "native39 collection original fixed job width")?;
+            prepare_collect_v39(id)
+        }
+        "source-commit-assemble39" => {
+            let (job, group) = borrowed_native_commit_assembly_v39(raw).ok_or("native39 exact commit assembly frame")?;
+            prepare_commit_assembly_v39(job, group)
         }
         _ => Err("unknown owning39 native transport kind".into()),
     }
@@ -1480,4 +1498,172 @@ pub fn prepare_terminal_v39(job: Digest, refund: bool) -> Result<PreparedNativeP
     body.push(u8::from(refund));
     body.extend_from_slice(&job);
     stage39_raw(51, body)
+}
+// ---- Owning39 mining (stage actions 73–77/79) and the PNR9 receipt-block carriage ----
+// Frames only: the dormant fold re-derives everything (economic class, work, price, budget, Gate C) from original rows.
+// There is no model-level approval action (user decision 2026-10-15, round 5).
+pub fn prepare_mining_register_v39(template_master: Digest, sequence: u64, share_permille: u16) -> Result<PreparedNativePayloadV29, String> {
+    use kaspa_consensus_core::palw_native_mining_v39::*;
+    let w = NativeMiningModelWireV39 { version: 39, template_master, sequence, share_permille };
+    let raw = borsh::to_vec(&w).map_err(|e| e.to_string())?;
+    NativeMiningModelWireV39::from_bytes(&raw)?;
+    stage39_raw(REGISTER_MODEL_ACTION_V39, raw)
+}
+/// `kind`: 0 seat (action 74), 1 seat exit / 2 model retirement (action 76).
+pub fn prepare_mining_seat_v39(model: Digest, kind: u8) -> Result<PreparedNativePayloadV29, String> {
+    use kaspa_consensus_core::palw_native_mining_v39::*;
+    let w = NativeMiningSeatWireV39 { version: 39, model, kind };
+    let raw = borsh::to_vec(&w).map_err(|e| e.to_string())?;
+    NativeMiningSeatWireV39::from_bytes(&raw)?;
+    stage39_raw(if kind == 0 { MODEL_SEAT_ACTION_V39 } else { MODEL_RETIRE_ACTION_V39 }, raw)
+}
+pub fn prepare_mining_commit_v39(model: Digest, master: Digest, sequence: u64) -> Result<PreparedNativePayloadV29, String> {
+    use kaspa_consensus_core::palw_native_mining_v39::*;
+    let w = NativeMiningCommitWireV39 { version: 39, model, master, sequence };
+    let raw = borsh::to_vec(&w).map_err(|e| e.to_string())?;
+    NativeMiningCommitWireV39::from_bytes(&raw)?;
+    stage39_raw(MINING_COMMIT_ACTION_V39, raw)
+}
+/// Action 77 (`kind 0`, a claim) or 79 (`kind 0` claim / `kind 1` receipt).
+pub fn prepare_mining_subject_v39(action: u8, kind: u8, id: Digest) -> Result<PreparedNativePayloadV29, String> {
+    use kaspa_consensus_core::palw_native_mining_v39::*;
+    if !matches!(action, ISSUE_RECEIPT_ACTION_V39 | COLLECT_MINING_ACTION_V39) {
+        return Err("mining39 subject frames are actions 77 and 79".into());
+    }
+    let w = NativeMiningSubjectWireV39 { version: 39, kind, id };
+    let raw = borsh::to_vec(&w).map_err(|e| e.to_string())?;
+    NativeMiningSubjectWireV39::from_bytes(&raw)?;
+    stage39_raw(action, raw)
+}
+/// The unsigned PNR9 spend for one header position and the exact message the
+/// receipt producer's ML-DSA-87 key signs (context
+/// `PALW_NATIVE_RECEIPT_MLDSA87_CONTEXT_V39`). The miner signs; no key is held here.
+#[allow(clippy::too_many_arguments)]
+pub fn native_receipt_spend_unsigned_v39(
+    network_domain: kaspa_consensus_core::Hash64,
+    pre_pow_hash: kaspa_consensus_core::Hash64,
+    timestamp: u64,
+    nonce: u64,
+    receipt: kaspa_consensus_core::Hash64,
+    quantum_index: u32,
+    producer_bond: kaspa_consensus_core::tx::TransactionOutpoint,
+    producer_pubkey: Vec<u8>,
+) -> (kaspa_consensus_core::palw_native_receipt_v39::PalwNativeReceiptSpendV39, kaspa_consensus_core::Hash64) {
+    use kaspa_consensus_core::palw_native_receipt_v39::*;
+    let spend = PalwNativeReceiptSpendV39 {
+        version: 39,
+        network_domain,
+        challenge: native_receipt_spend_challenge_v39(network_domain, pre_pow_hash, timestamp, nonce, receipt, quantum_index, &producer_bond),
+        receipt,
+        quantum_index,
+        producer_bond,
+        producer_pubkey,
+    };
+    let message = native_receipt_spend_id_v39(&spend);
+    (spend, message)
+}
+pub fn encode_native_receipt_carriage_v39(
+    spend: kaspa_consensus_core::palw_native_receipt_v39::PalwNativeReceiptSpendV39,
+    signature: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    use kaspa_consensus_core::palw_native_receipt_v39::*;
+    let bytes = PalwNativeReceiptSpendEnvelopeV39 { spend, signature }.encode();
+    PalwNativeReceiptSpendEnvelopeV39::decode(&bytes)?;
+    Ok(bytes)
+}
+/// **Retention release71** (RFC-0002 row 14): the retention payer releases one
+/// of ITS active source (`class = false`) or class (`class = true`) slots.
+/// Exact 67-byte body `39u16 ‖ kind ‖ id`; the fold refuses while any live
+/// consent, job, Master, model or class still retains it, and refuses any
+/// signer other than the recorded payer. Freeing a slot never adds Q/B/R/F.
+pub fn prepare_retention_release_v39(class: bool, id: Digest) -> Result<PreparedNativePayloadV29, String> {
+    if id == [0; 64] {
+        return Err("native39 release original identity absent".into());
+    }
+    let mut body = Vec::with_capacity(67);
+    body.extend_from_slice(&39u16.to_le_bytes());
+    body.push(u8::from(class));
+    body.extend_from_slice(&id);
+    stage39_raw(71, body)
+}
+/// **Expired producer-consent hold collection72** (RFC-0002 row 14): the
+/// exact 64-byte hold id. Anyone may pay it; the fold re-reads the hold and
+/// refuses unless it is a canonical consent hold strictly past its `until`.
+pub fn prepare_consent_hold_reap_v39(hold: Digest) -> Result<PreparedNativePayloadV29, String> {
+    if hold == [0; 64] {
+        return Err("native39 hold original identity absent".into());
+    }
+    stage39_raw(72, hold.to_vec())
+}
+/// **Expiry scan for collection72**: every canonical producer-consent hold in
+/// a fully authenticated row stream whose `until` lies strictly below
+/// `accept_daa`, in key order. Candidates only: the fold decides at the DAA
+/// the carrier is actually accepted at.
+pub fn native_expired_consent_holds_v39<R: kaspa_consensus_core::palw_native_audit_proof_v39::NativeAuditRowReaderV39>(
+    rows: &kaspa_consensus_core::palw_native_audit_proof_v39::VerifiedNativeAuxRowsV39<R>,
+    accept_daa: u64,
+) -> Result<Vec<Digest>, String> {
+    let keys: Vec<Vec<u8>> =
+        rows.keys().filter(|(t, k, _)| *t == 112 && k.len() == 66 && k[0] == 39 && k[1] == 94).map(|(_, k, _)| k.to_vec()).collect();
+    let mut out = Vec::new();
+    for k in keys {
+        let Some(v) = rows.row(112, &k, 256)? else { continue };
+        if let Some((id, until)) = kaspa_consensus_core::palw_state_v2::native_consent_hold_expiry_v39(&k, &v) {
+            if accept_daa > until {
+                out.push(id);
+            }
+        }
+    }
+    Ok(out)
+}
+/// Collection53 of a settled job past its complete original retention. The
+/// fold decides eligibility from original rows; this frame asserts nothing.
+pub fn prepare_collect_v39(job: Digest) -> Result<PreparedNativePayloadV29, String> {
+    if job == [0; 64] {
+        return Err("native39 collection original job absent".into());
+    }
+    let mut body = Vec::with_capacity(66);
+    body.extend_from_slice(&39u16.to_le_bytes());
+    body.extend_from_slice(&job);
+    stage39_raw(kaspa_consensus_core::palw_native_job_v39::NATIVE_COLLECT_ACTION_V39, body)
+}
+pub fn prepare_commit_assembly_v39(job: Digest, group: Digest) -> Result<PreparedNativePayloadV29, String> {
+    if [job, group].contains(&[0; 64]) {
+        return Err("native39 commit assembly original identities absent".into());
+    }
+    let mut body = Vec::with_capacity(130);
+    body.extend_from_slice(&39u16.to_le_bytes());
+    body.extend_from_slice(&job);
+    body.extend_from_slice(&group);
+    stage39_raw(kaspa_consensus_core::palw_native_job_v39::NATIVE_COMMIT_ASSEMBLE_ACTION_V39, body)
+}
+/// Producer compact-post transport54/55 for a canonical Commit wire that is
+/// too large for one carrier. `maximum` is the job's ORIGINAL before-Fund
+/// maximum positions; the wire is re-decoded under it before paging, and the
+/// group never exceeds the bound the fold derives from the same maximum.
+pub fn prepare_commit_parts_v39(raw: &[u8], maximum: u32) -> Result<Vec<PreparedNativePayloadV29>, String> {
+    use kaspa_consensus_core::palw_native_job_v39::*;
+    let wire = NativeCommitWireV39::from_bytes(raw, maximum)?;
+    if raw.len() as u64 > native_commit_bytes_bound_v39(maximum)? as u64 {
+        return Err("native39 compact Commit exceeds its original maximum transport bound".into());
+    }
+    let group = native_commit_group_v39(wire.job, raw);
+    let count = raw.len().div_ceil(NATIVE_COMMIT_PAGE_BYTES_V39);
+    let mut objects = Vec::with_capacity(count + 1);
+    for (index, page) in raw.chunks(NATIVE_COMMIT_PAGE_BYTES_V39).enumerate() {
+        let mut body = Vec::with_capacity(NATIVE_COMMIT_PART_PREFIX_V39 + page.len());
+        body.extend_from_slice(&39u16.to_le_bytes());
+        body.push(0);
+        body.extend_from_slice(&wire.job);
+        body.extend_from_slice(&group);
+        body.extend_from_slice(&(index as u16).to_le_bytes());
+        body.extend_from_slice(&(count as u16).to_le_bytes());
+        body.extend_from_slice(&(raw.len() as u32).to_le_bytes());
+        body.extend_from_slice(&(page.len() as u32).to_le_bytes());
+        body.extend_from_slice(page);
+        borrowed_native_commit_part_v39(&body).ok_or("native39 original commit page exact frame")?;
+        objects.push(stage39_raw(NATIVE_COMMIT_PART_ACTION_V39, body)?);
+    }
+    objects.push(prepare_commit_assembly_v39(wire.job, group)?);
+    Ok(objects)
 }

@@ -3672,6 +3672,42 @@ negative-expected-gain gates, which conflict with PRINCIPLES §0: those metrics
 must be reported, including UNKNOWN, while original bond caps, objective courts,
 paid resources and deadlines remain mandatory. This correction is unfinished.
 
+## Owning39 remaining rows (2026-10-15, `integ/rfc02-remaining`) — unbuilt source
+
+The fourteen rows of [the remaining-work list](rfc0002-remaining-work-2026-10-15.md) were coded on
+`integ/rfc02-remaining` (branched from `integ/rfc02-rfc06-12-g14`, merged from it periodically). The
+per-row file:line status is in that list. Nothing was compiled, tested, converted or run; nothing is a
+PASS; every new consensus path is dormant behind `palw_native_execution_v39` or the new
+`palw_native_mining_v39` (A-2 uniform: unjudged below its fence, refused armed).
+
+- **Termination and transport:** collection53 (original terminal, credit and retention; queue30 and
+  physical22 retired once; `HOLD_JOB` released; rows 16/17/23/28/84 kept; kind-31 tombstone carries the
+  consent digests), producer commit transport 54/55 in 32-KiB pages, paid-carrier lanes, node signer
+  checks, scanner spec arms for every owning39/mining39 row.
+- **Audit:** an independent Job audit factory and the complete Master Final audit over one anchored
+  stream, a read-only archive for bodies released by collection, the request composer, the Mistral
+  image/frontend-to-Master adapter, the PALWQ361 differential driver, two-window A6/A8 for v39 and the
+  payout/redemption audit that separates settlement, pending, coinbase delivery and UTXO spend.
+- **Mining (73–79, `PNR9`):** canonical work from actual positions, final lengths and every component's
+  compute; ordinary registration with seats and an ADR-0176 stake liability; claim-level drawn approval
+  only, as an RFC-0018 Gate C `'V'` subject; ADR-0176 budget plan/commit with bond formula v2 and the
+  0.51 export cap; one-use receipt quanta spent by an algo-7 `PNR9` header through the existing
+  receipt-spend entitlement and coinbase path. A privately paid job's Final grants none of these rights.
+- **User decisions 2026-10-15 rounds 4–5:** registered models are fixed at tier 0.3 from registration
+  with no model-level exam, probation, renewal or promotion; the tier comes from ADR-0179
+  `palw_model_tier_v1` (on `integ/decisions-1015`, consumed through a one-line swap point until it reaches
+  integ). Model-level drawn approval and private eligibility issuance were therefore not built; RFC-0017
+  table 131 is not consulted.
+- **Activation readiness:** explicit policy with the honest-fraction premise, fork fingerprint and probe,
+  SDK retention release 71 and expired consent-hold collection 72, signed 73–79 frames, operating
+  procedures ([native39-operations.md](launch/native39-operations.md)), and the anchor exporter's Rule-E
+  V2 leaf. Activation stays OFF.
+
+Blocked items: generated scanner arms (the wire generator stops on six missing shape-review pins that
+`integ/rfc06-12-remaining` adds); real checkpoint/tokenizer/context pins and differential measurements
+(conversion and execution are outside this phase); the header-side Rule-E V2 commitment
+(`palw_committed_state_root_v1` is V1-only, lane L2FC). The initial seven models remain `NOT_RUN`.
+
 ## Validation (2026-10-15) — paused 10-15 by user order
 
 **Paused 10-15 by user order; results so far apply only to the recorded source commits and

@@ -26,13 +26,15 @@
 //! Annual lists only ADD (ADR-0175): validation refuses a list that names a model id already listed, and membership needs the
 //! registered class's own artifact root, so no entry can change or replace an existing model. A listing is a policy decision — never a
 //! technical proof that a model is public or independently verifiable.
-
-use std::collections::BTreeSet;
-
-use borsh::{BorshDeserialize, BorshSerialize};
+//!
+//! **RFC-0019 (2026-10-15): the storage of `ApprovedModels` is the annual catalog chain** ([`crate::palw_annual_catalog_v1`]) — edition
+//! 0 is the genesis catalog, every later edition one annual fork's additions, chained by `previous_catalog_root`. The fence's value
+//! carries that chain and nothing parallel to it; the tier API below (`palw_model_tier_v1`, `_at_v1`, `_of_model_v1`,
+//! `palw_model_tier_of_v1`, the coefficient, the weight and the cap) is unchanged for its callers.
 
 use crate::Hash64;
 use crate::config::params::{ForkActivation, Params};
+use crate::palw_annual_catalog_v1::PalwAnnualCatalogChainV1;
 use crate::palw_bond_budget_v1::PalwAllocationWeightV1;
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
 use crate::palw_state_v2::{PalwChainStateV2, PalwStateParamsV2};
@@ -48,28 +50,15 @@ pub const PALW_MODEL_TIER_REGISTERED_CAP_PERMILLE_DESIGN_V1: u32 = 300;
 /// The fixed-point scale of the registered-tier cap factor.
 const PALW_MODEL_TIER_CAP_FACTOR_SCALE_V1: u64 = 1_000_000;
 
-/// **One entry of `ApprovedModels`** — a model id (the class id) and its fixed artifact root.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct PalwApprovedModelV1 {
-    pub model_id: Hash64,
-    pub artifact_root: Hash64,
-}
-
-/// **One annual (soft / hard) fork's list** — the models it ADDS to `ApprovedModels` from its activation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PalwApprovedModelsForkV1 {
-    pub activation: ForkActivation,
-    pub models: Vec<PalwApprovedModelV1>,
-}
-
-/// **`Params::palw_model_tier_v1`'s value**: the tier system's height, the genesis list, the annual lists and the two design values.
+/// **`Params::palw_model_tier_v1`'s value**: the tier system's height, the annual catalog chain (RFC-0019: `ApprovedModels(h)` IS the
+/// catalog active at `h` — edition 0 the genesis catalog, each later edition one annual fork's additions) and the two design values.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwModelTierFenceV1 {
     pub activation: ForkActivation,
-    /// Genesis models named explicitly (classes the genesis assembly registered are approved without being listed).
-    pub genesis: Vec<PalwApprovedModelV1>,
-    /// The annual forks' lists, in activation order.
-    pub annual: Vec<PalwApprovedModelsForkV1>,
+    /// **RFC-0019's catalog chain** — the ONE storage of `ApprovedModels` (no parallel list). Edition 0 names the genesis models
+    /// explicitly (classes the genesis assembly registered are approved as a chain fact without being listed); every later edition
+    /// activates at its own height, at or after the fence, and only adds.
+    pub catalogs: PalwAnnualCatalogChainV1,
     /// The registered tier's coefficient `c`, permille (design 300).
     pub registered_permille: u32,
     /// The registered tier's aggregate cap `κ`, permille (design value).
@@ -77,20 +66,20 @@ pub struct PalwModelTierFenceV1 {
 }
 
 impl PalwModelTierFenceV1 {
-    /// **NOT A PROPOSAL**: the fence at `activation` with the design values and empty lists (the fork-id probe, fixtures).
+    /// **NOT A PROPOSAL**: the fence at `activation` with the design values and an empty genesis catalog (the fork-id probe, fixtures).
     pub fn at(activation: ForkActivation) -> Self {
         Self {
             activation,
-            genesis: Vec::new(),
-            annual: Vec::new(),
+            catalogs: PalwAnnualCatalogChainV1::genesis_only(Vec::new()),
             registered_permille: PALW_MODEL_TIER_REGISTERED_PERMILLE_DESIGN_V1,
             registered_cap_permille: PALW_MODEL_TIER_REGISTERED_CAP_PERMILLE_DESIGN_V1,
         }
     }
 
-    /// **The value's own refusals** — the tiers' shape and the ADD-ONLY rule: every model id is listed at most once over the genesis
-    /// list and every annual list (so no list can re-list, replace or re-root an existing model — ADR-0175); annual lists activate in
-    /// strictly increasing order at or after the fence; no zero id or root; `0 < c < 1000`, `0 < κ ≤ 1000`.
+    /// **The value's own refusals** — the tiers' shape and RFC-0019's catalog chain ([`PalwAnnualCatalogChainV1::validate`]: edition
+    /// 0 at DAA 0, each edition chained to the previous root, strictly increasing real heights, ADD-ONLY — a class id listed once over
+    /// the whole chain, so no edition re-lists, replaces or re-roots a model, ADR-0175 — and a kernel version this build implements);
+    /// annual editions activate at or after the fence; `0 < c < 1000`, `0 < κ ≤ 1000`.
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.registered_permille == 0 || self.registered_permille >= PALW_MODEL_TIER_APPROVED_PERMILLE_V1 {
             return Err("the registered tier's coefficient is strictly between 0 and the approved tier's 1.0");
@@ -98,53 +87,28 @@ impl PalwModelTierFenceV1 {
         if self.registered_cap_permille == 0 || self.registered_cap_permille > 1_000 {
             return Err("the registered tier's aggregate cap is a positive permille, at most 1000");
         }
-        let mut seen: BTreeSet<Hash64> = BTreeSet::new();
-        let mut admit = |m: &PalwApprovedModelV1| -> Result<(), &'static str> {
-            if m.model_id == Hash64::default() || m.artifact_root == Hash64::default() {
-                return Err("an approved model names a non-zero model id and artifact root");
-            }
-            if !seen.insert(m.model_id) {
-                return Err("ApprovedModels only ADDS: a model id is listed once, never re-listed or re-rooted (ADR-0175)");
-            }
-            Ok(())
-        };
-        for m in &self.genesis {
-            admit(m)?;
-        }
-        let mut last: Option<u64> = None;
-        for fork in &self.annual {
-            if fork.activation == ForkActivation::never() || fork.models.is_empty() {
-                return Err("an annual list has a real activation and at least one model");
-            }
-            let at = fork.activation.daa_score();
-            if at < self.activation.daa_score() || last.is_some_and(|prev| at <= prev) {
-                return Err("annual lists activate in strictly increasing order, at or after the tier fence");
-            }
-            last = Some(at);
-            for m in &fork.models {
-                admit(m)?;
-            }
+        self.catalogs.validate()?;
+        if self.catalogs.editions.iter().skip(1).any(|c| c.activation_daa < self.activation.daa_score()) {
+            return Err("annual catalog editions activate at or after the tier fence");
         }
         Ok(())
     }
 
-    /// The value as the identity hashers write it, after the activation (Some-only).
+    /// The value as the identity hashers write it, after the activation (Some-only): the two values, then the catalog chain (each
+    /// edition's number, height and root — the root binds its models and the previous root). `consensus_identity_id`'s normalisation
+    /// has already dropped every edition not yet in force ([`PalwAnnualCatalogChainV1::drop_unscheduled_for_identity`]), so a build
+    /// carrying the NEXT edition shares the identity of one that does not; the schedule id and the raw params id see every edition.
     pub(crate) fn write_value_into(&self, h: &mut kaspa_hashes::ConsensusParamsId) {
         h.write(self.registered_permille.to_le_bytes());
         h.write(self.registered_cap_permille.to_le_bytes());
-        h.write(borsh::to_vec(&self.genesis).expect("approved models serialize"));
-        for fork in &self.annual {
-            h.write(fork.activation.daa_score().to_le_bytes());
-            h.write(borsh::to_vec(&fork.models).expect("approved models serialize"));
-        }
+        self.catalogs.write_into(h);
     }
 
     /// The fence's mirror on the V2 state params.
     pub fn mirror(&self) -> PalwModelTierMirrorV1 {
         PalwModelTierMirrorV1 {
             from_daa: self.activation.daa_score(),
-            genesis: self.genesis.clone(),
-            annual: self.annual.iter().map(|fork| (fork.activation.daa_score(), fork.models.clone())).collect(),
+            catalogs: self.catalogs.clone(),
             registered_permille: self.registered_permille,
             registered_cap_permille: self.registered_cap_permille,
         }
@@ -156,8 +120,8 @@ impl PalwModelTierFenceV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwModelTierMirrorV1 {
     pub from_daa: u64,
-    pub genesis: Vec<PalwApprovedModelV1>,
-    pub annual: Vec<(u64, Vec<PalwApprovedModelV1>)>,
+    /// RFC-0019's catalog chain — `ApprovedModels`.
+    pub catalogs: PalwAnnualCatalogChainV1,
     pub registered_permille: u32,
     pub registered_cap_permille: u32,
 }
@@ -167,20 +131,16 @@ impl PalwModelTierMirrorV1 {
         daa >= self.from_daa
     }
 
-    /// Where `(model_id, artifact_root)` is listed at `daa`, if it is (the root must match: a listing never re-roots a model).
+    /// Where `(model_id, artifact_root)` is listed at `daa`, if it is: the catalog edition that added it, among the editions active
+    /// at `daa` (the root must match: a listing never re-roots a model).
     pub fn listed_at(&self, model_id: &Hash64, artifact_root: &Hash64, daa: u64) -> Option<PalwTierSourceV1> {
         if !self.active_at(daa) {
             return None;
         }
-        let hit = |m: &PalwApprovedModelV1| m.model_id == *model_id && m.artifact_root == *artifact_root;
-        if self.genesis.iter().any(hit) {
-            return Some(PalwTierSourceV1::GenesisList);
-        }
-        self.annual
-            .iter()
-            .enumerate()
-            .find(|(_, (from, models))| daa >= *from && models.iter().any(hit))
-            .map(|(index, (from, _))| PalwTierSourceV1::AnnualFork { index: index as u32, from_daa: *from })
+        self.catalogs.listed_at(model_id, artifact_root, daa).map(|catalog| match catalog.edition {
+            0 => PalwTierSourceV1::GenesisList,
+            edition => PalwTierSourceV1::AnnualFork { edition, from_daa: catalog.activation_daa },
+        })
     }
 }
 
@@ -189,10 +149,10 @@ impl PalwModelTierMirrorV1 {
 pub enum PalwTierSourceV1 {
     /// A class the genesis assembly registered (`registrant_bond = None`) — a chain fact, no list needed.
     GenesisAssembly,
-    /// Named in the fence's genesis list.
+    /// Named in the genesis catalog (RFC-0019 edition 0).
     GenesisList,
-    /// Added by the `index`-th annual fork, active from `from_daa`.
-    AnnualFork { index: u32, from_daa: u64 },
+    /// Added by annual catalog edition `edition` (≥ 1), active from `from_daa`.
+    AnnualFork { edition: u32, from_daa: u64 },
 }
 
 /// **A model's tier.**
@@ -384,8 +344,10 @@ impl Params {
                 "palw_model_tier_v1 needs palw_independently_work_certified_v1 (RFC-0018 Gate C) at or below it: with no model review, per-claim certification is the safety gate for every tier",
             ));
         }
+        // RFC-0019 §10: the catalog chain is the value; its release process (signed manifest, mixed-binary drill across the switch)
+        // has produced no record yet, so arming stays refused whatever the chain says.
         Err(PalwModeV2Error::Invalid(
-            "palw_model_tier_v1 cannot be armed: the 0.3 / 1.0 coefficients and the registered-tier cap are design values without a measured record, and the annual list process is not built",
+            "palw_model_tier_v1 cannot be armed: the 0.3 / 1.0 coefficients and the registered-tier cap are design values without a measured record, and no annual catalog edition has a signed release manifest and a recorded mixed-binary switch drill (RFC-0019 §10)",
         ))
     }
 }

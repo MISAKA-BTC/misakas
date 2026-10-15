@@ -210,7 +210,7 @@ pub enum PalwRuleELeafV2ErrorV1 {
     BadLeaf,
 }
 
-fn keyed(domain: &[u8], parts: &[&[u8]]) -> Hash64 {
+pub(crate) fn keyed(domain: &[u8], parts: &[&[u8]]) -> Hash64 {
     let mut h = blake2b_simd::Params::new().hash_length(64).key(domain).to_state();
     for part in parts {
         h.update(part);
@@ -220,8 +220,22 @@ fn keyed(domain: &[u8], parts: &[&[u8]]) -> Hash64 {
     Hash64::from_bytes(out)
 }
 
-fn record_leaf(record: &PalwRuleEClaimRecordV1) -> Hash64 {
-    keyed(WINDOW_LEAF_DOMAIN, &[&borsh::to_vec(record).expect("a record serializes")])
+/// The leaf-v2 window leaf: the record's encoding WITHOUT RFC-0018's `certification` field, byte-identical to leaf v2 as it was
+/// specified before that field existed (the field is committed by leaf v3 only, `palw_fork_choice_rule_e_leaf_v3`).
+pub(crate) fn record_leaf(record: &PalwRuleEClaimRecordV1) -> Hash64 {
+    let legacy = (
+        record.claim_id,
+        record.accepted_blue_score,
+        record.bond,
+        record.attempt,
+        record.status,
+        record.safe_weight,
+        record.live_weight,
+        record.capped,
+        record.bond_collateral,
+        record.budget,
+    );
+    keyed(WINDOW_LEAF_DOMAIN, &[&borsh::to_vec(&legacy).expect("a record serializes")])
 }
 
 fn bond_leaf(bond: &PalwBondKeyV2) -> Hash64 {
@@ -238,7 +252,7 @@ fn split(n: usize) -> usize {
 }
 
 /// RFC 6962's tree hash over `leaves`.
-fn tree_root(leaves: &[Hash64], node: &[u8], empty: &[u8]) -> Hash64 {
+pub(crate) fn tree_root(leaves: &[Hash64], node: &[u8], empty: &[u8]) -> Hash64 {
     match leaves.len() {
         0 => keyed(empty, &[]),
         1 => leaves[0],
@@ -250,7 +264,7 @@ fn tree_root(leaves: &[Hash64], node: &[u8], empty: &[u8]) -> Hash64 {
 }
 
 /// The roots of the subtrees of `leaves` disjoint from `[lo, hi)`, in the order [`root_from_range`] consumes them.
-fn prove_range(leaves: &[Hash64], lo: usize, hi: usize, node: &[u8], empty: &[u8], out: &mut Vec<Hash64>) {
+pub(crate) fn prove_range(leaves: &[Hash64], lo: usize, hi: usize, node: &[u8], empty: &[u8], out: &mut Vec<Hash64>) {
     let n = leaves.len();
     if hi == 0 || lo >= n {
         out.push(tree_root(leaves, node, empty));
@@ -266,7 +280,7 @@ fn prove_range(leaves: &[Hash64], lo: usize, hi: usize, node: &[u8], empty: &[u8
 
 /// The root of a tree of `n` leaves from the leaves of `[lo, hi)` (`range`, in order) and the disjoint subtrees' roots (`proof`,
 /// consumed in order). `None` when either runs short.
-fn root_from_range(
+pub(crate) fn root_from_range(
     n: usize,
     lo: usize,
     hi: usize,
@@ -360,11 +374,22 @@ pub struct PalwRuleEWindowOpeningV1 {
 
 /// The node's half: open `window` (a state's [`palw_rule_e_window_v1`]) above `fork_blue_score`.
 pub fn palw_rule_e_open_window_above_v1(window: &[PalwRuleEClaimRecordV1], fork_blue_score: u64) -> PalwRuleEWindowOpeningV1 {
+    palw_rule_e_open_window_above_with(window, fork_blue_score, record_leaf, WINDOW_NODE_DOMAIN, WINDOW_EMPTY_DOMAIN)
+}
+
+/// [`palw_rule_e_open_window_above_v1`] with the leaf encoding and tree domains a leaf version uses (v3: RFC-0018).
+pub(crate) fn palw_rule_e_open_window_above_with(
+    window: &[PalwRuleEClaimRecordV1],
+    fork_blue_score: u64,
+    leaf: fn(&PalwRuleEClaimRecordV1) -> Hash64,
+    node: &[u8],
+    empty: &[u8],
+) -> PalwRuleEWindowOpeningV1 {
     let first_above = window.partition_point(|r| r.accepted_blue_score <= fork_blue_score);
     let lo = first_above.saturating_sub(1);
-    let leaves: Vec<Hash64> = window.iter().map(record_leaf).collect();
+    let leaves: Vec<Hash64> = window.iter().map(leaf).collect();
     let mut proof = Vec::new();
-    prove_range(&leaves, lo, window.len(), WINDOW_NODE_DOMAIN, WINDOW_EMPTY_DOMAIN, &mut proof);
+    prove_range(&leaves, lo, window.len(), node, empty, &mut proof);
     PalwRuleEWindowOpeningV1 { lo: lo as u32, records: window[lo..].to_vec(), proof }
 }
 
@@ -374,6 +399,18 @@ pub fn palw_rule_e_verify_window_above_v1(
     ext: &PalwRuleELeafV2Ext,
     fork_blue_score: u64,
     opening: &PalwRuleEWindowOpeningV1,
+) -> Result<Vec<PalwRuleEClaimRecordV1>, PalwRuleELeafV2ErrorV1> {
+    palw_rule_e_verify_window_above_with(ext, fork_blue_score, opening, record_leaf, WINDOW_NODE_DOMAIN, WINDOW_EMPTY_DOMAIN)
+}
+
+/// [`palw_rule_e_verify_window_above_v1`] with the leaf encoding and tree domains a leaf version uses (v3: RFC-0018).
+pub(crate) fn palw_rule_e_verify_window_above_with(
+    ext: &PalwRuleELeafV2Ext,
+    fork_blue_score: u64,
+    opening: &PalwRuleEWindowOpeningV1,
+    leaf: fn(&PalwRuleEClaimRecordV1) -> Hash64,
+    node: &[u8],
+    empty: &[u8],
 ) -> Result<Vec<PalwRuleEClaimRecordV1>, PalwRuleELeafV2ErrorV1> {
     if fork_blue_score < ext.window_floor_blue_score {
         return Err(PalwRuleELeafV2ErrorV1::ForkBelowWindow);
@@ -396,15 +433,7 @@ pub fn palw_rule_e_verify_window_above_v1(
     if opening.records.iter().skip(usize::from(boundary)).any(|r| r.accepted_blue_score <= fork_blue_score) {
         return Err(PalwRuleELeafV2ErrorV1::BadRange);
     }
-    let root = root_from_range(
-        n,
-        lo,
-        n,
-        &mut opening.records.iter().map(record_leaf),
-        &mut opening.proof.iter().copied(),
-        WINDOW_NODE_DOMAIN,
-        WINDOW_EMPTY_DOMAIN,
-    )
+    let root = root_from_range(n, lo, n, &mut opening.records.iter().map(leaf), &mut opening.proof.iter().copied(), node, empty)
     .ok_or(PalwRuleELeafV2ErrorV1::BadRange)?;
     if root != ext.window_root {
         return Err(PalwRuleELeafV2ErrorV1::RootMismatch);

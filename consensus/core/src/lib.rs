@@ -344,6 +344,8 @@ pub mod palw_fork_choice;
 pub mod palw_fork_choice_commitment_v1;
 /// ADR-0178 × RFC-0009 L2: the rule-E fields of the fork-choice leaf v2 — the window and registry trees, openings, the client's pair.
 pub mod palw_fork_choice_rule_e_leaf_v2;
+/// **RFC-0018 GAP-R4: the rule-E leaf v3** — header-committed rule E v2 capital and Gate C certification state (dormant).
+pub mod palw_fork_choice_rule_e_leaf_v3;
 /// ADR-0178: rule E — the fork choice weighs exclusive pasts, bonded participation first (`palw_fork_choice_rule_e_v1`, dormant).
 pub mod palw_fork_choice_rule_e_v1;
 pub mod palw_fp_admission_v3;
@@ -532,6 +534,10 @@ pub mod palw_model_eligibility_v1;
 /// **ADR-0179 — model tiers** (user decision 2026-10-15, round 4; dormant fence `palw_model_tier_v1`): `ApprovedModels(h)` (genesis +
 /// annual fork lists, add-only) at 1.0, every other registered model permanently 0.3, applied once in the allocation weight.
 pub mod palw_model_tier_v1;
+/// **RFC-0019 — the annual model catalog** (the value of `palw_model_tier_v1`, dormant): `ApprovedModels(h)` is an add-only chain of
+/// catalogs (genesis = edition 0) chained by `previous_catalog_root`, each edition activating at its own DAA; canonical encoding and
+/// root, chain validation, `annual_catalog_active_at`, `model_tier_permille` and the node's catalog status.
+pub mod palw_annual_catalog_v1;
 /// RFC-0015: the Panel=0 (`OptimisticPublicVerification`) fence `palw_panel_free_v1` — dormant, no height, refused when armed.
 pub mod palw_panel_free_v1;
 pub mod palw_panel_lifetime_v2;
@@ -1016,6 +1022,8 @@ pub mod palw_tir_public_fp_envelope_v1;
 pub mod palw_native_state_anchor_v39;
 
 pub mod palw_native_master_v39;
+pub mod palw_native_mining_v39;
+pub mod palw_native_receipt_v39;
 
 pub mod palw_prospective_kernel_material_v4;
 

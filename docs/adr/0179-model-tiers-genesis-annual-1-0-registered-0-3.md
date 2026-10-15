@@ -68,6 +68,7 @@
 * **配分:** `PalwBondBudgetStateV1::roll_epoch_v3_tiered`(fold は tier fence 以後で使う)。
 * **RPC:** registry 行(wire version 4、`RpcPalwModelLifecycle` の proto field 46/47、この message 内の番号)に `modelTier` と `modelTierPermille` を載せる。
 * **新しい番号:** object tag、kernel inner kind、aux table、RPC op、`messages.proto` 番号はいずれも割り当てていない。
+* **RFC-0019 による置き換え(2026-10-15、branch `integ/rfc0019-annual-catalog`):** fence の値の genesis list と年次 list は、[RFC-0019](../rfc/0019-annual-model-upgrade.md) の年次モデルカタログの連鎖 `PalwModelTierFenceV1::catalogs`(`AnnualModelCatalogV1` を `previous_catalog_root` でつなぐ。genesis = edition 0)に置き換えた。並行する list は残さない。階層の API(`palw_model_tier_v1`、`_at_v1`、`_of_model_v1`、`palw_model_tier_of_v1`、係数・重み・cap)は呼出元から見て不変。`PalwTierSourceV1::AnnualFork` は `index` ではなく `edition` を持つ。identity では、まだ有効でない edition を中身ごと外し(旧新の build が切替まで同じ identity)、fork id は各 edition の高さで gate する(RFC-0019 §7.2–7.3)。上の「追加のみ」の検査は、連鎖全体での class id の一意性・root の連鎖・高さの厳密な増加として連鎖の検証に入った。
 
 ## 試験 source
 
