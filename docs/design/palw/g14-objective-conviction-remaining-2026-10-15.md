@@ -1,0 +1,227 @@
+# G14: 客観的裁定・slash・ブロック生成／報酬拒否までの残作業
+
+更新日: 2026-10-15。対象workspace: `codex/integration-followup`。
+部品実装の基準保存点は WIP `0909ad5add2c2d696d9a131db297f67f350d85a0`。
+その後の新claim frame・native接続も実装途中のWIPであり、保存済みでも完成分には数えない。
+本書と追加ソースの保存点は、このファイルのgit履歴で確認する。
+本書は新経路の本番有効化や`pre`へのpushを許可するものではない。
+正式なnative設定の下で経路が実行可能になることと、shipping presetのfenceを有効化する判断は区別する。
+
+## 停止時点の引継ぎ
+
+2026-10-15、ユーザーの「ここまでで作業を完了して残作業をmdに残してpush」の指示により、ここで実装作業を停止する。
+**完了したのは今回の保存・引継ぎであり、G14全体ではない。** 全担当の編集を凍結し、未検証のWIPとして作業ブランチへ保存する。
+`pre`への反映・本番fence有効化・未統合branchの取込みは行わない。
+
+### 今回追加したソース（未検証）
+
+- `49794e9a7`では、元claim frame、署名付きcontrol／grant、atomic Valid＋S4＋raw grant＋Ready、producer exposure／保持／復元索引、native Rules／network domainの接続候補を保存した。
+- その後の保存対象は、元FPを包む`TFP1` bounded envelope、isolation／header-contextの元FP view、実carrierとの対応付け、元FPの通常予約後に同じatomic objectでframeを保存する経路、旧bundleの二重要求回避である。
+- 新しいoriginal／owner Openのrentをnative planから照合し、外側transactionの実feeで不足・未価格sentinelを拒否するソースを追加した。rent宣言をUTXOのcollectible feeから控除し、self-miningでその宣言額がそのまま戻らないよう接続する候補も追加した。
+- canonical foldには、受理に成功した元FPのcompanionだけを渡す。別の同claim transaction、拒否されたcarrier、後続の重複carrierのpledgeを貸し借りしないための処理である。
+- 上記はコンパイルも実行もしていない。構文／書式と差分検査だけであり、実料金の徴収・native受理・経済結果・期限内完走の証拠ではない。
+
+### 再開時に先に確認する具体的な穴
+
+1. 追加一式の型・全struct literal・enum／wire manifest pin・通常fee consumerをソース段階で揃える。G14の残りのコード実装を終えるまでは、ユーザー指定どおりbuild／testを始めない。
+2. `TFP1`のrent宣言、実UTXO fee、burn、producer／owner deposit、同一transactionのnative受理を通しで監査する。現時点では実徴収済みとは扱わない。
+3. `utxo_validation.rs`の`finality_fee += validated_tx.calculated_fee`は控除前額の分類である。新rent控除後のcollectible totalとの整合、EVM depositを併せ持つcarrier、他transactionの通常feeを巻き込む配分がないことを、template／Round／coinbaseと同じ規則で解決する。総feeから控除しただけで全配分の整合まで証明したことにはしない。
+4. 新envelopeは通常FP payloadのstrict decoderであり、Evalの追加tail等の別codecをまだ扱わない。全nested job-tail Vecの割当前上限も未監査である。外側48 KiB上限と一部preflightだけで全nested allocationが安全とはしない。
+5. context再導出helperのD=0拒否と、既存native routeが許す元FP形式・job種別・decode countの範囲を照合する。新carrierが合法な元形式を黙って落とす場合、対象を狭めて完成扱いせず対応を足す。
+6. V3/V4のtyped grant、共通filerからnative terminal、小さいrooted裁定参照／大witness搬送、実slash、生成資格と受信block拒否、全報酬consumerを完成させる。
+7. native worker／queue／inclusion、実CPU予約・反復上限、最大profile、GC、IBD／pruned import、再編で孤立した物理workのjournalを閉じる。
+8. R1〜R8の実装を全対象で揃えた後にV1〜V7をまとめて実行する。追加した未実行テストソースや別branchの結果を、今回の完成証拠に置き換えない。
+
+## 1. 到達すべき状態
+
+> producerとPanel全員が共謀しても、active planがcoverする計算不正・job/input/output/state/DA違反について、
+> Panel外の1人の適格なpublic bonded verifierが、producerの秘密状態やPanelの協力を使わず、
+> 公開・認証済みmaterialから局所化・客観的裁定・責任追及を完遂できる。
+
+ユーザーが示した具体例も、次のように成立させる。
+
+1. 計算と一致しないclaimをminerが提出する。
+2. 1人でも正しい検証者が、自分の登録モデルのコピーで不一致を確認する。
+3. その1人が、他のPanelの承認・投票・証拠提供を必要とせず、共通の告発経路で公開証拠を提出する。
+4. native courtが決定論的に違反を認定する。非応答なら、計算不正を推定せずDA/defaultを認定する。
+5. 認定を実際のclaim無効化、責任のあるbondのslash、当該不正claim／失効したbondに基づくブロック生成資格・work weight・報酬の拒否へ反映する。
+
+「正しいPanelが1つ」は、他の全員が反対しても**1人の正しい検証者から追及できる**という要件として扱う。
+全Panelが不正なら、Panel外のpublic bonded verifierが同じ終局へ到達しなければならない。
+
+### 判定してよいこと／いけないこと
+
+- 判定対象は、実行した時間やCPU使用履歴ではなく、登録された検証関係に対する具体的な不一致・違反である。
+- 計算を省略したminerでも、観測できる違反がなく結果が正しい場合、「計算しなかった」という行為だけをこの経路で立証・slashできるとはしない。今回の例は、計算と一致しないことを検証者が確認できた場合である。
+- サンプリングで全不正が必ず発見されるとはしない。ただし、active planの対象である具体的な不一致を発見した後の裁定を、Panel投票へ戻してはならない。
+- 正しい登録モデルのコピーを検証者が入手していることは前提とする。producerの実行時の秘密状態は不要にする。モデルの配布可否を合意で監査・処罰する機構は追加しない。
+- ここでいう「立証」は、公開materialの同一性認証と局所的な決定論的裁定である。LLM計算の暗号学的な正当性証明は使用しない。[PRINCIPLES §8](../../PRINCIPLES.md)と[AGENTS.md](../../../AGENTS.md)に従う。
+
+## 2. 現在地と、完成に数えていないもの
+
+既存コードには、公開証拠の分割搬送、元sourceの認証、小分け取得、own-model再計算、局所predicate、native stateへの差分適用／巻き戻し、準備／Ready、再開用索引、資源quoteの部品がある。
+しかし、新経路はまだnative受理・支払い・資格・徴収・終局へ一貫して接続されていない。**G14全体は未達成であり、生成・報酬拒否まで動作する状態とは扱わない。**
+
+| 現在あるもの | 残っている境界 |
+| --- | --- |
+| original TIR source認証・取得・再計算・局所predicate | findingをnative courtの確定した違反／棄却へ変換し、実際の制裁と結ぶ経路が未完 |
+| FullSUM allocation planner | `Complete`は部品の資源導出だけ。実際の料金徴収・担保確保・native admissionの成立ではない |
+| claim単位の準備期限、Ready、literal defaultのkernel | 署名付きcarrier、native資格、通常nodeキュー、実際の徴収が未接続 |
+| 再開用のprepared capture／索引 | native lease・Ready・GCとの運用接続、最大サイズと再開期限の実測は未完 |
+| 新しい元claim frame、保持・producer exposure・復元索引、元FPとのatomic受理の候補実装 | `0909ad5ad`後のWIP。transaction pairingと実料金検査をソースで接続した段階で、支払い済みstandingの実動作は未検証 |
+| bounded署名付きcontrol／grant carrier、tag 170／171、TFP1、独立fence・native foldの候補実装 | nativeネットワーク設定・通常入口・料金・burn・enum全体の整合と回帰は未検証。稼働する受理経路の完成ではない |
+| 追加した回帰テストのソース | 未実行。syntax／差分検査を、コンパイル・試験・実ネットワークの証拠に数えない |
+
+過去の別commit・別branchの試験結果は、この保存点と作業中差分の通し検証ではない。
+登録モデルからの告発試験も、起動しただけ／実行中／局所不一致の発見だけでは完成に数えない。
+
+### 今回のソース接続で採用した境界
+
+- 元FP受理時のmandatory preparerはproducerのみ。実Panelは通常のnative PanelBound時に一度固定し、drawn seatであるだけではcustody義務・slash権限を発生させない。
+- drawn seatは既存の元予算で準備作業を先行できるが、資格は**同じnative objectでのexact Valid receipt、実S4 lock、distinct raw grant、準備済みReadyのatomic受理**で初めて追加する。途中失敗でcreditだけを残してはならない。
+- grantやowner Openで元の準備期限・horizonを延ばさない。ownerの取得・work・元frame再検査は別途料金・depositを必要とし、元producer予算をownerごとに複製しない。
+- 現在のcarrier候補はwhole-job V2 receipt用。V3/V4のsegment／shard署名をV2署名へ読み替えず、新frameから未対応入口を拒否する。これは迂回防止であり、V3/V4対応完了ではない。
+- FullSUMにはframeの成長、old/new rowとjournal、再検査、署名検査回数・state参照数の上限を載せる。ただし、実native処理の反復回数制限・crypto予約・MLDSAのCPU料金／最悪時間は未接続・未実測である。回数を載せただけではCPU期限保証やG14 qualificationにならない。
+
+## 3. 実装の残作業
+
+以下は達成条件であり、単にAPIやテスト名を追加しただけでは完了しない。
+
+### R1. 元claimのnative受理・資金・保持を一本化する
+
+- [ ] generic arithmetic-only TIRも含め、元のpublic FP commitment、登録class/layout、binding、source、FullSUM、絶対期限を同じ受理文脈で固定する。
+- [ ] resource identityと、受理DAAを含むallocation identityを区別し、元署名・元job・元input/output/state・artifactの差し替えを拒否する。
+- [ ] 実際の料金とdeposit、producerのexposure、必要なbond exit hold、source保持を確保してから、frameと準備状態をatomicにrootへ反映する。
+- [ ] 構造的に正しいquote、署名、deserialize済みrow、旧ClaimBundleの支払いを、新FullSUMの支払い済みstandingに読み替えない。
+- [ ] 個々のownerの追加acquisition／workと、元claimのprepaid poolを分離する。複数ownerが同じ支払いを無制限に複製できず、攻撃者の先取りで正直な1人を排除しない料金・容量規則を完成する。
+
+### R2. 署名付き搬送と全native入口を接続する
+
+- [ ] 元FP envelope、Open、Preparation、Acquisition、RawValidGrantを、独立したprospective fenceの下で実装する。既存claimの料金・期限は変更しない。
+- [ ] claim、source、元allocation、owner固有row、reserved DAA、turn、actorを署名へ結び付ける。元allocation IDと`descriptor.allocation_id_v1(owner_contract)`を混同しない。
+- [ ] bounded codec、正しいbond鍵、domain、transaction pairing、重複・再送・期限・reorgの検査を実装する。
+- [ ] isolation／header検査、mempool、blockからの抽出、native fold、fee検査、import／recoveryを同じ規則で接続する。下位fenceでも旧履歴の判定を変えない。
+- [ ] senderの自己申告上限ではなく、nativeに固定されたbyte／count上限で、割当て前のdecodeを制限する。
+- [ ] 新kindのbounded fixture、wire manifest pin、通常carrier分類、署名検査、fee／massの全consumerを揃える。tagを確保しただけでwire統合完了にしない。
+
+### R3. Validの資格と担保を、元署名に結び付ける
+
+- [ ] 旧ClaimBundleに依存せず、実際にnativeで認められる**同一の署名済みValid receipt**と、新しいraw-source custody grantを照合する。
+- [ ] Panel所属、Sampled、旧history grant、未credit receiptだけでは、新しいraw custody義務・slash権限を発生させない。
+- [ ] grantを認める前に、実際に徴収できる担保と元horizonまでのholdを確保する。既存担保金額の規則を勝手に変えない。
+- [ ] 元claim受理時はproducerの署名しかない点を扱う。後続grantの義務追加を、元期限・元planを変えずに配線する。
+- [ ] late grantに、完了不可能なcold preparation期限を課さない。採用した先行準備＋atomic grant／Readyを、実nodeの準備worker・carrier・元予算・実担保へ通し、固定期限内に成立させる。候補helperの存在だけでは完了しない。
+- [ ] whole-job V2に加え、実際に有効なV3/V4等のtyped receipt／grantを、元のsegment／shard署名domainのまま接続する。未対応入口の拒否を「全receipt対応」と数えない。
+- [ ] owner Open時のliteral責任集合を確定し、後からのgrantで過去の継続処理を壊したり、過去の責任を増やしたりしない。再編時は現在のnative根拠と照合する。
+- [ ] 既存grantの署名、exact receipt、credit DAAを保持し、単にsigner集合が増えたことだけで不正なcontract置換を認めない。
+
+### R4. 1人の検証者による検出・局所化を全対象へ通す
+
+- [ ] 正しいPanelの1人とPanel外の1人が、同じ検証関係・同じ客観的裁定へ到達する共通filerを使えるようにする。
+- [ ] own-modelで得た不一致と、元claimの認証済みmaterialを結び付け、producerの秘密capture・秘密checkpoint・秘密状態の注入を排除する。
+- [ ] 計算、job、input、output、stateの各違反を既存の決定論的courtへ接続する。局所findingを、そのままportableな有罪certificateと扱わない。
+- [ ] claim、class、artifact、position、selector、sample／top-k等の意味、依存cone、元inputの完全なbindingを確認する。
+- [ ] 部分receiptや単一leafだけで、本来必要な依存閉包の認証・再計算を済ませたことにしない。
+- [ ] `Need`、一時的取得失敗、予算不足、EOF、`NoFault`、`PredicateHolds`を、計算有罪またはclaim全体の正しさへ読み替えない。
+
+### R5. DA非応答を実際の徴収まで到達させる
+
+- [ ] 元pledge／qualified grantから、回答義務のあるliteral signerと期限を確定する。
+- [ ] PreparationDefaultと、その後のReady済みactorに対するDA defaultを分離する。known non-Readyへ不可能なDA義務を繰り返し発行しない。
+- [ ] kernelのdefault effectを、nativeの既存経済規則・実bond lock・残高変更・会計へ接続する。効果オブジェクトを返すだけでは徴収完了ではない。
+- [ ] 担保がなく既存helperが徴収をskipした場合を、徴収成功と数えない。必要なlockの不在を受理時に防ぎ、終局時は実際の徴収額を確認する。
+- [ ] 同じ義務の徴収は1回のみとし、再送・複数告発者・再編・再開で二重徴収しない。無関係なPanel席や外部verifierを処罰しない。
+- [ ] sourceが出ない場合でも、他のPanelの署名や多数決なしで、1人のpublic bonded verifierが客観的DA終局へ到達できるようにする。
+
+### R6. 裁定結果をclaim・ブロック生成・報酬へ反映する
+
+- [ ] 計算違反の確定から、native claim無効化と責任のあるproducer／Valid bondの実slashまでを接続する。
+- [ ] 不正claimや失効したbondを使った生成資格・claim-backed work・block opportunityが、テンプレート生成だけでなく、受信blockの検証・合意受理でも拒否されることを保証する。
+- [ ] work weight、Final weight、coinbase、model配分の対象額、escrow、FinalReward等、当該不正を根拠に支払う全経路を照合し、既存方針どおり拒否／失効／保留を反映する。
+- [ ] 報酬・担保が経済的Finalへ逃げる前に裁定できるhold／windowを維持する。支払済み・使用済み資産を、後から存在しないclawbackで回収できる前提にしない。
+- [ ] EXEC root／slice／riderでは、元claimの違反を依存するsuffix・root・支払いへ伝播させる。無関係な仕事まで無条件に無効化しない。
+- [ ] 保留中の有効な告発、期限、棄却、返金、再編と再評価を同じnative状態で整合させる。正しいclaimは正常終了・支払いできるようにする。
+
+**「slashできる」だけでは、この節は完了しない。** 生成資格／block検証と各報酬consumerの実際の拒否結果が必要。
+既に受理したblockやFinal後の処理は、既存のfork-choice／liability方針へ正確に従う。文書だけで過去blockの扱いを決めたことにはしない。
+
+### R7. 全family・最大サイズで資源と期限を閉じる
+
+- [ ] preparationとowner workの別予算、RAM、artifact inventoryのresident tree、disk、sealed＋partial索引、IO、hash、parser、copy、演算、署名検査、carrier、court、terminal、再開をFullSUMへ反映する。
+- [ ] 合計金額を払っただけでなく、各actorの実work上限へ予算を配線する。Panelが外部verifierのprotected laneを消費できないようにする。
+- [ ] 固定された元preparation期限と、warm response／WorkDebit／part搬送の局所期限を両方満たす。colluderの合法な最大遅延を積み重ねても全体horizonを超えないようにする。
+- [ ] 実nodeのキュー、backpressure、inclusion容量、bonded verifierの参加枠を配線し、他owner・他claim・悪性送信者の負荷で完走が壊れない条件を定める。
+- [ ] 全体mapのclone／state root／GCの増幅、複数active claimの同時RAM・disk、native sweepの処理量を扱う。1rowや64件pageの上限だけで全体有界とはしない。
+- [ ] 新frame、元public commitment、後続grant、delta／journalの実際のfootprintを13資源次元と照合する。新しいrowを追加した後も、以前のquoteで全量を払えたと仮定しない。
+- [ ] admission／rehearsal／canonical foldで繰り返す署名検査・frame再検査を実際に予算化する。宣言した検査回数の上限をnative処理で守り、CPU料金／最悪処理時間が不明な部分を0扱いせず、期限条件の不足として残す。
+- [ ] 大きなwitnessを既存の小さいterminal上限へ黙って切り詰めない。明示的に資金化した分割搬送、またはnative incremental courtから小さいrooted certificateを作る経路を完成する。
+- [ ] `Incomplete`、overflow、サイズ拒否を「そのfamilyは完成」に数えず、元の対象範囲を満たす経路を実装する。
+
+### R8. 再開・pruning・reorgと通常node運用を閉じる
+
+- [ ] prepared descriptorと実際のnative Ready、元material TTL、保持ticket、通常worker、native権限付きGCを結ぶ。
+- [ ] Tiled reopenの全D IDs再認証が必要な場合、その時間・IO・carrier・RAMを最大条件で処理する。N再走査を避けただけで完走としない。
+- [ ] process再開・複数processのcache共有・破損・partial generation・期限前後のcleanupを扱い、正しい公開materialを早期削除しない。
+- [ ] canonical work counterの巻き戻しと、既に行った物理的な孤立fork作業を区別する。durable journalと有限recovery規則、または明示されたreorg前提なしに、restartで予算が復活しないと保証しない。
+- [ ] fresh node、IBD、pruned importでも、元claim・資格・raw bytes・証拠・期限・責任を現在のnative状態から復元できるようにする。
+
+## 4. 全familyの完了表を作る
+
+以下は対象の棚卸しであり、存在する部品を再実装する指示ではない。各active planについて、実際の登録値・最大profile・predicate・公開source・court・slash・生成／報酬consumerを対応付ける。
+
+| 対象 | 必要な確認 |
+| --- | --- |
+| legacy V2 Panel route／legacy計算 | 1 honest seatと全Panel共謀の両方。旧filer・held DA・Final前後からnative終局まで |
+| native TIR arithmetic-only | semantic bundleがなくても、元claim受理から局所化・court・徴収・consumer拒否まで |
+| TIR Flat／Tiled、dense／folded source | 元domain・全ID EOF・tile／step境界・最大サイズ。quote対応とlive route対応を混同しない |
+| Constraint／job／input／output | active planが認めるselector、greedy／top-k／sampling、prompt／tokenizer／grammar等の意味を保持 |
+| Prefix／state | legacy・TIRの元state、境界、carry／history、依存閉包。producer秘密checkpointを必要としない |
+| Float32 route | 実際のFloat32意味とsourceに対応するcourt。整数TIRの部品があるだけで対応済みとしない |
+| Tokenizer／artifact binding | claim固有の必要証拠を裁けること。モデル配布義務への置き換えはしない |
+| kernel／OPV、EXEC、generative／pipeline等 | その経路で実際に有効なplanを棚卸しし、root／sliceと全経済consumerを照合する。未対応を隠して除外しない |
+
+未統合のADR・RFC-0016実装・RFC-0017 branchは、このworkspaceへ取り込まない指定を維持する。
+ただし、生成資格／配分等がそれらの正式interfaceに依存する場合は、依存と未完了consumerを記録し、G14の完成証拠として代用しない。
+
+## 5. 実装後にまとめて行う検証
+
+ユーザー指定の順序は、**残りのコード実装を先に揃え、その後に一括検証**。この文書作成ではbuild／testを開始していない。
+
+| 検証 | 必須の終局／観測結果 |
+| --- | --- |
+| V1 コンパイル・既存回帰・境界decode | 変更一式のbuild、関連crate・既存挙動・新carrier／import／fenceの回帰。syntax検査では代替不可 |
+| V2 正しい1 seat、他全員不正 | 正しい1人のfilerが不一致からnative conviction、実slash、生成／報酬拒否まで到達 |
+| V3 producer＋全Panel共謀 | genesis特権・管理overrideなしの外部bond 1つ、自分のモデル、公開RPC／認証済みmaterialだけで同じ終局へ到達 |
+| V4 各違反familyとhonest twin | 計算・job・input・output・state・DAそれぞれの攻撃が正しい責任へ到達し、正当なclaimは棄却・返金・正常支払い |
+| V5 最大profile・資源・最大遅延 | 各familyの実最大値、全搬送、準備、再取得、最大合法遅延、容量競合で期限内終局。縮小profileや合成inputだけでは不可 |
+| V6 実ネットワークと経済会計 | 通常node／mempool／block受理で実施。block／claim／receipt／court／slash／coinbase等のIDと残高、weight、生成資格の変化を記録 |
+| V7 restart／IBD／pruned／reorg | 中断地点を変えて再開し、同じ裁定・1回だけの徴収・同じ最終会計へ復元。Final前後・TTL境界・他source混入も検査 |
+
+登録モデルの告発試験は、V2／V3のnative終局と経済結果まで揃って初めて、その対応範囲の完成証拠にする。
+検証ログはcommit・profile・native設定・実行command・node構成・期待値・実測値と結び付け、未完了／UNKNOWN／失敗を残す。
+検出確率や経済評価は、根拠のある値だけを報告する。計測していない成功率を置かない。
+
+## 6. 完成判定
+
+次の全てに証拠が揃うまで、G14全体を完成としない。
+
+- [ ] R1〜R8を対象の全active planへ接続し、未実装・休眠hook・未決の必須規則が残っていない。
+- [ ] 各対象の不一致／DA違反について、1人の検証者からnativeの確定裁定と徴収まで到達している。
+- [ ] 実際のblock生成資格／block検証／weight／全報酬consumerが裁定を消費している。
+- [ ] 正当なclaimの正常系、最大サイズ、共謀、再開・再編を含むV1〜V7が必要範囲で通っている。
+- [ ] fixtureだけのbond、テスト専用class許可、producerのprivate capture、手動state注入、fenceの不正overrideを完成証拠に使っていない。
+
+優先順は **R1〜R3のnative受理・資格 → R4〜R6の裁定と経済consumer → R7〜R8の全範囲閉包 → V1〜V7の一括検証**。
+R7の予算・期限条件はR1の元契約に必要なので、後付けで元horizonを伸ばすのではなく、受理実装と同時に固定する。
+
+## 7. コードと関連記録
+
+- [これまでの実装記録と未検証境界](g14-integration-followup-2026-10-15.md)
+- [activation readiness matrix](activation-readiness-matrix.md): 過去の結果・他laneの状況を含む。新経路の完了証拠として無条件に転用しない。
+- Source／work／Ready: `consensus/core/src/palw_tir_public_{source,owned,state,allocation}_v1.rs`
+- 元claim frame／署名搬送／元FP envelope／native fold候補: `consensus/core/src/palw_tir_public_{claim,carriage,fp_envelope,fold}_v1.rs`（WIP）
+- Custody: `consensus/core/src/palw_tir_public_custody_v1.rs`
+- 局所裁定: `consensus/core/src/palw_tir_objective_v1.rs`
+- Native状態・terminal: `consensus/core/src/palw_state_v2.rs`、`palw_staged_court_fold_v1.rs`、`palw_terminal_carriage_fold_v1.rs`
+- Node接続: `kaspad/src/palw_tir_acquisition_driver.rs`、`misaka/palw/tir/exec/src/node/{public_source,prepared_source}.rs`
+- block／経済consumer照合先: `consensus/src/pipeline/virtual_processor/processor/palw_accept.rs`、`consensus/src/processes/coinbase.rs`、`consensus/core/src/palw_weight{,_block,_cap_v1}.rs`、`palw_bond_budget_fold_v1.rs`

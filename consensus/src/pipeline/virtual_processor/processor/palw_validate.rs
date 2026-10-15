@@ -3769,6 +3769,22 @@ impl VirtualStateProcessor {
                         return Err("staged move is not signed by its literal reserver".into());
                     }
                 }
+                Obj::TirPublicControlV1 { control } => {
+                    if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
+                        continue;
+                    }
+                    // Admission and paid allocation checks remain the fold's.
+                    // A valid signature alone grants no original or owner standing.
+                    control.validate_native_signature_v1(self.palw_network_domain_v2(), state)?;
+                }
+                Obj::TirPublicGrantReadyV1 { grant } => {
+                    if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
+                        continue;
+                    }
+                    // The fold additionally authenticates the exact Valid receipt,
+                    // raw grant, native S4 lock and prepared descriptor atomically.
+                    grant.validate_native_signature_v1(self.palw_network_domain_v2(), state)?;
+                }
                 Obj::TirClassLayoutPublishedV1 { layout, .. } => {
                     // A-2: below its owning fence (`palw_staged_tir_route_v1`) the kind rides unjudged.
                     if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score)

@@ -3575,6 +3575,54 @@ where
     if !matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
         return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge: "SupplementaryReceipts" });
     }
+    validate_supplementary_receipt_set_v1(state, state_params, ctx, network_domain, claim_id, receipts, verify_mldsa87)
+}
+
+/// The new original TIR protocol accepts one signed, backed seat acknowledgement
+/// atomically with its distinct raw grant and Ready promise. It is NOT a licence:
+/// quorum, claim weight and the ordinary licensing doors remain unchanged.
+pub fn validate_public_custody_receipt_v1<V>(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    network_domain: Hash64,
+    receipt: &PalwSeatReceiptV2,
+    verify_mldsa87: V,
+) -> Result<(), PalwPanelV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    let claim = state.claim(&receipt.claim).ok_or(PalwPanelV2Error::MissingClaim(receipt.claim))?;
+    if crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, receipt.claim).is_none()
+        || !matches!(claim.phase, PalwClaimPhaseV2::PanelBound { .. } | PalwClaimPhaseV2::ReceiptLicensed { .. })
+    {
+        return Err(PalwPanelV2Error::WrongPhase { claim: receipt.claim, edge: "TirPublicGrantReady" });
+    }
+    validate_supplementary_receipt_set_v1(
+        state,
+        state_params,
+        ctx,
+        network_domain,
+        &receipt.claim,
+        std::slice::from_ref(receipt),
+        verify_mldsa87,
+    )?;
+    Ok(())
+}
+
+fn validate_supplementary_receipt_set_v1<V>(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    network_domain: Hash64,
+    claim_id: &Hash64,
+    receipts: &[PalwSeatReceiptV2],
+    verify_mldsa87: V,
+) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let duties = state.panel_duties_of(claim_id).ok_or(PalwPanelV2Error::NotOnDuty(*claim_id))?;
     let bound_daa = state.panel(claim_id).ok_or(PalwPanelV2Error::NoPanel(*claim_id))?.bound_daa;
     let receipt_deadline = bound_daa
