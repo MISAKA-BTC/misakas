@@ -1,4 +1,4 @@
-//! Source controls for object tag 170 and consumer v2's cell coverage (RFC-0006). Written for the consolidated validation phase; not
+//! Source controls for object tag 244 and consumer v2's cell coverage (RFC-0006). Written for the consolidated validation phase; not
 //! run here and not acceptance results.
 use super::*;
 use crate::config::params::{ForkActivation, MAINNET_PARAMS, TESTNET_PARAMS};
@@ -29,9 +29,9 @@ fn routed_accusation() -> PalwMemoryRoutingAccusationV2 {
     }
 }
 
-/// **Flags-off historical bytes**: tag 170 is new, dormant on every shipped preset, and leaves every older tag's encoding as it was.
+/// **Flags-off historical bytes**: tag 244 is new, dormant on every shipped preset, and leaves every older tag's encoding as it was.
 #[test]
-fn tag_170_is_dormant_and_old_tags_keep_their_bytes() {
+fn tag_244_is_dormant_and_old_tags_keep_their_bytes() {
     let object =
         PalwConsensusObjectV2::MemoryRoutingV2 { object: Box::new(PalwMemoryRoutingObjectV2::Accused { accusation: routed_accusation() }) };
     let encoded = borsh::to_vec(&object).unwrap();

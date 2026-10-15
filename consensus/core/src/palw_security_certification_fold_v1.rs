@@ -414,7 +414,10 @@ pub(super) fn sweep_security_certification_v1(
             } else {
                 PalwCertificationClaimFactsV1 {
                     still_final: claim.as_ref().is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::Final { .. })),
-                    accusation_pending: builder.state.palw_accusation_pending_v1(&claim_id),
+                    // G14 R6: an ORIGINAL TIR frame's conviction door is a pending prosecution for Gate C until it closes — the
+                    // decision waits (never a deadline failure), so no SecurityCertified credit precedes the last possible verdict.
+                    accusation_pending: builder.state.palw_accusation_pending_v1(&claim_id)
+                        || builder.state.palw_tir_public_prosecution_open_v1(&claim_id, now),
                 }
             };
             if let Some(outcome) = palw_certification_verdict_v1(&policy, &row, facts, now) {

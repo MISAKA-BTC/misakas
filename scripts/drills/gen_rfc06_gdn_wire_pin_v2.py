@@ -172,7 +172,7 @@ def main(variant="GdnStepAccusedV2", tag=243, label="RFC06 GDN data-membership/r
 
 if __name__ == "__main__":
     import sys
-    # `gen_rfc06_gdn_wire_pin_v2.py [VARIANT TAG]`: tag 243 by default; `MemoryRoutingV2 170` for the RFC06 GDN/router lane's carrier.
+    # `gen_rfc06_gdn_wire_pin_v2.py [VARIANT TAG]`: tag 243 by default; `MemoryRoutingV2 244` for the RFC06 GDN/router lane's carrier.
     if len(sys.argv) == 3:
         main(sys.argv[1], int(sys.argv[2]), "RFC06 router binding and checkpoint/routed accusations (consumer v2); source only")
     else:

@@ -26,7 +26,7 @@ pub enum PalwRfc0608FenceV1 {
     BeaconSourceOptInV1 = 4,
     /// RFC-0007: funded beacon source fee (`palw_beacon_source_fee_v1`).
     BeaconSourceFeeV1 = 5,
-    /// RFC-0006: anchored GDN step court and per-reader router binding (`palw_memory_routing_court_v2`, tags 170/243, aux 139).
+    /// RFC-0006: anchored GDN step court and per-reader router binding (`palw_memory_routing_court_v2`, tags 243/244, aux 139).
     MemoryRoutingCourtV2 = 6,
     /// RFC-0008: the once-only settlement registry across settlement consumers (`palw_settlement_once_v1`, aux 140).
     SettlementOnceV1 = 7,

@@ -3108,7 +3108,7 @@ impl<'a> TransitionBuilder<'a> {
 
     /// S4 on each literal covering signer, lock first; an already consumed offence or a
     /// signer without a slashable lock on this claim is skipped (never charged twice).
-    fn charge_covering_signers_v1(
+    pub(super) fn charge_covering_signers_v1(
         &mut self,
         conv: &PalwConvictionV1,
         claim_id: Hash64,

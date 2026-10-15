@@ -691,7 +691,7 @@ pub mod palw_step_refute;
 pub mod palw_gdn_state_map_v2;
 pub mod palw_gdn_court_v2;
 /// RFC-0006 consumer v2 (dormant, `palw_memory_routing_court_v2`): the immutable per-reader router binding (kernel-route aux 139)
-/// and object tag 170 — the binding declaration and the checkpoint-transition / convolution-window / routed-reader accusations.
+/// and object tag 244 — the binding declaration and the checkpoint-transition / convolution-window / routed-reader accusations.
 pub mod palw_memory_routing_v2;
 pub mod palw_router_binding_v2;
 pub mod palw_task_heads_v1;
@@ -1032,6 +1032,9 @@ pub mod palw_native_calibration_v39;
 pub mod palw_material_recovery_observation_v4;
 pub mod palw_material_session_enrollment_v4;
 pub mod palw_tir_public_custody_v1;
+pub mod palw_tir_public_carriage_v1;
+pub mod palw_tir_public_claim_v1;
+pub mod palw_tir_public_fp_envelope_v1;
 
 pub mod palw_native_state_anchor_v39;
 

@@ -32,6 +32,23 @@ impl PalwChainStateV2 {
         params: &PalwStateParamsV2,
         extras: &PalwTransitionExtrasV1,
     ) -> Result<u64, PalwStateV2Error> {
+        Self::staged_custodian_upper_v1(self.tir_classes.contains_key(&class_id), now, params, extras)
+    }
+    /// Class-independent native upper for a prospective REGISTERED TIR claim.
+    /// The claim adapter still checks registration and rederives this bound.
+    pub fn staged_registered_tir_maximum_custodians_v1(
+        now: u64,
+        params: &PalwStateParamsV2,
+        extras: &PalwTransitionExtrasV1,
+    ) -> Result<u64, PalwStateV2Error> {
+        Self::staged_custodian_upper_v1(true, now, params, extras)
+    }
+    fn staged_custodian_upper_v1(
+        registered_tir: bool,
+        now: u64,
+        params: &PalwStateParamsV2,
+        extras: &PalwTransitionExtrasV1,
+    ) -> Result<u64, PalwStateV2Error> {
         let flat = if params.panel_v3_rule_at(now) {
             u64::from(params.panel_v3().ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?.policy.seat_count)
         } else {
@@ -44,7 +61,7 @@ impl PalwChainStateV2 {
                     .ok_or(PalwStateV2Error::Overflow("prospective source shard custodians"))?,
             );
         }
-        if params.tir_shard_active_at(now) && self.tir_classes.contains_key(&class_id) {
+        if params.tir_shard_active_at(now) && registered_tir {
             maximum = maximum.max(u64::from(misaka_palw_panel::MAX_STRATIFIED_SEATS_V1));
         }
         maximum.checked_add(1).ok_or(PalwStateV2Error::Overflow("prospective source custodians"))
@@ -163,6 +180,34 @@ impl PalwChainStateV2 {
             .filter_map(|(_, claim, allocation)| self.staged_tir_acquisition_v1(*claim, *owner, *allocation))
             .map(|row| u128::from(row.owned.contract_v1().terms.plan.deposit_sompi))
             .fold(0u128, u128::saturating_add)
+    }
+    /// Original full-allocation escrow is distinct from both the ordinary FP
+    /// reservation and each outside owner's separately funded acquisition.
+    pub fn staged_tir_claim_exposure_v1(&self, producer: &PalwBondKeyV2) -> u128 {
+        self.staged_tir_claims_by_producer.range((*producer, ZERO_HASH64)..)
+            .take_while(|(bond, _)| bond == producer)
+            .filter_map(|(_, claim)| crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(self, *claim))
+            .map(|frame| u128::from(frame.plan_v1().terms.plan.deposit_sompi))
+            .fold(0u128, u128::saturating_add)
+    }
+    /// **G14 R5: an outside owner's demand on an ORIGINAL TIR frame is open** — a pending accusation (the one
+    /// `palw_accusation_pending_v1` predicate), so no non-fraud end closes the claim neutrally while the demanded custodians still
+    /// owe their answer or the owner its collection. Rows exist only past `palw_tir_public_conviction_v1`.
+    pub fn staged_tir_public_demand_open_v1(&self, claim: &Hash64) -> bool {
+        self.staged_tir_by_claim.get(claim).is_some_and(|rows| {
+            rows.iter().any(|(_, key)| match key {
+                PalwStagedCourtKeyV1::TirAcquisition(row_claim, owner, allocation) => self
+                    .staged_tir_acquisition_v1(*row_claim, *owner, *allocation)
+                    .is_some_and(|row| row.owned.active_v1().is_some()),
+                _ => false,
+            })
+        })
+    }
+    /// **G14 R6: an ORIGINAL TIR frame's d0 conviction door is still open at `now`** — `[accepted, collect_until)` of the frame's
+    /// own terms. Gate C waits on it (never a deadline failure), and the claim's `Final` floor is its close.
+    pub fn palw_tir_public_prosecution_open_v1(&self, claim: &Hash64, now: u64) -> bool {
+        crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(self, *claim)
+            .is_some_and(|frame| now < frame.plan_v1().terms.collect_until_daa)
     }
     pub fn staged_tir_source_until_v1(&self, claim: Hash64) -> Option<u64> {
         self.staged_tir_by_claim.get(&claim).and_then(|rows| rows.last().map(|(until, _)| *until))
@@ -3008,6 +3053,13 @@ pub(super) fn index_rows(
         // This dormant row is a source lease, not proof of a funded pledge or
         // qualified Valid grant. Native admission must establish signer holds.
         PalwStagedCourtRowV1::TirPreparation(row) => (row.preparation.contract_v1().material_until_daa, Vec::new()),
+        PalwStagedCourtRowV1::TirClaim(frame) => {
+            if key != frame.key_v1() { return (0, Vec::new()); }
+            let terms = frame.plan_v1().terms;
+            let holds = frame.custody_v1().liable_signers_v1().into_iter()
+                .map(|signer| (signer, terms.bond_exit_after_daa, key)).collect();
+            (terms.material_until_daa, holds)
+        }
     }
 }
 pub(super) fn update_indices(
@@ -3071,10 +3123,14 @@ pub(super) fn rebuild_indices(state: &mut PalwChainStateV2) {
     state.staged_flat_responders.clear();
     state.staged_history_responders.clear();
     state.staged_tir_by_owner.clear();
+    state.staged_tir_claims_by_producer.clear();
     state.staged_tir_by_claim.clear();
     state.staged_tir_responders.clear();
     state.staged_tir_preparers.clear();
     for (key, row) in &state.staged_courts {
+        if let Some(entry) = tir_claim_producer_index_v1(*key, row) {
+            state.staged_tir_claims_by_producer.insert(entry);
+        }
         if let Some((owner, claim, allocation, _)) = tir_index_metadata_v1(*key, row) {
             state.staged_tir_by_owner.insert((owner, claim, allocation));
             state.staged_tir_responders.extend(tir_response_index_rows_v1(*key, row));
@@ -3116,12 +3172,22 @@ pub(super) fn tir_source_index_metadata_v1(
     row: &PalwStagedCourtRowV1,
 ) -> Option<(Hash64, u64)> {
     match (key, row) {
+        (PalwStagedCourtKeyV1::TirClaim(claim), PalwStagedCourtRowV1::TirClaim(frame)) => {
+            (frame.key_v1() == key).then_some((claim, frame.plan_v1().terms.material_until_daa))
+        }
         (PalwStagedCourtKeyV1::TirPreparation(claim, allocation), PalwStagedCourtRowV1::TirPreparation(row)) => {
             let c = row.preparation.contract_v1();
             ((claim, allocation) == (c.claim, c.allocation_id)).then_some((claim, c.material_until_daa))
         }
         _ => tir_index_metadata_v1(key, row).map(|(_, claim, _, until)| (claim, until)),
     }
+}
+pub(super) fn tir_claim_producer_index_v1(
+    key: PalwStagedCourtKeyV1,
+    row: &PalwStagedCourtRowV1,
+) -> Option<(PalwBondKeyV2, Hash64)> {
+    let (PalwStagedCourtKeyV1::TirClaim(claim), PalwStagedCourtRowV1::TirClaim(frame)) = (key, row) else { return None };
+    (frame.key_v1() == key).then_some((frame.custody_v1().pledge_v1().producer, claim))
 }
 pub(super) fn tir_preparation_index_rows_v1(
     key: PalwStagedCourtKeyV1,
@@ -3149,6 +3215,10 @@ pub(super) fn tir_response_index_rows_v1(
     }).map(|signer| (*signer, pending.respond_until_daa, claim, owner, allocation, pending.turn, pending.demand_id)).collect()
 }
 fn update_tir_indices_v1(state: &mut PalwChainStateV2, key: PalwStagedCourtKeyV1, row: &PalwStagedCourtRowV1, insert: bool) {
+    if let Some(entry) = tir_claim_producer_index_v1(key, row) {
+        if insert { state.staged_tir_claims_by_producer.insert(entry); }
+        else { state.staged_tir_claims_by_producer.remove(&entry); }
+    }
     if let Some((owner, claim, allocation, _)) = tir_index_metadata_v1(key, row) {
         if insert {
             state.staged_tir_by_owner.insert((owner, claim, allocation));
@@ -3291,6 +3361,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::TirRawChunk(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::TirAcceptedBody(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::TirPreparation(row) => Some(row.preparation.contract_v1().material_until_daa),
+            PalwStagedCourtRowV1::TirClaim(frame) => Some(frame.plan_v1().terms.material_until_daa),
             _ => None,
         };
         if let Some(until) = tir_until {

@@ -317,13 +317,13 @@ impl PalwTirPublicSourceV1 {
         ids.filter(|ids| ids.source_id == self.source_id && ids.ids.len() == self.decode_count_v1() as usize)
             .ok_or_else(|| "TIR trace response needs IDs authenticated against this exact original source".into())
     }
-    fn row(&self, row: u32, root: Hash64, opening: &PalwStepOpeningV1, ids: &PalwTirPublicAuthenticatedIdsV1) -> Result<(), String> {
+    fn row(&self, row: u32, root: Hash64, opening: &PalwStepOpeningV1, rows_root: Hash64) -> Result<(), String> {
         if opening.leaf_index != u64::from(row)
             || opening.leaf_hash != root
             || opening.siblings.len() > PATH
             || crate::palw_step_leg::step_opening_root_capped_v1(u64::from(self.decode_count_v1()), opening, self.maximum_leaves)
                 .map_err(|e| e.to_string())?
-                != ids.rows_root
+                != rows_root
         {
             return Err("TIR public row opening does not reach the authenticated original rows root".into());
         }
@@ -337,8 +337,27 @@ impl PalwTirPublicSourceV1 {
         response: &PalwTirPublicResponseV1,
         ids: Option<&PalwTirPublicAuthenticatedIdsV1>,
     ) -> Result<PalwTirPublicAuthenticatedUnitV1, String> {
+        self.authenticate_with_rows_v1(request, response, ids, None)
+    }
+    pub(crate) fn authenticate_with_rows_v1(
+        &self,
+        request: &PalwTirPublicRequestV1,
+        response: &PalwTirPublicResponseV1,
+        ids: Option<&PalwTirPublicAuthenticatedIdsV1>,
+        native: Option<&PalwTirPublicRowsAnchorV1>,
+    ) -> Result<PalwTirPublicAuthenticatedUnitV1, String> {
         self.check_request_v1(request)?;
         self.check_response_bound_v1(request, response)?;
+        let rows_root = || -> Result<Hash64, String> {
+            if let Some(ids) = ids {
+                return Ok(self.ids(Some(ids))?.rows_root);
+            }
+            self.trace()?;
+            native
+                .filter(|a| a.source_id == self.source_id && a.trace_root == self.header.full_logits_trace_root)
+                .map(|a| a.rows_root)
+                .ok_or_else(|| "TIR trace response has no current native accepted-ID rows anchor".into())
+        };
         use PalwTirPublicRequestV1 as Q;
         use PalwTirPublicResponseV1 as A;
         match (request, response) {
@@ -378,11 +397,11 @@ impl PalwTirPublicSourceV1 {
                 }
             }
             (Q::RowsNode { level, index }, A::RowsNode { frontier, siblings }) => {
-                let ids = self.ids(ids)?;
+                let rows_root = rows_root()?;
                 crate::palw_tir_court_v1::palw_step_node_reaches_at_depth_v1(
                     DEPTH,
                     u64::from(self.decode_count_v1()),
-                    &ids.rows_root,
+                    &rows_root,
                     *level,
                     *index,
                     frontier,
@@ -391,7 +410,7 @@ impl PalwTirPublicSourceV1 {
                 .map_err(str::to_string)?;
             }
             (Q::TileNode { row, level, index }, A::TileNode { row_root, row_opening, frontier, siblings }) => {
-                self.row(*row, *row_root, row_opening, self.ids(ids)?)?;
+                self.row(*row, *row_root, row_opening, rows_root()?)?;
                 crate::palw_tir_court_v1::palw_step_node_reaches_at_depth_v1(
                     DEPTH,
                     u64::from(self.vocab).div_ceil(TILE_LANES as u64),
@@ -404,7 +423,7 @@ impl PalwTirPublicSourceV1 {
                 .map_err(str::to_string)?;
             }
             (Q::TraceTile { row, tile }, A::TraceTile { row_root, row_opening, lanes, opening }) => {
-                self.row(*row, *row_root, row_opening, self.ids(ids)?)?;
+                self.row(*row, *row_root, row_opening, rows_root()?)?;
                 crate::palw_step_refute::tiled_tile_authenticate_v1(
                     &self.context_hash,
                     *row,
@@ -536,6 +555,21 @@ pub struct PalwTirPublicAuthenticatedIdsV1 {
     source_id: Hash64,
     rows_root: Hash64,
     ids: Vec<u32>,
+}
+/// Native-view capability only. No public constructor, Clone or wire decoder.
+/// It authenticates rows identity, not generated IDs or model computation.
+pub(crate) struct PalwTirPublicRowsAnchorV1 {
+    source_id: Hash64,
+    trace_root: Hash64,
+    rows_root: Hash64,
+}
+impl PalwTirPublicRowsAnchorV1 {
+    /// Caller must resolve the CURRENT native owned pointer and exact rooted
+    /// accepted all-ID body before using this. A cache/serialized row is not an
+    /// authority for calling this crate-private native state boundary.
+    pub(crate) fn from_native_v1(source: &PalwTirPublicSourceV1, rows_root: Hash64) -> Self {
+        Self { source_id: source.source_id_v1(), trace_root: source.header.full_logits_trace_root, rows_root }
+    }
 }
 impl PalwTirPublicAuthenticatedIdsV1 {
     pub fn source_id_v1(&self) -> Hash64 {
@@ -820,6 +854,15 @@ mod tests {
         };
         let response = PalwTirPublicResponseV1::TraceTile { row_root, row_opening, lanes: tile_lanes, opening: tile_opening };
         check(&source, PalwTirPublicRequestV1::TraceTile { row: 0, tile: 0 }, response.clone(), Some(&ids));
+        let request = PalwTirPublicRequestV1::TraceTile { row: 0, tile: 0 };
+        assert!(source.authenticate_v1(&request, &response, None).is_err(), "wire material cannot mint a native rows anchor");
+        let native = PalwTirPublicRowsAnchorV1::from_native_v1(&source, ids.rows_root_v1());
+        assert_eq!(source.authenticate_with_rows_v1(&request, &response, None, Some(&native)).unwrap().response_v1(), &response);
+        let wrong = PalwTirPublicRowsAnchorV1::from_native_v1(&source, Hash64::from_u64_word(999));
+        assert!(source.authenticate_with_rows_v1(&request, &response, None, Some(&wrong)).is_err());
+        let (foreign, _) = geometry(8, 1);
+        let foreign = PalwTirPublicRowsAnchorV1::from_native_v1(&foreign, ids.rows_root_v1());
+        assert!(source.authenticate_with_rows_v1(&request, &response, None, Some(&foreign)).is_err());
         let PalwTirPublicResponseV1::TraceTile { mut row_opening, row_root, lanes, opening } = response else { unreachable!() };
         row_opening.leaf_index = 1;
         assert!(

@@ -433,6 +433,48 @@ pub fn build_fp_commitment_tx_with_original_public_v1(
     )
 }
 
+/// **G14 R1/R2: an ORIGINAL TIR frame's carrier (`TFP1`)** — the plain original FP commitment (signed and stateless-checked by
+/// [`build_fp_commitment_tx_with`], byte for byte), wrapped with its TIR binding header, the producer's signed source pledge and the
+/// exact native rent it declares. The declaration is burned from this carrier's fee by consensus, so `fee` must cover relay AND
+/// `declared_rent_sompi`; admission refuses a carrier that pays less or declares another amount than the native plan's rent.
+#[allow(clippy::too_many_arguments)]
+pub fn build_fp_commitment_tx_with_tir_public_original_v1(
+    signer: &dyn MessageSigner,
+    network_domain: Hash64,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    commitment: PalwFreePromptCommitmentV3,
+    prompt_token_ids: Vec<u32>,
+    price: FpCommitmentPriceV1<'_>,
+    header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    pledge: &kaspa_consensus_core::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1,
+    declared_rent_sompi: u64,
+    funding_outpoint: TransactionOutpoint,
+    funding: &UtxoEntry,
+    fee: u64,
+) -> Result<Transaction, String> {
+    if fee <= declared_rent_sompi {
+        return Err(format!("carrier fee {fee} does not cover the original TIR rent {declared_rent_sompi} it declares"));
+    }
+    let plain = build_fp_commitment_tx_with(
+        signer,
+        network_domain,
+        prompt_ids_form,
+        commitment,
+        prompt_token_ids,
+        price,
+        funding_outpoint,
+        funding,
+        fee,
+    )?;
+    let envelope = kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::new_v1(
+        plain.payload.clone(),
+        header.clone(),
+        pledge.clone(),
+        declared_rent_sompi,
+    )?;
+    build_funded_overlay_tx_with(signer, SUBNETWORK_ID_PALW_FP_COMMITMENT, envelope.encode_v1()?, funding_outpoint, funding, fee, false)
+}
+
 /// An external producer's original public envelope (version 2): the same original FP claim and
 /// pledge, plus the standing custody delegation both the producer and its node custodian signed.
 /// The delegation must name this producer and cover the pledged material horizon; admission

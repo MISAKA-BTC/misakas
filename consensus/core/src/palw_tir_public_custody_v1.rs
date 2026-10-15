@@ -93,6 +93,37 @@ impl PalwTirPublicCustodyPledgeV1 {
         }
         self.validate_signature_v1(executor_pubkey, verify)
     }
+    /// **The producer's unsigned pledge for a quoted plan** (G14 R1): the plan's source, resource plan and custodian upper, and
+    /// absolute clocks with room for acceptance up to `now_daa + (open door span)`: the pledge's `accept_until_daa` must lie after
+    /// the actual accepting DAA and its `material_until_daa` at or after the actual frame's (same spans from a later acceptance).
+    /// The caller signs [`Self::id_v1`] under [`PALW_TIR_SOURCE_PLEDGE_CONTEXT_V1`] with the producer bond's key.
+    pub fn for_plan_v1(
+        original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        plan: &crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1,
+        now_daa: u64,
+    ) -> Result<Self, String> {
+        let t = plan.terms;
+        let open_span = t.open_until_daa.checked_sub(t.accepted_daa).ok_or("quoted open door precedes its acceptance")?;
+        let material_span = t.material_until_daa.checked_sub(t.accepted_daa).ok_or("quoted material horizon precedes acceptance")?;
+        let accept_until_daa = now_daa.checked_add(open_span.max(1)).ok_or("pledge acceptance door overflows")?;
+        let material_until_daa = accept_until_daa.checked_add(material_span).ok_or("pledge material horizon overflows")?;
+        if crate::palw_freeprompt_v3::fp_claim_id_v3(original) != plan.original_claim {
+            return Err("quoted plan names another original claim".into());
+        }
+        Ok(Self {
+            version: 1,
+            claim: plan.original_claim,
+            producer: PalwBondKeyV2(original.job.executor_bond),
+            execution_root: original.execution_root,
+            job_identity: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original),
+            source_id: plan.source_id,
+            resource_plan_id: plan.resource_plan_id,
+            maximum_custodians: plan.acquisition.maximum_custodians,
+            accept_until_daa,
+            material_until_daa,
+            signature: Vec::new(),
+        })
+    }
     pub fn id_v1(&self) -> Hash64 {
         hash(
             b"misaka-palw/tir-source/pledge-id/v1",
@@ -246,6 +277,14 @@ impl BorshDeserialize for PalwTirPublicCustodyContractV1 {
     }
 }
 impl PalwTirPublicCustodyContractV1 {
+    /// Exact historical records, not just signer membership, must survive a
+    /// native update. This does not qualify new records or establish payment.
+    pub fn preserves_credited_v1(&self, old: &Self) -> bool {
+        self.pledge == old.pledge
+            && self.terms == old.terms
+            && self.drawn_panel == old.drawn_panel
+            && old.grants.iter().all(|(seat, record)| self.grants.get(seat) == Some(record))
+    }
     /// Native caller supplies the recomputed plan/source, actual drawn Panel and
     /// original bond public key. Signature verification does not prove payment.
     pub fn new_v1<F>(
@@ -383,6 +422,305 @@ impl PalwTirPublicCustodyContractV1 {
     }
 }
 
+/// The one actual native Panel binding, retained after ordinary Panel pruning.
+/// It is not an approval or a raw-source grant.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+pub struct PalwTirPublicOriginalPanelV1 {
+    pub anchor: Hash64,
+    pub bound_daa: u64,
+    pub seats: BTreeSet<PalwBondKeyV2>,
+}
+
+/// Exact original signed receipt and original native Ready. The raw grant and
+/// credit DAA remain in the containing old contract, with unchanged old codec.
+/// This public value is evidence data, never a deserializable credit marker.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+pub struct PalwTirPublicOriginalCreditV1 {
+    pub receipt: crate::palw_panel_v2::PalwSeatReceiptV2,
+    pub ready: crate::palw_tir_public_owned_v1::PalwTirPublicReadyV1,
+}
+
+/// Additive original-full-allocation custody. Existing custody wire bytes are
+/// unchanged; only the new original frame contains these additional records.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+pub struct PalwTirPublicOriginalCustodyV1 {
+    contract: PalwTirPublicCustodyContractV1,
+    panel: Option<PalwTirPublicOriginalPanelV1>,
+    credits: BTreeMap<PalwBondKeyV2, PalwTirPublicOriginalCreditV1>,
+}
+impl BorshDeserialize for PalwTirPublicOriginalCustodyV1 {
+    fn deserialize_reader<R: std::io::Read>(r: &mut R) -> std::io::Result<Self> {
+        use std::io::{Error, ErrorKind};
+        let invalid = |why| Error::new(ErrorKind::InvalidData, why);
+        let contract = PalwTirPublicCustodyContractV1::deserialize_reader(r)?;
+        let panel = match u8::deserialize_reader(r)? {
+            0 => None,
+            1 => {
+                let anchor = Hash64::deserialize_reader(r)?;
+                let bound_daa = u64::deserialize_reader(r)?;
+                let count = u32::deserialize_reader(r)?;
+                if u64::from(count).checked_add(1).is_none_or(|n| n > contract.pledge.maximum_custodians) {
+                    return Err(invalid("original TIR panel count exceeds frozen native upper"));
+                }
+                let mut seats = BTreeSet::new();
+                for _ in 0..count {
+                    let seat = PalwBondKeyV2::deserialize_reader(r)?;
+                    if seats.last().is_some_and(|old| *old >= seat) {
+                        return Err(invalid("original TIR panel keys are not canonical"));
+                    }
+                    seats.insert(seat);
+                }
+                Some(PalwTirPublicOriginalPanelV1 { anchor, bound_daa, seats })
+            }
+            _ => return Err(invalid("original TIR panel option is not canonical")),
+        };
+        let count = u32::deserialize_reader(r)?;
+        if count as usize > contract.grants.len() {
+            return Err(invalid("original TIR receipt count exceeds qualified grants before allocation"));
+        }
+        let mut credits = BTreeMap::new();
+        for _ in 0..count {
+            let seat = PalwBondKeyV2::deserialize_reader(r)?;
+            if credits.last_key_value().is_some_and(|(old, _)| *old >= seat) {
+                return Err(invalid("original TIR credit keys are not canonical"));
+            }
+            let receipt = crate::palw_panel_v2::PalwSeatReceiptV2 {
+                claim: BorshDeserialize::deserialize_reader(r)?,
+                verdict: BorshDeserialize::deserialize_reader(r)?,
+                seat_bond: BorshDeserialize::deserialize_reader(r)?,
+                signed_daa: BorshDeserialize::deserialize_reader(r)?,
+                signature: crate::palw_public_binding_v1::read_signature_v1(r)?,
+            };
+            let ready = BorshDeserialize::deserialize_reader(r)?;
+            credits.insert(seat, PalwTirPublicOriginalCreditV1 { receipt, ready });
+        }
+        let result = Self { contract, panel, credits };
+        result.check_v1().map_err(|e| invalid(e))?;
+        Ok(result)
+    }
+}
+impl PalwTirPublicOriginalCustodyV1 {
+    /// An original candidate starts with only the producer duty. Panel binding
+    /// and each raw Valid grant require separate native transitions afterward.
+    pub fn new_v1(contract: PalwTirPublicCustodyContractV1) -> Result<Self, String> {
+        if !contract.drawn_panel.is_empty() || !contract.grants.is_empty() {
+            return Err("original TIR custody imports a not-yet-native Panel or grant".into());
+        }
+        let result = Self { contract, panel: None, credits: BTreeMap::new() };
+        result.check_v1()?;
+        Ok(result)
+    }
+    pub fn contract_v1(&self) -> &PalwTirPublicCustodyContractV1 {
+        &self.contract
+    }
+    pub fn panel_v1(&self) -> Option<&PalwTirPublicOriginalPanelV1> {
+        self.panel.as_ref()
+    }
+    pub fn credit_v1(&self, seat: &PalwBondKeyV2) -> Option<&PalwTirPublicOriginalCreditV1> {
+        self.credits.get(seat)
+    }
+    pub fn credits_v1(&self) -> impl Iterator<Item = (&PalwBondKeyV2, &PalwTirPublicOriginalCreditV1)> {
+        self.credits.iter()
+    }
+    pub fn credited_daa_v1(&self, seat: &PalwBondKeyV2) -> Option<u64> {
+        self.contract.grants.get(seat).map(|(at, _)| *at)
+    }
+    pub fn grant_v1(&self, seat: &PalwBondKeyV2) -> Option<&PalwTirPublicCustodyGrantV1> {
+        self.contract.grants.get(seat).map(|(_, grant)| grant)
+    }
+    pub fn preserves_credited_v1(&self, old: &Self) -> bool {
+        self.contract.pledge == old.contract.pledge
+            && self.contract.terms == old.contract.terms
+            && old.panel.as_ref().is_none_or(|p| self.panel.as_ref() == Some(p))
+            && old.contract.grants.iter().all(|(seat, record)| self.contract.grants.get(seat) == Some(record))
+            && old.credits.iter().all(|(seat, record)| self.credits.get(seat) == Some(record))
+    }
+    pub fn check_v1(&self) -> Result<(), String> {
+        self.contract.check_v1()?;
+        let p = &self.contract.pledge;
+        let t = self.contract.terms;
+        if self.panel.as_ref().is_none_or(|panel| {
+            panel.anchor == Hash64::default()
+                || panel.bound_daa < t.accepted_daa
+                || panel.bound_daa >= t.material_until_daa
+                || panel.seats != self.contract.drawn_panel
+        }) && (!self.contract.drawn_panel.is_empty() || self.panel.is_some())
+        {
+            return Err("original TIR custody changes its one native Panel binding".into());
+        }
+        if self.credits.len() != self.contract.grants.len() {
+            return Err("original TIR custody lost exact signed receipt or Ready provenance".into());
+        }
+        for (seat, credit) in &self.credits {
+            let (at, grant) = self.contract.grants.get(seat).ok_or("original credit has no raw grant")?;
+            grant.check_receipt_v1(&credit.receipt)?;
+            if self.panel.as_ref().is_none_or(|panel| credit.receipt.signed_daa < panel.bound_daa)
+                || credit.ready.accepted_daa != *at
+                || credit.ready.descriptor.source_id != p.source_id
+                || credit.ready.descriptor.material_until_daa != t.material_until_daa
+                || credit.ready.descriptor.version != 1
+                || credit.ready.descriptor.manifest_digest == Hash64::default()
+                || credit.ready.work_receipt == Hash64::default()
+                || credit.ready.descriptor.retained_bytes == 0
+            {
+                return Err("original TIR custody substitutes native receipt, credit DAA or Ready".into());
+            }
+        }
+        Ok(())
+    }
+    fn check_native_claim_v1(&self, state: &crate::palw_state_v2::PalwChainStateV2, now: u64) -> Result<(), String> {
+        let p = &self.contract.pledge;
+        let claim = state.claim(&p.claim).ok_or("original TIR grant lost native claim")?;
+        if claim.bond != p.producer
+            || claim.execution_root != p.execution_root
+            || claim.accepted_daa != self.contract.terms.accepted_daa
+            || now < claim.accepted_daa
+            || now >= self.contract.terms.material_until_daa
+        {
+            return Err("original TIR custody substitutes native claim identity or original clock".into());
+        }
+        Ok(())
+    }
+    /// Native accepting context only; no caller-asserted Panel or callback.
+    /// Redraws cannot replace the frozen Panel or inherit credited signatures.
+    pub(crate) fn bind_original_panel_native_v1(
+        &mut self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        now: u64,
+    ) -> Result<(), String> {
+        self.check_v1()?;
+        self.check_native_claim_v1(state, now)?;
+        let native = state.panel(&self.contract.pledge.claim).ok_or("original TIR source has no actual bound native Panel")?;
+        let panel = PalwTirPublicOriginalPanelV1 {
+            anchor: native.anchor,
+            bound_daa: native.bound_daa,
+            seats: native.seats.iter().map(|seat| seat.bond).collect(),
+        };
+        if panel.seats.len() != native.seats.len()
+            || panel.bound_daa > now
+            || panel.seats.contains(&self.contract.pledge.producer)
+            || (panel.seats.len() as u64).checked_add(1).is_none_or(|n| n > self.contract.pledge.maximum_custodians)
+        {
+            return Err("native original TIR Panel exceeds paid upper or includes producer".into());
+        }
+        if let Some(old) = &self.panel {
+            return if *old == panel { Ok(()) } else { Err("original TIR source cannot inherit a redrawn Panel".into()) };
+        }
+        let mut next = self.clone();
+        next.contract.drawn_panel = panel.seats.clone();
+        next.panel = Some(panel);
+        next.check_v1()?;
+        *self = next;
+        Ok(())
+    }
+    /// The caller must first perform ordinary native SAME-object receipt
+    /// validation/credit and candidate `qualify_ready_v1`. This method then
+    /// verifies the concrete credited native duty + S4, native keys, original
+    /// V2 receipt signature, independent raw grant and exact original Ready.
+    /// It never licenses a claim, fabricates credit or imports a pending grant.
+    /// All candidate writes must commit or roll back together in the fold.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn qualify_original_native_v1(
+        &mut self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        source: &crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
+        preparation: &crate::palw_tir_public_owned_v1::PalwTirPublicPreparationV1,
+        receipt: &crate::palw_panel_v2::PalwSeatReceiptV2,
+        grant: &PalwTirPublicCustodyGrantV1,
+        now: u64,
+        native_network_domain: Hash64,
+    ) -> Result<(), String> {
+        self.check_v1()?;
+        self.check_native_claim_v1(state, now)?;
+        let p = &self.contract.pledge;
+        let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, p.claim)
+            .ok_or("raw Valid grant has no rooted original full allocation")?;
+        let plan = frame.plan_v1();
+        let panel = state.panel(&p.claim).ok_or("raw Valid grant has no actual native Panel")?;
+        let frozen = self.panel.as_ref().ok_or("raw Valid grant has no frozen original Panel")?;
+        let duty = state.panel_duties_of(&p.claim).and_then(|duties| duties.get(&receipt.seat_bond));
+        let lock = state.slashable_lock(receipt.seat_bond, p.claim).ok_or("raw Valid grant has no native S4 lock")?;
+        let ready = preparation.ready_v1(&receipt.seat_bond).ok_or("raw Valid grant has no atomic native Ready")?;
+        let Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirPreparation(previous)) =
+            state.staged_court_row_v1(&frame.preparation_key_v1())
+        else {
+            return Err("raw Valid grant has no native original preparation row".into());
+        };
+        let previous = &previous.preparation;
+        let mut expected_custodians = previous.contract_v1().custodians.clone();
+        expected_custodians.insert(receipt.seat_bond);
+        if frame.original_custody_v1() != self
+            || source.source_id_v1() != p.source_id
+            || plan.resource_plan_id != p.resource_plan_id
+            || panel.anchor != frozen.anchor
+            || panel.bound_daa != frozen.bound_daa
+            || panel.seats.len() != frozen.seats.len()
+            || panel.seats.iter().any(|seat| !frozen.seats.contains(&seat.bond))
+            || receipt.signed_daa < frozen.bound_daa
+            || duty.copied() != Some(now.max(1))
+            || lock.claim != p.claim
+            || lock.amount == 0
+            || lock.expiry_daa <= now
+            || preparation.contract_v1().claim != p.claim
+            || preparation.contract_v1().allocation_id != plan.allocation_id
+            || preparation.contract_v1().producer != p.producer
+            || preparation.contract_v1().drawn_panel != frozen.seats
+            || preparation.contract_v1().original_accepted_daa != plan.terms.accepted_daa
+            || preparation.contract_v1().preparation_until_daa != plan.preparation_until_daa
+            || preparation.contract_v1().material_until_daa != plan.terms.material_until_daa
+            || preparation.work_v1().allocation != plan.preparation_work
+            || preparation.work_v1() != previous.work_v1()
+            || previous.ready_v1(&receipt.seat_bond).is_some()
+            || previous.defaulted_v1(&receipt.seat_bond)
+            || previous.contract_v1().drawn_panel != frozen.seats
+            || preparation.contract_v1().custodians != expected_custodians
+            || ready.accepted_daa != now
+            || now >= plan.preparation_until_daa
+        {
+            return Err("raw Valid grant is not the exact native S4 credit plus original Ready in this object".into());
+        }
+        preparation.check_source_v1(source, &plan.acquisition)?;
+        let producer = state.bond(&p.producer).ok_or("original TIR producer key is missing")?;
+        let seat = state.bond(&receipt.seat_bond).ok_or("original TIR seat key is missing")?;
+        let verify = crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1;
+        p.validate_signature_v1(&producer.pubkey, verify)?;
+        let message =
+            crate::palw_panel_v2::palw_receipt_message_v2(native_network_domain, receipt.claim, receipt.verdict, receipt.signed_daa);
+        if !verify(&seat.pubkey, message.as_byte_slice(), &receipt.signature, crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT) {
+            return Err("raw original Valid receipt has no exact native V2 signature".into());
+        }
+        let mut next = self.clone();
+        next.contract.qualify_v1(receipt, grant, now, &seat.pubkey, verify)?;
+        next.credits.insert(receipt.seat_bond, PalwTirPublicOriginalCreditV1 { receipt: receipt.clone(), ready: ready.clone() });
+        next.check_v1()?;
+        if !next.preserves_credited_v1(self) {
+            return Err("original TIR credit would erase an earlier exact obligation".into());
+        }
+        *self = next;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+impl PalwTirPublicOriginalCustodyV1 {
+    /// Test-only: a frozen native Panel and exact credited Valid custody records with SYNTHETIC signatures (no verifier runs).
+    /// The structural check still runs (`check_v1`), so every record must be the exact shape native qualification writes.
+    pub(crate) fn with_credits_for_tests_v1(
+        mut self,
+        panel: PalwTirPublicOriginalPanelV1,
+        credited: Vec<(u64, PalwTirPublicCustodyGrantV1, PalwTirPublicOriginalCreditV1)>,
+    ) -> Result<Self, String> {
+        self.contract.drawn_panel = panel.seats.clone();
+        self.panel = Some(panel);
+        for (credited_daa, grant, credit) in credited {
+            self.credits.insert(grant.seat, credit);
+            self.contract.grants.insert(grant.seat, (credited_daa, grant));
+        }
+        self.check_v1()?;
+        Ok(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,6 +787,78 @@ mod tests {
             valid_receipt_digest: PalwTirPublicCustodyGrantV1::receipt_digest_v1(receipt),
             signature: signature(),
         }
+    }
+    fn original_credit() -> PalwTirPublicOriginalCustodyV1 {
+        let mut c = contract();
+        let receipt = receipt();
+        c.qualify_v1(&receipt, &grant(&receipt), 101, &key(), |_, _, _, domain| domain == PALW_TIR_SOURCE_GRANT_CONTEXT_V1).unwrap();
+        let ready = crate::palw_tir_public_owned_v1::PalwTirPublicReadyV1 {
+            descriptor: crate::palw_backend::PalwTirPublicPreparedDescriptorV1 {
+                version: 1,
+                source_id: c.pledge.source_id,
+                class_id: h(9),
+                artifact_root: h(10),
+                execution_root: c.pledge.execution_root,
+                trace_root: h(11),
+                step_root: h(12),
+                step_leaf_count: 1,
+                decode_count: 1,
+                vocab: 2,
+                material_until_daa: c.terms.material_until_daa,
+                manifest_digest: h(13),
+                retained_bytes: 1024,
+            },
+            accepted_daa: 101,
+            work_receipt: h(14),
+        };
+        let panel = Some(PalwTirPublicOriginalPanelV1 { anchor: h(15), bound_daa: 100, seats: c.drawn_panel.clone() });
+        let result = PalwTirPublicOriginalCustodyV1 {
+            contract: c,
+            panel,
+            credits: [(receipt.seat_bond, PalwTirPublicOriginalCreditV1 { receipt, ready })].into_iter().collect(),
+        };
+        // Structural-only fixture; it does not claim native S4/credit/payment,
+        // real signatures or that the synthetic Ready has been accepted.
+        result.check_v1().unwrap();
+        result
+    }
+    #[test]
+    fn original_credit_preserves_exact_records_not_just_liability_membership() {
+        let original = original_credit();
+        assert!(original.preserves_credited_v1(&original));
+        for dimension in 0..5 {
+            let mut changed = original.clone();
+            match dimension {
+                0 => changed.contract.grants.get_mut(&bond(7)).unwrap().0 += 1,
+                1 => changed.contract.grants.get_mut(&bond(7)).unwrap().1.signature[0] ^= 1,
+                2 => {
+                    let credit = changed.credits.get_mut(&bond(7)).unwrap();
+                    credit.receipt.signature[0] ^= 1;
+                    changed.contract.grants.get_mut(&bond(7)).unwrap().1.valid_receipt_digest =
+                        PalwTirPublicCustodyGrantV1::receipt_digest_v1(&credit.receipt);
+                }
+                3 => changed.credits.get_mut(&bond(7)).unwrap().ready.work_receipt = h(99),
+                _ => changed.panel.as_mut().unwrap().anchor = h(99),
+            }
+            assert_eq!(changed.contract.liable_signers_v1(), original.contract.liable_signers_v1());
+            assert!(!changed.preserves_credited_v1(&original));
+        }
+        let mut changed = original.clone();
+        changed.contract.grants.get_mut(&bond(7)).unwrap().0 += 1;
+        assert!(!changed.contract.preserves_credited_v1(&original.contract));
+    }
+    #[test]
+    fn additive_original_codec_keeps_old_prefix_and_bounds_credit_count() {
+        let original = original_credit();
+        let old = borsh::to_vec(&original.contract).unwrap();
+        let raw = borsh::to_vec(&original).unwrap();
+        assert_eq!(&raw[..old.len()], &old);
+        assert_eq!(borsh::from_slice::<PalwTirPublicOriginalCustodyV1>(&raw).unwrap(), original);
+        let mut oversized = old;
+        oversized.push(0); // no original Panel body
+        oversized.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(borsh::from_slice::<PalwTirPublicOriginalCustodyV1>(&oversized).is_err());
+        assert!(PalwTirPublicOriginalCustodyV1::new_v1(contract()).is_err());
     }
     #[test]
     fn every_original_scope_dimension_and_new_signing_domain_is_bound() {
@@ -591,3 +1001,7 @@ mod tests {
         }
     }
 }
+
+// Exhaustive read-only native input allocation inventory; no consensus encoding change.
+#[path = "palw_native_resource_v1/private/palw_tir_public_custody_v1.rs"]
+mod native_resource_inventory_v1;
