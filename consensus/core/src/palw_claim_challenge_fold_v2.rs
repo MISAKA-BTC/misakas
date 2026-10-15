@@ -166,7 +166,7 @@ fn apply_inner(
                 || job.maximum_consumers == 0
                 || job.maximum_consumers > p.maximum_enrollments_per_job
                 || count(b, PAID_CLAIM_JOBS_V2) >= p.maximum_jobs as usize
-                || l.claims.values().any(|r| r.job_id == job.base_job)
+                || !misaka_palw_kernel::claim_paid_v2::paid_job_enrollment_is_prospective_v3(&l, &job.base_job, ctx.daa_score)
                 || r_has_job(b, &job.base_job)?
             {
                 return Err(refused("paid job needs its actual payer's prospective consent before any claim"));
@@ -203,6 +203,7 @@ fn apply_inner(
                 || live >= p.maximum_live_claims as usize
                 || used.iter().filter(|a| a.job.id() == j.id()).count() >= j.maximum_consumers as usize
                 || l.claims.contains_key(&e.base_claim)
+                || l.beacon_sources.values().any(|source| source.job == j.base_job && source.outcome.is_none())
             {
                 return Err(refused("paid producer enrollment is late, replayed, unsigned or exceeds capacity"));
             }
@@ -442,17 +443,9 @@ fn apply_inner(
     Ok(())
 }
 fn r_has_job(b: &TransitionBuilder<'_>, base: &Digest) -> Result<bool, PalwStateV2Error> {
-    let r = b.state.kernel_route.as_ref().unwrap();
-    for ((t, _), v) in &r.aux {
-        if *t == PAID_CLAIM_JOBS_V2 {
-            let j: PaidClaimJobV2 = borsh::from_slice(v).map_err(|e| refused(e.to_string()))?;
-            if j.base_job == *base {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
+    b.state.kernel_route.as_ref().unwrap().paid_claim_job_is_enrolled_v3(base).map_err(refused)
 }
+
 fn admit_review(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,

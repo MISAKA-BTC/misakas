@@ -271,6 +271,21 @@ pub struct PalwPaidClaimFinalV2 {
     pub transcript_root: Digest,
 }
 impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
+    /// Signed prospective paid jobs cannot also be independent entropy sources.
+    /// Check canonical native rows, rather than guessing from an eventual Final.
+    pub fn paid_claim_job_is_enrolled_v3(&self, base: &Digest) -> Result<bool, String> {
+        for ((_, key), bytes) in self.aux.range((PAID_CLAIM_JOBS_V2, Vec::new())..(PAID_CLAIM_JOBS_V2 + 1, Vec::new())) {
+            let job: PaidClaimJobV2 = borsh::from_slice(bytes).map_err(|e| format!("invalid paid job authority: {e}"))?;
+            if key.as_slice() != job.id().as_slice() || job.version != 2 {
+                return Err("paid job authority key/version mismatch".into());
+            }
+            if job.base_job == *base {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub fn paid_claim_authority_v2(&self, context: &Digest) -> Result<PalwPaidClaimAuthorityV2, String> {
         let a: PalwPaidClaimAuthorityV2 =
             self.aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(context).unwrap()).ok_or("paid claim authority missing")?;
@@ -479,6 +494,11 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         }
         let l = route.ledger().map_err(&refuse)?;
         let p = fence.policy;
+        // Restore-only borrowed keys: source validation bounds the live set by
+        // MAX_LIVE_BEACON_SOURCE_SLOTS_V1; do not rescan its full retained history
+        // once for every paid job.
+        let independent_source_jobs: std::collections::BTreeSet<&Digest> =
+            l.beacon_sources.values().filter(|source| source.outcome.is_none()).map(|source| &source.job).collect();
         let count = |table: u8| route.aux.keys().filter(|(t, _)| *t == table).count();
         if count(PAID_CLAIM_CLASSES_V2) > p.maximum_classes as usize || count(PAID_CLAIM_JOBS_V2) > p.maximum_jobs as usize {
             return Err(refuse("retained class/job capacity exceeded".into()));
@@ -599,6 +619,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                         || l.job_poster(&j.base_job) != Some(j.payer)
                         || j.maximum_consumers == 0
                         || j.maximum_consumers > p.maximum_enrollments_per_job
+                        || independent_source_jobs.contains(&j.base_job)
                     {
                         return Err(refuse("job key/payer/mathematical class/capacity substituted".into()));
                     }

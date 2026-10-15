@@ -1285,6 +1285,11 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         }
         OpvGateV1::Pass => {}
     }
+    if let KernelRouteObjectV1::OptInBeaconSource { job, .. } | KernelRouteObjectV1::OptInPaidBeaconSource { job, .. } = object {
+        if builder.state.kernel_route.as_ref().is_some_and(|r| r.paid_claim_job_is_enrolled_v3(job).unwrap_or(true)) {
+            return Err(refused("paid checker-enrolled jobs cannot be Panel-independent beacon sources"));
+        }
+    }
     let kid = palw_kernel_bond_id_v1(signer);
     ledger.sync_bond(kid, builder.kernel_synced_collateral(signer, ctx.daa_score));
     // The other bond a slash can land on is the producer of the claim the object names: its collateral is brought up to date too, so

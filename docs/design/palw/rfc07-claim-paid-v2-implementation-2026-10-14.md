@@ -363,3 +363,29 @@ lookup/permutation and compact memory arguments also remain unimplemented; exact
 retained checks are not described as implementations of those arguments. The
 independent 128-bit review registry remains empty, and no new public fence is
 armed. Their completion and consolidated acceptance remain outstanding.
+
+
+## Prospective consent and source dependency exclusion (2026-10-15 integration)
+
+Source only, uncompiled and untested. Paid-job enrollment previously required no
+existing claim, but did not exclude an existing ordinary seal or source opt-in.
+A job payer could therefore impose new checker/lifetime terms after another
+producer had signed its ordinary work/source commitment. Native enrollment and
+its SDK builder now share `paid_job_enrollment_is_prospective_v3`: no claim, no
+live ordinary seal and no pending independent-source contract. An expired,
+unclaimed job can be enrolled only after prior observable work contracts end.
+
+The reverse overlap is excluded too. Both native source opt-in kinds inspect
+canonical paid-job enrollment rows before ledger admission or any debit; a
+checker-dependent paid job cannot enter the Panel-independent entropy pool.
+Paid-claim Commit and SDK drafts independently refuse a pending source contract
+on that job. Cold restore rejects the same incompatible pending-source/paid-job
+combination, using a single bounded borrowed source-job set rather than rescanning
+all historical sources per job. Source fees/deposits already earned under a
+terminated contract are not erased or reclassified. No existing claim, seed,
+codec, earned cash or public activation is changed.
+
+An unrun kernel scenario covers a fresh posted job, refusal to migrate after its
+real ordinary seal/source opt-in, and the later ability to enroll a still
+unclaimed job after those contracts end. Native fold/reorg/cold-state and SDK
+receipt end-to-end verification remain part of the consolidated test phase.

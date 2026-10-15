@@ -554,3 +554,12 @@ pub struct NativeSourcePaymentProofV3 {
     pub transaction_bytes: Vec<Vec<u8>>,
     pub coinbase_output: u32,
 }
+
+/// New signed checker terms must precede every observable producer commitment.
+/// A payer cannot retrospectively migrate an ordinary sealed job (including an
+/// already prepaid beacon source) into the paid-checking/absolute-expiry route.
+pub fn paid_job_enrollment_is_prospective_v3(ledger: &crate::ledger::KernelLedgerV1, job: &Digest, now: u64) -> bool {
+    !ledger.claims.values().any(|claim| claim.job_id == *job)
+        && !ledger.seals.iter().any(|((id, _), seal)| id == job && now <= seal.daa.saturating_add(ledger.policy.seal_ttl_daa))
+        && !ledger.beacon_sources.values().any(|source| source.job == *job && source.outcome.is_none())
+}
