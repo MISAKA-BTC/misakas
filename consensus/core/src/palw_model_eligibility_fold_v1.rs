@@ -259,8 +259,39 @@ pub(super) fn eligibility_final_weight_v1(_builder: &mut TransitionBuilder<'_>, 
     contribution
 }
 
-/// **U-2 (user decision 2026-10-15): may `claim` contribute SECURITY credit** — safe weight, bounded immature weight, the safe
-/// frontier, the settled-anchor depth, rule E's participation? A claim RFC-0017 pinned as a weightless Probation claim only once
+/// **U-2 / U-5 (user decisions 2026-10-15): may `claim` contribute security credit, given its class's eligibility at the claim's
+/// acceptance?** `false` for a claim of a `Probation` class or of a pre-fence class in its grace
+/// ([`palw_eligibility_security_credit_needs_certification_v1`]) unless RFC-0018 Gate C governs AND certifies it; `true` otherwise
+/// (RFC-0017 adds nothing). The grace keeps the class's rights; it never issues uncertified security credit.
+pub fn palw_eligibility_security_credit_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+) -> bool {
+    if !palw_probation_security_credit_v1(state, params, claim_id, claim) {
+        return false;
+    }
+    let needs = eligibility_class_view_v1(state, params, &claim.class_id).is_some_and(|view| {
+        palw_eligibility_security_credit_needs_certification_v1(
+            params.model_eligibility_v1(),
+            &view.facts,
+            view.row.as_ref(),
+            claim.accepted_daa,
+        )
+    });
+    !needs
+        || (crate::palw_rfc0018_v1::palw_gate_c_governs_v1(params, claim)
+            && crate::palw_rfc0018_v1::palw_independently_work_certified_v1(
+                claim_id,
+                claim,
+                &crate::palw_rfc0018_v1::PalwGateCViewV1::of(params, state),
+            ))
+}
+
+/// **U-2 (user decision 2026-10-15): may `claim` contribute SECURITY credit** — the safe frontier, the settled-anchor depth, rule E's
+/// participation? (A Probation claim's safe weight and bounded-immature weight are 0 whatever this says: `F = 0`, immature 0.) A
+/// claim RFC-0017 pinned as a weightless Probation claim only once
 /// RFC-0018 Gate C both governs it and certifies it ([`crate::palw_rfc0018_v1::palw_independently_work_certified_v1`] — the
 /// drawn-verifier m-of-k approval, premise-based certification, never a computation proof); below Gate C's fence it has NO such credit
 /// (the legacy `true` of that predicate never reaches a Probation claim). Every other claim: `true` (RFC-0017 adds nothing). The

@@ -218,7 +218,9 @@ mod palw_beacon_bootstrap_fold_v1;
 // RFC-0017: model eligibility (inner 74/75, aux 131) and its claim-gate / probation / Final hooks, past `palw_model_eligibility_v1`.
 #[path = "palw_model_eligibility_fold_v1.rs"]
 mod palw_model_eligibility_fold_v1;
-pub use palw_model_eligibility_fold_v1::{palw_eligibility_status_of_v1, palw_probation_security_credit_v1};
+pub use palw_model_eligibility_fold_v1::{
+    palw_eligibility_security_credit_v1, palw_eligibility_status_of_v1, palw_probation_security_credit_v1,
+};
 // RFC-0018 §7 (Gate C, adopted 2026-10-15): SecurityCertified — kernel-route aux 136, attestations on inner 75, past
 // `palw_independently_work_certified_v1`.
 #[path = "palw_security_certification_fold_v1.rs"]

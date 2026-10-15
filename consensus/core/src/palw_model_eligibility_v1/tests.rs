@@ -289,6 +289,35 @@ fn req_elig_7_below_the_fence_and_for_genesis_every_right_is_the_old_rule() {
     assert_eq!(palw_eligibility_status_v1(None, &f, None, FENCE).0, "not-governed");
 }
 
+/// **U-5 (user decision 2026-10-15): one renewal period of grace for a pre-fence class — never uncertified security credit.** Inside
+/// it the class keeps Eligible rights but every claim needs certification first; past it, without a renewal, `Lapsed`; a passed
+/// renewal ends the grace; the BASE-0 floor and post-fence classes have none.
+#[test]
+fn u5_the_pre_fence_grace_is_one_period_and_needs_certification() {
+    let m = mirror();
+    let p = policy();
+    let pre = facts(FENCE - 5, true);
+    let end = FENCE + p.renewal_epoch_daa + p.lapse_grace_daa;
+    assert!(!palw_eligibility_in_pre_fence_grace_v1(Some(&m), &pre, None, FENCE - 1), "below the fence: old rule, no grace");
+    assert!(palw_eligibility_in_pre_fence_grace_v1(Some(&m), &pre, None, FENCE));
+    assert!(palw_eligibility_in_pre_fence_grace_v1(Some(&m), &pre, None, end));
+    assert!(!palw_eligibility_in_pre_fence_grace_v1(Some(&m), &pre, None, end + 1), "one period, then Lapsed");
+    assert_eq!(palw_eligibility_effective_stage_v1(Some(&m), &pre, None, end + 1), Some(PalwEligibilityStageV1::Lapsed));
+    assert!(palw_eligibility_security_credit_needs_certification_v1(Some(&m), &pre, None, FENCE + 1), "the grace needs certification");
+    assert!(palw_eligibility_rights_v1(Some(&m), &pre, None, FENCE + 1).final_weight, "rights kept: weight once certified");
+    // A passed renewal ends the grace (its own exam stands).
+    let mut renewed = palw_eligibility_grandfathered_row_v1(&m, id(30), id(30), id(0), FENCE - 5);
+    renewed.exams_passed = 1;
+    assert!(!palw_eligibility_in_pre_fence_grace_v1(Some(&m), &pre, Some(&renewed), FENCE + 1));
+    // The BASE-0 floor and a post-fence class have no grace.
+    let floor = PalwEligibilityClassFactsV1 { genesis: true, base_floor: true, ..pre };
+    assert!(!palw_eligibility_in_pre_fence_grace_v1(Some(&m), &floor, None, FENCE + 1));
+    assert!(!palw_eligibility_in_pre_fence_grace_v1(Some(&m), &facts(FENCE + 5, true), None, FENCE + 6));
+    // Probation also needs certification (its Final weight is 0 regardless).
+    let probation = facts(FENCE + 5, true);
+    assert!(palw_eligibility_security_credit_needs_certification_v1(Some(&m), &probation, None, FENCE + 6));
+}
+
 #[test]
 fn req_elig_1_a_new_registration_is_a_job_only_model() {
     let m = mirror();

@@ -622,6 +622,39 @@ pub fn palw_eligibility_effective_stage_v1(
     })
 }
 
+/// **U-5 (user decision 2026-10-15): is the class in its pre-fence grace at `daa`?** — registered below the fence (a rewarded genesis
+/// class included, U-6; never the BASE-0 floor), no renewal passed yet, and `daa` inside ONE renewal period (+ the lapse grace) from
+/// the fence. Its existing claims keep their rights and liabilities, and its claims keep the Eligible rights through the grace; the
+/// grace is NOT an exemption that issues uncertified security credit: every claim accepted at or past the fence is governed by
+/// RFC-0018 Gate C (validation arms it at or below this fence), so it earns no Final weight, frontier, settled-anchor or rule-E
+/// credit before certification ([`palw_eligibility_security_credit_needs_certification_v1`]). Without a passed renewal: `Lapsed`.
+pub fn palw_eligibility_in_pre_fence_grace_v1(
+    mirror: Option<&PalwModelEligibilityMirrorV1>,
+    class: &PalwEligibilityClassFactsV1,
+    row: Option<&PalwEligibilityModelRowV1>,
+    daa: u64,
+) -> bool {
+    let Some(m) = mirror.filter(|m| m.governs(daa)) else { return false };
+    if class.base_floor || class.registered_daa >= m.from_daa {
+        return false;
+    }
+    let untested = row.is_none_or(|r| r.exams_passed == 0 && r.stage == PalwEligibilityStageV1::Eligible);
+    untested && daa <= m.from_daa.saturating_add(m.policy.renewal_epoch_daa).saturating_add(m.policy.lapse_grace_daa)
+}
+
+/// **U-2 / U-5: does a claim of this class at `daa` need certification before ANY security credit** (Final weight, safe frontier,
+/// settled-anchor depth, rule-E participation)? `Probation` (whose Final weight is 0 anyway) and the pre-fence grace. Below the fence,
+/// for the BASE-0 floor and for a class that passed its own exam: `false` (the general rules — Gate C included — decide).
+pub fn palw_eligibility_security_credit_needs_certification_v1(
+    mirror: Option<&PalwModelEligibilityMirrorV1>,
+    class: &PalwEligibilityClassFactsV1,
+    row: Option<&PalwEligibilityModelRowV1>,
+    daa: u64,
+) -> bool {
+    matches!(palw_eligibility_effective_stage_v1(mirror, class, row, daa), Some(PalwEligibilityStageV1::Probation))
+        || palw_eligibility_in_pre_fence_grace_v1(mirror, class, row, daa)
+}
+
 /// **The one gate every path reads** (RFC-0017 §6): the rights of the class for a claim accepted at `accepted_daa`. Keyed on the
 /// CLAIM's acceptance DAA, so a claim accepted below the fence, or while the class was eligible, keeps the rights it was accepted
 /// with (no retroactivity); the caller passes the class's row as of the acceptance (the fold reads it at acceptance and pins
