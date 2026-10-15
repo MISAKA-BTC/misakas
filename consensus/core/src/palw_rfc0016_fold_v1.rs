@@ -76,7 +76,7 @@ impl PalwModelEligibilitySourceV1 for PalwRfc0017EligibilityV1<'_> {
     fn eligible_since_daa_v1(&self, model: &Hash64) -> Option<u64> {
         self.classes_of(model)
             .iter()
-            .filter_map(|class| super::palw_model_eligibility_fold_v1::eligibility_class_view_v1(self.state, class)?.row)
+            .filter_map(|class| super::palw_model_eligibility_fold_v1::eligibility_class_view_v1(self.state, self.params, class)?.row)
             .filter(|row| row.stage == crate::palw_model_eligibility_v1::PalwEligibilityStageV1::Eligible)
             .map(|row| row.stage_since_daa)
             .max()

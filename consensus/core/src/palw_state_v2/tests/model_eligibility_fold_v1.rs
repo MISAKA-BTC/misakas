@@ -138,7 +138,7 @@ fn world(p: &PalwStateParamsV2) -> PalwChainStateV2 {
     ));
     for class in [ENTRANT, RE_REGISTERED] {
         let view =
-            crate::palw_state_v2::palw_model_eligibility_fold_v1::eligibility_class_view_v1(&s, &h64(class)).expect("registered");
+            crate::palw_state_v2::palw_model_eligibility_fold_v1::eligibility_class_view_v1(&s, p, &h64(class)).expect("registered");
         let probation =
             palw_eligibility_new_probation_row_v1(h64(class).as_bytes(), view.lineage, view.principal, FENCE + 10, FENCE + 10);
         s.kernel_route.as_mut().unwrap().aux.insert(
@@ -329,7 +329,7 @@ fn re_registering_the_same_weights_keeps_the_attempt_history() {
     let p = armed();
     let (s, _) = committed_and_drawn(&p);
     let same =
-        crate::palw_state_v2::palw_model_eligibility_fold_v1::eligibility_class_view_v1(&s, &h64(RE_REGISTERED)).unwrap().lineage;
+        crate::palw_state_v2::palw_model_eligibility_fold_v1::eligibility_class_view_v1(&s, &p, &h64(RE_REGISTERED)).unwrap().lineage;
     assert_eq!(same, model(&s, ENTRANT).lineage, "one artifact root, one lineage");
     let later = PROMOTE + test_policy().attempt_cooldown_daa + 3;
     let replay = commit(RE_REGISTERED, EligibilityExamPurposeV1::Promotion, 16, 0, 2);

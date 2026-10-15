@@ -575,12 +575,16 @@ pub struct PalwEligibilityClassFactsV1 {
     pub registered_daa: u64,
     /// The ADR-0135 registry lifecycle admits claims for the class ([`palw_eligibility_registry_admits_v1`]).
     pub registry_admits: bool,
+    /// **U-6 (user decision 2026-10-15): the class is the network's BASE-0 liveness floor** (`base_class_id`) — the one dedicated,
+    /// non-reward exception; every other genesis class goes through the pre-fence migration and renewal.
+    pub base_floor: bool,
 }
 
 /// **The stage in force for a class at `daa`**:
 ///
 /// * no mirror, or `daa` below the fence → `None` (the old rule: the caller grants what it granted before);
-/// * a genesis class → `None` (outside RFC-0017; user decision U-6 in the RFC);
+/// * the BASE-0 liveness floor (genesis, non-reward) → `None` (U-6, user decision 2026-10-15: its dedicated exception; no other
+///   genesis class is permanently exempt — a rewarded genesis class is a pre-fence class: grace, then renewal, below);
 /// * a row → the row's stage, with an `Eligible` row past `next_renewal_daa + lapse_grace_daa` read as `Lapsed` (the sweep writes it;
 ///   the read never waits for the sweep);
 /// * no row and registered below the fence → grandfathered `Eligible` until `from_daa + renewal_epoch_daa + lapse_grace_daa`, then
@@ -594,7 +598,8 @@ pub fn palw_eligibility_effective_stage_v1(
     daa: u64,
 ) -> Option<PalwEligibilityStageV1> {
     let mirror = mirror.filter(|m| m.governs(daa))?;
-    if class.genesis {
+    // U-6: only the non-reward BASE-0 liveness floor keeps a permanent exception.
+    if class.genesis && class.base_floor {
         return None;
     }
     let p = &mirror.policy;

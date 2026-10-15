@@ -22,7 +22,7 @@ fn mirror() -> PalwModelEligibilityMirrorV1 {
 }
 
 fn facts(registered_daa: u64, registry_admits: bool) -> PalwEligibilityClassFactsV1 {
-    PalwEligibilityClassFactsV1 { genesis: false, registered_daa, registry_admits }
+    PalwEligibilityClassFactsV1 { genesis: false, registered_daa, registry_admits, base_floor: false }
 }
 
 fn id(n: u8) -> EligDigestV1 {
@@ -275,8 +275,17 @@ fn req_elig_7_below_the_fence_and_for_genesis_every_right_is_the_old_rule() {
     let f = facts(FENCE + 5, false);
     assert_eq!(palw_eligibility_rights_v1(None, &f, None, FENCE + 10), PalwEligibilityRightsV1::OLD_RULE, "no mirror");
     assert_eq!(palw_eligibility_rights_v1(Some(&m), &f, None, FENCE - 1), PalwEligibilityRightsV1::OLD_RULE, "below the fence");
-    let genesis = PalwEligibilityClassFactsV1 { genesis: true, ..f };
-    assert_eq!(palw_eligibility_rights_v1(Some(&m), &genesis, None, FENCE + 10), PalwEligibilityRightsV1::OLD_RULE, "genesis");
+    // U-6 (user decision 2026-10-15): only the non-reward BASE-0 liveness floor keeps the permanent exception…
+    let floor = PalwEligibilityClassFactsV1 { genesis: true, base_floor: true, registered_daa: 0, ..f };
+    assert_eq!(palw_eligibility_rights_v1(Some(&m), &floor, None, FENCE + 10), PalwEligibilityRightsV1::OLD_RULE, "BASE-0 floor");
+    assert_eq!(palw_eligibility_effective_stage_v1(Some(&m), &floor, None, u64::MAX), None, "permanently");
+    // …a rewarded genesis class is a pre-fence class: Eligible through one renewal period (+ grace), then Lapsed unless renewed.
+    let rewarded = PalwEligibilityClassFactsV1 { genesis: true, base_floor: false, registered_daa: 0, ..f };
+    let p = policy();
+    assert_eq!(palw_eligibility_effective_stage_v1(Some(&m), &rewarded, None, FENCE + 10), Some(PalwEligibilityStageV1::Eligible));
+    let end = FENCE + p.renewal_epoch_daa + p.lapse_grace_daa;
+    assert_eq!(palw_eligibility_effective_stage_v1(Some(&m), &rewarded, None, end), Some(PalwEligibilityStageV1::Eligible));
+    assert_eq!(palw_eligibility_effective_stage_v1(Some(&m), &rewarded, None, end + 1), Some(PalwEligibilityStageV1::Lapsed));
     assert_eq!(palw_eligibility_status_v1(None, &f, None, FENCE).0, "not-governed");
 }
 

@@ -57,7 +57,11 @@ pub(super) struct PalwEligibilityClassViewV1 {
     pub row: Option<PalwEligibilityModelRowV1>,
 }
 
-pub(super) fn eligibility_class_view_v1(state: &PalwChainStateV2, class_id: &Hash64) -> Option<PalwEligibilityClassViewV1> {
+pub(super) fn eligibility_class_view_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    class_id: &Hash64,
+) -> Option<PalwEligibilityClassViewV1> {
     let class = state.class(class_id)?;
     let principal = class
         .registrant_bond
@@ -71,6 +75,8 @@ pub(super) fn eligibility_class_view_v1(state: &PalwChainStateV2, class_id: &Has
             genesis: class.registrant_bond.is_none(),
             registered_daa: class.registered_daa,
             registry_admits,
+            // U-6 (user decision 2026-10-15): the BASE-0 floor alone is exempt.
+            base_floor: *class_id == params.base_class_id(),
         },
         lineage: class.artifact_root.as_bytes(),
         principal,
@@ -87,7 +93,7 @@ pub(super) fn eligibility_of_v1(
     daa: u64,
 ) -> Option<(PalwEligibilityStageV1, PalwEligibilityRightsV1)> {
     let mirror = params.model_eligibility_v1_at(daa)?;
-    let view = eligibility_class_view_v1(state, class_id)?;
+    let view = eligibility_class_view_v1(state, params, class_id)?;
     let stage = palw_eligibility_effective_stage_v1(Some(mirror), &view.facts, view.row.as_ref(), daa)?;
     Some((stage, palw_eligibility_rights_of_stage_v1(stage, &mirror.policy)))
 }
@@ -148,7 +154,7 @@ pub(super) fn eligibility_probation_preview_v1(
 ) -> Result<Option<PalwEligibilityProbationTicketV1>, PalwStateV2Error> {
     let now = ctx.daa_score;
     let Some(mirror) = builder.params.model_eligibility_v1_at(now).copied() else { return Ok(None) };
-    let Some(view) = eligibility_class_view_v1(&builder.state, class_id) else { return Ok(None) };
+    let Some(view) = eligibility_class_view_v1(&builder.state, builder.params, class_id) else { return Ok(None) };
     let Some(stage) = palw_eligibility_effective_stage_v1(Some(&mirror), &view.facts, view.row.as_ref(), now) else {
         return Ok(None);
     };
@@ -311,9 +317,10 @@ pub(super) fn apply_commit_eligibility_exam_v1(
         }
     }
     let class_id = Hash64::from_bytes(commit.class_id);
-    let view = eligibility_class_view_v1(&builder.state, &class_id).ok_or_else(|| refuse("the exam names no registered class"))?;
+    let view = eligibility_class_view_v1(&builder.state, builder.params, &class_id)
+        .ok_or_else(|| refuse("the exam names no registered class"))?;
     let stage = palw_eligibility_effective_stage_v1(Some(&mirror), &view.facts, view.row.as_ref(), now)
-        .ok_or_else(|| refuse("a genesis class takes no eligibility exam"))?;
+        .ok_or_else(|| refuse("the BASE-0 liveness floor takes no eligibility exam (U-6: its dedicated exception)"))?;
     let mut model = match view.row.clone() {
         Some(row) => row,
         // A pre-fence class's first renewal: its grandfathered standing becomes a row.
@@ -634,7 +641,7 @@ pub fn palw_eligibility_status_of_v1(
     class_id: &Hash64,
     daa: u64,
 ) -> PalwEligibilityStatusReadV1 {
-    let Some(view) = eligibility_class_view_v1(state, class_id) else { return PalwEligibilityStatusReadV1::default() };
+    let Some(view) = eligibility_class_view_v1(state, params, class_id) else { return PalwEligibilityStatusReadV1::default() };
     let mirror = params.model_eligibility_v1();
     let (stage, next_renewal_daa, subsidy, block_right, final_weight) =
         palw_eligibility_status_v1(mirror, &view.facts, view.row.as_ref(), daa);
