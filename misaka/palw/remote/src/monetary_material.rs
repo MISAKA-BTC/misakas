@@ -224,6 +224,14 @@ impl DurableMonetaryMaterialProviderV1 {
         self.publish(candidate)?;
         Ok(replacement.id())
     }
+    /// `(stored consent, root)` of every retained obligation (read-only; see `monetary_material_gc`).
+    pub fn held_contracts(&self) -> Vec<(Hash64, Hash64)> {
+        self.store.held_contracts_v1()
+    }
+    /// The snapshot file this store publishes to (the janitor keeps its journal and intent marker beside it).
+    pub fn file(&self) -> &Path {
+        &self.file
+    }
     pub fn gc_finalized(
         &mut self,
         root: Hash64,

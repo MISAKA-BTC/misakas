@@ -565,6 +565,11 @@ impl PalwMonetaryMaterialProviderStoreV1 {
     pub fn encoded(&self) -> Result<Vec<u8>, PalwMaterialCapacityErrorV1> {
         borsh::to_vec(self).map_err(|_| PalwMaterialCapacityErrorV1::Capacity)
     }
+    /// Every retained obligation as `(stored consent, signed root)`, in key order, for a provider janitor that asks the
+    /// native GC witness about each one. Reading it authorizes nothing: deletion stays [`Self::release_if_finalized`]'s.
+    pub fn held_contracts_v1(&self) -> Vec<(Hash64, Hash64)> {
+        self.contracts.iter().map(|(consent, (_, manifest, _))| (*consent, manifest.root)).collect()
+    }
     /// Reopening never trusts persisted counters or hashes. All retained codec
     /// bytes are authenticated again against the caller's coherent native and
     /// kernel snapshot, before the provider exposes a single answer.
