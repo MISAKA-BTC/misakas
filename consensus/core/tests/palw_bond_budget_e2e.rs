@@ -71,6 +71,7 @@ fn policy(unit_msk: u64, window: u64, rho: u32, reward_msk: u64, slice: bool) ->
         liability_hold_daa: PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1,
         export_cap_permille: PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1,
         weight_value: PalwWeightValuePolicyV1::Unknown,
+        hold: None,
     }
 }
 

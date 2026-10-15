@@ -42,6 +42,7 @@ fn test_budget_policy(unit: u64) -> PalwBondBudgetPolicyV1 {
         liability_hold_daa: PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1,
         export_cap_permille: PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1,
         weight_value: PalwWeightValuePolicyV1::Unknown,
+        hold: None,
     }
 }
 

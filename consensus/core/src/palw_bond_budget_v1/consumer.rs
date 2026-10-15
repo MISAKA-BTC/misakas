@@ -238,6 +238,7 @@ mod tests {
             liability_hold_daa: PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1,
             export_cap_permille: PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1,
             weight_value: PalwWeightValuePolicyV1::Unknown,
+            hold: None,
         }
     }
     fn replay(state: &mut PalwBondBudgetStateV1, journal: &[PalwBudgetWriteV1], reverse: bool) {
