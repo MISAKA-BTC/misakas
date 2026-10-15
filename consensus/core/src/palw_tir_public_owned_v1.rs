@@ -1336,6 +1336,10 @@ pub struct PalwTirPublicSpentV1 {
     pub turns: u64,
     pub moves: u64,
     pub reacquire_nonce: u64,
+    /// **G14 R1 / G-T1: the owner's last progress** — the DAA of its Open, its latest Demand/Reacquire, the latest accepted Finish
+    /// of an answer to it, or its latest Collect. What idle-slot reclamation reads (`owner_idle_at_v1`); never a payment or a clock
+    /// of anyone else's obligation. (Rows exist only past `palw_tir_public_conviction_v1`; no earlier row has this layout.)
+    pub last_progress_daa: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwTirPublicOwnedV1 {
@@ -1697,7 +1701,7 @@ impl PalwTirPublicOwnedV1 {
         Ok(Self {
             contract: Box::new(contract).into(),
             pending: None,
-            spent: PalwTirPublicSpentV1 { moves: 1, ..Default::default() },
+            spent: PalwTirPublicSpentV1 { moves: 1, last_progress_daa: now, ..Default::default() },
             history: History { count: 0, peaks: [None; 64] },
             work: None,
             preparation: None,
@@ -1716,6 +1720,55 @@ impl PalwTirPublicOwnedV1 {
     }
     pub fn spent_v1(&self) -> PalwTirPublicSpentV1 {
         self.spent
+    }
+    /// An open demand the frame's literal custodians still owe an answer to, not yet collected as a default.
+    fn unpaid_v1(&self) -> bool {
+        self.active_v1().is_some_and(|p| {
+            !p.collected && self.response_custodians_v1().iter().any(|s| p.slots.get(s).is_none_or(|slot| slot.finished.is_none()))
+        })
+    }
+    /// **G14 R1 / G-T1: does this owner still hold one of its frame's K_owner slots?** Yes while it can still demand (turns left)
+    /// or still has an unpaid demand open. An owner that has spent every prepaid turn and owes/claims nothing imposes no further
+    /// custodian load, so it holds no slot (it stays in state until its material horizon, as every owner row does).
+    pub fn holds_owner_slot_v1(&self) -> bool {
+        self.spent.turns < self.contract.plan.maximum_turns || self.unpaid_v1()
+    }
+    /// The DAA from which this owner's idleness is counted: its last progress (`spent.last_progress_daa`: Open, Demand, an accepted
+    /// answer, Collect), never before the original preparation door (it cannot demand earlier) — and, while a demand it made is
+    /// still unpaid, never before that demand's response clock: the custodians owe it until then, and the default is the owner's
+    /// to collect after it.
+    pub fn idle_since_v1(&self) -> u64 {
+        let progress = self.spent.last_progress_daa.max(self.preparation.map_or(0, |p| p.preparation_until_daa));
+        match self.active_v1() {
+            Some(p) if self.unpaid_v1() => progress.max(p.respond_until_daa),
+            _ => progress,
+        }
+    }
+    /// The grace an owner has between two moves before its slot may be reclaimed: one native reorg-retention span of the frame's
+    /// own court config (`reorg_retention_daa`, at least one inclusion margin) — a span shorter than this could reclaim a slot over a
+    /// move a reorg is still undoing. Derived from the native plan, not a new constant; whether it is long enough for a real node's
+    /// owner loop is a measured value of the arming record (UNKNOWN until measured).
+    pub fn owner_idle_grace_daa_v1(&self) -> u64 {
+        let config = self.contract.plan.config;
+        config.reorg_retention_daa.max(config.prices.inclusion_margin_daa)
+    }
+    /// **G14 R1 / G-T1 (Lead default R1, idle-slot reclamation): an IDLE owner** — one still holding a slot that has made no
+    /// progress for [`Self::owner_idle_grace_daa_v1`] since [`Self::idle_since_v1`]. An owner with an unpaid demand inside its
+    /// response clock is never idle, and an owner answered late (even deliberately, by a colluding custodian) has the whole grace
+    /// from the accepted answer to make its next move.
+    pub fn owner_idle_at_v1(&self, now: u64) -> bool {
+        self.holds_owner_slot_v1() && now >= self.idle_since_v1().saturating_add(self.owner_idle_grace_daa_v1())
+    }
+    /// **Retire an idle owner's slot** (the next Open reclaims it): its open demand, answered or lapsed, is closed and its turn
+    /// budget is spent, so it can never demand again — K_owner stays the bound on concurrent custodian load. Its accepted answers
+    /// (rooted chunks, the accepted-rows pointer, the history frontier) are untouched. Refused for an owner that is not idle.
+    pub fn retire_idle_v1(&mut self, now: u64) -> Result<(), String> {
+        if !self.owner_idle_at_v1(now) {
+            return Err("TIR owner is not idle; its slot cannot be reclaimed".into());
+        }
+        self.pending = None;
+        self.spent.turns = self.contract.plan.maximum_turns;
+        Ok(())
     }
     pub fn work_v1(&self) -> Option<&PalwTirPublicWorkStateV1> {
         self.work.as_ref()
@@ -1924,6 +1977,8 @@ impl PalwTirPublicOwnedV1 {
             || self.spent.reacquire_logical > self.contract.plan.maximum_reacquire_logical_units
             || self.spent.turns > self.contract.plan.maximum_turns
             || self.spent.reacquire_nonce > self.spent.reacquire_logical
+            || self.spent.last_progress_daa < self.contract.reserved_daa
+            || self.active_v1().is_some_and(|p| self.spent.last_progress_daa < p.opened_daa)
             || self.history.count > self.spent.moves
             || self.history.peaks.iter().enumerate().any(|(i, p)| p.is_some() != (self.history.count & (1u64 << i) != 0))
         {
@@ -2044,6 +2099,7 @@ impl PalwTirPublicOwnedV1 {
             self.spent.fresh_logical = next;
         }
         self.spent.turns += 1;
+        self.spent.last_progress_daa = now;
         self.pending = Some(
             Box::new(PalwTirPublicPendingV1 {
                 request,
@@ -2246,6 +2302,7 @@ impl PalwTirPublicOwnedV1 {
         let index = history.append(reference.hash_v1()?)?;
         self.debit()?;
         self.history = history;
+        self.spent.last_progress_daa = now;
         self.pending.as_mut().unwrap().slots.get_mut(&signer).unwrap().finished = Some(reference.clone());
         if let PalwTirPublicFinishedV1::Ids(ids) = &authenticated {
             self.accepted_rows = Some(PalwTirPublicAcceptedRowsV1 { body: reference.clone(), rows_root: ids.rows_root_v1() });
@@ -2280,6 +2337,7 @@ impl PalwTirPublicOwnedV1 {
             missing_custodians: missing,
         };
         self.debit()?;
+        self.spent.last_progress_daa = now;
         self.pending.as_mut().unwrap().collected = true;
         Ok(effect)
     }

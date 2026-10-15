@@ -864,8 +864,11 @@ impl PalwPanelService {
 
 /// The court queue's lane of a custodian's answer move (Begin / Part / Finish), keyed by the demand id (free: `u32::MAX − 27`).
 pub(crate) const PALW_TIR_PUBLIC_RESPOND_ROUND_V1: u32 = u32::MAX - 27;
-/// Demands this node answers at once (each holds one prepared reader's answer body in memory).
-const PALW_TIR_PUBLIC_RESPONSES_V1: usize = 4;
+/// Demands this node answers at once (each holds one prepared reader's answer body in memory). **G14 G-T5:** at least the
+/// consensus cap on a frame's concurrent owners (K_owner), so every slot holder's demand on one frame is answered in parallel
+/// rather than queued behind the others while their response clocks run.
+const PALW_TIR_PUBLIC_RESPONSES_V1: usize =
+    kaspa_consensus_core::palw_tir_public_claim_v1::PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1 as usize;
 /// Bounded preparation polls of a warm prepared reader for one unit (a warm reader answers from its sealed index).
 const PALW_TIR_PUBLIC_RESPONSE_POLLS_V1: usize = 1 << 16;
 
@@ -886,7 +889,19 @@ struct ResponseCaseV1 {
     respond_until_daa: u64,
     body: Option<Vec<u8>>,
     failed: bool,
+    /// G-T5: the ordinal of the last move queued for this demand (Begin 0, a Part at offset `o` is `1 + o`, Finish `u64::MAX`).
+    /// A NEXT move (the accepted slot advanced) is queued at once; only a re-send of the same move waits `COURT_MOVE_REPLAN_DAA`.
+    last_move: Option<u64>,
     _memory: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
+}
+
+/// G-T5: the ordinal of an answer move (see `ResponseCaseV1::last_move`).
+fn response_move_ordinal_v1(action: &PalwTirPublicOwnedActionV1) -> u64 {
+    match action {
+        PalwTirPublicOwnedActionV1::Begin { .. } => 0,
+        PalwTirPublicOwnedActionV1::Part { offset, .. } => offset.saturating_add(1),
+        _ => u64::MAX,
+    }
 }
 
 /// What one accepted read decided for one owed demand.
@@ -1014,6 +1029,7 @@ impl PalwPanelService {
                                 respond_until_daa: p.respond_until_daa,
                                 body: None,
                                 failed: false,
+                                last_move: None,
                                 _memory: None,
                             },
                         );
@@ -1152,8 +1168,11 @@ impl PalwPanelService {
                     ResponseStepV1::Move { demand, action } => {
                         let Some(case) = book.responses.get(&demand) else { return Ok(()) };
                         let queue = (demand, PALW_TIR_PUBLIC_RESPOND_ROUND_V1, true);
+                        let ordinal = response_move_ordinal_v1(&action);
+                        // G-T5: a next move goes at once (its predecessor was accepted); only a re-send waits the replan span.
+                        let resend = case.last_move == Some(ordinal);
                         if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
-                            || moved.get(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+                            || (resend && moved.get(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA)))
                         {
                             return Ok(());
                         }
@@ -1170,9 +1189,13 @@ impl PalwPanelService {
                             signature: Vec::new(),
                         };
                         let object = signed_control_v1(self, network_domain, control)?;
+                        let respond_until_daa = case.respond_until_daa;
                         pending.push((queue.0, queue.1, queue.2, object));
-                        due.insert(queue, case.respond_until_daa.saturating_sub(1));
+                        due.insert(queue, respond_until_daa.saturating_sub(1));
                         moved.insert(queue, now);
+                        if let Some(case) = book.responses.get_mut(&demand) {
+                            case.last_move = Some(ordinal);
+                        }
                     }
                 }
                 Ok(())

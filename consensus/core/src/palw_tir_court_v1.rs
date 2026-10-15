@@ -3605,6 +3605,36 @@ pub(crate) mod test_support {
         ctx_of: impl FnOnce(&PalwTirClassV1, Hash64, &[u32]) -> PalwJobContextV2,
         forge: Option<(usize, usize)>,
     ) -> TinyExecution {
+        tiny_execution_selecting_in(ctx_of, forge, &|_, row, _| base0_decode_token_select_v1(row) as u32)
+    }
+
+    /// **G14 G-T2 test support: the honest choice of `rule` over `row` after `before`** (argmax of the rule's lane key, ties to
+    /// the lower index, banned lanes never chosen) — or, with `wrong`, the best lane the rule does NOT choose: a committed token
+    /// the selection door must refute, over arithmetic that is otherwise honest.
+    pub(crate) fn select_by_rule(rule: &PalwTirSelectionRuleV1, row: &[i32], before: &[u32], wrong: bool) -> u32 {
+        let keyed: Vec<(usize, i64)> =
+            row.iter().enumerate().filter_map(|(lane, value)| rule.key_v1(before, *value, lane).map(|key| (lane, key))).collect();
+        let best = |exclude: Option<usize>| {
+            keyed
+                .iter()
+                .filter(|(lane, _)| Some(*lane) != exclude)
+                .copied()
+                .reduce(|a, b| if crate::palw_decode_select_v2::decode_lane_beats_v2(b.1, b.0, a.1, a.0) { b } else { a })
+                .map(|(lane, _)| lane)
+                .expect("an admitted job leaves a lane")
+        };
+        let honest = best(None);
+        (if wrong { best(Some(honest)) } else { honest }) as u32
+    }
+
+    /// [`tiny_execution_in`] whose decode token at each position is `select(position, row, before)` — the honest rule of a
+    /// sampled or V4 job, or a selection violated at one position (the arithmetic of every leaf stays honest: the next position
+    /// consumes the committed token).
+    pub(crate) fn tiny_execution_selecting_in(
+        ctx_of: impl FnOnce(&PalwTirClassV1, Hash64, &[u32]) -> PalwJobContextV2,
+        forge: Option<(usize, usize)>,
+        select: &dyn Fn(u32, &[i32], &[u32]) -> u32,
+    ) -> TinyExecution {
         let (program, params) = program_and_params();
         let bytes = program.encode();
         let class = PalwTirClassV1 {
@@ -3635,7 +3665,8 @@ pub(crate) mod test_support {
             after.push(state.clone());
             if a + 1 >= PREFILL {
                 let row: Vec<i32> = step.logits.data.iter().map(|v| *v as i32).collect();
-                generated.push(base0_decode_token_select_v1(&row) as u32);
+                let token = select(generated.len() as u32, &row, &generated);
+                generated.push(token);
                 rows.push(row);
             }
         }

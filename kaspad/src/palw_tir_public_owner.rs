@@ -22,8 +22,22 @@
 //! Budgets: the native ones the fold enforces (owner terms, turns, logical units, response spans), plus this node's own: two
 //! cases at once, a bounded number of demands per case, the replay's quoted RAM held for the case's life, one probe per tick.
 //! Restart: cases are process memory (the replay is rerun, accepted answers are re-read from the chain); the filer's journal holds
-//! every finding already produced. **Not covered:** a decode-selection or trace-only disagreement (equal steps and output) is
-//! logged, not localized; a class with no kept prompt ids is not replayed.
+//! every finding already produced.
+//!
+//! **G14 close-out (2026-10-16):**
+//! - **G-T2, selection faults are localized.** Whenever the replay's trace or step root differs, the case first acquires the
+//!   complete committed IDs (EOF-authenticated) and compares them with the replay's own IDs. At the first position they differ it
+//!   demands that row's trace tile(s) and builds the tiled decode-token pin under the ORIGINAL job's own rule (greedy, seeded,
+//!   V4) with consensus-core's `palw_tir_public_selection_probe_v1`; a pin that refutes the committed token is the finding. A row
+//!   that does not refute it means the committed logits differ there — the case falls back to the arithmetic descent. A replay
+//!   whose roots all agree is still checked against the job's stop rule (Output door).
+//! - **G-T4, an honest drawn seat files through the same path.** A drawn seat that holds no Valid custody grant is an independent
+//!   owner (the fold's rule), so it is no longer skipped; and a claim this node's seat already found faulty (`seat_faults`) is
+//!   pursued first, ahead of the page cursor. Its finding enters the same filer book.
+//! - **G-T1:** a frame at K_owner is still pursued when a slot holder is idle (the Open reclaims that slot).
+//!
+//! **Not covered:** a class with no kept prompt ids is not replayed (the frame keeps them since G-T3); a trace-only disagreement
+//! with equal IDs and equal steps is logged.
 #![allow(dead_code)] // the panel loop calls the tick; the finding rule is consensus-core's (tested there).
 
 use super::super::{COURT_MOVE_REPLAN_DAA, PalwPanelService};
@@ -66,11 +80,61 @@ const PALW_TIR_PUBLIC_OWNER_SOURCE_READS_V1: u64 = 1 << 20;
 
 /// What the independent replay disagrees with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SuspicionV1 {
+pub(crate) enum SuspicionV1 {
     /// The committed step tree differs from the replay's: localize to a leaf and build its cone/logits primitive.
     Arithmetic,
     /// Steps agree but the committed output does not (or the stop rule is in question): read the complete original IDs.
     Output,
+    /// **G-T2:** the trace (or the step tree) differs: read the complete committed IDs first; a first differing position is a
+    /// selection candidate (its row's tiles → the decode-token pin); equal IDs fall to `Arithmetic` (steps differ) or `Output`.
+    Selection,
+}
+
+/// **G14 G-T2: what the replay says about a frame, before any acquisition** — `None` when nothing disagrees (the trace, the step
+/// tree and the output root all equal the committed ones and the replay's answer obeys the job's own stop rule).
+pub(crate) fn owner_suspicion_v1(
+    committed: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    committed_output_root: Hash64,
+    job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    vocab: u32,
+    replay: &kaspa_consensus_core::palw_backend::PalwTirOwnStepSourceInfoV1,
+) -> Option<SuspicionV1> {
+    let steps = replay.header.step_merkle_root != committed.step_merkle_root || replay.header.step_leaf_count != committed.step_leaf_count;
+    if steps || replay.header.full_logits_trace_root != committed.full_logits_trace_root {
+        return Some(SuspicionV1::Selection);
+    }
+    if replay.output_root != committed_output_root
+        || kaspa_consensus_core::palw_tir_objective_v1::original_stop_rule_fault_v1(job, vocab, &replay.generated_ids).is_some()
+    {
+        return Some(SuspicionV1::Output);
+    }
+    None
+}
+
+/// **G14 G-T4 / G-T1: may this bond start a case on a frame?** Not when it is liable on the claim (the producer or a credited
+/// Valid custodian — a drawn seat that signed no Valid is independent), not before the original preparation door or once the
+/// conviction door closed, and not when the frame has no slot for it (unless it already owns there).
+pub(crate) fn owner_may_pursue_v1(
+    view: &kaspa_consensus_core::palw_tir_public_claim_v1::PalwTirPublicFrameViewV1,
+    preparation_until_daa: u64,
+    signer: &PalwBondKeyV2,
+    now: u64,
+    slot_open: bool,
+    owns_here: bool,
+) -> bool {
+    !view.liable.contains(signer) && now >= preparation_until_daa && now < view.collect_until_daa && (slot_open || owns_here)
+}
+
+/// **G14 G-T4: the order frames are considered in** — the claims this node's own seat found faulty first (its Panel replay
+/// already disagrees), then the page of accepted frames; each once.
+pub(crate) fn owner_discovery_order_v1(seat_faulted: &[Hash64], page: &[Hash64], is_frame: impl Fn(&Hash64) -> bool) -> Vec<Hash64> {
+    let mut order: Vec<Hash64> = Vec::new();
+    for claim in seat_faulted.iter().filter(|c| is_frame(c)).chain(page.iter()) {
+        if !order.contains(claim) {
+            order.push(*claim);
+        }
+    }
+    order
 }
 
 /// One frame this node pursues as an outside owner (process memory).
@@ -81,6 +145,10 @@ struct OwnerCaseV1 {
     suspicion: SuspicionV1,
     own: Arc<dyn PalwTirOwnStepSourceV1>,
     prompt: Vec<u32>,
+    /// The replay's own decode ids (G-T2: compared with the committed ones to find a selection candidate).
+    replay_ids: Vec<u32>,
+    /// Whether the replay's step tree differs (G-T2: equal IDs with differing steps is an arithmetic fault).
+    steps_differ: bool,
     /// `(reserved_daa, acquisition allocation)` of this node's acquisition row, once its Open is accepted.
     acquisition: Option<(u64, Hash64)>,
     units: Vec<Arc<PalwTirPublicAuthenticatedUnitV1>>,
@@ -242,6 +310,7 @@ enum OwnerStepV1 {
         job: Box<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>,
         prompt: Vec<u32>,
         original_output_root: Hash64,
+        vocab: u32,
     },
     Move {
         claim: Hash64,
@@ -284,6 +353,9 @@ impl PalwPanelService {
             return;
         }
         let form = self.config.prompt_ids_form;
+        // G-T4: the claims this node's own seat found faulty are pursued first (process memory of the Panel replay).
+        let seat_faulted: Vec<Hash64> = self.seat_faults.lock().unwrap().claims().collect();
+        let court_limits = kaspa_consensus_core::palw_court_v2::palw_tir_court_limits_v1(&self.config.court);
         let mut steps: Vec<OwnerStepV1> = Vec::new();
         let mut now = 0u64;
         let armed = {
@@ -291,10 +363,12 @@ impl PalwPanelService {
                 steps.clear();
                 now = state.last_point().ok_or("TIR owner snapshot has no accepted clock")?.daa_score;
                 book.skipped.retain(|_, until| now < *until);
-                // Discover: one page of accepted frames per tick; a replay is started for a frame this bond may own.
+                // Discover: the claims this node's seat found faulty first (G-T4), then one page of accepted frames per tick; a
+                // replay is started for a frame this bond may own.
                 let page = state.staged_tir_frames_after_v1(book.after, 16);
                 book.after = page.last().copied();
-                for claim in page {
+                let order = owner_discovery_order_v1(&seat_faulted, &page, |claim| palw_tir_public_claim_v1(state, *claim).is_some());
+                for claim in order {
                     if book.cases.len() >= PALW_TIR_PUBLIC_OWNER_CASES_V1
                         || book.cases.contains_key(&claim)
                         || book.skipped.contains_key(&claim)
@@ -305,20 +379,26 @@ impl PalwPanelService {
                     let Some(frame) = palw_tir_public_claim_v1(state, claim) else { continue };
                     let view = frame.view_v1(state.staged_tir_owner_count_v1(&claim));
                     let plan = frame.plan_v1();
-                    if view.liable.contains(&signer)
-                        || view.drawn_panel.contains(&signer)
-                        || now < plan.preparation_until_daa
-                        || now >= view.collect_until_daa
-                        || view.owners_opened >= view.custodian_load.owners
-                    {
+                    let owns_here = state.staged_tir_acquisitions_of_v1(&claim).iter().any(|(owner, _)| *owner == signer);
+                    let slot_open = state.staged_tir_owner_slot_open_v1(&claim, now.saturating_add(1));
+                    if !owner_may_pursue_v1(&view, plan.preparation_until_daa, &signer, now, slot_open, owns_here) {
                         continue;
                     }
                     let original = frame.original_v1();
-                    let Some(prompt) = state.fp_claim_prompt_ids_v1(&original.job.class_id, &view.producer, &claim) else {
-                        book.skipped.insert(claim, now.saturating_add(PALW_TIR_PUBLIC_OWNER_SKIP_DAA_V1));
-                        continue;
+                    // A canonical job's prompt is derived from the job itself at replay (`job_for_anchor`); a user prompt is the
+                    // frame's kept public input (G-T3).
+                    let canonical = original.job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL;
+                    let prompt = match state.fp_claim_prompt_ids_v1(&original.job.class_id, &view.producer, &claim) {
+                        Some(prompt) => prompt,
+                        None if canonical => Vec::new(),
+                        None => {
+                            book.skipped.insert(claim, now.saturating_add(PALW_TIR_PUBLIC_OWNER_SKIP_DAA_V1));
+                            continue;
+                        }
                     };
-                    if kaspa_consensus_core::palw_freeprompt_v3::palw_fp_prompt_ids_admit_v1(&original.job, &prompt, form).is_err() {
+                    if !(canonical && prompt.is_empty())
+                        && kaspa_consensus_core::palw_freeprompt_v3::palw_fp_prompt_ids_admit_v1(&original.job, &prompt, form).is_err()
+                    {
                         book.skipped.insert(claim, now.saturating_add(PALW_TIR_PUBLIC_OWNER_SKIP_DAA_V1));
                         continue;
                     }
@@ -330,6 +410,7 @@ impl PalwPanelService {
                         job: Box::new(original.job.clone()),
                         prompt,
                         original_output_root: original.output_root,
+                        vocab: plan.acquisition.envelope.vocab,
                     });
                 }
                 // Advance every case by at most one decision.
@@ -411,7 +492,77 @@ impl PalwPanelService {
                     }
                     // 3. A finding from the harvested material, or the next unit this case wants.
                     let original = frame.original_v1();
+                    // G-T2: a selection candidate is decided first, from the complete committed IDs against the replay's own.
+                    if case.suspicion == SuspicionV1::Selection
+                        && let Some(ids) = case.ids.as_ref()
+                    {
+                        let rule = kaspa_consensus_core::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&original.job);
+                        let differs = ids.ids_v1() != case.replay_ids.as_slice();
+                        match (rule, differs) {
+                            (Some(rule), true) => {
+                                let registered =
+                                    state.tir_class_v1(&original.job.class_id).ok_or("TIR owner: class record is gone")?;
+                                let layout = kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_tir_layout_v1(
+                                    state,
+                                    original.job.class_id,
+                                )
+                                .ok_or("TIR owner: class layout is gone")?;
+                                let header = frame.header_v1();
+                                let binding = header.resolve_registered_layout_v1(
+                                    registered,
+                                    layout,
+                                    header.committed_execution_root,
+                                    maximum_leaves,
+                                )?;
+                                let rules = kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1 {
+                                    max_step_leaf_count: maximum_leaves,
+                                    prompt_form: form,
+                                    limits: court_limits,
+                                };
+                                let tiles: Vec<_> = case
+                                    .units
+                                    .iter()
+                                    .filter(|u| matches!(u.request_v1(), PalwTirPublicRequestV1::TraceTile { .. }))
+                                    .map(|u| (u.request_v1(), u.response_v1().clone()))
+                                    .collect();
+                                use kaspa_consensus_core::palw_tir_objective_v1::{
+                                    PalwTirSelectionProbeV1 as Probe, palw_tir_public_selection_probe_v1,
+                                };
+                                match palw_tir_public_selection_probe_v1(
+                                    &binding,
+                                    source.vocab_v1(),
+                                    &rule,
+                                    &rules,
+                                    ids.ids_v1(),
+                                    &case.replay_ids,
+                                    &tiles,
+                                )? {
+                                    Probe::Ready { position, evidence } => {
+                                        info!("[{PALW_PANEL}] TIR frame {claim}: decode-selection fault at position {position}");
+                                        steps.push(OwnerStepV1::Finding { claim: *claim, evidence: Box::new(evidence) });
+                                        continue;
+                                    }
+                                    Probe::Need(requests) => case.cone_want = requests.first().copied(),
+                                    // The committed row does not refute its token: the logits differ upstream — descend the steps.
+                                    Probe::Upstream { .. } | Probe::Agrees => {
+                                        case.suspicion = if case.steps_differ { SuspicionV1::Arithmetic } else { SuspicionV1::Output };
+                                        case.cone_want = None;
+                                    }
+                                }
+                            }
+                            // Equal IDs (or a constrained job, whose selection is its semantic court's): steps or output decide.
+                            _ => {
+                                case.suspicion = if case.steps_differ { SuspicionV1::Arithmetic } else { SuspicionV1::Output };
+                                case.cone_want = None;
+                            }
+                        }
+                    }
                     let want = match case.suspicion {
+                        // Still before the complete IDs, or waiting on a selection row's tile (the probe named it).
+                        SuspicionV1::Selection => match case.ids.as_ref() {
+                            None => Some(PalwTirPublicRequestV1::Ids { offset: 0 }),
+                            Some(_) => case.cone_want.filter(|w| !case.units.iter().any(|u| u.request_v1() == *w)),
+                        },
                         SuspicionV1::Output => match case.ids.as_ref() {
                             Some(ids) => {
                                 match kaspa_consensus_core::palw_tir_objective_v1::palw_tir_public_output_contradiction_v1(
@@ -539,7 +690,7 @@ impl PalwPanelService {
         for step in steps {
             let result: Result<(), String> = async {
                 match step {
-                    OwnerStepV1::Replay { claim, allocation_id, source_id, header, job, prompt, original_output_root } => {
+                    OwnerStepV1::Replay { claim, allocation_id, source_id, header, job, prompt, original_output_root, vocab } => {
                         let class = header.job_context.shape_profile_id;
                         let backend: Arc<dyn PalwExecutionBackendV1> = match self.resolve_backend(session, class, header.artifact_root) {
                             Ok(backend) => Arc::from(backend),
@@ -547,6 +698,18 @@ impl PalwPanelService {
                                 book.skipped.insert(claim, now.saturating_add(PALW_TIR_PUBLIC_OWNER_SKIP_DAA_V1));
                                 return Ok(());
                             }
+                        };
+                        let prompt = if prompt.is_empty()
+                            && job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL
+                        {
+                            let anchor = kaspa_consensus_core::palw_freeprompt_v3::fp_canonical_anchor_v1(&job);
+                            let (_, derived) = backend.job_for_anchor(anchor)?;
+                            let ids: Vec<u32> = derived.iter().map(|t| *t as u32).collect();
+                            kaspa_consensus_core::palw_freeprompt_v3::palw_fp_prompt_ids_admit_v1(&job, &ids, form)
+                                .map_err(|e| format!("the canonical prompt this node derives is not the job's: {e:?}"))?;
+                            ids
+                        } else {
+                            prompt
                         };
                         let need = backend.tir_own_step_source_need_v1(&header, &job, &prompt)?;
                         let memory = crate::palw_memory_ledger::host_ledger_v1()
@@ -564,18 +727,12 @@ impl PalwPanelService {
                         .await
                         .map_err(|e| format!("TIR owner replay worker failed: {e}"))??;
                         let info = own.info_v1();
-                        let suspicion = if info.header.step_merkle_root != header.step_merkle_root
-                            || info.header.step_leaf_count != header.step_leaf_count
-                        {
-                            Some(SuspicionV1::Arithmetic)
-                        } else if info.output_root != original_output_root {
-                            Some(SuspicionV1::Output)
-                        } else {
-                            if info.header.full_logits_trace_root != header.full_logits_trace_root {
-                                info!("[{PALW_PANEL}] TIR frame {claim}: trace-only disagreement (steps and output agree) is not localized here");
-                            }
-                            None
-                        };
+                        let steps_differ = info.header.step_merkle_root != header.step_merkle_root
+                            || info.header.step_leaf_count != header.step_leaf_count;
+                        // G-T2: any trace or step disagreement starts from the committed IDs (selection first, then the steps);
+                        // agreeing roots are still checked against the job's own stop rule.
+                        let suspicion = owner_suspicion_v1(&header, original_output_root, &job, vocab, info);
+                        let replay_ids = info.generated_ids.clone();
                         let Some(suspicion) = suspicion else {
                             book.skipped.insert(claim, now.saturating_add(PALW_TIR_PUBLIC_OWNER_SKIP_DAA_V1));
                             return Ok(());
@@ -590,6 +747,8 @@ impl PalwPanelService {
                                 suspicion,
                                 own,
                                 prompt,
+                                replay_ids,
+                                steps_differ,
                                 acquisition: None,
                                 units: Vec::new(),
                                 ids: None,
@@ -677,5 +836,144 @@ impl PalwPanelService {
                 debug!("[{PALW_PANEL}] TIR owner step remains pending: {why}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_consensus_core::palw_tir_public_claim_v1::{PalwTirPublicCustodianLoadV1, PalwTirPublicFrameViewV1};
+
+    fn h(n: u64) -> Hash64 {
+        Hash64::from_u64_word(n)
+    }
+    fn bond(n: u64) -> PalwBondKeyV2 {
+        PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(h(n), 0))
+    }
+    fn header(step_root: u64, trace_root: u64) -> kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1 {
+        kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1 {
+            version: 1,
+            job_context: kaspa_consensus_core::palw_v2::PalwJobContextV2 {
+                version: 2,
+                network_id: b"testnet-12".to_vec(),
+                job_id: h(1),
+                job_nullifier: h(2),
+                assignment_id: h(3),
+                execution_seed: [0u8; 32],
+                model_profile_id: h(4),
+                runtime_manifest_hash: h(5),
+                runtime_class_id: h(6),
+                shape_profile_id: h(7),
+                trace_scheme_id: h(8),
+                cu_ruleset_id: h(9),
+                tokenizer_id: h(10),
+                prompt_token_ids_hash: h(11),
+                declared_prefill_tokens: 3,
+                exact_decode_tokens: 2,
+                max_context_tokens: 64,
+            },
+            artifact_root: h(12),
+            full_logits_trace_root: h(trace_root),
+            step_leaf_count: 19,
+            step_merkle_root: h(step_root),
+            committed_execution_root: h(15),
+        }
+    }
+    /// The producer is bond 1, seat 2 holds a credited Valid custody grant (liable), seat 3 was drawn and signed nothing.
+    fn view() -> PalwTirPublicFrameViewV1 {
+        PalwTirPublicFrameViewV1 {
+            claim: h(100),
+            allocation_id: h(101),
+            source_id: h(102),
+            producer: bond(1),
+            pledge_id: h(103),
+            liable: BTreeSet::from([bond(1), bond(2)]),
+            drawn_panel: BTreeSet::from([bond(2), bond(3)]),
+            accepted_daa: 100,
+            collect_until_daa: 200,
+            material_until_daa: 300,
+            conviction_rent_sompi: 777,
+            maximum_witness_bytes: 1 << 20,
+            selection: Some(kaspa_consensus_core::palw_tir_court_v1::PalwTirSelectionRuleV1::Keyed {
+                sampling: kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY,
+            }),
+            owners_opened: 8,
+            custodian_load: PalwTirPublicCustodianLoadV1 { owners: 8, demands_per_custodian: 64, answer_bytes_per_custodian: 1 << 20 },
+            header: header(14, 13),
+        }
+    }
+    fn job(prompt_mode: u8) -> kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3 {
+        kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3 {
+            version: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+            network_domain: h(0x4E7),
+            class_id: h(7),
+            executor_bond: bond(1).0,
+            executor_pubkey: vec![1; 4],
+            operator_id: h(0x10),
+            anchor_block: h(0x11),
+            anchor_daa: 90,
+            job_nonce: [3; 32],
+            tokenizer_id: h(10),
+            prompt_token_ids_hash: h(11),
+            prompt_tokens: 3,
+            decode_token_limit: 2,
+            max_context_tokens: 64,
+            privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode,
+            sampling_seed: [0; 32],
+            temperature_q: 0,
+            decode: None,
+            tail: None,
+        }
+    }
+
+    /// **T-N6, node half: `g14_tir_seat_finding_reaches_the_filer_queue`** (G-T4). An honest drawn seat that signed no Valid is
+    /// an independent owner: the owner worker pursues the frame for it (never for a credited seat or the producer), the claims its
+    /// seat found faulty are taken first, a frame at K_owner is still pursued while a holder is idle (or where this bond already
+    /// owns), and its finding enters the public filer's book exactly as an outsider's does.
+    #[test]
+    fn g14_tir_seat_finding_reaches_the_filer_queue() {
+        let v = view();
+        let prepared = 120;
+        assert!(owner_may_pursue_v1(&v, prepared, &bond(3), 150, true, false), "the drawn seat that signed no Valid");
+        assert!(owner_may_pursue_v1(&v, prepared, &bond(300), 150, true, false), "an outsider");
+        assert!(!owner_may_pursue_v1(&v, prepared, &bond(2), 150, true, false), "a credited (liable) seat");
+        assert!(!owner_may_pursue_v1(&v, prepared, &bond(1), 150, true, false), "the producer");
+        assert!(!owner_may_pursue_v1(&v, prepared, &bond(3), 150, false, false), "no slot and none reclaimable");
+        assert!(owner_may_pursue_v1(&v, prepared, &bond(3), 150, false, true), "it already owns there");
+        assert!(!owner_may_pursue_v1(&v, prepared, &bond(3), 110, true, false), "before the original preparation door");
+        assert!(!owner_may_pursue_v1(&v, prepared, &bond(3), 200, true, false), "the conviction door closed");
+        // The seat's own faulty claims first (when they are frames), then the page, each once.
+        let order = owner_discovery_order_v1(&[h(9), h(5)], &[h(4), h(5), h(6)], |claim| *claim != h(9));
+        assert_eq!(order, vec![h(5), h(4), h(6)]);
+        // The seat's finding enters the same filer book (persisted), one per claim.
+        let dir = tempfile::tempdir().unwrap();
+        let mut book = PalwTirPublicFilerBookV1::load(dir.path());
+        let finding = PalwTirPublicConvictionEvidenceV1::Output { rows_root: h(20), ids: vec![1, 2] };
+        assert!(book.queue_finding_v1(v.claim, finding.clone(), 150));
+        assert!(!book.queue_finding_v1(v.claim, finding, 151));
+        assert_eq!(PalwTirPublicFilerBookV1::load(dir.path()).len(), 1, "it survives a restart");
+    }
+
+    /// **G-T2, the owner's first decision.** A replay whose trace or steps differ is a SELECTION candidate first (the committed IDs
+    /// are read and compared before any step descent); one whose roots agree but whose output differs, or whose own answer breaks
+    /// the job's stop rule, is an OUTPUT case; full agreement opens nothing.
+    #[test]
+    fn g14_tir_owner_reads_the_ids_first_on_any_trace_or_step_disagreement() {
+        use kaspa_consensus_core::palw_backend::PalwTirOwnStepSourceInfoV1 as Info;
+        let committed = header(14, 13);
+        let j = job(kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER);
+        let replay = |step: u64, trace: u64, output: u64, ids: Vec<u32>| Info {
+            header: header(step, trace),
+            generated_ids: ids,
+            output_root: h(output),
+            rows_root: None,
+        };
+        assert_eq!(owner_suspicion_v1(&committed, h(30), &j, 8, &replay(14, 13, 30, vec![1, 2])), None);
+        assert_eq!(owner_suspicion_v1(&committed, h(30), &j, 8, &replay(14, 99, 30, vec![1, 2])), Some(SuspicionV1::Selection));
+        assert_eq!(owner_suspicion_v1(&committed, h(30), &j, 8, &replay(99, 13, 30, vec![1, 2])), Some(SuspicionV1::Selection));
+        assert_eq!(owner_suspicion_v1(&committed, h(30), &j, 8, &replay(14, 13, 31, vec![1, 2])), Some(SuspicionV1::Output));
+        // The V3 rule never stops before its budget: a short own answer is an output (stop-rule) case even when the roots agree.
+        assert_eq!(owner_suspicion_v1(&committed, h(30), &j, 8, &replay(14, 13, 30, vec![1])), Some(SuspicionV1::Output));
     }
 }

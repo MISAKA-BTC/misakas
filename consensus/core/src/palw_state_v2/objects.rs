@@ -3297,6 +3297,11 @@ fn apply_object_inner(
                     why: why.to_string(),
                 });
             }
+            // **G14 G-03: past `palw_tir_public_conviction_v1` a TIR original takes its ORIGINAL frame or nothing.** A commitment on
+            // a registered TIR class without its transaction-paired `TFP1` is refused here, before anything is priced or written —
+            // so no frameless TIR claim reaches a reward, weight or credit (it cannot route around the one public conviction door).
+            // `Ok` below the fence and for every non-TIR class: byte-identical there.
+            palw_tir_public_fold_v1::require_original_frame_v1(builder, *claim_id, *class_id)?;
             // **G-01 option (b) / G-05 (`palw_g14_route_required_v1`)**: past the fence a free-prompt claim whose job needs a G14
             // route that is not armed (selection: the TIR public frame on THIS commitment; constraint / prefix / tokenizer: the staged
             // court with its legacy filer; never for non-public evidence) is not taken — no reward, weight or credit; its carrier pays
@@ -3626,22 +3631,20 @@ fn apply_object_inner(
             // and a row written before the claim exists would be swept by the drop of a claim that
             // was never there. Only past the fence: below it the map stays empty, which is what
             // keeps the state root where it was.
+            let prompt_row = PalwFpClaimPromptV1 {
+                prompt_tokens: *prompt_tokens,
+                prefix_root: crate::palw_freeprompt_v3::fp_prompt_prefix_root_v1(prompt_token_ids),
+                prompt_token_ids: prompt_token_ids.clone(),
+                expires_daa: palw_fp_prompt_row_expiry_v1(ctx.daa_score, builder.params.epoch_length),
+                consumed_state_root: consumed_prefix_state.state_root,
+                consumed_prefix_tokens: consumed_prefix_state.prefix_tokens,
+            };
             if derived.is_some() {
                 // ADR-0148: the first compute-priced commitment opens the lane's one target.
                 if in_compute {
                     builder.seed_fp_pooled_receipt_target()?;
                 }
-                builder.write_fp_claim_prompt(
-                    (*class_id, *bond, *claim_id),
-                    Some(PalwFpClaimPromptV1 {
-                        prompt_tokens: *prompt_tokens,
-                        prefix_root: crate::palw_freeprompt_v3::fp_prompt_prefix_root_v1(prompt_token_ids),
-                        prompt_token_ids: prompt_token_ids.clone(),
-                        expires_daa: palw_fp_prompt_row_expiry_v1(ctx.daa_score, builder.params.epoch_length),
-                        consumed_state_root: consumed_prefix_state.state_root,
-                        consumed_prefix_tokens: consumed_prefix_state.prefix_tokens,
-                    }),
-                )?;
+                builder.write_fp_claim_prompt((*class_id, *bond, *claim_id), Some(prompt_row.clone()))?;
             }
             // ADR-0088 Decision 3's recorded gap: a free-prompt claim names no root, so it is
             // attributed to the class's founding line's current root until the job's v6.
@@ -3662,7 +3665,8 @@ fn apply_object_inner(
                     .expect("a prevalidated native claim must have its immutable Panel consent fields");
             }
             if let Some(frame) = tir_original {
-                palw_tir_public_fold_v1::install_original_v1(builder, ctx, frame)?;
+                // G14 G-T3: the frame keeps the claim's public prompt ids to its material horizon (derived work or not).
+                palw_tir_public_fold_v1::install_original_v1(builder, ctx, frame, &prompt_row)?;
             }
         }
     }

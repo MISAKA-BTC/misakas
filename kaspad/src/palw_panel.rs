@@ -4008,6 +4008,31 @@ fn seat_conformance_on_v1() -> bool {
     SEAT_CONFORMANCE_V1.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// **DRILL ONLY (G14 audit §5.3, `--palw-drill-tamper-tir-frame`): the lie this node's canonical claims commit as ORIGINAL TIR
+/// frames**, so the real-node drill can inject each frame fault on the binary it ships and watch an outside bond convict it
+/// (never on a network carrying value: the daemon refuses the flag off devnet/simnet and salted testnet-12 drills).
+///
+/// The faults go through the producer's own path (the backend's run, the commitment assembly, the `TFP1` choice), so what is
+/// committed is self-consistent everywhere except the one lie:
+/// - **D-05 `Cone { leaf }`**: one lane of committed step leaf `leaf` moved and every root re-derived from that capture (the
+///   backend's free-prompt drill verb) — a cone forgery the frame's arithmetic door convicts.
+/// - **D-06 `Selection { position }`**: the committed token at decode `position` is not the job's own selection, the arithmetic
+///   after it computed honestly from it (the backend's selection drill verb) — the frame's decode-token door.
+/// - **D-07 `Output`**: the commitment names an output root the trace's own authenticated ids do not reproduce — the output door.
+/// - **D-18 `NoTfp1`**: the original is published without its `TFP1` frame even past `palw_tir_public_conviction_v1`; G-03
+///   refuses it at acceptance (before the fix it earned on the legacy route).
+///
+/// **Status:** a backend must serve the IR free-prompt lane for D-05/D-06 to produce a TIR original; the IR backend still refuses
+/// free prompts (`TIR_FREE_PROMPT_CLOSED_V1`, RFC-0002 Phase H), so on a real node these two produce no TIR claim yet. D-07 and
+/// D-18 act on the commitment and the carrier and are backend-independent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwDrillTirFrameFaultV1 {
+    Cone { leaf: u64 },
+    Selection { position: u32 },
+    Output,
+    NoTfp1,
+}
+
 #[derive(Clone)]
 pub struct PalwPanelConfig {
     /// Path to the 32-byte hex ML-DSA-87 seed of the bond that holds this node's seats.
@@ -4065,6 +4090,10 @@ pub struct PalwPanelConfig {
     /// DRILL ONLY (devnet/simnet; the daemon refuses it elsewhere): commit canonical claims whose
     /// capture has one lane of this step leaf corrupted — the one-move court's drill.
     pub drill_tamper_fp_leaf: Option<u64>,
+    /// DRILL ONLY (devnet/simnet or a salted testnet-12 drill; the daemon refuses it elsewhere): the lie this node's canonical
+    /// claims commit as ORIGINAL TIR frames — the G14 audit's drill scenarios D-05 (cone), D-06 (selection), D-07 (output) and
+    /// D-18 (no `TFP1`). See [`PalwDrillTirFrameFaultV1`].
+    pub drill_tamper_tir_frame: Option<PalwDrillTirFrameFaultV1>,
     /// DRILL ONLY: dispute even a claim this node reproduces exactly, so the innocent half of a
     /// round trip can be shown on a live chain. Refused on mainnet by the daemon.
     pub drill_challenge_all: bool,
@@ -7796,9 +7825,24 @@ impl PalwPanelService {
         job.max_context_tokens = canonical_ctx.max_context_tokens;
 
         let (job_for_run, prompt_for_run) = (job.clone(), prompt.clone());
-        let drill_fault_leaf = self.config.drill_tamper_fp_leaf;
+        // G14 drills D-05/D-06 (`--palw-drill-tamper-tir-frame`): a cone forgery rides the shipped leaf fault; a selection
+        // violation is the backend's own selection drill verb (refused by a backend without one).
+        let tir_drill = self.config.drill_tamper_tir_frame;
+        let drill_fault_leaf = self.config.drill_tamper_fp_leaf.or(match tir_drill {
+            Some(PalwDrillTirFrameFaultV1::Cone { leaf }) => Some(leaf),
+            _ => None,
+        });
+        let drill_selection = match tir_drill {
+            Some(PalwDrillTirFrameFaultV1::Selection { position }) => Some(position),
+            _ => None,
+        };
         let (_backend, executed) = offload(backend, move |b| {
             let run = match drill_fault_leaf {
+                None if drill_selection.is_some() => b.execute_free_prompt_with_selection_fault_v1(
+                    &job_for_run,
+                    &prompt_for_run,
+                    drill_selection.unwrap_or_default(),
+                )?,
                 None => b.execute_free_prompt(&job_for_run, &prompt_for_run)?,
                 // **DRILL ONLY** (ADR-0100 §6 step 2; the daemon refuses the flag off
                 // devnet/simnet): the same job with one lane of this leaf corrupted, every fact and
@@ -7821,9 +7865,17 @@ impl PalwPanelService {
             );
         }
         let retention = current_daa.saturating_add(facts.min_trace_retention_daa);
-        let commitment =
+        let mut commitment =
             kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(&job, &shape.job_context, &run, retention)
                 .map_err(|e| format!("the run does not assemble into a commitment: {e}"))?;
+        if let Some(position) = drill_selection {
+            warn!("[{PALW_PANEL}] PALW DRILL (D-06): this canonical claim commits a token at decode position {position} its job's rule does not select");
+        }
+        // G14 drill D-07: the commitment names an output root its own committed trace's ids do not reproduce.
+        if tir_drill == Some(PalwDrillTirFrameFaultV1::Output) {
+            commitment.output_root = Hash64::from_u64_word(0xD07D_07D0_7D07_D07D);
+            warn!("[{PALW_PANEL}] PALW DRILL (D-07): this canonical claim commits a substituted output root");
+        }
         let claim_id = fp_claim_id_v3(&commitment);
         let (run, original_header, mut unpublished_projection) =
             if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa) {
@@ -7893,7 +7945,13 @@ impl PalwPanelService {
         // this node's accepted snapshot, the producer's source pledge signed over the quoted resource plan, and the exact native rent
         // declared and paid on top of the carrier's relay fee. An original the frame route does not admit (semantic stage, non-greedy
         // selection, tail) quotes `None` and keeps the history-custody route above. Dormant: the quote is `None` below the fence.
+        // G14 drill D-18: past the fence the original is published WITHOUT its TFP1 frame (G-03 refuses it at acceptance).
+        let drill_no_tfp1 = tir_drill == Some(PalwDrillTirFrameFaultV1::NoTfp1);
+        if drill_no_tfp1 {
+            warn!("[{PALW_PANEL}] PALW DRILL (D-18): this canonical claim is published without its TFP1 original frame");
+        }
         let tir_original = match &original_header {
+            _ if drill_no_tfp1 => None,
             Some(kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header))
                 if self.consensus_config.params.palw_tir_public_conviction_v1_fence().is_some_and(|f| f.is_active(current_daa)) =>
             {
