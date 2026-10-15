@@ -17,6 +17,8 @@ pub enum PalwMaterialCodecV1 {
     NativeHeldComplete,
     KernelPositions,
     SegmentedParts,
+    /// Versioned complete typed court inventory, including snapshot slices and entries.
+    TypedKernelV4,
 }
 
 /// The full original and each continuation occupy separate signed scopes.

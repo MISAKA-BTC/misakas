@@ -433,18 +433,20 @@ fn program_blob<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1<R>, cap
 /// used by ledger restoration. The stack prefix supplies only Borsh framing;
 /// the actual program bytes are scanned directly without a concatenated Vec.
 pub(crate) fn standalone_tir_program_requests_v1(bytes: &[u8]) -> io::Result<u64> {
-    use misaka_palw_tir::program::{MAX_PROGRAM_BYTES, TirProgramV1};
+    standalone_program_requests_v1::<misaka_palw_tir::TirProgramV1>(bytes, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)
+}
+pub(crate) fn standalone_program_requests_v1<T: NativeWireScanV1>(bytes: &[u8], cap: u64) -> io::Result<u64> {
     let len = u32::try_from(bytes.len()).map_err(|_| wire::wire_bad("TIR program frame exceeds u32"))?;
     let prefix = len.to_le_bytes();
     let source = std::io::Cursor::new(prefix).chain(bytes);
     let mut reader = NativeWireReaderV1::new(source, u64::from(len) + 4);
-    let shape = program_blob::<TirProgramV1, _>(&mut reader, MAX_PROGRAM_BYTES as u64)?;
+    let shape = program_blob::<T, _>(&mut reader, cap)?;
     if reader.remaining() != 0 {
         return Err(wire::wire_bad("standalone TIR program trailing bytes"));
     }
     shape
         .heap
-        .checked_add(size_of::<NativeRetainedV1<TirProgramV1>>() as u64)
+        .checked_add(size_of::<NativeRetainedV1<T>>() as u64)
         .ok_or_else(|| wire::wire_bad("standalone TIR owner framing overflow"))
 }
 

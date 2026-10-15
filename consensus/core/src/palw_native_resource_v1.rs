@@ -21,6 +21,7 @@ pub type NativeStateCarriageV1 = NativeRetainedV1<crate::palw_state_v2::PalwStat
 mod generated;
 mod inventory;
 mod kernel_ledger;
+mod kernel_salted;
 mod ledger_expansion;
 mod tir;
 pub use demand::reserve_native_requests_v1;

@@ -978,3 +978,5 @@ pub mod palw_attempt_material_v3;
 
 pub mod palw_material_recovery_observation_v4;
 pub mod palw_material_session_enrollment_v4;
+
+pub mod palw_prospective_kernel_material_v4;

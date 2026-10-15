@@ -528,3 +528,35 @@ supply actual prior-stage outputs and authenticate image/finalized-output job
 facts. They do not independently establish native job authority or a complete
 pipeline proof. New source tests cover all seven edge kinds, padding, signed
 upstream values, native R agreement and a zero-hash-budget refusal; unrun.
+
+### Prospective provider handoff source (2026-10-15; uncompiled)
+
+The new `palw_prospective_kernel_material_v4` boundary uses an authenticated
+native checkpoint and the actual producer bond's key. Its distinct ML-DSA
+purpose signs the exact prospective salted commit, ledger/aux roots, finite
+admission interval, canonical provider roster and material manifest. There is
+no material-consent digest in this intent and no claim row supplied over wire.
+An unsigned SDK rehearsal and the signature-checked provider entry both replay
+the actual kernel admission on a retained local candidate ledger. This preview
+does not debit native escrow, install a claim, emit settlements or grant
+accepted-chain authority. Native admission must still occur afterwards. The
+specialized mutation/workspace owner API is being completed with RFC06 before
+consolidated validation.
+
+`TypedKernelV4` appends codec 3; codec bytes 0–2 keep their meanings. Its exact
+court inventory adds all snapshot slices and every returned retrieval entry to
+memory positions/pre-state and composite model positions. The old position
+bundle omitted these retrieval scopes. The new bounded range visitor,
+membership check and classifier authenticate each unit with the native
+snapshot/entry/position verifier. Canonical ordering and exact cardinality
+reject duplicate or omitted units. Source tests use real snapshot openings and
+exercise missing, duplicate and corrupt units, plus frozen old codec tags;
+uncompiled and unrun.
+
+The owned preview retains the candidate-ledger allocation ticket, the manifest
+and the native producer/provider keys. The provider daemon must durably hold
+actual bytes before signing 240/242, then check actual native adoption. Full
+artifact parameter retention, tiled/row transport, durable intrinsic context
+recovery after pruning, SDK bundle conversion and the final transport consumer
+are still being connected. This court-unit boundary does not claim these
+remaining paths are complete or that a caller-supplied consent is evidence.
