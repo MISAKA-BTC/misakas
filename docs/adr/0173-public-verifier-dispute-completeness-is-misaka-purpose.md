@@ -215,3 +215,16 @@ RFC-0014のgatesを、少なくとも次の条件で満たすまで本目標を�
 **状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
 
 通常のreward-bearing modeを1 claim 1 seat（Panel=1）とする場合でも、non-seatの証拠取得・裁定権限を制限しない。Panel署名を計算の真実の最終根拠にしない。producerと唯一のseatが共謀した場合、必要なモデルを保有したnon-seatが公開証拠から反証でき、Panel署名で妨害されないこと（受入試験P04）を要求する。外部の実検査が一切ない場合の未検出リスクは残余リスクとして明示し、`p = 1` と報告しない（P05）。
+
+## ユーザー方針 2026-10-15 による改定
+
+* 中核目標(非Panelの公開bondによる客観的conviction)は維持する。これに加え、**合意creditは公開告発の機会が経過した`SecurityCertified`のclaimだけが持つ**。G14の公開告発window(異議・convictionなしの経過)は認証の必要条件である。
+* `p = 0`(閉鎖モデル)の残余リスクは経済的な損失に限られ、合意finalityにはならない。
+
+**ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
+
+* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
+* **認証は前提に基づく。** claim固定後の乱数でglobal poolから抽選した検証者のm-of-k肯定承認と、G14公開告発windowの異議なし経過で成立する。「抽選されたverifier stakeのうち正直な割合が閾値以上」を明示的な前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない(PRINCIPLES §8)。認証済みでもG14で反証されたclaimはvoidされ、合意creditは取り消される。
+* **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
+* **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
+* 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。
