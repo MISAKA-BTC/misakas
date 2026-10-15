@@ -18,11 +18,18 @@
 //!
 //! **Not adjudicable here:** a seeded/temperature Float32 job (there is no canonical float
 //! sampler), and arithmetic correctness of the f32 row itself (a Float32 class's logits are an
-//! event summary, not a step output). Both stay refused/uncovered. The streaming verifier is an
-//! in-memory state machine; a rooted, restartable court over it is wiring that does not exist yet.
+//! event summary, not a step output). Both stay refused/uncovered.
+//!
+//! The streaming verifier is **rooted and restartable**: its hash state is the serializable
+//! [`crate::palw_rendering_stream_v1::LeafHashContinuationV1`] (the actual BLAKE2b compression
+//! continuation, never prior bytes), so the staged court stores it in chain state between blocks
+//! ([`crate::palw_float_constraint_source_v1`]) and [`PalwFloatRowStreamV1::check_v1`] re-derives
+//! its byte position from the lane count on every load.
 
 use crate::Hash64;
+use crate::palw_rendering_stream_v1::LeafHashContinuationV1;
 use crate::palw_v2::{PalwTraceEventOpeningV2, PalwTracePhaseV2, PalwTraceSummaryV2};
+use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::BTreeMap;
 
 /// One streamed part: at most 64 KiB of little-endian f32 lanes.
@@ -59,7 +66,7 @@ pub fn palw_float32_event_phase_v1(event_index: u32) -> (PalwTracePhaseV2, u32) 
 }
 
 /// What a fully authenticated row yields.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwFloatRowFactsV1 {
     pub event_index: u32,
     pub greedy_lane: u32,
@@ -70,13 +77,14 @@ pub struct PalwFloatRowFactsV1 {
 
 /// Bounded streaming authentication of ONE committed f32 row. Parts arrive in order; nothing a
 /// part claims is believed until [`Self::finish_v1`] re-derives the event hash, its opening and
-/// the binding's trace root.
-#[derive(Clone)]
+/// the binding's trace root. Serializable: the chain stores it between parts.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwFloatRowStreamV1 {
+    job_context_hash: Hash64,
     event_index: u32,
     n_vocab: u32,
     lanes_read: u32,
-    hash: blake2b_simd::State,
+    hash: LeafHashContinuationV1,
     nominated: Vec<u32>,
     keys: BTreeMap<u32, i32>,
     best: Option<(i32, u32)>,
@@ -92,16 +100,56 @@ impl PalwFloatRowStreamV1 {
             return Err("Float32 row stream names no bounded vocabulary, event or nominated lanes".into());
         }
         let (phase, step) = palw_float32_event_phase_v1(event_index);
-        let mut hash =
-            blake2b_simd::Params::new().hash_length(64).key(crate::palw_v2::PALW_V2_DOMAIN_LOGITS_EVENT).to_state();
+        // The keyed BLAKE2b-512 of `logits_event_hash_v2`, as a storable continuation.
+        let mut hash = LeafHashContinuationV1::new(crate::palw_v2::PALW_V2_DOMAIN_LOGITS_EVENT);
         hash.update(&crate::palw_v2::logits_event_header_v2(job_context_hash, phase, step, n_vocab));
         let mut nominated = nominated.to_vec();
         nominated.sort_unstable();
         nominated.dedup();
-        Ok(Self { event_index, n_vocab, lanes_read: 0, hash, nominated, keys: BTreeMap::new(), best: None })
+        Ok(Self {
+            job_context_hash: *job_context_hash,
+            event_index,
+            n_vocab,
+            lanes_read: 0,
+            hash,
+            nominated,
+            keys: BTreeMap::new(),
+            best: None,
+        })
     }
     pub fn lanes_read_v1(&self) -> u32 {
         self.lanes_read
+    }
+    pub fn event_index_v1(&self) -> u32 {
+        self.event_index
+    }
+    pub fn n_vocab_v1(&self) -> u32 {
+        self.n_vocab
+    }
+    pub fn nominated_v1(&self) -> &[u32] {
+        &self.nominated
+    }
+    /// A stored continuation is never a credential: its hashed byte count must be exactly the
+    /// key block, the canonical event header and the lanes read so far; its nominated keys and
+    /// running best must lie inside the lanes read.
+    pub fn check_v1(&self) -> Result<(), String> {
+        let (phase, step) = palw_float32_event_phase_v1(self.event_index);
+        let header = crate::palw_v2::logits_event_header_v2(&self.job_context_hash, phase, step, self.n_vocab).len() as u128;
+        if self.n_vocab == 0
+            || self.event_index as usize >= crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS
+            || self.lanes_read > self.n_vocab
+            || self.nominated.len() > PALW_FLOAT_ROW_NOMINATED_LANES_V1
+            || self.nominated.windows(2).any(|w| w[0] >= w[1])
+            || self.nominated.iter().any(|lane| *lane >= self.n_vocab)
+            || self.keys.keys().any(|lane| *lane >= self.lanes_read || self.nominated.binary_search(lane).is_err())
+            || self.nominated.iter().any(|lane| (*lane < self.lanes_read) != self.keys.contains_key(lane))
+            || self.best.is_some() != (self.lanes_read > 0)
+            || self.best.is_some_and(|(_, lane)| lane >= self.lanes_read)
+            || self.hash.byte_count() != Some(128 + header + u128::from(self.lanes_read) * 4)
+        {
+            return Err("Float32 row continuation changed its original byte position or nominated lanes".into());
+        }
+        Ok(())
     }
     pub fn part_v1(&mut self, offset_lanes: u32, bytes: &[u8]) -> Result<(), String> {
         if offset_lanes != self.lanes_read
@@ -141,7 +189,10 @@ impl PalwFloatRowStreamV1 {
         if self.lanes_read != self.n_vocab || summary.vocab_size != self.n_vocab {
             return Err("Float32 row is incomplete or not the committed vocabulary wide".into());
         }
-        let event_hash = Hash64::from_bytes(self.hash.finalize().as_bytes().try_into().expect("64"));
+        if *job_context_hash != self.job_context_hash {
+            return Err("Float32 row continuation was opened for another job context".into());
+        }
+        let event_hash = self.hash.finish();
         if opening.event_index != self.event_index || opening.event_hash != event_hash {
             return Err("Float32 row bytes do not hash to the opened event".into());
         }

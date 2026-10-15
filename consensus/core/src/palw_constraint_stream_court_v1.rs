@@ -434,6 +434,75 @@ impl PalwConstraintStreamCourtV1 {
             if terminal { original_stop } else { None },
         )
     }
+    /// **Greedy Float32 selection** (behind `palw_staged_float_constraint_v1`): the selection facts
+    /// come from an authenticated [`crate::palw_float_constraint_source_v1::PalwFloatConstraintPinV1`]
+    /// — the ids re-derived the claim's v2 trace root, and the committed/beating lanes' f32 order
+    /// keys come from a row whose event hash re-derived it too. The order key reproduces the
+    /// reference worker's strict `>` with first-index ties, so `beats` is the integer lane's own
+    /// rule over the keys. A seeded job is refused (no canonical float sampler). The caller supplies
+    /// the native retained original commitment for the terminal predicate, as for Flat.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_from_float_pin_with_original_stop_context_v1(
+        claim_id: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        expected_root: Hash64,
+        binding: &PalwStepBindingV2,
+        job: &PalwFreePromptJobV3,
+        pin: &crate::palw_float_constraint_source_v1::PalwFloatConstraintPinV1,
+        witness: Option<u32>,
+        eog_count: u32,
+        eog_opening: &PalwStepOpeningV1,
+        original: &PalwFreePromptCommitmentV3,
+        signed_context: Option<Hash64>,
+    ) -> Result<Self, String> {
+        if fp_claim_id_v3(original) != claim_id
+            || original.job != *job
+            || original.execution_root != expected_root
+            || original.decode_tokens_executed != binding.job_context.exact_decode_tokens
+            || original.decode_tokens_executed == 0
+            || original.decode_tokens_executed > job.decode_token_limit
+            || match original.stop_reason {
+                PalwFpStopReasonV3::ExactBudgetReached => original.decode_tokens_executed != job.decode_token_limit,
+                PalwFpStopReasonV3::EndOfGeneration => original.decode_tokens_executed >= job.decode_token_limit,
+            }
+        {
+            return Err("terminal Float32 predicate changes native original claim/count/stop facts".into());
+        }
+        if !job.sampling_v2().is_greedy() {
+            return Err("a seeded Float32 job has no canonical float sampler to adjudicate".into());
+        }
+        if !pin.matches_binding_v1(binding) {
+            return Err("Float32 semantic pin does not preserve the original claim/job/lane".into());
+        }
+        let terminal = pin.position_v1() as usize == pin.generated_ids_v1().len();
+        let committed = pin.committed_id_v1().filter(|id| *id < binding.shape_profile.vocab_size);
+        if committed.is_some() != pin.committed_key_v1().is_some() && !terminal {
+            return Err("in-vocabulary Float32 selection lacks its authenticated order key".into());
+        }
+        let beat = pin.beat_v1();
+        let beats = beat.zip(committed.zip(pin.committed_key_v1())).is_some_and(|((id, b), (committed, key))| {
+            crate::palw_decode_select_v2::decode_lane_beats_v2(i64::from(b), id as usize, i64::from(key), committed as usize)
+        });
+        Self::from_authenticated_selection_v1(
+            claim_id,
+            owner,
+            reserved_daa,
+            expected_root,
+            binding,
+            job,
+            pin.generated_ids_v1(),
+            pin.position_v1(),
+            witness,
+            beat.map(|b| b.0),
+            beats,
+            eog_count,
+            eog_opening,
+            signed_context,
+            &borsh::to_vec(pin).map_err(|e| e.to_string())?,
+            if terminal { Some(original.stop_reason) } else { None },
+        )
+    }
     #[allow(clippy::too_many_arguments)]
     fn from_authenticated_selection_v1(
         claim_id: Hash64,

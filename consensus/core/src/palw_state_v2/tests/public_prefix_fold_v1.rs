@@ -614,6 +614,7 @@ fn prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflo
             maximum_custodians,
             1 << 32,
             extras.staged_public_court.unwrap(),
+            crate::palw_staged_preclaim_v1::PalwStagedRouteGatesV1::default(),
         )
         .unwrap()
         .unwrap();
@@ -850,6 +851,8 @@ fn flat_response_index_pages_literal_phase_deadlines_and_roundtrips_seed_journal
                 Box::new(PalwSelectedSourceContextV1 { binding: Box::new(binding.clone()), job: Box::new(accusation.job.clone()) })
                     .into(),
             ),
+            float: None,
+            float_context: None,
             history_recovery: Default::default(),
             active: None,
             opened: vec![],

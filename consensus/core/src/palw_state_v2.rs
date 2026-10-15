@@ -8148,9 +8148,11 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
                     .map(|p| p.envelope.rent_sompi)
                     .unwrap_or(u64::MAX)
                 }
-                None | Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FlatConstraint { .. }) => {
-                    config.claim_terms(0, 4095, seed.binding.shape_profile.vocab_size).map(|t| t.plan.rent_sompi).unwrap_or(u64::MAX)
-                }
+                None
+                | Some(
+                    crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FlatConstraint { .. }
+                    | crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FloatConstraint { .. },
+                ) => config.claim_terms(0, 4095, seed.binding.shape_profile.vocab_size).map(|t| t.plan.rent_sompi).unwrap_or(u64::MAX),
             }
         }
         PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration } => {

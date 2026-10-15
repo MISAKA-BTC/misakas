@@ -58,6 +58,7 @@ impl PalwChainStateV2 {
         maximum_custodians: u64,
         maximum_leaves: u64,
         config: crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1,
+        gates: crate::palw_staged_preclaim_v1::PalwStagedRouteGatesV1,
     ) -> Result<Option<crate::palw_staged_preclaim_v1::PalwStagedPreclaimQuoteV1>, String> {
         if !self.staged_required_families_v1(original) {
             return Ok(None);
@@ -85,8 +86,8 @@ impl PalwChainStateV2 {
                 maximum_leaves,
                 config,
             )?;
-            if quote.is_some() && !crate::palw_staged_preclaim_v1::PALW_STAGED_TIR_ROUTE_ADMITTED_V1 {
-                return Err("TIR required-family claims stay refused: the native-context source carriage, TIR seed and TIR node actors are not wired (g14-completion-matrix §2i)".into());
+            if quote.is_some() && !gates.tir {
+                return Err("TIR required-family claims are refused below palw_staged_tir_route_v1".into());
             }
             return Ok(quote);
         }
@@ -94,7 +95,7 @@ impl PalwChainStateV2 {
             .fp_work_profiles
             .get(&geometry.class_id)
             .ok_or("legacy preclaim quote has no native registered shape profile")?;
-        crate::palw_staged_preclaim_v1::staged_preclaim_quote_v1(
+        crate::palw_staged_preclaim_v1::staged_preclaim_quote_with_gates_v1(
             &geometry,
             original,
             header,
@@ -104,6 +105,7 @@ impl PalwChainStateV2 {
             maximum_custodians,
             maximum_leaves,
             config,
+            gates,
         )
     }
     pub(super) fn staged_retirement_floor_v1(&self, claim: &Hash64, ordinary: u64) -> u64 {
@@ -500,7 +502,15 @@ impl TransitionBuilder<'_> {
         );
         let quote = self
             .state
-            .staged_preclaim_quote_v1(original, header, claim.accepted_daa, maximum_custodians, ladder, config)
+            .staged_preclaim_quote_v1(
+                original,
+                header,
+                claim.accepted_daa,
+                maximum_custodians,
+                ladder,
+                config,
+                crate::palw_staged_preclaim_v1::PalwStagedRouteGatesV1::of_extras_v1(self.extras),
+            )
             .map_err(|e| stage_refused(claim_id, e))?;
         let Some(quote) = quote else {
             // No staged semantic family is claimed by this descriptor. This is
@@ -787,9 +797,11 @@ pub(super) fn open(
                 Family::PublicPrefix
             }
             Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::Tokenizer { .. }) => Family::Tokenizer,
-            None | Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FlatConstraint { .. }) => {
-                Family::Constraint
-            }
+            None
+            | Some(
+                crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FlatConstraint { .. }
+                | crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FloatConstraint { .. },
+            ) => Family::Constraint,
             _ => return Err(stage_refused(seed.claim, "bundle requires the exact public required family")),
         };
         let next = &bundle.plan.stages[bundle.opened.len()];
@@ -1145,6 +1157,60 @@ pub(super) fn open(
         )?;
         return Ok(());
     }
+    if let Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FloatConstraint { source_id, answerer }) =
+        &seed.auxiliary
+    {
+        if !b.extras.staged_float_constraint_active {
+            return Err(PalwStateV2Error::ObjectiveOffenceDormant);
+        }
+        let frame =
+            bundle.as_ref().ok_or_else(|| stage_refused(seed.claim, "Float32 semantic seed requires original prepaid source frame"))?;
+        let source = frame
+            .float
+            .as_ref()
+            .ok_or_else(|| stage_refused(seed.claim, "Float32 semantic seed lacks an authenticated original source"))?;
+        if source.source_id != *source_id
+            || frame
+                .float_context
+                .as_ref()
+                .is_none_or(|context| context.binding.as_ref() != &binding || context.job.as_ref() != &original.job)
+        {
+            return Err(stage_refused(seed.claim, "Float32 seed substitutes accepted original source, binding or job"));
+        }
+        let pin = source.authenticated_pin_v1(answerer).map_err(|e| stage_refused(seed.claim, e))?;
+        let funded = contract
+            .terms
+            .plan
+            .rent_sompi
+            .checked_add(contract.terms.plan.deposit_sompi)
+            .ok_or(PalwStateV2Error::Overflow("Float32 semantic funding"))?;
+        let exits = vec![contract.terms.bond_exit_after_daa; contract.panel.len()];
+        let row = crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1::admit_with_authenticated_float_pin_v1(
+            seed,
+            &original,
+            target.execution_root,
+            contract.terms,
+            ctx.daa_score,
+            funded,
+            90_000,
+            b.state.claim(&seed.claim).ok_or(PalwStateV2Error::MissingClaim(seed.claim))?.trace_retention_daa,
+            contract.terms.bond_exit_after_daa,
+            &exits,
+            &binding,
+            &pin,
+        )
+        .map_err(|e| stage_refused(seed.claim, e))?;
+        write_admitted_family_v1(
+            b,
+            key,
+            PalwStagedCourtRowV1::Constraint(Box::new(row).into()),
+            bundle,
+            seed,
+            &binding,
+            &original.job,
+        )?;
+        return Ok(());
+    }
     // A root-authenticated profile may narrow a global fallback plan after seed admission.
     // Claim-wide clocks/holds remain the immutable conservative envelope stamped at acceptance.
     let mut terms = contract.terms;
@@ -1278,6 +1344,12 @@ pub(super) fn movement(
         Action::FlatSourceOpen { .. } | Action::FlatSourceAnswer(_) | Action::FlatSourceNominate { .. } | Action::FlatSourceCollect
     ) {
         return flat_control_v1(b, ctx, movement);
+    }
+    if matches!(
+        movement.action,
+        Action::FloatSourceOpen { .. } | Action::FloatSourceAnswer(_) | Action::FloatSourceNominate { .. } | Action::FloatSourceCollect
+    ) {
+        return float_control_v1(b, ctx, movement);
     }
     if matches!(movement.action, Action::HistoryCustodyGrant { .. } | Action::HistoryRecovery { .. }) {
         return history_control_v1(b, ctx, movement);
@@ -1911,6 +1983,168 @@ fn flat_control_v1(
     Ok(())
 }
 
+/// **The greedy Float32 source** (behind `palw_staged_float_constraint_v1`): the Flat source's
+/// clocks and literal custody over the claim's ORIGINAL v2 event tree — ids first, the owner's
+/// nomination over authenticated ids, then the nominated f32 row streamed into a stored row
+/// continuation per isolated slot ([`crate::palw_float_constraint_source_v1`]).
+fn float_control_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    movement: &crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamMoveV1,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1 as Action;
+    // Defence in depth: below its fence the form is the live build's undecodable payload and
+    // never reaches the fold (`crate::palw_staged_route_forms_v1`).
+    if b.extras.staged_public_court.is_none() || !b.extras.staged_float_constraint_active {
+        return Err(PalwStateV2Error::ObjectiveOffenceDormant);
+    }
+    movement.check().map_err(|e| stage_refused(movement.claim, e))?;
+    let key = PalwStagedCourtKeyV1::Owner(movement.claim, movement.reserver);
+    let Some(PalwStagedCourtRowV1::OwnerBundle(mut bundle)) = b.state.staged_courts.get(&key).cloned() else {
+        return Err(stage_refused(movement.claim, "Float32 source has no original prepaid owner frame"));
+    };
+    if movement.reserved_daa != bundle.reserved_daa
+        || movement.seed_id != bundle.plan.id_v1(bundle.claim)
+        || ctx.daa_score < bundle.plan.terms.accepted_daa
+        || ctx.daa_score >= bundle.plan.terms.collect_until_daa
+    {
+        return Err(stage_refused(movement.claim, "Float32 source changes literal paid original owner, seed or clock"));
+    }
+    let old = PalwStagedCourtRowV1::OwnerBundle(bundle.clone()).checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
+    let old_index = flat_response_index_rows_v1(&PalwStagedCourtRowV1::OwnerBundle(bundle.clone()));
+    let initial = bundle.float.is_none();
+    if let Action::FloatSourceOpen { binding } = &movement.action {
+        let next = bundle.active.map_or(0, |n| n as usize + 1);
+        let stage = bundle
+            .plan
+            .stages
+            .get(next)
+            .filter(|s| s.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint)
+            .ok_or_else(|| stage_refused(movement.claim, "Float32 source is not upcoming required family"))?;
+        if !initial
+            || bundle.opened.len() != next
+            || bundle.selected.is_some()
+            || bundle.flat.is_some()
+            || bundle.active.is_some_and(|n| !bundle.opened[n as usize].row.honest_complete_v1().unwrap_or(false))
+            || bundle.inventory.as_ref().is_some_and(|i| !i.sealed || i.length_fault_v1())
+        {
+            return Err(stage_refused(movement.claim, "Float32 source repeats intake or bypasses strict honest predecessor"));
+        }
+        let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(&b.state, &movement.claim)
+            .ok_or(PalwStateV2Error::MissingClaim(movement.claim))?;
+        let profile = b
+            .state
+            .fp_work_profiles
+            .get(&target.class_id)
+            .ok_or_else(|| stage_refused(movement.claim, "Float32 source has no original native profile"))?;
+        if profile.lane != crate::palw_step::PalwStepLaneV1::Float32 {
+            return Err(stage_refused(movement.claim, "Float32 source reinterprets an original integer class"));
+        }
+        let binding = binding.resolve_v1(target.class_id, profile).map_err(|e| stage_refused(movement.claim, e))?;
+        let original = b
+            .state
+            .staged_original_job_v1(movement.claim)
+            .map_err(|e| stage_refused(movement.claim, e))?
+            .ok_or_else(|| stage_refused(movement.claim, "Float32 source original accepted job absent"))?;
+        crate::palw_offence_attribution_v1::palw_constrained_job_target_v1(&target, &binding, &original.job)
+            .map_err(|e| stage_refused(movement.claim, e.to_string()))?;
+        if !original.job.is_constraint()
+            || crate::palw_offence_attribution_v1::palw_binding_identity_fault_v1(
+                &target,
+                &binding,
+                b.identity_rules_v1(ctx.daa_score),
+                false,
+            )
+            .map_err(|e| stage_refused(movement.claim, e.to_string()))?
+            .is_some()
+        {
+            return Err(stage_refused(movement.claim, "Float32 source substitutes constrained original binding"));
+        }
+        let contract = b
+            .state
+            .staged_claim_contract_v1(&movement.claim)
+            .ok_or_else(|| stage_refused(movement.claim, "Float32 source lacks immutable custody"))?;
+        if contract.producer == movement.reserver || contract.panel.contains(&movement.reserver) {
+            return Err(stage_refused(movement.claim, "Float32 source owner must be outside entire original held Panel"));
+        }
+        let custody = contract
+            .prefix_custody
+            .as_ref()
+            .ok_or_else(|| stage_refused(movement.claim, "Float32 source original signed material custody absent"))?
+            .current_signed_v1();
+        if !custody.public_qualified_v1() {
+            return Err(stage_refused(movement.claim, "Float32 source semantic custody is unqualified"));
+        }
+        let custodians = custody.expected_panel.into_iter().chain([contract.producer]).collect();
+        let config = b.extras.staged_public_court.expect("fence checked");
+        let respond = bundle
+            .plan
+            .preseed_source_until_v1(crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint, config)
+            .map_err(|e| stage_refused(movement.claim, e))?;
+        let source = crate::palw_float_constraint_source_v1::PalwFloatConstraintSourceSessionV1::new_v1(
+            bundle.claim,
+            bundle.owner,
+            bundle.reserved_daa,
+            bundle.plan.id_v1(bundle.claim),
+            contract.producer,
+            custodians,
+            &binding,
+            &original.job,
+            respond,
+            stage.terms.collect_until_daa,
+            config.prices,
+        )
+        .map_err(|e| stage_refused(movement.claim, e))?;
+        source.check_open_window_v1(ctx.daa_score).map_err(|e| stage_refused(movement.claim, e))?;
+        bundle.float = Some(Box::new(source).into());
+        bundle.float_context = Some(
+            Box::new(crate::palw_staged_bundle_v1::PalwSelectedSourceContextV1 {
+                binding: Box::new(binding),
+                job: Box::new(original.job),
+            })
+            .into(),
+        );
+    } else {
+        let source = bundle
+            .float
+            .as_mut()
+            .ok_or_else(|| stage_refused(movement.claim, "Float32 answer/control lacks accepted original source"))?;
+        let unpaid = match &movement.action {
+            Action::FloatSourceAnswer(answer) => {
+                source.answer_v1(ctx.daa_score, answer).map_err(|e| stage_refused(movement.claim, e))?;
+                None
+            }
+            Action::FloatSourceNominate { source_id, position, beat } => {
+                source
+                    .nominate_v1(ctx.daa_score, movement.reserver, *source_id, *position, *beat)
+                    .map_err(|e| stage_refused(movement.claim, e))?;
+                None
+            }
+            Action::FloatSourceCollect => Some(
+                source.collect_v1(ctx.daa_score).map_err(|e| stage_refused(movement.claim, e))?.into_iter().collect::<BTreeSet<_>>(),
+            ),
+            _ => return Err(stage_refused(movement.claim, "not a Float32 source action")),
+        };
+        if let Some(unpaid) = unpaid.filter(|s| !s.is_empty()) {
+            let producer = source.producer;
+            let claim = b.state.claim(&movement.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(movement.claim))?;
+            b.staged_selected_default_charge_v1(ctx, movement.claim, &claim, producer, &unpaid, movement.reserver)?;
+        }
+    }
+    bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
+    let row = PalwStagedCourtRowV1::OwnerBundle(bundle);
+    if initial {
+        b.write_staged_row_v1(key, Some(row));
+    } else {
+        let new = row.checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
+        let new_index = flat_response_index_rows_v1(&row);
+        b.state.staged_courts.insert(key, row);
+        update_flat_response_indices_v1(&mut b.state, old_index, new_index);
+        b.entries.push(PalwDeltaEntryV2::StagedCourtMove { key: (movement.claim, movement.reserver), old, new });
+    }
+    Ok(())
+}
+
 fn bundle_control_v1(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -1999,6 +2233,8 @@ fn bundle_control_v1(
             selected_context: None,
             flat: None,
             flat_context: None,
+            float: None,
+            float_context: None,
             history_recovery: BTreeMap::new(),
             active: None,
             opened: Vec::new(),
@@ -2218,8 +2454,18 @@ pub(super) fn selected_response_index_rows_v1(row: &PalwStagedCourtRowV1) -> Vec
         .map(|signer| (*signer, selected.respond_until_daa, bundle.claim, bundle.owner))
         .collect()
 }
+/// The streamed-source duty index: a Flat source's custodians and a greedy Float32 source's
+/// (one bundle holds at most one of them), so a node's source responder reads one page.
 pub(super) fn flat_response_index_rows_v1(row: &PalwStagedCourtRowV1) -> Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)> {
     let PalwStagedCourtRowV1::OwnerBundle(bundle) = row else { return Vec::new() };
+    if let Some(float) = &bundle.float {
+        return float
+            .custodians
+            .iter()
+            .filter(|key| float.has_response_duty_v1(key))
+            .filter_map(|key| float.response_deadline_v1(key).map(|at| (*key, at, bundle.claim, bundle.owner)))
+            .collect();
+    }
     let Some(flat) = &bundle.flat else { return Vec::new() };
     flat.custodians
         .iter()

@@ -45,6 +45,12 @@ pub enum PalwAuxiliaryPublicCourtSeedV1 {
         source_id: Hash64,
         answerer: PalwBondKeyV2,
     },
+    /// Greedy Float32 Constraint over the accepted Float32 source slot of `answerer`. Appended
+    /// form owned by `palw_staged_float_constraint_v1` (rides unjudged below it, A-2 uniform).
+    FloatConstraint {
+        source_id: Hash64,
+        answerer: PalwBondKeyV2,
+    },
 }
 /// Content-addressed profile already retained by the claim's class certification. The byte
 /// quote prices hydration; it cannot substitute a different graph for that historic class.
@@ -173,6 +179,18 @@ pub enum PalwConstraintStreamActionV1 {
         beat: Option<u32>,
     },
     FlatSourceCollect,
+    // Greedy Float32 Constraint source: appended forms owned by `palw_staged_float_constraint_v1`
+    // (`crate::palw_staged_route_forms_v1`); below it they ride unjudged, A-2 uniform.
+    FloatSourceOpen {
+        binding: crate::palw_selected_event_source_v1::PalwSelectedEventBindingV1,
+    },
+    FloatSourceAnswer(crate::palw_float_constraint_source_v1::PalwFloatSourceAnswerV1),
+    FloatSourceNominate {
+        source_id: Hash64,
+        position: u32,
+        beat: Option<u32>,
+    },
+    FloatSourceCollect,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamMoveV1 {
@@ -333,6 +351,39 @@ impl PalwConstraintStreamSeedV1 {
             Some(seed),
         )
     }
+    /// Local replay helper only (the Float32 twin of [`Self::court_from_authenticated_flat_pin_v1`]).
+    /// Native admission obtains `pin` from its accepted literal source slot.
+    pub fn court_from_authenticated_float_pin_v1(
+        &self,
+        root: Hash64,
+        original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        binding: &PalwStepBindingV2,
+        pin: &crate::palw_float_constraint_source_v1::PalwFloatConstraintPinV1,
+    ) -> Result<PalwConstraintStreamCourtV1, String> {
+        self.check(90_000)?;
+        let job = &original.job;
+        if !matches!(self.auxiliary, Some(PalwAuxiliaryPublicCourtSeedV1::FloatConstraint { .. }))
+            || self.resolved_binding_v1(job.class_id, Some(&binding.shape_profile))? != *binding
+            || self.job.as_deref().is_some_and(|actual| actual != job)
+        {
+            return Err("Float32 local replay substitutes original signed auxiliary or public context".into());
+        }
+        let seed = Hash64::from_bytes(self.signing_message().try_into().map_err(|_| "Float32 original seed digest width")?);
+        PalwConstraintStreamCourtV1::new_from_float_pin_with_original_stop_context_v1(
+            self.claim,
+            self.reserver,
+            self.reserved_daa,
+            root,
+            binding,
+            job,
+            pin,
+            self.witness,
+            self.eog_count,
+            &self.eog_opening,
+            original,
+            Some(seed),
+        )
+    }
     pub fn court_with_rooted_job(
         &self,
         expected_claim_root: Hash64,
@@ -433,6 +484,7 @@ impl PalwConstraintStreamMoveV1 {
             PalwConstraintStreamActionV1::HistoryCustodyGrant { grant, .. } => grant.seat,
             PalwConstraintStreamActionV1::HistoryRecovery { action, .. } => action.answerer_v1().unwrap_or(self.reserver),
             PalwConstraintStreamActionV1::FlatSourceAnswer(answer) => answer.answerer,
+            PalwConstraintStreamActionV1::FloatSourceAnswer(answer) => answer.answerer,
             _ => self.reserver,
         }
     }
@@ -469,6 +521,10 @@ impl PalwConstraintStreamMoveV1 {
                 | PalwConstraintStreamActionV1::FlatSourceAnswer(_)
                 | PalwConstraintStreamActionV1::FlatSourceNominate { .. }
                 | PalwConstraintStreamActionV1::FlatSourceCollect
+                | PalwConstraintStreamActionV1::FloatSourceOpen { .. }
+                | PalwConstraintStreamActionV1::FloatSourceAnswer(_)
+                | PalwConstraintStreamActionV1::FloatSourceNominate { .. }
+                | PalwConstraintStreamActionV1::FloatSourceCollect
         ) {
             if self.phase != PalwConstraintStreamPhaseV1::PrefixCourt {
                 return Err("bundle control changes its fixed carrier phase".into());
@@ -487,6 +543,9 @@ impl PalwConstraintStreamMoveV1 {
             answer.check_v1()?;
         }
         if let PalwConstraintStreamActionV1::FlatSourceAnswer(answer) = &self.action {
+            answer.action.check_wire_v1()?;
+        }
+        if let PalwConstraintStreamActionV1::FloatSourceAnswer(answer) = &self.action {
             answer.action.check_wire_v1()?;
         }
         if let PalwConstraintStreamActionV1::HistoryCustodyGrant { grant, receipt } = &self.action {

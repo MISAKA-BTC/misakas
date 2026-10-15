@@ -100,6 +100,73 @@ impl PalwOwnedConstraintStreamV1 {
         row.check()?;
         Ok(row)
     }
+    /// The greedy Float32 twin of [`Self::admit_with_authenticated_flat_pin_v1`]: the pin comes
+    /// from the accepted Float32 source slot, never from the carrier.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn admit_with_authenticated_float_pin_v1(
+        seed: &PalwConstraintStreamSeedV1,
+        original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        root: Hash64,
+        terms: PalwRenderingClaimTermsV1,
+        now: u64,
+        funding: u64,
+        maximum: u64,
+        material: u64,
+        producer_exit: u64,
+        panel_exits: &[u64],
+        binding: &crate::palw_step_leg::PalwStepBindingV2,
+        pin: &crate::palw_float_constraint_source_v1::PalwFloatConstraintPinV1,
+    ) -> Result<Self, String> {
+        let job = &original.job;
+        seed.check(maximum)?;
+        if seed.resolved_binding_v1(job.class_id, Some(&binding.shape_profile))? != *binding
+            || seed.job.as_deref().is_some_and(|original| original != job)
+            || now < terms.accepted_daa
+            || now >= terms.open_until_daa
+            || seed.reserved_daa > now
+            || terms.plan.prefix_tokens < pin.position_v1()
+            || terms.plan.vocab != binding.shape_profile.vocab_size
+            || !matches!(
+                seed.auxiliary,
+                Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FloatConstraint { .. })
+            )
+        {
+            return Err("Float32 semantic admission changes original signed job, profile or frozen allocation".into());
+        }
+        terms.check_holds(material, producer_exit, panel_exits)?;
+        if funding < terms.plan.rent_sompi.checked_add(terms.plan.deposit_sompi).ok_or("Float32 semantic funding overflow")? {
+            return Err("Float32 semantic court has no full prepaid work budget".into());
+        }
+        let seed_id = Hash64::from_bytes(seed.signing_message().try_into().map_err(|_| "Float32 seed digest width")?);
+        let court = PalwConstraintStreamCourtV1::new_from_float_pin_with_original_stop_context_v1(
+            seed.claim,
+            seed.reserver,
+            seed.reserved_daa,
+            root,
+            binding,
+            job,
+            pin,
+            seed.witness,
+            seed.eog_count,
+            &seed.eog_opening,
+            original,
+            Some(seed_id),
+        )?;
+        let row = Self {
+            claim: seed.claim,
+            reserver: seed.reserver,
+            reserved_daa: seed.reserved_daa,
+            terms,
+            rent_paid: terms.plan.rent_sompi,
+            deposit_locked: terms.plan.deposit_sompi,
+            moves_used: 1,
+            rendering_bytes_used: 0,
+            eog_bytes_used: 0,
+            court,
+        };
+        row.check()?;
+        Ok(row)
+    }
     pub(crate) fn checkpoint_v1(&self) -> PalwOwnedConstraintCheckpointV1 {
         PalwOwnedConstraintCheckpointV1 {
             court: self.court.checkpoint_v1(),

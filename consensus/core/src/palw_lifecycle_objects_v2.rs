@@ -1154,11 +1154,17 @@ pub enum PalwLifecycleKindFenceV1 {
     /// Independently versioned registered semantic metadata (tag164).
     ClassSemanticsV1 = 9,
     StagedPublicCourtV1 = 10,
+    /// `Params::palw_staged_tir_route_v1` — the TIR required-family staged route: the native seed kind (tag 168) and the
+    /// native-context selected-source forms appended inside tag 167 (`crate::palw_staged_route_forms_v1`).
+    StagedTirRouteV1 = 11,
+    /// `Params::palw_staged_float_constraint_v1` — the greedy Float32 Constraint source forms appended inside tags 165 and 167
+    /// (`crate::palw_staged_route_forms_v1`).
+    StagedFloatConstraintV1 = 12,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1170,6 +1176,8 @@ impl PalwLifecycleKindFenceV1 {
         Self::LegacyPublicFilerV1,
         Self::ClassSemanticsV1,
         Self::StagedPublicCourtV1,
+        Self::StagedTirRouteV1,
+        Self::StagedFloatConstraintV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1186,6 +1194,8 @@ impl PalwLifecycleKindFenceV1 {
             Self::LegacyPublicFilerV1 => "palw_legacy_public_filer_v1",
             Self::ClassSemanticsV1 => "palw_class_semantics_v1",
             Self::StagedPublicCourtV1 => "palw_staged_public_court_v1",
+            Self::StagedTirRouteV1 => "palw_staged_tir_route_v1",
+            Self::StagedFloatConstraintV1 => "palw_staged_float_constraint_v1",
         }
     }
 }
@@ -1363,6 +1373,15 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::ClassSemanticsDeclaredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ClassSemanticsV1),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
         O::ExecWorkRootOpenedV2 { .. } | O::ExecOriginRecordedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
+        // The TIR and greedy Float32 routes' forms appended inside the staged court's kinds are owned by their own fences
+        // (`crate::palw_staged_route_forms_v1`): below them, this build reads them as a staged-court-only build does.
+        O::PublicCourtStreamOpenedV1 { .. } | O::PublicCourtStreamMoveV1 { .. }
+            if crate::palw_staged_route_forms_v1::palw_staged_route_form_fence_v1(object).is_some() =>
+        {
+            PalwLifecycleKindOwnerV1::Fence(
+                crate::palw_staged_route_forms_v1::palw_staged_route_form_fence_v1(object).expect("guarded above"),
+            )
+        }
         O::PublicCourtStreamOpenedV1 { .. } | O::PublicCourtStreamLeafV1 { .. } | O::PublicCourtStreamMoveV1 { .. } => {
             PalwLifecycleKindOwnerV1::Fence(F::StagedPublicCourtV1)
         }
@@ -1598,9 +1617,30 @@ impl crate::config::params::Params {
                     PalwLifecycleKindFenceV1::LegacyPublicFilerV1 => self.palw_legacy_public_filer_v1,
                     PalwLifecycleKindFenceV1::ClassSemanticsV1 => self.palw_class_semantics_v1_fence(),
                     PalwLifecycleKindFenceV1::StagedPublicCourtV1 => self.palw_staged_public_court_v1,
+                    // In force where BOTH the route's and the staged court's fences are (the route's rows are the court's).
+                    PalwLifecycleKindFenceV1::StagedTirRouteV1 => {
+                        Self::palw_later_of_v1(self.palw_staged_tir_route_v1_fence(), self.palw_staged_public_court_v1)
+                    }
+                    PalwLifecycleKindFenceV1::StagedFloatConstraintV1 => {
+                        Self::palw_later_of_v1(self.palw_staged_float_constraint_v1_fence(), self.palw_staged_public_court_v1)
+                    }
                 },
             )
         })
+    }
+
+    /// Both fences armed (neither `never()`): the later one; otherwise none.
+    fn palw_later_of_v1(
+        a: Option<crate::config::params::ForkActivation>,
+        b: Option<crate::config::params::ForkActivation>,
+    ) -> Option<crate::config::params::ForkActivation> {
+        let never = crate::config::params::ForkActivation::never();
+        match (a, b) {
+            (Some(a), Some(b)) if a != never && b != never => {
+                Some(crate::config::params::ForkActivation::new(a.daa_score().max(b.daa_score())))
+            }
+            _ => None,
+        }
     }
 
     /// **A-2 is the premise of every owning fence.** Below its fence a new kind's bytes are judged as the live build judges them, and
@@ -3692,7 +3732,10 @@ pub(crate) mod tests {
                 let owns_a_form = PALW_INT12_WIRE_CHANGES_V1
                     .iter()
                     .any(|(_, c)| matches!(c, PalwInt12WireChangeV1::CarriedAppended { fence: f, .. } if *f == fence.params_field()));
-                assert!(owns_a_tag || owns_a_form, "{} owns a kind or an appended form", fence.params_field());
+                // A route's form appended inside a NEW kind (the staged court's), ledgered in its own table.
+                let owns_a_staged_form =
+                    crate::palw_staged_route_forms_v1::PALW_STAGED_ROUTE_FORMS_V1.iter().any(|(_, f)| *f == fence);
+                assert!(owns_a_tag || owns_a_form || owns_a_staged_form, "{} owns a kind or an appended form", fence.params_field());
             }
         }
 

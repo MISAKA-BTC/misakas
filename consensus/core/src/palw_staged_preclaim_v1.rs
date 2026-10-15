@@ -6,10 +6,21 @@ use crate::palw_staged_bundle_v1::{
 };
 use crate::{Hash64, palw_state_v2::PalwBondKeyV2};
 
-/// The TIR required-family route is quoted but not yet admitted: the native-context selected
-/// source carriage, the TIR Constraint seed and the node's TIR source actors are not wired.
-/// Until they are, an admitted TIR claim could not be prosecuted, so admission refuses it.
-pub const PALW_STAGED_TIR_ROUTE_ADMITTED_V1: bool = false;
+/// Which staged route extensions are armed at the quoting/accepting block. Below each fence
+/// the extension's claims are refused at admission (A-2 uniform: the same refusal every build
+/// below the fence applies), so no claim is admitted that its route could not prosecute.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwStagedRouteGatesV1 {
+    /// `palw_staged_tir_route_v1`: TIR required families (native-context seeds and answers).
+    pub tir: bool,
+    /// `palw_staged_float_constraint_v1`: greedy Float32 Constraint (rooted f32 row court).
+    pub float32: bool,
+}
+impl PalwStagedRouteGatesV1 {
+    pub fn of_extras_v1(extras: &crate::palw_state_v2::PalwTransitionExtrasV1) -> Self {
+        Self { tir: extras.staged_tir_route_active, float32: extras.staged_float_constraint_active }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwStagedClaimGeometryV1 {
@@ -39,11 +50,39 @@ pub fn staged_preclaim_quote_v1(
     maximum_leaves: u64,
     config: PalwStagedPublicCourtConfigV1,
 ) -> Result<Option<PalwStagedPreclaimQuoteV1>, String> {
+    staged_preclaim_quote_with_gates_v1(
+        geometry,
+        original,
+        header,
+        profile,
+        semantics,
+        inventory,
+        maximum_custodians,
+        maximum_leaves,
+        config,
+        PalwStagedRouteGatesV1::default(),
+    )
+}
+
+/// [`staged_preclaim_quote_v1`] with the armed route extensions (greedy Float32 Constraint).
+#[allow(clippy::too_many_arguments)]
+pub fn staged_preclaim_quote_with_gates_v1(
+    geometry: &PalwStagedClaimGeometryV1,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+    profile: &crate::palw_step::PalwShapeProfileV3,
+    semantics: &crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+    maximum_custodians: u64,
+    maximum_leaves: u64,
+    config: PalwStagedPublicCourtConfigV1,
+    gates: PalwStagedRouteGatesV1,
+) -> Result<Option<PalwStagedPreclaimQuoteV1>, String> {
     check_preclaim_identity_v1(geometry, original, header, maximum_custodians, config)?;
     let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Legacy(header) = header else {
         return Err("a TIR header is quoted by staged_preclaim_tir_quote_v1 against its registered record".into());
     };
-    legacy_preclaim_quote_v1(geometry, original, header, profile, semantics, inventory, maximum_custodians, maximum_leaves, config)
+    legacy_preclaim_quote_v1(geometry, original, header, profile, semantics, inventory, maximum_custodians, maximum_leaves, config, gates)
 }
 
 fn check_preclaim_identity_v1(
@@ -80,6 +119,7 @@ fn legacy_preclaim_quote_v1(
     maximum_custodians: u64,
     maximum_leaves: u64,
     config: PalwStagedPublicCourtConfigV1,
+    gates: PalwStagedRouteGatesV1,
 ) -> Result<Option<PalwStagedPreclaimQuoteV1>, String> {
     let binding = header.resolve_v1(profile, geometry.execution_root, maximum_leaves)?;
     crate::palw_legacy_held_da_v2::palw_legacy_fp_job_check_v2(&binding, &original.job).map_err(|e| e.to_string())?;
@@ -110,8 +150,15 @@ fn legacy_preclaim_quote_v1(
         families.push((PalwStagedFamilyV1::PublicPrefix, public.envelope));
     }
     if original.job.is_constraint() {
-        if profile.lane != crate::palw_step::PalwStepLaneV1::Int32 {
-            return Err("qualified Float constraint needs its original FloatV2 event source and semantic projection; integer source is not authority".into());
+        if profile.lane == crate::palw_step::PalwStepLaneV1::Float32 {
+            // The rooted f32 row court covers GREEDY Float32 only, above its own fence. A seeded
+            // Float32 job has no canonical float sampler and stays refused at every height.
+            if !gates.float32 {
+                return Err("Float32 Constraint claims are refused below palw_staged_float_constraint_v1".into());
+            }
+            if !original.job.sampling_v2().is_greedy() {
+                return Err("a seeded Float32 Constraint job has no canonical float sampler; refused at every height".into());
+            }
         }
         families.push((PalwStagedFamilyV1::Constraint, PalwRenderingResourcePlanV1::derive(4095, vocab, config.prices)?));
     }
@@ -125,6 +172,7 @@ fn legacy_preclaim_quote_v1(
         PalwPreclaimSourceGeometryV1 {
             vocab,
             logits_scheme_id: profile.logits_scheme_id,
+            lane: profile.lane,
             profile_bytes,
             step_leaf_count: binding.step_leaf_count,
         },
@@ -138,6 +186,9 @@ fn legacy_preclaim_quote_v1(
 struct PalwPreclaimSourceGeometryV1 {
     vocab: u32,
     logits_scheme_id: Hash64,
+    /// The class's registered lane: a `Float32` class's source is its v2 event tree, whatever
+    /// its logits scheme field says.
+    lane: crate::palw_step::PalwStepLaneV1,
     /// Bytes a source session retains to resolve the class (a legacy profile, a TIR program).
     profile_bytes: u64,
     step_leaf_count: u64,
@@ -176,6 +227,9 @@ pub fn staged_preclaim_tir_quote_v1(
         return Err("a TIR prefix-state job has no TIR state relation for the public prefix court".into());
     }
     if original.job.is_constraint() {
+        if view.lane == crate::palw_step::PalwStepLaneV1::Float32 {
+            return Err("a Float32 TIR class has no native-context Float32 source session".into());
+        }
         if !view.is_tiled_v1() {
             return Err("a flat-scheme TIR Constraint job has no TIR Flat source session".into());
         }
@@ -190,6 +244,7 @@ pub fn staged_preclaim_tir_quote_v1(
         PalwPreclaimSourceGeometryV1 {
             vocab: view.vocab_size,
             logits_scheme_id: view.logits_scheme_id,
+            lane: view.lane,
             profile_bytes: u64::from(record.program_bytes),
             step_leaf_count: view.step_leaf_count,
         },
@@ -250,7 +305,15 @@ fn finish_preclaim_quote_v1(
         let mut acquisition = staged_context_resource_plan_v1(profile_bytes, semantic, config)?;
         if family == PalwStagedFamilyV1::Constraint {
             let slots = u32::try_from(maximum_custodians).map_err(|_| "source native custody exceeds format")?;
-            let acquisition_source = if source.logits_scheme_id == crate::palw_step_refute::tiled_logits_scheme_id_v1() {
+            let acquisition_source = if source.lane == crate::palw_step::PalwStepLaneV1::Float32 {
+                crate::palw_float_constraint_source_v1::float_constraint_source_resource_plan_v1(
+                    original.decode_tokens_executed,
+                    vocab,
+                    profile_bytes,
+                    slots,
+                    config.prices,
+                )?
+            } else if source.logits_scheme_id == crate::palw_step_refute::tiled_logits_scheme_id_v1() {
                 crate::palw_selected_event_source_v1::selected_event_resource_plan_v1(
                     vocab,
                     original.decode_tokens_executed,

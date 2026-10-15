@@ -1068,7 +1068,15 @@ impl VirtualStateProcessor {
         let base_ladder =
             extras.held_context_ladder.or(extras.shard_court_ladder).ok_or("preclaim quote has no native held/shard leaf ladder")?;
         let maximum_leaves = state.class_step_ladder_v1(&original.job.class_id, base_ladder);
-        let quote = state.staged_preclaim_quote_v1(&original, &header, point.daa_score, maximum_custodians, maximum_leaves, config)?;
+        let quote = state.staged_preclaim_quote_v1(
+            &original,
+            &header,
+            point.daa_score,
+            maximum_custodians,
+            maximum_leaves,
+            config,
+            kaspa_consensus_core::palw_staged_preclaim_v1::PalwStagedRouteGatesV1::of_extras_v1(&extras),
+        )?;
         Ok(quote.map(|quote| (point.block, quote)))
     }
 

@@ -1778,6 +1778,32 @@ pub(crate) mod tests {
         )
     }
 
+    /// The same constrained public fixture on a `Float32` class: lane switched, class and job
+    /// context re-derived, two decode positions. The caller commits its own f32 capture's v2
+    /// trace root and rebinds the committed execution root.
+    pub(crate) fn public_float_constrained_binding_for_tests_v1()
+    -> (crate::palw_step_leg::PalwStepBindingV2, crate::palw_freeprompt_v3::PalwFreePromptJobV3) {
+        let (mut binding, proof) = public_constrained_case_for_tests_v1(false);
+        let mut job = proof.job;
+        binding.shape_profile.lane = crate::palw_step::PalwStepLaneV1::Float32;
+        job.class_id = binding.shape_profile.shape_profile_id();
+        let class = crate::palw_fp_execution_v3::PalwFpClassFactsV3 {
+            model_profile_id: binding.job_context.model_profile_id,
+            runtime_manifest_hash: binding.job_context.runtime_manifest_hash,
+            runtime_class_id: binding.job_context.runtime_class_id,
+            shape_profile_id: job.class_id,
+            cu_ruleset_id: binding.job_context.cu_ruleset_id,
+        };
+        binding.job_context = crate::palw_fp_execution_v3::palw_fp_job_context_v3(
+            &job,
+            &class,
+            &crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job, 2),
+            &binding.job_context.network_id,
+        )
+        .unwrap();
+        (binding, job)
+    }
+
     /// **The court's third arm, as an accusation**: an honest constrained run clears at every position (the stop included, with
     /// no witness); an id the constraint forbids is convicted from the ids and the opened renderings alone; the stop rule's
     /// "nothing is admitted" is convicted only when the challenger shows a lane that was; and a later position is not

@@ -452,6 +452,13 @@ pub struct PalwOwnedStagedBundleV1 {
         crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintSourceSessionV1>,
     >,
     pub flat_context: Option<crate::palw_staged_court_state_v1::PalwSharedCourtV1<PalwSelectedSourceContextV1>>,
+    /// Greedy Float32 Constraint source (behind `palw_staged_float_constraint_v1`).
+    pub float: Option<
+        crate::palw_staged_court_state_v1::PalwSharedCourtV1<
+            crate::palw_float_constraint_source_v1::PalwFloatConstraintSourceSessionV1,
+        >,
+    >,
+    pub float_context: Option<crate::palw_staged_court_state_v1::PalwSharedCourtV1<PalwSelectedSourceContextV1>>,
     pub history_recovery: std::collections::BTreeMap<
         Hash64,
         crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_history_custody_v1::PalwHistoryRecoveryV1>,
@@ -490,6 +497,11 @@ pub struct PalwStagedBundleCheckpointV1 {
     pub selected: Option<crate::palw_selected_event_source_v1::PalwSelectedEventSessionV1>,
     pub flat: Option<
         crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintSourceSessionV1>,
+    >,
+    pub float: Option<
+        crate::palw_staged_court_state_v1::PalwSharedCourtV1<
+            crate::palw_float_constraint_source_v1::PalwFloatConstraintSourceSessionV1,
+        >,
     >,
     pub history_recovery: std::collections::BTreeMap<
         Hash64,
@@ -551,6 +563,7 @@ impl PalwOwnedStagedBundleV1 {
             inventory: self.inventory.clone(),
             selected: self.selected.clone(),
             flat: self.flat.clone(),
+            float: self.float.clone(),
             history_recovery: self.history_recovery.clone(),
             active_checkpoint: self.active_v1().map(|row| row.checkpoint_v1().map(PalwStagedFamilyCheckpointV1)).transpose()?,
         })
@@ -594,6 +607,32 @@ impl PalwOwnedStagedBundleV1 {
             (None, None) => {}
             _ => return Err("checkpoint changes immutable flat source admission or custody".into()),
         }
+        match (&self.float, &cp.float) {
+            (Some(old), Some(new))
+                if (
+                    old.claim,
+                    old.owner,
+                    old.reserved_daa,
+                    old.bundle_id,
+                    old.source_id,
+                    old.respond_until_daa,
+                    old.collect_until_daa,
+                    old.producer,
+                    &old.custodians,
+                ) == (
+                    new.claim,
+                    new.owner,
+                    new.reserved_daa,
+                    new.bundle_id,
+                    new.source_id,
+                    new.respond_until_daa,
+                    new.collect_until_daa,
+                    new.producer,
+                    &new.custodians,
+                ) => {}
+            (None, None) => {}
+            _ => return Err("checkpoint changes immutable Float32 source admission or custody".into()),
+        }
         match (&self.selected, &cp.selected) {
             (Some(old), Some(new))
                 if (
@@ -621,6 +660,7 @@ impl PalwOwnedStagedBundleV1 {
         candidate.inventory = cp.inventory.clone();
         candidate.selected = cp.selected.clone();
         candidate.flat = cp.flat.clone();
+        candidate.float = cp.float.clone();
         candidate.history_recovery = cp.history_recovery.clone();
         match (candidate.active_mut_v1(), &cp.active_checkpoint) {
             (Some(row), Some(cp)) => row.restore_checkpoint_v1(&cp.0)?,
@@ -680,6 +720,23 @@ impl PalwOwnedStagedBundleV1 {
             }
             (None, None) => {}
             _ => return Err("flat source loses original authenticated public context".into()),
+        }
+        match (&self.float, &self.float_context) {
+            (Some(float), Some(context)) => {
+                float.check_v1()?;
+                if (float.claim, float.owner, float.reserved_daa, float.bundle_id)
+                    != (self.claim, self.owner, self.reserved_daa, self.plan.id_v1(self.claim))
+                    || float.collect_until_daa > self.plan.terms.collect_until_daa
+                    || context.binding.committed_execution_root != self.execution_root
+                    || context.binding.shape_profile.lane != crate::palw_step::PalwStepLaneV1::Float32
+                    || self.selected.is_some()
+                    || self.flat.is_some()
+                {
+                    return Err("Float32 source changes original frame, lane or source allocation".into());
+                }
+            }
+            (None, None) => {}
+            _ => return Err("Float32 source loses original authenticated public context".into()),
         }
         match (&self.inventory, &self.plan.inventory) {
             (Some(inventory), Some(plan))

@@ -435,6 +435,44 @@ pub fn palw_staged_flat_pin_v1(
     }
     progress.session.authenticated_pin_v1(&answerer).map(Some)
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwStagedFloatProgressV1 {
+    pub snapshot_block: crate::BlockHash,
+    pub now_daa: u64,
+    pub session: PalwSharedCourtV1<crate::palw_float_constraint_source_v1::PalwFloatConstraintSourceSessionV1>,
+    pub context: PalwSharedCourtV1<crate::palw_staged_bundle_v1::PalwSelectedSourceContextV1>,
+}
+/// The accepted greedy Float32 source of one owner frame (behind `palw_staged_float_constraint_v1`).
+pub fn palw_staged_float_source_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: (Hash64, PalwBondKeyV2),
+) -> Result<Option<PalwStagedFloatProgressV1>, String> {
+    let point = state.last_point().ok_or("Float32 source has no accepted snapshot")?;
+    let Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) = state.staged_owned_row_v1(key.0, key.1) else { return Ok(None) };
+    if point.daa_score < bundle.plan.terms.accepted_daa || point.daa_score >= bundle.plan.terms.material_until_daa {
+        return Ok(None);
+    }
+    let Some(session) = &bundle.float else { return Ok(None) };
+    let context = bundle.float_context.as_ref().ok_or("Float32 source lost original authenticated context")?;
+    Ok(Some(PalwStagedFloatProgressV1 {
+        snapshot_block: point.block,
+        now_daa: point.daa_score,
+        session: session.clone(),
+        context: context.clone(),
+    }))
+}
+pub fn palw_staged_float_pin_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: (Hash64, PalwBondKeyV2),
+    source: Hash64,
+    answerer: PalwBondKeyV2,
+) -> Result<Option<crate::palw_float_constraint_source_v1::PalwFloatConstraintPinV1>, String> {
+    let Some(progress) = palw_staged_float_source_v1(state, key)? else { return Ok(None) };
+    if progress.session.source_id != source {
+        return Err("Float32 pin lookup substitutes accepted original source".into());
+    }
+    progress.session.authenticated_pin_v1(&answerer).map(Some)
+}
 pub fn palw_staged_public_context_v1(
     state: &crate::palw_state_v2::PalwChainStateV2,
     claim: Hash64,
@@ -935,7 +973,7 @@ pub fn palw_staged_owned_context_v1(
                     return Ok(Some((context.binding.as_ref().clone(), context.job.as_ref().clone())));
                 }
             }
-            if let Some(context) = &bundle.flat_context {
+            if let Some(context) = bundle.flat_context.as_ref().or(bundle.float_context.as_ref()) {
                 if bundle.active.is_none()
                     || bundle.active.is_some_and(|n| {
                         bundle

@@ -3606,6 +3606,10 @@ impl VirtualStateProcessor {
                     if !self.palw_staged_public_court_v1.is_some_and(|activation| activation.is_active(point.daa_score)) {
                         continue;
                     }
+                    // A-2: a route's appended form below the route's own fence rides unjudged too.
+                    if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
+                        continue;
+                    }
                     let court = self.palw_court_params_v2.as_ref().ok_or("staged court needs V2 carrier parameters")?;
                     seed.check(court.max_close_bytes())?;
                     let owner = state.bond(&seed.reserver).ok_or("staged owner has no registered bond")?;
@@ -3683,6 +3687,10 @@ impl VirtualStateProcessor {
                     if !self.palw_staged_public_court_v1.is_some_and(|activation| activation.is_active(point.daa_score)) {
                         continue;
                     }
+                    // A-2: a route's appended form below the route's own fence rides unjudged too.
+                    if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
+                        continue;
+                    }
                     let _court = self.palw_court_params_v2.as_ref().ok_or("staged court needs V2 carrier parameters")?;
                     movement.check()?;
                     let owner = state.bond(&movement.reserver).ok_or("staged owner has no registered bond")?;
@@ -3749,6 +3757,10 @@ impl VirtualStateProcessor {
                                             | stage::PalwConstraintStreamActionV1::FlatSourceAnswer(_)
                                             | stage::PalwConstraintStreamActionV1::FlatSourceNominate { .. }
                                             | stage::PalwConstraintStreamActionV1::FlatSourceCollect
+                                            | stage::PalwConstraintStreamActionV1::FloatSourceOpen { .. }
+                                            | stage::PalwConstraintStreamActionV1::FloatSourceAnswer(_)
+                                            | stage::PalwConstraintStreamActionV1::FloatSourceNominate { .. }
+                                            | stage::PalwConstraintStreamActionV1::FloatSourceCollect
                                             | stage::PalwConstraintStreamActionV1::HistoryRecovery { .. },
                                             Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::OwnerBundle(
                                                 bundle,
@@ -3760,6 +3772,7 @@ impl VirtualStateProcessor {
                                     movement.action,
                                     stage::PalwConstraintStreamActionV1::PrefixPublicCollect { .. }
                                         | stage::PalwConstraintStreamActionV1::FlatSourceCollect
+                                        | stage::PalwConstraintStreamActionV1::FloatSourceCollect
                                         | stage::PalwConstraintStreamActionV1::SelectedEventCollect { .. }
                                         | stage::PalwConstraintStreamActionV1::HistoryRecovery {
                                             action:
@@ -3785,7 +3798,11 @@ impl VirtualStateProcessor {
                                             stage::PalwConstraintStreamActionV1::FlatSourceOpen { .. }
                                             | stage::PalwConstraintStreamActionV1::FlatSourceAnswer(_)
                                             | stage::PalwConstraintStreamActionV1::FlatSourceNominate { .. }
-                                            | stage::PalwConstraintStreamActionV1::FlatSourceCollect,
+                                            | stage::PalwConstraintStreamActionV1::FlatSourceCollect
+                                            | stage::PalwConstraintStreamActionV1::FloatSourceOpen { .. }
+                                            | stage::PalwConstraintStreamActionV1::FloatSourceAnswer(_)
+                                            | stage::PalwConstraintStreamActionV1::FloatSourceNominate { .. }
+                                            | stage::PalwConstraintStreamActionV1::FloatSourceCollect,
                                             Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::OwnerBundle(
                                                 bundle,
                                             )),
