@@ -95,6 +95,9 @@ pub use consumer::*;
 mod hold;
 pub use hold::*;
 
+mod allocation_v3;
+pub use allocation_v3::*;
+
 mod material;
 pub use material::{
     PALW_BOND_BUDGET_STATE_VERSION_V3, PALW_BUDGET_TABLE_MATERIAL_INCOME_V1, PalwMaterialIncomeV1, PalwMaterialPaymentV1,
@@ -246,6 +249,10 @@ pub enum PalwBudgetOriginV1 {
     HoldDay = 13,
     /// ユーザー方針 2026-10-15: a claim's shadow in its bond's **burst view** (released at `accepted + W_burst`).
     HoldBurst = 14,
+    /// ユーザー判断 2026-10-15 (bond式の再設計, `palw_bond_formula_v2`): a terminal claim's liability kept in its bond's **liability
+    /// view** until its liability ends (terminal + `H_L`, at least the court/DA/retention span) — open, never live, zero reservation;
+    /// the concurrent-collateral check counts it.
+    HoldLiability = 15,
 }
 
 /// **RFC-0016 P4 (user decision 2026-10-15): is this origin's reward user-paid escrow rather than a coinbase-derived leg?** A
@@ -283,13 +290,15 @@ pub enum PalwBudgetRefusalV1 {
     /// A capital assignment broke a rule (the reason).
     Assignment(&'static str),
     Overflow,
-    /// **RFC-0016 P4 (user decision 2026-10-15):** a user-paid (escrow-funded) claim whose full escrow reward cannot be reserved — the
-    /// policy's per-claim ceiling is below it. Decided BEFORE acceptance; an escrow reward is never clipped after.
-    EscrowNotReservable,
     /// ユーザー方針 2026-10-15: the bond's burst view (an additional short-period limit) has no room in this dimension.
     Burst {
         dim: PalwBudgetDimV1,
     },
+    /// ADR-0177 (2026-10-14): the claim's model has no reward-bearing block opportunity left this epoch (`P_m` applied to blocks).
+    ModelBlockOpportunity,
+    /// **RFC-0016 P4 (user decision 2026-10-15):** a user-paid (escrow-funded) claim whose full escrow reward cannot be reserved — the
+    /// policy's per-claim ceiling is below it. Decided BEFORE acceptance; an escrow reward is never clipped after.
+    EscrowNotReservable,
 }
 
 impl std::fmt::Display for PalwBudgetRefusalV1 {
@@ -307,10 +316,13 @@ impl std::fmt::Display for PalwBudgetRefusalV1 {
             Self::BadShrink => write!(f, "a reservation may only shrink, in the block that took it, and never below its consumption"),
             Self::Assignment(why) => write!(f, "capital assignment refused: {why} (ADR-0177 D3)"),
             Self::Overflow => write!(f, "budget arithmetic overflow"),
+            Self::Burst { dim } => write!(f, "the bond's short-period burst cap has no room in {dim:?} (ADR-0176, ユーザー方針 2026-10-15)"),
+            Self::ModelBlockOpportunity => {
+                write!(f, "the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5)")
+            }
             Self::EscrowNotReservable => {
                 write!(f, "the user-paid escrow reward exceeds one claim's reservation; refused, never clipped (RFC-0016 P4)")
             }
-            Self::Burst { dim } => write!(f, "the bond's short-period burst cap has no room in {dim:?} (ADR-0176, ユーザー方針 2026-10-15)"),
         }
     }
 }
@@ -615,7 +627,7 @@ pub fn palw_isqrt_u512_v1(n: PalwAllocationWeightV1) -> PalwAllocationWeightV1 {
 }
 
 /// **`palw_model_bond_allocation_v1`'s policy (ADR-0177 D3–D5) — every value POLICY, none approved.**
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwModelAllocationPolicyV1 {
     pub version: u16,
     /// `E`: the allocation epoch, DAA. Its tie to the budget's `W` is POLICY.
@@ -626,6 +638,42 @@ pub struct PalwModelAllocationPolicyV1 {
     pub curve: PalwAllocationCurveV1,
     /// Entries one assignment may name.
     pub max_models_per_bond: u16,
+    /// **User decision 2026-10-14 (RFC-0015 §8.5.5)** — the 30-day average of miner + claim-bound verifier capital, `P_m` applied to
+    /// block opportunity and coinbase ([`allocation_v3`]). `Some` exactly for a V3 policy; serialized only for V3, so every V2
+    /// policy's bytes, digest and identity are unchanged.
+    pub average: Option<PalwAllocationAverageV1>,
+}
+
+impl BorshSerialize for PalwModelAllocationPolicyV1 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.version.serialize(writer)?;
+        self.epoch_daa.serialize(writer)?;
+        self.seasoning_epochs.serialize(writer)?;
+        self.curve.serialize(writer)?;
+        self.max_models_per_bond.serialize(writer)?;
+        if self.version >= PALW_MODEL_ALLOCATION_POLICY_VERSION_V3 {
+            self.average.serialize(writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl BorshDeserialize for PalwModelAllocationPolicyV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let version: u16 = BorshDeserialize::deserialize_reader(reader)?;
+        Ok(Self {
+            version,
+            epoch_daa: BorshDeserialize::deserialize_reader(reader)?,
+            seasoning_epochs: BorshDeserialize::deserialize_reader(reader)?,
+            curve: BorshDeserialize::deserialize_reader(reader)?,
+            max_models_per_bond: BorshDeserialize::deserialize_reader(reader)?,
+            average: if version >= PALW_MODEL_ALLOCATION_POLICY_VERSION_V3 {
+                BorshDeserialize::deserialize_reader(reader)?
+            } else {
+                None
+            },
+        })
+    }
 }
 
 impl PalwModelAllocationPolicyV1 {
@@ -637,12 +685,18 @@ impl PalwModelAllocationPolicyV1 {
             seasoning_epochs: 1,
             curve: PalwAllocationCurveV1::interim_unapproved_v1(),
             max_models_per_bond: 1,
+            average: None,
         }
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.version != PALW_MODEL_ALLOCATION_POLICY_VERSION_V2 {
-            return Err("the allocation policy's version is not one this binary reads");
+        match (self.version, self.average.is_some()) {
+            (PALW_MODEL_ALLOCATION_POLICY_VERSION_V2, false) => {}
+            (PALW_MODEL_ALLOCATION_POLICY_VERSION_V3, true) => self.validate_v3()?,
+            (PALW_MODEL_ALLOCATION_POLICY_VERSION_V2 | PALW_MODEL_ALLOCATION_POLICY_VERSION_V3, _) => {
+                return Err("a V3 allocation policy carries the averaging terms and a V2 policy carries none");
+            }
+            _ => return Err("the allocation policy's version is not one this binary reads"),
         }
         if self.epoch_daa == 0 {
             return Err("the allocation epoch must be positive");
@@ -854,6 +908,8 @@ impl Params {
     /// **The fences' mirror** on the V2 bundle's state params. `None` on every shipped preset; a fixture that bypasses validation calls
     /// this after arming the fences.
     pub fn sync_palw_bond_budget_v1(&mut self) {
+        // ADR-0176 amendment: the bond formula's mirror rides every budget sync (fixtures arm both, then sync once).
+        self.sync_palw_bond_formula_v2();
         let mirror =
             self.palw_bond_budget_v1.as_ref().filter(|f| f.activation != ForkActivation::never()).map(|f| PalwBondBudgetMirrorV1 {
                 from_daa: f.activation.daa_score(),
@@ -1958,6 +2014,12 @@ impl PalwBondBudgetStateV1 {
             let Some(mut claim) = self.claims.get(&claim_id).copied() else { continue };
             let mut bond = self.bonds.get(&claim.bond).copied().unwrap_or_default();
             bond.window = bond.window.checked_sub(claim.reserved).unwrap_or(PalwBudgetVectorV1::ZERO);
+            // A liability-view row ends its liability here (the only place it ends): its open count and collateral leave the view.
+            if claim.origin == PalwBudgetOriginV1::HoldLiability && claim.open {
+                bond.open_claims = bond.open_claims.saturating_sub(1);
+                bond.open_liability_sompi = bond.open_liability_sompi.saturating_sub(claim.liability_sompi);
+                claim.open = false;
+            }
             self.put_bond(&claim.bond.clone(), bond, j);
             claim.in_window = false;
             self.put_claim(&claim_id, claim.live.then_some(claim), j);
@@ -2907,8 +2969,9 @@ impl PalwBondBudgetStateV1 {
         self.preview_claim_for_origin_moded_v1(policy, capital, bond, model, ask, origin, PalwHoldModeV1::for_origin(origin))
     }
 
-    /// [`Self::preview_claim_for_origin_v1`] with the claim's verification mode (ADR-0176's mode-aware hold): the escrow rule of RFC-0016
-    /// P4 first, then the long-window and the hold admissions, before any write.
+    /// [`Self::preview_claim_for_origin_v1`] with the claim's verification mode (ユーザー方針 2026-10-15): a coinbase-derived origin is
+    /// [`Self::preview_claim_moded_v1`]; a user-paid escrow origin keeps RFC-0016 P4's rules and runs the same hold admission (day view
+    /// for Panel=1, burst view, concurrent liability).
     #[allow(clippy::too_many_arguments)]
     pub fn preview_claim_for_origin_moded_v1(
         &self,
@@ -4488,6 +4551,7 @@ mod tests {
             seasoning_epochs: 1,
             curve: PalwAllocationCurveV1 { alpha_halves: 4 },
             max_models_per_bond: 4,
+            average: None,
         };
         let mut s = PalwBondBudgetStateV1::new(0, &p);
         let before = s.clone();
@@ -4566,6 +4630,7 @@ mod tests {
             seasoning_epochs: seasoning,
             curve: PalwAllocationCurveV1 { alpha_halves: halves },
             max_models_per_bond: 4,
+            average: None,
         }
     }
 
@@ -5334,6 +5399,7 @@ mod tests {
             seasoning_epochs: 1,
             curve: PalwAllocationCurveV1 { alpha_halves: 3 },
             max_models_per_bond: 4,
+            average: None,
         };
         let capital = 1_000 * BILI;
         let mut s = PalwBondBudgetStateV1::new(0, &p);

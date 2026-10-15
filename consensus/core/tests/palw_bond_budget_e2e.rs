@@ -256,6 +256,7 @@ fn the_allocation_clips_reward_only_on_the_real_fold() {
         seasoning_epochs: 1,
         curve: PalwAllocationCurveV1 { alpha_halves: 2 },
         max_models_per_bond: 4,
+        average: None,
     };
     let run = |alloc: Option<PalwModelAllocationPolicyV1>, assign: bool| -> (u64, Vec<u64>, u128) {
         let mut sim =
@@ -313,6 +314,7 @@ fn alpha_one_one_and_a_half_and_two_divide_the_budget_by_s_to_the_alpha_on_the_r
             seasoning_epochs: 1,
             curve: PalwAllocationCurveV1 { alpha_halves: halves },
             max_models_per_bond: 4,
+            average: None,
         };
         let mut sim = Sim::new(
             budget_params(250, policy(1_000_000, 4_000, 1, 1_000_000, false), Some(allocation)),
@@ -371,6 +373,7 @@ fn one_claim_to_final() -> (Sim, Hash64, usize) {
         seasoning_epochs: 1,
         curve: PalwAllocationCurveV1::interim_unapproved_v1(),
         max_models_per_bond: 4,
+        average: None,
     };
     let mut sim = Sim::new(
         budget_params(250, policy(1_000_000, 4_000, 1, 1_000_000, false), Some(allocation)),
@@ -607,4 +610,22 @@ fn round_draws_reserve_each_bonds_allocation_and_replay() {
     let off = sim.rewind_to(fork_at);
     sim.replay(&off);
     assert_eq!(sim.c.s, tip, "the replay is the chain");
+}
+
+/// **Hook H-4 (ADR-0176 D3, ADR-0178 §10): rule E reads the budget's grant** — the allocation rule E credits a budgeted `Final` claim
+/// is exactly the Final weight the fold granted it (the safe weight's own increment), in its bond's `W`-interval, under the ceiling
+/// `F_max` at the bond's collateral. (TEST SOURCE, not run in the round that wrote it.)
+#[test]
+fn rule_e_reads_the_budget_grant_on_the_real_fold() {
+    use kaspa_consensus_core::palw_fork_choice_rule_e_v1::{PalwRuleEBondBudgetV1, palw_rule_e_bond_budget_v1};
+    let (sim, a, _) = one_claim_to_final();
+    let s = &sim.c.s;
+    let engine = palw_rule_e_bond_budget_v1(&sim.c.sp);
+    let claim = s.claim(&a).expect("the Final claim is still in the state").clone();
+    let allocation = engine.allocation(s, &a, &claim).expect("a budgeted claim is governed by an allocation");
+    assert_eq!(Some(allocation.final_weight), s.bond_budget_final_weight(&a), "rule E credits exactly the fold's grant");
+    let row = *budget(&sim).claim_row(&a).expect("its row");
+    assert_eq!(allocation.terms.window, row.accepted_daa / 4_000);
+    assert!(allocation.final_weight <= allocation.terms.final_weight_ceiling);
+    assert!(allocation.final_weight <= row.reserved.final_weight, "never more than the reservation");
 }

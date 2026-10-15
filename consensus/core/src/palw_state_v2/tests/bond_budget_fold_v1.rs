@@ -36,6 +36,7 @@ fn test_allocation() -> PalwModelAllocationPolicyV1 {
         seasoning_epochs: 1,
         curve: PalwAllocationCurveV1 { alpha_halves: 2 },
         max_models_per_bond: 4,
+        average: None,
     }
 }
 

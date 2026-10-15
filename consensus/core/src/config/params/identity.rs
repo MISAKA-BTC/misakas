@@ -599,6 +599,10 @@ impl Params {
         if self.palw_model_bond_allocation_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_model_bond_allocation_v1 = None;
         }
+        // ADR-0176 amendment (ユーザー判断 2026-10-15): the bond formula's fence, likewise collapsed whole.
+        if self.palw_bond_formula_v2.is_some_and(|fence| fence.activation == ForkActivation::never()) {
+            self.palw_bond_formula_v2 = None;
+        }
         // ADR-0032's amended reporter share (lane INTF), likewise.
         if self.palw_reporter_share_v2 == Some(ForkActivation::never()) {
             self.palw_reporter_share_v2 = None;
@@ -1084,6 +1088,7 @@ impl Params {
             palw_beacon_bootstrap_v1,
             palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
+            palw_bond_formula_v2,
             palw_reporter_share_v2,
             palw_legacy_public_filer_v1,
             palw_court_model_scope_v1,
@@ -1399,6 +1404,7 @@ impl Params {
             ("palw_beacon_bootstrap_v1", palw_beacon_bootstrap_v1.as_ref().map(|f| f.activation)),
             ("palw_paid_consumer_lifecycle_v1", palw_paid_consumer_lifecycle_v1.as_ref().map(|f| f.activation)),
             ("palw_model_bond_allocation_v1", palw_model_bond_allocation_v1.as_ref().map(|fence| fence.activation)),
+            ("palw_bond_formula_v2", palw_bond_formula_v2.map(|fence| fence.activation)),
             ("palw_reporter_share_v2", *palw_reporter_share_v2),
             ("palw_legacy_public_filer_v1", *palw_legacy_public_filer_v1),
             ("palw_court_model_scope_v1", *palw_court_model_scope_v1),
@@ -1822,6 +1828,12 @@ impl Params {
         }
         if let Some(fence) = &self.palw_model_bond_allocation_v1 {
             h.write(b"palw_model_bond_allocation_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
+        // ADR-0176 amendment (ユーザー判断 2026-10-15): the bond formula, NAMED with its policy. Some-only.
+        if let Some(fence) = &self.palw_bond_formula_v2 {
+            h.write(b"palw_bond_formula_v2");
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
         }
@@ -2589,6 +2601,7 @@ impl Params {
             palw_beacon_bootstrap_v1,
             palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
+            palw_bond_formula_v2,
             palw_reporter_share_v2,
             palw_legacy_public_filer_v1,
             palw_court_model_scope_v1,
@@ -3463,6 +3476,10 @@ impl Params {
         if let Some(fence) = palw_model_bond_allocation_v1.as_mut() {
             fork(&mut fence.activation, visit);
         }
+        // ADR-0176 amendment (ユーザー判断 2026-10-15). Some-only.
+        if let Some(fence) = palw_bond_formula_v2.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         // ADR-0032's amended reporter share (lane INTF). Some-only.
         if let Some(activation) = palw_reporter_share_v2.as_mut() {
             fork(activation, visit);
@@ -4017,6 +4034,7 @@ impl Params {
             palw_beacon_bootstrap_v1,
             palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
+            palw_bond_formula_v2,
             palw_reporter_share_v2,
             palw_legacy_public_filer_v1,
             palw_court_model_scope_v1,
@@ -4975,6 +4993,11 @@ impl Params {
         }
         if let Some(fence) = &palw_model_bond_allocation_v1 {
             h.write(b"palw_model_bond_allocation_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
+        if let Some(fence) = &palw_bond_formula_v2 {
+            h.write(b"palw_bond_formula_v2");
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
         }

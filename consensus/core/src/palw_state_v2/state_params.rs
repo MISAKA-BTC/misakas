@@ -165,6 +165,7 @@ impl PalwStateParamsV2 {
             panel_lifetime_v2: None,
             palw_claim_challenge_v2: None,
             bond_budget: None,
+            bond_formula_v2: None,
             reporter_income_from_daa: None,
             material_income_from_daa: None,
             monetary_material: None,
@@ -721,6 +722,17 @@ impl PalwStateParamsV2 {
 
     pub fn bond_budget(&self) -> Option<&crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1> {
         self.bond_budget.as_ref()
+    }
+
+    /// **ADR-0176 amendment: `palw_bond_formula_v2`'s mirror** — written by `Params::sync_palw_bond_formula_v2` (and fixtures).
+    pub fn with_bond_formula_v2(mut self, mirror: Option<crate::palw_bond_formula_v2::PalwBondFormulaMirrorV2>) -> Self {
+        self.bond_formula_v2 = mirror;
+        self
+    }
+
+    /// The bond formula's mirror, if the network arms the fence (`None` on every shipped preset).
+    pub fn bond_formula_v2(&self) -> Option<&crate::palw_bond_formula_v2::PalwBondFormulaMirrorV2> {
+        self.bond_formula_v2.as_ref()
     }
 
     /// **Is the bond budget in force at `daa_score`?** `false` on every shipped preset.
@@ -1792,6 +1804,11 @@ impl PalwStateParamsV2 {
     /// `class_id` is the signature's one addition (ADR-0160 §7.2 left it to the lane): C7 keeps
     /// `m = E` (X-I5), and every caller holds the claim's class — the record or the attempt.
     pub fn claim_escrow_term_v2(&self, accepted_daa: u64, escrowed_reward: u64, class_id: &Hash64) -> u128 {
+        // ADR-0176 amendment (ユーザー判断 2026-10-15): past `palw_bond_formula_v2` (keyed on acceptance) the escrow term is the
+        // formula's economic right + collectable-loss top-up + court/DA/retention part; below it, exactly the old reading.
+        if let Some(term) = self.bond_formula_escrow_term_v2(accepted_daa, escrowed_reward, class_id) {
+            return term;
+        }
         if self.capacity_escrow_active_at(accepted_daa) {
             return crate::palw_escrow_funding_v2::palw_escrow_term_v2(self, accepted_daa, escrowed_reward, class_id);
         }

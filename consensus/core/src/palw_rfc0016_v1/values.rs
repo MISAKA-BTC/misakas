@@ -222,6 +222,13 @@ impl Params {
                 "palw_model_block_rights_v1 requires palw_model_bond_allocation_v1 (the P_m it issues from) at or below it",
             ));
         }
+        // `P_m` is applied to block opportunity ONCE (RFC-0015 §8.5.5): V+ is RFC-0016's physical-layer gate, so the ADR-0177 V3
+        // policy's own reward-bearing block-opportunity reservation must be off where V+ is armed (one gate, never two).
+        if allocation.policy.average.is_some_and(|a| a.block_opportunity) {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_model_block_rights_v1 and the allocation's block_opportunity would apply P_m to blocks twice: arm one",
+            ));
+        }
         let rights_epoch = bundle.state.epoch_length().max(1);
         if allocation.policy.epoch_daa == 0 || allocation.policy.epoch_daa % rights_epoch != 0 {
             return Err(PalwModeV2Error::Invalid(

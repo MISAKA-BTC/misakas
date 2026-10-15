@@ -158,3 +158,55 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 - **D6の受入条件:** `p_effective · (R_at_risk + L_collectible_net) > C_saved`。`p_effective`は検査、局所化、証拠包含、客観裁定、徴収の完了まで含む。共謀reporterへのbounty還流、担保の使い回し、同時claimの相関、外部利得、Panel報酬や検証費の省略益を評価に含める。総没収見込額を実在する回収可能資本より大きく見積もらない。
 - **モデル配分との関係:** ADR-0177の2026-10-12改定（Miner＋Panelのclaim bond合算と1.3〜2倍の配分係数、提案）は、本ADRの個別Q/B/R/F絶対上限を後から乗算で増やさない。「各bondの絶対上限自体を1.3〜2倍へ変更する」案は別案であり、採用していない。
 - **2026-10-11の裁定との関係:** fee-only RoundはB_maxに数えず独立のExecutionCapで制限、market feeはv1でR_maxに含めない、予算window W = 400 DAAはdrill暫定（activation-readiness-matrix §3i）。
+
+## 改定 — 2026-10-15（ユーザー方針 2026-10-15: 共通拘束期間・上限の設定方法・測定手順）
+
+**状態:** 方針は確定（ユーザー）。コードは休眠実装・未build・未検証（`palw_bond_budget_v1` V3 policy、全presetで`None`、有効化は拒否）。数値は本番定数ではない。
+
+- **主条件:** 同額の適格拘束元本・同じ検証mode・同じ期間で、計算を省略して高速にclaimする者が正直な計算より多いclaim枠・報酬ブロック・報酬・Final weightを得てはならない。**かつ**、参照用の正直なminerが実用的に使える上限にする。「上限が等しい」ことと「正直なminerが上限に届く」ことは別であり両方を試験する。需要・設備・検証がある間に上限不足だけでREAL生産が止まらないことも試験する。
+- **共通拘束期間（設計基準）:** Panel=1は1日相当DAA、Panel=0は7日相当DAA（1日 = 86,400 s / 120 s の時計slot = 720 DAA、名目換算。実測が遅いDAAでは実時間で1日より長くなり、短くはならない）。
+- **1日当たり最大発行の均等化:** 同じbondの1日当たり基準上限`q, b, r, f`に対し、Panel=1は1日で`(q, b, r, f)`、Panel=0は7日で`(7q, 7b, 7r, 7f)`。同じ件数を7倍速く回復させる方式は採らない。実装: V3 policyの単位当たりrateを「1日当たり」と読み、`daily(C) = ⌊C·rate/u⌋`、mode `M`の期間上限 = `daily(C) · days(M)`。
+- **一つの台帳、三つの見方:** 長期view（engineのwindow、全reservationを`d + 7日`まで保持、全claimを`7·daily`で検査）、日view（各claimのshadow行、`d + 1日`で解放、Panel=1 claimを`daily`で検査）、burst view（shadow行、`d + W_burst`で解放、全claimに追加の制限）。modeを切り替えても同じ元本の消費履歴・拘束・責任を引き継ぐ（Panel=0で消費→Panel=1で満額を再取得、またはその逆は不可）。受理済みclaimの期間・予約・責任は受理時に固定し、後のmode変更で短縮しない。
+- **枠の回復 ≠ 担保の解放:** 1日 / 7日は最早の通常再利用時刻であり、全額返却の保証時刻ではない。有効なchallengeや開示/courtが続く間は必要な担保を保持する（`H_L` / `liability_until`）。Panel=1の1日は早期（共謀）Valid署名で短縮しない。
+- **burst:** 週の総量だけでは初日に全量を使い6日以上休む使い方が残るため、短期のrate/burst上限を**追加の制限としてのみ**置く（消費済み7日枠を早く返さず、短期bucketと長期台帳の両方から権利を発行しない）。burst許容量はDAG並列度と実測した提出パターンから導く名前付き定数。
+- **担保規模:** 同時に予約される元本 ≈ `λ·a·H`（1日の受理数 × 1 claimの責任額 × 実際の平均保持時間）＋余裕＋他の責任。保持が長いほど同時担保が増えるため、1 claimの権利・予約・報酬を一体で調整する（D5）。架空担保・二重予約は不可。
+- **heartbeat:** heartbeat 0を目標にせず、数値改善のためにheartbeatの時計・fallback規則を弱めない。floor状態を動かすREALは、検査を通過しclaimを書いたAttempt laneのblock（`palw_real_share_v1`）であり、riderは同じに数えない。各段（計算→抽選当選→claim受理→採用REAL block→検証/Final→清算→bond枠回復）を分けて測り、計算と提出が可能なのにbond枠不足だけでREALが止まった時間、heartbeat依存時間、回復後の採用を記録する。heartbeatだけの期間からREALへ戻る回復は独立の必須試験とする。
+- **導出手順:** [cap derivation and measurement plan](../design/palw/adr-0176-cap-derivation-and-measurement-plan-2026-10-15.md)（Stage 1 実測 → Stage 2 sweep → Stage 3 敵対/境界試験）。該当範囲が無ければ数値を作らず、衝突する制約を報告する。現行コード値や「100件/7日」等の過去例を正式値にしない。
+- **実装の所在:** `consensus/core/src/palw_bond_budget_v1/hold.rs`（`PalwBondHoldPolicyV1`、`PalwHoldModeV1`、日/burst view、`hold_admit_v1`）、`palw_bond_budget_fold_v1.rs`（planがmodeを運ぶ）、`palw_bond_cap_sweep_v1.rs`（Stage 2/3 simulator）、`scripts/drills/adr0176_stage1_measure.py`（Stage 1 driver）、試験source `consensus/core/tests/adr0176_mode_hold_v1.rs` / `adr0176_cap_sweep.rs`（未実行）。
+
+## 改定 — 2026-10-15（ユーザー判断 2026-10-15: bond式の再設計）
+
+**状態:** 判断は確定（ユーザー）。コードは新しい休眠fence **`palw_bond_formula_v2`** の背後に実装（全presetで`None`、Some-onlyで両fingerprintに入り、`Some(never())`は畳まれ、有効化は拒否）。各claimの受理DAAで判定するため、testnet-12で稼働中の式（`L_existing + L_new ≤ u·C`, `u = 0.5`, `L = ⌈PWU_exposure·S·A/ρ⌉ + m_c`）は変わらない（A-2一様）。値は名前付きfence定数であり本番承認値ではない。
+
+**ユーザーが確認した現状（pre `4fb381a87`と2026-10-10監査JSON、合成bondの価格照会。実測ではない）:** Qwen A16 8kで`0.02471601 + 3,200.84650080 = 3,200.87121681` BILI（約99.9992 %がescrow）、A16 2Mで`59.74294207 + 3,200.84650080`。escrow割引`⌈E/ρ⌉`はFloor classだけ（model classのGPU監査能力が未測定のため意図的）。licence形成がFinal前にescrow予約とissuance slotを解放するため、共謀Validで同じ2 slotを回転できる。`u`を100 %にしても13,000 BILIで2件→4件、`ρ`を上げても0.0247の項しか縮まない。1日/7日の拘束で1件約3,200 BILIを保つと30件/日の例に約192,052 / 約1,344,366 BILIが要り、13,000 BILI・`u=0.5`で30件/日に収めるには1件約216.67 / 約30.95 BILI以下が要る（逆算であり提案値ではない）。
+
+**新しい式（受理DAA `d`、claim種別`t`、mode `M`、bond元本`C`、V3 budget policy、formula policy）:**
+
+```text
+(a) 同時担保   Σ_open L + 既存責任lock + 告発予約 + 未決責任 + L_new ≤ u · C        u = 500‰（暫定の出発点、最初に調整しない）
+(b) 期間会計   Q / B（後のcarrierへの帰属を含む）/ R（未払を含む）/ F を共通拘束W_M（Panel=1 1日、Panel=0 7日、1日当たり均等化）で集計
+(c) 枠の回復   earliest_recovery = d + W_M を受理時に固定。早期（共謀）Valid・licence形成・Final・void・court結果で前倒ししない。
+               担保の解放は別条件（未解決のdispute/courtが担保を保持）
+
+1 claimの権利（D2: 期間総量をclaimへ分割）
+  r_c = ⌊r_day / (q_day · ρ)⌋,  f_c = ⌊f_day / (q_day · ρ)⌋
+  R_c = min(R_ask, r_c)（削減許可時。Floor class、または固定された実測監査能力recordがあるclassだけ）、それ以外は R_ask
+  F_c = min(F_ask, f_c)
+予約の分解（各部分に固有の保持時間）
+  L_weight  = max(⌈f_c · v_F⌉, ⌈PWU·S·A · λ_pwu / 1000⌉)          ρで割らない
+  L_right   = R_c                                                   （kernel / nativeは0: 利用者escrowはproducer担保ではない）
+  gain      = R_c + ⌈f_c · v_F⌉                                     （claimの最大帰属権利）
+  L_coll    = max(loss_floor_t, ⌈gain · κ_t / 1000⌉)                 ρに依存しない下限、κ_t ≥ 1000
+  L_penalty = max(0, L_coll − L_right − ⌈f_c · v_F⌉)                （kernel / nativeはL_coll全額）
+  L_other   = court_cost_t + da_retention_cost_t
+  L         = L_weight + L_right + L_penalty + L_other ≥ L_coll ≥ gain
+保持: weight・right・penalty = terminal + H_L、other = max(d + retention_hold_t, そのclaimの全court/DA sessionの終了)、枠 = d + W_M
+```
+
+- **licence形成での解放を撤廃:** fence以後に受理されたclaimは、licenceでescrow予約を解放せず（`palw_rcore_supplementary_flips_v1`）、issuance slotは`d + W_M`まで保持する（`palw_issuance_holds_slot_v1`）。Final・終了後も、budget engineの責任view（`close_keeping_liability_v1`）が同時担保検査で責任終了まで数える。
+- **分解の公開:** RPC `getPalwClaims`のclaim row v5 `reservationSplit`（JSON: `type`, `mode`, `weight`, `right`, `penalty`, `other`, `total`, `collectableLoss`, `gain`, 各`*Hold`, `capacityRecoveryDaa`, `rights`; proto field 38）。fence未満のclaimは空。
+- **Floor限定のescrow割引の置換:** model classは、1 claimの期間権利が上の分割で有界であり、かつclassの検証/監査能力が測定済み（`PALW_BOND_FORMULA_MEASURED_CAPACITY_PINNED_V2`に固定されたrecord、現在は空）の場合だけ削減予約を受ける。監査backlogの懸念は価格ではなく能力で扱う。
+- **Panel=0 / Kernel claimの別会計:** 利用者払いescrow（coinbase legなし、model予算で削らない）、producerの責任担保（利用者の前払いで消えない）、producerの期間R上限を分ける（`palw_kernel_accounting_v2`）。約3,200 BILIの自作Attempt見積りはFree Prompt・Kernel claimの共通価格ではなく、種別ごとに価格を付ける（`PalwClaimTypePricingV2`: Attempt / FreePrompt / KernelPanelOne / KernelPanelZero / NativeFunded）。
+- **ρと損失:** 予約を小さくしても不正利得は小さくならない。徴収すべき損失の下限（`loss_floor_t`）はρで縮まず、PWUのslash exposureもρで割らない。報酬・weightを据え置いたまま予約だけを1/1000にすることはしない。
+- **測定・報告:** claim種別ごとに、予約をweight / escrow権利 / その他責任へ分け実際の保持時間とともに、同時担保`≈ λ·a·H`、四つの合格条件（担保会計、期間上限、実用性、REAL継続）を報告する（上記plan）。
+- **実装の所在:** `consensus/core/src/palw_bond_formula_v2.rs`、`palw_bond_budget_v1/hold.rs`（責任view）、`palw_state_v2/state_params.rs`（`claim_escrow_term_v2`）、`palw_weight_cap_v1.rs`（weight部分とG scale）、`palw_issuance_slots_v1.rs`、`palw_state_v2.rs`（licence flip）、`palw_bond_budget_fold_v1.rs`（budgetの責任額、close）、`palw_producer_v2.rs` / RPC（分解の公開）。試験source `consensus/core/tests/adr0176_bond_formula_v2.rs`（未実行）。

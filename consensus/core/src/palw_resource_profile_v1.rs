@@ -694,9 +694,12 @@ mod tests {
                 assert!(palw_dense_capture_bytes_v1(cap + 1, tile_len) > budget, "tile {tile_len}: one more leaf does not");
             }
         }
-        // The t12 held rows' tile (128): 632 B a leaf, so a 24 GiB host holds 40.8M leaves whole —
-        // under the smaller held canonical job's 105.5M (`dos_repro_0`), which that host streams.
-        assert_eq!(palw_whole_capture_leaf_cap_v1(PALW_HELD_STEP_LADDER_V1, 128, Some(budget)), budget / 632);
+        // The t12 held rows' tile (128): 2,592 B a leaf under the structural host bound of d3ff09371
+        // (hash vector, root-fold vectors, header growth, 16 B a tile value and four tile objects), so a
+        // 24 GiB host holds 9.9M leaves whole — under the smaller held canonical job's 105.5M
+        // (`dos_repro_0`), which that host streams.
+        assert_eq!(palw_dense_capture_bytes_v1(1, 128), 2_592);
+        assert_eq!(palw_whole_capture_leaf_cap_v1(PALW_HELD_STEP_LADDER_V1, 128, Some(budget)), budget / 2_592);
         assert_eq!(palw_whole_capture_leaf_cap_v1(PALW_HELD_STEP_LADDER_V1, 128, Some(0)), 0, "no budget holds no leaf");
         assert_eq!(palw_whole_capture_leaf_cap_v1(u64::MAX, u32::MAX, Some(u64::MAX)), 1 << 26, "saturating, and still capped");
     }
@@ -741,7 +744,9 @@ mod tests {
         // space is 26.6 billion leaves; the dense sink's leaf-hash vector alone is 64 B each — the
         // `total-vm:1702360980kB` `dmesg` printed on 2026-09-23 (1.70 TB; the vector is the whole of it
         // to within the process's other mappings) — and its tiles are 4.4 TB more. The held class's attempt
-        // therefore folds, and the fold retains 0.8 GiB at its `2^12` level. Whatever the K/V width.
+        // therefore folds, and the fold retains 3.14 GiB at its `2^12` level: eight retained hashes an
+        // entry plus 256 B a block leaf, the d3ff09371 host bound (0.8 GiB under the earlier two-hash
+        // estimate). Whatever the K/V width.
         assert!(palw_attempt_capture_folds_v1(&profile), "the 2M row is under the held regime, so its attempt folds");
         assert_eq!(leaves, 27_002_845_160, "the 2M attempt is 2^34.65 leaves");
         let leaf_vector_bytes = leaves * 64;
@@ -761,7 +766,7 @@ mod tests {
         assert!(dense as f64 > 15.0e12, "the dense capture of a 2M attempt is over 15 TB: {dense}");
         assert_eq!(i16_producer.capture, PalwCaptureRetentionV1::Fold { retain_level: HELD_RETAIN_LEVEL });
         assert_eq!(i16_producer.capture_retained_bytes, palw_fold_capture_bytes_v1(leaves, HELD_RETAIN_LEVEL));
-        assert!((0.7..0.9).contains(&(i16_producer.capture_retained_bytes as f64 / GIB)), "the fold retains under a GiB");
+        assert_eq!(i16_producer.capture_retained_bytes, 3_376_404_480, "6,592,492 retained entries x 512 B + 4,096 x 256 B");
         assert!(
             i16_producer.checkpoint_leg_bytes as f64 / GIB < 0.2,
             "the leg's own retention is small: {}",
@@ -841,11 +846,12 @@ mod tests {
             assert_eq!(p.retained_checkpoint_bytes, 0, "a replaying seat captures no leg");
             assert_eq!(p.checkpoint_leg_bytes, 0);
             // **The S1 replay keeps a hash per leaf it walks, and at this width that is the term**:
-            // segment 0 walks 8.7 billion leaves from the prompt — 580 GiB of `(index, hash)` — which
-            // is why the figure is printed rather than hidden: no seat on this design replays a 2M
-            // segment until the replay streams its hashes.
+            // segment 0 walks 8.7 billion leaves from the prompt — 580 GiB of `(index, hash)`, priced at
+            // four times that for the growing Vec's capacity (d3ff09371) — which is why the figure is
+            // printed rather than hidden: no seat on this design replays a 2M segment until the replay
+            // streams its hashes.
             assert_eq!(p.capture, PalwCaptureRetentionV1::ReplayHashes);
-            assert_eq!(p.capture_retained_bytes, p.leaves * 72);
+            assert_eq!(p.capture_retained_bytes, p.leaves * 72 * 4);
             assert!(p.leaves > 0);
             // The prefix is the state: nothing smaller serves dense attention.
             assert_eq!(p.kv_resident_bytes, palw_kv_series_bytes_v1(28, 256, p.end_rows, 2));
@@ -862,13 +868,13 @@ mod tests {
         // rows and the opening are the smaller terms. Compared without it (the K/V and opening terms alone):
         let without_hashes = |p: &PalwResourceProfileV1| p.working_set_bytes() - p.capture_retained_bytes;
         assert!(
-            without_hashes(&ends[1]) > without_hashes(&full) - full.capture_retained_bytes,
+            without_hashes(&ends[1]) > without_hashes(&full),
             "…but its i32 opening outweighs the i16 rows it saves: {} > {}",
             without_hashes(&ends[1]),
-            without_hashes(&full) - full.capture_retained_bytes
+            without_hashes(&full)
         );
         assert!(
-            without_hashes(&ends[1].from_genesis()) < without_hashes(&full) - full.capture_retained_bytes,
+            without_hashes(&ends[1].from_genesis()) < without_hashes(&full),
             "started at the prompt, it is smaller than a full seat"
         );
         assert!(ends[0].working_set_bytes() as f64 / GIB > 500.0, "segment 0's replay hashes alone are hundreds of GiB");

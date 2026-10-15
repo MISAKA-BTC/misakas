@@ -246,3 +246,9 @@ DAA emission budgetは総発行制約の参考であり、`S_m`/`f(S_m)`の実�
 - **マイナー報酬はモデル登録者へ直接分配しない。** モデル別のcoinbaseとブロック報酬はclaimを生成したMinerと検証責任を果たしたVerifierにだけ帰属し、登録者・ownerのlegを置かない（[ADR-0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)の「報酬からのowner service feeはNo」を維持）。登録者の収入は**ModelPositionの売買手数料**（売買ごとのBILI額の5 %、[ADR-0114](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)。fence `palw_model_leg_v2`でADR-0087の1 %から引き上げ。別に5 %をburn）であり、モデルが使われPositionの売買が増えるほど増える。報酬の5 %による買い上げ（ADR-0091）はlegなしで価格を上げるだけである。登録者が自らMiner/Verifierとして参加する場合は、その役割の報酬を同じ規則で受ける。
 - **二段評価の(b)所有者個人:** 所有者の収入は、Position売買手数料と、自らMiner/Verifierとして得る報酬の和で測る。モデル配分の伸びが直接登録者の収入になるとは扱わない。
 - **必須の受入試験:** `α = 1.5`は資本集中を強める。新規モデルが採掘機会を失いすぎないことを有効化前の必須評価とする。
+
+## 休眠実装 — 2026-10-15（上の2026-10-14決定の実装）
+
+**休眠実装（未build・未検証、`palw_model_bond_allocation_v1`は全presetで`None`、有効化は拒否）:** V3 allocation policy（`PalwAllocationAverageV1`: 30日、verifier元本、block機会。validationで`α = 1.5`と30日を固定）。`roll_epoch_v3`がepochごとにminerの成熟した割当とPanel seatが生存claimに拘束した額（`seat_exposure`）をbondごとに合算・元本でpro-rata clipして`S_m(k)`を記録し、30日分の平均`S̄_m`から`A_m = ⌊S̄_m^1.5⌋`を書く。`model_blocks_available_v1`は1 DAA = 1 block機会として`⌊accrued · A_m / ΣA⌋ − reserved_m`を返し、claimのplanが不足を拒否（clipしない）、commitが予約する（riderは先頭blockで計上済み）。待機bond・登録料・AMM/Position・未払報酬は数えない。所在: `consensus/core/src/palw_bond_budget_v1/allocation_v3.rs`、`palw_bond_budget_fold_v1.rs`（epoch roll、plan/commit）、試験source `consensus/core/tests/adr0177_allocation_v3.rs`。
+
+**未了:** 利用者escrowをmodel予算で削らない修正（RFC-0016 P4、`eee1710ce`）はmerge済み。coinbase由来のclaimについて、V3のmodel別報酬対象block権利とcoinbase側のR clip（`palw_model_available_v1`）が`P_m`を二重に適用しないよう解消する必要がある（ユーザー判断待ち）。実装したblock機会は報酬対象ブロック権利の層（claimが拒否されても物理blockは残る）であり、RFC-0016 D-Q1の物理層（V+、Draft）は未実装。新規モデルが`α = 1.5`で採掘機会を失いすぎないことの評価、verifierの参加手順・責任・拘束期間・報酬条件（預けるだけで検査しない対策を含む）の定義は有効化前の必須事項（ユーザー）。

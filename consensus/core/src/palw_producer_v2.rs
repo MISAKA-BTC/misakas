@@ -810,6 +810,7 @@ mod tests {
                 deadline_daa: Some(deadline),
                 reserved: 0,
                 committed: Some(0),
+                reservation_split: None,
                 escrowed_reward: 0,
                 payout_pending: None,
                 work_leaves: 0,
@@ -2085,6 +2086,10 @@ pub struct PalwClaimRowV1 {
     /// Final, and a void's abandon hold while it lasts. The sum is the bond's reserved exposure.
     /// `None` when the figure overflows (`palw_claim_commitment_v1`'s own `None`) — never a sentinel.
     pub committed: Option<u128>,
+    /// **ADR-0176 amendment (ユーザー判断 2026-10-15 item 3): the reservation's decomposition** — weight / economic right /
+    /// collectable-loss top-up / court-DA-retention, each with its hold, and the fixed earliest capacity recovery. `None` for a claim
+    /// accepted below `palw_bond_formula_v2` (every claim on every shipped preset).
+    pub reservation_split: Option<crate::palw_bond_formula_v2::PalwReservationSplitV2>,
     /// The block lane's escrow (0 for a prompt-lane claim, and for a merged-blue attempt).
     pub escrowed_reward: u64,
     /// The payout queued for the next coinbase, once the claim is final — the producer's leg.
@@ -2277,6 +2282,7 @@ pub fn palw_claim_rows_v1(
                 deadline_daa: palw_claim_phase_deadline_v1(state, id, claim, state_params, court.map(|c| c.1)),
                 reserved: claim.reserved,
                 committed: crate::palw_state_v2::palw_claim_commitment_v1(state_params, claim, tip_daa),
+                reservation_split: crate::palw_bond_formula_v2::palw_bond_formula_claim_split_v2(state_params, claim),
                 escrowed_reward: claim.escrowed_reward,
                 // ADR-0152 A-KEY: a vested Final's producer leg is queued under its own key, never
                 // under the raw claim id (phase2-plan §2.7); below the fence, exactly as before.

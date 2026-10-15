@@ -442,3 +442,61 @@ fn the_v3_policy_pins_the_users_spans() {
     assert!(v2_with.validate().is_err(), "a V2 policy carries no hold");
     assert_ne!(good.digest(), PalwBondBudgetPolicyV1 { hold: None, ..good.clone() }.digest());
 }
+
+#[test]
+fn after_a_halt_and_heartbeat_only_spans_the_budget_releases_and_real_resumes() {
+    // Guidance item 7/9 (restart/reorg/halt recovery; heartbeat-only → REAL): a bond fills its Panel=1 day, the chain then runs
+    // heartbeat-only (no REAL acceptance) and halts; the first block after resumption — whatever DAA jump it carries — releases
+    // every reservation whose clock passed BEFORE its admissions, and a REAL claim is admitted again. The floor state machine,
+    // Idle through the heartbeat-only span, moves to Normal on the first BLUE REAL acceptance (no cooldown).
+    use kaspa_consensus_core::palw_real_share_v1::{PalwFloorModeV1, PalwFloorStateV1, PalwRealAcceptedV1, palw_floor_step_v1};
+    let p = policy(1);
+    let capital = 1_000 * KAS;
+    let mut w = World::new(p);
+    w.tick(10);
+    w.try_claim(1, capital, 10, PalwHoldModeV1::PanelOne, 0).unwrap();
+    w.try_claim(1, capital, 10, PalwHoldModeV1::PanelOne, 0).unwrap();
+    w.tick(90);
+    w.try_claim(1, capital, 90, PalwHoldModeV1::PanelOne, 0).unwrap();
+    assert!(w.try_claim(1, capital, 91, PalwHoldModeV1::PanelOne, 0).is_err(), "the day is full");
+    // Heartbeat-only, then a halt: the next block arrives at DAA 10 + 9 days (a sparse jump).
+    let mut floor = PalwFloorStateV1::default();
+    for daa in (100..9 * DAY).step_by(50) {
+        floor = palw_floor_step_v1(floor, daa, None);
+    }
+    assert_eq!(floor.mode, PalwFloorModeV1::Idle, "heartbeat-only spans leave the floor Idle");
+    let resume = 10 + 9 * DAY;
+    w.tick(resume);
+    assert_eq!(w.s.bond_row(&bond(1)).map(|r| r.window.claims).unwrap_or(0), 0, "every clock that passed during the halt released");
+    w.try_claim(1, capital, resume, PalwHoldModeV1::PanelOne, 0).expect("REAL is admitted again at once");
+    floor = palw_floor_step_v1(floor, resume, Some(PalwRealAcceptedV1 { blue: true }));
+    assert!(matches!(floor.mode, PalwFloorModeV1::Normal { last_blue } if last_blue == resume), "REAL resumes the Normal state");
+    w.s.check_consistency().expect("consistent");
+}
+
+#[test]
+fn exit_and_re_registration_wait_for_the_long_view_and_the_liability() {
+    // RFC-0015 §8.3.4 / ADR-0176 D4: the capital that consumed capacity cannot leave (and come back as a fresh bond with a fresh
+    // ledger) while any reservation sits in its long view — 7 days even for a Panel=1-only bond (decision doc C2, lead default) — nor
+    // while its liability holds it. A slash lowers the caps of the next claims; the old consumption stays counted beside them.
+    let p = policy(1);
+    let mut w = World::new(p.clone());
+    w.tick(10);
+    w.try_claim(1, 2_000 * KAS, 10, PalwHoldModeV1::PanelOne, 100 * KAS).unwrap();
+    w.close_all_open(20);
+    for now in [21, DAY + 10, 6 * DAY] {
+        assert!(w.s.withdrawal_holds(&bond(1), now), "the capital is held at {now}");
+    }
+    assert!(!w.s.window_holds(&bond(1), 10 + 7 * DAY), "the long view ends at d + 7 days");
+    w.tick(10 + 7 * DAY);
+    assert!(!w.s.withdrawal_holds(&bond(1), 10 + 7 * DAY), "and the liability (20 + H_L) ended long before");
+    // A slash: the same bond at half its capital — its daily caps halve, the consumption still in its views stays counted.
+    let mut v = World::new(p);
+    v.tick(1);
+    for _ in 0..2 {
+        v.try_claim(2, 2_000 * KAS, 1, PalwHoldModeV1::PanelOne, 0).unwrap();
+    }
+    v.tick(100);
+    assert!(v.try_claim(2, 1_000 * KAS, 100, PalwHoldModeV1::PanelOne, 0).is_ok(), "3/day after the slash: 2 used + 1");
+    assert!(v.try_claim(2, 1_000 * KAS, 101, PalwHoldModeV1::PanelOne, 0).is_err(), "the old consumption counts against the new cap");
+}

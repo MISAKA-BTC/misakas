@@ -1728,6 +1728,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     reserved_sompi: row.reserved.to_string(),
                     // Empty where the figure overflows — no sentinel reads as an amount.
                     committed_sompi: row.committed.map(|c| c.to_string()).unwrap_or_default(),
+                    // ADR-0176 amendment (ユーザー判断 2026-10-15 item 3): the decomposition, not only the total.
+                    reservation_split: row.reservation_split.map(|split| split.audit_json()).unwrap_or_default(),
                     escrow_sompi: row.escrowed_reward,
                     payout_pending_sompi: row.payout_pending,
                     quanta: row.quanta,

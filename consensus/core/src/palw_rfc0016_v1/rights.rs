@@ -82,13 +82,23 @@ pub trait PalwRightsWeightsSourceV1 {
 impl PalwRightsWeightsSourceV1 for PalwBondBudgetStateV1 {
     fn rights_weights_v1(&self) -> Option<(BTreeMap<Hash64, PalwAllocationWeightV1>, PalwAllocationWeightV1)> {
         let epoch = self.header.allocation?;
-        let weights = self.models.iter().filter(|(_, row)| row.epoch == epoch.index).map(|(m, row)| (*m, row.weight)).collect();
+        // The ADR-0177 V3 engine keeps synthetic history / block-reservation rows in the same table: never a model's weight.
+        let weights = self
+            .models
+            .iter()
+            .filter(|(_, row)| row.epoch == epoch.index && !PalwBondBudgetStateV1::is_allocation_aux_row_v1(row))
+            .map(|(m, row)| (*m, row.weight))
+            .collect();
         Some((weights, epoch.sum_a))
     }
 
     fn rights_capital_v1(&self, model: &Hash64) -> u128 {
         let index = self.header.allocation.map(|e| e.index);
-        self.models.get(model).filter(|row| Some(row.epoch) == index).map(|row| row.capital).unwrap_or(0)
+        self.models
+            .get(model)
+            .filter(|row| Some(row.epoch) == index && !PalwBondBudgetStateV1::is_allocation_aux_row_v1(row))
+            .map(|row| row.capital)
+            .unwrap_or(0)
     }
 }
 

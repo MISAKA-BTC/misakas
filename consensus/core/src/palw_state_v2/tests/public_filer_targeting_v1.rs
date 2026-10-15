@@ -47,7 +47,14 @@ fn explicit_public_target_survives_old_claim_flood_and_preserves_native_eligibil
 
 #[test]
 fn explicit_lookup_reconstructs_its_own_admitted_reservations_after_carriage_restart() {
-    let p = params().with_legacy_public_filer_from_daa(Some(0));
+    // A legacy dispute record exists only where `palw_rcore_plus` is in force, and the reservation passes its
+    // accuser gate, whose room is the free half `C - max(committed, ceiling)`: at the default 1000‰ ceiling
+    // no bond has any. Same contract as `terminal_carriage_v1`'s fixture for the same reservation.
+    let p = params()
+        .with_fp_exposure_ceiling(500)
+        .unwrap()
+        .with_rcore_plus_mirrors(Some(0), 12_900, vec![h64(0x2B)])
+        .with_legacy_public_filer_from_daa(Some(0));
     let (licensed, claim, _, _) = f2_licensed_false_execution(&p);
     let row = licensed.claim(&claim).unwrap();
     let reserve = PalwConsensusObjectV2::DisputeReservedV1 {
