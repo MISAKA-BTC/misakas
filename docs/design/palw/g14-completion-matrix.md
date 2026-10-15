@@ -8,6 +8,9 @@ question of G14 completeness, this matrix supersedes their "Real node" columns.
 **Latest review refresh:** §2b records the Codex branch through numbered public DA reacquisition and the public-history / tag-158 DA-worker follow-ups; it overrides older status descriptions only for the
 specific cases it names. The milestone tables remain evidence history, not proof that every currently allowed profile is complete.
 
+**Completeness audit (2026-10-16):** [g14-completeness-proof-2026-10-16.md](g14-completeness-proof-2026-10-16.md) checks the G14 claim against the DAA 14,000
+active plan at `f244ed92d` (fraud class × lane matrix, adversarial gap list, test and drill obligations). Verdict: the claim does not hold for that plan in source.
+
 ## 0. The bar
 
 **Scenario.** The producer and EVERY Panel seat collude: every seat signs `Valid` / receipts. One public bonded verifier outside
