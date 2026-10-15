@@ -136,7 +136,7 @@ impl KernelMaterialContextArchiveV4 {
                 if bytes.len() as u64 != len {
                     return Err("kernel metadata changed extent while opening".into());
                 }
-                let proof = preflight_native_value_v1::<Snapshot>(&bytes, len).map_err(|e| e.to_string())?;
+                let proof = preflight_native_value_v1::<Snapshot>(&bytes[..], bytes.len() as u64).map_err(|e| e.to_string())?;
                 if proof.logical_requests_v1() > limits.max_heap_bytes {
                     return Err("kernel metadata exceeds aggregate RAM cap".into());
                 }
@@ -317,7 +317,7 @@ impl KernelMaterialContextArchiveV4 {
         let _raw_ram = self.ram.reserve(canonical_buffers_v4(len, 1)?)?;
         let _raw = reserve_native_requests_v1(canonical_buffers_v4(len, 1)?).map_err(|e| e.to_string())?;
         let bytes = borsh::to_vec(&(context, capsule)).map_err(|e| e.to_string())?;
-        let proof = preflight_native_value_v1::<KernelMaterialContextRecordV4>(&bytes, len).map_err(|e| e.to_string())?;
+        let proof = preflight_native_value_v1::<KernelMaterialContextRecordV4>(&bytes[..], bytes.len() as u64).map_err(|e| e.to_string())?;
         if proof.logical_requests_v1() > self.limits.max_heap_bytes {
             return Err("kernel metadata nested decode exceeds aggregate RAM cap before publication".into());
         }

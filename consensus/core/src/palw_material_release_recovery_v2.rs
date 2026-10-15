@@ -640,7 +640,7 @@ pub fn material_provider_terminals_owned_v4(
             }
         }
     }
-    preflight_native_value_v1::<Vec<PalwMaterialTerminalReceiptV2>>(&encoded, encoded.len() as u64).map_err(|e| e.to_string())?;
+    preflight_native_value_v1::<Vec<PalwMaterialTerminalReceiptV2>>(&encoded[..], encoded.len() as u64).map_err(|e| e.to_string())?;
     retain_native_value_decode_v1(&encoded, || borsh::from_slice::<Vec<PalwMaterialTerminalReceiptV2>>(&encoded))
         .map_err(|e| e.to_string())
 }

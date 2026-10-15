@@ -87,6 +87,27 @@ pub trait NativeReadyExchangeV3: Send + Sync {
     ) -> Result<(), String> {
         Err("explicit V4 kernel material ingress unavailable".into())
     }
+    /// RFC08 checker read: page the complete TypedKernelV4 material of `root` from `provider`, authenticated against the
+    /// provider's native bond key. The result is unauthenticated material until the SDK consumer verifies every unit.
+    #[allow(clippy::type_complexity)]
+    fn read_kernel_material_v4(
+        &self,
+        _root: kaspa_consensus_core::Hash64,
+        _preferred_consent: kaspa_consensus_core::Hash64,
+        _provider: PalwBondKeyV2,
+        _provider_pubkey: &[u8],
+        _local_daa: u64,
+        _max_bytes: u64,
+    ) -> Result<
+        (
+            kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwTypedKernelMaterialBundleV4,
+            kaspa_consensus_core::Hash64,
+            Vec<Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>>,
+        ),
+        String,
+    > {
+        Err("explicit V4 kernel material read unavailable".into())
+    }
     /// Queue a fully signed prospective contract; the caller must wait for its
     /// OWN coherent native prior-state admission before any execution/draw.
     fn ensure_recovery_session_v4(
@@ -504,6 +525,6 @@ pub fn palw_native_signature_map_owned_v3(
     for row in signatures {
         borsh::to_writer(&mut bytes, row).map_err(|e| e.to_string())?;
     }
-    preflight_native_value_v1::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(&bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
+    preflight_native_value_v1::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(&bytes[..], bytes.len() as u64).map_err(|e| e.to_string())?;
     retain_native_value_decode_v1(&bytes, || borsh::from_slice::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(&bytes)).map_err(|e| e.to_string())
 }

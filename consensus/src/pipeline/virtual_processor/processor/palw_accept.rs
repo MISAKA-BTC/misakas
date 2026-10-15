@@ -2782,7 +2782,7 @@ impl VirtualStateProcessor {
     }
 }
 
-impl VirtualProcessor {
+impl VirtualStateProcessor {
     pub(crate) fn palw_kernel_material_ingress_v4_impl(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -2814,7 +2814,7 @@ impl VirtualProcessor {
     }
 }
 
-impl VirtualProcessor {
+impl VirtualStateProcessor {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn palw_kernel_producer_candidate_v4_impl(
         &self,state:&kaspa_consensus_core::palw_state_v2::PalwChainStateV2,checkpoint:BlockHash,now:u64,

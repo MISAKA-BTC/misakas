@@ -63,7 +63,7 @@ fn bounded_funding<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>
     }
     d.deserialize_seq(Visitor)
 }
-fn regular(path: &Path) -> Result<(), String> {
+pub(super) fn regular(path: &Path) -> Result<(), String> {
     if !path.is_absolute() {
         return Err("kernel paid paths must be absolute".into());
     }
@@ -78,7 +78,7 @@ fn regular(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-fn hash(raw: &str) -> Result<Hash64, String> {
+pub(super) fn hash(raw: &str) -> Result<Hash64, String> {
     let mut bytes = [0u8; 64];
     faster_hex::hex_decode(raw.as_bytes(), &mut bytes).map_err(|e| e.to_string())?;
     Ok(Hash64::from_bytes(bytes))
@@ -119,7 +119,7 @@ fn read_bounded(
     }
     Ok((bytes, lease))
 }
-fn owned_dir(path: &Path) -> Result<(), String> {
+pub(super) fn owned_dir(path: &Path) -> Result<(), String> {
     for parent in path.ancestors().skip(1) {
         if fs::symlink_metadata(parent).map_err(|e| e.to_string())?.file_type().is_symlink() {
             return Err("kernel paid outbox traverses a symlink".into());
@@ -141,7 +141,7 @@ fn owned_dir(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-fn publish_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(super) fn publish_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if path.exists() {
         return Err("kernel paid outbox already contains this immutable record".into());
     }
@@ -301,7 +301,7 @@ impl PreparedKernelPaidWorkV4 {
             palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2, palw_producer_v2::PalwObjectRehearsalV1,
         };
         let (work_bytes, _file_lease) = read_bounded(&self.spec.work_path, self.spec.max_input_bytes)?;
-        let shape = preflight_native_value_v1::<ProgramPaidBootstrapWorkV3>(&work_bytes, work_bytes.len() as u64)
+        let shape = preflight_native_value_v1::<ProgramPaidBootstrapWorkV3>(&work_bytes[..], work_bytes.len() as u64)
             .map_err(|e| e.to_string())?;
         if shape.logical_requests_v1() > self.spec.max_workspace_bytes {
             return Err("kernel paid decoded input exceeds explicit workspace".into());
@@ -323,7 +323,7 @@ impl PreparedKernelPaidWorkV4 {
         let checkpoint = hash(&self.spec.checkpoint)?;
         let mut object: Option<NativeRetainedV1<PalwConsensusObjectV2>> = if object_path.exists() {
             let (bytes, _raw_lease) = read_bounded(&object_path, self.spec.max_input_bytes)?;
-            preflight_native_value_v1::<PalwConsensusObjectV2>(&bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
+            preflight_native_value_v1::<PalwConsensusObjectV2>(&bytes[..], bytes.len() as u64).map_err(|e| e.to_string())?;
             Some(retain_native_value_decode_v1(&bytes, || borsh::from_slice(&bytes)).map_err(|e| e.to_string())?)
         } else {
             None
@@ -347,13 +347,27 @@ impl PreparedKernelPaidWorkV4 {
         let script = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(
             &kaspa_hashes::blake2b_512_address_payload(self.payer.verification_key.as_ref()).as_bytes(),
         );
+        // A native read that races a tip/import/clock change (or an incomplete IBD/import) is retried on the next tick: these
+        // reads bracket their own native point and refuse rather than mix two. Only the signed expiry turns waiting into a
+        // terminal refusal; a draft, an upload, a queued carrier or a mempool entry is never treated as native acceptance.
+        macro_rules! retry {
+            ($what:expr, $e:expr) => {
+                match $e {
+                    Ok(v) => v,
+                    Err(error) => {
+                        kaspa_core::debug!("private kernel paid producer retries {}: {}", $what, error);
+                        continue;
+                    }
+                }
+            };
+        }
         loop {
             if matches!(self.tick.tick(Duration::from_secs(2)).await, kaspa_core::task::tick::TickReason::Shutdown) {
                 return Ok(());
             }
             let api = self.manager.consensus().unguarded_session();
-            let route = api.palw_kernel_route_v1().ok_or("own native paid route unavailable")?;
-            if let Some(authority) = route.paid_claim_for_base_v2(&root)? {
+            let Some(route) = api.palw_kernel_route_v1() else { continue };
+            if let Some(authority) = retry!("accepted authority read", route.paid_claim_for_base_v2(&root)) {
                 if authority.enrollment.class != class
                     || authority.enrollment.job != job
                     || authority.enrollment.producer
@@ -364,16 +378,23 @@ impl PreparedKernelPaidWorkV4 {
                 kaspa_core::info!("private kernel paid enrollment accepted: {}", faster_hex::hex_string(&root));
                 return Ok(());
             }
+            // The producer signed this deadline; past it no carrier of this work can be admitted, so stop rather than spend.
+            if api.get_virtual_daa_score() > self.spec.expires_daa {
+                return Err("signed kernel work expired before native acceptance; durable outbox retained".into());
+            }
             if object.is_none() {
                 if handoff.is_none() {
-                    let candidate = api.palw_kernel_producer_candidate_v4(
-                        checkpoint,
-                        self.producer,
-                        &work.commit,
-                        &salt,
-                        self.spec.commit_daa,
-                        self.spec.expires_daa,
-                    )?;
+                    let candidate = retry!(
+                        "own producer candidate",
+                        api.palw_kernel_producer_candidate_v4(
+                            checkpoint,
+                            self.producer,
+                            &work.commit,
+                            &salt,
+                            self.spec.commit_daa,
+                            self.spec.expires_daa,
+                        )
+                    );
                     let copy = NativeRetainedV1::try_from_clone_v1(&work.commit).map_err(|e| e.to_string())?;
                     let (commit, _copy_lease) = copy.into_parts_v1();
                     handoff = Some(
@@ -395,15 +416,17 @@ impl PreparedKernelPaidWorkV4 {
                 }
                 let request = handoff.as_ref().ok_or("kernel handoff absent")?.request();
                 if ingress.is_none() {
-                    let grant = api.palw_kernel_material_ingress_v4(checkpoint, request)?;
-                    exchange.0.ingest_kernel_material_v4(request, &grant)?;
+                    let grant = retry!("own native ingress grant", api.palw_kernel_material_ingress_v4(checkpoint, request));
+                    // Every named provider must durably hold the material and sign; a partial or failed exchange is retried
+                    // with a fresh grant (provider publication is idempotent per consent).
+                    retry!("authenticated provider exchange", exchange.0.ingest_kernel_material_v4(request, &grant));
                     ingress = Some(grant);
                 }
                 let grant = ingress.as_ref().ok_or("kernel ingress absent")?;
                 // Own accepted prior funded enrollment. Requiring useful-work
                 // finality here would create a first-work bootstrap cycle.
                 // Reorgs are rechecked below and journal dependent claims.
-                if !api.palw_kernel_material_admission_accepted_v4(request, &grant.enrollment)? {
+                if !retry!("own accepted funded enrollment", api.palw_kernel_material_admission_accepted_v4(request, &grant.enrollment)) {
                     continue;
                 }
                 let PalwMaterialRecoveryActionV2::FundedEnroll { monetary, .. } = &*grant.enrollment else {
@@ -455,7 +478,8 @@ impl PreparedKernelPaidWorkV4 {
             ) {
                 return Err("kernel cached carrier signature invalid".into());
             }
-            if !api.palw_kernel_material_consent_accepted_v4(Hash64::from_bytes(root), consent)? {
+            // Per-broadcast recheck: the covenant this carrier names is accepted at the current tip and import generation.
+            if !retry!("current accepted covenant", api.palw_kernel_material_consent_accepted_v4(Hash64::from_bytes(root), consent)) {
                 continue;
             }
 
@@ -528,12 +552,15 @@ impl PreparedKernelPaidWorkV4 {
             }
             // Retain the original owner while reserving the independent relay
             // transaction copy. Cold restart always resends this exact spend.
-            let _relay = super::recovery_ack_carrier_v4::reserve_carrier_build_v4(
-                signed,
-                &api.get_virtual_utxo_entry(tx.inputs[0].previous_outpoint)
-                    .ok_or("kernel original funding absent; durable transaction retained")?,
-                self.payer.verification_key.as_ref().len(),
-            )?;
+            // A spent funding outpoint means the carrier was mined (acceptance is read at the top of the next tick) or
+            // conflicted (the signed expiry bounds the wait); the durable transaction is kept either way.
+            let Some(funding) = api.get_virtual_utxo_entry(tx.inputs[0].previous_outpoint) else { continue };
+            let _relay =
+                retry!("relay copy reservation", super::recovery_ack_carrier_v4::reserve_carrier_build_v4(
+                    signed,
+                    &funding,
+                    self.payer.verification_key.as_ref().len(),
+                ));
             match tokio::time::timeout(
                 Duration::from_secs(10),
                 self.flow.submit_rpc_transaction(&api, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden),
