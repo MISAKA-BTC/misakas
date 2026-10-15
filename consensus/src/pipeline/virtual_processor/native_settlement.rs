@@ -80,8 +80,9 @@ pub(super) struct NativeChainRow {
     fork_choice: Option<Box<PalwForkChoiceDeltaV1>>,
     /// **RFC-0018 GAP-R4**: where rule E is in force at this block's own point, the root its chain child must commit for this block's
     /// post-state (`palw_committed_state_root_v2`: the rule-E leaf v2/v3 envelope), computed once from the post-state — a rule-E leaf
-    /// (window and registry roots) cannot be rebuilt backwards from deltas. `None` below rule E: the v1 rebuild above applies.
-    rule_e_committed: Option<Hash64>,
+    /// (window and registry roots) cannot be rebuilt backwards from deltas. `None` below rule E: the v1 rebuild above applies. Boxed,
+    /// as `fork_choice`, so a dormant row stays its size.
+    rule_e_committed: Option<Box<Hash64>>,
     // Shared Arc readers retain this reservation after cache replacement.
     // Drop the payload fields before returning the ticket to the checker.
     _resource_lease: Option<NativeDemandLeaseV1>,
@@ -115,8 +116,8 @@ fn native_roots_chain_v1(
             root == sink_state.state_root()
         } else {
             // RFC-0018 GAP-R4: past rule E the row carries the committed root of its post-state (rule-E leaf envelope).
-            let committed = match (row.rule_e_committed, leaf.as_ref()) {
-                (Some(committed), _) => committed,
+            let committed = match (row.rule_e_committed.as_deref(), leaf.as_ref()) {
+                (Some(committed), _) => *committed,
                 (None, Some(leaf)) => palw_committed_root_of_parts_v1(leaf, &root, fence),
                 (None, None) => root,
             };
@@ -188,8 +189,9 @@ impl VirtualStateProcessor {
         cursor: BlockHash,
         delta: Option<&kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2>,
         fork_projection: bool,
+        rule_e_root: bool,
     ) -> Result<Option<NativeDemandLeaseV1>, WalkFault> {
-        let reserve = || reserve_native_settlement_row_v1::<NativeChainRow>(delta, fork_projection);
+        let reserve = || reserve_native_settlement_row_v1::<NativeChainRow>(delta, fork_projection, rule_e_root);
         match reserve() {
             Ok(lease) => Ok(lease),
             Err(_) => {
@@ -231,7 +233,7 @@ impl VirtualStateProcessor {
         }
         let (delta_root, evidence, fork_choice, resource_lease) =
             if cursor == pruning || header.daa_score < self.evm_activation_daa_score {
-                let lease = self.native_row_reservation_v1(cursor, None, false)?;
+                let lease = self.native_row_reservation_v1(cursor, None, false, false)?;
                 (None, NativeDeltaEvidenceV1::default(), None, lease)
             } else {
                 // A missing or undecodable delta is a gap in the verified history, not an empty block.
@@ -242,7 +244,12 @@ impl VirtualStateProcessor {
                     }
                     Err(_) => return Err(WalkFault(HistoryGapV1::DeltaNotRetained, Some(cursor))),
                 };
-                let lease = self.native_row_reservation_v1(cursor, Some(&delta), self.palw_fork_choice_commitment_v1.is_some())?;
+                let lease = self.native_row_reservation_v1(
+                    cursor,
+                    Some(&delta),
+                    self.palw_fork_choice_commitment_v1.is_some(),
+                    self.native_redemption_params_v33.palw_fork_choice_rule_e_active_at(header.daa_score),
+                )?;
                 #[allow(unused_mut)]
                 let mut evidence = native_delta_evidence_v1(&delta);
                 #[cfg(test)]
@@ -262,10 +269,10 @@ impl VirtualStateProcessor {
                 let Some(state) = self.palw_candidate_state_v2(cursor) else {
                     return Err(WalkFault(HistoryGapV1::DeltaNotRetained, Some(cursor)));
                 };
-                Some(kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::palw_committed_state_root_v2(
+                Some(Box::new(kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::palw_committed_state_root_v2(
                     &state,
                     &self.native_redemption_params_v33,
-                ))
+                )))
             }
             _ => None,
         };
@@ -836,7 +843,7 @@ mod tests {
             delta_root: r.delta_root,
             evidence: NativeDeltaEvidenceV1::default(),
             fork_choice: r.fork_choice.clone(),
-            rule_e_committed: r.rule_e_committed,
+            rule_e_committed: r.rule_e_committed.clone(),
             _resource_lease: None,
         }
     }

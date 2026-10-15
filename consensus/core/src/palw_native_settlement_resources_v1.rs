@@ -45,6 +45,7 @@ fn reserve(bound: NativeCoverageV1) -> Result<Option<NativeDemandLeaseV1>, Nativ
 pub fn reserve_native_settlement_row_v1<Row>(
     delta: Option<&PalwStateDeltaV2>,
     fork_projection: bool,
+    rule_e_root: bool,
 ) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
     if !enabled() {
         return Ok(None);
@@ -58,6 +59,10 @@ pub fn reserve_native_settlement_row_v1<Row>(
         .add::<Row>(slots::<BTreeNodeEnvelopeV1<Hash64, Arc<Row>>>(1, path), path);
     if fork_projection {
         bound = bound.add::<Row>(slots::<PalwForkChoiceDeltaV1>(1, path), path);
+    }
+    // RFC-0018 GAP-R4: the boxed committed root a row carries where rule E is in force at its point.
+    if rule_e_root {
+        bound = bound.add::<Row>(slots::<crate::Hash64>(1, path), path);
     }
     let (mut claims, mut free, mut voided, mut rewards) = (0usize, 0usize, 0usize, 0usize);
     if let Some(delta) = delta {
