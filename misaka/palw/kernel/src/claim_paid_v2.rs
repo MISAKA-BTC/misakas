@@ -7,6 +7,13 @@ use misaka_palw_challenge::{
     BeaconContextV1, ChallengeSubjectV1, PostCommitChallengePolicyV1, RootV1, SubjectKindV1, VerifiedWorkBeaconV1,
 };
 
+/// PRINCIPLES §8 (2026-10-15): the native compact V4 plan, its producer proof record and proof binding are retired. The
+/// object variants below keep their wire identity for decoding only; every constructor that would admit, bind or credit them
+/// refuses.
+pub const COMPACT_V4_RETIRED: bool = true;
+pub const COMPACT_V4_RETIRED_REASON: &str =
+    "compact V4 is retired (PRINCIPLES §8): no compact proof record is generated, bound, accepted or credited";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PaidClaimTargetV2 {
     Program,
@@ -490,6 +497,10 @@ impl PaidClaimCheckAuthorityV2 {
         now: u64,
         previous: &[(Digest, Digest, Digest)],
     ) -> Result<Self, String> {
+        // PRINCIPLES §8 (2026-10-15): the V4 compact plan is retired; no check authority is built for it.
+        if COMPACT_V4_RETIRED {
+            return Err(COMPACT_V4_RETIRED_REASON.into());
+        }
         Self::for_interactive_round_inner(
             class,
             enrollment,
@@ -506,6 +517,9 @@ impl PaidClaimCheckAuthorityV2 {
         )
     }
     pub fn with_compact_proof_binding_v4(mut self, root: Digest) -> Result<Self, String> {
+        if COMPACT_V4_RETIRED {
+            return Err(COMPACT_V4_RETIRED_REASON.into());
+        }
         if self.interactive_plan.as_ref().is_none_or(|p| p.version != 4) || self.compact_proof_root.is_some() || root == [0; 64] {
             return Err("compact proof binding has wrong plan/duplicate/zero root".into());
         }
@@ -521,6 +535,9 @@ impl PaidClaimCheckAuthorityV2 {
         session: std::rc::Rc<crate::claim_compact_v1::native_v4::CompactVerificationSessionV4>,
         proof: Option<&crate::claim_compact_v1::native_v4::NativeCompactProofV4>,
     ) -> Result<Self, String> {
+        if COMPACT_V4_RETIRED {
+            return Err(COMPACT_V4_RETIRED_REASON.into());
+        }
         let plan = self.interactive_plan.as_ref().ok_or("compact plan missing")?;
         if plan.version != 4
             || *plan != registration.plan

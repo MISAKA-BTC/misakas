@@ -201,8 +201,9 @@ impl PrivateKernelPaidWorkSpecV4 {
         Ok(spec)
     }
     pub fn prepare(self, ctx: &PalwNativeCustodyContextV3) -> Result<PreparedKernelPaidWorkV4, String> {
-        if ctx.config.params.palw_claim_compact_v4.is_none() || ctx.config.params.palw_material_release_recovery_v2.is_none() {
-            return Err("explicit paid-v4/recovery configuration required".into());
+        // The paid-v4 private profile is PAV3 + material release recovery V2; the retired compact V4 fence is never armed.
+        if ctx.config.params.palw_material_release_recovery_v2.is_none() || ctx.config.params.palw_claim_compact_v4.is_some() {
+            return Err("explicit paid-v4/recovery configuration required (compact V4 is retired)".into());
         }
         let producer = PalwBondKeyV2(crate::palw_producer::parse_outpoint(
             ctx.producer_bond.as_deref().ok_or("kernel paid producer bond absent")?,

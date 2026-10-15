@@ -565,23 +565,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 PAID_CLAIM_CLASSES_V2 => {
                     let c: PaidClaimClassV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                     c.validate().map_err(&refuse)?;
-                    if let Some(plan) = c.interactive_plan.as_ref().filter(|p| p.version == 4) {
-                        route
-                            .paid_compact_contract_v4(&plan.id())
-                            .map_err(&refuse)?
-                            .registration
-                            .validate_for_class(&c, &l)
-                            .map_err(&refuse)?;
-                        let compact =
-                            params.claim_compact_v4_at(now).ok_or_else(|| refuse("compact class without active own fence".into()))?;
-                        if compact.require_independent_review {
-                            misaka_palw_challenge::approved_v2(
-                                &misaka_palw_challenge::shipped_registry_v2(),
-                                &plan.compiler,
-                                &c.source_policy,
-                            )
-                            .map_err(|e| refuse(e.to_string()))?;
-                        }
+                    // PRINCIPLES §8: the fold refuses a V4 compact plan, so a carried class naming one is inconsistent.
+                    if c.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
+                        return Err(refuse(crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACT_RETIRED_REASON_V1.into()));
                     }
                     let target = if let Some(base) = l.classes.get(&c.base_class) {
                         if crate::palw_claim_challenge_v2::is_segmented_descriptor_v3(&base.descriptor.digest()) {

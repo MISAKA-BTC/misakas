@@ -1,6 +1,11 @@
 //! **R7-RELATION round 3: the consensus gate of a compact relation contract.** Dormant: admission needs the ClaimV2 fence active
 //! (public validation keeps `palw_claim_challenge_v2` at `never`) and an approved review tuple naming the contract's suite (the
 //! shipped registry is empty). Nothing calls this from a block path yet; no wire id, aux table or state tag is allocated.
+//!
+//! **Retired (PRINCIPLES §8, 2026-10-15).** A compact relation contract is a producer-side admission object. Both registration
+//! entry points below refuse unconditionally: no new compact contract is generated, accepted or used as a credit authority.
+//! Only the deterministic coverage read API ([`palw_native_compact_coverage_v2`]) remains, as an inventory of which relations a
+//! verifier can check directly (Freivalds/linear evaluation over operands the verifier itself reads).
 
 use crate::config::params::Params;
 use misaka_palw_challenge::PostCommitChallengePolicyV1;
@@ -9,8 +14,14 @@ use misaka_palw_kernel::claim_compact_v1::{
     CompactContractSummaryV1, CompactPlanCoverageV1, CompactRelationContractV1, register_compact_relation_contract_v1,
 };
 
+/// PRINCIPLES §8: compact relation contracts (V1 single-plan, V2 whole-class, V4 native) are never admitted again.
+pub const PALW_COMPACT_CONTRACTS_RETIRED_V1: bool = true;
+/// The refusal every retired compact admission entry returns.
+pub const PALW_COMPACT_CONTRACT_RETIRED_REASON_V1: &str =
+    "compact relation contracts are retired (PRINCIPLES §8): no new compact contract, proof binding or compact class is admitted";
+
 /// Register a compact relation contract at `daa`: the ClaimV2 fence must be present and active, then the kernel's structural,
-/// coverage, bound and approved-review checks run against the shipped (empty) registry. Today it always refuses.
+/// coverage, bound and approved-review checks run against the shipped (empty) registry. Refuses unconditionally (§8).
 pub fn palw_compact_relation_registration_v1(
     params: &Params,
     daa: u64,
@@ -21,6 +32,9 @@ pub fn palw_compact_relation_registration_v1(
     adversary: &AdversaryBudgetV1,
     policy: &PostCommitChallengePolicyV1,
 ) -> Result<CompactContractSummaryV1, String> {
+    if PALW_COMPACT_CONTRACTS_RETIRED_V1 {
+        return Err(PALW_COMPACT_CONTRACT_RETIRED_REASON_V1.into());
+    }
     let fence = params.palw_claim_challenge_v2.as_ref().ok_or("compact relation contracts need the ClaimV2 fence, which is absent")?;
     if !fence.activation.is_active(daa) {
         return Err("the ClaimV2 fence is dormant: compact relation contracts are not admitted".into());
@@ -70,6 +84,9 @@ pub fn palw_native_compact_registration_v2(
     budget: &AdversaryBudgetV1,
     policy: &PostCommitChallengePolicyV1,
 ) -> Result<misaka_palw_kernel::claim_compact_v1::native_v2::NativeCompactContractSummaryV2, String> {
+    if PALW_COMPACT_CONTRACTS_RETIRED_V1 {
+        return Err(PALW_COMPACT_CONTRACT_RETIRED_REASON_V1.into());
+    }
     let fence = params.palw_claim_challenge_v2.as_ref().ok_or("ClaimV2 compiled fence absent")?;
     if !fence.activation.is_active(daa) {
         return Err("ClaimV2 compact registration is dormant".into());

@@ -384,8 +384,10 @@ pub fn sign_paid_claim_object_v2(
     };
     let actor = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&bond);
     let named = match inner {
-        PaidClaimObjectV2::RegisterCompactContractV4 { registration } => Some(registration.registrant),
-        PaidClaimObjectV2::BindCompactProofV4 { .. } => None, // exact enrolled producer checked by native admission.
+        // PRINCIPLES §8: the SDK never signs a retired compact V4 contract or proof binding.
+        PaidClaimObjectV2::RegisterCompactContractV4 { .. } | PaidClaimObjectV2::BindCompactProofV4 { .. } => {
+            return Err(misaka_palw_kernel::claim_paid_v2::COMPACT_V4_RETIRED_REASON.into());
+        }
         PaidClaimObjectV2::RegisterClass { class } => Some(class.registrant),
         PaidClaimObjectV2::EnrollJob { job } => Some(job.payer),
         PaidClaimObjectV2::Commit { enrollment, commit, .. } => {

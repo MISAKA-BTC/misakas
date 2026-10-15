@@ -234,19 +234,10 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
             });
         }
     }
-    if let Some(compact) = config.params.palw_claim_compact_v4.as_ref() {
+    if config.params.palw_material_release_recovery_v2.is_some() {
+        // Paid-v4 private profile: PAV3 + material release recovery V2. Compact V4 is retired (PRINCIPLES §8).
         manifest["privatePaidProfileVersion"] = serde_json::json!(4);
-        manifest["compactClaimPolicy"] = serde_json::json!({
-            "id": faster_hex::hex_string(&compact.policy.id()),
-            "activationDaa": compact.activation.daa_score(),
-            "maximumOpeningBytes": compact.policy.maximum_opening_bytes,
-            "maximumProofBytes": compact.policy.maximum_proof_bytes,
-            "maximumVerifierWork": compact.policy.maximum_verifier_work.to_string(),
-            "maximumStreamWords": compact.policy.maximum_stream_words,
-            "maxContracts": compact.policy.max_contracts,
-            "independentReviewRequired": compact.policy.require_independent_review,
-            "approved": false,
-        });
+        manifest["compactClaimPolicy"] = serde_json::json!({"retired": true, "reason": "PRINCIPLES §8"});
     }
     if let Some(recovery) = config.params.palw_material_release_recovery_v2.as_ref() {
         manifest["releaseRecoveryPolicy"] = serde_json::json!({
