@@ -37,17 +37,33 @@ class FiniteBootstrapDrill(smoke.ResourceDrill):
 
 
 def validate_factory_manifest(bootstrap, profile):
-    if profile not in ('complete-v1', 'paid-v3'):
+    if profile not in ('complete-v1', 'paid-v3', 'paid-v4'):
         raise ValueError('unallocated private bootstrap profile')
     if bootstrap.get('skipProofOfWork') is not False or bootstrap.get('releaseApproval') is not False:
         raise ValueError('the private factory must retain real PoW and no release approval')
-    if profile == 'paid-v3':
-        if bootstrap.get('schema') != 'misaka.private-paid-bootstrap.v3':
-            raise ValueError('paid-v3 requires its own authenticated bootstrap manifest')
+    if profile in ('paid-v3', 'paid-v4'):
+        version = profile.removeprefix('paid-')
+        if bootstrap.get('schema') != 'misaka.private-paid-bootstrap.' + version:
+            raise ValueError(profile + ' requires its own authenticated bootstrap manifest')
         if bootstrap.get('baseArtifactsAreControlReceipts') is not False:
             raise ValueError('old base artifacts cannot supply paid-v3 control receipts')
         if bootstrap.get('paidClaimIncluded') is not False or bootstrap.get('nativeFinalObserved') is not False:
             raise ValueError('offline paid-v3 bootstrap cannot assert native claim or Final')
+        if profile == 'paid-v4':
+            nested = bootstrap.get('privateProbeProfile')
+            if not isinstance(nested, dict) or nested.get('privatePaidProfileVersion') != 4:
+                raise ValueError('paid-v4 requires its separate compact/recovery factory identity')
+            for field in ('genesis', 'consensusParamsId'):
+                if not bootstrap.get(field) or nested.get(field) != bootstrap[field]:
+                    raise ValueError('paid-v4 nested factory identity differs: ' + field)
+            if nested.get('skipProofOfWork') is not False or nested.get('releaseApproval') is not False:
+                raise ValueError('paid-v4 nested factory must retain real PoW and no approval')
+            for field in ('compactClaimPolicy', 'releaseRecoveryPolicy'):
+                policy = nested.get(field)
+                if not isinstance(policy, dict) or policy.get('approved') is not False or not policy.get('id'):
+                    raise ValueError('paid-v4 requires its explicit unapproved policy: ' + field)
+            if any(bootstrap.get(field) is not False for field in ('compactContractIncluded', 'recoveryEnrollmentIncluded')):
+                raise ValueError('offline paid-v4 bootstrap cannot assert compact or recovery admission')
     elif bootstrap.get('kind') != 'rfc12-private-complete-bootstrap-file-fixture':
         raise ValueError('complete-v1 requires its exact original bootstrap manifest')
 
@@ -86,6 +102,46 @@ def native_provider_config(fixture, bootstrap, listen):
         hostArgv=host_argv, clientArgv=client_argv,
         appliesTo='non-floor classes past palw_monetary_material_v1; the BASE floor producer stays PAV2',
         unverifiedSource=True, nativeCustodyMeasured=False, releaseApproval=False)
+
+
+def native_provider_config_v4(fixture, bootstrap, listen, maximum_fee):
+    """Use one dedicated, explicitly funded payer for every provider carrier.
+
+    Seat 3 is neither a node producer's seat nor the workflow CLI funding key.
+    All keys are fixture keys; this establishes no operator independence.
+    """
+    if type(maximum_fee) is not int or not 0 < maximum_fee < 2**64:
+        raise ValueError('paid-v4 hosted providers need an explicit positive u64 carrier fee cap')
+    provider = native_provider_config(fixture, bootstrap, listen)
+    seats = bootstrap['seats']
+    if len(seats) < 4:
+        raise ValueError('paid-v4 hosted providers need a fourth dedicated carrier payer seat')
+    payer = seats[3]
+    def outpoint(value):
+        parts = value.split(':')
+        if (len(parts) != 2 or len(parts[0]) != 128 or
+                any(c not in '0123456789abcdef' for c in parts[0]) or
+                not parts[1].isascii() or not parts[1].isdecimal() or
+                str(int(parts[1])) != parts[1] or int(parts[1]) >= 2**32):
+            raise ValueError('paid-v4 provider/payer outpoints must be canonical Hash64:u32')
+        return bytes.fromhex(parts[0]), int(parts[1])
+    bonds = sorted(provider['providerBonds'], key=outpoint)
+    payer_key = str(fixture / payer['keyFile'])
+    if not Path(payer_key).is_absolute() or any(c in payer_key for c in ',@'):
+        raise ValueError('paid-v4 carrier payer key must be an unambiguous absolute fixture path')
+    if payer['keyFile'] in {seats[n]['keyFile'] for n in (0, 1, 2)} or payer['keyFile'] == bootstrap.get('fundingKeyFile'):
+        raise ValueError('paid-v4 carrier payer key must be dedicated')
+    outpoint(payer['feeOutpoint'])
+    if payer['feeOutpoint'] in {seats[n]['feeOutpoint'] for n in (0, 1, 2)}:
+        raise ValueError('paid-v4 carrier payer funding must be dedicated')
+    provider['hostArgv'].extend(['--private-probe-recovery-ack-key=' + payer_key,
+        '--private-probe-recovery-ack-funding=' + payer['feeOutpoint'],
+        '--private-probe-recovery-ack-fee-cap=' + str(maximum_fee)])
+    provider['clientArgv'].append('--private-probe-native-recovery-providers=' + ','.join(bonds))
+    provider.update(kind='rfc08-pav4-loopback-native-provider-v1', providerBonds=bonds,
+        carrierPayerSeat=3, maximumCarrierFeeSompi=maximum_fee,
+        appliesTo='paid-v4 non-floor classes with atomic FundedEnroll and current finalized recovery checkpoints')
+    return provider
 
 
 NATIVE_SESSION_KIND = 'rfc08-pav3-prospective-native-session-v1'
@@ -241,10 +297,10 @@ def exercise_native_custody(drill, bootstrap):
         finalObserved=False, gcObserved=False, releaseApproval=False)
 
 
-def plan_for(binary, salt, fixture, bootstrap, timeout, profile='complete-v1', native_provider=False):
+def plan_for(binary, salt, fixture, bootstrap, timeout, profile='complete-v1', native_provider=False, maximum_carrier_fee=None):
     validate_factory_manifest(bootstrap, profile)
-    if native_provider and profile != 'paid-v3':
-        raise ValueError('the PAV3 loopback native provider is a paid-v3 profile option only')
+    if native_provider and profile not in ('paid-v3', 'paid-v4'):
+        raise ValueError('the PAV3 loopback native provider is a paid-v3 profile option only or an explicit paid-v4 profile option')
     reservations, endpoints = [], []
     try:
         for _ in range(16 if native_provider else 15):
@@ -272,9 +328,12 @@ def plan_for(binary, salt, fixture, bootstrap, timeout, profile='complete-v1', n
         plan = dict(schemaVersion=1, kind='rfc12-private-registration-binding-only', nodes=nodes, privateProfile=profile,
             scenario_timeout_s=timeout, probe_timeout_s=15, command_timeout_s=60,
             fullRfc12SecurityApproval=False, release100kMeasured=False)
-        if profile == 'paid-v3':
+        if profile in ('paid-v3', 'paid-v4'):
             # Named for every paid-v3 plan; None unless explicitly requested, so the default paid-v3 run is unchanged.
-            provider = native_provider_config(fixture, bootstrap, endpoints[15]) if native_provider else None
+            provider = None
+            if native_provider:
+                provider = (native_provider_config_v4(fixture, bootstrap, endpoints[15], maximum_carrier_fee)
+                    if profile == 'paid-v4' else native_provider_config(fixture, bootstrap, endpoints[15]))
             if provider:
                 nodes[provider['host']]['argv'].extend(provider['hostArgv'])
                 nodes[provider['exchangeClient']]['argv'].extend(provider['clientArgv'])
@@ -472,7 +531,7 @@ def main():
     parser.add_argument('--binary', required=True)
     parser.add_argument('--cli', required=True)
     parser.add_argument('--salt', required=True)
-    parser.add_argument('--private-profile', choices=('complete-v1', 'paid-v3'), default='complete-v1',
+    parser.add_argument('--private-profile', choices=('complete-v1', 'paid-v3', 'paid-v4'), default='complete-v1',
         help='exact private policy; paid-v3 prepares new scope and never promotes old fixture receipts')
     parser.add_argument('--maximum-carrier-fee-sompi', required=True, type=int)
     parser.add_argument('--resource-limits', required=True)
@@ -480,7 +539,7 @@ def main():
     parser.add_argument('--timeout', type=int, default=240)
     parser.add_argument('--factory-timeout', type=int, default=60)
     parser.add_argument('--native-loopback-provider', action='store_true',
-        help='paid-v3 only: host the RFC-0008 PAV3 loopback provider (seats 1,2) on B for A\'s producer; unverified source')
+        help='paid-v3/v4: host the RFC-0008 loopback providers (seats 1,2) on B; v4 carriers use dedicated payer seat 3')
     parser.add_argument('--native-session', action='store_true',
         help='with --native-loopback-provider: enroll a prospective native session for the registered non-floor class '
         '(sponsor seat 0, providers seats 1,2), then switch A to that class and wait for a provider bundle; unverified source')
@@ -521,7 +580,7 @@ def main():
         elif args.maximum_binding_reservation_sompi is not None or args.maximum_complete_check_fee_sompi is not None:
             raise ValueError('separate complete-check bond caps require --complete-check')
         plan = plan_for(binary, args.salt, fixture, bootstrap, args.timeout, args.private_profile,
-            args.native_loopback_provider)
+            args.native_loopback_provider, args.maximum_carrier_fee_sompi)
         (root / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n')
         drill = FiniteBootstrapDrill(plan, root, sampler, {})
         drill.workflow_deadline = time.monotonic() + args.timeout

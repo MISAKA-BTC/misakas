@@ -635,7 +635,7 @@ pub(super) fn finish_exec_rewards_v1(
     let ids: Vec<_> = ledger.bonds.keys().copied().collect();
     for id in ids {
         if let Some(key) = builder.state.kernel_route.as_ref().and_then(|r| r.bond_key_of(&id)) {
-            ledger.sync_bond(id, builder.kernel_synced_collateral(&key, daa));
+            ledger.try_sync_bond_v1(id, builder.kernel_synced_collateral(&key, daa)).map_err(|e| refused(e.to_string()))?;
         }
     }
     let mut events = Vec::new();
@@ -1248,7 +1248,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     let original_attested = ledger.attested_artifacts.clone();
     if let Some((_, id)) = &scoped {
         let row = builder.state.kernel_route.as_ref().unwrap().model_artifact_binding_header_v2(id).unwrap();
-        ledger.attest_artifact(row.kernel_param_root.as_bytes());
+        ledger.try_attest_artifact_v1(row.kernel_param_root.as_bytes()).map_err(|e| refused(e.to_string()))?;
     }
     let object = scoped.as_ref().map(|(o, _)| o).unwrap_or(&object);
     if let KernelRouteObjectV1::RegisterClassV2 { mode, descriptor, program_bytes, plan, param_commitments } = &object
@@ -1267,7 +1267,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             )
             .is_ok()
         {
-            ledger.attest_artifact(facts.param_root);
+            ledger.try_attest_artifact_v1(facts.param_root).map_err(|e| refused(e.to_string()))?;
         }
     }
     if matches!(object, KernelRouteObjectV1::Withdraw { .. })
@@ -1280,7 +1280,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         OpvGateV1::Drop => return Ok(()),
         OpvGateV1::Admit(classes) => {
             for class in classes {
-                ledger.admit_optimistic_class(class).map_err(|r| refused(r.to_string()))?;
+                ledger.try_admit_optimistic_class_v1(class).map_err(refused)?;
             }
         }
         OpvGateV1::Pass => {}
@@ -1291,7 +1291,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         }
     }
     let kid = palw_kernel_bond_id_v1(signer);
-    ledger.sync_bond(kid, builder.kernel_synced_collateral(signer, ctx.daa_score));
+    ledger.try_sync_bond_v1(kid, builder.kernel_synced_collateral(signer, ctx.daa_score)).map_err(|e| refused(e.to_string()))?;
     // The other bond a slash can land on is the producer of the claim the object names: its collateral is brought up to date too, so
     // an earlier object of this block (or another lane's slash) can never leave the ledger believing the bond holds more than it does.
     if let KernelRouteObjectV1::FileProof { claim, .. }
@@ -1300,7 +1300,9 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         && let Some(producer) = ledger.claims.get(claim).map(|row| row.producer)
         && let Some(key) = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&producer))
     {
-        ledger.sync_bond(producer, builder.kernel_synced_collateral(&key, ctx.daa_score));
+        ledger
+            .try_sync_bond_v1(producer, builder.kernel_synced_collateral(&key, ctx.daa_score))
+            .map_err(|e| refused(e.to_string()))?;
     }
     // DA16 / ADR-0177 D2: past `palw_provider_court_v1` a demand names a claim-specific unit or nothing, within its requester's tally.
     let scope = match &object {
@@ -1594,6 +1596,7 @@ pub(super) fn apply_kernel_receipt_v1(
         tally.add(r, evidence);
     }
     if matches!(tally.state(), TallyStateV1::Covered) {
+        ledger.prepare_panel_tally_v1(&claim).map_err(|e| refused(e.to_string()))?;
         let _ = ledger.apply_panel_tally(&claim, true);
         builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key_bytes(&claim), None);
         builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key_bytes(&claim), None);
@@ -1658,7 +1661,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     let held: Vec<misaka_palw_kernel::hash::Digest> = ledger.bonds.keys().copied().collect();
     for kid in held {
         if let Some(key) = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&kid)) {
-            ledger.sync_bond(kid, builder.kernel_synced_collateral(&key, ctx.daa_score));
+            ledger.try_sync_bond_v1(kid, builder.kernel_synced_collateral(&key, ctx.daa_score)).map_err(|e| refused(e.to_string()))?;
         }
     }
     let pending_source_fees: Vec<_> =

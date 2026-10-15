@@ -79,8 +79,12 @@ pub(crate) fn build_lifecycle_carrier_v2(
             addr(&signable)
         ));
     }
-    let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() })
-        .map_err(|e| format!("the lifecycle payload does not serialize: {e}"))?;
+    // The derived struct serializer is exactly its two consecutive fields.
+    // Borrow the object rather than deep-cloning a proof before serialization.
+    let fields = (PALW_LIFECYCLE_TX_VERSION_V2, object);
+    let length = borsh::object_length(&fields).map_err(|e| format!("the lifecycle payload does not serialize: {e}"))?;
+    let mut payload = Vec::with_capacity(length);
+    borsh::to_writer(&mut payload, &fields).map_err(|e| format!("the lifecycle payload does not serialize: {e}"))?;
     let params = &config.params;
     let mass_calculator = MassCalculator::new(
         params.mass_per_tx_byte,

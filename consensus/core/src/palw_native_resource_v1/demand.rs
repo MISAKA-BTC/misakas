@@ -17,6 +17,17 @@ pub struct NativeDemandLeaseV1 {
     database: u64,
 }
 impl NativeDemandLeaseV1 {
+    /// Transfer part of this already admitted memory reservation to another
+    /// owner. The sum of both tickets remains unchanged; database reservation
+    /// stays with the original owner. Refusal changes neither ticket nor ledger.
+    pub fn split_memory_v1(&mut self, amount: u64) -> Result<Self, NativeCoverageV1> {
+        let remaining = self.memory.checked_sub(amount).ok_or_else(|| {
+            NativeCoverageV1::unsupported::<Self>("native owner ticket split", "transfer exceeds the owner's memory reservation")
+        })?;
+        let transferred = Self { checker: Arc::clone(&self.checker), memory: amount, database: 0 };
+        self.memory = remaining;
+        Ok(transferred)
+    }
     /// Extend an existing owner before its next allocation. Reuse the same
     /// ticket so tracking an unbounded walk does not itself allocate a second
     /// collection whose ownership would need another reservation.
@@ -211,6 +222,23 @@ pub fn admit_native_receive_v1(point: BlockHash) -> Result<(), NativeCoverageV1>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn split_transfers_only_owned_memory_and_each_drop_returns_its_share() {
+        let checker =
+            super::NativeDemandCheckerV1::new(super::NativeSnapshotResourceLimitsV1 { memory_bytes: 100, database_bytes: 100 });
+        let mut source = checker.reserve_requests_v1(80, 20).unwrap();
+        assert!(source.split_memory_v1(81).is_err());
+        assert_eq!(checker.outstanding(), (80, 20));
+        let mut output = source.split_memory_v1(50).unwrap();
+        assert_eq!(checker.outstanding(), (80, 20));
+        assert!(source.split_memory_v1(31).is_err());
+        output.grow_memory_v1(20).unwrap();
+        assert_eq!(checker.outstanding(), (100, 20));
+        drop(source);
+        assert_eq!(checker.outstanding(), (70, 0));
+        drop(output);
+        assert_eq!(checker.outstanding(), (0, 0));
+    }
     use super::*;
     #[test]
     fn growing_owner_is_atomic_and_returns_the_complete_ticket() {

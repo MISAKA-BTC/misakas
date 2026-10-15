@@ -78,6 +78,21 @@ impl<T: NativeHeapV1> NativeRetainedV1<T> {
     }
 }
 impl<T: Clone + NativeHeapV1> NativeRetainedV1<T> {
+    /// Borrowed-source copy construction. Unlike retain_existing_v1, admission
+    /// runs before Clone allocates. This authorizes this exact typed deep copy,
+    /// not later mutations or a larger derived projection of the input.
+    pub fn try_from_clone_v1(source: &T) -> Result<Self, NativeCoverageV1> {
+        let requests = value_requests_v1(source)?;
+        Self::clone_after_reservation_v1(source, requests, reserve_native_requests_v1)
+    }
+    fn clone_after_reservation_v1(
+        source: &T,
+        requests: u64,
+        reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
+    ) -> Result<Self, NativeCoverageV1> {
+        let lease = reserve(requests)?;
+        Ok(Self { value: source.clone(), _lease: lease })
+    }
     /// Core-owned, reviewed mutation only. The specialized owner API derives
     /// `growth` from its actual typed inputs/codec scans and complete temporary
     /// layouts. A claimed raw byte capacity is not a construction bound. This
@@ -116,7 +131,7 @@ impl<T: Clone + NativeHeapV1> NativeRetainedV1<T> {
 fn enabled() -> bool {
     native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1()
 }
-fn value_requests_v1<T: NativeHeapV1>(value: &T) -> Result<u64, NativeCoverageV1> {
+pub(crate) fn value_requests_v1<T: NativeHeapV1>(value: &T) -> Result<u64, NativeCoverageV1> {
     if !enabled() {
         return Ok(0);
     }
@@ -166,6 +181,34 @@ mod tests {
         drop(reader);
         assert_eq!(checker.outstanding(), (32, 0));
         drop(cache);
+        assert_eq!(checker.outstanding(), (0, 0));
+    }
+    #[test]
+    fn borrowed_source_clone_is_never_called_before_capacity_admission() {
+        #[derive(Debug)]
+        struct CountedClone(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+        impl Clone for CountedClone {
+            fn clone(&self) -> Self {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Self(std::sync::Arc::clone(&self.0))
+            }
+        }
+        impl NativeHeapV1 for CountedClone {
+            fn native_heap_v1(&self, _: &str) -> NativeCoverageV1 {
+                NativeCoverageV1::Bounded { bytes: 64 }
+            }
+        }
+        let copies = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let input = CountedClone(std::sync::Arc::clone(&copies));
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 64, database_bytes: 0 });
+        let failed = NativeRetainedV1::clone_after_reservation_v1(&input, 65, |n| checker.reserve_requests_v1(n, 0).map(Some));
+        assert!(failed.is_err());
+        assert_eq!(copies.load(std::sync::atomic::Ordering::Relaxed), 0);
+        assert_eq!(checker.outstanding(), (0, 0));
+        let copy = NativeRetainedV1::clone_after_reservation_v1(&input, 64, |n| checker.reserve_requests_v1(n, 0).map(Some)).unwrap();
+        assert_eq!(copies.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(checker.outstanding(), (64, 0));
+        drop(copy);
         assert_eq!(checker.outstanding(), (0, 0));
     }
     #[test]

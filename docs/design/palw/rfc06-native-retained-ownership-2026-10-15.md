@@ -38,3 +38,9 @@ Flat7/9 persisted programs and typed/composite spec roots have structural/derive
 ## Validation source prepared, not run
 
 Compact identity source tests cover batch abandonment, clone-new visibility, deletion, legacy fallback and unknown version refusal. Borrowed record tests assert exact existing bincode decoding and in-frame payload borrowing, including an impossible length rejection. Retained owner tests assert old readers keep their ticket after cache replacement and delegated Borsh bytes equal the original value bytes. Replay tests assert malformed opaque rows and overflow refuse before state mutation. Existing default-off native walk/root/reorg tests remain the compatibility baseline. Consolidated compilation and test execution are still pending.
+
+## Fixed-membership ledger mutations (source only)
+
+`ReservedKernelLedgerV1` now owns fallible insertion APIs for collateral sync, artifact attestation, OPV admission and the job pointer written by Panel/paid tallies. Each derives its one concrete BTree node from the actual absent key, extends the same retained ticket **before** mutation, and preserves existing-key/idempotent updates without another insertion request. The production kernel fold and paid tally callers use these APIs. Capacity refusal propagates before a new membership is installed. Source tests cover refusal preserving the map, idempotence, lease lifetime and semantic refusal without an insertion. They have not been executed.
+
+This is a specific consumer correction. General `apply_object`, fold temporaries, injected consumer projections, `DerefMut` field access and fresh `TransitionBuilder` construction remain separate preallocation gaps; these fixed insertion methods do not approve their workspace or make native resource closure complete.

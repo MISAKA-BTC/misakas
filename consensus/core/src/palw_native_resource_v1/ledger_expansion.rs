@@ -53,6 +53,55 @@ impl ReservedKernelLedgerV1 {
         let lease = reserve_native_requests_v1(ledger_clone_requests_v1(&self.ledger)?)?;
         Ok(Self { ledger: self.ledger.clone(), lease, projection_lease: None })
     }
+    /// Reserve before an audited fixed-membership mutation. Keep every growth
+    /// request in the same owner ticket; no detached temporary lease can expire
+    /// while the new BTree membership is still retained by this ledger.
+    fn reserve_membership_v1<K, V>(&mut self, absent: bool) -> Result<(), NativeCoverageV1> {
+        if !absent {
+            return Ok(());
+        }
+        let bytes = size_of::<typed::BTreeNodeEnvelopeV1<K, V>>() as u64;
+        if let Some(lease) = self.lease.as_mut() {
+            lease.grow_memory_v1(bytes)
+        } else {
+            self.lease = reserve_native_requests_v1(bytes)?;
+            Ok(())
+        }
+    }
+    /// Kernel sync_bond only inserts one fixed BondRow; it never changes any
+    /// other membership. A refusal leaves collateral and the map untouched.
+    pub fn try_sync_bond_v1(&mut self, bond: [u8; 64], collateral: u64) -> Result<(), NativeCoverageV1> {
+        self.reserve_membership_v1::<[u8; 64], misaka_palw_kernel::ledger::BondRowV1>(!self.ledger.bonds.contains_key(&bond))?;
+        self.ledger.sync_bond(bond, collateral);
+        Ok(())
+    }
+    pub fn try_attest_artifact_v1(&mut self, artifact: [u8; 64]) -> Result<(), NativeCoverageV1> {
+        self.reserve_membership_v1::<[u8; 64], ()>(!self.ledger.attested_artifacts.contains(&artifact))?;
+        self.ledger.attest_artifact(artifact);
+        Ok(())
+    }
+    pub fn try_admit_optimistic_class_v1(&mut self, class: [u8; 64]) -> Result<(), String> {
+        // Match the kernel's refusal before reserving an insertion it cannot
+        // perform. Its policy check and single admitted-set insert are audited.
+        if self.ledger.opv.policy.is_none() {
+            return self.ledger.admit_optimistic_class(class).map_err(|e| e.to_string());
+        }
+        self.reserve_membership_v1::<[u8; 64], ()>(!self.ledger.opv.admitted.contains(&class)).map_err(|e| e.to_string())?;
+        self.ledger.admit_optimistic_class(class).map_err(|e| e.to_string())
+    }
+    /// Both tally implementations can insert only this existing claim's job
+    /// pointer. Reserve it before the kernel mutates lifecycle/consumer state.
+    /// Semantic refusals may retain an unused request conservatively.
+    pub fn prepare_panel_tally_v1(&mut self, claim: &[u8; 64]) -> Result<(), NativeCoverageV1> {
+        if let Some(job) = self.ledger.claims.get(claim).map(|row| row.job_id) {
+            self.reserve_membership_v1::<[u8; 64], [u8; 64]>(!self.ledger.job_claims.contains_key(&job))?;
+        }
+        Ok(())
+    }
+    pub fn try_apply_paid_claim_tally_v2(&mut self, claim: &[u8; 64]) -> Result<(), String> {
+        self.prepare_panel_tally_v1(claim).map_err(|e| e.to_string())?;
+        self.ledger.apply_paid_claim_tally_v2(claim)
+    }
     pub fn as_rebuilt_from_v1(self, rows: &LedgerRowsV1) -> Self {
         // The ticket remains alive while the derived indexes are reconstructed.
         let Self { ledger, lease, projection_lease } = self;
@@ -545,6 +594,44 @@ mod expansion_completion_tests {
             truncated.values_mut().next().unwrap().pop();
             assert!(inventory_ledger_expansion_v1(&truncated, false).is_err());
         }
+    }
+    fn fixed_owner(limit: u64) -> (std::sync::Arc<NativeDemandCheckerV1>, ReservedKernelLedgerV1) {
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: limit, database_bytes: 0 });
+        let policy = crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(crate::Hash64::default(), crate::Hash64::default());
+        let ledger = crate::palw_kernel_route_v1::palw_kernel_route_template_v1(policy);
+        // An injected ticket tests growth/refusal without changing process-wide
+        // OnceLock admission settings or relying on test execution order.
+        let lease = Some(checker.reserve_requests_v1(0, 0).unwrap());
+        (checker, ReservedKernelLedgerV1::from_preflight_v1(ledger, lease))
+    }
+    #[test]
+    fn fixed_bond_insertion_reserves_before_mutation_and_reuses_its_owner() {
+        let node = size_of::<typed::BTreeNodeEnvelopeV1<[u8; 64], misaka_palw_kernel::ledger::BondRowV1>>() as u64;
+        let (checker, mut owner) = fixed_owner(node);
+        owner.try_sync_bond_v1([1; 64], 7).unwrap();
+        assert_eq!(checker.outstanding(), (node, 0));
+        owner.try_sync_bond_v1([1; 64], 9).unwrap();
+        assert_eq!(checker.outstanding(), (node, 0));
+        assert_eq!(owner.bonds[&[1; 64]].collateral, 9);
+        let before = owner.bonds.clone();
+        assert!(owner.try_sync_bond_v1([2; 64], 11).is_err());
+        assert_eq!(owner.bonds, before, "capacity refusal precedes insertion/collateral mutation");
+        assert_eq!(checker.outstanding(), (node, 0));
+        drop(owner);
+        assert_eq!(checker.outstanding(), (0, 0));
+    }
+    #[test]
+    fn fixed_attestation_is_idempotent_and_failed_growth_preserves_membership() {
+        let node = size_of::<typed::BTreeNodeEnvelopeV1<[u8; 64], ()>>() as u64;
+        let (checker, mut owner) = fixed_owner(node);
+        owner.try_attest_artifact_v1([1; 64]).unwrap();
+        owner.try_attest_artifact_v1([1; 64]).unwrap();
+        assert_eq!(checker.outstanding(), (node, 0));
+        assert!(owner.try_attest_artifact_v1([2; 64]).is_err());
+        assert_eq!(owner.attested_artifacts.iter().copied().collect::<Vec<_>>(), vec![[1; 64]]);
+        assert!(owner.try_admit_optimistic_class_v1([3; 64]).is_err());
+        assert!(owner.opv.admitted.is_empty());
+        assert_eq!(checker.outstanding(), (node, 0), "semantic refusal allocates no new membership");
     }
     #[test]
     fn actual_composite_stages_are_counted_and_shape_arithmetic_is_checked() {
