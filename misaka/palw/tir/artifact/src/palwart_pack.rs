@@ -44,16 +44,10 @@ pub const TOKENIZER_FILES_V3: &[&str] = &[
 ];
 /// Chat templates (a Jinja text, never evaluated here).
 pub const CHAT_TEMPLATE_FILES_V3: &[&str] = &["chat_template.jinja", "chat_template.json"];
-/// The checkpoint's configuration, kept for anyone re-deriving the program.
-pub const SOURCE_METADATA_FILES_V3: &[&str] = &[
-    "config.json",
-    "generation_config.json",
-    "preprocessor_config.json",
-    "video_preprocessor_config.json",
-    "processor_config.json",
-    "model.safetensors.index.json",
-    "configuration.json",
-];
+/// The checkpoint's configuration, kept for anyone re-deriving the program. The image/video/audio processor configs are not
+/// carried: the genesis scope is text generation only (`palwart_v3::PALWART_OUT_OF_SCOPE_FILES_V3`).
+pub const SOURCE_METADATA_FILES_V3: &[&str] =
+    &["config.json", "generation_config.json", "model.safetensors.index.json", "configuration.json"];
 /// License and notice files shipped by the source repository.
 pub const SOURCE_LICENSE_FILES_V3: &[&str] = &["LICENSE", "LICENSE.txt", "LICENSE.md", "NOTICE", "NOTICE.txt", "USE_POLICY.md"];
 /// The largest metadata file read (a tokenizer.json is tens of MiB).
@@ -206,7 +200,11 @@ impl TwinFrontierV1 {
 /// One row of param `j` (an axis-0 slice at rank ≥ 2, the whole tensor below).
 pub fn twin_row_bytes_v1(p: &misaka_palw_tir::TirProgramV1, j: u16) -> u64 {
     let d = &p.params[j as usize];
-    if d.shape.len() >= 2 { d.shape[1..].iter().map(|x| *x as u64).product::<u64>() * d.dtype.width() as u64 } else { tensor_bytes_v1(p, j) }
+    if d.shape.len() >= 2 {
+        d.shape[1..].iter().map(|x| *x as u64).product::<u64>() * d.dtype.width() as u64
+    } else {
+        tensor_bytes_v1(p, j)
+    }
 }
 
 /// **The TIR inventory root of a `PALWTIR1` file**, by the consensus rule (see the module docs):
@@ -272,9 +270,18 @@ pub fn pack_legacy_v3(legacy: &Path, inputs: &PalwArtPackInputsV3, hook: PalwArt
         return Err("the manifest must be a JSON object".into());
     }
     let format = v3::sniff_format_v3(legacy).map_err(|e| format!("{}: {e}", legacy.display()))?;
-    if !matches!(format, PalwArtifactFormatV3::Base0A16V2 | PalwArtifactFormatV3::Base0V1 | PalwArtifactFormatV3::TirV1 | PalwArtifactFormatV3::PalwQ361)
-    {
-        return Err(format!("{}: {} is not packed (supported: PALWB0A1/PALWB0A2, PALWTIR1, PALWQ361)", legacy.display(), format.name()));
+    if !matches!(
+        format,
+        PalwArtifactFormatV3::Base0A16V2
+            | PalwArtifactFormatV3::Base0V1
+            | PalwArtifactFormatV3::TirV1
+            | PalwArtifactFormatV3::PalwQ361
+    ) {
+        return Err(format!(
+            "{}: {} is not packed (supported: PALWB0A1/PALWB0A2, PALWTIR1, PALWQ361)",
+            legacy.display(),
+            format.name()
+        ));
     }
     let mut w = PalwArtWriterV3::create(&inputs.out_dir, &inputs.stem, inputs.segment_bytes, hook).map_err(s)?;
     let (program, layout, legacy_meta, weights) = match format {
@@ -284,6 +291,9 @@ pub fn pack_legacy_v3(legacy: &Path, inputs: &PalwArtPackInputsV3, hook: PalwArt
     };
     pack_common_v3(&mut w, inputs)?;
     let manifest = manifest_bytes_v3(&inputs.manifest, inputs.family, &weights);
+    if v3::manifest_declares_text_scope_v3(&manifest) {
+        v3::check_text_scope_v3(&program, w.sections())?;
+    }
     let mut prov = inputs.provenance.clone();
     if !prov.is_object() {
         prov = serde_json::json!({});
@@ -320,28 +330,50 @@ type Packed = (PalwArtProgramV3, Vec<u8>, String, PalwArtWeightsV3);
 /// an A16 file's declared `artifact_digest` (its last 64 bytes) is its inner root.
 fn pack_file_v3(w: &mut PalwArtWriterV3<'_>, legacy: &Path, family: u16, format: PalwArtifactFormatV3) -> Result<Packed, String> {
     let len = regular_file(legacy)?.ok_or_else(|| format!("{}: absent", legacy.display()))?;
+    let mut f = std::fs::File::open(legacy).map_err(|e| format!("{}: {e}", legacy.display()))?;
+    let (packed, _) = pack_reader_v3(w, &mut f, len, &legacy.display().to_string(), family, format, None)?;
+    Ok(packed)
+}
+
+/// A legacy A16 / PALWQ361 file carried whole from any reader (a local file, or an HTTPS stream that never lands on disk): its
+/// SHA-256 and its legacy digest are computed on the way, and with `expect_sha256` the bytes must be the pinned ones — checked
+/// before the caller can finish the index. Returns the section record and the SHA-256.
+fn pack_reader_v3(
+    w: &mut PalwArtWriterV3<'_>,
+    f: &mut dyn Read,
+    len: u64,
+    label: &str,
+    family: u16,
+    format: PalwArtifactFormatV3,
+    expect_sha256: Option<[u8; 32]>,
+) -> Result<(Packed, [u8; 32]), String> {
+    use sha2::{Digest as _, Sha256};
     let a16 = matches!(format, PalwArtifactFormatV3::Base0A16V2 | PalwArtifactFormatV3::Base0V1);
     if a16 && len < 8 + 64 {
-        return Err(format!("{}: {len} bytes cannot hold a BASE-0 artifact", legacy.display()));
+        return Err(format!("{label}: {len} bytes cannot hold a BASE-0 artifact"));
     }
     let (kind, enc, entry, prog) = if a16 {
         (section_kind::BASE0_A16, encoding::BASE0_A16_FILE, "base0.a16.palwart", program_kind::BASE0_A16_ENGINE)
     } else {
         (section_kind::PALWQ361_INT, encoding::PALWQ361_FILE, "qwen36.palwq36", program_kind::PALWQ361_ENGINE)
     };
-    let mut f = std::fs::File::open(legacy).map_err(|e| format!("{}: {e}", legacy.display()))?;
     let mut st = v3::legacy_file_digest_state_v3();
+    let mut sha = Sha256::new();
     w.begin_section(kind, family, section_kind::name(kind)).map_err(s)?;
     w.begin_entry(entry, None, dtype::BYTES, vec![len], enc, len).map_err(s)?;
     let mut buf = vec![0u8; 8 << 20];
     let mut got = 0u64;
     let mut tail = Vec::with_capacity(64);
     loop {
-        let n = f.read(&mut buf).map_err(|e| format!("{}: {e}", legacy.display()))?;
+        let n = f.read(&mut buf).map_err(|e| format!("{label}: {e}"))?;
         if n == 0 {
             break;
         }
+        if got + n as u64 > len {
+            return Err(format!("{label}: more than the declared {len} bytes"));
+        }
         st.update(&buf[..n]);
+        sha.update(&buf[..n]);
         w.write(&buf[..n]).map_err(s)?;
         got += n as u64;
         tail.extend_from_slice(&buf[..n]);
@@ -350,7 +382,14 @@ fn pack_file_v3(w: &mut PalwArtWriterV3<'_>, legacy: &Path, family: u16, format:
         }
     }
     if got != len {
-        return Err(format!("{}: changed while it was read ({got} of {len} bytes)", legacy.display()));
+        return Err(format!("{label}: {got} of {len} bytes (changed while read, or the stream ended)"));
+    }
+    let mut sha256 = [0u8; 32];
+    sha256.copy_from_slice(&sha.finalize());
+    if let Some(want) = expect_sha256
+        && want != sha256
+    {
+        return Err(format!("{label}: SHA-256 {} is not the pinned {}", hex(&sha256), hex(&want)));
     }
     w.end_entry().map_err(s)?;
     let mut file_digest = [0u8; 64];
@@ -364,9 +403,62 @@ fn pack_file_v3(w: &mut PalwArtWriterV3<'_>, legacy: &Path, family: u16, format:
     };
     w.end_section(scheme, root, 0).map_err(s)?;
     let program = PalwArtProgramV3 { kind: prog, ..PalwArtProgramV3::none() };
-    let weights =
-        PalwArtWeightsV3 { legacy_format: format, section_kind: kind, inner_root_scheme: scheme, inner_root: root, inner_leaf_count: 0, bytes: len };
-    Ok((program, Vec::new(), String::new(), weights))
+    let weights = PalwArtWeightsV3 {
+        legacy_format: format,
+        section_kind: kind,
+        inner_root_scheme: scheme,
+        inner_root: root,
+        inner_leaf_count: 0,
+        bytes: len,
+    };
+    Ok(((program, Vec::new(), String::new(), weights), sha256))
+}
+
+/// A legacy file arriving as a stream (genesis 8: #1's and #8's published legacy files, read over HTTPS and never stored).
+pub struct LegacyStreamV3<'r> {
+    pub reader: &'r mut dyn Read,
+    /// The file's length (the registry's).
+    pub len: u64,
+    /// Its name (provenance only).
+    pub name: String,
+    /// The LFS id the bytes must have; the index is not written otherwise.
+    pub sha256: [u8; 32],
+}
+
+/// **Pack a streamed legacy file** (A16 or PALWQ361; a `PALWTIR1` needs random access and is refused). The weight entry is the
+/// first entry of the data, at logical offset 0, so every segment but the last is an exact byte slice of the legacy file — which
+/// lets a content-defined-chunking store (Hugging Face Xet) deduplicate the upload against the legacy file already there.
+pub fn pack_legacy_stream_v3(
+    src: LegacyStreamV3<'_>,
+    inputs: &PalwArtPackInputsV3,
+    hook: PalwArtSegmentHookV3<'_>,
+) -> Result<PalwArtPackedV3, String> {
+    if !inputs.manifest.is_object() {
+        return Err("the manifest must be a JSON object".into());
+    }
+    let mut magic = [0u8; 8];
+    src.reader.read_exact(&mut magic).map_err(|e| format!("{}: {e}", src.name))?;
+    let format = PalwArtifactFormatV3::of_magic(&magic);
+    if !matches!(format, PalwArtifactFormatV3::Base0A16V2 | PalwArtifactFormatV3::Base0V1 | PalwArtifactFormatV3::PalwQ361) {
+        return Err(format!("{}: {} is not packed from a stream (supported: PALWB0A1/PALWB0A2, PALWQ361)", src.name, format.name()));
+    }
+    let mut w = PalwArtWriterV3::create(&inputs.out_dir, &inputs.stem, inputs.segment_bytes, hook).map_err(s)?;
+    let mut whole = std::io::Cursor::new(magic).chain(src.reader);
+    let ((program, layout, legacy_meta, weights), sha256) =
+        pack_reader_v3(&mut w, &mut whole, src.len, &src.name, inputs.family, format, Some(src.sha256))?;
+    pack_common_v3(&mut w, inputs)?;
+    let manifest = manifest_bytes_v3(&inputs.manifest, inputs.family, &weights);
+    if v3::manifest_declares_text_scope_v3(&manifest) {
+        v3::check_text_scope_v3(&program, w.sections())?;
+    }
+    let mut prov = inputs.provenance.clone();
+    if !prov.is_object() {
+        prov = serde_json::json!({});
+    }
+    prov["packer"] = serde_json::json!(format!("palwart pack {} (streamed)", env!("CARGO_PKG_VERSION")));
+    prov["legacy_file"] = serde_json::json!({ "name": src.name, "format": format.name(), "bytes": src.len, "sha256": hex(&sha256) });
+    let written = w.finish(manifest, program, layout, legacy_meta, v3::canonical_json_v3(&prov).into_bytes()).map_err(s)?;
+    Ok(PalwArtPackedV3 { written, weights })
 }
 
 fn pack_tir_v1_v3(w: &mut PalwArtWriterV3<'_>, legacy: &Path, family: u16) -> Result<Packed, String> {
@@ -469,8 +561,15 @@ pub fn pack_common_v3(w: &mut PalwArtWriterV3<'_>, inputs: &PalwArtPackInputsV3)
             w.put_file(n, text_encoding(n), p).map_err(s)?;
         }
         if let Some(t) = embedded {
-            w.put_entry("tokenizer_config.json#chat_template", None, dtype::BYTES, vec![t.len() as u64], encoding::UTF8_TEXT, t.as_bytes())
-                .map_err(s)?;
+            w.put_entry(
+                "tokenizer_config.json#chat_template",
+                None,
+                dtype::BYTES,
+                vec![t.len() as u64],
+                encoding::UTF8_TEXT,
+                t.as_bytes(),
+            )
+            .map_err(s)?;
         }
         w.end_section(inner_scheme::NONE, [0; 64], 0).map_err(s)?;
     }
@@ -485,7 +584,8 @@ pub fn pack_common_v3(w: &mut PalwArtWriterV3<'_>, inputs: &PalwArtPackInputsV3)
     }
 
     // License: the source's own files, then the ones the caller adds.
-    let mut lic: Vec<(String, PathBuf)> = present(SOURCE_LICENSE_FILES_V3)?.into_iter().map(|(n, p)| (format!("source/{n}"), p)).collect();
+    let mut lic: Vec<(String, PathBuf)> =
+        present(SOURCE_LICENSE_FILES_V3)?.into_iter().map(|(n, p)| (format!("source/{n}"), p)).collect();
     for p in &inputs.license_files {
         let len = regular_file(p)?.ok_or_else(|| format!("{}: absent", p.display()))?;
         if len > MAX_SMALL_FILE_V3 {
@@ -565,7 +665,8 @@ pub fn extract_legacy_v3(a: &v3::PalwArtV3, out: &Path) -> Result<PalwArtifactFo
             if sec.entries.len() != 1 {
                 return Err("a legacy-file section holds exactly one entry".into());
             }
-            let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(out).map_err(|e| format!("{}: {e}", out.display()))?;
+            let mut f =
+                std::fs::OpenOptions::new().write(true).create_new(true).open(out).map_err(|e| format!("{}: {e}", out.display()))?;
             a.stream_entry(si, 0, 8 << 20, &mut |b| f.write_all(b).map_err(|e| e.to_string())).map_err(s)?;
             f.sync_all().map_err(s)?;
             Ok(PalwArtifactFormatV3::of_magic(&sec_magic(a, si)?))
@@ -632,6 +733,10 @@ pub fn verify_v3(a: &v3::PalwArtV3) -> Result<serde_json::Value, String> {
     }
     a.verify_entries().map_err(s)?;
     out["entries"] = serde_json::json!("ok");
+    if v3::manifest_declares_text_scope_v3(&a.header.manifest) {
+        v3::check_text_scope_v3(&a.header.program, &a.header.sections)?;
+        out["scope"] = serde_json::json!("ok (text generation only: no image, audio, video or MTP component)");
+    }
     let Some((si, sec)) = a.weights() else { return Ok(out) };
     match sec.kind {
         section_kind::TIR_INVENTORY => {
@@ -676,7 +781,8 @@ pub fn verify_v3(a: &v3::PalwArtV3) -> Result<serde_json::Value, String> {
             if tail != sec.inner_root {
                 return Err("the A16 section's inner root is not the embedded file's declared digest".into());
             }
-            out["inner_root"] = serde_json::json!("ok (declared artifact_digest; recompute with palw-class / misaka_palw_sdk::palwart_deep)");
+            out["inner_root"] =
+                serde_json::json!("ok (declared artifact_digest; recompute with palw-class / misaka_palw_sdk::palwart_deep)");
         }
         section_kind::PALWQ361_INT => {
             let mut st = v3::legacy_file_digest_state_v3();

@@ -1,7 +1,13 @@
 //! **Genesis 8 — the next network's genesis model list, as an RFC-0019 edition-0 template** (user decisions 2026-10-15; dormant).
 //!
-//! The genesis set is eight uncensored models (huihui abliterated, Dolphin where no huihui variant exists); ids keep the user's
-//! original 1..10 numbering (7 and 9 were dropped). Each ships as ONE `PALWART3` artifact, and the catalog's `artifact_root` is that
+//! The genesis set is eight models; ids keep the user's original 1..10 numbering (7 and 9 were dropped). Seven are uncensored variants
+//! (huihui abliterated, Dolphin where no huihui variant exists); #8 is the existing official-derived PALWQ361 integer runtime
+//! (`Misakachain/Qwen3.6-35B-A3B-PALW-runtime`), carried byte for byte, the only entry that is not an uncensored variant.
+//!
+//! **Scope: text generation only** (user policy 2026-10-15) — token ids in, next-token logits out. Vision towers and projectors
+//! (mmproj), image/audio/video embedders and multi-token-prediction heads are not computed, not covered, not admitted as claims and
+//! not rewarded: [`palw_genesis8_admits_input_v1`] refuses every input but token ids by name, and the artifact refuses such
+//! components by name (`misaka_palw_tir_artifact::palwart_v3::check_text_scope_v3`). Each ships as ONE `PALWART3` artifact, and the catalog's `artifact_root` is that
 //! artifact's root (`misaka_palw_tir_artifact::palwart_v3::palwart_root_v3`), which commits the legacy identity of its weight section
 //! (the A16 `artifact_digest`, the TIR inventory root, or the PALWQ361 file digest) as an inner root.
 //!
@@ -50,6 +56,37 @@ pub struct PalwGenesisModelV1 {
     pub tentative: bool,
     /// The catalog's kernel version (0: the class's own registered binding).
     pub kernel_version: u16,
+    /// An uncensored variant (every entry but #8).
+    pub uncensored: bool,
+    /// What the checkpoint carries beyond text generation: never computed, covered, admitted or rewarded.
+    pub out_of_scope: &'static [&'static str],
+}
+
+/// The one scope of every genesis class.
+pub const PALW_GENESIS8_SCOPE_V1: &str = "text-generation";
+
+/// What a claim of a genesis class could be asked to read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwGenesisInputKindV1 {
+    /// Token ids (the text decoder's only input).
+    TokenIds,
+    /// Image pixels or image rows (a vision tower, a projector, an image embedder).
+    Image,
+    Audio,
+    Video,
+    /// A multi-token-prediction draft (an MTP head).
+    MtpDraft,
+}
+
+/// **The text scope, for claims**: a genesis class admits token ids and nothing else; every other input is refused by name.
+pub fn palw_genesis8_admits_input_v1(kind: PalwGenesisInputKindV1) -> Result<(), &'static str> {
+    match kind {
+        PalwGenesisInputKindV1::TokenIds => Ok(()),
+        PalwGenesisInputKindV1::Image => Err("GENESIS_SCOPE_IMAGE_REFUSED: genesis classes are text generation only"),
+        PalwGenesisInputKindV1::Audio => Err("GENESIS_SCOPE_AUDIO_REFUSED: genesis classes are text generation only"),
+        PalwGenesisInputKindV1::Video => Err("GENESIS_SCOPE_VIDEO_REFUSED: genesis classes are text generation only"),
+        PalwGenesisInputKindV1::MtpDraft => Err("GENESIS_SCOPE_MTP_REFUSED: multi-token-prediction heads are out of scope"),
+    }
 }
 
 /// **The genesis set** (registry: `scripts/genesis/genesis8_models.json`).
@@ -66,6 +103,8 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
         e2e_adjudicable: true,
         tentative: false,
         kernel_version: 0,
+        uncensored: true,
+        out_of_scope: &[],
     },
     PalwGenesisModelV1 {
         genesis_id: 2,
@@ -79,6 +118,8 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
         e2e_adjudicable: true,
         tentative: false,
         kernel_version: 0,
+        uncensored: true,
+        out_of_scope: &["vision tower model.visual.*", "MTP head mtp.*"],
     },
     PalwGenesisModelV1 {
         genesis_id: 3,
@@ -92,6 +133,8 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
         e2e_adjudicable: true,
         tentative: true,
         kernel_version: 0,
+        uncensored: true,
+        out_of_scope: &["vision tower model.visual.*", "MTP head mtp.*"],
     },
     PalwGenesisModelV1 {
         genesis_id: 4,
@@ -105,6 +148,8 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
         e2e_adjudicable: true,
         tentative: false,
         kernel_version: 0,
+        uncensored: true,
+        out_of_scope: &["image embedder model.vision_embedder.* / model.embed_vision.*", "audio embedder model.embed_audio.*"],
     },
     PalwGenesisModelV1 {
         genesis_id: 5,
@@ -118,6 +163,8 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
         e2e_adjudicable: true,
         tentative: false,
         kernel_version: 0,
+        uncensored: true,
+        out_of_scope: &[],
     },
     PalwGenesisModelV1 {
         genesis_id: 6,
@@ -131,19 +178,23 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
         e2e_adjudicable: true,
         tentative: false,
         kernel_version: 0,
+        uncensored: true,
+        out_of_scope: &["vision projector mmproj-model-bf16.gguf (not fetched)", "MTP block blk.64.nextn.*"],
     },
     PalwGenesisModelV1 {
         genesis_id: 8,
-        artifact_repo: "Misakachain/Huihui-Qwen3.6-35B-A3B-abliterated-PALW",
-        source_repo: "huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated",
-        source_revision: "8f0ee727aff5e771ea72466d64d13ecd851d2cc7",
-        source_file: "",
+        artifact_repo: "Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
+        source_repo: "Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
+        source_revision: "bbc2f6c3dc7940efe12698a4b09a4cd983e21b38",
+        source_file: "palw-runtime/qwen36-35b-a3b.palwq36",
         architecture: "Qwen3_5MoeForConditionalGeneration",
         license: "apache-2.0",
         route: PalwGenesisRouteV1::PalwQ361,
         e2e_adjudicable: true,
         tentative: false,
         kernel_version: 0,
+        uncensored: false,
+        out_of_scope: &["vision tower", "MTP head"],
     },
     PalwGenesisModelV1 {
         genesis_id: 10,
@@ -157,6 +208,8 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
         e2e_adjudicable: false,
         tentative: false,
         kernel_version: 0,
+        uncensored: true,
+        out_of_scope: &[],
     },
 ];
 
@@ -174,15 +227,28 @@ pub struct PalwGenesisRootsV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwGenesisCatalogErrorV1 {
     /// A genesis model the edition must list has no roots yet (its conversion or declaration has not run).
-    Missing { genesis_id: u8 },
+    Missing {
+        genesis_id: u8,
+    },
     /// Roots for an id that is not a genesis model.
-    Unknown { genesis_id: u8 },
-    Duplicate { genesis_id: u8 },
+    Unknown {
+        genesis_id: u8,
+    },
+    Duplicate {
+        genesis_id: u8,
+    },
     /// A zero class id or artifact root (a placeholder is never a root).
-    Zero { genesis_id: u8 },
+    Zero {
+        genesis_id: u8,
+    },
     /// Two genesis models with one class id.
-    SharedClass { genesis_id: u8 },
-    KernelVersion { genesis_id: u8, version: u16 },
+    SharedClass {
+        genesis_id: u8,
+    },
+    KernelVersion {
+        genesis_id: u8,
+        version: u16,
+    },
     Shape(&'static str),
 }
 
@@ -241,11 +307,14 @@ mod tests {
     fn roots_for(ids: &[u8]) -> Vec<(u8, PalwGenesisRootsV1)> {
         ids.iter()
             .map(|id| {
-                (*id, PalwGenesisRootsV1 {
-                    class_id: Hash64::from_u64_word(1000 + *id as u64),
-                    artifact_root: Hash64::from_u64_word(2000 + *id as u64),
-                    verification_plan_id: Hash64::default(),
-                })
+                (
+                    *id,
+                    PalwGenesisRootsV1 {
+                        class_id: Hash64::from_u64_word(1000 + *id as u64),
+                        artifact_root: Hash64::from_u64_word(2000 + *id as u64),
+                        verification_plan_id: Hash64::default(),
+                    },
+                )
             })
             .collect()
     }
@@ -257,13 +326,30 @@ mod tests {
         for m in &PALW_GENESIS8_MODELS_V1 {
             assert_eq!(m.source_revision.len(), 40, "#{}: a commit SHA", m.genesis_id);
             assert!(m.source_revision.bytes().all(|c| c.is_ascii_hexdigit()));
-            assert!(m.artifact_repo.starts_with("Misakachain/") && m.artifact_repo.ends_with("-PALW"));
+            assert!(m.artifact_repo.starts_with("Misakachain/"), "#{}", m.genesis_id);
         }
         let llama = palw_genesis8_model_v1(10).unwrap();
         assert!(llama.artifact_repo.trim_start_matches("Misakachain/").starts_with("Llama"), "Llama 3.3: the name begins with Llama");
         assert!(!llama.e2e_adjudicable);
         assert_eq!(PALW_GENESIS8_MODELS_V1.iter().filter(|m| m.e2e_adjudicable).count(), 7);
         assert!(palw_genesis8_model_v1(3).unwrap().tentative);
+        let eight = palw_genesis8_model_v1(8).unwrap();
+        assert!(!eight.uncensored && eight.route == PalwGenesisRouteV1::PalwQ361, "#8: the existing official-derived runtime");
+        assert_eq!(PALW_GENESIS8_MODELS_V1.iter().filter(|m| !m.uncensored).count(), 1, "the only non-uncensored entry");
+    }
+
+    #[test]
+    fn genesis_classes_admit_token_ids_and_refuse_every_other_input_by_name() {
+        assert_eq!(palw_genesis8_admits_input_v1(PalwGenesisInputKindV1::TokenIds), Ok(()));
+        for k in [
+            PalwGenesisInputKindV1::Image,
+            PalwGenesisInputKindV1::Audio,
+            PalwGenesisInputKindV1::Video,
+            PalwGenesisInputKindV1::MtpDraft,
+        ] {
+            assert!(palw_genesis8_admits_input_v1(k).unwrap_err().starts_with("GENESIS_SCOPE_"), "{k:?}");
+        }
+        assert_eq!(PALW_GENESIS8_SCOPE_V1, "text-generation");
     }
 
     #[test]
@@ -274,11 +360,17 @@ mod tests {
         assert_eq!(c.models.len(), 8);
         assert!(c.models.windows(2).all(|w| w[0].class_id < w[1].class_id));
         // A missing model, a zero root, an unknown id, a duplicate: refused.
-        assert_eq!(palw_genesis8_edition0_v1(&roots_for(&[1, 2, 4, 5, 6, 8, 10]), true), Err(PalwGenesisCatalogErrorV1::Missing { genesis_id: 3 }));
+        assert_eq!(
+            palw_genesis8_edition0_v1(&roots_for(&[1, 2, 4, 5, 6, 8, 10]), true),
+            Err(PalwGenesisCatalogErrorV1::Missing { genesis_id: 3 })
+        );
         let mut zero = roots_for(&all);
         zero[0].1.artifact_root = Hash64::default();
         assert_eq!(palw_genesis8_edition0_v1(&zero, true), Err(PalwGenesisCatalogErrorV1::Zero { genesis_id: 1 }));
-        assert_eq!(palw_genesis8_edition0_v1(&roots_for(&[1, 2, 3, 4, 5, 6, 7, 8, 10]), true), Err(PalwGenesisCatalogErrorV1::Unknown { genesis_id: 7 }));
+        assert_eq!(
+            palw_genesis8_edition0_v1(&roots_for(&[1, 2, 3, 4, 5, 6, 7, 8, 10]), true),
+            Err(PalwGenesisCatalogErrorV1::Unknown { genesis_id: 7 })
+        );
         let mut dup = roots_for(&all);
         dup.push(dup[0]);
         assert_eq!(palw_genesis8_edition0_v1(&dup, true), Err(PalwGenesisCatalogErrorV1::Duplicate { genesis_id: 1 }));

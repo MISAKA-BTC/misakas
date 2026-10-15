@@ -4596,12 +4596,20 @@ The frozen v1/v2 grammar refuses TopK on symbolic `H` and cannot express the req
 contract is still needed; the v37 declarations above and standalone v8 relation do not
 establish that implementation, native Final or RFC02 completion.
 
-### II.14.61 Genesis model set: eight uncensored models in one `.palwart` format (user decisions, 2026-10-15)
+### II.14.61 Genesis model set: eight text-generation models in one `.palwart` format (user decisions, 2026-10-15)
 
 **This replaces the initial seven-model target below** (kept as history). The user named ten genesis models, dropped #7
 (Gemma 4 26B-A4B, overlapping #8) and #9 (Qwen3-32B, overlapping #6), and chose the uncensored variant of each (huihui
-abliterated; Dolphin where no huihui variant exists). Ids keep the original numbering. These models are the next network's
-genesis (RFC-0019 edition 0, the 1.0 tier); testnet-12, its preset and its DAA 14,000 release scope are unchanged.
+abliterated; Dolphin where no huihui variant exists) except #8, which is the existing **official-derived** PALWQ361 runtime of
+Qwen3.6-35B-A3B carried byte for byte (the only entry that is not an uncensored variant). Ids keep the original numbering. These
+models are the next network's genesis (RFC-0019 edition 0, the 1.0 tier); testnet-12, its preset and its DAA 14,000 release scope
+are unchanged.
+
+**Scope: text generation only** (user policy, 2026-10-15). A genesis class maps token ids to next-token logits. Vision towers and
+projectors (mmproj), image/audio/video embedders and processors, and multi-token-prediction (MTP) heads are not computed, not
+covered, not admitted as claims and not rewarded; image paths will not be enabled. The artifact refuses such components by name
+(`check_text_scope_v3`: job inputs, out-of-scope params, tensors and files, program kinds) and so does the genesis claim route
+(`palw_genesis8_admits_input_v1`: anything but token ids).
 
 | # | Source (pinned revision) | Architecture | License | Route |
 | --- | --- | --- | --- | --- |
@@ -4611,7 +4619,7 @@ genesis (RFC-0019 edition 0, the 1.0 tier); testnet-12, its preset and its DAA 1
 | 4 | `huihui-ai/Huihui-gemma-4-12B-it-abliterated` @ `060ea173` | Gemma-4 Unified (dense, multimodal wrapper) | Apache-2.0 | TIR |
 | 5 | `huihui-ai/Huihui-gpt-oss-20b-BF16-abliterated` @ `b73ec897` | gpt-oss MoE (sinks, sliding window) | Apache-2.0 | TIR |
 | 6 | `huihui-ai/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-GGUF` @ `a0b17c71`, bf16 GGUF | Qwen3.8 GDN hybrid (community SFT) | Apache-2.0 | TIR |
-| 8 | `huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated` @ `8f0ee727` | Qwen3.6 GDN hybrid + MoE | Apache-2.0 | PALWQ361 integer runtime |
+| 8 | `Misakachain/Qwen3.6-35B-A3B-PALW-runtime` @ `bbc2f6c3`, `palw-runtime/qwen36-35b-a3b.palwq36` (official-derived; not re-converted) | Qwen3.6 GDN hybrid + MoE | Apache-2.0 | PALWQ361 integer runtime (wrapped) |
 | 10 | `huihui-ai/Llama-3.3-70B-Instruct-abliterated` @ `fa133346` | Llama 3 dense | Llama 3.3 | TIR (not required to be end-to-end adjudicable) |
 
 Every genesis model ships as **one versioned `PALWART3` artifact** (`misaka/palw/tir/artifact/src/palwart_v3.rs`): an index and
@@ -4620,15 +4628,25 @@ per-architecture weight section (A16, PALWQ361 integer, TIR inventory; MXFP4 exa
 source configuration, license texts and calibration inputs. The legacy `.palwart`/`.palwtir`/`.palwq36` formats stay readable under
 their own magics and identities (kept as inner roots, never reinterpreted); the catalog's `artifact_root` is the `PALWART3` root.
 Published artifacts go to `Misakachain/<SourceName>-PALW` (#10's name begins with "Llama", its card says "Built with Llama", and
-the Llama 3.3 license, Acceptable Use Policy and notice ship with it). The genesis list is
+the Llama 3.3 license, Acceptable Use Policy and notice ship with it); #8's container is added to its existing repository under
+`palwart/`, never replacing the runtime's own files.
+
+Calibration measures each site's activation range on the float reference (absmax, per-position and per-channel maxima); the
+integer program, and every adjudication over it, is exact and deterministic for any pinned calibration set, so the calibration
+length is a fit choice, not a correctness one. A recurrent (Gated DeltaNet) class is calibrated on one sequence as long as the
+context it serves (freeze-v1 §5.2, enforced by the converter): for #2, #3 and #6 the calibration length (`--calib-positions`,
+default 2,048) is the served context. Dense classes use four 512-token texts and serve 8,192. The texts are git blobs at one
+pinned commit; the token file and the measured statistics travel in the artifact and the manifest records texts, tokenizer,
+lengths and policy. The float reference's threaded kernels are bit-identical to its one-thread kernels, so the statistics do not
+depend on the core count. A fit guard (`palw-tir-fidelity --exec`, held-out text, mean KL <= 0.1 and top-1 >= 0.8) withholds the
+index of a class outside the tolerance where it can be measured on the conversion host. The genesis list is
 `consensus/core/src/palw_genesis8_catalog_v1.rs` (dormant: edition 0 is built only from supplied roots); the conversion pipeline is
 `scripts/genesis/genesis10_pipeline.py`; per-model status, coverage (architecture × layer kind) and open items are in
 `docs/design/palw/genesis8-status.md`.
 
 Adjudication is unchanged in kind (II.14.62): sampled deterministic re-execution, public localization and the deterministic court;
-genesis listing is economic only, and every claim still needs its own Gate C approval. Open at this writing: the safetensors→PALWQ361
-converter for #8, registration binding of the `PALWART3` root, K2-TIR kernel activation, and the image paths of the multimodal
-sources (the genesis classes are their text decoders).
+genesis listing is economic only, and every claim still needs its own Gate C approval. Open at this writing: registration binding
+of the `PALWART3` root and K2-TIR kernel activation.
 
 #### History: the initial seven-model activation target (user decision, 2026-10-15; superseded the same day)
 

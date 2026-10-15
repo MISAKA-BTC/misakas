@@ -23,17 +23,53 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "genesis8_models.json"
 API = "https://huggingface.co/api/models"
+# Text generation only (user policy 2026-10-15): the image/video/audio processor configs are not fetched or carried.
 SMALL_KEEP = {
     "config.json", "generation_config.json", "tokenizer.json", "tokenizer_config.json", "vocab.json", "merges.txt",
-    "special_tokens_map.json", "added_tokens.json", "chat_template.jinja", "preprocessor_config.json",
-    "video_preprocessor_config.json", "processor_config.json", "model.safetensors.index.json", "LICENSE",
-    "USE_POLICY.md", "README.md", "configuration.json",
+    "special_tokens_map.json", "added_tokens.json", "chat_template.jinja", "model.safetensors.index.json", "LICENSE",
+    "USE_POLICY.md", "README.md", "configuration.json", "NOTICE",
+}
+SCOPE = {
+    "kind": "text-generation",
+    "inputs": "token ids",
+    "outputs": "next-token logits",
+    "out_of_scope": "vision towers and projectors (mmproj), image/audio/video embedders and processors, multi-token-prediction (MTP) "
+                    "heads: not computed, not covered, not admitted as claims, not rewarded; refused by name below the text scope "
+                    "(misaka_palw_tir_artifact::palwart_v3::check_text_scope_v3)",
 }
 APACHE_NOTE = "Apache License 2.0 (the full text ships in the artifact: scripts/genesis/licenses/Apache-2.0.txt when the source has no LICENSE file)"
 
-# Conversion profiles. `calib`: documents of this repository tokenised by the model's own tokenizer.
-RECURRENT_CALIB = {"docs": ["docs/rfc/0002-palw-tensor-ir.md"], "len": 8192, "chunks": 1}
-DENSE_CALIB = {"docs": ["docs/archival.md", "docs/crescendo-guide.md", "CONTRIBUTING.md", "SECURITY.md"], "len": 512, "chunks": 1}
+# Conversion profiles. `calib`: documents of this repository tokenised by the model's own tokenizer (no chat template, no BOS).
+#
+# Calibration only measures each site's activation range (absmax, per-position and per-channel maxima, sum of squares) on the
+# float reference; the integer program, and every adjudication over it, is exact and deterministic for ANY pinned calibration set.
+# What the length buys is fit to the float model. A recurrent program (Gated DeltaNet) carries a state whose magnitude grows with
+# the position, so it is calibrated on one sequence at least as long as the context it is served at (freeze-v1 §5.2, enforced by
+# the converter): `len` IS the served context of a recurrent class, and the pipeline's `--calib-positions` sets both (default
+# 2048). A dense program has no carried state: four 512-token documents (2,048 positions) and the served context stays 8,192.
+CALIB_POSITIONS_DEFAULT = 2048
+RECURRENT_CALIB = {"kind": "recurrent", "docs": ["docs/rfc/0002-palw-tensor-ir.md"], "len": CALIB_POSITIONS_DEFAULT, "chunks": 1}
+DENSE_CALIB = {"kind": "dense", "docs": ["docs/archival.md", "docs/crescendo-guide.md", "CONTRIBUTING.md", "SECURITY.md"], "len": 512,
+               "chunks": 1}
+# The texts, pinned by git blob at one commit of this repository: a document edited later does not move a conversion's tokens.
+# The pipeline extracts each blob (`git cat-file blob`), checks the id, and tokenises the extracted copy. `evaluation` is the
+# held-out text of the fit guard (`palw-tir-fidelity --exec`: mean KL <= 0.1 and top-1 >= 0.8 against the float reference).
+CALIB_TEXTS = {
+    "git_commit": "d52d6c56ff33991f1caf67db5cd426dd736d2d29",
+    "blobs": {
+        "docs/rfc/0002-palw-tensor-ir.md": "7bb6e09f61b27775a9fa467e83f019aee371948a",
+        "docs/archival.md": "2bb5730da32226843407b3036c40ed001b26804b",
+        "docs/crescendo-guide.md": "9cad9e256809f5e893ce2ec69bde1efae4ae74be",
+        "CONTRIBUTING.md": "9b7e5e85eb2e049679cd7ed1bcc46e9b18849047",
+        "SECURITY.md": "d75fe2b3c7c52f9a1019a7999a472d64c4ce00d2",
+        "README.md": "a3166dc2f915782ccea239f919ddd5aed5c5e7dd",
+        "docs/PRINCIPLES.md": "1ab69ff7f2b0e72bec02d453afb9390dfff3607d",
+    },
+    "evaluation": {"docs": ["README.md", "docs/PRINCIPLES.md"], "len": 64, "chunks": 1},
+    "fit_tolerance": {"kl_mean_max": 0.1, "top1_min": 0.8,
+                      "source": "the L2 default tolerance (docs/evidence/hf-onboarding/20261010-huihui-qwen35-9b-fit-diagnosis), "
+                                "measured against the lowering's own float reference"},
+}
 
 MODELS = [
     dict(id=1, slug="dolphin3-qwen25-1p5b", source_repo="dphn/Dolphin3.0-Qwen2.5-1.5B",
@@ -45,7 +81,7 @@ MODELS = [
                          "Converted 2026-10-15 with the legacy base0 qwen25-convert --a16 --n-ctx 8192 at release commit 0b1c11b87; "
                          "the unified container wraps that A16 payload without re-quantising.",
          architecture="Qwen2ForCausalLM", model_type="qwen2", family="qwen2-dense",
-         license="apache-2.0", target_repo="Misakachain/Dolphin3.0-Qwen2.5-1.5B-PALW",
+         license="apache-2.0", target_repo="Misakachain/Dolphin3.0-Qwen2.5-1.5B-PALW", upload_prefix="palwart/",
          stem="Dolphin3.0-Qwen2.5-1.5B-PALW", converter="a16-legacy-wrap",
          convert_options={"n_ctx": 8192},
          legacy_artifact={"repo": "Misakachain/Dolphin3.0-Qwen2.5-1.5B-PALW",
@@ -65,7 +101,7 @@ MODELS = [
          architecture="Qwen3_5ForConditionalGeneration", model_type="qwen3_5", family="qwen35-gdn-hybrid",
          license="apache-2.0", target_repo="Misakachain/Huihui-Qwen3.5-2B-abliterated-PALW",
          stem="Huihui-Qwen3.5-2B-abliterated-PALW", converter="tir",
-         convert_options={"context": 8192, "gdn_core_wide": True, "calib": RECURRENT_CALIB},
+         convert_options={"context": CALIB_POSITIONS_DEFAULT, "gdn_core_wide": True, "calib": RECURRENT_CALIB},
          e2e_adjudicable=True, tentative=False, components=["decoder"]),
     dict(id=3, slug="huihui-qwen35-9b", source_repo="huihui-ai/Huihui-Qwen3.5-9B-abliterated",
          source_revision="05b9e7c9b978ba29bdb8f50a49c30e4b91183339", source_format="safetensors",
@@ -76,7 +112,7 @@ MODELS = [
          architecture="Qwen3_5ForConditionalGeneration", model_type="qwen3_5", family="qwen35-gdn-hybrid",
          license="apache-2.0", target_repo="Misakachain/Huihui-Qwen3.5-9B-abliterated-PALW",
          stem="Huihui-Qwen3.5-9B-abliterated-PALW", converter="tir",
-         convert_options={"context": 8192, "gdn_core_wide": True, "calib": RECURRENT_CALIB},
+         convert_options={"context": CALIB_POSITIONS_DEFAULT, "gdn_core_wide": True, "calib": RECURRENT_CALIB},
          e2e_adjudicable=True, tentative=True, components=["decoder"]),
     dict(id=4, slug="huihui-gemma4-12b", source_repo="huihui-ai/Huihui-gemma-4-12B-it-abliterated",
          source_revision="060ea173c4d1e30b636819f5281e7791b6e9be2f", source_format="safetensors",
@@ -104,13 +140,12 @@ MODELS = [
          derivation="abliteration of a community SFT, GGUF", derivation_author="huihui-ai",
          derivation_note="GGUF only. User decision 2026-10-15: converted from the bf16 GGUF, streamed end to end (HTTPS range "
                          "reads at the pinned revision, whole-file SHA-256 over the streamed bytes). The IQ3_S files stay "
-                         "registered as an alternative. The vision projector (mmproj-model-bf16.gguf) is pinned here but not "
-                         "converted: the genesis class is the text decoder (the image path is a separate prefix stage).",
-         aux_files={"mmproj-model-bf16.gguf": "vision-projector (pinned, not converted)"},
+                         "registered as an alternative. Text generation only: the vision projector is out of scope and not fetched.",
+         out_of_scope=["vision projector mmproj-model-bf16.gguf (not fetched)", "MTP block blk.64.nextn.* (dropped by the GGUF reader)"],
          architecture="Qwen3_5ForCausalLM (GGUF qwen35)", model_type="qwen35", family="qwen35-gdn-hybrid",
          license="apache-2.0", target_repo="Misakachain/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-PALW",
          stem="Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-PALW", converter="tir-gguf",
-         convert_options={"context": 8192, "gdn_core_wide": True, "calib": RECURRENT_CALIB, "gguf_variant": "bf16"},
+         convert_options={"context": CALIB_POSITIONS_DEFAULT, "gdn_core_wide": True, "calib": RECURRENT_CALIB, "gguf_variant": "bf16"},
          gguf_variants={"bf16": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-bf16.gguf",
                         "iq3_s1": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-IQ3_S1.gguf",
                         "iq3_s2": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-IQ3_S2.gguf",
@@ -120,16 +155,29 @@ MODELS = [
                            "why": "the GGUF repo has no tokenizer.json; calibration tokenises with the Qwen3.8 tokenizer, checked "
                                   "token by token against the GGUF's own tokenizer.ggml.tokens before use"},
          e2e_adjudicable=True, tentative=False, components=["decoder"]),
-    dict(id=8, slug="huihui-qwen36-35b-a3b", source_repo="huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated",
-         source_revision="8f0ee727aff5e771ea72466d64d13ecd851d2cc7", source_format="safetensors",
+    dict(id=8, slug="qwen36-35b-a3b-palwq361", source_repo="Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
+         source_revision="bbc2f6c3dc7940efe12698a4b09a4cd983e21b38", source_format="palwq361",
          base_model="Qwen/Qwen3.6-35B-A3B", base_author="Qwen team (Alibaba Cloud)",
-         derivation="abliteration", derivation_author="huihui-ai",
-         derivation_note="Needs a NEW PALWQ361 integer-runtime conversion from safetensors (the legacy qwen36-convert reads GGUF "
-                         "only); the published Misakachain/Qwen3.6-35B-A3B-PALW-runtime was built from other weights.",
+         derivation="PALWQ361 integer runtime derived from the official weights (NOT an uncensored variant)",
+         derivation_author="MISAKA (Misakachain)",
+         derivation_note="User decision 2026-10-15: #8 is the EXISTING official-derived PALWQ361 integer runtime, not re-converted "
+                         "and the only non-uncensored genesis entry. Its published legacy file is carried byte for byte in a "
+                         "PALWART3 index and segments added to the SAME repository under palwart/ (no legacy file replaced).",
          architecture="Qwen3_5MoeForConditionalGeneration", model_type="qwen3_5_moe", family="qwen35-gdn-hybrid-moe",
-         license="apache-2.0", target_repo="Misakachain/Huihui-Qwen3.6-35B-A3B-abliterated-PALW",
-         stem="Huihui-Qwen3.6-35B-A3B-abliterated-PALW", converter="palwq36",
-         convert_options={"context": 8192},
+         license="apache-2.0", target_repo="Misakachain/Qwen3.6-35B-A3B-PALW-runtime", upload_prefix="palwart/",
+         stem="Qwen3.6-35B-A3B-PALW", converter="palwq36-legacy-wrap",
+         convert_options={"n_ctx": "as published"},
+         legacy_artifact={"repo": "Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
+                          "revision": "bbc2f6c3dc7940efe12698a4b09a4cd983e21b38",
+                          "path": "palw-runtime/qwen36-35b-a3b.palwq36",
+                          "bytes": 36492831232,
+                          "sha256": "5fe1d15caf0e544b718a4a2398db4f902b9a6722b266dd53824fbc9723578b29",
+                          "xet_hash": "4aab592f35f66e211c4c1da91faadeac1232b4f5e4f1dc7b8f98ad4d98c2fcb6",
+                          "converter": "the published PALWQ361 runtime (qwen36-convert); not re-run"},
+         tokenizer_source={"repo": "Qwen/Qwen3.6-35B-A3B", "revision": "995ad96eacd98c81ed38be0c5b274b04031597b0",
+                           "files": ["tokenizer.json", "tokenizer_config.json", "chat_template.jinja", "config.json", "generation_config.json"],
+                           "why": "the runtime repository carries no tokenizer: the official tokenizer and chat template of the base model"},
+         out_of_scope=["vision tower", "MTP head"],
          e2e_adjudicable=True, tentative=False, components=["decoder"]),
     dict(id=10, slug="llama33-70b-abliterated", source_repo="huihui-ai/Llama-3.3-70B-Instruct-abliterated",
          source_revision="fa13334669544bab573e0e5313cad629a9c02e2c", source_format="safetensors",
@@ -143,6 +191,17 @@ MODELS = [
          convert_options={"context": 8192, "calib": DENSE_CALIB},
          e2e_adjudicable=False, tentative=False, components=["decoder"]),
 ]
+
+
+# What each family's checkpoint carries beyond text generation (never computed, covered, admitted or rewarded).
+OUT_OF_SCOPE_DEFAULT = {
+    "qwen2-dense": [],
+    "qwen35-gdn-hybrid": ["vision tower model.visual.* (ignored by the adapter)", "MTP head mtp.* (ignored by the adapter)"],
+    "qwen35-gdn-hybrid-moe": ["vision tower", "MTP head"],
+    "gemma4-unified-dense": ["image embedder model.vision_embedder.* / model.embed_vision.*", "audio embedder model.embed_audio.*"],
+    "gpt-oss-moe": [],
+    "llama-dense": [],
+}
 
 
 def fetch(repo: str, rev: str) -> dict:
@@ -164,29 +223,37 @@ def build() -> dict:
             name = s["rfilename"]
             if m["source_format"] == "gguf":
                 is_weight = name in variants
+            elif m["source_format"] == "palwq361":
+                is_weight = name == m["legacy_artifact"]["path"]
             else:
                 is_weight = name.endswith(".safetensors") and "/" not in name
-            is_aux = name in (m.get("aux_files") or {})
+            is_aux = False
             if not is_weight and not is_aux and name not in SMALL_KEEP:
                 continue
             lfs = s.get("lfs") or {}
-            kind = "weight" if is_weight else (m["aux_files"][name] if is_aux else "metadata")
+            kind = "weight" if is_weight else "metadata"
             files.append({"path": name, "bytes": s.get("size"), "kind": kind, "lfs_sha256": lfs.get("sha256"), "git_blob": s.get("blobId")})
         kept = {f["path"] for f in files}
         excluded = sorted(s["rfilename"] for s in meta["siblings"] if s["rfilename"] not in kept and s["rfilename"] != ".gitattributes")
         m2 = dict(m)
+        m2.setdefault("out_of_scope", OUT_OF_SCOPE_DEFAULT.get(m["family"], []))
+        m2["scope"] = SCOPE["kind"]
         m2["gated"] = bool(meta.get("gated"))
         m2["card_license"] = (meta.get("cardData") or {}).get("license")
         m2["card_base_model"] = (meta.get("cardData") or {}).get("base_model")
         m2["weight_bytes"] = sum(f["bytes"] for f in files if f["kind"] == "weight")
         m2["files"] = files
-        m2["excluded_files"] = excluded
+        m2["excluded_files"] = excluded if len(excluded) <= 24 else {"count": len(excluded), "note": "the rest of the repository is not read and is left as it is"}
         out.append(m2)
     return {
         "schema": "misaka.genesis8.models.v2",
-        "decision": "user-2026-10-15-genesis8-uncensored-variants (#5 BF16 b73ec897, #6 GGUF a0b17c71)",
+        "decision": "user-2026-10-15-genesis8 (uncensored variants; #5 BF16 b73ec897; #6 bf16 GGUF a0b17c71; #8 the existing "
+                    "official-derived PALWQ361 runtime bbc2f6c3; text generation only)",
         "recorded_from": "anonymous Hub API /api/models/<repo>/revision/<sha>?blobs=true (metadata only; no weights read)",
         "numbering": "ids keep the user's original 1..10; 7 (Gemma 4 26B-A4B) and 9 (Qwen3-32B) were dropped",
+        "scope": SCOPE,
+        "calibration_texts": CALIB_TEXTS,
+        "uncensored": "every entry is an uncensored variant except #8, the existing official-derived PALWQ361 runtime",
         "license_notes": {"apache-2.0": APACHE_NOTE,
                           "llama3.3": "Llama 3.3 Community License Agreement; Acceptable Use Policy at https://www.llama.com/llama3_3/use-policy"},
         "models": out,
