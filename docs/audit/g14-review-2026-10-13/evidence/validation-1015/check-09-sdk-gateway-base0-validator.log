@@ -1,0 +1,260 @@
+   Compiling num-traits v0.2.19
+   Compiling serde_json v1.0.151
+    Checking tracing v0.1.44
+    Checking tokio v1.42.1
+    Checking smallvec v1.13.2
+    Checking arrayvec v0.7.6
+    Checking rand v0.8.6
+    Checking polling v3.7.3
+    Checking async-io v2.3.4
+    Checking async-global-executor v2.4.1
+    Checking wasm-bindgen v0.2.100
+    Checking async-std v1.13.0
+    Checking chrono v0.4.38
+    Checking js-sys v0.3.77
+    Checking workflow-log v0.18.0
+    Checking parking_lot_core v0.9.10
+    Checking blake2b_simd v1.0.2
+    Checking faster-hex v0.10.1
+    Checking parking_lot v0.12.3
+    Checking uuid v1.18.1
+    Checking ordered-float v2.10.1
+    Checking misaka-palw-gen v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/gen)
+    Checking kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/utils)
+    Checking serde-value v0.7.0
+    Checking log4rs v1.4.0
+    Checking misaka-palw-challenge v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/challenge)
+    Checking workflow-serializer v0.18.0
+    Checking misaka-palw-tir-artifact v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/artifact)
+    Checking kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/core)
+    Checking misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/kernel)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/exec)
+    Checking alloy-rlp v0.3.15
+   Compiling ring v0.17.14
+    Checking const-hex v1.19.1
+    Checking web-sys v0.3.77
+    Checking serde-wasm-bindgen v0.6.5
+    Checking wasm-bindgen-futures v0.4.50
+    Checking ruint v1.20.0
+    Checking hashbrown v0.15.5
+    Checking alloy-primitives v0.8.26
+   Compiling rustls v0.23.45
+    Checking hex v0.4.3
+    Checking num-integer v0.1.46
+    Checking alloy-eip2930 v0.1.0
+    Checking num-bigint v0.4.6
+    Checking tokio-util v0.7.12
+    Checking h2 v0.4.19
+    Checking workflow-core v0.18.0
+    Checking workflow-panic-hook v0.18.0
+    Checking workflow-wasm v0.18.0
+    Checking num-rational v0.4.2
+    Checking kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/hashes)
+    Checking kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/math)
+    Checking kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/merkle)
+    Checking misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/panel)
+    Checking kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/muhash)
+    Checking kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/addresses)
+    Checking kaspa-wasm-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/wasm/core)
+    Checking rustls-webpki v0.103.15
+    Checking icu_normalizer v2.1.1
+    Checking num-iter v0.1.45
+    Checking alloy-eip7702 v0.1.1
+    Checking num-complex v0.4.6
+    Checking revm-primitives v10.0.0
+    Checking num v0.4.3
+    Checking idna_adapter v1.2.1
+    Checking hyper v1.9.0
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/core)
+    Checking idna v1.1.0
+    Checking substrate-bn v0.6.0
+    Checking hyper-util v0.1.20
+    Checking aurora-engine-modexp v1.2.0
+    Checking alloy-eip7702 v0.4.2
+    Checking nybbles v0.3.4
+   Compiling workflow-task-macros v0.18.0
+    Checking revm-precompile v11.0.3
+    Checking workflow-task v0.18.0
+    Checking alloy-trie v0.7.9
+    Checking tokio-rustls v0.26.4
+    Checking tungstenite v0.23.0
+    Checking hyper-rustls v0.27.3
+    Checking alloy-eips v0.8.3
+    Checking url v2.5.4
+    Checking tokio-tungstenite v0.23.1
+    Checking revm-interpreter v10.0.3
+    Checking serde_urlencoded v0.7.1
+   Compiling kaspa-rpc-macros v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/macros)
+    Checking toml_datetime v0.6.8
+    Checking serde_spanned v0.6.8
+    Checking reqwest v0.12.8
+    Checking revm v14.0.3
+    Checking toml_edit v0.22.22
+    Checking workflow-websocket v0.18.0
+    Checking alloy-consensus v0.8.3
+   Compiling misaka-palw-derive v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/derive)
+    Checking workflow-rpc v0.18.0
+    Checking toml v0.8.19
+    Checking workflow-http v0.18.0
+    Checking workflow-dom v0.18.0
+    Checking kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/txscript)
+    Checking misaka-palw-constraint v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/constraint)
+    Checking kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/mining/errors)
+    Checking misaka-palw v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/core)
+    Checking kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/pq/validator-core)
+    Checking kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/notify)
+    Checking kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/client)
+    Checking misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/lower)
+    Checking misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/base0)
+    Checking misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/sketch)
+    Checking kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/notify)
+    Checking kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/indexes/core)
+    Checking kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/wasm)
+    Checking kaspa-evm v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/evm/core)
+    Checking kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/core)
+    Checking kaspa-pq-signer v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/pq/signer)
+    Checking misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/remote)
+    Checking misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/sdk)
+    Checking misaka-palw-fp-submit v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/fp-submit)
+    Checking kaspa-wrpc-client v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/wrpc/client)
+    Checking misaka-palw-gateway v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/gateway)
+warning: function `image_slot_refs_v1` is never used
+   --> misaka/palw/gateway/src/tensor.rs:107:8
+    |
+107 | pub fn image_slot_refs_v1(images: &[DecodedImageV1], tile_len: u32) -> Result<Vec<PalwGenImageInputRefV1>, String> {
+    |        ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: struct `EmbeddingClaimFactsV1` is never constructed
+   --> misaka/palw/gateway/src/tensor.rs:174:12
+    |
+174 | pub struct EmbeddingClaimFactsV1 {
+    |            ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `embedding_claim_job_v1` is never used
+   --> misaka/palw/gateway/src/tensor.rs:185:8
+    |
+185 | pub fn embedding_claim_job_v1(
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `embedding_image_claim_job_v1` is never used
+   --> misaka/palw/gateway/src/tensor.rs:213:8
+    |
+213 | pub fn embedding_image_claim_job_v1(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `pooling_code_v1` is never used
+   --> misaka/palw/gateway/src/tensor.rs:236:8
+    |
+236 | pub fn pooling_code_v1(name: &str) -> Option<u8> {
+    |        ^^^^^^^^^^^^^^^
+
+warning: method `jobs` is never used
+  --> misaka/palw/gateway/src/serving.rs:81:12
+   |
+80 | impl InFlightGuard<'_> {
+   | ---------------------- method in this implementation
+81 |     pub fn jobs(&self) -> usize {
+   |            ^^^^
+
+warning: method `len` is never used
+   --> misaka/palw/gateway/src/idempotency.rs:255:12
+    |
+135 | impl IdempotencyStore {
+    | --------------------- method in this implementation
+...
+255 |     pub fn len(&self) -> usize {
+    |            ^^^
+
+warning: method `is_final` is never used
+   --> misaka/palw/gateway/src/status.rs:150:12
+    |
+149 | impl StatusReport {
+    | ----------------- method in this implementation
+150 |     pub fn is_final(&self) -> bool {
+    |            ^^^^^^^^
+
+warning: methods `streaming_count` and `cancelled_count` are never used
+   --> misaka/palw/gateway/src/status.rs:311:12
+    |
+297 | impl RequestBook {
+    | ---------------- methods in this implementation
+...
+311 |     pub fn streaming_count(&self) -> usize {
+    |            ^^^^^^^^^^^^^^^
+...
+315 |     pub fn cancelled_count(&self) -> usize {
+    |            ^^^^^^^^^^^^^^^
+
+warning: struct `PublicMaterial` is never constructed
+   --> misaka/palw/gateway/src/evidence.rs:118:12
+    |
+118 | pub struct PublicMaterial {
+    |            ^^^^^^^^^^^^^^
+
+warning: function `verify_public_material` is never used
+   --> misaka/palw/gateway/src/evidence.rs:126:8
+    |
+126 | pub fn verify_public_material(
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `fetch_and_verify` is never used
+   --> misaka/palw/gateway/src/evidence.rs:141:8
+    |
+141 | pub fn fetch_and_verify(
+    |        ^^^^^^^^^^^^^^^^
+
+warning: enum `OutputRule` is never used
+   --> misaka/palw/gateway/src/receipt.rs:275:10
+    |
+275 | pub enum OutputRule {
+    |          ^^^^^^^^^^
+
+warning: method `root` is never used
+   --> misaka/palw/gateway/src/receipt.rs:281:8
+    |
+280 | impl OutputRule {
+    | --------------- method in this implementation
+281 |     fn root(self, ctx: &PalwJobContextV2, ids: &[u32]) -> Hash64 {
+    |        ^^^^
+
+warning: struct `ReceiptWitness` is never constructed
+   --> misaka/palw/gateway/src/receipt.rs:289:12
+    |
+289 | pub struct ReceiptWitness<'a> {
+    |            ^^^^^^^^^^^^^^
+
+warning: enum `ReceiptError` is never used
+   --> misaka/palw/gateway/src/receipt.rs:305:10
+    |
+305 | pub enum ReceiptError {
+    |          ^^^^^^^^^^^^
+
+warning: struct `Verified` is never constructed
+   --> misaka/palw/gateway/src/receipt.rs:336:12
+    |
+336 | pub struct Verified {
+    |            ^^^^^^^^
+
+warning: function `verify_receipt` is never used
+   --> misaka/palw/gateway/src/receipt.rs:348:8
+    |
+348 | pub fn verify_receipt(receipt: &ReceiptV1, witness: &ReceiptWitness<'_>) -> Result<Verified, ReceiptError> {
+    |        ^^^^^^^^^^^^^^
+
+warning: enum `ChainStanding` is never used
+   --> misaka/palw/gateway/src/receipt.rs:421:10
+    |
+421 | pub enum ChainStanding {
+    |          ^^^^^^^^^^^^^
+
+warning: function `check_against_chain` is never used
+   --> misaka/palw/gateway/src/receipt.rs:430:8
+    |
+430 | pub fn check_against_chain(
+    |        ^^^^^^^^^^^^^^^^^^^
+
+warning: `misaka-palw-gateway` (bin "misaka-palw-gateway") generated 20 warnings
+    Finished `dev` profile [unoptimized] target(s) in 1m 09s
+exit 0
