@@ -479,9 +479,36 @@ pub(super) fn mature(builder: &mut TransitionBuilder<'_>, daa: u64) -> Result<()
         builder.write_exec_reward(id, None)?;
     }
     for (root, who, leg) in release_plan(&builder.state, daa, false).0 {
-        match who.1 {
-            Fund::NativeSlice => builder.add_panel_payout(leg.payload, leg.amount)?,
-            Fund::KernelFee => builder.add_kernel_payout(leg.payload, leg.amount)?,
+        // RFC-0008 once-only settlement (dormant): one root leg `(root, bond, fund)` is paid once across every consumer. A leg
+        // another consumer already settled is retired from the row without moving value again.
+        let pays = {
+            use crate::palw_settlement_once_v1::{
+                PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+            };
+            let fund = match who.1 {
+                Fund::NativeSlice => 0,
+                Fund::KernelFee => 1,
+            };
+            builder
+                .settle_once_v1(
+                    daa,
+                    PalwSettlementObligationV1::with_party(
+                        PalwSettlementLegV1::ExecLegPayment,
+                        root.as_bytes(),
+                        crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&who.0),
+                        fund,
+                    ),
+                    PalwSettlementConsumerV1::ExecLegMaturity,
+                    leg.amount,
+                    PalwSettlementDebitV1::Held { amount: leg.amount },
+                )?
+                .pays()
+        };
+        if pays {
+            match who.1 {
+                Fund::NativeSlice => builder.add_panel_payout(leg.payload, leg.amount)?,
+                Fund::KernelFee => builder.add_kernel_payout(leg.payload, leg.amount)?,
+            }
         }
         let mut row = builder.state.exec_v2_rewards[&root].clone();
         row.legs.remove(&who);
@@ -493,16 +520,21 @@ pub(super) fn mature(builder: &mut TransitionBuilder<'_>, daa: u64) -> Result<()
                 .as_ref()
                 .and_then(|b| b.claim_row(&super::palw_bond_budget_fold_v1::native_income_id_v1(root, &who.0, 0)))
                 .is_some();
-        builder.pay_native_recipient_v1(
-            root,
-            who.0,
-            if issuer { 0 } else { 2 },
-            daa,
-            leg.amount,
-            key(who.1, &leg.payload),
-            finished,
-        )?;
+        if pays {
+            builder.pay_native_recipient_v1(
+                root,
+                who.0,
+                if issuer { 0 } else { 2 },
+                daa,
+                leg.amount,
+                key(who.1, &leg.payload),
+                finished,
+            )?;
+        }
         builder.write_exec_reward(root, if row.legs.is_empty() { None } else { Some(row) })?;
+        if !pays {
+            continue;
+        }
         let mut c = builder.state.vesting_counters;
         c.moved = c.moved.checked_add(u128::from(leg.amount)).ok_or(PalwStateV2Error::Overflow("EXEC vesting moved"))?;
         builder.write_vesting_counters(c)?;

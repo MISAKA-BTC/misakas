@@ -502,7 +502,22 @@ pub(super) fn tick_model_verification_gate_v1(
                 {
                     continue; // the queue drains first; the release waits (never dropped, never doubled)
                 }
-                builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.payload, amount: row.amount }))?;
+                // RFC-0008 once-only settlement (dormant): the deferral of this claim is released once across every consumer.
+                {
+                    use crate::palw_settlement_once_v1::{
+                        PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+                    };
+                    let once = builder.settle_once_v1(
+                        now,
+                        PalwSettlementObligationV1::of(PalwSettlementLegV1::GateDeferredRelease, row.claim),
+                        PalwSettlementConsumerV1::VerificationGate,
+                        row.amount,
+                        PalwSettlementDebitV1::Held { amount: row.amount },
+                    )?;
+                    if once.pays() {
+                        builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.payload, amount: row.amount }))?;
+                    }
+                }
                 builder.write_kernel_row(table, key.clone(), None)?;
             }
         }

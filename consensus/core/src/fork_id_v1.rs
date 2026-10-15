@@ -855,6 +855,10 @@ mod tests {
             }
             "palw_reporter_income_v2" => params.palw_reporter_income_v2 = Some(at),
             "palw_material_income_v3" => params.palw_material_income_v3 = Some(at),
+            "palw_settlement_once_v1" => {
+                params.palw_settlement_once_v1 = Some(at);
+                params.sync_palw_settlement_once_v1();
+            }
             "palw_paid_consumer_lifecycle_v1" => {
                 params.palw_paid_consumer_lifecycle_v1 = Some(crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleFenceV1 {
                     activation: at,

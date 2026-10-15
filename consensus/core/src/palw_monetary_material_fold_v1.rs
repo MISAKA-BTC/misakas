@@ -182,6 +182,24 @@ fn fund(
     e: &PalwMonetaryMaterialEnrollmentV1,
 ) -> Result<(), PalwStateV2Error> {
     let fees: u64 = e.offers.iter().map(|o| o.prepaid_fee_sompi).sum();
+    // RFC-0008 once-only settlement (dormant): a consent's sponsor prepaid funding is debited once across every consumer (an
+    // enrollment and any replacement path that would fund the same consent). A second funding is refused; nothing moves.
+    {
+        use crate::palw_settlement_once_v1::{
+            PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+        };
+        let sponsor = crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&e.terms.sponsor);
+        let once = builder.settle_once_v1(
+            ctx.daa_score,
+            PalwSettlementObligationV1::of(PalwSettlementLegV1::MaterialFunding, e.id().as_bytes()),
+            PalwSettlementConsumerV1::MonetaryMaterial,
+            fees,
+            PalwSettlementDebitV1::Prepaid { sponsor, amount: fees },
+        )?;
+        if !once.pays() {
+            return Err(refused("material consent funding was already settled"));
+        }
+    }
     // Same native backing path as a funded source escrow: debit once, then
     // settle the provider's separately reserved R through a physical coinbase.
     if builder.slash_bond(e.terms.sponsor, u128::from(fees))? != fees {
@@ -759,6 +777,29 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
                     .map_or(0, |p| p.amount)
                     .checked_add(provider.prepaid_fee_sompi)
                     .ok_or_else(|| refused("material fee queue aggregate overflows"))?;
+                // RFC-0008 once-only settlement (dormant): one provider's prepaid fee of one consent is paid once across every
+                // consumer; a fee another consumer settled is marked queued here without moving value again.
+                let once = {
+                    use crate::palw_settlement_once_v1::{
+                        PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+                    };
+                    builder.settle_once_v1(
+                        ctx.daa_score,
+                        PalwSettlementObligationV1::with_party(
+                            PalwSettlementLegV1::MaterialProviderFee,
+                            provider.fee_context.as_bytes(),
+                            crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&provider.provider),
+                            0,
+                        ),
+                        PalwSettlementConsumerV1::MonetaryMaterial,
+                        provider.prepaid_fee_sompi,
+                        PalwSettlementDebitV1::Held { amount: provider.prepaid_fee_sompi },
+                    )?
+                };
+                if !once.pays() {
+                    provider.fee_queued = true;
+                    continue;
+                }
                 builder.settle_source_income_v1(
                     ctx,
                     provider.fee_context,
@@ -784,7 +825,23 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
         }
         for provider in failed {
             if let Some(p) = row.providers.iter_mut().find(|p| p.provider == provider && !p.charged) {
-                builder.slash_bond(provider, u128::from(p.collateral_sompi))?;
+                // RFC-0008 once-only settlement (dormant): one provider's default on one root is charged once across consumers.
+                let kid = crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&provider);
+                let once = {
+                    use crate::palw_settlement_once_v1::{
+                        PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+                    };
+                    builder.settle_once_v1(
+                        ctx.daa_score,
+                        PalwSettlementObligationV1::with_party(PalwSettlementLegV1::MaterialProviderDefault, row.terms.root.as_bytes(), kid, 0),
+                        PalwSettlementConsumerV1::MonetaryMaterial,
+                        p.collateral_sompi,
+                        PalwSettlementDebitV1::Collateral { bond: kid, amount: p.collateral_sompi },
+                    )?
+                };
+                if once.pays() {
+                    builder.slash_bond(provider, u128::from(p.collateral_sompi))?;
+                }
                 p.charged = true;
             }
             row.challenges.retain(|c| c.provider != provider);

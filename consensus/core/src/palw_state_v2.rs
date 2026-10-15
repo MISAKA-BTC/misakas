@@ -234,6 +234,10 @@ pub use palw_model_eligibility_fold_v1::{
 // `palw_independently_work_certified_v1`.
 #[path = "palw_security_certification_fold_v1.rs"]
 mod palw_security_certification_fold_v1;
+// RFC-0008: the once-only settlement registry (dormant `palw_settlement_once_v1`; kernel route aux 140) — every settlement consumer
+// checks and writes its exact obligation's marker in the same transition before any value moves.
+#[path = "palw_settlement_once_fold_v1.rs"]
+mod palw_settlement_once_fold_v1;
 #[path = "palw_panel_source_fee_fold_v2.rs"]
 mod palw_panel_source_fee_fold_v2;
 #[path = "palw_panel_v3_fold_v1.rs"]
@@ -1891,6 +1895,9 @@ pub struct PalwStateParamsV2 {
     reporter_income_from_daa: Option<u64>,
     #[borsh(skip)]
     material_income_from_daa: Option<u64>,
+    /// RFC-0008 `palw_settlement_once_v1` mirror (dormant; `None` everywhere).
+    #[borsh(skip)]
+    settlement_once_from_daa: Option<u64>,
     #[borsh(skip)]
     monetary_material: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1>,
     #[borsh(skip)]

@@ -441,6 +441,8 @@ pub mod palw_job_state;
 pub mod palw_kernel_route_v1;
 /// RFC-0015 §9 / §11.3: the one settlement predicate of a kernel-route claim (pending / final-revocable / settled / convicted / defaulted).
 pub mod palw_kernel_settlement_v1;
+/// RFC-0008: once-only settlement across all consumers (dormant `palw_settlement_once_v1`; kernel route aux 140).
+pub mod palw_settlement_once_v1;
 /// Kimi K3 native geometry, integer ops, tokenizer and artifact identity. Not a genesis class.
 /// Its kernels sit in the fenced catalog so `court_catalog_root` does not move.
 pub mod palw_kimi_k3_artifact_v1;

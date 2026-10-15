@@ -2541,6 +2541,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         true,
     ),
     a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel route aux 140 once-only settlement markers (one row per exact obligation id)" },
+        "palw_settlement_once_v1",
+        "RFC-8 once-only settlement across all consumers",
+        true,
+    ),
+    a2_row(
         PalwA2SlotV1::StateEncoding { what: "bond budget table 8 immutable paid native consumer service/dispute/material contracts" },
         "palw_paid_consumer_lifecycle_v1",
         "RFC-8 paid consumer lifecycle",

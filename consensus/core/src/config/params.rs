@@ -3078,6 +3078,11 @@ pub struct Params {
     /// Root-exact physical monetary payment/material retention, schema v3.
     /// Separate dormant fence; requires budget and reporter schemas at/below it.
     pub palw_material_income_v3: Option<ForkActivation>,
+    /// RFC-0008: the once-only settlement registry (kernel route aux 140). Every settlement consumer (native Final, kernel
+    /// Final, paid claim Final, EXEC root/legs, gate/certification releases, vesting moves, material funding/fees/defaults)
+    /// checks and writes one marker per exact obligation in the same transition. Dormant: `None` on every preset; validation
+    /// refuses arming it; requires the kernel route fence at or below it.
+    pub palw_settlement_once_v1: Option<ForkActivation>,
     /// Prospective producer-signed absolute Panel service lifetime. Dormant.
     pub palw_panel_lifetime_v2: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2>,
     /// Signed Claim V2 seed/checker/lifetime contract; dormant without scoped review.
@@ -6050,6 +6055,7 @@ impl Params {
             palw_bond_formula_v2: self.palw_bond_formula_v2,
             palw_reporter_income_v2: self.palw_reporter_income_v2,
             palw_material_income_v3: self.palw_material_income_v3,
+            palw_settlement_once_v1: self.palw_settlement_once_v1,
             palw_panel_lifetime_v2: self.palw_panel_lifetime_v2,
             palw_claim_challenge_v2: self.palw_claim_challenge_v2,
             palw_claim_compact_v4: self.palw_claim_compact_v4.clone(),
@@ -7200,6 +7206,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,
@@ -7546,6 +7553,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,
@@ -7874,6 +7882,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,
@@ -13382,6 +13391,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,

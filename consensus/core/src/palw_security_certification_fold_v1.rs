@@ -258,7 +258,23 @@ fn credit_certified_v1(
     if matches!(claim.source, PalwClaimSourceV2::Attempt) {
         builder.settle_anchor(now, true)?;
     }
-    if row.held_reward > 0 {
+    // RFC-0008 once-only settlement (dormant): the held issuance reward is named once across every consumer. This guards the
+    // PAYMENT only; the weight credit above is Gate C's own (SecurityCertified) and is neither added nor read here.
+    let releases = row.held_reward > 0 && {
+        use crate::palw_settlement_once_v1::{
+            PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+        };
+        builder
+            .settle_once_v1(
+                now,
+                PalwSettlementObligationV1::of(PalwSettlementLegV1::CertificationRelease, claim_id.as_bytes()),
+                PalwSettlementConsumerV1::SecurityCertification,
+                row.held_reward,
+                PalwSettlementDebitV1::Held { amount: row.held_reward },
+            )?
+            .pays()
+    };
+    if releases {
         let key = palw_certification_payout_key_v1(claim_id);
         let held = builder.state.pending_payouts.get(&key).map(|p| p.amount).unwrap_or(0);
         let amount = held.checked_add(row.held_reward).ok_or(PalwStateV2Error::Overflow("certified reward"))?;

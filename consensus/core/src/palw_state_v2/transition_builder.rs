@@ -9516,6 +9516,25 @@ impl<'a> TransitionBuilder<'a> {
         if !self.state.paid_consumer_service_fits_v1(&id, final_daa, final_daa) {
             return Err(PalwStateV2Error::ExecV2Refused("Final exceeds immutable paid consumer service".into()));
         }
+        // **RFC-0008 once-only settlement** (dormant `palw_settlement_once_v1`): a claim's issuance-funded Final — its R/F budget
+        // draw, every reward leg below, its buyback slice and its EXEC root split — settles once, whichever consumer reaches it. The
+        // marker is written here, in this transition, before any of them moves value; a repeated Final of the same claim pays
+        // nothing and changes nothing. `Dormant` below the fence: the historical path, byte for byte.
+        {
+            use crate::palw_settlement_once_v1::{
+                PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+            };
+            let once = self.settle_once_v1(
+                final_daa,
+                PalwSettlementObligationV1::of(PalwSettlementLegV1::IssuanceFinal, id.as_bytes()),
+                PalwSettlementConsumerV1::NativeFinal,
+                claim.escrowed_reward,
+                PalwSettlementDebitV1::Issuance { carve: claim.escrowed_reward },
+            )?;
+            if !once.pays() {
+                return Ok(());
+            }
+        }
         self.mark_paid_consumer_terminal_v1(id, final_daa)?;
         // **RFC-0018 Gate C (adopted 2026-10-15)**: a governed claim's `Final` completes the procedure only; its certification is
         // committed here (claim, producer and pool cut fixed now; the draw waits for later randomness). A no-op below the fence.
@@ -10422,7 +10441,31 @@ impl<'a> TransitionBuilder<'a> {
         use crate::palw_vesting_v1::{
             PalwVestingLegKindV1, PalwVestingNoteV1, PalwVestingSourceV1, palw_reporter_payout_key_v1, palw_vesting_payout_key_v1,
         };
-        if let PalwVestingSourceV1::Row { claim_id } = &next.source {
+        // RFC-0008 once-only settlement (dormant): a vesting row (or reporter entitlement) is released once across every consumer.
+        // A move another consumer already settled retires its row below without moving value again. `Dormant` below the fence.
+        let pays = {
+            use crate::palw_settlement_once_v1::{
+                PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+            };
+            let subject = match &next.source {
+                PalwVestingSourceV1::Row { claim_id } => claim_id.as_bytes(),
+                PalwVestingSourceV1::Reporter { offence_id } => offence_id.as_bytes(),
+            };
+            let total = next
+                .legs
+                .iter()
+                .try_fold(0u64, |sum, leg| sum.checked_add(leg.amount))
+                .ok_or(PalwStateV2Error::Overflow("vesting move total"))?;
+            self.settle_once_v1(
+                now,
+                PalwSettlementObligationV1::of(PalwSettlementLegV1::VestingRelease, subject),
+                PalwSettlementConsumerV1::VestingMaturity,
+                total,
+                PalwSettlementDebitV1::Held { amount: total },
+            )?
+            .pays()
+        };
+        if pays && let PalwVestingSourceV1::Row { claim_id } = &next.source {
             let row = self.state.vesting.get(claim_id).cloned().ok_or(PalwStateV2Error::MissingClaim(*claim_id))?;
             let mut recipients: BTreeMap<PalwBondKeyV2, PalwPayoutV2> = BTreeMap::new();
             for (bond, payout) in &row.seats {
@@ -10450,7 +10493,8 @@ impl<'a> TransitionBuilder<'a> {
                 finished,
             )?;
         }
-        if let PalwVestingSourceV1::Reporter { offence_id } = &next.source
+        if pays
+            && let PalwVestingSourceV1::Reporter { offence_id } = &next.source
             && self.params.reporter_income_active_at(now)
         {
             let book = self
@@ -10496,7 +10540,7 @@ impl<'a> TransitionBuilder<'a> {
             PalwVestingSourceV1::Row { claim_id } => palw_vesting_payout_key_v1(claim_id),
             PalwVestingSourceV1::Reporter { offence_id } => palw_reporter_payout_key_v1(offence_id),
         };
-        for leg in next.legs.iter().filter(|leg| leg.amount > 0) {
+        for leg in next.legs.iter().filter(|leg| pays && leg.amount > 0) {
             match leg.kind {
                 PalwVestingLegKindV1::Seat => self.add_panel_payout(leg.payload, leg.amount)?,
                 PalwVestingLegKindV1::Reserve => {
@@ -10517,24 +10561,33 @@ impl<'a> TransitionBuilder<'a> {
         match &next.source {
             PalwVestingSourceV1::Row { claim_id } => {
                 let row = self.state.vesting.get(claim_id).cloned().ok_or(PalwStateV2Error::MissingClaim(*claim_id))?;
+                // The counters are read BEFORE the row's removal, exactly as the historical order did.
                 let mut counters = self.state.vesting_counters;
-                counters.moved =
-                    counters.moved.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("vesting moved"))?;
+                if pays {
+                    counters.moved =
+                        counters.moved.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("vesting moved"))?;
+                }
                 self.write_vesting(*claim_id, None)?;
-                self.write_vesting_counters(counters)?;
-                self.note_vesting(PalwVestingNoteV1::Moved { source: next.source.clone(), legs: next.legs.clone() })?;
-                if row.reserve > 0 {
-                    self.note_vesting(PalwVestingNoteV1::ReserveCredited { claim_id: *claim_id, sompi: row.reserve })?;
+                if pays {
+                    self.write_vesting_counters(counters)?;
+                    self.note_vesting(PalwVestingNoteV1::Moved { source: next.source.clone(), legs: next.legs.clone() })?;
+                    if row.reserve > 0 {
+                        self.note_vesting(PalwVestingNoteV1::ReserveCredited { claim_id: *claim_id, sompi: row.reserve })?;
+                    }
                 }
             }
             PalwVestingSourceV1::Reporter { offence_id } => {
                 // Row 11: S-7 wrote it at step 2; 3d moves it and deletes it (the `ReporterReward`
                 // entry, 69). The reporter counters are S's, written at the award.
+                // RFC-0006: the removal's journal slot is admitted before the push (the row moves into the journal).
+                self.reserve_journal_slots_v1(1, "native reporter reward removal journal")?;
                 let old = self.state.reporter_rewards.remove(offence_id);
                 if old.is_some() {
                     self.entries.push(PalwDeltaEntryV2::ReporterReward { key: *offence_id, old, new: None });
                 }
-                self.note_vesting(PalwVestingNoteV1::Moved { source: next.source.clone(), legs: next.legs.clone() })?;
+                if pays {
+                    self.note_vesting(PalwVestingNoteV1::Moved { source: next.source.clone(), legs: next.legs.clone() })?;
+                }
             }
         }
         Ok(())
