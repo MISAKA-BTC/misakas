@@ -322,7 +322,7 @@ pub enum RpcApiOps {
     GetPalwRewardVesting = 241,
     /// G14: the native required-family preclaim quote an external producer signs its pledge over.
     /// Read-only; the same planner admission re-runs. Appended at the tail.
-    GetPalwStagedPreclaimQuote = 242,
+    GetPalwStagedPreclaimQuote = 244,
 }
 
 impl RpcApiOps {

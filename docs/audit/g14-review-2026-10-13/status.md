@@ -541,7 +541,7 @@ Recorded as "lead default pending user review" (reversible):
 
 1. History custody grants stay automatic for Valid Panel seats on required-family
    claims (signing Valid attests holding the material; 10-12 ruling).
-2. External producers: read-only preclaim quote RPC (op 242, same planner as
+2. External producers: read-only preclaim quote RPC (op 244, same planner as
    admission) and a custody delegation carried in an HFP1 version-2 envelope. Both
    the producer and its node custodian sign a standing window; admission refuses an
    invalid delegation; the custodian may sign the producer's literal answer slot and

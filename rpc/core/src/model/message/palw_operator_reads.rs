@@ -3614,7 +3614,7 @@ impl Deserializer for GetPalwModelCertificationResponse {
     }
 }
 
-/// G14 op 242: one original FP commitment and its public execution binding header, both as the
+/// G14 op 244: one original FP commitment and its public execution binding header, both as the
 /// lowercase hex of their borsh encodings (the exact bytes the HFP1 envelope will carry).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

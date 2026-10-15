@@ -639,7 +639,7 @@ fn main() {
         die(format!("nothing was signed: {g}"));
     }
     // **G14: the original public envelope.** A claim whose class requires a staged public family is
-    // refused at admission without the producer's pledge over the node's native quote (op 242), and an
+    // refused at admission without the producer's pledge over the node's native quote (op 244), and an
     // external producer, which runs no node, must name the node custodian that answers its DA demands.
     let public = public_binding_path.as_ref().and_then(|path| {
         let header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1 =
@@ -1597,7 +1597,7 @@ fn read_borsh_hex_v1<T: borsh::BorshDeserialize>(path: &Path, maximum_bytes: usi
     borsh::from_slice(&bytes).map_err(|e| e.to_string())
 }
 
-/// G14 op 242 plus the node's virtual DAA, from the node the rail already names. Advisory: the
+/// G14 op 244 plus the node's virtual DAA, from the node the rail already names. Advisory: the
 /// accepting block recomputes the same quote; a stale answer only makes admission refuse.
 fn chain_preclaim_quote_v1(
     runtime: &tokio::runtime::Runtime,

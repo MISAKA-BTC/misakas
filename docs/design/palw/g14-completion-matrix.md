@@ -771,7 +771,7 @@ Valid signers their covering charge.
 standing custody delegation: producer and node custodian both sign `(producer, custodian, window)`; admission
 requires the window to cover acceptance and the pledged material horizon and the custodian to be an active
 distinct bond, and refuses an invalid one. The custodian may sign the producer's literal answer slot; the slot,
-its deadlines and its liability remain the producer's. RPC op 242 serves the read-only quote; the gateway rail
+its deadlines and its liability remain the producer's. RPC op 244 serves the read-only quote; the gateway rail
 builds the envelope and refuses a required-family claim without a delegation.
 
 **History custody grants (lead default).** Valid Panel seats of required-family claims sign their history custody

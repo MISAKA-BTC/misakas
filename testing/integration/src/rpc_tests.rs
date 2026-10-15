@@ -1208,7 +1208,7 @@ async fn sanity_test() {
             KaspadPayloadOps::GetPalwStagedPreclaimQuote => {
                 let rpc_client = client.clone();
                 tst!(op, {
-                    // G14 op 242: malformed hex or an undecodable commitment is an error before any state is
+                    // G14 op 244: malformed hex or an undecodable commitment is an error before any state is
                     // read; this test network runs no ConsensusV2 bundle, so a decodable pair would answer
                     // `available: false`.
                     let odd = GetPalwStagedPreclaimQuoteRequest { commitment_hex: "0".into(), binding_hex: String::new() };

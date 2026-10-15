@@ -989,7 +989,7 @@ pub trait RpcApi: Sync + Send + AnySync {
     }
 
     /// The node's native required-family preclaim quote for one original FP commitment and its
-    /// public binding header (op 242). Read-only and advisory: admission recomputes it with the
+    /// public binding header (op 244). Read-only and advisory: admission recomputes it with the
     /// same planner at the accepting block, so a caller pins nothing on this answer's word.
     async fn get_palw_staged_preclaim_quote(
         &self,
