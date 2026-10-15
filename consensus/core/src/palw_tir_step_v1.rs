@@ -716,6 +716,56 @@ impl PalwTirStepSpaceV1 {
         Some(index)
     }
 
+    /// **The TIR prefix-state boundary** (behind `palw_staged_tir_route_v1`; the relation of
+    /// [`crate::palw_tir_prefix_state_v1`]): the number of state leaves that commit the state after
+    /// the first `k` positions, or `None` unless `k` is aligned to both the checkpoint interval and
+    /// `h_tile` and lies strictly inside the prompt. Only then is that state exactly committed by
+    /// leaves: the `Fixed` checkpoints at position `k − 1` and every `Hist` chunk of rows `0..k`.
+    pub fn prefix_state_leaf_count_v1(&self, ctx: &PalwJobContextV2, k: u32) -> Option<u64> {
+        let job = self.job_shape(ctx).ok()?;
+        if k == 0
+            || k >= job.prefill
+            || !k.is_multiple_of(self.layout.checkpoint_interval)
+            || !k.is_multiple_of(self.layout.h_tile)
+        {
+            return None;
+        }
+        let chunks = u64::from(k / self.layout.h_tile);
+        chunks.checked_mul(self.hist_leaves_per_tile())?.checked_add(self.fixed_leaves_per_checkpoint())
+    }
+
+    /// The `ordinal`-th state leaf of the prefix boundary `k`, in ascending leaf-index order: each
+    /// `Hist` chunk's leaves at positions `h_tile − 1, 2·h_tile − 1, …`, with the `Fixed`
+    /// checkpoint leaves at `k − 1` placed before that position's `Hist` leaves (their order in
+    /// the step tree).
+    pub fn prefix_state_leaf_v1(&self, ctx: &PalwJobContextV2, k: u32, ordinal: u64) -> Option<PalwTirLeafV1> {
+        let total = self.prefix_state_leaf_count_v1(ctx, k)?;
+        if ordinal >= total {
+            return None;
+        }
+        let job = self.job_shape(ctx).ok()?;
+        let hist = self.hist_leaves_per_tile();
+        let fixed = self.fixed_leaves_per_checkpoint();
+        let before_last = u64::from(k / self.layout.h_tile - 1) * hist;
+        let (position, within) = if ordinal < before_last {
+            let chunk = (ordinal / hist) as u32;
+            ((chunk + 1) * self.layout.h_tile - 1, Some(ordinal % hist))
+        } else {
+            (k - 1, None)
+        };
+        let all = self.leaves_at_position(&job, position);
+        let checkpoint = (position + 1).is_multiple_of(self.layout.checkpoint_interval);
+        let commits = all - if checkpoint { fixed } else { 0 } - hist;
+        let offset = match within {
+            // An earlier chunk: its Hist leaves come after any checkpoint at that position.
+            Some(j) => commits + if checkpoint { fixed } else { 0 } + j,
+            // The boundary position: Fixed first, then Hist.
+            None => commits + (ordinal - before_last),
+        };
+        let first = self.running_total(&job, position) as u64;
+        self.leaf_in_position(&job, position, offset, first + offset)
+    }
+
     /// Every leaf of position `a`, in order — what a producer commits there.
     pub fn leaves_of_position(&self, ctx: &PalwJobContextV2, a: u32) -> Vec<PalwTirLeafV1> {
         let Ok(job) = self.job_shape(ctx) else { return Vec::new() };

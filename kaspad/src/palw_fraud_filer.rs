@@ -601,6 +601,9 @@ pub(super) struct PalwFraudFilerCaseV1 {
     /// Reporter-door handoffs of the claim's direct proof, bounded like the replay lane's.
     direct_handed: u8,
     direct_asked_at: Option<u64>,
+    /// A TIR required-family claim's native context (behind `palw_staged_tir_route_v1`): set by the
+    /// native TIR replay. Such a case never enters the legacy binding/probe pipeline.
+    pub(super) tir: Option<Arc<FilerTirContextV1>>,
 }
 
 impl PalwFraudFilerCaseV1 {
@@ -652,6 +655,7 @@ impl PalwFraudFilerCaseV1 {
             sent: None,
             direct_handed: 0,
             direct_asked_at: None,
+            tir: None,
         }
     }
 
@@ -2789,7 +2793,9 @@ impl PalwPanelService {
             }
             if params.palw_staged_public_court_v1_active_at(current_daa)
                 && book.cases.get(&claim).is_some_and(|case| {
-                    case.candidate.job.free_prompt && (case.binding.is_none() || case.public_fp_job_v1().is_none())
+                    case.tir.is_none()
+                        && case.candidate.job.free_prompt
+                        && (case.binding.is_none() || case.public_fp_job_v1().is_none())
                 })
                 && let Err(why) = self.fraud_filer_public_context_v1(session, book, claim, bond_key)
             {
@@ -3055,6 +3061,54 @@ impl PalwPanelService {
                     }
                     _ => {}
                 }
+            }
+            // A TIR case (behind `palw_staged_tir_route_v1`): the engine's prelude decides the outcome and the
+            // reservation; everything after the reservation is the staged bundle's, dispatched above. It never
+            // enters the legacy binding read, probes or descent.
+            if book.cases.get(&claim).is_some_and(|case| case.tir.is_some()) {
+                let mismatch = matches!(
+                    book.cases[&claim].verdict,
+                    PalwFraudFilerVerdictV1::Mismatch(_) | PalwFraudFilerVerdictV1::DeferredMismatch
+                );
+                match kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_next_v1(
+                    role,
+                    &kaspa_consensus_core::palw_legacy_public_filer_v1::PalwFilerClaimFactsV1 { binding_known: true, ..facts.clone() },
+                    mismatch,
+                    &PalwLegacyBisectV1::new(0),
+                    |_| false,
+                ) {
+                    PalwFilerActionV1::Done(phase) if facts.outcome.is_some() || facts.ended || !mismatch => {
+                        book.settle(&claim, PalwFraudFilerVerdictV1::Settled(phase));
+                    }
+                    PalwFilerActionV1::Reserve => {
+                        if let Some(view) = view.as_ref() {
+                            self.fraud_filer_queue_v1(
+                                book,
+                                claim,
+                                PalwFraudFilerSentV1::Reserve,
+                                current_daa,
+                                court_pending,
+                                court_due,
+                                || {
+                                    let mut signed = true;
+                                    let object = palw_dispute_reserved_object_v1(
+                                        network_domain,
+                                        palw_fraud_filer_reservation_v1(view, bond_key),
+                                        |m| {
+                                            self.sign(m, PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1).unwrap_or_else(|| {
+                                                signed = false;
+                                                Vec::new()
+                                            })
+                                        },
+                                    );
+                                    if signed { Ok(object) } else { Err("no signing key for this bond".to_string()) }
+                                },
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
             }
             // Even a disclosure the session arm refused can carry a complete cryptographic proof of a wrong job.
             // Judge the binding against the recorded target BEFORE a mismatched count can stop subtree descent.
@@ -6413,6 +6467,123 @@ impl PalwPanelService {
     /// Start an attempt derived from its header, or an FP job/input authenticated against its accepted commitment and recorded pin.
     /// Run the verifier's own model under the full-seat memory reservation, retaining only its own capture. Missing public history
     /// or input waits without spending a run; a backend that cannot execute the job remains explicitly unjudged.
+    /// **The native TIR entry** (behind `palw_staged_tir_route_v1`): the claim's accepted public FP
+    /// job and its authenticated public input, the verifier's OWN TIR replay
+    /// (`replay_tir_generated_ids_v1`) under the claim's admitted header, then the verdict. Equal
+    /// tiled logits trace roots settle the claim as honest. Different roots make it a mismatch,
+    /// whose own ids are the Constraint nominee. Reservation and the staged bundle follow through
+    /// the engine's prelude and the TIR bundle stages. No legacy binding is read.
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_tir_replay_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        tir: FilerTirContextV1,
+        network_domain: Hash64,
+        current_daa: u64,
+        public_material: &[Vec<u8>],
+        replay_room: bool,
+    ) {
+        let Some(case) = book.cases.get(&claim) else { return };
+        let candidate = case.candidate.clone();
+        let retry = |book: &mut PalwFraudFilerBookV1, why: String| {
+            if let Some(case) = book.cases.get_mut(&claim) {
+                case.input_retry_at = current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
+            }
+            debug!("[{PALW_PANEL}] claim {claim}: the native TIR replay waits: {why}");
+        };
+        if !replay_room || book.running.is_some() {
+            return retry(book, "no replay room on this host".into());
+        }
+        let snapshot = candidate.clone();
+        let payload = match session.clone().spawn_blocking(move |c| palw_fraud_filer_fp_payload_v1(c, &snapshot, network_domain)).await {
+            Ok(payload) => input::PalwFraudFilerFpDescriptorV1::Accepted(payload),
+            Err(why) => return retry(book, format!("the accepted public FP job is unavailable: {why}")),
+        };
+        let job = payload.job().clone();
+        let accepted_pin = match &payload {
+            input::PalwFraudFilerFpDescriptorV1::Accepted(p) => kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&p.commitment),
+            input::PalwFraudFilerFpDescriptorV1::Disclosed { job_identity, .. } => *job_identity,
+        };
+        if job.network_domain != network_domain
+            || job.class_id != tir.view.class_id
+            || kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&tir.view.job_context) != accepted_pin
+        {
+            book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged("the accepted FP job is not the TIR header's job".into()));
+            return;
+        }
+        let Some(artifact_root) = candidate.job.artifact_root else {
+            book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged("its class is gone from the registry".into()));
+            return;
+        };
+        let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> =
+            match self.resolve_backend(session, job.class_id, artifact_root) {
+            Ok(backend) => Arc::from(backend),
+            Err(why) => {
+                book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(format!("its TIR class does not resolve on this host ({why})")));
+                return;
+            }
+        };
+        let prompt_form = self.class_prompt_ids_form(job.class_id);
+        let prompt = match input::palw_fraud_filer_fp_descriptor_input_v1(backend.as_ref(), &payload, prompt_form, public_material) {
+            Ok(input) => input.prompt_ids,
+            Err(why) => return retry(book, format!("the authenticated public input is not available yet: {why}")),
+        };
+        let need = match self
+            .backends()
+            .role_memory_need_or_chain_v1(job.class_id, artifact_root, super::FULL_SEAT_V1, |id| self.chain_carriage_v1(session, id))
+        {
+            Some(need) => need,
+            None => return retry(book, "the TIR class's resource profile is unavailable".into()),
+        };
+        let reservation = match self.reserve_replay_v1(PALW_FRAUD_FILER_REPLAY_ROLE_V1, &need, job.class_id, claim) {
+            Ok(reservation) => reservation,
+            Err(why) => return retry(book, why),
+        };
+        let header = tir.header.clone();
+        let replay_job = job.clone();
+        let replay = tokio::task::spawn_blocking(move || {
+            let _reservation = reservation;
+            backend.replay_tir_generated_ids_v1(&header, &replay_job, &prompt)
+        })
+        .await
+        .map_err(|e| format!("the TIR replay worker did not finish: {e}"))
+        .and_then(|r| r);
+        let replay = match replay {
+            Ok(replay) => replay,
+            Err(why) => {
+                book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(format!("no TIR replay on this host: {why}")));
+                return;
+            }
+        };
+        if replay.generated_ids.len() != tir.view.job_context.exact_decode_tokens as usize {
+            book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged("the TIR replay changed the exact decode count".into()));
+            return;
+        }
+        let case = book.cases.get_mut(&claim).expect("selected case");
+        case.tir = Some(Arc::new(tir));
+        case.registered_preflight = true;
+        if replay.full_logits_trace_root == case.tir.as_ref().expect("set").view.full_logits_trace_root {
+            book.settle(&claim, PalwFraudFilerVerdictV1::Honest);
+            return;
+        }
+        let execution_root = case.tir.as_ref().expect("set").view.committed_execution_root;
+        case.verdict = PalwFraudFilerVerdictV1::Mismatch(Arc::new(PalwFraudFilerRunV1 {
+            execution_root,
+            trace_root: replay.full_logits_trace_root,
+            output_root: Hash64::default(),
+            own_range: Box::new(|_, _| Err("a TIR pursuit localizes through its staged bundle, not a legacy leaf range".into())),
+            legacy: None,
+            own: None,
+            fp_job: Some(Box::new(job)),
+            own_output_ids: replay.generated_ids,
+            _job_reservation: None,
+            _reservation: None,
+        }));
+        info!("[{PALW_PANEL}] claim {claim}: the native TIR replay differs from the committed logits trace; pursuing it (G14)");
+    }
+
     async fn fraud_filer_start_replay_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
@@ -6427,6 +6598,24 @@ impl PalwPanelService {
         let candidate = case.candidate.clone();
         let job = candidate.job.clone();
         let producer = candidate.producer;
+        // A TIR required-family claim has no legacy binding: its discovery, replay and verdict are
+        // native (the decode view from native state, the verifier's own TIR replay).
+        if job.free_prompt
+            && let Ok(Some((view, header))) = session.palw_staged_tir_view_v1(claim, self.class_step_ladder(job.class_id))
+        {
+            self.fraud_filer_tir_replay_v1(
+                session,
+                book,
+                claim,
+                FilerTirContextV1 { view, header },
+                network_domain,
+                current_daa,
+                public_material,
+                replay_room,
+            )
+            .await;
+            return;
+        }
         let unjudged = |book: &mut PalwFraudFilerBookV1, why: String| {
             debug!("[{PALW_PANEL}] claim {claim}: the fraud filer does not judge it — {why}");
             if book.cases.get(&claim).is_some_and(|case| case.registered_preflight) {

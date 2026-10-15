@@ -62,6 +62,15 @@ pub trait PalwFloatPublicSourceReaderV1: Send {
     ) -> Result<Option<crate::palw_float_constraint_source_v1::PalwFloatSourceActionV1>, String>;
 }
 
+/// An outside verifier's own TIR replay of a constrained FP job
+/// ([`PalwExecutionBackendV1::replay_tir_generated_ids_v1`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwTirReplayV1 {
+    pub generated_ids: Vec<u32>,
+    /// `tiled_logits_trace_root_v1` over the replay's own `post` logits rows and ids.
+    pub full_logits_trace_root: Hash64,
+}
+
 /// The roots an attempt carries, and the bytes that answer for them.
 ///
 /// Family-agnostic on purpose: a block header commits these four values and does not know which
@@ -601,18 +610,23 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// * Select exactly `header.job_context.exact_decode_tokens` ids with the job's own decode
     ///   rule: greedy for a constrained job, masked by the job's constraint, first-index ties.
     ///   This is the rule the Constraint court applies to the committed logits.
-    /// * Return those ids. They are only a NOMINEE: the fraud filer compares them with the
-    ///   claim's authenticated ids to pick a position and a beating lane. The court decides from
-    ///   the producer's authenticated logits alone, so floating-point or kernel nondeterminism
-    ///   here can cost the verifier a wasted demand but can never convict an honest producer.
-    /// * An `Err` means "no replay". The filer then nominates only ids the constraint forbids,
-    ///   which needs no logits.
+    /// * Return those ids and the run's own tiled logits trace root:
+    ///   `tiled_logits_trace_root_v1(&header.job_context, own_rows, own_ids)`, where the rows are the
+    ///   `post` node's `i32` logits, one per decode call. TIR is integer and deterministic, so an
+    ///   honest claim reproduces `header.full_logits_trace_root` bit for bit. The fraud filer
+    ///   settles the claim as honest when the roots are equal, and pursues it (reservation, then the
+    ///   staged bundle) when they differ.
+    /// * The ids are only a NOMINEE: the filer compares them with the claim's authenticated ids to
+    ///   pick a position and a beating lane. The court decides from the producer's authenticated
+    ///   logits alone, so a wrong replay can cost the verifier a deposit but can never convict an
+    ///   honest producer.
+    /// * An `Err` means "no replay": the claim stays unjudged by this host.
     fn replay_tir_generated_ids_v1(
         &self,
         _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
         _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
         _prompt_token_ids: &[u32],
-    ) -> Result<Vec<u32>, String> {
+    ) -> Result<PalwTirReplayV1, String> {
         Err("this family has no TIR FP execution backend".into())
     }
 

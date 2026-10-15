@@ -224,7 +224,9 @@ pub fn staged_preclaim_tir_quote_v1(
     }
     let mut families = Vec::new();
     if original.job.is_prefix_state() {
-        return Err("a TIR prefix-state job has no TIR state relation for the public prefix court".into());
+        // The relation core exists (`palw_tir_prefix_state_v1`: aligned boundary, canonical digest,
+        // authenticated stream); its source session, family row, fold, quote and node actors do not.
+        return Err("a TIR prefix-state job's family court is not wired (relation core only); refused".into());
     }
     if original.job.is_constraint() {
         if view.lane == crate::palw_step::PalwStepLaneV1::Float32 {
