@@ -125,6 +125,7 @@ impl Router {
                 GetPalwMonetaryMaterial,
                 GetPalwStateCarriage,
                 GetPalwStagedPreclaimQuote,
+                GetPalwRfc0016Report,
                 GetPalwKernelClaim,
                 GetPalwKernelRows,
                 GetPalwKernelFinals,

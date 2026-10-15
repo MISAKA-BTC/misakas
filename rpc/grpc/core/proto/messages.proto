@@ -132,6 +132,7 @@ message KaspadRequest {
     GetPalwStateCarriageRequestMessage getPalwStateCarriageRequest = 1304;
     GetPalwRewardVestingRequestMessage getPalwRewardVestingRequest = 1296;
     GetPalwStagedPreclaimQuoteRequestMessage getPalwStagedPreclaimQuoteRequest = 1306;
+    GetPalwRfc0016ReportRequestMessage getPalwRfc0016ReportRequest = 1330;
     GetPalwKernelClaimRequestMessage getPalwKernelClaimRequest = 1234;
     GetPalwKernelRowsRequestMessage getPalwKernelRowsRequest = 1236;
     GetPalwKernelFinalsRequestMessage getPalwKernelFinalsRequest = 1238;
@@ -269,6 +270,7 @@ message KaspadResponse {
     GetPalwStateCarriageResponseMessage getPalwStateCarriageResponse = 1305;
     GetPalwRewardVestingResponseMessage getPalwRewardVestingResponse = 1297;
     GetPalwStagedPreclaimQuoteResponseMessage getPalwStagedPreclaimQuoteResponse = 1307;
+    GetPalwRfc0016ReportResponseMessage getPalwRfc0016ReportResponse = 1331;
     GetPalwKernelClaimResponseMessage getPalwKernelClaimResponse = 1235;
     GetPalwKernelRowsResponseMessage getPalwKernelRowsResponse = 1237;
     GetPalwKernelFinalsResponseMessage getPalwKernelFinalsResponse = 1239;

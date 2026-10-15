@@ -215,6 +215,12 @@ pub mod palw_block_commitment;
 /// `accepted_daa + W`) and the model-bond allocation — fences `palw_bond_budget_v1` and `palw_model_bond_allocation_v1` (dormant, refused
 /// when armed).
 pub mod palw_bond_budget_v1;
+/// **ADR-0176 amendment (ユーザー判断 2026-10-15: bond式の再設計)** — the decomposed, rights-derived bond reservation; fence
+/// `palw_bond_formula_v2` (dormant, refused when armed).
+pub mod palw_bond_formula_v2;
+/// **ADR-0176 cap derivation harness** (ユーザー方針 2026-10-15 item 8): the Stage 2/3 simulator over the real budget engine; decides
+/// nothing (validation-phase instrument).
+pub mod palw_bond_cap_sweep_v1;
 /// **ADR-0145 §1–§5: a claim's work is DERIVED from the graph and the execution, never declared.**
 /// The 2026-09-19 reward audit measured 7.8× the fork-choice weight for identical arithmetic
 /// because `pwu_per_inference` counts a canonical job the registrant writes while an attempt past
@@ -523,6 +529,9 @@ pub mod palw_panel_free_v1;
 pub mod palw_panel_free_gate_v1;
 /// RFC-0015 §9 / §11.3: the one settlement predicate of a kernel-route claim (pending / final-revocable / settled / convicted / defaulted).
 pub mod palw_kernel_settlement_v1;
+/// RFC-0017: model eligibility — registration free, rights examined (commit-then-draw), bounded in probation and renewed; dormant
+/// fence `palw_model_eligibility_v1` (kernel inner 74/75, aux 131).
+pub mod palw_model_eligibility_v1;
 pub mod palw_panel_v2;
 /// ADR-0144 §9: slashable panel VAR that cannot be counted twice. Pure functions of consensus
 /// facts; the fold in `palw_state_v2` is the writer, behind the same fence.
@@ -952,6 +961,10 @@ pub mod palw_cell_coverage_v1;
 /// R6-CELL round 4 (2026-10-15): the dormant `palw_cell_coverage_closure_v1` — an uncoverable legacy class (unknown map, hybrid
 /// v1/v2 recurrence, solo recurrence map, multi-router, Kimi router) refused at registration / the claim gate, convicted in court.
 pub mod palw_cell_coverage_closure_v1;
+/// RFC-0016 (2026-10-15, V+ adopted as design; values pending measurement): pre-issued per-model block rights, elastic Final
+/// capacity, the pre-lottery admission quote and the outcome-first model report — behind the dormant fences
+/// `palw_model_block_rights_v1` and `palw_elastic_final_capacity_v1` (refused when armed until measured values are pinned).
+pub mod palw_rfc0016_v1;
 
 pub mod palw_material_capacity_v1;
 

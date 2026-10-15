@@ -180,6 +180,8 @@ impl Params {
         self.validate_palw_legacy_held_da_v2()?;
         // **ADR-0176 / ADR-0177's dormant fences** (`crate::palw_bond_budget_v1`): refused when armed.
         self.validate_palw_bond_budget_v1()?;
+        // ADR-0176 amendment (ユーザー判断 2026-10-15: bond式の再設計): dormant, refused when armed.
+        self.validate_palw_bond_formula_v2()?;
         self.validate_palw_reporter_income_v2()?;
         self.validate_palw_material_income_v3()?;
         self.validate_palw_panel_lifetime_v2()?;
@@ -203,6 +205,11 @@ impl Params {
         self.validate_palw_2026_10_12_ruling_fences_v1()?;
         // **RFC-0006 R6-CELL round 4's coverage closure** (`crate::palw_cell_coverage_closure_v1`): refused when armed.
         self.validate_palw_cell_coverage_closure_v1()?;
+        // **RFC-0016's two dormant fences** (`crate::palw_rfc0016_v1`): refused when armed until measured values are pinned.
+        self.validate_palw_model_block_rights_v1()?;
+        self.validate_palw_elastic_final_capacity_v1()?;
+        // **RFC-0017's model eligibility** (`crate::palw_model_eligibility_v1`): refused when armed.
+        self.validate_palw_model_eligibility_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
         // **A-2 uniformity** (`crate::palw_lifecycle_objects_v2`): every lifecycle kind's owning fence needs the audit fence declared.
         self.validate_palw_lifecycle_kind_fences_v1()?;

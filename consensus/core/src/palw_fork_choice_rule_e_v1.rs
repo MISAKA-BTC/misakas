@@ -254,10 +254,48 @@ impl PalwRuleEBondBudgetV1 for PalwRuleENoBondBudgetV1 {
     }
 }
 
+/// **ADR-0176 D3 hook H-4 — BUDGET's engine as rule E reads it.** `None` where the network has no `palw_bond_budget_v1` (every
+/// shipped preset: rule E reads exactly as before), for a claim with no budget row (accepted below the fence) and for a `Legacy`
+/// seed (an old claim completes under its ruleset, ADR-0176 §4). Otherwise:
+///
+/// * `final_weight` — what the claim was GRANTED at `Final` (`consumed.final_weight`: the fold's `bond_budget_final_weight_v1` adds
+///   exactly this to the safe weight, and a free prompt's spends add their clipped quanta);
+/// * `provisional_weight` — the live claim's immature weight, which acceptance clipped to its reserved `F`;
+/// * `terms` — the policy's version, the interval `⌊accepted_daa / W⌋` (every such interval is a `W`-span, which the rolling window
+///   bounds by `F_max`), and `F_max(C, W)` at the bond's collateral in this state (a slashed bond's ceiling is its remaining capital's).
+///
+/// A function of the state and the network's fixed budget policy only (no availability, peer count or acquisition).
+#[derive(Clone, Copy, Debug)]
+pub struct PalwRuleEBudgetEngineV1<'a> {
+    mirror: Option<&'a crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1>,
+}
+
+impl PalwRuleEBondBudgetV1 for PalwRuleEBudgetEngineV1<'_> {
+    fn allocation(&self, state: &PalwChainStateV2, claim_id: &Hash64, claim: &PalwClaimStateV2) -> Option<PalwRuleEBudgetAllocationV1> {
+        use crate::palw_bond_budget_v1::PalwBudgetOriginV1 as O;
+        let mirror = self.mirror?;
+        let row = state
+            .bond_budget()?
+            .claim_row(claim_id)
+            .filter(|row| matches!(row.origin, O::Attempt | O::Rider | O::FreePrompt) && row.bond == claim.bond)?;
+        let capital = state.bond(&row.bond).map(|bond| bond.collateral).unwrap_or(0);
+        Some(PalwRuleEBudgetAllocationV1 {
+            terms: PalwRuleEBudgetTermsV1 {
+                version: mirror.policy.version,
+                window: row.accepted_daa / mirror.policy.window_daa.max(1),
+                final_weight_ceiling: crate::palw_bond_budget_v1::palw_bond_budget_caps_v1(&mirror.policy, capital).final_weight,
+            },
+            final_weight: row.consumed.final_weight,
+            provisional_weight: claim.immature_contribution.min(row.reserved.final_weight),
+        })
+    }
+}
+
 /// **The one place rule E learns which allocation is in force** — every path (the node's sides, the IBD commit, the leaf v2
-/// window) asks this. BUDGET wires its engine here, selected by its fence; until then, none.
-pub fn palw_rule_e_bond_budget_v1(_params: &PalwStateParamsV2) -> &'static dyn PalwRuleEBondBudgetV1 {
-    &PalwRuleENoBondBudgetV1
+/// window) asks this. BUDGET's engine ([`PalwRuleEBudgetEngineV1`]) answers where `palw_bond_budget_v1` is mirrored; on every shipped
+/// preset it is not, and every claim reads as before.
+pub fn palw_rule_e_bond_budget_v1(params: &PalwStateParamsV2) -> PalwRuleEBudgetEngineV1<'_> {
+    PalwRuleEBudgetEngineV1 { mirror: params.bond_budget() }
 }
 
 /// **One claim, reduced to what rule E reads** — priced at the state it is read from, exactly as the fold prices it there. The
@@ -548,7 +586,8 @@ pub fn palw_rule_e_sides_v1(
     common_bond: impl Fn(&PalwBondKeyV2) -> bool,
     common_bonds: usize,
 ) -> Result<PalwRuleEPairV1, PalwRuleEErrorV1> {
-    let budget = palw_rule_e_bond_budget_v1(params);
+    let engine = palw_rule_e_bond_budget_v1(params);
+    let budget: &dyn PalwRuleEBondBudgetV1 = &engine;
     let side_a = a.palw_rule_e_side_v1(
         params,
         uncertified_weightless_a,

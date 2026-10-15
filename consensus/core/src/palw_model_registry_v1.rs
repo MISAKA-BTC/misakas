@@ -1658,6 +1658,9 @@ pub struct PalwModelRegistryClassReadV1 {
     pub share_permille: Option<u16>,
     /// Claims of the class voided as `NoCapablePanel` (the capacity's failure, counted).
     pub no_capable_panel_voids: u32,
+    /// **RFC-0017 (`palw_model_eligibility_v1`): the class's eligibility stage, next renewal and rights at the tip** —
+    /// "not-governed" below the fence (every shipped network).
+    pub eligibility: crate::palw_model_eligibility_v1::PalwEligibilityStatusReadV1,
     /// Why the row is where it is, from its last reading: `ready {n} < {seats} for a panel`,
     /// `overloaded`, `ready {n} < {required} required`, `probing {passed}/{needed}`, `stable
     /// {n}/{needed}`, `admitting`, `base class`, `no work (kernel support boundary)` — for an operator to tell
@@ -2151,6 +2154,7 @@ pub fn palw_model_registry_read_v2(
                 (Some(_), None) => "the registry is not in force".to_string(),
                 (None, _) => "no row (registered before the fence without a carriage): never gated".to_string(),
             },
+            eligibility: crate::palw_state_v2::palw_eligibility_status_of_v1(state, params, class_id, tip_daa),
             no_capable_panel_voids: state
                 .claims_iter()
                 .filter(|(_, c)| {

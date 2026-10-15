@@ -3099,6 +3099,14 @@ pub struct Params {
     /// fence: `None` everywhere, Some-only hashed with its policy, collapsed from `Some(never())`, refused when armed
     /// ([`Self::validate_palw_model_bond_allocation_v1`]).
     pub palw_model_bond_allocation_v1: Option<crate::palw_bond_budget_v1::PalwModelBondAllocationFenceV1>,
+    /// **ADR-0176 amendment — ユーザー判断 2026-10-15: bond式の再設計** ([`crate::palw_bond_formula_v2`]): past this height (keyed on
+    /// each claim's acceptance) a claim's bond reservation is decomposed (weight / economic right / collectable-loss top-up / court-DA-
+    /// retention, each with its own hold), derived from the claim's per-period-split rights and a ρ-independent collectable loss; the
+    /// concurrent check stays `u·C` (u provisionally 500 ‰); a licence no longer releases the escrow reservation or the issuance slot
+    /// (capacity returns only at the fixed `d + W_M`); a model class takes the reduced reservation only with a pinned measured
+    /// audit-capacity record. Needs a V3 rights-slicing `palw_bond_budget_v1` at or below it. **Dormant**: `None` everywhere, Some-only
+    /// hashed with its policy, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_bond_formula_v2`]).
+    pub palw_bond_formula_v2: Option<crate::palw_bond_formula_v2::PalwBondFormulaFenceV2>,
 
     /// **Lane LG14-B (RFC-0014 §4–§5 on the legacy V2 Panel route, user decision GAP-80): public descent and the held/fused DA
     /// units** ([`crate::palw_legacy_held_da_v2`]). Past this height any bond may demand an interior node of a V2 claim's step or
@@ -3148,6 +3156,27 @@ pub struct Params {
     /// fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_cell_coverage_closure_v1`]) until its
     /// rule is verified.
     pub palw_cell_coverage_closure_v1: Option<ForkActivation>,
+    /// **palw_model_block_rights_v1** — RFC-0016 V+ ([`crate::palw_rfc0016_v1`]): past it a model-class Attempt is admitted only
+    /// when it consumes one of its model's pre-issued per-epoch block rights (`⌊P_m · N_exp⌋`, the entrant reserve deducted from
+    /// the fixed total; σ-capped mid-epoch reissue). **Dormant, with no activation height**: `None` on every preset and in no
+    /// flag-day list, hashed Some-only in both fingerprints, collapsed from `Some(never())`, refused when armed
+    /// ([`Self::validate_palw_model_block_rights_v1`]) until every RFC-0016 value has a pinned measured-value record.
+    /// Implemented dormant, NOT activated.
+    pub palw_model_block_rights_v1: Option<ForkActivation>,
+    /// **palw_elastic_final_capacity_v1** — RFC-0016 §10 ([`crate::palw_rfc0016_v1`]): past it a model class's verification
+    /// capacity is the per-verifier water-filled share of its ready verifiers (each verifier counted once, no cross-model
+    /// subtraction), capacity 0 admits nothing, and the long-window (C7) concurrency is derived from measured capacity.
+    /// **Dormant** exactly like [`Self::palw_model_block_rights_v1`] ([`Self::validate_palw_elastic_final_capacity_v1`]).
+    pub palw_elastic_final_capacity_v1: Option<ForkActivation>,
+    /// **palw_model_eligibility_v1** — RFC-0017 ([`crate::palw_model_eligibility_v1`]): past it a class registered at/after the fence
+    /// starts `Registered` (user-paid jobs only: no subsidy, no reward-bearing block right, no Final weight), takes bounded rights in
+    /// `Probation`, is promoted only by a commit-then-draw exam of stake-drawn verifiers (kernel inner 74/75, aux 131) and keeps
+    /// `Eligible` only through periodic renewal. Keyed on the claim's acceptance DAA (the class's registration DAA for the stage a
+    /// pre-fence class is read with). **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed
+    /// Some-only in both fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_model_eligibility_v1`])
+    /// until its rule is built and verified and its values approved; needs `palw_probabilistic_constraints_v1` (the kernel route holding
+    /// its rows) and `palw_bond_budget_v1` (the per-principal common cap it takes the minimum with) at or below it.
+    pub palw_model_eligibility_v1: Option<ForkActivation>,
 
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
@@ -5982,6 +6011,7 @@ impl Params {
             palw_provider_court_v1: self.palw_provider_court_v1,
             palw_legacy_held_da_v2: self.palw_legacy_held_da_v2,
             palw_bond_budget_v1: self.palw_bond_budget_v1.clone(),
+            palw_bond_formula_v2: self.palw_bond_formula_v2,
             palw_reporter_income_v2: self.palw_reporter_income_v2,
             palw_material_income_v3: self.palw_material_income_v3,
             palw_panel_lifetime_v2: self.palw_panel_lifetime_v2,
@@ -5999,6 +6029,9 @@ impl Params {
             palw_public_evidence_reward_v1: self.palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1: self.palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1: self.palw_cell_coverage_closure_v1,
+            palw_model_block_rights_v1: self.palw_model_block_rights_v1,
+            palw_elastic_final_capacity_v1: self.palw_elastic_final_capacity_v1,
+            palw_model_eligibility_v1: self.palw_model_eligibility_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -7119,6 +7152,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
     palw_panel_lifetime_v2: None,
@@ -7136,6 +7170,9 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
+    palw_model_block_rights_v1: None,
+    palw_elastic_final_capacity_v1: None,
+    palw_model_eligibility_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -7452,6 +7489,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
     palw_panel_lifetime_v2: None,
@@ -7469,6 +7507,9 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
+    palw_model_block_rights_v1: None,
+    palw_elastic_final_capacity_v1: None,
+    palw_model_eligibility_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -7767,6 +7808,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
     palw_panel_lifetime_v2: None,
@@ -7784,6 +7826,9 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
+    palw_model_block_rights_v1: None,
+    palw_elastic_final_capacity_v1: None,
+    palw_model_eligibility_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -12952,6 +12997,10 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_2026_10_12_ruling_fences_v1();
     // RFC-0006 R6-CELL round 4's coverage closure, likewise.
     params.sync_palw_cell_coverage_closure_v1();
+    // RFC-0016's two dormant fences (V+ block rights, elastic Final capacity), likewise.
+    params.sync_palw_rfc0016_v1();
+    // RFC-0017's model eligibility, likewise.
+    params.sync_palw_model_eligibility_v1();
     // RFC-0001 §2.10's adapter class listing, likewise.
     params.sync_palw_adapter_class_v1();
     // ADR-0096's decode constraint, likewise.
@@ -13248,6 +13297,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
     palw_panel_lifetime_v2: None,
@@ -13265,6 +13315,9 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
+    palw_model_block_rights_v1: None,
+    palw_elastic_final_capacity_v1: None,
+    palw_model_eligibility_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,

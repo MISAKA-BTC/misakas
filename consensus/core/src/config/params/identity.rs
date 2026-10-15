@@ -599,6 +599,10 @@ impl Params {
         if self.palw_model_bond_allocation_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_model_bond_allocation_v1 = None;
         }
+        // ADR-0176 amendment (ユーザー判断 2026-10-15): the bond formula's fence, likewise collapsed whole.
+        if self.palw_bond_formula_v2.is_some_and(|fence| fence.activation == ForkActivation::never()) {
+            self.palw_bond_formula_v2 = None;
+        }
         // ADR-0032's amended reporter share (lane INTF), likewise.
         if self.palw_reporter_share_v2 == Some(ForkActivation::never()) {
             self.palw_reporter_share_v2 = None;
@@ -620,6 +624,17 @@ impl Params {
         // RFC-0006 R6-CELL round 4's coverage closure, likewise.
         if self.palw_cell_coverage_closure_v1 == Some(ForkActivation::never()) {
             self.palw_cell_coverage_closure_v1 = None;
+        }
+        // RFC-0016's two dormant fences, likewise.
+        if self.palw_model_block_rights_v1 == Some(ForkActivation::never()) {
+            self.palw_model_block_rights_v1 = None;
+        }
+        if self.palw_elastic_final_capacity_v1 == Some(ForkActivation::never()) {
+            self.palw_elastic_final_capacity_v1 = None;
+        }
+        // RFC-0017's model eligibility, likewise.
+        if self.palw_model_eligibility_v1 == Some(ForkActivation::never()) {
+            self.palw_model_eligibility_v1 = None;
         }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
@@ -1077,12 +1092,16 @@ impl Params {
             palw_beacon_bootstrap_v1,
             palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
+            palw_bond_formula_v2,
             palw_reporter_share_v2,
             palw_legacy_public_filer_v1,
             palw_court_model_scope_v1,
             palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
+            palw_model_block_rights_v1,
+            palw_elastic_final_capacity_v1,
+            palw_model_eligibility_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -1390,12 +1409,16 @@ impl Params {
             ("palw_beacon_bootstrap_v1", palw_beacon_bootstrap_v1.as_ref().map(|f| f.activation)),
             ("palw_paid_consumer_lifecycle_v1", palw_paid_consumer_lifecycle_v1.as_ref().map(|f| f.activation)),
             ("palw_model_bond_allocation_v1", palw_model_bond_allocation_v1.as_ref().map(|fence| fence.activation)),
+            ("palw_bond_formula_v2", palw_bond_formula_v2.map(|fence| fence.activation)),
             ("palw_reporter_share_v2", *palw_reporter_share_v2),
             ("palw_legacy_public_filer_v1", *palw_legacy_public_filer_v1),
             ("palw_court_model_scope_v1", *palw_court_model_scope_v1),
             ("palw_public_evidence_reward_v1", *palw_public_evidence_reward_v1),
             ("palw_claim_hard_deadline_v1", palw_claim_hard_deadline_v1.as_ref().map(|f| f.activation)),
             ("palw_cell_coverage_closure_v1", *palw_cell_coverage_closure_v1),
+            ("palw_model_block_rights_v1", *palw_model_block_rights_v1),
+            ("palw_elastic_final_capacity_v1", *palw_elastic_final_capacity_v1),
+            ("palw_model_eligibility_v1", *palw_model_eligibility_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -1814,6 +1837,12 @@ impl Params {
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
         }
+        // ADR-0176 amendment (ユーザー判断 2026-10-15): the bond formula, NAMED with its policy. Some-only.
+        if let Some(fence) = &self.palw_bond_formula_v2 {
+            h.write(b"palw_bond_formula_v2");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
         // ADR-0032's amended reporter share (lane INTF), NAMED likewise, with the share it arms beside it (the SA-4 rule:
         // two builds arming one height at different shares must not print one schedule id). Some-only.
         if let Some(at) = self.palw_reporter_share_v2 {
@@ -1843,6 +1872,20 @@ impl Params {
         // RFC-0006 R6-CELL round 4's coverage closure, NAMED likewise. Some-only.
         if let Some(at) = self.palw_cell_coverage_closure_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_cell_coverage_closure_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // RFC-0016's two dormant fences, NAMED likewise. Some-only.
+        if let Some(at) = self.palw_model_block_rights_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_model_block_rights_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_elastic_final_capacity_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_elastic_final_capacity_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // RFC-0017's model eligibility, NAMED likewise. Some-only.
+        if let Some(at) = self.palw_model_eligibility_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_model_eligibility_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, NAMED likewise.
@@ -2569,12 +2612,16 @@ impl Params {
             palw_beacon_bootstrap_v1,
             palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
+            palw_bond_formula_v2,
             palw_reporter_share_v2,
             palw_legacy_public_filer_v1,
             palw_court_model_scope_v1,
             palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
+            palw_model_block_rights_v1,
+            palw_elastic_final_capacity_v1,
+            palw_model_eligibility_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -3441,6 +3488,10 @@ impl Params {
         if let Some(fence) = palw_model_bond_allocation_v1.as_mut() {
             fork(&mut fence.activation, visit);
         }
+        // ADR-0176 amendment (ユーザー判断 2026-10-15). Some-only.
+        if let Some(fence) = palw_bond_formula_v2.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         // ADR-0032's amended reporter share (lane INTF). Some-only.
         if let Some(activation) = palw_reporter_share_v2.as_mut() {
             fork(activation, visit);
@@ -3461,6 +3512,17 @@ impl Params {
         }
         // RFC-0006 R6-CELL round 4's coverage closure. Some-only.
         if let Some(activation) = palw_cell_coverage_closure_v1.as_mut() {
+            fork(activation, visit);
+        }
+        // RFC-0016's two dormant fences. Some-only.
+        if let Some(activation) = palw_model_block_rights_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_elastic_final_capacity_v1.as_mut() {
+            fork(activation, visit);
+        }
+        // RFC-0017's model eligibility. Some-only.
+        if let Some(activation) = palw_model_eligibility_v1.as_mut() {
             fork(activation, visit);
         }
         // palw_fp_prefix_inherit. Some-only.
@@ -3988,12 +4050,16 @@ impl Params {
             palw_beacon_bootstrap_v1,
             palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
+            palw_bond_formula_v2,
             palw_reporter_share_v2,
             palw_legacy_public_filer_v1,
             palw_court_model_scope_v1,
             palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
+            palw_model_block_rights_v1,
+            palw_elastic_final_capacity_v1,
+            palw_model_eligibility_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -4947,6 +5013,11 @@ impl Params {
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
         }
+        if let Some(fence) = &palw_bond_formula_v2 {
+            h.write(b"palw_bond_formula_v2");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
         if let Some(activation) = palw_provider_court_v1 {
             h.write(b"palw_provider_court_v1");
             h.write(activation.daa_score().to_le_bytes());
@@ -4986,6 +5057,20 @@ impl Params {
         // RFC-0006 R6-CELL round 4's coverage closure, Some-only for the same reason.
         if let Some(activation) = palw_cell_coverage_closure_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_cell_coverage_closure_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // RFC-0016's two dormant fences, Some-only for the same reason.
+        if let Some(activation) = palw_model_block_rights_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_model_block_rights_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_elastic_final_capacity_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_elastic_final_capacity_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // RFC-0017's model eligibility, Some-only for the same reason.
+        if let Some(activation) = palw_model_eligibility_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_model_eligibility_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, Some-only for the same reason.

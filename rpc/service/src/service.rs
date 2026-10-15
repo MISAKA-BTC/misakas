@@ -1728,6 +1728,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     reserved_sompi: row.reserved.to_string(),
                     // Empty where the figure overflows — no sentinel reads as an amount.
                     committed_sompi: row.committed.map(|c| c.to_string()).unwrap_or_default(),
+                    // ADR-0176 amendment (ユーザー判断 2026-10-15 item 3): the decomposition, not only the total.
+                    reservation_split: row.reservation_split.map(|split| split.audit_json()).unwrap_or_default(),
                     escrow_sompi: row.escrowed_reward,
                     payout_pending_sompi: row.payout_pending,
                     quanta: row.quanta,
@@ -2266,6 +2268,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     reason: class.reason.clone(),
                     // The floor takes no top-up (F3), so nothing is recommended for it.
                     recommended_pool_sompi: if class.is_base_class { 0 } else { recommended_pool_sompi },
+                    // RFC-0017: "not-governed" below `palw_model_eligibility_v1` (every shipped network).
+                    eligibility_stage: class.eligibility.stage.clone(),
+                    eligibility_next_renewal_daa: class.eligibility.next_renewal_daa,
+                    eligibility_subsidy: class.eligibility.subsidy,
+                    eligibility_block_right: class.eligibility.block_right,
+                    eligibility_final_weight: class.eligibility.final_weight,
+                    eligibility_exams_passed: class.eligibility.exams_passed,
+                    eligibility_lineage_attempts: class.eligibility.lineage_attempts,
                 }
             })
             .collect();
@@ -3675,6 +3685,35 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 bytes: page.bytes,
             }),
         }
+    }
+
+    async fn get_palw_rfc0016_report_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwRfc0016ReportRequest,
+    ) -> RpcResult<GetPalwRfc0016ReportResponse> {
+        // Bounded before any decode: a class id is 64 bytes (128 hex digits); empty asks for no quote.
+        let class = if request.class_hex.is_empty() {
+            None
+        } else {
+            if request.class_hex.len() != 128 {
+                return Err(RpcError::General("class hex must be 128 hex digits (a 64-byte class id)".into()));
+            }
+            let mut bytes = [0u8; 64];
+            faster_hex::hex_decode(request.class_hex.as_bytes(), &mut bytes)
+                .map_err(|e| RpcError::General(format!("class hex: {e}")))?;
+            Some(kaspa_consensus_core::Hash64::from_bytes(bytes))
+        };
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwRfc0016ReportResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let answer = session.spawn_blocking(move |c| c.palw_rfc0016_report_v1(class)).await;
+        Ok(match answer {
+            Ok(Some((now_daa, armed, report_json))) => GetPalwRfc0016ReportResponse { available: true, armed, now_daa, report_json },
+            Ok(None) => GetPalwRfc0016ReportResponse::default(),
+            Err(refusal) => return Err(RpcError::General(refusal)),
+        })
     }
 
     async fn get_palw_staged_preclaim_quote_call(

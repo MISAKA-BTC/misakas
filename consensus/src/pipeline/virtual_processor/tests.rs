@@ -16969,6 +16969,9 @@ mod t12_permissionless_panel_e2e;
 // Lane BUDGET (ADR-0176): the bond budget through the real pipeline on testnet-12 (a bypassed, never armable fence) — equal ceilings for
 // a fast and a slow producer, ρ ×1/×100/×1000, no recovery before accepted + W, IBD, reorg and restart.
 mod budget_e2e;
+// RFC-0016 (dormant, bypassed): V+ with every right at zero — the heartbeat keeps the cadence, is not tightened and earns nothing; IBD
+// and restart reach the same state.
+mod rfc0016_e2e;
 // Lane V02 (post-launch, 2026-09-26): `palw_final_lock_full_collateral` crossed on a real chain — lock-heavy
 // seats bind from the height and void their anchor below it.
 mod t12_final_lock_full_collateral_fence;

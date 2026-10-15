@@ -24,6 +24,7 @@ fn test_policy(rho: u32) -> PalwBondBudgetPolicyV1 {
         liability_hold_daa: PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1,
         export_cap_permille: PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1,
         weight_value: PalwWeightValuePolicyV1::Unknown,
+        hold: None,
     }
 }
 
@@ -35,6 +36,7 @@ fn test_allocation() -> PalwModelAllocationPolicyV1 {
         seasoning_epochs: 1,
         curve: PalwAllocationCurveV1 { alpha_halves: 2 },
         max_models_per_bond: 4,
+        average: None,
     }
 }
 

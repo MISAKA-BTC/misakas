@@ -1775,11 +1775,13 @@ pub enum PalwKernelInnerFenceV1 {
     MinimumPriceV1,
     /// `Params::palw_beacon_bootstrap_v1` (N3, round 3): one contributor's seal or reveal in a BootstrapExact source round (inner 73).
     BeaconBootstrapV1,
+    /// `Params::palw_model_eligibility_v1` (RFC-0017): an eligibility exam commit (inner 74) or a drawn verifier's attestation (inner 75).
+    ModelEligibilityV1,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::PanelFreeV1,
         Self::TypedRootsV1,
         Self::PanelFreeAndTypedRootsV1,
@@ -1795,6 +1797,7 @@ impl PalwKernelInnerFenceV1 {
         Self::HorizonExtensionV1,
         Self::MinimumPriceV1,
         Self::BeaconBootstrapV1,
+        Self::ModelEligibilityV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1814,6 +1817,7 @@ impl PalwKernelInnerFenceV1 {
             Self::HorizonExtensionV1 => "palw_horizon_extension_v1",
             Self::MinimumPriceV1 => "palw_minimum_price_v1",
             Self::BeaconBootstrapV1 => "palw_beacon_bootstrap_v1",
+            Self::ModelEligibilityV1 => "palw_model_eligibility_v1",
         }
     }
 }
@@ -1897,6 +1901,7 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         K::ConsentHorizonExtensionV1 { .. } => Some(PalwKernelInnerFenceV1::HorizonExtensionV1),
         K::SignMinimumPriceContractV1 { .. } => Some(PalwKernelInnerFenceV1::MinimumPriceV1),
         K::BootstrapExactV1 { .. } => Some(PalwKernelInnerFenceV1::BeaconBootstrapV1),
+        K::CommitEligibilityExamV1 { .. } | K::AttestEligibilityExamV1 { .. } => Some(PalwKernelInnerFenceV1::ModelEligibilityV1),
         K::FundBeaconSourceFee { .. } | K::FundPanelBeaconSourceFeeV2 { .. } | K::OptInPaidBeaconSource { .. } => {
             Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)
         }
@@ -1977,6 +1982,9 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (68, "ConsentHorizonExtensionV1", Some(PalwKernelInnerFenceV1::HorizonExtensionV1)),
     (69, "SignMinimumPriceContractV1", Some(PalwKernelInnerFenceV1::MinimumPriceV1)),
     (73, "BootstrapExactV1", Some(PalwKernelInnerFenceV1::BeaconBootstrapV1)),
+    // RFC-0017 (2026-10-15): the model eligibility exam commit and drawn-verifier attestation.
+    (74, "CommitEligibilityExamV1", Some(PalwKernelInnerFenceV1::ModelEligibilityV1)),
+    (75, "AttestEligibilityExamV1", Some(PalwKernelInnerFenceV1::ModelEligibilityV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -2377,6 +2385,22 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "N3 BootstrapExact fold stage (IndependentValidityVerified / EntropyEligibilityVerified)",
         true,
     ),
+    // RFC-0017 (2026-10-15): model eligibility — the exam objects, their rows, and the claim-gate / probation / Final-weight hooks.
+    a2_row(
+        PalwA2SlotV1::KernelInner { lo: 74, hi: 75 },
+        "palw_model_eligibility_v1",
+        "RFC-0017 model eligibility exam commit (74) and drawn-verifier attestation (75)",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux131 model eligibility rows: 0x4D model stage, 0x4C lineage counters, 0x50 principal counters, \
+                   0x4E network budgets, 0x45 exams (commit, anchor, draws, attestations, outcome), 0x43 probation-claim pins",
+        },
+        "palw_model_eligibility_v1",
+        "RFC-0017 model eligibility state",
+        true,
+    ),
     a2_row(
         PalwA2SlotV1::StateEncoding {
             what: "kernel route aux113-119,122-124: paid class/job/producer authority, future locks, receipts, lifetime counter/evidence/review scopes/rounds/Final projections",
@@ -2665,6 +2689,16 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "BUDGET (ADR-0177)",
         false,
     ),
+    // ADR-0176 amendment (ユーザー判断 2026-10-15: bond式の再設計): no new kind or wire; the V2 ledger's reservation terms change for
+    // claims accepted past the fence (keyed on acceptance), so below it every reader answers as before.
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "V2 claim reservation decomposed (weight term / escrow term), licence keeps escrow and issuance slot until d + W",
+        },
+        "palw_bond_formula_v2",
+        "ADR-0176 amendment (bond formula v2)",
+        false,
+    ),
     // ADR-0032 (2026-10-10): R-1's reporter share 49% and DA-6's exposure at it. testnet-12 arms R-core+ at genesis, so below this
     // fence the share must stay int-12's 1,000 bps (and the params fingerprint int-12's); INTF moves `pre`'s unfenced constant here.
     a2_row(
@@ -2771,6 +2805,20 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         },
         "palw_cell_coverage_closure_v1",
         "RFC-0006 R6-CELL round 4 coverage closure",
+        true,
+    ),
+    // 2026-10-15 (RFC-0017): model eligibility on the existing lanes. A registration keys on its own block's DAA, a claim on its
+    // acceptance DAA, a Final on the pin written at acceptance — so below the fence every verdict, write and root is the live build's.
+    a2_row(
+        PalwA2SlotV1::Int12FoldPastFence {
+            tags: &[3, 12],
+            what: "past the fence: a ClassRegistered (3) writes its eligibility row (Registered); a claim accepted past it (12, and \
+                   the attempt lane) of a Registered or Lapsed class is refused at the claim gate (ELIG_NOT_ELIGIBLE), of a Probation \
+                   class is admitted only inside min(principal B cap, model cap, network probation budget) and pinned (aux131 0x43) \
+                   so its Final adds no weight",
+        },
+        "palw_model_eligibility_v1",
+        "RFC-0017 model eligibility gates",
         true,
     ),
 ];

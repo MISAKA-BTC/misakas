@@ -8916,8 +8916,14 @@ impl<'a> TransitionBuilder<'a> {
             // **Lane BUDGET (ADR-0176 D3): the Final weight under the budget** — the grant, never beyond the claim's reserved F (the same
             // number every re-derivation reads back). Unchanged for an unbudgeted claim.
             let contribution = self.bond_budget_final_weight_v1(&id, contribution);
+            // **RFC-0017 (REQ-ELIG-2): a probation claim's Final is job completion, not consensus credit** — its F was reserved 0, so
+            // the grant above is already 0; the hook retires its pin. Unchanged for every other claim and below the fence.
+            let contribution = super::palw_model_eligibility_fold_v1::eligibility_final_weight_v1(self, &id, contribution);
             self.state.safe_weight =
                 self.state.safe_weight.checked_add(contribution).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
+        } else {
+            // RFC-0017: a free-prompt claim's pin retires at its Final (its receipt spends read the budget's F = 0).
+            let _ = super::palw_model_eligibility_fold_v1::eligibility_final_weight_v1(self, &id, 0);
         }
         // ADR-0042 Decision 10: `Final` is where escrow becomes payable, so it is where the
         // release is recorded. Nothing is minted here — this only names an amount and a payee for

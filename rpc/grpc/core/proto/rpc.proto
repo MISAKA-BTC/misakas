@@ -1824,6 +1824,8 @@ message RpcPalwClaimRow {
   bool vestingEtaEstimated = 36;
   // Testnet-12 lifecycle audit: weight + escrow (until licence) + receipt rights, decimal sompi.
   string committedSompi = 37;
+  // Version 5 (ADR-0176 amendment, user ruling 2026-10-15): the reservation's decomposition, JSON; empty below palw_bond_formula_v2.
+  string reservationSplit = 38;
 }
 
 // Testnet-12 lifecycle audit T12-058: one live Valid lock on a bond.
@@ -2227,6 +2229,17 @@ message RpcPalwModelLifecycle {
   // NON-BINDING recommended Activation Pool (2026-09-25): 16 · A_MAX / α of the terms in force; 0
   // where the pool is not armed and for the floor.
   uint64 recommendedPoolSompi = 38;
+  // RFC-0017 (dormant `palw_model_eligibility_v1`): the class's eligibility stage ("not-governed" below the fence, a genesis
+  // class; "registered", "probation", "eligible", "lapsed"), the DAA its eligibility lapses at without a passed renewal (0 =
+  // none), its three rights separately (subsidy, reward-bearing block right, Final weight), exams passed, and the exam
+  // attempts its lineage (artifact root) has consumed. Field numbers are local to this message.
+  string eligibilityStage = 39;
+  uint64 eligibilityNextRenewalDaa = 40;
+  bool eligibilitySubsidy = 41;
+  bool eligibilityBlockRight = 42;
+  bool eligibilityFinalWeight = 43;
+  uint32 eligibilityExamsPassed = 44;
+  uint32 eligibilityLineageAttempts = 45;
 }
 
 message RpcPalwSeatReadiness {
@@ -3382,6 +3395,19 @@ message GetPalwForkChoiceOpeningResponseMessage {
   bool dnsStageActive = 7;
   string dnsConfirmedAnchor = 8;
   uint64 dnsConfirmedAnchorDaa = 9;
+  RPCError error = 1000;
+}
+
+// RFC-0016 (op 255): the per-model report as JSON; targets apart from outcomes, node-local observations labelled.
+message GetPalwRfc0016ReportRequestMessage {
+  string classHex = 1;
+}
+
+message GetPalwRfc0016ReportResponseMessage {
+  bool available = 1;
+  bool armed = 2;
+  uint64 nowDaa = 3;
+  string reportJson = 4;
   RPCError error = 1000;
 }
 

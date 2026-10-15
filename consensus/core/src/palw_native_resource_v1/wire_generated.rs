@@ -130,6 +130,18 @@ impl NativeWireScanV1 for crate::palw_bond_budget_v1::PalwBudgetOriginV1 {
                 let mut sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
+            13 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            14 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            15 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -1758,6 +1770,57 @@ wire_struct!(crate::palw_model_benefits_v1::PalwModelBenefitPendingV1; Vec<crate
 wire_struct!(crate::palw_model_benefits_v1::PalwModelBenefitTierV1; u64, u32, u64, u64, Vec<u8>);
 wire_struct!(crate::palw_model_benefits_v1::PalwModelBenefitsV1; Vec<crate::palw_model_benefits_v1::PalwModelBenefitTierV1>, u64, u64, u64, Option<crate::palw_state_v2::PalwBondKeyV2>, Option<crate::palw_model_benefits_v1::PalwModelBenefitPendingV1>);
 wire_struct!(crate::palw_model_conformance_v2::ModelConformanceRowV2; crate::Hash64, [u8;64], [u8;64], [u8;64], crate::Hash64, [u8;64], [u8;64], u64, u64, u64, u64);
+wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityAttestationRowV1; crate::palw_model_eligibility_v1::EligDigestV1, misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1, crate::palw_model_eligibility_v1::EligDigestV1, u64);
+impl NativeWireScanV1 for crate::palw_model_eligibility_v1::PalwEligibilityExamOutcomeV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
+wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1; misaka_palw_kernel::model_eligibility_v1::EligibilityExamCommitV1, crate::palw_model_eligibility_v1::EligDigestV1, u64, u64, Option<(u64, crate::palw_model_eligibility_v1::EligDigestV1)>, Vec<crate::palw_model_eligibility_v1::EligDigestV1>, Vec<u32>, u64, u64, Vec<crate::palw_model_eligibility_v1::PalwEligibilityAttestationRowV1>, Option<(crate::palw_model_eligibility_v1::PalwEligibilityExamOutcomeV1, u64)>);
+wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityLineageRowV1; u32, u64, u64, u64, u64, u128);
+wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityModelRowV1; crate::palw_model_eligibility_v1::EligDigestV1, crate::palw_model_eligibility_v1::EligDigestV1, crate::palw_model_eligibility_v1::EligDigestV1, crate::palw_model_eligibility_v1::PalwEligibilityStageV1, u64, u64, u64, u64, Option<crate::palw_model_eligibility_v1::EligDigestV1>, u32);
+wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityNetworkRowV1; u64, u64, u64, u32, u64, u128);
+wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityPrincipalRowV1; u64, u32, u32, u64, u128);
+wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1; crate::palw_model_eligibility_v1::EligDigestV1, u64, u64, bool);
+impl NativeWireScanV1 for crate::palw_model_eligibility_v1::PalwEligibilityStageV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            3 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
 wire_struct!(crate::palw_model_lines_v1::PalwArtifactOwnerV1; crate::Hash64, crate::Hash64, u32);
 wire_struct!(crate::palw_model_lines_v1::PalwModelEvaluationV1; crate::Hash64, u32, crate::Hash64, u64, bool);
 impl NativeWireScanV1 for crate::palw_model_lines_v1::PalwModelLineStatusV1 {
@@ -3895,6 +3958,43 @@ impl NativeWireScanV1 for misaka_palw_kernel::mode::VerificationModeV1 {
                 Ok(sum)
             }
             1 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
+wire_struct!(misaka_palw_kernel::model_eligibility_v1::EligibilityExamCommitV1; u16, [u8;64], [u8;64], [u8;64], misaka_palw_kernel::model_eligibility_v1::EligibilityExamPurposeV1, [u8;64], u32, u32);
+impl NativeWireScanV1 for misaka_palw_kernel::model_eligibility_v1::EligibilityExamPurposeV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
+impl NativeWireScanV1 for misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            2 => {
                 let mut sum = NativeWireShapeV1::default();
                 Ok(sum)
             }

@@ -1711,6 +1711,11 @@ pub(super) fn apply_object(
             // state, for a 10,000-sompi relay fee. Past it the object is inert: the claim stays
             // `Provisional`, a later eligible `PanelBound` may still bind it, and otherwise
             // `window_bind` voids it exactly as if nobody had published a panel at all.
+            // **RFC-0016 (dormant)**: a claim waiting in a pending Final queue binds no panel — the object is inert, as above; its
+            // verification starts when it leaves the queue (its anchor slot then moves with its bind base).
+            if builder.state.rfc0016_claim_queued_v1(claim_id) {
+                return Ok(());
+            }
             match builder.require_panel_lock_eligible(*claim_id, &claim, seats, ctx.daa_score) {
                 Ok(()) => {}
                 Err(_) if builder.extras.audit_2026_09_23_active => return Ok(()),
@@ -3412,7 +3417,20 @@ pub(super) fn apply_object(
             // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
             builder.state.require_native_monetary_material_scope_v1(builder.params, *claim_id, &claim)?;
             let consumer_plan = builder.plan_paid_consumer_v1(*claim_id, &claim)?;
+            // RFC-0017 (REQ-ELIG-2): a `Probation` model's commitment is admitted whole inside its stage cap and the network's
+            // probation budget (`quanta` receipt blocks), planned with F = 0 and pinned once written; `None` below the fence.
+            let probation_ticket = super::palw_model_eligibility_fold_v1::eligibility_probation_preview_v1(
+                builder,
+                ctx,
+                &claim.class_id,
+                &claim.bond,
+                crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1.saturating_mul(quanta as u64),
+            )?;
             let budget_plan = builder.plan_free_prompt_budget_v1(ctx, &claim, quanta)?;
+            let budget_plan = match (&probation_ticket, budget_plan) {
+                (Some(ticket), Some(plan)) if ticket.weightless() => Some(plan.without_final_weight_v1()),
+                (_, plan) => plan,
+            };
             let panel_authorization = palw_panel_lifetime_fold_v2::select_authorization(builder, &claim)?;
             builder.reserve_for_claim(&claim)?;
             if let Some(contract) = consumer_plan {
@@ -3426,6 +3444,9 @@ pub(super) fn apply_object(
             }
             if let Some(plan) = budget_plan {
                 builder.commit_bond_budget_v1(ctx, *claim_id, plan)?;
+            }
+            if let Some(ticket) = probation_ticket {
+                super::palw_model_eligibility_fold_v1::eligibility_probation_commit_v1(builder, ctx, claim_id, ticket)?;
             }
             // **ADR-0145 §6: what this claim bought, so the next one is not sold it twice.**
             //

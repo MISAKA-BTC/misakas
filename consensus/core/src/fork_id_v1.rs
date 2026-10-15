@@ -916,6 +916,8 @@ mod tests {
             "palw_model_bond_allocation_v1" => {
                 params.palw_model_bond_allocation_v1 = Some(crate::palw_bond_budget_v1::PalwModelBondAllocationFenceV1::at(at));
             }
+            // ADR-0176 amendment (ユーザー判断 2026-10-15): a height with the unapproved probe policy (refused by `validate_palw_v2`).
+            "palw_bond_formula_v2" => params.palw_bond_formula_v2 = Some(crate::palw_bond_formula_v2::PalwBondFormulaFenceV2::at(at)),
             // ADR-0032's amended reporter share (lane INTF): a bare height, refused when armed by `validate_palw_v2` (which the probe
             // does not run).
             "palw_reporter_share_v2" => params.palw_reporter_share_v2 = Some(at),
@@ -930,6 +932,11 @@ mod tests {
             }
             // RFC-0006 R6-CELL round 4's coverage closure: a bare height, refused when armed by `validate_palw_v2`.
             "palw_cell_coverage_closure_v1" => params.palw_cell_coverage_closure_v1 = Some(at),
+            // RFC-0016's two dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_model_block_rights_v1" => params.palw_model_block_rights_v1 = Some(at),
+            "palw_elastic_final_capacity_v1" => params.palw_elastic_final_capacity_v1 = Some(at),
+            // RFC-0017's model eligibility: a bare height, refused when armed by `validate_palw_v2`.
+            "palw_model_eligibility_v1" => params.palw_model_eligibility_v1 = Some(at),
             // RFC-0012's coordinated retirement: the height, with a complete settlement policy beside it (its values only ride
             // along; the probe asks the hashers and the schedule, never `validate_palw_v2`).
             "palw_dns_retirement_v1" => {

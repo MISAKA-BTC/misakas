@@ -6,7 +6,7 @@
  * ADR-0090: a position is a whole number, 500,000 a line; below ADR-0162's fence a market exists only
  *           once it is SEEDED with the least seed, locked for good.
  * ADR-0162: past `palw_model_virtual_v1` every model's market is OPEN from the model's addition on a
- *           virtual reserve V = 10,000,000 MSK (it prices, it is never paid), trades from the class's
+ *           virtual reserve V = 10,000,000 BILI (it prices, it is never paid), trades from the class's
  *           approval, and takes an optional seed before its first trade. The curve is
  *           X x units = K with X = V + reserve, K taken from the row at every move.
  *
@@ -408,14 +408,14 @@ function signedFacts(tx) {
 // ============================================================================================
 // A position is the unit (no fraction); a line holds 500,000 of them. The curve is X x units = K
 // with X = V + reserve and K taken from the row at every move, so the product never falls. V is the
-// row's own virtual reserve: 10,000,000 MSK for a market opened past ADR-0162's fence (open from the
+// row's own virtual reserve: 10,000,000 BILI for a market opened past ADR-0162's fence (open from the
 // model's addition, no seed needed), zero for one opened by a seed before it (ADR-0090). V prices
 // and is never paid: a sell is paid only out of the real reserve above the locked seed.
 const VIRTUAL_V2_SOMPI = 10000000n * SOMPI_PER_MSK; // PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2
 const CURVE_DEFAULTS = {
   unitsPerPosition: 1n,                       // PALW_MODEL_POSITION_UNITS_V1 (ADR-0090 D1: one, no fraction)
   supplyUnits: 500000n,                       // PALW_MODEL_SUPPLY_UNITS_V1 = 500,000 whole positions a line
-  seedMinSompi: 100000n * SOMPI_PER_MSK,      // PALW_MODEL_SEED_MIN_SOMPI_V1 (100,000 MSK)
+  seedMinSompi: 100000n * SOMPI_PER_MSK,      // PALW_MODEL_SEED_MIN_SOMPI_V1 (100,000 BILI)
   burnPermille: 50n,                          // PALW_MODEL_BURN_PERMILLE_V1
   buybackPermille: 50n,                       // PALW_MODEL_BUYBACK_PERMILLE_V1 (ADR-0091: 5 % of a block's reward)
   legPermille: 10n,                           // PALW_MODEL_REGISTRANT_PERMILLE_V1 (the owner's leg since ADR-0088)
@@ -449,7 +449,7 @@ const curve = {
     return { found: true, opened: seedSompi > 0n, openedDaa: bi(daa || 0), mskReserve: seedSompi, positionUnits: c.supplyUnits, soldUnits: 0n, burnedSompi: 0n, ownerPaid: 0n, contributorPaid: 0n, closedToBuys: false, seedSompi, seededBy: seededBy || null, supplyUnits: c.supplyUnits, seedMinSompi: c.seedMinSompi, buybackSompi: 0n, retiredUnits: 0n, virtualSompi: 0n, classStatus: '' };
   },
   // ADR-0162 D1: a model's market as it stands from the model's addition — X = V, the whole supply
-  // in the curve, no MSK in it, open; the first price is V / 500,000 = 20 MSK
+  // in the curve, no BILI in it, open; the first price is V / 500,000 = 20 BILI
   opening(c, daa) {
     c = c || CURVE_DEFAULTS;
     return Object.assign(curve.seed(0n, c, null, daa), { opened: true, virtualSompi: VIRTUAL_V2_SOMPI, seedMinSompi: 0n });
@@ -545,7 +545,7 @@ const curve = {
     const after = Object.assign({}, m, { mskReserve: reserve - gross, positionUnits: unitsAfter, burnedSompi: bi(m.burnedSompi) + fees.burn });
     return { fees, after, priceAfter: curve.price(after, c) };
   },
-  // the least gross MSK (sompi) whose buy releases at least `units` whole positions; null when the curve cannot
+  // the least gross BILI (sompi) whose buy releases at least `units` whole positions; null when the curve cannot
   buyCostForUnits(m, units, c) {
     c = c || curve.consts(m); units = bi(units);
     const have = bi(m.positionUnits), x = curve.x(m);
@@ -793,7 +793,7 @@ const wallet = {
   choices() { return walletDiscovery.list(); },
   // a wallet to talk to: the chosen one, or one to choose
   any() { return !!this.provider || this.choices().length > 0; },
-  // **Can this wallet pay from more than the EVM account?** MISAKA Wallet keeps MSK on the post-quantum
+  // **Can this wallet pay from more than the EVM account?** MISAKA Wallet keeps BILI on the post-quantum
   // (UTXO) lane and, inside the same confirmation, moves what a transaction is short of to the EVM
   // account before sending it (its eth_sendTransaction plans the top-up; the approval window says how
   // much). So for it the EVM balance is NOT what it can spend — refusing on that balance is what kept
@@ -1012,7 +1012,7 @@ function ordersTableHtml(list, changing) {
       const acts = replaceable
         ? h`<button class="btn btn-sm" data-change="${t.hash}" ${why || t.kind === 'seed' ? 'disabled' : ''} title="${why || (t.kind === 'seed' ? 'A seed is cancelled, not changed' : 'Send a new amount in its place (same nonce, higher fee)')}">Change</button> <button class="btn btn-sm btn-ghost" data-cancel="${t.hash}" ${why ? 'disabled' : ''} title="${why || 'Replace it with a zero-value transfer to yourself (same nonce, higher fee): nothing is bought or sold'}">Cancel</button>`
         : raw('<span class="dim tiny">' + (t.status === 'queued' ? 'carried — can no longer be replaced' : t.replacedBy ? 'replacement sent' : '') + '</span>');
-      const row = h`<tr><td class="l">${fmtTime(t.sentAt)} <span class="dim tiny">${fmtDur(Date.now() - t.sentAt)} ago</span></td><td class="l">${rec ? db.label(rec) : t.label || shortId(t.lineId)}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}">${orderWhat(t)}${t.replaces ? raw(' <span class="dim tiny">(change)</span>') : ''}</td><td class="num">${t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' MSK'}</td><td class="l">${txStatusCell(t)}</td><td class="num">${t.nonce != null ? String(t.nonce) : '—'}</td><td class="l">${idCell(t.hash, 10)}</td><td class="acts">${acts}</td></tr>`;
+      const row = h`<tr><td class="l">${fmtTime(t.sentAt)} <span class="dim tiny">${fmtDur(Date.now() - t.sentAt)} ago</span></td><td class="l">${rec ? db.label(rec) : t.label || shortId(t.lineId)}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}">${orderWhat(t)}${t.replaces ? raw(' <span class="dim tiny">(change)</span>') : ''}</td><td class="num">${t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' BILI'}</td><td class="l">${txStatusCell(t)}</td><td class="num">${t.nonce != null ? String(t.nonce) : '—'}</td><td class="l">${idCell(t.hash, 10)}</td><td class="acts">${acts}</td></tr>`;
       if (changing !== t.hash) return row;
       return h`${row}<tr class="edit"><td colspan="8"><div class="chg">
         <label for="chgAmt">${t.kind === 'sell' ? 'Leave with' : 'Join with'}</label>
@@ -1059,7 +1059,7 @@ async function replaceOrder(order, tx, extra) {
 function cancelOrder(order) {
   return replaceOrder(order, { to: order.from, value: '0x0', data: '0x', gas: toHex(21000n) }, { kind: 'cancel', amount: '0' });
 }
-// A new count for a join (the least MSK that releases it, no floor), or a new count for a leave.
+// A new count for a join (the least BILI that releases it, no floor), or a new count for a leave.
 function changeOrder(order, units, market) {
   if (order.kind === 'buy') {
     const cost = curve.buyCostForUnits(market, units);
@@ -1108,11 +1108,11 @@ function bindOrderActions(box, ctx) {
       else if (units > 0n && t.kind === 'buy') {
         const c = curve.buyCostForUnits(m, units);
         if (!c) txt = 'the store cannot release that many';
-        else { txt = 'costs ' + fmtMsk(c.gross) + ' MSK (the order pays ' + fmtMsk(t.amount) + ' MSK)'; ok = true; }
+        else { txt = 'costs ' + fmtMsk(c.gross) + ' BILI (the order pays ' + fmtMsk(t.amount) + ' BILI)'; ok = true; }
       } else if (units > 0n) {
         const sq = curve.sellQuote(m, units);
         if (!sq) txt = 'the curve pays nothing for that many';
-        else { txt = 'pays back ' + fmtMsk(sq.fees.net) + ' MSK'; ok = true; }
+        else { txt = 'pays back ' + fmtMsk(sq.fees.net) + ' BILI'; ok = true; }
       }
       q.textContent = txt; send.disabled = !ok;
     };
@@ -1681,8 +1681,8 @@ async function followTx(hash, latestNonce) {
   if (!hit) return;
   txlog.claimed.add(hit.blockNumber + ':' + hit.logIndex);
   if (hit.kind === 'Refused') { txlog.update(t.hash, { status: 'refused', settledBlock: hit.blockNumber, reason: hit.reason }); toast('Refused by the fold: ' + (REFUSAL[hit.reason] || 'code ' + hit.reason) + '. ' + (t.kind === 'sell' ? 'Your memberships never left.' : 'The escrow was refunded.'), 'warn', t.label); }
-  else if (hit.kind === 'Seeded') { txlog.update(t.hash, { status: 'settled', settledBlock: hit.blockNumber, units: '0', msk: hit.mskIn.toString(), priceAfter: hit.priceAfter.toString() }); toast('Seeded: ' + fmtMsk(hit.mskIn) + ' MSK locked into the pool for good; a membership is ' + fmtPrice(hit.priceAfter) + ' MSK after it (settled in block ' + hit.blockNumber + ').', 'ok', t.label); refreshMarket(t.lineId).catch(() => {}); }
-  else { txlog.update(t.hash, { status: 'settled', settledBlock: hit.blockNumber, units: (hit.units || 0n).toString(), msk: (hit.kind === 'Bought' ? hit.mskIn : hit.mskOut).toString(), priceAfter: hit.priceAfter.toString() }); toast((hit.kind === 'Bought' ? 'Joined: ' + fmtPos(hit.units) + ' memberships for ' + fmtMsk(hit.mskIn) + ' MSK' : 'Left: ' + fmtPos(hit.units) + ' memberships for ' + fmtMsk(hit.mskOut) + ' MSK net') + ' (settled in block ' + hit.blockNumber + ').', 'ok', t.label); }
+  else if (hit.kind === 'Seeded') { txlog.update(t.hash, { status: 'settled', settledBlock: hit.blockNumber, units: '0', msk: hit.mskIn.toString(), priceAfter: hit.priceAfter.toString() }); toast('Seeded: ' + fmtMsk(hit.mskIn) + ' BILI locked into the pool for good; a membership is ' + fmtPrice(hit.priceAfter) + ' BILI after it (settled in block ' + hit.blockNumber + ').', 'ok', t.label); refreshMarket(t.lineId).catch(() => {}); }
+  else { txlog.update(t.hash, { status: 'settled', settledBlock: hit.blockNumber, units: (hit.units || 0n).toString(), msk: (hit.kind === 'Bought' ? hit.mskIn : hit.mskOut).toString(), priceAfter: hit.priceAfter.toString() }); toast((hit.kind === 'Bought' ? 'Joined: ' + fmtPos(hit.units) + ' memberships for ' + fmtMsk(hit.mskIn) + ' BILI' : 'Left: ' + fmtPos(hit.units) + ' memberships for ' + fmtMsk(hit.mskOut) + ' BILI net') + ' (settled in block ' + hit.blockNumber + ').', 'ok', t.label); }
   db.emit();
 }
 
@@ -2030,7 +2030,7 @@ class PriceChart {
       ctx.beginPath(); ctx.moveTo(x0, hy + 0.5); ctx.lineTo(x1, hy + 0.5); ctx.stroke(); ctx.setLineDash([]);
       ctx.fillStyle = '#e9f4f2'; ctx.beginPath(); ctx.arc(hx, hy, 4, 0, Math.PI * 2); ctx.fill();
       this.tip.hidden = false; this.tip.style.left = Math.min(Math.max(hx, 70), W - 70) + 'px'; this.tip.style.top = Math.max(hy, 30) + 'px';
-      this.tip.textContent = fmtDateTime(pts[best].t) + ':' + fmtTime(pts[best].t).slice(5) + '  ' + fmtPrice(pts[best].p) + ' MSK';
+      this.tip.textContent = fmtDateTime(pts[best].t) + ':' + fmtTime(pts[best].t).slice(5) + '  ' + fmtPrice(pts[best].p) + ' BILI';
     } else this.tip.hidden = true;
   }
 }
@@ -2085,8 +2085,8 @@ function seedReasonNotToSend(rec, sompi, balance) {
   if (cs && cs.head === 'Frozen') return 'The class is frozen: its line takes no seed.';
   if (rec.row && /retired/i.test(rec.row.status || '')) return 'The line is retired: it takes no seed.';
   if (rec.facadeSource !== 'registry') return 'Facade address not confirmed by the registry window yet.';
-  if (sompi == null || sompi <= 0n) return 'Enter the seed in MSK (whole sompi, at most 8 decimals).';
-  if (balance != null && sompiToWei(sompi) > balance && !wallet.topsUp()) return 'Insufficient MSK balance in the EVM account.';
+  if (sompi == null || sompi <= 0n) return 'Enter the seed in BILI (whole sompi, at most 8 decimals).';
+  if (balance != null && sompiToWei(sompi) > balance && !wallet.topsUp()) return 'Insufficient BILI balance in the EVM account.';
   return null;
 }
 // What a MISAKA Wallet will do before sending when the EVM account is short (see `wallet.topsUp`).
@@ -2094,13 +2094,13 @@ function seedReasonNotToSend(rec, sompi, balance) {
 // cannot cover the payment either.
 function topUpNote(needWei, balance) {
   if (!wallet.topsUp() || balance == null || needWei == null || needWei <= balance) return '';
-  return 'MISAKA Wallet will first move ' + fmtWeiMsk(needWei - balance) + ' MSK (and a little for gas) from your post-quantum balance to this EVM account, '
+  return 'MISAKA Wallet will first move ' + fmtWeiMsk(needWei - balance) + ' BILI (and a little for gas) from your post-quantum balance to this EVM account, '
     + 'then send. The move is claimed on chain in about two blocks (roughly 30–45 minutes on testnet-11); keep the wallet window open or come back to it.';
 }
-// The "MSK available" line, and what it means for the connected wallet.
+// The "BILI available" line, and what it means for the connected wallet.
 function availText(balance) {
   if (balance == null) return wallet.account ? '—' : 'connect a wallet';
-  return fmtWeiMsk(balance) + ' MSK' + (wallet.topsUp() ? ' on the EVM lane' : '');
+  return fmtWeiMsk(balance) + ' BILI' + (wallet.topsUp() ? ' on the EVM lane' : '');
 }
 function availHint() {
   return wallet.topsUp()
@@ -2120,7 +2120,7 @@ function renderSeedPanel(box, st, getRec, onSent) {
   box.innerHTML = h`
     <div class="panel-b seedp">
       <div class="seed-h"><span class="tag">Optional</span> Seed the pool before its first trade</div>
-      <p class="small"><b>${label}</b>'s store is already open: it opened when the model was added, on a virtual reserve of ${fmtMsk(m && m.virtualSompi ? m.virtualSompi : VIRTUAL_V2_SOMPI, 0)} MSK that prices every membership and is never paid to anyone. Nobody has to deposit anything. A seed is optional:</p>
+      <p class="small"><b>${label}</b>'s store is already open: it opened when the model was added, on a virtual reserve of ${fmtMsk(m && m.virtualSompi ? m.virtualSompi : VIRTUAL_V2_SOMPI, 0)} BILI that prices every membership and is never paid to anyone. Nobody has to deposit anything. A seed is optional:</p>
       <ul class="small seed-facts">
         <li>it <b>deepens the pool</b> and <b>raises the price floor</b> by seed / ${fmtPos(pv.supply)} — the price can never fall under (virtual reserve + seed) / ${fmtPos(pv.supply)};</li>
         <li>it is <b>locked for good</b>: no object pays it out, and whoever pays it gets <b>no membership</b> and nothing back, ever;</li>
@@ -2128,17 +2128,17 @@ function renderSeedPanel(box, st, getRec, onSent) {
         <li>it is <b>at your risk</b>: a model the chain never approves never trades, and its seed stays locked.</li>
       </ul>
       <div class="field">
-        <label for="seedAmt">Seed (MSK, locked for good)</label>
-        <div class="inp"><input id="seedAmt" inputmode="decimal" autocomplete="off" value="${st.msk}" aria-describedby="seedQuote"><span class="unit">MSK</span></div>
+        <label for="seedAmt">Seed (BILI, locked for good)</label>
+        <div class="inp"><input id="seedAmt" inputmode="decimal" autocomplete="off" value="${st.msk}" aria-describedby="seedQuote"><span class="unit">BILI</span></div>
       </div>
       <div class="quote" id="seedQuote">
-        <div class="r"><span>Membership price</span><span class="v">${pv.priceBefore != null ? fmtPrice(pv.priceBefore) : '—'} → ${pv.priceAfter != null ? fmtPrice(pv.priceAfter) : '—'} MSK</span></div>
-        <div class="r"><span>Price floor</span><span class="v">${pv.floorBefore != null ? fmtPrice(pv.floorBefore) : '—'} → ${pv.floorAfter != null ? fmtPrice(pv.floorAfter) : '—'} MSK</span></div>
-        <div class="r"><span>Real reserve after</span><span class="v">${pv.after ? fmtMsk(pv.after.mskReserve, 2) : '—'} MSK</span></div>
+        <div class="r"><span>Membership price</span><span class="v">${pv.priceBefore != null ? fmtPrice(pv.priceBefore) : '—'} → ${pv.priceAfter != null ? fmtPrice(pv.priceAfter) : '—'} BILI</span></div>
+        <div class="r"><span>Price floor</span><span class="v">${pv.floorBefore != null ? fmtPrice(pv.floorBefore) : '—'} → ${pv.floorAfter != null ? fmtPrice(pv.floorAfter) : '—'} BILI</span></div>
+        <div class="r"><span>Real reserve after</span><span class="v">${pv.after ? fmtMsk(pv.after.mskReserve, 2) : '—'} BILI</span></div>
         <div class="r"><span>Memberships you receive</span><span class="v">0</span></div>
         <div class="r"><span>Fee on the seed</span><span class="v">none</span></div>
         <div class="r"><span>Approval</span><span class="v">${ap.approved ? 'approved: the store trades' : '承認待ち · trading starts at approval'}</span></div>
-        <div class="r tot"><span>MSK available</span><span class="v" id="availV">${availText(st.balance)}</span></div>
+        <div class="r tot"><span>BILI available</span><span class="v" id="availV">${availText(st.balance)}</span></div>
       </div>
       ${availHint()}
       <div class="field"><button id="seedBtn" class="btn btn-lg" ${reason || st.busy ? 'disabled' : ''}>${st.busy ? 'Confirm in wallet…' : 'Seed ' + (rec ? rec.symbol : '')}</button><div class="reason" id="seedWhy">${reason || ''}</div>${!reason && sompi != null ? h`<div class="note tiny" id="seedTopUp">${topUpNote(sompiToWei(sompi), st.balance)}</div>` : raw('')}</div>
@@ -2284,7 +2284,7 @@ async function pageStore(arg) {
     const tiers = info && info.benefits && !info.benefits.lapsed && info.benefits.tiers ? info.benefits.tiers.length : null;
     const ap = approvalOf(rec);
     const stats = [
-      ['Membership price (MSK)', price, m && !m.seeded ? 'No market on this network yet: no curve, no price' : 'What one membership costs at this moment: (virtual reserve + real reserve) / memberships in the curve, from the market row'],
+      ['Membership price (BILI)', price, m && !m.seeded ? 'No market on this network yet: no curve, no price' : 'What one membership costs at this moment: (virtual reserve + real reserve) / memberships in the curve, from the market row'],
       ['Members hold', m && !m.legacy ? fmtPos(m.positionsOut != null ? m.positionsOut : held) + ' of ' + fmtPos(m.supplyUnits) : '—', m && m.legacy ? 'The node serves the pre-ADR-0090 row (units of a millionth of a position); not shown' : m ? 'Memberships held outside the curve now (the positions out). Ever taken: ' + fmtPos(m.soldUnits) : null],
       ['Membership tiers', tiers != null ? String(tiers) : raw('<span class="dim" title="This node serves no membership declaration for this line">—</span>'), 'Tiers the line\'s owner has declared, and what each one gets you (ADR-0095); the card is beside the desk'],
       ['Used (paid inferences)', use != null ? fmtInt(use) : '—', 'Claims the fold accepted against this line\'s current version: the one measurement the chain makes of a model, and it says what was used, never how good it was'],
@@ -2292,9 +2292,9 @@ async function pageStore(arg) {
       ['Bought by mining', m && m.buybackSompi != null ? fmtMsk(m.buybackSompi, 2) + (bi(m.retiredUnits || 0n) > 0n ? ' · ' + fmtPos(m.retiredUnits) + ' retired' : '') : m ? raw('<span class="dim" title="This node is from before ADR-0091 and serves no buyback">—</span>') : '—', 'ADR-0091: 5 % of every block\'s mining reward on this line buys memberships back and retires them. Nothing is paid to holders.'],
       ['Price 24 h', changeCell(rec || {}), 'What the curve\'s price did, sampled by this browser'],
       ['Trading', m && m.seeded ? (m.trading ? raw('<span class="tag ok">open</span>') : ap.approved ? raw('<span class="tag warn">closed to new members</span>') : raw('<span class="tag warn">承認待ち · trading starts at approval</span>')) : '—', 'ADR-0162: the store is open from the model\'s addition; joins start when the chain approves the class (status and lifecycle Active). Leaving is always open to members.'],
-      ['Virtual reserve (MSK)', m && m.seeded ? fmtMsk(m.virtualSompi || 0n, 0) : '—', 'ADR-0162: the reserve the store opened on — it prices every membership and is never paid to anyone (0 for a store a seed opened before ADR-0162)'],
-      ['Real reserve (MSK)', m ? fmtMsk(m.mskReserve, 2) : '—', 'MSK the curve actually holds to buy memberships back (never a spendable output); a member leaving is paid out of it, above the locked seed, and never out of the virtual reserve'],
-      ['Price floor (MSK)', m && m.floor != null ? fmtPrice(m.floor) : '—', 'The lowest price the curve can ever quote: every membership back in the curve. At the opening it is (virtual reserve + seed) / 500,000, and it only rises'],
+      ['Virtual reserve (BILI)', m && m.seeded ? fmtMsk(m.virtualSompi || 0n, 0) : '—', 'ADR-0162: the reserve the store opened on — it prices every membership and is never paid to anyone (0 for a store a seed opened before ADR-0162)'],
+      ['Real reserve (BILI)', m ? fmtMsk(m.mskReserve, 2) : '—', 'BILI the curve actually holds to buy memberships back (never a spendable output); a member leaving is paid out of it, above the locked seed, and never out of the virtual reserve'],
+      ['Price floor (BILI)', m && m.floor != null ? fmtPrice(m.floor) : '—', 'The lowest price the curve can ever quote: every membership back in the curve. At the opening it is (virtual reserve + seed) / 500,000, and it only rises'],
       ['Seed (locked)', m ? (m.seedSompi != null ? (m.seedSompi > 0n ? fmtMsk(m.seedSompi, 2) : raw('<span class="dim">none (optional)</span>')) : raw('<span class="dim" title="The AMM window does not carry the seed; the wRPC does">—</span>')) : '—', 'An optional seed, paid before the first trade, deepens the pool and raises the floor; it is locked for good and buys no membership'],
       ['Seeded by', m && m.seeded && m.seededBy ? raw(idCell(m.seededBy, 8).s) : '—', 'The first payer of the seed, kept for the record; a seeder holds no membership'],
       ['Owner', owner ? owner.text : '—', owner ? owner.title : null],
@@ -2317,7 +2317,7 @@ async function pageStore(arg) {
     if (menu) { menu.remove(); $('#mktSelect').setAttribute('aria-expanded', 'false'); return; }
     const lines = sortedLines();
     menu = document.createElement('div'); menu.className = 'mkt-menu'; menu.id = 'mktMenu'; menu.setAttribute('role', 'listbox');
-    menu.innerHTML = lines.length ? lines.map((r) => h`<div class="item ${r.lineId === lineId ? 'on' : ''}" role="option" data-id="${r.lineId}"><span class="n">${db.label(r)}</span><span class="p">${r.market && r.market.price != null ? fmtPrice(r.market.price) : r.market && !r.market.seeded ? raw('<span class="tag warn">no market here</span>') : '—'}</span><span class="s">${r.symbol} · ${shortId(r.lineId)}</span><span class="c">class ${shortId(r.classId || '', 8)}${r.market && r.market.seeded ? ' · real reserve ' + fmtMsk(r.market.mskReserve, 2) + ' MSK' + (r.market.trading ? '' : ' · 承認待ち') : ''}</span></div>`).join('') : '<div class="item"><span class="n dim">No lines known. Configure CLASS_IDS in config.js or reach a node.</span></div>';
+    menu.innerHTML = lines.length ? lines.map((r) => h`<div class="item ${r.lineId === lineId ? 'on' : ''}" role="option" data-id="${r.lineId}"><span class="n">${db.label(r)}</span><span class="p">${r.market && r.market.price != null ? fmtPrice(r.market.price) : r.market && !r.market.seeded ? raw('<span class="tag warn">no market here</span>') : '—'}</span><span class="s">${r.symbol} · ${shortId(r.lineId)}</span><span class="c">class ${shortId(r.classId || '', 8)}${r.market && r.market.seeded ? ' · real reserve ' + fmtMsk(r.market.mskReserve, 2) + ' BILI' + (r.market.trading ? '' : ' · 承認待ち') : ''}</span></div>`).join('') : '<div class="item"><span class="n dim">No lines known. Configure CLASS_IDS in config.js or reach a node.</span></div>';
     $('#mktBar').appendChild(menu);
     $('#mktSelect').setAttribute('aria-expanded', 'true');
     menu.addEventListener('click', (e) => { e.stopPropagation(); const it = e.target.closest('[data-id]'); if (it) { navigate('#/store/' + it.dataset.id); close(); } });
@@ -2340,7 +2340,7 @@ async function pageStore(arg) {
   function renderChartTools() {
     if (!alive()) return;
     const n = rec ? history.load(rec.lineId).length : 0;
-    $('#chartTools').innerHTML = h`<span class="rng">${RANGES.map(([l, ms]) => h`<button data-ms="${ms}" class="${ms === view.range ? 'on' : ''}">${l}</button>`)}</span><span class="legend">${rec ? db.label(rec) : ''} · MSK for one membership · ${n} sample${n === 1 ? '' : 's'} in this browser</span>`.s;
+    $('#chartTools').innerHTML = h`<span class="rng">${RANGES.map(([l, ms]) => h`<button data-ms="${ms}" class="${ms === view.range ? 'on' : ''}">${l}</button>`)}</span><span class="legend">${rec ? db.label(rec) : ''} · BILI for one membership · ${n} sample${n === 1 ? '' : 's'} in this browser</span>`.s;
     $$('#chartTools button').forEach((b) => b.addEventListener('click', () => { view.range = Number(b.dataset.ms); store.set('range', view.range); chart.setRange(view.range); renderChartTools(); }));
   }
   function renderChart() {
@@ -2400,16 +2400,16 @@ async function pageStore(arg) {
     const noCurve = m && !seeded ? raw('<tr><td colspan="4" class="empty">No market for this model on this network yet: no curve, so no price.</td></tr>') : raw('<tr><td colspan="4" class="empty">—</td></tr>');
     $('#depth').innerHTML = h`
       <div class="panel-h">Price list <span class="spacer"></span><span class="dim tiny" title="Every row is the chain's own curve arithmetic (ADR-0087 as amended by ADR-0090) applied to the market row as last read">on the ${m ? (m.source === 'wrpc' ? 'node' : 'EVM window') : 'market'} row</span></div>
-      <div class="sub">Join: what N memberships cost right now (MSK, fees included)</div>
+      <div class="sub">Join: what N memberships cost right now (BILI, fees included)</div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Memberships</th><th>Cost</th><th>Each</th><th>After</th></tr></thead><tbody>
         ${buys.length ? buys.map((b) => h`<tr><td class="num">${fmtInt(b.n)}</td>${bar(b.cost, maxCost, 'buy')}<td class="num">${b.avg != null ? fmtPx(b.avg) : '—'}</td><td class="num">${b.after != null ? fmtPx(b.after) : '—'}</td></tr>`) : noCurve}
       </tbody></table></div>
-      <div class="sub">Leave: what the store pays back for N memberships (MSK, after fees)</div>
+      <div class="sub">Leave: what the store pays back for N memberships (BILI, after fees)</div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Memberships</th><th>Back</th><th>Each</th><th>After</th></tr></thead><tbody>
         ${sells.length ? sells.map((s) => h`<tr><td class="num">${fmtInt(s.n)}</td>${bar(s.net, maxNet, 'sell')}<td class="num">${s.avg != null ? fmtPx(s.avg) : '—'}</td><td class="num">${s.after != null ? fmtPx(s.after) : '—'}</td></tr>`) : noCurve}
       </tbody></table></div>
       <div class="sub">Recent joins and leaves <span class="dim">(facade events, both doors' EVM side)</span></div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Block</th><th>What happened</th><th>Memberships</th><th>MSK</th><th>Price after</th></tr></thead><tbody>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Block</th><th>What happened</th><th>Memberships</th><th>BILI</th><th>Price after</th></tr></thead><tbody>
         ${ev === null || ev === undefined ? raw('<tr><td colspan="5" class="empty">' + (db.armed ? 'Loading…' : db.armed === false ? 'The market doors are dormant on this network.' : 'EVM RPC unreachable.') + '</td></tr>') : ev.length ? ev.slice(0, 8).map((e) => h`<tr><td class="num">${fmtInt(e.blockNumber)}</td><td class="l ${e.kind === 'Bought' ? 'up' : e.kind === 'Sold' ? 'down' : e.kind === 'Seeded' ? '' : 'dim'}" title="facade event ${e.kind}">${eventWord(e.kind)}${e.kind === 'Refused' ? raw(' <span class="dim tiny">' + esc(ACTION_NAME[e.actionId] || '') + ': ' + esc(REFUSAL[e.reason] || String(e.reason)) + '</span>') : ''}</td><td class="num">${e.units != null ? fmtPos(e.units) : e.kind === 'Seeded' ? raw('<span class="dim">opening</span>') : '—'}</td><td class="num">${e.kind === 'Bought' || e.kind === 'Seeded' ? fmtMsk(e.mskIn, 2) : e.kind === 'Sold' ? fmtMsk(e.mskOut, 2) : e.actionId !== 2 ? fmtMsk(e.amount, 2) : '—'}</td><td class="num">${e.priceAfter != null ? fmtPx(e.priceAfter) : '—'}</td></tr>`) : raw('<tr><td colspan="5" class="empty">No settlements in the last ' + esc(String(CFG.LOG_LOOKBACK_BLOCKS)) + ' blocks.</td></tr>')}
       </tbody></table></div>`.s;
   }
@@ -2423,7 +2423,7 @@ async function pageStore(arg) {
     const m = rec && rec.market; if (!m) return null;
     if (!m.seeded) return { invalid: 'Not seeded yet: no curve to quote against.' };
     if (entry.side === 'buy') {
-      // A join is entered as HOW MANY memberships (operator, 2026-09-11), and the site pays the least MSK
+      // A join is entered as HOW MANY memberships (operator, 2026-09-11), and the site pays the least BILI
       // that releases them — `curve.buyCostForUnits`, the chain's own arithmetic run until it gives at least
       // that many. Anything more would stay in the reserve: the fold refunds no fraction of a membership.
       if (String(entry.amount).trim() === '') return null;
@@ -2500,7 +2500,7 @@ async function pageStore(arg) {
       if (!ap.approved) return '承認待ち · trading starts at approval: the class is ' + (cs ? cs.head + (cs.activationDaa != null ? ' (activates at DAA ' + fmtInt(cs.activationDaa) + ')' : '') : 'not answered') + (ap.lifecycle && ap.lifecycle !== 'Active' ? ', ' + ap.lifecycle + ' in the registry' : '') + '. Joins open when the chain approves it.';
     }
     if (q.kind === 'buy' && rec.market && rec.market.closedToBuys) return 'This line is closed to new members' + (rec.market.marketRefusal ? ' (' + rec.market.marketRefusal + ')' : ' (retired)') + '; leaving still queues.';
-    if (q.kind === 'buy' && entry.balance != null && sompiToWei(q.sompi) > spendable() && !wallet.topsUp()) return entry.balance > spendable() ? 'Not enough MSK left once your open orders are counted: cancel or change one first.' : 'Insufficient MSK balance in the EVM account.';
+    if (q.kind === 'buy' && entry.balance != null && sompiToWei(q.sompi) > spendable() && !wallet.topsUp()) return entry.balance > spendable() ? 'Not enough BILI left once your open orders are counted: cancel or change one first.' : 'Insufficient BILI balance in the EVM account.';
     if (q.kind === 'sell' && entry.position != null && q.units > entry.position) return 'That is more than the memberships this account holds in the EVM namespace.';
     return null;
   }
@@ -2517,31 +2517,31 @@ async function pageStore(arg) {
       if (q.kind === 'buy') {
         const avg = q.unitsOut > 0n ? q.sompi / q.unitsOut : null;
         rows = h`
-          <div class="r tot"><span>You pay (fees included)</span><span class="v">${fmtMsk(q.sompi)} MSK</span></div>
+          <div class="r tot"><span>You pay (fees included)</span><span class="v">${fmtMsk(q.sompi)} BILI</span></div>
           <div class="r"><span>Memberships you get</span><span class="v">${fmtPos(q.unitsOut)}</span></div>${q.want != null && q.unitsOut < q.want ? h`
-          <div class="r warn tiny"><span>The node's row has moved: this MSK now releases ${fmtPos(q.unitsOut)}, not ${fmtPos(q.want)}. Re-enter the count to re-price.</span></div>` : ''}
-          <div class="r"><span>Price each</span><span class="v">${avg != null ? fmtPrice(avg) : '—'} MSK</span></div>
-          <div class="r"><span>Price after this join</span><span class="v">${fmtPrice(q.priceAfter)} MSK</span></div>
+          <div class="r warn tiny"><span>The node's row has moved: this BILI now releases ${fmtPos(q.unitsOut)}, not ${fmtPos(q.want)}. Re-enter the count to re-price.</span></div>` : ''}
+          <div class="r"><span>Price each</span><span class="v">${avg != null ? fmtPrice(avg) : '—'} BILI</span></div>
+          <div class="r"><span>Price after this join</span><span class="v">${fmtPrice(q.priceAfter)} BILI</span></div>
           <div class="r"><span>How far it moves the price</span><span class="v ${impact > 5 ? 'down' : ''}">${fmtPct(impact)}</span></div>
-          <div class="r"><span>Burned (${pctOf(fc.burnPermille)})</span><span class="v">${fmtMsk(q.fees.burn)} MSK</span></div>
-          <div class="r"><span>To the model's owner (${pctOf(fc.legPermille)})</span><span class="v">${fmtMsk(q.fees.leg)} MSK</span></div>
-          <div class="r"><span>Into the buy-back reserve (${pctOf(1000n - fc.burnPermille - fc.legPermille)})</span><span class="v">${fmtMsk(q.fees.net)} MSK</span></div>`.s;
+          <div class="r"><span>Burned (${pctOf(fc.burnPermille)})</span><span class="v">${fmtMsk(q.fees.burn)} BILI</span></div>
+          <div class="r"><span>To the model's owner (${pctOf(fc.legPermille)})</span><span class="v">${fmtMsk(q.fees.leg)} BILI</span></div>
+          <div class="r"><span>Into the buy-back reserve (${pctOf(1000n - fc.burnPermille - fc.legPermille)})</span><span class="v">${fmtMsk(q.fees.net)} BILI</span></div>`.s;
       } else {
         const avg = q.units > 0n ? q.fees.net / q.units : null;
         rows = h`
-          <div class="r"><span>From the buy-back reserve</span><span class="v">${fmtMsk(q.fees.gross)} MSK</span></div>
-          <div class="r"><span>Burned (${pctOf(fc.burnPermille)})</span><span class="v">${fmtMsk(q.fees.burn)} MSK</span></div>
-          <div class="r"><span>To the model's owner (${pctOf(fc.legPermille)})</span><span class="v">${fmtMsk(q.fees.leg)} MSK</span></div>
-          <div class="r"><span>You receive (${pctOf(1000n - fc.burnPermille - fc.legPermille)})</span><span class="v">${fmtMsk(q.fees.net)} MSK</span></div>
-          <div class="r"><span>Price each</span><span class="v">${avg != null ? fmtPrice(avg) : '—'} MSK</span></div>
-          <div class="r"><span>Price after this leave</span><span class="v">${fmtPrice(q.priceAfter)} MSK</span></div>
+          <div class="r"><span>From the buy-back reserve</span><span class="v">${fmtMsk(q.fees.gross)} BILI</span></div>
+          <div class="r"><span>Burned (${pctOf(fc.burnPermille)})</span><span class="v">${fmtMsk(q.fees.burn)} BILI</span></div>
+          <div class="r"><span>To the model's owner (${pctOf(fc.legPermille)})</span><span class="v">${fmtMsk(q.fees.leg)} BILI</span></div>
+          <div class="r"><span>You receive (${pctOf(1000n - fc.burnPermille - fc.legPermille)})</span><span class="v">${fmtMsk(q.fees.net)} BILI</span></div>
+          <div class="r"><span>Price each</span><span class="v">${avg != null ? fmtPrice(avg) : '—'} BILI</span></div>
+          <div class="r"><span>Price after this leave</span><span class="v">${fmtPrice(q.priceAfter)} BILI</span></div>
           <div class="r"><span>How far it moves the price</span><span class="v ${impact < -5 ? 'down' : ''}">${fmtPct(impact)}</span></div>`.s;
       }
       rows += h`<div class="r dim tiny"><span>Quoted by</span><span>${q.source === 'node' ? 'the node (AMM precompile)' : 'local arithmetic on the market row'}</span></div>`.s;
       // ADR-0114: a scheduled change of the owner's leg, said before it bites
       if (m && m.legV2Daa > 0n && fc.legPermille !== LEG_V2_PERMILLE) rows += h`<div class="r warn tiny"><span>From DAA ${fmtInt(m.legV2Daa)} the owner's fee on every join and leave is ${pctOf(LEG_V2_PERMILLE)} (ADR-0114); an order settled after that height pays it.</span></div>`.s;
     } else if (q && q.invalid) rows = h`<div class="err">${q.invalid}</div>`.s;
-    else rows = h`<div class="dim small">${entry.side === 'buy' ? 'Enter how many memberships to see what they cost.' : 'Enter how many memberships to give up.'} ${m && price != null ? 'One membership is ' + fmtPrice(price) + ' MSK right now.' : ''}</div>`.s;
+    else rows = h`<div class="dim small">${entry.side === 'buy' ? 'Enter how many memberships to see what they cost.' : 'Enter how many memberships to give up.'} ${m && price != null ? 'One membership is ' + fmtPrice(price) + ' BILI right now.' : ''}</div>`.s;
     box.innerHTML = rows;
     const btn = $('#sendBtn'), why = $('#sendWhy');
     if (!btn) return;
@@ -2557,13 +2557,13 @@ async function pageStore(arg) {
   }
   const seedState = { msk: null, busy: false, balance: null };
   // The EVM balance at latest does not move until a block carries an order, so the desk subtracts what the
-  // account's open orders will take; each order's MSK leaves the balance only when a block carries it.
+  // account's open orders will take; each order's BILI leaves the balance only when a block carries it.
   function held() { return wallet.account ? orders.reserved(wallet.account) : { wei: 0n, n: 0 }; }
   function spendable() { const b = entry.balance; if (b == null) return null; const r = held().wei; return b > r ? b - r : 0n; }
   function heldHtml() {
     const r = held();
     if (!r.n) return '';
-    return h`<div class="avail"><span class="muted">In open orders</span><span class="v"><a href="#" id="heldLink" title="Held by orders no block has carried yet; the balance above is what is left">${fmtWeiMsk(r.wei)} MSK · ${String(r.n)} order${r.n === 1 ? '' : 's'}</a></span></div>`.s;
+    return h`<div class="avail"><span class="muted">In open orders</span><span class="v"><a href="#" id="heldLink" title="Held by orders no block has carried yet; the balance above is what is left">${fmtWeiMsk(r.wei)} BILI · ${String(r.n)} order${r.n === 1 ? '' : 's'}</a></span></div>`.s;
   }
   function availNow() { return entry.balance == null ? availText(null) : availText(spendable()); }
   function renderEntry() {
@@ -2583,7 +2583,7 @@ async function pageStore(arg) {
         ${!acct ? h`<div class="wallet-prompt"><b>Start with a free preview</b><p>Enter a quantity to see the full cost. Connect your wallet when you are ready.</p><button class="btn btn-accent" id="deskConnect">Connect wallet</button></div>` : ''}
         <div class="seg wide" role="tablist"><button class="${entry.side === 'buy' ? 'on buy' : ''}" data-side="buy" role="tab" title="Buy a membership from the protocol's curve">Join</button><button class="${entry.side === 'sell' ? 'on sell' : ''}" data-side="sell" role="tab" title="Sell the membership back to the curve; nobody else can buy it from you">Leave</button></div>
         <div class="note tiny" style="margin-top:6px">${entry.side === 'buy' ? 'A membership is bought from the protocol, not from another person, and joining raises the price for the next member.' : 'A membership is sold back to the protocol, not to another person. It cannot be transferred, lent or given away.'}</div>
-        <div class="avail" style="margin-top:10px"><span class="muted">MSK available</span><span class="v" id="availV">${availNow()}</span></div>
+        <div class="avail" style="margin-top:10px"><span class="muted">BILI available</span><span class="v" id="availV">${availNow()}</span></div>
         <div id="heldV">${raw(heldHtml())}</div>
         ${entry.side === 'buy' ? availHint() : raw('')}
         <div class="avail"><span class="muted">Your membership</span><span class="v" id="posV">${entry.position != null ? fmtPos(entry.position) + ' ' + (rec ? rec.symbol : '') : acct ? '—' : '—'}</span></div>
@@ -2594,7 +2594,7 @@ async function pageStore(arg) {
         </div>
         <div class="quote" id="quoteBox"></div>
         <div class="field"><button id="sendBtn" class="btn btn-lg btn-accent" disabled>Join</button><div class="reason" id="sendWhy"></div><div class="note tiny" id="sendTopUp"></div></div>
-        <details class="disclosure settlement-help"><summary>How settlement works</summary><p class="note">Your request settles one block after the block that includes it, using the price at settlement. A request that returns no membership or no MSK is refused and refunded. Memberships are whole units held by this EVM account; they cannot be transferred and do not pay income.</p></details>
+        <details class="disclosure settlement-help"><summary>How settlement works</summary><p class="note">Your request settles one block after the block that includes it, using the price at settlement. A request that returns no membership or no BILI is refused and refunded. Memberships are whole units held by this EVM account; they cannot be transferred and do not pay income.</p></details>
       </div>
       ${m && m.takesSeed ? h`<details class="disclosure"><summary>Seed the pool (optional, before the first trade)</summary><div class="entry" id="seedSlot"></div></details>` : ''}`.s;
     const seedSlot = $('#seedSlot');
@@ -2648,8 +2648,8 @@ async function pageStore(arg) {
       if (!p) { body.innerHTML = '<div class="empty">Loading memberships…</div>'; return; }
       if (p.error) { body.innerHTML = h`<div class="empty">Memberships unavailable: ${p.error}</div>`.s; return; }
       if (!p.positions.length) { body.innerHTML = h`<div class="empty">This account holds no membership in the EVM namespace. <span class="dim">holder id ${shortId(p.holder)}</span></div>`.s; return; }
-      body.innerHTML = h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Model</th><th>Memberships</th><th>Price</th><th>If you left now (net MSK)</th><th></th></tr></thead><tbody>
-        ${p.positions.map((x) => { const r = db.line(x.lineId) || db.upsertLine(x.lineId, {}); const m = r.market; const q = m ? curve.sellQuote(m, x.units) : null; return h`<tr class="row-link" data-href="#/store/${x.lineId}"><td class="l">${db.label(r)} <span class="dim tiny">${r.symbol}</span></td><td class="num">${fmtPos(x.units)}</td><td class="num">${m && m.price != null ? fmtPrice(m.price) : '—'}</td><td class="num">${q ? fmtMsk(q.fees.net) + ' MSK' : '—'}</td><td><a href="#/store/${x.lineId}">Open</a></td></tr>`; })}
+      body.innerHTML = h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Model</th><th>Memberships</th><th>Price</th><th>If you left now (net BILI)</th><th></th></tr></thead><tbody>
+        ${p.positions.map((x) => { const r = db.line(x.lineId) || db.upsertLine(x.lineId, {}); const m = r.market; const q = m ? curve.sellQuote(m, x.units) : null; return h`<tr class="row-link" data-href="#/store/${x.lineId}"><td class="l">${db.label(r)} <span class="dim tiny">${r.symbol}</span></td><td class="num">${fmtPos(x.units)}</td><td class="num">${m && m.price != null ? fmtPrice(m.price) : '—'}</td><td class="num">${q ? fmtMsk(q.fees.net) + ' BILI' : '—'}</td><td><a href="#/store/${x.lineId}">Open</a></td></tr>`; })}
       </tbody></table></div><div class="note tiny">Read through ${p.source === 'wrpc' ? 'getPalwModelPositions(holder)' : 'the position window per known line'}; holder id ${shortId(p.holder)}. A membership is a whole number, and it is never paid anything: the last column is only what the curve would return if you gave every one of them up right now.</div>`.s;
       return;
     }
@@ -2666,7 +2666,7 @@ async function pageStore(arg) {
       const list = txlog.forAccount(acct);
       if (!list.length) { body.innerHTML = '<div class="empty">Nothing sent from this browser' + (acct ? ' by ' + shortAddr(acct) : '') + '.</div>'; return; }
       body.innerHTML = h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Time</th><th>Model</th><th>What you did</th><th>Amount</th><th>Floor</th><th>Status</th><th>Block</th><th>Settled</th><th>Tx</th></tr></thead><tbody>
-        ${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}" title="facade call ${t.kind}()">${t.kind === 'cancel' ? 'cancelled an order' : (MOVE_WORD[t.kind] || t.kind) + (t.replaces ? ' (change)' : '')}</td><td class="num">${t.kind === 'cancel' ? '—' : t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' MSK' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="num">${t.kind === 'buy' ? fmtPos(t.min) + ' memberships' : t.kind === 'sell' ? fmtMsk(t.min) + ' MSK' : '—'}</td><td class="l">${txStatusCell(t)}</td><td class="num">${t.blockNumber != null ? fmtInt(t.blockNumber) : '—'}</td><td class="num">${t.status === 'settled' ? (t.kind === 'seed' ? 'seeded ' + fmtMsk(t.msk) + ' MSK, price after ' + fmtPrice(t.priceAfter) : fmtPos(t.units) + ' memberships for ' + fmtMsk(t.msk) + ' MSK') : t.settledBlock ? 'block ' + fmtInt(t.settledBlock) : '—'}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}
+        ${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}" title="facade call ${t.kind}()">${t.kind === 'cancel' ? 'cancelled an order' : (MOVE_WORD[t.kind] || t.kind) + (t.replaces ? ' (change)' : '')}</td><td class="num">${t.kind === 'cancel' ? '—' : t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' BILI' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="num">${t.kind === 'buy' ? fmtPos(t.min) + ' memberships' : t.kind === 'sell' ? fmtMsk(t.min) + ' BILI' : '—'}</td><td class="l">${txStatusCell(t)}</td><td class="num">${t.blockNumber != null ? fmtInt(t.blockNumber) : '—'}</td><td class="num">${t.status === 'settled' ? (t.kind === 'seed' ? 'seeded ' + fmtMsk(t.msk) + ' BILI, price after ' + fmtPrice(t.priceAfter) : fmtPos(t.units) + ' memberships for ' + fmtMsk(t.msk) + ' BILI') : t.settledBlock ? 'block ' + fmtInt(t.settledBlock) : '—'}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}
       </tbody></table></div>`.s;
       return;
     }
@@ -2676,7 +2676,7 @@ async function pageStore(arg) {
       if (db.armed === false) { body.innerHTML = '<div class="empty">The market doors are dormant on this network; no facade emits events yet.</div>'; return; }
       if (!s) { body.innerHTML = '<div class="empty">' + (db.armed ? 'Loading…' : 'EVM RPC unreachable.') + '</div>'; return; }
       if (!s.length) { body.innerHTML = '<div class="empty">Nothing for ' + esc(shortAddr(acct)) + ' in the last ' + CFG.LOG_LOOKBACK_BLOCKS + ' blocks of the known models.</div>'; return; }
-      body.innerHTML = h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Block</th><th>Model</th><th>What happened</th><th>Memberships</th><th>MSK</th><th>Price after</th><th>Tx</th></tr></thead><tbody>
+      body.innerHTML = h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Block</th><th>Model</th><th>What happened</th><th>Memberships</th><th>BILI</th><th>Price after</th><th>Tx</th></tr></thead><tbody>
         ${s.map((e) => { const r = db.line(e.lineId); return h`<tr><td class="num">${fmtInt(e.blockNumber)}</td><td class="l">${r ? db.label(r) : shortId(e.lineId)}</td><td class="l ${e.kind === 'Bought' ? 'up' : e.kind === 'Sold' ? 'down' : ''}" title="facade event ${e.kind}">${eventWord(e.kind)}${e.kind === 'Refused' ? raw(' <span class="dim tiny">' + esc(ACTION_NAME[e.actionId] || '') + ': ' + esc(REFUSAL[e.reason] || String(e.reason)) + '</span>') : ''}</td><td class="num">${e.units != null ? fmtPos(e.units) : e.kind === 'Refused' && e.actionId === 2 ? fmtPos(e.amount) : e.kind === 'Seeded' ? '0 (seed)' : '—'}</td><td class="num">${e.kind === 'Bought' ? fmtMsk(e.mskIn) : e.kind === 'Seeded' ? fmtMsk(e.mskIn) + ' locked' : e.kind === 'Sold' ? fmtMsk(e.mskOut) : e.actionId !== 2 ? fmtMsk(e.amount) + ' refunded' : '—'}</td><td class="num">${e.priceAfter != null ? fmtPrice(e.priceAfter) : '—'}</td><td class="l">${idCell(e.txHash || '', 10)}</td></tr>`; })}
       </tbody></table></div>`.s;
       return;
@@ -2705,22 +2705,22 @@ async function pageStore(arg) {
         <dt>Symbol</dt><dd>${rec.symbol}</dd>
         <dt>Market</dt><dd>${m ? (m.seeded ? 'open since DAA ' + fmtInt(m.openedDaa) + (m.virtualSompi > 0n ? ' (from the model\'s addition, ADR-0162)' : ' (opened by its seed, ADR-0090)') : 'no market on this network yet') : '—'}</dd>
         <dt>Trading</dt><dd>${m && m.seeded ? (m.trading ? 'open' : approvalOf(rec).approved ? 'closed to new members' + (m.marketRefusal ? ' (' + m.marketRefusal + ')' : '') : '承認待ち · trading starts at approval') : '—'}</dd>
-        <dt>Virtual reserve</dt><dd>${m && m.seeded ? fmtMsk(m.virtualSompi || 0n) + ' MSK (prices the curve; never paid to anyone)' : '—'}</dd>
-        <dt>Real reserve</dt><dd>${m ? fmtMsk(m.mskReserve) + ' MSK' : '—'}</dd>
-        <dt>Price floor</dt><dd>${m && m.floor != null ? fmtPrice(m.floor) + ' MSK per membership' : '—'}</dd>
+        <dt>Virtual reserve</dt><dd>${m && m.seeded ? fmtMsk(m.virtualSompi || 0n) + ' BILI (prices the curve; never paid to anyone)' : '—'}</dd>
+        <dt>Real reserve</dt><dd>${m ? fmtMsk(m.mskReserve) + ' BILI' : '—'}</dd>
+        <dt>Price floor</dt><dd>${m && m.floor != null ? fmtPrice(m.floor) + ' BILI per membership' : '—'}</dd>
         <dt>Positions out</dt><dd>${m && m.positionsOut != null ? fmtPos(m.positionsOut) + ' of ' + fmtPos(m.supplyUnits) : '—'}</dd>
-        <dt>Seed (locked)</dt><dd>${m && m.seeded ? (m.seedSompi != null ? (m.seedSompi > 0n ? fmtMsk(m.seedSompi) + ' MSK, locked for good' : 'none (optional, before the first trade)') : raw('<span class="dim">not served by the AMM window</span>')) : m ? 'none' : '—'}</dd>
-        <dt>Bought by mining</dt><dd>${m && m.buybackSompi != null ? fmtMsk(m.buybackSompi) + ' MSK · ' + fmtPos(m.retiredUnits || 0n) + ' memberships retired' : raw('<span class="dim">not served by this node</span>')}</dd>
+        <dt>Seed (locked)</dt><dd>${m && m.seeded ? (m.seedSompi != null ? (m.seedSompi > 0n ? fmtMsk(m.seedSompi) + ' BILI, locked for good' : 'none (optional, before the first trade)') : raw('<span class="dim">not served by the AMM window</span>')) : m ? 'none' : '—'}</dd>
+        <dt>Bought by mining</dt><dd>${m && m.buybackSompi != null ? fmtMsk(m.buybackSompi) + ' BILI · ' + fmtPos(m.retiredUnits || 0n) + ' memberships retired' : raw('<span class="dim">not served by this node</span>')}</dd>
         <dt>Opened by</dt><dd>${m && m.seededBy ? idCell(m.seededBy, 12) : '—'}</dd>
-        <dt>Buy-back reserve</dt><dd>${m ? fmtMsk(m.mskReserve) + ' MSK' : '—'}</dd>
+        <dt>Buy-back reserve</dt><dd>${m ? fmtMsk(m.mskReserve) + ' BILI' : '—'}</dd>
         <dt>Memberships unsold</dt><dd>${m && !m.legacy ? fmtPos(m.positionUnits) + ' of ' + fmtPos(m.supplyUnits) : m ? raw('<span class="dim">— (the node serves the pre-ADR-0090 row: units of 10<sup>-6</sup> position, a virtual reserve)</span>') : '—'}</dd>
         <dt>Taken (cumulative)</dt><dd>${m && !m.legacy ? fmtPos(m.soldUnits) + ' memberships' : '—'}</dd>
-        <dt>Burned</dt><dd>${m ? fmtMsk(m.burnedSompi) + ' MSK' : '—'}</dd>
-        <dt>Paid to the owner</dt><dd>${m ? fmtMsk(m.ownerPaid) + ' MSK' : '—'}</dd>
-        <dt>Paid to a contributor</dt><dd>${m ? fmtMsk(m.contributorPaid) + ' MSK' : '—'}</dd>
+        <dt>Burned</dt><dd>${m ? fmtMsk(m.burnedSompi) + ' BILI' : '—'}</dd>
+        <dt>Paid to the owner</dt><dd>${m ? fmtMsk(m.ownerPaid) + ' BILI' : '—'}</dd>
+        <dt>Paid to a contributor</dt><dd>${m ? fmtMsk(m.contributorPaid) + ' BILI' : '—'}</dd>
         <dt>Closed to new members</dt><dd>${m ? (m.closedToBuys ? 'yes' : 'no') : '—'}</dd>
         <dt>Class status</dt><dd>${cs ? cs.head + (cs.activationDaa != null ? ', activates at DAA ' + fmtInt(cs.activationDaa) : '') + (cs.sinceDaa != null ? ' since DAA ' + fmtInt(cs.sinceDaa) : '') : '—'}</dd>
-        <dt>Least seed (network)</dt><dd>${m ? (seedMinFor(m) === 0n ? 'none: the store opens with the model (ADR-0162)' : fmtMsk(seedMinFor(m), 0) + ' MSK (below ADR-0162)') : '—'}</dd>
+        <dt>Least seed (network)</dt><dd>${m ? (seedMinFor(m) === 0n ? 'none: the store opens with the model (ADR-0162)' : fmtMsk(seedMinFor(m), 0) + ' BILI (below ADR-0162)') : '—'}</dd>
         <dt>Read through</dt><dd>${m ? (m.source === 'wrpc' ? 'wRPC getPalwModelMarket' : 'AMM window (eth_call)') + ', ' + fmtAgo(m.at) : '—'}</dd>
       </dl></div>`.s;
   }
@@ -2835,7 +2835,7 @@ function lineRowsHtml(list, opts) {
   opts = opts || {};
   return h`<div class="tbl-wrap"><table class="tbl" id="linesTbl"><thead><tr>
     ${opts.rank ? raw('<th>#</th>') : ''}
-    <th class="l">Model</th><th class="l">Class</th><th class="sortable ${opts.sort === 'usage' ? 'sorted' : ''}" data-sort="usage" title="Paid inferences the fold counted on the current version: the one measurement the chain makes">Used</th><th class="sortable ${opts.sort === 'price' ? 'sorted' : ''}" data-sort="price">Membership (MSK)</th><th>24 h</th><th class="sortable ${opts.sort === 'sold' ? 'sorted' : ''}" data-sort="sold">Members hold</th><th class="sortable ${opts.sort === 'buyback' ? 'sorted' : ''}" data-sort="buyback" title="MSK the mining reward has bought back and retired (ADR-0091)">Mining bought</th><th class="sortable ${opts.sort === 'reserve' ? 'sorted' : ''}" data-sort="reserve" title="The real MSK the curve holds to buy memberships back (the virtual reserve prices and is never paid)">Real reserve (MSK)</th><th title="The lowest price the curve can ever quote: every membership back in the curve">Floor (MSK)</th><th title="Chain-confirmed ready Panel seats for this model; readiness records, not live connections">Panel ready</th><th class="l">Owner</th><th>Versions</th><th class="l" title="Production eligibility and retained Final records, independent of whether the store is open">Readiness</th><th class="l">Status</th>
+    <th class="l">Model</th><th class="l">Class</th><th class="sortable ${opts.sort === 'usage' ? 'sorted' : ''}" data-sort="usage" title="Paid inferences the fold counted on the current version: the one measurement the chain makes">Used</th><th class="sortable ${opts.sort === 'price' ? 'sorted' : ''}" data-sort="price">Membership (BILI)</th><th>24 h</th><th class="sortable ${opts.sort === 'sold' ? 'sorted' : ''}" data-sort="sold">Members hold</th><th class="sortable ${opts.sort === 'buyback' ? 'sorted' : ''}" data-sort="buyback" title="BILI the mining reward has bought back and retired (ADR-0091)">Mining bought</th><th class="sortable ${opts.sort === 'reserve' ? 'sorted' : ''}" data-sort="reserve" title="The real BILI the curve holds to buy memberships back (the virtual reserve prices and is never paid)">Real reserve (BILI)</th><th title="The lowest price the curve can ever quote: every membership back in the curve">Floor (BILI)</th><th title="Chain-confirmed ready Panel seats for this model; readiness records, not live connections">Panel ready</th><th class="l">Owner</th><th>Versions</th><th class="l" title="Production eligibility and retained Final records, independent of whether the store is open">Readiness</th><th class="l">Status</th>
   </tr></thead><tbody>
     ${list.length ? list.map((r, i) => { const m = r.market, row = r.row, o = ownerLabel(row), u = usageOf(r); const held = m ? m.supplyUnits - m.positionUnits : null; const seeded = !!(m && m.seeded); return h`<tr class="row-link" data-href="#/store/${r.lineId}">
       ${opts.rank ? h`<td class="rank">${i + 1}</td>` : ''}
@@ -2932,11 +2932,11 @@ async function pageLine(arg) {
       ${rec.notFound ? raw('<div class="banner bad" style="margin-bottom:8px">The node reports no line and no class with this id.</div>') : ''}
       <div class="grid3">
         <div class="tile"><div class="k">Used (current version)</div><div class="v">${rec.usage ? fmtInt(rec.usage.attempt + rec.usage.fp) : '—'}</div><div class="s">${rec.usage ? fmtInt(rec.usage.attempt) + ' attempt · ' + fmtInt(rec.usage.fp) + ' free-prompt · ' + fmtInt(rec.usage.workLeaves) + ' leaves' : 'paid inferences counted by the fold'}</div></div>
-        <div class="tile"><div class="k">Membership price (MSK)</div><div class="v">${m && m.price != null ? fmtPrice(m.price) : m && !m.seeded ? raw('<span class="dim">no market here</span>') : '—'}</div><div class="s">${m ? (m.seeded ? 'open since DAA ' + fmtInt(m.openedDaa) + ' · floor ' + (m.floor != null ? fmtPrice(m.floor) : '—') + (m.trading ? '' : ' · 承認待ち · trading starts at approval') : 'this network has not armed ADR-0162\'s virtual reserve') : ''}</div></div>
+        <div class="tile"><div class="k">Membership price (BILI)</div><div class="v">${m && m.price != null ? fmtPrice(m.price) : m && !m.seeded ? raw('<span class="dim">no market here</span>') : '—'}</div><div class="s">${m ? (m.seeded ? 'open since DAA ' + fmtInt(m.openedDaa) + ' · floor ' + (m.floor != null ? fmtPrice(m.floor) : '—') + (m.trading ? '' : ' · 承認待ち · trading starts at approval') : 'this network has not armed ADR-0162\'s virtual reserve') : ''}</div></div>
         <div class="tile"><div class="k">Members hold</div><div class="v">${m && !m.legacy ? fmtPos(m.positionsOut != null ? m.positionsOut : m.supplyUnits - m.positionUnits) + ' / ' + fmtPos(m.supplyUnits) : '—'}</div><div class="s">${m && m.legacy ? 'pre-ADR-0090 row from the node: not shown' : 'positions out · ever taken ' + (m ? fmtPos(m.soldUnits) : '—')}</div></div>
         <div class="tile"><div class="k">Versions</div><div class="v">${row.versionsPublished != null ? row.versionsPublished : '—'}</div><div class="s">current v${row.current || '—'}${row.previews && row.previews.length ? ' · previews ' + row.previews.join(', ') : ''}</div></div>
         <div class="tile"><div class="k">Bought by mining</div><div class="v">${m && m.buybackSompi != null ? fmtMsk(m.buybackSompi, 2) : m ? '—' : '—'}</div><div class="s">${m && m.buybackSompi != null ? (bi(m.retiredUnits || 0n) > 0n ? fmtPos(m.retiredUnits) + ' memberships retired (the chain\'s, for good)' : 'nothing retired yet: each slice is under one membership\'s price') : 'this node serves no buyback (pre-ADR-0091)'}</div></div>
-        <div class="tile"><div class="k">Real reserve (MSK)</div><div class="v">${m ? fmtMsk(m.mskReserve, 2) : '—'}</div><div class="s">virtual reserve ${m && m.seeded ? fmtMsk(m.virtualSompi || 0n, 0) : '—'} (price only, never paid) · burned ${m ? fmtMsk(m.burnedSompi, 2) : '—'} · owner paid ${m ? fmtMsk(m.ownerPaid, 2) : '—'}</div></div>
+        <div class="tile"><div class="k">Real reserve (BILI)</div><div class="v">${m ? fmtMsk(m.mskReserve, 2) : '—'}</div><div class="s">virtual reserve ${m && m.seeded ? fmtMsk(m.virtualSompi || 0n, 0) : '—'} (price only, never paid) · burned ${m ? fmtMsk(m.burnedSompi, 2) : '—'} · owner paid ${m ? fmtMsk(m.ownerPaid, 2) : '—'}</div></div>
         <div class="tile"><div class="k">Seed (locked)</div><div class="v">${m && m.seeded ? (m.seedSompi != null ? (m.seedSompi > 0n ? fmtMsk(m.seedSompi, 2) : 'none') : '—') : m ? 'none' : '—'}</div><div class="s">${m && m.seededBy ? 'first paid by ' + shortId(m.seededBy, 10) + ' (for the record)' : 'optional, before the first trade; locked for good, no membership for the seeder'}</div></div>
         <div class="tile"><div class="k">Roots in force</div><div class="v">${inForce ? inForce.length : '—'}</div><div class="s">for the class at DAA ${info && info.tipDaa != null ? fmtInt(info.tipDaa) : '—'}</div></div>
       </div>
@@ -3003,29 +3003,29 @@ async function pagePortfolio() {
     if (!alive()) return;
     if ($('#chgAmt:focus')) return;              // not while a change is being typed
     const acct = wallet.account;
-    if (!acct) { main.innerHTML = h`<div class="page-h"><h1>My memberships</h1></div><div class="panel"><div class="empty">Connect a wallet to see the memberships it holds, its MSK balance and what it has done. <br><button class="btn btn-accent" id="pfConnect" style="margin-top:10px">Connect</button></div></div>`.s; $('#pfConnect').addEventListener('click', () => $('#connectBtn').click()); return; }
+    if (!acct) { main.innerHTML = h`<div class="page-h"><h1>My memberships</h1></div><div class="panel"><div class="empty">Connect a wallet to see the memberships it holds, its BILI balance and what it has done. <br><button class="btn btn-accent" id="pfConnect" style="margin-top:10px">Connect</button></div></div>`.s; $('#pfConnect').addEventListener('click', () => $('#connectBtn').click()); return; }
     const p = view.positions;
     let total = 0n, totalKnown = true;
     const rows = (p && p.positions || []).map((x) => { const r = db.line(x.lineId) || db.upsertLine(x.lineId, {}); const m = r.market; const q = m ? curve.sellQuote(m, x.units) : null; if (q) total += q.fees.net; else totalKnown = false; return { x, r, m, q }; });
     main.innerHTML = h`
       <div class="page-h"><h1>My memberships</h1><span class="sub mono">${acct}</span>${wallet.onChain() ? '' : raw('<span class="tag bad">wallet not on MISAKA</span>')}<span class="spacer"></span><a class="btn btn-sm" href="#/dev">Developer dashboard</a></div>
       <div class="grid3">
-        <div class="tile"><div class="k">MSK balance (EVM account)</div><div class="v">${view.balance != null ? fmtWeiMsk(view.balance) : '—'}</div>${(() => { const r = orders.reserved(acct); return r.n && view.balance != null ? h`<div class="s">${fmtWeiMsk(view.balance > r.wei ? view.balance - r.wei : 0n)} MSK left once ${String(r.n)} open order${r.n === 1 ? '' : 's'} (${fmtWeiMsk(r.wei)} MSK) are carried</div>` : raw(''); })()}<div class="s">${status.evm === 'up' ? 'eth_getBalance at latest' + (wallet.topsUp() ? ' — MISAKA Wallet also spends its post-quantum balance, moving what a payment is short of when you confirm' : '') : 'EVM RPC unreachable'}</div></div>
+        <div class="tile"><div class="k">BILI balance (EVM account)</div><div class="v">${view.balance != null ? fmtWeiMsk(view.balance) : '—'}</div>${(() => { const r = orders.reserved(acct); return r.n && view.balance != null ? h`<div class="s">${fmtWeiMsk(view.balance > r.wei ? view.balance - r.wei : 0n)} BILI left once ${String(r.n)} open order${r.n === 1 ? '' : 's'} (${fmtWeiMsk(r.wei)} BILI) are carried</div>` : raw(''); })()}<div class="s">${status.evm === 'up' ? 'eth_getBalance at latest' + (wallet.topsUp() ? ' — MISAKA Wallet also spends its post-quantum balance, moving what a payment is short of when you confirm' : '') : 'EVM RPC unreachable'}</div></div>
         <div class="tile"><div class="k">Models you are a member of</div><div class="v">${p ? p.positions.length : '—'}</div><div class="s">EVM namespace only (a bond's memberships are not this account's)</div></div>
-        <div class="tile"><div class="k">If you left every one now</div><div class="v">${p && totalKnown ? fmtMsk(total, 2) + ' MSK' : '—'}</div><div class="s">the net MSK the curves would pay back right now, fees included — a membership itself is never paid anything</div></div>
+        <div class="tile"><div class="k">If you left every one now</div><div class="v">${p && totalKnown ? fmtMsk(total, 2) + ' BILI' : '—'}</div><div class="s">the net BILI the curves would pay back right now, fees included — a membership itself is never paid anything</div></div>
       </div>
-      ${(() => { const list = orders.open(acct); if (!list.length) return raw(''); const r = orders.reserved(acct); return h`<div class="panel section"><div class="panel-h">Open orders <span class="spacer"></span><span class="dim">${String(list.length)} waiting · ${fmtWeiMsk(r.wei)} MSK held</span></div><div class="panel-b">${ordersTableHtml(list, orderCtx.changing)}</div></div>`; })()}
+      ${(() => { const list = orders.open(acct); if (!list.length) return raw(''); const r = orders.reserved(acct); return h`<div class="panel section"><div class="panel-h">Open orders <span class="spacer"></span><span class="dim">${String(list.length)} waiting · ${fmtWeiMsk(r.wei)} BILI held</span></div><div class="panel-b">${ordersTableHtml(list, orderCtx.changing)}</div></div>`; })()}
       <div class="panel section"><div class="panel-h">Memberships</div><div class="panel-b">
         ${!p ? raw('<div class="empty">' + (view.err ? esc(view.err) : 'Loading…') + '</div>') : !rows.length ? raw('<div class="empty">This account holds no membership in the EVM namespace. <span class="dim">holder id ' + esc(shortId(p.holder)) + '</span></div>') :
-          h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Model</th><th>Memberships</th><th>Price (MSK)</th><th>If you left now (net MSK)</th><th>Per membership</th><th></th></tr></thead><tbody>${rows.map(({ x, r, m, q }) => h`<tr class="row-link" data-href="#/store/${x.lineId}"><td class="l"><b>${db.label(r)}</b> <span class="dim tiny mono">${r.symbol}</span></td><td class="num">${fmtPos(x.units)}</td><td class="num">${m && m.price != null ? fmtPrice(m.price) : '—'}</td><td class="num">${q ? fmtMsk(q.fees.net) : '—'}</td><td class="num">${q ? fmtPrice(q.fees.net / x.units) : '—'}</td><td><a href="#/store/${x.lineId}">Open</a></td></tr>`)}</tbody></table></div>
+          h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Model</th><th>Memberships</th><th>Price (BILI)</th><th>If you left now (net BILI)</th><th>Per membership</th><th></th></tr></thead><tbody>${rows.map(({ x, r, m, q }) => h`<tr class="row-link" data-href="#/store/${x.lineId}"><td class="l"><b>${db.label(r)}</b> <span class="dim tiny mono">${r.symbol}</span></td><td class="num">${fmtPos(x.units)}</td><td class="num">${m && m.price != null ? fmtPrice(m.price) : '—'}</td><td class="num">${q ? fmtMsk(q.fees.net) : '—'}</td><td class="num">${q ? fmtPrice(q.fees.net / x.units) : '—'}</td><td><a href="#/store/${x.lineId}">Open</a></td></tr>`)}</tbody></table></div>
           <div class="note tiny">holder id ${shortId(p.holder, 16)} (evm_holder_v1 of chain ${CFG.CHAIN_ID} and this address), read through ${p.source === 'wrpc' ? 'getPalwModelPositions' : 'the position window'}. The last two columns are what the curve would pay if you gave the memberships up now; holding them pays you nothing.</div>`}
       </div></div>
       <div class="panel section"><div class="panel-h">Joins and leaves <span class="spacer"></span><span class="dim">facade events for this account, last ${CFG.LOG_LOOKBACK_BLOCKS} blocks</span></div><div class="panel-b">
         ${db.armed === false ? raw('<div class="empty">The market doors are dormant on this network.</div>') : !view.settlements ? raw('<div class="empty">' + (db.armed ? 'Loading…' : 'EVM RPC unreachable.') + '</div>') : !view.settlements.length ? raw('<div class="empty">Nothing found.</div>') :
-          h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Block</th><th class="l">Model</th><th class="l">What happened</th><th>Memberships</th><th>MSK</th><th>Price after</th></tr></thead><tbody>${view.settlements.map((e) => { const r = db.line(e.lineId); return h`<tr><td class="num">${fmtInt(e.blockNumber)}</td><td class="l">${r ? db.label(r) : shortId(e.lineId)}</td><td class="l ${e.kind === 'Bought' ? 'up' : e.kind === 'Sold' ? 'down' : ''}" title="facade event ${e.kind}">${eventWord(e.kind)}${e.kind === 'Refused' ? ' (' + (ACTION_NAME[e.actionId] || '') + ': ' + (REFUSAL[e.reason] || e.reason) + ')' : ''}</td><td class="num">${e.units != null ? fmtPos(e.units) : e.kind === 'Seeded' ? '0 (opening)' : '—'}</td><td class="num">${e.kind === 'Bought' ? fmtMsk(e.mskIn) : e.kind === 'Seeded' ? fmtMsk(e.mskIn) + ' locked' : e.kind === 'Sold' ? fmtMsk(e.mskOut) : e.actionId !== 2 ? fmtMsk(e.amount) + ' refunded' : '—'}</td><td class="num">${e.priceAfter != null ? fmtPrice(e.priceAfter) : '—'}</td></tr>`; })}</tbody></table></div>`}
+          h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Block</th><th class="l">Model</th><th class="l">What happened</th><th>Memberships</th><th>BILI</th><th>Price after</th></tr></thead><tbody>${view.settlements.map((e) => { const r = db.line(e.lineId); return h`<tr><td class="num">${fmtInt(e.blockNumber)}</td><td class="l">${r ? db.label(r) : shortId(e.lineId)}</td><td class="l ${e.kind === 'Bought' ? 'up' : e.kind === 'Sold' ? 'down' : ''}" title="facade event ${e.kind}">${eventWord(e.kind)}${e.kind === 'Refused' ? ' (' + (ACTION_NAME[e.actionId] || '') + ': ' + (REFUSAL[e.reason] || e.reason) + ')' : ''}</td><td class="num">${e.units != null ? fmtPos(e.units) : e.kind === 'Seeded' ? '0 (opening)' : '—'}</td><td class="num">${e.kind === 'Bought' ? fmtMsk(e.mskIn) : e.kind === 'Seeded' ? fmtMsk(e.mskIn) + ' locked' : e.kind === 'Sold' ? fmtMsk(e.mskOut) : e.actionId !== 2 ? fmtMsk(e.amount) + ' refunded' : '—'}</td><td class="num">${e.priceAfter != null ? fmtPrice(e.priceAfter) : '—'}</td></tr>`; })}</tbody></table></div>`}
       </div></div>
       <div class="panel section"><div class="panel-h">My activity <span class="spacer"></span><span class="dim">transactions sent from this browser</span></div><div class="panel-b">
-        ${(() => { const list = txlog.forAccount(acct); return !list.length ? raw('<div class="empty">Nothing sent from this browser yet.</div>') : h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Time</th><th class="l">Model</th><th class="l">What you did</th><th>Amount</th><th class="l">Status</th><th class="l">Tx</th></tr></thead><tbody>${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}" title="facade call ${t.kind}()">${t.kind === 'cancel' ? 'cancelled an order' : (MOVE_WORD[t.kind] || t.kind) + (t.replaces ? ' (change)' : '')}</td><td class="num">${t.kind === 'cancel' ? '—' : t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' MSK' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="l">${txStatusCell(t)}${t.status === 'settled' ? (t.kind === 'seed' ? ' · opened, first price ' + fmtPrice(t.priceAfter) + ' MSK' : ' · ' + fmtPos(t.units) + ' memberships / ' + fmtMsk(t.msk) + ' MSK') : ''}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}</tbody></table></div>`; })()}
+        ${(() => { const list = txlog.forAccount(acct); return !list.length ? raw('<div class="empty">Nothing sent from this browser yet.</div>') : h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Time</th><th class="l">Model</th><th class="l">What you did</th><th>Amount</th><th class="l">Status</th><th class="l">Tx</th></tr></thead><tbody>${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}" title="facade call ${t.kind}()">${t.kind === 'cancel' ? 'cancelled an order' : (MOVE_WORD[t.kind] || t.kind) + (t.replaces ? ' (change)' : '')}</td><td class="num">${t.kind === 'cancel' ? '—' : t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' BILI' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="l">${txStatusCell(t)}${t.status === 'settled' ? (t.kind === 'seed' ? ' · opened, first price ' + fmtPrice(t.priceAfter) + ' BILI' : ' · ' + fmtPos(t.units) + ' memberships / ' + fmtMsk(t.msk) + ' BILI') : ''}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}</tbody></table></div>`; })()}
       </div></div>`.s;
   }
   async function load() {
@@ -3053,12 +3053,12 @@ function pageDocs() {
   const c = db.constsFromChain || CURVE_DEFAULTS;
   const fees = curve.consts(null);   // the schedule the chain answers under now (ADR-0114), else the launch one
   const supply = c.supplyUnits || CURVE_DEFAULTS.supplyUnits;
-  // ADR-0162: every store opens on the virtual reserve, so the first price is V / supply = 20 MSK
+  // ADR-0162: every store opens on the virtual reserve, so the first price is V / supply = 20 BILI
   const first = curve.price(curve.opening({ supplyUnits: supply, unitsPerPosition: 1n }));
   $('#main').innerHTML = h`<div class="docs">
     <div class="page-h"><h1>How the model store works</h1></div>
     <p>MISAKA Options is a window onto the MISAKA chain's <b>model store</b>. Every model registered on the chain can open a store; what it sells is a <b>membership</b> in that model — access its developer declares on chain and, where the chain can check it, enforces. The store lives in the chain's PALW state fold; this site reads it through a node's wRPC and the EVM's read precompiles, and sends joins and leaves through the EVM's writer. Nothing on this site is a number of its own: every figure is an RPC reply or the chain's own arithmetic applied to a market row, and a dash means the value is not available.</p>
-    <p><b>A membership is not an income.</b> No holder is ever paid, there is no dividend, no rebate, no share of a fee and no claim on the reserve — the chain refuses to store a promise of any of those (ADR-0091, ADR-0095 §4.2). What a membership is worth to you is the access it carries, which the model's owner declares and this site prints on the store page. A membership can also be given back to the store for MSK at whatever the curve then pays, and that number moves. Nothing here supports it.</p>
+    <p><b>A membership is not an income.</b> No holder is ever paid, there is no dividend, no rebate, no share of a fee and no claim on the reserve — the chain refuses to store a promise of any of those (ADR-0091, ADR-0095 §4.2). What a membership is worth to you is the access it carries, which the model's owner declares and this site prints on the store page. A membership can also be given back to the store for BILI at whatever the curve then pays, and that number moves. Nothing here supports it.</p>
     <h2>The words on this page, and the chain's</h2>
     <p>ADR-0087 §0.3 fixes the nouns for this repository, the CLI, the RPC, the explorer and this
     site: they are <b>positions</b>, held by <b>holders</b>, in a <b>line</b>, conferring a
@@ -3070,7 +3070,7 @@ function pageDocs() {
       <tr><td>membership, member</td><td>position, holder (<code>decimals() = 0</code>)</td></tr>
       <tr><td>join / leave</td><td><code>buy(minUnitsOut)</code> / <code>sell(unitsIn, minMskOutSompi)</code></td></tr>
       <tr><td>seed the pool (optional)</td><td><code>seed()</code>, the seed</td></tr>
-      <tr><td>buy-back reserve</td><td>the curve's MSK reserve</td></tr></table>
+      <tr><td>buy-back reserve</td><td>the curve's BILI reserve</td></tr></table>
     <p>What a position is <b>not</b>, and what no page here may call it: a share, stock, equity, a
     security, a dividend, a yield, an investment in an issuer (株・株式・配当・出資・利回り). There is no
     company, no issuer, no capital raised, no profit and nobody who owes a holder anything —
@@ -3083,41 +3083,41 @@ function pageDocs() {
     <p>Most of that is the developer's to honour off chain, and this site says so. Two parts are not: while a line declares an early-access lead, <b>the fold refuses to make a new version current inside that window</b>, and it refuses to let one skip the window by publishing straight to current — the exclusivity is arithmetic, not a promise. And a declaration that outlives its own cadence or its expiry <b>lapses on its own</b>, with no complaint filed by anyone, and the card then says LAPSED. A weakening or a withdrawal takes effect only after notice, so a member can see what they are about to lose while there is still time to leave (ADR-0095).</p>
     <p class="dim">Where a store's card says the node serves no declaration, that is what it means: either the node predates ADR-0095 or the rule is not armed on this network yet. Nothing is promised that the chain cannot show you.</p>
     <h2>A store opens with the model, and nobody has to deposit anything</h2>
-    <p>A <b>line</b> is a model in the store's sense: a class (a registered model graph), an owner (a bond, the chain's post-quantum identity) and a name. Every class has a founding line whose id is the class id. <b>Every line has a store from the moment it is added</b> (ADR-0162): the class's registration adds its founding line, and founding a line adds the others. The store opens on a <b>virtual reserve</b> of ${fmtMsk(VIRTUAL_V2_SOMPI, 0)} MSK: a number the curve prices with, which <b>no object ever pays to anyone</b>, so nobody has to lock MSK for a store to exist. <b>Joins start when the chain approves the model</b> — its class <code>Active</code> in status and in the registry's lifecycle; until then the store shows its price and its floor beside the status 承認待ち · trading starts at approval, and a join is refused. Leaving is never refused. A <b>seed</b> is optional: anyone may lock MSK into a store before its first trade (on the EVM through the facade's <code>seed()</code>, on the UTXO side with <code>misaka palw model-seed</code>); it deepens the pool and raises the floor, it is <b>locked for good</b> (no withdrawal, no LP token, no admin), whoever pays it receives <b>no membership</b> and nothing back, and it is <b>at their risk</b>: a model the chain never approves never trades, and its seed stays locked. After the first trade a seed is refused, because it would raise the price of memberships already out and their holders could sell part of it back out.</p>
+    <p>A <b>line</b> is a model in the store's sense: a class (a registered model graph), an owner (a bond, the chain's post-quantum identity) and a name. Every class has a founding line whose id is the class id. <b>Every line has a store from the moment it is added</b> (ADR-0162): the class's registration adds its founding line, and founding a line adds the others. The store opens on a <b>virtual reserve</b> of ${fmtMsk(VIRTUAL_V2_SOMPI, 0)} BILI: a number the curve prices with, which <b>no object ever pays to anyone</b>, so nobody has to lock BILI for a store to exist. <b>Joins start when the chain approves the model</b> — its class <code>Active</code> in status and in the registry's lifecycle; until then the store shows its price and its floor beside the status 承認待ち · trading starts at approval, and a join is refused. Leaving is never refused. A <b>seed</b> is optional: anyone may lock BILI into a store before its first trade (on the EVM through the facade's <code>seed()</code>, on the UTXO side with <code>misaka palw model-seed</code>); it deepens the pool and raises the floor, it is <b>locked for good</b> (no withdrawal, no LP token, no admin), whoever pays it receives <b>no membership</b> and nothing back, and it is <b>at their risk</b>: a model the chain never approves never trades, and its seed stays locked. After the first trade a seed is refused, because it would raise the price of memberships already out and their holders could sell part of it back out.</p>
     <h2>A membership is whole, and it cannot be handed to anyone</h2>
     <p>Every store opens with <b>${fmtPos(supply)} memberships</b>, fixed at the opening and forever, and a membership is a <b>whole number</b>: one unit, no fraction (<code>decimals() = 0</code>). A join that would release less than one releases nothing and is refused; a leave names whole memberships. <b>There is no transfer</b> between people, on the chain or on the EVM: the facade's <code>transfer</code>, <code>approve</code> and <code>allowance</code> revert, and a contract can never hold one. So a membership cannot be scalped, lent or resold — the only way in is to pay the protocol, and the only way out is to give it back to the protocol.</p>
     <h2>What a membership costs</h2>
-    <p>The price is not set by anyone and there is no other buyer or seller: each line's store is a constant-product curve over <code>X = virtual reserve + real reserve</code>. <code>X × memberships = K</code>, where <code>K</code> is taken from the row as it stands at every move, so the product can only stay or grow. The price at any moment is <code>X / memberships still in the curve</code>; there is no other price. The first price is <code>virtual reserve / ${fmtPos(supply)}</code> (${fmtPrice(first)} MSK). A join adds its net leg to the real reserve and releases <code>memberships − ⌈K / X′⌉</code>; a leave returns memberships and pays <code>X − ⌈K / memberships′⌉</code>, and <b>never more than the real reserve above the locked seed</b> — nobody is ever paid out of the virtual reserve or a seed. <b>Joining raises the price for the next member; leaving lowers it.</b></p>
+    <p>The price is not set by anyone and there is no other buyer or seller: each line's store is a constant-product curve over <code>X = virtual reserve + real reserve</code>. <code>X × memberships = K</code>, where <code>K</code> is taken from the row as it stands at every move, so the product can only stay or grow. The price at any moment is <code>X / memberships still in the curve</code>; there is no other price. The first price is <code>virtual reserve / ${fmtPos(supply)}</code> (${fmtPrice(first)} BILI). A join adds its net leg to the real reserve and releases <code>memberships − ⌈K / X′⌉</code>; a leave returns memberships and pays <code>X − ⌈K / memberships′⌉</code>, and <b>never more than the real reserve above the locked seed</b> — nobody is ever paid out of the virtual reserve or a seed. <b>Joining raises the price for the next member; leaving lowers it.</b></p>
     <p><b>The floor.</b> Because the product never falls, the price can never go under <code>(virtual reserve + seed) / ${fmtPos(supply)}</code> — the price with every membership back in the curve — and that floor only rises, with every seed paid before the first trade and every membership mining retires. The real reserve never falls under the locked seed, by any sequence of joins and leaves. What the floor does not promise is that the reserve can pay everyone that price: the last member out is paid at the curve's own slope.</p>
     <h2>Using the model buys memberships back</h2>
     <p>When a block does PALW work with a model, the worker reward it earns is <b>escrowed</b> and named for its miner only when the block's claim reaches <code>Final</code>. At that moment <b>5 % of that reward buys memberships from this model's own store</b> and stays in it, and the miner is named the other <b>95 %</b> (ADR-0091). The slice takes no fee and gives nobody a membership: what the curve gives up for it is <b>retired</b> — the chain holds it for good, no object can sell it, and <code>in the curve + every member's + retired = ${fmtPos(supply)}</code>. <b>Nothing is ever distributed to members</b>; what use does for a member is raise the price the store will pay them if they ever leave.</p>
-    <p>A store that does not trade yet (before the model's approval), or one closed to new members, pays its miner in full — nothing is taken for it, so a model the chain never approves has locked no miner's MSK. Because the slice enters the reserve, the product rises and the price rises even when the slice is worth less than one membership: on testnet-11's subsidy the escrow is 2.29690373 MSK, the slice 0.11484518 MSK and the miner's 2.18205855 MSK.</p>
+    <p>A store that does not trade yet (before the model's approval), or one closed to new members, pays its miner in full — nothing is taken for it, so a model the chain never approves has locked no miner's BILI. Because the slice enters the reserve, the product rises and the price rises even when the slice is worth less than one membership: on testnet-11's subsidy the escrow is 2.29690373 BILI, the slice 0.11484518 BILI and the miner's 2.18205855 BILI.</p>
     <h2>Fees</h2>
-    <table><tr><th>on every MSK leg of a join or a leave</th><th>share</th><th>where it goes</th></tr>
+    <table><tr><th>on every BILI leg of a join or a leave</th><th>share</th><th>where it goes</th></tr>
       <tr><td>burn</td><td>${pctOf(fees.burnPermille)}</td><td>destroyed; supply only ever falls</td></tr>
       <tr><td>the model's owner</td><td>${pctOf(fees.legPermille)}</td><td>the line's owner bond (shared with an adopted contributor when the owner says so); burned for an unowned genesis line${fees.legPermille === LEG_V2_PERMILLE ? '' : ' — 5 % once ADR-0114\'s height is reached on this network'}</td></tr>
       <tr><td>net</td><td>${pctOf(1000n - fees.burnPermille - fees.legPermille)}</td><td>into the buy-back reserve on a join; paid to the member on a leave</td></tr>
       <tr><td>a seed (optional)</td><td>none</td><td>it is reserve, not a purchase: every sompi of it enters the curve, locked for good, and buys no membership</td></tr>
       <tr><td>the mining slice</td><td>none</td><td>reserve too: 5 % of a block's reward, whole; what it buys is retired, not held (ADR-0091)</td></tr></table>
-    <p>Joining and then leaving therefore costs ${pctOf(2n * (fees.burnPermille + fees.legPermille))} plus what your own move did to the price (past ADR-0114's height the owner takes ${pctOf(LEG_V2_PERMILLE)} and a round trip leaves about 20 % behind). Worked with no fee from a fresh store (ADR-0162 §5): A joins with 100,000 MSK and gets 4,950 memberships (price 20.40197959); B joins with 1,000,000 MSK and gets 44,599 (price 24.64196993); A leaves with all 4,950 and is paid 120,651.90897692 MSK; B leaves with all 44,599 and is paid 979,335.89102307 MSK — and the real reserve is left holding 12.2 MSK, the rounding's dust: nobody was paid out of the virtual reserve. Under ADR-0087's fees (5 % burned, 1 % to the owner) the same joins get 4,656 and 42,198. Doubling the first price takes about 4.14 M MSK, four times it 10 M, ten times about 21.6 M. The <a href="?selftest=1#/docs">self-test</a> checks this site's arithmetic against those golden numbers from the chain's own tests.</p>
+    <p>Joining and then leaving therefore costs ${pctOf(2n * (fees.burnPermille + fees.legPermille))} plus what your own move did to the price (past ADR-0114's height the owner takes ${pctOf(LEG_V2_PERMILLE)} and a round trip leaves about 20 % behind). Worked with no fee from a fresh store (ADR-0162 §5): A joins with 100,000 BILI and gets 4,950 memberships (price 20.40197959); B joins with 1,000,000 BILI and gets 44,599 (price 24.64196993); A leaves with all 4,950 and is paid 120,651.90897692 BILI; B leaves with all 44,599 and is paid 979,335.89102307 BILI — and the real reserve is left holding 12.2 BILI, the rounding's dust: nobody was paid out of the virtual reserve. Under ADR-0087's fees (5 % burned, 1 % to the owner) the same joins get 4,656 and 42,198. Doubling the first price takes about 4.14 M BILI, four times it 10 M, ten times about 21.6 M. The <a href="?selftest=1#/docs">self-test</a> checks this site's arithmetic against those golden numbers from the chain's own tests.</p>
     <h2>Listing a model</h2>
-    <p>The <a href="#/add">List a model</a> page is the checklist: (1) register the class from a node that holds the artifact (a bond, its key and a fee; not something a browser can do) — <b>the store is open at that moment</b>, priced at ${fmtPrice(first)} MSK; (2) optionally seed the pool before its first trade; (3) approval, which is the class reaching <code>Active</code> — at its activation DAA and through the registry's lifecycle, its lanes certified (ADR-0054, ADR-0075; a clock and a court, not a vote) — and <b>trading starts there</b>; (4) members join, and the owner declares what their membership gets them (ADR-0095).</p>
+    <p>The <a href="#/add">List a model</a> page is the checklist: (1) register the class from a node that holds the artifact (a bond, its key and a fee; not something a browser can do) — <b>the store is open at that moment</b>, priced at ${fmtPrice(first)} BILI; (2) optionally seed the pool before its first trade; (3) approval, which is the class reaching <code>Active</code> — at its activation DAA and through the registry's lifecycle, its lanes certified (ADR-0054, ADR-0075; a clock and a court, not a vote) — and <b>trading starts there</b>; (4) members join, and the owner declares what their membership gets them (ADR-0095).</p>
     <h2>Two doors, one store</h2>
     <p>A move can be a carrier transaction on the UTXO side signed by an ML-DSA-87 key, or an EVM transaction from an ordinary account. Both reach the same curve and the same fee table. This site uses the EVM door: the line's <b>MRC-20 facade</b> (address <code>0x4d50…</code>, read from the registry) exposes ERC-20's read half plus <code>buy(minUnitsOut)</code> payable, <code>sell(unitsIn, minMskOutSompi)</code> and <code>seed()</code> payable, which route to the writer at <code>0x…F013</code> (actions 1, 2 and 3). The site says join, leave and seed; the ABI says buy, sell and seed, and both name the same call.</p>
     <h2>When a join lands</h2>
     <ol><li><b>Emit.</b> Your transaction is included in chain block B. The writer validates the call, escrows a join's or a seed's value and emits <code>ActionQueued</code>. A join on a model the chain has not approved, and a seed on a store that has traded, revert here (<code>ClassNotEligible</code>, <code>SeedAfterTrade</code>) and move no value. Nothing else happens yet.</li>
       <li><b>Apply.</b> The fold applies the action after block B, after every carrier-borne move of B, quoted on the row as it then stands. This site sends no floor (<code>minUnitsOut</code> / <code>minMskOutSompi</code> = 0), so the move fills at the row's price then; a move that would release no membership or pay nothing is refused, never partial. A seed that a same-block trade overtook, or on a frozen class, is refused.</li>
-      <li><b>Settle.</b> In block C, the selected child of B, a system op burns a filled join's or seed's escrow into the line's sink, refunds a refused one, or credits a filled leave's net MSK to your account. The facade emits <code>Bought</code>, <code>Sold</code>, <code>Seeded</code> or <code>Refused</code> there.</li></ol>
+      <li><b>Settle.</b> In block C, the selected child of B, a system op burns a filled join's or seed's escrow into the line's sink, refunds a refused one, or credits a filled leave's net BILI to your account. The facade emits <code>Bought</code>, <code>Sold</code>, <code>Seeded</code> or <code>Refused</code> there.</li></ol>
     <p>So a membership taken at B is readable, and settled, one chain block later. My activity on this site follows exactly that sequence: sent, queued, then settled or refused.</p>
     <h2>Two member namespaces</h2>
     <p>A carrier-side member is a bond's payout payload. An EVM account's holder id is <code>evm_holder_v1(chain id, address)</code>, a keyed BLAKE2b-512 that this site reads from the position precompile (or derives locally when the EVM RPC is down). A membership taken from the EVM is given back from the EVM; one taken by a carrier is given back by a carrier; nothing moves units between the two. A tier, though, counts both: a member is not two people (ADR-0095 §4.3). An EVM-held membership carries the <code>CLASSICAL-ECC</code> security label: it is guarded by a secp256k1 key, not by the chain's post-quantum domain.</p>
     <h2>What the chain measures, and what it does not</h2>
     <p>Use counters are the fold's own count of paid inferences per version; they say what was used, never how good it was. Evaluations, dataset commitments and runtime hashes are <b>declarations</b> the chain records, labels by signer and never reads. The rankings order use, members, what mining bought back, the reserve and the opening deposit only; there is no on-chain quality oracle by design.</p>
     <h2>Units on the wire</h2>
-    <p>MSK amounts in the views, quotes and events are in sompi (1 MSK = 10<sup>8</sup> sompi). A join's or an opening's <code>msg.value</code> is in wei and must be a multiple of 10<sup>10</sup> (1 sompi). Membership amounts are whole numbers (<code>decimals() = 0</code>; the market row's <code>positionUnits</code> is a count of memberships).</p>
+    <p>BILI amounts in the views, quotes and events are in sompi (1 BILI = 10<sup>8</sup> sompi). A join's or an opening's <code>msg.value</code> is in wei and must be a multiple of 10<sup>10</sup> (1 sompi). Membership amounts are whole numbers (<code>decimals() = 0</code>; the market row's <code>positionUnits</code> is a count of memberships).</p>
     <h2>Read the design</h2>
     <ul><li><a href="${CFG.ADR_URL}/0095-a-position-is-a-membership-not-an-income.md" target="_blank" rel="noopener">ADR-0095: a position is a membership, not an income</a></li>
-      <li><a href="${CFG.ADR_URL}/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md" target="_blank" rel="noopener">ADR-0090: the pair is seeded with real MSK, locked for good, and a position is whole</a></li>
+      <li><a href="${CFG.ADR_URL}/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md" target="_blank" rel="noopener">ADR-0090: the pair is seeded with real BILI, locked for good, and a position is whole</a></li>
       <li><a href="${CFG.ADR_URL}/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md" target="_blank" rel="noopener">ADR-0091: the reward buys the pair, and no holder is paid</a></li>
       <li><a href="${CFG.ADR_URL}/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md" target="_blank" rel="noopener">ADR-0087: a position is bought from the curve and sold back to it</a></li>
       <li><a href="${CFG.ADR_URL}/0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md" target="_blank" rel="noopener">ADR-0088: the class keeps its graph; a line keeps its owner, and the owner keeps publishing</a></li>
@@ -3162,7 +3162,7 @@ async function pageAdd(arg) {
     const cs = f && f.status;
     const reg = !st.id ? ['', 'enter a class id'] : f == null ? ['', 'checking'] : f.exists === false ? ['bad', 'no class with this id on this chain'] : f.exists ? ['ok', 'registered' + (f.registeredDaa != null ? ' at DAA ' + fmtInt(f.registeredDaa) : '')] : ['', 'the chain did not answer'];
     // ADR-0162: the store opens with the registration — there is no opening step, and a seed is optional
-    const seed = !st.lineId ? ['', 'enter a line id'] : rec && rec.notFound ? ['bad', 'no such line'] : !m ? ['', 'reading the market row'] : m.seeded ? ['ok', 'open since DAA ' + fmtInt(m.openedDaa) + (m.seedSompi != null && m.seedSompi > 0n ? ' · ' + fmtMsk(m.seedSompi, 0) + ' MSK seeded' : '')] : ['warn', 'no market on this network'];
+    const seed = !st.lineId ? ['', 'enter a line id'] : rec && rec.notFound ? ['bad', 'no such line'] : !m ? ['', 'reading the market row'] : m.seeded ? ['ok', 'open since DAA ' + fmtInt(m.openedDaa) + (m.seedSompi != null && m.seedSompi > 0n ? ' · ' + fmtMsk(m.seedSompi, 0) + ' BILI seeded' : '')] : ['warn', 'no market on this network'];
     const ap = rec ? approvalOf(rec) : { approved: false };
     const appr = !st.id ? ['', 'enter a class id'] : !cs ? (f && f.exists === false ? ['bad', 'no class'] : ['', 'status not answered']) : cs.head === 'Active' ? (ap.approved ? ['ok', 'Active: trading'] : ['warn', 'Active, ' + (ap.lifecycle || 'not Active') + ' in the registry: trading starts at Active']) : cs.head === 'Registered' ? ['warn', 'Registered, activates at DAA ' + (cs.activationDaa != null ? fmtInt(cs.activationDaa) : '(not served)') + (db.chain.daa != null && cs.activationDaa != null ? ' (now ' + fmtInt(db.chain.daa) + ')' : '')] : cs.head === 'Frozen' ? ['bad', 'Frozen: no joins, ever'] : cs.head === 'Dormant' ? ['bad', 'Dormant: register again'] : ['', cs.head];
     const trade = m && m.seeded && m.trading ? ['ok', 'open to members'] : m && m.seeded ? ['warn', '承認待ち · trading starts at approval'] : ['', 'not yet'];
@@ -3202,7 +3202,7 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \\
       <li class="step">
         <div class="step-h"><span class="n">2</span><b>The store is open at once</b> ${stepTag(...s.seed)}</div>
         <div class="step-b">
-          <p class="small"><b>Nothing to deposit.</b> The moment the class is registered (or a line is founded) its store exists, on a virtual reserve of ${fmtMsk(VIRTUAL_V2_SOMPI, 0)} MSK that prices every membership and is never paid to anyone: ${fmtPos(supplyFor(m))} memberships at a first price of ${fmtPrice(VIRTUAL_V2_SOMPI / supplyFor(m))} MSK, shown on every surface from then on (ADR-0162). <b>Optional:</b> anyone may seed the pool before its first trade — it deepens the curve and raises the floor, it is locked for good, it buys no membership, and it is at the payer's risk (a model the chain never approves never trades). From a bond instead of a wallet: <code>misaka palw model-seed --line &lt;line id&gt; --msk &lt;amount&gt; --key-file &lt;seed&gt; --yes</code>.</p>
+          <p class="small"><b>Nothing to deposit.</b> The moment the class is registered (or a line is founded) its store exists, on a virtual reserve of ${fmtMsk(VIRTUAL_V2_SOMPI, 0)} BILI that prices every membership and is never paid to anyone: ${fmtPos(supplyFor(m))} memberships at a first price of ${fmtPrice(VIRTUAL_V2_SOMPI / supplyFor(m))} BILI, shown on every surface from then on (ADR-0162). <b>Optional:</b> anyone may seed the pool before its first trade — it deepens the curve and raises the floor, it is locked for good, it buys no membership, and it is at the payer's risk (a model the chain never approves never trades). From a bond instead of a wallet: <code>misaka palw model-seed --line &lt;line id&gt; --msk &lt;amount&gt; --key-file &lt;seed&gt; --yes</code>.</p>
           <div class="add-id">
             <label for="addLine" class="muted small">Line id (defaults to the class id, the founding line)</label>
             <div class="inp-row"><input id="addLine" class="idinp mono" spellcheck="false" autocomplete="off" placeholder="line id, 128 hex" value="${st.lineId}"><button class="btn" id="addLineUse">Use</button></div>
@@ -3228,9 +3228,9 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \\
         <div class="step-b">
           <p class="small">The model appears in <a href="#/lines">Models</a> with its membership price from its registration; once approved, joining raises it for the next member, leaving lowers it, and no sequence of either can take the price under its floor or pay anyone out of the virtual reserve or a seed. The last step is the owner's alone: <b>declare what a membership gets its holders</b> (ADR-0095) — early versions, a private beta, priority in the queue, the developer's room — with <code>misaka palw line-benefits</code>. Until they do, the card on the store page says so and the model is one nobody has promised anything about.${st.lineId ? raw(' <a class="btn btn-sm btn-accent" href="#/store/' + esc(st.lineId) + '">Open ' + esc(rec ? db.label(rec) : shortId(st.lineId)) + '</a> <a class="btn btn-sm" href="#/line/' + esc(st.lineId) + '">Model details</a>') : ''}</p>
           <dl class="kv small">
-            <dt>Membership price</dt><dd>${m && m.price != null ? fmtPrice(m.price) + ' MSK' : m && !m.seeded ? 'none (no market on this network)' : '—'}</dd>
-            <dt>Price floor</dt><dd>${m && m.floor != null ? fmtPrice(m.floor) + ' MSK' : '—'}</dd>
-            <dt>Virtual / real reserve</dt><dd>${m && m.seeded ? fmtMsk(m.virtualSompi || 0n, 0) + ' MSK (price only) / ' + fmtMsk(m.mskReserve, 2) + ' MSK' : '—'}</dd>
+            <dt>Membership price</dt><dd>${m && m.price != null ? fmtPrice(m.price) + ' BILI' : m && !m.seeded ? 'none (no market on this network)' : '—'}</dd>
+            <dt>Price floor</dt><dd>${m && m.floor != null ? fmtPrice(m.floor) + ' BILI' : '—'}</dd>
+            <dt>Virtual / real reserve</dt><dd>${m && m.seeded ? fmtMsk(m.virtualSompi || 0n, 0) + ' BILI (price only) / ' + fmtMsk(m.mskReserve, 2) + ' BILI' : '—'}</dd>
             <dt>Positions out</dt><dd>${m && m.positionsOut != null ? fmtPos(m.positionsOut) + ' of ' + fmtPos(m.supplyUnits) : '—'}</dd>
           </dl>
         </div>
@@ -3246,7 +3246,7 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \\
     if (rec && rec.notFound) { slot.innerHTML = h`<div class="empty">The node reports no line ${shortId(st.lineId, 12)} (and no class of that id).</div>`.s; return; }
     if (!m) { slot.innerHTML = '<div class="empty">' + (st.err ? esc(st.err) : 'Reading the market row…') + '</div>'; return; }
     if (!m.seeded) { slot.innerHTML = h`<div class="empty">No market for this line on ${CFG.NETWORK_NAME}: the network has not armed ADR-0162's virtual reserve, under which a store opens with its model.</div>`.s; return; }
-    const open = h`<div class="seeded-box"><span class="tag ok">Open</span> since DAA ${fmtInt(m.openedDaa)} · a membership is ${m.price != null ? fmtPrice(m.price) : '—'} MSK, the floor ${m.floor != null ? fmtPrice(m.floor) : '—'} MSK${m.seedSompi != null && m.seedSompi > 0n ? ' · ' + fmtMsk(m.seedSompi) + ' MSK seeded' + (m.seededBy ? ' (first by ' + shortId(m.seededBy, 12) + ')' : '') : ''} · ${m.trading ? 'trading' : '承認待ち · trading starts at approval'}.</div>`.s;
+    const open = h`<div class="seeded-box"><span class="tag ok">Open</span> since DAA ${fmtInt(m.openedDaa)} · a membership is ${m.price != null ? fmtPrice(m.price) : '—'} BILI, the floor ${m.floor != null ? fmtPrice(m.floor) : '—'} BILI${m.seedSompi != null && m.seedSompi > 0n ? ' · ' + fmtMsk(m.seedSompi) + ' BILI seeded' + (m.seededBy ? ' (first by ' + shortId(m.seededBy, 12) + ')' : '') : ''} · ${m.trading ? 'trading' : '承認待ち · trading starts at approval'}.</div>`.s;
     if (!m.takesSeed) { slot.innerHTML = open + h`<div class="note tiny">${bi(m.soldUnits) > 0n ? 'It has traded, so it takes no seed now: a seed is taken only before the first trade.' : 'This store opened by a seed before ADR-0162 and takes no further seed.'}</div>`.s; return; }
     slot.innerHTML = open + '<div id="seedSlotInner"></div>';
     st.seed.balance = st.balance;
@@ -3454,7 +3454,7 @@ async function pageDev(arg) {
       <div class="grid6 dev-stats">
         <div class="tile"><div class="k">Models</div><div class="v">${String(list.length)}</div><div class="s">lines whose row names you, or that you watch</div></div>
         <div class="tile"><div class="k">Members</div><div class="v">${memKnown ? fmtInt(mem) : '—'}</div><div class="s">memberships held outside the curves</div></div>
-        <div class="tile"><div class="k">In the reserves</div><div class="v">${fmtMsk(reserve, 0)}</div><div class="s">MSK behind your stores' buy-backs</div></div>
+        <div class="tile"><div class="k">In the reserves</div><div class="v">${fmtMsk(reserve, 0)}</div><div class="s">BILI behind your stores' buy-backs</div></div>
         <div class="tile"><div class="k">Owner fees earned</div><div class="v">${fmtMsk(fees, 2)}</div><div class="s">the owner's ${pctOf(fc.legPermille)} of every join and leave, paid to the owner payload</div></div>
         <div class="tile"><div class="k">Burned by your stores</div><div class="v">${fmtMsk(burned, 2)}</div><div class="s">the ${pctOf(fc.burnPermille)} burn of every move</div></div>
         <div class="tile"><div class="k">Paid inferences</div><div class="v">${fmtInt(used)}</div><div class="s">claims the fold counted against your current versions</div></div>
@@ -3475,11 +3475,11 @@ async function pageDev(arg) {
       return h`<div class="dev-card">
         <div class="dev-card-h"><img alt="" src="${identicon(r.lineId, 40)}"><div><div class="n">${db.label(r)}</div><div class="s mono dim">${r.symbol} · ${shortId(r.lineId, 8)}</div></div></div>
         <div class="dev-tags">${roles.map((x) => h`<span class="tag ok">${x}</span>`)}${dev.watch.includes(r.lineId) && !roles.length ? raw('<span class="tag">watching</span>') : ''}${m ? (m.seeded ? raw('<span class="tag ok">store open</span>') : raw('<span class="tag warn">store not open</span>')) : ''}${cs && cs.head !== 'Active' ? h`<span class="tag warn">${cs.head}</span>` : ''}</div>
-        <div class="dev-kv"><span>Price</span><b>${m && m.price != null ? fmtPrice(m.price) + ' MSK' : '—'}</b></div>
+        <div class="dev-kv"><span>Price</span><b>${m && m.price != null ? fmtPrice(m.price) + ' BILI' : '—'}</b></div>
         <div class="dev-kv"><span>Members</span><b>${n != null ? fmtInt(n) : '—'}</b></div>
         <div class="dev-bar" title="memberships outside the curve, of the ${m ? fmtInt(m.supplyUnits) : ''} a line opens with"><i style="width:${sold != null ? Math.min(100, Math.max(sold, sold > 0 ? 1 : 0)) : 0}%"></i></div>
-        <div class="dev-kv tiny dim"><span>${sold != null ? sold.toFixed(2) + ' % of the supply taken' : 'no curve yet'}</span><span>reserve ${m ? fmtMsk(m.mskReserve, 0) : '—'} MSK</span></div>
-        <div class="dev-kv"><span>Owner fees earned</span><b>${m ? fmtMsk(m.ownerPaid || 0n, 2) + ' MSK' : '—'}</b></div>
+        <div class="dev-kv tiny dim"><span>${sold != null ? sold.toFixed(2) + ' % of the supply taken' : 'no curve yet'}</span><span>reserve ${m ? fmtMsk(m.mskReserve, 0) : '—'} BILI</span></div>
+        <div class="dev-kv"><span>Owner fees earned</span><b>${m ? fmtMsk(m.ownerPaid || 0n, 2) + ' BILI' : '—'}</b></div>
         <div class="dev-kv"><span>Current version</span><b>${r.row && r.row.current ? 'v' + r.row.current : '—'}</b></div>
         <div class="dev-kv"><span>Member tiers</span><b>${b && b.tiers ? String(b.tiers.length) : '—'}</b></div>
         <div class="dev-acts"><a class="btn btn-sm" href="#/store/${r.lineId}">Store</a> <button class="btn btn-sm" data-manage="${r.lineId}">Manage</button></div>
@@ -3503,7 +3503,7 @@ async function pageDev(arg) {
     const target = pickLine();
     return h`<div class="grid2 dev-launch">
       <div class="panel"><div class="panel-h">1 · Found a line</div><div class="panel-b">
-        <p class="small">A <b>line</b> is a model people can join: it runs on a registered <b>class</b> (the graph), publishes <b>versions</b> (artifact roots) and gets its own store. Founding one is a signed carrier from an active bond, rent-priced (1 MSK of its fee is burned). A class you do not have yet is registered first — <a href="#/add">the listing checklist</a> walks through it, and <a href="#/dev/programs">Tools &amp; programs</a> writes its ADR-0108 manifest.</p>
+        <p class="small">A <b>line</b> is a model people can join: it runs on a registered <b>class</b> (the graph), publishes <b>versions</b> (artifact roots) and gets its own store. Founding one is a signed carrier from an active bond, rent-priced (1 BILI of its fee is burned). A class you do not have yet is registered first — <a href="#/add">the listing checklist</a> walks through it, and <a href="#/dev/programs">Tools &amp; programs</a> writes its ADR-0108 manifest.</p>
         <label class="small muted" for="lcClass">Class</label>
         <select id="lcClass" class="idinp mono"><option value="">choose a class…</option>${classes.map((c) => h`<option value="${c}" ${c === L.classId ? 'selected' : ''}>${db.line(c) ? db.label(db.line(c)) + ' · ' : ''}${shortId(c, 10)}</option>`)}</select>
         <label class="small muted" for="lcName">Name <span class="dim">(${String(nameBytes)}/64 bytes — shared, never squatted: the founder is in the line id)</span></label>
@@ -3528,7 +3528,7 @@ async function pageDev(arg) {
       </div></div>
     </div>
     <div class="panel"><div class="panel-h">3 · Its store (open from the registration)</div><div class="panel-b">
-      <p class="small">There is nothing to open: a line's store exists from the moment the line is added, on a virtual reserve of ${fmtMsk(VIRTUAL_V2_SOMPI, 0)} MSK that prices and is never paid (ADR-0162), and it trades from the class's approval. An optional <b>seed</b>, before the first trade, deepens the pool and raises the floor — locked for good, no membership, at the payer's risk. ${target ? h`For <b>${db.label(target)}</b>:` : raw('Add or watch the line first.')}</p>
+      <p class="small">There is nothing to open: a line's store exists from the moment the line is added, on a virtual reserve of ${fmtMsk(VIRTUAL_V2_SOMPI, 0)} BILI that prices and is never paid (ADR-0162), and it trades from the class's approval. An optional <b>seed</b>, before the first trade, deepens the pool and raises the floor — locked for good, no membership, at the payer's risk. ${target ? h`For <b>${db.label(target)}</b>:` : raw('Add or watch the line first.')}</p>
       <div id="devSeed"></div>
     </div></div>`;
   }
@@ -3678,7 +3678,7 @@ async function pageDev(arg) {
         dev.seed.balance = dev.balance;
         const tm = target.market;
         if (tm && tm.takesSeed) renderSeedPanel(box, dev.seed, () => target, () => { toast('Seed sent. It joins the pool one block after a block carries it; follow it under Open orders on the store page.', 'ok'); });
-        else if (tm && tm.seeded) box.innerHTML = h`<div class="note">The store is open: a membership is ${tm.price != null ? fmtPrice(tm.price) : '—'} MSK, the floor ${tm.floor != null ? fmtPrice(tm.floor) : '—'} MSK, ${fmtInt(members(tm) || 0n)} memberships held${tm.trading ? '' : ' · 承認待ち · trading starts at approval'}. <a href="#/store/${target.lineId}">Go to the store</a></div>`.s;
+        else if (tm && tm.seeded) box.innerHTML = h`<div class="note">The store is open: a membership is ${tm.price != null ? fmtPrice(tm.price) : '—'} BILI, the floor ${tm.floor != null ? fmtPrice(tm.floor) : '—'} BILI, ${fmtInt(members(tm) || 0n)} memberships held${tm.trading ? '' : ' · 承認待ち · trading starts at approval'}. <a href="#/store/${target.lineId}">Go to the store</a></div>`.s;
         else box.innerHTML = h`<div class="note">No market for this line on ${CFG.NETWORK_NAME}: the network has not armed ADR-0162's virtual reserve.</div>`.s;
       }
     }
@@ -3820,48 +3820,48 @@ function selfTestReport() {
   eq('facade of 1c866e31…', facadeDerived('1c866e31d50411237ce87f710c0defaca7d0bd0f5744ce6e49ce37893c93dc644918a67c22d10e555cb38a5c4f053fd07c90e74b0b4349b639c042698e9140bc'), '0x4d508171946bf26851195b2eb687e764187d0dda');
   eq('evm_holder_v1(0x4D534B, 0x0011…2233)', holderIdDerived('0x4D534B', '0x00112233445566778899aabbccddeeff00112233'), 'a08aa80f963d00cab91278c9b7be8ed347366112aaf3c8cdc85bc9cd417391865e4c0a57001e32a6090d54eb3d815a0df681dc79ee4dc6a8d6f319c9e5d41faf');
   // ---- ADR-0090: the constants, the seed, the goldens of palw_model_market_v1.rs's tests ----
-  const MSK = SOMPI_PER_MSK;
+  const BILI = SOMPI_PER_MSK;
   eq('a position is the unit (PALW_MODEL_POSITION_UNITS_V1 = 1)', CURVE_DEFAULTS.unitsPerPosition, 1n);
   eq('supply is 500,000 whole positions', CURVE_DEFAULTS.supplyUnits, 500000n);
-  eq('least seed is 100,000 MSK (10,000,000,000,000 sompi)', CURVE_DEFAULTS.seedMinSompi, 10000000000000n);
+  eq('least seed is 100,000 BILI (10,000,000,000,000 sompi)', CURVE_DEFAULTS.seedMinSompi, 10000000000000n);
   const z = curve.unseeded();
-  eq('an unseeded row has no price', curve.price(z), null); eq('an unseeded row quotes no buy', curve.buyQuote(z, 1000n * MSK), null); eq('an unseeded row quotes no sell', curve.sellQuote(z, 1n), null);
+  eq('an unseeded row has no price', curve.price(z), null); eq('an unseeded row quotes no buy', curve.buyQuote(z, 1000n * BILI), null); eq('an unseeded row quotes no sell', curve.sellQuote(z, 1n), null);
   const m0 = curve.seed(CURVE_DEFAULTS.seedMinSompi);
-  eq('the seed is the reserve, fee-free', m0.mskReserve, 100000n * MSK); eq('500,000 positions in the curve at the seed', m0.positionUnits, 500000n);
-  eq('first price = seed / 500,000 = 0.2 MSK', curve.price(m0), 20000000n);
-  const b1 = curve.buyQuote(m0, 1000n * MSK);
-  eq('buy 1,000 MSK: burn 50', b1.fees.burn, 50n * MSK); eq('buy 1,000 MSK: owner leg 10', b1.fees.leg, 10n * MSK); eq('buy 1,000 MSK: net 940', b1.fees.net, 940n * MSK);
-  eq('buy 1,000 MSK: 4,656 whole positions out', b1.unitsOut, 4656n); eq('reserve after: 100,940 MSK', b1.after.mskReserve, 100940n * MSK); eq('price after: 20,377,757 sompi', b1.priceAfter, 20377757n);
-  const b2 = curve.buyQuote(b1.after, 1000n * MSK);
-  eq('second buy: 4,570 positions out', b2.unitsOut, 4570n); eq('reserve after: 101,880 MSK', b2.after.mskReserve, 101880n * MSK); eq('buying raises the price', b2.priceAfter > b1.priceAfter, true);
+  eq('the seed is the reserve, fee-free', m0.mskReserve, 100000n * BILI); eq('500,000 positions in the curve at the seed', m0.positionUnits, 500000n);
+  eq('first price = seed / 500,000 = 0.2 BILI', curve.price(m0), 20000000n);
+  const b1 = curve.buyQuote(m0, 1000n * BILI);
+  eq('buy 1,000 BILI: burn 50', b1.fees.burn, 50n * BILI); eq('buy 1,000 BILI: owner leg 10', b1.fees.leg, 10n * BILI); eq('buy 1,000 BILI: net 940', b1.fees.net, 940n * BILI);
+  eq('buy 1,000 BILI: 4,656 whole positions out', b1.unitsOut, 4656n); eq('reserve after: 100,940 BILI', b1.after.mskReserve, 100940n * BILI); eq('price after: 20,377,757 sompi', b1.priceAfter, 20377757n);
+  const b2 = curve.buyQuote(b1.after, 1000n * BILI);
+  eq('second buy: 4,570 positions out', b2.unitsOut, 4570n); eq('reserve after: 101,880 BILI', b2.after.mskReserve, 101880n * BILI); eq('buying raises the price', b2.priceAfter > b1.priceAfter, true);
   const s = curve.sellQuote(b2.after, b1.unitsOut + b2.unitsOut);
   eq('sell all 9,226: gross 187,988,976,000 sompi', s.fees.gross, 187988976000n); eq('sell all: net 176,709,637,440 sompi', s.fees.net, 176709637440n); eq('sell all: the split is exact', s.fees.burn + s.fees.leg + s.fees.net, s.fees.gross);
-  eq('sell all: supply back in the curve', s.after.positionUnits, 500000n); eq('sell all: reserve stays above the seed (100,000.11024 MSK)', s.after.mskReserve, 10000011024000n); eq('selling lowers the price', s.priceAfter < b2.priceAfter, true);
-  eq('M2: nothing minted, nothing vanishes', 2000n * MSK + m0.seedSompi, s.after.mskReserve + s.fees.net + s.after.burnedSompi + b1.fees.leg + b2.fees.leg + s.fees.leg);
+  eq('sell all: supply back in the curve', s.after.positionUnits, 500000n); eq('sell all: reserve stays above the seed (100,000.11024 BILI)', s.after.mskReserve, 10000011024000n); eq('selling lowers the price', s.priceAfter < b2.priceAfter, true);
+  eq('M2: nothing minted, nothing vanishes', 2000n * BILI + m0.seedSompi, s.after.mskReserve + s.fees.net + s.after.burnedSompi + b1.fees.leg + b2.fees.leg + s.fees.leg);
   let k = curve.k(m0), m = m0, okK = true, okSeed = true;
-  for (const x of [1n, 999n, MSK, 37n * MSK, 1000n * MSK, 123456789012n]) { const q = curve.buyQuote(m, x); if (!q) continue; if (curve.k(q.after) < k) okK = false; k = curve.k(q.after); m = q.after; }
+  for (const x of [1n, 999n, BILI, 37n * BILI, 1000n * BILI, 123456789012n]) { const q = curve.buyQuote(m, x); if (!q) continue; if (curve.k(q.after) < k) okK = false; k = curve.k(q.after); m = q.after; }
   const bought = CURVE_DEFAULTS.supplyUnits - m.positionUnits;
   for (const u of [1n, 12345n, bought / 3n, bought / 2n]) { const q = curve.sellQuote(m, u); if (!q) continue; if (curve.k(q.after) < k) okK = false; if (q.after.mskReserve < m0.seedSompi) okSeed = false; k = curve.k(q.after); m = q.after; }
   const rest = curve.sellQuote(m, CURVE_DEFAULTS.supplyUnits - m.positionUnits);
   eq('P1: the product never falls', okK && curve.k(rest.after) >= k, true);
   eq('P1: the reserve never falls under the seed', okSeed && rest.after.mskReserve >= m0.seedSompi && rest.after.positionUnits === 500000n, true);
-  eq('P3: a buy of 0.1 MSK releases nothing', curve.buyQuote(m0, MSK / 10n), null);
-  const one = curve.buyQuote(m0, (22n * MSK) / 100n);
-  eq('P3: a buy of 0.22 MSK releases exactly one', one && one.unitsOut, 1n);
-  const rb = curve.buyQuote(m0, 100n * MSK), rs = curve.sellQuote(rb.after, rb.unitsOut);
+  eq('P3: a buy of 0.1 BILI releases nothing', curve.buyQuote(m0, BILI / 10n), null);
+  const one = curve.buyQuote(m0, (22n * BILI) / 100n);
+  eq('P3: a buy of 0.22 BILI releases exactly one', one && one.unitsOut, 1n);
+  const rb = curve.buyQuote(m0, 100n * BILI), rs = curve.sellQuote(rb.after, rb.unitsOut);
   // ADR-0114: the same table under the 5 % owner leg — the chain's palw_model_market_v1 goldens
   const V2 = Object.assign({}, CURVE_DEFAULTS, { legPermille: 50n });
-  const v2b1 = curve.buyQuote(m0, 1000n * MSK, V2);
-  eq('ADR-0114: a 1,000 MSK join burns 50, pays the owner 50, puts 900 in', [v2b1.fees.burn, v2b1.fees.leg, v2b1.fees.net].join('/'), [50n * MSK, 50n * MSK, 900n * MSK].join('/'));
+  const v2b1 = curve.buyQuote(m0, 1000n * BILI, V2);
+  eq('ADR-0114: a 1,000 BILI join burns 50, pays the owner 50, puts 900 in', [v2b1.fees.burn, v2b1.fees.leg, v2b1.fees.net].join('/'), [50n * BILI, 50n * BILI, 900n * BILI].join('/'));
   eq('ADR-0114: …and releases 4,459 memberships (price 20,361,584 sompi)', v2b1.unitsOut + '/' + v2b1.priceAfter, '4459/20361584');
-  const v2b2 = curve.buyQuote(v2b1.after, 1000n * MSK, V2);
+  const v2b2 = curve.buyQuote(v2b1.after, 1000n * BILI, V2);
   const v2s = curve.sellQuote(v2b2.after, v2b1.unitsOut + v2b2.unitsOut, V2);
   eq('ADR-0114: leaving with all 8,840: gross 179,982,400,000, net 161,984,160,000', v2b2.unitsOut + '/' + v2s.fees.gross + '/' + v2s.fees.net, '4381/179982400000/161984160000');
-  const v2rt = curve.sellQuote(curve.buyQuote(m0, 100n * MSK, V2).after, curve.buyQuote(m0, 100n * MSK, V2).unitsOut, V2);
-  eq('ADR-0114: 100 MSK in and straight out returns 80.892738 MSK (a fifth goes to fees)', v2rt.fees.net, 8089273800n);
-  eq('round trip returns at most 0.94² of the gross', rs.fees.net <= (94n * 94n * MSK) / 100n && rs.fees.net > 80n * MSK, true);
+  const v2rt = curve.sellQuote(curve.buyQuote(m0, 100n * BILI, V2).after, curve.buyQuote(m0, 100n * BILI, V2).unitsOut, V2);
+  eq('ADR-0114: 100 BILI in and straight out returns 80.892738 BILI (a fifth goes to fees)', v2rt.fees.net, 8089273800n);
+  eq('round trip returns at most 0.94² of the gross', rs.fees.net <= (94n * 94n * BILI) / 100n && rs.fees.net > 80n * BILI, true);
   const closed = Object.assign({}, b1.after, { closedToBuys: true });
-  eq('a closed market refuses buys', curve.buyQuote(closed, 10n * MSK), null); eq('a closed market honours sells', !!curve.sellQuote(closed, b1.unitsOut), true);
+  eq('a closed market refuses buys', curve.buyQuote(closed, 10n * BILI), null); eq('a closed market honours sells', !!curve.sellQuote(closed, b1.unitsOut), true);
   // ADR-0091 B6: the reward's slice, the miner's rest, and the move's effect on the row.
   eq('B1: five percent of a 229,690,373 sompi escrow is 11,484,518', curve.buybackSlice(229690373n), 11484518n);
   eq('B1: the miner is named the other ninety-five percent', 229690373n - curve.buybackSlice(229690373n), 218205855n);
@@ -3869,7 +3869,7 @@ function selfTestReport() {
   eq('B1: the whole slice is reserve, no leg', bb1 && bb1.after.mskReserve, 10000011484518n);
   eq('B1: a slice under one position retires none and still raises the price', bb1 && bb1.retired === 0n && curve.price(bb1.after) === 20000022n, true);
   const bb2 = curve.buyback(m0, 310000000n);
-  eq('B5: a 3.1 MSK slice retires 15 positions', bb2 && bb2.retired, 15n);
+  eq('B5: a 3.1 BILI slice retires 15 positions', bb2 && bb2.retired, 15n);
   eq('B5: M1 counts the retired', bb2 && bb2.after.positionUnits + bb2.after.retiredUnits === CURVE_DEFAULTS.supplyUnits, true);
   eq('B3: a closed pair takes no slice', curve.buyback(Object.assign({}, m0, { closedToBuys: true }), 11484518n), null);
   eq('B3: an unseeded row takes no slice', curve.buyback(curve.unseeded(CURVE_DEFAULTS), 11484518n), null);
@@ -3886,32 +3886,32 @@ function selfTestReport() {
   eq('decimals() selector', ABI.selector(SIG.decimals), '313ce567');
   const lid = '1c866e31d50411237ce87f710c0defaca7d0bd0f5744ce6e49ce37893c93dc644918a67c22d10e555cb38a5c4f053fd07c90e74b0b4349b639c042698e9140bc';
   eq('writer action 3 data = 0x01 || 000003 || lineA || lineB', seedActionData(lid), '0x01000003' + lid);
-  eq('seed value: 100,000 MSK = 10^23 wei', sompiToWei(CURVE_DEFAULTS.seedMinSompi), 10n ** 23n);
+  eq('seed value: 100,000 BILI = 10^23 wei', sompiToWei(CURVE_DEFAULTS.seedMinSompi), 10n ** 23n);
   eq('an ADR-0090 seed row: first price at the least seed', curve.price(curve.seed(CURVE_DEFAULTS.seedMinSompi)), 20000000n);
   // ---- ADR-0162: the virtual reserve — the chain's palw_model_market_v1::adr0162_virtual_reserve goldens ----
   const FREE = Object.assign({}, CURVE_DEFAULTS, { burnPermille: 0n, legPermille: 0n });
   const o0 = curve.opening();
-  eq('ADR-0162: a store opens on V = 10,000,000 MSK with no MSK in it', o0.virtualSompi === 10000000n * MSK && o0.mskReserve === 0n && curve.seeded(o0), true);
-  eq('ADR-0162 I-V9: the first quote is V / 500,000 = 20 MSK, and the floor starts there', curve.price(o0) + '/' + curve.floor(o0), '2000000000/2000000000');
-  const oa = curve.buyQuote(o0, 100000n * MSK, FREE);
-  eq('ADR-0162 §5.1: A joins with 100,000 MSK and gets 4,950', oa.unitsOut + '/' + oa.priceAfter, '4950/2040197959');
-  const ob = curve.buyQuote(oa.after, 1000000n * MSK, FREE);
-  eq('ADR-0162 §5.1: B joins with 1,000,000 MSK and gets 44,599 (price 24.64196993)', ob.unitsOut + '/' + ob.priceAfter, '44599/2464196993');
+  eq('ADR-0162: a store opens on V = 10,000,000 BILI with no BILI in it', o0.virtualSompi === 10000000n * BILI && o0.mskReserve === 0n && curve.seeded(o0), true);
+  eq('ADR-0162 I-V9: the first quote is V / 500,000 = 20 BILI, and the floor starts there', curve.price(o0) + '/' + curve.floor(o0), '2000000000/2000000000');
+  const oa = curve.buyQuote(o0, 100000n * BILI, FREE);
+  eq('ADR-0162 §5.1: A joins with 100,000 BILI and gets 4,950', oa.unitsOut + '/' + oa.priceAfter, '4950/2040197959');
+  const ob = curve.buyQuote(oa.after, 1000000n * BILI, FREE);
+  eq('ADR-0162 §5.1: B joins with 1,000,000 BILI and gets 44,599 (price 24.64196993)', ob.unitsOut + '/' + ob.priceAfter, '44599/2464196993');
   const osa = curve.sellQuote(ob.after, oa.unitsOut, FREE);
-  eq('ADR-0162 §5.1: A leaves with all 4,950 for 120,651.90897692 MSK', osa.fees.gross, 12065190897692n);
+  eq('ADR-0162 §5.1: A leaves with all 4,950 for 120,651.90897692 BILI', osa.fees.gross, 12065190897692n);
   const osb = curve.sellQuote(osa.after, ob.unitsOut, FREE);
-  eq('ADR-0162 §5.1: B leaves with all 44,599 for 979,335.89102307 MSK', osb.fees.gross, 97933589102307n);
-  eq('ADR-0162 §5.1: the real reserve ends at 12.2 MSK of dust — nobody was paid out of V', osb.after.mskReserve + '/' + (osa.fees.gross + osb.fees.gross + osb.after.mskReserve), '1220000001/' + (1100000n * MSK));
-  const ov1a = curve.buyQuote(o0, 100000n * MSK), ov1b = curve.buyQuote(ov1a.after, 1000000n * MSK);
+  eq('ADR-0162 §5.1: B leaves with all 44,599 for 979,335.89102307 BILI', osb.fees.gross, 97933589102307n);
+  eq('ADR-0162 §5.1: the real reserve ends at 12.2 BILI of dust — nobody was paid out of V', osb.after.mskReserve + '/' + (osa.fees.gross + osb.fees.gross + osb.after.mskReserve), '1220000001/' + (1100000n * BILI));
+  const ov1a = curve.buyQuote(o0, 100000n * BILI), ov1b = curve.buyQuote(ov1a.after, 1000000n * BILI);
   eq('ADR-0162 §5.2: under 5 % + 1 % the joins get 4,656 and 42,198', ov1a.unitsOut + '/' + ov1b.unitsOut, '4656/42198');
   const ov1s = curve.sellQuote(curve.sellQuote(ov1b.after, ov1a.unitsOut).after, ov1b.unitsOut);
-  eq('ADR-0162 §5.2: …and B is paid 866,449.31315975 MSK net, the reserve ending at 25.92800001', ov1s.fees.net + '/' + ov1s.after.mskReserve, '86644931315975/2592800001');
-  const eqv = curve.seed(10000000n * MSK);
-  eq('ADR-0162 I-V4: the opening quotes like a pair seeded with S = V', [1n, 777n * MSK, 250000n * MSK].every((x) => { const a = curve.buyQuote(o0, x), b = curve.buyQuote(eqv, x); return (a && a.unitsOut) === (b && b.unitsOut); }), true);
+  eq('ADR-0162 §5.2: …and B is paid 866,449.31315975 BILI net, the reserve ending at 25.92800001', ov1s.fees.net + '/' + ov1s.after.mskReserve, '86644931315975/2592800001');
+  const eqv = curve.seed(10000000n * BILI);
+  eq('ADR-0162 I-V4: the opening quotes like a pair seeded with S = V', [1n, 777n * BILI, 250000n * BILI].every((x) => { const a = curve.buyQuote(o0, x), b = curve.buyQuote(eqv, x); return (a && a.unitsOut) === (b && b.unitsOut); }), true);
   eq('ADR-0162: no leave can be paid out of V (nothing is out to sell at the opening)', curve.sellQuote(o0, 1n), null);
-  const os = curve.seedDeepen(o0, 500000n * MSK);
-  eq('ADR-0162 D4: a seed of 500,000 MSK before the first trade raises the floor to 21 MSK', os && curve.floor(os) + '/' + os.seedSompi, 2100000000n + '/' + (500000n * MSK));
-  eq('ADR-0162 D4 / I-V7: after the first trade no seed is taken', curve.seedDeepen(oa.after, MSK), null);
+  const os = curve.seedDeepen(o0, 500000n * BILI);
+  eq('ADR-0162 D4: a seed of 500,000 BILI before the first trade raises the floor to 21 BILI', os && curve.floor(os) + '/' + os.seedSompi, 2100000000n + '/' + (500000n * BILI));
+  eq('ADR-0162 D4 / I-V7: after the first trade no seed is taken', curve.seedDeepen(oa.after, BILI), null);
   const nv = normMarket({ found: true, opened: true, openedDaa: 100, mskReserve: 0, positionUnits: 500000, soldUnits: 0, priceSompiPerPosition: 2000000000, seedSompi: 0, seededBy: '', seedMinSompi: 0, virtualSompi: 1000000000000000, classStatus: 'Registered { activation_daa: 200, pending_share_permille: 1 }', closedToBuys: true }, 'wrpc');
   eq('normMarket: a virtual row is a market, priced and floored, not trading before approval, taking a seed', nv.seeded && nv.virtualRegime && nv.price === 2000000000n && nv.floor === 2000000000n && !nv.trading && nv.takesSeed && nv.positionsOut === 0n, true);
   eq('parseClassStatus reads Registered { activation_daa }', JSON.stringify(parseClassStatus('Registered { activation_daa: 118800, pending_share_permille: 1 }'), (kk, v) => (typeof v === 'bigint' ? v.toString() : v)), '{"head":"Registered","activationDaa":"118800","sinceDaa":null,"raw":"Registered { activation_daa: 118800, pending_share_permille: 1 }"}');

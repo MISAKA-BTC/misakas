@@ -856,6 +856,8 @@ fn apply_settlements_to_exec_vesting(
                     let payload =
                         builder.state.bonds.get(&bond).ok_or_else(|| refused("a Final fee recipient is missing"))?.payout_payload;
                     builder.consume_kernel_final_reward_v1(&claim, bond, payload, now, amount)?;
+                    // RFC-0016 (dormant): the escrow payout telemetry of the claim's model (consensus-derived, never coinbase).
+                    super::palw_rfc0016_fold_v1::rfc0016_note_escrow_payout_v1(builder, now, &claim, amount);
                 }
                 let payee = key.and_then(|key| builder.state.bonds.get(&key).map(|b| b.payout_payload));
                 match payee {
@@ -1065,6 +1067,13 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         // N3 (inner 73, round 3): a BootstrapExact seal or reveal, past `palw_beacon_bootstrap_v1`.
         KernelRouteObjectV1::BootstrapExactV1 { contribution } => {
             return super::palw_beacon_bootstrap_fold_v1::apply_bootstrap_exact_v1(builder, ctx, signer, contribution);
+        }
+        // RFC-0017 (inner 74/75): an eligibility exam's commit or a drawn verifier's attestation, past `palw_model_eligibility_v1`.
+        KernelRouteObjectV1::CommitEligibilityExamV1 { commit } => {
+            return super::palw_model_eligibility_fold_v1::apply_commit_eligibility_exam_v1(builder, ctx, signer, commit);
+        }
+        KernelRouteObjectV1::AttestEligibilityExamV1 { attestation } => {
+            return super::palw_model_eligibility_fold_v1::apply_attest_eligibility_exam_v1(builder, ctx, signer, attestation);
         }
         KernelRouteObjectV1::FundPanelBeaconSourceFeeV2 { epoch, terms } => {
             return super::palw_panel_source_fee_fold_v2::fund_panel_sources_v2(builder, ctx, signer, *epoch, terms);
@@ -1400,6 +1409,38 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             let reward = ledger.job_escrows.get(&row.job_id).map_or(0, |escrow| escrow.amount);
             let optimistic =
                 ledger.mode_of_claim(claim) == Some(misaka_palw_kernel::mode::VerificationModeV1::OptimisticPublicVerification);
+            // **RFC-0016 (dormant)**: past `palw_elastic_final_capacity_v1` an OPV claim is refused before acceptance while its model's
+            // open OPV claims need more checks than its ready verifiers give; an admitted one notes its model for the escrow telemetry.
+            if optimistic {
+                let kernel_class = Hash64::from_bytes(row.class_binding_id);
+                let mut natives: Vec<Hash64> = builder
+                    .state
+                    .kernel_route
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|route| route.kernel_bindings_v1())
+                    .filter(|(_, binding)| binding.kernel_class == kernel_class)
+                    .map(|(class, _)| class)
+                    .collect();
+                natives.sort();
+                natives.dedup();
+                let native = (natives.len() == 1).then(|| natives[0]);
+                let open = ledger
+                    .claims
+                    .iter()
+                    .filter(|(id, other)| {
+                        *id != claim
+                            && other.class_binding_id == row.class_binding_id
+                            && !other.life.state.is_terminal()
+                            && ledger.mode_of_claim(id)
+                                == Some(misaka_palw_kernel::mode::VerificationModeV1::OptimisticPublicVerification)
+                    })
+                    .count() as u64;
+                if super::palw_rfc0016_fold_v1::rfc0016_opv_claim_committed_v1(builder, ctx.daa_score, claim, native, open).is_err() {
+                    persist_budget(builder, ctx, &ledger);
+                    return Ok(());
+                }
+            }
             match builder.plan_kernel_claim_budget_v1(ctx, *signer, Hash64::from_bytes(row.class_binding_id), reward, optimistic) {
                 Ok(Some(plan)) => {
                     builder.state.require_kernel_monetary_material_scope_v1(
@@ -1615,6 +1656,9 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     super::palw_econ_contracts_fold_v1::sweep_econ_contracts_v1(builder, ctx)?;
     // N3 (round 3): due BootstrapExact rounds are judged (facts derived here, never asserted) and old judgements retire.
     super::palw_beacon_bootstrap_fold_v1::sweep_beacon_bootstrap_v1(builder, ctx)?;
+    // RFC-0017: committed eligibility exams are drawn once a later seed anchor exists, decided at k positives or their deadline;
+    // eligible models past their grace lapse; terminal claims' pins retire. A no-op below `palw_model_eligibility_v1`.
+    super::palw_model_eligibility_fold_v1::sweep_model_eligibility_v1(builder, ctx)?;
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     // Anything the tick moves: claims and demands, and (G14-R4) bonded seals that expire, escrows that return and served demands'
     // bonds — a route whose only rows are a seal or an escrow must still forfeit or return it on time.

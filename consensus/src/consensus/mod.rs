@@ -2953,6 +2953,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_shared_claim_cache_gc_ack_v1_impl(lease)
     }
 
+    fn palw_rfc0016_report_v1(&self, class: Option<kaspa_consensus_core::Hash64>) -> Result<Option<(u64, bool, String)>, String> {
+        self.virtual_processor.palw_rfc0016_report_v1_impl(class)
+    }
+
     fn palw_staged_preclaim_quote_v1(
         &self,
         original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,

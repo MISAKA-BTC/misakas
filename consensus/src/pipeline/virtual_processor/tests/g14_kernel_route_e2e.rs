@@ -3517,3 +3517,6 @@ mod socket_rpc;
 // RFC-0015 §13.2 (2026-10-15, test source): old Panel claims across the fence, the §8.3 budget on the OPV door (gate record present),
 // a direct proof over another bond's open demand: `g14_kernel_route_e2e/rfc15_panel_free.rs`.
 mod rfc15_panel_free;
+// RFC-0017 (2026-10-15, test source): model eligibility at the door and past the fence on the real node — A-2 refusal of inner 74,
+// genesis classes ungoverned byte for byte against an unarmed twin, a genesis exam refused: `g14_kernel_route_e2e/rfc17_eligibility.rs`.
+mod rfc17_eligibility;

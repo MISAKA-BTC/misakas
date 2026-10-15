@@ -772,6 +772,7 @@ from!(item: &kaspa_rpc_core::RpcPalwClaimRow, protowire::RpcPalwClaimRow, {
         vesting_eta_daa: item.vesting_eta_daa,
         vesting_eta_estimated: item.vesting_eta_estimated,
         committed_sompi: item.committed_sompi.clone(),
+        reservation_split: item.reservation_split.clone(),
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwClaimsRequest, protowire::GetPalwClaimsRequestMessage, {
@@ -2049,6 +2050,13 @@ from!(item: &kaspa_rpc_core::RpcPalwModelLifecycle, protowire::RpcPalwModelLifec
         required_ready_seats: item.required_ready_seats,
         registration_bond_sompi: item.registration_bond_sompi,
         recommended_pool_sompi: item.recommended_pool_sompi,
+        eligibility_stage: item.eligibility_stage.clone(),
+        eligibility_next_renewal_daa: item.eligibility_next_renewal_daa,
+        eligibility_subsidy: item.eligibility_subsidy,
+        eligibility_block_right: item.eligibility_block_right,
+        eligibility_final_weight: item.eligibility_final_weight,
+        eligibility_exams_passed: item.eligibility_exams_passed,
+        eligibility_lineage_attempts: item.eligibility_lineage_attempts,
         admission_claims_per_span_milli: item.admission_claims_per_span_milli,
         probes_passed: item.probes_passed,
         probes_failed: item.probes_failed,
@@ -3251,6 +3259,7 @@ try_from!(item: &protowire::RpcPalwClaimRow, kaspa_rpc_core::RpcPalwClaimRow, {
         vesting_eta_daa: item.vesting_eta_daa,
         vesting_eta_estimated: item.vesting_eta_estimated,
         committed_sompi: item.committed_sompi.clone(),
+        reservation_split: item.reservation_split.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwClaimsRequestMessage, kaspa_rpc_core::GetPalwClaimsRequest, {
@@ -4541,6 +4550,14 @@ try_from!(item: &protowire::RpcPalwModelLifecycle, kaspa_rpc_core::RpcPalwModelL
         required_ready_seats: item.required_ready_seats,
         registration_bond_sompi: item.registration_bond_sompi,
         recommended_pool_sompi: item.recommended_pool_sompi,
+        // RFC-0017: a peer that sends no stage (an older node) is read as ungoverned — the old rule's rights.
+        eligibility_stage: if item.eligibility_stage.is_empty() { "not-governed".to_string() } else { item.eligibility_stage.clone() },
+        eligibility_next_renewal_daa: item.eligibility_next_renewal_daa,
+        eligibility_subsidy: item.eligibility_subsidy || item.eligibility_stage.is_empty(),
+        eligibility_block_right: item.eligibility_block_right || item.eligibility_stage.is_empty(),
+        eligibility_final_weight: item.eligibility_final_weight || item.eligibility_stage.is_empty(),
+        eligibility_exams_passed: item.eligibility_exams_passed,
+        eligibility_lineage_attempts: item.eligibility_lineage_attempts,
         admission_claims_per_span_milli: item.admission_claims_per_span_milli,
         probes_passed: item.probes_passed,
         probes_failed: item.probes_failed,
@@ -5957,6 +5974,25 @@ mod palw_state_proof_grpc_tests {
         assert!(!back.available && back.header.is_none() && back.reason == "too far behind");
     }
 }
+
+from!(item: &kaspa_rpc_core::GetPalwRfc0016ReportRequest, protowire::GetPalwRfc0016ReportRequestMessage, {
+    Self { class_hex: item.class_hex.clone() }
+});
+try_from!(item: &protowire::GetPalwRfc0016ReportRequestMessage, kaspa_rpc_core::GetPalwRfc0016ReportRequest, {
+    Self { class_hex: item.class_hex.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwRfc0016ReportResponse>, protowire::GetPalwRfc0016ReportResponseMessage, {
+    Self {
+        available: item.available,
+        armed: item.armed,
+        now_daa: item.now_daa,
+        report_json: item.report_json.clone(),
+        error: None,
+    }
+});
+try_from!(item: &protowire::GetPalwRfc0016ReportResponseMessage, RpcResult<kaspa_rpc_core::GetPalwRfc0016ReportResponse>, {
+    Self { available: item.available, armed: item.armed, now_daa: item.now_daa, report_json: item.report_json.clone() }
+});
 
 from!(item: &kaspa_rpc_core::GetPalwStagedPreclaimQuoteRequest, protowire::GetPalwStagedPreclaimQuoteRequestMessage, {
     Self { commitment_hex: item.commitment_hex.clone(), binding_hex: item.binding_hex.clone() }

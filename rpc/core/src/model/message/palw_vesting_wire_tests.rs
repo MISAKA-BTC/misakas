@@ -89,8 +89,8 @@ fn a_version_2_row_reads_as_not_vesting() {
     let mut bytes = Vec::new();
     Serializer::serialize(&row, &mut bytes).unwrap();
     // Version 3 appended: "" (4) + u64 + u64 + None + u64 + None + None + None + bool; version 4
-    // after it: "" (4).
-    let tail = 4 + 8 + 8 + 1 + 8 + 1 + 1 + 1 + 1 + 4;
+    // after it: "" (4); version 5 (ADR-0176 amendment, the reservation split) after that: "" (4).
+    let tail = 4 + 8 + 8 + 1 + 8 + 1 + 1 + 1 + 1 + 4 + 4;
     bytes.truncate(bytes.len() - tail);
     bytes[..2].copy_from_slice(&2u16.to_le_bytes());
     let back = <RpcPalwClaimRow as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();

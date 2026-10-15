@@ -1581,6 +1581,28 @@ impl VirtualStateProcessor {
         self.palw_state_v2_store.read().prefix_history_record_v1(&request).map_err(|e| e.to_string())
     }
 
+    /// **RFC-0016 op 255**: the per-model report (and the quote for `class`) at the virtual tip, rendered as JSON.
+    pub fn palw_rfc0016_report_v1_impl(
+        &self,
+        class: Option<kaspa_consensus_core::Hash64>,
+    ) -> Result<Option<(u64, bool, String)>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let Some((chain_point, state)) = self.palw_v2_reader_state(params).map_err(|e| e.to_string())? else { return Ok(None) };
+        let now = self.virtual_stores.read().state.get().map_err(|e| e.to_string())?.daa_score;
+        let extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: chain_point,
+            daa_score: now,
+            blue_score: 0,
+            subsidy: 0,
+        });
+        let (rows, miners) = kaspa_consensus_core::palw_state_v2::palw_rfc0016_model_report_v1(&state, params, &extras, now);
+        let quote = class.and_then(|c| kaspa_consensus_core::palw_state_v2::palw_rfc0016_quote_v1(&state, params, &extras, &c, now));
+        let armed = params.rfc0016_v1().is_some();
+        let json =
+            kaspa_consensus_core::palw_rfc0016_v1::report::palw_rfc0016_report_json_v1(now, armed, &rows, &miners, quote.as_ref());
+        Ok(Some((now, armed, json)))
+    }
+
     pub fn palw_terminal_progress_v1_impl(
         &self,
         key: &kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalKeyV1,
@@ -6279,6 +6301,9 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconBootstrapV1 => {
                     "a BootstrapExact contribution is refused: palw_beacon_bootstrap_v1 is not in force at this block".into()
                 }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ModelEligibilityV1 => {
+                    "an eligibility exam object is refused: palw_model_eligibility_v1 is not in force at this block (RFC-0017)".into()
+                }
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => {
                     "a class registration under a verification mode is refused: palw_panel_free_v1 is not in force at this block (RFC-0015)"
                         .to_string()
@@ -6355,6 +6380,10 @@ impl VirtualStateProcessor {
             // N3 (inner 73, round 3): the mirrored dormant bootstrap fence.
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconBootstrapV1 => {
                 self.palw_state_params_v2.as_ref().is_some_and(|p| p.econ_contracts_v1().beacon_bootstrap_at(daa_score).is_some())
+            }
+            // RFC-0017 (inner 74/75): the mirrored dormant eligibility fence.
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ModelEligibilityV1 => {
+                self.palw_state_params_v2.as_ref().is_some_and(|p| p.model_eligibility_v1_at(daa_score).is_some())
             }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceFeeV1 => {
                 self.palw_beacon_source_fee_v1.is_some_and(|f| {

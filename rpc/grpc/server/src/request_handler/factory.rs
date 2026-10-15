@@ -137,6 +137,7 @@ impl Factory {
                 GetPalwStateCarriage,
                 GetPalwRewardVesting,
                 GetPalwStagedPreclaimQuote,
+                GetPalwRfc0016Report,
                 GetPalwKernelClaim,
                 GetPalwKernelRows,
                 GetPalwKernelFinals,
