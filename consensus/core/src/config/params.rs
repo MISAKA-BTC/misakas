@@ -3185,6 +3185,12 @@ pub struct Params {
     /// until its rule is built and verified and its values approved; needs `palw_probabilistic_constraints_v1` (the kernel route holding
     /// its rows) and `palw_bond_budget_v1` (the per-principal common cap it takes the minimum with) at or below it.
     pub palw_model_eligibility_v1: Option<ForkActivation>,
+    /// **palw_model_tier_v1** — ADR-0179 ([`crate::palw_model_tier_v1`], user decisions 2026-10-15 rounds 4–5): past it a model in
+    /// `ApprovedModels(h)` (genesis + add-only annual fork lists) weighs 1.0 and every other registered model a fixed 0.3, applied once
+    /// in the ADR-0177 allocation weight, with the registered tier's aggregate cap; model-level review is abolished. **Dormant**: `None`
+    /// on every preset, Some-only in both fingerprints (lists and values beside the height), collapsed from `Some(never())`, refused
+    /// when armed ([`Self::validate_palw_model_tier_v1`]).
+    pub palw_model_tier_v1: Option<crate::palw_model_tier_v1::PalwModelTierFenceV1>,
     /// **palw_dag_sibling_attribution_v1** — RFC-0018 §4 ([`crate::palw_rfc0018_v1`]): past it (the ACCEPTING block's DAA) the merged
     /// attempts of one chain block are admitted in a canonical order — a round robin over model classes, each class by
     /// `H(domain ‖ execution key)` — independent of GHOSTDAG colour and merge order, so which concurrent sibling wins a contended
@@ -6107,6 +6113,7 @@ impl Params {
             palw_model_block_rights_v1: self.palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1: self.palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1: self.palw_model_eligibility_v1,
+            palw_model_tier_v1: self.palw_model_tier_v1.clone(),
             palw_dag_sibling_attribution_v1: self.palw_dag_sibling_attribution_v1,
             palw_panel_anchor_permissionless_v1: self.palw_panel_anchor_permissionless_v1,
             palw_rule_e_participation_v2: self.palw_rule_e_participation_v2,
@@ -7257,6 +7264,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_model_tier_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,
@@ -7603,6 +7611,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_model_tier_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,
@@ -7931,6 +7940,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_model_tier_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,
@@ -13116,6 +13126,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_rfc0016_v1();
     // RFC-0017's model eligibility, likewise.
     params.sync_palw_model_eligibility_v1();
+    // ADR-0179's model tiers, likewise.
+    params.sync_palw_model_tier_v1();
     // RFC-0018's mirror (sibling attribution, permissionless anchor, rule E v2, Gate C), likewise.
     params.sync_palw_rfc0018_v1();
     // RFC-0001 §2.10's adapter class listing, likewise.
@@ -13439,6 +13451,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_model_tier_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,

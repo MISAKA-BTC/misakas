@@ -95,13 +95,18 @@ fn u2_the_fence_needs_gate_c_at_or_below_it() {
     p.palw_model_eligibility_v1 = Some(ForkActivation::new(FENCE));
     p.sync_palw_model_eligibility_v1();
     let PalwModeV2Error::Invalid(why) = p.validate_palw_model_eligibility_v1().unwrap_err() else { panic!("Invalid") };
-    assert!(why.contains("U-2") && why.contains("palw_independently_work_certified_v1"), "{why}");
+    assert!(why.contains("palw_independently_work_certified_v1"), "per-claim certification first: {why}");
     p.palw_independently_work_certified_v1 = Some(ForkActivation::new(FENCE));
     let PalwModeV2Error::Invalid(why) = p.validate_palw_model_eligibility_v1().unwrap_err() else { panic!("Invalid") };
-    assert!(why.contains("cannot be armed"), "with Gate C at the same height only the generic refusal remains: {why}");
+    // Round 5 (user decision 2026-10-15): model-level review is abolished — the fence never arms without the tier fence that
+    // retires its review.
+    assert!(why.contains("palw_model_tier_v1") && why.contains("abolished"), "{why}");
+    p.palw_model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierFenceV1::at(ForkActivation::new(FENCE)));
+    let PalwModeV2Error::Invalid(why) = p.validate_palw_model_eligibility_v1().unwrap_err() else { panic!("Invalid") };
+    assert!(why.contains("cannot be armed"), "with Gate C and the tier fence only the generic refusal remains: {why}");
     p.palw_independently_work_certified_v1 = Some(ForkActivation::new(FENCE + 1));
     let PalwModeV2Error::Invalid(why) = p.validate_palw_model_eligibility_v1().unwrap_err() else { panic!("Invalid") };
-    assert!(why.contains("U-2"), "Gate C above the fence leaves Probation claims below it uncovered: {why}");
+    assert!(why.contains("palw_independently_work_certified_v1"), "Gate C above the fence: {why}");
 }
 
 /// **U-2: the GHOSTDAG / DAA effect of Probation REAL blocks is bounded** — whatever the number of Probation models, lineages and

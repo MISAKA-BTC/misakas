@@ -641,6 +641,10 @@ impl Params {
         if self.palw_model_eligibility_v1 == Some(ForkActivation::never()) {
             self.palw_model_eligibility_v1 = None;
         }
+        // ADR-0179's model tiers, likewise.
+        if self.palw_model_tier_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
+            self.palw_model_tier_v1 = None;
+        }
         // RFC-0018's five dormant fences, likewise.
         if self.palw_dag_sibling_attribution_v1 == Some(ForkActivation::never()) {
             self.palw_dag_sibling_attribution_v1 = None;
@@ -1126,6 +1130,7 @@ impl Params {
             palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
+            palw_model_tier_v1,
             palw_dag_sibling_attribution_v1,
             palw_panel_anchor_permissionless_v1,
             palw_rule_e_participation_v2,
@@ -1451,6 +1456,7 @@ impl Params {
             ("palw_model_block_rights_v1", *palw_model_block_rights_v1),
             ("palw_elastic_final_capacity_v1", *palw_elastic_final_capacity_v1),
             ("palw_model_eligibility_v1", *palw_model_eligibility_v1),
+            ("palw_model_tier_v1", palw_model_tier_v1.as_ref().map(|fence| fence.activation)),
             ("palw_dag_sibling_attribution_v1", *palw_dag_sibling_attribution_v1),
             ("palw_panel_anchor_permissionless_v1", *palw_panel_anchor_permissionless_v1),
             ("palw_rule_e_participation_v2", *palw_rule_e_participation_v2),
@@ -1931,6 +1937,12 @@ impl Params {
         if let Some(at) = self.palw_model_eligibility_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_model_eligibility_v1");
             h.write(at.daa_score().to_le_bytes());
+        }
+        // ADR-0179's model tiers, NAMED with their lists and values. Some-only.
+        if let Some(fence) = self.palw_model_tier_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
+            h.write(b"palw_model_tier_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
         }
         // RFC-0018's five fences, NAMED likewise. Some-only (the schedule's id beside its height).
         if let Some(at) = self.palw_dag_sibling_attribution_v1.filter(|f| *f != ForkActivation::never()) {
@@ -2691,6 +2703,7 @@ impl Params {
             palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
+            palw_model_tier_v1,
             palw_dag_sibling_attribution_v1,
             palw_panel_anchor_permissionless_v1,
             palw_rule_e_participation_v2,
@@ -3604,6 +3617,13 @@ impl Params {
         if let Some(activation) = palw_model_eligibility_v1.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0179's model tiers: the fence and every annual list's activation. Some-only.
+        if let Some(fence) = palw_model_tier_v1.as_mut() {
+            fork(&mut fence.activation, visit);
+            for list in fence.annual.iter_mut() {
+                fork(&mut list.activation, visit);
+            }
+        }
         // RFC-0018's five fences. Some-only.
         if let Some(activation) = palw_dag_sibling_attribution_v1.as_mut() {
             fork(activation, visit);
@@ -4158,6 +4178,7 @@ impl Params {
             palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
+            palw_model_tier_v1,
             palw_dag_sibling_attribution_v1,
             palw_panel_anchor_permissionless_v1,
             palw_rule_e_participation_v2,
@@ -5182,6 +5203,12 @@ impl Params {
         if let Some(activation) = palw_model_eligibility_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_model_eligibility_v1");
             h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0179's model tiers, Some-only for the same reason (lists and values beside the height).
+        if let Some(fence) = palw_model_tier_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
+            h.write(b"palw_model_tier_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
         }
         // RFC-0018's five fences, Some-only for the same reason.
         if let Some(activation) = palw_dag_sibling_attribution_v1.filter(|f| *f != ForkActivation::never()) {
