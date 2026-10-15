@@ -898,6 +898,9 @@ fn apply_settlements_to_exec_vesting(
     // RFC-0008 (RFC08-1): the next slot ordinal of each `(claim, verifier)` check fee in this batch (the kernel pays every unpaid slot
     // of one verifier in one batch, so the occurrence order is the slot order).
     let mut check_fee_slots: std::collections::BTreeMap<([u8; 64], [u8; 64]), u64> = Default::default();
+    // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): the check fees of paid V2 claims this batch HOLDS, by the ordinal of
+    // their poster debit (the held row records what that debit actually took). Empty below the fence.
+    let mut held_fees: std::collections::BTreeMap<usize, crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1> = Default::default();
     for (ordinal, event) in events.iter().enumerate() {
         let LedgerEventV1::Settlement(s) = event else { continue };
         if already_settled.contains(&ordinal) {
@@ -919,29 +922,56 @@ fn apply_settlements_to_exec_vesting(
                 (false, false) => C::KernelTick,
             };
             let slot = check_fee_slots.entry((claim, verifier)).or_insert(0);
-            let obligation = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, claim, verifier, *slot);
+            let slot_ordinal = *slot;
+            let obligation = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, claim, verifier, slot_ordinal);
             *slot = slot.checked_add(1).ok_or(PalwStateV2Error::Overflow("check fee slot ordinal"))?;
-            // RFC08-2: a drawn verifier stands behind no claim of its own for its attestation (RFC07-5: lazy-verifier deterrence is
-            // unresolved), so its fee has no liability terms to source — refused past the fence, never defaulted.
-            let once = builder.settle_once_liable_v1(
-                now,
-                obligation,
-                consumer,
-                fee,
-                PalwSettlementDebitV1::Escrow { poster, amount: fee },
-                super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
-                    "RFC07-5: a drawn verifier's own liability horizon for its attestation is undefined",
-                ),
-            )?;
-            if !once.pays() {
-                if strict {
-                    return Err(refused(match once {
-                        super::palw_settlement_once_fold_v1::PalwSettleOnceV1::Refused(why) => why.name(),
-                        _ => "the verifier's check fee for this slot was already settled by another consumer",
-                    }));
+            if let Some(release_after_daa) = super::palw_paid_claim_trap_fold_v1::check_fee_hold_until_v1(builder, &claim, now) {
+                // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): a paid V2 claim's check fee is HELD — the poster's escrow is
+                // debited now, the verifier's `FinalReward` is not paid; the fee is released once, after the claim's trap reveal
+                // window (the verifier's liability horizon), less the forfeiture if the court convicts a claim it signed Clean.
+                if !super::palw_paid_claim_trap_fold_v1::check_fee_hold_admits_v1(builder, &obligation)? {
+                    if strict {
+                        return Err(refused("the verifier's check fee for this slot is already held or settled"));
+                    }
+                    already_settled.extend([ordinal + 1, ordinal + 2]);
+                    continue;
                 }
-                already_settled.extend([ordinal + 1, ordinal + 2]);
-                continue;
+                held_fees.insert(
+                    ordinal,
+                    crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1 {
+                        version: crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
+                        claim,
+                        verifier,
+                        slot: slot_ordinal,
+                        poster,
+                        fee,
+                        release_after_daa,
+                    },
+                );
+                already_settled.insert(ordinal + 2);
+            } else {
+                // RFC08-2: outside a paid V2 claim past the trap fence a drawn verifier stands behind no claim of its own for its
+                // attestation, so its fee has no liability terms to source — refused past the fence, never defaulted.
+                let once = builder.settle_once_liable_v1(
+                    now,
+                    obligation,
+                    consumer,
+                    fee,
+                    PalwSettlementDebitV1::Escrow { poster, amount: fee },
+                    super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
+                        "RFC07-5: a drawn verifier's own liability horizon for its attestation is undefined",
+                    ),
+                )?;
+                if !once.pays() {
+                    if strict {
+                        return Err(refused(match once {
+                            super::palw_settlement_once_fold_v1::PalwSettleOnceV1::Refused(why) => why.name(),
+                            _ => "the verifier's check fee for this slot was already settled by another consumer",
+                        }));
+                    }
+                    already_settled.extend([ordinal + 1, ordinal + 2]);
+                    continue;
+                }
             }
         }
         // **One escrow reward per kernel claim, across every consumer** (the kernel tick, a kernel object arm, the paid-claim Final
@@ -1097,8 +1127,14 @@ fn apply_settlements_to_exec_vesting(
                     *funded = funded.checked_add(debit).ok_or(PalwStateV2Error::Overflow("reporter collateral debit"))?;
                 }
                 if s.kind == SettlementKindV1::PayJobEscrow {
-                    let funded = escrow_debited.entry(s.claim).or_default();
-                    *funded = funded.checked_add(debit).ok_or(PalwStateV2Error::Overflow("kernel escrow debit"))?;
+                    if let Some(mut held) = held_fees.remove(&ordinal) {
+                        // RFC-0007 §4.1 T6: a held check fee's debit is the held row, never any Final reward's funding.
+                        held.fee = debit;
+                        super::palw_paid_claim_trap_fold_v1::write_held_check_fee_v1(builder, &held)?;
+                    } else {
+                        let funded = escrow_debited.entry(s.claim).or_default();
+                        *funded = funded.checked_add(debit).ok_or(PalwStateV2Error::Overflow("kernel escrow debit"))?;
+                    }
                 }
             }
             // ADR-0176 HOOK `budget-final` on the node (lane BUDGET): a payout is paid only inside the R / F reservation the claim
@@ -1195,6 +1231,9 @@ fn apply_settlements_to_exec_vesting(
             | SettlementKindV1::Withdraw => {}
         }
     }
+    // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): a paid V2 claim's conviction in this batch is recorded once and its
+    // Clean receipt signers are charged their liability. A no-op below the fence.
+    super::palw_paid_claim_trap_fold_v1::on_paid_claim_convictions_v1(builder, events, now)?;
     Ok(())
 }
 
@@ -2078,6 +2117,9 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // RFC-0018 Gate C: certifications are drawn, decided and — when certified — credited (safe weight, settled anchor, the held
     // issuance-funded reward). A no-op below `palw_independently_work_certified_v1`.
     super::palw_security_certification_fold_v1::sweep_security_certification_v1(builder, ctx)?;
+    // RFC-0007 §4.1 T6: held check fees past their trap reveal window (claim terminal) are released once; conviction rows past
+    // their window are forgotten. A no-op below `palw_paid_claim_trap_v1`.
+    super::palw_paid_claim_trap_fold_v1::release_held_check_fees_v1(builder, ctx.daa_score)?;
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     // Anything the tick moves: claims and demands, and (G14-R4) bonded seals that expire, escrows that return and served demands'
     // bonds — a route whose only rows are a seal or an escrow must still forfeit or return it on time.

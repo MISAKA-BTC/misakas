@@ -20,7 +20,9 @@
 //!
 //! A leg with no liable claim behind it (a sponsor's prepaid funding, a provider's default charge, a reporter's slash-funded
 //! award) is not subject to the predicate, by name. A leg whose payee's terms have no authenticated source at all (a verifier's
-//! check fee, a material provider's fee, a native mining receipt) is REFUSED, by name. A claim accepted before the fence keeps its
+//! check fee outside a paid V2 claim past `palw_paid_claim_trap_v1`, a material provider's fee, a native mining receipt) is
+//! REFUSED, by name. A paid V2 claim's check fee past the trap fence is held and released under the verifier's own terms
+//! ([`PalwLegLiabilityV1::VerifierCheck`]: the trap reveal window as its horizon, the held fee as its collateral). A claim accepted before the fence keeps its
 //! old ruleset (as X3, N4 and D2 do): the predicate binds what was admitted under it.
 //!
 //! **No credit.** Nothing here grants credit or weight (RFC-0018 Gate C stays the only credit predicate); no computation proof
@@ -48,6 +50,11 @@ pub(super) enum PalwLegLiabilityV1 {
     },
     /// A leg of a kernel claim (its escrow reward: its R draw is the payment).
     KernelClaim { claim: [u8; 64], draw: u64, paid_now: u64, vest_until: Option<u64> },
+    /// **RFC-0007 §4.1 T6 (`palw_paid_claim_trap_v1`): a drawn verifier's held check fee on a paid V2 claim**, released after
+    /// `horizon` (the claim's trap reveal window end, the row's own `release_after_daa`). The verifier's liability on this leg is
+    /// what the forfeiture can take of the held `fee`, and the held row itself is its collateral, locked through the horizon by
+    /// construction; the hard deadline is the producer-signed paid lifetime; the signer liability beyond the fee is its own leg.
+    VerifierCheck { claim: [u8; 64], fee: u64, horizon: u64 },
     /// A payee whose liability terms have no authenticated source: the leg is refused past the fence.
     Unsourced(&'static str),
     /// A leg that pays no liable claim's party (a debit into the books, a slash-funded award): outside the predicate, by name.
@@ -273,6 +280,52 @@ impl TransitionBuilder<'_> {
                     vest_until,
                     // The kernel keeps a claim's row convictable through `liability_until` (its own retention rule).
                     retire_not_before: liability_until,
+                    now,
+                }))
+            }
+            PalwLegLiabilityV1::VerifierCheck { claim, fee, horizon } => {
+                let route = self.state.kernel_route.as_ref().ok_or(unsourced("the kernel route"))?;
+                let kernel = route.kernel_claim_row_v1(&Hash64::from_bytes(claim)).ok_or(unsourced("the kernel claim row"))?;
+                if kernel.committed_daa < from {
+                    return Ok(None); // committed under the old ruleset
+                }
+                if !self.params.paid_claim_trap_active_at(now) {
+                    return Err(unsourced("a verifier's liability horizon: palw_paid_claim_trap_v1 is not in force"));
+                }
+                let lifetime = route
+                    .paid_claim_signed_lifetime_v2(&claim)
+                    .ok_or(unsourced("a verifier's liability horizon: the claim has no producer-signed paid lifetime"))?;
+                let (forfeitable, _) = crate::palw_paid_claim_trap_v1::palw_paid_trap_forfeit_v1(fee);
+                let liability = u128::from(forfeitable);
+                // A convicted claim's verdict already landed (the horizon stands); a Final one can be convicted no later than its
+                // own row's horizon, which the kernel keeps the row convictable through.
+                let retained = if kernel.convicted {
+                    Ok(u64::MAX)
+                } else {
+                    kernel.liability_until.ok_or("the paid claim's retention (neither convicted nor Final)")
+                };
+                let liability_until = retained.map(|kept| kept.min(horizon));
+                Ok(Some(PalwSettlementTermsSourcedV1 {
+                    // The fee was the poster's per-slot escrow, debited at the attestation: the release draws nothing more.
+                    reserved_reward: Ok(fee),
+                    consumed_reward: Ok(0),
+                    draw: 0,
+                    payment,
+                    paid_now: payment,
+                    exported_before: Ok(0),
+                    export_cap: self.export_cap_of_v1(liability),
+                    liability_sompi: Ok(liability),
+                    // The held row is the verifier's collateral for this leg: it holds the whole fee until the horizon has passed.
+                    bond_collateral: Ok(u128::from(fee)),
+                    other_live_liability: Ok(0),
+                    bond_locked_until: Ok(horizon),
+                    liability_until,
+                    signed_hard_deadline: Ok(lifetime.liability_until),
+                    material_ttl_until: self
+                        .covenant_ttl_v1(Hash64::from_bytes(claim))
+                        .ok_or("the material TTL: no healthy event-relative monetary covenant for the paid claim"),
+                    vest_until: Some(horizon.saturating_add(1)),
+                    retire_not_before: retained,
                     now,
                 }))
             }

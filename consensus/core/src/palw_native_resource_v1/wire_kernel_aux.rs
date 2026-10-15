@@ -450,6 +450,9 @@ pub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut Nativ
 115 | 123 | 125 | 126 | 127 | 130 | 131 | 132 | 133 | 134 | 135 | 136=>return Err(wire::wire_bad("unallocated aux row namespace")),
 141 if key_bytes==64=>crate::palw_class_registration_origin_v1::PalwClassRegistrationOriginRowV1::scan_native_wire_v1(frame)?,
 141=>return Err(wire::wire_bad("unallocated class registration origin row namespace")),
+142 if key_bytes==65 && prefix==crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_CONVICTION_PREFIX_V1=>crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1::scan_native_wire_v1(frame)?,
+142 if key_bytes==137 && prefix==crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1=>crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1::scan_native_wire_v1(frame)?,
+142=>return Err(wire::wire_bad("unallocated paid-claim trap row namespace")),
  _=>return Err(std::io::Error::new(std::io::ErrorKind::Unsupported,NativeCoverageV1::unsupported::<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>(&format!("native aux table {table}"),"nested row codec is not in the explicit supported shape inventory"))),})}
 
 /// The longest aux key any fold writes is far below this; a longer key is malformed, never truncated.
