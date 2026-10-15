@@ -30,6 +30,8 @@ pub enum PalwRfc0608FenceV1 {
     MemoryRoutingCourtV2 = 6,
     /// RFC-0008: the once-only settlement registry across settlement consumers (`palw_settlement_once_v1`, aux 140).
     SettlementOnceV1 = 7,
+    /// RFC-0007 §4.1 T6: planted faults in paid claims and the receipt signers' liability (`palw_paid_claim_trap_v1`, aux 142).
+    PaidClaimTrapV1 = 8,
 }
 impl PalwRfc0608FenceV1 {
     pub const fn name(self) -> &'static str {
@@ -41,6 +43,7 @@ impl PalwRfc0608FenceV1 {
             Self::BeaconSourceFeeV1 => "palw_beacon_source_fee_v1",
             Self::MemoryRoutingCourtV2 => "palw_memory_routing_court_v2",
             Self::SettlementOnceV1 => "palw_settlement_once_v1",
+            Self::PaidClaimTrapV1 => "palw_paid_claim_trap_v1",
         }
     }
 }
@@ -49,10 +52,6 @@ impl PalwRfc0608FenceV1 {
 /// measure — those belong to the record). While a fence has an entry here no record can arm it. Each entry names the
 /// remaining-work checkbox (`docs/design/palw/rfc-0006-0007-0008-0012-remaining-work-2026-10-15.md`) that closes it.
 pub const PALW_RFC0608_OPEN_BLOCKERS_V1: &[(PalwRfc0608FenceV1, &str)] = &[
-    (
-        PalwRfc0608FenceV1::ClaimChallengeV2,
-        "RFC07-5: lazy-verifier (T6) deterrence is unresolved — a drawn checker can approve without checking and still be paid",
-    ),
     (
         PalwRfc0608FenceV1::SettlementOnceV1,
         "RFC08-2 (unsourced terms): past the fence the combined liability predicate refuses, by name, every leg whose terms \
@@ -141,7 +140,7 @@ impl crate::config::params::Params {
 mod tests {
     use super::*;
     use crate::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, Params, SIMNET_PARAMS, TESTNET_PARAMS};
-    const ALL: [PalwRfc0608FenceV1; 7] = [
+    const ALL: [PalwRfc0608FenceV1; 8] = [
         PalwRfc0608FenceV1::MonetaryMaterialV1,
         PalwRfc0608FenceV1::MaterialReleaseRecoveryV2,
         PalwRfc0608FenceV1::ClaimChallengeV2,
@@ -149,6 +148,7 @@ mod tests {
         PalwRfc0608FenceV1::BeaconSourceFeeV1,
         PalwRfc0608FenceV1::MemoryRoutingCourtV2,
         PalwRfc0608FenceV1::SettlementOnceV1,
+        PalwRfc0608FenceV1::PaidClaimTrapV1,
     ];
     fn record(fence: PalwRfc0608FenceV1, domain: Digest, root: Digest) -> PalwRfc0608MeasuredRecordV1 {
         PalwRfc0608MeasuredRecordV1 {
@@ -173,6 +173,7 @@ mod tests {
             assert!(p.palw_beacon_source_fee_v1.is_none());
             assert!(p.palw_memory_routing_court_v2.is_none());
             assert!(p.palw_settlement_once_v1.is_none());
+            assert!(p.palw_paid_claim_trap_v1.is_none());
             for fence in ALL {
                 assert!(p.palw_rfc0608_measured_v1(fence, &0u8).is_err(), "{} armed without a record", fence.name());
             }

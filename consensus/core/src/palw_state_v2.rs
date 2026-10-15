@@ -1914,6 +1914,9 @@ pub struct PalwStateParamsV2 {
     /// RFC-0008 `palw_settlement_once_v1` mirror (dormant; `None` everywhere).
     #[borsh(skip)]
     settlement_once_from_daa: Option<u64>,
+    /// RFC-0007 §4.1 `palw_paid_claim_trap_v1` mirror (dormant; `None` everywhere).
+    #[borsh(skip)]
+    paid_claim_trap_from_daa: Option<u64>,
     #[borsh(skip)]
     monetary_material: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1>,
     #[borsh(skip)]
