@@ -381,9 +381,9 @@ impl IbdFlow {
                             );
                             return Err(e);
                         }
-                        if e.is_local_native_capacity_unavailable() {
+                        if e.is_local_native_resource_unavailable() {
                             info!(
-                                "Keeping peer {} after local native capacity refusal; no verdict on its chain was produced",
+                                "Keeping peer {} after local native resource refusal; no verdict on its chain was produced",
                                 self.router
                             );
                             continue;
@@ -637,8 +637,8 @@ impl IbdFlow {
                 //
                 // Transport failures leave the candidate where it was, so the ordinary retry and
                 // source-rotation machinery gets its turn. The lease bounds how long that can go on.
-                let local_capacity = e.is_local_native_capacity_unavailable();
-                let proof_was_judged = !local_capacity
+                let local_resource = e.is_local_native_resource_unavailable();
+                let proof_was_judged = !local_resource
                     && !matches!(
                         e,
                         ProtocolError::ConnectionClosed | ProtocolError::Timeout(_) | ProtocolError::UnexpectedMessage(..)
@@ -649,8 +649,8 @@ impl IbdFlow {
                     id.virtual_selected_parent,
                     self.router,
                     e,
-                    if local_capacity {
-                        "local capacity refusal — no chain or source fault"
+                    if local_resource {
+                        "local resource refusal — no chain or source fault"
                     } else if proof_was_judged {
                         "refusing the chain"
                     } else {
@@ -662,7 +662,7 @@ impl IbdFlow {
                         id,
                         CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof },
                     );
-                } else if !local_capacity {
+                } else if !local_resource {
                     // Transport failure, not a verdict on the chain. It stays retryable — but it is
                     // charged an attempt so a source that keeps flapping cannot re-arm
                     // `ProofRequested { since: now }` on every reconnect and pin the candidate at
@@ -2870,7 +2870,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             return self.request_pruning_point_palw_chunks(pruning_point).await;
         }
         let _snapshot_lease = crate::palw_snapshot_chunks::SnapshotSpill::new()
-            .map_err(|_| ProtocolError::PruningSidecarUnavailable("PALW snapshot session budget", pruning_point.to_string()))?;
+            .map_err(|why| ProtocolError::LocalNativeResourceUnavailable(format!("PALW snapshot spill/session: {why}")))?;
         self.router
             .enqueue(make_message!(
                 Payload::RequestPruningPointPalwState,

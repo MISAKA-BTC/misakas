@@ -17,6 +17,19 @@ fn hash(bytes: &[u8]) -> Result<Hash64, ProtocolError> {
     Ok(Hash64::from_bytes(bytes.try_into().map_err(|_| ProtocolError::Other("invalid PALW snapshot hash width"))?))
 }
 
+fn snapshot_failure(why: NativeSnapshotDecodeErrorV1) -> ProtocolError {
+    match why {
+        NativeSnapshotDecodeErrorV1::Capacity(unavailable) => ProtocolError::LocalNativeCapacityUnavailable(unavailable),
+        NativeSnapshotDecodeErrorV1::LocalStorage(why) => {
+            ProtocolError::LocalNativeResourceUnavailable(format!("PALW snapshot spill: {why}"))
+        }
+        NativeSnapshotDecodeErrorV1::Encoding(why) => {
+            kaspa_core::warn!("[palw-sidecar] structural snapshot decode refused: {why}");
+            ProtocolError::Other("PALW snapshot stream hash/Borsh/EOF failed")
+        }
+    }
+}
+
 impl IbdFlow {
     pub(super) async fn request_pruning_point_palw_chunks(&mut self, point: BlockHash) -> Result<Option<Snapshot>, ProtocolError> {
         if self.router.properties().protocol_version < crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
@@ -39,7 +52,7 @@ impl IbdFlow {
         let mut spill = if receiver.is_none() {
             Some(
                 SnapshotSpill::new()
-                    .map_err(|_| ProtocolError::PruningSidecarUnavailable("PALW snapshot session budget", point.to_string()))?,
+                    .map_err(|why| ProtocolError::LocalNativeResourceUnavailable(format!("PALW snapshot spill/session: {why}")))?,
             )
         } else {
             None
@@ -123,7 +136,7 @@ impl IbdFlow {
             }
             state
                 .accept(point, reply_root, msg.total_bytes, msg.chunk_count, index, chunk_hash, &msg.palw_state)
-                .map_err(|_| ProtocolError::Other("PALW snapshot chunk identity/order/size/hash failed"))?;
+                .map_err(snapshot_failure)?;
             if state.complete() {
                 break;
             }
@@ -135,13 +148,7 @@ impl IbdFlow {
         let (snapshot, native_lease) = kaspa_consensusmanager::spawn_blocking(move || receiver.decode_snapshot_with_native_lease())
             .await
             .map_err(|_| ProtocolError::Other("PALW snapshot decoding task failed"))?
-            .map_err(|why| match why {
-                NativeSnapshotDecodeErrorV1::Capacity(unavailable) => ProtocolError::LocalNativeCapacityUnavailable(unavailable),
-                NativeSnapshotDecodeErrorV1::Encoding(why) => {
-                    kaspa_core::warn!("[palw-sidecar] structural snapshot decode refused: {why}");
-                    ProtocolError::Other("PALW snapshot stream hash/Borsh/EOF failed")
-                }
-            })?;
+            .map_err(snapshot_failure)?;
         self.native_palw_receive_lease_v1 = native_lease;
         // Declarations were length checked and filtered during streaming decode. Native
         // import/adoption still validates the consensus state and each declaration's profile.
