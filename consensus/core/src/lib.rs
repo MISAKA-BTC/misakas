@@ -532,6 +532,9 @@ pub mod palw_kernel_settlement_v1;
 /// RFC-0017: model eligibility — registration free, rights examined (commit-then-draw), bounded in probation and renewed; dormant
 /// fence `palw_model_eligibility_v1` (kernel inner 74/75, aux 131).
 pub mod palw_model_eligibility_v1;
+/// **RFC-0018 — DAG parallel multi-model consensus** (dormant): sibling attribution, the permissionless Panel anchor, rule E
+/// participation v2, Gate C (`palw_independently_work_certified_v1`) and the DAG width schedule stub.
+pub mod palw_rfc0018_v1;
 pub mod palw_panel_v2;
 /// ADR-0144 §9: slashable panel VAR that cannot be counted twice. Pure functions of consensus
 /// facts; the fold in `palw_state_v2` is the writer, behind the same fence.

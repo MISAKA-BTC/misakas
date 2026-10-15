@@ -1920,6 +1920,10 @@ pub struct PalwStateParamsV2 {
     /// weight pin, the exam fold and the registry RPC read it). `None` on every shipped preset, and validation refuses every armed one.
     #[borsh(skip)]
     model_eligibility_v1: Option<crate::palw_model_eligibility_v1::PalwModelEligibilityMirrorV1>,
+    /// **RFC-0018's mirror** (`crate::palw_rfc0018_v1`): the four state-level fences' heights and Gate C's rule, written by
+    /// `Params::sync_palw_rfc0018_v1`. `None` on every shipped preset, and validation refuses every armed one.
+    #[borsh(skip)]
+    rfc0018_v1: Option<crate::palw_rfc0018_v1::PalwRfc0018MirrorV1>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -14465,7 +14469,27 @@ fn apply_palw_transition_v7_inner(
     //     the last slot. A refusal SKIPS (checkpoint, try, restore): the accepting block did not
     //     author its anticone, so nothing about a merged blue may disqualify it. The skip list is
     //     returned, never folded — logs are not state.
-    for merged in merged_work {
+    // **RFC-0018 §4 (`palw_dag_sibling_attribution_v1`, at THIS accepting block's DAA): the canonical sibling order.** Past the fence
+    // the attempts of the mergeset are admitted in a round robin over model classes, each class by `H(domain ‖ execution key)` —
+    // a function of the mergeset SET, not of GHOSTDAG colour or merge order — so concurrent siblings of different models share any
+    // contended per-block cap round by round and the ADR-0170 "last admitted" anchor is canonical. Non-attempt works keep their
+    // slots. Below the fence (every shipped network) the identity permutation: the consensus order, byte for byte.
+    let sibling_order: Vec<usize> =
+        if builder.params.rfc0018_v1().is_some_and(|mirror| mirror.sibling_attribution_at(ctx.daa_score)) {
+            let keys: Vec<crate::palw_rfc0018_v1::PalwSiblingKeyV1> = merged_work
+                .iter()
+                .map(|merged| match merged.work {
+                    PalwBlockWorkV3::Attempt(envelope) => {
+                        crate::palw_rfc0018_v1::palw_sibling_key_of_attempt_v1(envelope.attempt.class_id, merged.execution_key)
+                    }
+                    _ => crate::palw_rfc0018_v1::PalwSiblingKeyV1 { class_id: None, execution_key: merged.execution_key },
+                })
+                .collect();
+            crate::palw_rfc0018_v1::palw_sibling_canonical_order_v1(&keys)
+        } else {
+            (0..merged_work.len()).collect()
+        };
+    for merged in sibling_order.iter().map(|&index| &merged_work[index]) {
         let refusal: Option<String> = match merged.work {
             PalwBlockWorkV3::None => None,
             PalwBlockWorkV3::Attempt(envelope) => match admission {
@@ -14665,11 +14689,17 @@ fn apply_palw_transition_v7_inner(
         // pruning there would delete history a live claim still needs.
         Some((oldest_open, _)) => oldest_open.saturating_sub(1),
     };
+    // **RFC-0018 Gate C's frontier site**: a `Final` claim Gate C does not certify is resolved (it holds no prefix back) but matures
+    // nothing, as a `Voided` one — it never stands as the frontier. The identity below its fence and on every shipped network.
     if let Some(claim) = builder
         .state
         .claims
         .values()
-        .filter(|c| matches!(c.phase, PalwClaimPhaseV2::Final { .. }) && c.accepted_blue_score <= resolved_through)
+        .filter(|c| {
+            matches!(c.phase, PalwClaimPhaseV2::Final { .. })
+                && c.accepted_blue_score <= resolved_through
+                && crate::palw_rfc0018_v1::palw_gate_c_advances_frontier_v1(builder.params, &builder.state, c)
+        })
         .max_by_key(|c| c.accepted_blue_score)
         && claim.accepted_blue_score > old_frontier.0
     {
@@ -18932,6 +18962,9 @@ fn apply_receipt_spend(
     // `safe_weight` takes the grant. The receipt census below still counts the work done (it measures production, never reward).
     let last_quantum = spent.len() as u64 + 1 >= *quanta as u64;
     let credited = builder.bond_budget_receipt_spend_v1(ctx, &claim_id, per_quantum, last_quantum)?;
+    // **RFC-0018 Gate C's receipt-spend site**: a spend of an uncertified free-prompt claim weighs nothing (the identity below its
+    // fence, keyed on the claim's acceptance DAA, and on every shipped network). The block still spends its quantum.
+    let credited = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(builder.params, &claim, credited);
     builder.state.safe_weight = builder.state.safe_weight.checked_add(credited).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
     let mut updated = claim.clone();
     let PalwClaimSourceV2::FreePrompt { spent: ledger, .. } = &mut updated.source else { unreachable!("matched above") };

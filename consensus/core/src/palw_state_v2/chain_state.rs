@@ -3273,6 +3273,8 @@ impl PalwChainStateV2 {
                         let final_safe = |c: u128| crate::palw_weight_cap_v1::palw_weight_final_safe_v1(params, claim, c);
                         // Lane BUDGET: a budgeted claim weighs what its Final was granted, in both sums.
                         let credited = self.bond_budget_weight_or(id, final_safe(contribution));
+                        // RFC-0018 Gate C's final-weight site, re-derived through the same predicate (identity below its fence).
+                        let credited = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(params, claim, credited);
                         let ceiling = self.bond_budget_weight_or(id, final_safe(canonical.unwrap_or(claim.pwu as u128)));
                         safe = safe.checked_add(credited).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
                         safe_ceiling = safe_ceiling.checked_add(ceiling).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
@@ -3287,6 +3289,8 @@ impl PalwChainStateV2 {
                             .ok_or(PalwStateV2Error::Overflow("consistency spent weight"))?;
                         // Lane BUDGET: a budgeted claim's spends added what they were granted.
                         let spent_weight = self.bond_budget_weight_or(id, spent_weight);
+                        // RFC-0018 Gate C's receipt-spend site, re-derived (identity below its fence).
+                        let spent_weight = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(params, claim, spent_weight);
                         // **The free-prompt lane is NOT priced by Decision 7** — see the open
                         // question recorded at `apply_receipt_spend`. It contributes identically to
                         // both sums, so the bound below neither tightens nor loosens around it.
@@ -3316,9 +3320,10 @@ impl PalwChainStateV2 {
                 }
                 _ => {
                     // ADR-0160 F-W: a new-rule claim weighs through its bond's capped term, summed below.
+                    // RFC-0018 Gate C's provisional site, re-derived (identity below its fence).
                     if !crate::palw_weight_cap_v1::palw_weight_cap_applies_v1(params, claim) {
                         immature = immature
-                            .checked_add(claim.immature_contribution)
+                            .checked_add(crate::palw_rfc0018_v1::palw_claim_provisional_weight_v1(params, claim))
                             .ok_or(PalwStateV2Error::Overflow("consistency immature"))?;
                     }
                     let entry = exposure.entry(claim.bond).or_insert(0);
