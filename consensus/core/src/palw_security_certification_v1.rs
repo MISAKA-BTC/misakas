@@ -244,10 +244,17 @@ pub struct PalwCertificationNetworkRowV1 {
 /// `reverse_convicted_final` leaves a retired claim alone), or the frontier the chain stood at when Gate C came into force. The
 /// recomputed frontier never falls below it, so a retirement cannot move the frontier and a conviction can move it back only as far
 /// as the floor.
-#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwCertifiedFrontierFloorV1 {
     pub blue_score: u64,
     pub block: EligDigestV1,
+}
+
+// `[u8; 64]` has no `Default`: the floor's default is the zero frontier.
+impl Default for PalwCertifiedFrontierFloorV1 {
+    fn default() -> Self {
+        Self { blue_score: 0, block: [0; 64] }
+    }
 }
 
 fn hash64(domain: &[u8], parts: &[&[u8]]) -> EligDigestV1 {

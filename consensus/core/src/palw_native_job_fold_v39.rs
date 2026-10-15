@@ -100,7 +100,7 @@ fn prepay(
     }
     let e = epoch(p, ctx)?;
     let mut s = super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &e, palw_kernel_bond_id_v1(signer), [0; 64])?;
-    s.debit_ordinary(&p.execution.quota, &e, &DerivedOrdinaryMetadataV11::from_native_envelope(q)).map_err(bad)?;
+    s.debit_ordinary(&p.execution.quota, &e, &DerivedOrdinaryMetadataV11::from_native_envelope((&q).into())).map_err(bad)?;
     super::palw_flat_execution_fold_v11::write_shard(builder, &s, [0; 64])?;
     Ok(true)
 }
@@ -342,7 +342,7 @@ fn write_book(builder: &mut TransitionBuilder<'_>, h: &mut JobHeader, book: &Nat
     h.book_bytes = raw.len() as u32;
     h.terminal = book.terminal();
     builder.write_kernel_row(TABLE, k(17, &h.id), Some(raw))?;
-    builder.write_kernel_row(TABLE, k(16, &h.id), Some(b(&(h.root(), h))))?;
+    builder.write_kernel_row(TABLE, k(16, &h.id), Some(b(&(h.root(), &*h))))?;
     Ok(())
 }
 pub(super) fn reserved(r: &PalwKernelRouteStateV1, bond: &PalwBondKeyV2) -> u128 {

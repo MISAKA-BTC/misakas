@@ -125,7 +125,7 @@ fn prepay(
     let epoch = TrustedEpochV11::from_chain(&p.execution.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(bad)?;
     let actor = palw_kernel_bond_id_v1(signer);
     let mut shard = super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &epoch, actor, [0; 64])?;
-    shard.debit_ordinary(&p.execution.quota, &epoch, &DerivedOrdinaryMetadataV11::from_native_envelope(q)).map_err(bad)?;
+    shard.debit_ordinary(&p.execution.quota, &epoch, &DerivedOrdinaryMetadataV11::from_native_envelope((&q).into())).map_err(bad)?;
     super::palw_flat_execution_fold_v11::write_shard(builder, &shard, [0; 64])?;
     Ok(true)
 }

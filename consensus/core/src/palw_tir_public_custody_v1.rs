@@ -495,7 +495,7 @@ impl BorshDeserialize for PalwTirPublicOriginalCustodyV1 {
             credits.insert(seat, PalwTirPublicOriginalCreditV1 { receipt, ready });
         }
         let result = Self { contract, panel, credits };
-        result.check_v1().map_err(|e| invalid(e))?;
+        result.check_v1().map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
         Ok(result)
     }
 }

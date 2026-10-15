@@ -222,12 +222,14 @@ wire_tuple!(A, B, C);
 wire_tuple!(A, B, C, D);
 wire_tuple!(A, B, C, D, E);
 wire_tuple!(A, B, C, D, E, F);
+wire_tuple!(A, B, C, D, E, F, G);
 
-macro_rules! wire_struct { ($ty:ty; $($field:ty),* $(,)?) => {
+// A field may carry its `#[cfg(..)]` (a field that exists, and is encoded, only in that build).
+macro_rules! wire_struct { ($ty:ty; $($(#[$attr:meta])* $field:ty),* $(,)?) => {
  impl $crate::palw_native_resource_v1::NativeWireScanV1 for $ty {
   fn scan_native_wire_v1<R:std::io::Read>(reader:&mut $crate::palw_native_resource_v1::NativeWireReaderV1<R>)->std::io::Result<$crate::palw_native_resource_v1::NativeWireShapeV1> {
     reader.step()?;let mut sum=$crate::palw_native_resource_v1::NativeWireShapeV1::default();
-    $(sum=sum.merge(<$field as $crate::palw_native_resource_v1::NativeWireScanV1>::scan_native_wire_v1(reader)?)?;)*Ok(sum)
+    $($(#[$attr])* { sum=sum.merge(<$field as $crate::palw_native_resource_v1::NativeWireScanV1>::scan_native_wire_v1(reader)?)?; })*Ok(sum)
   }
  }
 }; }

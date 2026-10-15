@@ -925,7 +925,7 @@ mod tests {
         let mut binding = x.binding.clone();
         if flat {
             let mut program = misaka_palw_tir::TirProgramV1::decode_canonical(&binding.class.program).unwrap();
-            program.logits_scheme_id = crate::palw_step_refute::flat_logits_scheme_id_v1().as_byte_slice().try_into().unwrap();
+            program.logits_scheme_id = crate::palw_step_refute::flat_logits_scheme_id_v1().as_bytes();
             binding.class.program = program.encode();
         }
         let class_id = binding.class.class_id(&binding.artifact_root);

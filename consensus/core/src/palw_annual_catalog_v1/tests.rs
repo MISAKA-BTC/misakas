@@ -51,7 +51,7 @@ fn m(class: u8, root: u8) -> ApprovedModelV1 {
 }
 
 fn bond(n: u8) -> PalwBondKeyV2 {
-    PalwBondKeyV2(TransactionOutpoint::new(crate::Hash::from_bytes([n; 32]), 0))
+    PalwBondKeyV2(TransactionOutpoint::new(crate::Hash64::from_bytes([n; 64]), 0))
 }
 
 /// A base network with the tier fence at `fence_at` carrying `chain` (identity, schedule and fork-id tests read Params only; the

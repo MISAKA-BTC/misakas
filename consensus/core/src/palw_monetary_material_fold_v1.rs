@@ -367,7 +367,7 @@ fn action_inner_v4(
         if builder.params.material_release_recovery_at_v2(ctx.daa_score).is_none() {
             return Err(refused("current generation challenge own fence dormant"));
         }
-        let current = crate::palw_kernel_material_query_v4::material_provider_generation_v4(builder.state, root, *provider)
+        let current = crate::palw_kernel_material_query_v4::material_provider_generation_v4(&builder.state, root, *provider)
             .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
         if current != Some(*consent) {
             return Err(refused("current challenge substitutes provider generation"));

@@ -311,7 +311,8 @@ fn spec_claim_v4(
     ledger: &KernelLedgerV1,
     claim: &misaka_palw_kernel::spec::SpecClaimV1,
 ) -> Result<Digest, NativeCoverageV1> {
-    use misaka_palw_kernel::spec::{ComponentV1, SpecClaimV1, SpecClassKindV1, SpecJobV1, StageClaimV1, StageInputV1, TokenSourceV1};
+    use misaka_palw_kernel::spec::composite::{ComponentV1, StageClaimV1, StageInputV1, TokenSourceV1};
+    use misaka_palw_kernel::spec::{SpecClaimV1, SpecClassKindV1, SpecJobV1};
     let job = ledger.typed.jobs.get(&claim.job_id()).ok_or_else(|| unsupported_v4("selected typed job is absent"))?;
     let class_id = job.class();
     let class = ledger.typed.classes.get(&class_id).ok_or_else(|| unsupported_v4("selected typed class is absent"))?;

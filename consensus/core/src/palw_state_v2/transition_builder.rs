@@ -5847,7 +5847,7 @@ impl<'a> TransitionBuilder<'a> {
             Some(snapshot) => snapshot.attempted_ccu(),
             None => match self.state.work_target_shadow {
                 Some(target) => target.work,
-                None => return,
+                None => return Ok(()),
             },
         };
         if work == 0 {

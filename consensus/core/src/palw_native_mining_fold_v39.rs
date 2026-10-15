@@ -53,7 +53,7 @@ fn read<T: BorshDeserialize>(r: &PalwKernelRouteStateV1, kind: u8, id: &impl Bor
 fn counter(r: &PalwKernelRouteStateV1, kind: u8, id: &impl BorshSerialize) -> u64 {
     read::<u64>(r, kind, id, 8).unwrap_or(0)
 }
-fn route(builder: &TransitionBuilder<'_>) -> Result<&PalwKernelRouteStateV1, PalwStateV2Error> {
+fn route<'b>(builder: &'b TransitionBuilder<'_>) -> Result<&'b PalwKernelRouteStateV1, PalwStateV2Error> {
     builder.state.kernel_route.as_ref().ok_or_else(|| bad("mining39 kernel route absent"))
 }
 
@@ -169,7 +169,7 @@ fn prepay(
     let e = TrustedEpochV11::from_chain(&p.execution.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(bad)?;
     let mut s =
         super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &e, palw_kernel_bond_id_v1(signer), [0; 64])?;
-    s.debit_ordinary(&p.execution.quota, &e, &DerivedOrdinaryMetadataV11::from_native_envelope(q)).map_err(bad)?;
+    s.debit_ordinary(&p.execution.quota, &e, &DerivedOrdinaryMetadataV11::from_native_envelope((&q).into())).map_err(bad)?;
     super::palw_flat_execution_fold_v11::write_shard(builder, &s, [0; 64])?;
     Ok(true)
 }

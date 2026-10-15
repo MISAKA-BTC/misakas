@@ -200,7 +200,7 @@ pub(crate) fn tree_path(mut level: Vec<Digest>, mut index: usize, node: fn(&Dige
 }
 
 /// Recompute a root from a leaf, its index among `count`, and its siblings (`None`: a path that fits no tree).
-pub(crate) fn tree_root_from_path(
+pub fn tree_root_from_path(
     leaf: Digest,
     mut index: u64,
     mut count: u64,

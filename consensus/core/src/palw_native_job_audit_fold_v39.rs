@@ -46,7 +46,7 @@ fn decode<T: BorshDeserialize>(raw: &[u8], what: &str) -> Result<T, String> {
 }
 
 /// The auditor's own owning policies at the anchored DAA (no caller policy).
-pub(super) fn audit_policies_v39(
+pub(in crate::palw_state_v2) fn audit_policies_v39(
     parameters: &crate::config::params::Params,
     daa: u64,
 ) -> Result<NativeExecutionPoliciesV39, String> {

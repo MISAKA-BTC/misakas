@@ -58,6 +58,20 @@ for base,crate in CRATES:
 def canonical_module(crate,module):
     while (crate,module) in reexport:module=reexport[(crate,module)]
     return module
+# A private `#[path = "file.rs"] mod child;` (palw_state_v2's fold files live beside it at the crate root) whose pub items the
+# parent re-exports BY NAME (`pub use child::{A, B};`): those names are reachable only at the PARENT path, never at the path
+# the file's location suggests (G14: `crate::palw_panel_v3_fold_v1` is not a crate-level module).
+named_reexport={}
+for base,crate in CRATES:
+ for file in base.rglob('*.rs'):
+    if 'tests' in file.parts or file.name=='generated.rs':continue
+    raw=clean(file.read_text()); module=module_of(base,crate,file)
+    for m in re.finditer(r'#\[path\s*=\s*"([^"]+)"\]\s*mod\s+(\w+)\s*;',raw):
+        target=(file.parent/m[1]).resolve()
+        if not target.is_file() or not target.is_relative_to(base):continue
+        for u in re.finditer(r'(?m)^\s*pub\s+use\s+'+m[2]+r'\s*::\s*\{([^}]*)\}\s*;',raw):
+            for n in split(u[1]):
+                if re.fullmatch(r'\w+',n):named_reexport[(crate,module_of(base,crate,target),n)]=module
 for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_panel'),(ROOT/'misaka/palw/kernel/src','misaka_palw_kernel'),(ROOT/'misaka/palw/gen/src','misaka_palw_gen'),(ROOT/'misaka/palw/tir/core/src','misaka_palw_tir'),(ROOT/'misaka/palw/challenge/src','misaka_palw_challenge')]:
  for file in base.rglob('*.rs'):
     if 'tests' in file.parts or file.name=='generated.rs':continue
@@ -76,6 +90,8 @@ for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_pan
         if raw[pos]==';':body='';end=pos+1;form='unit'
         else:body,end=brace(raw,pos);form='named' if raw[pos]=='{' else 'tuple'
         path='::'.join(x for x in [crate,canonical_module(crate,module) if m.group(0).startswith('pub ') or m.group(0).startswith('pub\t') else module,name] if x)
+        if m.group(0).startswith('pub') and (crate,module,name) in named_reexport:
+            path='::'.join(x for x in [crate,named_reexport[(crate,module,name)],name] if x)
         attrs=raw[max(raw.rfind('}',0,m.start()),raw.rfind(';',0,m.start()))+1:m.start()]
         item=dict(attrs=attrs,kind=kind,name=name,path=path,body=body,form=form,module=module,type_public=m.group(0).startswith('pub'),file=str(file.relative_to(ROOT)))
         defs[path]=item;byname.setdefault(name,[]).append(item)
@@ -138,6 +154,16 @@ def references(t, origin):
         if resolved=='misaka_palw_tir::program_v2::Block':resolved='misaka_palw_tir::program::Block'
         if resolved not in visited:queue.append(resolved)
 
+# A field compiled only under a `#[cfg(..)]` (palw_state_v2's `#[cfg(test)]` extras writers) keeps that attribute in the generated
+# exhaustive destructure, so both the test and the non-test build name exactly the fields that exist.
+def field_cfgs(item):
+    out={}
+    for part in split(item['body']):
+        cfgs=re.findall(r'#\[\s*cfg\s*\((?:[^()]|\([^()]*\))*\)\s*\]',part)
+        fm=re.match(r'(?:pub(?:\([^)]*\))?\s+)?(\w+)\s*:',stripattrs(part))
+        if cfgs and fm:out[fm[1]]=' '.join(cfgs)+' '
+    return out
+
 def fields(item):
     result=[]
     for part in split(item['body']):
@@ -186,7 +212,8 @@ while queue:
         # Reviewed opaque layouts have a hand-written visitor beside their owner.
         unresolved.append(path);continue
     for _,typ,_ in fs:references(typ,item)
-    names=', '.join(name for name,_,_ in fs)
+    cfgs=field_cfgs(item)
+    names=', '.join(cfgs.get(name,'')+name for name,_,_ in fs)
     generated.append((item, f'native_struct!({path}; {names});', (not item['type_public'] or any(not public for _,_,public in fs))))
  elif kind=='struct' and form=='tuple':
     ts=[stripattrs(v) for v in split(body)]
