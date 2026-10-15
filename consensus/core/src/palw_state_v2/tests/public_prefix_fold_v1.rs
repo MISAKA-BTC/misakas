@@ -1432,3 +1432,37 @@ fn every_paid_family_continues_and_convicts_after_actual_sibling_da_default() {
     }
     continue_paid_case_after_sibling_default(PalwStagedCourtRowV1::Constraint(Box::new(row).into()), moves, root);
 }
+
+#[test]
+fn staged_source_default_charges_the_producer_only_when_it_is_itself_in_the_unpaid_set() {
+    let (state, p, extras, claim, owner) = state();
+    let claim_state = state.claim(&claim).unwrap().clone();
+    let now = claim_state.accepted_daa.max(100) + 50;
+    let offence = crate::palw_da_rcore_v1::palw_da_offence_id_v1(&producer().0, &claim);
+    let collateral = |s: &PalwChainStateV2, b: PalwBondKeyV2| s.bond(&b).unwrap().collateral;
+
+    // Total withholding: the producer and one Valid signer never reached EOF.
+    let mut builder = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
+    let unpaid = [producer(), bond(8)].into_iter().collect();
+    builder.staged_selected_default_charge_v1(&ctx(2, now, now), claim, &claim_state, producer(), &unpaid, owner).unwrap();
+    assert!(collateral(&builder.state, producer()) < collateral(&state, producer()), "withholding producer is charged");
+    assert!(collateral(&builder.state, bond(8)) < collateral(&state, bond(8)), "silent covering signer is charged");
+    assert_eq!(collateral(&builder.state, bond(9)), collateral(&state, bond(9)), "an answering signer is not");
+    assert!(builder.state.consumed_offence(&offence).is_some(), "the producer DA record is written once");
+    assert_eq!(collateral(&builder.state, owner), collateral(&state, owner), "the outside owner is never debited");
+
+    // The producer answered to EOF; only one signer stayed silent.
+    let mut builder = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
+    let unpaid = [bond(9)].into_iter().collect();
+    builder.staged_selected_default_charge_v1(&ctx(2, now, now), claim, &claim_state, producer(), &unpaid, owner).unwrap();
+    assert_eq!(collateral(&builder.state, producer()), collateral(&state, producer()), "an answering producer is not charged");
+    assert!(builder.state.consumed_offence(&offence).is_none(), "no producer DA record without producer default");
+    assert_eq!(builder.state.claim(&claim).unwrap().phase, claim_state.phase, "no void without producer default");
+    assert!(collateral(&builder.state, bond(9)) < collateral(&state, bond(9)), "only the silent signer is charged");
+    assert_eq!(collateral(&builder.state, bond(8)), collateral(&state, bond(8)));
+
+    // Roles stay literal: the independent winner can never be in its own unpaid set.
+    let mut builder = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
+    let unpaid = [producer(), owner].into_iter().collect();
+    assert!(builder.staged_selected_default_charge_v1(&ctx(2, now, now), claim, &claim_state, producer(), &unpaid, owner).is_err());
+}

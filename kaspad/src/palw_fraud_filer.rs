@@ -5106,7 +5106,7 @@ impl PalwPanelService {
                 // is the paid native backwards recovery opened; an already opened accepted
                 // session is always continued (restart loses the local hint, not the session).
                 if let (Some(seed), Some(_)) = (progress.seed_id, progress.bundle.as_ref()) {
-                    let native_needed = super::public_prefix::needs_native_history_recovery_v1(&history_directory, seed);
+                    let native_needed = super::public_prefix::needs_native_recovery_v1(&history_directory, seed);
                     return self.fraud_filer_history_recovery_v1(
                         session,
                         book,

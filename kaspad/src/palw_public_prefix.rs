@@ -87,13 +87,6 @@ impl PrefixCacheGcV1 {
     }
 }
 
-/// A bounded process-local hint: rooted page recovery found a link missing from the local
-/// CAS, the native archive and every peer. It never proves a DA fault; only an accepted
-/// native Demand and its original deadline authorize a collection.
-pub(super) fn needs_native_history_recovery_v1(directory: &std::path::Path, seed: Hash64) -> bool {
-    page_recovery::needs_native_recovery_v1(directory, seed)
-}
-
 pub(super) fn gc_prefix_cache_v1(
     directory: &std::path::Path,
     seed: Hash64,
@@ -180,18 +173,6 @@ pub(super) fn request_with_pages_v1(
     }))
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn recover_pages_v1(
-    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
-    target: &PalwOffenceTargetV1,
-    binding: &PalwStepBindingV2,
-    job: &PalwFreePromptJobV3,
-    progress: &PalwStagedOwnedProgressV1,
-    maximum_leaves: u64,
-    directory: &std::path::Path,
-) -> Result<bool, String> {
-    page_recovery::recover_v1(consensus, target, binding, job, progress, maximum_leaves, directory, |_| Ok(None))
-}
 pub(super) fn needs_native_recovery_v1(directory: &std::path::Path, seed: Hash64) -> bool {
     page_recovery::needs_native_recovery_v1(directory, seed)
 }
