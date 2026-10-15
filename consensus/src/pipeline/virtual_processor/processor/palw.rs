@@ -743,9 +743,14 @@ impl VirtualStateProcessor {
             mirror.gate_c_at(state.last_point().map_or(0, |point| point.daa_score))
         });
         if gate_c {
-            return match kaspa_consensus_core::palw_security_certification_v1::palw_pruning_progress_ceiling_v1(&state) {
-                Some(ceiling) => header.blue_score <= ceiling.max(frontier),
-                None => true,
+            // Two bounds, both independent of whether anything certifies: the progress ceiling (open claims, courts, undecided
+            // certifications) and the ROLLBACK bound — the lowest frontier a still-open conviction window could move the frontier
+            // back to (§7.5a/§7.7). Pruning never passes a point that may become the frontier again.
+            let progress = kaspa_consensus_core::palw_security_certification_v1::palw_pruning_progress_ceiling_v1(&state);
+            let rollback = kaspa_consensus_core::palw_security_certification_v1::palw_frontier_rollback_bound_v1(&state, state_params);
+            return match (progress, rollback) {
+                (None, None) => true,
+                (a, b) => header.blue_score <= a.into_iter().chain(b).min().unwrap_or(u64::MAX),
             };
         }
         kaspa_consensus_core::palw_fork_authority_v2::pruning_point_allowed_v2(header.blue_score, frontier)
@@ -6447,7 +6452,7 @@ impl VirtualStateProcessor {
     ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2> {
         match state_params.panel_claim_rule_v1(claim.accepted_daa) {
             kaspa_consensus_core::palw_permissionless_panel_v1::PanelClaimRuleV1::HistoricalLaneA => {
-                self.palw_v2_anchor_fact_of_candidate(from, claim.bind_base_daa(), panel_params)
+                self.palw_v2_anchor_fact_of_candidate_for_v1(from, claim.bind_base_daa(), panel_params, Some(claim.bond))
             }
             kaspa_consensus_core::palw_permissionless_panel_v1::PanelClaimRuleV1::PermissionlessV3 => None,
         }
@@ -6483,6 +6488,19 @@ impl VirtualStateProcessor {
         accepted_daa: u64,
         panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
     ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2> {
+        self.palw_v2_anchor_fact_of_candidate_for_v1(from, accepted_daa, panel_params, None)
+    }
+
+    /// [`Self::palw_v2_anchor_fact_of_candidate`] for a claim whose producer bond is `producer` — past RFC-0018's permissionless
+    /// anchor the producer's own contributions are excluded from the claim's seed, and a chain block whose only contributions at
+    /// or past the slot are the producer's does not anchor the claim (`palw_permissionless_anchors_claim_v1`).
+    pub(in crate::pipeline::virtual_processor) fn palw_v2_anchor_fact_of_candidate_for_v1(
+        &self,
+        from: BlockHash,
+        accepted_daa: u64,
+        panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
+        producer: Option<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2> {
         let slot = accepted_daa.checked_add(panel_params.anchor_delay())?;
         // The latest chain block recorded at or past the slot that anchors it — the earliest on the
         // chain once the walk is done — with, past lane A, the seed's source.
@@ -6497,7 +6515,7 @@ impl VirtualStateProcessor {
                     // RFC-0018 §5: a permissionless anchor anchors the slot only where its contributions at or past the slot reach
                     // the distinct-bond minimum; its seed is their aggregate, resolved at the earliest of them.
                     Some(anchor) if anchor.reach >= slot && anchor.permissionless.is_some() => {
-                        if let Some(seed) = self.palw_permissionless_seed_source_v1(&anchor, slot) {
+                        if let Some(seed) = self.palw_permissionless_seed_source_v1(&anchor, slot, producer.as_ref()) {
                             candidate = Some((block, daa, None));
                             permissionless_seed = Some(seed);
                         }
@@ -6548,12 +6566,17 @@ impl VirtualStateProcessor {
     /// fewer than the minimum distinct bonds contribute at or past the slot. The producer's own bond is not excluded here (the walk
     /// does not carry the claim's bond: GAP-A2); the two-distinct-bond minimum keeps at least one other bond's unpredictable
     /// execution inside the hash.
-    fn palw_permissionless_seed_source_v1(&self, anchor: &PalwChainAnchorV1, slot: u64) -> Option<(u64, kaspa_consensus_core::Hash64)> {
+    fn palw_permissionless_seed_source_v1(
+        &self,
+        anchor: &PalwChainAnchorV1,
+        slot: u64,
+        producer: Option<&kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Option<(u64, kaspa_consensus_core::Hash64)> {
         let contributions = anchor.permissionless.as_ref()?;
         kaspa_consensus_core::palw_rfc0018_v1::palw_permissionless_anchor_seed_v1(
             contributions,
             slot,
-            None,
+            producer,
             &kaspa_consensus_core::palw_rfc0018_v1::PalwPermissionlessAnchorPolicyV1::design_unapproved_v1(),
         )
     }
@@ -6565,6 +6588,21 @@ impl VirtualStateProcessor {
     /// fold's own acceptance of a merged attempt is decided in this same block's transition, so reading it here would be circular).
     /// Reads only chain data every node holds. `None` where a store cannot serve what it reads.
     fn palw_permissionless_contributions_of_chain_block_v1(
+        &self,
+        block: BlockHash,
+        header: &Header,
+    ) -> Option<Vec<kaspa_consensus_core::palw_rfc0018_v1::PalwAnchorContributionV1>> {
+        // RFC-0018 §5.2 (exact): the contributions are the ADMITTED attempts of committed fold output — the claims of the block's
+        // selected-parent state, blue and red carriers alike — so recognition runs one chain block behind admission and no header
+        // the fold refused ever contributes.
+        let data = self.ghostdag_store.get_data(block).ok()?;
+        let committed = self.palw_candidate_state_v2(data.selected_parent)?;
+        Some(kaspa_consensus_core::palw_rfc0018_v1::palw_permissionless_contributions_from_state_v1(&committed, header.blue_score))
+    }
+
+    /// The header-and-registry reading the committed-output one above replaced (kept for its tests' history; unused).
+    #[allow(dead_code)]
+    fn palw_permissionless_contributions_of_headers_v0(
         &self,
         block: BlockHash,
         header: &Header,
@@ -9776,8 +9814,22 @@ impl VirtualStateProcessor {
             reach.min(block_daa),
         );
         let mut out = Vec::new();
+        // RFC-0018 §5.2: past the permissionless anchor a block anchors only the claims a contribution of ANOTHER bond reaches — the
+        // per-claim predicate step 4c asks, on the same committed contributions.
+        let permissionless = self.palw_panel_anchor_permissionless_at(block_daa).then(|| {
+            kaspa_consensus_core::palw_rfc0018_v1::palw_permissionless_contributions_from_state_v1(state, header.blue_score)
+        });
         for claim_id in provisional {
             let Some(claim) = folded.claim(&claim_id) else { continue };
+            if let Some(contributions) = permissionless.as_ref()
+                && !kaspa_consensus_core::palw_rfc0018_v1::palw_permissionless_anchors_claim_v1(
+                    contributions,
+                    claim.bind_base_daa().saturating_add(anchor_delay),
+                    &claim.bond,
+                )
+            {
+                continue;
+            }
             let object = match self.palw_v2_derive_panel_binding_v1(
                 &folded,
                 block,

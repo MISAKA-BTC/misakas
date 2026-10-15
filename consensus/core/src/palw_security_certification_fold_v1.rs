@@ -190,6 +190,44 @@ fn pool_v1(
         .collect()
 }
 
+/// **The frontier floor's two writers** (journaled kernel rows): at the first block Gate C is in force, the floor is seeded with the
+/// frontier the chain stood at (so activation never moves it back); afterwards a frontier-eligible claim that RETIRES raises it to
+/// its own position (a retired claim can no longer be convicted). A no-op below the fence.
+pub(super) fn ensure_frontier_floor_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    frontier: (u64, Hash64),
+) -> Result<(), PalwStateV2Error> {
+    if !builder.params.rfc0018_v1().is_some_and(|mirror| mirror.gate_c_at(ctx.daa_score)) {
+        return Ok(());
+    }
+    if palw_certified_frontier_floor_v1(&builder.state).is_some() {
+        return Ok(());
+    }
+    super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
+    let floor = PalwCertifiedFrontierFloorV1 { blue_score: frontier.0, block: frontier.1.as_bytes() };
+    write_row(builder, certification_frontier_floor_key_v1(), Some(&floor));
+    Ok(())
+}
+
+/// `retire_claim`'s hook: a retiring frontier-eligible `Final` claim raises the floor (it is past every conviction window).
+pub(super) fn note_retirement_frontier_floor_v1(
+    builder: &mut TransitionBuilder<'_>,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+) -> Result<(), PalwStateV2Error> {
+    let Some(floor) = palw_certified_frontier_floor_v1(&builder.state) else { return Ok(()) };
+    if !matches!(claim.phase, PalwClaimPhaseV2::Final { .. })
+        || !crate::palw_rfc0018_v1::palw_gate_c_advances_frontier_v1(builder.params, &builder.state, claim_id, claim)
+        || claim.accepted_blue_score <= floor.blue_score
+    {
+        return Ok(());
+    }
+    let raised = PalwCertifiedFrontierFloorV1 { blue_score: claim.accepted_blue_score, block: claim.accepted_block.as_bytes() };
+    write_row(builder, certification_frontier_floor_key_v1(), Some(&raised));
+    Ok(())
+}
+
 /// **The consensus credit of a claim that just certified** — exactly the expressions the re-derivations read (consistency, retirement,
 /// reversal), so the state's accumulators and every re-derivation agree: an attempt's Final safe weight (canonical basis, F-W ceiling,
 /// the budget's grant) and one settled anchor; a free-prompt claim's spends so far. Then the held issuance-funded reward is named.

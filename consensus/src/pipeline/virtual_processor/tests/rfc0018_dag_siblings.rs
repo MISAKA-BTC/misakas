@@ -63,22 +63,40 @@ struct Rig {
     /// The three open classes: the floor first, then the planted model rows.
     classes: Vec<Hash64>,
     nonce: u64,
+    /// The blocks this rig mined before the siblings (a replica replays them: the harness's heartbeat coinbase is random).
+    history: Vec<Block>,
 }
 
 impl Rig {
     async fn new((config, bundle, premine, floats): Parts) -> Rig {
         kaspa_core::log::try_init_logger("warn");
         let mut c = t12_genesis_chain(&config, &bundle, &premine, &floats);
+        let mut history = Vec::new();
         for _ in 0..20 {
-            c.heartbeat(1_000, Vec::new()).await;
+            history.push(c.heartbeat(1_000, Vec::new()).await);
         }
+        Rig::finish(c, &bundle, history)
+    }
+
+    /// **A replica of `of`**: a fresh node on the same genesis that receives `of`'s pre-sibling blocks, then the same plant — so it
+    /// starts at the same sink with the same state, and differs only in what arrives next and in what order.
+    async fn replica((config, bundle, premine, floats): Parts, of: &Rig) -> Rig {
+        let mut c = t12_genesis_chain(&config, &bundle, &premine, &floats);
+        for block in &of.history {
+            c.ctx.consensus.validate_and_insert_block(block.clone()).virtual_state_task.await.expect("a replayed block is valid");
+            c.ctx.simulated_time = c.ctx.simulated_time.max(block.header.timestamp);
+        }
+        Rig::finish(c, &bundle, of.history.clone())
+    }
+
+    fn finish(c: T12Chain, bundle: &PalwConsensusParamsV2, history: Vec<Block>) -> Rig {
         let mut classes = vec![bundle.base_class_id];
         {
             let (_, tip) = c.tip_state();
             classes.extend(tip.model_lifecycles_iter().map(|(id, _)| *id).filter(|id| *id != bundle.base_class_id).take(2));
         }
         assert_eq!(classes.len(), 3, "testnet-12's genesis holds the floor and two model rows");
-        let mut rig = Rig { c, classes, nonce: 1 << 46 };
+        let mut rig = Rig { c, classes, nonce: 1 << 46, history };
         rig.plant();
         rig
     }
@@ -237,27 +255,35 @@ async fn run_all_retained(sibling_fence: bool) {
     assert_retained_and_attributed(tag, &rig, &siblings, merger.header.hash);
 }
 
-/// The same blocks, delivered to a second node in the reverse order, give the same sink, colouring and PALW state.
+/// The same blocks, delivered to fresh nodes in EVERY permutation of the three siblings' arrival (3! = 6), give the same sink,
+/// colouring, PALW state root (adopted claims, caps consumed, escrows), safe frontier and ADR-0170 seed anchor (RFC-0018 §4.2: under
+/// the fence the anchor is the least-priority admitted attempt of the span, never the last write).
 async fn run_arrival_order(sibling_fence: bool) {
     let tag = if sibling_fence { "sibling fence" } else { "launched" };
     let mut a = Rig::new(parts(sibling_fence)).await;
-    let mut b = Rig::new(parts(sibling_fence)).await;
-    // The two rigs start byte-identical (same genesis, same heartbeats, same plant): B follows A's chain block for block.
-    assert_eq!(a.c.sink(), b.c.sink(), "{tag}: identical starts");
+    let start = a.c.sink();
     let (siblings, merger) = three_models_from_the_same_parents(&mut a).await;
-    for s in siblings.iter().rev() {
-        b.insert(&s.block).await;
+    let (ga, sa) = (a.c.vp().ghostdag_store.get_data(merger.header.hash).unwrap(), a.c.tip_state().1);
+    for order in [[0usize, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]] {
+        let mut b = Rig::replica(parts(sibling_fence), &a).await;
+        // The two rigs start byte-identical (same genesis, the same replayed blocks, the same plant).
+        assert_eq!(b.c.sink(), start, "{tag}: identical starts");
+        for i in order {
+            b.insert(&siblings[i].block).await;
+        }
+        b.insert(&merger).await;
+        let tag = format!("{tag}, arrival {order:?}");
+        assert_eq!(a.c.sink(), b.c.sink(), "{tag}: one sink");
+        let gb = b.c.vp().ghostdag_store.get_data(merger.header.hash).unwrap();
+        assert_eq!(ga.selected_parent, gb.selected_parent, "{tag}: one selected parent");
+        assert_eq!(ga.mergeset_blues, gb.mergeset_blues, "{tag}: one colouring (blues)");
+        assert_eq!(ga.mergeset_reds, gb.mergeset_reds, "{tag}: one colouring (reds)");
+        let sb = b.c.tip_state().1;
+        assert_eq!(sa.state_root(), sb.state_root(), "{tag}: the adopted claims, caps and escrows are one");
+        assert_eq!(sa.safe_frontier(), sb.safe_frontier(), "{tag}: one fork-choice standing");
+        assert_eq!(sa.round_seed_anchor(), sb.round_seed_anchor(), "{tag}: one ADR-0170 seed anchor");
+        assert_retained_and_attributed(&tag, &b, &siblings, merger.header.hash);
     }
-    b.insert(&merger).await;
-    assert_eq!(a.c.sink(), b.c.sink(), "{tag}: one sink whatever the arrival order");
-    let (ga, gb) = (a.c.vp().ghostdag_store.get_data(merger.header.hash).unwrap(), b.c.vp().ghostdag_store.get_data(merger.header.hash).unwrap());
-    assert_eq!(ga.selected_parent, gb.selected_parent, "{tag}: one selected parent");
-    assert_eq!(ga.mergeset_blues, gb.mergeset_blues, "{tag}: one colouring (blues)");
-    assert_eq!(ga.mergeset_reds, gb.mergeset_reds, "{tag}: one colouring (reds)");
-    let (sa, sb) = (a.c.tip_state().1, b.c.tip_state().1);
-    assert_eq!(sa.state_root(), sb.state_root(), "{tag}: the adopted claims and the economic state are one");
-    assert_eq!(sa.safe_frontier(), sb.safe_frontier(), "{tag}: one fork-choice standing");
-    assert_retained_and_attributed(tag, &b, &siblings, merger.header.hash);
 }
 
 #[tokio::test]
