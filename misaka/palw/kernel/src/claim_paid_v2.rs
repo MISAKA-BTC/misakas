@@ -201,6 +201,15 @@ pub enum PaidClaimObjectV2 {
     IndependenceEvidence {
         observation: misaka_palw_challenge::approval_scope::SourceIndependenceObservationV3,
     },
+    /// Appended subvariants preserve every V3 discriminant and encoding.
+    RegisterCompactContractV4 {
+        registration: crate::claim_compact_v1::native_v4::CompactClaimRegistrationV4,
+    },
+    BindCompactProofV4 {
+        enrollment: Digest,
+        round: u32,
+        proof: crate::claim_compact_v1::native_v4::NativeCompactProofV4,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -299,6 +308,9 @@ pub struct PaidClaimCheckAuthorityV2 {
     message_root: Digest,
     opening_bound: bool,
     interactive_plan: Option<crate::claim_interactive_v3::CompiledClaimProofPlanV3>,
+    compact_proof_root: Option<Digest>,
+    compact_consumer: Option<std::rc::Rc<dyn crate::claim_compact_v1::native_v4::CompactRelationConsumerV4>>,
+    can_complete: bool,
 }
 impl PaidClaimCheckAuthorityV2 {
     pub fn verify(
@@ -335,11 +347,14 @@ impl PaidClaimCheckAuthorityV2 {
             message_root: [0; 64],
             opening_bound: class.interactive_plan.is_none(),
             interactive_plan: class.interactive_plan.clone(),
+            compact_proof_root: None,
+            compact_consumer: None,
+            can_complete: class.interactive_plan.as_ref().is_none_or(|p| p.version != 4),
         })
     }
     /// Caller must supply the independently verified source beacon; the transcript
     /// validator binds every producer message and challenge before this constructor.
-    pub fn for_interactive_round_v3(
+    fn for_interactive_round_inner(
         class: &PaidClaimClassV2,
         enrollment: &PaidClaimEnrollmentV2,
         context: &BeaconContextV1,
@@ -351,9 +366,14 @@ impl PaidClaimCheckAuthorityV2 {
         message_daa: u64,
         now: u64,
         prior_rounds: &[(Digest, Digest)],
+        prior_compact: Option<&[(Digest, Digest, Digest)]>,
     ) -> Result<Self, String> {
         class.validate()?;
         let plan = class.interactive_plan.as_ref().ok_or("interactive proof plan missing")?;
+        if (plan.version == 4) != prior_compact.is_some() {
+            return Err("compact plans require the explicit V4 transcript constructor".into());
+        }
+
         if enrollment.version != 2
             || enrollment.class != class.id()
             || round >= plan.rounds
@@ -375,6 +395,18 @@ impl PaidClaimCheckAuthorityV2 {
                 context.commitment_position.checked_add(context.policy.anchor_delay_slots).ok_or("round source overflow")?,
             )
             .map_err(|e| e.to_string())?,
+            misaka_palw_challenge::InteractiveModeV1::TranscriptBoundFiatShamir if plan.version == 4 => {
+                crate::claim_interactive_v3::fs_round_seed_v4(
+                    plan,
+                    enrollment.commit_root,
+                    class.source_policy.id(),
+                    beacon,
+                    round,
+                    prior_transcript,
+                    message_root,
+                    prior_compact.unwrap(),
+                )?
+            }
             misaka_palw_challenge::InteractiveModeV1::TranscriptBoundFiatShamir => crate::claim_interactive_v3::fs_round_seed_v3(
                 plan,
                 enrollment.commit_root,
@@ -410,7 +442,111 @@ impl PaidClaimCheckAuthorityV2 {
             message_root,
             opening_bound: false,
             interactive_plan: Some(plan.clone()),
+            compact_proof_root: None,
+            compact_consumer: None,
+            can_complete: plan.version != 4,
         })
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_interactive_round_v3(
+        class: &PaidClaimClassV2,
+        enrollment: &PaidClaimEnrollmentV2,
+        context: &BeaconContextV1,
+        subject: &ChallengeSubjectV1,
+        beacon: &VerifiedWorkBeaconV1,
+        round: u32,
+        message: Digest,
+        prior: Digest,
+        message_daa: u64,
+        now: u64,
+        previous: &[(Digest, Digest)],
+    ) -> Result<Self, String> {
+        Self::for_interactive_round_inner(
+            class,
+            enrollment,
+            context,
+            subject,
+            beacon,
+            round,
+            message,
+            prior,
+            message_daa,
+            now,
+            previous,
+            None,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_interactive_round_v4(
+        class: &PaidClaimClassV2,
+        enrollment: &PaidClaimEnrollmentV2,
+        context: &BeaconContextV1,
+        subject: &ChallengeSubjectV1,
+        beacon: &VerifiedWorkBeaconV1,
+        round: u32,
+        message: Digest,
+        prior: Digest,
+        message_daa: u64,
+        now: u64,
+        previous: &[(Digest, Digest, Digest)],
+    ) -> Result<Self, String> {
+        Self::for_interactive_round_inner(
+            class,
+            enrollment,
+            context,
+            subject,
+            beacon,
+            round,
+            message,
+            prior,
+            message_daa,
+            now,
+            &[],
+            Some(previous),
+        )
+    }
+    pub fn with_compact_proof_binding_v4(mut self, root: Digest) -> Result<Self, String> {
+        if self.interactive_plan.as_ref().is_none_or(|p| p.version != 4) || self.compact_proof_root.is_some() || root == [0; 64] {
+            return Err("compact proof binding has wrong plan/duplicate/zero root".into());
+        }
+        self.compact_proof_root = Some(root);
+        self.transcript_root = crate::claim_compact_v1::native_v4::compact_transcript_root_v4(self.transcript_root, root);
+        self.can_complete = true;
+        Ok(self)
+    }
+    pub fn bind_compact_opening_v4<T: BorshSerialize>(
+        &self,
+        material: &T,
+        registration: &crate::claim_compact_v1::native_v4::CompactClaimRegistrationV4,
+        session: std::rc::Rc<crate::claim_compact_v1::native_v4::CompactVerificationSessionV4>,
+        proof: Option<&crate::claim_compact_v1::native_v4::NativeCompactProofV4>,
+    ) -> Result<Self, String> {
+        let plan = self.interactive_plan.as_ref().ok_or("compact plan missing")?;
+        if plan.version != 4
+            || *plan != registration.plan
+            || plan.material_root(material)? != self.message_root
+            || plan.compiler
+                != crate::claim_compact_v1::native_v4::compact_suite_id_v4(
+                    &registration.contract,
+                    &registration.coverage,
+                    registration.adversary,
+                )
+            || registration.contract.coverage_root != registration.coverage.root()
+            || !session.matches(registration, self.sample_seed)
+        {
+            return Err("compact material/plan differs from signed native round".into());
+        }
+        let mut bound = self.clone();
+        if let Some(proof) = proof {
+            if self.compact_proof_root != Some(proof.root()) {
+                return Err("compact proof differs from producer post-seed binding".into());
+            }
+        } else {
+            bound.can_complete = false;
+        }
+        bound.opening_bound = true;
+        bound.compact_consumer = Some(session);
+        Ok(bound)
     }
     pub fn enrollment(&self) -> Digest {
         self.enrollment
@@ -424,6 +560,9 @@ impl PaidClaimCheckAuthorityV2 {
     pub fn bind_opening_v3<T: BorshSerialize>(&self, material: &T) -> Result<Self, String> {
         let mut bound = self.clone();
         if let Some(plan) = &self.interactive_plan {
+            if plan.version == 4 {
+                return Err("V4 needs the registered compact verifier and post-seed proof binding".into());
+            }
             if plan.material_root(material)? != self.message_root {
                 return Err("full-material opening differs from the signed round message".into());
             }
@@ -435,7 +574,8 @@ impl PaidClaimCheckAuthorityV2 {
         if !self.opening_bound {
             return Err("interactive full-material message has not been authenticated".into());
         }
-        crate::challenge::CheckerRandomnessV2::new(self.sample_seed, self.maximum_stream_blocks)
+        let randomness = crate::challenge::CheckerRandomnessV2::new(self.sample_seed, self.maximum_stream_blocks)?;
+        Ok(if let Some(consumer) = &self.compact_consumer { randomness.with_compact(consumer.clone()) } else { randomness })
     }
     pub fn check_program_or_pipeline(
         &self,
@@ -467,19 +607,36 @@ impl PaidClaimCheckAuthorityV2 {
         if !self.opening_bound || outsider.claim != self.base_claim {
             return Err("paid segmented checker has another claim or unauthenticated opening".into());
         }
-        outsider.check_segmented_computation(positions, tokens)
+        let finding = outsider.check_segmented_computation(positions, tokens)?;
+        if matches!(finding, crate::ledger::OutsiderFindingV1::Clean) && self.compact_consumer.is_some() {
+            let view = outsider.ledger.seg_claim_view_v1(&outsider.claim).ok_or("compact segmented claim missing")?;
+            let row = outsider.ledger.claims.get(&outsider.claim).ok_or("compact base claim missing")?;
+            let class = outsider.ledger.classes.get(&row.class_binding_id).ok_or("compact segmented class missing")?;
+            crate::claim_compact_v1::native_v4::check_segmented_compact_v4(
+                &view.context(),
+                class.plan.root(),
+                positions,
+                &|index, layer| outsider.artifact.param(0, index, layer),
+                tokens,
+                &self.randomness()?,
+            )?;
+        }
+        Ok(finding)
     }
     fn checked(&self, finding: crate::ledger::OutsiderFindingV1) -> PaidClaimVerificationResultV2 {
-        let complete = matches!(finding, crate::ledger::OutsiderFindingV1::Clean).then_some(VerifiedPaidClaimCheckV2 {
-            enrollment: self.enrollment,
-            verification_class: self.verification_class,
-            source_context: self.source_context,
-            sample_seed: self.sample_seed,
-            evidence_root: self.evidence_root,
-            transcript_root: self.transcript_root,
-            round: self.round,
-            message_root: self.message_root,
-        });
+        let compact_complete = self.interactive_plan.as_ref().is_none_or(|p| p.version != 4)
+            || self.compact_consumer.as_ref().is_some_and(|s| s.complete().is_ok());
+        let complete = (self.can_complete && compact_complete && matches!(finding, crate::ledger::OutsiderFindingV1::Clean))
+            .then_some(VerifiedPaidClaimCheckV2 {
+                enrollment: self.enrollment,
+                verification_class: self.verification_class,
+                source_context: self.source_context,
+                sample_seed: self.sample_seed,
+                evidence_root: self.evidence_root,
+                transcript_root: self.transcript_root,
+                round: self.round,
+                message_root: self.message_root,
+            });
         PaidClaimVerificationResultV2 { finding, complete }
     }
     pub fn verify_program_or_pipeline(
@@ -553,4 +710,13 @@ pub struct NativeSourcePaymentProofV3 {
     pub header_bytes: Vec<u8>,
     pub transaction_bytes: Vec<Vec<u8>>,
     pub coinbase_output: u32,
+}
+
+/// New signed checker terms must precede every observable producer commitment.
+/// A payer cannot retrospectively migrate an ordinary sealed job (including an
+/// already prepaid beacon source) into the paid-checking/absolute-expiry route.
+pub fn paid_job_enrollment_is_prospective_v3(ledger: &crate::ledger::KernelLedgerV1, job: &Digest, now: u64) -> bool {
+    !ledger.claims.values().any(|claim| claim.job_id == *job)
+        && !ledger.seals.iter().any(|((id, _), seal)| id == job && now <= seal.daa.saturating_add(ledger.policy.seal_ttl_daa))
+        && !ledger.beacon_sources.values().any(|source| source.job == *job && source.outcome.is_none())
 }

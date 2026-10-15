@@ -168,11 +168,13 @@ mod palw_flat_model_vector_fold_v7;
 mod palw_flat_model_vector_fold_v9;
 #[path = "palw_flat_stage_fold_v14.rs"]
 mod palw_flat_stage_fold_v14;
-#[path = "palw_native_initial_fold_v31.rs"]
-mod palw_native_initial_fold_v31;
 #[path = "palw_model_refutation_seal_fold_v4.rs"]
 mod palw_model_refutation_seal_fold_v4;
+#[path = "palw_native_initial_fold_v31.rs"]
+mod palw_native_initial_fold_v31;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
+#[path = "palw_material_release_recovery_fold_v2.rs"]
+mod palw_material_release_recovery_fold_v2;
 #[path = "palw_monetary_material_fold_v1.rs"]
 mod palw_monetary_material_fold_v1;
 #[path = "palw_provider_court_fold_v1.rs"]
@@ -1859,6 +1861,9 @@ pub struct PalwStateParamsV2 {
     panel_lifetime_v2: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeMirrorV2>,
     #[borsh(skip)]
     pub(crate) palw_claim_challenge_v2: Option<crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2>,
+    /// Runtime mirror only: adding compact v4 never changes legacy StateParams Borsh bytes.
+    #[borsh(skip)]
+    palw_claim_compact_v4: Option<crate::palw_claim_compact_v4::PalwClaimCompactFenceV4>,
     /// **Lane BUDGET (ADR-0176 / ADR-0177): `Params::palw_bond_budget_v1` and `palw_model_bond_allocation_v1`, mirrored by
     /// `Params::sync_palw_bond_budget_v1`** — the fences' heights and policies (the fold's budget hooks read it). `None` on every shipped
     /// preset, and validation refuses both armed.
@@ -1875,6 +1880,8 @@ pub struct PalwStateParamsV2 {
     material_income_from_daa: Option<u64>,
     #[borsh(skip)]
     monetary_material: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1>,
+    #[borsh(skip)]
+    material_release_recovery_v2: Option<crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryMirrorV2>,
     /// RFC07/RFC08 economic contracts (`crate::palw_econ_contracts_v1`): the three dormant fences' mirror, synchronized with Params.
     #[borsh(skip)]
     pub(crate) econ_contracts_v1: crate::palw_econ_contracts_v1::PalwEconContractsMirrorV1,
@@ -9066,6 +9073,9 @@ impl PalwCourtCloseGroupV2 {
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwStateV2Error {
+    /// Local construction capacity is not a consensus object or block fault.
+    #[error("local native construction capacity: {0}")]
+    NativeResource(crate::palw_native_resource_v1::NativeCoverageV1),
     #[error("invalid state params: {0}")]
     InvalidParams(&'static str),
     #[error("chain context is not monotone: {0}")]
@@ -12734,6 +12744,7 @@ impl PalwBondRegistrationIndexV1 {
 }
 
 struct TransitionBuilder<'a> {
+    native_reservation: crate::palw_native_resource_v1::NativeTransitionReservationV1,
     monetary_native_ready: BTreeMap<Hash64, (Hash64, crate::palw_attempt_material_v3::PalwNativeMaterialBindingV3)>,
     params: &'a PalwStateParamsV2,
     state: PalwChainStateV2,
@@ -13271,6 +13282,30 @@ pub fn apply_palw_transition_v2(
     apply_palw_transition_v3(parent, params, ctx, accepted_objects, work)
 }
 
+/// Retained-owner form of the original V2 face. Policy flags and extras are
+/// exactly the defaults used by the historical V2 -> V3 -> V4 wrappers.
+pub fn apply_palw_transition_retained_v2(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    current_attempt: Option<&PalwAttemptEnvelopeV2>,
+) -> Result<(crate::palw_native_resource_v1::NativeChainStateV1, crate::palw_native_resource_v1::NativeStateDeltaV1), PalwStateV2Error>
+{
+    apply_palw_transition_retained_v2_with_extras(
+        parent,
+        params,
+        ctx,
+        accepted_objects,
+        current_attempt,
+        false,
+        false,
+        false,
+        false,
+        &PalwTransitionExtrasV1::default(),
+    )
+}
+
 /// [`apply_palw_transition_v2`] with ADR-0065 D4's verdict policy — the face the pipeline's
 /// object-acceptance rehearsal and the state-sync walk use, so neither can hold a different
 /// opinion from the transition they exist to predict.
@@ -13353,6 +13388,45 @@ pub fn apply_palw_transition_v2_with_extras(
         None => PalwBlockWorkV3::None,
     };
     apply_palw_transition_v7(
+        parent,
+        params,
+        None,
+        ctx,
+        accepted_objects,
+        work,
+        &[],
+        // No header here (attempt-only wrapper, no merged work) — the own-vs-merged execution dedup
+        // cannot fire, so B-4's own-work key is `default`; below the deep fence it is unread anyway.
+        Hash64::default(),
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )
+    .map(|(state, delta, _)| (state, delta))
+}
+
+/// Retained-owner form of the historical rehearsal adapter.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_palw_transition_retained_v2_with_extras(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    current_attempt: Option<&PalwAttemptEnvelopeV2>,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<(crate::palw_native_resource_v1::NativeChainStateV1, crate::palw_native_resource_v1::NativeStateDeltaV1), PalwStateV2Error>
+{
+    let work = match current_attempt {
+        Some(envelope) => PalwBlockWorkV3::Attempt(envelope),
+        None => PalwBlockWorkV3::None,
+    };
+    apply_palw_transition_retained_v7(
         parent,
         params,
         None,
@@ -13640,6 +13714,31 @@ pub fn palw_v2_pre_object_base_v1(
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    palw_v2_pre_object_base_retained_v1(
+        parent,
+        params,
+        ctx,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )?
+    .into_unreserved_legacy_v1()
+    .map_err(PalwStateV2Error::NativeResource)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_pre_object_base_retained_v1(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<crate::palw_native_resource_v1::NativeChainStateV1, PalwStateV2Error> {
     if let Some(last) = &parent.last_point {
         if ctx.blue_score <= last.blue_score {
             return Err(PalwStateV2Error::NonMonotonicContext("blue_score must strictly increase along a chain"));
@@ -13649,7 +13748,7 @@ pub fn palw_v2_pre_object_base_v1(
         }
     }
     let mut builder =
-        TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
+        TransitionBuilder::try_new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)?;
 
     for claim_id in builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>() {
         builder.write_payout(claim_id, None);
@@ -13670,7 +13769,7 @@ pub fn palw_v2_pre_object_base_v1(
     }
     // ADR-0125: the span boundary runs where the fold runs it — before any claim is finalized here.
     if let Some(lane) = extras.round_lane {
-        builder.rotate_round_lane(ctx, lane.schedule_span_daa);
+        builder.rotate_round_lane(ctx, lane.schedule_span_daa)?;
     }
     // 1e. ADR-0165: the floor state's TIME step — a Probe that has run its slots and a Normal whose last BLUE REAL attempt is
     //     too old expire here, before the sweeps and before any attempt, so own and merged attempts read one state.
@@ -13711,7 +13810,7 @@ pub fn palw_v2_pre_object_base_v1(
     palw_mesh_fold_v1::sweep_mesh_v1(&mut builder, ctx);
     apply_work_target_shadow(&mut builder, parent, ctx);
     apply_work_target(&mut builder, parent, ctx);
-    apply_class_share_growth(&mut builder, parent, ctx);
+    apply_class_share_growth(&mut builder, parent, ctx)?;
     apply_class_reclamation(&mut builder, parent, ctx)?;
     // RFC-0004 (spec 17 §17.5.2): the improvement sweep, as the fold's step 2e does, then the material
     // lane's.
@@ -13721,7 +13820,7 @@ pub fn palw_v2_pre_object_base_v1(
     palw_panel_v3_fold_v1::advance_v1(&mut builder, parent, ctx)?;
     palw_monetary_material_fold_v1::tick(&mut builder, ctx)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
-    Ok(builder.checkpoint().0)
+    builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
 }
 
 /// Companion to [`palw_v2_pre_object_base_v1`]: apply exactly one accepted object to a base, as the
@@ -13738,14 +13837,41 @@ pub fn palw_v2_apply_one_object_v1(
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    palw_v2_apply_one_object_retained_v1(
+        base,
+        params,
+        ctx,
+        object,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )?
+    .into_unreserved_legacy_v1()
+    .map_err(PalwStateV2Error::NativeResource)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_apply_one_object_retained_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<crate::palw_native_resource_v1::NativeChainStateV1, PalwStateV2Error> {
     let mut builder =
-        TransitionBuilder::new(base, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
+        TransitionBuilder::try_new(base, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)?;
     // Step 3's reservation for the block's own attempt, as the fold takes it (see
     // `PalwTransitionExtrasV1::own_attempt_class`).
     builder.own_attempt_class = extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active);
     apply_object(&mut builder, ctx, object)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
-    Ok(builder.checkpoint().0)
+    builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
 }
 
 /// **Would this licence object actually LICENSE its claim on `base`?** (2026-09-24 DoS audit review
@@ -13800,7 +13926,7 @@ fn palw_v2_licensed_state_v1(
     uncertified_weightless: bool,
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
-) -> Option<(Hash64, PalwChainStateV2)> {
+) -> Option<(Hash64, crate::palw_native_resource_v1::NativeChainStateV1)> {
     let claim = match object {
         PalwConsensusObjectV2::ReceiptLicensed { claim, .. }
         | PalwConsensusObjectV2::ReceiptLicensedV2 { claim, .. }
@@ -13814,7 +13940,7 @@ fn palw_v2_licensed_state_v1(
     {
         return None;
     }
-    palw_v2_apply_one_object_v1(
+    palw_v2_apply_one_object_retained_v1(
         base,
         params,
         ctx,
@@ -13945,7 +14071,7 @@ pub fn palw_v2_supplementary_effect_v1(
     }
     let before = base.claims.get(&claim_id).filter(|c| matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }))?;
     let receipt_deadline = palw_claim_receipt_deadline_v1(base, params, &claim_id, before).ok().flatten()?;
-    let next = palw_v2_apply_one_object_v1(
+    let next = palw_v2_apply_one_object_retained_v1(
         base,
         params,
         ctx,
@@ -14012,6 +14138,56 @@ pub fn apply_palw_transition_v7(
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
+    let (state, delta, skips) = apply_palw_transition_retained_v7(
+        parent,
+        params,
+        admission,
+        ctx,
+        accepted_objects,
+        block_work,
+        merged_work,
+        own_execution_key,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )?;
+    Ok((
+        state.into_unreserved_legacy_v1().map_err(PalwStateV2Error::NativeResource)?,
+        delta.into_unreserved_legacy_v1().map_err(PalwStateV2Error::NativeResource)?,
+        skips.into_unreserved_legacy_v1().map_err(PalwStateV2Error::NativeResource)?,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn apply_palw_transition_retained_v7(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    admission: Option<&crate::palw_admission_v2::PalwAdmissionParamsV2>,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
+    merged_work: &[PalwMergedWorkV1<'_>],
+    // **B-4: the block's OWN attempt's pre_pow-inclusive execution commitment**, computed by the
+    // processor from this block's header (the fold holds no pre_pow). `Hash64::default()` when the
+    // block carries no attempt, and unread below `palw_audit_2026_09_11_deep`. A wrapper that has no
+    // header (rehearsal / genesis / sync) passes `default` — its fold carries no merged work, so the
+    // own-vs-merged dedup cannot fire there and the own attempt is applied identically either way.
+    own_execution_key: Hash64,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<
+    (
+        crate::palw_native_resource_v1::NativeChainStateV1,
+        crate::palw_native_resource_v1::NativeStateDeltaV1,
+        crate::palw_native_resource_v1::NativeRetainedV1<Vec<(BlockHash, String)>>,
+    ),
+    PalwStateV2Error,
+> {
     crate::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(ctx.block, || {
         apply_palw_transition_v7_inner(
             parent,
@@ -14051,7 +14227,14 @@ fn apply_palw_transition_v7_inner(
     uncertified_weightless: bool,
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
-) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
+) -> Result<
+    (
+        crate::palw_native_resource_v1::NativeChainStateV1,
+        crate::palw_native_resource_v1::NativeStateDeltaV1,
+        crate::palw_native_resource_v1::NativeRetainedV1<Vec<(BlockHash, String)>>,
+    ),
+    PalwStateV2Error,
+> {
     // 1. Context monotonicity: blue score strictly increases along a chain, DAA never decreases.
     if let Some(last) = &parent.last_point {
         if ctx.blue_score <= last.blue_score {
@@ -14063,7 +14246,7 @@ fn apply_palw_transition_v7_inner(
     }
 
     let mut builder =
-        TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
+        TransitionBuilder::try_new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)?;
 
     // Prospective custody is authenticated against the pre-object parent. A same-block
     // enrollment/replacement never authorizes this block's capture. A carriage that does not
@@ -14089,7 +14272,15 @@ fn apply_palw_transition_v7_inner(
                 &a.executor_bond,
                 header.nonce,
             );
-            if ready.verify_prior(parent, anchor, header.daa_score, crate::palw_attempt_material_v3::verify_ready_signature_v3).is_ok()
+            if ready
+                .verify_prior_with_recovery_v4(
+                    parent,
+                    params,
+                    anchor,
+                    header.daa_score,
+                    crate::palw_attempt_material_v3::verify_ready_signature_v3,
+                )
+                .is_ok()
             {
                 builder.monetary_native_ready.insert(ready.ready.binding.claim, (ready.ready.session, ready.ready.binding));
             }
@@ -14142,7 +14333,7 @@ fn apply_palw_transition_v7_inner(
     // 1d. ADR-0125: the execution lane's span boundary — before the sweeps, so an attempt finalized
     //     by this block is a credit in THIS block's span, never in the one its finals just closed.
     if let Some(lane) = extras.round_lane {
-        builder.rotate_round_lane(ctx, lane.schedule_span_daa);
+        builder.rotate_round_lane(ctx, lane.schedule_span_daa)?;
     }
     // 1e. ADR-0165: the floor state's TIME step — a Probe that has run its slots and a Normal whose last BLUE REAL attempt is
     //     too old expire here, before the sweeps and before any attempt, so own and merged attempts read one state.
@@ -14218,7 +14409,7 @@ fn apply_palw_transition_v7_inner(
     //     reads the same census, and before the objects and `ensure_epoch_budgets`, so the new
     //     epoch's budgets are derived from the table this leaves behind rather than from the one
     //     the closed epoch had. Off entirely when `class_growth_permille` is zero.
-    apply_class_share_growth(&mut builder, parent, ctx);
+    apply_class_share_growth(&mut builder, parent, ctx)?;
     // 2d. Reclamation (this line's ADR Decision 5), at the same boundary and off the same census.
     //     AFTER the growth step, because a class the growth rule just decayed to nothing and a
     //     class that has been silent for `reclaim_epochs` are different facts, and only the second
@@ -14512,7 +14703,7 @@ fn apply_palw_transition_v7_inner(
                     ) {
                         Err(refused) => Some(refused.to_string()),
                         Ok(_) => {
-                            let checkpoint = builder.checkpoint();
+                            let checkpoint = builder.try_checkpoint()?;
                             // B-1: past the deep fence a merged claim escrows its carve, carved from the
                             // MERGED block's own subsidy — the accepting coinbase withholds that same
                             // carve. Below the fence, false → escrows nothing (ADR-0058 D5),
@@ -14558,6 +14749,9 @@ fn apply_palw_transition_v7_inner(
                                     None
                                 }
                                 Err(refused) => {
+                                    if matches!(refused, PalwStateV2Error::NativeResource(_)) {
+                                        return Err(refused);
+                                    }
                                     builder.restore(checkpoint);
                                     // ADR-0160 stage 4 (F-N): a merged attempt's refusal for want of a unit
                                     // registers its demand too.
@@ -14570,10 +14764,13 @@ fn apply_palw_transition_v7_inner(
                 }
             },
             PalwBlockWorkV3::ReceiptSpend(spend) => {
-                let checkpoint = builder.checkpoint();
+                let checkpoint = builder.try_checkpoint()?;
                 match apply_receipt_spend(&mut builder, ctx, spend) {
                     Ok(()) => None,
                     Err(refused) => {
+                        if matches!(refused, PalwStateV2Error::NativeResource(_)) {
+                            return Err(refused);
+                        }
                         builder.restore(checkpoint);
                         Some(refused.to_string())
                     }
@@ -14588,7 +14785,7 @@ fn apply_palw_transition_v7_inner(
     // 4b′. **ADR-0164 F-M1: the riders of this block's leads**, after every claim the block's work creates (a merged lead is created in
     //      4b) and before step 4c, which reads what is resolved. Each batch is atomic; a refused one is a skip and leaves its lead
     //      with its whole carve. The rider marks past their window leave first. A no-op below the fence.
-    apply_pending_riders_v1(&mut builder, ctx, params, admission, &mut merged_skips);
+    apply_pending_riders_v1(&mut builder, ctx, params, admission, &mut merged_skips)?;
 
     // 4b″. **RFC-0010: the permissionless Panel's engine takes what the block carried** — the certified epoch outputs its objects
     //      brought (each verified against the branch and dropped, the block standing, if it does not verify), then the claims this
@@ -14784,7 +14981,7 @@ fn apply_palw_transition_v7_inner(
     }
 
     let delta = PalwStateDeltaV2 { point: *ctx, entries: builder.entries };
-    Ok((builder.state, delta, merged_skips))
+    builder.native_reservation.finish_transition_v1(builder.state, delta, merged_skips).map_err(PalwStateV2Error::NativeResource)
 }
 
 /// After the LAST open session on a licensed claim ends challenger-side (an explicit
@@ -16064,7 +16261,7 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
                 let record = builder.state.classes.get(&class_id).expect("just listed").clone();
                 let mut dormant = record.clone();
                 dormant.status = PalwClassStatusV2::Dormant { since_daa: ctx.daa_score };
-                builder.write_class(class_id, Some(dormant));
+                builder.write_class(class_id, Some(dormant))?;
                 if let Some(bond) = record.registrant_bond {
                     builder.move_registration_exposure(bond, false)?;
                 }
@@ -16073,12 +16270,12 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         };
         for (id, granted) in table {
             if builder.state.class_shares.get(&id).copied() != Some(granted) {
-                builder.write_share(id, Some(granted));
+                builder.write_share(id, Some(granted))?;
             }
         }
         let mut record = builder.state.classes.get(&class_id).expect("just listed").clone();
         record.status = PalwClassStatusV2::Active;
-        builder.write_class(class_id, Some(record));
+        builder.write_class(class_id, Some(record))?;
         // Onboarding P0: a gated class that activated is ACTIVE_REWARDABLE in its conformance record (a no-op for any other class).
         palw_onboarding_fold_v1::note_class_activated_v1(builder, &class_id);
     }
@@ -16437,25 +16634,29 @@ fn apply_work_target(builder: &mut TransitionBuilder<'_>, parent: &PalwChainStat
     }));
 }
 
-fn apply_class_share_growth(builder: &mut TransitionBuilder<'_>, parent: &PalwChainStateV2, ctx: &PalwBlockContextV2) {
+fn apply_class_share_growth(
+    builder: &mut TransitionBuilder<'_>,
+    parent: &PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+) -> Result<(), PalwStateV2Error> {
     // ADR-0137: past the work target no share grows or decays.
     if builder.extras.work_target_active {
-        return;
+        return Ok(());
     }
     if builder.params.class_growth_permille() == 0 {
-        return;
+        return Ok(());
     }
-    let Some(last) = &parent.last_point else { return };
+    let Some(last) = &parent.last_point else { return Ok(()) };
     let epoch_length = builder.params.epoch_length;
     let closed_epoch = last.daa_score / epoch_length;
     if ctx.daa_score / epoch_length <= closed_epoch {
-        return;
+        return Ok(());
     }
     // The closed epoch's budget table, or nothing: a table stamped with another epoch caps a
     // different span, and comparing production against it would invent a verdict.
     let budgets = match builder.state.epoch_budgets.as_ref() {
         Some(budgets) if budgets.epoch_index == closed_epoch => budgets.budget_blocks.clone(),
-        _ => return,
+        _ => return Ok(()),
     };
     // **ADR-0107: the closed epoch's VERIFIED work, per class** — attempt claims whose `Final`
     // happened inside the span, read off the claim records (they outlive the span: arming the
@@ -16500,7 +16701,7 @@ fn apply_class_share_growth(builder: &mut TransitionBuilder<'_>, parent: &PalwCh
         // A span nobody produced in measures nothing. Without this, every class in the table would
         // decay on a gap epoch and the floor would collect the whole table for an outage that was
         // never any class's fault.
-        return;
+        return Ok(());
     }
     let frozen: BTreeSet<Hash64> = builder
         .state
@@ -16520,9 +16721,10 @@ fn apply_class_share_growth(builder: &mut TransitionBuilder<'_>, parent: &PalwCh
     );
     for (class_id, share) in moved.shares {
         if builder.state.class_shares.get(&class_id).copied() != Some(share) {
-            builder.write_share(class_id, Some(share));
+            builder.write_share(class_id, Some(share))?;
         }
     }
+    Ok(())
 }
 
 /// **Reclamation: a class that has stopped producing gives its seat back** (this line's ADR
@@ -16591,7 +16793,7 @@ fn apply_class_reclamation(
             if let Some(walk) = builder.state.class_walks.get(id).copied()
                 && walk.idle_streak != 0
             {
-                builder.write_class_walk(*id, Some(PalwClassWalkV2 { last_epoch: closed_epoch, ..Default::default() }));
+                builder.write_class_walk(*id, Some(PalwClassWalkV2 { last_epoch: closed_epoch, ..Default::default() }))?;
             }
             continue;
         }
@@ -16614,7 +16816,7 @@ fn apply_class_reclamation(
         // that silence would reclaim a class for the boundary's own arithmetic.
         if budget == 0 {
             walk.last_epoch = closed_epoch;
-            builder.write_class_walk(*id, Some(walk));
+            builder.write_class_walk(*id, Some(walk))?;
             continue;
         }
         walk.idle_streak = if produced == 0 { walk.idle_streak + 1 } else { 0 };
@@ -16623,7 +16825,7 @@ fn apply_class_reclamation(
             reclaims.push(*id);
             walk = PalwClassWalkV2 { last_epoch: closed_epoch, ..Default::default() };
         }
-        builder.write_class_walk(*id, Some(walk));
+        builder.write_class_walk(*id, Some(walk))?;
     }
 
     for id in &reclaims {
@@ -16642,10 +16844,10 @@ fn apply_class_reclamation(
         let returned = builder.state.class_shares.get(id).copied().unwrap_or(0);
         // The row leaves the table whatever it held: a Dormant class with a zero entry is the one
         // shape `assert_internal_consistency` refuses (a share must name a live class).
-        builder.write_share(*id, None);
+        builder.write_share(*id, None)?;
         let mut dormant = record.clone();
         dormant.status = PalwClassStatusV2::Dormant { since_daa: ctx.daa_score };
-        builder.write_class(*id, Some(dormant));
+        builder.write_class(*id, Some(dormant))?;
         if let Some(bond) = record.registrant_bond {
             builder.move_registration_exposure(bond, false)?;
         }
@@ -16718,7 +16920,7 @@ fn redistribute_permille_v1(
             continue;
         }
         let held = builder.state.class_shares.get(id).copied().unwrap_or(0);
-        builder.write_share(*id, Some(held.saturating_add(extra as u16)));
+        builder.write_share(*id, Some(held.saturating_add(extra as u16)))?;
     }
     Ok(())
 }
@@ -16845,7 +17047,7 @@ fn apply_class_retargets(
         };
         let next = walked.min(ceiling).max(1);
         if next != current {
-            builder.write_receipt_target(pooled_key, Some(PalwClassTargetV2 { target: next }));
+            builder.write_receipt_target(pooled_key, Some(PalwClassTargetV2 { target: next }))?;
         }
     }
     for (lane_permille, counters_are_receipts) in [(split, false), (1000 - split, true)] {
@@ -16941,9 +17143,9 @@ fn apply_class_retargets(
                     crate::palw_class_daa::converge_idle_target_v1(current, floor_price, builder.params.class_daa_max_factor()).max(1);
                 if next != current {
                     if counters_are_receipts {
-                        builder.write_receipt_target(class_id, Some(PalwClassTargetV2 { target: next }));
+                        builder.write_receipt_target(class_id, Some(PalwClassTargetV2 { target: next }))?;
                     } else {
-                        builder.write_target(class_id, Some(PalwClassTargetV2 { target: next }));
+                        builder.write_target(class_id, Some(PalwClassTargetV2 { target: next }))?;
                     }
                 }
                 continue;
@@ -16976,9 +17178,9 @@ fn apply_class_retargets(
                 .max(1);
             if next != current {
                 if counters_are_receipts {
-                    builder.write_receipt_target(class_id, Some(PalwClassTargetV2 { target: next }));
+                    builder.write_receipt_target(class_id, Some(PalwClassTargetV2 { target: next }))?;
                 } else {
-                    builder.write_target(class_id, Some(PalwClassTargetV2 { target: next }));
+                    builder.write_target(class_id, Some(PalwClassTargetV2 { target: next }))?;
                 }
             }
         }
@@ -17781,7 +17983,7 @@ fn seat_attempt_lane_class_v1(
     }
     for (id, share) in table {
         if builder.state.class_shares.get(&id).copied() != Some(share) {
-            builder.write_share(id, Some(share));
+            builder.write_share(id, Some(share))?;
         }
     }
     // **A class being seated is a class being PRICED** (ADR-0076).
@@ -17798,7 +18000,7 @@ fn seat_attempt_lane_class_v1(
     // share the table just wrote and the class's own counted work.
     let seated = builder.state.class_shares.get(class_id).copied().unwrap_or(0);
     let pwu = builder.class_seed_pwu(class_id, ctx.daa_score);
-    builder.write_target(*class_id, Some(PalwClassTargetV2 { target: crate::palw_class_daa::attempt_target_seed_v1(seated, pwu) }));
+    builder.write_target(*class_id, Some(PalwClassTargetV2 { target: crate::palw_class_daa::attempt_target_seed_v1(seated, pwu) }))?;
     Ok(())
 }
 
@@ -18126,7 +18328,7 @@ fn apply_class_registration_v1(
         // moves.
         for (id, share) in table {
             if builder.state.class_shares.get(&id).copied() != Some(share) {
-                builder.write_share(id, Some(share));
+                builder.write_share(id, Some(share))?;
             }
         }
     }
@@ -18178,7 +18380,7 @@ fn apply_class_registration_v1(
             // genesis differently.
             fused_attention,
         }),
-    );
+    )?;
     // The canonical registration is signed, but pruning previously discarded its semantic
     // identities. Persist one immutable row at the independent semantic fence; no local model
     // or tokenizer file participates in the fold. Dormant re-registration cannot relabel it.
@@ -18203,7 +18405,7 @@ fn apply_class_registration_v1(
                 return Err(PalwStateV2Error::ImmutableModelUpdate("class canonical semantic identities changed"));
             }
         } else {
-            builder.write_class_semantics_v1(*class_id, Some(next));
+            builder.write_class_semantics_v1(*class_id, Some(next))?;
         }
     }
     // **ADR-0119 Decision 2: a class under the held map records its ladder, now.** The
@@ -18212,7 +18414,7 @@ fn apply_class_registration_v1(
     // the gate admits only past `Params::palw_held_context` — so a network that registers
     // none roots exactly as before.
     if held {
-        builder.write_class_step_ladder(*class_id, Some(crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1));
+        builder.write_class_step_ladder(*class_id, Some(crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1))?;
     }
     // **Decision 3: the registry's price, taken now and held while the class lives.** A
     // re-registration of a Dormant class takes it again — the previous reservation was
@@ -18235,8 +18437,8 @@ fn apply_class_registration_v1(
     }
     // A returning class starts its walk over: the counters are about the CURRENT
     // registration's production and nothing before it.
-    builder.write_class_walk(*class_id, None);
-    builder.write_target(*class_id, Some(PalwClassTargetV2 { target: *initial_target }));
+    builder.write_class_walk(*class_id, None)?;
+    builder.write_target(*class_id, Some(PalwClassTargetV2 { target: *initial_target }))?;
     // The receipt lane seeds at the uniform 2^-1, NOT from the class's `initial_target`.
     // It used to (ADR-0044: "one registration field, two slots"), and that was right while
     // every genesis target was 2^-1. The attempt lane's seed is now tuned per class to the
@@ -18247,7 +18449,7 @@ fn apply_class_registration_v1(
     // one free-prompt-certified class's lane at one win per 16,384 quanta for the ~7
     // epochs the receipt retarget needs to crawl back. The two retargets separate the
     // lanes from here, against their own censuses.
-    builder.write_receipt_target(*class_id, Some(PalwClassTargetV2 { target: PALW_RECEIPT_TARGET_SEED_V1 }));
+    builder.write_receipt_target(*class_id, Some(PalwClassTargetV2 { target: PALW_RECEIPT_TARGET_SEED_V1 }))?;
     // ADR-0135: a class registered with its carriage gets its lifecycle row from the graph.
     if builder.extras.model_registry.is_some()
         && let Some(work) = work
@@ -18299,6 +18501,7 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         K::Fence(F::StagedPublicCourtV1) => builder.extras.staged_public_court.is_some(),
         // RFC08: the mirror of `palw_monetary_material_v1` (merged 2026-10-15; this arm was missing on both parents).
         K::Fence(F::MonetaryMaterialV1) => builder.params.monetary_material_at_v1(ctx.daa_score).is_some(),
+        K::Fence(F::MaterialReleaseRecoveryV2) => builder.params.material_release_recovery_at_v2(ctx.daa_score).is_some(),
         // G14: the TIR / greedy Float32 staged routes ride inside the staged court's kinds, in force where both fences are.
         K::Fence(F::StagedTirRouteV1) => builder.extras.staged_public_court.is_some() && builder.extras.staged_tir_route_active,
         K::Fence(F::StagedFloatConstraintV1) => {
@@ -20528,11 +20731,11 @@ fn apply_pending_riders_v1(
     params: &PalwStateParamsV2,
     admission: Option<&crate::palw_admission_v2::PalwAdmissionParamsV2>,
     skips: &mut Vec<(BlockHash, String)>,
-) {
+) -> Result<(), PalwStateV2Error> {
     use crate::palw_capacity_s567_v1::{PALW_RIDERS_WINDOW_DAA_V1, PalwCapacityLedgerKeyV1 as K, PalwCapacityLedgerRowV1 as R};
     if !params.capacity_riders_active_at(ctx.daa_score) {
         builder.pending_riders.clear();
-        return;
+        return Ok(());
     }
     let expired: Vec<K> = builder
         .state
@@ -20554,14 +20757,18 @@ fn apply_pending_riders_v1(
             skips.push((ctx.block, format!("riders refused ({why}) of {lead_id}")));
             continue;
         }
-        let checkpoint = builder.checkpoint();
+        let checkpoint = builder.try_checkpoint()?;
         let seen = builder.seen_exec.clone();
         if let Err(why) = attach_riders_v1(builder, ctx, params, admission, &lead_id, &riders) {
+            if matches!(why, PalwStateV2Error::NativeResource(_)) {
+                return Err(why);
+            }
             builder.restore(checkpoint);
             builder.seen_exec = seen;
             skips.push((ctx.block, format!("riders refused ({why}) of {lead_id}")));
         }
     }
+    Ok(())
 }
 
 /// **A rider's share of its lead's escrow, and the subsidy that carves exactly that share** — `(e_r, s_r)` with `e_r = ⌊E_lead / (1 + n)⌋`
@@ -21060,8 +21267,7 @@ fn apply_attempt(
     // absence must not halt floor liveness). Below the monetary fence both calls below are no-ops for every class, so skipping
     // them for the floor is byte-identical there.
     let floor_exempt = claim.class_id == builder.params.base_class_id();
-    let monetary_ready =
-        if floor_exempt { None } else { palw_monetary_material_fold_v1::plan_native_ready(builder, ctx, claim_id)? };
+    let monetary_ready = if floor_exempt { None } else { palw_monetary_material_fold_v1::plan_native_ready(builder, ctx, claim_id)? };
     if monetary_ready.is_none() && !floor_exempt {
         builder.state.require_native_monetary_material_scope_v1(builder.params, claim_id, &claim)?;
     }
@@ -25112,4 +25318,7 @@ mod native_resource_inventory_v1;
 
 #[path = "palw_native_resource_v1/private/wire_carriage.rs"]
 mod native_wire_carriage_v1;
-pub(crate) use native_wire_carriage_v1::{restore_index_native_shape_v1, scan_carriage_native_wire_v1};
+pub(crate) use native_wire_carriage_v1::{
+    restore_index_native_shape_v1, scan_budget_delta_row_v1, scan_carriage_native_wire_v1, scan_exec_delta_row_v1,
+    scan_improvement_delta_row_v1, scan_vertex_delta_row_v1, transition_existing_index_shape_v1, transition_node_unit_v1,
+};

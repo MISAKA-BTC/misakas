@@ -72,7 +72,7 @@ mod palw_service_public_e2e;
 mod palw_service_violations_e2e;
 
 #[path = "palw_carrier_fees.rs"]
-mod palw_carrier_fees;
+pub(crate) mod palw_carrier_fees;
 
 /// **ADR-0152 R-3 (P2-8): the reporter's commit–reveal filer**, and the capture arm's
 /// `ExecutorRefuted` and J1 auto that feed it — a child of this module, so each call site below is

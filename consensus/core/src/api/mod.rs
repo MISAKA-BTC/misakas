@@ -499,6 +499,16 @@ pub trait ConsensusApi: Send + Sync {
     fn palw_monetary_material_covenants_v1(&self) -> Result<Vec<crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
         Err("monetary material covenant reads are unavailable".into())
     }
+    /// Read-only current/finalized native metadata, retaining allocation ownership
+    /// through private-process observation serialization. No public RPC tag.
+    fn palw_material_recovery_observation_v4(
+        &self,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_material_recovery_observation_v4::NativeRecoveryObservationV4>,
+        String,
+    > {
+        Err("native material recovery observations unavailable".into())
+    }
 
     /// RFC-0008 PAV3 producer read: the canonical prior native session for `attempt` at `daa`
     /// (`palw_attempt_material_v3::select_native_session_v3`, the one rule `verify_prior` re-runs) over the coherent tip
@@ -532,6 +542,58 @@ pub trait ConsensusApi: Send + Sync {
         _release_block: BlockHash,
     ) -> Result<bool, String> {
         Err("monetary material finality witnesses are unavailable".into())
+    }
+
+    /// A terminal receipt present in a coherent native-finalized state. Historical
+    /// Release headers and deltas are deliberately not authority prerequisites.
+    fn palw_material_terminal_receipt_finalized_v2(
+        &self,
+        _root: Hash64,
+        _stored_consent: Hash64,
+    ) -> Result<Option<(BlockHash, crate::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2)>, String> {
+        Err("native finalized terminal receipt reads are unavailable".into())
+    }
+
+    /// Bounded positive terminal rows in the CURRENT native-finalized state.
+    fn palw_material_provider_terminal_receipts_finalized_v4(
+        &self,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<Vec<crate::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2>>,
+        String,
+    > {
+        Err("native finalized provider terminal reads unavailable".into())
+    }
+    fn palw_material_recovery_finalized_daa_v4(&self) -> Result<Option<u64>, String> {
+        Err("native finalized recovery clock unavailable".into())
+    }
+    fn palw_native_recovery_session_quote_v4(
+        &self,
+        _checkpoint: Option<BlockHash>,
+        _daa: u64,
+        _class: Hash64,
+        _executor: crate::palw_state_v2::PalwBondKeyV2,
+        _providers: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4>,
+        String,
+    > {
+        Err("native recovery enrollment quotes unavailable".into())
+    }
+    fn palw_material_recovery_enrollment_finalized_v4(
+        &self,
+        _root: Hash64,
+        _consent: Hash64,
+        _recovery: Hash64,
+    ) -> Result<bool, String> {
+        Err("native finalized recovery enrollment reads unavailable".into())
+    }
+
+    fn palw_material_provider_ack_checkpoint_finalized_v2(
+        &self,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<(BlockHash, crate::palw_material_release_recovery_v2::PalwMaterialProviderAckCheckpointV2)>, String> {
+        Err("native finalized provider ACK checkpoints unavailable".into())
     }
 
     fn palw_monetary_material_unused_offer_finalized_v1(&self, _root: Hash64, _enrollment_until: u64) -> Result<bool, String> {
@@ -2034,8 +2096,15 @@ pub trait ConsensusApi: Send + Sync {
     fn pruning_point_palw_state_shared_v1(
         &self,
         point: crate::BlockHash,
-    ) -> Option<std::sync::Arc<crate::palw_state_v2::PalwStateCarriageV2>> {
-        self.pruning_point_palw_state(point).map(std::sync::Arc::new)
+    ) -> Option<std::sync::Arc<crate::palw_native_resource_v1::NativeStateCarriageV1>> {
+        if crate::palw_native_resource_v1::native_logical_admission_enabled_v1()
+            || crate::palw_native_resource_v1::native_resource_admission_enabled_v1()
+        {
+            return None;
+        }
+        self.pruning_point_palw_state(point)
+            .and_then(|v| crate::palw_native_resource_v1::NativeRetainedV1::retain_existing_v1(v).ok())
+            .map(std::sync::Arc::new)
     }
 
     /// Snapshot-bound material, with explicit negotiated complete coverage.
@@ -2238,11 +2307,24 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// Native IBD selection keeps local capacity separate from absent standing.
+    fn get_palw_candidate_order_v2_checked(
+        &self,
+    ) -> Result<Option<crate::palw_fork_choice::PalwCandidateOrderV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
+        Ok(self.get_palw_candidate_order_v2())
+    }
+
     /// **ADR-0178 rule E: this consensus's standing for the IBD commit** — the PALW state at the block it is weighed at (its sink; a
     /// staging consensus's imported pruning point, exactly as [`Self::get_palw_candidate_order_v2`] chooses) and that block's DAA
     /// score. `None` off a ConsensusV2 network or where the state cannot be read; the IBD flow fails closed on it.
     fn get_palw_rule_e_weighing_v1(&self) -> Option<crate::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1> {
         None
+    }
+
+    fn get_palw_rule_e_weighing_v1_checked(
+        &self,
+    ) -> Result<Option<crate::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
+        Ok(self.get_palw_rule_e_weighing_v1())
     }
 
     /// Returns the antipast of block `hash` from the POV of `context`, i.e. `antipast(hash) ∩ past(context)`.

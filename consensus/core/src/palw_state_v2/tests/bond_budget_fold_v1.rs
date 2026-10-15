@@ -389,7 +389,7 @@ fn named_native_reporter_freezes_funded_payee_and_pays_above_one_cap_in_exact_tr
     // monetary entitlement must still redeem its original authenticated payee.
     let mut changed = b.state.bond(&bond_key(1)).unwrap().clone();
     changed.payout_payload = h64(0xBAD08);
-    b.write_bond(bond_key(1), Some(changed));
+    b.write_bond(bond_key(1), Some(changed)).unwrap();
     let reveal_until = b.state.reward_pending[&offence].reveal_until;
     b.entries.push(PalwDeltaEntryV2::LastPoint { old: registered.last_point, new: Some(point) });
     b.state.last_point = Some(point);
@@ -653,7 +653,7 @@ fn round_draw_handles_overfull_migration_and_duplicate_span_without_partial_tick
         };
         let extras = PalwTransitionExtrasV1::default();
         let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
-        assert!(b.bond_budget_round_draw_v1(&ctx(2, 200, 2), &mut schedule, 1, 100, 10, &BTreeSet::new()));
+        assert!(b.bond_budget_round_draw_v1(&ctx(2, 200, 2), &mut schedule, 1, 100, 10, &BTreeSet::new()).unwrap());
         assert!(schedule.quanta.is_empty(), "unavailable {overfull} draw creates no uncapped permit");
         assert_eq!(b.state, parent, "accepted old income and earlier tickets are unchanged");
         assert!(b.entries.is_empty(), "no partial recipient reservation journal");

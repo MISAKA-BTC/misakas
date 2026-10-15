@@ -1658,6 +1658,37 @@ impl PalwProducerService {
                     template.block.header.daa_score
                 ));
             };
+            if self
+                .consensus_config
+                .params
+                .palw_material_release_recovery_v2
+                .as_ref()
+                .is_some_and(|f| f.activation.is_active(template.block.header.daa_score))
+            {
+                let roster = exchange.0.recovery_provider_roster_v4();
+                let quote = session.palw_native_recovery_session_quote_v4(
+                    None,
+                    template.block.header.daa_score,
+                    self.config.class_id,
+                    kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond),
+                    roster.to_vec(),
+                )?;
+                if quote.active_session.is_none() {
+                    let pending_exchange = exchange.clone();
+                    palw_until_exit_v1(
+                        &self.shutdown.listener,
+                        tokio::task::spawn_blocking(move || pending_exchange.0.ensure_recovery_session_v4(&quote)),
+                    )
+                    .await
+                    .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: V4 enrollment exchange abandoned"))?
+                    .map_err(|e| format!("V4 enrollment task failed: {e}"))??;
+                    return Err(format!(
+                        "{PALW_PRODUCER_NATIVE_CUSTODY_HOLD}: V4 atomic recovery enrollment queued; awaiting accepted native prior-state for class {} before execution",
+                        self.config.class_id
+                    ));
+                }
+                kaspa_core::debug!("RFC08 V4 prior recovery root {} admitted before native execution", quote.active_session.unwrap());
+            }
             // A rider has no header position and no carriage of its own to seal; none is built in the custody form.
             if rider.is_some() {
                 return Err(format!(

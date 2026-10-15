@@ -179,7 +179,7 @@ impl Consensus {
         tx_script_cache_counters: Arc<TxScriptCacheCounters>,
         creation_timestamp: u64,
         mining_rules: Arc<MiningRules>,
-    ) -> Self {
+    ) -> Result<Self, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         let params = &config.params;
         let perf_params = &config.perf;
         let is_consensus_exiting: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
@@ -328,7 +328,7 @@ impl Consensus {
         if config.process_genesis {
             header_processor.process_genesis();
             body_processor.process_genesis();
-            virtual_processor.process_genesis();
+            virtual_processor.process_genesis()?;
         } else if let Ok(stored_genesis) = storage.past_pruning_points_store.get(0) {
             // kaspa-pq Phase 3 re-genesis guard (ADR-0007): an existing consensus DB permanently
             // records the genesis it was built from at past_pruning_points[0] (written by
@@ -411,7 +411,7 @@ impl Consensus {
         // Run database upgrades if any
         this.run_database_upgrades();
 
-        this
+        Ok(this)
     }
 
     /// A procedure for calling database upgrades which are self-contained (i.e., do not require knowing the DB version)
@@ -1094,7 +1094,7 @@ impl Consensus {
     /// The PALW V2 state at the tip, through the shared materialization (audit M-7) — the one
     /// snapshot every `palw_model_*` reader answers from. `None` off ConsensusV2 or before the
     /// first state was written.
-    pub(crate) fn palw_state_v2_tip(&self) -> Option<Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>> {
+    pub(crate) fn palw_state_v2_tip(&self) -> Option<Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>> {
         let state_params = match &self.config.params.palw_consensus_mode {
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => &bundle.state,
             _ => return None,
@@ -1450,6 +1450,54 @@ impl ConsensusApi for Consensus {
         Ok(state.monetary_material_rows_v1())
     }
 
+    fn palw_material_recovery_observation_v4(
+        &self,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+            kaspa_consensus_core::palw_material_recovery_observation_v4::NativeRecoveryObservationV4,
+        >,
+        String,
+    > {
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Err("recovery observation requires ConsensusV2".into());
+        };
+        let before = self.lkg_virtual_state.load();
+        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || import.active.is_some() {
+            return Err("recovery observation import incomplete".into());
+        }
+        let policy = bundle.state.material_release_recovery_at_v2(before.daa_score).ok_or("recovery observation gate dormant")?;
+        let (point, state) = self
+            .virtual_processor
+            .palw_v2_reader_state(&bundle.state)
+            .map_err(|e| e.to_string())?
+            .ok_or("recovery observation state absent")?;
+        if point != before.ghostdag_data.selected_parent {
+            return Err("recovery observation is not the accepted sink".into());
+        }
+        let finalized = self.palw_finalized_material_recovery_state_v2()?;
+        let result = kaspa_consensus_core::palw_material_recovery_observation_v4::native_recovery_observation_v4(
+            &state,
+            point,
+            before.daa_score,
+            import.epoch,
+            finalized.as_ref().map(|(pin, state)| (*pin, &**state)),
+            policy.max_reserved_contracts,
+        )?;
+        let after = self.lkg_virtual_state.load();
+        let (after_import, after_stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !after_stable
+            || after_import.active.is_some()
+            || after_import.epoch != import.epoch
+            || point != after.ghostdag_data.selected_parent
+            || before.daa_score != after.daa_score
+        {
+            return Err("recovery observation changed native/import generation".into());
+        }
+        Ok(result)
+    }
+
     /// RFC-0008 PAV3: the same coherent tip read as [`Self::palw_monetary_material_covenants_v1`], with the canonical session
     /// selected by the ONE rule `verify_prior` re-runs and the rows/bonds taken from that single state snapshot.
     fn palw_native_session_v3(
@@ -1492,11 +1540,11 @@ impl ConsensusApi for Consensus {
         }
         state.assert_monetary_material_consistency_v1(&bundle.state).map_err(|e| e.to_string())?;
         let operator_of = |provider: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| state.bond(provider).map(|b| b.operator_id);
-        let Some(row) = kaspa_consensus_core::palw_attempt_material_v3::select_native_session_v3(
-            state.monetary_material_rows_v1(),
+        let Some(row) = kaspa_consensus_core::palw_attempt_material_v3::select_native_session_with_recovery_v4(
+            &state,
+            &bundle.state,
             attempt,
             daa,
-            operator_of,
         ) else {
             return Ok((point, None));
         };
@@ -1549,6 +1597,123 @@ impl ConsensusApi for Consensus {
             return Err("material GC witness changed snapshot/import generation".into());
         }
         Ok(true)
+    }
+
+    fn palw_material_terminal_receipt_finalized_v2(
+        &self,
+        root: kaspa_hashes::Hash64,
+        stored_consent: kaspa_hashes::Hash64,
+    ) -> Result<Option<(BlockHash, kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2)>, String>
+    {
+        use kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2;
+        let Some((pin, state)) = self.palw_finalized_material_recovery_state_v2()? else { return Ok(None) };
+        Ok(match state.material_recovery_row_v2(root) {
+            Some(PalwMaterialRecoveryRowV2::Terminal(receipt)) if receipt.covers(root, stored_consent) => Some((pin, receipt)),
+            _ => None,
+        })
+    }
+    fn palw_material_provider_terminal_receipts_finalized_v4(
+        &self,
+        provider: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+            Vec<kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2>,
+        >,
+        String,
+    > {
+        let Some((_, state)) = self.palw_finalized_material_recovery_state_v2()? else {
+            return Err("native finalized recovery state unavailable".into());
+        };
+        kaspa_consensus_core::palw_material_release_recovery_v2::material_provider_terminals_owned_v4(&state, provider)
+    }
+    fn palw_material_recovery_finalized_daa_v4(&self) -> Result<Option<u64>, String> {
+        let Some((pin, _)) = self.palw_finalized_material_recovery_state_v2()? else { return Ok(None) };
+        // The header is the native finality witness, never a wall-clock estimate.
+        self.headers_store.get_daa_score(pin).map(Some).map_err(|e| e.to_string())
+    }
+    fn palw_native_recovery_session_quote_v4(
+        &self,
+        checkpoint: Option<BlockHash>,
+        daa: u64,
+        class: kaspa_hashes::Hash64,
+        executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+            kaspa_consensus_core::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4,
+        >,
+        String,
+    > {
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Err("recovery enrollment quote needs ConsensusV2".into());
+        };
+        let before = self.lkg_virtual_state.load();
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || generation.active.is_some() {
+            return Err("recovery quote import incomplete".into());
+        }
+        let point = checkpoint.unwrap_or(before.ghostdag_data.selected_parent);
+        if !self.services.reachability_service.has_reachability_data(point)
+            || !self.services.reachability_service.is_chain_ancestor_of(point, before.ghostdag_data.selected_parent)
+        {
+            return Err("recovery checkpoint not on current accepted chain".into());
+        }
+        let point_daa = self.headers_store.get_daa_score(point).map_err(|e| e.to_string())?;
+        if daa < point_daa || point_daa.saturating_add(600) < daa {
+            return Err("recovery quote checkpoint/DAA exceeds bounded window".into());
+        }
+        let state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(point)
+            .map_err(|e| format!("recovery quote state unavailable: {e:?}"))?;
+        state.assert_monetary_material_consistency_v1(&bundle.state).map_err(|e| e.to_string())?;
+        state.assert_material_release_recovery_consistency_v2(&bundle.state).map_err(|e| e.to_string())?;
+        let network = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.config.params.net.to_string().as_bytes(),
+            Some(self.config.params.genesis.hash),
+        );
+        let quote = kaspa_consensus_core::palw_material_session_enrollment_v4::native_recovery_session_quote_v4(
+            &state,
+            &bundle.state,
+            point,
+            daa,
+            network,
+            class,
+            executor,
+            &providers,
+        )?;
+        let after = self.lkg_virtual_state.load();
+        let (generation_after, stable_after) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_after
+            || generation_after.active.is_some()
+            || generation.epoch != generation_after.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+        {
+            return Err("recovery quote changed tip/import generation".into());
+        }
+        Ok(quote)
+    }
+    fn palw_material_recovery_enrollment_finalized_v4(
+        &self,
+        root: kaspa_hashes::Hash64,
+        consent: kaspa_hashes::Hash64,
+        recovery: kaspa_hashes::Hash64,
+    ) -> Result<bool, String> {
+        let Some((_, state)) = self.palw_finalized_material_recovery_state_v2()? else { return Ok(false) };
+        Ok(state
+            .material_recovery_row_v2(root)
+            .is_some_and(|row| row.contract().id() == recovery && row.contract().generations.iter().any(|g| g.consent == consent)))
+    }
+    fn palw_material_provider_ack_checkpoint_finalized_v2(
+        &self,
+        provider: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<
+        Option<(BlockHash, kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialProviderAckCheckpointV2)>,
+        String,
+    > {
+        let Some((pin, state)) = self.palw_finalized_material_recovery_state_v2()? else { return Ok(None) };
+        Ok(state.material_provider_ack_checkpoint_v2(&provider).map(|checkpoint| (pin, checkpoint)))
     }
 
     fn palw_monetary_material_unused_offer_finalized_v1(
@@ -2765,7 +2930,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_staged_tir_prefix_leaf_index_v1_impl(key, ordinal, maximum_leaves)
     }
 
-    fn palw_staged_tir_layout_v1(&self, class_id: kaspa_consensus_core::Hash64) -> Option<kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1> {
+    fn palw_staged_tir_layout_v1(
+        &self,
+        class_id: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1> {
         self.virtual_processor.palw_staged_tir_layout_v1_impl(class_id)
     }
 
@@ -2814,7 +2982,13 @@ impl ConsensusApi for Consensus {
         &self,
         custodian: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
         after: Option<kaspa_consensus_core::Hash64>,
-    ) -> Result<(Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>, Option<kaspa_consensus_core::Hash64>), String> {
+    ) -> Result<
+        (
+            Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+            Option<kaspa_consensus_core::Hash64>,
+        ),
+        String,
+    > {
         self.virtual_processor.palw_staged_custody_delegations_to_v1_impl(custodian, after)
     }
 
@@ -3360,7 +3534,7 @@ impl ConsensusApi for Consensus {
     fn pruning_point_palw_state_shared_v1(
         &self,
         point: BlockHash,
-    ) -> Option<std::sync::Arc<kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2>> {
+    ) -> Option<std::sync::Arc<kaspa_consensus_core::palw_native_resource_v1::NativeStateCarriageV1>> {
         self.virtual_processor.pruning_point_palw_state_shared_v1_impl(point)
     }
 
@@ -3603,17 +3777,34 @@ impl ConsensusApi for Consensus {
     /// every peer forever. `palw_weighing_point_v2` supplies the answer that IS available there:
     /// the pruning point whose PALW carriage the flow imported and root-verified one line earlier.
     fn get_palw_candidate_order_v2(&self) -> Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1> {
-        let point = self.virtual_processor.palw_weighing_point_v2(self.get_sink())?;
-        self.virtual_processor.palw_candidate_order_v2(point)
+        self.get_palw_candidate_order_v2_checked().ok().flatten()
     }
 
-    /// ADR-0178 rule E: the state at the same weighing point as [`Self::get_palw_candidate_order_v2`], for the IBD commit's
-    /// claim-set comparison.
+    fn get_palw_candidate_order_v2_checked(
+        &self,
+    ) -> Result<
+        Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1>,
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    > {
+        let Some(point) = self.virtual_processor.palw_weighing_point_v2_checked(self.get_sink())? else { return Ok(None) };
+        self.virtual_processor.palw_candidate_order_v2_checked(point)
+    }
+
+    /// Same authenticated weighing point for the IBD exclusive-claim comparison.
     fn get_palw_rule_e_weighing_v1(&self) -> Option<kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1> {
-        let point = self.virtual_processor.palw_weighing_point_v2(self.get_sink())?;
-        let state = self.virtual_processor.palw_candidate_state_v2(point)?;
-        let daa_score = self.headers_store.get_daa_score(point).ok()?;
-        Some(kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1 { state, block: point, daa_score })
+        self.get_palw_rule_e_weighing_v1_checked().ok().flatten()
+    }
+
+    fn get_palw_rule_e_weighing_v1_checked(
+        &self,
+    ) -> Result<
+        Option<kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1>,
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    > {
+        let Some(point) = self.virtual_processor.palw_weighing_point_v2_checked(self.get_sink())? else { return Ok(None) };
+        let Some(state) = self.virtual_processor.palw_candidate_state_for_selection_v2(point)? else { return Ok(None) };
+        let Ok(daa_score) = self.headers_store.get_daa_score(point) else { return Ok(None) };
+        Ok(Some(kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1 { state, block: point, daa_score }))
     }
 
     fn get_antipast_from_pov(
@@ -4519,4 +4710,53 @@ pub fn palw_derived_claim_view_v1(
     let executor_pubkey = state.bond(&claim.bond).map(|b| b.pubkey.clone()).unwrap_or_default();
     let rows = state.derived_artifacts_of(claim_id).map(|(key, row)| (*key, row.clone())).collect();
     Some((claim, executor_pubkey, rows))
+}
+
+impl Consensus {
+    fn palw_finalized_material_recovery_state_v2(
+        &self,
+    ) -> Result<Option<(BlockHash, kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1)>, String> {
+        if self.config.params.palw_material_release_recovery_v2.is_none() {
+            return Ok(None);
+        }
+        let before = self.lkg_virtual_state.load();
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || generation.active.is_some() {
+            return Err("terminal receipt import is incomplete".into());
+        }
+        let finality = self.virtual_processor.virtual_finality_point(&before.ghostdag_data, self.pruning_point());
+        if !self.services.reachability_service.has_reachability_data(finality)
+            || !self.services.reachability_service.is_chain_ancestor_of(finality, before.ghostdag_data.selected_parent)
+        {
+            return Err("terminal receipt finalized anchor is unavailable".into());
+        }
+        // This is the state AFTER the selected parent committed by finality's
+        // header, and therefore finalized whenever finality is finalized. It can
+        // be reconstructed near the present pruning point without old Release.
+        let parent = self.ghostdag_store.get_data(finality).map_err(|e| e.to_string())?.selected_parent;
+        let state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(parent)
+            .map_err(|e| format!("terminal receipt finalized parent state unavailable: {e:?}"))?;
+        let header = self.headers_store.get_header(finality).map_err(|e| e.to_string())?;
+        kaspa_consensus_core::palw_state_proof_v1::state_root_of_pinned_header_v1(&header, finality).map_err(|e| e.to_string())?;
+        if self.virtual_processor.palw_committed_root_v1(&state) != header.palw_state_root {
+            return Err("terminal receipt reconstructed finalized state disagrees with header".into());
+        }
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Err("terminal receipt requires ConsensusV2".into());
+        };
+        state.assert_material_release_recovery_consistency_v2(&bundle.state).map_err(|e| e.to_string())?;
+        let after = self.lkg_virtual_state.load();
+        let (generation_after, stable_after) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_after
+            || generation_after.active.is_some()
+            || generation.epoch != generation_after.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+        {
+            return Err("terminal receipt changed finalized snapshot/import generation".into());
+        }
+        Ok(Some((finality, state)))
+    }
 }

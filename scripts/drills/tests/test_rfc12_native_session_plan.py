@@ -107,9 +107,15 @@ class Observations(unittest.TestCase):
             (folder / 'a-2.store').write_bytes(b'bundle')
             self.assertEqual(driver.custody_store_observed(directory), [str(folder / 'a-2.store')])
 
-    def test_the_session_step_refuses_to_run_beside_the_complete_check(self):
+    def test_legacy_session_step_requires_separate_complete_check_workflow(self):
         with self.assertRaisesRegex(ValueError, 'complete-check'):
-            driver.run(None, None, None, None, None, paid(), 1, complete_check=True, native_session=True)
+            driver.validate_workflow_options('paid-v3', True, True)
+
+    def test_v4_requires_actual_complete_check_before_non_floor_execution(self):
+        with self.assertRaisesRegex(ValueError, 'requires --complete-check'):
+            driver.validate_workflow_options('paid-v4', True, False)
+        driver.validate_workflow_options('paid-v4', True, True)
+        driver.validate_workflow_options('paid-v4', False, False)
 
 
 if __name__ == '__main__':

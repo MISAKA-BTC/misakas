@@ -376,3 +376,31 @@ fn source_final_has_its_own_finite_deadline_and_free_collateral_cannot_be_reused
     assert_eq!(w.l.beacon_sources[&(t.terms.context, PRODUCER)].held, 0, "late ordinary Final cannot resurrect the source contract");
     roundtrip(&w.l);
 }
+
+#[test]
+fn prospective_paid_job_enrollment_cannot_change_an_existing_seal_or_source_contract() {
+    use misaka_palw_kernel::claim_paid_v2::paid_job_enrollment_is_prospective_v3;
+    let mut w = World::new_opv();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    assert!(paid_job_enrollment_is_prospective_v3(&w.l, &job.id(), w.l.daa));
+    let seal = [0xA7; 64];
+    w.block(12, vec![T::SealClaim { producer: PRODUCER, job: job.id(), seal }]);
+    assert!(
+        !paid_job_enrollment_is_prospective_v3(&w.l, &job.id(), w.l.daa),
+        "payer cannot add checking terms after a producer's seal"
+    );
+    let target = target(&w, 71, 10, 40);
+    inputs(&mut w, std::slice::from_ref(&target), Some(0));
+    let events = submit(&mut w, 13, PRODUCER, opt(PRODUCER, job.id(), seal, &target));
+    assert!(refused(&events).is_none(), "{events:?}");
+    assert!(
+        !paid_job_enrollment_is_prospective_v3(&w.l, &job.id(), w.l.daa),
+        "existing source consent and fee/deposit rights are protected"
+    );
+    w.block(500, vec![]);
+    assert!(w.l.beacon_sources.values().all(|source| source.outcome.is_some()));
+    assert!(
+        paid_job_enrollment_is_prospective_v3(&w.l, &job.id(), w.l.daa),
+        "a new future enrollment may use an unclaimed job after old work and source contracts terminate"
+    );
+}

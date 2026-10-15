@@ -227,7 +227,7 @@ impl Sim {
         self.chain.ctx.consensus.get_virtual_daa_score()
     }
 
-    fn state(&self) -> std::sync::Arc<PalwChainStateV2> {
+    fn state(&self) -> std::sync::Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1> {
         self.vp().palw_state_v2_store.read().load_tip_cached(&self.chain.bundle.state).unwrap().expect("the tip loads").1
     }
 

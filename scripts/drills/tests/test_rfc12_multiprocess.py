@@ -15,6 +15,23 @@ spec.loader.exec_module(drill)
 
 
 class Oracle(unittest.TestCase):
+    def test_scenario_thresholds_refuse_rounded_unbounded_or_vacuous_plans_before_launch(self):
+        plan = dict(minimum_isolated_daa_span=5400, minimum_claims=100_000,
+            minimum_depth=3, minimum_work=str(2**100), maximum_probe_ms=200,
+            workflow_timeout_s=600, probe_timeout_s=10)
+        drill.validate_scenario_bounds(plan)
+        for key, values in {
+            'minimum_claims': (99_999, 100_000.0, True, float('inf'), 2**64),
+            'minimum_isolated_daa_span': (5399, 5400.0),
+            'minimum_depth': (0, True, 3.0),
+            'minimum_work': ('0', '01', 2**100, float(2**100), str(2**128)),
+            'workflow_timeout_s': (0, -1, 600.0, float('inf')),
+            'maximum_probe_ms': (0, True, 200.0),
+        }.items():
+            for value in values:
+                with self.subTest(key=key, value=value), self.assertRaises(AssertionError):
+                    drill.validate_scenario_bounds(dict(plan, **{key: value}))
+
     def test_completed_scenarios_cannot_hide_an_unobserved_cold_reopen(self):
         limits = dict(maximumProbeMs=200, maximumOwnedDatabaseLogicalBytes=1000)
         launches = dict(A=['A_LAUNCH_1'], B=['B_LAUNCH_1'], JOIN=['JOIN_LAUNCH_1', 'JOIN_LAUNCH_2'])
@@ -81,6 +98,36 @@ class Oracle(unittest.TestCase):
         row['settlement']['nativeSettlement']['uniqueWork'] = str(2 ** 100 - 1)
         with self.assertRaises(AssertionError):
             drill.coherent(row, plan)
+
+    def test_numeric_coercion_cannot_satisfy_native_work_or_import_epoch(self):
+        row, plan = self.fixture()
+        for value in (True, 2 ** 100, float(2 ** 100), '+1', '01', '1e38', str(2 ** 128), '\u0661'):
+            bad = copy.deepcopy(row)
+            bad['settlement']['nativeSettlement']['uniqueWork'] = value
+            with self.assertRaises(AssertionError):
+                drill.coherent(bad, plan)
+        for value in (True, 4.0, -1, 2 ** 64):
+            bad = copy.deepcopy(row)
+            bad['node']['importSessionEpoch'] = value
+            with self.assertRaises(AssertionError):
+                drill.coherent(bad, plan)
+
+    def test_pruned_join_cannot_pass_with_null_genesis_or_unrelated_finalized(self):
+        row, plan = self.fixture()
+        row['dag']['pruningPointHash'] = '06' * 64
+        row['node']['genesisHash'] = '07' * 64
+        with self.assertRaisesRegex(AssertionError, 'no native Finalized'):
+            drill.coherent(row, plan, require_finalized=True)
+        native = row['settlement']['nativeSettlement']
+        readiness = row['settlement']['nativeReadiness']['finalized']
+        native['finalized'] = readiness['finalized'] = row['dag']['pruningPointHash']
+        drill.coherent(row, plan, require_finalized=True)
+        native['finalized'] = readiness['finalized'] = '08' * 64
+        with self.assertRaisesRegex(AssertionError, 'actual pruning checkpoint'):
+            drill.coherent(row, plan, require_finalized=True)
+        native['finalized'] = readiness['finalized'] = row['dag']['pruningPointHash'] = row['node']['genesisHash']
+        with self.assertRaisesRegex(AssertionError, 'still names genesis'):
+            drill.coherent(row, plan, require_finalized=True)
 
     def test_header_only_success_and_named_missing_header_are_gc_evidence(self):
         class Rpc:

@@ -1900,9 +1900,13 @@ impl FlowContext {
         // Use a ProcessQueue so we get rid of duplicates
         let mut transactions_to_broadcast = ProcessQueue::new();
         for (block, virtual_state_task) in ancestor_batch.zip().chain(once((block, virtual_state_task))).chain(blocks.into_iter()) {
-            // We only care about waiting for virtual to process the block at this point, before proceeding with post-processing
-            // actions such as updating the mempool. We know this will not err since `block_task` already completed w/o error
-            let _ = virtual_state_task.await;
+            // Body acceptance does not promise that local native capacity can
+            // finish virtual resolution. Keep the mempool intact on that
+            // retryable local refusal; it is not peer or block invalidity.
+            if let Err(RuleError::LocalNativeCapacityUnavailable(unavailable)) = virtual_state_task.await {
+                warn!("block {} awaits local native capacity; mempool post-processing deferred: {unavailable}", block.hash());
+                continue;
+            }
             if let Ok(txs) = self
                 .mining_manager()
                 .clone()

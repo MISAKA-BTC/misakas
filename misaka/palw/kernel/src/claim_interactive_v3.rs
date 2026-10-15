@@ -37,7 +37,7 @@ impl CompiledClaimProofPlanV3 {
         Ok(plan)
     }
     pub fn id(&self) -> Digest {
-        object_id(b"MISAKA/PALW/CLAIM-PROOF-PLAN/V3", self)
+        object_id(if self.version == 4 { b"MISAKA/PALW/CLAIM-PROOF-PLAN/V4" } else { b"MISAKA/PALW/CLAIM-PROOF-PLAN/V3" }, self)
     }
     pub fn validate(&self, target: PaidClaimTargetV2, mode: InteractiveModeV1, rounds: u32, blocks: u64) -> Result<(), String> {
         // R7-RELATION (2026-10-15): a compact family's compiler id is recognized and refused by name, never read as an unknown plan.
@@ -48,8 +48,7 @@ impl CompiledClaimProofPlanV3 {
         if crate::claim_compact_v1::is_compact_relation_compiler_v1(&self.compiler) {
             return Err(crate::claim_compact_v1::COMPACT_RELATION_NOT_A_V3_PLAN_V1.into());
         }
-        if self.version != 3
-            || self.compiler != full_material_compiler_v3()
+        if !((self.version == 3 && self.compiler == full_material_compiler_v3()) || (self.version == 4 && self.compiler != [0; 64]))
             || self.target != target
             || self.mode != mode
             || mode == InteractiveModeV1::NonInteractive
@@ -72,7 +71,10 @@ impl CompiledClaimProofPlanV3 {
         if bytes.len() as u64 > self.maximum_material_bytes {
             return Err("proof opening exceeds signed byte capacity".into());
         }
-        Ok(object_id(b"MISAKA/PALW/CLAIM-PROOF-OPENING/V3", &(self.id(), bytes)))
+        Ok(object_id(
+            if self.version == 4 { b"MISAKA/PALW/CLAIM-PROOF-OPENING/V4" } else { b"MISAKA/PALW/CLAIM-PROOF-OPENING/V3" },
+            &(self.id(), bytes),
+        ))
     }
 }
 /// **R7-RELATION (RFC-0007 2026-10-15, item 5): compact proof families need their own versioned contracts.** The relation families
@@ -278,4 +280,62 @@ mod tests {
         }
         assert!(!is_compact_proof_family_compiler_v1(&full_material_compiler_v3()));
     }
+}
+
+/// V4 retains the V3 field layout but names a registered whole-native contract.
+/// The native own fence and exact registration row authenticate this constructor.
+pub fn compact_plan_v4(
+    contract: &crate::claim_compact_v1::native_v2::NativeCompactContractV2,
+    coverage: &crate::claim_compact_v1::native_v2::NativeCompactCoverageV2,
+    adversary: crate::claim_compact_v1::native_v4::CompactAdversaryBudgetV4,
+    mode: InteractiveModeV1,
+    rounds: u32,
+    maximum_material_bytes: u64,
+    maximum_stream_blocks: u64,
+) -> Result<CompiledClaimProofPlanV3, String> {
+    let plan = CompiledClaimProofPlanV3 {
+        version: 4,
+        compiler: crate::claim_compact_v1::native_v4::compact_suite_id_v4(contract, coverage, adversary),
+        target: coverage.target,
+        mode,
+        rounds,
+        maximum_material_bytes,
+        maximum_stream_blocks,
+    };
+    plan.validate(coverage.target, mode, rounds, maximum_stream_blocks)?;
+    Ok(plan)
+}
+/// Reabsorb each previous post-seed proof before drawing the next challenge.
+/// No V3 domain or byte encoding changes.
+pub fn fs_round_seed_v4(
+    plan: &CompiledClaimProofPlanV3,
+    statement: Digest,
+    policy: Digest,
+    source: &VerifiedWorkBeaconV1,
+    round: u32,
+    prior: Digest,
+    message: Digest,
+    prior_rounds: &[(Digest, Digest, Digest)],
+) -> Result<Digest, String> {
+    if plan.version != 4
+        || plan.mode != InteractiveModeV1::TranscriptBoundFiatShamir
+        || round >= plan.rounds
+        || message == [0; 64]
+        || (round == 0) != (prior == [0; 64])
+        || prior_rounds.len() != round as usize
+    {
+        return Err("compact FS round order/statement mismatch".into());
+    }
+    let mut transcript = misaka_palw_challenge::FiatShamirTranscriptV1::new(
+        object_id(b"MISAKA/PALW/CLAIM-PROOF-FS-STATEMENT/V4", &(plan.id(), statement)),
+        policy,
+        source,
+    );
+    for (message, expected, proof) in prior_rounds {
+        if *proof == [0; 64] || transcript.absorb(plan.mode, *message).map_err(|e| e.to_string())? != *expected {
+            return Err("compact FS previous material/challenge/proof missing or substituted".into());
+        }
+        transcript.absorb(plan.mode, object_id(b"MISAKA/PALW/CLAIM-PROOF-FS-POST-PROOF/V4", proof)).map_err(|e| e.to_string())?;
+    }
+    transcript.absorb(plan.mode, message).map_err(|e| e.to_string())
 }

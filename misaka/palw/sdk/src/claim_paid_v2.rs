@@ -158,6 +158,7 @@ pub fn paid_claim_commit_object_v2(
         || j.base_job != base_job
         || commit_daa > j.last_commit_daa
         || l.claims.contains_key(&base_claim)
+        || l.beacon_sources.values().any(|source| source.job == base_job && source.outcome.is_none())
         || material_consent == [0; 64]
     {
         return Err(Refusal::new("CLAIM_ENROLLMENT_INVALID", "prospective class/job/material consent or commit deadline mismatch"));
@@ -309,11 +310,15 @@ pub fn paid_claim_job_object_v2(
         .or_else(|| l.typed.jobs.get(&base_job).map(|j| j.class()));
     if l.job_poster(&base_job) != Some(payer)
         || baseclass != Some(c.base_class)
-        || l.claims.values().any(|c| c.job_id == base_job)
+        || !misaka_palw_kernel::claim_paid_v2::paid_job_enrollment_is_prospective_v3(&l, &base_job, l.daa)
+        || route.paid_claim_job_is_enrolled_v3(&base_job).map_err(|e| Refusal::new("CLAIM_JOB_AUTHORITY", e))?
         || maximum_consumers == 0
         || last_commit_daa <= l.daa
     {
-        return Err(Refusal::new("CLAIM_PAYER_CONSENT_INVALID", "actual payer must enroll the job before any claim"));
+        return Err(Refusal::new(
+            "CLAIM_PAYER_CONSENT_INVALID",
+            "actual payer must enroll the job before any live seal, source contract or claim",
+        ));
     }
     Ok(KernelRouteObjectV1::PaidClaimV2 {
         object: PaidClaimObjectV2::EnrollJob {
@@ -341,6 +346,21 @@ pub fn paid_claim_commit_object_derived_v2(
         misaka_palw_kernel::route::SaltedCommitV1::Spec { claim } => claim.id(),
     };
     let mut l = route.ledger().map_err(|e| Refusal::new("CLAIM_LEDGER_INVALID", e))?;
+    if l.beacon_sources.values().any(|source| {
+        source.job
+            == match &commit {
+                misaka_palw_kernel::route::SaltedCommitV1::Claim { claim, .. }
+                | misaka_palw_kernel::route::SaltedCommitV1::Segmented { claim, .. } => claim.job_id,
+                misaka_palw_kernel::route::SaltedCommitV1::Pipeline { claim, .. } => claim.job_id,
+                misaka_palw_kernel::route::SaltedCommitV1::Spec { claim } => claim.job_id(),
+            }
+            && source.outcome.is_none()
+    }) {
+        return Err(Refusal::new(
+            "CLAIM_SOURCE_DEPENDENCY",
+            "a paid checker-dependent claim cannot consume an independent source opt-in",
+        ));
+    }
     l.begin_block(commit_daa).map_err(|e| Refusal::new("CLAIM_ADMISSION_INVALID", e.to_string()))?;
     let inner = KernelRouteObjectV1::CommitClaimSalted { commit: commit.clone(), salt };
     l.apply_object(&inner, &misaka_palw_kernel::ledger::AuthV1 { signer_bond: commit.producer() })
@@ -364,6 +384,8 @@ pub fn sign_paid_claim_object_v2(
     };
     let actor = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&bond);
     let named = match inner {
+        PaidClaimObjectV2::RegisterCompactContractV4 { registration } => Some(registration.registrant),
+        PaidClaimObjectV2::BindCompactProofV4 { .. } => None, // exact enrolled producer checked by native admission.
         PaidClaimObjectV2::RegisterClass { class } => Some(class.registrant),
         PaidClaimObjectV2::EnrollJob { job } => Some(job.payer),
         PaidClaimObjectV2::Commit { enrollment, commit, .. } => {
@@ -400,6 +422,7 @@ pub fn sign_paid_claim_object_v2(
     Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::KernelRouteV1 { bytes, signer: bond, signature })
 }
 
+pub mod all_target_bootstrap;
 pub mod cli;
 pub mod private_bootstrap;
 pub mod producer_resources;
@@ -655,3 +678,5 @@ pub fn paid_claim_round_sources_from_kernel_rows_v3(
     }
     Ok(VerifiedPaidClaimSourcesV2 { route, authority, check, lock, round: Some(row) })
 }
+
+pub mod compact_v4;

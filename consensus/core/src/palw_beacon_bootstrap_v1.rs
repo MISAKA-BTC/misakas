@@ -756,6 +756,7 @@ pub const PALW_N3_GATED_REWARD_FENCES_V1: &[&str] = &[
     "palw_model_verification_gate_v1",
     "palw_minimum_price_v1",
     "palw_monetary_material_v1",
+    "palw_material_release_recovery_v2",
     "palw_panel_lifetime_v2",
 ];
 

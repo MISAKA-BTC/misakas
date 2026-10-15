@@ -129,12 +129,22 @@ impl VirtualStateProcessor {
     /// and wrongly accept a confirmed-history-abandoning reorg. Both branches' acceptance
     /// data is committed by the time the gate runs (the candidate's by
     /// `calculate_utxo_state_relatively`), so the per-branch walks are deterministic.
+    #[cfg(test)]
     pub(in crate::pipeline::virtual_processor) fn dns_reorg_outcome(
         &self,
         candidate: BlockHash,
         prev_sink: BlockHash,
         candidate_bond_view: &ActiveBondView,
     ) -> DnsReorgOutcome {
+        self.dns_reorg_outcome_checked(candidate, prev_sink, candidate_bond_view).expect("fixture has native selection capacity")
+    }
+
+    pub(in crate::pipeline::virtual_processor) fn dns_reorg_outcome_checked(
+        &self,
+        candidate: BlockHash,
+        prev_sink: BlockHash,
+        candidate_bond_view: &ActiveBondView,
+    ) -> Result<DnsReorgOutcome, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         // **ADR-0128 Decision 5: the stake reorg gate follows the BFT vote, and it is asked FIRST.**
         //
         // Past the fence at the incumbent sink, a candidate that abandons the DNS-final anchor is
@@ -144,11 +154,11 @@ impl VirtualStateProcessor {
         // is confirmed) goes on exactly as it does without the fence. See `dns_bft_gate_refusal`.
         let incumbent_daa = match self.headers_store.get_daa_score(prev_sink) {
             Ok(daa) => daa,
-            Err(_) => return DnsReorgOutcome::DominanceViolation,
+            Err(_) => return Ok(DnsReorgOutcome::DominanceViolation),
         };
         let dns_retired = self.dns_retired_at(incumbent_daa);
         if !dns_retired && let Some(refusal) = self.dns_bft_gate_refusal(candidate, prev_sink) {
-            return refusal;
+            return Ok(refusal);
         }
         // **Unit D, site 4: on a V2 network the deep-reorg gate IS the one comparator.**
         //
@@ -186,14 +196,14 @@ impl VirtualStateProcessor {
             // participation first once both tips stand `W_p` above the fork, then the economic keys over those pasts; a claim both
             // tips hold decides nothing (`palw_rule_e`). Unweighable refuses, as below; an allowed reorg still meets ADR-0065 D2.
             if self.palw_rule_e_active_at(incumbent_daa) {
-                return match self.palw_rule_e_gate_v1(candidate, prev_sink, incumbent_daa) {
+                return match self.palw_rule_e_gate_v1(candidate, prev_sink, incumbent_daa)? {
                     kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Allow => {
-                        self.palw_frontier_provenance_outcome(candidate, prev_sink)
+                        self.palw_frontier_provenance_outcome_checked(candidate, prev_sink)
                     }
-                    kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Refuse => DnsReorgOutcome::DominanceViolation,
+                    kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Refuse => Ok(DnsReorgOutcome::DominanceViolation),
                 };
             }
-            return match (self.palw_candidate_order_v2(prev_sink), self.palw_candidate_order_v2(candidate)) {
+            return match (self.palw_candidate_order_v2_checked(prev_sink)?, self.palw_candidate_order_v2_checked(candidate)?) {
                 (Some(incumbent), Some(challenger)) => {
                     // **lane: rcore/f1-forkchoice-attacks — an all-economic tie keeps the incumbent
                     // past the fence.** `decide_deep_reorg_v2` allows a `Greater` challenger, whose
@@ -237,41 +247,43 @@ impl VirtualStateProcessor {
                     };
                     match decision {
                         kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Allow => {
-                            self.palw_frontier_provenance_outcome(candidate, prev_sink)
+                            self.palw_frontier_provenance_outcome_checked(candidate, prev_sink)
                         }
-                        kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Refuse => DnsReorgOutcome::DominanceViolation,
+                        kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Refuse => {
+                            Ok(DnsReorgOutcome::DominanceViolation)
+                        }
                     }
                 }
                 (Some(_), None) => {
                     info!("deep reorg refused: candidate {candidate} cannot be weighed by this node's PALW authority");
-                    DnsReorgOutcome::DominanceViolation
+                    Ok(DnsReorgOutcome::DominanceViolation)
                 }
                 (None, _) => {
                     info!("deep reorg refused: this node cannot weigh its own sink {prev_sink} — PALW state is incomplete");
-                    DnsReorgOutcome::DominanceViolation
+                    Ok(DnsReorgOutcome::DominanceViolation)
                 }
             };
         }
         if dns_retired {
             // The only remaining case is an extension. Never fall back to Work/Stake here.
-            return if self.palw_candidate_order_v2(candidate).is_some() {
+            return Ok(if self.palw_candidate_order_v2_checked(candidate)?.is_some() {
                 DnsReorgOutcome::GateInactive
             } else {
                 DnsReorgOutcome::DominanceViolation
-            };
+            });
         }
         let Some(dns_params) = self.dns_params.as_ref() else {
-            return DnsReorgOutcome::GateInactive;
+            return Ok(DnsReorgOutcome::GateInactive);
         };
         let Ok(state) = self.dns_state_store.read().get() else {
-            return DnsReorgOutcome::GateInactive; // no DnsState written yet
+            return Ok(DnsReorgOutcome::GateInactive); // no DnsState written yet
         };
         if state.rollout_stage != DnsRolloutStage::Active {
-            return DnsReorgOutcome::GateInactive; // gate dormant outside the Active stage
+            return Ok(DnsReorgOutcome::GateInactive); // gate dormant outside the Active stage
         }
         let confirmed = state.last_dns_confirmed_anchor;
         if confirmed == BlockHash::default() {
-            return DnsReorgOutcome::GateInactive; // nothing confirmed yet
+            return Ok(DnsReorgOutcome::GateInactive); // nothing confirmed yet
         }
         let includes = match self.reachability_service.try_is_chain_ancestor_of(confirmed, candidate) {
             Ok(v) => v,
@@ -299,7 +311,7 @@ impl VirtualStateProcessor {
                 "DNS reorg gate: confirmed anchor {confirmed} is STALE — this node's chain advanced {anchor_age} DAA past it (TTL {}) without a new confirmation, so the branch it protects has lost its validator support; releasing the veto for candidate {candidate}",
                 dns_params.dns_veto_ttl_daa_score
             );
-            return DnsReorgOutcome::ConfirmedAnchorStale;
+            return Ok(DnsReorgOutcome::ConfirmedAnchorStale);
         }
 
         // The heavy two-dimensional inputs (common ancestor + per-branch Work/Stake walks)
@@ -342,14 +354,14 @@ impl VirtualStateProcessor {
                 debug!(
                     "DNS reorg gate: candidate {candidate} does not out-work sink {prev_sink} ({candidate_work} <= {canonical_work}); dominance violation without an ancestor search"
                 );
-                return DnsReorgOutcome::DominanceViolation;
+                return Ok(DnsReorgOutcome::DominanceViolation);
             }
             let Some(ancestor) = self.chain_common_ancestor_within(candidate, prev_sink, dns_params.gate_horizon_blocks()) else {
                 debug!(
                     "DNS reorg gate: candidate {candidate} vs sink {prev_sink} common ancestor is beyond the gate horizon ({} blocks); gate abstains (base-ledger finality point still applies)",
                     dns_params.gate_horizon_blocks()
                 );
-                return DnsReorgOutcome::GateInactive;
+                return Ok(DnsReorgOutcome::GateInactive);
             };
             let ancestor_work = self.ghostdag_store.get_blue_work(ancestor).unwrap_or_default();
 
@@ -443,7 +455,7 @@ impl VirtualStateProcessor {
                 },
             );
         }
-        outcome
+        Ok(outcome)
     }
 
     /// Searches for the next valid sink block (SINK = Virtual selected parent). The search is performed

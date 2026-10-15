@@ -703,7 +703,11 @@ pub fn palw_minimum_price_floor_v1(
 ) -> Option<(Digest, u64)> {
     row.signed_daa?;
     let claim = ledger.job_claims.get(&row.terms.job)?;
-    ledger.claims.get(claim).filter(|c| c.producer == row.terms.worker).map(|_| (*claim, row.terms.funded_minimum_sompi))
+    ledger
+        .claims
+        .get(claim)
+        .filter(|c| c.producer == row.terms.worker && c.holds_job())
+        .map(|_| (*claim, row.terms.funded_minimum_sompi))
 }
 
 /// Why a minimum-price row leaves aux 127 at the sweep.
@@ -711,7 +715,8 @@ pub fn palw_minimum_price_floor_v1(
 pub enum PalwMinimumPriceRetirementV1 {
     /// Not every party signed by `accept_by_daa`: the partial consent is stale.
     StaleConsent,
-    /// Past `retention_until_daa`: the priced retention is over.
+    /// Past `retention_until_daa` without an accepted worker claim. Existing
+    /// escrow floors survive delayed Final; this never extends physical service.
     Expired,
     /// Past `accept_by_daa` with no claim of the contracted worker on the job: the contract was never used.
     Unused,
@@ -729,18 +734,25 @@ pub fn palw_minimum_price_retirement_v1(
     if row.signed_daa.is_none() {
         return (now > row.terms.accept_by_daa).then_some(R::StaleConsent);
     }
-    if now > row.terms.retention_until_daa {
-        return Some(R::Expired);
+    if !ledger.job_escrows.contains_key(&row.terms.job) {
+        return Some(R::Settled);
     }
     let worker_claim = ledger
         .job_claims
         .get(&row.terms.job)
         .and_then(|claim| ledger.claims.get(claim))
-        .is_some_and(|claim| claim.producer == row.terms.worker);
-    if now > row.terms.accept_by_daa && !worker_claim {
-        return Some(R::Unused);
+        .is_some_and(|claim| claim.producer == row.terms.worker && claim.holds_job());
+    // The accepted money covenant is not a service clock. Removing its floor
+    // while escrow is live would let a delayed Final collect a smaller amount
+    // after the signed retention deadline. Keep the exact accepted floor until
+    // payment/neutral escrow release, without extending any provider lease.
+    if worker_claim {
+        return None;
     }
-    (!ledger.job_escrows.contains_key(&row.terms.job)).then_some(R::Settled)
+    if now > row.terms.retention_until_daa {
+        return Some(R::Expired);
+    }
+    (now > row.terms.accept_by_daa).then_some(R::Unused)
 }
 
 /// **The extension rows' retirement** at `now` (`true`: it leaves aux 126): an unapplied extension past its consent window is a stale
@@ -1203,6 +1215,103 @@ mod tests {
         assert_eq!(palw_minimum_price_floor_v1(&row, &l), None, "no claim holds the job: no floor");
         l.job_escrows.clear();
         assert_eq!(palw_minimum_price_retirement_v1(&row, &l, 140), Some(R::Settled), "the escrow is gone: nothing left to govern");
+    }
+
+    /// A retained row is monetary authority, not an extension of signed service.
+    /// This state fixture exercises the actual floor and retirement consumers;
+    /// it is not evidence of model computation or native coinbase payment.
+    #[test]
+    fn accepted_price_floor_survives_delay_reopen_and_branch_rollback_until_escrow_settles() {
+        use misaka_palw_kernel::{
+            evidence::{EvidenceHeaderV1, SuiteParamsV1, VerificationEvidenceV1},
+            job::KernelClaimV1,
+            ledger::{ClaimBodyV1, ClaimRowV1, JobEscrowRowV1},
+            lifecycle::{ClaimLifecycleV1, ClaimStateV1, LifecyclePolicyV1},
+        };
+        let policy = PalwMinimumPricePolicyV1::unapproved_probe_v1();
+        let terms = contract(&policy, 2_200);
+        let row = PalwMinimumPriceRowV1 {
+            terms,
+            consented: terms.required_parties(),
+            first_daa: 100,
+            signed_daa: Some(120),
+            policy: policy.id(),
+        };
+        let claim = [0x33; 64];
+        let mut ledger = empty_ledger();
+        let evidence = VerificationEvidenceV1 {
+            version: 1,
+            header: EvidenceHeaderV1 {
+                network_domain: terms.network,
+                ruleset_digest: [2; 64],
+                class_binding_id: terms.class,
+                program_root: [3; 64],
+                artifact_root: [4; 64],
+                plan_root: [5; 64],
+            },
+            job_input_root: [6; 64],
+            positions: 1,
+            initial_state_root: [7; 64],
+            final_state_root: [8; 64],
+            trace_root: [9; 64],
+            output_root: [10; 64],
+            segments: vec![],
+            suite: SuiteParamsV1 {
+                descriptor_digest: [11; 64],
+                checker_suite_id: 1,
+                challenge_policy_id: 1,
+                repetitions: 1,
+                target_bits: 128,
+                field_bits: 128,
+            },
+        };
+        ledger.claims.insert(
+            claim,
+            ClaimRowV1 {
+                producer: terms.worker,
+                class_binding_id: terms.class,
+                job_id: terms.job,
+                body: ClaimBodyV1::Program {
+                    claim: KernelClaimV1 {
+                        job_id: terms.job,
+                        producer_bond: terms.worker,
+                        generated: vec![1],
+                        evidence_root: evidence.root(),
+                    },
+                    evidence,
+                    commitments: vec![],
+                },
+                committed_daa: 140,
+                life: ClaimLifecycleV1::new(LifecyclePolicyV1 { check_window_daa: 600, challenge_window_daa: 1_200 }),
+                reserved: 2_200,
+                liability_until: Some(5_000),
+                convicted: false,
+                rewarded: false,
+                sealed_daa: 130,
+            },
+        );
+        ledger.job_claims.insert(terms.job, claim);
+        ledger.job_escrows.insert(terms.job, JobEscrowRowV1 { poster: terms.poster, amount: 2_200, posted_daa: 90 });
+        let reopened: PalwMinimumPriceRowV1 = borsh::from_slice(&borsh::to_vec(&row).unwrap()).unwrap();
+        for now in [terms.retention_until_daa, terms.retention_until_daa + 1, u64::MAX] {
+            assert_eq!(palw_minimum_price_retirement_v1(&reopened, &ledger, now), None);
+            assert_eq!(palw_minimum_price_floor_v1(&reopened, &ledger), Some((claim, 2_200)));
+        }
+        let before_payment = ledger.clone();
+        ledger.job_escrows.remove(&terms.job);
+        assert_eq!(palw_minimum_price_retirement_v1(&reopened, &ledger, 5_001), Some(PalwMinimumPriceRetirementV1::Settled));
+        assert_eq!(
+            palw_minimum_price_retirement_v1(&reopened, &before_payment, 5_001),
+            None,
+            "branch rollback restores the same live monetary floor"
+        );
+        ledger = before_payment;
+        ledger.claims.get_mut(&claim).unwrap().life.state = ClaimStateV1::Unavailable { daa: 5_001, producer_defaulted: false };
+        assert_eq!(
+            palw_minimum_price_floor_v1(&reopened, &ledger),
+            None,
+            "failed work cannot preserve a job's floor for another claimant"
+        );
     }
 
     /// **Round 3 (R8-WINDOW sweep)**: an unapplied extension is a stale consent past its window; an applied one retires once its

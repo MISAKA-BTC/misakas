@@ -80,10 +80,14 @@ for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_pan
         item=dict(attrs=attrs,kind=kind,name=name,path=path,body=body,form=form,module=module,type_public=m.group(0).startswith('pub'),file=str(file.relative_to(ROOT)))
         defs[path]=item;byname.setdefault(name,[]).append(item)
 
-primitive={'u8','u16','u32','u64','u128','usize','i8','i16','i32','i64','i128','isize','bool','f32','f64','String','Hash64','BlockHash','Hash','Hash32','Digest','()'}
+primitive={'u8','u16','u32','u64','u128','usize','i8','i16','i32','i64','i128','isize','bool','f32','f64','String','Hash64','BlockHash','TransactionId','Hash','Hash32','Digest','()'}
 # `PalwSharedCourtV1<T>` (G14) is a generic Arc newtype whose Borsh layout is T's: a container with hand-written visitors.
 containers={'Vec','Option','Box','Arc','BTreeMap','BTreeSet','HashMap','HashSet','VecDeque','IndexMap','IndexSet','SmallVec','Cow','PalwSharedCourtV1'}
-queue=['crate::palw_material_capacity_v1::PalwHeldMaterialBundleV1',
+queue=['crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3','crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4','crate::palw_material_capacity_v1::PalwKernelMaterialBundleV1','crate::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1','misaka_palw_kernel::public::PositionResponseV1','misaka_palw_kernel::seg_da::SegPartResponseV1',
+       'misaka_palw_kernel::route::KernelRouteObjectV1','crate::palw_state_v2::PalwConsensusObjectV2','crate::palw_state_v2::PalwTransitionExtrasV1',
+       'crate::palw_claim_compact_v4::PalwPaidCompactContractV4','crate::palw_claim_compact_v4::PalwPaidCompactProofBindingV4','crate::palw_material_release_recovery_v2::PalwMaterialProviderAckCheckpointV2','crate::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2','crate::palw_material_capacity_v1::PalwMonetaryMaterialProviderStoreV1',
+       'crate::palw_state_v2::PalwStateDeltaV2','crate::palw_native_settlement_v1::NativeDeltaEvidenceV1','crate::palw_fork_choice_commitment_v1::PalwForkChoiceDeltaV1',
+       'crate::palw_material_capacity_v1::PalwHeldMaterialBundleV1',
        # Field types of the hand-written Panel containers (PermissionlessPanelStateV1/PanelCandidatesV1 are manual).
        'misaka_palw_panel::ClaimRecordV3','misaka_palw_panel::BondIdV1','misaka_palw_panel::EpochSourceSetV1','misaka_palw_panel::SeatCandidateV1','misaka_palw_kernel::state::ClassRecordV1','misaka_palw_kernel::state::PipelineClassRecordV1','misaka_palw_kernel::flat_candidate7::FlatCandidateViewV7','misaka_palw_kernel::flat_candidate9::FlatCandidateViewV9','crate::palw_claim_challenge_v2::PalwPaidClaimIndexV3','crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1','crate::palw_panel_source_fee_v2::PalwPanelSourceFeeAuthorityV2','crate::palw_claim_challenge_v2::PalwPaidClaimAuthorityV2','crate::palw_claim_challenge_v2::PalwPaidClaimLockV2','crate::palw_claim_challenge_v2::PalwPaidClaimFinalV2','crate::palw_claim_challenge_v2::PalwPaidClaimEvidenceV3','crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3','misaka_palw_kernel::claim_paid_v2::PaidClaimClassV2','misaka_palw_kernel::claim_paid_v2::PaidClaimJobV2','misaka_palw_kernel::claim_paid_v2::PaidClaimReceiptV2','misaka_palw_challenge::approval_scope::LifetimeCounterV3','misaka_palw_challenge::approval_scope::LifetimeReviewScopeV3','crate::palw_kernel_route_v1::KernelAssignmentV1','crate::palw_kernel_route_v1::PalwKernelChunkGroupV1','misaka_palw_kernel::receipt::PalwConstraintReceiptV1','crate::palw_onboarding_v1::ArtifactBindingRowV1','crate::palw_onboarding_v1::KernelBindingRowV1','crate::palw_onboarding_v1::ConformanceRowV1','crate::palw_onboarding_v1::ConformanceAttemptRowV1','crate::palw_conformance_evidence_v1::ConformanceEvidencePostV1','crate::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1','crate::palw_panel_source_snapshot_v1::PalwPanelSourceSnapshotV1','crate::palw_state_v2::PalwClassAdmissionCarriageV2','crate::palw_state_v2::PalwStateCarriageV2','crate::palw_state_v2::PalwChainStateV2','misaka_palw_kernel::ledger::KernelLedgerV1',
        'crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2','crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2','crate::palw_panel_lifetime_v2::PalwPanelLifetimeEnrollmentV2',
@@ -161,6 +165,8 @@ while queue:
         for _,typ,_ in fs:references(typ,item)
         continue
     if fs is None or (not path.startswith('crate::') and any(not public for _,_,public in fs)):
+        if path=='misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26':
+            for _,typ,_ in fs:references(typ,item)
         # Reviewed opaque layouts have a hand-written visitor beside their owner.
         unresolved.append(path);continue
     for _,typ,_ in fs:references(typ,item)
@@ -195,7 +201,7 @@ while queue:
 
 # Opaque public types: preserve the actual type name in every refusal. Handwritten
 # private-owner visitors are intentionally omitted here.
-manual={'misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
+manual={'misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','kaspa_math::Uint576','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
 header='//! Generated explicit native field inventory. Regenerate with\n//! scripts/drills/gen_rfc06_native_inventory.py after schema changes.\n//! Every field/variant is exhaustive; private layouts are visited beside owners.\nuse super::*;\n'
 private={}; public=[]
 for item,code,is_private in generated:
@@ -223,3 +229,14 @@ visitor='impl NativeHeapV1 for misaka_palw_kernel::ledger::KernelLedgerV1 {\n fn
 visitor+=''.join('  sum=sum.add::<Self>(self.'+name+'.native_heap_v1(path),path);\n' for name in publicfields)
 visitor+='  sum\n }\n}\n'
 (OUT.parent/'kernel_ledger.rs').write_text('//! Generated matching public/private ledger visitor.\nuse super::*;\n'+visitor)
+
+source_plan_path='misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26'
+if source_plan_path in visited:
+ item=defs[source_plan_path];fs=fields(item)
+ groups=[fs[i:i+6] for i in range(0,len(fs),6)]
+ typ='('+','.join('('+','.join('&'+t for _,t,_ in group)+',)' for group in groups)+',)'
+ body='('+','.join('('+','.join(n for n,_,_ in group)+',)' for group in groups)+',)'
+ marker='// Generated source26 native inventory bridge; private fields remain private.'
+ owner=ROOT/item['file'];text=owner.read_text();text=text.split(marker)[0].rstrip()
+ text+='\n\n'+marker+'\nimpl StageSourcePlanRecordV26 {\n pub fn native_inventory_parts_v1(&self)->'+typ+' {\n let Self { '+','.join(n for n,_,_ in fs)+' }=self;\n '+body+'\n }\n}\n'
+ owner.write_text(text)

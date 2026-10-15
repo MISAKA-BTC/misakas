@@ -33,10 +33,32 @@ pub enum PalwStateWalkError {
     MissingDelta(BlockHash),
     #[error("state error while walking: {0}")]
     State(#[from] PalwStateV2Error),
+    #[error("native allocation refusal while walking: {0}")]
+    Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1),
     #[error("store error while walking: {0}")]
     Store(#[from] kaspa_database::prelude::StoreError),
 }
 
+impl PalwStateWalkError {
+    pub(crate) fn native_capacity_v1(&self) -> Option<kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+        match self {
+            Self::Resource(e) | Self::State(PalwStateV2Error::NativeResource(e)) => Some(e.clone()),
+            Self::Store(kaspa_database::prelude::StoreError::LocalResourceUnavailable(reason)) => {
+                Some(NativeCoverageV1::unsupported::<PalwChainStateV2>("cold native store capacity", reason))
+            }
+            _ => None,
+        }
+    }
+}
+impl From<kaspa_consensus_core::palw_native_resource_v1::NativeStateMutationErrorV1> for PalwStateWalkError {
+    fn from(error: kaspa_consensus_core::palw_native_resource_v1::NativeStateMutationErrorV1) -> Self {
+        match error {
+            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => Self::Resource(e),
+            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => Self::State(e),
+        }
+    }
+}
 /// The materialized anchor, loaded and verified against its committed root.
 ///
 /// `expected_root` is never `None` here, and that is the point: a carriage's self-consistency
@@ -77,6 +99,29 @@ pub fn walk_chain_path(
     Ok(state)
 }
 
+/// Production walk keeps each cold-state and transition reservation alive.
+pub fn walk_chain_path_retained_v1(
+    store: &DbPalwStateV2Store,
+    params: &PalwStateParamsV2,
+    mut state: kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+    removed: &[BlockHash],
+    added: &[BlockHash],
+) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1, PalwStateWalkError> {
+    for (blocks, revert) in [(removed, true), (added, false)] {
+        for block in blocks {
+            let delta = store
+                .delta_of_retained_v1(*block)
+                .map_err(|e| match e {
+                    kaspa_database::prelude::StoreError::KeyNotFound(_) => PalwStateWalkError::MissingDelta(*block),
+                    e => PalwStateWalkError::Store(e),
+                })?
+                .1;
+            state = state.try_delta_v1(&delta, params, revert).map_err(PalwStateWalkError::from)?;
+        }
+    }
+    Ok(state)
+}
+
 fn load_delta(
     store: &DbPalwStateV2Store,
     block: BlockHash,
@@ -107,6 +152,24 @@ mod tests {
     use kaspa_hashes::Hash64;
     use rocksdb::WriteBatch;
 
+    #[test]
+    fn native_capacity_classification_preserves_resources_without_calling_corrupt_data_capacity() {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+        let resource = NativeCoverageV1::unsupported::<PalwChainStateV2>("test typed requests", "no capacity");
+        assert_eq!(PalwStateWalkError::Resource(resource.clone()).native_capacity_v1(), Some(resource.clone()));
+        assert_eq!(PalwStateWalkError::State(PalwStateV2Error::NativeResource(resource.clone())).native_capacity_v1(), Some(resource));
+        assert!(
+            PalwStateWalkError::Store(kaspa_database::prelude::StoreError::LocalResourceUnavailable("typed owner refused".into()))
+                .native_capacity_v1()
+                .is_some()
+        );
+        assert!(
+            PalwStateWalkError::Store(kaspa_database::prelude::StoreError::DataInconsistency("wrong state root".into()))
+                .native_capacity_v1()
+                .is_none()
+        );
+        assert!(PalwStateWalkError::MissingDelta(BlockHash::default()).native_capacity_v1().is_none());
+    }
     fn h64(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
     }

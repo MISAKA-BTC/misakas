@@ -263,3 +263,268 @@ Each compiler has a distinct identity (`compact_relation_compiler_id_v1`).
 3. External review of the bounds and the transform.
 4. A PCS/GKR suite.
 5. Wiring into paid rounds and receipts.
+
+
+## All-target private producer/exporter (2026-10-15 integration workspace)
+
+Source only; no build, test or node run has been performed for this checkpoint.
+`claim_paid_v2/all_target_bootstrap.rs` adds real generation for Pipeline,
+Segmented v4 decoder and v5 encoder, and every TypedSpec form (Memory, Retrieval,
+Composite). Program continues through its existing implementation. Artifact
+parameters must match the registered native commitments (v3 tensor commitments
+for segmented classes); tiled prompts are authenticated against the job root;
+retrieval snapshots are rebuilt against the registered item count, dimensions,
+slice size and Merkle root. Memory uses the chain-authenticated current line head
+and actual step StateWrite outputs. Composite uses actual preceding generated
+ids, payloads and last logits to construct later stages. Each result carries the
+same native salted commit, public material, producer-signed enrollment and rooted
+receipt builder as Program. This extends generation and adapters, and does not
+assert that these paths have been accepted by a live node.
+
+Every stage is bounded before its TIR execution. Bounds include retained traces,
+external/random input copies, aggregate composite/memory steps, snapshot sort and
+Merkle data, encoded artifact, public material and serialization. The private
+hard caps remain 256 MiB workspace, 32 MiB material and 100M execution work;
+these are fixture refusal bounds, not measured network policy values. The
+exporter adds the entire restored request/route and file buffer to the workspace
+bound before running a producer. An oversized registered class is refused by this
+finite private generator even when a smaller input might fit.
+
+The feature-only private exporter retains the old Program request codec V3 and
+accepts `PrivatePaidNativeRequestV4` for all targets. V4 has the same independently
+pinned LR/AR, native class/job/enrollment terms and private signing card, plus
+stage-indexed parameters, a tiled prompt and public snapshot items. The existing
+`--request` invocation dispatches by the leading version. The manifest names the
+request version and native commit kind; the work file name stays
+`program-work-v3.borsh` for existing consumers, and its salted commit discriminant
+identifies the actual target. No file is an inclusion, source payment or Final
+receipt. Before Borsh allocates collections, the exact request schema scanner
+checks the header, every ledger/aux row using the native row codec scanner,
+canonical sorted map keys, tensor rank/product/dtype byte width, bounded snapshot
+item/key/payload counts, exact EOF and the combined decode heap. A 64 MiB input
+file bound is checked independently. Program V3 requests retain their layout and
+are normalized to the same bounded all-target input contract.
+
+Deferred acceptance source must cover honest work and an altered opening for
+Program, Pipeline, segmented decoder/encoder, Memory, Retrieval and Composite;
+both interactive modes; actual source funding/lock and assigned receipts; native
+Final/payment; restart and journal/reorg. Pure schema/resource tests added here do
+not substitute for those end-to-end cases. Compact family compilation and its
+native consensus contract remain a separate open implementation boundary; the
+all-target producer does not turn a full-material V3 plan into a compact proof.
+
+
+The native source opt-in adapter now resolves Program, Pipeline, Tiled/Segmented
+and TypedSpec jobs through one `beacon_source_job_profile_v1` function at both
+admission and cold restore. The old two-form lookup rejected otherwise valid
+salted typed/segmented work, despite the shared native claim admission and Final
+adapter already supporting those forms. The resolver grants no eligibility:
+the frozen target, candidate exclusion, OPV eligibility, exact live ordinary seal,
+registered payer, distinct per-target reservation and concurrency/horizon rules
+still apply. No ordinary seal acquires a source deposit implicitly. The added
+unrun typed-retrieval source test exercises real registration/job/retrieval,
+two target reservations against one ordinary seal, duplicate refusal, cold row
+rebuild, actual salted reveal, native Final and post-horizon refunds. Separate
+funded v5 fee collection and native-process acceptance remain required validation.
+
+
+## Registered native compact coverage binding (2026-10-15 integration)
+
+Source only, uncompiled and untested. The prior single-plan compact registration
+API accepted a caller's `coverage_root` without rederiving the entries from the
+actual program/plan. The API now requires both program and plan and recompiles
+before checking the review registry; an omitted relation under a relabeled
+coverage root is refused before review lookup. The dormant core wrapper forwards
+the program/plan explicitly. These arguments must be taken from authenticated
+native class rows; a self-consistent submitted plan is not chain authority.
+
+`claim_compact_v1/native_v2.rs` derives the whole map from the registered kernel
+ledger: Program/Segmented plans, every Pipeline stage, the Memory model plan with
+its native `max_steps` multiplier, every Composite model stage, and explicit exact
+retrieval/snapshot, memory-continuity and pipeline/composite-edge obligations.
+Cold validation recompiles and compares the entire map. The composed bound sums
+all probabilistic component instances (including every memory execution), then
+binding and the declared retry/beacon/grinding/adaptive budget. Its lifetime term
+requires per-attempt `Q = 1` and charges lifetime admissions once. Proof/work limits
+are checked with aggregate position × execution bounds. Unknown families still
+refuse; exact obligations are visible and not counted as compact lookup proofs.
+
+The core rooted reader `palw_native_compact_coverage_v2` and SDK CLI
+`claim-v2 COMPACT-COVERAGE` expose this map from separately pinned native LR/AR.
+The CLI requires explicit arithmetic opt-in, repetitions and transcript query
+budget; it assigns no production values or review status. Added unrun tests cover
+omitted relations, an erased memory-step multiplier and a missing snapshot exact
+obligation against cold rebuilt native rows.
+
+This closes the registered-class relation map and union accounting boundary. It
+does not close compact native block enrollment/round-message/receipt/Final
+migration: V3 full-material verification remains its own contract. GKR/PCS,
+lookup/permutation and compact memory arguments also remain unimplemented; exact
+retained checks are not described as implementations of those arguments. The
+independent 128-bit review registry remains empty, and no new public fence is
+armed. Their completion and consolidated acceptance remain outstanding.
+
+
+## Prospective consent and source dependency exclusion (2026-10-15 integration)
+
+Source only, uncompiled and untested. Paid-job enrollment previously required no
+existing claim, but did not exclude an existing ordinary seal or source opt-in.
+A job payer could therefore impose new checker/lifetime terms after another
+producer had signed its ordinary work/source commitment. Native enrollment and
+its SDK builder now share `paid_job_enrollment_is_prospective_v3`: no claim, no
+live ordinary seal and no pending independent-source contract. An expired,
+unclaimed job can be enrolled only after prior observable work contracts end.
+
+The reverse overlap is excluded too. Both native source opt-in kinds inspect
+canonical paid-job enrollment rows before ledger admission or any debit; a
+checker-dependent paid job cannot enter the Panel-independent entropy pool.
+Paid-claim Commit and SDK drafts independently refuse a pending source contract
+on that job. Cold restore rejects the same incompatible pending-source/paid-job
+combination, using a single bounded borrowed source-job set rather than rescanning
+all historical sources per job. Source fees/deposits already earned under a
+terminated contract are not erased or reclassified. No existing claim, seed,
+codec, earned cash or public activation is changed.
+
+An unrun kernel scenario covers a fresh posted job, refusal to migrate after its
+real ordinary seal/source opt-in, and the later ability to enroll a still
+unclaimed job after those contracts end. Native fold/reorg/cold-state and SDK
+receipt end-to-end verification remain part of the consolidated test phase.
+
+## 2026-10-15 native compact V4 consumer migration (source only)
+
+A new `palw_claim_compact_v4` capability separates the new semantics from all
+previous V3 private profiles; shipped presets remain `None`. It has finite named
+contract/opening/proof/work/stream capacities, with no new production parameter
+approval. The original V3 plan fields, discriminants, serialization and hash
+preimages remain unchanged. A plan with wire version 4 names the registered
+whole-native relation contract, complete native coverage and signed adversary
+budget in its compiler identity. Aux135 key64 holds that registration; key65
+`0x50 || round_id` holds the producer's post-seed binding and canonical proof.
+New operations are appended inside inner71.
+
+The material message is signed before the actual future source lock. After the
+lock, `COMPACT-PROVE` executes the actual checker over Program, Pipeline,
+Segmented and typed Memory/Retrieval/Composite inputs. Only then does the
+producer sign `COMPACT-BIND`. The native object carries the complete proof
+bundle, retained by native aux/carriage/journal, rather than extending an older
+provider's consent to seed-dependent transcript bytes. Registration checks the
+whole proof's located-instance/framing bound against actual native carriage.
+`COMPACT-VERIFY` requires this included binding, authenticates all material with
+the existing native checker, verifies the compact relations, and rejects
+missing, duplicated, replayed or unused proofs. The producer session cannot
+create a success receipt. Receipt transcripts, prior-round FS challenges,
+restore consistency and native Final bind the included proof root. Funding,
+source deposits and refunds retain the existing strict same-R native path.
+
+The segmented adapter currently retains exact roots/decode replay and performs
+an additional streaming proof-operand replay, with a single authenticated prior
+position cache. Its work bound charges these separate contributions; this is
+not a claim of sublinear execution or material acquisition. The implemented
+compact families remain Freivalds, linear Add/Sub, Hadamard sumcheck and
+ReduceSum sumcheck. The nine-family inventory remains exhaustive, but GKR/PCS,
+lookup/permutation and a compact state/memory argument are still unimplemented;
+`ExactRetained` is not counted as completing those arguments. No independent
+128-bit review, source-market economics or source-independence approval is
+fabricated by this migration. Public activation still refuses.
+
+All new source and negative/round-trip test cases are uncompiled and unrun as
+requested by the implementation-first order. Consolidated validation must cover
+new native registration, signed all-target work, source funding/lock, proof
+inclusion, assigned receipts, Final, cold restore and reorg; old V3 bytes and
+private fingerprints require regression checks in that later phase.
+
+### V5 semantic circuit source boundary (2026-10-15; uncompiled)
+
+`claim_circuit_v5` now lowers the twenty-five native TIR primitives into actual
+Boolean gates. Scalar arithmetic checks signed i128 overflow, the three exact
+rounding rules and dtype ranges. The frozen Q24 Exp/Rsqrt/Ln algorithms are
+lowered through integer gates rather than witness-provided function results.
+Tensor indexing reuses public shapes; dynamic Gather, TopK and comparisons use
+selectors. Reductions enforce positive and negative partial-sum extremes.
+HistAppend reuses the supplied prior-row wires, and StateWrite applies the
+native saturation interval. The existing reference type checker is exported
+without changing its rules, so this constructor uses the same accepted dtype
+and shape relations as native TIR (including signed Gather indices).
+
+The native primitive constructor calculates each existing input/prior/output
+tensor commitment from these same wires, including BLAKE2b compression and
+native dual/tiled/hiding leaf and tree preimages. An output digest supplied as
+a public constraint is not substituted for the computation. Explicit input
+Booleanity constraints `b * (1-b) = 0` are included for a later field proof;
+the Boolean evaluator alone would not establish this for a PCS witness.
+
+A counting pass runs the same emitter without allocating gate/witness/tensor
+wire vectors. It computes exact gate/assertion counts, then a retained owner
+reserves the typed graph before allocation. Output wire vectors and bounded
+reference type-check metadata have separate reservations before allocation.
+The evaluator reserves its witness while the graph owner remains live. These
+are deterministic typed allocation bounds, not an approval of process RSS,
+allocator overhead, cryptographic security or native network resource limits.
+
+Source tests cover reference indexing/ranking/reduction, signed Gather indices,
+state/history, altered outputs, altered native inputs, rounding and overflow.
+They have not been compiled or run. This boundary does not yet implement a
+whole-trace/program constructor, a PCS/GKR argument, a V5 native claim or
+activation. Consequently it does not close the missing argument-family rows,
+claim a compact verifier cost, or establish the required independent 128-bit
+review. Old V3/V4 bytes, roots and dormant gates remain separate.
+
+The following source boundary adds `compile_registered_program_trace_v5`.
+It borrows the actual registered single-program class from a ledger, compares
+its decoded program cache to immutable canonical bytes with a streaming writer,
+and binds the program root and the registered parameter map. It unrolls every
+block occurrence and position from zero, with public token/position constants,
+exact carry handles, initial zero Fixed states, position-entry state reads, and
+last-window history handles. All native node roots are constrained, including
+history/state results; the returned public binding names the native evidence
+and output roots. No separately chosen intermediate recurrence is a witness.
+The arena and write/history/reference buffers are admitted from actual instance
+and node counts before allocation. Whole-graph hashing now streams Borsh bytes
+instead of allocating a second serialized graph, and packed input evaluation
+borrows bytes without allocating an input-bit copy.
+
+This constructor consumes the registered ProgramV1 representation. Native
+pipeline/ProgramV2 and typed memory stage composition, claim/job binding of the
+new public circuit binding, PCS/GKR proving and verification, native V5 storage,
+SDK/CLI migration and independent review still remain. The new test source
+checks two positions whose post block must read the entry state (outputs 1 and
+3, rather than 2 and 4), history, altered node commitments, cache substitution
+and refusal before metadata allocation; none has been compiled or executed.
+
+The next algebraic source layer (`claim_circuit_v5::r1cs`) streams actual sparse
+rank-one constraints from the semantic graph. For example XOR becomes
+`(2a) * b = a + b - output`; AND, NOT, constants, input Booleanity and public
+assertions have explicit field equations. Every input also receives an
+independent `b*(b-1)=0` row, so a future decoder cannot omit bit constraints by
+presenting an arbitrary graph. Variable zero is fixed to one. Canonical field
+encodings are required. Exact row, variable, nonzero-term and padded-domain
+counts are checked before lowering; the immutable graph is borrowed rather
+than cloned into three sparse matrices. Matrix multilinear evaluations are
+implemented over those real coefficients with an explicit linear scan and
+field-multiplication bound. This scan is not a compact-verifier cost claim.
+
+This is a concrete relation for the later polynomial IOP. It is not itself a
+polynomial commitment or a GKR/Spartan/Brakedown argument. Reading the primary
+[GKR publication](https://www.microsoft.com/en-us/research/publication/delegating-computation-interactive-proofs-muggles/)
+and [Brakedown paper](https://eprint.iacr.org/2021/1043) does not substitute for
+implementing or reviewing those protocols. No random-code distance, query
+count, repetitions or 128-bit composition budget is approved by this source
+layer. New constraint-corruption and matrix-coefficient test source is unrun.
+
+`pipeline_edges` adds executable lowering for all seven external edge kinds:
+JobScalar, JobTokens, StageRows, StageFinal, StageRowCount, JobTokenCount and
+JobImage. Upstream rows/final values reuse the original symbolic tensor wires.
+Public templates use checked lengths and indexed reads without expanding a
+second token list. Image shape, exact byte length and declared interval are
+checked. Stage trip/token/stream row-start derivation is allocation free.
+Random inputs use the actual native R digest/word/Gaussian implementations,
+with the real seed/item/step and a fixed digest cache; hash-block work is
+bounded before the output wire vector is allocated. Output wire ownership is
+reserved from the resolved typed shape. This public deterministic R work is
+explicit and does not count as a compact verifier optimization.
+
+These edge emitters still need the shared ProgramV2/pipeline constructor to
+supply actual prior-stage outputs and authenticate image/finalized-output job
+facts. They do not independently establish native job authority or a complete
+pipeline proof. New source tests cover all seven edge kinds, padding, signed
+upstream values, native R agreement and a zero-hash-budget refusal; unrun.

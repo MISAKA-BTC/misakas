@@ -194,6 +194,9 @@ pub use verify::{
 
 pub mod flat_seal9;
 
+/// R7-RELATION (2026-10-15 round 3): compact relation proof compilers under the dormant ClaimV2 contract; unreviewed.
+pub mod claim_circuit_v5;
+/// RFC07/RFC08 signed economic contracts (inner 67–69), 2026-10-15; dormant.
 /// N3 (2026-10-15 round 3): BootstrapExact source contributions (inner 73), consumer-owned past `palw_beacon_bootstrap_v1`.
 pub mod beacon_bootstrap_v1;
 /// RFC-0017 (2026-10-15): model eligibility exam commits and attestations (inner 74/75), consumer-owned past
