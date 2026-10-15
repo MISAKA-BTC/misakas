@@ -3490,3 +3490,6 @@ mod opv_bootstrap;
 // `g14_kernel_route_e2e/socket_rpc.rs`.
 mod recovery;
 mod socket_rpc;
+// RFC-0015 §13.2 (2026-10-15, test source): old Panel claims across the fence, the §8.3 budget on the OPV door (gate record present),
+// a direct proof over another bond's open demand: `g14_kernel_route_e2e/rfc15_panel_free.rs`.
+mod rfc15_panel_free;
