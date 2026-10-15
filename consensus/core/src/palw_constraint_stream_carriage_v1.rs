@@ -89,6 +89,90 @@ pub struct PalwConstraintStreamSeedV1 {
     pub signature: Vec<u8>,
     pub retained_profile: Option<PalwRetainedCourtProfileV1>,
 }
+/// **What a native (TIR) seed opens** — the same two required families a TIR quote covers.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwNativeSeedFamilyV1 {
+    /// Constrained selection over the claim's tiled TIR logits (the pin authenticates through
+    /// the decode view; no binding).
+    Constraint { pin: PalwTiledDecodePinV1, witness: Option<u32>, eog_count: u32, eog_opening: PalwStepOpeningV1 },
+    /// The raw tokenizer court; its ids are read through the decode view.
+    Tokenizer {
+        id: u32,
+        present: bool,
+        length: u32,
+        opening: PalwStepOpeningV1,
+        raw_tokenizer_bytes: u64,
+        tokenizer_key_events: u64,
+        operand_tokenizer_bytes: u64,
+    },
+}
+/// **A seed that names no binding** (tag 168, `PublicCourtStreamOpenedNativeV1`, owned by
+/// `palw_staged_tir_route_v1`). It signs the IDENTITY of the claim's admitted TIR public header
+/// (the BLAKE2b of its borsh); the fold reads the header itself from the claim's native contract
+/// and derives the decode view from it and the registered class record.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwConstraintStreamNativeSeedV1 {
+    pub version: u16,
+    pub claim: Hash64,
+    pub reserver: PalwBondKeyV2,
+    pub reserved_daa: u64,
+    pub view_identity: Hash64,
+    /// The view's logits vocabulary, signed so the carrier's fee is computable from the object
+    /// alone; the fold refuses a seed whose value is not the derived view's.
+    pub vocab_size: u32,
+    /// None reads the literal retained claim-rooted job; Some must equal that exact job.
+    pub job: Option<Box<PalwFreePromptJobV3>>,
+    pub family: PalwNativeSeedFamilyV1,
+    pub signature: Vec<u8>,
+}
+/// The identity a native seed signs for an admitted TIR public header.
+pub fn palw_native_view_identity_v1(header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1) -> Hash64 {
+    Hash64::from_bytes(
+        blake2b_simd::Params::new()
+            .hash_length(64)
+            .key(b"misaka-palw/native-view-identity/v1")
+            .hash(&encode(header))
+            .as_bytes()
+            .try_into()
+            .expect("64"),
+    )
+}
+impl PalwConstraintStreamNativeSeedV1 {
+    pub fn signing_message(&self) -> Vec<u8> {
+        message(
+            b"native-seed",
+            &[
+                &encode(&self.version),
+                &encode(&self.claim),
+                &encode(&self.reserver),
+                &encode(&self.reserved_daa),
+                &encode(&self.view_identity),
+                &encode(&self.vocab_size),
+                &encode(&self.job),
+                &encode(&self.family),
+            ],
+        )
+    }
+    pub fn seed_id_v1(&self) -> Hash64 {
+        Hash64::from_bytes(self.signing_message().try_into().expect("seed digest width"))
+    }
+    pub fn check(&self, carrier_maximum: u64) -> Result<(), String> {
+        check_signature_shape(self.version, &self.signature)?;
+        let openings = match &self.family {
+            PalwNativeSeedFamilyV1::Constraint { pin, eog_opening, .. } => {
+                pin.generated_token_ids.len() <= crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS
+                    && eog_opening.siblings.len() <= 23
+                    && [&pin.row_opening, &pin.committed_opening, &pin.beat_opening].iter().all(|o| o.siblings.len() <= 64)
+            }
+            PalwNativeSeedFamilyV1::Tokenizer { opening, .. } => opening.siblings.len() <= 23,
+        };
+        if !openings {
+            return Err("native seed exceeds its bounded original proof shape".into());
+        }
+        bounded_encoded_len(self, usize::try_from(carrier_maximum).unwrap_or(usize::MAX))?;
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamLeafV1 {
     pub version: u16,
@@ -191,6 +275,13 @@ pub enum PalwConstraintStreamActionV1 {
         beat: Option<u32>,
     },
     FloatSourceCollect,
+    // TIR native-context selected source: appended forms owned by `palw_staged_tir_route_v1`
+    // (`crate::palw_staged_route_forms_v1`). Collection reuses `SelectedEventCollect`, which
+    // names no binding.
+    NativeSelectedDemand {
+        demand: crate::palw_selected_event_source_v1::PalwSelectedEventDemandV1,
+    },
+    NativeSelectedAnswer(crate::palw_selected_event_source_v1::PalwSelectedEventNativeAnswerV1),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamMoveV1 {
@@ -485,6 +576,7 @@ impl PalwConstraintStreamMoveV1 {
             PalwConstraintStreamActionV1::HistoryRecovery { action, .. } => action.answerer_v1().unwrap_or(self.reserver),
             PalwConstraintStreamActionV1::FlatSourceAnswer(answer) => answer.answerer,
             PalwConstraintStreamActionV1::FloatSourceAnswer(answer) => answer.answerer,
+            PalwConstraintStreamActionV1::NativeSelectedAnswer(answer) => answer.answerer,
             _ => self.reserver,
         }
     }
@@ -525,6 +617,8 @@ impl PalwConstraintStreamMoveV1 {
                 | PalwConstraintStreamActionV1::FloatSourceAnswer(_)
                 | PalwConstraintStreamActionV1::FloatSourceNominate { .. }
                 | PalwConstraintStreamActionV1::FloatSourceCollect
+                | PalwConstraintStreamActionV1::NativeSelectedDemand { .. }
+                | PalwConstraintStreamActionV1::NativeSelectedAnswer(_)
         ) {
             if self.phase != PalwConstraintStreamPhaseV1::PrefixCourt {
                 return Err("bundle control changes its fixed carrier phase".into());
@@ -547,6 +641,9 @@ impl PalwConstraintStreamMoveV1 {
         }
         if let PalwConstraintStreamActionV1::FloatSourceAnswer(answer) = &self.action {
             answer.action.check_wire_v1()?;
+        }
+        if let PalwConstraintStreamActionV1::NativeSelectedAnswer(answer) = &self.action {
+            answer.check_v1()?;
         }
         if let PalwConstraintStreamActionV1::HistoryCustodyGrant { grant, receipt } = &self.action {
             grant.check_receipt_v1(receipt)?;

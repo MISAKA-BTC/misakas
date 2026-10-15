@@ -167,6 +167,76 @@ impl PalwOwnedConstraintStreamV1 {
         row.check()?;
         Ok(row)
     }
+    /// **A TIR claim's Constraint stage** (behind `palw_staged_tir_route_v1`): the native seed's
+    /// tiled pin authenticates through the decode view the fold derived from the claim's admitted
+    /// header and registered record; `view_identity` is that header's borsh, entering the canonical
+    /// seed identity unchanged. No binding exists or is synthesized.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn admit_native_view_v1(
+        seed: &crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        root: Hash64,
+        terms: PalwRenderingClaimTermsV1,
+        now: u64,
+        funding: u64,
+        maximum: u64,
+        ladder: u64,
+        material: u64,
+        producer_exit: u64,
+        panel_exits: &[u64],
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        view_identity: &[u8],
+    ) -> Result<Self, String> {
+        seed.check(maximum)?;
+        let crate::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::Constraint { pin, witness, eog_count, eog_opening } =
+            &seed.family
+        else {
+            return Err("native constraint admission requires the native constraint family".into());
+        };
+        if seed.job.as_deref().is_some_and(|original| original != job)
+            || seed.vocab_size != view.vocab_size
+            || now < terms.accepted_daa
+            || now >= terms.open_until_daa
+            || seed.reserved_daa > now
+            || terms.plan.prefix_tokens < pin.position
+            || terms.plan.vocab != view.vocab_size
+        {
+            return Err("native constraint admission changes original signed job, view or frozen allocation".into());
+        }
+        terms.check_holds(material, producer_exit, panel_exits)?;
+        if funding < terms.plan.rent_sompi.checked_add(terms.plan.deposit_sompi).ok_or("native constraint funding overflow")? {
+            return Err("native constraint court has no full prepaid work budget".into());
+        }
+        let court = PalwConstraintStreamCourtV1::new_from_tiled_view_v1(
+            seed.claim,
+            seed.reserver,
+            seed.reserved_daa,
+            root,
+            view,
+            view_identity,
+            job,
+            pin,
+            *witness,
+            *eog_count,
+            eog_opening,
+            ladder,
+            Some(seed.seed_id_v1()),
+        )?;
+        let row = Self {
+            claim: seed.claim,
+            reserver: seed.reserver,
+            reserved_daa: seed.reserved_daa,
+            terms,
+            rent_paid: terms.plan.rent_sompi,
+            deposit_locked: terms.plan.deposit_sompi,
+            moves_used: 1,
+            rendering_bytes_used: 0,
+            eog_bytes_used: 0,
+            court,
+        };
+        row.check()?;
+        Ok(row)
+    }
     pub(crate) fn checkpoint_v1(&self) -> PalwOwnedConstraintCheckpointV1 {
         PalwOwnedConstraintCheckpointV1 {
             court: self.court.checkpoint_v1(),

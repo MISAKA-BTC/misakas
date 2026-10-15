@@ -222,6 +222,8 @@ pub struct PalwStagedSelectedProgressV1 {
     pub now_daa: u64,
     pub session: crate::palw_selected_event_source_v1::PalwSelectedEventSessionV1,
     pub context: Option<PalwSharedCourtV1<crate::palw_staged_bundle_v1::PalwSelectedSourceContextV1>>,
+    /// A TIR claim's native source context (behind `palw_staged_tir_route_v1`); exclusive with `context`.
+    pub native: Option<PalwSharedCourtV1<crate::palw_staged_bundle_v1::PalwNativeSourceContextV1>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwTokenizerArtifactInventoryProgressV1 {
@@ -531,12 +533,22 @@ pub fn palw_staged_selected_events_v1(
             };
             let target =
                 crate::palw_offence_attribution_v1::palw_offence_target_v1(state, &key.0).ok_or("selected source target absent")?;
-            let profile = state.fp_work_profile_of(&target.class_id).ok_or("selected source has no accepted profile")?;
-            if profile.logits_scheme_id != crate::palw_step_refute::tiled_logits_scheme_id_v1() {
-                return Ok(None);
-            }
             let contract = state.staged_claim_contract_v1(&key.0).ok_or("selected source contract absent")?;
             let bundle_contract = state.staged_bundle_contract_v1(key.0).ok_or("selected source required-family contract absent")?;
+            // A TIR claim's scheme is its registered record's; a legacy claim's its shape profile's.
+            let tiled = match &bundle_contract.original_binding {
+                crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(_) => {
+                    state.tir_classes.get(&target.class_id).ok_or("selected TIR source has no registered class record")?.facts.tiled
+                }
+                _ => {
+                    let profile = state.fp_work_profile_of(&target.class_id).ok_or("selected source has no accepted profile")?;
+                    profile.logits_scheme_id == crate::palw_step_refute::tiled_logits_scheme_id_v1()
+                        && profile.lane == crate::palw_step::PalwStepLaneV1::Int32
+                }
+            };
+            if !tiled {
+                return Ok(None);
+            }
             let respond = bundle
                 .plan
                 .preseed_source_until_v1(crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint, bundle_contract.config)?;
@@ -569,7 +581,49 @@ pub fn palw_staged_selected_events_v1(
         now_daa: point.daa_score,
         session,
         context: bundle.selected_context.clone(),
+        native: bundle.selected_native.clone(),
     }))
+}
+
+/// **A TIR claim's native decode view** (behind `palw_staged_tir_route_v1`): the admitted public
+/// header from the claim's native required-family contract (never a carrier) and the registered
+/// class record. `None` for a legacy claim.
+pub fn palw_staged_tir_view_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    claim: Hash64,
+    maximum_leaves: u64,
+) -> Result<
+    Option<(crate::palw_decode_view_v1::PalwDecodeViewV1, Box<crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1>)>,
+    String,
+> {
+    let Some(contract) = state.staged_bundle_contract_v1(claim) else { return Ok(None) };
+    let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header) = &contract.original_binding else {
+        return Ok(None);
+    };
+    let record =
+        state.tir_classes.get(&header.job_context.shape_profile_id).ok_or("TIR claim's registered class record is absent")?;
+    let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(header, record, maximum_leaves)?;
+    let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(state, &claim).ok_or("TIR view claim target absent")?;
+    if view.committed_execution_root != target.execution_root || view.class_id != target.class_id {
+        return Err("TIR view does not reproduce the claim's accepted execution root or class".into());
+    }
+    Ok(Some((view, Box::new(header.clone()))))
+}
+
+/// The active native TIR stage's seed and admitted header (node readers; `None` for a legacy stage).
+pub fn palw_staged_owned_native_seed_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: (Hash64, PalwBondKeyV2),
+) -> Result<Option<crate::palw_staged_bundle_v1::PalwStagedNativeSeedContextV1>, String> {
+    let Some(paid) = palw_staged_paid_authority_v1(state, key)? else { return Ok(None) };
+    let point = state.last_point().ok_or("paid native seed has no accepted clock")?;
+    if point.daa_score < paid.terms.accepted_daa || point.daa_score >= paid.terms.material_until_daa {
+        return Ok(None);
+    }
+    Ok(match state.staged_owned_row_v1(key.0, key.1) {
+        Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) => bundle.active_native_seed_v1().cloned(),
+        _ => None,
+    })
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwStagedFaultV1 {
@@ -775,9 +829,7 @@ pub fn palw_staged_paid_authority_v1(
         PalwStagedCourtRowV1::Prefix(c) => (c.reserved_daa, c.seed_id(), c.terms, c.execution_root_v1()),
         PalwStagedCourtRowV1::PublicPrefix(c) => (c.reserved_daa, c.seed_id(), c.terms, c.execution_root_v1()),
         PalwStagedCourtRowV1::OwnerBundle(c) => {
-            let seed = c
-                .active_seed_v1()
-                .map_or_else(|| c.plan.id_v1(c.claim), |seed| Hash64::from_bytes(seed.signing_message().try_into().expect("64")));
+            let seed = c.active_seed_id_v1().unwrap_or_else(|| c.plan.id_v1(c.claim));
             let terms = match c.active_v1() {
                 Some(PalwStagedCourtRowV1::Constraint(row)) => row.terms,
                 Some(PalwStagedCourtRowV1::Tokenizer(row)) => row.terms,
@@ -1000,7 +1052,9 @@ pub fn palw_staged_owned_context_v1(
                 let binding = header.resolve_v1(profile, original.execution_root, u64::MAX)?;
                 return Ok(Some((binding, original.job)));
             };
-            return Ok(Some((stage.context.binding.as_ref().clone(), stage.context.job.as_ref().clone())));
+            // A native TIR stage has no legacy binding to hydrate (`palw_staged_native_context_v1`).
+            let Some(stage) = stage.context.legacy_v1() else { return Ok(None) };
+            return Ok(Some((stage.binding.as_ref().clone(), stage.job.as_ref().clone())));
         }
         Some(PalwStagedCourtRowV1::Prefix(row)) => row.court_v1().admitted_context_v1(),
         Some(PalwStagedCourtRowV1::PublicPrefix(row)) => row.admitted_context_v1(),

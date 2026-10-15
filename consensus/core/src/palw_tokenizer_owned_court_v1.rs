@@ -71,6 +71,105 @@ impl PalwOwnedTokenizerCourtV1 {
             &seed.binding,
         )
     }
+    /// **A TIR claim's tokenizer stage** (behind `palw_staged_tir_route_v1`): the native seed's
+    /// tokenizer family, its statement and vocabulary read through the natively derived view.
+    #[allow(clippy::too_many_arguments)]
+    pub fn admit_native_view_v1(
+        seed: &crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1,
+        actual_job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        target: &crate::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        claim_terms: PalwRenderingClaimTermsV1,
+        prices: PalwRenderingResourcePricesV1,
+        now: u64,
+        available_capital: u64,
+        carrier_maximum: u64,
+        material_until: u64,
+        producer_exit_after: u64,
+        panel_exit_after: &[u64],
+    ) -> Result<Self, String> {
+        seed.check(carrier_maximum)?;
+        if seed.job.as_deref().is_some_and(|j| j != actual_job) || seed.vocab_size != view.vocab_size {
+            return Err("native tokenizer seed changes literal retained job or view vocabulary".into());
+        }
+        if seed.claim != target.claim_id
+            || now < claim_terms.accepted_daa
+            || now > claim_terms.open_until_daa
+            || seed.reserved_daa > now
+        {
+            return Err("tokenizer court changes actual claim/opening identity".into());
+        }
+        let crate::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::Tokenizer {
+            id,
+            present,
+            length,
+            opening,
+            raw_tokenizer_bytes,
+            tokenizer_key_events,
+            operand_tokenizer_bytes,
+        } = &seed.family
+        else {
+            return Err("owned tokenizer admission requires the native tokenizer family".into());
+        };
+        let registered = target.registered_semantics.as_ref().ok_or("tokenizer claim has no immutable semantics")?;
+        let (Some(raw), Some(bound)) = (registered.raw_tokenizer_bytes, registered.tokenizer_key_events) else {
+            return Err("tokenizer claim has no normative exact preimage/work obligation".into());
+        };
+        if (*raw_tokenizer_bytes, *tokenizer_key_events) != (raw, bound) {
+            return Err("tokenizer seed changes immutable raw length/work declaration".into());
+        }
+        let tokenizer_plan = PalwTokenizerResourcePlanV1::derive_with_key_bound(*operand_tokenizer_bytes, bound, prices)?;
+        let plan = tokenizer_plan.court_envelope(view.vocab_size, prices)?;
+        if plan.maximum_moves > claim_terms.plan.maximum_moves
+            || plan.inclusion_daa > claim_terms.plan.inclusion_daa
+            || plan.maximum_stream_bytes > claim_terms.plan.maximum_stream_bytes
+        {
+            return Err("tokenizer seed exceeds its immutable claim resource envelope".into());
+        }
+        let mut terms = claim_terms;
+        terms.plan = plan;
+        terms.check_holds(material_until, producer_exit_after, panel_exit_after)?;
+        let funding = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or("tokenizer funding overflows")?;
+        if available_capital < funding {
+            return Err("tokenizer owner has not funded complete admitted work".into());
+        }
+        let seed_id = seed.seed_id_v1();
+        let court = PalwTokenizerTableStreamV1::new_with_operand_length_view_v1(
+            seed_id,
+            target,
+            view,
+            actual_job,
+            *id,
+            *present,
+            *length,
+            opening,
+            *operand_tokenizer_bytes,
+        )?;
+        let table = crate::palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u64;
+        let table_moves = table.div_ceil(65536).checked_add(2).ok_or("tokenizer table moves overflow")?;
+        let maximum_carrier_bytes = tokenizer_plan
+            .maximum_carrier_bytes
+            .checked_add(table)
+            .and_then(|v| v.checked_add(table_moves.checked_mul(5632)?))
+            .and_then(|v| v.checked_add(carrier_maximum))
+            .ok_or("tokenizer cumulative carrier bytes overflow")?;
+        let row = Self {
+            claim: seed.claim,
+            reserver: seed.reserver,
+            reserved_daa: seed.reserved_daa,
+            terms,
+            rent_paid: plan.rent_sompi,
+            deposit_locked: plan.deposit_sompi,
+            moves_used: 1,
+            carrier_bytes_used: borsh::to_vec(seed).map_err(|e| e.to_string())?.len() as u64,
+            seed_id,
+            execution_root: target.execution_root,
+            maximum_carrier_bytes,
+            court,
+        };
+        row.check()?;
+        Ok(row)
+    }
     #[allow(clippy::too_many_arguments)]
     pub fn admit_with_resolved_binding_v1(
         seed: &PalwConstraintStreamSeedV1,

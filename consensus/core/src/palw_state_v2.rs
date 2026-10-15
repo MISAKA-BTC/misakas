@@ -7198,6 +7198,12 @@ pub enum PalwConsensusObjectV2 {
     PublicCourtStreamMoveV1 {
         movement: Box<crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamMoveV1>,
     } = 167,
+    /// **(tag 168): a staged seed that names no binding** — a TIR required-family claim's Constraint or tokenizer stage, its
+    /// decode view derived natively from the claim's admitted TIR public header and registered class record. Owned by
+    /// `palw_staged_tir_route_v1` (below it the live build's undecodable payload, riding unjudged). **Tag 168.**
+    PublicCourtStreamOpenedNativeV1 {
+        seed: Box<crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1>,
+    } = 168,
     /// **(tag 159): a non-fused step convicted by its committed leaf hash** — the one-move court's kernel over the committed inputs
     /// and the accuser's own model rows, without the output preimage. A direct objective proof: it lands whatever session or court
     /// is open on the claim. Signed by the accuser's bond. **Tag 159.**
@@ -8084,6 +8090,26 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
                 unreachable!()
             };
             plan.prepayment_rent_v1().unwrap_or(u64::MAX)
+        }
+        PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed } => {
+            let config = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
+            match &seed.family {
+                crate::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::Constraint { .. } => {
+                    config.claim_terms(0, 4095, seed.vocab_size).map(|t| t.plan.rent_sompi).unwrap_or(u64::MAX)
+                }
+                crate::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::Tokenizer {
+                    tokenizer_key_events,
+                    operand_tokenizer_bytes,
+                    ..
+                } => crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(
+                    *operand_tokenizer_bytes,
+                    *tokenizer_key_events,
+                    config.prices,
+                )
+                .and_then(|p| p.court_envelope(seed.vocab_size, config.prices))
+                .map(|p| p.rent_sompi)
+                .unwrap_or(u64::MAX),
+            }
         }
         PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed } => {
             let config = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();

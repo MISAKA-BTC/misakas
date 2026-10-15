@@ -103,6 +103,38 @@ impl PalwDecodeViewV1 {
     }
 }
 
+/// **The decode view's twin of `palw_constrained_job_target_v1`**: the view (derived natively from
+/// the claim's admitted header) is the claim's own, and the accepted job reproduces its context.
+/// For a TIR view, the header's identity was recomputed natively at admission
+/// (`palw_tir_execution_root_v1` under the registered class), so no legacy identity rule applies.
+pub fn palw_constrained_job_target_view_v1(
+    target: &crate::palw_offence_attribution_v1::PalwOffenceTargetV1,
+    view: &PalwDecodeViewV1,
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+) -> Result<(), String> {
+    let ctx = &view.job_context;
+    if view.committed_execution_root != target.execution_root
+        || view.class_id != target.class_id
+        || target.lane != Some(crate::palw_offence_attribution_v1::PalwClaimSourceKindV1::FreePrompt)
+        || target.job_identity == Hash64::default()
+        || crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(ctx) != target.job_identity
+        || view.full_logits_trace_root != target.trace_root
+        || job.class_id != target.class_id
+        || job.executor_bond != target.executor_bond.0
+        || crate::palw_freeprompt_v3::fp_job_id_v3(job) != ctx.job_id
+        || crate::palw_fp_execution_v3::palw_fp_execution_seed_v3(job) != ctx.execution_seed
+        || job.tokenizer_id != ctx.tokenizer_id
+        || job.prompt_token_ids_hash != ctx.prompt_token_ids_hash
+        || job.prompt_tokens != ctx.declared_prefill_tokens
+        || job.max_context_tokens != ctx.max_context_tokens
+        || ctx.exact_decode_tokens == 0
+        || ctx.exact_decode_tokens > job.decode_token_limit
+    {
+        return Err("the decode view or job is not the claim's own constrained execution".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

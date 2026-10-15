@@ -394,7 +394,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::DisputeReservedV1 { .. } | PalwConsensusObjectV2::DisputeReleasedV1 { .. } | PalwConsensusObjectV2::DisputeReacquiredV1 { .. }
             | PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { .. } | PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { .. }
             | PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. } | PalwConsensusObjectV2::PublicCourtStreamLeafV1 { .. }
-            | PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } => Ok(()),
+            | PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } | PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { .. } => Ok(()),
         // LG14-B (tags 157–159): the legacy held DA objects ride at every height, refused nowhere at isolation (A-2 rule 5: the live
         // build cannot decode them); the fence, the signature, the bonds, the claim's roots and the units are the gate's and the fold's.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
@@ -1385,6 +1385,8 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::PublicCourtStreamOpenedV1 { .. } | O::PublicCourtStreamLeafV1 { .. } | O::PublicCourtStreamMoveV1 { .. } => {
             PalwLifecycleKindOwnerV1::Fence(F::StagedPublicCourtV1)
         }
+        // The TIR route's native seed (168).
+        O::PublicCourtStreamOpenedNativeV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::StagedTirRouteV1),
         // Lane LG14-A: the dispute reservation and its release (154, 155).
         O::DisputeReservedV1 { .. }
         | O::DisputeReleasedV1 { .. }
@@ -1533,6 +1535,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (165, "PublicCourtStreamOpenedV1", PalwLifecycleKindFenceV1::StagedPublicCourtV1),
     (166, "PublicCourtStreamLeafV1", PalwLifecycleKindFenceV1::StagedPublicCourtV1),
     (167, "PublicCourtStreamMoveV1", PalwLifecycleKindFenceV1::StagedPublicCourtV1),
+    (168, "PublicCourtStreamOpenedNativeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
 ];
 

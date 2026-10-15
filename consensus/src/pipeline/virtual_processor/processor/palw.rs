@@ -1129,6 +1129,45 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_float_pin_v1(&state, key, source, answerer)
     }
 
+    /// A TIR claim's native decode view, read only where the TIR route is in force at the snapshot.
+    #[allow(clippy::type_complexity)]
+    pub fn palw_staged_tir_view_v1_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        maximum_leaves: u64,
+    ) -> Result<
+        Option<(
+            kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1,
+            Box<kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1>,
+        )>,
+        String,
+    > {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let now = state.last_point().ok_or("TIR view snapshot has no accepted clock")?.daa_score;
+        if !self.palw_staged_public_court_v1.is_some_and(|f| f.is_active(now))
+            || !self.palw_staged_tir_route_v1.is_some_and(|f| f.is_active(now))
+        {
+            return Ok(None);
+        }
+        kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_tir_view_v1(&state, claim, maximum_leaves)
+    }
+
+    pub fn palw_staged_owned_native_seed_v1_impl(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_bundle_v1::PalwStagedNativeSeedContextV1>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let now = state.last_point().ok_or("native seed snapshot has no accepted clock")?.daa_score;
+        if !self.palw_staged_tir_route_v1.is_some_and(|f| f.is_active(now)) {
+            return Ok(None);
+        }
+        kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_owned_native_seed_v1(&state, key)
+    }
+
     pub fn palw_staged_flat_pin_v1_impl(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),

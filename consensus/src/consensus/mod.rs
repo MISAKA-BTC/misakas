@@ -2491,6 +2491,27 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_staged_float_pin_v1_impl(key, source, answerer)
     }
 
+    fn palw_staged_tir_view_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        maximum_leaves: u64,
+    ) -> Result<
+        Option<(
+            kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1,
+            Box<kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1>,
+        )>,
+        String,
+    > {
+        self.virtual_processor.palw_staged_tir_view_v1_impl(claim, maximum_leaves)
+    }
+
+    fn palw_staged_owned_native_seed_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_bundle_v1::PalwStagedNativeSeedContextV1>, String> {
+        self.virtual_processor.palw_staged_owned_native_seed_v1_impl(key)
+    }
+
     fn palw_staged_flat_pin_v1(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),

@@ -442,6 +442,7 @@ pub(super) fn apply_object(
         PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed } => palw_staged_court_fold_v1::open(builder, ctx, seed)?,
         PalwConsensusObjectV2::PublicCourtStreamLeafV1 { leaf } => palw_staged_court_fold_v1::leaf(builder, ctx, leaf)?,
         PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } => palw_staged_court_fold_v1::movement(builder, ctx, movement)?,
+        PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed } => palw_staged_court_fold_v1::open_native(builder, ctx, seed)?,
         PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration } => {
             palw_terminal_carriage_fold_v1::declare(builder, ctx, declaration)?;
         }

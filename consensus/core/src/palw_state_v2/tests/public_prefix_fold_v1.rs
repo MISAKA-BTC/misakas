@@ -846,6 +846,7 @@ fn flat_response_index_pages_literal_phase_deadlines_and_roundtrips_seed_journal
             inventory: None,
             selected: None,
             selected_context: None,
+            selected_native: None,
             flat: Some(Box::new(session).into()),
             flat_context: Some(
                 Box::new(PalwSelectedSourceContextV1 { binding: Box::new(binding.clone()), job: Box::new(accusation.job.clone()) })

@@ -164,16 +164,34 @@ impl PalwSelectedTiledEventV1 {
         coordinate: PalwSelectedEventCoordinateV1,
         maximum_leaves: u64,
     ) -> Result<Self, String> {
-        let vocab = binding.shape_profile.vocab_size as usize;
-        if binding.shape_profile.logits_scheme_id != crate::palw_step_refute::tiled_logits_scheme_id_v1()
-            || rows.len() != binding.job_context.exact_decode_tokens as usize
+        crate::palw_step_leg::verify_binding_v1(binding).map_err(|e| e.to_string())?;
+        Self::of_public_rows_view_v1(
+            &crate::palw_decode_view_v1::PalwDecodeViewV1::of_verified_binding_v1(binding),
+            rows,
+            generated,
+            coordinate,
+            maximum_leaves,
+        )
+    }
+    /// The producer/custodian helper over a decode view (a TIR claim's: its custodian projects
+    /// the TIR executor's committed logits rows). The verifier never receives the capture.
+    pub fn of_public_rows_view_v1(
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        rows: &[Vec<i32>],
+        generated: &[u32],
+        coordinate: PalwSelectedEventCoordinateV1,
+        maximum_leaves: u64,
+    ) -> Result<Self, String> {
+        let vocab = view.vocab_size as usize;
+        if !view.is_tiled_v1()
+            || rows.len() != view.job_context.exact_decode_tokens as usize
             || generated.len() != rows.len()
             || rows.iter().any(|row| row.len() != vocab)
             || coordinate.row as usize >= rows.len()
         {
             return Err("selected source capture is not the original tiled shape".into());
         }
-        let context = binding.job_context.context_hash();
+        let context = view.job_context.context_hash();
         let row_leaf = |r: u64| {
             crate::palw_step_refute::tiled_logits_row_root_v1(&context, r as u32, &rows[r as usize])
                 .expect("nonempty checked vocabulary")
@@ -210,7 +228,7 @@ impl PalwSelectedTiledEventV1 {
             .ok_or("selected source tile is outside original vocabulary")?;
         let selected =
             Self { generated_token_ids: generated.to_vec(), row_root, row_opening, tile_lanes: lanes.to_vec(), tile_opening };
-        selected.authenticate_v1(binding, coordinate, maximum_leaves)?;
+        selected.authenticate_view_v1(view, coordinate, maximum_leaves)?;
         Ok(selected)
     }
     pub fn check_shape_v1(&self) -> Result<(), String> {
@@ -311,6 +329,26 @@ impl PalwSelectedEventAnswerV1 {
         self.event.check_shape_v1()?;
         if borsh::object_length(self).map_err(|e| e.to_string())? > PALW_SELECTED_EVENT_CARRIER_MAX_V1 - 5632 {
             return Err("selected retained-profile source exceeds paid signed carrier".into());
+        }
+        Ok(())
+    }
+}
+
+/// **A TIR claim's selected answer** (behind `palw_staged_tir_route_v1`): no binding rides the
+/// carrier. The fold derives the decode view from the claim's admitted TIR public header and its
+/// registered class record, and authenticates `event` against that view only.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwSelectedEventNativeAnswerV1 {
+    pub answerer: PalwBondKeyV2,
+    pub demand_id: Hash64,
+    pub coordinate: PalwSelectedEventCoordinateV1,
+    pub event: PalwSelectedTiledEventV1,
+}
+impl PalwSelectedEventNativeAnswerV1 {
+    pub fn check_v1(&self) -> Result<(), String> {
+        self.event.check_shape_v1()?;
+        if borsh::object_length(self).map_err(|e| e.to_string())? > PALW_SELECTED_EVENT_CARRIER_MAX_V1 - 5632 {
+            return Err("native selected source exceeds paid signed carrier".into());
         }
         Ok(())
     }
@@ -547,6 +585,89 @@ mod tests {
             )
             .is_err()
         );
+    }
+    /// **G14, TIR lane, from public material only.** A TIR claim has no legacy binding: the fold
+    /// derives the decode view from the claim's admitted TIR public header and its registered class
+    /// record. The producer and its entire held Panel collude. Either they withhold — both are
+    /// returned to the native sanction fold at the original clock — or one answers, and a forged
+    /// tile never authenticates against the view while the committed one exposes that the
+    /// admitted `[` outranks the committed `[7`: the Constraint court seeded from the
+    /// authenticated event alone sees the beat. No step reads a capture, a vote or a local run.
+    #[test]
+    fn g14_tir_outside_verifier_convicts_from_the_native_view_under_full_collusion() {
+        let key = |n| PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(n), 0));
+        let case = crate::palw_decode_constraint_v1::tests::public_tir_constrained_case_for_tests_v1();
+        let ladder = 1u64 << 20;
+        let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(&case.header, &case.record, ladder).unwrap();
+        assert!(view.is_tiled_v1());
+        let (producer, panel, owner) = (key(1), key(2), key(9));
+        let custodians = BTreeSet::from([producer, panel]);
+        let open = || {
+            PalwSelectedEventSessionV1::new_with_span_v1(
+                Hash64::from_u64_word(7),
+                owner,
+                10,
+                Hash64::from_u64_word(8),
+                100,
+                200,
+                10,
+                custodians.clone(),
+            )
+            .unwrap()
+        };
+        let coordinate = PalwSelectedEventCoordinateV1 { row: case.position, tile: 0 };
+        // (1) Total withholding: both custodians are collected at the original clock.
+        let mut withheld = open();
+        withheld.demand_view_v1(11, &view, &PalwSelectedEventDemandV1 { coordinate }).unwrap();
+        let demand_id = withheld.requests[&coordinate].demand_id;
+        assert!(withheld.collect_v1(99, coordinate, demand_id).is_err());
+        assert_eq!(withheld.collect_v1(100, coordinate, demand_id).unwrap(), custodians);
+        // (2) The colluders answer: a forged tile is refused, the committed one authenticates.
+        let mut session = open();
+        session.demand_view_v1(11, &view, &PalwSelectedEventDemandV1 { coordinate }).unwrap();
+        let demand_id = session.requests[&coordinate].demand_id;
+        let event = PalwSelectedTiledEventV1::of_public_rows_view_v1(&view, &case.rows, &case.ids, coordinate, ladder).unwrap();
+        let mut forged = event.clone();
+        forged.tile_lanes[case.ids[0] as usize] += 1_000_000;
+        assert!(session.answer_event_view_v1(12, &view, panel, demand_id, coordinate, &forged, ladder).is_err());
+        session.answer_event_view_v1(12, &view, producer, demand_id, coordinate, &event, ladder).unwrap();
+        let authenticated = session.requests[&coordinate].event.clone().unwrap();
+        // The seed's pin is built from the authenticated event only (both lanes share tile 0).
+        let pin = crate::palw_step_refute::PalwTiledDecodePinV1 {
+            position: case.position,
+            generated_token_ids: authenticated.generated_token_ids.clone(),
+            row_root: authenticated.row_root,
+            row_opening: authenticated.row_opening.clone(),
+            committed_tile_lanes: authenticated.tile_lanes.clone(),
+            committed_opening: authenticated.tile_opening.clone(),
+            beat_tile_lanes: authenticated.tile_lanes.clone(),
+            beat_opening: authenticated.tile_opening.clone(),
+            beat_lane: case.beat,
+        };
+        let identity = borsh::to_vec(&case.header).unwrap();
+        let court = crate::palw_constraint_stream_court_v1::PalwConstraintStreamCourtV1::new_from_tiled_view_v1(
+            Hash64::from_u64_word(7),
+            owner,
+            10,
+            view.committed_execution_root,
+            &view,
+            &identity,
+            &case.job,
+            &pin,
+            None,
+            case.eog.ids.len() as u32,
+            &case.eog.opening,
+            ladder,
+            None,
+        )
+        .unwrap();
+        assert_eq!(court.selection_for_tests_v1(), (case.position, Some(case.beat), true));
+        // A header with a substituted trace root, or another class's record, derives no view at all.
+        let mut foreign = case.header.clone();
+        foreign.full_logits_trace_root = Hash64::from_u64_word(1);
+        assert!(crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(&foreign, &case.record, ladder).is_err());
+        let other = crate::palw_tir_admission_v1::PalwTirClassRecordV1::test_row_v1(Hash64::from_u64_word(2));
+        assert!(crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(&case.header, &other, ladder).is_err());
     }
     #[test]
     fn selected_source_decoder_rejects_unpaid_vector_before_allocation() {

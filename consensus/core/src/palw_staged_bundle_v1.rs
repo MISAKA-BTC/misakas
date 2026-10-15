@@ -428,15 +428,63 @@ pub struct PalwStagedSeedContextV1 {
     pub binding: Box<crate::palw_step_leg::PalwStepBindingV2>,
     pub job: Box<crate::palw_freeprompt_v3::PalwFreePromptJobV3>,
 }
+/// A TIR stage's admitted context (behind `palw_staged_tir_route_v1`): the native seed, the
+/// claim's admitted TIR public header (read from the native contract, never the carrier) and job.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwStagedNativeSeedContextV1 {
+    pub seed: Box<crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1>,
+    pub header: Box<crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1>,
+    pub job: Box<crate::palw_freeprompt_v3::PalwFreePromptJobV3>,
+}
+/// An opened stage's admitted context: a legacy seed with its resolved binding, or a native TIR
+/// seed with the claim's admitted header.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwStagedStageContextV1 {
+    Legacy(PalwStagedSeedContextV1),
+    Native(PalwStagedNativeSeedContextV1),
+}
+impl PalwStagedStageContextV1 {
+    pub fn seed_id_v1(&self) -> Hash64 {
+        match self {
+            Self::Legacy(c) => Hash64::from_bytes(c.seed.signing_message().try_into().expect("seed digest width")),
+            Self::Native(c) => c.seed.seed_id_v1(),
+        }
+    }
+    pub fn legacy_v1(&self) -> Option<&PalwStagedSeedContextV1> {
+        match self {
+            Self::Legacy(c) => Some(c),
+            Self::Native(_) => None,
+        }
+    }
+    pub fn native_v1(&self) -> Option<&PalwStagedNativeSeedContextV1> {
+        match self {
+            Self::Native(c) => Some(c),
+            Self::Legacy(_) => None,
+        }
+    }
+    pub fn job_v1(&self) -> &crate::palw_freeprompt_v3::PalwFreePromptJobV3 {
+        match self {
+            Self::Legacy(c) => &c.job,
+            Self::Native(c) => &c.job,
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwSelectedSourceContextV1 {
     pub binding: Box<crate::palw_step_leg::PalwStepBindingV2>,
     pub job: Box<crate::palw_freeprompt_v3::PalwFreePromptJobV3>,
 }
+/// The TIR selected source's retained context (behind `palw_staged_tir_route_v1`): the claim's
+/// admitted header and job; the fold re-derives the decode view from it and the class record.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwNativeSourceContextV1 {
+    pub header: Box<crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1>,
+    pub job: Box<crate::palw_freeprompt_v3::PalwFreePromptJobV3>,
+}
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedOpenedFamilyV1 {
     pub row: PalwStagedFamilyRowV1,
-    pub context: crate::palw_staged_court_state_v1::PalwSharedCourtV1<PalwStagedSeedContextV1>,
+    pub context: crate::palw_staged_court_state_v1::PalwSharedCourtV1<PalwStagedStageContextV1>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwOwnedStagedBundleV1 {
@@ -448,6 +496,8 @@ pub struct PalwOwnedStagedBundleV1 {
     pub inventory: Option<PalwTokenizerInventoryV1>,
     pub selected: Option<crate::palw_selected_event_source_v1::PalwSelectedEventSessionV1>,
     pub selected_context: Option<crate::palw_staged_court_state_v1::PalwSharedCourtV1<PalwSelectedSourceContextV1>>,
+    /// A TIR claim's selected source context (the session is `selected`); exclusive with `selected_context`.
+    pub selected_native: Option<crate::palw_staged_court_state_v1::PalwSharedCourtV1<PalwNativeSourceContextV1>>,
     pub flat: Option<
         crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintSourceSessionV1>,
     >,
@@ -524,10 +574,7 @@ impl PalwOwnedStagedBundleV1 {
             bundle_id: self.plan.id_v1(self.claim),
             plan: self.plan.clone(),
             active_index: self.active,
-            pending_seed: self
-                .opened
-                .get(pending)
-                .map(|stage| Hash64::from_bytes(stage.context.seed.signing_message().try_into().expect("64"))),
+            pending_seed: self.opened.get(pending).map(|stage| stage.context.seed_id_v1()),
             inventory: self.inventory.as_ref().map(|i| (i.offset, i.maximum_bytes, i.sealed, i.length_fault_v1())),
         }
     }
@@ -538,10 +585,18 @@ impl PalwOwnedStagedBundleV1 {
         self.active.and_then(|i| self.opened.get_mut(i as usize)).map(|s| &mut s.row.0)
     }
     pub fn seed_row_v1(&self, seed_id: Hash64) -> Option<&PalwStagedCourtRowV1> {
-        self.opened.iter().find(|s| s.context.seed.signing_message().as_slice() == seed_id.as_byte_slice()).map(|s| &s.row.0)
+        self.opened.iter().find(|s| s.context.seed_id_v1() == seed_id).map(|s| &s.row.0)
     }
+    /// The active stage's LEGACY seed (`None` for a native TIR stage: see [`Self::active_native_seed_v1`]).
     pub fn active_seed_v1(&self) -> Option<&crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1> {
-        self.active.and_then(|index| self.opened.get(index as usize)).map(|stage| stage.context.seed.as_ref())
+        self.active.and_then(|index| self.opened.get(index as usize)).and_then(|stage| stage.context.legacy_v1()).map(|c| c.seed.as_ref())
+    }
+    pub fn active_native_seed_v1(&self) -> Option<&PalwStagedNativeSeedContextV1> {
+        self.active.and_then(|index| self.opened.get(index as usize)).and_then(|stage| stage.context.native_v1())
+    }
+    /// The active stage's seed identity, legacy or native.
+    pub fn active_seed_id_v1(&self) -> Option<Hash64> {
+        self.active.and_then(|index| self.opened.get(index as usize)).map(|stage| stage.context.seed_id_v1())
     }
     pub fn inventory_fault_v1(&self) -> Result<Option<crate::palw_tokenizer_owned_court_v1::PalwTokenizerCourtFaultV1>, String> {
         self.check_v1()?;
@@ -559,7 +614,7 @@ impl PalwOwnedStagedBundleV1 {
         Ok(PalwStagedBundleCheckpointV1 {
             bundle_id: self.plan.id_v1(self.claim),
             active_index: self.active,
-            active_seed: self.active_seed_v1().map(|seed| Hash64::from_bytes(seed.signing_message().try_into().expect("64"))),
+            active_seed: self.active_seed_id_v1(),
             inventory: self.inventory.clone(),
             selected: self.selected.clone(),
             flat: self.flat.clone(),
@@ -686,7 +741,16 @@ impl PalwOwnedStagedBundleV1 {
                 return Err("bundle recovery substitutes paid original stage identity or horizon".into());
             }
         }
+        if self.selected_native.is_some() && self.selected_context.is_some() {
+            return Err("selected source retains both a legacy and a native original context".into());
+        }
+        if let Some(native) = &self.selected_native {
+            if self.selected.is_none() || native.header.committed_execution_root != self.execution_root {
+                return Err("native selected source changes literal paid frame or original execution".into());
+            }
+        }
         match (&self.selected, &self.selected_context) {
+            (Some(_), None) if self.selected_native.is_some() => {}
             (Some(selected), Some(context)) => {
                 if (selected.claim, selected.owner, selected.reserved_daa, selected.bundle_id)
                     != (self.claim, self.owner, self.reserved_daa, self.plan.id_v1(self.claim))
@@ -756,8 +820,6 @@ impl PalwOwnedStagedBundleV1 {
         }
         for (index, stage) in self.opened.iter().enumerate() {
             stage.row.0.check(&PalwStagedCourtKeyV1::Owner(self.claim, self.owner))?;
-            let seed = &stage.context.seed;
-            seed.check(90_000)?;
             let (row_terms, row_reserved, row_seed) = match &stage.row.0 {
                 PalwStagedCourtRowV1::Constraint(row) => (row.terms, row.reserved_daa, row.seed_id()),
                 PalwStagedCourtRowV1::Tokenizer(row) => (row.terms, row.reserved_daa, row.seed_id()),
@@ -766,17 +828,36 @@ impl PalwOwnedStagedBundleV1 {
                 _ => return Err("bundle retains an untyped or recursive child".into()),
             };
             if stage.row.family_v1() != Some(self.plan.stages[index].family)
-                || (seed.claim, seed.reserver, seed.reserved_daa) != (self.claim, self.owner, self.reserved_daa)
                 || row_reserved != self.reserved_daa
                 || row_terms != self.plan.stages[index].terms
-                || row_seed.as_byte_slice() != seed.signing_message().as_slice()
-                || stage.context.binding.committed_execution_root != seed.binding.committed_execution_root
-                || stage.context.binding.committed_execution_root != self.execution_root
-                || seed.resolved_binding_v1(stage.context.job.class_id, Some(&stage.context.binding.shape_profile))?
-                    != *stage.context.binding
-                || seed.job.as_deref().is_some_and(|j| j != stage.context.job.as_ref())
+                || row_seed != stage.context.seed_id_v1()
             {
                 return Err("opened family changes signed original context or required stage".into());
+            }
+            match stage.context.as_ref() {
+                PalwStagedStageContextV1::Legacy(context) => {
+                    let seed = &context.seed;
+                    seed.check(90_000)?;
+                    if (seed.claim, seed.reserver, seed.reserved_daa) != (self.claim, self.owner, self.reserved_daa)
+                        || context.binding.committed_execution_root != seed.binding.committed_execution_root
+                        || context.binding.committed_execution_root != self.execution_root
+                        || seed.resolved_binding_v1(context.job.class_id, Some(&context.binding.shape_profile))? != *context.binding
+                        || seed.job.as_deref().is_some_and(|j| j != context.job.as_ref())
+                    {
+                        return Err("opened family changes signed original context or required stage".into());
+                    }
+                }
+                PalwStagedStageContextV1::Native(context) => {
+                    let seed = &context.seed;
+                    seed.check(90_000)?;
+                    if (seed.claim, seed.reserver, seed.reserved_daa) != (self.claim, self.owner, self.reserved_daa)
+                        || context.header.committed_execution_root != self.execution_root
+                        || seed.view_identity != crate::palw_constraint_stream_carriage_v1::palw_native_view_identity_v1(&context.header)
+                        || seed.job.as_deref().is_some_and(|j| j != context.job.as_ref())
+                    {
+                        return Err("opened native family changes signed original header or required stage".into());
+                    }
+                }
             }
             if self.active.is_some_and(|active| index < active as usize) && !stage.row.honest_complete_v1()? {
                 return Err("bundle retired a family without rooted honest completion".into());

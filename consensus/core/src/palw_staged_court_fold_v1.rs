@@ -1283,11 +1283,11 @@ fn write_admitted_family_v1(
     job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
 ) -> Result<(), PalwStateV2Error> {
     let row = if let Some(mut bundle) = bundle {
-        let context = crate::palw_staged_bundle_v1::PalwStagedSeedContextV1 {
+        let context = crate::palw_staged_bundle_v1::PalwStagedStageContextV1::Legacy(crate::palw_staged_bundle_v1::PalwStagedSeedContextV1 {
             seed: Box::new(seed.clone()),
             binding: Box::new(binding.clone()),
             job: Box::new(job.clone()),
-        };
+        });
         bundle.opened.push(crate::palw_staged_bundle_v1::PalwStagedOpenedFamilyV1 {
             row: crate::palw_staged_bundle_v1::PalwStagedFamilyRowV1(row),
             context: Box::new(context).into(),
@@ -1350,6 +1350,9 @@ pub(super) fn movement(
         Action::FloatSourceOpen { .. } | Action::FloatSourceAnswer(_) | Action::FloatSourceNominate { .. } | Action::FloatSourceCollect
     ) {
         return float_control_v1(b, ctx, movement);
+    }
+    if matches!(movement.action, Action::NativeSelectedDemand { .. } | Action::NativeSelectedAnswer(_)) {
+        return native_selected_control_v1(b, ctx, movement);
     }
     if matches!(movement.action, Action::HistoryCustodyGrant { .. } | Action::HistoryRecovery { .. }) {
         return history_control_v1(b, ctx, movement);
@@ -1710,6 +1713,10 @@ fn selected_control_v1(
     let Some(PalwStagedCourtRowV1::OwnerBundle(mut bundle)) = b.state.staged_courts.get(&key).cloned() else {
         return Err(stage_refused(movement.claim, "selected source requires already prepaid owner frame"));
     };
+    // A TIR claim's selected source collects through its native context.
+    if bundle.selected_native.is_some() {
+        return native_selected_control_v1(b, ctx, movement);
+    }
     if movement.reserved_daa != bundle.reserved_daa
         || movement.seed_id != bundle.plan.id_v1(bundle.claim)
         || ctx.daa_score < bundle.plan.terms.accepted_daa
@@ -1828,6 +1835,272 @@ fn selected_control_v1(
     }
     Ok(())
 }
+/// **The TIR selected source** (behind `palw_staged_tir_route_v1`): the legacy selected source's
+/// session, clocks and literal custody, with no binding on any carrier. The decode view is derived
+/// here, from the claim's admitted TIR public header and its registered class record, at every move.
+fn native_selected_control_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    movement: &crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamMoveV1,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1 as Action;
+    // Defence in depth: below its fence the form never reaches the fold (`crate::palw_staged_route_forms_v1`).
+    if b.extras.staged_public_court.is_none() || !b.extras.staged_tir_route_active {
+        return Err(PalwStateV2Error::ObjectiveOffenceDormant);
+    }
+    movement.check().map_err(|e| stage_refused(movement.claim, e))?;
+    let key = PalwStagedCourtKeyV1::Owner(movement.claim, movement.reserver);
+    let Some(PalwStagedCourtRowV1::OwnerBundle(mut bundle)) = b.state.staged_courts.get(&key).cloned() else {
+        return Err(stage_refused(movement.claim, "native selected source requires already prepaid owner frame"));
+    };
+    if movement.reserved_daa != bundle.reserved_daa
+        || movement.seed_id != bundle.plan.id_v1(bundle.claim)
+        || ctx.daa_score < bundle.plan.terms.accepted_daa
+        || ctx.daa_score >= bundle.plan.terms.collect_until_daa
+    {
+        return Err(stage_refused(movement.claim, "native selected source changes original paid frame identity or clock"));
+    }
+    let initial = bundle.selected.is_none();
+    let old = PalwStagedCourtRowV1::OwnerBundle(bundle.clone()).checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
+    let old_index = selected_response_index_rows_v1(&PalwStagedCourtRowV1::OwnerBundle(bundle.clone()));
+    let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(&b.state, &movement.claim)
+        .ok_or(PalwStateV2Error::MissingClaim(movement.claim))?;
+    let ladder = b.state.class_step_ladder_v1(
+        &target.class_id,
+        b.extras.held_context_ladder.or(b.extras.shard_court_ladder).ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?,
+    );
+    let (view, header) = crate::palw_staged_court_state_v1::palw_staged_tir_view_v1(&b.state, movement.claim, ladder)
+        .map_err(|e| stage_refused(movement.claim, e))?
+        .ok_or_else(|| stage_refused(movement.claim, "native selected source serves a TIR claim only"))?;
+    if !view.is_tiled_v1() {
+        return Err(stage_refused(movement.claim, "native selected source needs the claim's tiled TIR logits"));
+    }
+    if initial {
+        if !matches!(movement.action, Action::NativeSelectedDemand { .. }) {
+            return Err(stage_refused(movement.claim, "native selected answer/collect lacks accepted literal demand"));
+        }
+        let next = bundle.active.map_or(0, |n| n as usize + 1);
+        if bundle.opened.len() != next
+            || bundle.flat.is_some()
+            || bundle.float.is_some()
+            || bundle.active.is_some_and(|n| !bundle.opened[n as usize].row.honest_complete_v1().unwrap_or(false))
+            || bundle.inventory.as_ref().is_some_and(|i| !i.sealed || i.length_fault_v1())
+        {
+            return Err(stage_refused(movement.claim, "native selected acquisition cannot bypass honest predecessor or initial EOF intake"));
+        }
+        let progress =
+            crate::palw_staged_court_state_v1::palw_staged_selected_events_v1(&b.state, (movement.claim, movement.reserver))
+                .map_err(|e| stage_refused(movement.claim, e))?
+                .ok_or_else(|| stage_refused(movement.claim, "native selected source is not the next required native-priced family"))?;
+        let original = b
+            .state
+            .staged_original_job_v1(movement.claim)
+            .map_err(|e| stage_refused(movement.claim, e))?
+            .ok_or_else(|| stage_refused(movement.claim, "native selected source accepted original job absent"))?;
+        crate::palw_decode_view_v1::palw_constrained_job_target_view_v1(&target, &view, &original.job)
+            .map_err(|e| stage_refused(movement.claim, e))?;
+        if !original.job.is_constraint() {
+            return Err(stage_refused(movement.claim, "native selected source serves a constrained job only"));
+        }
+        bundle.selected = Some(progress.session);
+        bundle.selected_native = Some(
+            Box::new(crate::palw_staged_bundle_v1::PalwNativeSourceContextV1 { header, job: Box::new(original.job) }).into(),
+        );
+    } else if bundle.selected_native.as_ref().is_none_or(|context| *context.header != *header) {
+        return Err(stage_refused(movement.claim, "native selected movement substitutes the claim's admitted header"));
+    }
+    let session =
+        bundle.selected.as_mut().ok_or_else(|| stage_refused(movement.claim, "native selected source session disappeared"))?;
+    let unpaid = match &movement.action {
+        Action::NativeSelectedDemand { demand } => {
+            session.demand_view_v1(ctx.daa_score, &view, demand).map_err(|e| stage_refused(movement.claim, e))?;
+            None
+        }
+        Action::NativeSelectedAnswer(answer) => {
+            answer.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
+            session
+                .answer_event_view_v1(
+                    ctx.daa_score,
+                    &view,
+                    answer.answerer,
+                    answer.demand_id,
+                    answer.coordinate,
+                    &answer.event,
+                    ladder,
+                )
+                .map_err(|e| stage_refused(movement.claim, e))?;
+            None
+        }
+        Action::SelectedEventCollect { coordinate, demand_id } => {
+            Some(session.collect_v1(ctx.daa_score, *coordinate, *demand_id).map_err(|e| stage_refused(movement.claim, e))?)
+        }
+        _ => return Err(stage_refused(movement.claim, "not a native selected source action")),
+    };
+    bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
+    if let Some(unpaid) = unpaid.filter(|set| !set.is_empty()) {
+        let claim = b.state.claim(&movement.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(movement.claim))?;
+        b.staged_selected_default_charge_v1(ctx, movement.claim, &claim, target.executor_bond, &unpaid, movement.reserver)?;
+    }
+    let row = PalwStagedCourtRowV1::OwnerBundle(bundle);
+    if initial {
+        b.write_staged_row_v1(key, Some(row));
+    } else {
+        let new = row.checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
+        let new_index = selected_response_index_rows_v1(&row);
+        b.state.staged_courts.insert(key, row);
+        update_selected_response_indices_v1(&mut b.state, old_index, new_index);
+        b.entries.push(PalwDeltaEntryV2::StagedCourtMove { key: (movement.claim, movement.reserver), old, new });
+    }
+    Ok(())
+}
+
+/// **A TIR claim's stage seed** (tag 168, behind `palw_staged_tir_route_v1`): the Constraint or
+/// tokenizer family of a prepaid required-family bundle, admitted over the decode view derived
+/// from the claim's admitted TIR public header and registered class record. The seed signs that
+/// header's identity; nothing on the carrier is a binding.
+pub(super) fn open_native(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    seed: &crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1 as NativeFamily;
+    use crate::palw_staged_bundle_v1::PalwStagedFamilyV1 as Family;
+    if b.extras.staged_public_court.is_none() || !b.extras.staged_tir_route_active {
+        return Err(PalwStateV2Error::ObjectiveOffenceDormant);
+    }
+    seed.check(90_000).map_err(|e| stage_refused(seed.claim, e))?;
+    let key = PalwStagedCourtKeyV1::Owner(seed.claim, seed.reserver);
+    let Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) = b.state.staged_courts.get(&key).cloned() else {
+        return Err(stage_refused(seed.claim, "a native seed requires its prepaid required-family bundle"));
+    };
+    bundle.check_v1().map_err(|e| stage_refused(seed.claim, e))?;
+    if seed.reserved_daa != bundle.reserved_daa
+        || ctx.daa_score < bundle.plan.terms.accepted_daa
+        || ctx.daa_score >= bundle.plan.terms.stream_until_daa
+        || ctx.daa_score >= bundle.plan.terms.material_until_daa
+        || bundle.opened.len() >= bundle.plan.stages.len()
+        || bundle.opened.len() != bundle.active.map_or(0, |n| n as usize + 1)
+        || bundle.active.is_some_and(|n| !bundle.opened[n as usize].row.honest_complete_v1().unwrap_or(false))
+        || bundle.inventory.as_ref().is_some_and(|intake| !intake.sealed || intake.length_fault_v1())
+    {
+        return Err(stage_refused(seed.claim, "native seed requires an honest completed predecessor, intake and the paid frame clock"));
+    }
+    let family = match &seed.family {
+        NativeFamily::Constraint { .. } => Family::Constraint,
+        NativeFamily::Tokenizer { .. } => Family::Tokenizer,
+    };
+    let next = bundle.plan.stages[bundle.opened.len()].clone();
+    if next.family != family {
+        return Err(stage_refused(seed.claim, "native seed substitutes required family"));
+    }
+    let mut contract = b
+        .state
+        .staged_claim_contract_v1(&seed.claim)
+        .ok_or_else(|| stage_refused(seed.claim, "native seed lacks original claim contract"))?
+        .clone();
+    contract.terms = next.terms;
+    if ctx.daa_score >= contract.terms.open_until_daa || contract.panel.is_empty() {
+        return Err(stage_refused(seed.claim, "native seed is after its opening deadline or has no bound Panel"));
+    }
+    let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(&b.state, &seed.claim)
+        .ok_or(PalwStateV2Error::MissingClaim(seed.claim))?;
+    let ladder = b.state.class_step_ladder_v1(
+        &target.class_id,
+        b.extras.held_context_ladder.or(b.extras.shard_court_ladder).ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?,
+    );
+    let (view, header) = crate::palw_staged_court_state_v1::palw_staged_tir_view_v1(&b.state, seed.claim, ladder)
+        .map_err(|e| stage_refused(seed.claim, e))?
+        .ok_or_else(|| stage_refused(seed.claim, "a native seed serves a TIR claim only"))?;
+    if seed.view_identity != crate::palw_constraint_stream_carriage_v1::palw_native_view_identity_v1(&header)
+        || seed.vocab_size != view.vocab_size
+    {
+        return Err(stage_refused(seed.claim, "native seed signs another header or vocabulary than the claim's admitted one"));
+    }
+    let original = b
+        .state
+        .staged_original_job_v1(seed.claim)
+        .map_err(|e| stage_refused(seed.claim, e))?
+        .ok_or_else(|| stage_refused(seed.claim, "native seed requires the accepted original public FP job"))?;
+    if seed.job.as_deref().is_some_and(|j| *j != original.job) {
+        return Err(stage_refused(seed.claim, "native seed changes accepted original FP job"));
+    }
+    crate::palw_decode_view_v1::palw_constrained_job_target_view_v1(&target, &view, &original.job)
+        .map_err(|e| stage_refused(seed.claim, e))?;
+    let config = b.extras.staged_public_court.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
+    let funded = contract
+        .terms
+        .plan
+        .rent_sompi
+        .checked_add(contract.terms.plan.deposit_sompi)
+        .ok_or(PalwStateV2Error::Overflow("native staged funding"))?;
+    let exits = vec![contract.terms.bond_exit_after_daa; contract.panel.len()];
+    let retention = b.state.claim(&seed.claim).ok_or(PalwStateV2Error::MissingClaim(seed.claim))?.trace_retention_daa;
+    let row = match family {
+        Family::Constraint => {
+            let actual = crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1::derive(4095, view.vocab_size, config.prices)
+                .map_err(|e| stage_refused(seed.claim, e))?;
+            frozen_or_extended_terms_v1(&contract.terms, actual, ctx.daa_score, true).map_err(|e| stage_refused(seed.claim, e))?;
+            let identity = borsh::to_vec(header.as_ref()).map_err(|e| stage_refused(seed.claim, e.to_string()))?;
+            PalwStagedCourtRowV1::Constraint(
+                Box::new(
+                    crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1::admit_native_view_v1(
+                        seed,
+                        &original.job,
+                        target.execution_root,
+                        contract.terms,
+                        ctx.daa_score,
+                        funded,
+                        b.extras.terminal_evidence_max_bytes.unwrap_or(100_000),
+                        ladder,
+                        retention,
+                        contract.terms.bond_exit_after_daa,
+                        &exits,
+                        &view,
+                        &identity,
+                    )
+                    .map_err(|e| stage_refused(seed.claim, e))?,
+                )
+                .into(),
+            )
+        }
+        _ => PalwStagedCourtRowV1::Tokenizer(
+            Box::new(
+                crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1::admit_native_view_v1(
+                    seed,
+                    &original.job,
+                    &target,
+                    &view,
+                    contract.terms,
+                    config.prices,
+                    ctx.daa_score,
+                    funded,
+                    b.extras.terminal_evidence_max_bytes.unwrap_or(100_000),
+                    retention,
+                    contract.terms.bond_exit_after_daa,
+                    &exits,
+                )
+                .map_err(|e| stage_refused(seed.claim, e))?,
+            )
+            .into(),
+        ),
+    };
+    let mut bundle = bundle;
+    bundle.opened.push(crate::palw_staged_bundle_v1::PalwStagedOpenedFamilyV1 {
+        row: crate::palw_staged_bundle_v1::PalwStagedFamilyRowV1(row),
+        context: Box::new(crate::palw_staged_bundle_v1::PalwStagedStageContextV1::Native(
+            crate::palw_staged_bundle_v1::PalwStagedNativeSeedContextV1 {
+                seed: Box::new(seed.clone()),
+                header,
+                job: Box::new(original.job),
+            },
+        ))
+        .into(),
+    });
+    bundle.check_v1().map_err(|e| stage_refused(seed.claim, e))?;
+    b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(bundle)));
+    Ok(())
+}
+
 fn flat_control_v1(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -2231,6 +2504,7 @@ fn bundle_control_v1(
             inventory,
             selected: None,
             selected_context: None,
+            selected_native: None,
             flat: None,
             flat_context: None,
             float: None,
@@ -2285,7 +2559,7 @@ fn bundle_control_v1(
             let stage =
                 bundle.opened.get(next).ok_or_else(|| stage_refused(movement.claim, "activation has no signed pending child"))?;
             if *previous_seed != previous
-                || stage.context.seed.signing_message().as_slice() != next_seed.as_byte_slice()
+                || stage.context.seed_id_v1() != *next_seed
                 || bundle.active.is_some_and(|n| !bundle.opened[n as usize].row.honest_complete_v1().unwrap_or(false))
                 || ctx.daa_score >= bundle.plan.stages[next].terms.open_until_daa
             {

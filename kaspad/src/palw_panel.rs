@@ -15059,6 +15059,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. } => "PublicCourtStreamOpenedV1",
         PalwConsensusObjectV2::PublicCourtStreamLeafV1 { .. } => "PublicCourtStreamLeafV1",
         PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } => "PublicCourtStreamMoveV1",
+        PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { .. } => "PublicCourtStreamOpenedNativeV1",
         PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         PalwConsensusObjectV2::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         PalwConsensusObjectV2::VerificationVertexV1 { .. } => "VerificationVertexV1",

@@ -1215,6 +1215,24 @@ pub trait ConsensusApi: Send + Sync {
         Err("staged Float32 authenticated reader unavailable".into())
     }
 
+    fn palw_staged_tir_view_v1(
+        &self,
+        _claim: crate::Hash64,
+        _maximum_leaves: u64,
+    ) -> Result<
+        Option<(crate::palw_decode_view_v1::PalwDecodeViewV1, Box<crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1>)>,
+        String,
+    > {
+        Err("staged TIR decode view reader unavailable".into())
+    }
+
+    fn palw_staged_owned_native_seed_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_staged_bundle_v1::PalwStagedNativeSeedContextV1>, String> {
+        Err("staged native seed reader unavailable".into())
+    }
+
     fn palw_staged_resolved_public_context_v1(
         &self,
         _claim: crate::Hash64,

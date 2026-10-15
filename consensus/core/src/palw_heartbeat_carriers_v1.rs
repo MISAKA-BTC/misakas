@@ -119,7 +119,10 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         O::HeldLeafChallengeDeclared { .. } => true,
         O::ObjectiveEvidenceDeclaredV1 { .. } | O::ObjectiveEvidenceChunkV1 { .. } => true,
         // Owned court continuation is checked by its prospective fence, signature and rent.
-        O::PublicCourtStreamOpenedV1 { .. } | O::PublicCourtStreamLeafV1 { .. } | O::PublicCourtStreamMoveV1 { .. } => true,
+        O::PublicCourtStreamOpenedV1 { .. }
+        | O::PublicCourtStreamLeafV1 { .. }
+        | O::PublicCourtStreamMoveV1 { .. }
+        | O::PublicCourtStreamOpenedNativeV1 { .. } => true,
         O::BondRegistered { .. }
         | O::BondCapabilityDeclared { .. }
         | O::BondRetireRequested { .. }

@@ -3643,6 +3643,41 @@ impl VirtualStateProcessor {
                         return Err("staged move is not signed by its literal reserver".into());
                     }
                 }
+                Obj::PublicCourtStreamOpenedNativeV1 { seed } => {
+                    use kaspa_consensus_core::palw_constraint_stream_carriage_v1 as stage;
+                    // A-2: below its owning fence (`palw_staged_tir_route_v1`, in force only with the staged court) the kind
+                    // rides unjudged, as every build without the route reads it.
+                    if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score)
+                        || !self.palw_staged_public_court_v1.is_some_and(|activation| activation.is_active(point.daa_score))
+                    {
+                        continue;
+                    }
+                    let court = self.palw_court_params_v2.as_ref().ok_or("staged court needs V2 carrier parameters")?;
+                    seed.check(court.max_close_bytes())?;
+                    let owner = state.bond(&seed.reserver).ok_or("staged owner has no registered bond")?;
+                    // A native seed is always a stage of a prepaid required-family bundle.
+                    let authorized = match state.staged_owned_row_v1(seed.claim, seed.reserver) {
+                        Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::OwnerBundle(bundle)) => {
+                            bundle.reserved_daa == seed.reserved_daa
+                                && bundle.opened.len() < bundle.plan.stages.len()
+                                && bundle.opened.len() == bundle.active.map_or(0, |n| n as usize + 1)
+                                && point.daa_score >= bundle.plan.terms.accepted_daa
+                                && point.daa_score < bundle.plan.stages[bundle.opened.len()].terms.open_until_daa
+                        }
+                        _ => false,
+                    };
+                    if !authorized || !matches!(owner.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                        return Err("native staged seed changes its paid bundle frame or owner is inactive".into());
+                    }
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &owner.pubkey,
+                        &seed.signing_message(),
+                        &seed.signature,
+                        stage::PALW_CONSTRAINT_STREAM_CONTEXT_V1,
+                    ) {
+                        return Err("native staged seed is not signed by its literal reserver".into());
+                    }
+                }
                 Obj::PublicCourtStreamLeafV1 { leaf } => {
                     use kaspa_consensus_core::palw_constraint_stream_carriage_v1 as stage;
                     // A-2: below its owning fence (`palw_staged_public_court_v1`) the kind rides unjudged, as int-12 reads it.
@@ -3753,6 +3788,8 @@ impl VirtualStateProcessor {
                                             | stage::PalwConstraintStreamActionV1::SelectedEventDemand { .. }
                                             | stage::PalwConstraintStreamActionV1::SelectedEventAnswer(_)
                                             | stage::PalwConstraintStreamActionV1::SelectedEventCollect { .. }
+                                            | stage::PalwConstraintStreamActionV1::NativeSelectedDemand { .. }
+                                            | stage::PalwConstraintStreamActionV1::NativeSelectedAnswer(_)
                                             | stage::PalwConstraintStreamActionV1::FlatSourceOpen { .. }
                                             | stage::PalwConstraintStreamActionV1::FlatSourceAnswer(_)
                                             | stage::PalwConstraintStreamActionV1::FlatSourceNominate { .. }
@@ -3789,7 +3826,9 @@ impl VirtualStateProcessor {
                                         (
                                             stage::PalwConstraintStreamActionV1::SelectedEventDemand { .. }
                                             | stage::PalwConstraintStreamActionV1::SelectedEventAnswer(_)
-                                            | stage::PalwConstraintStreamActionV1::SelectedEventCollect { .. },
+                                            | stage::PalwConstraintStreamActionV1::SelectedEventCollect { .. }
+                                            | stage::PalwConstraintStreamActionV1::NativeSelectedDemand { .. }
+                                            | stage::PalwConstraintStreamActionV1::NativeSelectedAnswer(_),
                                             Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::OwnerBundle(
                                                 bundle,
                                             )),
