@@ -38,8 +38,9 @@ before it reaches `main`.
 | 0013 | Resource-bounded tools: conformance/resume, identity, distinct model capital and allocation evidence; fetch telemetry stays off-chain | Revised Draft / deferred where applicable, 2026-10-10後続改定 — ADR177 economics/allocation/implementation gates open; old runtime/tests retain scope; no activation | [0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md](0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md) |
 | 0014 | Conditional public-verifier prosecution; §16 model-acquisition non-interference, distinct miner capital, coinbase allocation; MISAKA Torrent / Seeder rewards / FPR abolished | Revised Draft / deferred where applicable, 2026-10-10後続改定 — ADR177 economics/allocation/implementation gates open; old runtime/tests retain scope; no activation | [0014-panel-independent-fraud-prosecution.md](0014-panel-independent-fraud-prosecution.md) |
 | 0015 | Deferred Panel=0: bond/time Q/B/R/F budgets, capacity subdivision and §8.5 model-bond coinbase allocation; no acquisition consensus | Revised Draft / deferred where applicable, 2026-10-10後続改定 — ADR177 economics/allocation/implementation gates open; old runtime/tests retain scope; no activation | [0015-panel-free-permissionless-verification.md](0015-panel-free-permissionless-verification.md) |
+| 0017 | Model eligibility: registration free, influence bounded — Registered / Probation / Eligible / Lapsed; promotion and renewal by commit-then-draw stake-drawn verifiers (m-of-k); subsidy, reward-bearing blocks and Final weight gated separately; the mandatory 300M attack | Draft, 2026-10-15 — implemented, dormant, unverified (fence `palw_model_eligibility_v1`, kernel inner 74/75, aux 131); values unapproved; no activation | [0017-model-eligibility-examination-and-renewal.md](0017-model-eligibility-examination-and-renewal.md) (branch `integ/rfc0017-model-eligibility`) |
 
-**Next free number: RFC-0016.**
+**Next free number: RFC-0018.** (RFC-0016 is not in this tree: it is treated as reserved by a branch not yet merged here.)
 
 ## Model acquisition non-interference and model-bond allocation — 2026-10-10後続改定
 
