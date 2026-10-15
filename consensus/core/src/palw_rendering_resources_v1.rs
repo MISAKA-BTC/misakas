@@ -42,6 +42,11 @@ fn narrow(value: u128) -> Result<u64, String> {
     u64::try_from(value).map_err(|_| "rendering resource terms exceed the platform's exact u64 envelope".into())
 }
 impl PalwRenderingResourcePlanV1 {
+    /// Every independently priced dimension must fit. Geometry fields are
+    /// capacities here; the native seed/job checks separately fix their identity.
+    pub fn covers_v1(&self, execution: Self) -> bool {
+        self.cover(execution) == *self
+    }
     /// Prefix length and vocab come from the authenticated binding/profile, never a declaration.
     /// Conservative bound allows all-vocabulary work. The refutation court itself needs only
     /// nominated witness/beat lanes; this helper does not implement an all-vocabulary census.
@@ -141,6 +146,30 @@ impl PalwRenderingResourcePlanV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn allocation_coverage_checks_every_geometry_work_capital_and_memory_dimension() {
+        let plan = PalwRenderingResourcePlanV1::derive(4, 17, prices()).unwrap();
+        assert!(plan.covers_v1(plan));
+        macro_rules! reject_deficit {($($field:ident),+ $(,)?)=>{$(
+            let mut short=plan;short.$field-=1;
+            assert!(!short.covers_v1(plan),"{} is not an optional allocation dimension",stringify!($field));
+        )+};}
+        reject_deficit!(
+            prefix_tokens,
+            vocab,
+            maximum_stream_bytes,
+            maximum_stream_leaves,
+            maximum_eog_bytes,
+            maximum_moves,
+            maximum_parser_steps,
+            maximum_blake_blocks,
+            inclusion_daa,
+            rent_sompi,
+            deposit_sompi,
+            row_bytes,
+            resident_ram_bytes
+        );
+    }
     fn prices() -> PalwRenderingResourcePricesV1 {
         PalwRenderingResourcePricesV1 {
             inclusion_margin_daa: 4,

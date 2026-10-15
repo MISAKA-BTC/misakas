@@ -75,6 +75,40 @@ pub struct PalwTirReplayV1 {
     pub output_root: Hash64,
 }
 
+/// Operational resources for one independent original-job TIR replay. The caller
+/// reserves RAM and disk BEFORE open; these are not a native admission certificate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirOwnStepSourceNeedV1 {
+    pub resident_ram_bytes: u64,
+    pub disk_bytes: u64,
+    pub leaf_count: u64,
+}
+
+/// Roots actually computed by the independent replay, never copied from the
+/// accused commitment. Header identity/context remain those of the original job.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwTirOwnStepSourceInfoV1 {
+    pub header: crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    pub generated_ids: Vec<u32>,
+    pub output_root: Hash64,
+    /// Only the original tiled scheme has a row-root Merkle tree.
+    pub rows_root: Option<Hash64>,
+}
+
+/// Disposable own computation used for search, not an authentication credential
+/// for accused inputs. Level zero nodes include the native indexed-leaf wrapper;
+/// leaf_hashes returns raw original leaf hashes. Every disk read is checked under
+/// this source's computed root. No method reads a producer capture.
+pub trait PalwTirOwnStepSourceV1: Send + Sync {
+    fn info_v1(&self) -> &PalwTirOwnStepSourceInfoV1;
+    fn node_v1(&self, level: u8, index: u64) -> Result<Hash64, String>;
+    /// Descend min(level,10) levels, at most 1024 entries, preserving odd promotion.
+    fn frontier_v1(&self, level: u8, index: u64) -> Result<Vec<Hash64>, String>;
+    fn leaf_hashes_v1(&self, first: u64, count: u32) -> Result<Vec<Hash64>, String>;
+    fn row_node_v1(&self, level: u8, index: u64) -> Result<Hash64, String>;
+    fn row_frontier_v1(&self, level: u8, index: u64) -> Result<Vec<Hash64>, String>;
+}
+
 /// The roots an attempt carries, and the bytes that answer for them.
 ///
 /// Family-agnostic on purpose: a block header commits these four values and does not know which
@@ -632,6 +666,51 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _prompt_token_ids: &[u32],
     ) -> Result<PalwTirReplayV1, String> {
         Err("this family has no TIR FP execution backend".into())
+    }
+
+    fn tir_own_step_source_need_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_token_ids: &[u32],
+    ) -> Result<PalwTirOwnStepSourceNeedV1, String> {
+        Err("this family has no independent TIR step source".into())
+    }
+
+    /// One full original-job replay, with bounded working RAM and a disposable
+    /// disk tree. Restart reruns the public computation, never trusts a disk cursor.
+    fn open_tir_own_step_source_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_token_ids: &[u32],
+        _cache_directory: &std::path::Path,
+    ) -> Result<std::sync::Arc<dyn PalwTirOwnStepSourceV1>, String> {
+        Err("this family has no independent TIR step source".into())
+    }
+
+    fn tir_logits_step_leaf_index_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _row: u32,
+        _lane: u64,
+    ) -> Result<u64, String> {
+        Err("this family has no original TIR logits step coordinate".into())
+    }
+
+    /// Build the existing objective TIR kernel's proof from authenticated PUBLIC
+    /// committed ranges and registered parameters. No producer capture/own-root
+    /// substitution. Missing operands remain unavailable, never an honest verdict.
+    fn build_tir_public_cone_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _prompt_token_ids: &[u32],
+        _trace: Option<&crate::palw_step_refute::PalwTiledDecodeTokensV1>,
+        _runs: &[crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        _leaf_index: u64,
+        _rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
+    ) -> Result<crate::palw_court_v2::PalwCourtVerdictProofV2, String> {
+        Err("this family has no public sparse TIR arithmetic builder".into())
     }
 
     /// **One committed TIR step leaf** (the TIR prefix-state source behind

@@ -92,14 +92,59 @@ localization path, all-family maximum-size execution, every recovery mode or
 population-wide deadline/resource guarantees are complete. The new regression
 tests have not been executed.
 
-### Next Source Blocker
+### Allocation Repair (Unverified)
 
 The prospective PublicPrefix stage currently has inconsistent budget identity:
 `palw_staged_preclaim_v1` adds history recovery to the frozen stage allocation,
 but `PalwOwnedPublicPrefixCourtV1::admit` replaces `terms.plan` with the smaller
 actual public-acquisition envelope. `PalwStagedBundleV1::check` requires exact
 equality between the opened child's terms and its frozen stage descriptor.
-Thus the full prospective bundle-opening path is not established by the
-accepted-state DA fixtures above. The next repair must preserve the immutable
-paid allocation while keeping actual execution counters bounded, without
-discarding recovery costs, loosening the descriptor check or reducing scope.
+The continuation adds a dedicated Bundle constructor which preserves the exact
+allocated terms and clocks while retaining the actual execution plan separately.
+All 13 resource dimensions must fit, including rent, deposit, resident memory,
+stored bytes and hashing work. The strict Bundle descriptor comparison remains
+unchanged, and the fold supplies the full frozen stage funding. Regression
+source follows a prepared prospective ClaimBundle through BundleOpen, child
+opening, activation and a real source demand for 0/1/5 qualified Panel
+custodians, with funding, descriptor-tamper, serialization and rollback cases.
+This is unexecuted source, not a passed original-carrier admission or node test.
+
+### TIR Continuation Boundaries
+
+- The typed arithmetic scheduler descends authenticated original step frontiers
+  without converting them to legacy bindings or using a Panel seat's reach cap.
+  Agreement on the step tree is explicitly not global honesty when trace/output
+  or public semantics remain unproven.
+- Explicit tag-156 reacquisition now accepts native typed TIR step leaves,
+  frontiers, runs and row nodes after their historical answered bit survives
+  local material loss. It preserves the original reservation, next nonce,
+  deadline, capital and TIR2/Shard fences; it does not reset the session budget.
+  Two native fold regressions and seven scheduler tests are source only.
+- An independent own-model source streams the original job into disposable
+  anonymous disk Merkle trees instead of retaining every step hash, selecting
+  row and executor checkpoint in RAM. Each later read authenticates under its
+  computed root. It uses the original constraint/V4/sampled selector and quotes
+  checked working RAM and exact disk space before opening. Four source tests
+  cover native odd-promotion roots, corruption/cleanup, Flat/Tiled trace codecs
+  and streamed/materialized execution agreement. The quote is operational, not
+  yet the native paid acquisition plan; restart requires a priced full rerun.
+- The sparse public-run evidence entry point rehydrates the original binding
+  from registered code, authenticates bounded ranges and invokes the existing
+  objective TIR cone kernel without a producer capture. This entry point is not
+  yet connected to the runtime filer and has no executed regression. Missing
+  operands or absent trace pins cannot be promoted to an Honest verdict.
+- TIR prefix responders now select a raw retained TIR capture or the inner range
+  of an exact-job FPC1 envelope. Metadata, snapshot, original-file decoding and
+  queued carrier memory are reserved before use. This corrects a real codec and
+  unaccounted-memory path; whole local capture decoding still needs its declared
+  host capacity and is not a maximum-profile streaming proof.
+- Existing reserved non-seat typed DA transport buys 34 sessions per reservation
+  (`PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1`), distinct from DA-8's unreserved
+  shared 16-session budget. The old reserved-path error text incorrectly said 16.
+  TIR units cannot use legacy 64-lane joins. The prospective paid TIR arithmetic
+  acquisition envelope, bounded wide trace/ID sources, and objective terminal
+  bridge must be connected before calling general TIR prosecution complete.
+- Native `TirRowNode` level 0 carries every row tile hash and generated IDs, and
+  `TirEvent` has an 8-bit tile field. That legacy transport cannot be treated as
+  an all-vocabulary/all-context bound. New own-model readers or unit schedulers
+  alone do not repair public acquisition or prove a real-network terminal.

@@ -942,7 +942,11 @@ pub(super) fn open(
         if bundle.is_none() {
             b.check_accuser_room(seed.reserver, u128::from(plan.deposit_sompi), "staged prefix court", ctx.daa_score)?;
         }
-        let funded = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or(PalwStateV2Error::Overflow("staged prefix funding"))?;
+        let funding_plan = if bundle.is_some() { extended_terms.plan } else { plan };
+        let funded = funding_plan
+            .rent_sompi
+            .checked_add(funding_plan.deposit_sompi)
+            .ok_or(PalwStateV2Error::Overflow("staged prefix funding"))?;
         let exits = vec![extended_terms.bond_exit_after_daa; contract.panel.len()];
         let encoded = borsh::to_vec(seed).map_err(|e| stage_refused(seed.claim, e.to_string()))?;
         let message = seed.signing_message();
@@ -969,21 +973,17 @@ pub(super) fn open(
         .map_err(|e| stage_refused(seed.claim, e))?;
         let row = if let Some(acquisition) = acquisition {
             let custody = public_custody.expect("checked above");
-            PalwStagedCourtRowV1::PublicPrefix(
-                Box::new(
-                    crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1::admit(
-                        row,
-                        contract.producer,
-                        custody,
-                        acquisition,
-                        extended_terms,
-                        ladder,
-                        funded,
-                    )
-                    .map_err(|e| stage_refused(seed.claim, e))?,
+            let row = if bundle.is_some() {
+                crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1::admit_with_allocation_v1(
+                    row, contract.producer, custody, acquisition, extended_terms, ladder, funded,
                 )
-                .into(),
-            )
+            } else {
+                crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1::admit(
+                    row, contract.producer, custody, acquisition, extended_terms, ladder, funded,
+                )
+            }
+            .map_err(|e| stage_refused(seed.claim, e))?;
+            PalwStagedCourtRowV1::PublicPrefix(Box::new(row).into())
         } else {
             PalwStagedCourtRowV1::Prefix(Box::new(row).into())
         };

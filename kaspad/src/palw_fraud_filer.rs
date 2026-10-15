@@ -63,6 +63,8 @@ mod selected_event_scheduler;
 mod tokenizer;
 #[path = "palw_tokenizer_scheduler.rs"]
 mod tokenizer_scheduler;
+#[path = "palw_tir_arithmetic_scheduler.rs"]
+mod tir_arithmetic_scheduler;
 #[cfg(test)] // the in-process e2e tests read the fp input the filer builds
 pub(super) use input::palw_fraud_filer_fp_input_v1;
 pub(super) use input::{palw_fraud_filer_fp_metadata_v1, palw_fraud_filer_fp_payload_v1};

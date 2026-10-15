@@ -324,6 +324,86 @@ impl<'a> TirEvidenceV1<'a> {
         })
     }
 
+    /// Sparse authenticated PUBLIC originals, without a producer capture or an
+    /// N-leaf tree. The native original header is rehydrated from this registered
+    /// program; each range already authenticates under its exact step root. The
+    /// committed ID summary is independently authenticated under the trace root.
+    /// Missing operands/pins remain unavailable to the existing refutation kernel.
+    #[allow(clippy::too_many_arguments)]
+    pub fn public_runs_v1(
+        runner: &'a TirClassRunnerV1<'a>,
+        binding: &'a PalwTirStepBindingV1,
+        prompt: &'a [u32],
+        trace: TirTraceV1<'a>,
+        inputs: &'a super::cell::TirRunInputsV1,
+        params: &'a dyn TirParamOpenerV1,
+        prompt_form: PalwPromptIdsFormV1,
+        cap: u64,
+    ) -> Result<Self, String> {
+        Self::check_binding(runner, binding)?;
+        kaspa_consensus_core::palw_tir_step_v1::verify_tir_binding_v1(binding, cap).map_err(|e| e.to_string())?;
+        if prompt.len() as u64 != u64::from(binding.job_context.declared_prefill_tokens)
+            || !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+                prompt_form,
+                prompt,
+                &binding.job_context.prompt_token_ids_hash,
+            )
+            || prompt.iter().any(|id| *id >= runner.space.program.token_bound)
+        {
+            return Err("the public TIR operand source changes original prompt identity".into());
+        }
+        match trace {
+            TirTraceV1::Summary { rows_root, generated, .. } => {
+                if Hash64::from_bytes(runner.space.program.logits_scheme_id) != tiled_logits_scheme_id_v1()
+                    || generated.len() as u64 != u64::from(binding.job_context.exact_decode_tokens)
+                    || kaspa_consensus_core::palw_step_refute::tiled_logits_outer_root_v1(
+                        &binding.job_context,
+                        generated.len() as u64,
+                        &rows_root,
+                        generated,
+                    ) != binding.full_logits_trace_root
+                {
+                    return Err("the public TIR ID summary does not authenticate original trace".into());
+                }
+            }
+            TirTraceV1::Rows { rows, generated } => {
+                let root = if Hash64::from_bytes(runner.space.program.logits_scheme_id) == tiled_logits_scheme_id_v1() {
+                    kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(&binding.job_context, rows, generated)
+                } else {
+                    Some(kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(&binding.job_context, rows, generated))
+                };
+                if rows.len() as u64 != u64::from(binding.job_context.exact_decode_tokens)
+                    || rows.len() != generated.len()
+                    || root != Some(binding.full_logits_trace_root)
+                {
+                    return Err("the public TIR rows do not authenticate original trace".into());
+                }
+            }
+            TirTraceV1::Absent => {}
+        }
+        let tree = inputs.proof_tree_for_binding_v1(binding, runner.class_id, cap)?;
+        Ok(Self {
+            runner,
+            binding,
+            prompt,
+            trace,
+            tree: Box::new(tree),
+            _tree_memory: None,
+            leaves: Leaves::Sparse(inputs.preimages_v1()),
+            params,
+            prompt_form,
+            cap,
+            cache: RefCell::new(BTreeMap::new()),
+            cache_memory: RefCell::new(None),
+            cache_budget: 0,
+            max_replay_positions: 0,
+            replay_positions_used: Cell::new(0),
+            replay_cost: None,
+            copies: super::copies::TirCarriedCopiesV1::new(),
+            inventory: Self::inventory_index(runner)?,
+        })
+    }
+
     /// **A challenger's store against a claim it re-executed honestly**: its own execution
     /// (`own`, the same job) supplies every leaf before the disputed one — equal to the accused's,
     /// as the bisection narrowed to the first leaf they differ at — and the accused supplies the

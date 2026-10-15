@@ -644,7 +644,13 @@ impl TirRunInputsV1 {
         &self.preimages
     }
     pub(crate) fn validate_capture_v1(&self, capture: &super::backend::TirCaptureV1, class_id: Hash64) -> Result<(), String> {
-        let b = &capture.binding;
+        self.validate_binding_v1(&capture.binding, class_id)
+    }
+    pub(crate) fn validate_binding_v1(
+        &self,
+        b: &kaspa_consensus_core::palw_tir_step_v1::PalwTirStepBindingV1,
+        class_id: Hash64,
+    ) -> Result<(), String> {
         if self.identity != Some((b.step_leaf_count, b.step_merkle_root, b.job_context.context_hash(), class_id)) {
             return Err("the sparse evidence is not this capture's binding".into());
         }
@@ -656,8 +662,15 @@ impl TirRunInputsV1 {
         class_id: Hash64,
         cap: u64,
     ) -> Result<super::sparse_tree::TirSparseStepTreeV1, String> {
-        self.validate_capture_v1(binding, class_id)?;
-        let b = &binding.binding;
+        self.proof_tree_for_binding_v1(&binding.binding, class_id, cap)
+    }
+    pub(crate) fn proof_tree_for_binding_v1(
+        &self,
+        b: &kaspa_consensus_core::palw_tir_step_v1::PalwTirStepBindingV1,
+        class_id: Hash64,
+        cap: u64,
+    ) -> Result<super::sparse_tree::TirSparseStepTreeV1, String> {
+        self.validate_binding_v1(b, class_id)?;
         let mut tree = super::sparse_tree::TirSparseStepTreeV1::new(b.step_leaf_count, b.step_merkle_root)?;
         for opening in self.ranges.values() {
             tree.add_range(opening, cap)?;
