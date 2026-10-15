@@ -2536,9 +2536,63 @@ impl VirtualStateProcessor {
                             ) {
                                 return Err("the class registrant did not sign this router binding".into());
                             }
+                            // **RFC06-4: the class's admission price re-derived under THIS binding** — each routed reader's
+                            // appendix priced at the row of the router it is bound to (its own width and tile), not the table's
+                            // first q36 router — under the court and ladder in force at this block, against the same ceilings the
+                            // registration gate applied. A binding under which some routed close could not be carried is refused.
+                            // Only here, past the fence; a class with no binding keeps the price it was admitted at.
+                            rb::palw_router_binding_check_v2(declaration)?;
+                            let bundle = self.palw_v2_bundle.as_ref().ok_or("router binding on a network with no V2 bundle")?;
+                            let profile = &declaration.profile;
+                            let kary = match self.palw_kary_court_active_at(point.daa_score) {
+                                false => None,
+                                true => {
+                                    let derived = self
+                                        .palw_court_params_at(point.daa_score)
+                                        .ok_or("router binding on a chain with no V2 ruleset")?
+                                        .map_err(|e| format!("router binding judged under a court with no shape: {e}"))?;
+                                    Some(kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
+                                        dissection_arity: derived.dissection_arity(),
+                                        prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
+                                        window_court_daa:
+                                            kaspa_consensus_core::palw_class_admission_v2::palw_class_court_window_for_shape_v1(
+                                                bundle.state.window_court(),
+                                                self.palw_model_court_window_active_at(point.daa_score),
+                                                self.palw_held_context_at(point.daa_score),
+                                                &derived,
+                                                profile,
+                                            )
+                                            .map_err(|e| format!("router binding: {e}"))?,
+                                    })
+                                }
+                            };
+                            let ladder = self
+                                .palw_context_ladder_at(point.daa_score)
+                                .then(|| {
+                                    kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+                                        profile,
+                                        kary,
+                                        bundle.court.max_step_leaf_count(),
+                                    )
+                                })
+                                .flatten();
+                            let held = kaspa_consensus_core::palw_class_admission_v2::PalwHeldAdmissionV1 {
+                                armed: self.palw_held_context_at(point.daa_score),
+                                panel_da: self.palw_panel_da_at(point.daa_score),
+                            };
+                            let row = rb::PalwRouterBindingRowV2 {
+                                version: rb::PALW_ROUTER_BINDING_VERSION_V2,
+                                bound_from_daa: point.daa_score,
+                                readers: declaration.readers.clone(),
+                            };
+                            kaspa_consensus_core::palw_class_admission_v2::palw_router_binding_admission_v2(
+                                bundle, profile, ladder, kary, held, &row,
+                            )
+                            .map_err(|e| format!("class {} is not admissible under this router binding: {e}", declaration.class_id))?;
                         }
                         mr::PalwMemoryRoutingObjectV2::Accused { accusation } => {
-                            let claim = state.claim(&accusation.claim).ok_or("memory/routing accusation names an absent native claim")?;
+                            let claim =
+                                state.claim(&accusation.claim).ok_or("memory/routing accusation names an absent native claim")?;
                             let ladder =
                                 state.class_step_ladder_v1(&claim.class_id, self.palw_court_step_ladder_at(point.daa_score, court));
                             accusation.validate_shape(ladder)?;

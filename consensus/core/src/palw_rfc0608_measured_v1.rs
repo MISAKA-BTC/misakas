@@ -65,10 +65,6 @@ pub const PALW_RFC0608_OPEN_BLOCKERS_V1: &[(PalwRfc0608FenceV1, &str)] = &[
     ),
     (
         PalwRfc0608FenceV1::MemoryRoutingCourtV2,
-        "RFC06-4: the routing appendix's admission price is not re-derived when a router binding exists",
-    ),
-    (
-        PalwRfc0608FenceV1::MemoryRoutingCourtV2,
         "RFC06-4: one offence-attribution path still uses the older coverage-closure rules",
     ),
     (
