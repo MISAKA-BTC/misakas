@@ -366,7 +366,7 @@ fn panel_sponsor_wire_is_versioned_and_bare_ledger_cannot_authorize_a_target() {
     let object = O::FundPanelBeaconSourceFeeV2 { epoch: 123, terms };
     let bytes = object.encode();
     assert_eq!(bytes[0], 1);
-    assert_eq!(bytes[1], 63);
+    assert_eq!(bytes[1], 70);
     assert_eq!(O::decode(&bytes).unwrap(), object);
     assert!(bytes.len() <= object.max_encoded_bytes());
     let mut trailing = bytes.clone();
