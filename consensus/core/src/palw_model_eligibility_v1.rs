@@ -1125,7 +1125,20 @@ impl Params {
     /// **Refused when armed at a real height** until RFC-0017's rule is built, verified and its values approved; `None` and
     /// `Some(never())` pass. The mirror must agree with the fence.
     pub fn validate_palw_model_eligibility_v1(&self) -> Result<(), PalwModeV2Error> {
-        if self.palw_model_eligibility_v1_from_daa().is_some() {
+        if let Some(at) = self.palw_model_eligibility_v1_from_daa() {
+            // U-2 (user decision 2026-10-15): a Probation claim's `F = 0` alone does not keep it out of the safe frontier, the settled
+            // anchor depth or rule E's participation — RFC-0018 Gate C (`palw_independently_work_certified_v1`) must govern every claim
+            // this fence can pin, so none of them counts there before it is certified. (RFC-0018 requires this fence at or below Gate
+            // C: the two arm at one height.)
+            let gate_c_below = self
+                .palw_independently_work_certified_v1
+                .filter(|f| *f != ForkActivation::never())
+                .is_some_and(|f| f.daa_score() <= at);
+            if !gate_c_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_model_eligibility_v1 needs palw_independently_work_certified_v1 (RFC-0018 Gate C) at or below it: Probation claims must never advance the safe frontier, settled-anchor depth or rule-E participation uncertified (U-2)",
+                ));
+            }
             return Err(PalwModeV2Error::Invalid(
                 "palw_model_eligibility_v1 cannot be armed: RFC-0017's rule is not built and verified and its values are not approved",
             ));

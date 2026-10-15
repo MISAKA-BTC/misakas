@@ -86,6 +86,59 @@ fn req_elig_7_the_fence_is_dormant_everywhere_and_refused_when_armed() {
     assert!(!crate::palw_beacon_bootstrap_v1::PALW_N3_GATED_REWARD_FENCES_V1.contains(&"palw_model_eligibility_v1"));
 }
 
+/// **U-2 (user decision 2026-10-15): the fence needs RFC-0018 Gate C at or below it** — so a Probation claim never advances the safe
+/// frontier, settled-anchor depth or rule-E participation uncertified (its `F = 0` alone would not keep it out). The refusal names
+/// U-2 before the generic "cannot be armed".
+#[test]
+fn u2_the_fence_needs_gate_c_at_or_below_it() {
+    let mut p = t12();
+    p.palw_model_eligibility_v1 = Some(ForkActivation::new(FENCE));
+    p.sync_palw_model_eligibility_v1();
+    let PalwModeV2Error::Invalid(why) = p.validate_palw_model_eligibility_v1().unwrap_err() else { panic!("Invalid") };
+    assert!(why.contains("U-2") && why.contains("palw_independently_work_certified_v1"), "{why}");
+    p.palw_independently_work_certified_v1 = Some(ForkActivation::new(FENCE));
+    let PalwModeV2Error::Invalid(why) = p.validate_palw_model_eligibility_v1().unwrap_err() else { panic!("Invalid") };
+    assert!(why.contains("cannot be armed"), "with Gate C at the same height only the generic refusal remains: {why}");
+    p.palw_independently_work_certified_v1 = Some(ForkActivation::new(FENCE + 1));
+    let PalwModeV2Error::Invalid(why) = p.validate_palw_model_eligibility_v1().unwrap_err() else { panic!("Invalid") };
+    assert!(why.contains("U-2"), "Gate C above the fence leaves Probation claims below it uncovered: {why}");
+}
+
+/// **U-2: the GHOSTDAG / DAA effect of Probation REAL blocks is bounded** — whatever the number of Probation models, lineages and
+/// principals, the blocks admitted under Probation in any probation epoch never exceed the network's fixed budget (20 ‰ of the
+/// epoch's DAA slots at the design value) and one lineage's never exceed its stage cap (2 ‰). So Probation blocks are at most that
+/// share of the blocks a DAA window holds, of the mergeset blues/reds GHOSTDAG colours and of the `W_work` step's realized-block
+/// input — a bounded, not zero, effect (their WEIGHT is zero: `F = 0`, no `bounded_immature`, Gate C before any credit).
+#[test]
+fn u2_probation_real_blocks_have_a_bounded_dag_and_daa_effect() {
+    let p = policy();
+    let unit = crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1;
+    let (network_budget, model_budget) = palw_probation_budgets_v1(&p);
+    let epoch_slots = p.probation_epoch_daa;
+    let mut network = PalwEligibilityNetworkRowV1::default();
+    let mut admitted_blocks = 0u64;
+    let mut per_lineage: std::collections::BTreeMap<u8, u64> = std::collections::BTreeMap::new();
+    // 300 lineages of 50 principals hammer one block at a time, every DAA of one epoch.
+    let mut lineages: Vec<PalwEligibilityLineageRowV1> = vec![PalwEligibilityLineageRowV1::default(); 300];
+    for daa in (FENCE..FENCE + epoch_slots).step_by(100) {
+        for (i, lineage) in lineages.iter_mut().enumerate() {
+            if let Ok(units) = palw_probation_admit_v1(&p, lineage, &network, daa, unit) {
+                let mut model = probation_row(i as u8, i as u8, FENCE);
+                let mut principal = PalwEligibilityPrincipalRowV1::default();
+                palw_probation_charge_v1(&p, daa, units, &mut model, lineage, &mut principal, &mut network);
+                admitted_blocks += units / unit;
+                *per_lineage.entry(i as u8).or_default() += units / unit;
+            }
+        }
+    }
+    assert!(admitted_blocks * unit <= network_budget, "the network's fixed budget binds however many models apply");
+    assert!(per_lineage.values().all(|b| b * unit <= model_budget), "each lineage within its stage cap");
+    // The DAG share: at most 20 ‰ of the epoch's DAA slots carry a Probation REAL block (one block per DAA at most).
+    assert!(admitted_blocks * 1_000 <= epoch_slots * p.probation_network_permille as u64);
+    assert_eq!(p.probation_network_permille, 20);
+    assert_eq!(p.probation_model_permille, 2, "V3 (2026-10-15): the Probation per-model cap stays 2 ‰ (calibration)");
+}
+
 #[test]
 fn the_design_policy_is_structurally_valid_and_its_guards_refuse_bad_shapes() {
     policy().validate().unwrap();

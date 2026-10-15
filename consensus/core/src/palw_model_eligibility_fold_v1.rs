@@ -242,14 +242,41 @@ pub(super) fn eligibility_probation_commit_v1(
 
 /// **The Final hook** (REQ-ELIG-2/6): a pinned probation claim's Final. Its weight is already 0 through its ADR-0176 reservation
 /// (planned with F = 0, [`PalwEligibilityProbationTicketV1::weightless`]) — the number every re-derivation (`bond_budget_weight_or`,
-/// `retire_claim`, the consistency check) reads back — so this returns `contribution` unchanged (which is that 0) and only retires
-/// the pin. Its Final completes the job and settles its escrow; it adds no chain-choice weight. Below the fence there are no pins.
-pub(super) fn eligibility_final_weight_v1(builder: &mut TransitionBuilder<'_>, claim_id: &Hash64, contribution: u128) -> u128 {
-    let key = eligibility_probation_claim_key_v1(&claim_id.as_bytes());
-    if row_of::<PalwEligibilityProbationClaimRowV1>(&builder.state, &key).is_some() {
-        write_row::<PalwEligibilityProbationClaimRowV1>(builder, key, None);
-    }
+/// `retire_claim`, the consistency check) reads back — so this returns `contribution` unchanged (which is that 0). Its Final completes
+/// the job and settles its escrow; it adds no chain-choice weight. Below the fence there are no pins.
+///
+/// **U-2 (user decision 2026-10-15): the pin OUTLIVES the Final** — it retires only when the claim leaves the state or is voided
+/// ([`sweep_model_eligibility_v1`]) — so [`palw_probation_security_credit_v1`] can still say, of a `Final` claim the safe frontier,
+/// the settled-anchor depth or rule E reads, that it was a Probation claim with no credit until certified.
+pub(super) fn eligibility_final_weight_v1(_builder: &mut TransitionBuilder<'_>, _claim_id: &Hash64, contribution: u128) -> u128 {
+    // The contribution is the budget's F = 0 grant already (every re-derivation reads the same number); nothing is written here.
     contribution
+}
+
+/// **U-2 (user decision 2026-10-15): may `claim` contribute SECURITY credit** — safe weight, bounded immature weight, the safe
+/// frontier, the settled-anchor depth, rule E's participation? A claim RFC-0017 pinned as a weightless Probation claim only once
+/// RFC-0018 Gate C both governs it and certifies it ([`crate::palw_rfc0018_v1::palw_independently_work_certified_v1`] — the
+/// drawn-verifier m-of-k approval, premise-based certification, never a computation proof); below Gate C's fence it has NO such credit
+/// (the legacy `true` of that predicate never reaches a Probation claim). Every other claim: `true` (RFC-0017 adds nothing). The
+/// sites that read safe frontier / settlement depth / rule E are RFC-0018's: with this fence they are reached through Gate C itself
+/// (validation arms Gate C at or below this fence), and this predicate is the narrow interface they may AND in.
+pub fn palw_probation_security_credit_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+) -> bool {
+    let key = eligibility_probation_claim_key_v1(&claim_id.as_bytes());
+    let weightless_probation = row_of::<PalwEligibilityProbationClaimRowV1>(state, &key).is_some_and(|pin| !pin.final_weight);
+    if !weightless_probation {
+        return true;
+    }
+    crate::palw_rfc0018_v1::palw_gate_c_governs_v1(params, claim)
+        && crate::palw_rfc0018_v1::palw_independently_work_certified_v1(
+            claim_id,
+            claim,
+            &crate::palw_rfc0018_v1::PalwGateCViewV1::of(params, state),
+        )
 }
 
 /// **Inner 74**: commit an exam. The committer is any Active bond; the attempt is counted against the class's lineage, the
@@ -505,12 +532,17 @@ pub(super) fn sweep_model_eligibility_v1(
                 }
             }
             Some(ELIGIBILITY_PROBATION_CLAIM_PREFIX_V1) if key.len() == 65 => {
-                // A pin whose claim is gone or terminal without passing the Final hook (a void, a retirement) retires; its units stay
-                // charged (consumption is history).
+                // A pin whose claim is gone (retired from the state) or voided retires; its units stay charged (consumption is
+                // history). U-2: a `Final` claim KEEPS its pin while it is in the state (it still carries no security credit until
+                // certified — `palw_probation_security_credit_v1`).
                 let mut id = [0u8; 64];
                 id.copy_from_slice(&key[1..]);
-                let live = builder.state.claims.get(&Hash64::from_bytes(id)).is_some_and(|claim| !claim.phase.is_terminal());
-                if !live {
+                let kept = builder
+                    .state
+                    .claims
+                    .get(&Hash64::from_bytes(id))
+                    .is_some_and(|claim| !matches!(claim.phase, PalwClaimPhaseV2::Voided { .. }));
+                if !kept {
                     pin_retirements.push(key.clone());
                 }
             }
