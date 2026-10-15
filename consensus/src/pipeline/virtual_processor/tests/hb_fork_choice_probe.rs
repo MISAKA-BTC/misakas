@@ -2876,3 +2876,5 @@ mod finality_consistency;
 // LIVE-R1 (2026-10-08): H1's devnet partition that healed on the wire and stayed split.
 mod partition_rejoin;
 mod private_final;
+// R12-AUTHORITY (2026-10-11): the private-Final race under the legal order (commitment <= rule E <= retirement).
+mod rfc12_authority;

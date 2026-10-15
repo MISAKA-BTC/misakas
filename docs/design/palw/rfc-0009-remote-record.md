@@ -1,5 +1,8 @@
 # RFC-0009 remote client / relay / redemption — implementation record (Agent C1)
 
+> **除外(2026-10-15 ユーザー恒久決定、[PRINCIPLES §8](../../PRINCIPLES.md)):** 暗号学的な計算証明(ZK、zk-SNARK/STARK、zkVM、PCS ベースの succinct proof など)は使用しない。本文中のそれらを将来・研究として挙げる記述は採用候補ではない。
+
+
 Branch `rfc9/c1-remote` (base `f9c2c4308`). Matrix: [`remaining-rfc-integration-matrix.md`](remaining-rfc-integration-matrix.md) (RFC-0009 rows).
 Spec of record: [RFC-0009](../../rfc/0009-palw-remote-miner.md), [implementation spec](rfc-0009-implementation-spec.md).
 

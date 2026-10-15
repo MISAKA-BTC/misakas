@@ -247,7 +247,7 @@ async fn top_up_carrier(
     let candidates = crate::palw_fp::spendable_candidates_v1(nv, &addr).await?;
     let mut sorted: Vec<_> = candidates.into_iter().collect();
     sorted.sort_by(|a, b| b.1.amount.cmp(&a.1.amount));
-    let want = amount.saturating_add(kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI);
+    let want = amount.saturating_add(kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI);
     let mut funding: Vec<_> = Vec::new();
     let mut have: u64 = 0;
     for (outpoint, entry) in sorted.into_iter().take(PALW_CARRIER_MAX_INPUTS) {

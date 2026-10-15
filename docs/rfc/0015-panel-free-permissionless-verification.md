@@ -699,6 +699,8 @@ RFC12のDNS finality撤去・native EVM変更 [C18] は別のupgradeである。
 
 ## 10. 将来のnode-verifiable compact proofとの関係
 
+> **除外(2026-10-15 ユーザー恒久決定、[PRINCIPLES §8](../PRINCIPLES.md)):** 暗号学的な計算証明(ZK、zk-SNARK/STARK、zkVM、PCS ベースの succinct proof など)は使用しない。本節の「将来の compact proof」は暗号学的証明を含まない範囲(決定論的再計算・確率的な代数チェック)に限り、暗号学的証明は採用候補ではない。
+
 producerが全nodeの承認済みkernel checkerで安価に検証できるcompact proofを
 提出する方式も、固定Panelなしで設計できる。
 ただし本RFCの基本modeはoptimistic public verificationであり、

@@ -10566,8 +10566,11 @@ impl VirtualStateProcessor {
         let entries = named.into_iter().map(|block| (block, self.palw_fork_choice_opening_v1_impl(block))).collect();
         // The gate's inputs as this node holds them (`dns_bft_gate_refusal` reads exactly these): the rollout stage and the
         // confirmed anchor. An unreadable or unwritten DNS state is reported as nothing confirmed in Bootstrap — what the gate reads it as.
+        // Past the RFC-0012 retirement at the sink the gate abstains (`dns_bft_gate_refusal` returns before reading the row), so the
+        // facts served are the abstaining ones — never the row frozen at the fence (lane R12, 2026-10-11; ported 2026-10-15).
+        let retired = self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.dns_retired_at(daa));
         let dns_gate = self.dns_params.as_ref().map(|_| {
-            let state = self.dns_state_store.read().get().ok();
+            let state = if retired { None } else { self.dns_state_store.read().get().ok() };
             kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwDnsGateFactV1 {
                 stage_active: state.as_ref().is_some_and(|s| s.rollout_stage == DnsRolloutStage::Active),
                 confirmed_anchor: state
