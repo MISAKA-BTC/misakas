@@ -1612,4 +1612,76 @@ mod conviction_e2e_tests {
         assert_eq!(consumed, vec![true, true, true, false]);
         assert!(b.state.staged_court_row_v1(&Key::TirWitness(claim_id, outsider())).is_none(), "a complete witness is never kept");
     }
+
+    /// **G14 R8: a fresh node restored from the pruning-point carriage continues the ORIGINAL frame identically** — not only an
+    /// index rebuild: the colluders' accepted world with a witness half-carried before the pruning point is imported through the
+    /// IBD wire (`PalwStateCarriageV2` bytes → `into_state` with the archival root), every TIR index equals the archival node's,
+    /// the frame, its d0 door and the in-flight witness read the same, and the completing part reaches the same conviction, the
+    /// same slashes and the same state root on both nodes.
+    #[test]
+    fn g14_fresh_node_import_continues_the_original_frame_identically() {
+        use crate::palw_tir_public_carriage_v1::{PalwTirPublicWitnessPartV1 as Part, palw_tir_public_witness_digest_v1};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let ids = fx.execution.generated.clone();
+        let rows_root =
+            crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context, &fx.execution.rows).unwrap();
+        let lying = credited_frame(&fx).with_original_output_root_for_tests_v1(h(0xBAD));
+        let (state, params, extras) = world(&fx, &lying);
+        let claim_id = lying.plan_v1().original_claim;
+        let encoded = borsh::to_vec(&Evidence::Output { rows_root, ids }).unwrap();
+        let digest = palw_tir_public_witness_digest_v1(&encoded);
+        let split = encoded.len() / 2;
+        let part = |offset: usize, end: usize| {
+            let plan = lying.plan_v1();
+            Control {
+                version: 1,
+                claim: plan.original_claim,
+                allocation_id: plan.allocation_id,
+                source_id: plan.source_id,
+                target: T::ConvictionWitness,
+                expected_turn: 0,
+                declared_rent_sompi: if offset == 0 { lying.conviction_rent_v1() } else { 0 },
+                signer: outsider(),
+                action: A::WitnessPart(Part {
+                    total_bytes: encoded.len() as u64,
+                    digest,
+                    offset: offset as u64,
+                    bytes: encoded[offset..end].to_vec(),
+                }),
+                signature: vec![5; SIG],
+            }
+        };
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &part(0, split)).unwrap();
+        let archival = b.state.clone();
+        let bytes = borsh::to_vec(&crate::palw_state_v2::PalwStateCarriageV2::from_state(&archival)).unwrap();
+        let fresh = borsh::from_slice::<crate::palw_state_v2::PalwStateCarriageV2>(&bytes)
+            .unwrap()
+            .into_state(&params, Some(archival.state_root()))
+            .expect("a fresh node imports the accepted frame world from the pruning-point carriage");
+        assert_eq!(fresh.state_root(), archival.state_root());
+        fresh.assert_tir_acquisition_indices_v1().unwrap();
+        assert_eq!(fresh.staged_due, archival.staged_due);
+        assert_eq!(fresh.staged_holds, archival.staged_holds);
+        assert_eq!(fresh.staged_tir_claims_by_producer, archival.staged_tir_claims_by_producer);
+        let now = lying.plan_v1().terms.accepted_daa + 6;
+        assert_eq!(fresh.palw_tir_public_prosecution_open_v1(&claim_id, now), archival.palw_tir_public_prosecution_open_v1(&claim_id, now));
+        assert_eq!(palw_tir_public_claim_v1(&fresh, claim_id), palw_tir_public_claim_v1(&archival, claim_id));
+        assert_eq!(
+            fresh.staged_court_row_v1(&Key::TirWitness(claim_id, outsider())),
+            archival.staged_court_row_v1(&Key::TirWitness(claim_id, outsider()))
+        );
+        let roots: Vec<Hash64> = [&archival, &fresh]
+            .into_iter()
+            .map(|node| {
+                let mut b = TransitionBuilder::new(node, &params, false, false, false, false, &extras);
+                apply_verified_control_v1(&mut b, &at(&lying, 6), lying.clone(), &part(split, encoded.len())).unwrap();
+                let (phase, _, consumed) = outcome(&b.state, &lying);
+                assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
+                assert_eq!(consumed, vec![true, true, true, false]);
+                b.state.state_root()
+            })
+            .collect();
+        assert_eq!(roots[0], roots[1], "the restored node reaches the archival node's exact post-conviction root");
+    }
 }

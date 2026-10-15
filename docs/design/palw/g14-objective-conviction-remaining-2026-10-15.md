@@ -367,16 +367,33 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
 ### R8. 再開・pruning・reorgと通常node運用を閉じる
 
 - [ ] prepared descriptorと実際のnative Ready、元material TTL、保持ticket、通常worker、native権限付きGCを結ぶ。
-  — **一部（ソースのみ・未検証）**: 準備 worker が descriptor を作り Ready まで投稿し、descriptor を journal（material horizon 到達で journal から
-  除去）。prepared file の GC（`retire_tir_prepared_capture_v1`、native irreversible DAA が horizon を超えた後のみ）と保持 ticket の接続は未。
+  — **実装（ソースのみ・未検証、2026-10-16）**: 準備 worker が descriptor を作り Ready まで投稿し、descriptor を journal
+  （`state_dir/palw-tir-public-custodian.v2`）。GC は `tir_public_custodian_maintenance_v1` が **irreversible DAA（pruning point の DAA）が
+  material horizon を超えた後だけ** backend の `retire_tir_prepared_capture_v1` で行い、file が消えてから journal から外す（accepted だが可逆な
+  DAA・file 時刻・frame 不在では消さない）。保持 ticket は準備中の capture/publish RAM 予約（host ledger）として持つ。**未**: journal に無い
+  孤立 `prepared-*` dir の掃除、disk 予約の ledger 化。
 - [ ] Tiled reopenの全D IDs再認証が必要な場合、その時間・IO・carrier・RAMを最大条件で処理する。N再走査を避けただけで完走としない。
-  — **未**（node 運用の範囲。今回は未着手）。
+  — **一部（ソースのみ・未検証）**: 再起動後、生存中の sealed capture を 1 tick 1 件ずつ `reopen_tir_prepared_capture_v1` で全面再オープン
+  （元 ID を outer EOF まで再 stream し各 opening を再認証）し、見積り `tir_prepared_capture_need_v1(..).reopen_ram_bytes` を host ledger に予約
+  して行う。demand が来る前に破損を検出する。**未**: 最大 profile での時間・IO の実測、応答 clock 内での reopen 完了の保証（応答 responder 自体が
+  未接続、R3 の注記）。
 - [ ] process再開・複数processのcache共有・破損・partial generation・期限前後のcleanupを扱い、正しい公開materialを早期削除しない。
-  — **未**（node 運用の範囲。今回は未着手）。
+  — **一部（ソースのみ・未検証）**: 再開は journal（tmp→rename、読めなければ退避）から sealed descriptor を戻し Ready を再投稿、破損は上の全面
+  reopen で検出（検出時は error log、以後は保持した元 capture からのみ応答可能）、partial generation は writer の `preparing-*` staging を再起動
+  時に掃除（backend 既存）、cleanup は irreversible horizon 後のみ（早期削除しない）。**未**: 複数 process の同一 retention dir 共有（1 retention
+  dir に 1 node process という既存の運用前提のまま、process 間 lock は無い）、破損 capture の同一 descriptor での再 seal。
 - [ ] canonical work counterの巻き戻しと、既に行った物理的な孤立fork作業を区別する。durable journalと有限recovery規則、または明示されたreorg前提なしに、restartで予算が復活しないと保証しない。
-  — **未**（node 運用の範囲。今回は未着手）。
+  — **実装（ソースのみ・未検証）**: 物理的な slice 実行を lane（claim, allocation）ごとに **実行前に** journal へ書く（write-ahead、書けなければ
+  実行しない）。有限 recovery 規則: 1 lane で物理的に実行する slice は native plan の `maximum_slices_per_actor × (maximum_restarts + 1)` まで。
+  canonical counter が reorg で巻き戻っても、process を再起動しても、この物理予算は復活しない（使い切った frame は準備をやめ、grant しない）。
+  entry は preparation door が irreversible になってから消える。テストソース `physical_slice_allowance_is_durable_and_finite`。
 - [ ] fresh node、IBD、pruned importでも、元claim・資格・raw bytes・証拠・期限・責任を現在のnative状態から復元できるようにする。
-  — **一部**: frame・準備・acquisition の row は rooted state にあり、index は row から再構築（`rebuild_indices`、`assert_tir_acquisition_indices_v1`）。raw bytes・証拠の node 側復元は未。
+  — **一部→実装（ソースのみ・未検証）**: frame・準備・acquisition・raw chunk／accepted body・staged witness・semantic ClaimBundle の row は
+  すべて rooted state にあり、pruning-point carriage で運ばれる。E2E ソース `g14_fresh_node_import_continues_the_original_frame_identically`:
+  witness を半分運んだ共謀 world を IBD wire（`PalwStateCarriageV2` bytes → `into_state`、archival root 指定）で fresh node に import し、
+  全 TIR index・frame・d0 door・in-flight witness が archival と一致し、完成 part が両 node で同じ有罪・同じ slash・同じ state root に到達する
+  ことを検査（index 再構築だけでなく fold の継続の同一性）。**未**: node-local な custodian material（保持 capture・prepared capture）は chain から
+  復元できない（custodian の義務そのもの）。filer/custodian の journal は node-local。
 
 ## 4. 全familyの完了表を作る
 

@@ -17,14 +17,18 @@
 //! ACCEPTED does `confirm_v1` mint the permit that funds the slice (`tir_acquisition_driver`'s `prepare_claim_*_slice_v1`). A lost
 //! carrier re-sends the same exact debit (`pending_action_v1`); a slice is never run on an unaccepted debit.
 //!
-//! **Restart.** The sealed descriptor of every prepared capture is journaled (`state_dir/palw-tir-public-custodian.v1`, written
-//! to a temporary file then renamed), so a restart re-files a lost Ready without preparing again and the responder can reopen the
-//! exact sealed capture (`reopen_tir_prepared_capture_v1`). An unsealed preparation restarts from its first slice on a fresh
-//! reader; the work book marks the first debit after a restart (`restart: true`) and the native per-actor slice budget bounds it.
+//! **Restart, reorg and GC (G14 R8).** The sealed descriptor of every prepared capture is journaled
+//! (`state_dir/palw-tir-public-custodian.v2`, written to a temporary file then renamed), so a restart re-files a lost Ready without
+//! preparing again; each live sealed capture is re-authenticated once per process by a full reopen
+//! (`reopen_tir_prepared_capture_v1`) under its quoted reopen RAM; and a sealed capture is retired only once its material horizon
+//! is IRREVERSIBLY past (the pruning point's DAA), never on an accepted-but-reversible clock. Physical slices are charged to the
+//! journal BEFORE they run, against the lane's finite allowance `maximum_slices_per_actor × (maximum_restarts + 1)`: neither a
+//! restart nor a reorg that rolls the canonical counter back refills it. An unsealed preparation restarts from its first slice
+//! on a fresh reader; the work book marks the first debit after a restart (`restart: true`).
 //!
 //! **Not covered here (recorded in docs/design/palw/g14-objective-conviction-remaining-2026-10-15.md):** answering outside owners'
 //! demands from the prepared capture (the Begin/Part/Finish responder), measured completion within the fixed preparation clock at
-//! the largest profile, and GC of sealed captures past the material horizon.
+//! the largest profile, sweeping orphan `prepared-*` directories the journal never recorded, and re-sealing a corrupted capture.
 #![allow(dead_code)] // the panel loop calls the tick; the journal helpers are exercised by the tests below.
 
 use super::super::{COURT_MOVE_REPLAN_DAA, PalwPanelService};
@@ -53,7 +57,7 @@ use kaspa_consensus_core::{
         palw_tir_public_preparation_snapshot_v1, palw_tir_public_work_book_v1,
     },
 };
-use kaspa_core::{debug, info, warn};
+use kaspa_core::{debug, error, info, warn};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -66,9 +70,9 @@ pub(crate) const PALW_TIR_PUBLIC_DEBIT_ROUND_V1: u32 = u32::MAX - 24;
 pub(crate) const PALW_TIR_PUBLIC_READY_ROUND_V1: u32 = u32::MAX - 25;
 /// Frames this node prepares at once (each holds one capture reader and, once warm, one prepared writer).
 const PALW_TIR_PUBLIC_CASES_V1: usize = 4;
-/// The journal's bound; a sealed entry leaves once native state shows its Ready, or its material horizon passed.
+/// The journal's bound; a sealed entry leaves only once its files are retired past the IRREVERSIBLE material horizon.
 const PALW_TIR_PUBLIC_SEALED_MAX_V1: usize = 4096;
-const PALW_TIR_PUBLIC_JOURNAL_MAGIC_V1: &[u8] = b"misaka-node/tir-public-custodian/v1\n";
+const PALW_TIR_PUBLIC_JOURNAL_MAGIC_V2: &[u8] = b"misaka-node/tir-public-custodian/v2\n";
 /// The fixed per-slice overhead `OperationalLedgerV1::require_preparation_v1` debits before the slice's own quoted work, so
 /// the debit the chain accepts covers both (it never under-buys and then refuses its own slice).
 const PALW_TIR_PUBLIC_SLICE_OVERHEAD_V1: PalwTirPublicWorkV1 = PalwTirPublicWorkV1 {
@@ -100,6 +104,25 @@ pub(crate) struct PalwTirPublicSealedV1 {
     pub descriptor: PalwTirPublicPreparedDescriptorV1,
 }
 
+/// **G14 R8: the physical preparation work this node ran on one claim-wide lane** — persisted BEFORE each slice runs (write-ahead),
+/// so neither a restart nor a reorg that rolls the canonical per-actor counter back refills the node's budget. The finite recovery
+/// rule: at most `maximum_slices_per_actor × (maximum_restarts + 1)` slices ever run on one lane (the native plan's own restart
+/// allowance), whatever the canonical counter later says; past it the node stops preparing that frame (and never grants).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub(crate) struct PalwTirPublicPhysicalWorkV1 {
+    pub claim: Hash64,
+    pub allocation_id: Hash64,
+    pub slices_run: u64,
+    /// The lane's preparation door; the entry is retired once that DAA is irreversible.
+    pub preparation_until_daa: u64,
+}
+
+#[derive(Default, BorshSerialize, BorshDeserialize)]
+struct JournalV2 {
+    sealed: Vec<PalwTirPublicSealedV1>,
+    physical: Vec<PalwTirPublicPhysicalWorkV1>,
+}
+
 /// One frame this node is preparing (process memory; see the module's restart note).
 struct CaseV1 {
     work: PalwTirPublicWorkBookV1,
@@ -119,29 +142,33 @@ struct CaseV1 {
 pub(crate) struct PalwTirPublicCustodianBookV1 {
     path: Option<PathBuf>,
     sealed: BTreeMap<(Hash64, Hash64), PalwTirPublicSealedV1>,
+    physical: BTreeMap<(Hash64, Hash64), PalwTirPublicPhysicalWorkV1>,
     dirty: bool,
     cases: HashMap<(Hash64, Hash64), CaseV1>,
+    /// G14 R8: sealed captures re-authenticated by a full reopen in THIS process (`true`) or found unusable (`false`).
+    verified: HashMap<(Hash64, Hash64), bool>,
 }
 
 impl PalwTirPublicCustodianBookV1 {
     /// The journal in `state_dir`, or an empty one — an unreadable file is set aside (`.unreadable`), never a reason not to start.
     pub(crate) fn load(state_dir: &Path) -> Self {
-        let path = state_dir.join("palw-tir-public-custodian.v1");
+        let path = state_dir.join("palw-tir-public-custodian.v2");
         let mut book = Self { path: Some(path.clone()), ..Self::default() };
         let Ok(meta) = std::fs::metadata(&path) else { return book };
         if meta.len() > (PALW_TIR_PUBLIC_SEALED_MAX_V1 as u64).saturating_mul(1024) {
             warn!("[{PALW_PANEL}] the TIR custodian journal {} exceeds its bound; set aside", path.display());
-            let _ = std::fs::rename(&path, path.with_extension("v1.unreadable"));
+            let _ = std::fs::rename(&path, path.with_extension("v2.unreadable"));
             return book;
         }
         let Ok(bytes) = std::fs::read(&path) else { return book };
         let parsed = bytes
-            .strip_prefix(PALW_TIR_PUBLIC_JOURNAL_MAGIC_V1)
-            .and_then(|body| borsh::from_slice::<Vec<PalwTirPublicSealedV1>>(body).ok())
-            .filter(|entries| entries.len() <= PALW_TIR_PUBLIC_SEALED_MAX_V1);
+            .strip_prefix(PALW_TIR_PUBLIC_JOURNAL_MAGIC_V2)
+            .and_then(|body| borsh::from_slice::<JournalV2>(body).ok())
+            .filter(|j| j.sealed.len() <= PALW_TIR_PUBLIC_SEALED_MAX_V1 && j.physical.len() <= PALW_TIR_PUBLIC_SEALED_MAX_V1);
         match parsed {
-            Some(entries) => {
-                book.sealed = entries.into_iter().map(|entry| ((entry.claim, entry.allocation_id), entry)).collect();
+            Some(journal) => {
+                book.sealed = journal.sealed.into_iter().map(|entry| ((entry.claim, entry.allocation_id), entry)).collect();
+                book.physical = journal.physical.into_iter().map(|entry| ((entry.claim, entry.allocation_id), entry)).collect();
                 if !book.sealed.is_empty() {
                     info!(
                         "[{PALW_PANEL}] the TIR custodian resumes {} sealed prepared capture(s) from {}",
@@ -152,7 +179,7 @@ impl PalwTirPublicCustodianBookV1 {
             }
             None => {
                 warn!("[{PALW_PANEL}] the TIR custodian journal {} does not decode; set aside", path.display());
-                let _ = std::fs::rename(&path, path.with_extension("v1.unreadable"));
+                let _ = std::fs::rename(&path, path.with_extension("v2.unreadable"));
             }
         }
         book
@@ -167,21 +194,45 @@ impl PalwTirPublicCustodianBookV1 {
             self.dirty = false;
             return;
         };
-        let mut bytes = PALW_TIR_PUBLIC_JOURNAL_MAGIC_V1.to_vec();
-        let entries: Vec<&PalwTirPublicSealedV1> = self.sealed.values().collect();
-        match borsh::to_vec(&entries) {
+        let mut bytes = PALW_TIR_PUBLIC_JOURNAL_MAGIC_V2.to_vec();
+        let journal =
+            JournalV2 { sealed: self.sealed.values().cloned().collect(), physical: self.physical.values().cloned().collect() };
+        match borsh::to_vec(&journal) {
             Ok(body) => bytes.extend(body),
             Err(e) => {
                 warn!("[{PALW_PANEL}] cannot encode the TIR custodian journal: {e}");
                 return;
             }
         }
-        let temporary = path.with_extension("v1.tmp");
+        let temporary = path.with_extension("v2.tmp");
         let written = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&temporary, &bytes));
         match written.and_then(|()| std::fs::rename(&temporary, &path)) {
             Ok(()) => self.dirty = false,
             Err(e) => warn!("[{PALW_PANEL}] cannot persist the TIR custodian journal {}: {e}", path.display()),
         }
+    }
+
+    /// **G14 R8: charge one physical slice on `key`'s lane, durably, before it runs.** `Err` once the lane's finite recovery
+    /// allowance (`cap`) is spent — the slice is not run, and the frame is not prepared further by this node.
+    fn charge_physical_slice_v1(&mut self, key: (Hash64, Hash64), cap: u64, preparation_until_daa: u64) -> Result<(), String> {
+        let entry = self.physical.entry(key).or_insert(PalwTirPublicPhysicalWorkV1 {
+            claim: key.0,
+            allocation_id: key.1,
+            slices_run: 0,
+            preparation_until_daa,
+        });
+        if entry.slices_run >= cap {
+            return Err(format!(
+                "the lane's physical slice allowance ({cap}) is spent; preparation stops (no grant without a capture)"
+            ));
+        }
+        entry.slices_run += 1;
+        self.dirty = true;
+        self.persist();
+        if self.dirty {
+            return Err("the physical-work journal could not be written; the slice does not run".into());
+        }
+        Ok(())
     }
 
     /// The sealed prepared capture of `(claim, allocation)`, for the responder's reopen.
@@ -198,11 +249,19 @@ impl PalwTirPublicCustodianBookV1 {
         Ok(())
     }
 
-    /// Drop sealed entries whose material horizon passed at `now` (their capture is no longer anyone's duty).
-    fn expire_v1(&mut self, now: u64) {
-        let before = self.sealed.len();
-        self.sealed.retain(|_, entry| now < entry.material_until_daa);
-        self.dirty |= before != self.sealed.len();
+    /// The sealed captures whose material horizon is IRREVERSIBLY past (`irreversible_daa > material_until`): only those may be
+    /// retired. An accepted-but-reversible DAA never authorizes deleting correct public material.
+    fn retirable_v1(&self, irreversible_daa: u64) -> Vec<PalwTirPublicSealedV1> {
+        self.sealed.values().filter(|entry| irreversible_daa > entry.material_until_daa).cloned().collect()
+    }
+
+    /// Forget a retired capture (its files are gone) and every physical-work entry whose door is irreversibly past.
+    fn retired_v1(&mut self, key: (Hash64, Hash64), irreversible_daa: u64) {
+        self.dirty |= self.sealed.remove(&key).is_some();
+        self.verified.remove(&key);
+        let before = self.physical.len();
+        self.physical.retain(|_, entry| irreversible_daa <= entry.preparation_until_daa);
+        self.dirty |= before != self.physical.len();
     }
 }
 
@@ -317,7 +376,6 @@ impl PalwPanelService {
             let mut read = |state: &PalwChainStateV2| -> Result<(), String> {
                 steps.clear();
                 now = state.last_point().ok_or("TIR custodian snapshot has no accepted clock")?.daa_score;
-                book.expire_v1(now);
                 // Discover: the producer's pending d0 duties, then the claims this seat signed Valid.
                 let mut fresh: Vec<(Hash64, Hash64)> = Vec::new();
                 if let Ok((page, _)) = state.staged_tir_preparation_duties_after_v1(signer, now, None, PALW_TIR_PUBLIC_CASES_V1) {
@@ -581,12 +639,23 @@ impl PalwPanelService {
                         moved.insert(queue, now);
                     }
                     StepV1::Run { key, snapshot } => {
+                        // The debit is accepted: its queued carrier (if still queued) is spent.
+                        pending.retain(|(a, b, c, _)| (*a, *b, *c) != (key.0, PALW_TIR_PUBLIC_DEBIT_ROUND_V1, true));
+                        // G14 R8: write-ahead physical charge, against the lane's finite recovery allowance — BEFORE the slice runs,
+                        // so a crash mid-slice still counts it and a reorg that rolls the canonical counter back refills nothing.
+                        let lane = snapshot.row.preparation.contract_v1();
+                        let cap = lane.plan.maximum_slices_per_actor.saturating_mul(lane.plan.maximum_restarts.saturating_add(1));
+                        let until = lane.preparation_until_daa;
+                        if let Err(why) = book.charge_physical_slice_v1(key, cap, until) {
+                            if let Some(case) = book.cases.get_mut(&key) {
+                                case.failed = true;
+                            }
+                            return Err(why);
+                        }
                         let Some(case) = book.cases.get_mut(&key) else { return Ok(()) };
                         let (Some(quote), Some(permit)) = (case.quote.take(), case.permit.take()) else {
                             return Err("TIR custodian has no accepted permit for its quoted slice".into());
                         };
-                        // The debit is accepted: its queued carrier (if still queued) is spent.
-                        pending.retain(|(a, b, c, _)| (*a, *b, *c) != (key.0, PALW_TIR_PUBLIC_DEBIT_ROUND_V1, true));
                         let expected = *permit.scope_v1();
                         let mut ledger = OperationalLedgerV1::from_native_permit_v1(permit, expected)?;
                         let warm = case.warm;
@@ -696,7 +765,92 @@ impl PalwPanelService {
                 debug!("[{PALW_PANEL}] TIR custodian preparation remains pending: {why}");
             }
         }
+        if let Err(why) = self.tir_public_custodian_maintenance_v1(session, book, now).await {
+            debug!("[{PALW_PANEL}] TIR custodian maintenance remains pending: {why}");
+        }
         book.persist();
+        Ok(())
+    }
+
+    /// **G14 R8: the sealed captures' lifecycle after Ready** (one bounded step per tick):
+    ///
+    /// 1. **Retire** a sealed capture only once its material horizon is IRREVERSIBLY past (the pruning point's DAA beyond
+    ///    `material_until`), through the backend's own native-clock retirement; the journal entry leaves only after the files are
+    ///    gone. An accepted-but-reversible DAA, a file clock or a missing frame never authorizes deleting correct public material.
+    /// 2. **Re-authenticate** each live sealed capture once per process with a full reopen (`reopen_tir_prepared_capture_v1`,
+    ///    which re-streams the original IDs to their outer EOF and re-checks every opening it serves), holding the quoted reopen
+    ///    RAM — so a capture corrupted on disk or across a restart is found before an owner's demand, not by a default.
+    async fn tir_public_custodian_maintenance_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwTirPublicCustodianBookV1,
+        now: u64,
+    ) -> Result<(), String> {
+        let pruning_point = session.async_pruning_point().await;
+        let irreversible = session.async_get_header(pruning_point).await.map_err(|e| e.to_string())?.daa_score;
+        let directory = self.config.retention_dir.join("tir-public-prepared");
+        if let Some(entry) = book.retirable_v1(irreversible).into_iter().next() {
+            let descriptor = entry.descriptor;
+            let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> =
+                Arc::from(self.resolve_backend(session, descriptor.class_id, descriptor.artifact_root)?);
+            let until = entry.material_until_daa;
+            tokio::task::spawn_blocking(move || backend.retire_tir_prepared_capture_v1(&descriptor, &directory, until, irreversible))
+                .await
+                .map_err(|e| format!("TIR prepared capture retirement worker failed: {e}"))??;
+            book.retired_v1((entry.claim, entry.allocation_id), irreversible);
+            info!("[{PALW_PANEL}] TIR frame {}: prepared capture retired past the irreversible horizon {until}", entry.claim);
+            return Ok(());
+        }
+        let Some(entry) = book
+            .sealed
+            .values()
+            .find(|entry| now < entry.material_until_daa && !book.verified.contains_key(&(entry.claim, entry.allocation_id)))
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let key = (entry.claim, entry.allocation_id);
+        let Some(view) = session.palw_tir_public_frame_v1(entry.claim)? else {
+            // No accepted frame to answer for (not yet, or no longer): nothing to verify against.
+            book.verified.insert(key, false);
+            return Ok(());
+        };
+        let descriptor = entry.descriptor;
+        let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> =
+            Arc::from(self.resolve_backend(session, descriptor.class_id, descriptor.artifact_root)?);
+        let header = view.header.clone();
+        let need = backend.tir_prepared_capture_need_v1(&header, descriptor.retained_bytes)?;
+        let _memory = crate::palw_memory_ledger::host_ledger_v1()
+            .reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: "public-tir-custodian-reopen",
+                    class_id: descriptor.class_id,
+                    job: entry.claim,
+                },
+                need.reopen_ram_bytes,
+            )
+            .map_err(|e| e.to_string())?;
+        let until = entry.material_until_daa;
+        let reopened = tokio::task::spawn_blocking(move || {
+            backend
+                .reopen_tir_prepared_capture_v1(&header, &descriptor, &directory, until, now)
+                .map(|reader| reader.prepared_descriptor_v1() == Some(&descriptor))
+        })
+        .await
+        .map_err(|e| format!("TIR prepared capture reopen worker failed: {e}"))?;
+        match reopened {
+            Ok(true) => {
+                book.verified.insert(key, true);
+            }
+            Ok(false) | Err(_) => {
+                book.verified.insert(key, false);
+                error!(
+                    "[{PALW_PANEL}] TIR frame {}: the sealed prepared capture failed re-authentication — its demands can only be \
+                     answered from the retained original capture now",
+                    entry.claim
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -742,14 +896,18 @@ mod tests {
         book.persist();
         let mut reloaded = PalwTirPublicCustodianBookV1::load(dir.path());
         assert_eq!(reloaded.sealed, book.sealed);
-        reloaded.expire_v1(600);
+        // G14 R8: an accepted-but-reversible DAA past the horizon retires nothing; only an IRREVERSIBLE one does.
+        assert!(reloaded.retirable_v1(500).is_empty(), "irreversible == material_until is not past it");
+        let retirable = reloaded.retirable_v1(600);
+        assert_eq!(retirable, vec![sealed(1, 500)]);
+        reloaded.retired_v1((retirable[0].claim, retirable[0].allocation_id), 600);
         assert!(reloaded.sealed_v1(Hash64::from_u64_word(101), Hash64::from_u64_word(201)).is_none());
         assert_eq!(reloaded.sealed_v1(Hash64::from_u64_word(102), Hash64::from_u64_word(202)), Some(&sealed(2, 900)));
         reloaded.persist();
         assert_eq!(PalwTirPublicCustodianBookV1::load(dir.path()).sealed.len(), 1);
-        std::fs::write(dir.path().join("palw-tir-public-custodian.v1"), b"not a journal").unwrap();
+        std::fs::write(dir.path().join("palw-tir-public-custodian.v2"), b"not a journal").unwrap();
         assert!(PalwTirPublicCustodianBookV1::load(dir.path()).sealed.is_empty());
-        assert!(dir.path().join("palw-tir-public-custodian.v1.unreadable").exists());
+        assert!(dir.path().join("palw-tir-public-custodian.v2.unreadable").exists());
     }
 
     /// The accepted debit covers the driver's fixed per-slice overhead plus the slice's own quoted work.
@@ -773,5 +931,24 @@ mod tests {
         assert_eq!(work.hash_bytes, 8192 + 16_384);
         assert_eq!(work.parser_steps, 1024 + 16 * 16_384);
         assert_eq!(work.io_bytes, 16_384);
+    }
+
+    /// **G14 R8: physical preparation work is charged write-ahead and survives a restart** — the lane's finite recovery allowance
+    /// is never refilled by reloading the journal, and an entry leaves only once its preparation door is irreversibly past.
+    #[test]
+    fn physical_slice_allowance_is_durable_and_finite() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = (Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        let mut book = PalwTirPublicCustodianBookV1::load(dir.path());
+        book.charge_physical_slice_v1(key, 2, 700).unwrap();
+        let mut second = PalwTirPublicCustodianBookV1::load(dir.path());
+        assert_eq!(second.physical[&key].slices_run, 1, "the charge is on disk before the slice ran");
+        second.charge_physical_slice_v1(key, 2, 700).unwrap();
+        let mut third = PalwTirPublicCustodianBookV1::load(dir.path());
+        assert!(third.charge_physical_slice_v1(key, 2, 700).is_err(), "a restart never refills the allowance");
+        third.retired_v1((Hash64::from_u64_word(9), Hash64::from_u64_word(9)), 700);
+        assert!(third.physical.contains_key(&key), "the door at 700 is not irreversibly past at 700");
+        third.retired_v1((Hash64::from_u64_word(9), Hash64::from_u64_word(9)), 701);
+        assert!(!third.physical.contains_key(&key));
     }
 }
