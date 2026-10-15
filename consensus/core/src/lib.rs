@@ -882,6 +882,7 @@ pub mod palw_tokenizer_artifact_inventory_v1;
 pub mod palw_public_binding_v1;
 pub mod palw_staged_preclaim_v1;
 pub mod palw_staged_load_bound_v1;
+pub mod palw_float_decode_v1;
 
 pub mod palw_tokenizer_table_stream_v1;
 
