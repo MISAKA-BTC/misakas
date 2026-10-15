@@ -315,7 +315,9 @@ pub fn palw_tir_public_source_for_row_v1(
             || c.plan != plan.acquisition
             || c.terms != plan.owner_terms_v1()?
             || c.producer != custody.pledge_v1().producer
-            || custody.drawn_panel_v1().contains(&c.owner)
+            // G14 G-T4: an owner is any bond NOT liable on the claim — a drawn seat that signed no Valid owns as an outsider does.
+            || frame.original_custody_v1().credit_v1(&c.owner).is_some()
+            || frame.original_custody_v1().grant_v1(&c.owner).is_some()
             || !c.custodians.is_subset(&custody.liable_signers_v1())
             || row.owned.work_v1().is_none_or(|work| work.allocation != plan.owner_work)
         {

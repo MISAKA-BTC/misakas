@@ -201,7 +201,8 @@ mod palw_staged_court_fold_v1;
 #[path = "palw_tir_public_fold_v1.rs"]
 mod palw_tir_public_fold_v1;
 pub use palw_tir_public_fold_v1::{
-    palw_tir_public_conviction_preflight_v1, palw_tir_public_original_quote_v1, palw_tir_public_preclaim_quote_v1,
+    PALW_G03_FRAMELESS_TIR_ORIGINAL_CODE_V1, palw_tir_public_conviction_preflight_v1, palw_tir_public_original_quote_v1,
+    palw_tir_public_preclaim_quote_v1,
 };
 #[path = "palw_terminal_carriage_fold_v1.rs"]
 mod palw_terminal_carriage_fold_v1;
@@ -19894,6 +19895,11 @@ pub struct PalwTransitionExtrasV1 {
     /// transaction was decoded into this exact original FP object by native ingress.
     /// A matching claim found elsewhere must never lend a pledge to another TX.
     pub tir_public_originals: BTreeMap<Hash64, crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1>,
+    /// **G14 G-03: `Params::palw_tir_public_conviction_v1` is in force at this block** (its own fence, read from the params, NOT
+    /// from whether [`Self::tir_public_allocation_rules_v1`] resolved). Past it a Free Prompt commitment on a registered TIR class
+    /// is admitted only WITH its transaction-paired `TFP1` ORIGINAL frame: a frameless one is refused at acceptance, so it earns
+    /// no reward, weight or credit. `false` by `Default` and below the fence — byte-identical to before it.
+    pub tir_public_conviction_active: bool,
     /// `palw_staged_float_constraint_v1` at this block: greedy Float32 Constraint claims are
     /// admitted with the rooted f32 row court. False below it: refused.
     pub staged_float_constraint_active: bool,

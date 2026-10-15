@@ -2015,6 +2015,19 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this backend has no free-prompt drill fault".to_string())
     }
 
+    /// **G14 drill D-06: a free-prompt run whose committed token at decode `position` is NOT the job's own selection** — the
+    /// best lane the job's rule does not choose — with every step after it computed honestly from that token and every root
+    /// re-derived from the capture, so only the frame's decode-token door (or a seat's replay) sees the lie. Same contract as
+    /// every drill verb: callers refuse to reach it on a network carrying value. A backend without the verb refuses.
+    fn execute_free_prompt_with_selection_fault_v1(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+        _position: u32,
+    ) -> Result<PalwFpRunV1, String> {
+        Err("this backend has no free-prompt selection drill".to_string())
+    }
+
     /// **A DRILL fault of any kind** ([`PalwDrillFaultV1`], ADR-0152 v3.1 addendum §4-bis.10) on the
     /// attempt lane: the job run through this family's own dense capture path — the prompt, context
     /// or prefill moved before the run, or the rows, ids, legs or roots moved after it — and every

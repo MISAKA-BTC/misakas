@@ -236,6 +236,11 @@ pub(super) fn apply_vertex_equivocation_v1(
     let mut total = palw_vertex_permille_of_v1(u128::from(record.collateral), PALW_VERTEX_EQUIVOCATION_PENALTY_PERMILLE_V1)
         .ok_or(PalwStateV2Error::Overflow("equivocation penalty"))?;
     for claim in claims {
+        // G14 G-13: a lock an ORIGINAL TIR frame credited stays for that frame's own conviction while its door is open (never
+        // forfeited here, so never charged twice); `false` for every claim without a frame — byte-identical below the fence.
+        if crate::palw_tir_public_claim_v1::palw_tir_public_frame_keeps_lock_v1(&builder.state, &seat, claim, ctx.daa_score) {
+            continue;
+        }
         if let Some(lock) = builder.state.slashable_locks.get(&(seat, claim)).copied() {
             total = total.checked_add(lock.amount).ok_or(PalwStateV2Error::Overflow("equivocation forfeited locks"))?;
             builder.write_slashable_lock((seat, claim), None)?;

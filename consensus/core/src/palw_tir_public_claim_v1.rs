@@ -349,6 +349,21 @@ pub fn palw_tir_public_claim_v1(state: &crate::palw_state_v2::PalwChainStateV2, 
     }
 }
 
+/// **G14 G-13 (TIR side): is `(seat, claim)`'s slashable lock reserved for an ORIGINAL frame's own conviction at `now`?** — the
+/// claim carries a frame whose d0 door is still open and `seat` holds an exact credited Valid custody grant in it. While this holds,
+/// a path that would drop the lock for another reason (an S2 licence redraw, a Panel-v3 shard redraw, a vertex equivocation's lock
+/// forfeiture) leaves it in place, so the frame's conviction finds every credited seat's lock (`apply_conviction_v1` asserts it).
+/// `false` for every claim without a frame — every claim below `palw_tir_public_conviction_v1` — so those paths are byte-identical.
+pub fn palw_tir_public_frame_keeps_lock_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    seat: &PalwBondKeyV2,
+    claim: Hash64,
+    now: u64,
+) -> bool {
+    palw_tir_public_claim_v1(state, claim)
+        .is_some_and(|frame| now < frame.plan_v1().terms.collect_until_daa && frame.original_custody_v1().credit_v1(seat).is_some())
+}
+
 /// Synthetic signature injection for source-only lifecycle/index fixtures.
 /// This is a structurally/native-geometry checked candidate, NOT paid standing.
 #[cfg(test)]
@@ -392,6 +407,26 @@ pub(crate) fn palw_tir_public_frame_fixture_v1(forge: Option<(usize, usize)>, ma
     tests::fixture_in(forge, maximum_custodians)
 }
 
+/// **G14 G-T2 test support:** [`palw_tir_public_frame_fixture_v1`] over a job `edit_job` shapes (a seeded V3 job, a V4 job with
+/// penalties or stop sequences, ...), whose execution decodes by THAT job's own selection rule — except at decode position
+/// `wrong_at`, where it commits the best lane the rule does not choose (a selection violation over honest arithmetic).
+#[cfg(test)]
+pub(crate) fn palw_tir_public_frame_fixture_ruled_v1(
+    maximum_custodians: u64,
+    edit_job: impl FnOnce(&mut crate::palw_freeprompt_v3::PalwFreePromptJobV3),
+    wrong_at: Option<u32>,
+) -> PalwTirPublicFrameFixtureV1 {
+    tests::fixture_with(None, maximum_custodians, edit_job, wrong_at, None)
+}
+
+/// **G14 test support: an honest execution whose producer-signed ORIGINAL commitment names `output_root`** — a different output
+/// root than the IDs its own committed trace authenticates. Built from the start (the claim id, pledge, plan and frame all over
+/// that commitment), so the frame's structure check holds; only the output door can convict it.
+#[cfg(test)]
+pub(crate) fn palw_tir_public_frame_fixture_lying_output_v1(maximum_custodians: u64, output_root: Hash64) -> PalwTirPublicFrameFixtureV1 {
+    tests::fixture_with(None, maximum_custodians, |_| {}, None, Some(output_root))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,6 +441,17 @@ mod tests {
     /// [`super::palw_tir_public_frame_fixture_v1`]: the context is derived first (from an honest run's class, prompt and counts,
     /// which a one-lane forge does not change), then the execution is run in it.
     pub(super) fn fixture_in(forge: Option<(usize, usize)>, maximum_custodians: u64) -> super::PalwTirPublicFrameFixtureV1 {
+        fixture_with(forge, maximum_custodians, |_| {}, None, None)
+    }
+    /// [`fixture_in`] with the job edited by `edit_job` before its context is derived, decoded by the edited job's own rule
+    /// (greedy when the job leaves the V3 greedy default), the rule violated at decode position `wrong_at`.
+    pub(super) fn fixture_with(
+        forge: Option<(usize, usize)>,
+        maximum_custodians: u64,
+        edit_job: impl FnOnce(&mut crate::palw_freeprompt_v3::PalwFreePromptJobV3),
+        wrong_at: Option<u32>,
+        output_root: Option<Hash64>,
+    ) -> super::PalwTirPublicFrameFixtureV1 {
         use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
         use crate::palw_freeprompt_v3::*;
         use crate::palw_tir_public_allocation_v1::*;
@@ -421,6 +467,7 @@ mod tests {
         job.prompt_tokens = honest.prompt.len() as u32;
         job.decode_token_limit = honest.generated.len() as u32;
         job.max_context_tokens = 64;
+        edit_job(&mut job);
         let class = PalwFpClassFactsV3 {
             model_profile_id: Hash64::default(),
             runtime_manifest_hash: Hash64::default(),
@@ -438,12 +485,17 @@ mod tests {
             step_leaf_count: honest.hashes.len() as u64,
         };
         let context = crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job, &class, &facts, b"testnet-12").unwrap();
-        let x = crate::palw_tir_court_v1::test_support::tiny_execution_in(|_, _, _| context.clone(), forge);
+        let rule = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&job).expect("a fixture job has a selection rule");
+        let select = |position: u32, row: &[i32], before: &[u32]| {
+            crate::palw_tir_court_v1::test_support::select_by_rule(&rule, row, before, wrong_at == Some(position))
+        };
+        let x = crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(|_, _, _| context.clone(), forge, &select);
         let binding = x.binding.clone();
         let original = PalwFreePromptCommitmentV3 {
             job,
             trace_root: binding.full_logits_trace_root,
-            output_root: crate::palw_attempt_rules_v1::palw_attempt_output_root_v1(&binding.job_context, &x.generated),
+            output_root: output_root
+                .unwrap_or_else(|| crate::palw_attempt_rules_v1::palw_attempt_output_root_v1(&binding.job_context, &x.generated)),
             schedule_root: Hash64::default(),
             execution_root: binding.committed_execution_root,
             decode_tokens_executed: x.generated.len() as u32,
