@@ -19287,12 +19287,13 @@ mod held_class_form_pin {
         let whole = include_str!("palw_panel.rs");
         let source = &whole[..whole.find("#[cfg(test)]\nmod tests").expect("the unit tests follow the code")];
         let uses: Vec<&str> = source.lines().filter(|l| l.contains("self.config.prompt_ids_form")).map(str::trim).collect();
-        // Six: the node registry's one constructor (`PalwBackendRegistry::for_node_v1`, which read it
+        // Seven: the node registry's one constructor (`PalwBackendRegistry::for_node_v1`, which read it
         // twice before the producer and the panel shared it), the two class-form doors, the
-        // canonical claim's carrier — built by two builders since G14's original public pledge
-        // (`build_fp_commitment_tx_original_public_v1` beside `build_fp_commitment_tx_under_params_v1`;
-        // both feed the chain's stateless check, which holds no class) — and a bisection's close.
-        assert_eq!(uses.len(), 6, "a new reader of the network's form — read the class's instead (ADR-0118 D3): {uses:#?}");
+        // canonical claim's carrier — built by three builders since G14's original public pledge and
+        // its TIR public original (`build_fp_commitment_tx_with_tir_public_original_v1`,
+        // `build_fp_commitment_tx_original_public_v1` and `build_fp_commitment_tx_under_params_v1`; all
+        // feed the chain's stateless check, which holds no class) — and a bisection's close.
+        assert_eq!(uses.len(), 7, "a new reader of the network's form — read the class's instead (ADR-0118 D3): {uses:#?}");
         assert!(source.contains("fn class_prompt_ids_form(&self, class_id: Hash64)"), "the one door");
         for callee in [
             "palw_fp_capture_decode_v1(",
