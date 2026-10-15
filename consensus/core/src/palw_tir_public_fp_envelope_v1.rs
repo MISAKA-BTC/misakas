@@ -14,8 +14,15 @@ pub const PALW_TIR_PUBLIC_FP_ENVELOPE_MAGIC_V1: &[u8; 4] = b"TFP1";
 pub const PALW_TIR_PUBLIC_FP_HEADER_MAX_BYTES_V1: usize = 2048;
 /// One fixed MLDSA87 pledge plus all of its bounded identity/clock fields.
 pub const PALW_TIR_PUBLIC_FP_PLEDGE_MAX_BYTES_V1: usize = 8192;
-pub const PALW_TIR_PUBLIC_FP_ENVELOPE_MAX_BYTES_V1: usize =
-    4 + 2 + 8 + 4 + PALW_FP_COMMITMENT_TX_MAX_BYTES + PALW_TIR_PUBLIC_FP_HEADER_MAX_BYTES_V1 + PALW_TIR_PUBLIC_FP_PLEDGE_MAX_BYTES_V1;
+pub const PALW_TIR_PUBLIC_FP_ENVELOPE_MAX_BYTES_V1: usize = 4
+    + 2
+    + 8
+    + 4
+    + PALW_FP_COMMITMENT_TX_MAX_BYTES
+    + PALW_TIR_PUBLIC_FP_HEADER_MAX_BYTES_V1
+    + PALW_TIR_PUBLIC_FP_PLEDGE_MAX_BYTES_V1
+    + 1
+    + PALW_TIR_PUBLIC_FP_PLEDGE_MAX_BYTES_V1;
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
 pub struct PalwTirPublicFpEnvelopeV1 {
@@ -26,6 +33,11 @@ pub struct PalwTirPublicFpEnvelopeV1 {
     pub original_payload: Vec<u8>,
     pub header: PalwPublicTirBindingHeaderV1,
     pub pledge: PalwTirPublicCustodyPledgeV1,
+    /// **G14 R4 (semantic stages): the producer's signed history pledge over the frame's SEMANTIC component** — present exactly
+    /// when the original's full allocation carries a registered semantic stage (constraint, tokenizer, prefix state). It binds
+    /// the frame's `semantic_resource_plan_id` and history capacity so the frame installs the staged semantic courts' contract
+    /// beside itself; native admission re-verifies its signature and every field against the recomputed plan.
+    pub history_pledge: Option<crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
 }
 impl BorshDeserialize for PalwTirPublicFpEnvelopeV1 {
     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
@@ -45,7 +57,13 @@ impl BorshDeserialize for PalwTirPublicFpEnvelopeV1 {
         // pledge decoder independently bounds its one signature before allocation.
         let header = PalwPublicTirBindingHeaderV1::deserialize_reader(reader)?;
         let pledge = PalwTirPublicCustodyPledgeV1::deserialize_reader(reader)?;
-        let result = Self { version, declared_rent_sompi, original_payload, header, pledge };
+        // The optional history pledge: one tag byte, then the pledge's own bounded decoder (one bounded signature).
+        let history_pledge = match u8::deserialize_reader(reader)? {
+            0 => None,
+            1 => Some(crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1::deserialize_reader(reader)?),
+            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "TFP1 history pledge tag is not an Option")),
+        };
+        let result = Self { version, declared_rent_sompi, original_payload, header, pledge, history_pledge };
         result.check_v1().map_err(|why| std::io::Error::new(std::io::ErrorKind::InvalidData, why))?;
         Ok(result)
     }
@@ -57,9 +75,18 @@ impl PalwTirPublicFpEnvelopeV1 {
         pledge: PalwTirPublicCustodyPledgeV1,
         declared_rent_sompi: u64,
     ) -> Result<Self, String> {
-        let result = Self { version: 1, declared_rent_sompi, original_payload, header, pledge };
+        let result = Self { version: 1, declared_rent_sompi, original_payload, header, pledge, history_pledge: None };
         result.check_v1()?;
         Ok(result)
+    }
+    /// The same envelope carrying the producer's history pledge over the frame's semantic component (see the field).
+    pub fn with_history_pledge_v1(
+        mut self,
+        history_pledge: crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1,
+    ) -> Result<Self, String> {
+        self.history_pledge = Some(history_pledge);
+        self.check_v1()?;
+        Ok(self)
     }
     fn check_shape_v1(&self) -> Result<(), String> {
         if self.version != 1
@@ -74,6 +101,15 @@ impl PalwTirPublicFpEnvelopeV1 {
         }
         crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(self.header.clone()).check_wire_v1()?;
         self.pledge.check_v1()?;
+        if let Some(history) = &self.history_pledge {
+            history.check_v1()?;
+            if (history.claim, history.producer, history.execution_root, history.job_identity)
+                != (self.pledge.claim, self.pledge.producer, self.pledge.execution_root, self.pledge.job_identity)
+                || borsh::object_length(history).map_err(|e| e.to_string())? > PALW_TIR_PUBLIC_FP_PLEDGE_MAX_BYTES_V1
+            {
+                return Err("TFP1 history pledge names another original claim/producer/execution/job or exceeds its bound".into());
+            }
+        }
         if borsh::object_length(&self.header).map_err(|e| e.to_string())? > PALW_TIR_PUBLIC_FP_HEADER_MAX_BYTES_V1
             || borsh::object_length(&self.pledge).map_err(|e| e.to_string())? > PALW_TIR_PUBLIC_FP_PLEDGE_MAX_BYTES_V1
             || borsh::object_length(self)
@@ -361,5 +397,46 @@ mod tests {
         let crate::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted { public_job, .. } = &mut object else { unreachable!() };
         *public_job = None;
         assert!(original.matches_object_v1(&object).is_err());
+    }
+
+    /// **G14 R4 (semantic stages): the producer's history pledge rides the envelope** — round-trips byte for byte, and one naming
+    /// another claim, producer, execution or job is refused before admission ever reads it.
+    #[test]
+    fn g14_history_pledge_rides_tfp1_and_must_name_the_same_original() {
+        let original = envelope();
+        let frame_pledge = original.pledge.clone();
+        let history = crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1 {
+            version: 1,
+            claim: frame_pledge.claim,
+            producer: frame_pledge.producer,
+            execution_root: frame_pledge.execution_root,
+            job_identity: frame_pledge.job_identity,
+            cu_ruleset_id: Hash64::from_u64_word(41),
+            resource_plan_id: Hash64::from_u64_word(42),
+            maximum_records: 8,
+            maximum_custodians: frame_pledge.maximum_custodians,
+            accept_until_daa: frame_pledge.accept_until_daa,
+            material_until_daa: frame_pledge.material_until_daa,
+            signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        };
+        let carried = original.clone().with_history_pledge_v1(history.clone()).unwrap();
+        let decoded = PalwTirPublicFpEnvelopeV1::decode_v1(&carried.encode_v1().unwrap()).unwrap();
+        assert_eq!(decoded, carried);
+        assert_eq!(decoded.history_pledge.as_ref(), Some(&history));
+        assert_eq!(decoded.original_fp_v1().unwrap(), original.original_fp_v1().unwrap(), "the original payload is untouched");
+        for n in 0..4 {
+            let mut bad = history.clone();
+            match n {
+                0 => bad.claim = Hash64::from_u64_word(99),
+                1 => bad.producer = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(99), 0)),
+                2 => bad.execution_root = Hash64::from_u64_word(99),
+                _ => bad.job_identity = Hash64::from_u64_word(99),
+            }
+            assert!(original.clone().with_history_pledge_v1(bad).is_err());
+        }
+        // An unknown Option tag fails closed before the pledge decoder runs.
+        let mut encoded = original.encode_v1().unwrap();
+        *encoded.last_mut().unwrap() = 2;
+        assert!(PalwTirPublicFpEnvelopeV1::decode_v1(&encoded).is_err());
     }
 }

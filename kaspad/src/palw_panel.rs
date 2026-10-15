@@ -7911,7 +7911,37 @@ impl PalwPanelService {
                             )
                             .ok_or("producer cannot sign the original TIR source pledge")?;
                         pledge.check_v1()?;
-                        Some((header.clone(), pledge, plan.terms.plan.rent_sompi))
+                        // G14 R4: a registered semantic stage rides the frame too — the producer signs the history pledge over
+                        // the frame's semantic component, on the frame pledge's own acceptance door and material horizon.
+                        let history = match (&plan.semantic, plan.semantic_resource_plan_id) {
+                            (Some(_), Some(resource_plan_id)) => {
+                                use kaspa_consensus_core::palw_history_custody_v1::{
+                                    PALW_HISTORY_PLEDGE_CONTEXT_V1, PalwHistoryCustodyPledgeV1,
+                                };
+                                let mut history = PalwHistoryCustodyPledgeV1 {
+                                    version: 1,
+                                    claim: claim_id,
+                                    producer: PalwBondKeyV2(bond),
+                                    execution_root: commitment.execution_root,
+                                    job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&commitment),
+                                    cu_ruleset_id: header.job_context.cu_ruleset_id,
+                                    resource_plan_id,
+                                    maximum_records: plan.maximum_semantic_history_records,
+                                    maximum_custodians: plan.acquisition.maximum_custodians,
+                                    accept_until_daa: pledge.accept_until_daa,
+                                    material_until_daa: pledge.material_until_daa,
+                                    signature: Vec::new(),
+                                };
+                                history.signature = self
+                                    .sign(history.pledge_id_v1().as_byte_slice(), PALW_HISTORY_PLEDGE_CONTEXT_V1)
+                                    .ok_or("producer cannot sign the frame's semantic history pledge")?;
+                                history.check_v1()?;
+                                Some(history)
+                            }
+                            (None, _) => None,
+                            (Some(_), None) => return Err("the frame quote's semantic component has no resource identity".into()),
+                        };
+                        Some((header.clone(), pledge, history, plan.terms.plan.rent_sompi))
                     }
                     None => None,
                 }
@@ -7952,7 +7982,7 @@ impl PalwPanelService {
         // because the fee is the only field the second build changes and the mass does not move
         // with it.
         let build = |fee: u64| {
-            if let Some((header, pledge, rent)) = &tir_original {
+            if let Some((header, pledge, history, rent)) = &tir_original {
                 // The rent rides on top of relay: consensus burns exactly the declaration from this carrier's fee.
                 return kaspa_pq_validator_core::build_fp_commitment_tx_with_tir_public_original_v1(
                     &key,
@@ -7963,6 +7993,7 @@ impl PalwPanelService {
                     price,
                     header,
                     pledge,
+                    history.as_ref(),
                     *rent,
                     funding_outpoint,
                     funding,
@@ -8696,6 +8727,9 @@ impl PalwPanelService {
         let mut public_flat_response_book = flat_source_responder::FlatSourceBookV1::default();
         let mut public_float_response_book = float_source_responder::FloatSourceBookV1::default();
         let mut public_tir_prefix_response_book = tir_prefix_responder::TirPrefixBookV1::default();
+        // G14 R3: ORIGINAL TIR frames this node prepares as the producer or a drawn Valid seat, and the sealed-descriptor journal.
+        let mut tir_public_custodian =
+            palw_fraud_filer::tir_public_custodian::PalwTirPublicCustodianBookV1::load(&self.config.state_dir);
         let mut public_history_response_book = history_recovery_actor::HistoryResponderBookV1::default();
         let mut delegated_slots = PalwDelegatedSlotsV1::default();
         let mut artifact_inventory_book = artifact_inventory::ArtifactInventoryBookV1::default();
@@ -8765,6 +8799,9 @@ impl PalwPanelService {
         ));
         // Lane LG14-A: the common fraud filer's book — a cache of the chain and this node's replays; nothing persists (§6.3).
         let mut fraud_filer = palw_fraud_filer::PalwFraudFilerBookV1::default();
+        // G14 R4: pending public convictions against ORIGINAL TIR frames — persisted, so a restart still files inside the door.
+        let mut tir_public_filer =
+            palw_fraud_filer::tir_public_filer_scheduler::PalwTirPublicFilerBookV1::load(&self.config.state_dir);
         // Lane G14-K: the kernel route's public verifier's book — a cache of the chain and this process's replays; nothing persists.
         let mut kernel_verifier = palw_kernel_verifier::PalwKernelVerifierBookV1::default();
         // ADR-0160 F-Q (stage 2): the audit duty's book; armed by identity (a bond in a credited claim's pool).
@@ -11187,6 +11224,23 @@ impl PalwPanelService {
             {
                 debug!("[{PALW_PANEL}] public history custody grant remains pending: {why}");
             }
+            // G14 R3: an ORIGINAL TIR frame's preparation — paid slices, the prepared capture, then the producer's Ready or a
+            // drawn Valid seat's atomic grant + Ready. A clean no-op below `palw_tir_public_conviction_v1`.
+            if let Err(why) = self
+                .tir_public_custodian_tick_v1(
+                    &session,
+                    bond_key,
+                    network_domain,
+                    &own_receipts,
+                    &mut tir_public_custodian,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] TIR frame custodian preparation remains pending: {why}");
+            }
             if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa) {
                 self.delegated_slots_tick_v1(&session, bond_key, &mut delegated_slots, &mut court_pending, &mut court_due, &mut court_moved)
                     .await;
@@ -13583,6 +13637,21 @@ impl PalwPanelService {
                 bond_key,
                 seat_replays.has_room(false),
                 &materials,
+                &mut court_pending,
+                &mut court_due,
+                &mut court_moved,
+            )
+            .await;
+            // --- G14 R4: public convictions against ORIGINAL TIR frames (`tir_public_filer_scheduler`) ---
+            //
+            // Files each pending finding at once inside the frame's fixed d0 door, after the fold's own dry run accepts it; one per
+            // claim on its own lane, persisted across restarts. A clean no-op below `palw_tir_public_conviction_v1`.
+            self.tir_public_filer_tick_v1(
+                &session,
+                bond_key,
+                network_domain,
+                current_daa,
+                &mut tir_public_filer,
                 &mut court_pending,
                 &mut court_due,
                 &mut court_moved,

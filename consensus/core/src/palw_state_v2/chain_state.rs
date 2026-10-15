@@ -2377,7 +2377,7 @@ impl PalwChainStateV2 {
         let mut holds = BTreeSet::new();
         let now = self.last_point().map(|p| p.daa_score).unwrap_or(0);
         for (key, row) in &self.staged_courts {
-            if matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..) | Key::TirClaim(_)) {
+            if matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..) | Key::TirClaim(_) | Key::TirWitness(..)) {
                 let (at, row_holds) = palw_staged_court_fold_v1::index_rows(*key, row);
                 due.insert((at, *key));
                 holds.extend(row_holds);
@@ -2415,10 +2415,10 @@ impl PalwChainStateV2 {
             }
         }
         let actual_due: BTreeSet<_> = self.staged_due.iter().filter(|(_, key)| {
-            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..) | Key::TirClaim(_))
+            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..) | Key::TirClaim(_) | Key::TirWitness(..))
         }).copied().collect();
         let actual_holds: BTreeSet<_> = self.staged_holds.iter().filter(|(_, _, key)| {
-            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..) | Key::TirClaim(_))
+            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..) | Key::TirClaim(_) | Key::TirWitness(..))
         }).copied().collect();
         if owners != self.staged_tir_by_owner || claims != self.staged_tir_by_claim || responders != self.staged_tir_responders
             || preparers != self.staged_tir_preparers

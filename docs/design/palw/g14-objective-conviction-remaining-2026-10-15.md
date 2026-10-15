@@ -51,7 +51,12 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
   `kernel_ledger.rs`・`wire_budget.rs`・`wire_jobs.rs` は他 lane の手書き arm があるため再生成結果を採らない）。TIR 経路の手書き codec 15 件を宣言と
   照合し `rfc06_native_manual_wire_review_v1.py` に `reviewed-field-layout` で pin。新しい owner-local visitor（`palw_mode_v2`、
   `palw_tir_public_{claim,custody,owned}_v1`）を `#[path] mod` で接続。
-- A-2 wire pin: tag 170/171 は `PALW_A2_NEW_KIND_WIRE_V1` に **0x0 の仮 pin** を置いた。検証段で `[a2u-pins]` 出力から pin し直す。
+- A-2 wire pin: tag 170/171 は `PALW_A2_NEW_KIND_WIRE_V1` に **build なしで導出した値**を pin した（170 = `0xb68d62123647ff28`、
+  171 = `0x68623b7dc7d30b55`、2026-10-16）。導出は `scripts/drills/a2u_new_kind_wire_pins.py`（a2u テストの manifest reader の移植。
+  fd9d6a8e4 の木で pin 済み 36 行をすべて再現、現 HEAD で integ の 243/244 も一致）。権威は Rust の
+  `every_landed_kind_is_pinned_to_its_wire_form` で、食い違えば検証段がその `[a2u-pins]` 出力から pin し直す。**別 lane の注意**: 同じ移植で
+  240–242（MonetaryMaterial*）の pin が現 HEAD の source と一致しない（fd9d6a8e4 以降の `PalwMaterialCodecV1` / `PalwMonetaryMaterialActionV1`
+  の変更、0cdf53c48・506fb2ffb・a1ad9d633・ccc065dff）。G14 の範囲外なので pin は変えていない。
 
 ### 休眠時の同一性（A-2）
 - 新しい行（TirClaim / TirPreparation / TirAcquisition）は fence 後にしか書かれない。Final floor（`palw_claim_final_floor_v1`）、
@@ -80,8 +85,9 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
    持つ original を拒否する（`prepare_original_v1`）。nested job-tail の割当前上限の全数監査は未。producer は TFP1 を quote → pledge 署名 →
    envelope の順で作る（`palw_tir_public_original_quote_v1` は admission と同じ `original_plan_v1` を使うので quote と受理が食い違わない）。
 5. context再導出helperのD=0拒否と、既存native routeが許す元FP形式・job種別・decode countの範囲を照合する。新carrierが合法な元形式を黙って落とす場合、対象を狭めて完成扱いせず対応を足す。
-   — **未（狭めた範囲を明記）**: frame の対象は「semantic stage 無し・greedy・tail 無しの FP V3 TIR job」に限定した。semantic（constraint /
-   tokenizer / prefix state）と sampling の original は frame 経路では拒否され、旧 ClaimBundle 経路のまま。
+   — **一部（ソースのみ・未検証、2026-10-16）**: frame は sampling（seeded Decision 11）・V4 pipeline（penalty/bias/stop）・semantic stage
+   （constraint / tokenizer / prefix state）を持つ original も受理する（下の R4 注記）。まだ拒否するのは job tail（eval/gen）と flat logits scheme の
+   class（selection pin が行全体を運ぶため bounded control に入らない、R7 の分割搬送待ち）で、それらは旧 ClaimBundle 経路のまま。
 6. V3/V4のtyped grant、共通filerからnative terminal、小さいrooted裁定参照／大witness搬送、実slash、生成資格と受信block拒否、全報酬consumerを完成させる。
    — **共通 filer → native terminal → 実 slash → 生成／報酬の拒否はソースで接続**（R4〜R6 の注記）。V3/V4 typed grant と大 witness 分割搬送は未。
 7. native worker／queue／inclusion、実CPU予約・反復上限、最大profile、GC、IBD／pruned import、再編で孤立した物理workのjournalを閉じる。
@@ -149,8 +155,8 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
 
 - [ ] generic arithmetic-only TIRも含め、元のpublic FP commitment、登録class/layout、binding、source、FullSUM、絶対期限を同じ受理文脈で固定する。
   — **実装（ソースのみ・未検証）**: `palw_tir_public_fold_v1.rs:71`（`prepare_paired_original_v1`）、`:124`（`prepare_original_v1`）、`:217`
-  （`install_original_v1`）、`objects.rs:3496`/`:3582`。X3 の hard deadline が frame の collect door より前なら拒否（`:241`）。semantic stage と
-  非 greedy の original は拒否（`:170`、範囲の限定）。
+  （`install_original_v1`）、`objects.rs:3496`/`:3582`。X3 の hard deadline が frame の collect door より前なら拒否。job tail と flat logits scheme の
+  original は拒否（範囲の限定）。semantic stage は ClaimBundle 契約を frame と同じ d0 に設置して受理（R4 の注記）。
 - [ ] resource identityと、受理DAAを含むallocation identityを区別し、元署名・元job・元input/output/state・artifactの差し替えを拒否する。
   — **実装（Codex、ソースのみ・未検証）**: `resource_plan_id`（pledge が署名）と `allocation_id`（受理 DAA を含む）を分離
   （`palw_tir_public_allocation_v1.rs:140`/`:142`）、差し替え拒否は `PalwTirPublicClaimV1::check_structure_v1` と
@@ -164,8 +170,13 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
   旧 licence 経路は exact credit を要求（`require_qualified_receipts_v1` `:786`）。
 - [ ] 個々のownerの追加acquisition／workと、元claimのprepaid poolを分離する。複数ownerが同じ支払いを無制限に複製できず、攻撃者の先取りで正直な1人を排除しない料金・容量規則を完成する。
   — **一部**: owner は自分の rent + deposit を別に払い（`open_v1` `:320`、`owner_terms_v1`）、元 pool を使わない。owner ごとの row 上限
-  （`maximum_owned_rows_per_reserver`）はある。**blocked**: claim あたりの owner 数・custodian の応答負荷の上限が無く、rent は burn されて
-  custodian に渡らないため、多数 owner による custodian への default 誘発（grief）を防ぐ容量規則が未決（設計判断が要る）。fence 休眠の理由の一つ。
+  （`maximum_owned_rows_per_reserver`）はある。
+  **実装（ソースのみ・未検証、Lead 既定 (a)・ユーザー確認待ち）**: claim あたりの outside owner 数を `PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1`
+  （K_owner = 8、`palw_tir_public_claim_v1.rs:277`）に制限し、超過 owner は duty・row を作る前に Open で拒否（`open_v1`
+  `palw_tir_public_fold_v1.rs:379`、数は `staged_tir_owner_count_v1` `palw_staged_court_fold_v1.rs:208`）。custodian の応答負荷上限は plan の
+  acquisition 容量から導出（`custodian_load_bound_v1` = K_owner × `maximum_turns` 件、× `maximum_unit_bytes` B、frame view に公開）。
+  **残る穴（ユーザー判断待ち）**: colluder が K 個の owner 枠を自費で先取りすると、正直な owner が Open できない（枠の再利用＝idle owner の
+  枠回収規則が未決）。この穴があるため「攻撃者の先取りで正直な1人を排除しない」は未達で、checkbox は閉じない。
 
 ### R2. 署名付き搬送と全native入口を接続する
 
@@ -207,12 +218,24 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
   （`preserves_credited_v1`）。
 - [ ] late grantに、完了不可能なcold preparation期限を課さない。採用した先行準備＋atomic grant／Readyを、実nodeの準備worker・carrier・元予算・実担保へ通し、固定期限内に成立させる。候補helperの存在だけでは完了しない。
   — **一部**: consensus 側の atomic grant/Ready は Codex 実装済み。node 側は 3 署名（V2 Valid・raw grant・outer）を元 domain で作る builder を追加
-  （`kaspad/src/palw_tir_public_filer.rs` `palw_tir_public_grant_ready_object_v1`、frame view に pledge id）。**blocked**: prepared descriptor を作る
-  準備 worker と投稿 scheduler が無く、固定期限内の成立は未実測。
+  （`kaspad/src/palw_tir_public_filer.rs` `palw_tir_public_grant_ready_object_v1`、frame view に pledge id）。
+  **node 準備 worker を追加（ソースのみ・未検証）**: `kaspad/src/palw_tir_public_custodian.rs`（`palw_fraud_filer` の子 module、panel loop から
+  毎 tick `tir_public_custodian_tick_v1` を呼ぶ、`palw_panel.rs` の history grant の直後）。producer（d0 の custodian、accepted index
+  `staged_tir_preparation_duties_after_v1` から duty を読む）と、Valid に署名した drawn seat（`own_receipts`）が、producer が前払いした claim 全体の
+  準備 lane で slice ごとに「backend の quote → work book が accepted state で exact debit を作る → 署名 `WorkDebit` を court queue
+  （round `u32::MAX − 24`）→ accept 後に `confirm_v1` が permit を mint → その permit で slice 実行」を繰り返し、prepared capture を seal する。
+  seal 後に producer は自分の `PreparationReady`、seat は Valid credit＋raw grant＋Ready の atomic object を投稿（round `u32::MAX − 25`）。
+  seat は seal するまで grant しないので、grant 後に cold preparation 期限を負わない（late grant）。sealed descriptor は
+  `state_dir/palw-tir-public-custodian.v1` に journal（tmp→rename）し、再起動後は再準備なしに Ready を再投稿できる。accepted state を読む
+  consensus API `palw_tir_public_read_v1`（fence 未満は `Ok(false)`、`api/mod.rs`・`consensus/mod.rs`・`processor/palw.rs`・`session.rs`）を追加。
+  **未**: 1 slice ごとに 1 carrier の往復が要り、固定 preparation 期限内に最大 profile で完走することは未実測。seat が元 capture を保持して
+  いない場合は grant しない（責任を負わない側に倒れる）。owner の demand に prepared capture から応答する responder（Begin/Part/Finish）は未接続。
 - [ ] whole-job V2に加え、実際に有効なV3/V4等のtyped receipt／grantを、元のsegment／shard署名domainのまま接続する。未対応入口の拒否を「全receipt対応」と数えない。
   — **blocked**: V3 の supplementary credit（`credit_supplementary_receipts_v3`）は `ReceiptLicensed` を要求する一方、frame の grant は licence
   前に要る。licence 前の typed credit door は新しい金銭規則で判断が要る。V4 shard receipt は RFC-0006 の shard record 経由。現状は frame の claim に
   typed licence を名指しで拒否（`require_qualified_typed_receipts_v1` `:799`）。
+  **Lead 既定 (b)（2026-10-15、ユーザー確認待ち）: この release では V3/V4 typed receipt を frame で名指し拒否のまま残し、licence 前の credit door は
+  導入しない。** よって本 checkbox は未完のまま（frame の対象は whole-job V2 Valid のみ）。
 - [ ] owner Open時のliteral責任集合を確定し、後からのgrantで過去の継続処理を壊したり、過去の責任を増やしたりしない。再編時は現在のnative根拠と照合する。
   — **実装（Codex、ソースのみ・未検証）**: owner contract の `custodians` は Open 時の liable 集合、`bind_preparation_v1` で Ready 済み応答者を固定、
   変更は現行 row 比較つきで適用。
@@ -225,18 +248,36 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
   — **実装（ソースのみ・未検証）**: tag 170 に `Conviction`/`Convict` を追加（`palw_tir_public_carriage_v1.rs:65`/`:73`）。filer は liable 以外の
   Active・floor 以上の任意 bond（`conviction_filer_v1` `palw_tir_public_fold_v1.rs:526`）で、Panel 席でも外部でも同じ object・同じ裁定
   （E2E ソース `:1096` で両者の結果一致を検査）。node 側は reader API `palw_tir_public_frame_v1` と署名済み object の builder
-  （`kaspad/src/palw_tir_public_filer.rs`）。**未**: いつ filing するかの scheduler・queue・restart journal。DA の Open は owner 規則上 drawn
-  seat 不可のまま（外部 bond が DA 終局に到達できる）。
+  （`kaspad/src/palw_tir_public_filer.rs`）。**filer scheduler を追加（ソースのみ・未検証）**: `kaspad/src/palw_tir_public_filer_scheduler.rs`
+  （panel loop の fraud filer の直後で毎 tick）。finding は `queue_finding_v1` で受け、d0 の door 内で即 filing（door は延びず、claim は door
+  閉鎖まで Final にならない）。署名前に fold と同じ経路の dry run（consensus-core `palw_tir_public_conviction_preflight_v1`、API
+  `palw_tir_public_conviction_preflight_v1`、次 DAA で評価し builder は破棄）で受理を確認し、holds・責任者・既に有罪・exit hold 喪失など
+  accepted state で分かる拒否には rent を払わない。queue は round `u32::MAX − 26`（claim ごと 1 件、due = `collect_until − 1`、
+  `COURT_MOVE_REPLAN_DAA` 後に再送、最大 3 回）。restart journal は `state_dir/palw-tir-public-filer.v1`（最大 16 件、tmp→rename、読めない
+  journal は退避）。**未**: finding の生産者（outside owner の acquisition 駆動 Open→Demand→Collect と、arithmetic scheduler の局所化）が
+  panel loop から未接続。DA の Open は owner 規則上 drawn seat 不可のまま（外部 bond が DA 終局に到達できる）。
 - [ ] own-modelで得た不一致と、元claimの認証済みmaterialを結び付け、producerの秘密capture・秘密checkpoint・秘密状態の注入を排除する。
   — **実装（ソースのみ・未検証）**: 証拠は元 root への opening と ID の EOF 認証のみで裁定し、program は state の登録値を native に埋める
   （carried program は拒否）。`adjudicate_original_v1`/`adjudicate_original_output_v1`（`palw_tir_objective_v1.rs:251`/`:103`）。
 - [ ] 計算、job、input、output、stateの各違反を既存の決定論的courtへ接続する。局所findingを、そのままportableな有罪certificateと扱わない。
-  — **一部**: 計算（cone/logits）、greedy selection（decode-token、`adjudicate_original_greedy_decode_v1` `:271`）、output identity、DA を frame の
-  native door で裁定（`apply_conviction_v1` `palw_tir_public_fold_v1.rs:589`）。finding は fold 内で再裁定してから funnel へ渡す。**未**: semantic
-  stage（constraint/tokenizer/prefix state）と sampling の court は frame に未接続 → それらを持つ original は受理しない（`:170`）。
+  — **一部→接続（ソースのみ・未検証、2026-10-16）**: 計算（cone/logits）、output identity、DA に加え、**selection と stop を original job 自身の規則で**
+  裁定する: `PalwTirSelectionRuleV1::of_job_v1`（`palw_tir_court_v1.rs`、`decoder_v1` と同じ選択: V3 は Decision 11 key、V4 は penalty/bias/ban
+  付き pipeline）と新 door `check_tir_decode_token_tiled_rule_v1`（認証は live greedy door と同一、比較は認証済み prefix 上の job の key。banned
+  lane の commit はそれ自体が fault。live の greedy door は不変）、`adjudicate_original_decode_v1`（`palw_tir_objective_v1.rs`）。stop 規則は Output
+  door で完全認証済み ID に `original_stop_rule_fault_v1`（V4 は `decode_answer_stop_v4`、V3 は budget 長）を適用し、output が一致しても stop
+  違反なら有罪（execution-proving）。**semantic stage**: frame は自身の allocation が既に価格付け・rebase した semantic component から
+  ClaimBundle 契約（staged semantic court が依拠するもの）を同じ d0 に設置する（`frame_semantic_bundle_v1`、prepare で検査し install で書く）。
+  producer の history pledge は TFP1 の新しい optional field `history_pledge` で運び（carrier walk が HFP1 と同じく元 object に対して認証し
+  claim で重複排除）、admission が署名と全 field（claim/producer/execution/job/cu_ruleset/`semantic_resource_plan_id`/history 容量/
+  acquisition custodian 上限/受理期限/material horizon）を再計算値と照合する。rent/deposit は frame の FullSUM が既に semantic を含むので二重に
+  払わない。semantic court が有罪にした claim の Valid custodian は ClaimBundle 経路と同じく `CourtFraud` void に基づく kind 3 で課金され、
+  frame の exit hold が collateral を残す。producer 側（kaspad の TFP1 経路）は semantic plan のとき history pledge を frame pledge と同じ受理期限・
+  horizon で署名して載せる。**未**: job tail と flat scheme（上記）。semantic court 側の G14 完全性（Panel 外 1 人で終局できるか）は ClaimBundle
+  経路の既存実装に依拠し、frame 経由での E2E は未。
 - [ ] claim、class、artifact、position、selector、sample／top-k等の意味、依存cone、元inputの完全なbindingを確認する。
-  — **一部**: claim/class/artifact/execution/trace/job は target で固定、依存 cone は cone 裁定が要求、greedy selection は decode-token。
-  sample/top-k 等は未接続のため対象外に限定（上記）。
+  — **一部（ソースのみ・未検証）**: claim/class/artifact/execution/trace/job は target で固定、依存 cone は cone 裁定が要求、selection は job 自身の
+  規則（seed・temperature・V4 penalty/bias/ban は original job から取り、filer は選べない）を認証済み prefix 上で、stop は完全認証済み ID 上で裁定。
+  V4 の選択は lane ごとの key の argmax で top-k/top-p は無いので、1 本の beating lane で反証できる。constraint mask は staged Constraint court。
 - [ ] 部分receiptや単一leafだけで、本来必要な依存閉包の認証・再計算を済ませたことにしない。
   — **実装（ソースのみ・未検証）**: cone 裁定は operand の opening を全て要求し、output 裁定は全 ID の EOF 認証が無ければ拒否
   （`authenticated_original_ids_v1` `:541`）。
@@ -304,7 +345,10 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
 - [ ] 固定された元preparation期限と、warm response／WorkDebit／part搬送の局所期限を両方満たす。colluderの合法な最大遅延を積み重ねても全体horizonを超えないようにする。
   — **未**（今回の範囲外。Codex の FullSUM 部品はある。実測・配線は未）。
 - [ ] 実nodeのキュー、backpressure、inclusion容量、bonded verifierの参加枠を配線し、他owner・他claim・悪性送信者の負荷で完走が壊れない条件を定める。
-  — **blocked**: owner 数・custodian 負荷の容量規則が未決（R1 最終項）。node の queue・backpressure も未。fence 休眠の理由。
+  — **一部（ソースのみ・未検証）**: owner 容量は K_owner と custodian 負荷上限（R1、Lead 既定・ユーザー確認待ち、先取りの穴あり）。
+  staged witness は (claim, filer) ごと 1 row、rent 前払いで door 閉鎖時に sweep。node 側 lane はすべて有界: custodian 準備は同時 4 frame・
+  各 lane claim ごと 1 件（`u32::MAX − 24/−25`）、filer は最大 16 件・claim ごと 1 件・part は逐次（`u32::MAX − 26`）、court queue の EDF と
+  carrier の in-flight 上限に従う。**未**: block あたりの TIR control の inclusion 上限と、Panel が外部 verifier の lane を消費しない保証の実測。
 - [ ] 全体mapのclone／state root／GCの増幅、複数active claimの同時RAM・disk、native sweepの処理量を扱う。1rowや64件pageの上限だけで全体有界とはしない。
   — **未**（今回の範囲外。Codex の FullSUM 部品はある。実測・配線は未）。
 - [ ] 新frame、元public commitment、後続grant、delta／journalの実際のfootprintを13資源次元と照合する。新しいrowを追加した後も、以前のquoteで全量を払えたと仮定しない。
@@ -312,22 +356,49 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
 - [ ] admission／rehearsal／canonical foldで繰り返す署名検査・frame再検査を実際に予算化する。宣言した検査回数の上限をnative処理で守り、CPU料金／最悪処理時間が不明な部分を0扱いせず、期限条件の不足として残す。
   — **未**（今回の範囲外。Codex の FullSUM 部品はある。実測・配線は未）。
 - [ ] 大きなwitnessを既存の小さいterminal上限へ黙って切り詰めない。明示的に資金化した分割搬送、またはnative incremental courtから小さいrooted certificateを作る経路を完成する。
-  — **未**: conviction は prepaid terminal witness 上限と control 90,000 B を超える primitive を拒否する（切り詰めない）。分割搬送・incremental court は未。
+  — **実装（ソースのみ・未検証、2026-10-16）: 明示的に資金化した分割搬送**。tag 170 に `ConvictionWitness` target と `WitnessPart`
+  action を追加（`palw_tir_public_carriage_v1.rs`、part は 16 KiB 以下で decode 前に上限検査、`PalwTirPublicWitnessPartV1`）。最初の part
+  （offset 0）が frame の conviction rent を宣言・burn し（terminal plan は witness 上限を 16 KiB part で価格付け済み）、以後の part は 0。part は
+  (claim, filer) の rooted row `TirWitness`（`PalwTirPublicWitnessRowV1`、door 閉鎖で sweep）に順番どおり追記され、宣言 bytes を満たした
+  part が digest を照合し `decode_staged_v1` で復号して `apply_conviction_v1` で直接 filing と同じ裁定を原子的に行う（holds/拒否なら part ごと
+  巻き戻り、row は rent 消費済みのまま door 閉鎖まで残る）。全体は frame の `terminal.maximum_witness_bytes` 以下。切り詰めは無い。node の
+  filer scheduler は control に入らない証拠を自動で part 分割し、accepted row の offset から再開する（`palw_tir_public_witness_part_object_v1`）。
+  E2E ソース `g14_staged_witness_assembles_in_order_and_convicts_once`。**未**: incremental court（rooted 参照で小さい certificate にする方式）は
+  採らず分割搬送で閉じた。flat scheme の selection pin（行全体）は witness 上限内なら同じ搬送で運べるが、flat の frame 受理は未解禁（R4 注記）。
 - [ ] `Incomplete`、overflow、サイズ拒否を「そのfamilyは完成」に数えず、元の対象範囲を満たす経路を実装する。
-  — **未（範囲を明記）**: `Incomplete` と semantic/非 greedy は frame 受理を拒否する。対象 family の拡張は未。
+  — **一部（範囲を明記）**: `Incomplete`、job tail、flat logits scheme は frame 受理を拒否する（sampling / V4 / semantic は受理に拡張済み、
+  ソースのみ・未検証）。flat scheme は分割搬送（本節の上の項）待ち。
 
 ### R8. 再開・pruning・reorgと通常node運用を閉じる
 
 - [ ] prepared descriptorと実際のnative Ready、元material TTL、保持ticket、通常worker、native権限付きGCを結ぶ。
-  — **未**（node 運用の範囲。今回は未着手）。
+  — **実装（ソースのみ・未検証、2026-10-16）**: 準備 worker が descriptor を作り Ready まで投稿し、descriptor を journal
+  （`state_dir/palw-tir-public-custodian.v2`）。GC は `tir_public_custodian_maintenance_v1` が **irreversible DAA（pruning point の DAA）が
+  material horizon を超えた後だけ** backend の `retire_tir_prepared_capture_v1` で行い、file が消えてから journal から外す（accepted だが可逆な
+  DAA・file 時刻・frame 不在では消さない）。保持 ticket は準備中の capture/publish RAM 予約（host ledger）として持つ。**未**: journal に無い
+  孤立 `prepared-*` dir の掃除、disk 予約の ledger 化。
 - [ ] Tiled reopenの全D IDs再認証が必要な場合、その時間・IO・carrier・RAMを最大条件で処理する。N再走査を避けただけで完走としない。
-  — **未**（node 運用の範囲。今回は未着手）。
+  — **一部（ソースのみ・未検証）**: 再起動後、生存中の sealed capture を 1 tick 1 件ずつ `reopen_tir_prepared_capture_v1` で全面再オープン
+  （元 ID を outer EOF まで再 stream し各 opening を再認証）し、見積り `tir_prepared_capture_need_v1(..).reopen_ram_bytes` を host ledger に予約
+  して行う。demand が来る前に破損を検出する。**未**: 最大 profile での時間・IO の実測、応答 clock 内での reopen 完了の保証（応答 responder 自体が
+  未接続、R3 の注記）。
 - [ ] process再開・複数processのcache共有・破損・partial generation・期限前後のcleanupを扱い、正しい公開materialを早期削除しない。
-  — **未**（node 運用の範囲。今回は未着手）。
+  — **一部（ソースのみ・未検証）**: 再開は journal（tmp→rename、読めなければ退避）から sealed descriptor を戻し Ready を再投稿、破損は上の全面
+  reopen で検出（検出時は error log、以後は保持した元 capture からのみ応答可能）、partial generation は writer の `preparing-*` staging を再起動
+  時に掃除（backend 既存）、cleanup は irreversible horizon 後のみ（早期削除しない）。**未**: 複数 process の同一 retention dir 共有（1 retention
+  dir に 1 node process という既存の運用前提のまま、process 間 lock は無い）、破損 capture の同一 descriptor での再 seal。
 - [ ] canonical work counterの巻き戻しと、既に行った物理的な孤立fork作業を区別する。durable journalと有限recovery規則、または明示されたreorg前提なしに、restartで予算が復活しないと保証しない。
-  — **未**（node 運用の範囲。今回は未着手）。
+  — **実装（ソースのみ・未検証）**: 物理的な slice 実行を lane（claim, allocation）ごとに **実行前に** journal へ書く（write-ahead、書けなければ
+  実行しない）。有限 recovery 規則: 1 lane で物理的に実行する slice は native plan の `maximum_slices_per_actor × (maximum_restarts + 1)` まで。
+  canonical counter が reorg で巻き戻っても、process を再起動しても、この物理予算は復活しない（使い切った frame は準備をやめ、grant しない）。
+  entry は preparation door が irreversible になってから消える。テストソース `physical_slice_allowance_is_durable_and_finite`。
 - [ ] fresh node、IBD、pruned importでも、元claim・資格・raw bytes・証拠・期限・責任を現在のnative状態から復元できるようにする。
-  — **一部**: frame・準備・acquisition の row は rooted state にあり、index は row から再構築（`rebuild_indices`、`assert_tir_acquisition_indices_v1`）。raw bytes・証拠の node 側復元は未。
+  — **一部→実装（ソースのみ・未検証）**: frame・準備・acquisition・raw chunk／accepted body・staged witness・semantic ClaimBundle の row は
+  すべて rooted state にあり、pruning-point carriage で運ばれる。E2E ソース `g14_fresh_node_import_continues_the_original_frame_identically`:
+  witness を半分運んだ共謀 world を IBD wire（`PalwStateCarriageV2` bytes → `into_state`、archival root 指定）で fresh node に import し、
+  全 TIR index・frame・d0 door・in-flight witness が archival と一致し、完成 part が両 node で同じ有罪・同じ slash・同じ state root に到達する
+  ことを検査（index 再構築だけでなく fold の継続の同一性）。**未**: node-local な custodian material（保持 capture・prepared capture）は chain から
+  復元できない（custodian の義務そのもの）。filer/custodian の journal は node-local。
 
 ## 4. 全familyの完了表を作る
 

@@ -175,8 +175,10 @@ fn original_plan_v1(
 
 /// **G14 R1/R2: the producer's pre-signing quote of an ORIGINAL frame** on the accepted snapshot: the exact native plan whose
 /// `resource_plan_id`/`source_id`/custodian upper the producer's pledge signs, and whose terms tell it the clocks and the rent it
-/// must declare and burn. `Ok(None)` for an original the frame route does not admit (a registered semantic stage, a non-greedy
-/// selection rule or a job tail — those still take the ClaimBundle route). Reads state only; buys nothing.
+/// must declare and burn. `Ok(None)` for an original the frame route does not admit (a job tail or a flat-scheme class — those
+/// still take the ClaimBundle route). A plan with `semantic` set also needs the producer's history pledge over that component
+/// (`TFP1`'s `history_pledge`: `semantic_resource_plan_id`, `maximum_semantic_history_records`, the acquisition custodian upper,
+/// the pledge's own acceptance and material horizon). Reads state only; buys nothing.
 pub fn palw_tir_public_original_quote_v1(
     base: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -185,12 +187,123 @@ pub fn palw_tir_public_original_quote_v1(
     original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
     header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
 ) -> Result<Option<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1>, PalwStateV2Error> {
-    if original.job.decode.is_some() || original.job.tail.is_some() {
+    if original.job.tail.is_some() {
         return Ok(None);
     }
     let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
-    let (plan, _, _, _) = original_plan_v1(&builder, now_daa, original, header)?;
-    Ok(plan.semantic.is_none().then_some(plan))
+    let (plan, _, _, geometry) = original_plan_v1(&builder, now_daa, original, header)?;
+    let tiled = builder.state.tir_class_v1(&geometry.class_id).is_some_and(|record| record.facts.tiled);
+    let judged = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&original.job).is_some() || plan.semantic.is_some();
+    Ok((tiled && judged).then_some(plan))
+}
+
+/// **G14 R4 (semantic stages): the staged-court contract an ORIGINAL frame with a registered semantic stage carries beside
+/// itself** — `Ok(None)` for a frame without one. The frame's full allocation already prices and schedules the semantic component
+/// (`plan.semantic`, rebased onto the frame's own clocks, and its `semantic_resource_plan_id`); this builds the SAME ClaimBundle
+/// contract the staged semantic courts (constraint, tokenizer, prefix state) hang off, from that component and the producer's
+/// transaction-local history pledge (`TFP1`'s `history_pledge`, authenticated against the original object by the carrier walk).
+/// Every pledge field is compared with the recomputed plan and the producer's bond signature is re-verified here, exactly as the
+/// ClaimBundle route's `prepare_required_bundle_v1` does. Nothing is paid twice: the frame's rent and deposit already include the
+/// semantic terms. A Valid custodian of a claim a semantic court convicts is charged through kind 3 on the `CourtFraud` void, as
+/// on the ClaimBundle route; its frame exit hold keeps the collateral collectible.
+fn frame_semantic_bundle_v1(b: &TransitionBuilder<'_>, frame: &Frame, now_daa: u64) -> Result<Option<Row>, PalwStateV2Error> {
+    let plan = frame.plan_v1();
+    let Some(semantic) = plan.semantic.as_ref() else { return Ok(None) };
+    let config = b.extras.staged_public_court.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
+    let claim = plan.original_claim;
+    let original = frame.original_v1();
+    let resource_plan_id =
+        plan.semantic_resource_plan_id.ok_or_else(|| refused("TIR original semantic component has no resource identity"))?;
+    let semantics = b
+        .state
+        .class_semantics
+        .get(&original.job.class_id)
+        .ok_or_else(|| refused("TIR original semantic component lost its class's immutable semantics"))?;
+    let pledge = b
+        .extras
+        .history_custody_pledges
+        .get(&claim)
+        .cloned()
+        .ok_or_else(|| refused("TIR original with a semantic stage lacks its producer's signed history pledge (TFP1 history_pledge)"))?;
+    pledge.check_v1().map_err(refused)?;
+    let producer = frame.custody_v1().pledge_v1().producer;
+    let record = b.state.bond(&producer).ok_or(PalwStateV2Error::MissingBond(producer))?;
+    pledge
+        .validate_signature_v1(&record.pubkey, crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1)
+        .map_err(refused)?;
+    let job_identity = crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original);
+    if (
+        pledge.claim,
+        pledge.producer,
+        pledge.execution_root,
+        pledge.job_identity,
+        pledge.cu_ruleset_id,
+        pledge.resource_plan_id,
+        pledge.maximum_records,
+        pledge.maximum_custodians,
+    ) != (
+        claim,
+        producer,
+        original.execution_root,
+        job_identity,
+        semantics.cu_ruleset_id,
+        resource_plan_id,
+        plan.maximum_semantic_history_records,
+        plan.acquisition.maximum_custodians,
+    ) || now_daa >= pledge.accept_until_daa
+        || semantic.terms.material_until_daa > pledge.material_until_daa
+    {
+        return Err(refused("TIR original history pledge changes the frame's semantic identity, capacity or paid horizon"));
+    }
+    let terms = semantic.terms;
+    let custody = crate::palw_prefix_custody_v1::PalwPrefixCustodyContractV1::new(
+        original.execution_root,
+        job_identity,
+        semantics.cu_ruleset_id,
+        &terms,
+    );
+    Ok(Some(Row::ClaimBundle(Box::new(crate::palw_staged_bundle_v1::PalwStagedBundleContractV1 {
+        claim: crate::palw_staged_court_state_v1::PalwStagedClaimContractV1 {
+            terms,
+            producer,
+            panel: std::collections::BTreeSet::new(),
+            prefix_custody: Some(custody.clone()),
+        },
+        plan: semantic.clone(),
+        config,
+        original_binding: crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(frame.header_v1().clone()),
+        producer_custodian: None,
+        history_custody: crate::palw_history_custody_v1::PalwHistoryCustodyContractV1 {
+            custody,
+            producer,
+            maximum_records: plan.maximum_semantic_history_records,
+            maximum_custodians: plan.acquisition.maximum_custodians,
+            pledge,
+        },
+    }))))
+}
+
+/// **G14 R4: would the fold accept this public conviction filing at `next_daa`?** A dry run of the SAME native path
+/// ([`apply_conviction_v1`]: window, filer, once-only, the native adjudication of the evidence, the liable bonds' exit holds and
+/// every funnel) on a throw-away builder over the accepted snapshot — nothing is committed. The node's filer scheduler asks it
+/// before it signs, so it never pays a conviction rent the fold would refuse for a reason the accepted state already shows. It is
+/// never a verdict: a later block can still change the answer, and only the accepted fold convicts.
+pub fn palw_tir_public_conviction_preflight_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    next_daa: u64,
+    filer: PalwBondKeyV2,
+    claim: Hash64,
+    evidence: &crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
+) -> Result<(), PalwStateV2Error> {
+    evidence.check_v1().map_err(refused)?;
+    let mut builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
+    rules(&builder)?;
+    let frame = palw_tir_public_claim_v1(base, claim).cloned().ok_or_else(|| refused("TIR conviction preflight: no ORIGINAL frame"))?;
+    frame.check_structure_v1(&frame.key_v1()).map_err(refused)?;
+    let ctx = PalwBlockContextV2 { block: Default::default(), daa_score: next_daa, blue_score: 0, subsidy: 0 };
+    apply_conviction_v1(&mut builder, &ctx, &frame, filer, evidence)
 }
 
 /// All inputs are transaction-local original material or resolved native state.
@@ -211,12 +324,20 @@ pub(super) fn prepare_original_v1(
         .ok_or_else(|| refused("TIR original layout is not registered"))?;
     let semantics = b.state.class_semantics.get(&geometry.class_id);
     let inventory = semantics.and_then(|s| b.state.staged_tokenizer_inventory_v1(s.tokenizer_id));
-    // **G14 R4 (narrowing, not completion): every violation class an admitted original covers must have a native conviction
-    // door.** The ORIGINAL frame's door judges arithmetic/logits, greedy selection, output identity and DA; the registered
-    // semantic stages (constraint, tokenizer, prefix state) still convict only through the old ClaimBundle's staged courts, which a
-    // frame never has. A semantic-bearing original is therefore refused rather than admitted with an unprosecutable layer.
-    if plan.semantic.is_some() || original.job.decode.is_some() || original.job.tail.is_some() {
-        return Err(refused("TIR original carries a semantic stage or non-greedy selection no frame court judges yet"));
+    // **G14 R4: every violation class an admitted original covers must have a native conviction door.** The ORIGINAL frame's
+    // door judges arithmetic/logits, output identity, DA, and selection and stop under the job's OWN rule (greedy, seeded
+    // Decision 11 sampling, or the V4 pipeline: `PalwTirSelectionRuleV1`, `original_stop_rule_fault_v1`); a registered semantic
+    // stage (constraint, tokenizer, prefix state) is judged by the staged semantic courts on the ClaimBundle contract the frame
+    // installs beside itself (`frame_semantic_bundle_v1`, checked below and written by `install_original_v1`). Still refused
+    // rather than admitted with an unprosecutable layer: a job tail (evaluation/generation) and a FLAT-scheme class (its
+    // decode-token pin carries whole rows, which no bounded control holds without split witness carriage, R7).
+    if original.job.tail.is_some() || !record.facts.tiled {
+        return Err(refused("TIR original carries a job tail or a flat logits scheme no bounded frame door judges yet"));
+    }
+    // A constrained job's selection is its constraint's mask: the staged Constraint court judges it, so the frame must carry
+    // the semantic contract (its plan always has the Constraint family when the job is constrained).
+    if crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&original.job).is_none() && plan.semantic.is_none() {
+        return Err(refused("TIR constrained original has no staged semantic contract to judge its selection"));
     }
     let original_source = crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_v1(
         record,
@@ -240,7 +361,7 @@ pub(super) fn prepare_original_v1(
         crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1,
     )
     .map_err(refused)?;
-    Frame::prepare_native_v1(
+    let frame = Frame::prepare_native_v1(
         original.clone(),
         header.clone(),
         plan,
@@ -255,7 +376,10 @@ pub(super) fn prepare_original_v1(
         object,
         crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1,
     )
-    .map_err(refused)
+    .map_err(refused)?;
+    // The semantic stages' staged contract must build (pledge, identity, capacity, horizon) before anything is written.
+    frame_semantic_bundle_v1(b, &frame, ctx.daa_score)?;
+    Ok(frame)
 }
 
 /// Call only after the same ordinary FP object has passed native validation and
@@ -320,10 +444,18 @@ pub(super) fn install_original_v1(
         preparation: Box::new(preparation).into(),
     };
     prep.check_structure_v1(&frame.preparation_key_v1()).map_err(refused)?;
+    // G14 R4: a registered semantic stage installs its staged-court contract beside the frame, at the same d0.
+    if let Some(bundle) = frame_semantic_bundle_v1(b, &frame, ctx.daa_score)? {
+        let key = Key::Claim(p.original_claim);
+        if b.state.staged_court_row_v1(&key).is_some() {
+            return Err(refused("TIR original semantic contract would overwrite an existing staged claim contract"));
+        }
+        b.write_staged_row_v1(key, Some(bundle))?;
+    }
     // The native dispatcher atomically owns the ordinary FP writes and these two
     // rows. Neither a separately submitted quote nor a historical FP can enter.
-    b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(Box::new(prep).into())));
-    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())));
+    b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(Box::new(prep).into())))?;
+    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())))?;
     Ok(())
 }
 
@@ -336,8 +468,8 @@ pub(super) fn bind_panel_v1(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContex
     let mut prep = old.clone();
     prep.preparation.bind_native_panel_v1(frame.custody_v1().drawn_panel_v1()).map_err(refused)?;
     prep.check_structure_v1(&frame.preparation_key_v1()).map_err(refused)?;
-    b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(prep)));
-    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())));
+    b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(prep)))?;
+    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())))?;
     Ok(())
 }
 
@@ -373,6 +505,12 @@ fn open_v1(
     owner: PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
     independent(b, frame, owner)?;
+    // **K_owner (Lead default, pending user review): refuse an excess owner before ANY custodian duty is created.** The frame's
+    // liable custodians answer at most `custodian_load_bound_v1` across all owners; each owner below pays only its own rent and
+    // deposit (`owner_terms_v1`), never the producer's prepaid preparation pool.
+    if b.state.staged_tir_owner_count_v1(&frame.plan_v1().original_claim) >= Frame::MAXIMUM_OWNERS_V1 {
+        return Err(refused("TIR original frame already carries its K_owner outside owners; custodian load is bounded"));
+    }
     let c = owner_contract(frame, owner, ctx.daa_score)?;
     let key = owner_key(frame, owner, ctx.daa_score)?;
     let allowance = rules(b)?.config.maximum_owned_rows_per_reserver;
@@ -408,7 +546,7 @@ fn open_v1(
     // Ordinary carrier fee validation must burn owner_terms.rent, independently
     // of the producer's original full payment. The indexed row occupies only
     // this owner's additional deposit; it cannot spend the original prep pool.
-    b.write_staged_row_v1(key, Some(Row::TirAcquisition(Box::new(row).into())));
+    b.write_staged_row_v1(key, Some(Row::TirAcquisition(Box::new(row).into())))?;
     Ok(())
 }
 
@@ -515,6 +653,13 @@ fn apply_verified_control_v1(
             }
             return apply_conviction_v1(b, ctx, &frame, control.signer, evidence);
         }
+        (T::ConvictionWitness, A::WitnessPart(part)) => {
+            let rent = if part.offset == 0 { frame.conviction_rent_v1() } else { 0 };
+            if control.declared_rent_sompi != rent || control.expected_turn != 0 {
+                return Err(refused("TIR staged witness burns the conviction rent at its first part only, and carries no turn"));
+            }
+            return apply_witness_part_v1(b, ctx, &frame, control.signer, part);
+        }
         _ => return Err(refused("TIR control substitutes preparation/open/owner namespaces")),
     };
     // Pure effects are not sanctions. Only the native literal default after its
@@ -553,7 +698,7 @@ fn apply_verified_control_v1(
         }
     }
     for change in transition.changes_v1() {
-        b.write_staged_row_v1(change.key, change.new.clone());
+        b.write_staged_row_v1(change.key, change.new.clone())?;
     }
     if let Some(unpaid) = unpaid {
         let claim = b.state.claim(&control.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(control.claim))?;
@@ -694,11 +839,10 @@ fn apply_conviction_v1(
             }
         }
         E::DecodeToken { proof } => {
-            let job = &frame.original_v1().job;
-            if job.decode.is_some() || job.tail.is_some() {
-                return Err(refused("TIR original job's selection rule is not plain greedy; no native selection court judges it yet"));
-            }
-            match crate::palw_tir_objective_v1::adjudicate_original_greedy_decode_v1(
+            // The ORIGINAL job's own selection rule — greedy, seeded Decision 11 sampling, or the V4 pipeline — never the filer's.
+            let rule = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&frame.original_v1().job)
+                .ok_or_else(|| refused("TIR original job's selection is a constraint mask or a tail; the frame's selection door does not judge it"))?;
+            match crate::palw_tir_objective_v1::adjudicate_original_decode_v1(
                 &b.state,
                 claim_id,
                 proof,
@@ -706,6 +850,7 @@ fn apply_conviction_v1(
                 frame.descriptor_v1().maximum_leaves,
                 native.prompt_form,
                 frame.plan_v1().terminal.maximum_witness_bytes,
+                &rule,
             )
             .map_err(refused)?
             {
@@ -717,7 +862,7 @@ fn apply_conviction_v1(
                     Some(claim.execution_root)
                 }
                 Arith::PredicateHolds { .. } => {
-                    return Err(refused("TIR nominated greedy selection holds: no conviction, and no finding of claim honesty"));
+                    return Err(refused("TIR nominated selection holds under the job's rule: no conviction, and no finding of claim honesty"));
                 }
             }
         }
@@ -737,8 +882,22 @@ fn apply_conviction_v1(
                     OutFault::OutputRootMismatch => None,
                     OutFault::IdOutsideVocabulary { .. } => Some(claim.execution_root),
                 },
+                // G14 R4 (the stop rule): the authenticated answer matches the claim, but it does not END where the job's own
+                // decoder ends it (past a completed stop sequence, short of the budget with no stop, or a banned id). The committed
+                // trace itself carries the over-long or short answer, so the execution is false (forfeit by root).
                 Out::OutputHolds { .. } => {
-                    return Err(refused("TIR original output identity holds: no conviction, and no finding of claim honesty"));
+                    match crate::palw_tir_objective_v1::original_stop_rule_fault_v1(
+                        &frame.original_v1().job,
+                        original_source.vocab_v1(),
+                        authenticated.ids_v1(),
+                    ) {
+                        Some(_) => Some(claim.execution_root),
+                        None => {
+                            return Err(refused(
+                                "TIR original output identity and stop rule hold: no conviction, and no finding of claim honesty",
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -760,9 +919,76 @@ fn apply_conviction_v1(
     b.convict_by_court_verdict_v1(ctx, claim_id, &claim, filer, None)?;
     // 3. An execution-proving fault forfeits by ROOT (siblings sharing the convicted execution).
     if let Some(root) = by_root {
-        b.forfeit_minted_round_rights(&root);
+        b.forfeit_minted_round_rights(&root)?;
     }
     Ok(())
+}
+
+/// **G14 R7: one in-order part of a staged conviction witness** — the split carriage of a witness larger than one control, never
+/// a truncation. Same window and filer rule as a direct filing; the declared whole is bounded by the frame's own prepaid witness
+/// ceiling (`terminal.maximum_witness_bytes`, the envelope the conviction rent already prices in 16 KiB parts). Parts append in
+/// order to the (claim, filer) row; the part that completes the declared bytes authenticates the assembly against its digest,
+/// decodes it ([`crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::decode_staged_v1`]) and adjudicates it
+/// through [`apply_conviction_v1`] exactly as a direct filing — atomically: a holding or refused witness rolls the whole part
+/// back (the incomplete row then waits, rent already burned, until the door's close sweeps it).
+fn apply_witness_part_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    frame: &Frame,
+    filer: PalwBondKeyV2,
+    part: &crate::palw_tir_public_carriage_v1::PalwTirPublicWitnessPartV1,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_tir_public_carriage_v1::{PalwTirPublicWitnessRowV1 as Witness, palw_tir_public_witness_digest_v1};
+    part.check_v1().map_err(refused)?;
+    let claim_id = frame.plan_v1().original_claim;
+    let terms = frame.plan_v1().terms;
+    if ctx.daa_score < terms.accepted_daa || ctx.daa_score >= terms.collect_until_daa {
+        return Err(refused("TIR staged witness is outside the frame's original collection door"));
+    }
+    conviction_filer_v1(b, frame, filer)?;
+    if part.total_bytes > frame.plan_v1().terminal.maximum_witness_bytes {
+        return Err(refused("TIR staged witness exceeds the frame's prepaid witness ceiling"));
+    }
+    let key = Key::TirWitness(claim_id, filer);
+    let existing = match b.state.staged_court_row_v1(&key) {
+        Some(Row::TirWitness(row)) => Some(row.as_ref().clone()),
+        Some(_) => return Err(refused("TIR staged witness key holds another row")),
+        None => None,
+    };
+    let mut row = match (existing.clone(), part.offset) {
+        (None, 0) => Witness {
+            claim: claim_id,
+            filer,
+            allocation_id: frame.plan_v1().allocation_id,
+            total_bytes: part.total_bytes,
+            digest: part.digest,
+            until_daa: terms.collect_until_daa,
+            received: Vec::new(),
+        },
+        (Some(row), offset) if offset != 0 => row,
+        _ => return Err(refused("TIR staged witness part is out of order (a witness opens once, at offset 0)")),
+    };
+    if (row.total_bytes, row.digest, row.allocation_id, row.received.len() as u64)
+        != (part.total_bytes, part.digest, frame.plan_v1().allocation_id, part.offset)
+    {
+        return Err(refused("TIR staged witness part changes its declared whole or skips accepted bytes"));
+    }
+    row.received.extend_from_slice(&part.bytes);
+    if (row.received.len() as u64) < row.total_bytes {
+        row.check_structure_v1(claim_id, filer).map_err(refused)?;
+        b.write_staged_row_v1(key, Some(Row::TirWitness(Box::new(row).into())))?;
+        return Ok(());
+    }
+    // Complete: the assembly must be exactly the declared witness, then it is ONE conviction filing.
+    if palw_tir_public_witness_digest_v1(&row.received) != row.digest {
+        return Err(refused("TIR staged witness does not assemble to its declared digest"));
+    }
+    let evidence =
+        crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::decode_staged_v1(&row.received).map_err(refused)?;
+    if existing.is_some() {
+        b.write_staged_row_v1(key, None)?;
+    }
+    apply_conviction_v1(b, ctx, frame, filer, &evidence)
 }
 
 /// Ordinary Valid validation, backing/credit/S4, new grant and Ready all commit
@@ -820,7 +1046,7 @@ fn apply_grant_ready_inner_v1(
     // Q4: never reprice the lock. Its original exact raw promise retains the
     // native amount through the original material/collection horizon.
     lock.expiry_daa = lock.expiry_daa.max(frame.plan_v1().terms.bond_exit_after_daa);
-    b.write_slashable_lock(key, Some(lock));
+    b.write_slashable_lock(key, Some(lock))?;
     frame
         .qualify_original_native_v1(
             &b.state,
@@ -833,8 +1059,8 @@ fn apply_grant_ready_inner_v1(
         )
         .map_err(refused)?;
     prep.check_structure_v1(&frame.preparation_key_v1()).map_err(refused)?;
-    b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(prep)));
-    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())));
+    b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(prep)))?;
+    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())))?;
     Ok(())
 }
 
@@ -1333,5 +1559,129 @@ mod conviction_e2e_tests {
         for seat in drawn() {
             assert_eq!(b.state.bonds.get(&seat).unwrap().collateral, COLLATERAL);
         }
+    }
+
+    /// **G14 R7: a witness carried in parts is assembled in order and adjudicated once, by the part that completes it** — the
+    /// first part burns the conviction rent, nothing is judged before the declared whole lands, an out-of-order or rent-free first
+    /// part is refused, and the completed witness convicts exactly as the same evidence filed directly (the row is consumed).
+    #[test]
+    fn g14_staged_witness_assembles_in_order_and_convicts_once() {
+        use crate::palw_tir_public_carriage_v1::{PalwTirPublicWitnessPartV1 as Part, palw_tir_public_witness_digest_v1};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let ids = fx.execution.generated.clone();
+        let rows_root =
+            crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context, &fx.execution.rows).unwrap();
+        let lying = credited_frame(&fx).with_original_output_root_for_tests_v1(h(0xBAD));
+        let (state, params, extras) = world(&fx, &lying);
+        let encoded = borsh::to_vec(&Evidence::Output { rows_root, ids }).unwrap();
+        assert!(encoded.len() as u64 <= lying.plan_v1().terminal.maximum_witness_bytes);
+        let digest = palw_tir_public_witness_digest_v1(&encoded);
+        let split = encoded.len() / 2;
+        let part = |offset: usize, end: usize| {
+            let plan = lying.plan_v1();
+            Control {
+                version: 1,
+                claim: plan.original_claim,
+                allocation_id: plan.allocation_id,
+                source_id: plan.source_id,
+                target: T::ConvictionWitness,
+                expected_turn: 0,
+                declared_rent_sompi: if offset == 0 { lying.conviction_rent_v1() } else { 0 },
+                signer: outsider(),
+                action: A::WitnessPart(Part {
+                    total_bytes: encoded.len() as u64,
+                    digest,
+                    offset: offset as u64,
+                    bytes: encoded[offset..end].to_vec(),
+                }),
+                signature: vec![5; SIG],
+            }
+        };
+        let claim_id = lying.plan_v1().original_claim;
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &part(split, encoded.len())).is_err());
+        let mut free = part(0, split);
+        free.declared_rent_sompi = 0;
+        assert!(apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &free).is_err());
+        apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &part(0, split)).unwrap();
+        assert!(b.state.staged_court_row_v1(&Key::TirWitness(claim_id, outsider())).is_some());
+        assert!(matches!(b.state.claims.get(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        apply_verified_control_v1(&mut b, &at(&lying, 6), lying.clone(), &part(split, encoded.len())).unwrap();
+        let (phase, _, consumed) = outcome(&b.state, &lying);
+        assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
+        assert_eq!(consumed, vec![true, true, true, false]);
+        assert!(b.state.staged_court_row_v1(&Key::TirWitness(claim_id, outsider())).is_none(), "a complete witness is never kept");
+    }
+
+    /// **G14 R8: a fresh node restored from the pruning-point carriage continues the ORIGINAL frame identically** — not only an
+    /// index rebuild: the colluders' accepted world with a witness half-carried before the pruning point is imported through the
+    /// IBD wire (`PalwStateCarriageV2` bytes → `into_state` with the archival root), every TIR index equals the archival node's,
+    /// the frame, its d0 door and the in-flight witness read the same, and the completing part reaches the same conviction, the
+    /// same slashes and the same state root on both nodes.
+    #[test]
+    fn g14_fresh_node_import_continues_the_original_frame_identically() {
+        use crate::palw_tir_public_carriage_v1::{PalwTirPublicWitnessPartV1 as Part, palw_tir_public_witness_digest_v1};
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let ids = fx.execution.generated.clone();
+        let rows_root =
+            crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context, &fx.execution.rows).unwrap();
+        let lying = credited_frame(&fx).with_original_output_root_for_tests_v1(h(0xBAD));
+        let (state, params, extras) = world(&fx, &lying);
+        let claim_id = lying.plan_v1().original_claim;
+        let encoded = borsh::to_vec(&Evidence::Output { rows_root, ids }).unwrap();
+        let digest = palw_tir_public_witness_digest_v1(&encoded);
+        let split = encoded.len() / 2;
+        let part = |offset: usize, end: usize| {
+            let plan = lying.plan_v1();
+            Control {
+                version: 1,
+                claim: plan.original_claim,
+                allocation_id: plan.allocation_id,
+                source_id: plan.source_id,
+                target: T::ConvictionWitness,
+                expected_turn: 0,
+                declared_rent_sompi: if offset == 0 { lying.conviction_rent_v1() } else { 0 },
+                signer: outsider(),
+                action: A::WitnessPart(Part {
+                    total_bytes: encoded.len() as u64,
+                    digest,
+                    offset: offset as u64,
+                    bytes: encoded[offset..end].to_vec(),
+                }),
+                signature: vec![5; SIG],
+            }
+        };
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        apply_verified_control_v1(&mut b, &at(&lying, 5), lying.clone(), &part(0, split)).unwrap();
+        let archival = b.state.clone();
+        let bytes = borsh::to_vec(&crate::palw_state_v2::PalwStateCarriageV2::from_state(&archival)).unwrap();
+        let fresh = borsh::from_slice::<crate::palw_state_v2::PalwStateCarriageV2>(&bytes)
+            .unwrap()
+            .into_state(&params, Some(archival.state_root()))
+            .expect("a fresh node imports the accepted frame world from the pruning-point carriage");
+        assert_eq!(fresh.state_root(), archival.state_root());
+        fresh.assert_tir_acquisition_indices_v1().unwrap();
+        assert_eq!(fresh.staged_due, archival.staged_due);
+        assert_eq!(fresh.staged_holds, archival.staged_holds);
+        assert_eq!(fresh.staged_tir_claims_by_producer, archival.staged_tir_claims_by_producer);
+        let now = lying.plan_v1().terms.accepted_daa + 6;
+        assert_eq!(fresh.palw_tir_public_prosecution_open_v1(&claim_id, now), archival.palw_tir_public_prosecution_open_v1(&claim_id, now));
+        assert_eq!(palw_tir_public_claim_v1(&fresh, claim_id), palw_tir_public_claim_v1(&archival, claim_id));
+        assert_eq!(
+            fresh.staged_court_row_v1(&Key::TirWitness(claim_id, outsider())),
+            archival.staged_court_row_v1(&Key::TirWitness(claim_id, outsider()))
+        );
+        let roots: Vec<Hash64> = [&archival, &fresh]
+            .into_iter()
+            .map(|node| {
+                let mut b = TransitionBuilder::new(node, &params, false, false, false, false, &extras);
+                apply_verified_control_v1(&mut b, &at(&lying, 6), lying.clone(), &part(split, encoded.len())).unwrap();
+                let (phase, _, consumed) = outcome(&b.state, &lying);
+                assert!(matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }), "{phase:?}");
+                assert_eq!(consumed, vec![true, true, true, false]);
+                b.state.state_root()
+            })
+            .collect();
+        assert_eq!(roots[0], roots[1], "the restored node reaches the archival node's exact post-conviction root");
     }
 }

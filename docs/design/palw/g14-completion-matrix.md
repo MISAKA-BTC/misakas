@@ -886,23 +886,25 @@ conviction, hold and Gate C wiring. **Source only: nothing below was compiled, r
 `palw_tir_public_conviction_v1` (`None` on every preset; the fence now also requires `palw_rcore_plus` and
 `palw_capacity_aggregate_liability`). **Recommendation for DAA 14,000: keep this fence dormant** (blockers in the last row).
 
-Scope admitted by the route: FP V3 TIR jobs with no registered semantic stage, a plain greedy selection rule and no job tail
-(`prepare_original_v1` refuses everything else by name, so no unprosecutable layer is admitted).
+Scope admitted by the route (2026-10-16): FP TIR jobs on a TILED-logits class with no job tail — any selection rule the job's own
+decoder uses (greedy, seeded Decision 11 sampling, the V4 pipeline with penalties/bias/bans/stop sequences) and any registered
+semantic stage (constraint / tokenizer / prefix state, whose staged courts hang off the ClaimBundle contract the frame now installs
+beside itself). `prepare_original_v1` still refuses a job tail and a flat-logits class by name.
 
 | Condition (§0 columns) | Original frame route at `integ/g14-remaining` |
 |---|---|
 | C1 ordinary entry | Filer = any Active, above-floor bond that is not liable on the claim (not the producer, no credited Valid grant). A drawn seat without a Valid and an outside bond file the SAME object (`TirPublicControlV1` target `Conviction`). Source only. |
-| C2 fresh verifier | Consensus reader `palw_tir_public_frame_v1` (accepted snapshot) and the node builder `kaspad/src/palw_tir_public_filer.rs`. No scheduler / queue / restart journal yet. |
-| C3 authenticated material | Evidence is a cone/logits primitive, a greedy decode-token primitive, or the complete original ID sequence; every byte opens against the claim's original roots; the registered program is filled natively (a carried program is refused). |
-| C4 bounded localization | The primitive is bounded by the frame's prepaid terminal witness ceiling and the 90,000-byte control; larger witnesses are refused, never truncated (split carriage not built). |
-| C5 objective verdict | Native re-adjudication in the fold (`adjudicate_original_v1`, `adjudicate_original_greedy_decode_v1`, `adjudicate_original_output_v1`). A holding predicate or any error refuses the filing and changes nothing. |
+| C2 fresh verifier | Consensus readers `palw_tir_public_frame_v1`, `palw_tir_public_read_v1` and the fold dry run `palw_tir_public_conviction_preflight_v1`; node builder `kaspad/src/palw_tir_public_filer.rs` and scheduler `kaspad/src/palw_tir_public_filer_scheduler.rs` (files at once inside the d0 door after the dry run accepts, own court lane, restart journal). The producers of findings (owner acquisition driving, arithmetic localization) are not yet called from the panel loop. |
+| C3 authenticated material | Evidence is a cone/logits primitive, a decode-token primitive judged under the ORIGINAL job's own selection rule, or the complete original ID sequence (identity and stop rule); every byte opens against the claim's original roots; the registered program is filled natively (a carried program is refused). Semantic stages: the staged courts' own material. |
+| C4 bounded localization | The witness is bounded by the frame's prepaid terminal witness ceiling; one larger than a control rides in 16 KiB `WitnessPart`s (first part burns the conviction rent) assembled in order in a rooted `TirWitness` row and adjudicated by the completing part. Never truncated. |
+| C5 objective verdict | Native re-adjudication in the fold (`adjudicate_original_v1`, `adjudicate_original_decode_v1` with `PalwTirSelectionRuleV1`, `adjudicate_original_output_v1` + `original_stop_rule_fault_v1`). A holding predicate or any error refuses the filing and changes nothing. |
 | C6 real sanction | Credited Valid custodians: S4 (lock + S3/S4 tier) once per seat; producer: `convict_by_court_verdict_v1` (void / Final reversal, `CourtConviction` once, reporter reward to the filer, ADR-0160 intent-class forfeiture + freeze). Every liable bond must hold its original exit hold, so the debit is collectible. DA: outside owner Collect / PreparationCollect → `staged_selected_default_charge_v1`, with the same exit-hold assertion. |
 | C7 refusal of standing | A frame's claim is floored to `Final` at the frame's `collect_until` (`palw_claim_final_floor_v1`): no spend weight, Final weight, escrow, model allocation, Gate C credit or coinbase leg before the door closes; Gate C certification waits while the door is open; a convicted claim is voided, so receipt spends are refused by validation (Final required) and by the template's spendable list; execution-proving faults forfeit by root; the convicted producer is frozen (admission `ProducerFrozen`, producer readiness). |
 | C8 once / reorg | Consumed-offence keys shared with the kind-3 and DA routes; second filing refused; journal reverts the verdict (fold-level E2E source checks the root). |
 | C9 (OPVB) | Not scored here. |
-| C10 maximum profile / deadline | **Open**: no measured maximum, no owner-count / custodian-load capacity rule, CPU of repeated signature checks not budgeted natively. |
-| Tests | `palw_tir_public_fold_v1.rs` `conviction_e2e_tests` (4 source tests: full collusion → outside conviction → slash → refusal, honest twin, output identity, outside preparation default), `kaspad/src/palw_tir_public_filer.rs` (real ML-DSA signing). **Not run.** |
-| Blockers before arming | producer-side TFP1 envelope (quote-before-sign RPC), Valid-seat GrantReady worker, node filer scheduling, V3/V4 typed receipts (refused by name), semantic / sampling courts for frames, owner-count and custodian-load capacity rule, R7/R8 measurement and recovery, A-2 wire re-pin for tags 170/171, V1–V7. |
+| C10 maximum profile / deadline | **Open**: no measured maximum; owner capacity is K_owner = 8 with a derived custodian-load bound (Lead default, pending user review; a colluder can pre-empt the slots); CPU of repeated signature checks not budgeted natively. |
+| Tests | `palw_tir_public_fold_v1.rs` `conviction_e2e_tests` (6 source tests, adding the staged witness and the fresh-node import continuation), `palw_tir_court.rs` selection door under the job's rule, `palw_tir_objective_v1.rs` stop rule, TFP1 history pledge round trip, `kaspad` custodian / filer journals and real ML-DSA signing. **Not run.** |
+| Blockers before arming | the custodians' demand responder (Begin/Part/Finish from the prepared capture — without it a granting seat or the producer can be defaulted), the finding producers for the filer, V3/V4 typed receipts (refused by name, Lead default), K_owner pre-emption (pending user review), flat-scheme and job-tail originals, measured maximum profile and deadlines (R7/R8), V1–V7. |
 
 ## 3. Family matrices (milestone baseline)
 
@@ -1470,3 +1472,9 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
   `Conviction`/`Convict`: arithmetic, greedy selection, output identity), the payout hold (Final floored at the frame's collect door,
   Gate C waits), the exit-hold assertion before any collection, frame reader API and node filing builder, regenerated native
   inventory / wire scanners. Source only; nothing compiled or run; fence recommended dormant at DAA 14,000.
+* 2026-10-16 — `integ/g14-remaining` (§2k): node custodian preparation worker (producer and drawn Valid seat: paid slices, prepared
+  capture, PreparationReady / atomic GrantReady, late grant) with irreversible-only GC, reopen re-authentication and write-ahead
+  physical work; filer scheduler (fold dry-run preflight, own lane, restart journal); selection and stop judged under the original job's
+  own rule (sampling and V4); semantic stages admitted through a ClaimBundle contract installed beside the frame (TFP1 history pledge);
+  split carriage of large witnesses (`ConvictionWitness`/`WitnessPart`, rooted `TirWitness` row); fresh-node import continuation test;
+  K_owner; A-2 pins for 170/171 derived without a build. Source only; fence still recommended dormant.
