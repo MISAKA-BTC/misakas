@@ -2535,17 +2535,11 @@ impl VirtualStateProcessor {
             // Rule-E networks commit the V2 leaf under the same L2FC envelope (`palw_fork_choice_rule_e_leaf_v2`); the auditor's
             // `check_native_state_anchor_v39` decodes V2 exactly where rule E is in force at the parent's DAA, so the exporter
             // must serve the same leaf the header committed (RFC-0002 row 14: correct V2 anchor export).
-            let rule_e = state
-                .last_point()
-                .is_some_and(|p| self.native_redemption_params_v33.palw_fork_choice_rule_e_active_at(p.daa_score));
-            let leaf = if active && rule_e {
-                kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v2::PalwForkChoiceLeafV2::of(&state, &self.native_redemption_params_v33)
-                    .ok_or("anchor39 original Rule-E V2 leaf absent")?
-                    .encode()
-            } else if active {
-                kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceLeafV1::of(&state)
-                    .ok_or("anchor39 original post-state point absent")?
-                    .encode()
+            // RFC-0018 GAP-R4: serve exactly the leaf the header committed, in the form the state's point selects (v1, rule-E v2, or
+            // rule-E v3 with capital and certification state) — the one function the committed root is built from.
+            let leaf = if active {
+                kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::palw_committed_leaf_bytes_v2(&state, &self.native_redemption_params_v33)
+                    .ok_or("anchor39 original committed leaf absent")?
             } else {
                 vec![]
             };
