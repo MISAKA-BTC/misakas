@@ -952,6 +952,20 @@ impl PalwFoldReadV1<'_> {
                 why: refusal.why().to_string(),
             });
         }
+        // **RFC-0017 (`palw_model_eligibility_v1`, REQ-ELIG-1)**: past the fence, a class whose eligibility stage carries no
+        // reward-bearing block right (`Registered`, `Lapsed`) takes no attempt and no free-prompt commitment — both lanes carry a
+        // subsidy-carved block. Its user-paid kernel / funded jobs never meet this gate. Below the fence, and for a genesis class,
+        // `None`: the rules below, byte for byte. (The evaluation lane is RFC-0004's and is not gated here: RFC-0017 §3 GAP-E4.)
+        if matches!(incoming, PalwGatedClaimV1::Attempt | PalwGatedClaimV1::FreePrompt { .. })
+            && let Some((_, why)) =
+                super::palw_model_eligibility_fold_v1::eligibility_claim_refusal_v1(self.state, self.params, class_id, now_daa)
+        {
+            return Err(PalwStateV2Error::ClassNotRewardable {
+                class: *class_id,
+                code: super::palw_model_eligibility_fold_v1::PALW_ELIGIBILITY_NOT_ELIGIBLE_CODE_V1,
+                why,
+            });
+        }
         let Some(fold) = self.extras.model_registry.as_ref() else { return Ok(()) };
         let whole = incoming.whole_claims(self.params.fp_quanta_per_canonical_job as u64);
         if let Some(state) = self.class_lifecycle_refusal(class_id) {

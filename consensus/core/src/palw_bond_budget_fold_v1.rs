@@ -285,6 +285,16 @@ impl PalwBudgetPlanV1 {
     pub(super) fn reservation(&self) -> &PalwBudgetVectorV1 {
         &self.reservation
     }
+
+    /// **RFC-0017 (`palw_model_eligibility_v1`, an additive call-site hook — not a change to the engine's rules):** the same plan
+    /// with no Final weight asked or reserved, for a claim of a `Probation` model whose Final creates no consensus credit. Every
+    /// reader of the claim's F (`bond_budget_final_weight_v1`, `bond_budget_weight_or`, the immature clip) then reads 0
+    /// consistently. Only `palw_model_eligibility_fold_v1`'s ticket asks for it, and only past its dormant fence.
+    pub(super) fn without_final_weight_v1(mut self) -> Self {
+        self.ask.final_weight = 0;
+        self.reservation.final_weight = 0;
+        self
+    }
 }
 
 fn budget_refused(bond: PalwBondKeyV2, why: PalwBudgetRefusalV1) -> PalwStateV2Error {

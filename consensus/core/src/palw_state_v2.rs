@@ -21022,7 +21022,21 @@ fn apply_attempt(
         builder.state.require_native_monetary_material_scope_v1(builder.params, claim_id, &claim)?;
     }
     let consumer_plan = builder.plan_paid_consumer_v1(claim_id, &claim)?;
+    // **RFC-0017 (`palw_model_eligibility_v1`, REQ-ELIG-2): a `Probation` model's attempt** is admitted whole inside the model's stage
+    // cap and the network's fixed probation budget (the bond's own ADR-0176 `B` cap is the plan below), or refused — before any write.
+    // Admitted, it is planned with no Final weight (F = 0) and pinned after the claim is written. `None` below the fence.
+    let probation_ticket = palw_model_eligibility_fold_v1::eligibility_probation_preview_v1(
+        builder,
+        ctx,
+        &claim.class_id,
+        &claim.bond,
+        origin.budget_block_units,
+    )?;
     let budget_plan = builder.plan_attempt_budget_v1(ctx, &claim, &attempt.artifact_root, origin.rider, origin.budget_block_units)?;
+    let budget_plan = match (&probation_ticket, budget_plan) {
+        (Some(ticket), Some(plan)) if ticket.weightless() => Some(plan.without_final_weight_v1()),
+        (_, plan) => plan,
+    };
     let claim = match &budget_plan {
         Some(plan) => {
             PalwClaimStateV2 { immature_contribution: claim.immature_contribution.min(plan.reservation().final_weight), ..claim }
@@ -21061,6 +21075,10 @@ fn apply_attempt(
     // Lane BUDGET: the reservation planned above, and the claim's block consumed at once (the block exists).
     if let Some(plan) = budget_plan {
         builder.commit_bond_budget_v1(ctx, claim_id, plan)?;
+    }
+    // RFC-0017: the probation charge and the claim's pin, once the claim is written.
+    if let Some(ticket) = probation_ticket {
+        palw_model_eligibility_fold_v1::eligibility_probation_commit_v1(builder, ctx, &claim_id, ticket)?;
     }
     if let Some(read) = issuance {
         builder.write_issuance_bucket_v1(issuance_bond, Some(read.spent_v1(ctx.daa_score)));
