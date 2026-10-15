@@ -4,9 +4,7 @@ use crate::{
     Hash64,
     config::params::Params,
     header::Header,
-    palw_fork_choice_commitment_v1::{
-        PALW_FORK_CHOICE_DOMAIN_V1, PalwForkChoiceLeafV1, PalwForkChoiceOpeningV1, PalwForkChoicePointV1,
-    },
+    palw_fork_choice_commitment_v1::{PalwForkChoiceLeafV1, PalwForkChoiceOpeningV1, PalwForkChoicePointV1},
     palw_state_proof_v1::{PalwStateOpeningV1, state_root_of_pinned_header_v1},
 };
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -72,17 +70,16 @@ pub fn check_native_state_anchor_v39(
     let inner = state.root();
     if params.palw_fork_choice_commitment_active_at(parent.daa_score) {
         if params.palw_fork_choice_rule_e_active_at(parent.daa_score) {
-            let leaf = crate::palw_fork_choice_rule_e_leaf_v2::PalwForkChoiceLeafV2::decode(&envelope.leaf)
-                .map_err(|e| format!("anchor39 original Rule-E V2 leaf: {e:?}"))?;
-            if leaf.block != pinned_parent || leaf.daa_score != parent.daa_score || leaf.blue_score != parent.blue_score {
-                return Err("anchor39 original Rule-E V2 point differs".into());
-            }
-            let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_FORK_CHOICE_DOMAIN_V1).to_state();
-            h.update(&leaf.encode());
-            h.update(inner.as_bytes());
-            if h.finalize().as_bytes() != committed.as_bytes() {
-                return Err("anchor39 original Rule-E V2 envelope does not open pinned child".into());
-            }
+            // RFC-0018 GAP-R4: the rule-E leaf in the grammar the auditor's own ruleset selects at the parent's point (v2, or v3 with
+            // rule E v2 capital and Gate C certification state) — the verifier node, L2 client and light client share.
+            crate::palw_fork_choice_rule_e_leaf_v3::palw_verify_committed_leaf_v2(
+                params,
+                &committed,
+                &PalwForkChoicePointV1 { block: pinned_parent, daa_score: parent.daa_score, blue_score: parent.blue_score },
+                &envelope.leaf,
+                &inner,
+            )
+            .map_err(|e| format!("anchor39 original Rule-E leaf: {e:?}"))?;
         } else {
             let leaf = PalwForkChoiceLeafV1::decode(&envelope.leaf).ok_or("anchor39 original V1 leaf grammar")?;
             PalwForkChoiceOpeningV1 { leaf, inner_root: inner }

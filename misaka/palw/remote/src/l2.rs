@@ -305,6 +305,22 @@ pub fn opening_from_wire_v1(leaf: &[u8], inner_root: &str) -> Option<PalwForkCho
     Some(PalwForkChoiceOpeningV1 { leaf: PalwForkChoiceLeafV1::decode(leaf)?, inner_root: inner_root.parse::<Hash64>().ok()? })
 }
 
+/// **RFC-0018 GAP-R4 — a header's committed opening in ANY form**, checked in the grammar the client's own ruleset (`params`)
+/// selects at `point`: flat, the v1 leaf, the rule-E leaf v2, or the rule-E leaf v3 (rule E v2 capital and Gate C certification
+/// state). The same function the node's v39 anchor verifier calls (`palw_verify_committed_leaf_v2`), so node and client accept exactly
+/// the same openings; past rule E it is what a client reads instead of [`opening_from_wire_v1`], whose v1 leaf a rule-E header does
+/// not commit.
+pub fn verify_committed_opening_v2(
+    params: &Params,
+    committed_root: &Hash64,
+    point: &PalwForkChoicePointV1,
+    leaf: &[u8],
+    inner_root: &Hash64,
+) -> Result<kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwCommittedLeafViewV2, String> {
+    kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::palw_verify_committed_leaf_v2(params, committed_root, point, leaf, inner_root)
+        .map_err(|e| format!("the committed opening does not verify in the client's form: {e:?}"))
+}
+
 /// The issuer channel's file limits: at most this many attestations are read per refresh (the newest by `issuedAtDaa`), each file at
 /// most [`ATTESTATION_FILE_MAX_BYTES_V1`].
 pub const ATTESTATION_DIR_MAX_FILES_V1: usize = 64;

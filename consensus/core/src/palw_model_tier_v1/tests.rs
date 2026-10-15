@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::config::params::{MAINNET_PARAMS, TESTNET_PARAMS};
+use crate::palw_annual_catalog_v1::ApprovedModelV1;
 use crate::network::{NetworkId, NetworkType};
 use crate::palw_bond_budget_v1::*;
 use crate::palw_state_v2::PalwBondKeyV2;
@@ -83,19 +84,17 @@ fn a_registered_model_is_0_3_from_registration_with_no_review_and_forever() {
     );
 }
 
+/// RFC-0019: `ApprovedModels` is the annual catalog chain — a fork listing is catalog edition `e ≥ 1`.
 #[test]
 fn only_an_annual_fork_listing_makes_1_0() {
     let mut f = fence();
     let fork_at = FENCE + YEAR_DAA;
-    f.annual.push(PalwApprovedModelsForkV1 {
-        activation: ForkActivation::new(fork_at),
-        models: vec![PalwApprovedModelV1 { model_id: h(1), artifact_root: h(2) }],
-    });
+    f.catalogs = f.catalogs.clone().with_edition(fork_at, vec![ApprovedModelV1::of(h(1), h(2))]);
     f.validate().unwrap();
     let mirror = f.mirror();
     assert_eq!(palw_model_tier_of_v1(Some(&mirror), &h(1), &h(2), false, fork_at - 1), PalwModelTierV1::Registered);
     let listed = palw_model_tier_of_v1(Some(&mirror), &h(1), &h(2), false, fork_at);
-    assert_eq!(listed, PalwModelTierV1::Approved(PalwTierSourceV1::AnnualFork { index: 0, from_daa: fork_at }));
+    assert_eq!(listed, PalwModelTierV1::Approved(PalwTierSourceV1::AnnualFork { edition: 1, from_daa: fork_at }));
     assert_eq!(palw_model_tier_coefficient_permille_v1(Some(&mirror), listed, fork_at), 1_000);
     // Another model is untouched by the listing.
     assert_eq!(palw_model_tier_of_v1(Some(&mirror), &h(3), &h(4), false, fork_at), PalwModelTierV1::Registered);
@@ -103,27 +102,35 @@ fn only_an_annual_fork_listing_makes_1_0() {
 
 #[test]
 fn an_annual_list_only_adds_and_never_re_roots_a_model() {
-    let entry = |id: u64, root: u64| PalwApprovedModelV1 { model_id: h(id), artifact_root: h(root) };
+    let entry = |id: u64, root: u64| ApprovedModelV1::of(h(id), h(root));
     let mut f = fence();
-    f.genesis.push(entry(1, 2));
-    f.annual.push(PalwApprovedModelsForkV1 { activation: ForkActivation::new(FENCE + 10), models: vec![entry(3, 4)] });
+    f.catalogs = PalwAnnualCatalogChainV1::genesis_only(vec![entry(1, 2)]).with_edition(FENCE + 10, vec![entry(3, 4)]);
     f.validate().unwrap();
-    // Re-listing a model id — with its own root or another — is refused: a list never overwrites or re-roots.
+    // Re-listing a model id — with its own root or another — is refused: an edition never overwrites or re-roots.
     for again in [entry(1, 2), entry(1, 9), entry(3, 9)] {
         let mut g = f.clone();
-        g.annual.push(PalwApprovedModelsForkV1 { activation: ForkActivation::new(FENCE + 20), models: vec![again] });
+        g.catalogs = g.catalogs.clone().with_edition(FENCE + 20, vec![again]);
         assert!(g.validate().is_err(), "{again:?}");
     }
-    // Out-of-order and empty lists are refused.
+    // Out-of-order and empty editions are refused.
     let mut late = f.clone();
-    late.annual.push(PalwApprovedModelsForkV1 { activation: ForkActivation::new(FENCE + 5), models: vec![entry(5, 6)] });
+    late.catalogs = late.catalogs.clone().with_edition(FENCE + 5, vec![entry(5, 6)]);
     assert!(late.validate().is_err());
     let mut empty = f.clone();
-    empty.annual.push(PalwApprovedModelsForkV1 { activation: ForkActivation::new(FENCE + 30), models: Vec::new() });
+    empty.catalogs = empty.catalogs.clone().with_edition(FENCE + 30, Vec::new());
     assert!(empty.validate().is_err());
+    // An edition below the tier fence is refused.
+    let mut early = fence();
+    early.catalogs = early.catalogs.clone().with_edition(FENCE - 1, vec![entry(7, 8)]);
+    assert!(early.validate().is_err());
     // Membership needs the class's own root: an entry naming another root never approves (or replaces) the registered class.
     let mirror = f.mirror();
     assert_eq!(palw_model_tier_of_v1(Some(&mirror), &h(3), &h(99), false, FENCE + 10), PalwModelTierV1::Registered);
+    // The genesis catalog (edition 0) approves from the fence.
+    assert_eq!(
+        palw_model_tier_of_v1(Some(&mirror), &h(1), &h(2), false, FENCE),
+        PalwModelTierV1::Approved(PalwTierSourceV1::GenesisList)
+    );
 }
 
 fn allocation_world(registered: &[Hash64], approved: Hash64) -> (PalwModelAllocationPolicyV1, PalwBondBudgetStateV1) {
