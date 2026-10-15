@@ -710,3 +710,69 @@ code は変えていない。fence の値、wire、指紋は変わらない。�
 - [activation-readiness-matrix.md](activation-readiness-matrix.md)(GAP-80・GAP-81、検証者誘因)
 - [t12-daa14000-release-plan-2026-10-15.md](t12-daa14000-release-plan-2026-10-15.md)
 - [../../PRINCIPLES.md](../../PRINCIPLES.md) §0・§6・§8・§9
+
+## 7. 追補: TIR 公開 frame lane の close-out(2026-10-16、branch `integ/g14-close-tir`)
+
+本書の本文(§0〜§6)は書き換えない。この節は TIR 公開 frame lane(§3.7)で変えた cell と gap の状態だけを記録する。
+**検証の水準は fold(consensus-core の lib test)と node 側の unit である。node 水準の E2E(T-N1)は書けていない(下の「T-N1 が書けない理由」)。**
+状態語は §0 のとおり(COVERED = source と fold 試験が揃う。verified / armable ではない)。
+
+### 7.1 gap の状態
+
+| ID | 状態 | 変更(要点) |
+|---|---|---|
+| G-03 | **閉(fold)** | fence 以後、登録 TIR class の FP commitment は transaction で対になった `TFP1` が無ければ受理時に拒否(`G03_FRAMELESS_TIR_ORIGINAL`)。frame が受理しない形(job tail、flat scheme、`PanelDa`、制約 job で semantic 契約なし、開けない semantic stage)は frame を作れないので、受理されない。判定は fence 自体(`tir_public_conviction_active`、params から)で、rules が解決したかではない。`palw_tir_public_fold_v1::require_original_frame_v1`、呼び出し `objects.rs`(N4 の直後、価格付けと書き込みの前)。 |
+| G-T1 | **一部閉(fold)** | K_owner = 8 は維持。slot を持つ owner が native の grace(`reorg_retention_daa`、最低 inclusion margin)の間 progress(Open・Demand・回答の Finish・Collect、`spent.last_progress_daa`)が無ければ idle とし、上限時の Open が最も長く idle な slot を回収する(その row は退役: 未払い demand を閉じ turn を使い切る。deposit は `slash_bond` で焼却、誰にも払わない)。未払いの demand を応答時計内に持つ owner と、遅い回答を受けた直後の owner は回収されない。**残る穴:** 能動的に demand を続ける共謀 owner(turn 予算内)は slot を保持できる(経済的な上限のみ)。grace 値の妥当性は未測定。 |
+| G-T2 | **閉(fold + node 実装、node は unit のみ)** | node の owner は trace か step が食い違うと、まず完全な committed IDs を取得して replay の IDs と比較する。最初の不一致位置の trace tile を demand し、consensus-core `palw_tir_public_selection_probe_v1` が job 自身の規則(greedy / seeded / V4)で pin を組む。反証できればそのまま filer へ、反証できなければ(committed row が replay と違う)算術の降下へ戻る。根が全て一致しても replay の答えが停止規則に反すれば Output。 |
+| G-T3 | **閉(fold)** | frame の設置時に claim の公開 prompt ids を ADR-0145 の prompt row に書き、material horizon(epoch 境界に切り上げ)まで保持する。derived work が書いた row は延長だけ。job の ids でないもの(`PanelDa` の空列を含む)は frame を拒否。canonical job は ids を持たず job から導出できるので row を書かない(node は `job_for_anchor` で導出)。 |
+| G-T4 | **閉(fold + node unit)** | Valid credit / grant を持たない抽選 seat は outsider と同じ owner になれる(`independent`、`palw_tir_public_source_for_row_v1`)。owner になった seat はその claim で grant できない。node の owner は抽選 seat を skip しなくなり、seat が見つけた不正(`seat_faults`)の claim を先に追う。finding は同じ filer book に入る。 |
+| G-T5 | **一部(node のみ)** | responder の同時 demand を 4 → K_owner(8)、受理済みの次の move は即送る(同じ move の再送だけ `COURT_MOVE_REPLAN_DAA` を待つ)。consensus の応答窓は同時性で伸ばしていない(行に閉じた不変条件を壊すため)。最大 profile での間に合いは未測定。 |
+| G-T6 | **一部** | T-N2〜T-N7 と genesis 試験を fold で追加・実行。既存 fold 試験 4 本の壊れた fixture を直した。T-N1 は未作成。 |
+| G-T7 / G-13(TIR 側) | **閉(fold)** | conviction は、false-Valid の offence が未消費の各 credited seat について、その claim の lock が存在し期限内であることを assert(無ければ filing ごと拒否、黙った skip なし)。grant 時に lock を `bond_exit_after_daa`(≥ door の閉鎖)まで延ばす既存処理に加え、door が開いている間は S2 licence の redraw、Panel-v3 の shard redraw、vertex の equivocation 没収が frame の credited lock を外さない(`palw_tir_public_frame_keeps_lock_v1`)。 |
+
+### 7.2 §3.7 の cell の変更(P14-g14 の列。水準は fold)
+
+| F | 旧 | 新 | 根拠 |
+|---|---|---|---|
+| F03 | PARTIAL | COVERED(fold) | G-T3: prompt ids を frame が保持。T-N5 |
+| F05 / F06 | GAP | OUT-OF-SCOPE | semantic stage を持つ original は legacy filer fence が無い限り受理しない(G-18 を frame が要しない)。G-03 と合わせて受理されない |
+| F07 | GAP | COVERED(fold)。node は unit | T-N2(greedy・seeded・V4 penalty・stop)、G-T2 |
+| F13 | GAP | PARTIAL | G-T1(idle は回収、能動的な占有は残る)。T-N4 |
+| F16 | PARTIAL | COVERED(fold) | 抽選 seat の経路(G-T4、T-N6)、各 seat lock の assert(T-N7) |
+| F22 | PARTIAL | PARTIAL | lock の assert は入った。clamp(R9)と集約責任は不変 |
+| F23 | OUT-OF-SCOPE(旧経路へ落ちる) | OUT-OF-SCOPE(受理拒否) | G-03。T-N3 |
+| F08 / F12 | PARTIAL | PARTIAL | G-T5 は node 側だけ |
+
+TIR frame lane の集計(B. P14-g14、fold 水準): 旧 9 / 9 / 4 / 1 / 1 → 新 12 / 8 / 0 / 3 / 1(C / P / G / O / n/a。F01・F04・F08…の node 水準は引き続き PARTIAL)。
+
+### 7.3 T-N1 が書けない理由(重要)
+
+**IR(TIR)class の Free Prompt lane は consensus でも node でも閉じている。** frame は TIR FP claim にしか付かないので、現状どの network でも frame を持つ claim は生まれない。
+- node: TIR backend の `execute_free_prompt` は `TIR_FREE_PROMPT_CLOSED_V1`(RFC-0002 Phase H まで閉)を返す(`misaka/palw/tir/exec/src/node/backend.rs`)。RPC も同じ文言で拒否する(`rpc/service/src/service.rs`)。
+- consensus: `palw_fp_derived_work`(t12 は genesis で武装)以後、FP の価格は class の `fp_work_profiles` を要し、無ければ `FreePromptClassHasNoWorkProfile`。この row は FP lane の認証(legacy の `PalwShapeProfileV3` を持つ object)でしか書かれず、IR class にその経路は無い。canonical claim(ids を運ばない)も同じ fence で `FreePromptPromptNotAccountable`。
+- したがって「署名済み TFP1 → mempool → template → fold」の本番経路を通る T-N1 は、Phase H(IR class の FP 認証と work profile、TIR backend の FP 実行)が無い限り作れない。fold 試験は frame を直接設置して検証している。
+- **帰結:** DAA 14,000 で `palw_tir_public_conviction_v1` を武装しても、t12 で報酬が frame を通って流れることはない。legacy route を (b) で止めると、Phase H が入るまで FP の報酬経路は無い。
+
+### 7.4 実行した試験(この branch)
+
+fold 水準の試験は署名を合成し、署名検証後の半分(`apply_verified_control_v1`)と credited frame の fixture(`with_custody_for_tests_v1`、cfg(test))を使う。
+本番の受理経路(ML-DSA、carrier fee、mempool、template)は通らない。
+
+- `cargo test -p kaspa-consensus-core --lib -- palw_tir_public shipped_presets_have_pinned_fingerprints`: `69 passed; 1 failed`。
+  失敗 1 本は `palw_tir_public_source_v1::tests::flat_original_binding_does_not_acquire_tiled_trace_obligations`(flat scheme の source 試験。
+  frame は flat を受理しない。この branch はその code path を変えていないが、base での結果は未確認)。
+  T-N2〜T-N7、genesis 試験、既存の frame fold 試験 8 本、`shipped_presets_have_pinned_fingerprints`(t12 の指紋 pin)は ok。
+- `cargo test -p kaspad --lib -- tir_public_owner palw_drill_tir_frame_tests tir_public_filer`: `5 passed; 0 failed`
+  (T-N6 の node 半分、G-T2 の owner 判定、drill flag の parse、既存の filer 試験 2 本)。
+
+### 7.5 武装に要る記録(測定値と判断。未測定は UNKNOWN)
+
+1. **前提(判断): IR class の Free Prompt lane(RFC-0002 Phase H)。** これが無いと frame に claim が来ない(§7.3)。
+2. owner の idle grace(`reorg_retention_daa` = 256 DAA)が、実 node の owner loop の往復(回答の受理から次の Demand の受理まで)より長いこと。
+3. K_owner 本の同時 demand のもとで、最大 profile の回答(最大の unit body と `Ids` 本体)が応答窓(`acquisition_daa` + moves × inclusion margin)に収まること(G-T5)。
+4. custodian の準備が最大 profile で preparation door 内に終わること(R7 / R8)。
+5. 最大 vocab の decode-token pin(全 generated ids と 4,096 lane の tile 2 枚)が terminal witness ceiling と分割搬送に収まること。
+6. ML-DSA 検査の反復を含む native CPU 予算(FullSUM、R7)。
+7. tag 170/171 の A-2 wire pin を Rust 試験で確定し、native inventory 生成器を再実行して、手で直した 4 行(`PalwTransitionExtrasV1`、`PalwTirPublicSpentV1`)と一致させること。
+8. V1〜V7 と drill D-05 / D-06 / D-07 / D-18 を、出荷 binary で fence をまたいで実行すること(D-05 / D-06 は 1 が前提)。
+9. 能動的に demand を続ける owner による slot 占有の費用と継続時間の評価(G-T1 の残り)。
