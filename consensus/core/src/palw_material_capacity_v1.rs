@@ -960,3 +960,5 @@ mod material_capacity_owner_v1;
 
 pub use material_capacity_owner_v1::prospective_kernel_bundle_auth_requests_v4;
 pub use material_capacity_owner_v1::prospective_kernel_bundle_requests_v4;
+
+pub use material_capacity_owner_v1::{kernel_material_unit_auth_requests_v4, kernel_material_unit_requests_v4};

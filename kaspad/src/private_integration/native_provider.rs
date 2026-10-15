@@ -472,7 +472,7 @@ impl LoopbackNativeProviderV3 {
             )?;
         }
         kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwNativeReadyRequestV3>(
-            &request.body,
+            &request.body[..],
             request.body.len() as u64,
         )
         .map_err(|e| e.to_string())?;
@@ -929,7 +929,7 @@ impl LoopbackNativeProviderV3 {
         }
         let encoded = borsh::to_vec(&signatures).map_err(|e| e.to_string())?;
         kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<Vec<(PalwBondKeyV2, Vec<u8>)>>(
-            &encoded,
+            &encoded[..],
             encoded.len() as u64,
         )
         .map_err(|e| e.to_string())?;
@@ -977,6 +977,13 @@ fn request_nonce_v3(body: &[u8]) -> [u8; 32] {
 }
 
 impl NativeReadyExchangeV3 for AuthenticatedSocketExchangeV3 {
+    fn fetch_kernel_material_unit_v4(
+        &self,
+        query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        authority: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>, String> {
+        self.fetch_kernel_v4(query, authority)
+    }
     fn ingest_kernel_material_v4(
         &self,
         material: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
@@ -1030,7 +1037,7 @@ impl NativeReadyExchangeV3 for AuthenticatedSocketExchangeV3 {
         write_frame_v3(&mut stream, &borsh::to_vec(&signed).map_err(|e| e.to_string())?)?;
         let frame = read_frame_v3(&mut stream)?;
         kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<ProviderTransportResponseV1>(
-            &frame,
+            &frame[..],
             frame.len() as u64,
         )
         .map_err(|e| e.to_string())?;
@@ -1040,7 +1047,7 @@ impl NativeReadyExchangeV3 for AuthenticatedSocketExchangeV3 {
         .map_err(|e| e.to_string())?;
         let responders = provider_transport_verify_response_v1(&response, &signed.header, roster_keys, &self.policy, now_unix_ms())?;
         kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwNativeReadyResponseV3>(
-            &response.body,
+            &response.body[..],
             response.body.len() as u64,
         )
         .map_err(|e| e.to_string())?;
@@ -1094,7 +1101,7 @@ fn handle_authenticated_v3(mut stream: TcpStream, service: &LoopbackNativeProvid
     let _ = stream.set_write_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3));
     let Ok(bytes) = read_frame_v3(&mut stream) else { return };
     if kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<ProviderTransportRequestV1>(
-        &bytes,
+        &bytes[..],
         bytes.len() as u64,
     )
     .is_err()
@@ -1112,6 +1119,10 @@ fn handle_authenticated_v3(mut stream: TcpStream, service: &LoopbackNativeProvid
     }
     if request.header.purpose == ProviderTransportPurposeV1::KernelMaterialIngressV4 {
         kernel_ingress_v4::handle_kernel_v4(&mut stream, service, &request);
+        return;
+    }
+    if request.header.purpose == ProviderTransportPurposeV1::KernelMaterialQueryV4 {
+        kernel_query_v4::handle_query_v4(&mut stream, service, &request);
         return;
     }
     let native = match service.authenticate(&request) {
@@ -1541,3 +1552,6 @@ mod tests {
 mod kernel_ingress_v4;
 #[path = "native_recovery_runtime_v4.rs"]
 mod recovery_runtime_v4;
+
+#[path = "native_kernel_material_query_v4.rs"]
+mod kernel_query_v4;

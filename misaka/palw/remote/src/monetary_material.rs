@@ -149,8 +149,10 @@ impl DurableMonetaryMaterialProviderV1 {
         provider: PalwBondKeyV2,
         demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
     ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, String> {
+        // Every retained generation is examined, not only the first candidate: any kernel-codec generation of this
+        // root/dependency must go through the current native-positive replay path (`answer_material_current_v4`).
         if self.contexts.is_some()
-            && self.store.material_generation_scope_v4(consent, root, dependency).is_some_and(|(_, scope)| {
+            && self.store.material_generation_scopes_v4(consent, root, dependency).any(|(_, scope)| {
                 scope.codec != kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCodecV1::NativeHeldComplete
             })
         {
@@ -172,14 +174,44 @@ impl DurableMonetaryMaterialProviderV1 {
         demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
         native: &dyn kaspa_consensus_core::api::ConsensusApi,
     ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, String> {
+        self.answer_material_generation_v4(preferred, root, dependency, provider, pubkey, demand, native, false)
+    }
+    /// A read request names one signed generation. Unlike court recovery, it
+    /// cannot silently answer under a different consent with equal scope bytes.
+    pub fn answer_material_exact_current_v4(
+        &self,
+        consent: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+        provider: PalwBondKeyV2,
+        pubkey: &[u8],
+        demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
+        native: &dyn kaspa_consensus_core::api::ConsensusApi,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, String> {
+        self.answer_material_generation_v4(consent, root, dependency, provider, pubkey, demand, native, true)
+    }
+    fn answer_material_generation_v4(
+        &self,
+        preferred: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+        provider: PalwBondKeyV2,
+        pubkey: &[u8],
+        demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
+        native: &dyn kaspa_consensus_core::api::ConsensusApi,
+        exact: bool,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, String> {
         use kaspa_consensus_core::{
             palw_attempt_material_v3::verify_ready_signature_v3, palw_kernel_material_context_v4::restore_kernel_material_context_v4,
             palw_material_capacity_v1::PalwMaterialCodecV1,
         };
         let mut last = String::from("no current eligible retained material generation");
         for (consent, scope) in self.store.material_generation_scopes_v4(preferred, root, dependency) {
+            if exact && consent != preferred {
+                continue;
+            }
             let result = (|| {
-                if consent != preferred || self.contexts.is_some() {
+                if exact || consent != preferred || self.contexts.is_some() {
                     native.palw_material_generation_authority_v4(root, consent, provider, scope)?;
                 }
                 if scope.codec != PalwMaterialCodecV1::NativeHeldComplete {

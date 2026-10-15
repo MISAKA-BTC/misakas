@@ -1017,3 +1017,5 @@ pub mod palw_kernel_material_enrollment_v4;
 pub mod palw_kernel_parameter_material_v4;
 pub mod palw_kernel_material_context_v4;
 pub mod palw_kernel_producer_candidate_v4;
+
+pub mod palw_kernel_material_query_v4;

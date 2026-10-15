@@ -226,7 +226,10 @@ mod palw_beacon_bootstrap_fold_v1;
 // RFC-0017: model eligibility (inner 74/75, aux 131) and its claim-gate / probation / Final hooks, past `palw_model_eligibility_v1`.
 #[path = "palw_model_eligibility_fold_v1.rs"]
 mod palw_model_eligibility_fold_v1;
-pub use palw_model_eligibility_fold_v1::palw_eligibility_status_of_v1;
+pub use palw_model_eligibility_fold_v1::{
+    palw_eligibility_bars_security_credit_v1, palw_eligibility_security_credit_v1, palw_eligibility_status_of_v1,
+    palw_probation_security_credit_v1,
+};
 // RFC-0018 §7 (Gate C, adopted 2026-10-15): SecurityCertified — kernel-route aux 136, attestations on inner 75, past
 // `palw_independently_work_certified_v1`.
 #[path = "palw_security_certification_fold_v1.rs"]
@@ -21385,6 +21388,12 @@ fn apply_attempt(
             PalwClaimStateV2 { immature_contribution: claim.immature_contribution.min(plan.reservation().final_weight), ..claim }
         }
         None => claim,
+    };
+    // RFC-0017 U-2 (user decision 2026-10-15): a weightless Probation claim contributes 0 to `bounded_immature` (and so to every
+    // provisional-weight reader) whether or not a budget plan exists; its Final weight is 0 through its F = 0 reservation.
+    let claim = match &probation_ticket {
+        Some(ticket) if ticket.weightless() => PalwClaimStateV2 { immature_contribution: 0, ..claim },
+        _ => claim,
     };
     let panel_authorization = palw_panel_lifetime_fold_v2::select_authorization(builder, &claim)?;
     if let Some(row) = &monetary_ready {

@@ -60,7 +60,7 @@ use misaka_palw_panel::{
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum PalwPanelV3BeaconSourceV1 {
     /// **The branch's own settlements** — the only value any processor resolves. Every Final the V2 lattice writes passed through a
-    /// Panel licence (never a source of a Panel draw); the kernel route's OPV Finals are `PanelIndependent`, and its claim seals are
+    /// Panel licence (never a source of a Panel draw); unapproved OPV Finals supply no entropy; the kernel route's claim seals are
     /// the v3 beacon's facts (RFC-0010 × RFC-0015, GAP-B3: the non-circular bootstrap of `opv-beacon-bootstrap.md` §4 — complete-check
     /// classes reach Final without a beacon, and their Finals seed every later draw, the Panel's included).
     #[default]
@@ -150,8 +150,9 @@ impl<'a> ChainPanelBeaconHistoryV1<'a> {
         Self { state, base_class, engine, source, tip_position }
     }
 
-    /// The kernel route's attributed OPV Finals (`PanelIndependent`). A route whose rows do not rebuild contributes nothing: the
-    /// fold refuses such a state on its own path, and a beacon that cannot be derived never locks (non-fraud `BeaconUnavailable`).
+    /// Selected-approval-authorized route events. An optimistic Final alone
+    /// exports none. Invalid route rows cannot derive a beacon and remain a
+    /// non-fraud `BeaconUnavailable` outcome.
     fn route_works(&self) -> Vec<AttributedWorkV1> {
         self.state.kernel_route.as_ref().and_then(|route| route.beacon_events_v1().ok()).unwrap_or_default()
     }
@@ -201,7 +202,7 @@ impl PanelBeaconHistoryV1 for ChainPanelBeaconHistoryV1<'_> {
         }
         route.paid_beacon_material_v5(context)?.ok_or_else(|| "Panel epoch has no authenticated prepaid funding".into())
     }
-    /// The V2 lattice's Finals (all `PanelLicensed`) and the kernel route's OPV Finals (`PanelIndependent`).
+    /// The V2 lattice's selected Panel Finals and any separately authorized route events.
     fn final_events(&self) -> Vec<WorkFinalEventV1> {
         match self.source {
             PalwPanelV3BeaconSourceV1::Chain => {

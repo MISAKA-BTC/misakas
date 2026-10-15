@@ -77,6 +77,50 @@ fn typed_response(stage: u8, data: &[u8]) -> Result<C, String> {
         shape::<misaka_palw_kernel::public::PositionResponseV1>(data)
     }
 }
+/// Before decoding a checker-fetched codec3 unit. This is allocation coverage,
+/// never an assertion about the correctness of model computation.
+pub fn kernel_material_unit_requests_v4(stage: u8, data: &[u8]) -> Result<C, String> {
+    if data.len() as u64 > crate::palw_kernel_parameter_material_v4::PALW_KERNEL_MATERIAL_UNIT_BYTES_V4 {
+        return Err("kernel material unit exceeds its typed wire bound".into());
+    }
+    typed_response(stage, data)
+}
+/// Authenticator scratch is derived from the actual returned codec and the
+/// caller's authenticated claim/class, separately from the raw decode owner.
+pub fn kernel_material_unit_auth_requests_v4(
+    stage: u8,
+    data: &[u8],
+    ledger: &misaka_palw_kernel::ledger::KernelLedgerV1,
+    claim: &misaka_palw_kernel::hash::Digest,
+) -> Result<C, String> {
+    use crate::{
+        palw_kernel_parameter_material_v4::{
+            PALW_KERNEL_PARAMETER_STAGE_V4, PALW_KERNEL_SEGMENTED_PART_STAGE_V4, PalwKernelParameterRowV4, PalwKernelSegmentedPartV4,
+        },
+        palw_native_resource_v1::{
+            native_kernel_parameter_auth_requests_v4, native_kernel_position_auth_requests_v4, native_kernel_segment_auth_requests_v4,
+        },
+    };
+    kernel_material_unit_requests_v4(stage, data)?;
+    if stage == PALW_KERNEL_PARAMETER_STAGE_V4 {
+        decoded_auth::<PalwKernelParameterRowV4>(data, native_kernel_parameter_auth_requests_v4)
+    } else if stage == PALW_KERNEL_SEGMENTED_PART_STAGE_V4 {
+        let count = shape::<PalwKernelSegmentedPartV4>(data)?.bytes().ok_or("segment wrapper capacity overflow")?;
+        let _codec = reserve_native_requests_v1(count).map_err(|e| e.to_string())?;
+        let unit: PalwKernelSegmentedPartV4 = borsh::from_slice(data).map_err(|e| e.to_string())?;
+        let row = ledger.claims.get(claim).ok_or("unit authentication claim absent")?;
+        let class = ledger.classes.get(&row.class_binding_id).ok_or("unit authentication class absent")?;
+        decoded_auth::<misaka_palw_kernel::seg_da::SegPartResponseV1>(&unit.bytes, |r| {
+            native_kernel_segment_auth_requests_v4(&class.program, unit.position, r)
+        })
+    } else if stage < misaka_palw_kernel::spec::SNAPSHOT_STAGE_BASE_V1 {
+        decoded_auth::<misaka_palw_kernel::public::PositionResponseV1>(data, native_kernel_position_auth_requests_v4)
+    } else {
+        // Slice/Entry i128/output projections were counted by the structural
+        // raw-shape scanner; their borrowed Merkle paths do not build a tree.
+        Ok(C::zero())
+    }
+}
 /// A structural scan counts the exact key/payload lanes before the native
 /// retrieval classifier expands i32/u32 values into i128 tensors and returns
 /// `[key,payload]` TensorWire pairs. Merkle authentication hashes borrowed

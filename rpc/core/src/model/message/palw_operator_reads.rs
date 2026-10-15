@@ -1916,6 +1916,9 @@ pub struct RpcPalwModelLifecycle {
     pub eligibility_subsidy: bool,
     pub eligibility_block_right: bool,
     pub eligibility_final_weight: bool,
+    /// Exams passed: each a PREMISE-BASED certification (m-of-k approval by stake-drawn verifiers, valid under the explicit premise
+    /// that the honest share of the drawn verifier stake is at least the threshold — RFC-0017 U-3), never a proof of computation
+    /// correctness.
     pub eligibility_exams_passed: u32,
     /// Exam attempts consumed by the class's lineage (all registrations of the same weights).
     pub eligibility_lineage_attempts: u32,

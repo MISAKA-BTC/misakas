@@ -23,7 +23,10 @@ fn count(b: &TransitionBuilder<'_>, table: u8) -> usize {
 fn authority(b: &TransitionBuilder<'_>, id: &Digest) -> Result<PalwPaidClaimAuthorityV2, PalwStateV2Error> {
     let r = b.state.kernel_route.as_ref().ok_or_else(|| refused("paid claim route missing"))?;
     let a = r.paid_claim_enrollment_v3(id).map_err(refused)?;
-    a.validate(&*r.ledger().map_err(refused)?).map_err(refused)?;
+    a.validate(
+        &*r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
+    )
+    .map_err(refused)?;
     Ok(a)
 }
 
@@ -355,7 +358,13 @@ fn apply_inner(
             );
             let inner = KernelRouteObjectV1::FundBeaconSourceFee { terms: *terms };
             route_fold::apply_kernel_route_object_v1(b, ctx, &inner.encode(), signer)?;
-            let l = b.state.kernel_route.as_ref().unwrap().ledger().map_err(refused)?;
+            let l = b
+                .state
+                .kernel_route
+                .as_ref()
+                .unwrap()
+                .ledger_checked_v1()
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
             if !l.beacon_source_fees.get(&id).is_some_and(|f| f.terms == *terms) {
                 return Err(refused("strict native prepaid source debit failed"));
             }
@@ -487,7 +496,11 @@ fn admit_review(
     if a.class.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
         return Err(refused(crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACT_RETIRED_REASON_V1));
     }
-    let actual = paid_claim_actual_algebraic_bound_v2(&*r.ledger().map_err(refused)?, &a.enrollment.base_claim).map_err(refused)?;
+    let actual = paid_claim_actual_algebraic_bound_v2(
+        &*r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
+        &a.enrollment.base_claim,
+    )
+    .map_err(refused)?;
     if claimed > actual {
         return Err(refused("review arithmetic overstates the actual registered math plan/repetitions/typed composition"));
     }
@@ -603,7 +616,8 @@ fn receipt_fold(
     let mut l = route_fold::load_ledger(b, ctx)?;
     let before = l.to_rows();
     if l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
-        l.try_apply_paid_claim_tally_v2(&a.enrollment.base_claim).map_err(refused)?;
+        l.try_apply_paid_claim_tally_checked_v2(&a.enrollment.base_claim)
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     }
     route_fold::flush(b, &l, &before);
     Ok(())
@@ -613,7 +627,7 @@ pub(super) fn tick_paid_claim_final_projection_v2(
     ctx: &PalwBlockContextV2,
 ) -> Result<(), PalwStateV2Error> {
     let Some(r) = b.state.kernel_route.as_ref() else { return Ok(()) };
-    let l = r.ledger().map_err(refused)?;
+    let l = r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     let mut projections = Vec::new();
     for ((t, row_key), bytes) in &r.aux {
         if *t != PAID_CLAIM_ENROLLMENTS_V2 || row_key.len() != 64 {
@@ -626,6 +640,9 @@ pub(super) fn tick_paid_claim_final_projection_v2(
         if matches!(row.life.state, misaka_palw_kernel::lifecycle::ClaimStateV1::Final { .. })
             && !r.aux.contains_key(&(PAID_CLAIM_FINALS_V2, key(&a.enrollment.id())))
         {
+            if !l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
+                return Err(refused("paid Final lacks approvals of the randomly selected assigned verifiers"));
+            }
             let (lock, completed_rounds, transcript_root) = if let Some(plan) = &a.class.interactive_plan {
                 if !r.paid_claim_interactive_complete_v3(&a, &l).map_err(refused)? {
                     return Err(refused("interactive Final lacks complete full-material rounds"));
@@ -711,7 +728,8 @@ fn verify_source_payment_v3(
     }
     let output = cb.outputs.get(p.coinbase_output as usize).ok_or_else(|| refused("economic payment output index missing"))?;
     let r = b.state.kernel_route.as_ref().unwrap();
-    let ledger = r.ledger().map_err(refused)?;
+    let ledger =
+        r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     let mut bound = false;
     for ((context, producer), promise) in &ledger.beacon_source_fee_promises {
         if promise.terms_id != o.prepaid_fee_terms || promise.fee != o.income_sompi {
@@ -790,7 +808,7 @@ pub(super) fn refresh_pending_paid_source_locks_v2(
     ctx: &PalwBlockContextV2,
 ) -> Result<(), PalwStateV2Error> {
     let Some(r) = b.state.kernel_route.as_ref() else { return Ok(()) };
-    let l = r.ledger().map_err(refused)?;
+    let l = r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     let mut invalid = Vec::new();
     for ((_, key), bytes) in r.aux.range((PAID_CLAIM_LOCKS_V2, Vec::new())..(PAID_CLAIM_LOCKS_V2 + 1, Vec::new())) {
         let mut lock: PalwPaidClaimLockV2 = borsh::from_slice(bytes).map_err(|e| refused(e.to_string()))?;
@@ -884,9 +902,15 @@ fn round_message(
         context.commitment_root = subject.commitment_root;
         context.commitment_position = ctx.daa_score;
         context.challenge_epoch = u64::from(round);
-        let target =
-            claim_source_target_v2(a.source_policy, context.clone(), a.enrollment.lifetime, &r.ledger().map_err(refused)?.policy)
-                .map_err(refused)?;
+        let target = claim_source_target_v2(
+            a.source_policy,
+            context.clone(),
+            a.enrollment.lifetime,
+            &r.ledger_checked_v1()
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
+                .policy,
+        )
+        .map_err(refused)?;
         if target.terms.seal_start <= ctx.daa_score {
             return Err(refused("staged challenge window must open after its signed message"));
         }
@@ -916,7 +940,12 @@ fn round_message(
         transcript_root: [0; 64],
         receipts: vec![],
     };
-    r.validate_paid_round_v4(&row, &a, &*r.ledger().map_err(refused)?).map_err(refused)?;
+    r.validate_paid_round_v4(
+        &row,
+        &a,
+        &*r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
+    )
+    .map_err(refused)?;
     admit_review(b, ctx, policy, &a, row.id(), u32::from(plan.mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon))?;
     put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
     if plan.mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
@@ -987,7 +1016,13 @@ fn round_fund(
         &ff.policy.cost_bounds.ok_or_else(|| refused("round cost scope missing"))?,
     );
     route_fold::apply_kernel_route_object_v1(b, ctx, &KernelRouteObjectV1::FundBeaconSourceFee { terms: *terms }.encode(), signer)?;
-    let l = b.state.kernel_route.as_ref().unwrap().ledger().map_err(refused)?;
+    let l = b
+        .state
+        .kernel_route
+        .as_ref()
+        .unwrap()
+        .ledger_checked_v1()
+        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     if !l.beacon_source_fees.get(&id).is_some_and(|f| f.terms == *terms) {
         return Err(refused("strict same-R native round debit failed"));
     }
@@ -1055,7 +1090,12 @@ fn round_lock(
         quorum,
         source_valid: true,
     });
-    r.validate_paid_round_v4(&row, &a, &*r.ledger().map_err(refused)?).map_err(refused)?;
+    r.validate_paid_round_v4(
+        &row,
+        &a,
+        &*r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
+    )
+    .map_err(refused)?;
     put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
     Ok(())
 }
@@ -1079,12 +1119,18 @@ fn round_receipt(
         return Err(refused("round receipt signer/source/lifetime mismatch"));
     }
     row.receipts.push(receipt.clone());
-    r.validate_paid_round_v4(&row, &a, &*r.ledger().map_err(refused)?).map_err(refused)?;
+    r.validate_paid_round_v4(
+        &row,
+        &a,
+        &*r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
+    )
+    .map_err(refused)?;
     put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
     let mut l = route_fold::load_ledger(b, ctx)?;
     let before = l.to_rows();
     if l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
-        l.try_apply_paid_claim_tally_v2(&a.enrollment.base_claim).map_err(refused)?;
+        l.try_apply_paid_claim_tally_checked_v2(&a.enrollment.base_claim)
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     }
     route_fold::flush(b, &l, &before);
     Ok(())

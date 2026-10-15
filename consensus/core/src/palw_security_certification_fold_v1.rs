@@ -304,7 +304,11 @@ pub(super) fn sweep_security_certification_v1(
             continue;
         }
         let mut changed = false;
+        // U-2 (P0): a claim RFC-0017 accepted under Probation can never be SecurityCertified — no verifier is drawn for it (it expires
+        // at `certify_by`, counted as a failed attempt), and the predicate refuses it whatever its row says.
+        let barred = crate::palw_state_v2::palw_eligibility_bars_security_credit_v1(&builder.state, &claim_id);
         if row.anchor.is_none()
+            && !barred
             && !palw_certification_public_check_v1(&row.class_id)
             && network.draws < policy.draws_per_epoch
             && let Some(a) = anchor.as_ref()
@@ -338,7 +342,15 @@ pub(super) fn sweep_security_certification_v1(
                 // Write the decided row FIRST: the credit's own reads (`palw_independently_work_certified_v1` in any re-derivation
                 // this block runs) then see the claim certified.
                 write_row(builder, key.clone(), Some(&row));
-                if let Some(claim) = claim.as_ref() {
+                // Credit only what the ONE predicate certifies (the U-2 bar, a void, the fence — all inside it), so the credit and every
+                // re-derivation read the same answer.
+                if let Some(claim) = claim.as_ref()
+                    && crate::palw_rfc0018_v1::palw_independently_work_certified_v1(
+                        &claim_id,
+                        claim,
+                        &crate::palw_rfc0018_v1::PalwGateCViewV1::of(builder.params, &builder.state),
+                    )
+                {
                     credit_certified_v1(builder, now, &claim_id, claim, &row)?;
                 }
             }

@@ -17,7 +17,7 @@ Merged in: `origin/integ/adr-0162-0178` (ADR-0176 mode-aware hold, bond formula 
 | Decision | Where |
 | --- | --- |
 | `P_m` is applied to blocks ONCE, by V+; ADR-0177 V3 `block_opportunity` must be off whenever V+ is armed; coinbase-side `P_m` stays the existing allocation's (this also resolves the ADR lane's C4) | refusal `consensus/core/src/palw_rfc0016_v1/values.rs:295`; test source `consensus/core/tests/rfc0016_v1.rs` `lead_decision_p_m_is_applied_to_blocks_once` |
-| Mid-epoch reissue is `A_m`-weighted (new rooted state); first-come stays the fallback where `A_m` is unavailable | `rights.rs:326`, `:386`; fold `palw_rfc0016_fold_v1.rs:453` |
+| Mid-epoch reissue is `A_m`-weighted (new rooted state); ~~first-come stays the fallback where `A_m` is unavailable~~ — **superseded by V2 (user decision 2026-10-15): with `A_m` missing nothing is reissued** (§8) | `rights.rs:326`, `:386`; fold `palw_rfc0016_fold_v1.rs:453` |
 | RPC op 255, proto 1330–1331 (confirmed) | §5 |
 
 ## 1. Fences and allocations
@@ -123,3 +123,22 @@ All **test source** (not run) unless marked evidence-only.
 * `consensus/src/pipeline/virtual_processor/tests/rfc0016_e2e.rs` uses `T12Chain` helpers (`heartbeat`, `attempt`, `tip_state`) and
   `PalwChainStateV2::safe_weight()`.
 * The regenerated native scanner also caught up ADR-0176's new `PalwBudgetOriginV1` variants (`generated.rs`, `wire_generated.rs`).
+
+## 8. User decisions 2026-10-15 (V2–V11) — implementation status (branch `integ/decisions-1015`)
+
+Binding text: [user decisions 2026-10-15](user-decisions-2026-10-15-adr-rfc16-rfc17.md) §2. Every value is a calibration starting point,
+never a production value; the measured-value gate still refuses both fences outside an isolated calibration network. Unbuilt and
+untested here (no PASS).
+
+| Item | Status | Where |
+| --- | --- | --- |
+| **V2** calibration σ = 0.25, φ = 0.5, pace margin 1.2, `k` = 1 (every candidate still swept); no first-come grant when `A_m` is missing | decided 2026-10-15 → **implemented** (calibration starting set, `k = 1` conformance; past φ without a snapshot only own rights admit — `ReissueUnavailable`); production values: **measurement pending** | `consensus/core/src/palw_rfc0016_v1/values.rs:106`, `:134`, `:160`; `rights.rs:255`, `:447`; test `rights.rs:561`; harness `scripts/drills/rfc0016_sigma_k_measure.py:66` |
+| **V3** entrant reserve ≤ 20 ‰ of total opportunity, ONE pool with RFC-0017's Probation budget (explicit netting); Probation per-model 2 ‰; `S_entry` = the eligible minimum producer bond | decided → **implemented** | `values.rs:116`; `rights.rs:189`; `palw_rfc0016_fold_v1.rs:137` (`S_entry`), `:145`, `:157`; RFC-0017 admission `palw_model_eligibility_fold_v1.rs:170`; validation `values.rs:391`; test `rights.rs:539` |
+| **V4** Q / B / R / F and collateral from measurement | **measurement pending** (ADR-0176 plan; unchanged) | — |
+| **V5** epoch = 720 DAA (calibration), 30-day window = 21,600 DAA; DAA vs wall-clock drift reported; never "24 h" | decided → **implemented** | `values.rs:122`, `:124`, `:407`; `report.rs:73`, `:118`; RPC `consensus/src/pipeline/virtual_processor/processor/palw.rs:1705`; harness `rfc0016_sigma_k_measure.py:175` |
+| **V6** pass thresholds: 0 invariant violations; honest cap utilization ≥ 80 %; REAL degradation ≤ 5 % vs no-V+ (provisional) | decided → **implemented** in the tooling; the runs: **measurement pending** | `scripts/drills/rfc0016_sigma_k_measure.py:210`–`:212`, `:215`, `:300`; `scripts/sim/palw-rfc0016-vplus-sim.py` (sweep) |
+| **V7** bond-capital-proportional queue shares; a quote is not a right (deterministic re-check); TTL expiry neutral | decided → **implemented**; `L_queue`, `T_queue`, `h`: **measurement pending** | `capacity.rs:195`, `:354`; `palw_rfc0016_fold_v1.rs:37`; tests `capacity.rs:506`, `:517` |
+| **V8** signed capacity attestation (model, verifier, capability, window, expiry, evidence root); no double count across models; `sigma_cap` ≤ 1; compute / memory / DA / court together | decided → **implemented** (type, message, checks, joint evaluation, one-budget-per-verifier supply); its carriage (an object kind) is **not allocated** — the fold still reads registry readiness | `capacity.rs:211`, `:240`, `:254`, `:276`, `:300`, `:318` |
+| **V9** verifier share 10–30 %, 20 % baseline; `checked_share` and within-deadline completion measured apart; no new issuance | decided → **implemented**; slope / `N`·`m`: **measurement pending** | `values.rs:128`; `report.rs:146`, `:166`; fold `palw_rfc0016_fold_v1.rs:799` |
+| **V10** withheld subsidy never redistributed nor re-issued | decided → **implemented** (by construction; pinned by a test source) | `consensus/core/src/palw_bond_budget_v1/decisions_1015.rs:383` |
+| **V11** no coinbase Panel migration | decided → **implemented** (`PALW_RFC0016_COINBASE_PANEL_MIGRATION_V1 = false` + test) | `values.rs:177`, `:535` |
