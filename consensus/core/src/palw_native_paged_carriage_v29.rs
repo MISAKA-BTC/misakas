@@ -36,7 +36,7 @@ pub struct NativePagedCarriageRecordV29 {
 }
 impl NativePagedCarriageRecordV29 {
     pub fn root(&self) -> Digest {
-        object_id(b"misaka-palw/native/original-full-court-carriage/v29", self)
+        if self.version==32{object_id(b"misaka-palw/native/original-phase-exclusive-producer-carriage/v32",self)}else{object_id(b"misaka-palw/native/original-full-court-carriage/v29", self)}
     }
 }
 pub struct CheckedNativePagedCarriagePlanV29 {
@@ -69,6 +69,29 @@ fn density(n: u32, window: u64, period: u64) -> Result<u64, String> {
 impl CheckedNativePagedCarriagePlanV29 {
     pub fn record(&self) -> &NativePagedCarriageRecordV29 {
         &self.record
+    }
+    /// Explicit32 phase-exclusive producer Commit lane. Before a claim exists
+    /// no source unit/proof owner can be admitted; once Commit succeeds this
+    /// lane becomes ineligible. Queue30 reserves the larger complete burst and
+    /// physical22 reserves the smaller service window conservatively. Neither
+    /// an old29 record nor an ordinary carrier receives this interpretation.
+    pub fn derive_invocation_v32(
+        program:&TirProgramV1,real_pc:&ParamCommitmentsV1,real_params:usize,
+        paid:&CheckedNativePagedProofPlanV29,class:Digest,job_plan:Digest,pursuit:Digest,
+        answer_window:u64,proof_window:u64,maximum_positions:u32,commit_window:u64,
+        service:&NativeCarriageServiceV22,mass:&NativeCarriageMassParamsV22,
+    )->Result<Self,String>{
+        use misaka_palw_kernel::flat_quota11::stage14::bounded28::{invocation_commit_bytes_bound_v32,invocation_commit_parts_bound_v32};
+        let mut p=Self::derive(program,real_pc,real_params,paid,class,job_plan,pursuit,answer_window,proof_window,service,mass)?;
+        let bytes=invocation_commit_bytes_bound_v32(maximum_positions)?;
+        let parts=invocation_commit_parts_bound_v32(maximum_positions)?;
+        if commit_window<=service.period_daa{return Err("invocation32 producer Commit has no complete service window".into());}
+        let r=&mut p.record;r.version=32;
+        r.pursuit=object_id(b"misaka-palw/native/original-commit-source-phase-contract/v32",&(pursuit,maximum_positions,bytes,parts,commit_window));
+        r.answer_packets=r.answer_packets.max((parts as u32+1).checked_mul(2).ok_or("invocation32 original producer attempt burst overflow")?);
+        r.answer_window=r.answer_window.min(commit_window);
+        r.density=density(r.answer_packets,r.answer_window,service.period_daa)?.checked_add(density(r.proof_packets,r.proof_window,service.period_daa)?).ok_or("invocation32 combined original carriage density overflow")?;
+        r.minimum_deadline=r.answer_window.min(r.proof_window);Ok(p)
     }
     pub fn derive(
         program: &TirProgramV1,

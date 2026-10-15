@@ -144,7 +144,7 @@ def native_receipt(stage: str, e: dict, base: Path) -> str | None:
 
 
 def panel_ok(panel: dict, base: Path, *, allow_local_validation: bool = False) -> bool:
-    if panel.get("local_qualified_validation_network") is True and not allow_local_validation:
+    if (panel.get("local_qualified_validation_network") is True or panel.get("local_qualified_validation_only") is True) and not allow_local_validation:
         return False
     windows = panel.get("windows")
     rule = panel.get("minimum_independent_operators")
@@ -191,7 +191,7 @@ def outcome(member: dict, row: dict | None, base: Path, cohort_sha: str) -> dict
     for stage in STAGES:
         e = row.get("stages", {}).get(stage, {})
         status = e.get("status", "NOT_RUN")
-        if status not in ("PASS", "FAIL", "NOT_RUN"):
+        if status not in ("PASS", "FAIL", "NOT_RUN", "LOCAL_VALIDATION"):
             raise ValueError(f"unknown stage status for {key}/{stage}")
         if status == "PASS" and (e.get("scope") != scope or not evidence_ok(e.get("evidence", {}), base)):
             status = "FAIL"

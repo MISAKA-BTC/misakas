@@ -3576,6 +3576,41 @@ The all-required launch target and publisher file/revision metadata are recorded
 conversion, full-task fidelity, Final or eligibility is established by this metadata.
 This requirement adds work; it does not remove the five gaps above or replace A6/A8.
 
+### Completion-branch source checkpoint (2026-10-15; unverified)
+
+The source audit of `pre` remains valid for its recorded commit. The subsequent
+completion branch is **not code-complete**. `f934a787b` saves native invocation
+replay, genuine original Master component records, source-backed Pixtral/decoder
+frontends, bounded integer PALWQ361 reading, consecutive-state receipt auditing
+and CAS evidence collection. These are implementation checkpoints, not new test
+results. No build, conversion, node execution or measurement has run for them.
+
+The remaining implementation includes:
+
+- Paid compact native Commit carriage and its exact original queue/consent
+  binding, followed by complete SDK and native audit integration.
+- An explicit new program/source grammar for history selection and large
+  parameters, values and inputs. The old grammar's limits remain in force;
+  refusing invalid windows or increasing an offline report buffer does not
+  implement their positive native execution and courts.
+- The exact Q36 grouped-quantization, routing/expert and recurrent-state forward
+  mirror. Reading its source format alone does not establish runtime equivalence.
+- Complete Master32 component delivery/redemption exports and the Python
+  two-window stream/CAS integration. A local qualified devnet is validation
+  evidence; it cannot become public A6/A8 evidence by carrying a qualified flag.
+
+The initial-seven gate separately requires exact precommitted native identity,
+all original component credits, coinbase inclusion and accepted redemption.
+Mistral's token-only Text29 identity cannot substitute for its complete
+vision/projector/decoder Master32. All seven remain `NOT_RUN`; the release gate
+does not activate a shipping preset or assign founding bonds. The original
+A6/A8 populations and failure denominators remain unchanged.
+
+After all implementation is complete, the consolidated validation must cover
+compilation, relevant regressions and adversarial courts, independently replayed
+native Final/coinbase/redemption, original checkpoint/context measurements, A6/A8
+and all seven initial models. Historical passes below do not validate this source.
+
 ## Validation (2026-10-15) — paused 10-15 by user order
 
 **Paused 10-15 by user order; results so far apply only to the recorded source commits and

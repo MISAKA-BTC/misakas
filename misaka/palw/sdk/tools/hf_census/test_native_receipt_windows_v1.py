@@ -54,6 +54,31 @@ class ReceiptWindowGuards(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_contract(contract)
 
+    def test_stream_reversal_preserves_every_point_across_chunks(self):
+        import json
+        from native_receipt_window_audit_v1 import reverse_pointer_stream
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dst = Path(tmp) / "reverse.jsonl", Path(tmp) / "stream.jsonl"
+            points = [{"child": f"{i:0128x}", "selected_parent": f"{i-1:0128x}", "collected": f"point-{i}"}
+                      for i in range(1, 1001)]
+            src.write_text("".join(json.dumps(p) + "\n" for p in reversed(points)))
+            self.assertEqual(reverse_pointer_stream(src, dst), len(points))
+            with dst.open() as f:
+                self.assertEqual(json.loads(next(f)), {"schema": "misaka.rfc02.receipt-state-stream.v2"})
+                self.assertEqual([json.loads(line) for line in f], points)
+
+    def test_partial_stream_cannot_be_promoted_to_complete(self):
+        from native_receipt_window_audit_v1 import reverse_pointer_stream
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dst = Path(tmp) / "reverse.jsonl", Path(tmp) / "stream.jsonl"
+            src.write_bytes(b'{"child":"partial"}')
+            with self.assertRaisesRegex(ValueError, "partial"):
+                reverse_pointer_stream(src, dst)
+
+    def test_local_processes_cannot_mint_public_independence(self):
+        self.assertFalse(ac.panel_ok({"local_qualified_validation_only": True}, Path(".")))
+
+
     def test_two_bool_only_exporters_cannot_mint_receipt_credit(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

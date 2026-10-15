@@ -412,7 +412,7 @@ fn master_invocation_v32(
             kaspa_consensus_core::palw_flat_stage_v14::StageFundRequestV14::from_bytes(&checked.body)?;
         }
         36 => {
-            misaka_palw_kernel::flat_quota11::stage14::StageTraceV14::from_bytes(
+            misaka_palw_kernel::flat_quota11::stage14::StageTraceV14::from_invocation_bytes_v32(
                 &checked.body,
                 positions.ok_or("master32 Commit requires exact actual positions")?,
             )?;
@@ -440,7 +440,7 @@ pub fn prepare_master_post_v32(
     job_id: Digest,
 ) -> Result<PreparedNativePayloadV29, String> {
     use misaka_palw_kernel::flat_quota11::stage14::{StageTraceV14, bounded28::derive_stage_quota_v32};
-    let trace = StageTraceV14::from_bytes(&envelope.body, actual.positions())?;
+    let trace = StageTraceV14::from_invocation_bytes_v32(&envelope.body, actual.positions())?;
     let quota = derive_stage_quota_v32(actual.class(), maximum_job)?;
     if envelope.master != actual.master_root()
         || envelope.stage != actual.class().wire().stage
@@ -454,6 +454,80 @@ pub fn prepare_master_post_v32(
         return Err("master32 Commit changes original maximum quota or actual invocation/input/decode".into());
     }
     master_invocation_v32(36, envelope, Some(actual.positions()))
+}
+
+/// Compact Commit32 fixes actual stopped IDs once, after original Fund. Output
+/// openings are delivered with the separate authenticated output certificate.
+pub fn prepare_master_compact_post_v32(
+    record: &kaspa_consensus_core::palw_flat_stage_v28::NativeInvocationCompactCommitV32,
+    actual: &misaka_palw_kernel::flat_inputs12::composition32::CheckedStageInvocationV32<'_>,
+    maximum_job: &misaka_palw_kernel::flat_inputs12::bounded28::CheckedStageJobV28,
+    job_id: Digest,
+) -> Result<PreparedNativePayloadV29, String> {
+    use kaspa_consensus_core::palw_flat_stage_v28::NativeInvocationCompactCommitV32;
+    let raw = borsh::to_vec(record).map_err(|e| e.to_string())?;
+    NativeInvocationCompactCommitV32::from_bytes(&raw, maximum_job.job().positions)?;
+    let trace =
+        misaka_palw_kernel::flat_quota11::stage14::StageTraceV14::from_invocation_bytes_v32(&record.trace, actual.positions())?;
+    let quota = misaka_palw_kernel::flat_quota11::stage14::bounded28::derive_stage_quota_v32(actual.class(), maximum_job)?;
+    if record.job != job_id
+        || record.generated != actual.generated()
+        || trace.version != 32
+        || !trace.output_openings.is_empty()
+        || trace.class != actual.class().root()
+        || trace.job_id != job_id
+        || trace.job_input != actual.trace_input_root()
+        || trace.admission != actual.job().admission().root()
+        || trace.quota != quota.root()
+    {
+        return Err("master32 compact post changes original job/maximum or actual stopped invocation".into());
+    }
+    stage(38, record)
+}
+/// Prepares the dedicated before-claim paid page lane; it cannot carry an
+/// arbitrary initial registration or reuse the old u8 fragment contract.
+pub fn prepare_master_compact_parts_v32(
+    record: &kaspa_consensus_core::palw_flat_stage_v28::NativeInvocationCompactCommitV32,
+    maximum_positions: u32,
+) -> Result<Vec<PreparedNativePayloadV29>, String> {
+    use kaspa_consensus_core::palw_flat_stage_v28::*;
+    let raw = borsh::to_vec(record).map_err(|e| e.to_string())?;
+    NativeInvocationCompactCommitV32::from_bytes(&raw, maximum_positions)?;
+    let group = invocation_commit_group_v32(record.job, &raw);
+    let count = raw.len().div_ceil(32 << 10);
+    let bound = misaka_palw_kernel::flat_quota11::stage14::bounded28::invocation_commit_bytes_bound_v32(maximum_positions)?;
+    let part_bound = misaka_palw_kernel::flat_quota11::stage14::bounded28::invocation_commit_parts_bound_v32(maximum_positions)?;
+    if raw.len() as u64 > bound || count > part_bound as usize {
+        return Err("master32 compact post exceeds original maximum-derived reservation".into());
+    }
+    if count == 0 || count > 512 {
+        return Err("master32 compact original page bound".into());
+    }
+    let mut parts = Vec::with_capacity(count + 1);
+    for (index, bytes) in raw.chunks(32 << 10).enumerate() {
+        let mut body = Vec::with_capacity(INVOCATION_COMMIT_PART_PREFIX_V32 + bytes.len());
+        body.extend_from_slice(&32u16.to_le_bytes());
+        body.push(0);
+        body.extend_from_slice(&record.job);
+        body.extend_from_slice(&group);
+        body.extend_from_slice(&(index as u16).to_le_bytes());
+        body.extend_from_slice(&(count as u16).to_le_bytes());
+        body.extend_from_slice(&(raw.len() as u32).to_le_bytes());
+        body.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        body.extend_from_slice(bytes);
+        borrowed_invocation_commit_part_v32(&body).ok_or("master32 compact page framing differs")?;
+        let object = K::StageExecutionV14 { action: 39, body };
+        if object.encoded_len() > object.max_encoded_bytes() {
+            return Err("master32 page outer carrier cap".into());
+        }
+        parts.push(PreparedNativePayloadV29 { object });
+    }
+    let mut body = Vec::with_capacity(130);
+    body.extend_from_slice(&32u16.to_le_bytes());
+    body.extend_from_slice(&record.job);
+    body.extend_from_slice(&group);
+    parts.push(PreparedNativePayloadV29 { object: K::StageExecutionV14 { action: 40, body } });
+    Ok(parts)
 }
 
 pub fn sign_native_payload_v29(
@@ -700,6 +774,11 @@ pub fn decode_native_payload_v29(
                 positions.ok_or("--positions exact original funded stage extent required")?,
             )?;
             stage(23, &t)
+        }
+        "stage-compact-commit32" => {
+            let cap = positions.ok_or("--positions original maximum positions required")?;
+            let record = kaspa_consensus_core::palw_flat_stage_v28::NativeInvocationCompactCommitV32::from_bytes(raw, cap)?;
+            stage(38, &record)
         }
         "stage-invocation-accept32" | "stage-invocation-fund32" | "stage-invocation-commit32" => {
             let envelope = kaspa_consensus_core::palw_flat_stage_v28::NativeStageInvocationEnvelopeV32::from_bytes(raw)?;

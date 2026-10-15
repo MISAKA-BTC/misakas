@@ -5,6 +5,9 @@ use super::*;
 use std::sync::Arc;
 
 pub const RECEIPT_STREAM_METADATA_BYTES_V1: usize = 128 << 20;
+/// Explicit local audit profile, matching the long-window collector. This is
+/// neither a consensus quota nor permission to sample a larger transcript.
+pub const RECEIPT_STREAM_MAX_POINTS_V1: usize = 10_000_000;
 
 #[derive(Default)]
 struct Endpoints {
@@ -64,6 +67,9 @@ impl ReceiptWindowAccumulatorV1 {
     }
 
     fn push_inner(&mut self, point: AnchoredReceiptPointV1) -> Result<(), String> {
+        if self.points >= RECEIPT_STREAM_MAX_POINTS_V1 {
+            return Err("receipt stream explicit state reservation exhausted".into());
+        }
         let s = &point.snapshot;
         let queue: BTreeSet<_> = s.queue().jobs.iter().copied().collect();
         if let Some(previous) = &self.prior {

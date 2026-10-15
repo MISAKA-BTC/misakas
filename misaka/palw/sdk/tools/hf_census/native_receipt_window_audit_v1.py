@@ -12,6 +12,50 @@ import acceptance_cohort as ac
 from native_receipt_window_driver_v1 import POINTER_SCHEMA, validate_contract
 
 
+def reverse_pointer_stream(source: Path, output: Path) -> int:
+    """Reverse a potentially multi-day JSONL index with one bounded line resident.
+
+    The collector emits child-to-parent. The offline verifier consumes the exact
+    parent-to-child stream; no state is sampled or omitted to fit an array cap.
+    """
+    count = 0
+    with source.open("rb") as src, output.open("xb") as dst:
+        dst.write(b'{"schema":"misaka.rfc02.receipt-state-stream.v2"}\n')
+        src.seek(0, 2)
+        end = src.tell()
+        if end == 0:
+            raise ValueError("empty original receipt transcript")
+        src.seek(end - 1)
+        if src.read(1) != b"\n":
+            raise ValueError("partial original receipt index line")
+        pos, suffix = end - 1, b""
+        while pos > 0:
+            size = min(65536, pos)
+            pos -= size
+            src.seek(pos)
+            block = src.read(size) + suffix
+            lines = block.split(b"\n")
+            suffix = lines[0]
+            for line in reversed(lines[1:]):
+                if not line or len(line) + 1 > 4096:
+                    raise ValueError("original receipt pointer line bound")
+                point = json.loads(line)
+                if set(point) != {"child", "selected_parent", "collected"}:
+                    raise ValueError("original pointer grammar differs")
+                common.hex128(point["child"]); common.hex128(point["selected_parent"])
+                dst.write(line + b"\n"); count += 1
+            if len(suffix) > 4096:
+                raise ValueError("original receipt pointer line bound")
+        if not suffix or len(suffix) + 1 > 4096:
+            raise ValueError("original receipt first pointer missing")
+        point = json.loads(suffix)
+        if set(point) != {"child", "selected_parent", "collected"}:
+            raise ValueError("original pointer grammar differs")
+        common.hex128(point["child"]); common.hex128(point["selected_parent"])
+        dst.write(suffix + b"\n"); count += 1
+    return count
+
+
 def audit(a, result: dict, work: Path, out: Path) -> int:
     evidence = Path(a.evidence_root).resolve()
     if not work.resolve().is_relative_to(evidence) or not out.resolve().is_relative_to(evidence):
@@ -31,62 +75,50 @@ def audit(a, result: dict, work: Path, out: Path) -> int:
         ("start_child", "end_child", "end_selected_parent", "provenance_start"))
     if provenance != start:
         raise ValueError("complete transcript must start at original first boundary")
-    fetch = common.pinned_exe(a.audit_fetch, a.audit_fetch_sha256)
+    collector = common.pinned_exe(a.receipt_collect, a.receipt_collect_sha256)
     checker = common.pinned_exe(a.receipt_audit, a.receipt_audit_sha256)
     own, own_sha_fetch, own_sha_checker = common.owning_args(a)
-    ident = contract["windows"][0]["intended"][0]["job"]
-
-    def collect(child, selected_parent, from_hash, folder, log, maximum):
-        common.run([fetch, "--rpc", a.rpc, "--pinned-child", child,
-            "--pinned-selected-parent", selected_parent, "--pinned-provenance-start", from_hash,
-            "--job", ident, "--network", a.network, "--genesis", a.genesis,
-            "--operator-id", a.operator_id, "--node-database-id", a.node_database,
-            *own_sha_fetch, *own, "--lifecycle-only", "true", "--max-blocks", str(maximum),
-            "--out", str(folder), "--timeout-seconds", "60"], log, a.timeout_seconds)
-        c = runner.read_json(folder / "collection.json")
-        if (c.get("network") != a.network or c.get("genesis") != a.genesis
-                or c.get("operator_id") != a.operator_id or c.get("node_database") != a.node_database
-                or c.get("pinned_child") != child or c.get("pinned_selected_parent") != selected_parent
-                or c.get("pinned_child_on_own_node_selected_chain") is not True
-                or c.get("complete_requested_provenance_retained") is not True
-                or c.get("qualified_native_profile") is not True or c.get("measurement_final_only") is not False):
-            raise ValueError("own validated node lacks original contiguous qualified chain/state")
-        for artifact in c.get("artifacts", []):
-            if not ac.evidence_ok(artifact, folder):
-                raise ValueError("independent collected artifact mutated")
-        return c
-
-    boundary = work / "boundary"
-    collection = collect(end, parent, start, boundary, work / "boundary-fetch.log", 65536)
-    blocks = sorted(boundary.glob("block-*.json"), reverse=True)
-    if not 3 <= len(blocks) <= 65536:
-        raise ValueError("complete sustained chain transcript unavailable/pruned/too large")
-    points, objects, retained = [], [], 0
-    for index, block_path in enumerate(blocks):
-        block = runner.read_json(block_path)
-        child = common.hex128(block["header"]["hash"])
-        parent_pin = common.hex128(block["verboseData"]["selectedParentHash"])
-        folder = boundary if child == end else work / f"point-{index:05}"
-        if folder != boundary:
-            collect(child, parent_pin, child, folder, work / f"point-{index:05}-fetch.log", 1)
-        points.append({"child": child, "selected_parent": parent_pin,
-                       "collected": str(folder.resolve().relative_to(evidence))})
-        for p in sorted(folder.iterdir()):
-            if p.is_file():
-                retained += p.stat().st_size
-                if retained > 32 << 30:
-                    raise ValueError("independent complete receipt transcript exceeds 32 GiB cap")
-                objects.append({"path": str(p.resolve().relative_to(evidence)), "sha256": ac.digest(p)})
-    if points[0]["child"] != start or points[-1]["child"] != end:
-        raise ValueError("own transcript does not cover original boundary pins")
-    transcript = work / "points.json"
-    ac.write(transcript, {"schema": "misaka.rfc02.receipt-state-transcript.v1", "points": points})
+    maximum = result.get("maximum_evidence_bytes")
+    if type(maximum) is not int or not 1 <= maximum <= 1 << 40:
+        raise ValueError("frozen complete transcript evidence reservation required")
+    boundary = work / "collected"
+    common.run([collector, "--rpc", a.rpc, "--network", a.network, "--genesis", a.genesis,
+        "--operator-id", a.operator_id, "--node-database-id", a.node_database, *own_sha_fetch, *own,
+        "--start-child", start, "--end-child", end, "--end-selected-parent", parent,
+        "--evidence-root", str(evidence), "--maximum-evidence-bytes", str(maximum),
+        "--timeout-seconds", str(min(a.timeout_seconds, 43200)), "--out", str(boundary)],
+        work / "collect.log", a.timeout_seconds)
+    collection = runner.read_json(boundary / "collection.json")
+    expected = {"schema": "misaka.rfc02.native-receipt-cas-collection.v1", "network": a.network,
+        "genesis": a.genesis, "operator_id": a.operator_id, "node_database": a.node_database,
+        "start_child": start, "end_child": end, "end_selected_parent": parent}
+    if any(collection.get(k) != v for k, v in expected.items()):
+        raise ValueError("own collector original transcript identity changed")
+    # Transport metadata is not authority. Every CAS object and every consecutive
+    # state is authenticated again by the pinned offline checker below.
+    transcript = work / "points.jsonl"
+    count = reverse_pointer_stream(boundary / "reverse-index.jsonl", transcript)
+    if count != collection.get("states") or count < 3:
+        raise ValueError("own original transcript was truncated")
+    objects = [{"path": str(p.resolve().relative_to(evidence)), "sha256": ac.digest(p)} for p in
+        (boundary / "collection.json", boundary / "evidence-index.jsonl", boundary / "reverse-index.jsonl")]
+    witness_args = []
+    witness_evidence = result.get("master_witnesses")
+    if any(w.get("masters") for w in contract["windows"]):
+        if not ac.evidence_ok(witness_evidence, evidence):
+            raise ValueError("frozen complete Master32 witnesses unavailable or mutated")
+        witness_args = ["--master-witnesses", witness_evidence["path"]]
+        objects.append(witness_evidence)
+        for d in runner.read_json(runner.relative_file(evidence, witness_evidence["path"])):
+            for key in ("outputs", "generated"):
+                f = runner.relative_file(evidence, d[key])
+                objects.append({"path": d[key], "sha256": ac.digest(f)})
     report_path = work / "proof-audit.json"
     common.run([checker, "--network", a.network, *own, *own_sha_checker,
         "--contract", str(contract_path), "--evidence-root", str(evidence),
-        "--points", str(transcript), "--out", str(report_path)], work / "proof-audit.log", a.timeout_seconds)
+        "--points", str(transcript), "--points-format", "stream-v2", *witness_args, "--out", str(report_path)], work / "proof-audit.log", a.timeout_seconds)
     report = runner.read_json(report_path)
-    if (report.get("schema") != "misaka.rfc02.proof-derived-receipt-windows.v1"
+    if (report.get("schema") != "misaka.rfc02.proof-derived-receipt-windows.v2"
             or report.get("network") != a.network or report.get("genesis") != a.genesis
             or report.get("qualified_native_profile") is not True
             or report.get("intended_claims_and_queue_accounting_verified") is not True):
@@ -109,6 +141,7 @@ def audit(a, result: dict, work: Path, out: Path) -> int:
         # Compare proof results without per-auditor filenames; all state roots,
         # operators, accepted original claims and cumulative counters must agree.
         "receipt_proof_result": report, "receipt_proof_evidence": proof_evidence,
+        "receipt_master_witnesses_evidence": witness_evidence, "receipt_points_format": "stream-v2",
         "receipt_points_evidence": {"path": str(transcript.resolve().relative_to(evidence)), "sha256": ac.digest(transcript)}, "chain_objects": objects,
         "node_consensus_params_id": collection["node_consensus_params_id"]}
     ac.write(out, doc)

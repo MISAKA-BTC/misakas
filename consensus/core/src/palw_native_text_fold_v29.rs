@@ -2582,6 +2582,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             namespace:29,complete_model:true,job:id,class:a.class,source:a.source,inventory:f.maximum.inventory,real_parameter:f.maximum.parameter,
             funding:a.funding,consent:a.consent,maximum_contract:f.maximum.root(),maximum_scope:a.maximum_scope,maximum_resource:a.maximum_resource,
             queue_plan:f.maximum.queue_plan,queue_policy:f.maximum.queue_policy,source_plan:f.maximum.source_acquisition,
+            physical_plan:f.maximum.physical_lease_plan,carriage_version:29,
             physical_service:{let raw=rows.get(&(EXECUTION_QUOTA_TABLE_V11,key(&(29u8,id,22u8)))).ok_or("receipt text original physical journal absent")?;
                 if raw.len()>2048{return Err("receipt physical journal cap".into());}
                 let(root,j):(Digest,NativePagedLeaseJournalV29)=borsh::from_slice(raw).map_err(|_|"receipt physical journal grammar")?;

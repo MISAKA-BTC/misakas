@@ -18,7 +18,7 @@ pub struct NativeReceiptJobV1 {
     pub namespace:u16,pub complete_model:bool,pub job:Digest,pub class:Digest,pub source:Digest,pub inventory:Digest,
     pub real_parameter:Digest,pub funding:Digest,pub consent:Digest,pub maximum_contract:Digest,
     pub maximum_scope:Digest,pub maximum_resource:Digest,pub queue_plan:Digest,pub queue_policy:Digest,
-    pub source_plan:Digest,pub physical_service:Digest,pub requester_operator:Digest,pub producer_operator:Digest,
+    pub source_plan:Digest,pub physical_service:Digest,pub physical_plan:Digest,pub carriage_version:u16,pub requester_operator:Digest,pub producer_operator:Digest,
     pub nonce:Digest,pub admitted:u64,pub commit_deadline:u64,pub deadline:u64,
     pub claim:Option<Digest>,pub committed:Option<u64>,pub challenge_end:Option<u64>,pub terminal:String,
 }
@@ -115,7 +115,10 @@ pub fn derive_native_receipt_snapshot_v1(aux:&VerifiedNativeAuxRowsV32<'_>,payou
     for id in &queued {let j=jobs.get(id).ok_or("receipt window live original absent")?;
         let(_,lease):(Digest,NativeQueueLeaseV30)=decode(&rows,borsh::to_vec(&(30u8,*id,1u8)).unwrap(),1024)?;
         let(_,physical):(Digest,NativePagedLeaseJournalV29)=decode(&rows,borsh::to_vec(&(29u8,*id,22u8)).unwrap(),2048)?;
-        if lease.original_funding!=j.funding||lease.original_consent!=j.consent||lease.original_plan!=j.queue_plan
+        let carriage:crate::palw_native_paged_carriage_v29::NativePagedCarriageRecordV29=decode(&rows,borsh::to_vec(&(29u8,*id,23u8)).unwrap(),4096)?;
+        if carriage.version!=j.carriage_version||carriage.root()!=j.physical_plan||carriage.class!=j.class||carriage.service!=j.physical_service
+            ||physical.lease.plan!=j.physical_plan||physical.proof_envelope!=carriage.proof_envelope
+            ||lease.original_funding!=j.funding||lease.original_consent!=j.consent||lease.original_plan!=j.queue_plan
             ||physical.namespace!=j.namespace||physical.maximum!=j.maximum_contract {
             return Err("receipt window live original max/Fund/queue rebind".into());}}
     Ok(CheckedNativeReceiptSnapshotV1{state:aux.state_root(),aux:aux.root(),daa,

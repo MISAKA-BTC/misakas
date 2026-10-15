@@ -211,7 +211,8 @@ def inspect_audit_pair(path: Path, root: Path, scope: dict, stage: str, run_sha:
                 or audit.get("single_credit_verified") is not True or audit.get("utxo_spend_verified") is not True
                 or not all(anchor[k] for k in ("single_credit", "redemption_transaction", "redemption_utxo"))):
             return False, "INDEPENDENT_UTXO_REDEMPTION_NOT_AUTHENTICATED"
-        anchors.append(anchor)
+        anchors.append({"ordinary": anchor, "complete_model_binding": audit.get("complete_model_binding"),
+                        "master": audit.get("validated_master_anchor")})
         local_profiles.append(audit.get("local_qualified_validation_network") is True)
         operators.add(entry["operator_id"])
         databases.add(entry["node_database"])
@@ -232,7 +233,7 @@ def validate_receipt_verifier(spec: dict, network: str) -> None:
         raise ValueError("fresh pinned offline receipt proof verifier required for each independent exporter")
     argv = spec["argv"]
     for flag, expected in (("--network", network), ("--contract", "{receipt_window_contract}"),
-                           ("--points", "{receipt_points}"), ("--evidence-root", "{evidence_root}"),
+                           ("--points", "{receipt_points}"), ("--points-format", "stream-v2"), ("--evidence-root", "{evidence_root}"),
                            ("--out", "{receipt_proof_result}")):
         if argv.count(flag) != 1 or argv.index(flag)+1 >= len(argv) or argv[argv.index(flag)+1] != expected:
             raise ValueError("offline receipt verifier must consume original contract/own proof transcript and fresh output")
@@ -258,6 +259,16 @@ def recheck_receipt_proof_pair(pair: Path, root: Path, specs: list, contract_pat
             raise ValueError("producer pre-created independent proof recheck output")
         context = {"receipt_window_contract": str(contract_path.resolve()), "evidence_root": str(root.resolve()),
                    "receipt_points": str(relative_file(root, points["path"])), "receipt_proof_result": str(output.resolve())}
+        witness = audit.get("receipt_master_witnesses_evidence")
+        has_masters = any(w.get("masters") for w in read_json(contract_path)["windows"])
+        if has_masters:
+            if not ac.evidence_ok(witness, root) or witness not in audit.get("chain_objects", []):
+                raise ValueError("complete Master32 public witnesses missing")
+            # The path is a verifier input, never a producer-authored verdict.
+            # Append ourselves so the command template cannot omit this binding.
+            if "--master-witnesses" in spec["argv"]:
+                raise ValueError("runner owns exact original Master32 witness binding")
+            spec = {**spec, "argv": [*spec["argv"], "--master-witnesses", witness["path"]]}
         code, _, error = run_command(spec, context, root / f"receipt-proof-rechecked-{index}.log")
         if code or error or not output.is_file() or read_json(output) != audit.get("receipt_proof_result"):
             raise ValueError(error or "fresh offline native proof recheck differs from exporter JSON")
@@ -294,10 +305,13 @@ def inspect_receipt_audit_pair(path: Path, root: Path, contract: dict, run_sha: 
         if not ac.evidence_ok(evidence, root) or evidence not in audit["chain_objects"]:
             raise ValueError("OFFLINE_RECEIPT_PROOF_REPORT_MISSING")
         report = read_json(relative_file(root, evidence["path"]))
-        if (report != audit.get("receipt_proof_result") or report.get("schema") != "misaka.rfc02.proof-derived-receipt-windows.v1"
+        if (report != audit.get("receipt_proof_result") or report.get("schema") != "misaka.rfc02.proof-derived-receipt-windows.v2"
                 or report.get("qualified_native_profile") is not True
                 or report.get("intended_claims_and_queue_accounting_verified") is not True
-                or len(report.get("windows", [])) != 2 or len(report.get("cumulative_accounting", [])) < 3):
+                or len(report.get("windows", [])) != 2 or len(report.get("cumulative_accounting", [])) < 3
+                or type(report.get("transcript_points")) is not int or report["transcript_points"] < 3
+                or report.get("retention_profile") != "previous-and-frozen-endpoints;every-point-verified;no-sampling"
+                or not isinstance(report.get("consecutive_transcript_root"), str) or len(report["consecutive_transcript_root"]) != 128):
             raise ValueError("BOOL_ONLY_RECEIPT_REPORT_IS_NOT_PROOF")
         panel = audit.get("receipt_windows", {})
         if (not ac.panel_ok(panel, root, allow_local_validation=True) or panel.get("schema") != "misaka.rfc02.proof-derived-receipt-panel.v1"
@@ -306,16 +320,18 @@ def inspect_receipt_audit_pair(path: Path, root: Path, contract: dict, run_sha: 
                        for k in ("cohort_sha256", "original_model_roots", "receipt_window_daa", "minimum_independent_operators"))):
             raise ValueError("ORIGINAL_RECEIPT_DENOMINATOR_OR_CONTRACT_CHANGED")
         for frozen, observed, public in zip(contract["windows"], report["windows"], panel["windows"]):
+            expected_ids = {j["job"] for j in frozen["intended"]} | {m["master"] for m in frozen.get("masters", [])}
+            expected_count = len(frozen["intended"]) + len(frozen.get("masters", []))
             if (public != {**observed, "evidence": evidence}
                     or any(observed.get(k) != frozen[k] for k in ("start_daa", "end_daa", "issuance_bin_daa", "minimum_commits_per_bin", "maximum_final_lag_daa"))
-                    or observed.get("intended_claims") != len(frozen["intended"])
-                    or {j.get("job") for j in observed.get("original_claims", [])} != {j["job"] for j in frozen["intended"]}
-                    or len(observed.get("original_claims", [])) != len(frozen["intended"])):
+                    or observed.get("intended_claims") != expected_count
+                    or {j.get("job") for j in observed.get("original_claims", [])} != expected_ids
+                    or len(observed.get("original_claims", [])) != expected_count):
                 raise ValueError("ACCEPTED_ORIGINAL_RECEIPT_SET_OR_CADENCE_CHANGED")
             bins = (frozen["end_daa"] - frozen["start_daa"]) // frozen["issuance_bin_daa"]
             counts = observed.get("accepted_commits_per_bin", [])
             if (len(counts) != bins or any(type(n) is not int or n < frozen["minimum_commits_per_bin"] for n in counts)
-                    or counts != observed.get("bounded_finals_per_bin") or sum(counts) != len(frozen["intended"])):
+                    or counts != observed.get("bounded_finals_per_bin") or sum(counts) != expected_count):
                 raise ValueError("SUSTAINED_RECEIPT_ISSUANCE_OR_FINAL_THROUGHPUT_FAILED")
         results.append(report)
         panels.append(panel)
@@ -598,7 +614,7 @@ def run(cohort_path: Path, plan_path: Path, committed_plan_sha: str, out: Path) 
             panel_doc["fresh_independent_proof_rechecks"] = rechecks
             panel = out / "receipt-windows.json"
             ac.write(panel, panel_doc)
-            local_only = panel_doc.get("local_qualified_validation_network") is True
+            local_only = (panel_doc.get("local_qualified_validation_network") is True or panel_doc.get("local_qualified_validation_only") is True)
             window_status = {"status": "LOCAL_VALIDATION" if local_only else "PASS",
                              "blocking": "LOCAL_QUALIFIED_VALIDATION_ONLY" if local_only else "PASS",
                              "audit_pair_sha256": ac.digest(pair), "proof_rechecks": rechecks}

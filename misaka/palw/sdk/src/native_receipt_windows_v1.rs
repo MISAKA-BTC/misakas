@@ -38,7 +38,7 @@ pub struct IntendedMasterReceiptV1 {
 /// native Master32 view; this type carries no native credit authority.
 #[derive(Clone)]
 pub struct MasterReceiptWitnessV1 {
-    pub master:Hash64,pub jobs:Vec<[u8;64]>,pub values:std::sync::Arc<Vec<Vec<misaka_palw_tir::Tensor>>>,pub generated:Vec<u32>,
+    pub master:Hash64,pub jobs:Vec<[u8;64]>,pub values:std::sync::Arc<Vec<Vec<misaka_palw_tir::Tensor>>>,pub certificates:Option<std::sync::Arc<Vec<Vec<misaka_palw_kernel::seg::NodeOpeningV1>>>>,pub generated:Vec<u32>,
 }
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -120,7 +120,7 @@ impl AnchoredReceiptPointV1 {
         for i in 0..witness_count {let Some(w)=load(&snapshot,i)? else {continue;};
             if w.jobs.is_empty()||w.jobs.len()>64{return Err("receipt Master32 witness extent".into());}
             if w.jobs.iter().all(|id|snapshot.jobs().get(id).is_some_and(|j|j.terminal=="Final")){
-                let checked=kaspa_consensus_core::palw_native_audit_proof_v32::derive_native_master_execution_record_v32(&aux,params,parent.daa_score,w.master.as_bytes(),&w.jobs,&w.values,&w.generated)?;
+                let checked=kaspa_consensus_core::palw_native_audit_proof_v32::derive_native_master_execution_record_certified_v32(&aux,params,parent.daa_score,w.master.as_bytes(),&w.jobs,&w.values,w.certificates.as_deref().map(Vec::as_slice),&w.generated)?;
                 if masters.insert(w.master.as_bytes(),checked.record().clone()).is_some(){return Err("receipt repeated Master32 witness".into());}
             }
         }
@@ -133,7 +133,7 @@ impl AnchoredReceiptPointV1 {
         for w in witnesses {
             if w.jobs.is_empty()||w.jobs.len()>64{return Err("receipt Master32 component witness extent".into());}
             if w.jobs.iter().all(|id|self.snapshot.jobs().get(id).is_some_and(|j|j.terminal=="Final")){
-                let checked=kaspa_consensus_core::palw_native_audit_proof_v32::derive_native_master_execution_record_v32(&aux,params,parent.daa_score,w.master.as_bytes(),&w.jobs,&w.values,&w.generated)?;
+                let checked=kaspa_consensus_core::palw_native_audit_proof_v32::derive_native_master_execution_record_certified_v32(&aux,params,parent.daa_score,w.master.as_bytes(),&w.jobs,&w.values,w.certificates.as_deref().map(Vec::as_slice),&w.generated)?;
                 if self.masters.insert(w.master.as_bytes(),checked.record().clone()).is_some(){return Err("receipt Master32 witness repeated".into());}
             }
         }Ok(())

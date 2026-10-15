@@ -642,7 +642,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
             ([u8;64],[u8;64],[u8;64],[u8;64],[u8;64],[u8;64],[u8;64],[u8;64],u32),
         ) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         112 if k.len() == 66 && k[0] == 32 && k[1] == 3 => <(
-            (u16,[u8;64],u16,[u8;64],[u8;64],[u8;64],[u8;64],[u8;64]),
+            (u16,[u8;64],u16,[u8;64],[u8;64],[u8;64],[u8;64],[u8;64],[u8;64]),
             (crate::palw_state_v2::PalwBondKeyV2,crate::palw_state_v2::PalwBondKeyV2,u64),
         ) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         112 if k.len() == 66 && k[0] == 32 && k[1] == 4 => <Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(frame)?,
@@ -652,6 +652,12 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
             (Vec<u32>,[u8;64],u64),
         ) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         112 if k.len() == 66 && k[0] == 32 && k[1] == 6 => <(u16,[u8;64],Vec<[u8;64]>,Vec<[u8;64]>,Option<[u8;64]>,bool) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        112 if k.len() == 66 && k[0] == 32 && k[1] == 8 => <(
+            [u8;64],(u16,[u8;64],[u8;64],[u8;64],crate::palw_state_v2::PalwBondKeyV2),
+            (u16,[u8;64],[u8;64],[u8;64],[u8;64],[u8;64],u32,u32,u16,u64),
+            (u64,[u8;64],u8,[u8;64],u16,u32,u16,u32,bool,bool),
+        ) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        112 if k.len() == 69 && k[0] == 32 && k[1] == 9 => raw_aux_row_v1(frame,32<<10)?,
         112 if k.len() == 66 && k[0] == 32 && k[1] == 7 => <(
             (u16,[u8;64],[u8;64],[u8;64],crate::palw_state_v2::PalwBondKeyV2,[u8;64],[u8;64],[u8;64],Vec<[u8;64]>),
             (u16,[u8;64],Vec<[u8;64]>,Vec<[u8;64]>,Option<[u8;64]>,bool),

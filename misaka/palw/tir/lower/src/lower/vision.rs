@@ -1250,6 +1250,14 @@ pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
 /// reads contiguous weight rows — the layout a tower declared as a pipeline class's stage needs for its closes to be carriable;
 /// the same integers either way).
 pub fn lower_vision_with(hl: &HlProgram, s: &VisionSpec, out_major: bool) -> Result<Lowered> {
+    lower_vision_recipe(hl, s, out_major, None)
+}
+fn lower_vision_recipe(
+    hl: &HlProgram,
+    s: &VisionSpec,
+    out_major: bool,
+    profile: Option<&tir::program_v39::SourceProfileV39>,
+) -> Result<Lowered> {
     let hb = tir::program::HISTORY_BOUND_V1_SMALL;
     let mut pb = ProgramBuilder::new(1, hb);
     let mut cx = Cx {
@@ -1287,7 +1295,7 @@ pub fn lower_vision_with(hl: &HlProgram, s: &VisionSpec, out_major: bool) -> Res
     order.push(hl.post);
     let mut out_node = None;
     for &hbk in &order {
-        let (tb, o) = vision_block(&mut pb, &mut cx, hbk, s)?;
+        let (tb, o) = vision_block(&mut pb, &mut cx, hbk, s, profile)?;
         block_map[hbk] = tb;
         if o.is_some() {
             out_node = o;
@@ -1296,8 +1304,10 @@ pub fn lower_vision_with(hl: &HlProgram, s: &VisionSpec, out_major: bool) -> Res
     let out_node = out_node.ok_or_else(|| LowerError::eval("internal: no output node"))?;
     let layers: Vec<u8> = hl.schedule.iter().map(|k| block_map[*k as usize]).collect();
     let program = pb.finish(block_map[hl.pre], layers, block_map[hl.post], out_node);
-    tir::validate::validate(&program)
-        .map_err(|e| LowerError::eval(format!("internal: the tower's program is not in normal form: {e}")))?;
+    if profile.is_none() {
+        tir::validate::validate(&program)
+            .map_err(|e| LowerError::eval(format!("internal: the tower's program is not in normal form: {e}")))?;
+    }
     let resid_sites = cx.resid_sites.into_iter().map(|((k, _), f)| (k, f)).collect();
     let logits_key = cx.logits_key.ok_or_else(|| LowerError::eval("internal: no output scale"))?;
     Ok(Lowered {
@@ -1310,6 +1320,97 @@ pub fn lower_vision_with(hl: &HlProgram, s: &VisionSpec, out_major: bool) -> Res
         site_nodes: cx.site_nodes,
         budget_fallbacks: vec![],
     })
+}
+
+/// New39 owns this program. The retained private recipe is only used to
+/// materialise its parameter fills; it is never encoded/admitted as old V1/V2.
+pub struct LoweredVisionV39 {
+    pub program: tir::program_v39::TirProgramV39,
+    recipe: Lowered,
+    lifted: u16,
+}
+impl LoweredVisionV39 {
+    pub fn lifted_parameter(&self) -> u16 {
+        self.lifted
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn materialise_stream(
+        &self,
+        hl: &HlProgram,
+        loader: &dyn crate::float_ref::stream::OccParams,
+        statistics: &BTreeMap<String, SiteStat>,
+        policy: &crate::quant::QuantPolicy,
+        opts: &super::StreamOpts,
+        sink: &mut dyn super::TensorSink,
+        progress: &dyn Fn(usize, usize),
+    ) -> Result<super::StreamMaterialised> {
+        super::materialise_stream(&self.recipe, hl, loader, statistics, policy, opts, sink, progress)
+    }
+}
+pub fn lower_vision_v39(hl: &HlProgram, s: &VisionSpec, profile: tir::program_v39::SourceProfileV39) -> Result<LoweredVisionV39> {
+    use tir::program_v2::{InputDecl, InputSource, OutputDecl};
+    use tir::program_v39::{BlockV39, NodeV39, TensorTypeV39, TirProgramV39};
+    profile.check().map_err(LowerError::bad)?;
+    s.validate()?;
+    let recipe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lower_vision_recipe(hl, s, true, Some(&profile))))
+        .map_err(|_| LowerError::not_lowerable("SOURCE39_VISION_RECIPE_PROFILE_BOUND"))??;
+    let lifted = recipe
+        .program
+        .params
+        .iter()
+        .position(|p| p.name == IMAGE_PARAM)
+        .ok_or_else(|| LowerError::bad("SOURCE39_VISION_ORIGINAL_IMAGE_ABSENT"))? as u16;
+    let image = &recipe.program.params[lifted as usize];
+    let inputs = vec![InputDecl {
+        name: image.name.clone(),
+        dtype: image.dtype,
+        shape: image.shape.clone(),
+        source: InputSource::External { lo: 0, hi: 255 },
+    }];
+    let params = recipe.program.params.iter().enumerate().filter(|(i, _)| *i != lifted as usize).map(|(_, p)| p.clone()).collect();
+    let blocks = recipe
+        .program
+        .blocks
+        .iter()
+        .map(|b| BlockV39 {
+            name: b.name.clone(),
+            carry_in: b.carry_in.iter().map(TensorTypeV39::from_frozen).collect(),
+            carry_out: b.carry_out.clone(),
+            nodes: b
+                .nodes
+                .iter()
+                .map(|n| {
+                    let mut node = NodeV39::from_frozen(n);
+                    for r in &mut node.inputs {
+                        if let tir::Ref::Param(j) = *r {
+                            *r = if j == lifted {
+                                tir::Ref::Input(tir::program_v2::FIRST_INPUT_REF_V2)
+                            } else {
+                                tir::Ref::Param(if j > lifted { j - 1 } else { j })
+                            };
+                        }
+                    }
+                    node
+                })
+                .collect(),
+        })
+        .collect();
+    let program = TirProgramV39 {
+        version: 39,
+        profile,
+        prim_set_id: tir::program_v39::PRIM_SET_ID_V39,
+        token_bound: 1,
+        history_bound: recipe.program.history_bound,
+        inputs,
+        params,
+        consts: recipe.program.consts.clone(),
+        states: recipe.program.states.clone(),
+        blocks,
+        schedule: recipe.program.schedule.clone(),
+        output: OutputDecl::Final { node: recipe.program.logits },
+    };
+    tir::validate_v39::validate_v39(&program).map_err(LowerError::bad)?;
+    Ok(LoweredVisionV39 { program, recipe, lifted })
 }
 
 pub(super) fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {
@@ -1470,14 +1571,25 @@ fn pixtral_attention_context_v38(
 }
 
 #[allow(clippy::too_many_lines)]
-fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &VisionSpec) -> Result<(u8, Option<u16>)> {
+fn vision_block(
+    pb: &mut ProgramBuilder,
+    cx: &mut Cx<'_>,
+    hbk: usize,
+    s: &VisionSpec,
+    profile: Option<&tir::program_v39::SourceProfileV39>,
+) -> Result<(u8, Option<u16>)> {
     let hl = cx.hl;
     let role = hl.blocks[hbk].role;
     let (d, l) = (s.d, s.rows());
     let carry_sig = vec![TensorType::fixed(DType::I32, &[l as u32, d as u32])];
     let mut lb = new_lb(hl, hbk);
     let tb = pb.blocks.len() as u8;
-    let mut b = pb.block(&hl.blocks[hbk].name, if role == BlockRole::Pre { vec![] } else { carry_sig });
+    let carry = if role == BlockRole::Pre { vec![] } else { carry_sig };
+    let mut b = if let Some(profile) = profile {
+        pb.block_for_program_v39(&hl.blocks[hbk].name, carry, profile).map_err(LowerError::bad)?
+    } else {
+        pb.block(&hl.blocks[hbk].name, carry)
+    };
     let resid = ScaleKey::resid();
     match role {
         BlockRole::Pre => {

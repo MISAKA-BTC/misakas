@@ -448,6 +448,9 @@ impl NativeCarriageGlobalV22 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NativePaidCarrierRequestV22 {
+    /// Original32 producer phase, authorized only before its actual Commit.
+    FundedCommitPartV32 {job:Digest,group:Digest,index:u16,count:u16,total:u32},
+    FundedCommitAssembleV32 {job:Digest,group:Digest},
     /// New full source/trace reply pages; not an old singleton answer.
     ProducerAnswerPartV29 {pending:Digest,group:Digest,index:u16,count:u16,total:u32},
     SourceAnswer { pending: Digest },
@@ -539,7 +542,9 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
                 (s.job_id, *seal, s.bond, s.reveal_until, 2u8)
             }
             NativePaidCarrierRequestV22::OwnProofPartV29 { .. }
-            |NativePaidCarrierRequestV22::ProducerAnswerPartV29 { .. } => return None,
+            |NativePaidCarrierRequestV22::ProducerAnswerPartV29 { .. }
+            |NativePaidCarrierRequestV22::FundedCommitPartV32 { .. }
+            |NativePaidCarrierRequestV22::FundedCommitAssembleV32 { .. } => return None,
         };
         let h = self.execution_job_header_v11(&job)?;
         if h.terminal != ExecutionTerminalV11::Challengeable || kind != 2 && h.producer != owner {

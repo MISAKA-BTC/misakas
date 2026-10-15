@@ -42,6 +42,10 @@ def expected_identity(model: dict) -> dict | None:
                 or master.get("namespace") != 32 or any(not hex_string(master.get(k), 128) for k in MASTER_PIN_FIELDS)):
             return None
         return master
+    if model.get("id") == "dense-24b":
+        # Text29 only receives token inputs. Its single-program identity cannot
+        # stand for the advertised image encoder/projector/decoder pipeline.
+        return None
     artifact = model.get("complete_artifact_pin") or {}
     fields = ("native_class", "native_source", "program_root", "inventory_root", "real_parameter_root")
     return {k: artifact[k] for k in fields} if all(hex_string(artifact.get(k), 128) for k in fields) else None
@@ -146,6 +150,40 @@ def validate_inputs(target: dict, cohort: dict, plan: dict, cohort_sha: str) -> 
         if (not path.is_absolute() or not path.is_file() or type(artifact.get("bytes")) is not int
                 or path.stat().st_size != artifact["bytes"] or ac.digest(path) != artifact["sha256"]):
             raise ValueError("missing or changed original complete canonical artifact")
+    validate_launch_receipt_scope(models, plan.get("receipt_window_contract", {}))
+
+
+def validate_launch_receipt_scope(models: dict[str, dict], contract: dict) -> None:
+    """All seven models must participate in BOTH original receipt windows.
+
+    This is the all-required launch panel, not a change to the statistical A6/A8
+    cohort. Request-specific nonce/scope/resource roots are checked by the
+    native window contract; the stable source/program/real-PC identity must
+    additionally match each model's precommitted canonical artifact here.
+    """
+    identities = {key: expected_identity(model) for key, model in models.items()}
+    if any(identity is None for identity in identities.values()):
+        raise ValueError("all seven original native model identities required for receipt windows")
+    roots = {key: identity["complete_inventory"] if identity.get("namespace") == 32 else identity["inventory_root"]
+             for key, identity in identities.items()}
+    if contract.get("original_model_roots") != roots or len(contract.get("windows", [])) != 2:
+        raise ValueError("initial launch receipt panel must retain all seven exact original model inventories")
+    for window in contract["windows"]:
+        observed = set()
+        for master_lane, entries in ((False, window.get("intended", [])), (True, window.get("masters", []))):
+            for entry in entries:
+                key = entry.get("member")
+                identity = identities.get(key)
+                if identity is None or master_lane != (identity.get("namespace") == 32):
+                    raise ValueError("launch receipt substitutes a component/token-only claim for the complete model")
+                fields = {"complete_source": "complete_source", "manifest": "manifest", "complete_inventory": "complete_inventory",
+                          "program_set": "program_set", "real_parameter_set": "real_parameter_set"} if master_lane else {
+                          "class": "native_class", "source": "native_source", "inventory": "inventory_root", "real_parameter": "real_parameter_root"}
+                if any(entry.get(field) != identity[original] for field, original in fields.items()):
+                    raise ValueError("launch receipt source/program/real-parameter identity differs from original model")
+                observed.add(key)
+        if observed != set(models):
+            raise ValueError("each original launch receipt window must exercise all seven complete models")
 
 
 def launch_outcome(target: dict, records: list[dict], observations: list[dict], windows: bool) -> dict:
@@ -183,8 +221,8 @@ def proof_derived_identity(audit: dict, root: Path) -> dict | None:
     anchor = audit.get("validated_anchor", {})
     if report.get("namespace") == 32:
         return proof_derived_master_binding(audit, report, root)
-    # Native28 is a component, not a complete-model Final. A new complete
-    # Master32 exporter needs its own explicit verifier/schema before admission.
+    # Native28 is a component, not a complete-model Final. Master32 uses the
+    # explicit aggregate and each original component redemption above.
     if (report.get("schema") != ac.NATIVE_AUDIT_SCHEMA or report.get("namespace") != 29
             or report.get("pinned_headers_and_original_rows_verified") is not True
             or report.get("qualified_native_profile") is not True

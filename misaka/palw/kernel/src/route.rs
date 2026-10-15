@@ -149,6 +149,32 @@ pub const MAX_STAGE_EXECUTION_BYTES_V14: usize = 2 << 20;
 /// larger envelope (bounded public upstream material plus the old typed body).
 /// The frozen stage actions 0..=33 retain their original 2MiB ceiling.
 pub const MAX_STAGE_INVOCATION_BYTES_V32: usize = (4 << 20) + (256 << 10) + 8192 + 7;
+/// Version32 compact whole Commit body is at most 9 MiB. Its paid part
+/// transport uses 143-byte metadata and at most 32 KiB of body per carrier.
+/// These are new inner64 actions; no old action acquires the larger ceiling.
+pub const MAX_STAGE_COMPACT_COMMIT_BYTES_V32: usize = (9 << 20) + 7;
+pub const MAX_STAGE_COMMIT_PART_BYTES_V32: usize = (32 << 10) + 143 + 7;
+
+fn stage_action_cap(action: u8) -> usize {
+    match action {
+        34..=36 => MAX_STAGE_INVOCATION_BYTES_V32,
+        37 => 64 + 7,
+        38 => MAX_STAGE_COMPACT_COMMIT_BYTES_V32,
+        39 => MAX_STAGE_COMMIT_PART_BYTES_V32,
+        40 => 130 + 7,
+        _ => MAX_STAGE_EXECUTION_BYTES_V14,
+    }
+}
+
+fn stage_action_extent(action: u8, encoded: usize) -> bool {
+    encoded <= stage_action_cap(action)
+        && match action {
+            37 => encoded == 71,
+            39 => encoded >= 143 + 7,
+            40 => encoded == 130 + 7,
+            _ => true,
+        }
+}
 
 /// Per-variant ceilings on the encoded object (version byte included), in bytes. A consumer's mass limit is tighter; these only
 /// bound what the kernel will ever parse.
@@ -762,14 +788,7 @@ pub fn borrowed_native_action_v1(bytes: &[u8]) -> Result<Option<BorrowedNativeAc
     };
     let (cap, last) = match tag {
         TAG_FUNDED_EXECUTION_V11 => (MAX_FUNDED_EXECUTION_BYTES_V11, 46),
-        TAG_STAGE_EXECUTION_V14 => (
-            if bytes.get(2).is_some_and(|a| matches!(*a, 34..=36)) {
-                MAX_STAGE_INVOCATION_BYTES_V32
-            } else {
-                MAX_STAGE_EXECUTION_BYTES_V14
-            },
-            37,
-        ),
+        TAG_STAGE_EXECUTION_V14 => (stage_action_cap(bytes.get(2).copied().unwrap_or(0)), 40),
         _ => return Ok(None),
     };
     let bad = |why: &str| KernelRefusalV1::new("NativeAction", RefusalKindV1::Malformed, why);
@@ -777,8 +796,8 @@ pub fn borrowed_native_action_v1(bytes: &[u8]) -> Result<Option<BorrowedNativeAc
         return Err(bad("native route version/byte cap"));
     }
     let action = *bytes.get(2).ok_or_else(|| bad("native action absent"))?;
-    if tag == TAG_STAGE_EXECUTION_V14 && action == 37 && bytes.len() != 71 {
-        return Err(bad("Master32 collection requires exactly the original master id"));
+    if tag == TAG_STAGE_EXECUTION_V14 && !stage_action_extent(action, bytes.len()) {
+        return Err(bad("Master32 action-specific bounded extent differs"));
     }
     if tag == TAG_FUNDED_EXECUTION_V11 && matches!(action, 41..=44) && bytes.len() > (32 << 10) + 79 {
         return Err(bad("initial31 complete bounded wire packet cap"));
@@ -945,9 +964,7 @@ impl KernelRouteObjectV1 {
         }
         if tag == TAG_STAGE_EXECUTION_V14 {
             let count = rest.get(2..6).ok_or_else(|| bad(RefusalKindV1::Malformed, "truncated stage14 action frame".into()))?;
-            if rest.get(1).is_none_or(|a| *a > 37)
-                || rest.get(1) == Some(&37) && bytes.len() != 71
-                || rest.get(1).is_some_and(|a| *a <= 33) && bytes.len() > MAX_STAGE_EXECUTION_BYTES_V14
+            if rest.get(1).is_none_or(|a| *a > 40 || !stage_action_extent(*a, bytes.len()))
                 || u32::from_le_bytes(count.try_into().unwrap()) as usize != rest.len().saturating_sub(6)
             {
                 return Err(bad(RefusalKindV1::Malformed, "stage14 action/count differs from exact bounded carrier".into()));
@@ -1225,7 +1242,7 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_BOOTSTRAP_EXACT_V1 => crate::beacon_bootstrap_v1::MAX_BOOTSTRAP_EXACT_OBJECT_BYTES_V1,
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1,
         TAG_FUNDED_EXECUTION_V11 => MAX_FUNDED_EXECUTION_BYTES_V11,
-        TAG_STAGE_EXECUTION_V14 => MAX_STAGE_INVOCATION_BYTES_V32,
+        TAG_STAGE_EXECUTION_V14 => MAX_STAGE_COMPACT_COMMIT_BYTES_V32,
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1,
         TAG_POST_TILED_JOB_V1 => MAX_POST_TILED_JOB_BYTES_V1,
         TAG_POST_PROMPT_TILE_V1 => MAX_POST_PROMPT_TILE_BYTES_V1,
@@ -1260,9 +1277,31 @@ mod tests {
         assert!(borrowed_native_action_v1(&collect).is_ok());
         assert!(KernelRouteObjectV1::decode(&collect).is_ok());
         let mut unknown = collect;
-        unknown[2] = 38;
+        unknown[2] = 41;
         assert!(borrowed_native_action_v1(&unknown).is_err());
         assert!(KernelRouteObjectV1::decode(&unknown).is_err());
+    }
+    #[test]
+    fn compact_commit_transport_has_its_own_whole_part_and_assembly_limits() {
+        let whole = KernelRouteObjectV1::StageExecutionV14 { action: 38, body: vec![0; MAX_STAGE_INVOCATION_BYTES_V32] }.encode();
+        assert!(borrowed_native_action_v1(&whole).is_ok());
+        assert!(KernelRouteObjectV1::decode(&whole).is_ok());
+        let mut wrong_action = whole;
+        wrong_action[2] = 36;
+        assert!(borrowed_native_action_v1(&wrong_action).is_err());
+        assert!(KernelRouteObjectV1::decode(&wrong_action).is_err());
+        for (action, sizes) in [(39, vec![143, 143 + (32 << 10)]), (40, vec![130])] {
+            for size in sizes {
+                let packet = KernelRouteObjectV1::StageExecutionV14 { action, body: vec![0; size] }.encode();
+                assert!(borrowed_native_action_v1(&packet).is_ok());
+                assert!(KernelRouteObjectV1::decode(&packet).is_ok());
+            }
+        }
+        for (action, size) in [(39, 142), (39, 144 + (32 << 10)), (40, 129), (40, 131)] {
+            let packet = KernelRouteObjectV1::StageExecutionV14 { action, body: vec![0; size] }.encode();
+            assert!(borrowed_native_action_v1(&packet).is_err());
+            assert!(KernelRouteObjectV1::decode(&packet).is_err());
+        }
     }
     #[test]
     fn native_action_borrowed_frame_has_exact_count_and_preserves_old_owned_bytes() {
@@ -1284,10 +1323,10 @@ mod tests {
         }
         assert!(borrowed_native_action_v1(&KernelRouteObjectV1::Withdraw { bond: [1; 64] }.encode()).unwrap().is_none());
         // Funded actions run to 46: 45/46 are the typed window class v37 register/attach (RFC02 §II.14.60), as the decoder admits.
-        for (tag, last) in [(TAG_FUNDED_EXECUTION_V11, 46), (TAG_STAGE_EXECUTION_V14, 36)] {
+        for (tag, last, unknown) in [(TAG_FUNDED_EXECUTION_V11, 46, 47), (TAG_STAGE_EXECUTION_V14, 38, 41)] {
             let mut raw = vec![1, tag, last, 0, 0, 0, 0];
             assert_eq!(borrowed_native_action_v1(&raw).unwrap().unwrap().action, last);
-            raw[2] = last + 1;
+            raw[2] = unknown;
             assert!(borrowed_native_action_v1(&raw).is_err());
             raw[2] = last;
             raw[0] = 2;

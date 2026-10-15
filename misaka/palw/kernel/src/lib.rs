@@ -203,3 +203,16 @@ pub mod panel_lifetime_v2;
 pub mod econ_contracts_v1;
 /// N3 (2026-10-15 round 3): BootstrapExact source contributions (inner 73), consumer-owned past `palw_beacon_bootstrap_v1`.
 pub mod beacon_bootstrap_v1;
+
+/// Owning full source39 grammar; no legacy source promotion.
+pub mod flat_source39;
+
+pub mod flat_prepared39;
+
+pub mod flat_resources39;
+
+pub mod flat_point39;
+
+pub mod flat_material39;
+
+pub mod flat_job39;

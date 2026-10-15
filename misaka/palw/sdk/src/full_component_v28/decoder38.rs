@@ -105,7 +105,7 @@ impl PreparedDecoderV38 {
                 return Err("DECODER38_IMAGE_HIDDEN_WIDTH_DIFFERS".into());
             }
         }
-        let output = misaka_palw_tir::program_v2::OutputDecl::Logits { node: prepared.lowered.program.logits };
+        let output = misaka_palw_tir::program_v2::OutputDecl::Logits { node: prepared.lowered.program.logits, scheme_id:prepared.lowered.program.logits_scheme_id };
         let lifts = p
             .image_rows
             .as_ref()

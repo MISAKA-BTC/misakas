@@ -9,6 +9,10 @@ use sha2::{Digest as _,Sha256};
 fn keep(path:&Path,raw:&[u8])->Result<String,String>{let mut f=std::fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e|e.to_string())?;f.write_all(raw).map_err(|e|e.to_string())?;Ok(misaka_palw_sdk::runtime_pack::commit::hex(&Sha256::digest(raw)))}
 struct Store {physical:PathBuf,logical:String,bytes:u64,maximum:u64}
 impl Store {
+    fn charge(&mut self,n:u64)->Result<(),String>{self.bytes=self.bytes.checked_add(n).filter(|v|*v<=self.maximum).ok_or("receipt complete evidence reservation exhausted")?;Ok(())}
+    fn file(&mut self,path:&Path,raw:&[u8])->Result<(),String>{self.charge(raw.len()as u64)?;keep(path,raw)?;Ok(())}
+    fn line(&mut self,file:&mut std::fs::File,raw:&[u8])->Result<(),String>{self.charge(raw.len()as u64+1)?;file.write_all(raw).and_then(|_|file.write_all(b"\n")).map_err(|e|e.to_string())}
+
     fn object(&mut self,raw:&[u8])->Result<NativeCasObjectV1,String>{
         let sha=misaka_palw_sdk::runtime_pack::commit::hex(&Sha256::digest(raw));let path=self.physical.join(&sha);
         if path.exists(){if path.metadata().map_err(|e|e.to_string())?.len()!=raw.len()as u64{return Err("receipt CAS existing object differs".into());}}
@@ -76,16 +80,16 @@ fn run()->Result<(),String>{
             ||count==0&&parent_hash!=end_parent||aux.block_hash!=next.to_string()||payout.block_hash!=next.to_string(){return Err("receipt original header/selected-parent/proof pin differs".into());}
         if params_id.is_empty(){params_id=status.consensus_params_id.clone();}else if params_id!=status.consensus_params_id{return Err("receipt owning parameters changed during transcript collection".into());}
         let folder_name=format!("point-{count:010}");let folder=partial.join(&folder_name);std::fs::create_dir(&folder).map_err(|e|e.to_string())?;
-        keep(&folder.join("child-header.json"),&serde_json::to_vec(&child).map_err(|e|e.to_string())?)?;
-        keep(&folder.join("selected-parent-header.json"),&serde_json::to_vec(&ph).map_err(|e|e.to_string())?)?;
+        store.file(&folder.join("child-header.json"),&serde_json::to_vec(&child).map_err(|e|e.to_string())?)?;
+        store.file(&folder.join("selected-parent-header.json"),&serde_json::to_vec(&ph).map_err(|e|e.to_string())?)?;
         store.proof(&aux,&folder.join("aux-proof32.cas.json.gz"))?;store.proof(&payout,&folder.join("payout-proof32.cas.json.gz"))?;
         let collected=final_out.join(&folder_name).strip_prefix(&root).map_err(|e|e.to_string())?.to_str().ok_or("receipt point path UTF8")?.to_string();
         let line=serde_json::to_vec(&serde_json::json!({"child":next.to_string(),"selected_parent":parent_hash.to_string(),"collected":collected})).map_err(|e|e.to_string())?;
-        if line.len()+1>4096{return Err("receipt pointer line bound".into());}reverse.write_all(&line).and_then(|_|reverse.write_all(b"\n")).map_err(|e|e.to_string())?;
+        if line.len()+1>4096{return Err("receipt pointer line bound".into());}store.line(&mut reverse,&line)?;
         for name in ["child-header.json","selected-parent-header.json","aux-proof32.cas.json.gz","payout-proof32.cas.json.gz"]{
             let path=folder.join(name);let mut f=std::fs::File::open(&path).map_err(|e|e.to_string())?;let mut h=Sha256::new();let mut buf=[0;65536];loop{let n=f.read(&mut buf).map_err(|e|e.to_string())?;if n==0{break;}h.update(&buf[..n]);}
             let digest=misaka_palw_sdk::runtime_pack::commit::hex(&h.finalize());let record=serde_json::json!({"path":format!("{folder_name}/{name}"),"sha256":digest,"bytes":path.metadata().map_err(|e|e.to_string())?.len()});
-            serde_json::to_writer(&mut inventory,&record).map_err(|e|e.to_string())?;inventory.write_all(b"\n").map_err(|e|e.to_string())?;
+            store.line(&mut inventory,&serde_json::to_vec(&record).map_err(|e|e.to_string())?)?;
         }
         rolling=misaka_palw_kernel::hash::object_id(b"misaka-palw/audit/reverse-collected-transcript/v1",&(rolling,next,parent_hash,count));
         count+=1;if next==start{break;}next=parent_hash;
@@ -96,7 +100,7 @@ fn run()->Result<(),String>{
         "states":count,"collected_reverse_root":misaka_palw_sdk::runtime_pack::commit::hex(&rolling),"reserved_evidence_bytes":maximum,"CAS_owned_bytes":store.bytes,
         "qualified_native_profile":true,"local_qualified_validation_network":own.parameters().native_final_is_local_qualified_v34(),
         "node_consensus_params_id":params_id,"complete_original_transcript_retained":true,"raw_node_assertions_are_unverified":true});
-    keep(&partial.join("collection.json"),&serde_json::to_vec_pretty(&report).map_err(|e|e.to_string())?)?;
+    store.file(&partial.join("collection.json"),&serde_json::to_vec_pretty(&report).map_err(|e|e.to_string())?)?;
     // All pointer/object names target final_out; no partial directory is a usable
     // completed transcript. Interrupted files remain visibly partial for cleanup.
     std::fs::rename(partial,final_out).map_err(|e|e.to_string())?;Ok(())

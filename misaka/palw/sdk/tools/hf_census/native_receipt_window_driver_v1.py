@@ -54,6 +54,9 @@ def execute(plan_path: Path, contract_path: Path, committed_sha: str, run_sha: s
     for value in ptr.values():
         if not isinstance(value, str) or len(value) != 128 or any(c not in "0123456789abcdef" for c in value):
             raise ValueError("exact native header pointers required")
+    maximum_evidence = plan.get("maximum_evidence_bytes")
+    if type(maximum_evidence) is not int or not 1 <= maximum_evidence <= 1 << 40:
+        raise ValueError("frozen complete original receipt evidence reservation required")
     master_witnesses = None
     masters = {m["master"]: m for w in contract["windows"] for m in w.get("masters", [])}
     if masters:
@@ -75,7 +78,7 @@ def execute(plan_path: Path, contract_path: Path, committed_sha: str, run_sha: s
     ac.write(result, {"schema": POINTER_SCHEMA, "stage": "receipt-windows", "run_plan_sha256": run_sha,
         "cohort_sha256": contract["cohort_sha256"], "contract_sha256": ac.digest(contract_path),
         "contract": str(contract_path.resolve().relative_to(evidence_root.resolve())), "native_pointers": ptr,
-        "master_witnesses": master_witnesses})
+        "master_witnesses": master_witnesses, "maximum_evidence_bytes": maximum_evidence})
 
 
 def validate_contract(c: dict) -> None:

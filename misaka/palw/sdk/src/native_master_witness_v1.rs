@@ -7,10 +7,11 @@ use misaka_palw_tir::{DType,Tensor};
 pub const MASTER_WITNESS_TYPED_LIMIT_V1:usize=2usize<<30;
 pub const MASTER_WITNESS_PEAK_LIMIT_V1:usize=(2usize<<30)+(256<<20);
 #[derive(Clone)]
-pub struct CheckedDecodedMasterOutputsV1 {values:Arc<Vec<Vec<Tensor>>>,typed_bytes:usize,raw_bytes:usize,sha256:[u8;32]}
+pub struct CheckedDecodedMasterOutputsV1 {values:Arc<Vec<Vec<Tensor>>>,certificates:Option<Arc<Vec<Vec<misaka_palw_kernel::seg::NodeOpeningV1>>>>,typed_bytes:usize,raw_bytes:usize,sha256:[u8;32]}
 impl CheckedDecodedMasterOutputsV1 {
     pub fn values(&self)->&[Vec<Tensor>]{self.values.as_slice()}
     pub fn shared_values(&self)->Arc<Vec<Vec<Tensor>>>{self.values.clone()}
+    pub fn shared_certificates(&self)->Option<Arc<Vec<Vec<misaka_palw_kernel::seg::NodeOpeningV1>>>>{self.certificates.clone()}
     pub fn typed_bytes(&self)->usize{self.typed_bytes}
     pub fn raw_bytes(&self)->usize{self.raw_bytes}
     pub fn sha256(&self)->[u8;32]{self.sha256}
@@ -54,11 +55,15 @@ impl NativeMasterWitnessCacheV1 {
             self.objects.retain(|_,object|Arc::strong_count(&object.values)>1);
             self.typed=self.objects.values().map(|v|v.typed_bytes).sum();
         }
-        let typed=preflight_master_outputs_v1(&raw)?;
+        let certified=raw.starts_with(&kaspa_consensus_core::palw_flat_stage_v28::NativeMasterOutputCertificatesV32::MAGIC);
+        let typed=if certified {
+            let c=kaspa_consensus_core::palw_flat_stage_v28::NativeMasterOutputCertificatesV32::from_bytes(&raw)?;
+            preflight_master_outputs_v1(&c.values)?.checked_add(raw.len().checked_mul(4).ok_or("master certificate metadata expansion overflow")?).ok_or("master certificate typed sum overflow")?
+        }else{preflight_master_outputs_v1(&raw)?};
         let next=self.typed.checked_add(typed).filter(|n|*n<=MASTER_WITNESS_TYPED_LIMIT_V1).ok_or("master witness aggregate typed reservation exceeded before decode")?;
         if next.checked_add(raw.len()).is_none_or(|n|n>MASTER_WITNESS_PEAK_LIMIT_V1){return Err("master witness aggregate decode peak exceeded".into());}
-        let values=kaspa_consensus_core::palw_native_audit_proof_v32::decode_native_master_outputs_v32(&raw)?;
-        let checked=CheckedDecodedMasterOutputsV1{values:Arc::new(values),typed_bytes:typed,raw_bytes:raw.len(),sha256:digest};
+        let(values,certificates)=kaspa_consensus_core::palw_flat_stage_v28::decode_native_master_certificates_v32(&raw)?;
+        let checked=CheckedDecodedMasterOutputsV1{values:Arc::new(values),certificates:certificates.map(Arc::new),typed_bytes:typed,raw_bytes:raw.len(),sha256:digest};
         self.typed=next;self.objects.insert(digest,checked.clone());Ok(checked)
     }
     pub fn retained_typed_bytes(&self)->usize{self.typed}

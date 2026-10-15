@@ -199,7 +199,7 @@ impl PipelineDescription {
         TirPipelineV1::decode_canonical(&p.encode(), programs).map_err(|e| format!("COMPLETE_FRONTEND_PIPELINE_ADMISSION: {e}"))
     }
 }
-fn bytes(path: &Path, cap: u64) -> Result<Vec<u8>, String> {
+pub(super) fn bytes(path: &Path, cap: u64) -> Result<Vec<u8>, String> {
     let f = std::fs::File::open(path).map_err(|e| e.to_string())?;
     if f.metadata().map_err(|e| e.to_string())?.len() > cap {
         return Err("COMPLETE_FRONTEND_INPUT_BYTE_BOUND".into());
@@ -211,13 +211,13 @@ fn bytes(path: &Path, cap: u64) -> Result<Vec<u8>, String> {
     }
     Ok(b)
 }
-fn decode<const N: usize>(s: &str) -> Result<[u8; N], String> {
+pub(super) fn decode<const N: usize>(s: &str) -> Result<[u8; N], String> {
     misaka_palw_tir_lower::frontend_pack::program::unhex(s, N)
         .map_err(|e| e.to_string())?
         .try_into()
         .map_err(|_| "COMPLETE_FRONTEND_DIGEST_LENGTH".into())
 }
-fn relative(root: &Path, name: &str) -> Result<PathBuf, String> {
+pub(super) fn relative(root: &Path, name: &str) -> Result<PathBuf, String> {
     let p = Path::new(name);
     if p.is_absolute() || p.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
         return Err("COMPLETE_FRONTEND_RELATIVE_PATH_REQUIRED".into());

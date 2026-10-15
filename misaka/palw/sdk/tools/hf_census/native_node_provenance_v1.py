@@ -26,7 +26,7 @@ def validate_specs(specs: list) -> None:
                 or not isinstance(p["binary"], str) or not Path(p["binary"]).is_absolute()
                 or not isinstance(p["binary_sha256"], str) or not re.fullmatch("[0-9a-f]{64}", p["binary_sha256"])
                 or not isinstance(p["database_directory"], str) or not Path(p["database_directory"]).is_absolute()
-                or p["database_directory"] != owner.get("node_database")):
+                or p["database_directory"] != owner.get("node_database") or not isinstance(p["rpc"], str)):
             raise ValueError("frozen local auditor PID/pinned binary/actual database directory required")
         endpoint = urlparse(p["rpc"])
         if endpoint.hostname not in {"127.0.0.1", "::1", "localhost"} or not endpoint.port or endpoint.username or endpoint.password:

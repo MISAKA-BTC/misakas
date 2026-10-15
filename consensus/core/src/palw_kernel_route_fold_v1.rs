@@ -953,14 +953,19 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     // Funded actions 25..=40 below Final27 (native_final absent) are opaque: validation did not check
     // their signature, so they must have ZERO state effect — no bond, budget, row or fee read/write.
     // Mirrors `palw_native_action_unjudged_at_v1` in the processor exactly.
-    if bytes.get(1).copied() == Some(misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11)
-        && builder.extras.kernel_route.as_ref().is_some_and(|e| match bytes.get(2) {
+    if builder.extras.kernel_route.as_ref().is_some_and(|e| match bytes.get(1).copied() {
+        Some(misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11) => match bytes.get(2) {
             Some(25..=40) => e.native_final.is_none(),
             // Typed window class (§II.14.60): its own fence AND Final27.
             Some(45 | 46) => e.native_final.is_none() || e.window_class_v37.is_none_or(|at| ctx.daa_score < at),
             _ => false,
-        })
-    {
+        },
+        Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) if matches!(bytes.get(2), Some(19..=40)) => {
+            e.native_final.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
+                || e.stage_execution_v28.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
+        }
+        _ => false,
+    }) {
         return Ok(());
     }
     // A malformed or over-size encoding, or a signer that is no Active bond, is a dropped object.

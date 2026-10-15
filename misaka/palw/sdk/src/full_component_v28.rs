@@ -3,6 +3,7 @@
 pub mod frontend;
 pub mod vision38;
 pub mod decoder38;
+pub mod q36mirror40;
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::{
     flat_component_source28::CheckedComponentManifestV28,

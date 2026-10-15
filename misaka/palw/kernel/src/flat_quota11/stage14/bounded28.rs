@@ -37,7 +37,10 @@ impl CheckedStageQuotaV28 {
     pub fn source_plan(&self,class:&CheckedStageClassV28,quota:&QuotaPolicyV11,discovery:&discovery13::DiscoveryPolicyV13)->Result<source16::SourcePlanV16,String>{
         discovery.check(quota)?;
         if self.class!=class.root() || self.source!=class.source().id() || self.policy!=class.wire().policy {return Err("stage28 source quotation changes original class".into());}
-        let requests=self.requests_per_owner.checked_mul(PROTECTED_SEALS_PER_JOB_V11).and_then(|n|n.checked_add(discovery.ordinary_lifetime_requests)).ok_or("stage28 source count overflow")?;
+        let mut requests=self.requests_per_owner.checked_mul(PROTECTED_SEALS_PER_JOB_V11).and_then(|n|n.checked_add(discovery.ordinary_lifetime_requests)).ok_or("stage28 source count overflow")?;
+        // Preclaim producer transport is a NEW32 obligation. Its units are
+        // reserved in addition to every owner's entire original source path.
+        if self.invocation32 {requests=requests.checked_add(invocation_commit_parts_bound_v32(self.plan.positions)? as u32+1).ok_or("invocation32 producer post count overflow")?;}
         source16::derive_source_plan_from_stage_v28(class,self,quota,requests)
     }
 }
@@ -90,9 +93,11 @@ pub fn derive_stage_quota_v32(class:&CheckedStageClassV28,job:&CheckedStageJobV2
     let input=job.input_raw_bytes().checked_mul(job.job().positions as u128).ok_or("stage32 all-position input resource overflow")?;
     if input>1<<20{return Err("stage32 maximum position inputs exceed original paid cap".into());}
     // Envelope32 has <=2MiB upstream tensor material and <=2MiB base carrier.
-    // Its fixed original plan reserves the full cap, independently of actual
+    // The16MiB supplement also covers raw i8->i128 tensor expansion and
+    // certificate/native class metadata ownership. The original plan reserves
+    // the full cap, independently of actual
     // EOS/number of prior Finals; repeated restore is priced at every action.
-    let extra=(8u64<<20).checked_add(input as u64).and_then(|n|n.checked_add(32768)).ok_or("stage32 original restore overflow")?;
+    let extra=(16u64<<20).checked_add(invocation_commit_bytes_bound_v32(job.job().positions)?).and_then(|n|n.checked_add(input as u64)).and_then(|n|n.checked_add(32768)).ok_or("stage32 original restore overflow")?;
     let restore=stage.restore_bytes.checked_add(extra).ok_or("stage32 full original restore overflow")?;
     let work=restore.checked_mul(restore).and_then(|n|n.checked_mul(64)).and_then(|n|n.checked_add(restore.checked_mul(1024)?)).ok_or("stage32 full original restore work overflow")?;
     let c=scope.scope();let prior=stage.plan.source_court_bound.clone();
@@ -102,7 +107,7 @@ pub fn derive_stage_quota_v32(class:&CheckedStageClassV28,job:&CheckedStageJobV2
     let supplement=action_envelope(work as u128,extra,None)?;
     stage.plan.baseline=stage.plan.baseline.checked_add(&supplement)?;
     for axis in [ResourceAxisV10::RawParameterStorage,ResourceAxisV10::CopiedReferenceBytes,ResourceAxisV10::StoredEvidenceBytes]{stage.plan.baseline.set(axis,stage.plan.baseline.get(axis).checked_add(input).ok_or("stage32 full position input overflow")?);}
-    let post=stage.plan.native_post_carrier_cap.checked_add(32768).ok_or("stage32 original post overflow")?;
+    let post=invocation_commit_bytes_bound_v32(job.job().positions)?;
     let full=filing.checked_add(restore).ok_or("stage32 full filing restore overflow")?;
     let sizes=[post.max(restore),restore+16384,restore+(128<<10),full,full,restore];
     for (i,a) in stage.plan.action_envelopes.iter_mut().enumerate(){*a=action_envelope(work as u128,sizes[i],if i==3||i==4{Some((court_work,filing,scratch))}else{None})?;include_native_post_io_v11(a,post)?;include_source_court_io_v11(a,class.source().parameters())?;}
@@ -115,7 +120,9 @@ impl CheckedStageQuotaV28 {
     /// Native mode comes from the original producer-signed invocation32 row,
     /// never an arbitrary on-wire flag or a legacy28 cache.
     pub fn restore_native_record_v32(class:Digest,source:Digest,admission:Digest,policy:Digest,requests:u32,restore_bytes:u64,record:&QuotaPlanRecordV11,expected:Digest)->Result<Self,String>{
-        let mut p=Self::restore_native_record(class,source,admission,policy,requests,restore_bytes,record,expected)?;p.invocation32=true;Ok(p)
+        let plan=CheckedJobQuotaPlanV11::restore(record,&record.root())?;
+        let p=Self{class,source,admission,policy,plan,requests_per_owner:requests,restore_bytes,invocation32:true};
+        if [class,source,admission,policy].contains(&[0;64])||requests==0||requests>1<<18||restore_bytes==0||restore_bytes>64<<20||p.root()!=expected{return Err("invocation32 original cached quota differs".into());}Ok(p)
     }
 }
 
@@ -272,4 +279,16 @@ impl StageJobBookV28 {
     pub fn receipt_clocks_v1(&self)->(u64,u64,Option<u64>){
         (self.admitted,self.commit_until,self.challenge_end.and_then(|d|d.checked_sub(self.challenge_window)))
     }
+}
+
+/// Upper bound for NEW32 compact Commit (actual generated IDs + compact trace
+/// segment roots). It deliberately excludes an all-position node directory.
+/// Frozen Stage14 output openings and carrier limits are unaffected.
+pub fn invocation_commit_bytes_bound_v32(positions:u32)->Result<u64,String>{
+    if positions==0||positions>misaka_palw_tir::program::HISTORY_BOUND_V1_HELD{return Err("invocation32 original Commit position range".into());}
+    let ids=(positions as u64).checked_mul(4).ok_or("invocation32 IDs overflow")?;
+    ids.checked_add(crate::seg::segment_count_v1(positions) as u64*64).and_then(|n|n.checked_add(1024)).ok_or("invocation32 compact Commit overflow".into())
+}
+pub fn invocation_commit_parts_bound_v32(positions:u32)->Result<u16,String>{
+    u16::try_from(invocation_commit_bytes_bound_v32(positions)?.div_ceil(32<<10)).ok().filter(|n|*n>0&&*n<=512).ok_or_else(||"invocation32 original producer Commit exceeds512 parts".into())
 }

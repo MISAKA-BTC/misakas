@@ -54,6 +54,34 @@ fn line(reader: &mut impl BufRead) -> Result<Option<Vec<u8>>, String> {
     }
     Ok((n != 0).then_some(raw))
 }
+fn generated_ids(path: &Path) -> Result<Vec<u32>, String> {
+    use serde::de::{Deserializer as _, SeqAccess, Visitor};
+    const MAX_IDS: usize = misaka_palw_tir::program::HISTORY_BOUND_V1_HELD as usize;
+    struct Ids;
+    impl<'de> Visitor<'de> for Ids {
+        type Value = Vec<u32>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("bounded original generated token ids")
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut ids = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(MAX_IDS));
+            while let Some(id) = seq.next_element::<u32>()? {
+                if ids.len() == MAX_IDS {
+                    return Err(serde::de::Error::custom("original generated token witness count exceeded"));
+                }
+                ids.push(id);
+            }
+            Ok(ids)
+        }
+    }
+    // A u32 takes at most ten decimal digits plus a separator. Original maximum
+    // invocation checks impose the job-specific limit after this local parser.
+    let raw = read_bounded_file_v32(path, MAX_IDS * 11 + 2)?;
+    let mut de = serde_json::Deserializer::from_slice(&raw);
+    let ids = de.deserialize_seq(Ids).map_err(|e| e.to_string())?;
+    de.end().map_err(|e| e.to_string())?;
+    Ok(ids)
+}
 fn run() -> Result<(), String> {
     let mut options = BTreeMap::new();
     let mut it = std::env::args().skip(1);
@@ -156,15 +184,12 @@ fn run() -> Result<(), String> {
                 if decoded.values().len() != d.jobs.len() {
                     return Err("receipt public output witness omits an original stage".into());
                 }
-                let generated: Vec<u32> = serde_json::from_slice(&read_bounded_file_v32(&relative(&root, &d.generated)?, 1 << 20)?)
-                    .map_err(|e| e.to_string())?;
-                if generated.len() > 65536 {
-                    return Err("receipt original generated token witness cap".into());
-                }
+                let generated = generated_ids(&relative(&root, &d.generated)?)?;
                 Ok(Some(MasterReceiptWitnessV1 {
                     master: d.master,
                     jobs: d.jobs.iter().map(|id| id.as_bytes()).collect(),
                     values: decoded.shared_values(),
+                    certificates: decoded.shared_certificates(),
                     generated,
                 }))
             },

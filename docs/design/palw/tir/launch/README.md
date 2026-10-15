@@ -43,8 +43,15 @@ windows to fit the old 65,536-point/whole-transcript memory ceiling. Output sche
 and bounded cumulative checkpoints. The legacy array input remains separately
 bounded. Both paths are unverified source until the consolidated phase.
 
-Still required: exact runtime variants (especially the multiple distinct 35B
-artifacts), original metadata/context and local weight/artifact pins; full Pixtral
+The user subsequently selected the original PALWQ361 integer runtime for 35B,
+excluding the newer Claude-4.7 GGUF. The manifest selects
+`palw-runtime/qwen36-35b-a3b.palwq36` at its pinned publisher LFS hash.
+The root `qwen36.palwq36` and the 2m `.palwart` have different identities and are
+not aliases. The exact selected file's context header and tokenizer still need
+to be pinned; a README conversion example with context512 is not that evidence.
+
+Still required: the other exact runtime variants, original metadata/context and
+local weight/artifact pins; full Pixtral
 vision/projector and hybrid MoE conversion; proof-derived complete-model identity
 export for native32; the implementation's consolidated checks; and all seven
 real-checkpoint trials under the target ruleset. Public Hub file metadata alone
