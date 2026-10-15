@@ -835,7 +835,7 @@ fn credit(
     if s.producer_credit != 0 {
         builder.pay_native_recipient_v1(Hash64::from_bytes(h.id), h.original.producer, 11, ctx.daa_score, amount, queue, true)?;
     } else {
-        builder.cancel_native_recipient_v1(Hash64::from_bytes(h.id), h.original.producer, 11);
+        builder.cancel_native_recipient_v1(Hash64::from_bytes(h.id), h.original.producer, 11)?;
     }
     builder.write_payout(queue, Some(PalwPayoutV2 { payload: payout, amount }))?;
     if let Some((f, payout)) = finder_payout {
@@ -900,7 +900,7 @@ fn credit(
         established: s.established,
     };
     builder.write_kernel_row(TABLE, k(23, &h.id), Some(b(&(c.root(), &c))))?;
-    builder.bond_budget_close_v1(&super::palw_bond_budget_fold_v1::native_job_budget_id_v39(&h.id), ctx.daa_score);
+    builder.bond_budget_close_v1(&super::palw_bond_budget_fold_v1::native_job_budget_id_v39(&h.id), ctx.daa_score)?;
     // Keep the original books/posts/credit for Master and independent audit,
     // but a terminal job no longer occupies an active actor job slot. This
     // does not return any resource or monetary-window allowance.

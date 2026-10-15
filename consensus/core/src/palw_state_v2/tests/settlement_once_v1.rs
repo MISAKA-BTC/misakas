@@ -2,7 +2,9 @@
 //! kernel route aux 140). SOURCE ONLY — written, never compiled or executed in this lane. Each control settles one obligation
 //! through two DIFFERENT consumers (or one consumer twice) and requires exactly one payment, one marker and an unchanged state for
 //! the second attempt; and below the fence requires the historical bytes.
-use super::super::palw_settlement_once_fold_v1::{PalwSettleOnceV1, kernel_producer_reward_at_v1, palw_settled_once_v1};
+use super::super::palw_settlement_once_fold_v1::{
+    PalwSettleOnceV1, kernel_check_fee_at_v1, kernel_producer_reward_at_v1, palw_settled_once_v1,
+};
 use super::*;
 use crate::palw_settlement_once_v1::*;
 use misaka_palw_kernel::ledger::LedgerEventV1;
@@ -200,7 +202,7 @@ fn the_producer_reward_triple_is_told_apart_from_a_verifier_check_fee() {
 }
 
 #[test]
-fn applying_the_same_producer_settlement_batch_twice_debits_and_pays_once() {
+fn applying_the_same_producer_settlement_batch_twice_debits_and_pays_at_most_once() {
     let p = armed();
     let extras = PalwTransitionExtrasV1::default();
     let mut parent = with_route(PalwChainStateV2::genesis());
@@ -215,13 +217,142 @@ fn applying_the_same_producer_settlement_batch_twice_debits_and_pays_once() {
         settlement(poster, 0, SettlementKindV1::ReleaseJobEscrow, claim),
         settlement(producer, 10, SettlementKindV1::FinalReward, claim),
     ];
-    // The closing tick (lenient) applies it, then a second consumer re-applies the same batch.
+    // The closing tick (lenient) applies it, then a second consumer re-applies the same batch. Past the fence the combined
+    // liability predicate (RFC08-2) reads the kernel claim's own row; this fixture's route has none, so the leg is unsourced: it
+    // is refused, the obligation closes at zero and NOTHING is debited or paid (the fail-closed side of "at most once").
     super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, false, 100).unwrap();
-    let paid_once = b.state.clone();
-    assert_eq!(paid_once.bonds[&bond_key(1)].collateral, 990, "the poster's escrow was debited once");
+    let first = b.state.clone();
+    assert_eq!(first.bonds[&bond_key(1)].collateral, 1_000, "an unsourced leg moves nothing");
+    let o = PalwSettlementObligationV1::of(PalwSettlementLegV1::EscrowFinalReward, claim);
+    assert_eq!(palw_settled_once_v1(&first, &o).map(|row| row.amount), Some(0), "the refusal is journaled at zero");
     super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, false, 101).unwrap();
-    assert_eq!(b.state, paid_once, "the lenient second application debits and pays nothing");
+    assert_eq!(b.state, first, "the lenient second application debits and pays nothing");
     // A strict object arm reaching the same claim is refused (the object is dropped).
     assert!(super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, true, 102).is_err());
     assert_eq!(markers(&b.state), 1);
 }
+
+// ---- RFC08-1: the remaining legs (verifier slot fees, free-prompt and native receipt quanta) ----
+
+fn check_fee_quad(poster: [u8; 64], verifier: [u8; 64], fee: u64, claim: [u8; 64]) -> Vec<LedgerEventV1> {
+    vec![
+        settlement(poster, fee, SettlementKindV1::PayJobEscrow, claim),
+        settlement(poster, 0, SettlementKindV1::ReleaseJobEscrow, claim),
+        settlement(verifier, fee, SettlementKindV1::FinalReward, claim),
+        LedgerEventV1::CheckFeePaid { claim, verifier, amount: fee },
+    ]
+}
+
+#[test]
+fn the_check_fee_quad_is_matched_exactly_and_never_as_a_producer_reward() {
+    let claim = [7; 64];
+    let quad = check_fee_quad([1; 64], [3; 64], 5, claim);
+    assert_eq!(kernel_check_fee_at_v1(&quad, 0), Some((claim, [1; 64], [3; 64], 5)));
+    assert_eq!(kernel_producer_reward_at_v1(&quad, 0), None, "a check fee is not the escrow reward leg");
+    // A CheckFeePaid naming another verifier or another amount is not this quad.
+    let mut other_verifier = quad.clone();
+    other_verifier[3] = LedgerEventV1::CheckFeePaid { claim, verifier: [4; 64], amount: 5 };
+    assert_eq!(kernel_check_fee_at_v1(&other_verifier, 0), None);
+    let mut other_amount = quad.clone();
+    other_amount[3] = LedgerEventV1::CheckFeePaid { claim, verifier: [3; 64], amount: 4 };
+    assert_eq!(kernel_check_fee_at_v1(&other_amount, 0), None);
+    // A producer triple (no CheckFeePaid) is not a check fee.
+    assert_eq!(kernel_check_fee_at_v1(&quad[..3], 0), None);
+}
+
+#[test]
+fn a_verifiers_slot_fees_are_marked_once_per_slot_across_the_tick_and_the_object_arm() {
+    let p = armed();
+    let extras = PalwTransitionExtrasV1::default();
+    let mut parent = with_route(PalwChainStateV2::genesis());
+    parent.bonds.insert(bond_key(1), bond_record(1_000, 1));
+    parent.bonds.insert(bond_key(3), bond_record(1_000, 3));
+    let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    let poster = b.note_kernel_bond(&bond_key(1)).unwrap();
+    let verifier = b.note_kernel_bond(&bond_key(3)).unwrap();
+    let claim = [7; 64];
+    // The verifier holds two drawn slots of the claim: the kernel pays both in one batch, two distinct obligations.
+    let mut batch = check_fee_quad(poster, verifier, 5, claim);
+    batch.extend(check_fee_quad(poster, verifier, 5, claim));
+    super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, false, 100).unwrap();
+    let first = b.state.clone();
+    // RFC08-2: a drawn verifier's own liability horizon is undefined (RFC07-5), so past the fence its fee is refused, never
+    // defaulted: each slot's obligation is closed at zero and the poster's escrow is not debited.
+    assert_eq!(first.bonds[&bond_key(1)].collateral, 1_000);
+    for slot in 0..2 {
+        let o = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, claim, verifier, slot);
+        let row = palw_settled_once_v1(&first, &o).expect("each slot has its own marker");
+        assert_eq!((row.consumer, row.amount), (PalwSettlementConsumerV1::KernelTick, 0));
+    }
+    assert_eq!(markers(&first), 2);
+    // The same batch again: past the fence the markers, not the kernel's per-slot paid flag, stop it.
+    super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, false, 101).unwrap();
+    assert_eq!(b.state, first, "the lenient repeat debits and pays nothing");
+    // A strict object arm naming the first slot again is refused (the object is dropped).
+    let one = check_fee_quad(poster, verifier, 5, claim);
+    assert!(super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &one, true, 102).is_err());
+    assert_eq!(markers(&b.state), 2, "a refused repeat writes no marker");
+}
+
+#[test]
+fn below_the_fence_a_check_fee_batch_writes_no_marker() {
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let mut parent = with_route(PalwChainStateV2::genesis());
+    parent.bonds.insert(bond_key(1), bond_record(1_000, 1));
+    parent.bonds.insert(bond_key(3), bond_record(1_000, 3));
+    let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    let poster = b.note_kernel_bond(&bond_key(1)).unwrap();
+    let verifier = b.note_kernel_bond(&bond_key(3)).unwrap();
+    super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &check_fee_quad(poster, verifier, 5, [7; 64]), false, 100)
+        .unwrap();
+    assert_eq!(markers(&b.state), 0, "dormant: the historical path, no registry read or write");
+}
+
+#[test]
+fn a_free_prompt_receipt_quantum_settles_once_even_if_its_spent_set_is_rewound() {
+    let base = params();
+    let certified = certify_fp_claim(&base, 60, 3);
+    // The registry armed from the spend's block, with a route header to hold the markers.
+    let p = base.clone().with_settlement_once_from(Some(130));
+    let parent = with_route(certified.clone());
+    let (spent_once, _) =
+        apply_palw_transition_v3(&parent, &p, &ctx(6, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 0))).unwrap();
+    let quantum_0 = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::ReceiptSpend, h64(0xFC).as_bytes(), [0; 64], 0);
+    let row = palw_settled_once_v1(&spent_once, &quantum_0).expect("the quantum's worker share is marked");
+    assert_eq!(row.consumer, PalwSettlementConsumerV1::ReceiptBlock);
+    // A second consumer of the SAME quantum — modelled by rewinding the claim's own guard (its `spent` set) — is refused by the
+    // registry alone.
+    let mut rewound = spent_once.clone();
+    if let PalwClaimSourceV2::FreePrompt { spent, .. } = &mut rewound.claims.get_mut(&h64(0xFC)).unwrap().source {
+        spent.remove(&0);
+    }
+    let again = apply_palw_transition_v3(&rewound, &p, &ctx(7, 131, 7), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 0)));
+    assert!(matches!(again, Err(PalwStateV2Error::QuantumAlreadySpent { index: 0, .. })), "{again:?}");
+    // The next quantum is another obligation and pays.
+    let (next, _) =
+        apply_palw_transition_v3(&spent_once, &p, &ctx(7, 131, 7), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 1))).unwrap();
+    assert_eq!(markers(&next), 2);
+    // Below the fence the same spend reads and writes no marker.
+    let (dormant, _) =
+        apply_palw_transition_v3(&parent, &base, &ctx(6, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 0))).unwrap();
+    assert_eq!(markers(&dormant), 0);
+}
+
+#[test]
+fn a_native_receipt_quantum_and_a_free_prompt_quantum_of_the_same_id_are_different_obligations() {
+    let p = armed();
+    let extras = PalwTransitionExtrasV1::default();
+    let parent = with_route(PalwChainStateV2::genesis());
+    let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    let carve = PalwSettlementDebitV1::Issuance { carve: 7 };
+    let native = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::NativeReceiptSpend, [9; 64], [0; 64], 2);
+    let fp = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::ReceiptSpend, [9; 64], [0; 64], 2);
+    assert!(b.settle_once_v1(10, native, PalwSettlementConsumerV1::ReceiptBlock, 7, carve).unwrap().pays());
+    assert!(b.settle_once_v1(10, fp, PalwSettlementConsumerV1::ReceiptBlock, 7, carve).unwrap().pays());
+    // The same native quantum through any other consumer is refused.
+    assert!(!b.settle_once_v1(11, native, PalwSettlementConsumerV1::NativeFinal, 7, carve).unwrap().pays());
+    assert!(!b.settle_once_v1(11, native, PalwSettlementConsumerV1::ReceiptBlock, 7, carve).unwrap().pays());
+    assert_eq!(markers(&b.state), 2);
+}
+
