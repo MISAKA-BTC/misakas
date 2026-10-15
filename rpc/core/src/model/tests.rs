@@ -1722,6 +1722,8 @@ mod mockery {
                 depth_is_lower_bound: mock(),
                 safe_frontier_blue_score: mock(),
                 safe_frontier_daa: mock(),
+                uncertified_final_anchors: 0,
+                security_certification_premise: None,
             }
         }
     }
@@ -3328,7 +3330,7 @@ mod mockery {
                 required_ready_seats: mock(),
                 registration_bond_sompi: mock(),
                 recommended_pool_sompi: mock(),
-                eligibility_stage: mock(),
+                eligibility_stage: "Probation".to_string(),
                 eligibility_next_renewal_daa: mock(),
                 eligibility_subsidy: mock(),
                 eligibility_block_right: mock(),

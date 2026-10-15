@@ -513,6 +513,9 @@ pub fn palw_rule_e_pair_from_openings_v1(
         a: side(a, &ids_b)?,
         b: side(b, &ids_a)?,
         even_split_min: palw_rule_e_even_split_min_v1(usize::try_from(fork_registry_len).unwrap_or(usize::MAX)),
+        // RFC-0018 GAP-R4: a leaf v2 window commits no bond capital, so a client cannot rank by v2 participation (its sides carry
+        // `participation_capital_v2 = 0`); the commitment's form at v2 is the L2FC follow-up.
+        even_split_min_capital_v2: crate::palw_rfc0018_v1::palw_rule_e_even_split_min_capital_v2(0),
     })
 }
 

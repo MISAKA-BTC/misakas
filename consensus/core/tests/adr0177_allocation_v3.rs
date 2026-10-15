@@ -15,7 +15,7 @@ use kaspa_consensus_core::tx::TransactionOutpoint;
 const KAS: u64 = 100_000_000;
 
 fn bond(n: u8) -> PalwBondKeyV2 {
-    PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::Hash::from_bytes([n; 32]), 0))
+    PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::Hash64::from_bytes([n; 64]), 0))
 }
 
 fn model(n: u8) -> Hash64 {

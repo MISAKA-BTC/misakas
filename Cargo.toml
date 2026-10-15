@@ -181,6 +181,7 @@ default-members = [
     "misaka/palw/tir/lower",
     "misaka/palw/tir/sketch",
     "misaka/palw/gen",
+    "misaka/palw/panel",
     "simpa",
     "wasm",
     "wasm/core",
