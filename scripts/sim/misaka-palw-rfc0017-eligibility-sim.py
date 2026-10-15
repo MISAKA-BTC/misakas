@@ -212,12 +212,47 @@ def scenarios() -> list:
     ]
 
 
+# --- the verifier-stake sweep (RFC-0017 §5.1, user decision U-3) ------------------------------------------------------------
+# The attacker's share f of the DRAWN verifier stake — not of total supply — decides P_pass. These are the points the RFC tabulates;
+# 1/3 and 0.6 are the two §7 driver cases (150M attacker verifier stake vs 300M and vs 100M honest verifier stake).
+SWEEP_F = (0.03, 0.05, 0.10, 0.20, 0.25, 1 / 3, 0.40, 0.50, 0.60, 0.75)
+ECON_M, ECON_K = 47, 24                  # the ECON round-2 gate's unapproved interim (readiness §3f), for comparison only
+ATTEMPT_FEE_BILI = 100_000               # PALW_ELIG_ATTEMPT_FEE_DESIGN_V1 in BILI (placeholder; user decision U-4)
+
+
+def single_exam_mc(f: float, trials: int, rng: random.Random, m: int = EXAM_M, k: int = EXAM_K) -> float:
+    """Monte-Carlo of one exam with a closed model: only attacker positions attest positively."""
+    passed = 0
+    for _ in range(trials):
+        if sum(1 for _ in range(m) if rng.random() < f) >= k:
+            passed += 1
+    return passed / trials
+
+
+def sweep(trials: int, rng: random.Random) -> None:
+    per_epoch = ATTEMPTS_NETWORK_PER_EPOCH
+    print("Pass-alone probability vs the attacker's share f of the DRAWN verifier stake (closed model; honest verifiers cannot attest)")
+    print(f"  {'f':>6} {'P_pass 4-of-7':>14} {'MC (n=' + str(trials) + ')':>14} {'any of 64':>10} {'any of 192':>11} {'P_pass 24-of-47':>16}")
+    for f in SWEEP_F:
+        pp = p_pass(f)
+        mc = single_exam_mc(f, trials, rng)
+        print(
+            f"  {f:6.3f} {pp:14.6f} {mc:14.6f} {1 - (1 - pp) ** per_epoch:10.6f} {1 - (1 - pp) ** (3 * per_epoch):11.6f} "
+            f"{p_pass(f, ECON_M, ECON_K):16.3e}"
+        )
+    print(f"  (64 = one 30-day epoch of the network attempt budget; 192 = 90 days. Griefing price of filling it: "
+          f"{ATTEMPTS_NETWORK_PER_EPOCH * ATTEMPT_FEE_BILI:,} BILI burned per epoch at the placeholder fee.)")
+    print()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--trials", type=int, default=2_000)
     ap.add_argument("--seed", type=int, default=17)
+    ap.add_argument("--sweep-trials", type=int, default=200_000)
     args = ap.parse_args()
     rng = random.Random(args.seed)
+    sweep(args.sweep_trials, rng)
 
     print("RFC-0017 analytic gate math (illustrative targets, not payouts; not soundness, not conviction probability)")
     pp = p_pass(0.03)
