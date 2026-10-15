@@ -904,6 +904,52 @@ fn qwen36_router_topk_slot(profile: &PalwShapeProfileV3, out_slot: u32) -> Optio
     Some((table_first_slot + index as u32, node))
 }
 
+/// **Which router family a kernel id is, if it is a router at all** (RFC-0006 routed-reader consumer v2). The two families'
+/// committed rows share one layout — `k` expert ids, then `k` weights — but their WEIGHT halves are two arithmetics (the q36
+/// shifted softmax, Kimi's), so a reader that consumes weights is bound only to its own family; a gather reads ids alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwRouterFamilyV2 {
+    Qwen36,
+    Kimi,
+}
+
+/// The router family `kernel_semantics_id` names (`None`: not a router).
+pub fn palw_router_family_v2(kernel_semantics_id: Hash64) -> Option<PalwRouterFamilyV2> {
+    if kernel_semantics_id == kernel_semantics_id_v1(KDESC_Q36_ROUTER_TOPK) {
+        Some(PalwRouterFamilyV2::Qwen36)
+    } else if kernel_semantics_id == kernel_semantics_id_v1(KDESC_KIMI_ROUTER_TOPK) {
+        Some(PalwRouterFamilyV2::Kimi)
+    } else {
+        None
+    }
+}
+
+/// **The router a routed reader at `out_slot` reads** (RFC-0006 routed-reader consumer v2).
+///
+/// `bound` is `None` on every legacy path: the table's unique q36 router, exactly [`qwen36_router_topk_slot`]. `Some(slot)` is the
+/// router the class registrant's immutable per-reader binding names (`crate::palw_router_binding_v2`); it is accepted only as a
+/// router node (either family) of the SAME layer-table instance as the reader, strictly before it in table order — anything else
+/// is `None` (unadjudicable), never a substitute. The court never chooses: the binding is the class's, fixed before the claim.
+pub(crate) fn qwen36_router_slot_for_reader_v2(
+    profile: &PalwShapeProfileV3,
+    out_slot: u32,
+    bound: Option<u32>,
+) -> Option<(u32, &crate::palw_step::PalwStepNodeV1)> {
+    let Some(slot) = bound else { return qwen36_router_topk_slot(profile, out_slot) };
+    let (_, layer) = profile.resolve_node_slot(out_slot)?;
+    let layer = layer?;
+    let table_first_slot = out_slot - intra_table_index(profile, out_slot)? as u32;
+    let table_len = u32::try_from(profile.layer_table(layer).len()).ok()?;
+    if slot < table_first_slot || slot >= table_first_slot.checked_add(table_len)? || slot >= out_slot {
+        return None;
+    }
+    let (router, router_layer) = profile.resolve_node_slot(slot)?;
+    if router_layer != Some(layer) || palw_router_family_v2(router.kernel_semantics_id).is_none() {
+        return None;
+    }
+    Some((slot, router))
+}
+
 /// **Recompute one step of the A16 tier or of Qwen3.6's own graph** (ADR-0052).
 ///
 /// Every arm calls the SAME function the engine calls. That is the point and not an economy: a
@@ -1041,6 +1087,7 @@ fn kimi_row(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn qwen36_row(
     op: Qwen36Op,
     node: &crate::palw_step::PalwStepNodeV1,
@@ -1051,6 +1098,9 @@ fn qwen36_row(
     kv_len: u64,
     gather: (&PalwStepCoordinateV1, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1<'_>, &[u32]),
     initial_gdn: Option<&[u32]>,
+    // RFC-0006 routed-reader consumer v2: the router the class's binding names for this reader. `None` on every legacy path (the
+    // table's unique q36 router, byte for byte the shipped rule).
+    bound_router: Option<u32>,
 ) -> Result<Vec<u32>, PalwStepRefuteError> {
     use crate::palw_base0_a16 as a16;
     use crate::palw_base0_a16::A16QuantParams;
@@ -1244,7 +1294,8 @@ fn qwen36_row(
     // router's own — a node whose block count disagrees with the routing is not this graph.
     let routed_ids = |k: usize| -> Result<Vec<usize>, PalwStepRefuteError> {
         let row = router_row()?;
-        let (_, topk_node) = qwen36_router_topk_slot(profile, gather.0.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)?;
+        let (_, topk_node) = qwen36_router_slot_for_reader_v2(profile, gather.0.node_slot, bound_router)
+            .ok_or(PalwStepRefuteError::Unadjudicable)?;
         let topk_width = match topk_node.out_len {
             crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as usize,
             crate::palw_step::PalwStepOutLenV1::KvScaled { .. } => return Err(PalwStepRefuteError::Unadjudicable),
@@ -3880,13 +3931,29 @@ fn canonical_input_leaves_anchored(
     program: KernelProgram,
     anchored: bool,
 ) -> Option<Vec<Vec<(u64, PalwStepCoordinateV1)>>> {
-    canonical_input_leaves_with_start_v2(profile, context, out_slot, out_coord, program, anchored, None)
+    canonical_input_leaves_with_start_v2(profile, context, out_slot, out_coord, program, anchored, None, None)
+}
+
+/// **The prover's view of a routed reader's canonical input set under RFC-0006's consumer v2** — [`canonical_input_leaves_v1`] with
+/// the routing appendix read from `bound_router`, the router the class registrant's immutable binding names for this reader
+/// (`crate::palw_router_binding_v2`). A builder passes exactly the row the chain holds for the class, or its set is not the
+/// canonical one. `None` is the legacy set exactly.
+pub fn canonical_input_leaves_routed_v2(
+    profile: &crate::palw_step::PalwShapeProfileV3,
+    ctx: &crate::palw_v2::PalwJobContextV2,
+    coord: &PalwStepCoordinateV1,
+    bound_router: Option<u32>,
+) -> Option<Vec<Vec<(u64, PalwStepCoordinateV1)>>> {
+    let (node, _) = profile.resolve_node_slot(coord.node_slot)?;
+    let program = resolve_kernel(&node.kernel_semantics_id)?;
+    canonical_input_leaves_with_start_v2(profile, ctx, coord.node_slot, coord, program, false, None, bound_router)
 }
 
 // V1 always passes None and preserves its input enumeration. The versioned
 // recurrence consumer derives Some(start) only after authenticating that exact
 // checkpoint. Construct the bounded suffix directly, never a full-prefix Vec
 // followed by filtering it.
+#[allow(clippy::too_many_arguments)]
 fn canonical_input_leaves_with_start_v2(
     profile: &PalwShapeProfileV3,
     context: &crate::palw_v2::PalwJobContextV2,
@@ -3895,6 +3962,8 @@ fn canonical_input_leaves_with_start_v2(
     program: KernelProgram,
     anchored: bool,
     recurrence_start: Option<u32>,
+    // RFC-0006 routed-reader consumer v2: the bound router for a routed reader (`None`: the legacy unique q36 router).
+    bound_router: Option<u32>,
 ) -> Option<Vec<Vec<(u64, PalwStepCoordinateV1)>>> {
     let (node, layer) = profile.resolve_node_slot(out_slot)?;
     let table_first_slot = out_slot - intra_table_index(profile, out_slot)? as u32;
@@ -4157,7 +4226,9 @@ fn canonical_input_leaves_with_start_v2(
     // opens it against the step root like every other input, and refused (`None`) when the table
     // holds zero or two routers: a court that had to choose would be choosing the evidence.
     if qwen36_reads_routing_v1(node) {
-        let (router_slot, router) = qwen36_router_topk_slot(profile, out_slot)?;
+        // RFC-0006 consumer v2: the router the class's binding names for this reader, when one is bound; otherwise the table's
+        // unique q36 router, exactly as before.
+        let (router_slot, router) = qwen36_router_slot_for_reader_v2(profile, out_slot, bound_router)?;
         let len = match router.out_len {
             crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
             crate::palw_step::PalwStepOutLenV1::KvScaled { .. } => return None,
@@ -4553,6 +4624,22 @@ pub fn check_execution_step_refutation_opened_capped_v1(
     prompt_ids_opening: Option<&crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
     max_step_leaf_count: u64,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    check_execution_step_refutation_routed_v2(refutation, weights, prompt_ids_opening, max_step_leaf_count, None)
+}
+
+/// **[`check_execution_step_refutation_opened_capped_v1`] under RFC-0006's routed-reader consumer v2.** `bound_router` is the
+/// router the class registrant's immutable per-reader binding names for the challenged reader — read by the CALLER off the chain's
+/// row for the claim's class (`crate::palw_router_binding_v2`), never from the accusation. `None` is the legacy court byte for
+/// byte. A routed reader under a binding appends the BOUND router's committed row (authenticated against the step root like every
+/// other input), derives its score universe and width from that router node, and uses its ids for the expert gather; a reader
+/// whose binding names no admissible router of its own table is unadjudicable, never re-pointed.
+pub fn check_execution_step_refutation_routed_v2(
+    refutation: &PalwExecutionStepRefutationV1,
+    weights: &dyn PalwWeightOracleV1,
+    prompt_ids_opening: Option<&crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
+    max_step_leaf_count: u64,
+    bound_router: Option<u32>,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     use crate::palw_step_leg::{PalwStepEvidenceV1, PalwStepRefutationV1, check_step_refutation_capped_v1};
 
     let binding = &refutation.binding;
@@ -4571,8 +4658,14 @@ pub fn check_execution_step_refutation_opened_capped_v1(
         Err(e) => return Err(e.into()),
     }
 
-    let (recomputed_row, row_offset, tile_start) =
-        recompute_challenged_row_v1(refutation, refutation.output_preimage.coord, weights, prompt_ids_opening, max_step_leaf_count)?;
+    let (recomputed_row, row_offset, tile_start) = recompute_challenged_row_with_v2(
+        refutation,
+        refutation.output_preimage.coord,
+        weights,
+        prompt_ids_opening,
+        max_step_leaf_count,
+        bound_router,
+    )?;
 
     // 4) Compare the challenged tile's slice, exact bits.
     let committed: Vec<u32> =
@@ -4607,6 +4700,16 @@ fn verified_canonical_inputs_v1(
     out_coord: crate::palw_step::PalwStepCoordinateV1,
     max_step_leaf_count: u64,
 ) -> Result<(Option<VerifiedKvAnchor<'_>>, Vec<Vec<(u64, PalwStepCoordinateV1)>>), PalwStepRefuteError> {
+    verified_canonical_inputs_with_v2(refutation, out_coord, max_step_leaf_count, None)
+}
+
+/// [`verified_canonical_inputs_v1`] with RFC-0006's bound router (`None`: the legacy check exactly).
+fn verified_canonical_inputs_with_v2(
+    refutation: &PalwExecutionStepRefutationV1,
+    out_coord: crate::palw_step::PalwStepCoordinateV1,
+    max_step_leaf_count: u64,
+    bound_router: Option<u32>,
+) -> Result<(Option<VerifiedKvAnchor<'_>>, Vec<Vec<(u64, PalwStepCoordinateV1)>>), PalwStepRefuteError> {
     let binding = &refutation.binding;
     let profile_hash = binding.shape_profile.shape_profile_id();
     let (node, _layer) = binding.shape_profile.resolve_node_slot(out_coord.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)?;
@@ -4622,13 +4725,15 @@ fn verified_canonical_inputs_v1(
         Some(ops) => Some(verify_kv_anchor(binding, ops, out_coord.call_index, out_coord.position, max_step_leaf_count)?),
         None => None,
     };
-    let required = canonical_input_leaves_anchored(
+    let required = canonical_input_leaves_with_start_v2(
         &binding.shape_profile,
         &binding.job_context,
         out_coord.node_slot,
         &out_coord,
         program,
         anchor.is_some(),
+        None,
+        bound_router,
     )
     .ok_or(PalwStepRefuteError::Unadjudicable)?;
     if refutation.inputs.len() != required.len() {
@@ -4690,13 +4795,25 @@ fn recompute_challenged_row_v1(
     prompt_ids_opening: Option<&crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
     max_step_leaf_count: u64,
 ) -> Result<(Vec<u32>, usize, usize), PalwStepRefuteError> {
+    recompute_challenged_row_with_v2(refutation, out_coord, weights, prompt_ids_opening, max_step_leaf_count, None)
+}
+
+/// [`recompute_challenged_row_v1`] with RFC-0006's bound router (`None`: the legacy recompute exactly).
+fn recompute_challenged_row_with_v2(
+    refutation: &PalwExecutionStepRefutationV1,
+    out_coord: crate::palw_step::PalwStepCoordinateV1,
+    weights: &dyn PalwWeightOracleV1,
+    prompt_ids_opening: Option<&crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
+    max_step_leaf_count: u64,
+    bound_router: Option<u32>,
+) -> Result<(Vec<u32>, usize, usize), PalwStepRefuteError> {
     let binding = &refutation.binding;
     let (node, layer) = binding.shape_profile.resolve_node_slot(out_coord.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)?;
     let program = resolve_kernel(&node.kernel_semantics_id).ok_or(PalwStepRefuteError::Unadjudicable)?;
 
     // 2) Canonical input set: exact leaves, exact order, all verified against the tree
     //    ([`verified_canonical_inputs_v1`], the same check the committed-half retrieval runs).
-    let (anchor, required) = verified_canonical_inputs_v1(refutation, out_coord, max_step_leaf_count)?;
+    let (anchor, required) = verified_canonical_inputs_with_v2(refutation, out_coord, max_step_leaf_count, bound_router)?;
 
     // 3) Recompute the node's full output row(s) for the challenged position: concatenate
     //    each logical input row's tiles back into one row.
@@ -4761,7 +4878,17 @@ fn recompute_challenged_row_v1(
     };
     let (prompt_ids, generated) = check_refutation_id_carriage_v1(refutation, prompt_ids_opening)?;
     let (recomputed_row, row_offset) =
-        run_program(program, node, layer, &binding.shape_profile, &inputs, weights, kv_len, (&out_coord, prompt_ids, generated))?;
+        run_program_v2(
+            program,
+            node,
+            layer,
+            &binding.shape_profile,
+            &inputs,
+            weights,
+            kv_len,
+            (&out_coord, prompt_ids, generated),
+            bound_router,
+        )?;
 
     let tile_start = out_coord.tile_index as usize * node.tile_len as usize;
     Ok((recomputed_row, row_offset, tile_start))
@@ -5003,7 +5130,28 @@ const ONE_F32: u32 = 0x3F80_0000;
 
 /// Runs one kernel program over the resolved inputs, producing the node's full output row
 /// at the challenged position (concatenated head-major where heads exist).
+///
+/// The legacy entry: [`run_program_v2`] with no routed-reader binding, byte for byte the court it was. Production paths call
+/// `run_program_v2` directly; the hostile-totality controls still drive this spelling.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(test), allow(dead_code))]
 fn run_program(
+    program: KernelProgram,
+    node: &crate::palw_step::PalwStepNodeV1,
+    layer: Option<u16>,
+    profile: &PalwShapeProfileV3,
+    inputs: &[Vec<u32>],
+    weights: &dyn PalwWeightOracleV1,
+    kv_len: u64,
+    gather: (&PalwStepCoordinateV1, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1<'_>, &[u32]),
+) -> Result<(Vec<u32>, usize), PalwStepRefuteError> {
+    run_program_v2(program, node, layer, profile, inputs, weights, kv_len, gather, None)
+}
+
+/// [`run_program`] with RFC-0006's routed-reader consumer v2: `bound_router` is the router slot the class's immutable binding names
+/// for this reader (`None`: the legacy unique q36 router).
+#[allow(clippy::too_many_arguments)]
+fn run_program_v2(
     program: KernelProgram,
     node: &crate::palw_step::PalwStepNodeV1,
     layer: Option<u16>,
@@ -5023,6 +5171,7 @@ fn run_program(
     // exists only on the far side of a check, so there is no path by which this frame reads an id
     // nobody proved.
     gather: (&PalwStepCoordinateV1, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1<'_>, &[u32]),
+    bound_router: Option<u32>,
     // **The index in the node's output row at which the returned slice begins** (ADR-0049
     // Decision B). Every kernel but the BASE-0 matmul recomputes the whole row and returns it at
     // offset 0; the matmul opens only the challenged tile's weight rows, so it can only return
@@ -5086,7 +5235,7 @@ fn run_program(
     };
     let row = match program {
         KernelProgram::Base0(op) => base0_row(op, node, layer, profile, inputs, weights, kv_len, gather),
-        KernelProgram::Qwen36(op) => qwen36_row(op, node, layer, profile, inputs, weights, kv_len, gather, None),
+        KernelProgram::Qwen36(op) => qwen36_row(op, node, layer, profile, inputs, weights, kv_len, gather, None, bound_router),
         KernelProgram::Kimi(op) => kimi_row(op, node, profile, inputs, kv_len),
         KernelProgram::L2Norm => {
             let x = inputs.first().ok_or(PalwStepRefuteError::InputSetNotCanonical("l2norm needs one input row"))?;

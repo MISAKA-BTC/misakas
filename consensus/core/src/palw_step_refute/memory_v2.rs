@@ -493,6 +493,7 @@ pub fn check_gdn_step_refutation_v2(
         program,
         false,
         Some(start.first_position),
+        None,
     )
     .ok_or(PalwStepRefuteError::Unadjudicable)?;
     let mut inputs = verified_input_rows_v2(binding, &r.step.inputs, &required, max_leaves)?;
@@ -547,6 +548,7 @@ pub fn check_gdn_step_refutation_v2(
                     ) + 1,
                     (&coord, prompt, &[]),
                     initial_head,
+                    None,
                 )?,
                 coord.tile_index as usize * node.tile_len as usize,
             )
