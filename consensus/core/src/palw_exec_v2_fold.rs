@@ -1079,7 +1079,7 @@ fn accept_slice_v2(
     {
         let held = builder.state.reserved_exposure.get(&slice.executor_bond).copied().unwrap_or(0);
         let next = held.checked_add(root.executor_exposure).ok_or(PalwStateV2Error::Overflow("exec v2 executor exposure"))?;
-        builder.write_exposure(slice.executor_bond, Some(next));
+        builder.write_exposure(slice.executor_bond, Some(next))?;
     }
     builder.write_exec_slice(
         (slice.root_claim_id, slice.slice_index),
@@ -1266,7 +1266,7 @@ fn release_executor_exposure_v2(
         let held = builder.state.reserved_exposure.get(&bond).copied().unwrap_or(0);
         let next =
             held.checked_sub(root.executor_exposure).ok_or(PalwStateV2Error::Overflow("exec v2 executor exposure underflow"))?;
-        builder.write_exposure(bond, if next == 0 { None } else { Some(next) });
+        builder.write_exposure(bond, if next == 0 { None } else { Some(next) })?;
     }
     Ok(())
 }

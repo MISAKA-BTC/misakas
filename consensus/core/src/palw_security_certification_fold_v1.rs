@@ -261,7 +261,7 @@ fn credit_certified_v1(
         let key = palw_certification_payout_key_v1(claim_id);
         let held = builder.state.pending_payouts.get(&key).map(|p| p.amount).unwrap_or(0);
         let amount = held.checked_add(row.held_reward).ok_or(PalwStateV2Error::Overflow("certified reward"))?;
-        builder.write_payout(key, Some(PalwPayoutV2 { payload: Hash64::from_bytes(row.payout_payload), amount }));
+        builder.write_payout(key, Some(PalwPayoutV2 { payload: Hash64::from_bytes(row.payout_payload), amount }))?;
     }
     Ok(())
 }

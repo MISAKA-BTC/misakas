@@ -444,7 +444,7 @@ pub(super) fn tick_rfc0016_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
             .map(|(k, _)| k.clone())
             .collect();
         for k in stale {
-            builder.write_kernel_row(PALW_RFC0016_TELEMETRY_TABLE_V1, k, None);
+            builder.write_kernel_row(PALW_RFC0016_TELEMETRY_TABLE_V1, k, None)?;
         }
     }
     Ok(())
@@ -470,7 +470,7 @@ fn rfc0016_snapshot_tick_v1(
         .map(|(k, _)| k.clone())
         .collect();
     for k in stale {
-        builder.write_kernel_row(PALW_RFC0016_RIGHTS_TABLE_V1, k, None);
+        builder.write_kernel_row(PALW_RFC0016_RIGHTS_TABLE_V1, k, None)?;
     }
     let consumed = palw_rfc0016_rights_consumed_now_v1(&builder.state, builder.params, ownership, epoch.epoch_index);
     let weights = builder.state.bond_budget.as_ref().and_then(|b| b.rights_weights_v1());

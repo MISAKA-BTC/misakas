@@ -61,7 +61,7 @@ fn policies(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Re
         return Err(refused("funded execution immutable policy changed"));
     }
     if stored.is_none() {
-        builder.write_kernel_row(EXECUTION_POLICY_TABLE_V11, Vec::new(), Some(bytes));
+        builder.write_kernel_row(EXECUTION_POLICY_TABLE_V11, Vec::new(), Some(bytes))?;
     }
     Ok(p)
 }
@@ -377,9 +377,9 @@ fn register(
         },
     };
     owners.push(c.id());
-    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, key(&c.id()), Some(key(&row)));
-    builder.write_kernel_row(EXECUTION_CLASS_OWNER_TABLE_V11, key(signer), Some(key(&owners)));
-    builder.note_kernel_bond(signer);
+    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, key(&c.id()), Some(key(&row)))?;
+    builder.write_kernel_row(EXECUTION_CLASS_OWNER_TABLE_V11, key(signer), Some(key(&owners)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 fn request_class(bytes: &[u8]) -> Result<Digest, PalwStateV2Error> {
@@ -439,9 +439,9 @@ fn prepare(
         return Err(refused("native preparation already present"));
     }
     owners.push(prep);
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&prep), Some(key(&row)));
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(signer), Some(key(&owners)));
-    builder.note_kernel_bond(signer);
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&prep), Some(key(&row)))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(signer), Some(key(&owners)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 fn nonce_witness(requester: Digest, next: &NativeRequesterNonceRowV11) -> NativeRequesterNonceWitnessV11 {
@@ -720,18 +720,18 @@ fn fund(
     write_shard(builder, &shard, job_id);
     write_trace(builder, &trace, 0, job_id);
     write_source_shard(builder, &source, job_id);
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(16u8, job_id, 1u8)), Some(key(&source_plan.record())));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(16u8, job_id, 1u8)), Some(key(&source_plan.record())))?;
     if let Some(c) = final_admission {
         final27::write_fund(builder, job_id, c);
     }
     owners.push(job_id);
     producer_jobs.push(job_id);
-    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, key(&(1u8, producer)), Some(key(&producer_jobs)));
-    builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, key(&requester_operator), Some(key(&next)));
-    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&job_id), Some(key(&row)));
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, key(&(1u8, producer)), Some(key(&producer_jobs)))?;
+    builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, key(&requester_operator), Some(key(&next)))?;
+    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&job_id), Some(key(&row)))?;
     if let Some(admission) = capacity {
         capacity::write(builder, admission, job_id);
-        builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(23u8, request.preparation)), None);
+        builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(23u8, request.preparation)), None)?;
     }
     builder.write_kernel_row(
         EXECUTION_CREDIT_TABLE_V11,
@@ -744,14 +744,14 @@ fn fund(
             plan: fees,
             earned: 0,
         })),
-    );
-    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, key(signer), Some(key(&owners)));
-    builder.write_kernel_row(EXECUTION_JOB_COUNT_TABLE_V11, vec![], Some(key(&(count + 1))));
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&request.preparation), None);
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, consent_key, None);
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(18u8, request.preparation)), None);
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(13u8, producer)), Some(key(&consents)));
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(signer), Some(key(&preparations)));
+    )?;
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, key(signer), Some(key(&owners)))?;
+    builder.write_kernel_row(EXECUTION_JOB_COUNT_TABLE_V11, vec![], Some(key(&(count + 1))))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&request.preparation), None)?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, consent_key, None)?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(18u8, request.preparation)), None)?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(13u8, producer)), Some(key(&consents)))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(signer), Some(key(&preparations)))?;
     Ok(())
 }
 pub(super) fn apply(
@@ -898,10 +898,10 @@ fn commit(
             super::palw_bond_budget_fold_v1::native_income_id_v1(Hash64::from_bytes(id), signer, 19),
         )?;
     }
-    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&id), Some(key(&row)));
-    builder.write_kernel_row(EXECUTION_PROTECTED_TABLE_V11, key(&id), Some(bytes.to_vec()));
-    builder.write_kernel_row(EXECUTION_VECTOR_JOB_TABLE_V11, key(&trace.vector), Some(key(&id)));
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)));
+    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&id), Some(key(&row)))?;
+    builder.write_kernel_row(EXECUTION_PROTECTED_TABLE_V11, key(&id), Some(bytes.to_vec()))?;
+    builder.write_kernel_row(EXECUTION_VECTOR_JOB_TABLE_V11, key(&trace.vector), Some(key(&id)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)))?;
     Ok(())
 }
 fn credit(
@@ -962,7 +962,7 @@ fn credit(
         }
         builder.pay_native_recipient_v1(original, row.header.producer, 11, ctx.daa_score, s.producer_credit, queue, true)?;
         if unique27 {
-            builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.header.producer_payout, amount: s.producer_credit }));
+            builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.header.producer_payout, amount: s.producer_credit }))?;
         } else {
             builder.add_kernel_payout(row.header.producer_payout, s.producer_credit)?;
         }
@@ -981,7 +981,7 @@ fn credit(
         if builder.state.pending_payouts.contains_key(&queue) {
             return Err(refused("native original principal queue already occupied"));
         }
-        builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.header.requester_payout, amount: s.requester_refund }));
+        builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.header.requester_payout, amount: s.requester_refund }))?;
     }
     if s.finder_credit != 0 {
         let finder = s.finder.ok_or_else(|| refused("native finder credit lacks original finder"))?;
@@ -1003,8 +1003,8 @@ fn credit(
             builder.add_kernel_payout(payout, s.finder_credit)?;
         }
     }
-    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&row.header.job_id), Some(key(row)));
-    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, key(&row.header.job_id), Some(key(&credit)));
+    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&row.header.job_id), Some(key(row)))?;
+    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, key(&row.header.job_id), Some(key(&credit)))?;
     Ok(())
 }
 fn close_adjudicated_quota(
@@ -1266,8 +1266,8 @@ fn apply_chunk_inner(
     // Only the final prepaid assembly establishes the whole original group hash.
     shard.accept_protected_fragment(&p.quota, &epoch, &plan, &paid).map_err(refused)?;
     let complete = shard.seal_row().is_some_and(|s| s.fragments.complete());
-    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, group_key.clone(), Some(key(&header)));
-    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, part_key, Some(chunk.bytes.clone()));
+    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, group_key.clone(), Some(key(&header)))?;
+    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, part_key, Some(chunk.bytes.clone()))?;
     write_shard(builder, &shard, id);
     if !complete {
         return Ok(());
@@ -1300,9 +1300,9 @@ fn apply_chunk_inner(
     {
         return Err(refused("native assembled own proof actor/target differs"));
     }
-    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, group_key, None);
+    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, group_key, None)?;
     for i in 0..header.count {
-        builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&(15u8, seal, i)), None);
+        builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&(15u8, seal, i)), None)?;
     }
     // All original parts are signed by this same actual native bond. Its actor
     // is not taken from an alleged balance, proof metadata or inner signature.
@@ -1409,10 +1409,10 @@ fn accept(
             )?
             .root(),
         };
-        builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(18u8, id)), Some(key(&(extra.root(), extra))));
+        builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(18u8, id)), Some(key(&(extra.root(), extra))))?;
     }
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(13u8, id)), Some(key(&(consent.root(), consent))));
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(13u8, *signer)), Some(key(&ids)));
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(13u8, id)), Some(key(&(consent.root(), consent))))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(13u8, *signer)), Some(key(&ids)))?;
     Ok(())
 }
 fn availability_terms(consent: &NativeExecutionConsentV13, source: Digest, trace: Digest, horizons: &ExecutionHorizonsV11) -> Digest {
@@ -1508,6 +1508,6 @@ fn pay_delivery_fee(
     }
     // Original requester coins above the signed producer cap are burned.
     // Valid original data is accepted when the remaining fee cap is zero.
-    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, key(&(19u8, id)), Some(key(&row)));
+    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, key(&(19u8, id)), Some(key(&row)))?;
     Ok(())
 }

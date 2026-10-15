@@ -219,13 +219,13 @@ pub(super) fn demand(
     state.required_retained_until = state.required_retained_until.max(proof_until);
     let demand = d.id();
     capacity::request(builder, id, request.lane, request.entitlement, request.slot, 1, demand.as_bytes(), ctx.daa_score, deadline)?;
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(14u8, id, counts.next_ordinal)), Some(key(&demand)));
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(14u8, id, counts.next_ordinal)), Some(key(&demand)))?;
     counts.next_ordinal += 1;
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, id)), Some(key(&counts)));
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&demand), Some(key(&d)));
-    builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, slot_key(signer, request.slot), Some(key(&demand)));
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)));
-    builder.note_kernel_bond(signer);
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, id)), Some(key(&counts)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&demand), Some(key(&d)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, slot_key(signer, request.slot), Some(key(&demand)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 fn close_demand(builder: &mut TransitionBuilder<'_>, mut d: NativeExecutionDemandV11) -> Result<(), PalwStateV2Error> {
@@ -236,9 +236,9 @@ fn close_demand(builder: &mut TransitionBuilder<'_>, mut d: NativeExecutionDeman
         counts.open_ordinary = counts.open_ordinary.checked_sub(1).ok_or_else(|| refused("native ordinary DA count underflow"))?;
     }
     d.body.settled = true;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&d.id()), Some(key(&d)));
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&d.job_id), Some(key(&state)));
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, d.job_id)), Some(key(&counts)));
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&d.id()), Some(key(&d)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&d.job_id), Some(key(&state)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, d.job_id)), Some(key(&counts)))?;
     Ok(())
 }
 pub(super) fn answer(
@@ -305,7 +305,7 @@ pub(super) fn answer(
         header: FlatVectorServedHeaderV9 { answered_daa: ctx.daa_score, answer_root: flat_vector_answer_root_v9(&bytes[68..]) },
         answer: bytes[68..].to_vec(),
     };
-    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, d.body.unit.key(&d.body.vector), Some(key(&served)));
+    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, d.body.unit.key(&d.body.vector), Some(key(&served)))?;
     close_demand(builder, d)
 }
 pub(super) fn settle(

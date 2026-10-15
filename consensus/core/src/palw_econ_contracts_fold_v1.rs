@@ -92,7 +92,7 @@ pub(super) fn open_model_verification_tally_v1(
         policy: policy.id(),
     };
     super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
-    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, id.to_vec(), Some(encode(&row)));
+    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, id.to_vec(), Some(encode(&row)))?;
     Ok(row)
 }
 
@@ -143,7 +143,7 @@ pub(super) fn attest_model_verification_v1(
     if !filled {
         return Err(refuse("the signer holds no open drawn slot of this tally"));
     }
-    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, attestation.tally.to_vec(), Some(encode(&row)));
+    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, attestation.tally.to_vec(), Some(encode(&row)))?;
     Ok(())
 }
 
@@ -283,7 +283,7 @@ pub(super) fn gate_final_reward_v1(
             PALW_MODEL_VERIFICATION_TABLE_V1,
             palw_model_verification_deferred_key_v1(&claim_id.as_bytes()),
             Some(encode(&deferred)),
-        );
+        )?;
     }
     Ok(gated.payable)
 }
@@ -379,7 +379,7 @@ pub(super) fn tick_model_verification_gate_v1(
             frozen.push((palw_model_verification_context_key_v1(&id), encode(&row)));
         }
         for (key, bytes) in frozen {
-            builder.write_kernel_row(table, key, Some(bytes));
+            builder.write_kernel_row(table, key, Some(bytes))?;
         }
     }
     // 2. Open the tallies whose beacon locked.
@@ -397,7 +397,7 @@ pub(super) fn tick_model_verification_gate_v1(
                 Ok(B::Locked(beacon)) => beacon.output,
                 Ok(B::Unavailable { .. } | B::Vetoed { .. }) | Err(_) => {
                     context.unavailable_daa = Some(now);
-                    builder.write_kernel_row(table, key, Some(encode(&context)));
+                    builder.write_kernel_row(table, key, Some(encode(&context)))?;
                     continue;
                 }
                 Ok(_) => continue,
@@ -444,7 +444,7 @@ pub(super) fn tick_model_verification_gate_v1(
             pool.dedup_by(|a, b| a.0 == b.0);
             if pool.is_empty() {
                 context.unavailable_daa = Some(now);
-                builder.write_kernel_row(table, key, Some(encode(&context)));
+                builder.write_kernel_row(table, key, Some(encode(&context)))?;
                 continue;
             }
             // Capacity: the undecided tallies held at once. A context past capacity waits (its beacon stays locked).
@@ -468,7 +468,7 @@ pub(super) fn tick_model_verification_gate_v1(
                 &final_claims,
                 &pool,
             )?;
-            builder.write_kernel_row(table, key, None);
+            builder.write_kernel_row(table, key, None)?;
         }
     }
     // 3. Take the decided tallies.
@@ -493,7 +493,7 @@ pub(super) fn tick_model_verification_gate_v1(
     for (key, row) in &deferred {
         match model_epoch_outcome_v1(builder, &policy, &row.model, row.epoch, now) {
             PalwModelVerificationOutcomeV1::Pending => {}
-            PalwModelVerificationOutcomeV1::Unattested => builder.write_kernel_row(table, key.clone(), None),
+            PalwModelVerificationOutcomeV1::Unattested => builder.write_kernel_row(table, key.clone(), None)?,
             PalwModelVerificationOutcomeV1::Attested | PalwModelVerificationOutcomeV1::NoFinalClaim => {
                 let queue = palw_model_verification_deferred_payout_key_v1(&row.claim);
                 if builder.state.pending_payouts.len() >= PALW_V2_MAX_PENDING_PAYOUTS
@@ -501,8 +501,8 @@ pub(super) fn tick_model_verification_gate_v1(
                 {
                     continue; // the queue drains first; the release waits (never dropped, never doubled)
                 }
-                builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.payload, amount: row.amount }));
-                builder.write_kernel_row(table, key.clone(), None);
+                builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.payload, amount: row.amount }))?;
+                builder.write_kernel_row(table, key.clone(), None)?;
             }
         }
     }
@@ -535,7 +535,7 @@ pub(super) fn tick_model_verification_gate_v1(
         out
     };
     for key in retired {
-        builder.write_kernel_row(table, key, None);
+        builder.write_kernel_row(table, key, None)?;
     }
     Ok(())
 }
@@ -680,7 +680,7 @@ pub(super) fn consent_horizon_extension_v1(
         super::palw_kernel_route_fold_v1::flush(builder, &ledger, &before);
         row.applied_daa = Some(now);
     }
-    builder.write_kernel_row(PALW_HORIZON_EXTENSION_TABLE_V1, key, Some(encode(&row)));
+    builder.write_kernel_row(PALW_HORIZON_EXTENSION_TABLE_V1, key, Some(encode(&row)))?;
     Ok(())
 }
 
@@ -760,8 +760,8 @@ pub(super) fn sign_minimum_price_contract_v1(
         row.signed_daa = Some(now);
     }
     super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
-    builder.write_kernel_row(PALW_MINIMUM_PRICE_TABLE_V1, key, Some(encode(&row)));
-    builder.write_kernel_row(PALW_MINIMUM_PRICE_TABLE_V1, job_key, Some(id.to_vec()));
+    builder.write_kernel_row(PALW_MINIMUM_PRICE_TABLE_V1, key, Some(encode(&row)))?;
+    builder.write_kernel_row(PALW_MINIMUM_PRICE_TABLE_V1, job_key, Some(id.to_vec()))?;
     Ok(())
 }
 
@@ -885,7 +885,7 @@ pub(super) fn sweep_econ_contracts_v1(builder: &mut TransitionBuilder<'_>, ctx: 
         }
     }
     for (table, key) in retire {
-        builder.write_kernel_row(table, key, None);
+        builder.write_kernel_row(table, key, None)?;
     }
     Ok(())
 }

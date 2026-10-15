@@ -236,9 +236,9 @@ pub(super) fn seal(
     state.required_until = state.required_until.max(horizon);
     native::write_shard(builder, &shard, id);
     native::write_trace(builder, &trace, 1, key.root());
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(19, &key.root()), Some(bytes(&row)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &id), Some(bytes(&state)));
-    builder.note_kernel_bond(signer);
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(19, &key.root()), Some(bytes(&row)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &id), Some(bytes(&state)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 
@@ -342,8 +342,8 @@ pub(super) fn apply_chunk(
     }
     shard.accept_protected_fragment(&p.execution.quota, &epoch, cached.plan(), &paid).map_err(refused)?;
     let complete = shard.seal_row().is_some_and(|s| s.fragments.complete());
-    builder.write_kernel_row(STAGE_TABLE_V14, group_key.clone(), Some(bytes(&group)));
-    builder.write_kernel_row(STAGE_TABLE_V14, part_key, Some(chunk.bytes.clone()));
+    builder.write_kernel_row(STAGE_TABLE_V14, group_key.clone(), Some(bytes(&group)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, part_key, Some(chunk.bytes.clone()))?;
     native::write_shard(builder, &shard, h.id);
     if !complete {
         return Ok(());
@@ -379,9 +379,9 @@ pub(super) fn apply_chunk(
     {
         return Err(refused("stage own signed proof inner actor/seal/domain differs"));
     }
-    builder.write_kernel_row(STAGE_TABLE_V14, group_key, None);
+    builder.write_kernel_row(STAGE_TABLE_V14, group_key, None)?;
     for i in 0..group.count {
-        builder.write_kernel_row(STAGE_TABLE_V14, bytes(&(23u8, seal, i)), None);
+        builder.write_kernel_row(STAGE_TABLE_V14, bytes(&(23u8, seal, i)), None)?;
     }
     super::super::apply_object(builder, ctx, &inner)
 }
@@ -563,7 +563,7 @@ pub(super) fn reveal(
         };
         // A theorem denies future aliases. Every existing job still needs its
         // own paid original court/default and actual conserved money below.
-        builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(14, &fact.relation), Some(bytes(&fact)));
+        builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(14, &fact.relation), Some(bytes(&fact)))?;
     }
     if builder.state.bonds.get(&h.producer).is_none_or(|b| b.collateral < reserve) {
         return Err(refused("stage owncourt original liability not fully collectible"));
@@ -644,7 +644,7 @@ pub(super) fn reveal(
     if collected != outcome.collected_original_slash {
         return Err(refused("stage owncourt actual collected slash differs"));
     }
-    builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.requester_payout, amount: outcome.requester_refund }));
+    builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.requester_payout, amount: outcome.requester_refund }))?;
     if outcome.finder_credit > 0 {
         if builder.params.reporter_income_active_at(ctx.daa_score) {
             let award = Hash64::from_bytes(misaka_palw_kernel::hash::object_id(
@@ -668,9 +668,9 @@ pub(super) fn reveal(
     original.book_bytes = bytes(&book);
     original.header.book_bytes_len = original.book_bytes.len() as u32;
     own.spent = true;
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(5, &own.job), Some(bytes(&original)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(13, &own.job), Some(bytes(&outcome)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(19, &seal), Some(bytes(&own)));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(5, &own.job), Some(bytes(&original)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(13, &own.job), Some(bytes(&outcome)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(19, &seal), Some(bytes(&own)))?;
     native::write_shard(builder, &paid, own.job);
     builder.write_kernel_row(
         STAGE_TABLE_V14,
@@ -687,7 +687,7 @@ pub(super) fn reveal(
             amount: outcome.requester_refund,
             established_daa: ctx.daa_score,
         })),
-    );
+    )?;
     Ok(())
 }
 
@@ -854,16 +854,16 @@ pub(super) fn retire(
             crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,
             bytes(&(1u8, owner.actor)),
             Some(bytes(&(owner.root(), owner))),
-        );
+        )?;
     }
     for key in [bytes(&(3u8, seal)), bytes(&(17u8, 1u8, seal))] {
-        builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11, key, None);
+        builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11, key, None)?;
     }
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(19, &seal), None);
-    builder.write_kernel_row(STAGE_TABLE_V14, bytes(&(20u8, seal)), None);
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(19, &seal), None)?;
+    builder.write_kernel_row(STAGE_TABLE_V14, bytes(&(20u8, seal)), None)?;
     for index in 0u8..64 {
-        builder.write_kernel_row(STAGE_TABLE_V14, bytes(&(23u8, seal, index)), None);
+        builder.write_kernel_row(STAGE_TABLE_V14, bytes(&(23u8, seal, index)), None)?;
     }
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &own.job), Some(bytes(&state)));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &own.job), Some(bytes(&state)))?;
     Ok(())
 }

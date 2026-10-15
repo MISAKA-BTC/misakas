@@ -44,7 +44,8 @@ impl PalwChainStateV2 {
 }
 
 impl TransitionBuilder<'_> {
-    fn write_legacy_answer_v2(&mut self, key: PalwLegacyAnswerKeyV2, new: Option<PalwPendingLegacyAnswerV2>) {
+    fn write_legacy_answer_v2(&mut self, key: PalwLegacyAnswerKeyV2, new: Option<PalwPendingLegacyAnswerV2>) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_row_v1(&key, &new, |s| &s.legacy_answers, false, "native legacy_answers writer")?;
         let old = match &new {
             Some(row) => self.state.legacy_answers.insert(key, row.clone()),
             None => self.state.legacy_answers.remove(&key),
@@ -52,6 +53,7 @@ impl TransitionBuilder<'_> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::LegacyAnswer { key, old, new });
         }
+        Ok(())
     }
 }
 
@@ -88,7 +90,7 @@ pub(super) fn declare(
     b.write_legacy_answer_v2(
         d.key(),
         Some(PalwPendingLegacyAnswerV2 { declaration: d.clone(), deadline_daa: deadline, parts: BTreeMap::new() }),
-    );
+    )?;
     Ok(())
 }
 
@@ -114,10 +116,10 @@ pub(super) fn chunk(
         // The processor checks the original answer signature on completion. The fold applies
         // exactly the ordinary hash/identity predicate and DA-4 transition, not a second verdict.
         apply_legacy_held_answer_v2(b, ctx, &answer)?;
-        b.write_legacy_answer_v2(c.key(), None);
+        b.write_legacy_answer_v2(c.key(), None)?;
     } else {
         row.parts.insert(c.index, c.bytes.clone());
-        b.write_legacy_answer_v2(c.key(), Some(row));
+        b.write_legacy_answer_v2(c.key(), Some(row))?;
     }
     sweep(b, ctx);
     Ok(())

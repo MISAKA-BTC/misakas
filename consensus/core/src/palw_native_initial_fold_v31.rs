@@ -116,11 +116,11 @@ fn cleanup(builder: &mut TransitionBuilder<'_>, h: &NativeInitialHeaderV31) -> R
         .position(|(id, op)| *id == h.id && *op == h.operator)
         .ok_or_else(|| refused("initial31 original retained owner absent"))?;
     for index in 0..h.start.count {
-        builder.write_kernel_row(TABLE, key(&(h.id, 2u8, index)), None);
+        builder.write_kernel_row(TABLE, key(&(h.id, 2u8, index)), None)?;
     }
-    builder.write_kernel_row(TABLE, key(&(h.id, 1u8)), None);
+    builder.write_kernel_row(TABLE, key(&(h.id, 1u8)), None)?;
     g.ids.remove(i);
-    builder.write_kernel_row(TABLE, key(&0u8), Some(bytes(&g)));
+    builder.write_kernel_row(TABLE, key(&0u8), Some(bytes(&g)))?;
     Ok(())
 }
 pub(super) fn apply(
@@ -174,7 +174,7 @@ fn inner(
         g.next = next;
         g.ids.push((id, op));
         write_header(builder, &h);
-        builder.write_kernel_row(TABLE, key(&0u8), Some(bytes(&g)));
+        builder.write_kernel_row(TABLE, key(&0u8), Some(bytes(&g)))?;
         return Ok(());
     }
     let part = if action == INITIAL_PART_ACTION_V31 {
@@ -223,7 +223,7 @@ fn inner(
             return Ok(());
         }
         h.accepted[part.index as usize / 8] |= 1 << (part.index % 8);
-        builder.write_kernel_row(TABLE, key(&(id, 2u8, part.index)), Some(part.bytes.to_vec()));
+        builder.write_kernel_row(TABLE, key(&(id, 2u8, part.index)), Some(part.bytes.to_vec()))?;
         write_header(builder, &h);
         return Ok(());
     }

@@ -291,17 +291,17 @@ pub(super) fn request(
     state.latest_answer_proof_until = state.latest_answer_proof_until.max(until);
     state.required_retained_until = state.required_retained_until.max(until);
     write_source_shard(builder, &source, req.job);
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(pending), Some(key(&d)));
-    builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, slot_key(signer, req.slot), Some(key(&pending)));
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(pending), Some(key(&d)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, slot_key(signer, req.slot), Some(key(&pending)))?;
     builder.write_kernel_row(
         EXECUTION_DEMAND_COUNT_TABLE_V11,
         key(&(14u8, req.job, counts.next_ordinal)),
         Some(key(&(16u8, pending))),
-    );
+    )?;
     counts.next_ordinal += 1;
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, req.job)), Some(key(&counts)));
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&req.job), Some(key(&state)));
-    builder.note_kernel_bond(signer);
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, req.job)), Some(key(&counts)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&req.job), Some(key(&state)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 fn close(builder: &mut TransitionBuilder<'_>, mut d: NativeSourceDemandV16) -> Result<(), PalwStateV2Error> {
@@ -312,9 +312,9 @@ fn close(builder: &mut TransitionBuilder<'_>, mut d: NativeSourceDemandV16) -> R
         c.open_ordinary = c.open_ordinary.checked_sub(1).ok_or_else(|| refused("native source ordinary count underflow"))?;
     }
     d.settled = true;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(d.id()), Some(key(&d)));
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&d.request.job), Some(key(&state)));
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, d.request.job)), Some(key(&c)));
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(d.id()), Some(key(&d)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&d.request.job), Some(key(&state)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, d.request.job)), Some(key(&c)))?;
     Ok(())
 }
 pub(super) fn answer(
@@ -352,7 +352,7 @@ pub(super) fn answer(
         .map_err(refused)?;
     d.attempts += 1;
     write_source_shard(builder, &shard, d.request.job);
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(id), Some(key(&d)));
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(id), Some(key(&d)))?;
     // Even a hostile nested Vec count consumes this original attempt. The
     // processor borrows/authenticates only the fixed pending identity first.
     let raw = bytes.get(64..68).ok_or_else(|| refused("source answer nested count absent"))?;
@@ -392,7 +392,7 @@ pub(super) fn answer(
         return Err(refused("source original requester debit differs"));
     }
     pay_delivery_fee(builder, ctx, d.request.job, d.producer, d.producer_payout, paid, true)?;
-    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, pending_key(unit_key(&d.request)), Some(bytes[68..].to_vec()));
+    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, pending_key(unit_key(&d.request)), Some(bytes[68..].to_vec()))?;
     close(builder, d)
 }
 pub(super) fn settle(

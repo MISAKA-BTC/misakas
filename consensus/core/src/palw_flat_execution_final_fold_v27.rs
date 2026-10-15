@@ -181,7 +181,7 @@ pub(super) fn accept(
         queue_policy: queue_policy.root(),
         queue_plan: queue.record().root(),
     };
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(27u8, id)), Some(key(&(c.root(), c))));
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(27u8, id)), Some(key(&(c.root(), c))))?;
     Ok(())
 }
 pub(super) fn plan_fund(

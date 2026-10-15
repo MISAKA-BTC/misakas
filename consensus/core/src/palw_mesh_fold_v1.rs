@@ -49,7 +49,7 @@ impl TransitionBuilder<'_> {
             return Ok(());
         }
         let next = self.state.reserved_exposure(&bond).checked_add(amount).ok_or(PalwStateV2Error::Overflow("mesh reservation"))?;
-        self.write_exposure(bond, Some(next));
+        self.write_exposure(bond, Some(next))?;
         Ok(())
     }
 
@@ -60,7 +60,7 @@ impl TransitionBuilder<'_> {
         }
         let next =
             self.state.reserved_exposure(&bond).checked_sub(amount).ok_or(PalwStateV2Error::Overflow("mesh reservation underflow"))?;
-        self.write_exposure(bond, if next == 0 { None } else { Some(next) });
+        self.write_exposure(bond, if next == 0 { None } else { Some(next) })?;
         Ok(())
     }
 
@@ -433,7 +433,7 @@ pub(super) fn count_audited_leaf_v1(
     }
     assignment.outcome = Some(PalwAuditOutcomeV1 { matched, signed_daa });
     let pay = row.pay;
-    builder.write_mesh_audit(*claim_id, Some(row));
+    builder.write_mesh_audit(*claim_id, Some(row))?;
     if !deferred {
         builder.mesh_pay_from_reserve(seat, pay);
     }
@@ -526,7 +526,7 @@ pub(super) fn apply_trap_committed_v1(
     builder.write_mesh_trap(
         trap.commitment,
         Some(PalwTrapRowV1 { setter, committed_daa: ctx.daa_score, deposit: PALW_TRAP_DEPOSIT_SOMPI_V1, revealed_claim: None }),
-    );
+    )?;
     Ok(())
 }
 
@@ -608,7 +608,7 @@ pub(super) fn apply_trap_revealed_v1(
 
     // 1. The deposit comes back, and the commitment is spent.
     builder.mesh_release(trap.setter, trap.deposit)?;
-    builder.write_mesh_trap(commitment, None);
+    builder.write_mesh_trap(commitment, None)?;
 
     // 2. The auditors the planted tile caught (once per claim).
     if !audit.trap_settled {
@@ -631,7 +631,7 @@ pub(super) fn apply_trap_revealed_v1(
             }
         }
         audit.trap_settled = true;
-        builder.write_mesh_audit(reveal.claim, Some(audit));
+        builder.write_mesh_audit(reveal.claim, Some(audit))?;
     }
 
     // 3. The trap claim: voided, its setter not slashed. **Lane PA, P-F1 (`palw_audit_1004_v1`): never a claim with a dispute open** — a

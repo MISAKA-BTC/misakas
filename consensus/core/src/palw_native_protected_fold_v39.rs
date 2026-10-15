@@ -406,7 +406,7 @@ fn proof_part(
         if part.body.len() != expected {
             return Ok(());
         }
-        builder.write_kernel_row(TABLE, k(38, &(o.id, i)), Some(part.body.to_vec()));
+        builder.write_kernel_row(TABLE, k(38, &(o.id, i)), Some(part.body.to_vec()))?;
         o.accepted[i as usize / 8] |= 1 << (i % 8);
         write_owner(builder, &o);
         return Ok(());
@@ -585,14 +585,14 @@ fn expire(
     o.consumed = o.committed.clone();
     o.remaining = QuotaQuantitiesV11::default();
     for i in 0..o.count {
-        builder.write_kernel_row(TABLE, k(38, &(id, i)), None);
+        builder.write_kernel_row(TABLE, k(38, &(id, i)), None)?;
     }
     let slot = st.owners.iter().position(|v| *v == id).unwrap();
     st.owners[slot] = [0; 64];
     put_rows(builder, &g, &a, &s);
     write_status(builder, &st);
-    builder.write_kernel_row(TABLE, k(39, &id), Some(b(&(o.root(), o.paid, o.proof, o.job, o.claim, o.funding, o.until))));
-    builder.write_kernel_row(TABLE, k(37, &id), None);
+    builder.write_kernel_row(TABLE, k(39, &id), Some(b(&(o.root(), o.paid, o.proof, o.job, o.claim, o.funding, o.until))))?;
+    builder.write_kernel_row(TABLE, k(37, &id), None)?;
     Ok(())
 }
 pub(super) fn query_debit(

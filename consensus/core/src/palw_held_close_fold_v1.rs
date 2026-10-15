@@ -135,6 +135,6 @@ pub(super) fn apply_held_leaf_challenge_v1(
             deposit: palw_close_assembly_deposit_v1(c.count),
             chunks: BTreeMap::new(),
         }),
-    );
+    )?;
     Ok(())
 }

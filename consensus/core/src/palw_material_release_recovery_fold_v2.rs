@@ -274,7 +274,7 @@ pub(super) fn action(
             if pending || checkpoint.reserved_acks != 0 || checkpoint.reserved_answer_events != 0 {
                 return Err(refused("provider stream has pending accepted obligations"));
             }
-            b.write_kernel_row(PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, material_provider_stream_key_v2(provider), None);
+            b.write_kernel_row(PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, material_provider_stream_key_v2(provider), None)?;
         }
     }
     Ok(())

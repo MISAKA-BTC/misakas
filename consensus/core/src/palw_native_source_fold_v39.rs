@@ -354,9 +354,9 @@ fn register_source(
             return Err(refused("source39 rehydration changes immutable original bytes"));
         }
         catalog.sources.push(id);
-        builder.write_kernel_row(TABLE, key(1, &id), Some(bytes(&body)));
-        builder.write_kernel_row(TABLE, key(96, &id), Some(bytes(signer)));
-        builder.write_kernel_row(TABLE, key(5, signer), Some(bytes(&catalog)));
+        builder.write_kernel_row(TABLE, key(1, &id), Some(bytes(&body)))?;
+        builder.write_kernel_row(TABLE, key(96, &id), Some(bytes(signer)))?;
+        builder.write_kernel_row(TABLE, key(5, signer), Some(bytes(&catalog)))?;
         return Ok(());
     }
     let h = SourceHeaderV39 {
@@ -368,10 +368,10 @@ fn register_source(
         registered: ctx.daa_score,
     };
     catalog.sources.push(id);
-    builder.write_kernel_row(TABLE, key(0, &id), Some(bytes(&(h.root(), &h))));
-    builder.write_kernel_row(TABLE, key(1, &id), Some(bytes(&body.to_vec())));
-    builder.write_kernel_row(TABLE, key(96, &id), Some(bytes(signer)));
-    builder.write_kernel_row(TABLE, key(5, signer), Some(bytes(&catalog)));
+    builder.write_kernel_row(TABLE, key(0, &id), Some(bytes(&(h.root(), &h))))?;
+    builder.write_kernel_row(TABLE, key(1, &id), Some(bytes(&body.to_vec())))?;
+    builder.write_kernel_row(TABLE, key(96, &id), Some(bytes(signer)))?;
+    builder.write_kernel_row(TABLE, key(5, signer), Some(bytes(&catalog)))?;
     Ok(())
 }
 fn register_class(
@@ -428,12 +428,12 @@ fn register_class(
     };
     catalog.classes.push(id);
     if old.is_none() {
-        builder.write_kernel_row(TABLE, key(2, &id), Some(bytes(&(h.root(), &h))));
+        builder.write_kernel_row(TABLE, key(2, &id), Some(bytes(&(h.root(), &h))))?;
     }
-    builder.write_kernel_row(TABLE, key(3, &id), Some(bytes(&body.to_vec())));
-    builder.write_kernel_row(TABLE, key(97, &id), Some(bytes(signer)));
-    builder.write_kernel_row(TABLE, key(98, &source.root()), Some(bytes(&source_references)));
-    builder.write_kernel_row(TABLE, key(5, signer), Some(bytes(&catalog)));
+    builder.write_kernel_row(TABLE, key(3, &id), Some(bytes(&body.to_vec())))?;
+    builder.write_kernel_row(TABLE, key(97, &id), Some(bytes(signer)))?;
+    builder.write_kernel_row(TABLE, key(98, &source.root()), Some(bytes(&source_references)))?;
+    builder.write_kernel_row(TABLE, key(5, signer), Some(bytes(&catalog)))?;
     Ok(())
 }
 
@@ -487,8 +487,8 @@ pub(super) fn retain_class(
         return Err(refused("source39 original class hold absent/replayed/nonlive"));
     }
     let n = count(r, 95, class)?.checked_add(1).ok_or_else(|| refused("source39 original class reference overflow"))?;
-    builder.write_kernel_row(TABLE, key(94, &hold.id()), Some(bytes(&(hold.root(), &hold))));
-    builder.write_kernel_row(TABLE, key(95, &class), Some(bytes(&n)));
+    builder.write_kernel_row(TABLE, key(94, &hold.id()), Some(bytes(&(hold.root(), &hold))))?;
+    builder.write_kernel_row(TABLE, key(95, &class), Some(bytes(&n)))?;
     Ok(())
 }
 pub(super) fn release_class(
@@ -504,8 +504,8 @@ pub(super) fn release_class(
         return Err(refused("source39 original class release reference differs"));
     }
     let n = count(r, 95, class)?.checked_sub(1).ok_or_else(|| refused("source39 original class reference underflow"))?;
-    builder.write_kernel_row(TABLE, key(94, &id), None);
-    builder.write_kernel_row(TABLE, key(95, &class), Some(bytes(&n)));
+    builder.write_kernel_row(TABLE, key(94, &id), None)?;
+    builder.write_kernel_row(TABLE, key(95, &class), Some(bytes(&n)))?;
     Ok(())
 }
 fn retention_action(
@@ -562,11 +562,11 @@ fn retention_action(
         let n = count(builder.state.kernel_route.as_ref().unwrap(), 98, source)?
             .checked_sub(1)
             .ok_or_else(|| refused("source39 original active source count underflow"))?;
-        builder.write_kernel_row(TABLE, key(98, &source), Some(bytes(&n)));
+        builder.write_kernel_row(TABLE, key(98, &source), Some(bytes(&n)))?;
     }
-    builder.write_kernel_row(TABLE, key(if class { 3 } else { 1 }, &id), None);
-    builder.write_kernel_row(TABLE, key(if class { 97 } else { 96 }, &id), None);
-    builder.write_kernel_row(TABLE, key(5, signer), Some(bytes(&c)));
+    builder.write_kernel_row(TABLE, key(if class { 3 } else { 1 }, &id), None)?;
+    builder.write_kernel_row(TABLE, key(if class { 97 } else { 96 }, &id), None)?;
+    builder.write_kernel_row(TABLE, key(5, signer), Some(bytes(&c)))?;
     // Immutable headers survive. Rehydration must reproduce their exact bytes
     // and original class derivation; freeing a slot never adds Q/B/R/F rights.
     Ok(())
@@ -614,10 +614,10 @@ fn cleanup_upload(builder: &mut TransitionBuilder<'_>, h: &UploadHeaderV39) -> R
     let index = c.uploads.iter().position(|id| *id == h.id).ok_or_else(|| refused("source39 upload original owner slot absent"))?;
     c.uploads.remove(index);
     for i in 0..h.start.count {
-        builder.write_kernel_row(TABLE, key(7, &(h.id, i)), None);
+        builder.write_kernel_row(TABLE, key(7, &(h.id, i)), None)?;
     }
-    builder.write_kernel_row(TABLE, key(6, &h.id), None);
-    builder.write_kernel_row(TABLE, key(5, &h.owner), Some(bytes(&c)));
+    builder.write_kernel_row(TABLE, key(6, &h.id), None)?;
+    builder.write_kernel_row(TABLE, key(5, &h.owner), Some(bytes(&c)))?;
     Ok(())
 }
 fn upload_start(
@@ -671,7 +671,7 @@ fn upload_start(
     c.next_upload = next;
     c.uploads.push(id);
     write_upload(builder, &h);
-    builder.write_kernel_row(TABLE, key(5, signer), Some(bytes(&c)));
+    builder.write_kernel_row(TABLE, key(5, signer), Some(bytes(&c)))?;
     Ok(())
 }
 fn upload_action(
@@ -724,7 +724,7 @@ fn upload_action(
         }
         h.attempts[index] += 1;
         write_upload(builder, &h); // persistent before copying the page
-        builder.write_kernel_row(TABLE, key(7, &(id, part.index)), Some(bytes(&part.bytes.to_vec())));
+        builder.write_kernel_row(TABLE, key(7, &(id, part.index)), Some(bytes(&part.bytes.to_vec())))?;
         h.accepted[index / 8] |= 1 << (index % 8);
         write_upload(builder, &h);
         return Ok(());

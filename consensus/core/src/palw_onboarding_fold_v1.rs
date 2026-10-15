@@ -113,7 +113,7 @@ pub(super) fn apply_artifact_bound_v1(
         PALW_ONBOARDING_TABLE_ARTIFACT_BINDINGS_V1,
         key2(v2_class, kernel_param_root),
         Some(borsh::to_vec(&row).expect("a binding row serializes")),
-    );
+    )?;
     Ok(())
 }
 
@@ -190,7 +190,7 @@ pub(super) fn apply_artifact_challenged_v1(
         PALW_ONBOARDING_TABLE_ARTIFACT_BINDINGS_V1,
         key2(v2_class, kernel_param_root),
         Some(borsh::to_vec(&refuted).expect("a binding row serializes")),
-    );
+    )?;
     Ok(())
 }
 
@@ -289,7 +289,7 @@ pub(super) fn apply_kernel_bound_v1(
         PALW_ONBOARDING_TABLE_KERNEL_BINDINGS_V1,
         borsh::to_vec(v2_class).expect("a digest serializes"),
         Some(borsh::to_vec(&row).expect("a binding row serializes")),
-    );
+    )?;
     Ok(())
 }
 
@@ -457,14 +457,14 @@ pub(super) fn apply_conformance_committed_v1(
         PALW_ONBOARDING_TABLE_CONFORMANCE_V1,
         key2(&class, &artifact_root),
         Some(borsh::to_vec(&row).expect("a conformance row serializes")),
-    );
+    )?;
     write_attempt(builder, &class, &attempt);
     if let Some(target) = source_target {
         builder.write_kernel_row(
             crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4,
             borsh::to_vec(&target.terms.context).expect("context serializes"),
             Some(borsh::to_vec(&target).expect("target serializes")),
-        );
+        )?;
     }
     if let Some(target) = paid_fee_target {
         let bounds = extras
@@ -475,15 +475,15 @@ pub(super) fn apply_conformance_committed_v1(
             crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_COST_BOUNDS_V5,
             borsh::to_vec(&target.target.terms.context).expect("context serializes"),
             Some(borsh::to_vec(&bounds).expect("source cost bounds serialize")),
-        );
+        )?;
         builder.write_kernel_row(
             crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_FEE_TARGETS_V5,
             borsh::to_vec(&target.target.terms.context).expect("context serializes"),
             Some(borsh::to_vec(&target).expect("paid target serializes")),
-        );
+        )?;
     }
     // The previous attempt's material goes with it (its id stays in the record's history only as `last_end`).
-    builder.write_kernel_row(PALW_ONBOARDING_TABLE_CONFORMANCE_EVIDENCE_V1, class_key(&class), None);
+    builder.write_kernel_row(PALW_ONBOARDING_TABLE_CONFORMANCE_EVIDENCE_V1, class_key(&class), None)?;
     Ok(())
 }
 
@@ -629,7 +629,7 @@ pub(super) fn apply_conformance_evidence_v1(
                 PALW_ONBOARDING_TABLE_CONFORMANCE_EVIDENCE_V1,
                 class_key(v2_class),
                 Some(borsh::to_vec(post.as_ref()).expect("a post serializes")),
-            );
+            )?;
         }
         // (Judged by `judge_refutation_v1` above.)
         ConformanceEvidenceActionV1::Refute { .. } => {}

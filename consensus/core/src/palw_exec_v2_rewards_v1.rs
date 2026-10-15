@@ -293,7 +293,7 @@ fn burn_actor(
             fund: who.1,
             action,
             payout,
-        });
+        })?;
     }
     // During Final the kernel fee is credited before the native row exists. Preserve the allocation receipt
     // so a forfeited fee cannot erase the later slice/native accounting in this same atomic settlement.
@@ -302,7 +302,7 @@ fn burn_actor(
         root,
         if row.legs.is_empty() && !builder.state.vesting.contains_key(&root) && !final_in_progress { None } else { Some(row) },
     );
-    builder.write_vesting_counters(c);
+    builder.write_vesting_counters(c)?;
     Ok(taken)
 }
 
@@ -358,14 +358,14 @@ pub(super) fn add(
     builder.write_exec_reward(root, Some(row));
     let mut c = builder.state.vesting_counters;
     c.created = c.created.checked_add(u128::from(amount)).ok_or(PalwStateV2Error::Overflow("EXEC vesting created"))?;
-    builder.write_vesting_counters(c);
+    builder.write_vesting_counters(c)?;
     builder.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::ExecReward {
         claim_id: root,
         bond,
         fund,
         action: Action::Created,
         payout: PalwPayoutV2 { payload, amount },
-    });
+    })?;
     if let Some(freeze) = builder.state.bond_freezes.get(&bond).copied() {
         if freeze.final_ {
             let taken = burn_actor(builder, root, bond, Action::Forfeited { offence_id: freeze.offence_key })?;
@@ -375,7 +375,7 @@ pub(super) fn add(
                     forfeited_sompi: freeze.forfeited_sompi.saturating_add(taken),
                     ..freeze
                 }),
-            );
+            )?;
         } else if let Some(lift) = freeze.lifts_at_v1(builder.params.window_court()) {
             freeze_bond(builder, bond, builder.state.exec_v2_rewards[&root].final_daa, lift);
         }
@@ -405,7 +405,7 @@ pub(super) fn burn(builder: &mut TransitionBuilder<'_>, root: Hash64) -> Result<
     c.burned = c.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("EXEC vesting burned"))?;
     let retained = if builder.state.vesting.contains_key(&root) { Some(Row { legs: BTreeMap::new(), ..row.clone() }) } else { None };
     builder.write_exec_reward(root, retained);
-    builder.write_vesting_counters(c);
+    builder.write_vesting_counters(c)?;
     for ((bond, fund), payout) in row.legs {
         builder.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::ExecReward {
             claim_id: root,
@@ -413,7 +413,7 @@ pub(super) fn burn(builder: &mut TransitionBuilder<'_>, root: Hash64) -> Result<
             fund,
             action: Action::Burned,
             payout,
-        });
+        })?;
     }
     Ok(())
 }
@@ -503,14 +503,14 @@ pub(super) fn mature(builder: &mut TransitionBuilder<'_>, daa: u64) -> Result<()
         builder.write_exec_reward(root, if row.legs.is_empty() { None } else { Some(row) });
         let mut c = builder.state.vesting_counters;
         c.moved = c.moved.checked_add(u128::from(leg.amount)).ok_or(PalwStateV2Error::Overflow("EXEC vesting moved"))?;
-        builder.write_vesting_counters(c);
+        builder.write_vesting_counters(c)?;
         builder.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::ExecReward {
             claim_id: root,
             bond: who.0,
             fund: who.1,
             action: Action::Moved,
             payout: leg,
-        });
+        })?;
     }
     Ok(())
 }
@@ -537,13 +537,13 @@ pub(super) fn invalidate_final(
         let mut c = builder.state.vesting_counters;
         c.burned = c.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("EXEC native vesting burned"))?;
         builder.write_vesting(root, None)?;
-        builder.write_vesting_counters(c);
+        builder.write_vesting_counters(c)?;
         builder.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::ExecDependencyBurned {
             claim_id: root,
             kernel_claim_id: dependency,
             sompi: row.total_sompi(),
             legs: row.legs().collect(),
-        });
+        })?;
     }
     burn(builder, root)?;
     builder.mark_liability_convicted(root, ctx.daa_score, reason)?;

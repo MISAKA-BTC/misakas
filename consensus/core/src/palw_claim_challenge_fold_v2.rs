@@ -301,11 +301,11 @@ fn apply_inner(
                     PAID_CLAIM_ENROLLMENTS_V2,
                     paid_claim_index_key_v3(prefix, &owner),
                     Some(borsh::to_vec(&PalwPaidClaimIndexV3 { version: 3, kind, owner, target: a.context.id() }).unwrap()),
-                );
+                )?;
             }
             // Interim V1 receipts cannot cover this new verification identity.
-            b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key(&e.base_claim), None);
-            b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key(&e.base_claim), None);
+            b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key(&e.base_claim), None)?;
+            b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key(&e.base_claim), None)?;
             route_fold::flush(b, &l, &before);
             admit_review(
                 b,
@@ -460,7 +460,7 @@ fn apply_inner(
         PaidClaimObjectV2::LockRound { enrollment, round } => round_lock(b, ctx, enrollment, *round)?,
         PaidClaimObjectV2::RoundReceipt { receipt } => round_receipt(b, ctx, signer, receipt)?,
     }
-    b.note_kernel_bond(signer);
+    b.note_kernel_bond(signer)?;
     Ok(())
 }
 fn r_has_job(b: &TransitionBuilder<'_>, base: &Digest) -> Result<bool, PalwStateV2Error> {
@@ -856,10 +856,10 @@ pub(super) fn refresh_pending_paid_source_locks_v2(
         }
     }
     for (key, row) in invalid_rounds {
-        b.write_kernel_row(PAID_CLAIM_ROUNDS_V2, key, Some(borsh::to_vec(&row).unwrap()));
+        b.write_kernel_row(PAID_CLAIM_ROUNDS_V2, key, Some(borsh::to_vec(&row).unwrap()))?;
     }
     for (key, row) in invalid {
-        b.write_kernel_row(PAID_CLAIM_LOCKS_V2, key, Some(borsh::to_vec(&row).unwrap()));
+        b.write_kernel_row(PAID_CLAIM_LOCKS_V2, key, Some(borsh::to_vec(&row).unwrap()))?;
     }
     Ok(())
 }
@@ -961,7 +961,7 @@ fn round_message(
                 })
                 .unwrap(),
             ),
-        );
+        )?;
     }
     Ok(())
 }

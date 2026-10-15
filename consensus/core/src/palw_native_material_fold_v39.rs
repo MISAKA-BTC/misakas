@@ -212,10 +212,10 @@ fn start(
             attempts: vec![0; cp.pages() as usize],
             accepted: vec![0; (cp.pages() as usize).div_ceil(8)],
         };
-        builder.write_kernel_row(TABLE, k(65, &h.id), Some(b(&(cs.root(), cs))));
+        builder.write_kernel_row(TABLE, k(65, &h.id), Some(b(&(cs.root(), cs))))?;
     }
     write(builder, &mut h, &s);
-    builder.write_kernel_row(TABLE, k(63, signer), Some(b(&ids)));
+    builder.write_kernel_row(TABLE, k(63, signer), Some(b(&ids)))?;
     Ok(())
 }
 // Part =39:u16,descriptor:64,index:u16 followed by bounded MaterialPage39.
@@ -250,7 +250,7 @@ fn part(
     if page.index != index || s.accept_part(&m, index, &page.body, &page.siblings).is_err() {
         return Ok(());
     }
-    builder.write_kernel_row(TABLE, k(62, &(id, index)), Some(raw[69..].to_vec()));
+    builder.write_kernel_row(TABLE, k(62, &(id, index)), Some(raw[69..].to_vec()))?;
     write(builder, &mut h, &s);
     Ok(())
 }
@@ -288,7 +288,7 @@ fn seal(
     certify_upstream(r, p, &h.descriptor, h.certificate.as_ref())?;
     s.accept_seal(&m, &checked).map_err(bad)?;
     if let Some(cp) = &h.certificate {
-        builder.write_kernel_row(TABLE, k(67, &h.id), Some(b(&cp.root())));
+        builder.write_kernel_row(TABLE, k(67, &h.id), Some(b(&cp.root())))?;
     }
     write(builder, &mut h, &s);
     Ok(())
@@ -313,21 +313,21 @@ fn collect(
         return Ok(());
     }
     for i in 0..m.record().pages {
-        builder.write_kernel_row(TABLE, k(62, &(id, i)), None);
+        builder.write_kernel_row(TABLE, k(62, &(id, i)), None)?;
     }
     if let Some(cp) = &h.certificate {
         for i in 0..cp.bytes.div_ceil(32768) as u16 {
-            builder.write_kernel_row(TABLE, k(66, &(cp.root(), i)), None);
+            builder.write_kernel_row(TABLE, k(66, &(cp.root(), i)), None)?;
         }
-        builder.write_kernel_row(TABLE, k(65, &id), None);
-        builder.write_kernel_row(TABLE, k(67, &id), None);
+        builder.write_kernel_row(TABLE, k(65, &id), None)?;
+        builder.write_kernel_row(TABLE, k(67, &id), None)?;
     }
-    builder.write_kernel_row(TABLE, k(60, &id), None);
-    builder.write_kernel_row(TABLE, k(61, &id), None);
+    builder.write_kernel_row(TABLE, k(60, &id), None)?;
+    builder.write_kernel_row(TABLE, k(61, &id), None)?;
     let mut ids = list(builder.state.kernel_route.as_ref().unwrap(), 63, &h.owner)?;
     ids.retain(|x| *x != id);
-    builder.write_kernel_row(TABLE, k(63, &h.owner), Some(b(&ids)));
-    builder.write_kernel_row(TABLE, k(64, &id), Some(b(&(h.plan, h.receipt, h.deadline))));
+    builder.write_kernel_row(TABLE, k(63, &h.owner), Some(b(&ids)))?;
+    builder.write_kernel_row(TABLE, k(64, &id), Some(b(&(h.plan, h.receipt, h.deadline))))?;
     Ok(())
 }
 pub(super) fn authenticate_material(
@@ -398,7 +398,7 @@ pub(super) fn attach(
         }
     }
     for h in updates {
-        builder.write_kernel_row(TABLE, k(60, &h.id), Some(b(&(h.root(), h))));
+        builder.write_kernel_row(TABLE, k(60, &h.id), Some(b(&(h.root(), h))))?;
     }
     Ok(())
 }
@@ -410,7 +410,7 @@ pub(super) fn detach(builder: &mut TransitionBuilder<'_>, m: &MaterialManifestV3
                 return Err(bad("native39 original material attachment differs"));
             }
             h.attached = None;
-            builder.write_kernel_row(TABLE, k(60, &h.id), Some(b(&(h.root(), h))));
+            builder.write_kernel_row(TABLE, k(60, &h.id), Some(b(&(h.root(), h))))?;
         }
     }
     Ok(())
@@ -604,7 +604,7 @@ fn certificate_part(
         return Err(bad("native39 original requester certificate page unavailable"));
     }
     cs.attempts[index as usize] += 1;
-    builder.write_kernel_row(TABLE, k(65, &id), Some(b(&(cs.root(), &cs))));
+    builder.write_kernel_row(TABLE, k(65, &id), Some(b(&(cs.root(), &cs))))?;
     let Ok(page) = MaterialPageV39::from_bytes(raw) else { return Ok(()) };
     let expected = (p.bytes - index as u64 * 32768).min(32768) as usize;
     if page.index != index
@@ -620,8 +620,8 @@ fn certificate_part(
         return Ok(());
     }
     cs.accepted[index as usize / 8] |= 1 << (index % 8);
-    builder.write_kernel_row(TABLE, k(66, &(p.root(), index)), Some(raw.to_vec()));
-    builder.write_kernel_row(TABLE, k(65, &id), Some(b(&(cs.root(), &cs))));
+    builder.write_kernel_row(TABLE, k(66, &(p.root(), index)), Some(raw.to_vec()))?;
+    builder.write_kernel_row(TABLE, k(65, &id), Some(b(&(cs.root(), &cs))))?;
     Ok(())
 }
 fn certify_upstream(

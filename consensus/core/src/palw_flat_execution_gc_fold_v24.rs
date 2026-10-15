@@ -115,15 +115,15 @@ fn demand_step(
     if !charge_removed(builder, ctx, p, signer, job, removed as u64)? {
         return Ok(());
     }
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key, None);
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&(22u8, pending_id)), None);
-    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, served_key, None);
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key, None)?;
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&(22u8, pending_id)), None)?;
+    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, served_key, None)?;
     if clear_slot {
-        builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, slot_key, None);
+        builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, slot_key, None)?;
     }
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, index, None);
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, index, None)?;
     counts.collected_ordinal += 1;
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, job)), Some(key(&counts)));
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, job)), Some(key(&counts)))?;
     Ok(())
 }
 #[derive(borsh::BorshSerialize)]
@@ -310,20 +310,20 @@ fn job_step(
     write_shard(builder, &shard, job);
     if let Some((global, queue)) = capacity_release {
         if let Some(q) = queue {
-            builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8)), Some(key(&(q.root(), q))));
-            builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, job, 1u8)), None);
+            builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8)), Some(key(&(q.root(), q))))?;
+            builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, job, 1u8)), None)?;
         }
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, 0u8)), Some(key(&(global.root(), global))));
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, 0u8)), Some(key(&(global.root(), global))))?;
         for k in [key(&(22u8, job)), key(&(22u8, job, 1u8)), key(&(22u8, job, 2u8))] {
-            builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, k, None);
+            builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, k, None)?;
         }
     }
-    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, key(&h.requester), Some(key(&requester)));
-    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, key(&(1u8, h.producer)), Some(key(&producer)));
-    builder.write_kernel_row(EXECUTION_JOB_COUNT_TABLE_V11, Vec::new(), Some(key(&(count - 1))));
-    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, key(&(24u8, job)), Some(key(&tomb)));
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, key(&h.requester), Some(key(&requester)))?;
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, key(&(1u8, h.producer)), Some(key(&producer)))?;
+    builder.write_kernel_row(EXECUTION_JOB_COUNT_TABLE_V11, Vec::new(), Some(key(&(count - 1))))?;
+    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, key(&(24u8, job)), Some(key(&tomb)))?;
     for k in [quota_key(2, &job), key(&(16u8, job)), key(&(16u8, job, 1u8)), trace_row_key(0, job)] {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, k, None);
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, k, None)?;
     }
     for (table, k) in [
         (EXECUTION_JOB_TABLE_V11, key(&job)),
@@ -331,10 +331,10 @@ fn job_step(
         (EXECUTION_DEMAND_COUNT_TABLE_V11, key(&job)),
         (EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, job))),
     ] {
-        builder.write_kernel_row(table, k, None);
+        builder.write_kernel_row(table, k, None)?;
     }
     if let Some(claim) = book.claim() {
-        builder.write_kernel_row(EXECUTION_VECTOR_JOB_TABLE_V11, key(&claim.vector), None);
+        builder.write_kernel_row(EXECUTION_VECTOR_JOB_TABLE_V11, key(&claim.vector), None)?;
     }
     let _ = plan;
     Ok(())
@@ -429,23 +429,23 @@ fn proof_step(
     retained.retained_seal_keys.retain(|v| *v != id);
     write_shard(builder, &caller, job);
     if let Some(owner) = owner {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &owner.actor), Some(key(&(owner.root(), owner))));
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &owner.actor), Some(key(&(owner.root(), owner))))?;
     }
     for k in [quota_key(3, &id), trace_row_key(1, id)] {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, k, None);
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, k, None)?;
     }
     for k in [key(&id), key(&(12u8, id))] {
-        builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, k, None);
+        builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, k, None)?;
     }
     for index in 0u8..64 {
-        builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&(15u8, id, index)), None);
+        builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&(15u8, id, index)), None)?;
     }
     builder.write_kernel_row(
         EXECUTION_CREDIT_TABLE_V11,
         key(&(24u8, job, id)),
         Some(key(&(own.original_paid_record_root, retired.root(), ctx.daa_score))),
-    );
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&job), Some(key(&retained)));
+    )?;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&job), Some(key(&retained)))?;
     capacity::commit_owner(builder, job, physical);
     Ok(())
 }
@@ -528,18 +528,18 @@ fn discovery_step(
     retained.retained_discovery_keys.retain(|v| *v != id);
     write_shard(builder, &merged, job);
     if let Some(owner) = owner {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &owner.actor), Some(key(&(owner.root(), owner))));
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &owner.actor), Some(key(&(owner.root(), owner))))?;
     }
     for k in [quota_key(4, &id), trace_row_key(2, id)] {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, k, None);
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, k, None)?;
     }
-    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&(13u8, id)), None);
+    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&(13u8, id)), None)?;
     builder.write_kernel_row(
         EXECUTION_CREDIT_TABLE_V11,
         key(&(24u8, job, id)),
         Some(key(&(own.original_paid_root, retired.root(), ctx.daa_score))),
-    );
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&job), Some(key(&retained)));
+    )?;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&job), Some(key(&retained)))?;
     capacity::commit_owner(builder, job, physical);
     Ok(())
 }

@@ -2074,7 +2074,7 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
             .expect("created")
             .map_err(|why| budget_refused(bond, why))?;
         if amount > 0 {
-            builder.write_payout(queue, Some(PalwPayoutV2 { payload, amount }));
+            builder.write_payout(queue, Some(PalwPayoutV2 { payload, amount }))?;
         }
     }
     builder.rearm_material_retirements_v1(now)?;

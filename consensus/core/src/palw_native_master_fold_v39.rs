@@ -461,14 +461,14 @@ fn register(
                 TABLE,
                 k(92, &(id, edge.stage, edge.input)),
                 Some(b(&(m.root(), *stage, *output_declaration, target.source))),
-            );
+            )?;
         }
     }
-    builder.write_kernel_row(TABLE, k(80, &id), Some(b(&(m.root(), &m))));
+    builder.write_kernel_row(TABLE, k(80, &id), Some(b(&(m.root(), &m))))?;
     let count = raw.len().div_ceil(32768) as u16;
-    builder.write_kernel_row(TABLE, k(81, &id), Some(b(&(39u16, id, raw.len() as u32, count, metadata_body_hash_v39(raw)))));
+    builder.write_kernel_row(TABLE, k(81, &id), Some(b(&(39u16, id, raw.len() as u32, count, metadata_body_hash_v39(raw)))))?;
     for (i, page) in raw.chunks(32768).enumerate() {
-        builder.write_kernel_row(TABLE, k(93, &(id, i as u16)), Some(page.to_vec()));
+        builder.write_kernel_row(TABLE, k(93, &(id, i as u16)), Some(page.to_vec()))?;
     }
     for c in &m.components {
         super::palw_native_source_fold_v39::retain_class(
@@ -479,13 +479,13 @@ fn register(
             m.deadline,
         )?;
     }
-    builder.write_kernel_row(TABLE, k(82, &id), Some(b(&(progress.root(), progress))));
-    builder.write_kernel_row(TABLE, k(85, signer), Some(b(&ids)));
+    builder.write_kernel_row(TABLE, k(82, &id), Some(b(&(progress.root(), progress))))?;
+    builder.write_kernel_row(TABLE, k(85, signer), Some(b(&ids)))?;
     builder.write_kernel_row(
         TABLE,
         k(86, signer),
         Some(b(&sequence.checked_add(1).ok_or_else(|| bad("Master39 original sequence overflow"))?)),
-    );
+    )?;
     Ok(())
 }
 
@@ -633,8 +633,8 @@ pub(super) fn record_funded(
         admitted: ctx.daa_score,
     };
     progress.components[stage] = Some(component.clone());
-    builder.write_kernel_row(TABLE, k(82, &m.id), Some(b(&(progress.root(), progress))));
-    builder.write_kernel_row(TABLE, k(84, &job), Some(b(&(m.id, component))));
+    builder.write_kernel_row(TABLE, k(82, &m.id), Some(b(&(progress.root(), progress))))?;
+    builder.write_kernel_row(TABLE, k(84, &job), Some(b(&(m.id, component))))?;
     Ok(())
 }
 /// Material preparation may borrow an output only from its own earlier
@@ -744,12 +744,12 @@ fn close(
             components,
             established: ctx.daa_score,
         };
-        builder.write_kernel_row(TABLE, k(83, &id), Some(b(&(final_record.root(), final_record))));
+        builder.write_kernel_row(TABLE, k(83, &id), Some(b(&(final_record.root(), final_record))))?;
     } else {
         if ctx.daa_score <= m.deadline {
             return Err(bad("Master39 original incomplete deadline has not expired"));
         }
-        builder.write_kernel_row(TABLE, k(87, &id), Some(b(&(m.root(), ctx.daa_score))));
+        builder.write_kernel_row(TABLE, k(87, &id), Some(b(&(m.root(), ctx.daa_score))))?;
     }
     // Header, funded bindings and immutable terminal credit roots remain. A
     // terminal Master never creates another payment, receipt or quota refund.
@@ -763,7 +763,7 @@ fn close(
     }
     let mut ids = catalog(builder.state.kernel_route.as_ref().unwrap(), &m.owner)?;
     ids.retain(|v| *v != id);
-    builder.write_kernel_row(TABLE, k(85, &m.owner), Some(b(&ids)));
+    builder.write_kernel_row(TABLE, k(85, &m.owner), Some(b(&ids)))?;
     Ok(())
 }
 pub(super) fn apply(
@@ -842,10 +842,10 @@ fn erase_upload(builder: &mut TransitionBuilder<'_>, h: &MetadataUpload) -> Resu
     let at = ids.iter().position(|id| *id == h.id).ok_or_else(|| bad("metadata39 original owner slot absent"))?;
     ids.remove(at);
     for i in 0..h.start.count {
-        builder.write_kernel_row(TABLE, k(89, &(h.id, i)), None);
+        builder.write_kernel_row(TABLE, k(89, &(h.id, i)), None)?;
     }
-    builder.write_kernel_row(TABLE, k(88, &h.id), None);
-    builder.write_kernel_row(TABLE, k(91, &h.owner), Some(b(&ids)));
+    builder.write_kernel_row(TABLE, k(88, &h.id), None)?;
+    builder.write_kernel_row(TABLE, k(91, &h.owner), Some(b(&ids)))?;
     Ok(())
 }
 fn start_upload(
@@ -910,12 +910,12 @@ fn start_upload(
     };
     ids.push(id);
     write_upload(builder, &h);
-    builder.write_kernel_row(TABLE, k(91, signer), Some(b(&ids)));
+    builder.write_kernel_row(TABLE, k(91, signer), Some(b(&ids)))?;
     builder.write_kernel_row(
         TABLE,
         k(90, signer),
         Some(b(&sequence.checked_add(1).ok_or_else(|| bad("metadata39 original sequence overflow"))?)),
-    );
+    )?;
     Ok(())
 }
 fn upload_action(
@@ -964,7 +964,7 @@ fn upload_action(
         }
         h.attempts[i] += 1;
         write_upload(builder, &h);
-        builder.write_kernel_row(TABLE, k(89, &(id, part.index)), Some(part.bytes.to_vec()));
+        builder.write_kernel_row(TABLE, k(89, &(id, part.index)), Some(part.bytes.to_vec()))?;
         h.accepted[i / 8] |= 1 << (i % 8);
         write_upload(builder, &h);
         return Ok(());

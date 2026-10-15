@@ -750,9 +750,9 @@ pub(super) fn apply_object(
                 &accusation.accuser,
                 false,
             )?;
-            builder.write_held_da_missing(claim_id, Some(accusation.missing));
+            builder.write_held_da_missing(claim_id, Some(accusation.missing))?;
             if let Some(demands) = demand {
-                builder.write_held_leaf_demands(claim_id, Some(demands));
+                builder.write_held_leaf_demands(claim_id, Some(demands))?;
             }
         }
         // **ADR-0103 Decision 4: the answer, and it is arithmetic.** The unit must be the one
@@ -990,7 +990,7 @@ pub(super) fn apply_object(
                         // The claim licenses; `write_claim` drops the progress row with the phase.
                         builder.license_claim(claim_id, claim, ctx.daa_score)?;
                     } else {
-                        builder.write_shard_licensing(claim_id, Some(progress));
+                        builder.write_shard_licensing(claim_id, Some(progress))?;
                     }
                 }
                 crate::palw_shard_licensing_v1::PalwShardQuorumV1::ProducerUnavailable { .. } => {
@@ -1486,7 +1486,7 @@ pub(super) fn apply_object(
             if builder.state.certified_family(lane, &digest).is_some() {
                 return Err(PalwStateV2Error::FamilyAlreadyCertified { lane, digest });
             }
-            builder.write_certified_family(lane, digest, Some(PalwCertifiedFamilyStateV2 { family, certified_daa: ctx.daa_score }));
+            builder.write_certified_family(lane, digest, Some(PalwCertifiedFamilyStateV2 { family, certified_daa: ctx.daa_score }))?;
         }
         PalwConsensusObjectV2::ClassLaneCertified { class_id, lane, profile } => {
             let record = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?.clone();
@@ -1543,7 +1543,7 @@ pub(super) fn apply_object(
                         )?;
                     }
                     if builder.extras.fp_derived_work_at(ctx.daa_score) {
-                        builder.write_fp_work_profile(*class_id, Some(profile.clone()));
+                        builder.write_fp_work_profile(*class_id, Some(profile.clone()))?;
                     }
                 }
                 PalwCertifiedLaneV1::Attempt => seat_attempt_lane_class_v1(builder, ctx, class_id)?,
@@ -1707,7 +1707,7 @@ pub(super) fn apply_object(
                     .ok_or(PalwStateV2Error::Overflow("activation pool withheld"))?;
                 pool.prep_sompi = 0;
                 pool.bonus_sompi = 0;
-                builder.write_activation_pool(*class_id, pool);
+                builder.write_activation_pool(*class_id, pool)?;
             }
         }
         PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor, seats } => {
@@ -1754,7 +1754,7 @@ pub(super) fn apply_object(
             // The 2026-09-25 sweep's V03(1): asked BEFORE the panel record exists, which is what
             // tells a `NoCapablePanel` retry from a redraw.
             let was_ncp_retry = palw_claim_awaits_ncp_retry_v1(&builder.state, builder.params, claim_id, &claim);
-            builder.write_panel(*claim_id, Some(PalwPanelStateV2 { anchor: *anchor, seats: seats.clone(), bound_daa: ctx.daa_score }));
+            builder.write_panel(*claim_id, Some(PalwPanelStateV2 { anchor: *anchor, seats: seats.clone(), bound_daa: ctx.daa_score }))?;
             // RFC-0006: a panel drawn per shard writes the claim's per-shard record (the plan frozen, the outsider flag, each
             // seat's share of the work); a flat panel writes nothing. Dormant: no plan exists below `palw_tir_shard_v1`.
             palw_tir_shard_fold_v1::bind_record_v1(builder, ctx, claim_id, &claim, anchor, seats)?;
@@ -1787,7 +1787,7 @@ pub(super) fn apply_object(
             builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound);
             builder.disarm_deadline(*claim_id);
             let deadline = ctx.daa_score.checked_add(sweep_window).ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
-            builder.arm_deadline(deadline, *claim_id);
+            builder.arm_deadline(deadline, *claim_id)?;
         }
         PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts } => {
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
@@ -2263,7 +2263,7 @@ pub(super) fn apply_object(
                     deposit,
                     chunks: BTreeMap::new(),
                 }),
-            );
+            )?;
         }
         PalwConsensusObjectV2::SeatReadinessProved { bond, class_id, span, opening, signature: _ } => {
             // ADR-0133 §11.2: past readiness V2 the one-leaf proof is not evidence any more.
@@ -2440,7 +2440,7 @@ pub(super) fn apply_object(
                 // swap of the whole accumulated record. `group` here is the local clone the checks
                 // above were made against; the writer applies the same bit and bytes to the row in
                 // state, which is why nothing but the delta shape changes.
-                builder.write_court_close_chunk((*session_id, *side), *index, bytes.clone());
+                builder.write_court_close_chunk((*session_id, *side), *index, bytes.clone())?;
                 return Ok(());
             }
             // **W7: the chunk that COMPLETES a group assembles it, and the close happens here.**
@@ -2857,7 +2857,7 @@ pub(super) fn apply_object(
             )
             .map_err(|e| refused(e.to_string()))?;
             cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
-            builder.write_tir_dissection(*session_id, Some(phase));
+            builder.write_tir_dissection(*session_id, Some(phase))?;
             builder.write_court(*session_id, Some(session))?;
         }
         // **RFC-0003: a pipeline claim's root claim opens F7's phase** — the IR arm above over the
@@ -2894,7 +2894,7 @@ pub(super) fn apply_object(
             )
             .map_err(|e| refused(e.to_string()))?;
             cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
-            builder.write_tir_dissection(*session_id, Some(phase));
+            builder.write_tir_dissection(*session_id, Some(phase))?;
             builder.write_court(*session_id, Some(session))?;
         }
         // **RFC-0004 A6: an evaluation claim's root claim opens F7's phase** — the generative arm above over the
@@ -2930,7 +2930,7 @@ pub(super) fn apply_object(
             )
             .map_err(|e| refused(e.to_string()))?;
             cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
-            builder.write_tir_dissection(*session_id, Some(phase));
+            builder.write_tir_dissection(*session_id, Some(phase))?;
             builder.write_court(*session_id, Some(session))?;
         }
         PalwConsensusObjectV2::CourtTirDissected { session_id, round, signature: _ } => {
@@ -2941,7 +2941,7 @@ pub(super) fn apply_object(
                 .apply_round(round, ctx.daa_score, builder.params.turn_deadline_daa())
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
             cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
-            builder.write_tir_dissection(*session_id, Some(phase));
+            builder.write_tir_dissection(*session_id, Some(phase))?;
             builder.write_court(*session_id, Some(session))?;
         }
         PalwConsensusObjectV2::CourtTirChildChosen { session_id, choice, signature: _ } => {
@@ -2952,7 +2952,7 @@ pub(super) fn apply_object(
                 .apply_choice(choice, ctx.daa_score, builder.params.turn_deadline_daa())
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
             cap_tir_phase_deadline_v1(&mut phase, &session, builder.params);
-            builder.write_tir_dissection(*session_id, Some(phase));
+            builder.write_tir_dissection(*session_id, Some(phase))?;
             builder.write_court(*session_id, Some(session))?;
         }
         PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts } => {
@@ -3470,7 +3470,7 @@ pub(super) fn apply_object(
             builder.write_claim(*claim_id, Some(claim))?;
             builder.stamp_staged_claim_v1(*claim_id, staged_contract);
             if let Some(wire) = public_job_wire {
-                builder.write_public_fp_job_v1(*claim_id, Some(wire));
+                builder.write_public_fp_job_v1(*claim_id, Some(wire))?;
             }
             if let Some(plan) = budget_plan {
                 builder.commit_bond_budget_v1(ctx, *claim_id, plan)?;
@@ -3499,7 +3499,7 @@ pub(super) fn apply_object(
                         consumed_state_root: consumed_prefix_state.state_root,
                         consumed_prefix_tokens: consumed_prefix_state.prefix_tokens,
                     }),
-                );
+                )?;
             }
             // ADR-0088 Decision 3's recorded gap: a free-prompt claim names no root, so it is
             // attributed to the class's founding line's current root until the job's v6.
@@ -3511,7 +3511,7 @@ pub(super) fn apply_object(
             let deadline = ctx.daa_score.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
             // RFC-0010: a claim accepted under the permissionless Panel's rule is clocked by its engine, not by V2's bind window.
             if !builder.params.panel_v3_rule_at(ctx.daa_score) {
-                builder.arm_deadline(deadline, *claim_id);
+                builder.arm_deadline(deadline, *claim_id)?;
             }
             // No production census here: commitments are not blocks. The receipt lane's counters
             // move when a quantum is SPENT.

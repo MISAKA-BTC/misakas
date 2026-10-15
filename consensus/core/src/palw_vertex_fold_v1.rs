@@ -80,7 +80,7 @@ pub(super) fn apply_vertex_v1(
     builder.write_vertex_round(
         (vertex.round, vertex.seat_bond),
         Some(PalwVertexRoundRowV1 { leaves_root: vertex.leaves_root, accepted_daa: daa, convicted: false }),
-    );
+    )?;
     let resolved = ResolvedLeavesV1::of(&builder.state, &vertex.leaves);
     let audit_index = super::palw_mesh_fold_v1::AuditRefIndexV1::of(&builder.state, &vertex.leaves);
     for leaf in &vertex.leaves {
@@ -136,7 +136,7 @@ fn count_verdict_v1(
             let mut tally = builder.state.vertex.tallies.get(claim_id).cloned().unwrap_or_default();
             tally.counted.push(PalwVertexCountedV1 { seat, verdict: *verdict, signed_daa: vertex.signed_daa });
             let reached = tally.valid() >= quorum();
-            builder.write_vertex_tally(*claim_id, Some(tally.clone()));
+            builder.write_vertex_tally(*claim_id, Some(tally.clone()))?;
             if reached {
                 license_from_tally_v1(builder, ctx, claim_id, &tally)?;
             }
@@ -237,7 +237,7 @@ pub(super) fn apply_vertex_equivocation_v1(
     for claim in claims {
         if let Some(lock) = builder.state.slashable_locks.get(&(seat, claim)).copied() {
             total = total.checked_add(lock.amount).ok_or(PalwStateV2Error::Overflow("equivocation forfeited locks"))?;
-            builder.write_slashable_lock((seat, claim), None);
+            builder.write_slashable_lock((seat, claim), None)?;
         }
     }
     // 2. The slash (clamped at the bond's collateral, as every slash is).
@@ -253,7 +253,7 @@ pub(super) fn apply_vertex_equivocation_v1(
         Some(row) => (row.accepted_daa, row.leaves_root),
         None => (daa, evidence.a.leaves_root.min(evidence.b.leaves_root)),
     };
-    builder.write_vertex_round((round, seat), Some(PalwVertexRoundRowV1 { leaves_root, accepted_daa, convicted: true }));
+    builder.write_vertex_round((round, seat), Some(PalwVertexRoundRowV1 { leaves_root, accepted_daa, convicted: true }))?;
     Ok(())
 }
 
@@ -314,7 +314,7 @@ pub(super) fn charge_held_attesters_v1(
         for row in rows.iter_mut().filter(|row| attesters.contains(&row.seat)) {
             row.charged = true;
         }
-        builder.write_vertex_held(*claim_id, Some(rows));
+        builder.write_vertex_held(*claim_id, Some(rows))?;
     }
     Ok(())
 }

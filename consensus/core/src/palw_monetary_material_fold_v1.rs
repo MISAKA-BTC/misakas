@@ -1115,7 +1115,7 @@ mod tests {
             let payload = builder.state.bond(&bond(n)).unwrap().payout_payload;
             let queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload);
             let income = super::super::palw_bond_budget_fold_v1::native_queued_income_id_v1(queue, &bond(n));
-            builder.write_payout(queue, None);
+            builder.write_payout(queue, None).unwrap();
             observe_payment(&mut builder, &ctx(1_000), income, queue);
             builder
                 .bond_budget_op(|b, _, j| b.confirm_native_income_payment_v1(&params.bond_budget().unwrap().policy, &income, 1_000, j))

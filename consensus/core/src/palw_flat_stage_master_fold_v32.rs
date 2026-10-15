@@ -82,7 +82,7 @@ pub(super) fn register(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV
     let bundle_raw:Vec<u8>=read(r,1,&source,16<<20).ok_or_else(||refused("Master32 original complete bundle body absent"))?;let(bundle,_)=NativeStageSourceBundleV28::from_bytes(&bundle_raw).map_err(refused)?.check().map_err(refused)?;let classes=wire.classes.iter().map(|id|restore_class(builder,p,*id)).collect::<Result<Vec<_>,_>>()?;let master=wire.check(&bundle,&classes).map_err(refused)?;let id=master.root();if master_read::<NativeMasterHeaderV32>(builder.state.kernel_route.as_ref().unwrap(),0,&id,16384).is_some()||builder.state.kernel_route.as_ref().unwrap().aux.contains_key(&(STAGE_TABLE_V14,master_key(7,&id))){return Err(refused("Master32 original requester declaration already registered"));}
     let courts=classes.iter().map(misaka_palw_kernel::flat_inputs12::court32::derive_stage_court_scope_v32).collect::<Result<Vec<_>,_>>().map_err(refused)?;
     let h=NativeMasterHeaderV32{version:32,id,requester:*signer,requester_operator:operator,source,manifest:bundle.manifest().root(),nonce:wire.nonce,policy:p.root(),registered:ctx.daa_score,body_bytes:body.len() as u32,classes:wire.classes.clone(),maximum_courts:courts.iter().map(|c|c.root()).collect(),maximum_resources:classes.iter().map(|c|c.maximum_resources().root()).collect(),next_stage:0,terminal:None};catalog.push(id);
-    builder.write_kernel_row(STAGE_TABLE_V14,master_key(0,&id),Some(bytes(&h)));builder.write_kernel_row(STAGE_TABLE_V14,master_key(1,&id),Some(bytes(&body.to_vec())));builder.write_kernel_row(STAGE_TABLE_V14,master_key(2,signer),Some(bytes(&catalog)));builder.note_kernel_bond(signer);Ok(())
+    builder.write_kernel_row(STAGE_TABLE_V14,master_key(0,&id),Some(bytes(&h)))?;builder.write_kernel_row(STAGE_TABLE_V14,master_key(1,&id),Some(bytes(&body.to_vec())))?;builder.write_kernel_row(STAGE_TABLE_V14,master_key(2,signer),Some(bytes(&catalog)))?;builder.note_kernel_bond(signer)?;Ok(())
 }
 
 // ---- Audit-time composite Final (lead default 2026-10-15, pending user review) ----
@@ -317,7 +317,7 @@ pub(super) fn accept_invocation(builder:&mut TransitionBuilder<'_>,ctx:&PalwBloc
     let id=*ids.last().ok_or_else(||refused("invocation32 own producer acceptance was not established"))?;let base:NativeStageConsentV28=read(r,10,&id,4096).ok_or_else(||refused("invocation32 base original acceptance absent"))?;
     if base.original14.job!=job.root()||base.original14.class!=prep.class||base.original14.producer!=*signer||base.original14.accepted_daa!=ctx.daa_score{return Err(refused("invocation32 cannot attach to unrelated/old producer consent"));}
     let c=InvocationConsentV32{version:32,master:e.master,stage:e.stage,class:prep.class,maximum:maximum.root(),court:maximum.scope().root(),material:material_root(&e),transport:transport.root(),base_consent:id,producer:*signer,requester:prep.requester,accepted:ctx.daa_score};
-    builder.write_kernel_row(STAGE_TABLE_V14,master_key(3,&id),Some(bytes(&c)));Ok(())
+    builder.write_kernel_row(STAGE_TABLE_V14,master_key(3,&id),Some(bytes(&c)))?;Ok(())
 }
 pub(super) fn fund_invocation(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,p:&NativeStagePoliciesV28,body:&[u8])->Result<(),PalwStateV2Error>{
     if !pay_invocation(builder,ctx,signer,p,body)?{return Ok(());}
@@ -336,12 +336,12 @@ pub(super) fn fund_invocation(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockC
     let b=NativeInvocationBindingV32{version:32,master:e.master,stage:e.stage,job:id,original_funding:original,invocation:[0;64],input_binding:[0;64],class:h.class,source:classes[e.stage as usize].source().id(),maximum_contract:h.contract.root(),original_shared_nonce:nonce.root(),maximum_invocation:maximum.root(),maximum_court:maximum.scope().root(),material:c.material,consent32:c.root(),actual_positions:0};
     // Base carrier is unnecessary for re-execution; the maximum job remains in
     // the immutable original max-book. Keep only exact public upstream facts.
-    progress.jobs[e.stage as usize]=id;builder.write_kernel_row(STAGE_TABLE_V14,master_key(6,&e.master),Some(bytes(&progress)));
+    progress.jobs[e.stage as usize]=id;builder.write_kernel_row(STAGE_TABLE_V14,master_key(6,&e.master),Some(bytes(&progress)))?;
     let lease: (Digest,crate::palw_native_paged_proof_v29::NativePagedLeaseJournalV29)=borsh::from_slice(builder.state.kernel_route.as_ref().unwrap().aux.get(&(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,bytes(&(29u8,id,22u8)))).ok_or_else(||refused("invocation32 original physical journal absent"))?).map_err(|_|refused("invocation32 physical journal grammar"))?;
     if lease.0!=lease.1.root()||lease.1.job!=id||lease.1.funding!=original||lease.1.lease.retired{return Err(refused("invocation32 producer transport has no live original lease"));}
     let journal=InvocationCommitJournalV32{version:32,job:id,funding:original,consent:c.root(),producer:request.producer,terms:transport,until:ctx.daa_score.checked_add(h.contract.temporal.commit_window).ok_or_else(||refused("invocation32 original producer transport deadline overflow"))?,lease:lease.1.lease_root,attempt:0,group:[0;64],count:0,total:0,next:0,charged:0,burned:false,assembled:false};
     write_commit_journal(builder,&journal);
-    e.body.clear();builder.write_kernel_row(STAGE_TABLE_V14,binding_key(id),Some(bytes(&b)));builder.write_kernel_row(STAGE_TABLE_V14,master_key(4,&id),Some(bytes(&bytes(&e))));Ok(())
+    e.body.clear();builder.write_kernel_row(STAGE_TABLE_V14,binding_key(id),Some(bytes(&b)))?;builder.write_kernel_row(STAGE_TABLE_V14,master_key(4,&id),Some(bytes(&bytes(&e))))?;Ok(())
 }
 pub(super) fn actual_positions(r:&PalwKernelRouteStateV1,job:Digest,fallback:u32)->Result<u32,PalwStateV2Error>{Ok(binding(r,job)?.map(|b|if b.actual_positions==0{fallback}else{b.actual_positions}).unwrap_or(fallback))}
 pub(super) fn actual_job_fixed(builder:&TransitionBuilder<'_>,h:&JobHeader,class:&CheckedStageClassV28)->Result<Option<CheckedStageJobV28>,PalwStateV2Error>{
@@ -388,9 +388,9 @@ fn commit_actual(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,sign
     book.commit_invocation_v32(&class,&maximum_job,&plan,&invocation,palw_kernel_bond_id_v1(signer),ctx.daa_score,&trace,h.producer_reserved).map_err(refused)?;
     b.invocation=invocation.invocation_root();b.input_binding=invocation.input_binding_root();b.actual_positions=invocation.positions();
     let actual=InvocationActualV32{version:32,maximum:b.maximum_invocation,invocation:b.invocation,inputs:b.input_binding,job:invocation.job().job().clone(),generated:generated.to_vec(),claim:book.claim().unwrap(),committed:ctx.daa_score};
-    builder.write_kernel_row(STAGE_TABLE_V14,binding_key(id),Some(bytes(&b)));builder.write_kernel_row(STAGE_TABLE_V14,master_key(5,&id),Some(bytes(&actual)));
+    builder.write_kernel_row(STAGE_TABLE_V14,binding_key(id),Some(bytes(&b)))?;builder.write_kernel_row(STAGE_TABLE_V14,master_key(5,&id),Some(bytes(&actual)))?;
     data.book=bytes(&book);data.trace=trace_raw.to_vec();write_job(builder,&mut h,&mut data,&book);
-    let status=crate::palw_native_paged_proof_v29::NativePagedJobStatusV29{version:29,namespace:28,job:id,funding:h.original,claim:book.claim().unwrap(),maximum:h.contract.root(),paid_plan:h.contract.paged_plan,parameter:class.source().parameters().root(),inventory:class.source().inventory_root(),active:true,admitted_interval:book.admitted_interval(),deadline:book.deadline(),challenge_end:book.challenge_end().unwrap(),paid_owners:[[0;64];4],owners_admitted:0,latest_paid_horizon:0};builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,bytes(&(29u8,id,0u8)),Some(bytes(&(status.root(),status))));close_commit_transport(builder,id)?;Ok(())
+    let status=crate::palw_native_paged_proof_v29::NativePagedJobStatusV29{version:29,namespace:28,job:id,funding:h.original,claim:book.claim().unwrap(),maximum:h.contract.root(),paid_plan:h.contract.paged_plan,parameter:class.source().parameters().root(),inventory:class.source().inventory_root(),active:true,admitted_interval:book.admitted_interval(),deadline:book.deadline(),challenge_end:book.challenge_end().unwrap(),paid_owners:[[0;64];4],owners_admitted:0,latest_paid_horizon:0};builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,bytes(&(29u8,id,0u8)),Some(bytes(&(status.root(),status))))?;close_commit_transport(builder,id)?;Ok(())
 }
 
 fn with_actual<T>(builder:&TransitionBuilder<'_>,p:&NativeStagePoliciesV28,h:&JobHeader,class:&CheckedStageClassV28,book:&StageJobBookV28,f:impl FnOnce(&CheckedStageInvocationV32<'_>,&misaka_palw_kernel::flat_inputs12::court32::CheckedStageCourtScopeV32,&[u32])->Result<T,PalwStateV2Error>)->Result<T,PalwStateV2Error>{
@@ -450,7 +450,7 @@ pub(super) fn note_final(builder:&mut TransitionBuilder<'_>,h:&JobHeader,book:&S
     p.finals[b.stage as usize]=object_id(b"misaka-palw/native/master-original-component-terminal/v32",&(b.master,b.stage,h.id,b.maximum_invocation,b.invocation,b.input_binding,book.original_root(),book.root(),book.claim(),s,queue));
     mh.next_stage=mh.next_stage.checked_add(1).ok_or_else(||refused("Master32 finite stage catalogue overflow"))?;
     if mh.next_stage as usize==p.jobs.len(){p.complete=Some(object_id(b"misaka-palw/native/master-all-components-completion-catalogue/v32",&(b.master,&p.jobs,&p.finals)));}
-    builder.write_kernel_row(STAGE_TABLE_V14,master_key(0,&b.master),Some(bytes(&mh)));builder.write_kernel_row(STAGE_TABLE_V14,master_key(6,&b.master),Some(bytes(&p)));Ok(())
+    builder.write_kernel_row(STAGE_TABLE_V14,master_key(0,&b.master),Some(bytes(&mh)))?;builder.write_kernel_row(STAGE_TABLE_V14,master_key(6,&b.master),Some(bytes(&p)))?;Ok(())
 }
 pub(super) fn check_collect(builder:&TransitionBuilder<'_>,h:&JobHeader,book:&StageJobBookV28)->Result<(),PalwStateV2Error>{
     let Some(b)=binding(builder.state.kernel_route.as_ref().unwrap(),h.id)?else{return Ok(())};
@@ -475,7 +475,7 @@ pub(super) fn collect_material(builder:&mut TransitionBuilder<'_>,job:Digest){
 pub(super) fn note_abort(builder:&mut TransitionBuilder<'_>,h:&JobHeader,book:&StageJobBookV28)->Result<(),PalwStateV2Error>{
     if !matches!(book.terminal(),StageTerminalV28::Refunded|StageTerminalV28::Convicted){return Ok(());}
     let Some(b)=binding(builder.state.kernel_route.as_ref().unwrap(),h.id)?else{return Ok(())};let mh:NativeMasterHeaderV32=master_read(builder.state.kernel_route.as_ref().unwrap(),0,&b.master,16384).ok_or_else(||refused("Master32 original declaration absent at terminal"))?;let mut p=progress(builder.state.kernel_route.as_ref().unwrap(),&mh)?;
-    if p.jobs.get(b.stage as usize)!=Some(&h.id)||book.original_root()!=b.original_funding||book.settlement().is_none(){return Err(refused("Master32 aborted child lacks genuine original settlement"));}p.aborted=true;builder.write_kernel_row(STAGE_TABLE_V14,master_key(6,&b.master),Some(bytes(&p)));Ok(())
+    if p.jobs.get(b.stage as usize)!=Some(&h.id)||book.original_root()!=b.original_funding||book.settlement().is_none(){return Err(refused("Master32 aborted child lacks genuine original settlement"));}p.aborted=true;builder.write_kernel_row(STAGE_TABLE_V14,master_key(6,&b.master),Some(bytes(&p)))?;Ok(())
 }
 
 /// Public metadata collection never creates a Final or pays again. The bounded
@@ -493,11 +493,11 @@ pub(super) fn collect_master(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockCo
     let mut catalog:Vec<Digest>=master_read(r,2,&h.requester,4+8*64).ok_or_else(||refused("Master32 original requester catalogue absent"))?;
     if !catalog.contains(&id){return Err(refused("Master32 original requester catalogue membership differs"));}catalog.retain(|j|*j!=id);
     let tombstone=(32u16,id,h.source,h.manifest,h.requester,h.requester_operator,h.nonce,h.policy,&h.classes,&state);
-    builder.write_kernel_row(STAGE_TABLE_V14,master_key(7,&id),Some(bytes(&tombstone)));
+    builder.write_kernel_row(STAGE_TABLE_V14,master_key(7,&id),Some(bytes(&tombstone)))?;
     // Preserve progress + compact child binding + native kind20 single-credit
     // receipts. Only bounded request payloads/owner catalogue slots disappear.
-    for kind in [0,1]{builder.write_kernel_row(STAGE_TABLE_V14,master_key(kind,&id),None);}
-    builder.write_kernel_row(STAGE_TABLE_V14,master_key(2,&h.requester),Some(bytes(&catalog)));builder.note_kernel_bond(signer);Ok(())
+    for kind in [0,1]{builder.write_kernel_row(STAGE_TABLE_V14,master_key(kind,&id),None)?;}
+    builder.write_kernel_row(STAGE_TABLE_V14,master_key(2,&h.requester),Some(bytes(&catalog)))?;builder.note_kernel_bond(signer)?;Ok(())
 }
 
 impl crate::palw_state_v2::PalwChainStateV2 {
@@ -606,7 +606,7 @@ pub(super) fn commit_part(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockConte
     if j.attempt==0||j.burned {erase_commit_parts(builder,part.job,j.attempt,j.count);j.attempt+=1;j.group=part.group;j.count=part.count;j.total=part.total;j.next=0;j.burned=false;}
     j.charged+=1;
     if borrowed_invocation_commit_part_v32(body).is_none(){j.burned=true;write_commit_journal(builder,&j);return Ok(());}
-    builder.write_kernel_row(STAGE_TABLE_V14,commit_part_key(part.job,j.attempt,part.index),Some(part.bytes.to_vec()));j.next+=1;write_commit_journal(builder,&j);Ok(())
+    builder.write_kernel_row(STAGE_TABLE_V14,commit_part_key(part.job,j.attempt,part.index),Some(part.bytes.to_vec()))?;j.next+=1;write_commit_journal(builder,&j);Ok(())
 }
 pub(super) fn assemble_commit(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,p:&NativeStagePoliciesV28,body:&[u8])->Result<(),PalwStateV2Error>{
     if body.len()!=130||body[..2]!=32u16.to_le_bytes(){return Err(refused("invocation32 exact original assembly job/group"));}

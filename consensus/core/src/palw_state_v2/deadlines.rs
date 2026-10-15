@@ -334,7 +334,7 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                         .checked_add(builder.params.window_bind)
                         .ok_or(PalwStateV2Error::Overflow("redraw bind deadline"))?;
                     builder.write_claim(claim_id, Some(revived))?;
-                    builder.arm_deadline(deadline, claim_id);
+                    builder.arm_deadline(deadline, claim_id)?;
                 } else if builder.params.panel_unavailable_expiry_active_at(ctx.daa_score) {
                     // **Lane PL part C (ADR-0166): two panels failing to conclude is verifier unavailability, not producer
                     // fraud.** The chain cannot tell a silent Sybil seat or an honest outage from a withholding producer by
@@ -496,7 +496,7 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                     &claim,
                 )?;
                 if let Some(at) = effective.filter(|at| *at >= ctx.daa_score) {
-                    builder.arm_deadline(at, claim_id);
+                    builder.arm_deadline(at, claim_id)?;
                     continue;
                 }
                 builder.retire_claim(claim_id, &claim)?;

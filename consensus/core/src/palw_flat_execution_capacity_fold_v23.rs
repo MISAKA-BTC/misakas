@@ -105,7 +105,7 @@ pub(super) fn accept(
         physical_service22: service.root(),
         slot_cooldown_terms: NativeExecutionConsentV23::cooldown_terms(),
     };
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(23u8, id)), Some(key(&(c.root(), c))));
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(23u8, id)), Some(key(&(c.root(), c))))?;
     Ok(())
 }
 pub(super) struct NativeCapacityAdmissionV23 {
@@ -287,7 +287,7 @@ pub(super) fn request(
         s.reserve_request(lane, owner, slot, kind, pending, now, deadline).map_err(refused)?;
     }
     if slots.is_some() && kind == 1 {
-        builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&(22u8, pending)), Some(vec![0]));
+        builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&(22u8, pending)), Some(vec![0]))?;
     }
     write_slots(builder, job, slots);
     Ok(())
@@ -311,7 +311,7 @@ pub(super) fn debit_trace_attempt(builder: &mut TransitionBuilder<'_>, job: Dige
         return Err(refused("native23 original trace answer attempts exhausted"));
     }
     let next = raw[0] + 1;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&(22u8, pending)), Some(vec![next]));
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&(22u8, pending)), Some(vec![next]))?;
     Ok(())
 }
 pub(super) fn check_fresh_start(builder: &TransitionBuilder<'_>, job: Digest, now: u64, horizon: u64) -> Result<(), PalwStateV2Error> {

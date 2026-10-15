@@ -118,7 +118,7 @@ pub(super) fn part(
         return Ok(());
     }
     let original = s.seal().unwrap().clone();
-    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, part_key(body.job, body.seal, body.index), Some(body.bytes.to_vec()));
+    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, part_key(body.job, body.seal, body.index), Some(body.bytes.to_vec()))?;
     write(builder, &s);
     if (0..original.count).any(|i| !original.accepted(i)) {
         return Ok(());

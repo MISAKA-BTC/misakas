@@ -238,9 +238,9 @@ fn request(
     actor_ids.push(id);
     write_pending(builder, &v);
     protected::write_status(builder, &st);
-    builder.write_kernel_row(TABLE, k(41, &unit), Some(b(&id)));
-    builder.write_kernel_row(TABLE, k(44, signer), Some(b(&actor_ids)));
-    builder.note_kernel_bond(signer);
+    builder.write_kernel_row(TABLE, k(41, &unit), Some(b(&id)))?;
+    builder.write_kernel_row(TABLE, k(44, signer), Some(b(&actor_ids)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 fn settle_pending(
@@ -271,8 +271,8 @@ fn settle_pending(
     v.delivered = delivered;
     write_pending(builder, v);
     protected::write_status(builder, &st);
-    builder.write_kernel_row(TABLE, k(44, &v.requester), Some(b(&ids)));
-    builder.write_kernel_row(TABLE, k(41, &v.unit), None);
+    builder.write_kernel_row(TABLE, k(44, &v.requester), Some(b(&ids)))?;
+    builder.write_kernel_row(TABLE, k(41, &v.unit), None)?;
     Ok(())
 }
 // Answer=39:u16,kind0,pending64,group64,indexu16,countu16,totalu32,len:u32,bytes.
@@ -332,7 +332,7 @@ fn answer(
     if n != raw.len() - 143 || n != expected {
         return Ok(());
     }
-    builder.write_kernel_row(TABLE, k(43, &(v.id, v.attempts, index)), Some(raw[143..].to_vec()));
+    builder.write_kernel_row(TABLE, k(43, &(v.id, v.attempts, index)), Some(raw[143..].to_vec()))?;
     v.accepted |= 1 << index;
     write_pending(builder, &v);
     if (0..count).any(|i| v.accepted & (1 << i) == 0) {
@@ -361,7 +361,7 @@ fn answer(
         return Ok(());
     }
     settle_pending(builder, &h, &mut v, true)?;
-    builder.write_kernel_row(TABLE, k(42, &v.unit), Some(b(&(v.root(), &v.demand, &reply))));
+    builder.write_kernel_row(TABLE, k(42, &v.unit), Some(b(&(v.root(), &v.demand, &reply))))?;
     Ok(())
 }
 fn default(

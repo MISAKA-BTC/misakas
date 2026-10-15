@@ -5057,7 +5057,7 @@ mod adr0135 {
             // A row that moves the horizon.
             let mut held = b.state.model_lifecycles[&kimi_id()].clone();
             held.state = PalwModelLifecycleV1::Held;
-            b.write_model_lifecycle(kimi_id(), Some(held));
+            b.write_model_lifecycle(kimi_id(), Some(held)).unwrap();
             assert_index_is_the_walk(&b, &fold, now, "after a row change");
             // A restore over writes the index had absorbed.
             let checkpoint = b.checkpoint();
@@ -5065,7 +5065,7 @@ mod adr0135 {
             b.write_claim(h64(0x4446), Some(fresh.clone())).unwrap();
             let mut active = b.state.model_lifecycles[&kimi_id()].clone();
             active.state = PalwModelLifecycleV1::Active;
-            b.write_model_lifecycle(kimi_id(), Some(active));
+            b.write_model_lifecycle(kimi_id(), Some(active)).unwrap();
             assert_index_is_the_walk(&b, &fold, now, "before the restore");
             b.restore(checkpoint);
             assert_index_is_the_walk(&b, &fold, now, "after the restore");
@@ -32122,10 +32122,10 @@ mod rcore_s1_api {
         let parent = PalwChainStateV2::genesis();
         let extras = PalwTransitionExtrasV1::default();
         let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
-        b.write_reporter_commit(h64(0x71), Some(PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 10 }));
-        b.write_reporter_commit(h64(0x72), Some(PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 12 }));
-        b.write_reporter_commit(h64(0x73), Some(PalwReporterCommitV1 { reporter: bond_key(2), committed_daa: 11 }));
-        b.write_reporter_commit(h64(0x72), None);
+        b.write_reporter_commit(h64(0x71), Some(PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 10 })).unwrap();
+        b.write_reporter_commit(h64(0x72), Some(PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 12 })).unwrap();
+        b.write_reporter_commit(h64(0x73), Some(PalwReporterCommitV1 { reporter: bond_key(2), committed_daa: 11 })).unwrap();
+        b.write_reporter_commit(h64(0x72), None).unwrap();
         assert_eq!(b.state.reporter_open_commitments(&bond_key(1)), 1);
         assert_eq!(b.state.reporter_open_commitments(&bond_key(2)), 1);
         assert_eq!(b.state.commitments_by_daa.iter().copied().collect::<Vec<_>>(), vec![(10, h64(0x71)), (11, h64(0x73))]);

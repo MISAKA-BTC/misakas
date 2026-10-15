@@ -63,7 +63,7 @@ fn policies(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Re
         return Err(refused("typed stage14 immutable native policy changed"));
     }
     if stored.is_none() {
-        builder.write_kernel_row(STAGE_TABLE_V14, key, Some(raw));
+        builder.write_kernel_row(STAGE_TABLE_V14, key, Some(raw))?;
     }
     // Text11 and stage14 use one global quota/actor/session pool. A different
     // configured tuple cannot fork those limits under another feature label.
@@ -74,7 +74,7 @@ fn policies(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Re
         return Err(refused("stage14/text11 shared native policies differ"));
     }
     if stored.is_none() {
-        builder.write_kernel_row(table, Vec::new(), Some(shared));
+        builder.write_kernel_row(table, Vec::new(), Some(shared))?;
     }
     Ok(p)
 }
@@ -544,7 +544,7 @@ fn fund(
         crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,
         bytes(&(16u8, job_id, 1u8)),
         Some(bytes(&source_plan.record())),
-    );
+    )?;
     super::palw_flat_execution_fold_v11::write_trace(builder, &trace_shard, 0, job_id);
     owners.push(job_id);
     producer_jobs.push(job_id);
@@ -552,8 +552,8 @@ fn fund(
         crate::palw_flat_execution_v11::EXECUTION_REQUEST_INDEX_TABLE_V11,
         bytes(&requester_operator),
         Some(bytes(&next_nonce)),
-    );
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(5, &job_id), Some(bytes(&row)));
+    )?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(5, &job_id), Some(bytes(&row)))?;
     builder.write_kernel_row(
         STAGE_TABLE_V14,
         stage_key_v14(16, &job_id),
@@ -573,7 +573,7 @@ fn fund(
             requests_admitted: 0,
             required_until: book.deadline_daa(),
         })),
-    );
+    )?;
     builder.write_kernel_row(
         STAGE_TABLE_V14,
         stage_key_v14(12, &job_id),
@@ -585,11 +585,11 @@ fn fund(
             plan: fees,
             earned: 0,
         })),
-    );
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(6, signer), Some(bytes(&owners)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(7, &request.producer), Some(bytes(&producer_jobs)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(10, &request.acceptance), None);
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(8, &request.producer), Some(bytes(&acceptances)));
+    )?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(6, signer), Some(bytes(&owners)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(7, &request.producer), Some(bytes(&producer_jobs)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(10, &request.acceptance), None)?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(8, &request.producer), Some(bytes(&acceptances)))?;
     Ok(())
 }
 
@@ -695,13 +695,13 @@ fn accept(
         return Err(refused("stage producer consent already exists"));
     }
     for id in expired {
-        builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(9, &id), None);
-        builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(10, &id), None);
+        builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(9, &id), None)?;
+        builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(10, &id), None)?;
     }
     owners.push(consent.id);
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(9, &consent.id), Some(bytes(&consent)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(8, signer), Some(bytes(&owners)));
-    builder.note_kernel_bond(signer);
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(9, &consent.id), Some(bytes(&consent)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(8, signer), Some(bytes(&owners)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 
@@ -792,9 +792,9 @@ fn accept_delivery_v18(
             *id = contract.id;
         }
     }
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(9, &old_id), None);
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(10, &contract.id), Some(bytes(&contract)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(8, signer), Some(bytes(&owners)));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(9, &old_id), None)?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(10, &contract.id), Some(bytes(&contract)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(8, signer), Some(bytes(&owners)))?;
     Ok(())
 }
 
@@ -875,7 +875,7 @@ fn commit(
     row.book_bytes = bytes(&book);
     row.header.book_bytes_len = row.book_bytes.len() as u32;
     row.trace_bytes = body.to_vec();
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(5, &id), Some(bytes(&row)));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(5, &id), Some(bytes(&row)))?;
     Ok(())
 }
 fn close_unclaimed(
@@ -948,7 +948,7 @@ fn close_unclaimed(
     row.header.book_bytes_len = row.book_bytes.len() as u32;
     // Fixed original beneficiary and principal only: public Close signers may
     // not redirect this queue or convert a payment attempt into new income.
-    builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.requester_payout, amount: refund }));
+    builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.requester_payout, amount: refund }))?;
     builder.cancel_native_recipient_v1(Hash64::from_bytes(id), h.producer, 14);
     builder.cancel_native_recipient_v1(Hash64::from_bytes(id), h.producer, 19);
     builder.bond_budget_close_v1(
@@ -967,8 +967,8 @@ fn close_unclaimed(
         amount: refund,
         established_daa: ctx.daa_score,
     };
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(11, &id), Some(bytes(&credit)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(5, &id), Some(bytes(&row)));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(11, &id), Some(bytes(&credit)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(5, &id), Some(bytes(&row)))?;
     super::palw_flat_execution_fold_v11::write_shard(builder, &shard, id);
     Ok(())
 }
@@ -1036,9 +1036,9 @@ fn bind(
     };
     let row = NativeStageSourceRowV14 { header, source_bytes: body.to_vec() };
     owners.push(id);
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(0, &id), Some(bytes(&row)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(1, signer), Some(bytes(&owners)));
-    builder.note_kernel_bond(signer);
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(0, &id), Some(bytes(&row)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(1, signer), Some(bytes(&owners)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 fn register(
@@ -1101,9 +1101,9 @@ fn register(
     };
     let row = NativeStageClassRowV14 { header, class_bytes: body.to_vec() };
     owners.push(id);
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(2, &id), Some(bytes(&row)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(3, signer), Some(bytes(&owners)));
-    builder.note_kernel_bond(signer);
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(2, &id), Some(bytes(&row)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(3, signer), Some(bytes(&owners)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 fn source_fact(
@@ -1168,7 +1168,7 @@ fn source_fact(
         established_daa: ctx.daa_score,
         reporter: *signer,
     };
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(14, &checked.relation_root()), Some(bytes(&fact)));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(14, &checked.relation_root()), Some(bytes(&fact)))?;
     // This is an admission-denial fact only. Each existing funded/committed
     // job still needs its own original claim/paid proof/coins court before a
     // finder, binder or producer settlement can be issued.
@@ -1356,15 +1356,15 @@ fn collect_terminal(
         collected_daa: ctx.daa_score,
     };
     super::palw_flat_execution_fold_v11::write_shard(builder, &shard, id);
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(17, &id), Some(bytes(&tombstone)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(6, &h.requester), Some(bytes(&requester)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(7, &h.producer), Some(bytes(&producer)));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(17, &id), Some(bytes(&tombstone)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(6, &h.requester), Some(bytes(&requester)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(7, &h.producer), Some(bytes(&producer)))?;
     for kind in [5u8, 12, 16] {
-        builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(kind, &id), None);
+        builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(kind, &id), None)?;
     }
     for request in pursuit.source_requests.iter().take(pursuit.requests_admitted as usize) {
-        builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_DEMAND_TABLE_V11, bytes(&(16u8, *request)), None);
-        builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(18, request), None);
+        builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_DEMAND_TABLE_V11, bytes(&(16u8, *request)), None)?;
+        builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(18, request), None)?;
     }
     for demand in collected_source {
         let slot = bytes(&(16u8, demand.requester, demand.request.slot));
@@ -1376,14 +1376,14 @@ fn collect_terminal(
             .aux_row::<Digest>(crate::palw_flat_execution_v11::EXECUTION_DEMAND_SLOT_TABLE_V11, &slot)
             == Some(demand.id())
         {
-            builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_DEMAND_SLOT_TABLE_V11, slot, None);
+            builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_DEMAND_SLOT_TABLE_V11, slot, None)?;
         }
     }
     for unit in pursuit.source_units.iter().take(pursuit.requests_admitted as usize) {
-        builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_SERVED_TABLE_V11, bytes(&(16u8, *unit)), None);
+        builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_SERVED_TABLE_V11, bytes(&(16u8, *unit)), None)?;
     }
     for key in [bytes(&(2u8, id)), bytes(&(16u8, id)), bytes(&(16u8, id, 1u8)), bytes(&(17u8, 0u8, id))] {
-        builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11, key, None);
+        builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11, key, None)?;
     }
     Ok(())
 }

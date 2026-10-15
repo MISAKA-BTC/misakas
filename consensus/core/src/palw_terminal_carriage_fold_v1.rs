@@ -30,7 +30,8 @@ impl PalwChainStateV2 {
     }
 }
 impl TransitionBuilder<'_> {
-    fn write_terminal_v1(&mut self, key: PalwTerminalKeyV1, new: Option<PalwPendingTerminalV1>) {
+    fn write_terminal_v1(&mut self, key: PalwTerminalKeyV1, new: Option<PalwPendingTerminalV1>) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_row_v1(&key, &new, |s| &s.terminal_evidence, false, "native terminal_evidence writer")?;
         let old = match &new {
             Some(r) => self.state.terminal_evidence.insert(key, r.clone()),
             None => self.state.terminal_evidence.remove(&key),
@@ -38,6 +39,7 @@ impl TransitionBuilder<'_> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::TerminalEvidence { key, old, new });
         }
+        Ok(())
     }
 }
 fn budget(b: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<u64, PalwStateV2Error> {
@@ -65,7 +67,7 @@ pub(super) fn declare(
     b.write_terminal_v1(
         d.key(),
         Some(PalwPendingTerminalV1 { declaration: d.clone(), deadline_daa: deadline, parts: BTreeMap::new() }),
-    );
+    )?;
     Ok(())
 }
 pub(super) fn part(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, p: &PalwTerminalPartV1) -> Result<(), PalwStateV2Error> {
@@ -121,7 +123,7 @@ pub(super) fn part(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, p: &
             &evidence,
             crate::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1::ReservedTerminal { court_maximum: maximum },
         )?;
-        b.write_terminal_v1(key, None);
+        b.write_terminal_v1(key, None)?;
         sweep(b, ctx);
     } else {
         let bytes = p.bytes.clone();

@@ -280,19 +280,19 @@ pub(super) fn request(
     state.requests_admitted += 1;
     state.required_until = state.required_until.max(proof_until);
     native::write_source_shard(builder, &shard, req.job);
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(d.id()), Some(bytes(&d)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(18, &d.id()), Some(bytes(&authority)));
-    builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, slot_key(*signer, req.slot), Some(bytes(&d.id())));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &req.job), Some(bytes(&state)));
-    builder.note_kernel_bond(signer);
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(d.id()), Some(bytes(&d)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(18, &d.id()), Some(bytes(&authority)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, slot_key(*signer, req.slot), Some(bytes(&d.id())))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &req.job), Some(bytes(&state)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 fn close(builder: &mut TransitionBuilder<'_>, mut d: NativeSourceDemandV16) -> Result<(), PalwStateV2Error> {
     let mut s = pursuit(builder, d.request.job)?;
     s.open_demands = s.open_demands.checked_sub(1).ok_or_else(|| refused("stage source pending counter underflow"))?;
     d.settled = true;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(d.id()), Some(bytes(&d)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &d.request.job), Some(bytes(&s)));
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(d.id()), Some(bytes(&d)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &d.request.job), Some(bytes(&s)))?;
     Ok(())
 }
 pub(super) fn answer(
@@ -334,7 +334,7 @@ pub(super) fn answer(
     shard.debit_answer(&p.execution.quota, &epoch, &plan, &palw_kernel_bond_id_v1(signer), n as u64).map_err(refused)?;
     d.attempts += 1;
     native::write_source_shard(builder, &shard, d.request.job);
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(id), Some(bytes(&d)));
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(id), Some(bytes(&d)))?;
     let answer = decode_answer_v16(&body[68..]).map_err(refused)?;
     let valid = match &answer {
         AnswerV16::Header(v) => d.request.kind == 0 && v.authenticates(&d.pc),
@@ -397,11 +397,11 @@ pub(super) fn answer(
         builder.add_kernel_payout(h.producer_payout, credit)?;
         fee.earned += credit;
     }
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(12, &d.request.job), Some(bytes(&fee)));
-    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, pending_key(native::source::unit_key(&d.request)), Some(body[68..].to_vec()));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(12, &d.request.job), Some(bytes(&fee)))?;
+    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, pending_key(native::source::unit_key(&d.request)), Some(body[68..].to_vec()))?;
     d.settled = true;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(d.id()), Some(bytes(&d)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &d.request.job), Some(bytes(&closed_pursuit)));
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(d.id()), Some(bytes(&d)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &d.request.job), Some(bytes(&closed_pursuit)))?;
     Ok(())
 }
 pub(super) fn settle(
@@ -545,7 +545,7 @@ pub(super) fn settle(
     if collected != outcome.collected_original_slash {
         return Err(refused("stage source default actual original producer slash differs"));
     }
-    builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.requester_payout, amount: outcome.requester_refund }));
+    builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.requester_payout, amount: outcome.requester_refund }))?;
     if outcome.finder_credit > 0 {
         if builder.params.reporter_income_active_at(ctx.daa_score) {
             let award = Hash64::from_bytes(misaka_palw_kernel::hash::object_id(
@@ -577,8 +577,8 @@ pub(super) fn settle(
     row.header.producer_reserved = book.producer_reserved();
     row.book_bytes = bytes(&book);
     row.header.book_bytes_len = row.book_bytes.len() as u32;
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(5, &d.request.job), Some(bytes(&row)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(13, &d.request.job), Some(bytes(&outcome)));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(5, &d.request.job), Some(bytes(&row)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(13, &d.request.job), Some(bytes(&outcome)))?;
     let credit = NativeStagePrincipalRefundV14 {
         version: 14,
         job: d.request.job,
@@ -591,11 +591,11 @@ pub(super) fn settle(
         amount: outcome.requester_refund,
         established_daa: established,
     };
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(11, &d.request.job), Some(bytes(&credit)));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(11, &d.request.job), Some(bytes(&credit)))?;
     native::write_shard(builder, &paid, d.request.job);
     let mut settled = d;
     settled.settled = true;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(settled.id()), Some(bytes(&settled)));
-    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &settled.request.job), Some(bytes(&closed_pursuit)));
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(settled.id()), Some(bytes(&settled)))?;
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &settled.request.job), Some(bytes(&closed_pursuit)))?;
     Ok(())
 }

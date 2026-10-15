@@ -732,13 +732,13 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     builder.write_claim(*c.claim_id, Some(claim))?;
     builder.stamp_staged_claim_v1(*c.claim_id, staged_contract);
     if let Some(wire) = public_job_wire {
-        builder.write_public_fp_job_v1(*c.claim_id, Some(wire));
+        builder.write_public_fp_job_v1(*c.claim_id, Some(wire))?;
     }
     builder.write_improvement_eval_job(key, Some(row));
     let deadline = daa.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
     // RFC-0010: a claim accepted under the permissionless Panel's rule is clocked by its engine, not by V2's bind window.
     if !builder.params.panel_v3_rule_at(daa) {
-        builder.arm_deadline(deadline, *c.claim_id);
+        builder.arm_deadline(deadline, *c.claim_id)?;
     }
     Ok(())
 }
@@ -2717,7 +2717,7 @@ mod tests {
             apply_object(b, &ctx(1_600), &honest).unwrap();
             // The claim's panel: three seats drawn; two of them answered.
             let seats = [(bond(ALICE), 1_610u64), (bond(BOB), 1_611), (bond(DAVE), 0)].into_iter().collect();
-            b.write_panel_duties(h(0xA7), Some(PalwPanelDutyRowV1 { seats, seat_exposure: 0 }));
+            b.write_panel_duties(h(0xA7), Some(PalwPanelDutyRowV1 { seats, seat_exposure: 0 })).unwrap();
         });
         let before = |who: u8| s1.improvement_earnings(&bond(who));
         let escrow_before = s1.improvement_candidate(&h(LINE), 1, &h(CAND_A)).unwrap().1.escrow_spent;

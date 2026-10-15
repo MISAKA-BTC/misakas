@@ -169,11 +169,11 @@ pub(super) fn admit(
     let physical = capacity::plan_owner(builder, id, ticket, claim.challenge_end)?;
     write(builder, &shard, ticket, id);
     write_trace(builder, &trace, 2, ticket);
-    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, native_key(&ticket), Some(key(&row)));
-    builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, counter_key, Some(key(&next)));
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)));
+    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, native_key(&ticket), Some(key(&row)))?;
+    builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, counter_key, Some(key(&next)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)))?;
     capacity::commit_owner(builder, id, physical);
-    builder.note_kernel_bond(signer);
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 pub(super) fn debit_request(
@@ -315,11 +315,11 @@ pub(super) fn convert(
     let physical = capacity::plan_transfer(builder, id, ticket, seal_key, horizon)?;
     write(builder, &shard, ticket, id);
     write_trace(builder, &trace, 1, seal_key);
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, trace_row_key(2, ticket), None);
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(3, &seal_key), Some(key(&(summary.row_root(), summary))));
-    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&seal_key), Some(key(&seal)));
-    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, native_key(&ticket), Some(key(&original)));
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, trace_row_key(2, ticket), None)?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(3, &seal_key), Some(key(&(summary.row_root(), summary))))?;
+    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&seal_key), Some(key(&seal)))?;
+    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, native_key(&ticket), Some(key(&original)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)))?;
     capacity::commit_owner(builder, id, physical);
     Ok(())
 }
