@@ -17962,6 +17962,28 @@ fn sweep_reward_reveals(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
                         why: "an award under the key is still waiting for step 3d",
                     });
                 }
+                // **RFC-0008 once-only settlement (RFC08-1; dormant `palw_settlement_once_v1`)**: the offence's award is named once
+                // across both its paths (the native monetary binding and the legacy reward row) and every consumer; a repeat names
+                // nothing and counts nothing. A reporter's slash-funded award stands behind no claim: the combined liability
+                // predicate does not bind it (by name). `Dormant` below the fence.
+                let once = {
+                    use crate::palw_settlement_once_v1::{
+                        PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+                    };
+                    builder.settle_once_liable_v1(
+                        ctx.daa_score,
+                        PalwSettlementObligationV1::of(PalwSettlementLegV1::ReporterAward, offence_key.as_bytes()),
+                        PalwSettlementConsumerV1::ReporterReveal,
+                        pending.amount,
+                        PalwSettlementDebitV1::Held { amount: pending.amount },
+                        palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim(
+                            "a reporter's slash-funded award stands behind no claim",
+                        ),
+                    )?
+                };
+                if !once.pays() {
+                    continue;
+                }
                 if !builder.award_native_reporter_v1(ctx.daa_score, offence_key, winner, pending.amount)? {
                     builder.write_reporter_reward(offence_key, Some(PalwPayoutV2 { payload: winner.payload, amount: pending.amount }))?;
                 }

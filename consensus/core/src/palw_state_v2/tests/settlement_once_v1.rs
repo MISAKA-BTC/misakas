@@ -356,3 +356,131 @@ fn a_native_receipt_quantum_and_a_free_prompt_quantum_of_the_same_id_are_differe
     assert_eq!(markers(&b.state), 2);
 }
 
+// ---- RFC08-1 (coverage audit): reporter awards and tranches, mesh reserve pay, improvement earnings, source-fee promises ----
+
+#[test]
+fn a_mesh_reserve_payment_is_paid_once_per_claim_and_auditor_across_its_paths() {
+    use super::super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1 as L;
+    let p = armed();
+    let extras = PalwTransitionExtrasV1::default();
+    let mut parent = with_route(PalwChainStateV2::genesis());
+    parent.bonds.insert(bond_key(3), bond_record(1_000, 3));
+    let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    b.write_panel_reserve(100).unwrap();
+    let claim = h64(0xA1);
+    let stood = L::NoLiableClaim("an audit answer that stood");
+    // The sweep pays the answer that stood...
+    assert_eq!(b.mesh_pay_from_reserve(50, &bond_key(3), 10, PalwSettlementLegV1::MeshAuditPay, &claim, stood).unwrap(), 10);
+    assert_eq!(b.state.panel_reserve_sompi(), 90);
+    let after_first = b.state.clone();
+    // ...and the same (claim, auditor) reached again — another sweep, or the answer path — pays nothing and leaves the reserve.
+    assert_eq!(b.mesh_pay_from_reserve(51, &bond_key(3), 10, PalwSettlementLegV1::MeshAuditPay, &claim, stood).unwrap(), 0);
+    assert_eq!(b.state, after_first);
+    // The trap bounty of the same pair is another obligation (paid once too).
+    let bounty = L::NoLiableClaim("a trap bounty");
+    assert_eq!(b.mesh_pay_from_reserve(52, &bond_key(3), 5, PalwSettlementLegV1::MeshTrapBounty, &claim, bounty).unwrap(), 5);
+    assert_eq!(b.mesh_pay_from_reserve(53, &bond_key(3), 5, PalwSettlementLegV1::MeshTrapBounty, &claim, bounty).unwrap(), 0);
+    assert_eq!(b.state.panel_reserve_sompi(), 85);
+    // An answer paid before its trap window has no sourced liability term: refused, nothing leaves the reserve.
+    let early = L::Unsourced("an audit answer paid before its row's trap window");
+    let other = h64(0xA2);
+    assert_eq!(b.mesh_pay_from_reserve(54, &bond_key(3), 10, PalwSettlementLegV1::MeshAuditPay, &other, early).unwrap(), 0);
+    assert_eq!(b.state.panel_reserve_sompi(), 85);
+}
+
+#[test]
+fn below_the_fence_a_mesh_payment_is_the_historical_payment() {
+    use super::super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1 as L;
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let mut parent = with_route(PalwChainStateV2::genesis());
+    parent.bonds.insert(bond_key(3), bond_record(1_000, 3));
+    let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    b.write_panel_reserve(100).unwrap();
+    let claim = h64(0xA1);
+    let leg = L::Unsourced("ignored below the fence");
+    // Dormant: every call pays (the historical rule had no registry), and no marker is written.
+    assert_eq!(b.mesh_pay_from_reserve(50, &bond_key(3), 10, PalwSettlementLegV1::MeshAuditPay, &claim, leg).unwrap(), 10);
+    assert_eq!(b.mesh_pay_from_reserve(51, &bond_key(3), 10, PalwSettlementLegV1::MeshAuditPay, &claim, leg).unwrap(), 10);
+    assert_eq!(markers(&b.state), 0);
+}
+
+#[test]
+fn an_improvement_credit_is_credited_once_per_source_row_across_its_paths() {
+    use super::super::palw_improve_fold_v1::{PALW_IMPROVE_HOLD_ARTIFACT_V1, PalwImproveCreditV1 as C};
+    let p = armed();
+    let extras = PalwTransitionExtrasV1::default();
+    let parent = with_route(PalwChainStateV2::genesis());
+    let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    let teacher = bond_key(4);
+    let owed = |b: &TransitionBuilder<'_>| b.state.improvement_earnings.get(&teacher).copied().unwrap_or(0);
+    // One artifact's hold, refunded by its deadline path and again by the material sweep: credited once.
+    let hold = C::HoldRefund { line: h64(0x10), kind: PALW_IMPROVE_HOLD_ARTIFACT_V1, id: [7; 64] };
+    b.credit_improvement_earnings_v1(hold, 60, &teacher, 30).unwrap();
+    b.credit_improvement_earnings_v1(hold, 61, &teacher, 30).unwrap();
+    assert_eq!(owed(&b), 30);
+    // Another artifact is another source.
+    b.credit_improvement_earnings_v1(C::HoldRefund { line: h64(0x10), kind: PALW_IMPROVE_HOLD_ARTIFACT_V1, id: [8; 64] }, 62, &teacher, 30)
+        .unwrap();
+    assert_eq!(owed(&b), 60);
+    // A grant tranche is keyed by its vested target: the same target twice credits once, the next target is new.
+    let tranche = C::GrantTranche { line: h64(0x10), epoch: 1, index: 0, target: 10 };
+    b.credit_improvement_earnings_v1(tranche, 63, &teacher, 10).unwrap();
+    b.credit_improvement_earnings_v1(tranche, 64, &teacher, 10).unwrap();
+    b.credit_improvement_earnings_v1(C::GrantTranche { line: h64(0x10), epoch: 1, index: 0, target: 20 }, 65, &teacher, 10).unwrap();
+    assert_eq!(owed(&b), 80);
+    // A dissolution pays its owner once.
+    let dissolve = C::Dissolution { line: h64(0x10) };
+    b.credit_improvement_earnings_v1(dissolve, 66, &teacher, 5).unwrap();
+    b.credit_improvement_earnings_v1(dissolve, 67, &teacher, 5).unwrap();
+    assert_eq!(owed(&b), 85);
+    // An evaluation fee is its claim's reward leg: an unknown claim has no sourced terms, so it is refused (closed at zero).
+    let fee = C::EvalFee { claim: h64(0xEE), final_daa: 60, role: 0 };
+    b.credit_improvement_earnings_v1(fee, 68, &teacher, 9).unwrap();
+    assert_eq!(owed(&b), 85, "refused by the combined liability predicate: never defaulted");
+}
+
+#[test]
+fn reporter_awards_and_their_tranches_settle_once_and_the_predicate_never_binds_a_reporter() {
+    use super::super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1 as L;
+    let p = armed();
+    let extras = PalwTransitionExtrasV1::default();
+    let parent = with_route(PalwChainStateV2::genesis());
+    let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    let reporter = L::NoLiableClaim("a reporter's slash-funded award stands behind no claim");
+    let held = PalwSettlementDebitV1::Held { amount: 40 };
+    // The award of one offence: named once, whichever path (the native binding or the legacy reward row) reaches it.
+    let award = PalwSettlementObligationV1::of(PalwSettlementLegV1::ReporterAward, [0x0F; 64]);
+    assert_eq!(b.settle_once_liable_v1(10, award, PalwSettlementConsumerV1::ReporterReveal, 40, held, reporter).unwrap(), PalwSettleOnceV1::First);
+    assert!(!b.settle_once_liable_v1(11, award, PalwSettlementConsumerV1::ReporterReveal, 40, held, reporter).unwrap().pays());
+    // Its tranches are keyed by progress: the same progress twice pays once; the next progress is the next tranche.
+    let tranche = |progress| {
+        PalwSettlementObligationV1::with_party(PalwSettlementLegV1::ReporterAwardTranche, [0x0F; 64], [0; 64], progress)
+    };
+    let part = PalwSettlementDebitV1::Held { amount: 20 };
+    assert!(b.settle_once_liable_v1(12, tranche(0), PalwSettlementConsumerV1::BondBudgetTick, 20, part, reporter).unwrap().pays());
+    assert!(!b.settle_once_liable_v1(13, tranche(0), PalwSettlementConsumerV1::BondBudgetTick, 20, part, reporter).unwrap().pays());
+    assert!(b.settle_once_liable_v1(14, tranche(20), PalwSettlementConsumerV1::BondBudgetTick, 20, part, reporter).unwrap().pays());
+    assert_eq!(markers(&b.state), 3);
+}
+
+#[test]
+fn a_source_fee_promise_is_closed_once_and_refused_past_the_fence_for_want_of_sourced_terms() {
+    use super::super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1 as L;
+    let p = armed();
+    let extras = PalwTransitionExtrasV1::default();
+    let parent = with_route(PalwChainStateV2::genesis());
+    let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    let promise = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::SourceFeePromise, [0x5C; 64], [0x51; 64], 0);
+    let prepaid = PalwSettlementDebitV1::Prepaid { sponsor: [0x50; 64], amount: 6 };
+    let unsourced = L::Unsourced("a beacon source's fee: no claim reservation, X3 deadline or material TTL backs the source");
+    let first = b.settle_once_liable_v1(10, promise, PalwSettlementConsumerV1::KernelTick, 6, prepaid, unsourced).unwrap();
+    assert!(matches!(first, PalwSettleOnceV1::Refused(_)), "{first:?}");
+    // Closed at zero: a second consumer (the object arm, the EXEC route) finds it settled and pays nothing.
+    let again = b.settle_once_liable_v1(11, promise, PalwSettlementConsumerV1::KernelObject, 6, prepaid, unsourced).unwrap();
+    assert!(matches!(again, PalwSettleOnceV1::AlreadySettled(row) if row.amount == 0));
+    // Below the fence it is dormant (the batch's own `fee_paid` set is the historical guard).
+    let q = params();
+    let mut d = TransitionBuilder::new(&parent, &q, false, false, false, false, &extras);
+    assert_eq!(d.settle_once_liable_v1(10, promise, PalwSettlementConsumerV1::KernelTick, 6, prepaid, unsourced).unwrap(), PalwSettleOnceV1::Dormant);
+}

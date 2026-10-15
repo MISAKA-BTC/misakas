@@ -71,6 +71,25 @@ pub enum PalwSettlementLegV1 {
     /// One native mining receipt block (`PNR9`): the same worker share for a native receipt quantum. Subject: the receipt id.
     /// Ordinal: the quantum index.
     NativeReceiptSpend = 12,
+    /// A commit-reveal reporter award closed at its reveal window (the native monetary binding or the legacy reward row,
+    /// whichever path names it). Subject: the offence key.
+    ReporterAward = 13,
+    /// One redeemed tranche of a funded reporter award (the bond budget's exact physical payout rows). Subject: the award id.
+    /// Ordinal: the award's progress (R already redeemed) before this tranche.
+    ReporterAwardTranche = 14,
+    /// An audit answer's pay from the panel reserve (at the answer, or at the row's sweep once it stood). Subject: the audited
+    /// claim. Party: the auditor (kernel id).
+    MeshAuditPay = 15,
+    /// A trap's bounty to an auditor it caught answering honestly, from the panel reserve. Subject: the audited claim. Party: the
+    /// auditor (kernel id).
+    MeshTrapBounty = 16,
+    /// One credit to the improvement earnings ledger. Subject: the source row's digest
+    /// ([`palw_settlement_subject_v1`]: a refunded hold, an evaluation claim, an S1 key or artifact, a grant, a dissolved line).
+    /// Party: the credited bond (kernel id). Ordinal: the role, or a grant tranche's vested target.
+    ImprovementEarning = 17,
+    /// A paid beacon source's once-only fee promise (`PaySourceFeeEscrow`). Subject: the fee context. Party: the promised
+    /// producer (kernel id).
+    SourceFeePromise = 18,
 }
 
 /// Which consumer settled a leg (audit only; never part of the obligation id).
@@ -89,6 +108,14 @@ pub enum PalwSettlementConsumerV1 {
     MonetaryMaterial = 9,
     /// A receipt block's own quantum (free-prompt or native mining).
     ReceiptBlock = 10,
+    /// The reporter reveal sweep (step 2).
+    ReporterReveal = 11,
+    /// The bond budget's clock (step 1f): redeemed reporter tranches.
+    BondBudgetTick = 12,
+    /// The audit mesh (an answer, a trap reveal, the sweep).
+    AuditMesh = 13,
+    /// The improvement pool (refunds, evaluation fees, S1 awards, grant vesting, a dissolution).
+    ImprovementPool = 14,
 }
 
 /// **The real debit a leg is paid from** (the journal's source side). A payment is never larger than its debit.
@@ -125,6 +152,21 @@ pub struct PalwSettlementObligationV1 {
     pub subject: [u8; 64],
     pub party: [u8; 64],
     pub ordinal: u64,
+}
+
+/// **A subject digest for a leg whose source row has a composite key** (data identity only, PRINCIPLES §8): a domain-keyed
+/// BLAKE2b-512 over a tag and its length-prefixed parts, so no two sources' encodings collide.
+pub fn palw_settlement_subject_v1(tag: &[u8], parts: &[&[u8]]) -> [u8; 64] {
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/settlement-once/subject/v1").to_state();
+    state.update(&(tag.len() as u64).to_le_bytes());
+    state.update(tag);
+    for part in parts {
+        state.update(&(part.len() as u64).to_le_bytes());
+        state.update(part);
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    out
 }
 
 impl PalwSettlementObligationV1 {

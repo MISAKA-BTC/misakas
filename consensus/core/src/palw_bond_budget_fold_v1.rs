@@ -2238,6 +2238,22 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
         if builder.state.pending_payouts.contains_key(&queue) {
             return Err(PalwStateV2Error::BondBudgetRefused("reporter tranche queue already exists".into()));
         }
+        // **RFC-0008 once-only settlement (RFC08-1; dormant `palw_settlement_once_v1`)**: one tranche `(award, progress)` is
+        // redeemed once across every consumer. A tranche another consumer already settled is skipped BEFORE the engine redeems
+        // anything (no R moves, no payout row); a first tranche is marked with what it actually paid, after the engine computed
+        // it and before the payout row is written. A reporter's slash-funded award stands behind no claim: the combined liability
+        // predicate does not bind it (by name). `Dormant` below the fence: nothing read or written.
+        let tranche = crate::palw_settlement_once_v1::PalwSettlementObligationV1::with_party(
+            crate::palw_settlement_once_v1::PalwSettlementLegV1::ReporterAwardTranche,
+            award.as_bytes(),
+            [0; 64],
+            progress,
+        );
+        if builder.params.settlement_once_active_at(now)
+            && super::palw_settlement_once_fold_v1::settled_row_v1(&builder.state, &tranche)?.is_some()
+        {
+            continue;
+        }
         let amount = builder
             .bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, j| {
                 budget.redeem_reporter_income_v1(
@@ -2253,6 +2269,20 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
             .expect("created")
             .map_err(|why| budget_refused(bond, why))?;
         if amount > 0 {
+            let once = builder.settle_once_liable_v1(
+                now,
+                tranche,
+                crate::palw_settlement_once_v1::PalwSettlementConsumerV1::BondBudgetTick,
+                amount,
+                crate::palw_settlement_once_v1::PalwSettlementDebitV1::Held { amount },
+                super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim(
+                    "a reporter's slash-funded award stands behind no claim",
+                ),
+            )?;
+            if !once.pays() {
+                // Unreachable after the pre-check (the marker cannot appear between them): fail closed, never a second row.
+                return Err(PalwStateV2Error::BondBudgetRefused("reporter tranche already settled".into()));
+            }
             builder.write_payout(queue, Some(PalwPayoutV2 { payload, amount }))?;
         }
     }

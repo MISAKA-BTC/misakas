@@ -1029,6 +1029,39 @@ fn apply_settlements_to_exec_vesting(
                     if promise.outcome.is_some() || promise.fee != s.amount || !fee_paid.insert((context, s.bond)) {
                         return Err(refused("source fee receipt differs from the once-only promise"));
                     }
+                    // **RFC-0008 once-only settlement (RFC08-1; dormant `palw_settlement_once_v1`)**: the promise `(context,
+                    // producer)` is paid once across every consumer and batch, not only within this batch (`fee_paid`). Every fee
+                    // instruction is strict, so a repeat or a refusal refuses the batch. RFC08-2: the sponsor-signed terms carry a
+                    // hold and a final-by DAA but a beacon source has no claim reservation, X3 deadline or material TTL — no
+                    // authentic source for the predicate's terms, so past the fence the payout is refused, never defaulted.
+                    let once = builder.settle_once_liable_v1(
+                        now,
+                        crate::palw_settlement_once_v1::PalwSettlementObligationV1::with_party(
+                            crate::palw_settlement_once_v1::PalwSettlementLegV1::SourceFeePromise,
+                            context,
+                            s.bond,
+                            0,
+                        ),
+                        match (exec_root.is_some(), strict) {
+                            (true, _) => crate::palw_settlement_once_v1::PalwSettlementConsumerV1::ExecKernelFee,
+                            (false, true) => crate::palw_settlement_once_v1::PalwSettlementConsumerV1::KernelObject,
+                            (false, false) => crate::palw_settlement_once_v1::PalwSettlementConsumerV1::KernelTick,
+                        },
+                        s.amount,
+                        crate::palw_settlement_once_v1::PalwSettlementDebitV1::Prepaid { sponsor: funding.terms.sponsor, amount: s.amount },
+                        super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
+                            "a beacon source's fee: no claim reservation, X3 deadline or material TTL backs the source",
+                        ),
+                    )?;
+                    match once {
+                        // Withheld by the predicate (a policy outcome, not an inconsistency): nothing is debited or paid; the
+                        // obligation is closed at zero.
+                        super::palw_settlement_once_fold_v1::PalwSettleOnceV1::Refused(_) => continue,
+                        super::palw_settlement_once_fold_v1::PalwSettleOnceV1::AlreadySettled(_) => {
+                            return Err(refused("the source fee promise was already settled by another consumer"));
+                        }
+                        _ => {}
+                    }
                 }
                 let held = fee_held.get_mut(&context).ok_or_else(|| refused("source fee escrow missing"))?;
                 *held = held.checked_sub(s.amount).ok_or_else(|| refused("source fee payout exceeds prepaid escrow"))?;
