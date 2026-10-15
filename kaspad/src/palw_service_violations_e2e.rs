@@ -705,6 +705,10 @@ async fn g14v_probe_the_floor_attempt_facts() {
 /// the service's authenticated subtree descent and the `StepLeaf` terminal the fold adjudicates; an honest twin is left alone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn g14v_step_lies_of_every_floor_op_kind_are_localized_and_convicted_before_final() {
+    super::palw_service_public_e2e::on_service_stack(g14v_step_lies_of_every_floor_op_kind_body).await
+}
+
+async fn g14v_step_lies_of_every_floor_op_kind_body() {
     use PalwStepOpKindV1 as K;
     let lines = run_cases(
         vec![
@@ -728,6 +732,10 @@ async fn g14v_step_lies_of_every_floor_op_kind_are_localized_and_convicted_befor
 /// convicted BEFORE `Final` from the service's own reads and replay.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn g14v_trace_token_output_input_and_state_binding_lies_are_convicted_before_final() {
+    super::palw_service_public_e2e::on_service_stack(g14v_trace_token_output_input_and_state_binding_lies_body).await
+}
+
+async fn g14v_trace_token_output_input_and_state_binding_lies_body() {
     let lines = run_cases(
         vec![
             (
@@ -761,6 +769,10 @@ async fn g14v_trace_token_output_input_and_state_binding_lies_are_convicted_befo
 /// start only after `Final` (the reservation at the Final row's stage, inside the liability horizon).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn g14v_a_step_lie_and_a_logits_lie_are_convicted_after_final() {
+    super::palw_service_public_e2e::on_service_stack(g14v_a_step_lie_and_a_logits_lie_after_final_body).await
+}
+
+async fn g14v_a_step_lie_and_a_logits_lie_after_final_body() {
     let lines = run_cases(
         vec![
             ("matmul element after Final", Lie::Step(PalwStepOpKindV1::MatMulQuant), Expect::Convicted),
@@ -781,6 +793,10 @@ async fn g14v_a_step_lie_and_a_logits_lie_are_convicted_after_final() {
 /// tag-159 leaf recompute from openings it builds itself — a late matmul element and the first embedding gather, before `Final`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn g14v_lg14b_frontier_descent_convicts_step_lies_through_the_service() {
+    super::palw_service_public_e2e::on_service_stack(g14v_lg14b_frontier_descent_body).await
+}
+
+async fn g14v_lg14b_frontier_descent_body() {
     let lines = run_cases_on(
         vec![
             ("matmul element (LG14-B)", Lie::Step(PalwStepOpKindV1::MatMulQuant), Expect::Convicted),
