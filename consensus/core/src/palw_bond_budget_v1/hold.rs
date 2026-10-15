@@ -232,7 +232,8 @@ fn ceil_mul_div(a: u128, b: u128, d: u128) -> u128 {
     a.checked_mul(b).map(|p| p.div_ceil(d)).unwrap_or(u128::MAX)
 }
 
-/// **The burst caps** (an additional limit): `⌈daily(C) · W_burst · β / (daa_per_day · 1000)⌉` per dimension. The ceiling keeps a
+/// **The burst caps** (an additional limit): `n = ⌈daily_q(C) · W_burst · β / (daa_per_day · 1000)⌉` claims, and `n` claims' worth of
+/// every other daily rate (never below that rate's own prorated ceiling). The ceiling keeps a
 /// bond whose daily rate is below one unit per burst window able to use it at all; the long and day views still bound the totals, so
 /// the ceiling never raises a period total (splitting capital can only add burst headroom, never period capacity).
 pub fn palw_bond_hold_burst_caps_v1(policy: &PalwBondBudgetPolicyV1, hold: &PalwBondHoldPolicyV1, capital: u64) -> PalwBudgetVectorV1 {
@@ -241,12 +242,18 @@ pub fn palw_bond_hold_burst_caps_v1(policy: &PalwBondBudgetPolicyV1, hold: &Palw
     let den = (hold.daa_per_day as u128).saturating_mul(1_000);
     let f = |x: u128| ceil_mul_div(x, num, den);
     let sat = |x: u128| u64::try_from(x).unwrap_or(u64::MAX);
+    // The claims ceiling `n` is the burst's unit: every other dimension is capped at `n` claims' worth of its daily rate
+    // (`⌈daily_d · n / daily_q⌉`, never below its own prorated ceiling). Ceiling each dimension separately let the claims dimension
+    // round up (1.2 → 2 claims) while the reward and block dimensions stayed at 1.2 claims' worth, so the second claim the burst
+    // allows was refused by them.
+    let claims = f(daily.claims as u128);
+    let worth = |x: u128| if daily.claims == 0 { f(x) } else { ceil_mul_div(x, claims, daily.claims as u128).max(f(x)) };
     PalwBudgetVectorV1 {
-        claims: sat(f(daily.claims as u128)),
-        block_units: sat(f(daily.block_units as u128)),
-        reward_sompi: sat(f(daily.reward_sompi as u128)),
-        final_weight: f(daily.final_weight),
-        round_rights: sat(f(daily.round_rights as u128)),
+        claims: sat(claims),
+        block_units: sat(worth(daily.block_units as u128)),
+        reward_sompi: sat(worth(daily.reward_sompi as u128)),
+        final_weight: worth(daily.final_weight),
+        round_rights: sat(worth(daily.round_rights as u128)),
     }
 }
 

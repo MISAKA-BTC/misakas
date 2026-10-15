@@ -171,15 +171,19 @@ fn the_reservation_is_never_below_the_collectable_loss_at_any_rho() {
             assert!(s.collectable_loss_sompi >= f.pricing(t).loss_floor_sompi as u128, "the floor never shrinks with ρ");
             assert!(s.weight_sompi >= (24 * KAS) as u128, "the PWU slash exposure is never divided by ρ");
             if t == PalwClaimTypeV2::Attempt {
-                floors.push((rho, s.total(), s.rights.reward_sompi));
+                // The weight VALUE `⌈f_c · v_F⌉` is the part of the gain beyond the reward right.
+                floors.push((rho, s.total(), s.rights.reward_sompi, s.gain_sompi - s.rights.reward_sompi as u128));
             }
         }
     }
-    // Rights shrink with ρ (the period total split over more claims); the reservation follows the rights, never below the floor —
-    // never "the same reward at 1/1000 of the reservation".
+    // Rights shrink with ρ (the period total split over more claims); the reservation never falls below the floor — never "the same
+    // reward at 1/1000 of the reservation". It does not fall with ρ either: per the formula (`L_penalty = L_coll − (L_right +
+    // ⌈f_c·v_F⌉)`, the PWU part of `L_weight` never divided by ρ) only the weight VALUE offsets the collectable loss, so when the PWU
+    // slash exposure dominates `L_weight` and `L_coll` sits at its floor, the reservation grows by exactly the weight value ρ took away.
     for w in floors.windows(2) {
-        let ((_, t0, r0), (_, t1, r1)) = (w[0], w[1]);
-        assert!(r1 <= r0 && t1 <= t0);
+        let ((_, t0, r0, v0), (_, t1, r1, v1)) = (w[0], w[1]);
+        assert!(r1 <= r0 && v1 <= v0, "rights by rho: {floors:?}");
+        assert!(t1 <= t0 + (v0 - v1), "the reservation grows at most by the weight value no longer offsetting the loss: {floors:?}");
         if r1 < r0 {
             assert!(t1 >= f.attempt.loss_floor_sompi as u128);
         }
