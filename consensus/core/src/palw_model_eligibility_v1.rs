@@ -1221,6 +1221,11 @@ pub struct PalwEligibilityStatusReadV1 {
     pub exams_passed: u32,
     /// Exam attempts the class's lineage (artifact root) has consumed, all registrations of the same weights together.
     pub lineage_attempts: u32,
+    /// **ADR-0179: the model's tier** — `not-governed` below `palw_model_tier_v1` (every shipped network), `approved` (genesis or an
+    /// annual fork listing, 1.0) or `registered` (fixed 0.3 from registration).
+    pub model_tier: String,
+    /// **ADR-0179: the tier's allocation coefficient `c_m`**, permille (1000 below the fence and for the approved tier).
+    pub model_tier_permille: u32,
 }
 
 impl Default for PalwEligibilityStatusReadV1 {
@@ -1233,6 +1238,8 @@ impl Default for PalwEligibilityStatusReadV1 {
             final_weight: true,
             exams_passed: 0,
             lineage_attempts: 0,
+            model_tier: "not-governed".to_string(),
+            model_tier_permille: crate::palw_model_tier_v1::PALW_MODEL_TIER_APPROVED_PERMILLE_V1,
         }
     }
 }
@@ -1331,24 +1338,24 @@ impl Params {
     /// `Some(never())` pass. The mirror must agree with the fence.
     pub fn validate_palw_model_eligibility_v1(&self) -> Result<(), PalwModeV2Error> {
         if let Some(at) = self.palw_model_eligibility_v1_from_daa() {
-            // U-2 (user decision 2026-10-15): a Probation claim's `F = 0` alone does not keep it out of the safe frontier, the settled
-            // anchor depth or rule E's participation — RFC-0018 Gate C (`palw_independently_work_certified_v1`) must govern every claim
-            // this fence can pin, so none of them counts there before it is certified. (RFC-0018 requires this fence at or below Gate
-            // C: the two arm at one height.)
+            // Round 5 (user decision 2026-10-15): model-level review is abolished; this fence is only ever armed with ADR-0179's
+            // `palw_model_tier_v1` at or below it, which retires the review (it stays the A-2 gate of inner 74/75 that RFC-0018's
+            // certification attestations ride).
+            let tier_below = self.palw_model_tier_v1_from_daa().is_some_and(|tier| tier <= at);
+            // RFC-0018 Gate C (`palw_independently_work_certified_v1`) at or below: per-claim certification is the one safety gate for
+            // every model (round 5; RFC-0018 requires this fence at or below Gate C — the two arm at one height).
             let gate_c_below = self
                 .palw_independently_work_certified_v1
                 .filter(|f| *f != ForkActivation::never())
                 .is_some_and(|f| f.daa_score() <= at);
             if !gate_c_below {
                 return Err(PalwModeV2Error::Invalid(
-                    "palw_model_eligibility_v1 needs palw_independently_work_certified_v1 (RFC-0018 Gate C) at or below it: Probation claims must never advance the safe frontier, settled-anchor depth or rule-E participation uncertified (U-2)",
+                    "palw_model_eligibility_v1 needs palw_independently_work_certified_v1 (RFC-0018 Gate C) at or below it: per-claim certification is the one safety gate for every model (round 5)",
                 ));
             }
-            // U-4 (user decision 2026-10-15): the burn and inspection fees come from the measured inspection cost.
-            let policy = PalwModelEligibilityPolicyV1::design_unapproved_v1(self.palw_model_eligibility_day_daa_v1());
-            if !palw_eligibility_fees_measured_v1(&policy, PALW_ELIG_MEASURED_FEE_RECORDS_V1) {
+            if !tier_below {
                 return Err(PalwModeV2Error::Invalid(
-                    "palw_model_eligibility_v1 cannot be armed: the attempt burn fee and the inspection fee have no measured-value record (U-4)",
+                    "palw_model_eligibility_v1 cannot be armed without palw_model_tier_v1 at or below it: model-level review is abolished (user decision 2026-10-15, round 5)",
                 ));
             }
             return Err(PalwModeV2Error::Invalid(

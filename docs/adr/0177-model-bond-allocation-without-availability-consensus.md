@@ -265,3 +265,17 @@ DAA emission budgetは総発行制約の参考であり、`S_m`/`f(S_m)`の実�
 * **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
 * **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
 * 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。
+
+## ユーザー方針 2026-10-15 第4回 — 配分の重みに階層係数 `c_m`
+
+> **統治する前提:** [PRINCIPLES §9](../PRINCIPLES.md)(凍結前提)。規則は [ADR-0179](0179-model-tiers-genesis-annual-1-0-registered-0-3.md) が定める。
+
+* 配分の重みを `A_m = c_m · S̄_m^1.5` とする。`c_m` の値は次のとおり。
+  * `ApprovedModels(h)`(genesis と年次フォークの指定): 1.0。
+  * 後から登録したモデル: 登録時点から固定の 0.3。
+* `S̄_m` は従来どおり、Miner + Verifier の 30 日平均の適格 bond であり、`α = 1.5` は変えない。
+* `c_m` はこの重みに**一度だけ**掛ける。その `P_m` を物理ブロック機会(RFC-0016 V+)と coinbase 配分の両方が使う。受理ブロックの報酬には重ねて掛けない。
+* 登録 tier 全体に発行上限 `κ` を設ける。
+  * 登録 tier の重みの合計が `ΣA` の `κ` を超えると、各重みを同じ割合で縮める。header の `ΣA` は縮める前の値を保つ。
+  * 縮めた分は発行せず、1.0 の階層へも再配分しない。
+* 実装(休眠): `PalwBondBudgetStateV1::roll_epoch_v3_tiered`(`consensus/core/src/palw_bond_budget_v1/allocation_v3.rs`)。fold は fence `palw_model_tier_v1` 以後でこれを使う。fence 未満では、従来の `roll_epoch_v3` と byte 単位で同じである。

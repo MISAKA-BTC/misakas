@@ -2061,6 +2061,8 @@ from!(item: &kaspa_rpc_core::RpcPalwModelLifecycle, protowire::RpcPalwModelLifec
         eligibility_final_weight: item.eligibility_final_weight,
         eligibility_exams_passed: item.eligibility_exams_passed,
         eligibility_lineage_attempts: item.eligibility_lineage_attempts,
+        model_tier: item.model_tier.clone(),
+        model_tier_permille: item.model_tier_permille,
         admission_claims_per_span_milli: item.admission_claims_per_span_milli,
         probes_passed: item.probes_passed,
         probes_failed: item.probes_failed,
@@ -4566,6 +4568,9 @@ try_from!(item: &protowire::RpcPalwModelLifecycle, kaspa_rpc_core::RpcPalwModelL
         eligibility_final_weight: item.eligibility_final_weight || item.eligibility_stage.is_empty(),
         eligibility_exams_passed: item.eligibility_exams_passed,
         eligibility_lineage_attempts: item.eligibility_lineage_attempts,
+        // ADR-0179: a peer that sends no tier (an older node) is untiered — every model 1.0.
+        model_tier: if item.model_tier.is_empty() { "not-governed".to_string() } else { item.model_tier.clone() },
+        model_tier_permille: if item.model_tier.is_empty() { 1_000 } else { item.model_tier_permille },
         admission_claims_per_span_milli: item.admission_claims_per_span_milli,
         probes_passed: item.probes_passed,
         probes_failed: item.probes_failed,

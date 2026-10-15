@@ -232,10 +232,7 @@ mod palw_beacon_bootstrap_fold_v1;
 // RFC-0017: model eligibility (inner 74/75, aux 131) and its claim-gate / probation / Final hooks, past `palw_model_eligibility_v1`.
 #[path = "palw_model_eligibility_fold_v1.rs"]
 mod palw_model_eligibility_fold_v1;
-pub use palw_model_eligibility_fold_v1::{
-    palw_eligibility_bars_security_credit_v1, palw_eligibility_security_credit_v1, palw_eligibility_status_of_v1,
-    palw_probation_security_credit_v1,
-};
+pub use palw_model_eligibility_fold_v1::palw_eligibility_status_of_v1;
 // RFC-0018 §7 (Gate C, adopted 2026-10-15): SecurityCertified — kernel-route aux 136, attestations on inner 75, past
 // `palw_independently_work_certified_v1`.
 #[path = "palw_security_certification_fold_v1.rs"]
@@ -1950,6 +1947,11 @@ pub struct PalwStateParamsV2 {
     /// `Params::sync_palw_rfc0018_v1`. `None` on every shipped preset, and validation refuses every armed one.
     #[borsh(skip)]
     rfc0018_v1: Option<crate::palw_rfc0018_v1::PalwRfc0018MirrorV1>,
+    /// **ADR-0179 (user decision 2026-10-15, round 4): `Params::palw_model_tier_v1`'s mirror** — `ApprovedModels` (genesis list and
+    /// annual lists) and the two design values, written by `Params::sync_palw_model_tier_v1`. `None` on every shipped preset, and
+    /// validation refuses every armed one.
+    #[borsh(skip)]
+    pub(crate) model_tier_v1: Option<crate::palw_model_tier_v1::PalwModelTierMirrorV1>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**

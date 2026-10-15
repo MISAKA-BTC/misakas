@@ -90,3 +90,12 @@ ADR0088の同一line更新、RFC0004/spec17の自動head置換を改定する。
 [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
 Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
 モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。
+
+## ユーザー方針 2026-10-15 第4回 — 年次フォークの承認リストは追加のみ
+
+> **統治する前提:** [PRINCIPLES §9](../PRINCIPLES.md)(凍結前提)。規則は [ADR-0179](0179-model-tiers-genesis-annual-1-0-registered-0-3.md) が定める。
+
+* 年 1 回程度のソフトフォークまたはハードフォークは、`ApprovedModels`(1.0 の階層)に「モデル ID + 固定 artifact root」を**追加するだけ**である。既存モデルを上書き・置換・再 root しない。
+* 実装では、validation が同じモデル ID の再掲を拒否する。membership は、登録済み class 自身の artifact root と一致したときだけ成立する(`consensus/core/src/palw_model_tier_v1.rs`)。
+* リストへの指定は政策的決定であり、公開性・独立検証可能性の技術的証明ではない。
+* 後から登録したモデルは登録時点から 0.3 に固定し、審査で 1.0 にはならない。登録の自由と不変性(本 ADR)は変わらない。

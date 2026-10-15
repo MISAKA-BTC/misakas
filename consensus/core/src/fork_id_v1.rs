@@ -946,6 +946,10 @@ mod tests {
             "palw_elastic_final_capacity_v1" => params.palw_elastic_final_capacity_v1 = Some(at),
             // RFC-0017's model eligibility: a bare height, refused when armed by `validate_palw_v2`.
             "palw_model_eligibility_v1" => params.palw_model_eligibility_v1 = Some(at),
+            // ADR-0179's model tiers: the design values and empty lists, refused when armed by `validate_palw_v2`.
+            "palw_model_tier_v1" => {
+                params.palw_model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierFenceV1::at(at));
+            }
             // RFC-0018's five dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_dag_sibling_attribution_v1" => params.palw_dag_sibling_attribution_v1 = Some(at),
             "palw_panel_anchor_permissionless_v1" => params.palw_panel_anchor_permissionless_v1 = Some(at),

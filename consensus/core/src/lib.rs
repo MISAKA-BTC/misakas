@@ -529,6 +529,9 @@ pub mod palw_panel_free_gate_v1;
 /// RFC-0017: model eligibility — registration free, rights examined (commit-then-draw), bounded in probation and renewed; dormant
 /// fence `palw_model_eligibility_v1` (kernel inner 74/75, aux 131).
 pub mod palw_model_eligibility_v1;
+/// **ADR-0179 — model tiers** (user decision 2026-10-15, round 4; dormant fence `palw_model_tier_v1`): `ApprovedModels(h)` (genesis +
+/// annual fork lists, add-only) at 1.0, every other registered model permanently 0.3, applied once in the allocation weight.
+pub mod palw_model_tier_v1;
 /// RFC-0015: the Panel=0 (`OptimisticPublicVerification`) fence `palw_panel_free_v1` — dormant, no height, refused when armed.
 pub mod palw_panel_free_v1;
 pub mod palw_panel_lifetime_v2;

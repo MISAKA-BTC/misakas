@@ -119,3 +119,17 @@ RFC-0018への狭いinterface: 本branchのRFC-0017は`palw_model_eligibility_v1
 - 0.3 は配分重みに一度だけ(`A_m = c_m · S̄_m^1.5`)。登録 tier 全体の発行上限は維持し、多数登録で枠を増やせない。
 - **claim 単位の検証は全モデルで維持する**(§7b のユーザー確認どおり): Gate C / SecurityCertified、court、claim ごとの抽選検証者認証。未認証 claim はどの階層でも fork choice・決済・Rule E・settled anchor・weight を進めない。
 - これに伴い、RFC-0017 の Probation に基づく SecurityCertified 不許可(U-2 の probation pin bar)は対象が存在しなくなる。claim の安全性は Gate C の claim 単位認証だけで扱う。
+
+## 7d. 第 4 回・第 5 回の実装状況(branch `integ/decisions-1015`、休眠・未 build・未試験)
+
+* **規則:** [ADR-0179](../../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md)。統治する前提は PRINCIPLES §9。
+* **RFC-0017** は階層の RFC に改定した。審査は廃止し、旧本文は履歴として残す。
+* **改定節を追加した文書:** ADR-0175、ADR-0177、RFC-0016、RFC-0015。
+* **fence `palw_model_tier_v1`:** `ApprovedModels` は genesis list と追加のみの年次 list で、`c = 0.3`(設計値)、登録 tier の上限 `κ`(設計値)を持つ。
+* **狭い interface:** `palw_model_tier_v1(state, params, class)`。RFC02 の登録 lane と RFC-0019 の年次カタログが使う。
+* **配分:** `c_m` は `roll_epoch_v3_tiered` で一度だけ掛け、`κ` を適用する。
+* **RFC-0016 と RFC-0017 の予算:** tier fence の下では entrant reserve を `ε = 0` とし、Probation 予算は無意味になる。
+* **審査の code:** tier fence の下では到達しない。`palw_model_eligibility_v1` は tier fence が同じ高さ以下にあるときだけ arm できる。
+* **U-2 の Probation bar:** RFC-0018 の Gate C 述語と認証 sweep から削除した。Gate C 自体は不変である。
+* **RPC:** registry 行(wire v4)に `modelTier` と `modelTierPermille` を載せる。
+* **試験の対応:** ADR-0179 §試験 source。

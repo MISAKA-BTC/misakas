@@ -214,6 +214,8 @@ impl Params {
         self.validate_palw_elastic_final_capacity_v1()?;
         // **RFC-0017's model eligibility** (`crate::palw_model_eligibility_v1`): refused when armed.
         self.validate_palw_model_eligibility_v1()?;
+        // **ADR-0179's model tiers** (`crate::palw_model_tier_v1`): refused when armed; add-only lists; the mirror must agree.
+        self.validate_palw_model_tier_v1()?;
         // **RFC-0018's five fences** (`crate::palw_rfc0018_v1`): refused when armed; the mirror must agree.
         self.validate_palw_rfc0018_v1()?;
         self.validate_palw_permissionless_panel_v1()?;

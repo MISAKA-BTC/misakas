@@ -186,6 +186,38 @@ impl PalwBondBudgetStateV1 {
         eligible_capital: impl Fn(&Hash64, u128) -> u128,
         j: &mut Vec<PalwBudgetWriteV1>,
     ) {
+        self.roll_epoch_v3_tiered(
+            policy,
+            index,
+            start_daa,
+            capital_of,
+            verifier,
+            eligible_capital,
+            |_| (false, crate::palw_model_tier_v1::PALW_MODEL_TIER_APPROVED_PERMILLE_V1),
+            None,
+            j,
+        )
+    }
+
+    /// **[`Self::roll_epoch_v3`] with ADR-0179's model tiers** (user decision 2026-10-15, round 4; `palw_model_tier_v1`, dormant):
+    /// `tier(model) = (registered, c_permille)`. Each live row's weight is `A_m = c_m · S̄_m^α` — the ONE place the tier is applied;
+    /// the resulting `P_m = A_m / ΣA` feeds RFC-0016 V+ block rights and the coinbase allocation alike, and no accepted block's
+    /// reward is multiplied by the tier again. With `registered_cap_permille = Some(ρ)` the registered (0.3) models' weights are
+    /// scaled so they total at most `ρ` of `ΣA` (the header keeps the UNSCALED `ΣA`): N registrations never multiply the tier's share,
+    /// and what the cap removes is never allocated (never minted, never redistributed to the approved tier).
+    #[allow(clippy::too_many_arguments)]
+    pub fn roll_epoch_v3_tiered(
+        &mut self,
+        policy: &PalwModelAllocationPolicyV1,
+        index: u64,
+        start_daa: u64,
+        capital_of: impl Fn(&PalwBondKeyV2) -> (u64, bool),
+        verifier: &BTreeMap<PalwBondKeyV2, BTreeMap<Hash64, u64>>,
+        eligible_capital: impl Fn(&Hash64, u128) -> u128,
+        tier: impl Fn(&Hash64) -> (bool, u32),
+        registered_cap_permille: Option<u32>,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) {
         let n = policy.average_epochs().unwrap_or(1);
         // 1. Seasoning, as the V2 roll.
         let mut miner: BTreeMap<PalwBondKeyV2, Vec<(Hash64, u64)>> = BTreeMap::new();
@@ -259,10 +291,24 @@ impl PalwBondBudgetStateV1 {
         for model in stale {
             put(&mut self.models, PALW_BUDGET_TABLE_MODELS_V1, &model, None, j);
         }
+        // ADR-0179: `A_m = c_m · S̄_m^α`, once; then the registered tier's aggregate cap.
         let mut sum_a = PalwAllocationWeightV1::ZERO;
+        let mut registered_sum = PalwAllocationWeightV1::ZERO;
+        let mut rows: Vec<(Hash64, u128, PalwAllocationWeightV1, bool)> = Vec::with_capacity(averages.len());
         for (model, average) in averages {
-            let weight = policy.curve.weight(average);
+            let (registered, c_permille) = tier(&model);
+            let weight = crate::palw_model_tier_v1::palw_model_tier_weight_v1(policy.curve.weight(average), c_permille);
             sum_a = sum_a.saturating_add(weight);
+            if registered {
+                registered_sum = registered_sum.saturating_add(weight);
+            }
+            rows.push((model, average, weight, registered));
+        }
+        let factor = registered_cap_permille
+            .map(|cap| crate::palw_model_tier_v1::palw_model_tier_cap_factor_ppm_v1(sum_a, registered_sum, cap))
+            .unwrap_or(1_000_000);
+        for (model, average, weight, registered) in rows {
+            let weight = if registered { crate::palw_model_tier_v1::palw_model_tier_scale_v1(weight, factor) } else { weight };
             put(
                 &mut self.models,
                 PALW_BUDGET_TABLE_MODELS_V1,
