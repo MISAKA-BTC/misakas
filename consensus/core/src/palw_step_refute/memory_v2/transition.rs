@@ -741,3 +741,7 @@ pub fn gdn_conv_window_refutation_from_capture_v2(
         inputs,
     })
 }
+
+#[cfg(test)]
+#[path = "transition_tests.rs"]
+mod tests;
