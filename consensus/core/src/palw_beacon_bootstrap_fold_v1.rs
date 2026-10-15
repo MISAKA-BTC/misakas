@@ -112,7 +112,9 @@ pub(super) fn apply_bootstrap_exact_v1(
                 .iter_mut()
                 .find(|s| s.contributor == contribution.contributor)
                 .ok_or_else(|| refuse("the contributor sealed nothing in this round"))?;
-            if seal.reveal.is_some() || seal.commitment != bootstrap_exact_commitment_v1(&round_id, &contribution.contributor, &preimage) {
+            if seal.reveal.is_some()
+                || seal.commitment != bootstrap_exact_commitment_v1(&round_id, &contribution.contributor, &preimage)
+            {
                 return Err(refuse("the reveal repeats, or does not open the contributor's own seal"));
             }
             seal.reveal = Some((preimage, now));
@@ -127,12 +129,16 @@ pub(super) fn apply_bootstrap_exact_v1(
 /// **The judging step** (the kernel route's closing step, at the block's DAA; journaled): every due round
 /// ([`PalwBootstrapRoundRowV1::due`]) gets its judgement ([`palw_bootstrap_judge_round_v1`] — the fold derives every fact; an aborted
 /// round is judged `WITHHELD`); a judgement older than the policy's retention retires its round. A no-op below the fence.
-pub(super) fn sweep_beacon_bootstrap_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+pub(super) fn sweep_beacon_bootstrap_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+) -> Result<(), PalwStateV2Error> {
     let now = ctx.daa_score;
     let Some(policy) = builder.params.econ_contracts_v1().beacon_bootstrap_at(now).copied() else { return Ok(()) };
     let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     let mut writes: Vec<(Vec<u8>, Option<Vec<u8>>)> = Vec::new();
-    for ((_, key), bytes) in route.aux.range((PALW_BEACON_BOOTSTRAP_TABLE_V1, Vec::new())..(PALW_BEACON_BOOTSTRAP_TABLE_V1 + 1, Vec::new()))
+    for ((_, key), bytes) in
+        route.aux.range((PALW_BEACON_BOOTSTRAP_TABLE_V1, Vec::new())..(PALW_BEACON_BOOTSTRAP_TABLE_V1 + 1, Vec::new()))
     {
         let mut row: PalwBootstrapRoundRowV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
         match row.judgement.as_ref() {

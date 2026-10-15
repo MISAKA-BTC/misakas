@@ -111,14 +111,16 @@ mod tests {
         let mut c = seal();
         c.round.target = [0; 64];
         assert!(c.validate().is_err());
-        let zero: BootstrapExactContributionV1 = borsh::from_slice(&borsh::to_vec(&BootstrapExactContributionV1 {
-            version: 0,
-            network: [0; 64],
-            round: BootstrapExactRoundV1 { profile: [0; 64], target: [0; 64], slot: 0 },
-            contributor: [0; 64],
-            action: BootstrapExactActionV1::Reveal { preimage: [0; 64] },
-        })
-        .unwrap())
+        let zero: BootstrapExactContributionV1 = borsh::from_slice(
+            &borsh::to_vec(&BootstrapExactContributionV1 {
+                version: 0,
+                network: [0; 64],
+                round: BootstrapExactRoundV1 { profile: [0; 64], target: [0; 64], slot: 0 },
+                contributor: [0; 64],
+                action: BootstrapExactActionV1::Reveal { preimage: [0; 64] },
+            })
+            .unwrap(),
+        )
         .unwrap();
         assert!(zero.validate().is_err(), "a zero body decodes but never validates");
     }

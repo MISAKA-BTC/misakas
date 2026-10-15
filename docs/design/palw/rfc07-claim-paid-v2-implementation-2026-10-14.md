@@ -160,3 +160,106 @@ actual artifact, and commits the new paid ruleset in an explicitly versioned
 conformance statement. Its manifest never promotes old control/receipt evidence
 and reports new native inclusion, conformance, paid work, source lock and Final as
 unobserved. Actual acceptance remains pending consolidated verification.
+
+## Compact relation compilers (2026-10-15, round 3)
+
+**Status: source checkpoint.** Not compiled and not tested, following the
+implementation-first order. Not reviewed, not wired into `PaidClaimClassV2` rounds,
+and not admitted: registration needs the dormant ClaimV2 fence active plus an
+approved review tuple, and the shipped registry is empty. This is no PASS.
+
+**What exists.** `misaka/palw/kernel/src/claim_compact_v1.rs` compiles a checked
+`VerificationPlanV1` relation by relation (`compile_plan_v1`) into a
+`CompactPlanCoverageV1`. Every relation is either compiled to a compact relation
+proof or kept on its descriptor's exact checker. A (family, checker) pair outside
+the inventory refuses the whole plan, and so does a typed-spec target or an
+undeclared grinding budget.
+
+### Relation classes in the shipped plans
+
+K2-TIR-v1…v5 use these (family, checker) pairs:
+
+- DenseMatrix with `FreivaldsM127` / `FreivaldsCrtV2`
+- ExactArithmetic, Structure, QuantRange, Nonlinear and Selection with `ExactRecompute`
+- RecurrentState with `StateContinuity`
+- MediaPipeline with `EdgeRecompute`
+
+A test pins that each of these pairs appears in `COMPACT_RELATION_INVENTORY_V1`.
+
+### Implemented compilers
+
+Each compiler has a distinct identity (`compact_relation_compiler_id_v1`).
+
+**`FreivaldsSeededV1` (`MatMul`)**
+- **Moduli:** the plan's `relation_moduli`, so 2^127−1 alone or the CRT prefix.
+- **Randomness:** one vector `r` per (repetition, modulus), drawn from the paid round seed's `Freivalds` stream. The weight projection is shared across batch slices.
+- **Proof:** a header only.
+- **Bound:** `ε ≤ 1/p` per slice and repetition. Instance bits are `t·b₀`.
+
+**`LinearEvaluationV1` (`Add`, `Sub`, numpy broadcast)**
+- **Check:** at one random point `ρ` from the `Vector` stream, `ỹ(ρ) = ã(ρ) ± b̃(ρ)` over the zero-padded flattened output.
+- **Bound:** `ε ≤ ν/p` by Schwartz–Zippel on the multilinear difference.
+- **Scalar case:** with `ν = 0` the identity is exact.
+
+**`SumCheckHadamardV1` (`Mul`, broadcast)**
+- **Check:** a sum-check of `Σ_x eq(ρ,x)·a(x)·b(x)` with degree 3 and `ν` rounds. The final claim is checked against `eq(ρ,κ)·ã(κ)·b̃(κ)`, which the verifier evaluates from the operands.
+- **Per-repetition bound:** `ε ≤ ν/p + 3ν/p`.
+- **Grinding:** round challenges are Fiat–Shamir over the transcript, keyed by the seed. The instance bound is therefore `b₀ − ⌈log₂(4ν + 3Q)⌉`, and repetitions are not credited.
+
+**`SumCheckReduceSumV1` (`ReduceSum{axis}`)**
+- **Layout:** the operand is laid out as `[output index][j]`, with `j` padded to `2^ν_j`.
+- **Check:** a degree-1 sum-check over `j` of `Ã'(ρ, j)`.
+- **Bound:** `ε ≤ ν_o/p + ν_j/p`. The instance bound is `b₀ − ⌈log₂(ν_o + ν_j + Q)⌉`.
+
+### Common rules
+
+- **Moduli and alias argument:** the moduli are the fewest Mersenne primes whose product exceeds the relation's integer error span. The verifier checks every operand and the output against its dtype range, so a nonzero integer error is nonzero modulo one used modulus. The bounds use the smallest such modulus.
+- **Proof rejection:** a proof is refused if it carries
+  - a non-canonical field element,
+  - a wrong round count,
+  - another relation or repetition count, or
+  - a size above its compiled byte bound.
+- **Stream exhaustion:** this yields `Unavailable`, never success or fraud.
+- **Fault localization:** `exact_relation_fault_v1` localizes a rejected relation to the first wrong output element for the existing exact court.
+- **Commitment binding:**
+  - `verify_relation_committed_v1` authenticates operands against the claim's commitments.
+  - `compact_proof_root_v1` / `bind_compact_round_message_v1` bind the proofs to a signed round message.
+- **No compact proof larger than its material:** an arithmetic relation is compiled only when its proof bound is below its operand bytes. Otherwise it stays exact.
+
+### Accounting
+
+- **Composed bound:** `compact_check_families_v1` gives one `CheckFamilyV1` per compact relation. Each carries its instance bits, with `instances = instances_per_position × max_positions`. `compact_composed_bound_v1` applies the union bound and the binding term.
+- **Lifetime term:** `compact_lifetime_failure_term_v1` turns the per-attempt bound into a `CumulativeFailureTermV1` over lifetime admissions. It refuses a budget that already charges `Q`, so `Q` is not counted twice.
+- **Contract binding:** `CompactRelationContractV1` binds the coverage root, the claimed bits, the binding bits and per-position proof/work bounds. `check` refuses an unbound coverage, a claimed bit count above what is derived, and any exceeded bound. `suite_id` is the identity a review tuple must name.
+
+### Refused, with reasons (`COMPACT_REFUSED_FAMILIES_V1`)
+
+- **GKR-style layered chain and PCS-backed evaluation:** there is no polynomial commitment. A hash-Merkle tensor commitment cannot open a multilinear evaluation.
+- **Lookup arguments (QuantRange, Nonlinear) and permutation/lookup arguments (Selection, routing):** these stay on exact recompute.
+- **Compact memory argument:** state continuity stays on wiring plus exact recompute.
+- **Staged-beacon sum-check:** one beacon per round is not compiled.
+- **Typed-spec targets:** there is no plan relation map.
+
+`CompiledClaimProofPlanV3::validate` refuses a compact relation compiler id by name (`COMPACT_RELATION_NOT_A_V3_PLAN_V1`). It never reads such an id as a full-material plan. The family-level stub contract keeps refusing.
+
+### Honest limits
+
+- **Reads:** verifier reads are not reduced below the operands' size.
+- **Message size:** the gain is the round message, with an explicit per-relation error.
+- **Elementwise error:** for elementwise relations the compact check adds an error term where exact recompute had none. Compiling them is the class's opt-in (`compact_exact_arithmetic`).
+- **Fiat–Shamir review:** the transform's grinding bound is a declared `Q`, which needs external review.
+
+### Required next
+
+1. Compile all the new code.
+2. Run the module tests:
+   - completeness on honest products and arithmetic, including the CRT case and broadcasting;
+   - tampered outputs caught;
+   - forged and non-canonical transcripts refused;
+   - bound arithmetic at fixed points;
+   - the composition and lifetime terms;
+   - refusal of unknown pairs and unimplemented families;
+   - a shipped fixture plan fully covered, with registration refused as unreviewed.
+3. External review of the bounds and the transform.
+4. A PCS/GKR suite.
+5. Wiring into paid rounds and receipts.

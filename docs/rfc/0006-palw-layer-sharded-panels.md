@@ -1035,6 +1035,122 @@ commit points. For any new probabilistic or algebraic cell profile (RFC07 Part V
 - Remaining (observations): proof of whole-claim soundness for small constraint checks, and boundary/memory/routing
   coverage per accepted model profile, are not established.
 
+#### R6-CELL round 3 — claim-wide boundary, routing and memory coverage (2026-10-15)
+
+**Status:** this is an argument plus a checker in source form. It is not compiled, not tested and not reviewed, and
+it is no PASS. It refines the remaining observation above and does not close it.
+
+**Committed trace.** Every value a TIR claim commits is one of five things:
+
+- a commit-point node tile (`PalwTirLeafKindV1::Commit`) of an occurrence (pre, layer `l`, post) at a position;
+- a `Fixed` state leaf (`State`);
+- a `Hist` window tile (`HistTile`);
+- a logits row;
+- the delivered token.
+
+Every node input is exactly one of the following:
+
+- **(i)** a node of the same occurrence;
+- **(ii)** a carry-in slot (`Ref::CarryIn`), whose bytes are the previous occurrence's committed carry-out tile, with
+  no second commitment;
+- **(iii)** a state (the previous position's `State` leaf or `HistTile` window);
+- **(iv)** a param, authenticated against the registered artifact;
+- **(v)** the job input or the previous position's delivered token.
+
+**Lemma (claim-wide first divergence).** Assume the binding term (BLAKE2b-512 collisions) does not fail. Suppose a
+committed trace differs from the reference evaluation of the registered program on the authenticated params and the
+job input. Then the first differing value, taken in evaluation order (position, then occurrence, then node), is
+exactly one of three things:
+
+- **(a)** the output of one relation instance of one cell, whose own inputs are all correct committed values or
+  correct recomputations;
+- **(b)** one state update (a `StateWrite`/`HistAppend` row, or a window that is not the previous window plus the new
+  row);
+- **(c)** the decode door (a delivered token that is not the decode of its committed logits row).
+
+*Proof sketch.* Take the first differing value. Every input it reads comes earlier in evaluation order, through
+(i)–(v), so each input is either correct or itself the first divergence:
+
+- inputs (i) and (iv) are correct;
+- input (ii) is the same bytes as an earlier commit point;
+- input (iii) is an earlier `State`/`HistTile` leaf;
+- input (v) is the job's input or an earlier door.
+
+The carry slot is not a separate relation: equality of a carry-out with the next carry-in holds by construction,
+because the next cell reads the committed carry-out tile. This holds only if every carry-out node is a commit point,
+which `validate` enforces and the checker re-checks. The same argument covers a shard cut, which is a carry edge
+between occurrences held by different shards (`palw_tir_shard_partition_v1` is contiguous), and a position-segment
+cut (`S_P = 2`), which is a state/`HistTile` edge between positions.
+
+**Coverage requirement.** By the lemma, a claim is localizable when each of the following has a verifier that maps
+it to a bounded exact terminal (`TirShardCourtAccused`, the logits/decode arms, H-dissection):
+
+- every relation of every node, by its family's descriptor checker (PALW-SH-10). Routing (TopK, Gather, Compare,
+  Select, ReduceMax) is the Selection family and is checked by exact recompute;
+- every carry-out slot, through the cell verifier's read of committed tiles (PALW-SH-11);
+- every `Fixed`/`Hist` state, through `StateContinuity` plus `State`/`HistTile` leaf recomputation;
+- the declared shard shape;
+- the door.
+
+The whole-claim false-accept bound is then the PALW-SH-12 union:
+
+- exact verifiers contribute `0`;
+- probabilistic relations contribute their RFC-0007 per-instance terms (R7-RELATION items 4 and 7), over every
+  position;
+- the binding term is added;
+- if fewer than all cells are checked, the selection loss is added (`⌊log₂(N/(N−s))⌋`), which a uniform sample of
+  `s` of `N` cells pays.
+
+A beacon mismatch only localizes. Conviction is always the exact terminal's.
+
+**The checker** is `consensus/core/src/palw_cell_coverage_v1.rs`. It is pure, and no consensus path calls it. It
+enumerates every boundary the code accepts and routes each one to its verifier.
+
+`palw_tir_cell_coverage_v1(descriptor, program, (S_L, S_P))` enumerates:
+
+- every node as a relation, using `family_of_prim` and the descriptor's `support`;
+- every Selection node again as routing;
+- every `carry_out` slot (it must name an existing commit-point node);
+- every `StateKind::{Fixed, Hist}` (exhaustive match, so a new kind cannot compile unclassified);
+- the shard shape. Only `2 ≤ S_L ≤ min(64, layers)` and `S_P ∈ {1, PALW_TIR_SHARD_POSITION_SEGMENTS_S1_V1}` are
+  accepted; any other shape is `UnknownProfileKind`;
+- the decode door.
+
+`palw_legacy_cell_coverage_v1(profile)` enumerates, for a `PalwShapeProfileV3`:
+
+- the profile version (V1–V3 only; any other version fails closed);
+- every layer by `layer_kind` (exhaustive over `GatedDeltaNet` / `Attention`) and every layer carry;
+- the MoE router of every layer table. Exactly one q36 router TopK is covered. More than one is uncovered, because
+  the router slot is then not unique. A fenced Kimi router is uncovered;
+- each memory section the layers need (attention cache, recurrence state) under the registered state chunk map:
+  - **no map:** the long form covers the section;
+  - **a known map:** the section is covered only if the map spells that section **and**
+    `palw_state_chunk_count_at_v1` enumerates it at a checkpoint;
+  - **an unknown map id:** `UnknownProfileKind`.
+
+`palw_shipped_legacy_profiles_v1` enumerates the shipped ladder families (graph v1, v5 and v7, and the v8 hybrid)
+at every row in `PALW_CONTEXT_LADDER_ROWS`. The tests drive the TIR checker over the sketch fixtures (dense + MoE,
+windowed, wide128) under K2-TIR-v2 and v4.
+
+**Gaps the checker names (from reading the code; not yet run).** These are recorded gaps, not passes:
+
+- The v1/v2 hybrid maps enumerate only their attention half. The recurrence section of a hybrid profile under them
+  is uncovered.
+- The standalone recurrence maps (`gdn_state_chunk_map_id_v1`–`v3`) are not enumerable by the court.
+- Outside the checker, the step leg still treats an unknown, non-held map as "no fault"
+  (`palw_step_leg.rs`, `_ => {}`), and V1/V2 profiles accept any map id. Both are fail-open acceptance paths that
+  need a versioned fence to close.
+- MoE in the legacy graph exists only as kernel and weight-name conventions.
+- Whether the legacy step court covers every operator of a layer is asserted by name here, not re-proved.
+
+**Remaining:**
+
+- compile and test the checker;
+- decide how to close the fail-open map paths (USER DECISION REQUIRED for any fence);
+- an external review of the lemma;
+- extend the enumeration to every registered class row of a live network, once a catalog of registered TIR
+  classes exists.
+
 ### R6-DRAW — the V3 per-shard draw
 
 In addition to the 2026-10-11 restore contract above:

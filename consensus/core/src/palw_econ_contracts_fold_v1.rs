@@ -211,13 +211,13 @@ fn model_epoch_outcome_v1(
         if let Some(tally) = route.aux_row::<PalwModelVerificationTallyV1>(PALW_MODEL_VERIFICATION_TABLE_V1, &id) {
             return tally.outcome(policy.threshold, now);
         }
-        if let Some(decided) =
-            route.aux_row::<PalwModelVerificationDecidedV1>(PALW_MODEL_VERIFICATION_TABLE_V1, &palw_model_verification_decided_key_v1(&id))
+        if let Some(decided) = route
+            .aux_row::<PalwModelVerificationDecidedV1>(PALW_MODEL_VERIFICATION_TABLE_V1, &palw_model_verification_decided_key_v1(&id))
         {
             return decided.outcome;
         }
-        if let Some(context) =
-            route.aux_row::<PalwModelVerificationContextV1>(PALW_MODEL_VERIFICATION_TABLE_V1, &palw_model_verification_context_key_v1(&id))
+        if let Some(context) = route
+            .aux_row::<PalwModelVerificationContextV1>(PALW_MODEL_VERIFICATION_TABLE_V1, &palw_model_verification_context_key_v1(&id))
         {
             return if context.unavailable_daa.is_some() { O::Unattested } else { O::Pending };
         }
@@ -325,12 +325,7 @@ pub(super) fn tick_model_verification_gate_v1(
     let (current, live): (Option<PalwAllocationEpochV1>, BTreeSet<(Hash64, u64)>) = match builder.state.bond_budget.as_ref() {
         Some(budget) => (
             budget.header.allocation,
-            budget
-                .claims
-                .values()
-                .filter(|row| row.live && row.accepted_daa >= from)
-                .filter_map(|row| row.model)
-                .collect(),
+            budget.claims.values().filter(|row| row.live && row.accepted_daa >= from).filter_map(|row| row.model).collect(),
         ),
         None => (None, BTreeSet::new()),
     };
@@ -418,11 +413,7 @@ pub(super) fn tick_model_verification_gate_v1(
                             .iter()
                             .filter(|(_, row)| row.model == Some((model, context.epoch)) && row.accepted_daa >= from)
                             .filter(|(claim, _)| {
-                                builder
-                                    .state
-                                    .claims
-                                    .get(*claim)
-                                    .is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::Final { .. }))
+                                builder.state.claims.get(*claim).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::Final { .. }))
                             })
                             .map(|(claim, _)| claim.as_bytes())
                             .collect()
@@ -503,7 +494,9 @@ pub(super) fn tick_model_verification_gate_v1(
             PalwModelVerificationOutcomeV1::Unattested => builder.write_kernel_row(table, key.clone(), None),
             PalwModelVerificationOutcomeV1::Attested | PalwModelVerificationOutcomeV1::NoFinalClaim => {
                 let queue = palw_model_verification_deferred_payout_key_v1(&row.claim);
-                if builder.state.pending_payouts.len() >= PALW_V2_MAX_PENDING_PAYOUTS || builder.state.pending_payouts.contains_key(&queue) {
+                if builder.state.pending_payouts.len() >= PALW_V2_MAX_PENDING_PAYOUTS
+                    || builder.state.pending_payouts.contains_key(&queue)
+                {
                     continue; // the queue drains first; the release waits (never dropped, never doubled)
                 }
                 builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.payload, amount: row.amount }));
@@ -825,7 +818,8 @@ pub(super) fn minimum_price_payout_floors_v1(
         return floors;
     }
     let Some(route) = builder.state.kernel_route.as_ref() else { return floors };
-    for ((_, key), bytes) in route.aux.range((PALW_MINIMUM_PRICE_TABLE_V1, Vec::new())..(PALW_MINIMUM_PRICE_TABLE_V1 + 1, Vec::new())) {
+    for ((_, key), bytes) in route.aux.range((PALW_MINIMUM_PRICE_TABLE_V1, Vec::new())..(PALW_MINIMUM_PRICE_TABLE_V1 + 1, Vec::new()))
+    {
         if key.len() != 65 || key[0] != MINIMUM_PRICE_CONTRACT_PREFIX_V1 {
             continue;
         }
@@ -866,7 +860,8 @@ pub(super) fn sweep_econ_contracts_v1(builder: &mut TransitionBuilder<'_>, ctx: 
                 let id = row.terms.id();
                 retire.push((PALW_MINIMUM_PRICE_TABLE_V1, key.clone()));
                 let index = palw_minimum_price_job_key_v1(&row.terms.job);
-                if route.aux.get(&(PALW_MINIMUM_PRICE_TABLE_V1, index.clone())).is_some_and(|named| named.as_slice() == id.as_slice()) {
+                if route.aux.get(&(PALW_MINIMUM_PRICE_TABLE_V1, index.clone())).is_some_and(|named| named.as_slice() == id.as_slice())
+                {
                     retire.push((PALW_MINIMUM_PRICE_TABLE_V1, index));
                 }
             }

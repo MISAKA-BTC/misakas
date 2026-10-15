@@ -26,7 +26,14 @@
 //! upper cost + `capital_rate` × the capital-time area counted once. Both parties sign the same terms before the worker is reserved; the
 //! contract binds the funded amount (the job's GAP-5 escrow must cover it), scope (job/class), worker, policy, deadline and retention.
 //! An offer below the derived minimum, an unmeasured class, a zero collection floor (UNKNOWN) or an unrepresentable quote is refused;
-//! while a contract governs a job, only its worker's claim is admitted, and only inside its acceptance deadline.
+//! while a contract governs a job, only its worker's claim is admitted, and only inside its acceptance deadline. **Round 3:** at
+//! settlement the contracted Final is paid at least the funded minimum out of the job's escrow, or nothing (neutral: the escrow
+//! returns whole to the poster) — never less ([`palw_minimum_price_floor_v1`]); a deterministic sweep retires stale consents and
+//! expired, unused or settled contracts ([`palw_minimum_price_retirement_v1`], [`palw_horizon_extension_retired_v1`]).
+//!
+//! **Round 3 wiring of the gate:** a closed model-epoch's OPVB context is frozen at the allocation epoch's roll, its tally opens from
+//! the verified locked beacon, and the Final payout of each gated claim reads the model-epoch's outcome (paid, withheld or deferred;
+//! aux 125's `0x01` / `0x02` / `0x03` rows). The fold is `palw_state_v2::palw_econ_contracts_fold_v1`.
 //!
 //! **No value here is approved.** Every parameter is a named field of a fenced policy; `unapproved_probe_*` exist only for tests and
 //! private profiles, and `validate_*` refuses every real activation like the sibling fences.
@@ -870,8 +877,8 @@ impl Params {
             ));
         }
         Err(PalwModeV2Error::Invalid(
-            "palw_minimum_price_v1 cannot be armed: measured class costs, the joint collection floor and settlement enforcement remain \
-             unapproved",
+            "palw_minimum_price_v1 cannot be armed: measured class costs, the joint collection floor and the neutral settlement rule \
+             remain unapproved",
         ))
     }
 }
@@ -915,7 +922,8 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                             let row: PalwModelVerificationContextV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                             row.validate(policy).map_err(|e| refuse(e.into()))?;
                             let id = palw_model_verification_tally_id_v1(&row.model, row.epoch);
-                            if *key != palw_model_verification_context_key_v1(&id) || has(palw_model_verification_decided_key_v1(&id)) {
+                            if *key != palw_model_verification_context_key_v1(&id) || has(palw_model_verification_decided_key_v1(&id))
+                            {
                                 return Err(refuse("a verification context under another key or beside its decided row".into()));
                             }
                         }
@@ -928,7 +936,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                         (65, Some(&MODEL_VERIFICATION_DECIDED_PREFIX_V1)) => {
                             let row: PalwModelVerificationDecidedV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                             let id = palw_model_verification_tally_id_v1(&row.model, row.epoch);
-                            if *key != palw_model_verification_decided_key_v1(&id) || row.outcome == PalwModelVerificationOutcomeV1::Pending {
+                            if *key != palw_model_verification_decided_key_v1(&id)
+                                || row.outcome == PalwModelVerificationOutcomeV1::Pending
+                            {
                                 return Err(refuse("a decided row under another key, or undecided".into()));
                             }
                         }
@@ -1181,10 +1191,8 @@ mod tests {
         let terms = contract(&p, 2_200);
         let mut row = PalwMinimumPriceRowV1 { terms, consented: vec![terms.worker], first_daa: 100, signed_daa: None, policy: p.id() };
         let mut l = empty_ledger();
-        l.job_escrows.insert(
-            terms.job,
-            misaka_palw_kernel::ledger::JobEscrowRowV1 { poster: terms.poster, amount: 2_200, posted_daa: 90 },
-        );
+        l.job_escrows
+            .insert(terms.job, misaka_palw_kernel::ledger::JobEscrowRowV1 { poster: terms.poster, amount: 2_200, posted_daa: 90 });
         assert_eq!(palw_minimum_price_retirement_v1(&row, &l, 150), None, "a partial consent lives to its acceptance deadline");
         assert_eq!(palw_minimum_price_retirement_v1(&row, &l, 151), Some(R::StaleConsent));
         row.signed_daa = Some(120);

@@ -1378,6 +1378,32 @@ only where an existing record justifies it.
      sum), source fee floor: **value: USER DECISION REQUIRED**.
    - `work_count_k`, `settlement_depth_D`, `anchor_delay_slots`, `retry_limit` of §VI.2: **value: USER DECISION
      REQUIRED** (no recommendation; §VI.8 item 2 analysis absent).
+7. **BootstrapExact object and fold stage (2026-10-15, round 3; dormant source, not compiled, not tested).** The N3
+   bootstrap now has a carried object and a fold stage under its own dormant fence `palw_beacon_bootstrap_v1`
+   (Some-only, `None` on every preset, refused when armed; requires `palw_probabilistic_constraints_v1` at or below it).
+   Kernel inner **73** `BootstrapExactV1` carries one bond's `Seal {commitment}` or `Reveal {preimage}` for one round
+   `(profile, target, slot)`; kernel route aux table **130** holds the rounds (key = round id). Normative rules:
+   - The round's windows derive from the target kernel claim's own `committed_daa` (read from the ledger at the first seal,
+     never from the contribution): seals in `(committed, committed + seal_window_daa]`, reveals in
+     `(seal end, seal end + reveal_window_daa]`; one seal per contributor; `commitment = H(round id, contributor, preimage)`.
+   - The fold judges a round once `now > reveal end` and either an input was withheld (the fold's withholding rule is
+     `AbortRound`: the round yields no output) or `now − last input ≥ profile.min_settlement_depth`. Every fact is derived
+     by the fold: content-only work identity `H(round, canonical commitments)`; exact output `H(round id, canonical
+     (contributor, preimage))` re-executed (V1 combiner: a structural placeholder, not an approved BootstrapExact kernel);
+     resource units = inputs; reads = {Genesis, KernelActive}; inputs-fixed position = the last seal (strictly after the
+     target); independent contributors = distinct operators of the sealing bonds; selection = every seal in canonical
+     `(sealed_daa, contributor)` order under the per-round cap; trials = on-chain seals; derivation = selected chain at
+     `now − last input`. `palw_bootstrap_independent_validity_v1`, then (only if it holds)
+     `palw_bootstrap_entropy_eligibility_v1`, run on those facts; the judgement is stored and the restore fence re-derives
+     it. `palw_bootstrap_holds_in_state_v1` feeds `palw_bootstrap_holds_v1` the re-derived witnesses.
+   - `approved_bootstrap_entropy_profiles_v1()` stays empty: the bootstrap holds nowhere and no new reward profile opens.
+     The fence's `profile` field is what rounds are judged under, never an approval.
+   - Named parameters `PalwBeaconBootstrapPolicyV1 {profile, seal_window_daa, reveal_window_daa,
+     maximum_contributors_per_round, maximum_sources_per_target, maximum_open_rounds, judged_retention_daa,
+     security_review_scope}` — invariants: finite non-zero windows, `maximum_contributors_per_round ≥
+     profile.min_independent_contributors`, `maximum_sources_per_target ≥ profile.sources_required`; **value: USER DECISION
+     REQUIRED** (the probe uses a SYNTHETIC profile only). The production BootstrapExact kernel, its resource bound and the
+     entropy profile (bias analysis covering `AbortRound`) remain undecided.
 
 ### R7-RANDOM — collection, composition and grinding
 
@@ -1505,6 +1531,30 @@ only where an existing record justifies it.
    **value: USER DECISION REQUIRED** (interim probe m = 47, k = 24 from the 2026-10-10 ruling, unapproved). The OPVB
    beacon wiring that opens a tally and the payout integration of its outcome remain open; T6 (lazy verifier) is not
    closed by an attestation.
+8. **Beacon → tally → payout wiring (2026-10-15, round 3; dormant source, not compiled, not tested).** Past
+   `palw_model_verification_gate_v1` (which now also requires `palw_probabilistic_constraints_v1` at or below it):
+   - **Freeze.** At the block that rolls the allocation epoch, every closed `(model m, epoch e)` with a live gated claim
+     (budget row naming `(m, e)`, accepted at or past the gate) gets a frozen OPVB context in aux 125 under
+     `0x01 ‖ tally id`: v3 sealed-source `ClaimVerification`, `commitment_root = tally id = H(m, e)`,
+     `commitment_position` = this block, `challenge_epoch = e`, eligible profiles = the OPV classes eligible now minus `m`,
+     excluded = `{m}`, candidate `Absent`, policy = the network's sealed-source onboarding policy (interim, unapproved).
+   - **Open.** When that context's beacon locks (`collect_sealed_work_beacon_v3` over the route's sealed sources), the tally
+     opens from the VERIFIED beacon output: sample = one Final claim of `(m, e)` (`UniformFinalClaimV1` over the canonical
+     set); pool = Active bonds with collateral ≥ the network floor, excluding the sampled claim's producer operator, keyed by
+     kernel bond id with stake = collateral; `m` slots drawn by stake. Unavailable/vetoed/refused beacon or an empty pool
+     marks the context unavailable. Capacity `maximum_open_tallies` bounds undecided tallies (excess contexts wait).
+   - **Pay.** At a gated claim's Final, after the budget grant and before the export cap, buyback and splits, the amount is
+     `palw_model_verification_subsidy_v1(outcome(m, e), amount)`: `Attested` / `NoFinalClaim` → paid; `Unattested` (k not
+     reached by the deadline, or unreachable, or the beacon unavailable, or a closed epoch with no context) → withheld,
+     never named or minted; undecided → deferred whole into aux 125 `0x02 ‖ claim id`. A decided tally is replaced by a
+     decided row `0x03 ‖ tally id` (the same answer for every claim of `(m, e)`).
+   - **Release.** Each block the gate's tick releases a deferred amount to the producer's payload as one payout (queue key
+     `H("MODEL-VERIFICATION-DEFERRED-PAYOUT", claim)`) once `(m, e)` is Attested/NoFinalClaim, or drops it once Unattested;
+     decided rows and contexts retire when no live gated claim or deferred reward reads them.
+   - Claims, user escrow, Final, weight and slashing are untouched; below the fence and for unallocated claims the payout is
+     byte-identical. **USER DECISION REQUIRED**: whether a deferred amount released later should keep the Panel/buyback
+     split (the source releases it to the producer alone), and whether an unavailable beacon should withhold (current rule)
+     or pay.
 
 ### ALL-MODEL
 

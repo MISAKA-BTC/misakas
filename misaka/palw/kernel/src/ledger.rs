@@ -1413,7 +1413,10 @@ impl KernelLedgerV1 {
             }
             // N3 (inner 73): a BootstrapExact contribution is judged only by the native consumer past `palw_beacon_bootstrap_v1`.
             KernelRouteObjectV1::BootstrapExactV1 { .. } => {
-                return Err(KernelRefusalV1::rule(name, "BootstrapExact sources must be interpreted by the authenticated native consumer"));
+                return Err(KernelRefusalV1::rule(
+                    name,
+                    "BootstrapExact sources must be interpreted by the authenticated native consumer",
+                ));
             }
             // M*-49 (`palw_verifier_pay_v1`): the signer is the drawn slot holder (`authorize`); below the consumer's fence no draw
             // exists, so the attestation is refused by its own rule.

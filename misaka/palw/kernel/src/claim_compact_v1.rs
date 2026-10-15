@@ -1326,7 +1326,7 @@ pub fn verify_relation_v1(
             if !p.compiler.transcript_bound() && !t.is_empty() {
                 return Err(CompactVerdictV1::Malformed("a transcript on a family without rounds".into()));
             }
-            dispatch(p, seed, scope, (rep, j), vars, inputs, y, Some(t), budget)?;
+            dispatch(p, seed, scope, (rep, j), vars, inputs, y, Some(t.as_slice()), budget)?;
         }
     }
     Ok(())
@@ -1358,12 +1358,21 @@ pub fn verify_relation_committed_v1(
 /// **Localization**: the first output element the exact relation disagrees with (`None`: the relation holds exactly). Used after
 /// [`CompactVerdictV1::Rejected`] to file the existing exact court; never a conviction by itself.
 pub fn exact_relation_fault_v1(p: &CompactRelationProgramV1, inputs: &[Tensor], y: &Tensor) -> Option<usize> {
-    let expect: Vec<Option<i128>> = match p.compiler {
+    // Operands the exact relation cannot even read are a fault at the first output element, never "the relation holds".
+    let Some(expect) = exact_relation_values(p, inputs, y) else { return Some(0) };
+    if expect.len() != y.data.len() {
+        return Some(0);
+    }
+    expect.iter().zip(&y.data).position(|(e, v)| *e != Some(*v))
+}
+
+fn exact_relation_values(p: &CompactRelationProgramV1, inputs: &[Tensor], y: &Tensor) -> Option<Vec<Option<i128>>> {
+    Some(match p.compiler {
         CompactRelationCompilerV1::FreivaldsSeededV1 => {
             let (x, w) = (inputs.first()?, inputs.get(1)?);
             let (xr, wr, yr) = (x.shape.len(), w.shape.len(), y.shape.len());
             if xr < 2 || wr < 2 || yr < 2 || w.shape[wr - 2] != x.shape[xr - 1] {
-                return Some(0);
+                return None;
             }
             let (m, k, n) = (x.shape[xr - 2], x.shape[xr - 1], w.shape[wr - 1]);
             let batch = &y.shape[..yr - 2];
@@ -1398,11 +1407,7 @@ pub fn exact_relation_fault_v1(p: &CompactRelationProgramV1, inputs: &[Tensor], 
             let row = layout.len() / n_out.max(1);
             (0..n_out).map(|o| layout[o * row..(o + 1) * row].iter().try_fold(0i128, |acc, v| acc.checked_add(*v))).collect()
         }
-    };
-    if expect.len() != y.data.len() {
-        return Some(0);
-    }
-    expect.iter().zip(&y.data).position(|(e, v)| *e != Some(*v))
+    })
 }
 
 #[cfg(test)]

@@ -923,7 +923,11 @@ impl PalwBootstrapRoundRowV1 {
 
     /// The last position any input was fixed or revealed at (the depth is counted from here).
     pub fn last_input_daa(&self) -> u64 {
-        self.seals.iter().map(|s| s.reveal.map_or(s.sealed_daa, |(_, at)| at.max(s.sealed_daa))).max().unwrap_or(self.target_committed_daa)
+        self.seals
+            .iter()
+            .map(|s| s.reveal.map_or(s.sealed_daa, |(_, at)| at.max(s.sealed_daa)))
+            .max()
+            .unwrap_or(self.target_committed_daa)
     }
 
     /// Whether the fold judges the round at `now`: its reveal window closed, and its inputs settled the profile's depth (an aborted
@@ -957,7 +961,9 @@ impl PalwBootstrapRoundRowV1 {
             if s.sealed_daa <= self.target_committed_daa
                 || s.sealed_daa > seal_end
                 || s.reveal.is_some_and(|(preimage, at)| {
-                    at <= seal_end || at > reveal_end || bootstrap_exact_commitment_v1(&round, &s.contributor, &preimage) != s.commitment
+                    at <= seal_end
+                        || at > reveal_end
+                        || bootstrap_exact_commitment_v1(&round, &s.contributor, &preimage) != s.commitment
                 })
             {
                 return Err("a bootstrap seal or reveal lies outside its round's windows or opens another commitment");
@@ -1062,7 +1068,9 @@ pub fn palw_bootstrap_eligible_in_state_v1(
     if policy.profile.id != profile_id {
         return out;
     }
-    for ((_, _), bytes) in route.aux.range((PALW_BEACON_BOOTSTRAP_TABLE_V1, Vec::new())..(PALW_BEACON_BOOTSTRAP_TABLE_V1 + 1, Vec::new())) {
+    for ((_, _), bytes) in
+        route.aux.range((PALW_BEACON_BOOTSTRAP_TABLE_V1, Vec::new())..(PALW_BEACON_BOOTSTRAP_TABLE_V1 + 1, Vec::new()))
+    {
         let Ok(row) = borsh::from_slice::<PalwBootstrapRoundRowV1>(bytes) else { continue };
         let Some(judged) = row.judgement.as_ref().map(|j| j.judged_daa) else { continue };
         if row.round.target != *target || row.round.profile != profile_id.as_bytes() {
@@ -1131,7 +1139,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let refuse = |why: String| PalwStateV2Error::CarriageInconsistent(format!("beacon bootstrap: {why}"));
         let Some(route) = self.kernel_route() else { return Ok(()) };
         let mut open = 0u64;
-        for ((_, key), bytes) in route.aux.range((PALW_BEACON_BOOTSTRAP_TABLE_V1, Vec::new())..(PALW_BEACON_BOOTSTRAP_TABLE_V1 + 1, Vec::new())) {
+        for ((_, key), bytes) in
+            route.aux.range((PALW_BEACON_BOOTSTRAP_TABLE_V1, Vec::new())..(PALW_BEACON_BOOTSTRAP_TABLE_V1 + 1, Vec::new()))
+        {
             let (_, policy) =
                 params.econ_contracts_v1().beacon_bootstrap.as_ref().ok_or_else(|| refuse("a round without its fence".into()))?;
             let row: PalwBootstrapRoundRowV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
@@ -1222,10 +1232,7 @@ mod round3_tests {
         assert_eq!(palw_bootstrap_judge_round_v1(&r, &p.profile, 121).0, judgement, "deterministic re-derivation");
         let judged = PalwBootstrapRoundRowV1 { judgement: Some(judgement), ..r.clone() };
         judged.validate(&p).unwrap();
-        let early = PalwBootstrapRoundRowV1 {
-            judgement: Some(palw_bootstrap_judge_round_v1(&r, &p.profile, 120).0),
-            ..r
-        };
+        let early = PalwBootstrapRoundRowV1 { judgement: Some(palw_bootstrap_judge_round_v1(&r, &p.profile, 120).0), ..r };
         assert!(early.validate(&p).is_err(), "never judged before it is due");
     }
 
@@ -1256,8 +1263,10 @@ mod round3_tests {
     #[test]
     fn n3_round3_holds_reads_the_judgements_and_the_release_approves_nothing() {
         let p = policy();
-        let eligible: Vec<_> =
-            [0, 1].iter().map(|slot| palw_bootstrap_judge_round_v1(&row(*slot, [1, 2], [true, true]), &p.profile, 121).1.unwrap()).collect();
+        let eligible: Vec<_> = [0, 1]
+            .iter()
+            .map(|slot| palw_bootstrap_judge_round_v1(&row(*slot, [1, 2], [true, true]), &p.profile, 121).1.unwrap())
+            .collect();
         let release = approved_bootstrap_entropy_profiles_v1();
         assert_eq!(palw_bootstrap_holds_v1(&eligible, p.profile.id, 100, &release).unwrap_err().code, "NO_APPROVED_PROFILE");
         assert_eq!(
