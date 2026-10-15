@@ -7778,6 +7778,7 @@ impl VirtualStateProcessor {
                             fence_activation_daa: fence.activation.daa_score(),
                         }
                     }),
+                    budget_required: fence.activation_gate.is_some(),
                 }),
                 typed_roots: self.palw_kernel_typed_roots_activation(),
                 beacon_source: self.palw_beacon_source_opt_in_v1.filter(|f| {

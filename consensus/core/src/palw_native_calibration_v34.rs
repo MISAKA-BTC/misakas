@@ -44,6 +44,7 @@ impl NativePanelFreeSettingsV34 {
             budgets: self.budgets,
             economics: self.economics,
             carrier: self.carrier,
+            activation_gate: None,
         };
         f.validate_value().map_err(|e| format!("native calibration34 OPV terms: {e:?}"))?;
         Ok(f)

@@ -220,6 +220,10 @@ pub struct PalwKernelOpvExtrasV1 {
     /// **G14-for-rewards**: `Some` from the fence's activation on (`None` below it, and the gate is unarmed). See
     /// `crate::palw_opv_bootstrap_v1::palw_reward_gate_v1`.
     pub reward_gate: Option<PalwRewardGateTermsV1>,
+    /// **RFC-0015 §8.3 / §13.3**: `true` exactly where the fence carries an activation gate record
+    /// (`PalwPanelFreeFenceV1::activation_gate`, `Params::palw_panel_free_gated_v1`; `false` on every value this binary builds): an OPV
+    /// claim is then admitted only with a `palw_bond_budget_v1` reservation (class-independent `Q/B/R/F`, common hold `d + W`).
+    pub budget_required: bool,
 }
 
 /// The terms of the G14-for-rewards gate at one block (from `Params::palw_panel_free_v1`).

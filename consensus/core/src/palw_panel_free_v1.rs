@@ -11,6 +11,10 @@
 //! `consensus_schedule_id`, collapsed whole from `Some(never())`, its activation alone visited by `for_each_fence`. Consensus reads it
 //! (`palw_model_conformance_fold_v2`) and the node E2E suite runs it with test-armed params; arming it on a real network is
 //! refused by [`Params::validate_palw_panel_free_v1`] (RFC-0015 amendment 2026-10-12: Panel=0 is not activated).
+//!
+//! **The activation gate is code** ([`crate::palw_panel_free_gate_v1`], 2026-10-15): the refusal lifts only for a fence value carrying
+//! an authenticated `PalwPanelFreeGateRecordV1` — every §13.3 conjunct PASS with evidence and independent review, bound to the network,
+//! height, terms and budget policies, the coupled fences armed at or below, and its digest pinned in the binary. No digest is pinned.
 
 use crate::Hash64;
 use crate::config::params::{ForkActivation, Params};
@@ -54,6 +58,12 @@ pub struct PalwPanelFreeFenceV1 {
     pub budgets: OpvBudgetsV1,
     pub economics: OpvEconomicsV1,
     pub carrier: CarrierCapsV1,
+    /// **RFC-0015 §13.3 as code** ([`crate::palw_panel_free_gate_v1`]): the authenticated activation gate record. `None` on every
+    /// value this binary builds; arming the fence anywhere but an isolated calibration genesis is refused unless this record lists
+    /// every §13.3 conjunct PASS, binds this network / height / terms / budget policies, finds the coupled fences armed at or below
+    /// it, and its digest is pinned in the binary (`PALW_PANEL_FREE_GATE_PINNED_RECORDS_V1`, empty). Hashed Some-only after the
+    /// terms, so no existing identity moves.
+    pub activation_gate: Option<crate::palw_panel_free_gate_v1::PalwPanelFreeGateRecordV1>,
 }
 
 impl PalwPanelFreeFenceV1 {
@@ -106,6 +116,7 @@ impl PalwPanelFreeFenceV1 {
                 response_cap: carrier.min(MAX_RESPOND_BYTES_V1 as u64),
                 commit_cap: carrier.min(MAX_COMMIT_CLAIM_BYTES_V1 as u64),
             },
+            activation_gate: None,
         }
     }
 
@@ -146,6 +157,11 @@ impl PalwPanelFreeFenceV1 {
         h.write(self.min_effective_bits.to_le_bytes());
         h.write([self.sampled_conformance_gates_reward as u8]);
         h.write(borsh::to_vec(&(self.window, self.budgets, self.economics, self.carrier)).expect("the terms serialize"));
+        // RFC-0015 §13.3: the activation gate record, Some-only (no value any shipped or existing calibration network spells moves).
+        if let Some(gate) = &self.activation_gate {
+            h.write(b"palw_panel_free_v1/activation-gate-record/v1");
+            h.write(gate.digest().as_byte_slice());
+        }
     }
 }
 
@@ -155,8 +171,10 @@ impl Params {
         self.palw_panel_free_v1.as_ref().is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa_score))
     }
 
-    /// **The fence's refusal**: RFC-0015 §13.3 `ACTIVATION_ALLOWED` is not evidenced and the node carries no Panel=0 acceptance rule,
-    /// so any armed height is refused.
+    /// **The fence's refusal** (RFC-0015 §13.3 `ACTIVATION_ALLOWED`, an AND contract): an armed height is refused unless the fence's
+    /// value carries an activation gate record that [`crate::palw_panel_free_gate_v1::PalwPanelFreeGateRecordV1::verify_v1`] accepts
+    /// against this binary's pins — which are empty, so every armed height is refused here (2026-10-12 amendment, N5: Panel=0 is not
+    /// activated). An isolated calibration genesis keeps its own validation (it never joins a real network).
     pub fn validate_palw_panel_free_v1(&self) -> Result<(), PalwModeV2Error> {
         if self.has_isolated_native_calibration_v34() {
             return self.validate_isolated_native_calibration_v34().map_err(|_| {
@@ -175,9 +193,17 @@ impl Params {
             ));
         }
         match &self.palw_panel_free_v1 {
-            Some(f) if f.activation != ForkActivation::never() => Err(PalwModeV2Error::Invalid(
-                "palw_panel_free_v1 cannot be armed: RFC-0015 §13.3 ACTIVATION_ALLOWED (G14 on a real node, the panel-free lifecycle and collateral review, a coordinated schedule) is not evidenced, this binary has no Panel=0 acceptance rule, its rewards are not budgeted (ADR-0176: no palw_bond_budget_v1 engine), and DA16's artifact-availability half (ADR-0177: withdrawn) is still in palw_provider_court_v1 (docs/design/palw/opv-beacon-bootstrap.md §15)",
-            )),
+            Some(f) if f.activation != ForkActivation::never() => match &f.activation_gate {
+                None => Err(PalwModeV2Error::Invalid(
+                    "palw_panel_free_v1 cannot be armed: RFC-0015 §13.3 ACTIVATION_ALLOWED is an AND contract and the fence carries no \
+                     authenticated activation gate record (PalwPanelFreeGateRecordV1: every conjunct PASS with evidence and review, bound \
+                     to this network, height, terms and budget policies, its digest pinned in the binary); Panel=0 is deferred \
+                     (2026-10-12 amendment, N5)",
+                )),
+                Some(gate) => gate
+                    .verify_v1(self, f, crate::palw_panel_free_gate_v1::PALW_PANEL_FREE_GATE_PINNED_RECORDS_V1)
+                    .map_err(|refusal| PalwModeV2Error::Invalid(refusal.reason())),
+            },
             _ => Ok(()),
         }
     }
