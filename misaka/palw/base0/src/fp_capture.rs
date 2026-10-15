@@ -1256,9 +1256,9 @@ impl Base0SparseStepCaptureV1 {
                 got: (call_index, position),
             });
         }
-        let (ctx, profile_hash) = (&self.ctx, self.profile_hash);
+        let hasher = crate::step_tile_hasher::StepTileHasherV1::new(&self.ctx, self.profile_hash);
         base0_position_tiles_v1(profile, self.prefill, call_index, position, rows, |leaf| {
-            self.acc.push(kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &leaf))?;
+            self.acc.push(hasher.hash(&leaf))?;
             self.cursor += 1;
             Ok(())
         })?;

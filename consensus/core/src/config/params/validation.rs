@@ -5,7 +5,8 @@ use super::*;
 impl Params {
     /// **The three fences of the 2026-10-12 rulings** (register §3): `palw_court_model_scope_v1` (D2), `palw_public_evidence_reward_v1`
     /// (N4) and `palw_claim_hard_deadline_v1` (X3). Each is refused when armed at a real height until its rule is built and verified;
-    /// `None` and `Some(never())` pass.
+    /// `None` and `Some(never())` pass. The rules exist as dormant, unverified source (`crate::palw_ruling_fences_v1`, 2026-10-15);
+    /// the refusal stays until they are verified and the user approves the X3 policy values.
     pub fn validate_palw_2026_10_12_ruling_fences_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         for (fence, why) in [
             (
@@ -17,7 +18,7 @@ impl Params {
                 "palw_public_evidence_reward_v1 cannot be armed: its rule (register N4, ruling 2026-10-12) is not built and verified yet",
             ),
             (
-                self.palw_claim_hard_deadline_v1,
+                self.palw_claim_hard_deadline_v1.map(|f| f.activation),
                 "palw_claim_hard_deadline_v1 cannot be armed: its rule (register X3, ruling 2026-10-12) is not built and verified yet",
             ),
         ] {
@@ -37,7 +38,8 @@ impl Params {
                 "palw_court_model_scope_v1 needs palw_legacy_held_da_v2 in force at or below it (its StepLeaf half)",
             ));
         }
-        Ok(())
+        // The mirrors the fold reads (`crate::palw_ruling_fences_v1`) agree with the fences; an X3 policy is structurally sound.
+        self.validate_palw_2026_10_12_ruling_mirrors_v1()
     }
 
     /// **The model-specific court window's prerequisite** (`palw_model_court_window`, the DAA-3,600 flag day): the
@@ -56,6 +58,23 @@ impl Params {
     }
 
     pub fn validate_palw_v2(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        self.validate_palw_v2_inner(false)
+    }
+
+    /// Feature-gated private factory exception for release heights only. All
+    /// value, dependency and retirement checks run on the actual armed bundle.
+    #[cfg(feature = "private-integration-config")]
+    pub fn validate_palw_v2_private_rule_e_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        if self.palw_fork_choice_rule_e_v1 != Some(ForkActivation::new(1))
+            || self.palw_fork_choice_commitment_v1 != Some(ForkActivation::new(1))
+            || self.palw_dns_retirement.is_none_or(|r| r.activation != ForkActivation::new(1))
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid("private Rule E factory requires all three exact heights"));
+        }
+        self.validate_palw_v2_inner(true)
+    }
+
+    fn validate_palw_v2_inner(&self, private_rule_e: bool) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         // The overlay's bond collateral has one gate left: the acceptance-time skip, in force from
         // `bond_spend_gate_mergeset_activation_daa_score`. The own-body gate that covered the blocks
         // below that fence could not run on any network (every overlay ships the fence at the
@@ -142,7 +161,9 @@ impl Params {
         // **RFC-0004 Part II's dormant fence** (`crate::palw_typed_roots_v1`): refused when armed.
         self.validate_palw_typed_roots_v1()?;
         // **RFC-0009 L2's dormant fence** (`crate::palw_fork_choice_commitment_v1`): refused when armed.
-        self.validate_palw_fork_choice_commitment_v1()?;
+        if !private_rule_e {
+            self.validate_palw_fork_choice_commitment_v1()?;
+        }
         // **M*-49's dormant fence** (`crate::palw_verifier_pay_v1`): refused when armed.
         self.validate_palw_verifier_pay_v1()?;
         // **RFC-0002 P0's dormant fence** (`crate::palw_model_refutation_seal_v4`): refused when armed.
@@ -161,7 +182,18 @@ impl Params {
         self.validate_palw_bond_budget_v1()?;
         self.validate_palw_reporter_income_v2()?;
         self.validate_palw_material_income_v3()?;
+        self.validate_palw_panel_lifetime_v2()?;
+        self.validate_palw_claim_challenge_v2()?;
+        self.validate_palw_monetary_material_v1()?;
+        // RFC07/RFC08 signed economic contracts (`crate::palw_econ_contracts_v1`): each refused when armed.
+        self.validate_palw_model_verification_gate_v1()?;
+        self.validate_palw_horizon_extension_v1()?;
+        self.validate_palw_minimum_price_v1()?;
+        // N3 (round 3): the BootstrapExact source rounds' fence, refused when armed (no approved profile).
+        self.validate_palw_beacon_bootstrap_v1()?;
         self.validate_palw_paid_consumer_lifecycle_v1()?;
+        // **N3 (REQ-N3-3)**: new reward profiles stay dormant until an independent bootstrap holds (second lock).
+        self.validate_palw_new_reward_profiles_n3_v1()?;
         self.validate_palw_model_bond_allocation_v1()?;
         // **ADR-0032's amended reporter share** (`crate::palw_reporter_share_v2`): refused when armed.
         self.validate_palw_reporter_share_v2()?;
@@ -169,6 +201,8 @@ impl Params {
         self.validate_palw_legacy_public_filer_v1()?;
         // **The three fences of the 2026-10-12 rulings** (register §3): refused when armed until their rules are built.
         self.validate_palw_2026_10_12_ruling_fences_v1()?;
+        // **RFC-0006 R6-CELL round 4's coverage closure** (`crate::palw_cell_coverage_closure_v1`): refused when armed.
+        self.validate_palw_cell_coverage_closure_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
         // **A-2 uniformity** (`crate::palw_lifecycle_objects_v2`): every lifecycle kind's owning fence needs the audit fence declared.
         self.validate_palw_lifecycle_kind_fences_v1()?;
@@ -1091,7 +1125,11 @@ impl Params {
             self.validate_palw_evidence_court_v1()?;
             self.validate_palw_audit_1004_v1()?;
             // ADR-0178 on this path too: rule E's fence and the DNS retirement's order.
-            return self.validate_palw_fork_choice_rule_e_v1();
+            return if private_rule_e {
+                self.validate_palw_fork_choice_rule_e_order_v1()
+            } else {
+                self.validate_palw_fork_choice_rule_e_v1()
+            };
         };
         bundle.validate()?;
         // **ADR-0103 Decision 1: a ladder past the bisection's clock is a network on which no
@@ -1973,7 +2011,7 @@ impl Params {
         self.validate_palw_audit_1004_v1()?;
         // **ADR-0178: rule E's fence and the DNS retirement's order** — last, after every other refusal, so a rule-E refusal
         // is reached only by a ruleset that passes everything else (`rfc12_zero_dns_matrix` relies on that).
-        self.validate_palw_fork_choice_rule_e_v1()
+        if private_rule_e { self.validate_palw_fork_choice_rule_e_order_v1() } else { self.validate_palw_fork_choice_rule_e_v1() }
     }
 
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {

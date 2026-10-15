@@ -681,24 +681,30 @@ pub enum PalwHeaderFormFenceV1 {
     ReceiptSpendV4,
     /// RFC-0008 v2's `PXE2` EXEC envelope on an algo-10 header — `Params::palw_exec_payload_v2` (only on a `ConsensusV2` network).
     ExecPayloadV2,
+    NativeMaterialV3,
 }
 
 impl PalwHeaderFormFenceV1 {
     /// Every owned form. A form added here needs its `HeaderForm` row in
     /// `crate::palw_lifecycle_objects_v2::PALW_A2_KIND_FENCE_TABLE_V1`, which the table test reconciles.
-    pub const ALL: [Self; 2] = [Self::ReceiptSpendV4, Self::ExecPayloadV2];
+    pub const ALL: [Self; 3] = [Self::ReceiptSpendV4, Self::ExecPayloadV2, Self::NativeMaterialV3];
 
     /// The `Params` field the form's fence is resolved from.
     pub const fn params_field(self) -> &'static str {
         match self {
             Self::ReceiptSpendV4 => "palw_receipt_spend_v4",
             Self::ExecPayloadV2 => "palw_exec_payload_v2",
+            Self::NativeMaterialV3 => "palw_monetary_material_v1",
         }
     }
 }
 
 /// Which owned form a header's carriage is, if any (`None`: a form the live build knows, judged as it judges it at every height).
 pub fn palw_header_form_owner_v1(algo_id: u8, palw_commitment: &[u8]) -> Option<PalwHeaderFormFenceV1> {
+    if is_palw_attempt_algo_id(algo_id) && crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(palw_commitment)
+    {
+        return Some(PalwHeaderFormFenceV1::NativeMaterialV3);
+    }
     if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 && crate::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(palw_commitment) {
         return Some(PalwHeaderFormFenceV1::ReceiptSpendV4);
     }
@@ -713,6 +719,7 @@ pub fn palw_header_form_owner_v1(algo_id: u8, palw_commitment: &[u8]) -> Option<
 pub struct PalwHeaderFormFencesV1 {
     pub receipt_spend_v4: Option<crate::config::params::ForkActivation>,
     pub exec_payload_v2: Option<crate::config::params::ForkActivation>,
+    pub native_material_v3: Option<crate::config::params::ForkActivation>,
 }
 
 impl PalwHeaderFormFencesV1 {
@@ -721,6 +728,7 @@ impl PalwHeaderFormFencesV1 {
         match form {
             PalwHeaderFormFenceV1::ReceiptSpendV4 => self.receipt_spend_v4,
             PalwHeaderFormFenceV1::ExecPayloadV2 => self.exec_payload_v2,
+            PalwHeaderFormFenceV1::NativeMaterialV3 => self.native_material_v3,
         }
         .is_some_and(|activation| activation != crate::config::params::ForkActivation::never() && activation.is_active(daa_score))
     }
@@ -732,6 +740,7 @@ impl crate::config::params::Params {
         PalwHeaderFormFencesV1 {
             receipt_spend_v4: self.palw_receipt_spend_v4_fence(),
             exec_payload_v2: self.palw_exec_payload_v2_fence(),
+            native_material_v3: self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
         }
     }
 }
@@ -778,6 +787,8 @@ pub fn check_palw_commitment_shape_with_forms_at(
         crate::palw_receipt_v4::PALW_COMMITMENT_MAX_BYTES_V4
     } else if form == Some(PalwHeaderFormFenceV1::ExecPayloadV2) {
         crate::palw_exec_v2::PALW_EXEC_V2_MAX_ENVELOPE_BYTES
+    } else if form == Some(PalwHeaderFormFenceV1::NativeMaterialV3) {
+        crate::palw_attempt_material_v3::PALW_ATTEMPT_MATERIAL_MAX_BYTES_V3
     } else {
         PALW_COMMITMENT_MAX_BYTES
     };
@@ -801,8 +812,12 @@ pub fn check_palw_commitment_shape_with_forms_at(
         // carries no work to price, and the finalizer refuses it as `PalwV2AttemptMissing`
         // anyway; failing HERE names the shape defect (wrong magic, truncated body, zero pwu…)
         // instead of a digest mismatch.
-        let envelope = crate::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(palw_commitment)
-            .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() })?;
+        let envelope = if form == Some(PalwHeaderFormFenceV1::NativeMaterialV3) {
+            crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(palw_commitment).map(|e| e.base)
+        } else {
+            crate::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(palw_commitment).map_err(|e| e.to_string())
+        }
+        .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() })?;
         return envelope
             .validate_shape_v2_at_version(lane.attempt_version())
             .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });

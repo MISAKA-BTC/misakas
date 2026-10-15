@@ -245,6 +245,19 @@ pub(super) fn apply_gen_tensor_commitment_v1(
         job_identity: if builder.extras.offence_attribution_active { *c.job_pin } else { Hash64::default() },
         rcore: PalwClaimRcoreV1::default(),
     };
+    // **N4 (REQ-N4-3, `palw_public_evidence_reward_v1`) — the grant guard for tag 87.** The record above earns nothing (no quanta,
+    // no pwu, no escrow, no rights), so N4 refuses nothing today. A later fence that grants tensor claims reward or Final weight
+    // grants it in THIS record, and then a job accepted past N4 whose required evidence cannot be public (PanelDa, image inputs)
+    // is refused here exactly as REQ-N4-1 refuses a free-prompt one. Below the fence `None` (REQ-N4-2).
+    if crate::palw_ruling_fences_v1::palw_claim_earns_reward_or_weight_v1(&claim)
+        && let Some(why) = crate::palw_ruling_fences_v1::palw_public_evidence_tensor_refusal_v1(builder.params, daa, &accepted)
+    {
+        return Err(PalwStateV2Error::ClassNotRewardable {
+            class: *c.class_id,
+            code: crate::palw_ruling_fences_v1::PALW_N4_NONPUBLIC_EVIDENCE_CODE_V1,
+            why: why.to_string(),
+        });
+    }
     builder.reserve_for_claim(&claim)?;
     builder.write_claim(*c.claim_id, Some(claim));
     let deadline = daa.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;

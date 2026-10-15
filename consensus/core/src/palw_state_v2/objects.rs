@@ -13,6 +13,16 @@ pub(super) fn apply_object(
             .iter()
             .any(|entry| matches!(entry, PalwDeltaEntryV2::Class { key, old: None, new: Some(_) } if key == class_id))
     })?;
+    let check_receipt =
+        |id: &Hash64| crate::palw_panel_lifetime_v2::require_panel_receipt_time_v2(&builder.state, builder.params, id, ctx.daa_score);
+    match object {
+        PalwConsensusObjectV2::ReceiptLicensed { claim, .. }
+        | PalwConsensusObjectV2::ReceiptLicensedV2 { claim, .. }
+        | PalwConsensusObjectV2::OptimisticLicensed { claim, .. } => check_receipt(claim)?,
+        PalwConsensusObjectV2::ShardReceiptLicensed { part } => check_receipt(&part.claim)?,
+        PalwConsensusObjectV2::TirShardReceiptLicensed { part } => check_receipt(&part.claim)?,
+        _ => {}
+    }
     match object {
         // ---- RFC-0010: a certified epoch output (tag 120): queued; the V3 stage verifies it against the branch and drops it if
         // it does not verify, the block standing ----
@@ -274,7 +284,18 @@ pub(super) fn apply_object(
                 }
                 let ladder = builder.state.class_step_ladder_v1(&claim.class_id, held);
                 let turn = builder.params.turn_deadline_daa();
-                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn)?;
+                // D2 (REQ-T6-4): the cone accusation's params are what it publishes for the root claim's finalize to relay (read
+                // only on a new claim).
+                let published = match &accusation.proof {
+                    crate::palw_court_v2::PalwCourtVerdictProofV2::TirCone { refutation } => {
+                        crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::TirParams(&refutation.params)
+                    }
+                    crate::palw_court_v2::PalwCourtVerdictProofV2::EvalCone { .. } => {
+                        crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::CarriedUnchecked
+                    }
+                    _ => crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::None,
+                };
+                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn, published)?;
             } else {
                 match accusation.verdict {
                     PalwCourtVerdictV2::ExecutorGuilty => builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?,
@@ -342,7 +363,15 @@ pub(super) fn apply_object(
                 }
                 let ladder = builder.state.class_step_ladder_v1(&claim.class_id, held);
                 let turn = builder.params.turn_deadline_daa();
-                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn)?;
+                // D2 (REQ-T6-4): the cone accusation's params are what it publishes for the root claim's finalize to relay (read
+                // only on a new claim).
+                let published = match &accusation.proof {
+                    crate::palw_court_v2::PalwCourtVerdictProofV2::GenCone { close } => {
+                        crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::GenParams(&close.params)
+                    }
+                    _ => crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::None,
+                };
+                open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, leaf, ladder, turn, published)?;
             } else {
                 match accusation.verdict {
                     PalwCourtVerdictV2::ExecutorGuilty => builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?,
@@ -393,6 +422,15 @@ pub(super) fn apply_object(
             palw_onboarding_fold_v1::apply_conformance_evidence_v1(builder, ctx, v2_class, action, signer)?;
         }
         // **Lane DA16 (tags 150–153): the provider court** — rows in the route's aux tables 43–45 (`palw_provider_court_fold_v1`).
+        PalwConsensusObjectV2::MonetaryMaterialEnrolledV1 { enrollment, signature: _ } => {
+            palw_monetary_material_fold_v1::enroll(builder, ctx, enrollment)?;
+        }
+        PalwConsensusObjectV2::MonetaryMaterialReplacedV1 { replacement, signature: _ } => {
+            palw_monetary_material_fold_v1::replace(builder, ctx, replacement)?;
+        }
+        PalwConsensusObjectV2::MonetaryMaterialActionV1 { action, signer, signature: _ } => {
+            palw_monetary_material_fold_v1::action(builder, ctx, action, signer)?;
+        }
         PalwConsensusObjectV2::ProviderLeaseV1 { subject, reserved, serve_until_daa, provider, signature: _ } => {
             palw_provider_court_fold_v1::apply_provider_lease_v1(builder, ctx, subject, *reserved, *serve_until_daa, provider)?;
         }
@@ -791,6 +829,8 @@ pub(super) fn apply_object(
             palw_tir_shard_fold_v1::apply_part_v1(builder, ctx, part)?;
         }
         PalwConsensusObjectV2::TirSeatReadinessProved { bond, class_id, shard, span, proof, signature: _ } => {
+            // D2 (`palw_court_model_scope_v1`): no plaintext model leaves for a class registered past the fence.
+            check_readiness_model_scope_v1(builder, ctx, class_id)?;
             palw_tir_shard_fold_v1::apply_readiness_v1(builder, ctx, bond, class_id, *shard, *span, proof)?;
         }
         // **ADR-0100 Decision 4: a class's shard plan.** The registrant's signature is the
@@ -2191,9 +2231,11 @@ pub(super) fn apply_object(
             if builder.extras.readiness_v2_active {
                 return Err(PalwStateV2Error::ReadinessV1Superseded(*class_id));
             }
+            check_readiness_model_scope_v1(builder, ctx, class_id)?;
             builder.apply_seat_readiness(ctx, bond, class_id, *span, opening)?;
         }
         PalwConsensusObjectV2::SeatReadinessProvedV2 { bond, class_id, span, proof, signature: _ } => {
+            check_readiness_model_scope_v1(builder, ctx, class_id)?;
             builder.apply_seat_readiness_v2(ctx, bond, class_id, *span, proof)?;
         }
         PalwConsensusObjectV2::ObjectiveOffence { kind, accused, evidence_id, evidence } => {
@@ -3080,6 +3122,21 @@ pub(super) fn apply_object(
                     },
                 );
             }
+            // **N4 (REQ-N4-1, `palw_public_evidence_reward_v1`)**: past the fence a free-prompt claim whose required evidence cannot be
+            // public — `PanelDa` prompt ids, FP Job V5 images / source ids — takes no new reward or Final weight, so it is not taken
+            // at all (as G14-for-rewards refuses a class off the onboarded path). Evaluation claims (above) earn nothing and are not
+            // asked. Below the fence `None`, and a claim accepted before it keeps its old ruleset to its end (REQ-N4-2).
+            if let Some(why) = crate::palw_ruling_fences_v1::palw_public_evidence_reward_refusal_v1(
+                builder.params,
+                ctx.daa_score,
+                public_job.as_deref(),
+            ) {
+                return Err(PalwStateV2Error::ClassNotRewardable {
+                    class: *class_id,
+                    code: crate::palw_ruling_fences_v1::PALW_N4_NONPUBLIC_EVIDENCE_CODE_V1,
+                    why: why.to_string(),
+                });
+            }
             let class = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
             if let PalwClassStatusV2::Frozen { .. } = class.status {
                 return Err(PalwStateV2Error::FrozenClass(*class_id));
@@ -3349,8 +3406,10 @@ pub(super) fn apply_object(
             let staged_contract = builder.prepare_staged_claim_with_job_v1(&mut claim, public_job.as_deref())?;
             // **Lane BUDGET (ADR-0176 D3): the commitment's reservation** — Q 1, B `quanta` receipt blocks, R `quanta` carves of this
             // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
+            builder.state.require_native_monetary_material_scope_v1(builder.params, *claim_id, &claim)?;
             let consumer_plan = builder.plan_paid_consumer_v1(*claim_id, &claim)?;
             let budget_plan = builder.plan_free_prompt_budget_v1(ctx, &claim, quanta)?;
+            let panel_authorization = palw_panel_lifetime_fold_v2::select_authorization(builder, &claim)?;
             builder.reserve_for_claim(&claim)?;
             if let Some(contract) = consumer_plan {
                 builder.commit_paid_consumer_v1(*claim_id, contract)?;
@@ -3401,7 +3460,25 @@ pub(super) fn apply_object(
             }
             // No production census here: commitments are not blocks. The receipt lane's counters
             // move when a quantum is SPENT.
+            if let Some(authorization) = panel_authorization {
+                palw_panel_lifetime_fold_v2::capture(builder, *claim_id, authorization)
+                    .expect("a prevalidated native claim must have its immutable Panel consent fields");
+            }
         }
     }
     Ok(())
+}
+
+/// **D2 on seat readiness (REQ-T6-3, restricted; `palw_court_model_scope_v1`)**: `SeatReadinessLeaves` publishes ~16 plaintext
+/// artifact leaves per (class, bond, span) as a seat condition. Past the fence a class REGISTERED at/after it — all of whose claims are
+/// new — takes no readiness proof (a Panel that cannot seat is a non-fraud, uncharged non-acceptance: REQ-T6-2); a class registered
+/// before keeps its readiness for the old claims that seat through it. `Ok` below the fence (every shipped chain).
+fn check_readiness_model_scope_v1(
+    builder: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    class_id: &Hash64,
+) -> Result<(), PalwStateV2Error> {
+    let registered = builder.state.class(class_id).map(|class| class.registered_daa);
+    crate::palw_ruling_fences_v1::palw_court_model_scope_admits_readiness_v1(builder.params, ctx.daa_score, registered)
+        .map_err(|why| PalwStateV2Error::ReadinessProofRefused(why.to_string()))
 }

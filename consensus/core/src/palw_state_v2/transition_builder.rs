@@ -28,6 +28,7 @@ impl<'a> TransitionBuilder<'a> {
     ) -> Self {
         Self {
             params,
+            monetary_native_ready: BTreeMap::new(),
             state: parent.clone(),
             entries: Vec::new(),
             registration_index: None,
@@ -437,6 +438,20 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn write_claim(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) {
+        // **X3 × retention (REQ-X3-6; Lead default 2026-10-15 round 3; `palw_claim_hard_deadline_v1`)**: a claim CREATED past the
+        // fence owes its material — trace, DA units, every hold that reads the record — through its hard deadline, fixed at
+        // acceptance, so a pursuit X3 admits can start from public material any time before `hard − B_remaining`. Raised once, here,
+        // the one site every creation passes; never moved after (REQ-X3-3). Below the fence (every shipped ruleset) `None`: the record
+        // is written byte for byte.
+        let new = match new {
+            Some(mut claim) if !self.state.claims.contains_key(&key) => {
+                if let Some(retention) = crate::palw_ruling_fences_v1::palw_claim_x3_retention_daa_v1(self.params, &claim) {
+                    claim.trace_retention_daa = retention;
+                }
+                Some(claim)
+            }
+            other => other,
+        };
         // Stamp once, at creation. A later prospective descriptor never changes an old claim.
         if self.extras.class_semantics_active
             && !self.state.claims.contains_key(&key)
@@ -2055,7 +2070,9 @@ impl<'a> TransitionBuilder<'a> {
             return Ok(());
         }
         if let Some(since) = paused_since {
-            if credit_pause {
+            // X3 (REQ-X3-3): no DA pause credit for a claim accepted past `palw_claim_hard_deadline_v1` — its deadlines are fixed at
+            // acceptance; the credit stays the OLD rule for the claims below it.
+            if credit_pause && !crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(self.params, &claim) {
                 let resumed = crate::palw_da_rcore_v1::palw_da_resume_claim_v1(&claim, since, now_daa);
                 if resumed != claim {
                     self.write_claim(claim_id, Some(resumed));
@@ -2068,7 +2085,10 @@ impl<'a> TransitionBuilder<'a> {
             && ((matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
                 && palw_rcore_licence_awaits_replay_v1(&claim)
                 && self.state.panel_v3.as_ref().is_some_and(|engine| engine.claim_rows().contains_key(&claim_id)))
-                || self.state.palw_v2_expiry_hold_applies_v1(self.params, &claim_id, &claim))
+                || self.state.palw_v2_expiry_hold_applies_v1(self.params, &claim_id, &claim)
+                // X3 (REQ-X3-5): any session held this claim's Final (DL-1's X3 row); the last close re-derives it.
+                || (matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
+                    && crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(self.params, &claim)))
         {
             // …and the last session on a lane-A claim the part-C hold reaches (SHARD): the same re-derivation.
             // RFC-0010 × G14 (SHARD): the last session on a V3 S2 licence closed — DL-1 re-derives its deadline (none while a court
@@ -2106,6 +2126,10 @@ impl<'a> TransitionBuilder<'a> {
             return;
         }
         let Some(claim) = self.state.claims.get(&claim_id) else { return };
+        // X3 (REQ-X3-3): no horizon credit for a claim accepted past `palw_claim_hard_deadline_v1` (the OLD rule below it).
+        if crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(self.params, claim) {
+            return;
+        }
         // A `Provisional` claim (redrawn) still names its old panel until the next bind replaces it;
         // there is no horizon to credit until then.
         if !matches!(claim.phase, PalwClaimPhaseV2::PanelBound { .. } | PalwClaimPhaseV2::ReceiptLicensed { .. }) {
@@ -3778,10 +3802,7 @@ impl<'a> TransitionBuilder<'a> {
         evidence: &[u8],
         evidence_budget: crate::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_offence_v1::{
-            PalwConsumedOffenceV1, PalwOffenceKindV1, PalwPanelFalseValidEvidenceV1, palw_offence_id_v1,
-            palw_panel_contradiction_convicts_execution_v1,
-        };
+        use crate::palw_offence_v1::{PalwConsumedOffenceV1, PalwOffenceKindV1, PalwPanelFalseValidEvidenceV1, palw_offence_id_v1};
         if !self.extras.objective_offence_at(ctx.daa_score) {
             return Err(PalwStateV2Error::ObjectiveOffenceDormant);
         }
@@ -3898,8 +3919,19 @@ impl<'a> TransitionBuilder<'a> {
                 let (execution_root, artifact_root) = self.false_valid_execution_roots(&payload)?;
                 convicted_execution_root = execution_root;
                 convicted_claim = Some(payload.claim_id);
-                palw_panel_contradiction_convicts_execution_v1(&payload.contradiction, execution_root, artifact_root, ladder)
-                    .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(offence_id, e.to_string()))?;
+                // R6-CELL round 4: the coverage closure governs a claim accepted at or past its fence (None on shipped networks).
+                let cell_closure =
+                    self.state.claims.get(&payload.claim_id).is_some_and(|c| {
+                        crate::palw_cell_coverage_closure_v1::palw_cell_closure_governs_v1(self.params, c.accepted_daa)
+                    });
+                crate::palw_offence_v1::palw_panel_contradiction_convicts_execution_closure_v1(
+                    &payload.contradiction,
+                    execution_root,
+                    artifact_root,
+                    ladder,
+                    cell_closure,
+                )
+                .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(offence_id, e.to_string()))?;
                 if let Some(lock) = self.state.slashable_locks.get(&(accused, payload.claim_id)).copied() {
                     if self.false_valid_lock_slashable_v1(&payload.claim_id, &lock, ctx.daa_score) {
                         self.write_slashable_lock((accused, payload.claim_id), None);
@@ -4073,7 +4105,7 @@ impl<'a> TransitionBuilder<'a> {
         evidence: &[u8],
         evidence_budget: crate::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_offence_attribution_v1::{palw_check_panel_false_valid_at_v2_with_budget_v1, palw_false_valid_offence_id_v2};
+        use crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2;
         use crate::palw_offence_v1::{PalwConsumedOffenceV1, PalwOffenceKindV1};
         if crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != evidence_id {
             return Err(PalwStateV2Error::ObjectiveOffenceRefused(
@@ -4103,7 +4135,7 @@ impl<'a> TransitionBuilder<'a> {
             evidence_budget,
         )?;
         // The reporter slot is F7's; until its fence arms it the adjudicator refuses a filled one.
-        let finding = palw_check_panel_false_valid_at_v2_with_budget_v1(
+        let finding = crate::palw_offence_attribution_v1::palw_check_panel_false_valid_at_v2_with_budget_closure_v1(
             &self.state,
             &accused,
             evidence,
@@ -4113,6 +4145,7 @@ impl<'a> TransitionBuilder<'a> {
             None,
             self.session_rule_v1(ctx.daa_score),
             evidence_budget,
+            self.params.cell_coverage_closure_from_daa(),
         )
         .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
         let claim_id = finding.target.claim_id;
@@ -8454,6 +8487,7 @@ impl<'a> TransitionBuilder<'a> {
     /// attempt whose licence set recounted to `basis_k ≥ 2` — an S2 licence and every free-prompt
     /// licence never tick. The deadline is DL-1's ([`palw_rcore_deadline_v1`]).
     pub(super) fn license_claim(&mut self, claim_id: Hash64, claim: PalwClaimStateV2, daa_score: u64) -> Result<(), PalwStateV2Error> {
+        crate::palw_panel_lifetime_v2::require_panel_receipt_time_v2(&self.state, self.params, &claim_id, daa_score)?;
         if self.state.paid_consumer_contract_v1(&claim_id).is_some() {
             // The licence's earliest Final is the one Final floor (`palw_claim_final_floor_v1`, the td0 rule; R6781-F merge), plus one.
             let through = palw_claim_final_floor_v1(&self.state, self.params, &claim_id, &claim, daa_score)?
@@ -8825,6 +8859,10 @@ impl<'a> TransitionBuilder<'a> {
             // **Lane BUDGET (ADR-0176 D3, design §2.6): the reward under the budget**, before the buyback and the panel split, so every
             // leg derives from it; the rest is never named — never minted. Unchanged for an unbudgeted claim.
             let escrow = self.bond_budget_final_reward_v1(&id, escrow);
+            // **RFC07 R7-ECON (`palw_model_verification_gate_v1`, round 3): the allocation payout reads its model-epoch's
+            // verification** — paid whole when attested (or no Final claim existed to sample), withheld when unattested, deferred while
+            // undecided; before every leg below. Unchanged below the fence and for every claim the allocation did not reserve for.
+            let escrow = palw_econ_contracts_fold_v1::gate_final_reward_v1(self, &id, claim, escrow, final_daa)?;
             // **Lane BUDGET, PESG §6: the external export cap.** What leaves the chain's books at Final — a leg written straight into the
             // payout queue (no vesting), or a buyback slice in a market reserve a holder can sell out of — is at most 0.51 of the
             // collateral the claim's liability still holds; a vesting leg is not an export (it moves once the lock has ended). The rest

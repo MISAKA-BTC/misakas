@@ -383,6 +383,11 @@ impl PermissionlessPanelStateV1 {
             if !record.phase.terminal() && view.terminal_claim(id) {
                 record.phase = ClaimPhaseV3::Released { daa };
                 events.released.push(*id);
+            } else if !record.phase.terminal()
+                && view.consumer_service_limits(id).is_some_and(|(until, _)| daa > until)
+                && !matches!(view.receipt_clock(id), Some(ReceiptClockV1::Paused))
+            {
+                Self::void(record, daa, NonFraudReasonV1::PanelUnavailable, events);
             }
         }
         if self.version == WIRE_VERSION_RETIRED_V1 {
@@ -534,7 +539,7 @@ impl PermissionlessPanelStateV1 {
                 excluded_bond: record.claim.producer,
                 excluded_operator: record.claim.producer_operator,
                 excluded_key: record.claim.producer_key,
-                candidates,
+                candidates: candidates.into(),
                 strata_members,
             };
             if complete {
@@ -713,7 +718,10 @@ impl PermissionlessPanelStateV1 {
                 _ => unreachable!(),
             };
             self.rebuild_reservations()?; // Remove this claim's previous reservation atomically.
-            if retry > policy.max_retries {
+            let consent_refuses = view.consumer_service_limits(&id).is_some_and(|(until, maximum)| {
+                u32::from(retry) > maximum || step_daa.checked_add(policy.receipt_window_daa).is_none_or(|end| end > until)
+            });
+            if retry > policy.max_retries || consent_refuses {
                 Self::void(&mut r, step_daa, NonFraudReasonV1::PanelUnavailable, events);
             } else {
                 let drawn = match r.strata {
@@ -1066,7 +1074,7 @@ impl PermissionlessPanelStateV1 {
                 excluded_operator: r.claim.producer_operator,
                 excluded_key: r.claim.producer_key,
                 policy_id: self.policy.id(),
-                candidates: Vec::new(),
+                candidates: Vec::new().into(),
                 strata_members: Vec::new(),
             };
             if seal.id != claim_seal_id(self.network, self.ruleset, r, &snapshot, seal.anchor_slot, seal.beacon_epoch) {
@@ -1400,4 +1408,35 @@ fn stratified_history_operators(
 fn serialize_reservations<S: serde::Serializer>(map: &BTreeMap<BondIdV1, u128>, serializer: S) -> Result<S::Ok, S::Error> {
     // Outpoint keys are structured; amounts remain exact for JavaScript observers too.
     Serialize::serialize(&map.iter().map(|(bond, amount)| (bond, amount.to_string())).collect::<Vec<_>>(), serializer)
+}
+
+impl PermissionlessPanelStateV1 {
+    /// Borrow every allocation-bearing table. Exhaustive destructuring makes a
+    /// newly added field require an inventory update without altering its codec.
+    pub fn native_inventory_parts_v1(
+        &self,
+    ) -> (
+        &BTreeMap<Hash64, ClaimRecordV3>,
+        &BTreeSet<Hash64>,
+        &BTreeMap<u64, Hash64>,
+        &BTreeMap<BondIdV1, u128>,
+        &BTreeMap<u64, EpochSourceSetV1>,
+    ) {
+        let Self {
+            version: _,
+            network: _,
+            ruleset: _,
+            policy: _,
+            tip: _,
+            height: _,
+            daa: _,
+            next_order: _,
+            claims,
+            work_ids,
+            beacons,
+            reservations,
+            epoch_sources,
+        } = self;
+        (claims, work_ids, beacons, reservations, epoch_sources)
+    }
 }

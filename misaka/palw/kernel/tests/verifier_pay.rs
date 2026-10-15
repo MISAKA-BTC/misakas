@@ -255,3 +255,24 @@ fn s3_s4_one_deposit_buys_at_most_one_attempts_worth_of_veto() {
     // The race seal that never opted in (SPAM1's) is no attempt's source.
     assert!([a, b, c].iter().all(|at| !src(&w, at).contains(&SPAM1)));
 }
+
+/// **M\*-49's carried attestation (inner 39, `AttestDrawnCheckV1`, 2026-10-15)**: the object a drawn slot holder signs pays exactly
+/// what the consumer call pays — only the named verifier may sign it, and a slot is paid once. Its canonical encoding round-trips.
+#[test]
+fn m49_the_carried_attestation_inner_39_pays_its_signer_only() {
+    use misaka_palw_kernel::route::{AuthV1, KernelRouteObjectV1};
+    let mut w = world();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let h = w.honest(&job, 3);
+    let id = h.claim.id();
+    w.block(10, vec![h.tx, T::PanelCovered { claim: id }]);
+    let ev = w.l.assign_drawn_v1(&id, &[OUTSIDER, SPAM2]).unwrap();
+    absorb(&mut w, ev);
+    let obj = KernelRouteObjectV1::AttestDrawnCheckV1 { verifier: OUTSIDER, claim: id };
+    assert_eq!(KernelRouteObjectV1::decode(&obj.encode()).unwrap(), obj, "canonical");
+    assert!(w.l.apply_object(&obj, &AuthV1 { signer_bond: SPAM2 }).is_err(), "only the named verifier signs its attestation");
+    let ev = w.l.apply_object(&obj, &AuthV1 { signer_bond: OUTSIDER }).unwrap();
+    let ev = absorb(&mut w, ev);
+    assert!(ev.contains(&E::CheckFeePaid { claim: id, verifier: OUTSIDER, amount: FEE }), "{ev:?}");
+    assert!(w.l.apply_object(&obj, &AuthV1 { signer_bond: OUTSIDER }).is_err(), "a slot is paid once");
+}

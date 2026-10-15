@@ -39,8 +39,9 @@ pub use conformance::{BeaconConformanceEvidenceV1, ConformanceCommitmentV1, Conf
 pub use hash::Digest;
 pub use lifecycle::{OnboardingFailureV1, OnboardingRecordV1, OnboardingStateV1, OnboardingStepV1};
 pub use policy::{
-    ApprovedTupleV1, InteractiveModeV1, PostCommitChallengePolicyV1, SourceRuleV1, approved_v1, complete_check_policy_v1,
-    reference_policy_v1, sealed_source_policy_v3, shipped_registry_v1,
+    ApprovedTupleV1, InteractiveModeV1, PostCommitChallengePolicyV1, ReviewedFailureBoundV2, ReviewedTupleV2, SourceRuleV1,
+    approved_v1, approved_v2, complete_check_policy_v1, reference_policy_v1, sealed_source_policy_v3, shipped_registry_v1,
+    shipped_registry_v2,
 };
 pub use sealed::{
     SealRevealV3, SealedBeaconStateV3, SealedSourceV3, SourceFateV3, collect_sealed_work_beacon_v3, combine_failure_bits_v1,
@@ -48,8 +49,9 @@ pub use sealed::{
 };
 pub use seed::{ChallengeStreamV1, FiatShamirTranscriptV1, StreamKindV1, StreamLabelV1, challenge_seed_v1, staged_round_challenge_v1};
 pub use soundness::{
-    APPROVAL_MIN_TARGET_BITS_V1, EffectiveBitsV1, EffectiveSoundnessInputV1, RelationSoundnessV1, SoundnessRefusalV1,
-    beacon_grinding_choices_bound_v1, competing_works_bound_v1, effective_false_accept_bits_v1,
+    APPROVAL_MIN_TARGET_BITS_V1, CumulativeFailureTermV1, EffectiveBitsV1, EffectiveSoundnessInputV1, RelationSoundnessV1,
+    SoundnessRefusalV1, beacon_grinding_choices_bound_v1, competing_works_bound_v1, cumulative_failure_bits_v1,
+    effective_false_accept_bits_v1,
 };
 pub use subject::{ChallengeSubjectV1, RootV1, SubjectKindV1};
 
@@ -59,3 +61,5 @@ pub use paid_opt_in::{
 };
 pub use policy::opt_in_source_policy_v4;
 pub use policy::paid_opt_in_source_policy_v5;
+
+pub mod approval_scope;

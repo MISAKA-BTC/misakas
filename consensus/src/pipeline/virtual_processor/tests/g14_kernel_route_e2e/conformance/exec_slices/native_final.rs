@@ -136,6 +136,161 @@ async fn finalize_native_root(cw: &mut Cw, s: &Session) -> (u64, Obj) {
     (final_daa, licence)
 }
 
+/// Advance only by actual heartbeat blocks. Bound missing DAA progress so a
+/// financial assertion cannot wait forever behind a stalled fixture clock.
+async fn native_payment_beat_to(cw: &mut Cw, target: u64, stage: &str) {
+    let start = cw.net.daa();
+    let started = std::time::Instant::now();
+    let block_limit = target.saturating_sub(start).saturating_mul(16).saturating_add(1_024);
+    let mut blocks = 0;
+    let mut unchanged = 0;
+    eprintln!("[x8-native-payment] {stage}: begin daa={start}, target={target}, maximum-heartbeats={block_limit}");
+    while cw.net.daa() < target {
+        assert!(blocks < block_limit, "{stage}: actual DAA failed to reach {target} after {blocks} heartbeat blocks");
+        let previous = cw.net.daa();
+        cw.net.chain.heartbeat(cw.net.ttpb(), Vec::new()).await;
+        blocks += 1;
+        let now = cw.net.daa();
+        assert!(now >= previous, "{stage}: linear heartbeat chain unexpectedly regressed DAA {previous} -> {now}");
+        unchanged = if now == previous { unchanged + 1 } else { 0 };
+        assert!(unchanged < 1_024, "{stage}: 1024 actual heartbeat blocks made no DAA progress at {now}");
+        if blocks % 64 == 0 {
+            eprintln!("[x8-native-payment] {stage}: blocks={blocks}, daa={now}/{target}, elapsed={:?}", started.elapsed());
+        }
+    }
+    eprintln!("[x8-native-payment] {stage}: reached daa={}, blocks={blocks}, elapsed={:?}", cw.net.daa(), started.elapsed());
+}
+
+/// Actual accepted native terms and ML-DSA provider leases. The surrounding
+/// REAL trace admission seam remains; this proves term authorization, not work.
+#[tokio::test]
+async fn x8_g14_native_paid_material_rejects_one_daa_beyond_signed_exec_and_accepts_exact_provider_terms() {
+    use kaspa_consensus_core::palw_bond_budget_v1::{
+        PalwBondBudgetFenceV1, PalwBondBudgetPolicyV1, PalwPaidConsumerLifecycleFenceV1, PalwPaidConsumerLifecyclePolicyV1,
+    };
+    use kaspa_consensus_core::palw_provider_court_v1::{
+        PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1, ProviderSubjectV1,
+        palw_provider_court_message_v1,
+    };
+    let mut cw = active_world_over_with_params(
+        VerificationModeV1::OptimisticPublicVerification,
+        |config| TestConsensus::new(config),
+        |params| {
+            let mut budget = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+            budget.capital_unit_sompi = 100_000_000;
+            budget.claims_per_unit = 100;
+            budget.block_units_per_unit = 100_000_000;
+            budget.reward_per_unit_sompi = 100_000_000;
+            budget.final_weight_per_unit = 1_000_000_000;
+            params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy: budget });
+            params.palw_reporter_income_v2 = Some(ForkActivation::new(1));
+            params.palw_material_income_v3 = Some(ForkActivation::new(1));
+            params.palw_paid_consumer_lifecycle_v1 = Some(PalwPaidConsumerLifecycleFenceV1 {
+                activation: ForkActivation::new(1),
+                policy: PalwPaidConsumerLifecyclePolicyV1 {
+                    version: 1,
+                    service_span_daa: 1_000,
+                    dispute_tail_daa: 3_000,
+                    material_tail_daa: 2_000,
+                },
+            });
+            params.palw_provider_court_v1 = Some(ForkActivation::new(1));
+            params.sync_palw_bond_budget_v1();
+            assert!(params.validate_palw_paid_consumer_lifecycle_v1().is_err());
+        },
+    )
+    .await;
+    let class = cw.v2_class;
+    let real = real_attempt(&mut cw, ROOT_CARD, class, 0xA7E5).await;
+    let terms = cw.net.chain.tip_state().1.paid_consumer_terms_v1(&real.claim).expect("actual native accepted terms");
+    let initial = palw_exec_v2_token_state_root_v1(&[&real.stream()]);
+    let draft = declaration(&cw, &real, Hash64::default(), initial);
+    let prefix = kernel_prefix_claim(&mut cw, &real, &draft).await;
+    let mut declaration = declaration(&cw, &real, Hash64::from_bytes(prefix.claim.id), initial);
+    let policy = cw.net.ledger().policy;
+    let offset = palw_exec_v2_retention_terms_v1(1, 0, cw.net.bundle.state.window_court(), &policy).unwrap().liability_until - 1;
+    let exact_expiry = terms.material_until.checked_sub(offset).expect("predeclared service can fund this root term");
+    assert!(exact_expiry > cw.net.daa());
+    let subject = ProviderSubjectV1::KernelClaim { claim: Hash64::from_bytes(prefix.claim.id) };
+    let reserved = cw.net.ledger().claims[&prefix.claim.id].reserved.div_ceil(2).max(PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1);
+    let leases: Vec<_> = [2, 3]
+        .into_iter()
+        .map(|card| {
+            let provider = cw.net.bond(card);
+            let payload = borsh::to_vec(&(subject, reserved, terms.material_until)).unwrap();
+            let message = palw_provider_court_message_v1(cw.net.domain, 150, &provider, &payload);
+            (
+                card,
+                Obj::ProviderLeaseV1 {
+                    subject,
+                    reserved,
+                    serve_until_daa: terms.material_until,
+                    provider,
+                    signature: sign(card, message.as_byte_slice(), PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, 0x95),
+                },
+            )
+        })
+        .collect();
+    cw.net.send(leases).await;
+    let message = palw_provider_court_message_v1(
+        cw.net.domain,
+        153,
+        &cw.net.bond(ROOT_CARD),
+        &borsh::to_vec(&Hash64::from_bytes(prefix.claim.id)).unwrap(),
+    );
+    cw.net
+        .send(vec![(
+            ROOT_CARD,
+            Obj::DaTransferV1 {
+                claim: Hash64::from_bytes(prefix.claim.id),
+                producer: cw.net.bond(ROOT_CARD),
+                signature: sign(ROOT_CARD, message.as_byte_slice(), PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, 0x96),
+            },
+        )])
+        .await;
+    let before = cw.net.chain.tip_state().1;
+    let accepted_leases = cw.net.api().unwrap().provider_leases_of_v1(&subject);
+    assert_eq!(accepted_leases.len(), 2, "both actual signed provider carriers were admitted");
+    assert!(accepted_leases.iter().all(|(_, lease)| lease.serve_until_daa == terms.material_until));
+    assert!(cw.net.api().unwrap().provider_subject_v1(&subject).unwrap().transferred_daa.is_some());
+    let money: Vec<_> = (0..cw.net.chain.bonds.len()).map(|card| cw.net.collateral(card)).collect();
+    let ledger = cw.net.ledger().to_rows();
+    declaration.expiry_daa = exact_expiry - 1;
+    declaration.signature =
+        sign(ROOT_CARD, declaration.signing_message(cw.net.domain).as_byte_slice(), PALW_EXEC_V2_ROOT_MLDSA87_CONTEXT, 0x71);
+    let object = Obj::ExecWorkRootOpenedV2 { declaration: Box::new(declaration.clone()) };
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: cw.net.chain.sink(),
+        daa_score: cw.net.daa() + 1,
+        blue_score: before.last_point().unwrap().blue_score + 1,
+        subsidy: 0,
+    };
+    let why = cw.net.chain.vp().palw_h1_carrier_refusal_on(&before, &cw.net.bundle.state, &point, &object).unwrap();
+    assert!(why.contains("signed EXEC horizon"), "refusal must name the material contract mismatch: {why}");
+    let carrier = cw.net.carrier(ROOT_CARD, &object);
+    let carrying = cw.net.chain.heartbeat(cw.net.ttpb(), vec![carrier.clone()]).await;
+    assert!(carrying.transactions.iter().any(|tx| tx.id() == carrier.id()), "the signed short-term root was actually carried");
+    cw.net.chain.heartbeat(cw.net.ttpb(), Vec::new()).await;
+    assert!(cw.net.chain.tip_state().1.exec_v2_root_v1(&real.claim).is_none());
+    let refused = cw.net.chain.tip_state().1;
+    assert_eq!(refused.claim(&real.claim), before.claim(&real.claim));
+    assert_eq!(cw.net.ledger().to_rows(), ledger, "a refused signed root creates no escrow/hold or fee mutation");
+    assert_eq!((0..cw.net.chain.bonds.len()).map(|card| cw.net.collateral(card)).collect::<Vec<_>>(), money);
+    assert_eq!(cw.net.api().unwrap().provider_leases_of_v1(&subject), accepted_leases);
+    declaration.expiry_daa = exact_expiry;
+    let root = send_root(&mut cw, declaration).await.expect("exact authorized term opens the root");
+    assert_eq!(root.expiry_daa, exact_expiry);
+    assert_eq!(
+        cw.net.chain.tip_state().1.exec_v2_liability_until_v1(&cw.net.bundle.state, &real.claim).unwrap(),
+        Some(terms.material_until)
+    );
+    assert_eq!(
+        cw.net.api().unwrap().provider_leases_of_v1(&subject),
+        accepted_leases,
+        "admission never rewrites providers' signed term"
+    );
+}
+
 #[tokio::test]
 async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_cancels_all_unpaid_funds() {
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};
@@ -405,6 +560,8 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
             policy.max_open_claims_per_bond = 1_000;
             policy.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1_000 };
             params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy });
+            params.palw_reporter_income_v2 = Some(ForkActivation::new(1));
+            params.palw_material_income_v3 = Some(ForkActivation::new(1));
             params.sync_palw_bond_budget_v1();
             // Counterfactual legacy whole-escrow pricing creates positive native
             // legs in the toy class. All parameters precede genesis and work;
@@ -434,6 +591,12 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     let state = cw.net.chain.tip_state().1;
     let native = state.vesting_row(&first.real.claim).unwrap().clone();
     let receipt = state.exec_v2_reward_vesting_v1(&first.real.claim).unwrap().clone();
+    eprintln!(
+        "[x8-native-payment] first Final: daa={final_daa}, expiry={}, liability={}, funds={}",
+        native.expiry_daa,
+        receipt.liability_until,
+        receipt.legs.len()
+    );
     assert!(native.producer.amount > 0 && native.seats.iter().any(|(_, leg)| leg.amount > 0));
     assert!(receipt.legs.iter().any(|((_, fund), leg)| *fund == PalwExecV2RewardFundV1::NativeSlice && leg.amount > 0));
     assert!(receipt.legs.iter().any(|((_, fund), leg)| *fund == PalwExecV2RewardFundV1::KernelFee && leg.amount > 0));
@@ -443,6 +606,17 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     assert_eq!(receipt.total_sompi_u128() + u128::from(native.producer.amount), u128::from(receipt.allocation_sompi));
     assert_eq!(state.settled_attempt_finals(), native.settled_at_final);
     assert!(native.expiry_daa > receipt.liability_until && native.final_daa == final_daa);
+    let material_subjects: Vec<_> = std::iter::once(first.real.claim)
+        .chain(std::iter::once(&first.prefix).chain(first.slices.iter()).map(|claim| Hash64::from_bytes(claim.claim.id)))
+        .collect();
+    for subject in &material_subjects {
+        assert_eq!(
+            state.material_income_hold_until_v1(&cw.net.bundle.state, *subject),
+            Some(u64::MAX),
+            "every authenticated root/dependency retains material while positive cash has no physical payment clock"
+        );
+        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(u64::MAX));
+    }
     // Supply the private depth1 with another genuine signed/assembled native
     // Final. No clock/Final setter supplies the maturity condition.
     let mut second = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), SECOND_LIFETIME).await;
@@ -454,6 +628,7 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     assert_eq!(state.settled_attempt_finals(), native.settled_at_final + 1);
     assert!(cw.net.daa() < native.expiry_daa);
     let second_native = state.vesting_row(&second.real.claim).unwrap().clone();
+    eprintln!("[x8-native-payment] second Final: daa={}, expiry={}", cw.net.daa(), second_native.expiry_daa);
     assert!(
         second_native.expiry_daa > native.expiry_daa + W,
         "the predeclared second signed lifetime isolates the first root's physical-payment W window"
@@ -477,7 +652,7 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
         };
         add(key, *bond, leg.amount);
     }
-    cw.net.beat_to(native.expiry_daa - 1).await;
+    native_payment_beat_to(&mut cw, native.expiry_daa - 1, "before first physical payment").await;
     let before = cw.net.chain.tip_state().1;
     assert!(before.vesting_row(&first.real.claim).is_some());
     assert!(before.exec_v2_reward_vesting_v1(&first.real.claim).is_some());
@@ -490,19 +665,43 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     let prior_cash: std::collections::BTreeMap<_, _> =
         expected.keys().map(|card| (*card, minted_and_owed(&cw.net, &cw.net.chain, *card).0)).collect();
     let mut paid_rows = std::collections::BTreeMap::new();
+    let mut observed = std::collections::BTreeMap::new();
+    let mut payment_blocks = 0;
     while paid_rows.len() < queues.len() {
         assert!(cw.net.daa() < native.expiry_daa + 32, "all actual first-root funds must settle without a synthetic clock");
+        assert!(payment_blocks < 1_024, "actual positive funds failed to drain after 1024 heartbeat blocks");
         cw.net.chain.heartbeat(cw.net.ttpb(), Vec::new()).await;
+        payment_blocks += 1;
         let state = cw.net.chain.tip_state().1;
         for (key, (bond, amount)) in &queues {
             if let Some(row) = state.bond_budget_native_queue_income_v1(*key, bond) {
-                assert_eq!(row.consumed.reward_sompi, *amount, "each actual positive leg consumes R once");
-                if !row.live && !paid_rows.contains_key(key) {
+                // Panel and EXEC slice legs of this recipient share a queue
+                // key, but are released in different ticks. Intermediate rows
+                // carry only the funds released so far, including earlier cash.
+                assert!(row.consumed.reward_sompi <= *amount, "a shared physical queue must never consume excess R");
+                if observed.insert(*key, (row.consumed.reward_sompi, row.live)) != Some((row.consumed.reward_sompi, row.live)) {
+                    eprintln!(
+                        "[x8-native-payment] queue {key}: daa={}, consumed={}/{amount}, pending={}",
+                        cw.net.daa(),
+                        row.consumed.reward_sompi,
+                        row.live
+                    );
+                }
+                if !row.live && row.consumed.reward_sompi == *amount && !paid_rows.contains_key(key) {
+                    assert_eq!(row.consumed.reward_sompi, *amount, "all positive funds consume their aggregate R exactly once");
                     assert!(state.pending_payout(key).is_none(), "R payment clock follows actual physical drain");
                     assert_eq!(row.reuse_not_before, cw.net.daa() + W, "actual sparse/zero-DAA payment plus W");
                     paid_rows.entry(*key).or_insert(*row);
                 }
             }
+        }
+        if payment_blocks % 16 == 0 {
+            eprintln!(
+                "[x8-native-payment] physical drain: blocks={payment_blocks}, daa={}, paid={}/{}",
+                cw.net.daa(),
+                paid_rows.len(),
+                queues.len()
+            );
         }
     }
     let paid = cw.net.chain.tip_state().1;
@@ -517,6 +716,16 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
         );
     }
     let counters = paid.vesting_counters();
+    let latest = paid_rows.values().map(|row| row.reuse_not_before).max().unwrap();
+    for subject in &material_subjects {
+        assert_eq!(
+            paid.material_income_hold_until_v1(&cw.net.bundle.state, *subject),
+            Some(latest),
+            "root and every dependency use the last actual positive fund payment plus W"
+        );
+        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(latest));
+    }
+    let material_receipts = paid.bond_budget().unwrap().material_income.clone();
     let sink = cw.net.chain.sink();
     let utxos = Net::utxos_of(&cw.net.chain);
     let root = paid.state_root();
@@ -524,18 +733,33 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     assert_eq!(cw.net.chain.sink(), sink);
     assert_eq!(cw.net.chain.tip_state().1.state_root(), root);
     assert_eq!(Net::utxos_of(&cw.net.chain), utxos);
+    assert_eq!(cw.net.chain.tip_state().1.bond_budget().unwrap().material_income, material_receipts);
+    for subject in &material_subjects {
+        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(latest));
+    }
     cw.net.send(vec![(REGISTRANT, licence)]).await;
     assert_eq!(cw.net.chain.tip_state().1.vesting_counters(), counters, "duplicate licence never creates/moves a second fund");
-    let latest = paid_rows.values().map(|row| row.reuse_not_before).max().unwrap();
-    cw.net.beat_to(latest - 1).await;
+    native_payment_beat_to(&mut cw, latest - 1, "before last physical payment plus W").await;
     let state = cw.net.chain.tip_state().1;
+    for subject in &material_subjects {
+        assert_eq!(state.material_income_hold_until_v1(&cw.net.bundle.state, *subject), Some(latest));
+        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(latest));
+    }
     for (key, row) in &paid_rows {
         if row.reuse_not_before == latest {
             assert!(state.bond_budget_native_queue_income_v1(*key, &row.bond).is_some(), "the final physical W has not ended");
         }
     }
-    cw.net.beat_to(latest).await;
+    native_payment_beat_to(&mut cw, latest, "last physical payment plus W").await;
     let released = cw.net.chain.tip_state().1;
+    for subject in &material_subjects {
+        assert_eq!(
+            released.material_income_hold_until_v1(&cw.net.bundle.state, *subject),
+            None,
+            "other work of the same recipients cannot perpetually retain this root's material"
+        );
+        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), None);
+    }
     for (key, row) in &paid_rows {
         assert!(released.bond_budget_native_queue_income_v1(*key, &row.bond).is_none());
     }
@@ -545,4 +769,115 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     let lane: Vec<_> = first.lane.into_iter().chain(second.lane).collect();
     let replay = replay_with_lane(&cw.net, &lane).await;
     cw.net.assert_same(&replay, "actual full happy native settlement/queue-window replay");
+}
+
+/// Actual ML-DSA carriers/native coinbase and a fresh Consensus on the same DB.
+/// The unused-root service contract proves consent/fee plumbing; it makes no
+/// native model-work or physical complete-copy claim.
+#[tokio::test]
+async fn x8_g14_native_signed_monetary_covenant_funds_exact_fee_once_and_recovers_its_authority() {
+    use kaspa_consensus_core::palw_bond_budget_v1::{PalwBondBudgetFenceV1, PalwBondBudgetPolicyV1};
+    use kaspa_consensus_core::palw_monetary_material_v1::*;
+    use kaspa_consensus_core::palw_provider_court_v1::{PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, palw_provider_court_message_v1};
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    let (config, _, premine, floats) = kernel_config();
+    let mut params = config.params.clone();
+    let mut budget = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+    budget.capital_unit_sompi = 100_000_000;
+    budget.reward_per_unit_sompi = 100_000_000;
+    let policy = PalwMonetaryMaterialPolicyV1 {
+        version: 1,
+        max_contracts: 16,
+        max_contracts_per_provider: 8,
+        max_bytes_per_contract: 1_000_000,
+        max_bytes_per_provider: 8_000_000,
+        minimum_collateral_sompi: 100_000_000,
+        minimum_fee_sompi: 1_000_000,
+        window_daa: budget.window_daa,
+        response_window_daa: 64,
+        max_enrollment_daa: 200,
+        cost_report_root: Hash64::from_bytes([0xD4; 64]),
+    };
+    params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy: budget });
+    params.palw_reporter_income_v2 = Some(ForkActivation::new(1));
+    params.palw_material_income_v3 = Some(ForkActivation::new(1));
+    params.palw_provider_court_v1 = Some(ForkActivation::new(1));
+    params.palw_monetary_material_v1 =
+        Some(PalwMonetaryMaterialFenceV1 { activation: ForkActivation::new(1), policy: policy.clone() });
+    params.sync_palw_bond_budget_v1();
+    assert!(params.validate_palw_monetary_material_v1().is_err(), "test consent is not public cost/liveness approval");
+    let bundle = match &params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
+        _ => unreachable!(),
+    };
+    let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, _receiver) = async_channel::unbounded();
+    let mut net = Net::over_cfg((Config::new(params), bundle, premine, floats), |c| TestConsensus::with_db(db.clone(), c, sender));
+    net.beat_to(1).await;
+    let root = Hash64::from_bytes([0xE4; 64]);
+    let mut enrollment = PalwMonetaryMaterialEnrollmentV1 {
+        terms: PalwMonetaryMaterialTermsV1 {
+            version: 1,
+            root,
+            dependencies: Vec::new(),
+            exec_plan_root: None,
+            sponsor: net.bond(0),
+            nonce: Hash64::from_bytes([0xE5; 64]),
+            policy: policy.id(),
+            max_material_bytes: 1_000,
+            material_manifest: None,
+            native_session: None,
+            window_daa: policy.window_daa,
+            enrollment_until_daa: net.daa() + 100,
+            payment_relative_until_finality: true,
+        },
+        offers: vec![2usize, 3]
+            .into_iter()
+            .map(|card| PalwMonetaryMaterialOfferV1 {
+                provider: net.bond(card),
+                collateral_sompi: policy.minimum_collateral_sompi,
+                prepaid_fee_sompi: policy.minimum_fee_sompi,
+                signature: Vec::new(),
+            })
+            .collect(),
+    };
+    enrollment.offers.sort_by_key(|o| o.provider);
+    let payload = enrollment.payload();
+    for offer in &mut enrollment.offers {
+        let card = [2usize, 3].into_iter().find(|card| net.bond(*card) == offer.provider).unwrap();
+        let message = palw_provider_court_message_v1(net.domain, 240, &offer.provider, &payload);
+        offer.signature = sign(card, message.as_byte_slice(), PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, 0xD1);
+    }
+    let message = palw_provider_court_message_v1(net.domain, 240, &enrollment.terms.sponsor, &payload);
+    let object = Obj::MonetaryMaterialEnrolledV1 {
+        enrollment: Box::new(enrollment.clone()),
+        signature: sign(0, message.as_byte_slice(), PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, 0xD2),
+    };
+    let before = net.collateral(0);
+    let provider_before = [net.collateral(2), net.collateral(3)];
+    net.send(vec![(0, object.clone())]).await;
+    for _ in 0..4 {
+        net.chain.heartbeat(net.ttpb(), Vec::new()).await;
+    }
+    let state = net.chain.tip_state().1;
+    let row = state.monetary_material_row_v1(root).expect("real signed enrollment admitted");
+    assert_eq!(net.collateral(0), before - 2 * policy.minimum_fee_sompi, "sponsor-owned escrow debited once");
+    assert_eq!([net.collateral(2), net.collateral(3)], provider_before, "fee uses the native payout queue");
+    assert_eq!(row.service_fee_total_sompi, u128::from(2 * policy.minimum_fee_sompi));
+    assert_eq!(row.service_fee_paid_sompi, row.service_fee_total_sompi);
+    assert!(row.providers.iter().all(|provider| provider.fee_paid));
+    let payment = row.last_payment.as_ref().expect("actual coinbase drain authority");
+    assert_eq!(payment.root, root);
+    assert_eq!(payment.amount, policy.minimum_fee_sompi);
+    assert!(payment.paid_daa >= row.accepted_daa);
+    assert!(row.providers.iter().all(|p| p.fee_queued));
+    assert_eq!(state.material_income_hold_until_v1(&net.bundle.state, root), Some(u64::MAX));
+    net.send(vec![(0, object)]).await;
+    assert_eq!(net.collateral(0), before - 2 * policy.minimum_fee_sompi, "replay creates no second escrow/fee");
+    let recovered = net.restart(db);
+    let rows = recovered.chain.ctx.consensus.palw_monetary_material_covenants_v1().expect("fresh coherent native read");
+    let restored = rows.into_iter().find(|r| r.terms.root == root).unwrap();
+    assert_eq!(restored.consent, row.consent);
+    assert_eq!(restored.last_payment, row.last_payment);
+    assert_eq!(recovered.chain.ctx.consensus.palw_material_income_hold_until_v1(root), Some(u64::MAX));
 }

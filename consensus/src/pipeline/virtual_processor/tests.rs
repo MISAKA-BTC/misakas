@@ -15138,8 +15138,10 @@ fn every_held_court_acceptance_arm_reads_the_claims_class_ladder() {
     for name in ["CheckpointAccused", "MaterialDisclosedHeld"] {
         assert!(arm(name).contains("state.class_step_ladder_v1(&claim.class_id, ladder)"), "{name} reads the claim's ladder");
     }
-    assert!(!source.contains("adjudicate_court_close_v2("), "every close is judged by v3, which knows the held regime");
-    assert_eq!(source.matches("adjudicate_court_close_v3(").count(), 3, "the node's verdict, a close chunk and a close");
+    assert!(!source.contains("adjudicate_court_close_v2("), "every close is judged by v4, which knows the held regime");
+    // RFC-0006 R6-CELL round 4: the three sites moved to v4, which is v3 with `palw_cell_coverage_closure_v1`'s mirror.
+    assert!(!source.contains("adjudicate_court_close_v3("), "every close also knows the coverage closure");
+    assert_eq!(source.matches("adjudicate_court_close_v4(").count(), 3, "the node's verdict, a close chunk and a close");
     assert!(source.contains("palw_fp_objects_from_accepted_txs_by_class_v1("), "the walk bounds each commitment by its class");
 }
 

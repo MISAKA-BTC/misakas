@@ -97,6 +97,10 @@ pub mod native_text_v29;
 /// G14 onboarding P0: the signed registration envelope (tag 108), the conformance evidence object (tag 109) and the fresh verifier
 /// that rebuilds the chain's conformance verdict from public reads.
 pub mod onboarding_chain;
+pub mod panel_source_fee_v2;
+pub mod panel_lifetime_v2;
+/// RFC07/RFC08 signed economic contracts (inner 39, 67–69): offline drafts and signing; dormant.
+pub mod econ_contracts_v1;
 pub mod onboarding_snapshot;
 /// RFC-0002 Part II §II.2: the header-only model preflight (`palw-class preflight <model>`).
 pub mod preflight;
@@ -616,3 +620,5 @@ pub mod flat_snapshot_v9;
 pub mod flat_streamed_locator_v9;
 pub mod flat_vector_v9;
 pub mod real_checkpoint_fixture11;
+
+pub mod claim_paid_v2;

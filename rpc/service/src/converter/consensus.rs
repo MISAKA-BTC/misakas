@@ -727,7 +727,7 @@ pub fn palw_block_kind_v1(
         kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.base_class_id),
         _ => None,
     };
-    match (kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment), base) {
+    match (kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment), base) {
         (Ok(envelope), Some(base)) if envelope.attempt.class_id == base => {
             if params.palw_floor_reserve_active_at(header.daa_score) {
                 "FALLBACK"

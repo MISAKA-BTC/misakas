@@ -1516,3 +1516,465 @@ fn paid_panel_source_subject_freezes_in_actual_fold_replay_and_carriage_and_surv
         "a candidate leaving the pending phase never releases its source exclusion"
     );
 }
+
+#[test]
+fn panel_sponsor_funds_native_escrow_before_entropy_and_unused_principal_refunds_once_through_reorg() {
+    use kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1;
+    use kaspa_consensus_core::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1;
+    use kaspa_consensus_core::palw_kernel_route_v1::{PalwKernelOpvExtrasV1, PalwKernelRouteExtrasV1};
+    use kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1;
+    use kaspa_consensus_core::palw_panel_source_fee_v2::panel_source_target_v2;
+    use kaspa_consensus_core::palw_panel_source_snapshot_v1::PALW_PANEL_SOURCE_SNAPSHOT_TABLE_V1;
+    use misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTermsV1;
+    use misaka_palw_kernel::route::KernelRouteObjectV1 as K;
+    // Unapproved pure-fold mechanics, with signatures admitted by the fixture.
+    // No source independence, measured profitability or real P2P evidence.
+    let policy = misaka_palw_challenge::paid_opt_in_source_policy_v5(2, 2, 20, 2, 1);
+    let mut panel = engine_policy();
+    panel.beacon_scheme = panel_beacon_scheme_of_v1(&policy);
+    panel.beacon_period_daa = 300;
+    panel.beacon_wait_daa = 200;
+    panel.validate().unwrap();
+    let mut v = V3::with(panel, FENCE);
+    v.inputs.approved_beacons = vec![policy.clone()];
+    v.inputs.beacon_source = PalwPanelV3BeaconSourceV1::Chain;
+    let mirror = *v.c.sp.panel_v3().unwrap();
+    let opv = PalwPanelFreeFenceV1::at(ForkActivation::new(FENCE));
+    let mut monetary = PalwBeaconSourceFeeFenceV1::unapproved_probe_at(ForkActivation::new(FENCE));
+    monetary.policy.cost_bounds.as_mut().unwrap().maximum_liability_daa = 20_000;
+    v.source_route = Some(PalwKernelRouteExtrasV1 {
+        network_domain: mirror.network,
+        ruleset_digest: mirror.ruleset,
+        chain_genesis: v.c.p.genesis.hash,
+        opv: Some(PalwKernelOpvExtrasV1 {
+            policy: opv.opv_policy(),
+            denied_classes: Vec::new(),
+            min_effective_bits: 128,
+            sampled_conformance_gates_reward: false,
+            test_eligible: Vec::new(),
+            reward_gate: None,
+        }),
+        beacon_source: Some(PalwBeaconSourceFenceV1::unapproved_probe_at(ForkActivation::new(FENCE))),
+        beacon_source_fee: Some(monetary),
+        ..Default::default()
+    });
+    // The route is created by its first accepted object, never by extras alone.
+    // Exercise that production writer before the epoch's parent checkpoint. As
+    // elsewhere in this pure-fold fixture, signatures are already-admitted inputs;
+    // this does not establish the native signature or paid-source admission gate.
+    let route_actor = bundle(&v.c.p)
+        .genesis_objects
+        .iter()
+        .filter_map(|object| match object {
+            PalwConsensusObjectV2::BondRegistered { bond, .. } => Some(*bond),
+            _ => None,
+        })
+        .nth(1)
+        .expect("a distinct existing genesis bond");
+    let init = misaka_palw_kernel::route::KernelRouteObjectV1::RequestExit {
+        bond: kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&route_actor),
+    };
+    v.step_with(&[PalwConsensusObjectV2::KernelRouteV1 { bytes: init.encode(), signer: route_actor, signature: Vec::new() }]);
+    assert!(v.c.s.kernel_route().is_some(), "an accepted route object creates authenticated parent state");
+    let id = v.floor_claim(0x7A);
+    v.step();
+    v.step();
+    let record = v.record(&id);
+    assert_eq!(record.phase, ClaimPhaseV3::Sealed);
+    let seal = record.seal.unwrap();
+    let release = seal.anchor_slot;
+    let source_checkpoint = v.engine().tip();
+    let request = BeaconRequestV1 {
+        network: mirror.network,
+        ruleset: mirror.ruleset,
+        scheme: panel.beacon_scheme,
+        epoch: seal.beacon_epoch,
+        release_daa: release,
+        deadline_daa: release + 200,
+    };
+    let delta = v.step_at(release + 3, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(delta.entries.iter().any(|entry| matches!(entry,
+        PalwDeltaEntryV2::KernelRouteRow { table, old: None, new: Some(_), .. } if *table == PALW_PANEL_SOURCE_SNAPSHOT_TABLE_V1)));
+    let frozen = v.c.s.kernel_route().unwrap().panel_source_snapshot_v1(seal.beacon_epoch).unwrap();
+    frozen.validate_for(&request, &policy).unwrap();
+    assert_eq!(frozen.committed_daa, release + 3);
+    assert_eq!(frozen.checkpoint, source_checkpoint);
+    assert!(frozen.eligible_profiles.is_empty());
+    assert_eq!(frozen.assigned_work_ids, BTreeSet::from([record.claim.work_id.as_bytes()]));
+    assert!(frozen.excluded_profiles.contains(&record.claim.class_id.as_bytes()));
+    assert_ne!(frozen.context(&request, &policy).unwrap().commitment_position, release);
+    let sponsor = bundle(&v.c.p)
+        .genesis_objects
+        .iter()
+        .filter_map(|o| match o {
+            PalwConsensusObjectV2::BondRegistered { bond, .. } => Some(*bond),
+            _ => None,
+        })
+        .nth(2)
+        .unwrap();
+    let route = v.c.s.kernel_route().unwrap();
+    let source = v.source_route.as_ref().unwrap().beacon_source.unwrap();
+    let tail = v.c.sp.window_challenge() + 2 * v.c.sp.window_court();
+    let target =
+        panel_source_target_v2(&source.policy, frozen.context(&request, &policy).unwrap(), &request, &panel, tail, &route.header.policy)
+            .unwrap();
+    let terms = BeaconSourceFeeTermsV1 {
+        source: target.terms,
+        sponsor: kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&sponsor),
+        fee_per_source: 50,
+        max_sources: 2,
+    };
+    let obj = K::FundPanelBeaconSourceFeeV2 { epoch: seal.beacon_epoch, terms };
+    let carrier = |actor, bytes| PalwConsensusObjectV2::KernelRouteV1 { signer: actor, bytes, signature: Vec::new() };
+    let native_before = v.c.s.bond(&sponsor).unwrap().collateral;
+    let before = v.c.s.clone();
+    // Rehearse a wrong signer on the same actual parent; no authority or debit survives.
+    let x = ctx(0xCA_0000 + release + 4, release + 4, release + 4, 0);
+    assert!(
+        v.fold(&before, &x, &[carrier(route_actor, obj.encode())], PalwBlockWorkV3::None, Hash64::default()).is_err(),
+        "the pure fold refuses wrong ownership; the node rehearsal drops that carrier"
+    );
+    assert_eq!(v.c.s, before, "a refused sponsorship leaves its parent unchanged");
+    let excessive = K::FundPanelBeaconSourceFeeV2 {
+        epoch: seal.beacon_epoch,
+        terms: BeaconSourceFeeTermsV1 { fee_per_source: native_before + 1, ..terms },
+    };
+    if let Ok((refused, delta, _)) = v.fold(&before, &x, &[carrier(sponsor, excessive.encode())], PalwBlockWorkV3::None, Hash64::default())
+    {
+        let route = refused.kernel_route().unwrap();
+        assert!(route.panel_source_fee_authority_v2(&terms.source.context).is_err());
+        assert!(!route.ledger().unwrap().beacon_source_fees.contains_key(&terms.source.context));
+        assert_eq!(refused.bond(&sponsor).unwrap().collateral, native_before);
+        assert!(!delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::KernelRouteRow { table: 112, .. })));
+        assert_eq!(revert_delta_v2(&refused, &delta, &v.c.sp).unwrap(), before);
+    }
+    assert_eq!(v.c.s, before, "insufficient actual collateral cannot leave a half-funded authority");
+    let delta = v.step_at(release + 4, &[carrier(sponsor, obj.encode())], PalwBlockWorkV3::None, Hash64::default(), 0);
+    let route = v.c.s.kernel_route().unwrap();
+    let ledger = route.ledger().unwrap();
+    assert_eq!(v.c.s.bond(&sponsor).unwrap().collateral, native_before - 100);
+    assert_eq!(ledger.source_fee_escrow_total().unwrap(), 100);
+    assert_eq!(route.panel_source_fee_authority_v2(&terms.source.context).unwrap().sponsor, sponsor);
+    assert!(delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::KernelRouteRow { table: 112, old: None, new: Some(_), .. })));
+    let header = borsh::to_vec(&route.header).unwrap();
+    let page = route.rows_page_v1(None, usize::MAX);
+    let restored = kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::from_served_rows_v1(
+        &header,
+        page.rows,
+        &route.ledger_root(),
+        &route.aux_root(),
+    )
+    .unwrap();
+    assert_eq!(restored.panel_source_fee_authority_v2(&terms.source.context).unwrap().sponsor, sponsor);
+    let funded = v.c.s.clone();
+    let x = ctx(0xCA_0000 + release + 5, release + 5, release + 5, 0);
+    assert!(
+        v.fold(&funded, &x, &[carrier(sponsor, obj.encode())], PalwBlockWorkV3::None, Hash64::default()).is_err(),
+        "a consumed permit cannot debit again"
+    );
+    assert_eq!(v.c.s, funded);
+    let delta = v.step_at(terms.source.seal_end, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_eq!(v.c.s.kernel_route().unwrap().ledger().unwrap().beacon_source_fees[&terms.source.context].refunded, 100);
+    assert_eq!(v.c.s.kernel_route().unwrap().ledger().unwrap().source_fee_escrow_total().unwrap(), 0);
+    assert_eq!(revert_delta_v2(&v.c.s, &delta, &v.c.sp).unwrap(), funded, "refund undo restores exact prepaid ownership");
+    v.step_at(terms.source.seal_end + 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_eq!(v.c.s.kernel_route().unwrap().ledger().unwrap().beacon_source_fees[&terms.source.context].refunded, 100);
+    assert_ne!(before.state_root(), funded.state_root());
+}
+
+#[test]
+fn paid_panel_sources_hold_the_same_native_r_until_actual_final_fee_queue_and_survive_replay() {
+    use kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1;
+    use kaspa_consensus_core::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1;
+    use kaspa_consensus_core::palw_kernel_route_v1::{PalwKernelOpvExtrasV1, PalwKernelRouteExtrasV1};
+    use kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1;
+    use kaspa_consensus_core::palw_panel_source_fee_v2::panel_source_target_v2;
+    use kaspa_consensus_core::palw_panel_source_snapshot_v1::PALW_PANEL_SOURCE_SNAPSHOT_TABLE_V1;
+    use misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTermsV1;
+    use misaka_palw_kernel::route::KernelRouteObjectV1 as K;
+    // Unapproved pure-fold mechanics, with signatures admitted by the fixture.
+    // No source independence, measured profitability or real P2P evidence.
+    let policy = misaka_palw_challenge::paid_opt_in_source_policy_v5(2, 2, 20, 2, 1);
+    let mut panel = engine_policy();
+    panel.beacon_scheme = panel_beacon_scheme_of_v1(&policy);
+    panel.beacon_period_daa = 300;
+    panel.beacon_wait_daa = 200;
+    panel.validate().unwrap();
+    let mut v = V3::with(panel, FENCE);
+    let mut budget_policy = kaspa_consensus_core::palw_bond_budget_v1::PalwBondBudgetPolicyV1::unapproved_probe_v1();
+    budget_policy.max_open_claims_per_bond = 1024;
+    budget_policy.block_units_per_unit = kaspa_consensus_core::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1;
+    v.c.sp = v.c.sp.clone().with_bond_budget(Some(kaspa_consensus_core::palw_bond_budget_v1::PalwBondBudgetMirrorV1 {
+        from_daa: FENCE,
+        policy: budget_policy,
+        allocation: None,
+    }));
+    v.inputs.approved_beacons = vec![policy.clone()];
+    v.inputs.beacon_source = PalwPanelV3BeaconSourceV1::Chain;
+    let mirror = *v.c.sp.panel_v3().unwrap();
+    let opv = PalwPanelFreeFenceV1::at(ForkActivation::new(FENCE));
+    let mut monetary = PalwBeaconSourceFeeFenceV1::unapproved_probe_at(ForkActivation::new(FENCE));
+    monetary.policy.cost_bounds.as_mut().unwrap().maximum_liability_daa = 20_000;
+    v.source_route = Some(PalwKernelRouteExtrasV1 {
+        network_domain: mirror.network,
+        ruleset_digest: mirror.ruleset,
+        chain_genesis: v.c.p.genesis.hash,
+        opv: Some(PalwKernelOpvExtrasV1 {
+            policy: opv.opv_policy(),
+            denied_classes: Vec::new(),
+            min_effective_bits: 128,
+            sampled_conformance_gates_reward: false,
+            test_eligible: Vec::new(),
+            reward_gate: None,
+        }),
+        beacon_source: Some(PalwBeaconSourceFenceV1::unapproved_probe_at(ForkActivation::new(FENCE))),
+        beacon_source_fee: Some(monetary),
+        ..Default::default()
+    });
+    // The route is created by its first accepted object, never by extras alone.
+    // Exercise that production writer before the epoch's parent checkpoint. As
+    // elsewhere in this pure-fold fixture, signatures are already-admitted inputs;
+    // this does not establish the native signature or paid-source admission gate.
+    let route_actor = bundle(&v.c.p)
+        .genesis_objects
+        .iter()
+        .filter_map(|object| match object {
+            PalwConsensusObjectV2::BondRegistered { bond, .. } => Some(*bond),
+            _ => None,
+        })
+        .nth(1)
+        .expect("a distinct existing genesis bond");
+    let init = misaka_palw_kernel::route::KernelRouteObjectV1::RequestExit {
+        bond: kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&route_actor),
+    };
+    v.step_with(&[PalwConsensusObjectV2::KernelRouteV1 { bytes: init.encode(), signer: route_actor, signature: Vec::new() }]);
+    assert!(v.c.s.kernel_route().is_some(), "an accepted route object creates authenticated parent state");
+    // Model/source eligibility is an explicit test seam. The source traces and
+    // source/fee/budget transitions are real; this is not G14 admission evidence.
+    let fx = misaka_palw_tir_sketch::fixture::wide128_v1(7);
+    let descriptor = misaka_palw_kernel::descriptor::k2_tir_v2_descriptor();
+    let plan = misaka_palw_kernel::plan::plan_for_tir_program_v1(
+        &descriptor,
+        &fx.program,
+        misaka_palw_kernel::public::program_root_v1(&fx.program.encode()),
+        4,
+    )
+    .unwrap();
+    let pc = misaka_palw_kernel::trace::ParamCommitmentsV1::of(&fx.params);
+    let class = misaka_palw_kernel::ledger::single_class_id_v1(
+        descriptor.digest(),
+        &fx.program.encode(),
+        &plan,
+        &pc,
+        misaka_palw_kernel::mode::VerificationModeV1::OptimisticPublicVerification,
+    );
+    let known: Vec<_> = bundle(&v.c.p)
+        .genesis_objects
+        .iter()
+        .filter_map(|o| match o {
+            PalwConsensusObjectV2::BondRegistered { bond, .. } => Some(*bond),
+            _ => None,
+        })
+        .collect();
+    let sponsor = known[2];
+    let producers = [known[3], known[4]];
+    let payers = [known[5], known[6]];
+    let route_extras = v.source_route.as_mut().unwrap();
+    route_extras.attested_artifacts.push(Hash64::from_bytes(pc.root()));
+    route_extras.opv.as_mut().unwrap().test_eligible.push(Hash64::from_bytes(class));
+    let carrier = |actor, object: K| PalwConsensusObjectV2::KernelRouteV1 { signer: actor, bytes: object.encode(), signature: Vec::new() };
+    let registration = K::RegisterClassV2 {
+        mode: misaka_palw_kernel::mode::VerificationModeV1::OptimisticPublicVerification,
+        descriptor: descriptor.digest(),
+        program_bytes: fx.program.encode(),
+        plan,
+        param_commitments: pc.clone(),
+    };
+    let mut preview = v.c.s.kernel_route().unwrap().ledger().unwrap();
+    preview.begin_block(v.c.daa + 1).unwrap();
+    let kid = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&sponsor);
+    preview.sync_bond(kid, v.c.s.bond(&sponsor).unwrap().collateral);
+    preview.attest_artifact(pc.root());
+    preview.admit_optimistic_class(class).unwrap();
+    let accepted = preview.apply_object(&registration, &misaka_palw_kernel::ledger::AuthV1 { signer_bond: kid });
+    assert!(accepted.is_ok(), "source fixture registration: {accepted:?}");
+    v.step_with(&[carrier(sponsor, registration)]);
+    assert!(v.c.s.kernel_route().unwrap().ledger().unwrap().classes.contains_key(&class));
+    let jobs: Vec<_> = (0..2)
+        .map(|i| misaka_palw_kernel::job::KernelJobV1 {
+            class_binding_id: class,
+            prompt: vec![3, 17, 9],
+            max_new_tokens: 1,
+            decode: misaka_palw_kernel::job::DecodeRuleV1::Greedy,
+            nonce: [40 + i as u8; 64],
+        })
+        .collect();
+    v.step_with(&[carrier(payers[0], K::PostJob { job: jobs[0].clone() }), carrier(payers[1], K::PostJob { job: jobs[1].clone() })]);
+    let id = v.floor_claim(0x7B);
+    v.step();
+    v.step();
+    let record = v.record(&id);
+    assert_eq!(record.phase, ClaimPhaseV3::Sealed);
+    let seal = record.seal.unwrap();
+    let release = seal.anchor_slot;
+    let source_checkpoint = v.engine().tip();
+    let request = BeaconRequestV1 {
+        network: mirror.network,
+        ruleset: mirror.ruleset,
+        scheme: panel.beacon_scheme,
+        epoch: seal.beacon_epoch,
+        release_daa: release,
+        deadline_daa: release + 200,
+    };
+    let delta = v.step_at(release + 3, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(delta.entries.iter().any(|entry| matches!(entry,
+        PalwDeltaEntryV2::KernelRouteRow { table, old: None, new: Some(_), .. } if *table == PALW_PANEL_SOURCE_SNAPSHOT_TABLE_V1)));
+    let frozen = v.c.s.kernel_route().unwrap().panel_source_snapshot_v1(seal.beacon_epoch).unwrap();
+    frozen.validate_for(&request, &policy).unwrap();
+    assert_eq!(frozen.committed_daa, release + 3);
+    assert_eq!(frozen.checkpoint, source_checkpoint);
+    assert!(frozen.eligible_profiles.contains(&class));
+    assert_eq!(frozen.assigned_work_ids, BTreeSet::from([record.claim.work_id.as_bytes()]));
+    assert!(frozen.excluded_profiles.contains(&record.claim.class_id.as_bytes()));
+    assert_ne!(frozen.context(&request, &policy).unwrap().commitment_position, release);
+    let source = v.source_route.as_ref().unwrap().beacon_source.unwrap();
+    let target = panel_source_target_v2(
+        &source.policy,
+        frozen.context(&request, &policy).unwrap(),
+        &request,
+        &panel,
+        v.c.sp.window_challenge() + 2 * v.c.sp.window_court(),
+        &v.c.s.kernel_route().unwrap().header.policy,
+    )
+    .unwrap();
+    let terms = BeaconSourceFeeTermsV1 {
+        source: target.terms,
+        sponsor: kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&sponsor),
+        fee_per_source: 50,
+        max_sources: 2,
+    };
+    v.step_at(
+        release + 4,
+        &[carrier(sponsor, K::FundPanelBeaconSourceFeeV2 { epoch: seal.beacon_epoch, terms })],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        0,
+    );
+    let ledger = v.c.s.kernel_route().unwrap().ledger().unwrap();
+    let class_row = &ledger.classes[&class];
+    let mut reveals = Vec::new();
+    let mut seals = Vec::new();
+    for (i, job) in jobs.iter().enumerate() {
+        let producer = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&producers[i]);
+        let trace = misaka_palw_kernel::trace::trace_v1(&fx.program, &fx.params, &job.prompt).unwrap();
+        let (post, logits) = class_row.logits_at();
+        let generated = vec![job.decode.select(&trace.values[job.prompt.len() - 1][post as usize][logits as usize]).unwrap()];
+        let wiring = misaka_palw_kernel::trace::WiringV1::new(&fx.program).unwrap();
+        let evidence = misaka_palw_kernel::evidence::build_evidence_v1(
+            &wiring,
+            &trace.evidence(),
+            &job.prompt,
+            class_row.header(class),
+            &descriptor,
+            2,
+        )
+        .unwrap();
+        let claim =
+            misaka_palw_kernel::job::KernelClaimV1 { job_id: job.id(), producer_bond: producer, generated, evidence_root: evidence.root() };
+        let salt = [70 + i as u8; 64];
+        let seal = misaka_palw_kernel::route::claim_seal_v2(&claim.id(), &salt);
+        seals.push(carrier(producers[i], K::SealClaim { producer, job: job.id(), seal }));
+        seals.push(carrier(
+            producers[i],
+            K::OptInPaidBeaconSource {
+                producer,
+                job: job.id(),
+                seal,
+                context: terms.source.context,
+                source_terms: terms.source.id(),
+                fee_terms: terms.id(),
+            },
+        ));
+        reveals.push((
+            producers[i],
+            claim.id(),
+            K::CommitClaimSalted {
+                salt,
+                commit: misaka_palw_kernel::route::SaltedCommitV1::Claim { claim, evidence, commitments: trace.evidence().commitments },
+            },
+        ));
+    }
+    v.step_at(terms.source.seal_start, &seals, PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_eq!(v.c.s.kernel_route().unwrap().ledger().unwrap().beacon_source_fee_promises.len(), 2);
+    let budget = v.c.s.bond_budget().unwrap();
+    let pending: Vec<_> = budget
+        .claims
+        .iter()
+        .filter(|(_, row)| row.origin == kaspa_consensus_core::palw_bond_budget_v1::PalwBudgetOriginV1::SourceFee)
+        .map(|(id, row)| (*id, *row))
+        .collect();
+    assert_eq!(pending.len(), 2, "each source has one separately held R fee");
+    let objects: Vec<_> = reveals.iter().map(|(producer, _, object)| carrier(*producer, object.clone())).collect();
+    v.step_at(terms.source.seal_end, &objects, PalwBlockWorkV3::None, Hash64::default(), 0);
+    v.step_at(terms.source.final_by, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_eq!(v.c.s.kernel_route().unwrap().ledger().unwrap().beacon_source_fees[&terms.source.context].paid, 0);
+    v.step_at(terms.source.final_by + policy.settlement_depth_d, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    let route = v.c.s.kernel_route().unwrap();
+    let (contract, sources, promises) = route.paid_beacon_material_v5(&terms.source.context).unwrap().unwrap();
+    let context = route.beacon_source_target_v4(&terms.source.context).unwrap().context;
+    let misaka_palw_challenge::SealedBeaconStateV3::Locked(beacon) =
+        misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&context, &contract, &sources, &promises, route.ledger().unwrap().daa)
+            .unwrap()
+    else {
+        panic!("actual source Finals must lock the paid Panel beacon");
+    };
+    let proof = BeaconProofV1 {
+        epoch: seal.beacon_epoch,
+        output: Hash64::from_bytes(beacon.output),
+        proof: borsh::to_vec(beacon.beacon()).unwrap(),
+    };
+    v.step_at(
+        terms.source.final_by + policy.settlement_depth_d + 1,
+        &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(proof) }],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        0,
+    );
+    assert_eq!(
+        v.engine().beacon_rows().get(&seal.beacon_epoch),
+        Some(&Hash64::from_bytes(beacon.output)),
+        "native Panel engine consumes the actual funded source beacon"
+    );
+    for (income, _) in &pending {
+        assert!(v.c.s.bond_budget().unwrap().claim_row(income).is_some());
+    }
+    v.step_at(terms.source.hold_until, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    let held = v.c.s.clone();
+    let before_r: Vec<_> =
+        pending.iter().map(|(_, row)| (row.bond, v.c.s.bond_budget().unwrap().bond_row(&row.bond).unwrap().window.reward_sompi)).collect();
+    let delta = v.step_at(terms.source.hold_until + 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_eq!(v.c.s.kernel_route().unwrap().ledger().unwrap().beacon_source_fees[&terms.source.context].paid, 100);
+    assert_eq!(v.c.s.kernel_route().unwrap().ledger().unwrap().source_fee_escrow_total().unwrap(), 0);
+    assert_eq!(revert_delta_v2(&v.c.s, &delta, &v.c.sp).unwrap(), held);
+    for (income, old) in &pending {
+        assert!(
+            v.c.s.bond_budget().unwrap().claim_row(income).is_none_or(|row| !row.live),
+            "original source entitlement is consumed, not duplicated"
+        );
+        assert!(
+            v.c.s.bond_budget().unwrap().claims.values().any(|row| row.bond == old.bond
+                && row.origin == kaspa_consensus_core::palw_bond_budget_v1::PalwBudgetOriginV1::NativeIncomeQueued
+                && row.reserved.reward_sompi >= 50),
+            "fee remains held in the native payout queue"
+        );
+    }
+    for (bond, before) in before_r {
+        assert_eq!(
+            v.c.s.bond_budget().unwrap().bond_row(&bond).unwrap().window.reward_sompi,
+            before,
+            "queue transfer preserves the same aggregate R"
+        );
+    }
+    v.step_at(terms.source.hold_until + 2, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_eq!(v.c.s.kernel_route().unwrap().ledger().unwrap().beacon_source_fees[&terms.source.context].paid, 100);
+}

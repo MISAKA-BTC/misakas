@@ -6,6 +6,31 @@ use crate::palw_work_slice_v2::{
     PalwExecV2RewardActionV1 as Action, PalwExecV2RewardFundV1 as Fund, PalwExecV2RewardRowV1 as Row, PalwWorkRootPhaseV2,
 };
 
+/// A native consumer's material service cannot silently extend the immutable
+/// EXEC terms authorized by the root declaration and each worker's job nonce.
+/// A longer proposed root expiry must be signed before admission instead.
+pub(super) fn require_paid_exec_material_window_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    root: &Hash64,
+    expiry: u64,
+) -> Result<(), PalwStateV2Error> {
+    let Some(terms) = state.paid_consumer_terms_v1(root) else { return Ok(()) };
+    let authorized = match &state.kernel_route {
+        Some(kernel) => {
+            super::palw_kernel_route_fold_v1::exec_liability_floor_v1(expiry, params.window_court(), &kernel.header.policy)?
+        }
+        None => expiry.checked_add(params.window_court()).ok_or(PalwStateV2Error::Overflow("paid EXEC material horizon"))?,
+    };
+    if terms.material_until > authorized {
+        return Err(PalwStateV2Error::ExecV2Refused(format!(
+            "paid consumer requires material through {}, beyond the signed EXEC horizon {authorized}",
+            terms.material_until
+        )));
+    }
+    Ok(())
+}
+
 /// The bound base floor and every retained dependency horizon. No dependency may disappear during its proof window.
 pub(super) fn horizon(
     state: &PalwChainStateV2,
@@ -47,6 +72,7 @@ pub(super) fn require_native_session_window(
     root_id: &Hash64,
     required_until: u64,
 ) -> Result<(), PalwStateV2Error> {
+    crate::palw_panel_lifetime_v2::require_panel_session_window_v2(state, params, root_id, required_until)?;
     state.require_paid_consumer_backstop_v1(root_id, required_until)?;
     let root = state.exec_v2.roots.get(root_id);
     let mut bound = match root {

@@ -65,7 +65,6 @@
 
 use crate::config::params::ForkActivation;
 use crate::header::Header;
-use crate::palw_attempt_v2::PalwAttemptEnvelopeV2;
 use crate::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
 use std::collections::BTreeMap;
 
@@ -171,7 +170,7 @@ impl PalwOperatorAnchorRuleV1 {
         if !crate::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id) {
             return None;
         }
-        let envelope = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).ok()?;
+        let envelope = crate::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment).ok()?;
         let bond = PalwBondKeyV2(envelope.attempt.executor_bond);
         (self.keys.get(&bond)? == &envelope.attempt.executor_pubkey).then_some(bond)
     }
@@ -196,6 +195,7 @@ pub fn palw_operator_anchor_admits_v1(rule: Option<&PalwOperatorAnchorRuleV1>, h
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palw_attempt_v2::PalwAttemptEnvelopeV2;
     use crate::palw_attempt_v2::PalwAttemptUnsignedV2;
     use crate::pow_layer0::{POW_ALGO_ID_HEARTBEAT_V1, POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_EXEC_V3};
     use crate::tx::{TransactionId, TransactionOutpoint};

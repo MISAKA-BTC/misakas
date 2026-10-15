@@ -197,6 +197,8 @@ pub mod palw_base0_profile;
 /// signature per seat window, a Merkle path per claim, the coverage funnel unchanged.
 pub mod palw_batch_licence_v1;
 pub mod palw_beacon_source_fee_v1;
+pub mod palw_panel_source_fee_v2;
+pub mod palw_panel_lifetime_v2;
 pub mod palw_beacon_source_opt_in_v1;
 /// MISAKA PALW bisection ladder (ADR-0027 §1's degraded path): the pure state machine that
 /// forces incremental disclosure when a miner withholds state — pinned midpoints, monotonic
@@ -245,6 +247,8 @@ pub mod palw_class_identity_v1;
 pub mod palw_class_seating_fence_v1;
 /// RFC-0001 §2.9: the job's tokenizer must be the class's listed one; dormant behind `palw_fp_tokenizer_match`.
 pub mod palw_class_semantics_v1;
+pub mod palw_class_sync_v1;
+pub mod palw_native_resource_v1;
 /// ADR-0152 §4-quater — class-derived verification deadlines behind
 /// `Params::palw_class_verify_deadline`: the constants, the measured-row type and the two pure
 /// derivations of `D(c)` (the state-reading half is in `palw_state_v2`). `None` on every preset but
@@ -260,6 +264,10 @@ pub mod palw_context_ladder;
 /// shipped class row of every preset that carries a V2 bundle is asserted against it. Changes no
 /// shipped constant; it relates two numbers that had never appeared in one expression.
 pub mod palw_court_deadline;
+/// D2's replacement routes (REQ-T6-4, DA16 design §7.5 items 1–2): every restricted court unit's conviction path from public
+/// authenticated material — the claim part with the accuser's rows, root claims relaying the challenger's published operands, and the
+/// readiness digest. Behind the dormant `palw_court_model_scope_v1`.
+pub mod palw_court_model_scope_routes_v1;
 /// Lane DA16: the court scope (ADR-0177 D2, RFC-0014 §16.4) — what a court may demand (claim-specific units only), what a verifier
 /// supplies from its own copy against the registered root, the node-level model-bytes masks and the cumulative bound.
 pub mod palw_court_scope_v1;
@@ -499,6 +507,8 @@ pub mod palw_optimistic_licence_v2;
 /// The OPV ↔ PALW Work Beacon startup cycle, closed: the complete-check bootstrap, derived OPV eligibility, the effective bits of a
 /// passed attempt, and the dependency graph (`docs/design/palw/opv-beacon-bootstrap.md`) — dormant with the kernel route's fences.
 pub mod palw_opv_bootstrap_v1;
+/// N3 (REQ-N3-1/2/3): the Work Beacon's independent bootstrap, apart from the ordinary Beacon and Panel=0 — dormant.
+pub mod palw_beacon_bootstrap_v1;
 /// ADR-0077 Decision 16 (P-16): `PanelDa`, the privacy mode whose prompt stays off chain — and
 /// ADR-0077 SA-5, which says what arming it does NOT buy.
 pub mod palw_panel_da_v1;
@@ -586,6 +596,8 @@ pub mod palw_root_activation_v1;
 /// module exposes no crediting API at all (`FINALIZED_WITHOUT_REPLAY` is untypable).
 pub mod palw_routing;
 pub mod palw_rule_manifest_v1;
+/// The rules of the user's 2026-10-12 rulings (register X3, N4, D2): three dormant fences, refused when armed.
+pub mod palw_ruling_fences_v1;
 /// MISAKA PALW challenge scheduling (ADR-0028): assignment tickets, DAA windows and the
 /// Stage-0 shadow ledger that measures `P_check`, no-show and replay cost. Land-stage,
 /// consensus-inert — computed and logged only; nothing consumes it.
@@ -905,3 +917,29 @@ pub mod palw_funded_execution_v11;
 pub mod palw_stage_execution_v14;
 pub mod palw_stage_execution_v28;
 pub mod palw_tokenizer_owned_court_v1;
+
+pub mod palw_monetary_material_v1;
+/// RFC07 R7-ECON / RFC08 R8-WINDOW / R8-ECON signed economic contracts (inner 67–69, aux 125–127; 2026-10-15). Dormant.
+pub mod palw_econ_contracts_v1;
+
+pub mod palw_claim_challenge_v2;
+pub mod palw_claim_interactive_v3;
+/// R7-RELATION round 3 (2026-10-15): the dormant ClaimV2 gate of compact relation contracts (refused: empty review registry).
+pub mod palw_claim_compact_v1;
+/// R6-CELL round 3 (2026-10-15): pure boundary/routing/memory coverage checker over accepted cell profiles. Below
+/// `palw_cell_coverage_closure_v1` not called by consensus; past it the closure's one predicate.
+pub mod palw_cell_coverage_v1;
+/// R6-CELL round 4 (2026-10-15): the dormant `palw_cell_coverage_closure_v1` — an uncoverable legacy class (unknown map, hybrid
+/// v1/v2 recurrence, solo recurrence map, multi-router, Kimi router) refused at registration / the claim gate, convicted in court.
+pub mod palw_cell_coverage_closure_v1;
+
+pub mod palw_material_capacity_v1;
+
+pub mod palw_monetary_material_evidence_v1;
+
+pub mod palw_monetary_material_rpc_v1;
+
+/// Op 243: the canonical carriage of a pinned header's PALW state, in bounded pages, and its client assembler.
+pub mod palw_state_carriage_rpc_v1;
+
+pub mod palw_attempt_material_v3;

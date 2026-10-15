@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "kind": "matching-native-v2-full-snapshot-codec-controls",
+  "sources": {
+    "scripts/drills/rfc06_snapshot_declarations_dump.rs": "252ab9f16ad3b7d2a9c8a0d15eaede60ac8c2303731e51e1adf67503fa4fc5cb",
+    "scripts/drills/rfc06_snapshot_full_wire_probe.rs": "25e787a6bba4e859edd2642bc09880840ca9be67b95a497dfa3df8285884c830",
+    "protocol/flows/src/palw_snapshot_chunks.rs": "e1d1e36073681fa7dc5a561bc44b93c64be0fa03776075988ab389699f9ee137"
+  },
+  "libraries": {
+    "tokio": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libtokio-b4c731d7060f093d.rlib",
+      "sha256": "d2bbfea82de33738d762e3ba272f44dbac895fec2be14992e8c19e40aa0e57a5"
+    },
+    "borsh": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libborsh-c57124d88bb5020f.rlib",
+      "sha256": "5532aa752af250630dc85869e908413d1ecf7975ad76a0d28e15fd50f6bf8fd7"
+    },
+    "kaspa_hashes": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_hashes-e1a05137bc7adce0.rlib",
+      "sha256": "4a908cae8ae473b6d40f26a2709e22584a5818ce0c9a6c045c32fc08a91d2af0"
+    },
+    "kaspa_consensus_core": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_consensus_core-28b14660ab28fb31.rlib",
+      "sha256": "c8bcd2fceca2ad3137ffd668e147e59a9135f670a40ded1c0ceb208090f50e3a"
+    },
+    "flate2": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libflate2-54c5a52fe316cd04.rlib",
+      "sha256": "4c13d4286ef1d3637837e75a97b7772e30a7a6b00fa2eed59d50d5ad05f4d778"
+    },
+    "uuid": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libuuid-0bdf4fe8a9a7b280.rlib",
+      "sha256": "6b172fc807858d3cd686f3c5f58af1363fb2d0d33d3e07b16589af12195a0585"
+    }
+  },
+  "producerBinary": "/tmp/misaka-rfc67812-runtime/consensus-native-final-v2",
+  "producerBinarySha256": "ca15d9c20db82117198b60b00aa907ee27d69dbe437780aa43e2683b90a8d499",
+  "controlBinarySha256": "72bd81e1bb5cb7d7fd66f1497b0111e1c5c9aa664911a3b107d5db477ebe3a70",
+  "fullProbeBinarySha256": "8d8d81e82807daf408f104d89441f8b2771df567f0ef82bb73b07f80d898c770",
+  "dumperBinarySha256": "be862248154d618aac5ff20ee26a75db82e910828f83fd3a3884416d64ea4b54",
+  "compileExit": 0,
+  "testsPassed": 20,
+  "testsFailed": 0,
+  "testsIgnored": 0,
+  "testBodySeconds": 2.41,
+  "maximumResidentSetSizeBytes": 41189376,
+  "producerContainsGenesisIndexPatch": false,
+  "newToolsInFinalTestV2BuildInputs": false,
+  "actualNativeDumpMeasured": false,
+  "realP2pAccepted": false
+}

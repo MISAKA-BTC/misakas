@@ -210,7 +210,10 @@ pub(super) fn ensure_route_header(builder: &mut TransitionBuilder<'_>, ctx: &Pal
 
 /// **The ledger the block's kernel moves run on**: the route's header created on first use (under the interim policy the processor
 /// resolved), the ledger rebuilt from the rows, the block begun.
-pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<KernelLedgerV1, PalwStateV2Error> {
+pub(super) fn load_ledger(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwStateV2Error> {
     load_ledger_with_projection_v9(builder, ctx, None, true)
 }
 
@@ -241,7 +244,7 @@ fn load_ledger_with_projection_v9(
     ctx: &PalwBlockContextV2,
     paid: Option<NativeProjectionPrepaidV9>,
     may_spend_reserve: bool,
-) -> Result<KernelLedgerV1, PalwStateV2Error> {
+) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwStateV2Error> {
     ensure_route_header(builder, ctx)?;
     let scope_table = crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1;
     let stored_scope = builder
@@ -344,7 +347,11 @@ fn load_ledger_with_projection_v9(
             .map_err(refused)?;
         ledger.set_beacon_source_fee_inputs(inputs).map_err(refused)?;
     }
+    builder.state.kernel_route.as_ref().expect("created").apply_paid_claim_consumer_inputs_v2(&mut ledger).map_err(refused)?;
     ledger.consumer_final_reward_caps = builder.kernel_final_reward_caps_v1(&ledger);
+    // RFC08 R8-ECON (`palw_minimum_price_v1`): every governed job's contracted claim carries its signed funded minimum as a payout
+    // floor (a Final the escrow cannot fund at it is neutral, never paid less). Empty below the fence.
+    ledger.consumer_minimum_payouts_v1 = super::palw_econ_contracts_fold_v1::minimum_price_payout_floors_v1(builder, ctx, &ledger);
     // RFC-0015 admission is no longer a list read here: a class is admitted to the mode at its own registration, and only while
     // DERIVED-eligible (`opv_gate_v1`), so the ledger's admitted rows are exactly the classes that were eligible when they registered.
     Ok(ledger)
@@ -521,7 +528,13 @@ pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1
         builder.write_kernel_header(PalwKernelRouteHeaderV1 { scalars, ..header });
     }
     let kernel = builder.state.kernel_route.as_mut().expect("a route that flushes exists");
-    let cached = ledger.clone().as_rebuilt_from_v1(&kernel.rows);
+    // Cache refill is optional. Reserve its separate deep payload before cloning;
+    // failure evicts the cache and leaves the committed rows authoritative.
+    let Ok(cached) = crate::palw_native_resource_v1::ledger_cache_clone_v1(ledger) else {
+        kernel.ledger_cache.clear();
+        return;
+    };
+    let cached = cached.as_rebuilt_from_v1(&kernel.rows);
     if kernel.rows.keys().any(|(t, _)| *t == TABLE_FLAT_CONFORMANCE_CLASSES_V9) {
         kernel.ledger_cache.set_native_projection(cached);
     } else {
@@ -924,6 +937,16 @@ pub(super) fn apply_kernel_route_object_v1(
     bytes: &[u8],
     signer: &PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
+    apply_kernel_route_object_authorized_v2(builder, ctx, bytes, signer, false)
+}
+
+pub(super) fn apply_kernel_route_object_authorized_v2(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    bytes: &[u8],
+    signer: &PalwBondKeyV2,
+    paid_enrollment: bool,
+) -> Result<(), PalwStateV2Error> {
     if builder.extras.kernel_route.is_none() {
         return Err(refused("palw_probabilistic_constraints_v1 is not in force at this block"));
     }
@@ -948,13 +971,55 @@ pub(super) fn apply_kernel_route_object_v1(
         return Ok(());
     }
     match misaka_palw_kernel::route::borrowed_native_action_v1(bytes) {
-        Ok(Some(a)) if a.tag==misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 && matches!(a.action,41..=44)=>return super::palw_native_initial_fold_v31::apply(builder,ctx,signer,a.action,a.body),
-        Ok(Some(a)) if a.tag==misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11=>return super::palw_flat_execution_fold_v11::apply(builder,ctx,signer,a.action,a.body),
-        Ok(Some(a)) if a.tag==misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14=>return super::palw_flat_stage_fold_v14::apply(builder,ctx,signer,a.action,a.body),
-        Err(_)=>return Ok(()),
-        _=>{}
+        Ok(Some(a)) if a.tag == misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 && matches!(a.action, 41..=44) => {
+            return super::palw_native_initial_fold_v31::apply(builder, ctx, signer, a.action, a.body);
+        }
+        Ok(Some(a)) if a.tag == misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 => {
+            return super::palw_flat_execution_fold_v11::apply(builder, ctx, signer, a.action, a.body);
+        }
+        Ok(Some(a)) if a.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 => {
+            return super::palw_flat_stage_fold_v14::apply(builder, ctx, signer, a.action, a.body);
+        }
+        Err(_) => return Ok(()),
+        _ => {}
     }
     let Ok(object) = KernelRouteObjectV1::decode(bytes) else { return Ok(()) };
+    if !paid_enrollment {
+        let job = match &object {
+            KernelRouteObjectV1::CommitClaim { claim, .. } | KernelRouteObjectV1::CommitSegmentedClaim { claim, .. } => {
+                Some(claim.job_id)
+            }
+            KernelRouteObjectV1::CommitPipelineClaim { claim, .. } => Some(claim.job_id),
+            KernelRouteObjectV1::CommitClaimSalted { commit, .. } => Some(match commit {
+                misaka_palw_kernel::route::SaltedCommitV1::Claim { claim, .. }
+                | misaka_palw_kernel::route::SaltedCommitV1::Segmented { claim, .. } => claim.job_id,
+                misaka_palw_kernel::route::SaltedCommitV1::Pipeline { claim, .. } => claim.job_id,
+                misaka_palw_kernel::route::SaltedCommitV1::Spec { claim } => claim.job_id(),
+            }),
+            KernelRouteObjectV1::Spec { object: misaka_palw_kernel::spec::SpecObjectV1::CommitClaim { claim } } => {
+                Some(claim.job_id())
+            }
+            _ => None,
+        };
+        if let (Some(job), Some(route)) = (job, builder.state.kernel_route.as_ref()) {
+            for ((table, _), bytes) in route.aux.range(
+                (crate::palw_claim_challenge_v2::PAID_CLAIM_JOBS_V2, Vec::new())
+                    ..(crate::palw_claim_challenge_v2::PAID_CLAIM_JOBS_V2 + 1, Vec::new()),
+            ) {
+                if *table == crate::palw_claim_challenge_v2::PAID_CLAIM_JOBS_V2
+                    && borsh::from_slice::<misaka_palw_kernel::claim_paid_v2::PaidClaimJobV2>(bytes)
+                        .map_err(|e| refused(e.to_string()))?
+                        .base_job
+                        == job
+                {
+                    return Err(refused("an enrolled prospective V2 job requires its producer's signed V2 reveal"));
+                }
+            }
+        }
+    }
+    // RFC08 R8-ECON (`palw_minimum_price_v1`): a job a minimum-price contract names admits only its contracted worker's claim, inside
+    // the contract's acceptance deadline and still funded. Below the fence nothing is read.
+    super::palw_econ_contracts_fold_v1::minimum_price_commit_gate_v1(builder, ctx, &object)?;
     // RFC-0002 P0 (RFC02-T): past `palw_model_refutation_seal_v1` a candidate refutation is only a sealed reveal (inner 37); the frozen
     // unsealed refutations pay whoever is included first — an equivalent re-encoding of an honest finder's proof — so they are refused
     // by name before any court, fee or row.
@@ -977,6 +1042,32 @@ pub(super) fn apply_kernel_route_object_v1(
         }
         KernelRouteObjectV1::StageExecutionV14 { action, body } => {
             return super::palw_flat_stage_fold_v14::apply(builder, ctx, signer, *action, body);
+        }
+        KernelRouteObjectV1::AuthorizePanelLifetimeV2 { authorization } => {
+            return super::palw_panel_lifetime_fold_v2::authorize(builder, ctx, signer, authorization);
+        }
+        KernelRouteObjectV1::PaidClaimV2 { object } => {
+            return super::palw_claim_challenge_fold_v2::apply_paid_claim_v2(builder, ctx, signer, object);
+        }
+        KernelRouteObjectV1::EnrollPanelConsumerLifetimeV2 { terms } => {
+            return super::palw_panel_lifetime_fold_v2::enroll(builder, ctx, signer, terms);
+        }
+        // RFC07/RFC08 signed economic contracts (inner 67–69): consumer-owned, each past its own dormant fence.
+        KernelRouteObjectV1::AttestModelVerificationV1 { attestation } => {
+            return super::palw_econ_contracts_fold_v1::attest_model_verification_v1(builder, ctx, signer, attestation);
+        }
+        KernelRouteObjectV1::ConsentHorizonExtensionV1 { terms } => {
+            return super::palw_econ_contracts_fold_v1::consent_horizon_extension_v1(builder, ctx, signer, terms);
+        }
+        KernelRouteObjectV1::SignMinimumPriceContractV1 { contract } => {
+            return super::palw_econ_contracts_fold_v1::sign_minimum_price_contract_v1(builder, ctx, signer, contract);
+        }
+        // N3 (inner 73, round 3): a BootstrapExact seal or reveal, past `palw_beacon_bootstrap_v1`.
+        KernelRouteObjectV1::BootstrapExactV1 { contribution } => {
+            return super::palw_beacon_bootstrap_fold_v1::apply_bootstrap_exact_v1(builder, ctx, signer, contribution);
+        }
+        KernelRouteObjectV1::FundPanelBeaconSourceFeeV2 { epoch, terms } => {
+            return super::palw_panel_source_fee_fold_v2::fund_panel_sources_v2(builder, ctx, signer, *epoch, terms);
         }
         KernelRouteObjectV1::SealModelRefutationV4 { slot, seal } => {
             return super::palw_model_refutation_seal_fold_v4::seal(builder, ctx, signer, *slot, seal);
@@ -1309,6 +1400,12 @@ pub(super) fn apply_kernel_route_object_v1(
             let reward = ledger.job_escrows.get(&row.job_id).map_or(0, |escrow| escrow.amount);
             match builder.plan_kernel_claim_budget_v1(ctx, *signer, Hash64::from_bytes(row.class_binding_id), reward) {
                 Ok(Some(plan)) => {
+                    builder.state.require_kernel_monetary_material_scope_v1(
+                        builder.params,
+                        Hash64::from_bytes(*claim),
+                        row,
+                        ctx.daa_score,
+                    )?;
                     builder.commit_bond_budget_v1(ctx, super::palw_bond_budget_fold_v1::kernel_budget_claim_id_v1(claim), plan)?;
                     builder.hold_kernel_income_v1(ctx, Hash64::from_bytes(*claim), row.liability_until.unwrap_or(ctx.daa_score))?;
                 }
@@ -1431,6 +1528,10 @@ pub(super) fn apply_kernel_receipt_v1(
     receipt: &PalwConstraintReceiptV1,
     signature: &[u8],
 ) -> Result<(), PalwStateV2Error> {
+    if builder.state.kernel_route.as_ref().is_some_and(|r| r.paid_claim_for_base_v2(&receipt.claim_id).ok().flatten().is_some()) {
+        return Err(refused("a V1 receipt cannot cover a paid V2 verification identity"));
+    }
+
     if builder.extras.kernel_route.is_none() {
         return Err(refused("palw_probabilistic_constraints_v1 is not in force at this block"));
     }
@@ -1505,6 +1606,12 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // DA16: the provider court's deadlines (a provider that did not answer is charged), expired leases, lapses — before the kernel's tick,
     // so a claim whose last provider was charged this block is void before its demands are swept.
     super::palw_provider_court_fold_v1::tick_provider_court_v1(builder, ctx)?;
+    super::palw_claim_challenge_fold_v2::refresh_pending_paid_source_locks_v2(builder, ctx)?;
+    // RFC08 R8-ECON / R8-WINDOW (round 3): stale consents and expired, unused or settled contracts retire, whatever the ledger is
+    // doing (a no-op below both fences).
+    super::palw_econ_contracts_fold_v1::sweep_econ_contracts_v1(builder, ctx)?;
+    // N3 (round 3): due BootstrapExact rounds are judged (facts derived here, never asserted) and old judgements retire.
+    super::palw_beacon_bootstrap_fold_v1::sweep_beacon_bootstrap_v1(builder, ctx)?;
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     // Anything the tick moves: claims and demands, and (G14-R4) bonded seals that expire, escrows that return and served demands'
     // bonds — a route whose only rows are a seal or an escrow must still forfeit or return it on time.
@@ -1602,6 +1709,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     flush(builder, &ledger, &before);
     // DA16: a demand on a transferred claim that nobody answered is its providers' failure — charge them (never the producer).
     super::palw_provider_court_fold_v1::settle_provider_liable_defaults_v1(builder, ctx, &events)?;
+    super::palw_claim_challenge_fold_v2::tick_paid_claim_final_projection_v2(builder, ctx)?;
     Ok(())
 }
 

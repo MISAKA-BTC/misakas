@@ -92,25 +92,34 @@ pub fn palw_profile_max_tile_len_v1(profile: &PalwShapeProfileV3) -> u32 {
     profile.pre_nodes.iter().chain(&profile.attn_nodes).chain(&profile.post_nodes).map(|n| n.tile_len).max().unwrap_or(0)
 }
 
-/// Bytes the dense sink holds for `leaf_count` leaves at `tile_len`: the leaf-hash vector (64 B a
-/// leaf, allocated whole) and one tile a leaf — `4 × tile_len` of values plus the tile object (its
-/// coordinate, its count, its version and the vector's own header: 56 B).
+/// Structural host upper bound for the dense sink: its original hash vector,
+/// root-fold current/next vectors, growing tile Vec (including minimum capacity
+/// four), growing byte payloads and the serialized material Vec that is built
+/// while the capture is still held. These are native allocation terms, never
+/// consensus fees or an allocator/RSS measurement.
 pub fn palw_dense_capture_bytes_v1(leaf_count: u64, tile_len: u32) -> u64 {
-    const TILE_OBJECT_BYTES: u64 = 56;
-    leaf_count.saturating_mul(64u64.saturating_add(4u64.saturating_mul(u64::from(tile_len))).saturating_add(TILE_OBJECT_BYTES))
+    let tile_object = std::mem::size_of::<(u64, crate::palw_step_leg::PalwStepTileLeafV1)>() as u64;
+    let per_leaf = 64u64
+        .saturating_add(128)
+        .saturating_add(128) // bounded encoded index/tile header plus its Vec growth
+        .saturating_add(16u64.saturating_mul(u64::from(tile_len)))
+        .saturating_add(tile_object.saturating_mul(4));
+    leaf_count.saturating_mul(per_leaf)
 }
 
-/// Bytes the fold holds: the retained vector (one hash per `2^level` leaves, at up to twice its
-/// length because it grows by doubling past its `2^20` initial capacity) and the block in flight.
+/// Retained capacity, its root fold's temporary vectors and the in-flight
+/// block's fold, the served tree clone and its serialized material while the
+/// original capture remains live. Eight retained and four block hashes per
+/// logical entry cover those simultaneous Vec capacities and root-fold levels.
 pub fn palw_fold_capture_bytes_v1(leaf_count: u64, retain_level: u32) -> u64 {
     let block = 1u64 << retain_level.min(40);
     let retained = leaf_count.div_ceil(block.max(1));
-    retained.saturating_mul(64).saturating_mul(2).saturating_add(block.saturating_mul(64))
+    retained.saturating_mul(64).saturating_mul(8).saturating_add(block.saturating_mul(256))
 }
 
-/// Bytes an S1 replay keeps for the `leaves` it walks: `(u64, Hash64)` a leaf.
+/// Growing `(u64, Hash64)` replay Vec, including its minimum capacity four.
 pub fn palw_replay_hashes_bytes_v1(leaves: u64) -> u64 {
-    leaves.saturating_mul(72)
+    leaves.saturating_mul(std::mem::size_of::<(u64, crate::Hash64)>() as u64).saturating_mul(4)
 }
 
 /// **The whole-capture cap a node applies when its operator stated no budget: the RC court's
@@ -182,11 +191,17 @@ pub enum PalwRuntimeProfileV1 {
     /// window per recurrence layer. Named so the hybrid's figures say which representation they
     /// price; an `i16` twin of it would be the same lossless repack the dense tier made.
     Q36KvI32,
+    /// BASE0's own i8 codes, not a quantization of an A16 class.
+    Base0KvI8,
 }
 
 impl PalwRuntimeProfileV1 {
     pub const ALL: [PalwRuntimeProfileV1; 3] =
         [PalwRuntimeProfileV1::A16KvI32, PalwRuntimeProfileV1::A16KvI16, PalwRuntimeProfileV1::Q36KvI32];
+
+    /// All model representations; `ALL` preserves the legacy A16 engine's
+    /// selectable representations and does not authorize i8 A16 quantization.
+    pub const ALL_MODELS: [PalwRuntimeProfileV1; 4] = [Self::A16KvI32, Self::A16KvI16, Self::Q36KvI32, Self::Base0KvI8];
 
     /// The name a log, a telemetry field or an operator's flag spells.
     pub const fn name(self) -> &'static str {
@@ -194,11 +209,12 @@ impl PalwRuntimeProfileV1 {
             PalwRuntimeProfileV1::A16KvI32 => "A16-KV-i32",
             PalwRuntimeProfileV1::A16KvI16 => "A16-KV-i16",
             PalwRuntimeProfileV1::Q36KvI32 => "Q36-KV-i32",
+            PalwRuntimeProfileV1::Base0KvI8 => "BASE0-KV-i8",
         }
     }
 
     pub fn parse(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|p| p.name() == name)
+        Self::ALL_MODELS.into_iter().find(|p| p.name() == name)
     }
 
     /// Bytes one cached code occupies under this representation.
@@ -206,6 +222,7 @@ impl PalwRuntimeProfileV1 {
         match self {
             PalwRuntimeProfileV1::A16KvI32 | PalwRuntimeProfileV1::Q36KvI32 => 4,
             PalwRuntimeProfileV1::A16KvI16 => 2,
+            PalwRuntimeProfileV1::Base0KvI8 => 1,
         }
     }
 }
@@ -349,9 +366,10 @@ pub fn palw_recurrence_layers_v1(profile: &PalwShapeProfileV3) -> u64 {
 
 /// **Bytes of the recurrence state a hybrid holds, for the whole job** — flat in the context: one
 /// `k × v` state per head per recurrence layer and the convolution's `kernel` most recent rows
-/// over the concatenated q/k/v channels, `i32` each. The channel width is priced at `3 × heads ×
-/// k` (the q and k projections at the v-head count, an over-statement where the k heads are fewer
-/// — the safe direction, and a few hundred KB a layer either way). Zero for a dense graph.
+/// over the concatenated q/k/v channels, `i32` each. The channel width is priced at `2 × heads ×
+/// k + heads × v` (q and k at the v-head count, conservative where k heads are
+/// fewer). The v width is independent of k; assuming three k widths undercounts
+/// a legal graph with wider value heads. Zero for a dense graph.
 pub fn palw_gdn_state_bytes_v1(profile: &PalwShapeProfileV3) -> u64 {
     let layers = palw_recurrence_layers_v1(profile);
     if layers == 0 {
@@ -360,7 +378,8 @@ pub fn palw_gdn_state_bytes_v1(profile: &PalwShapeProfileV3) -> u64 {
     let heads = u64::from(profile.gdn_heads);
     let (k, v) = (u64::from(profile.gdn_head_k_dim), u64::from(profile.gdn_head_v_dim));
     let state = heads.saturating_mul(k).saturating_mul(v);
-    let conv = u64::from(profile.gdn_conv_kernel).saturating_mul(3).saturating_mul(heads).saturating_mul(k);
+    let channels = heads.saturating_mul(k.saturating_mul(2).saturating_add(v));
+    let conv = u64::from(profile.gdn_conv_kernel).saturating_mul(channels);
     layers.saturating_mul(state.saturating_add(conv)).saturating_mul(4)
 }
 
@@ -476,6 +495,18 @@ pub fn palw_role_leaves_v1(
     }
 }
 
+/// Decode logits/output retention and material serialization while a run is
+/// held: original and served clone, plus the serialized Vec's growth. The job's
+/// dynamic network identity and native headers are counted separately from KV.
+pub fn palw_output_material_bytes_v1(profile: &PalwShapeProfileV3, job: &PalwJobContextV2) -> u64 {
+    let calls = u64::from(job.exact_decode_tokens);
+    let logits = calls.saturating_mul(u64::from(profile.vocab_size)).saturating_mul(4).saturating_mul(4);
+    let headers = calls.saturating_mul(std::mem::size_of::<Vec<i32>>() as u64).saturating_mul(4);
+    let ids = calls.saturating_mul(4).saturating_mul(4);
+    let context = (std::mem::size_of::<PalwJobContextV2>() as u64).saturating_add(job.network_id.len() as u64).saturating_mul(4);
+    logits.saturating_add(headers).saturating_add(ids).saturating_add(context)
+}
+
 /// **The resource profile of `role` on `job` under `runtime`** — the derivation, whole.
 /// `leaf_count` is the job's step-leaf count: the dense sink's vector is sized by it, the fold's
 /// retained set derives from it, and a partial seat's segment is cut over it.
@@ -488,6 +519,9 @@ pub fn palw_resource_profile_v1(
     limits: PalwRuntimeLimitsV1,
     capture: PalwCaptureRetentionV1,
 ) -> Option<PalwResourceProfileV1> {
+    if matches!(capture, PalwCaptureRetentionV1::Fold { retain_level } if retain_level > 40) {
+        return None; // no clamped level may masquerade as an actual capture bound
+    }
     let attention_layers = palw_attention_layers_v1(profile);
     let kv_dim = u64::from(profile.attn_kv_heads).saturating_mul(u64::from(profile.attn_head_dim));
     let heads = u64::from(profile.attn_heads);
@@ -538,7 +572,8 @@ pub fn palw_resource_profile_v1(
     };
     let trace_scratch_bytes = u64::from(limits.prefill_run_positions.max(1))
         .saturating_mul(palw_committed_trace_bytes_v1(profile, end_rows))
-        .saturating_mul(PALW_PREFILL_RUN_COPIES_V1);
+        .saturating_mul(PALW_PREFILL_RUN_COPIES_V1)
+        .saturating_add(palw_output_material_bytes_v1(profile, job));
     Some(PalwResourceProfileV1 {
         runtime,
         role,
@@ -691,7 +726,10 @@ mod tests {
         assert_eq!(i32_producer.retained_checkpoint_bytes, 0, "a held row's per-position cadence retains no chunk");
         assert!(palw_profile_has_fused_site_v1(&profile), "the 2M row is a fused graph");
         assert_eq!(i32_producer.attention_scratch_bytes, 12 * 2 * 12 * rows * 4, "twelve threads of two history-long rows");
-        assert_eq!(i32_producer.trace_scratch_bytes, 64 * 3 * palw_committed_trace_bytes_v1(&profile, rows));
+        assert_eq!(
+            i32_producer.trace_scratch_bytes,
+            64 * 3 * palw_committed_trace_bytes_v1(&profile, rows) + palw_output_material_bytes_v1(&profile, &job)
+        );
 
         let i16_producer =
             derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI16, PalwResourceRoleV1::Producer).expect("derives");
@@ -875,6 +913,31 @@ mod tests {
         assert_eq!(p.end_rows, 15);
         assert_eq!(p.kv_resident_bytes, 15 * 28 * 2 * 256 * 4);
         assert!(p.kv_resident_bytes < 1 << 20);
+    }
+
+    #[test]
+    fn recurrence_convolution_prices_independent_value_width_and_invalid_fold_is_unknown() {
+        use crate::palw_qwen36_profile::{QWEN36_35B_A3B, qwen36_profile_v7};
+        let mut profile = qwen36_profile_v7(QWEN36_35B_A3B).unwrap();
+        profile.gdn_head_k_dim = 64;
+        profile.gdn_head_v_dim = 192;
+        let heads = u64::from(profile.gdn_heads);
+        let layers = palw_recurrence_layers_v1(&profile);
+        let wanted = layers * (heads * 64 * 192 + u64::from(profile.gdn_conv_kernel) * heads * (2 * 64 + 192)) * 4;
+        assert_eq!(palw_gdn_state_bytes_v1(&profile), wanted);
+        let context = job(&profile, 1, 1);
+        assert!(
+            palw_resource_profile_v1(
+                &profile,
+                &context,
+                1,
+                PalwRuntimeProfileV1::Q36KvI32,
+                PalwResourceRoleV1::Producer,
+                LIMITS,
+                PalwCaptureRetentionV1::Fold { retain_level: 41 }
+            )
+            .is_none()
+        );
     }
 
     /// **The held hybrid row, priced** — the dense tier's twin, found on ibm 2026-09-23 08:07Z:

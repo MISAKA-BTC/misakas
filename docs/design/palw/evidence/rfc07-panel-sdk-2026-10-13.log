@@ -1,0 +1,22 @@
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/math)
+   Compiling misaka-palw-tir-artifact v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/tir/artifact)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/core)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling kaspa-wasm-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/wasm/core)
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/sdk)
+   Compiling misaka-palw-host-security v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/security)
+   Compiling misaka-palw-tir-ref2 v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/testing/reference/palw-tir-ref2)
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/pq/validator-core)
+   Compiling misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/base0)
+   Compiling misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/tir/lower)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/tir/sketch)
+    Finished `test` profile [unoptimized] target(s) in 5m 05s
+     Running unittests src/lib.rs (/tmp/misaka-rfc67812-node-target/debug/deps/misaka_palw_sdk-59f3709d21fde06e)
+
+running 2 tests
+test panel_source_fee_v2::tests::rooted_panel_permit_backing_and_full_snapshot_are_required_by_fresh_reader ... ok
+test panel_source_fee_v2::tests::sponsor_builder_derives_the_exact_native_clock_and_refuses_unfunded_or_late_terms ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 139 filtered out; finished in 0.02s
+

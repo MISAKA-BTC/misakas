@@ -24,10 +24,26 @@ import threading
 import time
 import urllib.request
 from misaka_wrpc_json import WsRpc
+from rfc12_owned_resources import OwnedResourceSampler, ResourceLimitExceeded
 
 
 class Blocked(RuntimeError):
     pass
+
+
+def read_process_limits(path):
+    limits = json.loads(Path(path).read_bytes())
+    fields = {'schemaVersion', 'kind', 'maximumOwnedProcessRssKiB', 'maximumOwnedDatabaseLogicalBytes',
+        'maximumProbeMs', 'samplePeriodMs', 'maximumFixtureOutputBytes'}
+    if set(limits) != fields or type(limits['schemaVersion']) is not int or limits['schemaVersion'] != 1 \
+            or limits['kind'] != 'rfc12-real-process-observation-bounds':
+        raise ValueError('real-process limits require their exact version-1 observation schema')
+    for field in fields - {'schemaVersion', 'kind'}:
+        if type(limits[field]) is not int or limits[field] <= 0:
+            raise ValueError(field + ' must be a positive integer fixed before launch')
+    if not 100 <= limits['samplePeriodMs'] <= 5000:
+        raise ValueError('samplePeriodMs must be between 100 and 5000')
+    return limits
 
 
 def normalized(value):
@@ -379,13 +395,96 @@ class Drill:
             self.kill(role)
 
 
+class MeasuredDrill(Drill):
+    """Finite real-process run with observed bounds fixed before the first child.
+
+    RSS sampling and logical file bytes are observations, not OS hard quotas.
+    Fixture commands remain actual owned children; their output is never imported
+    as an authoritative node state, work count or successful settlement verdict.
+    """
+    def __init__(self, plan, root, limits):
+        super().__init__(plan, root)
+        if type(plan.get('workflow_timeout_s')) is not int or plan['workflow_timeout_s'] <= 0:
+            raise ValueError('workflow_timeout_s must be a positive integer fixed before execution')
+        self.deadline = time.monotonic() + plan['workflow_timeout_s']
+        self.limits = limits.copy()
+        self.sampler = OwnedResourceSampler({}, limits)
+        self.command_count, self.command_observations = 0, []
+        self.command_outputs = []
+        self.node_launches = {role: [] for role in plan['nodes']}
+
+    def remaining(self):
+        self.sampler.check()
+        left = self.deadline - time.monotonic()
+        if left <= 0:
+            raise Blocked('the total predeclared real-process workflow deadline expired')
+        return left
+
+    def start(self, role):
+        self.remaining()
+        super().start(role)
+        self.sampler.register(role, self.processes[role])
+        label = '%s_LAUNCH_%d' % (role, len(self.node_launches[role]) + 1)
+        self.node_launches[role].append(label)
+        self.sampler.register(label, self.processes[role])
+        self.sampler.sample_now()
+        self.sampler.check()
+
+    def wait(self, predicate, label):
+        def bounded():
+            self.remaining()
+            value = predicate()
+            self.remaining()
+            return value
+        return super().wait(bounded, label)
+
+    def command(self, argv, timeout=None):
+        allowed = min(timeout or self.plan.get('command_timeout_s', 60), self.remaining())
+        self.command_count += 1
+        name = 'FIXTURE_%06d' % self.command_count
+        began = time.monotonic()
+        # Persist even large stdout directly; a fixture cannot fill the driver's
+        # heap with output or hide its failed stderr behind a later exception.
+        stdout_path, stderr_path = self.root / (name + '.stdout'), self.root / (name + '.stderr')
+        with stdout_path.open('w') as stdout, stderr_path.open('w') as stderr:
+            child = subprocess.Popen(argv, stdout=stdout, stderr=stderr, text=True)
+            self.sampler.register(name, child)
+            self.command_outputs.extend((stdout_path, stderr_path))
+            try:
+                while child.poll() is None:
+                    if time.monotonic() - began >= allowed:
+                        raise Blocked(name + ' exceeded its finite command/workflow deadline')
+                    self.remaining()
+                    self.check_fixture_output()
+                    time.sleep(.1)
+                self.sampler.check()
+                self.check_fixture_output()
+                if child.returncode:
+                    raise Blocked('%s exited %s; inspect preserved stderr' % (name, child.returncode))
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait(timeout=20)
+                self.command_observations.append(dict(label=name, returnCode=child.returncode,
+                    elapsedSeconds=time.monotonic() - began, stdout=str(stdout_path), stderr=str(stderr_path)))
+        # The fixture hook does not consume command output as a node authority.
+        return ''
+
+    def check_fixture_output(self):
+        if sum(path.stat().st_size for path in self.command_outputs) > self.limits['maximumFixtureOutputBytes']:
+            raise ResourceLimitExceeded('fixture output exceeded its predeclared logical byte bound')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--plan', required=True)
     parser.add_argument('--out', required=True)
+    parser.add_argument('--resource-limits', required=True,
+        help='predeclared sampled process/physical-file observation limits; never an OS quota')
     args = parser.parse_args()
     raw = Path(args.plan).read_bytes()
     plan = json.loads(raw)
+    limits = read_process_limits(args.resource_limits)
     assert set(plan['nodes']) == {'A', 'B', 'JOIN'}
     endpoints = []
     for node in plan['nodes'].values():
@@ -397,9 +496,10 @@ def main():
     assert plan['minimum_isolated_daa_span'] >= 5400, 'a short fork cannot satisfy the actual maturity/long-range drill'
     assert plan['minimum_claims'] >= 100_000 and int(plan['minimum_work']) > 0 and plan['minimum_depth'] > 0
     root = Path(tempfile.mkdtemp(prefix='misaka-rfc12-p2p-'))
-    drill = Drill(plan, root)
+    drill = MeasuredDrill(plan, root, limits)
     result = {'planSha256': hashlib.sha256(raw).hexdigest(), 'artifactDirectory': str(root),
-              'status': 'FAIL', 'fullRfc12SecurityApproval': False}
+              'status': 'FAIL', 'fullRfc12SecurityApproval': False, 'resourceLimits': limits, 'resourceLimitsMet': False,
+              'workflowTimeoutSeconds': plan['workflow_timeout_s']}
     try:
         drill.run()
         result['status'] = 'SCENARIOS_PASS'
@@ -408,11 +508,41 @@ def main():
     except Exception as error:
         result['reason'] = repr(error)
     finally:
-        drill.close()
+        try:
+            drill.close()
+        finally:
+            result['sampledOwnedResources'] = drill.sampler.stop()
         result.update(observations=drill.observations, probeLatenciesMs=drill.latencies)
+        result['fixtureCommands'] = drill.command_observations
+        result['requiredNodeLaunchSamples'] = drill.node_launches
+        result['ownedDatabaseLogicalBytes'] = {role: sum(file.stat().st_size
+            for file in (root / role).rglob('*') if file.is_file()) for role in ('A', 'B', 'JOIN')}
+        if result['status'] == 'SCENARIOS_PASS':
+            try:
+                check_process_limits(limits, result)
+                result['resourceLimitsMet'] = True
+            except ResourceLimitExceeded as error:
+                result.update(status='FAIL', reason=str(error))
         Path(args.out).write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps({key: value for key, value in result.items() if key != 'observations'}, indent=2))
     return 0 if result['status'] == 'SCENARIOS_PASS' else 1
+
+
+def check_process_limits(limits, result):
+    sampled = result['sampledOwnedResources']
+    if sampled['violation'] or sampled['observationFailures']:
+        raise ResourceLimitExceeded(sampled['violation'] or 'owned process sampling failed')
+    for role in ('A', 'B', 'JOIN'):
+        if sampled['ownedChildren'].get(role, {}).get('samples', 0) <= 0:
+            raise ResourceLimitExceeded('no owned RSS observation for ' + role)
+        launches = result['requiredNodeLaunchSamples'].get(role, [])
+        if not launches or any(sampled['ownedChildren'].get(label, {}).get('samples', 0) <= 0 for label in launches):
+            raise ResourceLimitExceeded('an owned node launch/reopen has no RSS observation for ' + role)
+    if not result['probeLatenciesMs'] or max(result['probeLatenciesMs']) > limits['maximumProbeMs']:
+        raise ResourceLimitExceeded('public RPC latency exceeded the fixed bound')
+    if set(result['ownedDatabaseLogicalBytes']) != {'A', 'B', 'JOIN'} or any(
+            value > limits['maximumOwnedDatabaseLogicalBytes'] for value in result['ownedDatabaseLogicalBytes'].values()):
+        raise ResourceLimitExceeded('owned file measurements are incomplete or exceed the fixed bound')
 
 
 if __name__ == '__main__':

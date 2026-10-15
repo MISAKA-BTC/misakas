@@ -2,6 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::Hash64;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// Historical experimental carriage marker; current loaders explicitly refuse it.
 pub const WIRE_VERSION_V1: u16 = 1;
@@ -222,6 +223,56 @@ pub struct ClaimSealV1 {
     pub beacon_epoch: u64,
 }
 
+/// Frozen population storage shared by transactional state copies and journals.
+/// The Borsh and JSON representations are exactly the historical candidate Vec.
+/// Mutation detaches the vector, so a changed fork cannot rewrite its parent.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PanelCandidatesV1(Arc<Vec<SeatCandidateV1>>);
+
+impl From<Vec<SeatCandidateV1>> for PanelCandidatesV1 {
+    fn from(rows: Vec<SeatCandidateV1>) -> Self {
+        Self(Arc::new(rows))
+    }
+}
+impl std::ops::Deref for PanelCandidatesV1 {
+    type Target = Vec<SeatCandidateV1>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for PanelCandidatesV1 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.0)
+    }
+}
+impl<'a> IntoIterator for &'a PanelCandidatesV1 {
+    type Item = &'a SeatCandidateV1;
+    type IntoIter = std::slice::Iter<'a, SeatCandidateV1>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+impl BorshSerialize for PanelCandidatesV1 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        BorshSerialize::serialize(self.0.as_ref(), writer)
+    }
+}
+impl BorshDeserialize for PanelCandidatesV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        Vec::<SeatCandidateV1>::deserialize_reader(reader).map(Self::from)
+    }
+}
+impl Serialize for PanelCandidatesV1 {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Serialize::serialize(self.0.as_ref(), serializer)
+    }
+}
+impl<'de> Deserialize<'de> for PanelCandidatesV1 {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        <Vec<SeatCandidateV1> as Deserialize>::deserialize(deserializer).map(Self::from)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PanelSnapshotV1 {
@@ -234,7 +285,7 @@ pub struct PanelSnapshotV1 {
     pub excluded_bond: BondIdV1,
     pub excluded_operator: Hash64,
     pub excluded_key: Hash64,
-    pub candidates: Vec<SeatCandidateV1>,
+    pub candidates: PanelCandidatesV1,
     /// **The strata populations** of a stratified claim, frozen with everything else at the pre-entropy checkpoint (the root covers
     /// them): one bitmap per candidate, aligned with `candidates` — bit `s` set iff the candidate may hold a class seat of stratum
     /// `s`, and the CLASS role set iff some bit is. Empty for a flat claim.
@@ -315,6 +366,12 @@ pub trait ConsensusViewV1 {
     /// The host's receipt clock for a currently bound claim; `None` (the default) is the engine's own
     /// `bound_daa + receipt_window_daa`.
     fn receipt_clock(&self, _claim: &Hash64) -> Option<ReceiptClockV1> {
+        None
+    }
+    /// Prospective native consent, authenticated by the host's rooted rows.
+    /// Absolute service expiry includes receipt retries and pauses. A paused
+    /// court continues; expiry never decides its outcome or erases earned cash.
+    fn consumer_service_limits(&self, _claim: &Hash64) -> Option<(u64, u32)> {
         None
     }
     /// **The population of a stratified claim** ([`PanelStrataV1`]), at the same checkpoint and under the same rules as
@@ -506,8 +563,29 @@ pub enum PanelErrorV1 {
 }
 
 pub(crate) fn digest<T: BorshSerialize>(domain: &str, value: &T) -> Hash64 {
-    let bytes = borsh::to_vec(value).expect("in-memory consensus serialization");
-    digest_bytes(domain, &bytes)
+    // Frozen populations may contain 400k candidates. Hash canonical Borsh
+    // directly instead of constructing another full encoded state buffer.
+    struct HashWriter<'a>(&'a mut blake2b_simd::State);
+    impl std::io::Write for HashWriter<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut h = blake2b_simd::Params::new().hash_length(64).to_state();
+    h.update(&(domain.len() as u32).to_le_bytes());
+    h.update(domain.as_bytes());
+    {
+        // Borsh emits many small fields. A fixed 64 KiB buffer amortizes hash
+        // updates without growing with the population or encoded state size.
+        let mut writer = std::io::BufWriter::with_capacity(64 << 10, HashWriter(&mut h));
+        BorshSerialize::serialize(value, &mut writer).expect("in-memory consensus serialization");
+        std::io::Write::flush(&mut writer).expect("in-memory consensus hash flush");
+    }
+    Hash64::from_bytes(h.finalize().as_bytes().try_into().expect("BLAKE2b-512"))
 }
 
 pub(crate) fn digest_bytes(domain: &str, bytes: &[u8]) -> Hash64 {

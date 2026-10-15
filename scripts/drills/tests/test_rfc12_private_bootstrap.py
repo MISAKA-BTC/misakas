@@ -18,6 +18,104 @@ SPEC.loader.exec_module(driver)
 
 
 class DriverControls(unittest.TestCase):
+    def test_paid_profile_cannot_reuse_original_bootstrap_control_receipts(self):
+        base = dict(kind='rfc12-private-complete-bootstrap-file-fixture', skipProofOfWork=False, releaseApproval=False)
+        driver.validate_factory_manifest(base, 'complete-v1')
+        with self.assertRaisesRegex(ValueError, 'own authenticated bootstrap'):
+            driver.validate_factory_manifest(base, 'paid-v3')
+        paid = dict(base, schema='misaka.private-paid-bootstrap.v3', baseArtifactsAreControlReceipts=False,
+            paidClaimIncluded=False, nativeFinalObserved=False)
+        driver.validate_factory_manifest(paid, 'paid-v3')
+        for field in ('baseArtifactsAreControlReceipts', 'paidClaimIncluded', 'nativeFinalObserved', 'skipProofOfWork'):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                driver.validate_factory_manifest(dict(paid, **{field: True}), 'paid-v3')
+
+    def test_later_complete_refusal_preserves_inclusion_and_actual_prior_fees_without_pass(self):
+        class FakeDrill:
+            plan = dict(nodes={'A': dict(borsh='owned:1')})
+
+            def start(self, role):
+                pass
+
+            def join_link(self, role, target):
+                pass
+
+            def wait(self, predicate, label):
+                return predicate()
+
+        included = {role: dict(sink='observed', onboarding=dict(found=True)) for role in ('A', 'B', 'JOIN')}
+        preview = dict(dry_run=True, total_fee_sompi=12)
+        sent = dict(ok=True, submitted=True, carriers=[dict(fee_sompi=5), dict(fee_sompi=7)])
+        result = dict(status='FAIL', nativeRegistrationBindingMeasured=False, coldReopenMeasured=False,
+            completeCheckMeasured=False)
+
+        def later_refusal(_drill, _sampler, _cli, _salt, _fixture, _bootstrap, budget, *args):
+            driver.complete.cap_and_charge(dict(carriers=[dict(fee_sompi=13)]), budget)
+            raise driver.transport.Blocked('complete verdict refused after a funded carrier')
+
+        bootstrap = dict(envelopeValidFromDaa=0, envelopeValidUntilDaa=0,
+            fundingKeyFile='owned.key', signedRegistration='registration', artifactBinding='binding')
+        with patch.object(driver, 'ready', return_value=True), \
+                patch.object(driver, 'rpc_read', return_value=dict(virtualDaaScore=0)), \
+                patch.object(driver, 'command', side_effect=[preview, sent]), \
+                patch.object(driver, 'agreement', return_value=included), \
+                patch.object(driver, 'activate_complete_clock', return_value=dict(consensusClockInjected=False)), \
+                patch.object(driver.complete, 'run', side_effect=later_refusal):
+            with self.assertRaisesRegex(driver.transport.Blocked, 'complete verdict refused'):
+                driver.run(FakeDrill(), None, Path('/owned/cli'), '74' * 32, Path('/owned/fixture'),
+                    bootstrap, 100, True, 100, 1,
+                    lambda evidence, cold: driver.record_observed_progress(result, evidence, cold))
+        self.assertEqual(result['status'], 'FAIL')
+        self.assertTrue(result['nativeRegistrationBindingMeasured'])
+        self.assertFalse(result['coldReopenMeasured'])
+        self.assertFalse(result['completeCheckMeasured'])
+        self.assertEqual(result['evidence']['included'], included)
+        self.assertEqual(result['evidence']['carrierBudget']['spent'], 25)
+        self.assertIsNone(result['evidence']['completeCheck'])
+
+    def test_complete_clock_restarts_observer_and_preserves_producer_fee_rollover(self):
+        events = []
+
+        class FakeDrill:
+            plan = dict(nodes={role: dict(argv=['--owned=' + role] + (['--palw-produce'] if role == 'A' else []))
+                for role in ('A', 'B', 'JOIN')})
+
+            def kill(self, role):
+                events.append(('kill', role))
+
+            def start(self, role):
+                events.append(('start', role))
+
+            def join_link(self, role, target):
+                events.append(('link', role, target))
+
+            def wait(self, predicate, label):
+                return predicate()
+
+        drill = FakeDrill()
+        before = list(drill.plan['nodes']['A']['argv'])
+        observed = {role: dict(sink='known-owned', virtualDaaScore=0) for role in ('A', 'B', 'JOIN')}
+        bootstrap = dict(seats=[dict(payAddress='unused'), dict(payAddress='owned-heartbeat-pay')])
+        with patch.object(driver, 'ready', return_value=True), patch.object(driver, 'agreement', return_value=observed):
+            result = driver.activate_complete_clock(drill, bootstrap)
+        self.assertEqual(events, [('kill', 'B'), ('start', 'B'), ('link', 'B', 'A')])
+        self.assertEqual(drill.plan['nodes']['A']['argv'], before)
+        self.assertEqual(drill.plan['nodes']['B']['argv'][-1], '--palw-heartbeat-miner-address=owned-heartbeat-pay')
+        self.assertFalse(result['consensusClockInjected'])
+        self.assertEqual(result['agreement'], observed)
+        with self.assertRaisesRegex(AssertionError, 'registration phase'):
+            driver.activate_complete_clock(drill, bootstrap)
+        self.assertEqual(len(events), 3, 'duplicate activation must start/kill no additional child')
+
+    def test_registration_window_refuses_actual_daa_zero_before_carrier_spend(self):
+        original = dict(envelopeValidFromDaa=1, envelopeValidUntilDaa=32)
+        with self.assertRaisesRegex(driver.transport.Blocked, 'excludes actual DAA 0'):
+            driver.registration_window(original, 0)
+        corrected = dict(envelopeValidFromDaa=0, envelopeValidUntilDaa=0)
+        self.assertEqual(driver.registration_window(corrected, 0)['observedDaa'], 0)
+        with self.assertRaisesRegex(driver.transport.Blocked, 'excludes actual DAA 1'):
+            driver.registration_window(corrected, 1)
+
     def test_complete_cost_cap_and_moving_private_pins_refuse_before_submission(self):
         bootstrap = dict(bindingReservationSompi='100', completeCheckFeeSompi='1',
             commitment='fixture.borsh', statementRoot='root', commitmentScope='scope.json')

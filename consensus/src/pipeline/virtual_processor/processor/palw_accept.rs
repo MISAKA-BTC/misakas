@@ -2399,3 +2399,187 @@ impl VirtualStateProcessor {
         Ok(((*header).clone(), fact))
     }
 }
+impl VirtualStateProcessor {
+    /// Op 242: one bounded page of the complete kernel auxiliary table of the state the pinned
+    /// header commits (its selected parent's post-state, exactly as `palw_state_proof_v1_impl`).
+    /// A page is never authority by itself: the client hashes every row across all pages into the
+    /// committed aux root before any monetary contract or absence is believed.
+    pub(crate) fn palw_monetary_aux_page_v1_impl(
+        &self,
+        block: BlockHash,
+        row: u64,
+        offset: u64,
+        limit: usize,
+    ) -> Result<kaspa_consensus_core::palw_monetary_material_rpc_v1::PalwMonetaryAuxPageV1, String> {
+        use kaspa_consensus_core::{palw_fork_choice_commitment_v1::PalwForkChoiceOpeningV1, palw_monetary_material_rpc_v1::*};
+        if !(1024..=PALW_MONETARY_RPC_MAX_PAGE_BYTES_V1).contains(&limit) {
+            return Err("monetary page byte limit outside 1024..1048576".into());
+        }
+        if self.palw_state_params_v2.is_none() {
+            return Err("this network has no PALW V2 state".into());
+        }
+        let (import_before, stable_before) = self.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_before || import_before.active.is_some() {
+            return Err("monetary proof import is incomplete".into());
+        }
+        let header = self.headers_store.get_header(block).map_err(|e| e.to_string())?;
+        kaspa_consensus_core::palw_state_proof_v1::state_root_of_pinned_header_v1(&header, block).map_err(|e| e.to_string())?;
+        let sink_daa = self.virtual_stores.read().state.get().map(|v| v.daa_score).unwrap_or(0);
+        if header.daa_score.saturating_add(PALW_STATE_PROOF_MAX_LAG_DAA) < sink_daa {
+            return Err("monetary proof checkpoint is too old; pin a newer block".into());
+        }
+        let parent = self.ghostdag_store.get_selected_parent(block).map_err(|e| e.to_string())?;
+        let parent_header = self.headers_store.get_header(parent).map_err(|e| e.to_string())?;
+        let (_at, state) =
+            self.palw_v2_state_at(parent).ok_or_else(|| format!("monetary proof parent state {parent} is unavailable"))?;
+        if self.palw_committed_root_v1(&state) != header.palw_state_root {
+            return Err("monetary proof reconstructed state disagrees with pinned header".into());
+        }
+        let (preimage, kernel_route_offset) = state.state_root_preimage_located_v1();
+        let kernel_route_offset =
+            kernel_route_offset.ok_or("authenticated monetary RPC needs the kernel auxiliary commitment")? as u64;
+        let fork_choice = if state.state_root() != header.palw_state_root { PalwForkChoiceOpeningV1::of(&state) } else { None };
+        let (aux_root, total_rows, next_row, next_offset, fragments) = monetary_aux_fragments_v1(&state, row, offset, limit)?;
+        let (import_after, stable_after) = self.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_after || import_after.active.is_some() || import_before.epoch != import_after.epoch {
+            return Err("monetary proof changed import generation".into());
+        }
+        Ok(PalwMonetaryAuxPageV1 {
+            header: (*header).clone(),
+            parent_header: (*parent_header).clone(),
+            state_preimage: preimage,
+            fork_choice,
+            kernel_route_offset,
+            aux_root,
+            total_rows,
+            start_row: row,
+            start_offset: offset,
+            next_row,
+            next_offset,
+            fragments,
+        })
+    }
+
+    /// Op 243: one bounded byte page of the canonical `PalwStateCarriageV2` encoding of the state the pinned header commits — its
+    /// selected parent's post-state, exactly as `palw_state_proof_v1_impl` and `palw_monetary_aux_page_v1_impl` serve it, refused
+    /// unless it reconstructs to the header's committed root, refused while a pruning import is incomplete or changes generation
+    /// under the read. Read-only. A page is never authority: the client assembles every page, decodes, restores through
+    /// `into_state_v3` and compares the restored state's committed root with the pinned header's
+    /// (`palw_state_carriage_rpc_v1::PalwStateCarriageAssemblerV1`). Each page re-encodes the carriage (no cache: the lag bound
+    /// and the 512 MiB cap bound the work).
+    pub(crate) fn palw_state_carriage_page_v1_impl(
+        &self,
+        block: BlockHash,
+        offset: u64,
+        limit: usize,
+    ) -> Result<kaspa_consensus_core::palw_state_carriage_rpc_v1::PalwStateCarriagePageV1, String> {
+        use kaspa_consensus_core::{palw_fork_choice_commitment_v1::PalwForkChoiceOpeningV1, palw_state_carriage_rpc_v1::*};
+        if !(PALW_CARRIAGE_RPC_MIN_PAGE_BYTES_V1..=PALW_CARRIAGE_RPC_MAX_PAGE_BYTES_V1).contains(&limit) {
+            return Err("carriage page byte limit outside 1024..1048576".into());
+        }
+        if self.palw_state_params_v2.is_none() {
+            return Err("this network has no PALW V2 state".into());
+        }
+        let (import_before, stable_before) = self.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_before || import_before.active.is_some() {
+            return Err("carriage import is incomplete".into());
+        }
+        let header = self.headers_store.get_header(block).map_err(|e| e.to_string())?;
+        kaspa_consensus_core::palw_state_proof_v1::state_root_of_pinned_header_v1(&header, block).map_err(|e| e.to_string())?;
+        let sink_daa = self.virtual_stores.read().state.get().map(|v| v.daa_score).unwrap_or(0);
+        if header.daa_score.saturating_add(PALW_STATE_PROOF_MAX_LAG_DAA) < sink_daa {
+            return Err("carriage checkpoint is too old; pin a newer block".into());
+        }
+        let parent = self.ghostdag_store.get_selected_parent(block).map_err(|e| e.to_string())?;
+        let parent_header = self.headers_store.get_header(parent).map_err(|e| e.to_string())?;
+        let (_at, state) = self.palw_v2_state_at(parent).ok_or_else(|| format!("carriage parent state {parent} is unavailable"))?;
+        if self.palw_committed_root_v1(&state) != header.palw_state_root {
+            return Err("carriage reconstructed state disagrees with pinned header".into());
+        }
+        let state_root = state.state_root();
+        let fork_choice = if state_root != header.palw_state_root { PalwForkChoiceOpeningV1::of(&state) } else { None };
+        let carriage = palw_state_carriage_bytes_v1(&state)?;
+        let bytes = palw_state_carriage_window_v1(&carriage, offset, limit)?;
+        let (import_after, stable_after) = self.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_after || import_after.active.is_some() || import_before.epoch != import_after.epoch {
+            return Err("carriage changed import generation".into());
+        }
+        Ok(PalwStateCarriagePageV1 {
+            header: (*header).clone(),
+            parent_header: (*parent_header).clone(),
+            fork_choice,
+            state_root,
+            total_bytes: carriage.len() as u64,
+            offset,
+            bytes,
+        })
+    }
+
+    /// The exact prior native session/roster a PAV3 provider signs Ready against. The view is the
+    /// pre-entropy state of `checkpoint` (a direct parent of the candidate header): a same-block
+    /// enrollment or replacement never authorizes the capture it carries. The returned authority
+    /// lets a provider derive the complete typed bundle; the producer's final admission re-checks
+    /// every actual signature against the same prior view.
+    pub(crate) fn palw_native_material_provider_authority_v3_impl(
+        &self,
+        checkpoint: BlockHash,
+        header: &Header,
+        ready: &kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3,
+    ) -> Result<kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3, String> {
+        use kaspa_consensus_core::palw_attempt_material_v3::*;
+        let (before, stable) = self.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || before.active.is_some() || !header.parents_by_level.first().is_some_and(|p| p.contains(&checkpoint)) {
+            return Err("provider capture checkpoint/import not admissible".into());
+        }
+        let params = self.palw_state_params_v2.as_ref().ok_or("provider native policy absent")?;
+        if params.monetary_material_at_v1(header.daa_score).is_none() {
+            return Err("provider native monetary fence dormant".into());
+        }
+        let state =
+            self.palw_candidate_state_v2_checked(checkpoint).map_err(|e| format!("provider pre-entropy state unavailable: {e:?}"))?;
+        let a = &ready.base.attempt;
+        if !palw_native_custody_required_v3(params, &a.class_id, header.daa_score) {
+            return Err("native custody is not required here (BASE floor class exempt)".into());
+        }
+        let network = self.palw_network_domain_v2();
+        let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+        ready.base.validate_stateless_v2(network, pre_pow, header.timestamp, header.nonce).map_err(|e| e.to_string())?;
+        ready.base.validate_signature_v2(verify_ready_signature_v3).map_err(|e| e.to_string())?;
+        let producer = state
+            .bond(&kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(a.executor_bond))
+            .ok_or("provider producer bond missing")?;
+        let class = state.class(&a.class_id).ok_or("provider native class missing")?;
+        if producer.pubkey != a.executor_pubkey || producer.operator_id != a.operator_id || class.artifact_root != a.artifact_root {
+            return Err("provider exact registered executor/class mismatch".into());
+        }
+        let anchor =
+            kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(network, pre_pow, a.class_id, &a.executor_bond, header.nonce);
+        // Each provider produces ITS Ready signature from this answer; the signature check here
+        // is deliberately vacuous and the real one runs at admission with the same prior view.
+        ready.verify_prior(&state, anchor, header.daa_score, |_, _, _, _| true)?;
+        let row = state.monetary_material_row_v1(ready.ready.session).ok_or("provider session absent")?;
+        let provider_keys = ready
+            .ready
+            .providers
+            .iter()
+            .map(|p| state.bond(p).map(|b| (*p, b.pubkey.clone())).ok_or("provider roster key missing"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let network_ladder = self
+            .palw_court_params_v2
+            .as_ref()
+            .map(|court| self.palw_court_step_ladder_at(header.daa_score, court))
+            .ok_or("provider actual native ladder absent")?;
+        let material = kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialNativeAuthorityV1 {
+            execution_root: a.execution_root,
+            class_id: a.class_id,
+            artifact_root: a.artifact_root,
+            ladder: state.class_step_ladder_v1(&a.class_id, network_ladder),
+            form: self.palw_prompt_ids_form_at(header.daa_score),
+        };
+        let (after, stable) = self.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || after.active.is_some() || before.epoch != after.epoch {
+            return Err("provider capture import generation changed".into());
+        }
+        Ok(PalwNativeMaterialProviderAuthorityV3 { row, material, provider_keys })
+    }
+}

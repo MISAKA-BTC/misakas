@@ -50,6 +50,8 @@ mod palw_fp;
 mod palw_gen;
 /// ADR-0088 Decision 12: `palw line-… / version-… / proposal-… / evaluate` — the model registry.
 mod palw_line;
+/// RFC-0008 PAV3 (2026-10-15 round 3): `palw material-session draft|sign|seal` — a prospective native session enrollment.
+mod palw_material_session;
 mod palw_model;
 mod palw_model_ops;
 mod palw_panel;
@@ -807,6 +809,33 @@ enum SourceCmd {
         #[arg(long, value_name = "ROOT")]
         aux_root: String,
     },
+    /// Write the complete op-211 kernel route snapshot `(header, rows)` that offline `palw-class claim-v2 --snapshot`
+    /// consumes, after reconstructing it against the caller's pinned roots. The file is not chain authority by itself.
+    Snapshot {
+        /// Ledger root from the caller's authenticated chain view.
+        #[arg(long, value_name = "ROOT")]
+        ledger_root: String,
+        /// Auxiliary root from the same authenticated chain view.
+        #[arg(long, value_name = "ROOT")]
+        aux_root: String,
+        /// New file (refused if it exists).
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
+    /// Write the canonical PALW state carriage the pinned block's header commits (op 243; the selected parent's post-state) — the
+    /// `--carriage` file offline `palw-class panel-lifetime-v2` restores — and print its state root for `--state-root`. The
+    /// assembled carriage must restore to exactly the pinned header's committed root; any mismatch writes nothing.
+    Carriage {
+        /// The pinned block, from the caller's authenticated selected chain.
+        #[arg(long, value_name = "BLOCK_HASH")]
+        block: String,
+        /// Optional ADR-0043 state root the caller already holds; refused unless the carriage restores to it.
+        #[arg(long, value_name = "ROOT")]
+        state_root: Option<String>,
+        /// New file (refused if it exists).
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1395,6 +1424,11 @@ enum PalwCmd {
     /// assignment, retries and terminal reason, and the engine's overview. Read-only (`getPalwPanelV3Status`, op 220: a node
     /// built before it drops the connection). On today's chain no beacon source is approved: `BEACON_UNAVAILABLE`.
     PanelV3(palw_panel_v3::PanelV3Args),
+    /// **RFC-0008 PAV3: a prospective native material session** (`MonetaryMaterialEnrolledV1` with `native_session`) —
+    /// draft it from a JSON spec, sign it as the sponsor and each provider (offline), seal the borsh object. Nothing is
+    /// submitted: file it with `misaka palw submit-object --object <out> --yes`.
+    #[command(subcommand)]
+    MaterialSession(palw_material_session::MaterialSessionCmd),
     /// Submit a free-prompt commitment built by `misaka-palw-fp-rail` (dry-run unless --yes).
     FpSubmit {
         /// The rail's `*.commitment-tx.borsh`.
@@ -3315,6 +3349,12 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Model(ModelCmd::Source(SourceCmd::Inspect { context, ledger_root, aux_root })) => {
             Box::pin(async move { operator::model_source::inspect(ctx, &context, &ledger_root, &aux_root).await })
         }
+        Command::Model(ModelCmd::Source(SourceCmd::Snapshot { ledger_root, aux_root, out })) => {
+            Box::pin(async move { operator::model_source::snapshot(ctx, &ledger_root, &aux_root, &out).await })
+        }
+        Command::Model(ModelCmd::Source(SourceCmd::Carriage { block, state_root, out })) => {
+            Box::pin(async move { operator::model_source::carriage(ctx, &block, state_root.as_deref(), &out).await })
+        }
         Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => Box::pin(async move {
             match profile(&args) {
                 Ok(p) => operator::market::market_open(ctx, p, &model, line, seed, yes, no_wait).await,
@@ -3420,6 +3460,7 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Palw(PalwCmd::Panel(PalwPanelCmd::Readiness(PalwPanelReadinessCmd::Prove { class, bond }))) => {
             Box::pin(async move { palw_panel::readiness_prove(ctx, &class, &bond).await })
         }
+        Command::Palw(PalwCmd::MaterialSession(cmd)) => Box::pin(async move { palw_material_session::run(cmd) }),
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => Box::pin(async move {
             palw_fp::submit(ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }),

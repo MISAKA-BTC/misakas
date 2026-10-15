@@ -1,0 +1,3 @@
+thread 'main' (16618349) panicked at consensus/src/pipeline/virtual_processor/processor.rs:5461:14:
+the bundle's genesis registrations must apply — `validate_palw_v2` ran them at construction: FirstClassMustBeTheBase { class_id: ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01, base: f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

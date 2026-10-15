@@ -11,6 +11,8 @@ Status: Revised Draft, 2026-10-10後続改定 — immutable identity, model acqu
 
 Original proposal: 2026-10-03. Stable filename retained for existing links.
 
+Spec closure 2026-10-15: R8-* requirement groups are closed or parameterized in text by [仕様閉鎖 — 2026-10-15](#spec-closure-2026-10-15). This is a document revision only; no implementation PASS, activation or fence height is implied.
+
 > **設計の優先規則:** heartbeat・BASE-0を弱めず、現行mainのliveness構造を正とする。claim-backed sliceは既存ROUND/EXEC laneへ統合する。[ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)の公開prosecution要件も維持する。文書の改定は実装・activationを意味しない。
 
 ## 0. 要旨と旧提案の置換
@@ -129,7 +131,7 @@ EXEC fork-choice weight = 0
 EXEC DAA contribution = 0
 ```
 
-rootとsliceに同じworkのrewardを二重払いしない。既存のclaim allocation・per-DAA発行上限・escrow資金制約を維持し、slice blockごとのcoinbase subsidyを追加しない。slice数を増やしてもclaim allocationは増えない。Tx feeは既存の取引会計に属し、work rewardとは別である。
+rootとsliceに同じworkのrewardを二重払いしない。（2026-10-15補足: 全positive legのroot native Final前無支払、bound kernel feeのhold、受理前Q/R予約、fee-only Roundの`ExecutionCap`、v1 market feeの`R_max`外の扱いは末尾の仕様閉鎖節R8-BUDGETを規範とする。）既存のclaim allocation・per-DAA発行上限・escrow資金制約を維持し、slice blockごとのcoinbase subsidyを追加しない。slice数を増やしてもclaim allocationは増えない。Tx feeは既存の取引会計に属し、work rewardとは別である。
 
 sliceの受理・positive verification・complete・Final・報酬解放を分ける。Final済みcanonical workが将来の既存scheduleへ入る場合も、**root全体の一つのaggregate Final creditから一回だけ**導出し、既存のeligibility / quota / capを維持する。rootと各sliceを別々のFinalとしてsnapshotに投入しない。EXEC_TXが消費したpermitを再生成しない。
 
@@ -208,7 +210,7 @@ activation前に、少なくとも以下を独立に実証する。
 5. **public prosecution:** slice/boundaryの各不正、DA default、false Validを有界materialから区別し、公開bondで裁定できる。未解決disputeのままFinalにしない。
 6. **資源・移行:** pending depth/work/bytes、open roots、closure walk、retention、queuesをboundedにし、activation境界、旧node、IBD、pruning、同時到着順で同じ結果を示す。
 
-旧v0のalgo-11、slice-clock、floor排除の試験はこの受入を証明しない。未解決gateは実装未完了として列挙し、placeholderでactivationを許可しない。供給/検証能力は実測で判断する。
+旧v0のalgo-11、slice-clock、floor排除の試験はこの受入を証明しない。2026-10-15の仕様閉鎖節が各gateに対応する規範規則と名前付きパラメータ（USER DECISION REQUIRED）を追加した。未解決gateは実装未完了として列挙し、placeholderでactivationを許可しない。供給/検証能力は実測で判断する。
 
 ## 8. 観測と段階導入
 
@@ -248,3 +250,105 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 **状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §3A.5。
 
 ADR-0177 2026-10-12改定のモデル配分（Miner＋Panelの適格claim bondと1.3〜2倍の係数、提案）をブロック生成機会へ接続する場合、coinbase配分だけの変更として済ませず、ブロック機会の帰属・上限・移行を本RFCで明示する。物理blockの総頻度、DAA/難易度、fork choice、Final weightを同時に変更するとは決定しておらず、特にFinal weightへ係数を自動乗算しない。必要な変更は別のversioned review・試験・activationを要する。
+
+<a id="spec-closure-2026-10-15"></a>
+
+## 仕様閉鎖 — 2026-10-15（設計監査の要件索引 R8-* に対する規範文）
+
+**状態と読み方:** 本節は[設計監査の要件索引](../design/palw/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md#完全解消を判定する要件の索引)のR8-*群について、本RFC本文に欠けていた規範規則・未定義パラメータ・後続設計記録との矛盾を閉じる文書改定である。上位は[PRINCIPLES](../PRINCIPLES.md)とADR-0173/0176/0177/0178であり、衝突時はそれらと後続のユーザー判断を優先する。本節は実装完了・検証PASS・activationを意味しない。公開fenceは全て不在のまま、release高さを変更しない。dormant codeに入っている数値はmechanics/fixture値であり、政策承認ではない。mechanicsの成功やprivate acceptanceを独立review・経済証拠として扱わない。詳細は[EXEC統合仕様v1](../design/palw/rfc-0008-implementation-spec.md) §§12–15と各設計記録に置き、本節はその規範的要約である。
+
+「USER DECISION REQUIRED」は、値の決定にユーザー判断を要する名前付きパラメータを示す。推奨値は既存記録から根拠を示せる場合だけ記す。
+
+### R8-LANE — 排他envelope、carrier、header carriage
+
+1. §2の排他subtype規則を維持する。加えて、同じwork/claim/rootを運ぶcarrierの数、同じsliceの再送、header carriage内の追加認証byteを、consensus position、permit、fork-choice weight、DAA、retarget、乱数source、独立検査の数として数えてはならない（MUST NOT）。
+2. **PAV3 header carriage（`palw_monetary_material_v1`配下、休眠）:** 新しいnative attemptはPAV2の署名済みattemptを不変のまま内包し、事前に署名済みのmonetary-material sessionへ結び付ける。規範条件は次のとおり。
+   - 選択するsessionは、未結合で、class/artifact/executor bond/operator/consensus導出job policy/受理区間がattemptと一致し、未chargedの**異なるprovider operatorを2以上**持つものの中で、session root鍵が最小のもの（canonical oldest-key）である（MUST）。producerは別のfunded sessionを選んで追加のdrawを得てはならない。producerとconsensusは同じ選択関数を使う。
+   - Readyはsession/consent/claim/execution key/manifestと未chargedのprovider roster（鍵順）を拘束し、各providerはReady idへ署名する。providerは2以上8以下（8はcarriage上限65,536 byte内に全署名・sealを収めるための構造上限）。
+   - executorはReady id、attempt id、全provider署名をroster順に含むsealへ署名する。sealはheader段階でattempt自身の鍵によりstatelessに検証する（MUST）。これはprovider署名byteを書き換えて一つのsolveから第二のheaderを作るmalleabilityを閉じるためである。provider鍵・executor鍵が登録bondのものかはstatefulなadmissionで検査する。
+   - provider署名とsealはLayer-0 ticket tagの外にあり、価格付け・lottery entropyにならない（MUST NOT）。block identityには含まれる。re-sealでticketを得られない。
+   - fence未満では、PAV3を新しい規則で判定してbytesを拒否してはならない。旧releaseとの混在で分裂しないよう、新しいheader形式は自身のfenceまでA-2共通規則（decode不能と同じ扱い）に従う。
+3. `PalwMaterialSessionMinProviders`（名前付きパラメータ）: 一sessionに要求する異なるprovider operatorの最小数。不変条件 `2 <= min <= PALW_MATERIAL_MAX_PROVIDERS_V3 (8)`。休眠codeは構造上の下限2を実装している。**value: USER DECISION REQUIRED**（推奨: 2を下限として維持。理由: 1 providerではmaterial保持が単一点故障になり、2は実装済みの構造下限である。これ以上の値は実測したprovider不履行率から決める）。
+
+### R8-WORK — 同単位のwork、prefix/suffix scope
+
+[実装仕様 §12](../design/palw/rfc-0008-implementation-spec.md#12-work-design-correction--execution-cost-is-not-lottery-weight-2026-10-10-audit)を規範とする。
+
+1. REALの抽選込みweightとexecution costは別の量である。credited workは、登録IR、一つのwhole-job facts、絶対positionから求める10次元execution cost vectorとし、prefixと各suffixを同じ単位・同じplanから導出する（MUST）。自己申告CCU/PWU、slice数、carrier数からcreditを導出しない。
+2. class登録DAAがcost policyのsnapshotを固定する。登録後のcost table変更は既存classへ遡及しない。
+3. 宣言された`total_work`/`boundaries`は導出planと一致しなければならず、生成数は宣言costと照合する。prefix bindingでは、jobの最大長と実際の生成長の両方をREAL contextの非零exact decodeと照合する（MUST）。range input commitmentは実prompt由来とする。
+4. 内部演算はchecked arithmeticとし、node cost `< 2^54`、各次元 `< 2^120`、10次元合計 `< 2^124` を超える入力を拒否する（§12.5）。共有DAGの走査はvisited setで各構造nodeを一度だけ訪れる。
+5. 履歴の再実行（restart/replay/reorg）を新しいuseful workとして数えない。
+6. `ExecWorkReleaseResourceBounds`（名前付き）: 最悪graph、root population、256-root restartのlatency/memory上限。**value: USER DECISION REQUIRED**（release閾値。既存記録に推奨値なし）。
+
+### R8-IDENTITY — useful workの一回利用
+
+1. `job_work_id`はclass、REAL job authorization、認証済みinputだけから導出する（MUST）。cuts、output依存の初期state、verification metadata、continuation extent、root id、owner label、bondに依存させてはならない（MUST NOT）。任意のinput hashでkeyを変える経路を拒否する。
+2. 一つのauthorizationで複数rootを開けない。記録が無いことを再利用の許可と扱ってはならない（MUST NOT）。新しいauthorizationは正当な同一inputの再実行を許す。
+3. 有限authorization（§12.6）: root openingは `max(source_daa, accepted_daa) <= opening_daa < source_daa + L_auth` の間だけ許される。`L_auth`は休眠v1で100,000 DAA固定、job-use履歴は最大100,000行・1 blockあたり最大256件の期限切れ削除で、期限内の行を追い出さない。これらはv1構造profileであり、release memory/latencyや経済admission capの承認ではない。`L_auth`・履歴上限の本番値: **value: USER DECISION REQUIRED**。
+4. 元のclockはnative claim受理時に捕捉する（§12.7）。後のheader可用性や呼出側bytesで変更できない。legacy claimは明示的なcarried original-header proof（§12.8）でのみ移行する。source/acceptanceの順序を仮定しない開始条件とする。
+5. Remaining（観察、未検証）: 全eligible legacy headerのcoverage/transport可用性、実DAG/multi-process pruned replay。
+
+### R8-BUDGET — 予約、Final前無支払、実debit
+
+1. **Final前無支払:** slice leg、bound kernel fee、Panel fund、EXEC executor fund、riderを含む全てのpositive legは、root claimのnative Final前に支払ってはならない（MUST NOT）。bound kernel claimの計算Finalはreward 0とし、job escrowをconsumer所有のhold（kernel table 31）に保持する。同じjobの別producerのFinalもholdを迂回できない（§13.1）。
+2. **root Final精算:** root Finalで一つのallocationのexecutor share内から実際のfeeを支払い、同額のnative issuanceを減らし、未使用escrowをposterへ返す（MUST）。actual debit、payout、root marker、refundを同じdeltaに記録する。void/expiry（ready rootの有限expiryを含む）は全holdを無支払で閉じる。既払prefix/sliceの後付けは拒否する。
+3. **受理前予約:** accepted claim、fee、bondの書込みより前に共有Q/R claim budgetを予約する（MUST）。standalone kernel claimはQ/Rだけを予約し、BとFを与えない。round drawは各bondの残存権利から候補を作り、一つでも予約が失敗すればdraw全体を取り消す（原子的）。
+4. **fee-only Round（2026-10-11ユーザー判断）:** fee-only Roundは`B_max`に数えず、資本比例の独立`ExecutionCap`で権利割当時に制限・課金する。失敗・未実行で権利を回復させない（MUST NOT）。`ExecutionCap`の資本比率: **value: USER DECISION REQUIRED**。
+5. **market fee（2026-10-11ユーザー判断）:** v1ではmarket feeを`R_max`に含めない。ただし期待手数料収入（fee利得）は経済安全性・抑止条件の計算に含める。fee額そのものの上限を証明したとはしない。（設計監査「追加受入条件と政策判断」の「market feeとissuanceの合計を`R_max`に含め、約定前にfee最大額を予約する」という記述は、[readiness matrix](../design/palw/activation-readiness-matrix.md)に記録されたこのユーザー判断と矛盾するため、v1については本項で置き換える。）
+6. **予算window `W_budget`（ADR-0176 D4）:** 400 DAAはdrill暫定値である（2026-10-11）。条件は対象profileが`L <= W_budget`とslot上限を満たすこと。長いG14 staged経路へそのまま適用しない。RFC12のwork量`W`とは別物である。本番値: **value: USER DECISION REQUIRED**（推奨: 400 DAA、上記条件付き。理由: ユーザーがdrill用に採用した値であり、それより長い経路には別の値が必要）。
+7. **allocation freeze:** retained EXEC rootがleadを名指しした後、riderによるescrow再配分を拒否する（§15.7）。
+8. **状態（2026-10-15、lead記録）: closed-as-provisional。** R8-BUDGETの仕様は次の値を**drill暫定（ユーザー判断10-11）、本番値はcensus/実測待ち**として閉じる: 予算window `W_budget` = 400 DAA（対象profileが`L <= W_budget`とslot上限を満たす場合のみ。長いG14 staged経路には適用しない）。fee-only Roundは`B_max`の外で、資本比例の独立`ExecutionCap`に従う（比率の値は未決）。v1のmarket feeは`R_max`の外。presetは変えず、fenceは武装しない。
+
+### R8-WINDOW — 依存claimの責任・material・post-Final
+
+1. **依存担保の床:** bindingの時点で `H_exec = expiry + max(native_window_court, kernel_liability) + kernel_court_deadline + kernel_proof_grace` をchecked arithmeticで依存claim行に固定する（MUST）。計算Final、pre-Final default、root fee精算、cancelでこのhorizonを短縮してはならない（MUST NOT）。支払済み・failed・予約ゼロ・期限切れのworkの後付けを拒否する。restoreは全依存のbase floorを再導出する。
+2. **Settled後の有罪:** Settled後の依存claimのconviction/defaultは、rootのnative Final、safe weight、native evidence、未解放vesting、payout全体へ一貫して伝播する（MUST）。kernelは自身のcollateralを処罰し、伝播だけを理由に他actorを追加slashしない。`void_claim`だけで巻戻しを済ませない。
+3. **native紛争期限:** native DA/courtの延長は、依存pathの最短の署名済みhorizon内に収まらなければならない。超える延長は拒否する（§15.4）。既存termを越える延長は、新しい署名・新しい資金による明示の同意だけで行う（未実装）。
+4. **X3（2026-10-12ユーザー判断）:** claim単位の絶対期限（固定点d0＝claim受理時）を延長しない規則は新しいversioned fenceでのみ適用する。live t12の旧規則は変えない。
+5. **workerの同意:** `nonce_v2 = H(slice-job-nonce/v2; nonce_v1 || expiry || H_exec || executor_exposure_sompi || policy_root)` を署名済みkernel claimで拘束し、最初の署名済みsliceでだけ予約する（§15.6）。allow-listは同意ではない。
+6. **Panel署名lifetime（inner 66/65、aux 121、`palw_panel_lifetime_v2`）:** producerはadmission前に絶対受理区間・service/liability endpoint・retry/pause予算・最大PWU/金額へ署名し、native birthで実statementを捕捉する。retryは同じendpointを共有し、pauseはcounterをresetしない。expiryは時間内のcourtを中和せず、獲得済み現金を消さない（MUST NOT）。名前付きパラメータ`PalwPanelLifetimePolicyV2 {maximum_service_daa, maximum_pause_daa, maximum_retries, maximum_enrollments, maximum_enrollments_per_producer}`（不変条件: `0 < maximum_service_daa < u64::MAX`、`maximum_pause_daa <= maximum_service_daa`、`0 < per_producer <= maximum_enrollments`、security/economic review scopeが非零）: **value: USER DECISION REQUIRED**。休眠codeのprobe値は政策値ではない。
+7. **monetary material covenant（outer 240–242、aux 120、`palw_monetary_material_v1`）:** 全provider・sponsorが完全なroot/依存、capacity manifest、担保、自己資金fee、物理的支払window `W_mat`、payment-relative義務に署名する。liabilityまたはqueueが残る間、holdはMAXとする。materialの解放は**最後の実支払 + `W_mat`**以後であり、release blockが現在のselected chainでfinalizedであることを物理GCの条件とする（MUST）。sparse DAAやqueue滞留でproviderの新しい義務は期限切れにならない。欠落delta、古いtip、未完了import、generation変化、契約の不在はGCを許可しない。名前付きパラメータ`PalwMonetaryMaterialPolicyV1 {max_contracts, max_contracts_per_provider, max_bytes_per_contract, max_bytes_per_provider, minimum_collateral_sompi, minimum_fee_sompi, window_daa (= W_mat), response_window_daa, max_enrollment_daa, cost_report_root}`（不変条件: 全て非零、`max_contracts_per_provider <= max_contracts`、`max_bytes_per_provider >= max_bytes_per_contract`、`cost_report_root`は承認済みreview由来）: **value: USER DECISION REQUIRED**。固定前払feeを未知の支払・回復時間の安全な対価と表示しない（`PaymentAndRecoveryTimeUnknown`）。
+8. paid material: native paid契約の`material_until`は署名済みEXEC retention horizon以上でなければ、fee/R移転・root/work-use書込みの前に拒否する（§15.11）。
+9. Remaining（観察、未検証）: 実nodeのnative root Final後の公開告発と支払回復、承諾付きhorizon延長、pruned join、workerの最低対価・資本費用。
+10. **承諾付きhorizon延長（2026-10-15、休眠実装）:** `palw_horizon_extension_v1`（kernel inner 68、aux 126）。EXECに束縛されたkernel claimの生きている`liability_until`を、worker（claimのproducer）とsponsor（jobのposter）が同一termsへ各自署名して延長する。全員の署名が揃った時点で原子的に適用し、(a) 延長だけ（Final・court窓を短縮しない）、(b) claim固定のhard deadline（claim受理`d0`からの`maximum_claim_horizon_daa`、EXEC rootのnative claimにX3が適用される場合はその`dispute_hard_deadline`との`min`）を越えない、(c) 期限切れhorizonを再開しない、(d) 獲得済み現金を取消さない、(e) EXEC income holdを同じhorizonまで延長する、(f) transferred claimのproviderは自身の署名済みlease（tag 150）が新horizonを既に覆うことで同意する（leaseを書換えない）。名前付きパラメータ`PalwHorizonExtensionPolicyV1 {maximum_extension_daa, maximum_consent_window_daa, maximum_claim_horizon_daa, maximum_open_extensions, require_price_contract, review scopes}`: **value: USER DECISION REQUIRED**。
+
+### R8-SLICE — 重複・再利用・一精算
+
+1. 同一executorの支払はslice毎にfloorせず、executor毎のworkをchecked arithmeticで合計してから一度だけfloorする（MUST）。slice分割の変更で同じexecutorの支払額を変えない。
+2. 新しいleg全体は未使用残高で制限し、不足時はexecutor毎に比例配分して整数端数をroot legに残す。advanceがallocation全体を既に超える場合、新しい支払は0。
+3. 公開prefixの再利用、同じ計算Final行の再適用、claim/revealの再送で二度精算しない。rootは一度だけ精算する。
+4. Remaining: native root Final／精算とその再起動・reorgまでの閉包（validation-only）。
+
+### R8-NEUTRAL — 順序・分割の不変性
+
+1. admission、ticket、allocation、payoutの結果は、operator id、genesisでの順序、class/bondの登録順を入れ替えても変わらない（MUST）。tie-breakは内容由来のcanonical keyで行い、登録順やoperatorの身元を優先しない。
+2. 同じ資本をbond、model、claim、root/slice/riderに分割しても、Q/B/R/Fの合計、ticket、モデル配分（ADR-0177 D3の`S_m`）を増やしてはならない（MUST NOT）。
+3. 登録operator idを独立した経済主体の証明として扱わない。同じ実質所有者が複数operatorを持つ可能性を残余リスクとして明記する。
+4. per-bond ticket上限は`B_max`から導出したものを使い、別の値を定義しない。
+5. Remaining: 全callerでのswap/split試験（validation-only）。
+
+### R8-RECOVERY — 世代一致、restart/reorg/pruning
+
+1. budget（carriage tail `0xEF`、delta 190/191）とEXEC（tail `0xEE`、delta 180/181）、reward vesting（`0xF4`）、actor extension（`0xF5`）、job-use履歴（`0xF2`）は同じ世代でcarriage/復元する（MUST）。片方を捨てる統合を禁止する。
+2. native clock（F3/table 8）と明示的migration proofはrestore・undoで同じ結果を与える。rootはlocal header lookupに依存しない。
+3. material GCは、active profileがcommitted generationを読めない、sinkが読取中に変わる、pruning importが進行中・不安定・読取不能・epoch変化の場合、`Some(u64::MAX)`でholdを保持する（MUST）。読取errorを「義務なし」と解してはならない。
+4. pruned joinは、同じ認証済みauthority、source/failure/fee、material commitmentとjournalを完全に受け取らなければならない。snapshotに収めるために履歴のfailureや失敗promiseを落としてはならない（MUST NOT）。
+5. Remaining: settled native root、OS crash、migration履歴の全coverage、multi-process P2P/実pruningの証拠（validation-only）。
+
+### R8-ECON — 収支基準
+
+1. [§15.7](../design/palw/rfc-0008-implementation-spec.md#157-worker-price-criterion-and-allocation-freeze)の基準を規範とする: `p_collect_lower * M_net_min >= C_upper`。`p_collect_lower`はnative Finalとrelease時の回収可能性の**同時**事象の証明済み下限であり、独立性の根拠なしに周辺確率を掛けない（二つの周辺下限a, bからは`max(0, a+b-1)`）。資本は各時点で一度だけ数える。
+2. 費用・回収floor・funded minimumの証拠が欠ける場合の判定はUNKNOWNであり、肯定判定にしない（MUST NOT）。未実装の上限を実装済みとして比較しない。
+3. 名前付きパラメータ `capital_rate`、class別`C_upper`の測定値、`M_net_min`を拘束する最低価格契約: **value: USER DECISION REQUIRED**（既存記録に推奨値なし。最低価格契約は未実装）。
+   （2026-10-15補足: 最低価格契約は休眠fence `palw_minimum_price_v1`（kernel inner 69、aux 127）で実装した。workerとposterが同一termsへ署名し、jobのGAP-5 escrowが`M_net_min`を賄い、まだworkerが予約されていない時だけ受理する。`C_upper` = class別測定値 + `capital_rate`×資本時間面積（一度だけ）、`required_M = ⌈C_upper / p_collect_lower⌉`未満の申出、未測定class、`p_collect_lower = 0`（UNKNOWN）、u64を越える見積りを拒否する。契約が支配するjobは契約workerのclaimだけを受理期限内に受理する。名前付きパラメータ`PalwMinimumPricePolicyV1 {capital_rate_ppm, capital_rate_period_daa, p_collect_lower_ppm, class_cost_upper, maximum_contracts, maximum_contract_daa, cost_report_root, economic_review_scope}`: **value: USER DECISION REQUIRED**。精算時の最低額強制（settlement enforcement）は未実装。)
+   （2026-10-15 round 3補足（休眠source、未compile・未test）: **精算時の最低額強制**と**期限切れ契約・古い同意のsweep**を実装した。(a) `load_ledger`は署名済み契約ごとに、そのjobを保持する契約workerのclaimへ`funded_minimum_sompi`をpayout floorとしてkernel ledgerの`consumer_minimum_payouts_v1`（consumer注入、row/carriageではない、restoreで空）へ入れる。(b) kernel ledgerはFinal（およびEXECの`finish_exec_reward`）でjob escrowから`paid = min(escrow, posterの残bond, consumer cap)`を計算し、`paid < floor`なら**少なく払わず**、契約結果をneutralとする: producerへのescrow支払いは0、escrowは全額posterへ`ReleaseJobEscrow`で返す（`paid ≥ floor`なら従来どおり）。fenceより下ではfloorが空で、支払いはbyte同一。(c) kernel routeのclosing stepの先頭（そのblockのobject適用後、block DAA）で決定的sweepが走り、aux 127の契約行（とjob index）を次で退役させる: 全署名前に`accept_by_daa`を過ぎた同意＝StaleConsent、`retention_until_daa`超過＝Expired、`accept_by_daa`超過かつ契約workerのclaimなし＝Unused、job escrow消滅（支払・neutral返却・idle返却）＝Settled。aux 126の延長行は未適用で`consent_by_daa`超過（古い同意）、または適用済みで`new_liability_until_daa`超過で退役する。退役はcapacityを解放するだけで、現金・claim・horizonを動かさない。(d) restore fenceは、route ledgerのDAAで既にsweepが退役させたはずのStaleConsent/Expired契約と古い延長行が残っていれば拒否する。式: `floor(claim) = funded_minimum_sompi`（署名済み契約、`job_claims[job]`のproducer = worker）; `paid = min(amount, collateral_poster, cap)`; `paid < floor ⇒ paid := 0, ReleaseJobEscrow(amount)`。新しい値は導入しない。neutral時にworkerへ何も払わない規則の妥当性（契約上の不払い責任の所在）は**USER DECISION REQUIRED**。)
+4. Remaining: 需要・cap前後・window飽和時の実測比較（validation-only）。
+
+### ALL-MODEL
+
+§6.1とADR-0177を維持する。追加で、2026-10-12のユーザー判断に従い、モデルbytesを強制するcourt経路はRFC6の2026-10-15節に記す休眠の制限fenceで閉じ、新しいdemand unitはclaim固有のwitness/state/traceに限る。公開検証できない証拠経路（N4）は新fence以後のclaimを新規報酬・weight対象から除外する。
+
+### 本文との関係
+
+§4の会計表と§7のgateは本節で補完される。旧記述を削除せず、衝突する場合は本節と[実装仕様](../design/palw/rfc-0008-implementation-spec.md) §§12–15を優先する。設計監査の旧記述「実際に回収可能なmarket feeとissuanceの合計を`R_max`に含める」は、v1では2026-10-11のユーザー判断（market feeは`R_max`外）で置き換えられたものとして扱う。

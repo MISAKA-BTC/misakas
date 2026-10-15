@@ -156,7 +156,9 @@ pub(crate) async fn check_node_genesis(
     params: &Params,
     salt: Option<&kaspa_consensus_core::config::drill::PalwDrillSaltV1>,
 ) -> Result<(), CliError> {
-    if !kaspa_consensus_core::config::drill::palw_node_genesis_check_applies_v1(params.net, salt) {
+    if !kaspa_consensus_core::config::drill::palw_node_genesis_check_applies_v1(params.net, salt)
+        && !native_import_status_required(params)
+    {
         return Ok(());
     }
     let status = client.get_palw_node_status().await.map_err(|e| {
@@ -169,7 +171,34 @@ pub(crate) async fn check_node_genesis(
             ),
         )
     })?;
-    node_genesis_verdict(params, salt, &status)
+    node_genesis_verdict(params, salt, &status)?;
+    node_import_verdict(params, &status)
+}
+
+pub(crate) fn native_import_status_required(params: &Params) -> bool {
+    params.palw_dns_retirement.as_ref().is_some_and(|f| f.activation != kaspa_consensus_core::config::params::ForkActivation::never())
+}
+
+/// A matching genesis cannot authorize choosing funds or signing over a
+/// partially installed ledger. Legacy non-retired nodes retain their ABI.
+pub(crate) fn node_import_verdict(params: &Params, status: &kaspa_rpc_core::GetPalwNodeStatusResponse) -> Result<(), CliError> {
+    if !status.import_session_available {
+        return if native_import_status_required(params) {
+            Err(CliError::new(exit::GENERIC, "the node does not report the durable import status required for native settlement"))
+        } else {
+            Ok(())
+        };
+    }
+    if !status.pruning_import_stable
+        || !status.import_session_point.is_empty()
+        || !matches!(status.import_session_phase.as_str(), "idle" | "legacy-stable")
+    {
+        return Err(CliError::new(
+            exit::GENERIC,
+            "the node is importing its pruning snapshot; wait for completion before choosing funds or signing",
+        ));
+    }
+    Ok(())
 }
 
 /// [`check_node_genesis`]'s verdict on a status already read (the operator surface reads it once).
@@ -1310,5 +1339,54 @@ mod locked_outpoint_tests {
         assert_eq!((row["bonded"].clone(), row["reserved"].clone()), (json!(false), json!(true)));
         let ordinary = Funding { reserved: false, ..reserved };
         assert!(ordinary.selectable() && output_marks(&ordinary).is_empty());
+    }
+
+    #[test]
+    fn matching_genesis_cannot_authorize_a_partial_import_money_view() {
+        let params = Params::from(kaspa_consensus_core::network::NetworkId::with_suffix(
+            kaspa_consensus_core::network::NetworkType::Testnet,
+            12,
+        ));
+        let mut status = kaspa_rpc_core::GetPalwNodeStatusResponse {
+            genesis_hash: params.genesis.hash.to_string(),
+            import_session_available: true,
+            import_session_epoch: 9,
+            import_session_point: params.genesis.hash.to_string(),
+            import_session_phase: "utxo-stream".into(),
+            pruning_import_stable: false,
+            ..Default::default()
+        };
+        assert!(node_genesis_verdict(&params, None, &status).is_ok());
+        assert!(node_import_verdict(&params, &status).is_err());
+        status.pruning_import_stable = true;
+        assert!(node_import_verdict(&params, &status).is_err(), "a stale true flag cannot erase an active session");
+        status.import_session_point.clear();
+        status.import_session_phase = "idle".into();
+        assert!(node_import_verdict(&params, &status).is_ok());
+        status.import_session_phase = "unknown".into();
+        assert!(node_import_verdict(&params, &status).is_err(), "an unallocated phase is not stable evidence");
+    }
+
+    #[test]
+    fn legacy_import_abi_is_not_native_retirement_authority() {
+        let mut params = Params::from(kaspa_consensus_core::network::NetworkId::with_suffix(
+            kaspa_consensus_core::network::NetworkType::Testnet,
+            12,
+        ));
+        let status = kaspa_rpc_core::GetPalwNodeStatusResponse::default();
+        assert!(node_import_verdict(&params, &status).is_ok(), "dormant legacy wallet ABI is retained");
+        params.palw_dns_retirement = Some(kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1 {
+            activation: kaspa_consensus_core::config::params::ForkActivation::new(1),
+            settlement: kaspa_consensus_core::palw_native_settlement_v1::PalwSettlementPolicyV1 {
+                settled_anchor_depth: 1,
+                unique_mature_work: 1,
+                max_operator_permille: 1000,
+                max_class_permille: 1000,
+            },
+            legacy_evidence_horizon_daa: 5,
+        });
+        assert!(node_import_verdict(&params, &status).is_err(), "legacy absent fields cannot certify a retired native ledger");
+        params.palw_dns_retirement.as_mut().unwrap().activation = kaspa_consensus_core::config::params::ForkActivation::never();
+        assert!(node_import_verdict(&params, &status).is_ok());
     }
 }

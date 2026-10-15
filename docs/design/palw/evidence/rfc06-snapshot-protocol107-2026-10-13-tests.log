@@ -1,0 +1,22 @@
+
+running 16 tests
+test palw_snapshot_chunks::tests::an_interrupted_stream_resumes_on_an_identical_new_peer_without_rewind_or_new_state ... ok
+test palw_snapshot_chunks::tests::canonical_snapshot_measurement_and_legacy_encoding_match_actual_bytes ... [rfc06-snapshot-size] old_field_sum=544 canonical_bytes=762 omitted_bytes=218
+ok
+test palw_snapshot_chunks::tests::chunked_snapshot_preserves_bytes_and_authenticates_complete_stream ... ok
+test palw_snapshot_chunks::tests::compressed_hashes_bind_point_nonce_codec_length_and_resume_identity ... ok
+test palw_snapshot_chunks::tests::compressed_native_snapshot_keeps_canonical_state_and_filtering ... ok
+test palw_snapshot_chunks::tests::compressed_snapshot_resumes_on_identical_peer_and_refuses_new_nonce ... ok
+test palw_snapshot_chunks::tests::compressed_truncation_crc_bombs_declared_length_and_trailing_streams_drop_every_spill ... ok
+test palw_snapshot_chunks::tests::compression_negotiation_nonce_codec_and_separate_caps_refuse_downgrades ... ok
+test palw_snapshot_chunks::tests::global_session_lease_is_released_on_cancel_and_io_failure ... ok
+test palw_snapshot_chunks::tests::hostile_chunk_order_replay_point_root_length_eof_and_cancel_are_refused ... ok
+test palw_snapshot_chunks::tests::immutable_stream_survives_a_new_snapshot_and_refuses_forged_stream_and_trailing_data ... ok
+test palw_snapshot_chunks::tests::legacy_and_chunked_payload_caps_include_all_declaration_framing ... ok
+test palw_snapshot_chunks::tests::malicious_borsh_lengths_truncated_vectors_and_declaration_amplification_are_refused ... ok
+test palw_snapshot_chunks::tests::native_optional_tails_are_framed_and_declarations_keep_legacy_filtering_semantics ... ok
+test palw_snapshot_chunks::tests::parked_receiver_point_change_replacement_and_expiry_release_only_owned_generations ... ok
+test palw_snapshot_chunks::tests::spill_is_unlinked_while_its_handle_is_live_so_crash_cannot_orphan_it ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.46s
+

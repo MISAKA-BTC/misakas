@@ -162,13 +162,21 @@ impl PalwStateParamsV2 {
             floor_reserve_from_daa: None,
             anchor_window_from_daa: None,
             panel_v3: None,
+            panel_lifetime_v2: None,
+            palw_claim_challenge_v2: None,
             bond_budget: None,
             reporter_income_from_daa: None,
             material_income_from_daa: None,
+            monetary_material: None,
+            econ_contracts_v1: Default::default(),
             paid_consumer_lifecycle: None,
             audit_1004_from_daa: None,
             reporter_share_v2_from_daa: None,
             legacy_public_filer_from_daa: None,
+            court_model_scope_from_daa: None,
+            public_evidence_reward_from_daa: None,
+            claim_hard_deadline_v1: None,
+            cell_coverage_closure_from_daa: None,
         })
     }
 
@@ -598,6 +606,58 @@ impl PalwStateParamsV2 {
     /// **Is the legacy route's public filer in force at `daa_score`?** `false` on every shipped preset.
     pub fn legacy_public_filer_active_at(&self, daa_score: u64) -> bool {
         self.legacy_public_filer_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **The 2026-10-12 rulings' mirrors** (`crate::palw_ruling_fences_v1`) — written by
+    /// `Params::sync_palw_2026_10_12_ruling_fences_v1` and by nothing else (and by fixtures, which is how a test arms them);
+    /// `None` where a fence is not armed.
+    pub fn with_court_model_scope_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.court_model_scope_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_court_model_scope_v1`'s height, if the network arms it (the mirror; register D2).
+    pub fn court_model_scope_from_daa(&self) -> Option<u64> {
+        self.court_model_scope_from_daa
+    }
+
+    /// N4's mirror (see [`Self::with_court_model_scope_from_daa`]).
+    pub fn with_public_evidence_reward_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.public_evidence_reward_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_public_evidence_reward_v1`'s height, if the network arms it (the mirror; register N4).
+    pub fn public_evidence_reward_from_daa(&self) -> Option<u64> {
+        self.public_evidence_reward_from_daa
+    }
+
+    /// **Is N4 in force for a claim accepted at `daa_score`?** `false` on every shipped preset.
+    pub fn public_evidence_reward_active_at(&self, daa_score: u64) -> bool {
+        self.public_evidence_reward_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// X3's mirror (see [`Self::with_court_model_scope_from_daa`]).
+    pub fn with_claim_hard_deadline_v1(mut self, mirror: Option<crate::palw_ruling_fences_v1::PalwClaimHardDeadlineMirrorV1>) -> Self {
+        self.claim_hard_deadline_v1 = mirror;
+        self
+    }
+
+    /// `Params::palw_claim_hard_deadline_v1`'s height and policy, if the network arms it (the mirror; register X3).
+    pub fn claim_hard_deadline_v1(&self) -> Option<crate::palw_ruling_fences_v1::PalwClaimHardDeadlineMirrorV1> {
+        self.claim_hard_deadline_v1
+    }
+
+    /// **R6-CELL round 4's mirror** (`crate::palw_cell_coverage_closure_v1`) — written by `Params::sync_palw_cell_coverage_closure_v1`
+    /// and by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_cell_coverage_closure_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.cell_coverage_closure_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_cell_coverage_closure_v1`'s height, if the network arms it (the mirror).
+    pub fn cell_coverage_closure_from_daa(&self) -> Option<u64> {
+        self.cell_coverage_closure_from_daa
     }
 
     /// **RFC-0010: the permissionless Panel's mirror** — written by `Params::sync_palw_permissionless_panel_v1` and by nothing else
@@ -1842,5 +1902,39 @@ impl PalwStateParamsV2 {
         // denom ≥ 1000 (tolerance floor × epoch ≥ 1), so the ceiling division is ≤ 1000 and a
         // whole-table base grant is always fundable.
         (1_000_000u128.div_ceil(denom)).max(1) as u16
+    }
+}
+
+impl PalwStateParamsV2 {
+    pub fn monetary_material_from_v1(&self) -> Option<u64> {
+        self.monetary_material.as_ref().map(|m| m.from_daa)
+    }
+    pub fn with_monetary_material(mut self, mirror: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1>) -> Self {
+        self.monetary_material = mirror;
+        self
+    }
+    pub fn monetary_material_at_v1(&self, daa: u64) -> Option<&crate::palw_monetary_material_v1::PalwMonetaryMaterialPolicyV1> {
+        self.monetary_material.as_ref().filter(|m| daa >= m.from_daa && self.material_income_active_at(daa)).map(|m| &m.policy)
+    }
+}
+
+impl crate::palw_state_v2::PalwStateParamsV2 {
+    pub fn with_panel_lifetime_v2(mut self, mirror: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeMirrorV2>) -> Self {
+        self.panel_lifetime_v2 = mirror;
+        self
+    }
+    pub fn panel_lifetime_v2_at(&self, daa: u64) -> Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeMirrorV2> {
+        self.panel_lifetime_v2.filter(|m| daa >= m.from_daa)
+    }
+}
+
+impl PalwStateParamsV2 {
+    pub fn with_claim_challenge_v2(mut self, fence: Option<crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2>) -> Self {
+        self.palw_claim_challenge_v2 = fence;
+        self
+    }
+    pub fn claim_challenge_v2_at(&self, daa: u64) -> Option<crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2> {
+        self.palw_claim_challenge_v2
+            .filter(|f| f.activation != crate::config::params::ForkActivation::never() && f.activation.is_active(daa))
     }
 }

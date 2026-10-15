@@ -1,0 +1,12 @@
+
+running 1 test
+test pipeline::virtual_processor::tests::t12_permissionless_panel_e2e::complete_population::rfc06_complete_population_native_100k_four_retained_seals_and_fifth_refusal ... [rfc06-resource] generated_funded_workers_progress=10000 setup_ms=2212
+[rfc06-resource] generated_funded_workers_progress=20000 setup_ms=5605
+[rfc06-resource] generated_funded_workers_progress=30000 setup_ms=8684
+[rfc06-resource] generated_funded_workers_progress=40000 setup_ms=13184
+[rfc06-resource] generated_funded_workers_progress=50000 setup_ms=16900
+[rfc06-resource] generated_funded_workers_progress=60000 setup_ms=21939
+[rfc06-resource] generated_funded_workers_progress=70000 setup_ms=26458
+[rfc06-resource] generated_funded_workers_progress=80000 setup_ms=30569
+[rfc06-resource] generated_funded_workers_progress=90000 setup_ms=34441
+[rfc06-resource] generated_funded_workers=99993 setup_ms=45450

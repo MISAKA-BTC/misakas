@@ -42,6 +42,7 @@
 
 use std::sync::Arc;
 
+use bincode::Options;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::ForkActivation;
@@ -54,6 +55,7 @@ use kaspa_database::prelude::StoreError;
 use kaspa_database::prelude::StoreResult;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, CachedDbItem, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
+use kaspa_hashes::HasherBase;
 use kaspa_utils::mem_size::MemSizeEstimator;
 use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
@@ -84,6 +86,23 @@ pub struct PalwStateTipRecordV2 {
     pub state_root: Hash64,
     /// `PalwStateCarriageV2`, Borsh bytes verbatim.
     pub carriage_borsh: Vec<u8>,
+}
+
+/// Compact accepted-point resource inventory. Integrity protects accidental
+/// corruption; it does not authenticate a peer-supplied estimate.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PalwNativeSnapshotInventoryRecordV1 {
+    inventory: kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotInventoryV1,
+    integrity: Hash64,
+}
+fn native_inventory_integrity_v1(
+    inventory: &kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotInventoryV1,
+) -> StoreResult<Hash64> {
+    let bytes = bincode::serialize(inventory)?;
+    let mut hash = kaspa_hashes::MerkleBranchHash64::new();
+    hash.write(b"palw-native-inventory/v1");
+    hash.write(&bytes);
+    Ok(hash.finalize())
 }
 
 /// PALW V2 chain state rows: per-chain-block deltas + the materialized tip snapshot.
@@ -213,9 +232,9 @@ impl DbPalwStateV2Store {
             .with_canonical_work_daa(self.canonical_work_daa)
     }
 
-    /// If the stored schema is not this build's, delete rows and tip TOGETHER and stamp the new
-    /// version — directly, not batched, because a store that stamped without clearing (or cleared
-    /// without stamping) would vouch for rows it no longer understands.
+    /// If the stored schema is not this build's, retire derived rows, tip and
+    /// servable snapshot in one synchronous batch with the new version. A partial
+    /// clear or a schema stamp published before its commit cannot authorize reads.
     pub fn reindex_if_stale(&mut self) -> StoreResult<()> {
         let stored = match self.schema.read() {
             Ok(v) => Some(v),
@@ -225,13 +244,29 @@ impl DbPalwStateV2Store {
         if stored == Some(PALW_STATE_V2_STORE_SCHEMA_VERSION) {
             return Ok(());
         }
-        self.deltas.delete_all(DirectDbWriter::new(&self.db))?;
-        self.clear_legacy_answer_history(&mut DirectDbWriter::new(&self.db), None)?;
-        match self.tip.remove(DirectDbWriter::new(&self.db)) {
-            Ok(()) | Err(StoreError::KeyNotFound(_)) => {}
-            Err(e) => return Err(e),
-        }
-        self.schema.write(DirectDbWriter::new(&self.db), &PALW_STATE_V2_STORE_SCHEMA_VERSION)
+        let mut batch = WriteBatch::default();
+        self.deltas.delete_all(BatchDbWriter::new(&mut batch))?;
+        self.clear_legacy_answer_history(&mut BatchDbWriter::new(&mut batch), None)?;
+        let (first, last) = rocksdb::PrefixRange(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1.as_ref()).into_bounds();
+        batch.delete_range(first.expect("native inventory prefix start"), last.expect("native inventory prefix end"));
+        let mut next_tip = CachedDbItem::new(self.db.clone(), DatabaseStorePrefixes::PalwStateV2Tip.into());
+        next_tip.remove(BatchDbWriter::new(&mut batch))?;
+        let mut next_snapshot = CachedDbItem::new(self.db.clone(), DatabaseStorePrefixes::PalwPruningPointState.into());
+        next_snapshot.remove(BatchDbWriter::new(&mut batch))?;
+        let mut next_schema = CachedDbItem::new(self.db.clone(), DatabaseStorePrefixes::PalwStateV2Schema.into());
+        next_schema.write(BatchDbWriter::new(&mut batch), &PALW_STATE_V2_STORE_SCHEMA_VERSION)?;
+        let mut options = rocksdb::WriteOptions::default();
+        options.set_sync(true);
+        self.db.write_opt(batch, &options)?;
+        self.tip.invalidate_cache();
+        self.pruning_snapshot.invalidate_cache();
+        self.schema.invalidate_cache();
+        self.tip = next_tip;
+        self.pruning_snapshot = next_snapshot;
+        self.schema = next_schema;
+        *self.tip_cache.lock() = None;
+        *self.pruning_snapshot_cache.lock() = None;
+        Ok(())
     }
 
     // --- deltas ---
@@ -411,8 +446,43 @@ impl DbPalwStateV2Store {
     ) -> StoreResult<()> {
         let carriage = PalwStateCarriageV2::from_state(state);
         let carriage_borsh = borsh::to_vec(&carriage).expect("PalwStateCarriageV2 is borsh-serializable");
+        let inventory = kaspa_consensus_core::palw_native_resource_v1::inventory_accepted_state_v1(
+            state,
+            block,
+            carriage_borsh.len() as u64,
+            kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotOperationV1::Serve,
+        );
+        let record = PalwNativeSnapshotInventoryRecordV1 { integrity: native_inventory_integrity_v1(&inventory)?, inventory };
+        // Raw batch staging deliberately publishes no optimistic positive cache.
+        // A new store/clone cannot observe metadata until the DB batch commits.
+        let metadata = bincode::serialize(&record)?;
+        if metadata.len() > 2 << 20 {
+            return Err(StoreError::DataInconsistency("native allocation inventory metadata exceeds 2 MiB".into()));
+        }
+        batch.put([u8::from(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1)], metadata);
         self.pruning_snapshot
             .write(BatchDbWriter::new(batch), &PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh })
+    }
+
+    /// Read only the compact accepted-point inventory. No native carriage decode
+    /// or giant snapshot-record clone is needed for a capacity refusal.
+    pub fn native_snapshot_inventory_v1(
+        &self,
+        point: BlockHash,
+    ) -> StoreResult<Option<kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotInventoryV1>> {
+        let Some(bytes) = self.db.get([u8::from(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1)])? else { return Ok(None) };
+        if bytes.len() > 2 << 20 {
+            return Err(StoreError::DataInconsistency("native allocation inventory metadata exceeds2MiB".into()));
+        }
+        let record: PalwNativeSnapshotInventoryRecordV1 =
+            bincode::DefaultOptions::new().with_fixint_encoding().with_limit(2 << 20).reject_trailing_bytes().deserialize(&bytes)?;
+        if record.inventory.version != 1 || native_inventory_integrity_v1(&record.inventory)? != record.integrity {
+            return Err(StoreError::DataInconsistency("native allocation inventory metadata version/integrity mismatch".into()));
+        }
+        if record.inventory.point != point {
+            return Ok(None);
+        }
+        Ok(Some(record.inventory))
     }
 
     /// The raw snapshot row, or `None` when this node has not captured one yet — which is the
@@ -851,17 +921,34 @@ mod tests {
         let mut batch = WriteBatch::default();
         store.insert_delta_batch(&mut batch, c1.block, child.state_root(), &delta).unwrap();
         store.set_tip_batch(&mut batch, c1.block, &child).unwrap();
+        store.set_pruning_snapshot_batch(&mut batch, c1.block, &child).unwrap();
         db.write(batch).unwrap();
+        assert!(store.load_tip(&p).unwrap().is_some(), "prime the positive decoded cache before retirement");
+        assert!(store.pruning_snapshot_record().unwrap().is_some());
 
         // Simulate an old layout: stamp a different version, then reopen.
         let mut schema_item: CachedDbItem<u32> = CachedDbItem::new(db.clone(), DatabaseStorePrefixes::PalwStateV2Schema.into());
         schema_item.write(DirectDbWriter::new(&db), &(PALW_STATE_V2_STORE_SCHEMA_VERSION - 1)).unwrap();
 
-        let mut restarted = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
+        let mut restarted = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        assert!(restarted.load_tip(&p).unwrap().is_some());
+        assert!(restarted.load_pruning_snapshot_carriage_cached(&p, c1.block).unwrap().is_some());
+        let sharing_old_caches = restarted.clone();
         restarted.reindex_if_stale().unwrap();
         assert!(!restarted.has_delta(c1.block).unwrap(), "stale rows are discarded");
         assert!(restarted.tip_record().unwrap().is_none(), "and the tip goes with them — both or neither");
+        assert!(restarted.pruning_snapshot_record().unwrap().is_none(), "an obsolete servable snapshot cannot survive the new schema");
         assert_eq!(restarted.schema.read().unwrap(), PALW_STATE_V2_STORE_SCHEMA_VERSION);
+        assert!(restarted.tip_cache.lock().is_none());
+        assert!(restarted.pruning_snapshot_cache.lock().is_none());
+        assert!(sharing_old_caches.tip_record().unwrap().is_none());
+        assert!(sharing_old_caches.pruning_snapshot_record().unwrap().is_none());
+        assert_eq!(sharing_old_caches.schema.read().unwrap(), PALW_STATE_V2_STORE_SCHEMA_VERSION);
+        let mut cold = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
+        cold.reindex_if_stale().unwrap();
+        assert!(!cold.has_delta(c1.block).unwrap());
+        assert!(cold.tip_record().unwrap().is_none());
+        assert!(cold.pruning_snapshot_record().unwrap().is_none());
     }
 
     /// **ADR-0152 T80: a datadir written at another PALW state version is refused by name** — before
@@ -905,5 +992,37 @@ mod tests {
         db.write(batch).unwrap();
         let fresh = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
         assert_eq!(fresh.load_tip(&p).unwrap().expect("the tip loads").1, child, "this build's own version loads");
+    }
+}
+
+#[cfg(test)]
+mod native_inventory_tests_v1 {
+    use super::*;
+    use kaspa_database::prelude::*;
+    #[test]
+    fn inventory_metadata_is_atomic_fresh_point_bound_and_integrity_checked() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+        let point = BlockHash::from_u64_word(123);
+        let state = PalwChainStateV2::genesis();
+        let mut abandoned = WriteBatch::default();
+        store.set_pruning_snapshot_batch(&mut abandoned, point, &state).unwrap();
+        let fresh = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+        assert!(fresh.native_snapshot_inventory_v1(point).unwrap().is_none());
+        drop(abandoned);
+        assert!(fresh.native_snapshot_inventory_v1(point).unwrap().is_none());
+        let mut committed = WriteBatch::default();
+        store.set_pruning_snapshot_batch(&mut committed, point, &state).unwrap();
+        db.write(committed).unwrap();
+        let inventory = fresh.native_snapshot_inventory_v1(point).unwrap().unwrap();
+        assert_eq!(inventory.state_root, state.state_root());
+        assert!(fresh.native_snapshot_inventory_v1(BlockHash::from_u64_word(124)).unwrap().is_none());
+        let mut corruption = WriteBatch::default();
+        let mut record =
+            PalwNativeSnapshotInventoryRecordV1 { integrity: native_inventory_integrity_v1(&inventory).unwrap(), inventory };
+        record.inventory.canonical_bytes += 1;
+        corruption.put([u8::from(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1)], bincode::serialize(&record).unwrap());
+        db.write(corruption).unwrap();
+        assert!(fresh.native_snapshot_inventory_v1(point).is_err());
     }
 }

@@ -494,9 +494,9 @@ gates passes today, and the unified EXEC stays unarmable (`PALW_EXEC_PAYLOAD_V2_
 
 | Gate | Owner | What this branch already shows (implemented; verified only where a run is named) | Open |
 | --- | --- | --- | --- |
-| SLICE | X8R (the Lead) | a plan is a partition with no gap or overlap (`a_plan_is_a_partition_with_no_gap_and_no_overlap`); more slices pay no more (`splitting_a_range_into_more_slices_pays_no_more`); a used index, a skip, an overlap and a replay credit nothing (`a_used_index_a_skip_an_overlap_and_a_replay_credit_nothing`); the root settles once and the allocation is conserved (`the_root_settles_once_…`); one job work id per root (`JobWorkAlreadyUsed`); the prefix nonce binds the root claim id (GAP-62); one budget per work, legs net of route reward (ADR-0176 D2, §10.9); node controls for two REAL roots, cross-index claim reuse and signed reveal replay after computation Final (§15.8, measured 2026-10-11) | a second composed write of the same Final claim row, native root Final and one capped settlement, including restart/reorg; the node controls in §15.8 do not substitute for those requirements |
+| SLICE | X8R (the Lead) | a plan is a partition with no gap or overlap (`a_plan_is_a_partition_with_no_gap_and_no_overlap`); more slices pay no more (`splitting_a_range_into_more_slices_pays_no_more`); a used index, a skip, an overlap and a replay credit nothing (`a_used_index_a_skip_an_overlap_and_a_replay_credit_nothing`); the root settles once and the allocation is conserved (`the_root_settles_once_…`); one job work id per root (`JobWorkAlreadyUsed`); the prefix nonce binds the root claim id (GAP-62); one budget per work, legs net of route reward (ADR-0176 D2, §10.9); node controls for two REAL roots, cross-index claim reuse and signed reveal replay after computation Final (§15.8, measured 2026-10-11); native Final/payment/recovery controls exist (§15.10; fresh execution pending) | a second composed write of the same Final claim row; fresh native root Final, all positive funds, material retention and restart/reorg acceptance; the controls' REAL trace seam and missing pruned/P2P evidence remain |
 | RECOVERY (EXEC half) | X8R | restart / replay / IBD / reorg of the carriage and the ledgers (`t12_exec_v2_carriage`), the salted-seal and slice-verification reorg cases | the prefix stage across a reorg |
-| BUDGET, WORK, WINDOW, NEUTRALITY, SPLIT, RECOVERY (budget half) | BUDGET (`palw_bond_budget_v1`) | — (EXEC carriers mint nothing: `B` = 0 per carrier; hooks H-3 / H-3a / H-3b, §10.9) | the pre-draw cap `T_candidate <= min(T_earned, BondRemainingRoundRights)` on the shared window; fee-only Rounds under B_max or an explicit execution cap (POLICY); split invariance; role-swap neutrality |
+| BUDGET, WORK, WINDOW, NEUTRALITY, SPLIT, RECOVERY (budget half) | BUDGET (`palw_bond_budget_v1`) | EXEC carriers mint nothing (`B` = 0 per carrier); standalone kernel Q/R reservation and recipient reclassification, capped candidate draw and atomic ticket reservation are connected to the native fold (§15.10); fresh compiled core budget selection: 64 passed | composed consumer/resource/economic acceptance of the shared pre-draw cap and explicit fee-only execution cap (POLICY), split invariance and role-swap neutrality; finite signed material service across actual delayed payment; leaf/fold PASS does not close these gates |
 | ECON | ECON | — | small/large model economics before/after the cap and window saturation, with criteria fixed before the run |
 
 EXEC_TX / EXEC_SLICE weight, blue score and DAA contribution stay 0; a slice's verification and reward aggregate to its root.
@@ -1367,3 +1367,111 @@ On 2026-10-11 the final EVM-enabled node command containing this control, honest
 kernel restart/reorg controls passed: **4 passed, 0 failed, 0 ignored**, build 2m02s, runtime 38.52s. The four-RFC audit
 records the rejected deep-heartbeat fixture, intermediate compile repairs and candidate run separately. None substitutes
 for the native-root Final and settlement requirements above.
+
+### 15.10 Native Final, all positive funds and root-exact material clocks
+
+The native consumer controls in `native_final.rs` retain the module's explicit REAL trace admission and lottery seam.
+They use signed artifact readiness, the chain-derived native Panel, signed V3 receipts and the native coverage assembler
+to reach root Final. One control compares actual poster fee debits, capped kernel fees, conserved additional/native
+funds, physical DB reopen and duplicate licence application, then submits an actual public prefix proof and checks
+that each unpaid fund burns once. Another reverses that public conviction through an actual shallow selected-chain
+reorg, restores the funded state and reapplies the proof without another fee charge. These are settlement controls;
+they are not honest trained-model execution, separate-process transport, OS-crash or deep-reorg proofs.
+
+The positive-fund control reaches two actual native Finals, satisfies the private second clock, waits for real queue
+drain into coinbase, and checks every positive native, Panel, EXEC-slice and kernel-fee amount against its exact queue
+receipt. The receipt's reusable R deadline is the physical payment DAA plus the private W436, not Final or enqueue.
+The test fixes its private D1, W and counterfactual whole-escrow pricing before genesis. They are unapproved mechanics
+values; zero compute-priced toy rewards are not relabelled as positive production economics.
+
+The 2026-10-13 extension enables reporter V2/material V3 before genesis in this same positive-money control. Each
+native root and authenticated kernel dependency must retain material with `Some(MAX)` while actual payment remains
+unknown, then use the last positive-fund payment plus W, survive physical DB reopen and release at that boundary.
+Another root of the same recipients must not create a perpetual hold on the completed work. Existing exact debit,
+coinbase, licence replay and independent block replay assertions remain. Fresh execution of these native controls is
+pending; their source presence and formatting checks are not a PASS.
+
+Fresh execution of the existing post-genesis-repair core binary on 2026-10-13 passed 64 budget cases and 89 EXEC-fold
+cases (one existing ignored resource case). `plan_kernel_claim_budget_v1`, `hold_kernel_income_v1` and authenticated
+EXEC transfer share the kernel fee's Q/R maximum without creating B/F or a second fee. `bond_budget_round_draw_v1`
+caps candidates by remaining rights before drawing and atomically refuses all tickets when any reservation fails.
+Those fresh leaf/fold results establish their tested scope, not complete composed native consumer acceptance. Raw logs
+and the new consumer's exact evidence boundary are retained in [the material acceptance record](rfc08-native-material-acceptance-2026-10-13.md).
+
+Root-exact payment provenance does not supply signed provider consent beyond a finite TTL, a funded minimum worker
+price, worst-population resources or pruned public-material availability. The shortest-dependency native-session guard
+continues to refuse an overlong path; it does not authorize a new retention extension. Full WINDOW/ECON/RECOVERY gates
+remain open until their complete acceptance evidence exists. No activation height or public parameter is changed.
+
+The material GC API must not treat unavailable state as an absent obligation. The 2026-10-13 repair pins with MAX
+on read failure/missing state, readable old-tip fallback, a changing committed sink or an incomplete/changing pruning
+import generation. Complete matching snapshots retain their actual absence or physical payment plus W deadline;
+dormant profiles remain unchanged. Janitor and foreign-copy GC use this same oracle. Two direct production-helper
+tests pass and both fail under the former `.ok().flatten()` decision; the native control's actual API, DB-reopen and
+release-boundary assertions are pending integration execution. This prevents a read failure from authorizing deletion,
+but does not extend provider consent or establish a finite funded storage contract.
+
+The first fresh EVM/private-integration native selection on 2026-10-13 compiled successfully and terminated with
+two passing funded-Final/recovery controls and one failing positive-fund control after 2495.04 seconds. That control
+incorrectly required the full shared Panel/EXEC-slice queue aggregate on its first intermediate row. Native vesting
+and EXEC release occur in separate ticks; a partially consumed queue is not a completed total. The corrected test
+rejects any excess R and waits for the exact predeclared aggregate to physically drain before assigning completion.
+Exact coinbase cash, all payment+W clocks, material release, DB reopen and replay remain mandatory. It additionally
+logs frozen deadlines and actual heartbeat progress with finite stall guards. The corrected positive-money run is
+pending; [the full failure and evidence boundary](rfc08-native-material-acceptance-2026-10-13.md) are retained.
+
+### 15.11 Paid native material terms cannot exceed signed EXEC retention
+
+A native paid-consumer contract freezes its `material_until` at native claim acceptance. Its service/dispute/material
+spans are not the EXEC declaration's expiry. Previously root admission compared provider leases with the EXEC-derived
+liability floor alone, while native material reads and retirement separately retained the work through the potentially
+longer paid-consumer term. A local GC pin does not authorize workers or providers to serve beyond their signed term.
+
+Root admission now requires `paid.material_until <= H_exec`, where `H_exec` is the existing declaration-expiry-derived
+retention horizon under the fixed native/kernel policy. Refusal occurs before binding kernel fee escrow, transferring
+recipient R or writing the root/work-use rows. The owner can propose and sign a sufficiently long root expiry before
+admission; accepted worker jobs then commit the same existing retention terms through their v2 nonce. Transferred
+provider leases still have to cover that whole horizon in the existing provider check. No lease, contract, Final or
+physical-payment clock is rewritten. Retained non-void roots repeat the same check on restore/replay. Claims without
+a paid native contract take the old read-only path, with no wire or root collection change.
+
+The new fold control obtains its native paid terms from ordinary acceptance and admits production lease/transfer
+objects with unchanged exact provider terms. A paid material horizon one DAA longer than the signed EXEC horizon must
+refuse with no parent carriage/fee/provider mutation; an exact bound must open, preserve provider rows and round-trip
+its delta, rollback and carriage. That fold harness explicitly retains its header-signature seam. A separate native
+control sends ML-DSA-signed provider leases and DA transfer through real carriers, refuses a short signed declaration,
+then re-signs its expiry to the exact accepted native material bound and requires successful admission with the same
+provider terms. Both new controls are pending fresh compile/execution; source presence is not acceptance evidence.
+
+This guard closes a specific admission mismatch. Physical payment plus W can still be unknown or later than a finite
+contract. No maximum physical queue latency, profitable worker offer or provider renewal/funding transition is inferred.
+The full consumer, pruned material and economic acceptance gates remain open and public presets remain dormant.
+
+The corrected core control passed on 2026-10-13 after a 7m53s incremental build (0.06s test runtime). The same fresh
+executable passed 90 EXEC-fold cases, including this control, with one existing ignored resource case, and 64 budget
+cases with none ignored. The first fixture had failed before the guard because its unapproved B rate could not admit
+one whole block; the corrected fixture preserves the native block charge and funds that declared requirement before
+genesis. Raw failed/passing logs are linked in [the material acceptance record](rfc08-native-material-acceptance-2026-10-13.md).
+The native signed-provider control remains pending, so these core results do not establish full cryptographic/node,
+physical-payment or pruned transport acceptance of this guard.
+
+### 15.12 Explicit monetary material covenant and typed wire capacity
+
+The 2026-10-14 source checkpoint introduces a separate provider-and-sponsor-signed
+payment-relative covenant (kinds 240–242, aux120). New signed manifests bind complete
+original/continuation codec bytes; native/kernel work checks its exact execution/body
+scope before admission. Provider fees use sponsor-owned funding and the common native
+coinbase queue, with exact original entitlements and real P+W receipts. Replacement
+preserves charged providers until physical service-fee payment. GC requires accepted
+native release history plus selected-chain finality of the release itself, beyond its
+payment tail. Existing finite leases and all public presets retain their meaning.
+
+The durable provider validates full NativeHeld/kernel/segmented material and exact
+byte counters before signing, atomically publishes with a crash-released kernel lease,
+revalidates on reopen and serves the retained typed disclosure. Unsupported codecs
+return explicit reasons. Completed-service economic evidence requires actual native
+income, complete retired-generation fee history and reviewed actual costs; future
+payment/recovery time remains unknown, so public activation is refused. Source is
+prepared but uncompiled/unexecuted under the user's code-first order. The complete
+scope, test seams and still-required acceptance are recorded in
+[the covenant checkpoint](rfc08-monetary-material-covenant-2026-10-14.md).

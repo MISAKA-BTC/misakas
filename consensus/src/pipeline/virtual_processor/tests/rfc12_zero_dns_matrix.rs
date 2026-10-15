@@ -3050,6 +3050,7 @@ struct SidecarCrashManifest {
     // The carriage has versioned EOF tails: frame its standalone serving bytes
     // rather than nesting its EOF decoder ahead of another manifest field.
     carriage: Option<Vec<u8>>,
+    declarations: Vec<(Hash64, Vec<u8>)>,
     raw_heads: CanonicalEvmHeads,
 }
 
@@ -3110,6 +3111,7 @@ async fn rfc12_process_sidecar_crash_worker() {
         let evm_state = rig.api().get_evm_state_snapshot_of(point).unwrap().unwrap();
         let mut overlay = None;
         let mut carriage = None;
+        let mut declarations = Vec::new();
         let import_session = rig.api().begin_pruning_point_import(point).unwrap();
         match kind.as_str() {
             "evm" => {
@@ -3117,7 +3119,30 @@ async fn rfc12_process_sidecar_crash_worker() {
             }
             "palw" => {
                 let imported = pending_carriage.unwrap();
-                rig.api().import_pruning_point_palw_state_for_session(import_session, imported.clone()).unwrap();
+                // Offer the authentic held genesis declarations explicitly.
+                // They are binary-known classes, so the ordinary sparse getter
+                // may omit them; this control requires nonempty index writes.
+                let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
+                    &rig.config.params.palw_consensus_mode
+                else {
+                    panic!("native genesis declarations");
+                };
+                declarations = bundle
+                    .genesis_objects
+                    .iter()
+                    .filter_map(|object| match object {
+                        kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+                            class_id,
+                            admission: Some(admission),
+                            ..
+                        } if imported.classes.contains_key(class_id) => Some((*class_id, borsh::to_vec(admission.as_ref()).unwrap())),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!declarations.is_empty(), "this crash control must stage actual authentic declaration rows");
+                rig.api()
+                    .import_pruning_point_palw_snapshot_for_session(import_session, imported.clone(), declarations.clone(), false)
+                    .unwrap();
                 carriage = Some(borsh::to_vec(&imported).unwrap());
             }
             "overlay" => {
@@ -3138,6 +3163,7 @@ async fn rfc12_process_sidecar_crash_worker() {
             evm_state,
             overlay,
             carriage,
+            declarations,
             raw_heads: vp.evm_heads_store.read().get().unwrap(),
         };
         let mut file = std::fs::File::create(root.join("manifest.borsh")).unwrap();
@@ -3158,6 +3184,14 @@ async fn rfc12_process_sidecar_crash_worker() {
     let vp = consensus.virtual_processor();
     let tip = vp.palw_state_v2_store.read().tip_record().unwrap().unwrap();
     assert_eq!((tip.block, tip.state_root), (manifest.palw_at, manifest.palw_root));
+    for (class_id, bytes) in &manifest.declarations {
+        let record = vp
+            .palw_class_carriage_store
+            .read()
+            .get(*class_id)
+            .expect("declaration survived the same OS kill as the tip and incomplete marker");
+        assert_eq!(&record.carriage, bytes, "cold declaration index is the offered authenticated generation");
+    }
     assert_eq!(vp.evm_heads_store.read().get().unwrap(), manifest.raw_heads, "durable heads are kept, not silently relabelled");
     assert!(consensus.get_evm_canonical_heads().is_err(), "a partial import cannot expose canonical ETH tags");
     if kind != "overlay" {
@@ -3200,8 +3234,27 @@ async fn rfc12_process_sidecar_crash_worker() {
         "palw" => {
             let carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2 =
                 borsh::from_slice(&manifest.carriage.unwrap()).expect("standalone served carriage bytes");
-            refused(consensus.import_pruning_point_palw_state_for_session(stale, carriage.clone()));
-            consensus.import_pruning_point_palw_state_for_session(retry, carriage).unwrap();
+            refused(consensus.import_pruning_point_palw_snapshot_for_session(
+                stale,
+                carriage.clone(),
+                manifest.declarations.clone(),
+                false,
+            ));
+            for (class_id, bytes) in &manifest.declarations {
+                assert_eq!(
+                    &vp.palw_class_carriage_store.read().get(*class_id).unwrap().carriage,
+                    bytes,
+                    "stale token cannot replace a declaration before its state is rejected"
+                );
+            }
+            consensus.import_pruning_point_palw_snapshot_for_session(retry, carriage, manifest.declarations.clone(), false).unwrap();
+            for (class_id, bytes) in &manifest.declarations {
+                assert_eq!(
+                    &vp.palw_class_carriage_store.read().get(*class_id).unwrap().carriage,
+                    bytes,
+                    "authorized identical recovery retains the exact declaration"
+                );
+            }
         }
         "overlay" => {
             let snapshot = manifest.overlay.unwrap();
@@ -3425,3 +3478,6 @@ async fn rfc12_durable_import_sessions_serialize_streams_and_close_without_legac
     assert!(!rig.api().is_pruning_utxoset_stable());
     assert_eq!(sorted_process_utxos(rig.api()), before, "authority reset does not manufacture or erase existing money");
 }
+
+#[path = "rfc12_process_import_crash.rs"]
+mod import_crash;

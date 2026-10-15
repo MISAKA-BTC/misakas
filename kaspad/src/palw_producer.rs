@@ -144,6 +144,10 @@ pub struct PalwProducerConfig {
     pub class_residency: misaka_palw_sdk::PalwWeightResidencyV1,
     /// ADR-0132: the node's per-class counters this producer reports its draws into.
     pub telemetry: std::sync::Arc<crate::palw_economics::PalwNodeTelemetryV1>,
+    /// **RFC-0008 PAV3: the producer↔provider exchange** ([`crate::palw_native_custody_v3`]). `None` on every ordinary kaspad
+    /// (no Args flag sets it): past `palw_monetary_material_v1` a non-floor class then holds with
+    /// [`PALW_PRODUCER_NATIVE_CUSTODY_HOLD`]. Only the feature-gated private-integration constructor wires one.
+    pub native_exchange: Option<crate::palw_native_custody_v3::PalwNativeExchangeHandleV3>,
 }
 
 pub struct PalwProducerService {
@@ -1636,6 +1640,32 @@ impl PalwProducerService {
         if !template_declares_an_attempt_lane(template.block.header.pow_algo_id) {
             return Err(format!("this network declares algo {} — not a ConsensusV2 lane", template.block.header.pow_algo_id));
         }
+        // **RFC-0008 PAV3: past `palw_monetary_material_v1` the chain admits new native work only in the owned signed custody
+        // form** — the canonical prior session's provider Ready signatures and this executor's seal. With a configured exchange
+        // ([`crate::palw_native_custody_v3`], wired only by the private-integration constructor) the draw below is priced on the
+        // PAV3 carriage and a win is sealed through it; without one the producer says so and holds instead of drawing a PAV2
+        // attempt every peer refuses. Below the fence — every shipped preset — this is unreachable and production is
+        // byte-identical. Lead default 2026-10-15: the BASE floor class is exempt (no paid material) and keeps producing PAV2.
+        let native_custody = crate::palw_native_custody_v3::palw_native_custody_in_force_v3(
+            &self.consensus_config.params,
+            facts.is_base_class,
+            template.block.header.daa_score,
+        );
+        if native_custody {
+            let Some(exchange) = self.config.native_exchange.as_ref() else {
+                return Err(format!(
+                    "{PALW_PRODUCER_NATIVE_CUSTODY_HOLD}: new native work at DAA {} needs a PAV3 provider exchange this node does not run",
+                    template.block.header.daa_score
+                ));
+            };
+            // A rider has no header position and no carriage of its own to seal; none is built in the custody form.
+            if rider.is_some() {
+                return Err(format!(
+                    "{PALW_PRODUCER_NATIVE_CUSTODY_HOLD}: riders are not built in the PAV3 custody form (exchange {})",
+                    exchange.0.describe()
+                ));
+            }
+        }
         // The job is the TEMPLATE's AND the bucket's. See `base0_rc_job_anchor_v1` for why it is
         // not the challenge's, and `PALW_TICKET_NONCE_BUCKET_LOG2` for what a bucket is.
         //
@@ -1822,7 +1852,7 @@ impl PalwProducerService {
         // **Raced against the exit signal** (T12-049): a draw of a wide class runs for minutes, and a
         // SIGINT that lands inside it must not wait for it — the blocking task finishes on its own
         // and is dropped with the runtime.
-        let (run, answer_ids) = palw_until_exit_v1(
+        let (run, answer_ids, backend) = palw_until_exit_v1(
             &self.shutdown.listener,
             tokio::task::spawn_blocking(move || {
                 let run = match tamper {
@@ -1832,7 +1862,8 @@ impl PalwProducerService {
                 // The answer's ids, read back off the capture by the family that wrote it — for the
                 // attempt-lane answer envelope (ADR-0084 Decision 4) staged beside the material.
                 let answer_ids = backend.fp_committed_output_ids(&run.material);
-                Ok::<_, String>((run, answer_ids))
+                // The backend comes back: past the PAV3 fence a won draw builds its typed custody bundle with it.
+                Ok::<_, String>((run, answer_ids, backend))
             }),
         )
         .await
@@ -1906,12 +1937,40 @@ impl PalwProducerService {
             })
             .unwrap_or(0);
 
+        // **RFC-0008 PAV3: the custody draw envelope** (past the fence, with an exchange — checked above). The canonical prior
+        // session is read from this node's own coherent tip, at the template's own selected parent (the state the fold
+        // re-selects against); its roster is refused before anything is spent on it. Both lotteries then price THIS envelope.
+        let native_draw = if native_custody {
+            let (point, selected) = session.palw_native_session_v3(&attempt, template.block.header.daa_score)?;
+            if point != template.selected_parent_hash {
+                return Err(format!(
+                    "{PALW_PRODUCER_NATIVE_CUSTODY_HOLD}: the tip moved between the template and the session read; next template"
+                ));
+            }
+            let (row, operators) = selected.ok_or_else(|| {
+                format!(
+                    "{PALW_PRODUCER_NATIVE_CUSTODY_HOLD}: no eligible prior signed native custody session for class {} at DAA {}",
+                    facts.class_id, template.block.header.daa_score
+                )
+            })?;
+            if let Some(refusal) = crate::palw_native_custody_v3::palw_native_roster_refusal_v3(attempt.operator_id, &operators) {
+                return Err(format!("{PALW_PRODUCER_NATIVE_CUSTODY_HOLD}: {refusal}"));
+            }
+            let envelope = crate::palw_native_custody_v3::palw_native_draw_envelope_v3(&row, &attempt, anchor)?;
+            Some((row, envelope))
+        } else {
+            None
+        };
+
         // **The draw.** The class lottery first, then the network's against `bits` — both are
         // functions of the one execution, so both are decided here, once, with no search and no
         // blocking task: two hashes, not a loop.
         let mut class_won = false;
         let search: Option<(u64, PalwAttemptUnsignedV2)> = {
-            let ticket = class_ticket_v3(&attempt, anchor);
+            let ticket = match &native_draw {
+                Some((_, envelope)) => envelope.class_ticket(anchor),
+                None => class_ticket_v3(&attempt, anchor),
+            };
             if ticket > facts.class_target {
                 trace!("[{PALW_PRODUCER}] bucket {nonce_bucket}: the class draw lost");
                 None
@@ -1919,8 +1978,10 @@ impl PalwProducerService {
                 class_won = true;
                 let mut header = template.block.header.clone();
                 header.nonce = nonce;
-                header.palw_commitment =
-                    PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature: vec![0u8; sig_len] }.encode_wire();
+                header.palw_commitment = match &native_draw {
+                    Some((_, envelope)) => envelope.encode_wire(),
+                    None => PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature: vec![0u8; sig_len] }.encode_wire(),
+                };
                 let state = kaspa_pow::StateLayer0::new(&header, self.config.network_id.as_bytes());
                 // ADR-0132 S: past the single lottery the chain admits an attempt header's digest
                 // unconditionally, so the producer must not throw the forward away on a network
@@ -1953,6 +2014,29 @@ impl PalwProducerService {
             .map_err(|e| format!("ML-DSA-87 sign: {e:?}"))?
             .as_ref()
             .to_vec();
+            // **RFC-0008 PAV3: the custody carriage, before anything is retained or announced** — the actual bundle, every roster
+            // provider's signature (each after its durable publication) and this executor's seal. A refusal anywhere publishes
+            // nothing: never a PAV2 fallback the chain refuses past the fence.
+            let commitment = match native_draw {
+                Some((row, provisional)) => {
+                    let mut probe = template.block.header.clone();
+                    probe.nonce = nonce;
+                    self.native_carriage_v3(
+                        session,
+                        &row,
+                        provisional,
+                        template.selected_parent_hash,
+                        probe,
+                        PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature: signature.clone() },
+                        anchor,
+                        backend,
+                        run.material.clone(),
+                        prompt.clone(),
+                    )
+                    .await?
+                }
+                None => PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature }.encode_wire(),
+            };
             // The promise, kept before it is made. See `retain_execution`.
             let material = self.retain_execution(message, &run.material)?;
             // **RFC-0007 Part II: the witness is the producer's obligation** (§II.7): a class whose attempts commit witness chunks keeps its
@@ -1999,7 +2083,7 @@ impl PalwProducerService {
             }
             self.last_lead_retention.store(attempt.trace_retention_daa, std::sync::atomic::Ordering::Relaxed);
             template.block.header.nonce = nonce;
-            template.block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature }.encode_wire();
+            template.block.header.palw_commitment = commitment;
             template.block.header.finalize();
             let block: kaspa_consensus_core::block::Block = template.block.clone().to_immutable();
             let hash = block.hash();
@@ -2037,6 +2121,109 @@ impl PalwProducerService {
             return Ok(Some((hash, message)));
         }
         Ok(None)
+    }
+
+    /// **RFC-0008 PAV3: a won draw's custody carriage** (lead default B, 2026-10-15; unverified source). In a blocking task:
+    /// the material authority the providers will be given (the Consensus API at the template's pre-entropy checkpoint, asked
+    /// with the draw carriage — authority reads neither the manifest's bytes nor any signature), the actual typed bundle from
+    /// this node's own capture with the backend that executed it, the exact Ready, every roster provider's signature through
+    /// the configured exchange, each checked against the registered roster key. Then the executor's seal, the stateless
+    /// header-stage check under the attempt's own key, and the draw re-checked: the sealed carriage prices exactly what won.
+    #[allow(clippy::too_many_arguments)]
+    async fn native_carriage_v3(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        row: &kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
+        provisional: kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3,
+        checkpoint: kaspa_consensus_core::BlockHash,
+        header: kaspa_consensus_core::header::Header,
+        base: PalwAttemptEnvelopeV2,
+        anchor: Hash64,
+        backend: Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
+        capture: Vec<u8>,
+        prompt: Vec<usize>,
+    ) -> Result<Vec<u8>, String> {
+        use crate::palw_native_custody_v3::{
+            PALW_NATIVE_READY_EXCHANGE_VERSION_V3, PalwNativeReadyRequestV3, palw_native_bundle_v3, palw_native_check_signatures_v3,
+            palw_native_provisional_envelope_v3, palw_native_same_draw_v3,
+        };
+        use kaspa_consensus_core::palw_attempt_material_v3::{draft_native_ready_v3, verify_ready_signature_v3};
+        let exchange = self
+            .config
+            .native_exchange
+            .clone()
+            .ok_or_else(|| format!("{PALW_PRODUCER_NATIVE_CUSTODY_HOLD}: no provider exchange is configured"))?;
+        let prompt: Vec<u32> = prompt
+            .iter()
+            .map(|id| u32::try_from(*id).map_err(|_| format!("prompt id {id} does not fit a u32")))
+            .collect::<Result<_, _>>()?;
+        let prefill_draw = self.consensus_config.params.palw_prefill_draw_active_at(header.daa_score);
+        let (session, row, draw) = (session.clone(), row.clone(), provisional.clone());
+        let described = exchange.0.describe();
+        let (ready, signatures, base) = palw_until_exit_v1(
+            &self.shutdown.listener,
+            tokio::task::spawn_blocking(move || {
+                let attempt = base.attempt.clone();
+                let probe = kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3 {
+                    base: base.clone(),
+                    ..draw.clone()
+                };
+                let authority = session.palw_native_material_provider_authority_v3(checkpoint, &header, &probe)?;
+                // Nothing below reads consensus: the session's read guard is not held across the providers' work.
+                drop(session);
+                if authority.row.terms.root != row.terms.root || authority.row.consent != row.consent {
+                    return Err("the native session moved between the draw and the seal".to_string());
+                }
+                let (_, manifest) = palw_native_bundle_v3(
+                    backend.as_ref(),
+                    &authority.row,
+                    &attempt,
+                    anchor,
+                    &capture,
+                    &prompt,
+                    prefill_draw,
+                    authority.material,
+                )?;
+                let ready = draft_native_ready_v3(&authority.row, &attempt, anchor, manifest)?;
+                if ready.session != draw.ready.session
+                    || ready.consent != draw.ready.consent
+                    || ready.providers != draw.ready.providers
+                    || ready.binding.execution_key != draw.ready.binding.execution_key
+                {
+                    return Err("the native session/roster/execution key moved between the draw and the seal".to_string());
+                }
+                let request = PalwNativeReadyRequestV3 {
+                    version: PALW_NATIVE_READY_EXCHANGE_VERSION_V3,
+                    checkpoint,
+                    header,
+                    envelope: palw_native_provisional_envelope_v3(base, ready.clone()),
+                    capture,
+                    prompt,
+                };
+                let signatures = exchange.0.request_signatures_authenticated(&request, &authority.provider_keys)?;
+                palw_native_check_signatures_v3(&ready, &authority.provider_keys, &signatures)?;
+                Ok::<_, String>((ready, signatures, request.envelope.base))
+            }),
+        )
+        .await
+        .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: the native custody exchange in flight is abandoned"))?
+        .map_err(|e| format!("the native custody task did not finish: {e}"))?
+        .map_err(|e| format!("{PALW_PRODUCER_NATIVE_CUSTODY_HOLD}: exchange {described}: {e}"))?;
+        let kp = self.keypair.as_ref().ok_or("no signing key")?;
+        let sealed =
+            misaka_palw_remote::native_ready_v3::producer_assemble_native_ready_v3(base, ready, &signatures, |message, context| {
+                libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message, context, [0x5Au8; 32])
+                    .map(|s| s.as_ref().to_vec())
+                    .map_err(|e| format!("ML-DSA-87 seal: {e:?}"))
+            })?;
+        sealed.verify_seal(verify_ready_signature_v3)?;
+        palw_native_same_draw_v3(&provisional, &sealed, anchor)?;
+        info!(
+            "[{PALW_PRODUCER}] PAV3 custody carriage sealed: session {}, {} provider signature(s) via {described}",
+            sealed.ready.session,
+            sealed.ready.providers.len()
+        );
+        Ok(sealed.encode_wire())
     }
 }
 
@@ -2098,6 +2285,9 @@ impl AsyncService for PalwProducerService {
 
 /// What a producer says when the exit signal cut a draw or a submit short.
 pub(crate) const PALW_PRODUCER_EXITING: &str = "stopping: the node is shutting down";
+
+/// What a producer says when the chain requires the PAV3 native custody form and this node runs no provider exchange.
+pub(crate) const PALW_PRODUCER_NATIVE_CUSTODY_HOLD: &str = "holding: the native custody form (PAV3) is in force";
 
 /// **`fut`, or `None` the moment the exit signal fires** (testnet-12 lifecycle audit T12-049).
 ///
@@ -2337,7 +2527,27 @@ mod real_submit_delay_tests {
         );
         let daemon = include_str!("daemon.rs");
         assert!(daemon.contains("drill_real_submit_delay: match args.palw_drill_real_submit_delay_s {"));
-        assert!(daemon.contains("!config.palw_drill_genesis_salt.is_some() || !palw_private_drill"), "refused off a salted chain");
+        // Exercise the same authorization resolver the daemon calls rather than
+        // pinning whether its source spells a missing Option as !is_some/is_none.
+        use kaspa_consensus_core::config::{
+            Config,
+            drill::{PalwDrillSaltV1, palw_chain_params_v1, palw_drill_network_v1},
+        };
+        let salt = PalwDrillSaltV1::from_bytes([0x74; 32]).unwrap();
+        let mut config = Config::new(palw_chain_params_v1(palw_drill_network_v1(), Some(&salt)).unwrap());
+        config.palw_drill_genesis_salt = Some(salt);
+        assert_eq!(
+            crate::palw_drill::palw_drill_real_submit_delay_v1(&config, Some(7)).unwrap(),
+            Some(std::time::Duration::from_secs(7))
+        );
+        config.params.genesis = kaspa_consensus_core::config::genesis::PALW_T12_GENESIS;
+        assert!(
+            crate::palw_drill::palw_drill_real_submit_delay_v1(&config, Some(7)).is_err(),
+            "a lost private params swap grants nothing"
+        );
+        config.palw_drill_genesis_salt = None;
+        assert!(crate::palw_drill::palw_drill_real_submit_delay_v1(&config, Some(7)).is_err(), "no salt, no private delay");
+        assert_eq!(crate::palw_drill::palw_drill_real_submit_delay_v1(&config, None).unwrap(), None);
     }
 }
 

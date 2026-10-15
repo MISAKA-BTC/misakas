@@ -181,7 +181,7 @@ impl RequestPruningPointPalwStateFlow {
                 self.serve_chunked(msg).await?;
                 continue;
             }
-            if !msg.snapshot_root.is_empty() || msg.chunk_index != 0 {
+            if !msg.snapshot_root.is_empty() || msg.chunk_index != 0 || msg.snapshot_codec != 0 || !msg.snapshot_nonce.is_empty() {
                 return Err(ProtocolError::Other("legacy PALW snapshot request carries chunk fields"));
             }
             let pp = req_pruning_point(msg.pruning_point_hash)?;
@@ -202,7 +202,7 @@ impl RequestPruningPointPalwStateFlow {
             }
             // Legacy peers share the same node-wide materialization/session backstop.
             // The empty lease file is removed as soon as this one response is queued.
-            let Ok(_snapshot_lease) = crate::palw_snapshot_chunks::SnapshotSpill::new() else {
+            let Ok(mut snapshot_lease) = crate::palw_snapshot_chunks::SnapshotSpill::new() else {
                 self.router.enqueue(make_message!(Payload::PruningPointPalwState, PruningPointPalwStateMessage::default())).await?;
                 continue;
             };
@@ -217,19 +217,46 @@ impl RequestPruningPointPalwStateFlow {
             // used to be collected unconditionally and then thrown away in the `None` arm below,
             // so a peer naming a hash this node never captured bought a SECOND full tip
             // materialization for a field that was never populated.
+            let resource_lease = session.clone().spawn_blocking(move |c| c.palw_reserve_native_snapshot_v1(pp)).await;
+            match resource_lease {
+                Ok(lease) => snapshot_lease.hold_native_resource_lease(lease),
+                Err(why) => {
+                    kaspa_core::warn!("[palw-sidecar] native snapshot capacity refused: {why:?}");
+                    self.router
+                        .enqueue(make_message!(Payload::PruningPointPalwState, PruningPointPalwStateMessage::default()))
+                        .await?;
+                    continue;
+                }
+            }
             let (carriage, class_carriages) = session
-                .spawn_blocking(move |c| match c.pruning_point_palw_state(pp) {
-                    Some(state) => {
-                        let declarations = c.palw_class_carriages_for_sync_v1();
-                        (Some(state), declarations)
+                .spawn_blocking(move |c| {
+                    match c.pruning_point_palw_state_shared_v1(pp) {
+                        Some(state) => {
+                            let declarations = match c.palw_class_carriages_for_snapshot_v1(&state, false) {
+                                Ok(declarations) => declarations,
+                                Err(error) => {
+                                    kaspa_core::warn!("[palw-sidecar] snapshot declarations for {pp}: {error}");
+                                    return (None, Vec::new());
+                                }
+                            };
+                            // Refuse before allocating a whole encoded Vec on the legacy
+                            // path. Chunked and legacy peers use the same canonical total.
+                            match crate::palw_snapshot_chunks::encode_legacy_snapshot(&state, &declarations) {
+                                Ok(bytes) => (Some(bytes), declarations),
+                                Err(error) => {
+                                    kaspa_core::warn!("[palw-sidecar] cannot serve PALW snapshot for {pp}: {error}");
+                                    (None, Vec::new())
+                                }
+                            }
+                        }
+                        None => (None, Vec::new()),
                     }
-                    None => (None, Vec::new()),
                 })
                 .await;
             let reply = match carriage {
                 Some(c) => PruningPointPalwStateMessage {
                     found: true,
-                    palw_state: borsh::to_vec(&c).expect("PalwStateCarriageV2 borsh is infallible"),
+                    palw_state: c,
                     class_carriages: class_carriages
                         .into_iter()
                         .map(|(class_id, carriage)| kaspa_p2p_lib::pb::PalwClassCarriageEntry {
@@ -247,36 +274,51 @@ impl RequestPruningPointPalwStateFlow {
             // transfer is answered `found: false` instead (the same answer an unprepared peer gives, so the requester tries another
             // peer at once), and a state over half the cap is logged where an operator reads it, long before it matters.
             let reply = {
-                let bytes = reply.palw_state.len() + reply.class_carriages.iter().map(|e| e.carriage.len()).sum::<usize>();
-                if bytes > crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES {
+                let bytes = crate::palw_snapshot_chunks::snapshot_payload_size(
+                    reply.palw_state.len() as u64,
+                    reply.class_carriages.iter().map(|e| e.carriage.len() as u64),
+                )
+                .ok();
+                if reply.found && bytes.is_none() {
                     kaspa_core::warn!(
-                        "[palw-sidecar] the PALW state for {pp} is {bytes} bytes, over the {} byte transport cap (PALW_PRUNING_STATE_MAX_BYTES): \
-                         answering not-found; pruned IBD needs the chunked transport (docs/design/palw/pruned-ibd-palw-state-chunked-transport.md)",
+                        "[palw-sidecar] the PALW snapshot for {pp} exceeds the {} byte transport cap (PALW_PRUNING_STATE_MAX_BYTES): answering not-found",
                         crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES
                     );
                     PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![], ..Default::default() }
                 } else {
-                    if bytes > crate::palw_gossip::PALW_PRUNING_STATE_WARN_BYTES {
+                    if let Some(bytes) = bytes
+                        && bytes > crate::palw_gossip::PALW_PRUNING_STATE_WARN_BYTES as u64
+                    {
                         kaspa_core::warn!(
-                            "[palw-sidecar] the PALW state for {pp} is {bytes} bytes: past half of the {} byte single-message cap — the chunked \
-                             transport is due (docs/design/palw/pruned-ibd-palw-state-chunked-transport.md)",
+                            "[palw-sidecar] the PALW snapshot for {pp} is {bytes} canonical bytes: past half of the {} byte total cap; \
+                             protocol-106 chunking bounds transfer buffers but retains this total limit",
                             crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES
                         );
                     }
                     reply
                 }
             };
-            let served = (reply.palw_state.len() + reply.class_carriages.iter().map(|e| e.carriage.len()).sum::<usize>()) as u64;
+            let served = crate::palw_snapshot_chunks::snapshot_payload_size(
+                reply.palw_state.len() as u64,
+                reply.class_carriages.iter().map(|e| e.carriage.len() as u64),
+            )
+            .unwrap_or(0); // A not-found reply has no state payload and spends only the attempt floor.
             self.ctx.palw_gossip().charge_sidecar_serve(peer, served);
             self.router.enqueue(make_message!(Payload::PruningPointPalwState, reply)).await?;
         }
     }
     async fn serve_chunked(&mut self, msg: RequestPruningPointPalwStateMessage) -> Result<(), ProtocolError> {
-        use crate::palw_snapshot_chunks::{SnapshotSender, SnapshotSpill, chunk_hash};
+        use crate::palw_snapshot_chunks::{SNAPSHOT_CODEC_ZLIB_V1, SnapshotSender, SnapshotSpill, chunk_hash_profile};
         if self.router.properties().protocol_version < crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
             return Err(ProtocolError::Other("PALW snapshot chunks require negotiated protocol 106"));
         }
         let pp = req_pruning_point(msg.pruning_point_hash)?;
+        let nonce = crate::palw_snapshot_chunks::compression_request_nonce(
+            self.router.properties().protocol_version,
+            msg.snapshot_codec,
+            &msg.snapshot_nonce,
+        )
+        .map_err(|_| ProtocolError::Other("PALW snapshot compression/nonce was not negotiated"))?;
         let root = if msg.snapshot_root.is_empty() {
             None
         } else {
@@ -298,16 +340,27 @@ impl RequestPruningPointPalwStateFlow {
                 return Ok(());
             }
             // Acquire the node-wide lease BEFORE the consensus snapshot clone or serialization.
-            let Ok(spill) = SnapshotSpill::new() else {
+            let Ok(mut spill) = SnapshotSpill::new() else {
                 self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
                 return Ok(());
             };
             let session = self.ctx.consensus().unguarded_session();
             let sender = session
                 .spawn_blocking(move |c| {
-                    c.pruning_point_palw_state(pp).map(|carriage| {
-                        let declarations = c.palw_class_carriages_for_sync_v1();
-                        SnapshotSender::encode_snapshot(spill, pp, &carriage, &declarations)
+                    match c.palw_reserve_native_snapshot_v1(pp) {
+                        Ok(lease) => spill.hold_native_resource_lease(lease),
+                        Err(why) => {
+                            kaspa_core::warn!("[palw-sidecar] native snapshot capacity refused: {why:?}");
+                            return None;
+                        }
+                    }
+                    c.pruning_point_palw_state_shared_v1(pp).map(|carriage| {
+                        let declarations =
+                            c.palw_class_carriages_for_snapshot_v1(&carriage, nonce.is_some()).map_err(std::io::Error::other)?;
+                        match nonce {
+                            Some(nonce) => SnapshotSender::encode_snapshot_compressed(spill, pp, &carriage, &declarations, nonce),
+                            None => SnapshotSender::encode_snapshot(spill, pp, &carriage, &declarations),
+                        }
                     })
                 })
                 .await;
@@ -317,7 +370,10 @@ impl RequestPruningPointPalwStateFlow {
             };
             // Reserve/charge this ONE traversal exactly like the old whole-message response.
             // Continuations may spend that traversal, but cannot rewind or duplicate a chunk.
-            self.ctx.palw_gossip().charge_sidecar_serve(peer, sender.total);
+            // Compression must not make a large reconstruction cheap to repeat.
+            // Charge the larger canonical traversal/wire size before continuation.
+            let traversed = sender.total.max(sender.profile.map_or(0, |p| p.decoded));
+            self.ctx.palw_gossip().charge_sidecar_serve(peer, traversed);
             if let Some(root) = root
                 && sender.resume(pp, root, msg.chunk_index).is_err()
             {
@@ -327,6 +383,9 @@ impl RequestPruningPointPalwStateFlow {
             self.chunks = Some(sender);
         }
         let sender = self.chunks.as_mut().unwrap();
+        if sender.profile.map(|p| p.nonce) != nonce {
+            return Err(ProtocolError::Other("PALW snapshot nonce/codec changed during stream"));
+        }
         let bytes = sender
             .chunk(pp, root, msg.chunk_index)
             .map_err(|_| ProtocolError::Other("invalid PALW snapshot point/root/order/expiry"))?;
@@ -338,8 +397,13 @@ impl RequestPruningPointPalwStateFlow {
             chunk_index: msg.chunk_index,
             chunk_count: sender.count,
             total_bytes: sender.total,
-            chunk_hash: chunk_hash(pp, sender.root, sender.total, sender.count, msg.chunk_index, &bytes).as_byte_slice().to_vec(),
+            chunk_hash: chunk_hash_profile(pp, sender.root, sender.total, sender.count, msg.chunk_index, &bytes, sender.profile)
+                .as_byte_slice()
+                .to_vec(),
             palw_state: bytes,
+            snapshot_codec: sender.profile.map_or(0, |_| SNAPSHOT_CODEC_ZLIB_V1),
+            decoded_bytes: sender.profile.map_or(0, |p| p.decoded),
+            snapshot_nonce: sender.profile.map_or_else(Vec::new, |p| p.nonce.to_vec()),
             ..Default::default()
         };
         if sender.next_index() == sender.count {

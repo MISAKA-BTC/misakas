@@ -283,6 +283,17 @@ impl HeaderProcessor {
             .map(|(_, state_params)| state_params);
         let receipt_v4_active = self.palw_receipt_spend_v4.is_some_and(|fence| fence.is_active(header.daa_score));
         let exec_v2_active = self.palw_exec_v2.is_some_and(|fence| fence.is_active(header.daa_score));
+        // RFC-0008 PAV3, the by-name second lock: below `palw_monetary_material_v1` the shape gate already refused this carriage as
+        // the live build does (a PAV2 decode, refused for its magic); this names it, and never reaches the stateless arm.
+        if kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
+            && kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(&header.palw_commitment)
+            && !self.palw_native_material_v3.is_some_and(|fence| fence.is_active(header.daa_score))
+        {
+            return Err(RuleError::BadPalwCarriageAdmission {
+                algo_id: header.pow_algo_id,
+                reason: "a PAV3 native custody carriage below palw_monetary_material_v1".into(),
+            });
+        }
         palw_carriage_stateless_v2(
             header,
             attempt_lane,
@@ -396,10 +407,19 @@ pub(crate) fn palw_carriage_stateless_v1(
         // solve attack this function's own doc describes. Which id is a lane at this height
         // is not asked again here; the gate above already refused the closed one by id.
         algo_id if is_palw_attempt_algo_id(algo_id) => {
-            kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment)
-                .map_err(|e| e.to_string())
-                .and_then(|envelope| {
-                    envelope
+            // A `PAV3` carriage reaches this arm only where `palw_monetary_material_v1` is in force (the
+            // fenced shape gate above refused it below the fence, as the live build does). Its executor
+            // seal over every provider signature is checked HERE, statelessly, for the same reason the
+            // attempt signature is below: those bytes are outside the Layer-0 tag but inside the block
+            // identity. Roster/key membership remains the stateful admission's question.
+            if kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(&header.palw_commitment) {
+                kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(&header.palw_commitment)?
+                    .verify_seal(|key, message, sig, context| {
+                    kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                })?;
+            }
+            kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment).and_then(|envelope| {
+                envelope
                             // **The LANE's version, not the compiled-in one** (SA-3). The fenced
                             // shape gate 45 lines above already took it; this call taking
                             // `PALW_ATTEMPT_V2_VERSION` instead made the fence a no-op on the
@@ -414,57 +434,57 @@ pub(crate) fn palw_carriage_stateless_v1(
                                 header.nonce,
                             )
                             .map_err(|e| e.to_string())?;
-                    // **The signature, on the RELAY path** (launch blockers §5).
-                    //
-                    // It was verified only on the chain walk, and the signature sits OUTSIDE
-                    // `commitment_root_v2` (ADR-0042 Decision 3c, deliberately) while the block-identity
-                    // digest hashes the raw carrier bytes. So anyone could take a solved block, write
-                    // arbitrary bytes of the right length into `signature`, and mint an unbounded number
-                    // of distinct blocks that every peer accepted, stored and relayed from ONE proof of
-                    // work — a byte flip and a re-hash each. They never became chain, which is why the
-                    // chain-walk check was thought sufficient; they did not need to, because the cost of
-                    // making one was zero and the cost of carrying one was everybody else's.
-                    //
-                    // Checkable here because the attempt carries its OWN key: whether that key is the
-                    // named bond's is admission item 2's stateful question, but whether the carrier
-                    // authored this attempt with the key it claims needs no state at all.
-                    envelope
-                        .validate_signature_v2(|key, message, sig, context| {
-                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
-                        })
-                        .map_err(|e| e.to_string())?;
-                    // **ADR-0072 Decision 8, asked where its own harm lives** (mainnet audit
-                    // 2026-09-06, C-1). D8's evidence is a header-stage fact — one unpinned field
-                    // "gave 4,096 distinct tickets and 4,096 distinct Layer-0 tags" — and a Layer-0
-                    // tag under `bits` is a block, a relayed header and a counted difficulty row.
-                    // The pin was placed at the composed admission entry point, which runs in the
-                    // virtual processor and only for a chain candidate, where an unbacked attempt is
-                    // `StatusDisqualifiedFromChain`: not an invalidity, and the row stays. Both of
-                    // the pin's inputs are available here — `state_params` is a network constant and
-                    // the retention pin is an equality against the header's OWN declared DAA score,
-                    // which `pre_pow_validation` validates separately, so a wrong score kills the
-                    // block there rather than making this pin wrong.
-                    //
-                    // And ADR-0071 Decision 2's ceiling, which that ADR says is "a rule" and which
-                    // no rule ever charged: one template may not claim more executions than a
-                    // producer could run against it.
-                    if let Some(state_params) = header_pins {
-                        kaspa_consensus_core::palw_admission_v2::check_palw_attempt_da_pins_v1(
-                            state_params,
-                            &envelope.attempt,
-                            header.daa_score,
-                        )
-                        .map_err(|e| e.to_string())?;
-                        if !kaspa_consensus_core::palw_attempt_v2::palw_attempt_bucket_admits_v1(header.nonce) {
-                            return Err(kaspa_consensus_core::palw_attempt_v2::PalwAttemptV2Error::NonceBucketAboveCeiling {
-                                bucket: kaspa_consensus_core::palw_attempt_v2::palw_nonce_bucket_v1(header.nonce),
-                                ceiling: kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_MAX_NONCE_BUCKET_V1,
-                            }
-                            .to_string());
+                // **The signature, on the RELAY path** (launch blockers §5).
+                //
+                // It was verified only on the chain walk, and the signature sits OUTSIDE
+                // `commitment_root_v2` (ADR-0042 Decision 3c, deliberately) while the block-identity
+                // digest hashes the raw carrier bytes. So anyone could take a solved block, write
+                // arbitrary bytes of the right length into `signature`, and mint an unbounded number
+                // of distinct blocks that every peer accepted, stored and relayed from ONE proof of
+                // work — a byte flip and a re-hash each. They never became chain, which is why the
+                // chain-walk check was thought sufficient; they did not need to, because the cost of
+                // making one was zero and the cost of carrying one was everybody else's.
+                //
+                // Checkable here because the attempt carries its OWN key: whether that key is the
+                // named bond's is admission item 2's stateful question, but whether the carrier
+                // authored this attempt with the key it claims needs no state at all.
+                envelope
+                    .validate_signature_v2(|key, message, sig, context| {
+                        kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                    })
+                    .map_err(|e| e.to_string())?;
+                // **ADR-0072 Decision 8, asked where its own harm lives** (mainnet audit
+                // 2026-09-06, C-1). D8's evidence is a header-stage fact — one unpinned field
+                // "gave 4,096 distinct tickets and 4,096 distinct Layer-0 tags" — and a Layer-0
+                // tag under `bits` is a block, a relayed header and a counted difficulty row.
+                // The pin was placed at the composed admission entry point, which runs in the
+                // virtual processor and only for a chain candidate, where an unbacked attempt is
+                // `StatusDisqualifiedFromChain`: not an invalidity, and the row stays. Both of
+                // the pin's inputs are available here — `state_params` is a network constant and
+                // the retention pin is an equality against the header's OWN declared DAA score,
+                // which `pre_pow_validation` validates separately, so a wrong score kills the
+                // block there rather than making this pin wrong.
+                //
+                // And ADR-0071 Decision 2's ceiling, which that ADR says is "a rule" and which
+                // no rule ever charged: one template may not claim more executions than a
+                // producer could run against it.
+                if let Some(state_params) = header_pins {
+                    kaspa_consensus_core::palw_admission_v2::check_palw_attempt_da_pins_v1(
+                        state_params,
+                        &envelope.attempt,
+                        header.daa_score,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    if !kaspa_consensus_core::palw_attempt_v2::palw_attempt_bucket_admits_v1(header.nonce) {
+                        return Err(kaspa_consensus_core::palw_attempt_v2::PalwAttemptV2Error::NonceBucketAboveCeiling {
+                            bucket: kaspa_consensus_core::palw_attempt_v2::palw_nonce_bucket_v1(header.nonce),
+                            ceiling: kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_MAX_NONCE_BUCKET_V1,
                         }
+                        .to_string());
                     }
-                    Ok(())
-                })
+                }
+                Ok(())
+            })
         }
         POW_ALGO_ID_PALW_RECEIPT_V3 => {
             kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment)
@@ -916,5 +936,58 @@ mod palw_carriage_lane_tests {
                 assert!(verdict.unwrap_err().contains("nonce bucket"), "the refusal names the ceiling");
             }
         }
+    }
+
+    /// **RFC-0008 PAV3: provider signatures are free bytes to the PoW, so the executor seal is checked here** — a relayed
+    /// byte flip in any provider signature, or in the seal itself, is refused at the header stage from one solve, while the
+    /// honest sealed carriage passes the same stateless arm as its PAV2 base. Roster membership stays the fold's question.
+    #[test]
+    fn a_pav3_provider_signature_or_seal_flip_is_refused_statelessly() {
+        use kaspa_consensus_core::palw_attempt_material_v3::{
+            PalwAttemptMaterialEnvelopeV3, PalwNativeMaterialBindingV3, PalwNativeMaterialReadyV3,
+        };
+        use kaspa_consensus_core::palw_material_capacity_v1::{PalwMaterialCodecV1, PalwMaterialManifestV1, PalwMaterialScopeV1};
+        use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+        let lane = PalwAttemptLaneV1::Unfenced;
+        let algo_id = POW_ALGO_ID_PALW_COMMITTED_V2;
+        let unsealed = header_with(algo_id, Vec::new());
+        let base = PalwAttemptEnvelopeV2::decode_wire(&signed_carriage(&unsealed, lane.attempt_version(), 1_000)).unwrap();
+        let claim = attempt_id_v2(&base.attempt);
+        let manifest = PalwMaterialManifestV1 {
+            root: Hash64::from_u64_word(0x51),
+            scopes: vec![PalwMaterialScopeV1 {
+                claim,
+                commitment: base.attempt.execution_root,
+                codec: PalwMaterialCodecV1::NativeHeldComplete,
+                bytes: 1,
+                units: 1,
+                content: Hash64::from_u64_word(0x52),
+            }],
+        };
+        let provider = |word| PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(word), 0));
+        let ready = PalwNativeMaterialReadyV3 {
+            version: 3,
+            session: manifest.root,
+            consent: Hash64::from_u64_word(0x53),
+            binding: PalwNativeMaterialBindingV3 { claim, execution_key: Hash64::from_u64_word(0x54), manifest },
+            providers: vec![provider(0x61), provider(0x62)],
+        };
+        let len = base.signature.len();
+        let sealed =
+            PalwAttemptMaterialEnvelopeV3::assemble(base, ready, vec![vec![0x11; len], vec![0x22; len]], |message, context| {
+                libcrux_ml_dsa::ml_dsa_87::sign(&keypair().signing_key, message, context, [0x5Bu8; 32])
+                    .map(|s| s.as_ref().to_vec())
+                    .map_err(|e| format!("{e:?}"))
+            })
+            .unwrap();
+        let carried = |envelope: &PalwAttemptMaterialEnvelopeV3| header_with(algo_id, envelope.encode_wire());
+        assert_eq!(palw_carriage_stateless_v1(&carried(&sealed), lane, domain(), None, 0), Ok(()), "the honest sealed carriage");
+        let mut flipped = sealed.clone();
+        flipped.provider_signatures[1][7] ^= 0x01;
+        assert_ne!(carried(&flipped).hash, carried(&sealed).hash, "a provider signature byte is block identity");
+        assert!(palw_carriage_stateless_v1(&carried(&flipped), lane, domain(), None, 0).is_err(), "provider flip refused");
+        let mut reseal = sealed.clone();
+        reseal.seal[0] ^= 0x01;
+        assert!(palw_carriage_stateless_v1(&carried(&reseal), lane, domain(), None, 0).is_err(), "seal flip refused");
     }
 }

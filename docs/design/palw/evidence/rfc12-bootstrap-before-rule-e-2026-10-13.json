@@ -1,0 +1,49 @@
+{
+  "status": "FAIL",
+  "artifactDirectory": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/misaka-rfc12-bootstrap-rdok3u8_",
+  "resourceLimits": {
+    "schemaVersion": 1,
+    "kind": "rfc12-construction-resource-bounds",
+    "maximumOwnedProcessRssKiB": 2097152,
+    "maximumOwnedDatabaseLogicalBytes": 2147483648,
+    "maximumProbeMs": 2000,
+    "maximumFactorySeconds": 180,
+    "samplePeriodMs": 250
+  },
+  "resourceLimitsMet": false,
+  "maximumCarrierFeeSompi": 100000000,
+  "nativeRegistrationBindingMeasured": false,
+  "completeCheckRequested": false,
+  "maximumBindingReservationSompi": null,
+  "maximumCompleteCheckFeeSompi": null,
+  "totalWorkflowTimeoutSeconds": 300,
+  "completeCheckMeasured": false,
+  "matureUsefulWorkMeasured": false,
+  "prunedIbdMeasured": false,
+  "marketFillsMeasured": false,
+  "release100kMeasured": false,
+  "fullRfc12SecurityApproval": false,
+  "reason": "MANIFEST exited 2: RFC12 private probe refused: invalid V2 bundle: palw_dns_retirement_v1 needs palw_fork_choice_rule_e_v1 armed at or below it (ADR-0178: the DNS overlay's veto may retire only once rule E decides deep reorgs)\n",
+  "sampledOwnedResources": {
+    "samplePeriodMs": 250,
+    "ownedChildren": {
+      "MANIFEST": {
+        "sampledPeakRssKiB": 24368,
+        "lastRssKiB": 24368,
+        "samples": 28,
+        "launches": 1,
+        "lastPid": 51350
+      }
+    },
+    "observationFailures": 0,
+    "violation": null,
+    "osHardQuotaApplied": false,
+    "completePeakRssMeasured": false
+  },
+  "ownedDatabaseLogicalBytes": {
+    "A": 0,
+    "B": 0,
+    "JOIN": 0
+  },
+  "probeLatenciesMs": []
+}

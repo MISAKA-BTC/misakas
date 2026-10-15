@@ -60,3 +60,7 @@ kaspa-pq-validator-core.workspace = true
 
 [lints]
 workspace = true
+
+# Provider snapshots use a crash-released kernel lease on the supported hosts.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

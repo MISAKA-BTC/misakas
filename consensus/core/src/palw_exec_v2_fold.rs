@@ -431,6 +431,9 @@ impl PalwChainStateV2 {
             return Ok(());
         }
         for (claim_id, root) in &self.exec_v2.roots {
+            if !matches!(root.phase, PalwWorkRootPhaseV2::Voided { .. }) {
+                super::palw_exec_v2_rewards_v1::require_paid_exec_material_window_v1(self, params, claim_id, root.expiry_daa)?;
+            }
             if !matches!(root.phase, PalwWorkRootPhaseV2::Voided { .. })
                 && let Some(kernel) = &self.kernel_route
             {
@@ -924,6 +927,20 @@ pub(super) fn apply_root_declared_v2(
         let active = builder.state.bonds.get(bond).is_some_and(|record| matches!(record.status, PalwBondStatusV2::Active));
         if !active {
             return Err(no(R::ExecutorUnfunded));
+        }
+    }
+    super::palw_exec_v2_rewards_v1::require_paid_exec_material_window_v1(
+        &builder.state,
+        builder.params,
+        &claim_id,
+        declaration.expiry_daa,
+    )?;
+    builder.state.require_monetary_material_enrollment_v1(builder.params, claim_id, daa, None)?;
+    if let Some(consent) = builder.state.monetary_material_row_v1(claim_id) {
+        if consent.terms.exec_plan_root != Some(declaration.plan_root)
+            || !consent.terms.dependencies.contains(&declaration.prefix_claim)
+        {
+            return Err(refused("monetary provider did not sign this root's complete execution plan/prefix".into()));
         }
     }
     // ---- writes ----

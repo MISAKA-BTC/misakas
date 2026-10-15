@@ -524,6 +524,24 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
             _ => None,
         }
     }
+
+    fn consumer_service_limits(&self, id: &Hash64) -> Option<(u64, u32)> {
+        let claim = self.builder.state.claims.get(id)?;
+        self.builder.params.panel_lifetime_v2_at(claim.accepted_daa)?;
+        match crate::palw_panel_lifetime_v2::panel_lifetime_claim_v2(&self.builder.state, self.builder.params, id, claim) {
+            Ok(Some(row))
+                if row.total_paused_daa <= row.terms.maximum_pause_daa
+                    && self
+                        .engine
+                        .claim(id)
+                        .is_some_and(|record| record.claim.immutable_fields.as_bytes() == row.terms.immutable_fields) =>
+            {
+                Some((row.terms.service_until_daa, row.terms.maximum_retries))
+            }
+            // Missing/corrupt authority is no permission to draw another window.
+            _ => Some((0, 0)),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -569,6 +587,7 @@ pub(super) fn advance_v1(
     parent: &PalwChainStateV2,
     ctx: &PalwBlockContextV2,
 ) -> Result<(), PalwStateV2Error> {
+    super::palw_panel_lifetime_fold_v2::observe_pauses(builder, ctx)?;
     let Some(mirror) = active_mirror(builder, ctx) else { return Ok(()) };
     let inputs = builder.extras.panel_v3.clone().unwrap_or_default();
     let engine = match builder.state.panel_v3.take() {
@@ -903,6 +922,18 @@ fn admission_of(
     claim_id: &Hash64,
     claim: &PalwClaimStateV2,
 ) -> Result<(AdmittedClaimV1, Option<PanelStrataV1>), &'static str> {
+    match crate::palw_panel_lifetime_v2::panel_lifetime_claim_v2(&builder.state, builder.params, claim_id, claim) {
+        Ok(Some(row)) => {
+            let fields = panel_admitted_claim_v1(&builder.state, *claim_id, 1)
+                .map_err(|_| "the signed Panel claim has no immutable admission fields")?
+                .immutable_fields;
+            if fields.as_bytes() != row.terms.immutable_fields {
+                return Err("the signed Panel lifetime substitutes immutable admission fields");
+            }
+        }
+        Ok(None) => {}
+        Err(_) => return Err("the claim has no matching prospective signed Panel lifetime"),
+    }
     if claim.work_id.is_none_or(|work| work == Hash64::default()) {
         return Err("a claim with no canonical work identity cannot be drawn a Panel (P0-10)");
     }
@@ -940,6 +971,7 @@ pub(super) fn take_block_v1(
     parent: &PalwChainStateV2,
     ctx: &PalwBlockContextV2,
 ) -> Result<(), PalwStateV2Error> {
+    super::palw_panel_lifetime_fold_v2::observe_pauses(builder, ctx)?;
     let proofs = std::mem::take(&mut builder.panel_v3_beacons);
     let Some(mirror) = active_mirror(builder, ctx) else { return Ok(()) };
     let inputs = builder.extras.panel_v3.clone().unwrap_or_default();

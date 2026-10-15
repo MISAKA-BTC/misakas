@@ -140,6 +140,30 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 params.sync_palw_permissionless_panel_v1();
             }
             PalwLifecycleKindFenceV1::ProviderCourtV1 => params.palw_provider_court_v1 = Some(at),
+            PalwLifecycleKindFenceV1::MonetaryMaterialV1 => {
+                use kaspa_consensus_core::palw_monetary_material_v1::*;
+                params.palw_monetary_material_v1 = Some(PalwMonetaryMaterialFenceV1 {
+                    activation: at,
+                    policy: PalwMonetaryMaterialPolicyV1 {
+                        version: 1,
+                        max_contracts: 16,
+                        max_contracts_per_provider: 8,
+                        max_bytes_per_contract: 1_000_000,
+                        max_bytes_per_provider: 8_000_000,
+                        minimum_collateral_sompi: 1,
+                        minimum_fee_sompi: 1,
+                        window_daa: params.palw_bond_budget_v1.as_ref().map_or(280, |b| b.policy.window_daa),
+                        response_window_daa: 64,
+                        max_enrollment_daa: 100,
+                        cost_report_root: Hash64::from_bytes([0xF4; 64]),
+                    },
+                });
+                // `monetary_material_at_v1` also requires the root-exact payment/material schema (reporter V2 + material V3) in
+                // force, else kinds 240-242 past their fence are refused as dormant instead of judged: arm them at or below `at`.
+                params.palw_reporter_income_v2 = Some(at);
+                params.palw_material_income_v3 = Some(at);
+                params.sync_palw_bond_budget_v1();
+            }
             // codex G14 (2026-10-11): class semantics declarations and the staged public court, each its own Some-only fence.
             PalwLifecycleKindFenceV1::ClassSemanticsV1 => params.palw_class_semantics_v1 = Some(at),
             // The staged public court and LG14-A's terminal evidence (tags 162-167) file objective offences: past their own fence
@@ -191,12 +215,22 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 params.sync_palw_exec_payload_v2();
             }
             PalwHeaderFormFenceV1::ReceiptSpendV4 => params.palw_receipt_spend_v4 = Some(at),
+            // The PAV3 attempt carriage shares `palw_monetary_material_v1` (armed above through `MonetaryMaterialV1`).
+            PalwHeaderFormFenceV1::NativeMaterialV3 => {}
             // The PXE2 header form shares the lifecycle kind's fence (armed above, the same field).
             PalwHeaderFormFenceV1::ExecPayloadV2 => params.palw_exec_payload_v2 = Some(at),
         }
     }
     for fence in PalwKernelInnerFenceV1::ALL {
         match fence {
+            PalwKernelInnerFenceV1::ClaimChallengeV2 => {
+                params.palw_claim_challenge_v2 =
+                    Some(kaspa_consensus_core::palw_claim_challenge_v2::PalwClaimChallengeFenceV2::unapproved_probe_at(at));
+            }
+            PalwKernelInnerFenceV1::PanelLifetimeV2 => {
+                params.palw_panel_lifetime_v2 =
+                    Some(kaspa_consensus_core::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2::unapproved_probe_at(at));
+            }
             PalwKernelInnerFenceV1::PanelFreeV1 => {
                 params.palw_panel_free_v1 =
                     Some(kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1::interim_v1(at, Vec::new()));
@@ -222,8 +256,30 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                     kaspa_consensus_core::palw_funded_execution_v11::PalwFundedExecutionFenceV11::unapproved_probe_at(at, [0; 64]),
                 );
             }
+            PalwKernelInnerFenceV1::VerifierPayV1 => params.palw_verifier_pay_v1 = Some(at),
+            // RFC07/RFC08 signed economic contracts (inner 67–69): unapproved probe policies, mirrored below.
+            PalwKernelInnerFenceV1::ModelVerificationGateV1 => {
+                params.palw_model_verification_gate_v1 =
+                    Some(kaspa_consensus_core::palw_econ_contracts_v1::PalwModelVerificationGateFenceV1::unapproved_probe_at(at))
+            }
+            PalwKernelInnerFenceV1::HorizonExtensionV1 => {
+                params.palw_horizon_extension_v1 =
+                    Some(kaspa_consensus_core::palw_econ_contracts_v1::PalwHorizonExtensionFenceV1::unapproved_probe_at(at))
+            }
+            PalwKernelInnerFenceV1::MinimumPriceV1 => {
+                params.palw_minimum_price_v1 =
+                    Some(kaspa_consensus_core::palw_econ_contracts_v1::PalwMinimumPriceFenceV1::unapproved_probe_at(at))
+            }
+            // N3 (inner 73, round 3): the unapproved probe policy (synthetic profile), mirrored below with the economic contracts.
+            PalwKernelInnerFenceV1::BeaconBootstrapV1 => {
+                params.palw_beacon_bootstrap_v1 =
+                    Some(kaspa_consensus_core::palw_beacon_bootstrap_v1::PalwBeaconBootstrapFenceV1::unapproved_probe_at(at))
+            }
         }
     }
+    params.sync_palw_claim_challenge_v2();
+    params.sync_palw_econ_contracts_v1();
+    params.sync_palw_permissionless_panel_v1();
     // Every other fence a LANDED row of the central table names (formulas, state encodings, the live build's kinds judged anew):
     // a row that lands with a fence this harness does not arm fails here, so node C judges every block with it far above.
     for row in PALW_A2_KIND_FENCE_TABLE_V1.iter().filter(|row| row.landed) {
@@ -242,14 +298,56 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_legacy_public_filer_v1"
             | "palw_beacon_source_opt_in_v1"
             | "palw_beacon_source_fee_v1"
+            | "palw_claim_challenge_v2"
+            | "palw_panel_lifetime_v2"
+            | "palw_monetary_material_v1"
             | "palw_exec_payload_v2"
             | "palw_model_refutation_seal_v1"
             | "palw_funded_execution_v11"
             | "palw_stage_execution_v14"
             | "palw_class_semantics_v1"
-            | "palw_staged_public_court_v1" => {} // armed above, through their enums
+            | "palw_staged_public_court_v1"
+            | "palw_model_verification_gate_v1"
+            | "palw_horizon_extension_v1"
+            | "palw_minimum_price_v1"
+            | "palw_beacon_bootstrap_v1" => {} // armed above, through their enums
+            // Armed at or below `at` with the monetary material kinds above; never moved later.
+            "palw_reporter_income_v2" | "palw_material_income_v3" => {
+                params.palw_reporter_income_v2.get_or_insert(at);
+                params.palw_material_income_v3.get_or_insert(at);
+                params.sync_palw_bond_budget_v1();
+            }
+            "palw_paid_consumer_lifecycle_v1" => {
+                params.palw_paid_consumer_lifecycle_v1 =
+                    Some(kaspa_consensus_core::palw_bond_budget_v1::PalwPaidConsumerLifecycleFenceV1 {
+                        activation: at,
+                        policy: kaspa_consensus_core::palw_bond_budget_v1::PalwPaidConsumerLifecyclePolicyV1 {
+                            version: 1,
+                            service_span_daa: 60,
+                            dispute_tail_daa: 700,
+                            material_tail_daa: 500,
+                        },
+                    });
+                params.sync_palw_bond_budget_v1();
+            }
             "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
             "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
+            // The 2026-10-12 rulings' rules (register X3, N4, D2): bare heights and X3's unapproved probe policy, mirrored onto the
+            // V2 bundle the fold reads. Each keys on a claim's acceptance DAA, so far above the chain they judge nothing here.
+            "palw_court_model_scope_v1" | "palw_public_evidence_reward_v1" | "palw_claim_hard_deadline_v1" => {
+                params.palw_court_model_scope_v1 = Some(at);
+                params.palw_public_evidence_reward_v1 = Some(at);
+                params.palw_claim_hard_deadline_v1 =
+                    Some(kaspa_consensus_core::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(at));
+                params.sync_palw_2026_10_12_ruling_fences_v1();
+            }
+            // RFC-0006 R6-CELL round 4's coverage closure: a bare height, mirrored onto the V2 bundle the fold and the court read.
+            // Its registration refusal keys on the block's DAA and its claim gate / court close on a claim's acceptance DAA, so far
+            // above the chain it judges nothing here.
+            "palw_cell_coverage_closure_v1" => {
+                params.palw_cell_coverage_closure_v1 = Some(at);
+                params.sync_palw_cell_coverage_closure_v1();
+            }
             // ADR-0175 needs model lines at or below it (`validate_palw_model_immutable_v1`); artifact root ownership is t12's.
             // testnet-12 runs model lines from genesis: never move them (a later height would disarm the live registry below it).
             "palw_model_immutable_v1" => {
@@ -679,6 +777,24 @@ fn pfs4_block(chain: &mut T12Chain, config: &Config) -> MutableBlock {
     block
 }
 
+/// An attempt-lane block on `chain`'s sink whose carriage is a malformed `PAV3` — built, not inserted. Algo 6 is the attempt id
+/// the live build's gate decodes as PAV2 under every lane it can be asked with.
+fn pav3_block(chain: &mut T12Chain, config: &Config) -> MutableBlock {
+    let mut template = chain
+        .ctx
+        .consensus
+        .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(Vec::new())), TemplateBuildMode::Standard)
+        .expect("a template");
+    stamp_harness_time(&config.params, &mut template.block.header, chain.ctx.simulated_time + config.params.target_time_per_block());
+    let mut block = template.block;
+    block.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2;
+    let mut commitment = kaspa_consensus_core::palw_attempt_material_v3::PALW_ATTEMPT_MATERIAL_WIRE_MAGIC_V3.to_vec();
+    commitment.extend_from_slice(&[0xA3; 96]);
+    block.header.palw_commitment = commitment;
+    block.header.finalize();
+    block
+}
+
 /// **The live build's refusals of a header carriage** — its shape gate (which has no arm for a form added after it) under every
 /// binding and lane it can be asked with; each refuses.
 fn live_build_shape_refusals(block: &MutableBlock) -> Vec<PowLayer0Error> {
@@ -687,7 +803,7 @@ fn live_build_shape_refusals(block: &MutableBlock) -> Vec<PowLayer0Error> {
         for lane in [PalwAttemptLaneV1::Unfenced, PalwAttemptLaneV1::LegacyArm, PalwAttemptLaneV1::ExecutionArm] {
             out.push(
                 check_palw_commitment_shape_at(block.header.pow_algo_id, &block.header.palw_commitment, bound, lane)
-                    .expect_err("the live build's gate refuses a PFS4 carriage under every binding and lane"),
+                    .expect_err("the live build's gate refuses a new-form carriage under every binding and lane"),
             );
         }
     }
@@ -1003,6 +1119,34 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
         "the pruning-proof path refuses it with the live build's gate's refusal: {a_proof}"
     );
     assert_ne!(proof_refusal(&now), a_proof, "past the fence the form is the V4 carriage, judged by its own decode");
+
+    // ---- the PAV3 attempt header: the live build's refusal (a PAV2 decode, refused for its magic), on both paths ----
+    let pav3 = pav3_block(&mut a, &config);
+    let live = live_build_shape_refusals(&pav3);
+    let err = a.ctx.consensus.validate_and_insert_block(pav3.clone().to_immutable()).virtual_state_task.await.expect_err("refused");
+    let header_refusal = err.to_string();
+    assert!(
+        live.iter().any(|e| RuleError::BadPalwCommitmentShape(e.to_string()).to_string() == header_refusal),
+        "the header path refuses a PAV3 header with the live build's gate's refusal: {header_refusal} (the gate's: {live:?})"
+    );
+    let mut proof: Vec<Vec<Arc<kaspa_consensus_core::header::Header>>> = vec![Vec::new(); config.params.max_block_level as usize + 1];
+    proof[0].push(Arc::new(pav3.header.clone()));
+    let proof_refusal =
+        |chain: &T12Chain| chain.ctx.consensus.validate_pruning_proof_standalone(&proof).expect_err("refused").to_string();
+    let a_proof = proof_refusal(&a);
+    assert!(
+        live.iter().any(|e| {
+            kaspa_consensus_core::errors::pruning::PruningImportError::PruningProofBadPalwCommitment(
+                pav3.header.hash,
+                0,
+                e.to_string(),
+            )
+            .to_string()
+                == a_proof
+        }),
+        "the pruning-proof path refuses a PAV3 header with the live build's gate's refusal: {a_proof}"
+    );
+    assert_ne!(proof_refusal(&now), a_proof, "past the fence the form is the PAV3 carriage, judged by its own decode");
     let refused = vec![(pfs4.to_immutable(), header_refusal)];
 
     // ---- every node agrees, block by block ----

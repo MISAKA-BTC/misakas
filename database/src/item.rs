@@ -26,6 +26,13 @@ impl<T> CachedDbItem<T> {
         Self { db, key, cached_item: Arc::new(RwLock::new(None)) }
     }
 
+    /// Forget the shared decoded value after an externally committed batch.
+    /// Callers keep their publication guard until all affected caches are
+    /// invalidated; every clone subsequently reads the durable database value.
+    pub fn invalidate_cache(&self) {
+        *self.cached_item.write() = None;
+    }
+
     pub fn read(&self) -> Result<T, StoreError>
     where
         T: Clone + DeserializeOwned,

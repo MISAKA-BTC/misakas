@@ -384,32 +384,38 @@ pub static PALW_KERNEL_LEDGER_CACHE_HITS_V1: std::sync::atomic::AtomicU64 = std:
 
 /// The cached ledger of a [`PalwKernelRouteStateV1`] (see its `ledger_cache`). Clones share the immutable ledger; a load clones it.
 #[derive(Clone, Default)]
-pub struct KernelLedgerCacheV1(Option<std::sync::Arc<KernelLedgerV1>>, bool);
+pub struct KernelLedgerCacheV1(Option<std::sync::Arc<crate::palw_native_resource_v1::ReservedKernelLedgerV1>>, bool);
 
 impl KernelLedgerCacheV1 {
-    pub fn get(&self) -> Option<KernelLedgerV1> {
-        if self.1 { None } else { self.0.as_ref().map(|l| (**l).clone()) }
+    /// Cache clones share both immutable payload and its reservation ticket.
+    pub(crate) fn native_ledger_ref_v1(&self) -> Option<&KernelLedgerV1> {
+        self.0.as_ref().map(|ledger| &ledger.ledger)
     }
-
-    pub fn set(&mut self, ledger: KernelLedgerV1) {
+    pub fn get(&self) -> Result<Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1>, String> {
+        if self.1 {
+            return Ok(None);
+        }
+        self.0.as_ref().map(|ledger| ledger.try_clone_v1().map_err(|e| e.to_string())).transpose()
+    }
+    pub fn set(&mut self, ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1) {
         self.0 = Some(std::sync::Arc::new(ledger));
         self.1 = false;
     }
-
     pub fn clear(&mut self) {
         self.0 = None;
         self.1 = false;
     }
-
-    pub(crate) fn native_projection(&self) -> Option<KernelLedgerV1> {
-        if self.1 { self.0.as_ref().map(|l| (**l).clone()) } else { None }
+    pub(crate) fn native_projection(&self) -> Result<Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1>, String> {
+        if !self.1 {
+            return Ok(None);
+        }
+        self.0.as_ref().map(|ledger| ledger.try_clone_v1().map_err(|e| e.to_string())).transpose()
     }
-    pub(crate) fn set_native_projection(&mut self, mut ledger: KernelLedgerV1) {
+    pub(crate) fn set_native_projection(&mut self, mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1) {
         ledger.flat_conformance_classes_v9.clear();
         self.0 = Some(std::sync::Arc::new(ledger));
         self.1 = true;
     }
-
     pub fn is_set(&self) -> bool {
         self.0.is_some()
     }
@@ -482,15 +488,17 @@ impl PalwKernelRouteStateV1 {
     /// The kernel ledger these rows describe (over the state's own configuration): the cached one when the fold left it (GAP 8: no
     /// row decoded, no program decoded, no gate recomputed), else rebuilt from the rows. In a debug build the cache is checked against
     /// the rows every time, so a write path that forgot to clear it fails the tests instead of a node.
-    pub fn ledger(&self) -> Result<KernelLedgerV1, String> {
-        let scoped = |mut ledger: KernelLedgerV1| -> Result<KernelLedgerV1, String> {
+    pub fn ledger(&self) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, String> {
+        let scoped = |mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1| -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, String> {
             ledger.commitment_scope_from_daa = match self.aux.get(&(PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1, Vec::new())) {
                 Some(bytes) => Some(borsh::from_slice(bytes).map_err(|_| "malformed court-scope activation")?),
                 None => None,
             };
+            ledger.reserve_projection_v1(self).map_err(|e| e.to_string())?;
+            self.apply_paid_claim_consumer_inputs_v2(&mut ledger)?;
             Ok(ledger)
         };
-        if let Some(cached) = self.ledger_cache.get() {
+        if let Some(cached) = self.ledger_cache.get()? {
             PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             debug_assert!(
                 cached.scalars() == self.header.scalars && cached.to_rows() == self.rows,
@@ -498,7 +506,11 @@ impl PalwKernelRouteStateV1 {
             );
             return scoped(cached);
         }
-        scoped(KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &self.rows)?)
+        let lease = crate::palw_native_resource_v1::reserve_ledger_expansion_v1(self, false).map_err(|e| e.to_string())?;
+        scoped(crate::palw_native_resource_v1::ReservedKernelLedgerV1::from_preflight_v1(
+            KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &self.rows)?,
+            lease,
+        ))
     }
 
     /// A decoded aux row.
@@ -709,8 +721,9 @@ impl PalwKernelRouteStateV1 {
                 .map(|row| row.committed_daa)
                 .min()
                 .unwrap_or(receipt.accepted_daa);
-            let (final_path, event) = match receipt.mode {
-                VerificationModeV1::OptimisticPublicVerification => {
+            let (final_path, event) = match (receipt.mode, ledger.paid_claim_consumers_v2.contains_key(&receipt.claim)) {
+                (_, true) => ("PaidClaimV2", None),
+                (VerificationModeV1::OptimisticPublicVerification, false) => {
                     let ctx = WorkFinalContextV1 {
                         accepted_position: earliest,
                         settlement_position: receipt.final_daa,
@@ -732,7 +745,7 @@ impl PalwKernelRouteStateV1 {
                     };
                     ("PanelIndependent", Some(borsh::to_vec(&attributed).map_err(|e| e.to_string())?))
                 }
-                VerificationModeV1::PanelLicensed => ("PanelLicensed", None),
+                (VerificationModeV1::PanelLicensed, false) => ("PanelLicensed", None),
             };
             let statement = receipt.assurance.statement();
             out.push(KernelFinalReadV1 { receipt, final_path, event, statement });
@@ -1388,7 +1401,7 @@ impl PalwKernelRouteStateV1 {
     /// historical registration was fully independently checked in its block.
     /// Remote snapshot consumers use ledger()/full from_rows and an external
     /// chain anchor, never this fixed-prefix operational projection.
-    pub(crate) fn ledger_native_projection_v9(&self) -> Result<KernelLedgerV1, String> {
+    pub(crate) fn ledger_native_projection_v9(&self) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, String> {
         use misaka_palw_kernel::{ledger::flat_candidate9::*, rows::*};
         let mut count = 0usize;
         let mut bytes = 0usize;
@@ -1407,7 +1420,7 @@ impl PalwKernelRouteStateV1 {
         if count == 0 {
             return self.ledger();
         }
-        if let Some(cached) = self.ledger_cache.native_projection() {
+        if let Some(cached) = self.ledger_cache.native_projection()? {
             debug_assert!(cached.scalars() == self.header.scalars);
             debug_assert!(cached.flat_conformance_classes_v9.is_empty());
             debug_assert!(cached.native_candidate_count_v9() == count);
@@ -1417,8 +1430,12 @@ impl PalwKernelRouteStateV1 {
                 self.rows.keys().filter(|(t, _)| *t != TABLE_FLAT_CONFORMANCE_CLASSES_V9).count()
             );
             PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut cached = cached;
+            cached.reserve_projection_v1(self).map_err(|e| e.to_string())?;
+            self.apply_paid_claim_consumer_inputs_v2(&mut cached)?;
             return Ok(cached);
         }
+        let lease = crate::palw_native_resource_v1::reserve_ledger_expansion_v1(self, true).map_err(|e| e.to_string())?;
         let rows: LedgerRowsV1 = self
             .rows
             .iter()
@@ -1434,7 +1451,8 @@ impl PalwKernelRouteStateV1 {
                 row.get(..64).ok_or("native9 truncated admitted owner")?.try_into().map_err(|_| "native9 owner size")?;
             ledger.note_native_candidate_projection_v9(owner, class)?;
         }
-        Ok(ledger)
+        self.apply_paid_claim_consumer_inputs_v2(&mut ledger)?;
+        Ok(crate::palw_native_resource_v1::ReservedKernelLedgerV1::from_preflight_v1(ledger, lease))
     }
 }
 

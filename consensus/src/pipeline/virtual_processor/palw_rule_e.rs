@@ -24,7 +24,6 @@ use kaspa_consensus_core::{
     blockhash::ORIGIN,
     config::params::ForkActivation,
     dns_finality::ActiveBondView,
-    palw_attempt_v2::PalwAttemptEnvelopeV2,
     palw_fork_authority_v2::{PALW_REORG_SHALLOW_TIE_DAA_V1, PalwDeepReorgV2},
     palw_fork_choice_rule_e_v1::{
         PALW_RULE_E_FORK_WALK_V1, PALW_RULE_E_MAX_EXTRA_CANDIDATES_V1, PALW_RULE_E_MAX_SCORED_V1, PALW_RULE_E_SCORE_WALK_V1,
@@ -239,7 +238,10 @@ impl VirtualStateProcessor {
                 if !is_palw_attempt_algo_id(header.pow_algo_id) {
                     continue;
                 }
-                let Ok(envelope) = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment) else { continue };
+                let Ok(envelope) = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment)
+                else {
+                    continue;
+                };
                 let bond = PalwBondKeyV2(envelope.attempt.executor_bond);
                 if registry.bond(&bond).is_some() {
                     bonds.insert(bond);

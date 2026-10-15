@@ -1290,6 +1290,10 @@ impl Qwen25A16Backend {
     /// **Hold the cache in `profile`'s representation** — `A16-KV-i32` (the oracle) or
     /// `A16-KV-i16`. A node-local choice: every root this backend commits is the same under either.
     pub fn with_runtime_profile(mut self, profile: kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1) -> Self {
+        assert!(
+            profile != kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1::Base0KvI8,
+            "BASE0 i8 storage is not an A16 runtime representation"
+        );
         self.runtime_profile = profile;
         self
     }
@@ -2067,7 +2071,7 @@ impl Qwen25A16Backend {
         carried_prompt: Option<&[u32]>,
     ) -> Result<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldEvidenceV1, String> {
         use kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1;
-        use kaspa_consensus_core::palw_step_leg::{PalwStepPrefixStreamV1, step_tile_leaf_hash_ctx_v1};
+        use kaspa_consensus_core::palw_step_leg::PalwStepPrefixStreamV1;
         let binding = &filing.binding;
         if binding.shape_profile.shape_profile_id() != self.class_profile_id {
             return Err("the filing is not this class's".to_string());
@@ -2107,7 +2111,7 @@ impl Qwen25A16Backend {
             vocab: self.artifact.shape.vocab,
             run: self.prefill_run_positions,
         };
-        let (_ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+        let hasher = crate::step_tile_hasher::StepTileHasherV1::new(ctx, profile.shape_profile_id());
         let mut query_tile = None;
         let mut pushed: Result<(), String> = Ok(());
         crate::fp_interval::base0_fp_replay_interval_with_v1(
@@ -2119,7 +2123,7 @@ impl Qwen25A16Backend {
             &mut replay,
             &mut |index, tile| {
                 if index < narrowed && pushed.is_ok() {
-                    pushed = stream.push(step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &tile)).map_err(|e| e.to_string());
+                    pushed = stream.push(hasher.hash(&tile)).map_err(|e| e.to_string());
                     if index == query_leaf {
                         query_tile = Some(tile);
                     }
@@ -2180,7 +2184,7 @@ impl Qwen25A16Backend {
     ) -> Result<Vec<kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1>, String> {
         use kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1;
         use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, PalwStepNodeRoleV1, PalwStepOutLenV1, PalwStepTableV1};
-        use kaspa_consensus_core::palw_step_leg::{PalwStepPrefixStreamV1, step_tile_leaf_hash_ctx_v1};
+        use kaspa_consensus_core::palw_step_leg::PalwStepPrefixStreamV1;
         if !self.court_capable {
             return Err("the v1 class carries no capture to read a cache row out of".to_string());
         }
@@ -2244,7 +2248,7 @@ impl Qwen25A16Backend {
             vocab: self.artifact.shape.vocab,
             run: self.prefill_run_positions,
         };
-        let (_ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+        let hasher = crate::step_tile_hasher::StepTileHasherV1::new(ctx, profile.shape_profile_id());
         let mut kept: Vec<(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)> = Vec::new();
         let mut pushed: Result<(), String> = Ok(());
         crate::fp_interval::base0_fp_replay_interval_with_v1(
@@ -2256,7 +2260,7 @@ impl Qwen25A16Backend {
             &mut replay,
             &mut |index, tile| {
                 if index < narrowed && pushed.is_ok() {
-                    pushed = stream.push(step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &tile)).map_err(|e| e.to_string());
+                    pushed = stream.push(hasher.hash(&tile)).map_err(|e| e.to_string());
                     if wanted.contains(&index) {
                         kept.push((index, tile));
                     }
@@ -4431,12 +4435,11 @@ fn a16_leaves_by_position(
     binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
     tiles: &[(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)],
 ) -> Vec<Hash64> {
-    let _ctx_hash = binding.job_context.context_hash();
-    let profile_hash = binding.shape_profile.shape_profile_id();
+    let hasher = crate::step_tile_hasher::StepTileHasherV1::new(&binding.job_context, binding.shape_profile.shape_profile_id());
     let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
     for (index, leaf) in tiles {
         if let Some(slot) = leaves.get_mut(*index as usize) {
-            *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, leaf);
+            *slot = hasher.hash(leaf);
         }
     }
     leaves

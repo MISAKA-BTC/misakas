@@ -227,3 +227,7 @@ mod tests {
         assert!(borsh::to_vec(&empty_proof(0, "model")).unwrap().len() < 33_000);
     }
 }
+
+// Read-only native allocation inventory; no state/root/codec field is added.
+#[path = "palw_native_resource_v1/private/palw_json_key_set_v1.rs"]
+mod native_resource_inventory_v1;

@@ -9,11 +9,17 @@ fn keyed64(domain: &[u8], parts: &[&[u8]]) -> Hash64 {
 }
 
 impl PalwChainStateV2 {
+    pub fn material_monetary_ledger_v1(&self) -> Option<&PalwBondBudgetStateV1> {
+        self.bond_budget.as_ref()
+    }
     /// Last material release for a native root and its authenticated EXEC dependencies.
     /// MAX means an actual funded right/queue still has no physical payment clock.
     /// This does not extend any signed kernel/provider term; admission must separately
     /// obtain consent/funding for a sufficient finite term.
     pub fn material_income_hold_until_v1(&self, params: &PalwStateParamsV2, root: Hash64) -> Option<u64> {
+        self.material_income_hold_without_covenant_v1(params, root).max(self.monetary_material_hold_v1(root))
+    }
+    pub fn material_income_hold_without_covenant_v1(&self, params: &PalwStateParamsV2, root: Hash64) -> Option<u64> {
         let book = self.bond_budget.as_ref()?;
         if params.material_income_from().is_none() || book.header.version < PALW_BOND_BUDGET_STATE_VERSION_V3 {
             return None;
@@ -55,6 +61,7 @@ impl TransitionBuilder<'_> {
         if !self.params.material_income_active_at(now) {
             return Ok(());
         }
+        self.state.require_monetary_material_enrollment_v1(self.params, root, now, None)?;
         self.bond_budget_op(|budget, _, j| budget.bind_material_income_v1(root, income, j))
             .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("material root has no monetary engine".into()))?
             .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))
@@ -271,6 +278,16 @@ impl TransitionBuilder<'_> {
         let mut roots = BTreeSet::new();
         let mut legacy = false;
         for entry in &self.entries {
+            if let PalwDeltaEntryV2::KernelRouteRow { table, old, new, .. } = entry
+                && *table == crate::palw_monetary_material_v1::PALW_MONETARY_MATERIAL_TABLE_V1
+            {
+                for bytes in [old, new].into_iter().flatten() {
+                    let row: crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1 = borsh::from_slice(bytes).map_err(|_| {
+                        PalwStateV2Error::CarriageInconsistent("monetary material retirement row does not decode".into())
+                    })?;
+                    roots.extend(self.state.monetary_material_scope_v1(&row));
+                }
+            }
             if let PalwDeltaEntryV2::BondBudgetRow { table, old, new, .. } = entry
                 && *table == PALW_BUDGET_TABLE_MATERIAL_INCOME_V1
             {

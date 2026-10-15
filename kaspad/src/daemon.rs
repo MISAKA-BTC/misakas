@@ -480,14 +480,17 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         println!("this data directory belongs to the test-only RFC12 private probe; ordinary kaspad refuses it");
         exit(1);
     }
-    create_core_with_runtime_inner(runtime, args, fd_total_budget, None)
+    create_core_with_runtime_inner(runtime, args, fd_total_budget, None, None)
 }
 
+/// `native_custody` (RFC-0008 PAV3): a wiring hook only the feature-gated private-integration constructor passes; ordinary
+/// kaspad passes `None`, and its producer holds past the monetary fence for want of a provider exchange.
 pub(crate) fn create_core_with_runtime_inner(
     runtime: &Runtime,
     args: &Args,
     fd_total_budget: i32,
     private_config: Option<kaspa_consensus_core::config::Config>,
+    native_custody: Option<crate::palw_native_custody_v3::PalwNativeCustodyHookV3>,
 ) -> (Arc<Core>, Arc<RpcCoreService>) {
     let network = args.network();
     let mut fd_remaining = fd_total_budget;
@@ -525,6 +528,22 @@ pub(crate) fn create_core_with_runtime_inner(
     crate::palw_prefill_run::arm_prefill_run_cap_v1(args.palw_prefill_run_max);
     // The reservation ledger's declared bound (ADR-0151 follow-up, item 3): the per-node share, so
     // three duties in this process cannot each take the whole host because each fitted alone.
+    kaspa_consensus_core::palw_native_resource_v1::arm_native_resource_limits_v1(args.palw_native_resource_admission_v1.then_some(
+        kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotResourceLimitsV1 {
+            // A missing explicit budget is zero capacity, never unlimited.
+            memory_bytes: args.palw_native_memory_budget.unwrap_or(0),
+            database_bytes: args.palw_native_database_budget.unwrap_or(0),
+        },
+    ));
+    kaspa_consensus_core::palw_native_resource_v1::arm_native_logical_limits_v1(
+        (args.palw_native_logical_admission_v1 || args.palw_native_resource_admission_v1).then_some(
+            kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotResourceLimitsV1 {
+                memory_bytes: args.palw_native_memory_budget.unwrap_or(0),
+                database_bytes: args.palw_native_database_budget.unwrap_or(0),
+            },
+        ),
+    );
+    crate::palw_resource_admission_v2::arm(args.palw_resource_admission_v2);
     crate::palw_memory_ledger::arm_host_share_v1(crate::args::palw_host_share_bytes_v1(args));
     // int-10.2 D1: and, where the operator named one, the host ledger every node on this host shares —
     // the host pool is rebuilt over it (same share, same carve) before any service can reserve.
@@ -1388,6 +1407,21 @@ Do you confirm? (y/n)";
     // Read before `config` moves: whether this is a PALW (ConsensusV2) network, for the janitor below.
     let palw_consensus_v2 =
         matches!(config.params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_));
+    // RFC-0008 PAV3 (private-integration constructor only): any in-node loopback provider service, and the exchange this
+    // node's producer seals custody carriages through. Refused at construction, like the private profile's other inputs.
+    let palw_native_exchange = native_custody.and_then(|hook| {
+        hook(crate::palw_native_custody_v3::PalwNativeCustodyContextV3 {
+            consensus_manager: consensus_manager.clone(),
+            config: config.clone(),
+            data_dir: app_dir.join(network.to_prefixed()),
+            class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
+            class_cache_bytes: args.palw_class_cache_bytes,
+            chain_classes: palw_chain_classes,
+            producer_key_path: args.palw_producer_key.clone(),
+            producer_bond: args.palw_producer_bond.clone(),
+        })
+        .unwrap_or_else(|why| panic!("RFC-0008 PAV3 private native custody wiring: {why}"))
+    });
     let palw_producer_service = if args.palw_produce {
         // **A producer with no way to carry a lifecycle object must not start** (audit M2-10).
         //
@@ -1488,15 +1522,14 @@ Do you confirm? (y/n)";
                         // salted chain; refused again here, on the chain this node RUNS, so a lost params swap cannot
                         // arm it on public testnet-12.
                         drill_real_submit_delay: match args.palw_drill_real_submit_delay_s {
-                            Some(seconds) if config.palw_drill_genesis_salt.is_none() || !palw_private_drill => {
-                                panic!("--palw-drill-real-submit-delay-s={seconds} is a drill and is a salted testnet-12 drill only")
-                            }
                             Some(seconds) => {
+                                let delay = crate::palw_drill::palw_drill_real_submit_delay_v1(&config, Some(seconds))
+                                    .unwrap_or_else(|error| panic!("{error}"));
                                 warn!(
                                     "PALW DRILL: this producer will hold every REAL (non-floor) attempt it wins for {seconds} s after its \
                                      template before submitting it, to emulate an 8k inference. Its blocks reach the chain late on purpose."
                                 );
-                                Some(std::time::Duration::from_secs(seconds))
+                                delay
                             }
                             None => None,
                         },
@@ -1566,6 +1599,7 @@ Do you confirm? (y/n)";
                                 Some(class_id),
                             ),
                         ),
+                        native_exchange: palw_native_exchange,
                     },
                     consensus_manager.clone(),
                     mining_manager.clone(),

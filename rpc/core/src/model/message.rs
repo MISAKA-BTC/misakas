@@ -2604,3 +2604,8 @@ mod reward_vesting_codec_version_tests {
         assert!(<GetPalwRewardVestingResponse as Deserializer>::deserialize(&mut bytes.as_slice()).is_err());
     }
 }
+
+mod palw_monetary_material;
+pub use palw_monetary_material::*;
+mod palw_state_carriage;
+pub use palw_state_carriage::*;

@@ -97,3 +97,7 @@ impl PalwBase0PrefixDigestV1 {
         Ok(crate::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&self.class_id, self.prefix_tokens, &self.hash.finish()))
     }
 }
+
+// Read-only native allocation inventory; no state/root/codec field is added.
+#[path = "palw_native_resource_v1/private/palw_prefix_base0_codec_v1.rs"]
+mod native_resource_inventory_v1;

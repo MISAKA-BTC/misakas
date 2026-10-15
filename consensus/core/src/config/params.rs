@@ -3068,6 +3068,23 @@ pub struct Params {
     /// Root-exact physical monetary payment/material retention, schema v3.
     /// Separate dormant fence; requires budget and reporter schemas at/below it.
     pub palw_material_income_v3: Option<ForkActivation>,
+    /// Prospective producer-signed absolute Panel service lifetime. Dormant.
+    pub palw_panel_lifetime_v2: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2>,
+    /// Signed Claim V2 seed/checker/lifetime contract; dormant without scoped review.
+    pub palw_claim_challenge_v2: Option<crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2>,
+    /// Explicit signed payment-relative material covenants; dormant without cost approval.
+    pub palw_monetary_material_v1: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialFenceV1>,
+    /// **RFC07 R7-ECON: the optional verification-attestation gate on the model allocation** ([`crate::palw_econ_contracts_v1`]):
+    /// inner 67 / aux 125. Dormant; Some-only; needs `palw_model_bond_allocation_v1` at or below it; refused when armed.
+    pub palw_model_verification_gate_v1: Option<crate::palw_econ_contracts_v1::PalwModelVerificationGateFenceV1>,
+    /// **RFC08 R8-WINDOW: the consent-signed dependency horizon extension**: inner 68 / aux 126. Dormant; Some-only; refused when armed.
+    pub palw_horizon_extension_v1: Option<crate::palw_econ_contracts_v1::PalwHorizonExtensionFenceV1>,
+    /// **RFC08 R8-ECON: the worker/poster minimum-price contract**: inner 69 / aux 127. Dormant; Some-only; refused when armed.
+    pub palw_minimum_price_v1: Option<crate::palw_econ_contracts_v1::PalwMinimumPriceFenceV1>,
+    /// **N3 (round 3): the Work Beacon's independent bootstrap — BootstrapExact source rounds** ([`crate::palw_beacon_bootstrap_v1`]):
+    /// inner 73 / aux 130. Dormant; Some-only; needs `palw_probabilistic_constraints_v1` at or below it; refused when armed (no
+    /// approved profile). A source-only record: no reward, block right or Final weight.
+    pub palw_beacon_bootstrap_v1: Option<crate::palw_beacon_bootstrap_v1::PalwBeaconBootstrapFenceV1>,
     /// Immutable paid native consumer service/backstop/material contract. Dormant.
     pub palw_paid_consumer_lifecycle_v1: Option<crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleFenceV1>,
     /// **ADR-0177 D3–D5: the model-bond allocation** ([`crate::palw_bond_budget_v1`]): past this height a bond's signed capital
@@ -3113,7 +3130,18 @@ pub struct Params {
     /// **palw_claim_hard_deadline_v1** — register X3: past it a claim's dispute hard deadline is fixed at acceptance and never extended. **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only
     /// in both fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_2026_10_12_ruling_fences_v1`])
     /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/mainnet-spec-register-2026-10-12.md).
-    pub palw_claim_hard_deadline_v1: Option<ForkActivation>,
+    /// The value carries X3's policy (`T_prepare`, `T_observe`, `T_resolve` and the `B_*` start-budget terms with no existing
+    /// source — [`crate::palw_ruling_fences_v1`]), hashed Some-only by its id beside the height; no value is approved.
+    pub palw_claim_hard_deadline_v1: Option<crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1>,
+    /// **palw_cell_coverage_closure_v1** — RFC-0006 R6-CELL round 4 ([`crate::palw_cell_coverage_closure_v1`]): past it a legacy class
+    /// whose cell coverage has a gap (an unknown state chunk map id — the step court's fail-open — or an uncovered kind: the hybrid
+    /// v1/v2 recurrence half, a solo recurrence map, a multi-router table, a Kimi router) is refused at registration (keyed on the
+    /// class's registration DAA), its claims are refused at the claim gate where the fold holds its graph, and a court close of a
+    /// claim accepted past it convicts where the fold does not (keyed on the claim's acceptance DAA). Pays and weights nothing.
+    /// **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only in both
+    /// fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_cell_coverage_closure_v1`]) until its
+    /// rule is verified.
+    pub palw_cell_coverage_closure_v1: Option<ForkActivation>,
 
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
@@ -5934,6 +5962,13 @@ impl Params {
             palw_bond_budget_v1: self.palw_bond_budget_v1.clone(),
             palw_reporter_income_v2: self.palw_reporter_income_v2,
             palw_material_income_v3: self.palw_material_income_v3,
+            palw_panel_lifetime_v2: self.palw_panel_lifetime_v2,
+            palw_claim_challenge_v2: self.palw_claim_challenge_v2,
+            palw_monetary_material_v1: self.palw_monetary_material_v1.clone(),
+            palw_model_verification_gate_v1: self.palw_model_verification_gate_v1,
+            palw_horizon_extension_v1: self.palw_horizon_extension_v1,
+            palw_minimum_price_v1: self.palw_minimum_price_v1.clone(),
+            palw_beacon_bootstrap_v1: self.palw_beacon_bootstrap_v1,
             palw_paid_consumer_lifecycle_v1: self.palw_paid_consumer_lifecycle_v1.clone(),
             palw_model_bond_allocation_v1: self.palw_model_bond_allocation_v1.clone(),
             palw_reporter_share_v2: self.palw_reporter_share_v2,
@@ -5941,6 +5976,7 @@ impl Params {
             palw_court_model_scope_v1: self.palw_court_model_scope_v1,
             palw_public_evidence_reward_v1: self.palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1: self.palw_claim_hard_deadline_v1,
+            palw_cell_coverage_closure_v1: self.palw_cell_coverage_closure_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -7061,6 +7097,13 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_panel_lifetime_v2: None,
+    palw_claim_challenge_v2: None,
+    palw_monetary_material_v1: None,
+    palw_model_verification_gate_v1: None,
+    palw_horizon_extension_v1: None,
+    palw_minimum_price_v1: None,
+    palw_beacon_bootstrap_v1: None,
     palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
@@ -7068,6 +7111,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
+    palw_cell_coverage_closure_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -7384,6 +7428,13 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_panel_lifetime_v2: None,
+    palw_claim_challenge_v2: None,
+    palw_monetary_material_v1: None,
+    palw_model_verification_gate_v1: None,
+    palw_horizon_extension_v1: None,
+    palw_minimum_price_v1: None,
+    palw_beacon_bootstrap_v1: None,
     palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
@@ -7391,6 +7442,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
+    palw_cell_coverage_closure_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -7689,6 +7741,13 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_panel_lifetime_v2: None,
+    palw_claim_challenge_v2: None,
+    palw_monetary_material_v1: None,
+    palw_model_verification_gate_v1: None,
+    palw_horizon_extension_v1: None,
+    palw_minimum_price_v1: None,
+    palw_beacon_bootstrap_v1: None,
     palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
@@ -7696,6 +7755,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
+    palw_cell_coverage_closure_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -12860,6 +12920,10 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_reporter_share_v2();
     // The legacy route's public filer (lane LG14-A), likewise.
     params.sync_palw_legacy_public_filer_v1();
+    // The 2026-10-12 rulings' fences (X3, N4, D2), likewise.
+    params.sync_palw_2026_10_12_ruling_fences_v1();
+    // RFC-0006 R6-CELL round 4's coverage closure, likewise.
+    params.sync_palw_cell_coverage_closure_v1();
     // RFC-0001 §2.10's adapter class listing, likewise.
     params.sync_palw_adapter_class_v1();
     // ADR-0096's decode constraint, likewise.
@@ -13156,6 +13220,13 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_panel_lifetime_v2: None,
+    palw_claim_challenge_v2: None,
+    palw_monetary_material_v1: None,
+    palw_model_verification_gate_v1: None,
+    palw_horizon_extension_v1: None,
+    palw_minimum_price_v1: None,
+    palw_beacon_bootstrap_v1: None,
     palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
@@ -13163,6 +13234,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
+    palw_cell_coverage_closure_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,

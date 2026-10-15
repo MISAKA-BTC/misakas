@@ -2975,12 +2975,11 @@ fn qwen36_leaves_by_position(
     binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
     tiles: &[(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)],
 ) -> Vec<Hash64> {
-    let _ctx_hash = binding.job_context.context_hash();
-    let profile_hash = binding.shape_profile.shape_profile_id();
+    let hasher = crate::step_tile_hasher::StepTileHasherV1::new(&binding.job_context, binding.shape_profile.shape_profile_id());
     let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
     for (index, leaf) in tiles {
         if let Some(slot) = leaves.get_mut(*index as usize) {
-            *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, leaf);
+            *slot = hasher.hash(leaf);
         }
     }
     leaves

@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "kind": "specific-overlay-negative-cache-controls",
+  "sources": {
+    "consensus/src/model/stores/overlay_absent_cache.rs": "fb196b26070b33e9a507cf03504c102d9b8eee8d63ef38f5637cd6378a65468c",
+    "consensus/src/model/stores/rewarded_epochs.rs": "e5434c1000f352febdbefd548b975c08461549ad9352d64fc3fa24f1699cedd8",
+    "consensus/src/model/stores/epoch_accumulator.rs": "45c2e57b2d53c9c39b71f0a9405a80b6e0966a058aecea32b3f33603d7bb1a68",
+    "consensus/src/model/stores/pruning_overlay_snapshot.rs": "df479e57283403c3a600e90f8572d9f99c162997b877219692b08fedaa2fa9bb",
+    "consensus/src/model/stores/mod.rs": "4c05e5ccbf7815a0df36ccc8bcd07ee4861994ac7cb423cd266c47f9cd10d06d"
+  },
+  "libraries": {
+    "rocksdb": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/librocksdb-1051681b1c647835.rlib",
+      "sha256": "450db98e4ee92eabb3e66688d16029f12f231740ecef89a694e668888e44a7b8"
+    },
+    "parking_lot": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libparking_lot-8de9406302607524.rlib",
+      "sha256": "764973d48621d223fb8c88532f6bc95c676de97eb156396b30003e84f9cfab10"
+    },
+    "kaspa_utils": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_utils-1359c7195c3b2bc5.rlib",
+      "sha256": "bdd21be87dc62bbcaad637ffc91d958877eef20c162139dcff582605c005b56d"
+    },
+    "indexmap": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libindexmap-3eb036414c6ce2e3.rlib",
+      "sha256": "7df246aceabdcdc450edc7496b6480ebed048a41210e6bd1588f85575666af7c"
+    },
+    "kaspa_hashes": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_hashes-3fc5d0c1255d8f6c.rlib",
+      "sha256": "acf5ccdb20eadfccc32548ed82b0dc092a8b456f9340131547cf725456081c56"
+    },
+    "kaspa_consensus_core": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_consensus_core-6bbd04bb0b7b74a6.rlib",
+      "sha256": "ffd8b49f57bd70b0239ad9321de87b95cd8fbb2374684ff8db6482cb3c2e91e1"
+    },
+    "kaspa_database": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_database-73c0e2813b89ae91.rlib",
+      "sha256": "c8b950dde2ec0c3ee2d17a930113367ccee46078781c5a361db283915849c7b9"
+    }
+  },
+  "harnessSourceSha256": "3e445a5c982b266af123abf63c9a2ba9531d07b24876e0603086dd47d124c71c",
+  "binarySha256": "2323ad3844f212b57eff20169e09cc50d4045c23daaefda9ee3472014d6175fb",
+  "compileExit": 0,
+  "testsPassed": 16,
+  "testsFailed": 0,
+  "testsIgnored": 0,
+  "testBodySeconds": 0.1,
+  "maximumResidentSetSizeBytes": 20709376,
+  "native100kAccepted": false,
+  "realP2pAccepted": false,
+  "sustainedPerformanceAccepted": false,
+  "pendingKeyLimit": 16384,
+  "saturation": "negative-cache-disabled-until-fresh-store/reopen"
+}

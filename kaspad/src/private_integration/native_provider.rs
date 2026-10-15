@@ -1,0 +1,887 @@
+//! **RFC-0008 PAV3 loopback provider for the private paid-v3 profile** (lead default B, 2026-10-15; unverified source,
+//! never compiled or run here). Feature-gated with the rest of `private_integration`: ordinary kaspad Args cannot select it.
+//!
+//! A provider service owns, per configured fixture provider bond, a [`DurableMonetaryMaterialProviderV1`] store under the
+//! node's private data dir, and signs a producer's Ready only after it
+//!
+//! 1. obtained the material authority from ITS OWN node's Consensus API
+//!    (`palw_native_material_provider_authority_v3`, which re-runs the canonical session selection at the checkpoint),
+//! 2. re-derived the job prompt from the anchor and rebuilt the complete typed bundle from the capture with its own backend
+//!    (`palw_native_custody_v3::palw_native_bundle_v3`, the one function the producer uses too), and found the producer's
+//!    manifest identical,
+//! 3. checked that the chain's registered key for its roster bond is the key it holds, and that the executor is not one of
+//!    its own operators,
+//! 4. durably published the bundle (`misaka_palw_remote::native_ready_v3::provider_sign_native_ready_v3`).
+//!
+//! Keys are the private fixture's seat seeds (the files `export_private_complete_bootstrap_v1` writes, loaded with
+//! `load_validator_seed` like every private seat key) named with their bond outpoints; each must be the salt's own card for
+//! that bond, at least two distinct card operators are required, and none may be the local producer's key, bond or operator.
+//! Transport: in-process (this node's own producer), or one framed request per connection over TCP carrying the
+//! integrity-authenticated provider envelope (`misaka_palw_remote::provider_transport_v1`, 2026-10-15 round 3): the request is
+//! signed by the executor's registered bond key, every response by each answering provider bond's registered key, with the
+//! network domain, a nonce, the wall clock and the DAA score bound and a replay guard on the provider. The loopback socket is
+//! one instance of it; `--private-probe-native-network=remote` admits separate hosts (still feature-gated, private only). It
+//! is TLS-free by design: the material is public, so nothing is encrypted — integrity and authentication are the guarantees.
+//!
+//! The service also runs the provider GC janitor (`misaka_palw_remote::monetary_material_gc`) over its own Consensus API: a
+//! retained bundle is deleted only under `palw_monetary_material_release_finalized_v1` (accepted native release AND
+//! selected-chain finality of the release block), with a write-ahead intent marker; every failed read retains.
+use crate::palw_native_custody_v3::{
+    NativeReadyExchangeV3, PALW_NATIVE_READY_EXCHANGE_VERSION_V3, PalwNativeCustodyContextV3, PalwNativeCustodyHookV3,
+    PalwNativeExchangeHandleV3, PalwNativeReadyRequestV3, PalwNativeReadyResponseV3, palw_native_bundle_v3, palw_native_prompt_v3,
+};
+use kaspa_consensus_core::{
+    palw_material_capacity_v1::PalwMaterialNativeAuthorityV1,
+    palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    palw_state_v2::{PalwBondKeyV2, palw_operator_id_v2},
+};
+use kaspa_hashes::Hash64;
+use misaka_palw_remote::{
+    monetary_material::DurableMonetaryMaterialProviderV1,
+    monetary_material_gc::{MonetaryMaterialGcJanitorV1, MonetaryMaterialGcOracleV1},
+    provider_transport_v1::{
+        PALW_PROVIDER_TRANSPORT_REPLAY_CAPACITY_V1, ProviderTransportPolicyV1, ProviderTransportPurposeV1,
+        ProviderTransportReplayGuardV1, ProviderTransportRequestV1, ProviderTransportResponseV1, ProviderTransportSignerV1,
+        provider_transport_request_v1, provider_transport_response_v1, provider_transport_verify_request_v1,
+        provider_transport_verify_response_v1,
+    },
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::{Read, Write},
+    net::{SocketAddr, TcpListener, TcpStream},
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
+
+/// One framed request or response; a private fixture capture is small, and an unbounded length is refused.
+pub const PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3: u64 = 1 << 30;
+/// How long one exchange may take end to end (two bundle rebuilds and fsyncs on a private fixture class).
+pub const PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3: Duration = Duration::from_secs(600);
+/// How long the provider waits on any single read from a peer (a stalled peer is dropped, not waited on for the full exchange).
+pub const PRIVATE_NATIVE_EXCHANGE_IDLE_TIMEOUT_V3: Duration = Duration::from_secs(60);
+/// Connections a provider service handles at once; more are closed unanswered.
+pub const PRIVATE_NATIVE_EXCHANGE_MAX_CONNECTIONS_V3: usize = 4;
+/// How often the provider GC janitor runs.
+pub const PRIVATE_NATIVE_PROVIDER_GC_PERIOD_V3: Duration = Duration::from_secs(60);
+
+/// One configured provider bond and the fixture seed that signs for it.
+pub struct PrivateNativeProviderKeyV3 {
+    pub bond: PalwBondKeyV2,
+    pub seed_path: PathBuf,
+    key: kaspa_pq_validator_core::ValidatorKey,
+}
+
+/// Which addresses the provider socket options accept (`--private-probe-native-network`, default `loopback`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateNativeNetworkV3 {
+    /// 127.0.0.1 / ::1 only, as the drill runs it.
+    Loopback,
+    /// Any explicit address with a port: separate hosts. Every frame is still the authenticated envelope; nothing is
+    /// encrypted (the material is public).
+    Remote,
+}
+
+/// **The private native-custody wiring**, parsed from the private node's `--private-probe-native-*` options only.
+pub struct PrivateNativeCustodySpecV3 {
+    /// Provider bonds this node serves (empty: none).
+    pub providers: Vec<PrivateNativeProviderKeyV3>,
+    /// Serve them to other private nodes on this socket. Without it they serve this node's own producer in-process.
+    pub listen: Option<SocketAddr>,
+    /// This node's producer asks the provider service at this socket (authenticated with its own producer key).
+    pub exchange: Option<SocketAddr>,
+    pub network: PrivateNativeNetworkV3,
+}
+
+fn socket(name: &str, value: &str, network: PrivateNativeNetworkV3, dial: bool) -> Result<SocketAddr, String> {
+    let addr: SocketAddr = value.parse().map_err(|e| format!("{name}={value}: {e}"))?;
+    if addr.port() == 0 {
+        return Err(format!("{name} must name an explicit port"));
+    }
+    match network {
+        PrivateNativeNetworkV3::Loopback if !addr.ip().is_loopback() => Err(format!(
+            "{name} must be an explicit loopback address with a port (separate hosts need --private-probe-native-network=remote)"
+        )),
+        PrivateNativeNetworkV3::Remote if dial && addr.ip().is_unspecified() => {
+            Err(format!("{name} cannot dial an unspecified address"))
+        }
+        _ => Ok(addr),
+    }
+}
+
+impl PrivateNativeCustodySpecV3 {
+    /// `keys`: `SEED_FILE@TXID:INDEX[,SEED_FILE@TXID:INDEX...]`; `network`: `loopback` (default) or `remote`. `None` when no
+    /// option was given.
+    pub fn parse(
+        keys: Option<&str>,
+        listen: Option<&str>,
+        exchange: Option<&str>,
+        network: Option<&str>,
+    ) -> Result<Option<Self>, String> {
+        if keys.is_none() && listen.is_none() && exchange.is_none() {
+            return match network {
+                None => Ok(None),
+                Some(_) => Err("--private-probe-native-network needs a provider socket option".into()),
+            };
+        }
+        let network = match network {
+            None | Some("loopback") => PrivateNativeNetworkV3::Loopback,
+            Some("remote") => PrivateNativeNetworkV3::Remote,
+            Some(other) => return Err(format!("--private-probe-native-network={other}: expected loopback or remote")),
+        };
+        if network == PrivateNativeNetworkV3::Remote && listen.is_none() && exchange.is_none() {
+            return Err("--private-probe-native-network=remote needs a provider listener or exchange".into());
+        }
+        let mut providers = Vec::new();
+        if let Some(keys) = keys {
+            for entry in keys.split(',') {
+                let (file, bond) =
+                    entry.rsplit_once('@').ok_or_else(|| format!("provider key '{entry}' is not SEED_FILE@TXID:INDEX"))?;
+                let path = PathBuf::from(file);
+                if !path.is_absolute() {
+                    return Err(format!("provider seed file {file} must be an absolute fixture path"));
+                }
+                let seed = kaspa_pq_validator_core::load_validator_seed(file)?;
+                let bond = PalwBondKeyV2(crate::palw_producer::parse_outpoint(bond)?);
+                providers.push(PrivateNativeProviderKeyV3 {
+                    bond,
+                    seed_path: path,
+                    key: kaspa_pq_validator_core::ValidatorKey::from_seed(seed),
+                });
+            }
+            let bonds: BTreeSet<_> = providers.iter().map(|p| p.bond).collect();
+            let keys: BTreeSet<_> = providers.iter().map(|p| p.key.public_key().to_vec()).collect();
+            if bonds.len() != providers.len() || keys.len() != providers.len() {
+                return Err("private native providers need distinct bonds and distinct keys".into());
+            }
+            if providers.len() < 2 || providers.len() > kaspa_consensus_core::palw_attempt_material_v3::PALW_MATERIAL_MAX_PROVIDERS_V3
+            {
+                return Err("a private native provider service holds 2..=8 roster bonds".into());
+            }
+        }
+        let listen = listen.map(|v| socket("--private-probe-native-provider-listen", v, network, false)).transpose()?;
+        let exchange = exchange.map(|v| socket("--private-probe-native-exchange", v, network, true)).transpose()?;
+        if listen.is_some() && providers.is_empty() {
+            return Err("--private-probe-native-provider-listen needs --private-probe-native-provider-keys".into());
+        }
+        if exchange.is_some() && !providers.is_empty() && listen.is_none() {
+            return Err("in-process providers and a socket exchange are exclusive for one producer".into());
+        }
+        if exchange.is_some() && exchange == listen {
+            return Err("a node does not dial its own provider socket; omit the listener to serve it in-process".into());
+        }
+        Ok(Some(Self { providers, listen, exchange, network }))
+    }
+
+    /// **The fixture check**: each provider seed is the salt's card key for that exact bond; at least two distinct card
+    /// operators; and, on a node that produces, none is its producer's bond, key or operator (an observer that names a seat's
+    /// producer key without `--palw-produce` may host other seats). Runs before any service or DB opens. A node reopened
+    /// without `--palw-produce` keeps an unused exchange: nothing calls it.
+    pub fn check_fixture(&self, config: &kaspa_consensus_core::config::Config, args: &crate::args::Args) -> Result<(), String> {
+        let salt = config.palw_drill_genesis_salt.as_ref().ok_or("private native providers need the salted fixture")?;
+        let cards: BTreeMap<PalwBondKeyV2, kaspa_consensus_core::config::drill::PalwDrillCardV1> =
+            kaspa_consensus_core::config::drill::palw_t12_drill_cards_v1(salt)
+                .into_iter()
+                .map(|card| {
+                    (
+                        PalwBondKeyV2(kaspa_consensus_core::config::drill::palw_t12_drill_premine_outpoint_v1(
+                            salt,
+                            card.premine_index,
+                        )),
+                        card,
+                    )
+                })
+                .collect();
+        let mut operators = BTreeSet::new();
+        for provider in &self.providers {
+            let card = cards.get(&provider.bond).ok_or("a private native provider bond is not a fixture seat")?;
+            if card.bond.pubkey.as_slice() != provider.key.public_key() {
+                return Err(format!("provider seed {} is not the fixture key of its bond", provider.seed_path.display()));
+            }
+            operators.insert(palw_operator_id_v2(&card.operator.pubkey));
+        }
+        if !self.providers.is_empty() && operators.len() < 2 {
+            return Err("private native providers need at least two distinct operators".into());
+        }
+        if let Some(bond) = args.palw_producer_bond.as_ref().filter(|_| args.palw_produce) {
+            let bond = PalwBondKeyV2(crate::palw_producer::parse_outpoint(bond)?);
+            if self.providers.iter().any(|p| p.bond == bond) {
+                return Err("a private native provider is this node's own producer bond".into());
+            }
+            if let Some(card) = cards.get(&bond)
+                && operators.contains(&palw_operator_id_v2(&card.operator.pubkey))
+            {
+                return Err("a private native provider shares the executor's operator; self-custody is refused".into());
+            }
+        }
+        if let Some(path) = args.palw_producer_key.as_ref().filter(|_| args.palw_produce) {
+            let producer = kaspa_pq_validator_core::ValidatorKey::from_seed(kaspa_pq_validator_core::load_validator_seed(path)?);
+            if self.providers.iter().any(|p| p.key.public_key() == producer.public_key()) {
+                return Err("a private native provider key is this node's own producer key".into());
+            }
+        }
+        Ok(())
+    }
+
+    /// The daemon hook: open the provider service (its authenticated listener and its GC janitor), and return the exchange for
+    /// this node's producer.
+    pub fn into_hook(self) -> PalwNativeCustodyHookV3 {
+        Box::new(move |ctx: PalwNativeCustodyContextV3| -> Result<Option<PalwNativeExchangeHandleV3>, String> {
+            let Self { providers, listen, exchange, network } = self;
+            let service = if providers.is_empty() { None } else { Some(Arc::new(LoopbackNativeProviderV3::open(&ctx, providers)?)) };
+            if let Some(service) = &service {
+                let service = Arc::clone(service);
+                std::thread::Builder::new()
+                    .name("palw-native-provider-gc-v3".into())
+                    .spawn(move || {
+                        loop {
+                            std::thread::sleep(PRIVATE_NATIVE_PROVIDER_GC_PERIOD_V3);
+                            service.gc_tick();
+                        }
+                    })
+                    .map_err(|e| e.to_string())?;
+            }
+            if let (Some(service), Some(listen)) = (&service, listen) {
+                let listener = TcpListener::bind(listen).map_err(|e| format!("native provider listener {listen}: {e}"))?;
+                let service = Arc::clone(service);
+                std::thread::Builder::new()
+                    .name("palw-native-provider-v3".into())
+                    .spawn(move || serve_authenticated_v3(listener, service, network))
+                    .map_err(|e| e.to_string())?;
+                kaspa_core::warn!(
+                    "RFC12 PRIVATE: PAV3 native provider service listening on {listen} ({network:?}; authenticated, unencrypted; \
+                     unapproved mechanics)"
+                );
+            }
+            Ok(match (exchange, service, listen) {
+                (Some(addr), _, _) => {
+                    let key =
+                        ctx.producer_key_path.as_deref().ok_or("an authenticated provider exchange needs --palw-producer-key")?;
+                    let bond = ctx.producer_bond.as_deref().ok_or("an authenticated provider exchange needs --palw-producer-bond")?;
+                    Some(PalwNativeExchangeHandleV3(Arc::new(AuthenticatedSocketExchangeV3 {
+                        addr,
+                        policy: ProviderTransportPolicyV1::new(
+                            transport_domain_v3(&ctx.config.params),
+                            PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3,
+                        ),
+                        sender: PalwBondKeyV2(crate::palw_producer::parse_outpoint(bond)?),
+                        key: kaspa_pq_validator_core::ValidatorKey::from_seed(kaspa_pq_validator_core::load_validator_seed(key)?),
+                    })))
+                }
+                (None, Some(service), None) => Some(PalwNativeExchangeHandleV3(service)),
+                _ => None,
+            })
+        })
+    }
+}
+
+/// The chain/network domain the transport binds: the attempt's own `network_domain`.
+fn transport_domain_v3(params: &kaspa_consensus_core::config::params::Params) -> Hash64 {
+    kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(params.net.to_string().as_bytes(), Some(params.genesis.hash))
+}
+
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+struct ServedProviderV3 {
+    bond: PalwBondKeyV2,
+    operator: Hash64,
+    key: kaspa_pq_validator_core::ValidatorKey,
+    store: Mutex<DurableMonetaryMaterialProviderV1>,
+    authorities: Mutex<AuthorityIndexV3>,
+    janitor: Mutex<MonetaryMaterialGcJanitorV1>,
+}
+
+/// **The in-node provider service.** Holds no consensus state of its own: every authority is a fresh Consensus API read.
+pub struct LoopbackNativeProviderV3 {
+    consensus_manager: Arc<kaspa_consensusmanager::ConsensusManager>,
+    config: Arc<kaspa_consensus_core::config::Config>,
+    court: kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2,
+    holdings: Vec<misaka_palw_sdk::PalwLoadedArtifactV1>,
+    chain_classes: bool,
+    providers: Vec<ServedProviderV3>,
+    transport: ProviderTransportPolicyV1,
+    replay: Mutex<ProviderTransportReplayGuardV1>,
+}
+
+impl LoopbackNativeProviderV3 {
+    fn open(ctx: &PalwNativeCustodyContextV3, keys: Vec<PrivateNativeProviderKeyV3>) -> Result<Self, String> {
+        let params = &ctx.config.params;
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            return Err("a native provider needs a ConsensusV2 network".into());
+        };
+        let policy = &params.palw_monetary_material_v1.as_ref().ok_or("a native provider needs the monetary material fence")?.policy;
+        let salt = ctx.config.palw_drill_genesis_salt.as_ref().ok_or("a native provider needs the salted private fixture")?;
+        let operators: BTreeMap<PalwBondKeyV2, Hash64> = kaspa_consensus_core::config::drill::palw_t12_drill_cards_v1(salt)
+            .into_iter()
+            .map(|card| {
+                (
+                    PalwBondKeyV2(kaspa_consensus_core::config::drill::palw_t12_drill_premine_outpoint_v1(salt, card.premine_index)),
+                    palw_operator_id_v2(&card.operator.pubkey),
+                )
+            })
+            .collect();
+        let dir = ctx.data_dir.join("palw-native-provider-v3");
+        let mut providers = Vec::new();
+        for key in keys {
+            let file = dir.join(format!("{}-{}.store", key.bond.0.transaction_id, key.bond.0.index));
+            let authorities = AuthorityIndexV3::open(&file.with_extension("authorities"))?;
+            let store = DurableMonetaryMaterialProviderV1::open(
+                &file,
+                policy.max_bytes_per_contract,
+                policy.max_bytes_per_provider,
+                None,
+                |claim| authorities.get(&claim),
+            )?;
+            let operator = *operators.get(&key.bond).ok_or("a native provider bond is not a fixture seat")?;
+            let janitor = MonetaryMaterialGcJanitorV1::open(&file)?;
+            providers.push(ServedProviderV3 {
+                bond: key.bond,
+                operator,
+                key: key.key,
+                store: Mutex::new(store),
+                authorities: Mutex::new(authorities),
+                janitor: Mutex::new(janitor),
+            });
+        }
+        let form = params.palw_prompt_ids_form_v1();
+        let net = params.net.to_string().into_bytes();
+        let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(bundle.court, form, net);
+        let holdings = crate::palw_backends::load_class_holdings_v1(
+            "palw-native-provider",
+            &sdk,
+            &ctx.class_artifacts,
+            ctx.class_cache_bytes,
+            misaka_palw_sdk::PalwWeightResidencyV1::PageCache,
+        );
+        Ok(Self {
+            consensus_manager: Arc::clone(&ctx.consensus_manager),
+            config: Arc::clone(&ctx.config),
+            court: bundle.court,
+            holdings,
+            chain_classes: ctx.chain_classes,
+            providers,
+            transport: ProviderTransportPolicyV1::new(transport_domain_v3(params), PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3),
+            replay: Mutex::new(ProviderTransportReplayGuardV1::new(
+                PALW_PROVIDER_TRANSPORT_REPLAY_CAPACITY_V1,
+                misaka_palw_remote::provider_transport_v1::PALW_PROVIDER_TRANSPORT_MAX_SKEW_MS_V1,
+            )),
+        })
+    }
+
+    /// **Authenticate a network request before any work**: the envelope (domain, freshness, DAA window against this node's
+    /// virtual DAA, the sender's signature, replay), then its binding to the body — the sender is the attempt's executor bond and
+    /// key and the request is about the header's DAA — and the recipients are this service's bonds on the session roster. The
+    /// executor key's registration is the authority read's (`sign_request`: it refuses a key that is not the bond's).
+    fn authenticate(&self, request: &ProviderTransportRequestV1) -> Result<PalwNativeReadyRequestV3, String> {
+        let local_daa = Some(self.consensus_manager.consensus().unguarded_session().get_virtual_daa_score());
+        {
+            let mut replay = self.replay.lock().map_err(|_| "replay guard poisoned")?;
+            provider_transport_verify_request_v1(
+                request,
+                ProviderTransportPurposeV1::NativeReadyV3,
+                &self.transport,
+                now_unix_ms(),
+                local_daa,
+                &mut replay,
+            )?;
+        }
+        let native: PalwNativeReadyRequestV3 = borsh::from_slice(&request.body).map_err(|e| e.to_string())?;
+        let attempt = &native.envelope.base.attempt;
+        let header = &request.header;
+        if header.sender.0 != attempt.executor_bond
+            || header.sender_pubkey != attempt.executor_pubkey
+            || attempt.network_domain != self.transport.domain
+            || header.daa_score != native.header.daa_score
+        {
+            return Err("the authenticated sender is not the attempt's executor bond/key, or the request names another DAA".into());
+        }
+        if !header.recipients.iter().all(|bond| native.envelope.ready.providers.contains(bond))
+            || !self.providers.iter().any(|p| header.recipients.contains(&p.bond))
+        {
+            return Err("the request's recipients are not this service's bonds on the session roster".into());
+        }
+        Ok(native)
+    }
+
+    /// The signed response: every bond this service holds among the request's recipients signs it.
+    fn respond(
+        &self,
+        request: &ProviderTransportRequestV1,
+        body: &PalwNativeReadyResponseV3,
+    ) -> Result<ProviderTransportResponseV1, String> {
+        let signers: Vec<_> = self
+            .providers
+            .iter()
+            .filter(|p| request.header.recipients.contains(&p.bond))
+            .map(|p| {
+                (p.bond, move |message: &[u8], context: &[u8]| -> Result<Vec<u8>, String> {
+                    Ok(p.key.sign_with_context(message, context).to_vec())
+                })
+            })
+            .collect();
+        let responders: Vec<(PalwBondKeyV2, ProviderTransportSignerV1<'_>)> =
+            signers.iter().map(|(bond, sign)| (*bond, sign as ProviderTransportSignerV1<'_>)).collect();
+        provider_transport_response_v1(&request.header, now_unix_ms(), borsh::to_vec(body).map_err(|e| e.to_string())?, responders)
+    }
+
+    /// **One janitor round per served bond** over this node's Consensus API (see the module comment). Logged, never fatal.
+    pub fn gc_tick(&self) {
+        for provider in &self.providers {
+            let (Ok(mut janitor), Ok(mut store)) = (provider.janitor.lock(), provider.store.lock()) else {
+                kaspa_core::warn!("RFC12 PRIVATE: PAV3 provider GC skipped a poisoned store; everything retained");
+                continue;
+            };
+            let mut oracle = ConsensusGcOracleV3(&self.consensus_manager);
+            match janitor.tick(&mut store, &mut oracle) {
+                Ok(report) => {
+                    if !report.deleted.is_empty() {
+                        kaspa_core::info!(
+                            "RFC12 PRIVATE: PAV3 provider {}:{} deleted {} finalized-release bundle(s); {} retained",
+                            provider.bond.0.transaction_id,
+                            provider.bond.0.index,
+                            report.deleted.len(),
+                            report.retained
+                        );
+                    }
+                    if let Some(reason) = report.refused {
+                        kaspa_core::warn!("RFC12 PRIVATE: PAV3 provider GC retained everything this round: {reason}");
+                    }
+                }
+                Err(error) => kaspa_core::warn!("RFC12 PRIVATE: PAV3 provider GC failed; everything retained: {error}"),
+            }
+        }
+    }
+
+    /// One request, every roster bond this service holds: each signature only after its own durable publication.
+    pub fn sign_request(&self, request: &PalwNativeReadyRequestV3) -> Result<Vec<(PalwBondKeyV2, Vec<u8>)>, String> {
+        if request.version != PALW_NATIVE_READY_EXCHANGE_VERSION_V3 {
+            return Err("unknown native exchange version".into());
+        }
+        let ready = &request.envelope.ready;
+        let attempt = &request.envelope.base.attempt;
+        let ours: Vec<&ServedProviderV3> = self.providers.iter().filter(|p| ready.providers.contains(&p.bond)).collect();
+        if ours.is_empty() {
+            return Err("none of this service's provider bonds is on the session roster".into());
+        }
+        if ours.iter().any(|p| p.operator == attempt.operator_id) {
+            return Err("the executor is one of this service's provider operators; self-custody is refused".into());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let authority = session.palw_native_material_provider_authority_v3(request.checkpoint, &request.header, &request.envelope)?;
+        let params = &self.config.params;
+        let registry = crate::palw_backends::PalwBackendRegistry::for_node_v1(
+            params,
+            self.court,
+            params.palw_prompt_ids_form_v1(),
+            self.holdings.clone(),
+            params.net.to_string().into_bytes(),
+            self.chain_classes,
+        );
+        let backend = registry.resolve_or_chain(attempt.class_id, attempt.artifact_root, |id| {
+            if self.chain_classes { session.palw_registered_class_carriage_v1(id) } else { None }
+        })?;
+        drop(session);
+        // The authority answer validated the attempt's network domain, position and signature: the anchor is the header's.
+        let anchor = kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(
+            attempt.network_domain,
+            kaspa_consensus_core::hashing::header::pre_pow_hash_64(&request.header),
+            attempt.class_id,
+            &attempt.executor_bond,
+            request.header.nonce,
+        );
+        let prompt = palw_native_prompt_v3(backend.as_ref(), anchor)?;
+        if prompt != request.prompt {
+            return Err("the request's prompt is not the one its anchor implies".into());
+        }
+        let prefill_draw = params.palw_prefill_draw_active_at(request.header.daa_score);
+        let (bundle, manifest) = palw_native_bundle_v3(
+            backend.as_ref(),
+            &authority.row,
+            attempt,
+            anchor,
+            &request.capture,
+            &prompt,
+            prefill_draw,
+            authority.material,
+        )?;
+        if manifest != ready.binding.manifest {
+            return Err("the producer's manifest differs from the bundle this provider rebuilt".into());
+        }
+        let mut signatures = Vec::new();
+        for provider in ours {
+            let (_, registered) = authority
+                .provider_keys
+                .iter()
+                .find(|(bond, _)| *bond == provider.bond)
+                .ok_or("the chain names no key for this roster bond")?;
+            if registered.as_slice() != provider.key.public_key() {
+                return Err("the chain's registered key for this roster bond is not the key this service holds".into());
+            }
+            // The reopen index first: a crash after publication must still find the authority to re-verify the bundle.
+            provider.authorities.lock().map_err(|_| "authority index poisoned")?.record(bundle.claim, authority.material)?;
+            let mut store = provider.store.lock().map_err(|_| "provider store poisoned")?;
+            let signature = misaka_palw_remote::native_ready_v3::provider_sign_native_ready_v3(
+                &mut store,
+                provider.bond,
+                &authority.row,
+                ready,
+                &bundle,
+                authority.material,
+                |message, context| Ok(provider.key.sign_with_context(message, context).to_vec()),
+            )?;
+            signatures.push((provider.bond, signature));
+        }
+        Ok(signatures)
+    }
+}
+
+impl NativeReadyExchangeV3 for LoopbackNativeProviderV3 {
+    fn describe(&self) -> String {
+        format!("in-process loopback provider ({} bond(s))", self.providers.len())
+    }
+    fn request_signatures(&self, request: &PalwNativeReadyRequestV3) -> Result<BTreeMap<PalwBondKeyV2, Vec<u8>>, String> {
+        Ok(self.sign_request(request)?.into_iter().collect())
+    }
+}
+
+/// **The client half**: one connection per request to a provider service on this or another host, the request signed with
+/// this node's producer key and every response verified with the roster keys this node's own authority read returned.
+pub struct AuthenticatedSocketExchangeV3 {
+    pub addr: SocketAddr,
+    policy: ProviderTransportPolicyV1,
+    sender: PalwBondKeyV2,
+    key: kaspa_pq_validator_core::ValidatorKey,
+}
+
+/// A request nonce: unique, not secret (replay protection needs uniqueness per sender only).
+fn request_nonce_v3(body: &[u8]) -> [u8; 32] {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let mut state = blake2b_simd::Params::new().hash_length(32).key(b"MISAKA/PALW/PROVIDER-TRANSPORT/NONCE/V1").to_state();
+    state.update(&nanos.to_le_bytes());
+    state.update(&COUNTER.fetch_add(1, Ordering::Relaxed).to_le_bytes());
+    state.update(&std::process::id().to_le_bytes());
+    state.update(body);
+    let mut nonce = [0u8; 32];
+    nonce.copy_from_slice(state.finalize().as_bytes());
+    nonce
+}
+
+impl NativeReadyExchangeV3 for AuthenticatedSocketExchangeV3 {
+    fn describe(&self) -> String {
+        format!("authenticated provider socket {} (integrity-only, unencrypted)", self.addr)
+    }
+    fn request_signatures(&self, _request: &PalwNativeReadyRequestV3) -> Result<BTreeMap<PalwBondKeyV2, Vec<u8>>, String> {
+        Err("an authenticated provider socket verifies responses with the roster keys; no unauthenticated path exists".into())
+    }
+    fn request_signatures_authenticated(
+        &self,
+        request: &PalwNativeReadyRequestV3,
+        roster_keys: &[(PalwBondKeyV2, Vec<u8>)],
+    ) -> Result<BTreeMap<PalwBondKeyV2, Vec<u8>>, String> {
+        let attempt = &request.envelope.base.attempt;
+        if attempt.executor_bond != self.sender.0 || attempt.executor_pubkey.as_slice() != self.key.public_key() {
+            return Err("this node's producer key/bond is not the attempt's executor".into());
+        }
+        let body = borsh::to_vec(request).map_err(|e| e.to_string())?;
+        let signed = provider_transport_request_v1(
+            ProviderTransportPurposeV1::NativeReadyV3,
+            self.policy.domain,
+            self.sender,
+            self.key.public_key().to_vec(),
+            request.envelope.ready.providers.clone(),
+            request_nonce_v3(&body),
+            now_unix_ms(),
+            request.header.daa_score,
+            body,
+            |message, context| Ok(self.key.sign_with_context(message, context).to_vec()),
+        )?;
+        let mut stream = TcpStream::connect_timeout(&self.addr, Duration::from_secs(10)).map_err(|e| e.to_string())?;
+        stream.set_read_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3)).map_err(|e| e.to_string())?;
+        stream.set_write_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3)).map_err(|e| e.to_string())?;
+        write_frame_v3(&mut stream, &borsh::to_vec(&signed).map_err(|e| e.to_string())?)?;
+        let response: ProviderTransportResponseV1 =
+            borsh::from_slice(&read_frame_v3(&mut stream)?).map_err(|e| format!("provider transport response: {e}"))?;
+        let responders = provider_transport_verify_response_v1(&response, &signed.header, roster_keys, &self.policy, now_unix_ms())?;
+        let body: PalwNativeReadyResponseV3 = borsh::from_slice(&response.body).map_err(|e| e.to_string())?;
+        match body {
+            PalwNativeReadyResponseV3::Signed { version: PALW_NATIVE_READY_EXCHANGE_VERSION_V3, signatures } => {
+                let count = signatures.len();
+                let map: BTreeMap<_, _> = signatures.into_iter().collect();
+                if map.len() != count || !map.keys().eq(responders.iter()) {
+                    return Err("the provider service's Ready signatures are not exactly its authenticated responders".into());
+                }
+                Ok(map)
+            }
+            PalwNativeReadyResponseV3::Refused { reason, .. } => Err(format!("provider refused (authenticated): {reason}")),
+            PalwNativeReadyResponseV3::Signed { .. } => Err("unknown native exchange response version".into()),
+        }
+    }
+}
+
+/// **The service half.** Loopback mode admits loopback peers only; remote mode any peer. At most
+/// [`PRIVATE_NATIVE_EXCHANGE_MAX_CONNECTIONS_V3`] connections at once, one request each. An unauthenticated request gets no
+/// answer (the service is never a signing oracle for unauthenticated bytes); an authenticated one gets a signed answer.
+fn serve_authenticated_v3(listener: TcpListener, service: Arc<LoopbackNativeProviderV3>, network: PrivateNativeNetworkV3) {
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    for stream in listener.incoming() {
+        let Ok(stream) = stream else { continue };
+        let admitted = match network {
+            PrivateNativeNetworkV3::Loopback => stream.peer_addr().is_ok_and(|peer| peer.ip().is_loopback()),
+            PrivateNativeNetworkV3::Remote => stream.peer_addr().is_ok(),
+        };
+        if !admitted || in_flight.fetch_add(1, Ordering::AcqRel) >= PRIVATE_NATIVE_EXCHANGE_MAX_CONNECTIONS_V3 {
+            if admitted {
+                in_flight.fetch_sub(1, Ordering::AcqRel);
+            }
+            continue;
+        }
+        let (service, counter) = (Arc::clone(&service), Arc::clone(&in_flight));
+        let spawned = std::thread::Builder::new().name("palw-native-provider-conn-v3".into()).spawn(move || {
+            handle_authenticated_v3(stream, &service);
+            counter.fetch_sub(1, Ordering::AcqRel);
+        });
+        if spawned.is_err() {
+            in_flight.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+fn handle_authenticated_v3(mut stream: TcpStream, service: &LoopbackNativeProviderV3) {
+    let _ = stream.set_read_timeout(Some(PRIVATE_NATIVE_EXCHANGE_IDLE_TIMEOUT_V3));
+    let _ = stream.set_write_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3));
+    let Ok(bytes) = read_frame_v3(&mut stream) else { return };
+    let Ok(request) = borsh::from_slice::<ProviderTransportRequestV1>(&bytes) else { return };
+    let native = match service.authenticate(&request) {
+        Ok(native) => native,
+        Err(reason) => {
+            kaspa_core::warn!("RFC12 PRIVATE: PAV3 native provider dropped an unauthenticated request: {reason}");
+            return;
+        }
+    };
+    let body = match service.sign_request(&native) {
+        Ok(signatures) => PalwNativeReadyResponseV3::Signed { version: PALW_NATIVE_READY_EXCHANGE_VERSION_V3, signatures },
+        Err(reason) => {
+            kaspa_core::warn!("RFC12 PRIVATE: PAV3 native provider refused a request: {reason}");
+            PalwNativeReadyResponseV3::Refused { version: PALW_NATIVE_READY_EXCHANGE_VERSION_V3, reason }
+        }
+    };
+    match service.respond(&request, &body).and_then(|response| borsh::to_vec(&response).map_err(|e| e.to_string())) {
+        Ok(bytes) => {
+            let _ = write_frame_v3(&mut stream, &bytes);
+        }
+        Err(reason) => kaspa_core::warn!("RFC12 PRIVATE: PAV3 native provider could not sign its response: {reason}"),
+    }
+}
+
+/// The node's own Consensus API as the janitor's oracle: coherent covenant read (sink unchanged across it), the selected
+/// chain after a point, and the physical-GC witness.
+struct ConsensusGcOracleV3<'a>(&'a kaspa_consensusmanager::ConsensusManager);
+
+impl MonetaryMaterialGcOracleV1 for ConsensusGcOracleV3<'_> {
+    fn covenant_rows(
+        &mut self,
+    ) -> Result<
+        (kaspa_consensus_core::BlockHash, Vec<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>),
+        String,
+    > {
+        let session = self.0.consensus().unguarded_session_blocking();
+        let before = session.get_sink();
+        let rows = session.palw_monetary_material_covenants_v1()?;
+        if session.get_sink() != before {
+            return Err("the sink moved during the covenant read".into());
+        }
+        Ok((before, rows))
+    }
+    fn chain_after(
+        &mut self,
+        low: kaspa_consensus_core::BlockHash,
+        limit: usize,
+    ) -> Result<Vec<kaspa_consensus_core::BlockHash>, String> {
+        let session = self.0.consensus().unguarded_session_blocking();
+        session.get_virtual_chain_from_block(low, Some(limit)).map(|path| path.added).map_err(|e| e.to_string())
+    }
+    fn release_finalized(
+        &mut self,
+        root: Hash64,
+        consent: Hash64,
+        tail: Hash64,
+        release_block: kaspa_consensus_core::BlockHash,
+    ) -> Result<bool, String> {
+        let session = self.0.consensus().unguarded_session_blocking();
+        session.palw_monetary_material_release_finalized_v1(root, consent, tail, release_block)
+    }
+}
+
+fn write_frame_v3(stream: &mut impl Write, bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() as u64 > PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3 {
+        return Err("native exchange frame exceeds its cap".into());
+    }
+    stream
+        .write_all(&(bytes.len() as u64).to_le_bytes())
+        .and_then(|_| stream.write_all(bytes))
+        .and_then(|_| stream.flush())
+        .map_err(|e| e.to_string())
+}
+
+fn read_frame_v3(stream: &mut impl Read) -> Result<Vec<u8>, String> {
+    let mut length = [0u8; 8];
+    stream.read_exact(&mut length).map_err(|e| e.to_string())?;
+    let length = u64::from_le_bytes(length);
+    if length > PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3 {
+        return Err("native exchange frame exceeds its cap".into());
+    }
+    let mut bytes = vec![0u8; length as usize];
+    stream.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+    Ok(bytes)
+}
+
+/// The authority each held bundle was admitted under, kept beside the store so a reopen re-verifies every bundle
+/// (`DurableMonetaryMaterialProviderV1::open`'s recovery asks for it per claim). Written whole, fsynced and renamed, BEFORE the
+/// bundle is published: an entry without a bundle is harmless, a bundle without its entry would refuse the reopen.
+struct AuthorityIndexV3 {
+    file: PathBuf,
+    rows: BTreeMap<Hash64, PalwMaterialNativeAuthorityV1>,
+}
+
+type AuthorityRowV3 = (Hash64, Hash64, Hash64, Hash64, u64, u8);
+
+impl AuthorityIndexV3 {
+    fn open(file: &Path) -> Result<Self, String> {
+        let rows = match std::fs::read(file) {
+            Ok(bytes) => borsh::from_slice::<Vec<AuthorityRowV3>>(&bytes)
+                .map_err(|e| format!("native provider authority index: {e}"))?
+                .into_iter()
+                .map(|(claim, execution_root, class_id, artifact_root, ladder, form)| {
+                    let form = match form {
+                        0 => PalwPromptIdsFormV1::Flat,
+                        1 => PalwPromptIdsFormV1::MerkleV1,
+                        _ => return Err("native provider authority index names an unknown prompt form".to_string()),
+                    };
+                    Ok((claim, PalwMaterialNativeAuthorityV1 { execution_root, class_id, artifact_root, ladder, form }))
+                })
+                .collect::<Result<_, _>>()?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(error) => return Err(error.to_string()),
+        };
+        Ok(Self { file: file.to_path_buf(), rows })
+    }
+    fn get(&self, claim: &Hash64) -> Option<PalwMaterialNativeAuthorityV1> {
+        self.rows.get(claim).copied()
+    }
+    fn record(&mut self, claim: Hash64, authority: PalwMaterialNativeAuthorityV1) -> Result<(), String> {
+        match self.rows.get(&claim) {
+            Some(known) if *known == authority => return Ok(()),
+            Some(_) => return Err("a claim's native authority changed between two Ready requests".into()),
+            None => {}
+        }
+        let mut rows = self.rows.clone();
+        rows.insert(claim, authority);
+        let encoded: Vec<AuthorityRowV3> = rows
+            .iter()
+            .map(|(claim, a)| {
+                let form = match a.form {
+                    PalwPromptIdsFormV1::Flat => 0,
+                    PalwPromptIdsFormV1::MerkleV1 => 1,
+                };
+                (*claim, a.execution_root, a.class_id, a.artifact_root, a.ladder, form)
+            })
+            .collect();
+        let parent = self.file.parent().ok_or("authority index has no parent directory")?;
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        let temporary = self.file.with_extension("authorities.partial");
+        let result = (|| {
+            let mut out = std::fs::File::create(&temporary)?;
+            out.write_all(&borsh::to_vec(&encoded)?)?;
+            out.sync_all()?;
+            std::fs::rename(&temporary, &self.file)?;
+            std::fs::File::open(parent)?.sync_all()
+        })();
+        if let Err(error) = result {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error.to_string());
+        }
+        self.rows = rows;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_private_options_are_loopback_by_default_and_need_two_distinct_bonds() {
+        assert!(PrivateNativeCustodySpecV3::parse(None, None, None, None).unwrap().is_none());
+        assert!(PrivateNativeCustodySpecV3::parse(None, None, None, Some("remote")).is_err(), "a network with no socket");
+        assert!(PrivateNativeCustodySpecV3::parse(None, None, Some("10.0.0.1:7000"), None).is_err(), "not loopback");
+        assert!(PrivateNativeCustodySpecV3::parse(None, None, Some("127.0.0.1:0"), None).is_err(), "no port");
+        assert!(PrivateNativeCustodySpecV3::parse(None, Some("127.0.0.1:7000"), None, None).is_err(), "a listener with no keys");
+        let spec = PrivateNativeCustodySpecV3::parse(None, None, Some("127.0.0.1:7000"), None).unwrap().unwrap();
+        assert!(spec.providers.is_empty() && spec.listen.is_none());
+        assert_eq!(spec.network, PrivateNativeNetworkV3::Loopback);
+        let remote = PrivateNativeCustodySpecV3::parse(None, None, Some("10.0.0.1:7000"), Some("remote")).unwrap().unwrap();
+        assert_eq!((remote.network, remote.exchange), (PrivateNativeNetworkV3::Remote, Some("10.0.0.1:7000".parse().unwrap())));
+        assert!(PrivateNativeCustodySpecV3::parse(None, None, Some("0.0.0.0:7000"), Some("remote")).is_err(), "cannot dial 0.0.0.0");
+        assert!(PrivateNativeCustodySpecV3::parse(None, None, Some("10.0.0.1:7000"), Some("lan")).is_err(), "unknown network");
+        let dir = tempfile::tempdir().unwrap();
+        let seed = |n: u8| {
+            let path = dir.path().join(format!("bond-{n}.seed"));
+            kaspa_pq_validator_core::write_validator_seed(path.to_str().unwrap(), &[n; 32]).unwrap();
+            path.to_str().unwrap().to_owned()
+        };
+        let (a, b) = (seed(1), seed(2));
+        let txid = Hash64::from_u64_word(9);
+        let keys = format!("{a}@{txid}:1,{b}@{txid}:2");
+        let spec = PrivateNativeCustodySpecV3::parse(Some(&keys), Some("127.0.0.1:7001"), None, None).unwrap().unwrap();
+        assert_eq!(spec.providers.len(), 2);
+        let remote = PrivateNativeCustodySpecV3::parse(Some(&keys), Some("0.0.0.0:7001"), None, Some("remote")).unwrap().unwrap();
+        assert_eq!(remote.listen, Some("0.0.0.0:7001".parse().unwrap()), "a remote provider may listen on every interface");
+        assert!(PrivateNativeCustodySpecV3::parse(Some(&keys), Some("0.0.0.0:7001"), None, None).is_err(), "loopback by default");
+        assert!(PrivateNativeCustodySpecV3::parse(Some(&format!("{a}@{txid}:1")), None, None, None).is_err(), "one bond is no roster");
+        assert!(
+            PrivateNativeCustodySpecV3::parse(Some(&format!("{a}@{txid}:1,{a}@{txid}:2")), None, None, None).is_err(),
+            "one key twice"
+        );
+        assert!(
+            PrivateNativeCustodySpecV3::parse(Some(&keys), None, Some("127.0.0.1:7002"), None).is_err(),
+            "in-process providers and a socket exchange are exclusive"
+        );
+        assert!(PrivateNativeCustodySpecV3::parse(Some(&keys), Some("127.0.0.1:7003"), Some("127.0.0.1:7003"), None).is_err());
+    }
+
+    #[test]
+    fn a_frame_round_trips_and_an_oversized_length_is_refused() {
+        let mut wire = Vec::new();
+        write_frame_v3(&mut wire, b"ready").unwrap();
+        assert_eq!(read_frame_v3(&mut wire.as_slice()).unwrap(), b"ready");
+        let mut huge = (PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3 + 1).to_le_bytes().to_vec();
+        huge.extend([0u8; 8]);
+        assert!(read_frame_v3(&mut huge.as_slice()).is_err());
+    }
+
+    #[test]
+    fn the_authority_index_survives_a_reopen_and_refuses_a_changed_authority() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("p.authorities");
+        let a = PalwMaterialNativeAuthorityV1 {
+            execution_root: Hash64::from_u64_word(1),
+            class_id: Hash64::from_u64_word(2),
+            artifact_root: Hash64::from_u64_word(3),
+            ladder: 1 << 22,
+            form: PalwPromptIdsFormV1::MerkleV1,
+        };
+        let claim = Hash64::from_u64_word(4);
+        AuthorityIndexV3::open(&file).unwrap().record(claim, a).unwrap();
+        let mut reopened = AuthorityIndexV3::open(&file).unwrap();
+        assert_eq!(reopened.get(&claim), Some(a));
+        reopened.record(claim, a).unwrap();
+        assert!(reopened.record(claim, PalwMaterialNativeAuthorityV1 { ladder: 1, ..a }).is_err());
+    }
+}

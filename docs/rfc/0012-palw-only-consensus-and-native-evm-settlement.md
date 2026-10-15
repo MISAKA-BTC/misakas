@@ -11,6 +11,7 @@
 
 
 * Status: **Draft — dormant implementation; no activation or production settlement parameters assigned.**
+* Spec closures, 2026-10-15: [R12-* requirement groups](#spec-closure-2026-10-15) — normative rules and named parameters; no PASS or activation implied.
 * Revision, 2026-10-10後続改定: §2.1 withdraws model-availability consensus and adds model-bond coinbase allocation under unchanged total issuance and individual ceilings. Rule E and claim-specific adjudication remain separate gates; the dormant DNS-retirement work does not implement this amendment.
 * Implementation record: [unactivated fence, native heads, monetary transition and remaining release gates](0012-dormant-implementation.md).
 * Source baseline: `3b09a814ed4b2a2f90009c05c1219efc9be46b5f` on `misakas/main`.
@@ -151,6 +152,9 @@ and its derivation from a specified canonical state snapshot. Parameters include
 settled-anchor depth `D`, additional **unique eligible matured useful-work** `W`, work-concentration
 limits and the applicable challenge/DA lifecycle. Values and their security justification are
 activation blockers; this RFC assigns neither arbitrary confirmation counts nor a time promise.
+*(2026-10-15: the parameters, their invariants, the 2026-10-08/10-11 drill-provisional rulings and the
+open-court/EXEC-horizon/maturity rules are specified in [Spec closures — 2026-10-15](#spec-closure-2026-10-15), R12-SETTLE.
+The drill values remain USER DECISION REQUIRED for production.)*
 
 For an executed EVM result at carrier `B`, its safe eligibility requires:
 
@@ -295,7 +299,8 @@ Introduce a proposed `palw_dns_retirement_v1` fence, scheduled only for a compat
 Its consensus parameters, reward schedule, transaction retirement matrix and snapshot version are
 part of the fingerprint/schedule commitment. Changing a CLI flag is not activation.
 
-Before scheduling, specify the fence predicate at **each** call site: earning block, paying block,
+Before scheduling, specify the fence predicate at **each** call site (2026-10-15: the resolved call sites are listed in
+[Spec closures — 2026-10-15](#spec-closure-2026-10-15), R12-AUTHORITY item 2; EVM execution and snapshot boundary remain open): earning block, paying block,
 accepting transaction view, incumbent chain, candidate chain, EVM execution and snapshot boundary.
 No candidate may choose its own activation state to bypass a live rule. Crossing/forking around
 the fence must converge independently of arrival order; the exact transition algorithm and tests
@@ -315,6 +320,9 @@ ML-DSA key loaders and bond/payout helpers first. Keep historical codecs and rep
 networks need them; delete live voter/aggregator scheduling, not consensus history indiscriminately.
 
 ## 6. Monetary policy: no DNS reward, no extra issuance
+
+*(2026-10-15: this split is **not adopted**. The dormant code commits it only inside the unarmed fence's policy values;
+production split and fee schedule are USER DECISION REQUIRED — see [Spec closures — 2026-10-15](#spec-closure-2026-10-15), R12-MONEY.)*
 
 The proposed normal **eligible PALW block** split for the current 72/8/20 t12 baseline is:
 **92% PALW claim escrow, 8% inclusion, 0% DNS validator subsidy**. The removed 20 percentage points
@@ -430,3 +438,152 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 ADR-0177 2026-10-12改定のモデル配分（Miner＋Panelの適格claim bondと1.3〜2倍の係数、提案）をブロック生成機会へ接続する場合、coinbase配分だけの変更として済ませず、ブロック機会の帰属・上限・移行を本RFCで明示する。物理blockの総頻度、DAA/難易度、fork choice、Final weightを同時に変更するとは決定しておらず、特にFinal weightへ係数を自動乗算しない。必要な変更は別のversioned review・試験・activationを要する。
 
 **X5:** `palw_dns_retirement_v1` は設計上のfence識別子、`Params::palw_dns_retirement` はRustの内部フィールド名であり、異なる階層の名前である。
+
+<a id="spec-closure-2026-10-15"></a>
+
+## Spec closures — 2026-10-15
+
+**Scope and reading rule.** This section closes specification gaps that the
+[design audit's requirement index](../design/palw/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md#完全解消を判定する要件の索引)
+lists for R12-AUTHORITY, R12-SETTLE, R12-BRIDGE, R12-HEADS, R12-MONEY and R12-OPS. Where this RFC's body is silent
+or contradicts a later design record, ADR or user ruling, this section governs; superseded body text is kept
+and annotated, not deleted. [PRINCIPLES](../PRINCIPLES.md) and ADR-0173/0176/0177/0178 rank above it. Nothing
+here is an implementation PASS, an activation, a fence height or a production parameter assignment; every
+public preset keeps `palw_dns_retirement_v1` absent. "USER DECISION REQUIRED" marks a named parameter whose
+value needs the user's decision; a recommendation appears only where an existing record justifies one.
+Mechanics results and private-process acceptance are not independent review or economic evidence.
+
+### R12-AUTHORITY — every selection entry point, ordering and assumptions
+
+1. **Rule E ordering (ADR-0178 §4.6).** A ruleset MUST NOT arm `palw_dns_retirement_v1` unless
+   `palw_fork_choice_rule_e_v1` is armed at or below the same height. The public validator continues to refuse both
+   until their gates close.
+2. **Fence predicate per call site (closes §5's "specify at each call site").** Fork choice resolves retirement at
+   the **incumbent** sink (the candidate cannot select its own rule). Transaction admission and template selection
+   resolve it at the **accepting** DAA. Claim escrow uses the **lower** of the earning and paying DAA. Historical
+   equivocation evidence is admissible only within the accepting-DAA horizon and only when both signed targets lie
+   strictly before retirement. The EVM-execution and snapshot-boundary predicates MUST be specified in the same
+   form before scheduling; until then this item remains open (it is not left to a generic `daa >= H` test).
+3. **No replacement authority.** After retirement no DNS state, Panel receipt, committee/threshold signature,
+   RFC07 `BeaconLocked` predicate, settlement label, publication-history row or operator override may veto or
+   reorder PALW selection. `safe`/`finalized` labels are outputs of selection, never inputs to it.
+4. **Removal inventory as a release artifact.** The release MUST carry an inventory of every live DNS read/write,
+   stake fallback, transaction kind, payout and snapshot path, each marked removed or allow-listed with a reason
+   (§8 removal audit). A renamed module is not evidence of removal.
+5. **Trusted-sync and genesis assumptions.** The release MUST publish a versioned statement of what a new node
+   trusts (genesis identity, headers-proof/pruning-point import, any checkpoint) and of the adversary assumptions
+   under which PALW-only selection is analysed (private maturation, Panel concentration, bootstrap randomness,
+   DA/court censorship, long-range and partition attacks). This RFC does not supply that analysis; absence of the
+   statement blocks scheduling.
+6. **Model availability is not an input** (ADR-0177, ADR-0178 §10): selection, settlement and readiness read no
+   model distribution, peer reachability, acquisition result or lease.
+7. Remaining (observations, not verified): multi-process zero-DNS fork/partition/long-range drill, attack tests of
+   the certified effect, the EVM/snapshot predicates in item 2.
+
+### R12-SETTLE — `PalwSettlementPolicyV1` parameters and invariants
+
+1. **Open dispute inventory.** Evidence filtering, lifecycle closure and readiness MUST read one shared inventory of
+   open DA sessions **and** open computation courts (`native_open_sessions_v1`). An expired retention clock never
+   bypasses an open court. A claim with an open dispute contributes no D or W.
+2. **Unique work.** W counts each `(canonical work id, quantum index)` once, read from the PALW delta of the block
+   that carried the transition (not from rows the sink still holds). EXEC slice work counts once, under the root's
+   identity, at root native Final. Carrier copies, heartbeat, floor, execution Round and unspent FP grants add zero.
+   A later `Final → Voided` conviction retracts what the `Final` counted.
+3. **EXEC consumer horizon.** The Final journal, the native facts and the node lifecycle/readiness MUST carry the
+   EXEC consumer horizon of every counted root, so a dependency still inside its liability window is not mature.
+4. **Maturity invariant.** A counted fact is mature no earlier than
+   `max(accepted + M_maturity, Final + claim_retirement, trace_retention)` and, additionally, no earlier than the
+   last applicable court/DA/liability endpoint of that claim (including any G14/OPV/EXEC consumer path). A longer
+   new G14 path therefore lengthens maturity automatically (2026-10-11 ruling).
+5. **Prefix, not islands.** §3 item 4 stands; an unresolved earlier dependency stops the safe prefix.
+6. **Named parameters** (all committed in the fence's policy and fingerprint; all **value: USER DECISION REQUIRED**):
+
+   | Parameter | Invariant | Recommendation and source |
+   | --- | --- | --- |
+   | `settled_anchor_depth` D | integer ≥ 1; counts distinct qualifying grant/attempt anchors, never slices | recommended **3** — 2026-10-11 drill-provisional ruling; with a 400 ‰ operator cap three operators is the minimum that can satisfy it ([policy proposal](../design/palw/rfc-0012-policy-proposal.md)) |
+   | `unique_mature_work` W (pwu) | > 0; distinct from ADR-0176's budget window | recommended **6,331,093,440** as a drill floor (= 3 × smallest REAL claim); production value from a census `⌈k × matured REAL work per window⌉`, which does not exist yet |
+   | `operator_concentration_cap_permille` | 1..1000 | recommended **400** (2026-10-11 drill ruling) |
+   | `class_concentration_cap_permille` | 1..1000 | recommended **1000** for now; re-evaluate **600** once ≥ 3 REAL classes have mature work (2026-10-11 ruling) |
+   | `M_maturity` (DAA) | ≥ accepted+bind+receipt+challenge+court of the counted rules | recommended **5,400** (DERIVED in the policy proposal); per the 2026-10-08 ruling it is neither shortened nor treated as final without the formula derivation, the 5,400/3,000/1,000/600 comparison and the attack tests |
+   | `legacy_evidence_horizon_daa` | ≥ the DNS `evidence_window_blocks` it preserves | recommended **10,080** (DERIVED from `evidence_window_blocks`) |
+
+   The 2026-10-11 values were adopted for the **drill only**; they are not production values and do not arm anything.
+
+   **Status (2026-10-15, lead record): closed-as-provisional.** The specification of R12-SETTLE is closed with these
+   values marked **drill-provisional (user ruling 10-11), production values pending census/measurement**:
+   D = 3; W = 6,331,093,440 pwu (revisit with the census); operator concentration 400 ‰; class concentration
+   1000 ‰ for now, re-evaluated at 600 ‰ once at least three REAL classes have mature work;
+   maturity = `max(accepted + 5,400 DAA, the later retirement/liability deadline)`, so any longer G14 deadline
+   lengthens maturity; legacy DNS evidence horizon 10,080 DAA. No preset carries them and no fence is armed.
+7. Remaining: census of operators/classes/pwu per window, native court-extension and pruned-provenance paths,
+   private-fork attack evidence (validation-only).
+
+### R12-BRIDGE — native accounting
+
+The §4.1 invariants are complete as specification. Added rule: claim/refund exclusivity is evaluated at the
+accepting DAA of the executing block, so a merge, delayed execution or reorg cannot make both paths succeed; market
+settlement effects belong to the same state generation as the UTXO/EVM effects and are undone with them. Remaining
+items are validation-only: reorg/refund boundary rollback, actual market fills, and equality of both ledger roots
+after undo/replay.
+
+### R12-HEADS — durability and reader coherence
+
+1. Every import session/recovery marker, each verified sidecar install, the marker preceding virtual UTXO
+   replacement and the final stable publication MUST pass a synchronous WAL barrier before the next step. Intrusive
+   target resets use the same barrier.
+2. Native-retirement virtual commits MUST persist publication history synchronously with their UTXO/selected-chain
+   generation before releasing reader guards (extends §3.1).
+3. Validated snapshot declarations MUST be installed with the PALW tip, the servable pruning snapshot and the
+   incomplete marker in one batch; whole-set validation precedes staging. Genesis PALW delta, initial tip, UTXO-valid
+   rows and accepted class-carriage index rows are staged in one batch after the transition is fully derived.
+4. An incomplete intermediate virtual copy MUST NOT publish canonical ETH or native tags.
+5. Remaining (observations): power-loss durability, atomic initialization of every header/body/virtual store, crash
+   between generations under real pruning, finalized-conflict external evidence.
+
+### R12-MONEY — split, fees and retained liabilities
+
+1. **The §6 split is not adopted.** `92 / 8 / 0` is a proposal. The dormant implementation commits it inside the
+   unarmed fence's policy values only so the mechanics can be tested; that is not adoption. The same holds for the
+   dormant rule that normal and native-settlement transaction fees go 100% to the carrier.
+   Named parameters `retirement_subsidy_split` (claim-escrow ‰, inclusion ‰, DNS ‰ = 0; sum = 1000) and
+   `retirement_fee_schedule` (per-recipient fee shares; sum = 1000; no DNS/service share): **value: USER DECISION REQUIRED**. No recommendation is made here, because the
+   model-bond allocation of the claim escrow under ADR-0177 D4 (and its 2026-10-12 proposal) is itself undecided.
+2. Invariants that hold for any value: the emission ceiling never increases; escrow ≤ actually withheld base at the
+   payer; the retired DNS share is not minted where no eligible claim backs it; old claims keep their recorded
+   entitlement (no retroactive 72%→92%); pre-fence liabilities are settled once and residual reserves follow an
+   explicit auditable rule.
+3. **2026-10-11 rulings applied.** A fee-only Round is not counted in `B_max`; it is limited by a separate,
+   capital-proportional `ExecutionCap` charged at allocation. In v1 the market fee is not in `R_max`; expected fee
+   income enters the economic-safety computation.
+4. Remaining: reconciliation of snapshot generations, old/new earn-pay and legacy horizons on every path
+   (validation-only).
+
+### R12-OPS — capabilities, retired kinds, release procedure
+
+1. New DNS bonds (`0x10`), attestation shards (`0x11`) and precommits (`0x19`) are rejected after retirement in
+   header context, populated UTXO context and template selection. Bond unbond/exit stays available.
+2. Clients MUST check reported durable import status before selecting funds or signing. Under native retirement a
+   client requires the import-status capability; a missing capability is accepted only for dormant legacy rules.
+   Validator status reports an unknown finality authority when both the settlement read and DNS authority fail,
+   never a fallback "active DNS validator" headline.
+3. wRPC keeps the exact v1 encoding when the optional native fields are absent and uses response v2 when present.
+4. **Release observation bounds.** Real-process drills require a separately supplied
+   `rfc12-real-process-observation-bounds` v1 document (`maximumOwnedProcessRssKiB`,
+   `maximumOwnedDatabaseLogicalBytes`, `maximumProbeMs`, `samplePeriodMs` ∈ [100, 5000],
+   `maximumFixtureOutputBytes`) and a fixed `workflow_timeout_s`. Values: **USER DECISION REQUIRED**; none is
+   invented here. A >100,000-block processor latency bound for the release: **USER DECISION REQUIRED**.
+5. Before scheduling, the bond exit procedure, compatibility matrix and fingerprint MUST be published (§8 step 5).
+6. Remaining: third-party wallets/SDKs/EVM tooling migration, pruned P2P, 100k release latency (validation-only).
+7. **External wallet path (2026-10-15, round 3; source only, no PASS).** Items 1–3 are now available to third-party
+   code as one versioned surface: `kaspa-wallet-core::misaka_preflight` (capability schema `misaka.wallet.capability.v1`,
+   a single `preflight` call before signing, WASM `misakaPreflightV1`). It refuses on genesis mismatch, a missing or
+   incomplete import status, an unknown finality authority, and retired kinds once retirement is active or scheduled
+   within 1,000 DAA of the sink. The 1,000 DAA margin is a proposal: **USER REVIEW**. Integrator note:
+   [rfc12-external-wallet-integration-2026-10-15](../design/palw/rfc12-external-wallet-integration-2026-10-15.md).
+   Third-party migration itself remains EXTERNAL.
+
+### ALL-MODEL
+
+RFC6's 2026-10-15 section holds the shared ALL-MODEL rules. For this RFC: no settlement, head or fork-choice rule
+reads model availability; immutable model identity binds claims; the 2026-10-12 proposal to connect model-bond
+allocation to block opportunities does not change D, W, fork choice or Final weight.

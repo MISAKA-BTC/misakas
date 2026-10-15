@@ -48,8 +48,11 @@ pub const PALW_MATERIAL_MAX_BYTES: usize = 16 << 20;
 /// ends. The requester refused anything over 64 MiB while the live carriage already weighed ≈ 57 MB and grows with every bond, class and
 /// claim, and the server had no cap at all (it served whatever it materialised and the requester dropped it after the transfer, so a
 /// grown state was a deterministic IBD failure). 384 MiB is a sixth of the transport's 1 GiB message limit and leaves ≈ 6.7× headroom over
-/// today's state; the single-message transport itself is a design limit, written up in
-/// `docs/design/palw/pruned-ibd-palw-state-chunked-transport.md` (chunked, back-pressured, resumable), not raised further here.
+/// today's state. Protocol 106 streams bounded chunks, but retains this TOTAL cap:
+/// chunking does not make a larger native carriage importable. Both modes account for
+/// the same canonical state/declaration envelope, including every class id and length.
+/// Native 100k/four-population carriage and decoded RSS still require measured headroom;
+/// see `docs/design/palw/pruned-ibd-palw-state-chunked-transport.md`.
 pub const PALW_PRUNING_STATE_MAX_BYTES: usize = 384 << 20;
 
 /// Lane PA, B-F2: the size at which a serving node says, loudly, that the single-message transport is nearing its cap (half of it).

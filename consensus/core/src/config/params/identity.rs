@@ -569,6 +569,21 @@ impl Params {
         if self.palw_paid_consumer_lifecycle_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_paid_consumer_lifecycle_v1 = None;
         }
+        if self.palw_panel_lifetime_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_panel_lifetime_v2 = None; }
+        if self.palw_claim_challenge_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_claim_challenge_v2 = None; }
+        if self.palw_monetary_material_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_monetary_material_v1 = None; }
+        if self.palw_model_verification_gate_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_model_verification_gate_v1 = None;
+        }
+        if self.palw_horizon_extension_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_horizon_extension_v1 = None;
+        }
+        if self.palw_minimum_price_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_minimum_price_v1 = None;
+        }
+        if self.palw_beacon_bootstrap_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_beacon_bootstrap_v1 = None;
+        }
         if self.palw_material_income_v3 == Some(ForkActivation::never()) {
             self.palw_material_income_v3 = None;
         }
@@ -593,8 +608,12 @@ impl Params {
         if self.palw_public_evidence_reward_v1 == Some(ForkActivation::never()) {
             self.palw_public_evidence_reward_v1 = None;
         }
-        if self.palw_claim_hard_deadline_v1 == Some(ForkActivation::never()) {
+        if self.palw_claim_hard_deadline_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_claim_hard_deadline_v1 = None;
+        }
+        // RFC-0006 R6-CELL round 4's coverage closure, likewise.
+        if self.palw_cell_coverage_closure_v1 == Some(ForkActivation::never()) {
+            self.palw_cell_coverage_closure_v1 = None;
         }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
@@ -1041,6 +1060,13 @@ impl Params {
             palw_bond_budget_v1,
             palw_reporter_income_v2,
             palw_material_income_v3,
+            palw_panel_lifetime_v2,
+            palw_claim_challenge_v2,
+            palw_monetary_material_v1,
+            palw_model_verification_gate_v1,
+            palw_horizon_extension_v1,
+            palw_minimum_price_v1,
+            palw_beacon_bootstrap_v1,
             palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
@@ -1048,6 +1074,7 @@ impl Params {
             palw_court_model_scope_v1,
             palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1,
+            palw_cell_coverage_closure_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -1344,13 +1371,21 @@ impl Params {
             ("palw_bond_budget_v1", palw_bond_budget_v1.as_ref().map(|fence| fence.activation)),
             ("palw_reporter_income_v2", *palw_reporter_income_v2),
             ("palw_material_income_v3", *palw_material_income_v3),
+            ("palw_panel_lifetime_v2", palw_panel_lifetime_v2.as_ref().map(|f| f.activation)),
+            ("palw_claim_challenge_v2", palw_claim_challenge_v2.as_ref().map(|f| f.activation)),
+            ("palw_monetary_material_v1", palw_monetary_material_v1.as_ref().map(|f| f.activation)),
+            ("palw_model_verification_gate_v1", palw_model_verification_gate_v1.as_ref().map(|f| f.activation)),
+            ("palw_horizon_extension_v1", palw_horizon_extension_v1.as_ref().map(|f| f.activation)),
+            ("palw_minimum_price_v1", palw_minimum_price_v1.as_ref().map(|f| f.activation)),
+            ("palw_beacon_bootstrap_v1", palw_beacon_bootstrap_v1.as_ref().map(|f| f.activation)),
             ("palw_paid_consumer_lifecycle_v1", palw_paid_consumer_lifecycle_v1.as_ref().map(|f| f.activation)),
             ("palw_model_bond_allocation_v1", palw_model_bond_allocation_v1.as_ref().map(|fence| fence.activation)),
             ("palw_reporter_share_v2", *palw_reporter_share_v2),
             ("palw_legacy_public_filer_v1", *palw_legacy_public_filer_v1),
             ("palw_court_model_scope_v1", *palw_court_model_scope_v1),
             ("palw_public_evidence_reward_v1", *palw_public_evidence_reward_v1),
-            ("palw_claim_hard_deadline_v1", *palw_claim_hard_deadline_v1),
+            ("palw_claim_hard_deadline_v1", palw_claim_hard_deadline_v1.as_ref().map(|f| f.activation)),
+            ("palw_cell_coverage_closure_v1", *palw_cell_coverage_closure_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -1724,6 +1759,29 @@ impl Params {
             h.write(f.activation.daa_score().to_le_bytes());
             h.write(f.policy.digest().as_bytes());
         }
+        if let Some(f) = &self.palw_panel_lifetime_v2 { h.write(b"palw_panel_lifetime_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
+        if let Some(f) = &self.palw_claim_challenge_v2 { h.write(b"palw_claim_challenge_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id()); }
+        if let Some(f) = &self.palw_monetary_material_v1 { h.write(b"palw_monetary_material_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
+        if let Some(f) = &self.palw_model_verification_gate_v1 {
+            h.write(b"palw_model_verification_gate_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &self.palw_horizon_extension_v1 {
+            h.write(b"palw_horizon_extension_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &self.palw_minimum_price_v1 {
+            h.write(b"palw_minimum_price_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &self.palw_beacon_bootstrap_v1 {
+            h.write(b"palw_beacon_bootstrap_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
         if let Some(at) = self.palw_material_income_v3 {
             h.write(b"palw_material_income_v3");
             h.write(at.daa_score().to_le_bytes());
@@ -1759,8 +1817,14 @@ impl Params {
             h.write(b"palw_public_evidence_reward_v1");
             h.write(at.daa_score().to_le_bytes());
         }
-        if let Some(at) = self.palw_claim_hard_deadline_v1.filter(|f| *f != ForkActivation::never()) {
+        if let Some(f) = self.palw_claim_hard_deadline_v1.filter(|f| f.activation != ForkActivation::never()) {
             h.write(b"palw_claim_hard_deadline_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        // RFC-0006 R6-CELL round 4's coverage closure, NAMED likewise. Some-only.
+        if let Some(at) = self.palw_cell_coverage_closure_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_cell_coverage_closure_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, NAMED likewise.
@@ -2476,6 +2540,13 @@ impl Params {
             palw_bond_budget_v1,
             palw_reporter_income_v2,
             palw_material_income_v3,
+            palw_panel_lifetime_v2,
+            palw_claim_challenge_v2,
+            palw_monetary_material_v1,
+            palw_model_verification_gate_v1,
+            palw_horizon_extension_v1,
+            palw_minimum_price_v1,
+            palw_beacon_bootstrap_v1,
             palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
@@ -2483,6 +2554,7 @@ impl Params {
             palw_court_model_scope_v1,
             palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1,
+            palw_cell_coverage_closure_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -3319,6 +3391,21 @@ impl Params {
         if let Some(f) = palw_paid_consumer_lifecycle_v1.as_mut() {
             fork(&mut f.activation, visit);
         }
+        if let Some(f) = palw_panel_lifetime_v2.as_mut() { fork(&mut f.activation, visit); }
+        if let Some(f) = palw_claim_challenge_v2.as_mut() { fork(&mut f.activation, visit); }
+        if let Some(f) = palw_monetary_material_v1.as_mut() { fork(&mut f.activation, visit); }
+        if let Some(f) = palw_model_verification_gate_v1.as_mut() {
+            fork(&mut f.activation, visit);
+        }
+        if let Some(f) = palw_horizon_extension_v1.as_mut() {
+            fork(&mut f.activation, visit);
+        }
+        if let Some(f) = palw_minimum_price_v1.as_mut() {
+            fork(&mut f.activation, visit);
+        }
+        if let Some(f) = palw_beacon_bootstrap_v1.as_mut() {
+            fork(&mut f.activation, visit);
+        }
         if let Some(at) = palw_material_income_v3.as_mut() {
             fork(at, visit);
         }
@@ -3343,7 +3430,11 @@ impl Params {
         if let Some(activation) = palw_public_evidence_reward_v1.as_mut() {
             fork(activation, visit);
         }
-        if let Some(activation) = palw_claim_hard_deadline_v1.as_mut() {
+        if let Some(f) = palw_claim_hard_deadline_v1.as_mut() {
+            fork(&mut f.activation, visit);
+        }
+        // RFC-0006 R6-CELL round 4's coverage closure. Some-only.
+        if let Some(activation) = palw_cell_coverage_closure_v1.as_mut() {
             fork(activation, visit);
         }
         // palw_fp_prefix_inherit. Some-only.
@@ -3860,6 +3951,13 @@ impl Params {
             palw_bond_budget_v1,
             palw_reporter_income_v2,
             palw_material_income_v3,
+            palw_panel_lifetime_v2,
+            palw_claim_challenge_v2,
+            palw_monetary_material_v1,
+            palw_model_verification_gate_v1,
+            palw_horizon_extension_v1,
+            palw_minimum_price_v1,
+            palw_beacon_bootstrap_v1,
             palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
@@ -3867,6 +3965,7 @@ impl Params {
             palw_court_model_scope_v1,
             palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1,
+            palw_cell_coverage_closure_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -4775,6 +4874,29 @@ impl Params {
             h.write(f.activation.daa_score().to_le_bytes());
             h.write(f.policy.digest().as_bytes());
         }
+        if let Some(f) = &palw_panel_lifetime_v2 { h.write(b"palw_panel_lifetime_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
+        if let Some(f) = &palw_claim_challenge_v2 { h.write(b"palw_claim_challenge_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id()); }
+        if let Some(f) = &palw_monetary_material_v1 { h.write(b"palw_monetary_material_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
+        if let Some(f) = &palw_model_verification_gate_v1 {
+            h.write(b"palw_model_verification_gate_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &palw_horizon_extension_v1 {
+            h.write(b"palw_horizon_extension_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &palw_minimum_price_v1 {
+            h.write(b"palw_minimum_price_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &palw_beacon_bootstrap_v1 {
+            h.write(b"palw_beacon_bootstrap_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
         if let Some(at) = palw_material_income_v3 {
             h.write(b"palw_material_income_v3");
             h.write(at.daa_score().to_le_bytes());
@@ -4820,8 +4942,14 @@ impl Params {
             h.write(b"palw_public_evidence_reward_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
-        if let Some(activation) = palw_claim_hard_deadline_v1.filter(|f| *f != ForkActivation::never()) {
+        if let Some(f) = palw_claim_hard_deadline_v1.filter(|f| f.activation != ForkActivation::never()) {
             h.write(b"palw_claim_hard_deadline_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        // RFC-0006 R6-CELL round 4's coverage closure, Some-only for the same reason.
+        if let Some(activation) = palw_cell_coverage_closure_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_cell_coverage_closure_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, Some-only for the same reason.

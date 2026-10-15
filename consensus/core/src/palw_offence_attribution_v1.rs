@@ -832,9 +832,10 @@ enum PalwStructuralPassV1 {
 fn structural_pass(
     refutation: &crate::palw_step_leg::PalwStepRefutationV1,
     step_ladder: u64,
+    cell_closure: bool,
 ) -> Result<PalwStructuralPassV1, PalwOffenceVerifyError> {
     let root = &refutation.binding.committed_execution_root;
-    match crate::palw_step_leg::check_step_refutation_capped_v1(refutation, step_ladder) {
+    match crate::palw_step_leg::check_step_refutation_closure_capped_v1(refutation, step_ladder, cell_closure) {
         // The shape pass mints its evidence id at kind 0, leaf 0; every opened verdict at its own
         // kind and leaf. That id is the one mark of which pass answered.
         Ok(verdict) if verdict.evidence_id == crate::palw_step_leg::step_refutation_evidence_id(root, 0, 0, verdict.fault) => {
@@ -900,6 +901,17 @@ pub fn palw_false_valid_fault_site_v1(
     contradiction: &PalwPanelContradictionV1,
     step_ladder: u64,
 ) -> Result<(PalwFaultSiteV1, u64), PalwOffenceVerifyError> {
+    palw_false_valid_fault_site_closure_v1(contradiction, step_ladder, false)
+}
+
+/// [`palw_false_valid_fault_site_v1`] under RFC-0006 R6-CELL round 4's coverage closure (`palw_cell_coverage_closure_v1`): with
+/// `cell_closure` (the closure governs the claim) the structural pass uses the closure-aware step checker, so an uncoverable profile
+/// is a whole-claim shape fault rather than "no fault". `false`: byte for byte the V1 function.
+pub fn palw_false_valid_fault_site_closure_v1(
+    contradiction: &PalwPanelContradictionV1,
+    step_ladder: u64,
+    cell_closure: bool,
+) -> Result<(PalwFaultSiteV1, u64), PalwOffenceVerifyError> {
     use crate::palw_step_leg::{PalwStepEvidenceV1, PalwStepRefutationV1};
     match contradiction {
         PalwPanelContradictionV1::StepArithmetic { refutation, .. } => {
@@ -912,7 +924,7 @@ pub fn palw_false_valid_fault_site_v1(
                 },
             };
             let count = refutation.binding.step_leaf_count;
-            Ok(match structural_pass(&structural, step_ladder)? {
+            Ok(match structural_pass(&structural, step_ladder, cell_closure)? {
                 PalwStructuralPassV1::Shape => (PalwFaultSiteV1::Whole, 0),
                 PalwStructuralPassV1::LeafFault => (leaf_alone_site(&refutation.binding, refutation.output_opening.leaf_index), count),
                 PalwStructuralPassV1::Clean => (arithmetic_site(refutation), count),
@@ -920,7 +932,7 @@ pub fn palw_false_valid_fault_site_v1(
         }
         PalwPanelContradictionV1::StepStructural(refutation) => match &refutation.evidence {
             PalwStepEvidenceV1::StepTile { opening, .. } | PalwStepEvidenceV1::KvChunk { opening, .. } => {
-                Ok(match structural_pass(refutation, step_ladder)? {
+                Ok(match structural_pass(refutation, step_ladder, cell_closure)? {
                     PalwStructuralPassV1::Shape => (PalwFaultSiteV1::Whole, 0),
                     PalwStructuralPassV1::LeafFault | PalwStructuralPassV1::Clean => {
                         (leaf_alone_site(&refutation.binding, opening.leaf_index), refutation.binding.step_leaf_count)
@@ -1060,8 +1072,34 @@ pub fn palw_false_valid_convicts_execution_v2(
     class_artifact_root: Hash64,
     step_ladder: u64,
 ) -> Result<(), PalwOffenceVerifyError> {
+    palw_false_valid_convicts_execution_closure_v2(
+        contradiction,
+        prompt_ids_opening,
+        claim_execution_root,
+        class_artifact_root,
+        step_ladder,
+        false,
+    )
+}
+
+/// [`palw_false_valid_convicts_execution_v2`] under the R6-CELL coverage closure: `cell_closure` reaches the structural step check
+/// ([`crate::palw_offence_v1::palw_panel_contradiction_convicts_execution_closure_v1`]). `false`: byte for byte the V2 function.
+pub fn palw_false_valid_convicts_execution_closure_v2(
+    contradiction: &PalwPanelContradictionV1,
+    prompt_ids_opening: Option<&PalwPromptIdsOpeningV1>,
+    claim_execution_root: Hash64,
+    class_artifact_root: Hash64,
+    step_ladder: u64,
+    cell_closure: bool,
+) -> Result<(), PalwOffenceVerifyError> {
     let Some(opening) = prompt_ids_opening else {
-        return palw_panel_contradiction_convicts_execution_v1(contradiction, claim_execution_root, class_artifact_root, step_ladder);
+        return crate::palw_offence_v1::palw_panel_contradiction_convicts_execution_closure_v1(
+            contradiction,
+            claim_execution_root,
+            class_artifact_root,
+            step_ladder,
+            cell_closure,
+        );
     };
     let PalwPanelContradictionV1::StepArithmetic { refutation, operand_openings } = contradiction else {
         return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
@@ -2028,6 +2066,7 @@ fn claim_proving_fault_v1(
 /// convicting kinds** (3 against a `Valid` signer, 4 against the executor): the execution checks
 /// against the target's root and artifact at the class's ladder, and the claim checks against its
 /// recorded identity. Returns the forfeiture scope and, for a 9, the identity check that failed.
+#[allow(clippy::too_many_arguments)]
 fn adjudicate_against_claim_v1(
     state: &PalwChainStateV2,
     target: &PalwOffenceTargetV1,
@@ -2037,6 +2076,7 @@ fn adjudicate_against_claim_v1(
     fp_decode_rules_active: bool,
     rules: PalwIdentityRulesV1,
     sessions: PalwSessionRuleV1,
+    cell_closure: bool,
 ) -> Result<(PalwForfeitScopeV1, Option<PalwIdentityFaultV1>), PalwOffenceVerifyError> {
     let ladder = state.class_step_ladder_v1(&target.class_id, PALW_FALSE_VALID_NETWORK_LADDER_V1);
     match admission {
@@ -2108,12 +2148,13 @@ fn adjudicate_against_claim_v1(
                 PalwPanelContradictionV1::LogitsNotStepOutput { event, row, head_tile, head_opening } => {
                     palw_logits_not_step_output_fault_v1(target, event, *row, *head_tile, head_opening, ladder)?
                 }
-                _ => palw_false_valid_convicts_execution_v2(
+                _ => palw_false_valid_convicts_execution_closure_v2(
                     contradiction,
                     prompt_ids_opening,
                     target.execution_root,
                     target.artifact_root,
                     ladder,
+                    cell_closure,
                 )?,
             }
             Ok((PalwForfeitScopeV1::ByRoot, None))
@@ -2205,6 +2246,7 @@ pub fn palw_check_panel_false_valid_at_v2(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn palw_check_panel_false_valid_at_v2_with_budget_v1(
     state: &PalwChainStateV2,
     accused: &PalwBondKeyV2,
@@ -2215,6 +2257,64 @@ pub fn palw_check_panel_false_valid_at_v2_with_budget_v1(
     sig: Option<PalwFalseValidSigCheckV1<'_>>,
     sessions: PalwSessionRuleV1,
     evidence_budget: PalwObjectiveEvidenceBudgetV1,
+) -> Result<PalwFalseValidFindingV1, PalwOffenceVerifyError> {
+    palw_check_panel_false_valid_at_v2_with_budget_closure_v1(
+        state,
+        accused,
+        evidence,
+        fp_decode_rules_active,
+        reporter_armed,
+        rules,
+        sig,
+        sessions,
+        evidence_budget,
+        None,
+    )
+}
+
+/// [`palw_check_panel_false_valid_at_v2`] under RFC-0006 R6-CELL round 4's coverage closure: `cell_closure_from` is the closure's
+/// mirrored height (`PalwStateParamsV2::cell_coverage_closure_from_daa`). For a claim accepted at or past it the structural step
+/// checks (fault site and conviction) use the closure-aware checker, so a Panel signer's `Valid` on an uncoverable profile is
+/// convictable instead of answering "no fault". `None` (every shipped network): byte for byte the existing function.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_check_panel_false_valid_at_v2_closure_v1(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    evidence: &[u8],
+    fp_decode_rules_active: bool,
+    reporter_armed: bool,
+    rules: PalwIdentityRulesV1,
+    sig: Option<PalwFalseValidSigCheckV1<'_>>,
+    sessions: PalwSessionRuleV1,
+    cell_closure_from: Option<u64>,
+) -> Result<PalwFalseValidFindingV1, PalwOffenceVerifyError> {
+    palw_check_panel_false_valid_at_v2_with_budget_closure_v1(
+        state,
+        accused,
+        evidence,
+        fp_decode_rules_active,
+        reporter_armed,
+        rules,
+        sig,
+        sessions,
+        PalwObjectiveEvidenceBudgetV1::DirectCarrier,
+        cell_closure_from,
+    )
+}
+
+/// [`palw_check_panel_false_valid_at_v2_with_budget_v1`] with the coverage closure's height (see the function above).
+#[allow(clippy::too_many_arguments)]
+pub fn palw_check_panel_false_valid_at_v2_with_budget_closure_v1(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    evidence: &[u8],
+    fp_decode_rules_active: bool,
+    reporter_armed: bool,
+    rules: PalwIdentityRulesV1,
+    sig: Option<PalwFalseValidSigCheckV1<'_>>,
+    sessions: PalwSessionRuleV1,
+    evidence_budget: PalwObjectiveEvidenceBudgetV1,
+    cell_closure_from: Option<u64>,
 ) -> Result<PalwFalseValidFindingV1, PalwOffenceVerifyError> {
     if evidence.len() as u64 > evidence_budget.maximum(sessions) {
         return Err(PalwOffenceVerifyError::EvidenceTooLarge);
@@ -2254,6 +2354,9 @@ pub fn palw_check_panel_false_valid_at_v2_with_budget_v1(
         }
     }
     let target = palw_offence_target_v1(state, &payload.claim_id).ok_or(PalwOffenceVerifyError::NoTarget)?;
+    // R6-CELL round 4: the coverage closure governs a claim accepted at or past its fence (`None` on every shipped network).
+    let cell_closure =
+        cell_closure_from.is_some_and(|from| state.claims.get(&target.claim_id).is_some_and(|c| c.accepted_daa >= from));
     if sessions.refuses(state, &target.claim_id) {
         return Err(PalwOffenceVerifyError::ClaimUnderSession);
     }
@@ -2309,6 +2412,7 @@ pub fn palw_check_panel_false_valid_at_v2_with_budget_v1(
         fp_decode_rules_active,
         rules,
         sessions,
+        cell_closure,
     )?;
     let ladder = state.class_step_ladder_v1(&target.class_id, PALW_FALSE_VALID_NETWORK_LADDER_V1);
     let staged_site = match &payload.contradiction {
@@ -2324,7 +2428,7 @@ pub fn palw_check_panel_false_valid_at_v2_with_budget_v1(
     };
     let (site, step_leaf_count) = match staged_site.or_else(|| palw_claim_proving_site_v1(&payload.contradiction, identity_fault)) {
         Some(site) => (site, 0),
-        None => palw_false_valid_fault_site_v1(&payload.contradiction, ladder)?,
+        None => palw_false_valid_fault_site_closure_v1(&payload.contradiction, ladder, cell_closure)?,
     };
     let assigned = palw_false_valid_assigned_mask_v1(state, &target.claim_id, accused);
     palw_false_valid_liable_v1(&payload.receipt, site, target.segment_count, assigned, step_leaf_count)?;
@@ -2690,6 +2794,7 @@ pub fn palw_check_executor_refuted_at_v1_with_budget_v1(
         fp_decode_rules_active,
         rules,
         sessions,
+        false,
     )?;
     Ok(PalwExecutorRefutedFindingV1 { target, forfeit, identity_fault })
 }

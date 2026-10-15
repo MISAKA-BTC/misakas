@@ -515,7 +515,7 @@ impl VirtualStateProcessor {
                                 .palw_court_params_v2
                                 .as_ref()
                                 .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                            let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v3(
+                            let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v4(
                                 state,
                                 session_id,
                                 proof,
@@ -531,6 +531,8 @@ impl VirtualStateProcessor {
                                 self.palw_fp_decode_rules
                                     .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never())
                                     .map(|f| f.daa_score()),
+                                // RFC-0006 R6-CELL round 4: the coverage closure's mirror (None on every shipped network).
+                                self.palw_state_params_v2.as_ref().and_then(|p| p.cell_coverage_closure_from_daa()),
                             )
                             .map_err(|e| e.to_string())?;
                             if derived != *verdict {
@@ -867,7 +869,7 @@ impl VirtualStateProcessor {
                         .palw_court_params_v2
                         .as_ref()
                         .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v3(
+                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v4(
                         state,
                         session_id,
                         proof,
@@ -882,6 +884,8 @@ impl VirtualStateProcessor {
                         self.palw_fp_decode_rules
                             .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never())
                             .map(|f| f.daa_score()),
+                        // RFC-0006 R6-CELL round 4: the coverage closure's mirror (None on every shipped network).
+                        self.palw_state_params_v2.as_ref().and_then(|p| p.cell_coverage_closure_from_daa()),
                     )
                     .map_err(|e| e.to_string())?;
                     if derived != *verdict {
@@ -1812,28 +1816,31 @@ impl VirtualStateProcessor {
                                 {
                                     return Err("a Windowed receipt below palw_capacity_batch_licence (ADR-0160 F-B)".to_string());
                                 }
-                                let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_panel_false_valid_at_v2(
-                                    state,
-                                    accused,
-                                    evidence,
-                                    state_params.fp_decode_rules_at(point.daa_score),
-                                    // F7's reporter slot: empty until its own fence arms it.
-                                    false,
-                                    self.palw_identity_rules_v1(point.daa_score),
-                                    Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidSigCheckV1 {
-                                        chain_domain: domain,
-                                        seat_pubkey: &record.pubkey,
-                                        seat_active: matches!(
-                                            record.status,
-                                            kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active
-                                                | kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring { .. }
-                                        ),
-                                        verify: &Self::verify_mldsa87_with_context_bool,
-                                    }),
-                                    // Lane LG14-A (RFC-0014 §7.4): the fold's session rule at this block.
-                                    self.palw_session_rule_at(point.daa_score),
-                                )
-                                .map_err(|e| e.to_string())?;
+                                // R6-CELL round 4: the coverage closure's mirrored height (None on every shipped network).
+                                let finding =
+                                    kaspa_consensus_core::palw_offence_attribution_v1::palw_check_panel_false_valid_at_v2_closure_v1(
+                                        state,
+                                        accused,
+                                        evidence,
+                                        state_params.fp_decode_rules_at(point.daa_score),
+                                        // F7's reporter slot: empty until its own fence arms it.
+                                        false,
+                                        self.palw_identity_rules_v1(point.daa_score),
+                                        Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidSigCheckV1 {
+                                            chain_domain: domain,
+                                            seat_pubkey: &record.pubkey,
+                                            seat_active: matches!(
+                                                record.status,
+                                                kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active
+                                                    | kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring { .. }
+                                            ),
+                                            verify: &Self::verify_mldsa87_with_context_bool,
+                                        }),
+                                        // Lane LG14-A (RFC-0014 §7.4): the fold's session rule at this block.
+                                        self.palw_session_rule_at(point.daa_score),
+                                        state_params.cell_coverage_closure_from_daa(),
+                                    )
+                                    .map_err(|e| e.to_string())?;
                                 let offence_id = kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(
                                     &accused.0,
                                     &finding.target.claim_id,
@@ -1929,7 +1936,16 @@ impl VirtualStateProcessor {
                     ) {
                         return Err(kaspa_consensus_core::palw_offence_v1::PalwOffenceVerifyError::AttributionDormant.to_string());
                     }
-                    kaspa_consensus_core::palw_offence_v1::palw_verify_objective_offence_v1(
+                    // R6-CELL round 4: whether the coverage closure governs the accused claim (a `PanelFalseValid`'s named claim
+                    // accepted at or past the closure's mirrored height); `false` on every shipped network and for every other kind.
+                    let cell_closure = matches!(kind, kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid)
+                        && borsh::from_slice::<kaspa_consensus_core::palw_offence_v1::PalwPanelFalseValidEvidenceV1>(evidence)
+                            .ok()
+                            .and_then(|p| state.claim(&p.claim_id).map(|c| c.accepted_daa))
+                            .is_some_and(|daa| {
+                                kaspa_consensus_core::palw_cell_coverage_closure_v1::palw_cell_closure_governs_v1(state_params, daa)
+                            });
+                    kaspa_consensus_core::palw_offence_v1::palw_verify_objective_offence_closure_v1(
                         *kind,
                         &accused.0,
                         evidence_id,
@@ -1950,6 +1966,7 @@ impl VirtualStateProcessor {
                         // not be convicted through this route at all.
                         self.palw_max_step_leaf_count_v1(),
                         Self::verify_mldsa87_with_context_bool,
+                        cell_closure,
                     )
                     .map_err(|e| e.to_string())?;
                     if let kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid = kind {
@@ -1987,11 +2004,12 @@ impl VirtualStateProcessor {
                             }
                         }
                         let ladder = state.class_step_ladder_v1(&class_id, 64);
-                        kaspa_consensus_core::palw_offence_v1::palw_panel_contradiction_convicts_execution_v1(
+                        kaspa_consensus_core::palw_offence_v1::palw_panel_contradiction_convicts_execution_closure_v1(
                             &payload.contradiction,
                             execution_root,
                             artifact_root,
                             ladder,
+                            cell_closure,
                         )
                         .map_err(|e| e.to_string())?;
                     }
@@ -3490,6 +3508,81 @@ impl VirtualStateProcessor {
                 }
                 // **Lane DA16 (tags 150–153): the provider court** — the fence, an Active signer, its signature over the payload; the
                 // leases, units and verdicts are the fold's.
+                Obj::MonetaryMaterialEnrolledV1 { enrollment, signature } => {
+                    if state_params.monetary_material_at_v1(point.daa_score).is_none() {
+                        return Err("monetary material enrollment is dormant".into());
+                    }
+                    let payload = enrollment.payload();
+                    self.palw_provider_court_signature_ok(
+                        state,
+                        point.daa_score,
+                        240,
+                        &enrollment.terms.sponsor,
+                        &payload,
+                        signature,
+                    )?;
+                    for offer in &enrollment.offers {
+                        self.palw_provider_court_signature_ok(
+                            state,
+                            point.daa_score,
+                            240,
+                            &offer.provider,
+                            &payload,
+                            &offer.signature,
+                        )?;
+                    }
+                }
+                Obj::MonetaryMaterialReplacedV1 { replacement, signature } => {
+                    if state_params.monetary_material_at_v1(point.daa_score).is_none() {
+                        return Err("monetary material replacement is dormant".into());
+                    }
+                    let payload = replacement.payload();
+                    self.palw_provider_court_signature_ok(
+                        state,
+                        point.daa_score,
+                        241,
+                        &replacement.enrollment.terms.sponsor,
+                        &payload,
+                        signature,
+                    )?;
+                    for offer in &replacement.enrollment.offers {
+                        self.palw_provider_court_signature_ok(
+                            state,
+                            point.daa_score,
+                            241,
+                            &offer.provider,
+                            &payload,
+                            &offer.signature,
+                        )?;
+                    }
+                }
+                Obj::MonetaryMaterialActionV1 { action, signer, signature } => {
+                    if state_params.monetary_material_at_v1(point.daa_score).is_none() {
+                        return Err("monetary material action is dormant".into());
+                    }
+                    if let kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::Release {
+                        root,
+                        consent,
+                        tail_block,
+                    } = action.as_ref()
+                    {
+                        let row = state.monetary_material_row_v1(*root).ok_or("material release has no enrollment")?;
+                        if row.consent != *consent || row.tail_block != Some(*tail_block) {
+                            return Err("material release substitutes its consent/tail".into());
+                        }
+                        let block_data = self.ghostdag_store.get_data(point.block).map_err(|e| e.to_string())?;
+                        let pruning_point = self.pruning_point_store.read().pruning_point().map_err(|e| e.to_string())?;
+                        let finality = self.depth_manager.calc_finality_point(&block_data, pruning_point);
+                        if !self.reachability_service.is_chain_ancestor_of(*tail_block, block_data.selected_parent)
+                            || !self.reachability_service.is_chain_ancestor_of(*tail_block, finality)
+                        {
+                            return Err("monetary material tail is not finalized on the carrying block's selected chain".into());
+                        }
+                    } else {
+                        let payload = borsh::to_vec(action.as_ref()).map_err(|e| e.to_string())?;
+                        self.palw_provider_court_signature_ok(state, point.daa_score, 242, signer, &payload, signature)?;
+                    }
+                }
                 Obj::ProviderLeaseV1 { subject, reserved, serve_until_daa, provider, signature } => {
                     let payload = borsh::to_vec(&(subject, reserved, serve_until_daa)).map_err(|e| e.to_string())?;
                     self.palw_provider_court_signature_ok(state, point.daa_score, 150, provider, &payload, signature)?;

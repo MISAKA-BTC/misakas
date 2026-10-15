@@ -105,7 +105,19 @@ pub(super) fn apply_held_leaf_challenge_v1(
     // 9. The writes — the session first (its capacity, the accuser's reservation and the claim's path to
     // `Final` are the court's), then the group.
     let turn = builder.params.turn_deadline_daa();
-    let opened = open_dissection_at_named_leaf_v1(builder, ctx, claim_id, &claim, accuser, c.leaf_index, ladder, turn)?;
+    // D2 (REQ-T6-4): a held leaf challenge carries digests only, so it publishes no operand for a root claim to relay — on a claim
+    // accepted past `palw_court_model_scope_v1` it opens nothing, and the cone accusations (tags 62 / 88) are the route.
+    let opened = open_dissection_at_named_leaf_v1(
+        builder,
+        ctx,
+        claim_id,
+        &claim,
+        accuser,
+        c.leaf_index,
+        ladder,
+        turn,
+        crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::None,
+    )?;
     debug_assert_eq!(opened, session_id, "the session the court opened is the one the challenge names");
     builder.write_court_close_group(
         (opened, PalwCourtSideV1::Challenger),

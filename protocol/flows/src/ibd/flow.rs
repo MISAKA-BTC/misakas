@@ -131,6 +131,7 @@ pub struct IbdFlow {
     pub(super) incoming_route: IncomingRoute,
     pub(super) body_only_ibd_permitted: bool,
     header_format: HeaderFormat,
+    pub(super) native_palw_receive_lease_v1: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
 
     // Receives relay blocks from relay flow which are out of orphan resolution range and hence trigger IBD
     relay_receiver: JobReceiver<Block>,
@@ -204,6 +205,7 @@ impl IbdFlow {
             body_only_ibd_permitted,
             header_format,
             connection_generation: verification_trace::next_connection_generation(),
+            native_palw_receive_lease_v1: None,
             active_recovery_permit: None,
             earned_adoption_permit: Mutex::new(None),
             challenger_receiver,
@@ -314,6 +316,7 @@ impl IbdFlow {
                     self.ctx.chain_participation().end_decision();
                 }
                 self.active_recovery_permit = None;
+                self.native_palw_receive_lease_v1 = None;
                 // Release the reservation only when the attempt it authorised actually finished.
                 // Clearing it on failure spends the handoff on one stumble and drops the node back
                 // to the branch it had already decided against — measured: after the first permitted
@@ -2815,6 +2818,15 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         if !palw_active {
             return Ok(None);
         }
+        self.native_palw_receive_lease_v1 = None;
+        if self.router.properties().protocol_version < crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED
+            && (kaspa_consensus_core::palw_native_resource_v1::native_resource_admission_enabled_v1()
+                || kaspa_consensus_core::palw_native_resource_v1::native_logical_admission_enabled_v1())
+        {
+            return Err(ProtocolError::Other(
+                "explicit native receive admission requires negotiated protocol 107 structural preflight",
+            ));
+        }
         if self.router.properties().protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
             return self.request_pruning_point_palw_chunks(pruning_point).await;
         }
@@ -2837,6 +2849,9 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             || msg.chunk_index != 0
             || !msg.chunk_hash.is_empty()
             || msg.pruning_point_hash.is_some()
+            || msg.snapshot_codec != 0
+            || msg.decoded_bytes != 0
+            || !msg.snapshot_nonce.is_empty()
         {
             return Err(ProtocolError::Other("legacy PALW snapshot reply carries unnegotiated chunk metadata"));
         }
@@ -2846,14 +2861,11 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         // **Lane PA, B-F2**: the cap is the shared one (`PALW_PRUNING_STATE_MAX_BYTES`, 384 MiB — the 64 MiB it was sat just above today's
         // ≈ 57 MB state), it covers the class declarations beside the carriage (they were unbounded in total), and it is asked of the
         // whole message before either is decoded.
-        const MAX_PALW_STATE_BYTES: usize = crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES;
-        let total_bytes = msg
-            .palw_state
-            .len()
-            .saturating_add(msg.class_carriages.iter().map(|e| e.carriage.len()).fold(0usize, usize::saturating_add));
-        if msg.palw_state.len() > MAX_PALW_STATE_BYTES || total_bytes > MAX_PALW_STATE_BYTES {
-            return Err(ProtocolError::Other("PruningPointPalwState exceeds the accepted size cap"));
-        }
+        crate::palw_snapshot_chunks::snapshot_payload_size(
+            msg.palw_state.len() as u64,
+            msg.class_carriages.iter().map(|e| e.carriage.len() as u64),
+        )
+        .map_err(|_| ProtocolError::Other("PruningPointPalwState exceeds the accepted size cap"))?;
         let carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2 = borsh::from_slice(&msg.palw_state)
             .map_err(|_| ProtocolError::Other("invalid PALW state carriage in PruningPointPalwState"))?;
         // ADR-0067 Decision 6: the declarations ride along. Additive, so a peer that does not send
@@ -2896,31 +2908,14 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         declarations: Vec<(kaspa_consensus_core::Hash64, Vec<u8>)>,
     ) -> Result<(), ProtocolError> {
         let pruning_point = import_session.point;
-        consensus.clone().spawn_blocking(move |c| c.import_pruning_point_palw_state_for_session(import_session, carriage)).await?;
-        info!("imported the PALW state of the pruning point {}", pruning_point);
-        // **After the state, because each declaration is checked against it** (ADR-0067
-        // Decision 6). A refusal is per-entry and never fatal: the state is the consensus half and
-        // it is already in; a declaration this node could not verify simply leaves that class
-        // unservable, which is where a pruned sync stood before this existed.
-        if !declarations.is_empty() {
-            let total = declarations.len();
-            let adopted = consensus
-                .clone()
-                .spawn_blocking(move |c| {
-                    declarations
-                        .into_iter()
-                        .filter(|(class_id, bytes)| match c.palw_adopt_class_carriage_v1(*class_id, bytes) {
-                            Ok(()) => true,
-                            Err(why) => {
-                                kaspa_core::debug!("[palw-class-carriage] peer's declaration for {class_id} refused: {why}");
-                                false
-                            }
-                        })
-                        .count()
-                })
-                .await;
-            info!("adopted {adopted} of {total} class declaration(s) offered with the pruning point state");
-        }
+        let complete = self.router.properties().protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED;
+        consensus
+            .clone()
+            .spawn_blocking(move |c| {
+                c.import_pruning_point_palw_snapshot_for_session(import_session, carriage, declarations, complete)
+            })
+            .await?;
+        info!("imported PALW state and validated class material for pruning point {}", pruning_point);
         Ok(())
     }
 

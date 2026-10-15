@@ -1,0 +1,19 @@
+{"schemaVersion":1,"kind":"rfc06-native-fixture-authentic-declarations","point":"fb4d45dc8fd4ec84e03906f05349ccd04a2db60c9bdda5044a36582428d9c5fb94fc5822161510d33779490b4a935866fb4b938940619e7a80173b2d16d5379c","daaScore":6,"nativeClassesMatched":3,"heldDeclarationsComplete":2,"builtinFloorAdmissionNone":1,"builtinFloorProfileDerived":true,"builtinFloorWeightsRecomputed":false,"declarationVecBytes":9610,"declarationsCompleteForFixture":true,"source":"matching-public-launch-genesis-objects","actualServerIndexChecked":false,"stateRootChecked":false,"realP2pAccepted":false}
+        0.77 real         0.09 user         0.10 sys
+           630538240  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               38708  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   0  voluntary context switches
+                  48  involuntary context switches
+          1570914800  instructions retired
+           597280493  cycles elapsed
+           620020672  peak memory footprint

@@ -2405,6 +2405,12 @@ impl PalwChainStateV2 {
         crate::palw_fp_job_v5::palw_fp_v5_resolve_class_v1(job, self.gen_classes.get(&job.v4.class_id), armed)
     }
 
+    /// A test's way to replace an open court session (its ladder walked to `Terminal` off-fold) — R6-CELL round 4's court-v4 fixture.
+    #[cfg(test)]
+    pub(crate) fn test_replace_court_session_v2(&mut self, session_id: Hash64, session: PalwCourtSessionStateV2) {
+        self.court_sessions.insert(session_id, session);
+    }
+
     /// A test's way to stand a `tir_classes` row in (the fold writes rows only through a registration).
     #[cfg(test)]
     pub(crate) fn test_insert_tir_class_v1(&mut self, class_id: Hash64, record: crate::palw_tir_admission_v1::PalwTirClassRecordV1) {
@@ -2501,6 +2507,15 @@ impl PalwChainStateV2 {
     /// The exact byte string [`Self::state_root`] hashes, in the order ADR-0043 §2 freezes. Collections appear as their 64-byte
     /// [`collection_root`]; scalars and the small borsh blocks appear in full.
     pub fn state_root_preimage(&self) -> Vec<u8> {
+        self.state_root_preimage_located_v1().0
+    }
+
+    /// [`Self::state_root_preimage`] (byte for byte: it IS that function's body) and the offset at which the writer itself began the
+    /// Some-only `kernel-route/v1` block — `None` when the state has no kernel route. The serving side of op 242 carries this offset
+    /// (`kernel_route_offset`); a client never trusts it, but compares it with what
+    /// [`Self::kernel_route_offset_of_preimage_v1`] derives from the authenticated preimage alone.
+    pub fn state_root_preimage_located_v1(&self) -> (Vec<u8>, Option<usize>) {
+        let mut kernel_route_offset = None;
         let mut state = RootPreimageV1::default();
         state.update(&PALW_STATE_V2_VERSION.to_le_bytes());
         state.update(collection_root(b"bonds", &self.bonds).as_byte_slice());
@@ -2619,6 +2634,7 @@ impl PalwChainStateV2 {
         }
         // **G14 lane D.** Its own block, Some-only: `None` until the first block at or past the fence nobody can arm.
         if let Some(kernel) = &self.kernel_route {
+            kernel_route_offset = Some(state.0.len());
             state.update(b"kernel-route/v1");
             state.update(kernel.ledger_root().as_byte_slice());
             state.update(kernel.aux_root().as_byte_slice());
@@ -2942,7 +2958,94 @@ impl PalwChainStateV2 {
                 state.update(&borsh::to_vec(p).expect("PalwBlockContextV2 is borsh-serializable"));
             }
         }
-        state.0
+        (state.0, kernel_route_offset)
+    }
+
+    /// **Where the `kernel-route/v1` block begins in an AUTHENTICATED state-root preimage — derived from the preimage alone, by walking
+    /// the fixed grammar [`Self::state_root_preimage_located_v1`] writes before that block.** `Ok(None)`: the grammar reaches no
+    /// kernel-route block (the state has none). `Err`: the bytes are not a preimage of this build's layout (another version, a
+    /// truncated or malformed prefix) — the caller refuses, it never falls back to searching.
+    ///
+    /// **Why a walk and not a search.** Searching the preimage for the label is ambiguous: the label could recur, and when the state has
+    /// no kernel route a search would accept ANY later occurrence. The walk only ever looks where the writer can begin a block:
+    ///
+    /// 1. the version (2 bytes, this build's [`PALW_STATE_V2_VERSION`] only), seven collection roots, the ADR-0045 epoch-budget block
+    ///    (tag `0`, or tag `1` and ONE typed borsh `PalwEpochBudgetsV2`, whose decoding is self-delimiting), fourteen collection roots;
+    /// 2. at most 17 UNLABELED roots (ADR-0087 markets 2, ADR-0088 registry 5, ADR-0095 benefits 2, ADR-0089 settlements 1, ADR-0100
+    ///    shards 3, ADR-0103 1, ADR-0111 1, ADR-0119 ladders 1 and windows 1), then optionally `tir_shard/v1` + two roots, then
+    ///    optionally `floor_state_v1` + ONE typed borsh `PalwFloorStateV1`, then at most two unlabeled roots (lane PL-E seat
+    ///    availability, seat root readiness), then `kernel-route/v1` + the ledger root + the aux root.
+    ///
+    /// Every position the walk inspects is therefore a position where an honest writer starts a block or a root. The result is a pure
+    /// function of the preimage, and the preimage is authenticated by the header's committed root before this is called, so **a
+    /// serving node cannot steer which window is chosen**: it can neither supply nor alter the bytes, and the offset it carries is only
+    /// compared with this one. The walk is wrong only if a 64-byte keyed BLAKE2b collection root (a hash of chain state, not a value
+    /// any party chooses) happens to BEGIN with one of the three labels — a ≥96-bit prefix match no state can be ground into. When the
+    /// state has no kernel route, the inspected positions fall inside later blocks, which hold fixed labels (none contains this label),
+    /// collection roots and consensus-computed integers, never free bytes; and a monetary consumer additionally requires the block.
+    ///
+    /// A new Some-only block inserted BEFORE `kernel-route/v1` must extend this walk in the same change (the
+    /// `kernel_route_locator_*` tests compare it with the writer's own offset over every optional block before it).
+    pub fn kernel_route_offset_of_preimage_v1(preimage: &[u8]) -> Result<Option<usize>, String> {
+        const ROOT: usize = 64;
+        const KERNEL: &[u8] = b"kernel-route/v1";
+        const TIR_SHARD: &[u8] = b"tir_shard/v1";
+        const FLOOR: &[u8] = b"floor_state_v1";
+        const UNLABELED_BEFORE_TIR_SHARD: usize = 17;
+        const UNLABELED_BEFORE_KERNEL: usize = 2;
+        let fits = |at: usize, n: usize| at.checked_add(n).is_some_and(|end| end <= preimage.len());
+        let starts = |at: usize, label: &[u8]| preimage.get(at..).is_some_and(|rest| rest.starts_with(label));
+        if preimage.get(..2) != Some(PALW_STATE_V2_VERSION.to_le_bytes().as_slice()) {
+            return Err(format!("the preimage is not a version-{PALW_STATE_V2_VERSION} PALW state preimage"));
+        }
+        let mut at = 2 + 7 * ROOT;
+        match preimage.get(at) {
+            Some(0) => at += 1,
+            Some(1) => {
+                let mut rest = &preimage[at + 1..];
+                let before = rest.len();
+                <PalwEpochBudgetsV2 as borsh::BorshDeserialize>::deserialize(&mut rest)
+                    .map_err(|e| format!("the preimage's epoch-budget block does not decode: {e}"))?;
+                at += 1 + (before - rest.len());
+            }
+            _ => return Err("the preimage's epoch-budget tag is neither 0 nor 1".into()),
+        }
+        at += 14 * ROOT;
+        if !fits(at, 0) {
+            return Err("the preimage is shorter than its fixed prefix".into());
+        }
+        // `phase`: 0 = in the unlabeled run before `tir_shard/v1`; 1 = right after `tir_shard/v1`; 2 = after `floor_state_v1`.
+        let (mut phase, mut run) = (0u8, 0usize);
+        loop {
+            if starts(at, KERNEL) {
+                return if fits(at, KERNEL.len() + 2 * ROOT) {
+                    Ok(Some(at))
+                } else {
+                    Err("the preimage's kernel-route block is truncated".into())
+                };
+            }
+            if phase == 0 && run <= UNLABELED_BEFORE_TIR_SHARD && starts(at, TIR_SHARD) {
+                if !fits(at, TIR_SHARD.len() + 2 * ROOT) {
+                    return Err("the preimage's tir-shard block is truncated".into());
+                }
+                (at, phase, run) = (at + TIR_SHARD.len() + 2 * ROOT, 1, 0);
+                continue;
+            }
+            if (phase == 0 && run <= UNLABELED_BEFORE_TIR_SHARD || phase == 1 && run == 0) && starts(at, FLOOR) {
+                let mut rest = &preimage[at + FLOOR.len()..];
+                let before = rest.len();
+                <crate::palw_real_share_v1::PalwFloorStateV1 as borsh::BorshDeserialize>::deserialize(&mut rest)
+                    .map_err(|e| format!("the preimage's floor-state block does not decode: {e}"))?;
+                (at, phase, run) = (at + FLOOR.len() + (before - rest.len()), 2, 0);
+                continue;
+            }
+            let limit = if phase == 0 { UNLABELED_BEFORE_TIR_SHARD + UNLABELED_BEFORE_KERNEL } else { UNLABELED_BEFORE_KERNEL };
+            if run < limit && fits(at, ROOT) {
+                (at, run) = (at + ROOT, run + 1);
+                continue;
+            }
+            return Ok(None);
+        }
     }
 
     // ---- consistency ----
@@ -2995,9 +3098,17 @@ impl PalwChainStateV2 {
         }
         self.assert_vertex_consistency_v1()?;
         self.assert_exec_v2_consistency_v1(params)?;
+        self.assert_monetary_material_consistency_v1(params)?;
         self.assert_mesh_consistency_v1()?;
         // RFC-0010: the permissionless Panel's engine is internally consistent and agrees with the claims, panels and duty rows.
         self.assert_panel_v3_consistency_v1(params)?;
+        self.assert_panel_lifetime_consistency_v2(params)?;
+        self.assert_paid_claim_consistency_v3(params)?;
+        // RFC07/RFC08 signed economic contracts (aux 125–127): rows only past their fences, each its parties' consent.
+        self.assert_econ_contracts_consistency_v1(params)?;
+        // N3 (round 3): aux 130 rounds only past their fence; every stored judgement re-derived.
+        self.assert_beacon_bootstrap_consistency_v1(params)?;
+        self.assert_panel_source_fee_consistency_v2()?;
         // Lane BUDGET: the bond budget's own invariants (windows = Σ in-window reservations, open counts, releases, consumption within
         // reservation) — a carriage decodes whatever its tail holds, so an import is refused on a bent engine.
         if let Some(budget) = &self.bond_budget {

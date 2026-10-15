@@ -15,6 +15,23 @@ spec.loader.exec_module(drill)
 
 
 class Oracle(unittest.TestCase):
+    def test_completed_scenarios_cannot_hide_an_unobserved_cold_reopen(self):
+        limits = dict(maximumProbeMs=200, maximumOwnedDatabaseLogicalBytes=1000)
+        launches = dict(A=['A_LAUNCH_1'], B=['B_LAUNCH_1'], JOIN=['JOIN_LAUNCH_1', 'JOIN_LAUNCH_2'])
+        children = {name: dict(samples=1) for name in ('A', 'B', 'JOIN', 'A_LAUNCH_1', 'B_LAUNCH_1',
+            'JOIN_LAUNCH_1', 'JOIN_LAUNCH_2')}
+        result = dict(sampledOwnedResources=dict(violation=None, observationFailures=0, ownedChildren=children),
+            probeLatenciesMs=[100], ownedDatabaseLogicalBytes=dict(A=100, B=100, JOIN=100),
+            requiredNodeLaunchSamples=launches)
+        drill.check_process_limits(limits, result)
+        children['JOIN_LAUNCH_2']['samples'] = 0
+        with self.assertRaisesRegex(drill.ResourceLimitExceeded, 'launch/reopen'):
+            drill.check_process_limits(limits, result)
+        children['JOIN_LAUNCH_2']['samples'] = 1
+        result['sampledOwnedResources']['observationFailures'] = 1
+        with self.assertRaisesRegex(drill.ResourceLimitExceeded, 'sampling failed'):
+            drill.check_process_limits(limits, result)
+
     def fixture(self):
         plan = dict(ruleset_id='01' * 32, policy_id='02' * 64,
                     minimum_work=str(2 ** 100), minimum_depth=7)

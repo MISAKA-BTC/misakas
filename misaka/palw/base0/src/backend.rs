@@ -484,6 +484,70 @@ impl PalwExecutionBackendV1 for Base0Backend {
         self.attempt_rules
     }
 
+    fn runtime_profile_v1(&self) -> Option<kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1> {
+        Some(kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1::Base0KvI8)
+    }
+
+    fn canonical_job_prefill_tokens(&self) -> Option<usize> {
+        Some(self.canonical_job.0 as usize)
+    }
+
+    fn attempt_working_set_bytes(&self, prefill_tokens: usize) -> Option<u64> {
+        let job = kaspa_consensus_core::palw_base0_profile::rc_job_context(
+            &self.profile,
+            u32::try_from(prefill_tokens).ok()?,
+            self.canonical_job.1,
+        );
+        self.resource_profile_v1(Some(&job), kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::Producer)
+            .map(|profile| profile.working_set_bytes())
+    }
+
+    fn resource_profile_v1(
+        &self,
+        job: Option<&PalwJobContextV2>,
+        role: kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1,
+    ) -> Option<kaspa_consensus_core::palw_resource_profile_v1::PalwResourceProfileV1> {
+        use kaspa_consensus_core::palw_resource_profile_v1::*;
+        let canonical;
+        let job = match job {
+            Some(job) => job,
+            None => {
+                canonical = kaspa_consensus_core::palw_base0_profile::rc_job_context(
+                    &self.profile,
+                    self.canonical_job.0,
+                    self.canonical_job.1,
+                );
+                &canonical
+            }
+        };
+        let leaves = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&self.profile, job, self.step_ladder_cap()).ok()?;
+        // BASE0's current attempt, verdict and segment replay retain tiles.
+        // The segment object also holds hashes; the dense structural bound
+        // includes both instead of pricing that replay as hashes alone.
+        let capture = PalwCaptureRetentionV1::DenseTiles { tile_len: palw_profile_max_tile_len_v1(&self.profile) };
+        let mut result = palw_resource_profile_v1(
+            &self.profile,
+            job,
+            leaves,
+            PalwRuntimeProfileV1::Base0KvI8,
+            role,
+            PalwRuntimeLimitsV1 { threads: rayon::current_num_threads().max(1) as u32, prefill_run_positions: 1 },
+            capture,
+        )?;
+        // The floor keeps Vec<Vec<i8>> per side/layer, unlike flat A16.
+        // Include up to twice the row-vector capacity and its Vec headers,
+        // plus up to twice payload capacity. This is host representation only.
+        let row_header = std::mem::size_of::<Vec<i8>>() as u64;
+        let vector_rows = if result.end_rows == 0 { 0 } else { result.end_rows.saturating_mul(2).max(4) };
+        let row_payload = if result.kv_dim == 0 { 0 } else { result.kv_dim.saturating_mul(2).max(8) };
+        result.kv_resident_bytes = result
+            .attention_layers
+            .saturating_mul(2)
+            .saturating_mul(result.end_rows.saturating_mul(row_payload).saturating_add(vector_rows.saturating_mul(row_header)))
+            .saturating_add(result.attention_layers.saturating_mul(2).saturating_mul(std::mem::size_of::<Vec<Vec<i8>>>() as u64));
+        Some(result)
+    }
+
     fn model_id(&self) -> &str {
         &self.model_id
     }
@@ -1302,13 +1366,11 @@ fn leaves_by_position(
     binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
     tiles: &[(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)],
 ) -> Vec<kaspa_hashes::Hash64> {
-    use kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1;
-    let _ctx_hash = binding.job_context.context_hash();
-    let profile_hash = binding.shape_profile.shape_profile_id();
+    let hasher = crate::step_tile_hasher::StepTileHasherV1::new(&binding.job_context, binding.shape_profile.shape_profile_id());
     let mut leaves = vec![kaspa_hashes::Hash64::default(); binding.step_leaf_count as usize];
     for (index, leaf) in tiles {
         if let Some(slot) = leaves.get_mut(*index as usize) {
-            *slot = step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, leaf);
+            *slot = hasher.hash(leaf);
         }
     }
     leaves
@@ -1325,6 +1387,27 @@ mod tests {
         let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor is registered");
         let root = crate::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
         Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves from nothing"))
+    }
+
+    #[test]
+    fn floor_resource_profile_prices_actual_job_roles_and_i8_row_vectors() {
+        use kaspa_consensus_core::palw_resource_profile_v1::*;
+        let backend = floor_backend();
+        let (job, _) = backend.job_for_anchor(Hash64::from_u64_word(17)).unwrap();
+        let producer = backend.resource_profile_v1(Some(&job), PalwResourceRoleV1::Producer).unwrap();
+        let full = backend.resource_profile_v1(Some(&job), PalwResourceRoleV1::FullSeat).unwrap();
+        assert_eq!(producer.runtime, PalwRuntimeProfileV1::Base0KvI8);
+        assert_eq!(producer.end_rows, palw_job_end_rows_v1(&job));
+        assert_eq!(producer.kv_resident_bytes, full.kv_resident_bytes);
+        assert!(
+            producer.kv_resident_bytes >= palw_kv_series_bytes_v1(producer.attention_layers, producer.kv_dim, producer.end_rows, 1)
+        );
+        assert!(matches!(producer.capture, PalwCaptureRetentionV1::DenseTiles { .. }));
+        let segment =
+            backend.resource_profile_v1(Some(&job), PalwResourceRoleV1::PartialSeat { seat_count: 2, segment_index: 0 }).unwrap();
+        assert!(segment.leaves <= producer.leaves);
+        assert!(matches!(segment.capture, PalwCaptureRetentionV1::DenseTiles { .. }));
+        assert_eq!(backend.attempt_working_set_bytes(job.declared_prefill_tokens as usize), Some(producer.working_set_bytes()));
     }
 
     /// The class facts the integer family answers for. `rc_job_context` leaves the model and

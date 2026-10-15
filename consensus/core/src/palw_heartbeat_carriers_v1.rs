@@ -230,6 +230,11 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::LegacyLeafRecomputedV2 { .. }
         // Lane BUDGET (tag 140): a capital assignment is registry traffic in the fee market; no halt waits on it.
         | O::BondCapitalAssignedV1 { .. }
+        // RFC-0008 (tags 240-242): monetary material consent, replacement and service actions are registry/service traffic in the
+        // fee market; no halt waits on them.
+        | O::MonetaryMaterialEnrolledV1 { .. }
+        | O::MonetaryMaterialReplacedV1 { .. }
+        | O::MonetaryMaterialActionV1 { .. }
         | O::LineageHeadRolledBack { .. }
         | O::ImprovementPoolFunded { .. }
         // RFC-0007 Part I (tags 91, 92): a vertex is verification traffic, in the fee market beside the licence it replaces; the

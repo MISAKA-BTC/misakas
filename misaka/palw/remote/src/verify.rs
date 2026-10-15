@@ -321,8 +321,8 @@ fn verify_carriage_v1(header: &Header, network_domain: Hash64) -> Result<(), Str
         kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
     };
     if is_palw_attempt_algo_id(header.pow_algo_id) {
-        use kaspa_consensus_core::palw_attempt_v2::{PalwAttemptEnvelopeV2, challenge_v2};
-        let envelope = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).map_err(|e| e.to_string())?;
+        use kaspa_consensus_core::palw_attempt_v2::challenge_v2;
+        let envelope = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment)?;
         let a = &envelope.attempt;
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
         if a.network_domain != network_domain {

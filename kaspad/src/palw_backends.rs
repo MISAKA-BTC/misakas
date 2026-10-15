@@ -330,7 +330,7 @@ impl PalwBackendRegistry {
                 .iter()
                 .find(|holding| self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).is_ok())
                 .and_then(holding_terms_v1)
-                .unwrap_or((0, 0))
+                .unwrap_or_else(crate::palw_resource_admission_v2::unknown_holding_terms)
         };
         Self::compose_need_v1(backend, terms, job, role)
     }
@@ -460,7 +460,7 @@ impl PalwBackendRegistry {
         } else {
             self.serving_holding_or_chain_v1(class_id, artifact_root, fetch)
                 .and_then(|(holding, _)| holding_terms_v1(holding))
-                .unwrap_or((0, 0))
+                .unwrap_or_else(crate::palw_resource_admission_v2::unknown_holding_terms)
         };
         Self::compose_need_v1(backend, terms, job, role)
     }
@@ -951,8 +951,34 @@ pub struct PalwRoleMemoryNeedV1 {
 impl PalwRoleMemoryNeedV1 {
     /// The figure a gate compares and the ledger reserves.
     pub fn total_bytes(&self) -> u64 {
+        if crate::palw_resource_admission_v2::enabled() {
+            return self.checked_total_bytes_v2().unwrap_or(u64::MAX);
+        }
         let working_set = self.profile.map(|p| p.working_set_bytes()).unwrap_or(PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1);
         self.holding_bytes.saturating_add(working_set)
+    }
+
+    /// A fixed scratch fallback is not an all-model bound. Saturation at any
+    /// component or sum is unknown; it cannot become an admitted small figure.
+    pub fn checked_total_bytes_v2(&self) -> Result<u64, &'static str> {
+        let profile = self.profile.ok_or("model working-set derivation is unavailable")?;
+        let components = [
+            self.holding_bytes,
+            profile.kv_resident_bytes,
+            profile.opening_bytes,
+            profile.retained_checkpoint_bytes,
+            profile.attention_scratch_bytes,
+            profile.trace_scratch_bytes,
+            profile.capture_retained_bytes,
+            profile.checkpoint_leg_bytes,
+            profile.gdn_state_bytes,
+        ];
+        components.into_iter().try_fold(0u64, |sum, component| {
+            if component == u64::MAX {
+                return Err("model/holding demand is unknown or saturated");
+            }
+            sum.checked_add(component).ok_or("model/holding demand overflows")
+        })
     }
 
     /// The artifact's resident bytes: its file (or its pinned residency, or its pinned file) plus the
@@ -971,6 +997,11 @@ impl PalwRoleMemoryNeedV1 {
 
     /// The decomposition, for a hold line or a telemetry field.
     pub fn describe(&self) -> String {
+        if crate::palw_resource_admission_v2::enabled() {
+            if let Err(reason) = self.checked_total_bytes_v2() {
+                return format!("{} demand is unknown under resource-admission-v2: {reason}", self.role.name());
+            }
+        }
         match self.profile {
             Some(p) => format!(
                 "{:.2} GiB as {} (artifact {:.2} GiB{} + K/V {:.2} GiB at {} rows{} + attention scratch {:.2} GiB + trace scratch {:.2} GiB{} \
@@ -1041,6 +1072,11 @@ pub fn palw_whole_capture_need_v1(
     use kaspa_consensus_core::palw_resource_profile_v1::{
         PalwCaptureRetentionV1, PalwResourceProfileV1, PalwRuntimeProfileV1, palw_dense_capture_bytes_v1, palw_profile_max_tile_len_v1,
     };
+    if crate::palw_resource_admission_v2::enabled() && need.profile.is_none() {
+        // Synthetic dense-capture scratch must not turn an unknown model into
+        // an authenticated all-model working-set derivation.
+        return need;
+    }
     let tile_len = palw_profile_max_tile_len_v1(profile);
     let capture = PalwCaptureRetentionV1::DenseTiles { tile_len };
     let capture_retained_bytes = palw_dense_capture_bytes_v1(leaves, tile_len);

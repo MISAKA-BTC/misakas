@@ -26,6 +26,7 @@ misaka-palw-base0.workspace = true
 misaka-palw-tir.workspace = true
 # ADR-0172: the K2-TIR-v1 reference kernel's static route of a lowered program (reported by the preflight and the census).
 misaka-palw-kernel.workspace = true
+misaka-palw-panel.workspace = true
 # RFC-0003: a generative class's output header (declaring a pipeline class).
 misaka-palw-gen.workspace = true
 misaka-palw-tir-artifact = { path = "../tir/artifact" }

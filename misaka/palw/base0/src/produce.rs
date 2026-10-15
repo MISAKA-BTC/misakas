@@ -1038,13 +1038,8 @@ pub fn base0_replay_from_checkpoint_capped_v1(
     // the leaves it did not touch are not claims about zero — they are simply not this replay's.
     // Which is why only the touched ones are returned.
     let partial = capture.finish_partial();
-    let _ctx_hash = ctx.context_hash();
-    let profile_hash = profile.shape_profile_id();
-    let leaf_hashes = partial
-        .tiles
-        .iter()
-        .map(|(i, leaf)| (*i, kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, leaf)))
-        .collect();
+    let hasher = crate::step_tile_hasher::StepTileHasherV1::new(ctx, profile.shape_profile_id());
+    let leaf_hashes = partial.tiles.iter().map(|(i, leaf)| (*i, hasher.hash(leaf))).collect();
     Ok(Base0CheckpointReplayV1 {
         tiles: partial.tiles,
         leaf_hashes,
@@ -1347,12 +1342,11 @@ pub fn base0_dense_step_leaves_capped_v1(
     if binding.step_leaf_count == 0 || binding.step_leaf_count > max_step_leaf_count {
         return None;
     }
-    let _ctx_hash = binding.job_context.context_hash();
-    let profile_hash = binding.shape_profile.shape_profile_id();
+    let hasher = crate::step_tile_hasher::StepTileHasherV1::new(&binding.job_context, binding.shape_profile.shape_profile_id());
     let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
     for (index, leaf) in tiles {
         let slot = leaves.get_mut(*index as usize)?;
-        *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, leaf);
+        *slot = hasher.hash(leaf);
     }
     Some(leaves)
 }
@@ -1724,14 +1718,13 @@ fn base0_logits_rows_are_the_heads_output_v1(
     committed_leaves: &[Hash64],
 ) -> Result<(), Base0SeatRefusalV1> {
     use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, canonical_step_leaf_index};
-    use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1, step_tile_leaf_hash_ctx_v1};
+    use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1};
     let profile = &binding.shape_profile;
     let Some(head) = base0_logits_head_v1(profile) else {
         return Ok(());
     };
     let ctx = &binding.job_context;
-    let _ctx_hash = ctx.context_hash();
-    let profile_hash = profile.shape_profile_id();
+    let hasher = crate::step_tile_hasher::StepTileHasherV1::new(ctx, profile.shape_profile_id());
     let vocab = profile.vocab_size as usize;
     let tile_len = head.tile_len as usize;
     let tiles = vocab.div_ceil(tile_len);
@@ -1758,7 +1751,7 @@ fn base0_logits_rows_are_the_heads_output_v1(
                 values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
             };
             let committed = usize::try_from(first + u64::from(tile_index)).ok().and_then(|at| committed_leaves.get(at));
-            if committed != Some(&step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &leaf)) {
+            if committed != Some(&hasher.hash(&leaf)) {
                 return Err(refused);
             }
         }

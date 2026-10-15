@@ -11,7 +11,7 @@ use kaspa_consensus_core::palw_permissionless_panel_v1::{
     NonFraudReasonV1, PalwPermissionlessPanelCompleteV1, WIRE_VERSION_COMPLETE_V1,
 };
 use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
-use kaspa_consensus_core::tx::TransactionId;
+use kaspa_consensus_core::tx::{TransactionInput, TransactionOutput};
 use kaspa_muhash::MuHash;
 use std::time::Instant;
 
@@ -59,17 +59,33 @@ fn complete_armed(extra_workers: u64, limit: u32) -> (Config, PalwConsensusParam
         // modulo helper used for harness cards cannot manufacture 100k distinct registered keys.
         drop(key);
         let payout = kaspa_hashes::blake2b_512_address_payload(&pubkey);
-        let bond = PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(0xD600_0000 + n), index: 0 });
         let mut worker = template.clone();
         let Obj::BondRegistered { bond: b, pubkey: pk, operator_pubkey, payout_payload, collateral, .. } = &mut worker else {
             unreachable!()
         };
+        // High-entropy ordinary transaction IDs, not a compressible integer-word
+        // outpoint namespace. This unsigned funding descriptor is not a mined
+        // payment: Config's genesis UTXO commitment remains the fixture authority.
+        let script = p2pkh_mldsa87_spk(&payout.as_bytes());
+        let funding = Transaction::new(
+            0,
+            vec![TransactionInput::new(TransactionOutpoint::new(payout, 0), Vec::new(), n, 0)],
+            vec![TransactionOutput::new(*collateral, script.clone())],
+            0,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+            0,
+            Vec::new(),
+        );
+        let bond = PalwBondKeyV2(TransactionOutpoint::new(funding.id(), 0));
         *b = bond;
         *operator_pubkey = pubkey.clone();
         *pk = pubkey;
         *payout_payload = payout;
-        premine.push((bond.0, UtxoEntry::new(*collateral, p2pkh_mldsa87_spk(&payout.as_bytes()), 0, false)));
+        premine.push((bond.0, UtxoEntry::new(*collateral, script, 0, false)));
         workers.push(worker);
+        if (n + 1) % 10_000 == 0 {
+            eprintln!("[rfc06-resource] generated_funded_workers_progress={} setup_ms={}", n + 1, started.elapsed().as_millis());
+        }
     }
     let PalwConsensusMode::ConsensusV2(bundle) = &mut config.params.palw_consensus_mode else { unreachable!() };
     bundle.genesis_objects.extend(workers);
@@ -250,6 +266,20 @@ async fn complete_retained_populations(extra_workers: u64, expect_fifth_refusal:
         bytes <= 384 << 20,
         begun.elapsed().as_millis()
     );
+    if let Some(path) = std::env::var_os("MISAKA_RFC06_NATIVE_CARRIAGE_OUT") {
+        use std::io::Write;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = std::io::BufWriter::with_capacity(64 << 10, options.open(&path).expect("owned new RFC06 output file"));
+        borsh::to_writer(&mut file, &carriage).unwrap();
+        file.flush().unwrap();
+        eprintln!("[rfc06-resource] canonical_carriage_saved={}", std::path::Path::new(&path).display());
+    }
     assert_eq!(carriage.into_state(&cards.state, Some(state.state_root())).unwrap(), state);
 }
 

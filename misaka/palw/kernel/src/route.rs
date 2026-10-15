@@ -84,7 +84,7 @@ pub const TAG_SEAL_MODEL_REFUTATION_V4: u8 = 36;
 /// The reveal of a sealed refutation (kind, target, salt, exact proof bytes).
 pub const TAG_REVEAL_MODEL_REFUTATION_V4: u8 = 37;
 // 16–18 are K2S's (K2-TIR-v4); 21–37 are RFC-02's (conformance classes, model artifact binding / conformance, model refutation
-// seal v4) on the integration line, 38/39 are G14R's verifier pay (reserved, not yet used); registry
+// seal v4) on the integration line, 38/39 are G14R's verifier pay (39 `AttestDrawnCheckV1` landed 2026-10-15; 38 reserved); registry
 // `remaining-rfc-integration-matrix.md` §2.
 // 41–60: RFC-0002 codex final (`codex/rfc02-review-completion`): protected flat candidate v6 (41–44), complete-scope mixed
 // candidate v7 (45–52), ordinary-point mixed candidate v9 (53–60). Codex numbered them 36–55 on its branch; 36/37 are
@@ -118,6 +118,26 @@ pub const MAX_OPT_IN_BEACON_SOURCE_BYTES_V1: usize = 384;
 // 61–62: codex RFC-7 final prepaid source fees (lane R6781-F merge, 2026-10-12): codex numbered them 22 / 23 (RFC-02's here).
 pub const TAG_FUND_BEACON_SOURCE_FEE_V1: u8 = 61;
 pub const TAG_OPT_IN_PAID_BEACON_SOURCE_V1: u8 = 62;
+/// Native-owned, signed Panel sponsor permit and atomic funding. Renumbered 63 → 70 and 64 → 71 (2026-10-15, lead decision): the
+/// RFC02 branch owns 63 (`FundedExecutionV11`) and 64 (`StageExecutionV14`); neither number was ever live on this branch.
+pub const TAG_FUND_PANEL_BEACON_SOURCE_FEE_V2: u8 = 70;
+pub const TAG_PAID_CLAIM_V2: u8 = 71;
+pub const TAG_ENROLL_PANEL_CONSUMER_LIFETIME_V2: u8 = 65;
+pub const TAG_AUTHORIZE_PANEL_LIFETIME_V2: u8 = 66;
+/// G14R's reserved verifier-pay slot 39 (M\*-49, `palw_verifier_pay_v1`): a drawn slot holder's attestation of one claim's check.
+pub const TAG_ATTEST_DRAWN_CHECK_V1: u8 = 39;
+// 67–69: RFC07/RFC08 signed economic contracts (2026-10-15, inside the RFC07 reservation 65–73; consumer-owned, each past its own
+// dormant fence): the model-epoch verification attestation, the consented horizon extension and the minimum-price contract.
+pub const TAG_ATTEST_MODEL_VERIFICATION_V1: u8 = 67;
+pub const TAG_CONSENT_HORIZON_EXTENSION_V1: u8 = 68;
+pub const TAG_SIGN_MINIMUM_PRICE_CONTRACT_V1: u8 = 69;
+// 73: N3's BootstrapExact source contribution (2026-10-15 round 3; the top of the RFC07 reservation 65–73, consumer-owned past
+// `palw_beacon_bootstrap_v1`). 70/71: the renumbered Panel sponsor funding and paid ClaimV2 (above). 72 stays unallocated; 63/64
+// belong to the RFC02 branch.
+pub const TAG_BOOTSTRAP_EXACT_V1: u8 = 73;
+/// version, tag, verifier, claim.
+pub const MAX_ATTEST_DRAWN_CHECK_BYTES_V1: usize = 1 + 1 + 64 + 64;
+pub const MAX_FUND_PANEL_BEACON_SOURCE_FEE_BYTES_V2: usize = 288;
 pub const MAX_FUND_BEACON_SOURCE_FEE_BYTES_V1: usize = 256;
 pub const MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1: usize = 448;
 /// Explicit funded execution grammar, separately fenced by the native consumer.
@@ -613,6 +633,43 @@ pub enum KernelRouteObjectV1 {
         action: u8,
         body: Vec<u8>,
     } = 64,
+    /// Native-owned Panel sponsor permit and funding in one signed object.
+    /// Bare ledgers refuse this variant: only the authenticated epoch fold may authorize it.
+    FundPanelBeaconSourceFeeV2 {
+        epoch: u64,
+        terms: crate::beacon_source_fee::BeaconSourceFeeTermsV1,
+    } = 70,
+    PaidClaimV2 {
+        object: crate::claim_paid_v2::PaidClaimObjectV2,
+    } = 71,
+    EnrollPanelConsumerLifetimeV2 {
+        terms: crate::panel_lifetime_v2::PanelConsumerLifetimeTermsV2,
+    } = 65,
+    AuthorizePanelLifetimeV2 {
+        authorization: crate::panel_lifetime_v2::PanelLifetimeAuthorizationV2,
+    } = 66,
+    /// **M\*-49 (`palw_verifier_pay_v1`, G14R's reserved 39)**: a drawn slot holder attests its check of `claim`; the ledger pays its
+    /// unpaid slots `check_fee` out of the poster's escrow before the attestation deadline. Signed by `verifier`.
+    AttestDrawnCheckV1 {
+        verifier: Digest,
+        claim: Digest,
+    } = 39,
+    /// RFC07 R7-ECON: a drawn verifier's attestation for a model-epoch verification tally (consumer-owned).
+    AttestModelVerificationV1 {
+        attestation: crate::econ_contracts_v1::ModelVerificationAttestationV1,
+    } = 67,
+    /// RFC08 R8-WINDOW: one affected party's consent to a live dependency horizon extension (consumer-owned).
+    ConsentHorizonExtensionV1 {
+        terms: crate::econ_contracts_v1::HorizonExtensionTermsV1,
+    } = 68,
+    /// RFC08 R8-ECON: one party's signature on a worker/poster minimum-price contract (consumer-owned).
+    SignMinimumPriceContractV1 {
+        contract: crate::econ_contracts_v1::MinimumPriceContractTermsV1,
+    } = 69,
+    /// N3 (`palw_beacon_bootstrap_v1`): one contributor's seal or reveal in a BootstrapExact source round (consumer-owned).
+    BootstrapExactV1 {
+        contribution: crate::beacon_bootstrap_v1::BootstrapExactContributionV1,
+    } = 73,
 }
 
 /// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.
@@ -689,20 +746,35 @@ impl std::error::Error for KernelRefusalV1 {}
 /// Borrow the two independently fenced native action frames before allocating
 /// their body vectors. Callers still authenticate the exact outer bytes and
 /// native owns any expensive inner decode after its original paid predebit.
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub struct BorrowedNativeActionV1<'a> {pub tag:u8,pub action:u8,pub body:&'a [u8]}
-pub fn borrowed_native_action_v1(bytes:&[u8])->Result<Option<BorrowedNativeActionV1<'_>>,KernelRefusalV1>{
-    let Some(tag)=bytes.get(1).copied() else{return Ok(None);};
-    let (cap,last)=match tag{TAG_FUNDED_EXECUTION_V11=>(MAX_FUNDED_EXECUTION_BYTES_V11,46),TAG_STAGE_EXECUTION_V14=>(MAX_STAGE_EXECUTION_BYTES_V14,33),_=>return Ok(None)};
-    let bad=|why:&str|KernelRefusalV1::new("NativeAction",RefusalKindV1::Malformed,why);
-    if bytes.first()!=Some(&KERNEL_ROUTE_VERSION_V1)||bytes.len()>cap{return Err(bad("native route version/byte cap"));}
-    let action=*bytes.get(2).ok_or_else(||bad("native action absent"))?;
-    if tag==TAG_FUNDED_EXECUTION_V11 && matches!(action,41..=44) && bytes.len()>(32<<10)+79 {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BorrowedNativeActionV1<'a> {
+    pub tag: u8,
+    pub action: u8,
+    pub body: &'a [u8],
+}
+pub fn borrowed_native_action_v1(bytes: &[u8]) -> Result<Option<BorrowedNativeActionV1<'_>>, KernelRefusalV1> {
+    let Some(tag) = bytes.get(1).copied() else {
+        return Ok(None);
+    };
+    let (cap, last) = match tag {
+        TAG_FUNDED_EXECUTION_V11 => (MAX_FUNDED_EXECUTION_BYTES_V11, 46),
+        TAG_STAGE_EXECUTION_V14 => (MAX_STAGE_EXECUTION_BYTES_V14, 33),
+        _ => return Ok(None),
+    };
+    let bad = |why: &str| KernelRefusalV1::new("NativeAction", RefusalKindV1::Malformed, why);
+    if bytes.first() != Some(&KERNEL_ROUTE_VERSION_V1) || bytes.len() > cap {
+        return Err(bad("native route version/byte cap"));
+    }
+    let action = *bytes.get(2).ok_or_else(|| bad("native action absent"))?;
+    if tag == TAG_FUNDED_EXECUTION_V11 && matches!(action, 41..=44) && bytes.len() > (32 << 10) + 79 {
         return Err(bad("initial31 complete bounded wire packet cap"));
     }
-    let raw=bytes.get(3..7).ok_or_else(||bad("native action count absent"))?;let n=u32::from_le_bytes(raw.try_into().unwrap()) as usize;
-    if action>last||n!=bytes.len().saturating_sub(7){return Err(bad("native action exact bounded count"));}
-    Ok(Some(BorrowedNativeActionV1{tag,action,body:&bytes[7..]}))
+    let raw = bytes.get(3..7).ok_or_else(|| bad("native action count absent"))?;
+    let n = u32::from_le_bytes(raw.try_into().unwrap()) as usize;
+    if action > last || n != bytes.len().saturating_sub(7) {
+        return Err(bad("native action exact bounded count"));
+    }
+    Ok(Some(BorrowedNativeActionV1 { tag, action, body: &bytes[7..] }))
 }
 
 /// A writer that only counts (the encoded size of an object without allocating it).
@@ -776,6 +848,15 @@ impl KernelRouteObjectV1 {
             Self::CommitClaimSalted { .. } => TAG_COMMIT_CLAIM_SALTED_V1,
             Self::OptInBeaconSource { .. } => TAG_OPT_IN_BEACON_SOURCE_V1,
             Self::FundBeaconSourceFee { .. } => TAG_FUND_BEACON_SOURCE_FEE_V1,
+            Self::FundPanelBeaconSourceFeeV2 { .. } => TAG_FUND_PANEL_BEACON_SOURCE_FEE_V2,
+            Self::PaidClaimV2 { .. } => TAG_PAID_CLAIM_V2,
+            Self::EnrollPanelConsumerLifetimeV2 { .. } => TAG_ENROLL_PANEL_CONSUMER_LIFETIME_V2,
+            Self::AuthorizePanelLifetimeV2 { .. } => TAG_AUTHORIZE_PANEL_LIFETIME_V2,
+            Self::AttestDrawnCheckV1 { .. } => TAG_ATTEST_DRAWN_CHECK_V1,
+            Self::AttestModelVerificationV1 { .. } => TAG_ATTEST_MODEL_VERIFICATION_V1,
+            Self::ConsentHorizonExtensionV1 { .. } => TAG_CONSENT_HORIZON_EXTENSION_V1,
+            Self::SignMinimumPriceContractV1 { .. } => TAG_SIGN_MINIMUM_PRICE_CONTRACT_V1,
+            Self::BootstrapExactV1 { .. } => TAG_BOOTSTRAP_EXACT_V1,
             Self::OptInPaidBeaconSource { .. } => TAG_OPT_IN_PAID_BEACON_SOURCE_V1,
             Self::FundedExecutionV11 { .. } => TAG_FUNDED_EXECUTION_V11,
             Self::StageExecutionV14 { .. } => TAG_STAGE_EXECUTION_V14,
@@ -842,7 +923,7 @@ impl KernelRouteObjectV1 {
             let count = rest.get(2..6).ok_or_else(|| bad(RefusalKindV1::Malformed, "truncated funded action frame".into()))?;
             // 45/46 = typed window class v37 register/attach (RFC02 §II.14.60), judged only past its own fence.
             if rest.get(1).is_none_or(|a| *a > 46)
-                || rest.get(1).is_some_and(|a| matches!(*a,41..=44)) && bytes.len()>(32<<10)+79
+                || rest.get(1).is_some_and(|a| matches!(*a, 41..=44)) && bytes.len() > (32 << 10) + 79
                 || u32::from_le_bytes(count.try_into().unwrap()) as usize != rest.len().saturating_sub(6)
             {
                 return Err(bad(RefusalKindV1::Malformed, "funded action/count differs from exact bounded carrier".into()));
@@ -1044,6 +1125,15 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_COMMIT_CLAIM_SALTED_V1 => "CommitClaimSalted",
         TAG_OPT_IN_BEACON_SOURCE_V1 => "OptInBeaconSource",
         TAG_FUND_BEACON_SOURCE_FEE_V1 => "FundBeaconSourceFee",
+        TAG_FUND_PANEL_BEACON_SOURCE_FEE_V2 => "FundPanelBeaconSourceFeeV2",
+        TAG_PAID_CLAIM_V2 => "PaidClaimV2",
+        TAG_ENROLL_PANEL_CONSUMER_LIFETIME_V2 => "EnrollPanelConsumerLifetimeV2",
+        TAG_AUTHORIZE_PANEL_LIFETIME_V2 => "AuthorizePanelLifetimeV2",
+        TAG_ATTEST_DRAWN_CHECK_V1 => "AttestDrawnCheckV1",
+        TAG_ATTEST_MODEL_VERIFICATION_V1 => "AttestModelVerificationV1",
+        TAG_CONSENT_HORIZON_EXTENSION_V1 => "ConsentHorizonExtensionV1",
+        TAG_SIGN_MINIMUM_PRICE_CONTRACT_V1 => "SignMinimumPriceContractV1",
+        TAG_BOOTSTRAP_EXACT_V1 => "BootstrapExactV1",
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => "OptInPaidBeaconSource",
         TAG_FUNDED_EXECUTION_V11 => "FundedExecutionV11",
         TAG_STAGE_EXECUTION_V14 => "StageExecutionV14",
@@ -1108,6 +1198,15 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_COMMIT_CLAIM_SALTED_V1 => MAX_COMMIT_CLAIM_SALTED_BYTES_V1,
         TAG_OPT_IN_BEACON_SOURCE_V1 => MAX_OPT_IN_BEACON_SOURCE_BYTES_V1,
         TAG_FUND_BEACON_SOURCE_FEE_V1 => MAX_FUND_BEACON_SOURCE_FEE_BYTES_V1,
+        TAG_FUND_PANEL_BEACON_SOURCE_FEE_V2 => MAX_FUND_PANEL_BEACON_SOURCE_FEE_BYTES_V2,
+        TAG_PAID_CLAIM_V2 => 256 << 20,
+        TAG_ENROLL_PANEL_CONSUMER_LIFETIME_V2 => 4096,
+        TAG_AUTHORIZE_PANEL_LIFETIME_V2 => 4096,
+        TAG_ATTEST_DRAWN_CHECK_V1 => MAX_ATTEST_DRAWN_CHECK_BYTES_V1,
+        TAG_ATTEST_MODEL_VERIFICATION_V1 | TAG_CONSENT_HORIZON_EXTENSION_V1 | TAG_SIGN_MINIMUM_PRICE_CONTRACT_V1 => {
+            crate::econ_contracts_v1::MAX_ECON_CONTRACT_OBJECT_BYTES_V1
+        }
+        TAG_BOOTSTRAP_EXACT_V1 => crate::beacon_bootstrap_v1::MAX_BOOTSTRAP_EXACT_OBJECT_BYTES_V1,
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1,
         TAG_FUNDED_EXECUTION_V11 => MAX_FUNDED_EXECUTION_BYTES_V11,
         TAG_STAGE_EXECUTION_V14 => MAX_STAGE_EXECUTION_BYTES_V14,
@@ -1127,18 +1226,32 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
 mod tests {
     use super::*;
     #[test]
-    fn native_action_borrowed_frame_has_exact_count_and_preserves_old_owned_bytes(){
-        for object in [KernelRouteObjectV1::FundedExecutionV11{action:15,body:vec![7;128<<10]},KernelRouteObjectV1::StageExecutionV14{action:14,body:vec![9;4096]}] {
-            let raw=object.encode();let frame=borrowed_native_action_v1(&raw).unwrap().unwrap();
-            assert_eq!(frame.body.as_ptr(),raw[7..].as_ptr());assert_eq!(frame.body.len(),raw.len()-7);
-            assert_eq!(KernelRouteObjectV1::decode(&raw).unwrap(),object);
-            let mut lie=raw.clone();lie[3..7].copy_from_slice(&u32::MAX.to_le_bytes());assert!(borrowed_native_action_v1(&lie).is_err());
-            let mut extra=raw;extra.push(0);assert!(borrowed_native_action_v1(&extra).is_err());
+    fn native_action_borrowed_frame_has_exact_count_and_preserves_old_owned_bytes() {
+        for object in [
+            KernelRouteObjectV1::FundedExecutionV11 { action: 15, body: vec![7; 128 << 10] },
+            KernelRouteObjectV1::StageExecutionV14 { action: 14, body: vec![9; 4096] },
+        ] {
+            let raw = object.encode();
+            let frame = borrowed_native_action_v1(&raw).unwrap().unwrap();
+            assert_eq!(frame.body.as_ptr(), raw[7..].as_ptr());
+            assert_eq!(frame.body.len(), raw.len() - 7);
+            assert_eq!(KernelRouteObjectV1::decode(&raw).unwrap(), object);
+            let mut lie = raw.clone();
+            lie[3..7].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert!(borrowed_native_action_v1(&lie).is_err());
+            let mut extra = raw;
+            extra.push(0);
+            assert!(borrowed_native_action_v1(&extra).is_err());
         }
-        assert!(borrowed_native_action_v1(&KernelRouteObjectV1::Withdraw{bond:[1;64]}.encode()).unwrap().is_none());
-        for(tag,last)in[(TAG_FUNDED_EXECUTION_V11,44),(TAG_STAGE_EXECUTION_V14,33)]{
-            let mut raw=vec![1,tag,last,0,0,0,0];assert_eq!(borrowed_native_action_v1(&raw).unwrap().unwrap().action,last);
-            raw[2]=last+1;assert!(borrowed_native_action_v1(&raw).is_err());raw[2]=last;raw[0]=2;assert!(borrowed_native_action_v1(&raw).is_err());
+        assert!(borrowed_native_action_v1(&KernelRouteObjectV1::Withdraw { bond: [1; 64] }.encode()).unwrap().is_none());
+        for (tag, last) in [(TAG_FUNDED_EXECUTION_V11, 44), (TAG_STAGE_EXECUTION_V14, 33)] {
+            let mut raw = vec![1, tag, last, 0, 0, 0, 0];
+            assert_eq!(borrowed_native_action_v1(&raw).unwrap().unwrap().action, last);
+            raw[2] = last + 1;
+            assert!(borrowed_native_action_v1(&raw).is_err());
+            raw[2] = last;
+            raw[0] = 2;
+            assert!(borrowed_native_action_v1(&raw).is_err());
         }
     }
 
@@ -1252,11 +1365,46 @@ mod tests {
             .collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
-        assert!((38..=39).all(|t| max_encoded_bytes_of_tag(t).is_none()), "38/39 are reserved for G14R, not allocated");
-        // 61/62 retain prepaid source fees; 63 is explicit funded execution11.
-        assert!(max_encoded_bytes_of_tag(65).is_none(), "65 is not allocated");
-        for tag in (22..=37).chain(40..=64) {
+        assert!(max_encoded_bytes_of_tag(38).is_none(), "38 stays reserved for G14R, not allocated");
+        // 39: G14R's M*-49 drawn-check attestation (2026-10-15). 61–62: prepaid sources. 63: RFC02 explicit funded execution11;
+        // 64: RFC02 typed external stage14. 65–66: prospective Panel consent. 67–69: RFC07/RFC08 signed economic contracts
+        // (2026-10-15). 70–71: native Panel authority and paid ClaimV2 (renumbered from 63/64, which the RFC02 branch owns).
+        // 73: N3's BootstrapExact contribution (2026-10-15 round 3). 72 is unallocated.
+        assert!(max_encoded_bytes_of_tag(72).is_none(), "72 is not allocated");
+        for tag in (22..=37).chain(39..=71).chain(73..=73) {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
+        }
+        for o in [
+            KernelRouteObjectV1::AttestDrawnCheckV1 { verifier: [1; 64], claim: [2; 64] },
+            KernelRouteObjectV1::ConsentHorizonExtensionV1 {
+                terms: crate::econ_contracts_v1::HorizonExtensionTermsV1 {
+                    version: 1,
+                    network: [1; 64],
+                    claim: [2; 64],
+                    root: [3; 64],
+                    worker: [4; 64],
+                    sponsor: [5; 64],
+                    current_liability_until_daa: 100,
+                    new_liability_until_daa: 150,
+                    hard_deadline_daa: 200,
+                    consent_by_daa: 90,
+                    price_contract: [0; 64],
+                },
+            },
+            KernelRouteObjectV1::BootstrapExactV1 {
+                contribution: crate::beacon_bootstrap_v1::BootstrapExactContributionV1 {
+                    version: 1,
+                    network: [1; 64],
+                    round: crate::beacon_bootstrap_v1::BootstrapExactRoundV1 { profile: [2; 64], target: [3; 64], slot: 1 },
+                    contributor: [4; 64],
+                    action: crate::beacon_bootstrap_v1::BootstrapExactActionV1::Reveal { preimage: [5; 64] },
+                },
+            },
+        ] {
+            let bytes = o.encode();
+            assert_eq!(bytes[1], o.tag(), "{}", o.name());
+            assert!(bytes.len() <= o.max_encoded_bytes(), "{}", o.name());
+            assert_eq!(KernelRouteObjectV1::decode(&bytes).unwrap(), o);
         }
         assert_eq!(name_of_tag(TAG_FUND_BEACON_SOURCE_FEE_V1), "FundBeaconSourceFee");
         assert_eq!(name_of_tag(TAG_OPT_IN_PAID_BEACON_SOURCE_V1), "OptInPaidBeaconSource");

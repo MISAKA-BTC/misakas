@@ -212,6 +212,10 @@ pub enum MinerHalt {
         "the template pays its block reward to {got}, not to this miner ({want}): a custodial job — refused (non-custodial by default)"
     )]
     Custodial { got: String, want: String },
+    /// RFC-0008: past `palw_monetary_material_v1` only the PAV3 native custody form is admitted, and this miner was given no
+    /// provider exchange. Holding is the fail-closed answer: a PAV2 attempt there is refused by every peer.
+    #[error("the native custody form (PAV3) is in force at DAA {daa} and this miner has no provider exchange: holding")]
+    NativeCustodyRequired { daa: u64 },
 }
 
 #[derive(Clone, Debug)]
@@ -281,6 +285,22 @@ pub fn step(
     signer: &dyn AttemptSigner,
     network_draw: &dyn Fn(&Header, u64, bool) -> bool,
 ) -> Result<StepOutcome, MinerHalt> {
+    step_with_custody(nodes, cfg, state, executor, signer, network_draw, &|_, _| false, None)
+}
+
+/// [`step`] that knows where the RFC-0008 native custody form is in force (`custody_in_force(template DAA)`, from this build's
+/// own compiled params) and, there, mounts the PAV3 carriage through `custody`. In force without an exchange: [`MinerHalt::NativeCustodyRequired`].
+#[allow(clippy::too_many_arguments)]
+pub fn step_with_custody(
+    nodes: &[&dyn RemoteNode],
+    cfg: &MinerConfig,
+    state: &mut MinerState,
+    executor: &mut dyn AttemptExecutor,
+    signer: &dyn AttemptSigner,
+    network_draw: &dyn Fn(&Header, u64, bool) -> bool,
+    custody_in_force: &dyn Fn(u64, &Hash64) -> bool,
+    custody: Option<&mut dyn crate::attempt::NativeCustodyV3>,
+) -> Result<StepOutcome, MinerHalt> {
     let views: Vec<ViewAdapter<'_>> = nodes.iter().map(|n| ViewAdapter(*n)).collect();
     let view_refs: Vec<&dyn ChainView> = views.iter().map(|v| v as &dyn ChainView).collect();
     let view: AgreedView = agree(&view_refs, &cfg.quorum)?;
@@ -330,19 +350,39 @@ pub fn step(
     };
     let gated = GatedSigner { inner: signer, recheck: &recheck };
 
-    let mounted: MountedAttempt = match mount_attempt(
-        &accepted,
-        template_header,
-        &cfg.attempt,
-        accepted.observation.facts.pwu,
-        accepted.observation.facts.min_trace_retention_daa,
-        accepted.observation.facts.artifact_root,
-        cfg.class_id,
-        &mut state.cursor,
-        executor,
-        &gated,
-        network_draw,
-    )? {
+    // The BASE floor class is exempt (lead default 2026-10-15): the caller's predicate takes the template's class.
+    let native = custody_in_force(template_header.daa_score, &accepted.observation.facts.class_id);
+    let mounted = match (native, custody) {
+        (false, _) => mount_attempt(
+            &accepted,
+            template_header,
+            &cfg.attempt,
+            accepted.observation.facts.pwu,
+            accepted.observation.facts.min_trace_retention_daa,
+            accepted.observation.facts.artifact_root,
+            cfg.class_id,
+            &mut state.cursor,
+            executor,
+            &gated,
+            network_draw,
+        )?,
+        (true, None) => return Err(MinerHalt::NativeCustodyRequired { daa: template_header.daa_score }),
+        (true, Some(custody)) => crate::attempt::mount_native_attempt_v3(
+            &accepted,
+            template_header,
+            &cfg.attempt,
+            accepted.observation.facts.pwu,
+            accepted.observation.facts.min_trace_retention_daa,
+            accepted.observation.facts.artifact_root,
+            cfg.class_id,
+            &mut state.cursor,
+            executor,
+            &gated,
+            custody,
+            network_draw,
+        )?,
+    };
+    let mounted: MountedAttempt = match mounted {
         Some(m) => m,
         None => {
             let bucket = state.cursor.map(|(_, next)| next.saturating_sub(1)).unwrap_or(0);

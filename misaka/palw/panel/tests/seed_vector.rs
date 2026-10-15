@@ -27,7 +27,7 @@ fn seed_v3_matches_independently_encoded_python_blake2b_vector() {
         excluded_bond: BondIdV1 { transaction: h(0), index: 0 },
         excluded_operator: h(0),
         excluded_key: h(0),
-        candidates: vec![],
+        candidates: vec![].into(),
         strata_members: vec![],
     };
     // Independently generated with hashlib.blake2b(struct.pack('<I', len(domain)) + domain +

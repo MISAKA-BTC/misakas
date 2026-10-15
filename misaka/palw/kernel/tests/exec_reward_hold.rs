@@ -219,3 +219,30 @@ fn standalone_final_uses_trusted_reward_grant_and_exec_substitution_uses_only_it
     w.consumer.check_view(&w.l);
     assert_eq!(w.consumer.paid(&PRODUCER), 3);
 }
+
+/// **R8-ECON at settlement (round 3)**: a contracted Final whose escrow, consumer cap or poster bond cannot fund the signed minimum is
+/// neutral — the escrow is released whole to the poster and the producer is paid nothing out of it — never a smaller payment; at or
+/// above the floor it pays exactly as before. The floor is consumer-injected, never a row, and a restore carries none.
+#[test]
+fn a_minimum_price_floor_pays_at_least_the_minimum_or_releases_the_escrow_whole() {
+    for (cap, floor, paid) in [(7, 7, 7), (100, 5, 7), (3, 5, 0), (0, 1, 0), (6, 7, 0)] {
+        let mut w = World::new();
+        let job = w.post_job(2, &[3, 17, 9], 3, 1);
+        let honest = w.honest(&job, 3);
+        let claim = honest.claim.id();
+        w.block(10, vec![honest.tx, T::PanelCovered { claim }]);
+        let (rows, root) = (w.l.to_rows(), w.l.root());
+        w.l.consumer_final_reward_caps.insert(claim, cap);
+        w.l.consumer_minimum_payouts_v1.insert(claim, floor);
+        assert_eq!(w.l.root(), root, "a floor is consumer-injected, never transaction-owned state");
+        assert_eq!(w.l.to_rows(), rows);
+        let before = w.l.bonds[&POSTER].clone();
+        w.block(60, vec![]);
+        assert_eq!(w.consumer.paid(&PRODUCER), paid, "cap {cap}, floor {floor}");
+        assert_eq!(w.l.bonds[&POSTER].collateral, before.collateral - paid);
+        assert_eq!(w.l.bonds[&POSTER].reserved, before.reserved - 7, "the escrow's reservation is released either way");
+        assert!(!w.l.job_escrows.contains_key(&job.id()));
+        assert_eq!(w.l.claims[&claim].rewarded, paid > 0);
+        assert!(restored(&w).consumer_minimum_payouts_v1.is_empty(), "restore must re-inject the current floors");
+    }
+}

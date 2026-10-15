@@ -814,6 +814,11 @@ pub struct KernelLedgerV1 {
     pub schedule: KernelScheduleV1,
     /// Trusted native consumer caps for standalone Final fees. Not rows or transaction inputs.
     pub consumer_final_reward_caps: BTreeMap<Digest, u64>,
+    /// **RFC08 R8-ECON (`palw_minimum_price_v1`)**: trusted native consumer floors — claim → the signed minimum-price contract's
+    /// funded minimum. A Final paid out of its job's escrow below its floor is NOT paid less: the contract outcome is neutral (the
+    /// escrow returns whole to its poster, the producer is paid nothing from it). Re-injected on every load like the caps; not rows,
+    /// never carried, empty below the consumer's fence (every rule above is then byte-identical).
+    pub consumer_minimum_payouts_v1: BTreeMap<Digest, u64>,
     /// Descriptors this binary implements (never bytes from a transaction).
     pub known: Vec<KernelDescriptorV1>,
     pub daa: u64,
@@ -849,6 +854,8 @@ pub struct KernelLedgerV1 {
     pub beacon_sources: BTreeMap<(Digest, Digest), crate::beacon_source::BeaconSourceRowV1>,
     /// Trusted consumer inputs, never rows/rooted state. Empty on restore; the new feature is refused by default.
     pub beacon_source_inputs: crate::beacon_source::BeaconSourceInputsV1,
+    /// Native authenticated V2 inputs; persisted in the consumer's aux root.
+    pub paid_claim_consumers_v2: BTreeMap<Digest, crate::claim_paid_v2::PaidClaimConsumerV2>,
     pub beacon_source_fee_inputs: crate::beacon_source_fee::BeaconSourceFeeInputsV1,
     pub beacon_source_fees: BTreeMap<Digest, crate::beacon_source_fee::BeaconSourceFeeFundingV1>,
     pub beacon_source_fee_promises: BTreeMap<(Digest, Digest), crate::beacon_source_fee::BeaconSourceFeePromiseV1>,
@@ -949,6 +956,7 @@ impl KernelLedgerV1 {
             policy,
             schedule,
             consumer_final_reward_caps: BTreeMap::new(),
+            consumer_minimum_payouts_v1: BTreeMap::new(),
             known,
             daa: 0,
             bonds: BTreeMap::new(),
@@ -972,6 +980,7 @@ impl KernelLedgerV1 {
             exec_reward_holds: BTreeMap::new(),
             beacon_sources: BTreeMap::new(),
             beacon_source_inputs: Default::default(),
+            paid_claim_consumers_v2: Default::default(),
             beacon_source_fee_inputs: Default::default(),
             beacon_source_fees: Default::default(),
             beacon_source_fee_promises: Default::default(),
@@ -1033,6 +1042,9 @@ impl KernelLedgerV1 {
     /// nothing (silence and partial coverage never pass).
     pub fn apply_panel_tally(&mut self, claim: &Digest, covered: bool) -> Result<Vec<LedgerEventV1>, KernelRefusalV1> {
         let daa = self.daa;
+        if self.paid_claim_consumers_v2.contains_key(claim) {
+            return Err(KernelRefusalV1::rule("PanelTally", "paid V2 claim requires its versioned receipt authority"));
+        }
         let Some(job) = self.claims.get(claim).map(|r| r.job_id) else {
             return Err(KernelRefusalV1::rule("PanelTally", "no such claim"));
         };
@@ -1059,6 +1071,22 @@ impl KernelLedgerV1 {
             self.job_claims.insert(job, *claim);
         }
         Ok(Vec::new())
+    }
+
+    pub fn apply_paid_claim_tally_v2(&mut self, claim: &Digest) -> Result<(), String> {
+        let input = self.paid_claim_consumers_v2.get_mut(claim).ok_or("paid V2 consumer authority missing")?;
+        if !input.lifetime.receipt_open(self.daa) { return Err("paid V2 receipt is past its signed deadline".into()); }
+        let row = self.claims.get(claim).ok_or("paid V2 claim missing")?;
+        if row.convicted || matches!(row.life.state, ClaimStateV1::Unavailable { .. } | ClaimStateV1::TimedOut { .. } | ClaimStateV1::Final { .. }) {return Err("paid V2 claim already decided".into());}
+        if self.job_claims.get(&row.job_id).is_some_and(|h| h != claim && self.claims.get(h).is_some_and(ClaimRowV1::holds_job)) {
+            return Err("another claim already holds the canonical job payment right".into());
+        }
+        input.complete = true;
+        let row = self.claims.get_mut(claim).expect("claim checked");
+        row.life.state = ClaimStateV1::ProbabilisticPass { passed_daa: self.daa, window_end_daa: input.lifetime.challenge_until };
+        row.life.final_hold_until = row.life.final_hold_until.max(input.lifetime.dispute_until);
+        self.job_claims.insert(row.job_id, *claim);
+        Ok(())
     }
 
     // ── the per-object API ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -1370,6 +1398,33 @@ impl KernelLedgerV1 {
                 self.opt_in_beacon_source(*producer, *job, *seal, *context, *terms, &mut out)
                     .map_err(|why| KernelRefusalV1::rule(name, why))?;
             }
+            KernelRouteObjectV1::FundPanelBeaconSourceFeeV2 { .. }
+            | KernelRouteObjectV1::PaidClaimV2 { .. }
+            | KernelRouteObjectV1::EnrollPanelConsumerLifetimeV2 { .. }
+            | KernelRouteObjectV1::AuthorizePanelLifetimeV2 { .. } => {
+                return Err(KernelRefusalV1::rule(name, "Panel sponsor authority must be derived by the native consumer"));
+            }
+            // RFC07/RFC08 economic contracts (inner 67–69): consumer-owned, each past its own dormant fence.
+            KernelRouteObjectV1::AttestModelVerificationV1 { .. }
+            | KernelRouteObjectV1::ConsentHorizonExtensionV1 { .. }
+            | KernelRouteObjectV1::SignMinimumPriceContractV1 { .. } => {
+                return Err(KernelRefusalV1::rule(
+                    name,
+                    "economic contracts must be interpreted by the authenticated native consumer",
+                ));
+            }
+            // N3 (inner 73): a BootstrapExact contribution is judged only by the native consumer past `palw_beacon_bootstrap_v1`.
+            KernelRouteObjectV1::BootstrapExactV1 { .. } => {
+                return Err(KernelRefusalV1::rule(
+                    name,
+                    "BootstrapExact sources must be interpreted by the authenticated native consumer",
+                ));
+            }
+            // M*-49 (`palw_verifier_pay_v1`): the signer is the drawn slot holder (`authorize`); below the consumer's fence no draw
+            // exists, so the attestation is refused by its own rule.
+            KernelRouteObjectV1::AttestDrawnCheckV1 { verifier, claim } => {
+                out.extend(self.attest_drawn_v1(claim, verifier)?);
+            }
             KernelRouteObjectV1::FundBeaconSourceFee { terms } => {
                 self.fund_beacon_source_fee(*terms, &mut out).map_err(|why| KernelRefusalV1::rule(name, why))?;
             }
@@ -1499,8 +1554,9 @@ impl KernelLedgerV1 {
             O::SealClaim { producer, .. } | O::OptInBeaconSource { producer, .. } | O::OptInPaidBeaconSource { producer, .. } => {
                 Some((*producer, "producer"))
             }
-            O::FundBeaconSourceFee { terms } => Some((terms.sponsor, "sponsor")),
+            O::FundBeaconSourceFee { terms } | O::FundPanelBeaconSourceFeeV2 { terms, .. } => Some((terms.sponsor, "sponsor")),
             O::SealProof { accuser, .. } => Some((*accuser, "accuser")),
+            O::AttestDrawnCheckV1 { verifier, .. } => Some((*verifier, "verifier")),
             O::Spec { object } => object.named_actor(),
             _ => None,
         };
@@ -1581,6 +1637,16 @@ impl KernelLedgerV1 {
         let collateral = self.bonds.get(&row.poster).map_or(0, |b| b.collateral);
         // Never instruct more than the poster's bond still holds (another subsystem may have slashed it since).
         let paid = row.amount.min(collateral).min(cap);
+        // R8-ECON: a contracted Final the escrow (or its cap, or the poster's remaining bond) cannot fund at the contract's minimum
+        // is never paid less — its outcome is neutral: the escrow is released whole to the poster and the producer is paid nothing
+        // out of it. No floor (every claim below the consumer's fence): unchanged.
+        if self.consumer_minimum_payouts_v1.get(claim).is_some_and(|minimum| paid < *minimum) {
+            if let Some(b) = self.bonds.get_mut(&row.poster) {
+                b.reserved = b.reserved.saturating_sub(row.amount);
+            }
+            settle(out, row.poster, row.amount, SettlementKindV1::ReleaseJobEscrow, Some(*claim));
+            return 0;
+        }
         if let Some(b) = self.bonds.get_mut(&row.poster) {
             b.reserved = b.reserved.saturating_sub(row.amount);
             b.collateral -= paid;
@@ -2877,6 +2943,12 @@ impl KernelLedgerV1 {
         const NAME: &str = "FileDemand";
         let rule = |why: &str| KernelRefusalV1::rule(NAME, why);
         let daa = self.daa;
+        if let Some(paid) = self.paid_claim_consumers_v2.get(claim) {
+            let path = self.demand_window_daa_v1(claim, position).checked_add(self.policy.proof_grace_daa);
+            if path.and_then(|p| daa.checked_add(p)).is_none_or(|end| end > paid.lifetime.liability_until) {
+                return Err(rule("the demand's full court/grace path exceeds the signed V2 lifetime"));
+            }
+        }
         if matches!(self.claims.get(claim).map(|r| &r.body), Some(ClaimBodyV1::Segmented { .. })) {
             return self.seg_file_demand(demander, claim, stage, position, out);
         }
@@ -3141,7 +3213,10 @@ impl KernelLedgerV1 {
                     // chain for a demand's deadline must not turn a provable fraud into a cheap default. If no valid proof arrives
                     // the outcome stays the default (availability, never fraud) and the reservation is released at the horizon.
                     // The per-class horizon (G14-B), never shortening one an EXEC hold or a source opt-in already extended.
-                    row.liability_until = Some(row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)));
+                    row.liability_until = Some(match self.paid_claim_consumers_v2.get(&id) {
+                        Some(paid) => paid.lifetime.liability_until,
+                        None => row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)),
+                    });
                 }
                 if let Some(b) = self.bonds.get_mut(&row.producer) {
                     b.reserved = b.reserved.saturating_sub(taken - held);
@@ -3179,6 +3254,19 @@ impl KernelLedgerV1 {
             let (producer, before, after, reserved, liability) = {
                 let row = self.claims.get_mut(&id).expect("listed");
                 let before = row.life.state.clone();
+                if let Some(paid) = self.paid_claim_consumers_v2.get(&id) {
+                    let d = paid.lifetime;
+                    row.life.final_hold_until = row.life.final_hold_until.max(d.dispute_until);
+                    // A sparse block never slides these logical endpoints. A live
+                    // dispute is preserved and exact fraud/default above wins.
+                    if !matches!(row.life.state, ClaimStateV1::Disputed { .. } | ClaimStateV1::Convicted { .. } | ClaimStateV1::Unavailable { .. } | ClaimStateV1::TimedOut { .. } | ClaimStateV1::Final { .. }) {
+                        if paid.complete {
+                            if matches!(row.life.state, ClaimStateV1::Checking { .. } | ClaimStateV1::Challengeable { .. } | ClaimStateV1::Committed | ClaimStateV1::ChallengeBound { .. }) {
+                                row.life.state = ClaimStateV1::ProbabilisticPass { passed_daa: d.checking_until, window_end_daa: d.challenge_until };
+                            }
+                        } else {row.life.state = ClaimStateV1::Checking { anchor_daa: d.committed_daa, deadline_daa: d.checking_until };}
+                    }
+                }
                 let _ = row.life.apply(ClaimEventV1::Tick { daa });
                 (row.producer, before, row.life.state.clone(), row.reserved, row.liability_until)
             };
@@ -3186,7 +3274,10 @@ impl KernelLedgerV1 {
                 (b, ClaimStateV1::Final { .. }) if !matches!(b, ClaimStateV1::Final { .. }) => {
                     let liability_daa = self.claim_liability_daa_v1(&id);
                     let row = self.claims.get_mut(&id).expect("listed");
-                    row.liability_until = Some(row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)));
+                    row.liability_until = Some(match self.paid_claim_consumers_v2.get(&id) {
+                        Some(paid) => paid.lifetime.liability_until,
+                        None => row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)),
+                    });
                     // GAP-5: the reward is paid out of the job's escrow (the poster pays), once — never issued. ADR-0176 hook
                     // (`palw_bond_budget_v1`, not built): this payout also re-checks and consumes the producer bond's reservation.
                     let (job, convicted) = (row.job_id, row.convicted);
@@ -3586,7 +3677,23 @@ impl OutsiderV1<'_> {
         }
     }
 
+    /// V2 prospective enrollment checks. Public prosecution keeps its own-salt
+    /// V1 entry; a paid consumer explicitly supplies authenticated randomness.
+    pub fn check_seeded_v2(&self, randomness: &crate::challenge::CheckerRandomnessV2) -> Result<OutsiderFindingV1, String> {
+        let row = self.ledger.claims.get(&self.claim).ok_or("no such claim")?;
+        let missing = self.missing(row);
+        if !missing.is_empty() { return Ok(OutsiderFindingV1::Demand(missing)); }
+        match &row.body {
+            ClaimBodyV1::Program { claim, .. } => self.check_program_randomness(row, claim, Some(randomness)),
+            ClaimBodyV1::Pipeline { .. } => self.check_pipeline_randomness(row, false, Some(randomness)),
+            ClaimBodyV1::Segmented { .. } => Err("segmented V2 requires authenticated position material and tokens".into()),
+            ClaimBodyV1::Spec(_) => Err("typed V2 requires authenticated snapshot material".into()),
+        }
+    }
     fn check_program(&self, row: &ClaimRowV1, claim: &KernelClaimV1) -> Result<OutsiderFindingV1, String> {
+        self.check_program_randomness(row, claim, None)
+    }
+    fn check_program_randomness(&self, row: &ClaimRowV1, claim: &KernelClaimV1, randomness: Option<&crate::challenge::CheckerRandomnessV2>) -> Result<OutsiderFindingV1, String> {
         use crate::verify::{ScopeV1, ScopeVerdictV1};
         let l = self.ledger;
         let class = l.classes.get(&row.class_binding_id).ok_or("no such class")?;
@@ -3607,7 +3714,11 @@ impl OutsiderV1<'_> {
         }
         // Then every relation the plan covers.
         let material = StageMaterial { o: self, stage: 0, program: 0, commitments: &class.param_commitments };
-        Ok(match fresh.check_salted(&material, &ScopeV1::WholeClaim, self.salt) {
+        let verdict = match randomness {
+            None => fresh.check_salted(&material, &ScopeV1::WholeClaim, self.salt),
+            Some(r) => fresh.check_seeded_v2(&material, &ScopeV1::WholeClaim, r),
+        };
+        Ok(match verdict {
             ScopeVerdictV1::Pass { .. } => OutsiderFindingV1::Clean,
             ScopeVerdictV1::Fault(p) => {
                 OutsiderFindingV1::Prosecute(ProsecutionV1::Kernel(crate::public::FaultProofWireV1::of(&p).to_bytes()))
@@ -3623,6 +3734,9 @@ impl OutsiderV1<'_> {
     }
 
     fn check_pipeline_mode(&self, row: &ClaimRowV1, commitments_only: bool) -> Result<OutsiderFindingV1, String> {
+        self.check_pipeline_randomness(row, commitments_only, None)
+    }
+    fn check_pipeline_randomness(&self, row: &ClaimRowV1, commitments_only: bool, randomness: Option<&crate::challenge::CheckerRandomnessV2>) -> Result<OutsiderFindingV1, String> {
         let l = self.ledger;
         let class = l.pipeline_classes.get(&row.class_binding_id).ok_or("no such class")?;
         let (record, header, binding) = l.pipeline_public_record(&self.claim).ok_or("no record")?;
@@ -3641,7 +3755,10 @@ impl OutsiderV1<'_> {
             })
             .collect();
         let refs: Vec<&dyn MaterialV1> = mats.iter().map(|m| m as &dyn MaterialV1).collect();
-        match if commitments_only { fresh.reexecute(&refs)? } else { fresh.check_salted(&refs, self.salt) } {
+        let finding = if commitments_only { fresh.reexecute(&refs)? }
+            else if let Some(r) = randomness { fresh.check_seeded_v2(&refs, r) }
+            else { fresh.check_salted(&refs, self.salt) };
+        match finding {
             PipelineFindingV1::Pass => Ok(OutsiderFindingV1::Clean),
             PipelineFindingV1::Fault(w) => Ok(OutsiderFindingV1::Prosecute(ProsecutionV1::Pipeline(w.to_bytes()))),
             PipelineFindingV1::Unavailable(what) => Err(format!("unavailable with every value in hand: {what}")),
@@ -3717,3 +3834,6 @@ mod tests {
         assert!(carrier_fit_v1(&b, roomy, roomy, 5000).is_err(), "commitments that cannot be carried: no claim can be committed");
     }
 }
+
+#[path="native_inventory_ledger_v1.rs"]
+mod native_resource_inventory_v1;

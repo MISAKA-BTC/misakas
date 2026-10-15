@@ -38,6 +38,9 @@ pub mod palw_legacy_held_v2;
 /// V04 (the pre-t12 drill of 2026-09-25): the order a collector offers licences in (node policy).
 pub mod palw_licence_order;
 pub mod palw_memory_ledger;
+/// RFC-0008 PAV3: the in-node producer's native custody exchange (the transport trait and the producer-side checks).
+pub mod palw_native_custody_v3;
+pub mod palw_resource_admission_v2;
 pub mod palw_panel;
 /// int-10.2 A2: the prefill run width a replay runs at, chosen from the memory the ledger can grant
 /// (node policy).

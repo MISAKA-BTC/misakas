@@ -121,7 +121,7 @@ use rayon::{
     ThreadPool,
     prelude::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator},
 };
-use rocksdb::WriteBatch;
+use rocksdb::{WriteBatch, WriteOptions};
 use std::{
     cmp::min,
     collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque},
@@ -309,6 +309,15 @@ fn exec_v2_test_admitted_classes_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64>
     let mut classes: Vec<_> = list.iter().filter(|(_, from)| *from <= daa_score).map(|(class, _)| *class).collect();
     classes.sort();
     classes
+}
+
+/// Rows that must share a UTXO commit. Genesis has no earlier durable PALW tip
+/// to replay from, so its initial materialization must ride the delta and status.
+struct PalwUtxoCommitV2 {
+    root: Hash64,
+    delta: kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2,
+    genesis: Option<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+    genesis_carriages: Vec<(Hash64, crate::model::stores::palw_class_carriage::PalwClassCarriageRecord)>,
 }
 
 pub struct VirtualStateProcessor {
@@ -2565,7 +2574,7 @@ impl VirtualStateProcessor {
                                     // DAA: the fences, and the actions this block's EVM step queued.
                                     &{
                                         let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);
-                                        if state_params.exec_v2_active_at(point.daa_score) {
+                                        if state_params.exec_v2_active_at(point.daa_score) || state_params.monetary_material_at_v1(point.daa_score).is_some() {
                                             if attempt.is_some()
                                                 && let Ok(bytes) = borsh::to_vec(header.as_ref())
                                             {
@@ -2712,7 +2721,12 @@ impl VirtualStateProcessor {
                             ctx.validator_quality_subpool,
                             ctx.reserve_balance_after,
                             evm_staged,
-                            palw_v2_staged,
+                            palw_v2_staged.map(|(root, delta)| PalwUtxoCommitV2 {
+                                root,
+                                delta,
+                                genesis: None,
+                                genesis_carriages: Vec::new(),
+                            }),
                         );
                         // Count the number of UTXO-processed chain blocks
                         chain_block_counter += 1;
@@ -3118,12 +3132,25 @@ impl VirtualStateProcessor {
         // it produced and the delta that produces it — staged in THIS batch so the PALW state and
         // the block's UTXO data can never be half-written relative to each other. `None` on every
         // network whose mode is not `ConsensusV2`, which is every shipped preset.
-        palw_v2_staged: Option<(kaspa_hashes::Hash64, kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2)>,
+        palw_v2_staged: Option<PalwUtxoCommitV2>,
     ) {
         let mut batch = WriteBatch::default();
-        if let Some((state_root, delta)) = palw_v2_staged {
+        let mut genesis_class_store = None;
+        if let Some(staged) = palw_v2_staged {
             let mut store = self.palw_state_v2_store.write();
-            store.insert_delta_batch(&mut batch, current, state_root, &delta).unwrap();
+            store.insert_delta_batch(&mut batch, current, staged.root, &staged.delta).unwrap();
+            if let Some(genesis) = staged.genesis {
+                assert_eq!(current, self.genesis.hash, "only genesis can install the initial PALW tip");
+                store.set_tip_batch(&mut batch, current, &genesis).unwrap();
+            }
+            if !staged.genesis_carriages.is_empty() {
+                assert_eq!(current, self.genesis.hash, "only genesis declarations use this initial commit");
+                let mut class_store = self.palw_class_carriage_store.write();
+                for (class_id, record) in staged.genesis_carriages {
+                    class_store.insert_batch(&mut batch, class_id, record).unwrap();
+                }
+                genesis_class_store = Some(class_store);
+            }
         }
         if let Some(mut staged) = evm_staged {
             // §12: in a mode that keeps no long-term EVM state history (`head`), drop
@@ -3224,12 +3251,16 @@ impl VirtualStateProcessor {
         self.utxo_diffs_store.insert_batch(&mut batch, current, Arc::new(mergeset_diff)).unwrap();
         self.utxo_multisets_store.insert_batch(&mut batch, current, multiset).unwrap();
         self.acceptance_data_store.insert_batch(&mut batch, current, Arc::new(acceptance_data)).unwrap();
-        if !rewarded_keys.is_empty() {
-            self.rewarded_epochs_store.insert_batch(&mut batch, current, Arc::new(rewarded_keys)).unwrap();
-        }
-        if quality_subpool > 0 {
-            self.block_quality_pool_store.insert_batch(&mut batch, current, quality_subpool).unwrap();
-        }
+        let rewarded_commit = if !rewarded_keys.is_empty() {
+            Some(self.rewarded_epochs_store.insert_batch_tracked(&mut batch, current, Arc::new(rewarded_keys)).unwrap())
+        } else {
+            None
+        };
+        let quality_commit = if quality_subpool > 0 {
+            Some(self.block_quality_pool_store.insert_batch_tracked(&mut batch, current, quality_subpool).unwrap())
+        } else {
+            None
+        };
         if reserve_balance > 0 {
             self.reserve_balance_store.insert_batch(&mut batch, current, reserve_balance).unwrap();
         }
@@ -3237,6 +3268,13 @@ impl VirtualStateProcessor {
         self.pruning_samples_store.insert_batch(&mut batch, current, pruning_sample_from_pov).idempotent().unwrap();
         let write_guard = self.statuses_store.set_batch(&mut batch, current, StatusUTXOValid).unwrap();
         self.db.write(batch).unwrap();
+        drop(genesis_class_store);
+        if let Some(ticket) = rewarded_commit {
+            ticket.committed();
+        }
+        if let Some(ticket) = quality_commit {
+            ticket.committed();
+        }
         // Calling the drops explicitly after the batch is written in order to avoid possible errors.
         drop(write_guard);
     }
@@ -3412,8 +3450,14 @@ impl VirtualStateProcessor {
         // single header read on every current network.
         self.update_epoch_accumulator(&mut batch, dns_sink);
 
-        // Flush the batch changes
-        self.db.write(batch).unwrap();
+        // Served native publication history must survive loss of the page cache
+        // together with its selected-chain/UTXO generation. Below retirement
+        // preserve the historical asynchronous write policy.
+        if self.headers_store.get_daa_score(dns_sink).is_ok_and(|daa| self.dns_retired_at(daa)) {
+            self.write_pruning_import_barrier(batch);
+        } else {
+            self.db.write(batch).unwrap();
+        }
 
         // Calling the drops explicitly after the batch is written in order to avoid possible errors.
         drop(virtual_write);
@@ -3726,7 +3770,7 @@ impl VirtualStateProcessor {
             if unentitled.contains(member) {
                 continue;
             }
-            let attempt = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment)
+            let attempt = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment)
                 .ok()
                 .is_some_and(|e| e.attempt.class_id != params.base_class_id());
             let receipt = if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3 {
@@ -5428,24 +5472,10 @@ impl VirtualStateProcessor {
     /// Initializes UTXO state of genesis and points virtual at genesis.
     /// Note that pruning point-related stores are initialized by `init`
     pub fn process_genesis(self: &Arc<Self>) {
-        // Write the UTXO state of genesis
-        self.commit_utxo_state(
-            self.genesis.hash,
-            UtxoDiff::default(),
-            MuHash::new(),
-            AcceptanceData::default(),
-            ZERO_HASH64,
-            Vec::new(),
-            0,    // kaspa-pq ADR-0018 "本格版": genesis has no validator quality sub-pool.
-            0,    // kaspa-pq ADR-0018 "本格版" (Phase 4): genesis reserve balance is 0.
-            None, // kaspa-pq ADR-0020 v0.4: genesis is EVM-inert (v0 header).
-            None, // ADR-0042 Unit C: genesis stages no PALW delta — the tip is installed below.
-        );
-
         // ADR-0042 Decision 5 / Unit C: the V2 state's zero point. Installed beside the genesis
         // UTXO commit so a fresh database has a tip to walk from, and skipped entirely on a
         // network with no V2 bundle (every shipped preset), where the store stays empty.
-        if let Some(state_params) = self.palw_state_params_v2.as_ref() {
+        let palw_genesis = self.palw_state_params_v2.as_ref().map(|state_params| {
             // The genesis block APPLIES the bundle's registration list. A V2 network has no class
             // and no bond until something registers them, and the only block that can is this one:
             // admission refuses an attempt naming a bond the chain does not have, so a genesis
@@ -5477,15 +5507,53 @@ impl VirtualStateProcessor {
                 &self.palw_transition_extras_for(&point),
             )
             .expect("the bundle's genesis registrations must apply — `validate_palw_v2` ran them at construction");
-            let mut batch = WriteBatch::default();
-            let mut store = self.palw_state_v2_store.write();
-            // The delta rides too, so the genesis point is walkable like every other chain block
-            // rather than a special case the reorg walk has to know about.
-            store.insert_delta_batch(&mut batch, self.genesis.hash, genesis_state.state_root(), &delta).unwrap();
-            store.set_tip_batch(&mut batch, self.genesis.hash, &genesis_state).unwrap();
-            drop(store);
-            self.db.write(batch).unwrap();
-        }
+            let mut genesis_carriages = Vec::new();
+            for object in &objects {
+                if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+                    class_id,
+                    artifact_root,
+                    admission: Some(carriage),
+                    ..
+                } = object
+                {
+                    let accepted = genesis_state.class(class_id).expect("the genesis class registration was accepted");
+                    assert_eq!(accepted.artifact_root, *artifact_root, "genesis declaration must name the accepted artifact");
+                    assert_eq!(accepted.registered_daa, point.daa_score);
+                    assert_eq!(
+                        carriage.profile.shape_profile_id(),
+                        *class_id,
+                        "genesis declaration must authenticate its class profile"
+                    );
+                    assert_eq!(carriage.canonical.shape_profile_id, *class_id, "genesis canonical job must name the same profile");
+                    genesis_carriages.push((
+                        *class_id,
+                        crate::model::stores::palw_class_carriage::PalwClassCarriageRecord {
+                            registered_daa: accepted.registered_daa,
+                            artifact_root: accepted.artifact_root,
+                            carriage: borsh::to_vec(carriage.as_ref()).expect("the accepted genesis declaration must encode"),
+                        },
+                    ));
+                }
+            }
+            PalwUtxoCommitV2 { root: genesis_state.state_root(), delta, genesis: Some(genesis_state), genesis_carriages }
+        });
+
+        // Derive the complete registration transition before any UTXO-valid write.
+        // Unlike later tips, genesis has no older materialization from which a
+        // restart can replay a missing tip. Its delta, tip and UTXO-valid marker
+        // therefore commit in one RocksDB batch, including on a process kill.
+        self.commit_utxo_state(
+            self.genesis.hash,
+            UtxoDiff::default(),
+            MuHash::new(),
+            AcceptanceData::default(),
+            ZERO_HASH64,
+            Vec::new(),
+            0,    // kaspa-pq ADR-0018 "本格版": genesis has no validator quality sub-pool.
+            0,    // kaspa-pq ADR-0018 "本格版" (Phase 4): genesis reserve balance is 0.
+            None, // kaspa-pq ADR-0020 v0.4: genesis is EVM-inert (v0 header).
+            palw_genesis,
+        );
 
         // Init the virtual selected chain store
         let mut batch = WriteBatch::default();
@@ -5501,6 +5569,41 @@ impl VirtualStateProcessor {
             &Default::default(),
             &Default::default(),
         );
+    }
+
+    /// Import recovery barriers must survive loss of the process and its page
+    /// cache. In particular, an asynchronous incomplete marker is insufficient
+    /// before clearing a previously stable UTXO set. The closing barrier also
+    /// flushes preceding sidecar/copy writes to this DB's WAL before publishing
+    /// the stable generation. A failed barrier is fatal: staged store caches
+    /// cannot be served after an unsuccessful durable commit.
+    pub(crate) fn write_pruning_import_barrier(&self, batch: WriteBatch) {
+        let mut options = WriteOptions::default();
+        options.set_sync(true);
+        self.db.write_opt(batch, &options).expect("persisting a pruning import recovery barrier cannot fail");
+    }
+
+    /// Test-only OS-kill rendezvous. Production builds contain no environment
+    /// switch or pause path. The exact child process owns the rendezvous directory.
+    #[cfg(test)]
+    fn pruning_import_crash_checkpoint(&self, label: &str) {
+        if std::env::var("MISAKA_RFC12_IMPORT_CRASH_STAGE").ok().as_deref() != Some(label) {
+            return;
+        }
+        let Ok(root) = std::env::var("MISAKA_RFC12_IMPORT_CRASH_DIRECTORY") else { return };
+        // Genesis startup also imports its premine. The worker arms only after
+        // its baseline and expected cold-recovery manifest are durable.
+        if std::fs::read(std::path::Path::new(&root).join("armed")).ok().as_deref() != Some(label.as_bytes()) {
+            return;
+        }
+        let mut file = std::fs::File::create(std::path::Path::new(&root).join("ready")).unwrap();
+        use std::io::Write;
+        file.write_all(label.as_bytes()).unwrap();
+        file.sync_all().unwrap();
+        // Parent Child::kill supplies the crash. No DB close or flush executes.
+        loop {
+            std::thread::park();
+        }
     }
 
     pub fn pruning_import_session(&self) -> PruningImportResult<kaspa_consensus_core::pruning::PruningImportSessionStateV1> {
@@ -5549,7 +5652,7 @@ impl VirtualStateProcessor {
         let mut batch = WriteBatch::default();
         meta.set_import_session(&mut batch, &state).map_err(unavailable)?;
         meta.set_pruning_utxoset_stable_flag(&mut batch, false).map_err(unavailable)?;
-        self.db.write(batch).expect("writing pruning import authority cannot fail");
+        self.write_pruning_import_barrier(batch);
         Ok(token)
     }
 
@@ -5600,7 +5703,7 @@ impl VirtualStateProcessor {
         let mut batch = WriteBatch::default();
         meta.set_import_session(&mut batch, state)
             .map_err(|e| PruningImportError::PruningPointImportContextUnavailable(point, format!("import phase: {e}")))?;
-        self.db.write(batch).expect("writing pruning import phase cannot fail");
+        self.write_pruning_import_barrier(batch);
         Ok(())
     }
 
@@ -5657,8 +5760,12 @@ impl VirtualStateProcessor {
             meta.set_import_session(&mut batch, state).expect("staging the UTXO import phase cannot fail");
         }
         meta.set_pruning_utxoset_stable_flag(&mut batch, false).expect("staging an incomplete UTXO import cannot fail");
-        self.db.write(batch).expect("writing an incomplete UTXO import cannot fail");
+        self.write_pruning_import_barrier(batch);
+        #[cfg(test)]
+        self.pruning_import_crash_checkpoint("utxo-before-clear");
         meta.utxo_set.clear().expect("clearing an authorized UTXO import cannot fail");
+        #[cfg(test)]
+        self.pruning_import_crash_checkpoint("utxo-after-clear");
         Ok(())
     }
 
@@ -5697,7 +5804,7 @@ impl VirtualStateProcessor {
             let mut pruning_meta_write = self.pruning_meta_stores.write();
             pruning_meta_write.set_utxoset_position(&mut batch, new_pruning_point).unwrap();
             pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
-            self.db.write(batch).unwrap();
+            self.write_pruning_import_barrier(batch);
         }
 
         // Preserve the existing metadata -> virtual copy lock order. Never wait for a
@@ -5741,12 +5848,20 @@ impl VirtualStateProcessor {
         }
         {
             // Copy the pruning-point UTXO set into virtual's UTXO set.
+            #[cfg(test)]
+            self.pruning_import_crash_checkpoint("utxo-before-virtual-copy");
             virtual_write.utxo_set.clear().unwrap();
+            #[cfg(test)]
+            self.pruning_import_crash_checkpoint("utxo-after-virtual-clear");
             for chunk in &pruning_meta_read.utxo_set.iterator().map(|iter_result| iter_result.unwrap()).chunks(1000) {
                 virtual_write.utxo_set.write_from_iterator_without_cache(chunk).unwrap();
+                #[cfg(test)]
+                self.pruning_import_crash_checkpoint("utxo-mid-virtual-copy");
             }
             // ADR-0109 Decision 1: the set was replaced wholesale; the index follows it wholesale.
             self.rebuild_evm_deposit_lock_index(&virtual_write.utxo_set);
+            #[cfg(test)]
+            self.pruning_import_crash_checkpoint("utxo-after-virtual-copy");
         }
 
         drop(pruning_meta_read);
@@ -5772,7 +5887,7 @@ impl VirtualStateProcessor {
             self.utxo_multisets_store.set_batch(&mut batch, new_pruning_point, imported_utxo_multiset.clone()).unwrap();
 
             let statuses_write = self.statuses_store.set_batch(&mut batch, new_pruning_point, StatusUTXOValid).unwrap();
-            self.db.write(batch).unwrap();
+            self.write_pruning_import_barrier(batch);
             drop(statuses_write);
         }
 
@@ -5871,7 +5986,11 @@ impl VirtualStateProcessor {
         // Store writers update caches as they stage the batch. A failed durable
         // commit is fatal, like the other consensus writes; returning would expose
         // the cached true marker without its durable completion.
-        self.db.write(batch).expect("writing the verified import completion cannot fail");
+        #[cfg(test)]
+        self.pruning_import_crash_checkpoint("import-before-complete");
+        self.write_pruning_import_barrier(batch);
+        #[cfg(test)]
+        self.pruning_import_crash_checkpoint("import-after-complete");
         Ok(())
     }
 
@@ -6020,7 +6139,7 @@ impl VirtualStateProcessor {
         // crash here must make IBD retry all sidecars, never reuse old stable UTXOs.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
         pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
-        self.db.write(batch).unwrap();
+        self.write_pruning_import_barrier(batch);
         drop(pruning_meta_write);
         *readiness_memo = None;
         drop(pruning_point_read);
@@ -6138,8 +6257,40 @@ impl VirtualStateProcessor {
         pruning_point: BlockHash,
         carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
     ) -> PruningImportResult<()> {
+        self.import_pruning_point_palw_snapshot(pruning_point, carriage, None)
+    }
+
+    /// Install state and its execution declarations as one recovery generation.
+    /// Validation of the complete offered set precedes every store mutation.
+    pub(crate) fn import_pruning_point_palw_snapshot(
+        &self,
+        pruning_point: BlockHash,
+        carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        declarations: Option<(Vec<(kaspa_hashes::Hash64, Vec<u8>)>, bool)>,
+    ) -> PruningImportResult<()> {
         let Some(params) = self.palw_state_params_v2.as_ref() else {
             return Ok(()); // not a ConsensusV2 network — nothing reads this store.
+        };
+        let declaration_rows = if let Some((offered, complete)) = declarations {
+            self.palw_validate_snapshot_declarations_v1_impl(&carriage, &offered, complete).map_err(|why| {
+                PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("snapshot declarations: {why}"))
+            })?;
+            offered
+                .into_iter()
+                .map(|(id, bytes)| {
+                    let class = &carriage.classes[&id]; // membership was checked above
+                    (
+                        id,
+                        crate::model::stores::palw_class_carriage::PalwClassCarriageRecord {
+                            registered_daa: class.registered_daa,
+                            artifact_root: class.artifact_root,
+                            carriage: bytes,
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
         };
         let context_error = |e: StoreError| {
             PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("PALW pruning-point store: {e}"))
@@ -6234,6 +6385,15 @@ impl VirtualStateProcessor {
                 ));
             }
         }
+        // Install uses the actual typed, authenticated state and its rebuilt
+        // indices, never the sender's byte length or local Serve metadata. Keep
+        // this operation's demand reserved through the durable WAL barrier.
+        let _native_install_lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_install_in_database_v1(
+            pruning_point,
+            &state,
+            self.db.native_single_directory_quota_path_v1(),
+        )
+        .map_err(|why| PruningImportError::PruningPointImportContextUnavailable(pruning_point, why.to_string()))?;
         // Pin the established target after validation and through the durable batch.
         // Pruning -> PALW -> metadata matches pruning advancement's lock order.
         let pruning_point_read = self.pruning_point_store.read();
@@ -6242,8 +6402,14 @@ impl VirtualStateProcessor {
         // so what becomes durable is a function of what was verified, and a caller cannot store a
         // snapshot under a root it did not compute. The peer's bytes never reach the database.
         let mut batch = WriteBatch::default();
+        // Match ordinary block commit's PALW -> class-index lock order, and
+        // retain both guards until the complete generation is durable.
+        let mut store = self.palw_state_v2_store.write();
+        let mut class_store = self.palw_class_carriage_store.write();
+        for (id, row) in declaration_rows {
+            class_store.insert_batch(&mut batch, id, row).expect("staging a verified snapshot declaration cannot fail");
+        }
         {
-            let mut store = self.palw_state_v2_store.write();
             store.set_tip_batch(&mut batch, pruning_point, &state).expect("writing the verified PALW tip cannot fail");
             // The same state, also as this node's servable snapshot. Without it a node that just
             // joined by a pruned sync holds the pruning-point state but cannot HAND it on until
@@ -6257,7 +6423,7 @@ impl VirtualStateProcessor {
         // crash between those steps must leave a durable incomplete-import flag.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
         pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
-        self.db.write(batch).unwrap();
+        self.write_pruning_import_barrier(batch);
         drop(pruning_meta_write);
         Ok(())
     }
@@ -6489,12 +6655,14 @@ impl VirtualStateProcessor {
         if insert_reserve {
             self.reserve_balance_store.insert_batch(&mut batch, pruning_point, canonical.reserve_balance).unwrap();
         }
-        overlay_write.set_batch(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot: canonical }).unwrap();
+        let overlay_commit =
+            overlay_write.set_batch_tracked(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot: canonical }).unwrap();
         // Legacy monetary/bond rights are another sidecar of the same import.
         // Mark recovery incomplete in its batch, even if no UTXOs were cleared yet.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
         pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
-        self.db.write(batch).unwrap();
+        self.write_pruning_import_barrier(batch);
+        overlay_commit.committed();
         drop(pruning_meta_write);
         Ok(())
     }
@@ -6601,11 +6769,13 @@ impl VirtualStateProcessor {
         let view = ActiveBondView::from_records(self.bonds_as_of(pp_daa).into_iter().map(|r| (r.bond_outpoint, r)));
         let snapshot = self.compute_overlay_snapshot(pruning_point, &view);
         let mut batch = WriteBatch::default();
-        self.pruning_overlay_snapshot_store
+        let overlay_commit = self
+            .pruning_overlay_snapshot_store
             .write()
-            .set_batch(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot })
+            .set_batch_tracked(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot })
             .unwrap();
         self.db.write(batch).unwrap();
+        overlay_commit.committed();
     }
 
     pub fn are_pruning_points_violating_finality(&self, pp_list: PruningPointsList) -> bool {
@@ -6720,6 +6890,9 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::PublicCourtStreamOpenedV1 { .. } => "PublicCourtStreamOpenedV1",
         O::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         O::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
+        O::MonetaryMaterialEnrolledV1 { .. } => "MonetaryMaterialEnrolledV1",
+        O::MonetaryMaterialReplacedV1 { .. } => "MonetaryMaterialReplacedV1",
+        O::MonetaryMaterialActionV1 { .. } => "MonetaryMaterialActionV1",
         O::ClassSemanticsDeclaredV1 { .. } => "ClassSemanticsDeclaredV1",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",

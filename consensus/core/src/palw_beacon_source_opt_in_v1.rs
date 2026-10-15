@@ -142,7 +142,31 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             if target.terms.context != id {
                 return Err("source target key mismatch".into());
             }
-            if daa < target.terms.seal_start || daa >= target.terms.seal_end {
+            // Panel's sponsor must fund before the entropy window opens. The
+            // common source admission still requires an ordinary seal at S.
+            if daa >= target.terms.seal_end
+                || (daa < target.terms.seal_start
+                    && !matches!(target.context.subject_kind, misaka_palw_challenge::SubjectKindV1::PanelAssignment | misaka_palw_challenge::SubjectKindV1::ClaimVerification))
+            {
+                continue;
+            }
+            if target.context.subject_kind == misaka_palw_challenge::SubjectKindV1::ClaimVerification {
+                let a = self.paid_claim_source_authority_v3(&id)?;
+                if a.source_policy != fence.policy || a.authorized_daa > daa || a.authorized_daa < fence.activation.daa_score() {
+                    return Err("paid claim source policy/timing differs from authenticated consent".into());
+                }
+                inputs.targets.insert(id, target);
+                continue;
+            }
+            if target.context.subject_kind == misaka_palw_challenge::SubjectKindV1::PanelAssignment {
+                let authority = self.panel_source_fee_authority_v2(&id)?;
+                if authority.source_policy != fence.policy
+                    || authority.authorized_daa > daa
+                    || target.context.commitment_position < fence.activation.daa_score()
+                {
+                    return Err("Panel source terms differ from their authenticated network authority".into());
+                }
+                inputs.targets.insert(id, target);
                 continue;
             }
             let misaka_palw_challenge::RootV1::Present(class) = target.context.candidate_profile_id else {
@@ -176,10 +200,13 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         use misaka_palw_kernel::lifecycle::ClaimStateV1 as C;
         let target = self.beacon_source_target_v4(context)?;
         let ledger = self.ledger()?;
+        // A prospective OPV claim which depends on paid Panel checking cannot
+        // re-enter the Panel-independent source pool through its old base codec.
         let finals: std::collections::BTreeMap<_, _> = self
             .finals_read_v1()?
             .into_iter()
             .filter_map(|f| {
+                if ledger.paid_claim_consumers_v2.contains_key(&f.receipt.claim) { return None; }
                 let bytes = f.event?;
                 let w: misaka_palw_challenge::AttributedWorkV1 = borsh::from_slice(&bytes).ok()?;
                 Some((f.receipt.claim, w.event))

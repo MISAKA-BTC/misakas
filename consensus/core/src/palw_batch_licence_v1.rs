@@ -328,6 +328,9 @@ pub fn palw_batch_entry_route_v1(
     daa_score: u64,
     entry: &PalwBatchLicenceEntryV1,
 ) -> PalwBatchEntryRouteV1 {
+    if crate::palw_panel_lifetime_v2::require_panel_receipt_time_v2(state, params, &entry.claim, daa_score).is_err() {
+        return PalwBatchEntryRouteV1::Inert;
+    }
     let (Some(claim), Some(panel)) = (state.claim(&entry.claim), state.panel(&entry.claim)) else {
         return PalwBatchEntryRouteV1::Inert;
     };

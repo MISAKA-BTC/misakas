@@ -644,7 +644,7 @@ pub(crate) async fn claim_of_block(node: &NodeRead, hash: &str) -> Result<Option
     if !kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(block.header.pow_algo_id) {
         return Ok(None);
     }
-    let envelope = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&block.header.palw_commitment)
+    let envelope = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&block.header.palw_commitment)
         .map_err(|e| format!("its attempt does not decode: {e}"))?;
     Ok(Some(kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&envelope.attempt).to_string()))
 }

@@ -133,6 +133,8 @@ impl Factory {
                 GetPalwFraudFilerStatus,
                 GetPalwPanelV3Status,
                 GetPalwExecV2Status,
+                GetPalwMonetaryMaterial,
+                GetPalwStateCarriage,
                 GetPalwRewardVesting,
                 GetPalwKernelClaim,
                 GetPalwKernelRows,

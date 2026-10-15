@@ -1,7 +1,8 @@
 //! Construction boundary for the unpublished integration probe only.
 //!
-//! This has no Args/CLI activation path. Production presets and their startup
-//! refusals remain unchanged; the helper runs an explicitly supplied private
+//! Ordinary kaspad has no Args activation path for this constructor. An explicit
+//! feature-required private binary selects only exact named fixture factories.
+//! Production presets and their startup refusals remain unchanged; the helper runs an explicitly supplied private
 //! Config over loopback services and a separately owned, fingerprinted database.
 
 use crate::{
@@ -29,8 +30,60 @@ use std::{
 
 mod bootstrap;
 pub use bootstrap::export_private_complete_bootstrap_v1;
+mod claim_paid_bootstrap;
+pub use claim_paid_bootstrap::{PrivatePaidProgramRequestV3, export_private_paid_program_work_v3};
+mod paid_claim_factory;
+pub use paid_claim_factory::private_paid_claim_params_v3;
+mod paid_bootstrap;
+pub use paid_bootstrap::export_private_paid_bootstrap_v3;
+mod native_provider;
+pub use native_provider::PrivateNativeCustodySpecV3;
 
 pub const PRIVATE_PROBE_MARKER_V1: &str = "rfc12-private-probe-v1.json";
+
+/// Exact private native-settlement dependency bundle. The factory retains real
+/// Rule E and its header commitment; only release-arming refusals are excepted.
+pub fn private_native_settlement_params_v1(
+    mut params: kaspa_consensus_core::config::params::Params,
+) -> Result<kaspa_consensus_core::config::params::Params, String> {
+    use kaspa_consensus_core::{
+        config::params::ForkActivation,
+        palw_native_settlement_v1::{PalwDnsRetirementV1, PalwSettlementPolicyV1},
+    };
+    params.palw_fork_choice_rule_e_v1 = Some(ForkActivation::new(1));
+    params.palw_fork_choice_commitment_v1 = Some(ForkActivation::new(1));
+    params.palw_dns_retirement = Some(PalwDnsRetirementV1 {
+        activation: ForkActivation::new(1),
+        settlement: PalwSettlementPolicyV1 {
+            settled_anchor_depth: 1,
+            unique_mature_work: 1,
+            max_operator_permille: 1000,
+            max_class_permille: 1000,
+        },
+        legacy_evidence_horizon_daa: 5,
+    });
+    validate_private_native_relations(&params)?;
+    Ok(params)
+}
+
+fn validate_private_native_relations(params: &kaspa_consensus_core::config::params::Params) -> Result<(), String> {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    params.validate_palw_fork_choice_rule_e_order_v1().map_err(|e| e.to_string())?;
+    if params.palw_fork_choice_rule_e_v1 != Some(ForkActivation::new(1))
+        || params.palw_fork_choice_commitment_v1 != Some(ForkActivation::new(1))
+        || params.palw_dns_retirement.is_none_or(|r| r.activation != ForkActivation::new(1))
+    {
+        return Err("private retirement requires its exact Rule E/commitment/retirement heights".into());
+    }
+    let mut checked = params.clone();
+    checked.palw_probabilistic_constraints_v1 = None;
+    checked.palw_signed_registration_v1 = None;
+    checked.palw_panel_free_v1 = None;
+    // The private entry point retains the armed commitment/Rule E/retirement
+    // while running every production value and dependency validator.
+    checked.validate_palw_v1().map_err(|e| e.to_string())?;
+    checked.validate_palw_v2_private_rule_e_v1().map_err(|e| e.to_string())
+}
 
 /// Exact complete-only private policy for a public registration/bootstrap probe.
 /// The test constructor alone can run this policy; ordinary startup continues
@@ -40,10 +93,7 @@ pub fn private_complete_check_params_v1(
     salt: &kaspa_consensus_core::config::drill::PalwDrillSaltV1,
 ) -> Result<kaspa_consensus_core::config::params::Params, String> {
     use kaspa_consensus_core::{
-        config::params::ForkActivation,
-        palw_native_settlement_v1::{PalwDnsRetirementV1, PalwSettlementPolicyV1},
-        palw_panel_free_v1::PalwPanelFreeFenceV1,
-        palw_tir_v1::PalwTirFenceV1,
+        config::params::ForkActivation, palw_panel_free_v1::PalwPanelFreeFenceV1, palw_tir_v1::PalwTirFenceV1,
     };
     let mut params = kaspa_consensus_core::config::drill::palw_chain_params_v1(palw_drill_network_v1(), Some(salt))?;
     // T12 already arms the canonical economic bundle from genesis. The IR's
@@ -64,18 +114,7 @@ pub fn private_complete_check_params_v1(
         return Err("the complete-only private policy must retain the complete reward gate and full effective target".into());
     }
     params.palw_panel_free_v1 = Some(panel_free);
-    // These are the construction profile's explicit test-policy terms, never
-    // an economic, security or D/W approval. All real material windows remain.
-    params.palw_dns_retirement = Some(PalwDnsRetirementV1 {
-        activation: ForkActivation::new(1),
-        settlement: PalwSettlementPolicyV1 {
-            settled_anchor_depth: 1,
-            unique_mature_work: 1,
-            max_operator_permille: 1000,
-            max_class_permille: 1000,
-        },
-        legacy_evidence_horizon_daa: 5,
-    });
+    params = private_native_settlement_params_v1(params)?;
     validate_private_complete_relations(&params)?;
     Ok(params)
 }
@@ -85,12 +124,7 @@ fn validate_private_complete_relations(params: &kaspa_consensus_core::config::pa
     // invariant, including the TIR mirror, economics, lifecycle fence audit and
     // the fixed Panel-free value, is checked by its production implementation.
     params.palw_panel_free_v1.as_ref().ok_or("missing private Panel-free policy")?.validate_value()?;
-    let mut checked = params.clone();
-    checked.palw_probabilistic_constraints_v1 = None;
-    checked.palw_signed_registration_v1 = None;
-    checked.palw_panel_free_v1 = None;
-    checked.validate_palw_v1().map_err(|e| e.to_string())?;
-    checked.validate_palw_v2().map_err(|e| e.to_string())
+    validate_private_native_relations(params)
 }
 
 /// Test-policy identity, not a release result or economic/security approval.
@@ -127,7 +161,7 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
             "legacyEvidenceHorizonDaa": r.legacy_evidence_horizon_daa,
         })
     });
-    serde_json::json!({
+    let mut manifest = serde_json::json!({
         "version": 1,
         "kind": "rfc12-private-integration-probe",
         "network": config.params.net.to_string(),
@@ -141,13 +175,33 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
             "capabilitiesAdded": false, "participantIndependenceProven": false,
         })),
         "retirement": retirement,
+        "forkChoiceRuleEDaa": config.params.palw_fork_choice_rule_e_v1.map(|at| at.daa_score()),
+        "forkChoiceCommitmentDaa": config.params.palw_fork_choice_commitment_v1.map(|at| at.daa_score()),
         "skipProofOfWork": config.params.skip_proof_of_work,
         "canonicalWorkDaa": config.params.palw_canonical_work_daa(),
         "completeOnlyPrivatePolicy": config.params.palw_probabilistic_constraints_v1.is_some()
             && config.params.palw_signed_registration_v1.is_some() && config.params.palw_panel_free_v1.is_some(),
         "releaseApproval": false,
         "securitySoundnessMeasured": false,
-    })
+    });
+    // Preserve existing native-v1/population-v1/complete-v1 marker bytes. Only
+    // the independently fingerprinted new profile gains its additional fields.
+    if let Some(fence) = config.params.palw_claim_challenge_v2.filter(|f| f.activation.is_active(0)) {
+        manifest["paidClaimPrivatePolicy"] = serde_json::json!(true);
+        manifest["paidClaimMaximumRounds"] = serde_json::json!(fence.policy.maximum_rounds);
+        // 2026-10-15: the mechanics-only Panel lifetime and paid consumer lifecycle the paid-v3 factory arms beside PAV3.
+        if let Some(lifetime) = config.params.palw_panel_lifetime_v2.filter(|f| f.activation.is_active(0)) {
+            manifest["paidPanelLifetimePolicyId"] = serde_json::json!(lifetime.policy.id().to_string());
+        }
+        if let Some(consumer) = config.params.palw_paid_consumer_lifecycle_v1.as_ref().filter(|f| f.activation.is_active(0)) {
+            manifest["paidConsumerLifecyclePolicy"] = serde_json::json!({
+                "digest": consumer.policy.digest().to_string(), "serviceSpanDaa": consumer.policy.service_span_daa,
+                "disputeTailDaa": consumer.policy.dispute_tail_daa, "materialTailDaa": consumer.policy.material_tail_daa,
+                "approved": false,
+            });
+        }
+    }
+    manifest
 }
 
 fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
@@ -199,7 +253,16 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
     let private_complete = config.params.palw_probabilistic_constraints_v1.is_some()
         || config.params.palw_signed_registration_v1.is_some()
         || config.params.palw_panel_free_v1.is_some();
-    if private_complete {
+    if config.params.palw_claim_challenge_v2.is_some_and(|f| f.activation.is_active(0)) {
+        if config.private_population.is_some() {
+            return Err("the paid-v3 private probe has no population override".into());
+        }
+        let expected = private_paid_claim_params_v3(salt)?;
+        if config.params.consensus_params_id() != expected.consensus_params_id() {
+            return Err("private paid-claim Config differs from its exact salted factory policy".into());
+        }
+        paid_claim_factory::validate_private_paid_claim_relations_v3(&config.params)?;
+    } else if private_complete {
         if config.private_population.is_some() {
             return Err("the complete-only private bootstrap profile has no population override".into());
         }
@@ -209,8 +272,12 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
         }
         validate_private_complete_relations(&config.params)?;
     } else {
-        config.params.validate_palw_v1().map_err(|error| error.to_string())?;
-        config.params.validate_palw_v2().map_err(|error| error.to_string())?;
+        if config.params.palw_dns_retirement.is_some() {
+            validate_private_native_relations(&config.params)?;
+        } else {
+            config.params.validate_palw_v1().map_err(|error| error.to_string())?;
+            config.params.validate_palw_v2().map_err(|error| error.to_string())?;
+        }
     }
     let mut applied = config.clone();
     args.apply_to_config(&mut applied);
@@ -272,6 +339,8 @@ fn pin_owned_probe_directory(args: &Args, config: &Config) -> Result<(), String>
     let mut file = OpenOptions::new().write(true).create_new(true).open(marker).map_err(|error| error.to_string())?;
     file.write_all(&serde_json::to_vec_pretty(&expected).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
     file.sync_all().map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    fs::File::open(directory).and_then(|directory| directory.sync_all()).map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -281,10 +350,40 @@ pub fn create_private_integration_core_with_runtime(
     fd_total_budget: i32,
     config: Config,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
-    validate_private_probe(args, &config)?;
-    pin_owned_probe_directory(args, &config)?;
+    prepare_private_integration_probe(args, &config)?;
     kaspa_core::warn!("RFC12 PRIVATE INTEGRATION PROBE: injected test policy; release/soundness evidence remains unapproved");
-    Ok(create_core_with_runtime_inner(runtime, args, fd_total_budget, Some(config)))
+    Ok(create_core_with_runtime_inner(runtime, args, fd_total_budget, Some(config), None))
+}
+
+/// The paid-v3 private node with the RFC-0008 PAV3 loopback native custody wiring (unverified source): a provider service
+/// over fixture provider bonds and/or the exchange this node's producer seals through. The spec is checked against the
+/// salted fixture and the producer's own key/bond/operator before any service or DB opens.
+pub fn create_private_integration_core_with_native_custody_v3(
+    runtime: &Runtime,
+    args: &Args,
+    fd_total_budget: i32,
+    config: Config,
+    native: PrivateNativeCustodySpecV3,
+) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
+    if !config.params.palw_claim_challenge_v2.is_some_and(|f| f.activation.is_active(0))
+        || config.params.palw_monetary_material_v1.is_none()
+    {
+        return Err("the private PAV3 native custody wiring belongs to the paid-v3 profile only".into());
+    }
+    native.check_fixture(&config, args)?;
+    prepare_private_integration_probe(args, &config)?;
+    kaspa_core::warn!(
+        "RFC12 PRIVATE INTEGRATION PROBE: injected test policy and a PAV3 loopback native custody exchange; release/soundness \
+         evidence remains unapproved"
+    );
+    Ok(create_core_with_runtime_inner(runtime, args, fd_total_budget, Some(config), Some(native.into_hook())))
+}
+
+/// Validate and pin ownership before Runtime opens a log or any node service.
+/// Repeated calls accept only the same exact salted private policy.
+pub fn prepare_private_integration_probe(args: &Args, config: &Config) -> Result<(), String> {
+    validate_private_probe(args, config)?;
+    pin_owned_probe_directory(args, config)
 }
 
 #[cfg(test)]
@@ -301,12 +400,29 @@ mod tests {
         assert_eq!(params.genesis.bits, baseline.genesis.bits);
         assert!(!params.skip_proof_of_work);
         assert_eq!(params.palw_canonical_work_daa(), Some(0));
+        assert!(params.palw_fork_choice_rule_e_active_at(1));
+        assert_eq!(params.palw_fork_choice_commitment_v1, Some(kaspa_consensus_core::config::params::ForkActivation::new(1)));
+        params.validate_palw_fork_choice_rule_e_order_v1().unwrap();
         assert!(params.validate_palw_v2().is_err(), "ordinary startup keeps its release refusal");
         let opv = params.palw_panel_free_v1.as_ref().unwrap();
         assert!(!opv.sampled_conformance_gates_reward);
         assert_eq!(opv.min_effective_bits, 128);
         opv.validate_value().unwrap();
         validate_private_complete_relations(&params).unwrap();
+        for field in 0..5 {
+            let mut changed = params.clone();
+            match field {
+                0 => changed.palw_fork_choice_rule_e_v1 = None,
+                1 => changed.palw_fork_choice_commitment_v1 = None,
+                2 => changed.palw_dns_retirement.as_mut().unwrap().settlement.unique_mature_work = 0,
+                3 => changed.dns_params.as_mut().unwrap().full_reward_split_daa_score = 2,
+                _ => changed.blockrate.target_time_per_block += 1,
+            }
+            assert!(
+                validate_private_complete_relations(&changed).is_err(),
+                "private release exception cannot hide invalid dependency/value {field}"
+            );
+        }
         let mut config = Config::new(params);
         config.palw_drill_genesis_salt = Some(salt);
         let args = Args {
@@ -368,6 +484,46 @@ mod tests {
         let mut public = config.clone();
         public.palw_drill_genesis_salt = None;
         assert!(validate_private_probe(&args, &public).unwrap_err().contains("salted"));
+    }
+
+    #[test]
+    fn private_prepare_pins_empty_ownership_before_runtime_can_open_logs() {
+        let root = tempfile::tempdir().unwrap();
+        let owned = root.path().join("owned");
+        let salt = PalwDrillSaltV1::from_bytes([0x16; 32]).unwrap();
+        let mut config = Config::new(palw_chain_params_v1(palw_drill_network_v1(), Some(&salt)).unwrap());
+        config.palw_drill_genesis_salt = Some(salt);
+        let args = Args {
+            testnet: true,
+            testnet_suffix: 12,
+            disable_dns_seeding: true,
+            outbound_target: 0,
+            disable_upnp: true,
+            listen: Some("127.0.0.1:53001".parse().unwrap()),
+            rpclisten: Some("127.0.0.1:53002".parse().unwrap()),
+            appdir: Some(owned.display().to_string()),
+            ..Args::default()
+        };
+        prepare_private_integration_probe(&args, &config).unwrap();
+        let marker = owned.join(PRIVATE_PROBE_MARKER_V1);
+        let before = std::fs::read(&marker).unwrap();
+        assert_eq!(std::fs::read_dir(&owned).unwrap().count(), 1, "no logger/database path may precede the ownership pin");
+        prepare_private_integration_probe(&args, &config).unwrap();
+        assert_eq!(std::fs::read(&marker).unwrap(), before);
+        let mut another = config.clone();
+        another.params = private_native_settlement_params_v1(another.params).unwrap();
+        assert!(
+            prepare_private_integration_probe(&args, &another).is_err(),
+            "a valid different private policy cannot reuse the owned DB"
+        );
+        assert_eq!(std::fs::read(&marker).unwrap(), before);
+        let unrelated = root.path().join("unrelated");
+        std::fs::create_dir(&unrelated).unwrap();
+        std::fs::write(unrelated.join("existing"), b"another task").unwrap();
+        let unrelated_args = Args { appdir: Some(unrelated.display().to_string()), ..args };
+        assert!(prepare_private_integration_probe(&unrelated_args, &config).is_err());
+        assert_eq!(std::fs::read_dir(&unrelated).unwrap().count(), 1);
+        assert_eq!(std::fs::read(unrelated.join("existing")).unwrap(), b"another task");
     }
 
     #[test]

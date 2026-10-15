@@ -1,0 +1,53 @@
+
+running 23 tests
+test stores::epoch_accumulator::tests::block_quality_pool_insert_get_delete ... ok
+test stores::epoch_accumulator::tests::block_quality_pool_pending_batch_and_same_hash_restore ... ok
+test stores::epoch_accumulator::tests::epoch_accumulator_set_get_overwrite ... ok
+test stores::epoch_accumulator::tests::quality_tracked_reverse_commit_releases_only_its_ticket ... ok
+test stores::epoch_accumulator::tests::reserve_balance_insert_get_delete ... ok
+test stores::overlay_absent_cache::tests::abandoned_failed_and_unwound_tickets_cannot_release_pending_absence ... 
+thread 'stores::overlay_absent_cache::tests::abandoned_failed_and_unwound_tickets_cannot_release_pending_absence' (17075368) panicked at /Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/src/model/stores/overlay_absent_cache.rs:343:13:
+abandon staged batch
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ok
+test stores::overlay_absent_cache::tests::acknowledged_batches_retire_pending_without_flushing_other_misses ... ok
+test stores::overlay_absent_cache::tests::bounded_disabled_and_failed_mutation_invalidation ... ok
+test stores::overlay_absent_cache::tests::fresh_and_disabled_sibling_writes_invalidate_old_absence ... ok
+test stores::overlay_absent_cache::tests::late_miss_cannot_hide_concurrent_insert_or_restore ... ok
+test stores::overlay_absent_cache::tests::pending_saturation_disables_without_an_unbounded_dirty_list ... ok
+test stores::overlay_absent_cache::tests::queued_batch_misses_are_never_published_in_new_sibling_cache ... ok
+test stores::overlay_absent_cache::tests::repeated_absence_avoids_reads_but_errors_are_retried ... ok
+test stores::overlay_absent_cache::tests::same_key_abandoned_ticket_bound_disables_safely ... ok
+test stores::overlay_absent_cache::tests::same_key_reverse_commit_keeps_pending_until_every_ticket_acknowledged ... ok
+test stores::pruning_overlay_snapshot::tests::singleton_absence_queued_commit_clone_and_reopen ... ok
+test stores::pruning_overlay_snapshot::tests::singleton_direct_write_invalidates_independently_cached_absence ... ok
+test stores::pruning_overlay_snapshot::tests::singleton_tracked_commit_abandon_and_reverse_overwrite_db_values ... ok
+test stores::rewarded_epochs::tests::absence_batch_commit_clone_restore_and_reopen ... ok
+test stores::rewarded_epochs::tests::insert_get_delete_under_count_policy ... ok
+test stores::rewarded_epochs::tests::tracked_batch_reverse_commit_and_abandon_use_real_db ... ok
+test stores::rewarded_epochs::tests::value_has_no_byte_estimation - should panic ... 
+thread 'stores::rewarded_epochs::tests::value_has_no_byte_estimation' (17075518) panicked at /Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/utils/src/mem_size.rs:40:9:
+not implemented
+ok
+test stores::rewarded_epochs::tests::value_is_unit_estimable ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+        0.94 real         0.09 user         0.05 sys
+            21643264  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                1974  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                  68  voluntary context switches
+                 478  involuntary context switches
+          1008603621  instructions retired
+           445969688  cycles elapsed
+             6734304  peak memory footprint

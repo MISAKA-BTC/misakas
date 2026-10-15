@@ -486,6 +486,78 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// Coherent signed service terms, recovery state and native payment/tail
+    /// authority. An unavailable view cannot discharge a provider obligation.
+    fn palw_native_material_provider_authority_v3(
+        &self,
+        _checkpoint: BlockHash,
+        _header: &Header,
+        _ready: &crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3,
+    ) -> Result<crate::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3, String> {
+        Err("native material provider authority unavailable".into())
+    }
+    fn palw_monetary_material_covenants_v1(&self) -> Result<Vec<crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
+        Err("monetary material covenant reads are unavailable".into())
+    }
+
+    /// RFC-0008 PAV3 producer read: the canonical prior native session for `attempt` at `daa`
+    /// (`palw_attempt_material_v3::select_native_session_v3`, the one rule `verify_prior` re-runs) over the coherent tip
+    /// state, with each uncharged roster provider's registered operator, and the selected-parent point it was read at.
+    /// `Ok((point, None))`: no eligible session there. An unavailable or moving view is an error, never an empty roster.
+    #[allow(clippy::type_complexity)]
+    fn palw_native_session_v3(
+        &self,
+        _attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
+        _daa: u64,
+    ) -> Result<
+        (
+            BlockHash,
+            Option<(
+                crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
+                Vec<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>,
+            )>,
+        ),
+        String,
+    > {
+        Err("native session reads are unavailable".into())
+    }
+
+    /// Physical GC authority requires the accepted release itself (as well as
+    /// its payment tail) to survive every admitted selected-chain reorg.
+    fn palw_monetary_material_release_finalized_v1(
+        &self,
+        _root: Hash64,
+        _consent: Hash64,
+        _tail: Hash64,
+        _release_block: BlockHash,
+    ) -> Result<bool, String> {
+        Err("monetary material finality witnesses are unavailable".into())
+    }
+
+    fn palw_monetary_material_unused_offer_finalized_v1(&self, _root: Hash64, _enrollment_until: u64) -> Result<bool, String> {
+        Err("monetary material unused-offer witnesses are unavailable".into())
+    }
+
+    fn palw_monetary_aux_page_v1(
+        &self,
+        _block: BlockHash,
+        _row: u64,
+        _offset: u64,
+        _limit: usize,
+    ) -> Result<crate::palw_monetary_material_rpc_v1::PalwMonetaryAuxPageV1, String> {
+        Err("authenticated monetary pages are unavailable".into())
+    }
+
+    /// Op 243: one bounded page of the canonical carriage of the PALW state `block`'s header commits.
+    fn palw_state_carriage_page_v1(
+        &self,
+        _block: BlockHash,
+        _offset: u64,
+        _limit: usize,
+    ) -> Result<crate::palw_state_carriage_rpc_v1::PalwStateCarriagePageV1, String> {
+        Err("PALW state carriage pages are unavailable".into())
+    }
+
     /// **ADR-0080 design A: one side's declared court close, mid-assembly.**
     ///
     /// The row `(session_id, side)` holds — count, `present` bitmap, deadlines, digest, deposit —
@@ -863,6 +935,18 @@ pub trait ConsensusApi: Send + Sync {
         &self,
         session: PruningImportSessionV1,
         carriage: crate::palw_state_v2::PalwStateCarriageV2,
+    ) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    /// Atomically install a root-verified PALW snapshot and its validated
+    /// execution declarations under the current durable import authority.
+    fn import_pruning_point_palw_snapshot_for_session(
+        &self,
+        session: PruningImportSessionV1,
+        carriage: crate::palw_state_v2::PalwStateCarriageV2,
+        declarations: Vec<(kaspa_hashes::Hash64, Vec<u8>)>,
+        complete: bool,
     ) -> PruningImportResult<()> {
         unimplemented!()
     }
@@ -1634,6 +1718,70 @@ pub trait ConsensusApi: Send + Sync {
     /// ADR-0067 Decision 6: the class declarations this node can serve a pruned-syncing peer.
     fn palw_class_carriages_for_sync_v1(&self) -> Vec<(kaspa_hashes::Hash64, Vec<u8>)> {
         Vec::new()
+    }
+
+    /// Acquire the global local-capacity ticket only when the operator selected
+    /// a native admission capability. Disabled mode performs no inventory I/O.
+    fn palw_reserve_native_snapshot_v1(
+        &self,
+        point: crate::BlockHash,
+    ) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
+        use crate::palw_native_resource_v1::*;
+        if !native_resource_admission_enabled_v1() && !native_logical_admission_enabled_v1() {
+            return Ok(None);
+        }
+        reserve_native_snapshot_v1(point, self.palw_native_snapshot_inventory_v1(point))
+    }
+
+    /// Public accepted-point typed allocation/allocator/DB coverage diagnostics.
+    /// A cold or unsupported point returns a concrete reason without decoding a
+    /// large native carriage or accepting a peer's resource advertisement.
+    fn palw_native_snapshot_inventory_v1(
+        &self,
+        _point: crate::BlockHash,
+    ) -> Result<crate::palw_native_resource_v1::NativeSnapshotInventoryV1, crate::palw_native_resource_v1::NativeCoverageV1> {
+        Err(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+            "accepted-point inventory",
+            "this consensus has no persisted trusted typed native snapshot inventory",
+        ))
+    }
+
+    /// A trusted implementation may supply a whole native restore/DB bound.
+    /// Unknown remains unknown; encoded byte caps and measured fixtures do not
+    /// qualify a bound. The explicit local capability refuses `None`.
+    fn palw_native_snapshot_resource_bound_v1(
+        &self,
+        _point: crate::BlockHash,
+    ) -> Option<crate::palw_native_resource_v1::NativeSnapshotResourceBoundV1> {
+        None
+    }
+
+    /// Shared immutable captured snapshot: serving peers do not each clone a
+    /// native 100k carriage. The legacy owned getter remains available.
+    fn pruning_point_palw_state_shared_v1(
+        &self,
+        point: crate::BlockHash,
+    ) -> Option<std::sync::Arc<crate::palw_state_v2::PalwStateCarriageV2>> {
+        self.pruning_point_palw_state(point).map(std::sync::Arc::new)
+    }
+
+    /// Snapshot-bound material, with explicit negotiated complete coverage.
+    fn palw_class_carriages_for_snapshot_v1(
+        &self,
+        _snapshot: &crate::palw_state_v2::PalwStateCarriageV2,
+        _complete: bool,
+    ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
+        Err("this consensus does not index snapshot declarations".into())
+    }
+
+    /// Read-only validation, performed before pruning-state installation.
+    fn palw_validate_snapshot_declarations_v1(
+        &self,
+        _snapshot: &crate::palw_state_v2::PalwStateCarriageV2,
+        _declarations: &[(kaspa_hashes::Hash64, Vec<u8>)],
+        _complete: bool,
+    ) -> Result<(), String> {
+        Err("this consensus cannot validate snapshot declarations".into())
     }
 
     /// **RFC-0007: the vertex tables at the tip** — the counts, and `seat`'s own `(round, leaves_root, convicted)` rows from

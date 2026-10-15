@@ -173,6 +173,8 @@ mod palw_native_initial_fold_v31;
 #[path = "palw_model_refutation_seal_fold_v4.rs"]
 mod palw_model_refutation_seal_fold_v4;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
+#[path = "palw_monetary_material_fold_v1.rs"]
+mod palw_monetary_material_fold_v1;
 #[path = "palw_provider_court_fold_v1.rs"]
 mod palw_provider_court_fold_v1;
 // Lane LG14-A: the legacy route's dispute reservations (tags 154–155), their lapse, release and burn, and the reserved DA budget.
@@ -197,6 +199,16 @@ mod palw_bond_budget_fold_v1;
 mod palw_adapter_class_fold_v1;
 // RFC-0010: the permissionless Panel's (V3) production fold — a child module, so it reads the builder and writes the tables only
 // through their one writers.
+#[path = "palw_panel_lifetime_fold_v2.rs"]
+mod palw_panel_lifetime_fold_v2;
+// RFC07/RFC08 signed economic contracts (inner 67–69, aux 125–127), each past its own dormant fence.
+#[path = "palw_econ_contracts_fold_v1.rs"]
+mod palw_econ_contracts_fold_v1;
+// N3 (round 3): BootstrapExact source rounds (inner 73, aux 130), past `palw_beacon_bootstrap_v1`.
+#[path = "palw_beacon_bootstrap_fold_v1.rs"]
+mod palw_beacon_bootstrap_fold_v1;
+#[path = "palw_panel_source_fee_fold_v2.rs"]
+mod palw_panel_source_fee_fold_v2;
 #[path = "palw_panel_v3_fold_v1.rs"]
 mod palw_panel_v3_fold_v1;
 pub use palw_panel_v3_fold_v1::{
@@ -1831,6 +1843,10 @@ pub struct PalwStateParamsV2 {
     /// reads it). `None` on every shipped preset, and `validate_palw_permissionless_panel_v1` refuses every armed one.
     #[borsh(skip)]
     panel_v3: Option<crate::palw_permissionless_panel_v1::PalwPanelV3ParamsV1>,
+    #[borsh(skip)]
+    panel_lifetime_v2: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeMirrorV2>,
+    #[borsh(skip)]
+    pub(crate) palw_claim_challenge_v2: Option<crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2>,
     /// **Lane BUDGET (ADR-0176 / ADR-0177): `Params::palw_bond_budget_v1` and `palw_model_bond_allocation_v1`, mirrored by
     /// `Params::sync_palw_bond_budget_v1`** — the fences' heights and policies (the fold's budget hooks read it). `None` on every shipped
     /// preset, and validation refuses both armed.
@@ -1841,6 +1857,11 @@ pub struct PalwStateParamsV2 {
     reporter_income_from_daa: Option<u64>,
     #[borsh(skip)]
     material_income_from_daa: Option<u64>,
+    #[borsh(skip)]
+    monetary_material: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1>,
+    /// RFC07/RFC08 economic contracts (`crate::palw_econ_contracts_v1`): the three dormant fences' mirror, synchronized with Params.
+    #[borsh(skip)]
+    pub(crate) econ_contracts_v1: crate::palw_econ_contracts_v1::PalwEconContractsMirrorV1,
     #[borsh(skip)]
     paid_consumer_lifecycle: Option<crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleMirrorV1>,
     /// **Lane PA: `Params::palw_audit_1004_v1`'s height**, mirrored by `Params::sync_palw_audit_1004_v1` (the folds that carry the
@@ -1859,6 +1880,21 @@ pub struct PalwStateParamsV2 {
     /// names its height.
     #[borsh(skip)]
     legacy_public_filer_from_daa: Option<u64>,
+    /// **The 2026-10-12 rulings' fences** (`crate::palw_ruling_fences_v1`), mirrored by
+    /// `Params::sync_palw_2026_10_12_ruling_fences_v1`: D2's `palw_court_model_scope_v1` height, N4's
+    /// `palw_public_evidence_reward_v1` height and X3's `palw_claim_hard_deadline_v1` height with its policy. `None` on every
+    /// shipped preset, and validation refuses every armed one.
+    #[borsh(skip)]
+    court_model_scope_from_daa: Option<u64>,
+    #[borsh(skip)]
+    public_evidence_reward_from_daa: Option<u64>,
+    #[borsh(skip)]
+    claim_hard_deadline_v1: Option<crate::palw_ruling_fences_v1::PalwClaimHardDeadlineMirrorV1>,
+    /// **RFC-0006 R6-CELL round 4: `Params::palw_cell_coverage_closure_v1`'s height**, mirrored by
+    /// `Params::sync_palw_cell_coverage_closure_v1` (`crate::palw_cell_coverage_closure_v1`: the registration refusal, the claim gate
+    /// and the court close read it). `None` on every shipped preset, and validation refuses every armed one.
+    #[borsh(skip)]
+    cell_coverage_closure_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -3738,7 +3774,7 @@ pub fn palw_claim_receipt_deadline_v1(
     claim: &PalwClaimStateV2,
 ) -> Result<Option<u64>, PalwStateV2Error> {
     let Some(panel) = state.panels.get(claim_id) else { return Ok(None) };
-    panel
+    let deadline = panel
         .bound_daa
         .checked_add(params.receipt_window_for_claim_v1(
             state,
@@ -3746,8 +3782,10 @@ pub fn palw_claim_receipt_deadline_v1(
             crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim),
             panel.bound_daa,
         ))
-        .map(Some)
-        .ok_or(PalwStateV2Error::Overflow("receipt deadline"))
+        .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
+    let consent = crate::palw_panel_lifetime_v2::panel_lifetime_claim_v2(state, params, claim_id, claim)
+        .map_err(PalwStateV2Error::KernelRouteRefused)?;
+    Ok(Some(consent.map_or(deadline, |row| deadline.min(row.terms.service_until_daa))))
 }
 
 /// **DL-1 (S's rows): a claim's one deadline**, a pure function of rooted data and the last point's
@@ -3828,9 +3866,24 @@ pub fn palw_rcore_deadline_v1(
         // **RFC-0010 × G14 (SHARD): a V3 S2 licence owes no deadline while an accusation is pending** — its gate is an uncharged
         // expiry that would close the accusation neutrally. Dormant: no engine exists on any shipped chain.
         PalwClaimPhaseV2::ReceiptLicensed { .. } if state.palw_v3_s2_licence_held_v1(claim_id, claim) => None,
+        // **X3 (REQ-X3-5, `palw_claim_hard_deadline_v1`): reaching the deadline alone never Finals a claim an eligible pursuit still
+        // holds** — for a claim accepted past the fence, ANY open DA session (a non-seat's too) holds its Final until that session
+        // resolves on its own deadline; the session's close re-derives this row. `false` for every claim below the fence.
+        PalwClaimPhaseV2::ReceiptLicensed { .. }
+            if crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(params, claim)
+                && da.is_some_and(|record| record.open_sessions() > 0) =>
+        {
+            None
+        }
         PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => {
             // §4-quater V4: the one licensed Final floor, `max(L + wc, H)` past the fence.
             let mut floor = palw_claim_final_floor_v1(state, params, claim_id, claim, licensed_daa)?;
+            // **X3 (REQ-X3-2): `effective = min(proposed, hard)`** — the claim's hard deadline, fixed at acceptance, caps the proposed
+            // challenge deadline. `None` (unchanged) for a claim accepted below the fence.
+            floor = crate::palw_ruling_fences_v1::palw_claim_effective_deadline_v1(
+                floor,
+                crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(params, claim),
+            );
             // M4, Q-5's gate: an S2 licence not yet raised to 2 waits out both supplementary doors
             // (`max(L + wc, B* + W_r(c) + 1, H, last)` — the receipt deadline reads the claim's `W_r(c)`).
             if palw_rcore_licence_awaits_replay_v1(claim)
@@ -7219,6 +7272,20 @@ pub enum PalwConsensusObjectV2 {
         sequence: u64,
         signature: Vec<u8>,
     } = 140,
+    /// New signed payment-relative monetary material consent. No old lease is extended.
+    MonetaryMaterialEnrolledV1 {
+        enrollment: Box<crate::palw_monetary_material_v1::PalwMonetaryMaterialEnrollmentV1>,
+        signature: Vec<u8>,
+    } = 240,
+    MonetaryMaterialReplacedV1 {
+        replacement: Box<crate::palw_monetary_material_v1::PalwMonetaryMaterialReplacementV1>,
+        signature: Vec<u8>,
+    } = 241,
+    MonetaryMaterialActionV1 {
+        action: Box<crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1>,
+        signer: PalwBondKeyV2,
+        signature: Vec<u8>,
+    } = 242,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -9834,6 +9901,10 @@ pub enum PalwStateV2Error {
     /// onboarding/G14 path, so it earns no reward and no consensus work weight — no claim of it is admitted on any lane.
     #[error("class {class} earns no reward or consensus work weight: {code} ({why})")]
     ClassNotRewardable { class: Hash64, code: &'static str, why: String },
+    /// **R6-CELL round 4** (`palw_cell_coverage_closure_v1`, REQ-CELL-1): past the fence a class whose legacy cell coverage has a
+    /// gap (an unknown state chunk map, or an uncovered kind) is refused at registration — explicitly uncovered and unrewarded.
+    #[error("class {class} is refused at registration: {code} ({why})")]
+    CellCoverageRefused { class: Hash64, code: &'static str, why: &'static str },
     /// **A second IR class registration in one block** ([`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]).
     /// The acceptance walk drops it by name with the block standing; this is the fold's second lock.
     #[error("IR class {class} is one IR class registration more than a block may carry ({max})")]
@@ -12512,6 +12583,7 @@ impl PalwBondRegistrationIndexV1 {
 }
 
 struct TransitionBuilder<'a> {
+    monetary_native_ready: BTreeMap<Hash64, (Hash64, crate::palw_attempt_material_v3::PalwNativeMaterialBindingV3)>,
     params: &'a PalwStateParamsV2,
     state: PalwChainStateV2,
     entries: Vec<PalwDeltaEntryV2>,
@@ -13494,6 +13566,7 @@ pub fn palw_v2_pre_object_base_v1(
     palw_improve_material_fold_v1::settle_improvement_material_v1(&mut builder, ctx)?;
     // RFC-0010: the permissionless Panel's engine against the pre-object base, as the fold's step 2f does.
     palw_panel_v3_fold_v1::advance_v1(&mut builder, parent, ctx)?;
+    palw_monetary_material_fold_v1::tick(&mut builder, ctx)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
     Ok(builder.checkpoint().0)
 }
@@ -13839,6 +13912,36 @@ fn apply_palw_transition_v7_inner(
     let mut builder =
         TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
 
+    // Prospective custody is authenticated against the pre-object parent. A same-block
+    // enrollment/replacement never authorizes this block's capture. A carriage that does not
+    // authenticate under THIS parent (a merged blue captured against its own, different prior
+    // view; a consumed or replaced session) records nothing: its attempt then meets
+    // `plan_native_ready`'s refusal and is skipped like any refused own/merged attempt. It never
+    // fails the merging block's whole transition, which a third party's blue could otherwise force.
+    if params.monetary_material_at_v1(ctx.daa_score).is_some() {
+        for bytes in extras.exec_v2_origin_headers.values() {
+            let Ok(header) = borsh::from_slice::<crate::header::Header>(bytes) else { continue };
+            if !crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(&header.palw_commitment) {
+                continue;
+            }
+            let Ok(ready) = crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(&header.palw_commitment)
+            else {
+                continue;
+            };
+            let a = &ready.base.attempt;
+            let anchor = crate::palw_attempt_v2::execution_anchor_v3(
+                a.network_domain,
+                crate::hashing::header::pre_pow_hash_64(&header),
+                a.class_id,
+                &a.executor_bond,
+                header.nonce,
+            );
+            if ready.verify_prior(parent, anchor, header.daa_score, crate::palw_attempt_material_v3::verify_ready_signature_v3).is_ok()
+            {
+                builder.monetary_native_ready.insert(ready.ready.binding.claim, (ready.ready.session, ready.ready.binding));
+            }
+        }
+    }
     // 1b. Drain the payout queue THIS block's coinbase paid. It must happen before the sweeps,
     //     because the sweeps are what refill it: a claim finalized by this block is paid by the
     //     NEXT one, and clearing after would erase it. Every node applying this block clears the
@@ -13979,6 +14082,7 @@ fn apply_palw_transition_v7_inner(
     //     one-ledger headroom as it stands before anything this block carries. Mirrored in `palw_v2_pre_object_base_v1`. A no-op
     //     below `palw_permissionless_panel_v1`.
     palw_panel_v3_fold_v1::advance_v1(&mut builder, parent, ctx)?;
+    palw_monetary_material_fold_v1::tick(&mut builder, ctx)?;
 
     // 3. The block's accepted objects, in consensus acceptance order.
     //
@@ -14453,6 +14557,7 @@ fn apply_palw_transition_v7_inner(
     palw_terminal_carriage_fold_v1::sweep(&mut builder, ctx);
     palw_staged_court_fold_v1::sweep(&mut builder, ctx);
 
+    palw_monetary_material_fold_v1::refresh(&mut builder, ctx)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
     // Weight / frontier / position entries, exactly once, at the end.
     if (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature) {
@@ -14582,7 +14687,10 @@ fn rearm_after_challenger_side_close(
             if builder.extras.offence_attribution_active
                 && builder.extras.held_context_ladder.is_some()
                 && builder.state.class_is_held_v1(&claim.class_id)
-                && licensed_daa < ctx.daa_score =>
+                && licensed_daa < ctx.daa_score
+                // X3 (REQ-X3-3): no window re-grant for a claim accepted past `palw_claim_hard_deadline_v1` — this re-arm stays
+                // the OLD rule for the claims below it.
+                && !crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(builder.params, claim) =>
         {
             let mut moved = claim.clone();
             moved.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: ctx.daa_score };
@@ -15180,6 +15288,7 @@ fn open_held_dissection_v1(
         }
         _ => builder.params.turn_deadline_daa(),
     };
+    // D2 (REQ-T6-4): the accusation's own rows are what it publishes for the root claim to relay (read only on a new claim).
     open_dissection_at_named_leaf_v1(
         builder,
         ctx,
@@ -15189,6 +15298,10 @@ fn open_held_dissection_v1(
         accusation.leaf_index,
         ladder,
         opening_turn,
+        crate::palw_court_model_scope_routes_v1::PalwD2OpeningOperandsV1::Attn {
+            binding: &accusation.refutation.binding,
+            openings: &accusation.artifact_openings,
+        },
     )
     .map(|_| ())
 }
@@ -17389,7 +17502,10 @@ fn apply_audit_receipt_batch_v1(
         return Err(PalwStateV2Error::AuditReceiptRefused { auditor: *auditor, why });
     }
     for entry in entries {
-        if !crate::palw_audit_door_v1::palw_audit_entry_kept_v1(&builder.state, builder.params, auditor, entry) {
+        if crate::palw_panel_lifetime_v2::require_panel_receipt_time_v2(&builder.state, builder.params, &entry.claim_id, ctx.daa_score)
+            .is_err()
+            || !crate::palw_audit_door_v1::palw_audit_entry_kept_v1(&builder.state, builder.params, auditor, entry)
+        {
             continue;
         }
         let claim = builder.state.claims.get(&entry.claim_id).cloned().ok_or(PalwStateV2Error::MissingClaim(entry.claim_id))?;
@@ -17833,9 +17949,11 @@ fn apply_class_registration_v1(
             u16::try_from(committed).expect("committed is bounded by 1000 above"),
         )?;
     }
-    // **G14-for-rewards**: past the OPV fence no class is written Active (and granted share) at its registration — it activates in
-    // `activate_due_classes`, through the reward gate (`palw_opv_bootstrap_v1::palw_reward_gate_v1`).
-    let reward_gated = builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()).is_some_and(|o| o.reward_gate.is_some());
+    // **G14-for-rewards**: useful-computation classes activate through the reward
+    // gate. Its BASE_FLOOR exemption also applies at registration: withholding
+    // the first floor's share leaves genesis unable to register its next class.
+    let reward_gated = *class_id != builder.params.base_class_id
+        && builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()).is_some_and(|o| o.reward_gate.is_some());
     let weightless = *activation_daa > ctx.daa_score || reward_gated;
     if !weightless {
         // ADR-0045 Decision 3: the share table mutates HERE and at the activation edge,
@@ -18080,6 +18198,21 @@ fn object_preconditions_v1(
         return Err(PalwStateV2Error::TirRegistrationRefused(
             "a legacy-family class registration past palw_tir_only_v1: a new class is an IR program or an IR pipeline (RFC-0002 Phase H)",
         ));
+    }
+    // **RFC-0006 R6-CELL round 4 (`palw_cell_coverage_closure_v1`, REQ-CELL-1)**: past the fence a legacy registration whose carried
+    // profile the cell coverage checker does not cover end to end — an unknown state chunk map id (the step court's fail-open), the
+    // hybrid v1/v2 recurrence half, a solo recurrence map, a multi-router table, a Kimi router — is refused, keyed on the block's
+    // DAA (the class's registration DAA). A carriage-less registration is the card's own (genesis); the court answers for it.
+    // Below the fence `None`, and nothing here runs.
+    if let PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(carriage), .. } = object
+        && let Some(refusal) =
+            crate::palw_cell_coverage_closure_v1::palw_cell_closure_registration_refusal_v1(params, ctx.daa_score, &carriage.profile)
+    {
+        return Err(PalwStateV2Error::CellCoverageRefused {
+            class: *class_id,
+            code: crate::palw_cell_coverage_closure_v1::PALW_CELL_UNCOVERABLE_CODE_V1,
+            why: refusal.why(),
+        });
     }
     // **RFC-0004 A6: below `palw_improvement_v1` an evaluation court move is refused by name** — the acceptance walk
     // drops it first (an older build cannot decode it and skips it); this is the second lock.
@@ -20738,6 +20871,15 @@ fn apply_attempt(
     // escrow, F its Final contribution) against the bond's window: the LAST check before any write, so step 4 skips a refused own attempt
     // (its carve withheld as a skipped attempt's, never minted) and 4b a merged one; the claim's immature weight is held within the F it
     // reserves. `None` below `palw_bond_budget_v1`: nothing read, nothing written.
+    // Lead default 2026-10-15 (pending user review): the BASE floor class is exempt from native custody (no paid material; provider
+    // absence must not halt floor liveness). Below the monetary fence both calls below are no-ops for every class, so skipping
+    // them for the floor is byte-identical there.
+    let floor_exempt = claim.class_id == builder.params.base_class_id();
+    let monetary_ready =
+        if floor_exempt { None } else { palw_monetary_material_fold_v1::plan_native_ready(builder, ctx, claim_id)? };
+    if monetary_ready.is_none() && !floor_exempt {
+        builder.state.require_native_monetary_material_scope_v1(builder.params, claim_id, &claim)?;
+    }
     let consumer_plan = builder.plan_paid_consumer_v1(claim_id, &claim)?;
     let budget_plan = builder.plan_attempt_budget_v1(ctx, &claim, &attempt.artifact_root, origin.rider, origin.budget_block_units)?;
     let claim = match &budget_plan {
@@ -20746,6 +20888,10 @@ fn apply_attempt(
         }
         None => claim,
     };
+    let panel_authorization = palw_panel_lifetime_fold_v2::select_authorization(builder, &claim)?;
+    if let Some(row) = &monetary_ready {
+        palw_monetary_material_fold_v1::bind_native_ready(builder, row);
+    }
     builder.reserve_for_claim(&claim)?;
     if let Some(contract) = consumer_plan {
         builder.commit_paid_consumer_v1(claim_id, contract)?;
@@ -20824,6 +20970,10 @@ fn apply_attempt(
     // merged loop and must leave no mark, and only past the deep fence.
     if builder.extras.audit_2026_09_11_deep_active {
         builder.seen_exec.insert(origin.execution_key);
+    }
+    if let Some(authorization) = panel_authorization {
+        palw_panel_lifetime_fold_v2::capture(builder, claim_id, authorization)
+            .expect("a prevalidated native claim must have its immutable Panel consent fields");
     }
     Ok(())
 }
@@ -24725,3 +24875,14 @@ mod staged_court_state_tests_v1 {
         assert!(borsh::from_slice::<PalwStateCarriageV2>(&empty_tail).is_err());
     }
 }
+
+#[path = "palw_claim_challenge_fold_v2.rs"]
+mod palw_claim_challenge_fold_v2;
+
+// Read-only native allocation inventory; no state/root/codec field is added.
+#[path = "palw_native_resource_v1/private/palw_state_v2.rs"]
+mod native_resource_inventory_v1;
+
+#[path = "palw_native_resource_v1/private/wire_carriage.rs"]
+mod native_wire_carriage_v1;
+pub(crate) use native_wire_carriage_v1::{restore_index_native_shape_v1, scan_carriage_native_wire_v1};

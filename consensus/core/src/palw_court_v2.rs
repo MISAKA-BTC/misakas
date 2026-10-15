@@ -1326,7 +1326,41 @@ pub fn palw_decode_close_verdict_v1(
 /// is judged in (ADR-0119 Decision 4): under it a fused site's rows are opened at the claim's own
 /// ladder ([`palw_attn_opening_cap_v1`]) rather than the structural `2^22`. Decided by the caller at
 /// the BLOCK's DAA, as `step_ladder` is.
+///
+/// [`adjudicate_court_close_v4`] with no coverage closure (`palw_cell_coverage_closure_v1` unarmed): byte for byte the court it was.
+#[allow(clippy::too_many_arguments)]
 pub fn adjudicate_court_close_v3(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    proof: &PalwCourtVerdictProofV2,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    step_ladder: u64,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    held_regime: bool,
+    decode_close_convicts_only: bool,
+    fp_decode_rules_from_daa: Option<u64>,
+) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
+    adjudicate_court_close_v4(
+        state,
+        session_id,
+        proof,
+        court,
+        step_ladder,
+        prompt_ids_form,
+        held_regime,
+        decode_close_convicts_only,
+        fp_decode_rules_from_daa,
+        None,
+    )
+}
+
+/// [`adjudicate_court_close_v3`] under RFC-0006 R6-CELL round 4's coverage closure (`crate::palw_cell_coverage_closure_v1`,
+/// REQ-CELL-2): `cell_closure_from_daa` is the closure's mirror (`PalwStateParamsV2::cell_coverage_closure_from_daa`), `None` on
+/// every shipped network. For a claim accepted at or past it, a legacy close whose binding — pinned to the registered class and to
+/// the claim's committed execution root — is a profile the cell coverage checker does not cover adjudicates `ExecutorGuilty`,
+/// objectively, from the binding alone: the court never reads an unenumerable map as no fault for a new claim.
+#[allow(clippy::too_many_arguments)]
+pub fn adjudicate_court_close_v4(
     state: &PalwChainStateV2,
     session_id: &Hash64,
     proof: &PalwCourtVerdictProofV2,
@@ -1359,6 +1393,8 @@ pub fn adjudicate_court_close_v3(
     // RFC-0001 §A: `Params::palw_fp_decode_rules`'s height — a decode-token close does not try a
     // free-prompt claim accepted at or past it ([`palw_decode_close_admits_claim_v1`]).
     fp_decode_rules_from_daa: Option<u64>,
+    // RFC-0006 R6-CELL round 4: `palw_cell_coverage_closure_v1`'s mirror — see this function's docs.
+    cell_closure_from_daa: Option<u64>,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     // The cost gate runs before ANY state is read, which is the cheapest-first ordering a cost
     // bound has to have: an oversized object must be refusable without a lookup, a decode or a
@@ -1388,6 +1424,22 @@ pub fn adjudicate_court_close_v3(
     // ladder is `Terminal` and only an arithmetic close can finish the job" — so this makes the
     // code agree with the sentence the ladder was built for.
     let narrowed = session.ladder.terminal_index().ok_or(PalwCourtV2Error::LadderNotTerminal)?;
+    // **R6-CELL round 4 (REQ-CELL-2)**: a move in this session (the ladder is terminal), on a claim accepted past the closure, whose
+    // binding is the claim's own execution of its registered class, convicts when that class is uncoverable — whatever leaf it opens,
+    // because the fault is the class's shape, not a step's value. Below the fence (`None`) nothing here runs.
+    // A covered class (or a claim accepted before the fence) goes on below exactly as before; the pins run only before a conviction.
+    if let Some(binding) = binding_of(proof)
+        && crate::palw_cell_coverage_closure_v1::palw_cell_closure_court_convicts_v1(
+            cell_closure_from_daa,
+            claim.accepted_daa,
+            &binding.shape_profile,
+        )
+    {
+        check_close_profile_is_the_registered_class(claim.class_id, binding)?;
+        check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
+        crate::palw_step_leg::verify_binding_v1(binding).map_err(|e| PalwCourtV2Error::DoesNotAdjudicate(e.to_string()))?;
+        return Ok(PalwCourtVerdictV2::ExecutorGuilty);
+    }
     match proof {
         PalwCourtVerdictProofV2::Arithmetic { refutation, .. } | PalwCourtVerdictProofV2::ArithmeticOpened { refutation, .. } => {
             let opened = refutation.output_opening.leaf_index;
@@ -4335,6 +4387,94 @@ mod tests {
             Err(PalwCourtV2Error::CloseTooLarge { got: bytes, ceiling: bytes - 1 }),
             "one byte over does not"
         );
+    }
+
+    /// **R6-CELL round 4 (REQ-CELL-2) through a real court session**: a licensed claim of an uncoverable class (the step-leg
+    /// fixture's unknown state map), a `CourtOpened` session walked to its `Terminal` rung, and a close carrying that claim's own
+    /// binding. Past the closure (`Some(0)`) `adjudicate_court_close_v4` convicts on the class's shape, whatever leaf the close
+    /// opens; below it (`None`) and for a claim accepted before the closure (`Some(u64::MAX)`) v4 is v3's answer exactly, which
+    /// is never that conviction. Not executed in the implementation-first phase.
+    #[test]
+    fn req_cell_2_court_v4_convicts_an_uncoverable_class_at_a_terminal_session() {
+        fn zeroed<T: borsh::BorshDeserialize>() -> T {
+            let zeros = vec![0u8; 1 << 16];
+            T::deserialize(&mut zeros.as_slice()).expect("an all-zero encoding decodes")
+        }
+        let (binding, _material, _hashes, _leaves) = crate::palw_step_leg::tests::honest();
+        assert!(
+            crate::palw_cell_coverage_closure_v1::palw_cell_closure_legacy_refusal_v1(&binding.shape_profile).is_some(),
+            "the fixture's map is outside every known map"
+        );
+        let class_id = binding.shape_profile.shape_profile_id();
+        let trace_root = binding.full_logits_trace_root;
+        let (licensed, claim_id) = licensed_state_of(class_id, h64(0xA7), trace_root, binding.committed_execution_root);
+        let p = params_for(class_id);
+        let sid = court_session_id_v2(&claim_id, &trace_root, &bond_key(1), &bond_key(2), PalwBisectSpaceV1::StepLeaves, 64);
+        let (mut in_court, _) = apply_palw_transition_v2(
+            &licensed,
+            &p,
+            &ctx(5, 110, 5),
+            &[PalwConsensusObjectV2::CourtOpened {
+                session_id: sid,
+                claim: claim_id,
+                challenger_bond: bond_key(2),
+                space: PalwBisectSpaceV1::StepLeaves,
+                space_size: 64,
+                signature: Vec::new(),
+            }],
+            None,
+        )
+        .expect("the court opens on the licensed claim");
+        let mut session = in_court.court_session(&sid).expect("the session is open").clone();
+        let mut daa = 111;
+        while session.ladder.turn() != crate::palw_bisect::PalwBisectTurnV1::Terminal {
+            let round = session.ladder.round();
+            let midpoint = session.ladder.expected_midpoint().expect("a non-terminal ladder has a midpoint");
+            session
+                .ladder
+                .apply_disclosure(
+                    &crate::palw_bisect::PalwBisectDisclosureV1 {
+                        version: 1,
+                        session_id: session.ladder.session_id(),
+                        round,
+                        midpoint,
+                        mid_state: h64(0x40 + u64::from(round)),
+                    },
+                    daa,
+                    10,
+                )
+                .expect("the disclosure is the pinned midpoint");
+            daa += 1;
+            session
+                .ladder
+                .apply_verdict(
+                    &crate::palw_bisect::PalwBisectVerdictV1 {
+                        version: 1,
+                        session_id: session.ladder.session_id(),
+                        round,
+                        agree: false,
+                    },
+                    daa,
+                    10,
+                )
+                .expect("the verdict answers the round");
+            daa += 1;
+        }
+        in_court.test_replace_court_session_v2(sid, session);
+        let mut refutation: crate::palw_step_refute::PalwExecutionStepRefutationV1 = zeroed();
+        refutation.binding = binding;
+        let proof = PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings: Vec::new() };
+        let form = crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        let v4 = |closure: Option<u64>| {
+            adjudicate_court_close_v4(&in_court, &sid, &proof, &court(), LADDER, form, false, false, None, closure)
+        };
+        let live = adjudicate_court_close_v3(&in_court, &sid, &proof, &court(), LADDER, form, false, false, None);
+        // REQ-CELL-3: below the fence, and for a claim accepted before it, the live court's answer byte for byte.
+        assert_eq!(v4(None), live);
+        assert_eq!(v4(Some(u64::MAX)), live);
+        assert_ne!(live, Ok(PalwCourtVerdictV2::ExecutorGuilty), "the live court cannot convict on the class's shape");
+        // REQ-CELL-2: past it, a decisive conviction — never a producer win by default.
+        assert_eq!(v4(Some(0)), Ok(PalwCourtVerdictV2::ExecutorGuilty));
     }
 }
 

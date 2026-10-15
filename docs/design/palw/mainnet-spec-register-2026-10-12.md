@@ -81,7 +81,7 @@
 
 ## 3. 判断（ユーザー、2026-10-12 決定）
 
-決定内容は [レビュー整理](rfc-adr-review-resolution-2026-10-12.md) の「ユーザー判断 — 2026-10-12」に記録した。要約: X3 は新fenceのみで延長禁止（固定時点はd0）、N4 は新fence以後の非公開経路を新規報酬・weight対象外、D2 の4経路は休眠の制限fenceで閉じる、W1 は整数seed拒否のまま、N3 は成立まで新profile休眠。これにより REQ-X3-1〜5・REQ-N4-1 は「新fence側の要求」、REQ-T6-3 は「制限fence側の要求」、W1 は既存テスト `identity_valued_knobs_…` で充足、REQ-N3-3 は現状（全fence None・拒否）で充足となる。新fence（X3・N4・D2制限）の名前と実装は未着手。
+決定内容は [レビュー整理](rfc-adr-review-resolution-2026-10-12.md) の「ユーザー判断 — 2026-10-12」に記録した。要約: X3 は新fenceのみで延長禁止（固定時点はd0）、N4 は新fence以後の非公開経路を新規報酬・weight対象外、D2 の4経路は休眠の制限fenceで閉じる、W1 は整数seed拒否のまま、N3 は成立まで新profile休眠。これにより REQ-X3-1〜5・REQ-N4-1 は「新fence側の要求」、REQ-T6-3 は「制限fence側の要求」、W1 は既存テスト `identity_valued_knobs_…` で充足、REQ-N3-3 は現状（全fence None・拒否）で充足となる。新fence（X3・N4・D2制限）の名前と実装は未着手（2026-10-12時点。2026-10-15に休眠の未検証ソースを作成 — §3.1）。
 
 以下は判断前の論点（記録として残す）:
 
@@ -90,6 +90,37 @@
 3. **T6/ADR-0177 D2:** Lで有効なモデルbytes強制のcourt経路4本を、休眠の制限fenceで閉じるか（RFC-0014 §16.4の案）。
 4. **W1:** gatewayの整数seedを拒否のままにするか、`le64(n+1)` に写すか（どちらでもRFC-0003の :299 を直す）。
 5. **N3:** bootstrapをPanel=0（`OpvFinal`）に依らずに成立させる設計。成立までは新profileを休眠に置く（REQ-N3-3）。
+
+### 3.1 2026-10-15 — X3・N4・D2 制限の休眠fence（未検証のソース）
+
+§3の判断を受け、3つのfenceの規則を**休眠のソース**として作成した。**ビルド・テストは未実行**で、PASSを主張しない。3つともどのpresetでも `None`、有効化は `validate_palw_2026_10_12_ruling_fences_v1` が拒否する（2026-10-12の骨組みcommit `3b9ed5ede` の名前をそのまま使う）。fence未満では各hookが何もしない（claimの受理DAA、readinessはclassの登録DAAで判定）ので、Lの状態root・判定は変わらない設計である（A-2: `PALW_A2_KIND_FENCE_TABLE_V1` に3行、`t12_a2u_new_kinds_uniform.rs` のnode Cで遠い高さに武装）。
+
+| fence | 規則（中心: `consensus/core/src/palw_ruling_fences_v1.rs`） | fold側のhook | REQテスト（`palw_ruling_fences_v1/tests.rs`） |
+|---|---|---|---|
+| `palw_claim_hard_deadline_v1`（X3） | d0固定: `receipt = d0+T_prepare`、`open_cutoff = receipt+T_observe`、`hard = min(open_cutoff+T_resolve, trace_retention_daa)`。`effective = min(proposed, hard)`。`B_remaining = B_cold_fetch+B_check+B_localize+B_disclose+B_court+B_carrier+B_reorg_slack`（`B_disclose`=DA開示窓、`B_court`=`window_court`、他5項とT_*はfenceのpolicy項目で**本番値なし**、probe値のみ）。fenceの型は `Option<PalwClaimHardDeadlineFenceV1>` に変更し、policy idを両fingerprintにSome-onlyで入れた。他agent向けhelper: `palw_claim_hard_deadline_of_v1`・`palw_claim_effective_deadline_v1`・`palw_claim_pursuit_may_start_v1` | DL-1のlicensed行でmin、X3 claimは開いたDA session中はFinal期限なし（`palw_rcore_deadline_v1`、session開始でdisarm・最後のcloseで再導出）。延長禁止: held decoy再付与（`rearm_after_challenger_side_close`）、DA pause credit・V6 credit、staged courtの2つの延長、model court窓のretention延長。開始予算: reservation（tag 154）とnamed-leaf dissection。lapse sweepはDA sessionが開いた予約を残す | `req_x3_1_the_hard_deadline_is_fixed_at_acceptance`、`req_x3_2_the_effective_deadline_is_min_of_proposed_and_hard`、`req_x3_3_no_extension_or_regrant_for_a_new_claim_and_the_old_rules_stay_for_old_claims`、`req_x3_4_a_pursuit_starts_only_inside_its_budget`、`req_x3_5_reaching_the_deadline_alone_never_finals_an_unresolved_claim` |
+| `palw_public_evidence_reward_v1`（N4） | fence以後に受理するFP claimで、証拠を公開できない経路（`PanelDa`、FP Job V5の画像・source ID）は新規の報酬・Final weightを得ない — G14-for-rewardsと同じくclaim gateで受理しない（code `N4_NONPUBLIC_EVIDENCE`）。判定は受理時だけ | `palw_state_v2/objects.rs` の `FreePromptCommitted` 腕（評価claimの分岐の後） | `req_n4_1_a_nonpublic_evidence_route_earns_no_new_reward_or_weight`、`req_n4_2_claims_accepted_before_the_fence_keep_the_old_ruleset` |
+| `palw_court_model_scope_v1`（D2制限） | fence以後に受理したclaimでは、Lで有効な4経路（`HeldStepLeaf`・`AttnRootClaimOperands`・`TirGenRootClaimParams`・`SeatReadinessLeaves`）を認めない。旧claimは維持 | held `StepLeaf` DA要求を拒否（`open_da_session_rcore_mode_v1`）、named-leaf dissection（tag 38/62/88/90経由）を開かない、readiness証明（tag 47/50/93）はfence以後に登録したclassだけ拒否 | `req_t6_3_restricted_the_armed_model_byte_routes_close_for_new_claims_only` |
+
+未解決（有効化前に要判断・要実装）:
+
+- **X3のpolicy値**（T_prepare/T_observe/T_resolveと5つのB項）は未承認。`B_localize` はclass/plan別のenvelopeにすべきだが、今は単一値。
+- **X3とLの窓の関係**: `hard` がretention（bind+receipt+challenge+court）で頭打ちのため、policy次第でlicence後のpursuitがほぼ開始できない。T_*とretention義務の関係（retentionをhardまで延ばす要件にするか）は設計判断が要る。遅いlicenceは `min()` により観測窓が短くなる（RFC-0014改定節どおり）。`open_cutoff` 前のFinalは禁止していない（REQ-X3-2の字義どおり）。
+- **D2の代替経路は未構築**: dissectionのroot claimを座標のみにし挑戦者がopeningを出す経路（DA16 design §7.5 1–2）がないため、fence以後の新claimでone-moveで決まらないsiteは訴追できない（G14の穴）。readinessの制限はclass単位で、旧classの新claimはreadinessを使い続ける。
+- **N4**: 生成tensor claim（tag 87）は現状weightlessなので対象外。将来weightを与えるfenceは同じ述語を使う必要がある。
+- R-core+未満のADR-0062経路（`resume_claim_after_da_session_v2`）のpause返却にはX3のguardを入れていない（t12はR-core+をgenesisで武装）。
+
+#### 3.1.1 2026-10-15（round 3）— D2代替経路・N4のtag 87・X3のretention延長（未検証のソース）
+
+上の未解決4項目のうち3つに休眠のソースを追加した。**ビルド・テストは未実行**で、PASSを主張しない。新しいobject種別・fence・tag・state tableは追加していない（既存3 fenceの裏側。fence未満・`None` presetではどのhookも読まれず、A-2の表とharnessは変更不要）。
+
+- **D2の代替経路（REQ-T6-4、`consensus/core/src/palw_court_model_scope_routes_v1.rs`）**: 制限した4 unitごとに、公開の認証済み材料だけで有罪にする経路を置いた（`PALW_D2_REPLACEMENT_ROUTES_V1`）。
+  - `HeldStepLeaf` → claim part のみ（LG14-Bの `KernelWitness`、または `palw_legacy_held_da_v2` 以後の `StepLeaf` 回答。rowなし、沈黙はDA default）＋告発者自身のrow → one-move（`palw_d2_one_move_on_claim_part_v1` = `palw_one_move_verdict_bound_v2`）またはtag 159。claim partがrowを運ぶと拒否。
+  - `AttnRootClaimOperands`・`TirGenRootClaimParams` → **座標のみに署名するroot claim＋挑戦者が公開したoperandの中継**。被告の署名は元から座標とclaim値だけを覆う（attention: `palw_attn_root_claim_message_v1(session, root)`、IR: `(version, elements, totals)`）。fence以後の新claimでは、named-leaf dissectionを開くobjectがroot claimの必要とするmodel operandを**公開**していなければ開かない（`open_dissection_at_named_leaf_v1` → `palw_d2_named_leaf_operands_admit_v1`。attentionは告発のrowからsiteが導出できること、IR/pipelineは運ばれたparamが登録rootで認証できること、tag 90はdigestのみなので新claimでは開かない）。被告は自分のコピーを読まずに、chain上の公開bytesを中継してroot claimを出せる（`palw_d2_attn_root_claim_relayed_v1`・`palw_d2_tir_root_claim_relayed_v1`）。dissectionとbottomの判定は既存のまま。
+  - `SeatReadinessLeaves` → 抽選leafごとのkeyed digest（`palw_d2_readiness_digest_v1`、bytesは出さない）を、モデル保有者が自分の認証済みopeningで反証（`palw_d2_readiness_refute_v1`）。**object種別は未割当**（R-D2-READY、Leadがtagを割り当てる）。
+  - テスト（`palw_court_model_scope_routes_v1/tests.rs`）: `every_restricted_unit_has_a_replacement_route_that_compels_no_model_bytes`（棚卸し）、`req_t6_4_full_collusion_on_a_new_claim_is_convicted_by_the_replacement_route`（producer＋Panel全員共謀の新claimを、Panel外の公開bonded verifierが公開材料と自分のrowで有罪にする。非fused・fusedの不正tile、正直なfusedはdissectionへ、公開operandのない・認証できないopeningは開かない）、`a_cone_opening_publishes_authenticated_params_or_states_it_reads_none`、`the_root_claim_signatures_cover_coordinates_only_so_a_relay_keeps_them`、`a_readiness_digest_is_refuted_only_by_the_registered_bytes`。
+  - 残り（R-D2-COVER）: IR/pipeline/evaluationのfinalizeが読むparamの**正確な集合**はopening時に導出していない。挑戦者の公開が足りなければ被告が不足分を補うことになる（告発1件あたりfinalize 1回分の読み取りに有界、claimが正直なら挑戦者のexposureで支払い）。composite artifactとevaluation closeのparamはfinalizeが認証する。
+- **N4のtag 87（REQ-N4-3）**: tensor claimは現状weightless（quanta・pwu・escrow・rights・immatureすべて0）なので拒否は起きない。報酬・weightを与えるなら必ず通る唯一の書き込み地点（`palw_gen_claim_fold_v1` のclaim生成）に、`palw_claim_earns_reward_or_weight_v1(&claim) && palw_public_evidence_tensor_refusal_v1(...)` のguardを置いた（`PanelDa`・画像入力は非公開、code `N4_NONPUBLIC_EVIDENCE`）。テスト `req_n4_3_a_weightless_tensor_claim_is_guarded_where_weight_would_be_granted`。
+- **X3とretention（Lead既定、REQ-X3-6）**: retentionを**hardまで延長**する側に決めた。`hard = d0 + T_prepare + T_observe + T_resolve`（retentionでの頭打ちを削除、`palw_x3_hard_deadline_at_v1`）。X3 claimは生成時に一度だけ `trace_retention_daa = max(trace_retention_daa, hard)`（`TransitionBuilder::write_claim`、REQ-X3-3の「受理後の延長」ではなくd0固定の一部）。これでclaim trace・DA material unit・recordを読む全holdがhardまで義務になる。paid consumerのmaterial holdは `material_until ≥ hard` を要求（`palw_bond_budget_fold_v1/consumer.rs`）。追加retentionの費用はpolicyの名前付き項目 `retention_cost_per_daa_sompi`（`c_retain`、**本番値なし**、probe値1）で、`palw_x3_retention_cost_sompi_v1 = extra_daa × c_retain`（0は未測定として拒否）、`palw_x3_material_term_with_retention_v1 = material + extra_daa × c_retain` を `C_upper` のclass cost（`palw_minimum_price_c_upper_v1`）と `PalwBeaconSourceCostBoundsV1.material_sompi` に入れる入力とした（econ側の呼び出しは未接続、econ laneの担当）。テスト `req_x3_6_retention_extends_to_the_hard_deadline_and_is_priced`、`req_x3_1` は頭打ち削除に合わせて更新。monetary material（`PalwMonetaryMaterialPolicyV1`、`misaka/palw/remote`）の保持期間をhardまで伸ばす接続は未実装（provider lane）。
 
 ## 4. 文書・コメントの訂正一覧（実装の挙動を変えない）— 2026-10-12 実施済み
 

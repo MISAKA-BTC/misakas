@@ -5,6 +5,7 @@ pub mod services;
 pub mod storage;
 pub mod test_consensus;
 
+mod palw_material_hold;
 mod utxo_set_override;
 
 use crate::{
@@ -953,7 +954,7 @@ impl Consensus {
             // Store the currently bodyless anticone for trusted validation.
             meta.set_body_missing_anticone(&mut batch, anticone).unwrap();
         }
-        self.db.write(batch).unwrap();
+        self.virtual_processor.write_pruning_import_barrier(batch);
         drop(pruning_point_write);
         Ok(())
     }
@@ -1382,8 +1383,232 @@ impl ConsensusApi for Consensus {
         else {
             return None;
         };
-        let (_, state) = self.virtual_processor.palw_v2_reader_state(&bundle.state).ok().flatten()?;
-        state.material_income_hold_until_v1(&bundle.state, claim)
+        let before = self.lkg_virtual_state.load();
+        let active = self.config.params.palw_material_income_active_at(before.daa_score);
+        if !active {
+            return None;
+        }
+        let complete = || {
+            self.virtual_processor
+                .pruning_import_status()
+                .ok()
+                .and_then(|(session, stable)| (stable && session.active.is_none()).then_some(session.epoch))
+        };
+        let import_before = complete();
+        let snapshot = self.virtual_processor.palw_v2_reader_state(&bundle.state);
+        let after = self.lkg_virtual_state.load();
+        // The general reader may return its old tip when reconstruction fails.
+        // That fallback, an import, or a changing generation cannot authorize
+        // irreversible file deletion. Preserve a healthy snapshot's real None.
+        palw_material_hold::material_hold_from_snapshot_v1(
+            active,
+            import_before.is_some()
+                && import_before == complete()
+                && before.ghostdag_data.selected_parent == after.ghostdag_data.selected_parent,
+            after.ghostdag_data.selected_parent,
+            snapshot,
+            |state| state.material_income_hold_until_v1(&bundle.state, claim),
+        )
+    }
+
+    fn palw_native_material_provider_authority_v3(
+        &self,
+        checkpoint: BlockHash,
+        header: &Header,
+        ready: &kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3,
+    ) -> Result<kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3, String> {
+        self.virtual_processor.palw_native_material_provider_authority_v3_impl(checkpoint, header, ready)
+    }
+    fn palw_monetary_material_covenants_v1(
+        &self,
+    ) -> Result<Vec<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Err("monetary material requires ConsensusV2".into());
+        };
+        let before = self.lkg_virtual_state.load();
+        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || import.active.is_some() {
+            return Err("monetary material view has an incomplete import".into());
+        }
+        let (point, state) = self
+            .virtual_processor
+            .palw_v2_reader_state(&bundle.state)
+            .map_err(|e| e.to_string())?
+            .ok_or("monetary material state is missing")?;
+        let after = self.lkg_virtual_state.load();
+        let (after_import, after_stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !after_stable
+            || after_import.active.is_some()
+            || import.epoch != after_import.epoch
+            || point != after.ghostdag_data.selected_parent
+            || before.ghostdag_data.selected_parent != point
+        {
+            return Err("monetary material view changed generation or returned an old tip".into());
+        }
+        state.assert_monetary_material_consistency_v1(&bundle.state).map_err(|e| e.to_string())?;
+        Ok(state.monetary_material_rows_v1())
+    }
+
+    /// RFC-0008 PAV3: the same coherent tip read as [`Self::palw_monetary_material_covenants_v1`], with the canonical session
+    /// selected by the ONE rule `verify_prior` re-runs and the rows/bonds taken from that single state snapshot.
+    fn palw_native_session_v3(
+        &self,
+        attempt: &kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2,
+        daa: u64,
+    ) -> Result<
+        (
+            BlockHash,
+            Option<(
+                kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
+                Vec<(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, kaspa_hashes::Hash64)>,
+            )>,
+        ),
+        String,
+    > {
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Err("native session requires ConsensusV2".into());
+        };
+        let before = self.lkg_virtual_state.load();
+        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || import.active.is_some() {
+            return Err("native session view has an incomplete import".into());
+        }
+        let (point, state) = self
+            .virtual_processor
+            .palw_v2_reader_state(&bundle.state)
+            .map_err(|e| e.to_string())?
+            .ok_or("native session state is missing")?;
+        let after = self.lkg_virtual_state.load();
+        let (after_import, after_stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !after_stable
+            || after_import.active.is_some()
+            || import.epoch != after_import.epoch
+            || point != after.ghostdag_data.selected_parent
+            || before.ghostdag_data.selected_parent != point
+        {
+            return Err("native session view changed generation or returned an old tip".into());
+        }
+        state.assert_monetary_material_consistency_v1(&bundle.state).map_err(|e| e.to_string())?;
+        let operator_of = |provider: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| state.bond(provider).map(|b| b.operator_id);
+        let Some(row) = kaspa_consensus_core::palw_attempt_material_v3::select_native_session_v3(
+            state.monetary_material_rows_v1(),
+            attempt,
+            daa,
+            operator_of,
+        ) else {
+            return Ok((point, None));
+        };
+        let operators = row
+            .providers
+            .iter()
+            .filter(|p| !p.charged)
+            .map(|p| operator_of(&p.provider).map(|operator| (p.provider, operator)).ok_or("native session provider bond absent"))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((point, Some((row, operators))))
+    }
+
+    fn palw_monetary_material_release_finalized_v1(
+        &self,
+        root: kaspa_hashes::Hash64,
+        consent: kaspa_hashes::Hash64,
+        tail: kaspa_hashes::Hash64,
+        release_block: BlockHash,
+    ) -> Result<bool, String> {
+        // This coherent read also refuses incomplete imports, stale tips and
+        // missing states. An unsigned absence can never authorize file GC.
+        let before = self.lkg_virtual_state.load();
+        let (import_before, stable_before) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_before || import_before.active.is_some() {
+            return Err("material GC import is incomplete".into());
+        }
+        let rows = self.palw_monetary_material_covenants_v1()?;
+        if rows.iter().any(|row| row.terms.root == root) {
+            return Ok(false);
+        }
+        if !self.virtual_processor.palw_monetary_material_release_delta_v1(root, consent, tail, release_block)? {
+            return Ok(false);
+        }
+        let finality = self.virtual_processor.virtual_finality_point(&before.ghostdag_data, self.pruning_point());
+        for block in [tail, release_block] {
+            if !self.reachability_service.has_reachability_data(block)
+                || !self.reachability_service.is_chain_ancestor_of(block, before.ghostdag_data.selected_parent)
+                || !self.reachability_service.is_chain_ancestor_of(block, finality)
+            {
+                return Ok(false);
+            }
+        }
+        let after = self.lkg_virtual_state.load();
+        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable
+            || import.active.is_some()
+            || import.epoch != import_before.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+        {
+            return Err("material GC witness changed snapshot/import generation".into());
+        }
+        Ok(true)
+    }
+
+    fn palw_monetary_material_unused_offer_finalized_v1(
+        &self,
+        root: kaspa_hashes::Hash64,
+        enrollment_until: u64,
+    ) -> Result<bool, String> {
+        let before = self.lkg_virtual_state.load();
+        let (import_before, stable_before) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_before || import_before.active.is_some() {
+            return Err("unused-offer import is incomplete".into());
+        }
+        if self.palw_monetary_material_covenants_v1()?.iter().any(|row| row.terms.root == root) {
+            return Ok(false);
+        }
+        let finality = self.virtual_processor.virtual_finality_point(&before.ghostdag_data, self.pruning_point());
+        if !self.reachability_service.has_reachability_data(finality)
+            || !self.reachability_service.is_chain_ancestor_of(finality, before.ghostdag_data.selected_parent)
+            || self.headers_store.get_daa_score(finality).map_err(|e| e.to_string())? <= enrollment_until
+        {
+            return Ok(false);
+        }
+        // Current absence could be caused by an unfinalized release, which
+        // an admitted reorg may undo. Require absence AT the finalized block.
+        let finalized_state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(finality)
+            .map_err(|e| format!("unused-offer finalized state unavailable: {e:?}"))?;
+        if finalized_state.monetary_material_row_v1(root).is_some() {
+            return Ok(false);
+        }
+        let after = self.lkg_virtual_state.load();
+        let (import_after, stable_after) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_after
+            || import_after.active.is_some()
+            || import_before.epoch != import_after.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+        {
+            return Err("unused offer changed snapshot/import generation".into());
+        }
+        Ok(true)
+    }
+
+    fn palw_monetary_aux_page_v1(
+        &self,
+        block: BlockHash,
+        row: u64,
+        offset: u64,
+        limit: usize,
+    ) -> Result<kaspa_consensus_core::palw_monetary_material_rpc_v1::PalwMonetaryAuxPageV1, String> {
+        self.virtual_processor.palw_monetary_aux_page_v1_impl(block, row, offset, limit)
+    }
+
+    fn palw_state_carriage_page_v1(
+        &self,
+        block: BlockHash,
+        offset: u64,
+        limit: usize,
+    ) -> Result<kaspa_consensus_core::palw_state_carriage_rpc_v1::PalwStateCarriagePageV1, String> {
+        self.virtual_processor.palw_state_carriage_page_v1_impl(block, offset, limit)
     }
 
     /// ADR-0080 design A, on the node: the materialized tip, then the row itself. The tip read is
@@ -2343,6 +2568,18 @@ impl ConsensusApi for Consensus {
         })
     }
 
+    fn import_pruning_point_palw_snapshot_for_session(
+        &self,
+        session: PruningImportSessionV1,
+        carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        declarations: Vec<(kaspa_hashes::Hash64, Vec<u8>)>,
+        complete: bool,
+    ) -> PruningImportResult<()> {
+        self.virtual_processor.with_pruning_import_session(Some(session), |_| {
+            self.virtual_processor.import_pruning_point_palw_snapshot(session.point, carriage, Some((declarations, complete)))
+        })
+    }
+
     fn import_pruning_point_overlay_snapshot_for_session(
         &self,
         session: PruningImportSessionV1,
@@ -2803,6 +3040,47 @@ impl ConsensusApi for Consensus {
 
     fn palw_class_carriages_for_sync_v1(&self) -> Vec<(kaspa_hashes::Hash64, Vec<u8>)> {
         self.virtual_processor.palw_class_carriages_for_sync_v1_impl()
+    }
+
+    fn palw_native_snapshot_inventory_v1(
+        &self,
+        point: BlockHash,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotInventoryV1,
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    > {
+        self.virtual_processor.palw_native_snapshot_inventory_v1_impl(point)
+    }
+
+    fn palw_native_snapshot_resource_bound_v1(
+        &self,
+        point: BlockHash,
+    ) -> Option<kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotResourceBoundV1> {
+        self.virtual_processor.palw_native_snapshot_inventory_v1_impl(point).ok()?.physical_bound_v1().ok()
+    }
+
+    fn pruning_point_palw_state_shared_v1(
+        &self,
+        point: BlockHash,
+    ) -> Option<std::sync::Arc<kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2>> {
+        self.virtual_processor.pruning_point_palw_state_shared_v1_impl(point)
+    }
+
+    fn palw_class_carriages_for_snapshot_v1(
+        &self,
+        snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        complete: bool,
+    ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
+        self.virtual_processor.palw_class_carriages_for_snapshot_v1_impl(snapshot, complete)
+    }
+
+    fn palw_validate_snapshot_declarations_v1(
+        &self,
+        snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        declarations: &[(kaspa_hashes::Hash64, Vec<u8>)],
+        complete: bool,
+    ) -> Result<(), String> {
+        self.virtual_processor.palw_validate_snapshot_declarations_v1_impl(snapshot, declarations, complete)
     }
 
     fn palw_v2_pending_vertex_equivocations_v1(&self) -> Vec<kaspa_consensus_core::palw_vertex_v1::PalwVertexEquivocationV1> {
@@ -3883,7 +4161,7 @@ impl ConsensusApi for Consensus {
             let mut meta = self.pruning_meta_stores.write();
             let mut batch = rocksdb::WriteBatch::default();
             meta.set_pruning_utxoset_stable_flag(&mut batch, val).unwrap();
-            self.db.write(batch).unwrap();
+            self.virtual_processor.write_pruning_import_barrier(batch);
             Ok(())
         })
     }

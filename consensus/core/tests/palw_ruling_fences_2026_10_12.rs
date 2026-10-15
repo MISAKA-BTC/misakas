@@ -37,7 +37,10 @@ fn set(p: &mut Params, name: &str, at: Option<ForkActivation>) {
     match name {
         "palw_court_model_scope_v1" => p.palw_court_model_scope_v1 = at,
         "palw_public_evidence_reward_v1" => p.palw_public_evidence_reward_v1 = at,
-        "palw_claim_hard_deadline_v1" => p.palw_claim_hard_deadline_v1 = at,
+        "palw_claim_hard_deadline_v1" => {
+            p.palw_claim_hard_deadline_v1 =
+                at.map(kaspa_consensus_core::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at)
+        }
         other => panic!("not a ruling fence: {other}"),
     }
 }

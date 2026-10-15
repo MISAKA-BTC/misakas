@@ -21,25 +21,25 @@
 //! the one that won can share a key while differing in the weights they name and the canonical
 //! job that prices them — and the canonical job is not covered by the id at all.
 //!
-//! # The one place this index is NOT complete, said plainly
+//! # Pruning-point declaration transport
 //!
-//! **A node that joins by a pruned sync gets the class state and none of these rows.** The only
-//! writer is the chain-candidate accept path, and a pruning-point IBD never walks the blocks
-//! below the pruning point: `import_pruning_point_palw_state` brings the class table over
-//! wholesale and touches nothing here. Such a node therefore holds classes whose declarations it
-//! does not have, and — with the ADR-0067 arm armed — REFUSES to serve them, which reads as "this
-//! node cannot serve the registered class" rather than as the missing index it is.
+//! Protocol 107 carries snapshot-bound accepted declarations alongside PALW
+//! state. The importer validates the complete offered set before mutation and
+//! stages the tip, servable snapshot, declarations and incomplete-import marker
+//! in one durable recovery batch. The store guard remains held until commit;
+//! staged rows never populate a positive cache. A joined node can serve the same
+//! authenticated declarations without replaying a pruned registration block.
 //!
-//! That refusal is the safe direction (it never serves a class it cannot prove), and it is a real
-//! gap: on a pruned-sync fleet only the nodes that watched a registration go by can judge its
-//! class, and judging is what decides quorums. Closing it means either carrying the accepted
-//! carriages in the pruning-point sidecar beside `PalwStateCarriageV2`, or serving a row from a
-//! peer on demand — which needs no trust, because `profile.shape_profile_id() == class_id` makes
-//! the bytes self-authenticating. Neither is built; the ADR records it as open.
+//! A profile id alone does not authenticate its canonical tokenizer/runtime/job.
+//! Complete transport requires retained semantic identity or exact binary-known
+//! genesis identity, plus the retained PWU and fused-attention geometry. A legacy
+//! post-genesis class lacking that authority is refused as unsupported rather
+//! than supplying an invented canonical identity. Protocol 106's historical
+//! sparse compatibility path does not prove complete declaration coverage.
 
 use std::sync::Arc;
 
-use kaspa_database::prelude::{CachePolicy, CachedDbAccess, CachedDbItem, DB, DirectDbWriter, StoreError, StoreResult};
+use kaspa_database::prelude::{BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DB, DirectDbWriter, StoreError, StoreResult};
 use kaspa_database::registry::DatabaseStorePrefixes;
 use kaspa_hashes::Hash64;
 use kaspa_utils::mem_size::MemSizeEstimator;
@@ -95,8 +95,17 @@ impl DbPalwClassCarriageStore {
         if stored == PALW_CLASS_CARRIAGE_SCHEMA_VERSION {
             return Ok(());
         }
-        self.access.delete_all(DirectDbWriter::new(&self.db))?;
-        self.schema.write(DirectDbWriter::new(&self.db), &PALW_CLASS_CARRIAGE_SCHEMA_VERSION)
+        let mut batch = rocksdb::WriteBatch::default();
+        self.access.delete_all(BatchDbWriter::new(&mut batch))?;
+        // The replacement cache remains private until rows and schema commit.
+        let mut next_schema = CachedDbItem::new(self.db.clone(), DatabaseStorePrefixes::PalwClassCarriagesSchema.into());
+        next_schema.write(BatchDbWriter::new(&mut batch), &PALW_CLASS_CARRIAGE_SCHEMA_VERSION)?;
+        let mut options = rocksdb::WriteOptions::default();
+        options.set_sync(true);
+        self.db.write_opt(batch, &options)?;
+        self.schema.invalidate_cache();
+        self.schema = next_schema;
+        Ok(())
     }
 
     /// The declaration the chain accepted for `class_id`, if this node saw it.
@@ -105,8 +114,69 @@ impl DbPalwClassCarriageStore {
     }
 
     /// Record an accepted registration's declaration. Idempotent for one class id by the module
-    /// doc's argument (the id is the profile's hash).
+    /// doc's argument: service additionally checks the current root, registration
+    /// position and canonical semantic authority against the consensus snapshot.
     pub fn insert(&mut self, class_id: Hash64, record: PalwClassCarriageRecord) -> StoreResult<()> {
         self.access.write(DirectDbWriter::new(&self.db), class_id, Arc::new(record))
+    }
+
+    /// Genesis and pruning-snapshot declarations share their PALW commit. Do not publish
+    /// a positive cache row before the containing RocksDB batch commits.
+    /// The caller retains its store write guard through that commit.
+    pub(crate) fn insert_batch(
+        &mut self,
+        batch: &mut rocksdb::WriteBatch,
+        class_id: Hash64,
+        record: PalwClassCarriageRecord,
+    ) -> StoreResult<()> {
+        self.access.write_many_without_cache(BatchDbWriter::new(batch), &mut std::iter::once((class_id, Arc::new(record))))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+
+    #[test]
+    fn obsolete_declaration_rows_and_shared_schema_cache_retire_together() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let id = Hash64::from_u64_word(1);
+        let mut original = DbPalwClassCarriageStore::new(db.clone(), CachePolicy::Count(16));
+        original.reindex_if_stale().unwrap();
+        original
+            .insert(id, PalwClassCarriageRecord { registered_daa: 0, artifact_root: Hash64::from_u64_word(2), carriage: vec![3, 4] })
+            .unwrap();
+        let mut old_schema = CachedDbItem::new(db.clone(), DatabaseStorePrefixes::PalwClassCarriagesSchema.into());
+        old_schema.write(DirectDbWriter::new(&db), &(PALW_CLASS_CARRIAGE_SCHEMA_VERSION - 1)).unwrap();
+        let mut reopened = DbPalwClassCarriageStore::new(db.clone(), CachePolicy::Count(16));
+        assert!(reopened.get(id).is_some());
+        assert_eq!(reopened.schema.read().unwrap(), PALW_CLASS_CARRIAGE_SCHEMA_VERSION - 1);
+        let shared = reopened.clone();
+        reopened.reindex_if_stale().unwrap();
+        assert!(shared.get(id).is_none());
+        assert_eq!(shared.schema.read().unwrap(), PALW_CLASS_CARRIAGE_SCHEMA_VERSION);
+        let mut cold = DbPalwClassCarriageStore::new(db, CachePolicy::Count(16));
+        cold.reindex_if_stale().unwrap();
+        assert!(cold.get(id).is_none());
+    }
+
+    #[test]
+    fn genesis_batch_carriage_is_not_visible_before_commit_and_survives_fresh_cache() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwClassCarriageStore::new(db.clone(), CachePolicy::Count(16));
+        store.reindex_if_stale().unwrap();
+        let id = Hash64::from_u64_word(1);
+        let record = PalwClassCarriageRecord { registered_daa: 0, artifact_root: Hash64::from_u64_word(2), carriage: vec![3, 4] };
+        let mut abandoned = rocksdb::WriteBatch::default();
+        store.insert_batch(&mut abandoned, id, record.clone()).unwrap();
+        assert!(store.get(id).is_none(), "staged declarations cannot authorize service");
+        drop(abandoned);
+        assert!(DbPalwClassCarriageStore::new(db.clone(), CachePolicy::Count(16)).get(id).is_none());
+        let mut committed = rocksdb::WriteBatch::default();
+        store.insert_batch(&mut committed, id, record.clone()).unwrap();
+        db.write(committed).unwrap();
+        assert_eq!(*store.get(id).unwrap(), record);
+        assert_eq!(*DbPalwClassCarriageStore::new(db, CachePolicy::Count(16)).get(id).unwrap(), record);
     }
 }
