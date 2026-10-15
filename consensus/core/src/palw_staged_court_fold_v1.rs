@@ -71,10 +71,29 @@ impl PalwChainStateV2 {
         };
         let semantics =
             self.class_semantics.get(&geometry.class_id).ok_or("preclaim quote has no immutable admitted class semantics")?;
+        if matches!(header, crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(_)) {
+            let record =
+                self.tir_classes.get(&geometry.class_id).ok_or("TIR preclaim quote has no native registered class record")?;
+            let quote = crate::palw_staged_preclaim_v1::staged_preclaim_tir_quote_v1(
+                &geometry,
+                original,
+                header,
+                record,
+                semantics,
+                self.staged_tokenizer_inventory_v1(semantics.tokenizer_id),
+                maximum_custodians,
+                maximum_leaves,
+                config,
+            )?;
+            if quote.is_some() && !crate::palw_staged_preclaim_v1::PALW_STAGED_TIR_ROUTE_ADMITTED_V1 {
+                return Err("TIR required-family claims stay refused: the native-context source carriage, TIR seed and TIR node actors are not wired (g14-completion-matrix §2i)".into());
+            }
+            return Ok(quote);
+        }
         let profile = self
             .fp_work_profiles
             .get(&geometry.class_id)
-            .ok_or("TIR or missing profile needs its distinct native quote projection")?;
+            .ok_or("legacy preclaim quote has no native registered shape profile")?;
         crate::palw_staged_preclaim_v1::staged_preclaim_quote_v1(
             &geometry,
             original,

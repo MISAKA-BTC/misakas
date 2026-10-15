@@ -6,6 +6,11 @@ use crate::palw_staged_bundle_v1::{
 };
 use crate::{Hash64, palw_state_v2::PalwBondKeyV2};
 
+/// The TIR required-family route is quoted but not yet admitted: the native-context selected
+/// source carriage, the TIR Constraint seed and the node's TIR source actors are not wired.
+/// Until they are, an admitted TIR claim could not be prosecuted, so admission refuses it.
+pub const PALW_STAGED_TIR_ROUTE_ADMITTED_V1: bool = false;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwStagedClaimGeometryV1 {
     pub class_id: Hash64,
@@ -34,6 +39,20 @@ pub fn staged_preclaim_quote_v1(
     maximum_leaves: u64,
     config: PalwStagedPublicCourtConfigV1,
 ) -> Result<Option<PalwStagedPreclaimQuoteV1>, String> {
+    check_preclaim_identity_v1(geometry, original, header, maximum_custodians, config)?;
+    let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Legacy(header) = header else {
+        return Err("a TIR header is quoted by staged_preclaim_tir_quote_v1 against its registered record".into());
+    };
+    legacy_preclaim_quote_v1(geometry, original, header, profile, semantics, inventory, maximum_custodians, maximum_leaves, config)
+}
+
+fn check_preclaim_identity_v1(
+    geometry: &PalwStagedClaimGeometryV1,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+    maximum_custodians: u64,
+    config: PalwStagedPublicCourtConfigV1,
+) -> Result<(), String> {
     config.check()?;
     header.check_wire_v1()?;
     if original.job.class_id != geometry.class_id
@@ -47,9 +66,21 @@ pub fn staged_preclaim_quote_v1(
     {
         return Err("preclaim quote substitutes original producer, class, execution, job or native custody bound".into());
     }
-    let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Legacy(header) = header else {
-        return Err("TIR requires its own verified execution projection, not a legacy quote".into());
-    };
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn legacy_preclaim_quote_v1(
+    geometry: &PalwStagedClaimGeometryV1,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicLegacyBindingHeaderV1,
+    profile: &crate::palw_step::PalwShapeProfileV3,
+    semantics: &crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+    maximum_custodians: u64,
+    maximum_leaves: u64,
+    config: PalwStagedPublicCourtConfigV1,
+) -> Result<Option<PalwStagedPreclaimQuoteV1>, String> {
     let binding = header.resolve_v1(profile, geometry.execution_root, maximum_leaves)?;
     crate::palw_legacy_held_da_v2::palw_legacy_fp_job_check_v2(&binding, &original.job).map_err(|e| e.to_string())?;
     if !semantics.matches_context(&binding.job_context) {
@@ -84,6 +115,101 @@ pub fn staged_preclaim_quote_v1(
         }
         families.push((PalwStagedFamilyV1::Constraint, PalwRenderingResourcePlanV1::derive(4095, vocab, config.prices)?));
     }
+    let profile_bytes = borsh::object_length(profile).map_err(|e| e.to_string())? as u64;
+    finish_preclaim_quote_v1(
+        geometry,
+        original,
+        semantics,
+        inventory,
+        families,
+        PalwPreclaimSourceGeometryV1 {
+            vocab,
+            logits_scheme_id: profile.logits_scheme_id,
+            profile_bytes,
+            step_leaf_count: binding.step_leaf_count,
+        },
+        maximum_custodians,
+        config,
+    )
+}
+
+/// What the Constraint source quote reads of a claim's class, legacy or TIR.
+#[derive(Clone, Copy, Debug)]
+struct PalwPreclaimSourceGeometryV1 {
+    vocab: u32,
+    logits_scheme_id: Hash64,
+    /// Bytes a source session retains to resolve the class (a legacy profile, a TIR program).
+    profile_bytes: u64,
+    step_leaf_count: u64,
+}
+
+/// **The TIR preclaim quote**: the same planner over a TIR claim's decode view, derived from the
+/// native-admitted public header and the class's registered record (no layout, no binding on the
+/// wire). Covered families: Constraint over the TIR class's tiled logits and the raw tokenizer.
+/// A TIR prefix-state job and a flat-scheme TIR Constraint job have no TIR source/relation and are
+/// refused by name.
+#[allow(clippy::too_many_arguments)]
+pub fn staged_preclaim_tir_quote_v1(
+    geometry: &PalwStagedClaimGeometryV1,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    semantics: &crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+    maximum_custodians: u64,
+    maximum_leaves: u64,
+    config: PalwStagedPublicCourtConfigV1,
+) -> Result<Option<PalwStagedPreclaimQuoteV1>, String> {
+    check_preclaim_identity_v1(geometry, original, header, maximum_custodians, config)?;
+    let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header) = header else {
+        return Err("a legacy header is quoted against its registered shape profile".into());
+    };
+    let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(header, record, maximum_leaves)?;
+    if view.job_context.exact_decode_tokens != original.decode_tokens_executed
+        || view.job_context.tokenizer_id != original.job.tokenizer_id
+        || !semantics.matches_context(&view.job_context)
+    {
+        return Err("TIR preclaim quote changes the original decode count, tokenizer or immutable CU statement".into());
+    }
+    let mut families = Vec::new();
+    if original.job.is_prefix_state() {
+        return Err("a TIR prefix-state job has no TIR state relation for the public prefix court".into());
+    }
+    if original.job.is_constraint() {
+        if !view.is_tiled_v1() {
+            return Err("a flat-scheme TIR Constraint job has no TIR Flat source session".into());
+        }
+        families.push((PalwStagedFamilyV1::Constraint, PalwRenderingResourcePlanV1::derive(4095, view.vocab_size, config.prices)?));
+    }
+    finish_preclaim_quote_v1(
+        geometry,
+        original,
+        semantics,
+        inventory,
+        families,
+        PalwPreclaimSourceGeometryV1 {
+            vocab: view.vocab_size,
+            logits_scheme_id: view.logits_scheme_id,
+            profile_bytes: u64::from(record.program_bytes),
+            step_leaf_count: view.step_leaf_count,
+        },
+        maximum_custodians,
+        config,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_preclaim_quote_v1(
+    geometry: &PalwStagedClaimGeometryV1,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    semantics: &crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+    mut families: Vec<(PalwStagedFamilyV1, PalwRenderingResourcePlanV1)>,
+    source: PalwPreclaimSourceGeometryV1,
+    maximum_custodians: u64,
+    config: PalwStagedPublicCourtConfigV1,
+) -> Result<Option<PalwStagedPreclaimQuoteV1>, String> {
+    let vocab = source.vocab;
     let intake = match (semantics.raw_tokenizer_bytes, inventory) {
         (Some(_), Some(cert)) => {
             cert.check_v1()?;
@@ -117,14 +243,14 @@ pub fn staged_preclaim_quote_v1(
         config.acquisition_daa,
         config.prices,
     )?;
-    let profile_bytes = borsh::object_length(profile).map_err(|e| e.to_string())? as u64;
+    let profile_bytes = source.profile_bytes;
     let mut staged = Vec::new();
     for (family, semantic) in families {
         let semantic = if family == PalwStagedFamilyV1::PublicPrefix { semantic.checked_sum_v1(recovery)? } else { semantic };
         let mut acquisition = staged_context_resource_plan_v1(profile_bytes, semantic, config)?;
         if family == PalwStagedFamilyV1::Constraint {
             let slots = u32::try_from(maximum_custodians).map_err(|_| "source native custody exceeds format")?;
-            let source = if profile.logits_scheme_id == crate::palw_step_refute::tiled_logits_scheme_id_v1() {
+            let acquisition_source = if source.logits_scheme_id == crate::palw_step_refute::tiled_logits_scheme_id_v1() {
                 crate::palw_selected_event_source_v1::selected_event_resource_plan_v1(
                     vocab,
                     original.decode_tokens_executed,
@@ -132,19 +258,19 @@ pub fn staged_preclaim_quote_v1(
                     slots,
                     config,
                 )?
-            } else if profile.logits_scheme_id == crate::palw_step_refute::flat_logits_scheme_id_v1() {
+            } else if source.logits_scheme_id == crate::palw_step_refute::flat_logits_scheme_id_v1() {
                 crate::palw_flat_constraint_stream_v1::flat_constraint_source_resource_plan_v1(
                     original.decode_tokens_executed,
                     vocab,
                     profile_bytes,
                     slots,
-                    binding.step_leaf_count,
+                    source.step_leaf_count,
                     config.prices,
                 )?
             } else {
                 return Err("constraint source must preserve its actual native logits scheme".into());
             };
-            acquisition = acquisition.checked_sum_v1(source)?;
+            acquisition = acquisition.checked_sum_v1(acquisition_source)?;
         }
         staged.push((family, semantic, Some(acquisition)));
     }

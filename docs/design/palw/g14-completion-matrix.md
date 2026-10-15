@@ -782,8 +782,13 @@ material, per the 10-12 ruling that Miner and Panel hold the registered model).
 - **Float32 Constraint.** The base Float32 lane has no decode-token adjudicator (`check_base0_decode_token_refutation_v2`
   refuses Float32; `PalwDecodeTokenPinV1::FloatV2` authenticates ids but adjudicates no selection), and the Flat
   constraint stream requires the Int32 lane. A required-family Constraint claim of a Float32 class is refused by
-  `staged_preclaim_quote_v1`. Missing: a deterministic Float32 selection adjudicator, the FloatV2 event source and
-  its semantic projection into the constraint court, and Float32 Flat/Tiled source sessions.
+  `staged_preclaim_quote_v1`. *Progress 2026-10-15 (source only, unverified):* the adjudicator core exists
+  (`palw_float_decode_v1`): an order key reproducing the reference worker's greedy first-index f32 argmax
+  (signed zero equal), a bounded streaming verifier that authenticates one committed f32 row against its event
+  hash, event opening and the claim's trace root, the greedy decode verdict and the constrained beat comparison.
+  Seeded Float32 jobs remain unadjudicable (no canonical float sampler). Still missing: a rooted, restartable
+  Float32 row court (the stream's hash state is in-memory), Float32 source sessions (custodians streaming a
+  committed row), the constraint court's Float32 seed, and node actors; the lane stays refused.
 - **TIR required families.** `staged_preclaim_quote_v1` refuses a TIR header. Missing, exactly:
   (1) a quote projection from the registered TIR class/layout to family geometry (vocabulary, logits scheme, lane,
   prefix-state relation dims) replacing `fp_work_profiles`; (2) a TIR state relation for the prefix-state court
@@ -792,6 +797,15 @@ material, per the 10-12 ruling that Miner and Panel hold the registered model).
   commitment for the Constraint courts and the selected/Flat sources; (4) generated-id authentication from the TIR
   output commitment for the tokenizer court; (5) TIR capture readers for the node responders; (6) TIR execution
   backends in the fraud filer stages. Until all six exist the lane is uncovered and unrewarded.
+  *Progress 2026-10-15 (source only, unverified):* (1) is implemented as
+  `staged_preclaim_tir_quote_v1` over a decode view derived from the admitted TIR header and the
+  registered record (`palw_decode_view_v1`; execution root recomputed under the TIR domain), covering
+  Constraint over tiled TIR logits and the raw tokenizer; TIR prefix-state and flat-scheme TIR
+  Constraint are refused by name. Part of (3) exists: tiled row/tile authentication, the selected
+  source demand/answer core and the Constraint court seed run over the decode view
+  (`new_from_tiled_view_v1`). Still missing: a native-context selected answer/seed carriage (a TIR
+  binding cannot ride a carrier), the fold's TIR selected/seed admission, (2), (4), (5), (6). The quote
+  is gated by `PALW_STAGED_TIR_ROUTE_ADMITTED_V1 = false`, so TIR required-family claims stay refused.
 
 **Inclusion pressure without a consensus cap (lead default).** No per-block cap on staged moves (it would let a
 coalition fill the cap). Load is bounded by fees (every move is an ordinary fee-paying transaction), by prepaid
