@@ -23,13 +23,23 @@
 | fence配管 | 実装 | `config/params.rs:3186-3206`、`config/params/identity.rs`、`fork_id_v1.rs`、`config/params/validation.rs`、mirror `palw_state_v2/state_params.rs:689-697` | — | `palw_rfc0018_v1/tests.rs`(休眠、Some-only、arm拒否) |
 | aux 136 scanner | 生成 | `palw_native_resource_v1/wire_kernel_aux.rs`、`wire_generated.rs`、`generated.rs` | — | — |
 
+## 2b. 2026-10-15 追加(残りgapの解消)
+
+| 項目 | 状態 | file | 試験 |
+| --- | --- | --- | --- |
+| frontierの巻き戻し(conviction後に再計算、floor、reorg/IBD一貫) | 実装(休眠、Gate C fence) | `palw_security_certification_v1.rs`(`palw_gate_c_frontier_v1`、`palw_frontier_rollback_bound_v1`、floor row `'F'`)、fold `ensure_frontier_floor_v1`/`note_retirement_frontier_floor_v1`、`palw_state_v2.rs`の frontier step、`transition_builder.rs` `retire_claim` | `palw_rfc0018_v1/tests.rs` `rfc18_frontier_rolls_back_on_conviction_and_pruning_never_passes_a_rollback_target` |
+| pruningの巻き戻し上限 | 実装(休眠) | `processor/palw.rs` `palw_pruning_point_allowed_v2` | 同上 |
+| permissionless anchorの厳密化(確定fold出力、claimごとのproducer除外) | 実装(休眠、anchor fence) | `palw_rfc0018_v1.rs`(`palw_permissionless_contributions_from_state_v1`、`palw_permissionless_anchors_claim_v1`)、`processor/palw.rs`(walk `_for_v1`、binding導出)、`palw_state_v2.rs` step 4c | `rfc18_anchor_seed_excludes_the_producer…`、`rfc18_anchor_contributions_are_committed_fold_output` |
+| leaf v2 / gRPC / RPCへの配線 | 実装 | record `certification`、`palw_rule_e_certification_summary_v1`、`rpc.proto`(settlement 13/14、claim row 39)、`convert/message.rs`、claim row wire v6 | `rfc18_a_client_reads_gate_c_from_the_window` |
+| siblingの順序非依存(上限・seed anchor) | 実装(休眠、sibling fence) | mergeset内はcanonical順、seed anchorはspan内最小priority(`record_round_seed_anchor_of`)。selected parentのsiblingはGHOSTDAGの決定的規則で先に採用(RFC §4.1 I-S6) | E2E `rfc0018_dag_siblings.rs`(到着順全6通りでstate root・seed anchor一致) |
+
 ## 3. 完了できなかった点と理由
 
 * **build・試験の実行:** 本laneの規則(cargo build/check/test禁止)により未実施。validation agentが実行する。
-* **GAP-A1/A2(anchor):** 「採用された」attemptの判定はheader+registryで近似する(同じblockのfoldで決まるため循環)。walkはclaimのbondを持たないので、producer除外は2 bond最小で代替した。
+* **anchor:** GAP-A1/A2は解消。認識は採用の1 chain block後になる。
 * **GAP-C3:** 認証前のfree-prompt spendのcoinbase carveは止めていない(weightは止める)。processorのproducer pre-checkまで変える必要がある。
 * **GAP-C4:** 保留した発行由来報酬は認証時にproducerへ1 legで払う。Panel share・buyback・vestingへの分配は未設計(U-2)。
-* **GAP-R4/R6:** leaf v2は資本を運ばない。gRPCは新しいRPC fieldを運ばない。
-* **frontierの後退:** 認証後に反証されたclaimのweight・participation・settlement depthは取り消されるが、safe frontierは既存規則どおり後退しない。
+* **GAP-R4:** leaf v2は資本(rule E v2のparticipation)を運ばない。
+* **selected parentのsibling:** GHOSTDAGがselected parentに選んだsiblingは自分のblockで先に採用される。決定的(blue work、block hash)で到着順に依存しないが、mergeset内の他siblingと同じ土俵では比べない。
 * **DAG幅のreader:** live経路(header処理、GHOSTDAG、difficulty、pruning)に触れるため実装しない(RFC §8.4)。
 * **DNS-BFTの物理除去:** 別lane(`integ/rfc12-dns-removal`)。本branchには取り込まない。
