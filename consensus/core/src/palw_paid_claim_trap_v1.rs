@@ -3,19 +3,20 @@
 //! ("推奨で進めて良い"): the recommended (a)+(b) of the remaining-work note §4.1.
 //!
 //! ```text
-//! (a) planted faults   a producer drawn by the paid-trap lottery commits a trap with the EXISTING TrapCommitted (tag 102):
-//!                      H(claim ‖ fault leaf ‖ tiles ‖ salt) under its own bond, salted, naming no claim — byte-identical to an
-//!                      audit-mesh trap. It must land strictly BEFORE the paid claim's seat lock (the seats are then drawn by
-//!                      the paid-claim beacon over a fault that was already fixed). After the receipt window, inside the reveal
-//!                      window, the EXISTING TrapRevealed (tag 103) opens it over the paid base claim. Its fault evidence is the
-//!                      court's own: the claim must stand convicted by the kernel's deterministic FileProof/FileDemand check
-//!                      (PRINCIPLES §8 — no computation proof of any kind).
-//! (b) signer liability every drawn checker that signed a Clean (complete) receipt on a paid claim the court later convicts —
-//!                      a trap or an ordinary claim alike — forfeits its check fee and is charged the signer liability; the
-//!                      conviction's accuser, when it is a drawn checker, is paid the existing trap bounty at a trap's reveal.
+//! (a) planted faults   a producer drawn by the audit mesh's slot lottery commits a trap with the EXISTING TrapCommitted (tag
+//!                      102): H(claim ‖ fault leaf ‖ tiles ‖ salt) under its own bond, salted, naming no claim — the same object
+//!                      and the same admission as an audit-mesh trap. It must land strictly BEFORE the paid claim's seat lock
+//!                      (the seats are then drawn by the paid-claim beacon over a fault that was already fixed). After the
+//!                      receipt window, inside the reveal window, the EXISTING TrapRevealed (tag 103) opens it over the paid
+//!                      base claim. Its fault evidence is the court's own: the claim must stand convicted by the kernel's
+//!                      deterministic FileProof/FileDemand check (PRINCIPLES §8 — no computation proof of any kind).
+//! (b) signer liability every drawn checker that signed a Clean (complete) receipt on a paid claim the court convicts — a trap
+//!                      or an ordinary claim alike — is charged the signer liability on its collateral at the conviction and
+//!                      forfeits its held check fee at the fee's release; the conviction's accuser, when it is a drawn seat
+//!                      other than the setter, is paid the existing trap bounty at a trap's reveal.
 //! check fees           a paid claim's verifier check fee does not leave at its attestation: it is held (aux 142) until the
-//!                      trap reveal window has passed, and released once through the once-only registry under the combined
-//!                      liability check with that window as the verifier's liability horizon.
+//!                      trap reveal window has passed and the claim is terminal, then released once through the once-only
+//!                      registry under the combined liability check with that window as the verifier's liability horizon.
 //! ```
 //!
 //! Nothing here grants consensus credit or weight (RFC-0018 Gate C stays the only credit path); a trap claim is a convicted claim,
@@ -35,16 +36,19 @@ pub const PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1: u8 = 0x02;
 /// The rows' version.
 pub const PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1: u8 = 1;
 
-/// **UNKNOWN — the paid-trap rate** (basis points of 10,000 per bond and trap slot): which producers may reveal a trap on a paid
-/// claim (checked at the reveal, against the commitment's slot, so the commit itself stays identical to a mesh trap's). A probe
-/// value, not a proposal: the measured record must pin `p` with `p × forfeiture > the check cost` (note §4.1).
-pub const PALW_PAID_CLAIM_TRAP_RATE_BP_V1: u64 = 100;
+/// **UNKNOWN — the paid-trap rate, conditional on the audit mesh's slot draw** (basis points of 10,000 per bond and trap slot).
+/// A trap is committed through the mesh's own admission, so its setter was already drawn by the mesh lottery
+/// (`palw_mesh_v1::PALW_TRAP_RATE_BP_V1`) at the commit; this second ticket, asked only at a paid reveal (the commit itself stays
+/// identical to a mesh trap's), thins it. The effective paid-trap rate is `mesh rate × this / 10,000`; the probe value 10,000 leaves
+/// the mesh rate alone. Not a proposal: the measured record must pin the effective `p` with `p × forfeiture > the check cost`
+/// (note §4.1).
+pub const PALW_PAID_CLAIM_TRAP_RATE_BP_V1: u64 = 10_000;
 /// **UNKNOWN — check-fee forfeiture** (permille of each held check fee a Clean signer of a convicted claim loses). Probe value.
 pub const PALW_PAID_CLAIM_TRAP_CHECK_FEE_FORFEIT_PERMILLE_V1: u64 = 1_000;
 /// **UNKNOWN — receipt-signer liability** (sompi charged once to each Clean signer of a convicted paid claim). Probe value.
 pub const PALW_PAID_CLAIM_TRAP_SIGNER_LIABILITY_SOMPI_V1: u64 = 1;
-/// **UNKNOWN — the trap reveal window** (DAA after the paid claim's receipt window): a trap is revealed inside it, and a verifier's
-/// check fee is held through it (the verifier's liability horizon). Probe value.
+/// **UNKNOWN — the trap reveal window** (DAA after the paid claim's receipt window, never past its signed liability horizon): a trap
+/// is revealed inside it, and a verifier's check fee is held through it (the verifier's liability horizon). Probe value.
 pub const PALW_PAID_CLAIM_TRAP_REVEAL_WINDOW_DAA_V1: u64 = 240;
 /// Held check fees released by one block's tick (a structural bound on the sweep's work, not an economic value).
 pub const PALW_PAID_CLAIM_TRAP_RELEASES_PER_BLOCK_V1: usize = 256;
@@ -77,6 +81,8 @@ pub struct PalwPaidClaimConvictionRowV1 {
     pub enrollment: [u8; 64],
     pub accuser: [u8; 64],
     pub convicted_daa: u64,
+    /// The row is forgotten once this DAA has passed (the end of the claim's trap reveal window, or the conviction's DAA if later).
+    pub forget_after_daa: u64,
 }
 
 /// **A held verifier check fee** (aux 142, `0x02 ‖ claim ‖ verifier ‖ le64(slot)`): the poster's escrow was debited at the
@@ -114,8 +120,8 @@ pub fn palw_paid_trap_held_fee_key_v1(claim: &[u8; 64], verifier: &[u8; 64], slo
     key
 }
 
-/// **The paid-trap lottery**: was `setter` drawn to set a paid-claim trap in the trap slot of `daa` (the commitment's DAA)? A uniform
-/// ticket per `(bond, slot)` against [`PALW_PAID_CLAIM_TRAP_RATE_BP_V1`]; asked at the reveal only.
+/// **The paid-trap ticket**: may `setter`'s trap committed at `daa` be revealed over a paid claim? A uniform ticket per `(bond, slot)`
+/// against [`PALW_PAID_CLAIM_TRAP_RATE_BP_V1`], on top of the mesh slot draw its commitment already passed; asked at the reveal only.
 pub fn palw_paid_trap_slot_drawn_v1(setter: &PalwBondKeyV2, daa: u64) -> bool {
     let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_PAID_CLAIM_TRAP_SLOT_DOMAIN_V1).to_state();
     state.update(&borsh::to_vec(setter).expect("a bond key serializes"));
@@ -126,9 +132,10 @@ pub fn palw_paid_trap_slot_drawn_v1(setter: &PalwBondKeyV2, daa: u64) -> bool {
 }
 
 /// **The verifier's liability horizon on a paid claim**: the last DAA of the trap reveal window after the claim's signed receipt
-/// window. A check fee is held through it; a trap is revealed inside it.
+/// window, never past the claim's signed liability horizon (no conviction lands after it, so nothing is held past it). A check fee is
+/// held through it; a trap is revealed inside it.
 pub fn palw_paid_trap_reveal_end_v1(lifetime: &misaka_palw_kernel::claim_paid_v2::PaidClaimLifetimeV2) -> u64 {
-    lifetime.checking_until.saturating_add(PALW_PAID_CLAIM_TRAP_REVEAL_WINDOW_DAA_V1)
+    lifetime.checking_until.saturating_add(PALW_PAID_CLAIM_TRAP_REVEAL_WINDOW_DAA_V1).min(lifetime.liability_until)
 }
 
 /// What one Clean signer of a convicted claim loses of one held fee: `(forfeited, kept)`.
@@ -139,6 +146,33 @@ pub fn palw_paid_trap_forfeit_v1(fee: u64) -> (u64, u64) {
     .unwrap_or(fee)
     .min(fee);
     (forfeited, fee - forfeited)
+}
+
+/// **The paid V2 claim a trap or a check fee is judged against** — the fields of its enrollment authority this mechanism reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwPaidTrapClaimV1 {
+    pub base_claim: [u8; 64],
+    pub enrollment: [u8; 64],
+    pub producer: PalwBondKeyV2,
+    pub interactive: bool,
+    pub lifetime: misaka_palw_kernel::claim_paid_v2::PaidClaimLifetimeV2,
+}
+
+impl PalwPaidTrapClaimV1 {
+    pub fn of(a: &crate::palw_claim_challenge_v2::PalwPaidClaimAuthorityV2) -> Self {
+        Self {
+            base_claim: a.enrollment.base_claim,
+            enrollment: a.enrollment.id(),
+            producer: a.producer,
+            interactive: a.class.interactive_plan.is_some(),
+            lifetime: a.enrollment.lifetime,
+        }
+    }
+
+    /// The claim's trap reveal window end (the verifier's liability horizon).
+    pub fn reveal_end(&self) -> u64 {
+        palw_paid_trap_reveal_end_v1(&self.lifetime)
+    }
 }
 
 /// **Everything a paid-trap reveal is judged on**, gathered from the state by the fold (and by the acceptance walk).
@@ -159,6 +193,8 @@ pub struct PalwPaidTrapRevealInputV1 {
     pub setter_drawn: bool,
     /// The paid claim's signed receipt window end.
     pub checking_until: u64,
+    /// [`palw_paid_trap_reveal_end_v1`] of the paid claim's signed lifetime.
+    pub reveal_end: u64,
     /// The court convicted the paid claim (the kernel row's own verdict).
     pub convicted: bool,
     pub now: u64,
@@ -198,7 +234,7 @@ pub fn palw_paid_trap_reveal_admits_v1(i: &PalwPaidTrapRevealInputV1) -> Result<
     if i.now <= i.checking_until {
         return Err("paid trap: revealed inside the receipt window");
     }
-    if i.now > i.checking_until.saturating_add(PALW_PAID_CLAIM_TRAP_REVEAL_WINDOW_DAA_V1) {
+    if i.now > i.reveal_end {
         return Err("paid trap: revealed after the reveal window");
     }
     if !i.convicted {
@@ -263,6 +299,7 @@ mod tests {
             lock_daa: Some(101),
             setter_drawn: true,
             checking_until: 200,
+            reveal_end: 200 + PALW_PAID_CLAIM_TRAP_REVEAL_WINDOW_DAA_V1,
             convicted: true,
             now: 201,
         }
@@ -299,6 +336,17 @@ mod tests {
         let end = 200 + PALW_PAID_CLAIM_TRAP_REVEAL_WINDOW_DAA_V1;
         palw_paid_trap_reveal_admits_v1(&PalwPaidTrapRevealInputV1 { now: end, ..input() }).unwrap();
         assert!(palw_paid_trap_reveal_admits_v1(&PalwPaidTrapRevealInputV1 { now: end + 1, ..input() }).is_err(), "late");
+        // The window never runs past the claim's signed liability horizon.
+        let short = misaka_palw_kernel::claim_paid_v2::PaidClaimLifetimeV2 {
+            committed_daa: 0,
+            checking_until: 200,
+            challenge_until: 210,
+            dispute_until: 220,
+            liability_until: 230,
+        };
+        assert_eq!(palw_paid_trap_reveal_end_v1(&short), 230);
+        let long = misaka_palw_kernel::claim_paid_v2::PaidClaimLifetimeV2 { liability_until: u64::MAX, ..short };
+        assert_eq!(palw_paid_trap_reveal_end_v1(&long), end);
         assert!(palw_paid_trap_reveal_admits_v1(&PalwPaidTrapRevealInputV1 { convicted: false, ..input() }).is_err(), "no verdict");
         assert!(palw_paid_trap_reveal_admits_v1(&PalwPaidTrapRevealInputV1 { interactive: true, ..input() }).is_err());
     }
@@ -332,6 +380,7 @@ mod tests {
             assert!(params.palw_paid_claim_trap_v1.is_none());
             assert!(!params.palw_paid_claim_trap_active_at(u64::MAX));
             params.validate_palw_paid_claim_trap_v1().unwrap();
+            assert!(params.palw_fences_v1().iter().any(|(name, at)| *name == "palw_paid_claim_trap_v1" && at.is_none()));
             let mut armed = params.clone();
             armed.palw_paid_claim_trap_v1 = Some(ForkActivation::new(9_000_000));
             assert!(armed.validate_palw_paid_claim_trap_v1().is_err(), "no prerequisites below it");

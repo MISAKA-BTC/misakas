@@ -368,3 +368,58 @@ fn class_registration_origins_have_their_own_exact_aux_codec() {
     let error = super::wire_kernel_aux::scan_native_aux_row_v1(PALW_CLASS_REGISTRATION_ORIGIN_TABLE_V1, &[0xEE; 65], &mut empty).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 }
+
+/// RFC-0007 §4.1 T6 paid-claim trap rows (aux 142, dormant): a 65-byte `0x01 ‖ claim` key reaches the conviction row's codec, a
+/// 137-byte `0x02 ‖ claim ‖ verifier ‖ le64(slot)` key the held check fee's; any other shape fails closed as malformed; 142 collides
+/// with no other aux table. Source only, not executed.
+#[test]
+fn paid_claim_trap_rows_have_their_own_exact_aux_codec() {
+    use crate::palw_paid_claim_trap_v1::*;
+    assert_eq!(PALW_PAID_CLAIM_TRAP_TABLE_V1, 142);
+    for other in [
+        crate::palw_settlement_once_v1::PALW_SETTLEMENT_ONCE_TABLE_V1,
+        crate::palw_class_registration_origin_v1::PALW_CLASS_REGISTRATION_ORIGIN_TABLE_V1,
+        crate::palw_router_binding_v2::PALW_ROUTER_BINDING_TABLE_V2,
+        crate::palw_material_release_recovery_v2::PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2,
+        crate::palw_claim_compact_v4::PAID_CLAIM_COMPACT_V4,
+        crate::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_TABLE_V1,
+    ] {
+        assert_ne!(other, PALW_PAID_CLAIM_TRAP_TABLE_V1);
+    }
+    let conviction = PalwPaidClaimConvictionRowV1 {
+        version: PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
+        base_claim: [1; 64],
+        enrollment: [2; 64],
+        accuser: [3; 64],
+        convicted_daa: 9,
+        forget_after_daa: 10,
+    };
+    let bytes = borsh::to_vec(&conviction).unwrap();
+    let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+    super::wire_kernel_aux::scan_native_aux_row_v1(PALW_PAID_CLAIM_TRAP_TABLE_V1, &palw_paid_trap_conviction_key_v1(&[1; 64]), &mut reader)
+        .unwrap();
+    assert_eq!(reader.remaining(), 0);
+    let held = PalwHeldCheckFeeRowV1 {
+        version: PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
+        claim: [1; 64],
+        verifier: [4; 64],
+        slot: 0,
+        poster: [5; 64],
+        fee: 7,
+        release_after_daa: 11,
+    };
+    let bytes = borsh::to_vec(&held).unwrap();
+    let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+    super::wire_kernel_aux::scan_native_aux_row_v1(
+        PALW_PAID_CLAIM_TRAP_TABLE_V1,
+        &palw_paid_trap_held_fee_key_v1(&[1; 64], &[4; 64], 0),
+        &mut reader,
+    )
+    .unwrap();
+    assert_eq!(reader.remaining(), 0);
+    for bad_key in [vec![0xEE; 65], vec![PALW_PAID_CLAIM_TRAP_CONVICTION_PREFIX_V1; 137], vec![0xEE; 64]] {
+        let mut empty = NativeWireReaderV1::new(&[][..], 0);
+        let error = super::wire_kernel_aux::scan_native_aux_row_v1(PALW_PAID_CLAIM_TRAP_TABLE_V1, &bad_key, &mut empty).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+}

@@ -55,7 +55,8 @@ pub const PALW_RFC0608_OPEN_BLOCKERS_V1: &[(PalwRfc0608FenceV1, &str)] = &[
     (
         PalwRfc0608FenceV1::SettlementOnceV1,
         "RFC08-2 (unsourced terms): past the fence the combined liability predicate refuses, by name, every leg whose terms \
-         have no authenticated source: verifier check fees (RFC07-5: no verifier liability horizon), material provider fees \
+         have no authenticated source: verifier check fees outside a paid V2 claim past palw_paid_claim_trap_v1 (no verifier \
+         liability horizon; a paid V2 claim's fee is held and sourced by RFC07-5's trap window), material provider fees \
          (event-relative covenant, no finite horizon), native mining receipts and native funded/text/job/mining admissions (no \
          signed hard deadline), kernel claims outside a paid V2 enrollment (no producer-signed lifetime), beacon source-fee \
          promise payouts (no claim reservation, X3 deadline or material TTL) and audit answers paid before their trap window \
