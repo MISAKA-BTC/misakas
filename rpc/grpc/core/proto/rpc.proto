@@ -1824,6 +1824,8 @@ message RpcPalwClaimRow {
   bool vestingEtaEstimated = 36;
   // Testnet-12 lifecycle audit: weight + escrow (until licence) + receipt rights, decimal sompi.
   string committedSompi = 37;
+  // Version 5 (ADR-0176 amendment, user ruling 2026-10-15): the reservation's decomposition, JSON; empty below palw_bond_formula_v2.
+  string reservationSplit = 38;
 }
 
 // Testnet-12 lifecycle audit T12-058: one live Valid lock on a bond.

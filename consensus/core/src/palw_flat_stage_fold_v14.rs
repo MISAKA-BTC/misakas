@@ -203,7 +203,14 @@ fn plan_stage_budget(
             block_units: 0,
             reward_sompi: 0,
             final_weight: 0,
-            liability_sompi: p.execution.execution.required_producer_reserve as u128,
+            // ADR-0176 amendment (ユーザー判断 2026-10-15): past `palw_bond_formula_v2` at least the formula's NativeFunded total
+            // (collectable-loss floor + court/DA/retention), the class's own reserve otherwise.
+            liability_sompi: builder.bond_formula_producer_liability_v2(
+                ctx,
+                crate::palw_bond_formula_v2::PalwClaimTypeV2::NativeFunded,
+                0,
+                p.execution.execution.required_producer_reserve as u128,
+            ),
         },
         crate::palw_bond_budget_v1::PalwBudgetOriginV1::KernelRoute,
         0,

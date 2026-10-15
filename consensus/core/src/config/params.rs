@@ -3099,6 +3099,14 @@ pub struct Params {
     /// fence: `None` everywhere, Some-only hashed with its policy, collapsed from `Some(never())`, refused when armed
     /// ([`Self::validate_palw_model_bond_allocation_v1`]).
     pub palw_model_bond_allocation_v1: Option<crate::palw_bond_budget_v1::PalwModelBondAllocationFenceV1>,
+    /// **ADR-0176 amendment — ユーザー判断 2026-10-15: bond式の再設計** ([`crate::palw_bond_formula_v2`]): past this height (keyed on
+    /// each claim's acceptance) a claim's bond reservation is decomposed (weight / economic right / collectable-loss top-up / court-DA-
+    /// retention, each with its own hold), derived from the claim's per-period-split rights and a ρ-independent collectable loss; the
+    /// concurrent check stays `u·C` (u provisionally 500 ‰); a licence no longer releases the escrow reservation or the issuance slot
+    /// (capacity returns only at the fixed `d + W_M`); a model class takes the reduced reservation only with a pinned measured
+    /// audit-capacity record. Needs a V3 rights-slicing `palw_bond_budget_v1` at or below it. **Dormant**: `None` everywhere, Some-only
+    /// hashed with its policy, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_bond_formula_v2`]).
+    pub palw_bond_formula_v2: Option<crate::palw_bond_formula_v2::PalwBondFormulaFenceV2>,
 
     /// **Lane LG14-B (RFC-0014 §4–§5 on the legacy V2 Panel route, user decision GAP-80): public descent and the held/fused DA
     /// units** ([`crate::palw_legacy_held_da_v2`]). Past this height any bond may demand an interior node of a V2 claim's step or
@@ -5991,6 +5999,7 @@ impl Params {
             palw_provider_court_v1: self.palw_provider_court_v1,
             palw_legacy_held_da_v2: self.palw_legacy_held_da_v2,
             palw_bond_budget_v1: self.palw_bond_budget_v1.clone(),
+            palw_bond_formula_v2: self.palw_bond_formula_v2,
             palw_reporter_income_v2: self.palw_reporter_income_v2,
             palw_material_income_v3: self.palw_material_income_v3,
             palw_panel_lifetime_v2: self.palw_panel_lifetime_v2,
@@ -7129,6 +7138,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
     palw_panel_lifetime_v2: None,
@@ -7463,6 +7473,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
     palw_panel_lifetime_v2: None,
@@ -7779,6 +7790,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
     palw_panel_lifetime_v2: None,
@@ -13263,6 +13275,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
     palw_panel_lifetime_v2: None,

@@ -916,6 +916,8 @@ mod tests {
             "palw_model_bond_allocation_v1" => {
                 params.palw_model_bond_allocation_v1 = Some(crate::palw_bond_budget_v1::PalwModelBondAllocationFenceV1::at(at));
             }
+            // ADR-0176 amendment (ユーザー判断 2026-10-15): a height with the unapproved probe policy (refused by `validate_palw_v2`).
+            "palw_bond_formula_v2" => params.palw_bond_formula_v2 = Some(crate::palw_bond_formula_v2::PalwBondFormulaFenceV2::at(at)),
             // ADR-0032's amended reporter share (lane INTF): a bare height, refused when armed by `validate_palw_v2` (which the probe
             // does not run).
             "palw_reporter_share_v2" => params.palw_reporter_share_v2 = Some(at),

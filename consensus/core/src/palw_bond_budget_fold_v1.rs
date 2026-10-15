@@ -279,6 +279,8 @@ pub(super) struct PalwBudgetPlanV1 {
     reservation: PalwBudgetVectorV1,
     /// Block units consumed at once (the claim's own block exists already).
     consume_blocks_now: u64,
+    /// ユーザー方針 2026-10-15: the claim's verification mode (Panel=1 day view / Panel=0), fixed at acceptance.
+    mode: PalwHoldModeV1,
 }
 
 impl PalwBudgetPlanV1 {
@@ -763,6 +765,22 @@ impl TransitionBuilder<'_> {
         origin: PalwBudgetOriginV1,
         consume_blocks_now: u64,
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
+        self.plan_bond_budget_moded_v1(ctx, bond, model, ask, origin, consume_blocks_now, PalwHoldModeV1::for_origin(origin))
+    }
+
+    /// [`Self::plan_bond_budget_v1`] with the claim's verification mode (ユーザー方針 2026-10-15): a Panel=1 claim is also checked
+    /// against its bond's day view; every claim against the burst view and the concurrent-liability cap (V3 policies only).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn plan_bond_budget_moded_v1(
+        &self,
+        ctx: &PalwBlockContextV2,
+        bond: PalwBondKeyV2,
+        model: Option<Hash64>,
+        ask: PalwBudgetAskV1,
+        origin: PalwBudgetOriginV1,
+        consume_blocks_now: u64,
+        mode: PalwHoldModeV1,
+    ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
         let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(None) };
         let capital = self.state.bonds.get(&bond).map(|r| r.collateral).unwrap_or(0);
         // RFC-0016 P4 (user decision 2026-10-15): a user-paid escrow claim (the kernel route) is never clipped by, and never
@@ -782,10 +800,19 @@ impl TransitionBuilder<'_> {
             }
         };
         let reservation = budget
-            .preview_claim_for_origin_v1(&mirror.policy, capital, bond, model, ask, origin)
+            .preview_claim_for_origin_moded_v1(&mirror.policy, capital, bond, model, ask, origin, mode)
             .map_err(|why| budget_refused(bond, why))?;
         if consume_blocks_now > reservation.block_units {
             return Err(budget_refused(bond, PalwBudgetRefusalV1::Short { dim: PalwBudgetDimV1::BlockUnits }));
+        }
+        // ADR-0177 (2026-10-14): P_m sets the model's reward-bearing block opportunity too (a rider rides its lead's block, which the
+        // lead's acceptance counted). Refused, never clipped: a block opportunity is a whole block.
+        if let (Some(m), Some(alloc)) = (model, mirror.allocation_at(ctx.daa_score))
+            && alloc.average.is_some_and(|a| a.block_opportunity)
+            && origin != PalwBudgetOriginV1::Rider
+            && reservation.block_units > budget.model_blocks_available_v1(&m, ctx.daa_score)
+        {
+            return Err(budget_refused(bond, PalwBudgetRefusalV1::ModelBlockOpportunity));
         }
         Ok(Some(PalwBudgetPlanV1 {
             policy: mirror.policy,
@@ -797,6 +824,7 @@ impl TransitionBuilder<'_> {
             origin,
             reservation,
             consume_blocks_now,
+            mode,
         }))
     }
 
@@ -815,9 +843,13 @@ impl TransitionBuilder<'_> {
             self.create_bond_budget_v1(ctx, &mirror)?;
         }
         let bond = plan.bond;
+        let block_opportunity = self
+            .bond_budget_mirror_at(ctx.daa_score)
+            .and_then(|mirror| mirror.allocation_at(ctx.daa_score).and_then(|alloc| alloc.average))
+            .is_some_and(|a| a.block_opportunity);
         let out = self
             .bond_budget_op(|budget, _, j| {
-                let reserved = budget.reserve_claim_v1(
+                let reserved = budget.reserve_claim_moded_v1(
                     &plan.policy,
                     plan.capital,
                     claim_id,
@@ -826,9 +858,17 @@ impl TransitionBuilder<'_> {
                     plan.accepted_daa,
                     plan.ask,
                     plan.origin,
+                    plan.mode,
                     j,
                 )?;
                 debug_assert_eq!(reserved, plan.reservation, "the plan and the commit read one engine state");
+                // ADR-0177 (2026-10-14): the model's block opportunity is taken at acceptance (never returned early).
+                if let Some(m) = plan.model
+                    && plan.origin != PalwBudgetOriginV1::Rider
+                    && block_opportunity
+                {
+                    budget.reserve_model_blocks_v1(&m, reserved.block_units, j);
+                }
                 if plan.consume_blocks_now > 0 {
                     budget
                         .consume(&claim_id, PalwBudgetDimV1::BlockUnits, plan.consume_blocks_now as u128, true, j)
@@ -1551,13 +1591,23 @@ impl TransitionBuilder<'_> {
         } else {
             None
         };
-        self.plan_bond_budget_v1(
+        // ユーザー方針 2026-10-15: an OPV claim holds Panel=0's 7-day span; a Panel-licensed kernel claim Panel=1's day.
+        let mode = if kernel_class_is_optimistic { PalwHoldModeV1::PanelZero } else { PalwHoldModeV1::PanelOne };
+        // ユーザー判断 2026-10-15 item 6: the producer's liability is reserved beside the user's escrow (never replaced by it).
+        let claim_type = if kernel_class_is_optimistic {
+            crate::palw_bond_formula_v2::PalwClaimTypeV2::KernelPanelZero
+        } else {
+            crate::palw_bond_formula_v2::PalwClaimTypeV2::KernelPanelOne
+        };
+        let liability = self.bond_formula_producer_liability_v2(ctx, claim_type, reward, 0);
+        self.plan_bond_budget_moded_v1(
             ctx,
             bond,
             model,
-            PalwBudgetAskV1 { block_units: 0, reward_sompi: reward, final_weight: 0, liability_sompi: 0 },
+            PalwBudgetAskV1 { block_units: 0, reward_sompi: reward, final_weight: 0, liability_sompi: liability },
             PalwBudgetOriginV1::KernelRoute,
             0,
+            mode,
         )
     }
 
@@ -1659,7 +1709,7 @@ impl TransitionBuilder<'_> {
             block_units: budget_block_units,
             reward_sompi: claim.escrowed_reward,
             final_weight: crate::palw_weight_cap_v1::palw_weight_final_safe_v1(self.params, claim, contribution),
-            liability_sompi: claim.reserved,
+            liability_sompi: self.bond_formula_liability_v2(ctx, claim),
         };
         let origin = if rider { PalwBudgetOriginV1::Rider } else { PalwBudgetOriginV1::Attempt };
         let model = self.bond_budget_model_of(&claim.class_id, Some(artifact_root));
@@ -1682,7 +1732,7 @@ impl TransitionBuilder<'_> {
             block_units: PALW_BUDGET_BLOCK_UNIT_V1.saturating_mul(quanta as u64),
             reward_sompi: carve.saturating_mul(quanta as u64),
             final_weight: per_quantum.saturating_mul(quanta as u128),
-            liability_sompi: claim.reserved,
+            liability_sompi: self.bond_formula_liability_v2(ctx, claim),
         };
         let model = self.bond_budget_model_of(&claim.class_id, None);
         self.plan_bond_budget_v1(ctx, claim.bond, Some(model), ask, PalwBudgetOriginV1::FreePrompt, 0)
@@ -1844,6 +1894,25 @@ impl TransitionBuilder<'_> {
     /// the bond's liability hold runs to `now + H_L` (PESG §6).
     pub(super) fn bond_budget_close_v1(&mut self, claim_id: &Hash64, now: u64) {
         let hold_until = self.bond_budget_liability_hold_until_v1(now);
+        // ADR-0176 amendment (ユーザー判断 2026-10-15): a claim priced by `palw_bond_formula_v2` keeps its liability collateral counted
+        // until its liability ends — terminal + H_L, and at least its court/DA/retention span — not merely its withdrawal.
+        let formula = self
+            .state
+            .bond_budget
+            .as_ref()
+            .and_then(|budget| budget.claim_row(claim_id))
+            .map(|row| (row.accepted_daa, row.origin))
+            .filter(|(accepted, _)| self.params.bond_formula_v2_applies_at(*accepted));
+        if let Some((accepted, origin)) = formula {
+            let retention = self
+                .params
+                .bond_formula_v2()
+                .map(|m| m.policy.pricing(crate::palw_bond_formula_v2::palw_claim_type_of_origin_v2(origin)).retention_hold_daa)
+                .unwrap_or(0);
+            let until = hold_until.max(accepted.saturating_add(retention));
+            self.bond_budget_op(|budget, _, j| budget.close_keeping_liability_v1(claim_id, until, j));
+            return;
+        }
         self.bond_budget_op(|budget, _, j| budget.close_at(claim_id, Some(hold_until), j));
     }
 
@@ -2012,17 +2081,22 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
     if let (Some(policy), Some(epoch)) = (mirror.allocation_at(now).cloned(), mirror.allocation_epoch_at(now)) {
         let rolled = builder.state.bond_budget.as_ref().and_then(|b| b.header.allocation).is_some_and(|a| a.index >= epoch);
         if !rolled {
+            // ADR-0177 as decided 2026-10-14 (a V3 policy): the 30-day average of miner + claim-bound verifier capital.
+            let verifier = if policy.average.is_some_and(|a| a.verifier_capital) {
+                builder.bond_budget_verifier_capital_v1()
+            } else {
+                BTreeMap::new()
+            };
             builder.bond_budget_op(|budget, state, j| {
-                budget.roll_epoch(
-                    &policy,
-                    epoch,
-                    now,
-                    |bond| match state.bonds.get(bond) {
-                        Some(record) => (record.collateral, matches!(record.status, PalwBondStatusV2::Active)),
-                        None => (0, false),
-                    },
-                    j,
-                )
+                let capital_of = |bond: &PalwBondKeyV2| match state.bonds.get(bond) {
+                    Some(record) => (record.collateral, matches!(record.status, PalwBondStatusV2::Active)),
+                    None => (0, false),
+                };
+                if policy.average.is_some() {
+                    budget.roll_epoch_v3(&policy, epoch, now, capital_of, &verifier, j)
+                } else {
+                    budget.roll_epoch(&policy, epoch, now, capital_of, j)
+                }
             });
         }
         let carve = builder.params.worker_carve_at(ctx.subsidy, builder.extras.escrow_carve);
@@ -2084,6 +2158,61 @@ impl TransitionBuilder<'_> {
     /// **RFC-0015 §8.3 (lead default 2026-10-15, pending user review): no Panel-free claim is admitted unbudgeted.** `true` wherever
     /// the network declares the OPV policy (`palw_panel_free_v1`; the processor sets `budget_required` on every such network,
     /// calibration and test-armed worlds included — validate what ships).
+    /// **ADR-0177 (2026-10-14): claim-bound verifier capital per bond and model** — every live Panel duty's seat exposure, attributed to
+    /// the model its claim reserved against (claims without a budget model count nowhere). A waiting bond, a registration, an AMM /
+    /// Position or an unpaid reward is never here: only collateral a seat has actually bound to a live claim.
+    pub(super) fn bond_budget_verifier_capital_v1(&self) -> BTreeMap<PalwBondKeyV2, BTreeMap<Hash64, u64>> {
+        let mut out: BTreeMap<PalwBondKeyV2, BTreeMap<Hash64, u64>> = BTreeMap::new();
+        let Some(budget) = self.state.bond_budget.as_ref() else { return out };
+        for (claim_id, duty) in self.state.panel_duties.iter() {
+            let Some((model, _)) = budget.claim_row(claim_id).and_then(|row| row.model) else { continue };
+            let amount = u64::try_from(duty.seat_exposure).unwrap_or(u64::MAX);
+            for seat in duty.seats.keys() {
+                let entry = out.entry(*seat).or_default().entry(model).or_default();
+                *entry = entry.saturating_add(amount);
+            }
+        }
+        out
+    }
+
+    /// **A V2 claim's liability collateral for the budget** (PESG §6 `K`): `claim.reserved` (its weight term) below
+    /// `palw_bond_formula_v2`; past it the formula's whole decomposed reservation — weight + right + collectable-loss top-up +
+    /// court/DA/retention + a free prompt's priced receipt rights ([`crate::palw_state_v2::palw_claim_bond_reservation_v1`], the V2
+    /// ledger's ONE expression).
+    pub(super) fn bond_formula_liability_v2(&self, ctx: &PalwBlockContextV2, claim: &PalwClaimStateV2) -> u128 {
+        if !self.params.bond_formula_v2_applies_at(ctx.daa_score) {
+            return claim.reserved;
+        }
+        crate::palw_state_v2::palw_claim_bond_reservation_v1(self.params, claim).unwrap_or(u128::MAX)
+    }
+
+    /// **A kernel / native claim's producer liability** (ユーザー判断 2026-10-15 item 6): `below` under the old rule; past
+    /// `palw_bond_formula_v2` at least the formula's total for the type (collectable loss on the reward the user escrowed + court/DA/
+    /// retention) — the user's prepayment never removes it.
+    pub(super) fn bond_formula_producer_liability_v2(
+        &self,
+        ctx: &PalwBlockContextV2,
+        claim_type: crate::palw_bond_formula_v2::PalwClaimTypeV2,
+        reward: u64,
+        below: u128,
+    ) -> u128 {
+        use crate::palw_bond_formula_v2::{PalwBondFormulaInputV2, palw_bond_formula_split_v2};
+        if !self.params.bond_formula_v2_applies_at(ctx.daa_score) {
+            return below;
+        }
+        let (Some(formula), Some(budget)) = (self.params.bond_formula_v2(), self.params.bond_budget()) else { return below };
+        let input = PalwBondFormulaInputV2 {
+            claim_type,
+            accepted_daa: ctx.daa_score,
+            reward_ask_sompi: reward,
+            final_weight_ask: 0,
+            block_units_ask: 0,
+            pwu_exposure_sompi: 0,
+            reduction_allowed: false,
+        };
+        palw_bond_formula_split_v2(&formula.policy, &budget.policy, &input).map_or(u128::MAX, |split| split.total().max(below))
+    }
+
     pub(super) fn panel_free_budget_required_v1(&self) -> bool {
         self.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()).is_some_and(|o| o.budget_required)
     }
@@ -2140,7 +2269,12 @@ impl TransitionBuilder<'_> {
                 block_units: 0,
                 reward_sompi: 0,
                 final_weight: 0,
-                liability_sompi: class.record().required_producer_reserve as u128,
+                liability_sompi: self.bond_formula_producer_liability_v2(
+                    ctx,
+                    crate::palw_bond_formula_v2::PalwClaimTypeV2::NativeFunded,
+                    job.reward,
+                    class.record().required_producer_reserve as u128,
+                ),
             },
             PalwBudgetOriginV1::KernelRoute,
             0,
@@ -2196,7 +2330,17 @@ impl TransitionBuilder<'_> {
             ctx,
             producer,
             None,
-            PalwBudgetAskV1 { block_units: 0, reward_sompi: 0, final_weight: 0, liability_sompi: m.producer_reserve as u128 },
+            PalwBudgetAskV1 {
+                block_units: 0,
+                reward_sompi: 0,
+                final_weight: 0,
+                liability_sompi: self.bond_formula_producer_liability_v2(
+                    ctx,
+                    crate::palw_bond_formula_v2::PalwClaimTypeV2::NativeFunded,
+                    r.reward,
+                    m.producer_reserve as u128,
+                ),
+            },
             PalwBudgetOriginV1::KernelRoute,
             0,
         )

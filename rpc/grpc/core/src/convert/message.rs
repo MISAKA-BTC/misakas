@@ -772,6 +772,7 @@ from!(item: &kaspa_rpc_core::RpcPalwClaimRow, protowire::RpcPalwClaimRow, {
         vesting_eta_daa: item.vesting_eta_daa,
         vesting_eta_estimated: item.vesting_eta_estimated,
         committed_sompi: item.committed_sompi.clone(),
+        reservation_split: item.reservation_split.clone(),
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwClaimsRequest, protowire::GetPalwClaimsRequestMessage, {
@@ -3258,6 +3259,7 @@ try_from!(item: &protowire::RpcPalwClaimRow, kaspa_rpc_core::RpcPalwClaimRow, {
         vesting_eta_daa: item.vesting_eta_daa,
         vesting_eta_estimated: item.vesting_eta_estimated,
         committed_sompi: item.committed_sompi.clone(),
+        reservation_split: item.reservation_split.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwClaimsRequestMessage, kaspa_rpc_core::GetPalwClaimsRequest, {

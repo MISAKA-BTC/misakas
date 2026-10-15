@@ -115,11 +115,16 @@ pub struct RpcPalwClaimRow {
     /// version-3 peer, and where the node's figure overflows (never a sentinel amount).
     #[serde(default)]
     pub committed_sompi: String,
+    /// **Version 5 — ADR-0176 amendment (ユーザー判断 2026-10-15 item 3)**: the reservation's decomposition as one JSON object
+    /// (`type`, `mode`, `weight`, `right`, `penalty`, `other`, `collectableLoss`, `gain`, each component's hold and the fixed
+    /// `capacityRecoveryDaa`). Empty for a claim accepted below `palw_bond_formula_v2` and from a version-4 peer.
+    #[serde(default)]
+    pub reservation_split: String,
 }
 
 impl Serializer for RpcPalwClaimRow {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &4, writer)?;
+        store!(u16, &5, writer)?;
         store!(String, &self.claim_id, writer)?;
         store!(bool, &self.is_free_prompt, writer)?;
         store!(String, &self.class_id, writer)?;
@@ -161,6 +166,8 @@ impl Serializer for RpcPalwClaimRow {
         store!(bool, &self.vesting_eta_estimated, writer)?;
         // Version 4: what the claim holds on its bond, whole (weight + escrow + rights).
         store!(String, &self.committed_sompi, writer)?;
+        // Version 5: the reservation's decomposition (ADR-0176 amendment).
+        store!(String, &self.reservation_split, writer)?;
         Ok(())
     }
 }
@@ -213,6 +220,9 @@ impl Deserializer for RpcPalwClaimRow {
         }
         if version >= 4 {
             row.committed_sompi = load!(String, reader)?;
+        }
+        if version >= 5 {
+            row.reservation_split = load!(String, reader)?;
         }
         Ok(row)
     }

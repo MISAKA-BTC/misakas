@@ -307,7 +307,7 @@ pub fn palw_rule_e_window_v1(
         params,
         uncertified_weightless,
         canonical_work_daa,
-        palw_rule_e_bond_budget_v1(params),
+        &palw_rule_e_bond_budget_v1(params),
         |_, claim| claim.accepted_blue_score > floor,
     )?;
     records.sort_by(|a, b| (a.accepted_blue_score, a.claim_id).cmp(&(b.accepted_blue_score, b.claim_id)));

@@ -2689,6 +2689,16 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "BUDGET (ADR-0177)",
         false,
     ),
+    // ADR-0176 amendment (ユーザー判断 2026-10-15: bond式の再設計): no new kind or wire; the V2 ledger's reservation terms change for
+    // claims accepted past the fence (keyed on acceptance), so below it every reader answers as before.
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "V2 claim reservation decomposed (weight term / escrow term), licence keeps escrow and issuance slot until d + W",
+        },
+        "palw_bond_formula_v2",
+        "ADR-0176 amendment (bond formula v2)",
+        false,
+    ),
     // ADR-0032 (2026-10-10): R-1's reporter share 49% and DA-6's exposure at it. testnet-12 arms R-core+ at genesis, so below this
     // fence the share must stay int-12's 1,000 bps (and the params fingerprint int-12's); INTF moves `pre`'s unfenced constant here.
     a2_row(

@@ -1856,6 +1856,10 @@ pub struct PalwStateParamsV2 {
     /// preset, and validation refuses both armed.
     #[borsh(skip)]
     bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1>,
+    /// **ADR-0176 amendment (ユーザー判断 2026-10-15: bond式の再設計): `Params::palw_bond_formula_v2`, mirrored by
+    /// `Params::sync_palw_bond_formula_v2`.** `None` on every shipped preset; validation refuses it armed.
+    #[borsh(skip)]
+    bond_formula_v2: Option<crate::palw_bond_formula_v2::PalwBondFormulaMirrorV2>,
     /// Separate dormant monetary schema v2 fence, synchronized with Params.
     #[borsh(skip)]
     reporter_income_from_daa: Option<u64>,
@@ -3744,6 +3748,11 @@ pub fn palw_rcore_supplementary_flips_v1(
     now_daa: u64,
 ) -> bool {
     let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = staged.phase else { return false };
+    // ADR-0176 amendment (ユーザー判断 2026-10-15: bond式の再設計): past `palw_bond_formula_v2` a licence never releases the escrow
+    // reservation — reservations leave only when the liability ends, capacity only at the fixed d + W (keyed on acceptance).
+    if params.bond_formula_v2_applies_at(staged.accepted_daa) {
+        return false;
+    }
     !staged.rcore.escrow_released
         && now_daa <= palw_rcore_release_window_closes_v1(params, licensed_daa, receipt_deadline)
         && palw_rcore_release_due_v1(params, state, claim_id, staged)

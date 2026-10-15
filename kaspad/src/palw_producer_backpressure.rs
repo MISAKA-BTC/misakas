@@ -156,6 +156,7 @@ mod tests {
             deadline_daa: None,
             reserved: 0,
             committed: None,
+            reservation_split: None,
             escrowed_reward: 0,
             payout_pending: None,
             work_leaves: 0,
