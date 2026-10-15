@@ -431,6 +431,17 @@ impl PreparedKernelPaidWorkV4 {
                     // Every named provider must durably hold the material and sign; a partial or failed exchange is retried
                     // with a fresh grant (provider publication is idempotent per consent).
                     retry!("authenticated provider exchange", exchange.0.ingest_kernel_material_v4(request, &grant));
+                    // Keep the sponsor's own copy of the signed work and its intrinsic context beside the outbox: a later
+                    // bounded provider replacement (--private-probe-kernel-replace) replays exactly these, never a
+                    // provider-supplied copy. Written once; an existing record is left untouched.
+                    let request_path = path.join("request.borsh");
+                    if !request_path.exists() {
+                        publish_borsh(&request_path, request, self.spec.max_input_bytes)?;
+                    }
+                    let context_path = path.join("context.borsh");
+                    if !context_path.exists() {
+                        publish_borsh(&context_path, &*grant.context, self.spec.max_input_bytes)?;
+                    }
                     ingress = Some(grant);
                 }
                 let grant = ingress.as_ref().ok_or("kernel ingress absent")?;

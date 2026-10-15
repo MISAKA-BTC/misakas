@@ -2036,6 +2036,19 @@ impl ConsensusApi for Consensus {
         }
         Ok(authority)
     }
+    fn palw_exec_origin_coverage_v1(
+        &self,
+        listed: usize,
+    ) -> Result<kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginCoverageV1, String> {
+        let before = self.lkg_virtual_state.load();
+        let state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
+            .map_err(|e| format!("historical header census state unavailable: {e:?}"))?;
+        Ok(kaspa_consensus_core::palw_work_slice_v2::palw_exec_origin_coverage_v1(&state, listed.min(4096), |block| {
+            self.headers_store.get_header(block).ok().and_then(|header| borsh::object_length(&*header).ok()).map(|n| n as u64)
+        }))
+    }
     fn palw_native_recovery_session_quote_v4(
         &self,
         checkpoint: Option<BlockHash>,

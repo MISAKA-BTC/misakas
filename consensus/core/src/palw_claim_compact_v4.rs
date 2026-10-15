@@ -221,3 +221,42 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod retirement_tests {
+    use super::*;
+    use crate::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS};
+
+    fn policy() -> PalwClaimCompactPolicyV4 {
+        PalwClaimCompactPolicyV4 {
+            max_contracts: 1,
+            maximum_opening_bytes: 1,
+            maximum_proof_bytes: 1,
+            maximum_verifier_work: 1,
+            maximum_stream_words: 1,
+            require_independent_review: true,
+        }
+    }
+
+    /// PRINCIPLES §8: no preset carries the fence, and configuring it at all — dormant or armed — is refused.
+    #[test]
+    fn compact_v4_is_retired_on_every_preset_and_refused_when_configured() {
+        assert!(crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACTS_RETIRED_V1);
+        for preset in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS] {
+            assert!(preset.palw_claim_compact_v4.is_none());
+            assert!(preset.validate_palw_claim_compact_v4().is_ok());
+        }
+        for activation in [ForkActivation::never(), ForkActivation::new(0)] {
+            let mut params = TESTNET_PARAMS.clone();
+            params.palw_claim_compact_v4 = Some(PalwClaimCompactFenceV4 { activation, policy: policy() });
+            assert!(params.validate_palw_claim_compact_v4().is_err(), "retired compact V4 accepted at {activation:?}");
+        }
+    }
+
+    /// The renumbered table is 138 and distinct from RFC-0016's telemetry table 135.
+    #[test]
+    fn compact_v4_table_is_138() {
+        assert_eq!(PAID_CLAIM_COMPACT_V4, 138);
+        assert_ne!(PAID_CLAIM_COMPACT_V4, crate::palw_rfc0016_v1::ledger::PALW_RFC0016_TELEMETRY_TABLE_V1);
+    }
+}

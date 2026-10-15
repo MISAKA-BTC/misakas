@@ -604,6 +604,11 @@ pub trait ConsensusApi: Send + Sync {
     ) -> Result<(), String> {
         Err("current native kernel material authority unavailable".into())
     }
+    /// RFC-0006 read-only census of the eligible historical headers the EXEC origin migration needs, from this node's own
+    /// store at its tip (`listed` caps the returned claim lists). Authorizes nothing.
+    fn palw_exec_origin_coverage_v1(&self, _listed: usize) -> Result<crate::palw_work_slice_v2::PalwExecOriginCoverageV1, String> {
+        Err("historical header coverage census unavailable".into())
+    }
     fn palw_material_generation_authority_v4(
         &self,
         _root: Hash64,

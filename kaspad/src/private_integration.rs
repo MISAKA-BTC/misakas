@@ -44,10 +44,13 @@ mod native_provider;
 pub use native_provider::PrivateNativeCustodySpecV3;
 pub(crate) mod recovery_ack_carrier_v4;
 mod recovery_observation_v4;
+mod exec_origin_coverage_v1;
 mod kernel_paid_producer_v4;
 pub use kernel_paid_producer_v4::PrivateKernelPaidWorkSpecV4;
 mod kernel_paid_checker_v4;
 pub use kernel_paid_checker_v4::PrivateKernelPaidCheckSpecV4;
+mod kernel_paid_replace_v4;
+pub use kernel_paid_replace_v4::PrivateKernelPaidReplaceSpecV4;
 pub use recovery_ack_carrier_v4::PrivateRecoveryAckFeeSpecV4;
 
 pub fn parse_private_recovery_provider_roster_v4(
@@ -468,6 +471,7 @@ pub fn create_private_integration_core_with_native_custody_v4(
         recovery_providers,
         None,
         None,
+        None,
     )
 }
 
@@ -497,6 +501,7 @@ pub fn create_private_integration_core_with_kernel_paid_work_v4(
         recovery_providers,
         Some(work),
         None,
+        None,
     )
 }
 
@@ -513,11 +518,23 @@ pub fn create_private_integration_core_with_kernel_paid_consumers_v4(
     recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
     work: Option<PrivateKernelPaidWorkSpecV4>,
     checker: Option<PrivateKernelPaidCheckSpecV4>,
+    replace: Option<PrivateKernelPaidReplaceSpecV4>,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
-    if work.is_some() && (!args.palw_produce || native.is_none()) {
-        return Err("kernel paid work requires the configured producer and authenticated custody exchange".into());
+    if (work.is_some() || replace.is_some()) && (!args.palw_produce || native.is_none()) {
+        return Err("kernel paid work/replacement requires the configured producer (sponsor) and authenticated custody exchange".into());
     }
-    create_private_native_custody_v4_inner(runtime, args, fd_total_budget, config, native, ack_fees, recovery_providers, work, checker)
+    create_private_native_custody_v4_inner(
+        runtime,
+        args,
+        fd_total_budget,
+        config,
+        native,
+        ack_fees,
+        recovery_providers,
+        work,
+        checker,
+        replace,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -531,12 +548,14 @@ fn create_private_native_custody_v4_inner(
     recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
     kernel_work: Option<PrivateKernelPaidWorkSpecV4>,
     kernel_checker: Option<PrivateKernelPaidCheckSpecV4>,
+    kernel_replace: Option<PrivateKernelPaidReplaceSpecV4>,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
     paid_v4_factory::validate_private_paid_claim_relations_v4(&config.params)?;
     if let Some(native) = &native {
         native.check_fixture(&config, args)?;
     } else if kernel_checker.is_none()
         || kernel_work.is_some()
+        || kernel_replace.is_some()
         || ack_fees.is_some()
         || !recovery_providers.is_empty()
         || args.palw_produce
@@ -556,7 +575,9 @@ fn create_private_native_custody_v4_inner(
         return Err("a producing paid-v4 custody node needs an explicit sorted distinct roster of 2..8 provider bonds".into());
     }
     prepare_private_integration_probe(args, &config)?;
-    kaspa_core::warn!("RFC12 PRIVATE paid-v4: compact/recovery mechanics; acceptance, soundness and economic approval pending");
+    kaspa_core::warn!(
+        "RFC12 PRIVATE paid-v4: release-recovery mechanics (compact V4 retired); acceptance, soundness and economic approval pending"
+    );
     let hook: crate::palw_native_custody_v3::PalwNativeCustodyHookV3 = match (native, ack_fees) {
         (Some(native), Some(fees)) => native.into_hook_with_service_v4(Box::new(move |service, ctx| fees.start(service, ctx))),
         (Some(native), None) => native.into_hook(),
@@ -569,7 +590,9 @@ fn create_private_native_custody_v4_inner(
         // consumes the context. An uploaded file supplies work, not authority.
         let producer = kernel_work.map(|work| work.prepare(&ctx)).transpose()?;
         let checker = kernel_checker.map(|checker| checker.prepare(&ctx)).transpose()?;
+        let replacement = kernel_replace.map(|replace| replace.prepare(&ctx)).transpose()?;
         recovery_observation_v4::start(&ctx)?;
+        exec_origin_coverage_v1::start(&ctx)?;
         let exchange = hook(ctx)?;
         if let Some(producer) = producer {
             producer
@@ -577,6 +600,10 @@ fn create_private_native_custody_v4_inner(
         }
         if let Some(checker) = checker {
             checker.start()?;
+        }
+        if let Some(replacement) = replacement {
+            replacement
+                .start(exchange.as_ref().ok_or("kernel replacement requires an explicit authenticated provider exchange")?.clone())?;
         }
         Ok(exchange)
     });
