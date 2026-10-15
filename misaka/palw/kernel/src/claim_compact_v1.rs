@@ -46,6 +46,8 @@ use crate::field::{F89, F107, FieldElemV1, Fp, MODULI_V2, mersenne};
 use crate::hash::{Digest, object_id};
 use crate::plan::{PlanRelationV1, VerificationPlanV1, dtype_of_tag, relation_moduli};
 
+pub mod native_v2;
+
 pub const COMPACT_RELATION_COMPILER_DOMAIN_V1: &[u8] = b"MISAKA/PALW/CLAIM-PROOF-COMPILER/COMPACT-RELATION/V1";
 pub const COMPACT_RELATION_SCOPE_DOMAIN_V1: &[u8] = b"MISAKA/PALW/COMPACT-RELATION/SCOPE/V1";
 pub const COMPACT_RELATION_FS_DOMAIN_V1: &[u8] = b"MISAKA/PALW/COMPACT-RELATION/FS/V1";
@@ -712,10 +714,16 @@ impl CompactRelationContractV1 {
 pub fn register_compact_relation_contract_v1(
     contract: &CompactRelationContractV1,
     coverage: &CompactPlanCoverageV1,
+    program: &TirProgramV1,
+    plan: &VerificationPlanV1,
     adversary: &AdversaryBudgetV1,
     registry: &[ReviewedTupleV2],
     policy: &PostCommitChallengePolicyV1,
 ) -> Result<CompactContractSummaryV1, String> {
+    let actual = compile_plan_v1(contract.target, program, plan, &coverage.params).map_err(|e| e.to_string())?;
+    if actual != *coverage {
+        return Err("compact coverage does not equal the actual registered program/plan compilation".into());
+    }
     let summary = contract.check(coverage, adversary)?;
     misaka_palw_challenge::approved_v2(registry, &contract.suite_id(coverage), policy)
         .map_err(|e| format!("compact relation suite is not an approved review tuple: {e}"))?;
@@ -1765,11 +1773,20 @@ mod tests {
             let refused = register_compact_relation_contract_v1(
                 &contract,
                 &coverage,
+                &program,
+                &plan,
                 &AdversaryBudgetV1::NONE,
                 &misaka_palw_challenge::shipped_registry_v2(),
                 &policy,
             );
             assert!(refused.unwrap_err().contains("not an approved review tuple"), "the shipped registry is empty");
+            let mut omitted = coverage.clone();
+            omitted.entries.pop();
+            let forged = CompactRelationContractV1 { coverage_root: omitted.root(), ..contract.clone() };
+            let error =
+                register_compact_relation_contract_v1(&forged, &omitted, &program, &plan, &AdversaryBudgetV1::NONE, &[], &policy)
+                    .unwrap_err();
+            assert!(error.contains("actual registered program/plan"), "coverage omission is refused before approval lookup");
             let overclaim = CompactRelationContractV1 { claimed_soundness_bits: u16::MAX, ..contract.clone() };
             assert!(overclaim.check(&coverage, &AdversaryBudgetV1::NONE).is_err());
             let unbound = CompactRelationContractV1 { coverage_root: [1; 64], ..contract };

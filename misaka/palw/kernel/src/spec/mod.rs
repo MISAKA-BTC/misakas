@@ -554,7 +554,7 @@ pub fn retrieval_claim_material_bytes_v1(root: &RetrievalRootV1) -> u128 {
     (root.snapshot.items as u128).saturating_mul(item_bytes(root))
 }
 
-fn retrieval_reexecution_work_v1(root: &RetrievalRootV1) -> u128 {
+pub fn retrieval_reexecution_work_v1(root: &RetrievalRootV1) -> u128 {
     retrieval_claim_material_bytes_v1(root)
         .saturating_mul(64)
         .saturating_add((root.snapshot.items as u128).saturating_mul(root.snapshot.dim as u128).saturating_mul(128))

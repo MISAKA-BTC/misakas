@@ -326,3 +326,40 @@ unrun typed-retrieval source test exercises real registration/job/retrieval,
 two target reservations against one ordinary seal, duplicate refusal, cold row
 rebuild, actual salted reveal, native Final and post-horizon refunds. Separate
 funded v5 fee collection and native-process acceptance remain required validation.
+
+
+## Registered native compact coverage binding (2026-10-15 integration)
+
+Source only, uncompiled and untested. The prior single-plan compact registration
+API accepted a caller's `coverage_root` without rederiving the entries from the
+actual program/plan. The API now requires both program and plan and recompiles
+before checking the review registry; an omitted relation under a relabeled
+coverage root is refused before review lookup. The dormant core wrapper forwards
+the program/plan explicitly. These arguments must be taken from authenticated
+native class rows; a self-consistent submitted plan is not chain authority.
+
+`claim_compact_v1/native_v2.rs` derives the whole map from the registered kernel
+ledger: Program/Segmented plans, every Pipeline stage, the Memory model plan with
+its native `max_steps` multiplier, every Composite model stage, and explicit exact
+retrieval/snapshot, memory-continuity and pipeline/composite-edge obligations.
+Cold validation recompiles and compares the entire map. The composed bound sums
+all probabilistic component instances (including every memory execution), then
+binding and the declared retry/beacon/grinding/adaptive budget. Its lifetime term
+requires per-attempt `Q = 1` and charges lifetime admissions once. Proof/work limits
+are checked with aggregate position × execution bounds. Unknown families still
+refuse; exact obligations are visible and not counted as compact lookup proofs.
+
+The core rooted reader `palw_native_compact_coverage_v2` and SDK CLI
+`claim-v2 COMPACT-COVERAGE` expose this map from separately pinned native LR/AR.
+The CLI requires explicit arithmetic opt-in, repetitions and transcript query
+budget; it assigns no production values or review status. Added unrun tests cover
+omitted relations, an erased memory-step multiplier and a missing snapshot exact
+obligation against cold rebuilt native rows.
+
+This closes the registered-class relation map and union accounting boundary. It
+does not close compact native block enrollment/round-message/receipt/Final
+migration: V3 full-material verification remains its own contract. GKR/PCS,
+lookup/permutation and compact memory arguments also remain unimplemented; exact
+retained checks are not described as implementations of those arguments. The
+independent 128-bit review registry remains empty, and no new public fence is
+armed. Their completion and consolidated acceptance remain outstanding.

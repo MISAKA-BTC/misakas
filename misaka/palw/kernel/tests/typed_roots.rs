@@ -1344,3 +1344,38 @@ fn typed_retrieval_sources_reserve_per_target_and_restore_through_final_refund()
     );
     w.rebuilt().validate_beacon_sources().unwrap();
 }
+
+#[test]
+fn native_compact_coverage_binds_typed_memory_steps_and_exact_snapshot_boundaries() {
+    use misaka_palw_kernel::claim_compact_v1::{
+        CompactCompileParamsV1,
+        native_v2::{NativeExactBoundaryV2, compile_native_class_v2},
+    };
+    let params = CompactCompileParamsV1 { compact_exact_arithmetic: true, arithmetic_repetitions: 2, fs_query_bits: 64 };
+    let m = Mem::new(memory_v1(3));
+    let coverage = compile_native_class_v2(&m.w.l, m.class, params).unwrap();
+    assert_eq!(coverage.target, misaka_palw_kernel::claim_paid_v2::PaidClaimTargetV2::TypedSpec);
+    assert_eq!(coverage.parts.len(), 1);
+    assert_eq!(coverage.parts[0].maximum_executions, 8, "native memory root max_steps");
+    assert!(coverage.exact_boundaries.iter().any(|b| matches!(b, NativeExactBoundaryV2::Memory { .. })));
+    coverage.validate_against(&m.w.rebuilt()).unwrap();
+    let mut wrong = coverage.clone();
+    wrong.parts[0].maximum_executions = 1;
+    assert!(wrong.validate_against(&m.w.l).is_err(), "cannot erase seven memory executions from whole-class union");
+    let mut omitted = coverage.clone();
+    omitted.parts[0].coverage.entries.pop();
+    assert!(omitted.validate_against(&m.w.l).is_err(), "a relation cannot disappear under an unchanged plan root");
+    let data = SnapshotDataV1::new(corpus(8, 2), 2, 2, 4).unwrap();
+    let (spec, _) = retrieval_spec(&data, 2);
+    let mut w = W::new(true);
+    let (class, ev) = w.register(spec, Some(data.snapshot.root()));
+    assert_eq!(ev.last(), Some(&E::ClassRegistered { class }));
+    let retrieval = compile_native_class_v2(&w.l, class, params).unwrap();
+    assert!(retrieval.parts.is_empty(), "snapshot ranking is exact, not an invented algebraic check");
+    assert!(
+        matches!(&retrieval.exact_boundaries[..],[NativeExactBoundaryV2::Retrieval{snapshot,..}]if *snapshot==data.snapshot.root())
+    );
+    let mut empty = retrieval.clone();
+    empty.exact_boundaries.clear();
+    assert!(empty.validate_against(&w.l).is_err());
+}

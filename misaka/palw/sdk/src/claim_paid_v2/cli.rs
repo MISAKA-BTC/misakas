@@ -4,7 +4,7 @@
 use super::*;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-const USAGE: &str = "palw-class claim-v2 CLASS|JOB|COMMIT|FUND|LOCK|VERIFY|MESSAGE|ROUND-FUND|ROUND-LOCK|ROUND-VERIFY|SIGN|INSPECT|FINAL
+const USAGE: &str = "palw-class claim-v2 CLASS|JOB|COMMIT|FUND|LOCK|VERIFY|MESSAGE|ROUND-FUND|ROUND-LOCK|ROUND-VERIFY|SIGN|INSPECT|FINAL|COMPACT-COVERAGE
 All commands: --snapshot FILE --ledger-root HEX --aux-root HEX --out FILE
 CLASS: --claim-policy POLICY_BORSH --source-policy SOURCE_BORSH --beacon-policy CHALLENGE_BORSH --base-class HEX --actor BOND_HEX [--rounds N --max-material-bytes N]
 JOB: --class HEX --base-job HEX --actor BOND_HEX --nonce HEX --last-commit DAA --max-consumers N
@@ -19,6 +19,7 @@ ROUND-VERIFY: --enrollment HEX --round N --material MATERIAL_BORSH --actor HEX -
 SIGN: --draft KERNEL_OBJECT --network ID [--drill-salt HEX] --bond TXID:INDEX --key-file SEED
 INSPECT: --context HEX
 FINAL: --enrollment HEX
+COMPACT-COVERAGE: --base-class HEX --compact-arithmetic true|false --arithmetic-repetitions N --fs-query-bits N
 Snapshot is borsh((header, Vec<(table,key,row)>)); roots must be authenticated from your selected chain.
 SIGN writes an outer native object for misaka palw submit-object; the other commands write unsigned drafts.
 An unapproved mechanics policy, economic estimate or signed seat receipt does not grant public security approval.";
@@ -64,6 +65,19 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let (header, rows): (Vec<u8>, Vec<(u8, Vec<u8>, Vec<u8>)>) = typed(&snapshot, 256 << 20)?;
     let route = PalwKernelRouteStateV1::from_served_rows_v1(&header, rows.clone(), &lr, &ar).map_err(|e| e.to_string())?;
     let object = match command.as_str() {
+        "COMPACT-COVERAGE" => {
+            let class = hash(&mut f, "--base-class")?;
+            let params = misaka_palw_kernel::claim_compact_v1::CompactCompileParamsV1 {
+                compact_exact_arithmetic: number(&mut f, "--compact-arithmetic")?,
+                arithmetic_repetitions: number(&mut f, "--arithmetic-repetitions")?,
+                fs_query_bits: number(&mut f, "--fs-query-bits")?,
+            };
+            let coverage = kaspa_consensus_core::palw_claim_compact_v1::palw_native_compact_coverage_v2(&route, class, params)?;
+            if !f.is_empty() {
+                return Err(format!("unknown options: {:?}", f.keys()));
+            }
+            return write(&out, &borsh::to_vec(&coverage).map_err(|e| e.to_string())?);
+        }
         "CLASS" => {
             let p = typed(&take(&mut f, "--claim-policy")?, 64 << 10)?;
             let s = typed(&take(&mut f, "--source-policy")?, 64 << 10)?;
