@@ -393,7 +393,87 @@ impl PalwConstraintStreamCourtV1 {
         signed_context: Option<Hash64>,
         original_stop: Option<PalwFpStopReasonV3>,
     ) -> Result<Self, String> {
-        if !pin.matches_binding_v1(binding) {
+        verify_binding_v1(binding).map_err(|e| e.to_string())?;
+        Self::flat_selection_view_v1(
+            claim_id,
+            owner,
+            reserved_daa,
+            expected_root,
+            &crate::palw_decode_view_v1::PalwDecodeViewV1::of_verified_binding_v1(binding),
+            &borsh::to_vec(binding).map_err(|e| e.to_string())?,
+            job,
+            pin,
+            witness,
+            eog_count,
+            eog_opening,
+            signed_context,
+            original_stop,
+        )
+    }
+    /// A native original TIR header supplies the view and seed identity. The Flat
+    /// pin must come from the accepted EOF stream; no legacy root is synthesized.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_from_flat_view_with_original_stop_context_v1(
+        claim_id: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        expected_root: Hash64,
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        view_identity: &[u8],
+        job: &PalwFreePromptJobV3,
+        pin: &crate::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1,
+        witness: Option<u32>,
+        eog_count: u32,
+        eog_opening: &PalwStepOpeningV1,
+        original: &PalwFreePromptCommitmentV3,
+        signed_context: Option<Hash64>,
+    ) -> Result<Self, String> {
+        if fp_claim_id_v3(original) != claim_id
+            || original.job != *job
+            || original.execution_root != expected_root
+            || original.decode_tokens_executed != view.job_context.exact_decode_tokens
+            || original.decode_tokens_executed == 0
+            || original.decode_tokens_executed > job.decode_token_limit
+            || match original.stop_reason {
+                PalwFpStopReasonV3::ExactBudgetReached => original.decode_tokens_executed != job.decode_token_limit,
+                PalwFpStopReasonV3::EndOfGeneration => original.decode_tokens_executed >= job.decode_token_limit,
+            }
+        {
+            return Err("terminal Flat predicate changes native original claim/count/stop facts".into());
+        }
+        Self::flat_selection_view_v1(
+            claim_id,
+            owner,
+            reserved_daa,
+            expected_root,
+            view,
+            view_identity,
+            job,
+            pin,
+            witness,
+            eog_count,
+            eog_opening,
+            signed_context,
+            Some(original.stop_reason),
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn flat_selection_view_v1(
+        claim_id: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        expected_root: Hash64,
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        view_identity: &[u8],
+        job: &PalwFreePromptJobV3,
+        pin: &crate::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1,
+        witness: Option<u32>,
+        eog_count: u32,
+        eog_opening: &PalwStepOpeningV1,
+        signed_context: Option<Hash64>,
+        original_stop: Option<PalwFpStopReasonV3>,
+    ) -> Result<Self, String> {
+        if !pin.matches_view_v1(view) {
             return Err("flat semantic pin does not preserve the original claim/job/scheme".into());
         }
         let terminal = pin.position_v1() as usize == pin.generated_ids_v1().len();
@@ -402,7 +482,7 @@ impl PalwConstraintStreamCourtV1 {
         }
         let committed = pin.committed_id_v1();
         let value = pin.committed_value_v1();
-        if committed.is_some_and(|id| id < binding.shape_profile.vocab_size) && value.is_none() {
+        if committed.is_some_and(|id| id < view.vocab_size) && value.is_none() {
             return Err("in-vocabulary Flat selection lacks its authenticated scalar".into());
         }
         let beat = pin.beat_v1();
@@ -415,12 +495,13 @@ impl PalwConstraintStreamCourtV1 {
                 committed as usize,
             )
         });
-        Self::from_authenticated_selection_v1(
+        Self::from_authenticated_selection_view_v1(
             claim_id,
             owner,
             reserved_daa,
             expected_root,
-            binding,
+            view,
+            view_identity,
             job,
             pin.generated_ids_v1(),
             pin.position_v1(),

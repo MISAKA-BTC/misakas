@@ -84,6 +84,30 @@ pub struct PalwTirOwnStepSourceNeedV1 {
     pub leaf_count: u64,
 }
 
+/// The first unavailable credential read by the canonical cone evaluator.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwTirPublicConeNeedV1 {
+    StepPreimage { index: u64 },
+    StepOpening { index: u64 },
+    StepRange { first: u64, count: u64 },
+    Prompt { tile: Option<u32> },
+    DecodePin,
+    RegisteredArtifact,
+}
+
+#[derive(Clone, Debug)]
+pub enum PalwTirPublicConeProbeV1 {
+    Need(PalwTirPublicConeNeedV1),
+    Ready {
+        proof: crate::palw_court_v2::PalwCourtVerdictProofV2,
+        meter: crate::palw_tir_court_v1::PalwTirBuilderMeterV1,
+    },
+    /// A construction refusal, not an acquittal or a completed prosecution.
+    Refused {
+        reason: String,
+    },
+}
+
 /// Roots actually computed by the independent replay, never copied from the
 /// accused commitment. Header identity/context remain those of the original job.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -711,6 +735,44 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
     ) -> Result<crate::palw_court_v2::PalwCourtVerdictProofV2, String> {
         Err("this family has no public sparse TIR arithmetic builder".into())
+    }
+
+    /// The caller debits the ENTIRE allocation before EVERY probe, including
+    /// Need/Refused/error waves: the evaluator exposes a meter only on success.
+    /// Allocations must be cumulative under the original paid work/window.
+    /// copy_budget_bytes is the caller's held before-copy allocation, separate
+    /// from work. Copy/scratch refusal is Refused, never a new DA obligation.
+    /// Ready is a built proof, not the native verifier's verdict.
+    fn probe_tir_public_cone_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _prompt_token_ids: &[u32],
+        _trace: Option<&crate::palw_step_refute::PalwTiledDecodeTokensV1>,
+        _runs: &[crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        _leaf_index: u64,
+        _rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
+        _limits: crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+        _copy_budget_bytes: u64,
+    ) -> Result<PalwTirPublicConeProbeV1, String> {
+        Err("this family has no public sparse TIR dependency probe".into())
+    }
+
+    fn build_tir_public_cone_bounded_v1(
+        &self,
+        header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        prompt_token_ids: &[u32],
+        trace: Option<&crate::palw_step_refute::PalwTiledDecodeTokensV1>,
+        runs: &[crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        leaf_index: u64,
+        rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
+        limits: crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+        copy_budget_bytes: u64,
+    ) -> Result<(crate::palw_court_v2::PalwCourtVerdictProofV2, crate::palw_tir_court_v1::PalwTirBuilderMeterV1), String> {
+        match self.probe_tir_public_cone_v1(header, prompt_token_ids, trace, runs, leaf_index, rules, limits, copy_budget_bytes)? {
+            PalwTirPublicConeProbeV1::Ready { proof, meter } => Ok((proof, meter)),
+            PalwTirPublicConeProbeV1::Need(need) => Err(format!("public TIR dependency unavailable: {need:?}")),
+            PalwTirPublicConeProbeV1::Refused { reason } => Err(reason),
+        }
     }
 
     /// **One committed TIR step leaf** (the TIR prefix-state source behind

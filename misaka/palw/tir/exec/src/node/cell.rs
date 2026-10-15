@@ -651,6 +651,11 @@ impl TirRunInputsV1 {
         b: &kaspa_consensus_core::palw_tir_step_v1::PalwTirStepBindingV1,
         class_id: Hash64,
     ) -> Result<(), String> {
+        // An empty source can bind to a checked original header without claiming
+        // any operand. Its first real run still establishes the exact identity.
+        if self.identity.is_none() && self.hashes.is_empty() && self.preimages.is_empty() && self.ranges.is_empty() {
+            return Ok(());
+        }
         if self.identity != Some((b.step_leaf_count, b.step_merkle_root, b.job_context.context_hash(), class_id)) {
             return Err("the sparse evidence is not this capture's binding".into());
         }

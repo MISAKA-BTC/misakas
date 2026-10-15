@@ -15,6 +15,407 @@ use kaspa_consensus_core::{
 };
 use std::sync::Arc;
 
+use kaspa_consensus_core::{
+    palw_backend::{PalwExecutionBackendV1, PalwTirPublicConeNeedV1, PalwTirPublicConeProbeV1},
+    palw_court_v2::PalwCourtVerdictProofV2,
+    palw_tir_court_v1::{PalwTirBuilderMeterV1, PalwTirBuilderWorkLimitsV1, PalwTirCourtRulesV1, PalwTirStepRunDisclosureV1},
+    palw_tir_public_source_v1::{
+        PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1, PalwTirPublicAuthenticatedIdsV1, PalwTirPublicAuthenticatedUnitV1, PalwTirPublicRequestV1,
+        PalwTirPublicResponseV1, PalwTirPublicSourceV1,
+    },
+};
+
+/// Literal native scope supplied by the future paid-sidecar reader. This local
+/// DTO is NOT an admission, a paid ticket or permission to choose a later clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ConeScopeV1 {
+    pub claim: Hash64,
+    pub owner: PalwBondKeyV2,
+    pub reserved_daa: u64,
+    pub bundle_id: Hash64,
+    pub source_id: Hash64,
+    pub leaf_index: u64,
+    pub acquisition_until_daa: u64,
+}
+
+/// Operational limits, not native class limits. Runtime integration must obtain
+/// these and all spent totals from authenticated paid state, including restart.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ConeContinuationCapsV1 {
+    pub total_builder: PalwTirBuilderWorkLimitsV1,
+    pub maximum_probes: u64,
+    pub maximum_requests: u64,
+    pub maximum_response_bytes: u64,
+    pub maximum_copy_bytes: u64,
+    pub maximum_planning_steps: u64,
+    pub maximum_material_units: usize,
+    pub maximum_preparation_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct ConeSpentV1 {
+    pub probes: u64,
+    pub elements: u64,
+    pub terms: u64,
+    pub targets: u64,
+    pub source_reads: u64,
+    pub requests: u64,
+    pub response_bytes: u64,
+    pub copy_bytes: u64,
+    pub planning_steps: u64,
+}
+
+pub(super) struct ConeContinuationBudgetV1 {
+    scope: ConeScopeV1,
+    caps: ConeContinuationCapsV1,
+    spent: ConeSpentV1,
+    pending: Option<PalwTirPublicRequestV1>,
+}
+
+fn charged_v1(old: u64, amount: u64, maximum: u64) -> Result<u64, String> {
+    old.checked_add(amount).filter(|n| *n <= maximum).ok_or_else(|| "TIR cone continuation allocation is exhausted".into())
+}
+
+impl ConeContinuationBudgetV1 {
+    /// Restore, never silently renew. Until a paid native reader restores these
+    /// values, this helper must not be activated as a runtime paid source actor.
+    pub(super) fn restore_v1(
+        scope: ConeScopeV1,
+        caps: ConeContinuationCapsV1,
+        spent: ConeSpentV1,
+        pending: Option<PalwTirPublicRequestV1>,
+    ) -> Result<Self, String> {
+        let budget = Self { scope, caps, spent, pending };
+        budget.check_spent_v1(&spent)?;
+        if scope.reserved_daa >= scope.acquisition_until_daa
+            || scope.claim == Hash64::default()
+            || scope.bundle_id == Hash64::default()
+            || scope.source_id == Hash64::default()
+            || caps.maximum_preparation_bytes == 0
+            || (pending.is_some() && spent.requests == 0)
+        {
+            return Err("TIR cone continuation lacks an original clock or host allocation".into());
+        }
+        Ok(budget)
+    }
+
+    pub(super) fn spent_v1(&self) -> ConeSpentV1 {
+        self.spent
+    }
+
+    fn check_spent_v1(&self, spent: &ConeSpentV1) -> Result<(), String> {
+        let b = self.caps.total_builder;
+        for (used, maximum) in [
+            (spent.probes, self.caps.maximum_probes),
+            (spent.elements, b.evaluation.max_elements),
+            (spent.terms, b.evaluation.max_terms),
+            (spent.targets, b.max_target_requests),
+            (spent.source_reads, b.max_source_reads),
+            (spent.requests, self.caps.maximum_requests),
+            (spent.response_bytes, self.caps.maximum_response_bytes),
+            (spent.copy_bytes, self.caps.maximum_copy_bytes),
+            (spent.planning_steps, self.caps.maximum_planning_steps),
+        ] {
+            charged_v1(used, 0, maximum)?;
+        }
+        Ok(())
+    }
+
+    fn charge_probe_v1(&mut self, limits: PalwTirBuilderWorkLimitsV1, copy_budget_bytes: u64) -> Result<(), String> {
+        let cap = self.caps.total_builder;
+        let mut next = self.spent;
+        next.probes = charged_v1(next.probes, 1, self.caps.maximum_probes)?;
+        next.elements = charged_v1(next.elements, limits.evaluation.max_elements, cap.evaluation.max_elements)?;
+        next.terms = charged_v1(next.terms, limits.evaluation.max_terms, cap.evaluation.max_terms)?;
+        next.targets = charged_v1(next.targets, limits.max_target_requests, cap.max_target_requests)?;
+        next.source_reads = charged_v1(next.source_reads, limits.max_source_reads, cap.max_source_reads)?;
+        next.copy_bytes = charged_v1(next.copy_bytes, copy_budget_bytes, self.caps.maximum_copy_bytes)?;
+        self.spent = next;
+        Ok(())
+    }
+
+    fn charge_plan_v1(&mut self, steps: u64) -> Result<(), String> {
+        self.spent.planning_steps = charged_v1(self.spent.planning_steps, steps, self.caps.maximum_planning_steps)?;
+        Ok(())
+    }
+
+    fn acquire_v1(&mut self, source: &PalwTirPublicSourceV1, request: PalwTirPublicRequestV1) -> Result<ConeContinuationV1, String> {
+        let bound = source.unit_bound_v1(&request)?;
+        let requests = charged_v1(self.spent.requests, 1, self.caps.maximum_requests)?;
+        let bytes = charged_v1(self.spent.response_bytes, bound.maximum_response_bytes, self.caps.maximum_response_bytes)?;
+        self.spent.requests = requests;
+        self.spent.response_bytes = bytes;
+        self.pending = Some(request);
+        Ok(ConeContinuationV1::Acquire(request))
+    }
+}
+
+pub(super) struct PreparedConeV1 {
+    pub proof: PalwCourtVerdictProofV2,
+    pub meter: PalwTirBuilderMeterV1,
+    // The actual proof remains accounted after the blocking wave returns.
+    pub _reservation: crate::palw_memory_ledger::PalwMemoryReservationV1,
+}
+
+pub(super) enum ConeContinuationV1 {
+    Acquire(PalwTirPublicRequestV1),
+    AwaitOriginalPrompt {
+        tile: Option<u32>,
+    },
+    AwaitAuthenticatedIds,
+    AwaitRegisteredArtifact,
+    /// All named leaves exist, but a canonical combined path is still absent.
+    AwaitRangePath {
+        first: u64,
+        count: u64,
+    },
+    NeedMoreBudget {
+        reason: String,
+    },
+    Refused {
+        reason: String,
+    },
+    /// Proof construction only. Native terminal carriage, rehearsal, original
+    /// attribution and clock admission remain independent mandatory checks.
+    Ready(PreparedConeV1),
+}
+
+fn interval_v1(unit: &PalwTirPublicAuthenticatedUnitV1) -> Option<(u64, u64)> {
+    match unit.request_v1() {
+        PalwTirPublicRequestV1::StepLeaf { index } => Some((index, index.checked_add(1)?)),
+        PalwTirPublicRequestV1::StepRun { first, count } => Some((first, first.checked_add(u64::from(count))?)),
+        _ => None,
+    }
+}
+
+/// Sorted authenticated intervals, not an iteration over every requested leaf.
+fn first_gap_v1(first: u64, count: u64, intervals: &[(u64, u64)]) -> Result<Option<(u64, u64)>, String> {
+    let end = first.checked_add(count).ok_or("TIR operand interval overflow")?;
+    if count == 0 {
+        return Err("TIR operand interval is empty".into());
+    }
+    let mut cursor = first;
+    for &(lo, hi) in intervals {
+        if hi <= cursor {
+            continue;
+        }
+        if lo > cursor {
+            return Ok(Some((cursor, lo.min(end) - cursor)));
+        }
+        cursor = hi.min(end);
+        if cursor == end {
+            return Ok(None);
+        }
+    }
+    Ok((cursor < end).then_some((cursor, end - cursor)))
+}
+
+fn lower_cone_need_v1(
+    budget: &mut ConeContinuationBudgetV1,
+    source: &PalwTirPublicSourceV1,
+    intervals: &[(u64, u64)],
+    need: PalwTirPublicConeNeedV1,
+) -> Result<ConeContinuationV1, String> {
+    use PalwTirPublicConeNeedV1 as N;
+    let (first, count) = match need {
+        N::StepPreimage { index } | N::StepOpening { index } => (index, 1),
+        N::StepRange { first, count } => (first, count),
+        N::Prompt { tile } => return Ok(ConeContinuationV1::AwaitOriginalPrompt { tile }),
+        N::DecodePin => return Ok(ConeContinuationV1::AwaitAuthenticatedIds),
+        N::RegisteredArtifact => return Ok(ConeContinuationV1::AwaitRegisteredArtifact),
+    };
+    if first.checked_add(count).is_none_or(|end| end > source.leaf_count_v1()) {
+        return Err("canonical TIR evaluator requested a range outside the original execution".into());
+    }
+    let Some((missing, length)) = first_gap_v1(first, count, intervals)? else {
+        return Ok(match need {
+            N::StepRange { .. } => ConeContinuationV1::AwaitRangePath { first, count },
+            _ => ConeContinuationV1::NeedMoreBudget {
+                reason: "the canonical credential is already authenticated; another DA demand cannot repair a reader/copy refusal"
+                    .into(),
+            },
+        });
+    };
+    let count = length.min(u64::from(PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1)) as u32;
+    let request = if count == 1 {
+        PalwTirPublicRequestV1::StepLeaf { index: missing }
+    } else {
+        PalwTirPublicRequestV1::StepRun { first: missing, count }
+    };
+    budget.acquire_v1(source, request)
+}
+
+/// One canonical dependency wave, under a caller's already-funded original scope.
+/// Only native original-root-authenticated public units enter the sparse builder.
+/// The operational guard is NOT a replacement for a native paid reader/ticket;
+/// no runtime activation is wired until that reader also restores spent totals.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn continue_cone_v1(
+    budget: &mut ConeContinuationBudgetV1,
+    source: &PalwTirPublicSourceV1,
+    registered: &kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1,
+    material: &[Arc<PalwTirPublicAuthenticatedUnitV1>],
+    ids: Option<&PalwTirPublicAuthenticatedIdsV1>,
+    prompt: &[u32],
+    backend: &dyn PalwExecutionBackendV1,
+    rules: &PalwTirCourtRulesV1,
+    limits: PalwTirBuilderWorkLimitsV1,
+    copy_budget_bytes: u64,
+    now_daa: u64,
+) -> Result<ConeContinuationV1, String> {
+    let scope = budget.scope;
+    if scope.source_id != source.source_id_v1()
+        || scope.leaf_index >= source.leaf_count_v1()
+        || now_daa < scope.reserved_daa
+        || now_daa >= scope.acquisition_until_daa
+        || material.len() > budget.caps.maximum_material_units
+        || ids.is_some_and(|ids| ids.source_id_v1() != source.source_id_v1())
+    {
+        return Err("TIR cone wave changes its original source, clock or material allocation".into());
+    }
+    if let Some(pending) = budget.pending {
+        source.check_request_v1(&pending)?;
+        if !material.iter().any(|unit| unit.source_id_v1() == source.source_id_v1() && unit.request_v1() == pending) {
+            // Polling alone spends no new probe/plan quota or hydration. An
+            // existing signed native demand keeps its literal clock and identity.
+            return Ok(ConeContinuationV1::Acquire(pending));
+        }
+    }
+    let units = material.len() as u64;
+    let sort_levels = u64::from(64 - units.max(1).leading_zeros());
+    budget.charge_plan_v1(units.checked_mul(sort_levels + 8).ok_or("TIR planning work overflow")?)?;
+    // Reserve before resolving/cloning the native program/layout, any run or IDs.
+    // This estimate is operational, not a consensus resource certificate.
+    let mut bytes = (registered.program.len() as u64)
+        .checked_add(borsh::object_length(layout).map_err(|e| e.to_string())? as u64)
+        .and_then(|n| n.checked_add(borsh::object_length(source.header_v1()).ok()? as u64))
+        .ok_or("TIR original context preparation overflow")?;
+    let binding_bytes = bytes;
+    for unit in material {
+        if unit.source_id_v1() != source.source_id_v1() {
+            return Err("TIR cone material belongs to another original source".into());
+        }
+        if interval_v1(unit).is_some() {
+            bytes = bytes
+                .checked_add(binding_bytes)
+                .and_then(|n| n.checked_add(borsh::object_length(unit.response_v1()).ok()? as u64))
+                .ok_or("TIR public run preparation overflow")?;
+        }
+    }
+    let evaluator_units = limits
+        .evaluation
+        .max_elements
+        .checked_add(limits.max_source_reads)
+        .and_then(|n| n.checked_add(limits.max_target_requests))
+        .ok_or("TIR evaluator scratch overflow")?;
+    bytes = bytes
+        .checked_add(u64::from(source.decode_count_v1()) * 4)
+        .and_then(|n| n.checked_mul(8))
+        .and_then(|n| n.checked_add(evaluator_units.checked_mul(128)?))
+        .and_then(|n| n.checked_add(copy_budget_bytes.checked_mul(2)?))
+        .and_then(|n| n.checked_add(65_536))
+        .ok_or("TIR cone host allocation overflow")?;
+    if copy_budget_bytes == 0 || bytes > budget.caps.maximum_preparation_bytes {
+        return Ok(ConeContinuationV1::NeedMoreBudget { reason: "TIR cone wave exceeds its held preparation/copy allocation".into() });
+    }
+    let reservation = crate::palw_memory_ledger::host_ledger_v1()
+        .reserve(
+            crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                role: "public-tir-cone-wave",
+                class_id: registered.facts.class_id,
+                job: scope.claim,
+            },
+            bytes,
+        )
+        .map_err(|e| e.to_string())?;
+    let binding = source.header_v1().resolve_registered_layout_v1(
+        registered,
+        layout,
+        source.header_v1().committed_execution_root,
+        rules.max_step_leaf_count,
+    )?;
+    let space = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(&binding.class).map_err(|e| e.to_string())?;
+    // Enumerate only through the native program's actual canonical leaf space.
+    space.leaf_at(&binding.job_context, scope.leaf_index).ok_or("TIR cone output is not a canonical original leaf")?;
+    let mut compact = binding;
+    kaspa_consensus_core::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut compact);
+    let mut intervals: Vec<_> = material.iter().filter_map(|unit| interval_v1(unit)).collect();
+    intervals.sort_unstable();
+    if let Some(pending) = budget.pending {
+        let (first, count) = match pending {
+            PalwTirPublicRequestV1::StepLeaf { index } => (index, 1),
+            PalwTirPublicRequestV1::StepRun { first, count } => (first, u64::from(count)),
+            _ => return Err("TIR cone pending request has another source family".into()),
+        };
+        if first_gap_v1(first, count, &intervals)?.is_some() {
+            return Ok(ConeContinuationV1::Acquire(pending));
+        }
+        budget.pending = None;
+    }
+    if first_gap_v1(scope.leaf_index, 1, &intervals)?.is_some() {
+        return budget.acquire_v1(source, PalwTirPublicRequestV1::StepLeaf { index: scope.leaf_index });
+    }
+    let mut runs = Vec::with_capacity(intervals.len());
+    for unit in material {
+        let (preimages, range) = match unit.response_v1() {
+            PalwTirPublicResponseV1::StepLeaf { preimage, opening } => (
+                vec![preimage.clone()],
+                kaspa_consensus_core::palw_step_leg::PalwStepRangeOpeningV1 {
+                    first_leaf_index: opening.leaf_index,
+                    leaf_hashes: vec![opening.leaf_hash],
+                    siblings: opening.siblings.clone(),
+                },
+            ),
+            PalwTirPublicResponseV1::StepRun { preimages, range } => (preimages.clone(), range.clone()),
+            _ => continue,
+        };
+        // Verify singleton-opening conversion too; no own leaf/root is used to
+        // repair an absent path or to manufacture a range credential.
+        if kaspa_consensus_core::palw_step_leg::step_range_opening_root_capped_v1(
+            compact.step_leaf_count,
+            &range,
+            rules.max_step_leaf_count,
+        )
+        .map_err(|e| e.to_string())?
+            != compact.step_merkle_root
+        {
+            return Err("TIR public range conversion changes the original step root".into());
+        }
+        runs.push(PalwTirStepRunDisclosureV1 { binding: compact.clone(), preimages, range });
+    }
+    let trace = ids.map(|ids| kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 {
+        rows_root: ids.rows_root_v1(),
+        generated_token_ids: ids.ids_v1().to_vec(),
+    });
+    // Charge the FULL allocated probe work/copy budget even on Need, Refused or
+    // Err. Re-evaluating the already-read prefix never resets total paid work.
+    budget.charge_probe_v1(limits, copy_budget_bytes)?;
+    match backend.probe_tir_public_cone_v1(
+        source.header_v1(),
+        prompt,
+        trace.as_ref(),
+        &runs,
+        scope.leaf_index,
+        rules,
+        limits,
+        copy_budget_bytes,
+    )? {
+        PalwTirPublicConeProbeV1::Need(need) => lower_cone_need_v1(budget, source, &intervals, need),
+        PalwTirPublicConeProbeV1::Refused { reason } => Ok(ConeContinuationV1::Refused { reason }),
+        PalwTirPublicConeProbeV1::Ready { proof, meter } => {
+            if meter.work.elements > limits.evaluation.max_elements
+                || meter.work.terms > limits.evaluation.max_terms
+                || meter.target_requests > limits.max_target_requests
+                || meter.source_reads > limits.max_source_reads
+            {
+                return Ok(ConeContinuationV1::Refused { reason: "TIR cone builder exceeded this wave's allocation".into() });
+            }
+            Ok(ConeContinuationV1::Ready(PreparedConeV1 { proof, meter, _reservation: reservation }))
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ArithmeticStepV1 {
     Need(PalwDaUnitV1),
@@ -245,6 +646,79 @@ mod tests {
 
     fn hash(n: u64) -> Hash64 {
         Hash64::from_u64_word(n)
+    }
+
+    fn cone_budget() -> (ConeContinuationBudgetV1, PalwTirBuilderWorkLimitsV1) {
+        let per_wave = PalwTirBuilderWorkLimitsV1 {
+            evaluation: misaka_palw_tir::demand::DemandLimits { max_elements: 10, max_terms: 20 },
+            max_target_requests: 5,
+            max_source_reads: 30,
+        };
+        let caps = ConeContinuationCapsV1 {
+            total_builder: PalwTirBuilderWorkLimitsV1 {
+                evaluation: misaka_palw_tir::demand::DemandLimits { max_elements: 20, max_terms: 40 },
+                max_target_requests: 10,
+                max_source_reads: 60,
+            },
+            maximum_probes: 2,
+            maximum_requests: 10,
+            maximum_response_bytes: 1_000_000,
+            maximum_copy_bytes: 100,
+            maximum_planning_steps: 1_000,
+            maximum_material_units: 10,
+            maximum_preparation_bytes: 1_000_000,
+        };
+        let scope = ConeScopeV1 {
+            claim: hash(1),
+            owner: owner(),
+            reserved_daa: 10,
+            bundle_id: hash(2),
+            source_id: hash(3),
+            leaf_index: 7,
+            acquisition_until_daa: 100,
+        };
+        (ConeContinuationBudgetV1::restore_v1(scope, caps, ConeSpentV1::default(), None).unwrap(), per_wave)
+    }
+
+    #[test]
+    fn missing_and_refused_probe_waves_cannot_reset_cumulative_work_or_copy_budget() {
+        let (mut budget, per_wave) = cone_budget();
+        // Charged BEFORE the call; Need, Refused and Err receive no refund.
+        budget.charge_probe_v1(per_wave, 50).unwrap();
+        budget.charge_probe_v1(per_wave, 50).unwrap();
+        let spent = budget.spent_v1();
+        assert_eq!((spent.probes, spent.elements, spent.terms, spent.source_reads, spent.copy_bytes), (2, 20, 40, 60, 100));
+        assert!(budget.charge_probe_v1(per_wave, 1).is_err());
+        assert_eq!(budget.spent_v1(), spent, "a rejected charge is atomic");
+        let mut restored = ConeContinuationBudgetV1::restore_v1(budget.scope, budget.caps, spent, None).unwrap();
+        assert!(restored.charge_probe_v1(per_wave, 1).is_err(), "restore does not buy another probe");
+        assert_eq!(restored.scope.acquisition_until_daa, 100);
+    }
+
+    #[test]
+    fn canonical_range_over_one_source_unit_advances_past_authenticated_prefixes() {
+        assert_eq!(first_gap_v1(0, 1_024, &[(0, 256), (256, 512), (768, 1_024)]).unwrap(), Some((512, 256)));
+        assert_eq!(first_gap_v1(0, 1_024, &[(0, 256), (256, 512), (512, 768), (768, 1_024)]).unwrap(), None);
+        assert_eq!(first_gap_v1(500, 600, &[(0, 768), (768, 1_024)]).unwrap(), Some((1_024, 76)));
+        assert!(first_gap_v1(u64::MAX, 1, &[]).is_err());
+        assert!(first_gap_v1(0, 0, &[]).is_err());
+    }
+
+    #[test]
+    fn malformed_restored_spending_and_counter_overflow_do_not_create_authority() {
+        let (budget, _) = cone_budget();
+        let spent = ConeSpentV1 { probes: 3, ..Default::default() };
+        assert!(ConeContinuationBudgetV1::restore_v1(budget.scope, budget.caps, spent, None).is_err());
+        assert!(
+            ConeContinuationBudgetV1::restore_v1(
+                budget.scope,
+                budget.caps,
+                ConeSpentV1::default(),
+                Some(PalwTirPublicRequestV1::StepLeaf { index: 7 }),
+            )
+            .is_err()
+        );
+        assert!(charged_v1(u64::MAX, 1, u64::MAX).is_err());
     }
 
     #[test]

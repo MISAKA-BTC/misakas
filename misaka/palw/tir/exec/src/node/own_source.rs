@@ -479,8 +479,231 @@ mod tests {
                 let count = u32::try_from(run.leaf_count.min(1024)).unwrap();
                 assert_eq!(source.leaf_hashes_v1(0, count).unwrap(), run.leaf_hashes[..count as usize]);
                 assert!(source.leaf_hashes_v1(0, 1025).is_err());
+                if tiled {
+                    use super::super::evidence::{TirEvidenceV1, TirTraceV1};
+                    use super::super::inventory::TirParamOpenerV1;
+                    use kaspa_consensus_core::palw_artifact::{PalwArtifactMultiproofV1, PalwArtifactOpeningV1};
+                    struct NoParams;
+                    impl TirParamOpenerV1 for NoParams {
+                        fn param_opening(&self, _: u32) -> Option<PalwArtifactOpeningV1> {
+                            None
+                        }
+                        fn param_multiproof(&self, _: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+                            None
+                        }
+                    }
+                    let binding = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepBindingV1 {
+                        version: 1,
+                        job_context: original.job_context.clone(),
+                        class: class.clone(),
+                        artifact_root: artifact,
+                        full_logits_trace_root: run.trace_root,
+                        step_leaf_count: run.leaf_count,
+                        step_merkle_root: run.step_merkle_root,
+                        committed_execution_root: run.execution_root,
+                    };
+                    let inputs = super::super::cell::TirRunInputsV1::default();
+                    let mut wrong_width = run.logits_rows.clone();
+                    wrong_width[0].push(0);
+                    let rows = TirTraceV1::Rows { rows: &wrong_width, generated: &run.generated };
+                    let error = TirEvidenceV1::public_runs_v1(
+                        &runner,
+                        &binding,
+                        &prompt,
+                        rows,
+                        &inputs,
+                        &NoParams,
+                        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                        u64::MAX,
+                    )
+                    .err()
+                    .unwrap();
+                    assert!(error.contains("registered logits width"));
+                    let mut pin = kaspa_consensus_core::palw_step_refute::tiled_decode_pin_v1(
+                        &binding.job_context,
+                        &run.logits_rows,
+                        &run.generated,
+                        0,
+                        0,
+                    )
+                    .unwrap();
+                    pin.row_root = Hash64::from_u64_word(991);
+                    let pins = [pin];
+                    let summary =
+                        TirTraceV1::Summary { rows_root: source.info.rows_root.unwrap(), generated: &run.generated, pins: &pins };
+                    let error = TirEvidenceV1::public_runs_v1(
+                        &runner,
+                        &binding,
+                        &prompt,
+                        summary,
+                        &inputs,
+                        &NoParams,
+                        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                        u64::MAX,
+                    )
+                    .err()
+                    .unwrap();
+                    assert!(error.contains("unauthenticated trace pins"));
+                }
             }
         }
         assert!(std::fs::read_dir(directory.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn public_sparse_originals_reach_native_cone_kernel_and_missing_never_acquits() {
+        use super::super::{artifact::TirArtifactV1, backend::TirBackendV1};
+        use kaspa_consensus_core::{
+            palw_backend::{PalwExecutionBackendV1, PalwTirPublicConeNeedV1, PalwTirPublicConeProbeV1},
+            palw_court_v2::PalwCourtVerdictProofV2,
+            palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1},
+            palw_mode_v2::PalwCourtParamsV2,
+            palw_prompt_ids_v1::PalwPromptIdsFormV1,
+            palw_step_refute::{PalwStepRefuteError, PalwTiledDecodeTokensV1, tiled_logits_rows_root_v1},
+            palw_tir_court_v1::{PalwTirBuilderWorkLimitsV1, check_tir_cone_refutation_v1},
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let (name, original, params) = test_common::programs()
+            .into_iter()
+            .find(|(_, p, _)| !p.params.is_empty() && misaka_palw_tir::interval::analyze_ranges(p).is_ok())
+            .unwrap();
+        let program = test_common::tiled(original);
+        let layout = test_common::layout(&program, 5, 2, 2, 64);
+        let path = directory.path().join("public.palwtir");
+        let mut tensor =
+            |j: u16, l: Option<u16>| params.tensors.get(&(j, l)).map(|t| t.to_le_bytes()).ok_or("missing fixture parameter".into());
+        misaka_palw_tir_artifact::write_container_v1(
+            &path,
+            &program,
+            borsh::to_vec(&layout).unwrap(),
+            [2; 64],
+            name.clone(),
+            &mut tensor,
+        )
+        .unwrap();
+        let artifact = std::sync::Arc::new(TirArtifactV1::open(&path).unwrap());
+        let (root, _) = artifact.inventory_root().unwrap();
+        let class = artifact.class().unwrap();
+        let canonical =
+            kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
+        let backend = TirBackendV1::new(name, artifact, root, canonical, PalwPromptIdsFormV1::Flat, 1 << 26).unwrap();
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(31)).unwrap();
+        let prompt_ids: Vec<u32> = prompt.iter().map(|id| *id as u32).collect();
+        let rules = backend.court_rules(
+            &PalwCourtParamsV2::new(kaspa_consensus_core::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT, 4, 2).unwrap(),
+        );
+        let limits = PalwTirBuilderWorkLimitsV1 { evaluation: rules.limits, max_target_requests: 1 << 20, max_source_reads: 1 << 24 };
+        let copies = 1 << 28;
+        for fault in [false, true] {
+            // Producer fixture construction is separated from the verifier below.
+            let produced = if fault {
+                backend.execute_with_injected_fault(&job, &prompt, 3).unwrap()
+            } else {
+                backend.execute(&job, &prompt).unwrap()
+            };
+            let capture = super::super::backend::TirCaptureV1::decode(&produced.material).unwrap();
+            let header = PalwPublicTirBindingHeaderV1::of_binding_v1(&capture.binding);
+            let trace = PalwTiledDecodeTokensV1 {
+                rows_root: tiled_logits_rows_root_v1(&job, &capture.logits_rows).unwrap(),
+                generated_token_ids: capture.generated.clone(),
+            };
+            let mut public_runs = Vec::new();
+            for first in (0..header.step_leaf_count).step_by(256) {
+                let count = (header.step_leaf_count - first).min(256) as u32;
+                let PalwDaAnswerV1::TirStepRun(run) =
+                    backend.step_unit_answer(&produced.material, PalwDaUnitV1::TirStepRun { first, count }).unwrap()
+                else {
+                    panic!("fixture did not publish original run")
+                };
+                public_runs.push(*run);
+            }
+            // The actual verifier receives only public authenticated originals and
+            // its registered artifact; it has no producer capture or private state.
+            assert!(matches!(
+                backend.probe_tir_public_cone_v1(&header, &prompt_ids, Some(&trace), &[], 3, &rules, limits, copies).unwrap(),
+                PalwTirPublicConeProbeV1::Need(
+                    PalwTirPublicConeNeedV1::StepPreimage { .. } | PalwTirPublicConeNeedV1::StepOpening { .. }
+                )
+            ));
+            let (proof, _) = backend
+                .build_tir_public_cone_bounded_v1(&header, &prompt_ids, Some(&trace), &public_runs, 3, &rules, limits, copies)
+                .unwrap();
+            let PalwCourtVerdictProofV2::TirCone { refutation } = proof else { panic!("not native cone") };
+            let verdict = check_tir_cone_refutation_v1(&refutation, &rules);
+            if fault {
+                assert!(verdict.is_ok());
+            } else {
+                assert_eq!(verdict, Err(PalwStepRefuteError::NoFaultFound));
+            }
+            let mut tampered = public_runs.clone();
+            tampered[0].range.leaf_hashes[0] = Hash64::from_u64_word(999);
+            assert!(
+                backend.probe_tir_public_cone_v1(&header, &prompt_ids, Some(&trace), &tampered, 3, &rules, limits, copies).is_err()
+            );
+            assert!(
+                matches!(
+                    backend.probe_tir_public_cone_v1(&header, &prompt_ids, Some(&trace), &public_runs, 3, &rules, limits, 0).unwrap(),
+                    PalwTirPublicConeProbeV1::Refused { .. }
+                ),
+                "held operands refused by copy admission must not create a fresh DA duty"
+            );
+            let zero = PalwTirBuilderWorkLimitsV1 { evaluation: rules.limits, max_target_requests: 0, max_source_reads: 0 };
+            assert!(matches!(
+                backend.probe_tir_public_cone_v1(&header, &prompt_ids, Some(&trace), &[], 3, &rules, zero, copies).unwrap(),
+                PalwTirPublicConeProbeV1::Refused { .. }
+            ));
+            if !fault {
+                let mut found_decode = false;
+                for index in 0..header.step_leaf_count {
+                    let Ok((PalwCourtVerdictProofV2::TirCone { refutation }, _)) = backend.build_tir_public_cone_bounded_v1(
+                        &header,
+                        &prompt_ids,
+                        Some(&trace),
+                        &public_runs,
+                        index,
+                        &rules,
+                        limits,
+                        copies,
+                    ) else {
+                        continue;
+                    };
+                    if refutation.decode_tokens.is_none() {
+                        continue;
+                    }
+                    found_decode = true;
+                    assert!(matches!(
+                        backend
+                            .probe_tir_public_cone_v1(&header, &prompt_ids, None, &public_runs, index, &rules, limits, copies)
+                            .unwrap(),
+                        PalwTirPublicConeProbeV1::Need(PalwTirPublicConeNeedV1::DecodePin)
+                    ));
+                    let mut missing = *refutation;
+                    missing.decode_tokens = None;
+                    assert_ne!(check_tir_cone_refutation_v1(&missing, &rules), Err(PalwStepRefuteError::NoFaultFound));
+                    break;
+                }
+                assert!(found_decode, "fixture must exercise an actual generated-token dependency");
+                let mut invalid_ids = trace.clone();
+                *invalid_ids.generated_token_ids.last_mut().unwrap() = u32::MAX;
+                let mut invalid_header = header.clone();
+                invalid_header.full_logits_trace_root = tiled_logits_outer_root_v1(
+                    &job,
+                    u64::from(job.exact_decode_tokens),
+                    &invalid_ids.rows_root,
+                    &invalid_ids.generated_token_ids,
+                );
+                invalid_header.committed_execution_root = palw_tir_execution_root_v1(
+                    &job.context_hash(),
+                    &invalid_header.full_logits_trace_root,
+                    &job.shape_profile_id,
+                    header.step_leaf_count,
+                    &header.step_merkle_root,
+                );
+                let refused = backend
+                    .probe_tir_public_cone_v1(&invalid_header, &prompt_ids, Some(&invalid_ids), &[], 3, &rules, limits, copies)
+                    .unwrap_err();
+                assert!(refused.contains("separate output-validity predicate"));
+            }
+        }
     }
 }

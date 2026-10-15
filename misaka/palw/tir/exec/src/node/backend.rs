@@ -323,6 +323,42 @@ impl TirBackendV1 {
                 as u32
         }))
     }
+
+    fn tir_original_selector_need_v1(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    ) -> Result<u64, String> {
+        let mut bytes = 0u64;
+        if let Some(constraint) = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_tail_v1(job) {
+            let table = self.token_table_for_job_v1(job).ok_or("own TIR constraint table is not publicly registered on this host")?;
+            // table.root() simultaneously holds raw and indexed hashes and a
+            // folding level; include capacity growth, EOG sorting and the lane
+            // admission mask. The table's resident renderings are held by the
+            // separately admitted backend/table role, not cloned by the selector.
+            bytes = (table.entries.len() as u64).checked_add(1).and_then(|n| n.checked_mul(256))
+                .and_then(|n| n.checked_add((table.eog_token_ids.len() as u64).checked_mul(16)?))
+                // Borsh automaton nodes/edges plus canonical reserialization and
+                // bounded stack clones are conservatively covered per raw byte.
+                .and_then(|n| n.checked_add((constraint.len() as u64).checked_mul(64)?))
+                .and_then(|n| n.checked_add(16_384))
+                .ok_or("own TIR constraint selector quote overflow")?;
+        }
+        if let Some(config) = job.decode.as_ref().filter(|_| job.decodes_under_v4_rules()) {
+            // The selector owns its config clone and one penalty-window count
+            // vector. No full logits-row copy is made by decode_select_v4.
+            let stops = config
+                .stop_sequences
+                .iter()
+                .try_fold(0u64, |n, sequence| n.checked_add(24)?.checked_add((sequence.len() as u64).checked_mul(4)?))
+                .ok_or("own TIR stop sequence quote overflow")?;
+            bytes = bytes
+                .checked_add(stops)
+                .and_then(|n| n.checked_add((config.logit_bias.len() as u64).checked_mul(8)?))
+                .and_then(|n| n.checked_add(u64::from(config.penalty_window).checked_mul(24)?))
+                .ok_or("own TIR decode selector quote overflow")?;
+        }
+        Ok(bytes)
+    }
     /// Serve the class `artifact` declares under `artifact_root` (the inventory root the chain
     /// registered — derived from the artifact by the caller, never read from a sidecar here), at the
     /// canonical job `canonical` (its `shape_profile_id` must be the class id).
@@ -1569,8 +1605,12 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
                 .checked_add(super::own_source::tree_disk_bytes_v1(u64::from(ctx.exact_decode_tokens))?)
                 .ok_or("own TIR disk quote overflow")?;
         }
+        let selector_bytes = self.tir_original_selector_need_v1(job)?;
         let resident_ram_bytes = super::memory::tir_executor_storage_need_v1(&self.space, &self.plan, ctx)?
-            .checked_add(u64::from(ctx.exact_decode_tokens).checked_mul(32).ok_or("own TIR ID quote overflow")?)
+            // Includes generated-vector capacity plus state_after's temporary
+            // borrowed-rendering vector across the longest decode prefix.
+            .checked_add(u64::from(ctx.exact_decode_tokens).checked_mul(64).ok_or("own TIR ID quote overflow")?)
+            .and_then(|n| n.checked_add(selector_bytes))
             .and_then(|n| n.checked_add(1_048_576))
             .ok_or("own TIR RAM quote overflow")?;
         Ok(kaspa_consensus_core::palw_backend::PalwTirOwnStepSourceNeedV1 { resident_ram_bytes, disk_bytes, leaf_count })
@@ -1609,6 +1649,30 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         leaf_index: u64,
         rules: &PalwTirCourtRulesV1,
     ) -> Result<PalwCourtVerdictProofV2, String> {
+        self.build_tir_public_cone_bounded_v1(
+            header,
+            prompt_token_ids,
+            trace,
+            runs,
+            leaf_index,
+            rules,
+            tir_court_builder_limits_v1(rules),
+            super::copies::DEFAULT_COPY_LIMIT_V1,
+        )
+        .map(|(proof, _)| proof)
+    }
+
+    fn probe_tir_public_cone_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        prompt_token_ids: &[u32],
+        trace: Option<&PalwTiledDecodeTokensV1>,
+        runs: &[kaspa_consensus_core::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        leaf_index: u64,
+        rules: &PalwTirCourtRulesV1,
+        limits: kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+        copy_budget_bytes: u64,
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwTirPublicConeProbeV1, String> {
         let (registered, _) = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_class_record_v1(&self.class, &self.artifact_root)
             .map_err(|e| e.to_string())?;
         let binding =
@@ -1654,8 +1718,8 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
             self.prompt_ids_form,
             self.ladder,
         )?;
-        let refutation = store.cone_refutation(leaf_index, rules).map_err(|e| e.to_string())?;
-        Ok(PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) })
+        let store = store.with_carried_copy_limits_v1(copy_budget_bytes, copy_budget_bytes);
+        Ok(store.probe_cone_v1(leaf_index, rules, limits))
     }
 
     /// G14: step leaf `leaf_index` of a TIR claim — its canonical lanes and its capped opening against the header's step root,

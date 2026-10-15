@@ -903,6 +903,7 @@ pub mod palw_float_constraint_source_v1;
 pub mod palw_staged_route_forms_v1;
 pub mod palw_tir_prefix_state_v1;
 pub mod palw_tir_prefix_owned_v1;
+pub mod palw_tir_public_source_v1;
 pub mod palw_decode_view_v1;
 
 pub mod palw_tokenizer_table_stream_v1;

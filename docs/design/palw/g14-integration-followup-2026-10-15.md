@@ -131,8 +131,14 @@ This is unexecuted source, not a passed original-carrier admission or node test.
 - The sparse public-run evidence entry point rehydrates the original binding
   from registered code, authenticates bounded ranges and invokes the existing
   objective TIR cone kernel without a producer capture. This entry point is not
-  yet connected to the runtime filer and has no executed regression. Missing
-  operands or absent trace pins cannot be promoted to an Honest verdict.
+  yet connected to the runtime filer and has no executed regression. A typed
+  first-missing probe now uses that same bounded evaluator with explicit work
+  and copy allocations, including a genuinely empty original-root sparse source.
+  Allocation refusals are distinct from missing DA, and each wave must debit its
+  entire work allocation even on Need/Refused/error. Public-only proof/kernel,
+  tampered-range, missing-decode, invalid-ID and work/copy refusal regressions
+  remain source only. Missing operands or absent trace pins cannot be promoted
+  to an Honest verdict.
 - TIR prefix responders now select a raw retained TIR capture or the inner range
   of an exact-job FPC1 envelope. Metadata, snapshot, original-file decoding and
   queued carrier memory are reserved before use. This corrects a real codec and
@@ -148,3 +154,32 @@ This is unexecuted source, not a passed original-carrier admission or node test.
   `TirEvent` has an 8-bit tile field. That legacy transport cannot be treated as
   an all-vocabulary/all-context bound. New own-model readers or unit schedulers
   alone do not repair public acquisition or prove a real-network terminal.
+- Flat original EOF streams, literal source sessions and their semantic court
+  can now be constructed from the native decode view without synthesizing a
+  legacy TIR binding. Their existing serialized fields, exact original Flat
+  hash, provisional-until-EOF IDs, independent signer slots and two-pass clocks
+  remain unchanged. Source tests compare legacy/view construction bytes and
+  exercise a TIR-header decode fixture through EOF, restart and an invalid-ID
+  court fault, plus corrupt-root and foreign-scheme rejection. This is a helper
+  bridge only: the prospective Flat-TIR admission refusal remains until versioned
+  Bundle/fold/node opening and acquisition accounting are actually connected.
+- The independent native TIR public-source module derives its private geometry
+  from the actual registered program/layout and original header. It authenticates
+  raw step leaves/runs, interior row/tile frontiers and full-width tile indices
+  under the original domains. Sequential ID chunks stay provisional until exact
+  ordered EOF reproduces the original outer trace hash. Authenticated result
+  markers cannot be deserialized. Both absolute-format and context-bound vector
+  decoders reject oversized allocations before reading their bodies. Six source
+  regressions include genuine native classes, wide/ragged tiles and multichunk
+  IDs. These are logical acquisition units, not yet paid custody duties: a run
+  may need tens of MiB before multipart, and the per-unit bound is not the full
+  sum for slots, retries, own replay, journals, dependent waves or terminal work.
+  No old wire structure, native admission rule or fence is changed by this module.
+- The arithmetic continuation helper consumes authenticated units, asks the
+  canonical evaluator for the next missing dependency and advances bounded
+  missing ranges without replacing producer operands with its own hashes. Its
+  work, copy, material-byte and planning counters are cumulative; a built proof
+  retains its host allocation. Already-present credentials that a local reader
+  cannot supply do not create another DA obligation. The helper is not activated
+  in the runtime: native paid state must bind/restore those counters and clocks,
+  account for polling/restart and carry the actual terminal before that is safe.
