@@ -2397,6 +2397,36 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     })
                 })
                 .collect(),
+            // RFC-0019: the annual model catalog this binary carries, read at the tip (pure: Params and a height). Not scheduled on
+            // every shipped network. Readiness is never a node field (it is measured off-chain and is never a vote).
+            annual_catalog: {
+                let s = kaspa_consensus_core::palw_annual_catalog_v1::palw_annual_catalog_status_v1(&self.config.params, read.tip_daa);
+                kaspa_rpc_core::RpcPalwAnnualCatalogStatus {
+                    scheduled: s.scheduled,
+                    fence_daa: s.fence_daa,
+                    active: s.active,
+                    current_edition: s.current_edition,
+                    current_root: if s.scheduled { s.current_root.to_string() } else { String::new() },
+                    has_next: s.next_activation_daa.is_some(),
+                    next_edition: s.next_edition.unwrap_or(0),
+                    next_activation_daa: s.next_activation_daa.unwrap_or(0),
+                    next_root: s.next_root.map(|r| r.to_string()).unwrap_or_default(),
+                    editions: s
+                        .editions
+                        .iter()
+                        .map(|e| kaspa_rpc_core::RpcPalwAnnualCatalogEdition {
+                            edition: e.edition,
+                            activation_daa: e.activation_daa,
+                            previous_root: e.previous_root.to_string(),
+                            root: e.root.to_string(),
+                            models: e.models,
+                            state: e.state.name().to_string(),
+                        })
+                        .collect(),
+                    kernel_version_max: s.kernel_version_max as u32,
+                    readiness: "off-chain".to_string(),
+                }
+            },
         };
         // RFC-0002 Part II §II.7.4: what blocks each class and at which stage, read off the response the node just built
         // (one pure function, shared with the CLI, which derives the same reading for a node that serves none).
@@ -3767,6 +3797,67 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 row_hex: row.map(|(_, bytes)| faster_hex::hex_string(&bytes)).unwrap_or_default(),
             },
             Ok(None) => GetPalwRouterBindingV2Response::default(),
+            Err(refusal) => return Err(RpcError::General(refusal)),
+        })
+    }
+
+    async fn get_palw_paid_claim_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwPaidClaimRequest,
+    ) -> RpcResult<GetPalwPaidClaimResponse> {
+        // Bounded before any decode: a claim id is 64 bytes (128 hex digits).
+        if request.base_claim.len() != 128 {
+            return Err(RpcError::General("base claim hex must be 128 hex digits (a 64-byte claim id)".into()));
+        }
+        let mut base = [0u8; 64];
+        faster_hex::hex_decode(request.base_claim.as_bytes(), &mut base)
+            .map_err(|e| RpcError::General(format!("base claim hex: {e}")))?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwPaidClaimResponse::default());
+        }
+        let round = request.round;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        // One read of the tip state; the caller brackets it with its own generation stamps (it is not an atomic snapshot of the
+        // sink and the route).
+        let answer = session
+            .spawn_blocking(move |c| {
+                let sink = c.get_sink();
+                let tip_daa = c.get_virtual_daa_score();
+                let Some(route) = c.palw_kernel_route_v1() else { return Ok(None) };
+                kaspa_consensus_core::palw_paid_claim_read_v1::palw_paid_claim_read_v1(&route, &base, round)
+                    .map(|read| Some((sink, tip_daa, read)))
+            })
+            .await;
+        let bond = |b: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| format!("{}:{}", b.0.transaction_id, b.0.index);
+        Ok(match answer {
+            Ok(None) => GetPalwPaidClaimResponse::default(),
+            Ok(Some((sink, tip_daa, read))) => {
+                let mut response = GetPalwPaidClaimResponse {
+                    available: true,
+                    sink: sink.to_string(),
+                    tip_daa,
+                    base_claim: faster_hex::hex_string(&base),
+                    round,
+                    ..Default::default()
+                };
+                if let Some(read) = read {
+                    response.found = true;
+                    response.enrollment = faster_hex::hex_string(&read.enrollment);
+                    response.class_id = faster_hex::hex_string(&read.class_id);
+                    response.job_id = faster_hex::hex_string(&read.job_id);
+                    response.producer_bond = bond(&read.producer);
+                    response.material_consent = faster_hex::hex_string(&read.material_consent);
+                    response.state = read.state.to_string();
+                    response.round_found = read.round_found;
+                    response.seats = read.seats.iter().map(bond).collect();
+                    response.quorum = read.quorum;
+                    response.receipts = read.receipts.iter().map(bond).collect();
+                    response.final_reached = read.final_daa.is_some();
+                    response.final_daa = read.final_daa.unwrap_or_default();
+                }
+                response
+            }
             Err(refusal) => return Err(RpcError::General(refusal)),
         })
     }

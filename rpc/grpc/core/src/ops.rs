@@ -154,6 +154,7 @@ pub enum KaspadPayloadOps {
     GetPalwRewardVesting,
     GetPalwStagedPreclaimQuote,
     GetPalwRouterBindingV2,
+    GetPalwPaidClaim,
     GetPalwRfc0016Report,
     GetPalwKernelClaim,
     GetPalwKernelRows,

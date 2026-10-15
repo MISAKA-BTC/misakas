@@ -2564,6 +2564,8 @@ pub use palw_rfc0016_report::*;
 
 mod palw_router_binding_v2;
 pub use palw_router_binding_v2::*;
+mod palw_paid_claim_read;
+pub use palw_paid_claim_read::*;
 
 mod palw_vesting;
 pub use palw_vesting::*;

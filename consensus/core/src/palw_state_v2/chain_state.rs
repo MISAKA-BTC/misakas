@@ -2553,6 +2553,12 @@ impl PalwChainStateV2 {
         (self.safe_frontier_blue_score, self.safe_frontier)
     }
 
+    /// **RFC-0018, tests only**: set the state's point (the fold's last chain block), as a committed post-state carries it.
+    #[cfg(test)]
+    pub(crate) fn set_last_point_for_tests(&mut self, point: Option<PalwBlockContextV2>) {
+        self.last_point = point;
+    }
+
     /// **RFC-0018, tests only**: set or remove one bond row (the attack acceptance fixtures' registries).
     #[cfg(test)]
     pub(crate) fn set_bond_for_tests(&mut self, key: PalwBondKeyV2, bond: Option<PalwBondStateV2>) {

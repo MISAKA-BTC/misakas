@@ -1271,6 +1271,18 @@ async fn sanity_test() {
                     assert!(!read.available && !read.found);
                 })
             }
+            KaspadPayloadOps::GetPalwPaidClaim => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0012 acceptance (op 247): a malformed claim id is an error before any state is read; this test network runs
+                    // no ConsensusV2 bundle, so a well-formed read answers `available: false` and finds nothing.
+                    let odd = GetPalwPaidClaimRequest { base_claim: "0".into(), round: 0 };
+                    assert!(rpc_client.get_palw_paid_claim_call(None, odd).await.is_err());
+                    let well = GetPalwPaidClaimRequest { base_claim: "00".repeat(64), round: 0 };
+                    let read = rpc_client.get_palw_paid_claim_call(None, well).await.unwrap();
+                    assert!(!read.available && !read.found);
+                })
+            }
             KaspadPayloadOps::GetPalwStagedPreclaimQuote => {
                 let rpc_client = client.clone();
                 tst!(op, {
