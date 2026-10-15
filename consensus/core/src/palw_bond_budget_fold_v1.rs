@@ -790,6 +790,15 @@ impl TransitionBuilder<'_> {
         if consume_blocks_now > reservation.block_units {
             return Err(budget_refused(bond, PalwBudgetRefusalV1::Short { dim: PalwBudgetDimV1::BlockUnits }));
         }
+        // ADR-0177 (2026-10-14): P_m sets the model's reward-bearing block opportunity too (a rider rides its lead's block, which the
+        // lead's acceptance counted). Refused, never clipped: a block opportunity is a whole block.
+        if let (Some(m), Some(alloc)) = (model, mirror.allocation_at(ctx.daa_score))
+            && alloc.average.is_some_and(|a| a.block_opportunity)
+            && origin != PalwBudgetOriginV1::Rider
+            && reservation.block_units > budget.model_blocks_available_v1(&m, ctx.daa_score)
+        {
+            return Err(budget_refused(bond, PalwBudgetRefusalV1::ModelBlockOpportunity));
+        }
         Ok(Some(PalwBudgetPlanV1 {
             policy: mirror.policy,
             capital,
@@ -819,6 +828,10 @@ impl TransitionBuilder<'_> {
             self.create_bond_budget_v1(ctx, &mirror)?;
         }
         let bond = plan.bond;
+        let block_opportunity = self
+            .bond_budget_mirror_at(ctx.daa_score)
+            .and_then(|mirror| mirror.allocation_at(ctx.daa_score).and_then(|alloc| alloc.average))
+            .is_some_and(|a| a.block_opportunity);
         let out = self
             .bond_budget_op(|budget, _, j| {
                 let reserved = budget.reserve_claim_moded_v1(
@@ -834,6 +847,13 @@ impl TransitionBuilder<'_> {
                     j,
                 )?;
                 debug_assert_eq!(reserved, plan.reservation, "the plan and the commit read one engine state");
+                // ADR-0177 (2026-10-14): the model's block opportunity is taken at acceptance (never returned early).
+                if let Some(m) = plan.model
+                    && plan.origin != PalwBudgetOriginV1::Rider
+                    && block_opportunity
+                {
+                    budget.reserve_model_blocks_v1(&m, reserved.block_units, j);
+                }
                 if plan.consume_blocks_now > 0 {
                     budget
                         .consume(&claim_id, PalwBudgetDimV1::BlockUnits, plan.consume_blocks_now as u128, true, j)
@@ -2046,17 +2066,22 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
     if let (Some(policy), Some(epoch)) = (mirror.allocation_at(now).cloned(), mirror.allocation_epoch_at(now)) {
         let rolled = builder.state.bond_budget.as_ref().and_then(|b| b.header.allocation).is_some_and(|a| a.index >= epoch);
         if !rolled {
+            // ADR-0177 as decided 2026-10-14 (a V3 policy): the 30-day average of miner + claim-bound verifier capital.
+            let verifier = if policy.average.is_some_and(|a| a.verifier_capital) {
+                builder.bond_budget_verifier_capital_v1()
+            } else {
+                BTreeMap::new()
+            };
             builder.bond_budget_op(|budget, state, j| {
-                budget.roll_epoch(
-                    &policy,
-                    epoch,
-                    now,
-                    |bond| match state.bonds.get(bond) {
-                        Some(record) => (record.collateral, matches!(record.status, PalwBondStatusV2::Active)),
-                        None => (0, false),
-                    },
-                    j,
-                )
+                let capital_of = |bond: &PalwBondKeyV2| match state.bonds.get(bond) {
+                    Some(record) => (record.collateral, matches!(record.status, PalwBondStatusV2::Active)),
+                    None => (0, false),
+                };
+                if policy.average.is_some() {
+                    budget.roll_epoch_v3(&policy, epoch, now, capital_of, &verifier, j)
+                } else {
+                    budget.roll_epoch(&policy, epoch, now, capital_of, j)
+                }
             });
         }
         let carve = builder.params.worker_carve_at(ctx.subsidy, builder.extras.escrow_carve);
@@ -2118,6 +2143,23 @@ impl TransitionBuilder<'_> {
     /// **RFC-0015 §8.3 (lead default 2026-10-15, pending user review): no Panel-free claim is admitted unbudgeted.** `true` wherever
     /// the network declares the OPV policy (`palw_panel_free_v1`; the processor sets `budget_required` on every such network,
     /// calibration and test-armed worlds included — validate what ships).
+    /// **ADR-0177 (2026-10-14): claim-bound verifier capital per bond and model** — every live Panel duty's seat exposure, attributed to
+    /// the model its claim reserved against (claims without a budget model count nowhere). A waiting bond, a registration, an AMM /
+    /// Position or an unpaid reward is never here: only collateral a seat has actually bound to a live claim.
+    pub(super) fn bond_budget_verifier_capital_v1(&self) -> BTreeMap<PalwBondKeyV2, BTreeMap<Hash64, u64>> {
+        let mut out: BTreeMap<PalwBondKeyV2, BTreeMap<Hash64, u64>> = BTreeMap::new();
+        let Some(budget) = self.state.bond_budget.as_ref() else { return out };
+        for (claim_id, duty) in self.state.panel_duties.iter() {
+            let Some((model, _)) = budget.claim_row(claim_id).and_then(|row| row.model) else { continue };
+            let amount = u64::try_from(duty.seat_exposure).unwrap_or(u64::MAX);
+            for seat in duty.seats.keys() {
+                let entry = out.entry(*seat).or_default().entry(model).or_default();
+                *entry = entry.saturating_add(amount);
+            }
+        }
+        out
+    }
+
     /// **A V2 claim's liability collateral for the budget** (PESG §6 `K`): `claim.reserved` (its weight term) below
     /// `palw_bond_formula_v2`; past it the formula's whole decomposed reservation — weight + right + collectable-loss top-up +
     /// court/DA/retention + a free prompt's priced receipt rights ([`crate::palw_state_v2::palw_claim_bond_reservation_v1`], the V2

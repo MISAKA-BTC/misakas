@@ -256,6 +256,7 @@ fn the_allocation_clips_reward_only_on_the_real_fold() {
         seasoning_epochs: 1,
         curve: PalwAllocationCurveV1 { alpha_halves: 2 },
         max_models_per_bond: 4,
+        average: None,
     };
     let run = |alloc: Option<PalwModelAllocationPolicyV1>, assign: bool| -> (u64, Vec<u64>, u128) {
         let mut sim =
@@ -313,6 +314,7 @@ fn alpha_one_one_and_a_half_and_two_divide_the_budget_by_s_to_the_alpha_on_the_r
             seasoning_epochs: 1,
             curve: PalwAllocationCurveV1 { alpha_halves: halves },
             max_models_per_bond: 4,
+            average: None,
         };
         let mut sim = Sim::new(
             budget_params(250, policy(1_000_000, 4_000, 1, 1_000_000, false), Some(allocation)),
@@ -371,6 +373,7 @@ fn one_claim_to_final() -> (Sim, Hash64, usize) {
         seasoning_epochs: 1,
         curve: PalwAllocationCurveV1::interim_unapproved_v1(),
         max_models_per_bond: 4,
+        average: None,
     };
     let mut sim = Sim::new(
         budget_params(250, policy(1_000_000, 4_000, 1, 1_000_000, false), Some(allocation)),

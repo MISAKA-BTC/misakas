@@ -95,6 +95,9 @@ pub use consumer::*;
 mod hold;
 pub use hold::*;
 
+mod allocation_v3;
+pub use allocation_v3::*;
+
 mod material;
 pub use material::{
     PALW_BOND_BUDGET_STATE_VERSION_V3, PALW_BUDGET_TABLE_MATERIAL_INCOME_V1, PalwMaterialIncomeV1, PalwMaterialPaymentV1,
@@ -282,6 +285,8 @@ pub enum PalwBudgetRefusalV1 {
     Burst {
         dim: PalwBudgetDimV1,
     },
+    /// ADR-0177 (2026-10-14): the claim's model has no reward-bearing block opportunity left this epoch (`P_m` applied to blocks).
+    ModelBlockOpportunity,
 }
 
 impl std::fmt::Display for PalwBudgetRefusalV1 {
@@ -300,6 +305,9 @@ impl std::fmt::Display for PalwBudgetRefusalV1 {
             Self::Assignment(why) => write!(f, "capital assignment refused: {why} (ADR-0177 D3)"),
             Self::Overflow => write!(f, "budget arithmetic overflow"),
             Self::Burst { dim } => write!(f, "the bond's short-period burst cap has no room in {dim:?} (ADR-0176, ユーザー方針 2026-10-15)"),
+            Self::ModelBlockOpportunity => {
+                write!(f, "the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5)")
+            }
         }
     }
 }
@@ -604,7 +612,7 @@ pub fn palw_isqrt_u512_v1(n: PalwAllocationWeightV1) -> PalwAllocationWeightV1 {
 }
 
 /// **`palw_model_bond_allocation_v1`'s policy (ADR-0177 D3–D5) — every value POLICY, none approved.**
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwModelAllocationPolicyV1 {
     pub version: u16,
     /// `E`: the allocation epoch, DAA. Its tie to the budget's `W` is POLICY.
@@ -615,6 +623,42 @@ pub struct PalwModelAllocationPolicyV1 {
     pub curve: PalwAllocationCurveV1,
     /// Entries one assignment may name.
     pub max_models_per_bond: u16,
+    /// **User decision 2026-10-14 (RFC-0015 §8.5.5)** — the 30-day average of miner + claim-bound verifier capital, `P_m` applied to
+    /// block opportunity and coinbase ([`allocation_v3`]). `Some` exactly for a V3 policy; serialized only for V3, so every V2
+    /// policy's bytes, digest and identity are unchanged.
+    pub average: Option<PalwAllocationAverageV1>,
+}
+
+impl BorshSerialize for PalwModelAllocationPolicyV1 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.version.serialize(writer)?;
+        self.epoch_daa.serialize(writer)?;
+        self.seasoning_epochs.serialize(writer)?;
+        self.curve.serialize(writer)?;
+        self.max_models_per_bond.serialize(writer)?;
+        if self.version >= PALW_MODEL_ALLOCATION_POLICY_VERSION_V3 {
+            self.average.serialize(writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl BorshDeserialize for PalwModelAllocationPolicyV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let version: u16 = BorshDeserialize::deserialize_reader(reader)?;
+        Ok(Self {
+            version,
+            epoch_daa: BorshDeserialize::deserialize_reader(reader)?,
+            seasoning_epochs: BorshDeserialize::deserialize_reader(reader)?,
+            curve: BorshDeserialize::deserialize_reader(reader)?,
+            max_models_per_bond: BorshDeserialize::deserialize_reader(reader)?,
+            average: if version >= PALW_MODEL_ALLOCATION_POLICY_VERSION_V3 {
+                BorshDeserialize::deserialize_reader(reader)?
+            } else {
+                None
+            },
+        })
+    }
 }
 
 impl PalwModelAllocationPolicyV1 {
@@ -626,12 +670,18 @@ impl PalwModelAllocationPolicyV1 {
             seasoning_epochs: 1,
             curve: PalwAllocationCurveV1::interim_unapproved_v1(),
             max_models_per_bond: 1,
+            average: None,
         }
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.version != PALW_MODEL_ALLOCATION_POLICY_VERSION_V2 {
-            return Err("the allocation policy's version is not one this binary reads");
+        match (self.version, self.average.is_some()) {
+            (PALW_MODEL_ALLOCATION_POLICY_VERSION_V2, false) => {}
+            (PALW_MODEL_ALLOCATION_POLICY_VERSION_V3, true) => self.validate_v3()?,
+            (PALW_MODEL_ALLOCATION_POLICY_VERSION_V2 | PALW_MODEL_ALLOCATION_POLICY_VERSION_V3, _) => {
+                return Err("a V3 allocation policy carries the averaging terms and a V2 policy carries none");
+            }
+            _ => return Err("the allocation policy's version is not one this binary reads"),
         }
         if self.epoch_daa == 0 {
             return Err("the allocation epoch must be positive");
@@ -4438,6 +4488,7 @@ mod tests {
             seasoning_epochs: 1,
             curve: PalwAllocationCurveV1 { alpha_halves: 4 },
             max_models_per_bond: 4,
+            average: None,
         };
         let mut s = PalwBondBudgetStateV1::new(0, &p);
         let before = s.clone();
@@ -4516,6 +4567,7 @@ mod tests {
             seasoning_epochs: seasoning,
             curve: PalwAllocationCurveV1 { alpha_halves: halves },
             max_models_per_bond: 4,
+            average: None,
         }
     }
 
