@@ -209,7 +209,8 @@ fn q36_gdn_replay_state_v2(
     if !matches!(resolve_kernel(&node.kernel_semantics_id), Some(KernelProgram::Qwen36(Qwen36Op::GdnStep))) {
         return Err(PalwStepRefuteError::Unadjudicable);
     }
-    let first = node_slot.checked_sub(intra_table_index(profile, node_slot).ok_or(PalwStepRefuteError::Unadjudicable)? as u32)
+    let first = node_slot
+        .checked_sub(intra_table_index(profile, node_slot).ok_or(PalwStepRefuteError::Unadjudicable)? as u32)
         .ok_or(PalwStepRefuteError::Unadjudicable)?;
     let mut widths = Vec::with_capacity(5);
     let mut tiles = Vec::with_capacity(5);
@@ -316,7 +317,8 @@ fn bind_to_claim_v2(
         return Err(evidence("recurrence checkpoint evidence names another claim execution"));
     }
     leg::verify_binding_v1(binding)?;
-    if binding.shape_profile.shape_profile_id() != registered_class || binding.state_chunk_map_id != binding.shape_profile.state_chunk_map_id
+    if binding.shape_profile.shape_profile_id() != registered_class
+        || binding.state_chunk_map_id != binding.shape_profile.state_chunk_map_id
     {
         return Err(evidence("recurrence checkpoint evidence is not the claim's registered class and map"));
     }
@@ -389,9 +391,7 @@ pub fn check_gdn_transition_refutation_v2(
     let _workspace = reserve_checkpoint_workspace_v2(binding, window, row_lanes, heads)?;
 
     let selected_accused = gdn_selected_delta_chunks_v2(profile, to_first, layer, head)?;
-    if let Err(shape) =
-        authenticate_selected_v2(binding, &r.accused, index, covered, to_first, &selected_accused, max_leaves)?
-    {
+    if let Err(shape) = authenticate_selected_v2(binding, &r.accused, index, covered, to_first, &selected_accused, max_leaves)? {
         let derived = match shape {
             PalwGdnMismatchV2::CheckpointShape { derived, .. } => derived,
             _ => 0,
@@ -489,7 +489,8 @@ fn conv_sources_v2(
     if table.iter().filter(|n| n.kernel_semantics_id == node.kernel_semantics_id).count() != 1 || node.input_refs.len() != 3 {
         return Err(evidence("the layer's convolution is not unique with three projection sources"));
     }
-    let first = conv_slot.checked_sub(intra_table_index(profile, conv_slot).ok_or(PalwStepRefuteError::Unadjudicable)? as u32)
+    let first = conv_slot
+        .checked_sub(intra_table_index(profile, conv_slot).ok_or(PalwStepRefuteError::Unadjudicable)? as u32)
         .ok_or(PalwStepRefuteError::Unadjudicable)?;
     let want = [
         u64::from(geometry.key_heads) * u64::from(geometry.k_dim),
@@ -555,7 +556,8 @@ pub fn gdn_conv_window_required_v2(
             let mut row = Vec::new();
             for t in (lo / tile) as u32..=((hi - 1) / tile) as u32 {
                 let coord = PalwStepCoordinateV1 { tile_index: t, ..coord0 };
-                let index = canonical_step_leaf_index(profile, &binding.job_context, &coord).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                let index =
+                    canonical_step_leaf_index(profile, &binding.job_context, &coord).ok_or(PalwStepRefuteError::Unadjudicable)?;
                 row.push((index, coord));
             }
             out.push(row);
@@ -576,7 +578,8 @@ pub fn check_gdn_conv_window_refutation_v2(
     bind_to_claim_v2(r.version, binding, claim_execution_root, registered_class)?;
     let profile = &binding.shape_profile;
     let geometry = PalwGdnStateGeometryV2::of(profile).map_err(evidence)?;
-    let conv_heads = if geometry.layout == crate::palw_gdn_state_map_v2::PalwGdnStateLayoutV2::FullConvV1 { 1 } else { geometry.heads };
+    let conv_heads =
+        if geometry.layout == crate::palw_gdn_state_map_v2::PalwGdnStateLayoutV2::FullConvV1 { 1 } else { geometry.heads };
     if r.head >= conv_heads {
         return Err(evidence("accused window head is outside the layout"));
     }
@@ -591,7 +594,8 @@ pub fn check_gdn_conv_window_refutation_v2(
         selected.push(offset.checked_add(local).and_then(|i| u32::try_from(i).ok()).ok_or(PalwStepRefuteError::Unadjudicable)?);
     }
     let lanes = 2 * u64::from(geometry.k_dim) + u64::from(geometry.v_dim);
-    let _workspace = reserve_checkpoint_workspace_v2(binding, u64::from(geometry.conv_kernel), lanes.max(u64::from(geometry.conv_width)), 1)?;
+    let _workspace =
+        reserve_checkpoint_workspace_v2(binding, u64::from(geometry.conv_kernel), lanes.max(u64::from(geometry.conv_width)), 1)?;
     if let Err(shape) = authenticate_selected_v2(binding, &r.accused, index, covered, to_first, &selected, max_leaves)? {
         let derived = match shape {
             PalwGdnMismatchV2::CheckpointShape { derived, .. } => derived,

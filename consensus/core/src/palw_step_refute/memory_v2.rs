@@ -32,12 +32,21 @@ pub const PALW_GDN_STEP_EVIDENCE_VERSION_V2: u16 = 2;
 /// check only under consumer v2's closure mode.
 pub fn gdn_checkpoint_chunk_count_v2(profile: &crate::palw_step::PalwShapeProfileV3, positions: u32) -> Option<u64> {
     let map = profile.state_chunk_map_id;
-    let reached =
-        map == maps::gdn_state_chunk_map_id_v1() || map == maps::gdn_state_chunk_map_id_v2() || maps::palw_map_is_hybrid_composed_v2(&map);
-    if !reached {
+    if !palw_gdn_solo_map_v2(&map) && !maps::palw_map_is_hybrid_composed_v2(&map) {
         return None;
     }
     capture::gdn_recurrence_section_v2(profile, positions).ok().map(|(_, count, _)| count)
+}
+
+/// **The solo recurrence maps consumer v2 captures and judges**: gdn v1 (full window), v2 (head window) and v3 (the key-head gather,
+/// `PalwGdnStateGeometryV2::of`'s `KeyHeadConvV3`, which also demands the signed version-3 profile). One predicate for the court
+/// gate, the checkpoint count and the executor's capture geometry, so they cannot disagree about which solo map is served.
+///
+/// A solo v3 class cannot REGISTER today: `PalwShapeProfileV3::validate_shape` lets a version-3 profile carry only the held hybrid
+/// composition v5 or no map, and relaxing that unconditional rule would change every binary's shape verdict below any fence. So the
+/// v3 arm here is ready and unreachable until a fenced registration path exists (RFC06 GDN lane report).
+pub fn palw_gdn_solo_map_v2(map: &Hash64) -> bool {
+    *map == maps::gdn_state_chunk_map_id_v1() || *map == maps::gdn_state_chunk_map_id_v2() || *map == maps::gdn_state_chunk_map_id_v3()
 }
 
 /// Merkle membership of existing state bytes. This is not a proof of the
@@ -109,10 +118,9 @@ pub fn gdn_replay_start_v2(
     let p = &binding.shape_profile;
     let id = p.state_chunk_map_id;
     // Legacy hybrid1/2 name a composition but do not serialize its recurrence.
-    // Solo key-head v3 likewise has no production capture consumer yet.
-    // RFC-0006 consumer v2's composed hybrid maps (new ids) DO serialize both halves (`capture::gdn_recurrence_section_v2`).
-    if id != maps::gdn_state_chunk_map_id_v1()
-        && id != maps::gdn_state_chunk_map_id_v2()
+    // RFC-0006 consumer v2's composed hybrid maps (new ids) DO serialize both halves (`capture::gdn_recurrence_section_v2`), and
+    // the solo maps — v3's key-head gather included — have the executor's capture (`palw_gdn_solo_map_v2`).
+    if !palw_gdn_solo_map_v2(&id)
         && id != maps::hybrid_state_chunk_map_id_v3()
         && !maps::palw_map_is_hybrid_composed_v2(&id)
         && !maps::palw_profile_is_held_v4(p)

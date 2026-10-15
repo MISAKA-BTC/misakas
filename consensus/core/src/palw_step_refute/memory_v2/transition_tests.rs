@@ -83,8 +83,7 @@ fn transition_fixture(forge: bool) -> PalwGdnTransitionRefutationV2 {
         state_chunk_count: chunks.len() as u32,
         state_chunks_root: leg::state_chunks_root_v1(&hashes).unwrap(),
     };
-    let leaf_hash =
-        leg::checkpoint_leaf_hash_v2(&context_hash, &b.checkpoint_profile.profile_hash(), &b.state_chunk_map_id, &leaf);
+    let leaf_hash = leg::checkpoint_leaf_hash_v2(&context_hash, &b.checkpoint_profile.profile_hash(), &b.state_chunk_map_id, &leaf);
     let opening = step_opening_v1(&[leaf_hash], 0).unwrap();
     b.checkpoint_count = 1;
     b.checkpoint_merkle_root = leg::step_opening_root_capped_v1(1, &opening, MAX).unwrap();
@@ -103,7 +102,13 @@ fn transition_fixture(forge: bool) -> PalwGdnTransitionRefutationV2 {
 }
 
 fn check(r: &PalwGdnTransitionRefutationV2) -> Result<PalwGdnCheckpointVerdictV2, PalwGdnCourtErrorV2> {
-    check_gdn_transition_refutation_v2(r, r.binding.committed_execution_root, r.binding.shape_profile.shape_profile_id(), &PalwNoWeightsV1, MAX)
+    check_gdn_transition_refutation_v2(
+        r,
+        r.binding.committed_execution_root,
+        r.binding.shape_profile.shape_profile_id(),
+        &PalwNoWeightsV1,
+        MAX,
+    )
 }
 
 /// **Honest long-versus-anchored parity at the checkpoint itself**: an honest first checkpoint IS the genesis replay over its window
@@ -170,7 +175,12 @@ fn a_checkpoint_whose_count_is_not_the_layout_is_a_shape_fault() {
     let mut leaf = r.accused.leaf.clone();
     leaf.state_chunk_count += 1;
     let context_hash = r.binding.job_context.context_hash();
-    let leaf_hash = leg::checkpoint_leaf_hash_v2(&context_hash, &r.binding.checkpoint_profile.profile_hash(), &r.binding.state_chunk_map_id, &leaf);
+    let leaf_hash = leg::checkpoint_leaf_hash_v2(
+        &context_hash,
+        &r.binding.checkpoint_profile.profile_hash(),
+        &r.binding.state_chunk_map_id,
+        &leaf,
+    );
     let opening = step_opening_v1(&[leaf_hash], 0).unwrap();
     r.binding.checkpoint_merkle_root = leg::step_opening_root_capped_v1(1, &opening, MAX).unwrap();
     fixtures::rebind_committed_root(&mut r.binding);
@@ -193,7 +203,15 @@ fn the_conv_window_terminal_refuses_a_layer_without_a_q36_convolution() {
         accused: r.accused.clone(),
         inputs: Vec::new(),
     };
-    assert!(check_gdn_conv_window_refutation_v2(&conv, conv.binding.committed_execution_root, conv.binding.shape_profile.shape_profile_id(), MAX).is_err());
+    assert!(
+        check_gdn_conv_window_refutation_v2(
+            &conv,
+            conv.binding.committed_execution_root,
+            conv.binding.shape_profile.shape_profile_id(),
+            MAX
+        )
+        .is_err()
+    );
 }
 
 /// **Flags-off historical bytes**: the v2 count helper answers nothing for every historical map the legacy dispatcher owns, so the
