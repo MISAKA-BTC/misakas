@@ -622,3 +622,5 @@ pub mod flat_vector_v9;
 pub mod real_checkpoint_fixture11;
 
 pub mod claim_paid_v2;
+
+pub mod native_receipt_windows_v1;

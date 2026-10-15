@@ -4,9 +4,10 @@ use super::*;
 use misaka_palw_kernel::flat_inputs12::composition32::{MasterRequestV32,CheckedMasterRequestV32,CheckedStageInvocationV32,CheckedComponentOutputV32,ComponentOutputContextV32,check_component_output_v32,check_master_final_v32,check_stage_invocation_v32};
 
 #[derive(Clone,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
-struct NativeInvocationBindingV32 {
+pub(super) struct NativeInvocationBindingV32 {
     version:u16,master:Digest,stage:u16,job:Digest,original_funding:Digest,invocation:Digest,input_binding:Digest,
     class:Digest,source:Digest,maximum_contract:Digest,original_shared_nonce:Digest,
+    maximum_invocation:Digest,maximum_court:Digest,material:Digest,consent32:Digest,actual_positions:u32,
 }
 /// This type is not exported and has no decoder/public raw constructor. Its
 /// kernel projection cannot be substituted for an authenticated native receipt.
@@ -19,7 +20,12 @@ fn component_final(
     let r=builder.state.kernel_route.as_ref().unwrap();
     let binding:NativeInvocationBindingV32=read(r,32,&job,1024).ok_or_else(||refused("Master32 original invocation has no authenticated native funding binding"))?;
     if binding.version!=32||binding.master!=master.root()||binding.job!=job||binding.original_funding!=h.original||binding.invocation!=invocation.invocation_root()||binding.input_binding!=invocation.input_binding_root()||binding.class!=h.class||binding.source!=invocation.source().id()||binding.maximum_contract!=h.contract.root()||binding.original_shared_nonce==[0;64]||master.wire().classes.get(binding.stage as usize)!=Some(&h.class){return Err(refused("Master32 component native original funding/invocation/class/source/master binding differs"));}
-    let(_class,_actual,plan,book,data)=restore_job(builder,p,&h)?;
+    let class=invocation.class();
+    let data:JobData=read(r,6,&job,(1<<20)+(2<<20)+16384).ok_or_else(||refused("Master32 original component body absent"))?;
+    let book:StageJobBookV28=borsh::from_slice(&data.book).map_err(|_|refused("Master32 original component book grammar"))?;
+    let maximum=class.check_job(book.job()).map_err(refused)?;
+    let plan=derive_stage_quota_v32(class,&maximum).map_err(refused)?;book.check(class,&maximum,&plan).map_err(refused)?;
+    if h.id!=job||h.class!=class.root()||h.original!=book.original_root()||h.book!=book.root()||data.book.len()!=h.book_bytes as usize||data.trace.len()!=h.trace_bytes as usize||book.claim().is_none(){return Err(refused("Master32 original component native book/claim differs"));}
     if book.terminal()!=StageTerminalV28::Final||book.settlement().is_none(){return Err(refused("Master32 component has no genuine native Final"));}
     let settlement=book.settlement().unwrap();let queue=settlement_queue(&h,true);
     let(rooted,stored_queue,payload):(StageSettlementV28,crate::Hash64,crate::Hash64)=read(r,14,&job,1024).ok_or_else(||refused("Master32 original actual terminal monetary receipt absent"))?;
@@ -29,7 +35,7 @@ fn component_final(
     if builder.state.pending_payouts.get(&queue).is_some_and(|paid|paid.payload!=payload||paid.amount!=settlement.producer_credit){return Err(refused("Master32 pending producer redemption disagrees with original income"));}
     let nonce=r.execution_nonce_counter_v11(&book.requester_operator()).map_err(refused)?;
     if nonce.next_nonce<=misaka_palw_kernel::flat_execution11::canonical_nonce_v11(&book.job().nonce).map_err(refused)?||nonce.root()!=misaka_palw_kernel::flat_execution11::native_requester_nonce_counter_root_v11(&book.requester_operator(),nonce.next_nonce){return Err(refused("Master32 component original native requester nonce is not spent"));}
-    let trace=StageTraceV14::from_bytes(&data.trace,h.positions).map_err(refused)?;
+    let trace=StageTraceV14::from_bytes(&data.trace,invocation.positions()).map_err(refused)?;
     let projection=check_component_output_v32(invocation,&book,&plan,&trace,values,&ComponentOutputContextV32{master:master.root(),invocation:binding.invocation,inputs:binding.input_binding,job,funding:h.original,terminal:book.root(),source:binding.source,class:h.class,claim:book.claim().unwrap(),credit_queue:queue.as_bytes(),actual_credit:settlement.producer_credit,actual_escrow:settlement.escrow_debit,producer_operator:book.producer_operator(),established:settlement.established}).map_err(refused)?;
     Ok(NativeCheckedComponentFinalV32{binding,output:projection,terminal:book.root(),credit:queue})
 }
@@ -45,7 +51,21 @@ fn master_read<T:BorshDeserialize>(r:&PalwKernelRouteStateV1,kind:u8,id:&impl Bo
 fn restore_master(builder:&TransitionBuilder<'_>,p:&NativeStagePoliciesV28,id:Digest)->Result<(CheckedMasterRequestV32,Vec<CheckedStageClassV28>,NativeMasterHeaderV32),PalwStateV2Error>{
     let r=builder.state.kernel_route.as_ref().unwrap();let h:NativeMasterHeaderV32=master_read(r,0,&id,16384).ok_or_else(||refused("Master32 original native header absent"))?;
     let raw:Vec<u8>=master_read(r,1,&id,2<<20).ok_or_else(||refused("Master32 original request absent"))?;if h.version!=32||h.id!=id||h.body_bytes as usize!=raw.len()||h.policy!=p.root(){return Err(refused("Master32 original header/policy/extent differs"));}
-    let wire=MasterRequestV32::from_bytes(&raw).map_err(refused)?;let classes=h.classes.iter().map(|id|restore_class(builder,p,*id)).collect::<Result<Vec<_>,_>>()?;let bundle_raw:Vec<u8>=read(r,1,&h.source,16<<20).ok_or_else(||refused("Master32 original complete source absent"))?;let(bundle,_)=NativeStageSourceBundleV28::from_bytes(&bundle_raw).map_err(refused)?.check().map_err(refused)?;let master=wire.check(&bundle,&classes).map_err(refused)?;
+    let wire=MasterRequestV32::from_bytes(&raw).map_err(refused)?;
+    let bundle_raw:Vec<u8>=read(r,1,&h.source,16<<20).ok_or_else(||refused("Master32 original complete source absent"))?;
+    let(bundle,sources)=NativeStageSourceBundleV28::from_bytes(&bundle_raw).map_err(refused)?.check().map_err(refused)?;
+    let mut classes=Vec::with_capacity(h.classes.len());let mut class_bytes=0usize;
+    for id in &h.classes {
+        let ch:ClassHeader=read(r,2,id,1024).ok_or_else(||refused("Master32 original class header absent"))?;
+        let bytes:Vec<u8>=read(r,3,id,1<<20).ok_or_else(||refused("Master32 original class wire absent"))?;
+        class_bytes=class_bytes.checked_add(bytes.len()).ok_or_else(||refused("Master32 class aggregate overflow"))?;if class_bytes>1<<20{return Err(refused("Master32 original complete class metadata exceeds paid aggregate cap"));}
+        let cw=FlatStageClassWireV28::from_bytes(&bytes).map_err(refused)?;
+        let source=sources.get(cw.stage as usize).ok_or_else(||refused("Master32 original class source index absent"))?;
+        let mut class=cw.check(source).map_err(refused)?;class.bind_complete_bundle(&bundle).map_err(refused)?;
+        if ch.id!=*id||class.root()!=*id||ch.bundle!=bundle.root()||ch.source!=source.id()||ch.bytes as usize!=bytes.len()||ch.policy!=p.root()||cw.policy!=p.root()||ch.scope!=class.maximum_scope().root()||ch.resource!=class.maximum_resources().root()||r.stage_source_refuted_relation_v14(&source.relation_root()){return Err(refused("Master32 original checked class/source/policy/maxima differs or refuted"));}
+        classes.push(class);
+    }
+    let master=wire.check(&bundle,&classes).map_err(refused)?;
     if master.root()!=id||wire.complete_source!=h.source||wire.manifest!=h.manifest||wire.requester!=palw_kernel_bond_id_v1(&h.requester)||wire.nonce!=h.nonce||wire.classes!=h.classes||h.maximum_courts.len()!=classes.len()||h.maximum_resources.len()!=classes.len(){return Err(refused("Master32 original full source/classes/requester/nonce roots differ"));}
     for(i,class)in classes.iter().enumerate(){let scope=misaka_palw_kernel::flat_inputs12::court32::derive_stage_court_scope_v32(class).map_err(refused)?;if scope.root()!=h.maximum_courts[i]||class.maximum_resources().root()!=h.maximum_resources[i]{return Err(refused("Master32 independently derived original maximum component courts/resources differ"));}}
     Ok((master,classes,h))
@@ -211,4 +231,156 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     ) -> Result<(Digest, Vec<Digest>), String> {
         audit_master_composite_from_rows_v32(rows, p, master, jobs, values, generated)
     }
+}
+
+
+#[derive(Clone,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
+struct InvocationConsentV32 {version:u16,master:Digest,stage:u16,class:Digest,maximum:Digest,court:Digest,material:Digest,base_consent:Digest,producer:PalwBondKeyV2,requester:PalwBondKeyV2,accepted:u64}
+impl InvocationConsentV32 {fn root(&self)->Digest{object_id(b"misaka-palw/native/producer-original-maximum-invocation-consent/v32",self)}}
+#[derive(Clone,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
+struct InvocationActualV32 {version:u16,maximum:Digest,invocation:Digest,inputs:Digest,job:misaka_palw_kernel::flat_inputs12::bounded14::FlatStageJobV14,generated:Vec<u32>,claim:Digest,committed:u64}
+fn binding_key(job:Digest)->Vec<u8>{key(32,&job)}
+pub(super) fn binding(r:&PalwKernelRouteStateV1,job:Digest)->Result<Option<NativeInvocationBindingV32>,PalwStateV2Error>{
+    let Some(raw)=r.aux.get(&(STAGE_TABLE_V14,binding_key(job)))else{return Ok(None)};
+    if raw.len()>2048{return Err(refused("invocation32 fixed original binding cap"));}
+    let b:NativeInvocationBindingV32=borsh::from_slice(raw).map_err(|_|refused("invocation32 fixed original binding grammar"))?;
+    if b.version!=32||b.job!=job||[b.master,b.class,b.source,b.original_funding,b.maximum_contract,b.original_shared_nonce,b.maximum_invocation,b.maximum_court,b.material,b.consent32].contains(&[0;64]){return Err(refused("invocation32 original native funding binding differs"));}Ok(Some(b))
+}
+fn material_root(e:&NativeStageInvocationEnvelopeV32)->Digest{object_id(b"misaka-palw/native/original-upstream-invocation-material/v32",&(e.master,e.stage,&e.generated,&e.upstream_jobs,&e.upstream_outputs))}
+fn material(r:&PalwKernelRouteStateV1,b:&NativeInvocationBindingV32)->Result<NativeStageInvocationEnvelopeV32,PalwStateV2Error>{
+    let raw:Vec<u8>=master_read(r,4,&b.job,MASTER_INVOCATION_MAX_BYTES_V32+8).ok_or_else(||refused("invocation32 original material absent"))?;
+    let e=NativeStageInvocationEnvelopeV32::from_bytes(&raw).map_err(refused)?;
+    if material_root(&e)!=b.material||e.master!=b.master||e.stage!=b.stage{return Err(refused("invocation32 original material changed"));}Ok(e)
+}
+/// A fixed original restore cap is paid BEFORE decoding variable envelope32,
+/// classes, upstream output tensors or actual position-input images.
+fn pay_invocation(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,p:&NativeStagePoliciesV28,body:&[u8])->Result<bool,PalwStateV2Error>{
+    if body.len()>MASTER_INVOCATION_MAX_BYTES_V32{return Err(refused("invocation32 bounded original carrier exceeded"));}
+    // The complete source bundle is shared by every class; <=64 independent
+    // class wires are restored. Charge each bounded class before decoding any.
+    if !pay_restore(builder,ctx,signer,p,16<<20,1<<20,1<<20,body.len() as u32)?{return Ok(false);}
+    for _ in 1..64{if !pay_restore(builder,ctx,signer,p,0,1<<20,0,0)?{return Ok(false);}}
+    Ok(true)
+}
+fn prior_finals(builder:&TransitionBuilder<'_>,p:&NativeStagePoliciesV28,master:&CheckedMasterRequestV32,classes:&[CheckedStageClassV28],e:&NativeStageInvocationEnvelopeV32)->Result<Vec<CheckedComponentOutputV32>,PalwStateV2Error>{
+    if e.stage as usize>=classes.len()||e.upstream_jobs.len()!=e.stage as usize{return Err(refused("invocation32 must bind every earlier genuine component"));}
+    let values=if e.stage==0 {if !e.upstream_outputs.is_empty(){return Err(refused("invocation32 first stage has no upstream output carrier"));}vec![]}else{crate::palw_native_audit_proof_v32::decode_native_master_outputs_v32(&e.upstream_outputs).map_err(refused)?};
+    if values.len()!=e.upstream_jobs.len(){return Err(refused("invocation32 upstream output catalogue differs"));}
+    let mut finals=Vec::with_capacity(values.len());let mut original_bytes=0usize;
+    for(i,job)in e.upstream_jobs.iter().enumerate(){
+        let b=binding(builder.state.kernel_route.as_ref().unwrap(),*job)?.ok_or_else(||refused("invocation32 cannot relabel an unrelated standalone Final"))?;
+        let a:InvocationActualV32=master_read(builder.state.kernel_route.as_ref().unwrap(),5,job, (256<<10)+4096).ok_or_else(||refused("invocation32 upstream actual invocation absent"))?;
+        if b.master!=master.root()||b.stage as usize!=i||b.class!=classes[i].root()||a.version!=32||a.maximum!=b.maximum_invocation||a.invocation!=b.invocation||a.inputs!=b.input_binding||a.job.positions!=b.actual_positions||a.claim==[0;64]{return Err(refused("invocation32 prior genuine Final has another master/order/actual binding"));}
+        let invocation=check_stage_invocation_v32(master,&classes[i],&a.job,&a.generated,&finals).map_err(refused)?;
+        let final_=component_final(builder,master,&invocation,*job,&values[i],p)?;
+        finals.push(final_.output);
+    }
+    // A later stage may use only the actual generation of the master's
+    // independently finalized decoder; arbitrary new ids cannot be supplied.
+    for(i,job)in e.upstream_jobs.iter().enumerate(){if matches!(classes[i].template().program.output,misaka_palw_tir::program_v2::OutputDecl::Logits{..}){let a:InvocationActualV32=master_read(builder.state.kernel_route.as_ref().unwrap(),5,job,(256<<10)+4096).ok_or_else(||refused("invocation32 original decoder actual absent"))?;if a.generated!=e.generated{return Err(refused("invocation32 replaces original upstream stopped ids"));}}}
+    Ok(finals)
+}
+fn maximum<'a>(builder:&TransitionBuilder<'_>,p:&NativeStagePoliciesV28,e:&NativeStageInvocationEnvelopeV32,master:&CheckedMasterRequestV32,classes:&'a[CheckedStageClassV28],job:&misaka_palw_kernel::flat_inputs12::bounded14::FlatStageJobV14)->Result<misaka_palw_kernel::flat_inputs12::composition32::CheckedMaximumInvocationV32,PalwStateV2Error>{
+    let class=classes.get(e.stage as usize).ok_or_else(||refused("invocation32 original stage absent"))?;
+    let finals=prior_finals(builder,p,master,classes,e)?;
+    misaka_palw_kernel::flat_inputs12::composition32::derive_maximum_invocation_v32(master,class,job,&e.generated,&finals).map_err(refused)
+}
+pub(super) fn accept_invocation(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,p:&NativeStagePoliciesV28,body:&[u8])->Result<(),PalwStateV2Error>{
+    if !pay_invocation(builder,ctx,signer,p,body)?{return Ok(());}
+    let e=NativeStageInvocationEnvelopeV32::from_bytes(body).map_err(refused)?;let(master,classes,_)=restore_master(builder,p,e.master)?;
+    let wire=StageAcceptSourceV28::from_bytes(&e.body).map_err(refused)?;let prep=StageAcceptRequestV14::from_bytes(&wire.preparation14).map_err(refused)?;let job=FlatStageJobV14::from_bytes(&prep.job_bytes).map_err(refused)?;
+    let maximum=maximum(builder,p,&e,&master,&classes,&job)?;
+    if prep.class!=classes[e.stage as usize].root(){return Err(refused("invocation32 original acceptance class differs"));}
+    accept_impl(builder,ctx,signer,p,&e.body,true)?;
+    let r=builder.state.kernel_route.as_ref().unwrap();let ids:Vec<Digest>=read(r,9,signer,4+8*64).ok_or_else(||refused("invocation32 own producer original acceptance catalog absent"))?;
+    let id=*ids.last().ok_or_else(||refused("invocation32 own producer acceptance was not established"))?;let base:NativeStageConsentV28=read(r,10,&id,4096).ok_or_else(||refused("invocation32 base original acceptance absent"))?;
+    if base.original14.job!=job.root()||base.original14.class!=prep.class||base.original14.producer!=*signer||base.original14.accepted_daa!=ctx.daa_score{return Err(refused("invocation32 cannot attach to unrelated/old producer consent"));}
+    let c=InvocationConsentV32{version:32,master:e.master,stage:e.stage,class:prep.class,maximum:maximum.root(),court:maximum.scope().root(),material:material_root(&e),base_consent:id,producer:*signer,requester:prep.requester,accepted:ctx.daa_score};
+    builder.write_kernel_row(STAGE_TABLE_V14,master_key(3,&id),Some(bytes(&c)));Ok(())
+}
+pub(super) fn fund_invocation(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,p:&NativeStagePoliciesV28,body:&[u8])->Result<(),PalwStateV2Error>{
+    if !pay_invocation(builder,ctx,signer,p,body)?{return Ok(());}
+    let mut e=NativeStageInvocationEnvelopeV32::from_bytes(body).map_err(refused)?;let(master,classes,_)=restore_master(builder,p,e.master)?;let request=StageFundRequestV14::from_bytes(&e.body).map_err(refused)?;let job=FlatStageJobV14::from_bytes(&request.job_bytes).map_err(refused)?;
+    let maximum=maximum(builder,p,&e,&master,&classes,&job)?;
+    let c:InvocationConsentV32=master_read(builder.state.kernel_route.as_ref().unwrap(),3,&request.acceptance,1024).ok_or_else(||refused("invocation32 original producer signed maximum acceptance absent"))?;
+    if c.version!=32||c.master!=e.master||c.stage!=e.stage||c.class!=request.class||c.maximum!=maximum.root()||c.court!=maximum.scope().root()||c.material!=material_root(&e)||c.base_consent!=request.acceptance||c.producer!=request.producer||c.requester!=*signer{return Err(refused("invocation32 Fund changes original producer maximum/master/upstream material"));}
+    fund_impl(builder,ctx,signer,p,&e.body,true)?;
+    let r=builder.state.kernel_route.as_ref().unwrap();let(id,original,_):(Digest,Digest,Digest)=read(r,11,&request.acceptance,256).ok_or_else(||refused("invocation32 original Fund did not establish actual debit"))?;
+    let h=original_header(builder,id)?;let nonce=r.execution_nonce_counter_v11(&r.aux_row::<NativeStageConsentV28>(STAGE_TABLE_V14,&key(10,&request.acceptance)).ok_or_else(||refused("invocation32 original producer consent absent"))?.original14.requester_operator).map_err(refused)?;
+    if binding(r,id)?.is_some()||h.original!=original||h.class!=c.class{return Err(refused("invocation32 original funding already bound or differs"));}
+    let b=NativeInvocationBindingV32{version:32,master:e.master,stage:e.stage,job:id,original_funding:original,invocation:[0;64],input_binding:[0;64],class:h.class,source:classes[e.stage as usize].source().id(),maximum_contract:h.contract.root(),original_shared_nonce:nonce.root(),maximum_invocation:maximum.root(),maximum_court:maximum.scope().root(),material:c.material,consent32:c.root(),actual_positions:0};
+    // Base carrier is unnecessary for re-execution; the maximum job remains in
+    // the immutable original max-book. Keep only exact public upstream facts.
+    e.body.clear();builder.write_kernel_row(STAGE_TABLE_V14,binding_key(id),Some(bytes(&b)));builder.write_kernel_row(STAGE_TABLE_V14,master_key(4,&id),Some(bytes(&bytes(&e))));Ok(())
+}
+pub(super) fn actual_positions(r:&PalwKernelRouteStateV1,job:Digest,fallback:u32)->Result<u32,PalwStateV2Error>{Ok(binding(r,job)?.map(|b|if b.actual_positions==0{fallback}else{b.actual_positions}).unwrap_or(fallback))}
+pub(super) fn actual_job_fixed(builder:&TransitionBuilder<'_>,h:&JobHeader,class:&CheckedStageClassV28)->Result<Option<CheckedStageJobV28>,PalwStateV2Error>{
+    let Some(b)=binding(builder.state.kernel_route.as_ref().unwrap(),h.id)?else{return Ok(None)};
+    let a:InvocationActualV32=master_read(builder.state.kernel_route.as_ref().unwrap(),5,&h.id,(256<<10)+4096).ok_or_else(||refused("invocation32 authenticated actual projection absent"))?;
+    if a.version!=32||a.maximum!=b.maximum_invocation||a.invocation!=b.invocation||a.inputs!=b.input_binding||a.job.positions!=b.actual_positions||b.original_funding!=h.original||b.maximum_contract!=h.contract.root()||b.class!=class.root(){return Err(refused("invocation32 authenticated original actual projection changed"));}
+    class.check_job(&a.job).map(Some).map_err(refused)
+}
+pub(super) fn commit_invocation(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,p:&NativeStagePoliciesV28,body:&[u8])->Result<(),PalwStateV2Error>{
+    // Fixed outer frame cap before any variable material. The signed body is
+    // predebited under the funded maximum before actual generation is decoded.
+    if body.len()>MASTER_INVOCATION_MAX_BYTES_V32{return Err(refused("invocation32 Commit carrier cap"));}
+    if !pay_invocation(builder,ctx,signer,p,body)?{return Ok(());}
+    let e=NativeStageInvocationEnvelopeV32::from_bytes(body).map_err(refused)?;
+    let id:Digest=e.body.get(66..130).ok_or_else(||refused("invocation32 Commit exact original job prefix absent"))?.try_into().unwrap();let mut h=original_header(builder,id)?;
+    let mut b=binding(builder.state.kernel_route.as_ref().unwrap(),id)?.ok_or_else(||refused("invocation32 Commit lacks original before-Fund binding"))?;
+    if h.producer!=*signer||h.terminal!=StageTerminalV28::Funded||b.invocation!=[0;64]||b.master!=e.master||b.stage!=e.stage{return Err(refused("invocation32 Commit own original producer/maximum state differs"));}
+    let epoch=TrustedEpochV11::from_chain(&p.execution.quota,ctx.block.as_bytes(),ctx.daa_score).map_err(refused)?;
+    let cached=cached_plan(&h,p)?; // Same canonical cached full vector; mode is rederived below.
+    let binding_=original_binding(builder,p,&h,&cached)?;
+    let mut shard=super::super::super::palw_flat_execution_fold_v11::quota_shard(builder,&p.execution,&epoch,palw_kernel_bond_id_v1(signer),id)?;
+    let charge=cached.plan().action(misaka_palw_kernel::flat_quota11::QuotaActionKindV11::Metadata,&e.body).map_err(refused)?;shard.debit_reserved(&p.execution.quota,&epoch,&binding_,cached.plan(),&charge).map_err(refused)?;super::super::super::palw_flat_execution_fold_v11::write_shard(builder,&shard,id);
+    let(class,maximum_job,plan,mut book,mut data)=restore_job(builder,p,&h)?;let(master,classes,_)=restore_master(builder,p,b.master)?;let original=material(builder.state.kernel_route.as_ref().unwrap(),&b)?;
+    if e.upstream_jobs!=original.upstream_jobs||e.upstream_outputs!=original.upstream_outputs{return Err(refused("invocation32 Commit replaces original upstream Finals"));}
+    let finals=prior_finals(builder,p,&master,&classes,&original)?;let maximum=misaka_palw_kernel::flat_inputs12::composition32::derive_maximum_invocation_v32(&master,&class,book.job(),&original.generated,&finals).map_err(refused)?;
+    if maximum.root()!=b.maximum_invocation||maximum.scope().root()!=b.maximum_court||contract(builder,p,&class,&maximum_job,&plan)?.record()!=&h.contract||cached.root()!=plan.root(){return Err(refused("invocation32 original maximum resource/court contract changed"));}
+    let invocation=maximum.project(&master,&class,&e.generated,&finals).map_err(refused)?;
+    let trace=StageTraceV14::from_bytes(&e.body,invocation.positions()).map_err(refused)?;
+    book.commit_invocation_v32(&class,&maximum_job,&plan,&invocation,palw_kernel_bond_id_v1(signer),ctx.daa_score,&trace,h.producer_reserved).map_err(refused)?;
+    b.invocation=invocation.invocation_root();b.input_binding=invocation.input_binding_root();b.actual_positions=invocation.positions();
+    let actual=InvocationActualV32{version:32,maximum:b.maximum_invocation,invocation:b.invocation,inputs:b.input_binding,job:invocation.job().job().clone(),generated:e.generated,claim:book.claim().unwrap(),committed:ctx.daa_score};
+    builder.write_kernel_row(STAGE_TABLE_V14,binding_key(id),Some(bytes(&b)));builder.write_kernel_row(STAGE_TABLE_V14,master_key(5,&id),Some(bytes(&actual)));
+    data.book=bytes(&book);data.trace=e.body;write_job(builder,&mut h,&mut data,&book);
+    let status=crate::palw_native_paged_proof_v29::NativePagedJobStatusV29{version:29,namespace:28,job:id,funding:h.original,claim:book.claim().unwrap(),maximum:h.contract.root(),paid_plan:h.contract.paged_plan,parameter:class.source().parameters().root(),inventory:class.source().inventory_root(),active:true,admitted_interval:book.admitted_interval(),deadline:book.deadline(),challenge_end:book.challenge_end().unwrap(),paid_owners:[[0;64];4],owners_admitted:0,latest_paid_horizon:0};builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,bytes(&(29u8,id,0u8)),Some(bytes(&(status.root(),status))));Ok(())
+}
+
+fn with_actual<T>(builder:&TransitionBuilder<'_>,p:&NativeStagePoliciesV28,h:&JobHeader,class:&CheckedStageClassV28,book:&StageJobBookV28,f:impl FnOnce(&CheckedStageInvocationV32<'_>,&misaka_palw_kernel::flat_inputs12::court32::CheckedStageCourtScopeV32,&[u32])->Result<T,PalwStateV2Error>)->Result<T,PalwStateV2Error>{
+    let b=binding(builder.state.kernel_route.as_ref().unwrap(),h.id)?.ok_or_else(||refused("invocation32 genuine original binding absent"))?;
+    let e=material(builder.state.kernel_route.as_ref().unwrap(),&b)?;let(master,classes,_)=restore_master(builder,p,b.master)?;
+    let finals=prior_finals(builder,p,&master,&classes,&e)?;
+    let maximum=misaka_palw_kernel::flat_inputs12::composition32::derive_maximum_invocation_v32(&master,class,book.job(),&e.generated,&finals).map_err(refused)?;
+    let a:InvocationActualV32=master_read(builder.state.kernel_route.as_ref().unwrap(),5,&h.id,(256<<10)+4096).ok_or_else(||refused("invocation32 immutable actual projection absent"))?;
+    let invocation=maximum.project(&master,class,&a.generated,&finals).map_err(refused)?;
+    if maximum.root()!=b.maximum_invocation||maximum.scope().root()!=b.maximum_court||a.version!=32||a.maximum!=maximum.root()||a.job!=*invocation.job().job()||a.invocation!=invocation.invocation_root()||b.invocation!=a.invocation||a.inputs!=invocation.input_binding_root()||b.input_binding!=a.inputs||b.actual_positions!=invocation.positions()||book.claim()!=Some(a.claim)||h.original!=b.original_funding||h.contract.root()!=b.maximum_contract{return Err(refused("invocation32 actual source/state/input/generated/claim no longer derives from original before-Fund maximum"));}
+    f(&invocation,maximum.scope(),&a.generated)
+}
+pub(super) fn check_final_binding(builder:&TransitionBuilder<'_>,p:&NativeStagePoliciesV28,h:&JobHeader,book:&StageJobBookV28,class:&CheckedStageClassV28,data:&JobData)->Result<(),PalwStateV2Error>{
+    if binding(builder.state.kernel_route.as_ref().unwrap(),h.id)?.is_none(){return Ok(());}
+    with_actual(builder,p,h,class,book,|invocation,_,_|{
+        let trace=StageTraceV14::from_bytes(&data.trace,invocation.positions()).map_err(refused)?;
+        if trace.job_id!=h.id||trace.class!=h.class||trace.job_input!=invocation.job().job().root()||trace.admission!=invocation.job().admission().root()||trace.quota!=book.quota_root()||book.claim()!=Some(object_id(b"misaka-palw/kernel/stage-authenticated-trace/v28",&(h.contract.root(),trace.root()))){return Err(refused("invocation32 Final changes original actual trace claim"));}Ok(())
+    })
+}
+pub(super) fn verify_computation(builder:&TransitionBuilder<'_>,p:&NativeStagePoliciesV28,h:&JobHeader,book:&StageJobBookV28,class:&CheckedStageClassV28,data:&JobData,raw:&[u8])->Result<(),PalwStateV2Error>{
+    use misaka_palw_kernel::{flat_inputs12::court32::*,flat_court5::{FlatSegContextV5,FlatFaultV5},element::SegClaimContextV1,seg::prompt_root_of_ids_v1,job::DecodeRuleV1};
+    with_actual(builder,p,h,class,book,|invocation,scope,generated|{
+        if raw.len() as u64>scope.scope().maximum_bytes{return Err(refused("invocation32 original paid court bound exceeded"));}
+        let version=raw.get(..2).map(|v|u16::from_le_bytes(v.try_into().unwrap())).ok_or_else(||refused("invocation32 original typed computation court absent"))?;
+        let position=match version {
+            32=>{let f=StagePointFaultV32::from_bytes(raw).map_err(refused)?;let f=misaka_palw_kernel::flat_point25::parse_flat_point_fault_v25(&f.point25).map_err(|e|refused(e.to_string()))?;f.output.node.as_ref().ok_or_else(||refused("invocation32 point output absent"))?.position},
+            7=>misaka_palw_kernel::flat_topk7::TopKFaultV7::from_bytes(raw).map_err(|e|refused(e.to_string()))?.output.node.as_ref().ok_or_else(||refused("invocation32 TopK output absent"))?.position,
+            5=>match FlatFaultV5::from_bytes(raw).map_err(|e|refused(e.to_string()))?{FlatFaultV5::Decode(f)=>f.logits.node.as_ref().ok_or_else(||refused("invocation32 decoder logits opening absent"))?.position,FlatFaultV5::Malformed(f)=>f.output.position,_=>return Err(refused("invocation32 ordinary relation must use original V2 court32"))},
+            _=>return Err(refused("invocation32 unknown computation court")),
+        };
+        let trace=StageTraceV14::from_bytes(&data.trace,invocation.positions()).map_err(refused)?;
+        let view=invocation.actual_program().v1_view();let pc=invocation.combined_parameters_at(position).map_err(refused)?;
+        let logits=matches!(invocation.actual_program().output,misaka_palw_tir::program_v2::OutputDecl::Logits{..});
+        let dummy=vec![0;invocation.positions() as usize];let prompt=if logits{invocation.prompt()}else{&dummy};let generated=if logits{generated}else{&[0][..]};
+        let base=FlatSegContextV5{profile:misaka_palw_kernel::flat_court5::flat_trace_profile_id_v5(),claim:SegClaimContextV1{program:&view,params:&pc,segment_roots:&trace.segment_roots,positions:invocation.positions(),prompt_len:prompt.len() as u32,prompt_root:prompt_root_of_ids_v1(prompt),inline_prompt:Some(prompt),generated,decode:DecodeRuleV1::Greedy,encoder:None}};
+        if version==32{let f=StagePointFaultV32::from_bytes(raw).map_err(refused)?;verify_stage_point_fault_v32(invocation,scope,base,&f).map_err(|e|refused(format!("{e:?}")))}else{verify_stage_special_fault_v32(invocation,scope,base,raw).map_err(|e|refused(format!("{e:?}")))}
+    })
 }

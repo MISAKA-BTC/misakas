@@ -922,6 +922,7 @@ pub mod palw_native_initial_v31;
 pub mod palw_native_audit_v27;
 pub mod palw_native_audit_proof_v32;
 pub mod palw_native_redemption_v33;
+pub mod palw_native_receipt_windows_v1;
 pub mod palw_native_calibration_v34;
 pub mod palw_native_spend_v35;
 pub mod palw_window_class_v37;

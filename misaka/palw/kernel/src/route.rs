@@ -145,6 +145,10 @@ pub const TAG_FUNDED_EXECUTION_V11: u8 = 63;
 pub const MAX_FUNDED_EXECUTION_BYTES_V11: usize = (1 << 20) + (16 << 10);
 pub const TAG_STAGE_EXECUTION_V14: u8 = 64;
 pub const MAX_STAGE_EXECUTION_BYTES_V14: usize = 2 << 20;
+/// Only the explicitly versioned Master32 invocation actions 34..=36 use this
+/// larger envelope (bounded public upstream material plus the old typed body).
+/// The frozen stage actions 0..=33 retain their original 2MiB ceiling.
+pub const MAX_STAGE_INVOCATION_BYTES_V32: usize = (4 << 20) + (256 << 10) + 8192 + 7;
 
 /// Per-variant ceilings on the encoded object (version byte included), in bytes. A consumer's mass limit is tighter; these only
 /// bound what the kernel will ever parse.
@@ -758,7 +762,14 @@ pub fn borrowed_native_action_v1(bytes: &[u8]) -> Result<Option<BorrowedNativeAc
     };
     let (cap, last) = match tag {
         TAG_FUNDED_EXECUTION_V11 => (MAX_FUNDED_EXECUTION_BYTES_V11, 46),
-        TAG_STAGE_EXECUTION_V14 => (MAX_STAGE_EXECUTION_BYTES_V14, 33),
+        TAG_STAGE_EXECUTION_V14 => (
+            if bytes.get(2).is_some_and(|a| matches!(*a, 34..=36)) {
+                MAX_STAGE_INVOCATION_BYTES_V32
+            } else {
+                MAX_STAGE_EXECUTION_BYTES_V14
+            },
+            36,
+        ),
         _ => return Ok(None),
     };
     let bad = |why: &str| KernelRefusalV1::new("NativeAction", RefusalKindV1::Malformed, why);
@@ -931,7 +942,8 @@ impl KernelRouteObjectV1 {
         }
         if tag == TAG_STAGE_EXECUTION_V14 {
             let count = rest.get(2..6).ok_or_else(|| bad(RefusalKindV1::Malformed, "truncated stage14 action frame".into()))?;
-            if rest.get(1).is_none_or(|a| *a > 33)
+            if rest.get(1).is_none_or(|a| *a > 36)
+                || rest.get(1).is_some_and(|a| *a <= 33) && bytes.len() > MAX_STAGE_EXECUTION_BYTES_V14
                 || u32::from_le_bytes(count.try_into().unwrap()) as usize != rest.len().saturating_sub(6)
             {
                 return Err(bad(RefusalKindV1::Malformed, "stage14 action/count differs from exact bounded carrier".into()));
@@ -1209,7 +1221,7 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_BOOTSTRAP_EXACT_V1 => crate::beacon_bootstrap_v1::MAX_BOOTSTRAP_EXACT_OBJECT_BYTES_V1,
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1,
         TAG_FUNDED_EXECUTION_V11 => MAX_FUNDED_EXECUTION_BYTES_V11,
-        TAG_STAGE_EXECUTION_V14 => MAX_STAGE_EXECUTION_BYTES_V14,
+        TAG_STAGE_EXECUTION_V14 => MAX_STAGE_INVOCATION_BYTES_V32,
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1,
         TAG_POST_TILED_JOB_V1 => MAX_POST_TILED_JOB_BYTES_V1,
         TAG_POST_PROMPT_TILE_V1 => MAX_POST_PROMPT_TILE_BYTES_V1,
@@ -1225,6 +1237,22 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn new_master_carriers_do_not_enlarge_frozen_stage_actions() {
+        let body = vec![0u8; MAX_STAGE_EXECUTION_BYTES_V14];
+        let old = KernelRouteObjectV1::StageExecutionV14 { action: 33, body: body.clone() }.encode();
+        assert!(borrowed_native_action_v1(&old).is_err());
+        assert!(KernelRouteObjectV1::decode(&old).is_err());
+        let new = KernelRouteObjectV1::StageExecutionV14 { action: 34, body }.encode();
+        assert!(borrowed_native_action_v1(&new).is_ok());
+        assert!(KernelRouteObjectV1::decode(&new).is_ok());
+        let mut oversized = new;
+        oversized.resize(MAX_STAGE_INVOCATION_BYTES_V32 + 1, 0);
+        let size = (oversized.len() - 7) as u32;
+        oversized[3..7].copy_from_slice(&size.to_le_bytes());
+        assert!(borrowed_native_action_v1(&oversized).is_err());
+        assert!(KernelRouteObjectV1::decode(&oversized).is_err());
+    }
     #[test]
     fn native_action_borrowed_frame_has_exact_count_and_preserves_old_owned_bytes() {
         for object in [
@@ -1245,7 +1273,7 @@ mod tests {
         }
         assert!(borrowed_native_action_v1(&KernelRouteObjectV1::Withdraw { bond: [1; 64] }.encode()).unwrap().is_none());
         // Funded actions run to 46: 45/46 are the typed window class v37 register/attach (RFC02 §II.14.60), as the decoder admits.
-        for (tag, last) in [(TAG_FUNDED_EXECUTION_V11, 46), (TAG_STAGE_EXECUTION_V14, 33)] {
+        for (tag, last) in [(TAG_FUNDED_EXECUTION_V11, 46), (TAG_STAGE_EXECUTION_V14, 36)] {
             let mut raw = vec![1, tag, last, 0, 0, 0, 0];
             assert_eq!(borrowed_native_action_v1(&raw).unwrap().unwrap().action, last);
             raw[2] = last + 1;

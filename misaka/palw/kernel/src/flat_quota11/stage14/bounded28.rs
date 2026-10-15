@@ -19,8 +19,10 @@ pub struct CheckedStageQuotaV28 {
     plan: CheckedJobQuotaPlanV11,
     requests_per_owner: u32,
     restore_bytes:u64,
+    invocation32:bool,
 }
 impl CheckedStageQuotaV28 {
+    pub fn is_invocation_v32(&self)->bool {self.invocation32}
     pub fn root(&self) -> Digest {
         object_id(b"misaka-palw/kernel/stage-original-quota/v28", &(28u16,self.class,self.source,self.admission,self.policy,self.plan.record().root(),self.requests_per_owner,self.restore_bytes))
     }
@@ -29,7 +31,7 @@ impl CheckedStageQuotaV28 {
     pub fn restore_bytes(&self)->u64 {self.restore_bytes}
     pub fn restore_native_record(class:Digest,source:Digest,admission:Digest,policy:Digest,requests:u32,restore_bytes:u64,record:&QuotaPlanRecordV11,expected:Digest)->Result<Self,String>{
         let plan=CheckedJobQuotaPlanV11::restore(record,&record.root())?;
-        let value=Self{class,source,admission,policy,plan,requests_per_owner:requests,restore_bytes};
+        let value=Self{class,source,admission,policy,plan,requests_per_owner:requests,restore_bytes,invocation32:false};
         if [class,source,admission,policy].contains(&[0;64])||requests==0||requests>1<<18||restore_bytes==0||restore_bytes>32<<20||value.root()!=expected{return Err("stage28 documentary cached original quota differs".into());}Ok(value)
     }
     pub fn source_plan(&self,class:&CheckedStageClassV28,quota:&QuotaPolicyV11,discovery:&discovery13::DiscoveryPolicyV13)->Result<source16::SourcePlanV16,String>{
@@ -76,7 +78,45 @@ pub fn derive_stage_quota_v28(class:&CheckedStageClassV28,job:&CheckedStageJobV2
     // throughout their original claim; maximum reference remains a separate root.
     for(axis,n)in[(ResourceAxisV10::RawParameterStorage,job.input_raw_bytes()),(ResourceAxisV10::CopiedReferenceBytes,job.input_reference_bytes()),(ResourceAxisV10::StoredEvidenceBytes,job.input_raw_bytes())] {baseline.set(axis,baseline.get(axis).checked_add(n).ok_or("stage28 input baseline overflow")?);}
     let plan=CheckedJobQuotaPlanV11{program_root:crate::public::program_root_v1(&program.encode()),parameter_root:job.combined_parameters().root(),resource_root:job.resources().root(),class_scope_root:class.maximum_scope().root(),actual_scope_root:job.scope().root(),native_restore_work:restore_work,native_post_carrier_cap:post,source_court_bound:source_bound,positions:job.job().positions,baseline,action_envelopes:actions,action_carrier_caps:[post.max(restore_bytes),restore_bytes+16384,restore_bytes+(128<<10),full,full,restore_bytes]};
-    Ok(CheckedStageQuotaV28{class:class.root(),source:source.id(),admission:job.admission().root(),policy:class.wire().policy,plan,requests_per_owner,restore_bytes})
+    Ok(CheckedStageQuotaV28{class:class.root(),source:source.id(),admission:job.admission().root(),policy:class.wire().policy,plan,requests_per_owner,restore_bytes,invocation32:false})
+}
+
+/// New invocation32 quotation. Old28 byte meanings remain unchanged. All
+/// position-specific input images and the bounded original Master/upstream
+/// certificate are retained and restored under the ORIGINAL maximum plan.
+pub fn derive_stage_quota_v32(class:&CheckedStageClassV28,job:&CheckedStageJobV28)->Result<CheckedStageQuotaV28,String>{
+    let mut stage=derive_stage_quota_v28(class,job)?;
+    let scope=crate::flat_inputs12::court32::derive_stage_court_scope_v32(class)?;
+    let input=job.input_raw_bytes().checked_mul(job.job().positions as u128).ok_or("stage32 all-position input resource overflow")?;
+    if input>1<<20{return Err("stage32 maximum position inputs exceed original paid cap".into());}
+    // Envelope32 has <=2MiB upstream tensor material and <=2MiB base carrier.
+    // Its fixed original plan reserves the full cap, independently of actual
+    // EOS/number of prior Finals; repeated restore is priced at every action.
+    let extra=(8u64<<20).checked_add(input as u64).and_then(|n|n.checked_add(32768)).ok_or("stage32 original restore overflow")?;
+    let restore=stage.restore_bytes.checked_add(extra).ok_or("stage32 full original restore overflow")?;
+    let work=restore.checked_mul(restore).and_then(|n|n.checked_mul(64)).and_then(|n|n.checked_add(restore.checked_mul(1024)?)).ok_or("stage32 full original restore work overflow")?;
+    let c=scope.scope();let prior=stage.plan.source_court_bound.clone();
+    let filing=prior.max_proof_bytes.max(c.maximum_bytes).checked_add(4096).ok_or("stage32 maximum filing overflow")?;
+    let court_work=prior.work.max(c.maximum_work);let scratch=prior.scratch_bytes.max(c.maximum_scratch);
+    if filing>16<<20||court_work>1<<34||scratch>256<<20{return Err("stage32 complete original court capacity exceeded".into());}
+    let supplement=action_envelope(work as u128,extra,None)?;
+    stage.plan.baseline=stage.plan.baseline.checked_add(&supplement)?;
+    for axis in [ResourceAxisV10::RawParameterStorage,ResourceAxisV10::CopiedReferenceBytes,ResourceAxisV10::StoredEvidenceBytes]{stage.plan.baseline.set(axis,stage.plan.baseline.get(axis).checked_add(input).ok_or("stage32 full position input overflow")?);}
+    let post=stage.plan.native_post_carrier_cap.checked_add(32768).ok_or("stage32 original post overflow")?;
+    let full=filing.checked_add(restore).ok_or("stage32 full filing restore overflow")?;
+    let sizes=[post.max(restore),restore+16384,restore+(128<<10),full,full,restore];
+    for (i,a) in stage.plan.action_envelopes.iter_mut().enumerate(){*a=action_envelope(work as u128,sizes[i],if i==3||i==4{Some((court_work,filing,scratch))}else{None})?;include_native_post_io_v11(a,post)?;include_source_court_io_v11(a,class.source().parameters())?;}
+    stage.plan.native_restore_work=work;stage.plan.native_post_carrier_cap=post;stage.plan.action_carrier_caps=sizes;
+    let leaves=c.relations.iter().map(|r|r.operand_leaves.iter().copied().sum::<u64>()).max().unwrap_or(0);
+    stage.requests_per_owner=stage.requests_per_owner.checked_add(u32::try_from(leaves).map_err(|_|"stage32 callback count overflow")?).and_then(|n|n.checked_add(64)).filter(|n|*n<=1<<18).ok_or("stage32 bounded full-context pursuit count exceeded")?;
+    stage.restore_bytes=restore;stage.invocation32=true;Ok(stage)
+}
+impl CheckedStageQuotaV28 {
+    /// Native mode comes from the original producer-signed invocation32 row,
+    /// never an arbitrary on-wire flag or a legacy28 cache.
+    pub fn restore_native_record_v32(class:Digest,source:Digest,admission:Digest,policy:Digest,requests:u32,restore_bytes:u64,record:&QuotaPlanRecordV11,expected:Digest)->Result<Self,String>{
+        let mut p=Self::restore_native_record(class,source,admission,policy,requests,restore_bytes,record,expected)?;p.invocation32=true;Ok(p)
+    }
 }
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
@@ -168,6 +208,16 @@ impl StageJobBookV28 {
         for(i,o)in trace.output_openings.iter().enumerate(){let position=if count==1&&matches!(job.program().output,misaka_palw_tir::program_v2::OutputDecl::Final{..}){self.job.positions-1}else{i as u32};if o.position!=position||o.occurrence!=occurrence||o.node!=node||!o.authenticates(&trace.segment_roots,self.job.positions,prepared.index(occurrence,node),prepared.node_count){return Err("stage28 delivered output unauthenticated".into());}}
         self.claim=Some(object_id(b"misaka-palw/kernel/stage-authenticated-trace/v28",&(self.contract,trace.root())));self.challenge_end=Some(daa.checked_add(self.challenge_window).ok_or("stage28 challenge clock overflow")?);self.final_after=Some(self.challenge_end.unwrap().checked_add(self.final_wait).ok_or("stage28 original complete delivery final clock overflow")?);self.terminal=StageTerminalV28::Challengeable;self.check(class,job,quota)
     }
+    pub fn commit_invocation_v32(&mut self,class:&CheckedStageClassV28,maximum:&CheckedStageJobV28,quota:&CheckedStageQuotaV28,invocation:&crate::flat_inputs12::composition32::CheckedStageInvocationV32<'_>,producer:Digest,daa:u64,trace:&StageTraceV14,actual_reserved:u64)->Result<(),String>{
+        self.check(class,maximum,quota)?;
+        if !quota.is_invocation_v32()||self.terminal!=StageTerminalV28::Funded||producer!=self.job.producer||daa<self.admitted||daa>=self.commit_until||actual_reserved<self.reserve||invocation.positions()>self.job.positions||trace.version!=14||trace.class!=self.class||trace.job_id!=self.id()||trace.job_input!=invocation.job().job().root()||trace.admission!=invocation.job().admission().root()||trace.quota!=quota.root(){return Err("stage32 Commit changes original maximum/actor/claim/actual invocation".into());}
+        let view=invocation.actual_program().v1_view();let p=crate::element::PreparedV1::without_stage_v32(&view,invocation.actual_program())?;
+        let occurrence=u16::try_from(p.w.occurrences.len().checked_sub(1).ok_or("stage32 output occurrence absent")?).map_err(|_|"stage32 output occurrence overflow")?;let node=invocation.actual_program().output.node();
+        let final_only=matches!(invocation.actual_program().output,misaka_palw_tir::program_v2::OutputDecl::Final{..});let count=if final_only{1}else{invocation.positions() as usize};
+        if trace.segment_roots.len()!=crate::seg::segment_count_v1(invocation.positions()) as usize||trace.output_openings.len()!=count{return Err("stage32 actual trace directory/output count differs".into());}
+        for(i,o)in trace.output_openings.iter().enumerate(){let q=if final_only{invocation.positions()-1}else{i as u32};if o.position!=q||o.occurrence!=occurrence||o.node!=node||!o.authenticates(&trace.segment_roots,invocation.positions(),p.index(occurrence,node),p.node_count){return Err("stage32 actual output opening differs".into());}}
+        self.claim=Some(object_id(b"misaka-palw/kernel/stage-authenticated-trace/v28",&(self.contract,trace.root())));self.challenge_end=Some(daa.checked_add(self.challenge_window).ok_or("stage32 challenge overflow")?);self.final_after=Some(self.challenge_end.unwrap().checked_add(self.final_wait).ok_or("stage32 final clock overflow")?);self.terminal=StageTerminalV28::Challengeable;self.check(class,maximum,quota)
+    }
     /// Consumer authenticates original numerical Final27 grant, all original
     /// source/trace/own owner rows, genuine pending closure and exact coin queue
     /// before calling. A route contains only a job key, never these authorities.
@@ -214,4 +264,12 @@ pub fn check_stage_source_admission_v28(class:&CheckedStageClassV28,job:&Checked
     if own.root()!=source.root()||source.root()!=book.source_plan{return Err("stage28 original consent producer source quotation differs".into());}
     let checked=CheckedStageSourceAdmissionV28{binding:book.binding(plan,policy)?,consent:book.consent,plan:source.root(),operator:book.producer_operator,epoch:epoch.clone()};
     source16::from_checked_stage_admission_v28(checked,source)
+}
+
+/// Readonly original clocks for an independent authenticated receipt-window audit.
+/// No wire bytes, book root or admission authority changes.
+impl StageJobBookV28 {
+    pub fn receipt_clocks_v1(&self)->(u64,u64,Option<u64>){
+        (self.admitted,self.commit_until,self.challenge_end.and_then(|d|d.checked_sub(self.challenge_window)))
+    }
 }

@@ -348,6 +348,13 @@ impl NativeQueueGlobalV30 {
         }
         Ok(())
     }
+    /// Readonly audit projection only after the configured policy and SAME shared
+    /// physical row have been checked. This never constructs a native admission.
+    pub fn audit_entries_v1<'a>(&'a self, policy: &NativeQueuePolicyV30, physical: &NativeCarriageGlobalV22)
+        -> Result<Vec<(&'a Digest, &'a Digest, &'a Digest, u32, u64)>, String> {
+        self.check(policy, physical)?;
+        Ok(self.entries.iter().map(|e| (&e.job, &e.funding, &e.lease, e.packets, e.owned_bytes)).collect())
+    }
     /// Both global mutations are transactional. The caller persists the two
     /// exact resulting rows with original funding/consent, never separately.
     pub fn admit(

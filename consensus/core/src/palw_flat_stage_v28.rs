@@ -286,19 +286,23 @@ impl CheckedNativeStageMaximumV28 {
         // retain their independent declared namespace and immutable public PC.
         let mut real=class.source().program().v1_view();real.params.truncate(class.source().program().params.len());
         let source_bound=crate::palw_native_source_proof_v25::derive_native_source_proof_bound_v25(&real,class.source().parameters())?;
-        let restore=class.source_restore_bytes().checked_add(borsh::to_vec(class.wire()).map_err(|e|e.to_string())?.len() as u64).and_then(|n|n.checked_add(u64::try_from(job.input_raw_bytes()).ok()?)).and_then(|n|n.checked_add(32768)).ok_or("stage28 exact native restore extent overflow")?;
-        let paged=crate::palw_native_paged_proof_v29::CheckedNativePagedProofPlanV29::derive(class.maximum_scope(),class.maximum_resources(),&p.execution.quota,source_bound.maximum_bytes as u64,source_bound.work,source_bound.scratch,restore)?;
+        let restore=if quota.is_invocation_v32(){quota.restore_bytes().checked_add(32768)}else{class.source_restore_bytes().checked_add(borsh::to_vec(class.wire()).map_err(|e|e.to_string())?.len() as u64).and_then(|n|n.checked_add(u64::try_from(job.input_raw_bytes()).ok()?)).and_then(|n|n.checked_add(32768))}.ok_or("stage28 exact native restore extent overflow")?;
+        let scope32=if quota.is_invocation_v32(){Some(misaka_palw_kernel::flat_inputs12::court32::derive_stage_court_scope_v32(class)?)}else{None};
+        let (court_bytes,court_work,court_scratch)=scope32.as_ref().map(|s|(s.scope().maximum_bytes,s.scope().maximum_work,s.scope().maximum_scratch)).unwrap_or((0,0,0));
+        let paged=crate::palw_native_paged_proof_v29::CheckedNativePagedProofPlanV29::derive(class.maximum_scope(),class.maximum_resources(),&p.execution.quota,court_bytes.max(source_bound.maximum_bytes as u64),court_work.max(source_bound.work),court_scratch.max(source_bound.scratch),restore)?;
         let temporal=NativeStageTemporalV28::derive(p,class.root(),class.maximum_scope().root(),class.maximum_resources().root(),quota.requests_per_owner())?;
         let carriage=crate::palw_native_paged_carriage_v29::CheckedNativePagedCarriagePlanV29::derive(&real,class.source().parameters(),real.params.len(),&paged,class.root(),quota.plan().record().root(),temporal.root(),temporal.answer_window,temporal.proof_window.checked_sub(temporal.seal_maturity).ok_or("stage28 original proof window exhausted")?,service,mass)?;
         let queue=crate::palw_native_queue_v30::CheckedNativeQueuePlanV30::derive_paged(&final_policy.queue_policy,mass,carriage)?;
-        let q=&class.maximum_resources().quantities;
-        let cold=[A::Macs,A::ScalarSteps,A::IndexSteps,A::ValidatedElements,A::ParameterHashBytes,A::TraceHashBytes,A::MetadataWork,A::CopiedReferenceBytes,A::RawParameterStorage,A::DeliveryBytes,A::StoredEvidenceBytes,A::CourtWork].into_iter().try_fold(0u128,|n,a|n.checked_add(q.get(a)).ok_or("stage28 cold resource monetary extent overflow"))?;
+        let owned=if quota.is_invocation_v32(){Some(quota.plan().record().baseline.clone())}else{None};
+        let q=owned.as_ref().map(|q|&q.0);
+        let resource_quantity=|a:A|->u128{q.map(|q|q[a as usize]).unwrap_or_else(||class.maximum_resources().quantities.get(a))};
+        let cold=[A::Macs,A::ScalarSteps,A::IndexSteps,A::ValidatedElements,A::ParameterHashBytes,A::TraceHashBytes,A::MetadataWork,A::CopiedReferenceBytes,A::RawParameterStorage,A::DeliveryBytes,A::StoredEvidenceBytes,A::CourtWork].into_iter().try_fold(0u128,|n,a|n.checked_add(resource_quantity(a)).ok_or("stage28 cold resource monetary extent overflow"))?;
         let acquisition=caller.request_cost().get(A::MetadataWork).checked_mul(caller.attempts() as u128).ok_or("stage28 complete acquisition monetary overflow")?;
         let work=cold.checked_add(acquisition).and_then(|n|n.checked_add(paged.record().court_work as u128*2)).and_then(|n|n.checked_add(paged.record().guarantee.get(A::MetadataWork))).ok_or("stage28 complete pursuit monetary overflow")?;
         let reference_cost=ledger.dismissal_fee_v1(u64::try_from(work).map_err(|_|"stage28 complete monetary work exceeds public range")?).checked_add(ledger.demand_bond.checked_mul(caller.requests() as u64).ok_or("stage28 complete source bonds overflow")?).ok_or("stage28 full finder cost overflow")?;
         let execution=&p.execution.execution;
         let finder=u64::try_from((execution.required_producer_reserve as u128)*(execution.finder_permille as u128)/1000).map_err(|_|"stage28 finder extent overflow")?;
-        let basis=crate::palw_native_final_v27::NativeFinalClassBasisV27{class:class.root(),program:class.source().program_root(),inventory:class.source().inventory_root(),real_parameter:class.source().parameters().root(),original_max_scope:class.maximum_scope().root(),original_max_resource:class.maximum_resources().root(),execution_policy:execution.root(),quota_policy:p.execution.quota.root(),discovery_policy:p.execution.discovery.root(),source_protocol:p.source_protocol,verifier_profile:class.maximum_scope().court_set(),physical_service:p.physical_service,complete_reference_cost_sompi:reference_cost,maximum_producer_gain_sompi:execution.reward_cap.checked_add(execution.external_gain_cap).ok_or("stage28 gain overflow")?,original_producer_reserve_sompi:execution.required_producer_reserve,original_finder_award_sompi:finder,original_default_obligation_sompi:execution.default_obligation,maximum_reference_bytes:u64::try_from(q.get(A::RawParameterStorage).checked_add(q.get(A::ReferenceTensorPayload)).and_then(|n|n.checked_add(q.get(A::StoredEvidenceBytes))).ok_or("stage28 complete reference byte overflow")?).map_err(|_|"stage28 complete reference byte overflow")?,maximum_court_bytes:paged.record().maximum_bytes as u64,maximum_court_work:paged.record().court_work,maximum_court_scratch:paged.record().court_scratch};
+        let basis=crate::palw_native_final_v27::NativeFinalClassBasisV27{class:class.root(),program:class.source().program_root(),inventory:class.source().inventory_root(),real_parameter:class.source().parameters().root(),original_max_scope:class.maximum_scope().root(),original_max_resource:class.maximum_resources().root(),execution_policy:execution.root(),quota_policy:p.execution.quota.root(),discovery_policy:p.execution.discovery.root(),source_protocol:p.source_protocol,verifier_profile:if quota.is_invocation_v32(){misaka_palw_kernel::flat_inputs12::court32::ordinary_stage_court_id_v32()}else{class.maximum_scope().court_set()},physical_service:p.physical_service,complete_reference_cost_sompi:reference_cost,maximum_producer_gain_sompi:execution.reward_cap.checked_add(execution.external_gain_cap).ok_or("stage28 gain overflow")?,original_producer_reserve_sompi:execution.required_producer_reserve,original_finder_award_sompi:finder,original_default_obligation_sompi:execution.default_obligation,maximum_reference_bytes:u64::try_from(resource_quantity(A::RawParameterStorage).checked_add(resource_quantity(A::ReferenceTensorPayload)).and_then(|n|n.checked_add(resource_quantity(A::StoredEvidenceBytes))).ok_or("stage28 complete reference byte overflow")?).map_err(|_|"stage28 complete reference byte overflow")?,maximum_court_bytes:paged.record().maximum_bytes as u64,maximum_court_work:paged.record().court_work,maximum_court_scratch:paged.record().court_scratch};
         let conditions=final_policy.check_class(p.network_domain,&basis,temporal.source_acquisition.checked_add(temporal.proof_window).ok_or("stage28 complete pursuit clock overflow")?,true,service.implemented)?;
         if execution.horizons.challenge_window<conditions.complete_path_daa(){return Err("stage28 original challenge interval shorter than measured independent complete reference/source/proof/delivery path".into());}
         let delivery_fee_terms=object_id(b"misaka-palw/native/stage-original-burned-delivery-fees/v28",&(28u16,source.root(),caller.root(),object_id(b"misaka-palw/native/stage-original-ledger-terms/v28",ledger),ledger.demand_bond,0u64));
@@ -324,5 +328,36 @@ impl NativeStageSourceBundleV28 {
         let checked=check_stage_bundle_v28(&manifest,&sources)?;
         if checked.bytes()!=borsh::to_vec(self).map_err(|e|e.to_string())?.len() as u64{return Err("stage28 original full-source canonical extent changed".into());}
         Ok((checked,sources))
+    }
+}
+
+/// Dedicated Master32 carrier, inner64 actions34/35/36. The nested body is the
+/// old typed Accept28/Fund14/Trace14 grammar, under a NEW explicit action only.
+/// `generated` is empty for a not-yet-committed decoder at Accept/Fund, and first
+/// fixed by Commit36. Earlier stream outputs must come from genuine native
+/// component Finals of this exact master, never caller-supplied assertions.
+#[derive(Clone,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
+pub struct NativeStageInvocationEnvelopeV32 {
+    pub version:u16,pub master:Digest,pub stage:u16,pub generated:Vec<u32>,
+    pub upstream_jobs:Vec<Digest>,pub upstream_outputs:Vec<u8>,pub body:Vec<u8>,
+}
+pub const MASTER_INVOCATION_MAX_BYTES_V32:usize=(4<<20)+(256<<10)+8192;
+impl NativeStageInvocationEnvelopeV32 {
+    pub fn root(&self)->Digest{object_id(b"misaka-palw/native/original-master-invocation-carrier/v32",self)}
+    pub fn from_bytes(raw:&[u8])->Result<Self,String>{
+        use std::io::{Cursor,Read};
+        if raw.len()>MASTER_INVOCATION_MAX_BYTES_V32||raw.len()<84{return Err("master32 invocation bounded envelope".into());}
+        let mut r=Cursor::new(raw);
+        let version=u16::deserialize_reader(&mut r).map_err(|e|e.to_string())?;
+        if version!=32{return Err("master32 invocation version".into());}
+        let master=Digest::deserialize_reader(&mut r).map_err(|e|e.to_string())?;
+        let stage=u16::deserialize_reader(&mut r).map_err(|e|e.to_string())?;
+        fn n(r:&mut Cursor<&[u8]>,cap:usize,width:usize)->Result<usize,String>{let n=u32::deserialize_reader(r).map_err(|e|e.to_string())? as usize;if n>cap||n>r.get_ref().len().saturating_sub(r.position() as usize)/width{return Err("master32 nested count before allocation".into());}Ok(n)}
+        fn blob(r:&mut Cursor<&[u8]>,cap:usize)->Result<Vec<u8>,String>{let size=n(r,cap,1)?;let mut v=vec![0;size];r.read_exact(&mut v).map_err(|e|e.to_string())?;Ok(v)}
+        let count=n(&mut r,65536,4)?;let mut generated=Vec::with_capacity(count);for _ in 0..count{generated.push(u32::deserialize_reader(&mut r).map_err(|e|e.to_string())?);}
+        let count=n(&mut r,64,64)?;let mut upstream_jobs=Vec::with_capacity(count);for _ in 0..count{upstream_jobs.push(Digest::deserialize_reader(&mut r).map_err(|e|e.to_string())?);}
+        let upstream_outputs=blob(&mut r,2<<20)?;let body=blob(&mut r,2<<20)?;
+        let out=Self{version,master,stage,generated,upstream_jobs,upstream_outputs,body};
+        if r.position() as usize!=raw.len()||borsh::to_vec(&out).map_err(|e|e.to_string())?!=raw{return Err("master32 exact canonical invocation envelope".into());}Ok(out)
     }
 }

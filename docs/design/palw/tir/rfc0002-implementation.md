@@ -3538,8 +3538,43 @@ courts 3/4 in `reveal_paged` via `window_court` (own v37 filing envelope
 job; decoder ceiling 46; pre-gate/fold unjudged predicate covers 45|46. SDK
 `prepare_window_attach_v37`, `window_filing_v37`, `native-payload --kind window-attach37`.
 Test sources: kernel `tests/flat_window37.rs` (envelope, selection-job determinism, program
-binding refusal); node below-fence test now sends 45 and 46. No code item of RFC02 remains;
-RFC03 patch/audio stays spec + fenced refusing codec.
+binding refusal); node below-fence test now sends 45 and 46. The earlier assertion that no
+RFC02 code remained was incorrect; the source audit below supersedes it. RFC03 patch/audio
+stays spec + fenced refusing codec.
+
+### Source audit of integrated pre `5aa52b886` (2026-10-15)
+
+This is a source-level assessment, not a new compilation or measurement result. The
+five gaps below were found in the integrated `pre` source. Work continues on
+`codex/workspace-rfc02-completion`, based on that exact commit. Code must be completed
+before the consolidated validation phase starts, as requested by the user.
+
+| Gap | Required correction | Current evidence |
+| --- | --- | --- |
+| Complete native components | Master acceptance/funding/commit, Logits, position-specific Random and post-state continuity must use the actual canonical source, maximum reservation and full courts | Implementation in progress; no new build or execution |
+| Length36 token maximum | Original requested maximum and stopped extent must both pass the token axis, including independent Final/receipt extraction | Guards and regression source added; unverified |
+| Window37 program binding | Actual history state/writer operand and selection source, primitive, dtype and shape must match their court | Defensive registration/attachment guards and regression source added; **positive history-selection execution remains open** |
+| A6 receipt windows | Audit consecutive independently pinned states, original jobs and joint queue/physical accounting at the frozen sustained issuance rate across two windows | Proof-derived auditor and runner integration in progress; no measurement |
+| Complete frontend artifacts | Actual source and real weights must produce complete-component Source28 artifacts without a preconstructed tensor callback bundle | Importer/CLI implementation in progress; no conversion run |
+
+The window issue is deeper than a missing dtype comparison. Frozen TIR v1 (and the v1
+view of v2) explicitly refuses `TopK` along symbolic history dimension `H`; its output
+type cannot express `min(H, selection_cap)` either. Thus a same-shaped node is not a
+history-selection implementation. The new guards reject such a class before registration,
+preserve the frozen primitive semantics, and do **not** establish an executable positive
+window path. An explicitly versioned execution/source contract is still required before
+that feature, or all RFC02 code, may be called complete.
+
+The defensive window attachment also checks court work, scratch and original-class
+restoration against the original paid envelope, in addition to filing bytes. It never
+grants additional work from an after-Fund declaration. No shipping fence or preset changes.
+
+**Additional user scope (2026-10-15):** initial simultaneous block/coinbase/Final support
+for 1.5B, 8B, 14B, 24B, 32B and 70B dense tiers plus the Qwen3.6-35B-A3B hybrid MoE.
+The all-required launch target and publisher file/revision metadata are recorded in
+`launch/initial-seven-models-v1.json` and RFC §II.14.61. No runtime variant, model
+conversion, full-task fidelity, Final or eligibility is established by this metadata.
+This requirement adds work; it does not remove the five gaps above or replace A6/A8.
 
 ## Validation (2026-10-15) — paused 10-15 by user order
 

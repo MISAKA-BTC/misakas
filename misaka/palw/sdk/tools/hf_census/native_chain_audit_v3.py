@@ -134,24 +134,34 @@ def lifecycle(a, scope: dict, ptr: dict, work: Path, out: Path) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    for name in ("stage", "scope", "stage-result", "run-plan-sha256", "audit-result", "node-database", "operator-id",
+    for name in ("stage", "stage-result", "run-plan-sha256", "audit-result", "node-database", "operator-id",
                  "genesis", "network", "rpc", "palw-class", "palw-class-sha256", "audit-fetch", "audit-fetch-sha256",
                  "work-dir", "evidence-root"):
         ap.add_argument(f"--{name}", required=True)
+    ap.add_argument("--scope")
+    ap.add_argument("--receipt-audit")
+    ap.add_argument("--receipt-audit-sha256")
     # Isolated calibration34 owning snapshot (all three) or none: the shipped preset.
     for name in ("own-params-snapshot34", "own-params-snapshot-root", "own-params-sha256"):
         ap.add_argument(f"--{name}")
     ap.add_argument("--timeout-seconds", type=int, default=600)
     a = ap.parse_args()
-    if a.stage not in ("register", "seat", "final", "redemption"):
+    if a.stage not in ("register", "seat", "final", "redemption", "receipt-windows"):
         return 2
     out = Path(a.audit_result)
     work = Path(a.work_dir)
     if out.exists() or work.exists():
         raise ValueError("fresh audit result and work directory required")
     work.mkdir(parents=True)
-    scope = json.loads(Path(a.scope).read_text())
     result = json.loads(Path(a.stage_result).read_text())
+    if a.stage == "receipt-windows":
+        from native_receipt_window_audit_v1 import audit
+        if not a.receipt_audit or not a.receipt_audit_sha256:
+            raise ValueError("pinned independent receipt proof checker required")
+        return audit(a, result, work, out)
+    if not a.scope:
+        raise ValueError("original lifecycle scope required")
+    scope = json.loads(Path(a.scope).read_text())
     if result.get("schema") != RESULT_SCHEMA or result.get("stage") != a.stage:
         raise ValueError("stage result pointer document differs")
     ptr = result.get("native_pointers") or {}

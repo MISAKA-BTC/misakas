@@ -40,3 +40,22 @@ pub fn verify_stage_point_fault_v32(invocation:&CheckedStageInvocationV32<'_>,ma
     let pr=PreparedV1::without_stage_v32(base.claim.program,invocation.actual_program()).map_err(|e|bad(&e))?;
     crate::flat_point25::verify_point_prepared_v25(&PointContextV25{court_id:crate::flat_point25::ordinary_point_court_id_v25(),base},&inner,&pr)
 }
+
+
+/// Frozen special-court grammar under NEW, independently authenticated V2
+/// wiring. Existing v5/v7 entry points still prepare their original V1 wiring.
+pub fn verify_stage_special_fault_v32(invocation:&CheckedStageInvocationV32<'_>,maximum:&CheckedStageCourtScopeV32,base:FlatSegContextV5<'_>,raw:&[u8])->Result<(),DismissalV1>{
+    let bad=|s:&str|DismissalV1::NotAuthentic(s.into());
+    if maximum.scope.source!=invocation.source().id()||maximum.scope.court!=ordinary_stage_court_id_v32()||invocation.positions()>maximum.scope.maximum_positions||base.claim.positions!=invocation.positions()||base.claim.program!=&invocation.actual_program().v1_view()||base.claim.encoder.is_some()||raw.len() as u64>maximum.scope.maximum_bytes{return Err(bad("stage32 special court changes original complete V2 binding"));}
+    let pr=PreparedV1::without_stage_v32(base.claim.program,invocation.actual_program()).map_err(|s|bad(&s))?;
+    match raw.get(..2).map(|v|u16::from_le_bytes(v.try_into().unwrap())) {
+        Some(7)=>{let f=crate::flat_topk7::TopKFaultV7::from_bytes(raw).map_err(|e|bad(&e.to_string()))?;let q=f.output.node.as_ref().ok_or_else(||bad("stage32 TopK output absent"))?.position;let pc=invocation.combined_parameters_at(q).map_err(|e|bad(&e))?;if base.claim.params!=&pc{return Err(bad("stage32 TopK actual-position input PC differs"));}crate::flat_topk7::verify_topk_prepared_v32(&crate::flat_topk7::TopKContextV7{court_id:crate::flat_topk7::topk_court_id_v7(),base},&f,&pr)},
+        Some(5)=>{let f=crate::flat_court5::FlatFaultV5::from_bytes(raw).map_err(|e|bad(&e.to_string()))?;
+            // All scalar ordinary/whole state relations must use the new32
+            // dependency-pricing path. Legacy is only Decode or type/header.
+            if !matches!(f,crate::flat_court5::FlatFaultV5::Decode(_)|crate::flat_court5::FlatFaultV5::Malformed(_)){return Err(bad("stage32 ordinary relation requires original V2 point32 court"));}
+            if matches!(f,crate::flat_court5::FlatFaultV5::Decode(_))&&!matches!(invocation.actual_program().output,misaka_palw_tir::program_v2::OutputDecl::Logits{..}){return Err(bad("stage32 Rows/Final has no decoder relation"));}
+            crate::flat_court5::verify_flat_fault_prepared_v32(&base,&f,&pr).map(|_|())},
+        _=>Err(bad("stage32 unknown special court grammar")),
+    }
+}

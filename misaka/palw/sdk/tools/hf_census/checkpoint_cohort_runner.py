@@ -132,6 +132,9 @@ def validate_plan(cohort: dict, plan: dict, cohort_sha: str) -> None:
                 or set(contract["original_model_roots"]) - {m["id"] for m in cohort["members"]}
                 or any(not isinstance(v, str) or len(v) != 128 for v in contract["original_model_roots"].values())):
             raise ValueError("two-window original cohort/model R/clock/operator contract must be fixed before measurement")
+    if plan.get("receipt_window_command") is not None:
+        from native_receipt_window_driver_v1 import validate_contract
+        validate_contract(plan["receipt_window_contract"])
     for entry in members:
         stages = entry.get("stages", {})
         if set(stages) - set(ac.STAGES):
@@ -212,6 +215,67 @@ def inspect_audit_pair(path: Path, root: Path, scope: dict, stage: str, run_sha:
     return True, "PASS"
 
 
+def inspect_receipt_audit_pair(path: Path, root: Path, contract: dict, run_sha: str) -> dict:
+    """Accept only matching proof-checker output from two own replay databases.
+
+    Producer pointer documents and a pair of bool-only JSON reports are insufficient.
+    Every window names a hashed offline report; exact original jobs, native clocks,
+    per-bin throughput, whole-transcript roots and counters must agree across nodes.
+    """
+    pair = read_json(path)
+    if pair.get("schema") != AUDIT_PAIR_SCHEMA or len(pair.get("exports", [])) != 2:
+        raise ValueError("TWO_INDEPENDENT_RECEIPT_PROOF_EXPORTS_REQUIRED")
+    results, panels, operators, databases = [], [], set(), set()
+    for entry in pair["exports"]:
+        if not ac.evidence_ok(entry, root):
+            raise ValueError("NATIVE_RECEIPT_EXPORT_MISSING_OR_MUTATED")
+        audit = read_json(relative_file(root, entry["path"]))
+        if (audit.get("schema") != CHAIN_SCHEMA or audit.get("stage") != "receipt-windows"
+                or audit.get("run_plan_sha256") != run_sha
+                or any(audit.get(k) != entry.get(k) for k in ("genesis", "network", "operator_id", "node_database"))
+                or any(audit.get(k) is not True for k in ("anchor_from_validated_consensus_database", "canonical_blocks_verified",
+                    "qualified_native_profile", "intended_claims_and_queue_accounting_verified"))
+                or audit.get("isolated_calibration") is not False or not audit.get("chain_objects")
+                or not all(ac.evidence_ok(e, root) for e in audit["chain_objects"])):
+            raise ValueError("INDEPENDENT_NATIVE_RECEIPT_PROOFS_INCOMPLETE")
+        for e in audit["chain_objects"]:
+            relative_file(root, e["path"])
+        evidence = audit.get("receipt_proof_evidence", {})
+        if not ac.evidence_ok(evidence, root) or evidence not in audit["chain_objects"]:
+            raise ValueError("OFFLINE_RECEIPT_PROOF_REPORT_MISSING")
+        report = read_json(relative_file(root, evidence["path"]))
+        if (report != audit.get("receipt_proof_result") or report.get("schema") != "misaka.rfc02.proof-derived-receipt-windows.v1"
+                or report.get("qualified_native_profile") is not True
+                or report.get("intended_claims_and_queue_accounting_verified") is not True
+                or len(report.get("windows", [])) != 2 or len(report.get("cumulative_accounting", [])) < 3):
+            raise ValueError("BOOL_ONLY_RECEIPT_REPORT_IS_NOT_PROOF")
+        panel = audit.get("receipt_windows", {})
+        if (not ac.panel_ok(panel, root) or panel.get("schema") != "misaka.rfc02.proof-derived-receipt-panel.v1"
+                or panel.get("contract_root") != report.get("contract_root")
+                or any(panel.get(k) != contract.get(k) or report.get(k) != contract.get(k)
+                       for k in ("cohort_sha256", "original_model_roots", "receipt_window_daa", "minimum_independent_operators"))):
+            raise ValueError("ORIGINAL_RECEIPT_DENOMINATOR_OR_CONTRACT_CHANGED")
+        for frozen, observed, public in zip(contract["windows"], report["windows"], panel["windows"]):
+            if (public != {**observed, "evidence": evidence}
+                    or any(observed.get(k) != frozen[k] for k in ("start_daa", "end_daa", "issuance_bin_daa", "minimum_commits_per_bin", "maximum_final_lag_daa"))
+                    or observed.get("intended_claims") != len(frozen["intended"])
+                    or {j.get("job") for j in observed.get("original_claims", [])} != {j["job"] for j in frozen["intended"]}
+                    or len(observed.get("original_claims", [])) != len(frozen["intended"])):
+                raise ValueError("ACCEPTED_ORIGINAL_RECEIPT_SET_OR_CADENCE_CHANGED")
+            bins = (frozen["end_daa"] - frozen["start_daa"]) // frozen["issuance_bin_daa"]
+            counts = observed.get("accepted_commits_per_bin", [])
+            if (len(counts) != bins or any(type(n) is not int or n < frozen["minimum_commits_per_bin"] for n in counts)
+                    or counts != observed.get("bounded_finals_per_bin") or sum(counts) != len(frozen["intended"])):
+                raise ValueError("SUSTAINED_RECEIPT_ISSUANCE_OR_FINAL_THROUGHPUT_FAILED")
+        results.append(report)
+        panels.append(panel)
+        operators.add(entry["operator_id"])
+        databases.add(entry["node_database"])
+    if len(operators) != 2 or len(databases) != 2 or results[0] != results[1]:
+        raise ValueError("INDEPENDENT_RECEIPT_REPLAY_OR_CUMULATIVE_QUEUE_DISAGREES")
+    return panels[0]
+
+
 def execute_audit_pair(specs: list, context: dict, folder: Path, stage: str, out: Path) -> tuple[Path, float]:
     exports, elapsed = [], 0.0
     for index, spec in enumerate(specs):
@@ -219,7 +283,8 @@ def execute_audit_pair(specs: list, context: dict, folder: Path, stage: str, out
         if path.exists():
             raise ValueError("producer pre-created independent auditor output")
         ctx = {**context, "audit_result": str(path.resolve()), "node_database": spec["node_database"],
-               "operator_id": spec["operator_id"], "genesis": spec["genesis"], "network": spec["network"]}
+               "operator_id": spec["operator_id"], "genesis": spec["genesis"], "network": spec["network"],
+               "audit_work_dir": str((folder / f"{stage}-independent-audit-{index}-work").resolve())}
         code, seconds, error = run_command(spec, ctx, folder / f"{stage}-independent-audit-{index}.log")
         elapsed += seconds
         if code or error or not path.is_file() or path.stat().st_size > MAX_JSON:
@@ -443,40 +508,29 @@ def run(cohort_path: Path, plan_path: Path, committed_plan_sha: str, out: Path) 
     panel = None
     window_status = {"status": "NOT_RUN", "blocking": "NO_TWO_WINDOW_NATIVE_DRIVER"}
     if plan.get("receipt_window_command") is not None:
-        candidate = out / "receipt-windows.json"
+        candidate = out / "receipt-window-pointers.json"
         try:
             spec = plan["receipt_window_command"]
             validate_auditors(spec.get("independent_audits"), plan)
-            ctx = {"evidence_root": str(out.resolve()), "result": str(candidate.resolve()),
-                   "run_plan_sha256": run_sha, "cohort": str(cohort_path.resolve())}
-            code, _, error = run_command(spec, ctx, out / "receipt-windows.log")
             contract = plan["receipt_window_contract"]
-            window_result = read_json(candidate) if candidate.is_file() else {}
-            if (code or error or not ac.panel_ok(window_result, out)
-                    or window_result.get("cohort_sha256") != cohort_sha
-                    or window_result.get("original_model_roots") != contract["original_model_roots"]
-                    or window_result.get("receipt_window_daa") != contract["receipt_window_daa"]
-                    or window_result.get("minimum_independent_operators") != contract["minimum_independent_operators"]):
-                raise ValueError(error or "original two-window intended receipt conditions failed")
+            contract_path = out / "receipt-window-contract.json"
+            ac.write(contract_path, contract)
+            ctx = {"evidence_root": str(out.resolve()), "result": str(candidate.resolve()),
+                   "run_plan_sha256": run_sha, "cohort": str(cohort_path.resolve()),
+                   "receipt_window_contract": str(contract_path.resolve())}
+            code, _, error = run_command(spec, ctx, out / "receipt-windows.log")
+            pointers = read_json(candidate) if candidate.is_file() else {}
+            if (code or error or pointers.get("schema") != "misaka.rfc02.native-receipt-window-pointers.v1"
+                    or pointers.get("stage") != "receipt-windows" or pointers.get("run_plan_sha256") != run_sha
+                    or pointers.get("contract_sha256") != ac.digest(contract_path)
+                    or pointers.get("cohort_sha256") != cohort_sha
+                    or pointers.get("contract") != str(contract_path.relative_to(out))):
+                raise ValueError(error or "original pointer-only native receipt driver failed")
             pair, _ = execute_audit_pair(spec["independent_audits"],
                 {**ctx, "stage_result": str(candidate.resolve())}, out, "receipt-windows", out)
-            exports = read_json(pair)["exports"]
-            for entry in exports:
-                audit = read_json(relative_file(out, entry["path"]))
-                if (audit.get("schema") != CHAIN_SCHEMA or audit.get("stage") != "receipt-windows"
-                        or audit.get("run_plan_sha256") != run_sha or audit.get("genesis") != entry["genesis"]
-                        or audit.get("network") != entry["network"] or audit.get("operator_id") != entry["operator_id"]
-                        or audit.get("node_database") != entry["node_database"]
-                        or audit.get("anchor_from_validated_consensus_database") is not True
-                        or audit.get("canonical_blocks_verified") is not True
-                        or audit.get("qualified_native_profile") is not True or audit.get("isolated_calibration") is not False
-                        or audit.get("intended_claims_and_queue_accounting_verified") is not True
-                        or audit.get("receipt_windows") != read_json(candidate)
-                        or not audit.get("chain_objects") or not all(ac.evidence_ok(e, out) for e in audit["chain_objects"])):
-                    raise ValueError("independent original receipt-window/queue replay differs")
-                for evidence in audit["chain_objects"]:
-                    relative_file(out, evidence["path"])
-            panel = candidate
+            panel_doc = inspect_receipt_audit_pair(pair, out, contract, run_sha)
+            panel = out / "receipt-windows.json"
+            ac.write(panel, panel_doc)
             window_status = {"status": "PASS", "audit_pair_sha256": ac.digest(pair)}
         except (OSError, ValueError, KeyError, TypeError) as e:
             window_status = {"status": "FAIL", "blocking": str(e)}

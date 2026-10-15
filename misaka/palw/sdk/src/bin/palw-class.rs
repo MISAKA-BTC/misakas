@@ -51,6 +51,7 @@ USAGE:
     palw-class certify   --network <id> --out <path> [--model-id <model-id>] [--family-id <hex>] <artifact-path>
     palw-class drill-leaves --network <id> [--model-id <model-id>] [--decode N] <artifact-path>
     palw-class close-sizes --network <id> [--anchor <hex>] [--json] <artifact-path>
+    palw-class compile-complete-frontend28 --declaration <json> --declaration-sha256 <hex> --original-source-dir <dir> --out <fresh-dir>
     palw-class produce-complete-pipeline28 --pipeline-borsh <canonical> --source-bundle <borsh> --tensor-directory <dir>
                          --original-source-dir <dir> --tokenizer <128hex> --out <fresh.palwtir2> --file-limit-mib N
     palw-class declare-complete-pipeline28 <fresh.palwtir2> --source-bundle <borsh> --class-wire <borsh> [--class-wire ...]
@@ -613,6 +614,17 @@ fn run(args: &[String]) -> Result<(), String> {
             };
             let path = PathBuf::from(args.first().ok_or(USAGE)?);
             drill_leaves(&view, &path, wanted.as_deref(), decode)
+        }
+        "compile-complete-frontend28" => {
+            let declaration = PathBuf::from(take_flag(&mut args, "--declaration").ok_or("--declaration original source-backed JSON required")?);
+            let sha = take_flag(&mut args, "--declaration-sha256").ok_or("--declaration-sha256 independent original pin required")?;
+            let sha: [u8;32] = misaka_palw_tir_lower::frontend_pack::program::unhex(&sha,32).map_err(|e| e.to_string())?.try_into().map_err(|_| "declaration SHA256 length")?;
+            let source = PathBuf::from(take_flag(&mut args, "--original-source-dir").ok_or("--original-source-dir required")?);
+            let out = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out fresh directory required")?);
+            if !args.is_empty() || network.is_some() { return Err("source-backed complete frontend is offline; exact explicit options required".into()); }
+            let report = misaka_palw_sdk::full_component_v28::frontend::compile_complete_frontend_v28(&declaration,sha,&source,&out)?;
+            println!("{}", serde_json::to_string_pretty(&report).map_err(|e|e.to_string())?);
+            Ok(())
         }
         "produce-complete-pipeline28" => {
             use std::io::Read;

@@ -89,3 +89,12 @@ rayon.workspace = true
 name = "palw-native-audit-fetch"
 path = "src/bin/palw-native-audit-fetch.rs"
 required-features = ["native-rpc"]
+
+[[bin]]
+name = "palw-native-receipt-audit"
+path = "src/bin/palw-native-receipt-audit.rs"
+
+[[bin]]
+name = "palw-native-receipt-anchors"
+path = "src/bin/palw-native-receipt-anchors.rs"
+required-features = ["native-rpc"]
