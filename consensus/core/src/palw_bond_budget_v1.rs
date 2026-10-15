@@ -1051,6 +1051,14 @@ pub fn palw_bond_budget_reservation_v1(policy: &PalwBondBudgetPolicyV1, ask: Pal
     v
 }
 
+/// **ADR-0176 C4b (user decision 2026-10-15): a user-paid escrow claim's reservation** — [`palw_bond_budget_reservation_v1`] with the
+/// reward NEVER clipped by the coinbase-derived per-claim ceiling `r_c` (that ceiling slices the bond's coinbase period rights; a
+/// user's escrow is not coinbase). The Final-weight ceiling still applies (a kernel claim reserves `F = 0` anyway). The producer's
+/// common `R` cap and the required collateral bind it at admission, before acceptance.
+pub fn palw_bond_budget_escrow_reservation_v1(policy: &PalwBondBudgetPolicyV1, ask: PalwBudgetAskV1) -> PalwBudgetVectorV1 {
+    PalwBudgetVectorV1 { reward_sompi: ask.reward_sompi, ..palw_bond_budget_reservation_v1(policy, ask) }
+}
+
 /// **Admission** (design §2.5): the open-claim cap, then `window + reservation ≤ caps(C)` in `Q, B, R, F` order.
 pub fn palw_bond_budget_admit_v1(
     policy: &PalwBondBudgetPolicyV1,
@@ -2985,8 +2993,11 @@ impl PalwBondBudgetStateV1 {
     /// [`Self::preview_claim_v1`] unchanged. A user-paid escrow origin ([`palw_budget_origin_is_user_escrow_v1`]):
     ///
     /// * is NEVER clipped by the model-allocation budget (`model` is ignored: that budget is coinbase-derived);
-    /// * must reserve its WHOLE reward: a per-claim ceiling below the escrow is [`PalwBudgetRefusalV1::EscrowNotReservable`], and a
-    ///   bond whose common `R` cap cannot hold it is `Exhausted { Reward }` — both before acceptance, never a clip after.
+    /// * **ADR-0176 C4b (user decision 2026-10-15): is never bound by the coinbase-derived per-claim ceiling `r_c`** (the ρ slice of the
+    ///   bond's COINBASE period rights, [`palw_bond_budget_claim_ceilings_v1`]) — [`palw_bond_budget_escrow_reservation_v1`];
+    /// * must reserve its WHOLE reward inside the producer's common `R` cap, with its required collateral: a bond whose cap (or
+    ///   collateral) cannot hold it is refused (`Exhausted { Reward }`, `LiabilityExceedsCapital`, …) — before acceptance, never a
+    ///   reduction after. ([`PalwBudgetRefusalV1::EscrowNotReservable`] stays for a reservation that would still come out short.)
     pub fn preview_claim_for_origin_v1(
         &self,
         policy: &PalwBondBudgetPolicyV1,
@@ -3016,7 +3027,7 @@ impl PalwBondBudgetStateV1 {
         if !palw_budget_origin_is_user_escrow_v1(origin) {
             return self.preview_claim_moded_v1(policy, capital, bond, model, ask, mode);
         }
-        let reservation = palw_bond_budget_reservation_v1(policy, ask);
+        let reservation = palw_bond_budget_escrow_reservation_v1(policy, ask);
         if reservation.reward_sompi < ask.reward_sompi {
             return Err(PalwBudgetRefusalV1::EscrowNotReservable);
         }
@@ -5479,13 +5490,23 @@ mod tests {
             Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward }),
             "a full R window refuses the next escrow claim instead of reserving less"
         );
-        // A per-claim ceiling (rho slicing) below the escrow: refused, where a coinbase-derived ask would be sliced.
+        // ADR-0176 C4b (user decision 2026-10-15): the coinbase-derived per-claim ceiling (rho slicing) does NOT bind a user-paid
+        // escrow — the whole escrow is reserved inside the common R cap — where a coinbase-derived ask is sliced.
         let sliced = policy(3, true);
         let t = PalwBondBudgetStateV1::new(0, &sliced);
         let (r_claim, _) = palw_bond_budget_claim_ceilings_v1(&sliced).unwrap();
         assert_eq!(
-            t.preview_claim_for_origin_v1(&sliced, capital, bond(1), None, ask(r_claim + 1), PalwBudgetOriginV1::KernelRoute),
-            Err(PalwBudgetRefusalV1::EscrowNotReservable)
+            t.preview_claim_for_origin_v1(&sliced, capital, bond(1), None, ask(r_claim + 1), PalwBudgetOriginV1::KernelRoute)
+                .unwrap()
+                .reward_sompi,
+            r_claim + 1,
+            "r_c never applies to user-paid escrow (C4b)"
+        );
+        let r_max_sliced = palw_bond_budget_caps_v1(&sliced, capital).reward_sompi;
+        assert_eq!(
+            t.preview_claim_for_origin_v1(&sliced, capital, bond(1), None, ask(r_max_sliced + 1), PalwBudgetOriginV1::KernelRoute),
+            Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward }),
+            "the producer's common R cap still binds it, before acceptance"
         );
         assert_eq!(
             t.preview_claim_for_origin_v1(&sliced, capital, bond(1), None, ask(r_claim + 1), PalwBudgetOriginV1::Attempt)

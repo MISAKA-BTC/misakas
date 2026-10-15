@@ -13,6 +13,9 @@
 //! C3  Round rights and the monetary income rows get rate / burst caps BESIDE the 7-day total: they write the bond's day and burst
 //!     shadows like claims (one short-period ledger per bond across every path, so one principal is never used twice) and are admitted
 //!     against the day view at a named per-day rate and against the burst view. The rates are calibration starting points.
+//! C4b the coinbase-derived per-claim ceiling `r_c` never binds user-paid escrow (`palw_bond_budget_escrow_reservation_v1`); the
+//!     producer's common `R` cap and the required collateral still do, and an insufficient claim is refused BEFORE acceptance, never
+//!     reduced after
 //! ```
 //!
 //! Nothing in this module is built or run by the lane that wrote it (a separate validation agent compiles). No line is a PASS.
@@ -280,6 +283,44 @@ mod tests {
         assert_eq!(
             s2.hold_rate_admit_v1(&v2, CAPITAL, &bond(1), &PalwBudgetVectorV1 { reward_sompi: u64::MAX, ..PalwBudgetVectorV1::ZERO }),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn c4b_user_escrow_is_never_bound_by_the_coinbase_per_claim_ceiling() {
+        let mut p = v3();
+        p.slice_rights_by_rho = true;
+        p.rho = 3;
+        let (r_c, _) = palw_bond_budget_claim_ceilings_v1(&p).expect("slicing policy");
+        let ask = PalwBudgetAskV1 { block_units: 0, reward_sompi: r_c * 3, final_weight: 0, liability_sompi: KAS as u128 };
+        assert_eq!(palw_bond_budget_reservation_v1(&p, ask).reward_sompi, r_c, "a coinbase-derived leg is sliced");
+        assert_eq!(palw_bond_budget_escrow_reservation_v1(&p, ask).reward_sompi, r_c * 3, "a user's escrow is not");
+        let s = PalwBondBudgetStateV1::new(0, &p);
+        let r = s
+            .preview_claim_for_origin_moded_v1(
+                &p,
+                CAPITAL,
+                bond(1),
+                None,
+                ask,
+                PalwBudgetOriginV1::KernelRoute,
+                PalwHoldModeV1::PanelZero,
+            )
+            .expect("inside the common R cap");
+        assert_eq!(r.reward_sompi, r_c * 3);
+        // The required collateral still binds: a liability above the concurrent-collateral cap is refused before acceptance.
+        let heavy = PalwBudgetAskV1 { liability_sompi: (CAPITAL as u128) * 2, ..ask };
+        assert_eq!(
+            s.preview_claim_for_origin_moded_v1(
+                &p,
+                CAPITAL,
+                bond(1),
+                None,
+                heavy,
+                PalwBudgetOriginV1::KernelRoute,
+                PalwHoldModeV1::PanelZero
+            ),
+            Err(PalwBudgetRefusalV1::LiabilityExceedsCapital)
         );
     }
 
