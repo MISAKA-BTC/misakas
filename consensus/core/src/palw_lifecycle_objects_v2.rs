@@ -2876,6 +2876,21 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "RFC-0006 R6-CELL round 4 coverage closure",
         true,
     ),
+    // 2026-10-15 (RFC-0006 consumer v2): past BOTH the closure and `palw_memory_routing_court_v2`, the closure's three readers re-read
+    // a profile through what that consumer reaches. Keyed exactly as the closure is (registration DAA, claim acceptance DAA), so
+    // below the fence every verdict, write and root is the round-4 one.
+    a2_row(
+        PalwA2SlotV1::Int12FoldPastFence {
+            tags: &[3, 8, 12],
+            what: "past both fences: a ClassRegistered (3) of a solo gdn v1/v2 or composed hybrid map, or of a bindable multi-router / \
+                   Kimi table, is no longer refused at registration; a claim (12, and the attempt lane) of such a class is admitted \
+                   when its recurrence is reached and its routed readers are covered by a router binding declared at or before \
+                   acceptance; a CourtClosed (8) re-reads REQ-CELL-2 the same way (adjudicate_court_close_v5)",
+        },
+        "palw_memory_routing_court_v2",
+        "RFC-0006 consumer v2 cell coverage",
+        true,
+    ),
     // 2026-10-15 (RFC-0017): model eligibility on the existing lanes. A registration keys on its own block's DAA, a claim on its
     // acceptance DAA, a Final on the pin written at acceptance — so below the fence every verdict, write and root is the live build's.
     a2_row(

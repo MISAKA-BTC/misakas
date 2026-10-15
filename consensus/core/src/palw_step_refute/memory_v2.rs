@@ -26,6 +26,20 @@ pub use transition::{
 
 pub const PALW_GDN_STEP_EVIDENCE_VERSION_V2: u16 = 2;
 
+/// **RFC-0006 consumer v2: the canonical chunk count of a recurrence checkpoint the legacy dispatcher cannot count** — a solo gdn
+/// v1/v2 map or a composed hybrid map, at the checkpoint covering `positions` (`capture::gdn_recurrence_section_v2`). `None` for
+/// every other map (those are `palw_state_chunk_count_at_v1`'s) and where the layout does not derive. Read by the structural step
+/// check only under consumer v2's closure mode.
+pub fn gdn_checkpoint_chunk_count_v2(profile: &crate::palw_step::PalwShapeProfileV3, positions: u32) -> Option<u64> {
+    let map = profile.state_chunk_map_id;
+    let reached =
+        map == maps::gdn_state_chunk_map_id_v1() || map == maps::gdn_state_chunk_map_id_v2() || maps::palw_map_is_hybrid_composed_v2(&map);
+    if !reached {
+        return None;
+    }
+    capture::gdn_recurrence_section_v2(profile, positions).ok().map(|(_, count, _)| count)
+}
+
 /// Merkle membership of existing state bytes. This is not a proof of the
 /// correctness of any model computation. Index/address/count are rederived.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]

@@ -121,6 +121,13 @@ pub enum PalwCellVerifierV1 {
     LegacyStateMapEnumerated,
     /// No map registered: the genesis-anchored long form replays the section.
     LegacyLongForm,
+    /// **RFC-0006 consumer v2** (past `palw_memory_routing_court_v2`): the recurrence state of a solo gdn v1/v2 map or of a composed
+    /// hybrid map, adjudicated by the checkpoint-anchored replay (`memory_v2::check_gdn_step_refutation_v2`, tag 243) and kept sound
+    /// by the checkpoint terminals (`memory_v2::check_gdn_transition_refutation_v2` / `_conv_window_`, tag 170).
+    LegacyAnchoredRecurrenceV2,
+    /// **RFC-0006 consumer v2**: a multi-router or Kimi-routed table's routed readers, each read under the class registrant's
+    /// immutable per-reader router binding (`crate::palw_router_binding_v2`, tag 170 / aux 139).
+    LegacyRouterBindingV2,
 }
 
 /// **Which kind of uncovered boundary a gap is** (round 4). Each kind is REFUSED AT ADMISSION past `palw_cell_coverage_closure_v1`
@@ -323,10 +330,17 @@ fn map_sections_v1(map: &Hash64) -> Option<(bool, bool)> {
 
 /// **Legacy graph profile coverage**: layers, carries, routers and memory sections of one accepted `PalwShapeProfileV3`.
 pub fn palw_legacy_cell_coverage_v1(profile: &PalwShapeProfileV3) -> Result<PalwCellCoverageV1, Vec<PalwCellCoverageGapV1>> {
+    let (covered, gaps) = palw_legacy_cell_coverage_parts_v1(profile);
+    finish(covered, gaps)
+}
+
+/// [`palw_legacy_cell_coverage_v1`]'s two halves — what it routes and what it cannot — so consumer v2
+/// ([`palw_legacy_cell_coverage_v2`]) re-routes only the gaps it actually reaches and keeps every other answer byte for byte.
+fn palw_legacy_cell_coverage_parts_v1(profile: &PalwShapeProfileV3) -> (PalwCellCoverageV1, Vec<PalwCellCoverageGapV1>) {
     let mut covered = Vec::new();
     let mut gaps = Vec::new();
     if ![PALW_STEP_OBJECT_VERSION_V1, PALW_STEP_OBJECT_VERSION_V2, PALW_STEP_OBJECT_VERSION_V3].contains(&profile.version) {
-        return Err(vec![PalwCellCoverageGapV1::UnknownProfileKind { why: format!("shape profile version {}", profile.version) }]);
+        return (Vec::new(), vec![PalwCellCoverageGapV1::UnknownProfileKind { why: format!("shape profile version {}", profile.version) }]);
     }
     let q36_router = kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_ROUTER_TOPK);
     let kimi_router = kernel_semantics_id_v1(crate::palw_step_refute::KDESC_KIMI_ROUTER_TOPK);
@@ -403,7 +417,123 @@ pub fn palw_legacy_cell_coverage_v1(profile: &PalwShapeProfileV3) -> Result<Palw
     } else {
         gaps.push(PalwCellCoverageGapV1::UnknownProfileKind { why: "a state chunk map id outside every known map".into() });
     }
-    finish(covered, gaps)
+    (covered, gaps)
+}
+
+// -------------------------------------------------------------------------------------------------
+// RFC-0006 memory/routing consumer v2 (past `palw_memory_routing_court_v2`)
+// -------------------------------------------------------------------------------------------------
+
+/// **What consumer v2 knows about the dated object** — the class's router binding row where one is declared (the claim gate and
+/// the court read it from aux 139), or the registration case, where no binding can exist yet and a BINDABLE routed table is
+/// admitted (its claims then wait at the claim gate for the binding).
+#[derive(Clone, Copy, Debug)]
+pub struct PalwCellConsumersV2<'a> {
+    pub router_binding: Option<&'a crate::palw_router_binding_v2::PalwRouterBindingRowV2>,
+    pub registration: bool,
+}
+
+/// **Does consumer v2's anchored recurrence court reach this profile's recurrence state?** A solo gdn v1/v2 map or a composed
+/// hybrid map (the v3/v4/v5 compositions are already covered by round 4; hybrid v1/v2 roots carry no recurrence and never are; the
+/// solo key-head v3 map has no capture consumer). The geometry must derive, and a composed checkpoint must fit the flat chunk cap at
+/// the class's widest context.
+pub fn palw_recurrence_reached_v2(profile: &PalwShapeProfileV3) -> bool {
+    let map = profile.state_chunk_map_id;
+    let solo = map == maps::gdn_state_chunk_map_id_v1() || map == maps::gdn_state_chunk_map_id_v2();
+    let composed = maps::palw_map_is_hybrid_composed_v2(&map);
+    if !(solo || composed) {
+        return false;
+    }
+    let Ok(geometry) = crate::palw_gdn_state_map_v2::PalwGdnStateGeometryV2::of(profile) else { return false };
+    if !composed {
+        return true;
+    }
+    match maps::hybrid_composed_attention_chunks_v2(profile, profile.n_ctx.max(1)) {
+        Some(Ok(attention)) => attention
+            .checked_add(geometry.chunk_count())
+            .is_some_and(|total| total <= crate::palw_step_leg::PALW_STEP_LEG_MAX_STATE_CHUNKS as u64),
+        _ => false,
+    }
+}
+
+/// **Does consumer v2 reach this profile's routed readers?** With a binding row: it binds every routed reader and the combines keep
+/// their weight families. At registration: the class is bindable.
+pub fn palw_routing_reached_v2(profile: &PalwShapeProfileV3, consumers: PalwCellConsumersV2<'_>) -> bool {
+    use crate::palw_router_binding_v2 as rb;
+    match consumers.router_binding {
+        Some(row) => rb::palw_router_binding_covers_v2(profile, row) && rb::palw_combine_router_families_v2(profile).is_ok(),
+        None => consumers.registration && rb::palw_router_binding_possible_v2(profile),
+    }
+}
+
+/// **Legacy coverage past consumer v2** — [`palw_legacy_cell_coverage_v1`] with exactly the gaps consumer v2 reaches re-routed:
+///
+/// * a solo gdn v1/v2 map's recurrence section → [`PalwCellVerifierV1::LegacyAnchoredRecurrenceV2`] (its attention section, if the
+///   profile has one, stays uncovered: a solo map spells none);
+/// * a composed hybrid map (an unknown id to round 4) → both sections: the attention cache by the long form (no KV anchor reader
+///   knows the composed id) and the recurrence by the anchored court;
+/// * a multi-router / Kimi-routed table → [`PalwCellVerifierV1::LegacyRouterBindingV2`] when [`palw_routing_reached_v2`].
+///
+/// Every other gap — hybrid v1/v2's recurrence half, attention-only maps under recurrence layers, unknown maps, solo key-head v3 —
+/// stays exactly as round 4 names it.
+pub fn palw_legacy_cell_coverage_v2(
+    profile: &PalwShapeProfileV3,
+    consumers: PalwCellConsumersV2<'_>,
+) -> Result<PalwCellCoverageV1, Vec<PalwCellCoverageGapV1>> {
+    let (mut covered, gaps) = palw_legacy_cell_coverage_parts_v1(profile);
+    let map = profile.state_chunk_map_id;
+    let recurrence = palw_recurrence_reached_v2(profile);
+    let routing = palw_routing_reached_v2(profile, consumers);
+    let composed = maps::palw_map_is_hybrid_composed_v2(&map);
+    let mut remaining = Vec::new();
+    for gap in gaps {
+        match &gap {
+            PalwCellCoverageGapV1::Uncovered {
+                boundary: boundary @ PalwCellBoundaryV1::LegacyMemory { section: PalwCellMemorySectionV1::RecurrenceState, .. },
+                kind: PalwCellUncoveredKindV1::SoloRecurrenceMap,
+                ..
+            } if recurrence => covered.push((boundary.clone(), PalwCellVerifierV1::LegacyAnchoredRecurrenceV2)),
+            PalwCellCoverageGapV1::Uncovered {
+                boundary: boundary @ PalwCellBoundaryV1::LegacyRouter { .. },
+                kind: PalwCellUncoveredKindV1::MultiRouterTable | PalwCellUncoveredKindV1::KimiRouter,
+                ..
+            } if routing => {
+                if !covered.iter().any(|(b, _)| b == boundary) {
+                    covered.push((boundary.clone(), PalwCellVerifierV1::LegacyRouterBindingV2));
+                }
+            }
+            PalwCellCoverageGapV1::UnknownProfileKind { .. } if composed && recurrence => {
+                let has = |kind| (0..profile.layer_count).any(|l| profile.layer_kind(l) == kind);
+                if has(PalwLayerKindV1::Attention) {
+                    covered.push((
+                        PalwCellBoundaryV1::LegacyMemory { map, section: PalwCellMemorySectionV1::AttentionCache },
+                        PalwCellVerifierV1::LegacyLongForm,
+                    ));
+                }
+                if has(PalwLayerKindV1::GatedDeltaNet) {
+                    covered.push((
+                        PalwCellBoundaryV1::LegacyMemory { map, section: PalwCellMemorySectionV1::RecurrenceState },
+                        PalwCellVerifierV1::LegacyAnchoredRecurrenceV2,
+                    ));
+                }
+            }
+            _ => remaining.push(gap),
+        }
+    }
+    finish(covered, remaining)
+}
+
+/// **Consumer v2's disposition of each uncovered kind** — the round-4 matrix with the two kinds this consumer actually reaches moved
+/// to `Covered` (a solo recurrence map: only gdn v1/v2, see [`palw_recurrence_reached_v2`]; a multi-router / Kimi table: only under
+/// a covering binding). Everything else stays refused at admission.
+pub fn palw_cell_uncovered_disposition_v2(kind: PalwCellUncoveredKindV1) -> PalwCellDispositionV1 {
+    match kind {
+        PalwCellUncoveredKindV1::SoloRecurrenceMap => PalwCellDispositionV1::Covered(PalwCellVerifierV1::LegacyAnchoredRecurrenceV2),
+        PalwCellUncoveredKindV1::MultiRouterTable | PalwCellUncoveredKindV1::KimiRouter => {
+            PalwCellDispositionV1::Covered(PalwCellVerifierV1::LegacyRouterBindingV2)
+        }
+        other => palw_cell_uncovered_disposition_v1(other),
+    }
 }
 
 /// The shipped legacy ladder families (graph v1, v5, v7, and the v8 hybrid row) at every ladder row, labelled; a family that does

@@ -2320,8 +2320,11 @@ pub fn check_step_refutation_capped_v1(
 pub fn check_step_refutation_closure_capped_v1(
     refutation: &PalwStepRefutationV1,
     max_step_leaf_count: u64,
-    cell_closure: bool,
+    // `bool` is the round-4 closure (`From<bool>`); RFC-0006 consumer v2's mode re-reads the profile and checkpoint counts
+    // through what that consumer reaches.
+    cell_closure: impl Into<crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1>,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepLegError> {
+    let cell_closure = cell_closure.into();
     let binding = &refutation.binding;
     let (context_hash, profile_hash, checkpoint_profile_hash) = verify_binding(binding)?;
     let committed = &binding.committed_execution_root;
@@ -2336,8 +2339,7 @@ pub fn check_step_refutation_closure_capped_v1(
             return Some(PalwStepFaultV1::ShapeProfileNotCanonical);
         }
         // R6-CELL round 4 (REQ-CELL-2): past the closure an uncoverable profile is not a canonical class.
-        if cell_closure && crate::palw_cell_coverage_closure_v1::palw_cell_closure_legacy_refusal_v1(&binding.shape_profile).is_some()
-        {
+        if cell_closure.refuses_profile(&binding.shape_profile) {
             return Some(PalwStepFaultV1::ShapeProfileNotCanonical);
         }
         // The class-context bound, in the enumeration's own form — AFTER the profile's own
@@ -2636,7 +2638,7 @@ fn checkpoint_fault(
     opening: &PalwStepOpeningV1,
     preimage: &PalwCheckpointLeafV2,
     // R6-CELL round 4: the coverage closure governs this claim (see `check_step_refutation_closure_capped_v1`).
-    cell_closure: bool,
+    cell_closure: crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1,
 ) -> Option<PalwStepFaultV1> {
     if preimage.version != PALW_STEP_LEG_OBJECT_VERSION_V1 {
         return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
@@ -2692,7 +2694,18 @@ fn checkpoint_fault(
         // **R6-CELL round 4 (`palw_cell_coverage_closure_v1`)**: past the closure a mapped class the court cannot count is not a
         // class at all (it is refused at registration and convicted by the shape pass), so `None` is never read as no fault. The
         // unmapped long form keeps its `None`.
-        None if cell_closure && binding.state_chunk_map_id != Hash64::default() => {
+        // RFC-0006 consumer v2: a solo gdn v1/v2 or composed hybrid checkpoint's count IS derivable past that consumer's fence
+        // (`memory_v2::gdn_checkpoint_chunk_count_v2`), so it is checked rather than read as a fault.
+        None if cell_closure == crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1::MemoryRoutingV2
+            && crate::palw_step_refute::memory_v2::gdn_checkpoint_chunk_count_v2(&binding.shape_profile, positions).is_some() =>
+        {
+            let canonical =
+                crate::palw_step_refute::memory_v2::gdn_checkpoint_chunk_count_v2(&binding.shape_profile, positions).unwrap_or(0);
+            if preimage.state_chunk_count as u64 != canonical {
+                return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
+            }
+        }
+        None if cell_closure.in_force() && binding.state_chunk_map_id != Hash64::default() => {
             return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
         }
         _ => {}

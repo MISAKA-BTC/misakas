@@ -515,7 +515,7 @@ impl VirtualStateProcessor {
                                 .palw_court_params_v2
                                 .as_ref()
                                 .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                            let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v4(
+                            let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v5(
                                 state,
                                 session_id,
                                 proof,
@@ -533,6 +533,8 @@ impl VirtualStateProcessor {
                                     .map(|f| f.daa_score()),
                                 // RFC-0006 R6-CELL round 4: the coverage closure's mirror (None on every shipped network).
                                 self.palw_state_params_v2.as_ref().and_then(|p| p.cell_coverage_closure_from_daa()),
+                                // RFC-0006 consumer v2's mirror (None on every shipped network).
+                                self.palw_state_params_v2.as_ref().and_then(|p| p.memory_routing_court_from_daa()),
                             )
                             .map_err(|e| e.to_string())?;
                             if derived != *verdict {
@@ -869,7 +871,7 @@ impl VirtualStateProcessor {
                         .palw_court_params_v2
                         .as_ref()
                         .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v4(
+                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v5(
                         state,
                         session_id,
                         proof,
@@ -886,6 +888,8 @@ impl VirtualStateProcessor {
                             .map(|f| f.daa_score()),
                         // RFC-0006 R6-CELL round 4: the coverage closure's mirror (None on every shipped network).
                         self.palw_state_params_v2.as_ref().and_then(|p| p.cell_coverage_closure_from_daa()),
+                        // RFC-0006 consumer v2's mirror (None on every shipped network).
+                        self.palw_state_params_v2.as_ref().and_then(|p| p.memory_routing_court_from_daa()),
                     )
                     .map_err(|e| e.to_string())?;
                     if derived != *verdict {
