@@ -2954,6 +2954,9 @@ mod private_final;
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 mod sink_order_probe {
     use super::strict_win_honest_race::{duel_on, duel_release_set, honest_sibling_race};
+    use super::*;
+    use crate::model::services::reachability::ReachabilityService;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     use rand::Rng;
     use std::collections::HashMap;
 
@@ -3223,3 +3226,5 @@ mod sink_order_probe {
         run_honest("honest race, release set + reserve", || duel_on(real_share_set)).await;
     }
 }
+// R12-AUTHORITY (2026-10-11): the private-Final race under the legal order (commitment <= rule E <= retirement).
+mod rfc12_authority;

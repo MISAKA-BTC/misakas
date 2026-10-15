@@ -590,7 +590,7 @@ pub(crate) fn build_move_carrier_multi(
     extra: Vec<TransactionOutput>,
 ) -> Result<(kaspa_consensus_core::tx::Transaction, u64), CliError> {
     use kaspa_consensus_core::mass::MassCalculator;
-    let floor = kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI;
+    let floor = kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI;
     let calc = MassCalculator::new(
         nv.params.mass_per_tx_byte,
         nv.params.mass_per_script_pub_key_byte,
@@ -617,7 +617,7 @@ fn build_move_carrier(
     extra: Vec<TransactionOutput>,
 ) -> Result<(kaspa_consensus_core::tx::Transaction, u64), CliError> {
     use kaspa_consensus_core::mass::MassCalculator;
-    let floor = kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI;
+    let floor = kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI;
     let calc = MassCalculator::new(
         nv.params.mass_per_tx_byte,
         nv.params.mass_per_script_pub_key_byte,
@@ -717,7 +717,7 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
     // 480,000 storage-mass cap (measured: 15 accepted, 20 refused at 585,524).
     let mut sorted: Vec<_> = candidates.into_iter().collect();
     sorted.sort_by(|a, b| b.1.amount.cmp(&a.1.amount));
-    let want = msk_seed.saturating_add(kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI);
+    let want = msk_seed.saturating_add(kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI);
     let mut funding: Vec<_> = Vec::new();
     let mut have: u64 = 0;
     for (o, e) in sorted.into_iter().take(PALW_CARRIER_MAX_INPUTS) {
@@ -734,7 +734,7 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
                 funding.len(),
                 have,
                 msk_seed,
-                kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI,
+                kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI,
                 &addr,
                 &line,
                 r.seed_min_sompi,
@@ -896,7 +896,7 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text
     let candidates = crate::palw_fp::spendable_candidates_v1(&nv, &addr).await?;
     let (outpoint, entry) = candidates
         .into_iter()
-        .find(|(_, e)| e.amount > msk_in.saturating_add(kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI))
+        .find(|(_, e)| e.amount > msk_in.saturating_add(kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI))
         .ok_or_else(|| CliError::new(exit::GENERIC, format!("no mature, unbonded UTXO at {addr} holds {} plus a fee", msk(msk_in))))?;
     let sink = TransactionOutput::new(msk_in, palw_model_sink_spk_v1(&line));
     let (tx, fee) = build_move_carrier(&key, &nv, &object, outpoint, &entry, vec![sink])?;
