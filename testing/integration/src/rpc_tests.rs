@@ -1253,9 +1253,9 @@ async fn sanity_test() {
                     // RFC-0016 (op 255): a malformed class id is an error before any state is read; this test network runs no
                     // ConsensusV2 bundle, so a well-formed read answers `available: false`.
                     let odd = GetPalwRfc0016ReportRequest { class_hex: "0".into() };
-                    assert!(rpc_client.get_palw_rfc0016_report_call(None, odd).await.is_err());
+                    assert!(rpc_client.get_palw_rfc_0016_report_call(None, odd).await.is_err());
                     let empty = GetPalwRfc0016ReportRequest { class_hex: String::new() };
-                    let read = rpc_client.get_palw_rfc0016_report_call(None, empty).await.unwrap();
+                    let read = rpc_client.get_palw_rfc_0016_report_call(None, empty).await.unwrap();
                     assert!(!read.available && !read.armed);
                 })
             }

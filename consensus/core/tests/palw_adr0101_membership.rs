@@ -8,7 +8,11 @@ fn enclosing_fn(lines: &[&str], at: usize) -> String {
         .rev()
         .find_map(|l| {
             let t = l.trim_start();
-            let rest = t.strip_prefix("pub fn ").or_else(|| t.strip_prefix("fn ")).or_else(|| t.strip_prefix("pub(crate) fn "))?;
+            let rest = t
+                .strip_prefix("pub fn ")
+                .or_else(|| t.strip_prefix("fn "))
+                .or_else(|| t.strip_prefix("pub(crate) fn "))
+                .or_else(|| t.strip_prefix("pub(super) fn "))?;
             Some(rest.split(['(', '<']).next().unwrap_or("").to_string())
         })
         .unwrap_or_default()
@@ -85,7 +89,8 @@ fn a_position_moves_only_between_a_holder_and_the_curve() {
         .iter()
         .enumerate()
         .filter(|(_, l)| {
-            l.contains("write_model_position(") && !l.trim_start().starts_with("fn ") && !l.trim_start().starts_with("//")
+            // The writer's own definition (any visibility: `pub(super) fn` since the fold split) is not a write.
+            l.contains("write_model_position(") && !l.contains("fn write_model_position(") && !l.trim_start().starts_with("//")
         })
         .map(|(i, _)| enclosing_fn(&lines, i))
         .collect();
@@ -133,7 +138,13 @@ fn a_position_moves_only_between_a_holder_and_the_curve() {
             .then_some(name)
         })
         .collect();
-    assert_eq!(transfer_objects, vec!["ModelLineOwnerTransferred"], "no object moves a Position from one holder to another");
+    // `DaTransferV1` (DA16 provider court, tag 153) moves a claim's data-availability duty to its providers; like the line transfer
+    // its arm writes no holding (the writer count above).
+    assert_eq!(
+        transfer_objects,
+        vec!["ModelLineOwnerTransferred", "DaTransferV1"],
+        "no object moves a Position from one holder to another"
+    );
 }
 
 /// **The pin above sees the writers the old grep could not** (the 2026-09-23 Position route

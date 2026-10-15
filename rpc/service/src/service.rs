@@ -3726,7 +3726,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         }
     }
 
-    async fn get_palw_rfc0016_report_call(
+    async fn get_palw_rfc_0016_report_call(
         &self,
         _connection: Option<&DynRpcConnection>,
         request: GetPalwRfc0016ReportRequest,
