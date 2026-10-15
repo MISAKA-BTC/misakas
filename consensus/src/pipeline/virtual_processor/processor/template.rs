@@ -3,6 +3,42 @@
 use super::*;
 
 impl VirtualStateProcessor {
+    pub(super) fn native_carriage_for_template_snapshot_v22(
+        &self,
+        virtual_state: &VirtualState,
+    ) -> Option<kaspa_consensus_core::palw_native_carrier_index_v22::NativeCarriageSnapshotV22> {
+        let extras = self.palw_kernel_route_extras_at(virtual_state.daa_score)?;
+        let mass = extras.native_carriage_mass?;
+        let service = extras.native_carriage_service?;
+        let queue = extras.native_final.as_ref().map(|f| f.policy.queue_policy.clone());
+        let parent = virtual_state.ghostdag_data.selected_parent;
+        let parent_daa = self.headers_store.get_daa_score(parent).ok()?;
+        let (at, state) = self.palw_v2_state_at(parent)?;
+        if at != parent {
+            return None;
+        }
+        let snapshot = kaspa_consensus_core::palw_native_carrier_index_v22::NativeCarriageSnapshotV22::from_consumer_state(
+            virtual_state.daa_score,
+            parent_daa,
+            state,
+            mass,
+            service,
+        )
+        .ok()?;
+        match queue {
+            Some(policy) => snapshot.with_queue_policy_v30(policy).ok(),
+            None => Some(snapshot),
+        }
+    }
+
+    pub fn native_carriage_snapshot_v22(
+        &self,
+    ) -> Option<kaspa_consensus_core::palw_native_carrier_index_v22::NativeCarriageSnapshotV22> {
+        let virtual_read = self.virtual_stores.read();
+        let state = virtual_read.state.get().ok()?;
+        self.native_carriage_for_template_snapshot_v22(&state)
+    }
+
     pub(super) fn validate_block_template_transactions_in_parallel<V: UtxoView + Sync>(
         &self,
         txs: &[Transaction],
@@ -76,7 +112,7 @@ impl VirtualStateProcessor {
         // payload by `evm_template_fields`; ignored pre-activation.
         evm_template_data: kaspa_consensus_core::evm::EvmTemplateData,
     ) -> Result<BlockTemplate, RuleError> {
-        self.build_block_template_with_selector_provider(miner_data, build_mode, evm_template_data, move |_| tx_selector)
+        self.build_block_template_with_selector_provider(miner_data, build_mode, evm_template_data, move |_, _| tx_selector)
     }
 
     pub fn build_block_template_with_selector_factory(
@@ -86,8 +122,8 @@ impl VirtualStateProcessor {
         build_mode: TemplateBuildMode,
         evm_template_data: kaspa_consensus_core::evm::EvmTemplateData,
     ) -> Result<BlockTemplate, RuleError> {
-        self.build_block_template_with_selector_provider(miner_data, build_mode, evm_template_data, |latest_ready_epoch| {
-            tx_selector_factory.build_selector(latest_ready_epoch)
+        self.build_block_template_with_selector_provider(miner_data, build_mode, evm_template_data, |latest_ready_epoch, native| {
+            tx_selector_factory.build_selector_with_native_carriage(latest_ready_epoch, native)
         })
     }
 
@@ -265,7 +301,10 @@ impl VirtualStateProcessor {
         tx_selector_provider: F,
     ) -> Result<BlockTemplate, RuleError>
     where
-        F: FnOnce(Option<u64>) -> Box<dyn TemplateTransactionSelector>,
+        F: FnOnce(
+            Option<u64>,
+            Option<kaspa_consensus_core::palw_native_carrier_index_v22::NativeCarriageSnapshotV22>,
+        ) -> Box<dyn TemplateTransactionSelector>,
     {
         //
         // TODO (relaxed): additional tests
@@ -287,7 +326,8 @@ impl VirtualStateProcessor {
         // are byte-identical to before.
         let template_bond_view = self.initial_active_bond_view();
         let latest_ready_epoch = self.latest_ready_epoch_for_template_snapshot(&virtual_state);
-        let mut tx_selector = tx_selector_provider(latest_ready_epoch);
+        let native = self.native_carriage_for_template_snapshot_v22(&virtual_state);
+        let mut tx_selector = tx_selector_provider(latest_ready_epoch, native);
         let mut txs = tx_selector.select_transactions();
         let mut calculated_fees = Vec::with_capacity(txs.len());
         // kaspa-pq DNS-finality (§6.5): per-reason drop counters for diagnostics.

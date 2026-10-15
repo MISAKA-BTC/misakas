@@ -3060,3 +3060,531 @@ Branch `rfc02/merge-final` from the integration line `319c3695e`: `rfc02/takeove
   RFC02-T's inner 36/37 protects the frozen 23/27/32 refutations past `palw_model_refutation_seal_v1`. The sealed-bounty rule protects
   the kernel `FileProof`. RFC02-T's flat-v5 pursuit gate now also applies to codex's protected v6 posts past that fence.
 * No int-12 wire type changed: every new kind is inside tag 110 or 113, and both are post-int-12.
+
+## Workspace continuation — paid pre-proof discovery v13, 2026-10-13
+
+The requested workspace branch is `codex/workspace-rfc02`, created from the
+fetched `origin/pre` at `96813336a`. The quoted `64699e960` was not the current
+remote value at branch creation. No attachment body was present; this increment
+uses §II.14 and the latest ledger's explicit remaining guarantees.
+
+Added `flat_quota11::discovery13`, a bounded fixed-row API for a paid discovery
+reservation made before a proof or coordinate exists. The same original global,
+actor and job aggregates/retained counters cover discovery and proof slots.
+Producer lifetime answer counts must include all four discovery sessions and
+all eight later protected demands. Exact original job/quota roots derive the
+request, journal and proof envelopes. Failed expensive requests keep their
+predebit. Conversion preserves one slot and original money, takes a new proof
+maturity and consumes unused discovery allowance. Same-interval retirement
+cannot refund capacity; expired collection charges current ordinary capacity
+and cannot revive old guarantees. Native callers still authenticate coins,
+keys/roots/absence and permanent spent-ticket/nonces, then apply returned rows
+atomically. This API is not yet connected to consensus object dispatch.
+
+Thirteen new controls cover original native money/claim/clock/operator bindings,
+fixed framing, delivery underfunding/overflow, ordinary saturation, failed
+attempts, per-axis caps, shared slot exhaustion, exact rooted restoration,
+conversion/new maturity/v11 handoff, duplicate conversion, terminal guards and
+same/next-interval retirement, and same-DAA distinct DAG blocks. Initial trial fixtures wrongly assumed a
+four-DAA challenge window; corrected boundary tests derive the actual original
+claim's challenge end. These are component tests, not checkpoint completion.
+
+Corrected the local-LLM census's target flag: shape-ready confidence is exposed
+as `shape_ready_meets_target`; zero measured active-kernel full-task Finals give
+`meets_target=false` and `acceptance_status=NOT_RUN`. Its rendered report no
+longer suggests shape-only coverage satisfies A8. No population denominator,
+threshold, failure record or actual Final count was changed.
+
+Remaining: native policy/nonce/escrow/quota/UTXO dispatch and transactional
+Fund→Commit→DA/court→Final; complete unknown-coordinate discovery/delivery
+bounds and deadlines; principal/window capital accounting; full versioned
+length and typed H/media execution integration; real checkpoint/task/context
+and independent Final/redemption evidence; A6/A8 measured cohorts and confidence.
+The full RFC02 goal is active and **not complete**. Shipping fences remain dormant.
+
+Validation for this discovery increment (before native dispatch integration):
+
+```sh
+cargo test --locked -p misaka-palw-kernel --lib discovery13
+cargo test --locked -p misaka-palw-kernel --lib --test flat_execution11 --test flat_lengths7 --test flat_graph7 --test flat_graph9 --test flat_inputs12
+cargo test --locked -p kaspa-consensus-core --lib palw_flat_execution_v11::tests
+cargo clippy --locked -p misaka-palw-kernel --lib --tests -- -D warnings
+cargo check --locked -p kaspa-consensus-core
+```
+
+The broad run passes228 kernel library cases (one existing ignored case),26
+execution,10 graph7,6 graph9,5 typed-input and5 length cases. It contains the
+first12 discovery controls; the final13-control run adds the same-DAA DAG case
+and rechecks the final owned discovery source. The five native carrier controls
+pass separately, before new dispatch edits. These counts are overlapping
+regressions, not new model acceptance credit. Clippy including tests, Python
+syntax checks, formatter and whitespace checks pass. Exact selected output is
+retained in [discovery controls](evidence/rfc02-discovery13-2026-10-13-tests.log),
+[native carrier baseline](evidence/rfc02-discovery13-native-carrier-baseline-2026-10-13.log)
+and [Clippy](evidence/rfc02-discovery13-2026-10-13-clippy.log).
+
+The user subsequently supplied local original weights and the historical census
+snapshot, and authorized parallel implementation. Native funded execution,
+versioned typed stage lengths/checker/court and predeclared checkpoint/cohort
+work are now proceeding on this same branch. These later changes require their
+own coherent validation and do not inherit completion from this increment.
+
+
+## Native integration snapshot — 2026-10-13
+
+The workspace branch is `codex/workspace-rfc02`, retaining `64699e960` and its
+ancestor `96813336a`. The current continuation implements prospective native
+namespaces over the existing complete-scope v7/v9 checker. This snapshot is
+**not RFC02 completion** and is not an activation or model-coverage certificate.
+
+Two independent Params fields, `palw_funded_execution_v11` and
+`palw_stage_execution_v14`, bind their complete policy roots and activation in
+raw Params/schedule identity. The existing peer-identity normalization still
+collapses an entire `Some(never)` option and normalizes prospective non-genesis
+schedules as before. A policy at genesis changes peer identity. All shipped
+presets retain `None`, and validation refuses arming while the public discovery,
+court/DA, monetary and checkpoint acceptance conditions remain open. Three
+selected fence/identity tests pass; their complete output is
+[evidence/rfc02-native-policy-fence-tests-20261013.log](evidence/rfc02-native-policy-fence-tests-20261013.log).
+
+Native inner 63 implements an original funded job: exact prepared request,
+requester collateral debit, the shared operator nonce counter, fixed selected
+quota rows, exact original Commit and producer reserve, own-seal maturity,
+computation/source courts, typed DA and paid discovery conversion. Native inner
+64 is a separate version-14 typed input/source contract: declared T/P/A maxima,
+job actual dimensions, immutable real weights/state, checked public inputs and
+original source inventory, funded job and Commit. The typed source inventory
+excludes virtual job inputs; frozen text/source/length meanings are preserved.
+The implementation is still under integration testing. Inspection found that a
+requester naming a producer must not reserve that producer's resources/recipient
+income or job slots before the producer signs exact preparation consent; this
+pre-Fund consent is pending in this snapshot and blocks release. In particular, complete
+monetary B/R/F and material-retention provenance, stage source court/DA,
+public-discovery worst bounds and honest Final/redemption are not certified by
+these partial connections.
+
+Funded proof chunks append target 6 under the funded namespace's own fence.
+Only that target uses its original paid seal's protected 32-KiB fragments and
+bounded 64-part assembly, outside the ordinary eight-group pool. Acceptance
+checks the exact outer signed fragment and its own fence; the fold must debit
+whole assembly before reconstructing/hash/decode and bind the reconstructed
+signer, action, seal and actor to the original opener/target. Old targets retain
+their bounds and independent inner-signature checks. Invalid attempts must retain
+the paid attempt; this is a node-test requirement, not inferred from codec tests.
+
+Selected quota collection now refuses closed-job deletion while the rooted
+retained count includes any unseen seal or discovery ticket. Owner collection
+uses the selected original counter. Public third-party collection additionally
+authenticates the distinct seal-owner row and charges the current caller's
+ordinary allowance for the full fixed restore/journal and collection. Native
+must atomically persist both actor rows, aggregates, subject and seal deletion.
+It cannot charge the owner's allowance, refund an earlier reservation or revive
+expired proof/discovery guarantees. Public collection tests are pending in this
+snapshot; the earlier selected owner/hidden-row test passed independently.
+
+The checkpoint panel and D_all SRS were committed before measurement. Six
+safetensors source file/hash/shape inventories pass; the GGUF panel member fails
+because required auxiliary files are absent. The fixed independent Qwen0.5
+three-task reference run records two successes and a translation failure. The
+full original context and downstream native verification/Final stages do not
+inherit those successes. The current D_all end-to-end report remains 0/128 with
+missing stages retained. These failures and NOT_RUN stages remain in the
+committed observations. The root locator uses authenticated logarithmic
+segment/position/node bisection; header/operand acquisition and terminal proof
+costs remain separate. No fixture, header-only census or reduced-context pilot
+is credited as A6/A8 full-task success.
+
+### Continuation after the native snapshot
+
+Pre-Fund producer Consent18 now binds the exact preparation, principals,
+operator nonce, original interval, expiry and derived additional availability
+and capped fee roots in both namespaces. This repairs the snapshot's known
+victim-producer reservation gap. Old metadata acceptance does not grant these
+additional rights. Current native node tests still need coherent rerunning
+after the consent, source, pursuit and monetary changes; the snapshot's remote
+build does not test those later edits.
+
+Frozen v11/v13 request metadata was insufficient to restore a complete class
+or deliver an original 4096-value i128 PC leaf. Separate Source16 and Trace17
+supplements preserve the old quantities and attempts. Source16 authenticates a
+fixed cached quote against the original class/job/policy roots and reserves its
+own PC answer guarantee within the same global/producer 21-axis totals. The
+source codec retains original headers, odd-carry subtree paths and full leaves.
+Trace17 prices original class/post restoration separately for producer and
+requester; admission and failed expensive attempts must be charged before
+restore. Native borrowed dispatch and exact pending-request ownership are
+still being integrated; component success is not proof of those node gates.
+
+Three Source16 controls pass, covering original consent/owner/epoch binding,
+failed answers, unchanged frozen11 subject meanings, fixed cached-quote root
+and price tampering, and public expired collection without old credit revival.
+Two intermediate test failures were zero-axis mutations in the test itself,
+corrected to actual bit changes; they were not accepted successes. The final
+selected output is [Source16 controls](evidence/rfc02-source16-controls-20261013.log).
+The independent distinct-payer protected GC control also passes, including
+owner allowance preservation and authenticated counter updates; see
+[public GC control](evidence/rfc02-public-gc-controls-20261013.log). Native must
+still apply every returned row and explicit tombstone atomically.
+
+The native monetary fold control for reward role11 and capped source fee role19
+passes with both roles: an unpaid hold survives the original H+W, partial
+payment leaves remaining R and the withdrawal gate held, each queue starts W
+at its actual payment, and the final release happens once. Every transition
+round-trips carriage, applies and undoes its exact delta. This is a monetary
+control using admitted fixture holds, not a native Final or court verdict; see
+[sparse income control](evidence/rfc02-native-sparse-income-controls-20261013.log).
+
+The fixed dense-checkpoint task measurements retain failures. Qwen0.5 scores
+64/96 token matches and 1/3 exact sequences; GLM78/96 and2/3; Smol96/96 and3/3;
+Llama91/96 and2/3. Smol's source-task semantic success is only1/3, so perfect
+integer token agreement alone cannot pass the task gate. All four combined
+task gates fail their predeclared requirements. Qwen's prepared native fixture
+contains 26 positions and6570 nodes per position and reproduces the three-token
+arithmetic reference; its context64/artifact512 is not original-context32768
+coverage. Static original-context audits still refuse complete jobs at resource
+or declaration gates. Candidate lowering/pricing extensions are independently
+versioned; they do not revise the original failed observations.
+
+The separately predeclared layout15 equivalence run on actual Qwen0.5 weights
+passes: all151,936 logits match at every one of26 positions, the same
+660,615,904 complete integer parameter bytes are used, and both programs emit
+`[19,17,151645]`. The original6570-node program and transformed6666-node program
+have independent identities. This is integer lowering equivalence only; it
+does not fix a source model's wrong semantic answers or establish original
+context, active native checker, Final or population coverage. Its observation
+is [layout15 bitexact run](evidence/rfc02-qwen05-layout15-bitexact-observation-20261013.json),
+with protocol frozen before execution in `53dd07105`.
+
+The processor now verifies borrowed, exact-length native63/64 frames without
+allocating a second body vector. Source15 preflight reads only fixed original
+pending/producer/attempt/deadline rows; the native fold then debits before nested
+decode. The coherent processor check passes, recorded in
+[snapshot2 check](evidence/rfc02-native-snapshot2-processor-check-20261013.log).
+It emitted one unused-parameter warning in the in-progress stage source fold;
+this check is compilation evidence, not native node-test or Final evidence.
+
+Consumer-resolved NativeCarriageMassParams22 and a complete carrier envelope
+now account for actual compute/transient/contextual storage mass. Two controls
+pass: the raw128-KiB envelope refuses against actual block mass, a bounded source
+packet matches the production mass calculator, and script/sigops/dust-storage
+growth refuses. See [physical mass controls](evidence/rfc02-native-carriage-mass-controls-20261013.log).
+The future global delivery lease and protected selector are still under
+implementation, including coexistence with original H1/readiness carriage.
+
+The subsequent frozen native/stage snapshot compiles through the consensus
+processor without warnings; see [final snapshot2 compilation](evidence/rfc02-native-snapshot2-final-check-20261013.log).
+Stage ordinary real-PC request/answer/default and capped fee accounting are now
+connected, while genuine Convicted quota-terminal marking, protected discovery
+lanes and independent Final remain open. The rooted stage collection path
+collects genuine expired Refunded jobs without restoring guarantees and keeps
+the original principal/highwater anchors. These transitions still require new
+native signed node tests; the earlier snapshot build cannot certify them.
+
+The current D_all full end-to-end coverage remains0/128. Independent native
+Final/redemption, stage source court/DA, calibrated economic/carriage guarantees,
+and the two A6 receipt windows/A8 population criteria remain open. Every shipped
+new namespace fence stays absent and activation validation remains closed.
+
+### Original physical capacity, Stage courts and restored source evidence
+
+After snapshot2, native physical22 admission and explicit Consent23/Fund24 were
+connected behind the independent dormant text fence. They bind the original
+producer consent, pursuit deadline, complete mass envelope and shared global
+lease, with per-unit two-attempt counters and original stream cooldowns. Three
+capacity controls pass, including the ordinary3 plus owned8 stream bound;
+they do not prove delivery. The new bounded native mempool index authenticates
+original pending/owner/lease metadata and the populated UTXO carrier at admission
+and again at the template's exact selected-parent snapshot. It separates all
+namespace/unit/part identities, bounds variants/count/bytes, protects admitted
+entries from the fee market and composes a packet before the H1/ordinary
+remainder. Consumer service still uses `probe(implemented=false)`: real delivery,
+refill, stage physical leases and the service clock assumptions remain open.
+The new mining/consensus connection passed a compiler check; its runtime controls
+and latest signed-node transitions are being tested separately. Do not count the
+old remote snapshot's failed test compilation as a new-code pass.
+
+Stage14 original computation/source/header terminal courts and paid target7
+assembly now connect through their own fold before the ordinary chunk pool.
+Current producer/source/default and Convicted quota-terminal transitions, plus
+expired paid seal collection, still require runtime node evidence. Public
+pre-proof source acquisition needs its new caller supplement and a deadline
+derived before funding; the old protected two-request allowance is unchanged.
+
+Missing source payloads were restored without overwriting unrelated files: eight
+safetensor files for five pinned checkpoints match their original byte counts
+and SHA256 values. See [restoration evidence](evidence/rfc02-checkpoint-payload-restoration-20261013.json).
+The original Qwen8 artifact was reconstructed byte for byte and matches the
+historical whole-file SHA256; see [exact reconstruction](evidence/rfc02-qwen05-original8-exact-reconstruction-20261013.json).
+Historical manual-prompt fixed32 failures are retained. A separately frozen
+publisher-chat/first-EOS v2 run gives linear16 23/23 token agreement and3/3 exact
+jobs, but both source and integer translation fail the original English-answer
+criterion: combined task acceptance remains FAIL. The restored original8 run
+remains FAIL as well. These are reduced-context diagnostics, not original full
+context, complete multimodal or A6/A8 coverage. No acceptance threshold or
+population denominator was weakened.
+
+The user then changed the execution order to **all code first, integrated
+verification afterward**. No new build, runtime, checkpoint or coverage run is
+started during this implementation phase. The earlier native metadata controls
+(2), bounded local reserve controls (2) and existing H1/readiness regression
+controls (14, including the reserve control) passed before that instruction.
+Subsequent shared refill and same-unit fee-replacement protection are implemented
+but await the integrated verification phase. The false consumer service probe
+continues to deny delivery authority. Remaining code includes the new full-court
+contract, versioned maximum/actual EOS stopping, original temporal/final consent,
+public acquisition/retirement and independent Final/redemption drivers. Frozen
+v7/v9/v11/v14 bytes, counts and pricing are preserved; new larger court/transport
+or final conditions require their own complete versioned contract.
+
+### Code-first integration: Final27, Stage28, stopping29 and queue30
+
+New code adds separate Final27 and Stage28 Params/identity/fence plumbing,
+the full-court25 and paid paged29 contracts, maximum/actual EOS stopping29,
+and shared original burst residency30. The trusted Final27 policy binds
+Queue30. A private checked quotation derives from the original checked class,
+real PC/job/pursuit or the independently checked paged carriage29, accounting
+for four complete copies and bounded index/UTXO metadata. Global admission
+jointly reserves physical service and count/bytes; a live legacy23 lease without
+new queue consent refuses. Genuine closure jointly retires both exact leases
+once, without returning old quota credits. Native Text29 and Stage28 adapters
+are being connected to these original rows.
+
+Consumer code provisions the native queue at startup separately from ordinary
+mempool capacity. RAM scaling preserves its promise, high-priority ordinary
+traffic cannot borrow unused native slots, and confirmed-input carrier bounds
+exclude unpriced ancestor delivery. Original-unit RBF conserves aliases, and
+generic expiry does not erase a paid indexed packet. The Final27-active consumer
+resolves the implemented reserved scheduler profile; dormant/old contracts
+continue to resolve the false probe. This implementation marker does not
+replace Final27's independent source/detection/economic/delivery evidence.
+
+All these changes and newly written queue/identity/mempool controls are
+**UNVERIFIED** during the requested code-first phase. No subsequent compilation,
+node run, checkpoint conversion or A6/A8 measurement has been started. Independent
+native Final/redemption and full original-context corpus measurements remain
+required. The latest D_all end-to-end result is still0/128, not a code-completion
+estimate. New shipping activation fields remain absent.
+
+The user additionally authorized periodic commit/push of this workspace branch.
+`codex/workspace-rfc02` was pushed through2b9e268b7; a30-minute thread heartbeat
+saves coherent progress on the same branch and labels unverified snapshots.
+It does not push `pre`, force-push, or start verification during code-first work.
+
+The next unverified progress snapshot also contains initial registration31's
+separate paid pre-Fund fragmentation and native audit32's anchored readonly
+openings. Initial31 preserves the old TIR program and old object/proof count
+limits; its512-part body transport invokes only Text29/Stage28 registration.
+The Qwen11MB fixture includes a full trace directory: its original program is
+about14KB, and no program limit increase was needed. Audit32 extends the readonly
+state-proof API with explicit native aux/payout labels and exact commitment
+positions, preserving the underlying state hash. Genuine fixed11 Final27
+extraction is on disk; Text29's actual fold, full V2 component execution/composed
+Final, node audit export and some Stage28 transitions remain under implementation.
+This snapshot is a backup for review, not a compile/test pass or RFC02 completion.
+
+### Code-first integration: immutable audit32 and credit delivery33
+
+The actual node now has readonly audit32 extraction from an immutable
+UTXO-validated block and its exact independently validated selected-parent
+state. RPC202 returns the authenticated auxiliary opening with a bounded raw
+audit record; clients reconstruct every field from the opening. Serialized
+records and server flags cannot mint a checked Final. New proof labels identify
+the original auxiliary/payout commitment positions without changing their
+frozen state hashes. A future rule-E V2 envelope requires its own opening
+verifier; the current auditor refuses it rather than falling back to a raw root.
+
+New Final27 producer credits use a unique queue key binding original job,
+funding, settlement and payout payload. The old11 route keeps its original
+pooled payout meaning. Delivery33 derives a real coinbase inclusion proof from
+the original validated block body using the owning Crescendo mass fence and
+Hash64 transaction Merkle domain. The independent verifier checks pinned
+pre/post state openings, the exact original credit, the whole canonical payout
+drain prefix, output order/value/script and consumption of the unique original
+credit queue. Other pooled keys may be legitimately re-enqueued by that block.
+It returns the original credit's real transaction outpoint, not a receipt flag.
+RPC202's new redemption query exports the coinbase proof alongside the same
+immutable audit anchor; ordinary proof responses preserve version1 bytes.
+
+Coinbase delivery alone does not establish maturity, current unspentness,
+successful spending, independent node replay or A6/A8 coverage. SDK bounded
+decoding, actual UTXO/spend drivers, trusted isolated calibration configuration,
+Text29 whole native transition/audit and full-component composed Final remain
+under implementation. Latest additions and written Merkle/RPC controls remain
+**UNVERIFIED**: no fresh build/test/node/measurement run has occurred during the
+requested code-first phase. D_all remains0/128 end-to-end measured.
+
+### Code-first continuation (Claude, 2026-10-15) — unverified source checkpoint
+
+All items below are **unverified source checkpoints**: no build, check, test,
+clippy, node, devnet or measurement ran (code-first phase). Nothing is armed;
+every new path stays behind `palw_funded_execution_v11` ∧ `palw_native_final_v27`
+(absent on every preset). RFC text: [II.14.58](../../../rfc/0002-palw-tensor-ir.md#ii1458-text29-native-lane-accepted-spend-redemption-and-the-a6a8-receipt-rule-2026-10-15).
+
+- **Calibration34 wiring.** One shared factory,
+  `load_isolated_native_calibration_v34`, is used by the daemon
+  (`--palw-native-calibration-snapshot/-root`) and by the SDK loader behind
+  `palw-class` and `palw-native-audit-fetch`. `check_same_owning_ruleset_v34`
+  refuses a node whose announced `consensus_params_id`, schedule id or genesis
+  differs from the auditor's own reconstruction; peers with another snapshot
+  already differ in handshake fingerprint/genesis. The daemon logs the measurement
+  devnet beside its fingerprint. The fetch CLI also accepts a shipped preset (no
+  snapshot) so a future qualified network uses the same path.
+- **Text29 wired.** `palw_native_text_fold_v29` (with its public DA submodule) and
+  `palw_native_paged_fold_v29` are now modules of the funded fold; actions 27–40
+  dispatch through `text29::apply` (34 refused by name; 40 kinds 0/1/2). New kind-2
+  `collect_terminal` retires source guarantee, quota subject and joint
+  Queue30/physical22 leases once under `check_text_terminal_v29`, then frees the
+  finite catalogues. Text29 producer reserves and requester DA bonds join the
+  unavailable-collateral sums; the v11 candidate-retention scan skips namespaced
+  Text29 keys. SDK builders and `palw-class native-payload` / new `native-parts`
+  cover every Text29 action (paged parts and reply pages as signed object sets).
+  Previously this ~120 KB of fold source was not compiled at all, so the first
+  compile will surface its latent errors.
+- **Independent Final / redemption.** Text29 producer credits use the shared
+  `native_final_credit_queue_v27` identity; audit32 extracts namespace-29 Finals
+  from authenticated rows (`audit_record_from_rows_v29`); the SDK accepts
+  namespace 29. New `palw_native_spend_v35` proves the exact credit outpoint was
+  consumed by a transaction in an independently pinned chain block's committed
+  accepted-id root (implies maturity, prior unspentness, valid spend). Wired into
+  `palw-class audit-native-final32` (`--accepted-spend35-json …`) and the fetch
+  CLI (`--spend-chain-block`, `--spend-tx-json`, `--pinned-post-header`), which
+  now also requires the pinned child on the own node's selected chain.
+- **A6/A8 evidence.** Audit reports carry `final_receipt_class`
+  (`measurement-final` / `qualified-final`). `acceptance_cohort.py` counts the
+  `final` stage only for a qualified audit32 report and `redemption` only with
+  delivery33 + spend35; otherwise named failures (`MEASUREMENT_FINAL_ONLY`,
+  `REDEMPTION_NOT_SPEND_VERIFIED`, `UNAUTHENTICATED_NATIVE_RECEIPT`). New
+  `native_chain_audit_v3.py` produces the runner's
+  `independent-native-chain-audit.v3` for final/redemption stages from one
+  operator's own node (register/seat exporters remain absent → NOT_RUN).
+- **Length versioning.** The SDK Text29 Commit decoder now caps generated tokens
+  and segments from the job's own versioned maximum (as consensus does), not the
+  frozen v1 history constant.
+
+Remaining code (not validation): Stage28 audit32/redemption extraction (its
+producer queue identity is Stage-specific and set before the settlement exists;
+needs an identity decision), Master32 composed Final (bind/finalize actions; the
+component output tensors exceed one carrier and initial31 deliberately cannot
+carry Final-class bodies — transport decision), register/seat chain-audit
+exporters, v8 history long-context typed graph and RFC03 patch/audio lengths.
+Validation still owns every measured calibration root, A6/A8 cohorts and the
+two receipt windows. D_all remains 0/128 end-to-end measured.
+
+### Lead defaults and remaining code (Claude, 2026-10-15, second pass) — unverified source checkpoint
+
+Each item below is a **lead default pending user review** (reversible); see
+[II.14.59](../../../rfc/0002-palw-tensor-ir.md#ii1459-versioned-length-fields-and-lead-defaults-2026-10-15).
+No build/test/node run; nothing armed; public presets unchanged.
+
+- **Stage28 independent Final/redemption.** `audit_record_from_rows_v28` extracts namespace-28
+  Finals carrying the Stage28 credit identifier; redemption33 skips only the v27 identity
+  re-derivation for namespace 28; SDK accepts 28. Kernel book gained read-only root getters.
+- **Master32 composite at audit time.** `derive_native_master_composite_v32` (core),
+  `native_master_v32` (SDK), `palw-class audit-master-composite32`; bounded public output
+  transport `decode_native_master_outputs_v32`. No on-chain carrier; not a consensus object.
+- **Local qualified validation preset.** `NativeFinalPurposeV34::LocalQualifiedValidation`
+  (isolated genesis binding, Qualified conditions), `local_validation_snapshot_v34`, parser
+  `parse_calibrations_json_v34`, `palw-class native-calibration34`. Loader still refuses the
+  public `Qualified` purpose.
+- **Below-fence pass-through.** `palw_native_action_unjudged_at_v1` (validation) and the
+  matching early return in `apply_kernel_route_object_v1`; node test source
+  `native_final27_actions_below_their_fence_are_neither_rejected_nor_applied` (valid blocks,
+  unchanged native rows and collateral, including corrupted signatures).
+- **Register/seat exporters.** `derive_native_lifecycle_anchor_v32` with Text29/Stage28 row
+  readers, SDK `native_lifecycle_v32`, `palw-class audit-native-lifecycle32`, fetch
+  `--lifecycle-only true`, and `native_chain_audit_v3.py` now covers register, seat, final and
+  redemption — no chain stage is NOT_RUN for lack of code.
+- **Length versioning.** Kernel `flat_lengths36` (FrozenV1 / Window8 rules, token/patch/audio
+  axes, fenced media refusal) and test source `tests/flat_lengths36.rs`.
+
+Remaining code (design-scale): complete typed v8 graph (HistAppend continuity, KV/state
+binding) and its class version adopting contract 36; RFC03 patch/audio typed stage contracts
+and fence. Everything else listed is validation-phase work.
+
+### Typed window graph v37 and mempool alignment (Claude, 2026-10-15, third pass) — unverified source checkpoint
+
+- **Kernel** `flat_window37`: `WindowGraphV37` (append/KV binding, state continuity,
+  selection bound to a continuity-built history), derived `WindowGraphScopeV37`, bounded
+  `WindowFaultV37` + `verify_window_fault_v37`, ordinary `check_window_step_v37`;
+  `flat_history8::source_point` is now crate-visible. Tests: `tests/flat_window37.rs`.
+- **Consensus** `palw_window_class_v37`: dormant Params fence `palw_window_class_v37` wired
+  through params (field, clone, 4 presets `None`), identity (normalize, 3 destructures, fence
+  list, both hashes, fork visit), `fork_id_v1` probe, `validate_palw_v2`; calibration34
+  snapshot gained a trailing `window_class_v37` flag (arms it at genesis on the isolated devnet
+  only; `palw-class native-calibration34 --window37 true`). Funded action 45
+  `text29::register_window37`; extras `window_class_v37`; processor pre-gate and fold early
+  return share one predicate; route decoder ceiling 44→45. SDK `prepare_window_class_v37`,
+  `native-payload --kind window-class37`. Tests: core unit test in the module; the node
+  below-fence test now also sends action 45.
+- **Mempool alignment (checked, no change needed).** For an unjudged object the mempool
+  never rejects: (a) `native_carrier_candidate_v22` recognizes only actions 8/15/32/37 (and
+  stage 8/26/32) and, below Final27, `native_carriage_for_template_snapshot_v22` has no queue
+  policy, so `qualify` returns `None` for 32/37 and the carrier is admitted as an ordinary
+  lifecycle carrier without the protected reserve; (b) the ordinary path's per-object check
+  (`palw_kernel_route_object_is_signed`) now returns `Ok` for unjudged objects, exactly as block
+  validation does. Garbage bodies fail the 29-version prefix of the metadata borrowers and are
+  never candidates. Hence mempool, template and block validation agree.
+
+Remaining (job lane): Text window jobs (fund/commit/court with `WindowFaultV37` and the v8
+selection court) are the next class-version step; validation owns every measurement.
+
+### Window-class job path (Claude, 2026-10-15, fourth pass) — unverified source checkpoint
+
+Window jobs reuse Text29 end to end (fund/commit/Final/collection/audit32 ns29/delivery33/
+spend35). New: funded action 46 `attach_window37` (producer opt-in, graph-to-program binding
+`check_window_graph_program_v37`, court envelopes within the original paid filing bound);
+courts 3/4 in `reveal_paged` via `window_court` (own v37 filing envelope
+`borrowed_window_filing_v37`; v25 envelope unchanged); window binding row collected with the
+job; decoder ceiling 46; pre-gate/fold unjudged predicate covers 45|46. SDK
+`prepare_window_attach_v37`, `window_filing_v37`, `native-payload --kind window-attach37`.
+Test sources: kernel `tests/flat_window37.rs` (envelope, selection-job determinism, program
+binding refusal); node below-fence test now sends 45 and 46. No code item of RFC02 remains;
+RFC03 patch/audio stays spec + fenced refusing codec.
+
+## Validation (2026-10-15) — paused 10-15 by user order
+
+**Paused 10-15 by user order; results so far apply only to the recorded source commits and
+will be rerun in the consolidated phase** (after every RFC stream finishes coding). Logs are
+under the checkout's `target/rfc02-validation/` (local, not committed). Toolchain 1.93.0,
+`-j 6`, own `./target`.
+
+| Step | Command | Source commit | Result |
+| --- | --- | --- | --- |
+| lock | `cargo update --offline --workspace` (SDK workspace-internal deps only) | e92a74c95 | lock updated |
+| 1 | `cargo check --locked -p misaka-palw-tir -p misaka-palw-kernel` | e92a74c95 | PASS after 13 compile fixes |
+| 1 | `cargo check --locked -p kaspa-consensus-core` | 9a102af21 | PASS after 33 compile fixes |
+| 1 | `cargo check --locked -p kaspa-consensus -p kaspa-mining -p kaspa-rpc-service` | 9a102af21 | PASS |
+| 1 | `cargo check --locked -p misaka-palw-sdk --bins --lib` | 9a102af21 | PASS |
+| 1 | `cargo check --locked -p kaspad` | 9a102af21 | PASS |
+| 2 | `cargo test -p misaka-palw-kernel --test flat_lengths36 --test flat_window37 --test flat_history8 --test flat_lengths7` | 9a102af21 | PASS 20/20 (3+4+8+5) |
+| 2 | `cargo test -p kaspa-consensus-core --lib -- palw_native_calibration_v34 palw_native_spend_v35 palw_window_class_v37 palw_native_paged_proof_v29 palw_native_redemption_v33 funded_execution_fence_tests` | 08c8081f3 | PASS 12/12 after one code fix |
+| 2 | `cargo test -p kaspa-consensus --lib -- native_final27_actions_below_their_fence_are_neither_rejected_nor_applied execution11_native` | 9b33500ff | PASS 6/6 after one code fix and four test-expectation corrections |
+| 2 | `python3 -m unittest test_acceptance_cohort.py` / `test_checkpoint_cohort_runner.py test_rfc02_acceptance_batch.py` | 9b33500ff | PASS 12/12, 8/8 |
+| 3 | `cargo test -p kaspa-consensus-core --lib` (whole lib) | 9b33500ff | 3926 passed, 5 failed, 13 ignored — NOT PASS |
+| 3 | full `cargo test -p kaspa-consensus-core` (309 integration binaries) | — | stopped: the debug target grew to 86 GB and free disk fell to 33 GB |
+
+Code fixes made during validation (all committed): kernel trait/visibility/metadata-wrapper
+and interval `consume` fixes; consensus-core field names, ordinary-metadata envelope
+constructor, `LayoutV3` leaf `Option`, canonical TIR decode, layout accessor,
+comparable/serializable source binding; calibration34 declares the A-2 audit fence on its
+isolated genesis (no snapshot could load before); the stateless ride rule accepts the native
+64×32 KiB chunk lanes (targets 6/7).
+
+The five whole-lib failures, classified against the RFC02 workspace base `64699e960`
+(same five tests built from that tree in a separate target):
+- `delta_entry_discriminants_are_the_ones_on_disk` — also fails on the base: the test pins
+  `TerminalPart` at 205, the registry reconciliation `9ace6032f` moved it to 212. Test pin
+  corrected (uncommitted-at-run, committed below; not yet rerun).
+- `the_intent_class_is_the_court_fraud_and_contradictions_…` — also fails on the base: tags
+  16/17 were added to the intent class by `b31278797`/`da63ea284` without updating the test.
+  Left as a pre-existing open item for the consolidated phase (decision on the tag list).
+- `public_filer_targeting_v1::explicit_lookup_reconstructs_…` — also fails on the base
+  (`AccusationExposureCeiling`, accuser room 0 for a bond registered in the same block).
+  Pre-existing, not RFC02; open.
+- `a2u::every_landed_kind_is_pinned_to_its_wire_form` — passes on the base; RFC02's native
+  chunk targets 6/7 changed tag 113's wire form. Re-pinned with the reason (not yet rerun).
+- `only_this_module_may_ask_the_pre_fence_slot_rule` — passes on the base; it failed here only
+  because this checkout nests other agents' worktrees under `.claude/`. The scan now skips
+  `.claude` (not yet rerun).
+
+Step 4 (devnet / real-checkpoint cohort) was not prepared or launched.

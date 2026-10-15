@@ -17,6 +17,7 @@ misaka-palw-tir = { path = "../core" }
 borsh.workspace = true
 blake2b_simd.workspace = true
 thiserror.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 
 [dev-dependencies]
 serde_json.workspace = true

@@ -20,7 +20,7 @@ fn short(v: &Value) -> String {
 }
 
 pub fn provenance_of(meta: &str) -> Provenance {
-    let Ok(m) = serde_json::from_str::<Value>(meta) else { return Provenance::default() };
+    let Ok(m) = misaka_palw_tir_artifact::metadata_v16::parse_recorded_metadata_v16(meta) else { return Provenance::default() };
     if !m.is_object() {
         return Provenance::default();
     }

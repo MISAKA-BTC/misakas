@@ -1,0 +1,54 @@
+{
+  "schema": "misaka.rfc02.publisher-template-first-EOS-precision-comparison.v2",
+  "hashed_inputs": {
+    "rfc02-qwen05-publisher-chat-task-plan-v2-20261013.json": "2050c6c6e88a2032ed8ca74c9470ea6a501ae90dad577a5d8229fac5c0ffab44",
+    "rfc02-qwen05-publisher-chat16-source-inputs-v2-20261013.json": "174e5c453e6848e3cd2ce8e71d4b46adb68d0081328c8fa1697d863e9fffde67",
+    "rfc02-qwen05-publisher-chat16-integer-v2-20261013.json": "09e2f26f7c3230c6e68be861a6dfd8b11681887eab42fe651010aa6cb05d2330",
+    "rfc02-qwen05-publisher-chat16-score-v2-20261013.json": "dce2d142671930eaa06e71e33a28e9c437dce72e0045b9312ea2974cf18e41e4",
+    "rfc02-qwen05-publisher-chat8-source-inputs-v2-20261013.json": "07951530cb1bc4ecffdc579b7b5496de6456570909f5ec97b949ae6b2c260f15",
+    "rfc02-qwen05-publisher-chat8-integer-restored-v2-20261013.json": "c0495933d5de8160528cb562d0c7aa0134be1254cdd0de0f5758ac1d62052a91",
+    "rfc02-qwen05-publisher-chat8-score-restored-v2-20261013.json": "4568e6dd65cd1c1ad176340cf68b5a1d3d676646ebfa56bb9edbf99fc1015b8c",
+    "rfc02-qwen05-original8-exact-reconstruction-20261013.json": "29c5977320583bc73b27029a7ffbae75ffd4ab998d34f1b0390bbe3380e35640"
+  },
+  "original_manual_fixed32_failures_and_thresholds_retained": true,
+  "initial_source_and_integer_input_ids_exactly_equal_for_both_profiles": true,
+  "original8_full_file_sha_restored_exactly": true,
+  "new16_profile_is_a_separate_artifact_and_program_identity": true,
+  "decoder_contract": "greedy-first-EOS-no-padding.v2",
+  "max_requested_generated_count_per_job": 32,
+  "comparison": "all actual terminated output slots; sum max(source/int length) perjob; no padding or dropped positions",
+  "profiles": {
+    "original8": {
+      "actual_compared_output_slots": 28,
+      "generated_token_agreement": 0.39285714285714285,
+      "exact_generated_job_fraction": 0.6666666666666666,
+      "source_task_answer_fraction": 0.6666666666666666,
+      "integer_task_answer_fraction": 0.3333333333333333,
+      "predeclared_free_running_fidelity_passed": false,
+      "predeclared_generation_and_answer_thresholds_met": false
+    },
+    "linear16": {
+      "actual_compared_output_slots": 23,
+      "generated_token_agreement": 1.0,
+      "exact_generated_job_fraction": 1.0,
+      "source_task_answer_fraction": 0.6666666666666666,
+      "integer_task_answer_fraction": 0.6666666666666666,
+      "predeclared_free_running_fidelity_passed": true,
+      "predeclared_generation_and_answer_thresholds_met": false
+    }
+  },
+  "linear16_actual_source_integer_fed_ids_equal_all_jobs": true,
+  "linear16_actual_generated_counts": [
+    3,
+    8,
+    12
+  ],
+  "linear16_actual_fed_positions": [
+    47,
+    48,
+    68
+  ],
+  "old8_dynamic_input_divergence": "Code feedback differs after first generated-output divergence; identical initial publisher-template tokens. This is free-running divergence, not a different initial source/int template.",
+  "source_quality_failure_independent": "Both source and linear16 translate to Japanese+romanization, not the predeclared Hello answer; combined gate remains FAIL.",
+  "advertised32768_context_modalities_nativeFinal_and_A6_A8_established": false
+}

@@ -242,6 +242,42 @@ pub struct FlatExecutionFilingV11 {
     pub kind: u8,
     pub body: Vec<u8>,
 }
+/// New bounded original-PC header counterexample. Its explicit wire version
+/// leaves the legacy v11 mixed/source-tile filing grammar unchanged.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeSourceHeaderFaultV16 {
+    pub param: u16,
+    pub layer_code: u32,
+    pub header: misaka_palw_kernel::flat_quota11::source16::opening::HeaderV16,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+pub struct NativeSourceHeaderFilingV16 {
+    pub version: u16,
+    pub kind: u8,
+    pub body: Vec<u8>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeVerifiedHeaderFactV16 {
+    pub version: u16,
+    pub binding: Digest,
+    pub program: Digest,
+    pub pc: Digest,
+    pub proof_root: Digest,
+    pub established: u64,
+    pub finder: Digest,
+    pub fault: NativeSourceHeaderFaultV16,
+}
+pub fn decode_native_source_header_filing_v16(bytes: &[u8], cap: u64) -> Result<NativeSourceHeaderFilingV16, String> {
+    if bytes.len() != 7 + 2 + 4 + 162
+        || bytes.len() as u64 > cap
+        || bytes[..2] != 16u16.to_le_bytes()
+        || bytes[2] != 2
+        || u32::from_le_bytes(bytes[3..7].try_into().unwrap()) as usize != bytes.len() - 7
+    {
+        return Err("source header filing16 exact framing".into());
+    }
+    Ok(NativeSourceHeaderFilingV16 { version: 16, kind: 2, body: bytes[7..].to_vec() })
+}
 pub fn decode_flat_execution_filing_v11(bytes: &[u8], admitted_cap: u64) -> Result<FlatExecutionFilingV11, String> {
     if bytes.len() < 7
         || bytes.len() > EXECUTION_FILING_MAX_BYTES_V11
@@ -304,8 +340,40 @@ impl NativeExecutionSealV11 {
             &(self.version, self.job_id, self.vector, self.actor, self.proof_root, self.seal, self.posted_daa),
         )
     }
+    pub fn checked_original_paid_root(&self) -> Result<Digest, String> {
+        use misaka_palw_kernel::flat_quota11::{NativePaidSealAnchorV11, native_paid_seal_record_root_v11};
+        let n = NativePaidSealAnchorV11 {
+            job_id: self.job_id,
+            funded_job_root: self.funded_job_root,
+            book_root: self.original_book_root,
+            claim_id: self.claim_id,
+            vector_id: self.vector,
+            seal_actor: self.actor,
+            seal_operator_id: self.operator,
+            producer_operator_id: self.producer_operator,
+            proof_root: self.proof_root,
+            posted_daa: self.posted_daa,
+            matures_daa: self.mature_daa,
+            horizon_daa: self.horizon_daa,
+            original_paid_seal_root: self.original_paid_record_root,
+            original_debit: self.original_paid_debit,
+            original_debit_receipt: self.original_paid_receipt,
+            shared_live_seals: 0,
+            shared_actor_live_seals: 0,
+        };
+        let root = native_paid_seal_record_root_v11(&n);
+        if self.original_paid_debit == 0
+            || self.original_paid_receipt == [0; 64]
+            || self.operator == self.producer_operator
+            || root != self.original_paid_record_root
+        {
+            return Err("native own seal original paid money/operator root differs".into());
+        }
+        Ok(root)
+    }
     pub fn check_reveal(&self, actor: &Digest, salt: &Digest, bytes: &[u8], current_daa: u64) -> Result<(), String> {
-        if self.version != 11
+        if self.checked_original_paid_root().is_err()
+            || self.version != 11
             || self.spent
             || self.actor != *actor
             || self.mature_daa > current_daa
@@ -924,5 +992,483 @@ impl FlatExecutionPostV11 {
                 &(evidence.positions, evidence.claim_root, self.body.trace.segment_roots.last().copied()),
             ),
         }
+    }
+}
+
+/// Immutable network configuration, never accepted from a transaction body.
+/// Its identity covers producer lifetime deliveries as well as original money
+/// and all 21 quota axes. A custom devnet configuration can exercise mechanics;
+/// this tuple does not certify measured population/model coverage.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionPoliciesV11 {
+    pub execution: misaka_palw_kernel::flat_execution11::ExecutionPolicyV11,
+    pub quota: misaka_palw_kernel::flat_quota11::QuotaPolicyV11,
+    pub discovery: misaka_palw_kernel::flat_quota11::discovery13::DiscoveryPolicyV13,
+}
+impl NativeExecutionPoliciesV11 {
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/native/funded-execution-policies/v11", self)
+    }
+    pub fn check(&self, network_domain: Digest) -> Result<(), String> {
+        self.execution.check(&self.quota)?;
+        self.discovery.check(&self.quota)?;
+        if self.execution.network_domain != network_domain || self.quota.network_domain != network_domain {
+            return Err("funded native execution policy belongs to another network".into());
+        }
+        Ok(())
+    }
+}
+
+pub const EXECUTION_ACTION_REGISTER_V11: u8 = 0;
+pub const EXECUTION_ACTION_PREPARE_V11: u8 = 1;
+pub const EXECUTION_ACTION_FUND_V11: u8 = 2;
+pub const EXECUTION_ACTION_COMMIT_V11: u8 = 3;
+pub const EXECUTION_ACTION_CLOSE_V11: u8 = 4;
+pub const EXECUTION_ACTION_SEAL_V11: u8 = 5;
+pub const EXECUTION_ACTION_REVEAL_V11: u8 = 6;
+pub const EXECUTION_ACTION_EXPIRE_V11: u8 = 7;
+pub const EXECUTION_ACTION_DEMAND_V11: u8 = 8;
+pub const EXECUTION_ACTION_ANSWER_V11: u8 = 9;
+pub const EXECUTION_ACTION_SETTLE_DEMAND_V11: u8 = 10;
+pub const EXECUTION_ACTION_DISCOVER_V11: u8 = 11;
+pub const EXECUTION_ACTION_CONVERT_V11: u8 = 12;
+
+/// Native close state, derived from authenticated rows. Counters distinguish
+/// paid discovery from ordinary requests and preserve lifetime answer bounds.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionPursuitV11 {
+    pub ordinary_requests: u32,
+    pub open_demands: u32,
+    pub retained_seal_keys: Vec<Digest>,
+    pub retained_discovery_keys: Vec<Digest>,
+    pub latest_answer_proof_until: u64,
+    pub required_retained_until: u64,
+}
+/// Separate fixed counters preserve the v11 pursuit framing. Ordinary callers
+/// may occupy three units; the four original protected tickets retain two each.
+/// The monotone ordinal indexes bounded cleanup without scanning the DA table.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionDemandCountersV13 {
+    pub open_ordinary: u32,
+    pub next_ordinal: u32,
+    pub collected_ordinal: u32,
+}
+pub const NATIVE_EXECUTION_OPEN_ORDINARY_V13: u32 = 3;
+pub const NATIVE_EXECUTION_OPEN_TOTAL_V13: u32 = NATIVE_EXECUTION_OPEN_ORDINARY_V13 + 4 * 2;
+impl NativeExecutionPursuitV11 {
+    pub fn decode(bytes: &[u8]) -> Result<Self, String> {
+        // At most four retained shared seal/discovery tickets. Inspect both
+        // vector counts before any allocation, independently of rooted state.
+        if bytes.len() < 32 || bytes.len() > 32 + 4 * 64 {
+            return Err("native pursuit fixed extent".into());
+        }
+        let a = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+        let b_at = 12usize.checked_add(a.checked_mul(64).ok_or("pursuit count overflow")?).ok_or("pursuit count overflow")?;
+        let b = u32::from_le_bytes(bytes.get(b_at..b_at + 4).ok_or("truncated native pursuit")?.try_into().unwrap()) as usize;
+        if a + b > 4 || bytes.len() != 32 + (a + b) * 64 {
+            return Err("native pursuit shared retained count".into());
+        }
+        borsh::from_slice(bytes).map_err(|_| "native pursuit framing".into())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionDemandRequestV11 {
+    pub job_id: Digest,
+    pub slot: u8,
+    pub position: u32,
+    pub occurrence: u16,
+    pub node: u16,
+    /// 0 node, 1 hash, 2 selected value, 3 typed header.
+    pub kind: u8,
+    pub index: u64,
+    /// 0 ordinary; 1 original paid own proof; 2 original paid discovery.
+    pub lane: u8,
+    pub entitlement: Digest,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionDemandV11 {
+    pub job_id: Digest,
+    pub lane: u8,
+    pub entitlement: Digest,
+    pub body: crate::palw_flat_model_vector_da_v9::FlatVectorDemandV9,
+}
+impl NativeExecutionDemandV11 {
+    pub fn id(&self) -> Hash64 {
+        self.body.id()
+    }
+}
+
+impl PalwKernelRouteStateV1 {
+    /// Readonly original rooted execution, also used by public scoped replay.
+    /// This never grants a fresh Fund/Commit or trusts a carrier's verification.
+    pub fn execution_view_v11(&self, id: &Digest) -> Result<crate::palw_flat_model_vector_v9::FlatModelVectorViewV9, String> {
+        use misaka_palw_kernel::flat_execution11::*;
+        let row = self.execution_job_row_v11(id)?;
+        let header = self.execution_class_header_v11(&row.header.class_id).ok_or("native original class absent")?;
+        let fixed = header.checked_fixed_header()?;
+        let book = row.restore_book(&fixed)?;
+        let c = &header.record;
+        let binding =
+            self.model_artifact_binding_header_v2(&Hash64::from_bytes(c.binding_id)).ok_or("native original source absent")?;
+        let source = NativeSourceBindingV11 {
+            descriptor: binding.descriptor,
+            program_root: binding.program_root,
+            parameter_root: binding.kernel_param_root.as_bytes(),
+            inventory_root: binding.model_inventory_root.as_bytes(),
+            bound_daa: binding.bound_daa,
+            matures_daa: binding.matures_daa,
+            refuted: binding.refuted,
+        };
+        let candidate =
+            self.flat_candidate_record_v9(&Hash64::from_bytes(c.candidate9_id)).ok_or("native original candidate absent")?;
+        let policies: NativeExecutionPoliciesV11 = self.aux_row(EXECUTION_POLICY_TABLE_V11, &[]).ok_or("native policies absent")?;
+        let class = restore_native_execution_class_header_v11(
+            &candidate,
+            &source,
+            Some(c),
+            &policies.execution,
+            &policies.quota,
+            self.header.scalars.daa,
+        )?;
+        let raw = self
+            .aux
+            .get(&(EXECUTION_PROTECTED_TABLE_V11, borsh::to_vec(id).map_err(|e| e.to_string())?))
+            .ok_or("native original post absent")?;
+        if raw.len() as u64 > row.header.stored_post_cap {
+            return Err("native original post ceiling".into());
+        }
+        let post = decode_flat_execution_post_v11(raw).map_err(|e| e.to_string())?;
+        checked_flat_execution_post_v11(self, &class, &book, &post)
+    }
+    pub fn execution_demand_v11(&self, id: &Hash64) -> Option<NativeExecutionDemandV11> {
+        let raw = self.aux.get(&(EXECUTION_DEMAND_TABLE_V11, borsh::to_vec(id).ok()?))?;
+        if raw.len() > 2048 {
+            return None;
+        }
+        let row: NativeExecutionDemandV11 = borsh::from_slice(raw).ok()?;
+        (row.id() == *id).then_some(row)
+    }
+}
+
+/// Original pre-proof native debit and nonce. Converted/retired status never
+/// changes the immutable projection that authorized this discovery ticket.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionDiscoveryV13 {
+    pub job_id: Digest,
+    pub funded_job_root: Digest,
+    pub book_root: Digest,
+    pub claim_id: Digest,
+    pub vector: Digest,
+    pub actor: Digest,
+    pub operator: Digest,
+    pub producer_operator: Digest,
+    pub nonce: Digest,
+    pub posted_daa: u64,
+    pub matures_daa: u64,
+    pub horizon_daa: u64,
+    pub original_debit: u64,
+    pub original_debit_receipt: Digest,
+    pub original_paid_root: Digest,
+    pub converted_to: Option<Digest>,
+}
+impl NativeExecutionDiscoveryV13 {
+    pub fn native(&self) -> misaka_palw_kernel::flat_quota11::discovery13::NativePaidDiscoveryV13 {
+        use misaka_palw_kernel::flat_quota11::discovery13::NativePaidDiscoveryV13;
+        NativePaidDiscoveryV13 {
+            job_id: self.job_id,
+            funded_job_root: self.funded_job_root,
+            book_root: self.book_root,
+            claim_id: self.claim_id,
+            vector_id: self.vector,
+            actor: self.actor,
+            actor_operator: self.operator,
+            producer_operator: self.producer_operator,
+            nonce: self.nonce,
+            posted_daa: self.posted_daa,
+            matures_daa: self.matures_daa,
+            horizon_daa: self.horizon_daa,
+            debit: self.original_debit,
+            debit_receipt: self.original_debit_receipt,
+            original_root: self.original_paid_root,
+        }
+    }
+    pub fn key(&self) -> Digest {
+        self.native().key()
+    }
+}
+
+/// Read the exact fixed quota record after the bounded book frame; do not copy
+/// the prompt or post just to quote a native fragment/answer operation.
+pub fn native_execution_job_plan_v11(bytes: &[u8]) -> Result<(NativeExecutionJobHeaderV11, QuotaPlanRecordV11), String> {
+    let header = native_execution_job_header_v11(bytes)?;
+    let mut r = Cursor::new(bytes);
+    let _: NativeExecutionJobHeaderV11 = NativeExecutionJobHeaderV11::deserialize_reader(&mut r).map_err(|_| "native fixed header")?;
+    let len = u32::deserialize_reader(&mut r).map_err(|_| "native book frame")?;
+    let end = (r.position() as usize).checked_add(len as usize).filter(|e| *e <= bytes.len()).ok_or("native book framing overflow")?;
+    r.set_position(end as u64);
+    let plan = QuotaPlanRecordV11::deserialize_reader(&mut r).map_err(|_| "native fixed quota plan")?;
+    if plan.root() != header.quota_plan_root {
+        return Err("native fixed original quota plan root differs".into());
+    }
+    Ok((header, plan))
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionProofGroupV11 {
+    pub group: Digest,
+    pub seal: Digest,
+    pub opener: PalwBondKeyV2,
+    pub count: u8,
+    pub opened_daa: u64,
+    pub expires_daa: u64,
+    pub parts: std::collections::BTreeMap<u8, Vec<u8>>,
+}
+impl NativeExecutionProofGroupV11 {
+    pub fn from_bytes(bytes: &[u8], cap: usize) -> Result<Self, String> {
+        let mut r = Cursor::new(bytes);
+        let _: Digest = Digest::deserialize_reader(&mut r).map_err(|_| "native group id")?;
+        let _: Digest = Digest::deserialize_reader(&mut r).map_err(|_| "native group paid seal")?;
+        let _: PalwBondKeyV2 = PalwBondKeyV2::deserialize_reader(&mut r).map_err(|_| "native group opener")?;
+        let declared = u8::deserialize_reader(&mut r).map_err(|_| "native group count")?;
+        let _: u64 = u64::deserialize_reader(&mut r).map_err(|_| "native group clock")?;
+        let _: u64 = u64::deserialize_reader(&mut r).map_err(|_| "native group clock")?;
+        let n = u32::deserialize_reader(&mut r).map_err(|_| "native group parts count")?;
+        if declared == 0 || declared > 64 || n > declared as u32 {
+            return Err("native group bounded parts".into());
+        }
+        let mut previous = None;
+        let mut total = 0usize;
+        for _ in 0..n {
+            let i = u8::deserialize_reader(&mut r).map_err(|_| "native group part index")?;
+            let size = u32::deserialize_reader(&mut r).map_err(|_| "native group part count")? as usize;
+            if i >= declared
+                || previous.is_some_and(|p| p >= i)
+                || size == 0
+                || size > misaka_palw_kernel::flat_quota11::PROTECTED_FRAGMENT_BYTES_V11 as usize
+            {
+                return Err("native group index/body bounds".into());
+            }
+            total = total.checked_add(size).filter(|n| *n <= cap).ok_or("native group aggregate cap")?;
+            let end = (r.position() as usize).checked_add(size).filter(|n| *n <= bytes.len()).ok_or("native group truncated part")?;
+            r.set_position(end as u64);
+            previous = Some(i);
+        }
+        if r.position() as usize != bytes.len() {
+            return Err("native group trailing bytes".into());
+        }
+        borsh::from_slice(bytes).map_err(|_| "native group canonical framing".into())
+    }
+}
+impl PalwKernelRouteStateV1 {
+    pub fn execution_seal_v11(&self, id: &Digest) -> Option<NativeExecutionSealV11> {
+        let raw = self.aux.get(&(EXECUTION_SEAL_TABLE_V11, borsh::to_vec(id).ok()?))?;
+        if raw.len() > 2048 {
+            return None;
+        }
+        let s: NativeExecutionSealV11 = borsh::from_slice(raw).ok()?;
+        let k = misaka_palw_kernel::flat_quota11::ProtectedSealKeyV11 {
+            job_id: s.job_id,
+            vector_id: s.vector,
+            seal_actor: s.actor,
+            proof_root: s.proof_root,
+            horizon_daa: s.horizon_daa,
+        };
+        (s.checked_original_paid_root().is_ok()
+            && s.version == 11
+            && k.root() == *id
+            && crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&s.bond) == s.actor)
+            .then_some(s)
+    }
+    pub fn funded_proof_chunk_cap_v11(&self, id: &Digest) -> Option<usize> {
+        let s = self.execution_seal_v11(id)?;
+        let raw = self.aux.get(&(EXECUTION_JOB_TABLE_V11, borsh::to_vec(&s.job_id).ok()?))?;
+        let (_, record) = native_execution_job_plan_v11(raw).ok()?;
+        let plan = CheckedJobQuotaPlanV11::restore(&record, &record.root()).ok()?;
+        usize::try_from(misaka_palw_kernel::flat_quota11::derive_protected_seal_plan_v11(&plan).ok()?.assembly_cap).ok()
+    }
+    pub fn funded_proof_group_v11(&self, id: &Digest) -> Option<NativeExecutionProofGroupV11> {
+        let cap = self.funded_proof_chunk_cap_v11(id)?;
+        let group = NativeExecutionProofGroupV11::from_bytes(
+            self.aux.get(&(EXECUTION_SEAL_TABLE_V11, borsh::to_vec(&(12u8, *id)).ok()?))?,
+            cap,
+        )
+        .ok()?;
+        (group.seal == *id && group.parts.is_empty()).then_some(group)
+    }
+    pub fn funded_proof_chunk_completion_v11(
+        &self,
+        chunk: &crate::palw_kernel_route_v1::PalwKernelChunkV1,
+    ) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        use crate::palw_kernel_route_v1::PalwKernelChunkTargetV1;
+        let PalwKernelChunkTargetV1::FundedProofV11 { seal, actor } = chunk.target else { return None };
+        let original = self.execution_seal_v11(&seal)?;
+        if actor != original.actor
+            || chunk.opener != original.bond
+            || original.spent
+            || chunk.count == 0
+            || chunk.count > 64
+            || chunk.index >= chunk.count
+            || chunk.bytes.is_empty()
+            || chunk.bytes.len() > misaka_palw_kernel::flat_quota11::PROTECTED_FRAGMENT_BYTES_V11 as usize
+        {
+            return None;
+        }
+        let cap = self.funded_proof_chunk_cap_v11(&seal)?;
+        let stored = self.funded_proof_group_v11(&seal);
+        let mut parts: std::collections::BTreeMap<u8, &[u8]> = Default::default();
+        if let Some(g) = &stored {
+            if g.group != chunk.group.as_bytes()
+                || g.opener != chunk.opener
+                || g.count != chunk.count
+                || g.parts.contains_key(&chunk.index)
+            {
+                return None;
+            }
+            for i in 0..g.count {
+                if i == chunk.index {
+                    continue;
+                }
+                if let Some(raw) = self.aux.get(&(EXECUTION_SEAL_TABLE_V11, borsh::to_vec(&(15u8, seal, i)).ok()?)) {
+                    if raw.is_empty() || raw.len() > misaka_palw_kernel::flat_quota11::PROTECTED_FRAGMENT_BYTES_V11 as usize {
+                        return None;
+                    }
+                    parts.insert(i, raw);
+                }
+            }
+        }
+        parts.insert(chunk.index, &chunk.bytes);
+        if parts.len() != chunk.count as usize {
+            return None;
+        }
+        let sum = parts.values().try_fold(0usize, |n, b| n.checked_add(b.len()))?;
+        if sum > cap {
+            return None;
+        }
+        let mut bytes = Vec::with_capacity(sum);
+        for i in 0..chunk.count {
+            bytes.extend_from_slice(parts.get(&i)?);
+        }
+        if crate::palw_state_v2::palw_object_chunk_group_id_v1(&bytes) != chunk.group {
+            return None;
+        }
+        let inner = borsh::from_slice(&bytes).ok()?;
+        crate::palw_kernel_route_v1::palw_kernel_chunk_inner_matches_target_v1(&inner, &chunk.target).then_some(inner)
+    }
+}
+
+pub const EXECUTION_ACTION_ACCEPT_V13: u8 = 13;
+pub const EXECUTION_ACTION_ACCEPT_V18: u8 = 18;
+pub const EXECUTION_ACTION_SOURCE_REQUEST_V16: u8 = 14;
+pub const EXECUTION_ACTION_SOURCE_ANSWER_V16: u8 = 15;
+pub const EXECUTION_ACTION_SOURCE_SETTLE_V16: u8 = 16;
+pub const EXECUTION_ACTION_ACCEPT_V23: u8 = 23;
+pub const EXECUTION_ACTION_FUND_V23: u8 = 24;
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeSourceRequestV16 {
+    pub job: Digest,
+    pub lane: u8,
+    pub entitlement: Digest,
+    pub slot: u8,
+    pub param: u16,
+    /// 0 means None; 1..65536 identify the real original layer 0..65535.
+    pub layer_code: u32,
+    pub kind: u8,
+    pub axis: u8,
+    pub level: u8,
+    pub index: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeSourceDemandV16 {
+    pub request: NativeSourceRequestV16,
+    pub requester: PalwBondKeyV2,
+    pub requester_payout: Hash64,
+    pub producer: PalwBondKeyV2,
+    pub producer_payout: Hash64,
+    pub pc: Digest,
+    pub declared_dtype: u8,
+    pub declared_rank: u8,
+    pub declared_shape: [u64; 4],
+    pub filed: u64,
+    pub deadline: u64,
+    pub proof_until: u64,
+    pub bond: u64,
+    pub attempts: u8,
+    pub settled: bool,
+}
+impl NativeSourceDemandV16 {
+    pub fn id(&self) -> Digest {
+        object_id(
+            b"misaka-palw/native/original-bound-pc-demand/v16",
+            &(&self.request, self.requester, self.producer, self.pc, self.filed, self.deadline, self.bond),
+        )
+    }
+}
+/// Producer authorization precedes any reservation against its actor/resource
+/// or monetary windows. The original request carrier retains its frozen bytes.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionConsentV13 {
+    pub version: u16,
+    pub preparation: Digest,
+    pub class_id: Digest,
+    pub original_class_header_root: Digest,
+    pub policies_root: Digest,
+    pub input_root: Digest,
+    pub quota_plan_root: Digest,
+    pub requester: PalwBondKeyV2,
+    pub requester_operator: Digest,
+    pub producer: PalwBondKeyV2,
+    pub producer_operator: Digest,
+    pub nonce: Digest,
+    pub reward: u64,
+    pub accepted_daa: u64,
+    pub expires_daa: u64,
+    pub network_interval: u64,
+}
+impl NativeExecutionConsentV13 {
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/native/original-producer-consent/v13", self)
+    }
+}
+/// Separate contract commits additional PC availability and trace restoration
+/// reservations. A v13 signature alone cannot authorize these extra charges.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionConsentV18 {
+    pub version: u16,
+    pub original_consent13_root: Digest,
+    pub source_plan16_root: Digest,
+    pub trace_plan17_root: Digest,
+    pub availability_terms_root: Digest,
+    pub fee_plan19_root: Digest,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionFeePlanV19 {
+    pub version: u16,
+    pub class: Digest,
+    pub quota_plan: Digest,
+    pub original_consent13: Digest,
+    pub reward: u64,
+    pub maximum: u64,
+    pub trace_units: u32,
+    pub source_units: u32,
+    pub trace_unit_fee: u64,
+    pub source_unit_fee: u64,
+}
+impl NativeExecutionFeePlanV19 {
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/native/original-delivery-fee-plan/v19", self)
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionFeesV19 {
+    pub version: u16,
+    pub job: Digest,
+    pub funded_job_root: Digest,
+    pub original_consent18: Digest,
+    pub plan: NativeExecutionFeePlanV19,
+    pub earned: u64,
+}
+impl NativeExecutionConsentV18 {
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/native/original-producer-consent/v18", self)
     }
 }

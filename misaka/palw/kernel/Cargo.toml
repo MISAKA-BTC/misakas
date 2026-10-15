@@ -27,6 +27,10 @@ thiserror.workspace = true
 # The tiny dense + MoE + history classes RFC-0007 Part II's prototype tests on: real TIR programs
 # with every MatMul kind, TopK routing, Gather and Hist state.
 misaka-palw-tir-sketch = { path = "../tir/sketch" }
+# Header-only resource audit examples must not pull live consensus integration.
+misaka-palw-tir-artifact = { path = "../tir/artifact" }
+serde_json.workspace = true
+misaka-palw-tir-lower = { path = "../tir/lower" }
 
 [lints]
 workspace = true

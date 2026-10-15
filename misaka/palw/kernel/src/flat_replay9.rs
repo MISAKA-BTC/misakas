@@ -150,6 +150,27 @@ impl FlatReplaySessionV9 {
         artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
         tokens: &[u32],
     ) -> FlatReplayResultV9 {
+        self.check_mode(c, declared, public, artifact, tokens, false)
+    }
+    pub(crate) fn check_stage_v14(
+        &mut self,
+        c: &FlatContextV9<'_>,
+        declared: &FlatReplayEnvelopeV9,
+        public: &dyn FlatPublicReadsV9,
+        artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+        tokens: &[u32],
+    ) -> FlatReplayResultV9 {
+        self.check_mode(c, declared, public, artifact, tokens, true)
+    }
+    fn check_mode(
+        &mut self,
+        c: &FlatContextV9<'_>,
+        declared: &FlatReplayEnvelopeV9,
+        public: &dyn FlatPublicReadsV9,
+        artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+        tokens: &[u32],
+        stage: bool,
+    ) -> FlatReplayResultV9 {
         if let Err(e) = c.prepare() {
             return FlatReplayResultV9::Inconsistent(format!("{e:?}"));
         }
@@ -271,7 +292,11 @@ impl FlatReplaySessionV9 {
         let bounded = Bounded { session: self, public, hit: Cell::new(None) };
         let mut scan =
             TopKScanBudgetV7 { remaining_work: e.topk_scan_work_per_attempt, auxiliary_ceiling: self.limits.topk_auxiliary_bytes };
-        let finding = crate::flat_detect9::check_flat_claim_v9(c, &bounded, artifact, tokens, &mut scan);
+        let finding = if stage {
+            crate::flat_detect9::check_flat_stage_v14(c, &bounded, artifact, tokens, &mut scan)
+        } else {
+            crate::flat_detect9::check_flat_claim_v9(c, &bounded, artifact, tokens, &mut scan)
+        };
         match bounded.hit.get() {
             Some(d) => FlatReplayResultV9::Limit(d),
             None => FlatReplayResultV9::Finding(finding),

@@ -1,0 +1,9 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 42s
+     Running unittests src/lib.rs (/tmp/rfc02-native-check/debug/deps/kaspa_consensus_core-b76d3b72e05b4671)
+
+running 2 tests
+test palw_native_carrier_index_v22::tests::proof_variants_bind_original_namespace_owner_and_part_not_transaction_encoding ... ok
+test palw_native_carrier_index_v22::tests::native_source_metadata_is_versioned_exact_and_cannot_decode_unrelated_objects ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3927 filtered out; finished in 0.01s

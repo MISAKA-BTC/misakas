@@ -1909,6 +1909,8 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwStateProofResponse>, protowire::Ge
         state_preimage: item.state_preimage.clone(),
         collection: item.collection.clone(),
         rows: item.rows.iter().map(protowire::RpcPalwProofRow::from).collect(),
+        native_audit_record:item.native_audit_record.clone(),
+        native_coinbase_proof:item.native_coinbase_proof.clone(),
         error: None,
     }
 });
@@ -4383,6 +4385,8 @@ try_from!(item: &protowire::GetPalwStateProofResponseMessage, RpcResult<kaspa_rp
         state_preimage: item.state_preimage.clone(),
         collection: item.collection.clone(),
         rows: item.rows.iter().map(kaspa_rpc_core::RpcPalwProofRow::try_from).collect::<RpcResult<Vec<_>>>()?,
+        native_audit_record:item.native_audit_record.clone(),
+        native_coinbase_proof:item.native_coinbase_proof.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwVestingRequestMessage, kaspa_rpc_core::GetPalwVestingRequest, {
@@ -5920,6 +5924,8 @@ mod palw_state_proof_grpc_tests {
             block_hash: "cd".repeat(64),
             header: Some(header.clone()),
             state_preimage: vec![1, 2, 3, 4, 5],
+            native_audit_record: Some(vec![7; 256]),
+            native_coinbase_proof: Some(vec![33; 512]),
             collection: "classes".into(),
             rows: vec![RpcPalwProofRow { key: vec![7; 68], value: vec![8; 300] }, RpcPalwProofRow { key: vec![6; 64], value: vec![] }],
         };
@@ -5936,6 +5942,8 @@ mod palw_state_proof_grpc_tests {
         assert_eq!(back.state_preimage, vec![1, 2, 3, 4, 5]);
         assert_eq!(back.collection, "classes");
         assert_eq!(back.rows, response.rows);
+        assert_eq!(back.native_audit_record, response.native_audit_record);
+        assert_eq!(back.native_coinbase_proof, response.native_coinbase_proof);
         // An unavailable answer keeps its reason and carries no header.
         let none = GetPalwStateProofResponse { reason: "too far behind".into(), ..Default::default() };
         let wire: protowire::GetPalwStateProofResponseMessage = RpcResult::Ok(&none).into();

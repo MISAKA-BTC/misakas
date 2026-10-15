@@ -1,0 +1,74 @@
+{
+  "elapsed_seconds": 264.521101459,
+  "fed_tokens": [
+    151644,
+    872,
+    198,
+    27473,
+    220,
+    89015,
+    1119,
+    6364,
+    13,
+    17841,
+    448,
+    1172,
+    279,
+    42113,
+    13,
+    151645,
+    198,
+    151644,
+    77091,
+    198,
+    89015
+  ],
+  "loader_row_cache_bytes": 134217728,
+  "positions": 21,
+  "reference": "current generic high-level float interpreter, streamed original checkpoint weights, f32 storage/f64 contractions",
+  "schema": "misaka.rfc02.source-HL-prefix-diagnostic.v1",
+  "selected_scores": [
+    {
+      "score": 14.236946105957031,
+      "token_id": 151645
+    },
+    {
+      "score": 14.146061897277832,
+      "token_id": 6313
+    },
+    {
+      "score": 5.2897515296936035,
+      "token_id": 151643
+    }
+  ],
+  "source_fidelity_fullcontext_native_final_or_a6_a8_established": false,
+  "source_manifest_pins_authenticated_by_this_tool": false,
+  "top5": [
+    {
+      "score": 14.236946105957031,
+      "token_id": 151645
+    },
+    {
+      "score": 14.146061897277832,
+      "token_id": 6313
+    },
+    {
+      "score": 12.740147590637207,
+      "token_id": 0
+    },
+    {
+      "score": 12.359795570373535,
+      "token_id": 5373
+    },
+    {
+      "score": 12.354158401489258,
+      "token_id": 1773
+    }
+  ],
+  "vocab": 151936,
+  "source_before_and_after_sha256_match": true,
+  "source_manifest_sha256": "64ab29ad66c4b852673cc3da25416c72ce6af5c568ee53a78ec1734291ae61a8",
+  "process_max_RSS_bytes": 934772736,
+  "whole_invocation_seconds": 267.0655177079607,
+  "frozen_HL_protocol_sha256": "cbf488c2213ce3dade7e99a61e634c270a274bd2c042c685db4484affcaa9008"
+}

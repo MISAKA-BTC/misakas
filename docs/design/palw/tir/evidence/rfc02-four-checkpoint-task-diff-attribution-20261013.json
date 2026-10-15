@@ -1,0 +1,275 @@
+{
+  "schema": "misaka.rfc02.fixed-task-diff-attribution.v1",
+  "rows": [
+    {
+      "repository": "Qwen/Qwen2.5-0.5B-Instruct",
+      "revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+      "original_thresholds": {
+        "token_agreement_min": 0.95,
+        "exact_job_fraction_min": 0.6666666666666666,
+        "source_and_integer_task_success_min": 1.0
+      },
+      "original_generation_and_answer_gates_met": false,
+      "source_json_sha256": "084fd3bb3363429eea2435d968f165a52fcda3ccb32c8580cb9c37de4e81ab9e",
+      "integer_json_sha256": "b7f969acc32e15739948666082595beb55bfe4f91a078935ac1dbb25a5b9c322",
+      "score_json_sha256": "5091adb3ac98b89c0308cc9c32ababbe47492a0da640fac60434aa52528711c0",
+      "protocol_sha256": "4336f7660c1bff144711983084aba8b64b91314c495df876fccf0bed432cc191",
+      "jobs": [
+        {
+          "id": "arithmetic-512-1",
+          "task": "arithmetic",
+          "source_first_EOS": 2,
+          "first_integer_source_divergence": 28,
+          "divergence_phase": "AFTER_SOURCE_EOS",
+          "tokens_equal_through_source_EOS": true,
+          "source_answer": "42",
+          "integer_answer": "42",
+          "source_predeclared_answer_passed": true,
+          "integer_predeclared_answer_passed": true,
+          "prompt_tokens_byte_identical": true,
+          "complete_original_fixed_count_comparison_not_replaced": true
+        },
+        {
+          "id": "translation-512-1",
+          "task": "translation",
+          "source_first_EOS": 1,
+          "first_integer_source_divergence": 1,
+          "divergence_phase": "AT_SOURCE_EOS",
+          "tokens_equal_through_source_EOS": false,
+          "source_answer": "\u3053\u3093\u306b\u3061\u306f",
+          "integer_answer": "\u3053\u3093\u306b\u3061\u306f\uff01",
+          "source_predeclared_answer_passed": false,
+          "integer_predeclared_answer_passed": false,
+          "prompt_tokens_byte_identical": true,
+          "complete_original_fixed_count_comparison_not_replaced": true
+        },
+        {
+          "id": "code-512-1",
+          "task": "code",
+          "source_first_EOS": 11,
+          "first_integer_source_divergence": null,
+          "divergence_phase": "NO_DIVERGENCE",
+          "tokens_equal_through_source_EOS": true,
+          "source_answer": "def add(a, b):\n    return a + b",
+          "integer_answer": "def add(a, b):\n    return a + b",
+          "source_predeclared_answer_passed": true,
+          "integer_predeclared_answer_passed": true,
+          "prompt_tokens_byte_identical": true,
+          "complete_original_fixed_count_comparison_not_replaced": true
+        }
+      ]
+    },
+    {
+      "repository": "zai-org/glm-edge-1.5b-chat",
+      "revision": "7b201d3c160c25beda4cf0d107617ad975cd1ca8",
+      "original_thresholds": {
+        "token_agreement_min": 0.95,
+        "exact_job_fraction_min": 0.6666666666666666,
+        "source_and_integer_task_success_min": 1.0
+      },
+      "original_generation_and_answer_gates_met": false,
+      "source_json_sha256": "702d4264b8e7feb640cc3f53098985c1350753ee27dc3933303985fa6c15201f",
+      "integer_json_sha256": "e8fbac012bc2f99b2f192ae8fcfcf4ac1d2272bdce143ff735d51151840d6164",
+      "score_json_sha256": "4455827fec1d39d70049973bb9d89e84764b96f72624f7150d41fda1227ed1b7",
+      "protocol_sha256": "0a5073e36c940c7a96cbf0c97b294e0637d69c94e7d788202c3735e1a0712f93",
+      "jobs": [
+        {
+          "id": "arithmetic-512-1",
+          "task": "arithmetic",
+          "source_first_EOS": 2,
+          "first_integer_source_divergence": 14,
+          "divergence_phase": "AFTER_SOURCE_EOS",
+          "tokens_equal_through_source_EOS": true,
+          "source_answer": "42",
+          "integer_answer": "42",
+          "source_predeclared_answer_passed": true,
+          "integer_predeclared_answer_passed": true,
+          "prompt_tokens_byte_identical": true,
+          "complete_original_fixed_count_comparison_not_replaced": true
+        },
+        {
+          "id": "translation-512-1",
+          "task": "translation",
+          "source_first_EOS": 1,
+          "first_integer_source_divergence": null,
+          "divergence_phase": "NO_DIVERGENCE",
+          "tokens_equal_through_source_EOS": true,
+          "source_answer": "Hello",
+          "integer_answer": "Hello",
+          "source_predeclared_answer_passed": true,
+          "integer_predeclared_answer_passed": true,
+          "prompt_tokens_byte_identical": true,
+          "complete_original_fixed_count_comparison_not_replaced": true
+        },
+        {
+          "id": "code-512-1",
+          "task": "code",
+          "source_first_EOS": 16,
+          "first_integer_source_divergence": null,
+          "divergence_phase": "NO_DIVERGENCE",
+          "tokens_equal_through_source_EOS": true,
+          "source_answer": "```python\ndef add(a, b):\n    return a + b\n```",
+          "integer_answer": "```python\ndef add(a, b):\n    return a + b\n```",
+          "source_predeclared_answer_passed": false,
+          "integer_predeclared_answer_passed": false,
+          "prompt_tokens_byte_identical": true,
+          "complete_original_fixed_count_comparison_not_replaced": true
+        }
+      ]
+    },
+    {
+      "repository": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
+      "revision": "31b70e2e869a7173562077fd711b654946d38674",
+      "original_thresholds": {
+        "token_agreement_min": 0.95,
+        "exact_job_fraction_min": 0.6666666666666666,
+        "source_and_integer_task_success_min": 1.0
+      },
+      "original_generation_and_answer_gates_met": false,
+      "source_json_sha256": "3860b862c03ae5d2103b7939d156b90bd2214f432e531073a1f85e46f6c8c687",
+      "integer_json_sha256": "e487da53358c93d1cba9f567b8fef6e58bdd63851168b1d4f159e714bfc16336",
+      "score_json_sha256": "7c2403043dfcc0e152b415d9514fb16ac469f921d38831ad06ce3b8b752e0bca",
+      "protocol_sha256": "1d0ab5a0e6aa959c97d9fe233bc496699a69243dbcf56d282fb835366b342e05",
+      "jobs": [
+        {
+          "id": "arithmetic-512-1",
+          "task": "arithmetic",
+          "source_first_EOS": 2,
+          "first_integer_source_divergence": null,
+          "divergence_phase": "NO_DIVERGENCE",
+          "tokens_equal_through_source_EOS": true,
+          "source_answer": "32",
+          "integer_answer": "32",
+          "source_predeclared_answer_passed": false,
+          "integer_predeclared_answer_passed": false,
+          "prompt_tokens_byte_identical": true,
+          "complete_original_fixed_count_comparison_not_replaced": true
+        },
+        {
+          "id": "translation-512-1",
+          "task": "translation",
+          "source_first_EOS": 9,
+          "first_integer_source_divergence": null,
+          "divergence_phase": "NO_DIVERGENCE",
+          "tokens_equal_through_source_EOS": true,
+          "source_answer": "\u3053\u3093\u306b\u3061\u306f",
+          "integer_answer": "\u3053\u3093\u306b\u3061\u306f",
+          "source_predeclared_answer_passed": false,
+          "integer_predeclared_answer_passed": false,
+          "prompt_tokens_byte_identical": true,
+          "complete_original_fixed_count_comparison_not_replaced": true
+        },
+        {
+          "id": "code-512-1",
+          "task": "code",
+          "source_first_EOS": 12,
+          "first_integer_source_divergence": null,
+          "divergence_phase": "NO_DIVERGENCE",
+          "tokens_equal_through_source_EOS": true,
+          "source_answer": "def add(a, b):\n    return a + b",
+          "integer_answer": "def add(a, b):\n    return a + b",
+          "source_predeclared_answer_passed": true,
+          "integer_predeclared_answer_passed": true,
+          "prompt_tokens_byte_identical": true,
+          "complete_original_fixed_count_comparison_not_replaced": true
+        }
+      ]
+    },
+    {
+      "repository": "unsloth/Llama-3.2-1B-Instruct",
+      "revision": "5a8abab4a5d6f164389b1079fb721cfab8d7126c",
+      "original_thresholds": {
+        "token_agreement_min": 0.95,
+        "exact_job_fraction_min": 0.6666666666666666,
+        "source_and_integer_task_success_min": 1.0
+      },
+      "original_generation_and_answer_gates_met": false,
+      "source_json_sha256": "d09f8b1e7d00c453c5087ad10ce46a1def662eecc1627bf93e5c5650177c64e6",
+      "integer_json_sha256": "3adca22b360dcc3726247df153daf2e8618d005ed1779bc485cd007cc4e22f26",
+      "score_json_sha256": "ce69359191e386ec45e2dc599a164ef902eb1e10efd0bdf4a6ec7b3025d8e6b5",
+      "protocol_sha256": "bb4d90f28485d45ca993cfa28cf9a750bdc64686cfaeddccda5ef47afb1d1fa6",
+      "jobs": [
+        {
+          "id": "arithmetic-512-1",
+          "task": "arithmetic",
+          "source_first_EOS": 1,
+          "first_integer_source_divergence": 6,
+          "divergence_phase": "AFTER_SOURCE_EOS",
+          "tokens_equal_through_source_EOS": true,
+          "source_answer": "42",
+          "integer_answer": "42",
+          "source_predeclared_answer_passed": true,
+          "integer_predeclared_answer_passed": true,
+          "prompt_tokens_byte_identical": true,
+          "complete_original_fixed_count_comparison_not_replaced": true
+        },
+        {
+          "id": "translation-512-1",
+          "task": "translation",
+          "source_first_EOS": 1,
+          "first_integer_source_divergence": null,
+          "divergence_phase": "NO_DIVERGENCE",
+          "tokens_equal_through_source_EOS": true,
+          "source_answer": "\u3053\u3093\u306b\u3061\u306f",
+          "integer_answer": "\u3053\u3093\u306b\u3061\u306f",
+          "source_predeclared_answer_passed": false,
+          "integer_predeclared_answer_passed": false,
+          "prompt_tokens_byte_identical": true,
+          "complete_original_fixed_count_comparison_not_replaced": true
+        },
+        {
+          "id": "code-512-1",
+          "task": "code",
+          "source_first_EOS": 16,
+          "first_integer_source_divergence": null,
+          "divergence_phase": "NO_DIVERGENCE",
+          "tokens_equal_through_source_EOS": true,
+          "source_answer": "```python\ndef add(a, b):\n    return a + b\n```",
+          "integer_answer": "```python\ndef add(a, b):\n    return a + b\n```",
+          "source_predeclared_answer_passed": false,
+          "integer_predeclared_answer_passed": false,
+          "prompt_tokens_byte_identical": true,
+          "complete_original_fixed_count_comparison_not_replaced": true
+        }
+      ]
+    }
+  ],
+  "Qwen_source_EOS_probe": {
+    "source_EOS_score": 14.237072944641113,
+    "source_rival_score": 14.14610481262207,
+    "source_EOS_minus_rival": 0.09096813201904297,
+    "integer_EOS_score_in_declared_float_units": 13.913904547691349,
+    "integer_rival_score_in_declared_float_units": 14.042805254459385,
+    "integer_EOS_minus_rival": -0.1289007067680359,
+    "integer_EOS_error": -0.3231683969497645,
+    "integer_rival_error": -0.10329955816268566,
+    "exact_old_new_layout_logits_at_same_prefix": true,
+    "actual_fed_positions": 21,
+    "HF_reference_sha256": "572fc10e86fce414967bf26af2a6c542e4330c6e67b028e51da179962cfdf782",
+    "integer_diagnostic_sha256": "50bcebc07ded08225c8a04c06556b23c382b248dcd56fb200dbbdcbcbfa7e8d8",
+    "observed_inference": "At this same 21-token prefix current generic high-level float lowering agrees with HF on the EOS/rival ordering (errors below 0.000127), while integer lowering reverses it. This isolates integer quantization/approximation at this probe; it is not a model-wide fidelity result.",
+    "HL_source_comparison_status": "COMPLETED",
+    "fullcontext_sourcefidelity_nativeFinal_or_A6_A8_established": false,
+    "HL_observation_sha256": "59dc7020383d24dacc4f0a09d526e45dbef38e40e41a1c99be850eefc707b937",
+    "HL_scores": [
+      {
+        "score": 14.236946105957031,
+        "token_id": 151645
+      },
+      {
+        "score": 14.146061897277832,
+        "token_id": 6313
+      },
+      {
+        "score": 5.2897515296936035,
+        "token_id": 151643
+      }
+    ],
+    "HL_source_EOS_error": -0.00012683868408203125,
+    "HL_source_rival_error": -4.291534423828125e-05
+  },
+  "fixed_count_after_EOS_failures_are_preserved_not_reclassified_as_PASS": true,
+  "no_threshold_or_source_pin_or_advertised_task_change": true,
+  "source_quality_failures_are_independent_of_matching_or_improving_integer_fidelity": true,
+  "native_final_fullcontext_or_A6_A8_coverage_established": false
+}

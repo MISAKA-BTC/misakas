@@ -2975,6 +2975,15 @@ pub struct Params {
     /// preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from `Some(never())`, and refused when armed
     /// ([`Self::validate_palw_probabilistic_constraints_v1`]) — the RFC assigns none, and shadow comparison precedes any proposal.
     pub palw_probabilistic_constraints_v1: Option<ForkActivation>,
+    /// Independently versioned funded flat execution policy; dormant on every preset.
+    pub palw_funded_execution_v11: Option<crate::palw_funded_execution_v11::PalwFundedExecutionFenceV11>,
+    /// Independent typed Rows/Final stage source and funded execution contract.
+    pub palw_stage_execution_v14: Option<crate::palw_flat_stage_v14::PalwStageExecutionFenceV14>,
+    /// Original native Final's numerical, whole-claim and environment contract.
+    /// No preset authorizes this policy; never() normalizes the complete tuple.
+    pub palw_native_final_v27: Option<crate::palw_native_final_v27::PalwNativeFinalFenceV27>,
+    /// Original stage28 book/source/court/Final consent, independent of frozen14.
+    pub palw_stage_execution_v28: Option<crate::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
 
     /// **ADR-0178: rule E, the fork choice that heals a partition on bonded participation** ([`crate::palw_fork_choice_rule_e_v1`]):
     /// past it the sink search weighs every valid tip, the deep-reorg gate and the IBD commit compare the two tips' EXCLUSIVE pasts
@@ -3005,6 +3014,11 @@ pub struct Params {
     /// are refused by name. **Dormant**: `None` on every preset, Some-only hashed, collapsed from `Some(never())`, refused when armed
     /// ([`Self::validate_palw_model_refutation_seal_v1`]).
     pub palw_model_refutation_seal_v1: Option<ForkActivation>,
+    /// **RFC-0002 §II.14.60: typed window class v37** (funded action 45: a Text29-sourced class adopting
+    /// `LengthContractV36` with a `WindowGraphV37`). **Dormant**: `None` on every preset, Some-only hashed, collapsed from
+    /// `Some(never())`, refused when armed except on an isolated calibration34 devnet
+    /// ([`Self::validate_palw_window_class_v37`]). Below it action 45 rides unjudged.
+    pub palw_window_class_v37: Option<ForkActivation>,
     /// Per-attempt source reservation, inner 40 (codex RFC-7; renumbered from 21 at the merge). Independent, None on every preset, Some-only fingerprints.
     /// Every real activation is refused until funded fees, timing/resource bounds and source security approval are complete.
     pub palw_beacon_source_opt_in_v1: Option<crate::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1>,
@@ -5900,11 +5914,16 @@ impl Params {
             palw_gen_range_twin_v1: self.palw_gen_range_twin_v1,
             palw_task_heads_v1: self.palw_task_heads_v1,
             palw_probabilistic_constraints_v1: self.palw_probabilistic_constraints_v1,
+            palw_funded_execution_v11: self.palw_funded_execution_v11.clone(),
+            palw_stage_execution_v14: self.palw_stage_execution_v14.clone(),
+            palw_native_final_v27: self.palw_native_final_v27.clone(),
+            palw_stage_execution_v28: self.palw_stage_execution_v28.clone(),
             palw_fork_choice_rule_e_v1: self.palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1: self.palw_typed_roots_v1,
             palw_fork_choice_commitment_v1: self.palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1: self.palw_verifier_pay_v1,
             palw_model_refutation_seal_v1: self.palw_model_refutation_seal_v1,
+            palw_window_class_v37: self.palw_window_class_v37,
             palw_beacon_source_opt_in_v1: self.palw_beacon_source_opt_in_v1,
             palw_beacon_source_fee_v1: self.palw_beacon_source_fee_v1,
             palw_panel_free_v1: self.palw_panel_free_v1.clone(),
@@ -7022,11 +7041,16 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_task_heads_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_funded_execution_v11: None,
+    palw_stage_execution_v14: None,
+    palw_native_final_v27: None,
+    palw_stage_execution_v28: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
     palw_model_refutation_seal_v1: None,
+    palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
     palw_beacon_source_fee_v1: None,
     palw_panel_free_v1: None,
@@ -7340,11 +7364,16 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_task_heads_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_funded_execution_v11: None,
+    palw_stage_execution_v14: None,
+    palw_native_final_v27: None,
+    palw_stage_execution_v28: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
     palw_model_refutation_seal_v1: None,
+    palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
     palw_beacon_source_fee_v1: None,
     palw_panel_free_v1: None,
@@ -7640,11 +7669,16 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_task_heads_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_funded_execution_v11: None,
+    palw_stage_execution_v14: None,
+    palw_native_final_v27: None,
+    palw_stage_execution_v28: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
     palw_model_refutation_seal_v1: None,
+    palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
     palw_beacon_source_fee_v1: None,
     palw_panel_free_v1: None,
@@ -13102,11 +13136,16 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_task_heads_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_funded_execution_v11: None,
+    palw_stage_execution_v14: None,
+    palw_native_final_v27: None,
+    palw_stage_execution_v28: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
     palw_model_refutation_seal_v1: None,
+    palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
     palw_beacon_source_fee_v1: None,
     palw_panel_free_v1: None,
@@ -13506,3 +13545,6 @@ mod adr0142_release_probe {
 /// and set back it is the launch release to the id.
 #[cfg(test)]
 mod post_launch_fence_arming_tests;
+
+#[cfg(test)]
+mod funded_execution_fence_tests;

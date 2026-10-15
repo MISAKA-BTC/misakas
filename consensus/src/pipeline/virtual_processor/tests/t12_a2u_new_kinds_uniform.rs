@@ -213,6 +213,15 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 params.palw_typed_roots_v1 = Some(at)
             }
             PalwKernelInnerFenceV1::ModelRefutationSealV1 => params.palw_model_refutation_seal_v1 = Some(at),
+            PalwKernelInnerFenceV1::StageExecutionV14 => {
+                params.palw_stage_execution_v14 =
+                    Some(kaspa_consensus_core::palw_flat_stage_v14::PalwStageExecutionFenceV14::unapproved_probe_at(at, [0; 64]));
+            }
+            PalwKernelInnerFenceV1::FundedExecutionV11 => {
+                params.palw_funded_execution_v11 = Some(
+                    kaspa_consensus_core::palw_funded_execution_v11::PalwFundedExecutionFenceV11::unapproved_probe_at(at, [0; 64]),
+                );
+            }
         }
     }
     // Every other fence a LANDED row of the central table names (formulas, state encodings, the live build's kinds judged anew):
@@ -235,6 +244,8 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_beacon_source_fee_v1"
             | "palw_exec_payload_v2"
             | "palw_model_refutation_seal_v1"
+            | "palw_funded_execution_v11"
+            | "palw_stage_execution_v14"
             | "palw_class_semantics_v1"
             | "palw_staged_public_court_v1" => {} // armed above, through their enums
             "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),

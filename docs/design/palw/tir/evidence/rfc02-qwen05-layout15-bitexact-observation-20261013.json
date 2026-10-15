@@ -1,0 +1,28 @@
+{
+  "all_position_logits_exact": true,
+  "artifact_before_after_sha256_match": true,
+  "artifact_sha256": "9af80e4e459cc2334519295fb100c58291382e3e4b4a5ee3e7098e7d1d8a17b6",
+  "block_rewrites": 1,
+  "complete_integer_parameter_bytes_loaded": 660615904,
+  "elapsed_seconds": 11.51407125,
+  "generated": [
+    19,
+    17,
+    151645
+  ],
+  "layout_job_protocol_sha256": "15241bef89e22388a58671aba958f94374415cacee1ead992838f4699d252abd",
+  "native_final_source_fidelity_full_context_or_a6_a8_established": false,
+  "native_job_protocol_sha256": "d51aa7c022b6dfe244c3ef3499280115893ac72d7b2e925d669c092e228ea1ef",
+  "new_class_program_trace_inventory_binding_required": true,
+  "new_position_payload_quote": 64914329,
+  "new_program_nodes": 6666,
+  "new_program_sha256": "879211ba0d5058a56fd75d0d231cf64cf3cf5798b801a8cb1f46f0b8445d6514",
+  "old_position_payload_quote": 63869849,
+  "old_program_sha256": "462899c98ec4aa7885a7afa99338e9972c1e16428cfa1ff1783a8f1c2443f731",
+  "original_program_nodes": 6570,
+  "parameter_storage": "bounded owned byte arrays; same borrowed typed views in both executors",
+  "positions": 26,
+  "schema": "misaka.rfc02.layout15-real-artifact-bitexact.v1",
+  "process_max_RSS_bytes": 886177792,
+  "whole_invocation_wall_seconds": 15.10109862498939
+}

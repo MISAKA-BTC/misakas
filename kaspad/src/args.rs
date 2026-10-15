@@ -817,6 +817,11 @@ pub struct Args {
     pub retention_period_days: Option<f64>,
 
     pub override_params_file: Option<String>,
+    /// Pinned isolated native calibration34; command line only.
+    #[serde(skip)]
+    pub palw_native_calibration_snapshot: Option<String>,
+    #[serde(skip)]
+    pub palw_native_calibration_root: Option<String>,
 
     pub rocksdb_preset: Option<String>,
     pub rocksdb_wal_dir: Option<String>,
@@ -1047,6 +1052,8 @@ impl Default for Args {
             palw_host_pinner: false,
             retention_period_days: None,
             override_params_file: None,
+            palw_native_calibration_snapshot: None,
+            palw_native_calibration_root: None,
             rocksdb_preset: None,
             rocksdb_wal_dir: None,
             rocksdb_cache_size: None,
@@ -1540,6 +1547,49 @@ impl Args {
             && let Err(e) = config.params.validate_palw_v2()
         {
             panic!("the --palw-*-devnet economic bundle produced a ruleset the node refuses: {e:?}");
+        }
+
+        if let Some(path) = &self.palw_native_calibration_snapshot {
+            use kaspa_consensus_core::palw_native_calibration_v34::NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V34;
+            use std::io::Read;
+            if self.network().network_type() != NetworkType::Devnet
+                || self.override_params_file.is_some()
+                || self.palw_drill_genesis_salt.is_some()
+            {
+                panic!(
+                    "--palw-native-calibration-snapshot requires the owning devnet base without generic overrides or a testnet drill"
+                );
+            }
+            #[cfg(feature = "devnet-prealloc")]
+            if self.num_prealloc_utxos.is_some() {
+                panic!("native calibration34 uses the pinned original devnet UTXO set");
+            }
+            let pin: kaspa_consensus_core::Hash64 = self
+                .palw_native_calibration_root
+                .as_deref()
+                .expect("native calibration34 needs its explicit snapshot root")
+                .parse()
+                .unwrap_or_else(|e| panic!("native calibration34 root: {e}"));
+            let file = fs::File::open(path).unwrap_or_else(|e| panic!("native calibration34 snapshot: {e}"));
+            let length = file.metadata().unwrap_or_else(|e| panic!("native calibration34 snapshot metadata: {e}")).len();
+            if length > NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V34 as u64 {
+                panic!("native calibration34 snapshot byte cap");
+            }
+            let mut bytes = Vec::new();
+            file.take(NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V34 as u64 + 1)
+                .read_to_end(&mut bytes)
+                .unwrap_or_else(|e| panic!("native calibration34 bounded snapshot read: {e}"));
+            // The SAME owning factory the auditor/signer CLIs use (`native_params_v34`): a node and
+            // its auditor cannot read one snapshot two ways. Peers with another snapshot announce
+            // another `consensus_params_id`/genesis and the handshake refuses them.
+            config.params = kaspa_consensus_core::palw_native_calibration_v34::load_isolated_native_calibration_v34(
+                &config.params,
+                &bytes,
+                pin.as_bytes(),
+            )
+            .unwrap_or_else(|e| panic!("native calibration34 owning snapshot: {e}"));
+        } else if self.palw_native_calibration_root.is_some() {
+            panic!("native calibration34 root supplied without its snapshot");
         }
 
         // A malformed checkpoint is fatal on purpose. Continuing without one would leave the node
@@ -3450,6 +3500,22 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                 .help("The number of total days of data to keep.")
         )
         .arg(
+            Arg::new("palw-native-calibration-snapshot")
+                .long("palw-native-calibration-snapshot")
+                .value_name("file")
+                .value_parser(clap::value_parser!(String))
+                .requires("palw-native-calibration-root")
+                .help("Pinned native calibration34 snapshot on a distinct devnet genesis. Does not qualify production Final or A6/A8.")
+        )
+        .arg(
+            Arg::new("palw-native-calibration-root")
+                .long("palw-native-calibration-root")
+                .value_name("128-hex")
+                .value_parser(clap::value_parser!(String))
+                .requires("palw-native-calibration-snapshot")
+                .help("Explicit object root of the immutable native calibration34 snapshot.")
+        )
+        .arg(
             Arg::new("override-params-file")
                 .long("override-params-file")
                 .require_equals(true)
@@ -3893,6 +3959,8 @@ impl Args {
             #[cfg(feature = "devnet-prealloc")]
             prealloc_amount: arg_match_unwrap_or::<u64>(&m, "prealloc-amount", defaults.prealloc_amount),
             override_params_file: m.get_one::<String>("override-params-file").cloned(),
+            palw_native_calibration_snapshot: m.get_one::<String>("palw-native-calibration-snapshot").cloned(),
+            palw_native_calibration_root: m.get_one::<String>("palw-native-calibration-root").cloned(),
             rocksdb_preset: m.get_one::<String>("rocksdb-preset").cloned().or(defaults.rocksdb_preset),
             rocksdb_wal_dir: m.get_one::<String>("rocksdb-wal-dir").cloned().or(defaults.rocksdb_wal_dir),
             rocksdb_cache_size: m.get_one::<usize>("rocksdb-cache-size").cloned().or(defaults.rocksdb_cache_size),

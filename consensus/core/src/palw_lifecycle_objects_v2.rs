@@ -344,12 +344,25 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, signature } => {
             if signature.is_empty() {
                 Err("a kernel route chunk must carry its opener's signature — unsigned, anyone could open a group as any bond")
-            } else if chunk.count == 0
-                || chunk.count > crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT
-                || chunk.index >= chunk.count
-                || chunk.bytes.is_empty()
-                || chunk.bytes.len() > crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES
-            {
+            } else if {
+                // Native targets 6/7 own their paid protected lane: up to 64 fragments of
+                // 32 KiB (`palw_kernel_chunks_v1`, the funded/stage folds); all others keep 16.
+                let native = matches!(
+                    chunk.target,
+                    crate::palw_kernel_route_v1::PalwKernelChunkTargetV1::FundedProofV11 { .. }
+                        | crate::palw_kernel_route_v1::PalwKernelChunkTargetV1::StageProofV14 { .. }
+                );
+                let (count_cap, byte_cap) = if native {
+                    (64u8, misaka_palw_kernel::flat_quota11::PROTECTED_FRAGMENT_BYTES_V11 as usize)
+                } else {
+                    (crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT, crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES)
+                };
+                chunk.count == 0
+                    || chunk.count > count_cap
+                    || chunk.index >= chunk.count
+                    || chunk.bytes.is_empty()
+                    || chunk.bytes.len() > byte_cap
+            } {
                 Err("a kernel route chunk's index, count or part is out of range")
             } else {
                 Ok(())
@@ -1683,17 +1696,23 @@ pub enum PalwKernelInnerFenceV1 {
     BeaconSourceOptInV1,
     /// Signed prepaid source escrow; needs this monetary fence plus source opt-in and OPV.
     BeaconSourceFeeV1,
+    /// Explicit funded execution, independently bound network policy.
+    FundedExecutionV11,
+    /// Independent typed source and Rows/Final execution contract, inner64.
+    StageExecutionV14,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::PanelFreeV1,
         Self::TypedRootsV1,
         Self::PanelFreeAndTypedRootsV1,
         Self::ModelRefutationSealV1,
         Self::BeaconSourceOptInV1,
         Self::BeaconSourceFeeV1,
+        Self::FundedExecutionV11,
+        Self::StageExecutionV14,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1704,6 +1723,8 @@ impl PalwKernelInnerFenceV1 {
             Self::ModelRefutationSealV1 => "palw_model_refutation_seal_v1",
             Self::BeaconSourceOptInV1 => "palw_beacon_source_opt_in_v1",
             Self::BeaconSourceFeeV1 => "palw_beacon_source_fee_v1",
+            Self::FundedExecutionV11 => "palw_funded_execution_v11",
+            Self::StageExecutionV14 => "palw_stage_execution_v14",
         }
     }
 }
@@ -1779,6 +1800,8 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         K::SealModelRefutationV4 { .. } | K::RevealModelRefutationV4 { .. } => Some(PalwKernelInnerFenceV1::ModelRefutationSealV1),
         K::OptInBeaconSource { .. } => Some(PalwKernelInnerFenceV1::BeaconSourceOptInV1),
         K::FundBeaconSourceFee { .. } | K::OptInPaidBeaconSource { .. } => Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1),
+        K::FundedExecutionV11 { .. } => Some(PalwKernelInnerFenceV1::FundedExecutionV11),
+        K::StageExecutionV14 { .. } => Some(PalwKernelInnerFenceV1::StageExecutionV14),
     }
 }
 
@@ -1845,6 +1868,8 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     // codex RFC-7 final (R6781-F merge): codex numbered these 22 / 23 — RFC-02's on the integration line — so they follow 41–60.
     (61, "FundBeaconSourceFee", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
     (62, "OptInPaidBeaconSource", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
+    (63, "FundedExecutionV11", Some(PalwKernelInnerFenceV1::FundedExecutionV11)),
+    (64, "StageExecutionV14", Some(PalwKernelInnerFenceV1::StageExecutionV14)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -2135,6 +2160,16 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "RFC-7 FundBeaconSourceFee / OptInPaidBeaconSource (prepaid source fees)",
         true,
     ),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 63, hi: 63 }, "palw_funded_execution_v11", "RFC-0002 native funded execution11, explicit consent23/Fund24", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 64, hi: 64 }, "palw_stage_execution_v14", "RFC-0002 typed external stage14", true),
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux table 112 stage14 source/class/job and owner catalogs, explicit18 producer consent,20 delivery fee cap, original operator-bound source pending/pursuit, actual per-job settlement/principal and terminal GC anchor; shared text11/stage14 operator nonce counter and quota92 source16/trace17 liabilities",
+        },
+        "palw_stage_execution_v14",
+        "RFC-0002 typed source namespace and bounded T/P/A stage admission",
+        true,
+    ),
     // codex RFC-6/7/8/12 final (lane R6781-F): the state its kinds write, each only past its own dormant fence (below it no row
     // exists and every root is unchanged). codex's own numbers are spent on the integration line: kernel ledger tables 29 / 30 →
     // table 27 kinds 5 / 6; kernel route aux 46 / 47 / 48 / 49 → 108 / 109 / 110 / 111; bond budget table 6 → 9.
@@ -2183,6 +2218,18 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::KernelNested { what: "PalwKernelChunkTargetV1::FlatProofV9 (5) inside KernelRouteChunkV1 (tag 113)" },
         "palw_panel_free_v1",
         "RFC-0002 actor-owned mature v9 proof chunks (also needs tag 113 probabilistic constraints fence)",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::KernelNested { what: "PalwKernelChunkTargetV1::FundedProofV11 (6) inside KernelRouteChunkV1 (tag 113)" },
+        "palw_funded_execution_v11",
+        "RFC-0002 original paid native11 proof, own fence before fees or ordinary chunk pools",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::KernelNested { what: "PalwKernelChunkTargetV1::StageProofV14 (7) inside KernelRouteChunkV1 (tag 113)" },
+        "palw_stage_execution_v14",
+        "RFC-0002 original paid typed-stage proof, independent stage14 fence and assembly",
         true,
     ),
     a2_row(
@@ -4658,7 +4705,8 @@ pub(crate) mod tests {
             (109, 0xcd35f41524be4a4f), // OPVB: PostComplete and the derived-eligibility forms of tag 109 (under palw_probabilistic_constraints_v1)
             (110, 0xb15fb011723ebbe0),
             (111, 0x27999d2df751e9c6),
-            (113, 0x2fb1aa3e7e627952), // FlatProofV9 (5) appends its own authenticated actor/maturity lane under the same dormant fence.
+            (113, 0x8f19418d98449cce), // FlatProofV9 (5); RFC02 native FundedProofV11 (6) / StageProofV14 (7) append their own paid
+            // protected lanes, each judged only past palw_funded_execution_v11 / palw_stage_execution_v14 (re-pinned 2026-10-15).
             (120, 0x0811fa945c751a68),
             // X8R's RFC-0008 v2 work-root declaration, under `palw_exec_payload_v2` (lifecycle kind fence 6).
             (130, 0x5774ef35c9a3fdaa),

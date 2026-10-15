@@ -150,7 +150,7 @@ impl TransitionBuilder<'_> {
     }
 
     /// Record that the route has seen `bond` (its kernel digest maps back to it).
-    fn note_kernel_bond(&mut self, bond: &PalwBondKeyV2) -> misaka_palw_kernel::hash::Digest {
+    pub(super) fn note_kernel_bond(&mut self, bond: &PalwBondKeyV2) -> misaka_palw_kernel::hash::Digest {
         let kid = palw_kernel_bond_id_v1(bond);
         self.write_kernel_row(
             PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1,
@@ -927,14 +927,34 @@ pub(super) fn apply_kernel_route_object_v1(
     if builder.extras.kernel_route.is_none() {
         return Err(refused("palw_probabilistic_constraints_v1 is not in force at this block"));
     }
+    // Funded actions 25..=40 below Final27 (native_final absent) are opaque: validation did not check
+    // their signature, so they must have ZERO state effect — no bond, budget, row or fee read/write.
+    // Mirrors `palw_native_action_unjudged_at_v1` in the processor exactly.
+    if bytes.get(1).copied() == Some(misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11)
+        && builder.extras.kernel_route.as_ref().is_some_and(|e| match bytes.get(2) {
+            Some(25..=40) => e.native_final.is_none(),
+            // Typed window class (§II.14.60): its own fence AND Final27.
+            Some(45 | 46) => e.native_final.is_none() || e.window_class_v37.is_none_or(|at| ctx.daa_score < at),
+            _ => false,
+        })
+    {
+        return Ok(());
+    }
     // A malformed or over-size encoding, or a signer that is no Active bond, is a dropped object.
-    let Ok(object) = KernelRouteObjectV1::decode(bytes) else { return Ok(()) };
     if bytes.len() > PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 {
         return Ok(());
     }
     if !builder.state.bonds.get(signer).is_some_and(|b| matches!(b.status, PalwBondStatusV2::Active)) {
         return Ok(());
     }
+    match misaka_palw_kernel::route::borrowed_native_action_v1(bytes) {
+        Ok(Some(a)) if a.tag==misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 && matches!(a.action,41..=44)=>return super::palw_native_initial_fold_v31::apply(builder,ctx,signer,a.action,a.body),
+        Ok(Some(a)) if a.tag==misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11=>return super::palw_flat_execution_fold_v11::apply(builder,ctx,signer,a.action,a.body),
+        Ok(Some(a)) if a.tag==misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14=>return super::palw_flat_stage_fold_v14::apply(builder,ctx,signer,a.action,a.body),
+        Err(_)=>return Ok(()),
+        _=>{}
+    }
+    let Ok(object) = KernelRouteObjectV1::decode(bytes) else { return Ok(()) };
     // RFC-0002 P0 (RFC02-T): past `palw_model_refutation_seal_v1` a candidate refutation is only a sealed reveal (inner 37); the frozen
     // unsealed refutations pay whoever is included first — an equivalent re-encoding of an honest finder's proof — so they are refused
     // by name before any court, fee or row.
@@ -952,6 +972,12 @@ pub(super) fn apply_kernel_route_object_v1(
     }
     // Inner 22/23 are consensus-owned state/collateral courts, never bare-ledger moves.
     match &object {
+        KernelRouteObjectV1::FundedExecutionV11 { action, body } => {
+            return super::palw_flat_execution_fold_v11::apply(builder, ctx, signer, *action, body);
+        }
+        KernelRouteObjectV1::StageExecutionV14 { action, body } => {
+            return super::palw_flat_stage_fold_v14::apply(builder, ctx, signer, *action, body);
+        }
         KernelRouteObjectV1::SealModelRefutationV4 { slot, seal } => {
             return super::palw_model_refutation_seal_fold_v4::seal(builder, ctx, signer, *slot, seal);
         }
@@ -1607,6 +1633,12 @@ pub(super) fn apply_kernel_route_chunk_v1(
     if builder.extras.kernel_route.is_none() {
         return Err(refused("palw_probabilistic_constraints_v1 is not in force at this block"));
     }
+    if matches!(chunk.target, PalwKernelChunkTargetV1::FundedProofV11 { .. }) {
+        return super::palw_flat_execution_fold_v11::apply_chunk(builder, ctx, chunk);
+    }
+    if matches!(chunk.target, PalwKernelChunkTargetV1::StageProofV14 { .. }) {
+        return super::palw_flat_stage_fold_v14::apply_chunk(builder, ctx, chunk);
+    }
     if chunk.count == 0 || chunk.count > PALW_OBJECT_CHUNK_MAX_COUNT {
         return Err(PalwStateV2Error::ChunkCountOutOfRange { count: chunk.count, max: PALW_OBJECT_CHUNK_MAX_COUNT });
     }
@@ -1842,6 +1874,9 @@ fn candidate_withdraw_held_v9(
     ledger: &KernelLedgerV1,
     owner: &misaka_palw_kernel::hash::Digest,
 ) -> Result<bool, PalwStateV2Error> {
+    if super::palw_flat_execution_fold_v11::candidate_withdraw_held(builder, ctx, ledger, owner)? {
+        return Ok(true);
+    }
     use crate::palw_flat_model_vector_v3::{FLAT_MODEL_VECTOR_TABLE_V3, FlatModelVectorHeaderV3};
     use borsh::BorshDeserialize;
     let policy = route_policies(builder)?.0;

@@ -3348,6 +3348,8 @@ message GetPalwStateProofResponseMessage {
   bytes statePreimage = 5;
   string collection = 6;
   repeated RpcPalwProofRow rows = 7;
+  optional bytes nativeAuditRecord = 8;
+  optional bytes nativeCoinbaseProof = 9;
   RPCError error = 1000;
 }
 

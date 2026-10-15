@@ -681,6 +681,15 @@ pub(crate) fn create_core_with_runtime_inner(
     // 2026-08-13. One line here makes "is this binary the release?" answerable without a peer,
     // which is what a flag day needs.
     info!("Consensus params fingerprint: {} (network {})", config.params.consensus_params_id(), config.params.net);
+    // RFC-0002 native calibration34: an isolated measurement devnet says so beside its fingerprint.
+    // Its receipts are measurement Finals only — never A6/A8 pass evidence (`native_final_is_qualified_v34`).
+    if config.params.has_isolated_native_calibration_v34() {
+        warn!(
+            "PALW native calibration34: isolated measurement devnet (genesis {}, schedule {}); Final receipts here are NOT A6/A8 evidence",
+            config.params.genesis.hash,
+            config.params.consensus_schedule_id()
+        );
+    }
     // A drill crossing the post-launch release's flag day (`--palw-drill-fence-at`) says which fences
     // it set, beside the fingerprint they moved.
     for line in crate::palw_drill::palw_drill_fence_lines_v1(&config) {
@@ -1184,30 +1193,41 @@ Do you confirm? (y/n)";
         Some(dns_params) => kaspa_mining::AttestationMempoolPolicy::from_dns_params(dns_params),
         None => kaspa_mining::AttestationMempoolPolicy::disabled(),
     };
-    let mining_manager = MiningManagerProxy::new(Arc::new(MiningManager::new_with_extended_config(
-        config.target_time_per_block(),
-        false,
-        config.max_block_mass,
-        config.ram_scale,
-        config.block_template_cache_lifetime,
-        mining_counters.clone(),
-        // kaspa-pq PQ-only relay: every kaspa-pq network enforces PQ at genesis, so the production
-        // mempool requires ML-DSA-87 P2PKH outputs/inputs (audit Finding C).
-        true,
-        // ADR-0087 Decision 6 (mainnet audit 2026-09-06, M-9): the mempool's model-sink carve-outs
-        // are live only where the ruleset declares the market. `None` on every shipped preset, so
-        // this is `false` on testnet-11, devnet and a carded mainnet today.
-        config.palw_model_market.is_some(),
-        // ADR-0152-adjacent (Activation Pool): the activation sink relays only where the ruleset
-        // declares the pool (testnet-12 alone).
-        config.palw_activation_pool_fence().is_some(),
-        evm_fee_recipient,
-        attestation_policy,
-        // ADR-0152 v3.1 H-1 (P2-9): templates take H-1's lifecycle carriers first, and a full pool
-        // keeps a reserve for them, where R-core+ is armed — testnet-12 only; every other preset
-        // selects and evicts exactly as before.
-        kaspa_mining::mempool::config::palw_h1_carrier_priority_for(&config.params),
-    )));
+    let mining_manager = MiningManagerProxy::new(Arc::new(
+        MiningManager::new_with_extended_config(
+            config.target_time_per_block(),
+            false,
+            config.max_block_mass,
+            config.ram_scale,
+            config.block_template_cache_lifetime,
+            mining_counters.clone(),
+            // kaspa-pq PQ-only relay: every kaspa-pq network enforces PQ at genesis, so the production
+            // mempool requires ML-DSA-87 P2PKH outputs/inputs (audit Finding C).
+            true,
+            // ADR-0087 Decision 6 (mainnet audit 2026-09-06, M-9): the mempool's model-sink carve-outs
+            // are live only where the ruleset declares the market. `None` on every shipped preset, so
+            // this is `false` on testnet-11, devnet and a carded mainnet today.
+            config.palw_model_market.is_some(),
+            // ADR-0152-adjacent (Activation Pool): the activation sink relays only where the ruleset
+            // declares the pool (testnet-12 alone).
+            config.palw_activation_pool_fence().is_some(),
+            evm_fee_recipient,
+            attestation_policy,
+            // ADR-0152 v3.1 H-1 (P2-9): templates take H-1's lifecycle carriers first, and a full pool
+            // keeps a reserve for them, where R-core+ is armed — testnet-12 only; every other preset
+            // selects and evicts exactly as before.
+            kaspa_mining::mempool::config::palw_h1_carrier_priority_for(&config.params),
+        )
+        .with_native_queue_v30(
+            config
+                .params
+                .palw_native_final_v27
+                .as_ref()
+                .filter(|f| f.activation != kaspa_consensus_core::config::params::ForkActivation::never())
+                .map(|f| f.policy.queue_policy.clone()),
+        )
+        .expect("native Final queue30 startup contract must be provisionable"),
+    ));
     let mining_monitor =
         Arc::new(MiningMonitor::new(mining_manager.clone(), mining_counters, tx_script_cache_counters.clone(), tick_service.clone()));
 

@@ -788,6 +788,8 @@ mod tests {
             "palw_fork_choice_commitment_v1" => params.palw_fork_choice_commitment_v1 = Some(at),
             "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
             "palw_model_refutation_seal_v1" => params.palw_model_refutation_seal_v1 = Some(at),
+            // RFC-0002 §II.14.60 typed window class (funded action 45): refused when armed by `validate_palw_v2`.
+            "palw_window_class_v37" => params.palw_window_class_v37 = Some(at),
             // codex RFC-7's per-attempt beacon source opt-in (inner 40): refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_beacon_source_opt_in_v1" => {
                 params.palw_beacon_source_opt_in_v1 =
@@ -813,6 +815,22 @@ mod tests {
                 })
             }
             // codex RFC-7 final's prepaid source fees (inner 61/62): refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_stage_execution_v14" => {
+                params.palw_stage_execution_v14 =
+                    Some(crate::palw_flat_stage_v14::PalwStageExecutionFenceV14::unapproved_probe_at(at, [0; 64]));
+            }
+            "palw_native_final_v27" => {
+                params.palw_native_final_v27 =
+                    Some(crate::palw_native_final_v27::PalwNativeFinalFenceV27::unapproved_probe_at(at, [0; 64]));
+            }
+            "palw_stage_execution_v28" => {
+                params.palw_stage_execution_v28 =
+                    Some(crate::palw_flat_stage_v28::PalwStageExecutionFenceV28::unapproved_probe_at(at, [0; 64]));
+            }
+            "palw_funded_execution_v11" => {
+                params.palw_funded_execution_v11 =
+                    Some(crate::palw_funded_execution_v11::PalwFundedExecutionFenceV11::unapproved_probe_at(at, [0; 64]));
+            }
             "palw_beacon_source_fee_v1" => {
                 params.palw_beacon_source_fee_v1 =
                     Some(crate::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1::unapproved_probe_at(at))

@@ -610,3 +610,70 @@ fn a_recurrent_pack_records_its_calibrated_context_and_rebuilds_the_same_file() 
     assert_eq!(r.checks.iter().find(|c| c.name == "artifact").expect("an artifact check").status, Status::Pass);
     let _ = std::fs::remove_dir_all(work);
 }
+
+#[test]
+fn linear16_profile_is_explicit_and_rebuilds_without_changing_legacy_profile_image() {
+    let work = scratch("linear16");
+    let src = fixture("hf/llama");
+    let (old, _, _) = build(&src, &work.join("legacy"), 64, false);
+    let image = serde_json::to_value(&old.profile).unwrap();
+    assert!(image.get("linear_weight_bits").is_none());
+    assert_eq!(old.profile.linear_weight_bits, 8);
+    let newwork = work.join("wide");
+    std::fs::create_dir_all(&newwork).unwrap();
+    let mut req = ConvertRequest::new(&src, newwork.join("artifact.palwtir"));
+    req.calib = Some(calibration(&newwork, 64, 3, 12));
+    req.linear_weight_bits = 16;
+    let packdir = newwork.join("pack");
+    let mut options = BuildOpts::new(req, &packdir, "linear16");
+    options.prompts = 2;
+    options.prefill = 5;
+    options.decode = 2;
+    let built = build_pack(&options, &|_| {}).unwrap();
+    assert_eq!(built.pack.profile.linear_weight_bits, 16);
+    assert_eq!(serde_json::to_value(&built.pack.profile).unwrap()["linear_weight_bits"], 16);
+    assert_ne!(built.pack.result.inventory_root, old.result.inventory_root);
+    let mut verify = VerifyOpts::new(&packdir);
+    verify.model = Some(src);
+    verify.rebuild = true;
+    let report = verify_pack(&verify, &|_| {}).unwrap();
+    assert!(report.checks.iter().all(|c| c.status != Status::Fail), "{}", report.render());
+    for name in ["artifact", "conformance", "frontend"] {
+        assert_eq!(report.checks.iter().find(|c| c.name == name).unwrap().status, Status::Pass);
+    }
+    let mut bad = serde_json::to_value(&built.pack).unwrap();
+    bad["profile"]["linear_weight_bits"] = serde_json::json!(32);
+    assert!(RuntimePackV1::parse(&bad.to_string()).is_err());
+    let _ = std::fs::remove_dir_all(work);
+}
+
+#[test]
+fn metadata_profile_v16_is_explicit_in_pack_and_declared_artifact() {
+    use misaka_palw_sdk::runtime_pack::build::DeclareOpts;
+    use misaka_palw_tir_artifact::metadata_v16::{MetadataParseProfileV16, parse_recorded_metadata_v16};
+    let work = scratch("metadata16");
+    let src = fixture("hf/llama");
+    let mut req = ConvertRequest::new(&src, work.join("artifact.palwtir"));
+    req.calib = Some(calibration(&work, 64, 3, 12));
+    let dir = work.join("pack");
+    let mut options = BuildOpts::new(req, &dir, "metadata16");
+    options.metadata_profile = Some(MetadataParseProfileV16::CorrectlyRoundedV16);
+    options.prompts = 1;
+    options.prefill = 5;
+    options.decode = 2;
+    options.declare.push(DeclareOpts {
+        network: "testnet-12".into(),
+        choice: misaka_palw_sdk::tir_layout::TirLayoutChoiceV1 { max_context: Some(512), ..Default::default() },
+    });
+    let built = build_pack(&options, &|_| {}).unwrap();
+    assert_eq!(built.pack.converter.metadata_parsing_profile.as_deref(), Some("correctly-rounded-v16"));
+    let declared = work.join("artifact.palwtir.testnet-12.palwtir");
+    let c = misaka_palw_tir_artifact::PalwTirContainerV1::open(&declared).unwrap();
+    let metadata = parse_recorded_metadata_v16(&c.header.meta).unwrap();
+    assert_eq!(metadata["metadata_parsing"]["profile"], "correctly-rounded-v16");
+    assert_eq!(metadata["logits_scale"].as_f64().unwrap().to_bits(), built.pack.logits.scale.to_bits());
+    let mut bad = serde_json::to_value(&built.pack).unwrap();
+    bad["converter"]["metadata_parsing_profile"] = serde_json::json!("unpriced-guess");
+    assert!(RuntimePackV1::parse(&bad.to_string()).is_err());
+    let _ = std::fs::remove_dir_all(work);
+}

@@ -501,8 +501,12 @@ impl<'a> FillCtx<'a> {
     /// computes the small per-row parts — scales, shifts, outlier columns — in a pass over blocks and
     /// keeps no codes: `sc.main.codes` is empty).
     pub fn inject_split(&self, p: u32, kx: &ScaleKey, f_max: i32, sc: SplitCodes) -> Result<()> {
+        self.inject_split_bits(p, kx, f_max, 8, sc)
+    }
+
+    pub fn inject_split_bits(&self, p: u32, kx: &ScaleKey, f_max: i32, bits: u8, sc: SplitCodes) -> Result<()> {
         let out = self.outliers(kx)?;
-        self.split_memo.lock().expect("memo").insert(format!("{p}:{out:?}:{f_max}"), Arc::new(sc));
+        self.split_memo.lock().expect("memo").insert(format!("{p}:{out:?}:{f_max}:{bits}"), Arc::new(sc));
         Ok(())
     }
 
@@ -511,8 +515,16 @@ impl<'a> FillCtx<'a> {
     /// fixed point relative to each row's main unit, `wo[o][j] = W[o, c_j] · t_{c_j} /
     /// (sw[o] · t_main) · 2^f[o]`, with `f[o] ≤ f_max` as large as keeps them inside `±2^30`.
     pub fn split_rows(&self, p: u32, kx: &ScaleKey, f_max: i32) -> Result<Arc<SplitCodes>> {
+        self.split_rows_bits(p, kx, f_max, 8)
+    }
+
+    /// The same outlier construction at an explicit main weight width.
+    pub fn split_rows_bits(&self, p: u32, kx: &ScaleKey, f_max: i32, bits: u8) -> Result<Arc<SplitCodes>> {
+        if !matches!(bits, 8 | 16) {
+            return Err(LowerError::bad("split weight width must be 8 or 16"));
+        }
         let out = self.outliers(kx)?;
-        let mk = format!("{p}:{out:?}:{f_max}");
+        let mk = format!("{p}:{out:?}:{f_max}:{bits}");
         if let Some(r) = self.split_memo.lock().expect("memo").get(&mk) {
             return Ok(r.clone());
         }
@@ -524,7 +536,12 @@ impl<'a> FillCtx<'a> {
                 masked[r * cols + c] = 0.0;
             }
         }
-        let main = quantize_rows(&masked, rows, cols, None);
+        let (main, main16) = if bits == 16 {
+            let wide = quantize_rows16(&masked, rows, cols);
+            (RowCodes { rows, cols, codes: Vec::new(), scales: wide.scales }, Some(wide.codes))
+        } else {
+            (quantize_rows(&masked, rows, cols, None), None)
+        };
         let tv = self.scale_vec(kx, cols)?;
         let tn = self.scale(kx)?;
         let mut wo = Vec::with_capacity(rows * out.len());
@@ -538,7 +555,7 @@ impl<'a> FillCtx<'a> {
                 vals.iter().map(|v| (v * 2f64.powi(fr)).round().clamp(-(1i64 << 31) as f64 + 1.0, (1i64 << 31) as f64 - 1.0) as i32),
             );
         }
-        let sc = Arc::new(SplitCodes { main, outliers: out, wo, f });
+        let sc = Arc::new(SplitCodes { main, main16, outliers: out, wo, f });
         self.split_memo.lock().expect("memo").insert(mk, sc.clone());
         Ok(sc)
     }
@@ -548,6 +565,8 @@ impl<'a> FillCtx<'a> {
 #[derive(Clone, Debug)]
 pub struct SplitCodes {
     pub main: RowCodes,
+    /// Wide main codes when requested; `main.scales` describes them and `main.codes` is empty.
+    pub main16: Option<Vec<i16>>,
     pub outliers: Vec<usize>,
     /// `[rows, outliers]`, row-major.
     pub wo: Vec<i32>,

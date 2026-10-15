@@ -37,6 +37,8 @@ pub const DOMAIN_IMPL_SET: &[u8] = b"misaka.palw.runtime-pack.impl-set.v1";
 pub const DOMAIN_CALIBRATION: &[u8] = b"misaka.palw.runtime-pack.calibration-id.v1";
 /// A pack that pins `gdn_core_wide` hashes its calibration identity under this domain with the flag in it; every other pack keeps v1.
 pub const DOMAIN_CALIBRATION_V2: &[u8] = b"misaka.palw.runtime-pack.calibration-id.v2";
+/// Explicit linear16 profile, distinct from both legacy calibration identities.
+pub const DOMAIN_CALIBRATION_LINEAR16: &[u8] = b"misaka.palw.runtime-pack.calibration-id.linear16.v1";
 pub const DOMAIN_BINDING: &[u8] = b"misaka.palw.runtime-pack.input-state-binding.v1";
 pub const DOMAIN_RESOURCE: &[u8] = b"misaka.palw.runtime-pack.resource-profile.v1";
 pub const DOMAIN_SOURCE: &[u8] = b"misaka.palw.runtime-pack.source-provenance.v1";
@@ -148,6 +150,13 @@ struct CalibrationIdentityV1 {
 struct CalibrationIdentityV2 {
     base: CalibrationIdentityV1,
     gdn_core_wide: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+struct CalibrationIdentityLinear16 {
+    base: CalibrationIdentityV1,
+    gdn_core_wide: bool,
+    linear_weight_bits: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -384,7 +393,16 @@ impl PackCommitInputs {
             context: pack.profile.context.map(|c| c as u64),
         };
         // H1: a pack pinning `gdn_core_wide` hashes its calibration identity under v2 with the flag; every other pack keeps v1.
-        let calibration = if pack.profile.gdn_core_wide {
+        let calibration = if pack.profile.linear_weight_bits == 16 {
+            tool_root(
+                DOMAIN_CALIBRATION_LINEAR16,
+                &CalibrationIdentityLinear16 {
+                    base: calibration_v1,
+                    gdn_core_wide: pack.profile.gdn_core_wide,
+                    linear_weight_bits: 16,
+                },
+            )
+        } else if pack.profile.gdn_core_wide {
             tool_root(DOMAIN_CALIBRATION_V2, &CalibrationIdentityV2 { base: calibration_v1, gdn_core_wide: true })
         } else {
             tool_root(DOMAIN_CALIBRATION, &calibration_v1)

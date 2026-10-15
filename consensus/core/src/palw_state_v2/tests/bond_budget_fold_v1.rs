@@ -553,6 +553,65 @@ fn partial_native_fd_fe_funds_use_individual_physical_payment_clocks_with_exact_
     }
 }
 
+/// Original funded reward (11) and capped source fee (19) holds remain genuine
+/// unpaid liabilities across sparse blocks, including between partial credits.
+/// This exercises monetary APIs and carriage, not native Final soundness.
+#[test]
+fn funded_reward_and_source_fee_hold_r_through_sparse_partial_payment_and_replay() {
+    use super::super::palw_bond_budget_fold_v1::{native_income_id_v1, native_queued_income_id_v1};
+    for role in [11, 19] {
+        let p = armed_with(test_policy(1), None);
+        let (registered, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let extras = PalwTransitionExtrasV1::default();
+        let payload = registered.bond(&bond_key(1)).unwrap().payout_payload;
+        let queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload);
+        let root = h64(0x8910 + u64::from(role));
+        let id = native_income_id_v1(root, &bond_key(1), role);
+        let mut b = TransitionBuilder::new(&registered, &p, false, false, false, false, &extras);
+        b.hold_native_recipient_v1(root, bond_key(1), role, 100, 500, 50, &[]).unwrap();
+        let held = b.state.clone();
+        let delta = PalwStateDeltaV2 { point: ctx(2, 100, 2), entries: b.entries };
+        assert_replayable(&p, &registered, &held, &delta);
+        let (late, delta) = apply(&held, &p, &ctx(3, 1_000, 3), &[], None);
+        assert_replayable(&p, &held, &late, &delta);
+        assert!(late.bond_budget().unwrap().claim_row(&id).unwrap().live);
+        assert_eq!(late.bond_budget().unwrap().bond_row(&bond_key(1)).unwrap().window.reward_sompi, 50);
+        assert_eq!(late.bond_budget().unwrap().bond_row(&bond_key(1)).unwrap().latest_release_daa, u64::MAX);
+        let mut b = TransitionBuilder::new(&late, &p, false, false, false, false, &extras);
+        b.pay_native_recipient_v1(root, bond_key(1), role, 1_001, 10, queue, false).unwrap();
+        b.write_payout(queue, Some(PalwPayoutV2 { payload, amount: 10 }));
+        let partial = b.state.clone();
+        let delta = PalwStateDeltaV2 { point: ctx(4, 1_001, 4), entries: b.entries };
+        assert_replayable(&p, &late, &partial, &delta);
+        assert_eq!(partial.bond_budget().unwrap().claim_row(&id).unwrap().origin, PalwBudgetOriginV1::NativeIncomePartial);
+        let (first_paid, delta) = apply(&partial, &p, &ctx(5, 2_000, 5), &[], None);
+        assert_replayable(&p, &partial, &first_paid, &delta);
+        let (first_released, delta) = apply(&first_paid, &p, &ctx(6, 2_050, 6), &[], None);
+        assert_replayable(&p, &first_paid, &first_released, &delta);
+        assert_eq!(first_released.bond_budget().unwrap().bond_row(&bond_key(1)).unwrap().window.reward_sompi, 40);
+        assert!(first_released.bond_budget().unwrap().claim_row(&id).unwrap().live);
+        assert_eq!(first_released.bond_budget().unwrap().bond_row(&bond_key(1)).unwrap().latest_release_daa, u64::MAX);
+        let mut b = TransitionBuilder::new(&first_released, &p, false, false, false, false, &extras);
+        b.pay_native_recipient_v1(root, bond_key(1), role, 3_000, 20, queue, true).unwrap();
+        b.write_payout(queue, Some(PalwPayoutV2 { payload, amount: 20 }));
+        let last_queued = b.state.clone();
+        let delta = PalwStateDeltaV2 { point: ctx(7, 3_000, 7), entries: b.entries };
+        assert_replayable(&p, &first_released, &last_queued, &delta);
+        assert!(last_queued.bond_budget().unwrap().claim_row(&id).is_none());
+        let (last_paid, delta) = apply(&last_queued, &p, &ctx(8, 4_000, 8), &[], None);
+        assert_replayable(&p, &last_queued, &last_paid, &delta);
+        let queued_id = native_queued_income_id_v1(queue, &bond_key(1));
+        assert_eq!(last_paid.bond_budget().unwrap().claim_row(&queued_id).unwrap().reuse_not_before, 4_050);
+        let (before_release, delta) = apply(&last_paid, &p, &ctx(9, 4_049, 9), &[], None);
+        assert_replayable(&p, &last_paid, &before_release, &delta);
+        assert_eq!(before_release.bond_budget().unwrap().bond_row(&bond_key(1)).unwrap().window.reward_sompi, 40);
+        let (released, delta) = apply(&before_release, &p, &ctx(10, 4_050, 10), &[], None);
+        assert_replayable(&p, &before_release, &released, &delta);
+        assert!(released.bond_budget().unwrap().bond_row(&bond_key(1)).is_none());
+        assert!(released.pending_payout(&queue).is_none());
+    }
+}
+
 /// Synthetic snapshot metadata tests the production draw's refusal transaction;
 /// native signed Final/lottery correctness remains a separate acceptance test.
 #[test]

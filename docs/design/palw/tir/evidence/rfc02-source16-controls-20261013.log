@@ -1,0 +1,11 @@
+   Compiling misaka-palw-tir-lower v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/tir/lower)
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 26.36s
+     Running tests/flat_execution11.rs (target/debug/deps/flat_execution11-02e515af7caf40cc)
+
+running 3 tests
+test source16_public_expired_collection_charges_only_current_caller_and_never_revives_old_guarantees ... ok
+test source16_fixed_native_quote_cache_cannot_rebind_price_job_policy_or_root ... ok
+test source16_original_producer_consent_shared_guarantee_and_failed_answers_preserve_frozen11 ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out; finished in 0.00s

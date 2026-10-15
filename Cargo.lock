@@ -6263,7 +6263,10 @@ dependencies = [
  "misaka-palw-challenge",
  "misaka-palw-gen",
  "misaka-palw-tir",
+ "misaka-palw-tir-artifact",
+ "misaka-palw-tir-lower",
  "misaka-palw-tir-sketch",
+ "serde_json",
  "thiserror 1.0.64",
 ]
 
@@ -6361,7 +6364,9 @@ dependencies = [
  "kaspa-consensus-core",
  "kaspa-hashes",
  "kaspa-pq-validator-core",
+ "kaspa-rpc-core",
  "kaspa-txscript",
+ "kaspa-wrpc-client",
  "libc",
  "libcrux-ml-dsa",
  "libm",
@@ -6381,6 +6386,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.8",
+ "tokio",
 ]
 
 [[package]]
@@ -6469,6 +6475,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "sha2 0.10.8",
  "thiserror 1.0.64",
 ]
 

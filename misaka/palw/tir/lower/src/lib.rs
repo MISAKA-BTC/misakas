@@ -56,6 +56,7 @@ pub mod artifact;
 pub mod calib;
 pub mod cfg;
 pub mod convert;
+pub mod full_court_source25;
 pub mod detmath;
 pub mod diffusion;
 /// RFC-0003 step 7: a bidirectional encoder as the pieces of a registered Embedding class.
@@ -72,6 +73,7 @@ pub mod hf_schema;
 pub mod hf_weights;
 pub mod hl;
 pub mod lora;
+pub mod layout_pass15;
 pub mod lower;
 pub mod model;
 pub mod ngram;

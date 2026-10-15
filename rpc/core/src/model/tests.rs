@@ -2667,6 +2667,8 @@ mod mockery {
                 block_hash: mock_hex(),
                 header: mock(),
                 state_preimage: vec![9; 70],
+                native_audit_record: None,
+                native_coinbase_proof: None,
                 collection: "classes".to_string(),
                 rows: mock(),
             }

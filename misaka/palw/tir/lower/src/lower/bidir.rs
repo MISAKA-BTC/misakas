@@ -385,6 +385,7 @@ pub fn lower_bidir_with(hl: &HlProgram, spec: &ArchSpec, cfg: &BidirCfg, extras:
         table_shift: 0,
         carry_keys: BTreeMap::new(),
         table_chunk: 1 << 24,
+        linear_weight_bits: 8,
         conv_weight_bits: 8,
         out_major_rows: false,
         gdn_core_wide: false,

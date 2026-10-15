@@ -6,6 +6,16 @@
 use super::*;
 use crate::flat_execution11::{ExecutionJobStateV11, ExecutionTerminalV11};
 
+/// Stage14 alone constructs the private checked token after authenticating its
+/// original paid native book/source/input/claim/operator/epoch. No raw digest or
+/// frozen11 flag constructor is exposed across namespaces.
+pub(super) fn from_checked_stage_proof_v14(
+    checked: super::stage14::CheckedStageProofGrantV14,
+) -> Result<CheckedPaidSealV11,String> {
+    let (binding,key,original_paid_seal_root,seal_operator_id,producer_operator_id,posted_daa,matures_daa) = checked.into_parts();
+    Ok(CheckedPaidSealV11 {binding,key,original_paid_seal_root,seal_operator_id,producer_operator_id,posted_daa,matures_daa})
+}
+
 pub const PROTECTED_SEALS_MAX_V11: u32 = 1024;
 pub const PROTECTED_SEALS_PER_ACTOR_V11: u32 = 4;
 pub const PROTECTED_FRAGMENT_BYTES_V11: u64 = 32 << 10;

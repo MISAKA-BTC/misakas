@@ -135,6 +135,10 @@ impl Params {
         self.validate_palw_task_heads_v1()?;
         // **RFC-0011 §15.7's dormant fence** (`crate::palw_probabilistic_constraints_v1`): refused when armed.
         self.validate_palw_probabilistic_constraints_v1()?;
+        self.validate_palw_funded_execution_v11()?;
+        self.validate_palw_stage_execution_v14()?;
+        self.validate_palw_native_final_v27()?;
+        self.validate_palw_stage_execution_v28()?;
         // **RFC-0004 Part II's dormant fence** (`crate::palw_typed_roots_v1`): refused when armed.
         self.validate_palw_typed_roots_v1()?;
         // **RFC-0009 L2's dormant fence** (`crate::palw_fork_choice_commitment_v1`): refused when armed.
@@ -143,6 +147,7 @@ impl Params {
         self.validate_palw_verifier_pay_v1()?;
         // **RFC-0002 P0's dormant fence** (`crate::palw_model_refutation_seal_v4`): refused when armed.
         self.validate_palw_model_refutation_seal_v1()?;
+        self.validate_palw_window_class_v37()?;
         self.validate_palw_beacon_source_opt_in_v1()?;
         self.validate_palw_beacon_source_fee_v1()?;
         // **RFC-0015's dormant fence** (`crate::palw_panel_free_v1`): refused when armed.

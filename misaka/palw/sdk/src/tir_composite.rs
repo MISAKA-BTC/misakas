@@ -99,7 +99,7 @@ impl TirCompositeV1 {
 
 /// The container's provenance as a JSON object (`{"provenance": …}` around anything else).
 fn meta_of(c: &PalwTirContainerV1) -> serde_json::Value {
-    match serde_json::from_str::<serde_json::Value>(&c.header.meta) {
+    match misaka_palw_tir_artifact::metadata_v16::parse_recorded_metadata_v16(&c.header.meta) {
         Ok(v) if v.is_object() => v,
         Ok(v) => serde_json::json!({ "provenance": v }),
         Err(_) => serde_json::json!({ "provenance": c.header.meta }),
@@ -234,7 +234,8 @@ pub fn tir_composite_ref_of_path_v1(path: &Path) -> Option<Result<PalwTirComposi
 /// **The chain's reference a section's provenance records** (`meta.composite`, parent class
 /// included) — what a node opens the section against and holds to the candidate's registration.
 pub fn tir_composite_ref_of_meta_v1(meta: &str) -> Result<PalwTirCompositeRefV1, String> {
-    let v: serde_json::Value = serde_json::from_str(meta).map_err(|e| format!("the provenance is not JSON: {e}"))?;
+    let v = misaka_palw_tir_artifact::metadata_v16::parse_recorded_metadata_v16(meta)
+        .map_err(|e| format!("the provenance is not JSON: {e}"))?;
     let c = TirCompositeV1::from_meta(v.get("composite").ok_or("the provenance records no composite")?)?;
     let parent_class = c.parent_class.ok_or("the composite record names no parent class")?;
     Ok(PalwTirCompositeRefV1 { parent_class, parent_root: c.parent_root, adapter_root: c.adapter_root, p: c.p })

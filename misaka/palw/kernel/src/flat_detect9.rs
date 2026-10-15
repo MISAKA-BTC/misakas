@@ -588,33 +588,67 @@ pub(crate) fn check_flat_claim_v9(
     tokens: &[u32],
     scan: &mut TopKScanBudgetV7,
 ) -> FlatFindingV9 {
+    check_flat_claim_mode_v9(c, public, artifact, tokens, scan, true)
+}
+pub(crate) fn check_flat_stage_v14(
+    c: &FlatContextV9<'_>,
+    public: &dyn FlatPublicReadsV9,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    scan: &mut TopKScanBudgetV7,
+) -> FlatFindingV9 {
+    if c.base.claim.encoder.is_some()
+        || c.base.claim.prompt_len != c.base.claim.positions
+        || c.base.claim.generated != [0]
+        || tokens.len() != c.base.claim.positions as usize
+        || tokens.iter().any(|t| *t != 0)
+    {
+        return error("stage14 replay requires its canonical position-only carrier");
+    }
+    check_flat_claim_mode_v9(c, public, artifact, tokens, scan, false)
+}
+fn check_flat_claim_mode_v9(
+    c: &FlatContextV9<'_>,
+    public: &dyn FlatPublicReadsV9,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    scan: &mut TopKScanBudgetV7,
+    check_decode: bool,
+) -> FlatFindingV9 {
     if let Err(e) = c.prepare() {
         return error(e);
     }
     let scope_root = c.scope.root();
-    let result = crate::flat_detect5::check_flat_claim_engine(&c.base, public, artifact, tokens, |pr, unit, expected, own, token| {
-        let finding = if matches!(pr.w.node(unit.occurrence, unit.node).prim, Prim::TopK { .. }) {
-            match crate::flat_scope7::point_relation(pr, unit.position, unit.occurrence, unit.node) {
-                Ok(true) => topk_relation(c, &scope_root, pr, public, unit, expected, own, scan),
-                Ok(false) => match crate::flat_detect5::read_node(&c.base, pr, public, unit) {
-                    Err(f) => f.into(),
-                    Ok(o) => {
-                        if flat_profile_commitment_v5(expected).ok() != Some(o.commitment) {
-                            header(c, &scope_root, public, unit, &o)?
+    let result = crate::flat_detect5::check_flat_claim_engine_mode(
+        &c.base,
+        public,
+        artifact,
+        tokens,
+        check_decode,
+        |pr, unit, expected, own, token| {
+            let finding = if matches!(pr.w.node(unit.occurrence, unit.node).prim, Prim::TopK { .. }) {
+                match crate::flat_scope7::point_relation(pr, unit.position, unit.occurrence, unit.node) {
+                    Ok(true) => topk_relation(c, &scope_root, pr, public, unit, expected, own, scan),
+                    Ok(false) => match crate::flat_detect5::read_node(&c.base, pr, public, unit) {
+                        Err(f) => f.into(),
+                        Ok(o) => {
+                            if flat_profile_commitment_v5(expected).ok() != Some(o.commitment) {
+                                header(c, &scope_root, public, unit, &o)?
+                            }
+                            crate::flat_detect5::relation(&c.base, pr, public, unit, expected, own, token).into()
                         }
-                        crate::flat_detect5::relation(&c.base, pr, public, unit, expected, own, token).into()
-                    }
-                },
-                Err(e) => error(e),
+                    },
+                    Err(e) => error(e),
+                }
+            } else {
+                ordinary_relation(c, &scope_root, pr, public, unit, expected, own, token)
+            };
+            match finding {
+                FlatFindingV9::Clean => Ok(()),
+                f => Err(f),
             }
-        } else {
-            ordinary_relation(c, &scope_root, pr, public, unit, expected, own, token)
-        };
-        match finding {
-            FlatFindingV9::Clean => Ok(()),
-            f => Err(f),
-        }
-    });
+        },
+    );
     match result {
         Err(FlatFindingV9::Fault(f)) => checked(c, f),
         Err(f) => f,

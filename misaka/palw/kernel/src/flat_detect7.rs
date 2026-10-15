@@ -109,7 +109,7 @@ fn point(
     let value = output_point(&reply.value, shape, element).ok().and_then(|v| u32::try_from(v).ok());
     value.map(|v| (v, reply.value)).ok_or(FlatFindingV7::ValueDemand(read))
 }
-fn topk_relation(
+pub(crate) fn topk_relation_rows(
     c: &FlatContextV7<'_>,
     pr: &PreparedV1<'_>,
     public: &dyn FlatPublicReadsV7,
@@ -117,10 +117,16 @@ fn topk_relation(
     expected: &Tensor,
     own: &dyn Fn() -> Result<Vec<Tensor>, String>,
     scan: &mut TopKScanBudgetV7,
+    selected_row: Option<u64>,
+    opened_output: Option<crate::seg::NodeOpeningV1>,
 ) -> FlatFindingV7 {
-    let output = match crate::flat_detect5::read_node(&c.base, pr, public, unit) {
-        Ok(o) => o,
-        Err(f) => return f.into(),
+    let output = match opened_output {
+        Some(o) if crate::flat_court4::authenticate_node(&c.base, pr, &o, (unit.position, unit.occurrence, unit.node)) => o,
+        Some(_) => return FlatFindingV7::Demand(unit),
+        None => match crate::flat_detect5::read_node(&c.base, pr, public, unit) {
+            Ok(o) => o,
+            Err(f) => return f.into(),
+        },
     };
     let (p, s, n) = (unit.position, unit.occurrence, unit.node);
     let sh = pr.shapes(p, s, n);
@@ -172,7 +178,11 @@ fn topk_relation(
         }
         _ => return error("uncommitted source cannot select the point court"),
     };
-    for row in 0..rows {
+    if selected_row.is_some_and(|r| r >= rows) {
+        return error("selected TopK row outside output");
+    }
+    let row_range = selected_row.map_or(0..rows, |r| r..r + 1);
+    for row in row_range {
         let mut selected = Vec::new();
         if selected.try_reserve_exact(k as usize).is_err() {
             return error("TopK selected buffer refused");
@@ -268,7 +278,7 @@ pub(crate) fn check_flat_claim_v7(
 ) -> FlatFindingV7 {
     let result = crate::flat_detect5::check_flat_claim_engine(&c.base, public, artifact, tokens, |pr, unit, expected, own, token| {
         let finding = match c.scope.uses_point(pr, unit.position, unit.occurrence, unit.node) {
-            Ok(true) => topk_relation(c, pr, public, unit, expected, own, scan),
+            Ok(true) => topk_relation_rows(c, pr, public, unit, expected, own, scan, None, None),
             Ok(false) => crate::flat_detect5::relation(&c.base, pr, public, unit, expected, own, token).into(),
             Err(e) => error(e),
         };

@@ -1372,6 +1372,12 @@ pub trait ConsensusApi: Send + Sync {
         vec![None; carriers.len()]
     }
 
+    /// Original paid native carrier metadata at one coherent virtual / selected
+    /// parent snapshot. No priority is granted by a transaction's route tag.
+    fn native_carriage_snapshot_v22(&self) -> Option<crate::palw_native_carrier_index_v22::NativeCarriageSnapshotV22> {
+        None
+    }
+
     /// **The 2026-09-25 sweep, V01: the H-1 carrier gate's answer on each of `txs` at the tip** — one
     /// per transaction, in order: `Some(reason)` for a carrier the tip's fold would refuse, by the
     /// one predicate the mempool asks at admission and the template asks at every build
@@ -1719,6 +1725,28 @@ pub trait ConsensusApi: Send + Sync {
     ) -> Result<(crate::header::Header, crate::palw_state_proof_v1::PalwFactProofV1), String> {
         let _ = (block, collection);
         Err("this consensus serves no PALW state proof".to_string())
+    }
+
+    /// Readonly original Final view from an immutable, fully validated block
+    /// and its exact selected-parent state. The returned private Core view
+    /// proves row agreement, not a client-trusted chain or a redeemed UTXO.
+    fn palw_native_execution_audit_v32(
+        &self,
+        block: BlockHash,
+        job: [u8; 64],
+    ) -> Result<(crate::header::Header, crate::palw_native_audit_v27::CheckedNativeExecutionAuditViewV27), String> {
+        let _ = (block, job);
+        Err("this consensus serves no native Final audit anchor".into())
+    }
+
+    /// Actual coinbase inclusion proof from an immutable UTXO-validated block.
+    /// Clients still authenticate their own chain/selected-parent and queue openings.
+    fn palw_native_coinbase_proof_v33(
+        &self,
+        block: BlockHash,
+    ) -> Result<(crate::header::Header, crate::palw_native_redemption_v33::NativeCoinbaseProofV33), String> {
+        let _ = block;
+        Err("this consensus serves no native coinbase inclusion proof".into())
     }
 
     /// **RFC-0009 L2: the fork-choice openings of `blocks`' post-states** (op 203), with this node's sink and DAG tips. Empty `blocks`: the

@@ -184,6 +184,87 @@ pub(crate) fn relation(
     checked_fault(c, fault)
 }
 
+/// Resume a legacy court at a coordinate independently discovered from public
+/// roots. This does not discover or certify an earlier prefix: callers must
+/// bind a complete independent replay and select its first divergent relation.
+/// It reuses the frozen v5 checker and filings, without changing their wire or
+/// accepting a producer's prepared prosecution.
+pub fn locate_selected_legacy_relation_v5(
+    c: &FlatSegContextV5<'_>,
+    public: &dyn FlatPublicReadsV5,
+    unit: FlatReadV5,
+    expected: &Tensor,
+    own: &dyn Fn() -> Result<Vec<Tensor>, String>,
+    token: &dyn Fn() -> Option<PromptTileOpeningV1>,
+) -> FlatFindingV5 {
+    let pr = match common::prepare(c) {
+        Ok(pr) => pr,
+        Err(e) => return error(e),
+    };
+    if !pr.valid(unit.occurrence, unit.node) || unit.position >= c.claim.positions || unit.leaf.is_some() {
+        return error("invalid selected legacy relation");
+    }
+    relation(c, &pr, public, unit, expected, own, token)
+}
+
+/// Exact independent logits versus the immutable delivered decode id. Public
+/// node acquisition authenticates all locally produced leaf values; all trace
+/// roots must be checked separately before this can establish full cleanliness.
+pub fn locate_selected_decode_v5(
+    c: &FlatSegContextV5<'_>,
+    public: &dyn FlatPublicReadsV5,
+    position: u32,
+    expected: &Tensor,
+) -> FlatFindingV5 {
+    if c.claim.encoder.is_some() || position >= c.claim.positions || position + 1 < c.claim.prompt_len {
+        return error("invalid selected decode relation");
+    }
+    let index = position + 1 - c.claim.prompt_len;
+    let Some(&delivered) = c.claim.generated.get(index as usize) else { return error("missing delivered decode id") };
+    let pr = match common::prepare(c) {
+        Ok(pr) => pr,
+        Err(e) => return error(e),
+    };
+    let s = (pr.w.occurrences.len() - 1) as u16;
+    let n = c.claim.program.logits;
+    let (dtype, shape) = pr.declared(s, n, position);
+    if expected.dtype != dtype || expected.shape != shape {
+        return error("independent logits type/shape differs");
+    }
+    let Some(rival) = c.claim.decode.select(expected) else { return error("empty independent logits") };
+    if rival == delivered {
+        return FlatFindingV5::Clean;
+    }
+    let node = match read_node(c, &pr, public, FlatReadV5::node(position, s, n)) {
+        Ok(o) => o,
+        Err(e) => return e,
+    };
+    if flat_profile_commitment_v5(expected).ok() != Some(node.commitment) {
+        return error("logits root differs; localize execution before decode");
+    }
+    let reads = if delivered as usize >= expected.data.len() {
+        Vec::new()
+    } else {
+        [delivered, rival]
+            .iter()
+            .map(|e| {
+                if expected.data.len() >= 64 {
+                    (FlatTreeV5::of(expected).expect("validated logits").layout().leaf_of(*e as u64).unwrap(), 0)
+                } else {
+                    let (row, tile, _) = crate::merkle3::LayoutV3::of(&expected.shape).row_leaf_of(*e as u64).unwrap();
+                    (row, tile)
+                }
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    };
+    match value_proof(expected, Some(node), &reads) {
+        Ok(logits) => checked_fault(c, FlatFaultV5::Decode(FlatDecodeFaultV5 { index, rival, logits })),
+        Err(e) => e,
+    }
+}
+
 /// Re-execute from authenticated job ids and independently acquired parameters.
 /// Retains current/previous position values, not the complete trace. Public
 /// reads have no tensor-value API. Stop at the first fault or DA request. A
@@ -194,6 +275,25 @@ pub(crate) fn check_flat_claim_engine<E: From<FlatFindingV5>>(
     public: &dyn FlatPublicReadsV5,
     artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
     tokens: &[u32],
+    inspect: impl FnMut(
+        &PreparedV1<'_>,
+        FlatReadV5,
+        &Tensor,
+        &dyn Fn() -> Result<Vec<Tensor>, String>,
+        &dyn Fn() -> Option<PromptTileOpeningV1>,
+    ) -> Result<(), E>,
+) -> Result<(), E> {
+    check_flat_claim_engine_mode(c, public, artifact, tokens, true, inspect)
+}
+
+/// V14's explicit external stage mode uses the same authenticated full graph
+/// replay but does not assign decoder semantics to a Rows/Final output.
+pub(crate) fn check_flat_claim_engine_mode<E: From<FlatFindingV5>>(
+    c: &FlatSegContextV5<'_>,
+    public: &dyn FlatPublicReadsV5,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    check_decode: bool,
     mut inspect: impl FnMut(
         &PreparedV1<'_>,
         FlatReadV5,
@@ -262,12 +362,14 @@ pub(crate) fn check_flat_claim_engine<E: From<FlatFindingV5>>(
                 }
             }
         }
-        if c.claim.encoder.is_none() && p + 1 >= c.claim.prompt_len {
+        if check_decode && c.claim.encoder.is_none() && p + 1 >= c.claim.prompt_len {
             let index = p + 1 - c.claim.prompt_len;
             let s = (values.len() - 1) as u16;
             let n = c.claim.program.logits;
             let t = &values[s as usize][n as usize];
-            let delivered = c.claim.generated[index as usize];
+            let Some(&delivered) = c.claim.generated.get(index as usize) else {
+                return Err(TirError::new(TirErrorKind::Operand, "decoder claim lacks its delivered token"));
+            };
             if c.claim.decode.select(t) != Some(delivered) {
                 let finding = (|| {
                     let node = read_node(c, &pr, public, FlatReadV5::node(p, s, n))?;
@@ -339,9 +441,11 @@ mod tests {
         missing: Option<FlatReadV5>,
         borrowed: bool,
         hashes: Cell<u64>,
+        nodes: Cell<u64>,
     }
     impl FlatPublicReadsV5 for Server {
         fn node(&self, u: FlatReadV5) -> Option<NodeOpeningV1> {
+            self.nodes.set(self.nodes.get() + 1);
             if self.missing == Some(u) {
                 return None;
             }
@@ -398,7 +502,7 @@ mod tests {
                 prompt,
                 generated,
                 roots,
-                server: Server { c, values: trace.values, missing: None, borrowed: false, hashes: Cell::new(0) },
+                server: Server { c, values: trace.values, missing: None, borrowed: false, hashes: Cell::new(0), nodes: Cell::new(0) },
             }
         }
         fn context(&self, inline: bool) -> FlatSegContextV5<'_> {
@@ -462,6 +566,65 @@ mod tests {
             }
         }
         assert_eq!(tags, (0..25).collect());
+    }
+    #[test]
+    fn selected_decode_needs_one_authenticated_node_and_no_public_values_or_hashes() {
+        let (p, m, _, _) = state_fixture();
+        for delivered in [1, 128, 200] {
+            let mut trial = Trial::of(p.clone(), m.clone(), vec![1, 2, 3], None);
+            trial.generated[0] = delivered;
+            let logits = trial.server.values[2][1][trial.p.logits as usize].clone();
+            let FlatFindingV5::Fault(f) = locate_selected_decode_v5(&trial.context(true), &trial.server, 2, &logits) else {
+                panic!("missing selected decode fault")
+            };
+            assert!(verify_flat_fault_v5(&trial.context(true), &f).is_ok());
+            assert_eq!(trial.server.nodes.get(), 1);
+            assert_eq!(trial.server.hashes.get(), 0);
+            trial.server.borrowed = true;
+            assert!(matches!(locate_selected_decode_v5(&trial.context(true), &trial.server, 2, &logits), FlatFindingV5::Demand(_)));
+        }
+    }
+    #[test]
+    fn selected_history_court_has_log_leaf_reads_and_two_authenticated_sources() {
+        let (mut p, m, _, hn) = state_fixture();
+        p.states[1].kind = misaka_palw_tir::program::StateKind::Hist { window: 64 };
+        for pos in [0, 1, 24, 25] {
+            let good = Trial::of(p.clone(), m.clone(), vec![1; 26], None);
+            let own = trace_v1(&good.p, &m, &good.prompt).unwrap();
+            let expected = &own.values[pos as usize][0][hn as usize];
+            for e in [0, 63, 64, 128, expected.data.len() - 1] {
+                if e >= expected.data.len() {
+                    continue;
+                }
+                let bad = Trial::of(p.clone(), m.clone(), vec![1; 26], Some((pos, 0, hn, e)));
+                let context = bad.context(true);
+                let pr = common::prepare(&context).unwrap();
+                let operands = || {
+                    operand_sources(&pr, pos, 0, hn)
+                        .unwrap()
+                        .iter()
+                        .map(|src| match src {
+                            OperandSourceV1::Source(SourceV1::Node { position, occurrence, node }) => {
+                                own.values[*position as usize][*occurrence as usize][*node as usize].clone()
+                            }
+                            OperandSourceV1::Source(SourceV1::Zeros { dtype, shape }) => Tensor::zeros(*dtype, shape),
+                            _ => panic!("unexpected history source"),
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let unit = FlatReadV5::node(pos, 0, hn);
+                let FlatFindingV5::Fault(f) =
+                    locate_selected_legacy_relation_v5(&context, &bad.server, unit, expected, &|| Ok(operands()), &|| None)
+                else {
+                    panic!("missing history fault at{pos}:{e}")
+                };
+                assert!(verify_flat_fault_v5(&context, &f).is_ok());
+                assert!(bad.server.nodes.get() <= 3);
+                let bound = FlatTreeV5::of(expected).unwrap().layout().bounds_for::<5>(expected.dtype).unwrap().localization_replies;
+                assert!(bad.server.hashes.get() <= bound);
+                assert!(bad.server.nodes.get() + bad.server.hashes.get() <= 10);
+            }
+        }
     }
     #[test]
     fn flat_stream_verifier_small_nodes_decode_ties_and_wrong_registered_model() {
@@ -599,7 +762,7 @@ mod tests {
                     .collect(),
             );
             let roots = c.segment_roots();
-            let server = Server { c, values: trace.values, missing: None, borrowed: false, hashes: Cell::new(0) };
+            let server = Server { c, values: trace.values, missing: None, borrowed: false, hashes: Cell::new(0), nodes: Cell::new(0) };
             for inline in [true, false] {
                 let ctx = FlatSegContextV5 {
                     profile: flat_trace_profile_id_v5(),

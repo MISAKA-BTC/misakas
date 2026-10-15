@@ -694,6 +694,34 @@ impl VirtualStateProcessor {
                 );
                 continue;
             }
+            // Older builds cannot decode target 6. Below its own fence it
+            // consumes neither ordinary chunk slots nor a funded reservation.
+            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::KernelRouteV1 { bytes, .. } = &object
+                && self.palw_native_action_active_at_v1(&folded, bytes, point.daa_score) == Some(false)
+            {
+                info!("Block {block}: a native action was dropped before its original owning contract, and the block stands");
+                continue;
+            }
+            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, .. } = &object
+                && matches!(chunk.target, kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkTargetV1::FundedProofV11 { .. })
+                && !self.palw_kernel_inner_fence_at(
+                    kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::FundedExecutionV11,
+                    point.daa_score,
+                )
+            {
+                info!("Block {block}: a funded proof chunk was dropped below palw_funded_execution_v11, and the block stands");
+                continue;
+            }
+            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, .. } = &object
+                && matches!(chunk.target, kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkTargetV1::StageProofV14 { .. })
+                && !self.palw_kernel_inner_fence_at(
+                    kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::StageExecutionV14,
+                    point.daa_score,
+                )
+            {
+                info!("Block {block}: a typed stage proof chunk was dropped before its owning fence, and the block stands");
+                continue;
+            }
             // **Lane BUDGET: below `palw_model_bond_allocation_v1` a capital assignment (tag 140) is dropped by name**, first and charged
             // nothing (an older build cannot decode it and skips it, A-2).
             if kaspa_consensus_core::palw_state_v2::palw_object_is_bond_budget_v1(&object)
@@ -2243,6 +2271,63 @@ impl VirtualStateProcessor {
     /// **Bounded.** Walking the state back to an old block costs delta applications, and a flat proof of a table costs every row. A block
     /// more than [`PALW_STATE_PROOF_MAX_LAG_DAA`] behind the sink is refused (pin a newer checkpoint), and so is a collection whose rows
     /// would exceed [`PALW_STATE_PROOF_MAX_BYTES`] (a tree-shaped state commitment is the fix, and a consensus change).
+    pub fn palw_native_execution_audit_v32(
+        &self,
+        block: BlockHash,
+        job: [u8; 64],
+    ) -> Result<
+        (kaspa_consensus_core::header::Header, kaspa_consensus_core::palw_native_audit_v27::CheckedNativeExecutionAuditViewV27),
+        String,
+    > {
+        if self.palw_state_params_v2.is_none() {
+            return Err("native audit32 network has no PALW V2 state".into());
+        }
+        if self.statuses_store.read().get(block).ok() != Some(kaspa_consensus_core::blockstatus::BlockStatus::StatusUTXOValid) {
+            return Err("native audit32 requires a fully validated block, not a pending/header-only candidate".into());
+        }
+        let header = self.headers_store.get_header(block).map_err(|_| "native audit32 original block header absent")?;
+        if kaspa_consensus_core::hashing::header::hash(&header) != block {
+            return Err("native audit32 stored header differs from the requested immutable block".into());
+        }
+        let parent = self.ghostdag_store.get_selected_parent(block).map_err(|_| "native audit32 selected parent absent")?;
+        if self.statuses_store.read().get(parent).ok() != Some(kaspa_consensus_core::blockstatus::BlockStatus::StatusUTXOValid) {
+            return Err("native audit32 selected parent was not independently validated".into());
+        }
+        let sink_daa = self.virtual_stores.read().state.get().map_err(|_| "native audit32 virtual snapshot unavailable")?.daa_score;
+        if header.daa_score.saturating_add(PALW_STATE_PROOF_MAX_LAG_DAA) < sink_daa {
+            return Err("native audit32 original block lies outside bounded replay window".into());
+        }
+        let (at, state) = self.palw_v2_state_at(parent).ok_or("native audit32 selected-parent state unavailable")?;
+        if at != parent || self.palw_committed_root_v1(&state) != header.palw_state_root {
+            return Err("native audit32 exact selected-parent state does not open the original header commitment".into());
+        }
+        let view = state.native_execution_audit_v27(job)?;
+        if view.record().state_root != state.state_root().as_bytes() {
+            return Err("native audit32 original readonly Final view was rebound".into());
+        }
+        Ok(((*header).clone(), view))
+    }
+
+    pub fn palw_native_coinbase_proof_v33(
+        &self,
+        block: BlockHash,
+    ) -> Result<(kaspa_consensus_core::header::Header, kaspa_consensus_core::palw_native_redemption_v33::NativeCoinbaseProofV33), String>
+    {
+        if self.statuses_store.read().get(block).ok() != Some(kaspa_consensus_core::blockstatus::BlockStatus::StatusUTXOValid) {
+            return Err("native redemption33 requires an immutable fully UTXO-validated block".into());
+        }
+        let header = self.headers_store.get_header(block).map_err(|_| "native redemption33 original block header absent")?;
+        let transactions =
+            self.block_transactions_store.get(block).map_err(|_| "native redemption33 original full block body absent")?;
+        let proof = kaspa_consensus_core::palw_native_redemption_v33::prove_native_coinbase_v33(
+            &header,
+            block,
+            &self.native_redemption_params_v33,
+            transactions.iter(),
+        )?;
+        Ok(((*header).clone(), proof))
+    }
+
     pub fn palw_state_proof_v1_impl(
         &self,
         block: BlockHash,
@@ -2267,9 +2352,15 @@ impl VirtualStateProcessor {
             .ghostdag_store
             .get_selected_parent(block)
             .map_err(|_| format!("the node holds no GHOSTDAG data for block {block}"))?;
-        let (_at, state) = self
+        let (at, state) = self
             .palw_v2_state_at(parent)
             .ok_or_else(|| format!("this node cannot establish the PALW state as-of {parent}, the selected parent of {block}"))?;
+        if (collection == kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_AUX_LABEL_V32
+            || collection == kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32)
+            && at != parent
+        {
+            return Err("native audit32 requires the exact selected-parent anchor, not a store-tip fallback".into());
+        }
         // RFC-0009 L2: in the form the header commits (`palw_committed_root_v1`). Past `palw_fork_choice_commitment_v1` the proof's
         // preimage opens the ADR-0043 root inside the envelope; the client unwraps it with the fork-choice opening of `parent`.
         if self.palw_committed_root_v1(&state) != header.palw_state_root {
@@ -2280,13 +2371,26 @@ impl VirtualStateProcessor {
             ));
         }
         let fact = match collection {
+            c if c == kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_AUX_LABEL_V32 => {
+                kaspa_consensus_core::palw_native_audit_proof_v32::prove_native_aux_v32(&state)?
+            }
+            c if c == kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32 => {
+                kaspa_consensus_core::palw_native_audit_proof_v32::prove_native_payouts_v32(&state)?
+            }
             c if c == proof::PALW_PROOF_LABEL_BONDS => proof::prove_bonds_v1(&state),
             c if c == proof::PALW_PROOF_LABEL_CLASSES => proof::prove_classes_v1(&state),
             c if c == proof::PALW_PROOF_LABEL_CLAIMS => proof::prove_claims_v1(&state),
             other => return Err(format!("no such collection {:?}: bonds, classes or claims", String::from_utf8_lossy(other))),
         };
         let bytes: usize = fact.state.preimage.len() + fact.collection.rows.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>();
-        if bytes > PALW_STATE_PROOF_MAX_BYTES {
+        let cap = if collection == kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_AUX_LABEL_V32
+            || collection == kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32
+        {
+            kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_AUX_PROOF_MAX_BYTES_V32
+        } else {
+            PALW_STATE_PROOF_MAX_BYTES
+        };
+        if bytes > cap {
             return Err(format!(
                 "the {} table is {bytes} bytes, over the {PALW_STATE_PROOF_MAX_BYTES} a flat proof may carry: the state commitment is flat, and a tree-shaped one is a consensus change",
                 String::from_utf8_lossy(collection)

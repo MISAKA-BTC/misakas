@@ -744,7 +744,7 @@ impl TransitionBuilder<'_> {
 
     /// **Plan a claim's reservation** (design §2.5): `None` below the fence (the claim is unbudgeted); `Err` when the bond's window or
     /// open-claim cap refuses it — before any write.
-    fn plan_bond_budget_v1(
+    pub(super) fn plan_bond_budget_v1(
         &self,
         ctx: &PalwBlockContextV2,
         bond: PalwBondKeyV2,
@@ -2004,4 +2004,107 @@ pub(super) fn apply_capital_assignment_v1(
         })
         .expect("created above")
         .map_err(|why| refused(&why.to_string()))
+}
+
+/// Independently funded text work grants no consensus block or Final weight.
+/// Its original producer consent precedes this private, fixed Q/T reservation;
+/// actual fee income is reserved separately in role 11 to avoid double R.
+impl TransitionBuilder<'_> {
+    pub(super) fn plan_funded_execution_budget_v13(
+        &self,
+        ctx: &PalwBlockContextV2,
+        producer: PalwBondKeyV2,
+        class: &misaka_palw_kernel::flat_execution11::CheckedNativeExecutionClassV11,
+        job: &misaka_palw_kernel::flat_execution11::ExecutionJobRecordV11,
+    ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
+        use misaka_palw_kernel::flat_execution11::ExecutionClassContextV11;
+        if !class.can_admit()
+            || class.native_admission_epoch() != Some((ctx.block.as_bytes(), ctx.daa_score))
+            || job.class_id != class.record().id()
+            || job.producer != crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&producer)
+            || job.admitted_daa != ctx.daa_score
+            || job.reward == 0
+            || job.escrow_original_debit != job.reward
+            || job.escrow_debit_receipt == [0; 64]
+        {
+            return Err(PalwStateV2Error::BondBudgetRefused(
+                "funded work budget lacks exact native original admission/producer/money".into(),
+            ));
+        }
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(None) };
+        if mirror.allocation_at(ctx.daa_score).is_some() {
+            // BindModelArtifactV2 has no V2 model-line registration. A copied
+            // candidate/descriptor/inventory digest cannot manufacture one.
+            return Err(PalwStateV2Error::BondBudgetRefused(
+                "funded work has no independently authenticated native model-line allocation".into(),
+            ));
+        }
+        self.plan_bond_budget_v1(
+            ctx,
+            producer,
+            None,
+            PalwBudgetAskV1 {
+                block_units: 0,
+                reward_sompi: 0,
+                final_weight: 0,
+                liability_sompi: class.record().required_producer_reserve as u128,
+            },
+            PalwBudgetOriginV1::KernelRoute,
+            0,
+        )
+    }
+}
+pub(super) fn funded_execution_budget_id_v13(job: &misaka_palw_kernel::hash::Digest) -> Hash64 {
+    Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"misaka-palw/native/original-funded-work-budget/v13", job))
+}
+
+impl TransitionBuilder<'_> {
+    /// Original maximum reservation for the independently versioned text29
+    /// book. Structural/public scope derivation alone is not native authority.
+    /// The private current-block token binds the authenticated consent, shared
+    /// principal nonce and paid monetary receipt before this budget is planned.
+    pub(super) fn plan_native_text_budget_v29(
+        &self,
+        ctx: &PalwBlockContextV2,
+        producer: PalwBondKeyV2,
+        maximum: &crate::palw_native_text_stop_v29::CheckedNativeTextMaximumV29,
+        funding: &crate::palw_native_text_stop_v29::NativeTextFundingV29,
+        admission: &crate::palw_native_text_stop_v29::CheckedNativeTextAdmissionV29,
+    ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
+        let bad = |why: &str| PalwStateV2Error::BondBudgetRefused(why.into());
+        admission.check_current(ctx.block.as_bytes(), ctx.daa_score, maximum, funding)
+            .map_err(|why| bad(&why))?;
+        let m = maximum.record();
+        let r = &funding.request;
+        let extras = self.extras.kernel_route.as_ref().ok_or_else(|| bad("text29 budget lacks original consumer environment"))?;
+        let final27 = extras.native_final.as_ref().ok_or_else(|| bad("text29 budget lacks trusted Final27 policy"))?;
+        let original = extras.funded_execution.as_ref().ok_or_else(|| bad("text29 budget lacks original global21 producer terms"))?;
+        let bond = self.state.bonds.get(&producer).ok_or_else(|| bad("text29 original producer bond absent"))?;
+        if !matches!(bond.status, PalwBondStatusV2::Active)
+            || r.producer != crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&producer)
+            || r.producer_operator != bond.operator_id.as_bytes()
+            || r.requester_operator == r.producer_operator
+            || m.final_policy27 != final27.policy.root()
+            || final27.activation == crate::config::params::ForkActivation::never()
+            || !final27.activation.is_active(ctx.daa_score)
+            || original.activation == crate::config::params::ForkActivation::never()
+            || !original.activation.is_active(ctx.daa_score)
+            || funding.admitted_daa != ctx.daa_score
+            || funding.maximum != *m
+            || m.producer_reserve == 0
+        {
+            return Err(bad("text29 QT/R reservation changes original producer, policy, maximum or admission epoch"));
+        }
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(None) };
+        if mirror.allocation_at(ctx.daa_score).is_some() {
+            return Err(bad("text29 has no independently authenticated native model-line allocation"));
+        }
+        self.plan_bond_budget_v1(ctx, producer, None, PalwBudgetAskV1 {
+            block_units: 0, reward_sompi: 0, final_weight: 0,
+            liability_sompi: m.producer_reserve as u128,
+        }, PalwBudgetOriginV1::KernelRoute, 0)
+    }
+}
+pub(super) fn native_text_budget_id_v29(job: &misaka_palw_kernel::hash::Digest) -> Hash64 {
+    Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"misaka-palw/native/original-text-maximum-budget/v29", job))
 }

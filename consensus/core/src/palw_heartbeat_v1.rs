@@ -536,7 +536,8 @@ mod tests {
                 let name = entry.file_name().to_string_lossy().to_string();
                 if path.is_dir() {
                     // Build outputs and vendored sources are not this workspace's call sites.
-                    if !matches!(name.as_str(), "target" | ".git" | "node_modules" | "vendor") {
+                    // `.claude` holds OTHER checkouts (agent worktrees nested in this one), not this workspace.
+                    if !matches!(name.as_str(), "target" | ".git" | "node_modules" | "vendor" | ".claude") {
                         stack.push(path);
                     }
                     continue;

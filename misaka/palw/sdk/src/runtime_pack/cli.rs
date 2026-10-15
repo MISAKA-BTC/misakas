@@ -265,6 +265,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             }
             req.max_window = num(&mut args, "--max-window")?;
             req.gdn_core_wide = take_bool(&mut args, "--gdn-core-wide");
+            req.linear_weight_bits = num(&mut args, "--linear-weight-bits")?.unwrap_or(8);
             if let Some(m) = take_flag(&mut args, "--math") {
                 req.math = MathMode::parse(&m).ok_or_else(|| format!("--math {m}: libm-v1 or std"))?;
             }
@@ -282,6 +283,12 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             let name = take_flag(&mut args, "--name")
                 .unwrap_or_else(|| model.file_name().and_then(|n| n.to_str()).unwrap_or("model").to_string());
             let mut o = BuildOpts::new(req, pack_dir, name);
+            o.metadata_profile = take_flag(&mut args, "--metadata-profile")
+                .map(|p| {
+                    misaka_palw_tir_artifact::metadata_v16::MetadataParseProfileV16::parse(&p)
+                        .ok_or_else(|| format!("unknown --metadata-profile {p}"))
+                })
+                .transpose()?;
             o.repo = take_flag(&mut args, "--repo");
             o.revision = take_flag(&mut args, "--revision");
             o.hf_reference = take_flag(&mut args, "--hf-reference").map(PathBuf::from);

@@ -497,6 +497,19 @@ impl Params {
         if self.palw_task_heads_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_task_heads_v1 = None;
         }
+        if self.palw_stage_execution_v28.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_stage_execution_v28 = None;
+        }
+        if self.palw_native_final_v27.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_native_final_v27 = None;
+        }
+        if self.palw_stage_execution_v14.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_stage_execution_v14 = None;
+        }
+        // Collapse the entire funded execution tuple from never(), including policies.
+        if self.palw_funded_execution_v11.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_funded_execution_v11 = None;
+        }
         // The probabilistic-constraint fence, likewise.
         if self.palw_probabilistic_constraints_v1 == Some(ForkActivation::never()) {
             self.palw_probabilistic_constraints_v1 = None;
@@ -519,6 +532,9 @@ impl Params {
         }
         if self.palw_model_refutation_seal_v1 == Some(ForkActivation::never()) {
             self.palw_model_refutation_seal_v1 = None;
+        }
+        if self.palw_window_class_v37 == Some(ForkActivation::never()) {
+            self.palw_window_class_v37 = None;
         }
         if self.palw_beacon_source_opt_in_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_beacon_source_opt_in_v1 = None;
@@ -1005,11 +1021,16 @@ impl Params {
             palw_gen_range_twin_v1,
             palw_task_heads_v1,
             palw_probabilistic_constraints_v1,
+            palw_funded_execution_v11,
+            palw_stage_execution_v14,
+            palw_native_final_v27,
+            palw_stage_execution_v28,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
             palw_model_refutation_seal_v1,
+            palw_window_class_v37,
             palw_beacon_source_opt_in_v1,
             palw_beacon_source_fee_v1,
             palw_panel_free_v1,
@@ -1303,11 +1324,16 @@ impl Params {
             ("palw_gen_range_twin_v1", *palw_gen_range_twin_v1),
             ("palw_task_heads_v1", palw_task_heads_v1.map(|fence| fence.activation)),
             ("palw_probabilistic_constraints_v1", *palw_probabilistic_constraints_v1),
+            ("palw_funded_execution_v11", palw_funded_execution_v11.as_ref().map(|f| f.activation)),
+            ("palw_stage_execution_v14", palw_stage_execution_v14.as_ref().map(|f| f.activation)),
+            ("palw_native_final_v27", palw_native_final_v27.as_ref().map(|f| f.activation)),
+            ("palw_stage_execution_v28", palw_stage_execution_v28.as_ref().map(|f| f.activation)),
             ("palw_fork_choice_rule_e_v1", *palw_fork_choice_rule_e_v1),
             ("palw_typed_roots_v1", *palw_typed_roots_v1),
             ("palw_fork_choice_commitment_v1", *palw_fork_choice_commitment_v1),
             ("palw_verifier_pay_v1", *palw_verifier_pay_v1),
             ("palw_model_refutation_seal_v1", *palw_model_refutation_seal_v1),
+            ("palw_window_class_v37", *palw_window_class_v37),
             ("palw_beacon_source_opt_in_v1", palw_beacon_source_opt_in_v1.map(|f| f.activation)),
             ("palw_beacon_source_fee_v1", palw_beacon_source_fee_v1.map(|f| f.activation)),
             ("palw_panel_free_v1", palw_panel_free_v1.as_ref().map(|fence| fence.activation)),
@@ -1582,6 +1608,26 @@ impl Params {
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
         }
+        if let Some(fence) = &self.palw_stage_execution_v14 {
+            h.write(b"palw_stage_execution_v14");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policies.root());
+        }
+        if let Some(fence) = &self.palw_native_final_v27 {
+            h.write(b"palw_native_final_v27");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.root());
+        }
+        if let Some(fence) = &self.palw_stage_execution_v28 {
+            h.write(b"palw_stage_execution_v28");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policies.root());
+        }
+        if let Some(fence) = &self.palw_funded_execution_v11 {
+            h.write(b"palw_funded_execution_v11");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policies.root());
+        }
         // The probabilistic-constraint fence, NAMED likewise.
         if let Some(at) = self.palw_probabilistic_constraints_v1 {
             h.write(b"palw_probabilistic_constraints_v1");
@@ -1609,6 +1655,10 @@ impl Params {
         }
         if let Some(at) = self.palw_model_refutation_seal_v1 {
             h.write(b"palw_model_refutation_seal_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_window_class_v37 {
+            h.write(b"palw_window_class_v37");
             h.write(at.daa_score().to_le_bytes());
         }
         if let Some(at) = self.palw_beacon_source_opt_in_v1 {
@@ -2406,11 +2456,16 @@ impl Params {
             palw_gen_range_twin_v1,
             palw_task_heads_v1,
             palw_probabilistic_constraints_v1,
+            palw_funded_execution_v11,
+            palw_stage_execution_v14,
+            palw_native_final_v27,
+            palw_stage_execution_v28,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
             palw_model_refutation_seal_v1,
+            palw_window_class_v37,
             palw_beacon_source_opt_in_v1,
             palw_beacon_source_fee_v1,
             palw_panel_free_v1,
@@ -3193,6 +3248,18 @@ impl Params {
         if let Some(fence) = palw_task_heads_v1.as_mut() {
             fork(&mut fence.activation, visit);
         }
+        if let Some(fence) = palw_stage_execution_v14.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
+        if let Some(fence) = palw_native_final_v27.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
+        if let Some(fence) = palw_stage_execution_v28.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
+        if let Some(fence) = palw_funded_execution_v11.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         // The probabilistic-constraint fence. Some-only.
         if let Some(activation) = palw_probabilistic_constraints_v1.as_mut() {
             fork(activation, visit);
@@ -3214,6 +3281,9 @@ impl Params {
             fork(activation, visit);
         }
         if let Some(activation) = palw_model_refutation_seal_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_window_class_v37.as_mut() {
             fork(activation, visit);
         }
         if let Some(fence) = palw_beacon_source_opt_in_v1.as_mut() {
@@ -3770,11 +3840,16 @@ impl Params {
             palw_gen_range_twin_v1,
             palw_task_heads_v1,
             palw_probabilistic_constraints_v1,
+            palw_funded_execution_v11,
+            palw_stage_execution_v14,
+            palw_native_final_v27,
+            palw_stage_execution_v28,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
             palw_model_refutation_seal_v1,
+            palw_window_class_v37,
             palw_beacon_source_opt_in_v1,
             palw_beacon_source_fee_v1,
             palw_panel_free_v1,
@@ -4611,6 +4686,26 @@ impl Params {
             h.write(fence.activation.daa_score().to_le_bytes());
             fence.write_value_into(&mut h);
         }
+        if let Some(fence) = palw_stage_execution_v14 {
+            h.write(b"palw_stage_execution_v14");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policies.root());
+        }
+        if let Some(fence) = palw_native_final_v27 {
+            h.write(b"palw_native_final_v27");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.root());
+        }
+        if let Some(fence) = palw_stage_execution_v28 {
+            h.write(b"palw_stage_execution_v28");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policies.root());
+        }
+        if let Some(fence) = palw_funded_execution_v11 {
+            h.write(b"palw_funded_execution_v11");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policies.root());
+        }
         // The probabilistic-constraint fence, Some-only for the same reason.
         if let Some(activation) = palw_probabilistic_constraints_v1 {
             h.write(b"palw_probabilistic_constraints_v1");
@@ -4638,6 +4733,10 @@ impl Params {
         }
         if let Some(activation) = palw_model_refutation_seal_v1 {
             h.write(b"palw_model_refutation_seal_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_window_class_v37 {
+            h.write(b"palw_window_class_v37");
             h.write(activation.daa_score().to_le_bytes());
         }
         if let Some(activation) = palw_beacon_source_opt_in_v1 {

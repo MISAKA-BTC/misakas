@@ -45,6 +45,7 @@ rand_chacha.workspace = true
 clap = { workspace = true, features = ["derive"] }
 rayon.workspace = true
 blake2b_simd.workspace = true
+sha2.workspace = true
 # The conversion's transcendental functions (activation and RoPE tables, scale arithmetic) are the
 # pure-Rust libm's, not the platform's, so an artifact rebuilt anywhere has the same bytes
 # (`detmath`, math mode `libm-v1`). Already in Cargo.lock.
@@ -57,6 +58,7 @@ misaka-palw-tir-exec = { path = "../exec" }
 # Freeze criterion 4 on the lowered programs (tests/three_way.rs): the second implementation beside
 # the reference evaluator and the typed backend. Tests only.
 misaka-palw-tir-ref2 = { path = "../../../../testing/reference/palw-tir-ref2" }
+sha2.workspace = true
 
 [features]
 # The per-architecture Rust parsers this crate had before model adapters became data

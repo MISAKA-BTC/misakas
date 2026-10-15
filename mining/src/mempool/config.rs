@@ -117,6 +117,8 @@ pub struct Config {
     /// `false` by default, so every other network — testnet-11, devnet, mainnet — and every unit
     /// fixture selects exactly as it did before: no carrier is indexed and no lane is built.
     pub palw_h1_carrier_priority: bool,
+    /// Original network queue promise, provisioned at startup before workers.
+    pub native_queue_policy_v30: Option<kaspa_consensus_core::palw_native_queue_v30::NativeQueuePolicyV30>,
 }
 
 impl Config {
@@ -177,6 +179,7 @@ impl Config {
             attestation_policy: AttestationMempoolPolicy::disabled(),
             // ADR-0152 H-1: off unless the network arms R-core+ (the daemon's wiring).
             palw_h1_carrier_priority: false,
+            native_queue_policy_v30: None,
         }
     }
 
@@ -233,13 +236,17 @@ impl Config {
             attestation_policy: AttestationMempoolPolicy::disabled(),
             // ADR-0152 H-1: off unless the network arms R-core+ (the daemon's wiring).
             palw_h1_carrier_priority: false,
+            native_queue_policy_v30: None,
         }
     }
 
     pub fn apply_ram_scale(mut self, ram_scale: f64) -> Self {
         // Allow only scaling down
-        self.maximum_transaction_count = (self.maximum_transaction_count as f64 * ram_scale.min(1.0)) as usize;
-        self.mempool_size_limit = (self.mempool_size_limit as f64 * ram_scale.min(1.0)) as usize;
+        let (packets, bytes) =
+            self.native_queue_policy_v30.as_ref().map_or((0, 0), |p| (p.max_packets as usize, p.max_owned_bytes as usize));
+        self.maximum_transaction_count =
+            packets + (self.maximum_transaction_count.saturating_sub(packets) as f64 * ram_scale.min(1.0)) as usize;
+        self.mempool_size_limit = bytes + (self.mempool_size_limit.saturating_sub(bytes) as f64 * ram_scale.min(1.0)) as usize;
         self
     }
 
@@ -253,6 +260,18 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_ram_scaling_preserves_original_native_queue_promise() {
+        let mut cfg = Config::build_default(120_000, false, 500_000);
+        let policy = kaspa_consensus_core::palw_native_queue_v30::NativeQueuePolicyV30::probe([9; 64]);
+        cfg.mempool_size_limit += policy.max_owned_bytes as usize;
+        cfg.maximum_transaction_count += policy.max_packets as usize;
+        cfg.native_queue_policy_v30 = Some(policy.clone());
+        let scaled = cfg.apply_ram_scale(0.01);
+        assert!(policy.consumer_capacity(scaled.maximum_transaction_count, scaled.mempool_size_limit));
+        assert_eq!(scaled.native_queue_policy_v30.as_ref().unwrap().root(), policy.root());
+        assert!(scaled.mempool_size_limit > policy.max_owned_bytes as usize);
+    }
 
     /// **A 120-second network must not report zero blocks per second** (testnet-12, 2026-08-22).
     ///

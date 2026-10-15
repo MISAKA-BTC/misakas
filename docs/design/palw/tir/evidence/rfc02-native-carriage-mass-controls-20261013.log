@@ -1,0 +1,9 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 34s
+     Running unittests src/lib.rs (/tmp/rfc02-native-check/debug/deps/kaspa_consensus_core-b76d3b72e05b4671)
+
+running 2 tests
+test palw_native_carriage_v22::tests::original_source_packet_refuses_contextual_storage_and_signature_growth ... ok
+test palw_native_carriage_v22::tests::complete_source_packet_uses_actual_mass_not_the_inner_byte_cap ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3922 filtered out; finished in 0.00s

@@ -294,6 +294,8 @@ impl RpcApi for PalwSocketNode {
                 block_hash: block.to_string(),
                 header: Some(RpcHeader::from(&header)),
                 state_preimage: proof.state.preimage,
+                native_audit_record: None,
+                native_coinbase_proof: None,
                 collection,
                 rows: proof.collection.rows.into_iter().map(|(key, value)| RpcPalwProofRow { key, value }).collect(),
             },

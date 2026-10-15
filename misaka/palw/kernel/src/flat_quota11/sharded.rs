@@ -79,7 +79,7 @@ impl ProtectedSealSummaryV11 {
         Ok(row)
     }
 }
-fn read_fixed_row<T: BorshDeserialize>(bytes: &[u8], width: u64) -> Result<T, String> {
+pub(super) fn read_fixed_row<T: BorshDeserialize>(bytes: &[u8], width: u64) -> Result<T, String> {
     if bytes.len() as u128 != width as u128 {
         return Err("quota selected row has wrong fixed extent".into());
     }
@@ -436,6 +436,48 @@ impl CheckedQuotaShardV11 {
         }
         self.state.mark_expired_terminal_closed(policy, epoch, binding, class, terminal, paid)
     }
+    pub fn mark_expired_stage_terminal_closed_v14(
+        &mut self,
+        policy: &QuotaPolicyV11,
+        epoch: &TrustedEpochV11,
+        binding: &SubjectBindingV11,
+        class: &crate::flat_inputs12::source14::CheckedStageClassV14,
+        plan: &stage14::CheckedStageQuotaV14,
+        terminal: &stage14::StageJobBookV14,
+        paid: &ExpiredTerminalDebitV11,
+    ) -> Result<(), String> {
+        if self.selected_job != binding.job_id {
+            return Err("quota expired stage mark selects a different original job".into());
+        }
+        self.state.mark_expired_stage_terminal_closed_v14(policy, epoch, binding, class, plan, terminal, paid)
+    }
+    pub fn debit_stage_verdict_v14(
+        &mut self, policy: &QuotaPolicyV11, epoch: &TrustedEpochV11,
+        class: &crate::flat_inputs12::source14::CheckedStageClassV14,
+        book: &stage14::StageJobBookV14, plan: &stage14::CheckedStageQuotaV14,
+    ) -> Result<stage14::StageVerdictDebitV14, String> {
+        if self.selected_job != book.id() { return Err("stage verdict selects a different original job".into()); }
+        let new_interval = self.preflight_unreserved_actor(policy, epoch)?;
+        let paid = self.state.debit_stage_verdict_v14(policy, epoch, self.actor, class, book, plan)?;
+        self.account_unreserved_actor(new_interval);
+        Ok(paid)
+    }
+    pub fn debit_stage_protected_verdict_v14(
+        &mut self,policy:&QuotaPolicyV11,epoch:&TrustedEpochV11,plan:&stage14::CheckedStageQuotaV14,
+        original_paid:&Digest,carrier:&[u8],
+    )->Result<stage14::StageVerdictDebitV14,String>{
+        let key=self.seal_key.ok_or("stage owncourt selected paid seal absent")?;
+        let binding=self.subject_row().ok_or("stage owncourt original subject absent")?.binding.clone();
+        if self.selected_job!=binding.job_id{return Err("stage owncourt changes selected original job".into());}
+        self.state.debit_stage_protected_verdict_v14(policy,epoch,self.actor,&binding,plan,&key,original_paid,carrier)
+    }
+    pub fn mark_stage_verdict_closed_v14(
+        &mut self, policy: &QuotaPolicyV11, epoch: &TrustedEpochV11,
+        terminal: &CheckedQuotaTerminalV11, paid: &stage14::StageVerdictDebitV14,
+    ) -> Result<(), String> {
+        if self.selected_job != terminal.binding.job_id { return Err("stage verdict terminal changes original job".into()); }
+        self.state.mark_stage_verdict_closed_v14(policy, epoch, terminal, paid)
+    }
     pub fn admit_protected_seal(
         &mut self,
         policy: &QuotaPolicyV11,
@@ -492,6 +534,118 @@ impl CheckedQuotaShardV11 {
         paid: &ProtectedFragmentDebitV11,
     ) -> Result<(), String> {
         self.state.accept_protected_fragment(policy, epoch, self.actor, plan, paid)
+    }
+    /// Collect the selected owner's expired seal. Its native row membership,
+    /// original terminal/nonce witness and owner-counter row are authenticated
+    /// before loading this shard. Public third-party collection needs a separate
+    /// payer row; it must not silently charge this selected owner's allowance.
+    pub fn collect_expired_protected_seal(
+        &mut self,
+        policy: &QuotaPolicyV11,
+        epoch: &TrustedEpochV11,
+        terminal: &CheckedQuotaTerminalV11,
+    ) -> Result<ProtectedQuotaReceiptV11, String> {
+        let key = self.seal_key.ok_or("quota shard expired selected seal absent")?;
+        if self.selected_job != terminal.binding.job_id
+            || self.subject_key != Some(terminal.binding.job_id)
+            || self.global_seal_count == 0
+            || self.retained_actor_seals == 0
+        {
+            return Err("quota shard collection selects another original subject/counter".into());
+        }
+        let new_interval = self.preflight_unreserved_actor(policy, epoch)?;
+        let receipt = self.state.collect_expired_protected_seal(policy, epoch, self.actor, &key, terminal)?;
+        self.account_unreserved_actor(new_interval);
+        self.global_seal_count -= 1;
+        self.retained_actor_seals -= 1;
+        self.seal_key = None;
+        Ok(receipt)
+    }
+    /// Public collection charges the current caller's ordinary allowance and
+    /// authenticates a fifth, distinct seal-owner counter row. Native must
+    /// prepay the fixed restore before calling and atomically persist the caller,
+    /// returned owner, global, subject, and deletion; carrier roots are invalid.
+    /// No owner allowance or earlier-interval reservation is refunded/recreated.
+    pub fn collect_expired_protected_seal_for(
+        &mut self,
+        policy: &QuotaPolicyV11,
+        epoch: &TrustedEpochV11,
+        terminal: &CheckedQuotaTerminalV11,
+        seal: &ProtectedSealSummaryV11,
+        expected_seal: &Digest,
+        owner: &QuotaActorRowV11,
+        expected_owner: &Digest,
+    ) -> Result<(ProtectedQuotaReceiptV11, QuotaActorRowV11), String> {
+        if self.actor == owner.actor
+            || self.seal_key.is_some()
+            || self.selected_job != terminal.binding.job_id
+            || self.subject_key != Some(terminal.binding.job_id)
+            || seal.admitted_interval >= epoch.network_interval
+            || epoch.block_daa <= seal.key.horizon_daa
+        {
+            return Err("public seal collection requires distinct payer and exact expired original subject".into());
+        }
+        let subject = self.subject_row().ok_or("public seal collection lost subject")?;
+        let global = self.global_row();
+        // Validate original complete aggregates with the selected owner's row;
+        // this projection stays bounded to one subject and one seal.
+        let _owner_projection = Self::from_native_rows(
+            policy,
+            &global,
+            &global.root(),
+            owner.actor,
+            self.selected_job,
+            Some(seal.key.root()),
+            Some((owner, expected_owner)),
+            Some((subject, &subject.row_root())),
+            Some((seal, expected_seal)),
+        )?;
+        let new_interval = self.preflight_unreserved_actor(policy, epoch)?;
+        // In addition to the frozen collection tariff, charge fixed reads,
+        // hashes/copies and native journal for BOTH actor rows and all selected
+        // records. This price is derived here, never supplied by the caller.
+        let restore_bytes = QUOTA_GLOBAL_ROW_BYTES_V11
+            + 2 * QUOTA_SELECTED_ACTOR_ROW_BYTES_V11
+            + QUOTA_SELECTED_SUBJECT_ROW_BYTES_V11
+            + QUOTA_SELECTED_SEAL_ROW_BYTES_V11
+            + (16 << 10);
+        let extra = action_envelope(restore_bytes as u128 * 64, restore_bytes, None)?;
+        let mut scratch = self.state.clone();
+        scratch.debit_unreserved(policy, epoch, self.actor, &extra)?;
+        scratch.protected_seals.insert(seal.key.root(), seal.clone());
+        let mut receipt = scratch.collect_expired_protected_seal(policy, epoch, self.actor, &seal.key.root(), terminal)?;
+        receipt.consumed = receipt.consumed.checked_add(&extra)?;
+        let mut remaining_owner = owner.clone();
+        remaining_owner.retained_protected_seals -= 1;
+        self.state = scratch;
+        self.account_unreserved_actor(new_interval);
+        self.global_seal_count -= 1;
+        Ok((receipt, remaining_owner))
+    }
+    /// The rooted per-job retained counter covers ALL seals, including rows
+    /// outside this projection and v13 discovery tickets. An empty local map
+    /// cannot prove the original job has no remaining protected reservation.
+    pub fn collect_closed_expired(
+        &mut self,
+        policy: &QuotaPolicyV11,
+        epoch: &TrustedEpochV11,
+        terminal: &CheckedQuotaTerminalV11,
+    ) -> Result<QuotaCollectionReceiptV11, String> {
+        let subject = self.subject_row().ok_or("quota shard closed collection subject absent")?;
+        if self.selected_job != terminal.binding.job_id
+            || self.subject_key != Some(terminal.binding.job_id)
+            || subject.retained_protected_seals != 0
+            || self.global_subject_count == 0
+            || self.seal_key.is_some()
+        {
+            return Err("quota shard closed collection lacks original complete retained count".into());
+        }
+        let new_interval = self.preflight_unreserved_actor(policy, epoch)?;
+        let receipt = self.state.collect_closed_expired(policy, epoch, self.actor, terminal)?;
+        self.account_unreserved_actor(new_interval);
+        self.global_subject_count -= 1;
+        self.subject_key = None;
+        Ok(receipt)
     }
 }
 impl QuotaStateV11 {

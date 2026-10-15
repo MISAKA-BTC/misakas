@@ -714,6 +714,13 @@ pub struct VirtualStateProcessor {
     /// Resolved in ONE place, [`Self::palw_kernel_route_at`]. Never armable by a real network (its validation refuses every
     /// height); a test builds the config without that validation.
     pub(super) palw_probabilistic_constraints_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_funded_execution_v11: Option<kaspa_consensus_core::palw_funded_execution_v11::PalwFundedExecutionFenceV11>,
+    pub(super) palw_stage_execution_v14: Option<kaspa_consensus_core::palw_flat_stage_v14::PalwStageExecutionFenceV14>,
+    pub(super) palw_native_final_v27: Option<kaspa_consensus_core::palw_native_final_v27::PalwNativeFinalFenceV27>,
+    pub(super) palw_stage_execution_v28: Option<kaspa_consensus_core::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
+    pub(super) native_carriage_mass: kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22,
+    /// Immutable owning ruleset for independent native proof exporters.
+    pub(super) native_redemption_params_v33: Arc<Params>,
     /// `Params::palw_fork_choice_commitment_v1` (RFC-0009 L2): past it a header commits its selected parent's post-state as
     /// `BLAKE2b(fork-choice leaf ‖ ADR-0043 root)`. Every site that produces or checks a header root goes through
     /// [`Self::palw_committed_root_v1`]; `None` everywhere, where that is `state.state_root()` byte for byte.
@@ -730,6 +737,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_verifier_pay_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_model_refutation_seal_v1` (RFC-0002 P0, RFC02-T): candidate refutations only as sealed reveals (inner 36 / 37).
     pub(super) palw_model_refutation_seal_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_window_class_v37` (RFC-0002 §II.14.60): the typed window class, funded action 45.
+    pub(super) palw_window_class_v37: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_beacon_source_opt_in_v1: Option<kaspa_consensus_core::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1>,
     pub(super) palw_beacon_source_fee_v1: Option<kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1>,
     /// `Params::palw_signed_registration_v1` (RFC-0009 G-EXPIRY / G-RULESET): may a class registration arrive in a signed-expiry envelope
@@ -1407,11 +1416,20 @@ impl VirtualStateProcessor {
             palw_kimi_k3: params.palw_kimi_k3_fence(),
             palw_tir_v1: params.palw_tir_v1_fence(),
             palw_probabilistic_constraints_v1: params.palw_probabilistic_constraints_v1,
+            palw_funded_execution_v11: params.palw_funded_execution_v11.clone(),
+            palw_stage_execution_v14: params.palw_stage_execution_v14.clone(),
+            palw_native_final_v27: params.palw_native_final_v27.clone(),
+            palw_stage_execution_v28: params.palw_stage_execution_v28.clone(),
+            native_redemption_params_v33: Arc::new(params.clone()),
+            native_carriage_mass: kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22::from_consensus_params(
+                params,
+            ),
             palw_fork_choice_commitment_v1: params.palw_fork_choice_commitment_v1,
             palw_panel_free_v1: params.palw_panel_free_v1.clone(),
             palw_typed_roots_v1: params.palw_typed_roots_v1,
             palw_verifier_pay_v1: params.palw_verifier_pay_v1,
             palw_model_refutation_seal_v1: params.palw_model_refutation_seal_v1,
+            palw_window_class_v37: params.palw_window_class_v37,
             palw_beacon_source_opt_in_v1: params.palw_beacon_source_opt_in_v1,
             palw_beacon_source_fee_v1: params.palw_beacon_source_fee_v1,
             palw_signed_registration_v1: params.palw_signed_registration_v1,

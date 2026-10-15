@@ -22,8 +22,18 @@ mod protected;
 pub use protected::*;
 mod sharded;
 pub use sharded::*;
+/// Explicit v13 pre-proof discovery over the same authenticated aggregates.
+/// Legacy v11 paid proof seals retain their wire and quota rules.
+pub mod discovery13;
+pub mod source16;
+pub mod trace17;
 #[cfg(test)]
 mod protected_tests;
+/// Explicit typed-stage bindings reuse the frozen 21-axis accounting engine;
+/// they cannot enter the legacy text admission constructors.
+pub mod stage14;
+pub mod initial31;
+pub mod text29;
 
 pub const QUOTA_AXES_V11: usize = 21;
 pub const FUTURE_ACTION_KINDS_V11: usize = 6;
@@ -63,14 +73,14 @@ impl QuotaQuantitiesV11 {
         }
         Ok(value)
     }
-    fn checked_mul(&self, times: u32) -> Result<Self, String> {
+    pub fn checked_mul(&self, times: u32) -> Result<Self, String> {
         let mut value = Self::default();
         for (out, a) in value.0.iter_mut().zip(self.0.iter()) {
             *out = a.checked_mul(times as u128).ok_or("quota multiplication overflow")?;
         }
         Ok(value)
     }
-    fn within(&self, cap: &Self) -> Result<(), String> {
+    pub fn within(&self, cap: &Self) -> Result<(), String> {
         for axis in ResourceAxisV10::ALL {
             if self.get(axis) > cap.get(axis) {
                 return Err(format!("quota cap exceeded: {axis:?}"));
@@ -161,13 +171,13 @@ impl TrustedEpochV11 {
         policy.check()?;
         Ok(Self { block_hash, block_daa, network_interval: block_daa / policy.interval_daa })
     }
-    fn check(&self, policy: &QuotaPolicyV11) -> Result<(), String> {
+    pub fn check(&self, policy: &QuotaPolicyV11) -> Result<(), String> {
         if self.network_interval != self.block_daa / policy.interval_daa {
             return Err("quota epoch interval differs from trusted DAA".into());
         }
         Ok(())
     }
-    fn interval_end(&self, policy: &QuotaPolicyV11) -> Result<u64, String> {
+    pub fn interval_end(&self, policy: &QuotaPolicyV11) -> Result<u64, String> {
         self.network_interval
             .checked_add(1)
             .and_then(|v| v.checked_mul(policy.interval_daa))
@@ -823,6 +833,11 @@ pub struct DerivedOrdinaryMetadataV11 {
 impl DerivedOrdinaryMetadataV11 {
     pub fn quantities(&self) -> &QuotaQuantitiesV11 {
         &self.quantities
+    }
+    /// Native folds that derive a fixed ordinary restore/journal envelope from
+    /// authenticated original extents (not a wire declaration) wrap it here.
+    pub fn from_native_envelope(quantities: QuotaQuantitiesV11) -> Self {
+        Self { quantities }
     }
 }
 pub fn derive_ordinary_metadata_v11(program: &TirProgramV1, pc: &ParamCommitmentsV1) -> Result<DerivedOrdinaryMetadataV11, String> {

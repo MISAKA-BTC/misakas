@@ -11,7 +11,7 @@
 use super::conformance::{self, ImplSet};
 use super::hfref::{self, HfReference};
 use super::manifest::*;
-use crate::tir_layout::{TirLayoutChoiceV1, tir_declare_layout_v1};
+use crate::tir_layout::TirLayoutChoiceV1;
 use crate::tir_manifest::PalwTirManifestV1;
 use misaka_palw_tir_lower::adapter::{self, canonical_json};
 use misaka_palw_tir_lower::convert::{ConvertOutcome, ConvertRequest, convert_model};
@@ -53,6 +53,8 @@ pub struct BuildOpts {
     /// **Streamed conformance** (RFC-0002 Part II §II.9 L2), as [`super::verify::VerifyOpts::streamed`]: `None` — automatically, for an
     /// artifact over [`conformance::STREAM_ABOVE_BYTES_V1`].
     pub streamed: Option<bool>,
+    /// Explicit artifact provenance parsing; None retains the historical build parser.
+    pub metadata_profile: Option<misaka_palw_tir_artifact::metadata_v16::MetadataParseProfileV16>,
 }
 
 impl BuildOpts {
@@ -73,6 +75,7 @@ impl BuildOpts {
             declare: Vec::new(),
             allow_out_of_tolerance: false,
             streamed: None,
+            metadata_profile: None,
         }
     }
 }
@@ -238,7 +241,10 @@ pub fn build(opts: &BuildOpts, log: &dyn Fn(String)) -> Result<BuiltPack, String
     let m = PalwTirManifestV1::derive_streamed(artifact)?;
     let meta: serde_json::Value = {
         let c = misaka_palw_tir_artifact::PalwTirContainerV1::open(artifact).map_err(|e| e.to_string())?;
-        serde_json::from_str(&c.header.meta).unwrap_or(serde_json::Value::Null)
+        match opts.metadata_profile {
+            Some(p) => misaka_palw_tir_artifact::metadata_v16::parse_metadata_v16(&c.header.meta, p)?,
+            None => serde_json::from_str(&c.header.meta).unwrap_or(serde_json::Value::Null),
+        }
     };
     let logits_scale = conv.report.logits_scale;
     let convention = meta.get("logits_convention").and_then(|v| v.as_str()).unwrap_or("legacy-greedy-only").to_string();
@@ -326,7 +332,16 @@ pub fn build(opts: &BuildOpts, log: &dyn Fn(String)) -> Result<BuiltPack, String
         out.push(format!(".{}.palwtir", d.network));
         let out = PathBuf::from(out);
         log(format!("declaring the class on {}", d.network));
-        let r = tir_declare_layout_v1(&params, bundle, artifact, &out, &d.choice, Some(&opts.name))?;
+        let r = crate::tir_layout::tir_declare_layout_with_metadata_profile_v16(
+            &params,
+            bundle,
+            artifact,
+            &out,
+            &d.choice,
+            Some(&opts.name),
+            None,
+            opts.metadata_profile,
+        )?;
         r.admission.as_ref().map_err(|e| format!("{}: the class is not admitted: {e}", d.network))?;
         let dm = PalwTirManifestV1::derive_streamed(&out)?;
         let class = misaka_palw_tir_exec::node::TirArtifactV1::open(&out)?.class()?;
@@ -419,10 +434,12 @@ pub fn build(opts: &BuildOpts, log: &dyn Fn(String)) -> Result<BuiltPack, String
             },
             max_window: request.max_window,
             gdn_core_wide: request.gdn_core_wide,
+            linear_weight_bits: request.linear_weight_bits,
             context: request.context,
             calibration,
         },
         converter: ConverterSection {
+            metadata_parsing_profile: opts.metadata_profile.map(|p| p.name().to_string()),
             name: "palw-tir-convert".into(),
             crate_version: env!("CARGO_PKG_VERSION").into(),
             lowering: LOWERING_VERSION_V1.into(),

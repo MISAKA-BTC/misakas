@@ -4196,3 +4196,385 @@ completion percentage; accepted native honest-Final model records remain0.
 **状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 詳細は[RFC/ADRレビューの整理（2026-10-12）](../design/palw/rfc-adr-review-resolution-2026-10-12.md) と[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
 
 Proposal Aの `class_seated`（executor以外のモデル保有operatorを `seat_count` 以上、registrant・executorを除いた独立operatorの下限）は、モデル配布監査ではなく、実際にclaimを検証できるPanelを形成する条件として維持する（ADR-0177 D1補足：Miner・Panelは保有必須、登録者に配布義務はない）。Panel=1暫定modeでは、単一seatで全検証scopeを覆える経路だけを対象とし、旧複数seat前提を一括定数置換しない（RFC-0010 2026-10-12改定）。
+
+### §14.52 — Paid pre-proof discovery and one-slot proof conversion, v13 (2026-10-13)
+
+`flat_quota11::discovery13` defines an explicit v13 policy and bounded fixed-row
+transition API. A discovery ticket needs an authenticated original funded claim,
+independent owner/operator, original deposit receipt and permanent native nonce
+absence. It needs neither a prebuilt proof nor a known fault coordinate. Its
+policy commits the original quota policy and a bounded request allowance.
+Producer admission must cover ordinary lifetime answers plus discovery answers
+for all four retained job slots and the eight post-proof protected demands.
+Underfunding or arithmetic overflow refuses; declaring a ticket does not reserve
+producer deliveries retrospectively.
+
+The ticket uses the original v11 global, actor and job retained-slot counters
+and all 21 cumulative resource axes. Admission reserves request envelopes,
+fixed journal operations and the existing independently derived seal/court/chunk
+plan together. Requests debit before decoding or calling a provider; failed
+expensive attempts stay paid. They consume reserved capacity even when ordinary
+capacity is exhausted. Immutable selected-row roots, exact per-attempt costs,
+ownership, maturity, original interval and deadline are independently checked.
+All returned rows must be applied in a single native journal transaction.
+
+The frozen v11 request tariff used here covers fixed request metadata, not a
+full class/post restore. It also does not cover a complete original PC leaf of
+4096 i128 values. An integrated consumer must price those larger operations in
+separate, explicitly consented supplements before restoring or decoding them;
+the v13 ticket alone grants neither operation.
+
+Conversion authenticates a new exact own proof seal on the same claim, vector,
+owner/operator and original deposit receipt. It takes a new proof maturity and
+transfers one retained slot and only the prepaid proof guarantee to the existing
+v11 protected row. Unused discovery capacity becomes consumption, never an
+ordinary refund. Same-interval retirement likewise consumes unused guarantees;
+after an authenticated native rollover, collection pays a new ordinary fixed
+journal operation and restores no expired credits. Native must preserve a
+permanent spent-ticket/nonce anchor through row collection.
+
+This is a bounded discovery reservation component, not a completed native route.
+The v13 policy must be bound and checked by the eventual versioned native
+Fund/claim/demand/answer/close path. A configured request count is not a theorem
+that every unknown relation can be localized within that count or before its
+deadline. Original-model acquisition remains external (mode A). Native atomic
+coin/nonce/row application, operator-wide capital and rotation accounting,
+complete localization bounds, aggregate adversarial liveness, funded execution
+Final/redemption and all §II.14/A6/A8 acceptance remain open. No shipping fence,
+frozen TIR byte, v7/v9 court, v11 policy root or existing seal grammar changes.
+
+The local-LLM census now reports its shape threshold separately from A8
+acceptance. A header-only report with zero measured active-kernel full-task
+Finals always has `meets_target=false` and `acceptance_status=NOT_RUN`, even
+when its shape-ready lower confidence bound exceeds 90%. Historical shape
+measurements are retained; they are not Final evidence.
+
+
+### 14.53 Prospective native funded and typed-stage namespaces
+
+Inner 63 (`FundedExecutionV11`) and inner 64 (`StageExecutionV14`) are separately
+fenced native integrations of the complete-scope checker, original requester
+escrow, principal nonce, derived shared quota and typed source/input contracts.
+Their policy identities and prospective state extensions do not change frozen
+v1/v7/v9 meanings. Funded proof chunk target 6 belongs to inner 63's owning
+fence and original protected seal, including failed fragment/assembly charges;
+it does not acquire ordinary chunk-pool priority. Typed stage14 source inventory
+covers real original weights/state and never synthetic job-input slots.
+
+Collection of an expired protected seal by a third party requires authenticated
+rows for both current payer and original seal owner, plus the complete original
+subject/global counters and terminal anchor. Price the full fixed restore and
+journal to the payer's current ordinary allowance, decrement exactly the original
+owner/subject/global retained counters, and delete once. Collection must never
+refund old guarantees or recreate a proof attempt. Empty selected maps do not
+prove absence of other retained seals or discovery tickets.
+
+These are prospective implementation contracts. The native monetary, discovery,
+court/DA and independent Final gates, real full-context/checkpoint conditions
+and A6/A8 population criteria in II.14 remain required. Shipping presets keep the
+new fields absent and arming validation remains closed. Current code and actual
+measurement status are recorded in the [implementation ledger](../design/palw/tir/rfc0002-implementation.md).
+
+### 14.54 Original producer consent and additional source obligations
+
+Consent18 precedes Fund and commits the exact original preparation, requester
+and producer principals, operator nonce, reward, quota interval, expiry and
+derived availability/fee policy roots. Old metadata acceptance does not grant
+these rights. A requester cannot allocate another producer's answer capacity,
+catalogue slots or recipient R merely by naming that producer. A consumed
+consent and funded principal nonce remain spent across row collection.
+
+Source16 supplements frozen v11 with an independently derived original-PC
+answer obligation, allowing a complete original leaf within a bounded 128-KiB
+carrier. It covers original headers, subtrees and original 4096-value leaves,
+never a smaller reinterpreted leaf. Its checked quote commits the original
+class, real parameter/source inventory, job quota plan and policy. A rooted
+fixed cached quote is authenticated against those original native roots; a raw
+serialized price vector cannot grant capacity. The source guarantee shares
+all 21 global and producer resource aggregates while preserving the v11
+subject's original attempt/quantity meanings. Answers debit before payload
+decode, including failed attempts. Native pending-request authentication,
+exact per-request attempts, original deadlines and original producer ownership
+are additional obligations of the consumer.
+
+Trace17 separately covers complete original class/post restoration by the
+requesting actor and producer. Source16 and Trace17 are granted only under the
+producer's original Consent18, and paid caller entitlement precedes expensive
+restore. Neither supplement is a Final authority. Public expired collection
+authenticates the original terminal and source row and pays a new current
+caller tariff. It cannot move expired reservations into the current interval,
+refund them or resurrect an obligation.
+
+DA fee income requires explicit capped consent and actual collected caller
+collateral. Original reward plus all credited fees and configured external or
+default gains must remain within the original producer liability. Unpaid or
+partly paid recipient R remains held across sparse DAA jumps; the reuse clock
+starts at actual queue payment. Illustrative policy numbers do not establish
+economic deterrence or guaranteed carriage. Localization turns, simultaneous
+response capacity and whole-path deadlines require their own authenticated
+policy bounds and measurements before independent Final can open.
+
+Physical carriage must use actual consensus compute, transient and contextual
+storage mass. The inner 128-KiB codec limit is not a delivery guarantee: that
+payload plus signature/transaction overhead can exceed the actual 500000 mass
+block. A carrier contract must bound the complete payload, inputs, outputs,
+signature scripts, output scripts, sigops and contextual UTXO storage, and
+authenticate the governing mass constants from Params. New delivery leases
+must share block room with existing H1/readiness lanes, include paid failed
+attempts and proof transport, and prevent fast slot reuse from exceeding the
+promised service rate. A mass quotation alone does not establish that scheduler.
+
+### 14.55 Original physical leases and native carrier selection
+
+Native text Consent23 and Fund24 explicitly bind the original Consent18,
+Pursuit19 and physical service/lease22 roots. Frozen Fund2 and Consent18 are not
+silently upgraded. A consent23 preparation cannot fall back to Fund2 to omit
+its physical obligations. Global lease admission includes failed answer attempts,
+original proof fragments and localization/transport deadlines. An ordinary stream
+or owned proof stream retains its original slot until its original deadline;
+answering early, copying a pending ID or converting a discovery owner to a proof
+owner cannot manufacture an additional concurrent stream.
+
+The native mempool/template path must authenticate the original pending unit,
+producer/owner, remaining attempt and live lease against the template's exact
+selected-parent state. A route tag, parser success, fee or caller-declared mass
+does not grant priority. Recheck the complete populated transaction against its
+original payload/input/output/script/sigop/contextual-storage envelope. Limit
+UTXO variants of the same unit/part and take at most one such variant in the
+reserved selection for a block. The original unit survives transaction fee,
+signature encoding and UTXO changes; source/trace/proof and text/stage namespaces
+remain distinct. Local index count and retained-byte ceilings also apply, and
+every removal or original-unit retirement releases its exact local entry.
+
+Selection uses the same virtual read snapshot as transaction validation. It may
+not substitute the mutable store tip if the selected-parent state is unavailable.
+Existing H1/readiness carriage and the ordinary fee market share the actual block
+mass left by the native packet. A service boundary crossed by a DAA jump must not
+be ignored merely because the new DAA is not an exact multiple of the period.
+Boundary selection alone does not prove the promised duration: bounds on DAA
+advancement, relay/admission, template refill, competing leases and actual
+inclusion require separate measured evidence. A node-local reserved index is not
+a censorship theorem or an independent Final authority.
+
+The current consumer service remains a non-authorizing probe until the reserved
+builder and its delivery assumptions are verified. Stage14 requires its own
+original physical consent/lease before using this lane; a text23 lease cannot
+authorize a stage response. All shipping activation fields remain absent.
+
+### 14.56 Original burst residency and the new full-court contracts
+
+The full-court25 checker, actual/max EOS stopping29 and Stage28 contracts have
+their own records, roots and bounded decoders. They do not enlarge the frozen
+v7/v9/v11/v14 court, count, pricing or length semantics. Text29 reserves the
+original maximum before Fund, checks the actual first-EOS-or-cap length at
+Commit, and retains the maximum reservation after early stopping. Stage28
+reserves the full original component bundle, real source namespace and the
+whole acquisition/discovery/prove/delivery horizon before Fund. New paid
+transport29 uses u16 parts and at most512 parts; old target6/7 carriers retain
+their u8 and64-part meanings.
+
+Every new Final27 consent must additionally bind Queue30's original policy and
+independently derived plan. Delivery density alone cannot admit a burst: account
+for all answer/proof variants, complete carrier envelopes, populated input UTXO
+scripts and retained index/transaction copies. Reserve both packet count and
+owned bytes in the SAME shared native global before collateral or escrow moves.
+Text and Stage share that global. Joint physical22/Queue30 admission is atomic;
+a live legacy23 lease without an original Queue30 promise cannot be silently
+relabeled. A caller-supplied serialized memory quote is not a checked plan.
+
+An honest consumer provisions the declared native queue in addition to its
+ordinary mempool. Ordinary transactions, including local high-priority entries,
+cannot borrow that earmarked capacity. Local RAM scaling cannot reduce the
+original native reservation. The new queue's complete singleton envelope uses
+confirmed inputs; an unconfirmed ancestor is not an additional free carriage
+slot. Same-unit fee replacement subtracts the superseded original variant once,
+while a third independent variant gets no position. Generic fee/expiry removal
+must retain live indexed native units. Genuine terminal collection releases
+the exact Queue30 and physical22 leases together after their original horizon,
+all pending answers/owners/fragments and physical cooldowns close; it never
+restores frozen21 quota credits.
+
+Final27's trusted public profile binds Queue30 policy in network identity.
+An implemented node selector is distinct from measured whole-claim detection,
+complete cold-reference cost, actual delivery and independent Final/redemption.
+These conditions and A6/A8 evidence still gate activation. All shipping fences
+remain absent until completion evidence passes the contract.
+
+Initial registration31 is a separate, ordinary paid pre-Fund transport for a
+large canonical source/class body. Its signed Start binds original owner,
+permanent network sequence, exact target (Text29 class or Stage28 source/class),
+whole-body root, byte extent, u16 count and expiry inside the original interval.
+At most4 objects and1 per mature operator are retained, with512 parts of32KiB,
+16MiB total and2 original attempts per part/assembly. Charge whole retained and
+assembly buffers in the SAME21-axis global before allocating/storing them;
+malformed inner lengths consume their paid attempt before decoding. Assembly
+rechecks all extents and the original hash, then invokes the target's genuine
+registration checks. The transport cannot dispatch Fund, Commit or Final and
+offers no protected delivery guarantee before Fund. Expired paid collection
+deletes exact bounded fragments while retaining the permanent sequence.
+Frozen object/proof chunk counts and canonical TIR program limits are unchanged.
+
+### II.14.57 Independent original credit delivery — audit32/redemption33
+
+Native Final evidence must open original consensus rows under an independently
+pinned header, selected parent and owning ruleset. A producer's serialized audit
+record is a projection to compare against rederived rows, never an authority to
+mint a checked Final. Explicit auxiliary/payout proof labels authenticate their
+exact original commitment positions. New envelope semantics require their own
+opening verifier and cannot use an old-version or raw-root fallback.
+
+New Final27 credits have a unique payment identity binding original job,
+funding, settlement and payee. A pooled queue for another job cannot stand in
+for a previously consumed original credit. Redemption33 checks the actual
+coinbase at transaction index0 against the pinned block's transaction Merkle
+root, including the owning Crescendo mass-commitment fence and exact missing
+subtree grammar. Complete authenticated before/after payout tables prove the
+same canonical drain prefix that the transition clears. Its contiguous outputs
+must preserve original order, amounts and payee scripts, and the exact original
+credit queue must disappear. The resulting evidence names a real outpoint and
+the original credit; it does not infer maturity, current unspentness or a later
+successful spend. Independent node validation and those UTXO lifecycle checks
+remain part of the completion and A6/A8 evidence.
+
+### II.14.58 Text29 native lane, accepted-spend redemption and the A6/A8 receipt rule (2026-10-15)
+
+> **Change marker — 2026-10-15 (RFC text amended; implementation is an unverified
+> source checkpoint).** This section adds three normative rules and amends
+> II.14.57's last paragraph: the "UTXO lifecycle checks" it left open are now
+> specified by rule 2 below. No shipping fence, preset or release height changes.
+
+1. **Text29 action grammar.** Inside the funded namespace (inner 63), actions
+   27–40 belong to Text29 and are judged only past BOTH `palw_funded_execution_v11`
+   and `palw_native_final_v27`; below either fence the bodies ride unjudged.
+   Action 32 is the common paid paged part for namespaces 28 and 29: the part that
+   completes a paid file's Part/Assembly/Court debits also reveals it. Action 34
+   has no body and is refused by name. Action 40 carries an explicit collection
+   kind: 0 retires one expired paid owner, 1 collects the next indexed public
+   answer/default cache, 2 retires a genuinely terminal job. Kind 2 requires every
+   paid owner, caller row, public cache and physical stream to be retired already;
+   it then retires the source guarantee, the shared quota subject and the joint
+   Queue30/physical22 leases once under a kernel-checked original terminal grant
+   (`check_text_terminal_v29`), returns the finite owner-catalogue slots, and keeps
+   the immutable original credit receipt, consumed-consent anchor and nonce counter.
+   Text29 producer reserves and requester DA bonds count in the bond's unavailable
+   collateral beside the v11 sums.
+2. **Independent redemption is an accepted spend.** A producer Final credit of
+   Text29 uses the SAME unique credit identity as Final27
+   (`native_final_credit_queue_v27(job, funding, settlement, payee)`), so audit32 and
+   delivery33 verify it without any Text29-private row DTO (`namespace = 29`).
+   Redemption is complete only when spend35 shows the exact original credit
+   outpoint consumed by a non-coinbase transaction whose id is in the complete
+   accepted-id list of an independently pinned chain block: the verifier recomputes
+   `AcceptedIdMerkleBranchHash64(selected-parent root || sorted mergeset ids)` and
+   compares it with the pinned header. Consensus acceptance implies maturity, prior
+   unspentness and a valid payee signature; the DAA clock is re-checked against the
+   owning ruleset's coinbase maturity. No producer, Panel seat or serving-node flag is
+   an input. Current unspentness of a not-yet-spent credit is not claimed.
+3. **Measurement Final is not A6/A8 evidence.** An isolated calibration34 devnet
+   (`NativeFinalPurposeV34::IsolatedCalibration`, distinct genesis, pinned snapshot)
+   may produce real Final/delivery/spend receipts for measurement. Every audit report
+   names its class (`final_receipt_class`: `measurement-final` or `qualified-final`).
+   The A6/A8 aggregator counts the `final` stage only for a `qualified-final`
+   audit32 report and the `redemption` stage only when that report also carries a
+   verified delivery33 and spend35; a measurement Final stays in the denominator as
+   the named failure `MEASUREMENT_FINAL_ONLY`. The node and every auditor load the
+   calibration snapshot through one shared factory, and the auditor refuses a node
+   whose announced params fingerprint, schedule id or genesis differs from its own
+   reconstruction. A qualified Final requires a shipping network whose Final27 policy
+   has the `Qualified` purpose; no preset has one, and creating one is a user decision.
+
+### II.14.59 Versioned length fields and lead defaults (2026-10-15)
+
+> **Change marker — 2026-10-15 (RFC text amended).** Items 1–4 are *lead defaults
+> pending user review* (reversible). Implementation is an unverified source checkpoint.
+> No public preset, fence or release height changes.
+
+**Versioned length fields (normative).** A job length is never reinterpreted: a change of
+maximum, history growth rule or modality unit is a new contract version. Contract 36
+(`LengthContractV36`) binds the program root, a history rule, the maximum positions and one
+declaration per modality axis:
+
+| Field | Meaning |
+| --- | --- |
+| `rule = FrozenV1 { history_bound }` | v1 semantics unchanged: `maximum_positions ≤` the program's frozen `history_bound` |
+| `rule = Window8 { plan, window, selection_cap }` | the v8 window/selection relation (`flat_history8`); the plan root binds graph coordinates, row shape, window and cap; cost and evidence bounds are derived from that plan **at the requested maximum** (`HistorySelectionPlanV8::scope`) |
+| `token { maximum, unit_bytes = 4, profile = 0 }` | exact u32-id axis, `maximum ≤ maximum_positions` |
+| `patch` / `audio { maximum, unit_bytes, profile }` | RFC03 axes: committed bytes per patch / audio frame and the RFC03 encoding/preprocessing profile root |
+
+A job commits its actual lengths before Fund (`check_actual`): every present axis is
+`1..=maximum`, every absent axis is 0, and no claim or later slice can enlarge them. The
+RFC03 patch/audio axes decode (so their bytes ride unjudged below their fence) but are refused
+by name until their typed stage contract and fence ship (`MEDIA_LENGTHS_ARMABLE_V36 = false`).
+A Text/Stage class that adopts contract 36 is itself a new class version; existing
+Text29/Stage28 classes keep their v1/v28 meanings. Still open: the complete typed v8 graph
+(HistAppend continuity, KV/state binding) and the RFC03 media stage contracts.
+
+**Lead defaults (pending user review).**
+1. *Stage28 credit identity.* Stage28 keeps its own credit identifier (fixed before its
+   settlement exists). The audit record carries it as `payout_queue` with `namespace = 28`;
+   audit extraction authenticates it against the original header and the immutable kind-14
+   receipt; redemption33 skips only the v27 re-derivation for namespace 28. No consensus change.
+2. *Master32 composite Final.* Composed at audit time from the components' individually
+   genuine, settled Stage28 Finals in one pinned state's verified rows, the owning Stage28 policy
+   and public tokens/outputs (each output authenticated against its component's trace
+   openings). The composite is **not a consensus object**: no carrier, row or credit.
+3. *Qualified Finals for validation.* A LOCAL purpose `LocalQualifiedValidation` judges Finals
+   under the Qualified conditions but is bound to an isolated devnet genesis and loadable only
+   through the v34 snapshot path (`palw-class native-calibration34 --purpose local-qualified`).
+   It is never a public preset, t12/mainnet or release height. Reports mark
+   `local_qualified_validation_network`.
+4. *Below-fence rule.* While Final27 is inactive, funded actions 25–40 are neither rejected nor
+   applied: validation passes them unjudged and the fold returns before any read or write, using
+   the identical predicate (Final27 active ∧ OPV active).
+
+**Real-checkpoint chain stages.** Register (class bound to a mature unrefuted source with its
+derived maxima) and seat (job funded with the producer's original consent — the Panel-free
+lane's seat) are re-derived from the same verified full aux opening as Final and redemption.
+
+### II.14.60 Typed window graph v37 and the window class (2026-10-15)
+
+> **Change marker — 2026-10-15 (RFC text amended; unverified source checkpoint).**
+> New dormant fence `palw_window_class_v37` (absent on every preset, Some-only hashed,
+> `Some(never())` collapsed, refused when armed except `always()` on an isolated
+> calibration34 devnet). No release height.
+
+`flat_history8` proves only the selection over an authenticated history image and leaves
+that image's continuity open. **`WindowGraphV37`** closes it for a whole program:
+
+1. **KV/state binding (append).** For every declared history (a layer's K, V or recurrent
+   state image) and every position `p`, the newest row of the image at `p`
+   (`H_p = min(p+1, window)`) equals that position's committed writer-node output.
+2. **State continuity.** Every older row of the image at `p` equals the image at `p-1`,
+   shifted by exactly one row once `p ≥ window`. A reset, skipped, duplicated or reordered
+   row is a two-point counterexample (`WindowFaultV37`: `Append` or `Continuity{slot}`) whose
+   points authenticate against the claim's segment roots; its filing/court bounds derive from
+   the graph (`scope`), never from a declaration.
+3. **Selection binding.** The v8 selection plan's `graph_root` is the outer graph's root and
+   its source must be one of these continuity-bound histories (same node, dtype, row shape).
+
+**Window class v37** (funded action 45) registers a class from one registered Text29 class:
+its `LengthContractV36` must use the `Window8` rule whose plan is the graph's selection plan,
+with the same program root and maximum positions; native re-derives the record (program, real
+PC, inventory, length/graph/scope roots) from the authenticated Text29 class and the program's
+frozen header. Registration creates no job, reward, consensus weight or Final right; the window
+job lane (fund/commit/court using `WindowFaultV37` and the v8 selection court) is the next
+class-version step. **A-2:** below `palw_window_class_v37` (or below Final27) action 45 is
+neither rejected nor applied — validation passes it unjudged and the fold returns before any read
+or write, with the identical predicate. The route decoder's funded action ceiling becomes 45.
+
+#### II.14.60a Window-class job path (2026-10-15, unverified source checkpoint)
+
+A window job **is a Text29 job**: preparation, producer consent, Fund, Commit, close/Final,
+collection, audit32 (namespace 29), delivery33 and spend35 are exactly Text29's. Funded action
+46 (`u16 37 ‖ job ‖ window class`) lets the job's **producer** opt its Funded, uncommitted job
+into a registered window class of the same Text29 class — producer consent is required because
+the window courts add liability beyond the original Text29 consent. Attachment re-derives the
+window class, binds the graph to the actual program (`check_window_graph_program_v37`: node
+count, flat slots, history `[min(p+1,W), row]` and writer `row` shapes at the boundary
+positions), requires the job's maximum positions within the class's and both window court
+envelopes within the job's original paid filing bound. A window-bound job additionally accepts,
+through the same paid paged29 owner/Part/Assembly/Court path and the same conviction and
+settlement, a filing in its own envelope (`u16 37, kind, len, body`; the frozen v25 envelope
+keeps kinds 0..=2): kind 3 = `WindowFaultV37` (append/KV binding or continuity), kind 4 = the
+job's deterministic v8 `HistorySelectionFaultV8` (`window_selection_job_v37`). Actions 45/46
+ride unjudged below `palw_window_class_v37` or Final27 (A-2); the route decoder ceiling is 46.

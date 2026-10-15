@@ -192,7 +192,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let artifact = TirArtifactV1::open(artifact_path)?;
     let meta: serde_json::Value = serde_json::from_str(&artifact.container().header.meta)?;
-    if artifact.plan().program.token_bound != p.vocab || artifact.plan().program.history_bound < p.context || meta["math"] != "libm-v1"
+    // Historical pilot containers used a string; runtime-pack containers use
+    // the converter's exact one-field MathModeV1 image. Both identify the same
+    // portable provenance, and neither changes committed TIR arithmetic.
+    let portable_math = meta["math"] == "libm-v1"
+        || meta["math"].as_object().is_some_and(|m| m.len() == 1 && m.get("mode").is_some_and(|v| v == "libm-v1"));
+    if artifact.plan().program.token_bound != p.vocab || artifact.plan().program.history_bound < p.context || !portable_math
     {
         return Err("generation artifact vocabulary/context/arithmetic".into());
     }

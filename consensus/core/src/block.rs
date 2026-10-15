@@ -168,6 +168,16 @@ pub trait TemplateTransactionSelector {
 /// the template's latest ready attestation epoch, fixed by consensus under the same read lock.
 pub trait TemplateTransactionSelectorFactory {
     fn build_selector(&self, latest_ready_epoch: Option<u64>) -> Box<dyn TemplateTransactionSelector>;
+
+    /// Native carriers use the very same selected-parent snapshot as this
+    /// template. Existing/custom selectors retain their original behavior.
+    fn build_selector_with_native_carriage(
+        &self,
+        latest_ready_epoch: Option<u64>,
+        _native: Option<crate::palw_native_carrier_index_v22::NativeCarriageSnapshotV22>,
+    ) -> Box<dyn TemplateTransactionSelector> {
+        self.build_selector(latest_ready_epoch)
+    }
 }
 
 /// Block template build mode
