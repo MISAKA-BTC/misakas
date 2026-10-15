@@ -78,6 +78,10 @@ pub(super) struct NativeChainRow {
     /// from the sink's and check a header past `palw_fork_choice_commitment_v1` (it commits the leaf with the root). Kept only where that
     /// fence is configured at all (`None` on every shipped network, and with the delta), and boxed so a dormant row stays its size.
     fork_choice: Option<Box<PalwForkChoiceDeltaV1>>,
+    /// **RFC-0018 GAP-R4**: where rule E is in force at this block's own point, the root its chain child must commit for this block's
+    /// post-state (`palw_committed_state_root_v2`: the rule-E leaf v2/v3 envelope), computed once from the post-state — a rule-E leaf
+    /// (window and registry roots) cannot be rebuilt backwards from deltas. `None` below rule E: the v1 rebuild above applies.
+    rule_e_committed: Option<Hash64>,
     // Shared Arc readers retain this reservation after cache replacement.
     // Drop the payload fields before returning the ticket to the checker.
     _resource_lease: Option<NativeDemandLeaseV1>,
@@ -110,9 +114,11 @@ fn native_roots_chain_v1(
         let holds = if i == 0 {
             root == sink_state.state_root()
         } else {
-            let committed = match leaf.as_ref() {
-                Some(leaf) => palw_committed_root_of_parts_v1(leaf, &root, fence),
-                None => root,
+            // RFC-0018 GAP-R4: past rule E the row carries the committed root of its post-state (rule-E leaf envelope).
+            let committed = match (row.rule_e_committed, leaf.as_ref()) {
+                (Some(committed), _) => committed,
+                (None, Some(leaf)) => palw_committed_root_of_parts_v1(leaf, &root, fence),
+                (None, None) => root,
             };
             committed == rows[i - 1].header_palw_root
         };
@@ -250,6 +256,19 @@ impl VirtualStateProcessor {
             };
         let parent =
             self.ghostdag_store.get_selected_parent(cursor).map_err(|_| WalkFault(HistoryGapV1::ParentUnreadable, Some(cursor)))?;
+        // RFC-0018 GAP-R4: past rule E the committed root of this block's post-state, from the post-state itself.
+        let rule_e_committed = match delta_root {
+            Some(_) if self.native_redemption_params_v33.palw_fork_choice_rule_e_active_at(header.daa_score) => {
+                let Some(state) = self.palw_candidate_state_v2(cursor) else {
+                    return Err(WalkFault(HistoryGapV1::DeltaNotRetained, Some(cursor)));
+                };
+                Some(kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::palw_committed_state_root_v2(
+                    &state,
+                    &self.native_redemption_params_v33,
+                ))
+            }
+            _ => None,
+        };
         let row = Arc::new(NativeChainRow {
             hash: cursor,
             parent,
@@ -259,6 +278,7 @@ impl VirtualStateProcessor {
             delta_root,
             evidence,
             fork_choice,
+            rule_e_committed,
             _resource_lease: resource_lease,
         });
         if cursor != pruning {
@@ -781,6 +801,7 @@ mod tests {
                         delta_root: Some(states[n].state_root()),
                         evidence: NativeDeltaEvidenceV1::default(),
                         fork_choice: keep.then(|| Box::new(PalwForkChoiceDeltaV1::of(&deltas[n - 1]))),
+                        rule_e_committed: None,
                         _resource_lease: None,
                     })
                 })
@@ -815,6 +836,7 @@ mod tests {
             delta_root: r.delta_root,
             evidence: NativeDeltaEvidenceV1::default(),
             fork_choice: r.fork_choice.clone(),
+            rule_e_committed: r.rule_e_committed,
             _resource_lease: None,
         }
     }

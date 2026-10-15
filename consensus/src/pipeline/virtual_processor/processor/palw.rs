@@ -7895,7 +7895,10 @@ impl VirtualStateProcessor {
     /// pruning-point import and the native-settlement walk share (`palw_fork_choice_commitment_v1`). Below the fence (every shipped
     /// network) it is `state.state_root()`.
     pub(crate) fn palw_committed_root_v1(&self, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> Hash64 {
-        kaspa_consensus_core::palw_fork_choice_commitment_v1::palw_committed_state_root_v1(state, self.palw_fork_choice_commitment_v1)
+        // RFC-0018 GAP-R4: the form the state's own point selects — flat, leaf v1, rule-E leaf v2, or (rule E with rule E v2 / Gate C)
+        // leaf v3 — under the node's own ruleset. Equal to `palw_committed_state_root_v1` wherever rule E is not in force (every
+        // shipped network: the commitment fence itself is `None` there, so this is `state.state_root()`).
+        kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::palw_committed_state_root_v2(state, &self.native_redemption_params_v33)
     }
 
     /// **G14 lane D: `Params::palw_probabilistic_constraints_v1` resolved at the block's DAA**, in exactly one place.
