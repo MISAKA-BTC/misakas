@@ -1256,12 +1256,21 @@ async fn fresh_public_service(case: PublicCase) {
 }
 
 async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Option<recovery::RecoveryMode>) {
-    // In a debug build the service's call depth overflowed the 2 MiB libtest thread that polls it
-    // (`fresh_public_bond_service_carries_reserved_da_to_objective_default`, SIGABRT for the whole binary). Run it on a dedicated
-    // thread and runtime with the stack a node's own threads have; a panic inside is re-raised here unchanged.
+    on_service_stack(move || fresh_public_service_with_recovery_inner(case, recovery_mode)).await
+}
+
+/// **Runs a node-service E2E body on a dedicated thread and runtime with the stack a node's own threads have.** In a debug build
+/// the service's call depth overflowed the 2 MiB libtest thread that polls it (SIGABRT for the whole binary — every other test in
+/// the process lost — and, under nextest, the test itself). Four worker threads, as the `#[tokio::test]` flavor these bodies were
+/// written for; a panic inside is re-raised here unchanged.
+pub(super) async fn on_service_stack<F, Fut>(body: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()>,
+{
     const STACK: usize = 64 << 20;
     let worker = std::thread::Builder::new()
-        .name("palw-public-service-e2e".into())
+        .name("palw-service-e2e".into())
         .stack_size(STACK)
         .spawn(move || {
             tokio::runtime::Builder::new_multi_thread()
@@ -1270,7 +1279,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                 .enable_all()
                 .build()
                 .expect("a test runtime")
-                .block_on(Box::pin(fresh_public_service_with_recovery_inner(case, recovery_mode)))
+                .block_on(Box::pin(body()))
         })
         .expect("the service test thread starts");
     if let Err(panic) = tokio::task::spawn_blocking(move || worker.join()).await.expect("the join task completes") {
@@ -1548,6 +1557,11 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
         recovery::pruned::import_public_carriage(&mut chain, &premine, claim).await;
     }
     let producer_capital = chain.tc.palw_operator_da_standing_v1(chain.view(claim).producer).unwrap().collateral;
+    // The producer leg's reporter reward is pending only through its reveal window (`reveal_until`), then the sweep awards it and
+    // vesting moves it; the loop below may finish the Panel legs long after that window. The winner is latched when first seen.
+    let mut producer_reward_seen: Option<kaspa_consensus_core::palw_state_v2::PalwRewardWinnerV1> = None;
+    let mut seat_rewards_seen: std::collections::BTreeMap<Hash64, kaspa_consensus_core::palw_state_v2::PalwRewardWinnerV1> =
+        Default::default();
     let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))).unwrap());
     let config = Arc::new(chain.config.clone());
     let tick = Arc::new(TickService::new());
@@ -2283,12 +2297,19 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                     let producer_after = chain.tc.palw_operator_da_standing_v1(view.producer).unwrap().collateral;
                     assert!(producer_capital > 0);
                     assert!(producer_after < producer_capital, "the proven fraud collects the producer's forfeit and S2 action");
-                    let producer_reward = filing.pending.and_then(|p| p.best);
+                    if let Some(best) = filing.pending.and_then(|p| p.best) {
+                        producer_reward_seen.get_or_insert(best);
+                    }
+                    let producer_reward = producer_reward_seen;
                     let mut panels = Vec::new();
                     for seat in &all_seats {
                         let key = kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &claim);
                         let panel = chain.tc.palw_reporter_filing_read_v1(key, Hash64::default(), bond, None).unwrap();
-                        let winner = panel.pending.and_then(|p| p.best);
+                        // Each seat leg's winner is pending only through its own reveal window; latched when first seen, as above.
+                        let winner = panel.pending.and_then(|p| p.best).or_else(|| seat_rewards_seen.get(&key).copied());
+                        if let Some(w) = winner {
+                            seat_rewards_seen.entry(key).or_insert(w);
+                        }
                         if let Some(consumed) = panel.consumed {
                             if winner.is_none() && case != PublicCase::TiledConstraintLargeJob {
                                 continue;
@@ -2321,7 +2342,16 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                         assert_eq!(best.reporter, bond);
                         assert!(best.committed_daa < consumed.accepted_daa);
                     } else {
-                        assert_eq!(consumed.amount, 0, "only a duplicate producer leg has no reporter reward");
+                        assert_eq!(
+                            consumed.amount,
+                            0,
+                            "only a duplicate producer leg has no reporter reward (daa {} consumed {:?} pending {:?} awarded {:?} committed {:?})",
+                            chain.daa(),
+                            consumed,
+                            filing.pending,
+                            filing.awarded,
+                            filing.committed_daa
+                        );
                     }
                     let carriers = chain.history[service_start..]
                         .iter()

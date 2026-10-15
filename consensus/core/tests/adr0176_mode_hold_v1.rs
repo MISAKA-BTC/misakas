@@ -512,10 +512,13 @@ fn c2_panel_one_only_bond_recovers_issuance_in_a_day_but_exits_after_seven() {
     let capital = 1_000 * KAS;
     let mut w = World::new(p);
     w.tick(10);
-    for _ in 0..3 {
+    // The burst view (2 per 72 DAA at this capital) spreads the day's three: two at DAA 10, the third at 83.
+    for _ in 0..2 {
         w.try_claim(1, capital, 10, PalwHoldModeV1::PanelOne, 0).unwrap();
     }
-    assert!(w.try_claim(1, capital, 10, PalwHoldModeV1::PanelOne, 0).is_err(), "the day's three are used");
+    w.tick(83);
+    w.try_claim(1, capital, 83, PalwHoldModeV1::PanelOne, 0).unwrap();
+    assert!(w.try_claim(1, capital, 83, PalwHoldModeV1::PanelOne, 0).is_err(), "the day's three are used");
     w.tick(10 + DAY);
     w.try_claim(1, capital, 10 + DAY, PalwHoldModeV1::PanelOne, 0).expect("Panel=1 issuance recovers after one day");
     // Every claim terminal at once (a colluding immediate Final): the liability hold ends after H_L; the long view does not.

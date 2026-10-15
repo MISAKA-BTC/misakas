@@ -90,7 +90,8 @@ impl PalwChainStateV2 {
     ) -> Option<PalwRoundFeeAdmissionV1> {
         let mirror = params.bond_budget.as_ref().filter(|mirror| mirror.active_at(ctx.daa_score))?;
         let extras = PalwTransitionExtrasV1 { escrow_carve, ..PalwTransitionExtrasV1::default() };
-        let mut builder = TransitionBuilder::new(self, params, false, false, false, false, &extras);
+        // `new` is the tests' panicking constructor; a native-resource refusal here is simply no admission view.
+        let mut builder = TransitionBuilder::try_new(self, params, false, false, false, false, &extras).ok()?;
         tick_bond_budget_v1(&mut builder, ctx).ok()?;
         Some(PalwRoundFeeAdmissionV1 {
             policy: mirror.policy.clone(),
@@ -800,7 +801,12 @@ impl TransitionBuilder<'_> {
         if !self.native_writers_tracking_v1() {
             return Ok(());
         }
-        let max_models = self.params.bond_budget().map_or(u64::from(u16::MAX), |mirror| u64::from(mirror.policy.max_models_per_bond));
+        // An assignment row's width is the ALLOCATION policy's (ADR-0177); without that fence the widest a u16 count admits.
+        let max_models = self
+            .params
+            .bond_budget()
+            .and_then(|mirror| mirror.allocation.as_ref())
+            .map_or(u64::from(u16::MAX), |(_, policy)| u64::from(policy.max_models_per_bond));
         let entry = size_of::<(Hash64, u64)>() as u64;
         let assignment_row = max_models.saturating_mul(2).saturating_mul(entry).saturating_add(64);
         let encoding = assignment_row.saturating_mul(2).max(1024);

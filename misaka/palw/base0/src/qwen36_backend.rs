@@ -1884,11 +1884,14 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     /// one: a figure for fewer decode calls than the attempt makes would under-state it.
     fn attempt_working_set_bytes(&self, prefill_tokens: usize) -> Option<u64> {
         let profile = self.profile.as_ref()?;
-        let job = kaspa_consensus_core::palw_base0_profile::rc_job_context(
+        let mut job = kaspa_consensus_core::palw_base0_profile::rc_job_context(
             profile,
             u32::try_from(prefill_tokens).ok()?,
             self.canonical_job.1.max(1),
         );
+        // The attempt carries THIS backend's network id, and the run's output material prices the job's network identity
+        // (`palw_output_material_bytes_v1`): the gate's figure is the attempt's own, as the dense tier's `resource_job_v1` gives.
+        job.network_id = self.network_id.clone();
         self.resource_profile_v1(Some(&job), kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::Producer)
             .map(|p| p.working_set_bytes())
     }
@@ -4883,7 +4886,9 @@ mod tests {
         assert!(matches!(profile.capture, PalwCaptureRetentionV1::Fold { .. }), "{:?}", profile.capture);
         assert_eq!(profile.leaves, leaves);
         assert!(profile.recurrence_layers >= 1 && profile.gdn_state_bytes > 0, "a hybrid prices its recurrence state");
-        assert!(profile.capture_retained_bytes < 1 << 20, "a small job's fold is small: {}", profile.capture_retained_bytes);
+        // The structural host bound (RFC06 native resources) prices the in-flight block at four 64-B hashes a leaf
+        // (`palw_fold_capture_bytes_v1`: 256 B, was 64 B), so a 4,096-leaf block alone is 1 MiB: small is 2 MiB now.
+        assert!(profile.capture_retained_bytes < 2 << 20, "a small job's fold is small: {}", profile.capture_retained_bytes);
         assert_eq!(backend.runtime_profile_v1().map(|p| p.name()), Some("Q36-KV-i32"));
         assert_eq!(
             backend.attempt_working_set_bytes(job.declared_prefill_tokens as usize),

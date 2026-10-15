@@ -58,7 +58,7 @@ pub(super) fn write_status(builder: &mut TransitionBuilder<'_>, s: &Status) -> R
     Ok(())
 }
 pub(super) fn set_claim(builder: &mut TransitionBuilder<'_>, h: &JobHeader, claim: Digest) -> Result<(), PalwStateV2Error> {
-    let mut s: (_, Status) = read(builder.state.kernel_route.as_ref().unwrap(), 36, &h.id, 2048)?;
+    let mut s: (Digest, Status) = read(builder.state.kernel_route.as_ref().unwrap(), 36, &h.id, 2048)?;
     if s.0 != s.1.root() || s.1.claim != [0; 64] || s.1.admitted != 0 || !s.1.pending.is_empty() {
         return Err(bad("native39 public status cannot replace prior claim"));
     }

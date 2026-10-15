@@ -51,7 +51,7 @@ fn m(class: u8, root: u8) -> ApprovedModelV1 {
 }
 
 fn bond(n: u8) -> PalwBondKeyV2 {
-    PalwBondKeyV2(TransactionOutpoint::new(crate::Hash::from_bytes([n; 32]), 0))
+    PalwBondKeyV2(TransactionOutpoint::new(crate::Hash64::from_bytes([n; 64]), 0))
 }
 
 /// A base network with the tier fence at `fence_at` carrying `chain` (identity, schedule and fork-id tests read Params only; the
@@ -434,7 +434,8 @@ fn a_catalog_naming_absent_models_never_gates_blocks_or_liveness() {
     let roots: BTreeMap<Hash64, Hash64> = BTreeMap::new();
     let other = Hash64::from_u64_word(0xC0);
     let (ap, mut s) = allocation_world(&[(0, other, 1_000 * KAS)]);
-    roll_through_catalog(&ap, &mut s, &mirror, &roots, 0..2);
+    // Three rolls, as the other allocation tests here: the assignment (DAA 1, epoch 0) is seasoned for a full epoch first.
+    roll_through_catalog(&ap, &mut s, &mirror, &roots, 0..3);
     assert!(s.model_row(&absent.class_id).is_none(), "an absent catalog model takes no row and no share");
     assert!(s.model_row(&other).is_some(), "the running registered model keeps its (0.3, capped) allocation");
 }

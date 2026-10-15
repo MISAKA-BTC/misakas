@@ -164,10 +164,7 @@ where
     {
         return Err("native39 receipt spend version/network/header-position challenge differs".into());
     }
-    let bond = state
-        .bonds
-        .get(&crate::palw_state_v2::PalwBondKeyV2(s.producer_bond))
-        .ok_or("native39 receipt producer bond absent")?;
+    let bond = state.bond(&crate::palw_state_v2::PalwBondKeyV2(s.producer_bond)).ok_or("native39 receipt producer bond absent")?;
     if !matches!(bond.status, PalwBondStatusV2::Active) || bond.pubkey != s.producer_pubkey {
         return Err("native39 receipt producer bond is not Active under the carried key".into());
     }

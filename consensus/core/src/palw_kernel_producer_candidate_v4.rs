@@ -7,7 +7,9 @@ use crate::{
     palw_prospective_kernel_material_v4::{commit_identity_v4, object_hash, prepare_unsigned_kernel_candidate_v4},
     palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwStateParamsV2},
 };
-use misaka_palw_kernel::{hash::Digest, ledger::KernelLedgerV1, route::SaltedCommitV1};
+use misaka_palw_kernel::{hash::Digest, ledger::KernelLedgerV1};
+/// Re-exported for the session forwarders (the consensus manager does not depend on the kernel crate).
+pub use misaka_palw_kernel::route::SaltedCommitV1;
 pub struct PalwKernelProducerCandidateOwnedV4 {
     candidate: ReservedKernelLedgerV1,
     pubkey: NativeRetainedV1<Vec<u8>>,

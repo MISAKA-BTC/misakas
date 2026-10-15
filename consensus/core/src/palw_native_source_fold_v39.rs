@@ -320,7 +320,7 @@ fn prepay(
     let actor = crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(signer);
     let mut shard = super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &epoch, actor, [0; 64])?;
     shard
-        .debit_ordinary(&p.execution.quota, &epoch, &DerivedOrdinaryMetadataV11::from_native_envelope(quantities))
+        .debit_ordinary(&p.execution.quota, &epoch, &DerivedOrdinaryMetadataV11::from_native_envelope((&quantities).into()))
         .map_err(refused)?;
     super::palw_flat_execution_fold_v11::write_shard(builder, &shard, [0; 64])?;
     Ok(true)

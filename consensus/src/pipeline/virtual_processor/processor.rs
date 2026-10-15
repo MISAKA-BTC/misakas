@@ -2548,7 +2548,7 @@ impl VirtualStateProcessor {
                                 // so the registration still has to arrive in somebody else's
                                 // block. See ADR-0064's correction.
                                 let bootstrap =
-                                    self.palw_bootstrap_activation.filter(|fence| fence.is_active(point.daa_score)).map(|_| &folded);
+                                    self.palw_bootstrap_activation.filter(|fence| fence.is_active(point.daa_score)).map(|_| &*folded);
                                 let attempt =
                                     match self.palw_v2_check_attempt_admission(&header, state, state_params, &point, bootstrap) {
                                         Ok(attempt) => attempt,
@@ -7309,6 +7309,9 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::CourtAttnChildChosen { .. } => "CourtAttnChildChosen",
         // ADR-0152-adjacent — a sink-bound top-up of a class's Activation Pool (tag 58).
         O::ActivationPoolFunded { .. } => "ActivationPoolFunded",
+        // G14 — the original paid TIR control (tag 170) and its atomic Valid grant / Ready (tag 171).
+        O::TirPublicControlV1 { .. } => "TirPublicControlV1",
+        O::TirPublicGrantReadyV1 { .. } => "TirPublicGrantReadyV1",
     }
 }
 

@@ -222,6 +222,35 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 params.palw_exec_payload_v2 = Some(at);
                 params.sync_palw_exec_payload_v2();
             }
+            // RFC-0008 release recovery (tags 240-242's v2 rows): in force at the later of its own and the monetary material
+            // fence (armed above through `MonetaryMaterialV1`), with its unapproved probe terms.
+            PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2 => {
+                params.palw_material_release_recovery_v2 = Some(
+                    kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(at),
+                );
+            }
+            // RFC-0006 memory/routing court v2 (tags 243-244): in force at the later of its own and the shard court's fence.
+            PalwLifecycleKindFenceV1::MemoryRoutingCourtV2 => {
+                params.palw_memory_routing_court_v2 = Some(at);
+                if params.palw_shard_court.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at.daa_score()) {
+                    params.palw_shard_court = Some(at);
+                }
+            }
+            // G14 original paid TIR conviction (tags 170-171): in force where the staged TIR route, the staged court, the
+            // objective-offence ledger, R-core+ and the aggregate liability all are, each armed at or below `at` here.
+            PalwLifecycleKindFenceV1::TirPublicConvictionV1 => {
+                params.palw_tir_public_conviction_v1 = Some(at);
+                for field in [&mut params.palw_staged_tir_route_v1, &mut params.palw_staged_public_court_v1, &mut params.palw_rcore_plus] {
+                    if field.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at.daa_score()) {
+                        *field = Some(at);
+                    }
+                }
+                arm_objective_offence_at_or_below(params, at);
+                if params.palw_capacity_aggregate_liability.as_ref().is_none_or(|l| l.activation.daa_score() > at.daa_score()) {
+                    params.palw_capacity_aggregate_liability =
+                        Some(kaspa_consensus_core::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at));
+                }
+            }
         }
     }
     for form in PalwHeaderFormFenceV1::ALL {

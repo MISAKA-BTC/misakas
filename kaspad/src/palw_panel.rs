@@ -19380,6 +19380,8 @@ mod own_claim_event_tests {
             work_leaves: 0,
             open_courts: 0,
             exec_lane: None,
+            // RFC-0018 Gate C is dormant on every shipped network.
+            security_certification: "not-governed",
         }
     }
 

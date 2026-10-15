@@ -806,6 +806,9 @@ mod tests {
             "palw_court_commitment_scope_v1" => params.palw_court_commitment_scope_v1 = Some(at),
             "palw_staged_public_court_v1" => params.palw_staged_public_court_v1 = Some(at),
             "palw_staged_tir_route_v1" => params.palw_staged_tir_route_v1 = Some(at),
+            // G14 original paid TIR conviction: a bare height; `palw_tir_public_conviction_v1_fence` resolves it only with the staged
+            // TIR route, the staged court, the objective-offence ledger, R-core+ and the aggregate liability, which the probe does not ask.
+            "palw_tir_public_conviction_v1" => params.palw_tir_public_conviction_v1 = Some(at),
             "palw_staged_float_constraint_v1" => params.palw_staged_float_constraint_v1 = Some(at),
             // codex RFC-8 / RFC-12 final's monetary fences (R6781-F): bare heights, and the paid consumer lifecycle with its
             // unapproved probe terms (its values only ride along).
@@ -819,6 +822,21 @@ mod tests {
                 params.palw_panel_lifetime_v2 = Some(crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2::unapproved_probe_at(at))
             }
             "palw_material_release_recovery_v2"=> {params.palw_material_release_recovery_v2=Some(crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(at));}
+            // The retired compact contract v4 (PRINCIPLES §8): validation refuses every activation; the probe asks only the hashers
+            // and the schedule, with nominal policy values that only ride along.
+            "palw_claim_compact_v4" => {
+                params.palw_claim_compact_v4 = Some(crate::palw_claim_compact_v4::PalwClaimCompactFenceV4 {
+                    activation: at,
+                    policy: crate::palw_claim_compact_v4::PalwClaimCompactPolicyV4 {
+                        max_contracts: 1,
+                        maximum_opening_bytes: 1,
+                        maximum_proof_bytes: 1,
+                        maximum_verifier_work: 1,
+                        maximum_stream_words: 1,
+                        require_independent_review: true,
+                    },
+                })
+            }
             "palw_monetary_material_v1" => {
                 params.palw_monetary_material_v1 = Some(crate::palw_monetary_material_v1::PalwMonetaryMaterialFenceV1 {
                     activation: at,

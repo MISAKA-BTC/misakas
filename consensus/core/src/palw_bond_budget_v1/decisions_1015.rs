@@ -198,7 +198,7 @@ mod tests {
     const KAS: u64 = 100_000_000;
 
     fn bond(n: u8) -> PalwBondKeyV2 {
-        PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::Hash::from_bytes([n; 32]), 0))
+        PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::Hash64::from_bytes([n; 64]), 0))
     }
 
     fn h(n: u64) -> Hash64 {

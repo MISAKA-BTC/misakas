@@ -174,12 +174,14 @@ impl LoopbackNativeProviderV3 {
             }
             provider.signature = recovery.clone();
         }
+        // The signed consent's id (the capsule is complete; persisting it below does not change it).
+        let consent = monetary.id();
         // A crash cannot externally expose a signature whose full native
         // verification context/signature capsule is not durably recoverable.
         for p in self.providers.iter().filter(|p| intent.providers.contains(&p.bond)) {
             p.store.lock().map_err(|_| "kernel provider store poisoned")?.persist_kernel_signatures_v4(&ingress.context, &capsule)?;
         }
-        Ok((Response::Signed { request: r.material.id(), consent: monetary.id(), signatures }, lease))
+        Ok((Response::Signed { request: r.material.id(), consent, signatures }, lease))
     }
 }
 impl AuthenticatedSocketExchangeV3 {

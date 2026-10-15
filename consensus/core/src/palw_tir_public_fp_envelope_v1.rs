@@ -331,7 +331,7 @@ mod tests {
             match n {
                 0 => bad.header.committed_execution_root = Hash64::from_u64_word(99),
                 1 => bad.header.step_merkle_root = Hash64::from_u64_word(99),
-                2 => bad.header.job_context.execution_seed = Hash64::from_u64_word(99),
+                2 => bad.header.job_context.execution_seed = [99; 32],
                 3 => bad.header.job_context.exact_decode_tokens += 1,
                 4 => bad.pledge.claim = Hash64::from_u64_word(99),
                 5 => bad.pledge.producer = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(99), 0)),

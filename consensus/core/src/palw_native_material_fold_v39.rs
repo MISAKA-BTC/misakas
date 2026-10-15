@@ -57,7 +57,7 @@ fn progress(
 fn write(builder: &mut TransitionBuilder<'_>, h: &mut MaterialHeader, s: &MaterialProgressV39) -> Result<(), PalwStateV2Error> {
     h.progress = s.root();
     builder.write_kernel_row(TABLE, k(61, &h.id), Some(b(s)))?;
-    builder.write_kernel_row(TABLE, k(60, &h.id), Some(b(&(h.root(), h))))?;
+    builder.write_kernel_row(TABLE, k(60, &h.id), Some(b(&(h.root(), &*h))))?;
     Ok(())
 }
 pub(super) struct NativeMaterialReader<'a> {
@@ -107,7 +107,7 @@ fn pay_complete(
     let e = epoch(p, ctx)?;
     let mut shard =
         super::super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &e, palw_kernel_bond_id_v1(signer), [0; 64])?;
-    shard.debit_ordinary(&p.execution.quota, &e, &DerivedOrdinaryMetadataV11::from_native_envelope(q)).map_err(bad)?;
+    shard.debit_ordinary(&p.execution.quota, &e, &DerivedOrdinaryMetadataV11::from_native_envelope((&q).into())).map_err(bad)?;
     super::super::palw_flat_execution_fold_v11::write_shard(builder, &shard, [0; 64])?;
     Ok(true)
 }
@@ -576,7 +576,7 @@ fn pay_certificate(
     let e = epoch(p, ctx)?;
     let mut s =
         super::super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &e, palw_kernel_bond_id_v1(signer), [0; 64])?;
-    s.debit_ordinary(&p.execution.quota, &e, &DerivedOrdinaryMetadataV11::from_native_envelope(q)).map_err(bad)?;
+    s.debit_ordinary(&p.execution.quota, &e, &DerivedOrdinaryMetadataV11::from_native_envelope((&q).into())).map_err(bad)?;
     super::super::palw_flat_execution_fold_v11::write_shard(builder, &s, [0; 64])?;
     Ok(true)
 }

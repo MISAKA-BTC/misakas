@@ -57,7 +57,7 @@ impl QuotaQuantitiesV11 {
     pub fn get(&self, axis: ResourceAxisV10) -> u128 {
         self.0[axis as usize]
     }
-    fn set(&mut self, axis: ResourceAxisV10, value: u128) {
+    pub(crate) fn set(&mut self, axis: ResourceAxisV10, value: u128) {
         self.0[axis as usize] = value;
     }
     pub fn checked_add(&self, rhs: &Self) -> Result<Self, String> {

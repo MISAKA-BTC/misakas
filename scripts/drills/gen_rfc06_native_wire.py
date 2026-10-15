@@ -74,13 +74,15 @@ for path in sorted(G['visited']):
     if kind=='struct':
         for part in split(body):
             if re.search(r'#\[borsh\(skip\)\]',part):continue
+            # A `#[cfg(..)]` field exists (and is encoded) only in that build: the scanner names it under the same cfg.
+            cfg=''.join(c+' ' for c in re.findall(r'#\[\s*cfg\s*\((?:[^()]|\([^()]*\))*\)\s*\]',part))
             part=stripattrs(part)
             if form=='named':
                 m=re.match(r'(?:pub(?:\([^)]*\))?\s+)?\w+\s*:\s*(.*)',part,re.S)
                 if not m:raise ValueError((path,part))
                 typ=m[1]
             else:typ=re.sub(r'^pub(?:\([^)]*\))?\s+','',part)
-            fieldtypes.append(qualify(typ,item))
+            fieldtypes.append(cfg+qualify(typ,item))
         code='wire_struct!('+path+'; '+', '.join(fieldtypes)+');'
     else:
         arms=[];next_tag=0

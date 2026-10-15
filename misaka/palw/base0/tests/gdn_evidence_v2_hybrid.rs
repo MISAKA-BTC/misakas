@@ -97,10 +97,13 @@ fn a_forged_held_checkpoint_is_demanded_answered_and_convicted() {
         base0_gdn_transition_evidence_from_disclosures_v2,
     };
 
+    // The held v8 profile's recurrence spacing is one attention history tile (16 positions, the fused profile's), so the job must
+    // checkpoint past it: at n_ctx 160 the canonical job is (19, 2), whose checkpoints cover positions 1..=19, within the fixture's
+    // 32-position table (at n_ctx 32 the job is (3, 2) and its checkpoints cover 1..=3: none carries the recurrence).
     let (artifact, mut geometry) = qwen36_fixture();
-    geometry.n_ctx = 32;
+    geometry.n_ctx = 160;
     let profile = qwen36_profile_v8(geometry).expect("graph-v8 projects");
-    let backend = qwen36_backend(&artifact, &profile, qwen36_held_canonical_v1(32)).with_attempt_rules(PalwAttemptRulesV1::CoreV1);
+    let backend = qwen36_backend(&artifact, &profile, qwen36_held_canonical_v1(160)).with_attempt_rules(PalwAttemptRulesV1::CoreV1);
     let (canonical, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x6D_6E02)).expect("a job");
     let out = backend.execute(&palw_attempt_job_v1(canonical, true), &prompt).expect("the honest attempt runs");
     let honest = backend.gdn_accuser_view_v2(&out.material, None).expect("the accuser's view of the served capture");
@@ -118,7 +121,17 @@ fn a_forged_held_checkpoint_is_demanded_answered_and_convicted() {
         .iter()
         .map(|leaf| (leaf.checkpoint_index, palw_checkpoint_positions_at_v1(&b.shape_profile, ctx, leaf.covered_decode_call)))
         .find(|(_, positions)| palw_checkpoint_leaf_carries_recurrence_v1(&b.shape_profile, *positions))
-        .expect("the job reaches a recurrence-carrying checkpoint (spacing 16 at this context)");
+        .unwrap_or_else(|| {
+            let covered: Vec<(u32, u32)> = honest
+                .checkpoint_leaves
+                .iter()
+                .map(|leaf| (leaf.checkpoint_index, palw_checkpoint_positions_at_v1(&b.shape_profile, ctx, leaf.covered_decode_call)))
+                .collect();
+            panic!(
+                "the job reaches a recurrence-carrying checkpoint (spacing {}): (checkpoint, covered positions) = {covered:?}",
+                kaspa_consensus_core::palw_context_ladder::palw_anchored_interval_for_profile_v1(&b.shape_profile)
+            )
+        });
 
     // The producer's forged state at that checkpoint: the honest chunks, one byte of the first demanded chunk flipped.
     let demands = gdn_transition_demands_v2(b, node_slot, 0, index).expect("the transition's units");

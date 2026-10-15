@@ -384,6 +384,89 @@ impl ConsensusSessionOwned {
         self.consensus.palw_tir_public_read_v1(read)
     }
 
+    // ---- RFC06/RFC08 own-node kernel material (private producer/checker/replacement helpers): same store-tip reads ----
+
+    /// The kernel route state (`ConsensusApi::palw_kernel_route_v1`): `None` before the fence's first kernel move.
+    pub fn palw_kernel_route_v1(&self) -> Option<kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1> {
+        self.consensus.palw_kernel_route_v1()
+    }
+
+    pub fn palw_kernel_producer_candidate_v4(
+        &self,
+        checkpoint: kaspa_consensus_core::BlockHash,
+        producer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        commit: &kaspa_consensus_core::palw_kernel_producer_candidate_v4::SaltedCommitV1,
+        salt: &[u8; 64],
+        commit_daa: u64,
+        expires_daa: u64,
+    ) -> Result<kaspa_consensus_core::palw_kernel_producer_candidate_v4::PalwKernelProducerCandidateOwnedV4, String> {
+        self.consensus.palw_kernel_producer_candidate_v4(checkpoint, producer, commit, salt, commit_daa, expires_daa)
+    }
+
+    pub fn palw_kernel_material_consent_accepted_v4(
+        &self,
+        root: kaspa_consensus_core::Hash64,
+        consent: kaspa_consensus_core::Hash64,
+    ) -> Result<bool, String> {
+        self.consensus.palw_kernel_material_consent_accepted_v4(root, consent)
+    }
+
+    pub fn palw_kernel_material_admission_accepted_v4(
+        &self,
+        request: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+        draft: &kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+    ) -> Result<bool, String> {
+        self.consensus.palw_kernel_material_admission_accepted_v4(request, draft)
+    }
+
+    pub fn palw_kernel_material_ingress_v4(
+        &self,
+        checkpoint: kaspa_consensus_core::BlockHash,
+        request: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+    ) -> Result<kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4, String> {
+        self.consensus.palw_kernel_material_ingress_v4(checkpoint, request)
+    }
+
+    /// RFC-0006 read-only census of the historical headers the EXEC origin migration needs (authorizes nothing).
+    pub fn palw_exec_origin_coverage_v1(&self, listed: usize) -> Result<kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginCoverageV1, String> {
+        self.consensus.palw_exec_origin_coverage_v1(listed)
+    }
+
+    pub fn palw_kernel_material_replacement_v4(
+        &self,
+        context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+    ) -> Result<kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4, String> {
+        self.consensus.palw_kernel_material_replacement_v4(context, bundle, intent)
+    }
+
+    pub fn palw_kernel_material_query_authority_v4(
+        &self,
+        query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        requester: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        pubkey: &[u8],
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4>,
+        String,
+    > {
+        self.consensus.palw_kernel_material_query_authority_v4(query, requester, pubkey)
+    }
+
+    pub fn palw_native_recovery_session_quote_v4(
+        &self,
+        checkpoint: Option<kaspa_consensus_core::BlockHash>,
+        daa: u64,
+        class: kaspa_consensus_core::Hash64,
+        executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<kaspa_consensus_core::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4>,
+        String,
+    > {
+        self.consensus.palw_native_recovery_session_quote_v4(checkpoint, daa, class, executor, providers)
+    }
+
     /// G14 R4: the accepted ORIGINAL TIR frame a public verifier files against.
     pub fn palw_tir_public_frame_v1(
         &self,

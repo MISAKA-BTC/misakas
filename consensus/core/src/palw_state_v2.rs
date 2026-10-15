@@ -16626,7 +16626,7 @@ fn apply_work_target_shadow(builder: &mut TransitionBuilder<'_>, parent: &PalwCh
     let escrow = worker_carve_v2(builder.params, ctx.subsidy, builder.extras.escrow_carve);
     let previous = builder.state.work_target_shadow;
     let floor = match (escrow, previous) {
-        (0, None) => return,
+        (0, None) => return Ok(()),
         (0, Some(previous)) => previous.floor,
         (escrow, _) => palw_work_floor_v1(escrow, fold.rate_sompi_per_giga),
     };

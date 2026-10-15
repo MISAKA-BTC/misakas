@@ -716,7 +716,7 @@ pub fn compile_complete_frontend_v39(
                     || bindings
                         .iter()
                         .zip(upstream_stages)
-                        .any(|(b, s)| !matches!(b,super::frontend::BindingDescription::StageFinal{stage}if stage==s))
+                        .any(|(b, s)| !matches!(b,super::frontend::BindingDescription::StageFinal{stage}if u16::from(*stage)==*s))
                 {
                     return Err("SOURCE39_IMAGE_JOIN_ORIGINAL_EDGES_DIFFER".into());
                 }
@@ -744,7 +744,7 @@ pub fn compile_complete_frontend_v39(
             FrontendCompilerV39::Vision { profile, processor_stage } => {
                 let geometry = if let Some(upstream) = processor_stage {
                     if *upstream as usize >= i
-                        || !matches!(plan.pipeline.stages[i].bind.as_slice(),[super::frontend::BindingDescription::StageFinal{stage}]if stage==upstream)
+                        || !matches!(plan.pipeline.stages[i].bind.as_slice(),[super::frontend::BindingDescription::StageFinal{stage}]if u16::from(*stage)==*upstream)
                     {
                         return Err("SOURCE39_VISION_PROCESSOR_ORIGINAL_EDGE_DIFFERS".into());
                     }

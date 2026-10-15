@@ -128,7 +128,7 @@ pub(crate) fn read_leaf39(r: &mut Cursor<&[u8]>, values: &mut usize, filing_byte
     let axis = read::<u8>(r)?;
     let line = read::<u64>(r)?;
     let tile = read::<u64>(r)?;
-    if axis != crate::merkle3::AXIS_ROW && axis != crate::merkle3::AXIS_COL {
+    if axis != crate::merkle::AXIS_ROW && axis != crate::merkle::AXIS_COL {
         return Err("point39 leaf axis".into());
     }
     let count = bounded_count(r, 4096)?;

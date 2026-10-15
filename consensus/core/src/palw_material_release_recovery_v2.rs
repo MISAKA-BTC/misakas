@@ -13,6 +13,14 @@ use std::collections::BTreeSet;
 /// Kernel-route aux table 137 (renumbered 134 → 137 on 2026-10-15: 134/135 are RFC-0016's queue index and telemetry, 136 is
 /// RFC-0018's certification table; 137 grepped free across this tree, integ/decisions-1015 and integ/validation).
 pub const PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2: u8 = 137;
+/// **The forms this fence owns inside the monetary material kinds (240–242)** — appended inside NEW kinds, so neither the new-kind
+/// table nor the int-12 wire ledger names them (`palw_lifecycle_kind_owner_v1` routes each to
+/// `PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2`; below it they ride unjudged as the monetary-material-only build reads them).
+pub const PALW_MATERIAL_RECOVERY_FORMS_V2: [(&str, crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1); 3] = [
+    ("MonetaryMaterialEnrolledV1 / MonetaryMaterialReplacedV1 with a TypedKernelV4 scope", crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2),
+    ("PalwMonetaryMaterialActionV1::RecoveryV2", crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2),
+    ("PalwMonetaryMaterialActionV1::ChallengeCurrentV4", crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2),
+];
 pub const PALW_MATERIAL_RELEASE_RECOVERY_MAX_CONTRACTS_V2: u32 = 4096;
 pub const PALW_MATERIAL_RELEASE_RECOVERY_MAX_GENERATIONS_V2: u16 = 64;
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

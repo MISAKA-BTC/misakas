@@ -610,7 +610,7 @@ fn rfc0016_queue_tick_v1(
             // The window starts when the claim leaves the queue: its bind base (and anchor slot) is now.
             let mut released = claim;
             released.rebound_daa = Some(now);
-            builder.write_claim(claim_id, Some(released));
+            builder.write_claim(claim_id, Some(released))?;
             builder.rearm_claim_deadline_dl1_v1(claim_id, now)?;
             // Telemetry: the queue wait, consensus-derived.
             let key = telemetry_model_key_v1(PALW_RFC0016_TELEMETRY_QUEUE_WAIT_PREFIX_V1, epoch_index, &model);

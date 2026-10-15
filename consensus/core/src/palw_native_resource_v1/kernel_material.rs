@@ -324,7 +324,8 @@ pub(super) fn assembly_layout_requests_v4(
 fn selected_material_requests(ledger: &misaka_palw_kernel::ledger::KernelLedgerV1, claim: &Digest) -> Result<u64, NativeCoverageV1> {
     use misaka_palw_kernel::{
         ledger::ClaimBodyV1,
-        spec::{ComponentV1, SpecClaimV1, SpecClassKindV1, StageClaimV1},
+        spec::composite::{ComponentV1, StageClaimV1},
+        spec::{SpecClaimV1, SpecClassKindV1},
     };
     let row = ledger.claims.get(claim).ok_or_else(|| bad("material reservation requires actual admitted claim"))?;
     let mut q = TirNativeRequestsV1::new();

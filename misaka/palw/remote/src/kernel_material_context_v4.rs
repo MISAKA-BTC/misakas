@@ -165,7 +165,7 @@ impl KernelMaterialContextArchiveV4 {
                     return Err("kernel metadata has noncanonical trailing bytes".into());
                 }
                 for encoded in owner.rows.values() {
-                    let p = preflight_native_value_v1::<KernelMaterialContextRecordV4>(encoded, encoded.len() as u64)
+                    let p = preflight_native_value_v1::<KernelMaterialContextRecordV4>(encoded.as_slice(), encoded.len() as u64)
                         .map_err(|e| e.to_string())?;
                     if p.logical_requests_v1() > limits.max_heap_bytes {
                         return Err("kernel metadata nested row exceeds explicit decode cap".into());
@@ -273,7 +273,7 @@ impl KernelMaterialContextArchiveV4 {
     }
     pub fn get(&self, consent: Hash64) -> Result<Option<KernelMaterialContextRecordOwnedV4>, String> {
         let Some(bytes) = self.rows.get(&consent) else { return Ok(None) };
-        let p = preflight_native_value_v1::<KernelMaterialContextRecordV4>(bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
+        let p = preflight_native_value_v1::<KernelMaterialContextRecordV4>(bytes.as_slice(), bytes.len() as u64).map_err(|e| e.to_string())?;
         if p.logical_requests_v1() > self.limits.max_heap_bytes {
             return Err("kernel metadata row exceeds decode RAM cap".into());
         }
@@ -400,8 +400,7 @@ impl KernelMaterialContextArchiveV4 {
             .as_ref()
             .map(|(_, b)| {
                 b.len() as u64
-                    + std::mem::size_of::<kaspa_consensus_core::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<Hash64, Vec<u8>>>()
-                        as u64
+                    + kaspa_consensus_core::palw_native_resource_v1::btree_node_envelope_bytes_v1::<Hash64, Vec<u8>>() as u64
             })
             .unwrap_or(0);
         let requests =

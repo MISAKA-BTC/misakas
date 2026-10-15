@@ -553,8 +553,8 @@ fn flat_program_blob_v1<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1
     let unit = relation
         + operands
         + size_of::<PrimitiveResourcesV10>()
-        + 2 * size_of::<typed::BTreeNodeEnvelopeV1<(u16, Option<u16>), (u16, u16)>>
-        > () + size_of::<typed::BTreeNodeEnvelopeV1<u32, ()>>();
+        + 2 * size_of::<typed::BTreeNodeEnvelopeV1<(u16, Option<u16>), (u16, u16)>>()
+        + size_of::<typed::BTreeNodeEnvelopeV1<u32, ()>>();
     shape = shape.allocation(rows.checked_mul(8).ok_or_else(|| wire::wire_bad("flat concurrent metadata overflow"))?, unit)?;
     Ok(shape)
 }

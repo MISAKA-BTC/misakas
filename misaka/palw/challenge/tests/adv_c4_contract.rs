@@ -62,7 +62,9 @@ fn good() -> Vec<WorkFinalEventV1> {
     vec![work(1, A, 103, 110), work(2, B, 104, 111), work(3, A, 105, 112)]
 }
 
-fn locked(c: &BeaconContextV1, events: &[WorkFinalEventV1], tip: u64) -> WorkBeaconV1 {
+/// The beacon this context locks, as the crate derives it: a `VerifiedWorkBeaconV1` (F-C4-05's fix — a seed is never minted from
+/// a presented beacon) that reads as its `WorkBeaconV1` through `Deref`.
+fn locked(c: &BeaconContextV1, events: &[WorkFinalEventV1], tip: u64) -> VerifiedWorkBeaconV1 {
     match collect_work_beacon_v1(c, events, tip).unwrap() {
         WorkBeaconStateV1::Locked(b) => b,
         other => panic!("not locked: {other:?}"),
@@ -299,8 +301,8 @@ fn a_reorg_before_the_lock_changes_the_beacon_and_one_after_the_k_th_source_does
     other[1] = work(9, B, 104, 111);
     let b2 = locked(&c, &other, 117);
     assert_ne!(b2.output, b.output);
-    assert!(verify_work_beacon_v1(&c, &b, &other, 117).is_err(), "the old beacon is refused on the new branch");
-    assert!(verify_work_beacon_v1(&c, &b2, &other, 117).is_ok());
+    assert!(verify_work_beacon_v1(&c, b.beacon(), &other, 117).is_err(), "the old beacon is refused on the new branch");
+    assert!(verify_work_beacon_v1(&c, b2.beacon(), &other, 117).is_ok());
     let s = subject(&c);
     assert_ne!(challenge_seed_v1(&c, &s, &b).unwrap(), challenge_seed_v1(&c, &s, &b2).unwrap());
     // Reorg dropped the 3rd source: back to collecting (no lock).
@@ -320,7 +322,8 @@ fn a_reorg_before_the_lock_changes_the_beacon_and_one_after_the_k_th_source_does
 #[test]
 fn every_single_field_edit_of_a_presented_beacon_is_refused() {
     let c = ctx(SubjectKindV1::ClaimVerification);
-    let b = locked(&c, &good(), 150);
+    // The presented form: the derived beacon's plain `WorkBeaconV1`, as a peer would send it.
+    let b = locked(&c, &good(), 150).beacon().clone();
     assert!(verify_work_beacon_v1(&c, &b, &good(), 150).is_ok());
     let mut edits: Vec<(&str, WorkBeaconV1)> = Vec::new();
     for i in 0..b.sources.len() {
@@ -379,8 +382,11 @@ fn every_single_field_edit_of_a_presented_beacon_is_refused() {
 /// beacon, another epoch's, an invented output). FAILS today: it hashes `(subject, beacon.anchor, beacon.output)` for any
 /// `WorkBeaconV1` shape; only a caller that remembered to run `verify_work_beacon_v1` is protected, and a typed `VerifiedBeacon`
 /// would make the mistake unrepresentable.
+///
+/// F-C4-05 is fixed by exactly that: `challenge_seed_v1` takes a `VerifiedWorkBeaconV1`, which only this crate's collectors derive
+/// (it has no decoder and no public constructor), so an invented beacon cannot reach the seed at all — it is refused where a
+/// presented beacon enters, `verify_work_beacon_v1` — and another context's derived beacon is refused by its context id.
 #[test]
-#[ignore = "FAIL F-C4-05: challenge_seed_v1 accepts a beacon never derived from the context (unverified WorkBeaconV1)"]
 fn a_seed_must_not_be_minted_from_a_beacon_that_is_not_this_contexts() {
     let c = ctx(SubjectKindV1::ClaimVerification);
     let s = subject(&c);
@@ -390,13 +396,14 @@ fn a_seed_must_not_be_minted_from_a_beacon_that_is_not_this_contexts() {
     c2.challenge_epoch = 8;
     let other_epoch = locked(&c2, &good(), 150);
     // An invented one: right shape, attacker-chosen output and anchor.
-    let mut invented = real.clone();
+    let mut invented = real.beacon().clone();
     invented.output = [0x41; 64];
     invented.challenge_anchor = [0x42; 64];
     let ok = challenge_seed_v1(&c, &s, &real).is_ok();
     assert!(ok);
     assert!(challenge_seed_v1(&c, &s, &other_epoch).is_err(), "another epoch's beacon minted a seed for this subject");
-    assert!(challenge_seed_v1(&c, &s, &invented).is_err(), "an invented beacon minted a seed");
+    assert!(verify_work_beacon_v1(&c, &invented, &good(), 150).is_err(), "an invented beacon is never verified, so never seeds");
+    assert!(verify_work_beacon_v1(&c, real.beacon(), &good(), 150).is_ok(), "the derived one is");
 }
 
 /// EXPECTED (before running): arbitrary contexts and events, including extreme positions and counts, never panic the beacon
@@ -656,9 +663,22 @@ fn observation_the_contract_fixes_no_minimum_k_and_approval_is_exact() {
     }
     let p = reference_policy_v1(3, 2, 40, 5, 4);
     let suite = named_id("suite");
-    let reg = [ApprovedTupleV1 { checker_suite_id: suite, challenge_policy_id: p.id(), soundness_policy_id: p.soundness_policy_id, min_repetitions: 4 }];
-    assert!(approved_v1(&reg, &suite, &p).is_ok());
-    assert!(approved_v1(&reg, &named_id("other suite"), &p).is_err());
+    // Since round 1 a registry tuple also states its relations' soundness and its grinding / beacon / adaptive-query horizon, and
+    // `approved_v1` never approves on the tuple alone: it then needs the effective bound and the full binding/source/coverage
+    // review (`approved_v2`). What stays exact is the LOOKUP: only this suite and this policy id find the tuple.
+    let reg = [ApprovedTupleV1 {
+        checker_suite_id: suite,
+        challenge_policy_id: p.id(),
+        soundness_policy_id: p.soundness_policy_id,
+        min_repetitions: 4,
+        relations: Vec::new(),
+        grinding_choices_per_beacon: 1,
+        beacons_per_attempt: 1,
+        adaptive_queries: 1,
+    }];
+    assert_ne!(approved_v1(&reg, &suite, &p), Err(PolicyRefusalV1::NotApproved), "the exact tuple is found");
+    assert!(approved_v1(&reg, &suite, &p).is_err(), "and the tuple alone approves nothing");
+    assert_eq!(approved_v1(&reg, &named_id("other suite"), &p), Err(PolicyRefusalV1::NotApproved));
     assert!(approved_v1(&reg, &suite, &reference_policy_v1(3, 2, 40, 5, 3)).is_err(), "fewer repetitions");
     assert!(approved_v1(&reg, &suite, &reference_policy_v1(2, 2, 40, 5, 4)).is_err(), "another k is another policy id");
     let mut q = p.clone();
@@ -733,7 +753,7 @@ fn the_onboarding_lifecycle_has_no_shortcut_to_active() {
         P::ConformanceChecked(Ok([5; 64])),
         P::PublicProsecutionGate { complete: true },
     ];
-    let mut r = OnboardingRecordV1::new();
+    let mut r = OnboardingRecordV1::new(u32::MAX);
     let mut records = vec![r.clone()];
     for p in &prefix {
         r.apply(p.clone()).unwrap();
@@ -758,25 +778,32 @@ fn the_onboarding_lifecycle_has_no_shortcut_to_active() {
     }
 }
 
-/// OBSERVATION / GAP-C4-C (descriptive): the record counts only `BeaconUnavailable` against the policy's retry limit. A candidate
-/// whose conformance FAILS can commit again (any harmless change of the statement is a new commitment and a new seed) without
-/// limit and pass on a lucky draw: the grinding budget of a sampled check is not enforced by the lifecycle. 60 failures then a pass.
+/// GAP-C4-C, CLOSED since round 1: the record used to count only `BeaconUnavailable` against the policy's retry limit, so a
+/// candidate whose conformance FAILED could commit again without limit and pass on a lucky draw (round 1: 60 failures then a pass).
+/// `OnboardingRecordV1::new(attempt_limit)` now bounds every attempt that ended without a pass, failed ones included: once the
+/// limit is spent the next commitment is refused (`AttemptsExhausted`) and the record is unchanged, so no draw is left to pass on.
 #[test]
 fn gap_a_failed_conformance_can_be_recommitted_without_limit_until_a_draw_passes() {
     use OnboardingFailureV1 as F;
     use OnboardingStepV1 as P;
-    let mut r = OnboardingRecordV1::new();
+    const LIMIT: u32 = 5;
+    let mut r = OnboardingRecordV1::new(LIMIT);
     r.apply(P::Frontend(Ok([1; 64]))).unwrap();
     r.apply(P::StaticAdmission(Ok([2; 64]))).unwrap();
     r.apply(P::Registered { class_id: [3; 64] }).unwrap();
-    for i in 0..60u8 {
+    for i in 0..LIMIT as u8 {
         r.apply(P::ConformanceCommitted { commitment_root: [i; 64] }).unwrap();
         r.apply(P::ConformanceChecked(Err(F::ConformanceFailed))).unwrap();
     }
-    assert_eq!(r.beacon_retries, 0, "failures are not counted anywhere");
-    r.apply(P::ConformanceCommitted { commitment_root: [99; 64] }).unwrap();
-    r.apply(P::ConformanceChecked(Ok([5; 64]))).unwrap();
-    assert_eq!(r.state, OnboardingStateV1::ConformancePassed);
+    assert_eq!(r.attempts(), LIMIT, "failed attempts are counted");
+    let before = r.clone();
+    assert_eq!(
+        r.apply(P::ConformanceCommitted { commitment_root: [99; 64] }),
+        Err(misaka_palw_challenge::lifecycle::OnboardingRefusalV1::AttemptsExhausted(LIMIT)),
+        "no commitment past the limit, so no lucky draw"
+    );
+    assert_eq!(r, before, "the refused commitment changed nothing");
+    assert_ne!(r.state, OnboardingStateV1::ConformancePassed);
 }
 
 fn commitment(c: &BeaconContextV1) -> ConformanceCommitmentV1 {

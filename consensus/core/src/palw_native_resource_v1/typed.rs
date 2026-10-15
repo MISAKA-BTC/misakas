@@ -203,6 +203,11 @@ pub(crate) struct BTreeNodeEnvelopeV1<K, V> {
     values: [V; 16],
     edges: [usize; 17],
 }
+/// The request bytes one [`BTreeNodeEnvelopeV1`] of `BTreeMap<K, V>` stands for: what an outside consumer (the remote's metadata
+/// RAM budget) charges per map entry, without naming the crate-private envelope.
+pub const fn btree_node_envelope_bytes_v1<K, V>() -> usize {
+    std::mem::size_of::<BTreeNodeEnvelopeV1<K, V>>()
+}
 impl<K: NativeHeapV1, V: NativeHeapV1> NativeHeapV1 for BTreeMap<K, V> {
     fn native_members_v1(&self) -> Option<u64> {
         self.iter().try_fold(self.len() as u64, |n, (k, v)| n.checked_add(k.native_members_v1()?)?.checked_add(v.native_members_v1()?))
@@ -251,22 +256,26 @@ tuple_native!(A:0,B:1,C:2);
 tuple_native!(A:0,B:1,C:2,D:3);
 tuple_native!(A:0,B:1,C:2,D:3,E:4);
 tuple_native!(A:0,B:1,C:2,D:3,E:4,F:5);
+tuple_native!(A:0,B:1,C:2,D:3,E:4,F:5,G:6);
 
-macro_rules! native_struct { ($ty:ty; $($field:ident),* $(,)?) => {
+// A field may carry its `#[cfg(..)]`: the destructure stays exhaustive in every build (the field exists only in that build).
+macro_rules! native_struct { ($ty:ty; $($(#[$attr:meta])* $field:ident),* $(,)?) => {
     impl $crate::palw_native_resource_v1::NativeHeapV1 for $ty {
         fn native_heap_v1(&self,path:&str)->$crate::palw_native_resource_v1::NativeCoverageV1 {
-            let Self { $($field),* } = self;
+            let Self { $($(#[$attr])* $field),* } = self;
             let mut sum=$crate::palw_native_resource_v1::NativeCoverageV1::zero();
-            $(sum=sum.add::<Self>($crate::palw_native_resource_v1::NativeHeapV1::native_heap_v1($field,path),path);)* sum
+            $($(#[$attr])* { sum=sum.add::<Self>($crate::palw_native_resource_v1::NativeHeapV1::native_heap_v1($field,path),path); })* sum
         }
         fn native_members_v1(&self)->Option<u64> {
-            let Self { $($field),* } = self;
+            let Self { $($(#[$attr])* $field),* } = self;
             #[allow(unused_mut)] let mut n=0u64;
-            $(n=n.checked_add($crate::palw_native_resource_v1::NativeHeapV1::native_members_v1($field)?)?;)* Some(n)
+            $($(#[$attr])* { n=n.checked_add($crate::palw_native_resource_v1::NativeHeapV1::native_members_v1($field)?)?; })* Some(n)
         }
         fn native_components_v1(&self)->Vec<$crate::palw_native_resource_v1::NativeFieldInventoryV1> {
-            let Self { $($field),* }=self;
-            vec![$($crate::palw_native_resource_v1::NativeFieldInventoryV1::of(concat!(stringify!($ty),".",stringify!($field)), $field)),*]
+            let Self { $($(#[$attr])* $field),* }=self;
+            #[allow(unused_mut)] let mut fields=Vec::new();
+            $($(#[$attr])* { fields.push($crate::palw_native_resource_v1::NativeFieldInventoryV1::of(concat!(stringify!($ty),".",stringify!($field)), $field)); })*
+            fields
         }
     }
 }; }
@@ -294,6 +303,13 @@ macro_rules! native_unit {
     };
 }
 macro_rules! native_enum {
+    // An uninhabited enum (a reserved object kind): a reference to it is never empty to the checker, its value is.
+    ($ty:ty; ) => {
+        impl NativeHeapV1 for $ty {
+            fn native_members_v1(&self)->Option<u64> { match *self {} }
+            fn native_heap_v1(&self,_:&str)->NativeCoverageV1 { match *self {} }
+        }
+    };
     ($ty:ty; $($variant:ident $( { $($named:ident),* } )? $( ( $($tuple:ident),* ) )?),* $(,)?) => {
         impl NativeHeapV1 for $ty {
             fn native_members_v1(&self)->Option<u64> {

@@ -287,7 +287,8 @@ fn req_x3_3_no_extension_or_regrant_for_a_new_claim_and_the_old_rules_stay_for_o
             include_str!("../palw_state_v2/transition_builder.rs"),
             &[
                 "if credit_pause && !crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(self.params, &claim) {",
-                "if crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(self.params, claim) {\n            return;\n        }",
+                // `credit_verify_pause_v6` returns its writer's Result since the RFC06 typed-capacity writers (b496ee2ba).
+                "if crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(self.params, claim) {\n            return Ok(());\n        }",
             ],
         ),
         (
