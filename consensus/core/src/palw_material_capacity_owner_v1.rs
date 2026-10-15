@@ -4,8 +4,8 @@
 use super::*;
 use crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1;
 use crate::palw_native_resource_v1::{
-    preflight_native_value_v1, reserve_native_requests_v1, NativeCoverageV1 as C, NativeHeapV1, NativeRetainedV1, NativeWireReaderV1,
-    NativeWireScanV1,
+    NativeCoverageV1 as C, NativeHeapV1, NativeRetainedV1, NativeWireReaderV1, NativeWireScanV1, preflight_native_value_v1,
+    reserve_native_requests_v1,
 };
 use std::mem::size_of;
 type Store = PalwMonetaryMaterialProviderStoreV1;
@@ -55,7 +55,7 @@ fn inner_response(codec: PalwMaterialCodecV1, data: &[u8]) -> Result<C, String> 
 }
 fn typed_response(stage: u8, data: &[u8]) -> Result<C, String> {
     use crate::palw_kernel_parameter_material_v4::{
-        PalwKernelParameterRowV4, PalwKernelSegmentedPartV4, PALW_KERNEL_PARAMETER_STAGE_V4, PALW_KERNEL_SEGMENTED_PART_STAGE_V4,
+        PALW_KERNEL_PARAMETER_STAGE_V4, PALW_KERNEL_SEGMENTED_PART_STAGE_V4, PalwKernelParameterRowV4, PalwKernelSegmentedPartV4,
     };
     if stage == PALW_KERNEL_PARAMETER_STAGE_V4 {
         shape::<PalwKernelParameterRowV4>(data)
@@ -84,7 +84,7 @@ fn typed_response(stage: u8, data: &[u8]) -> Result<C, String> {
 fn retrieval_response_requests_v4(data: &[u8], slice: bool) -> Result<C, String> {
     use misaka_palw_kernel::{
         public::TensorWireV1,
-        spec::retrieval::{EntryResponseV1, SliceResponseV1, MAX_RETRIEVAL_DIM_V1, MAX_RETRIEVAL_PAYLOAD_V1, MAX_SLICE_ITEMS_V1},
+        spec::retrieval::{EntryResponseV1, MAX_RETRIEVAL_DIM_V1, MAX_RETRIEVAL_PAYLOAD_V1, MAX_SLICE_ITEMS_V1, SliceResponseV1},
     };
     let mut requests = if slice { shape::<SliceResponseV1>(data)? } else { shape::<EntryResponseV1>(data)? };
     let mut c = Cursor(data);
@@ -159,11 +159,7 @@ impl<'a> Cursor<'a> {
     }
     fn count(&mut self, cap: usize) -> Result<usize, String> {
         let n = u32::from_le_bytes(self.take(4)?.try_into().unwrap()) as usize;
-        if n > cap {
-            Err("provider nested capacity exceeded".into())
-        } else {
-            Ok(n)
-        }
+        if n > cap { Err("provider nested capacity exceeded".into()) } else { Ok(n) }
     }
 }
 /// Walk embedded bundle and response bytes without first allocating the outer
@@ -286,7 +282,7 @@ pub fn prospective_kernel_bundle_auth_requests_v4(
 ) -> Result<C, String> {
     use crate::{
         palw_kernel_parameter_material_v4::{
-            PalwKernelParameterRowV4, PalwKernelSegmentedPartV4, PALW_KERNEL_PARAMETER_STAGE_V4, PALW_KERNEL_SEGMENTED_PART_STAGE_V4,
+            PALW_KERNEL_PARAMETER_STAGE_V4, PALW_KERNEL_SEGMENTED_PART_STAGE_V4, PalwKernelParameterRowV4, PalwKernelSegmentedPartV4,
         },
         palw_native_resource_v1::{
             native_kernel_parameter_auth_requests_v4, native_kernel_position_auth_requests_v4, native_kernel_segment_auth_requests_v4,
@@ -335,6 +331,32 @@ pub fn prospective_kernel_bundle_auth_requests_v4(
     Ok(total)
 }
 impl NativeRetainedV1<Store> {
+    pub fn provider_kernel_bundle_owned_v4(
+        &self,
+        consent: Hash64,
+        dependency: Hash64,
+    ) -> Result<NativeRetainedV1<crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4>, String> {
+        use crate::palw_prospective_kernel_material_v4::{PalwProspectiveKernelBundleV4 as B, PalwTypedKernelMaterialBundleV4};
+        let (_, manifest, rows) = self.contracts.get(&consent).ok_or("kernel bundle consent absent")?;
+        let scope = manifest.scope(dependency).ok_or("kernel bundle signed scope absent")?;
+        let raw = rows.get(&dependency).ok_or("kernel bundle bytes absent")?;
+        let requests = match scope.codec {
+            PalwMaterialCodecV1::KernelPositions => shape::<PalwKernelMaterialBundleV1>(raw)?,
+            PalwMaterialCodecV1::SegmentedParts => shape::<PalwSegmentedMaterialBundleV1>(raw)?,
+            PalwMaterialCodecV1::TypedKernelV4 => shape::<PalwTypedKernelMaterialBundleV4>(raw)?,
+            PalwMaterialCodecV1::NativeHeldComplete => return Err("held bundle is not kernel material".into()),
+        };
+        let requests = add(requests, fixed(1, size_of::<B>()));
+        let lease =
+            reserve_native_requests_v1(requests.bytes().ok_or("kernel bundle ownership overflow")?).map_err(|e| e.to_string())?;
+        let value = match scope.codec {
+            PalwMaterialCodecV1::KernelPositions => B::KernelPositions(borsh::from_slice(raw).map_err(|e| e.to_string())?),
+            PalwMaterialCodecV1::SegmentedParts => B::SegmentedParts(borsh::from_slice(raw).map_err(|e| e.to_string())?),
+            PalwMaterialCodecV1::TypedKernelV4 => B::TypedKernelV4(borsh::from_slice(raw).map_err(|e| e.to_string())?),
+            PalwMaterialCodecV1::NativeHeldComplete => unreachable!(),
+        };
+        Ok(NativeRetainedV1::from_owner_reserved_v1(value, lease))
+    }
     /// Retention-only recovery for kernel frames. The callback authenticates
     /// saved identity metadata, not claim acceptance or permission to answer.
     pub fn recover_provider_retaining_kernel_v4(
@@ -483,10 +505,12 @@ mod tests {
         let mut store = Store::default();
         store.contracts.insert(consent, (manifest.id(), manifest, BTreeMap::from([(claim, malformed)])));
         let encoded = borsh::to_vec(&store).unwrap();
-        assert!(NativeRetainedV1::<Store>::recover_provider_verified_v1(&encoded, 1000, 10000, None, |_| panic!(
-            "native authority must not run before structural preflight"
-        ))
-        .is_err());
+        assert!(
+            NativeRetainedV1::<Store>::recover_provider_verified_v1(&encoded, 1000, 10000, None, |_| panic!(
+                "native authority must not run before structural preflight"
+            ))
+            .is_err()
+        );
         let empty = borsh::to_vec(&Store::default()).unwrap();
         let recovered = NativeRetainedV1::<Store>::recover_provider_verified_v1(&empty, 1000, 10000, None, |_| None).unwrap();
         assert!(recovered.held_contracts_v1().is_empty());

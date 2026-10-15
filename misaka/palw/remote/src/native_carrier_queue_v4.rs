@@ -28,14 +28,39 @@ const MAX_ROWS: usize = 4096;
 const MAX_BYTES: u64 = 64 << 20;
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum NativeCarrierPurposeV4 {
-    Enrollment { class: Hash64, executor: PalwBondKeyV2, root: Hash64, consent: Hash64, recovery: Hash64, until_daa: u64 },
-    Answer { provider: PalwBondKeyV2, stream: Hash64, sequence: u64, event: Hash64, deadline_daa: u64 },
-    Release { root: Hash64, consent: Hash64, tail: Hash64 },
+    Enrollment {
+        class: Hash64,
+        executor: PalwBondKeyV2,
+        root: Hash64,
+        consent: Hash64,
+        recovery: Hash64,
+        until_daa: u64,
+    },
+    Answer {
+        provider: PalwBondKeyV2,
+        stream: Hash64,
+        sequence: u64,
+        event: Hash64,
+        deadline_daa: u64,
+    },
+    Release {
+        root: Hash64,
+        consent: Hash64,
+        tail: Hash64,
+    },
+    /// Exact manifest for an actual kernel claim; does not impersonate a native
+    /// prospective session enrollment (variant 0).
+    KernelEnrollmentV4 {
+        root: Hash64,
+        consent: Hash64,
+        recovery: Hash64,
+        until_daa: u64,
+    },
 }
 impl NativeCarrierPurposeV4 {
     fn id(&self) -> Hash64 {
         match self {
-            Self::Enrollment { root, .. } => *root,
+            Self::Enrollment { root, .. } | Self::KernelEnrollmentV4 { root, .. } => *root,
             Self::Answer { event, .. } => *event,
             Self::Release { root, .. } => {
                 Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/RELEASE-CARRIER/V4", root))
@@ -62,6 +87,22 @@ impl NativeCarrierPurposeV4 {
                             == *recovery
                         && monetary.terms.enrollment_until_daa == *until_daa
                         && monetary.terms.native_session.as_ref().is_some_and(|s| s.class_id == *class)
+                }
+                _ => false,
+            },
+            (Self::KernelEnrollmentV4 { root, consent, recovery, until_daa }, M::RecoveryV2(r)) => match &**r {
+                R::FundedEnroll { monetary, terms, .. } => {
+                    monetary.terms.root == *root
+                        && monetary.id() == *consent
+                        && monetary.terms.sponsor == *signer
+                        && terms.sponsor == *signer
+                        && terms.root == *root
+                        && terms.initial_consent == *consent
+                        && Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/RELEASE-RECOVERY-CONSENT/V2", terms))
+                            == *recovery
+                        && monetary.terms.enrollment_until_daa == *until_daa
+                        && monetary.terms.native_session.is_none()
+                        && monetary.terms.material_manifest.as_ref().is_some_and(|m| m.root == *root)
                 }
                 _ => false,
             },
@@ -99,6 +140,7 @@ impl NativeWireScanV1 for NativeCarrierPurposeV4 {
             0 => <(Hash64, PalwBondKeyV2, Hash64, Hash64, Hash64, u64)>::scan_native_wire_v1(r),
             1 => <(PalwBondKeyV2, Hash64, u64, Hash64, u64)>::scan_native_wire_v1(r),
             2 => <(Hash64, Hash64, Hash64)>::scan_native_wire_v1(r),
+            3 => <(Hash64, Hash64, Hash64, u64)>::scan_native_wire_v1(r),
             _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "native carrier purpose unknown")),
         }
     }
@@ -254,7 +296,14 @@ impl NativeCarrierQueueV4 {
                 .map_err(|e| e.to_string())?
                 .logical_requests_v1();
         }
-        let max_encoded = old_len.checked_add(encoded_extra).ok_or("native queue encoded bound overflow")?;
+        let old_entry = match self.rows.get(&id) {
+            Some(old) => (borsh::object_length(old).map_err(|e| e.to_string())? as u64)
+                .checked_add(64)
+                .ok_or("native queue old entry overflow")?,
+            None => 0,
+        };
+        let max_encoded =
+            old_len.checked_sub(old_entry).and_then(|n| n.checked_add(encoded_extra)).ok_or("native queue encoded bound overflow")?;
         if max_encoded > MAX_BYTES {
             return Err("native carrier queue total byte capacity exhausted".into());
         }

@@ -429,8 +429,15 @@ impl LoopbackNativeProviderV3 {
                     } else {
                         Demand::Kernel { stage: c.stage, position: c.position }
                     };
-                    let action = match store.answer_material_owned_v1(row.consent, row.terms.root, c.dependency, provider.bond, demand)
-                    {
+                    let action = match store.answer_material_current_v4(
+                        row.consent,
+                        row.terms.root,
+                        c.dependency,
+                        provider.bond,
+                        provider.key.public_key(),
+                        demand,
+                        &*api,
+                    ) {
                         Ok(a) => a,
                         Err(error) => {
                             kaspa_core::warn!("RFC08 V4 actual court material unavailable: {error}");

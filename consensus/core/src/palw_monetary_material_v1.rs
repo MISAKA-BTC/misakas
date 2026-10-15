@@ -375,7 +375,11 @@ impl PalwChainStateV2 {
             crate::palw_state_v2::PalwStateV2Error::ExecV2Refused("kernel material complete codec capacity is unenrolled".into())
         })?;
         let commitment = crate::palw_material_capacity_v1::kernel_material_commitment_v1(row);
-        let expected = if matches!(row.body, misaka_palw_kernel::ledger::ClaimBodyV1::Segmented { .. }) {
+        let expected = if params.material_release_recovery_at_v2(now).is_some()
+            && params.material_release_recovery_from_v2().is_some_and(|from| row.committed_daa >= from)
+        {
+            crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4
+        } else if matches!(row.body, misaka_palw_kernel::ledger::ClaimBodyV1::Segmented { .. }) {
             crate::palw_material_capacity_v1::PalwMaterialCodecV1::SegmentedParts
         } else {
             crate::palw_material_capacity_v1::PalwMaterialCodecV1::KernelPositions
@@ -625,5 +629,41 @@ mod tests {
         signatures.offers[0].signature = vec![9; 32];
         assert_eq!(id, signatures.id());
         assert_eq!(e, borsh::from_slice(&borsh::to_vec(&e).unwrap()).unwrap());
+    }
+    #[test]
+    fn complete_kernel_codec_owns_recovery_fence_on_both_ordinary_carriers() {
+        use crate::{
+            palw_lifecycle_objects_v2::{PalwLifecycleKindFenceV1 as F, PalwLifecycleKindOwnerV1 as O, palw_lifecycle_kind_owner_v1},
+            palw_material_capacity_v1::{PalwMaterialCodecV1, PalwMaterialManifestV1, PalwMaterialScopeV1},
+            palw_state_v2::PalwConsensusObjectV2 as C,
+        };
+        let mut e = enrollment();
+        let legacy = C::MonetaryMaterialEnrolledV1 { enrollment: Box::new(e.clone()), signature: vec![] };
+        assert_eq!(palw_lifecycle_kind_owner_v1(&legacy), O::Fence(F::MonetaryMaterialV1));
+        e.terms.material_manifest = Some(PalwMaterialManifestV1 {
+            root: e.terms.root,
+            scopes: vec![PalwMaterialScopeV1 {
+                claim: e.terms.root,
+                commitment: Hash64::from_bytes([8; 64]),
+                codec: PalwMaterialCodecV1::TypedKernelV4,
+                bytes: 100,
+                units: 1,
+                content: Hash64::from_bytes([9; 64]),
+            }],
+        });
+        let new = C::MonetaryMaterialEnrolledV1 { enrollment: Box::new(e.clone()), signature: vec![] };
+        let replaced = C::MonetaryMaterialReplacedV1 {
+            replacement: Box::new(PalwMonetaryMaterialReplacementV1 {
+                root: e.terms.root,
+                previous: Hash64::from_bytes([7; 64]),
+                sequence: 1,
+                enrollment: e,
+            }),
+            signature: vec![],
+        };
+        assert_eq!(palw_lifecycle_kind_owner_v1(&new), O::Fence(F::MaterialReleaseRecoveryV2));
+        assert_eq!(palw_lifecycle_kind_owner_v1(&replaced), O::Fence(F::MaterialReleaseRecoveryV2));
+        assert_eq!(borsh::to_vec(&PalwMaterialCodecV1::KernelPositions).unwrap(), vec![1]);
+        assert_eq!(borsh::to_vec(&PalwMaterialCodecV1::SegmentedParts).unwrap(), vec![2]);
     }
 }

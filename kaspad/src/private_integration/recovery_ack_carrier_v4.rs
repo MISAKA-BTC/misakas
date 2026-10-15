@@ -342,7 +342,7 @@ mod tests {
 /// Exact single-input/single-change carrier grammar BEFORE Borsh allocates.
 /// The payload is then compared to the already bounded signed outbox object;
 /// no arbitrary consensus-object enum is decoded from a local corrupt frame.
-fn decode_carrier(bytes: &[u8], object: &PalwConsensusObjectV2) -> Result<(Transaction, Option<NativeDemandLeaseV1>), String> {
+pub(super) fn decode_carrier(bytes: &[u8], object: &PalwConsensusObjectV2) -> Result<(Transaction, Option<NativeDemandLeaseV1>), String> {
     struct Cursor<'a>(&'a [u8]);
     impl<'a> Cursor<'a> {
         fn take(&mut self, n: usize) -> Result<(), String> {
@@ -432,7 +432,7 @@ fn decode_carrier(bytes: &[u8], object: &PalwConsensusObjectV2) -> Result<(Trans
 /// One-input, one-change, no-replacement construction path used above. Each
 /// allocation family follows the production builder, including simultaneously
 /// live priced/unsigned payloads and ScriptBuilder's geometric byte buffers.
-fn reserve_carrier_build_v4(
+pub(super) fn reserve_carrier_build_v4(
     object: &PalwConsensusObjectV2,
     funding: &kaspa_consensus_core::tx::UtxoEntry,
     public_key_bytes: usize,
