@@ -645,6 +645,10 @@ pub struct Args {
     /// This node's canonical free-prompt claims commit a capture with one lane of this step leaf
     /// corrupted — the one-move court's drill (ADR-0100 §6 step 2).
     pub palw_drill_tamper_fp_leaf: Option<u64>,
+    /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill): the lie this node's canonical claims commit as ORIGINAL TIR
+    /// frames — `cone:<leaf>` (D-05), `selection:<position>` (D-06), `output` (D-07), `no-tfp1` (D-18). Parsed by
+    /// [`parse_palw_drill_tamper_tir_frame_v1`]; see `palw_panel::PalwDrillTirFrameFaultV1`.
+    pub palw_drill_tamper_tir_frame: Option<String>,
     /// DRILL ONLY: open a court against every licensed claim, reproduced or not.
     pub palw_drill_challenge_all: bool,
     /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill: `palw_private_drill_network_v1`).
@@ -982,6 +986,7 @@ impl Default for Args {
             palw_tir_shard_fetch: false,
             palw_tir_shard_run_leaves: None,
             palw_drill_tamper_fp_leaf: None,
+            palw_drill_tamper_tir_frame: None,
             palw_drill_challenge_all: false,
             palw_drill_answer_only: false,
             palw_drill_refuse_leaf_evidence: false,
@@ -2683,6 +2688,18 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-tamper-tir-frame")
+                .long("palw-drill-tamper-tir-frame")
+                .require_equals(true)
+                .help(
+                    "PALW DRILL ONLY (G14 audit drills D-05/D-06/D-07/D-18): the lie this node's canonical claims commit as ORIGINAL TIR \
+                     frames — cone:<leaf> (one committed step leaf forged, roots re-derived), selection:<position> (the committed token at \
+                     that decode position is not the job's own selection), output (a substituted output root), no-tfp1 (published \
+                     without its TFP1 frame past palw_tir_public_conviction_v1, refused at acceptance). DEVNET/SIMNET OR A SALTED \
+                     TESTNET-12 DRILL ONLY.",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-tamper-boundary")
                 .long("palw-drill-tamper-boundary")
                 .require_equals(true)
@@ -3927,6 +3944,7 @@ impl Args {
             palw_tir_shard_fetch: m.get_one::<bool>("palw-tir-shard-fetch").copied().unwrap_or(false),
             palw_tir_shard_run_leaves: m.get_one::<u32>("palw-tir-shard-run-leaves").copied(),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
+            palw_drill_tamper_tir_frame: m.get_one::<String>("palw-drill-tamper-tir-frame").cloned(),
             palw_drill_challenge_all: m
                 .get_one::<bool>("palw-drill-challenge-all")
                 .copied()
@@ -4735,6 +4753,38 @@ pub fn parse_palw_tir_shard_declare_v1(spec: &str) -> Result<(kaspa_hashes::Hash
     let s_l: u16 = s_l.parse().map_err(|_| "S_L is not a number".to_string())?;
     let s_p: u16 = s_p.parse().map_err(|_| "S_P is not a number".to_string())?;
     Ok((class, s_l, s_p))
+}
+
+/// **`--palw-drill-tamper-tir-frame=<fault>`, parsed** (G14 audit drills D-05/D-06/D-07/D-18): `cone:<leaf>`,
+/// `selection:<position>`, `output` or `no-tfp1`. Anything else is refused by name.
+pub fn parse_palw_drill_tamper_tir_frame_v1(spec: &str) -> Result<crate::palw_panel::PalwDrillTirFrameFaultV1, String> {
+    use crate::palw_panel::PalwDrillTirFrameFaultV1 as F;
+    match spec.split_once(':') {
+        Some(("cone", leaf)) => Ok(F::Cone { leaf: leaf.parse().map_err(|_| "cone:<leaf> needs a step leaf number".to_string())? }),
+        Some(("selection", position)) => Ok(F::Selection {
+            position: position.parse().map_err(|_| "selection:<position> needs a decode position number".to_string())?,
+        }),
+        None if spec == "output" => Ok(F::Output),
+        None if spec == "no-tfp1" => Ok(F::NoTfp1),
+        _ => Err(format!("unknown TIR frame drill fault '{spec}': expected cone:<leaf>, selection:<position>, output or no-tfp1")),
+    }
+}
+
+#[cfg(test)]
+mod palw_drill_tir_frame_tests {
+    use super::*;
+    use crate::palw_panel::PalwDrillTirFrameFaultV1 as F;
+    /// The four G14 frame drills (D-05, D-06, D-07, D-18) parse by name; nothing else does.
+    #[test]
+    fn g14_tir_frame_drill_faults_parse_by_name() {
+        assert_eq!(parse_palw_drill_tamper_tir_frame_v1("cone:7").unwrap(), F::Cone { leaf: 7 });
+        assert_eq!(parse_palw_drill_tamper_tir_frame_v1("selection:0").unwrap(), F::Selection { position: 0 });
+        assert_eq!(parse_palw_drill_tamper_tir_frame_v1("output").unwrap(), F::Output);
+        assert_eq!(parse_palw_drill_tamper_tir_frame_v1("no-tfp1").unwrap(), F::NoTfp1);
+        for bad in ["", "cone", "cone:", "cone:x", "selection:-1", "output:1", "no-tfp", "leaf:7"] {
+            assert!(parse_palw_drill_tamper_tir_frame_v1(bad).is_err(), "{bad}");
+        }
+    }
 }
 
 /// **`--palw-drill-tamper-boundary=<position>:<occurrence>`, parsed** (RFC-0006, D-S3).

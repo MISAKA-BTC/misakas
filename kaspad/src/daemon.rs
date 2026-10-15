@@ -2044,6 +2044,20 @@ Do you confirm? (y/n)";
                                 Err(why) => panic!("--palw-drill-tamper-eval={spec}: {why}"),
                             },
                         },
+                        drill_tamper_tir_frame: match args.palw_drill_tamper_tir_frame.as_deref() {
+                            // The G14 frame drills (D-05/D-06/D-07/D-18): the same private-chain rule as every drill fault.
+                            Some(spec) if !palw_private_drill => panic!(
+                                "--palw-drill-tamper-tir-frame={spec} is a drill fault injector and is devnet/simnet (or a salted testnet-12 drill) only"
+                            ),
+                            Some(spec) => match crate::args::parse_palw_drill_tamper_tir_frame_v1(spec) {
+                                Ok(fault) => {
+                                    warn!("PALW DRILL: this node's canonical claims will commit the ORIGINAL TIR frame lie {fault:?}. They are meant to be convicted (or, for no-tfp1, refused).");
+                                    Some(fault)
+                                }
+                                Err(why) => panic!("--palw-drill-tamper-tir-frame={spec}: {why}"),
+                            },
+                            None => None,
+                        },
                         drill_tamper_fp_leaf: match args.palw_drill_tamper_fp_leaf {
                             // Devnet, simnet, or a salted testnet-12 drill (ADR-0152 §8.2) — a
                             // private chain by construction; never public testnet-12.

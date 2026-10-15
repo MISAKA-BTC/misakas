@@ -513,6 +513,7 @@ pub(super) fn panel_config(chain: &Chain, dir: &std::path::Path, bond: PalwBondK
         canonical_class: None,
         canonical_interval_daa: 100,
         drill_tamper_fp_leaf: None,
+        drill_tamper_tir_frame: None,
         drill_challenge_all: false,
         drill_answer_only: false,
         drill_refuse_leaf_evidence: false,
