@@ -159,6 +159,10 @@ impl PalwFinalQueueV1 {
     }
 
     /// Void every entry whose wait passed `queue_ttl_daa` (no slash; the issuance capacity it consumed is NOT returned early).
+    ///
+    /// **V7 (user decision 2026-10-15): a TTL expiry is a NEUTRAL end, never a fraud finding** — the claim waited for capacity the
+    /// network did not have. No slash, no escrow forfeit, no bond breaker strike, no conviction; the fold voids it as `BindTimeout`
+    /// (`PALW_RFC0016_QUEUE_TTL_VOID_REASON_V1`), the uncharged reason, counted only as a network capacity signal.
     pub fn expire_v1(&mut self, now_daa: u64, values: &PalwRfc0016ValuesV1) -> Vec<Hash64> {
         let ttl = values.queue_ttl_daa;
         let (gone, kept): (Vec<_>, Vec<_>) = self.entries.iter().copied().partition(|e| e.queued_daa.saturating_add(ttl) < now_daa);
@@ -184,6 +188,10 @@ impl PalwFinalQueueV1 {
 }
 
 /// A bond's ceiling in queue entries: `⌈L · C_b / ΣC⌉` over the bonds active in the class's queue (the asking bond included), at least 1.
+///
+/// **V7 (user decision 2026-10-15): the bounded queue's fair share is proportional to bond capital** (`L_queue`, `T_queue` and `h` are
+/// measured; this is the shape). Splitting capital buys no extra share beyond the ceiling's rounding (each split bond needs the bond
+/// floor), and no bond can hold more than its share however early it queues.
 pub fn palw_queue_bond_share_cap_v1(capital: u128, active_capital: u128, values: &PalwRfc0016ValuesV1) -> u32 {
     let len = values.queue_len_per_class as u128;
     if active_capital == 0 {
@@ -206,6 +214,11 @@ pub enum PalwQuoteVerdictV1 {
 }
 
 /// **The combined pre-lottery admission quote** (RFC-0016 §8.1 step 7, §10): read BEFORE an Attempt's forward.
+///
+/// **V7 (user decision 2026-10-15): a quote is NOT a right.** It is advice computed from the state the producer saw; the block that
+/// carries the Attempt re-checks the SAME rules against ITS state ([`super::rights::palw_rights_admit_with_snapshot_v1`], the
+/// capacity room, the queue's bond share) — deterministic in that state, so every node reaches one verdict whatever the quote said.
+/// A concurrent winner that took the last right or slot makes the later one refused (or queued within `h`), never admitted twice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwAdmissionQuoteV1 {
     pub rights: Option<PalwRightsQuoteV1>,
@@ -281,6 +294,42 @@ pub fn palw_opv_capacity_admits_v1(open_claims: u64, checks_available: u64, valu
 mod tests {
     use super::*;
     use crate::tx::TransactionOutpoint;
+
+    /// V7 (user decision 2026-10-15): the queue's fair share follows bond capital (3:1 capital → 3:1 share of `L`).
+    #[test]
+    fn v7_queue_shares_are_capital_proportional() {
+        let mut v = PalwRfc0016ValuesV1 { queue_len_per_class: 8, ..Default::default() };
+        assert_eq!(palw_queue_bond_share_cap_v1(3_000, 4_000, &v), 6);
+        assert_eq!(palw_queue_bond_share_cap_v1(1_000, 4_000, &v), 2);
+        v.queue_len_per_class = 4;
+        assert_eq!(palw_queue_bond_share_cap_v1(1, 1_000_000, &v), 1, "at least one entry");
+    }
+
+    /// V7: a quote is advice; the carrying block's re-check is deterministic and refuses once a concurrent winner took the last
+    /// right — the same answer on every node.
+    #[test]
+    fn v7_a_quote_is_not_a_right_and_races_recheck_deterministically() {
+        use super::super::rights::*;
+        let values = PalwRfc0016ValuesV1 { reissue_checkpoint_permille: 500, pace_margin_permille: 1_000, ..Default::default() };
+        let epoch = PalwRightsEpochV1 {
+            epoch_index: 0,
+            start_daa: 0,
+            length: 1_000,
+            n_exp: 1,
+            issued: [(Hash64::from_u64_word(1), 1u64)].into_iter().collect(),
+            ..Default::default()
+        };
+        let model = Hash64::from_u64_word(1);
+        let before = std::collections::BTreeMap::new();
+        let quote = palw_rights_quote_v1(&epoch, &before, &model, 10, &values);
+        assert_eq!(quote.verdict, Ok(PalwRightsUseV1::Own), "the quote said yes");
+        // A concurrent winner consumed the only right first: the later carrier is refused, on every node alike.
+        let after: std::collections::BTreeMap<Hash64, u64> = [(model, 1u64)].into_iter().collect();
+        let a = palw_rights_admit_with_snapshot_v1(&epoch, &after, &model, 11, &values, None);
+        let b = palw_rights_admit_with_snapshot_v1(&epoch, &after, &model, 11, &values, None);
+        assert_eq!(a, b);
+        assert!(a.is_err(), "the quote granted nothing");
+    }
 
     fn h(i: u64) -> Hash64 {
         Hash64::from_u64_word(i)

@@ -32,6 +32,10 @@ use crate::palw_rfc0016_v1::rights::{
 };
 use crate::palw_rfc0016_v1::values::{PALW_RFC0016_VALUES_V1, PalwRfc0016ValuesV1};
 
+/// **V7 (user decision 2026-10-15): the void reason of a queue TTL expiry** — `BindTimeout`, the uncharged reason (no slash, no
+/// escrow forfeit, no bond breaker strike): a TTL end is neutral, never a fraud finding.
+pub const PALW_RFC0016_QUEUE_TTL_VOID_REASON_V1: PalwVoidReasonV2 = PalwVoidReasonV2::BindTimeout;
+
 /// Telemetry rows older than this many epochs are dropped (bounded state).
 pub const PALW_RFC0016_TELEMETRY_EPOCHS_KEPT_V1: u64 = 8;
 
@@ -549,7 +553,8 @@ fn rfc0016_queue_tick_v1(
         .filter_map(|(_, v)| borsh::from_slice::<(Hash64, u64)>(v).ok().map(|(class, _)| class))
         .collect();
     for class_id in classes {
-        // TTL voids (no slash: `BindTimeout` is never charged) and rows of claims that left by another route.
+        // TTL voids — V7: a neutral end (`PALW_RFC0016_QUEUE_TTL_VOID_REASON_V1`, never charged, never fraud) — and rows of claims
+        // that left by another route.
         let mut live: Vec<(Hash64, u64, PalwClaimStateV2)> = Vec::new();
         for (claim_id, _bond, queued) in builder.state.rfc0016_queue_v1(&class_id) {
             match builder.state.claims.get(&claim_id).cloned() {
@@ -557,7 +562,7 @@ fn rfc0016_queue_tick_v1(
                     if queued.saturating_add(values.queue_ttl_daa) < now {
                         rfc0016_unqueue_v1(builder, &class_id, queued, &claim_id);
                         builder.disarm_deadline(claim_id);
-                        builder.void_claim(claim_id, &claim, now, PalwVoidReasonV2::BindTimeout)?;
+                        builder.void_claim(claim_id, &claim, now, PALW_RFC0016_QUEUE_TTL_VOID_REASON_V1)?;
                     } else {
                         live.push((claim_id, queued, claim));
                     }
