@@ -13,7 +13,10 @@
 //! 3. finds, in the same `Params`, every fence a conjunct is mechanically checkable against armed **at or below** the activation —
 //!    the kernel route (`palw_probabilistic_constraints_v1`), ADR-0176's class-independent `Q/B/R/F` caps and common DAA hold
 //!    (`palw_bond_budget_v1`, its policy valid), ADR-0177's allocation (`palw_model_bond_allocation_v1`) and court model scope
-//!    (`palw_court_model_scope_v1`), and RFC-0014 / ADR-0178's rule E (`palw_fork_choice_rule_e_v1`);
+//!    (`palw_court_model_scope_v1`), RFC-0014 / ADR-0178's rule E (`palw_fork_choice_rule_e_v1`), and — lead default 2026-10-15,
+//!    pending user review — G14's public prosecution (`palw_staged_public_court_v1`, the hard prerequisite) and the monitoring
+//!    economics (`palw_verifier_pay_v1`); plus, only where the record's rewarded profile set includes them, the TIR required-family
+//!    route (`palw_staged_tir_route_v1`) and the Float32 constraint route (`palw_staged_float_constraint_v1`);
 //! 4. and — the authentication — whose digest is one of [`PALW_PANEL_FREE_GATE_PINNED_RECORDS_V1`], a constant of this binary's
 //!    source. **That list is empty.** A record can therefore only become acceptable through a reviewed code release that pins its
 //!    digest; no configuration file, command-line flag or operator signature can make it so, and this binary accepts none.
@@ -120,6 +123,16 @@ pub enum PalwGateVerdictV1 {
     Unknown = 2,
 }
 
+/// **The rewarded profile families the record was reviewed for** (bound in the record, hence in its digest): each `true` family
+/// makes its G14 staged route a required fence. A family absent here may not be reward-bearing under the record.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwPanelFreeRewardedProfilesV1 {
+    /// TIR required-family classes are in the rewarded set (needs `palw_staged_tir_route_v1`).
+    pub tir_required_family: bool,
+    /// Greedy Float32 constraint classes are in the rewarded set (needs `palw_staged_float_constraint_v1`).
+    pub float32_constraint: bool,
+}
+
 /// One conjunct's line of the record.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwPanelFreeGateEntryV1 {
@@ -145,6 +158,8 @@ pub struct PalwPanelFreeGateRecordV1 {
     pub bond_budget_policy: Hash64,
     /// [`palw_panel_free_allocation_policy_digest_v1`] of the `palw_model_bond_allocation_v1` policy armed beside it.
     pub allocation_policy: Hash64,
+    /// The rewarded profile families (conditional route fences).
+    pub profiles: PalwPanelFreeRewardedProfilesV1,
     /// One entry per conjunct, strictly ascending by conjunct.
     pub entries: Vec<PalwPanelFreeGateEntryV1>,
 }
@@ -189,7 +204,8 @@ impl PalwPanelFreeGateRefusalV1 {
             Self::WrongTerms => "palw_panel_free_v1's activation gate record was reviewed for other OPV terms than the fence carries",
             Self::FenceNotArmedAtOrBelow(_) => {
                 "palw_panel_free_v1 needs palw_probabilistic_constraints_v1, palw_bond_budget_v1, palw_model_bond_allocation_v1, \
-                 palw_court_model_scope_v1 and palw_fork_choice_rule_e_v1 armed at or below it (RFC-0015 §8.3–§8.5, §9, §13.3)"
+                 palw_court_model_scope_v1, palw_fork_choice_rule_e_v1, palw_staged_public_court_v1, palw_verifier_pay_v1 (and the \
+                 staged TIR / Float32 routes of the rewarded profile families) armed at or below it (RFC-0015 §1, §7, §8.3–§8.5, §9, §13.3)"
             }
             Self::BondBudgetPolicy => {
                 "palw_panel_free_v1's activation gate record was reviewed for another (or an invalid) palw_bond_budget_v1 policy"
@@ -292,14 +308,24 @@ impl PalwPanelFreeGateRecordV1 {
         let at = self.activation_daa;
         let budget = params.palw_bond_budget_v1.as_ref();
         let allocation = params.palw_model_bond_allocation_v1.as_ref();
-        for (name, armed) in [
-            ("palw_probabilistic_constraints_v1", at_or_below(params.palw_probabilistic_constraints_v1, at)),
-            ("palw_bond_budget_v1", at_or_below(budget.map(|f| f.activation), at)),
-            ("palw_model_bond_allocation_v1", at_or_below(allocation.map(|f| f.activation), at)),
-            ("palw_court_model_scope_v1", at_or_below(params.palw_court_model_scope_v1, at)),
-            ("palw_fork_choice_rule_e_v1", at_or_below(params.palw_fork_choice_rule_e_v1, at)),
+        for (name, required, armed) in [
+            ("palw_probabilistic_constraints_v1", true, at_or_below(params.palw_probabilistic_constraints_v1, at)),
+            ("palw_bond_budget_v1", true, at_or_below(budget.map(|f| f.activation), at)),
+            ("palw_model_bond_allocation_v1", true, at_or_below(allocation.map(|f| f.activation), at)),
+            ("palw_court_model_scope_v1", true, at_or_below(params.palw_court_model_scope_v1, at)),
+            ("palw_fork_choice_rule_e_v1", true, at_or_below(params.palw_fork_choice_rule_e_v1, at)),
+            // Lead default 2026-10-15 (pending user review): G14 public prosecution and the monitoring economics.
+            ("palw_staged_public_court_v1", true, at_or_below(params.palw_staged_public_court_v1, at)),
+            ("palw_verifier_pay_v1", true, at_or_below(params.palw_verifier_pay_v1, at)),
+            // Only where the reviewed rewarded profile set includes the family.
+            ("palw_staged_tir_route_v1", self.profiles.tir_required_family, at_or_below(params.palw_staged_tir_route_v1, at)),
+            (
+                "palw_staged_float_constraint_v1",
+                self.profiles.float32_constraint,
+                at_or_below(params.palw_staged_float_constraint_v1, at),
+            ),
         ] {
-            if !armed {
+            if required && !armed {
                 return Err(PalwPanelFreeGateRefusalV1::FenceNotArmedAtOrBelow(name));
             }
         }

@@ -157,6 +157,18 @@ fn typed_config(typed: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine
     }
     params.palw_panel_free_v1 = Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new()));
     params.palw_typed_roots_v1 = typed.then(|| ForkActivation::new(1));
+    // RFC-0015 §8.3 (lead default 2026-10-15): an OPV network budgets every Panel-free claim (mechanics policy, unapproved).
+    let bundle = if params.arm_palw_opv_mechanics_budget_v1() {
+        let mut tmp = params.clone();
+        tmp.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
+        tmp.sync_palw_bond_budget_v1();
+        match tmp.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b,
+            _ => unreachable!("set above"),
+        }
+    } else {
+        bundle
+    };
     params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
     params.skip_proof_of_work = true;
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fences; only this harness bypasses it");

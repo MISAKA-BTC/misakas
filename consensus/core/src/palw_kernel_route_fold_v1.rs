@@ -1398,7 +1398,9 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         if let LedgerEventV1::ClaimCommitted { claim } = event {
             let row = ledger.claims.get(claim).ok_or_else(|| refused("accepted kernel claim is missing"))?;
             let reward = ledger.job_escrows.get(&row.job_id).map_or(0, |escrow| escrow.amount);
-            match builder.plan_kernel_claim_budget_v1(ctx, *signer, Hash64::from_bytes(row.class_binding_id), reward) {
+            let optimistic =
+                ledger.mode_of_claim(claim) == Some(misaka_palw_kernel::mode::VerificationModeV1::OptimisticPublicVerification);
+            match builder.plan_kernel_claim_budget_v1(ctx, *signer, Hash64::from_bytes(row.class_binding_id), reward, optimistic) {
                 Ok(Some(plan)) => {
                     builder.state.require_kernel_monetary_material_scope_v1(
                         builder.params,
@@ -1409,18 +1411,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                     builder.commit_bond_budget_v1(ctx, super::palw_bond_budget_fold_v1::kernel_budget_claim_id_v1(claim), plan)?;
                     builder.hold_kernel_income_v1(ctx, Hash64::from_bytes(*claim), row.liability_until.unwrap_or(ctx.daa_score))?;
                 }
-                // RFC-0015 §8.3 / §13.3: on a network whose Panel-free fence carries an activation gate record (none in this binary
-                // can pass validation), an OptimisticPublicVerification claim is admitted only with a class-independent Q/B/R/F
-                // reservation and the common DAA hold `d + W` of `palw_bond_budget_v1`; an unbudgeted OPV claim is refused like a
-                // budget refusal (it still pays the verification it used). Below the gate (test-armed worlds, isolated calibration)
-                // nothing changes.
-                Ok(None)
-                    if builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()).is_some_and(|o| o.budget_required)
-                        && ledger.mode_of_claim(claim) == Some(misaka_palw_kernel::mode::VerificationModeV1::OptimisticPublicVerification) =>
-                {
-                    persist_budget(builder, ctx, &ledger);
-                    return Ok(());
-                }
+                // RFC-0015 §8.3: an unbudgeted OPV claim arrives here as `Err` (`unbudgeted_panel_free_v1`) and is refused below.
                 Ok(None) => {}
                 Err(_) => {
                     persist_budget(builder, ctx, &ledger);

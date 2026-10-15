@@ -189,7 +189,8 @@ fn plan_stage_budget(
         return Err(refused("stage fixed budget lacks exact original18 checked native epoch/producer/coins"));
     }
     let Some(mirror) = builder.bond_budget_mirror_at(ctx.daa_score) else {
-        return Ok(None);
+        // RFC-0015 §8.3: Panel-free stage work is unbudgeted only where no OPV policy requires a budget.
+        return builder.unbudgeted_panel_free_v1();
     };
     if mirror.allocation_at(ctx.daa_score).is_some() {
         return Err(refused("stage budget has no independently authenticated native model-line allocation"));

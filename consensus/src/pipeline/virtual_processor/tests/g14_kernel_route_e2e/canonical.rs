@@ -93,6 +93,7 @@ fn canonical_config(opv: bool) -> (Config, PalwConsensusParamsV2, Premine, Premi
     } else {
         None
     };
+    let bundle = with_opv_budget(&mut params, bundle);
     params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
     params.skip_proof_of_work = true;
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fence; only this harness bypasses it");

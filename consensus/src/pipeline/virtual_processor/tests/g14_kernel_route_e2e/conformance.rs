@@ -66,6 +66,7 @@ fn conformance_config(eligible: Vec<Hash64>, floor: u16) -> (Config, PalwConsens
     // ruled floor the release terms hold — only the complete check gates rewards.
     fence.sampled_conformance_gates_reward = floor == 0;
     params.palw_panel_free_v1 = Some(fence);
+    let bundle = with_opv_budget(&mut params, bundle);
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fences");
     (Config::new(params), bundle, premine, floats)
 }
@@ -1263,6 +1264,7 @@ async fn g14_rewards_a_legacy_panel_route_class_keeps_the_old_route_and_never_ea
     let (config, bundle, premine, floats) = kernel_config_onboarding();
     let mut params = config.params.clone();
     params.palw_panel_free_v1 = Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(60), Vec::new()));
+    let bundle = with_opv_budget(&mut params, bundle);
     let mut net = Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new);
     net.beat_to(1).await;
     let refusal = |net: &Net, class: Hash64, card: usize| {

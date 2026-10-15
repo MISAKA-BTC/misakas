@@ -51,6 +51,7 @@ fn boot_config(min_effective_bits: u16, denied: Vec<Hash64>) -> (Config, PalwCon
     fence.sampled_conformance_gates_reward = true;
     assert!(fence.validate_value().is_err(), "GAP-70's drill switch is refused by the value's own validation");
     params.palw_panel_free_v1 = Some(fence);
+    let bundle = with_opv_budget(&mut params, bundle);
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fences");
     (Config::new(params), bundle, premine, floats)
 }

@@ -5,14 +5,13 @@
 //! * **Old claims across the upgrade** (§11.2, §13.2 last row): a Panel-licensed claim admitted below `palw_panel_free_v1` keeps its
 //!   seats, its receipts and its Panel Final after the fence; an OPV registration below the fence is dropped; one past it registers
 //!   and its claim has no seat.
-//! * **§8.3 on the OPV door**: where the fence carries an activation gate record (`PalwPanelFreeFenceV1::activation_gate`) an OPV
-//!   claim is admitted only with a `palw_bond_budget_v1` reservation — class-independent `Q = 1`, no reward block, no Final weight —
-//!   whose issuance slot returns at `d + W` and at no other time (not at Final); without the budget engine the claim is refused.
+//! * **§8.3 on the OPV door** (lead default 2026-10-15: on EVERY network with an OPV policy, test-armed and calibration included): an
+//!   OPV claim is admitted only with a `palw_bond_budget_v1` reservation — class-independent `Q = 1`, no reward block, no Final
+//!   weight — whose issuance slot returns at `d + W` and at no other time (not at Final); without the budget engine it is refused.
 //! * **A direct proof lands over another bond's open demand** (§6.1, §13.2 "有効proofがあるが別courtが先行"): the demander is not
 //!   punished, the accuser is paid, the producer is slashed once.
 //!
-//! Like the rest of this suite the fences are armed WITHOUT their validation (which refuses them on every height); the activation gate
-//! record used here is a placeholder whose only role is to be present (the harness bypasses `validate_palw_panel_free_v1`).
+//! Like the rest of this suite the fences are armed WITHOUT their validation (which refuses them on every height).
 use super::*;
 use kaspa_consensus_core::palw_bond_budget_v1::{
     PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1, PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1, PALW_BOND_BUDGET_POLICY_VERSION_V2,
@@ -20,25 +19,11 @@ use kaspa_consensus_core::palw_bond_budget_v1::{
     PalwRoundRightsPolicyV1, PalwWeightValuePolicyV1,
 };
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
-use kaspa_consensus_core::palw_panel_free_gate_v1::{PALW_PANEL_FREE_GATE_RECORD_VERSION_V1, PalwPanelFreeGateRecordV1};
 
 /// The upgrade height of the migration case: above every object of the Panel-licensed claim's life up to its pass.
 const H: u64 = 30;
 /// The common DAA hold `W` of the test budget: longer than the OPV window (50 DAA), so an early Final would show an early return.
 const W: u64 = 80;
-
-/// A placeholder record: present (so the fold's `budget_required` holds), never valid (validation is bypassed by this harness).
-fn placeholder_gate() -> PalwPanelFreeGateRecordV1 {
-    PalwPanelFreeGateRecordV1 {
-        version: PALW_PANEL_FREE_GATE_RECORD_VERSION_V1,
-        genesis: Hash64::default(),
-        activation_daa: 1,
-        terms: Hash64::default(),
-        bond_budget_policy: Hash64::default(),
-        allocation_policy: Hash64::default(),
-        entries: Vec::new(),
-    }
-}
 
 /// A TEST budget policy per card 0's whole collateral: ample claims, reward and weight; `W` as above.
 fn test_budget_policy(unit: u64) -> PalwBondBudgetPolicyV1 {
@@ -60,11 +45,11 @@ fn test_budget_policy(unit: u64) -> PalwBondBudgetPolicyV1 {
     }
 }
 
-/// An OPV network with `fence`, the mechanics worlds' eligible class, and — where `budget` — `palw_bond_budget_v1` armed at DAA 1 with
-/// [`test_budget_policy`] (mirrored onto the V2 bundle, as `budget_e2e.rs` does).
+/// An OPV network with `fence` and the mechanics worlds' eligible class; where `budget`, `palw_bond_budget_v1` armed at DAA 1 with
+/// [`test_budget_policy`] (re-mirrored onto the bundle), else NO budget (only to show the refusal).
 fn rfc15_config(fence: PalwPanelFreeFenceV1, budget: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     opv_test_eligible(&opv_admitted());
-    let (mut config, bundle, premine, floats) = kernel_config_with(Some(fence));
+    let (config, bundle, premine, floats) = kernel_config_with_budget(Some(fence), false);
     if !budget {
         return (config, bundle, premine, floats);
     }
@@ -76,19 +61,19 @@ fn rfc15_config(fence: PalwPanelFreeFenceV1, budget: bool) -> (Config, PalwConse
             _ => None,
         })
         .expect("a genesis card");
-    config.params.palw_bond_budget_v1 =
-        Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy: test_budget_policy(unit) });
-    config.params.sync_palw_bond_budget_v1();
-    let PalwConsensusMode::ConsensusV2(armed) = &config.params.palw_consensus_mode else { unreachable!("ConsensusV2") };
-    assert!(armed.state.bond_budget().is_some(), "the budget mirror is set");
-    let bundle = armed.clone();
-    (config, bundle, premine, floats)
+    let mut params = config.params.clone();
+    params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy: test_budget_policy(unit) });
+    params.sync_palw_bond_budget_v1();
+    let mut tmp = params.clone();
+    tmp.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle);
+    tmp.sync_palw_bond_budget_v1();
+    let PalwConsensusMode::ConsensusV2(bundle) = tmp.palw_consensus_mode else { unreachable!("set above") };
+    assert!(bundle.state.bond_budget().is_some(), "the budget mirror is set");
+    (Config::new(params), bundle, premine, floats)
 }
 
-fn gated_fence() -> PalwPanelFreeFenceV1 {
-    let mut f = PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new());
-    f.activation_gate = Some(placeholder_gate());
-    f
+fn opv_fence() -> PalwPanelFreeFenceV1 {
+    PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new())
 }
 
 /// The budget's kernel-route row of card `card`'s claims (one claim in these worlds).
@@ -103,7 +88,7 @@ fn kernel_budget_rows(w: &World, card: usize) -> Vec<PalwBudgetClaimRowV1> {
 #[tokio::test]
 async fn rfc15_e2e_an_opv_claim_draws_the_bond_budget_and_its_slot_returns_only_at_d_plus_w() {
     kaspa_core::log::try_init_logger("warn");
-    let mut w = World::on_opv(Net::over_cfg(rfc15_config(gated_fence(), true), TestConsensus::new)).await;
+    let mut w = World::on_opv(Net::over_cfg(rfc15_config(opv_fence(), true), TestConsensus::new)).await;
     let job = w.job().await;
     let honest = w.claim(0, &job, false).await;
     let rows = kernel_budget_rows(&w, 0);
@@ -139,12 +124,12 @@ async fn rfc15_e2e_an_opv_claim_draws_the_bond_budget_and_its_slot_returns_only_
     w.net.assert_same(&z, "replay");
 }
 
-/// **Where the fence carries a gate record, an OPV claim without the budget engine is refused** (RFC-0015 §8.3: no reward-bearing
-/// claim outside the class-independent caps); the job stays free for a budgeted network, nothing is written.
+/// **An OPV claim without the budget engine is refused** on any network with an OPV policy (RFC-0015 §8.3, lead default
+/// 2026-10-15: no Panel-free claim outside the class-independent caps); nothing is written.
 #[tokio::test]
-async fn rfc15_e2e_with_a_gate_record_an_unbudgeted_opv_claim_is_refused() {
+async fn rfc15_e2e_an_unbudgeted_opv_claim_is_refused() {
     kaspa_core::log::try_init_logger("warn");
-    let mut w = World::on_opv(Net::over_cfg(rfc15_config(gated_fence(), false), TestConsensus::new)).await;
+    let mut w = World::on_opv(Net::over_cfg(rfc15_config(opv_fence(), false), TestConsensus::new)).await;
     let job = w.job().await;
     let refused = w.claim_with(0, &job, false, Delivery::Direct).await;
     assert!(!w.net.ledger().claims.contains_key(&refused.id), "no budget engine: the OPV claim is refused at the door");
@@ -160,7 +145,7 @@ async fn rfc15_e2e_with_a_gate_record_an_unbudgeted_opv_claim_is_refused() {
 async fn rfc15_e2e_a_panel_licensed_claim_admitted_below_the_fence_finishes_under_panel_rules() {
     kaspa_core::log::try_init_logger("warn");
     let fence = PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(H), Vec::new());
-    let mut w = World::on(Net::over_cfg(rfc15_config(fence, false), TestConsensus::new)).await;
+    let mut w = World::on(Net::over_cfg(rfc15_config(fence, true), TestConsensus::new)).await;
     let job = w.job().await;
     let old = w.claim(0, &job, false).await;
     assert!(w.net.daa() < H, "the old claim is admitted below the fence");

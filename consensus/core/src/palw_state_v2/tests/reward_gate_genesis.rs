@@ -19,7 +19,7 @@ fn opv_at_genesis_keeps_the_floor_active_and_other_classes_behind_the_actual_rew
                 sampled_conformance_gates_reward: false,
                 test_eligible: Vec::new(),
                 reward_gate: Some(PalwRewardGateTermsV1 { fence_activation_daa: 0 }),
-                budget_required: false,
+                budget_required: true,
             }),
             ..Default::default()
         }),

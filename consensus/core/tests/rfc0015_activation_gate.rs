@@ -14,7 +14,7 @@ use kaspa_consensus_core::palw_bond_budget_v1::{PalwBondBudgetFenceV1, PalwModel
 use kaspa_consensus_core::palw_mode_v2::PalwModeV2Error;
 use kaspa_consensus_core::palw_panel_free_gate_v1::{
     PALW_PANEL_FREE_GATE_PINNED_RECORDS_V1, PALW_PANEL_FREE_GATE_RECORD_VERSION_V1, PalwGateVerdictV1, PalwPanelFreeConjunctV1 as C,
-    PalwPanelFreeGateEntryV1, PalwPanelFreeGateRecordV1, PalwPanelFreeGateRefusalV1 as R, palw_panel_free_allocation_policy_digest_v1,
+    PalwPanelFreeGateEntryV1, PalwPanelFreeGateRecordV1, PalwPanelFreeRewardedProfilesV1, PalwPanelFreeGateRefusalV1 as R, palw_panel_free_allocation_policy_digest_v1,
     palw_panel_free_terms_digest_v1,
 };
 use kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1;
@@ -31,6 +31,8 @@ fn coupled_params() -> Params {
     p.palw_model_bond_allocation_v1 = Some(PalwModelBondAllocationFenceV1::at(ForkActivation::new(AT)));
     p.palw_court_model_scope_v1 = Some(ForkActivation::new(AT));
     p.palw_fork_choice_rule_e_v1 = Some(ForkActivation::new(AT));
+    p.palw_staged_public_court_v1 = Some(ForkActivation::new(AT));
+    p.palw_verifier_pay_v1 = Some(ForkActivation::new(AT));
     p
 }
 
@@ -47,6 +49,7 @@ fn complete_record(p: &Params, f: &PalwPanelFreeFenceV1) -> PalwPanelFreeGateRec
         terms: palw_panel_free_terms_digest_v1(f),
         bond_budget_policy: p.palw_bond_budget_v1.as_ref().unwrap().policy.digest(),
         allocation_policy: palw_panel_free_allocation_policy_digest_v1(&p.palw_model_bond_allocation_v1.as_ref().unwrap().policy),
+        profiles: PalwPanelFreeRewardedProfilesV1::default(),
         entries: C::ALL
             .iter()
             .enumerate()
@@ -172,12 +175,14 @@ fn rfc0015_gate_every_conjunct_and_every_coupled_fence_is_required() {
         Err(R::NotPass(C::PanelZeroDeferralLiftedByRuling))
     );
     type Unset = fn(&mut Params);
-    let couplings: [(&str, Unset); 5] = [
+    let couplings: [(&str, Unset); 7] = [
         ("palw_probabilistic_constraints_v1", |q| q.palw_probabilistic_constraints_v1 = None),
         ("palw_bond_budget_v1", |q| q.palw_bond_budget_v1 = None),
         ("palw_model_bond_allocation_v1", |q| q.palw_model_bond_allocation_v1 = None),
         ("palw_court_model_scope_v1", |q| q.palw_court_model_scope_v1 = None),
         ("palw_fork_choice_rule_e_v1", |q| q.palw_fork_choice_rule_e_v1 = None),
+        ("palw_staged_public_court_v1", |q| q.palw_staged_public_court_v1 = None),
+        ("palw_verifier_pay_v1", |q| q.palw_verifier_pay_v1 = None),
     ];
     for (name, unset) in couplings {
         let mut q = p.clone();
@@ -234,4 +239,29 @@ fn rfc0015_gate_the_record_is_identity_some_only() {
     assert_ne!(id(gated), id(other), "the record's content is hashed");
     assert_eq!(id(bare.clone()), id(bare), "deterministic");
     assert!(!p.palw_panel_free_gated_v1(), "testnet-12 carries no fence, hence no record");
+}
+
+/// The staged TIR / Float32 routes are required exactly when the reviewed rewarded profile set includes their family (lead default
+/// 2026-10-15): absent families need no route; a present family without its route armed at or below is refused; the profile set is
+/// part of the record's identity.
+#[test]
+fn rfc0015_gate_the_staged_g14_routes_follow_the_rewarded_profile_set() {
+    let (p, f) = (coupled_params(), fence());
+    assert_eq!(verdict(&p, &f, &complete_record(&p, &f)), Ok(()), "no TIR / Float32 family rewarded: neither route required");
+    let mut tir = complete_record(&p, &f);
+    tir.profiles.tir_required_family = true;
+    assert_eq!(verdict(&p, &f, &tir), Err(R::FenceNotArmedAtOrBelow("palw_staged_tir_route_v1")));
+    let mut with_tir = p.clone();
+    with_tir.palw_staged_tir_route_v1 = Some(ForkActivation::new(AT));
+    assert_eq!(verdict(&with_tir, &f, &tir), Ok(()));
+    let mut late = p.clone();
+    late.palw_staged_tir_route_v1 = Some(ForkActivation::new(AT + 1));
+    assert_eq!(verdict(&late, &f, &tir), Err(R::FenceNotArmedAtOrBelow("palw_staged_tir_route_v1")));
+    let mut float = complete_record(&p, &f);
+    float.profiles.float32_constraint = true;
+    assert_eq!(verdict(&p, &f, &float), Err(R::FenceNotArmedAtOrBelow("palw_staged_float_constraint_v1")));
+    let mut with_float = p.clone();
+    with_float.palw_staged_float_constraint_v1 = Some(ForkActivation::new(AT));
+    assert_eq!(verdict(&with_float, &f, &float), Ok(()));
+    assert_ne!(tir.digest(), complete_record(&p, &f).digest(), "the profile set is bound in the record");
 }
