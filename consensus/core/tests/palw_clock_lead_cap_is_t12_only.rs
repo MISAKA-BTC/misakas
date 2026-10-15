@@ -21,22 +21,25 @@ use kaspa_consensus_core::config::params::{
 /// simnet below.
 const BEFORE_THE_CAP: &[(&str, &str, &str, &str)] = &[
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was bd633ce9…, 44cb8fd7…, 5a1d8d56…)
         "testnet-11",
-        "bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29",
-        "44cb8fd729e9575a6e3b1e72c466b8abce4b9ecd81bb556685c9ba225487117f",
-        "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
+        "0c2c022a11572d73779fc0610cf65d4147feb499a9b58472901d3d73ecfc1f71",
+        "bf4cc0b3e2fa208a18cce48d0c33db74e48adf275a069687b534856411f1c83e",
+        "f023f74befcdaf732f213616c79fd94782d7728f835151bbfd986498f962bd64",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 7a27f341…, 7a27f341…, edd80c01…)
         "devnet",
-        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
-        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
-        "edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f",
+        "f17c6555a617736bd13e90eaab80974223149c211d08af516008bd6500010b1f",
+        "f17c6555a617736bd13e90eaab80974223149c211d08af516008bd6500010b1f",
+        "d82068a0080c47f45f376c81c621ec002aa8541a22c49e9d0a373e263c39c680",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was eb866c61…, 7819e5ed…, a1ed7ff0…)
         "mainnet",
-        "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5",
-        "7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8",
-        "a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4",
+        "0befd2fa1da052fb88ef8a04cc1bd6412ea560371aaec606790194dee41ac3fa",
+        "db7f8f9869a612c6e90ff8a01806569a0fe7391cfa8226c3c3a89680ae83d277",
+        "7b8f4090c31d524312f1b6d8a91d0e47544b031a62560d90b9a1bc65b709e7c6",
     ),
     ("testnet-10", TESTNET_10_IDS.0, TESTNET_10_IDS.1, TESTNET_10_IDS.2),
     ("simnet", SIMNET_IDS.0, SIMNET_IDS.1, SIMNET_IDS.2),
@@ -47,31 +50,31 @@ const BEFORE_THE_CAP: &[(&str, &str, &str, &str)] = &[
 /// ids were taken from this file's own output on this tree, where both presets leave the cap `None`
 /// and a Some-only writer writes nothing for it.
 const TESTNET_10_IDS: (&str, &str, &str) = (
-    "0d9cf361e02dea6d9e873014ff5e414c2e8e6879e8d705cde6c924a3a3f8dd88",
-    "2c3067c01e76ac32f0bd3f78ba49cc25f2ea771af4eb848e5aaad17f825a0a64",
-    "7ea3296f36fc827898aa6560a1f71159652a12a7dd69105178564b9f7723d5d0",
+    "a4153f537905eebd364d43742ccfc6e7264149cce61392f827dc0d45aee4d08d",
+    "c9adc147ada258574c0926534fae5dd4eb82b5a2795bdc5300affd74abfe0380",
+    "e86052cdfea252fde7c2277087aeda5566c41e9161f083705e99bf3180653ff6",
 );
 const SIMNET_IDS: (&str, &str, &str) = (
-    "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd",
-    "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd",
-    "f981edc9bff1b71ae46abf030c0c56c40beafabeeae78d8435dd502ad6191f69",
+    "5fca6e0c631ea9327fc75e1bd5463b2d78814c3a9937f2d6cea282bdfc05ef56",
+    "5fca6e0c631ea9327fc75e1bd5463b2d78814c3a9937f2d6cea282bdfc05ef56",
+    "04ccb8fe229ae341d1c2b171b4bd7a578fcc326c3ecbf5f017ccaee878f3aee5",
 );
 
 /// testnet-12 at `befb59dfe` (the mainnet-values commit's own pins: `1870bc1f…` / `6e193d30…` /
 /// `79563f51…`) — what testnet-12 is with the cap taken away: the cap is the only thing that moved it.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was 9d3a0096…, 4ae08484…)
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was a9280987…, 50990e0f…, 250fe032…)
 const T12_BEFORE_THE_CAP: (&str, &str, &str) = (
-    "a928098725ed6533cdae313f39d5c32089720eeb1255a8d490ce1c06f4f47e19",
-    "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
-    "250fe032e9a5ab2de3d5ad427427bc2707100269ace5c5803c7f4ee9764b975e",
+    "20206cf2e283e2bf1859d817196a93a8ff6e85e45ce01faa5302fb9ad9b142ad",
+    "73312ebf4fa0fd951fff099bc9be1760a21e30ac00c92ee62225e7fa0404aded",
+    "6a29a90722344aad14adea9b13e92736e5e16a1c2ea1f3b785a28a649249c50a",
 );
 
 /// testnet-12 as this change ships it — the ids a testnet-12 node on this build announces.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was b41089e3…, 34b0dc14…)
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 5ee7fd8e…, 5de80e64…, 1678e073…)
 const T12_WITH_THE_CAP: (&str, &str, &str) = (
-    "5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6",
-    "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9",
+    "59a6d1b00434b42129201098fafb2c889a27d6392a87e531df6e1409beeb6ce7",
+    "92042711856b239713d0376b7466422e561618fc51e115e1557be34b078e5acd",
+    "bc0600cc47b9433b99b715e902e3892e86295460b98cc1893c4fccc26f2b780c",
 );
 
 fn shipped(name: &str) -> Params {

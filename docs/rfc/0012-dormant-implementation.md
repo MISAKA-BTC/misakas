@@ -1,39 +1,40 @@
-# RFC-0012 dormant implementation
+# RFC-0012 PALW-only implementation
 
-Status: implemented behind an **unassigned** `Params::palw_dns_retirement` fence.
-All shipped network presets use `None`. No network, activation height, D/W threshold,
-operator/class concentration cap, or legacy evidence horizon is assigned by this implementation.
-There is no CLI override for this policy. Test fixtures do not constitute deployment settings.
-The [RFC's release gates](0012-palw-only-consensus-and-native-evm-settlement.md#8-implementation-sequence-and-release-gates)
-remain mandatory before activation.
+This source tree is for the new ruleset only. The old DNS BFT implementation and
+validator workers have been removed, including `dns_bft.rs`, `dns_bft_v1.rs`,
+`validator_service.rs`, the standalone `run`/`bond` commands, in-process validator
+flags and DNS-dependent bridge pause policies. It cannot revalidate the old BFT
+network history. Every preset has a new consensus identity and schedule marker;
+use a fresh network/database rather than attaching this build to the old network.
 
-## Coordinated transition
+Bonded-stake attestation/precommit quorum, DNS-final anchor advancement, stake
+preference and the DNS-anchor reorg veto are deleted. The production virtual
+processor no longer reads DNS state. Historical anchors cannot accelerate coinbase
+maturity or certify EVM heads.
 
-`PalwDnsRetirementV1` commits its activation, policy version and all policy values,
-legacy evidence horizon, subsidy/fee schedule, retired transaction kinds, and native
-snapshot version into both the consensus-parameter and schedule identities. `None`
-contributes no new bytes; existing preset fingerprint vectors remain the reference.
+DNS participation transactions are rejected from genesis. The PALW comparator,
+strict economic wins, shallow-race convergence, frontier provenance and missing
+state refusal remain authoritative. DNS attestation/active-set RPCs return empty
+results and precommit duty reports retirement at DAA 0. Reserved wire IDs and
+historical payload layouts are retained to avoid reusing protocol identifiers.
+PALW keys, producer/panel/court operations, wallet transactions and historical
+bond exits remain available. DNS peer discovery is independent and remains available.
 
-Fork choice resolves retirement at the incumbent sink. After retirement, the DNS
-BFT veto and stale-stake preferred-tip selection abstain; the existing full PALW
-state comparator, frontier/maturity rules, provenance checks, strict wins, shallow
-tie rules and missing-data refusal remain in force. DNS confirmation updates stop.
-Peer-discovery DNS and header ordering as a download hint are unaffected.
-
-Transaction admission resolves the fence at the accepting DAA score. New DNS bonds
-(`0x10`), attestation shards (`0x11`) and precommits (`0x19`) are rejected in header
-context, populated UTXO context and template selection. Historical equivocation is
-allowed only through the configured finite accepting-DAA horizon, with both signed
-targets strictly before retirement; normal evidence signature checks still apply.
-Bond unbond/exit validation, historical snapshots, codecs, PALW producer/seat bonds,
-panel/court/slashing, payout types and shared signing-key loaders remain available.
+Native settlement certification still requires an explicit
+`Params::palw_dns_retirement` policy. All shipped presets leave that policy `None`;
+no production D/W thresholds, concentration caps or certification activation height
+are assigned by this deletion. Without an active native policy, EVM `latest` names
+an executed canonical block while `safe` and `finalized` are unavailable. Neither
+an old DNS anchor nor an imported pruning point provides a native certificate.
+The [RFC release gates](0012-palw-only-consensus-and-native-evm-settlement.md#8-implementation-sequence-and-release-gates)
+still apply before deployment.
 
 ## Native EVM evidence and heads
 
 The existing native lock/claim/refund/withdrawal executor remains authoritative:
 claim before timeout, refund at/after timeout, same-block claim/refund exclusion,
 scaling, tips, single credit/debit and parent-payload/child-result ordering remain
-unchanged. Retirement releases the optional DNS Pause admission gate. Acceptance
+unchanged. The DNS Pause admission gate has been deleted. Acceptance
 and settlement confidence remain separate facts.
 
 The new native evidence row uses the canonical L1 sink hash as its generation.
@@ -83,9 +84,7 @@ keeps retirement status, evidence and the legacy PALW status at one generation.
 
 New eligible non-floor attempts escrow 92% and useful-work inclusion earns up to 8%,
 with zero new DNS subsidy. Normal and native-settlement transaction fees go to their
-carrier (100% worker, zero DNS/service). Allocation uses the lower earning/paying
-DAA for claim escrow. Old claims retain their original recorded entitlement; a later
-payer does not retroactively increase it. Recovery floor retains its prior bounded
+carrier (100% worker, zero DNS/service). This new ruleset applies its accounting from genesis; it does not replay old DNS-era earnings. Recovery floor retains its prior bounded
 carve. The coinbase withholds the full new worker base; unallocated remainder is
 never minted, preventing the retired 20% from becoming an immediate miner windfall.
 Inclusion eligibility follows the existing entitlement/dedup checks and excludes
@@ -94,19 +93,19 @@ continue through the old deferred payout path; no new DNS reward keys are genera
 
 ## Readers and services
 
-In-process and standalone DNS validator workers stop signing/funding after retirement.
+In-process and standalone DNS validator workers have been deleted.
 Status reports the retired role; historical bond exits remain accessible. CLI,
 TypeScript, gRPC and wRPC expose optional native evidence/retirement fields. wRPC
 keeps the exact v1 encoding when those fields are absent and uses response v2 when
-present. Old JSON without these fields remains readable. The wallet clears an
-explicitly unavailable DNS shortcut and retains its long coinbase-maturity fallback.
+present. Old JSON without these fields remains readable. DNS-final coinbase acceleration
+and wallet anchor polling are removed; the long DAA maturity remains authoritative.
 Explorer overlay/finality pages become native settlement views after retirement;
 bridge notices report native evidence availability instead of DNS funding/quorum waits.
 
 ## Activation work still required
 
-This is dormant engineering support, **not a completed production migration or a
-PALW common-prefix security proof**. Before assigning an activation:
+The deletion is complete, but native settlement policy remains unassigned. This
+change is not a production deployment or a PALW common-prefix security proof. Before assigning an activation:
 
 * Justify D, W, concentration caps, evidence horizon and trusted-sync assumptions;
   measure private maturation, class/operator concentration and withholding attacks.
@@ -122,7 +121,22 @@ PALW common-prefix security proof**. Before assigning an activation:
 
 Focused regression tests cover committed policy values, unset presets, duplicate
 work, concentration/maturity/order/lifecycle stops, evidence windows, integer subsidy
-conservation, opposed DNS state at the retirement fence, transaction/template refusal,
-old entitlement preservation, native generation mismatch and atomic row persistence.
-Legacy bridge/execution/reorg tests remain part of validation; they do not by themselves
+conservation, opposed persisted DNS state, transaction/template refusal,
+native generation mismatch and atomic row persistence.
+PALW and native bridge/execution tests remain part of validation; they do not by themselves
 satisfy the private-network activation matrix above.
+
+## Validation of DNS authority removal
+
+The related consensus, node, signer/key utility, CLI, gateway, extension and wallet
+crates pass `cargo check --locked --tests` (nine selected packages). Focused tests
+pass: 9 RFC-0012 core tests, 10 fingerprint/maturity tests, 14 signer tests,
+32 key/exit tests and 8 consensus tests, for 73 tests total. The consensus tests
+include opposed persisted DNS anchors, isolated participation rejection, unreadable
+PALW state, EVM execution/claim templates and the long coinbase maturity fallback.
+Shell scripts and both setup UI scripts also pass syntax checks.
+
+The repository's repin enumeration checker still reports the same 107 pre-existing
+unclassified occurrences as the base commit; this deletion adds no occurrences.
+That checker is not a passing repository-wide gate. The activated private-network
+matrix above remains outside this code-removal validation.

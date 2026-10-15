@@ -3,8 +3,7 @@ use kaspa_muhash::MuHash;
 use std::sync::Arc;
 
 use crate::{
-    BlockHashSet, BlueWorkType, ChainPath, Hash64,
-    acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
+    BlockHashSet, BlueWorkType, ChainPath, acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
     api::args::{TransactionValidationArgs, TransactionValidationBatchArgs},
     block::{
         Block, BlockTemplate, TemplateBuildMode, TemplateTransactionSelector, TemplateTransactionSelectorFactory, VirtualStateApproxId,
@@ -13,7 +12,7 @@ use crate::{
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
-        ActiveValidatorSet, AttestationQualityDeficit, DnsConfirmation, PrecommitDuty, StakeBondPage, StakeBondQuery, StakeBondRecord,
+        ActiveValidatorSet, AttestationQualityDeficit, DnsConfirmation, StakeBondPage, StakeBondQuery, StakeBondRecord,
         ValidatorAttestationTarget,
     },
     errors::{
@@ -621,15 +620,6 @@ pub trait ConsensusApi: Send + Sync {
         _limit: usize,
     ) -> Vec<ValidatorAttestationTarget> {
         Vec::new()
-    }
-
-    /// MISAKA §5 round 2: the lock this validator is carrying on the selected chain and the epochs
-    /// it still owes a precommit for.
-    ///
-    /// `None` when the DNS overlay is not configured; `round_active: false` below
-    /// `Params::dns_bft_gate` (ADR-0128), which is where every shipped preset sits.
-    fn get_precommit_duty(&self, _validator_id: Hash64, _bond_outpoint: TransactionOutpoint) -> Option<PrecommitDuty> {
-        None
     }
 
     fn get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {
@@ -1285,8 +1275,7 @@ pub trait ConsensusApi: Send + Sync {
     /// row) at the tip. `None` for a legacy class, an unknown one, or off ConsensusV2.
     fn palw_tir_class_record_v1(
         &self,
-        _class_id: kaspa_hashes::Hash64,
-    ) -> Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1> {
+        _class_id: kaspa_hashes::Hash64) -> Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1> {
         None
     }
 
@@ -1344,7 +1333,8 @@ pub trait ConsensusApi: Send + Sync {
     }
 
     /// **RFC-0007 Part IV.1: the audits `seat` still owes** at the tip. Empty by `Default`.
-    fn palw_v2_mesh_audit_duties_v1(&self, _seat: crate::palw_state_v2::PalwBondKeyV2) -> Vec<crate::palw_mesh_v1::PalwMeshAuditDutyV1> {
+    fn palw_v2_mesh_audit_duties_v1(&self, _seat: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<crate::palw_mesh_v1::PalwMeshAuditDutyV1> {
         Vec::new()
     }
 

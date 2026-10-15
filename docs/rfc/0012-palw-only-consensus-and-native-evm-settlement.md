@@ -48,6 +48,10 @@ The bridge in this RFC is the **native MISAKA UTXO ↔ MISAKA EVM accounting tra
 same L1**, not an Ethereum/other-chain bridge. An external chain cannot inherit PALW settlement
 without its own proof verification, destination rules and security analysis.
 
+Implementation status: the old DNS BFT and validator workers have been deleted from
+this tree for a new-ruleset-only build. The following table records the design baseline.
+See [implementation notes](0012-dormant-implementation.md) for the current behavior.
+
 ## 1. What must actually change in today's code
 
 | Existing dependency, verified at the source baseline | Required replacement |
@@ -65,7 +69,7 @@ Primary source paths:
 * [Virtual processor](../../consensus/src/pipeline/virtual_processor/processor.rs), especially
   `dns_reorg_outcome`, `update_evm_canonical_heads`, `bridge_finality_is_fresh`, snapshot import
   and template construction.
-* [DNS BFT gate](../../consensus/src/pipeline/virtual_processor/dns_bft.rs),
+* Historical DNS BFT gate (removed from this tree);
   [PALW comparator](../../consensus/core/src/palw_fork_choice.rs),
   [shared/historical overlay types](../../consensus/core/src/dns_finality.rs).
 * [Native EVM accounting](../../consensus/src/processes/evm/mod.rs), especially

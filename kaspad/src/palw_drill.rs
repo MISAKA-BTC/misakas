@@ -239,13 +239,25 @@ impl PalwDrillExtraFencesV1 {
             ("--palw-drill-capacity-rho100-at", self.capacity_rho100_at, "the capacity ramp's rho = 100 step straight after rho = 10"),
             ("--palw-drill-capacity-step4-at", self.capacity_step4_at, "the capacity ramp's rho = 250 step (F-L's fourth step)"),
             ("--palw-drill-capacity-step5-at", self.capacity_step5_at, "the capacity ramp's rho = 1000 step (F-L's fifth step)"),
-            ("--palw-drill-capacity-emission-at", self.capacity_emission_at, "the per-DAA PALW reward budget (palw_capacity_emission_budget, F-EM)"),
+            (
+                "--palw-drill-capacity-emission-at",
+                self.capacity_emission_at,
+                "the per-DAA PALW reward budget (palw_capacity_emission_budget, F-EM)",
+            ),
             ("--palw-drill-capacity-multi-claim-at", self.capacity_multi_claim_at, "riders (palw_capacity_multi_claim, F-M1)"),
-            ("--palw-drill-capacity-rho-breaker-at", self.capacity_rho_breaker_at, "the lower-only rho breaker (palw_capacity_rho_breaker, F-K)"),
+            (
+                "--palw-drill-capacity-rho-breaker-at",
+                self.capacity_rho_breaker_at,
+                "the lower-only rho breaker (palw_capacity_rho_breaker, F-K)",
+            ),
             ("--palw-drill-gen-at", self.gen_at, "RFC-0003's generative fence (palw_gen_v1)"),
             ("--palw-drill-decode-rules-at", self.decode_rules_at, "the decode rules (palw_fp_decode_rules)"),
             ("--palw-drill-fp-v5-at", self.fp_v5_at, "FP Job V5 (palw_fp_job_v5)"),
-            ("--palw-drill-fp-constraint-at", self.fp_constraint_at, "the decode constraint (palw_fp_decode_constraint, FP job version 6)"),
+            (
+                "--palw-drill-fp-constraint-at",
+                self.fp_constraint_at,
+                "the decode constraint (palw_fp_decode_constraint, FP job version 6)",
+            ),
             ("--palw-drill-fp-prefix-at", self.fp_prefix_at, "the prefix-state receipt (palw_fp_prefix_state)"),
             ("--palw-drill-fp-prefix-inherit-at", self.fp_prefix_inherit_at, "the inherited-prefix leaves (palw_fp_prefix_inherit)"),
             ("--palw-drill-fp-tokenizer-at", self.fp_tokenizer_at, "the tokenizer-match rule (palw_fp_tokenizer_match)"),
@@ -257,17 +269,28 @@ impl PalwDrillExtraFencesV1 {
             ("--palw-drill-audit-mesh-at", self.audit_mesh_at, "RFC-0007's audit mesh (palw_audit_mesh_v1)"),
             ("--palw-drill-capped-at", self.capped_at, "RFC-0007's capped onboarding (palw_capped_onboarding_v1)"),
             ("--palw-drill-panel-liveness-at", self.panel_liveness_at, "lane PL's panel-liveness list (ADR-0166)"),
-            ("--palw-drill-useful-work-at", self.useful_work_at, "ADR-0165's Useful Work Transition (palw_floor_reserve_v1, palw_real_clock_tick_v1)"),
+            (
+                "--palw-drill-useful-work-at",
+                self.useful_work_at,
+                "ADR-0165's Useful Work Transition (palw_floor_reserve_v1, palw_real_clock_tick_v1)",
+            ),
             ("--palw-drill-improve-at", self.improve_at, "RFC-0004's improvement fence (palw_improvement_v1)"),
             ("--palw-drill-tir-shard-at", self.tir_shard_at, "RFC-0006's layer-sharded panels (palw_tir_shard_v1)"),
-            ("--palw-drill-int11-at", self.int11_at, "the int-11 flag day's whole list (RFC-0003, RFC-0004, the capacity ramp to rho = 25 / 100)"),
+            (
+                "--palw-drill-int11-at",
+                self.int11_at,
+                "the int-11 flag day's whole list (RFC-0003, RFC-0004, the capacity ramp to rho = 25 / 100)",
+            ),
         ]
         .into_iter()
         .find_map(|(flag, at, what)| at.map(|at| (flag, at, what)))
     }
 
     /// **Arm them on `params`**, in order, each refusal naming its flag; the moves, for the node to print.
-    pub fn apply(&self, params: &mut kaspa_consensus_core::config::params::Params) -> Result<Vec<kaspa_consensus_core::config::drill::PalwDrillFenceMoveV1>, String> {
+    pub fn apply(
+        &self,
+        params: &mut kaspa_consensus_core::config::params::Params,
+    ) -> Result<Vec<kaspa_consensus_core::config::drill::PalwDrillFenceMoveV1>, String> {
         use kaspa_consensus_core::config::drill as d;
         // Steps 2 and 3 of the ramp, and rho = 100 straight after rho = 10, are the same slots: one or the other.
         if self.capacity_rho100_at.is_some() && (self.capacity_step2_at.is_some() || self.capacity_step3_at.is_some()) {
@@ -347,16 +370,20 @@ impl PalwDrillExtraFencesV1 {
         }
         // ADR-0164's entries: the budget, the riders and the breaker before the steps that need them, then ρ = 250 and ρ = 1000.
         if let Some(at) = self.capacity_emission_at {
-            moves.extend(d::palw_drill_capacity_emission_at_v1(params, at).map_err(|e| format!("--palw-drill-capacity-emission-at: {e}"))?);
+            moves.extend(
+                d::palw_drill_capacity_emission_at_v1(params, at).map_err(|e| format!("--palw-drill-capacity-emission-at: {e}"))?,
+            );
         }
         if let Some(at) = self.capacity_multi_claim_at {
             moves.extend(
-                d::palw_drill_capacity_multi_claim_at_v1(params, at).map_err(|e| format!("--palw-drill-capacity-multi-claim-at: {e}"))?,
+                d::palw_drill_capacity_multi_claim_at_v1(params, at)
+                    .map_err(|e| format!("--palw-drill-capacity-multi-claim-at: {e}"))?,
             );
         }
         if let Some(at) = self.capacity_rho_breaker_at {
             moves.extend(
-                d::palw_drill_capacity_rho_breaker_at_v1(params, at).map_err(|e| format!("--palw-drill-capacity-rho-breaker-at: {e}"))?,
+                d::palw_drill_capacity_rho_breaker_at_v1(params, at)
+                    .map_err(|e| format!("--palw-drill-capacity-rho-breaker-at: {e}"))?,
             );
         }
         if let Some(at) = self.capacity_step4_at {
@@ -381,7 +408,9 @@ impl PalwDrillExtraFencesV1 {
             moves.extend(d::palw_drill_fp_prefix_at_v1(params, at).map_err(|e| format!("--palw-drill-fp-prefix-at: {e}"))?);
         }
         if let Some(at) = self.fp_prefix_inherit_at {
-            moves.extend(d::palw_drill_fp_prefix_inherit_at_v1(params, at).map_err(|e| format!("--palw-drill-fp-prefix-inherit-at: {e}"))?);
+            moves.extend(
+                d::palw_drill_fp_prefix_inherit_at_v1(params, at).map_err(|e| format!("--palw-drill-fp-prefix-inherit-at: {e}"))?,
+            );
         }
         if let Some(at) = self.fp_tokenizer_at {
             moves.extend(d::palw_drill_fp_tokenizer_at_v1(params, at).map_err(|e| format!("--palw-drill-fp-tokenizer-at: {e}"))?);
@@ -498,7 +527,13 @@ impl PalwDrillExtraFencesV1 {
     /// The marker's `rfc1_at=` line — RFC-0001's four fences (`none` when none stands, else
     /// `fp_prefix:… fp_tokenizer:… fp_constraint2:… adapter:…`), its own line so every earlier line keeps its text.
     fn rfc1_marker_text(&self) -> String {
-        if self.fp_constraint_at.is_none() && self.fp_prefix_at.is_none() && self.fp_prefix_inherit_at.is_none() && self.fp_tokenizer_at.is_none() && self.fp_constraint2_at.is_none() && self.adapter_at.is_none() {
+        if self.fp_constraint_at.is_none()
+            && self.fp_prefix_at.is_none()
+            && self.fp_prefix_inherit_at.is_none()
+            && self.fp_tokenizer_at.is_none()
+            && self.fp_constraint2_at.is_none()
+            && self.adapter_at.is_none()
+        {
             return palw_drill_marker_fence_text_v1(None);
         }
         let at = |v: Option<u64>| palw_drill_marker_fence_text_v1(v);
@@ -655,11 +690,7 @@ pub fn palw_drill_validate_args_v1(args: &Args) -> ConfigResult<()> {
     }
     let ring = PalwDrillKeyringV1::new(salt);
     palw_drill_keys_are_drill_only_v1(args, &ring)?;
-    for (flag, value) in [
-        ("--palw-producer-bond", &args.palw_producer_bond),
-        ("--palw-fee-outpoint", &args.palw_fee_outpoint),
-        ("--stake-bond", &args.stake_bond),
-    ] {
+    for (flag, value) in [("--palw-producer-bond", &args.palw_producer_bond), ("--palw-fee-outpoint", &args.palw_fee_outpoint)] {
         if let Some(outpoint) = value.as_deref().and_then(|s| crate::palw_producer::parse_outpoint(s).ok())
             && palw_t12_public_genesis_txid_v1(&outpoint.transaction_id)
         {
@@ -688,16 +719,6 @@ fn palw_drill_keys_are_drill_only_v1(args: &Args, ring: &PalwDrillKeyringV1) -> 
             return Err(refused(format!(
                 "--palw-producer-key={path} is not a bond key of drill {salt_id} (bond keys 0..{PALW_DRILL_KEYRING_SPAN_V1}). A drill signs \
                  with drill-only keys, never a card key: take a seed from the keyring --palw-drill-write-keyring writes"
-            )));
-        }
-    }
-    if let Some(path) = args.validator_key.as_deref() {
-        let seed = kaspa_pq_validator_core::load_validator_seed(path).map_err(|e| refused(format!("--validator-key: {e}")))?;
-        let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
-        if ring.find_validator_pubkey(key.public_key()).is_none() {
-            return Err(refused(format!(
-                "--validator-key={path} is not a validator key of drill {salt_id} (validator keys 0..{PALW_DRILL_KEYRING_SPAN_V1}). A \
-                 drill's attestations are signed with drill-only keys: take a seed from the keyring's `validator` rows"
             )));
         }
     }
@@ -911,7 +932,9 @@ pub fn palw_drill_datadir_guard_v4(
                 && recorded_model_court == model_court_text
                 && recorded_capacity == capacity_text
                 && recorded_extra == extra_text
-                && later.iter().all(|(key, _, text)| marker_line(key).unwrap_or_else(|| palw_drill_marker_fence_text_v1(None)) == *text)
+                && later
+                    .iter()
+                    .all(|(key, _, text)| marker_line(key).unwrap_or_else(|| palw_drill_marker_fence_text_v1(None)) == *text)
             {
                 return Ok(());
             }
@@ -1354,7 +1377,7 @@ mod tests {
         assert_eq!(with(&[&salt_flag]).palw_drill_real_submit_delay_s, None, "off by default");
         let bare = with(&[&salt_flag, "--palw-drill-real-submit-delay-s"]);
         assert_eq!(bare.palw_drill_real_submit_delay_s, Some(340), "the bare flag is the 8k producer's median inference, 340 s");
-        palw_drill_validate_args_v1(&bare).expect("a salted drill node takes the bare flag"); 
+        palw_drill_validate_args_v1(&bare).expect("a salted drill node takes the bare flag");
         for bad in ["0", "3601", "-1", "x"] {
             let mut argv: Vec<String> = base.iter().map(|s| (*s).to_owned()).collect();
             argv.push(salt_flag.clone());
@@ -1486,7 +1509,8 @@ mod tests {
             let text = help_of(id);
             assert!(!text.contains("  "), "--{id}'s help has a run of spaces: {text}");
         }
-        for id in ["palw-drill-answer-only", "palw-drill-refuse-leaf-evidence", "palw-drill-tamper-fp-leaf", "palw-drill-tamper-eval"] {
+        for id in ["palw-drill-answer-only", "palw-drill-refuse-leaf-evidence", "palw-drill-tamper-fp-leaf", "palw-drill-tamper-eval"]
+        {
             assert!(help_of(id).contains("OR A SALTED TESTNET-12 DRILL ONLY"), "--{id}");
         }
     }
@@ -1539,7 +1563,6 @@ mod tests {
         let other = PalwDrillKeyringV1::new(PalwDrillSaltV1::from_bytes([0x35; 32]).unwrap());
         let drill_bond = seed_file(dir.path(), "drill-bond", &ring.key(PalwDrillKeyRoleV1::Bond, 3).seed);
         let drill_operator = seed_file(dir.path(), "drill-operator", &ring.key(PalwDrillKeyRoleV1::Operator, 3).seed);
-        let drill_validator = seed_file(dir.path(), "drill-validator", &ring.key(PalwDrillKeyRoleV1::Validator, 0).seed);
         let foreign_bond = seed_file(dir.path(), "foreign-bond", &other.key(PalwDrillKeyRoleV1::Bond, 3).seed);
         let heartbeat = ring.key(PalwDrillKeyRoleV1::Heartbeat, 0).address(Prefix::Testnet).to_string();
         let payout = ring.key(PalwDrillKeyRoleV1::Payout, 1).address(Prefix::Testnet).to_string();
@@ -1566,20 +1589,8 @@ mod tests {
             format!("--palw-producer-bond={}:{}", drill_seat.transaction_id, drill_seat.index),
             format!("--palw-producer-pay-address={payout}"),
             format!("--palw-heartbeat-miner-address={heartbeat}"),
-            format!("--validator-key={drill_validator}"),
-            format!("--stake-bond={}:{}", drill_seat.transaction_id, drill_seat.index),
         ]);
         assert!(palw_drill_validate_args_v1(&ok).is_ok(), "{:?}", palw_drill_validate_args_v1(&ok));
-
-        // Review finding 6: the validator key and the stake bond are drill-only too.
-        for (extra, needle) in [
-            (format!("--validator-key={drill_bond}"), "is not a validator key of drill"),
-            (format!("--validator-key={foreign_bond}"), "is not a validator key of drill"),
-            (format!("--stake-bond={}:{}", public_seat.transaction_id, public_seat.index), "names public testnet-12's genesis txid"),
-        ] {
-            let why = refusal(&node(&[extra.clone()]));
-            assert!(why.contains(needle), "{extra}: {why}");
-        }
 
         // Review finding 2: the EVM fee recipient is one of the drill's EVM accounts.
         #[cfg(feature = "evm")]
@@ -1907,7 +1918,10 @@ mod tests {
             "{why}"
         );
         let none = palw_drill_datadir_guard_v3(&dir, Some(&a), "g", Some(6), Some(10), Some(14), None).unwrap_err();
-        assert!(none.contains("recorded room:none,verify:none,step2:30,step3:40,rho100:none, now none"), "dropped over a stored chain: {none}");
+        assert!(
+            none.contains("recorded room:none,verify:none,step2:30,step3:40,rho100:none, now none"),
+            "dropped over a stored chain: {none}"
+        );
         // The keyring names them and the fingerprint the node on the same command line announces.
         let keys = tempfile::tempdir().unwrap();
         let path = palw_drill_write_keyring_v4(&a, keys.path(), Some(6), Some(10), Some(14), None, set).expect("written");
@@ -2141,7 +2155,14 @@ mod tests {
             let why = refusal(&parse(&argv));
             assert!(why.contains("needs --palw-drill-genesis-salt"), "{argv:?}: {why}");
         }
-        let why = refusal(&parse(&["--testnet", "--netsuffix=10", "--nodnsseed", "--addpeer=10.0.0.2:26311", &flag, "--palw-drill-fence-at=40"]));
+        let why = refusal(&parse(&[
+            "--testnet",
+            "--netsuffix=10",
+            "--nodnsseed",
+            "--addpeer=10.0.0.2:26311",
+            &flag,
+            "--palw-drill-fence-at=40",
+        ]));
         assert!(why.contains("testnet-12 only"), "{why}");
         assert!(refusal(&with(&[&flag, "--palw-drill-fence-at=0"])).contains("not genesis"));
         let drill = kaspa_consensus_core::config::params::palw_t12_drill_params_v1(&salt());
@@ -2180,8 +2201,7 @@ mod tests {
         let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
         let flag = format!("--palw-drill-genesis-salt={SALT}");
         let release_drill = config_of(&parse(&base.iter().copied().chain([flag.as_str()]).collect::<Vec<_>>()));
-        let crossing =
-            config_of(&parse(&base.iter().copied().chain([flag.as_str(), "--palw-drill-fence-at=40"]).collect::<Vec<_>>()));
+        let crossing = config_of(&parse(&base.iter().copied().chain([flag.as_str(), "--palw-drill-fence-at=40"]).collect::<Vec<_>>()));
         assert_eq!(crossing.params.genesis.hash, release_drill.params.genesis.hash, "the salt's genesis");
         assert_eq!(crossing.palw_drill_genesis_salt, Some(salt()));
         assert_eq!(crossing.palw_drill_fence_moves.len(), PALW_T12_POST_LAUNCH_FENCES_V1.len());
@@ -2461,7 +2481,11 @@ mod tests {
         let without = config_of(&parsed(&[]));
         let with = config_of(&parsed(&["--palw-drill-panel-liveness-at=60"]));
         assert_eq!(
-            (without.params.palw_panel_unavailable_expiry, without.params.palw_panel_fast_switch, without.params.palw_seat_availability),
+            (
+                without.params.palw_panel_unavailable_expiry,
+                without.params.palw_panel_fast_switch,
+                without.params.palw_seat_availability
+            ),
             (Some(ForkActivation::new(5_300)), Some(ForkActivation::new(5_300)), Some(ForkActivation::new(5_300))),
             "armed at the release's height on the release drill (int-12: the flag day's list)"
         );
@@ -2521,7 +2545,8 @@ mod tests {
         assert_eq!(with.palw_drill_fence_moves.len(), without.palw_drill_fence_moves.len() + 1, "one fence moved");
         with.params.validate_palw_v2().expect("the drill with the held leaf challenge validates");
         assert_ne!(with.params.consensus_params_id(), without.params.consensus_params_id(), "the fence moves the fingerprint");
-        palw_drill_validate_args_v1(&parsed(&["--palw-drill-tir-at=20", "--palw-drill-held-chunks-at=140"])).expect("with the IR fence");
+        palw_drill_validate_args_v1(&parsed(&["--palw-drill-tir-at=20", "--palw-drill-held-chunks-at=140"]))
+            .expect("with the IR fence");
         // The marker's own line, and a stored chain is never reopened under another height.
         let dir = root.path().join("x/misaka-testnet-12");
         let set = PalwDrillExtraFencesV1 { held_chunks_at: Some(140), ..Default::default() };

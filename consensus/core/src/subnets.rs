@@ -207,19 +207,10 @@ pub const SUBNETWORK_ID_COMPUTE_COMMITMENT: SubnetworkId = SubnetworkId::from_by
 /// no off-chain executor↔verifier round trip is needed and every verdict is publicly auditable.
 pub const SUBNETWORK_ID_COMPUTE_VERDICT: SubnetworkId = SubnetworkId::from_byte(0x18);
 
-/// Round 2 of DNS finality — [`crate::dns_finality::StakePrecommitPayload`]. A validator that has
-/// seen the prevote quorum for an epoch's anchor **locks** on it and says so on chain. An anchor
-/// is DNS-confirmed only once the precommit round reaches quorum too, so finality is a two-round
-/// commit rather than a single tally, and a validator that moves its lock has published the
-/// evidence of doing so. In the 0x10-0x18 overlay band because it is the same finality overlay:
-/// the attestation shard is the prevote, this is the precommit.
+/// Reserved retired DNS precommit ID. Never reused; participation is rejected from genesis.
 pub const SUBNETWORK_ID_STAKE_PRECOMMIT: SubnetworkId = SubnetworkId::from_byte(0x19);
 
-/// Two precommits from one validator that cannot both be honest —
-/// [`crate::dns_finality::PrecommitEvidencePayload`]. The round-2 sibling of
-/// `SUBNETWORK_ID_SLASHING_EVIDENCE`: a lock is only worth carrying if breaking it costs the
-/// bond, and the two signed payloads are the whole proof, so no reachability and no access to the
-/// losing branch's blocks is needed to check it.
+/// Reserved retired DNS precommit evidence ID. Rejected by the new ruleset.
 pub const SUBNETWORK_ID_PRECOMMIT_EVIDENCE: SubnetworkId = SubnetworkId::from_byte(0x1a);
 
 // kaspa-pq Selected-Parent EVM Lane (ADR-0020) EVM bridge subnetwork ids. Byte

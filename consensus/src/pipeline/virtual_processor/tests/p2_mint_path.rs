@@ -1308,30 +1308,24 @@ async fn p2_t25_t05_a_leg_is_no_utxo_until_minted_and_then_obeys_decision_a_alon
         assert!(matches!(block_path(mint_daa + floor - 1), Err(TxRuleError::ImmatureCoinbaseSpend(..))));
     }
 
-    // T25's DNS half: the node's DnsState names a confirmed anchor (the policy layer reads it,
-    // never consensus). At the mint's own block it releases the leg at the block path's floor; one
-    // DAA before it has not passed the mint and changes nothing. The node's state is put back after.
+    // Persisted DNS confirmation cannot shorten the new ruleset's maturity fallback.
     {
         use crate::model::stores::dns_state::{DnsStateStore, DnsStateStoreReader};
-        let kept = vp.dns_state_store.read().get().expect("testnet-12 keeps a DnsState");
-        let confirm = |anchor_daa: u64| {
-            let mut state = kept.clone();
-            state.last_dns_confirmed_anchor = minted.block.header.hash;
-            state.last_dns_confirmed_anchor_daa_score = anchor_daa;
-            vp.dns_state_store.write().set(state).expect("the DnsState is planted");
-            assert_eq!(vp.dns_coinbase_settlement().expect("the fallback").confirmed_anchor_daa, Some(anchor_daa));
-        };
-        confirm(mint_daa - 1);
-        assert!(
-            matches!(mempool(Some(mint_daa + floor.max(1))), Err(TxRuleError::ImmatureCoinbaseSpend(..))),
-            "an anchor before the mint's block has not passed it: the long fallback still applies"
-        );
-        confirm(mint_daa);
-        mempool(Some(mint_daa + floor)).expect("a DNS-final anchor at the mint releases it at the block path's floor");
-        if floor > 0 {
-            assert!(matches!(mempool(Some(mint_daa + floor - 1)), Err(TxRuleError::ImmatureCoinbaseSpend(..))), "never below it");
-        }
-        vp.dns_state_store.write().set(kept).expect("the node's DnsState is restored");
+        let kept = vp.dns_state_store.read().get().ok();
+        let mut state = kept.clone().unwrap_or_else(|| kaspa_consensus_core::dns_finality::DnsState {
+            selected_chain_anchor: minted.block.header.hash, anchor_daa_score: mint_daa,
+            work_depth: Default::default(), stake_depth: Default::default(),
+            last_dns_confirmed_anchor: Default::default(), last_dns_confirmed_anchor_daa_score: 0,
+            rollout_stage: kaspa_consensus_core::dns_finality::DnsRolloutStage::Launch,
+            validator_set_commitment: Default::default(), health: Default::default(),
+        });
+        state.last_dns_confirmed_anchor = minted.block.header.hash;
+        state.last_dns_confirmed_anchor_daa_score = mint_daa;
+        vp.dns_state_store.write().set(state).unwrap();
+        assert_eq!(vp.dns_coinbase_settlement().unwrap().confirmed_anchor_daa, None);
+        assert!(matches!(mempool(Some(mint_daa + maturity - 1)), Err(TxRuleError::ImmatureCoinbaseSpend(..))));
+        mempool(Some(mint_daa + maturity)).unwrap();
+        if let Some(kept) = kept { vp.dns_state_store.write().set(kept).unwrap(); }
     }
 
     // The held row's DAA clock ran out before block 1; through every block since, its second clock

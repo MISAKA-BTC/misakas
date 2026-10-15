@@ -82,32 +82,6 @@ use std::{
 use tokio::join;
 use workflow_rpc::server::WebSocketCounters as WrpcServerCounters;
 
-/// A service implementing the Rpc API at kaspa_rpc_core level.
-///
-/// Collects notifications from the consensus and forwards them to
-/// actual protocol-featured services. Thanks to the subscription pattern,
-/// notifications are sent to the registered services only if the actually
-/// need them.
-///
-/// ### Implementation notes
-///
-/// This was designed to have a unique instance in the whole application,
-/// though multiple instances could coexist safely.
-///
-/// Any lower-level service providing an actual protocol, like gPRC should
-/// register into this instance in order to get notifications. The data flow
-/// from this instance to registered services and backwards should occur
-/// by adding respectively to the registered service a Collector and a
-/// Subscriber.
-/// kaspa-pq Phase 11 (ADR-0010): bridges the in-process validator service (defined in
-/// the `kaspad` crate) to the RPC layer without a circular dependency — `kaspad`
-/// implements this trait for its `ValidatorService`, and `RpcCoreService` holds an
-/// optional `dyn` to serve `getValidatorStatus`.
-#[async_trait]
-pub trait ValidatorStatusProvider: Send + Sync {
-    async fn rpc_validator_status(&self) -> GetValidatorStatusResponse;
-}
-
 /// **What this node's build knows about a PALW class** — its model and the context its canonical
 /// job runs at. `getPalwClassContexts` asks it for a class whose declaration this node did not index
 /// (a genesis class carries none), and for the model id of one it did. Defined here, beside the
@@ -279,7 +253,13 @@ fn palw_tir_registered_class_context(
 ) -> PalwRegisteredClassContext {
     let n_ctx = record.facts.max_context;
     let Some(canonical) = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_of_v1(n_ctx) else {
-        return PalwRegisteredClassContext { n_ctx, canonical_prefill_tokens: 0, canonical_decode_tokens: 0, max_context_tokens: 0, ir: true };
+        return PalwRegisteredClassContext {
+            n_ctx,
+            canonical_prefill_tokens: 0,
+            canonical_decode_tokens: 0,
+            max_context_tokens: 0,
+            ir: true,
+        };
     };
     // The one constructor of an IR job context, so the bound is the one the chain's jobs carry.
     let job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_job_context_v1(&record.facts, canonical);
@@ -536,7 +516,6 @@ pub struct RpcCoreService {
     fee_estimate_verbose_cache: ExpiringCache<kaspa_mining::errors::MiningManagerResult<GetFeeEstimateExperimentalResponse>>,
     mining_rule_engine: Arc<MiningRuleEngine>,
     /// kaspa-pq Phase 11: optional bridge to the in-process validator service.
-    validator_status_provider: Option<Arc<dyn ValidatorStatusProvider>>,
     /// `getPalwClassContexts`: the build's class ledger, where the node has one.
     palw_class_ledger_provider: Option<Arc<dyn PalwClassLedgerProvider>>,
     /// **A testnet-12 drill's drill-only pay addresses** (ADR-0152 §8.2; P2-12 review finding 6):
@@ -780,7 +759,6 @@ impl RpcCoreService {
         grpc_tower_counters: Arc<TowerConnectionCounters>,
         system_info: SystemInfo,
         mining_rule_engine: Arc<MiningRuleEngine>,
-        validator_status_provider: Option<Arc<dyn ValidatorStatusProvider>>,
     ) -> Self {
         // This notifier UTXOs subscription granularity to index-processor or consensus notifier
         let policies = match index_notifier {
@@ -865,7 +843,6 @@ impl RpcCoreService {
             fee_estimate_cache: ExpiringCache::new(Duration::from_millis(500), Duration::from_millis(1000)),
             fee_estimate_verbose_cache: ExpiringCache::new(Duration::from_millis(500), Duration::from_millis(1000)),
             mining_rule_engine,
-            validator_status_provider,
             palw_class_ledger_provider: None,
             palw_drill_pay_payloads,
         }
@@ -1884,11 +1861,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 rt.verification_vertex.as_str(),
                 rt.verification_shard_shadow.as_str(),
             ]
-                .iter()
-                .filter(|part| !part.is_empty())
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" "),
+            .iter()
+            .filter(|part| !part.is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" "),
         })
     }
 
@@ -2033,31 +2010,38 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // ADR-0127 Decision 3: one read of the sink's PALW state. Unavailable is not unsettled — a
         // node with no V2 state, or one that cannot date its frontier, says so.
         let session = self.consensus_manager.consensus().session().await;
-        let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
-        let dns_retired_at = self.config.params.palw_dns_retirement.filter(|r| r.activation.is_active(sink_daa)).map(|r| r.activation.daa_score());
+        let dns_retired_at = Some(0);
         let native_settlement = session.async_get_native_settlement_snapshot().await.map_err(|e| RpcError::General(e.to_string()))?;
         // DAA alone cannot identify the last effect within an equal-DAA group. Only a strictly
         // older DAA is certified through this compatibility API; exact heads are in native_settlement.
-        let native_settled = if dns_retired_at.is_some() {
-            match native_settlement.as_ref().and_then(|s| s.safe) {
-                Some(safe) => session.async_get_header(safe).await.ok().is_some_and(|h| h.daa_score > request.daa_score),
-                None => false,
-            }
-        } else { false };
+        let native_settled = match native_settlement.as_ref().and_then(|s| s.safe) {
+            Some(safe) => session.async_get_header(safe).await.ok().is_some_and(|h| h.daa_score > request.daa_score),
+            None => false,
+        };
         let Some(settlement) = session.async_palw_settlement_v1(request.daa_score).await else {
             let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
-            return Ok(GetPalwSettlementResponse { available: native_settlement.is_some(), settled: native_settled, depth: native_settlement.as_ref().map_or(0, |s| s.depth), sink_daa, daa_score: request.daa_score, dns_retired_at, native_settlement, ..Default::default() });
+            return Ok(GetPalwSettlementResponse {
+                available: native_settlement.is_some(),
+                settled: native_settled,
+                depth: native_settlement.as_ref().map_or(0, |s| s.depth),
+                sink_daa,
+                daa_score: request.daa_score,
+                dns_retired_at,
+                native_settlement,
+                ..Default::default()
+            });
         };
-        let depth = if dns_retired_at.is_some() { native_settlement.as_ref().map_or(0, |s| s.depth) } else { settlement.depth };
+        let depth = native_settlement.as_ref().map_or(0, |s| s.depth);
         Ok(GetPalwSettlementResponse {
-            dns_retired_at, native_settlement,
+            dns_retired_at,
+            native_settlement,
             available: true,
             sink_daa: settlement.sink_daa,
             daa_score: request.daa_score,
-            settled: if dns_retired_at.is_some() { native_settled } else { settlement.settled },
+            settled: native_settled,
             depth,
             pending_anchors: settlement.pending,
-            depth_is_lower_bound: dns_retired_at.is_some() || settlement.depth_is_lower_bound,
+            depth_is_lower_bound: true,
             safe_frontier_blue_score: settlement.safe_frontier_blue_score,
             safe_frontier_daa: settlement.safe_frontier_daa,
         })
@@ -2068,36 +2052,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetPrecommitDutyRequest,
     ) -> RpcResult<GetPrecommitDutyResponse> {
-        // MISAKA §5 round 2: the duty view, read from the chain rather than remembered by the
-        // signer. A malformed id or outpoint is a request error; `available: false` when the node
-        // has no view for this validator.
-        let validator_id = request
+        request
             .validator_id
             .parse::<kaspa_hashes::Hash64>()
             .map_err(|_| RpcError::General(format!("validator_id '{}' is not a valid 64-byte Hash64", request.validator_id)))?;
-        let bond_outpoint = parse_bond_outpoint(&request.bond_outpoint)?;
-        let session = self.consensus_manager.consensus().unguarded_session();
-        Ok(match session.async_get_precommit_duty(validator_id, bond_outpoint).await {
-            Some(duty) => GetPrecommitDutyResponse {
-                retired_at: self.config.params.palw_dns_retirement.filter(|r| r.activation.is_active(duty.sink_daa_score)).map(|r| r.activation.daa_score()),
-                available: true,
-                round_active: duty.round_active,
-                sink_daa_score: duty.sink_daa_score,
-                held_epoch: duty.held.epoch,
-                held_anchor: duty.held.anchor.to_string(),
-                due: duty
-                    .due
-                    .into_iter()
-                    .map(|(epoch, anchor, anchor_daa_score, snapshot_commitment)| RpcPrecommitDue {
-                        epoch,
-                        anchor_hash: anchor.to_string(),
-                        anchor_daa_score,
-                        snapshot_commitment: snapshot_commitment.to_string(),
-                    })
-                    .collect(),
-            },
-            None => GetPrecommitDutyResponse::default(),
-        })
+        parse_bond_outpoint(&request.bond_outpoint)?;
+        Ok(GetPrecommitDutyResponse { retired_at: Some(0), ..Default::default() })
     }
 
     async fn get_palw_class_contexts_call(
@@ -2491,7 +2451,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             return Ok(GetPalwClassPanelStatusResponse::default());
         };
         let Some(row) = view.classes.into_iter().find(|c| c.class_id == class_id) else {
-            return Ok(GetPalwClassPanelStatusResponse { available: true, tip_daa: view.tip_daa, found: false, status: Default::default() });
+            return Ok(GetPalwClassPanelStatusResponse {
+                available: true,
+                tip_daa: view.tip_daa,
+                found: false,
+                status: Default::default(),
+            });
         };
         let holds_local = self
             .flow_context
@@ -2513,21 +2478,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetPalwPanelSeatsRequest,
     ) -> RpcResult<GetPalwPanelSeatsResponse> {
-        let class_filter = if request.class_id.trim().is_empty() {
-            None
-        } else {
-            Some(parse_class_id_or_alias(&request.class_id)?)
-        };
+        let class_filter = if request.class_id.trim().is_empty() { None } else { Some(parse_class_id_or_alias(&request.class_id)?) };
         let session = self.consensus_manager.consensus().unguarded_session();
         let Some(view) = session.spawn_blocking(|c| c.palw_panel_network_view_v1()).await else {
             return Ok(GetPalwPanelSeatsResponse::default());
         };
-        let seats = view
-            .seats
-            .into_iter()
-            .filter(|s| class_filter.is_none_or(|id| s.class_id == id))
-            .map(rpc_palw_panel_seat)
-            .collect();
+        let seats =
+            view.seats.into_iter().filter(|s| class_filter.is_none_or(|id| s.class_id == id)).map(rpc_palw_panel_seat).collect();
         Ok(GetPalwPanelSeatsResponse { available: true, tip_daa: view.tip_daa, seats })
     }
 
@@ -2536,11 +2493,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetPalwPanelStatusRequest,
     ) -> RpcResult<GetPalwPanelStatusResponse> {
-        let class_filter = if request.class_id.trim().is_empty() {
-            None
-        } else {
-            Some(parse_class_id_or_alias(&request.class_id)?)
-        };
+        let class_filter = if request.class_id.trim().is_empty() { None } else { Some(parse_class_id_or_alias(&request.class_id)?) };
         let session = self.consensus_manager.consensus().unguarded_session();
         let sink_daa_score_timestamp = session.async_get_sink_daa_score_timestamp().await;
         let synced = self.is_node_synced(&session, sink_daa_score_timestamp).await;
@@ -2555,9 +2508,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             });
         };
         let mut classes = Vec::new();
-        for local in rt.panel_classes.iter().filter(|c| {
-            class_filter.is_none_or(|id| c.class_id.eq_ignore_ascii_case(&id.to_string()))
-        }) {
+        for local in rt.panel_classes.iter().filter(|c| class_filter.is_none_or(|id| c.class_id.eq_ignore_ascii_case(&id.to_string())))
+        {
             let class_id = local.class_id.parse::<kaspa_hashes::Hash64>().ok();
             let chain = class_id.and_then(|id| view.classes.iter().find(|c| c.class_id == id));
             let seat = class_id.and_then(|id| {
@@ -2601,7 +2553,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 classes.push(RpcPalwLocalPanelClass {
                     class_id: row.class_id.to_string(),
                     model_name: row.model_name.clone(),
-                    seat_id: seat.map(|s| kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(s.seat_id)).unwrap_or_default(),
+                    seat_id: seat
+                        .map(|s| kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(s.seat_id))
+                        .unwrap_or_default(),
                     artifact_loaded: false,
                     artifact_root: String::new(),
                     working_set_bytes: 0,
@@ -2644,11 +2598,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetPalwPanelAssignmentsRequest,
     ) -> RpcResult<GetPalwPanelAssignmentsResponse> {
-        let claim_filter = if request.claim_id.trim().is_empty() {
-            None
-        } else {
-            Some(parse_hash64(&request.claim_id, "claim id")?)
-        };
+        let claim_filter = if request.claim_id.trim().is_empty() { None } else { Some(parse_hash64(&request.claim_id, "claim id")?) };
         let seat_filter = if request.seat_id.trim().is_empty() { None } else { Some(request.seat_id.trim().to_string()) };
         let session = self.consensus_manager.consensus().unguarded_session();
         let Some(view) = session.spawn_blocking(|c| c.palw_panel_network_view_v1()).await else {
@@ -2695,11 +2645,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         };
         let session = self.consensus_manager.consensus().unguarded_session();
         let tip_daa = session.get_virtual_daa_score();
-        let object = if request.object_hex.trim().is_empty() {
-            None
-        } else {
-            Some(decode_class_registered_hex(&request.object_hex)?)
-        };
+        let object = if request.object_hex.trim().is_empty() { None } else { Some(decode_class_registered_hex(&request.object_hex)?) };
         let mut checks = Vec::new();
         let mut registration = RpcPalwModelRegistration { constructed: object.is_some(), ..Default::default() };
         if let Some(object) = &object {
@@ -2774,7 +2720,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         if let Some(class_id) = row.as_ref().map(|r| r.class_id).or(requested_class) {
             if let Some(read) = session.clone().spawn_blocking(|c| c.palw_model_registry_v1()).await {
                 if let Some(class) = read.classes.iter().find(|c| c.class_id == class_id) {
-                    registration.registry_state = class.row.as_ref().map(|r| format!("{:?}", r.state)).unwrap_or_else(|| "Legacy".into());
+                    registration.registry_state =
+                        class.row.as_ref().map(|r| format!("{:?}", r.state)).unwrap_or_else(|| "Legacy".into());
                     if class.row.is_some() {
                         registration.folded = true;
                         registration.included = true;
@@ -2789,11 +2736,16 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             self.fill_registration_from_tx(&mut registration, &request.transaction_id, inclusion_known).await?;
         }
         finalize_registration_state(&mut registration);
-        let found = registration.folded || registration.included || registration.accepted || registration.submitted || registration.constructed;
+        let found = registration.folded
+            || registration.included
+            || registration.accepted
+            || registration.submitted
+            || registration.constructed;
         if !found {
-            registration.reject_code = kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded
-                .code()
-                .to_string();
+            registration.reject_code =
+                kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded
+                    .code()
+                    .to_string();
             registration.processor_verdict = registration.reject_code.clone();
         }
         Ok(GetPalwModelRegistrationStatusResponse { available: true, tip_daa, found, registration })
@@ -2812,7 +2764,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let tip_daa = session.get_virtual_daa_score();
         let rows = session.clone().spawn_blocking(|c| c.palw_v2_class_table()).await;
         let Some(row) = rows.into_iter().find(|r| r.class_id == class_id) else {
-            return Ok(GetPalwModelResponse { available: true, tip_daa, found: false, class_id: class_id.to_string(), ..Default::default() });
+            return Ok(GetPalwModelResponse {
+                available: true,
+                tip_daa,
+                found: false,
+                class_id: class_id.to_string(),
+                ..Default::default()
+            });
         };
         // An IR class's window is its record's (RFC-0002 Phase F): it registered no legacy carriage.
         let n_ctx = session
@@ -2856,7 +2814,10 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 .and_then(|c| c.row.as_ref().map(|r| format!("{:?}", r.state)))
                 .unwrap_or_else(|| "Legacy".into()),
             ready_seats: class_reg.map(|c| c.ready_seats_now).or_else(|| panel_class.map(|c| c.ready_seats)).unwrap_or(0),
-            required_ready_seats: class_reg.and_then(|c| c.row.as_ref().map(|r| r.profile.required_ready_seats)).or_else(|| panel_class.map(|c| c.required_ready_seats)).unwrap_or(0),
+            required_ready_seats: class_reg
+                .and_then(|c| c.row.as_ref().map(|r| r.profile.required_ready_seats))
+                .or_else(|| panel_class.map(|c| c.required_ready_seats))
+                .unwrap_or(0),
             inflight_claims: class_reg.map(|c| c.inflight_now).or_else(|| panel_class.map(|c| c.inflight_claims)).unwrap_or(0),
             admission_permille: class_reg
                 .and_then(|c| c.row.as_ref().map(|r| r.admission_milli as u32))
@@ -3475,78 +3436,19 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetDnsConfirmationRequest,
     ) -> RpcResult<GetDnsConfirmationResponse> {
-        // kaspa-pq Phase 10 (ADR-0009): expose the current DnsState-derived
-        // confirmation view. `available: false` when the overlay is not
-        // configured for this network (or no DnsState has been written yet).
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let confirmation = session.async_get_dns_confirmation().await;
-        // Per-block finality is evaluated relative to the stable confirmed anchor; both
-        // fields are `Copy`, so snapshot them before `confirmation` is consumed below.
-        let anchor_info = confirmation.as_ref().map(|c| (c.last_dns_confirmed_anchor, c.dns_confirmed));
-        let mut response = match confirmation {
-            Some(c) => GetDnsConfirmationResponse {
-                available: true,
-                block_hash: c.block_hash.to_string(),
-                work_depth: c.work_depth.to_string(),
-                required_work_depth: c.required_work_depth.to_string(),
-                stake_depth: c.stake_depth.to_string(),
-                required_stake_depth: c.required_stake_depth.to_string(),
-                pow_confirmed: c.pow_confirmed,
-                dns_confirmed: c.dns_confirmed,
-                rollout_stage: c.rollout_stage as u32,
-                expected_dns_confirmation_seconds: c.expected_dns_confirmation_seconds,
-                work_reorg_risk_upper_bound: c.work_reorg_risk_upper_bound,
-                stake_reorg_risk_upper_bound: c.stake_reorg_risk_upper_bound,
-                dns_reorg_risk_conservative_bound: c.dns_reorg_risk_conservative_bound,
-                note: c.note,
-                health: c.health as u32,
-                // audit M-01: the stable DNS-confirmed anchor (≠ the pov-dependent sink `block_hash`).
-                last_dns_confirmed_anchor: c.last_dns_confirmed_anchor.to_string(),
-                last_dns_confirmed_anchor_daa_score: c.last_dns_confirmed_anchor_daa_score,
-                // kaspa-pq explorer: per-block fields filled below when `request.block_hash` is set.
-                block_found: false,
-                block_is_dns_final: false,
-                block_is_confirmed_anchor: false,
-                block_daa_score: 0,
-                // The VLT activation state machine and its gauges are removed (VLT voting weight is
-                // gone). The fields stay for wire compatibility and answer what a pre-v4 payload
-                // decodes to: the empty status.
-                vlt_state: "pre_shadow".to_string(),
-                vlt_shadow_active: false,
-                vlt_weight_fence_reached: false,
-                vlt_finality_active: false,
-                vlt_total_weight: "0".to_string(),
-                vlt_quorum_weight: "0".to_string(),
-                vlt_snapshot_epoch: 0,
-                vlt_snapshot_root: String::new(),
-                vlt_gauges_daa_score: 0,
-            },
-            None => GetDnsConfirmationResponse::default(),
-        };
-
-        // kaspa-pq explorer support (`getBlockDnsScore`): when the caller supplies a specific
-        // `block_hash`, answer "is THIS block DNS-final?" relative to the confirmed canonical
-        // anchor. A block is DNS-final iff the overlay has confirmed an anchor and the block is
-        // that anchor or one of its selected-chain ancestors (i.e. at/below the anchor on the
-        // selected chain). Header-only blocks still count as `block_found`.
+        // Reserved RPC shape: DNS finality is retired and no anchor is certified.
+        let mut response = GetDnsConfirmationResponse::default();
         if !request.block_hash.is_empty() {
             let hash = request
                 .block_hash
                 .parse::<kaspa_hashes::Hash64>()
                 .map_err(|_| RpcError::General(format!("block_hash '{}' is not a valid 64-byte hash", request.block_hash)))?;
+            let session = self.consensus_manager.consensus().unguarded_session();
             if let Ok(block) = session.async_get_block_even_if_header_only(hash).await {
                 response.block_found = true;
                 response.block_daa_score = block.header.daa_score;
             }
-            if let Some((anchor, dns_confirmed)) = anchor_info
-                && anchor != kaspa_hashes::Hash64::default()
-            {
-                response.block_is_confirmed_anchor = hash == anchor;
-                response.block_is_dns_final = dns_confirmed
-                    && (response.block_is_confirmed_anchor || session.async_is_chain_ancestor_of(hash, anchor).await.unwrap_or(false));
-            }
         }
-
         Ok(response)
     }
 
@@ -3689,53 +3591,6 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             )));
         }
 
-        // The template's own predicate (`bridge_finality_is_fresh` in the virtual processor), read
-        // the same way: blue score, beyond the anchor's healthy distance below the sink. A claim
-        // this accepts is one the template will carry, and the reverse.
-        let dns_confirmation = session.async_get_dns_confirmation().await;
-        let sink_blue_score = session.async_get_sink_blue_score().await;
-        let (bridge_finality_fresh, anchor_distance) = match (dns_confirmation.as_ref(), self.config.params.dns_params.as_ref()) {
-            (Some(c), Some(dns)) => {
-                let anchor_blue_score = if c.last_dns_confirmed_anchor == Default::default() {
-                    None
-                } else {
-                    session.async_get_header(c.last_dns_confirmed_anchor).await.ok().map(|header| header.blue_score)
-                };
-                (
-                    kaspa_consensus_core::dns_finality::dns_finality_fresh_for_bridge(
-                        c.dns_confirmed,
-                        c.last_dns_confirmed_anchor,
-                        anchor_blue_score,
-                        sink_blue_score,
-                        dns,
-                    ),
-                    anchor_blue_score.map(|anchor| {
-                        (
-                            sink_blue_score.saturating_sub(anchor),
-                            kaspa_consensus_core::dns_finality::dns_bridge_max_anchor_distance_blue_score(dns),
-                        )
-                    }),
-                )
-            }
-            _ => (false, None),
-        };
-        // ADR-0109 Decision 2: under `Label` (the default) a stale anchor refuses nothing here — the
-        // claim waits in the queue like any other; under `Pause` the pre-ADR refusal stands.
-        if !self.config.params.palw_dns_retired_at(sink_daa)
-            && !bridge_finality_fresh
-            && self.config.evm_bridge_finality_effective() == kaspa_consensus_core::evm::EvmBridgeFinalityPolicy::Pause
-        {
-            return Err(RpcError::RpcSubsystem(format!(
-                "EVM bridge is paused: DNS finality is unconfirmed or stale at sink daa {sink_daa} ({}); retry after validators advance a fresh DNS-confirmed anchor",
-                match (dns_confirmation.as_ref().map(|c| c.dns_confirmed), anchor_distance) {
-                    (Some(false), _) => "DNS finality is not confirmed".to_string(),
-                    (_, Some((distance, bound))) =>
-                        format!("the confirmed anchor is {distance} blue below the sink; the bridge allows {bound}"),
-                    _ => "no DNS-confirmed anchor this node can read".to_string(),
-                }
-            )));
-        }
-
         // §14.2: queue locally AND gossip the lock outpoint for P2P relay, so the
         // claim reaches the dominant selected-chain producer regardless of which
         // node the depositor submitted to (mirrors submit_evm_transaction_call).
@@ -3757,24 +3612,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         _: GetAttestationQualityDeficitsRequest,
     ) -> RpcResult<GetAttestationQualityDeficitsResponse> {
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let deficits = session
-            .async_get_attestation_quality_deficits()
-            .await
-            .into_iter()
-            .map(|d| RpcAttestationQualityDeficit {
-                epoch: d.epoch,
-                target_hash: d.target_hash.to_string(),
-                target_daa_score: d.target_daa_score,
-                included_stake: d.included_stake,
-                expected_stake: d.expected_stake,
-                required_stake: d.required_stake,
-                required_stake_delta: d.required_stake_delta,
-                quality_floor_bps: d.quality_floor_bps,
-                health: d.health as u32,
-            })
-            .collect();
-        Ok(GetAttestationQualityDeficitsResponse { deficits })
+        Ok(GetAttestationQualityDeficitsResponse::default())
     }
 
     async fn get_validator_status_call(
@@ -3782,18 +3620,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         _: GetValidatorStatusRequest,
     ) -> RpcResult<GetValidatorStatusResponse> {
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
-        if let Some(retirement) = self.config.params.palw_dns_retirement.filter(|r| r.activation.is_active(daa)) {
-            return Ok(GetValidatorStatusResponse { enabled: false, mode: "retired".into(),
-                status_label: format!("Retired at DAA {} by palw_dns_retirement_v1; PALW remains active", retirement.activation.daa_score()),
-                ..Default::default() });
-        }
-        // kaspa-pq Phase 11 (ADR-0010): delegate to the in-process validator service when
-        // present (`--enable-validator`); `enabled: false` otherwise.
-        Ok(match &self.validator_status_provider {
-            Some(provider) => provider.rpc_validator_status().await,
-            None => GetValidatorStatusResponse::default(),
+        Ok(GetValidatorStatusResponse {
+            enabled: false,
+            mode: "retired".into(),
+            status_label: "DNS validator service removed; PALW producer and Panel duties remain available".into(),
+            ..Default::default()
         })
     }
 
@@ -3802,23 +3633,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetValidatorAttestationTargetRequest,
     ) -> RpcResult<GetValidatorAttestationTargetResponse> {
-        // kaspa-pq Phase 12 (ADR-0011): assemble the ready-to-sign attestation target for
-        // `request.bond_outpoint` so the `kaspa-pq-validator` sidecar can fetch the signing
-        // message over local wRPC. A malformed outpoint is a request error; `available: false`
-        // when the overlay is not configured or no target could be assembled.
-        let bond_outpoint = parse_bond_outpoint(&request.bond_outpoint)?;
-        let session = self.consensus_manager.consensus().unguarded_session();
-        Ok(match session.async_get_validator_attestation_target(bond_outpoint).await {
-            Some(t) => GetValidatorAttestationTargetResponse {
-                available: true,
-                epoch: t.epoch,
-                target_hash: t.target_hash.to_string(),
-                target_daa_score: t.target_daa_score,
-                validator_set_commitment: t.validator_set_commitment.to_string(),
-                message: t.message.to_string(),
-            },
-            None => GetValidatorAttestationTargetResponse::default(),
-        })
+        parse_bond_outpoint(&request.bond_outpoint)?;
+        Ok(GetValidatorAttestationTargetResponse::default())
     }
 
     async fn get_validator_attestation_targets_call(
@@ -3826,27 +3642,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetValidatorAttestationTargetsRequest,
     ) -> RpcResult<GetValidatorAttestationTargetsResponse> {
-        // kaspa-pq DNS v3 (batch): every ready attestation target for `request.bond_outpoint`
-        // from `from_epoch` (ascending, capped) so an external validator that fell behind can sign
-        // every missed epoch in one poll. A malformed outpoint is a request error; empty when the
-        // overlay is off or none are ready.
-        const MAX_TARGETS: u32 = 64;
-        let bond_outpoint = parse_bond_outpoint(&request.bond_outpoint)?;
-        let limit = request.limit.min(MAX_TARGETS) as usize;
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let targets = session
-            .async_get_validator_attestation_targets(bond_outpoint, request.from_epoch, limit)
-            .await
-            .into_iter()
-            .map(|t| RpcValidatorAttestationTarget {
-                epoch: t.epoch,
-                target_hash: t.target_hash.to_string(),
-                target_daa_score: t.target_daa_score,
-                validator_set_commitment: t.validator_set_commitment.to_string(),
-                message: t.message.to_string(),
-            })
-            .collect();
-        Ok(GetValidatorAttestationTargetsResponse { targets })
+        parse_bond_outpoint(&request.bond_outpoint)?;
+        Ok(GetValidatorAttestationTargetsResponse::default())
     }
 
     async fn get_stake_bond_call(
@@ -5038,7 +4835,9 @@ pub fn palw_capacity_shadow_response_v1(
     }
 }
 
-fn palw_v2_bundle(params: &kaspa_consensus_core::config::params::Params) -> Option<&kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2> {
+fn palw_v2_bundle(
+    params: &kaspa_consensus_core::config::params::Params,
+) -> Option<&kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2> {
     match &params.palw_consensus_mode {
         kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle),
         _ => None,
@@ -5115,7 +4914,9 @@ fn palw_tir_preflight_report(
     report
 }
 
-fn rpc_preflight_check(check: &kaspa_consensus_core::palw_model_registration_v1::PalwModelPreflightCheckV1) -> RpcPalwModelPreflightCheck {
+fn rpc_preflight_check(
+    check: &kaspa_consensus_core::palw_model_registration_v1::PalwModelPreflightCheckV1,
+) -> RpcPalwModelPreflightCheck {
     RpcPalwModelPreflightCheck { code: check.code.clone(), ok: check.ok, message: check.message.clone() }
 }
 
@@ -5138,7 +4939,10 @@ fn rpc_preflight_response(
     }
 }
 
-fn fill_registration_from_class(registration: &mut RpcPalwModelRegistration, row: &kaspa_consensus_core::palw_state_v2::PalwClassRowV2) {
+fn fill_registration_from_class(
+    registration: &mut RpcPalwModelRegistration,
+    row: &kaspa_consensus_core::palw_state_v2::PalwClassRowV2,
+) {
     registration.class_id = row.class_id.to_string();
     registration.constructed = true;
     registration.submitted = true;
@@ -5149,9 +4953,8 @@ fn fill_registration_from_class(registration: &mut RpcPalwModelRegistration, row
     registration.mempool_accepted = false;
     registration.reject_code.clear();
     if registration.processor_verdict.is_empty() {
-        registration.processor_verdict = kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::AdmissionOk
-            .code()
-            .to_string();
+        registration.processor_verdict =
+            kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::AdmissionOk.code().to_string();
     }
 }
 
@@ -5543,7 +5346,13 @@ mod palw_class_context_tests {
 
     /// This build's Qwen3.6-35B-A3B row: a (7, 2) canonical job at `n_ctx` 8 — a footprint of 8, valid.
     fn declared() -> PalwRegisteredClassContext {
-        PalwRegisteredClassContext { n_ctx: 8, canonical_prefill_tokens: 7, canonical_decode_tokens: 2, max_context_tokens: 8, ir: false }
+        PalwRegisteredClassContext {
+            n_ctx: 8,
+            canonical_prefill_tokens: 7,
+            canonical_decode_tokens: 2,
+            max_context_tokens: 8,
+            ir: false,
+        }
     }
 
     /// **The chain's declaration outranks the build's ledger, the ledger names the model, and a class

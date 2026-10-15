@@ -470,7 +470,7 @@ fn sign(key: &ValidatorKey, message: &Hash64) -> Vec<u8> {
 /// `model-sell` uses.
 async fn carry(ctx: &Ctx, nv: &NodeView, key: &ValidatorKey, object: &PalwConsensusObjectV2, what: &str, yes: bool) -> CliResult {
     let rent = kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v1(object);
-    let floor = kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI;
+    let floor = kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI;
     let addr = key.funding_address(nv.params.prefix());
     let candidates = crate::palw_fp::spendable_candidates_v1(nv, &addr).await?;
     let (outpoint, entry) = candidates.into_iter().find(|(_, e)| e.amount > rent.saturating_add(floor)).ok_or_else(|| {

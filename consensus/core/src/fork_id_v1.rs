@@ -636,14 +636,7 @@ mod tests {
                 work.activation = at;
             }
             "palw_attempt_activation" => params.palw_attempt_activation = Some(at),
-            "dns_bft_gate" => {
-                params.dns_bft_gate = Some(crate::config::params::DnsBftGateV1 {
-                    activation: at,
-                    t_leak_daa: 5_040,
-                    reentry_final_depth_daa: 200,
-                    min_retained_validators: 4,
-                })
-            }
+
             "palw_inactivity_leak" => {
                 params.palw_inactivity_leak = Some(crate::config::params::PalwInactivityLeakV1 {
                     activation: at,
@@ -706,7 +699,8 @@ mod tests {
             // refused without R-core+ and the attribution fence at or below it by `validate_palw_v2`, which
             // the probe does not run — it asks only the hashers and the schedule.
             "palw_capacity_aggregate_liability" => {
-                params.palw_capacity_aggregate_liability = Some(crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at))
+                params.palw_capacity_aggregate_liability =
+                    Some(crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at))
             }
             // A later step's slot: the value (armed at 1,000 where absent, as a widening's lane is) grows to
             // `slot` steps, the missing ones one DAA apart above the last, and step `slot` sits at `at`.
@@ -1798,8 +1792,6 @@ mod tests {
         });
         at_6000.palw_overlay_carve =
             at_6000.palw_overlay_carve.map(|carve| crate::config::params::PalwOverlayCarveV1 { activation: six_thousand, ..carve });
-        at_6000.dns_bft_gate =
-            at_6000.dns_bft_gate.map(|gate| crate::config::params::DnsBftGateV1 { activation: six_thousand, ..gate });
         // ADR-0135 and ADR-0132 Upgrade C ride the same flag day.
         at_6000.palw_model_registry = Some(six_thousand);
         at_6000.palw_economic_payout = at_6000

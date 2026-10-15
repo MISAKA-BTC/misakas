@@ -179,7 +179,7 @@ pub const PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1: bool = true;
 /// finding 2, which is strict-win's own).
 ///
 /// [`palw_deep_reorg_strict_economic_v1`] keeps the incumbent on every all-economic tie, and the gate
-/// that consults the fence (`dns_reorg_outcome`) judges every non-extension sink move, a one-block
+/// that consults the fence (`palw_reorg_outcome`) judges every non-extension sink move, a one-block
 /// sibling switch included. "The incumbent" is whichever sibling a node saw first, so two honest nodes
 /// racing a slot keep different sinks — and since the refused sibling leaves the virtual's parents,
 /// neither merges the other's tip and every later block that ties keeps them apart: their virtual
@@ -208,7 +208,7 @@ pub const PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1: bool = true;
 ///
 /// **One rule** (rcore/cap-s1). The capacity lane measured the finding under its fence F-W and gave F-W
 /// a copy of this rule (`palw_deep_reorg_capacity_v1`, without the no-DAA-lowering check); cap-s1 dropped
-/// the copy and F-W's arm in `dns_reorg_outcome`, and `PALW_CAPACITY_SHALLOW_REORG_{DAA,WALK}_V1` are now
+/// the copy and F-W's arm in `palw_reorg_outcome`, and `PALW_CAPACITY_SHALLOW_REORG_{DAA,WALK}_V1` are now
 /// aliases of [`PALW_REORG_SHALLOW_TIE_DAA_V1`] / [`PALW_REORG_SHALLOW_TIE_WALK_V1`]. F-W requires this
 /// fence at or below it, so wherever F-W is active this function answers — with the check
 /// ([`PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1`]).

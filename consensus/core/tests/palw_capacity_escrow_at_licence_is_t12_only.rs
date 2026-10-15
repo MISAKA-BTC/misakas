@@ -28,11 +28,11 @@ use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_
 /// testnet-12 as THIS build ships it — the DAA-1,300 release (rcore/int-5), every capacity
 /// fence dormant: params, identity, schedule — the same triple `palw_operator_anchor_is_t12_only::
 /// T12_RELEASE` pins.
-// re-pin 2026-09-27 @b2bf20a78b0d: third post-launch flag day: capacity tests judge their fence against the DAA-1,300 release (release_v2) (was cbe9152f…, f78b02ad…)
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 24e1aec3…, 5de80e64…, d263d7f2…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
-    "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a",
+    "deca53d0b0ecffed5fffbdb0df72ae035631c6743a42f3262a101b146f5a4784",
+    "92042711856b239713d0376b7466422e561618fc51e115e1557be34b078e5acd",
+    "7804951885d60a29bfb6aa5b8f7bc2af6c8b4692636f019bc1320a7f4aad3385",
 );
 
 /// Heights an operator might pick: a low one a drill crosses (the release's prerequisites moved down to

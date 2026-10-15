@@ -813,31 +813,7 @@ wait_sync() {
 }
 
 auto_validator() {
-  say "auto validator preparation"
-  [ -x "$BIN_DIR/misaka" ] || prepare
-  if ! pid_alive "$KASPAD_PID"; then
-    start_node
-  fi
-  wait_sync
-  keygen
-  miner_start
-  printf '\n'
-  say "funding status"
-  balance || true
-  cat <<EOF
-
-Next:
-  1. Keep the miner running until coinbase maturity passes.
-  2. Re-check balance:
-       scripts/misaka-desktop-node.sh balance
-  3. When mature funding is available, create the bond:
-       scripts/misaka-desktop-node.sh bond 10MSK
-  4. Start validator:
-       scripts/misaka-desktop-node.sh validator-start
-
-Note:
-  Visible balance is not always bondable. Mined rewards need coinbase maturity first.
-EOF
+  die "DNS validator onboarding is retired. Use misaka verifier setup for PALW panel duties."
 }
 
 keygen() {
@@ -949,57 +925,11 @@ ensure_valid_bond_outpoint() {
 }
 
 bond() {
-  [ -x "$BIN_DIR/kaspa-pq-validator" ] || die "kaspa-pq-validator is missing. Run prepare first."
-  amount="${1:-10MSK}"
-  say "create stake bond amount=$amount"
-  set +e
-  output="$("$BIN_DIR/kaspa-pq-validator" bond \
-    --node-wrpc-borsh "127.0.0.1:$WRPC_BORSH_PORT" \
-    --validator-key "$VALIDATOR_KEY" \
-    --amount "$amount" \
-    --network "$NETWORK" 2>&1)"
-  code=$?
-  set -e
-  printf '%s\n' "$output"
-  if [ "$code" -ne 0 ]; then
-    die "bond failed. If it says not enough MATURE funding, keep mining and wait for coinbase maturity."
-  fi
-  if ! outpoint="$(extract_bond_outpoint "$output")"; then
-    die "valid bond_outpoint not found in output"
-  fi
-  save_state_value BOND_OUTPOINT "$outpoint"
-  printf 'bond_outpoint: %s\n' "$outpoint"
+  die "DNS validator onboarding is retired. Use misaka verifier setup for PALW panel duties."
 }
 
 validator_start() {
-  mkdirs
-  [ -x "$BIN_DIR/kaspa-pq-validator" ] || die "kaspa-pq-validator is missing. Run prepare first."
-  load_state
-  [ -n "${BOND_OUTPOINT:-}" ] || die "BOND_OUTPOINT missing. Run bond first."
-  ensure_valid_bond_outpoint
-  if pid_alive "$VALIDATOR_PID"; then
-    say "validator already running pid=$(cat "$VALIDATOR_PID")"
-    return
-  fi
-  say "start validator sidecar"
-  (
-    cd "$ROOT_DIR"
-    env HOME="$HOME_DIR" "$BIN_DIR/kaspa-pq-validator" run \
-      --node-wrpc-borsh "127.0.0.1:$WRPC_BORSH_PORT" \
-      --validator-key "$VALIDATOR_KEY" \
-      --stake-bond "$BOND_OUTPOINT" \
-      --signed-epoch-db "$VALIDATOR_DB" \
-      --network "$NETWORK" > "$VALIDATOR_LOG" 2>&1 &
-    echo $! > "$VALIDATOR_PID"
-  )
-  sleep 2
-  if pid_alive "$VALIDATOR_PID"; then
-    printf 'validator started pid=%s\n' "$(cat "$VALIDATOR_PID")"
-    printf 'log: %s\n' "$VALIDATOR_LOG"
-  else
-    tail -n 80 "$VALIDATOR_LOG" || true
-    die "validator failed to start"
-  fi
+  die "DNS validator onboarding is retired. Use misaka verifier setup for PALW panel duties."
 }
 
 logs() {

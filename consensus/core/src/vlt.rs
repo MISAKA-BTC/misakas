@@ -1782,7 +1782,7 @@ mod tests {
 
     #[test]
     fn the_audit_fee_is_verdict_blind_and_covers_more_than_the_transaction() {
-        // `ATTESTATION_TX_FEE_FLOOR_SOMPI` in kaspa-pq-validator-core; restated rather than
+        // `PALW_TX_FEE_FLOOR_SOMPI` in kaspa-pq-validator-core; restated rather than
         // depended on (consensus-core must not depend on the validator crate).
         const OVERLAY_TX_FEE_FLOOR_SOMPI: u64 = 250_000;
         assert!(

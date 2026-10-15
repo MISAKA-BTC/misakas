@@ -3,14 +3,13 @@
 //! We use newtypes in order to simplify changing the underlying lock in the future
 
 use kaspa_consensus_core::{
-    BlockHash, BlockHashSet, BlueWorkType, ChainPath, Hash64,
-    acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
+    BlockHash, BlockHashSet, BlueWorkType, ChainPath, acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
     api::{BlockCount, BlockValidationFutures, ConsensusApi, ConsensusStats, DynConsensus},
     block::Block,
     blockstatus::BlockStatus,
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
-        ActiveValidatorSet, AttestationQualityDeficit, DnsConfirmation, PrecommitDuty, StakeBondPage, StakeBondQuery, StakeBondRecord,
+        ActiveValidatorSet, AttestationQualityDeficit, DnsConfirmation, StakeBondPage, StakeBondQuery, StakeBondRecord,
         ValidatorAttestationTarget,
     },
     errors::consensus::ConsensusResult,
@@ -333,7 +332,8 @@ impl ConsensusSessionOwned {
     }
 
     /// RFC-0006: the layer-shard plans at the tip.
-    pub fn palw_tir_shard_plans_v1(&self) -> Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_tir_shard_v1::PalwTirShardPlanV1)> {
+    pub fn palw_tir_shard_plans_v1(&self,
+    ) -> Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_tir_shard_v1::PalwTirShardPlanV1)> {
         self.consensus.palw_tir_shard_plans_v1()
     }
 
@@ -414,7 +414,8 @@ impl ConsensusSessionOwned {
     }
 
     /// **RFC-0007 Parts II and IV: the mesh at the tip**, and `seat`'s open audits.
-    pub fn palw_v2_mesh_status_v1(&self, seat: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2) -> kaspa_consensus_core::palw_mesh_v1::PalwMeshStatusV1 {
+    pub fn palw_v2_mesh_status_v1(&self, seat: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> kaspa_consensus_core::palw_mesh_v1::PalwMeshStatusV1 {
         self.consensus.palw_v2_mesh_status_v1(seat)
     }
 
@@ -737,7 +738,8 @@ impl ConsensusSessionOwned {
     }
 
     /// ADR-0127 Decision 3: the settlement read at `daa_score`, off the async runtime.
-    pub async fn async_get_native_settlement_snapshot(&self) -> ConsensusResult<Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>> {
+    pub async fn async_get_native_settlement_snapshot(&self,
+    ) -> ConsensusResult<Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>> {
         self.clone().spawn_blocking(|c| c.get_native_settlement_snapshot()).await
     }
 
@@ -854,12 +856,6 @@ impl ConsensusSessionOwned {
         limit: usize,
     ) -> Vec<ValidatorAttestationTarget> {
         self.clone().spawn_blocking(move |c| c.get_validator_attestation_targets(bond_outpoint, from_epoch, limit)).await
-    }
-
-    /// MISAKA §5 round 2: the lock this validator carries on the selected chain, and the epochs it
-    /// still owes a precommit for.
-    pub async fn async_get_precommit_duty(&self, validator_id: Hash64, bond_outpoint: TransactionOutpoint) -> Option<PrecommitDuty> {
-        self.clone().spawn_blocking(move |c| c.get_precommit_duty(validator_id, bond_outpoint)).await
     }
 
     pub async fn async_get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {

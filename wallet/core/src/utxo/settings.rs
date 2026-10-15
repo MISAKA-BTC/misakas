@@ -11,19 +11,9 @@ pub struct NetworkParams {
     pub coinbase_transaction_stasis_period_daa: u64,
     pub user_transaction_maturity_period_daa: AtomicU64,
     pub additional_compound_transaction_mass: u64,
-    /// DNS-accelerated coinbase settlement, mirroring the network's
-    /// `DnsParams::coinbase_settlement_long_maturity_daa` (`0` = the network has no settlement
-    /// and coinbase maturity behaves classically). When non-zero, a coinbase that has passed
-    /// ordinary maturity stays **Pending** until the DNS confirmed anchor passes its block or
-    /// the long fallback elapses — the same `coinbase_spend_settled` rule the node's mempool
-    /// enforces, so the wallet's "pending" is exactly the node's "won't relay yet".
+    /// Additional long DAA coinbase maturity shared with the node's mempool policy.
+    /// Historical DNS-final anchors do not shorten this period.
     pub coinbase_settlement_long_maturity_daa: u64,
-    /// The DNS confirmed anchor's DAA score as last observed from the node
-    /// (`get_dns_confirmation`), `0` = none observed. RUNTIME state, not a constant: the
-    /// UtxoProcessor refreshes it at epoch cadence. Kept here because every maturity call site
-    /// already receives `&NetworkParams`, so the anchor rides along without changing six call
-    /// signatures — the same pattern as the runtime-settable maturity periods above.
-    pub dns_confirmed_anchor_daa: AtomicU64,
 }
 
 impl NetworkParams {
@@ -59,15 +49,6 @@ impl NetworkParams {
     pub fn coinbase_settlement_long_maturity_daa(&self) -> u64 {
         self.coinbase_settlement_long_maturity_daa
     }
-
-    #[inline]
-    pub fn dns_confirmed_anchor_daa(&self) -> u64 {
-        self.dns_confirmed_anchor_daa.load(Ordering::Relaxed)
-    }
-
-    pub fn set_dns_confirmed_anchor_daa(&self, value: u64) {
-        self.dns_confirmed_anchor_daa.store(value, Ordering::Relaxed);
-    }
 }
 
 static MAINNET_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| NetworkParams {
@@ -79,7 +60,6 @@ static MAINNET_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| Networ
     // Decision A mainnet's (2026-09-25). Below this ladder's 1,000-DAA coinbase maturity, so on the
     // bundle-free 10 bps preset a coinbase is never held past it; a carded mainnet runs it as t12 does.
     coinbase_settlement_long_maturity_daa: 600,
-    dns_confirmed_anchor_daa: AtomicU64::new(0),
 });
 
 static TESTNET10_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| NetworkParams {
@@ -103,7 +83,6 @@ static TESTNET10_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| Netw
     // `cargo test` stops at the first failing binary and the integration suite aborted ahead of
     // this crate.
     coinbase_settlement_long_maturity_daa: 600,
-    dns_confirmed_anchor_daa: AtomicU64::new(0),
 });
 
 /// testnet-11 — the public PALW chain (ADR-0035 Decision 1). A separate static rather than a
@@ -127,7 +106,6 @@ static TESTNET11_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| Netw
     // `TESTNET_PARAMS`, so the day t11 overrides `dns_params` the assertion follows on its own
     // instead of quietly checking the other network's number.
     coinbase_settlement_long_maturity_daa: 600,
-    dns_confirmed_anchor_daa: AtomicU64::new(0),
 });
 
 /// testnet-12 — the 2026-09-22 regenesis that replaces testnet-11 on the public fleet
@@ -149,7 +127,6 @@ static TESTNET12_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| Netw
     user_transaction_maturity_period_daa: AtomicU64::new(100),
     additional_compound_transaction_mass: 100,
     coinbase_settlement_long_maturity_daa: 600,
-    dns_confirmed_anchor_daa: AtomicU64::new(0),
 });
 
 static SIMNET_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| NetworkParams {
@@ -158,7 +135,6 @@ static SIMNET_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| Network
     user_transaction_maturity_period_daa: AtomicU64::new(100),
     additional_compound_transaction_mass: 0,
     coinbase_settlement_long_maturity_daa: 0,
-    dns_confirmed_anchor_daa: AtomicU64::new(0),
 });
 
 static DEVNET_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| NetworkParams {
@@ -167,7 +143,6 @@ static DEVNET_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| Network
     user_transaction_maturity_period_daa: AtomicU64::new(10),
     additional_compound_transaction_mass: 0,
     coinbase_settlement_long_maturity_daa: 0,
-    dns_confirmed_anchor_daa: AtomicU64::new(0),
 });
 
 impl NetworkParams {

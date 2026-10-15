@@ -1,57 +1,9 @@
-//! kaspa-pq Phase 10/11/12: DNS Probabilistic Finality Overlay type
-//! surface.
+//! Historical DNS payload/state layouts, retained bond exits and payout liabilities.
 //!
-//! See [ADR-0009](../../docs/adr/0009-dns-probabilistic-finality.md)
-//! for the consensus design,
-//! [ADR-0010](../../docs/adr/0010-validator-node-architecture.md) for
-//! the in-process validator architecture, and
-//! [ADR-0011](../../docs/adr/0011-validator-deployment-and-equivocation-safety.md)
-//! for the single-host deployment + equivocation-safety operating
-//! model, and
-//! [ADR-0024](../../docs/adr/0024-verified-llm-token-weighted-bft.md) for
-//! the MISAKA Verified LLM Token-Weighted BFT compute overlay ([`crate::vlt`]; its
-//! voting-weight half is removed, so finality weighs bonded stake). This module carries the
-//! **type surface only** that Phase
-//! 10 follow-up PRs (10.4 — 10.14) will reference; consensus rule
-//! implementations panic with explicit `unimplemented!()` so the
-//! missing surface is loud rather than silently-zero.
-//!
-//! Categories:
-//!
-//! - **Wire payloads** (`StakeBondPayload`, `StakeAttestation`,
-//!   `StakeAttestationShardPayload`, `SlashingEvidencePayload`) —
-//!   what nodes commit on-chain. Bounded by `MAX_ATTESTATIONS_PER_SHARD`.
-//! - **Consensus state** (`StakeBondRecord`, `ValidatorRecord`,
-//!   `ValidatorSetSnapshot`, `DnsState`) — what nodes derive from the
-//!   wire payloads and persist in the consensus stores defined by
-//!   ADR-0010 §"Subsystem file layout".
-//! - **Node-side policy** (`BlockTemplatePolicy`, `DnsParams`) —
-//!   per-network knobs read at startup.
-//! - **Validator-local state** (`ValidatorStatus`, `SignedEpochRecord`,
-//!   `SignedEpochCheckOutcome`) — node-local surface every validator
-//!   service needs (in-process or sidecar). Never on the wire; never a
-//!   consensus input. See ADR-0011.
-//! - **RPC view** (`DnsConfirmation`) — surface returned by the
-//!   `getDnsConfirmation` method (lands in PR-10.14).
-//! - **Helpers** (`validator_set_commitment`, `stake_attestation_message`,
-//!   `check_signed_epoch_record`) — byte-deterministic derivations
-//!   and pure-function safety checks every node / validator must
-//!   agree on. Panic-stub-free; consumed by validator + verifier
-//!   alike.
-//!
-//! Hash widths follow [ADR-0008](../../docs/adr/0008-hash64-consensus-identity.md)
-//! and [ADR-0010](../../docs/adr/0010-validator-node-architecture.md)
-//! §"Validator-set commitment derivation": `validator_id`,
-//! `target_hash`, `validator_set_commitment`, and the owner /
-//! validator pubkey hashes inside the registry types are all 64-byte
-//! [`Hash64`]. `TransactionOutpoint.transaction_id` is the upstream
-//! 32-byte alias today and widens to Hash64 in the PR-9.5 cascade —
-//! callers must not assume 32 bytes there long-term.
-//!
-//! All payload and state types derive `BorshSerialize` /
-//! `BorshDeserialize` so they round-trip through the existing wRPC
-//! Borsh path; `serde` JSON is added via manual impls in the
-//! consumer-facing RPC types only.
+//! RFC-0012 removes DNS validators, bonded-stake attestation/precommit quorum, DNS-final
+//! anchor advancement, stake preference and the DNS reorg veto. The shared key primitives,
+//! PALW signing journal, reserved wire layouts and retained liability accounting remain here.
+//! Historical parameter fields and RPC records confer no live consensus authority.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
@@ -155,7 +107,7 @@ pub const STAKE_SCORE_SCALE: u128 = 1_000_000_000;
 
 /// Default staleness a bridge/finality-dependent producer policy may tolerate in the last
 /// DNS-confirmed anchor beyond its healthy distance below the tip (blue score; see
-/// [`dns_finality_fresh_for_bridge`]). Each network carries the active value in
+/// `dns_finality_fresh_for_bridge` (retired)). Each network carries the active value in
 /// [`DnsParams::bridge_finality_max_staleness_daa_score`].
 pub const DEFAULT_BRIDGE_FINALITY_MAX_STALENESS_DAA_SCORE: u64 = 1_500;
 
@@ -183,14 +135,8 @@ pub const ATTESTATION_MESSAGE_DOMAIN: &[u8] = b"kaspa-pq-v1/stake-attestation";
 /// so an unbond authorization can never be replayed as any of those.
 pub const UNBOND_REQUEST_CONTEXT: &[u8] = b"kaspa-pq-v1/unbond/mldsa87";
 
-/// MISAKA §5 round 2: ML-DSA-87 signing context for a [`StakePrecommitPayload`]. Distinct from
-/// [`ATTESTATION_MLDSA87_CONTEXT`] on purpose and load-bearing — sharing it would let a prevote
-/// signature be replayed as a precommit, collapsing the two rounds into one and taking the whole
-/// commit property with it.
+/// Reserved retired DNS precommit context, retained solely for cross-domain rejection tests.
 pub const PRECOMMIT_MLDSA87_CONTEXT: &[u8] = b"misaka-v1/precommit/mldsa87";
-
-/// BLAKE2b-256 domain key for the precommit message. See [`stake_precommit_message`].
-pub const PRECOMMIT_MESSAGE_DOMAIN: &[u8] = b"misaka-v1/stake-precommit";
 
 /// kaspa-pq H-05: BLAKE2b-256 domain key for the unbond-request message the
 /// owner signs over (binds the authorization to the specific bond outpoint).
@@ -312,7 +258,7 @@ pub enum DnsRolloutStage {
 /// orthogonal to [`DnsRolloutStage`]. It **never** invalidates a block — when degraded,
 /// PoW/GHOSTDAG, normal txs, and PoW-confirmation all continue; only the DNS-confirmed
 /// anchor stops advancing. Derived from the per-epoch included-stake fractions by
-/// [`derive_dns_health`] and surfaced (later) via `getDnsConfirmation`.
+/// `derive_dns_health` (retired) and surfaced (later) via `getDnsConfirmation`.
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
@@ -470,218 +416,6 @@ pub struct StakeAttestationShardPayload {
     /// (consensus rule in PR-10.4). Bounded by
     /// `MAX_ATTESTATIONS_PER_SHARD`.
     pub attestations: Vec<StakeAttestation>,
-}
-
-/// Wrap a single [`StakeAttestation`] into a one-element
-/// [`StakeAttestationShardPayload`], copying the shard-level
-/// `(epoch, target_hash, target_daa_score, validator_set_commitment)` from the
-/// attestation so the PR-10.4 single-anchor-per-shard invariant holds by
-/// construction. This is the common in-process-validator case (one validator
-/// emitting one attestation per epoch); batching multiple validators' attestations
-/// into a fuller shard is an aggregator concern, not the signer's.
-pub fn single_attestation_shard(attestation: StakeAttestation) -> StakeAttestationShardPayload {
-    StakeAttestationShardPayload {
-        version: DNS_PAYLOAD_VERSION_V1,
-        epoch: attestation.epoch,
-        target_hash: attestation.target_hash,
-        target_daa_score: attestation.target_daa_score,
-        validator_set_commitment: attestation.validator_set_commitment,
-        attestations: vec![attestation],
-    }
-}
-
-/// Build the subnetwork [`Transaction`] carrying a borsh-encoded
-/// [`StakeAttestationShardPayload`] on `SUBNETWORK_ID_STAKE_ATTESTATION_SHARD`.
-///
-/// **TEST HELPER — NOT for production (audit M-02).** The transaction has no inputs/outputs, so
-/// the stock `NoTxInputs` isolation rule rejects it at mempool ingestion and in blocks. It exists
-/// only to exercise payload/eligibility logic in unit tests. Production validators MUST build the
-/// fee-funded, signed shard via `kaspa_pq_validator_core::ValidatorKey::build_funded_shard_tx`
-/// (ADR-0010 §"Validator service runtime" step 9). `#[doc(hidden)]` to keep it off the public API.
-#[doc(hidden)]
-pub fn stake_attestation_shard_tx(shard: &StakeAttestationShardPayload) -> Transaction {
-    let payload = borsh::to_vec(shard).expect("borsh serialization of a well-formed shard is infallible");
-    Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, 0, payload)
-}
-
-/// Round 2 of DNS finality: one validator's **precommit** — a lock on an epoch's canonical
-/// anchor, published on chain.
-///
-/// The attestation shard is round 1, the prevote: "I have seen this anchor and I accept it".
-/// One round of that is a tally, not a commit. It answers "did two thirds of the weight approve
-/// anchor A for epoch E" and nothing at all about epoch E+1: a validator may support A here and a
-/// conflicting A' on another branch later, and no artefact anywhere makes that a provable fault.
-/// Safety then rests on validators behaving, rather than on their being unable to misbehave
-/// undetected — which is the difference between a quorum and a BFT commit.
-///
-/// A precommit closes that. It is only signed after the prevote quorum for `(epoch, target_hash)`
-/// is visible, and it carries [`Self::locked_epoch`] / [`Self::locked_hash`] — the lock the signer
-/// held when it signed. Two consequences:
-///
-/// * **On chain**, a precommit counts only if its declared lock matches what this chain shows as
-///   that validator's previous precommit, so a validator cannot quietly forget a lock it published
-///   ([`crate::dns_bft_v1::lock_consistent_precommits`]).
-/// * **Across branches**, that restatement is self-contained evidence. Two precommits naming the
-///   same `locked_epoch` with different `locked_hash` prove the signer held two different locks at
-///   one height, and proving it needs only the two payloads — no reachability, no access to the
-///   losing branch's blocks. That is the accountability a single round cannot produce.
-///
-/// **ADR-0128: the round counts past `Params::dns_bft_gate`.** An anchor is DNS-final when more
-/// than two thirds of the epoch's counted bonded stake has attested it and precommitted it with a
-/// lock-consistent precommit bound to the epoch's snapshot commitment ([`crate::dns_bft_v1`]). Below
-/// the fence, and on every network that leaves it unset, the payload stays admissible and its
-/// equivocation evidence slashable ([`precommit_fault`]), and nothing counts it toward confirmation.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct StakePrecommitPayload {
-    pub version: u16,
-
-    /// 64-byte validator identifier, bound to `bond_outpoint`'s bond exactly as an attestation's
-    /// is — without the binding, varying it would evade the one-precommit-per-epoch dedup.
-    pub validator_id: Hash64,
-    pub bond_outpoint: TransactionOutpoint,
-
-    /// The epoch whose canonical lagged anchor this locks on.
-    pub epoch: u64,
-    /// That anchor. Must be this chain's canonical anchor for `epoch`, and must already hold a
-    /// prevote quorum, or the precommit counts for nothing.
-    pub target_hash: Hash64,
-    /// The anchor's DAA score, carried for the same reason an attestation carries it: the
-    /// precommit can be partially checked without a header lookup.
-    pub target_daa_score: u64,
-
-    /// The epoch of the lock this validator held when it signed, or `0` for none.
-    pub locked_epoch: u64,
-    /// That lock's anchor, or [`Hash64::default`] for none. Declaring a lock the chain
-    /// contradicts makes this precommit uncountable; declaring two different ones at the same
-    /// `locked_epoch` on two branches is provable equivocation.
-    pub locked_hash: Hash64,
-
-    /// ADR-0128 Decision 4: the commitment to the counted set this precommit is weighed against —
-    /// [`crate::dns_bft_v1::dns_bft_snapshot_commitment_v1`] of `(epoch, anchor, anchor DAA, W(E),
-    /// root(S(E)))`. In the signed digest; a precommit whose commitment is not the one this chain
-    /// computes for its epoch counts for nothing. A signer reads it from the precommit duty.
-    pub snapshot_commitment: Hash64,
-
-    /// ML-DSA-87 over [`stake_precommit_message`] under [`PRECOMMIT_MLDSA87_CONTEXT`].
-    pub signature: Vec<u8>,
-}
-
-impl StakePrecommitPayload {
-    /// Whether this payload's own fields are mutually possible, independent of any chain.
-    ///
-    /// A lock is something the signer held *before* this precommit, so it must name a strictly
-    /// earlier epoch; and "no lock" is exactly `(0, default)` — a zero epoch with a real hash, or
-    /// a real epoch with a zero hash, is a half-declared lock that the chain check could neither
-    /// confirm nor contradict.
-    pub fn lock_is_self_consistent(&self) -> bool {
-        match (self.locked_epoch, self.locked_hash == Hash64::default()) {
-            (0, true) => true,
-            (0, false) => false,
-            (_, true) => false,
-            (l, false) => l < self.epoch,
-        }
-    }
-}
-
-/// The lock a validator is carrying, as the chain shows it.
-///
-/// `None` for a validator with no counted precommit yet; that is the `(0, default)` a first
-/// precommit must declare.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub struct PrecommitLock {
-    pub epoch: u64,
-    pub anchor: Hash64,
-}
-
-/// What two precommits from one validator prove, when they cannot both be honest.
-///
-/// Both are decided from the two payloads **alone** — no chain, no reachability, no access to the
-/// branch the other one came from. That is the property the lock declaration was designed for: a
-/// partition's losing side does not have to be reconstructed for its signatures to convict.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum PrecommitFault {
-    /// Two precommits for the **same epoch** that disagree about the anchor, or about the lock
-    /// held while signing. A validator has exactly one of each at the moment it locks an epoch, so
-    /// two different answers are two different histories.
-    Equivocation,
-    /// Two precommits declaring **different anchors at the same `locked_epoch`**. The signer is
-    /// claiming to have held two different locks at one height, which cannot happen on a single
-    /// chain: each precommit's declaration names its predecessor, and there is only one.
-    ContradictoryLock,
-}
-
-/// The fault two precommits prove, or `None` if they are compatible.
-///
-/// Requires the same validator and the same bond — evidence against a bond is evidence about the
-/// key that bond pledges, and a pair from two different signers proves nothing about either.
-/// Byte-identical payloads are a rebroadcast, not an offence.
-///
-/// Deliberately narrow. A precommit that re-declares a lock the validator has already moved past
-/// cannot be ordered against its sibling from the two payloads alone, so it is not *proof* of two
-/// histories and must not burn a bond. Slashing is for what is provable from the evidence itself.
-pub fn precommit_fault(a: &StakePrecommitPayload, b: &StakePrecommitPayload) -> Option<PrecommitFault> {
-    if a.validator_id != b.validator_id || a.bond_outpoint != b.bond_outpoint {
-        return None;
-    }
-    if a.epoch == b.epoch {
-        let same_vote = a.target_hash == b.target_hash
-            && a.target_daa_score == b.target_daa_score
-            && a.locked_epoch == b.locked_epoch
-            && a.locked_hash == b.locked_hash;
-        return if same_vote { None } else { Some(PrecommitFault::Equivocation) };
-    }
-    // A zero `locked_epoch` is "no lock yet", which every validator holds exactly once and which
-    // says nothing about history — two first-precommits are not two locks.
-    if a.locked_epoch != 0 && a.locked_epoch == b.locked_epoch && a.locked_hash != b.locked_hash {
-        return Some(PrecommitFault::ContradictoryLock);
-    }
-    None
-}
-
-/// Two precommits from one validator that cannot both be honest, plus the reporter that presented
-/// them (ADR-0013 Addendum C — the reward is minted by consensus at `(evidence_tx_id, 0)`).
-///
-/// The round-2 sibling of [`SlashingEvidencePayload`], and the reason round 2 is worth running: a
-/// lock that costs nothing to break is not a lock. Round 1's equivocation evidence covers two
-/// attestations for one epoch; this covers a validator that carried two locks, which is the fault
-/// a single round could not express at all.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct PrecommitEvidencePayload {
-    pub version: u16,
-    pub bond_outpoint: TransactionOutpoint,
-    pub precommit_a: StakePrecommitPayload,
-    pub precommit_b: StakePrecommitPayload,
-    /// The reporter's 64-byte ML-DSA P2PKH spend payload, as in
-    /// [`SlashingEvidencePayload::reporter_reward_spk_payload`]. A malformed value only misdirects
-    /// the reporter's own reward, so consensus checks nothing beyond the fixed width.
-    pub reporter_reward_spk_payload: [u8; 64],
-}
-
-/// What round 2 asks of one validator at the current sink.
-///
-/// Read from the chain rather than remembered locally, and that is the point: `held` is what the
-/// **network** can see this validator has locked, so a node that restarted, resynced or was
-/// restored from a backup restates the lock everyone else already has a signature for. A node
-/// trusting its own memory here would eventually declare a lock the chain contradicts — which
-/// stops its precommits counting — or, worse, one that contradicts a lock it published on another
-/// branch, which is the equivocation the round exists to make provable.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct PrecommitDuty {
-    /// Whether the precommit round is live at the sink (`Params::dns_bft_gate`, ADR-0128).
-    pub round_active: bool,
-    pub sink_daa_score: u64,
-    /// The lock this validator is carrying on this chain, as counted.
-    pub held: PrecommitLock,
-    /// Epochs whose prevote quorum is met and which this validator has not precommitted yet:
-    /// `(epoch, anchor_hash, anchor_daa, snapshot_commitment)`, ascending.
-    ///
-    /// Ascending because a lock must name a STRICTLY EARLIER epoch, so a validator's own
-    /// precommits can only ever move forward — it may skip entries (and should, when it is far
-    /// behind: see the frontier jump in the validator service) but must never go back. The
-    /// commitment is per entry (ADR-0128 Decision 4): each precommit binds ITS target epoch's
-    /// counted set, so a late signature for an old due epoch carries that epoch's commitment, not
-    /// whichever happens to be current.
-    pub due: Vec<(u64, Hash64, u64, Hash64)>,
 }
 
 /// Phase 10 transaction payload that burns a validator's bond by
@@ -847,7 +581,7 @@ pub struct DnsState {
     /// Equal to `selected_chain_anchor` when the anchor itself is
     /// DNS-confirmed.
     ///
-    /// **Past `Params::dns_bft_gate` (ADR-0128 Decision 5)** it is instead the newest DNS-final
+    /// **Past the retired DNS BFT gate (ADR-0128 Decision 5)** it is instead the newest DNS-final
     /// anchor — both BFT rounds above two thirds of the epoch's counted bonded stake — carried
     /// forward while it stays a chain ancestor of the sink, and the default (nothing confirmed)
     /// where the evaluation could not cover its walk. The layout is unchanged.
@@ -862,7 +596,7 @@ pub struct DnsState {
     pub validator_set_commitment: Hash64,
 
     /// kaspa-pq Phase 13 (ADR-0018 §C): read-only DNS-finality health for this anchor,
-    /// derived once per epoch by [`derive_dns_health`] over the same bounded StakeScore
+    /// derived once per epoch by `derive_dns_health` (retired) over the same bounded StakeScore
     /// window (`DisabledBeforeActivation` until the overlay reaches `Active`). Carried
     /// here so `getDnsConfirmation` can surface it without re-walking the window. **Never**
     /// a block-validity input — degraded health stalls the DNS-confirmed anchor only; PoW
@@ -942,7 +676,7 @@ pub struct DnsParams {
     /// points). An epoch whose included-attestation stake fraction
     /// `included_stake / expected_active_stake` is below `φS` earns **zero** StakeScore;
     /// above it the credit is the smooth `(fraction − φS)/(1 − φS)`
-    /// ([`epoch_stake_credit`]). NOT a BFT 2/3 supermajority — set `φS >` the modelled
+    /// (`epoch_stake_credit` (retired)). NOT a BFT 2/3 supermajority — set `φS >` the modelled
     /// adversarial stake-inclusion rate so a minority cannot accumulate StakeScore.
     /// `φS == 0` reproduces the pre-ADR-0018 linear credit exactly.
     pub stake_event_quality_floor_bps: u16,
@@ -1067,8 +801,8 @@ pub struct DnsParams {
 
     /// The staleness a bridge/finality-dependent producer policy tolerates in the last
     /// DNS-confirmed anchor, **beyond the anchor's healthy distance below the tip**
-    /// ([`dns_anchor_healthy_distance_blue_score`]), counted in blue score since 2026-09-10 — see
-    /// [`dns_finality_fresh_for_bridge`] for why the old DAA reading could never be met on
+    /// (`dns_anchor_healthy_distance_blue_score` (retired)), counted in blue score since 2026-09-10 — see
+    /// `dns_finality_fresh_for_bridge` (retired) for why the old DAA reading could never be met on
     /// testnet-11. The value did not change — `DnsParams` is borsh-serialized into the consensus
     /// fingerprint, so moving it would be a flag day — and neither did the name; only the policy
     /// that reads it did. This is a per-network knob
@@ -1079,7 +813,7 @@ pub struct DnsParams {
 
     /// **Partition-liveness override (incident 2026-08-03 §8).** Multiplier `N` such that a
     /// candidate accumulating more than `N ×` canonical's WorkScore *since the common ancestor*
-    /// is accepted by [`check_dns_reorg_rule`] **regardless of the stake dimension**. `0` disables
+    /// is accepted by the retired DNS reorg rule **regardless of the stake dimension**. `0` disables
     /// the override and restores the strict (partition-prone) non-substitutability rule.
     ///
     /// ## Why this exists
@@ -1124,7 +858,7 @@ pub struct DnsParams {
     /// makes miners extend it, and work then accumulates where the validators are.
     ///
     /// A candidate within [`Self::gate_horizon_blocks`] qualifies only if ALL hold (evaluated in
-    /// [`stake_preference_verdict`], chain-deterministic on every input):
+    /// `stake_preference_verdict` (retired), chain-deterministic on every input):
     ///   * this node's own rollout stage is `Active` and its own confirmed anchor is stale past
     ///     the full [`Self::dns_veto_ttl_daa_score`] — a fresh anchor means this chain IS a
     ///     live-DNS branch, and symmetric-live contests (including a partition with validators
@@ -1264,7 +998,7 @@ pub struct DnsParams {
     /// **Confirmed-anchor veto TTL (release path for a branch that lost its validators).**
     /// Maximum DAA distance THIS node's own canonical chain may advance past its last
     /// DNS-confirmed anchor while the anchor still arms the reorg veto. Past it the gate reports
-    /// [`DnsReorgOutcome::ConfirmedAnchorStale`] and abstains until a fresh anchor confirms.
+    /// the historical stale-anchor outcome and abstains until a fresh anchor confirms.
     /// `u64::MAX` disables the TTL (the pre-TTL behaviour: the veto never expires).
     ///
     /// ## The clock is deliberately the node's OWN chain, never the candidate's
@@ -1336,7 +1070,7 @@ pub struct DnsParams {
     /// every preset; it stays so that the preset shape and its borsh encoding (hashed into
     /// `consensus_params_id`) are unchanged. `Params::palw_inactivity_leak`, the fence that
     /// replaced it (ADR-0066 Decision 4), is refused by `Params::validate_palw_v2`; the leak that
-    /// exists is `Params::dns_bft_gate`'s (ADR-0128 Decision 3).
+    /// exists is the retired DNS BFT gate's (ADR-0128 Decision 3).
     ///
     /// Why it could not be the switch: `DnsParams` is hashed into `consensus_params_id` as one raw
     /// borsh blob, and `for_each_fence` deliberately does not visit inside it. Both halves are
@@ -1470,14 +1204,6 @@ impl DnsParams {
         self
     }
 
-    /// The epoch-credit rule: the φS graded floor over bonded stake.
-    ///
-    /// The VLT quorum rule that the weight fence would have switched to is removed, so this is the
-    /// one rule on every network, at every height.
-    pub fn epoch_credit_rule(&self) -> EpochCreditRule {
-        EpochCreditRule::QualityFloor { quality_floor_bps: self.stake_event_quality_floor_bps }
-    }
-
     /// Whether the compute overlay is **running** at `daa_score`: committees drawn, verdicts
     /// counted and paid, a settled challenge slashing the side that lost.
     ///
@@ -1515,63 +1241,6 @@ impl DnsParams {
         let depth_epochs = ((self.required_stake_depth.0 / STAKE_SCORE_SCALE) as u64).max(2);
         let needed = depth_epochs.saturating_mul(l).saturating_add(lag).saturating_add(backoff);
         l >= 1 && lag >= 1 && backoff < l && window >= needed
-    }
-
-    /// The **ceiling** on any [`StakeScore`] this configuration can produce.
-    ///
-    /// [`compute_stake_score`] sums [`epoch_stake_credit`] over the epochs inside
-    /// `stake_score_window_blue_score`, and each epoch credits at most
-    /// [`STAKE_SCORE_SCALE`] (full participation). So the attainable maximum is
-    /// `floor(window / epoch_length) × STAKE_SCORE_SCALE` — a *windowed*, non-cumulative
-    /// quantity, unlike `blue_work`.
-    ///
-    /// **Any stake threshold at or above this value is unsatisfiable by construction.** That is
-    /// not hypothetical: incident 2026-07-19 §2-4 found `emergency_stake_margin` set to
-    /// `100 × SCALE` (1e11) against a 15-epoch window whose ceiling is `1.5e10`, so the
-    /// `DominanceSatisfied` escape path could never be taken on ANY network state and
-    /// `TwoDimensionalDominance` silently degenerated into `HardCheckpoint`. Use this helper
-    /// when calibrating margins, and see the preset test that enforces headroom against it.
-    pub fn max_attainable_stake_score(&self) -> StakeScore {
-        let l = self.attestation_epoch_length_blue_score.max(1);
-        StakeScore((self.stake_score_window_blue_score / l) as u128 * STAKE_SCORE_SCALE)
-    }
-
-    /// The effective reorg-gate horizon: [`Self::dns_gate_horizon_blocks`], or
-    /// [`Self::max_reorg_horizon_blocks`] when that is `0` (the pre-split behaviour, kept so a
-    /// preset or test that tunes only `max_reorg_horizon_blocks` still moves the gate with it).
-    pub fn gate_horizon_blocks(&self) -> u64 {
-        if self.dns_gate_horizon_blocks == 0 { self.max_reorg_horizon_blocks } else { self.dns_gate_horizon_blocks }
-    }
-
-    /// Has the confirmed anchor gone stale — i.e. has this node's own canonical chain advanced
-    /// more than [`Self::dns_veto_ttl_daa_score`] past it without a new confirmation?
-    ///
-    /// `canonical_daa_score` MUST be the node's own canonical tip (never a candidate branch's);
-    /// see the field doc for why the clock is one-sided. Saturating, so an anchor that somehow
-    /// sits ahead of the tip reads as fresh (age 0) rather than wrapping into "stale".
-    pub fn confirmed_anchor_is_stale(&self, canonical_daa_score: u64, anchor_daa_score: u64) -> bool {
-        canonical_daa_score.saturating_sub(anchor_daa_score) > self.dns_veto_ttl_daa_score
-    }
-
-    /// Is the veto's reach configured coherently — does the gate horizon cover at least the
-    /// economic reorg horizon, and does the TTL leave room for a healthy chain's
-    /// anchor-to-tip distance (`lag + one epoch`, plus the same again as margin)?
-    ///
-    /// A preset assertion, not a runtime rule: a TTL below the healthy distance would expire
-    /// every anchor the moment it confirmed, silently disabling DNS finality altogether, and a
-    /// gate horizon below the economic horizon would abstain on forks the reward path still
-    /// treats as rewritable.
-    pub fn veto_reach_is_coherent(&self) -> bool {
-        let healthy_gap = self.attestation_lag_blue_score.saturating_add(self.attestation_epoch_length_blue_score);
-        self.gate_horizon_blocks() >= self.max_reorg_horizon_blocks && self.dns_veto_ttl_daa_score >= healthy_gap.saturating_mul(2)
-    }
-
-    /// Is [`Self::emergency_stake_margin`] actually reachable? A margin at or above
-    /// [`Self::max_attainable_stake_score`] makes the two-dimensional escape path dead code
-    /// (incident 2026-07-19 §2-4). Enforced by the preset tests rather than at runtime, so a
-    /// deliberate research configuration can still opt out.
-    pub fn emergency_stake_margin_is_attainable(&self) -> bool {
-        self.emergency_stake_margin.0 < self.max_attainable_stake_score().0
     }
 
     /// ADR-0018 §F staged reward rollout — the effective fee/subsidy split for a
@@ -1854,7 +1523,7 @@ pub struct ValidatorAttestationTarget {
 /// signature bytes, stored in [`SignedEpochRecord::signature_fingerprint`] so a
 /// validator can recognise a re-broadcast of its own in-flight attestation across
 /// restarts without persisting the full ~3.3 KB signature. It is **not** part of
-/// the equivocation predicate (see [`check_signed_epoch_record`]) — two valid hedged
+/// the equivocation predicate (see `check_signed_epoch_record` (retired)) — two valid hedged
 /// signatures over the same message differ, so only `(target_hash, target_daa_score)`
 /// equality decides equivocation.
 pub fn signature_fingerprint(signature: &[u8]) -> Hash64 {
@@ -1951,64 +1620,6 @@ pub fn stake_attestation_message(
     hasher.update(target_hash.as_byte_slice());
     hasher.update(&target_daa_score.to_le_bytes());
     hasher.update(validator_set_commitment.as_byte_slice());
-    hasher.update(bond_outpoint.transaction_id.as_byte_slice());
-    hasher.update(&bond_outpoint.index.to_le_bytes());
-
-    let mut out = [0u8; 32];
-    out.copy_from_slice(hasher.finalize().as_bytes());
-    Hash::from_bytes(out)
-}
-
-/// The 32-byte digest a [`StakePrecommitPayload`] signs.
-///
-/// ```text
-/// BLAKE2b-256(
-///     key   = PRECOMMIT_MESSAGE_DOMAIN,
-///     input = network_id
-///          || epoch.to_le_bytes()
-///          || target_hash.as_bytes()           (64 B)
-///          || target_daa_score.to_le_bytes()
-///          || locked_epoch.to_le_bytes()
-///          || locked_hash.as_bytes()           (64 B)
-///          || snapshot_commitment.as_bytes()   (64 B)
-///          || bond_outpoint.transaction_id     (64 B)
-///          || bond_outpoint.index.to_le_bytes()  (4 B),
-/// )
-/// ```
-///
-/// The **lock is inside the digest**, which is the whole reason this is not just an attestation
-/// with a different context byte. A signature that did not cover `(locked_epoch, locked_hash)`
-/// would leave the declaration unsigned, and anyone could restate a validator's lock as whatever
-/// the chain happened to want — so the on-chain lock check would verify nothing and the
-/// cross-branch evidence would prove nothing.
-///
-/// The **snapshot commitment is inside the digest** for the same shape of reason, at the
-/// denominator instead of the lock (§5.1): a precommit whose signature did not cover which
-/// `W(E)` it was weighed under could be counted against a different one, and the quorum would
-/// silently stop meaning two thirds of anything. ADR-0128 Decision 4 names the commitment:
-/// [`crate::dns_bft_v1::dns_bft_snapshot_commitment_v1`].
-///
-/// `network_id` and `bond_outpoint` bind the precommit to a network and to the specific bond whose
-/// weight it pledges, exactly as in [`stake_attestation_message`].
-#[allow(clippy::too_many_arguments)]
-pub fn stake_precommit_message(
-    network_id: &[u8],
-    epoch: u64,
-    target_hash: Hash64,
-    target_daa_score: u64,
-    locked_epoch: u64,
-    locked_hash: Hash64,
-    snapshot_commitment: Hash64,
-    bond_outpoint: TransactionOutpoint,
-) -> Hash {
-    let mut hasher = Blake2bParams::new().hash_length(32).key(PRECOMMIT_MESSAGE_DOMAIN).to_state();
-    hasher.update(network_id);
-    hasher.update(&epoch.to_le_bytes());
-    hasher.update(target_hash.as_byte_slice());
-    hasher.update(&target_daa_score.to_le_bytes());
-    hasher.update(&locked_epoch.to_le_bytes());
-    hasher.update(locked_hash.as_byte_slice());
-    hasher.update(snapshot_commitment.as_byte_slice());
     hasher.update(bond_outpoint.transaction_id.as_byte_slice());
     hasher.update(&bond_outpoint.index.to_le_bytes());
 
@@ -2201,35 +1812,6 @@ pub enum SignedEpochCheckOutcome {
     Block = 2,
 }
 
-/// Pure-function equivocation guard.
-///
-/// Returns one of [`SignedEpochCheckOutcome::Allow`],
-/// [`SignedEpochCheckOutcome::AllowRebroadcast`], or
-/// [`SignedEpochCheckOutcome::Block`] given the prior signing
-/// record (if any) for the same `(bond_outpoint, validator_id,
-/// epoch)` triple and the candidate the validator service is
-/// about to sign. See ADR-0011 §"Signed-epoch persistence" for
-/// the decision table.
-///
-/// The function deliberately does **not** validate the
-/// `signature_fingerprint`: two valid hedged ML-DSA-87 signatures
-/// over the same message will have different fingerprints, so the
-/// predicate that matters is target-hash + target-daa-score
-/// equality.
-///
-/// Both arguments come from the same trust domain (the validator's
-/// own DB and its own in-flight candidate), so this function does
-/// no cryptographic verification — it is a pure comparison.
-pub fn check_signed_epoch_record(prev: Option<&SignedEpochRecord>, candidate: &SignedEpochRecord) -> SignedEpochCheckOutcome {
-    match prev {
-        None => SignedEpochCheckOutcome::Allow,
-        Some(p) if p.target_hash == candidate.target_hash && p.target_daa_score == candidate.target_daa_score => {
-            SignedEpochCheckOutcome::AllowRebroadcast
-        }
-        Some(_) => SignedEpochCheckOutcome::Block,
-    }
-}
-
 /// One row of the PALW attempt anti-equivocation journal (ADR-0042 Decision 4 / PR-05): for a
 /// given V2 challenge, the attempt id this key signed. The challenge already binds
 /// `(network_domain, pre_pow_hash, timestamp, nonce, class, bond)` — so "one challenge, one
@@ -2250,7 +1832,7 @@ pub struct PalwAttemptSignRecordV1 {
     pub signature_fingerprint: Hash64,
 }
 
-/// The PALW twin of [`check_signed_epoch_record`], with the same decision table: no prior record
+/// The PALW twin of `check_signed_epoch_record` (retired), with the same decision table: no prior record
 /// for the challenge ⇒ `Allow`; the same attempt id again ⇒ `AllowRebroadcast` (re-signing one's
 /// own claim is a retry, not an equivocation — critical for restart-during-announce); a
 /// DIFFERENT attempt id under the same challenge ⇒ `Block`.
@@ -2800,7 +2382,7 @@ pub fn compute_attestation_reward_payouts(
 
 /// Shared anti-capture proportional share: `pool × min(stake, expected_stake) /
 /// expected_stake` (`0` when `expected_stake == 0`). Integer `u128`, multiply-
-/// before-divide (no lossy `unit` intermediate, mirroring [`epoch_stake_credit`]).
+/// before-divide (no lossy `unit` intermediate, mirroring `epoch_stake_credit` (retired)).
 /// The `min` clamp is the anti-capture invariant — a single share can never exceed
 /// the whole `pool`, so over-counting (duplicate inclusion) cannot over-drain it. In
 /// the valid domain (`stake ≤ expected_stake`) the clamp is a no-op, so the result
@@ -3678,21 +3260,12 @@ pub fn resolve_slashing_side_effects(
     // `(slashing_tx_id, 0)` under Addendum C.2.
     for tx in txs {
         // `(bond_outpoint, reporter_payload, slashed_epoch)` for whichever evidence kind this is.
-        // Round 1 slashes on two attestations for one epoch; round 2 on two precommits that cannot
-        // both be honest. Same side effect, because they are the same offence at two different
-        // rounds, and a lock nobody can be burned for breaking is not a lock.
+        // Only retained legacy attestation evidence can create this liability.
         let claim = match dns_tx_kind(&tx.subnetwork_id) {
             Some(DnsTxKind::SlashingEvidence) => borsh::from_slice::<SlashingEvidencePayload>(&tx.payload)
                 .ok()
                 // Both attestations share an epoch — that is what makes them equivocating.
                 .map(|ev| (ev.bond_outpoint, ev.reporter_reward_spk_payload, ev.attestation_a.epoch)),
-            Some(DnsTxKind::PrecommitEvidence) => borsh::from_slice::<PrecommitEvidencePayload>(&tx.payload).ok().map(|ev| {
-                // The two precommits share an epoch only for `Equivocation`; a `ContradictoryLock`
-                // pair spans two. Attribute it to the newer, which is the one whose lock the
-                // validator was breaking.
-                let epoch = ev.precommit_a.epoch.max(ev.precommit_b.epoch);
-                (ev.bond_outpoint, ev.reporter_reward_spk_payload, epoch)
-            }),
             _ => None,
         };
         let Some((bond_outpoint, reporter_payload, slashed_epoch)) = claim else {
@@ -3710,176 +3283,7 @@ pub fn resolve_slashing_side_effects(
     slashing_side_effects_from_evidence(&resolved, slashing_reporter_reward_bps, security_reserve_bps, victim_epoch_pool_bps, None)
 }
 
-// ---------------------------------------------------------------------
-// Consensus rule implementations (PR-10.5).
-//
-// `compute_stake_score` and `check_dns_reorg_rule` below replace the
-// PR-10.3 `*_stub` panics with the real deterministic logic from
-// ADR-0009. They are pure functions: the DAG-dependent facts (per-epoch
-// signed/total stake, common-ancestor work/stake split, whether the
-// candidate keeps the confirmed anchor) are computed by the consensus
-// pipeline in a later PR and fed in here, so the rule itself stays
-// unit-testable in isolation and free of any `RuleError` dependency.
-// ---------------------------------------------------------------------
-
-/// Per-epoch stake tally fed into [`compute_stake_score`] (ADR-0009
-/// §"StakeScore mechanics"). The caller enforces the
-/// `(bond_outpoint, validator_id, epoch)` uniqueness rule, so
-/// `signed_stake_sompi` already excludes any validator double-counted
-/// across attestation shards.
-/// **Voting-weight units:** sompi of bonded stake. `u128` because the tally was shared with the
-/// removed µRTE-scaled VLT weight, and widening it back would move nothing but the type.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct EpochStakeTally {
-    pub epoch: u64,
-    /// Deduplicated voting weight whose validators signed this epoch's
-    /// selected-chain anchor.
-    pub signed_weight: u128,
-    /// Total active voting weight at this epoch (the normalisation denominator).
-    pub total_weight: u128,
-}
-
-/// Per-epoch **quality-gated** StakeScore credit (ADR-0018 §B; refines ADR-0009
-/// §"StakeScore mechanics"):
-///
-/// ```text
-/// f = included_stake / expected_stake                        (clamped to 1.0)
-/// credit = 0,                                      if f < φS
-///        = (f − φS) / (1 − φS) × STAKE_SCORE_SCALE, otherwise
-/// ```
-///
-/// `φS` (`quality_floor_bps`, basis points) is the **stake-event quality floor** — an
-/// epoch below it earns nothing, so a minority included-stake fraction can never
-/// accumulate StakeScore (the attack the prior linear credit allowed). `φS == 0`
-/// reproduces that linear credit **exactly** (the `10_000` factors cancel). The numerator
-/// is clamped to the denominator (an over-count cannot inflate the score) and the
-/// arithmetic is integer `u128` throughout (no floats; `saturating_mul` is defensive —
-/// the real products are far below `u128::MAX`).
-pub fn epoch_stake_credit(included_stake: u128, expected_stake: u128, quality_floor_bps: u16) -> u128 {
-    if expected_stake == 0 {
-        return 0;
-    }
-    let expected = expected_stake;
-    let included = included_stake.min(expected);
-    let floor = (quality_floor_bps as u128).min(10_000);
-    // f < φS  ⟺  included × 10_000 < expected × floor.
-    if included.saturating_mul(10_000) < expected.saturating_mul(floor) {
-        return 0;
-    }
-    let denom = 10_000 - floor; // (1 − φS) in bps units
-    if denom == 0 {
-        // φS == 100%: only full inclusion reaches here, and earns the full scale.
-        return STAKE_SCORE_SCALE;
-    }
-    // (included×10_000 − expected×floor) × SCALE / (expected × denom).
-    let numerator = included * 10_000 - expected * floor;
-    numerator.saturating_mul(STAKE_SCORE_SCALE) / expected.saturating_mul(denom)
-}
-
-/// Which rule turns an epoch's `(signed, total)` voting weight into StakeScore credit.
-///
-/// One rule is left: [`Self::QualityFloor`], the ADR-0018 §B graded credit over bonded stake. The
-/// binary BFT-quorum rule the VLT weight fence would have switched to is removed.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum EpochCreditRule {
-    /// ADR-0018 §B graded credit above the φS stake-event quality floor.
-    QualityFloor { quality_floor_bps: u16 },
-}
-
-/// One epoch's StakeScore credit under `rule`.
-pub fn epoch_credit(signed_weight: u128, total_weight: u128, rule: EpochCreditRule) -> u128 {
-    match rule {
-        EpochCreditRule::QualityFloor { quality_floor_bps } => epoch_stake_credit(signed_weight, total_weight, quality_floor_bps),
-    }
-}
-
-/// Deterministic `StakeScore(H)` aggregation over the epochs whose anchors lie on the
-/// selected chain ending at the target (ADR-0009 §"StakeScore mechanics", quality-gated
-/// per ADR-0018 §B). Every node observing the same on-chain shard set + the same
-/// `rule` reaches the same number — integer `u128` throughout, no floats.
-pub fn compute_stake_score(per_epoch: &[EpochStakeTally], rule: EpochCreditRule) -> StakeScore {
-    let mut acc: u128 = 0;
-    for e in per_epoch {
-        acc = acc.saturating_add(epoch_credit(e.signed_weight, e.total_weight, rule));
-    }
-    StakeScore(acc)
-}
-
-/// Derive the read-only [`DnsHealth`] signal (ADR-0018 §C) from the per-epoch tallies of
-/// the bounded StakeScore window (sorted ascending by epoch, as produced by
-/// [`aggregate_epoch_tallies`]). **Not** a consensus gate — purely a liveness signal that
-/// never affects block validity.
-///
-/// - `overlay_active == false` → `DisabledBeforeActivation`.
-/// - Healthy (`Active`) if any of the last `degraded_epochs` epochs **met φS**, or if there is
-///   less than `degraded_epochs` epochs of history.
-/// - Otherwise the last `degraded_epochs` epochs all earned nothing → degraded:
-///   `DegradedCertificateCensored` when they are **all** below the near-zero
-///   `censorship_floor_bps` (the censorship signature), else `DegradedStakeQualityLow`.
-///
-/// The censorship discriminator is fraction-based: it is what separates *nobody's shards are
-/// being included* from *validators are participating but not reaching the threshold*.
-pub fn derive_dns_health(
-    per_epoch: &[EpochStakeTally],
-    rule: EpochCreditRule,
-    censorship_floor_bps: u16,
-    degraded_epochs: u32,
-    overlay_active: bool,
-) -> DnsHealth {
-    if !overlay_active {
-        return DnsHealth::DisabledBeforeActivation;
-    }
-    let m = (degraded_epochs as usize).max(1);
-    if per_epoch.len() < m {
-        return DnsHealth::Active; // insufficient history for a sustained-degradation signal
-    }
-    let window = &per_epoch[per_epoch.len() - m..];
-    let frac_bps = |e: &EpochStakeTally| -> u128 {
-        if e.total_weight == 0 {
-            return 0;
-        }
-        e.signed_weight.min(e.total_weight) * 10_000 / e.total_weight
-    };
-    // "Cleared the threshold" is deliberately NOT `epoch_credit(..) > 0`: `epoch_stake_credit`
-    // pays exactly zero at `f == φS` (its numerator vanishes there), so a credit-based test would
-    // flip an epoch sitting exactly on φS from Active to degraded. The original `frac >= φS`
-    // comparison is kept byte-for-byte.
-    let cleared = |e: &EpochStakeTally| match rule {
-        EpochCreditRule::QualityFloor { quality_floor_bps } => frac_bps(e) >= quality_floor_bps as u128,
-    };
-    if window.iter().any(cleared) {
-        return DnsHealth::Active; // a recent epoch cleared the active threshold
-    }
-    if window.iter().all(|e| frac_bps(e) < censorship_floor_bps as u128) {
-        DnsHealth::DegradedCertificateCensored
-    } else {
-        DnsHealth::DegradedStakeQualityLow
-    }
-}
-
-/// History-confirmation predicate — `WorkDepth(B) ≥ cW ∧ StakeDepth(B) ≥ cS`. An anchor is
-/// DNS-confirmed iff it clears **both** thresholds. Used by the consensus pipeline to advance
-/// [`DnsState::last_dns_confirmed_anchor`].
-///
-/// audit H-02 — what this is and is NOT: on the production presets `cW = required_work_depth =
-/// BlueWorkType::ZERO`, so the work term is satisfied trivially and confirmation is effectively
-/// **stake-depth only** (a stake-confirmed canonical lagged anchor). This is NOT the "Double
-/// Nakamoto" claim of an independent PoW *and* PoS confirmation count — the PoW dimension does NOT
-/// gate confirmation here. The two-dimensional **finality safety** (non-substitutability: a heavier
-/// PoW chain cannot rewrite a stake-confirmed anchor) is enforced separately by the reorg gate
-/// [`check_dns_reorg_rule`], which requires BOTH a WorkScore and a StakeScore dominance margin over
-/// canonical SINCE THE COMMON ANCESTOR (deltas, not the absolute cumulative `work_depth` read here).
-/// Set `cW > 0` only if you also switch `work_depth` to an anchor-relative delta (see the audit note).
-pub fn is_dns_confirmed(
-    work_depth: BlueWorkType,
-    stake_depth: StakeScore,
-    required_work_depth: BlueWorkType,
-    required_stake_depth: StakeScore,
-) -> bool {
-    work_depth >= required_work_depth && stake_depth >= required_stake_depth
-}
-
-/// Reorg-gate mode (ADR-0009 §"Phase-specific behaviour").
+/// Frozen discriminants in historical DNS parameter bytes; no reorg gate reads them.
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
@@ -3895,231 +3299,17 @@ pub enum DnsReorgMode {
     TwoDimensionalDominance = 1,
 }
 
-/// Inputs to [`check_dns_reorg_rule`]. The DAG-dependent facts are
-/// computed by the consensus pipeline (later PR) and passed in, keeping
-/// the decision a pure, unit-testable function.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DnsReorgInputs {
-    pub rollout_stage: DnsRolloutStage,
-    pub mode: DnsReorgMode,
-    /// `true` iff the candidate chain still contains the latest
-    /// DNS-confirmed anchor (it does not rewrite confirmed history).
-    pub candidate_includes_confirmed_anchor: bool,
-    /// `WorkScore` accumulated by each chain *after* the common
-    /// ancestor `I = common_ancestor(candidate, canonical_tip)`.
-    pub candidate_work_after: BlueWorkType,
-    pub canonical_work_after: BlueWorkType,
-    /// `StakeScore` accumulated after `I`.
-    pub candidate_stake_after: StakeScore,
-    pub canonical_stake_after: StakeScore,
-    pub emergency_work_margin: BlueWorkType,
-    pub emergency_stake_margin: StakeScore,
-    /// Partition-liveness override multiplier — see
-    /// [`DnsParams::emergency_work_override_multiplier`]. `0` disables the override.
-    pub emergency_work_override_multiplier: u32,
-    /// DAA distance the node's OWN canonical chain has advanced past the DNS-confirmed anchor
-    /// (`canonical_tip.daa_score − anchor.daa_score`, saturating). Never the candidate's — see
-    /// [`DnsParams::dns_veto_ttl_daa_score`].
-    pub confirmed_anchor_age_daa_score: u64,
-    /// [`DnsParams::dns_veto_ttl_daa_score`]; `u64::MAX` disables the staleness release.
-    pub veto_ttl_daa_score: u64,
-}
-
-/// Outcome of the DNS reorg gate. The consensus pipeline maps the
-/// reject variants to a `RuleError`; surfacing a rich enum keeps
-/// consensus-core free of that dependency and mirrors the
-/// [`SignedEpochCheckOutcome`] style.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum DnsReorgOutcome {
-    /// Not in `Active` rollout stage — the gate is dormant and
-    /// PoW/GHOSTDAG decides alone (Phases 1–9 behaviour).
-    GateInactive,
-    /// The candidate keeps the latest DNS-confirmed anchor; confirmed
-    /// history is not rewritten, so the gate does not trigger.
-    IncludesConfirmedAnchor,
-    /// Mainnet path: the candidate exits the confirmed prefix and beats
-    /// canonical on **both** `WorkScore` and `StakeScore` by the
-    /// emergency margins. The rare legitimate deep-reorg path.
-    DominanceSatisfied,
-    /// PoC / testnet hard-checkpoint reject: candidate exits the
-    /// confirmed prefix.
-    HardCheckpointReject,
-    /// Mainnet reject: candidate exits the confirmed prefix but fails
-    /// the two-dimensional dominance test (a PoW-only or stake-only
-    /// attacker lands here — non-substitutability).
-    DominanceViolation,
-    /// **Partition-liveness override.** The candidate exits the confirmed prefix and does NOT
-    /// satisfy the stake dimension, but out-Works canonical since the common ancestor by more
-    /// than [`DnsParams::emergency_work_override_multiplier`]`×`. Accepted so a partitioned
-    /// minority branch can rejoin the work-dominant chain instead of wedging forever. Callers
-    /// should log this loudly — it means the stake veto was deliberately released.
-    WorkDominanceOverride,
-    /// **Confirmed-anchor TTL release** (the [`DnsParams::dns_veto_ttl_daa_score`] layer). This
-    /// node's own canonical chain has advanced more than the TTL past the anchor it is defending
-    /// without confirming a new one, so that anchor's live validator support is gone and it stops
-    /// being a veto. Accepted; the gate re-arms as soon as a fresh anchor confirms. Like
-    /// [`Self::WorkDominanceOverride`] this is an operationally significant release and belongs in
-    /// the log.
-    ConfirmedAnchorStale,
-    /// **ADR-0065 D2 — the challenger's matured work rests on bonds it minted for itself.**
-    ///
-    /// A reorg refused because a QUORUM-sized majority of some panel that advanced the
-    /// challenger's `safe_frontier` was drawn from bonds registered after the common ancestor —
-    /// i.e. bonds nobody on the incumbent chain could see when the branches parted.
-    /// `palw_fork_choice`'s ordering puts matured work first on the grounds that "a fork nobody
-    /// could see collects no receipts, so it has no frontier", and this is the rule that makes
-    /// that true instead of merely asserted.
-    ///
-    /// Deliberately absent from [`Self::is_accept`]: it is a refusal, not a release.
-    FrontierProvenanceViolation,
-}
-
-impl DnsReorgOutcome {
-    /// `true` for the accept variants (gate dormant, anchor retained,
-    /// dominance satisfied, the partition-liveness work override, or the
-    /// stale-anchor TTL release).
-    pub fn is_accept(self) -> bool {
-        matches!(
-            self,
-            DnsReorgOutcome::GateInactive
-                | DnsReorgOutcome::IncludesConfirmedAnchor
-                | DnsReorgOutcome::DominanceSatisfied
-                | DnsReorgOutcome::WorkDominanceOverride
-                | DnsReorgOutcome::ConfirmedAnchorStale
-        )
-    }
-
-    /// `true` for the two variants that mean "a veto existed and was deliberately released".
-    /// Both are worth a `warn!` at the call site: on a healthy node neither ever fires, and on a
-    /// wedged one they are the only evidence that the gate stepped aside.
-    pub fn is_liveness_release(self) -> bool {
-        matches!(self, DnsReorgOutcome::WorkDominanceOverride | DnsReorgOutcome::ConfirmedAnchorStale)
-    }
-}
-
-/// Pure decision for the DNS reorg gate (ADR-0009 §"Decision" +
-/// §"Phase-specific behaviour"). Replaces the PR-10.3
-/// `check_dns_reorg_rule_stub`.
-///
-/// Two-dimensional **non-substitutability**: in mainnet mode a
-/// candidate that exits the DNS-confirmed prefix must *strictly* beat
-/// canonical on `WorkScore` **and** `StakeScore`, each by its emergency
-/// margin. A PoW-only surplus or a stake-only surplus is rejected —
-/// "PoW surplus does not substitute for PoS deficit and vice versa".
-pub fn check_dns_reorg_rule(inputs: &DnsReorgInputs) -> DnsReorgOutcome {
-    // The gate engages only in the Active rollout stage (ADR-0009
-    // §"Three-stage rollout"); Launch/Bootstrap run pure PoW/GHOSTDAG.
-    if inputs.rollout_stage != DnsRolloutStage::Active {
-        return DnsReorgOutcome::GateInactive;
-    }
-    // A candidate that still contains the confirmed anchor does not
-    // rewrite confirmed history — the gate does not trigger.
-    if inputs.candidate_includes_confirmed_anchor {
-        return DnsReorgOutcome::IncludesConfirmedAnchor;
-    }
-    // Confirmed-anchor TTL — see [`DnsParams::dns_veto_ttl_daa_score`]. The anchor being defended
-    // has had no re-confirmation while this node's OWN chain advanced past the TTL, so the branch
-    // it lives on has lost the live validator support that made it worth defending. Release
-    // before evaluating dominance: a veto whose backing is gone should not be scored at all.
-    if inputs.confirmed_anchor_age_daa_score > inputs.veto_ttl_daa_score {
-        return DnsReorgOutcome::ConfirmedAnchorStale;
-    }
-    // Partition-liveness override — see [`DnsParams::emergency_work_override_multiplier`].
-    //
-    // Evaluated for BOTH modes (the deadlock is a property of an unreleasable veto, not of one
-    // mode) and INDEPENDENTLY of `emergency_work_margin`: that margin is an absolute
-    // `BlueWorkType` which a floored-difficulty network never reaches (testnet-22 carried a
-    // 1_000_000 margin against a real since-ancestor work of ~2.2e5), so gating the override on
-    // it would make the override itself unreachable — exactly the bug it exists to fix. A ratio
-    // is difficulty-denominated by construction.
-    //
-    // Overflow ⇒ the bound is unreachable ⇒ no override (fail-closed, never fail-open).
-    let work_override = |i: &DnsReorgInputs| -> bool {
-        if i.emergency_work_override_multiplier == 0 {
-            return false;
-        }
-        let (bound, overflowed) = i.canonical_work_after.overflowing_mul_u64(i.emergency_work_override_multiplier as u64);
-        !overflowed && i.candidate_work_after > bound
-    };
-
-    // The candidate exits the DNS-confirmed prefix.
-    match inputs.mode {
-        DnsReorgMode::HardCheckpoint => {
-            if work_override(inputs) {
-                DnsReorgOutcome::WorkDominanceOverride
-            } else {
-                DnsReorgOutcome::HardCheckpointReject
-            }
-        }
-        DnsReorgMode::TwoDimensionalDominance => {
-            // `saturating_add` so an (astronomically unlikely) margin
-            // overflow conservatively makes the bound un-beatable.
-            let work_bound = inputs.canonical_work_after.saturating_add(inputs.emergency_work_margin);
-            let stake_bound = inputs.canonical_stake_after.0.saturating_add(inputs.emergency_stake_margin.0);
-            let work_ok = inputs.candidate_work_after > work_bound;
-            let stake_ok = inputs.candidate_stake_after.0 > stake_bound;
-            if work_ok && stake_ok {
-                DnsReorgOutcome::DominanceSatisfied
-            } else if work_override(inputs) {
-                DnsReorgOutcome::WorkDominanceOverride
-            } else {
-                DnsReorgOutcome::DominanceViolation
-            }
-        }
-    }
-}
-
-/// The DNS-settlement context a coinbase-spend check runs under: the network's
-/// long-maturity fallback and the confirmed anchor's DAA position, if any.
-/// Assembled by the caller because the two enforcement layers source the anchor
-/// differently — see [`coinbase_spend_settled`].
+/// Retained coinbase maturity context. Historical DNS anchors have no authority.
 #[derive(Clone, Copy, Debug)]
 pub struct DnsCoinbaseSettlement {
-    /// [`DnsParams::coinbase_settlement_long_maturity_daa`]; caller guarantees non-zero.
     pub long_maturity_daa: u64,
-    /// The DAA score of the last DNS-confirmed anchor in this context's lineage, or `None`
-    /// while nothing is confirmed (bootstrap, overlay off, or a dead overlay whose anchor
-    /// never existed). `None` grants no acceleration — everyone waits the long fallback.
+    /// Reserved compatibility field. Ignored after DNS finality removal.
     pub confirmed_anchor_daa: Option<u64>,
-    // **No second clock on a coinbase** (the user's Mainnet Decision A, 2026-09-24): coinbase
-    // spendability is DAA-based maturity only — the long fallback, or DNS-final early release. The
-    // 2026-09-23 heartbeat audit had armed a second clock here (`settled_anchor_armed` /
-    // `settled_anchor_floor_daa`: past `palw_audit_2026_09_23` the fallback also waited for
-    // `palw_settled_anchor_depth` settled PALW anchors), which made a coinbase's liquidity depend on
-    // the attempt lane's liveness and left the validator, the wallet and the mempool with three
-    // different answers. It is removed from coinbases only; the second clock on locks, liabilities,
-    // retiring bonds and the D1 maturity floor is untouched.
 }
 
-/// DNS-accelerated coinbase settlement: `settle_at = block_daa + min(long_maturity,
-/// anchor-passage delay)`, with the ordinary `coinbase_maturity` as an unconditional floor.
-///
-/// The design is ACCELERATION, not permission (the mode-switch alternative was rejected for its
-/// blinding attack): a live overlay makes rewards liquid at epoch speed once the confirmed
-/// anchor passes the reward's block; a dead, censored, or absent overlay merely means nobody is
-/// accelerated and every coinbase waits `long_maturity`. Killing the overlay therefore grants an
-/// attacker nothing — it only slows everyone's settlement, including the attacker's own — and
-/// validators who withhold confirmation only surrender their own acceleration. There is no
-/// Active→Stale reward boundary to grief because there are no modes.
-///
-/// Anchor-passage is `anchor_daa >= block_daa`: every coinbase UTXO belongs to a selected-chain
-/// block and the anchor lives on the same selected chain, so DAA comparison is chain order.
-/// Confirmation is permanent (the confirmed prefix only grows along a branch), so acceleration
-/// once earned is never re-litigated; a reorg discards losing-branch coinbases wholesale by UTXO
-/// semantics, which is what makes settlement need no bookkeeping of its own.
-///
-/// Enforcement discipline (why the caller supplies the anchor):
-/// * **Policy layer (mempool/relay/template)** — reads the node's current DnsState singleton.
-///   Node-local timing differences here are safe: policy divergence cannot split acceptance.
-/// * **Consensus layer** — MUST NOT read the singleton: its value depends on the node's own
-///   virtual-resolve batching, and a validity rule fed node-local state is a chain split. Wiring
-///   consensus enforcement requires the anchor as a sequential per-chain-block view with
-///   apply/revert symmetry — the [`ActiveBondView`] pattern — and until that view exists the
-///   consensus call site passes `None` settlement, keeping consensus byte-identical to the
-///   pre-settlement rule at any knob value.
-///
-/// `coinbase_maturity` stays the floor in every branch so this can only ever DELAY spendability
-/// relative to today, never hasten it below the depth the base rule already demands.
+/// A coinbase matures after the ordinary floor and, when configured, the long DAA maturity.
+/// Historical DNS-final anchors never accelerate maturity. Consensus call sites that pass
+/// `None` continue to enforce the ordinary floor; mempool and wallet policy share the long clock.
 pub fn coinbase_spend_settled(
     utxo_block_daa_score: u64,
     pov_daa_score: u64,
@@ -4127,129 +3317,19 @@ pub fn coinbase_spend_settled(
     settlement: Option<&DnsCoinbaseSettlement>,
 ) -> bool {
     let age = pov_daa_score.saturating_sub(utxo_block_daa_score);
-    // The base floor is unconditional — acceleration may not undercut it.
+    // The ordinary floor is unconditional.
     if age < coinbase_maturity || pov_daa_score < utxo_block_daa_score {
         return false;
     }
     let Some(s) = settlement else {
-        return true; // feature off (or consensus layer awaiting its sequential anchor view)
+        return true; // no additional maturity policy
     };
     if age >= s.long_maturity_daa {
         // The long fallback: nobody is ever frozen forever — by the DAA clock alone (Decision A:
         // a coinbase's liquidity never waits on the attempt lane settling anchors).
         return true;
     }
-    // Acceleration: the confirmed anchor has passed this coinbase's block.
-    s.confirmed_anchor_daa.is_some_and(|anchor| anchor >= utxo_block_daa_score)
-}
-
-/// Inputs to [`stake_preference_verdict`] — every field is derived from chain
-/// data (own DnsState at the current resolve step, blue work, and windowed
-/// per-branch stake walks), so every node evaluating the same DAG computes the
-/// same verdict.
-#[derive(Clone, Debug)]
-pub struct StakePreferenceInputs {
-    /// This node's own rollout stage at the resolve step.
-    pub rollout_stage: DnsRolloutStage,
-    /// How far this node's own chain advanced past its last confirmed anchor.
-    pub own_anchor_age_daa_score: u64,
-    /// [`DnsParams::dns_veto_ttl_daa_score`].
-    pub veto_ttl_daa_score: u64,
-    /// [`DnsParams::stake_preference_max_work_deficit_multiplier`]; `0` disables.
-    pub multiplier: u32,
-    /// Candidate/canonical blue work accumulated since the common ancestor.
-    pub candidate_work_after: BlueWorkType,
-    pub canonical_work_after: BlueWorkType,
-    /// Candidate/canonical StakeScore accumulated since the common ancestor.
-    pub candidate_stake_after: StakeScore,
-    pub canonical_stake_after: StakeScore,
-    /// [`DnsParams::emergency_stake_margin`] — relative-dominance margin.
-    pub emergency_stake_margin: StakeScore,
-    /// [`DnsParams::required_stake_depth`] — the absolute confirmation-grade floor.
-    pub required_stake_depth: StakeScore,
-}
-
-/// The stake-preference decision (see
-/// [`DnsParams::stake_preference_max_work_deficit_multiplier`] for the design):
-/// `true` iff the sink should move onto `candidate` because this node's own
-/// branch has demonstrably lost its DNS overlay while the candidate's is
-/// demonstrably alive at confirmation grade, within a bounded work deficit.
-///
-/// Pure so the boundary behaviour is unit-testable: every condition below is a
-/// distinct guard with a distinct reason to exist, and each has a test pinning
-/// the side of the boundary it decides.
-pub fn stake_preference_verdict(i: &StakePreferenceInputs) -> bool {
-    // Disabled, or the overlay is not in the Active stage: pure work-max selection.
-    if i.multiplier == 0 || i.rollout_stage != DnsRolloutStage::Active {
-        return false;
-    }
-    // The preference is an ESCAPE from a dead branch, never an attraction between live ones.
-    // `>` (not `>=`): the veto's own staleness boundary, kept identical so there is no DAA at
-    // which the anchor is simultaneously "fresh enough to defend" and "dead enough to flee".
-    if i.own_anchor_age_daa_score <= i.veto_ttl_daa_score {
-        return false;
-    }
-    // Absolute confirmation-grade depth (H-02): tentative or trickle DNS moves nothing. This is
-    // the hysteresis ON-bar — far above zero, while the OFF condition (own anchor fresh again)
-    // is a different quantity entirely, so boundary jitter in one cannot oscillate the other.
-    if i.candidate_stake_after.0 == 0 || i.candidate_stake_after.0 < i.required_stake_depth.0 {
-        return false;
-    }
-    // Relative dominance with the same margin the veto's stake dimension uses.
-    if i.candidate_stake_after.0 <= i.canonical_stake_after.0.saturating_add(i.emergency_stake_margin.0) {
-        return false;
-    }
-    // Bounded work deficit: candidate_work_after × multiplier must exceed canonical's. Overflow
-    // means the candidate's work is astronomically large — the deficit condition is then
-    // trivially satisfied (and the normal work-max search would have chosen it anyway).
-    let (bound, overflowed) = i.candidate_work_after.overflowing_mul_u64(i.multiplier as u64);
-    overflowed || bound > i.canonical_work_after
-}
-
-/// ADR-0018 §H — assemble [`DnsReorgInputs`] from the raw per-chain facts the
-/// consensus pipeline gathers, computing the `*_work_after` fields as the
-/// **WorkScore accumulated since the common ancestor** `I = common_ancestor(
-/// candidate, canonical_tip)`: `blue_work(tip) − blue_work(I)`. Blue work is a
-/// cumulative GHOSTDAG quantity, so this delta is an exact `saturating_sub` (a
-/// `tip` that is itself `I` contributes zero, the floor).
-///
-/// `candidate_stake_after` / `canonical_stake_after` are passed in already
-/// reduced to the since-`I` delta — StakeScore is a *windowed*, non-cumulative
-/// quantity (see [`compute_stake_score`]), so its since-ancestor value is **not**
-/// a subtraction and must be computed per branch by the caller (the heavier
-/// DAG walk wired in a follow-up). Keeping that out of this helper leaves the
-/// Work-dimension derivation pure and unit-testable, and makes the two-input
-/// shape explicit for the gate.
-#[allow(clippy::too_many_arguments)]
-pub fn reorg_inputs_since_common_ancestor(
-    rollout_stage: DnsRolloutStage,
-    mode: DnsReorgMode,
-    candidate_includes_confirmed_anchor: bool,
-    candidate_blue_work: BlueWorkType,
-    canonical_blue_work: BlueWorkType,
-    common_ancestor_blue_work: BlueWorkType,
-    candidate_stake_after: StakeScore,
-    canonical_stake_after: StakeScore,
-    emergency_work_margin: BlueWorkType,
-    emergency_stake_margin: StakeScore,
-    emergency_work_override_multiplier: u32,
-    confirmed_anchor_age_daa_score: u64,
-    veto_ttl_daa_score: u64,
-) -> DnsReorgInputs {
-    DnsReorgInputs {
-        rollout_stage,
-        mode,
-        candidate_includes_confirmed_anchor,
-        candidate_work_after: candidate_blue_work.saturating_sub(common_ancestor_blue_work),
-        canonical_work_after: canonical_blue_work.saturating_sub(common_ancestor_blue_work),
-        candidate_stake_after,
-        canonical_stake_after,
-        emergency_work_margin,
-        emergency_stake_margin,
-        emergency_work_override_multiplier,
-        confirmed_anchor_age_daa_score,
-        veto_ttl_daa_score,
-    }
+    false
 }
 
 // =====================================================================
@@ -4294,9 +3374,9 @@ pub enum DnsTxKind {
     ComputeCommitment,
     /// `SUBNETWORK_ID_COMPUTE_VERDICT` — [`crate::vlt::ComputeVerdictPayload`].
     ComputeVerdict,
-    /// `SUBNETWORK_ID_STAKE_PRECOMMIT` — [`StakePrecommitPayload`].
+    /// Reserved retired precommit subnetwork; rejected by the new ruleset.
     StakePrecommit,
-    /// `SUBNETWORK_ID_PRECOMMIT_EVIDENCE` — [`PrecommitEvidencePayload`].
+    /// Reserved retired precommit-evidence subnetwork; rejected by the new ruleset.
     PrecommitEvidence,
 }
 
@@ -4405,20 +3485,6 @@ pub enum DnsTxError {
     /// A job commitment's published input is empty or exceeds [`crate::vlt::MAX_JOB_INPUT_BYTES`].
     /// Empty is refused too: a job with no input has nothing for a verifier to replay.
     JobInputSize(usize),
-    /// A precommit's declared lock is not internally possible: half-declared (one of
-    /// `locked_epoch` / `locked_hash` zero and the other not), or naming an epoch at or above the
-    /// one being locked, which would be a lock the signer could not yet have held.
-    IncoherentPrecommitLock,
-    /// Precommit evidence whose two payloads are not both bound to the bond it names, or come
-    /// from different validators — evidence against a bond has to be about that bond's own key.
-    PrecommitEvidenceBondMismatch,
-    /// Precommit evidence whose two payloads are compatible: they could both be honest, so they
-    /// prove nothing and must not burn a bond.
-    PrecommitEvidenceNotContradictory,
-    /// A precommit-evidence tx declares outputs. Like slashing evidence it is a pure evidence
-    /// carrier whose reporter reward is minted at `(tx_id, 0)`, and a declared output would
-    /// collide with that mint.
-    PrecommitEvidenceHasOutputs(usize),
 }
 
 impl Display for DnsTxError {
@@ -4466,18 +3532,6 @@ impl Display for DnsTxError {
             DnsTxError::JobInputSize(n) => {
                 write!(f, "compute commitment publishes a {n}-byte job input, which is empty or above the permitted maximum")
             }
-            DnsTxError::IncoherentPrecommitLock => {
-                write!(f, "precommit declares a lock that is half-declared or not strictly below the epoch it locks")
-            }
-            DnsTxError::PrecommitEvidenceBondMismatch => {
-                write!(f, "precommit evidence's two payloads are not both bound to the bond and validator it names")
-            }
-            DnsTxError::PrecommitEvidenceNotContradictory => {
-                write!(f, "precommit evidence's two payloads could both be honest, so they prove no fault")
-            }
-            DnsTxError::PrecommitEvidenceHasOutputs(n) => {
-                write!(f, "precommit-evidence tx declares {n} output(s); it must declare none")
-            }
         }
     }
 }
@@ -4499,8 +3553,7 @@ fn check_attestation_wellformed(att: &StakeAttestation) -> Result<(), DnsTxError
         return Err(DnsTxError::InvalidSignatureLen(att.signature.len()));
     }
     // MISAKA VLT PR 2: the audit-#4 "VSC is fixed zero" rule is not stateless: it lives at the
-    // acceptance gate (`classify_one_attestation`), which both the template and the block-validity
-    // rule funnel through. The slashing-evidence path accepts any VSC here, so an equivocation is
+    // retired acceptance gate. The retained legacy slashing-evidence path accepts any VSC, so an equivocation is
     // provable whatever commitment the two votes carried.
     Ok(())
 }
@@ -4870,15 +3923,6 @@ pub fn bond_mutations_from_accepted_txs(
                     muts.push(BondMutation::Slash(payload.bond_outpoint, accepted_daa_score));
                 }
             }
-            Some(DnsTxKind::PrecommitEvidence) => {
-                // Round 2's equivocation, and the reason a lock is worth carrying: two precommits
-                // that cannot both be honest burn the bond exactly as two attestations do. Both
-                // signatures are verified as a block-validity rule
-                // (`precommit_evidence_genuine`), so anything reaching here is proved.
-                if let Ok(payload) = borsh::from_slice::<PrecommitEvidencePayload>(&tx.payload) {
-                    muts.push(BondMutation::Slash(payload.bond_outpoint, accepted_daa_score));
-                }
-            }
             Some(DnsTxKind::StakeUnbond) => {
                 // audit H-05: an accepted unbond request stamps the bond's unbond clock.
                 //
@@ -4927,6 +3971,7 @@ pub fn bond_mutations_from_accepted_txs(
             | Some(DnsTxKind::ComputeCapability)
             | Some(DnsTxKind::ComputeCommitment)
             | Some(DnsTxKind::ComputeVerdict)
+            | Some(DnsTxKind::PrecommitEvidence)
             | Some(DnsTxKind::StakePrecommit)
             | None => {}
         }
@@ -5198,151 +4243,6 @@ impl RewardedEpochSet {
 // dedup + normalisation deterministic and unit-testable.
 // =====================================================================
 
-/// One signature-verified, bond-active attestation contribution fed into
-/// [`aggregate_epoch_tallies`]. The caller (consensus aggregation pass)
-/// has already (a) confirmed the referenced bond exists and is `Active` at
-/// the attestation's `target_daa_score`, and (b) verified the ML-DSA-87
-/// signature — so only the dedup key and the bond's stake remain.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct AttestationContribution {
-    pub epoch: u64,
-    pub validator_id: Hash64,
-    pub bond_outpoint: TransactionOutpoint,
-    /// This validator's voting weight for `epoch`: the bond's stake in sompi (see
-    /// [`EpochStakeTally`]).
-    pub signed_weight: u128,
-}
-
-/// Aggregate validated attestation contributions into per-epoch
-/// [`EpochStakeTally`]s (ADR-0009 §"StakeScore mechanics" / Addendum A.5).
-///
-/// Enforces the `(bond_outpoint, validator_id, epoch)` uniqueness rule —
-/// each triple contributes its stake at most once, even across multiple
-/// shards. `total_active_stake_by_epoch` supplies each epoch's
-/// normalisation denominator (total `Active` stake at that epoch); an
-/// epoch with a denominator but no signed stake yields a `0` tally, and
-/// signed contributions for an epoch absent from the denominator map are
-/// ignored (no denominator ⇒ the epoch is not yet normalisable). Tallies
-/// are returned ascending by epoch for deterministic downstream hashing.
-pub fn aggregate_epoch_tallies(
-    contributions: &[AttestationContribution],
-    total_weight_by_epoch: &BTreeMap<u64, u128>,
-) -> Vec<EpochStakeTally> {
-    let mut seen: HashSet<(Hash64, u64)> = HashSet::new();
-    let mut signed_by_epoch: BTreeMap<u64, u128> = BTreeMap::new();
-    for c in contributions {
-        // Dedup on (VALIDATOR, epoch) — not on the bond. One identity, one vote per epoch,
-        // whichever of its bonds signed it.
-        if seen.insert((c.validator_id, c.epoch)) {
-            let entry = signed_by_epoch.entry(c.epoch).or_insert(0);
-            *entry = entry.saturating_add(c.signed_weight);
-        }
-    }
-    total_weight_by_epoch
-        .iter()
-        .map(|(&epoch, &total)| EpochStakeTally {
-            epoch,
-            // `signed` is clamped to `total` by both credit rules, so an
-            // over-count cannot inflate the score or manufacture a quorum.
-            signed_weight: signed_by_epoch.get(&epoch).copied().unwrap_or(0),
-            total_weight: total,
-        })
-        .collect()
-}
-
-/// Build the new [`DnsState`] for `anchor`, advancing the last
-/// DNS-confirmed anchor when `anchor` clears **both** depth thresholds
-/// (ADR-0009 Addendum A.5; via [`is_dns_confirmed`]).
-///
-/// `prev` is the previous `DnsState` (the singleton store's current value,
-/// or `None` before the overlay's first write).
-///
-/// **audit #3 (consensus-split fix):** `anchor` is the POV-dependent `sink` and is stored
-/// as `selected_chain_anchor` ONLY for the recompute throttle — it is NOT what gets confirmed.
-/// The confirmed point is `confirmable_anchor`: the canonical lagged anchor of the latest ready
-/// epoch (a fixed, blue_score-coordinated selected-chain block every node derives identically).
-/// A candidate is confirmed only when the depth predicate holds AND a canonical anchor exists;
-/// then `last_dns_confirmed_anchor` is that canonical anchor, so all nodes protect the identical
-/// anchor in the reorg gate. (Confirming the `sink` instead would let nodes that recompute at
-/// different boundary sinks protect different anchors and split the gate.) When not confirmed the
-/// previously-confirmed anchor is carried forward; with no previous confirmation it defaults to
-/// the zero `Hash64` ("nothing confirmed yet"), which the reorg gate treats as dormant.
-///
-/// `health` is the per-epoch [`DnsHealth`] signal the caller derived for this anchor
-/// (via [`derive_dns_health`]); it is stored verbatim — a pure liveness annotation that
-/// never influences whether the anchor confirms.
-#[allow(clippy::too_many_arguments)]
-pub fn advance_dns_confirmation(
-    prev: Option<&DnsState>,
-    anchor: Hash64,
-    anchor_daa_score: u64,
-    confirmable_anchor: Option<(Hash64, u64)>,
-    work_depth: BlueWorkType,
-    stake_depth: StakeScore,
-    rollout_stage: DnsRolloutStage,
-    validator_set_commitment: Hash64,
-    health: DnsHealth,
-    required_work_depth: BlueWorkType,
-    required_stake_depth: StakeScore,
-    anchor_epoch_attesters: u32,
-    min_anchor_attesters: u32,
-) -> DnsState {
-    // Confirm the CANONICAL anchor (deterministic across nodes), never the POV-dependent sink.
-    //
-    // `anchor_epoch_attesters` (incident 2026-08-03 §8 — "dead-branch confirm"): the anchor's OWN
-    // epoch must carry credited attestations from at least `min_anchor_attesters` DISTINCT
-    // validators. `stake_depth` is a windowed sum over several epochs, so without this guard a
-    // branch whose attestation flow has already stopped can still latch a NEW anchor purely from
-    // stake accrued in EARLIER epochs. That arms the reorg veto on a branch no validator is
-    // currently supporting and wedges the node against the rest of the network. Live support is
-    // what makes an anchor worth defending; an anchor without it must not become a veto.
-    //
-    // The distinct-validator threshold (`min_anchor_attesters > 1`, see the field doc) extends the
-    // same reasoning to *who* the support comes from: a veto that can hold a whole network off its
-    // chain should not be arm-able by one signer. `1` is exactly the original "≥1 credited
-    // attestation" rule.
-    let confirmed = confirmable_anchor.is_some()
-        && anchor_epoch_attesters >= min_anchor_attesters.max(1)
-        && is_dns_confirmed(work_depth, stake_depth, required_work_depth, required_stake_depth);
-    let (last_dns_confirmed_anchor, last_dns_confirmed_anchor_daa_score) = match (confirmed, confirmable_anchor, prev) {
-        (true, Some(canonical), _) => canonical,
-        (_, _, Some(p)) => (p.last_dns_confirmed_anchor, p.last_dns_confirmed_anchor_daa_score),
-        _ => (Hash64::default(), 0),
-    };
-    DnsState {
-        selected_chain_anchor: anchor,
-        anchor_daa_score,
-        work_depth,
-        stake_depth,
-        last_dns_confirmed_anchor,
-        last_dns_confirmed_anchor_daa_score,
-        rollout_stage,
-        validator_set_commitment,
-        health,
-    }
-}
-
-/// Per-epoch normalisation denominator for StakeScore: for each epoch in
-/// `epoch_anchor_daa` (epoch → that epoch's selected-chain anchor DAA
-/// score), the total stake of bonds that are `Active` at that anchor's DAA
-/// score (ADR-0009 §"StakeScore mechanics" / Addendum A.5).
-///
-/// Pure: the caller supplies the bonds in the (bounded) window and each
-/// epoch's anchor DAA score; activation / slash / unbond are evaluated via
-/// [`is_bond_active_at`] (DAA-stamped, so this is reorg-safe with no
-/// incremental state). Pairs with [`aggregate_epoch_tallies`] to feed
-/// [`compute_stake_score`].
-pub fn total_active_stake_by_epoch(bonds: &[StakeBondRecord], epoch_anchor_daa: &BTreeMap<u64, u64>) -> BTreeMap<u64, u128> {
-    epoch_anchor_daa
-        .iter()
-        .map(|(&epoch, &anchor_daa)| {
-            let total =
-                bonds.iter().filter(|b| is_bond_active_at(b, anchor_daa)).fold(0u128, |acc, b| acc.saturating_add(b.amount as u128));
-            (epoch, total)
-        })
-        .collect()
-}
-
 /// kaspa-pq ADR-0018 "本格版" (PoS-v2) — the per-epoch accumulator tally (Phase 1).
 ///
 /// One entry per epoch in the consensus `DbEpochAccumulatorStore`, recomputed
@@ -5351,7 +4251,7 @@ pub fn total_active_stake_by_epoch(bonds: &[StakeBondRecord], epoch_anchor_daa: 
 /// quality-bonus payout (Phase 2) needs once an epoch is buried and final:
 ///
 /// * `expected_stake` — the epoch's total `Active` stake at its anchor (`epoch · epoch_length`),
-///   the §E anti-capture **denominator** (mirrors [`total_active_stake_by_epoch`]).
+///   the §E anti-capture **denominator** (mirrors `total_active_stake_by_epoch` (retired)).
 /// * `included` — the validators whose attestations for this epoch were **rewarded** (included
 ///   in a coinbase fan-out) on the selected chain, as `(owner_reward_spk_payload, included_stake)`.
 ///   Addendum B §B.3(c) cross-block `(bond, epoch)` uniqueness guarantees each validator appears
@@ -5757,104 +4657,6 @@ pub fn validate_compute_verdict_payload(payload: &[u8]) -> Result<(), DnsTxError
     Ok(())
 }
 
-/// Stateless shape of a [`StakePrecommitPayload`] (subnetwork `SUBNETWORK_ID_STAKE_PRECOMMIT`).
-///
-/// Everything checkable without a chain: version, signature width, and the lock's internal
-/// consistency. Whether the declared lock is the *true* one — the one the chain shows — is the
-/// counting rule's question past `Params::dns_bft_gate` ([`crate::dns_bft_v1::lock_consistent_precommits`]).
-pub fn validate_stake_precommit_payload(payload: &[u8]) -> Result<(), DnsTxError> {
-    let p: StakePrecommitPayload = borsh::from_slice(payload).map_err(|_| DnsTxError::Decode)?;
-    if p.version != DNS_PAYLOAD_VERSION_V1 {
-        return Err(DnsTxError::UnsupportedVersion(p.version));
-    }
-    if p.signature.len() != STAKE_ATTESTATION_SIG_LEN {
-        return Err(DnsTxError::InvalidSignatureLen(p.signature.len()));
-    }
-    if !p.lock_is_self_consistent() {
-        return Err(DnsTxError::IncoherentPrecommitLock);
-    }
-    Ok(())
-}
-
-/// Build the subnetwork [`Transaction`] carrying a borsh-encoded [`StakePrecommitPayload`].
-///
-/// **TEST HELPER — NOT for production**, for the same reason
-/// [`stake_attestation_shard_tx`] is: no inputs or outputs, so `NoTxInputs` rejects it everywhere
-/// a real block is built. Production validators fund and sign the tx through
-/// `kaspa_pq_validator_core`.
-#[doc(hidden)]
-pub fn stake_precommit_tx(precommit: &StakePrecommitPayload) -> Transaction {
-    let payload = borsh::to_vec(precommit).expect("borsh serialization of a well-formed precommit is infallible");
-    Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_PRECOMMIT, 0, payload)
-}
-
-/// Stateless shape of a [`PrecommitEvidencePayload`]: both precommits well-formed and bound to the
-/// bond the evidence names, and the pair genuinely contradictory.
-///
-/// Everything here is decided from the payload alone, which is the whole design of round 2's
-/// evidence — the signatures are checked as a block-validity rule
-/// (`precommit_evidence_genuine`), because a structurally valid forgery must not be able to burn
-/// a bond.
-pub fn validate_precommit_evidence_payload(payload: &[u8]) -> Result<(), DnsTxError> {
-    let ev: PrecommitEvidencePayload = decode_dns_payload(payload)?;
-    if ev.version != DNS_PAYLOAD_VERSION_V1 {
-        return Err(DnsTxError::UnsupportedVersion(ev.version));
-    }
-    for p in [&ev.precommit_a, &ev.precommit_b] {
-        if p.signature.len() != STAKE_ATTESTATION_SIG_LEN {
-            return Err(DnsTxError::InvalidSignatureLen(p.signature.len()));
-        }
-        if !p.lock_is_self_consistent() {
-            return Err(DnsTxError::IncoherentPrecommitLock);
-        }
-        if p.bond_outpoint != ev.bond_outpoint {
-            return Err(DnsTxError::PrecommitEvidenceBondMismatch);
-        }
-    }
-    if ev.precommit_a.validator_id != ev.precommit_b.validator_id {
-        return Err(DnsTxError::PrecommitEvidenceBondMismatch);
-    }
-    if precommit_fault(&ev.precommit_a, &ev.precommit_b).is_none() {
-        return Err(DnsTxError::PrecommitEvidenceNotContradictory);
-    }
-    Ok(())
-}
-
-/// Stateless validation of a `SUBNETWORK_ID_PRECOMMIT_EVIDENCE` **transaction**: valid evidence,
-/// and **no outputs** — the reporter reward is minted at `(evidence_tx_id, 0)`, so a declared
-/// output would collide with the mint. Mirrors [`validate_slashing_evidence_tx`], for the same
-/// reason and enforced at the same layer (body processing, which runs for every block).
-pub fn validate_precommit_evidence_tx(payload: &[u8], outputs: &[TransactionOutput]) -> Result<(), DnsTxError> {
-    validate_precommit_evidence_payload(payload)?;
-    if !outputs.is_empty() {
-        return Err(DnsTxError::PrecommitEvidenceHasOutputs(outputs.len()));
-    }
-    Ok(())
-}
-
-/// Every decodable [`PrecommitEvidencePayload`] among `txs`.
-pub fn precommit_evidence_from_accepted_txs(txs: &[Transaction]) -> Vec<PrecommitEvidencePayload> {
-    let mut out = Vec::new();
-    for tx in txs {
-        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::PrecommitEvidence)
-            && let Ok(ev) = borsh::from_slice::<PrecommitEvidencePayload>(&tx.payload)
-        {
-            out.push(ev);
-        }
-    }
-    out
-}
-
-/// Build the subnetwork [`Transaction`] carrying borsh-encoded precommit evidence.
-///
-/// **TEST HELPER — NOT for production**, like [`stake_precommit_tx`]: no inputs, so `NoTxInputs`
-/// rejects it in any real block.
-#[doc(hidden)]
-pub fn precommit_evidence_tx(ev: &PrecommitEvidencePayload) -> Transaction {
-    let payload = borsh::to_vec(ev).expect("borsh serialization of well-formed evidence is infallible");
-    Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PRECOMMIT_EVIDENCE, 0, payload)
-}
-
 /// Stateless validation of a [`ComputeChallengePayload`]'s bytes.
 ///
 /// A [`ComputeFraudKind::ContradictoryVerification`] challenge must carry exactly the two
@@ -5946,113 +4748,6 @@ pub fn validate_compute_challenge_tx(payload: &[u8], outputs: &[TransactionOutpu
         return Err(DnsTxError::SlashingEvidenceHasOutputs(outputs.len()));
     }
     Ok(())
-}
-
-/// Builds the [`DnsConfirmation`] RPC view from the current [`DnsState`] and
-/// the network's confirmation thresholds (ADR-0009; the `getDnsConfirmation`
-/// RPC, PR-10.14). Pure. `pow_confirmed` is the work-depth threshold alone;
-/// `dns_confirmed` requires **both** depths (via [`is_dns_confirmed`]).
-///
-/// Per ADR-0009 §"Public-claim discipline", the three `*_risk_*` strings are
-/// deliberately descriptive (not a single joint probability) and must be read
-/// alongside the boolean flags. `expected_dns_confirmation_seconds` is left 0
-/// (a calibrated estimate is a follow-up).
-pub fn dns_confirmation_from_state(
-    state: &DnsState,
-    required_work_depth: BlueWorkType,
-    required_stake_depth: StakeScore,
-) -> DnsConfirmation {
-    let pow_confirmed = state.work_depth >= required_work_depth;
-    let dns_confirmed = is_dns_confirmed(state.work_depth, state.stake_depth, required_work_depth, required_stake_depth);
-    DnsConfirmation {
-        block_hash: state.selected_chain_anchor,
-        work_depth: state.work_depth,
-        required_work_depth,
-        stake_depth: state.stake_depth,
-        required_stake_depth,
-        pow_confirmed,
-        dns_confirmed,
-        rollout_stage: state.rollout_stage,
-        expected_dns_confirmation_seconds: 0,
-        work_reorg_risk_upper_bound: "see ADR-0009 §Public-claim discipline".to_string(),
-        stake_reorg_risk_upper_bound: "see ADR-0009 §Public-claim discipline".to_string(),
-        dns_reorg_risk_conservative_bound: "see ADR-0009 §Public-claim discipline".to_string(),
-        note: format!(
-            "rollout_stage={:?}; health={:?}; pow_confirmed={pow_confirmed}; dns_confirmed={dns_confirmed}",
-            state.rollout_stage, state.health
-        ),
-        health: state.health,
-        // audit M-01: surface the stable DNS-confirmed anchor (≠ the pov-dependent sink block_hash).
-        last_dns_confirmed_anchor: state.last_dns_confirmed_anchor,
-        last_dns_confirmed_anchor_daa_score: state.last_dns_confirmed_anchor_daa_score,
-    }
-}
-
-/// Attestation epochs whose credit may still be landing on chain when the newest ready epoch's
-/// anchor is read — the inclusion allowance in [`dns_anchor_healthy_distance_blue_score`].
-///
-/// A validator's attestations are chained (each spends the previous one's change) and land one per
-/// block, so on a sparse chain the newest one or two epochs are routinely still in the mempool.
-/// Measured on testnet-11 (2026-09-10, the explorer node's log, 27 confirmed anchors): while
-/// confirmation was keeping up the confirmed anchor sat 5–12 blue below the sink, most often 6–8.
-pub const DNS_BRIDGE_ANCHOR_INCLUSION_EPOCHS: u64 = 3;
-
-/// **How far below the tip, in blue score, the DNS-confirmed anchor sits while confirmation is
-/// keeping up** — the distance a bridge must not count as staleness.
-///
-/// The confirmed anchor is the canonical anchor of the newest READY epoch that carries credited
-/// attestations: an epoch is ready `attestation_lag_blue_score` after it ends, its anchor sits
-/// `attestation_anchor_backoff_blue_score` below its end, the tip runs up to one epoch less a score
-/// past the moment that epoch became ready, and the attestations of the newest
-/// [`DNS_BRIDGE_ANCHOR_INCLUSION_EPOCHS`] epochs may still be landing. Summed:
-/// `lag + backoff + epoch_len × (1 + inclusion) + (epoch_len − 1)` — 12 on testnet-11's 120 s
-/// preset (lag 2, backoff 1, epoch 2), 619 on PRODUCTION's 10 bps one.
-pub fn dns_anchor_healthy_distance_blue_score(dns: &DnsParams) -> u64 {
-    let epoch_len = dns.attestation_epoch_length_blue_score.max(1);
-    dns.attestation_lag_blue_score
-        .saturating_add(dns.attestation_anchor_backoff_blue_score)
-        .saturating_add(epoch_len.saturating_mul(1 + DNS_BRIDGE_ANCHOR_INCLUSION_EPOCHS))
-        .saturating_add(epoch_len - 1)
-}
-
-/// **The farthest below the tip, in blue score, the last DNS-confirmed anchor may sit for
-/// bridge/finality-dependent operations to proceed**: the healthy distance plus the preset's
-/// [`DnsParams::bridge_finality_max_staleness_daa_score`] tolerance. Past it, confirmation has
-/// stopped keeping up, and the bridge pauses — within that many blue blocks of a real stall.
-pub fn dns_bridge_max_anchor_distance_blue_score(dns: &DnsParams) -> u64 {
-    dns_anchor_healthy_distance_blue_score(dns).saturating_add(dns.bridge_finality_max_staleness_daa_score)
-}
-
-/// Freshness predicate for bridge/finality-dependent operations — the EVM template's producer
-/// policy and the deposit-claim RPC. Never block validity.
-///
-/// Missing attestations are not a base-ledger validity failure, but consumers that depend on DNS
-/// finality must require a currently confirmed anchor that is keeping up with the tip.
-///
-/// **Measured in blue score, beyond the anchor's structural distance** (2026-09-10). This used to
-/// be `current_daa − anchor_daa ≤ bridge_finality_max_staleness_daa_score`: a DAA distance that
-/// had to hold the anchor's healthy distance inside the tolerance. testnet-11's preset sets that
-/// tolerance to 2, while its confirmed anchor can never be closer than 3 blue (lag 2 + backoff 1)
-/// and DAA runs ahead of blue score — so the bridge could not open there even with DNS confirmed:
-/// 9 to 12 DAA at every confirmation, and `EVM bridge is paused` on every claim. The tolerance now
-/// counts only what is not structure, so a stall still pauses the bridge.
-///
-/// `anchor_blue_score` is the anchor header's blue score, `None` when this node cannot read it
-/// (which pauses); `tip_blue_score` is the sink's.
-pub fn dns_finality_fresh_for_bridge(
-    dns_confirmed: bool,
-    last_dns_confirmed_anchor: Hash64,
-    anchor_blue_score: Option<u64>,
-    tip_blue_score: u64,
-    dns: &DnsParams,
-) -> bool {
-    let Some(anchor_blue_score) = anchor_blue_score else {
-        return false;
-    };
-    dns_confirmed
-        && last_dns_confirmed_anchor != Hash64::default()
-        && tip_blue_score >= anchor_blue_score
-        && tip_blue_score - anchor_blue_score <= dns_bridge_max_anchor_distance_blue_score(dns)
 }
 
 #[cfg(test)]
@@ -6273,269 +4968,6 @@ mod tests {
         assert_ne!(OverlaySnapshot::default().commitment_root(), Hash64::default());
     }
 
-    // ---- PR-10.5: StakeScore + DNS reorg gate ----
-
-    #[test]
-    fn epoch_stake_credit_quality_floor() {
-        // φS = 0 reproduces the prior linear credit EXACTLY (the 10_000 factors cancel).
-        assert_eq!(epoch_stake_credit(1, 3, 0), 333_333_333); // floor(1e9/3)
-        assert_eq!(epoch_stake_credit(5, 10, 0), STAKE_SCORE_SCALE / 2); // 0.5
-        assert_eq!(epoch_stake_credit(50, 50, 0), STAKE_SCORE_SCALE); // 1.0
-        // φS = 0.60: below → 0, exactly-at → 0 (continuous), above → smooth (f−φS)/(1−φS).
-        let floor = 6000u16;
-        assert_eq!(epoch_stake_credit(5, 10, floor), 0); // 0.50 < 0.60
-        assert_eq!(epoch_stake_credit(6, 10, floor), 0); // exactly at the floor → 0
-        assert_eq!(epoch_stake_credit(8, 10, floor), STAKE_SCORE_SCALE / 2); // (0.80−0.60)/0.40 = 0.5
-        assert_eq!(epoch_stake_credit(10, 10, floor), STAKE_SCORE_SCALE); // full inclusion → 1.0
-        // Edges.
-        assert_eq!(epoch_stake_credit(7, 0, floor), 0); // no active stake
-        assert_eq!(epoch_stake_credit(999, 50, floor), STAKE_SCORE_SCALE); // numerator clamped to expected
-        assert_eq!(epoch_stake_credit(10, 10, 10_000), STAKE_SCORE_SCALE); // φS = 100%: full inclusion only
-        assert_eq!(epoch_stake_credit(9, 10, 10_000), 0); // φS = 100%: < 100% → 0
-    }
-
-    #[test]
-    fn compute_stake_score_sums_credits_deterministically() {
-        let epochs = vec![
-            EpochStakeTally { epoch: 1, signed_weight: 10, total_weight: 10 }, // 1.0
-            EpochStakeTally { epoch: 2, signed_weight: 5, total_weight: 10 },  // 0.5
-            EpochStakeTally { epoch: 3, signed_weight: 0, total_weight: 10 },  // 0.0
-        ];
-        // φS = 0 (no floor): linear sum 1.0 + 0.5 + 0.0.
-        let s = compute_stake_score(&epochs, EpochCreditRule::QualityFloor { quality_floor_bps: 0 });
-        assert_eq!(s, StakeScore(STAKE_SCORE_SCALE + STAKE_SCORE_SCALE / 2));
-        assert_eq!(compute_stake_score(&epochs, EpochCreditRule::QualityFloor { quality_floor_bps: 0 }), s); // deterministic
-        assert_eq!(compute_stake_score(&[], EpochCreditRule::QualityFloor { quality_floor_bps: 0 }), StakeScore(0));
-        // φS = 0.60: epoch 2 (0.50) and 3 (0.0) drop to 0; only epoch 1 (1.0) credits.
-        assert_eq!(
-            compute_stake_score(&epochs, EpochCreditRule::QualityFloor { quality_floor_bps: 6000 }),
-            StakeScore(STAKE_SCORE_SCALE)
-        );
-    }
-
-    #[test]
-    fn derive_dns_health_signal() {
-        let tally = |signed: u128, total: u128| EpochStakeTally { epoch: 0, signed_weight: signed, total_weight: total };
-        let (floor, censor, m) = (EpochCreditRule::QualityFloor { quality_floor_bps: 6000 }, 1000u16, 3u32);
-        // Not active → DisabledBeforeActivation regardless of tallies.
-        assert_eq!(derive_dns_health(&[tally(0, 10)], floor, censor, m, false), DnsHealth::DisabledBeforeActivation);
-        // Fewer than M epochs of history → Active (no sustained signal yet).
-        assert_eq!(derive_dns_health(&[tally(0, 10), tally(0, 10)], floor, censor, m, true), DnsHealth::Active);
-        // A recent epoch meets φS → Active even after a dip (health recovers immediately).
-        let recovered = vec![tally(0, 10), tally(0, 10), tally(7, 10)]; // last = 0.70 ≥ 0.60
-        assert_eq!(derive_dns_health(&recovered, floor, censor, m, true), DnsHealth::Active);
-        // Last M all below φS but above the censorship floor → StakeQualityLow.
-        let low = vec![tally(3, 10), tally(2, 10), tally(4, 10)]; // 0.30 / 0.20 / 0.40, in [0.10, 0.60)
-        assert_eq!(derive_dns_health(&low, floor, censor, m, true), DnsHealth::DegradedStakeQualityLow);
-        // Last M all near-zero (below the censorship floor) → CertificateCensored.
-        assert_eq!(
-            derive_dns_health(&[tally(0, 10), tally(0, 10), tally(0, 10)], floor, censor, m, true),
-            DnsHealth::DegradedCertificateCensored
-        );
-        // Not ALL below the censorship floor within the window → StakeQualityLow.
-        let mixed = vec![tally(0, 10), tally(0, 10), tally(3, 10)]; // last 0.30 > 0.10 censorship floor
-        assert_eq!(derive_dns_health(&mixed, floor, censor, m, true), DnsHealth::DegradedStakeQualityLow);
-    }
-
-    #[test]
-    fn is_dns_confirmed_requires_both_thresholds() {
-        let w = BlueWorkType::from_u64;
-        let (cw, cs) = (w(100), StakeScore(STAKE_SCORE_SCALE));
-        assert!(is_dns_confirmed(w(100), StakeScore(STAKE_SCORE_SCALE), cw, cs)); // both met
-        assert!(is_dns_confirmed(w(200), StakeScore(STAKE_SCORE_SCALE * 2), cw, cs));
-        assert!(!is_dns_confirmed(w(99), StakeScore(STAKE_SCORE_SCALE), cw, cs)); // work short
-        assert!(!is_dns_confirmed(w(100), StakeScore(STAKE_SCORE_SCALE - 1), cw, cs)); // stake short
-    }
-
-    fn reorg_inputs(
-        stage: DnsRolloutStage,
-        mode: DnsReorgMode,
-        includes: bool,
-        cw: u64,
-        kw: u64,
-        cs: u128,
-        ks: u128,
-    ) -> DnsReorgInputs {
-        DnsReorgInputs {
-            rollout_stage: stage,
-            mode,
-            candidate_includes_confirmed_anchor: includes,
-            // Override disabled by default so these cases exercise the strict 2-D rule exactly as
-            // before; the override has its own dedicated tests below.
-            emergency_work_override_multiplier: 0,
-            candidate_work_after: BlueWorkType::from_u64(cw),
-            canonical_work_after: BlueWorkType::from_u64(kw),
-            candidate_stake_after: StakeScore(cs),
-            canonical_stake_after: StakeScore(ks),
-            emergency_work_margin: BlueWorkType::from_u64(0),
-            emergency_stake_margin: StakeScore(0),
-            // A fresh anchor (age 0) with the TTL disabled: these cases exercise the dominance
-            // rule, not the staleness release, which has its own tests below.
-            confirmed_anchor_age_daa_score: 0,
-            veto_ttl_daa_score: u64::MAX,
-        }
-    }
-
-    #[test]
-    fn dns_reorg_gate_dormant_before_active() {
-        let i = reorg_inputs(DnsRolloutStage::Bootstrap, DnsReorgMode::TwoDimensionalDominance, false, 1, 100, 1, 100);
-        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::GateInactive);
-        assert!(check_dns_reorg_rule(&i).is_accept());
-    }
-
-    #[test]
-    fn dns_reorg_includes_confirmed_anchor_ok() {
-        let i = reorg_inputs(DnsRolloutStage::Active, DnsReorgMode::TwoDimensionalDominance, true, 0, 999, 0, 999);
-        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::IncludesConfirmedAnchor);
-    }
-
-    #[test]
-    fn dns_reorg_hard_checkpoint_rejects_any_exit() {
-        // Even a candidate that dominates on both axes is rejected under hard-checkpoint.
-        let i = reorg_inputs(DnsRolloutStage::Active, DnsReorgMode::HardCheckpoint, false, 9999, 1, 9999, 1);
-        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::HardCheckpointReject);
-        assert!(!check_dns_reorg_rule(&i).is_accept());
-    }
-
-    #[test]
-    fn dns_reorg_two_dimensional_non_substitutability() {
-        let (m, a) = (DnsReorgMode::TwoDimensionalDominance, DnsRolloutStage::Active);
-        // beats BOTH → accepted
-        assert_eq!(check_dns_reorg_rule(&reorg_inputs(a, m, false, 200, 100, 200, 100)), DnsReorgOutcome::DominanceSatisfied);
-        // beats WORK only (stake equal) → rejected (non-substitutability)
-        assert_eq!(check_dns_reorg_rule(&reorg_inputs(a, m, false, 200, 100, 100, 100)), DnsReorgOutcome::DominanceViolation);
-        // beats STAKE only (work equal) → rejected
-        assert_eq!(check_dns_reorg_rule(&reorg_inputs(a, m, false, 100, 100, 200, 100)), DnsReorgOutcome::DominanceViolation);
-        // ties on both (must STRICTLY beat) → rejected
-        assert_eq!(check_dns_reorg_rule(&reorg_inputs(a, m, false, 100, 100, 100, 100)), DnsReorgOutcome::DominanceViolation);
-    }
-
-    /// Partition-liveness override (incident 2026-08-03 §8). A stake-less candidate that
-    /// out-Works canonical since the common ancestor by MORE than the multiplier is accepted;
-    /// at or below it the strict non-substitutability rule still rejects. This is what stops a
-    /// partitioned minority branch from wedging forever against the work-dominant chain.
-    #[test]
-    fn dns_reorg_work_override_releases_stake_veto() {
-        let (m, a) = (DnsReorgMode::TwoDimensionalDominance, DnsRolloutStage::Active);
-        let with_mult = |cw: u64, kw: u64, mult: u32| {
-            let mut i = reorg_inputs(a, m, false, cw, kw, 0, 500); // candidate stake 0, canonical 500
-            i.emergency_work_override_multiplier = mult;
-            check_dns_reorg_rule(&i)
-        };
-        // 5x > 4x → override releases the stake veto even though candidate stake is ZERO.
-        assert_eq!(with_mult(500, 100, 4), DnsReorgOutcome::WorkDominanceOverride);
-        assert!(with_mult(500, 100, 4).is_accept());
-        // Exactly 4x is NOT "more than 4x" → still rejected (strict comparison).
-        assert_eq!(with_mult(400, 100, 4), DnsReorgOutcome::DominanceViolation);
-        // 3x → rejected: an ordinary fork must not release the veto.
-        assert_eq!(with_mult(300, 100, 4), DnsReorgOutcome::DominanceViolation);
-        // multiplier 0 disables the override entirely (strict legacy behaviour).
-        assert_eq!(with_mult(10_000, 100, 0), DnsReorgOutcome::DominanceViolation);
-        // The override is independent of `emergency_work_margin` — an absolute margin far above
-        // the real work scale (the testnet-22 condition) must not disable it.
-        let mut i = reorg_inputs(a, m, false, 500, 100, 0, 500);
-        i.emergency_work_override_multiplier = 4;
-        i.emergency_work_margin = BlueWorkType::from_u64(1_000_000); // unreachable at this scale
-        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::WorkDominanceOverride);
-        // Overflow in the bound computation must fail CLOSED (no override), never open.
-        let mut i = reorg_inputs(a, m, false, 1, 0, 0, 500);
-        i.canonical_work_after = BlueWorkType::MAX;
-        i.emergency_work_override_multiplier = 4;
-        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::DominanceViolation);
-    }
-
-    /// Regression for the testnet-22 deadlock (incident 2026-08-03 §8) using the reported field
-    /// values. Branch A (community) held blueWork 429,462 and branch B (validators) 217,934, split
-    /// at daa 114,307. Branch B had confirmed a branch-B-ONLY anchor, so branch A's candidates
-    /// exited the confirmed prefix and scored stake 0 against branch B's own bond view — branch B
-    /// could never accept branch A, and the partition could not self-heal. With the override the
-    /// minority branch rejoins.
-    #[test]
-    fn testnet22_partition_deadlock_is_released() {
-        let (m, a) = (DnsReorgMode::TwoDimensionalDominance, DnsRolloutStage::Active);
-        // Since-ancestor deltas at the split: branch A accumulated ~219k, branch B only ~8k.
-        let (branch_a_after, branch_b_after) = (219_462u64, 7_934u64);
-        // Branch B's view: candidate = branch A (invisible stake ⇒ 0), canonical = branch B.
-        let mut i = reorg_inputs(a, m, false, branch_a_after, branch_b_after, 0, 12);
-        i.emergency_work_margin = BlueWorkType::from_u64(1_000_000); // the real testnet-10/22 value
-        i.emergency_stake_margin = StakeScore(100 * STAKE_SCORE_SCALE);
-
-        // Before the fix (override disabled): permanent RejectedDominance — the observed deadlock.
-        i.emergency_work_override_multiplier = 0;
-        assert_eq!(
-            check_dns_reorg_rule(&i),
-            DnsReorgOutcome::DominanceViolation,
-            "reproduces the incident: the work-dominant branch is refused forever"
-        );
-
-        // After the fix: branch A out-works branch B by ~27x ≫ 4x → the veto releases.
-        i.emergency_work_override_multiplier = 4;
-        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::WorkDominanceOverride);
-        assert!(check_dns_reorg_rule(&i).is_accept(), "the partitioned minority branch can rejoin");
-    }
-
-    /// Regression for the 2026-07-19 testnet-10 virtual freeze (§2-2/§2-3/§2-4). An isolated node
-    /// kept mining its own branch at ~45 s/block while the network advanced at 10 bps; the gate
-    /// refused every block of the network's chain for 3.5 h, silently, and a restart did not clear
-    /// it (the self-referential anchor was persisted). Both layers that made it permanent are
-    /// covered: an unsatisfiable stake margin, and the absence of any work-based release.
-    #[test]
-    fn testnet10_virtual_freeze_is_released() {
-        let (m, a) = (DnsReorgMode::TwoDimensionalDominance, DnsRolloutStage::Active);
-        // Over 3.5 h the network's chain accumulated ~126_000 blocks of work; the isolated
-        // self-branch ~280. Candidate = the network's chain, whose stake is invisible from the
-        // wedged node's own bond view and therefore scores 0.
-        let mut i = reorg_inputs(a, m, false, 126_000, 280, 0, STAKE_SCORE_SCALE);
-        i.emergency_work_margin = BlueWorkType::from_u64(1_000_000);
-
-        // §2-4: the historical margin (1e11) sat ABOVE the 15-epoch window ceiling (1.5e10), so
-        // `DominanceSatisfied` was unreachable for ANY chain — the escape valve did not exist.
-        i.emergency_stake_margin = StakeScore(100 * STAKE_SCORE_SCALE);
-        i.emergency_work_override_multiplier = 0;
-        assert_eq!(
-            check_dns_reorg_rule(&i),
-            DnsReorgOutcome::DominanceViolation,
-            "reproduces the freeze: the network's own chain is refused indefinitely"
-        );
-
-        // After the fix the calibrated margin and the work override both apply; the node rejoins.
-        i.emergency_stake_margin = StakeScore(3 * STAKE_SCORE_SCALE);
-        i.emergency_work_override_multiplier = 4;
-        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::WorkDominanceOverride);
-        assert!(check_dns_reorg_rule(&i).is_accept(), "the wedged node can follow the network again");
-    }
-
-    /// incident 2026-07-19 §2-4. `StakeScore` is WINDOWED, so it has a hard ceiling of
-    /// `floor(window / epoch_length) × SCALE`. A margin at or above that ceiling is unsatisfiable
-    /// by construction, which silently turns `TwoDimensionalDominance` into `HardCheckpoint` —
-    /// exactly the failure that shipped. This test makes that class of miscalibration impossible
-    /// to reintroduce unnoticed.
-    #[test]
-    fn presets_emergency_stake_margin_is_attainable() {
-        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
-        for (name, p) in [
-            ("genesis-active/dev-sim", GENESIS_ACTIVE_DNS_PARAMS),
-            ("production/mainnet", PRODUCTION_DNS_PARAMS),
-            ("testnet", TESTNET_DNS_PARAMS),
-        ] {
-            let ceiling = p.max_attainable_stake_score();
-            assert!(ceiling.0 > 0, "{name}: the StakeScore window must admit at least one epoch");
-            assert!(
-                p.emergency_stake_margin_is_attainable(),
-                "{name}: emergency_stake_margin {} is >= the attainable StakeScore ceiling {} — the DominanceSatisfied escape path would be dead code",
-                p.emergency_stake_margin.0,
-                ceiling.0
-            );
-            // The historical value must NOT pass, or this test would not have caught the bug.
-            let mut regressed = p.clone();
-            regressed.emergency_stake_margin = StakeScore(100 * STAKE_SCORE_SCALE);
-            assert!(
-                !regressed.emergency_stake_margin_is_attainable(),
-                "{name}: the shipped-and-broken 1e11 margin must be rejected by this check"
-            );
-        }
-    }
-
     /// **Bond-stamp path-independence** (the overlay-commitment divergence class, incident
     /// 2026-08-03 report §8 "946d7210 の overlay commitment 発散").
     ///
@@ -6670,125 +5102,6 @@ mod tests {
         assert_eq!(rec.unbond_request_daa_score, Some(100));
     }
 
-    /// Confirmed-anchor TTL (`dns_veto_ttl_daa_score`): an anchor whose branch stopped confirming
-    /// stops being a veto once the node's OWN chain has advanced past the TTL — the testnet-20
-    /// dead-branch wedge shape, where a node keeps producing blocks on a branch no validator
-    /// attests to and the previously-confirmed anchor is carried forward forever.
-    #[test]
-    fn dns_reorg_stale_anchor_releases_the_veto() {
-        let (m, a) = (DnsReorgMode::TwoDimensionalDominance, DnsRolloutStage::Active);
-        // A candidate with NO work and NO stake advantage — refused on every dimension while the
-        // anchor is fresh, so only staleness can explain a release here.
-        let with_age = |age: u64, ttl: u64| {
-            let mut i = reorg_inputs(a, m, false, 100, 100, 0, 500);
-            i.emergency_work_override_multiplier = 4;
-            i.confirmed_anchor_age_daa_score = age;
-            i.veto_ttl_daa_score = ttl;
-            check_dns_reorg_rule(&i)
-        };
-        // Fresh anchor (the healthy lag+epoch distance) ⇒ the veto stands.
-        assert_eq!(with_age(200, 6_000), DnsReorgOutcome::DominanceViolation);
-        // Exactly at the TTL is NOT past it (strict comparison, like every other threshold here).
-        assert_eq!(with_age(6_000, 6_000), DnsReorgOutcome::DominanceViolation);
-        // One DAA past ⇒ released.
-        assert_eq!(with_age(6_001, 6_000), DnsReorgOutcome::ConfirmedAnchorStale);
-        assert!(with_age(6_001, 6_000).is_accept());
-        assert!(with_age(6_001, 6_000).is_liveness_release());
-        // TTL disabled ⇒ the pre-TTL behaviour at ANY age (the veto never expires).
-        assert_eq!(with_age(u64::MAX, u64::MAX), DnsReorgOutcome::DominanceViolation);
-        // The TTL never overrides "the candidate keeps the confirmed anchor" — that path accepts
-        // first and is not a release, so the distinction stays visible in the logs.
-        let mut keeps = reorg_inputs(a, m, true, 100, 100, 0, 500);
-        keeps.confirmed_anchor_age_daa_score = 99_999;
-        keeps.veto_ttl_daa_score = 10;
-        assert_eq!(check_dns_reorg_rule(&keeps), DnsReorgOutcome::IncludesConfirmedAnchor);
-        // Nor does it wake a dormant gate.
-        let mut dormant = reorg_inputs(DnsRolloutStage::Bootstrap, m, false, 100, 100, 0, 500);
-        dormant.confirmed_anchor_age_daa_score = 99_999;
-        dormant.veto_ttl_daa_score = 10;
-        assert_eq!(check_dns_reorg_rule(&dormant), DnsReorgOutcome::GateInactive);
-        // It releases `HardCheckpoint` too — the same unreleasable-veto shape lives there.
-        let mut hc = reorg_inputs(a, DnsReorgMode::HardCheckpoint, false, 1, 100, 0, 500);
-        hc.confirmed_anchor_age_daa_score = 11;
-        hc.veto_ttl_daa_score = 10;
-        assert_eq!(check_dns_reorg_rule(&hc), DnsReorgOutcome::ConfirmedAnchorStale);
-    }
-
-    /// The TTL clock is the node's OWN canonical tip, so a candidate branch cannot buy its way
-    /// past the veto by being far ahead in DAA. This is the property that keeps the TTL from
-    /// becoming a stake-substitution lever: an attacker mining a secret branch to an arbitrary
-    /// height changes nothing about whether the victim's own anchor has aged out.
-    #[test]
-    fn stale_anchor_clock_ignores_the_candidate_branch() {
-        use crate::config::params::PRODUCTION_DNS_PARAMS;
-        let p = DnsParams { dns_veto_ttl_daa_score: 6_000, ..PRODUCTION_DNS_PARAMS.clone() };
-        // Victim's own chain sits 200 DAA past its anchor (healthy) — the attacker's branch being
-        // 10_000_000 DAA ahead is not an input to this predicate at all.
-        assert!(!p.confirmed_anchor_is_stale(1_000_200, 1_000_000), "a healthy own-chain distance is never stale");
-        // The victim's own chain going quiet on confirmations IS what ages the anchor.
-        assert!(p.confirmed_anchor_is_stale(1_006_001, 1_000_000));
-        // Saturating: an anchor ahead of the tip (a fresh confirmation racing the read) is fresh.
-        assert!(!p.confirmed_anchor_is_stale(1_000, 900_000));
-        // u64::MAX TTL is "never stale" even at the extreme.
-        let never = DnsParams { dns_veto_ttl_daa_score: u64::MAX, ..PRODUCTION_DNS_PARAMS.clone() };
-        assert!(!never.confirmed_anchor_is_stale(u64::MAX, 0));
-    }
-
-    /// The gate's reach must be a deliberate number. `max_reorg_horizon_blocks` is 300 blocks —
-    /// **30 seconds at 10 BPS** — and since the gate abstains past the horizon, leaving the two
-    /// tied would mean DNS finality protects a 30-second window and nothing older. The production
-    /// presets must therefore carry an explicit, larger gate horizon, and a TTL with real headroom
-    /// over the healthy anchor-to-tip distance (`lag + epoch`), or confirmations would expire as
-    /// fast as they are made.
-    #[test]
-    fn presets_veto_reach_is_calibrated() {
-        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
-        for (name, p) in [("production/mainnet", PRODUCTION_DNS_PARAMS), ("testnet", TESTNET_DNS_PARAMS)] {
-            assert!(
-                p.veto_reach_is_coherent(),
-                "{name}: gate horizon {} / TTL {} is incoherent against reorg horizon {} and lag+epoch {}",
-                p.gate_horizon_blocks(),
-                p.dns_veto_ttl_daa_score,
-                p.max_reorg_horizon_blocks,
-                p.attestation_lag_blue_score + p.attestation_epoch_length_blue_score,
-            );
-            assert!(
-                p.gate_horizon_blocks() > p.max_reorg_horizon_blocks,
-                "{name}: the gate must reach FURTHER than the 300-block economic horizon (30 s at 10 BPS), else DNS finality is a 30-second property"
-            );
-            assert!(
-                p.dns_veto_ttl_daa_score < p.gate_horizon_blocks(),
-                "{name}: a TTL at or beyond the horizon can never fire — the horizon abstain would always win"
-            );
-            assert_ne!(p.dns_veto_ttl_daa_score, u64::MAX, "{name}: an unreleasable veto is what made partitions permanent");
-        }
-        // devnet/simnet keep the tied-to-`max_reorg_horizon_blocks` behaviour on purpose: the DAG
-        // simulation fixtures tune that one knob and expect the gate to follow it.
-        assert_eq!(GENESIS_ACTIVE_DNS_PARAMS.dns_gate_horizon_blocks, 0);
-        assert_eq!(GENESIS_ACTIVE_DNS_PARAMS.gate_horizon_blocks(), GENESIS_ACTIVE_DNS_PARAMS.max_reorg_horizon_blocks);
-        // A veto arm-able by ONE signer is only acceptable where the active set is deliberately one
-        // operator. Mainnet's floor is 3 validators, so it must require more than a single attester.
-        assert_eq!(TESTNET_DNS_PARAMS.min_active_validators, 1);
-        assert_eq!(TESTNET_DNS_PARAMS.min_anchor_attesters, 1, "single-operator mesh: 2 would mean nothing ever confirms");
-        assert!(
-            PRODUCTION_DNS_PARAMS.min_anchor_attesters > 1
-                && PRODUCTION_DNS_PARAMS.min_anchor_attesters <= PRODUCTION_DNS_PARAMS.min_active_validators,
-            "mainnet must need >1 distinct attester, but no more than its own validator floor"
-        );
-    }
-
-    /// The override is a liveness floor for the whole gate, so it releases `HardCheckpoint` too —
-    /// that mode has the same unreleasable-veto shape and would wedge identically.
-    #[test]
-    fn dns_reorg_work_override_applies_to_hard_checkpoint() {
-        let (m, a) = (DnsReorgMode::HardCheckpoint, DnsRolloutStage::Active);
-        let mut i = reorg_inputs(a, m, false, 500, 100, 0, 0);
-        i.emergency_work_override_multiplier = 4;
-        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::WorkDominanceOverride);
-        i.emergency_work_override_multiplier = 0;
-        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::HardCheckpointReject);
-    }
-
     /// Every shipped preset must carry a non-zero override, since the deadlock is reachable on any
     /// network running `TwoDimensionalDominance` — which is all of them.
     #[test]
@@ -6807,70 +5120,6 @@ mod tests {
         }
     }
 
-    /// Every guard in [`stake_preference_verdict`] exists for a named failure mode; this pins
-    /// each boundary from both sides so none of them can be quietly widened.
-    #[test]
-    fn stake_preference_is_an_escape_from_a_dead_branch_only() {
-        let base = StakePreferenceInputs {
-            rollout_stage: DnsRolloutStage::Active,
-            own_anchor_age_daa_score: 6_001, // one past the TTL: own DNS is DEAD
-            veto_ttl_daa_score: 6_000,
-            multiplier: 2,
-            candidate_work_after: BlueWorkType::from_u64(600),
-            canonical_work_after: BlueWorkType::from_u64(1_000),
-            candidate_stake_after: StakeScore(20 * STAKE_SCORE_SCALE),
-            canonical_stake_after: StakeScore(0),
-            emergency_stake_margin: StakeScore(3 * STAKE_SCORE_SCALE),
-            required_stake_depth: StakeScore(10 * STAKE_SCORE_SCALE),
-        };
-        assert!(stake_preference_verdict(&base), "the qualifying case must qualify, or nothing below means anything");
-
-        // Symmetric-live safety: a fresh own anchor disarms the preference entirely — validators
-        // on BOTH sides of a partition means neither side gets pulled.
-        assert!(!stake_preference_verdict(&StakePreferenceInputs { own_anchor_age_daa_score: 6_000, ..base.clone() }));
-        assert!(!stake_preference_verdict(&StakePreferenceInputs { own_anchor_age_daa_score: 0, ..base.clone() }));
-
-        // Not Active, or disabled: inert.
-        assert!(!stake_preference_verdict(&StakePreferenceInputs { rollout_stage: DnsRolloutStage::Bootstrap, ..base.clone() }));
-        assert!(!stake_preference_verdict(&StakePreferenceInputs { multiplier: 0, ..base.clone() }));
-
-        // Hysteresis ON-bar: below confirmation-grade absolute depth, tentative DNS moves nothing —
-        // even with total relative dominance.
-        assert!(!stake_preference_verdict(&StakePreferenceInputs {
-            candidate_stake_after: StakeScore(10 * STAKE_SCORE_SCALE - 1),
-            ..base.clone()
-        }));
-        assert!(!stake_preference_verdict(&StakePreferenceInputs { candidate_stake_after: StakeScore(0), ..base.clone() }));
-
-        // Relative dominance must clear the margin strictly.
-        assert!(!stake_preference_verdict(&StakePreferenceInputs {
-            candidate_stake_after: StakeScore(13 * STAKE_SCORE_SCALE),
-            canonical_stake_after: StakeScore(10 * STAKE_SCORE_SCALE),
-            ..base.clone()
-        }));
-        assert!(stake_preference_verdict(&StakePreferenceInputs {
-            candidate_stake_after: StakeScore(13 * STAKE_SCORE_SCALE + 1),
-            canonical_stake_after: StakeScore(10 * STAKE_SCORE_SCALE),
-            ..base.clone()
-        }));
-
-        // The deficit bound: at multiplier 2, a branch with exactly half the work fails (500×2 is
-        // not > 1000) and one just above half passes — and a >4× work advantage on the canonical
-        // side (the emergency-override regime) is therefore unreachable from this rule.
-        assert!(!stake_preference_verdict(&StakePreferenceInputs {
-            candidate_work_after: BlueWorkType::from_u64(500),
-            ..base.clone()
-        }));
-        assert!(stake_preference_verdict(&StakePreferenceInputs {
-            candidate_work_after: BlueWorkType::from_u64(501),
-            ..base.clone()
-        }));
-        assert!(!stake_preference_verdict(&StakePreferenceInputs {
-            candidate_work_after: BlueWorkType::from_u64(249),
-            ..base.clone()
-        }));
-    }
-
     /// Mainnet ships the preference OFF until the partition/IBD scenario matrix has run; test
     /// networks ship it ON so the soak and the regression harness actually exercise it.
     #[test]
@@ -6885,51 +5134,15 @@ mod tests {
         }
     }
 
-    /// Settlement posture: testnet soaked the policy layer first and mainnet now takes it (the user's
-    /// Mainnet Decision A, made mainnet's on 2026-09-25); the dev/sim fixture presets ship it off.
-    /// The value must clear the dispute-resolution horizon — `gate_horizon + veto TTL` — or the
-    /// fallback goes liquid while a fork can still flip: on testnet, and on mainnet at the carded
-    /// cadence it launches at (on the bundle-free 10 bps preset 600 sits under the 1,000-block base
-    /// maturity, which `coinbase_spend_settled` never undercuts, so the knob is inert there).
+    /// Historical anchors never shorten the long DAA maturity; the ordinary floor remains
+    /// unconditional, including for a malformed context below the coinbase's own DAA score.
     #[test]
-    fn presets_declare_the_coinbase_settlement_posture() {
-        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, MAINNET_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
-        let m = PRODUCTION_DNS_PARAMS.coinbase_settlement_long_maturity_daa;
-        assert_eq!(m, 600, "mainnet: Decision A's DAA fallback, testnet's soaked value");
-        let carded = PRODUCTION_DNS_PARAMS.at_two_minute_cadence();
-        assert!(
-            m > carded.gate_horizon_blocks() + carded.dns_veto_ttl_daa_score,
-            "a carded mainnet's fallback outlasts its dispute horizon"
-        );
-        assert!(m <= MAINNET_PARAMS.coinbase_maturity(), "…and the bundle-free 10 bps preset's base maturity already covers it");
-        assert_eq!(GENESIS_ACTIVE_DNS_PARAMS.coinbase_settlement_long_maturity_daa, 0, "dev/sim fixtures keep their semantics");
-        let t = TESTNET_DNS_PARAMS.coinbase_settlement_long_maturity_daa;
-        assert!(t > 0, "testnet soaks the settlement policy");
-        for (name, p) in
-            [("genesis-active", GENESIS_ACTIVE_DNS_PARAMS), ("production", PRODUCTION_DNS_PARAMS), ("testnet", TESTNET_DNS_PARAMS)]
-        {
-            assert_eq!(
-                p.coinbase_settlement_consensus_activation_daa_score,
-                u64::MAX,
-                "{name}: consensus settlement must stay fenced until the anchor fold lands with its scenario matrix"
-            );
-        }
-        assert!(
-            t > TESTNET_DNS_PARAMS.gate_horizon_blocks() + TESTNET_DNS_PARAMS.dns_veto_ttl_daa_score,
-            "the fallback must outlast the dispute-resolution horizon (got {t})"
-        );
-    }
-
-    /// Every branch of [`coinbase_spend_settled`] pinned from both sides: the base floor is
-    /// unconditional, `None` settlement is byte-identical to the base rule, the long fallback
-    /// releases exactly at its bound, and acceleration requires the anchor AT or PAST the block.
-    #[test]
-    fn coinbase_settlement_accelerates_and_never_undercuts() {
+    fn rfc0012_coinbase_settlement_ignores_historical_dns_anchors() {
         let s = |anchor: Option<u64>| DnsCoinbaseSettlement { long_maturity_daa: 30_000, confirmed_anchor_daa: anchor };
 
-        // Base floor unconditional — even with a passed anchor.
+        // A historical anchor cannot bypass either maturity.
         assert!(!coinbase_spend_settled(1_000, 1_099, 100, Some(&s(Some(2_000)))));
-        assert!(coinbase_spend_settled(1_000, 1_100, 100, Some(&s(Some(2_000)))));
+        assert!(!coinbase_spend_settled(1_000, 1_100, 100, Some(&s(Some(2_000)))));
 
         // Feature off (None): base maturity alone — today's behaviour.
         assert!(coinbase_spend_settled(1_000, 1_100, 100, None));
@@ -6938,71 +5151,14 @@ mod tests {
         assert!(!coinbase_spend_settled(1_000, 30_999, 100, Some(&s(None))));
         assert!(coinbase_spend_settled(1_000, 31_000, 100, Some(&s(None))));
 
-        // Anchor short of the block grants nothing; at the block it grants settlement.
+        // Anchors below, at and above the coinbase never grant early settlement.
         assert!(!coinbase_spend_settled(1_000, 20_000, 100, Some(&s(Some(999)))));
-        assert!(coinbase_spend_settled(1_000, 20_000, 100, Some(&s(Some(1_000)))));
+        assert!(!coinbase_spend_settled(1_000, 20_000, 100, Some(&s(Some(1_000)))));
+        assert!(!coinbase_spend_settled(1_000, 20_000, 100, Some(&s(Some(50_000)))));
+        assert!(coinbase_spend_settled(1_000, 31_000, 100, Some(&s(Some(50_000)))));
 
         // A pov below the block (malformed context) never settles.
         assert!(!coinbase_spend_settled(1_000, 999, 0, Some(&s(Some(2_000)))));
-    }
-
-    #[test]
-    fn dns_reorg_dominance_respects_margins() {
-        let (m, a) = (DnsReorgMode::TwoDimensionalDominance, DnsRolloutStage::Active);
-        let mut i = reorg_inputs(a, m, false, 150, 100, 150, 100);
-        i.emergency_work_margin = BlueWorkType::from_u64(60); // need cand_W > 160; 150 fails
-        i.emergency_stake_margin = StakeScore(10);
-        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::DominanceViolation);
-        i.candidate_work_after = BlueWorkType::from_u64(161); // clears work margin; stake 150 > 110 ok
-        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::DominanceSatisfied);
-    }
-
-    #[test]
-    fn reorg_inputs_since_common_ancestor_subtracts_work() {
-        let w = BlueWorkType::from_u64;
-        // work_after = blue_work(tip) − blue_work(common ancestor); cumulative → exact subtraction.
-        // Stake is windowed (not cumulative) so it is passed through verbatim, not subtracted.
-        let i = reorg_inputs_since_common_ancestor(
-            DnsRolloutStage::Active,
-            DnsReorgMode::TwoDimensionalDominance,
-            false,
-            w(1000), // candidate tip cumulative work
-            w(900),  // canonical tip cumulative work
-            w(500),  // common ancestor cumulative work
-            StakeScore(7),
-            StakeScore(3),
-            w(0),
-            StakeScore(0),
-            0,
-            0,        // fresh anchor
-            u64::MAX, // TTL disabled: this test covers the since-ancestor derivation only
-        );
-        assert_eq!(i.candidate_work_after, w(500)); // 1000 − 500
-        assert_eq!(i.canonical_work_after, w(400)); // 900 − 500
-        assert_eq!((i.candidate_stake_after, i.canonical_stake_after), (StakeScore(7), StakeScore(3))); // passed through
-        // Candidate out-works (500 > 400) AND out-stakes (7 > 3) → dominance satisfied.
-        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::DominanceSatisfied);
-
-        // A tip that IS the common ancestor contributes zero since-ancestor work (saturating
-        // floor) → it cannot dominate, so the gate rejects.
-        let i = reorg_inputs_since_common_ancestor(
-            DnsRolloutStage::Active,
-            DnsReorgMode::TwoDimensionalDominance,
-            false,
-            w(500), // candidate tip == common ancestor
-            w(900),
-            w(500),
-            StakeScore(9),
-            StakeScore(1),
-            w(0),
-            StakeScore(0),
-            0,
-            0,        // fresh anchor
-            u64::MAX, // TTL disabled: this test covers the since-ancestor derivation only
-        );
-        assert_eq!(i.candidate_work_after, w(0)); // 500 − 500, floored
-        assert_eq!(i.canonical_work_after, w(400));
-        assert_eq!(check_dns_reorg_rule(&i), DnsReorgOutcome::DominanceViolation); // zero work cannot dominate
     }
 
     #[test]
@@ -7239,26 +5395,6 @@ mod tests {
     }
 
     #[test]
-    fn single_attestation_shard_tx_builds_a_valid_overlay_tx() {
-        let att = fixture_attestation();
-        let shard = single_attestation_shard(att.clone());
-        assert_eq!(shard.attestations, vec![att.clone()]);
-        // Shard-level tuple is copied from the attestation.
-        assert_eq!(
-            (shard.epoch, shard.target_hash, shard.target_daa_score, shard.validator_set_commitment),
-            (att.epoch, att.target_hash, att.target_daa_score, att.validator_set_commitment)
-        );
-
-        let tx = stake_attestation_shard_tx(&shard);
-        assert!(tx.inputs.is_empty() && tx.outputs.is_empty());
-        assert_eq!(dns_tx_kind(&tx.subnetwork_id), Some(DnsTxKind::StakeAttestationShard));
-        // The built payload must pass the stateless shard validator and decode back.
-        assert!(validate_stake_attestation_shard_payload(&tx.payload).is_ok());
-        let decoded: StakeAttestationShardPayload = borsh::from_slice(&tx.payload).unwrap();
-        assert_eq!(decoded, shard);
-    }
-
-    #[test]
     fn dns_tx_kind_maps_overlay_subnetworks() {
         assert_eq!(dns_tx_kind(&SUBNETWORK_ID_STAKE_BOND), Some(DnsTxKind::StakeBond));
         assert_eq!(dns_tx_kind(&SUBNETWORK_ID_STAKE_ATTESTATION_SHARD), Some(DnsTxKind::StakeAttestationShard));
@@ -7283,73 +5419,6 @@ mod tests {
     }
 
     // ---- MISAKA §5 round 2: the precommit payload ----
-
-    /// The lock is inside the signed digest. Without that the declaration would be an unsigned
-    /// field anyone could restate, and both the on-chain lock check and the cross-branch
-    /// equivocation proof would be checking a number nobody committed to. Same for the §5.1
-    /// snapshot commitment, at the denominator instead of the lock: a signature that did not
-    /// cover it could be counted against a `W(E)` its signer never weighed under.
-    #[test]
-    fn precommit_digest_covers_the_declared_lock() {
-        let net = b"misaka-test";
-        let op = TransactionOutpoint::new(Hash64::from_bytes([7; 64]), 0);
-        let anchor = Hash64::from_bytes([0xa1; 64]);
-        let snap = Hash64::from_bytes([0x5a; 64]);
-        let base = stake_precommit_message(net, 11, anchor, 500, 10, Hash64::from_bytes([0xa0; 64]), snap, op);
-        // Same vote, different declared lock ⇒ different digest ⇒ the old signature does not carry.
-        assert_ne!(base, stake_precommit_message(net, 11, anchor, 500, 10, Hash64::from_bytes([0xbb; 64]), snap, op));
-        assert_ne!(base, stake_precommit_message(net, 11, anchor, 500, 9, Hash64::from_bytes([0xa0; 64]), snap, op));
-        // Same vote, different denominator ⇒ different digest — §5.1's whole point.
-        assert_ne!(
-            base,
-            stake_precommit_message(net, 11, anchor, 500, 10, Hash64::from_bytes([0xa0; 64]), Hash64::from_bytes([0x5b; 64]), op)
-        );
-        // And it is bound to the network and the bond, like an attestation.
-        assert_ne!(base, stake_precommit_message(b"other-net", 11, anchor, 500, 10, Hash64::from_bytes([0xa0; 64]), snap, op));
-        assert_ne!(
-            base,
-            stake_precommit_message(
-                net,
-                11,
-                anchor,
-                500,
-                10,
-                Hash64::from_bytes([0xa0; 64]),
-                snap,
-                TransactionOutpoint::new(Hash64::from_bytes([8; 64]), 0)
-            )
-        );
-    }
-
-    /// A lock is something the signer held *before* the epoch it is locking, and "no lock" is
-    /// exactly `(0, zero)`. A half-declared lock is refused at the stateless layer: the chain
-    /// check could neither confirm nor contradict it.
-    #[test]
-    fn precommit_lock_must_be_whole_and_in_the_past() {
-        let sig = vec![0u8; STAKE_ATTESTATION_SIG_LEN];
-        let mk = |locked_epoch: u64, locked_hash: Hash64| StakePrecommitPayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            validator_id: Hash64::from_bytes([1; 64]),
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 0),
-            epoch: 10,
-            target_hash: Hash64::from_bytes([0xa1; 64]),
-            target_daa_score: 500,
-            locked_epoch,
-            locked_hash,
-            snapshot_commitment: Hash64::default(),
-            signature: sig.clone(),
-        };
-        let some = Hash64::from_bytes([0xa0; 64]);
-        assert!(mk(0, Hash64::default()).lock_is_self_consistent(), "no lock at all is the first precommit's case");
-        assert!(mk(9, some).lock_is_self_consistent());
-        assert!(!mk(0, some).lock_is_self_consistent(), "an epoch-less lock is half-declared");
-        assert!(!mk(9, Hash64::default()).lock_is_self_consistent(), "an anchor-less lock is half-declared");
-        assert!(!mk(10, some).lock_is_self_consistent(), "a lock at the epoch it locks is not one the signer held");
-        assert!(!mk(11, some).lock_is_self_consistent(), "nor is one from the future");
-
-        assert_eq!(validate_stake_precommit_payload(&borsh::to_vec(&mk(10, some)).unwrap()), Err(DnsTxError::IncoherentPrecommitLock));
-        assert!(validate_stake_precommit_payload(&borsh::to_vec(&mk(9, some)).unwrap()).is_ok());
-    }
 
     /// Whatever heights a shipped preset carries, it is either dormant or configured for the
     /// compute overlay it runs.
@@ -7399,216 +5468,6 @@ mod tests {
                 "{name}: §7 — a validator could exit while the compute it votes with is still challengeable"
             );
         }
-    }
-
-    // ---- MISAKA §5 round 2: what a broken lock costs ----
-
-    fn pcp(epoch: u64, anchor: u8, target_daa: u64, lock: (u64, u8)) -> StakePrecommitPayload {
-        StakePrecommitPayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            validator_id: Hash64::from_bytes([1; 64]),
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 0),
-            epoch,
-            target_hash: Hash64::from_bytes([anchor; 64]),
-            target_daa_score: target_daa,
-            locked_epoch: lock.0,
-            locked_hash: if lock.1 == 0 { Hash64::default() } else { Hash64::from_bytes([lock.1; 64]) },
-            snapshot_commitment: Hash64::default(),
-            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
-        }
-    }
-
-    /// The fault the two-round design exists to make provable — and, just as importantly, what it
-    /// deliberately does not call a fault.
-    ///
-    /// A validator holds exactly one lock at a time, so two precommits declaring different anchors
-    /// at one `locked_epoch` are two histories, and two precommits disagreeing about one epoch are
-    /// the same. Both are decided from the payloads alone: no chain, no reachability, no access to
-    /// the branch either came from — which is the point, because the second one is typically from
-    /// a fork this node will never have the blocks for.
-    #[test]
-    fn precommit_evidence_convicts_only_what_two_payloads_prove() {
-        use PrecommitFault::*;
-        // Two anchors at one locked_epoch: the signer held two locks at one height.
-        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (10, 0xb0)), &pcp(12, 0xa2, 600, (10, 0xc0))), Some(ContradictoryLock));
-        // Two answers for one epoch — anchor, or the lock held while signing.
-        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (10, 0xb0)), &pcp(11, 0xa2, 500, (10, 0xb0))), Some(Equivocation));
-        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (10, 0xb0)), &pcp(11, 0xa1, 500, (10, 0xc0))), Some(Equivocation));
-
-        // A rebroadcast is not an offence.
-        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (10, 0xb0)), &pcp(11, 0xa1, 500, (10, 0xb0))), None);
-        // An ordinary lock chain: each precommit declares its predecessor, so the locked_epochs
-        // differ and nothing contradicts.
-        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (10, 0xb0)), &pcp(12, 0xa2, 600, (11, 0xa1))), None);
-        // "No lock yet" is held by every validator exactly once and says nothing about history —
-        // two first-precommits are not two locks.
-        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (0, 0)), &pcp(12, 0xa2, 600, (0, 0))), None);
-        // Two different signers prove nothing about either.
-        let other = StakePrecommitPayload { validator_id: Hash64::from_bytes([2; 64]), ..pcp(11, 0xa2, 500, (10, 0xc0)) };
-        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (10, 0xb0)), &other), None);
-
-        // Re-declaring a lock the validator has moved past is a fault the WALK punishes (it stops
-        // counting), but the two payloads alone cannot say which came first on chain, so it is not
-        // proof of two histories and must not burn a bond.
-        assert_eq!(precommit_fault(&pcp(11, 0xa1, 500, (10, 0xb0)), &pcp(12, 0xa2, 600, (10, 0xb0))), None);
-    }
-
-    /// The stateless layer accepts only evidence that is bound to one bond and genuinely
-    /// contradictory, and — like round 1's — carries no outputs, because the reporter reward is
-    /// minted at `(tx_id, 0)`.
-    #[test]
-    fn precommit_evidence_payload_shape_is_enforced() {
-        let ev = |a: StakePrecommitPayload, b: StakePrecommitPayload| PrecommitEvidencePayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 0),
-            precommit_a: a,
-            precommit_b: b,
-            reporter_reward_spk_payload: [0xab; 64],
-        };
-        let good = ev(pcp(11, 0xa1, 500, (10, 0xb0)), pcp(12, 0xa2, 600, (10, 0xc0)));
-        assert!(validate_precommit_evidence_tx(&borsh::to_vec(&good).unwrap(), &[]).is_ok());
-
-        // An output would collide with the reporter mint.
-        let out = TransactionOutput::new(1, p2pkh_mldsa87_spk(&[0xab; 64]));
-        assert_eq!(
-            validate_precommit_evidence_tx(&borsh::to_vec(&good).unwrap(), &[out]),
-            Err(DnsTxError::PrecommitEvidenceHasOutputs(1))
-        );
-
-        // A compatible pair proves nothing and must not reach the bond.
-        let benign = ev(pcp(11, 0xa1, 500, (10, 0xb0)), pcp(12, 0xa2, 600, (11, 0xa1)));
-        assert_eq!(
-            validate_precommit_evidence_payload(&borsh::to_vec(&benign).unwrap()),
-            Err(DnsTxError::PrecommitEvidenceNotContradictory)
-        );
-
-        // A precommit not bound to the bond the evidence names would let evidence be re-pointed.
-        let elsewhere = StakePrecommitPayload {
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([9; 64]), 0),
-            ..pcp(12, 0xa2, 600, (10, 0xc0))
-        };
-        assert_eq!(
-            validate_precommit_evidence_payload(&borsh::to_vec(&ev(pcp(11, 0xa1, 500, (10, 0xb0)), elsewhere)).unwrap()),
-            Err(DnsTxError::PrecommitEvidenceBondMismatch)
-        );
-    }
-
-    /// Accepted precommit evidence burns the bond and pays the reporter, exactly as round 1's
-    /// does. Same offence, one round later — and a lock nobody can be burned for breaking is not
-    /// a lock.
-    #[test]
-    fn precommit_evidence_slashes_the_bond_and_pays_the_reporter() {
-        let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
-        let view = ActiveBondView::from_records([(op, fixture_bond_record(op))]);
-        let a = StakePrecommitPayload { bond_outpoint: op, ..pcp(11, 0xa1, 500, (10, 0xb0)) };
-        let b = StakePrecommitPayload { bond_outpoint: op, ..pcp(12, 0xa2, 600, (10, 0xc0)) };
-        let tx = precommit_evidence_tx(&PrecommitEvidencePayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            bond_outpoint: op,
-            precommit_a: a,
-            precommit_b: b,
-            reporter_reward_spk_payload: [0xab; 64],
-        });
-
-        let muts = bond_mutations_from_accepted_txs(std::slice::from_ref(&tx), RESOLVE_DAA, 0, 0, false);
-        assert_eq!(muts, vec![BondMutation::Slash(op, RESOLVE_DAA)], "the bond is slashed at acceptance");
-
-        let effects = resolve_slashing_side_effects(std::slice::from_ref(&tx), &view, RESOLVE_DAA, 1000, 0, 0);
-        assert_eq!(effects.len(), 1);
-        assert_eq!(effects[0].bond_outpoint, op);
-        assert_eq!(effects[0].slashed_amount_sompi, 100_000_000_000);
-        assert_eq!(effects[0].reporter_output.as_ref().unwrap().value, 10_000_000_000, "10% to the reporter, as in round 1");
-        assert_eq!(effects[0].reporter_output.as_ref().unwrap().script_public_key, p2pkh_mldsa87_spk(&[0xab; 64]));
-        assert_eq!(effects[0].burned_sompi, 90_000_000_000);
-    }
-
-    /// Every shipped preset weighs bonded stake under the graded φS rule: the weight fence is removed
-    /// (`u64::MAX` everywhere, refused otherwise), and only testnet runs the compute overlay.
-    #[test]
-    fn vlt_fence_keeps_shipped_presets_on_the_legacy_rule() {
-        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
-        for (name, p) in
-            [("genesis-active", GENESIS_ACTIVE_DNS_PARAMS), ("production", PRODUCTION_DNS_PARAMS), ("testnet", TESTNET_DNS_PARAMS)]
-        {
-            // The WEIGHT fence is removed: `u64::MAX` on every shipped preset, and
-            // `validate_palw_v2` refuses any other value.
-            assert_eq!(p.vlt.vlt_activation_daa_score, u64::MAX, "{name} must ship with VLT dormant");
-
-            // The SHADOW fence is dormant everywhere EXCEPT where a release has deliberately
-            // scheduled step 3 — testnet, at `TESTNET_VLT_SHADOW_FORK_DAA_SCORE`. Below that
-            // height the preset is still byte-identical to the legacy rule, which is what this
-            // test is really about; above it the overlay runs and is policed, with finality
-            // untouched. A preset that scheduled its shadow fence is separately required to be
-            // configured for the overlay by `shipped_presets_are_either_dormant_or_fully_forkable`.
-            let shadow = p.vlt.vlt_shadow_activation_daa_score;
-            if shadow == u64::MAX {
-                assert!(!p.vlt_shadow_active_at(u64::MAX - 1), "{name}: no certificate is credited, no audit fee paid");
-            } else if shadow == 0 {
-                assert_eq!(name, "testnet", "only testnet has a scheduled shadow fork ({name} moved one unexpectedly)");
-                // GENESIS-ACTIVE (the PALW re-genesis): there is no "below the fence" for the
-                // legacy rule to hold in, because the fork ships in the genesis rules themselves.
-                // That is only available to a chain being rebuilt — and it is why the rebuild took
-                // it: no height to miss, no fleet to coordinate ahead of one, no window in which
-                // the bond spend gate is off while challenge slashing is on.
-                assert!(p.vlt_shadow_active_at(0), "{name}: genesis-active means the overlay runs from block 1");
-            } else {
-                assert_eq!(name, "testnet", "only testnet has a scheduled shadow fork ({name} moved one unexpectedly)");
-                assert!(!p.vlt_shadow_active_at(shadow - 1), "{name}: the legacy rule holds right up to the fence");
-                assert!(p.vlt_shadow_active_at(shadow), "{name}: and the overlay starts exactly at it");
-            }
-            // The removed token overlay's fences stay dormant on every preset (`validate_palw_v2`
-            // refuses anything else), and the dormant preset is internally coherent.
-            assert_eq!(p.tkn.tkn_activation_daa_score, u64::MAX, "{name} must ship with the token program dormant");
-            assert!(!p.tkn.shadow_active_at(u64::MAX - 1), "{name}: the token fences never open");
-            assert!(p.tkn.is_coherent().is_ok(), "{name}: the dormant token preset must be coherent");
-            assert!(
-                matches!(p.epoch_credit_rule(), EpochCreditRule::QualityFloor { quality_floor_bps } if quality_floor_bps == p.stake_event_quality_floor_bps),
-                "{name} must stay on the graded φS rule"
-            );
-            // The bond requirement is untouched by the VLT work — VLT changes what a bond BUYS
-            // (weight capped at `lambda x collateral`), never what it costs to hold one. The
-            // amounts are 20,000,000 MSK per validator over a floor of 6, whose product is the
-            // active-stake gate (the user's 2026-09-25 decision, the 2026-09-24 mainnet assumption).
-            // From 2026-08-30 to then the bond was 10,000 MSK over 12, tied to the figure a PALW
-            // genesis seat posted (ADR-0061); the decision separated the two floors again — a DNS
-            // vote can reverse a confirmed anchor, a PALW seat backs its own claims — so the tie to
-            // `GENESIS_BOND_COLLATERAL_SOMPI` is gone. The derivation lives in
-            // `the_active_stake_gate_is_the_product_of_the_two_floors` and on
-            // `PRODUCTION_DNS_PARAMS.min_bond_amount_sompi`.
-            if name != "genesis-active" && name != "testnet" {
-                assert_ne!(
-                    p.min_bond_amount_sompi,
-                    crate::config::premine::GENESIS_BOND_COLLATERAL_SOMPI,
-                    "{name}: a validator bond is its own floor again, not the PALW genesis seat's"
-                );
-                assert_eq!(p.min_bond_amount_sompi, 20_000_000 * crate::constants::SOMPI_PER_KASPA, "{name}");
-                assert_eq!(p.min_active_validators, 6, "{name}");
-                assert_eq!(
-                    p.min_active_stake_sompi,
-                    p.min_active_validators as u64 * p.min_bond_amount_sompi,
-                    "{name}: the stake gate is the product of the two floors"
-                );
-            }
-        }
-    }
-
-    /// Health must not shift under the φS rule. The boundary case is
-    /// `f == φS` exactly: it earns ZERO StakeScore credit (the graded numerator vanishes there)
-    /// yet has always reported `Active`, so a credit-based health test would silently change the
-    /// signal on live networks. Pin both halves.
-    #[test]
-    fn dns_health_preserves_the_legacy_phi_s_boundary() {
-        let rule = EpochCreditRule::QualityFloor { quality_floor_bps: 6000 };
-        let at_floor = EpochStakeTally { epoch: 0, signed_weight: 6, total_weight: 10 }; // f == φS
-        assert_eq!(epoch_credit(6, 10, rule), 0, "exactly at φS earns no credit");
-        assert_eq!(
-            derive_dns_health(&[at_floor, at_floor, at_floor], rule, 1000, 3, true),
-            DnsHealth::Active,
-            "but health has always read exactly-at-φS as Active"
-        );
-        // Just below φS is genuinely degraded.
-        let below = EpochStakeTally { epoch: 0, signed_weight: 5, total_weight: 10 };
-        assert_eq!(derive_dns_health(&[below, below, below], rule, 1000, 3, true), DnsHealth::DegradedStakeQualityLow);
     }
 
     fn fixture_verdict(id: u64, verdict: crate::vlt::VerificationVerdict, replay: Hash64) -> crate::vlt::VerifierAttestation {
@@ -8320,21 +6179,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn shard_tuple_rejects_target_daa_score_mismatch() {
-        // P-1C (DNS v2/v3): the shard's (epoch, target_hash, target_daa_score, vsc) tuple must
-        // match every contained attestation — including target_daa_score (previously unchecked).
-        let att = fixture_attestation();
-        let mut shard = single_attestation_shard(att);
-        // Desync ONLY target_daa_score (the attestation keeps its own value).
-        shard.target_daa_score = shard.target_daa_score.wrapping_add(1);
-        let payload = borsh::to_vec(&shard).unwrap();
-        assert!(
-            matches!(validate_stake_attestation_shard_payload(&payload), Err(DnsTxError::ShardTupleMismatch)),
-            "a shard whose target_daa_score disagrees with its attestation must be rejected"
-        );
-    }
-
     // ---- DNS v3: Canonical Lagged Anchor (blue_score-coordinated) ----
 
     #[test]
@@ -8443,68 +6287,6 @@ mod tests {
             );
             assert_eq!(params.stake_event_quality_floor_bps, 6000, "{name} must retain the 60% StakeScore/reward quality floor");
         }
-    }
-
-    #[test]
-    fn bridge_finality_freshness_requires_confirmed_non_stale_dns_anchor() {
-        let anchor = Hash64::from_bytes([0x42; 64]);
-        let anchor_blue = 10_000;
-        let dns = crate::config::params::PRODUCTION_DNS_PARAMS;
-        let bound = dns_bridge_max_anchor_distance_blue_score(&dns);
-        assert_eq!(bound, dns_anchor_healthy_distance_blue_score(&dns) + DEFAULT_BRIDGE_FINALITY_MAX_STALENESS_DAA_SCORE);
-
-        assert!(dns_finality_fresh_for_bridge(true, anchor, Some(anchor_blue), anchor_blue + bound, &dns));
-        assert!(!dns_finality_fresh_for_bridge(true, anchor, Some(anchor_blue), anchor_blue + bound + 1, &dns), "a stall pauses");
-        assert!(!dns_finality_fresh_for_bridge(false, anchor, Some(anchor_blue), anchor_blue, &dns), "unconfirmed pauses");
-        assert!(!dns_finality_fresh_for_bridge(true, Hash64::default(), Some(0), 0, &dns), "no anchor pauses");
-        assert!(
-            !dns_finality_fresh_for_bridge(true, anchor, Some(anchor_blue), anchor_blue - 1, &dns),
-            "an anchor above the tip pauses"
-        );
-        assert!(!dns_finality_fresh_for_bridge(true, anchor, None, anchor_blue, &dns), "an anchor this node cannot read pauses");
-    }
-
-    /// **testnet-11's bridge could not open, and now opens exactly while confirmation keeps up.**
-    ///
-    /// The 120 s preset tolerates 2 of staleness, and the old predicate read it as a DAA distance
-    /// that had to CONTAIN the confirmed anchor's distance below the tip. That distance is never
-    /// below lag + backoff = 3 blue, and DAA runs ahead of blue score: on 2026-09-10 DNS finality was
-    /// confirmed on testnet-11 at anchor DAA 3149 / blue 2188 with the sink at DAA 3161 / blue 2197,
-    /// and every deposit claim came back `EVM bridge is paused`. Pinned from both sides: the healthy
-    /// distances measured while confirmation was keeping up (5–12 blue) are fresh, and a stall
-    /// pauses the bridge within the preset's 2 blue of tolerance past the healthy distance.
-    #[test]
-    fn testnet_11_opens_the_bridge_while_dns_confirmation_keeps_up_and_pauses_on_a_stall() {
-        let t11 =
-            crate::config::params::Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11))
-                .dns_params
-                .expect("testnet-11 carries the DNS overlay");
-        assert_eq!(
-            (
-                t11.attestation_lag_blue_score,
-                t11.attestation_anchor_backoff_blue_score,
-                t11.attestation_epoch_length_blue_score,
-                t11.bridge_finality_max_staleness_daa_score
-            ),
-            (2, 1, 2, 2),
-            "the preset this test reasons about"
-        );
-        assert_eq!(dns_anchor_healthy_distance_blue_score(&t11), 12);
-        assert_eq!(dns_bridge_max_anchor_distance_blue_score(&t11), 14);
-
-        let anchor = Hash64::from_bytes([0x31; 64]);
-        // The measured confirmation: blue 2188 under a sink at blue 2197 — fresh now. (The old DAA
-        // reading saw 3161 − 3149 = 12 > 2 and paused.)
-        assert!(dns_finality_fresh_for_bridge(true, anchor, Some(2188), 2197, &t11));
-        // Every healthy distance measured on the live chain.
-        for distance in 5..=12u64 {
-            assert!(dns_finality_fresh_for_bridge(true, anchor, Some(2188), 2188 + distance, &t11), "healthy {distance}");
-        }
-        // A stall: the anchor stops while the tip climbs. Open through the tolerance, paused after.
-        assert!(dns_finality_fresh_for_bridge(true, anchor, Some(2188), 2188 + 14, &t11));
-        assert!(!dns_finality_fresh_for_bridge(true, anchor, Some(2188), 2188 + 15, &t11), "stalled: paused");
-        // And it never opens on an unconfirmed state, whatever the distance.
-        assert!(!dns_finality_fresh_for_bridge(false, anchor, Some(2188), 2197, &t11));
     }
 
     #[test]
@@ -9086,242 +6868,6 @@ mod tests {
     // ---- A.5: StakeScore aggregation -> DnsState ----
 
     #[test]
-    fn aggregate_epoch_tallies_dedups_triple_and_normalises() {
-        let op1 = TransactionOutpoint::new(Hash64::from_bytes([0x01; 64]), 0);
-        let op2 = TransactionOutpoint::new(Hash64::from_bytes([0x02; 64]), 0);
-        let v1 = Hash64::from_bytes([0xa1; 64]);
-        let v2 = Hash64::from_bytes([0xa2; 64]);
-        let contribs = vec![
-            AttestationContribution { epoch: 1, validator_id: v1, bond_outpoint: op1, signed_weight: 30 },
-            // Duplicate (op1, v1, epoch 1) — must NOT be double-counted.
-            AttestationContribution { epoch: 1, validator_id: v1, bond_outpoint: op1, signed_weight: 30 },
-            AttestationContribution { epoch: 1, validator_id: v2, bond_outpoint: op2, signed_weight: 20 },
-            AttestationContribution { epoch: 2, validator_id: v1, bond_outpoint: op1, signed_weight: 30 },
-        ];
-        let totals = BTreeMap::from([(1u64, 100u128), (2u64, 100u128), (3u64, 100u128)]);
-        let tallies = aggregate_epoch_tallies(&contribs, &totals);
-        assert_eq!(tallies.len(), 3); // ascending by epoch
-        assert_eq!(tallies[0], EpochStakeTally { epoch: 1, signed_weight: 50, total_weight: 100 });
-        assert_eq!(tallies[1], EpochStakeTally { epoch: 2, signed_weight: 30, total_weight: 100 });
-        assert_eq!(tallies[2], EpochStakeTally { epoch: 3, signed_weight: 0, total_weight: 100 });
-        // End-to-end (φS = 0, linear): 0.5 + 0.3 + 0.0 = 0.8.
-        assert_eq!(
-            compute_stake_score(&tallies, EpochCreditRule::QualityFloor { quality_floor_bps: 0 }),
-            StakeScore(STAKE_SCORE_SCALE / 2 + STAKE_SCORE_SCALE * 3 / 10)
-        );
-    }
-
-    #[test]
-    fn aggregate_epoch_tallies_ignores_epoch_without_denominator() {
-        let op = TransactionOutpoint::new(Hash64::from_bytes([0x01; 64]), 0);
-        let contribs = vec![AttestationContribution {
-            epoch: 9,
-            validator_id: Hash64::from_bytes([0xa1; 64]),
-            bond_outpoint: op,
-            signed_weight: 50,
-        }];
-        assert!(aggregate_epoch_tallies(&contribs, &BTreeMap::new()).is_empty());
-    }
-
-    #[test]
-    fn advance_dns_confirmation_confirms_canonical_anchor_not_sink() {
-        let vsc = Hash64::from_bytes([0x22; 64]);
-        let (cw, cs) = (BlueWorkType::from_u64(1000), StakeScore(STAKE_SCORE_SCALE)); // work>=1000, stake>=1.0
-        let stage = DnsRolloutStage::Active;
-
-        // Stake below cS, no prev -> nothing confirmed (zero), even with a candidate anchor.
-        let sink1 = Hash64::from_bytes([0x11; 64]);
-        let canon1 = Hash64::from_bytes([0x91; 64]);
-        let s1 = advance_dns_confirmation(
-            None,
-            sink1,
-            500,
-            Some((canon1, 480)),
-            BlueWorkType::from_u64(2000),
-            StakeScore(STAKE_SCORE_SCALE / 2),
-            stage,
-            vsc,
-            DnsHealth::Active,
-            cw,
-            cs,
-            // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
-            1,
-            1,
-        );
-        assert_eq!(s1.selected_chain_anchor, sink1);
-        assert_eq!(s1.last_dns_confirmed_anchor, Hash64::default());
-
-        // audit #3: thresholds met -> confirm the CANONICAL anchor, NOT the POV-dependent sink.
-        let sink2 = Hash64::from_bytes([0x33; 64]);
-        let canon2 = Hash64::from_bytes([0x99; 64]);
-        let s2 = advance_dns_confirmation(
-            Some(&s1),
-            sink2,
-            600,
-            Some((canon2, 580)),
-            BlueWorkType::from_u64(2000),
-            StakeScore(STAKE_SCORE_SCALE),
-            stage,
-            vsc,
-            DnsHealth::DegradedStakeQualityLow,
-            cw,
-            cs,
-            // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
-            1,
-            1,
-        );
-        assert_eq!(s2.selected_chain_anchor, sink2, "selected_chain_anchor stays the sink (throttle only)");
-        assert_eq!(s2.last_dns_confirmed_anchor, canon2, "confirmed anchor is the canonical anchor");
-        assert_eq!(s2.last_dns_confirmed_anchor_daa_score, 580);
-        assert_ne!(s2.last_dns_confirmed_anchor, sink2, "the sink is NOT what gets confirmed");
-        assert_eq!(s2.health, DnsHealth::DegradedStakeQualityLow); // health never gates confirmation
-
-        // No canonical anchor (None) -> cannot confirm even if depth passes; carry prev forward.
-        let sink3 = Hash64::from_bytes([0x44; 64]);
-        let s3 = advance_dns_confirmation(
-            Some(&s2),
-            sink3,
-            700,
-            None,
-            BlueWorkType::from_u64(2000),
-            StakeScore(STAKE_SCORE_SCALE),
-            stage,
-            vsc,
-            DnsHealth::Active,
-            cw,
-            cs,
-            // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
-            1,
-            1,
-        );
-        assert_eq!(s3.selected_chain_anchor, sink3);
-        assert_eq!(s3.last_dns_confirmed_anchor, canon2, "no ready anchor -> keep prev confirmed");
-
-        // Below-threshold stake (with a candidate anchor present) also carries prev forward.
-        let s4 = advance_dns_confirmation(
-            Some(&s2),
-            sink3,
-            700,
-            Some((Hash64::from_bytes([0x77; 64]), 690)),
-            BlueWorkType::from_u64(2000),
-            StakeScore(0),
-            stage,
-            vsc,
-            DnsHealth::Active,
-            cw,
-            cs,
-            // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
-            1,
-            1,
-        );
-        assert_eq!(s4.last_dns_confirmed_anchor, canon2, "below-threshold -> keep prev confirmed");
-        assert_eq!(s4.last_dns_confirmed_anchor_daa_score, 580);
-    }
-
-    /// "Dead-branch confirm" guard (incident 2026-08-03 §8). `stake_depth` is a WINDOWED sum over
-    /// several epochs, so a branch whose validators have already gone silent still carries enough
-    /// accrued stake to clear `required_stake_depth`. Without this guard it would keep latching
-    /// NEW anchors from that stale stake, arming an unreleasable reorg veto on a branch nothing is
-    /// attesting to. An anchor must have live support in its OWN epoch to become a veto.
-    #[test]
-    fn anchor_without_live_support_is_not_confirmed() {
-        let vsc = Hash64::from_bytes([0x22; 64]);
-        let (cw, cs) = (BlueWorkType::from_u64(1000), StakeScore(STAKE_SCORE_SCALE));
-        let canon = Hash64::from_bytes([0xC0; 64]);
-        let confirm = |attesters: u32, min_attesters: u32| {
-            advance_dns_confirmation(
-                None,
-                Hash64::from_bytes([0x10; 64]),
-                900,
-                Some((canon, 880)),
-                BlueWorkType::from_u64(2000),  // work clears cW
-                StakeScore(STAKE_SCORE_SCALE), // windowed stake clears cS (accrued in EARLIER epochs)
-                DnsRolloutStage::Active,
-                vsc,
-                DnsHealth::Active,
-                cw,
-                cs,
-                attesters,
-                min_attesters,
-            )
-            .last_dns_confirmed_anchor
-        };
-        // Both depth dimensions clear, but the anchor's own epoch has no credited attestation.
-        assert_eq!(confirm(0, 1), Hash64::default(), "no live support in the anchor's epoch ⇒ NOT confirmed");
-        // Same inputs with one credited attestation in the anchor's epoch ⇒ confirmed as before.
-        assert_eq!(confirm(1, 1), canon, "live support ⇒ confirmed");
-        // Distinct-attester floor: a lone signer must not arm a network-wide veto where the active
-        // set is meant to be multi-operator (mainnet's `min_anchor_attesters = 2`).
-        assert_eq!(confirm(1, 2), Hash64::default(), "one attester below a 2-attester floor ⇒ NOT confirmed");
-        assert_eq!(confirm(2, 2), canon, "two distinct attesters meet the floor ⇒ confirmed");
-        assert_eq!(confirm(5, 2), canon, "more than the floor is fine");
-        // A misconfigured `0` floor must not degrade into "confirm with no support at all".
-        assert_eq!(confirm(0, 0), Hash64::default(), "a zero floor still requires ≥1 credited attestation");
-    }
-
-    /// audit H-02 (true WorkDepth, Option A): with `required_work_depth > 0`, confirmation is
-    /// genuinely TWO-DIMENSIONAL — it requires BOTH `WorkDepth ≥ cW` AND `StakeDepth ≥ cS`. The
-    /// decisive new property: a candidate with ENOUGH STAKE but SHALLOW work (`WorkDepth < cW`) is
-    /// NOT confirmed (a stake-side adversary can no longer fast-finalize a low-PoW anchor). This is
-    /// the behavior that `required_work_depth = 0` (devnet/simnet) collapses to "stake-only".
-    #[test]
-    fn true_workdepth_requires_both_work_and_stake() {
-        let vsc = Hash64::from_bytes([0x22; 64]);
-        let (cw, cs) = (BlueWorkType::from_u64(1000), StakeScore(STAKE_SCORE_SCALE)); // cW=1000, cS=1.0
-        let stage = DnsRolloutStage::Active;
-        let canon = Hash64::from_bytes([0xC0; 64]);
-        let confirm = |work: u64, stake: u128| {
-            advance_dns_confirmation(
-                None,
-                Hash64::from_bytes([0x10; 64]),
-                900,
-                Some((canon, 880)),
-                BlueWorkType::from_u64(work),
-                StakeScore(stake),
-                stage,
-                vsc,
-                DnsHealth::Active,
-                cw,
-                cs,
-                1,
-                1,
-            )
-            .last_dns_confirmed_anchor
-        };
-        // Both dimensions clear ⇒ confirmed.
-        assert_eq!(confirm(2000, STAKE_SCORE_SCALE), canon, "work≥cW ∧ stake≥cS ⇒ confirmed");
-        // Enough STAKE but SHALLOW work ⇒ NOT confirmed (the true-WorkDepth gate; stake-only would confirm).
-        assert_eq!(confirm(999, STAKE_SCORE_SCALE), Hash64::default(), "stake≥cS but work<cW ⇒ NOT confirmed (true WorkDepth)");
-        // Enough WORK but insufficient stake ⇒ NOT confirmed (the stake gate).
-        assert_eq!(confirm(2000, STAKE_SCORE_SCALE / 2), Hash64::default(), "work≥cW but stake<cS ⇒ NOT confirmed");
-        // Exactly at both thresholds ⇒ confirmed (inclusive ≥).
-        assert_eq!(confirm(1000, STAKE_SCORE_SCALE), canon, "work==cW ∧ stake==cS ⇒ confirmed");
-    }
-
-    #[test]
-    fn total_active_stake_by_epoch_sums_only_active_bonds() {
-        // A: activation 100, stake 30. B: activation 500, stake 20.
-        // C: activation 100, slashed at 300, stake 50.
-        let mut a = stake_bond_record_from_payload(&fixture_bond(), fixture_outpoint());
-        a.amount = 30;
-        a.activation_daa_score = 100;
-        let mut b = a.clone();
-        b.amount = 20;
-        b.activation_daa_score = 500;
-        let mut c = a.clone();
-        c.amount = 50;
-        c.slashed_at_daa_score = Some(300);
-        let bonds = vec![a, b, c];
-
-        let epochs = BTreeMap::from([(1u64, 50u64), (2, 200), (3, 400), (4, 600)]);
-        let totals = total_active_stake_by_epoch(&bonds, &epochs);
-        assert_eq!(totals.get(&1), Some(&0)); // daa 50: all activate >= 100 -> Pending
-        assert_eq!(totals.get(&2), Some(&80)); // daa 200: A(30) + C(50) active
-        assert_eq!(totals.get(&3), Some(&30)); // daa 400: A(30); C slashed @300; B not yet
-        assert_eq!(totals.get(&4), Some(&50)); // daa 600: A(30) + B(20); C slashed
-    }
-
-    #[test]
     fn attestations_from_accepted_txs_flattens_shards_only() {
         // Two shards (2 + 3 attestations) + a non-overlay tx -> 5 attestations.
         let shard_a = dns_overlay_tx(SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, borsh::to_vec(&fixture_shard(2)).unwrap());
@@ -9335,36 +6881,6 @@ mod tests {
         // Undecodable shard payload is skipped.
         let bad = dns_overlay_tx(SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, vec![0xff]);
         assert!(attestations_from_accepted_txs(&[bad]).is_empty());
-    }
-
-    #[test]
-    fn dns_confirmation_from_state_sets_flags() {
-        let state = DnsState {
-            selected_chain_anchor: Hash64::from_bytes([0x11; 64]),
-            anchor_daa_score: 1000,
-            work_depth: BlueWorkType::from_u64(5000),
-            stake_depth: StakeScore(STAKE_SCORE_SCALE), // 1.0
-            last_dns_confirmed_anchor: Hash64::default(),
-            last_dns_confirmed_anchor_daa_score: 0,
-            rollout_stage: DnsRolloutStage::Active,
-            validator_set_commitment: Hash64::from_bytes([0x22; 64]),
-            health: DnsHealth::DegradedCertificateCensored,
-        };
-        // Both thresholds met -> pow + dns confirmed.
-        let c = dns_confirmation_from_state(&state, BlueWorkType::from_u64(1000), StakeScore(STAKE_SCORE_SCALE / 2));
-        assert_eq!(c.block_hash, state.selected_chain_anchor);
-        assert!(c.pow_confirmed && c.dns_confirmed);
-        assert_eq!(c.rollout_stage, DnsRolloutStage::Active);
-        assert_eq!(c.health, DnsHealth::DegradedCertificateCensored); // surfaced verbatim from DnsState
-        assert_eq!(c.required_work_depth, BlueWorkType::from_u64(1000));
-
-        // Work met but stake below threshold -> pow only.
-        let c = dns_confirmation_from_state(&state, BlueWorkType::from_u64(1000), StakeScore(STAKE_SCORE_SCALE * 2));
-        assert!(c.pow_confirmed && !c.dns_confirmed);
-
-        // Work below threshold -> neither.
-        let c = dns_confirmation_from_state(&state, BlueWorkType::from_u64(9999), StakeScore(0));
-        assert!(!c.pow_confirmed && !c.dns_confirmed);
     }
 
     #[test]
@@ -9828,69 +7344,6 @@ mod tests {
             assert_eq!(back, o);
         }
         assert_eq!(SignedEpochCheckOutcome::default(), SignedEpochCheckOutcome::Allow);
-    }
-
-    // ---- check_signed_epoch_record — full decision matrix -----------
-
-    #[test]
-    fn equivocation_check_allow_when_no_prior() {
-        let candidate = fixture_signed();
-        assert_eq!(check_signed_epoch_record(None, &candidate), SignedEpochCheckOutcome::Allow);
-    }
-
-    #[test]
-    fn equivocation_check_allow_rebroadcast_when_exact_match() {
-        let prev = fixture_signed();
-        let candidate = prev.clone();
-        assert_eq!(check_signed_epoch_record(Some(&prev), &candidate), SignedEpochCheckOutcome::AllowRebroadcast);
-    }
-
-    #[test]
-    fn equivocation_check_allow_rebroadcast_when_only_signature_fingerprint_differs() {
-        // ML-DSA-87 is hedged by default (FIPS 204 §3.4); two
-        // valid signatures over the same message differ on the
-        // `rnd` parameter. Bit-equality on the fingerprint would
-        // therefore be too strict, and would falsely block honest
-        // re-signs after a restart. The predicate that matters is
-        // (target_hash, target_daa_score) equality — this test
-        // pins that.
-        let prev = fixture_signed();
-        let mut candidate = prev.clone();
-        candidate.signature_fingerprint = Hash64::from_bytes([0xcdu8; 64]); // different fingerprint
-        assert_eq!(check_signed_epoch_record(Some(&prev), &candidate), SignedEpochCheckOutcome::AllowRebroadcast);
-    }
-
-    #[test]
-    fn equivocation_check_block_when_target_hash_differs() {
-        let prev = fixture_signed();
-        let mut candidate = prev.clone();
-        candidate.target_hash = Hash64::from_bytes([0x99u8; 64]); // different anchor — would be equivocation
-        assert_eq!(check_signed_epoch_record(Some(&prev), &candidate), SignedEpochCheckOutcome::Block);
-    }
-
-    #[test]
-    fn equivocation_check_block_when_target_daa_score_differs() {
-        let prev = fixture_signed();
-        let mut candidate = prev.clone();
-        // Same target_hash but different DAA score still counts —
-        // ADR-0009 §"`SlashingEvidencePayload`" lists this as
-        // evidence; the rare case of two attestations sharing
-        // target_hash at different DAA scores is a node bug, and
-        // signing both would still be slashable.
-        candidate.target_daa_score = prev.target_daa_score + 1;
-        assert_eq!(check_signed_epoch_record(Some(&prev), &candidate), SignedEpochCheckOutcome::Block);
-    }
-
-    #[test]
-    fn equivocation_check_block_when_both_target_fields_differ() {
-        let prev = fixture_signed();
-        let candidate = SignedEpochRecord {
-            epoch: prev.epoch,
-            target_hash: Hash64::from_bytes([0x99u8; 64]),
-            target_daa_score: prev.target_daa_score + 1000,
-            signature_fingerprint: Hash64::from_bytes([0xeeu8; 64]),
-        };
-        assert_eq!(check_signed_epoch_record(Some(&prev), &candidate), SignedEpochCheckOutcome::Block);
     }
 
     // ---- Reward / slashing distribution (ADR-0013) ----------------
@@ -11168,9 +8621,4 @@ mod tests {
         let h2_clean = compute_signer_audit_chain_entry(h1, &r2);
         assert_ne!(h2_after_insert, h2_clean, "post-insertion chain hash must differ from clean chain hash");
     }
-
-    // ---- PR-10.5: the former `*_stub` panics are now implemented ----
-    // `compute_stake_score` / `check_dns_reorg_rule` replace the PR-10.3
-    // `unimplemented!()` stubs; behaviour is covered by the StakeScore +
-    // reorg-gate tests above.
 }

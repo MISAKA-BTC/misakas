@@ -4,8 +4,8 @@ use crate::{
         BlockProcessResult,
         RuleError::{
             BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment, BadPalwCommitmentShape, BadUTXOCommitment,
-            ComputeOverlayRetired, IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext, UnauthorizedUnbondRequestInBlock,
-            UnverifiablePrecommitEvidenceInBlock, UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
+            ComputeOverlayRetired, InvalidTransactionsInUtxoContext, UnauthorizedUnbondRequestInBlock,
+            UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
         },
     },
     model::stores::{
@@ -31,18 +31,17 @@ use kaspa_consensus_core::{
     coinbase::*,
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondMutation, BondStatus, DnsParams, EpochTally,
-        FeeSplitParams, OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, RewardedEpochSet, SlashingSideEffect, StakeAttestation,
-        UNBOND_REQUEST_CONTEXT, attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score,
-        decode_attestation_shard, deferred_quality_bonus_outputs_for_block, effective_bond_status, epochs_finalized_at,
-        precommit_evidence_from_accepted_txs, precommit_fault, recompute_epoch_tallies, reserve_drip_outputs_for_block,
+        FeeSplitParams, OverlaySnapshot, SlashingSideEffect, UNBOND_REQUEST_CONTEXT, bond_mutations_from_accepted_txs, bond_release_daa_score,
+        deferred_quality_bonus_outputs_for_block, effective_bond_status, epochs_finalized_at,
+        recompute_epoch_tallies, reserve_drip_outputs_for_block,
         resolve_slashing_side_effects, slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
-        stake_precommit_message, unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
-        validator_participation_reward_outputs, victim_compensation_outputs,
+        unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
+        victim_compensation_outputs,
     },
     hashing,
     header::Header,
     muhash::MuHashExtensions,
-    subnets::{SUBNETWORK_ID_PALW_LIFECYCLE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD},
+    subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
     tx::{
         MutableTransaction, PopulatedTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry,
         ValidatedTransaction, VerifiableTransaction,
@@ -216,7 +215,10 @@ pub(super) struct PalwRoundVerdictsV1 {
     /// permit it holds, or the named reason it does not. Read by nobody in consensus.
     pub judged: Vec<(
         BlockHash,
-        Result<kaspa_consensus_core::palw_exec_view_v1::PalwRoundLineageV1, kaspa_consensus_core::palw_exec_view_v1::PalwRoundRefusalV1>,
+        Result<
+            kaspa_consensus_core::palw_exec_view_v1::PalwRoundLineageV1,
+            kaspa_consensus_core::palw_exec_view_v1::PalwRoundRefusalV1,
+        >,
     )>,
 }
 
@@ -935,7 +937,6 @@ impl VirtualStateProcessor {
         // check so the fan-out below can assume every included attestation is
         // eligible (its bond resolves to Active with a valid signature).
         // Inert below activation.
-        self.check_attestation_reward_eligibility(&txs, selected_parent_bond_view, header.daa_score)?;
 
         // kaspa-pq Phase 10/11 (ADR-0009 §"SlashingEvidencePayload"): reject a
         // block whose slashing evidence is not genuine, so a forged evidence
@@ -945,7 +946,6 @@ impl VirtualStateProcessor {
         // MISAKA §5 round 2: the same rule for the same reason, one round later. The stateless
         // layer only checks that the two precommits *would* contradict each other — which anyone
         // can author — so without this a well-formed forgery would burn any validator's bond.
-        self.check_precommit_evidence_genuine(&txs, selected_parent_bond_view, header.daa_score)?;
 
         // ADR-0038 Decision A: the PALW block admission predicate, whole and in one call
         // (`check_palw_block_admission_v1`). Placed here because this is the first point that
@@ -1003,10 +1003,11 @@ impl VirtualStateProcessor {
         // committee beacon, the credit walk, the audit fee, the challenge slash) is gone, and no
         // shipped chain carried one of these transactions (ADR-0134 §2).
         self.check_compute_overlay_retired(&txs, header.daa_score)?;
-        if self.dns_retired_at(header.daa_score) {
-            if let Some(tx) = txs.iter().find(|tx| kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id)) {
-                return Err(kaspa_consensus_core::errors::block::RuleError::DnsParticipationRetired(tx.id()));
-            }
+
+        if let Some(tx) =
+            txs.iter().find(|tx| kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id))
+        {
+            return Err(kaspa_consensus_core::errors::block::RuleError::DnsParticipationRetired(tx.id()));
         }
 
         // kaspa-pq Phase 10/11 + Phase 13 (ADR-0009 Addendum B §B.5 / ADR-0018
@@ -1033,16 +1034,23 @@ impl VirtualStateProcessor {
                 &self.palw_round_blocks_of(&ctx.ghostdag_data),
             )
         });
-        let (validator_reward_outputs, rewarded_keys, newly_included_stake, expected_stake) = self.validator_reward_outputs_for_block(
+        let (validator_reward_outputs, rewarded_keys, _, _) = self.validator_reward_outputs_for_block(
             &txs,
             selected_parent_bond_view,
             header.daa_score,
             ctx.selected_parent(),
             validator_pool,
         );
-        let (newly_included_stake, expected_stake) = if self.dns_retired_at(header.daa_score) {
-            self.native_inclusion_ratio(&ctx.ghostdag_data, &mergeset_non_daa, &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { block: header.hash, daa_score: header.daa_score, blue_score: header.blue_score, subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score) })
-        } else { (newly_included_stake, expected_stake) };
+        let (newly_included_stake, expected_stake) = self.native_inclusion_ratio(
+            &ctx.ghostdag_data,
+            &mergeset_non_daa,
+            &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: header.hash,
+                daa_score: header.daa_score,
+                blue_score: header.blue_score,
+                subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
+            },
+        );
         ctx.validator_rewarded_keys = rewarded_keys;
 
         // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): stash this block's validator
@@ -1239,219 +1247,22 @@ impl VirtualStateProcessor {
         }
     }
 
-    /// kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5 / ADR-0013): the
-    /// validator reward outputs a block's coinbase must carry. Derived
-    /// deterministically from the block's included attestations
-    /// (`attestations_from_accepted_txs`, canonical order) resolved against
-    /// `bond_view` (the bond set as-of the block's selected parent) and the
-    /// network `RewardParams`. ADR-0018 §E: each included validator earns a
-    /// stake-proportional share of the §F validator pool's participation
-    /// sub-pool against the epoch's expected (total active) stake, with
-    /// within-block + cross-block `(bond, epoch)` dedup and a whole-output pool
-    /// cap (see [`validator_participation_reward_outputs`]).
-    ///
-    /// Run identically by the coinbase **construction** (block-template) and
-    /// **validation** paths, so they agree byte-for-byte. Returns no outputs
-    /// unless the overlay is configured AND `daa_score` has reached
-    /// `dns_activation_daa_score` (= 0 everywhere today) — so it is active
-    /// from genesis on every current network. Callers run the §B.4
-    /// eligibility rule first, so every attestation here resolves to an
-    /// `Active` bond; the `if let Some` is a defensive skip.
-    ///
-    /// `selected_parent` is the block's selected parent — the chain tip the
-    /// `(bond, epoch)` cross-block uniqueness walk starts from (§B.3(c)). The
-    /// walk (this block + its selected-chain ancestors within
-    /// `reward_uniqueness_window_blocks` DAA) reads the per-block
-    /// `rewarded_epochs_store` to build the already-rewarded prefix set; the
-    /// matching recency bound drops attestations whose target is older than the
-    /// window, so the bounded walk is guaranteed to see any prior reward of the
-    /// same pair. The overlay is genesis-active on every current network
-    /// (`dns_activation_daa_score` = 0), so the walk reads the rows written as
-    /// validators are rewarded.
+    /// Retained deferred quality liabilities, shared by coinbase construction and validation.
+    /// No new DNS participation outputs, reward keys, or stake credit are produced.
     pub(super) fn validator_reward_outputs_for_block(
         &self,
-        txs: &[Transaction],
+        _txs: &[Transaction],
         bond_view: &ActiveBondView,
         daa_score: u64,
         selected_parent: BlockHash,
-        // kaspa-pq Phase 13 (ADR-0018 §F/§E): the validator-side coinbase pool
-        // (`CoinbaseManager::coinbase_validator_pool`) this block's §E
-        // participation rewards are distributed from. The caller computes it past
-        // `dns_activation_daa_score` (= 0 on every current network), so it is
-        // funded from genesis everywhere.
-        validator_pool: u64,
-        // kaspa-pq Phase 13 (ADR-0018 §D): also returns `(newly_included_stake,
-        // expected_stake)` so the coinbase can pay the §D worker inclusion bounty.
+        _validator_pool: u64,
     ) -> (Vec<TransactionOutput>, RewardedEpochKeys, u128, u128) {
-        let Some(dns_params) = self.dns_params.as_ref() else {
-            return (Vec::new(), Vec::new(), 0, 0);
-        };
-        if daa_score < dns_params.dns_activation_daa_score {
-            return (Vec::new(), Vec::new(), 0, 0);
-        }
-        if self.dns_retired_at(daa_score) {
-            // Historical quality liabilities are paid once at their original finalization crossing.
-            return (self.deferred_quality_bonus_outputs(dns_params, daa_score, selected_parent, bond_view), Vec::new(), 0, 0);
-        }
-        let window = dns_params.reward_uniqueness_window_blocks;
-
-        // kaspa-pq DNS v3: canonical anchors as-of the selected parent (the deterministic
-        // as-of-block view, like `bond_view` / the deferred-bonus path). Only an attestation
-        // naming THIS chain's canonical lagged anchor for a READY, NON-DUPLICATE epoch earns a
-        // reward — exactly the GoodAttestation v3 rule the PR4 StakeScore verifier applies, so
-        // reward and StakeScore agree on what counts. A non-canonical or duplicate target earns
-        // nothing (it is simply absent from `creditable`), and so never enters `rewarded_keys`
-        // (hence never the §D bounty, §E pool, cross-block dedup, or the deferred bonus).
-        let creditable = self.canonical_anchors_in_window(selected_parent, dns_params, dns_params.stake_score_window_blue_score);
-
-        // Resolve eligible, recent, CANONICAL attestations (canonical order). Recency
-        // (§B.3(c)): an attestation whose target is older than the window earns
-        // nothing — keeps the uniqueness walk below bounded.
-        // Why each attestation did NOT earn a reward, for the one caller that needs it: a coinbase
-        // mismatch. Two nodes that disagree about this fan-out disagree about block validity, and
-        // "outputs act=3 exp=2" alone sends the investigation to the wrong half of the subsystem —
-        // it says the sets differ, not which attestation one side dropped or on which test. Kept
-        // as a per-block tally rather than a log, so the mismatch path can print it and every
-        // other path pays nothing.
-        let mut dropped: Vec<(u64, &'static str)> = Vec::new();
-        let mut attestations = Vec::new();
-        for att in attestations_from_accepted_txs(txs) {
-            if daa_score.saturating_sub(att.target_daa_score) > window {
-                dropped.push((att.epoch, "stale_beyond_reward_window"));
-                continue;
-            }
-            // v3 canonical gate: the epoch must be creditable (ready, non-duplicate) and the
-            // attestation must name its canonical anchor exactly.
-            let Some(anchor) = creditable.get(&att.epoch) else {
-                dropped.push((att.epoch, "epoch_not_creditable_at_selected_parent"));
-                continue;
-            };
-            if att.target_hash != anchor.anchor_hash || att.target_daa_score != anchor.anchor_daa_score {
-                dropped.push((att.epoch, "target_is_not_this_chains_canonical_anchor"));
-                continue;
-            }
-            if bond_view.active_bond_at(&att.bond_outpoint, att.target_daa_score).is_none() {
-                dropped.push((att.epoch, "bond_not_active_at_target"));
-            }
-            if let Some(bond) = bond_view.active_bond_at(&att.bond_outpoint, att.target_daa_score) {
-                // ADR-0018 §E: carry the bond's stake — the proportional weight in the
-                // participation distribution (against the expected-stake denominator).
-                attestations.push((att.bond_outpoint, att.epoch, bond.owner_reward_spk_payload, bond.amount));
-            }
-        }
-
-        // Build the already-rewarded prefix set: the selected parent and its
-        // selected-chain ancestors within `window` DAA, unioning each block's
-        // rewarded `(bond, epoch)` keys (§B.3(c)). ADR-0022: routed through
-        // `selected_chain_overlay_window`, which merges the persisted below-pruning-
-        // point window — so a pruned-IBD node dedups post-pruning blocks against the
-        // pre-pruning rewards too (its walk cannot reach below the pruning point).
-        // Inert merge on a from-genesis node.
-        let mut already_rewarded = RewardedEpochSet::new();
-        for c in self.selected_chain_overlay_window(selected_parent, daa_score, window) {
-            for (bond_outpoint, epoch) in c.rewarded_keys.iter() {
-                already_rewarded.insert(*bond_outpoint, *epoch);
-            }
-        }
-
-        // ADR-0018 §E: distribute the participation sub-pool proportionally by stake against the
-        // epoch's expected (total active) stake — the anti-capture denominator — with the same
-        // within-block + cross-block (§B.3(c)) `(bond, epoch)` uniqueness and a whole-output pool
-        // cap (Σ ≤ pool; the unspent remainder is not minted).
-        //
-        // M-04 (denominator definition): the per-block reward intentionally uses the INCLUSION-time
-        // active set (`total_active_stake_at(daa_score)`, below) as the expected-stake denominator,
-        // whereas the StakeScore security signal uses the epoch-ANCHOR-time set. Both are
-        // per-block-deterministic (read from the same selected-parent bond view), so neither splits;
-        // they differ only in reference point, which is correct — the reward pays inclusion in THIS
-        // block against the stake live at THIS block, while StakeScore measures buried-epoch security.
-        //
-        // ADR-0018 "本格版" (PoS-v2): the participation/quality split is **fenced**. Below
-        // `pos_v2_activation_daa_score` the FULL pool funds participation (effective bps = 10_000),
-        // byte-identical to the pre-v2 behavior regardless of the configured `validator_participation_bps`
-        // — so on the devnet/simnet preset (fence = `u64::MAX`) raising the quality share in the presets
-        // stays inert. At/above the fence — i.e. on mainnet/testnet (`PRODUCTION_DNS_PARAMS`, fence = 0)
-        // from block 1 — the configured split carves the quality-bonus sub-pool, which the per-epoch
-        // accumulator accrues (Phase 1) and `deferred_quality_bonus_outputs` (below) pays at finalization.
-        let expected_stake = bond_view.total_active_stake_at(daa_score) as u128;
-        let participation_bps = if daa_score >= dns_params.pos_v2_activation_daa_score {
-            dns_params.reward_params.validator_participation_bps
-        } else {
-            10_000
-        };
-        let (participation_pool, _quality_bonus_pool) = split_validator_pool(validator_pool as u128, participation_bps);
-
-        // ADR-0018 §D base inclusion bounty: the stake this block NEWLY includes — the
-        // same recency-filtered attestations under the same within-block + cross-block
-        // (§B.3(c)) `(bond, epoch)` dedup as §E, but summed pre-pool-cap (the miner
-        // included them regardless of what §E could pay). The coinbase pays the includer
-        // a proportional share of the §D pool against `expected_stake`.
-        let mut seen_in_block = RewardedEpochSet::new();
-        let mut newly_included_stake: u128 = 0;
-        for (bond_outpoint, epoch, _payload, stake) in &attestations {
-            if already_rewarded.contains(bond_outpoint, *epoch) || !seen_in_block.insert(*bond_outpoint, *epoch) {
-                continue;
-            }
-            newly_included_stake += *stake as u128;
-        }
-
-        let (mut outputs, rewarded_keys) =
-            validator_participation_reward_outputs(participation_pool, expected_stake, &attestations, &already_rewarded);
-        // Eligible but unpaid: the §B.3(c) cross-block dedup already rewarded this (bond, epoch)
-        // in the window, or the whole-output pool cap truncated the tail. Both are legitimate —
-        // and both are also exactly how two nodes end up building different coinbases, so the
-        // gap between "eligible" and "paid" is worth naming when it exists.
-        if rewarded_keys.len() != attestations.len() {
-            info!(
-                "[validator-fanout] daa={daa_score} eligible={} paid={} outputs={} (dedup window holds {} already-rewarded key(s), pool={participation_pool}, expected_stake={expected_stake})",
-                attestations.len(),
-                rewarded_keys.len(),
-                outputs.len(),
-                already_rewarded.len(),
-            );
-        }
-
-        // ADR-0018 "本格版" (PoS-v2) §E deferred quality bonus: append the bonus outputs for any
-        // epoch THIS block first buries beyond the finalization window (φS-gated), recomputed from
-        // the selected-parent window. Inert below the v2 fence. The finalized epochs are old
-        // (buried by `reward_window + max_reorg_horizon`) and disjoint from the participation
-        // epochs (recent, within `reward_window`), so the two output sets never double-pay.
-        outputs.extend(self.deferred_quality_bonus_outputs(dns_params, daa_score, selected_parent, bond_view));
-
-        // An attestation that a block INCLUDED but this node will not reward — for any reason
-        // other than plain staleness — is the precursor to a coinbase mismatch, and until now it
-        // left no trace at all. Staleness is routine (a miner may include an old shard; it simply
-        // earns nothing), so it is counted and not named; the other three mean this node's view
-        // of the chain differs from the includer's, which is exactly what a mismatch is made of.
-        let stale = dropped.iter().filter(|(_, why)| *why == "stale_beyond_reward_window").count();
-        let disagreements: Vec<String> =
-            dropped.iter().filter(|(_, why)| *why != "stale_beyond_reward_window").map(|(e, why)| format!("epoch{e}:{why}")).collect();
-        if !disagreements.is_empty() {
-            info!(
-                "[validator-fanout] daa={daa_score} rewarding {} attestation(s), {} stale, but {} included one(s) this node does not consider rewardable: [{}]",
-                attestations.len(),
-                stale,
-                disagreements.len(),
-                disagreements.join(","),
-            );
-        } else if !attestations.is_empty() && outputs.is_empty() {
-            // Eligible attestations and nobody paid. Either the pool is empty or the denominator
-            // is, and both are silent failures that surface much later as a coinbase mismatch
-            // against a node that did pay — so say it here, where the inputs are still in hand.
-            info!(
-                "[validator-fanout] daa={daa_score} {} eligible attestation(s) earned NOTHING: participation_pool={participation_pool} expected_stake={expected_stake} validator_pool={validator_pool}",
-                attestations.len(),
-            );
-        } else {
-            trace!(
-                "[validator-fanout] daa={daa_score} txs={} eligible={} outputs={} pool={participation_pool} expected_stake={expected_stake} stale={stale}",
-                txs.len(),
-                attestations.len(),
-                outputs.len(),
-            );
-        }
-
-        (outputs, rewarded_keys, newly_included_stake, expected_stake)
+        // No validator participation rewards. Only bounded historical quality liabilities remain.
+        let outputs = self
+            .dns_params
+            .as_ref()
+            .map_or_else(Vec::new, |p| self.deferred_quality_bonus_outputs(p, daa_score, selected_parent, bond_view));
+        (outputs, Vec::new(), 0, 0)
     }
 
     /// kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 2) §E — the **deferred quality-bonus** coinbase
@@ -1524,29 +1335,22 @@ impl VirtualStateProcessor {
         deferred_quality_bonus_outputs_for_block(dns_params.stake_event_quality_floor_bps, bounds, &finalized)
     }
 
-    /// kaspa-pq DNS-finality (E1/E3 §6.1/§6.2): classify ONE selected mempool tx for
-    /// the block template. Folds the activation gate (`dns_params.is_some()` AND
-    /// `daa_score >= dns_activation_daa_score`) then delegates to the pure
-    /// [`classify_attestation_shard_for_template`]. Below the gate every tx is
-    /// `KeepNonShard` — byte-identical to the pre-classifier behavior. Uses the SAME
-    /// per-attestation eligibility checks ([`classify_one_attestation`]) as the §B.4
-    /// block-validity rule, so a kept shard always passes validation and a dropped one
-    /// would have self-disqualified the block; the template path additionally returns
-    /// a drop REASON so the builder can refill + count.
-    ///
-    /// Recency is *not* filtered here: a stale-but-eligible shard is valid (§B.4
-    /// ignores recency) and simply earns no reward, so it is `KeepEligible`.
+    /// Reject retired DNS participation before validating template transactions.
     pub(super) fn classify_attestation_shard_for_template(
         &self,
         tx: &Transaction,
-        bond_view: &ActiveBondView,
-        daa_score: u64,
+        _bond_view: &ActiveBondView,
+        _daa_score: u64,
     ) -> AttestationShardDecision {
-        if self.dns_retired_at(daa_score) && kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id) {
-            return AttestationShardDecision::Drop { reason: AttestationDropReason::DnsRetired, bond: TransactionOutpoint::new(tx.id(), 0), epoch: 0 };
+        if kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id) {
+            AttestationShardDecision::Drop {
+                reason: AttestationDropReason::DnsRetired,
+                bond: TransactionOutpoint::new(tx.id(), 0),
+                epoch: 0,
+            }
+        } else {
+            AttestationShardDecision::KeepNonShard
         }
-        let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
-        classify_attestation_shard_for_template(tx, bond_view, self.genesis.hash, activated)
     }
 
     /// kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): legacy block-template
@@ -1563,50 +1367,10 @@ impl VirtualStateProcessor {
     pub(super) fn retain_reward_eligible_attestation_shards(
         &self,
         txs: &mut Vec<Transaction>,
-        bond_view: &ActiveBondView,
-        daa_score: u64,
+        _bond_view: &ActiveBondView,
+        _daa_score: u64,
     ) {
-        let Some(dns_params) = self.dns_params.as_ref() else {
-            return;
-        };
-        if daa_score < dns_params.dns_activation_daa_score {
-            return;
-        }
-        let net_id = self.genesis.hash;
-        // A non-shard tx yields no attestations → `attestation_reward_eligibility`
-        // returns Ok, so it is retained. A shard tx is retained iff *all* its
-        // attestations are eligible.
-        txs.retain(|tx| attestation_reward_eligibility(std::slice::from_ref(tx), bond_view, net_id, true).is_ok());
-    }
-
-    /// kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): the Model-B
-    /// reward-eligibility **block-validity** rule. Rejects a block that
-    /// includes a `StakeAttestationShard` whose attestation is not
-    /// structurally reward-eligible against this block's own selected-parent
-    /// bond view — its bond must resolve to `Active` (at the attestation's
-    /// `target_daa_score`) **and** its ML-DSA-87 signature must verify. This
-    /// makes "included ⇒ rewardable" a consensus invariant, so the coinbase
-    /// reward fan-out (PR-10.5′-b3) needs no skip set. Reward **uniqueness**
-    /// (Addendum B §B.3(c)) is a reward-emission concern, not a validity one
-    /// (a duplicate `(bond, epoch)` is simply unrewarded), and is not checked
-    /// here.
-    ///
-    /// Active when the overlay is configured **and** `daa_score` has reached
-    /// `dns_activation_daa_score` (= 0 on every current network, so
-    /// this runs from genesis today). The canonical
-    /// digest + signature verification mirror the StakeScore aggregation pass
-    /// (`processor.rs`) byte-for-byte and the validator-service signer.
-    fn check_attestation_reward_eligibility(
-        &self,
-        txs: &[Transaction],
-        selected_parent_bond_view: &ActiveBondView,
-        daa_score: u64,
-    ) -> BlockProcessResult<()> {
-        // Fold the gate: configured overlay AND past activation.
-        let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
-        // ADR-0009 Addendum A.3: the network_id discriminator is the genesis hash.
-        attestation_reward_eligibility(txs, selected_parent_bond_view, self.genesis.hash, activated)
-            .map_err(|(bond_tx, epoch)| IneligibleAttestationInBlock(bond_tx, epoch))
+        txs.retain(|tx| !kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id));
     }
 
     /// kaspa-pq Phase 10/11 (ADR-0009 §"SlashingEvidencePayload"): the stateful
@@ -1635,33 +1399,6 @@ impl VirtualStateProcessor {
             activated,
         )
         .map_err(UnverifiableSlashingEvidenceInBlock)
-    }
-
-    /// MISAKA §5 round 2: rejects a block carrying precommit evidence that is not genuine — the
-    /// round-2 sibling of [`Self::check_slashing_evidence_genuine`].
-    ///
-    /// Gated on `dns_activation_daa_score`, not on the VLT fences, for the same reason the round-1
-    /// rule is: it guards a transaction that is *accepted* now. A precommit only counts toward
-    /// finality past `Params::dns_bft_gate` (ADR-0128), but the payload is relayable and includable from the day
-    /// the subnet exists, so the rule that stops a forged one burning a bond has to exist from the
-    /// same day.
-    fn check_precommit_evidence_genuine(
-        &self,
-        txs: &[Transaction],
-        selected_parent_bond_view: &ActiveBondView,
-        daa_score: u64,
-    ) -> BlockProcessResult<()> {
-        let Some(params) = self.dns_params.as_ref() else { return Ok(()) };
-        let activated = daa_score >= params.dns_activation_daa_score;
-        precommit_evidence_genuine(
-            txs,
-            selected_parent_bond_view,
-            self.genesis.hash,
-            daa_score,
-            params.evidence_window_blocks,
-            activated,
-        )
-        .map_err(UnverifiablePrecommitEvidenceInBlock)
     }
 
     /// MISAKA Verified LLM Token-Weighted BFT (§7): rejects a block carrying a compute fraud proof
@@ -2030,179 +1767,14 @@ impl VirtualStateProcessor {
     }
 }
 
-/// kaspa-pq DNS-finality (E1/§6.1): why a [`StakeAttestationShard`] tx was dropped
-/// from a block TEMPLATE. These reasons exist ONLY on the template-construction path
-/// (counters + refill diagnostics); block VALIDITY keeps mapping the same condition
-/// to the single [`IneligibleAttestationInBlock`] error (the wire/consensus rule is
-/// unchanged). Each variant mirrors exactly one branch of [`classify_one_attestation`].
+/// A retired DNS participation transaction is permanently ineligible for a template.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AttestationDropReason {
-    DnsRetired,
-    /// The referenced bond does not resolve to `Active` at the attestation's
-    /// `target_daa_score` in the as-of-selected-parent bond view (branch a).
-    BondNotActiveAtTarget,
-    /// The self-declared `validator_id` does not match the bond's
-    /// `validator_pubkey_hash` (P-1A binding, branch a').
-    ValidatorIdMismatch,
-    /// The ML-DSA-87 signature does not verify over the canonical digest (branch b).
-    BadSignature,
-    /// The tx payload is not a decodable `StakeAttestationShardPayload` (a shard-
-    /// subnetwork tx whose bytes do not borsh-decode). Never produced by
-    /// [`attestations_from_accepted_txs`] (which silently skips undecodable
-    /// payloads), but classified explicitly so a malformed shard is dropped with a
-    /// reason rather than silently kept as a `KeepEligible{count:0}`.
-    MalformedPayload,
-    /// A non-zero `validator_set_commitment` below the VLT weight fence — audit #4's fixed-zero
-    /// invariant, enforced here since PR 2 moved it off the stateless layer (which cannot see
-    /// the fence). Above the fence the field carries the §5.1 snapshot commitment and this
-    /// reason is never produced.
-    NonZeroValidatorSetCommitment,
-}
+pub(crate) enum AttestationDropReason { DnsRetired }
 
-impl AttestationDropReason {
-    /// kaspa-pq DNS-finality (audit v24 H-5): map a drop reason to the mempool-hygiene
-    /// kind the mining manager acts on.
-    ///
-    /// - `MalformedPayload` / `ValidatorIdMismatch` / `BadSignature` are intrinsic to the
-    ///   shard itself — it can never become eligible as-is → `Terminal` (evict at once).
-    /// - `BondNotActiveAtTarget` depends on the template's selected-parent bond VIEW, which a
-    ///   reorg / a few more blocks can change → `Quarantine` (do not hard-evict; let TTL govern).
-    pub(crate) fn template_drop_kind(self) -> kaspa_consensus_core::block::AttestationTemplateDropKind {
-        use kaspa_consensus_core::block::AttestationTemplateDropKind;
-        match self {
-            AttestationDropReason::DnsRetired
-            | AttestationDropReason::MalformedPayload
-            | AttestationDropReason::ValidatorIdMismatch
-            | AttestationDropReason::NonZeroValidatorSetCommitment
-            | AttestationDropReason::BadSignature => AttestationTemplateDropKind::Terminal,
-            AttestationDropReason::BondNotActiveAtTarget => AttestationTemplateDropKind::Quarantine,
-        }
-    }
-}
-
-/// kaspa-pq DNS-finality (E1/§6.1): the per-tx decision the block-template builder
-/// makes for one selected mempool tx. `KeepNonShard` and `KeepEligible` are added to
-/// the template; `Drop` is rejected back to the selector (which refills from the next
-/// candidate) and counted by reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AttestationShardDecision {
-    /// Not a `StakeAttestationShard` tx (subnetwork ≠ 0x11) — always kept.
     KeepNonShard,
-    /// A shard tx all of whose attestations are §B.4-eligible — kept.
-    KeepEligible { attestation_count: usize },
-    /// A shard tx with ≥1 ineligible (or malformed) attestation — dropped + refilled.
     Drop { reason: AttestationDropReason, bond: TransactionOutpoint, epoch: u64 },
-}
-
-/// kaspa-pq DNS-finality (E1/§6.1): classify ONE attestation against the bond view
-/// using the IDENTICAL checks the §B.4 block-validity rule and the StakeScore path
-/// use. `Ok(())` ⇒ eligible; `Err(reason)` ⇒ the first failing branch. The block-
-/// validity rule ([`attestation_reward_eligibility`]) and the template classifier
-/// ([`classify_attestation_shard_for_template`]) both funnel through here so the
-/// eligibility logic can never diverge between construction and validation.
-fn classify_one_attestation(
-    att: &StakeAttestation,
-    bond_view: &ActiveBondView,
-    net_id: BlockHash,
-) -> Result<(), AttestationDropReason> {
-    // MISAKA VLT PR 2: audit #4's fixed-zero VSC invariant, enforced at this gate, which both the
-    // template and the §B.4 block-validity rule funnel through: a block carrying a non-zero-VSC
-    // attestation is invalid.
-    if att.validator_set_commitment != kaspa_hashes::Hash64::default() {
-        return Err(AttestationDropReason::NonZeroValidatorSetCommitment);
-    }
-    // (a) bond resolves to Active at the attestation's anchor.
-    let Some(bond) = bond_view.active_bond_at(&att.bond_outpoint, att.target_daa_score) else {
-        return Err(AttestationDropReason::BondNotActiveAtTarget);
-    };
-    // kaspa-pq DNS v2 (P-1A): the self-declared validator_id must match the bond's
-    // validator_pubkey_hash (validator_id is not in the signed digest); reward eligibility
-    // shares the StakeScore binding so no reward can be earned by a non-canonical validator_id.
-    if att.validator_id != bond.validator_pubkey_hash {
-        return Err(AttestationDropReason::ValidatorIdMismatch);
-    }
-    // (b) ML-DSA-87 signature verifies over the canonical digest.
-    let digest = stake_attestation_message(
-        net_id.as_byte_slice(),
-        att.epoch,
-        att.target_hash,
-        att.target_daa_score,
-        att.validator_set_commitment,
-        att.bond_outpoint,
-    )
-    .as_bytes();
-    if !matches!(verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT), Ok(true)) {
-        return Err(AttestationDropReason::BadSignature);
-    }
-    Ok(())
-}
-
-/// kaspa-pq DNS-finality (E1/§6.1): classify ONE selected mempool tx for the block
-/// template. A non-shard tx is `KeepNonShard`. A shard tx is decoded and each of its
-/// attestations run through [`classify_one_attestation`]: the first failure ⇒
-/// `Drop{reason,bond,epoch}`; all eligible ⇒ `KeepEligible{attestation_count}`. A
-/// shard-subnetwork tx whose payload does not decode ⇒ `Drop{MalformedPayload}`
-/// (carrying the tx id as a degenerate bond outpoint + epoch 0). When `activated`
-/// is `false` (overlay dormant / below `dns_activation_daa_score`) EVERY tx is kept
-/// (`KeepNonShard`) — byte-identical to the pre-classifier behavior.
-pub(crate) fn classify_attestation_shard_for_template(
-    tx: &Transaction,
-    bond_view: &ActiveBondView,
-    net_id: BlockHash,
-    activated: bool,
-) -> AttestationShardDecision {
-    if !activated || tx.subnetwork_id != SUBNETWORK_ID_STAKE_ATTESTATION_SHARD {
-        return AttestationShardDecision::KeepNonShard;
-    }
-    // A shard-subnetwork tx whose payload does not decode is malformed. (The §B.4
-    // validity rule reaches this via `attestations_from_accepted_txs` skipping it ⇒
-    // it would carry no attestations and be vacuously eligible; the template path
-    // is stricter and drops it so a near-empty template is not served.)
-    let Some(shard) = decode_attestation_shard(tx) else {
-        return AttestationShardDecision::Drop {
-            reason: AttestationDropReason::MalformedPayload,
-            bond: TransactionOutpoint::new(tx.id(), 0),
-            epoch: 0,
-        };
-    };
-    for att in shard.attestations.iter() {
-        if let Err(reason) = classify_one_attestation(att, bond_view, net_id) {
-            return AttestationShardDecision::Drop { reason, bond: att.bond_outpoint, epoch: att.epoch };
-        }
-    }
-    AttestationShardDecision::KeepEligible { attestation_count: shard.attestations.len() }
-}
-
-/// Pure core of the ADR-0009 Addendum B §B.4 reward-eligibility rule, split
-/// out from [`VirtualStateProcessor::check_attestation_reward_eligibility`] so
-/// it can be unit-tested without a full processor. `activated` folds the
-/// `dns_params.is_some() && daa_score >= dns_activation_daa_score` gate; when
-/// `false` the rule is a no-op. On every current network the gate is `true`
-/// from genesis (`dns_activation_daa_score` = 0), so the rule is active. On the
-/// first ineligible attestation returns `Err((bond tx id, epoch))`; the caller maps
-/// it to [`IneligibleAttestationInBlock`]. An attestation is eligible iff its
-/// bond resolves to `Active` in `bond_view` at the attestation's
-/// `target_daa_score` **and** its ML-DSA-87 signature verifies over the
-/// canonical [`stake_attestation_message`] digest (Addendum A.3 layout).
-///
-/// Shares its per-attestation checks with the template classifier via
-/// [`classify_one_attestation`], so block validity and template adoption can
-/// never disagree on what is eligible (only the template path keeps reasons).
-fn attestation_reward_eligibility(
-    txs: &[Transaction],
-    bond_view: &ActiveBondView,
-    net_id: BlockHash,
-    activated: bool,
-) -> Result<(), (TransactionId, u64)> {
-    if !activated {
-        return Ok(());
-    }
-    for att in attestations_from_accepted_txs(txs) {
-        if classify_one_attestation(&att, bond_view, net_id).is_err() {
-            return Err((att.bond_outpoint.transaction_id, att.epoch));
-        }
-    }
-    Ok(())
 }
 
 /// Pure core of the ADR-0009 §"SlashingEvidencePayload" stateful genuineness
@@ -2259,12 +1831,6 @@ pub(super) fn proved_slash_targets(
                 proved.insert(ev.bond_outpoint);
             }
         }
-        for ev in precommit_evidence_from_accepted_txs(one) {
-            let older = ev.precommit_a.target_daa_score < including_daa && ev.precommit_b.target_daa_score < including_daa;
-            if older && precommit_evidence_genuine(one, bond_view, net_id, including_daa, evidence_window_blocks, true).is_ok() {
-                proved.insert(ev.bond_outpoint);
-            }
-        }
     }
     proved
 }
@@ -2288,7 +1854,9 @@ pub(super) fn proved_slashing_evidence_txs(
     evidence_window_blocks: u64,
 ) -> Vec<Transaction> {
     txs.iter()
-        .filter(|tx| !proved_slash_targets(std::slice::from_ref(*tx), bond_view, net_id, including_daa, evidence_window_blocks).is_empty())
+        .filter(|tx| {
+            !proved_slash_targets(std::slice::from_ref(*tx), bond_view, net_id, including_daa, evidence_window_blocks).is_empty()
+        })
         .cloned()
         .collect()
 }
@@ -2344,81 +1912,6 @@ fn slashing_evidence_genuine(
             .as_bytes();
             if !matches!(
                 verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
-                Ok(true)
-            ) {
-                return Err(ev.bond_outpoint.transaction_id);
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Pure core of the MISAKA §5 round-2 precommit-evidence genuineness rule.
-///
-/// The stateless layer has already established that the two payloads contradict each other and are
-/// bound to one bond and one validator id. What it cannot establish is that the *validator signed
-/// them* — anyone can author two contradictory payloads and name someone else's bond. So this
-/// requires, for both precommits:
-///
-/// * the bond resolves in the block's selected-parent view, and `validator_id` is that bond's own
-///   `validator_pubkey_hash` (the id is not inside the signed digest, so without this the evidence
-///   could be re-pointed at a different bond);
-/// * the bond held slashable stake (`Active`/`Unbonding`) at the precommit's own target, since an
-///   offence by a bond with nothing at risk is not slashable;
-/// * the ML-DSA-87 signature verifies over the canonical [`stake_precommit_message`] digest — the
-///   one that covers the declared lock, which is what makes the contradiction attributable at all.
-///
-/// Freshness mirrors round 1: within `evidence_window_blocks` of the newer precommit's target, so
-/// slashing cannot reach back past the bond's still-locked window and a long-settled fork cannot
-/// be dredged up to grief a since-honest validator.
-fn precommit_evidence_genuine(
-    txs: &[Transaction],
-    bond_view: &ActiveBondView,
-    net_id: BlockHash,
-    including_daa: u64,
-    evidence_window_blocks: u64,
-    activated: bool,
-) -> Result<(), TransactionId> {
-    if !activated {
-        return Ok(());
-    }
-    for ev in precommit_evidence_from_accepted_txs(txs) {
-        let Some(bond) = bond_view.get(&ev.bond_outpoint) else {
-            return Err(ev.bond_outpoint.transaction_id);
-        };
-        let newest_target = ev.precommit_a.target_daa_score.max(ev.precommit_b.target_daa_score);
-        if including_daa.saturating_sub(newest_target) > evidence_window_blocks {
-            return Err(ev.bond_outpoint.transaction_id);
-        }
-        // Re-derived here rather than trusted from the stateless pass: this rule is the one that
-        // burns a bond, so it must not depend on a check running earlier in a different layer.
-        if precommit_fault(&ev.precommit_a, &ev.precommit_b).is_none() {
-            return Err(ev.bond_outpoint.transaction_id);
-        }
-        for p in [&ev.precommit_a, &ev.precommit_b] {
-            if p.bond_outpoint != ev.bond_outpoint || p.validator_id != bond.validator_pubkey_hash {
-                return Err(ev.bond_outpoint.transaction_id);
-            }
-            if !matches!(effective_bond_status(bond, p.target_daa_score), BondStatus::Active | BondStatus::Unbonding) {
-                return Err(ev.bond_outpoint.transaction_id);
-            }
-            // The claimed snapshot commitment is echoed into the digest exactly like the claimed
-            // lock: the evidence proves the validator SIGNED these two payloads, whatever
-            // denominator each named — equivocation does not become honest by being weighed
-            // against the wrong `W(E)`.
-            let digest = stake_precommit_message(
-                net_id.as_byte_slice(),
-                p.epoch,
-                p.target_hash,
-                p.target_daa_score,
-                p.locked_epoch,
-                p.locked_hash,
-                p.snapshot_commitment,
-                p.bond_outpoint,
-            )
-            .as_bytes();
-            if !matches!(
-                verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &p.signature, PRECOMMIT_MLDSA87_CONTEXT),
                 Ok(true)
             ) {
                 return Err(ev.bond_outpoint.transaction_id);
@@ -2593,329 +2086,8 @@ mod tests {
         });
     }
 
-    // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): the reward-eligibility
-    // rule's pure core. Covers the gate + both reject branches (bond absent /
-    // signature invalid). The accept-with-valid-signature path requires
-    // ML-DSA-87 signing (libcrux) and is covered by the PR-10.5′-b3 end-to-end
-    // integration test rather than here.
-    mod attestation_reward_eligibility {
-        use kaspa_consensus_core::tx::Transaction;
-
-        fn eligibility(
-            txs: &[Transaction],
-            view: &ActiveBondView,
-            net: BlockHash,
-            activated: bool,
-        ) -> Result<(), (kaspa_consensus_core::tx::TransactionId, u64)> {
-            super::super::attestation_reward_eligibility(txs, view, net, activated)
-        }
-        use kaspa_consensus_core::{
-            BlockHash,
-            dns_finality::{
-                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
-                StakeAttestation, StakeBondRecord, single_attestation_shard, stake_attestation_shard_tx,
-            },
-            tx::TransactionOutpoint,
-        };
-        use kaspa_hashes::Hash64;
-
-        fn outpoint(b: u8) -> TransactionOutpoint {
-            TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
-        }
-
-        fn attestation(bond_outpoint: TransactionOutpoint) -> StakeAttestation {
-            StakeAttestation {
-                version: DNS_PAYLOAD_VERSION_V1,
-                validator_id: Hash64::from_bytes([0xa1; 64]),
-                bond_outpoint,
-                epoch: 1,
-                target_hash: Hash64::from_bytes([0x55; 64]),
-                target_daa_score: 10_000,
-                validator_set_commitment: Hash64::default(),
-                // Garbage signature — never verifies. The accept path is tested
-                // end-to-end in b3 (a real validator-signed attestation).
-                signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
-            }
-        }
-
-        fn active_bond(op: TransactionOutpoint) -> StakeBondRecord {
-            StakeBondRecord {
-                version: DNS_PAYLOAD_VERSION_V1,
-                bond_outpoint: op,
-                owner_pubkey_hash: Hash64::from_bytes([0xaa; 64]),
-                validator_pubkey_hash: Hash64::from_bytes([0xbb; 64]),
-                validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
-                amount: 1_000,
-                activation_daa_score: 0, // Active from genesis.
-                created_daa_score: 0,
-                unbonding_period_blocks: 100,
-                owner_reward_spk_payload: [0xdd; 64],
-                unbond_request_daa_score: None,
-                slashed_at_daa_score: None,
-                status: BondStatus::Active,
-            }
-        }
-
-        const NET: fn() -> BlockHash = || Hash64::from_bytes([0x07; 64]);
-
-        #[test]
-        fn noop_when_not_activated() {
-            // Even an attestation referencing an unknown bond passes when the
-            // gate is closed (the `false` arg below). Current nets run with the
-            // gate open (dns_activation = 0); this covers the pre-activation path.
-            let tx = stake_attestation_shard_tx(&single_attestation_shard(attestation(outpoint(1))));
-            assert_eq!(eligibility(&[tx], &ActiveBondView::new(), NET(), false), Ok(()));
-        }
-
-        #[test]
-        fn rejects_attestation_with_unknown_bond() {
-            // Activated + empty bond view ⇒ the bond does not resolve ⇒ reject.
-            let tx = stake_attestation_shard_tx(&single_attestation_shard(attestation(outpoint(1))));
-            assert_eq!(eligibility(&[tx], &ActiveBondView::new(), NET(), true), Err((Hash64::from_bytes([1; 64]), 1)));
-        }
-
-        #[test]
-        fn rejects_attestation_with_invalid_signature() {
-            // Activated + bond present & Active, but the (garbage) signature
-            // fails verification ⇒ reject at branch (b).
-            let op = outpoint(2);
-            let view = ActiveBondView::from_records([(op, active_bond(op))]);
-            let tx = stake_attestation_shard_tx(&single_attestation_shard(attestation(op)));
-            assert_eq!(eligibility(&[tx], &view, NET(), true), Err((Hash64::from_bytes([2; 64]), 1)));
-        }
-
-        #[test]
-        fn ok_when_no_attestation_shards() {
-            // Activated but no shard txs ⇒ nothing to check ⇒ Ok.
-            assert_eq!(eligibility(&[], &ActiveBondView::new(), NET(), true), Ok(()));
-        }
-    }
-
-    // kaspa-pq DNS-finality (E1/§6.1, tests T0–T2): the reason-returning TEMPLATE
-    // classifier `classify_attestation_shard_for_template`. Shares its per-attestation
-    // checks with the §B.4 validity rule (`classify_one_attestation`), so these also
-    // pin that the two never diverge. The KeepEligible accept path uses a real
-    // ML-DSA-87 signature (libcrux), so a kept shard provably also passes §B.4.
-    mod classify_attestation_shard_for_template {
-        use super::super::{AttestationDropReason, AttestationShardDecision};
-
-        fn classify(tx: &Transaction, view: &ActiveBondView, net: BlockHash, activated: bool) -> AttestationShardDecision {
-            super::super::classify_attestation_shard_for_template(tx, view, net, activated)
-        }
-        use kaspa_consensus_core::{
-            BlockHash,
-            constants::TX_VERSION,
-            dns_finality::{
-                ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN,
-                STAKE_VALIDATOR_PUBKEY_LEN, StakeAttestation, StakeBondRecord, single_attestation_shard, stake_attestation_message,
-                stake_attestation_shard_tx, validator_id_from_pubkey,
-            },
-            subnets::{SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD},
-            tx::{Transaction, TransactionOutpoint},
-        };
-        use kaspa_hashes::Hash64;
-        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
-
-        const NET: fn() -> BlockHash = || Hash64::from_bytes([0x07; 64]);
-
-        fn outpoint(b: u8) -> TransactionOutpoint {
-            TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
-        }
-
-        // A bond whose validator key is `kp`, Active from genesis. `validator_pubkey_hash`
-        // binds the pubkey so the P-1A id check passes for a matching `validator_id`.
-        fn active_bond_with_key(op: TransactionOutpoint, kp: &mldsa::MLDSA87KeyPair) -> StakeBondRecord {
-            let validator_pubkey = kp.verification_key.as_ref().to_vec();
-            StakeBondRecord {
-                version: DNS_PAYLOAD_VERSION_V1,
-                bond_outpoint: op,
-                owner_pubkey_hash: Hash64::from_bytes([0xaa; 64]),
-                validator_pubkey_hash: validator_id_from_pubkey(&validator_pubkey),
-                validator_pubkey,
-                amount: 1_000,
-                activation_daa_score: 0, // Active from genesis.
-                created_daa_score: 0,
-                unbonding_period_blocks: 100,
-                owner_reward_spk_payload: [0xdd; 64],
-                unbond_request_daa_score: None,
-                slashed_at_daa_score: None,
-                status: BondStatus::Active,
-            }
-        }
-
-        // Sign an attestation over the canonical digest with `kp`; `validator_id` is
-        // supplied so the P-1A binding can be exercised independently of the signature.
-        fn signed_attestation(
-            kp: &mldsa::MLDSA87KeyPair,
-            validator_id: Hash64,
-            bond_outpoint: TransactionOutpoint,
-            epoch: u64,
-            target_daa_score: u64,
-        ) -> StakeAttestation {
-            let target_hash = Hash64::from_bytes([0x55; 64]);
-            // Zero, as every below-fence signer emits: the classifier under test pins the
-            // below-fence path, where a non-zero VSC is itself a drop reason.
-            let vsc = Hash64::default();
-            let digest = stake_attestation_message(NET().as_byte_slice(), epoch, target_hash, target_daa_score, vsc, bond_outpoint);
-            let sig = mldsa::sign(&kp.signing_key, digest.as_bytes().as_slice(), ATTESTATION_MLDSA87_CONTEXT, [0x55u8; 32])
-                .expect("ml-dsa-87 sign");
-            StakeAttestation {
-                version: DNS_PAYLOAD_VERSION_V1,
-                validator_id,
-                bond_outpoint,
-                epoch,
-                target_hash,
-                target_daa_score,
-                validator_set_commitment: vsc,
-                signature: sig.as_ref().to_vec(),
-            }
-        }
-
-        /// MISAKA VLT PR 2: audit #4's fixed-zero VSC rule, relocated here from the stateless
-        /// layer. A non-zero VSC is its own drop reason — BEFORE the signature check, so the
-        /// reason names the actual fault.
-        #[test]
-        fn a_nonzero_vsc_is_rejected_before_the_signature_check() {
-            let kp = mldsa::generate_key_pair([9u8; 32]);
-            let op = outpoint(9);
-            let view = ActiveBondView::from_records([(op, active_bond_with_key(op, &kp))]);
-            let mut att = signed_attestation(&kp, validator_id_from_pubkey(kp.verification_key.as_ref()), op, 1, 10_000);
-            att.validator_set_commitment = Hash64::from_bytes([0x66; 64]);
-            let tx = stake_attestation_shard_tx(&single_attestation_shard(att));
-            assert_eq!(
-                classify(&tx, &view, NET(), true),
-                AttestationShardDecision::Drop { reason: AttestationDropReason::NonZeroValidatorSetCommitment, bond: op, epoch: 1 }
-            );
-        }
-
-        #[test]
-        fn keep_non_shard_when_not_activated() {
-            // Gate closed ⇒ even an ineligible shard is `KeepNonShard` (byte-identical
-            // to the pre-classifier behavior, which kept everything).
-            let kp = mldsa::generate_key_pair([1u8; 32]);
-            let att = signed_attestation(&kp, validator_id_from_pubkey(kp.verification_key.as_ref()), outpoint(1), 1, 10_000);
-            let tx = stake_attestation_shard_tx(&single_attestation_shard(att));
-            assert_eq!(classify(&tx, &ActiveBondView::new(), NET(), false), AttestationShardDecision::KeepNonShard);
-        }
-
-        #[test]
-        fn keep_non_shard_for_native_tx() {
-            // A non-shard (native) tx is always `KeepNonShard`, gate open or not.
-            let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
-            assert_eq!(classify(&tx, &ActiveBondView::new(), NET(), true), AttestationShardDecision::KeepNonShard);
-        }
-
-        // T0: active bond + valid sig + correct id ⇒ KeepEligible.
-        #[test]
-        fn t0_keep_eligible_for_active_bond_valid_sig_correct_id() {
-            let kp = mldsa::generate_key_pair([2u8; 32]);
-            let op = outpoint(2);
-            let bond = active_bond_with_key(op, &kp);
-            let view = ActiveBondView::from_records([(op, bond.clone())]);
-            // Correct id (matches the bond's validator_pubkey_hash) + a real signature.
-            let att = signed_attestation(&kp, bond.validator_pubkey_hash, op, 1, 10_000);
-            let tx = stake_attestation_shard_tx(&single_attestation_shard(att));
-            assert_eq!(classify(&tx, &view, NET(), true), AttestationShardDecision::KeepEligible { attestation_count: 1 });
-        }
-
-        // T1: inactive-bond-at-target ⇒ Drop(BondNotActiveAtTarget). The bond activates
-        // AFTER the attestation's target, so `active_bond_at(target)` resolves to None.
-        #[test]
-        fn t1_drop_bond_not_active_at_target() {
-            let kp = mldsa::generate_key_pair([3u8; 32]);
-            let op = outpoint(3);
-            let mut bond = active_bond_with_key(op, &kp);
-            bond.activation_daa_score = 20_000; // not yet active at target 10_000
-            bond.status = BondStatus::Pending;
-            let view = ActiveBondView::from_records([(op, bond.clone())]);
-            let att = signed_attestation(&kp, bond.validator_pubkey_hash, op, 1, 10_000);
-            let tx = stake_attestation_shard_tx(&single_attestation_shard(att));
-            assert_eq!(
-                classify(&tx, &view, NET(), true),
-                AttestationShardDecision::Drop { reason: AttestationDropReason::BondNotActiveAtTarget, bond: op, epoch: 1 }
-            );
-        }
-
-        // T2: validator_id mismatch ⇒ Drop(ValidatorIdMismatch). The bond is Active and
-        // the signature is valid, but the self-declared validator_id is wrong.
-        #[test]
-        fn t2_drop_validator_id_mismatch() {
-            let kp = mldsa::generate_key_pair([4u8; 32]);
-            let op = outpoint(4);
-            let bond = active_bond_with_key(op, &kp);
-            let view = ActiveBondView::from_records([(op, bond)]);
-            let wrong_id = Hash64::from_bytes([0xff; 64]);
-            let att = signed_attestation(&kp, wrong_id, op, 1, 10_000);
-            let tx = stake_attestation_shard_tx(&single_attestation_shard(att));
-            assert_eq!(
-                classify(&tx, &view, NET(), true),
-                AttestationShardDecision::Drop { reason: AttestationDropReason::ValidatorIdMismatch, bond: op, epoch: 1 }
-            );
-        }
-
-        // Bad signature ⇒ Drop(BadSignature): active bond + correct id, garbage sig.
-        #[test]
-        fn drop_bad_signature() {
-            let kp = mldsa::generate_key_pair([5u8; 32]);
-            let op = outpoint(5);
-            let bond = active_bond_with_key(op, &kp);
-            let view = ActiveBondView::from_records([(op, bond.clone())]);
-            let mut att = signed_attestation(&kp, bond.validator_pubkey_hash, op, 1, 10_000);
-            att.signature = vec![0u8; STAKE_ATTESTATION_SIG_LEN]; // garbage — never verifies
-            let tx = stake_attestation_shard_tx(&single_attestation_shard(att));
-            assert_eq!(
-                classify(&tx, &view, NET(), true),
-                AttestationShardDecision::Drop { reason: AttestationDropReason::BadSignature, bond: op, epoch: 1 }
-            );
-        }
-
-        // Malformed payload ⇒ Drop(MalformedPayload): a shard-subnetwork tx whose payload
-        // is not a decodable StakeAttestationShardPayload.
-        #[test]
-        fn drop_malformed_payload() {
-            let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, 0, vec![0xde, 0xad]);
-            match classify(&tx, &ActiveBondView::new(), NET(), true) {
-                AttestationShardDecision::Drop { reason: AttestationDropReason::MalformedPayload, epoch, .. } => {
-                    assert_eq!(epoch, 0);
-                }
-                other => panic!("expected Drop(MalformedPayload), got {other:?}"),
-            }
-        }
-
-        // kaspa-pq audit v24 (H-5): the drop-reason → mempool-hygiene-kind mapping the mining
-        // manager acts on. Intrinsic-to-the-shard reasons are TERMINAL (evict at once); the
-        // view-dependent reason is QUARANTINE (do not hard-evict — a reorg may make it eligible).
-        #[test]
-        fn h5_drop_reason_template_kind_mapping() {
-            use kaspa_consensus_core::block::AttestationTemplateDropKind;
-            assert_eq!(AttestationDropReason::MalformedPayload.template_drop_kind(), AttestationTemplateDropKind::Terminal);
-            assert_eq!(AttestationDropReason::ValidatorIdMismatch.template_drop_kind(), AttestationTemplateDropKind::Terminal);
-            assert_eq!(AttestationDropReason::BadSignature.template_drop_kind(), AttestationTemplateDropKind::Terminal);
-            assert_eq!(AttestationDropReason::BondNotActiveAtTarget.template_drop_kind(), AttestationTemplateDropKind::Quarantine);
-        }
-
-        // A garbage 64-byte pubkey in the bond cannot pass the id check anyway, so this
-        // guards that an absurd key length does not panic (defensive).
-        #[test]
-        fn drop_when_bond_has_short_pubkey() {
-            let kp = mldsa::generate_key_pair([6u8; 32]);
-            let op = outpoint(6);
-            let mut bond = active_bond_with_key(op, &kp);
-            bond.validator_pubkey = vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN]; // not kp's key
-            let view = ActiveBondView::from_records([(op, bond.clone())]);
-            let att = signed_attestation(&kp, bond.validator_pubkey_hash, op, 1, 10_000);
-            let tx = stake_attestation_shard_tx(&single_attestation_shard(att));
-            // id matches (we used bond.validator_pubkey_hash), but the sig won't verify
-            // against the mismatched bond key ⇒ BadSignature.
-            assert_eq!(
-                classify(&tx, &view, NET(), true),
-                AttestationShardDecision::Drop { reason: AttestationDropReason::BadSignature, bond: op, epoch: 1 }
-            );
-        }
-    }
-
     // kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): the stake-unbond owner-
-    // authorization rule. Unlike the mods above, this exercises the full ACCEPT
+    // authorization rule. This exercises the full ACCEPT
     // path with a real ML-DSA-87 owner signature (libcrux) — owner-authorization
     // is THE security property (it blocks the active-set grief attack).
     mod unbond_request_authorized {
@@ -3162,128 +2334,6 @@ mod tests {
     // round later, because it is the same attack: the stateless layer only establishes that two
     // payloads *would* contradict each other, and anyone can author that pair naming someone
     // else's bond.
-    mod precommit_evidence_genuine {
-        use super::super::precommit_evidence_genuine as genuine;
-        use kaspa_consensus_core::{
-            BlockHash,
-            constants::TX_VERSION,
-            dns_finality::{
-                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, PrecommitEvidencePayload, STAKE_ATTESTATION_SIG_LEN,
-                STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord, StakePrecommitPayload,
-            },
-            subnets::SUBNETWORK_ID_PRECOMMIT_EVIDENCE,
-            tx::{Transaction, TransactionOutpoint},
-        };
-        use kaspa_hashes::Hash64;
-
-        fn outpoint(b: u8) -> TransactionOutpoint {
-            TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
-        }
-
-        fn precommit(bond_outpoint: TransactionOutpoint, epoch: u64, anchor: u8, lock_anchor: u8) -> StakePrecommitPayload {
-            StakePrecommitPayload {
-                version: DNS_PAYLOAD_VERSION_V1,
-                validator_id: Hash64::from_bytes([0xa1; 64]),
-                bond_outpoint,
-                epoch,
-                target_hash: Hash64::from_bytes([anchor; 64]),
-                target_daa_score: 10_000,
-                locked_epoch: 1,
-                locked_hash: Hash64::from_bytes([lock_anchor; 64]),
-                snapshot_commitment: Hash64::default(),
-                signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN], // garbage — never verifies
-            }
-        }
-
-        fn active_bond(op: TransactionOutpoint) -> StakeBondRecord {
-            StakeBondRecord {
-                version: DNS_PAYLOAD_VERSION_V1,
-                bond_outpoint: op,
-                owner_pubkey_hash: Hash64::from_bytes([0xaa; 64]),
-                validator_pubkey_hash: Hash64::from_bytes([0xa1; 64]),
-                validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
-                amount: 1_000,
-                activation_daa_score: 0,
-                created_daa_score: 0,
-                unbonding_period_blocks: 100,
-                owner_reward_spk_payload: [0xdd; 64],
-                unbond_request_daa_score: None,
-                slashed_at_daa_score: None,
-                status: BondStatus::Active,
-            }
-        }
-
-        /// Two locks at one `locked_epoch` — the cross-branch fault.
-        fn evidence_tx(op: TransactionOutpoint) -> Transaction {
-            let ev = PrecommitEvidencePayload {
-                version: DNS_PAYLOAD_VERSION_V1,
-                bond_outpoint: op,
-                precommit_a: precommit(op, 2, 0x55, 0xb0),
-                precommit_b: precommit(op, 3, 0x99, 0xc0),
-                reporter_reward_spk_payload: [0xee; 64],
-            };
-            Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PRECOMMIT_EVIDENCE, 0, borsh::to_vec(&ev).unwrap())
-        }
-
-        const NET: fn() -> BlockHash = || Hash64::from_bytes([0x07; 64]);
-        const FRESH_DAA: u64 = 10_000;
-        const WINDOW: u64 = 200_000;
-
-        #[test]
-        fn noop_when_not_activated() {
-            assert_eq!(genuine(&[evidence_tx(outpoint(1))], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, false), Ok(()));
-        }
-
-        #[test]
-        fn rejects_evidence_with_unknown_bond() {
-            assert_eq!(
-                genuine(&[evidence_tx(outpoint(1))], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, true),
-                Err(Hash64::from_bytes([1; 64]))
-            );
-        }
-
-        #[test]
-        fn rejects_evidence_with_invalid_signatures() {
-            // The attack this rule exists for: a well-formed, genuinely contradictory pair that
-            // the accused validator never signed. Without the signature check it would burn any
-            // bond for the price of one transaction.
-            let op = outpoint(2);
-            let view = ActiveBondView::from_records([(op, active_bond(op))]);
-            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
-        }
-
-        #[test]
-        fn rejects_evidence_re_pointed_at_another_bond() {
-            // `validator_id` is not inside the signed digest, so without the bond binding a real
-            // pair of signatures could be aimed at a different validator's stake.
-            let op = outpoint(2);
-            let mut bond = active_bond(op);
-            bond.validator_pubkey_hash = Hash64::from_bytes([0xff; 64]);
-            let view = ActiveBondView::from_records([(op, bond)]);
-            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
-        }
-
-        #[test]
-        fn rejects_stale_evidence_outside_the_window() {
-            let op = outpoint(2);
-            let view = ActiveBondView::from_records([(op, active_bond(op))]);
-            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), 10_000 + WINDOW + 1, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
-        }
-
-        #[test]
-        fn rejects_evidence_when_bond_had_no_stake_at_risk() {
-            let op = outpoint(2);
-            let mut bond = active_bond(op);
-            bond.activation_daa_score = 50_000; // still Pending at the precommits' target
-            let view = ActiveBondView::from_records([(op, bond)]);
-            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
-        }
-
-        #[test]
-        fn ok_when_no_precommit_evidence() {
-            assert_eq!(genuine(&[], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, true), Ok(()));
-        }
-    }
 
     // MISAKA VLT §7: the compute-fraud-proof genuineness rule's pure core.
     //

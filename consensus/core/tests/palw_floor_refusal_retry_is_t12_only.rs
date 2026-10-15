@@ -35,10 +35,11 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
 /// testnet-12 as THIS build ships it — the DAA-750 post-launch release (the same pins
 /// `palw_registry_resilience_is_t12_only`'s `T12_RELEASE` holds): params, identity, schedule.
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was dbbc9104…, 5de80e64…, 7c652212…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
-    "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
+    "41f0b7851b523ec378448d1f2d5fc2cc1562092a73ebfeab98c6999f65a75db3",
+    "92042711856b239713d0376b7466422e561618fc51e115e1557be34b078e5acd",
+    "6c94fae224479c3e6cdcb3a7ac542749b8903ad457af363a6ca7d75e2cfb2416",
 );
 
 /// testnet-12 as it LAUNCHED (`0e8ec984e`): both post-launch lists dormant.
@@ -51,22 +52,25 @@ const T12_LAUNCH: (&str, &str, &str) = (
 /// Every other preset at the release, as `palw_registry_resilience_is_t12_only` pins them.
 const OTHERS_AT_THE_RELEASE: &[(&str, &str, &str, &str)] = &[
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was bd633ce9…, 44cb8fd7…, 5a1d8d56…)
         "testnet-11",
-        "bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29",
-        "44cb8fd729e9575a6e3b1e72c466b8abce4b9ecd81bb556685c9ba225487117f",
-        "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
+        "0c2c022a11572d73779fc0610cf65d4147feb499a9b58472901d3d73ecfc1f71",
+        "bf4cc0b3e2fa208a18cce48d0c33db74e48adf275a069687b534856411f1c83e",
+        "f023f74befcdaf732f213616c79fd94782d7728f835151bbfd986498f962bd64",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 7a27f341…, 7a27f341…, edd80c01…)
         "devnet",
-        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
-        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
-        "edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f",
+        "f17c6555a617736bd13e90eaab80974223149c211d08af516008bd6500010b1f",
+        "f17c6555a617736bd13e90eaab80974223149c211d08af516008bd6500010b1f",
+        "d82068a0080c47f45f376c81c621ec002aa8541a22c49e9d0a373e263c39c680",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was eb866c61…, 7819e5ed…, a1ed7ff0…)
         "mainnet",
-        "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5",
-        "7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8",
-        "a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4",
+        "0befd2fa1da052fb88ef8a04cc1bd6412ea560371aaec606790194dee41ac3fa",
+        "db7f8f9869a612c6e90ff8a01806569a0fe7391cfa8226c3c3a89680ae83d277",
+        "7b8f4090c31d524312f1b6d8a91d0e47544b031a62560d90b9a1bc65b709e7c6",
     ),
     (
         "testnet-10",

@@ -27,23 +27,25 @@ use kaspa_hashes::Hash64;
 /// — the values every other testnet-12-only fence pins, unmoved.
 const BEFORE_THE_HORIZON: &[(&str, &str, &str, &str)] = &[
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was bd633ce9…, 44cb8fd7…, 5a1d8d56…)
         "testnet-11",
-        "bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29",
-        "44cb8fd729e9575a6e3b1e72c466b8abce4b9ecd81bb556685c9ba225487117f",
-        "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
+        "0c2c022a11572d73779fc0610cf65d4147feb499a9b58472901d3d73ecfc1f71",
+        "bf4cc0b3e2fa208a18cce48d0c33db74e48adf275a069687b534856411f1c83e",
+        "f023f74befcdaf732f213616c79fd94782d7728f835151bbfd986498f962bd64",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 7a27f341…, 7a27f341…, edd80c01…)
         "devnet",
-        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
-        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
-        "edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f",
+        "f17c6555a617736bd13e90eaab80974223149c211d08af516008bd6500010b1f",
+        "f17c6555a617736bd13e90eaab80974223149c211d08af516008bd6500010b1f",
+        "d82068a0080c47f45f376c81c621ec002aa8541a22c49e9d0a373e263c39c680",
     ),
     (
-        // re-pin 2026-09-25 @57c1fe323c44: t12 shipping re-pin 2026-09-25 (rcore/int-3 57c1fe32): mainnet values (λ 5, 1,620 s tolerance, level 225; mainnet takes t12's DNS set, carve, Decision A), the beat lead cap (132 s past the receiver clock), the execution-quantum maturity 120 DAA, the readiness-memory / duties / mempool node fixes; T41 v22 golden moves because R1 (palw_activation_pool) excludes genesis rows from silence reclamation. Genesis a27f8f44 and premine txid 5e0d5f1b unchanged. (was badaa8e9…, 00d98599…)
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was eb866c61…, 7819e5ed…, a1ed7ff0…)
         "mainnet",
-        "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5",
-        "7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8",
-        "a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4",
+        "0befd2fa1da052fb88ef8a04cc1bd6412ea560371aaec606790194dee41ac3fa",
+        "db7f8f9869a612c6e90ff8a01806569a0fe7391cfa8226c3c3a89680ae83d277",
+        "7b8f4090c31d524312f1b6d8a91d0e47544b031a62560d90b9a1bc65b709e7c6",
     ),
 ];
 
@@ -57,11 +59,11 @@ const BEFORE_THE_HORIZON: &[(&str, &str, &str, &str)] = &[
 /// Re-pinned 2026-09-25 (`rcore/exec-maturity-120`): testnet-12's 120-DAA execution-quantum maturity
 /// (`palw_exec_maturity_is_t12_only`) is in this twin — and so are c6ffd812's mainnet values, which the
 /// merge `2004c588` left un-re-pinned here. Previous: `fd7353c0…` / `a7fe561c…` / `28d866f1…`.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was 6ae62ed9…, d03277bb…)
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 715b7894…, 9f267fb1…, dc74b91d…)
 const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (
-    "715b7894d2988224d15e2ae97fab907e5ee96638508d6fccf100314c85da9cf0",
-    "9f267fb1794c366a70a9b9008773bc470f8d0ab03ebb0ca26e9a28eaacb70ab4",
-    "dc74b91d96003cf08731828c3933f071c6391ce3503bfd8659e87c2a8ea3bdd4",
+    "985465997cf4816a901e7217750af45bcec15fd47cf6c70b0795dfd34d3b137a",
+    "971a362605f139bcb698e3cad868eec18cafefd23616cbb67f7308c28eac48bd",
+    "22eae96e6938e7a22b3ddfd92869ae727e1ee2228d1f621aaf8b0ef3ba2ab0b8",
 );
 
 /// testnet-12 with the horizon, on the same tree (at `3e9ae4ba`, before the pool and int-3 merges:
@@ -71,11 +73,11 @@ const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (
 /// (= `palw_exec_maturity_is_t12_only`'s `T12_WITH_THE_MATURITY`; at `2004c588` they were `2790d7ce…` /
 /// `1fd06c99…` / `e0af0218…`, which this pin never caught up with). Previous: `4d38b3f1…` / `2477a803…` /
 /// `06dd5566…`.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was b41089e3…, 34b0dc14…)
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 5ee7fd8e…, 5de80e64…, 1678e073…)
 const T12_WITH_THE_HORIZON: (&str, &str, &str) = (
-    "5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6",
-    "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9",
+    "59a6d1b00434b42129201098fafb2c889a27d6392a87e531df6e1409beeb6ce7",
+    "92042711856b239713d0376b7466422e561618fc51e115e1557be34b078e5acd",
+    "bc0600cc47b9433b99b715e902e3892e86295460b98cc1893c4fccc26f2b780c",
 );
 
 fn shipped(name: &str) -> Params {

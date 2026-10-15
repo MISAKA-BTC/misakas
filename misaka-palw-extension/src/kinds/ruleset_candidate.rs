@@ -73,11 +73,7 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             companion(&mut params.palw_attempt_work, name, "work_log2 and the nonce budget", at, |f, at| f.activation = at)?
         }
         "palw_attempt_activation" => params.palw_attempt_activation = Some(at),
-        "dns_bft_gate" => {
-            companion(&mut params.dns_bft_gate, name, "t_leak_daa, the re-entry depth and the validator floor", at, |f, at| {
-                f.activation = at
-            })?
-        }
+
         "palw_inactivity_leak" => {
             companion(&mut params.palw_inactivity_leak, name, "t_leak_daa and the re-entry depth", at, |f, at| f.activation = at)?
         }
@@ -249,7 +245,8 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_activation_pool" => {
             genesis_only(name, at)?;
             let terms = params.palw_activation_pool.map(|pool| pool.terms).unwrap_or_default();
-            params.palw_activation_pool = Some(kaspa_consensus_core::config::params::PalwActivationPoolParamsV1 { activation: at, terms });
+            params.palw_activation_pool =
+                Some(kaspa_consensus_core::config::params::PalwActivationPoolParamsV1 { activation: at, terms });
         }
         // The readiness-V2 horizon (user decision 2026-09-25, readiness capacity option (a)): genesis-only
         // (a crossing would count one row by two horizons), so a height is refused here by name. At

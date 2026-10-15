@@ -33,7 +33,7 @@ impl PalwDnsRetirementV1 {
         b.extend(0u16.to_le_bytes()); // DNS subsidy / normal fee / finality fee shares
         b.extend(10_000u16.to_le_bytes()); // normal and native-settlement fees go to their carrier
         b.extend(NATIVE_SETTLEMENT_SNAPSHOT_VERSION_V1.to_le_bytes());
-        b.extend([0x10, 0x11, 0x19]); // new DNS bonds, attestation shards and precommits are retired
+        b.extend([0x10, 0x11, 0x19, 0x1a]); // new DNS bonds, attestation shards and precommits are retired
         b
     }
 }
@@ -68,12 +68,21 @@ impl PalwSettlementPolicyV1 {
 
 /// DNS history, exits and PALW objects retain their own validators. Peer-discovery DNS is unrelated.
 pub fn creates_dns_participation(id: &crate::subnets::SubnetworkId) -> bool {
-    matches!(*id, SUBNETWORK_ID_STAKE_BOND | SUBNETWORK_ID_STAKE_ATTESTATION_SHARD | SUBNETWORK_ID_STAKE_PRECOMMIT)
+    matches!(
+        *id,
+        SUBNETWORK_ID_STAKE_BOND
+            | SUBNETWORK_ID_STAKE_ATTESTATION_SHARD
+            | SUBNETWORK_ID_STAKE_PRECOMMIT
+            | SUBNETWORK_ID_PRECOMMIT_EVIDENCE
+    )
 }
 
 /// Historical DNS equivocation is admitted for a finite accepting-DAA horizon only.
 /// PALW evidence and exits are not routed through this retired-role check.
 pub fn legacy_dns_evidence_allowed_v1(r: PalwDnsRetirementV1, tx: &crate::tx::Transaction, daa: u64) -> bool {
+    if creates_dns_participation(&tx.subnetwork_id) {
+        return false;
+    }
     if !r.activation.is_active(daa) {
         return true;
     }
@@ -81,10 +90,6 @@ pub fn legacy_dns_evidence_allowed_v1(r: PalwDnsRetirementV1, tx: &crate::tx::Tr
         borsh::from_slice::<crate::dns_finality::SlashingEvidencePayload>(&tx.payload)
             .ok()
             .map(|e| (e.attestation_a.target_daa_score, e.attestation_b.target_daa_score))
-    } else if tx.subnetwork_id == SUBNETWORK_ID_PRECOMMIT_EVIDENCE {
-        borsh::from_slice::<crate::dns_finality::PrecommitEvidencePayload>(&tx.payload)
-            .ok()
-            .map(|e| (e.precommit_a.target_daa_score, e.precommit_b.target_daa_score))
     } else {
         return true;
     };
@@ -371,11 +376,10 @@ mod tests {
         );
     }
     #[test]
-    fn rfc0012_retirement_keeps_exits_evidence_and_palw_roles() {
+    fn rfc0012_retirement_keeps_exits_and_palw_roles() {
         for id in [
             SUBNETWORK_ID_STAKE_UNBOND,
             SUBNETWORK_ID_SLASHING_EVIDENCE,
-            SUBNETWORK_ID_PRECOMMIT_EVIDENCE,
             SUBNETWORK_ID_PALW_COMMITMENT,
             SUBNETWORK_ID_PALW_RECEIPT,
             SUBNETWORK_ID_PALW_LIFECYCLE,
@@ -383,6 +387,7 @@ mod tests {
             assert!(!creates_dns_participation(&id));
         }
         assert!(creates_dns_participation(&SUBNETWORK_ID_STAKE_BOND));
+        assert!(creates_dns_participation(&SUBNETWORK_ID_PRECOMMIT_EVIDENCE));
     }
     #[test]
     fn rfc0012_equal_daa_does_not_count_work_before_the_executed_effect() {
@@ -440,19 +445,17 @@ mod tests {
     #[test]
     fn rfc0012_historical_evidence_has_a_finite_horizon_and_no_post_retirement_target() {
         use crate::{
-            dns_finality::{PrecommitEvidencePayload, StakePrecommitPayload},
+            dns_finality::{SlashingEvidencePayload, StakeAttestation},
             tx::{Transaction, TransactionOutpoint},
         };
-        let vote = |target| StakePrecommitPayload {
+        let vote = |target| StakeAttestation {
             version: 1,
             validator_id: h(1),
             bond_outpoint: TransactionOutpoint::new(h(2), 0),
             epoch: 1,
             target_hash: h(3),
             target_daa_score: target,
-            locked_epoch: 0,
-            locked_hash: h(0),
-            snapshot_commitment: h(4),
+            validator_set_commitment: h(4),
             signature: vec![],
         };
         let tx = |target| {
@@ -461,13 +464,13 @@ mod tests {
                 vec![],
                 vec![],
                 0,
-                SUBNETWORK_ID_PRECOMMIT_EVIDENCE,
+                SUBNETWORK_ID_SLASHING_EVIDENCE,
                 0,
-                borsh::to_vec(&PrecommitEvidencePayload {
+                borsh::to_vec(&SlashingEvidencePayload {
                     version: 1,
                     bond_outpoint: TransactionOutpoint::new(h(2), 0),
-                    precommit_a: vote(99),
-                    precommit_b: vote(target),
+                    attestation_a: vote(99),
+                    attestation_b: vote(target),
                     reporter_reward_spk_payload: [0; 64],
                 })
                 .unwrap(),
@@ -477,6 +480,9 @@ mod tests {
         assert!(legacy_dns_evidence_allowed_v1(r, &tx(99), 110));
         assert!(!legacy_dns_evidence_allowed_v1(r, &tx(99), 111));
         assert!(!legacy_dns_evidence_allowed_v1(r, &tx(100), 100));
-        assert!(legacy_dns_evidence_allowed_v1(r, &tx(100), 99), "history below the fence uses the old validator");
+        assert!(
+            legacy_dns_evidence_allowed_v1(r, &tx(100), 99),
+            "the retained legacy evidence horizon begins at its configured fence"
+        );
     }
 }

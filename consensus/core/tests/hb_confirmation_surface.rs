@@ -240,7 +240,7 @@ fn heartbeat_only_history_settles_nothing_but_matures_everything() {
 /// anchors** — the mempool's rule (`coinbase_spend_settled` under the node's
 /// `dns_coinbase_settlement`, which no longer carries a settled-anchor clock), on testnet-12's own
 /// params, at the exact bound: one DAA short it waits, at the long maturity it is spendable, and a
-/// DNS-final anchor at or past the block still releases it early.
+/// historical DNS-final anchor cannot release it early.
 #[test]
 fn a_coinbase_is_spendable_after_its_daa_maturity_with_zero_settled_anchors() {
     let t12 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
@@ -252,7 +252,7 @@ fn a_coinbase_is_spendable_after_its_daa_maturity_with_zero_settled_anchors() {
     assert!(!coinbase_spend_settled(block, block + long - 1, floor, Some(&no_anchor)), "one DAA short of the maturity");
     assert!(coinbase_spend_settled(block, block + long, floor, Some(&no_anchor)), "at the DAA maturity, with no anchor at all");
     let dns_final = DnsCoinbaseSettlement { long_maturity_daa: long, confirmed_anchor_daa: Some(block) };
-    assert!(coinbase_spend_settled(block, block + floor.max(1), floor, Some(&dns_final)), "DNS-final early release");
+    assert!(!coinbase_spend_settled(block, block + floor.max(1), floor, Some(&dns_final)), "historical DNS-final anchors grant no early release");
     // The validator's coin selection asks the same DAA number (`coinbase_spend_maturity`), so it
     // never selects a coinbase the mempool refuses and never waits on anchors the mempool ignores.
     assert_eq!(t12.coinbase_spend_maturity(), floor.max(long));

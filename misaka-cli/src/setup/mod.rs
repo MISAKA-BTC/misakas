@@ -60,7 +60,6 @@ const PREPARE_JOB: &str = "prepare-vps";
 const DEFAULT_VALIDATOR_DIR: &str = "/var/lib/misaka/validator";
 const DEFAULT_VALIDATOR_KEY: &str = "/var/lib/misaka/validator/validator.seed";
 const DEFAULT_VALIDATOR_DB: &str = "/var/lib/misaka/validator/validator.state";
-const DEFAULT_VALIDATOR_ENV: &str = "/etc/misaka/validator.env";
 const DEFAULT_MINER_ENV: &str = "/etc/misaka/miner.env";
 
 #[derive(Subcommand, Debug)]
@@ -1738,10 +1737,6 @@ fn validator_db_path() -> PathBuf {
     PathBuf::from(DEFAULT_VALIDATOR_DB)
 }
 
-fn validator_env_path() -> PathBuf {
-    PathBuf::from(DEFAULT_VALIDATOR_ENV)
-}
-
 fn miner_env_path() -> PathBuf {
     PathBuf::from(DEFAULT_MINER_ENV)
 }
@@ -1936,68 +1931,8 @@ async fn validator_balance(ctx: &Ctx, args: &WebArgs) -> SetupResult<serde_json:
     }))
 }
 
-async fn validator_bond(ctx: &Ctx, args: &WebArgs, amount: &str) -> SetupResult<serde_json::Value> {
-    if amount.trim().is_empty() {
-        return Err(CliError::new(exit::GENERIC, "amount is required, e.g. 10BILI"));
-    }
-    let key_path = validator_key_path();
-    if !key_path.is_file() {
-        return Err(CliError::new(exit::GENERIC, "validator key is missing; generate validator key first"));
-    }
-    let borsh = wrpc_borsh_endpoint(&ctx.network, &ctx.rpc)?;
-    let output = match run_capture(
-        "kaspa-pq-validator",
-        vec![
-            "bond".to_string(),
-            "--node-wrpc-borsh".to_string(),
-            borsh,
-            "--validator-key".to_string(),
-            key_path.display().to_string(),
-            "--amount".to_string(),
-            amount.trim().to_string(),
-            "--network".to_string(),
-            ctx.network.clone(),
-        ],
-    ) {
-        Ok(output) => output,
-        Err(e) if e.msg.contains("not enough MATURE funding") => {
-            let state = hydrate_validator_state_from_key(&ctx.network, &args.state_file, load_state(&args.state_file));
-            let snapshot = node_snapshot(ctx).await;
-            return Ok(serde_json::json!({
-                "ok": false,
-                "error": e.msg,
-                "validator": {
-                    "keyPath": key_path.display().to_string(),
-                    "keyExists": key_path.is_file(),
-                    "validatorId": state.validator.validator_id,
-                    "fundingAddress": state.validator.funding_address,
-                    "bondOutpoint": state.validator.bond_outpoint,
-                    "nodeSynced": snapshot.synced,
-                    "maturity": maturity_progress_value(&ctx.network, state.validator.miner_start_daa_score, snapshot.virtual_daa_score),
-                }
-            }));
-        }
-        Err(e) => return Err(e),
-    };
-    let bond = parse_prefixed_output(&output, "bond_outpoint");
-    let mut state = hydrate_validator_state_from_key(&ctx.network, &args.state_file, load_state(&args.state_file));
-    state.validator.bond_outpoint = bond.clone();
-    state.validator.key = Some(key_path.display().to_string());
-    state.validator.signed_epoch_db = Some(validator_db_path().display().to_string());
-    write_state(&args.state_file, &state)?;
-    Ok(serde_json::json!({
-        "ok": bond.is_some(),
-        "message": if bond.is_some() { "Bond transaction submitted. Press Validator Status, then Start Validator when active." } else { "Bond command finished, but bond_outpoint was not found in output." },
-        "validator": {
-            "bondOutpoint": bond,
-            "amount": amount,
-            "keyPath": key_path.display().to_string(),
-            "keyExists": key_path.is_file(),
-            "validatorId": state.validator.validator_id,
-            "fundingAddress": state.validator.funding_address,
-        },
-        "logs": output,
-    }))
+async fn validator_bond(_ctx: &Ctx, _args: &WebArgs, _amount: &str) -> SetupResult<serde_json::Value> {
+    Err(CliError::new(exit::GENERIC, "DNS validator onboarding is retired; use misaka verifier setup for PALW panel duties"))
 }
 
 fn validator_chain_status(ctx: &Ctx, args: &WebArgs) -> SetupResult<serde_json::Value> {
@@ -2031,65 +1966,8 @@ fn validator_chain_status(ctx: &Ctx, args: &WebArgs) -> SetupResult<serde_json::
     }))
 }
 
-fn render_validator_unit(service_user: &str, network: &str, borsh: &str) -> String {
-    format!(
-        "[Unit]\n\
-Description=MISAKA validator sidecar\n\
-After=misaka-kaspad.service\n\
-Requires=misaka-kaspad.service\n\n\
-[Service]\n\
-User={service_user}\n\
-Group={service_user}\n\
-EnvironmentFile=/etc/misaka/validator.env\n\
-ExecStart=/usr/local/bin/kaspa-pq-validator run \\\n  --node-wrpc-borsh {borsh} \\\n  --validator-key {DEFAULT_VALIDATOR_KEY} \\\n  --stake-bond ${{STAKE_BOND}} \\\n  --signed-epoch-db {DEFAULT_VALIDATOR_DB} \\\n  --network {network}\n\
-Restart=always\n\
-RestartSec=10\n\
-LimitNOFILE=1048576\n\n\
-[Install]\n\
-WantedBy=multi-user.target\n"
-    )
-}
-
-async fn validator_service_install(ctx: &Ctx, args: &WebArgs) -> SetupResult<serde_json::Value> {
-    if root_uid() != Some(0) {
-        return Err(CliError::new(exit::UNSAFE_REFUSED, "validator service install must be run as root or through sudo"));
-    }
-    let state = hydrate_validator_state_from_key(&ctx.network, &args.state_file, load_state(&args.state_file));
-    let bond = state
-        .validator
-        .bond_outpoint
-        .clone()
-        .ok_or_else(|| CliError::new(exit::GENERIC, "bond outpoint is unknown; create bond first"))?;
-    if !validator_key_path().is_file() {
-        return Err(CliError::new(exit::GENERIC, "validator key is missing; generate validator key first"));
-    }
-    ensure_validator_dir(&args.service_user)?;
-    let env_path = validator_env_path();
-    let env = format!("STAKE_BOND={bond}\n");
-    write_if_changed(&env_path, &env, args.force)?;
-    run_checked("chmod", vec!["0600".to_string(), env_path.display().to_string()])?;
-    let borsh = wrpc_borsh_endpoint(&ctx.network, &ctx.rpc)?;
-    let unit = render_validator_unit(&args.service_user, &ctx.network, &borsh);
-    let unit_path = service_unit_path(DEFAULT_VALIDATOR_SERVICE);
-    write_if_changed(&unit_path, &unit, args.force)?;
-    run_checked("systemctl", ["daemon-reload"])?;
-    run_checked("systemctl", ["enable", "--now", DEFAULT_VALIDATOR_SERVICE])?;
-    let snapshot = node_snapshot(ctx).await;
-    Ok(serde_json::json!({
-        "ok": true,
-        "message": "Validator service installed and started.",
-        "validator": {
-            "service": DEFAULT_VALIDATOR_SERVICE,
-            "serviceState": service_state(DEFAULT_VALIDATOR_SERVICE),
-            "keyPath": DEFAULT_VALIDATOR_KEY,
-            "keyExists": validator_key_path().is_file(),
-            "validatorId": state.validator.validator_id,
-            "fundingAddress": state.validator.funding_address,
-            "bondOutpoint": bond,
-            "nodeSynced": snapshot.synced,
-            "unitPath": unit_path.display().to_string(),
-        }
-    }))
+async fn validator_service_install(_ctx: &Ctx, _args: &WebArgs) -> SetupResult<serde_json::Value> {
+    Err(CliError::new(exit::UNSAFE_REFUSED, "DNS validator service is retired; configure PALW producer/Panel duties in kaspad"))
 }
 
 fn render_miner_unit(service_user: &str, network: &str, grpc: &str) -> String {

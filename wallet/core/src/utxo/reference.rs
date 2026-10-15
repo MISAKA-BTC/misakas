@@ -31,7 +31,7 @@ pub trait UtxoEntryReferenceExtension {
     fn maturity(&self, params: &NetworkParams, current_daa_score: u64) -> Maturity;
     fn balance(&self, params: &NetworkParams, current_daa_score: u64) -> Balance;
 
-    /// DNS-accelerated coinbase settlement, evaluated by the SAME
+    /// Long DAA coinbase maturity, evaluated by the same
     /// [`kaspa_consensus_core::dns_finality::coinbase_spend_settled`] rule the node's mempool
     /// enforces — one function, two callers, no drift. `true` for networks without settlement
     /// (`coinbase_settlement_long_maturity_daa == 0`) and for non-coinbase entries.
@@ -77,13 +77,8 @@ impl UtxoEntryReferenceExtension for UtxoEntryReference {
         if long_maturity == 0 || !self.is_coinbase() {
             return true;
         }
-        let anchor = params.dns_confirmed_anchor_daa();
-        // **The node's own rule** (`coinbase_spend_settled`, the mempool's): DAA-based maturity only
-        // — the long fallback, or DNS-final early release (the user's Mainnet Decision A,
-        // 2026-09-24, removed the settled-anchor second clock from coinbases), so this estimate and
-        // the mempool now give one answer on every network.
-        let settlement =
-            DnsCoinbaseSettlement { long_maturity_daa: long_maturity, confirmed_anchor_daa: (anchor > 0).then_some(anchor) };
+        // DNS finality is retired. Historical wallet/RPC anchor values cannot shorten maturity.
+        let settlement = DnsCoinbaseSettlement { long_maturity_daa: long_maturity, confirmed_anchor_daa: None };
         coinbase_spend_settled(self.block_daa_score(), current_daa_score, 0, Some(&settlement))
     }
 }

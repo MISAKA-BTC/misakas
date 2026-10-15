@@ -21,25 +21,28 @@ use kaspa_consensus_core::config::params::{
 /// testnet-11's and devnet's params and identity ids and nothing else (see `BEFORE_THE_FLOOR`).
 const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was bd633ce9…, 44cb8fd7…, 5a1d8d56…)
         "testnet-11",
-        "bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29",
-        "44cb8fd729e9575a6e3b1e72c466b8abce4b9ecd81bb556685c9ba225487117f",
-        "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
+        "0c2c022a11572d73779fc0610cf65d4147feb499a9b58472901d3d73ecfc1f71",
+        "bf4cc0b3e2fa208a18cce48d0c33db74e48adf275a069687b534856411f1c83e",
+        "f023f74befcdaf732f213616c79fd94782d7728f835151bbfd986498f962bd64",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 7a27f341…, 7a27f341…, edd80c01…)
         "devnet",
-        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
-        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
-        "edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f",
+        "f17c6555a617736bd13e90eaab80974223149c211d08af516008bd6500010b1f",
+        "f17c6555a617736bd13e90eaab80974223149c211d08af516008bd6500010b1f",
+        "d82068a0080c47f45f376c81c621ec002aa8541a22c49e9d0a373e263c39c680",
     ),
     // Re-pinned 2026-09-25: mainnet's DNS set moved to testnet-12's numbers (6 validators x 20M MSK,
     // 120M MSK active stake, the 600-DAA coinbase long maturity; user decision). The schedule id did not
     // move. Previous: params `badaa8e9…`, identity `00d98599…`.
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was eb866c61…, 7819e5ed…, a1ed7ff0…)
         "mainnet",
-        "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5",
-        "7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8",
-        "a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4",
+        "0befd2fa1da052fb88ef8a04cc1bd6412ea560371aaec606790194dee41ac3fa",
+        "db7f8f9869a612c6e90ff8a01806569a0fe7391cfa8226c3c3a89680ae83d277",
+        "7b8f4090c31d524312f1b6d8a91d0e47544b031a62560d90b9a1bc65b709e7c6",
     ),
 ];
 
@@ -85,11 +88,11 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
 /// HIGH): armed from genesis on testnet-12 and hashed Some-only into all three ids;
 /// `palw_clock_lead_cap_is_t12_only` pins that taking it away returns testnet-12's previous ids.
 /// Previous: `05173205…` / `df02039d…` / `beeaa0a8…`.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was e4d6c4b0…, e5478caa…)
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was b09de8cf…, 7be7b92f…, b7500a13…)
 const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "b09de8cfbd6a730f15ca47dbcc2c5de7a8ebffb53cc82b11b0a23db61137db71",
-    "7be7b92fd3583a6d288ebcd417d3f2cee9ab7d86f13967c19ee28c9aec08c62f",
-    "b7500a134ca5c4fe3f6451076a1024891eb24cc8aa3e3681a112d14fdbb92f4b",
+    "0115f56372859006ec45321571457e04a6398645f364c87be55b111577fd4392",
+    "c94698731c97b2359d355091b0ed28abf074ad8789f0aed1065dfd0bd6bb8a33",
+    "4cbc50f7428d04dd3088780866cfec86db8f61ee980aea2fbbeb9b3db86d12b2",
 );
 
 /// testnet-12 with this fence AND `palw_class_verify_deadline` taken away — the depth re-derived
@@ -104,11 +107,11 @@ const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
 ///
 /// **Re-pinned 2026-09-25 with [`T12_BEFORE_THE_ATTRIBUTION`], for the lead cap**
 /// (`palw_clock_lead_cap`). Previous: `2343195d…` / `1e06025d…` / `b08b25bd…`.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was 205e4dd5…, f65dcc27…)
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was ca795cfd…, 0d7ca2ba…, d414fa7a…)
 const T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE: (&str, &str, &str) = (
-    "ca795cfdfec408e8875237a4756a8d2f7d80d7fab39c9a2fbe51a08ad12637c6",
-    "0d7ca2bade522865cc0c3f464262b90834064de57ad1c984ecdbf11b3cab9c8c",
-    "d414fa7a6d7f591e6cf2a6be07cf8185ac8bfc2692cec286dbccb35419cebce2",
+    "1c437a43f4220551c9506d3501b6998bc62e7df8d2f899fea7cd436adb9f9610",
+    "1f1fc9c8c0720dd18351a78efbec0db5a8bc4c2de5cf340bd3102651f23aca24",
+    "541413435eb130c36470cdf4847db3085ed26ee8a9b46f1e07c7e3a3f80a30fa",
 );
 
 fn shipped(name: &str) -> Params {

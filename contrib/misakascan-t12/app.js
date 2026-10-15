@@ -2602,7 +2602,7 @@ async function renderOverlay(){
 
     ${vsRows ? `<h2 class="sec">This node's validator</h2>
       <div class="kv">${vsRows.map(r=>`<div class="row"><div class="key">${r[0]}</div><div class="val">${r[1]}</div></div>`).join("")}</div>`
-      : `<h2 class="sec">This node's validator</h2><div class="note">This node is not running the validator service (<span class="mono">--enable-validator</span> off). Validator/stake figures above are derived from on-chain bond &amp; attestation transactions.</div>`}
+      : `<h2 class="sec">This node's validator</h2><div class="note">DNS validator voting has been retired. Historical bond exits remain available; PALW producer and panel duties use their own keys.</div>`}
 
     <h2 class="sec">Stake bonds (${bonds.length})</h2>
     ${bonds.length ? `<table class="tbl"><thead><tr><th>Bond (tx id)</th><th>Validator id</th><th class="num">Amount</th><th class="num">Activation DAA</th><th>Status</th></tr></thead><tbody>${

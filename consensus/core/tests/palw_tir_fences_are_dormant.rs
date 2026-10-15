@@ -111,124 +111,144 @@ fn rulesets() -> Vec<(&'static str, Params)> {
 /// before the first Phase F field (see the module doc). Never transcribed: printed by this test.
 const PINS: &[(&str, &str, &str, &str)] = &[
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was eb866c61…, 7819e5ed…, a1ed7ff0…)
         "MAINNET_PARAMS",
-        "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5",
-        "7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8",
-        "a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4",
+        "0befd2fa1da052fb88ef8a04cc1bd6412ea560371aaec606790194dee41ac3fa",
+        "db7f8f9869a612c6e90ff8a01806569a0fe7391cfa8226c3c3a89680ae83d277",
+        "7b8f4090c31d524312f1b6d8a91d0e47544b031a62560d90b9a1bc65b709e7c6",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 3de9ba33…, 22307d0c…, 7ea3296f…)
         "TESTNET_PARAMS",
-        "3de9ba33581b12b8478a1d476a4e58889ed21ddb91dc24cc00706f49dd5b5b97",
-        "22307d0c46b75110aea7967d16708fdf50a69f31450f7ed44d7309574395972a",
-        "7ea3296f36fc827898aa6560a1f71159652a12a7dd69105178564b9f7723d5d0",
+        "3cbf3945aaa0b2f4e195ef7e2229e0d71690ed5bcc561da774e274caf8b1fa45",
+        "e2fb02a20a1c22c740f1ed4a780c805b8b49fdd68139d5b7490558fe514feb16",
+        "e86052cdfea252fde7c2277087aeda5566c41e9161f083705e99bf3180653ff6",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 03b8564e…, 929a3367…, cb379fa0…)
         "TESTNET11_PARAMS",
-        "03b8564ece85e237b9252f390d0a73001bd67d02aee26418032a716e94057beb",
-        "929a3367d45faebd8c23927923abf10f91e6025cfb4b52a1ecb8768ade2d0e78",
-        "cb379fa021867dab89971e6f99a3469a6d044084d688113fa0b8e20f93af04d1",
+        "a04d00987327c9e5b051baddea37b014d46344efad2a67632816553d83e93266",
+        "8c9f6252df37aded198710cf68e26ea6fa4803e3a17656b163276e4c51af8180",
+        "761a82012a0781e618139c5fa25ae9b48821317f16af45b43ec0d7cec910f4fa",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 80cbefe8…, 80cbefe8…, edd80c01…)
         "DEVNET_PARAMS",
-        "80cbefe885c82921843f431a0d0ca85d93bec6d6cd74f0bf3413c2fd3827be52",
-        "80cbefe885c82921843f431a0d0ca85d93bec6d6cd74f0bf3413c2fd3827be52",
-        "edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f",
+        "c5c67b0357c2bbb89f15477f09373c6a13680090ef983ad0cd1d5f9e7bad5964",
+        "c5c67b0357c2bbb89f15477f09373c6a13680090ef983ad0cd1d5f9e7bad5964",
+        "d82068a0080c47f45f376c81c621ec002aa8541a22c49e9d0a373e263c39c680",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 63238ba1…, 63238ba1…, f981edc9…)
         "SIMNET_PARAMS",
-        "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd",
-        "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd",
-        "f981edc9bff1b71ae46abf030c0c56c40beafabeeae78d8435dd502ad6191f69",
+        "5fca6e0c631ea9327fc75e1bd5463b2d78814c3a9937f2d6cea282bdfc05ef56",
+        "5fca6e0c631ea9327fc75e1bd5463b2d78814c3a9937f2d6cea282bdfc05ef56",
+        "04ccb8fe229ae341d1c2b171b4bd7a578fcc326c3ecbf5f017ccaee878f3aee5",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was eb866c61…, 7819e5ed…, a1ed7ff0…)
         "from(mainnet)",
-        "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5",
-        "7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8",
-        "a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4",
+        "0befd2fa1da052fb88ef8a04cc1bd6412ea560371aaec606790194dee41ac3fa",
+        "db7f8f9869a612c6e90ff8a01806569a0fe7391cfa8226c3c3a89680ae83d277",
+        "7b8f4090c31d524312f1b6d8a91d0e47544b031a62560d90b9a1bc65b709e7c6",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 0d9cf361…, 2c3067c0…, 7ea3296f…)
         "from(testnet-10)",
-        "0d9cf361e02dea6d9e873014ff5e414c2e8e6879e8d705cde6c924a3a3f8dd88",
-        "2c3067c01e76ac32f0bd3f78ba49cc25f2ea771af4eb848e5aaad17f825a0a64",
-        "7ea3296f36fc827898aa6560a1f71159652a12a7dd69105178564b9f7723d5d0",
+        "a4153f537905eebd364d43742ccfc6e7264149cce61392f827dc0d45aee4d08d",
+        "c9adc147ada258574c0926534fae5dd4eb82b5a2795bdc5300affd74abfe0380",
+        "e86052cdfea252fde7c2277087aeda5566c41e9161f083705e99bf3180653ff6",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was bd633ce9…, 44cb8fd7…, 5a1d8d56…)
         "from(testnet-11)",
-        "bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29",
-        "44cb8fd729e9575a6e3b1e72c466b8abce4b9ecd81bb556685c9ba225487117f",
-        "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
+        "0c2c022a11572d73779fc0610cf65d4147feb499a9b58472901d3d73ecfc1f71",
+        "bf4cc0b3e2fa208a18cce48d0c33db74e48adf275a069687b534856411f1c83e",
+        "f023f74befcdaf732f213616c79fd94782d7728f835151bbfd986498f962bd64",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 770fb822…, 5de80e64…, 9410712f…)
         "from(testnet-12) − IR flag day",
-        "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
-        "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
+        "5f6c86f85e688c487a8d7e529ad669747f8e479457f774e33e5a4dc7e300d76c",
+        "92042711856b239713d0376b7466422e561618fc51e115e1557be34b078e5acd",
+        "2549f73158cfeeeb99aa9422fbe7765e987d1475dbb0ce4a5579b93402f7571f",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 7a27f341…, 7a27f341…, edd80c01…)
         "from(devnet)",
-        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
-        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
-        "edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f",
+        "f17c6555a617736bd13e90eaab80974223149c211d08af516008bd6500010b1f",
+        "f17c6555a617736bd13e90eaab80974223149c211d08af516008bd6500010b1f",
+        "d82068a0080c47f45f376c81c621ec002aa8541a22c49e9d0a373e263c39c680",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 63238ba1…, 63238ba1…, f981edc9…)
         "from(simnet)",
-        "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd",
-        "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd",
-        "f981edc9bff1b71ae46abf030c0c56c40beafabeeae78d8435dd502ad6191f69",
+        "5fca6e0c631ea9327fc75e1bd5463b2d78814c3a9937f2d6cea282bdfc05ef56",
+        "5fca6e0c631ea9327fc75e1bd5463b2d78814c3a9937f2d6cea282bdfc05ef56",
+        "04ccb8fe229ae341d1c2b171b4bd7a578fcc326c3ecbf5f017ccaee878f3aee5",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was eb866c61…, 7819e5ed…, a1ed7ff0…)
         "mainnet_shipped_params",
-        "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5",
-        "7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8",
-        "a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4",
+        "0befd2fa1da052fb88ef8a04cc1bd6412ea560371aaec606790194dee41ac3fa",
+        "db7f8f9869a612c6e90ff8a01806569a0fe7391cfa8226c3c3a89680ae83d277",
+        "7b8f4090c31d524312f1b6d8a91d0e47544b031a62560d90b9a1bc65b709e7c6",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 7a27f341…, 7a27f341…, edd80c01…)
         "devnet_shipped_params",
-        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
-        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
-        "edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f",
+        "f17c6555a617736bd13e90eaab80974223149c211d08af516008bd6500010b1f",
+        "f17c6555a617736bd13e90eaab80974223149c211d08af516008bd6500010b1f",
+        "d82068a0080c47f45f376c81c621ec002aa8541a22c49e9d0a373e263c39c680",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was bd633ce9…, 44cb8fd7…, 5a1d8d56…)
         "palw_rc_shipped_params",
-        "bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29",
-        "44cb8fd729e9575a6e3b1e72c466b8abce4b9ecd81bb556685c9ba225487117f",
-        "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
+        "0c2c022a11572d73779fc0610cf65d4147feb499a9b58472901d3d73ecfc1f71",
+        "bf4cc0b3e2fa208a18cce48d0c33db74e48adf275a069687b534856411f1c83e",
+        "f023f74befcdaf732f213616c79fd94782d7728f835151bbfd986498f962bd64",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 770fb822…, 5de80e64…, 9410712f…)
         "palw_t12_shipped_params − IR flag day",
-        "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
-        "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
+        "5f6c86f85e688c487a8d7e529ad669747f8e479457f774e33e5a4dc7e300d76c",
+        "92042711856b239713d0376b7466422e561618fc51e115e1557be34b078e5acd",
+        "2549f73158cfeeeb99aa9422fbe7765e987d1475dbb0ce4a5579b93402f7571f",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was b8564b88…, 5de80e64…, 93da24cc…)
         "palw_t12_launch_params_v1",
-        "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
-        "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd",
+        "6187399e51559e7f4bb0ef7935915478ff9b0ea51c8c8202c32a76967c1a2025",
+        "92042711856b239713d0376b7466422e561618fc51e115e1557be34b078e5acd",
+        "04617b53173b09f997c87e77f1b4d3b2d326ddc5a954373a1248e8782b79c6bf",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was dbbc9104…, 5de80e64…, 7c652212…)
         "palw_t12_release_v1_params",
-        "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
-        "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
+        "41f0b7851b523ec378448d1f2d5fc2cc1562092a73ebfeab98c6999f65a75db3",
+        "92042711856b239713d0376b7466422e561618fc51e115e1557be34b078e5acd",
+        "6c94fae224479c3e6cdcb3a7ac542749b8903ad457af363a6ca7d75e2cfb2416",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 24e1aec3…, 5de80e64…, d263d7f2…)
         "palw_t12_release_v2_params",
-        "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
-        "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a",
+        "deca53d0b0ecffed5fffbdb0df72ae035631c6743a42f3262a101b146f5a4784",
+        "92042711856b239713d0376b7466422e561618fc51e115e1557be34b078e5acd",
+        "7804951885d60a29bfb6aa5b8f7bc2af6c8b4692636f019bc1320a7f4aad3385",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 770fb822…, 5de80e64…, 9410712f…)
         "palw_t12_release_v3_params",
-        "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
-        "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
+        "5f6c86f85e688c487a8d7e529ad669747f8e479457f774e33e5a4dc7e300d76c",
+        "92042711856b239713d0376b7466422e561618fc51e115e1557be34b078e5acd",
+        "2549f73158cfeeeb99aa9422fbe7765e987d1475dbb0ce4a5579b93402f7571f",
     ),
     (
+        // re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 31b913ef…, 2254a5ae…, 9410712f…)
         "palw_t12_drill_params_v1 − IR flag day",
-        "31b913ef15a1617472bc1764978763e530c021b116c98a77e6e5f6f47769faa4",
-        "2254a5ae75cc1ed6fa70cc6f9a57281e7ab36aa8f80a820a545b81dad21549c6",
-        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
+        "76782050bfd25ee908e152f3235d862df998f2ce17193b29d686987f4bdf1988",
+        "969d6f24489ef37fab96801978ae0907c7fbbc3f55d0ae38a7dd4995fe057413",
+        "2549f73158cfeeeb99aa9422fbe7765e987d1475dbb0ce4a5579b93402f7571f",
     ),
 ];
 

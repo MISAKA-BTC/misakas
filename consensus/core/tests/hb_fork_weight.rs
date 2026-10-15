@@ -223,24 +223,11 @@ fn every_depth_gate_and_the_clock_it_reads() {
     // HEARTBEAT_RECOVERY_INTERVAL_MS of wall clock (difficulty.rs:437-476).
     let daa_secs = p.coinbase_maturity() as f64 * (HEARTBEAT_RECOVERY_INTERVAL_MS as f64 / 1000.0);
     println!("\n  coinbase_maturity is DAA, and DAA is cursor-capped at 1 / {} ms:", HEARTBEAT_RECOVERY_INTERVAL_MS);
-    println!("    {} DAA of heartbeat-only history costs {:.1} h of WALL CLOCK (not hashes)", p.coinbase_maturity(), daa_secs / 3600.0);
-}
-
-/// The DNS-BFT veto — the one gate that refuses a reorg *before* the PALW comparator — expires on
-/// a clock heartbeats drive. `dns_bft.rs:553` releases the veto when
-/// `confirmed_anchor_is_stale(incumbent_daa, anchor_daa)`, and `incumbent_daa` is DAA score.
-#[test]
-fn the_dns_veto_ttl_is_a_daa_clock_and_heartbeats_drive_daa() {
-    let p = palw_t12_shipped_params();
-    let dns = p.dns_params.as_ref().expect("t12 configures the DNS overlay");
-    println!("=== DNS-BFT reorg veto ===");
-    println!("  dns_veto_ttl_daa_score       {}", dns.dns_veto_ttl_daa_score);
-    println!("  unit                         DAA SCORE (dns_bft.rs:553, confirmed_anchor_is_stale)");
-    let secs = dns.dns_veto_ttl_daa_score as f64 * (HEARTBEAT_RECOVERY_INTERVAL_MS as f64 / 1000.0);
-    println!("  heartbeat-only cost to expire the veto: {} DAA = {:.1} h wall clock, 0 bond, 0 pwu", dns.dns_veto_ttl_daa_score, secs / 3600.0);
-    println!("  hash cost of those beats:    {} x 2^24 = 2^{:.1}", dns.dns_veto_ttl_daa_score,
-        ((dns.dns_veto_ttl_daa_score as u128 * (1u128 << PALW_HEARTBEAT_WORK_LOG2)) as f64).log2());
-    assert!(dns.dns_veto_ttl_daa_score > 0);
+    println!(
+        "    {} DAA of heartbeat-only history costs {:.1} h of WALL CLOCK (not hashes)",
+        p.coinbase_maturity(),
+        daa_secs / 3600.0
+    );
 }
 
 /// **The sustained price of blue-work parity with the honest chain.** The sink-search heap

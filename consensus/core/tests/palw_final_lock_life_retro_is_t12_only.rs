@@ -31,10 +31,11 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
 /// testnet-12 as the fleet runs it — the DAA-750 post-launch release (`c3dbaee3c`): params, identity,
 /// schedule. `palw_final_lock_life_is_t12_only`'s `T12_RELEASE`; this fence, dormant, must not move it.
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was dbbc9104…, 5de80e64…, 7c652212…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
-    "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
+    "41f0b7851b523ec378448d1f2d5fc2cc1562092a73ebfeab98c6999f65a75db3",
+    "92042711856b239713d0376b7466422e561618fc51e115e1557be34b078e5acd",
+    "6c94fae224479c3e6cdcb3a7ac542749b8903ad457af363a6ca7d75e2cfb2416",
 );
 
 /// Heights the next flag day might take: above the DAA-750 release (its lane V02 fence must be at or

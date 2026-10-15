@@ -1,18 +1,6 @@
-//! kaspa-pq remote signer / HSM daemon core (ADR-0015, audit H-04).
-//!
-//! Transport-agnostic signing engine: holds the ML-DSA-87 validator key(s), enforces the signing
-//! policy ([`SignerPolicy`]), keeps an equivocation guard ([`SignedEpochStore`]) and a tamper-evident
-//! audit log, and turns a [`SignerRequest`] into a [`SignerResponse`]. The binary ([`crate`]'s
-//! `main.rs`) wraps this in a Unix-domain-socket frame loop; tests drive [`SignerState::handle_request`]
-//! directly. The validator NODE never sees the key — it sends a digest + purpose and gets a signature
-//! back (or a policy refusal), so a node compromise cannot directly exfiltrate the key or equivocate.
-//!
-//! Reused, audited building blocks (no new crypto/protocol invented here):
-//! * the protocol types + [`compute_signer_audit_chain_entry`] + [`signature_fingerprint`] from
-//!   `kaspa_consensus_core::dns_finality`;
-//! * [`ValidatorKey`] (signing) + [`SignedEpochStore`] (crash-consistent, fsync'd equivocation log)
-//!   from `kaspa_pq_validator_core`;
-//! * the pure equivocation decision [`check_signed_epoch_record`].
+//! Remote signing engine for PALW duties, wallet transactions and historical bond exits.
+//! Enforces purpose-specific contexts, a durable PALW attempt journal and a tamper-evident audit log.
+//! Legacy DNS attestation and takeover requests are refused under every signing policy.
 
 use std::{
     collections::{BTreeSet, HashMap},
@@ -23,17 +11,15 @@ use std::{
 
 use kaspa_consensus_core::{
     dns_finality::{
-        ATTESTATION_MLDSA87_CONTEXT, AUDIT_CHECKPOINT_MLDSA87_CONTEXT, HostId, PalwAttemptSignRecordV1, SignedEpochCheckOutcome,
-        SignedEpochRecord, SignerAuditCheckpoint, SignerAuditRecord, SignerError, SignerMessageDigest, SignerMetadata, SignerOutcome,
-        SignerPolicy, SignerRequest, SignerResponse, SigningPurpose, TAKEOVER_TOKEN_CONTEXT, UNBOND_REQUEST_CONTEXT,
-        compute_signer_audit_chain_entry, signature_fingerprint,
+        AUDIT_CHECKPOINT_MLDSA87_CONTEXT, HostId, PalwAttemptSignRecordV1, SignedEpochCheckOutcome, SignerAuditCheckpoint,
+        SignerAuditRecord, SignerError, SignerMessageDigest, SignerMetadata, SignerOutcome, SignerPolicy, SignerRequest,
+        SignerResponse, SigningPurpose, UNBOND_REQUEST_CONTEXT, compute_signer_audit_chain_entry, signature_fingerprint,
     },
     palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
     palw_freeprompt_v3::{PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, PALW_FP_V3_MLDSA87_SPEND_CONTEXT},
-    tx::TransactionOutpoint,
 };
 use kaspa_hashes::Hash64;
-use kaspa_pq_validator_core::{PalwAttemptJournalStore, SignedEpochStore, ValidatorKey};
+use kaspa_pq_validator_core::{PalwAttemptJournalStore, ValidatorKey};
 
 /// An append-only, hash-chained, fsync'd audit log (ADR-0015 §"Audit log"). Each record extends the
 /// chain via [`compute_signer_audit_chain_entry`]; on load the file is replayed to recompute the
@@ -245,10 +231,6 @@ pub struct SignerState {
     keys: HashMap<Hash64, ValidatorKey>,
     policy: SignerPolicy,
     state_dir: PathBuf,
-    /// Per-`validator_id` equivocation log. The signer guards on `(validator_id, epoch)` — a
-    /// validator signing two different targets for one epoch is slashable regardless of bond — so a
-    /// fixed default `bond_outpoint` keys the reused [`SignedEpochStore`] purely by epoch.
-    epoch_stores: HashMap<Hash64, SignedEpochStore>,
     /// Per-`validator_id` PALW attempt journal (ADR-0042 PR-05): one challenge, one attempt id,
     /// enforced before a signature exists rather than slashed after one leaks.
     palw_journals: HashMap<Hash64, PalwAttemptJournalStore>,
@@ -312,7 +294,6 @@ impl SignerState {
             keys,
             policy,
             state_dir,
-            epoch_stores: HashMap::new(),
             palw_journals: HashMap::new(),
             audit,
             checkpoint_path,
@@ -341,15 +322,6 @@ impl SignerState {
     /// `validator_id`s this signer can sign for.
     pub fn known_validators(&self) -> Vec<Hash64> {
         self.keys.keys().copied().collect()
-    }
-
-    fn epoch_store(&mut self, vid: Hash64) -> Result<&mut SignedEpochStore, String> {
-        if !self.epoch_stores.contains_key(&vid) {
-            let path = self.state_dir.join(format!("{vid}.epochs.json"));
-            let store = SignedEpochStore::load_or_empty(path, vid, TransactionOutpoint::default())?;
-            self.epoch_stores.insert(vid, store);
-        }
-        Ok(self.epoch_stores.get_mut(&vid).expect("just inserted"))
     }
 
     fn palw_journal(&mut self, vid: Hash64) -> Result<&mut PalwAttemptJournalStore, String> {
@@ -490,9 +462,10 @@ impl SignerState {
         // match arm and nothing else; adding a purpose can no longer forget a second list.
         const TRANSACTION_CONTEXTS: [&[u8]; 1] = [kaspa_txscript::MLDSA87_TX_CONTEXT];
         let required_ctx: Option<&[u8]> = match req.purpose {
-            SigningPurpose::Attestation => Some(ATTESTATION_MLDSA87_CONTEXT),
+            SigningPurpose::Attestation | SigningPurpose::TakeoverToken => {
+                return Err(SignerError::PolicyViolation("DNS validator signing purpose is retired".into()));
+            }
             SigningPurpose::Unbond => Some(UNBOND_REQUEST_CONTEXT),
-            SigningPurpose::TakeoverToken => Some(TAKEOVER_TOKEN_CONTEXT),
             // The PALW attempt context is reserved exactly like the overlay three: a purpose that
             // could borrow it would mint block-production signatures past the journal below.
             SigningPurpose::PalwAttemptV2 => Some(PALW_ATTEMPT_V2_MLDSA87_CONTEXT),
@@ -530,33 +503,6 @@ impl SignerState {
         // (2) The signer must hold this validator's key.
         if !self.keys.contains_key(&req.validator_id) {
             return Err(SignerError::KeyNotFound);
-        }
-
-        // (3) Equivocation guard (ADR-0011) — only for attestations, only when not Permissive.
-        //     Strict refuses a conflicting (validator, epoch) target; AuditOnly logs but allows.
-        let mut record_after_sign: Option<SignedEpochRecord> = None;
-        if matches!(req.purpose, SigningPurpose::Attestation) && !matches!(self.policy, SignerPolicy::Permissive) {
-            let SignerMetadata::Attestation { epoch, target_hash, target_daa_score } = req.metadata else {
-                return Err(SignerError::PolicyViolation("attestation request missing Attestation metadata (epoch/target)".into()));
-            };
-            let candidate = SignedEpochRecord { epoch, target_hash, target_daa_score, signature_fingerprint: Hash64::default() };
-            let policy = self.policy;
-            let store = self.epoch_store(req.validator_id).map_err(SignerError::InternalError)?;
-            match store.check(&candidate) {
-                SignedEpochCheckOutcome::Block => {
-                    let msg =
-                        format!("equivocation: epoch {epoch} already signed a different target (validator {})", req.validator_id);
-                    if matches!(policy, SignerPolicy::Strict) {
-                        return Err(SignerError::PolicyViolation(msg));
-                    }
-                    // AuditOnly: surface the conflict but proceed (migration mode).
-                    log::warn!("[signer] AuditOnly: {msg} — signing anyway");
-                }
-                // First time for this epoch: persist the record AFTER a successful sign.
-                SignedEpochCheckOutcome::Allow => record_after_sign = Some(candidate),
-                // Same target again: already recorded; safe to re-sign without re-recording.
-                SignedEpochCheckOutcome::AllowRebroadcast => {}
-            }
         }
 
         // (3b) PALW attempt anti-equivocation journal (ADR-0042 PR-05) — same shape as the
@@ -605,13 +551,6 @@ impl SignerState {
         };
         let sig = key.sign_with_context(&digest, &req.context);
 
-        // (5) Persist the equivocation record only on a brand-new (validator, epoch) attestation,
-        //     stamping the real signature fingerprint (fail-closed if the durable write fails).
-        if let Some(mut rec) = record_after_sign {
-            rec.signature_fingerprint = signature_fingerprint(&sig);
-            let store = self.epoch_store(req.validator_id).map_err(SignerError::InternalError)?;
-            store.record_and_flush(rec).map_err(SignerError::InternalError)?;
-        }
         // (5b) Same discipline for a brand-new PALW attempt: the journal entry becomes durable
         //      BEFORE the signature is released — a flush failure refuses the request, so no
         //      signature exists whose record could be lost. Fail-closed before a double-sign.
@@ -839,6 +778,7 @@ pub mod transport {
 mod tests {
     use super::*;
     use kaspa_consensus_core::dns_finality::{ATTESTATION_MLDSA87_CONTEXT, stake_attestation_message};
+    use kaspa_consensus_core::tx::TransactionOutpoint;
     use kaspa_hashes::Hash;
     use kaspa_pq_validator_core::VALIDATOR_SEED_LEN;
     // **The value, not a copy of it** (mainnet audit L-5, 2026-09-06). This used to re-type the
@@ -1264,49 +1204,36 @@ mod tests {
             metadata: SignerMetadata::None,
         };
         assert!(matches!(s.handle_request(&tx, Hash::default(), 1).result, Err(SignerError::PolicyViolation(_))));
-        // A non-denied purpose (Attestation) still signs.
-        assert!(s.handle_request(&att_request(2, vid, 5, Hash64::from_bytes([0x01; 64]), 50), Hash::default(), 2).result.is_ok());
+        // A non-denied PALW purpose still signs.
+        assert!(
+            s.handle_request(&palw_request(2, vid, Hash64::from_bytes([1; 64]), Hash64::from_bytes([2; 64])), Hash::default(), 2)
+                .result
+                .is_ok()
+        );
     }
 
     #[test]
     fn rejects_unknown_validator_key() {
         let mut s = SignerState::new(vec![key(0x33)], SignerPolicy::Permissive, tmp_dir("unknown"), Hash::default()).unwrap();
-        let req = att_request(1, Hash64::from_bytes([0x99; 64]), 5, Hash64::from_bytes([0x01; 64]), 50);
+        let req = palw_request(1, Hash64::from_bytes([0x99; 64]), Hash64::from_bytes([1; 64]), Hash64::from_bytes([2; 64]));
         assert!(matches!(s.handle_request(&req, Hash::default(), 1).result, Err(SignerError::KeyNotFound)));
     }
 
     #[test]
-    fn strict_blocks_equivocation_allows_rebroadcast() {
-        let k = key(0x44);
-        let vid = k.validator_id;
-        let mut s = SignerState::new(vec![k], SignerPolicy::Strict, tmp_dir("strict"), Hash::default()).unwrap();
-        let (t_x, t_y) = (Hash64::from_bytes([0x0a; 64]), Hash64::from_bytes([0x0b; 64]));
-        // First attestation for epoch 7 → signed.
-        assert!(s.handle_request(&att_request(1, vid, 7, t_x, 70), Hash::default(), 1).result.is_ok(), "first epoch-7 sign");
-        // SAME target again → rebroadcast, still signed (not equivocation).
-        assert!(s.handle_request(&att_request(2, vid, 7, t_x, 70), Hash::default(), 2).result.is_ok(), "rebroadcast of same target");
-        // DIFFERENT target for epoch 7 → equivocation → BLOCKED.
-        let blocked = s.handle_request(&att_request(3, vid, 7, t_y, 71), Hash::default(), 3).result;
-        assert!(matches!(blocked, Err(SignerError::PolicyViolation(_))), "conflicting target for the same epoch is blocked");
-        // A different epoch is unaffected.
-        assert!(s.handle_request(&att_request(4, vid, 8, t_y, 80), Hash::default(), 4).result.is_ok(), "different epoch signs");
-    }
-
-    #[test]
-    fn equivocation_guard_survives_restart() {
-        let k = key(0x55);
-        let vid = k.validator_id;
-        let dir = tmp_dir("restart");
-        let (t_x, t_y) = (Hash64::from_bytes([0x1a; 64]), Hash64::from_bytes([0x1b; 64]));
-        {
-            let mut s = SignerState::new(vec![k], SignerPolicy::Strict, dir.clone(), Hash::default()).unwrap();
-            assert!(s.handle_request(&att_request(1, vid, 9, t_x, 90), Hash::default(), 1).result.is_ok());
+    fn retired_dns_signing_is_refused_under_every_policy() {
+        let k = key(0x39);
+        for policy in [SignerPolicy::Strict, SignerPolicy::AuditOnly, SignerPolicy::Permissive] {
+            let mut signer = SignerState::new(vec![key(0x39)], policy, tmp_dir("retired-dns"), HostId::default()).unwrap();
+            let mut request = att_request(1, k.validator_id, 1, Hash64::from_bytes([1; 64]), 1);
+            for purpose in [SigningPurpose::Attestation, SigningPurpose::TakeoverToken] {
+                request.purpose = purpose;
+                if purpose == SigningPurpose::TakeoverToken {
+                    request.context = kaspa_consensus_core::dns_finality::TAKEOVER_TOKEN_CONTEXT.to_vec();
+                    request.message_digest = SignerMessageDigest::TakeoverToken(Hash::default());
+                }
+                assert!(matches!(signer.try_sign(&request), Err(SignerError::PolicyViolation(reason)) if reason.contains("retired")));
+            }
         }
-        // CRASH + RESTART: a fresh engine over the same state dir must remember epoch 9 and still
-        // block a conflicting target (the equivocation log is fsync'd + reloaded).
-        let mut s2 = SignerState::new(vec![key(0x55)], SignerPolicy::Strict, dir, Hash::default()).unwrap();
-        let blocked = s2.handle_request(&att_request(2, vid, 9, t_y, 91), Hash::default(), 2).result;
-        assert!(matches!(blocked, Err(SignerError::PolicyViolation(_))), "equivocation guard persists across restart");
     }
 
     fn palw_request(req_id: u64, vid: Hash64, challenge: Hash64, attempt_id: Hash64) -> SignerRequest {
@@ -1423,47 +1350,5 @@ mod tests {
         // Reload: replaying the persisted log recomputes the identical chain head (tamper-evidence).
         let s2 = SignerState::new(vec![key(0x66)], SignerPolicy::Permissive, dir, Hash::default()).unwrap();
         assert_eq!(s2.audit_chain_head(), head_after_two, "reloaded audit chain head matches");
-    }
-
-    /// End-to-end over a REAL Unix domain socket: handshake + length-prefixed Borsh framing + a sign
-    /// and an equivocation refusal flow through `transport::serve_connection` exactly as the daemon
-    /// binary runs it. Proves the daemon actually serves, not just that `handle_request` works.
-    #[cfg(unix)]
-    #[test]
-    fn socket_roundtrip_signs_then_refuses_equivocation() {
-        use super::transport::{SignerClient, serve_connection};
-        use std::os::unix::net::UnixListener;
-        use std::sync::{Arc, Mutex};
-
-        let k = key(0x77);
-        let vid = k.validator_id;
-        let server_id = Hash::from_bytes([0x5e; 32]);
-        let state = Arc::new(Mutex::new(SignerState::new(vec![k], SignerPolicy::Strict, tmp_dir("socket"), server_id).unwrap()));
-
-        let sock = std::env::temp_dir().join("kaspa-pq-signer-test-77.sock");
-        let _ = fs::remove_file(&sock);
-        let listener = UnixListener::bind(&sock).unwrap();
-        let srv_state = Arc::clone(&state);
-        let server = std::thread::spawn(move || {
-            for stream in listener.incoming().take(1).flatten() {
-                serve_connection(stream, &srv_state, server_id, &[]);
-            }
-        });
-
-        // Connect through the public client API (the validator's production path).
-        let mut client = SignerClient::connect(&sock, Hash::from_bytes([0xc1; 32])).unwrap();
-        assert_eq!(client.server_identity, server_id, "handshake ack carries the daemon identity");
-
-        // First attestation → signed over the wire.
-        let resp1 = client.sign(&att_request(1, vid, 42, Hash64::from_bytes([0xaa; 64]), 420)).unwrap();
-        assert_eq!(resp1.result.unwrap().len(), 4627, "socket signs the first attestation");
-
-        // Conflicting attestation (same epoch, different target) → equivocation refusal over the wire.
-        let resp2 = client.sign(&att_request(2, vid, 42, Hash64::from_bytes([0xbb; 64]), 421)).unwrap();
-        assert!(matches!(resp2.result, Err(SignerError::PolicyViolation(_))), "socket refuses the equivocating attestation");
-
-        drop(client);
-        server.join().unwrap();
-        let _ = fs::remove_file(&sock);
     }
 }

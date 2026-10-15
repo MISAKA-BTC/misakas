@@ -1,4 +1,6 @@
-# DNS-finality validator runbook
+# DNS-finality validator runbook (historical)
+
+RFC-0012 removes DNS validator voting, BFT, and the `run`/`bond` commands from this build. The instructions below describe the old network and cannot be used with the new ruleset. PALW roles and historical bond exits remain available.
 
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 

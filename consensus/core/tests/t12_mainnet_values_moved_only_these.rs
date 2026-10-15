@@ -40,11 +40,11 @@ fn at_the_parent(mut p: Params) -> Params {
 
 /// `palw_offence_attribution_is_t12_only`'s `T12_BEFORE_THE_ATTRIBUTION` at `8270cf03` (testnet-12
 /// with the attribution fence taken away), before this change moved it.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was 54353a89…, f0468188…)
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was d837fb19…, df8d548d…, 9e6afcf5…)
 const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "d837fb191d81f01d30f241d28fdb9d13a12caa9cd5ee5644abbe37da53b37cf5",
-    "df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe",
-    "9e6afcf540c02944e18bf3a75e31cbfaf65884510c136e57ce9f692a7cd5c27b",
+    "f2c8e87c0b50199bccf8a87ffe7e6a28f4d9bfe0e24143f7752a04cb24687d2d",
+    "e7518de677d2fc075c9727988109bf1a01994b4f7816d91ab4def03fef754f22",
+    "df82f42a9383a100f94f9fc90ca695be5ac687eab06faf6aa9a6063a5189640f",
 );
 
 #[test]

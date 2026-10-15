@@ -2,8 +2,7 @@ use crate::constants::{MAX_SOMPI, TX_VERSION};
 use kaspa_consensus_core::config::params::PqEnforcementMode;
 use kaspa_consensus_core::dns_finality::{
     DnsTxKind, dns_tx_kind, validate_compute_capability_payload, validate_compute_certificate_payload, validate_compute_challenge_tx,
-    validate_compute_commitment_payload, validate_compute_verdict_payload, validate_precommit_evidence_tx,
-    validate_slashing_evidence_tx, validate_stake_attestation_shard_payload, validate_stake_bond_tx, validate_stake_precommit_payload,
+    validate_compute_commitment_payload, validate_compute_verdict_payload, validate_slashing_evidence_tx,
     validate_stake_unbond_payload,
 };
 use kaspa_consensus_core::palw_carriage::{palw_carriage_tx_kind, validate_palw_carriage_stage1_tx};
@@ -26,8 +25,9 @@ impl TransactionValidator {
     /// context -- header or utxo. **Note** that any check performed here should be moved to
     /// header contextual validation if it becomes HF activation dependent. This is bcs we rely
     /// on checks here to be truly independent and avoid calling it multiple times wherever possible
-    /// (e.g., BBT relies on mempool in isolation checks even though virtual daa score might have changed)   
+    /// (e.g., BBT relies on mempool in isolation checks even though virtual daa score might have changed)
     pub fn validate_tx_in_isolation(&self, tx: &Transaction) -> TxResult<()> {
+        self.check_dns_retirement(tx, 0)?;
         self.check_transaction_inputs_in_isolation(tx)?;
         self.check_transaction_outputs_in_isolation(tx)?;
         self.check_transaction_pq_output_classes(tx)?;
@@ -391,10 +391,9 @@ fn check_transaction_subnetwork(
         // bond existence, rollout-stage gating, ML-DSA-87 signature
         // verification, the `U ≥ R + E` dominance bound — land in later PRs.
         match kind {
-            // ADR-0016 D.1: the StakeBond stateless check also verifies its
-            // output-0 locks the declared stake (value == amount, owner P2PKH).
-            DnsTxKind::StakeBond => validate_stake_bond_tx(&tx.payload, &tx.outputs),
-            DnsTxKind::StakeAttestationShard => validate_stake_attestation_shard_payload(&tx.payload),
+            DnsTxKind::StakeBond | DnsTxKind::StakeAttestationShard | DnsTxKind::StakePrecommit | DnsTxKind::PrecommitEvidence => {
+                return Err(TxRuleError::DnsParticipationRetired(tx.subnetwork_id.clone()));
+            }
             // ADR-0013 Addendum C.2: a slashing tx is a pure evidence carrier —
             // it must declare no outputs so consensus can mint the reporter
             // reward at (slashing_tx_id, 0) without colliding with a tx output.
@@ -424,15 +423,6 @@ fn check_transaction_subnetwork(
             // declared verdict must be what comparing the two receipt hashes implies) is
             // context-free and lives here; committee membership and the signature are stateful.
             DnsTxKind::ComputeVerdict => validate_compute_verdict_payload(&tx.payload),
-            // Round 2 of DNS finality (ADR-0128). The declared lock's *internal* possibility is
-            // context-free and checked here; whether it is the lock the chain shows, and whether the
-            // precommit counts, is decided past `Params::dns_bft_gate` by the virtual processor.
-            DnsTxKind::StakePrecommit => validate_stake_precommit_payload(&tx.payload),
-            // Round 2's equivocation evidence. Like slashing evidence it is a pure evidence
-            // carrier and must declare no outputs; the two signatures are verified as a
-            // block-validity rule, because this payload burns a bond and anyone can author a
-            // contradiction naming someone else's.
-            DnsTxKind::PrecommitEvidence => validate_precommit_evidence_tx(&tx.payload, &tx.outputs),
         }
         .map_err(TxRuleError::InvalidDnsOverlayPayload)?;
         Ok(())
@@ -924,14 +914,7 @@ mod tests {
     /// per-field payload coverage lives in `kaspa_consensus_core::dns_finality`;
     /// this test only confirms the consensus-layer wiring.
     #[test]
-    fn validate_dns_overlay_subnetwork_tx() {
-        use kaspa_consensus_core::dns_finality::{
-            DNS_PAYLOAD_VERSION_V1, DnsTxError, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, SlashingEvidencePayload,
-            StakeAttestation, StakeBondPayload, p2pkh_mldsa87_spk, validator_id_from_pubkey,
-        };
-        use kaspa_consensus_core::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_BOND};
-        use kaspa_hashes::Hash64;
-
+    fn retired_dns_transactions_are_rejected_in_isolation_without_a_policy() {
         let params = MAINNET_PARAMS.clone();
         let tv = TransactionValidator::new_for_tests(
             params.max_tx_inputs,
@@ -946,108 +929,16 @@ mod tests {
 
         // A native funding-style tx (one input, one output) reused as the
         // carrier; only `subnetwork_id` + `payload` vary across cases.
-        let base = Transaction::new(
-            0,
-            vec![TransactionInput {
-                previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x11u8; 64]), index: 0 },
-                signature_script: vec![0u8; 64],
-                sequence: u64::MAX,
-                sig_op_count: 0,
-            }],
-            vec![TransactionOutput { value: 0x2123e300, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x76, 0xa9, 0x14)) }],
-            0,
-            SUBNETWORK_ID_NATIVE,
-            0,
-            vec![],
-        );
-
-        // Well-formed stake-bond payload → accepted.
-        let validator_pubkey = vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN];
-        let bond = StakeBondPayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            owner_pubkey_hash: Hash64::from_bytes([0xaau8; 64]),
-            // audit H-04: canonical key-derived overlay identity.
-            validator_pubkey_hash: validator_id_from_pubkey(&validator_pubkey),
-            validator_pubkey,
-            amount: 1_000,
-            activation_daa_score: 0,
-            unbonding_period_blocks: 1,
-            owner_reward_spk_payload: [0xddu8; 64],
-        };
-        let mut tx = base.clone();
-        tx.subnetwork_id = SUBNETWORK_ID_STAKE_BOND;
-        tx.payload = borsh::to_vec(&bond).unwrap();
-        // ADR-0016 D.1: output-0 must lock the stake (value == amount, owner P2PKH).
-        tx.outputs[0] = TransactionOutput::new(bond.amount, p2pkh_mldsa87_spk(&bond.owner_reward_spk_payload));
-        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
-
-        // Bond whose output-0 does not lock `amount` (ADR-0016 D.1) → rejected.
-        let mut tx_unlocked = tx.clone();
-        tx_unlocked.outputs[0] = TransactionOutput::new(bond.amount - 1, p2pkh_mldsa87_spk(&bond.owner_reward_spk_payload));
-        assert_match!(
-            tv.validate_tx_in_isolation(&tx_unlocked),
-            Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::BondOutputValueMismatch { .. }))
-        );
-
-        // Malformed stake-bond payload (zero amount) → InvalidDnsOverlayPayload.
-        let mut bad = bond.clone();
-        bad.amount = 0;
-        let mut tx = base.clone();
-        tx.subnetwork_id = SUBNETWORK_ID_STAKE_BOND;
-        tx.payload = borsh::to_vec(&bad).unwrap();
-        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::ZeroBondAmount)));
-
-        // Undecodable bytes on a DNS subnetwork → InvalidDnsOverlayPayload(Decode),
-        // proving the id is routed to the validators rather than rejected outright.
-        let mut tx = base.clone();
-        tx.subnetwork_id = SUBNETWORK_ID_SLASHING_EVIDENCE;
-        tx.payload = vec![0xffu8, 0x00];
-        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::Decode)));
-
-        // ADR-0013 Addendum C.2: a slashing-evidence tx is a pure evidence
-        // carrier whose reporter reward is minted by consensus at
-        // (slashing_tx_id, 0). A well-formed payload is accepted iff the tx
-        // declares no outputs; any output would create a UTXO that collides
-        // with that mint. Build valid equivocation evidence (two attestations
-        // sharing one (bond_outpoint, validator_id, epoch) triple but
-        // approving different anchors).
-        let attestation = |target: u8| StakeAttestation {
-            version: DNS_PAYLOAD_VERSION_V1,
-            validator_id: Hash64::from_bytes([0xa5u8; 64]),
-            bond_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x77u8; 64]), index: 42 },
-            epoch: 7,
-            target_hash: Hash64::from_bytes([target; 64]),
-            target_daa_score: 1_234_567,
-            validator_set_commitment: Hash64::default(), // audit #4: VSC is a fixed-zero invariant
-            signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
-        };
-        let evidence = SlashingEvidencePayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            bond_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x77u8; 64]), index: 42 },
-            attestation_a: attestation(0x11),
-            attestation_b: attestation(0x33),
-            reporter_reward_spk_payload: [0xeeu8; 64],
-        };
-        let evidence_payload = borsh::to_vec(&evidence).unwrap();
-
-        // Valid evidence + no outputs → accepted.
-        let mut tx = base.clone();
-        tx.subnetwork_id = SUBNETWORK_ID_SLASHING_EVIDENCE;
-        tx.payload = evidence_payload.clone();
-        tx.outputs = vec![];
-        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
-
-        // Valid evidence + a (non-zero) declared output → rejected with
-        // SlashingEvidenceHasOutputs. (A zero-value output is independently
-        // caught earlier by the `TxOutZero` range check, so the carrier here
-        // keeps `base`'s non-zero output to exercise this rule specifically.)
-        let mut tx_with_out = base;
-        tx_with_out.subnetwork_id = SUBNETWORK_ID_SLASHING_EVIDENCE;
-        tx_with_out.payload = evidence_payload;
-        assert_match!(
-            tv.validate_tx_in_isolation(&tx_with_out),
-            Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::SlashingEvidenceHasOutputs(1)))
-        );
+        use kaspa_consensus_core::subnets::*;
+        for id in [
+            SUBNETWORK_ID_STAKE_BOND,
+            SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
+            SUBNETWORK_ID_STAKE_PRECOMMIT,
+            SUBNETWORK_ID_PRECOMMIT_EVIDENCE,
+        ] {
+            let tx = Transaction::new(0, vec![], vec![], 0, id, 0, vec![]);
+            assert!(matches!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::DnsParticipationRetired(_))));
+        }
     }
 }
 

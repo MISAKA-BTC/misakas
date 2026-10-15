@@ -35,11 +35,11 @@ fn ids(p: &Params) -> (String, String, String) {
 ///
 /// **Re-pinned 2026-09-25 for the lead cap** (`palw_clock_lead_cap`, armed from genesis on testnet-12,
 /// hashed Some-only into all three ids). Previous: `58c04756…` / `6388b87b…` / `2c2f7c0e…`.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was 4db7c459…, cc6dd90f…)
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was b272e2f5…, e36ebef7…, 11ce9af4…)
 const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "b272e2f5f7adcacc8e3b7ef5121f2223a04ed50a7a0ec6ad5a3ffde3ebb066ad",
-    "e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035",
-    "11ce9af44c0ee06cd645b678f84a80e6a4b06a52e6f2bdbcd8635f0663744934",
+    "85a2b0cb592a0841e6ab7c08b19a529e37759c55cc65f69755fd944e75fc4753",
+    "fceaacb7ad38fbbbc08474159315a9ee3cc86de8b68381c55f8e52ef24918ae3",
+    "b6f55381335209ac93dc781fac524530134fd34ec99ab9d8ee5a640157151c42",
 );
 
 /// **The ledger is the only thing this change moved on testnet-12.** Take it away (and the

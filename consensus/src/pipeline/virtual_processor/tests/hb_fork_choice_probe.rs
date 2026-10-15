@@ -7,7 +7,7 @@
 //! parent carrying Y — the same UTXO (card 1's genesis fee float) paid back to itself — and releases
 //! it to the victim block by block. After every released block the victim's own stores are read: its
 //! sink, the blue work of both tips above the fork point, and the PALW deep-reorg keys
-//! (`palw_candidate_order_v2`) that `dns_reorg_outcome` hands `decide_deep_reorg_v2`. The victim's
+//! (`palw_candidate_order_v2`) that `palw_reorg_outcome` hands `decide_deep_reorg_v2`. The victim's
 //! UTXO set is then asked whether X's or Y's output survived.
 //!
 //! The regimes, as the question poses them:
@@ -1777,7 +1777,7 @@ async fn hb_probe_fence_refuses_the_tied_reorg_the_shipped_rule_allows() {
 // shallow tie that makes them converge (the capacity lane's verify finding 2, measured there on F-W's
 // copy of the rule — rcore/cap-weight 3aa4abec4 — and ported here onto strict-win itself).
 //
-// `dns_reorg_outcome` judges every non-extension sink move, a one-block sibling switch included. A
+// `palw_reorg_outcome` judges every non-extension sink move, a one-block sibling switch included. A
 // strict-win that keeps the incumbent on EVERY all-economic tie is a rule about ARRIVAL ORDER: two
 // honest nodes that saw sibling tips in different orders keep different sinks, the refused sibling
 // leaves the virtual's parents, and every later block that ties keeps them apart — their virtual
@@ -2535,7 +2535,7 @@ async fn capacity_probe_w_t6b_a_licence_only_the_private_branch_carries_wins_pas
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // lane: rcore/cap-weight — the lane's verify finding 2: honest sibling forks under strict-win and F-W.
 //
-// `dns_reorg_outcome` judges every non-extension sink move, a one-block sibling switch included. Past
+// `palw_reorg_outcome` judges every non-extension sink move, a one-block sibling switch included. Past
 // `palw_reorg_strict_economic_win` an all-economic tie keeps the incumbent — a rule about ARRIVAL ORDER —
 // and the refused sibling leaves the virtual's parents, so two honest nodes that saw sibling tips in
 // different orders keep different sinks, and every later block that ties keeps them apart. F-W makes

@@ -386,11 +386,11 @@ tool が書く（`--apply` は計算した commit に、出荷 commit での `--
 release build の probe（§4 step 10〜11 の `IDENTITY`）がこれと一致しなければ止める。
 
 ```
-# re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was b41089e3…, 34b0dc14…)
-EXPECT_FP=5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6
+# re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 5ee7fd8e…, 1678e073…)
+EXPECT_FP=59a6d1b00434b42129201098fafb2c889a27d6392a87e531df6e1409beeb6ce7
 EXPECT_GENESIS=a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23
 PREMINE_TXID=5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669
-# schedule id 1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9（fence schedule "750, 1000"）
+# schedule id bc0600cc47b9433b99b715e902e3892e86295460b98cc1893c4fccc26f2b780c（fence schedule "750, 1000"）
 # rule manifest digest 9def81a1c56c02d5d1f9d24c5ddbe78d6f7598b31928ab6f388a2a074f14b4d4d4cf8c2245666bc13b9c91688c106efe428e8643075b68b40c4820adb4201d8d
 ```
 

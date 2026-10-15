@@ -93,7 +93,7 @@ start_node() {
   [ -n "$addr" ] || die "cannot derive bond $i's address"
   local args=(--devnet --appdir="$WORK_DIR/node-$i" --listen="127.0.0.1:$(p2p_of "$i")" --rpclisten-borsh="127.0.0.1:$(rpc_of "$i")"
         --evm-rpc-listen="127.0.0.1:$(evm_of "$i")" --utxoindex --nodnsseed --disable-upnp --nogrpc --enable-unsynced-mining
-        --palw-model-devnet="$FENCE_DAA" --palw-devnet-floor-only --evm-bridge-devnet-unpaused
+        --palw-model-devnet="$FENCE_DAA" --palw-devnet-floor-only
         --palw-produce --palw-panel --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i" --palw-producer-pay-address="$addr"
         --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
   if [ -n "${EXTRA_NODE_ARGS:-}" ]; then read -r -a extra <<<"$EXTRA_NODE_ARGS"; args+=("${extra[@]}"); fi

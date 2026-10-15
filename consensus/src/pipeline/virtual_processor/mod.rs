@@ -1,5 +1,5 @@
-mod dns_bft;
 pub mod errors;
+mod palw_reorg;
 mod processor;
 mod utxo_inquirer;
 mod utxo_validation;

@@ -37,11 +37,11 @@ use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_
 /// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
 /// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
 /// `T12_WITH_THE_CAP` holds.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was b41089e3…, 34b0dc14…)
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 5ee7fd8e…, 5de80e64…, 1678e073…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6",
-    "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9",
+    "59a6d1b00434b42129201098fafb2c889a27d6392a87e531df6e1409beeb6ce7",
+    "92042711856b239713d0376b7466422e561618fc51e115e1557be34b078e5acd",
+    "bc0600cc47b9433b99b715e902e3892e86295460b98cc1893c4fccc26f2b780c",
 );
 
 /// The post-launch release's height (DAA 500, the user's decision of 2026-09-26) and two more an

@@ -739,7 +739,6 @@
         <div class="control-list">
           <button id="btn-check-app" onclick="callApi('/api/bootstrap/status')" data-i18n="btnCheckApp">1. Check app</button>
           <button id="btn-auto-node" class="primary" onclick="autoNodeJoin()" data-i18n="btnAutoNode">Auto node setup</button>
-          <button id="btn-auto-validator" class="primary" onclick="autoValidatorJoin()" data-i18n="btnAutoValidator">Auto validator setup</button>
           <button id="btn-auto-stop" onclick="stopAuto()" data-i18n="btnStopAuto">Stop automatic setup</button>
           <button id="btn-prepare" class="primary" onclick="callApi('/api/bootstrap/prepare')" data-i18n="btnPrepare">2. Prepare VPS</button>
           <button id="btn-prepare-logs" onclick="startPrepareLogs()" data-i18n="btnPrepareLogs">View prepare logs</button>
@@ -778,9 +777,8 @@
             <div id="bondHint" class="hint-note" data-i18n="bondHintUnknown">Check bond balance before creating bond.</div>
             <div class="hint-note warn" data-i18n="bondMaturityExplainer">Visible balance is not always bondable. Mined rewards need coinbase maturity first.</div>
           </div>
-          <button id="btn-bond" class="primary" onclick="createBond()" data-i18n="btnBond">12. Create bond</button>
+          <p class="hint-note">DNS validator onboarding is retired. Use <code>misaka verifier setup</code> for PALW panel duties.</p>
           <button id="btn-validator-chain" onclick="callApi('/api/validator/chain-status')" data-i18n="btnValidatorChain">13. Validator status</button>
-          <button id="btn-validator-apply" class="primary" onclick="callApi('/api/validator/service/apply')" data-i18n="btnValidatorApply">14. Start validator</button>
           <button id="btn-validator-logs" onclick="callApi('/api/validator/logs')" data-i18n="btnValidatorLogs">Validator logs</button>
         </div>
       </section>
@@ -795,7 +793,6 @@
         <div class="actions">
           <button id="btn-quick-refresh" onclick="refreshLiveState(true)" data-i18n="quickRefresh">Refresh status</button>
           <button id="btn-quick-auto" class="primary" onclick="autoNodeJoin()" data-i18n="quickAuto">Auto node</button>
-          <button id="btn-quick-validator" class="primary" onclick="autoValidatorJoin()" data-i18n="quickValidator">Auto validator</button>
           <button id="btn-quick-dashboard" onclick="openDashboard()" data-i18n="quickDashboard">Dashboard</button>
           <button id="btn-quick-learn" onclick="openLearn()" data-i18n="quickLearn">Learn</button>
           <button id="btn-quick-support" onclick="openSupportPanel()" data-i18n="quickSupport">Support</button>
@@ -2972,88 +2969,7 @@
       }
     }
 
-    async function autoValidatorJoin() {
-      clearPrepareLogPoll();
-      autoRunning = true;
-      autoStopRequested = false;
-      autoLines = [];
-      setBusy(true);
-      try {
-        appendAuto(t('validatorAutoStart'));
-        const status = await autoFetch(t('labelCheckSync'), '/api/status');
-        if (!(status.node && status.node.synced)) {
-          appendAuto(t('validatorNodeRequired'));
-          await waitNodeSync();
-        }
 
-        let validator = await autoFetch(t('labelCheckValidator'), '/api/validator/status');
-        if (!gate.validatorKey) {
-          validator = await autoFetch(t('labelGenerateKey'), '/api/validator/keygen', { requireOk: true });
-          const addr = validator.validator && validator.validator.fundingAddress;
-          if (addr) appendAuto(`Funding address: ${addr}`);
-          await autoFetch(t('labelCpuCheck'), '/api/miner/diagnostics', { requireOk: true });
-          appendAuto(t('minerDiagnoseHint'));
-          const mine = confirm(minerConfirmText());
-          if (mine) {
-            await autoFetch(t('labelStartMiner'), minerStartPath(), { requireOk: true });
-            appendAuto(t('minerStartedPause'));
-          } else {
-            appendAuto(t('fundingPause'));
-          }
-          return;
-        }
-
-        const miner = await autoFetch(t('labelCheckMiner'), '/api/miner/status');
-        if (!gate.validatorBond && !(miner.miner && miner.miner.serviceState === 'active')) {
-          await autoFetch(t('labelCpuCheck'), '/api/miner/diagnostics', { requireOk: true });
-          appendAuto(t('minerDiagnoseHint'));
-          const mine = confirm(minerConfirmText());
-          if (mine) {
-            await autoFetch(t('labelStartMiner'), minerStartPath(), { requireOk: true });
-            appendAuto(t('minerStartedPause'));
-          } else {
-            appendAuto(t('fundingPause'));
-          }
-          return;
-        }
-
-        await autoFetch(t('labelCheckFunding'), '/api/validator/balance');
-
-        if (!gate.validatorBond) {
-          const amount = document.getElementById('bondAmount').value.trim();
-          if (!amount) throw new Error(t('requiredBond'));
-          const amountSompi = currentBondAmountSompi();
-          if (amountSompi === null || amountSompi <= 0) throw new Error(t('bondHintInvalid'));
-          if (gate.fundingBalanceSompi !== null && gate.fundingBalanceSompi !== undefined && gate.fundingBalanceSompi < amountSompi) {
-            appendAuto(gate.fundingBalanceSompi <= 0 ? t('bondHintZero') : fmt('bondHintLow', { balance: gate.fundingBalanceMsk || '-', amount }));
-            appendAuto(t('fundingPause'));
-            return;
-          }
-          if (gate.fundingBalanceMsk) {
-            appendAuto(fmt('bondReadyLog', { balance: gate.fundingBalanceMsk, amount }));
-          }
-          const ok = confirm(t('bondConfirm') + amount + '?');
-          if (!ok) {
-            appendAuto(t('bondSkipped'));
-            return;
-          }
-          await autoFetch(t('labelCreateBond'), '/api/validator/bond?amount=' + encodeURIComponent(amount), { requireOk: true });
-        }
-
-        await autoFetch(t('labelValidatorStatus'), '/api/validator/chain-status');
-        if (!gate.validatorRunning) {
-          await autoFetch(t('labelStartValidator'), '/api/validator/service/apply', { requireOk: true });
-        }
-        await autoFetch(t('labelValidatorLogs'), '/api/validator/logs');
-        appendAuto(t('validatorAutoDone'));
-      } catch (err) {
-        appendAuto(fmt('autoStopped', { message: errorMessage(err) }));
-        if (!autoStopRequested) recordError(err, 'automatic validator setup');
-      } finally {
-        autoRunning = false;
-        setBusy(false);
-      }
-    }
 
     async function callApi(path) {
       setBusy(true);
@@ -3104,27 +3020,7 @@
       }
     }
 
-    function createBond() {
-      const amount = document.getElementById('bondAmount').value.trim();
-      if (!amount) {
-        logEl.textContent = t('requiredBond');
-        return;
-      }
-      const amountSompi = currentBondAmountSompi();
-      if (amountSompi === null || amountSompi <= 0) {
-        logEl.textContent = t('bondHintInvalid');
-        return;
-      }
-      if (gate.fundingBalanceSompi !== null && gate.fundingBalanceSompi !== undefined && gate.fundingBalanceSompi < amountSompi) {
-        logEl.textContent = gate.fundingBalanceSompi <= 0
-          ? t('bondHintZero')
-          : fmt('bondHintLow', { balance: gate.fundingBalanceMsk || '-', amount });
-        return;
-      }
-      const ok = confirm(t('bondConfirm') + amount + '?');
-      if (!ok) return;
-      callApi('/api/validator/bond?amount=' + encodeURIComponent(amount));
-    }
+
 
     window.addEventListener('error', event => {
       logEl.dataset.touched = 'true';

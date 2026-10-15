@@ -62,7 +62,7 @@
 //!
 //! # Fork choice past the fence: strict-win's rule, the one copy (rcore/cap-s1)
 //!
-//! The deep-reorg gate (`dns_reorg_outcome`) judges every non-extension sink move, a one-block
+//! The deep-reorg gate (`palw_reorg_outcome`) judges every non-extension sink move, a one-block
 //! sibling switch included. Staged weight makes all-economic ties the rule — a `Created` attempt weighs
 //! 0, a bond at its cap gains nothing — and a tie that keeps the incumbent is a rule about arrival
 //! order: two honest nodes racing a slot would keep the siblings they saw first (the lane's verify

@@ -53,7 +53,7 @@ use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpWorkerResultV3, PalwFreePro
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_hashes::Hash64;
-use kaspa_pq_validator_core::{ATTESTATION_TX_FEE_FLOOR_SOMPI, FpCommitmentPriceV1, VALIDATOR_SEED_LEN, ValidatorKey};
+use kaspa_pq_validator_core::{PALW_TX_FEE_FLOOR_SOMPI, FpCommitmentPriceV1, VALIDATOR_SEED_LEN, ValidatorKey};
 use kaspa_txscript::{pay_to_address_script, script_class::ScriptClass};
 
 fn die(msg: String) -> ! {
@@ -517,7 +517,7 @@ fn main() {
     // size, size the fee from that shape with the same estimator the panel and `palw fp` use, and
     // build again at that fee unless the operator named one.
     let fee = fee.unwrap_or_else(|| {
-        let probe = build(ATTESTATION_TX_FEE_FLOOR_SOMPI);
+        let probe = build(PALW_TX_FEE_FLOOR_SOMPI);
         let p = &DEVNET_PARAMS;
         let calc =
             MassCalculator::new(p.mass_per_tx_byte, p.mass_per_script_pub_key_byte, p.mass_per_sig_op, p.storage_mass_parameter);

@@ -8968,7 +8968,7 @@ pub const PALW_OBJECT_CHUNK_TTL_DAA: u64 = 4_000;
 /// silently — the failure mode a mirrored constant has, and the reason this note exists.
 const PALW_RENT_RELAY_FEE_SOMPI_PER_KG: u64 = 10_000;
 
-/// The flat floor under [`palw_relay_fee_for_mass_v1`] — `ATTESTATION_TX_FEE_FLOOR_SOMPI`.
+/// The flat floor under [`palw_relay_fee_for_mass_v1`] — `PALW_TX_FEE_FLOOR_SOMPI`.
 const PALW_RENT_FEE_FLOOR_SOMPI: u64 = 250_000;
 
 /// `relay_fee_for_compute_mass`, re-expressed here (see [`PALW_RENT_RELAY_FEE_SOMPI_PER_KG`]).

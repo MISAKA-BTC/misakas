@@ -3,7 +3,7 @@ use kaspa_consensus_core::config::ibd_checkpoint::{IbdCheckpoint, builtin_ibd_ch
 use kaspa_consensus_core::config::trusted_checkpoint::TrustedCheckpoint;
 use kaspa_consensus_core::{
     config::Config,
-    evm::{EvmBridgeFinalityPolicy, EvmHistoryMode},
+    evm::EvmHistoryMode,
     network::{NetworkId, NetworkType},
 };
 use kaspa_core::kaspad_env::version;
@@ -38,7 +38,7 @@ pub enum NodeProfile {
     BootstrapPruned,
     /// One-shot fresh-DB catch-up from a `--connect` seed, then promote to bootstrap.
     RecoverySync,
-    /// Staking/attestation node label; does not force `--enable-validator`.
+    /// PALW verifier node label; does not force panel participation.
     Validator,
     /// Archival node label; does not force `--archival`.
     Archive,
@@ -136,12 +136,6 @@ pub struct Args {
     /// which keeps no §12 history for the pruning-point export / historical reads).
     #[serde(default)]
     pub evm_retire_206: bool,
-    /// The devnet spelling of `--evm-bridge-finality=label` (see `Config`); kept for scripts.
-    pub evm_bridge_devnet_unpaused: bool,
-    /// ADR-0109 Decision 2: `label` (default) or `pause` — what a stale DNS-finality anchor does to
-    /// the EVM lane on this node (see `Config::evm_bridge_finality`).
-    #[serde(default)]
-    pub evm_bridge_finality: EvmBridgeFinalityPolicy,
     /// C-01 S9b-prune: ONE-SHOT, IRREVERSIBLE bulk reclamation of the legacy per-block 206 EVM state
     /// snapshot store that accumulated before `--evm-retire-206`. Runs once at startup, then a no-op.
     /// Effective only when `--evm-retire-206` is itself effective (requires `--evm-flat-authoritative`
@@ -214,9 +208,6 @@ pub struct Args {
     /// is present for: remove it from the unit after the node is back.
     pub clear_quarantine: bool,
 
-    // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service. Default off.
-    pub enable_validator: bool,
-    pub validator_key: Option<String>,
     /// ADR-0042: run the in-process PALW-RC block producer. Only a `ConsensusV2` network has
     /// anything for it to do, and it says so and stops otherwise.
     pub palw_produce: bool,
@@ -658,8 +649,6 @@ pub struct Args {
     /// kaspa-pq EVM Lane v0.4 (§8.2/§16): the miner's EVM coinbase (20-byte hex,
     /// optional 0x) — claims the priority fees of this node's own payload txs.
     pub evm_fee_recipient: Option<String>,
-    pub stake_bond: Option<String>,
-    pub validator_mode: Option<String>,
 
     /// PALW v2 (Land stage): path to a `palw-agent` Unix socket to monitor. Observation only —
     /// health-probed and logged, feeding the capability handle nothing consensus-visible
@@ -847,8 +836,6 @@ impl Default for Args {
             checkpoints: vec![],
             enforce_chain_participation: false,
             clear_quarantine: false,
-            enable_validator: false,
-            validator_key: None,
             palw_produce: false,
             palw_heartbeat_miner_address: None,
             palw_round_lane: None,
@@ -947,8 +934,6 @@ impl Default for Args {
             palw_panel: None,
             palw_fee_outpoint: None,
             evm_fee_recipient: None,
-            stake_bond: None,
-            validator_mode: None,
             compute_endpoint: None,
             palw_model_devnet_daa: None,
             palw_shard_court_devnet_daa: None,
@@ -982,8 +967,6 @@ impl Default for Args {
             evm_shadow_state_backend: false,
             evm_flat_authoritative: false,
             evm_retire_206: false,
-            evm_bridge_devnet_unpaused: false,
-            evm_bridge_finality: EvmBridgeFinalityPolicy::Label,
             evm_prune_legacy_206: false,
             evm_materialize_pp_anchor: false,
             wrpc_verbose: false,
@@ -1054,14 +1037,6 @@ impl Args {
         config.evm_shadow_state_backend = self.evm_shadow_state_backend; // C-01 S4: shadow dual-write
         config.evm_flat_authoritative = self.evm_flat_authoritative; // C-01 S9: flat-authoritative executor seed
         config.evm_retire_206 = self.evm_retire_206; // C-01 S9b: stop persisting the per-block 206 snapshot
-        // ADR-0109 Decision 2: finality is a label, not a pause. `--evm-bridge-finality=label` (the
-        // default) includes deposit claims and EVM transactions whatever the DNS anchor's distance —
-        // a reader asks the eth RPC for `safe` when it wants the confirmed state; `pause` keeps the
-        // gate this node had before ADR-0109. The devnet spelling of `label` is kept for scripts.
-        config.evm_bridge_finality = self.evm_bridge_finality;
-        if self.evm_bridge_devnet_unpaused {
-            config.evm_bridge_devnet_unpaused = true;
-        }
         config.evm_prune_legacy_206 = self.evm_prune_legacy_206; // C-01 S9b-prune: one-shot bulk reclamation of legacy 206
         config.evm_materialize_pp_anchor = self.evm_materialize_pp_anchor; // F2c: one-shot pp EVM anchor backfill
 
@@ -1739,7 +1714,7 @@ pub fn cli() -> Command {
         )
         .arg(
             Arg::new("maxinpeers")
-                .long("maxinpeers") 
+                .long("maxinpeers")
                 .env("KASPAD_MAXINPEERS")
                 .value_name("maxinpeers")
                 .require_equals(true)
@@ -1799,7 +1774,6 @@ pub fn cli() -> Command {
             arg!(--"clear-quarantine" "kaspa-pq (ADR-0025): operator override — clear a persisted Quarantined chain-participation state at startup and resume normal participation. Clears quarantine ONLY (a pending candidate review keeps its deadline). Fires on EVERY boot it is present for; remove it from the service unit once the node is back.")
                 .env("KASPAD_CLEAR_QUARANTINE"),
         )
-        .arg(arg!(--"enable-validator" "kaspa-pq: run the in-process DNS-overlay validator service (ADR-0010). Default off.").env("KASPAD_ENABLE_VALIDATOR"))
         .arg(
             arg!(--"palw-produce" "PALW ADR-0042: run the in-process PALW-RC block producer. Needs --palw-producer-key and --palw-producer-bond; --palw-producer-pay-address defaults to the key's own address. Only a ConsensusV2 network can use it. Default off.")
                 .env("KASPAD_PALW_PRODUCE"),
@@ -2892,30 +2866,6 @@ pub fn cli() -> Command {
                 .help("kaspa-pq EVM Lane: the miner's EVM coinbase address (20-byte hex, optional 0x) — receives the priority fees of this node's own EVM payload txs."),
         )
         .arg(
-            Arg::new("validator-key")
-                .long("validator-key")
-                .env("KASPAD_VALIDATOR_KEY")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(String))
-                .help("kaspa-pq: path to the validator ML-DSA-87 signing seed file (64 hex chars = 32 bytes)."),
-        )
-        .arg(
-            Arg::new("stake-bond")
-                .long("stake-bond")
-                .env("KASPAD_STAKE_BOND")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(String))
-                .help("kaspa-pq: stake-bond outpoint backing this validator's attestations, as 'txid:index'."),
-        )
-        .arg(
-            Arg::new("validator-mode")
-                .long("validator-mode")
-                .env("KASPAD_VALIDATOR_MODE")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(String))
-                .help("kaspa-pq: validator operating mode {active, standby, observer} (default: observer)."),
-        )
-        .arg(
             Arg::new("compute-endpoint")
                 .long("compute-endpoint")
                 .env("KASPAD_COMPUTE_ENDPOINT")
@@ -3163,22 +3113,6 @@ pub fn cli() -> Command {
                  block at minutes per producer. DEVNET ONLY; every node of a drill must carry it (it is in the consensus fingerprint).")
                 .env("KASPAD_PALW_DEVNET_FLOOR_ONLY"),
         )
-        .arg(
-            arg!(--"evm-bridge-devnet-unpaused" "The devnet spelling of --evm-bridge-finality=label (ADR-0109), kept for scripts: the EVM \
-                 payload and the deposit-claim RPC do not wait for a fresh DNS-finality anchor.")
-                .env("KASPAD_EVM_BRIDGE_DEVNET_UNPAUSED"),
-        )
-        .arg(
-            Arg::new("evm-bridge-finality")
-                .long("evm-bridge-finality")
-                .env("KASPAD_EVM_BRIDGE_FINALITY")
-                .value_name("POLICY")
-                .value_parser(["label", "pause"])
-                .help("ADR-0109: what a stale DNS-finality anchor does to the EVM lane on this node. label (default): deposit claims, \
-                       EVM transactions and the EVM coinbase are included whatever the anchor's distance, and eth_* readers ask for the \
-                       `safe` tag (the DNS-confirmed anchor) when they want confirmed state. pause: the behaviour before ADR-0109 — an \
-                       empty EVM payload and a refused claim RPC while the anchor is unconfirmed or stale."),
-        )
         .arg(arg!(--utxoindex "Enable the UTXO index").env("KASPAD_UTXOINDEX"))
         .arg(
             Arg::new("max-tracked-addresses")
@@ -3186,8 +3120,8 @@ pub fn cli() -> Command {
                 .env("KASPAD_MAX_TRACKED_ADDRESSES")
                 .require_equals(true)
                 .value_parser(clap::value_parser!(usize))
-                .help(format!("Max (preallocated) number of addresses being tracked for UTXO changed events (default: {}, maximum: {}). 
-Setting to 0 prevents the preallocation and sets the maximum to {}, leading to 0 memory footprint as long as unused but to sub-optimal footprint if used.", 
+                .help(format!("Max (preallocated) number of addresses being tracked for UTXO changed events (default: {}, maximum: {}).
+Setting to 0 prevents the preallocation and sets the maximum to {}, leading to 0 memory footprint as long as unused but to sub-optimal footprint if used.",
 0, Tracker::MAX_ADDRESS_UPPER_BOUND, Tracker::DEFAULT_MAX_ADDRESSES)),
         )
         .arg(arg!(--testnet "Use the test network").env("KASPAD_TESTNET"))
@@ -3392,7 +3326,7 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                 .require_equals(true)
                 .value_parser(NodeProfile::VARIANTS)
                 .help("MISAKA node role profile: full | bootstrap-pruned | recovery-sync | validator | archive | public-rpc. \
-                       The sync-only profiles apply 8GB resource defaults and reject --archival/--utxoindex/--enable-validator/\
+                       The sync-only profiles apply 8GB resource defaults and reject --archival/--utxoindex/\
                        --evm-rpc-listen/--unsaferpc; recovery-sync additionally requires --connect. Consensus rules are unchanged.")
         )
         .arg(
@@ -3527,15 +3461,6 @@ impl Args {
             evm_shadow_state_backend: arg_match_unwrap_or::<bool>(&m, "evm-shadow-state-backend", defaults.evm_shadow_state_backend),
             evm_flat_authoritative: arg_match_unwrap_or::<bool>(&m, "evm-flat-authoritative", defaults.evm_flat_authoritative),
             evm_retire_206: arg_match_unwrap_or::<bool>(&m, "evm-retire-206", defaults.evm_retire_206),
-            evm_bridge_devnet_unpaused: arg_match_unwrap_or::<bool>(
-                &m,
-                "evm-bridge-devnet-unpaused",
-                defaults.evm_bridge_devnet_unpaused,
-            ),
-            evm_bridge_finality: m
-                .get_one::<String>("evm-bridge-finality")
-                .and_then(|s| EvmBridgeFinalityPolicy::from_str_opt(s))
-                .unwrap_or(defaults.evm_bridge_finality),
             evm_prune_legacy_206: arg_match_unwrap_or::<bool>(&m, "evm-prune-legacy-206", defaults.evm_prune_legacy_206),
             evm_materialize_pp_anchor: arg_match_unwrap_or::<bool>(
                 &m,
@@ -3566,8 +3491,6 @@ impl Args {
                 "enforce-chain-participation",
                 defaults.enforce_chain_participation,
             ),
-            enable_validator: arg_match_unwrap_or::<bool>(&m, "enable-validator", defaults.enable_validator),
-            validator_key: m.get_one::<String>("validator-key").cloned().or(defaults.validator_key),
             palw_produce: arg_match_unwrap_or::<bool>(&m, "palw-produce", defaults.palw_produce),
             palw_panel: arg_match_named_flag(&m, "palw-panel").or(defaults.palw_panel),
             palw_fee_outpoint: m.get_one::<String>("palw-fee-outpoint").cloned().or(defaults.palw_fee_outpoint),
@@ -3585,7 +3508,10 @@ impl Args {
             palw_class_resident_bytes: m.get_one::<u64>("palw-class-resident-bytes").copied().or(defaults.palw_class_resident_bytes),
             palw_riders: m.get_one::<u32>("palw-riders").copied().unwrap_or(defaults.palw_riders),
             palw_redemption_auth_dir: m.get_one::<String>("palw-redemption-auth-dir").cloned().or(defaults.palw_redemption_auth_dir),
-            palw_evidence_provider_dir: m.get_one::<String>("palw-evidence-provider-dir").cloned().or(defaults.palw_evidence_provider_dir),
+            palw_evidence_provider_dir: m
+                .get_one::<String>("palw-evidence-provider-dir")
+                .cloned()
+                .or(defaults.palw_evidence_provider_dir),
             palw_attempt_retention_minutes: m
                 .get_one::<u64>("palw-attempt-retention-minutes")
                 .copied()
@@ -3667,7 +3593,10 @@ impl Args {
             palw_drill_tamper_eval: m.get_one::<String>("palw-drill-tamper-eval").cloned(),
             palw_tir_fused_kernels: m.get_one::<bool>("palw-tir-fused-kernels").copied().unwrap_or(defaults.palw_tir_fused_kernels),
             palw_tir_metal: m.get_one::<bool>("palw-tir-metal").copied().unwrap_or(defaults.palw_tir_metal),
-            palw_no_seat_conformance: m.get_one::<bool>("palw-no-seat-conformance").copied().unwrap_or(defaults.palw_no_seat_conformance),
+            palw_no_seat_conformance: m
+                .get_one::<bool>("palw-no-seat-conformance")
+                .copied()
+                .unwrap_or(defaults.palw_no_seat_conformance),
             palw_drill_fence4_at: m.get_one::<u64>("palw-drill-fence4-at").copied(),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_boundary: m.get_one::<String>("palw-drill-tamper-boundary").cloned(),
@@ -3702,8 +3631,6 @@ impl Args {
                 .or(defaults.palw_heartbeat_miner_address),
             palw_round_lane: arg_match_named_flag(&m, "palw-round-lane").or(defaults.palw_round_lane),
             evm_fee_recipient: m.get_one::<String>("evm-fee-recipient").cloned().or(defaults.evm_fee_recipient),
-            stake_bond: m.get_one::<String>("stake-bond").cloned().or(defaults.stake_bond),
-            validator_mode: m.get_one::<String>("validator-mode").cloned().or(defaults.validator_mode),
             compute_endpoint: m.get_one::<String>("compute-endpoint").cloned().or(defaults.compute_endpoint),
             palw_model_devnet_daa: m.get_one::<u64>("palw-model-devnet").copied().or(defaults.palw_model_devnet_daa),
             palw_shard_court_devnet_daa: m.get_one::<u64>("palw-shard-court-devnet").copied().or(defaults.palw_shard_court_devnet_daa),

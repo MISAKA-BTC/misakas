@@ -262,7 +262,7 @@ fn counted_by_notes(node: &T12Chain, blocks: &[BlockHash]) -> (i128, i128) {
 /// **`challenger` (as `c_node` weighs it) strictly wins the one fork-choice comparator against
 /// `incumbent` (as `i_node` weighs it)** — `compare_palw_candidates_v1`: frontier, safe weight, live
 /// total, then the tip's hash — and not on the hash. A V2 node's deep-reorg gate asks nothing else
-/// (`dns_reorg_outcome`, Unit D), so a fork that only out-works a chain is a coin flip on the tip
+/// (`palw_reorg_outcome`, Unit D), so a fork that only out-works a chain is a coin flip on the tip
 /// hash; the chains here differ in live work. The order is a function of the candidate's state, so
 /// two nodes holding the two chains weigh them as one node holding both does.
 fn dominates(c_node: &T12Chain, challenger: BlockHash, i_node: &T12Chain, incumbent: BlockHash, what: &str) {

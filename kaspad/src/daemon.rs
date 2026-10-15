@@ -25,7 +25,7 @@ use kaspa_grpc_server::service::GrpcService;
 use kaspa_notify::{address::tracker::Tracker, subscription::context::SubscriptionContext};
 use kaspa_p2p_lib::Hub;
 use kaspa_p2p_mining::rule_engine::MiningRuleEngine;
-use kaspa_rpc_service::service::{PalwClassLedgerProvider, RpcCoreService, ValidatorStatusProvider};
+use kaspa_rpc_service::service::{PalwClassLedgerProvider, RpcCoreService};
 use kaspa_txscript::caches::TxScriptCacheCounters;
 use kaspa_utils::git;
 use kaspa_utils::networking::ContextualNetAddress;
@@ -70,7 +70,6 @@ const MINIMUM_RETENTION_PERIOD_DAYS: f64 = 2.0;
 const ONE_GIGABYTE: f64 = 1_000_000_000.0;
 
 use crate::args::{Args, NodeProfile, VPS_8GB_MIN_SYSTEM_MEMORY_BYTES};
-use crate::validator_service::{ValidatorConfig, ValidatorMode, ValidatorService};
 
 const DEFAULT_DATA_DIR: &str = "datadir";
 const CONSENSUS_DB: &str = "consensus";
@@ -189,9 +188,6 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
         }
         if args.utxoindex {
             return Err(ConfigError::NodeProfileIncompatible(profile, "--utxoindex"));
-        }
-        if args.enable_validator {
-            return Err(ConfigError::NodeProfileIncompatible(profile, "--enable-validator"));
         }
         if args.evm_rpc_listen.is_some() {
             return Err(ConfigError::NodeProfileIncompatible(profile, "--evm-rpc-listen"));
@@ -1298,13 +1294,8 @@ Do you confirm? (y/n)";
         }
         kaspa_consensus_core::evm::EvmAddress::from_bytes(bytes)
     });
-    // kaspa-pq DNS-finality: local attestation mempool/mining policy (expiry, dedup, recent-epoch
-    // template preference). Enabled and configured from the chain's `DnsParams` when present
-    // (mainnet/testnet/devnet/simnet carry it); disabled otherwise so behavior is unchanged.
-    let attestation_policy = match config.dns_params.as_ref() {
-        Some(dns_params) => kaspa_mining::AttestationMempoolPolicy::from_dns_params(dns_params),
-        None => kaspa_mining::AttestationMempoolPolicy::disabled(),
-    };
+    // DNS participation is retired; no ready-epoch queue or attestation promotion is active.
+    let attestation_policy = kaspa_mining::AttestationMempoolPolicy::disabled();
     let mining_manager = MiningManagerProxy::new(Arc::new(MiningManager::new_with_extended_config(
         config.target_time_per_block(),
         false,
@@ -1395,52 +1386,11 @@ Do you confirm? (y/n)";
     // and a capability handle only — an absent or quarantined agent withdraws v2 compute
     // capability (which nothing consensus-visible consumes yet) and the node continues
     // validator-only, exactly as the VPS design's failure policy requires. Independent of
-    // `--enable-validator`: watching a runtime is not a validator role.
     let _palw_agent_capability = args.compute_endpoint.as_ref().map(|endpoint| {
         // Accept both the bare socket path and the design docs' `unix://` URI spelling.
         let path = endpoint.strip_prefix("unix://").unwrap_or(endpoint);
         crate::palw_agent::spawn_palw_agent_monitor(PathBuf::from(path))
     });
-
-    // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service. Built only
-    // when `--enable-validator` is set (so default node behavior is unchanged) and after
-    // `flow_context`, which it uses to submit attestation-shard transactions.
-    let validator_service = if args.enable_validator {
-        let mode = match args.validator_mode.as_deref() {
-            Some(s) => s.parse::<ValidatorMode>().unwrap_or_else(|err| {
-                warn!("{err}; falling back to observer mode");
-                ValidatorMode::default()
-            }),
-            None => ValidatorMode::default(),
-        };
-        // Equivocation-safety log lives beside the per-network data dir (NOT inside it),
-        // so it survives a `--reset-db` and still binds the validator to its network.
-        let state_path = app_dir.join(network.to_prefixed()).join("validator-state.json");
-        let validator_config = ValidatorConfig {
-            mode,
-            key_path: args.validator_key.clone(),
-            stake_bond: args.stake_bond.clone(),
-            state_path: Some(state_path),
-            address_prefix: config.prefix(),
-            // ADR-0009 Addendum A.3: the network discriminator is the per-network genesis hash,
-            // the same value consensus binds into every overlay message it verifies.
-            network_id: config.params.genesis.hash.as_byte_slice().to_vec(),
-        };
-        let validator_mass_calculator = kaspa_consensus_core::mass::MassCalculator::new_with_consensus_params(&config.params);
-        Some(Arc::new(ValidatorService::new(
-            validator_config,
-            consensus_manager.clone(),
-            tick_service.clone(),
-            flow_context.clone(),
-            validator_mass_calculator,
-            index_service.as_ref().map(|x| x.utxoindex().unwrap()),
-            // Effective spend maturity (floor ∨ settlement): the floor alone selects coinbases
-            // the node refuses (issue #81).
-            config.params.coinbase_spend_maturity(),
-        )))
-    } else {
-        None
-    };
 
     let p2p_service = Arc::new(P2pService::new(
         flow_context.clone(),
@@ -1756,12 +1706,6 @@ Do you confirm? (y/n)";
         Err(_) => None,
     };
 
-    // kaspa-pq Phase 11 (ADR-0010): expose the in-process validator service's status via
-    // the `getValidatorStatus` RPC (None when `--enable-validator` is off).
-    let validator_status_provider: Option<Arc<dyn ValidatorStatusProvider>> = match &validator_service {
-        Some(v) => Some(v.clone()),
-        None => None,
-    };
     // kaspa-pq EVM Lane (ADR-0020 §16): keep a mining-manager handle for the
     // Ethereum JSON-RPC adapter (`eth_sendRawTransaction`). Routed through the
     // `flow_context` (admit + P2P-broadcast to EVM-relay peers, like the UTXO RPC
@@ -1775,12 +1719,19 @@ Do you confirm? (y/n)";
     // RFC-0006: the GPU device is a helper process (its own workspace and lock), spawned here and registered; any failure leaves the CPU.
     if args.palw_tir_shard_gpu {
         let helper = args.palw_tir_shard_gpu_helper.as_ref().map(std::path::PathBuf::from).unwrap_or_else(|| {
-            std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("palw-tir-gpu-helper"))).unwrap_or_else(|| "palw-tir-gpu-helper".into())
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("palw-tir-gpu-helper")))
+                .unwrap_or_else(|| "palw-tir-gpu-helper".into())
         });
         let mirror = args.palw_tir_shard_gpu_mirror || args.palw_tir_shard_shadow;
         match misaka_palw_sdk::lineages::tir::TirProcessDeviceV1::spawn(&helper, &[], mirror) {
             Ok(device) => {
-                info!("PALW-TIR shard cells: device helper {} ({})", helper.display(), misaka_palw_sdk::lineages::tir::TirDeviceV1::name(&device));
+                info!(
+                    "PALW-TIR shard cells: device helper {} ({})",
+                    helper.display(),
+                    misaka_palw_sdk::lineages::tir::TirDeviceV1::name(&device)
+                );
                 misaka_palw_sdk::lineages::tir::register_device_v1(std::sync::Arc::new(device));
             }
             Err(why) => warn!("--palw-tir-shard-gpu: no device helper ({why}): cells run on the CPU"),
@@ -1788,8 +1739,8 @@ Do you confirm? (y/n)";
     }
     // RFC-0006 (D-S3): a drill's consistent lie at a layer-shard boundary — refused on mainnet, as every fault injector is.
     if let Some(spec) = args.palw_drill_tamper_boundary.as_deref() {
-        let (position, boundary) =
-            crate::args::parse_palw_drill_tamper_boundary_v1(spec).unwrap_or_else(|e| panic!("--palw-drill-tamper-boundary={spec}: {e}"));
+        let (position, boundary) = crate::args::parse_palw_drill_tamper_boundary_v1(spec)
+            .unwrap_or_else(|e| panic!("--palw-drill-tamper-boundary={spec}: {e}"));
         if network.is_mainnet() {
             panic!("--palw-drill-tamper-boundary={spec} is a drill fault injector and is refused on mainnet");
         }
@@ -1810,7 +1761,9 @@ Do you confirm? (y/n)";
             // A flag that cannot be honoured is refused by name rather than ignored.
             panic!("--palw-tir-metal: {e}");
         }
-        info!("PALW: IR fused unit-row kernels on the Metal GPU ON (--palw-tir-metal): bit-identical to the CPU kernels, node software only");
+        info!(
+            "PALW: IR fused unit-row kernels on the Metal GPU ON (--palw-tir-metal): bit-identical to the CPU kernels, node software only"
+        );
     }
     // RFC-0002 Part II Proposal B: the seat's executor self-test before its first possession proof (on unless `--palw-no-seat-conformance`).
     crate::palw_panel::set_seat_conformance_v1(!args.palw_no_seat_conformance);
@@ -1865,7 +1818,6 @@ Do you confirm? (y/n)";
             grpc_tower_counters.clone(),
             system_info,
             mining_rule_engine.clone(),
-            validator_status_provider,
         )
         .with_palw_class_ledger_provider(palw_class_ledger_provider),
     );
@@ -1899,9 +1851,6 @@ Do you confirm? (y/n)";
     }
     async_runtime.register(p2p_service);
     async_runtime.register(consensus_monitor);
-    if let Some(validator_service) = validator_service {
-        async_runtime.register(validator_service)
-    };
     // ADR-0042: the PALW-RC block producer. Registered only when it was asked for AND the network
     // actually has a ConsensusV2 lane — a producer on a hash-only chain would build templates for
     // an algo nobody declares and log a refusal every few hundred milliseconds.
@@ -1975,7 +1924,9 @@ Do you confirm? (y/n)";
                         vertex_full_refs: args.palw_vertex_full_refs,
                         sketch_check: args.palw_sketch_check,
                         vertex_equivocate_at: match args.palw_drill_vertex_equivocate_at {
-                            Some(at) if palw_private_drill && config_for_palw_panel.params.palw_verification_vertex_fence().is_some() => {
+                            Some(at)
+                                if palw_private_drill && config_for_palw_panel.params.palw_verification_vertex_fence().is_some() =>
+                            {
                                 warn!(
                                     "PALW DRILL: this seat will sign a second vertex for one round from DAA {at} (RFC-0007 equivocation). \
                                      Its bond will be slashed and ejected."
@@ -1999,7 +1950,10 @@ Do you confirm? (y/n)";
                         tir_shard_hold: args.palw_tir_shard_hold.clone(),
                         tir_shard_declare: match args.palw_tir_shard_declare.as_deref() {
                             None => None,
-                            Some(spec) => Some(crate::args::parse_palw_tir_shard_declare_v1(spec).unwrap_or_else(|e| panic!("--palw-tir-shard-declare: {e}"))),
+                            Some(spec) => Some(
+                                crate::args::parse_palw_tir_shard_declare_v1(spec)
+                                    .unwrap_or_else(|e| panic!("--palw-tir-shard-declare: {e}")),
+                            ),
                         },
                         tir_shard_gpu: args.palw_tir_shard_gpu,
                         tir_shard_demand_runs: args.palw_tir_shard_demand_runs,
@@ -2009,7 +1963,11 @@ Do you confirm? (y/n)";
                         tir_shard_shadow: args.palw_tir_shard_shadow,
                         improve_artifact_dir: args.palw_improve_artifact_dir.as_ref().map(std::path::PathBuf::from),
                         root_fetch_cmd: args.palw_root_fetch_cmd.clone(),
-                        root_drop_dir: args.palw_root_drop_dir.as_ref().or(args.palw_improve_artifact_dir.as_ref()).map(std::path::PathBuf::from),
+                        root_drop_dir: args
+                            .palw_root_drop_dir
+                            .as_ref()
+                            .or(args.palw_improve_artifact_dir.as_ref())
+                            .map(std::path::PathBuf::from),
                         improve_capture_dir: args.palw_improve_capture_dir.as_ref().map(std::path::PathBuf::from),
                         improve_tamper: match args.palw_drill_tamper_eval.as_deref() {
                             None => None,
@@ -2066,7 +2024,9 @@ Do you confirm? (y/n)";
                         evidence_provider_dirs: args
                             .palw_evidence_provider_dir
                             .as_deref()
-                            .map(|dirs| dirs.split(',').map(str::trim).filter(|d| !d.is_empty()).map(std::path::PathBuf::from).collect())
+                            .map(|dirs| {
+                                dirs.split(',').map(str::trim).filter(|d| !d.is_empty()).map(std::path::PathBuf::from).collect()
+                            })
                             .unwrap_or_default(),
                         drill_answer_only: {
                             let drill = palw_private_drill;
@@ -2546,32 +2506,6 @@ mod tests {
         assert!(matches!(validate_args(&args), Err(ConfigError::NodeProfileIncompatible(_, "--archival"))));
     }
 
-    #[test]
-    fn bootstrap_pruned_rejects_enable_validator() {
-        let args = parse(&["--node-profile=bootstrap-pruned", "--enable-validator"]);
-        assert!(matches!(validate_args(&args), Err(ConfigError::NodeProfileIncompatible(_, "--enable-validator"))));
-    }
-
-    /// **The DNS-overlay validator is an operator role again.** Validators attest for the stake reorg
-    /// gate, so every node operator who upgrades can run one: the service's flags parse into the
-    /// fields `ValidatorConfig` is built from, and `--node-profile=validator` is a label again.
-    #[test]
-    fn the_validator_flags_parse() {
-        let args = parse(&[
-            "--enable-validator",
-            "--validator-key=/tmp/validator.seed",
-            "--stake-bond=00:0",
-            "--validator-mode=active",
-            "--node-profile=validator",
-        ]);
-        assert!(args.enable_validator);
-        assert_eq!(args.validator_key.as_deref(), Some("/tmp/validator.seed"));
-        assert_eq!(args.stake_bond.as_deref(), Some("00:0"));
-        assert_eq!(args.validator_mode.as_deref(), Some("active"));
-        assert!(matches!(args.node_profile, NodeProfile::Validator));
-        assert!(validate_args(&args).is_ok());
-    }
-
     /// **The VLT compute role and the overlay's devnet switches stay retired, flags included.** The
     /// validator attests and precommits; nothing in kaspad executes or audits LLM jobs for the VLT
     /// overlay, submits token fixture ops, or arms the VLT and token fences on a devnet. A unit file
@@ -2639,8 +2573,16 @@ mod tests {
     }
 
     #[test]
+    fn retired_dns_flags_are_unknown() {
+        for flag in ["--enable-validator", "--validator-mode=active", "--validator-key=old.seed",
+                     "--stake-bond=old:0", "--evm-bridge-finality=pause", "--evm-bridge-devnet-unpaused"] {
+            assert!(Args::parse(["kaspad", flag]).is_err(), "{flag}");
+        }
+    }
+
+    #[test]
     fn full_profile_allows_heavy_flags() {
-        let args = parse(&["--utxoindex", "--archival", "--enable-validator", "--evm-rpc-listen=127.0.0.1:8545"]);
+        let args = parse(&["--utxoindex", "--archival", "--evm-rpc-listen=127.0.0.1:8545"]);
         assert!(validate_args(&args).is_ok());
     }
 }

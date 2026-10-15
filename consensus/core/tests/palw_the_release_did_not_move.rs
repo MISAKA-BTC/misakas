@@ -44,8 +44,10 @@ use kaspa_consensus_core::config::params::{
 /// V2 arm): the params and identity ids move with the version alone — `palw_rcore_plus` and C7's list
 /// are Some-only / non-empty-only and absent here — and the schedule id does not move. Previous:
 /// params `c99bb4f4…`, identity `19dbdbb8…`.
-const T11_CONSENSUS_PARAMS_ID: &str = "bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29";
-const T11_CONSENSUS_IDENTITY_ID: &str = "44cb8fd729e9575a6e3b1e72c466b8abce4b9ecd81bb556685c9ba225487117f";
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was bd633ce9…)
+const T11_CONSENSUS_PARAMS_ID: &str = "0c2c022a11572d73779fc0610cf65d4147feb499a9b58472901d3d73ecfc1f71";
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 44cb8fd7…)
+const T11_CONSENSUS_IDENTITY_ID: &str = "bf4cc0b3e2fa208a18cce48d0c33db74e48adf275a069687b534856411f1c83e";
 /// **Re-pinned 2026-09-23 for ADR-0151's `palw_economic_safety`, and only this one of the three.**
 ///
 /// `consensus_schedule_id` writes every score `for_each_fence` visits, and a `None` Some-only fence
@@ -56,10 +58,12 @@ const T11_CONSENSUS_IDENTITY_ID: &str = "44cb8fd729e9575a6e3b1e72c466b8abce4b9ec
 ///
 /// This id is explicitly NOT a gate — it exists so a mismatch can be reported precisely — which is
 /// why a new dormant fence may move it and why re-pinning is the whole remedy.
-const T11_CONSENSUS_SCHEDULE_ID: &str = "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64";
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was 5a1d8d56…)
+const T11_CONSENSUS_SCHEDULE_ID: &str = "f023f74befcdaf732f213616c79fd94782d7728f835151bbfd986498f962bd64";
 /// **Re-pinned 2026-09-25: mainnet's DNS set moved to testnet-12's numbers** (6 validators x 20M MSK,
 /// 120M MSK active stake, the 600-DAA coinbase long maturity; user decision). Previous: `badaa8e9…`.
-const MAINNET_CONSENSUS_PARAMS_ID: &str = "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5";
+// re-pin 2026-10-08 @e35409e2a: RFC-0012 removes DNS BFT; new ruleset only (was eb866c61…)
+const MAINNET_CONSENSUS_PARAMS_ID: &str = "0befd2fa1da052fb88ef8a04cc1bd6412ea560371aaec606790194dee41ac3fa";
 
 #[test]
 fn the_shipped_release_fingerprint_did_not_move() {

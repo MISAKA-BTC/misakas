@@ -1,6 +1,6 @@
 [package]
 name = "kaspa-pq-validator"
-description = "Kaspa-PQ validator sidecar (ADR-0011): connects to a local node over 127.0.0.1 wRPC and attests when its stake bond is active"
+description = "PALW key/funding and historical stake-bond exit utility; DNS validator voting is retired"
 publish = false
 rust-version.workspace = true
 version.workspace = true

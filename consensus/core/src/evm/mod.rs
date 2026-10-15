@@ -1241,40 +1241,6 @@ impl MemSizeEstimator for EvmDepositLockRecord {
     }
 }
 
-/// **ADR-0109 Decision 2 — what a stale DNS-finality anchor does to the EVM lane on this node.**
-/// Node policy, never block validity: a block built either way validates on every node.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum EvmBridgeFinalityPolicy {
-    /// The producer includes deposit claims, EVM transactions and its EVM coinbase whatever the
-    /// anchor's distance, and the claim RPC queues whatever the distance; a reader who wants the
-    /// two-resource-confirmed state asks the eth RPC for the `safe` tag, which is the DNS-confirmed
-    /// anchor (Decision 4). The default on every network.
-    #[default]
-    Label,
-    /// The behaviour before ADR-0109: an empty EVM payload and a refused claim RPC while the anchor
-    /// is unconfirmed or farther below the sink than `dns_bridge_max_anchor_distance_blue_score`.
-    Pause,
-}
-
-impl EvmBridgeFinalityPolicy {
-    /// Parse the `--evm-bridge-finality` value; `None` for an unknown string.
-    pub fn from_str_opt(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "label" => Some(Self::Label),
-            "pause" => Some(Self::Pause),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Label => "label",
-            Self::Pause => "pause",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EvmHistoryMode {
