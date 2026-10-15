@@ -54,16 +54,6 @@ pub const PALW_RFC0608_OPEN_BLOCKERS_V1: &[(PalwRfc0608FenceV1, &str)] = &[
         "RFC07-5: lazy-verifier (T6) deterrence is unresolved — a drawn checker can approve without checking and still be paid",
     ),
     (
-        PalwRfc0608FenceV1::BeaconSourceOptInV1,
-        "RFC07-3: source-dependency cycles longer than two producers cannot be judged (BeaconContextV1 carries no subject \
-         claim/producer)",
-    ),
-    (
-        PalwRfc0608FenceV1::BeaconSourceFeeV1,
-        "RFC07-3: source-dependency cycles longer than two producers cannot be judged (BeaconContextV1 carries no subject \
-         claim/producer)",
-    ),
-    (
         PalwRfc0608FenceV1::SettlementOnceV1,
         "RFC08-2 (unsourced terms): past the fence the combined liability predicate refuses, by name, every leg whose terms \
          have no authenticated source: verifier check fees (RFC07-5: no verifier liability horizon), material provider fees \

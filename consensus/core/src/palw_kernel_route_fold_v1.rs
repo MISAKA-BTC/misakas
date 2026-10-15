@@ -1651,6 +1651,34 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             return Err(refused("two producers cannot be each other's live beacon sources (mutual certification)"));
         }
     }
+    // RFC-0007 RFC07-3 (user decision 2026-10-15, design note §4.2): the seal-before-commit order. A producer may seal as a
+    // source only strictly before the commitment of every live paid claim of its own that is a source target, checked whichever
+    // edge comes second, so no source cycle of any length can form (`crate::palw_beacon_source_order_v1`). Both opt-in kinds,
+    // for paid-claim targets (a target with no paid claim has no producer to cycle through). Dormant: these objects exist only
+    // past the opt-in/fee fences, `None` on every preset.
+    if let KernelRouteObjectV1::OptInBeaconSource { producer, job, context, .. }
+    | KernelRouteObjectV1::OptInPaidBeaconSource { producer, job, context, .. } = &object
+        && let Some(route) = builder.state.kernel_route.as_ref()
+        && let Some(target_producer) = paid_source_target_producer_v1(route, context)
+        && let Some(target_commit) = route.beacon_source_target_v4(context).ok().map(|t| t.context.commitment_position)
+        && let Some(seal) = ledger.seals.get(&(*job, *producer))
+    {
+        use crate::palw_beacon_source_order_v1::{PalwSourceEdgeV1, palw_source_order_admits_v1};
+        let new = PalwSourceEdgeV1 {
+            source: *producer,
+            target_producer,
+            sealed_daa: seal.daa,
+            target_commit_daa: target_commit,
+        };
+        // Live = within its signed horizon (failure/refund does not free a slot early, as the kernel's own cap reads it). An edge
+        // whose target cannot be resolved to a paid claim carries no producer and cannot close a cycle.
+        let live = ledger.beacon_sources.iter().filter(|(_, row)| ctx.daa_score <= row.terms.hold_until).filter_map(|((other, source), row)| {
+            let target_producer = paid_source_target_producer_v1(route, other)?;
+            let target_commit_daa = route.beacon_source_target_v4(other).ok()?.context.commitment_position;
+            Some(PalwSourceEdgeV1 { source: *source, target_producer, sealed_daa: row.sealed_daa, target_commit_daa })
+        });
+        palw_source_order_admits_v1(live, &new).map_err(|why| refused(why.reason()))?;
+    }
     let kid = palw_kernel_bond_id_v1(signer);
     ledger.try_sync_bond_v1(kid, builder.kernel_synced_collateral(signer, ctx.daa_score)).map_err(PalwStateV2Error::NativeResource)?;
     // The other bond a slash can land on is the producer of the claim the object names: its collateral is brought up to date too, so
@@ -2472,4 +2500,43 @@ fn candidate_withdraw_held_v9(
         }
     }
     Ok(false)
+}
+
+/// **RFC07-3: the producer of a paid-claim source target**, initial or staged, read from the authority row's fixed-size
+/// `(version, enrollment)` prefix (the checker snapshot behind it is never decoded). `None` for a context that names no paid claim.
+fn paid_source_target_producer_v1(
+    route: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1,
+    context: &misaka_palw_kernel::hash::Digest,
+) -> Option<misaka_palw_kernel::hash::Digest> {
+    use crate::palw_claim_challenge_v2::{
+        PAID_CLAIM_ENROLLMENTS_V2, PAID_CLAIM_ID_INDEX_PREFIX_V3, PAID_CLAIM_ROUNDS_V2, PalwPaidClaimIndexKindV3, PalwPaidClaimIndexV3,
+        paid_claim_index_key_v3,
+    };
+    use borsh::BorshDeserialize;
+    fn enrollment_prefix(
+        route: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1,
+        primary: &misaka_palw_kernel::hash::Digest,
+    ) -> Option<misaka_palw_kernel::claim_paid_v2::PaidClaimEnrollmentV2> {
+        let raw = route.aux.get(&(PAID_CLAIM_ENROLLMENTS_V2, primary.to_vec()))?;
+        let mut bytes = raw.as_slice();
+        (u16::deserialize(&mut bytes).ok()? == 2).then_some(())?;
+        misaka_palw_kernel::claim_paid_v2::PaidClaimEnrollmentV2::deserialize(&mut bytes).ok()
+    }
+    if let Some(enrollment) = enrollment_prefix(route, context) {
+        return Some(enrollment.producer);
+    }
+    // A staged round's context: its index names the round row, whose first field is the enrollment id.
+    let index: PalwPaidClaimIndexV3 =
+        route.aux_row(PAID_CLAIM_ROUNDS_V2, &paid_claim_index_key_v3(PAID_CLAIM_ID_INDEX_PREFIX_V3, context))?;
+    if index.version != 3 || index.kind != PalwPaidClaimIndexKindV3::StagedContext || index.owner != *context {
+        return None;
+    }
+    let round = route.aux.get(&(PAID_CLAIM_ROUNDS_V2, index.target.to_vec()))?;
+    let enrollment: misaka_palw_kernel::hash::Digest = round.get(..64)?.try_into().ok()?;
+    let by_id: PalwPaidClaimIndexV3 =
+        route.aux_row(PAID_CLAIM_ENROLLMENTS_V2, &paid_claim_index_key_v3(PAID_CLAIM_ID_INDEX_PREFIX_V3, &enrollment))?;
+    if by_id.version != 3 || by_id.kind != PalwPaidClaimIndexKindV3::Enrollment || by_id.owner != enrollment {
+        return None;
+    }
+    enrollment_prefix(route, &by_id.target).map(|e| e.producer)
 }
