@@ -962,10 +962,9 @@ pub mod palw_material_release_recovery_v2;
 pub mod palw_econ_contracts_v1;
 pub mod palw_monetary_material_v1;
 
-/// R7-RELATION round 3 (2026-10-15): the dormant ClaimV2 gate of compact relation contracts (refused: empty review registry).
+/// Codex (2026-10-15): versioned native compact admission V4 (aux 135, colliding with RFC-0016's telemetry table); dormant.
+/// Compact (sum-check / Fiat–Shamir) relation proofs await a ruling under PRINCIPLES §8 (merge sweep 2026-10-15).
 pub mod palw_claim_compact_v4;
-/// R6-CELL round 3 (2026-10-15): pure boundary/routing/memory coverage checker over accepted cell profiles. Below
-/// `palw_cell_coverage_closure_v1` not called by consensus; past it the closure's one predicate.
 /// R6-CELL round 4 (2026-10-15): the dormant `palw_cell_coverage_closure_v1` — an uncoverable legacy class (unknown map, hybrid
 /// v1/v2 recurrence, solo recurrence map, multi-router, Kimi router) refused at registration / the claim gate, convicted in court.
 pub mod palw_cell_coverage_closure_v1;

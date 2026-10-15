@@ -194,9 +194,9 @@ pub use verify::{
 
 pub mod flat_seal9;
 
-/// R7-RELATION (2026-10-15 round 3): compact relation proof compilers under the dormant ClaimV2 contract; unreviewed.
-pub mod claim_circuit_v5;
-/// RFC07/RFC08 signed economic contracts (inner 67–69), 2026-10-15; dormant.
+// `claim_circuit_v5` (Codex e34b201c9 / beba0dba4 / ee8757fd5 / 82daa585e / ac19fe860: Boolean/hash circuits and R1CS
+// "required by a polynomial IOP" for a future proof contract) is EXCLUDED from the integration line by the permanent user
+// decision of 2026-10-15 (docs/PRINCIPLES.md §8: no cryptographic proofs of computation). Removed in the 2026-10-15 merge sweep.
 /// N3 (2026-10-15 round 3): BootstrapExact source contributions (inner 73), consumer-owned past `palw_beacon_bootstrap_v1`.
 pub mod beacon_bootstrap_v1;
 /// RFC-0017 (2026-10-15): model eligibility exam commits and attestations (inner 74/75), consumer-owned past
