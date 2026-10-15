@@ -332,7 +332,7 @@ complete sparse/dissection proof sum merely by counting canonical operations.
 No new fence is armed and no existing claim gains new duties or clocks from this
 batch.
 
-The deadline audit found an additional mandatory coupling: the present owned
+At WIP `d3b94dc7f`, the deadline audit found a mandatory coupling: the then-current owned
 response span prices Begin/Part/Finish, not N cold-capture preparation slices or
 their native pre-debit transactions. A global work SUM does not repair that
 per-demand clock. Charging the entire remaining preparation allowance on every
@@ -346,3 +346,80 @@ defaulter by an underpriced clock. Canonical WorkSpent also reverts on reorg:
 it is not proof of at-most-once orphaned physical computation across a lost local
 journal. Durable verifier recovery and the finite reorg/restart allowance remain
 separate obligations.
+
+### Original Preparation and Durable Ready Indexes (Unverified)
+
+The next source batch addresses the preparation/response-clock separation. It
+does not enable a new native carrier or reinterpret an old claim's payment.
+
+- Preparation has its own claim/allocation key and rooted row, independent of
+  outside-owner Opens. The deadline is the ORIGINAL accepted DAA plus the frozen
+  preparation duration, not a fresh demand or restart timestamp. Each literal
+  custodian has a protected work lane and an individual Ready/default state.
+  Ready records an actor's custody/retention promise, not a computation-validity
+  result. Its signature must be authenticated by the eventual native carrier;
+  a pure transition's signer argument is not evidence that this happened.
+- A new native allocation derivation separates semantic stages (optional for a
+  genuinely arithmetic-only job), source acquisition, preparation work, outside
+  owner work, Ready metadata, executor/artifact/index storage, local court
+  witness sizing and terminal/control costs. It commits a clock-independent
+  producer resource identity and a separate accepted allocation identity with
+  all absolute clocks. The old V1 Flat-TIR refusal remains unchanged; only the
+  new quote can use the existing original Flat bridge. Unsupported derivations
+  and native witness ceilings are explicit incomplete results, not zero-cost
+  components or evidence that maximum profiles are qualified.
+- Resource review found and addressed two different accounting surfaces: the
+  artifact inventory tree is resident RAM even though own step/row trees are
+  disk-backed, and preparation IO must reach actor work limits, not merely the
+  aggregate monetary SUM. The native geometry supplies these allowances; an
+  operational host Need cannot authorize them. Global ledger-map clone/root
+  amplification and actual reserved inclusion capacity remain outside this
+  derivation's claimed coverage.
+- An owner inherits the current claim-wide preparation reference, cannot restart
+  cold capture in each DA turn, and cannot impose short DA deadlines on actors
+  still within the original preparation window. Acquisition does not require an
+  all-Panel Ready vote. Missing Ready yields a once-only literal preparation
+  default effect, not a computed-fraud finding or an already-executed sanction.
+  After the original preparation window, DA targets are the frozen Ready subset;
+  known non-Ready actors cannot accumulate impossible repeated DA obligations.
+  The native row must still match that subset after a reorg.
+  Bound-row response spans include warm ID-authentication slices and the
+  WorkDebit carriers for response/part preparation, in addition to the existing
+  Begin/Part/Finish carriers. Receiver body recovery after accepted Finish uses
+  the original stream horizon, not a new short responder deadline.
+- Native derived indexes retain the original source before any outside owner
+  exists, page outstanding preparation duties in signer-local EDF order, and
+  update on delta apply/revert and import/rebuild. Preparation defaults do not
+  erase material. Bounded native sweep removes the row at its original material
+  expiry. The plain custodian list creates no new signer hold or slash right.
+  Regression source covers these lifecycle boundaries, without executing tests.
+- The responder can publish its original capture and disk indexes in bounded
+  16KiB slices, sync a fixed bounded manifest and atomically publish a sealed
+  directory. A deterministic partial-generation namespace bounds same-source
+  restart leftovers. A retry repairs only the same immutable manifest; bounded
+  retirement requires native irreversible expiry and never deletes unrelated
+  files. RAM, duplicate disk, IO/hash, slices and file-operation Needs are
+  explicit host obligations, not native admission or payment credentials.
+- Reopened readers bind the exact original source, descriptor and native
+  horizon. Prepared slice cursors also bind the manifest digest and horizon;
+  raw readers bind no prepared descriptor. Every answer still authenticates to
+  original committed roots. Local manifests and prepared trees are not public
+  verifier credentials or proofs that model computation was correct.
+
+Important incomplete boundaries remain: the original full-allocation frame and
+prospective signed carrier, actual native payment/admission and qualified
+custody holds, literal economic collection, ordinary node queue integration,
+and native objective terminal production. The retained old ClaimBundle is only
+a source-context fallback, not funding for the new preparation/allocation.
+Context-bounded preparation decoding also needs enforcement at the eventual
+native carrier/import ingress; a sender's declared upper bound is not authority.
+Reopening tiled material still authenticates all D IDs, so avoiding an N-step
+rescan does NOT establish the maximum-profile short-response restart deadline.
+Process-local staging exclusion is not cross-process cache-sharing safety.
+Neither that nor prepared persistence solves orphan physical work accounting
+across a reorg and lost verifier journal. No such guarantee is counted complete.
+
+The 2026-10-15 permanent user decision is recorded in repository `AGENTS.md` and
+`docs/PRINCIPLES.md` section 8. Computation-correctness cryptographic validity
+proofs are not an implementation or future option. This batch uses data
+identity/authentication and deterministic local adjudication only.

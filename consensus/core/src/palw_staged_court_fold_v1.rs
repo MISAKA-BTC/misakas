@@ -167,6 +167,16 @@ impl PalwChainStateV2 {
     pub fn staged_tir_source_until_v1(&self, claim: Hash64) -> Option<u64> {
         self.staged_tir_by_claim.get(&claim).and_then(|rows| rows.last().map(|(until, _)| *until))
     }
+    pub fn staged_tir_preparation_v1(
+        &self,
+        claim: Hash64,
+        allocation: Hash64,
+    ) -> Option<&crate::palw_tir_public_state_v1::PalwTirPublicPreparationRowV1> {
+        match self.staged_courts.get(&PalwStagedCourtKeyV1::TirPreparation(claim, allocation)) {
+            Some(PalwStagedCourtRowV1::TirPreparation(row)) => Some(row.as_ref()),
+            _ => None,
+        }
+    }
     pub fn staged_original_job_v1(
         &self,
         claim: Hash64,
@@ -448,6 +458,44 @@ impl PalwChainStateV2 {
         }
         Ok((page, None))
     }
+    /// Fixed original preparation duties, independent of owner Opens. This is
+    /// metadata discovery only, not an admission, work or sanction credential.
+    pub fn staged_tir_preparation_duties_after_v1(
+        &self,
+        signer: PalwBondKeyV2,
+        now: u64,
+        after: Option<(u64, Hash64, Hash64)>,
+        limit: usize,
+    ) -> Result<(Vec<(Hash64, Hash64)>, Option<(u64, Hash64, Hash64)>), String> {
+        use std::ops::Bound;
+        if self.last_point().is_none_or(|p| p.daa_score != now) || limit == 0 {
+            return Err("TIR preparation page changes accepted snapshot clock or finite capacity".into());
+        }
+        let Some(first_live) = now.checked_add(1) else { return Ok((Vec::new(), None)) };
+        let lower = match after {
+            Some((at, claim, allocation)) if at >= first_live => Bound::Excluded((signer, at, claim, allocation)),
+            _ => Bound::Included((signer, first_live, ZERO_HASH64, ZERO_HASH64)),
+        };
+        let cap = limit.min(64);
+        let mut page = Vec::with_capacity(cap);
+        let mut cursor = None;
+        for (_, at, claim, allocation) in self.staged_tir_preparers.range((lower, Bound::Unbounded))
+            .take_while(|(bond, ..)| *bond == signer).take(cap + 1)
+        {
+            if page.len() == cap { return Ok((page, cursor)); }
+            let row = self.staged_tir_preparation_v1(*claim, *allocation)
+                .ok_or("TIR preparation index lost its original claim-wide row")?;
+            let c = row.preparation.contract_v1();
+            if c.preparation_until_daa != *at || now < c.original_accepted_daa || now >= c.material_until_daa
+                || !row.preparation.pending_signers_v1().contains(&signer)
+            {
+                return Err("TIR preparation index differs from original unpaid literal duty".into());
+            }
+            page.push((*claim, *allocation));
+            cursor = Some((*at, *claim, *allocation));
+        }
+        Ok((page, None))
+    }
     /// Accepted-snapshot EDF page over TIR acquisition's exact outstanding
     /// literal slots. Metadata only, at most64 rows plus one indexed lookahead.
     /// This reader cannot create a grant, paid allocation or collection right.
@@ -484,7 +532,7 @@ impl PalwChainStateV2 {
             let c = row.owned.contract_v1();
             let pending = row.owned.active_v1().ok_or("TIR duty index lost its accepted demand")?;
             if pending.collected || pending.respond_until_daa != *at || pending.turn != *turn || pending.demand_id != *demand
-                || !c.custodians.contains(&signer) || pending.slots.get(&signer).is_some_and(|slot| slot.finished.is_some())
+                || !row.owned.response_custodians_v1().contains(&signer) || pending.slots.get(&signer).is_some_and(|slot| slot.finished.is_some())
                 || now < c.reserved_daa || now >= c.terms.material_until_daa
             {
                 return Err("TIR duty index differs from exact unpaid signer/source/turn/clock".into());
@@ -2913,6 +2961,9 @@ pub(super) fn index_rows(
         }
         PalwStagedCourtRowV1::TirRawChunk(row) => (row.material_until_daa, Vec::new()),
         PalwStagedCourtRowV1::TirAcceptedBody(row) => (row.material_until_daa, Vec::new()),
+        // This dormant row is a source lease, not proof of a funded pledge or
+        // qualified Valid grant. Native admission must establish signer holds.
+        PalwStagedCourtRowV1::TirPreparation(row) => (row.preparation.contract_v1().material_until_daa, Vec::new()),
     }
 }
 pub(super) fn update_indices(
@@ -2978,12 +3029,16 @@ pub(super) fn rebuild_indices(state: &mut PalwChainStateV2) {
     state.staged_tir_by_owner.clear();
     state.staged_tir_by_claim.clear();
     state.staged_tir_responders.clear();
+    state.staged_tir_preparers.clear();
     for (key, row) in &state.staged_courts {
-        if let Some((owner, claim, allocation, until)) = tir_index_metadata_v1(*key, row) {
+        if let Some((owner, claim, allocation, _)) = tir_index_metadata_v1(*key, row) {
             state.staged_tir_by_owner.insert((owner, claim, allocation));
-            state.staged_tir_by_claim.entry(claim).or_default().insert((until, *key));
             state.staged_tir_responders.extend(tir_response_index_rows_v1(*key, row));
         }
+        if let Some((claim, until)) = tir_source_index_metadata_v1(*key, row) {
+            state.staged_tir_by_claim.entry(claim).or_default().insert((until, *key));
+        }
+        state.staged_tir_preparers.extend(tir_preparation_index_rows_v1(*key, row));
         state.staged_history_responders.extend(history_response_index_rows_v1(row));
         state.staged_flat_responders.extend(flat_response_index_rows_v1(row));
         state.staged_selected_responders.extend(selected_response_index_rows_v1(row));
@@ -3012,6 +3067,30 @@ pub(super) fn tir_index_metadata_v1(
     if (c.claim, c.owner) != (claim, owner) { return None; }
     Some((owner, claim, allocation, c.terms.material_until_daa))
 }
+pub(super) fn tir_source_index_metadata_v1(
+    key: PalwStagedCourtKeyV1,
+    row: &PalwStagedCourtRowV1,
+) -> Option<(Hash64, u64)> {
+    match (key, row) {
+        (PalwStagedCourtKeyV1::TirPreparation(claim, allocation), PalwStagedCourtRowV1::TirPreparation(row)) => {
+            let c = row.preparation.contract_v1();
+            ((claim, allocation) == (c.claim, c.allocation_id)).then_some((claim, c.material_until_daa))
+        }
+        _ => tir_index_metadata_v1(key, row).map(|(_, claim, _, until)| (claim, until)),
+    }
+}
+pub(super) fn tir_preparation_index_rows_v1(
+    key: PalwStagedCourtKeyV1,
+    row: &PalwStagedCourtRowV1,
+) -> Vec<(PalwBondKeyV2, u64, Hash64, Hash64)> {
+    let (PalwStagedCourtKeyV1::TirPreparation(claim, allocation), PalwStagedCourtRowV1::TirPreparation(row)) = (key, row) else {
+        return Vec::new();
+    };
+    let c = row.preparation.contract_v1();
+    if (claim, allocation) != (c.claim, c.allocation_id) { return Vec::new(); }
+    row.preparation.pending_signers_v1().into_iter()
+        .map(|signer| (signer, c.preparation_until_daa, claim, allocation)).collect()
+}
 /// Exact current unpaid literal slots, not a Panel draw and not an admission or
 /// collection credential. Native versioned admission still owes grant checks.
 pub(super) fn tir_response_index_rows_v1(
@@ -3021,23 +3100,31 @@ pub(super) fn tir_response_index_rows_v1(
     let Some((owner, claim, allocation, _)) = tir_index_metadata_v1(key, row) else { return Vec::new() };
     let PalwStagedCourtRowV1::TirAcquisition(row) = row else { return Vec::new() };
     let Some(pending) = row.owned.active_v1().filter(|p| !p.collected) else { return Vec::new() };
-    row.owned.contract_v1().custodians.iter().filter(|signer| {
+    row.owned.response_custodians_v1().iter().filter(|signer| {
         pending.slots.get(signer).is_none_or(|slot| slot.finished.is_none())
     }).map(|signer| (*signer, pending.respond_until_daa, claim, owner, allocation, pending.turn, pending.demand_id)).collect()
 }
 fn update_tir_indices_v1(state: &mut PalwChainStateV2, key: PalwStagedCourtKeyV1, row: &PalwStagedCourtRowV1, insert: bool) {
-    let Some((owner, claim, allocation, until)) = tir_index_metadata_v1(key, row) else { return };
-    if insert {
-        state.staged_tir_by_owner.insert((owner, claim, allocation));
-        state.staged_tir_by_claim.entry(claim).or_default().insert((until, key));
-        state.staged_tir_responders.extend(tir_response_index_rows_v1(key, row));
-    } else {
-        state.staged_tir_by_owner.remove(&(owner, claim, allocation));
-        if let Some(rows) = state.staged_tir_by_claim.get_mut(&claim) {
+    if let Some((owner, claim, allocation, _)) = tir_index_metadata_v1(key, row) {
+        if insert {
+            state.staged_tir_by_owner.insert((owner, claim, allocation));
+            state.staged_tir_responders.extend(tir_response_index_rows_v1(key, row));
+        } else {
+            state.staged_tir_by_owner.remove(&(owner, claim, allocation));
+            for entry in tir_response_index_rows_v1(key, row) { state.staged_tir_responders.remove(&entry); }
+        }
+    }
+    if let Some((claim, until)) = tir_source_index_metadata_v1(key, row) {
+        if insert {
+            state.staged_tir_by_claim.entry(claim).or_default().insert((until, key));
+        } else if let Some(rows) = state.staged_tir_by_claim.get_mut(&claim) {
             rows.remove(&(until, key));
             if rows.is_empty() { state.staged_tir_by_claim.remove(&claim); }
         }
-        for entry in tir_response_index_rows_v1(key, row) { state.staged_tir_responders.remove(&entry); }
+    }
+    for entry in tir_preparation_index_rows_v1(key, row) {
+        if insert { state.staged_tir_preparers.insert(entry); }
+        else { state.staged_tir_preparers.remove(&entry); }
     }
 }
 pub(super) fn selected_response_index_rows_v1(row: &PalwStagedCourtRowV1) -> Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)> {
@@ -3159,6 +3246,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::TirAcquisition(row) => Some(row.owned.contract_v1().terms.material_until_daa),
             PalwStagedCourtRowV1::TirRawChunk(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::TirAcceptedBody(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::TirPreparation(row) => Some(row.preparation.contract_v1().material_until_daa),
             _ => None,
         };
         if let Some(until) = tir_until {

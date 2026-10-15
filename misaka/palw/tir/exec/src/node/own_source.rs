@@ -100,6 +100,10 @@ impl DiskTree {
         file.set_len(bytes).map_err(|e| e.to_string())?;
         Ok(Self { file, base: 0, widths, offsets, emitted: 0, root: None })
     }
+    pub(crate) fn file_snapshot_v1(&self) -> Result<(File, u64, u64), String> {
+        let (_, _, bytes) = Self::geometry(self.widths[0])?;
+        Ok((self.file.try_clone().map_err(|e| e.to_string())?, self.base, bytes))
+    }
     /// Disjoint fixed slice of one anonymous forest file; never truncates it.
     /// All slices of a forest must be used serially: cloned fds share seek state.
     pub(crate) fn slice(file: &File, base: u64, count: u64, root: Option<Hash64>) -> Result<Self, String> {
