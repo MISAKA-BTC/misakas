@@ -28,6 +28,11 @@ The surface is in the public wallet SDK crate `kaspa-wallet-core`, module
 A refusal means the wallet does not choose funds and does not sign. These are the
 refusal codes:
 
+* `invalidCapabilities`: the native capability has another schema/version, or
+  its displayed authority contradicts its underlying retirement/DNS facts.
+  The native and JSON/WASM evaluators apply the same check. A serialized `dns`
+  or `native` label cannot turn failed reads into authority.
+
 1. `genesisMismatch`: the node runs a genesis other than the one in the wallet's params.
    A drill and the public network can share a network name.
 2. `importStatusMissing`: the wallet's params schedule native retirement, or the node
@@ -66,3 +71,8 @@ treated as unsupported under retirement.
   Third-party migration is still EXTERNAL.
 * The 1,000 DAA retirement signing margin is a proposal and needs USER REVIEW.
 * The JSON and WASM forms have not been built for wasm32 here.
+
+The follow-up consistency controls cover native callers with an unsupported
+version and both native/JSON callers whose authority label was substituted after
+failed reads. They are source only and have not been executed. The authority
+check does not assert Safe/Final availability or payment settlement.
