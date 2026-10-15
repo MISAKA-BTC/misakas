@@ -521,6 +521,8 @@ pub mod palw_panel_economy_v1;
 pub mod palw_panel_free_v1;
 /// RFC-0015 §13.3 as code: the authenticated activation gate record `palw_panel_free_v1` needs to be armed (no record is pinned).
 pub mod palw_panel_free_gate_v1;
+/// RFC-0015 §9 / §11.3: the one settlement predicate of a kernel-route claim (pending / final-revocable / settled / convicted / defaulted).
+pub mod palw_kernel_settlement_v1;
 pub mod palw_panel_v2;
 /// ADR-0144 §9: slashable panel VAR that cannot be counted twice. Pure functions of consensus
 /// facts; the fold in `palw_state_v2` is the writer, behind the same fence.

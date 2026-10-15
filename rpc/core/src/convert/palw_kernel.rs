@@ -108,6 +108,8 @@ pub fn palw_kernel_claim_response_v1(c: &dyn ConsensusApi, claim: Hash64) -> Rpc
         opv_reservation_sompi: read.opv.as_ref().map(|o| o.reservation).unwrap_or(0),
         opv_max_gain_sompi: read.opv.as_ref().map(|o| o.max_gain).unwrap_or(0),
         final_statement: read.opv.as_ref().map(|o| o.statement.to_string()).unwrap_or_default(),
+        settlement: read.settlement.to_string(),
+        settled_from_daa: read.settled_from_daa.unwrap_or(0),
     })
 }
 

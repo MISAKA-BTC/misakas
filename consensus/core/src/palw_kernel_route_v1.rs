@@ -654,6 +654,11 @@ pub struct KernelClaimReadV1 {
     pub mode: &'static str,
     /// The OPV clock facts a fresh verifier plans by (`None` for a Panel-licensed claim).
     pub opv: Option<KernelOpvReadV1>,
+    /// **RFC-0015 §9 / §11.3**: the claim's settlement standing at the route's DAA (`crate::palw_kernel_settlement_v1`):
+    /// `pending`, `final-revocable` (Final, still convictable: never "safe"), `settled`, `convicted` or `defaulted`.
+    pub settlement: &'static str,
+    /// The first DAA at which the claim is (or, absent a conviction or default, will be) settled; `None` before Final.
+    pub settled_from_daa: Option<u64>,
     /// The lifecycle state, spelled out (`Final { final_daa: 7 }`, `Convicted { daa: 9 }`, ...).
     pub state: String,
     pub final_daa: Option<u64>,
@@ -831,11 +836,15 @@ impl PalwKernelRouteStateV1 {
             max_gain: v.max_gain,
             statement: v.assurance.statement(),
         });
+        let settlement = crate::palw_kernel_settlement_v1::palw_kernel_row_settlement_v1(&ledger, claim, ledger.daa)
+            .unwrap_or(crate::palw_kernel_settlement_v1::PalwKernelSettlementV1::Pending);
         Ok(Some(KernelClaimReadV1 {
             claim_id: *claim,
             kind,
             mode: ledger.mode_of_class(&row.class_binding_id).name(),
             opv,
+            settlement: settlement.label(),
+            settled_from_daa: settlement.settled_from_daa(),
             state: format!("{:?}", row.life.state),
             final_daa,
             convicted: row.convicted,

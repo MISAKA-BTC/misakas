@@ -268,3 +268,81 @@ async fn rfc15_e2e_a_self_prosecuted_lie_costs_the_producer_and_its_sybil_togeth
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
 }
+
+/// Does the producer bond's collateral stand behind a live duty at the tip (the bond lock's own predicate)?
+fn bond_held(w: &World, card: usize) -> bool {
+    let state = w.net.chain.tip_state().1;
+    kaspa_consensus_core::palw_state_v2::palw_bond_backs_live_duty_v2(
+        &state,
+        &w.net.bond(card),
+        w.net.daa(),
+        None,
+        w.net.bundle.state.window_court(),
+    )
+}
+
+/// **Collateral exit and re-registration wait for the claim's clocks** (§8.3.3, §8.3.4, §13.2 "期間境界…bond分割・退出/再登録・鍵変更"):
+/// an OPV producer's collateral stays held — so it can neither leave nor be re-registered under another key (a bond's key IS its
+/// identity: a "key change" is a new bond whose capital must first leave the old one) — through its OPV reservation's liability
+/// horizon, the budget's common hold `d + W` and the bond's liability hold `H_L`, whichever is last; Final frees none of them.
+#[tokio::test]
+async fn rfc15_e2e_collateral_exit_and_re_registration_wait_for_d_plus_w_and_the_liability_horizon() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::on_opv(Net::over_cfg(rfc15_config(opv_fence(), true), TestConsensus::new)).await;
+    let job = w.job().await;
+    let honest = w.claim(0, &job, false).await;
+    assert!(bond_held(&w, 0), "an admitted OPV claim holds its producer's collateral");
+    let (_, view) = opv_view(&w, &honest.id);
+    w.net.beat_to(view.final_floor_daa).await;
+    assert!(matches!(w.net.claim_state(&honest.id), ClaimStateV1::Final { .. }));
+    assert!(bond_held(&w, 0), "Final releases neither the liability reservation nor the issuance window");
+    let row = kernel_budget_rows(&w, 0)[0];
+    let liability = w.net.ledger().claims[&honest.id].liability_until.expect("a Final claim has a liability horizon");
+    let hold = {
+        let state = w.net.chain.tip_state().1;
+        state.bond_budget.as_ref().and_then(|b| b.bond_row(&w.net.bond(0)).map(|r| r.liability_hold_until)).unwrap_or(0)
+    };
+    let free_at = row.reuse_not_before.max(liability.saturating_add(1)).max(hold.saturating_add(1));
+    w.net.beat_to(free_at - 1).await;
+    assert!(bond_held(&w, 0), "one DAA before the last clock the capital is still held (no early exit, no fresh window)");
+    w.net.beat_to(free_at + 1).await;
+    assert!(!bond_held(&w, 0), "past every clock the capital may leave");
+    assert!(kernel_budget_rows(&w, 0).iter().all(|r| !r.in_window), "and its consumption left the window at d + W, not earlier");
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}
+
+/// **Slash, then a new claim** (§8.3.3, §13.2 "`d + W`到達、未解決court/DA/retention、slash後の新claim"): a conviction takes the
+/// lie's reservation; the convicted claim's budget consumption stays in the window until its own `d + W`; the producer's next claim is
+/// admitted against the caps of the capital it has LEFT, beside that consumption — never against the original capital.
+#[tokio::test]
+async fn rfc15_e2e_after_a_slash_the_next_claim_fits_the_remaining_capital_beside_the_old_consumption() {
+    use kaspa_consensus_core::palw_bond_budget_v1::palw_bond_budget_caps_v1;
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::on_opv(Net::over_cfg(rfc15_config(opv_fence(), true), TestConsensus::new)).await;
+    let (job_a, job_b) = (w.job().await, w.job().await);
+    let lie = w.claim(0, &job_a, true).await;
+    let outsider = w.outsiders(&lie, &[], 1)[0];
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x73);
+    w.proof(outsider, &lie.id, proof).await;
+    assert!(w.net.ledger().claims[&lie.id].convicted);
+    let after_slash = w.net.collateral(0);
+    let old = kernel_budget_rows(&w, 0);
+    assert_eq!(old.len(), 1);
+    assert!(old[0].in_window, "a conviction returns nothing to the window before d + W");
+
+    let next = w.claim(0, &job_b, false).await;
+    assert!(w.net.ledger().claims.contains_key(&next.id), "the next claim is admitted");
+    let state = w.net.chain.tip_state().1;
+    let budget = state.bond_budget.as_ref().expect("the engine");
+    let window = budget.bond_row(&w.net.bond(0)).expect("the bond's row").window;
+    assert_eq!(window.claims, 2, "the convicted claim's consumption and the new one share the window");
+    let unit = w.net.bundle.genesis_objects.iter().find_map(|o| match o {
+        Obj::BondRegistered { collateral, .. } => Some(*collateral),
+        _ => None,
+    });
+    let caps = palw_bond_budget_caps_v1(&test_budget_policy(unit.expect("a genesis card")), after_slash);
+    assert!(window.fits_within(&caps), "the window fits the caps of the capital left after the slash: {window:?} vs {caps:?}");
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}

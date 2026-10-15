@@ -3766,7 +3766,32 @@ async function pageMyProfile(arg) {
   if (tab !== 'new') { wallet.listeners.add(load); onCleanup(()=>wallet.listeners.delete(load)); }
   await load();
 }
-const PAGES = { store: pageStore, portfolio: pagePortfolio, lines: pageLines, line: pageLine, leaderboard: pageLeaderboard, add: pageAdd, docs: pageDocs, dev: pageDev, me:pageMyProfile };
+// RFC-0015 §11.3: one kernel claim's settlement mode, challenge window and assurance (`#/claim/<128-hex id>`), from the node's
+// `getPalwKernelClaim` read. An OPV Final is shown as "no accepted challenge", never as a proof that the computation is correct.
+async function pageClaim(arg) {
+  const gen = pageState.gen, alive = () => gen === pageState.gen;
+  const id = String(arg || '').trim().toLowerCase();
+  const main = $('#main');
+  main.innerHTML = h`
+    <div class="page-h"><h1>Claim</h1><span class="sub">settlement mode, challenge window and what its Final does and does not mean</span></div>
+    <div class="panel"><div class="panel-b">
+      <form id="claimForm" class="claim-form"><input id="claimId" class="mono" placeholder="128-hex kernel claim id" value="${id}" spellcheck="false" autocomplete="off"><button type="submit">Read</button></form>
+      <div id="claimBody" class="claim-body"></div>
+    </div></div>`.s;
+  $('#claimForm').addEventListener('submit', (e) => { e.preventDefault(); navigate('#/claim/' + $('#claimId').value.trim().toLowerCase()); });
+  const body = $('#claimBody');
+  const A = window.MISAKA_CLAIM_ASSURANCE;
+  if (!A) { body.textContent = 'The claim view script did not load.'; return; }
+  if (!/^[0-9a-f]{128}$/.test(id)) { body.textContent = id ? 'A kernel claim id is 128 hex characters.' : ''; return; }
+  async function refresh() {
+    let read;
+    try { read = await A.load(rpc, id); } catch (e) { if (alive()) body.textContent = 'The node did not answer: ' + e.message; return; }
+    if (alive()) body.innerHTML = A.render(read);
+  }
+  await refresh();
+  every(15000, refresh);
+}
+const PAGES = { store: pageStore, portfolio: pagePortfolio, lines: pageLines, line: pageLine, leaderboard: pageLeaderboard, add: pageAdd, docs: pageDocs, dev: pageDev, me:pageMyProfile, claim: pageClaim };
 async function route() {
   const first = parseHash();
   // Links printed before the store was called a store still exist, in wallets, chats and the
