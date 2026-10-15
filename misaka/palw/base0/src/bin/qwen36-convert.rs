@@ -268,6 +268,20 @@ fn main() {
         dir.metadata.get(&format!("{arch}.{k}")).and_then(|v| v.as_u64()).unwrap_or_else(|| die(format!("no metadata {arch}.{k}")))
     };
     let declared = meta("block_count") as usize;
+    // **Multi-token-prediction draft blocks** (`{arch}.nextn_predict_layers`, llama.cpp's convention; e.g. huihui's
+    // `…-MTP-GGUF` of Qwen3.6-35B-A3B): the trailing blocks a speculative decoder runs beside the model. The model's own forward
+    // pass never reads them, so they are not layers of the artifact; each must carry its `nextn.*` tensors (else the count is not
+    // what it says, and it is refused). Same rule as the PALW-TIR GGUF reader. A checkpoint without the key is unchanged.
+    let nextn = dir.metadata.get(&format!("{arch}.nextn_predict_layers")).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    if nextn >= declared {
+        die(format!("nextn_predict_layers {nextn} of {declared} blocks"));
+    }
+    for i in declared - nextn..declared {
+        if !dir.tensors.keys().any(|k| k.starts_with(&format!("blk.{i}.nextn."))) {
+            die(format!("nextn_predict_layers {nextn} names block {i} a multi-token-prediction layer, and it has no `nextn.*` tensor"));
+        }
+    }
+    let declared = declared - nextn;
     let layers = layer_cap.unwrap_or(declared).min(declared);
     // qwen3moe has no interval key because every layer is full attention.
     let interval = if hybrid { meta("full_attention_interval") as usize } else { 1 };

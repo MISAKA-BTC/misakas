@@ -116,7 +116,13 @@ activation terms.
 ## 5. Open items
 
 * **#8 converter**: a safetensors → PALWQ361 path (map the HF names of the fused experts and the GDN tensors onto the PALWQ361 writer,
-  shard-streamed), or the TIR route with a fused-expert binding in `qwen3-5-moe.json`. Neither is written.
+  shard-streamed), or the TIR route with a fused-expert binding in `qwen3-5-moe.json`. Neither is written. **Option needing a user
+  decision:** huihui publishes the same abliterated weights as GGUF (`huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF` @
+  `acd5abe0`, f16 71.07 GB or Q8_0 37.80 GB, Apache-2.0, base `Qwen/Qwen3.6-35B-A3B`); the frozen `qwen36-convert` reads `qwen35moe`
+  GGUF over HTTPS ranges (`--url --header`) and now drops the trailing MTP block (`nextn_predict_layers`, the same rule as the TIR
+  GGUF reader). Its output is the legacy `.palwq36` written locally (~33–36 GB) and then packed (`palwart pack`, segments uploaded
+  and deleted): with ~64 GB free and the 30 GB floor that does not fit today; a two-pass writer (triples first, then the file streamed
+  into segments) would remove the local file.
 * **Registration binds the PALWART3 root**: today a TIR class binds its inventory root; the next network's registration must bind the
   container root and the court must open the inner inventory leaves under the inner root it commits. Consensus work, not started.
 * **K2-TIR activation**: the kernels are implemented, not active; arming them is a fenced decision outside this lane.
