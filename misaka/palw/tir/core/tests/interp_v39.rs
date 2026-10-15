@@ -214,7 +214,7 @@ fn complete_trace_observer_includes_noncommit_nodes_at_original_slots() {
             Ok(())
         })
         .unwrap();
-    let expected: usize = p.occurrences().map(|(b, _)| p.blocks[b as usize].nodes.len()).sum();
+    let expected: usize = p.occurrences().into_iter().map(|(b, _)| p.blocks[b as usize].nodes.len()).sum();
     assert_eq!(points.len(), expected);
     assert_eq!(points.iter().map(|p| p.0).collect::<Vec<_>>(), (0..expected as u32).collect::<Vec<_>>());
     assert!(points.iter().any(|p| p.1 == 1 && p.3 == 3));

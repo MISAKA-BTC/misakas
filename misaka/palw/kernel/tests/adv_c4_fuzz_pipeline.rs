@@ -62,6 +62,12 @@ fn policy() -> LedgerPolicyV1 {
         accuser_reward_permille: 500,
         default_penalty: 100,
         claim_reward: 7,
+        // GAP-5 / seal / prosecution-reserve terms added after round 1 was written: the values the in-crate pipeline suites use
+        // (`k2_ledger_pipeline.rs`).
+        job_fee: 2,
+        job_escrow_ttl_daa: 300,
+        prosecution_reserve_permille: 500,
+        seal_deposit: 1,
         max_adjudications_per_block: 64,
         max_court_work_per_block: u64::MAX,
         claim_seal_delay_daa: 1,
@@ -263,6 +269,20 @@ fn structured(name: &str, obj: &O) -> Vec<(String, O)> {
                     }
                     for (st, inp, pos) in [(u8::MAX, 0u16, 0u32), (0, u16::MAX, 0), (0, 0, u32::MAX), (1, u16::MAX, u32::MAX)] {
                         out.push((format!("{name}/where{st}.{inp}.{pos}"), put(PipelineFaultWireV1::Edge { stage: st, input: inp, position: pos, claimed: claimed.clone(), upstream: upstream.clone() })));
+                    }
+                }
+                // The commitment-only edge form (no claimed tensor; the edge is judged against its committed root): the same upstream
+                // and coordinate mutants as `Edge`.
+                PipelineFaultWireV1::EdgeCommitment { stage, input, position, upstream } => {
+                    for k in 0..upstream.len() {
+                        for (i, t) in tensor_mutants(&upstream[k]).into_iter().enumerate() {
+                            let mut u = upstream.clone();
+                            u[k] = t;
+                            out.push((format!("{name}/upstream{k}#{i}"), put(PipelineFaultWireV1::EdgeCommitment { stage: *stage, input: *input, position: *position, upstream: u })));
+                        }
+                    }
+                    for (st, inp, pos) in [(u8::MAX, 0u16, 0u32), (0, u16::MAX, 0), (0, 0, u32::MAX), (1, u16::MAX, u32::MAX)] {
+                        out.push((format!("{name}/where{st}.{inp}.{pos}"), put(PipelineFaultWireV1::EdgeCommitment { stage: st, input: inp, position: pos, upstream: upstream.clone() })));
                     }
                 }
                 PipelineFaultWireV1::Stage { stage, proof } => {

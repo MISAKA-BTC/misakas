@@ -189,7 +189,7 @@ pub fn derive_flat_resources_v39(source: &CheckedSourceV39, positions: u32) -> R
                 setadd(&mut q, A::TraceHashBytes, mul(mul(hashed, 2)?, positions as u128)?)?;
                 setadd(
                     &mut q,
-                    A::RawStorageBytes,
+                    A::RawParameterStorage,
                     mul(add(mul(out, 3 * node.out.dtype.width() as u128)?, mul(leaves, 128)?)?, positions as u128)?,
                 )?;
                 setadd(&mut q, A::ParameterCalls, mul(mul(out, 2)?, positions as u128)?)?;

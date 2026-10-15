@@ -331,7 +331,7 @@ impl<'a> ActualInputResolverV39<'a> {
                 crate::flat_material39::tensor_commitment_streamed_v39(d.dtype, &shape, |offset, count| {
                     let mut values = Vec::with_capacity(count);
                     for lane in offset..offset + count as u64 {
-                        let word = misaka_palw_gen::rand_word_v1(*domain, seed, step, 0, lane).map_err(|e| e.to_string())?;
+                        let word = misaka_palw_gen::rand_word_v1(*domain, seed, step, 0, lane).map_err(|e| format!("{e:?}"))?;
                         let value = match dist {
                             misaka_palw_tir::program_v2::RandomDist::Uniform { .. } => word as i128,
                             misaka_palw_tir::program_v2::RandomDist::Normal => misaka_palw_gen::gauss_q24_v1(word as u16) as i128,
@@ -430,7 +430,7 @@ fn original_input_range_v39(
             let mut values = Vec::with_capacity(count);
             for lane in offset..offset + count as u64 {
                 let word = misaka_palw_gen::rand_word_v1(*domain, seed, if *per_step { position } else { 0 }, 0, lane)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| format!("{e:?}"))?;
                 values.push(match dist {
                     misaka_palw_tir::program_v2::RandomDist::Uniform { .. } => word as i128,
                     misaka_palw_tir::program_v2::RandomDist::Normal => misaka_palw_gen::gauss_q24_v1(word as u16) as i128,

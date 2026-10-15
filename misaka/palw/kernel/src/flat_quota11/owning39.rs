@@ -137,7 +137,7 @@ fn public_input_restore_v39(source: &CheckedSourceV39, job: &CheckedJobMaximumV3
             (ResourceAxisV10::CopiedReferenceBytes, raw * 4 + reread * 3),
             (ResourceAxisV10::ParameterHashBytes, raw * 2 + reread),
             (ResourceAxisV10::ParameterCalls, reads + cells * 2),
-            (ResourceAxisV10::RawStorageBytes, reread),
+            (ResourceAxisV10::RawParameterStorage, reread),
             (ResourceAxisV10::MetadataWork, cells * 16384 + reread * 64),
             (ResourceAxisV10::ParameterTreeScratch, 512 << 10),
             (ResourceAxisV10::OwnedPeakBytes, 1 << 20),

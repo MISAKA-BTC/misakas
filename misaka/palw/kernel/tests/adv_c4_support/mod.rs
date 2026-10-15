@@ -20,6 +20,11 @@ pub struct Book {
     pub burned: u64,
     pub issued: u64,
     pub withdrawn: u64,
+    /// Prepaid source-fee escrows by context: debited from their sponsor, not yet paid or refunded.
+    pub held: BTreeMap<Digest, u64>,
+    /// Σ `PayJobEscrow` and Σ `FinalReward`: since GAP-5 a Final reward is spent escrow routed to the producer, never issued.
+    pub escrow_spent: u64,
+    pub final_rewards: u64,
     /// Net collateral the CONSUMER added or removed through `sync_bond` (outside the ledger's control).
     pub external: i128,
     pub initial: i128,
@@ -42,6 +47,7 @@ impl Book {
             + self.paid.values().map(|v| *v as i128).sum::<i128>()
             + self.burned as i128
             + self.withdrawn as i128
+            + self.held.values().map(|v| *v as i128).sum::<i128>()
             - self.issued as i128
     }
 
@@ -54,28 +60,34 @@ impl Book {
         let (b, a) = (s.bond, s.amount);
         let c = self.coll.get(&b).copied().unwrap_or(0);
         let r = self.res.get(&b).copied().unwrap_or(0);
+        // The kinds and their book rules are `misaka_palw_kernel::settle`'s (its module table and `SettlementBookV1`), restated
+        // independently here: GAP-5's job escrows and fees, seal deposits, forfeited demand bonds and prepaid source-fee escrows
+        // joined the original twelve after round 1 was written.
         match s.kind {
-            K::ReserveClaim | K::ReserveDemand => {
+            K::ReserveClaim | K::ReserveDemand | K::ReserveJobEscrow | K::ReserveSealDeposit => {
                 if a > c.saturating_sub(r) {
                     return Err(format!("reserve {a} past free {}", c.saturating_sub(r)));
                 }
                 self.res.insert(b, r + a);
             }
-            K::ReleaseClaim | K::ReleaseDemand => {
+            K::ReleaseClaim | K::ReleaseDemand | K::ReleaseJobEscrow | K::ReleaseSealDeposit => {
                 if a > r {
                     return Err(format!("release {a} of {r}"));
                 }
                 self.res.insert(b, r - a);
             }
-            K::SlashFraud | K::SlashDefault => {
+            K::SlashFraud | K::SlashDefault | K::PayJobEscrow | K::ForfeitSealDeposit | K::ForfeitDemandBond => {
                 if a > r || a > c {
                     return Err(format!("slash {a} of reservation {r} / collateral {c}"));
                 }
                 self.res.insert(b, r - a);
                 self.coll.insert(b, c - a);
                 self.slashed += a;
+                if s.kind == K::PayJobEscrow {
+                    self.escrow_spent += a;
+                }
             }
-            K::SlashFiling => {
+            K::SlashFiling | K::AdmissionFee | K::JobFee => {
                 if a > c.saturating_sub(r) {
                     return Err(format!("fee {a} past free {}", c.saturating_sub(r)));
                 }
@@ -91,8 +103,32 @@ impl Book {
                 self.routed += a;
             }
             K::FinalReward => {
+                // GAP-5: a spent escrow routed to the producer, never new money.
+                if self.final_rewards + a > self.escrow_spent {
+                    return Err(format!("a Final reward of {a} with only {} of spent escrow", self.escrow_spent - self.final_rewards));
+                }
+                self.final_rewards += a;
                 *self.paid.entry(b).or_default() += a;
-                self.issued += a;
+                self.routed += a;
+            }
+            K::FundSourceFeeEscrow => {
+                let context = s.claim.ok_or("source fee escrow needs its context")?;
+                if self.held.contains_key(&context) || a > c.saturating_sub(r) {
+                    return Err("invalid or duplicate source fee funding".into());
+                }
+                self.coll.insert(b, c - a);
+                self.slashed += a;
+                self.held.insert(context, a);
+            }
+            K::PaySourceFeeEscrow | K::RefundSourceFeeEscrow => {
+                let context = s.claim.ok_or("source fee payout needs its context")?;
+                let held = self.held.get_mut(&context).ok_or("unfunded source fee payout")?;
+                if a > *held {
+                    return Err("source fee payout exceeds its escrow".into());
+                }
+                *held -= a;
+                *self.paid.entry(b).or_default() += a;
+                self.routed += a;
             }
             K::Withdraw => {
                 if r != 0 || a != c {
@@ -108,8 +144,10 @@ impl Book {
 
     /// After every block: slashes were routed 1:1, value is conserved, and the ledger's view of every bond is the book's.
     pub fn check(&self, l: &KernelLedgerV1) -> Result<(), String> {
-        if self.slashed != self.routed {
-            return Err(format!("slashed {} but routed {}", self.slashed, self.routed));
+        // Every debit has an owner: routed out, or still held in a prepaid source-fee escrow.
+        let held: u64 = self.held.values().sum();
+        if self.slashed != self.routed + held {
+            return Err(format!("slashed {} but routed {} (+ {held} held)", self.slashed, self.routed));
         }
         if self.supply() - self.external != self.initial {
             return Err(format!("value not conserved: {} vs {}", self.supply() - self.external, self.initial));
@@ -157,6 +195,7 @@ pub fn fold(l: &mut KernelLedgerV1, b: &LedgerBlockV1, mut book: Option<&mut Boo
                 Ok(Vec::new())
             }
             LedgerTxV1::PanelCovered { claim } => l.apply_panel_tally(claim, true),
+            LedgerTxV1::AdmitOptimisticClass { class } => l.admit_optimistic_class(*class).map(|()| Vec::new()),
             LedgerTxV1::Object { auth, object } => l.apply_encoded(&object.encode(), auth),
         };
         match r {

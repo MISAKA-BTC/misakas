@@ -3,7 +3,8 @@
 //! validates byte geometry, bounded page attempts and actual source C_v3.
 use crate::{
     hash::{Digest, object_id},
-    merkle3::{AXIS_COL, AXIS_ROW, LayoutV3, commit_v3, leaf_hash_v3, node_hash_v3},
+    merkle::{AXIS_COL, AXIS_ROW},
+    merkle3::{LayoutV3, commit_v3, leaf_hash_v3, node_hash_v3},
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_tir::DType;

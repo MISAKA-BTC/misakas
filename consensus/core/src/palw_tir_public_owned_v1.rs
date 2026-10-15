@@ -3020,6 +3020,3 @@ mod tests {
     }
 }
 
-// Exhaustive read-only native input allocation inventory; no consensus encoding change.
-#[path = "palw_native_resource_v1/private/palw_tir_public_owned_v1.rs"]
-mod native_resource_inventory_v1;
