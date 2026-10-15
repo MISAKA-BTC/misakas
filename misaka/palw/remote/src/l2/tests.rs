@@ -487,6 +487,31 @@ fn an_issuer_the_chain_contradicts_and_an_opening_that_does_not_hold_are_refused
     // The shipped rules: the fence is dormant everywhere, so the client stays HEADER_VERIFIED past its checkpoint.
     let shipped = ForkChoiceRulesV1::of(&kaspa_consensus_core::config::params::TESTNET_PARAMS);
     assert_eq!(shipped.commitment, None);
+    assert_eq!(shipped.rule_e, None);
+}
+
+/// **R12 (2026-10-11): the client reads rule E's fence from the params**, so a conflict on a network where rule E may decide is a
+/// `LeafV1Insufficient` STOP rather than a verdict of the pre-rule-E comparator. The legal schedule (commitment <= rule E <=
+/// retirement) is the only one a release may arm; on it the DNS gate is retired and rule E is in force.
+#[test]
+fn the_rules_carry_rule_e_from_the_params_and_a_rule_e_conflict_stops() {
+    let mut params = kaspa_consensus_core::config::params::TESTNET_PARAMS.clone();
+    params.palw_fork_choice_commitment_v1 = Some(ForkActivation::new(0));
+    params.palw_fork_choice_rule_e_v1 = Some(ForkActivation::new(0));
+    let of = ForkChoiceRulesV1::of(&params);
+    assert_eq!(of.rule_e, Some(ForkActivation::new(0)), "the client reads the node's rule-E fence");
+    let f = fork();
+    let (ta, tb) = (f.a.last().unwrap(), f.b.last().unwrap());
+    let views = [view("p1", &f.c, &f.a, f.now), view("p2", &f.c, &f.b, f.now)];
+    let ev = [attest(ta, 106), attest(tb, 106)];
+    let lim = L2LimitsV1::default();
+    // Without rule E the comparator decides this fork (the control); with it, the v1 leaf cannot feed the comparator: STOP.
+    assert_eq!(chosen_tip(&run(&views, &ev, &rules(), &lim, &f.o).unwrap()), ta.header.hash, "control: no rule E, a verdict");
+    let ruled = ForkChoiceRulesV1 { rule_e: of.rule_e, dns_retired: Some(ForkActivation::new(0)), ..rules() };
+    assert!(matches!(run(&views, &ev, &ruled, &lim, &f.o), Err(L2StopV1::LeafV1Insufficient(_))), "a rule-E conflict stops");
+    // A single chain is unaffected by rule E.
+    let single = [view("p1", &f.c, &f.a, f.now), view("p4", &f.c, &f.a, f.now)];
+    assert_eq!(chosen_tip(&run(&single, &[attest(ta, 103)], &ruled, &lim, &f.o).unwrap()), ta.header.hash);
 }
 
 /// The finality seal and ADR-0065 D2: what nodes would never weigh, or may veto, is a STOP.

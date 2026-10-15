@@ -2187,6 +2187,37 @@ impl<'a> Wizard<'a> {
         params: &kaspa_consensus_core::config::params::Params,
         dns: &kaspa_consensus_core::dns_finality::DnsParams,
     ) -> Step {
+        // RFC-0012 §5: past `palw_dns_retirement_v1` a new DNS bond (0x10) is refused by consensus, so onboarding stops here instead
+        // of staking a bond that can never attest. Read from the node (the fence resolves at its sink), as `misaka validator status`
+        // and the standalone validator's `bond` do. Where this build schedules a retirement, an unreadable status refuses too —
+        // an unknown finality authority is never read as "DNS still active". Historical bond exits stay available (`bond retire`).
+        match self.node().client().get_palw_settlement(0).await {
+            Ok(status) if status.dns_retired_at.is_some() => {
+                return Err(Halt::Blocked(
+                    Finding::error(
+                        "E-SETUP-DNS-RETIRED",
+                        exit::CONFIG,
+                        format!(
+                            "DNS validator onboarding on {} retired at DAA {} (RFC-0012)",
+                            self.network,
+                            status.dns_retired_at.unwrap_or_default()
+                        ),
+                    )
+                    .reason("past the retirement the chain admits no new DNS bond, attestation or precommit; PALW roles remain")
+                    .fix(format!("misaka --network {} mining setup", self.network))
+                    .docs("docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md"),
+                ));
+            }
+            Ok(_) => {}
+            Err(e) if params.palw_dns_retirement.is_some() => {
+                return Err(Halt::Blocked(
+                    Finding::error("E-SETUP-DNS-RETIREMENT-UNREAD", exit::COMPONENT_DOWN, "The DNS retirement status could not be read")
+                        .reason("this network schedules the RFC-0012 retirement, so onboarding needs the node to say it has not passed")
+                        .current(e.to_string()),
+                ));
+            }
+            Err(_) => {}
+        }
         let key = self
             .key_source()
             .load_key()

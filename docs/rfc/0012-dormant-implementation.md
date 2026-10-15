@@ -191,3 +191,72 @@ Presets, fences and heights are unchanged.
 | 3 wRPC v1/v2 | The capability is built from serde JSON of the existing responses; absent optional fields read as unavailable, never as a pass | WASM bindings (`misakaCapabilitiesFromReadsV1`, `misakaPreflightV1`) not built for wasm32 |
 | 6 Third-party migration | Integrator note `docs/design/palw/rfc12-external-wallet-integration-2026-10-15.md`; one `preflight(rpc, expectations, txs)` call | No external wallet, SDK or EVM tool migrated or tested: still EXTERNAL |
 
+
+## Port of `codex/rfc12-remove-dns-bft` — 2026-10-15
+
+Source only; nothing was compiled or run in this port and no PASS is assigned. Presets, fences, heights, the consensus
+params id, the schedule id and the int-12 A-2 vectors are unchanged.
+
+**Approach.** The Codex snapshot (`344a1b882`, base `e35409e2a`, 10-08, unbuilt) deleted the DNS BFT gate, most of
+`dns_finality`, the in-process and standalone validator workers, their flags and RPC, and re-pinned every preset
+(t12 fingerprint `5ee7fd8e…` → `59a6d1b0…`). Its own note says that build "cannot revalidate the old BFT network history".
+That is approach (a), a new network. This RFC specifies approach (b) instead: §5 introduces the `palw_dns_retirement_v1`
+fence, keeps "sufficient versioned data/readers to replay and verify old history", says "delete live voter/aggregator
+scheduling, not consensus history indiscriminately", and the 2026-10-15 spec closures resolve the fence per call site
+(incumbent sink / accepting DAA / lower earn-pay DAA) and require rule E at or below it. testnet-12 runs `dns_bft_gate`
+from DAA 6,001 and its history carries DNS anchors and votes, so a node that follows t12 needs the legacy rules below the
+fence. The port therefore keeps every pre-retirement path byte-identical and carries the snapshot's intent — no DNS
+authority on the new rules — as fence-gated behaviour plus an enforced inventory, not as physical deletion.
+
+**What the port adds** (beyond the dormant implementation above, which already gates fork choice, DNS confirmation updates,
+EVM heads, bridge freshness/Pause, coinbase settlement, stake preference, DNS kinds `0x10/0x11/0x19`, precommit duty, the
+ConsensusApi DNS reads and both validator workers):
+
+* lane R12's unmerged fixes (`origin/rfc12/r12-wip` `e96e93234`): op 203 serves the abstaining DNS gate facts past the
+  retirement; `get_attestation_quality_deficits` reports none past it; the RFC-0009 L2 client reads
+  `palw_fork_choice_rule_e_v1` (it was hard-coded `None`); tests `rfc12_authority`, `rfc12_x17`, the L2 rule-E STOP;
+* `rfc12_dns_reader_inventory` (R12-AUTHORITY item 4 as a test): every DNS authority read in the consensus crate is listed
+  with its reason and must ask `dns_retired_at`, delegate only to such a function, or be reachable only from one; the DNS BFT
+  veto has exactly one call site, skipped past the retirement at the incumbent sink. It is a textual check — the behaviour is
+  `rfc12_zero_dns_matrix`'s;
+* operator tooling: `misaka validator setup` refuses to stake a DNS bond once the node reports the retirement (and, where the
+  build schedules one, when the status cannot be read); the `ruleset-candidate` extension refuses to arm or move `dns_bft_gate`;
+* shared helper extraction (§5 "extract shared … helpers first"): `kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI` (same
+  value) is the name PALW, wallet and operator callers use; `ATTESTATION_TX_FEE_FLOOR_SOMPI` stays as the validator's alias.
+
+**Not carried over from the snapshot**, because each breaks t12 replay or its identity: deleting `dns_bft.rs`,
+`dns_bft_v1.rs`, the `dns_finality` validation types, `validator_service.rs`, `kaspa-pq-validator`'s `run`/`bond`,
+the `--enable-validator`/`--validator-*`/`--stake-bond`/`--evm-bridge-finality=pause` flags, `getPrecommitDuty`, the
+attestation mempool policy and the processor's DNS tests; removing `dns_bft_gate` and its fingerprint bytes from `Params`;
+the re-pinned README/checklist/join-guide fingerprints. Each of these stays reachable only below the retirement. Physical
+removal belongs to a release whose supported networks no longer replay DNS-era history (a fresh-genesis preset, or after
+t12 retires and is no longer validated from genesis); it is not scheduled here.
+
+**Path mapping** (snapshot path → this tree):
+
+| Snapshot (pre-reorg) | Reorganized tree | Port |
+| --- | --- | --- |
+| `consensus/src/pipeline/virtual_processor/dns_bft.rs` | same | kept; abstains past retirement |
+| `consensus/src/pipeline/virtual_processor/processor.rs` (`dns_reorg_outcome`, `dns_stake_preferred_tip`, `dns_coinbase_settlement*`) | `…/processor/dns.rs` (10-13 split) | kept; gated |
+| `…/processor.rs` (`palw_fork_choice_openings_v1_impl`) | `…/processor/palw.rs` | R12 fix ported |
+| `…/processor.rs` (template, `bridge_finality_is_fresh`) | `…/processor/template.rs`, `processor.rs` | kept; gated |
+| `…/virtual_processor/palw_reorg.rs` (new in snapshot) | — | not created; rule E lives in `palw_rule_e.rs` |
+| `consensus/core/src/dns_bft_v1.rs`, `dns_finality.rs` | same (+ `dns_finality/`) | kept (history codecs/readers) |
+| `consensus/core/src/config/params.rs` | `params.rs` + `params/{identity,validation}.rs` | unchanged |
+| `kaspad/src/validator_service.rs`, `args.rs`, `daemon.rs`, `palw_drill.rs` | same | kept; worker reports `Retired` |
+| `kaspa-pq-validator/`, `kaspa-pq-validator-core/`, `kaspa-pq-signer/` | `misaka/pq/validator/`, `misaka/pq/validator-core/`, `misaka/pq/signer/` | kept; fee-floor name extracted |
+| `misaka-cli/src/{operator/wizard.rs, setup/, palw_*.rs, wallet.rs, operator/market.rs}` | `misaka/apps/cli/src/…` | wizard guard; fee-floor rename |
+| `misaka-palw-extension/src/kinds/ruleset_candidate.rs` | `misaka/palw/extension/src/kinds/ruleset_candidate.rs` | `dns_bft_gate` refused |
+| `misaka-palw-gateway/src/bin/rail.rs` | `misaka/palw/gateway/src/bin/rail.rs` | fee-floor rename |
+| `misaka-palw-remote/src/l2.rs` (R12 lane) | `misaka/palw/remote/src/l2.rs` | rule E read ported |
+| `scripts/check-repin-enumeration.py`, `scripts/misaka-palw-model-market-devnet-e2e.sh` | `scripts/ci/…`, `scripts/drills/…` | unchanged (no re-pin) |
+| `rpc/service/src/service.rs`, `components/consensusmanager/src/session.rs`, `consensus/core/src/api/mod.rs` | same | unchanged; reads already retire |
+| `wallet/core/src/utxo/{processor,reference,settings}.rs` | same | unchanged; wallet already clears the shortcut |
+| `contrib/…`, `docs/{validator-runbook,testnet12-join-mining,t12-rcore-launch-checklist}.md`, `README.md` | same | unchanged (live t12 values stay) |
+
+**Still referencing DNS, and why** (allow-listed): bond mutations, unbond authorization and proved-slash filtering
+(historical exits and the finite evidence horizon); `update_dns_state`/`dns_bft_*` and `DnsState` (replay of t12 below the
+fence); the legacy `safe` arm of `update_evm_canonical_heads` (below the fence only); the DNS reward split and payout keys
+(pre-fence entitlements, settled once); `dns_params`/`dns_bft_gate` in `Params` and their fingerprint bytes (identity of the
+live presets); the validator workers and `misaka validator *` (t12 runs DNS-BFT until the fence); DNS seeders and peer
+discovery (unrelated to the finality overlay).

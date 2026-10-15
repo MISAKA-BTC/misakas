@@ -72,7 +72,12 @@ pub const VALIDATOR_SEED_LEN: usize = 32;
 /// (`fees 30000 … under the required amount of 232600`), wedging any validator that hit the
 /// fallback. 250 000 sits above that observed minimum yet below every real mass-based fee, so it can
 /// never be the under-fee cause again without over-charging the normal path.
-pub const ATTESTATION_TX_FEE_FLOOR_SOMPI: u64 = 250_000;
+pub const ATTESTATION_TX_FEE_FLOOR_SOMPI: u64 = PALW_TX_FEE_FLOOR_SOMPI;
+
+/// **The same flat fee floor under its role-neutral name** (RFC-0012 §5: extract the shared helpers before the DNS-only service
+/// retires). PALW, wallet and operator transactions use this name; [`ATTESTATION_TX_FEE_FLOOR_SOMPI`] stays the DNS validator's
+/// spelling of the identical value, so nothing a validator or PALW caller pays changes.
+pub const PALW_TX_FEE_FLOOR_SOMPI: u64 = 250_000;
 
 /// Convert a transaction's non-contextual **compute mass** into the node's minimum relay fee
 /// (sompi), matching `minimum_required_transaction_relay_fee` in

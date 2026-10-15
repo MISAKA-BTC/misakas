@@ -1907,6 +1907,10 @@ impl ConsensusApi for Consensus {
         }
 
         let sink = self.get_sink();
+        // RFC-0012: past the retirement no attestation is admitted, so no deficit can be cured — report none (lane R12, 2026-10-11).
+        if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.config.params.palw_dns_retired_at(daa)) {
+            return Vec::new();
+        }
         let anchors = self.virtual_processor.canonical_anchors_in_window(sink, dns_params, dns_params.stake_score_window_blue_score);
         if anchors.is_empty() {
             return Vec::new();
