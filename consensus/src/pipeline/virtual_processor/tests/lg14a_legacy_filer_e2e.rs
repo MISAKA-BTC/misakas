@@ -1155,3 +1155,7 @@ async fn lg14a_unarmed_the_reservation_is_dropped_by_name_and_the_bystander_is_o
 // Lane G14-R: the pursuit resumes across a reorg that removes the reservation, a full IBD node mid-descent and a pruned import:
 // `lg14a_legacy_filer_e2e/g14r_resume.rs`.
 mod g14r_resume;
+
+// Lane g14-close-legacy (2026-10-16): LG14-A + LG14-B + option (b) armed through `Params` that pass the whole validation with test
+// arm-readiness records (never a mirror-only bypass): full collusion convicted by an outside bond, held-DA withholding defaulted.
+mod g14_close_legacy;
