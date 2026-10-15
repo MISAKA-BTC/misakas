@@ -585,6 +585,18 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     if let Some(state) = builder.read().class_lifecycle_refusal(c.class_id) {
         return Err(PalwStateV2Error::ClassNotAdmitting { class: *c.class_id, state });
     }
+    // **RFC-0017 GAP-E4 (`palw_model_eligibility_v1`)**: an evaluation claim on a class whose eligibility stage carries no
+    // reward-bearing right (`Registered`, `Lapsed`) is refused on EVERY network that arms the fence — asked here unconditionally, not
+    // only past `palw_audit_2026_09_23` where `check_class_admits_claim` below asks it again. Below the fence `None`.
+    if let Some((_, why)) =
+        super::palw_model_eligibility_fold_v1::eligibility_claim_refusal_v1(&builder.state, builder.params, c.class_id, daa)
+    {
+        return Err(PalwStateV2Error::ClassNotRewardable {
+            class: *c.class_id,
+            code: super::palw_model_eligibility_fold_v1::PALW_ELIGIBILITY_NOT_ELIGIBLE_CODE_V1,
+            why,
+        });
+    }
     builder.check_class_verify_admits_v1(
         c.class_id,
         daa,

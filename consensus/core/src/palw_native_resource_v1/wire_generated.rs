@@ -1792,10 +1792,10 @@ impl NativeWireScanV1 for crate::palw_model_eligibility_v1::PalwEligibilityExamO
     }
 }
 wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1; misaka_palw_kernel::model_eligibility_v1::EligibilityExamCommitV1, crate::palw_model_eligibility_v1::EligDigestV1, u64, u64, Option<(u64, crate::palw_model_eligibility_v1::EligDigestV1)>, Vec<crate::palw_model_eligibility_v1::EligDigestV1>, Vec<u32>, u64, u64, Vec<crate::palw_model_eligibility_v1::PalwEligibilityAttestationRowV1>, Option<(crate::palw_model_eligibility_v1::PalwEligibilityExamOutcomeV1, u64)>);
-wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityLineageRowV1; u32, u64, u64, u64, u64);
+wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityLineageRowV1; u32, u64, u64, u64, u64, u128);
 wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityModelRowV1; crate::palw_model_eligibility_v1::EligDigestV1, crate::palw_model_eligibility_v1::EligDigestV1, crate::palw_model_eligibility_v1::EligDigestV1, crate::palw_model_eligibility_v1::PalwEligibilityStageV1, u64, u64, u64, u64, Option<crate::palw_model_eligibility_v1::EligDigestV1>, u32);
-wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityNetworkRowV1; u64, u64, u64, u32, u64);
-wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityPrincipalRowV1; u64, u32, u32, u64);
+wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityNetworkRowV1; u64, u64, u64, u32, u64, u128);
+wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityPrincipalRowV1; u64, u32, u32, u64, u128);
 wire_struct!(crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1; crate::palw_model_eligibility_v1::EligDigestV1, u64, u64, bool);
 impl NativeWireScanV1 for crate::palw_model_eligibility_v1::PalwEligibilityStageV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {

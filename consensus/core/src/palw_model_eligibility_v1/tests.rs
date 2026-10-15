@@ -580,3 +580,24 @@ fn s7_8_mode_switching_re_acquires_nothing() {
         assert!(total <= model_cap * epochs, "{days} days: {total} > {model_cap} × {epochs}");
     }
 }
+
+/// **GAP-E3: the attempt fee** — non-zero by validation, due whole from free collateral, and the price of filling the network's
+/// attempt budget is `attempts_network_per_epoch × fee` per epoch (burned). The VALUE is user decision U-4.
+#[test]
+fn gap_e3_an_attempt_costs_a_burned_fee_and_griefing_the_budget_has_a_price() {
+    let p = policy();
+    assert_eq!(p.attempt_fee_sompi, PALW_ELIG_ATTEMPT_FEE_DESIGN_V1);
+    let mut free = p;
+    free.attempt_fee_sompi = 0;
+    assert!(free.validate().is_err(), "a free attempt makes the network attempt budget free to grief");
+    assert!(palw_eligibility_fee_affordable_v1(p.attempt_fee_sompi as u128, p.attempt_fee_sompi));
+    assert!(!palw_eligibility_fee_affordable_v1(p.attempt_fee_sompi as u128 - 1, p.attempt_fee_sompi));
+    let per_epoch = palw_eligibility_griefing_cost_v1(&p, 1);
+    assert_eq!(per_epoch, (p.attempts_network_per_epoch as u128) * (p.attempt_fee_sompi as u128));
+    assert_eq!(palw_eligibility_griefing_cost_v1(&p, 3), 3 * per_epoch, "90 days of 30-day epochs");
+    let (mut l, mut pr, mut n) =
+        (PalwEligibilityLineageRowV1::default(), PalwEligibilityPrincipalRowV1::default(), PalwEligibilityNetworkRowV1::default());
+    palw_eligibility_record_fee_v1(7, &mut l, &mut pr, &mut n);
+    palw_eligibility_record_fee_v1(7, &mut l, &mut pr, &mut n);
+    assert_eq!((l.fees_burned_sompi, pr.fees_burned_sompi, n.fees_burned_sompi), (14, 14, 14));
+}

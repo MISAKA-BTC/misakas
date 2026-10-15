@@ -13,7 +13,7 @@
 //!                              REQ-ELIG-2: a Probation class's claim admitted inside the lineage / network budgets, planned with F = 0
 //!                              (`PalwBudgetPlanV1::without_final_weight_v1`) and pinned
 //! eligibility_final_weight_v1  REQ-ELIG-2/6: a pinned probation claim's Final adds no weight; the pin retires at Final / void
-//! apply_commit_eligibility_exam_v1   inner 74 (REQ-ELIG-3/4)
+//! apply_commit_eligibility_exam_v1   inner 74 (REQ-ELIG-3/4; GAP-E3: the attempt fee burned from free collateral)
 //! apply_attest_eligibility_exam_v1   inner 75 (REQ-ELIG-3)
 //! sweep_model_eligibility_v1   anchor → draw → verdict → outcome; lapse (REQ-ELIG-5); old exams retire
 //! ```
@@ -243,6 +243,10 @@ pub(super) fn apply_commit_eligibility_exam_v1(
         return Err(refuse("an eligibility exam commit needs an Active bond"));
     }
     let committer_principal = record.operator_id.as_bytes();
+    let collateral = record.collateral;
+    // The route's header, created on first use (a refusal below drops the whole object, header included: the processor folds each
+    // object alone before the block's fold).
+    super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
     {
         let route = builder.state.kernel_route.as_ref().ok_or_else(|| refuse("the kernel route is missing"))?;
         if commit.network != route.header.policy.network_domain {
@@ -275,7 +279,17 @@ pub(super) fn apply_commit_eligibility_exam_v1(
     let mut network: PalwEligibilityNetworkRowV1 = row_of(&builder.state, &eligibility_network_key_v1()).unwrap_or_default();
     palw_eligibility_commit_admits_v1(&policy, commit, &model, stage, &lineage, &principal, &network, now)
         .map_err(|why| refuse(format!("RFC-0017: the exam commit is refused: {why:?}")))?;
+    // GAP-E3: the attempt fee, from the committer's FREE collateral (what its claims, courts and accusations do not hold), burned
+    // whole at the commit — the same write as a registration burn (`collateral` falls, `slashed` rises, the release destroys it).
+    let fee = policy.attempt_fee_sompi;
+    let free = (collateral as u128)
+        .saturating_sub(builder.committed_at(signer, now))
+        .saturating_sub(builder.read().accuser_ledger_v1(signer, now));
+    if !palw_eligibility_fee_affordable_v1(free, fee) {
+        return Err(refuse("RFC-0017: the committing bond's free collateral does not cover the exam-attempt fee"));
+    }
     palw_eligibility_count_attempt_v1(&policy, now, &mut lineage, &mut principal, &mut network);
+    palw_eligibility_record_fee_v1(fee, &mut lineage, &mut principal, &mut network);
     model.open_exam = Some(exam_id);
     // The anchor floor: the latest seed anchor recorded when the exam was committed — the draw waits for a strictly later one.
     let committed_span = builder.state.round_seed_anchor.as_ref().map(|anchor| anchor.span).unwrap_or(0);
@@ -292,7 +306,7 @@ pub(super) fn apply_commit_eligibility_exam_v1(
         attestations: Vec::new(),
         outcome: None,
     };
-    super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
+    builder.burn_registration_fee(*signer, fee)?;
     write_row(builder, exam_key, Some(&exam));
     write_row(builder, eligibility_model_key_v1(&commit.class_id), Some(&model));
     write_row(builder, lineage_key, Some(&lineage));
@@ -320,6 +334,7 @@ pub(super) fn apply_attest_eligibility_exam_v1(
     if !matches!(record.status, PalwBondStatusV2::Active) {
         return Err(refuse("an eligibility attestation needs an Active bond"));
     }
+    super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
     {
         let route = builder.state.kernel_route.as_ref().ok_or_else(|| refuse("the kernel route is missing"))?;
         if attestation.network != route.header.policy.network_domain {
@@ -349,7 +364,6 @@ pub(super) fn apply_attest_eligibility_exam_v1(
         transcript: attestation.transcript,
         attested_daa: now,
     });
-    super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
     write_row(builder, key, Some(&exam));
     Ok(())
 }

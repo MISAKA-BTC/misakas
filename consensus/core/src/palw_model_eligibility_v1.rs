@@ -114,6 +114,11 @@ pub const PALW_ELIG_RENEWAL_WINDOW_DAYS_DESIGN_V1: u64 = 7;
 pub const PALW_ELIG_LAPSE_GRACE_DAYS_DESIGN_V1: u64 = 2;
 /// Days a bond must have been registered before an exam's commit to be in its verifier population.
 pub const PALW_ELIG_VERIFIER_MATURITY_DAYS_DESIGN_V1: u64 = 7;
+/// **The non-refundable exam-attempt fee** (RFC-0017 §5, GAP-E3; the VALUE is user decision U-4): burned from the committing bond's
+/// free collateral at the commit — whatever the draw, the outcome or a later withdrawal — so filling the network's attempt budget
+/// costs `attempts_network_per_epoch × fee` per attempt epoch ([`palw_eligibility_griefing_cost_v1`]). Burned, never paid out:
+/// no examiner is paid from new issuance. 100,000 BILI (in sompi) is a PLACEHOLDER so the mechanism has a non-zero value to test.
+pub const PALW_ELIG_ATTEMPT_FEE_DESIGN_V1: u64 = 100_000 * 100_000_000;
 
 // =================================================================================================================================
 // Stage, rights
@@ -226,6 +231,8 @@ pub struct PalwModelEligibilityPolicyV1 {
     pub attempts_network_per_epoch: u32,
     pub attempt_epoch_daa: u64,
     pub attempt_cooldown_daa: u64,
+    /// The non-refundable attempt fee, burned at commit (sompi; U-4).
+    pub attempt_fee_sompi: u64,
     // ---- D. renewal ----------------------------------------------------------------------------------------------------------
     pub renewal_epoch_daa: u64,
     pub renewal_window_daa: u64,
@@ -257,6 +264,7 @@ impl PalwModelEligibilityPolicyV1 {
             attempts_network_per_epoch: PALW_ELIG_ATTEMPTS_NETWORK_EPOCH_DESIGN_V1,
             attempt_epoch_daa: PALW_ELIG_ATTEMPT_EPOCH_DAYS_DESIGN_V1 * day_daa,
             attempt_cooldown_daa: PALW_ELIG_ATTEMPT_COOLDOWN_DAYS_DESIGN_V1 * day_daa,
+            attempt_fee_sompi: PALW_ELIG_ATTEMPT_FEE_DESIGN_V1,
             renewal_epoch_daa: PALW_ELIG_RENEWAL_EPOCH_DAYS_DESIGN_V1 * day_daa,
             renewal_window_daa: PALW_ELIG_RENEWAL_WINDOW_DAYS_DESIGN_V1 * day_daa,
             lapse_grace_daa: PALW_ELIG_LAPSE_GRACE_DAYS_DESIGN_V1 * day_daa,
@@ -292,6 +300,12 @@ impl PalwModelEligibilityPolicyV1 {
             || self.attempts_per_principal_per_epoch > self.attempts_network_per_epoch
         {
             return Err("attempt bounds must be positive and the principal's within the network's".into());
+        }
+        if self.attempt_fee_sompi == 0 {
+            return Err(
+                "an exam attempt must cost a non-refundable fee (GAP-E3): a free attempt makes the network budget free to grief"
+                    .into(),
+            );
         }
         if self.renewal_window_daa == 0 || self.renewal_window_daa > self.renewal_epoch_daa {
             return Err("the renewal window must be positive and inside the renewal epoch".into());
@@ -338,6 +352,8 @@ pub struct PalwEligibilityLineageRowV1 {
     pub probation_epoch: u64,
     pub probation_units_used: u64,
     pub probation_units_total: u64,
+    /// Attempt fees burned for this lineage's exams (GAP-E3).
+    pub fees_burned_sompi: u128,
 }
 
 /// `'P' ‖ operator id`: a principal's counters. A Sybil principal is a new key with its own bond floor; the network budgets
@@ -348,6 +364,8 @@ pub struct PalwEligibilityPrincipalRowV1 {
     pub attempts_in_epoch: u32,
     pub attempts_total: u32,
     pub probation_units_total: u64,
+    /// Attempt fees this principal's bonds burned (GAP-E3).
+    pub fees_burned_sompi: u128,
 }
 
 /// `'N' ‖ 0^64`: the network-wide budgets.
@@ -358,6 +376,8 @@ pub struct PalwEligibilityNetworkRowV1 {
     pub attempt_epoch: u64,
     pub attempts_in_epoch: u32,
     pub attempts_total: u64,
+    /// Attempt fees burned network-wide (GAP-E3).
+    pub fees_burned_sompi: u128,
 }
 
 /// `'C' ‖ claim id`: the pin of a probation-admitted claim.
@@ -706,6 +726,29 @@ pub fn palw_eligibility_commit_admits_v1(
         return Err(R::NetworkAttemptsExhausted);
     }
     Ok(())
+}
+
+/// **GAP-E3: may `free` collateral pay the attempt fee?** The fee is due whole; a bond that cannot pay it commits nothing.
+pub fn palw_eligibility_fee_affordable_v1(free_collateral: u128, fee: u64) -> bool {
+    free_collateral >= fee as u128
+}
+
+/// **What filling the network's attempt budget costs** over `epochs` attempt epochs: `attempts_network_per_epoch × fee × epochs`,
+/// burned — the griefing price RFC-0017 §5 reports beside the honest models' waiting time.
+pub fn palw_eligibility_griefing_cost_v1(policy: &PalwModelEligibilityPolicyV1, epochs: u64) -> u128 {
+    (policy.attempts_network_per_epoch as u128) * (policy.attempt_fee_sompi as u128) * (epochs as u128)
+}
+
+/// Record a burned attempt fee on the lineage, the principal and the network (the burn itself is the fold's bond write).
+pub fn palw_eligibility_record_fee_v1(
+    fee: u64,
+    lineage: &mut PalwEligibilityLineageRowV1,
+    principal: &mut PalwEligibilityPrincipalRowV1,
+    network: &mut PalwEligibilityNetworkRowV1,
+) {
+    lineage.fees_burned_sompi = lineage.fees_burned_sompi.saturating_add(fee as u128);
+    principal.fees_burned_sompi = principal.fees_burned_sompi.saturating_add(fee as u128);
+    network.fees_burned_sompi = network.fees_burned_sompi.saturating_add(fee as u128);
 }
 
 /// Count one attempt at commit time (never refunded: a withdrawal after seeing the draw is a spent attempt).

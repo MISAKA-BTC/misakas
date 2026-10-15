@@ -11,6 +11,11 @@
 * **Activation:** 休眠fence `palw_model_eligibility_v1`（`Option<ForkActivation>`）。全presetで`None`、flag-dayリストに含めない、fingerprintはSome-only、`Some(never())`は`None`へ畳む、armすると`validate_palw_model_eligibility_v1`が拒否する。A-2一様: fence未満ではkernel inner 74/75はA-2 gateで落ち、fold・gate・RPCは旧規則と同じ値を返す。前提fence: `palw_probabilistic_constraints_v1`（aux行を持つkernel route）と`palw_bond_budget_v1`（F=0のreservationとprincipal共通cap）が同じ高さ以下。
 * **Baseline:** 設計根拠は`pre` = `4fb381a87`（2026-10-14のα=1.5確定とattestation gate維持を含む）、実装は統合branch `integ/rfc02-rfc06-12-g14` = `2e74a485b`の上。`pre`の文書commit 4件（`640b7c242`〜`4fb381a87`）はこのbranchに無く、このbranchは`pre`より182 commit進んだcodeを持つ（merge-base `64699e960`）。本文のcode行番号は`2e74a485b`のもので、`pre`で同じ行のもの・`pre`に無いものは§3で明記した（`scripts/ci/check-doc-citations.sh`で両treeを照合）。
 * **Not activated by:** 本RFCのmerge、設計値表（§11）、単体試験sourceの存在、simulation driverの出力。
+
+> **資格の安全性は、抽選されるverifier stakeに占める攻撃者の割合 `f` に依存する（ユーザー判断 U-3、§5.1）。**
+> `f`は総供給比（300M = 3 %）ではない。正直なverifier stakeが攻撃者のverifier stakeより小さければ、閉鎖モデルの攻撃者は自分の抽選位置だけで合格できる。
+> driverの値（4-of-7、閉鎖モデル）: `f = 1/3`（攻撃者150M 対 正直300M）で1試行あたり **17.3 %**、`f = 0.6`（攻撃者150M 対 正直100M）で **71.0 %**、`f = 3 %`でも0.0026 %。
+> 試行の上限・手数料・m/kはこの確率を有界にするだけで、`f`が大きい世界を安全にはしない。全体verifier stakeの下限（またはECONの1/3上限との統合）を決めない限り、本RFCの昇格gateは安全性の根拠として使えない（MUST NOT）。
 * **Normative language:** MUST / MUST NOTは本fence有効化後の規則。設計値は名前付きの未承認値であり本番承認ではない。
 * **RFC-0016との関係:** 統合branchの[RFC-0016](0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)（2026-10-15のユーザー判断: Kernel claimはB = 0・F = 0・利用者払いescrowのみでcoinbase legなし・escrowはclipしない、拘束期間はPanel=0 7日相当 / Panel=1 1日相当、mode切替で能力を再取得しない）を拘束条件として扱い、再審しない。本RFCは物理block機会（RFC-0016 §7–§8）を変えず、その上に「モデル単位の資格」を重ねる。書式はRFC-0015/0016に揃えた。
 
@@ -96,7 +101,7 @@ ECON gateはpreでは文書（readiness §3f/§3k）、code（`palw_econ_contrac
 
 * モデルは存在する（不変・登録自由、ADR-0175）。利用者払いのtest job（kernel/OPV、native funded、escrowのみの経路）は完了・精算できる（MUST）。
 * 登録・自分のPanelのReady・自分のclaimのFinalは、通常のcoinbase配分・報酬付きblock権利・Final weightを**一切**生まない（MUST NOT）。
-* 検査報酬のための新規発行はしない（MUST NOT）。検査費用は利用者・登録者・検証者の既存escrow/手数料の範囲（GAP-E3）。
+* 検査報酬のための新規発行はしない（MUST NOT）。検査試行の費用は**返還しない試行手数料**（§5、GAP-E3で実装、値はU-4）としてcommit時に焼却する。
 
 ### B. Probation（試用）
 
@@ -138,7 +143,29 @@ f = 3 %、4-of-7:  P_pass ≈ 0.00264 %（2.636e-5）/ 試行
 * したがって、大量登録・再申請・長期運用を通じた**総試行数を有界にし数える**（MUST）。`redraw-until-lucky`を防ぐ（MUST）。実装: lineage生涯上限、principal/epoch上限、**network/epoch固定上限**、lineage cooldown、commit時点で試行を消費（撤回・再登録で返らない）。network上限`A`があれば攻撃者の総合格確率は `1 − (1 − P_pass)^A ≤ A·P_pass` で抑えられる。
 * 次は**別の要因**であり`P_pass`に含まれない: 乱数のbias（anchorの再抽選費用）、検査者への攻撃（妨害・買収）、確認せず承認（lazy verifier）、疎な不正の見逃し（検査claim数が有限）。
 * `P_pass`は計算のsoundnessでも有罪確率でもない（MUST NOT 同一視）。
-* network固定上限はgriefing面を持つ: 攻撃者が試行枠を先に消費すると正直な新モデルの待ち時間が伸びる（§7で「正直モデルの待ち時間」として必ず報告する）。試行あたりの手数料は未接続（GAP-E3）。
+* network固定上限はgriefing面を持つ: 攻撃者が試行枠を先に消費すると正直な新モデルの待ち時間が伸びる（§7で「正直モデルの待ち時間」として必ず報告する）。
+* **試行手数料（GAP-E3、実装済み・休眠）:** commit（inner 74）はcommitterのbondの**自由担保**（claim拘束・告発台帳を除いた額）から`attempt_fee_sompi`を払えなければ受理されず、払えば全額をcommit時に焼却する（registration burnと同じ書込み: `collateral`減・`slashed`増・release時に消滅）。抽選結果・合否・撤回に関係なく返還しない。network試行枠を埋める価格は `attempts_network_per_epoch × fee`／epoch（`palw_eligibility_griefing_cost_v1`）。設計値の仮置き（100,000 BILI）では1 epoch（30日）6.4M BILI、90日19.2M BILIで、300M攻撃者には払える額である。値はU-4。
+
+### 5.1 抽選verifier stake比 `f` に対する合格確率（U-3）
+
+閉鎖モデル（正直な検証者は入手できず肯定承認を出さない）で、攻撃者が自分の抽選位置だけで合格する確率。解析値と`scripts/sim/misaka-palw-rfc0017-eligibility-sim.py`（`--sweep-trials 200000 --seed 17`）のMonte-Carlo出力。「64回中」「192回中」は攻撃者がnetwork試行枠を全て使えた場合の上限であり、lineage上限24・cooldownでさらに小さくなる。これはdriverの出力であり安全・危険の判定ではない。
+
+| 攻撃者の抽選stake比 `f` | `P_pass` 4-of-7（解析） | 同（Monte-Carlo、20万回） | 64回中≥1回（1 epochの全network枠） | 192回中≥1回（90日） | 参考: 24-of-47（ECON暫定） |
+| --- | --- | --- | --- | --- | --- |
+| 0.03 | 0.0026 % | 0.0010 % | 0.17 % | 0.50 % | 2.3e-24 |
+| 0.05 | 0.019 % | 0.024 % | 1.23 % | 3.65 % | 3.1e-19 |
+| 0.10 | 0.27 % | 0.28 % | 16.0 % | 40.8 % | 1.6e-12 |
+| 0.20 | 3.33 % | 3.31 % | 88.6 % | 99.85 % | 2.1e-6 |
+| 0.25 | 7.06 % | 7.19 % | 99.1 % | ≈100 % | 1.1e-4 |
+| **0.333**（§7-1: 攻撃者verifier 150M 対 正直300M） | **17.3 %** | 17.4 % | ≈100 % | ≈100 % | 0.90 % |
+| 0.40 | 29.0 % | 28.9 % | ≈100 % | ≈100 % | 8.2 % |
+| 0.50 | 50.0 % | 50.1 % | ≈100 % | ≈100 % | 50 % |
+| **0.60**（§7-4: 攻撃者verifier 150M 対 正直100M） | **71.0 %** | 70.9 % | ≈100 % | ≈100 % | 91.8 % |
+| 0.75 | 92.9 % | 93.0 % | ≈100 % | ≈100 % | ≈100 % |
+
+* §7のdriver（Monte-Carlo、同名定数）では、ケース1（`f = 1/3`）の再検査成功確率が30日で約0.79、90日で約0.99、ケース4（`f = 0.6`）は30日で1.0だった。正直資本が10倍（`f ≈ 0.048`）のケース2では90日で0.002〜0.005。
+* したがって安全性の主要因は`m/k`でも試行上限でもなく**正直なverifier stakeの規模**である。ECON暫定の24-of-47は`f ≤ 1/3`で1 %未満だが、`f = 0.6`では92 %で、同じく`f`に依存する。
+* `f`を下げる手段（verifier stakeの最低規模、母集団の成熟、Panel/Minerとの同一資金の二重計上禁止）と、`f`が大きい場合の失敗の影響（§6の三帰結の上限、§4Dの更新失効）を、値の承認と同時に決める（U-3）。
 
 ## 6. 三つの帰結を別々にgateする
 
@@ -178,8 +205,13 @@ subsidyだけを止めるのは不十分である（G-3）。三つを別々にg
 | 4 | 正直なverifier stakeが小さい（総供給3 % ≠ verifier 3 %） | `f`を変えて`P_pass`を報告 | `s7_2_3_4_union_bound_*`; driver S4 |
 | 5 | 最初は公開・正直、昇格後に非公開・偽造 | 次回更新で承認されず失効、露出窓 = 更新期間 + 猶予 | `s7_5_closed_after_promotion_lapses_at_the_next_renewal`; driver S5 |
 | 6 | 抽選を見てから撤回・再登録 | 試行はcommit時に消費、lineageで継承、同番号の再送拒否 | `s7_6_*`, `req_elig_4_*`; driver S6 |
-| 7 | 検証者・証拠の妨害 | 正直モデルの待ち時間、`Unavailable`はslashしない | `req_elig_3_k_positive_positions_*`; driver S7 |
+| 7 | 検証者・証拠の妨害 | 正直モデルの待ち時間、`Unavailable`はslashしない | `req_elig_3_k_positive_positions_*`, fold `without_k_attestations_the_exam_is_not_promoted_and_nothing_is_slashed`; driver S7 |
 | 8 | 1日/7日mode切替を30日・90日 | 切替でprobation予算・試行を再取得しない | `s7_8_mode_switching_re_acquires_nothing`; driver S8 |
+
+**fold-level と node E2E の試験source（未実行）:**
+
+* `consensus/core/src/palw_state_v2/tests/model_eligibility_fold_v1.rs` — 実際のfold（`apply_palw_transition_v2_with_extras`、kernel route付き）で: A-2（fence無し/先送りで全lane旧規則・exam拒否）、経路別gate（Registeredはattempt・free-prompt・evaluationで拒否、genesisは対象外、Probationは通過）、chainの`round_seed_anchor`によるcommit-then-draw（commit時のanchorでは抽選されず、後のanchorで抽選、committer除外）、手数料の焼却と記録、k-of-mでの昇格、承認なしでNotPromoted・誰もslashされない、同じ重みの再登録で試行番号とcooldownを継承、手数料不足とgenesisのexam拒否、更新なしの失効・gateの再拒否・失効後の更新commit。
+* `consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/rfc17_eligibility.rs` — real node: fence未満のinner 74はmempoolで拒否されchainは継続、fence以後もgenesis classは未armの双子とblockごとに同じstate root・同じclaim受理、genesisのexamは手数料なしで拒否。**非genesis classのprobation→昇格→失効をnode上で通す試験は未作成**（登録carriageとseat readinessが要る。§10の未了項目）。
 
 **simulation driver:** `scripts/sim/misaka-palw-rfc0017-eligibility-sim.py`。全てのmodel parameterは名前付き定数（`ATTACKER_BILI`、`ALPHA`、§11の設計値、`HONEST_CHECK_RATE`、`ATTACKER_ATTEMPT_SHARE`、`BOND_CAP_MULTIPLE`、`HOLD_DAYS`、scenarioごとの`honest_verifier_bili`等）。出力は上の5指標をscenario×期間（30/90日）ごとに別列で出す。driverはchainの実装を実行せず規則をmodel化したものであり、出力は検証でも値の承認でもない。driverの既知の単純化（30日平均の立ち上がり遅れを無視＝攻撃者に有利、ADR-0176 capは`BOND_CAP_MULTIPLE`で代用、乱数biasと検査者攻撃は未model化）はdocstringに列挙した。
 
@@ -206,22 +238,24 @@ subsidyだけを止めるのは不十分である（G-3）。三つを別々にg
 
 | 場所 | hook | 規則 |
 | --- | --- | --- |
-| `fold_read.rs` `check_class_admits_claim`（Attempt / FreePrompt） | `eligibility_claim_refusal_v1` | Registered/Lapsedは`ELIG_NOT_ELIGIBLE` |
+| `fold_read.rs` `check_class_admits_claim`（Attempt / FreePrompt / Evaluation） | `eligibility_claim_refusal_v1` | Registered/Lapsedは`ELIG_NOT_ELIGIBLE` |
+| `palw_improve_eval_fold_v1.rs`（RFC-0004 evaluation claim、audit fenceに関係なく） | 同上 | 同上（GAP-E4） |
+| inner 74 commit | 自由担保から`attempt_fee_sompi`を焼却 | 不足なら拒否（GAP-E3） |
 | `palw_state_v2.rs` `apply_attempt`（予算planの直前/claim書込後） | `eligibility_probation_preview_v1` / `_commit_v1` | Probationは段階cap・network予算で全量受理または拒否（`ELIG_PROBATION_BUDGET`）、F = 0で予約、pin |
 | `objects.rs` FreePromptCommitted（同上） | 同上 | `quanta`ブロック分 |
 | `palw_bond_budget_fold_v1.rs` `PalwBudgetPlanV1` | `without_final_weight_v1`（追加のみ、engine規則は不変） | 予約F = 0 |
 | `transition_builder.rs` `finalize_claim` | `eligibility_final_weight_v1` | pin退役（weightは予約F = 0で既に0） |
 | `palw_kernel_route_fold_v1.rs` dispatch / closing tick | inner 74/75、`sweep_model_eligibility_v1` | — |
 | processor `palw.rs` A-2 gate | `PalwKernelInnerFenceV1::ModelEligibilityV1` | fence未満は落とす |
-| モデル配分（ADR-0177 V3: `palw_allocation_snapshot_v3` / `roll_epoch_v3`、`palw_bond_budget_fold_v1.rs:2096`） | `palw_eligibility_allocation_capital_v1`を提供 | **未接続（GAP-E1）**: 当該fileは別laneが改定中のため編集しない |
+| モデル配分（ADR-0177 V3: `roll_epoch_v3`の`eligible_capital` hook、`palw_bond_budget_fold_v1.rs`） | `palw_eligibility_allocation_capital_v1` | Registered/Lapsedは0（GAP-E1、ADR lane `308980b0a`が接続） |
 | RPC `GetPalwModelRegistry` | `palw_eligibility_status_of_v1` → row fields | stage、次回更新DAA、三権利、合格数、lineage試行数 |
 
 ## 9. 未解決のgap
 
-* **GAP-E1（coinbase配分の分母）:** Registered/Lapsedの資本を配分の分母・分子から外す呼出を未接続。2026-10-15に合流したADR-0177 V3配分では、モデル別`S_m(k)`は`palw_allocation_snapshot_v3`（`consensus/core/src/palw_bond_budget_v1/allocation_v3.rs:135`）、epoch rollは`roll_epoch_v3`（同 :173）、呼出は`palw_bond_budget_fold_v1.rs:2096`。これらはADR-0176/0177 lane（`integ/adr-0162-0178`）の改定対象のため編集せず、snapshotの各モデル値を`palw_eligibility_allocation_capital_v1`に通す接続を同laneへ依頼する。未接続の間、駐車資本による他モデルの希釈と、`P_m`によるblock機会の割当が残る（報酬付きclaimそのものはclaim gateで止まる）。
+* **GAP-E1（coinbase配分の分母）— 2026-10-15にADR-0176/0177 laneが接続（`308980b0a`、休眠）:** `roll_epoch_v3`（`palw_bond_budget_v1/allocation_v3.rs`）が`eligible_capital` hookを受け、`palw_bond_budget_fold_v1.rs`の呼出がモデルのclass段階（`eligibility_of_v1`）を`palw_eligibility_allocation_capital_v1`へ通す。各epochのsnapshotと30日平均の両方に適用され、fence以後Registered/Lapsedのモデルはcoinbase配分の分母・分子とblock機会から外れる（駐車資本による希釈なし）。fence未満は従来どおり。
 * **GAP-E2（Panel=0とkernel route）:** OPV/kernel claimはB = F = 0なので対象外とした。将来kernel claimに報酬legが付くなら同じhookが要る。
-* **GAP-E3（試行手数料）:** policyに手数料はない。network試行枠のgriefing（§5）への費用は未設計。新規発行はしない。
-* **GAP-E4（evaluation lane）:** RFC-0004のevaluation claim（`PalwGatedClaimV1::Evaluation`）はgateしていない。
+* **GAP-E3（試行手数料）— 2026-10-15に実装（休眠）:** §5の返還しない手数料。値はU-4。手数料は検査者へ払わず焼却する（新規発行なし）。
+* **GAP-E4（evaluation lane）— 2026-10-15に実装（休眠）:** RFC-0004のevaluation claimはcoinbase・block権利・Final weightを生まない（escrow 0、quanta 0、手数料は参加者bondの借方）が、executorと承認seatに支払い、scoreがimprovement lineの昇格を決めるので、Registered/Lapsedのclassでは拒否する。他のclaim経路を再走査した結果、weightの加算はAttempt FinalとFree Promptのreceipt spendの2箇所だけで（どちらもgate済み）、generative claim・kernel/OPV・native fundedは利用者払いでB = F = 0。
 * **GAP-E5（claims_rootの検証）:** chainは検査claim集合の中身を判定しない（rootと件数だけ）。検証者が当該claimを取得できなければ`Unavailable`になる。
 * **GAP-E6（genesisとpre-fence）:** genesis classは対象外、pre-fence classは更新1期間だけ猶予（U-5/U-6）。
 
@@ -230,8 +264,11 @@ subsidyだけを止めるのは不十分である（G-3）。三つを別々にg
 ~~~text
 ACTIVATION_ALLOWED
     = 本RFCの値（§11）のユーザー承認
-      AND GAP-E1 接続（配分の入力が資格を読む）
+      AND GAP-E1 の接続（`308980b0a`）の試験 PASS
       AND 単体試験 PASS（palw_model_eligibility_v1/tests.rs、kernel wire、RPC wire v3）
+      AND fold試験 PASS（palw_state_v2/tests/model_eligibility_fold_v1.rs）と node E2E PASS（g14_kernel_route_e2e/rfc17_eligibility.rs）
+      AND 非genesis classのprobation→昇格→失効の node E2E（未作成）
+      AND U-3: 全体verifier stakeの前提と§5.1の f に対する評価
       AND A-2 一様試験 PASS（t12_a2u_new_kinds_uniform: fence遥か上で全block同一）
       AND §7 の8ケースを real node・独立driverで5指標ごとに報告（ラベルではなく数値）
       AND reorg / restart / IBD / carriage（aux 131）で同じ状態
@@ -262,7 +299,8 @@ ACTIVATION_ALLOWED
 | `probation_final_weight` | false | 初期提案（Probation FinalはFinal weightなし） |
 | `day_daa` | networkのblock時間から導出 | 日数→DAA換算 |
 | 正直なverifier stake `V_honest`、正直検査率 | 決めない | §1の別仮定。driverでは名前付き入力 |
-| 試行手数料・検査者報酬 | 決めない | 新規発行なし（GAP-E3） |
+| `PALW_ELIG_ATTEMPT_FEE_DESIGN_V1` | 100,000 BILI（sompi、**仮置き**） | 返還しない試行手数料、commit時に焼却（GAP-E3、値はU-4） |
+| 検査者報酬 | 決めない | 新規発行なし |
 
 未確定の値を任意の件数・日数・倍率で埋めて安全性の根拠にしない。
 
@@ -270,8 +308,9 @@ ACTIVATION_ALLOWED
 
 * **U-1** §11の設計値（m/k、予算、試行上限、更新期間）。
 * **U-2** Probation FinalのFinal weightを0とする初期提案の確定。
-* **U-3** 全体verifier stakeの前提（`V_honest`の下限、またはECONの1/3上限との統合）とm/kの選び方（ECON gateの47/24と統一するか）。
-* **U-4** 試行枠griefingへの対策（手数料・burn・lineage優先）と、新規発行をしない検査者報酬の財源。
+* **U-3（最重要）** 全体verifier stakeの前提: 攻撃者の抽選stake比`f`の上限をどう保証するか（`V_honest`の下限、ECONの1/3上限との統合、成熟期間）。§5.1のとおり`f = 1/3`で1試行17.3 %、`f = 0.6`で71.0 %であり、資格の安全性はこの前提に依存する。m/kの選び方（ECON gateの24-of-47と統一するか）もここで決める。
+* **U-4** 試行手数料の値（仮置き100,000 BILI、1 epochの全network枠で6.4M BILI焼却）と、lineage優先など待ち時間対策、新規発行をしない検査者報酬の財源。
+* **U-9** evaluation laneをRegistered/Lapsedのclassで拒否すること（GAP-E4、利用者払いのtest jobはkernel/funded経路を使う）。
 * **U-5** pre-fenceの登録モデルの扱い（本実装は更新1期間の猶予後に失効、更新検査で継続）。
 * **U-6** genesis classを対象外とすること。
 * **U-7** ECON round 2 gate（subsidyのみ）との関係: 併存させるか、本RFCの更新検査で置き換えるか。

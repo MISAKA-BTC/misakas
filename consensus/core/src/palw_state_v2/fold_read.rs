@@ -955,8 +955,10 @@ impl PalwFoldReadV1<'_> {
         // **RFC-0017 (`palw_model_eligibility_v1`, REQ-ELIG-1)**: past the fence, a class whose eligibility stage carries no
         // reward-bearing block right (`Registered`, `Lapsed`) takes no attempt and no free-prompt commitment — both lanes carry a
         // subsidy-carved block. Its user-paid kernel / funded jobs never meet this gate. Below the fence, and for a genesis class,
-        // `None`: the rules below, byte for byte. (The evaluation lane is RFC-0004's and is not gated here: RFC-0017 §3 GAP-E4.)
-        if matches!(incoming, PalwGatedClaimV1::Attempt | PalwGatedClaimV1::FreePrompt { .. })
+        // `None`: the rules below, byte for byte. GAP-E4 (2026-10-15): the RFC-0004 evaluation lane is gated alike — it earns no
+        // coinbase, block or Final weight, but its executor and credited seats are paid and its score decides a line's promotion, so an
+        // unexamined class is not one an evaluation may run on.
+        if matches!(incoming, PalwGatedClaimV1::Attempt | PalwGatedClaimV1::FreePrompt { .. } | PalwGatedClaimV1::Evaluation)
             && let Some((_, why)) =
                 super::palw_model_eligibility_fold_v1::eligibility_claim_refusal_v1(self.state, self.params, class_id, now_daa)
         {

@@ -49,9 +49,9 @@ native_struct!(crate::palw_econ_contracts_v1::PalwModelVerificationDeferredV1; m
 native_struct!(crate::palw_econ_contracts_v1::PalwModelVerificationDecidedV1; model, epoch, outcome, decided_daa);
 native_struct!(crate::palw_beacon_bootstrap_v1::PalwBootstrapRoundRowV1; round, target_committed_daa, seals, judgement, policy);
 native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityModelRowV1; class_id, lineage, principal, stage, registered_daa, stage_since_daa, probation_units_total, next_renewal_daa, open_exam, exams_passed);
-native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityLineageRowV1; attempts_total, last_commit_daa, probation_epoch, probation_units_used, probation_units_total);
-native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityPrincipalRowV1; attempt_epoch, attempts_in_epoch, attempts_total, probation_units_total);
-native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityNetworkRowV1; probation_epoch, probation_units_used, attempt_epoch, attempts_in_epoch, attempts_total);
+native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityLineageRowV1; attempts_total, last_commit_daa, probation_epoch, probation_units_used, probation_units_total, fees_burned_sompi);
+native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityPrincipalRowV1; attempt_epoch, attempts_in_epoch, attempts_total, probation_units_total, fees_burned_sompi);
+native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityNetworkRowV1; probation_epoch, probation_units_used, attempt_epoch, attempts_in_epoch, attempts_total, fees_burned_sompi);
 native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1; commit, committer_principal, committed_daa, committed_span, anchor, draws, examined, drawn_daa, deadline_daa, attestations, outcome);
 native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1; class_id, accepted_daa, units, final_weight);
 native_struct!(crate::palw_provider_court_v1::ProviderLeaseRowV1; reserved, filed_daa, serve_until_daa, charged);
