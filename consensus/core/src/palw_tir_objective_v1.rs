@@ -262,6 +262,29 @@ pub fn adjudicate_original_v1(
     adjudicate_target_v1(target, record, proof, court, step_ladder, prompt_form, allocated_proof_bytes)
 }
 
+/// **G14 R4: the decode-SELECTION primitive of an ORIGINAL greedy job** — the tiled decode-token door
+/// (`check_tir_decode_token_tiled_v1`: the committed token at `position` against the beating lane of its own authenticated
+/// row, greedy, ties to the lower index; a token outside the vocabulary is itself refuted) over the claim's ORIGINAL roots and
+/// job, pinned exactly as [`adjudicate_original_v1`] pins them. The caller must establish that the original job's selection
+/// rule IS greedy (no sampling/mask configuration, no tail); a sampled job is never judged by this primitive.
+#[allow(clippy::too_many_arguments)]
+pub fn adjudicate_original_greedy_decode_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    proof: &PalwCourtVerdictProofV2,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    step_ladder: u64,
+    prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    allocated_proof_bytes: u64,
+) -> Result<PalwTirObjectiveOutcomeV1, String> {
+    if !matches!(proof, PalwCourtVerdictProofV2::TirDecodeTokenTiled { .. }) {
+        return Err("TIR original selection adjudication needs the tiled decode-token primitive".into());
+    }
+    let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(state, &claim).ok_or("TIR objective target is absent")?;
+    let record = state.tir_class_v1(&target.class_id).ok_or("TIR objective target has no native registered program")?;
+    adjudicate_target_with_v1(target, record, proof, court, step_ladder, prompt_form, allocated_proof_bytes, true)
+}
+
 fn adjudicate_target_v1(
     target: PalwOffenceTargetV1,
     record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
@@ -271,10 +294,25 @@ fn adjudicate_target_v1(
     prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     allocated_proof_bytes: u64,
 ) -> Result<PalwTirObjectiveOutcomeV1, String> {
+    adjudicate_target_with_v1(target, record, carried, court, step_ladder, prompt_form, allocated_proof_bytes, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn adjudicate_target_with_v1(
+    target: PalwOffenceTargetV1,
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    carried: &PalwCourtVerdictProofV2,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    step_ladder: u64,
+    prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    allocated_proof_bytes: u64,
+    greedy_decode: bool,
+) -> Result<PalwTirObjectiveOutcomeV1, String> {
     let disputed_leaf = match carried {
-        PalwCourtVerdictProofV2::TirCone { refutation } => refutation.output_opening.leaf_index,
-        PalwCourtVerdictProofV2::TirLogits { accusation } => accusation.step_opening.leaf_index,
-        _ => return Err("public TIR arithmetic adjudication needs its own cone/logits predicate, not a session/decode verdict".into()),
+        PalwCourtVerdictProofV2::TirCone { refutation } if !greedy_decode => refutation.output_opening.leaf_index,
+        PalwCourtVerdictProofV2::TirLogits { accusation } if !greedy_decode => accusation.step_opening.leaf_index,
+        PalwCourtVerdictProofV2::TirDecodeTokenTiled { pin, .. } if greedy_decode => u64::from(pin.position),
+        _ => return Err("public TIR adjudication needs its own cone/logits (or greedy decode-token) primitive, not a session".into()),
     };
     if allocated_proof_bytes == 0 || borsh::object_length(carried).map_err(|e| e.to_string())? as u64 > allocated_proof_bytes {
         return Err("TIR public proof exceeds its original allocated body".into());

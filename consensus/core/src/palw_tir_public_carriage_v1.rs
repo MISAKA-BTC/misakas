@@ -94,6 +94,9 @@ pub enum PalwTirPublicConvictionEvidenceV1 {
     /// The complete original generated-ID sequence, EOF-authenticated natively against the committed
     /// logits trace root by `rows_root` (the canonical 1024-ID chunks are re-derived by the fold).
     Output { rows_root: Hash64, ids: Vec<u32> },
+    /// The decode-SELECTION primitive (`TirDecodeTokenTiled`) of a GREEDY original job: the committed token at one position
+    /// against its own authenticated logits row. Refused for any job whose original selection rule is not greedy.
+    DecodeToken { proof: Box<crate::palw_court_v2::PalwCourtVerdictProofV2> },
 }
 impl BorshSerialize for PalwTirPublicConvictionEvidenceV1 {
     fn serialize<W: std::io::Write>(&self, w: &mut W) -> std::io::Result<()> {
@@ -106,6 +109,10 @@ impl BorshSerialize for PalwTirPublicConvictionEvidenceV1 {
                 1u8.serialize(w)?;
                 rows_root.serialize(w)?;
                 ids.serialize(w)
+            }
+            Self::DecodeToken { proof } => {
+                2u8.serialize(w)?;
+                proof.serialize(w)
             }
         }
     }
@@ -128,6 +135,7 @@ impl BorshDeserialize for PalwTirPublicConvictionEvidenceV1 {
                 }
                 Ok(Self::Output { rows_root, ids })
             }
+            2 => Ok(Self::DecodeToken { proof: Box::new(BorshDeserialize::deserialize_reader(r)?) }),
             _ => Err(invalid("unknown TIR conviction evidence form")),
         }
     }
@@ -150,6 +158,16 @@ impl PalwTirPublicConvictionEvidenceV1 {
             Self::Output { rows_root, ids } => {
                 if *rows_root == Hash64::default() || ids.is_empty() || ids.len() > PALW_TIR_PUBLIC_CONVICTION_MAX_IDS_V1 {
                     return Err("TIR public output conviction has no bounded authenticated ID sequence".into());
+                }
+            }
+            Self::DecodeToken { proof } => {
+                if !matches!(proof.as_ref(), P::TirDecodeTokenTiled { .. }) {
+                    return Err("TIR public selection conviction carries no tiled decode-token primitive".into());
+                }
+                let mut stripped = proof.as_ref().clone();
+                stripped.tir_strip_program_v1();
+                if stripped != **proof {
+                    return Err("TIR public selection conviction carries its own program".into());
                 }
             }
         }

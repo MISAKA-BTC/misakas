@@ -162,6 +162,13 @@ pub(super) fn prepare_original_v1(
             return Err(refused(format!("TIR original full allocation remains incomplete: {missing:?}")));
         }
     };
+    // **G14 R4 (narrowing, not completion): every violation class an admitted original covers must have a native conviction
+    // door.** The ORIGINAL frame's door judges arithmetic/logits, greedy selection, output identity and DA; the registered
+    // semantic stages (constraint, tokenizer, prefix state) still convict only through the old ClaimBundle's staged courts, which a
+    // frame never has. A semantic-bearing original is therefore refused rather than admitted with an unprosecutable layer.
+    if plan.semantic.is_some() || original.job.decode.is_some() || original.job.tail.is_some() {
+        return Err(refused("TIR original carries a semantic stage or non-greedy selection no frame court judges yet"));
+    }
     let original_source = crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_v1(
         record,
         layout,
@@ -625,6 +632,34 @@ fn apply_conviction_v1(
                 }
                 Arith::PredicateHolds { .. } => {
                     return Err(refused("TIR nominated arithmetic primitive holds: no conviction, and no finding of claim honesty"));
+                }
+            }
+        }
+        E::DecodeToken { proof } => {
+            let job = &frame.original_v1().job;
+            if job.decode.is_some() || job.tail.is_some() {
+                return Err(refused("TIR original job's selection rule is not plain greedy; no native selection court judges it yet"));
+            }
+            match crate::palw_tir_objective_v1::adjudicate_original_greedy_decode_v1(
+                &b.state,
+                claim_id,
+                proof,
+                &native.court,
+                frame.descriptor_v1().maximum_leaves,
+                native.prompt_form,
+                frame.plan_v1().terminal.maximum_witness_bytes,
+            )
+            .map_err(refused)?
+            {
+                Arith::Convicts(finding) => {
+                    if finding.target_v1().claim_id != claim_id || finding.target_v1().execution_root != claim.execution_root {
+                        return Err(refused("TIR selection finding names another claim or execution"));
+                    }
+                    // The committed trace contradicts its own rows: the execution itself is false (forfeit by root).
+                    Some(claim.execution_root)
+                }
+                Arith::PredicateHolds { .. } => {
+                    return Err(refused("TIR nominated greedy selection holds: no conviction, and no finding of claim honesty"));
                 }
             }
         }

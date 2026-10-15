@@ -904,7 +904,7 @@ native_struct!(crate::palw_float_constraint_source_v1::PalwFloatSourceAnswerV1; 
 native_struct!(crate::palw_selected_event_source_v1::PalwSelectedEventNativeAnswerV1; answerer, demand_id, coordinate, event);
 native_struct!(crate::palw_tir_prefix_owned_v1::PalwTirPrefixLeafAnswerV1; answerer, seed_id, ordinal, values_le, opening);
 native_enum!(crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1; Demand { request }, Reacquire { previous, proof, nonce }, Begin { demand_id, answerer, total_bytes, body_hash }, Part { demand_id, answerer, offset, bytes }, Finish { demand_id, answerer }, Collect { demand_id }, WorkDebit(f0), PreparationReady { descriptor }, PreparationCollect { actor });
-native_enum!(crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1; Arithmetic { proof }, Output { rows_root, ids });
+native_enum!(crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1; Arithmetic { proof }, Output { rows_root, ids }, DecodeToken { proof });
 native_struct!(crate::palw_tir_public_custody_v1::PalwTirPublicCustodyGrantV1; version, claim, seat, signed_daa, pledge_id, valid_receipt_digest, signature);
 native_struct!(crate::palw_backend::PalwTirPublicPreparedDescriptorV1; version, source_id, class_id, artifact_root, execution_root, trace_root, step_root, step_leaf_count, decode_count, vocab, material_until_daa, manifest_digest, retained_bytes);
 native_struct!(crate::palw_exec_v2::PalwWorkRangeV1; start, end);

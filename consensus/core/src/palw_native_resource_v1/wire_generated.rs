@@ -7513,6 +7513,12 @@ impl NativeWireScanV1 for crate::palw_tir_public_carriage_v1::PalwTirPublicConvi
                 sum = sum.merge(<Vec<u32> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum =
+                    sum.merge(<Box<crate::palw_court_v2::PalwCourtVerdictProofV2> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
