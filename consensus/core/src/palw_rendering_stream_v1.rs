@@ -182,6 +182,9 @@ impl PalwRenderingStreamV1 {
     pub fn offset(&self) -> u32 {
         self.offset
     }
+    pub fn cursor_v1(&self) -> (u32, bool, u32, u32) {
+        (self.id, self.present, self.length, self.offset)
+    }
     pub fn check(&self) -> Result<(), String> {
         let header = if self.present { 9u128 } else { 5 };
         if self.hash.buffer.len() > 128

@@ -2425,6 +2425,102 @@ impl<'a> TransitionBuilder<'a> {
         claim: &PalwClaimStateV2,
         charge: &PalwDaDefaultChargeV1,
     ) -> Result<(), PalwStateV2Error> {
+        self.da_default_charge_with_producer_leg_v1(ctx, claim, charge, true)
+    }
+
+    /// Only the prospective rooted history fold may invoke this with the accepted
+    /// pledge and exact expired demand. Existing claims do not gain history custody.
+    pub(super) fn staged_history_default_charge_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        claim: &PalwClaimStateV2,
+        contract: &crate::palw_history_custody_v1::PalwHistoryCustodyContractV1,
+        default: &crate::palw_history_custody_v1::PalwHistoryRecoveryDefaultV1,
+        winner: PalwBondKeyV2,
+    ) -> Result<(), PalwStateV2Error> {
+        let request = &default.request;
+        if contract.pledge.check_v1().is_err()
+            || request.check_v1().is_err()
+            || contract.pledge.claim != request.claim
+            || request.owner != winner
+            || contract.producer != claim.bond
+            || contract.pledge.execution_root != claim.execution_root
+            || contract.custody.accepted_daa != claim.accepted_daa
+            || request.sequence > contract.maximum_records
+            || request.material_until_daa > contract.pledge.material_until_daa
+            || default.opened_daa < request.reserved_daa
+            || default.opened_daa >= default.answer_until_daa
+            || default.collected_daa != ctx.daa_score
+            || ctx.daa_score < default.answer_until_daa
+            || ctx.daa_score >= request.material_until_daa
+            || !default.custodians.contains(&contract.producer)
+            || default.custodians.contains(&winner)
+            || default.custodians.iter().any(|bond| {
+                *bond != contract.producer && !contract.custody.credited.get(bond)
+                    .is_some_and(|receipt| receipt.credited_daa <= default.opened_daa)
+            })
+        {
+            return Err(PalwStateV2Error::CarriageInconsistent("history default differs from the accepted pledge and literal expired custody grant".into()));
+        }
+        // The literal expired set includes the producer (checked above): its leg runs.
+        self.staged_selected_default_charge_v1(ctx, request.claim, claim, contract.producer, &default.custodians, winner)
+    }
+
+    /// The rooted prospective source fold supplies the exact expired demand and
+    /// its literal unpaid set: every mandatory custodian, the producer included,
+    /// that did not reach EOF. Panel membership is not that proof. The producer's
+    /// claim-level leg runs only when the producer itself is in that set; silent
+    /// signers beside an answering producer bear only their own covering charge.
+    /// History invokes this economic leg only after its separate pledge checks.
+    pub(super) fn staged_selected_default_charge_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+        producer: PalwBondKeyV2,
+        unpaid: &std::collections::BTreeSet<PalwBondKeyV2>,
+        winner: PalwBondKeyV2,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_da_rcore_v1::{PalwDaStageV1, palw_da_offence_id_v1};
+        if producer != claim.bond || ctx.daa_score < claim.accepted_daa || winner == producer || unpaid.contains(&winner) {
+            return Err(PalwStateV2Error::CarriageInconsistent("retained source default changes producer, independent winner or literal signer roles".into()));
+        }
+        let covering: std::collections::BTreeSet<PalwBondKeyV2> = unpaid.iter().copied().filter(|bond| *bond != producer).collect();
+        if !unpaid.contains(&producer) {
+            // The producer answered to EOF: no void, no producer record, no session release.
+            let g = self.claim_g_v1(&claim_id).map(|g| g.g()).unwrap_or(0);
+            let covering: Vec<PalwBondKeyV2> = covering.into_iter().collect();
+            let conv = self.open_conviction_v1(&covering, ctx.daa_score);
+            return self.charge_covering_signers_v1(&conv, claim_id, &covering, g);
+        }
+        let offence = palw_da_offence_id_v1(&producer.0, &claim_id);
+        let producer_already_charged = self.state.consumed_offences.contains_key(&offence);
+        // A sibling default may already have voided the claim and paid the reporter.
+        // Retained family custody must not rerun that economic leg or reset its phase.
+        let (stage, live_producer_leg) = match claim.phase {
+            PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } => (PalwDaStageV1::Live, true),
+            PalwClaimPhaseV2::ReceiptLicensed { .. } => (PalwDaStageV1::Licensed, true),
+            PalwClaimPhaseV2::Final { .. } => (PalwDaStageV1::FinalRow, true),
+            _ => (PalwDaStageV1::Live, false),
+        };
+        let charge = PalwDaDefaultChargeV1 {
+            claim_id,
+            producer,
+            stage,
+            g: self.claim_g_v1(&claim_id).map(|g| g.g()).unwrap_or(0),
+            covering: covering.iter().copied().collect(),
+            winner,
+        };
+        self.da_default_charge_with_producer_leg_v1(ctx, claim, &charge, live_producer_leg && !producer_already_charged)
+    }
+
+    fn da_default_charge_with_producer_leg_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        claim: &PalwClaimStateV2,
+        charge: &PalwDaDefaultChargeV1,
+        run_producer_leg: bool,
+    ) -> Result<(), PalwStateV2Error> {
         use crate::palw_da_rcore_v1::{PalwDaStageV1, palw_da_offence_id_v1};
         use crate::palw_offence_v1::PalwOffenceKindV1;
         let now = ctx.daa_score;
@@ -2435,29 +2531,9 @@ impl<'a> TransitionBuilder<'a> {
         let conv = self.open_conviction_v1(&opened, now);
         let fp_first = self.post_final_fp_g_v1(&claim_id);
         // 1. S4 on each covering signer, lock first.
-        for seat in &charge.covering {
-            let key = crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &claim_id);
-            if self.state.consumed_offences.contains_key(&key) {
-                continue;
-            }
-            let Some(lock) = self.state.slashable_locks.get(&(*seat, claim_id)).copied() else { continue };
-            self.write_slashable_lock((*seat, claim_id), None);
-            let s4 = lock.amount.saturating_add(palw_rcore_s3s4_action_v1(conv.c0(seat), charge.g));
-            self.slash_bond(*seat, s4)?;
-            self.close_conviction_v1(
-                &conv,
-                key,
-                PalwOffenceKindV1::PanelFalseValidV2,
-                *seat,
-                s4,
-                Hash64::default(),
-                claim_id,
-                &[*seat],
-                &[(*seat, crate::palw_aggregate_liability_v1::PalwConvictedOffenceV1::CoveringSigner)],
-            )?;
-        }
+        self.charge_covering_signers_v1(&conv, claim_id, &charge.covering, charge.g)?;
         // 2. The producer, by stage.
-        let nominal = match charge.stage {
+        let nominal = if !run_producer_leg { 0 } else { match charge.stage {
             PalwDaStageV1::Live | PalwDaStageV1::Licensed => {
                 self.void_and_slash_at(claim_id, claim, now, PalwVoidReasonV2::ProducerWithholding, Some(&conv))?
             }
@@ -2480,7 +2556,7 @@ impl<'a> TransitionBuilder<'a> {
                     fp_first,
                 )?
             }
-        };
+        } };
         // 3. The record, once per claim; forfeiture by claim; the reward to the earliest defaulted accuser.
         if !self.state.consumed_offences.contains_key(&offence_id) {
             self.close_conviction_v1(
@@ -2499,6 +2575,40 @@ impl<'a> TransitionBuilder<'a> {
         self.forfeit_minted_round_rights_of_claim(&claim_id);
         // 4. Every session closed and every refuted entry refunded (the void did it for a live stage).
         self.da_release_all_v1(claim_id, true, now)?;
+        Ok(())
+    }
+
+    /// S4 on each literal covering signer, lock first; an already consumed offence or a
+    /// signer without a slashable lock on this claim is skipped (never charged twice).
+    fn charge_covering_signers_v1(
+        &mut self,
+        conv: &PalwConvictionV1,
+        claim_id: Hash64,
+        covering: &[PalwBondKeyV2],
+        g: u128,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_offence_v1::PalwOffenceKindV1;
+        for seat in covering {
+            let key = crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &claim_id);
+            if self.state.consumed_offences.contains_key(&key) {
+                continue;
+            }
+            let Some(lock) = self.state.slashable_locks.get(&(*seat, claim_id)).copied() else { continue };
+            self.write_slashable_lock((*seat, claim_id), None);
+            let s4 = lock.amount.saturating_add(palw_rcore_s3s4_action_v1(conv.c0(seat), g));
+            self.slash_bond(*seat, s4)?;
+            self.close_conviction_v1(
+                conv,
+                key,
+                PalwOffenceKindV1::PanelFalseValidV2,
+                *seat,
+                s4,
+                Hash64::default(),
+                claim_id,
+                &[*seat],
+                &[(*seat, crate::palw_aggregate_liability_v1::PalwConvictedOffenceV1::CoveringSigner)],
+            )?;
+        }
         Ok(())
     }
 

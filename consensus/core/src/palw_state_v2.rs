@@ -3088,16 +3088,28 @@ pub fn palw_accuser_exposure_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) 
         })
         .fold(0u128, u128::saturating_add);
     // Lane LG14-A: a reservation's deposit (live or held) sits on the free half as a session's exposure does; zero below the fence.
-    courts.saturating_add(da).saturating_add(state.legacy_dispute_exposure_v1(bond)).saturating_add(
-        state
-            .staged_by_owner
-            .range((*bond, ZERO_HASH64)..)
-            .take_while(|(owner, _)| owner == bond)
-            .filter_map(|(_, claim)| state.staged_owned_row_v1(*claim, *bond))
-            .filter_map(|row| row.owner_accounting_v1())
-            .map(|(_, _, deposit, _)| u128::from(deposit))
-            .fold(0u128, u128::saturating_add),
-    )
+    courts
+        .saturating_add(da)
+        .saturating_add(state.legacy_dispute_exposure_v1(bond))
+        .saturating_add(
+            state
+                .staged_by_owner
+                .range((*bond, ZERO_HASH64)..)
+                .take_while(|(owner, _)| owner == bond)
+                .filter_map(|(_, claim)| state.staged_owned_row_v1(*claim, *bond))
+                .filter_map(|row| row.owner_accounting_v1())
+                .map(|(_, _, deposit, _)| u128::from(deposit))
+                .fold(0u128, u128::saturating_add),
+        )
+        .saturating_add(
+            state
+                .staged_inventory_by_owner
+                .range((*bond, ZERO_HASH64)..)
+                .take_while(|(owner, _)| owner == bond)
+                .filter_map(|(_, artifact)| state.staged_tokenizer_inventory_open_v1(*artifact, *bond))
+                .map(|row| u128::from(row.plan.deposit_sompi))
+                .fold(0u128, u128::saturating_add),
+        )
 }
 
 /// **A-6: the room an accuser still has on its free half** — [`palw_rcore_gate_room_v1`] with
@@ -7254,6 +7266,19 @@ pub enum PalwConsensusObjectV2 {
     PublicCourtStreamMoveV1 {
         movement: Box<crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamMoveV1>,
     } = 167,
+    /// **(tag 168): a staged seed that names no binding** — a TIR required-family claim's Constraint or tokenizer stage, its
+    /// decode view derived natively from the claim's admitted TIR public header and registered class record. Owned by
+    /// `palw_staged_tir_route_v1` (below it the live build's undecodable payload, riding unjudged). **Tag 168.**
+    PublicCourtStreamOpenedNativeV1 {
+        seed: Box<crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1>,
+    } = 168,
+    /// **(tag 169): a registered TIR class's layout, published** — public class data (no signature), authenticated by the
+    /// class record's `layout_digest` and program. The TIR prefix-state quote and court rebuild the class's step space from
+    /// it. Owned by `palw_staged_tir_route_v1` (below it the live build's undecodable payload, riding unjudged). **Tag 169.**
+    TirClassLayoutPublishedV1 {
+        class_id: Hash64,
+        layout: Box<crate::palw_tir_class_v1::PalwTirLayoutV1>,
+    } = 169,
     /// **(tag 159): a non-fused step convicted by its committed leaf hash** — the one-move court's kernel over the committed inputs
     /// and the accuser's own model rows, without the output preimage. A direct objective proof: it lands whatever session or court
     /// is open on the claim. Signed by the accuser's bond. **Tag 159.**
@@ -8126,6 +8151,56 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
         // chunk that pays (a chunk carries no `count`, chunks arrive in any order, and this ceiling
         // is read where the folded state is not in hand).
         PalwConsensusObjectV2::CourtCloseDeclared { count, .. } => palw_court_close_min_fee_v1(*count as u64),
+        PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement }
+            if matches!(
+                movement.action,
+                crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::ArtifactInventoryOpen { .. }
+            ) =>
+        {
+            let crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::ArtifactInventoryOpen { offer, .. } =
+                &movement.action
+            else {
+                unreachable!()
+            };
+            crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryV1::quote_v1(
+                offer.maximum_bytes,
+                crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+            )
+            .map(|plan| plan.rent_sompi)
+            .unwrap_or(u64::MAX)
+        }
+        PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement }
+            if matches!(
+                movement.action,
+                crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::BundleOpen { .. }
+            ) =>
+        {
+            let crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::BundleOpen { plan } = &movement.action else {
+                unreachable!()
+            };
+            plan.prepayment_rent_v1().unwrap_or(u64::MAX)
+        }
+        PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed } => {
+            let config = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
+            match &seed.family {
+                crate::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::Constraint { .. }
+                | crate::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::PrefixState { .. } => {
+                    config.claim_terms(0, 4095, seed.vocab_size).map(|t| t.plan.rent_sompi).unwrap_or(u64::MAX)
+                }
+                crate::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::Tokenizer {
+                    tokenizer_key_events,
+                    operand_tokenizer_bytes,
+                    ..
+                } => crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(
+                    *operand_tokenizer_bytes,
+                    *tokenizer_key_events,
+                    config.prices,
+                )
+                .and_then(|p| p.court_envelope(seed.vocab_size, config.prices))
+                .map(|p| p.rent_sompi)
+                .unwrap_or(u64::MAX),
+            }
+        }
         PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed } => {
             let config = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
             match &seed.auxiliary {
@@ -8159,9 +8234,41 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
                 )
                 .map(|p| p.envelope.rent_sompi)
                 .unwrap_or(u64::MAX),
-                None => {
-                    config.claim_terms(0, 4095, seed.binding.shape_profile.vocab_size).map(|t| t.plan.rent_sompi).unwrap_or(u64::MAX)
+                Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::PublicPrefix {
+                    prefix_tokens,
+                    relation,
+                    slots,
+                    ..
+                }) => {
+                    let profile_bytes = seed.retained_profile.as_ref().map_or_else(
+                        || borsh::object_length(&seed.binding.shape_profile).map(|n| n as u64).unwrap_or(u64::MAX),
+                        |r| r.original_bytes,
+                    );
+                    crate::palw_prefix_resources_v1::PalwPrefixResourcePlanV1::derive_with_profile_bytes(
+                        &seed.binding.shape_profile,
+                        *relation,
+                        *prefix_tokens,
+                        seed.binding.step_leaf_count,
+                        90_000,
+                        config.prices,
+                        profile_bytes,
+                    )
+                    .and_then(|base| {
+                        crate::palw_prefix_public_source_v1::PalwPrefixPublicAcquisitionPlanV1::derive(
+                            base,
+                            *slots as usize,
+                            config.prices,
+                            profile_bytes,
+                        )
+                    })
+                    .map(|p| p.envelope.rent_sompi)
+                    .unwrap_or(u64::MAX)
                 }
+                None
+                | Some(
+                    crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FlatConstraint { .. }
+                    | crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FloatConstraint { .. },
+                ) => config.claim_terms(0, 4095, seed.binding.shape_profile.vocab_size).map(|t| t.plan.rent_sompi).unwrap_or(u64::MAX),
             }
         }
         PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration } => {
@@ -10634,6 +10741,12 @@ pub struct PalwChainStateV2 {
     staged_due: BTreeSet<(u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>,
     /// Derived owner-local allowance/exposure index: other reservers cannot occupy this lane.
     staged_by_owner: BTreeSet<(PalwBondKeyV2, Hash64)>,
+    staged_inventory_by_owner: BTreeSet<(PalwBondKeyV2, Hash64)>,
+    /// Rebuildable signer/EDF queue over exact live public-prefix obligations.
+    staged_prefix_responders: BTreeSet<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)>,
+    staged_selected_responders: BTreeSet<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)>,
+    staged_flat_responders: BTreeSet<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)>,
+    staged_history_responders: BTreeSet<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2, Hash64)>,
     /// RFC-0004: the governed lines by `(next_due_daa, line_id)` — the order the fold advances them
     /// in (spec 17 §17.5.2).
     improvement_due: BTreeSet<(u64, Hash64)>,
@@ -13534,7 +13647,7 @@ pub fn palw_v2_pre_object_base_v1(
     sweep_da_sessions(&mut builder, ctx)?;
     palw_legacy_answer_chunks_fold_v2::sweep(&mut builder, ctx);
     palw_terminal_carriage_fold_v1::sweep(&mut builder, ctx);
-    palw_staged_court_fold_v1::sweep(&mut builder, ctx);
+    palw_staged_court_fold_v1::sweep(&mut builder, ctx)?;
     // Lane LG14-A: the dispute reservations' lapse, as the fold's step 2 runs it.
     palw_legacy_public_filer_fold_v1::sweep_legacy_disputes(&mut builder, ctx)?;
     sweep_court_close_deadlines(&mut builder, ctx)?;
@@ -14012,7 +14125,7 @@ fn apply_palw_transition_v7_inner(
     sweep_da_sessions(&mut builder, ctx)?;
     palw_legacy_answer_chunks_fold_v2::sweep(&mut builder, ctx);
     palw_terminal_carriage_fold_v1::sweep(&mut builder, ctx);
-    palw_staged_court_fold_v1::sweep(&mut builder, ctx);
+    palw_staged_court_fold_v1::sweep(&mut builder, ctx)?;
     // Lane LG14-A: every dispute reservation whose claim's hard deadline is behind this block lapses, right after the DA sweep.
     palw_legacy_public_filer_fold_v1::sweep_legacy_disputes(&mut builder, ctx)?;
     // A declared close is swept at ITS OWN window before the session's backstop is read (audit
@@ -14555,7 +14668,7 @@ fn apply_palw_transition_v7_inner(
     apply_rho_breaker_epoch_v1(&mut builder, ctx);
     palw_legacy_answer_chunks_fold_v2::sweep(&mut builder, ctx);
     palw_terminal_carriage_fold_v1::sweep(&mut builder, ctx);
-    palw_staged_court_fold_v1::sweep(&mut builder, ctx);
+    palw_staged_court_fold_v1::sweep(&mut builder, ctx)?;
 
     palw_monetary_material_fold_v1::refresh(&mut builder, ctx)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
@@ -18133,6 +18246,13 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         K::Fence(F::ExecPayloadV2) => builder.params.exec_v2_active_at(ctx.daa_score),
         K::Fence(F::ClassSemanticsV1) => builder.extras.class_semantics_active,
         K::Fence(F::StagedPublicCourtV1) => builder.extras.staged_public_court.is_some(),
+        // RFC08: the mirror of `palw_monetary_material_v1` (merged 2026-10-15; this arm was missing on both parents).
+        K::Fence(F::MonetaryMaterialV1) => builder.params.monetary_material_at_v1(ctx.daa_score).is_some(),
+        // G14: the TIR / greedy Float32 staged routes ride inside the staged court's kinds, in force where both fences are.
+        K::Fence(F::StagedTirRouteV1) => builder.extras.staged_public_court.is_some() && builder.extras.staged_tir_route_active,
+        K::Fence(F::StagedFloatConstraintV1) => {
+            builder.extras.staged_public_court.is_some() && builder.extras.staged_float_constraint_active
+        }
     }
 }
 
@@ -19211,6 +19331,18 @@ pub struct PalwTransitionExtrasV1 {
     pub terminal_evidence_max_bytes: Option<u64>,
     /// None preserves all historic deadlines/holds; Some stamps newly accepted claims only.
     pub staged_public_court: Option<crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1>,
+    /// `palw_staged_tir_route_v1` at this block: TIR required-family claims are admitted to the
+    /// staged route (native-context seeds and answers). False below it: refused, A-2 uniform.
+    pub staged_tir_route_active: bool,
+    /// `palw_staged_float_constraint_v1` at this block: greedy Float32 Constraint claims are
+    /// admitted with the rooted f32 row court. False below it: refused.
+    pub staged_float_constraint_active: bool,
+    /// Transaction-local producer pledges extracted from the prospective FP envelope.
+    /// An ordinary FP claim must never borrow another transaction's pledge.
+    pub history_custody_pledges: BTreeMap<Hash64, crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
+    pub public_original_bindings: BTreeMap<Hash64, crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>,
+    /// Transaction-local producer custody delegations (HFP1 version 2), keyed by claim.
+    pub producer_custody_delegations: BTreeMap<Hash64, crate::palw_history_custody_v1::PalwProducerCustodyDelegationV1>,
     /// **ADR-0133 §7: `Params::palw_seat_gate_possession`'s HEIGHT.** Past it
     /// `required_ready_seats` is the possession question alone — the panel plus the spare — and a
     /// class heavier than its fleet is admitted RARELY (one claim in flight, the smallest
@@ -21425,8 +21557,24 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             if &row.checkpoint_v1().map_err(|_| PalwStateV2Error::DeltaMismatch("staged move is not an owned court"))? != expected {
                 return Err(PalwStateV2Error::DeltaMismatch("staged move checkpoint mismatch"));
             }
+            let old_due = palw_staged_court_fold_v1::index_rows(lookup, row).0;
+            let old_responses = palw_staged_court_fold_v1::response_index_rows(row);
+            let old_selected = palw_staged_court_fold_v1::selected_response_index_rows_v1(row);
+            let old_flat = palw_staged_court_fold_v1::flat_response_index_rows_v1(row);
+            let old_history = palw_staged_court_fold_v1::history_response_index_rows_v1(row);
             row.restore_checkpoint_v1(install)
                 .map_err(|_| PalwStateV2Error::DeltaMismatch("staged checkpoint exceeds immutable contract"))?;
+            let new_due = palw_staged_court_fold_v1::index_rows(lookup, row).0;
+            let new_responses = palw_staged_court_fold_v1::response_index_rows(row);
+            let new_selected = palw_staged_court_fold_v1::selected_response_index_rows_v1(row);
+            let new_flat = palw_staged_court_fold_v1::flat_response_index_rows_v1(row);
+            let new_history = palw_staged_court_fold_v1::history_response_index_rows_v1(row);
+            state.staged_due.remove(&(old_due, lookup));
+            state.staged_due.insert((new_due, lookup));
+            palw_staged_court_fold_v1::update_response_indices(state, old_responses, new_responses);
+            palw_staged_court_fold_v1::update_selected_response_indices_v1(state, old_selected, new_selected);
+            palw_staged_court_fold_v1::update_flat_response_indices_v1(state, old_flat, new_flat);
+            palw_staged_court_fold_v1::update_history_response_indices_v1(state, old_history, new_history);
         }
         PalwDeltaEntryV2::TerminalEvidence { key, old, new } => swap_write!(state.terminal_evidence, key, old, new),
         PalwDeltaEntryV2::TerminalPart { key, index, old, new } => {
@@ -23743,6 +23891,11 @@ impl PalwStateCarriageV2 {
             staged_holds: BTreeSet::new(),
             staged_due: BTreeSet::new(),
             staged_by_owner: BTreeSet::new(),
+            staged_inventory_by_owner: BTreeSet::new(),
+            staged_prefix_responders: BTreeSet::new(),
+            staged_selected_responders: BTreeSet::new(),
+            staged_flat_responders: BTreeSet::new(),
+            staged_history_responders: BTreeSet::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
@@ -24421,7 +24574,7 @@ mod staged_court_state_tests_v1 {
             &PalwDeltaEntryV2::StagedCourtSeed {
                 key: PalwStagedCourtKeyV1::Owner(claim, owner),
                 old: None,
-                new: Some(PalwStagedCourtRowV1::Tokenizer(Box::new(row))),
+                new: Some(PalwStagedCourtRowV1::Tokenizer(Box::new(row).into())),
             },
             false,
         )
@@ -24442,7 +24595,7 @@ mod staged_court_state_tests_v1 {
             &PalwDeltaEntryV2::StagedCourtSeed {
                 key: PalwStagedCourtKeyV1::Owner(claim, owner),
                 old: Some(current),
-                new: Some(PalwStagedCourtRowV1::Tokenizer(Box::new(initial))),
+                new: Some(PalwStagedCourtRowV1::Tokenizer(Box::new(initial).into())),
             },
             false,
         )
@@ -24576,7 +24729,7 @@ mod staged_court_state_tests_v1 {
                 let seed = PalwDeltaEntryV2::StagedCourtSeed {
                     key: owner_key,
                     old: None,
-                    new: Some(PalwStagedCourtRowV1::Prefix(Box::new(row))),
+                    new: Some(PalwStagedCourtRowV1::Prefix(Box::new(row).into())),
                 };
                 apply_delta_entry(&mut state, &contract, false).unwrap();
                 apply_delta_entry(&mut state, &seed, false).unwrap();
@@ -24682,7 +24835,7 @@ mod staged_court_state_tests_v1 {
             let seed = PalwDeltaEntryV2::StagedCourtSeed {
                 key: owner_key,
                 old: None,
-                new: Some(PalwStagedCourtRowV1::Tokenizer(Box::new(row.clone()))),
+                new: Some(PalwStagedCourtRowV1::Tokenizer(Box::new(row.clone()).into())),
             };
             apply_delta_entry(&mut state, &contract, false).unwrap();
             apply_delta_entry(&mut state, &seed, false).unwrap();
@@ -24755,7 +24908,7 @@ mod staged_court_state_tests_v1 {
         let owner_entry = PalwDeltaEntryV2::StagedCourtSeed {
             key: PalwStagedCourtKeyV1::Owner(claim, owner),
             old: None,
-            new: Some(PalwStagedCourtRowV1::Constraint(Box::new(row))),
+            new: Some(PalwStagedCourtRowV1::Constraint(Box::new(row).into())),
         };
         apply_delta_entry(&mut state, &claim_entry, false).unwrap();
         apply_delta_entry(&mut state, &owner_entry, false).unwrap();
@@ -24809,7 +24962,7 @@ mod staged_court_state_tests_v1 {
             let owner_entry = PalwDeltaEntryV2::StagedCourtSeed {
                 key: PalwStagedCourtKeyV1::Owner(row.claim, row.reserver),
                 old: None,
-                new: Some(PalwStagedCourtRowV1::Constraint(Box::new(row))),
+                new: Some(PalwStagedCourtRowV1::Constraint(Box::new(row).into())),
             };
             apply_delta_entry(&mut state, &owner_entry, false).unwrap();
             assert_eq!(reference.resolve(&state, root).is_ok(), guilty);

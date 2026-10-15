@@ -13,6 +13,53 @@ use crate::palw_tokenizer_json_stream_v1::{
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 
+/// Every prospective FP job answers its immutable registered tokenizer/table
+/// statement. Only constrained jobs additionally name that table in their job tail.
+pub fn palw_tokenizer_statement_v1<'a>(
+    target: &'a crate::palw_offence_attribution_v1::PalwOffenceTargetV1,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+) -> Result<&'a crate::palw_class_semantics_v1::PalwClassSemanticsV1, String> {
+    crate::palw_offence_attribution_v1::palw_constrained_job_target_v1(target, binding, job).map_err(|e| e.to_string())?;
+    let registered = target
+        .registered_semantics
+        .as_ref()
+        .filter(|r| r.matches_context(&binding.job_context))
+        .ok_or("tokenizer stream has no matching immutable claim semantics")?;
+    let (Some(root), Some(_), Some(_), Some(_)) =
+        (registered.token_table_root, registered.rendering_rule, registered.raw_tokenizer_bytes, registered.tokenizer_key_events)
+    else {
+        return Err("historical unqualified tokenizer cannot enter prospective stream court".into());
+    };
+    if job.is_constraint() && crate::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job) != Some(root) {
+        return Err("tokenizer stream table is not the immutable registered root".into());
+    }
+    Ok(registered)
+}
+
+/// [`palw_tokenizer_statement_v1`] over a decode view (a TIR claim's, derived natively).
+pub fn palw_tokenizer_statement_view_v1<'a>(
+    target: &'a crate::palw_offence_attribution_v1::PalwOffenceTargetV1,
+    view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+) -> Result<&'a crate::palw_class_semantics_v1::PalwClassSemanticsV1, String> {
+    crate::palw_decode_view_v1::palw_constrained_job_target_view_v1(target, view, job)?;
+    let registered = target
+        .registered_semantics
+        .as_ref()
+        .filter(|r| r.matches_context(&view.job_context))
+        .ok_or("tokenizer stream has no matching immutable claim semantics")?;
+    let (Some(root), Some(_), Some(_), Some(_)) =
+        (registered.token_table_root, registered.rendering_rule, registered.raw_tokenizer_bytes, registered.tokenizer_key_events)
+    else {
+        return Err("historical unqualified tokenizer cannot enter prospective stream court".into());
+    };
+    if job.is_constraint() && crate::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job) != Some(root) {
+        return Err("tokenizer stream table is not the immutable registered root".into());
+    }
+    Ok(registered)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwAuthenticatedRenderingDigestStreamV1 {
     context: Hash64,
@@ -146,12 +193,45 @@ impl PalwTokenizerTableStreamV1 {
         opening: &PalwStepOpeningV1,
         operand_raw_length: u64,
     ) -> Result<Self, String> {
-        crate::palw_offence_attribution_v1::palw_constrained_job_target_v1(target, binding, job).map_err(|e| e.to_string())?;
-        let registered = target
-            .registered_semantics
-            .as_ref()
-            .filter(|r| r.matches_context(&binding.job_context))
-            .ok_or("tokenizer stream has no matching immutable claim semantics")?;
+        let registered = palw_tokenizer_statement_v1(target, binding, job)?;
+        Self::with_statement_v1(
+            context,
+            registered,
+            binding.shape_profile.vocab_size,
+            id,
+            present,
+            length,
+            opening,
+            operand_raw_length,
+        )
+    }
+    /// The same court over a decode view (a TIR claim's, behind `palw_staged_tir_route_v1`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_operand_length_view_v1(
+        context: Hash64,
+        target: &crate::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        id: u32,
+        present: bool,
+        length: u32,
+        opening: &PalwStepOpeningV1,
+        operand_raw_length: u64,
+    ) -> Result<Self, String> {
+        let registered = palw_tokenizer_statement_view_v1(target, view, job)?;
+        Self::with_statement_v1(context, registered, view.vocab_size, id, present, length, opening, operand_raw_length)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn with_statement_v1(
+        context: Hash64,
+        registered: &crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+        vocab: u32,
+        id: u32,
+        present: bool,
+        length: u32,
+        opening: &PalwStepOpeningV1,
+        operand_raw_length: u64,
+    ) -> Result<Self, String> {
         let (Some(root), Some(rule), Some(raw_length), Some(bound)) =
             (registered.token_table_root, registered.rendering_rule, registered.raw_tokenizer_bytes, registered.tokenizer_key_events)
         else {
@@ -160,24 +240,13 @@ impl PalwTokenizerTableStreamV1 {
         match rule {
             crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1 => (),
         }
-        if crate::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job) != Some(root) {
-            return Err("tokenizer stream table is not the immutable registered root".into());
-        }
         Ok(Self {
             context,
             signed_key_bound: bound,
             signed_raw_length: raw_length,
             operand_raw_length,
             parser: PalwTokenizerJsonStreamV1::new(context, registered.tokenizer_id, operand_raw_length, id),
-            table: PalwAuthenticatedRenderingDigestStreamV1::new(
-                context,
-                root,
-                binding.shape_profile.vocab_size,
-                id,
-                present,
-                length,
-                opening,
-            )?,
+            table: PalwAuthenticatedRenderingDigestStreamV1::new(context, root, vocab, id, present, length, opening)?,
         })
     }
     pub(crate) fn same_contract_v1(&self, other: &Self) -> bool {

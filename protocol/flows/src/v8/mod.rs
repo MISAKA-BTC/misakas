@@ -16,6 +16,7 @@ use crate::v7::{
 pub(crate) mod claimrelay_evm;
 pub(crate) mod palw_gossip_flow;
 pub(crate) mod palw_interval_flow;
+pub(crate) mod palw_prefix_history_flow;
 pub(crate) mod request_block_bodies;
 pub(crate) mod request_pruning_point_snapshots;
 pub(crate) mod txrelay_evm;
@@ -260,6 +261,14 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
             ctx.clone(),
             router.clone(),
             router.subscribe(vec![KaspadMessagePayloadType::RequestEvmDepositClaims]),
+        )));
+    }
+
+    if protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_PREFIX_HISTORY {
+        flows.push(Box::new(palw_prefix_history_flow::PalwPrefixHistoryFlow::new(
+            ctx.clone(), router.clone(), router.subscribe_with_capacity(vec![
+                KaspadMessagePayloadType::PalwPrefixHistoryRequest, KaspadMessagePayloadType::PalwPrefixHistoryRecord,
+            ], 2),
         )));
     }
 

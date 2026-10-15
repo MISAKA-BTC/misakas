@@ -523,6 +523,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_class_semantics_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_court_commitment_scope_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_staged_public_court_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_staged_tir_route_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_staged_float_constraint_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0095 §4.11 as corrected: the membership's own fence.
     pub(super) palw_model_benefits: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0114: `Params::palw_model_leg_v2_fence` — the five-percent owner leg's height.
@@ -1107,6 +1109,11 @@ pub(super) const PALW_RENT_UNPRICED: u64 = u64::MAX;
 pub(super) struct PalwCarriedObjectV1 {
     pub(super) object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     pub(super) carrier_fee: u64,
+    /// Original transaction-local companion, never borrowed from another carrier.
+    pub(super) history_pledge: Option<kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
+    pub(super) original_binding: Option<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>,
+    /// The same carrier's optional producer custody delegation (HFP1 version 2).
+    pub(super) custody_delegation: Option<kaspa_consensus_core::palw_history_custody_v1::PalwProducerCustodyDelegationV1>,
     /// **The 2026-09-23 Position route matrix, P-B1: what this object's carrier is owed if acceptance
     /// refuses it.** `Some` only for a carrier-borne `ModelBuy`/`ModelSeed` past
     /// `palw_audit_2026_09_23`, resolved in `palw_v2_objects_of_block` where the carrier is in hand;
@@ -1361,6 +1368,8 @@ impl VirtualStateProcessor {
             palw_class_semantics_v1: params.palw_class_semantics_v1_fence(),
             palw_court_commitment_scope_v1: params.palw_court_commitment_scope_v1_fence(),
             palw_staged_public_court_v1: params.palw_staged_public_court_v1_fence(),
+            palw_staged_tir_route_v1: params.palw_staged_tir_route_v1_fence(),
+            palw_staged_float_constraint_v1: params.palw_staged_float_constraint_v1_fence(),
             palw_model_benefits: params.palw_model_benefits_fence(),
             palw_model_leg_v2: params.palw_model_leg_v2_fence(),
             palw_model_seed_v2: params.palw_model_seed_v2_fence(),
@@ -2378,6 +2387,16 @@ impl VirtualStateProcessor {
                                     // by the UTXO walk two frames up, where the fee is knowable.
                                     &ctx.palw_v2_accepted_tx_fees,
                                 );
+                                let history_custody_pledges = objects.iter().filter_map(|carried| carried.history_pledge.clone())
+                                    .map(|pledge| (pledge.claim, pledge)).collect();
+                                let public_original_bindings = objects.iter().filter_map(|carried| {
+                                    carried.history_pledge.as_ref().zip(carried.original_binding.as_ref())
+                                        .map(|(pledge, header)| (pledge.claim, header.clone()))
+                                }).collect();
+                                let producer_custody_delegations = objects.iter().filter_map(|carried| {
+                                    carried.history_pledge.as_ref().zip(carried.custody_delegation.as_ref())
+                                        .map(|(pledge, delegation)| (pledge.claim, delegation.clone()))
+                                }).collect();
                                 // Decisions 7/8: every lifecycle object meets its own validator
                                 // before the transition folds it — and an object that FAILS is
                                 // dropped rather than fatal to the block that accepted it.
@@ -2574,6 +2593,9 @@ impl VirtualStateProcessor {
                                     // DAA: the fences, and the actions this block's EVM step queued.
                                     &{
                                         let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);
+                                        extras.history_custody_pledges = history_custody_pledges;
+                                        extras.public_original_bindings = public_original_bindings;
+                                        extras.producer_custody_delegations = producer_custody_delegations;
                                         if state_params.exec_v2_active_at(point.daa_score) || state_params.monetary_material_at_v1(point.daa_score).is_some() {
                                             if attempt.is_some()
                                                 && let Ok(bytes) = borsh::to_vec(header.as_ref())
@@ -3135,9 +3157,34 @@ impl VirtualStateProcessor {
         palw_v2_staged: Option<PalwUtxoCommitV2>,
     ) {
         let mut batch = WriteBatch::default();
+        // Pruning -> PALW matches pruning/import lock order. A long-running
+        // candidate must recheck irreversible ancestry at its actual commit.
+        let public_pruning_guard = palw_v2_staged.as_ref().filter(|staged| {
+            staged.delta.entries.iter().any(|entry| matches!(entry,
+                kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtSeed { .. }
+                | kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtMove { .. }
+            ))
+        }).map(|_| self.pruning_point_store.read());
+        // Only a block on the irreversible chain itself archives public material: the pruning
+        // point is in its selected chain, or it is one of the pruning point's chain ancestors.
+        // A stale fork's block is never archived, whatever its DAA. The pruning clock read
+        // under the same lock also freezes already-expired leases inside the store writer.
+        let public_irreversible = public_pruning_guard.as_ref().map(|guard| {
+            let pruning = guard.pruning_point().expect("native public archive pruning point");
+            let pruning_daa = self.headers_store.get_daa_score(pruning).expect("native public archive pruning clock");
+            let on_irreversible_chain = self.reachability_service.try_is_chain_ancestor_of(pruning, current).unwrap_or(false)
+                || self.reachability_service.try_is_chain_ancestor_of(current, pruning).unwrap_or(false);
+            (on_irreversible_chain, pruning_daa)
+        });
+        let archive_public_material = public_irreversible.is_some_and(|(on_chain, _)| on_chain);
+        let public_irreversible_daa = public_irreversible.map_or(0, |(_, daa)| daa);
+        // Native archive/lease GC must not race a prepared but uncommitted union.
+        // Hold the same store exclusion through the atomic DB commit below.
+        let mut palw_archive_guard = palw_v2_staged.as_ref().map(|_| self.palw_state_v2_store.write());
+        // Lock order: pruning -> PALW -> class index (the ordinary and the import commits agree).
         let mut genesis_class_store = None;
         if let Some(staged) = palw_v2_staged {
-            let mut store = self.palw_state_v2_store.write();
+            let store = palw_archive_guard.as_mut().expect("PALW accepted archive guard");
             store.insert_delta_batch(&mut batch, current, staged.root, &staged.delta).unwrap();
             if let Some(genesis) = staged.genesis {
                 assert_eq!(current, self.genesis.hash, "only genesis can install the initial PALW tip");
@@ -3150,6 +3197,32 @@ impl VirtualStateProcessor {
                     class_store.insert_batch(&mut batch, class_id, record).unwrap();
                 }
                 genesis_class_store = Some(class_store);
+            }
+            let delta = &staged.delta;
+            if archive_public_material && delta.entries.iter().any(|entry| match entry {
+                kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtMove { old, .. } => old.public_prefix_checkpoint_v1().is_some(),
+                _ => false,
+            }) {
+                let mut movements = Vec::new();
+                for row in acceptance_data.iter() {
+                    let transactions = self.block_transactions_store.get(row.block_hash).unwrap();
+                    for accepted in &row.accepted_transactions {
+                        let transaction = transactions.get(accepted.index_within_block as usize)
+                            .filter(|tx| tx.id() == accepted.transaction_id).expect("accepted native transaction identity");
+                        if transaction.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE { continue; }
+                        if let Ok(payload) = borsh::from_slice::<kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2>(
+                            &transaction.payload)
+                            && let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = payload.object
+                        { movements.push(*movement); }
+                    }
+                }
+                // Same commit batch as the rooted successful transitions. Public wire
+                // bytes are retained under their native head, independent of body pruning.
+                store.archive_prefix_movements_batch_v1(&mut batch, delta, &movements).unwrap();
+            }
+            if archive_public_material {
+                store.archive_recovered_prefix_history_batch_v1(&mut batch, delta).unwrap();
+                store.archive_staged_cache_leases_batch_v1(&mut batch, delta, public_irreversible_daa).unwrap();
             }
         }
         if let Some(mut staged) = evm_staged {
@@ -3275,6 +3348,8 @@ impl VirtualStateProcessor {
         if let Some(ticket) = quality_commit {
             ticket.committed();
         }
+        drop(palw_archive_guard);
+        drop(public_pruning_guard);
         // Calling the drops explicitly after the batch is written in order to avoid possible errors.
         drop(write_guard);
     }
@@ -3710,7 +3785,7 @@ impl VirtualStateProcessor {
     ) -> Vec<PalwCarriedObjectV1> {
         objects
             .into_iter()
-            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, refund: None, unrefundable: None })
+            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, history_pledge: None, original_binding: None, custody_delegation: None, refund: None, unrefundable: None })
             .collect()
     }
 
@@ -6402,29 +6477,39 @@ impl VirtualStateProcessor {
         // so what becomes durable is a function of what was verified, and a caller cannot store a
         // snapshot under a root it did not compute. The peer's bytes never reach the database.
         let mut batch = WriteBatch::default();
-        // Match ordinary block commit's PALW -> class-index lock order, and
-        // retain both guards until the complete generation is durable.
+        // Match ordinary block commit's pruning -> PALW -> class-index lock order, and
+        // retain the guards until the complete generation is durable.
         let mut store = self.palw_state_v2_store.write();
         let mut class_store = self.palw_class_carriage_store.write();
         for (id, row) in declaration_rows {
             class_store.insert_batch(&mut batch, id, row).expect("staging a verified snapshot declaration cannot fail");
         }
-        {
-            store.set_tip_batch(&mut batch, pruning_point, &state).expect("writing the verified PALW tip cannot fail");
-            // The same state, also as this node's servable snapshot. Without it a node that just
-            // joined by a pruned sync holds the pruning-point state but cannot HAND it on until
-            // its own pruning point next advances — so the fix would not propagate past the first
-            // hop, and a young network would have exactly one node able to serve.
-            store
-                .set_pruning_snapshot_batch(&mut batch, pruning_point, &state)
-                .expect("writing the verified PALW pruning snapshot cannot fail");
-        }
+        store.set_tip_batch(&mut batch, pruning_point, &state).expect("writing the verified PALW tip cannot fail");
+        // Live claim/owner holds come from the verified state itself, written in the same batch
+        // as its tip. Holds already below this imported irreversible clock are not recreated.
+        let imported_irreversible_daa = self
+            .headers_store
+            .get_daa_score(pruning_point)
+            .ok()
+            .or_else(|| state.last_point().map(|point| point.daa_score))
+            .unwrap_or(0);
+        store.archive_staged_cache_leases_state_batch_v1(&mut batch, &state, imported_irreversible_daa)
+            .expect("restoring verified PALW material leases cannot fail");
+        // The same state, also as this node's servable snapshot. Without it a node that just
+        // joined by a pruned sync holds the pruning-point state but cannot HAND it on until
+        // its own pruning point next advances — so the fix would not propagate past the first
+        // hop, and a young network would have exactly one node able to serve.
+        store
+            .set_pruning_snapshot_batch(&mut batch, pruning_point, &state)
+            .expect("writing the verified PALW pruning snapshot cannot fail");
         // The PALW sidecar is installed before IBD replaces the UTXO set. An OS
         // crash between those steps must leave a durable incomplete-import flag.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
         pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
         self.write_pruning_import_barrier(batch);
         drop(pruning_meta_write);
+        drop(class_store);
+        drop(store);
         Ok(())
     }
 
@@ -6888,6 +6973,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::PublicCourtStreamMoveV1 { .. } => "PublicCourtStreamMoveV1",
         O::PublicCourtStreamLeafV1 { .. } => "PublicCourtStreamLeafV1",
         O::PublicCourtStreamOpenedV1 { .. } => "PublicCourtStreamOpenedV1",
+        O::PublicCourtStreamOpenedNativeV1 { .. } => "PublicCourtStreamOpenedNativeV1",
+        O::TirClassLayoutPublishedV1 { .. } => "TirClassLayoutPublishedV1",
         O::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         O::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
         O::MonetaryMaterialEnrolledV1 { .. } => "MonetaryMaterialEnrolledV1",

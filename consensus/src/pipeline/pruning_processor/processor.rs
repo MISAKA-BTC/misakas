@@ -651,6 +651,10 @@ impl PruningProcessor {
                 // A no-op (delete-of-absent) on every network without a V2 bundle, which is every
                 // shipped preset.
                 self.palw_state_v2_store.write().delete_delta_batch(&mut batch, current).unwrap();
+                // Paid public prefix material outlives a body's pruning while its original
+                // horizon is live. Only this irreversible point can advance archive GC.
+                let archive_pruning_daa = self.headers_store.get_daa_score(new_pruning_point).unwrap();
+                self.palw_state_v2_store.read().gc_prefix_history_batch_v1(&mut batch, archive_pruning_daa, 64).unwrap();
                 // kaspa-pq ADR-0020 (EVM lane): prune this pruned block's per-block
                 // EVM data (audit H-01 — without this the EVM stores grew O(state ×
                 // blocks) and were never reclaimed). All keyed by the L1 block hash;

@@ -343,6 +343,7 @@ pub mod palw_fork_choice_rule_e_v1;
 pub mod palw_fp_admission_v3;
 pub mod palw_fp_beacon_v3;
 pub mod palw_fp_constraint_job_v1;
+pub mod palw_public_token_table_v1;
 /// RFC-0001 §2.5: the decode constraint's second subset and automaton bounds; dormant behind `palw_fp_constraint_v2`.
 pub mod palw_fp_constraint_v2;
 pub mod palw_fp_devnet_v3;
@@ -881,9 +882,24 @@ pub mod palw_prefix_state_stream_v1;
 
 pub mod palw_prefix_custody_v1;
 pub mod palw_prefix_public_owned_v1;
+pub mod palw_prefix_history_v1;
+pub mod palw_history_custody_v1;
 pub mod palw_prefix_public_source_v1;
 pub mod palw_reward_vesting_read_v2;
 pub mod palw_staged_court_state_v1;
+pub mod palw_staged_bundle_v1;
+pub mod palw_flat_constraint_stream_v1;
+pub mod palw_selected_event_source_v1;
+pub mod palw_tokenizer_artifact_inventory_v1;
+pub mod palw_public_binding_v1;
+pub mod palw_staged_preclaim_v1;
+pub mod palw_staged_load_bound_v1;
+pub mod palw_float_decode_v1;
+pub mod palw_float_constraint_source_v1;
+pub mod palw_staged_route_forms_v1;
+pub mod palw_tir_prefix_state_v1;
+pub mod palw_tir_prefix_owned_v1;
+pub mod palw_decode_view_v1;
 
 pub mod palw_tokenizer_table_stream_v1;
 

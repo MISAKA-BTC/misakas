@@ -368,6 +368,12 @@ impl Params {
         if self.palw_staged_public_court_v1 == Some(ForkActivation::never()) {
             self.palw_staged_public_court_v1 = None;
         }
+        if self.palw_staged_tir_route_v1 == Some(ForkActivation::never()) {
+            self.palw_staged_tir_route_v1 = None;
+        }
+        if self.palw_staged_float_constraint_v1 == Some(ForkActivation::never()) {
+            self.palw_staged_float_constraint_v1 = None;
+        }
         if self.palw_model_lines == Some(ForkActivation::never()) {
             self.palw_model_lines = None;
         }
@@ -1002,6 +1008,8 @@ impl Params {
             palw_class_semantics_v1,
             palw_court_commitment_scope_v1,
             palw_staged_public_court_v1,
+            palw_staged_tir_route_v1,
+            palw_staged_float_constraint_v1,
             palw_model_benefits,
             palw_model_leg_v2,
             palw_model_seed_v2,
@@ -1312,6 +1320,8 @@ impl Params {
             ("palw_class_semantics_v1", *palw_class_semantics_v1),
             ("palw_court_commitment_scope_v1", *palw_court_commitment_scope_v1),
             ("palw_staged_public_court_v1", *palw_staged_public_court_v1),
+            ("palw_staged_tir_route_v1", *palw_staged_tir_route_v1),
+            ("palw_staged_float_constraint_v1", *palw_staged_float_constraint_v1),
             ("palw_model_benefits", *palw_model_benefits),
             ("palw_model_leg_v2", *palw_model_leg_v2),
             ("palw_model_seed_v2", *palw_model_seed_v2),
@@ -1737,6 +1747,14 @@ impl Params {
         }
         if let Some(at) = self.palw_staged_public_court_v1 {
             h.write(b"palw_staged_public_court_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_staged_tir_route_v1 {
+            h.write(b"palw_staged_tir_route_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_staged_float_constraint_v1 {
+            h.write(b"palw_staged_float_constraint_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // The provider court's fence (DA16), NAMED likewise.
@@ -2482,6 +2500,8 @@ impl Params {
             palw_class_semantics_v1,
             palw_court_commitment_scope_v1,
             palw_staged_public_court_v1,
+            palw_staged_tir_route_v1,
+            palw_staged_float_constraint_v1,
             palw_model_benefits,
             palw_model_leg_v2,
             palw_model_seed_v2,
@@ -3094,6 +3114,12 @@ impl Params {
             fork(activation, visit);
         }
         if let Some(activation) = palw_staged_public_court_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_staged_tir_route_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_staged_float_constraint_v1.as_mut() {
             fork(activation, visit);
         }
         match palw_model_lines.as_mut() {
@@ -3893,6 +3919,8 @@ impl Params {
             palw_class_semantics_v1,
             palw_court_commitment_scope_v1,
             palw_staged_public_court_v1,
+            palw_staged_tir_route_v1,
+            palw_staged_float_constraint_v1,
             palw_model_benefits,
             palw_model_leg_v2,
             palw_model_seed_v2,
@@ -4576,6 +4604,14 @@ impl Params {
         }
         if let Some(activation) = palw_staged_public_court_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_staged_public_court_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_staged_tir_route_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_staged_tir_route_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_staged_float_constraint_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_staged_float_constraint_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         if let Some(activation) = palw_model_lines {

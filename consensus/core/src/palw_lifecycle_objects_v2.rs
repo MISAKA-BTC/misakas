@@ -407,7 +407,8 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::DisputeReservedV1 { .. } | PalwConsensusObjectV2::DisputeReleasedV1 { .. } | PalwConsensusObjectV2::DisputeReacquiredV1 { .. }
             | PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { .. } | PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { .. }
             | PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. } | PalwConsensusObjectV2::PublicCourtStreamLeafV1 { .. }
-            | PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } => Ok(()),
+            | PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } | PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { .. }
+            | PalwConsensusObjectV2::TirClassLayoutPublishedV1 { .. } => Ok(()),
         // LG14-B (tags 157–159): the legacy held DA objects ride at every height, refused nowhere at isolation (A-2 rule 5: the live
         // build cannot decode them); the fence, the signature, the bonds, the claim's roots and the units are the gate's and the fold's.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
@@ -1173,11 +1174,17 @@ pub enum PalwLifecycleKindFenceV1 {
     ClassSemanticsV1 = 9,
     StagedPublicCourtV1 = 10,
     MonetaryMaterialV1 = 11,
+    /// `Params::palw_staged_tir_route_v1` — the TIR required-family staged route: the native seed kind (tag 168) and the
+    /// native-context selected-source forms appended inside tag 167 (`crate::palw_staged_route_forms_v1`).
+    StagedTirRouteV1 = 12,
+    /// `Params::palw_staged_float_constraint_v1` — the greedy Float32 Constraint source forms appended inside tags 165 and 167
+    /// (`crate::palw_staged_route_forms_v1`).
+    StagedFloatConstraintV1 = 13,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 14] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1190,6 +1197,8 @@ impl PalwLifecycleKindFenceV1 {
         Self::ClassSemanticsV1,
         Self::StagedPublicCourtV1,
         Self::MonetaryMaterialV1,
+        Self::StagedTirRouteV1,
+        Self::StagedFloatConstraintV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1207,6 +1216,8 @@ impl PalwLifecycleKindFenceV1 {
             Self::ClassSemanticsV1 => "palw_class_semantics_v1",
             Self::StagedPublicCourtV1 => "palw_staged_public_court_v1",
             Self::MonetaryMaterialV1 => "palw_monetary_material_v1",
+            Self::StagedTirRouteV1 => "palw_staged_tir_route_v1",
+            Self::StagedFloatConstraintV1 => "palw_staged_float_constraint_v1",
         }
     }
 }
@@ -1387,8 +1398,21 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::ClassSemanticsDeclaredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ClassSemanticsV1),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
         O::ExecWorkRootOpenedV2 { .. } | O::ExecOriginRecordedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
+        // The TIR and greedy Float32 routes' forms appended inside the staged court's kinds are owned by their own fences
+        // (`crate::palw_staged_route_forms_v1`): below them, this build reads them as a staged-court-only build does.
+        O::PublicCourtStreamOpenedV1 { .. } | O::PublicCourtStreamMoveV1 { .. }
+            if crate::palw_staged_route_forms_v1::palw_staged_route_form_fence_v1(object).is_some() =>
+        {
+            PalwLifecycleKindOwnerV1::Fence(
+                crate::palw_staged_route_forms_v1::palw_staged_route_form_fence_v1(object).expect("guarded above"),
+            )
+        }
         O::PublicCourtStreamOpenedV1 { .. } | O::PublicCourtStreamLeafV1 { .. } | O::PublicCourtStreamMoveV1 { .. } => {
             PalwLifecycleKindOwnerV1::Fence(F::StagedPublicCourtV1)
+        }
+        // The TIR route's native seed (168).
+        O::PublicCourtStreamOpenedNativeV1 { .. } | O::TirClassLayoutPublishedV1 { .. } => {
+            PalwLifecycleKindOwnerV1::Fence(F::StagedTirRouteV1)
         }
         // Lane LG14-A: the dispute reservation and its release (154, 155).
         O::DisputeReservedV1 { .. }
@@ -1541,6 +1565,8 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (240, "MonetaryMaterialEnrolledV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
     (241, "MonetaryMaterialReplacedV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
     (242, "MonetaryMaterialActionV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
+    (168, "PublicCourtStreamOpenedNativeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
+    (169, "TirClassLayoutPublishedV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
 ];
 
@@ -1626,9 +1652,30 @@ impl crate::config::params::Params {
                     PalwLifecycleKindFenceV1::ClassSemanticsV1 => self.palw_class_semantics_v1_fence(),
                     PalwLifecycleKindFenceV1::StagedPublicCourtV1 => self.palw_staged_public_court_v1,
                     PalwLifecycleKindFenceV1::MonetaryMaterialV1 => self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
+                    // In force where BOTH the route's and the staged court's fences are (the route's rows are the court's).
+                    PalwLifecycleKindFenceV1::StagedTirRouteV1 => {
+                        Self::palw_later_of_v1(self.palw_staged_tir_route_v1_fence(), self.palw_staged_public_court_v1)
+                    }
+                    PalwLifecycleKindFenceV1::StagedFloatConstraintV1 => {
+                        Self::palw_later_of_v1(self.palw_staged_float_constraint_v1_fence(), self.palw_staged_public_court_v1)
+                    }
                 },
             )
         })
+    }
+
+    /// Both fences armed (neither `never()`): the later one; otherwise none.
+    fn palw_later_of_v1(
+        a: Option<crate::config::params::ForkActivation>,
+        b: Option<crate::config::params::ForkActivation>,
+    ) -> Option<crate::config::params::ForkActivation> {
+        let never = crate::config::params::ForkActivation::never();
+        match (a, b) {
+            (Some(a), Some(b)) if a != never && b != never => {
+                Some(crate::config::params::ForkActivation::new(a.daa_score().max(b.daa_score())))
+            }
+            _ => None,
+        }
     }
 
     /// **A-2 is the premise of every owning fence.** Below its fence a new kind's bytes are judged as the live build judges them, and
@@ -2188,6 +2235,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::ObjectTags { lo: 162, hi: 163 }, "palw_legacy_public_filer_v1", "LG14 terminal objective evidence", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 164, hi: 164 }, "palw_class_semantics_v1", "G14 prospective registered semantics", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 165, hi: 167 }, "palw_staged_public_court_v1", "G14 owned public court stream", true),
+    a2_row(
+        PalwA2SlotV1::ObjectTags { lo: 168, hi: 169 },
+        "palw_staged_tir_route_v1",
+        "G14 TIR native seed and layout publication",
+        true,
+    ),
     // ---- kernel-route inner kinds (inside tag 110) ----
     a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 13, hi: 14 }, "palw_panel_free_v1", "RFC-0015 OPV registrations", true),
@@ -2738,6 +2791,8 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (162, 163, "LG14 terminal objective evidence", &["palw_legacy_public_filer_v1"]),
     (164, 164, "G14 prospective registered semantics", &["palw_class_semantics_v1"]),
     (165, 167, "G14 owned public court stream", &["palw_staged_public_court_v1"]),
+    // 168–169: the G14 TIR staged route (native seed opening, TIR class layout publication), merged 2026-10-15.
+    (168, 169, "G14 TIR staged route", &["palw_staged_tir_route_v1"]),
     // 230: reserved 2026-10-15 for the D2 replacement route's seat readiness digest (R-D2-READY). Checked free on this branch, the
     // G14 public-conviction branch and the RFC02 branch (all end at 167 / start again at 240); the kind itself is not landed yet.
     (230, 230, "D2 seat readiness digest (reserved)", &["palw_court_model_scope_v1"]),
@@ -4012,7 +4067,10 @@ pub(crate) mod tests {
                 let owns_a_form = PALW_INT12_WIRE_CHANGES_V1
                     .iter()
                     .any(|(_, c)| matches!(c, PalwInt12WireChangeV1::CarriedAppended { fence: f, .. } if *f == fence.params_field()));
-                assert!(owns_a_tag || owns_a_form, "{} owns a kind or an appended form", fence.params_field());
+                // A route's form appended inside a NEW kind (the staged court's), ledgered in its own table.
+                let owns_a_staged_form =
+                    crate::palw_staged_route_forms_v1::PALW_STAGED_ROUTE_FORMS_V1.iter().any(|(_, f)| *f == fence);
+                assert!(owns_a_tag || owns_a_form || owns_a_staged_form, "{} owns a kind or an appended form", fence.params_field());
             }
         }
 

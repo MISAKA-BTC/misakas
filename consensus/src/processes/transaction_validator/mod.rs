@@ -162,6 +162,7 @@ pub struct TransactionValidator {
     /// ruleset carries the fence at all, and is refused by name everywhere else); the header-context door refuses one below
     /// the height. `None` on every shipped preset.
     palw_fp_decode_constraint_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    palw_staged_public_court_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **RFC-0001 §2.5: `Params::palw_fp_constraint_v2_fence()`** — read by the header-context door only (a second-form
     /// constraint below its height is refused). `None` on every shipped preset.
     palw_fp_constraint_v2_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -230,6 +231,7 @@ impl TransactionValidator {
             palw_fp_prefix_state_fence: None,
             palw_fp_prefix_inherit_fence: None,
             palw_fp_decode_constraint_fence: None,
+            palw_staged_public_court_fence: None,
             palw_fp_constraint_v2_fence: None,
         }
     }
@@ -308,6 +310,12 @@ impl TransactionValidator {
     /// version-6 commitment's stateless rules at isolation and refuses one below the fence's height in the header context.
     pub fn with_fp_decode_constraint_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
         self.palw_fp_decode_constraint_fence =
+            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    pub fn with_staged_public_court_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_staged_public_court_fence =
             fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
         self
     }
@@ -414,6 +422,7 @@ impl TransactionValidator {
             palw_fp_prefix_state_fence: None,
             palw_fp_prefix_inherit_fence: None,
             palw_fp_decode_constraint_fence: None,
+            palw_staged_public_court_fence: None,
             palw_fp_constraint_v2_fence: None,
         }
     }

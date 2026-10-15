@@ -45,14 +45,20 @@
 
 use super::*;
 use std::collections::BTreeSet;
+#[path = "palw_staged_bundle_scheduler.rs"]
+mod bundle_scheduler;
 #[path = "palw_fraud_filer_constraint.rs"]
 mod constraint;
+#[path = "palw_constraint_scheduler.rs"]
+mod constraint_scheduler;
 #[path = "palw_fraud_filer_history.rs"]
 pub(super) mod history;
 #[path = "palw_fraud_filer_input.rs"]
 pub(super) mod input;
 #[path = "palw_fraud_filer_prefix.rs"]
 mod prefix;
+#[path = "palw_selected_event_scheduler.rs"]
+mod selected_event_scheduler;
 #[path = "palw_filer_tokenizer.rs"]
 mod tokenizer;
 #[path = "palw_tokenizer_scheduler.rs"]
@@ -94,6 +100,52 @@ pub(super) const PALW_FRAUD_FILER_TERMINAL_ROUND_V2: u32 = u32::MAX - 12;
 pub(super) const PALW_FRAUD_FILER_RELEASE_ROUND_V1: u32 = u32::MAX - 13;
 /// One guarded typed staged move per claim; the accepted cursor, not transport, acknowledges it.
 pub(super) const PALW_FRAUD_FILER_STAGED_ROUND_V1: u32 = u32::MAX - 14;
+
+/// A TIR claim's natively derived original context (behind `palw_staged_tir_route_v1`): the
+/// decode view and the admitted public header, both read from native accepted state.
+pub(super) struct FilerTirContextV1 {
+    pub view: kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1,
+    pub header: Box<kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1>,
+}
+
+fn palw_fraud_filer_paid_progress_v1(
+    progress: &kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+    claim: Hash64,
+    owner: PalwBondKeyV2,
+) -> bool {
+    progress.claim == claim
+        && progress.reserver == owner
+        && progress.seed_id.is_some()
+        && (progress.cursor.is_some() || progress.bundle.is_some())
+        && progress.terms.accepted_daa <= progress.reserved_daa
+        && progress.reserved_daa <= progress.now_daa
+        && progress.now_daa
+            < progress.bundle.as_ref().map_or(progress.terms.collect_until_daa, |bundle| bundle.plan.terms.collect_until_daa)
+}
+
+fn palw_fraud_filer_staged_due_v1(
+    object: &PalwConsensusObjectV2,
+    terms: &kaspa_consensus_core::palw_rendering_resources_v1::PalwRenderingClaimTermsV1,
+) -> u64 {
+    use kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1;
+    let until = match object {
+        PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. } | PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { .. } => {
+            terms.open_until_daa
+        }
+        PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement }
+            if matches!(movement.action, PalwConstraintStreamActionV1::BundleOpen { .. }) =>
+        {
+            terms.open_until_daa
+        }
+        PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement }
+            if matches!(movement.action, PalwConstraintStreamActionV1::PrefixPublicCollect { .. }) =>
+        {
+            terms.collect_until_daa
+        }
+        _ => terms.stream_until_daa,
+    };
+    until.saturating_sub(1)
+}
 /// The host ledger's role for this filer's replays.
 pub(super) const PALW_FRAUD_FILER_REPLAY_ROLE_V1: &str = "fraud-filer";
 /// Mismatched runs held in memory at once (each keeps its capture for the localizer's own ranges).
@@ -493,6 +545,7 @@ pub(super) struct PalwFraudFilerCaseV1 {
     pub(super) candidate: PalwFraudFilerCandidateV1,
     pub(super) verdict: PalwFraudFilerVerdictV1,
     pub(super) binding: Option<PalwStepBindingV2>,
+    _public_context_reservation: Option<Arc<crate::palw_memory_ledger::PalwMemoryReservationV1>>,
     pub(super) bisect: PalwLegacyBisectV1,
     /// Lane G14-V: the claim's step tree as far as authenticated range answers reached it (the subtree descent's state).
     pub(super) step_tree: Option<PalwAuthTreeV1>,
@@ -507,8 +560,12 @@ pub(super) struct PalwFraudFilerCaseV1 {
     constraint_done: bool,
     prefix_plan: Option<prefix::PrefixPlanV1>,
     prefix_complete: bool,
+    prefix_stage_pending: bool,
     rendering_done: bool,
     staged_tokenizer: Option<Arc<std::sync::Mutex<Option<tokenizer_scheduler::TokenizerSchedulerV1>>>>,
+    staged_constraint: Option<Arc<std::sync::Mutex<Option<constraint_scheduler::ConstraintSchedulerV1>>>>,
+    constraint_stage_pending: bool,
+    staged_bundle_pending: bool,
     staged_tokenizer_sent: Option<(Hash64, u64, u8)>,
     prefix_budget: u64,
     _prefix_reservation: Option<Arc<crate::palw_memory_ledger::PalwMemoryReservationV1>>,
@@ -528,6 +585,8 @@ pub(super) struct PalwFraudFilerCaseV1 {
     deferred_public: Option<Arc<PalwFraudFilerDeferredPublicV1>>,
     input_retry_at: u64,
     pub(super) fp_bootstrap: Option<PalwFraudFilerFpBootstrapV1>,
+    /// Authenticated user ids survive replica rotation under their original small ticket.
+    fp_replay_input: Option<PalwFraudFilerFpBootstrapV1>,
     /// Binding-only pursuit when the original FP job is unavailable; held through a later replay.
     fp_job_pending: bool,
     fp_expected_pin: Option<Hash64>,
@@ -542,6 +601,9 @@ pub(super) struct PalwFraudFilerCaseV1 {
     /// Reporter-door handoffs of the claim's direct proof, bounded like the replay lane's.
     direct_handed: u8,
     direct_asked_at: Option<u64>,
+    /// A TIR required-family claim's native context (behind `palw_staged_tir_route_v1`): set by the
+    /// native TIR replay. Such a case never enters the legacy binding/probe pipeline.
+    pub(super) tir: Option<Arc<FilerTirContextV1>>,
 }
 
 impl PalwFraudFilerCaseV1 {
@@ -550,6 +612,7 @@ impl PalwFraudFilerCaseV1 {
             candidate,
             verdict: PalwFraudFilerVerdictV1::Pending,
             binding: None,
+            _public_context_reservation: None,
             bisect: PalwLegacyBisectV1::new(0),
             step_tree: None,
             trace: PalwTraceDescentV1::default(),
@@ -561,8 +624,12 @@ impl PalwFraudFilerCaseV1 {
             constraint_done: false,
             prefix_plan: None,
             prefix_complete: false,
+            prefix_stage_pending: false,
             rendering_done: false,
             staged_tokenizer: None,
+            staged_constraint: None,
+            constraint_stage_pending: false,
+            staged_bundle_pending: false,
             staged_tokenizer_sent: None,
             prefix_budget: 0,
             _prefix_reservation: None,
@@ -577,6 +644,7 @@ impl PalwFraudFilerCaseV1 {
             deferred_public: None,
             input_retry_at: 0,
             fp_bootstrap: None,
+            fp_replay_input: None,
             fp_job_pending: false,
             fp_expected_pin: None,
             fp_job_disclosure_enabled: false,
@@ -587,6 +655,7 @@ impl PalwFraudFilerCaseV1 {
             sent: None,
             direct_handed: 0,
             direct_asked_at: None,
+            tir: None,
         }
     }
 
@@ -623,6 +692,11 @@ impl PalwFraudFilerCaseV1 {
                 PalwFraudFilerVerdictV1::Mismatch(run) => run.fp_job.as_deref(),
                 _ => None,
             })
+    }
+
+    fn constraint_preflight_pending_v1(&self) -> bool {
+        self.constraint_stage_pending
+            || (self.binding.is_some() && !self.constraint_done && self.public_fp_job_v1().is_some_and(|job| job.is_constraint()))
     }
 
     pub(super) fn learn(&mut self, probe: PalwLegacyProbeV1, answer: &PalwDaBuiltAnswerV1) -> Result<(), String> {
@@ -802,7 +876,11 @@ impl PalwFraudFilerCaseV1 {
 
     /// Public semantics cannot certify an arithmetic run which the host never completed.
     fn may_finish_semantics_v1(&self, semantic_ready: bool) -> bool {
-        semantic_ready && self.arithmetic_matched && matches!(self.verdict, PalwFraudFilerVerdictV1::SemanticPending)
+        semantic_ready
+            && self.arithmetic_matched
+            && !self.constraint_stage_pending
+            && !self.staged_bundle_pending
+            && matches!(self.verdict, PalwFraudFilerVerdictV1::SemanticPending)
     }
 
     /// Apply the authenticated worker result, including the input accumulator and its shared memory ticket.
@@ -1008,6 +1086,82 @@ pub(super) struct PalwFraudFilerBookV1 {
 }
 
 impl PalwFraudFilerBookV1 {
+    fn observe_paid_authority_v1(
+        &mut self,
+        claim: Hash64,
+        authority: &kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedPaidAuthorityV1,
+        now_daa: u64,
+    ) {
+        if authority.terms.accepted_daa > authority.reserved_daa
+            || authority.reserved_daa > now_daa
+            || now_daa >= authority.terms.collect_until_daa
+        {
+            return;
+        }
+        if let Some(case) = self.cases.get_mut(&claim)
+            && !case.prefix_complete
+            && !case.rendering_done
+            && matches!(
+                case.verdict,
+                PalwFraudFilerVerdictV1::Pending
+                    | PalwFraudFilerVerdictV1::Settled(PalwFilerPhaseV1::DaDefault | PalwFilerPhaseV1::Dismissed)
+            )
+        {
+            case.verdict = PalwFraudFilerVerdictV1::SemanticPending;
+            case.release_pending = false;
+        }
+    }
+
+    fn hold_fp_input_v1(
+        &mut self,
+        claim: Hash64,
+        payload: input::PalwFraudFilerFpDescriptorV1,
+        form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        ledger: &Arc<crate::palw_memory_ledger::PalwMemoryLedgerV1>,
+        maximum: u64,
+    ) -> bool {
+        let Some(case) = self.cases.get_mut(&claim) else { return false };
+        if case.fp_bootstrap.is_some() {
+            return true;
+        }
+        if case.fp_replay_input.as_ref().is_some_and(|input| input.form == form && input.payload.job() == payload.job()) {
+            case.fp_bootstrap = case.fp_replay_input.take();
+            return true;
+        }
+        let was_pursued = case.pursued();
+        // Canonical ids are derived under a replay/direct-proof ticket, not this bootstrap.
+        let n = if payload.job().prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL {
+            0
+        } else {
+            u64::from(payload.job().prompt_tokens)
+        };
+        let bytes = n.saturating_mul(16).saturating_add(n.div_ceil(32).saturating_mul(256)).saturating_add(2 * maximum);
+        let Ok(ticket) = ledger.reserve(
+            crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                role: "public-fp-input",
+                class_id: payload.job().class_id,
+                job: claim,
+            },
+            bytes,
+        ) else {
+            return false;
+        };
+        case.fp_bootstrap = Some(input::PalwFraudFilerFpBootstrapV1 {
+            payload: Arc::new(payload),
+            form,
+            ids: Vec::new(),
+            chunk: 0,
+            _reservation: Some(Arc::new(ticket)),
+        });
+        if !was_pursued {
+            self.walked_from = None;
+            self.walked_to = None;
+            self.walk = None;
+            self.read_at = None;
+        }
+        true
+    }
+
     /// Forget cases below the fence, but drain any already-started blocking replay before another can start.
     pub(super) fn clear(&mut self) {
         let running = self.running.take();
@@ -1146,6 +1300,9 @@ impl PalwFraudFilerBookV1 {
             matches!(case.verdict, PalwFraudFilerVerdictV1::Pending | PalwFraudFilerVerdictV1::DeferredMismatch)
                 && !case.candidate.seat
                 && current_daa >= case.input_retry_at
+                // Reprobing an unavailable job uses no replica. Its public DA pursuit
+                // must not repeatedly evict a different claim's active localization.
+                && (!case.fp_job_pending || case.public_fp_job_v1().is_some())
                 && case.fp_bootstrap.as_ref().is_none_or(|input| {
                     input.ready()
                         || input.payload.job().prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL
@@ -1230,6 +1387,7 @@ impl PalwFraudFilerBookV1 {
     /// Judge all three committed roots. An output-only or trace-only mismatch still needs a public proof or DA default.
     pub(super) fn judge(&mut self, claim: Hash64, result: Result<PalwFraudFilerRunV1, String>) -> Option<&PalwFraudFilerVerdictV1> {
         let case = self.cases.get_mut(&claim)?;
+        let was_pursued = case.pursued();
         case.runs = case.runs.saturating_add(1);
         if result.is_err() {
             case.replay_failures = case.replay_failures.saturating_add(1);
@@ -1237,7 +1395,15 @@ impl PalwFraudFilerBookV1 {
         let bootstrapped = case.fp_bootstrap.is_some() || case.fp_job_pending;
         if result.is_ok() {
             case.deferred_public = None;
-            case.fp_bootstrap = None;
+            case.fp_replay_input = case.fp_bootstrap.take().filter(|input| {
+                input.ready()
+                    && input.payload.job().prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER
+                    && result.as_ref().is_ok_and(|run| {
+                        run.execution_root != case.candidate.job.execution_root
+                            || run.trace_root != case.candidate.job.trace_root
+                            || run.output_root != case.candidate.job.output_root
+                    })
+            });
             case.fp_descriptor = None;
             case.fp_job_pending = false;
             case._fp_job_reservation = None;
@@ -1278,7 +1444,7 @@ impl PalwFraudFilerBookV1 {
             case.fp_job_pending = false;
             case._fp_job_reservation = None;
         }
-        if case.pursued() {
+        if case.pursued() && !was_pursued {
             // Earlier walks did not collect answers for this case while it was pending, even if its acceptance is newer than
             // the old floor. Backfill every newly pursued case; do not skip it using another case's completed watermark.
             self.walked_from = None;
@@ -1325,10 +1491,30 @@ impl PalwFraudFilerBookV1 {
                 case.legacy_wanted = None;
                 case.constraint_plan = None;
                 case.constraint_done = false;
+                // A rooted semantic completion belongs to the accepted branch. Revalidate
+                // both its typed court and any released matching replay after rollback.
+                if case.registered_preflight
+                    && (case.arithmetic_matched || case.release_pending)
+                    && matches!(case.verdict, PalwFraudFilerVerdictV1::SemanticPending | PalwFraudFilerVerdictV1::Honest)
+                {
+                    case.verdict = PalwFraudFilerVerdictV1::Pending;
+                    case.fp_job_pending = case.candidate.job.free_prompt;
+                    case.release_pending = false;
+                }
+                case.arithmetic_matched = false;
+                case.prefix_plan = None;
+                case.prefix_complete = false;
+                case.prefix_stage_pending = false;
+                case.rendering_done = false;
+                case._prefix_reservation = None;
+                case.prefix_budget = 0;
                 case.legacy_round.clear();
                 case.lanes_sent.clear();
                 case.legacy_material_tickets.clear();
                 case.staged_tokenizer = None;
+                case.staged_constraint = None;
+                case.constraint_stage_pending = false;
+                case.staged_bundle_pending = false;
                 case.staged_tokenizer_sent = None;
                 case.sent = None;
                 case.awaiting_public = None;
@@ -1336,6 +1522,7 @@ impl PalwFraudFilerBookV1 {
                     input.ids.clear();
                     input.chunk = 0;
                 }
+                case.fp_replay_input = None;
             }
         }
         if walk.next.is_none() && !walk.incomplete {
@@ -1396,12 +1583,16 @@ impl PalwFraudFilerBookV1 {
             case.deferred_public = None;
             case.prefix_plan = None;
             case.prefix_complete = false;
+            case.prefix_stage_pending = false;
             case._prefix_reservation = None;
             case.release_pending = false;
             case.fp_bootstrap = None;
+            case.fp_replay_input = None;
             case.fp_descriptor = None;
             case.fp_job_pending = false;
             case._fp_job_reservation = None;
+            case.binding = None;
+            case._public_context_reservation = None;
         }
         self.answers.retain(|(held, _), _| held != claim);
         if let Some(case) = self.cases.get_mut(claim) {
@@ -1413,6 +1604,9 @@ impl PalwFraudFilerBookV1 {
             case.lanes_sent.clear();
             case.legacy_material_tickets.clear();
             case.staged_tokenizer = None;
+            case.staged_constraint = None;
+            case.constraint_stage_pending = false;
+            case.staged_bundle_pending = false;
             case.staged_tokenizer_sent = None;
             case.rcore_wanted = None;
             case.trace = PalwTraceDescentV1::default();
@@ -1524,7 +1718,13 @@ fn palw_fraud_filer_registered_preflight_v1(
         {
             return Ok(false);
         }
-        if job.is_constraint() && !rendering_verified {
+        let qualified_rendering = target.registered_semantics.as_ref().is_some_and(|row| {
+            row.rendering_rule.is_some()
+                && row.token_table_root.is_some()
+                && row.raw_tokenizer_bytes.is_some()
+                && row.tokenizer_key_events.is_some()
+        });
+        if (job.is_constraint() || qualified_rendering) && !rendering_verified {
             // Root equality is only the immutable selection check. The whole authenticated
             // tokenizer/table correspondence must also pass before matching arithmetic is Honest.
             return Ok(false);
@@ -1616,7 +1816,8 @@ pub(super) fn palw_fraud_filer_round_step_v1(
 
 /// **Lane G14-L: the bootstrap's parallel round** — after the binding, every input chunk AND the root round's node lanes ride ONE
 /// reserved session (the plan's input round: the verifier replays after it, and the root round's frontiers are already on chain).
-/// Chunks are learned in order; the root nodes are read after the replay. Falls back to the one-unit bootstrap below the fences, before
+/// Chunks are learned in order; root nodes are deferred while constraint selection is pending.
+/// Falls back to the one-unit bootstrap below the fences, before
 /// the binding, or where the claim needs no reservation step.
 pub(super) fn palw_fraud_filer_bootstrap_step_v2(
     role: PalwFilerRoleV1,
@@ -1653,7 +1854,10 @@ pub(super) fn palw_fraud_filer_bootstrap_step_v2(
         return PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Done(PalwFilerPhaseV1::Unjudged));
     };
     let mut round: Vec<PalwLegacyHeldUnitV2> = (0..chunks).map(|chunk| PalwLegacyHeldUnitV2::PromptIds { chunk }).collect();
-    if height > 0 {
+    if height > 0
+        && !case.constraint_preflight_pending_v1()
+        && !(case.public_fp_job_v1().is_some_and(|job| job.is_prefix_state()) && !case.prefix_complete)
+    {
         round.extend(palw_legacy_kary_round_units_v1(
             kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyTreeV2::Step,
             binding.step_leaf_count,
@@ -2513,6 +2717,46 @@ impl PalwPanelService {
                 _ => {}
             }
         }
+        // A rooted paid semantic row survives a sibling DA outcome. Read accepted authority
+        // before scheduling a fresh replay: continuation is not a new legacy reservation.
+        let _authority_memory = if params.palw_staged_public_court_v1_active_at(current_daa) {
+            let bytes = (book.cases.len() as u64).saturating_mul(1024).saturating_add(16_384);
+            match crate::palw_memory_ledger::host_ledger_v1().reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: "public-paid-authority-read",
+                    class_id: Hash64::default(),
+                    job: Hash64::default(),
+                },
+                bytes,
+            ) {
+                Ok(ticket) => Some(ticket),
+                Err(why) => {
+                    debug!("[{PALW_PANEL}] paid semantic discovery waits for memory: {why}");
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let staged_authority = if params.palw_staged_public_court_v1_active_at(current_daa) {
+            let claims: Vec<_> = book.cases.keys().copied().collect();
+            session
+                .clone()
+                .spawn_blocking(move |c| {
+                    claims
+                        .into_iter()
+                        .map(|claim| (claim, c.palw_staged_paid_authority_v1((claim, bond_key))))
+                        .collect::<HashMap<_, _>>()
+                })
+                .await
+        } else {
+            HashMap::new()
+        };
+        for (claim, authority) in &staged_authority {
+            if let Ok(Some(authority)) = authority {
+                book.observe_paid_authority_v1(*claim, authority, current_daa);
+            }
+        }
         book.make_replay_room(current_daa, seat_replay_room);
         if let Some(claim) = book.next_probe_at(current_daa, seat_replay_room) {
             self.fraud_filer_start_replay_v1(
@@ -2547,12 +2791,134 @@ impl PalwPanelService {
                 case.fp_expected_pin = target.as_ref().map(|target| target.job_identity);
                 case.fp_job_disclosure_enabled = params.palw_legacy_held_da_v2_active_at(current_daa);
             }
+            if params.palw_staged_public_court_v1_active_at(current_daa)
+                && book.cases.get(&claim).is_some_and(|case| {
+                    case.tir.is_none()
+                        && case.candidate.job.free_prompt
+                        && (case.binding.is_none() || case.public_fp_job_v1().is_none())
+                })
+                && let Err(why) = self.fraud_filer_public_context_v1(session, book, claim, bond_key)
+            {
+                debug!("[{PALW_PANEL}] claim {claim}: original public header bootstrap remains pending: {why}");
+            }
             let facts = palw_fraud_filer_facts_v1(
                 view.as_ref(),
                 &bond_key,
                 reservable,
                 book.cases.get(&claim).is_some_and(|case| case.binding.is_some()),
             );
+            if let Some(Err(why)) = staged_authority.get(&claim) {
+                debug!("[{PALW_PANEL}] claim {claim}: paid semantic authority snapshot unavailable: {why}");
+                continue;
+            }
+            if staged_authority.get(&claim).is_some_and(|p| {
+                matches!(p, Ok(Some(p))
+                if p.terms.accepted_daa <= p.reserved_daa && p.reserved_daa <= current_daa && current_daa < p.terms.collect_until_daa)
+            }) && (!facts.reserved
+                || facts.ended
+                || facts.outcome.is_some()
+                || book.cases.get(&claim).is_some_and(|case| {
+                    !case.prefix_complete && !case.rendering_done && (case.binding.is_none() || case.public_fp_job_v1().is_none())
+                }))
+                && facts.outcome != Some(PalwFilerPhaseV1::Convicted)
+            {
+                court_pending.retain(|(held, round, responder, _)| {
+                    *held != claim
+                        || !palw_fraud_filer_queued_v1(*round, *responder)
+                        || (*round == PALW_FRAUD_FILER_STAGED_ROUND_V1 && !*responder)
+                });
+                let authority = staged_authority[&claim].as_ref().ok().and_then(Option::as_ref).expect("paid authority above");
+                let bytes = match authority.terms.plan.resident_ram_bytes.checked_mul(8).and_then(|n| n.checked_add(16_384)) {
+                    Some(bytes) => bytes,
+                    None => {
+                        debug!("[{PALW_PANEL}] claim {claim}: retained paid snapshot copy bound overflow");
+                        continue;
+                    }
+                };
+                let _paid_snapshot_memory = match crate::palw_memory_ledger::host_ledger_v1().reserve(
+                    crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                        role: "public-paid-snapshot-read",
+                        class_id: book.cases[&claim].candidate.job.class_id,
+                        job: claim,
+                    },
+                    bytes,
+                ) {
+                    Ok(ticket) => ticket,
+                    Err(why) => {
+                        debug!("[{PALW_PANEL}] claim {claim}: retained paid snapshot waits for memory: {why}");
+                        continue;
+                    }
+                };
+                let progress = match session.palw_staged_owned_progress_v1((claim, bond_key)) {
+                    Ok(Some(progress))
+                        if palw_fraud_filer_paid_progress_v1(&progress, claim, bond_key)
+                            // Paid authority names the ACTIVE literal stage (its seed digest and terms)
+                            // once a bundle stage is open, and the bundle frame before that — exactly
+                            // what the owned progress reports. Comparing the frame forever after
+                            // activation would read as a perpetual snapshot change.
+                            && (progress.reserved_daa, progress.seed_id, progress.terms)
+                                == (authority.reserved_daa, Some(authority.seed_id), authority.terms) =>
+                    {
+                        progress
+                    }
+                    Ok(Some(progress)) if palw_fraud_filer_paid_progress_v1(&progress, claim, bond_key) => {
+                        debug!("[{PALW_PANEL}] claim {claim}: accepted paid authority changed between snapshots; retry unchanged");
+                        continue;
+                    }
+                    Ok(_) => {
+                        court_pending
+                            .retain(|(held, round, responder, _)| *held != claim || !palw_fraud_filer_queued_v1(*round, *responder));
+                        book.settle(&claim, PalwFraudFilerVerdictV1::Settled(facts.outcome.unwrap_or(PalwFilerPhaseV1::Expired)));
+                        continue;
+                    }
+                    Err(why) => {
+                        debug!("[{PALW_PANEL}] claim {claim}: retained paid cursor remains unavailable: {why}");
+                        continue;
+                    }
+                };
+                match self
+                    .fraud_filer_paid_stage_v1(session, book, claim, bond_key, target.as_ref(), progress, court_pending, court_due)
+                    .await
+                {
+                    Ok((Some(filing), _)) => {
+                        false_valid.note_executor_refuted_v1(
+                            crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                                params,
+                                self.config.fee_outpoint.is_some(),
+                                current_daa,
+                            ),
+                            &filing.object,
+                            Some(view.as_ref().map_or(book.cases[&claim].candidate.accepted_daa, |v| v.accepted_daa)),
+                            current_daa,
+                        );
+                        let mut door = self.conviction_door_v1(session, reporter, bond_key, network_domain);
+                        let case = book.cases.get_mut(&claim).expect("paid pursuit retained");
+                        if !door.holds(&filing.offence_key)
+                            && case.direct_handed < super::reporter_filer::PALW_FILER_HAND_OFFS_PER_OFFENCE_V1
+                            && case.direct_asked_at.is_none_or(|at| current_daa.saturating_sub(at) >= PALW_FRAUD_FILER_RESEND_DAA_V1)
+                        {
+                            case.direct_asked_at = Some(current_daa);
+                            match door.file(filing) {
+                                PalwFileOutcomeV1::Queued { .. } | PalwFileOutcomeV1::AlreadyFiled => case.direct_handed += 1,
+                                PalwFileOutcomeV1::AlreadyConvicted => {}
+                                why => {
+                                    warn!("[{PALW_PANEL}] claim {claim}: retained paid semantic proof waits at reporter door: {why:?}")
+                                }
+                            }
+                        }
+                    }
+                    Ok((None, true)) if facts.reserved && !facts.ended && facts.outcome.is_none() => {
+                        let case = book.cases.get_mut(&claim).expect("paid pursuit retained");
+                        if !case.arithmetic_matched {
+                            case.verdict = PalwFraudFilerVerdictV1::Pending;
+                        }
+                    }
+                    Ok((None, _)) => {}
+                    Err(why) => debug!("[{PALW_PANEL}] claim {claim}: retained paid semantic continuation remains pending: {why}"),
+                }
+                // Paid authority never authorizes a new seed, DA demand, reserve or release.
+                continue;
+            }
             if facts.ended || facts.outcome.is_some() {
                 court_pending.retain(|(held, round, responder, _)| *held != claim || !palw_fraud_filer_queued_v1(*round, *responder));
                 book.settle(&claim, PalwFraudFilerVerdictV1::Settled(facts.outcome.unwrap_or(PalwFilerPhaseV1::Expired)));
@@ -2606,6 +2972,144 @@ impl PalwPanelService {
                 }
                 continue;
             }
+            let mut header_bundle_dispatched = false;
+            if params.palw_staged_public_court_v1_active_at(current_daa) && facts.reserved {
+                match session.palw_staged_owned_progress_v1((claim, bond_key)) {
+                    Ok(Some(progress)) if progress.bundle.is_some() => {
+                        header_bundle_dispatched = true;
+                        book.cases.get_mut(&claim).expect("pursued").staged_bundle_pending = true;
+                        let context = book.cases.get(&claim).and_then(|case| {
+                            case.binding.as_ref().zip(case.public_fp_job_v1()).map(|(binding, job)| (Some(binding.clone()), job.clone()))
+                        });
+                        // A TIR claim has no legacy binding: its context is the natively derived view
+                        // (behind `palw_staged_tir_route_v1`; `None` below that fence or for a legacy claim).
+                        let tir = match (target.as_ref(), context.is_none()) {
+                            (Some(target), true) => session
+                                .palw_staged_tir_view_v1(claim, self.class_step_ladder(target.class_id))
+                                .ok()
+                                .flatten()
+                                .map(|(view, header)| FilerTirContextV1 { view, header }),
+                            _ => None,
+                        };
+                        let context = match (context, &tir) {
+                            (Some(context), _) => Some(context),
+                            (None, Some(_)) => session.palw_staged_original_commitment_v1(claim).ok().flatten().map(|o| (None, o.job)),
+                            (None, None) => None,
+                        };
+                        if let (Some(target), Some((binding, job))) = (target.as_ref(), context) {
+                            let maximum = self
+                                .config
+                                .court
+                                .max_close_bytes()
+                                .min(kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES);
+                            let file_by = progress.bundle.as_ref().map(|bundle| bundle.plan.terms.collect_until_daa.saturating_sub(2));
+                            match self
+                                .fraud_filer_bundle_stage_v1(
+                                    session,
+                                    book,
+                                    claim,
+                                    target,
+                                    binding.as_ref(),
+                                    &job,
+                                    tir.as_ref(),
+                                    progress,
+                                    maximum,
+                                    file_by,
+                                    court_pending,
+                                    court_due,
+                                )
+                                .await
+                            {
+                                Ok((Some(filing), _)) => {
+                                    false_valid.note_executor_refuted_v1(
+                                        crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                                            params,
+                                            self.config.fee_outpoint.is_some(),
+                                            current_daa,
+                                        ),
+                                        &filing.object,
+                                        Some(view.as_ref().map_or(book.cases[&claim].candidate.accepted_daa, |v| v.accepted_daa)),
+                                        current_daa,
+                                    );
+                                    let mut door = self.conviction_door_v1(session, reporter, bond_key, network_domain);
+                                    let case = book.cases.get_mut(&claim).expect("pursued");
+                                    if !door.holds(&filing.offence_key)
+                                        && case.direct_handed < super::reporter_filer::PALW_FILER_HAND_OFFS_PER_OFFENCE_V1
+                                        && case
+                                            .direct_asked_at
+                                            .is_none_or(|at| current_daa.saturating_sub(at) >= PALW_FRAUD_FILER_RESEND_DAA_V1)
+                                    {
+                                        case.direct_asked_at = Some(current_daa);
+                                        if matches!(
+                                            door.file(filing),
+                                            PalwFileOutcomeV1::Queued { .. } | PalwFileOutcomeV1::AlreadyFiled
+                                        ) {
+                                            case.direct_handed += 1;
+                                        }
+                                    }
+                                    continue;
+                                }
+                                Ok(_) => {}
+                                Err(why) => debug!("[{PALW_PANEL}] claim {claim}: original-header bundle remains pending: {why}"),
+                            }
+                        }
+                    }
+                    Err(why) => {
+                        header_bundle_dispatched = true;
+                        book.cases.get_mut(&claim).expect("pursued").staged_bundle_pending = true;
+                        debug!("[{PALW_PANEL}] claim {claim}: required-family snapshot unavailable: {why}");
+                    }
+                    _ => {}
+                }
+            }
+            // A TIR case (behind `palw_staged_tir_route_v1`): the engine's prelude decides the outcome and the
+            // reservation; everything after the reservation is the staged bundle's, dispatched above. It never
+            // enters the legacy binding read, probes or descent.
+            if book.cases.get(&claim).is_some_and(|case| case.tir.is_some()) {
+                let mismatch = matches!(
+                    book.cases[&claim].verdict,
+                    PalwFraudFilerVerdictV1::Mismatch(_) | PalwFraudFilerVerdictV1::DeferredMismatch
+                );
+                match kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_next_v1(
+                    role,
+                    &kaspa_consensus_core::palw_legacy_public_filer_v1::PalwFilerClaimFactsV1 { binding_known: true, ..facts.clone() },
+                    mismatch,
+                    &PalwLegacyBisectV1::new(0),
+                    |_| false,
+                ) {
+                    PalwFilerActionV1::Done(phase) if facts.outcome.is_some() || facts.ended || !mismatch => {
+                        book.settle(&claim, PalwFraudFilerVerdictV1::Settled(phase));
+                    }
+                    PalwFilerActionV1::Reserve => {
+                        if let Some(view) = view.as_ref() {
+                            self.fraud_filer_queue_v1(
+                                book,
+                                claim,
+                                PalwFraudFilerSentV1::Reserve,
+                                current_daa,
+                                court_pending,
+                                court_due,
+                                || {
+                                    let mut signed = true;
+                                    let object = palw_dispute_reserved_object_v1(
+                                        network_domain,
+                                        palw_fraud_filer_reservation_v1(view, bond_key),
+                                        |m| {
+                                            self.sign(m, PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1).unwrap_or_else(|| {
+                                                signed = false;
+                                                Vec::new()
+                                            })
+                                        },
+                                    );
+                                    if signed { Ok(object) } else { Err("no signing key for this bond".to_string()) }
+                                },
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             // Even a disclosure the session arm refused can carry a complete cryptographic proof of a wrong job.
             // Judge the binding against the recorded target BEFORE a mismatched count can stop subtree descent.
             // The reporter door rehearses the actual gate; an open colluder court cannot veto a valid direct proof.
@@ -2628,10 +3132,113 @@ impl PalwPanelService {
                         progress.court_maximum.min(kaspa_consensus_core::palw_terminal_carriage_v1::PALW_TERMINAL_MAX_BYTES_V1)
                     }
                     Ok(None) => kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES,
-                    Err(_) => continue,
+                    Err(why) => {
+                        debug!("[{PALW_PANEL}] claim {claim}: public terminal budget is unavailable: {why}");
+                        continue;
+                    }
                 };
                 let fp_job = book.cases.get(&claim).and_then(|c| c.public_fp_job_v1().cloned());
-                if fp_job.as_ref().is_some_and(|job| job.is_prefix_state())
+                let mut staged_filing = None;
+                let mut staged_pending =
+                    header_bundle_dispatched && book.cases.get(&claim).is_some_and(|case| case.staged_bundle_pending);
+                let mut public_prefix_stage = false;
+                let mut public_bundle_stage = header_bundle_dispatched;
+                let bundle_progress =
+                    if params.palw_staged_public_court_v1_active_at(current_daa) && facts.reserved && fp_job.is_some() {
+                        Some(session.palw_staged_owned_progress_v1((claim, bond_key)))
+                    } else {
+                        None
+                    };
+                if let Some(Err(why)) = &bundle_progress {
+                    book.cases.get_mut(&claim).expect("pursued").staged_bundle_pending = true;
+                    public_bundle_stage = true;
+                    staged_pending = true;
+                    public_prefix_stage = fp_job.as_ref().is_some_and(|job| job.is_prefix_state());
+                    debug!("[{PALW_PANEL}] claim {claim}: unknown accepted required-family progress remains pending: {why}");
+                }
+                if matches!(&bundle_progress,Some(Ok(Some(progress))) if progress.bundle.is_none()) {
+                    book.cases.get_mut(&claim).expect("pursued").staged_bundle_pending = false;
+                }
+                if params.palw_staged_public_court_v1_active_at(current_daa)
+                    && !header_bundle_dispatched
+                    && facts.reserved
+                    && let (Some(job), PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(initial))) = (fp_job.as_ref(), answer)
+                    && let Some(Ok(Some(progress))) = bundle_progress
+                    && progress.bundle.is_some()
+                {
+                    public_bundle_stage = true;
+                    public_prefix_stage = job.is_prefix_state();
+                    staged_pending = true;
+                    match self
+                        .fraud_filer_bundle_stage_v1(
+                            session,
+                            book,
+                            claim,
+                            target,
+                            Some(initial.binding()),
+                            job,
+                            None,
+                            progress,
+                            maximum,
+                            file_by,
+                            court_pending,
+                            court_due,
+                        )
+                        .await
+                    {
+                        Ok((filing, complete)) => {
+                            staged_filing = filing;
+                            staged_pending = !complete;
+                        }
+                        Err(why) => debug!("[{PALW_PANEL}] claim {claim}: required-family bundle remains pending: {why}"),
+                    }
+                }
+                if !public_bundle_stage
+                    && params.palw_staged_public_court_v1_active_at(current_daa)
+                    && facts.reserved
+                    && let (Some(job), PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(initial))) =
+                        (fp_job.as_ref().filter(|job| job.is_prefix_state()), answer)
+                {
+                    match session.palw_staged_owned_progress_v1((claim, bond_key)) {
+                        Ok(Some(progress)) => {
+                            public_prefix_stage = true;
+                            staged_pending = true;
+                            match self
+                                .fraud_filer_prefix_stage_v1(
+                                    session,
+                                    book,
+                                    claim,
+                                    target,
+                                    initial.binding(),
+                                    job,
+                                    progress,
+                                    maximum,
+                                    file_by,
+                                    court_pending,
+                                    court_due,
+                                )
+                                .await
+                            {
+                                Ok((filing, done)) => {
+                                    staged_filing = filing;
+                                    if done {
+                                        book.cases.get_mut(&claim).expect("pursued").prefix_complete = true;
+                                        staged_pending = false;
+                                    }
+                                }
+                                Err(why) => debug!("[{PALW_PANEL}] claim {claim}: staged public prefix work remains pending: {why}"),
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(why) => {
+                            public_prefix_stage = true;
+                            staged_pending = true;
+                            debug!("[{PALW_PANEL}] claim {claim}: staged public prefix snapshot unavailable: {why}");
+                        }
+                    }
+                }
+                if !public_prefix_stage
+                    && fp_job.as_ref().is_some_and(|job| job.is_prefix_state())
                     && book.cases.get(&claim).is_some_and(|case| case._prefix_reservation.is_none() || case.prefix_budget < maximum)
                 {
                     // Three learning/proof copies, Vec growth and the terminal builder remain
@@ -2649,17 +3256,18 @@ impl PalwPanelService {
                     case._prefix_reservation = Some(Arc::new(ticket));
                     case.prefix_budget = maximum;
                 }
-                let mut staged_filing = None;
-                let mut staged_pending = false;
-                if params.palw_staged_public_court_v1_active_at(current_daa)
+                book.cases.get_mut(&claim).expect("pursued").prefix_stage_pending = public_prefix_stage && staged_pending;
+                if !public_bundle_stage
+                    && params.palw_staged_public_court_v1_active_at(current_daa)
                     && facts.reserved
                     && !book.cases.get(&claim).is_some_and(|case| case.rendering_done)
-                    && target
-                        .registered_semantics
-                        .as_ref()
-                        .is_some_and(|r| r.rendering_rule.is_some() && r.tokenizer_key_events.is_some())
-                    && let (Some(job), PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(initial))) =
-                        (fp_job.as_ref().filter(|j| j.is_constraint()), answer)
+                    && target.registered_semantics.as_ref().is_some_and(|r| {
+                        r.rendering_rule.is_some()
+                            && r.tokenizer_key_events.is_some()
+                            && r.raw_tokenizer_bytes.is_some()
+                            && r.token_table_root.is_some()
+                    })
+                    && let (Some(job), PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(initial))) = (fp_job.as_ref(), answer)
                 {
                     match session.palw_staged_owned_progress_v1((claim, bond_key)) {
                         Ok(Some(progress)) => {
@@ -2772,6 +3380,8 @@ impl PalwPanelService {
                     PalwFraudFilerVerdictV1::Mismatch(run) => run.own_output_ids.clone(),
                     _ => Vec::new(),
                 };
+                let selection_replayed = matches!(&case.verdict, PalwFraudFilerVerdictV1::Mismatch(run) if run.fp_job.is_some());
+                let arithmetic_matched = case.arithmetic_matched;
                 let events: BTreeMap<PalwDaUnitV1, _> = book
                     .answers
                     .iter()
@@ -2797,6 +3407,10 @@ impl PalwPanelService {
                         prefix_direct_checked = true;
                         if direct.is_some() {
                             return Ok(direct);
+                        }
+                        if public_prefix_stage {
+                            prefix_plan = None;
+                            return Ok(None);
                         }
                         let PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(initial)) = &answer else { return Ok(None) };
                         if prefix_plan.is_none() {
@@ -2836,7 +3450,7 @@ impl PalwPanelService {
                         && !staged_pending
                         && staged_filing.is_none()
                         && target.registered_semantics.as_ref().is_some_and(|row| row.rendering_rule.is_some())
-                        && let Some(job) = fp_job.as_ref().filter(|job| job.is_constraint())
+                        && let Some(job) = fp_job.as_ref()
                         && let PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(initial)) = &answer
                     {
                         let check = (|| {
@@ -2849,8 +3463,7 @@ impl PalwPanelService {
                                     }
                                 })
                                 .ok_or("the outside verifier does not hold the registered tokenizer file")?;
-                            let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(job)
-                                .ok_or("the outside verifier does not hold the registered token table")?;
+                            let table = tokenizer_scheduler::registered_table_v1(&target, initial.binding(), job)?;
                             tokenizer::check_held_tokenizer_v1(&path, &target, initial.binding(), job, &table, maximum as usize)
                         })();
                         match check {
@@ -2899,7 +3512,9 @@ impl PalwPanelService {
                         if prefix_filing.is_some() {
                             return Ok((prefix_filing, previous_plan, constraint_done));
                         }
-                        let direct = if prefix_direct_checked {
+                        let direct = if prefix_direct_checked
+                            || (public_bundle_stage && fp_job.as_ref().is_some_and(|job| job.is_constraint()))
+                        {
                             None
                         } else {
                             palw_fraud_filer_public_filing_with_budget_v3(&target, rules, &answer, file_by, fp_job.as_ref(), maximum)?
@@ -2912,17 +3527,71 @@ impl PalwPanelService {
                             return Ok((None, None, false));
                         };
                         if !matches!(initial, kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Tiled { .. }) {
-                            return Ok((None, None, false));
+                            return Ok((
+                                None,
+                                None,
+                                matches!(initial, kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Flat { .. }),
+                            ));
                         }
-                        let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(&job)
-                            .ok_or("the public verifier does not hold the job's tokenizer table")?;
+                        // The public bundle stage streams the original table in bounded parts (a
+                        // file-backed holding may exceed any resident table); the legacy direct
+                        // proof keeps its in-memory table and its own evidence budget.
+                        let table = if public_bundle_stage {
+                            None
+                        } else {
+                            Some(
+                                kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(&job)
+                                    .ok_or("the public verifier does not hold the job's tokenizer table")?,
+                            )
+                        };
                         let plan = match previous_plan {
                             Some(plan) => Some(plan),
-                            None => constraint::tiled_plan_v1(&target, &job, initial, &own_ids, table.clone())?,
+                            None if public_bundle_stage => {
+                                let root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(&job)
+                                    .ok_or("constrained job has no immutable table root")?;
+                                constraint_scheduler::nominate_v1(
+                                    &target,
+                                    &job,
+                                    initial,
+                                    &own_ids,
+                                    crate::palw_public_token_table::public_table_v1(&root, &job.tokenizer_id)
+                                        .ok_or("the public verifier does not hold the job's original public table")?,
+                                    &crate::palw_memory_ledger::host_ledger_v1(),
+                                )?
+                            }
+                            None => constraint::tiled_plan_v1(
+                                &target,
+                                &job,
+                                initial,
+                                &own_ids,
+                                table.clone().ok_or("legacy direct proof lost its resident table")?,
+                            )?,
                         };
-                        let Some(plan) = plan else { return Ok((None, None, false)) };
+                        let plan = plan.or_else(|| {
+                            if public_bundle_stage
+                                && (selection_replayed || arithmetic_matched)
+                                && let kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Tiled {
+                                    generated_token_ids,
+                                    ..
+                                } = initial
+                            {
+                                generated_token_ids.first().copied().map(|committed| constraint::TiledPlanV1 {
+                                    position: 0,
+                                    committed,
+                                    witness: None,
+                                    beat_lane: None,
+                                })
+                            } else {
+                                None
+                            }
+                        });
+                        let Some(plan) = plan else { return Ok((None, None, selection_replayed)) };
+                        if public_bundle_stage {
+                            return Ok((None, Some(plan), false));
+                        }
                         let selected: Option<Vec<_>> = plan.units().iter().map(|unit| events.get(unit).cloned()).collect();
                         let Some(selected) = selected else { return Ok((None, Some(plan), false)) };
+                        let table = table.ok_or("legacy direct proof lost its resident table")?;
                         let contradiction =
                             constraint::tiled_contradiction_with_budget_v2(&target, &job, plan, &selected, table, maximum)?;
                         let filing = contradiction
@@ -3018,7 +3687,8 @@ impl PalwPanelService {
                             book.walk = None;
                             book.read_at = None;
                         }
-                        book.cases.get_mut(&claim).expect("held above").constraint_done = complete;
+                        let case = book.cases.get_mut(&claim).expect("held above");
+                        case.constraint_done = complete && !case.staged_bundle_pending;
                     }
                     Err(why) => debug!("[{PALW_PANEL}] claim {claim}: this public event yields no direct proof: {why}"),
                 }
@@ -3029,6 +3699,9 @@ impl PalwPanelService {
             let lanes = lanes_on.then_some(PalwFraudFilerLanesV1 { now_daa: current_daa, form });
             court_pending.retain(|(held, round, responder, object)| {
                 if *held != claim || !palw_fraud_filer_queued_v1(*round, *responder) { return true; }
+                // Staged owner moves are the staged queue's own: it retires them against the
+                // accepted cursor, never against the legacy session/answer facts below.
+                if *round == PALW_FRAUD_FILER_STAGED_ROUND_V1 { return true; }
                 if *round == PALW_FRAUD_FILER_RESERVE_ROUND_V1 { return !facts.reserved; }
                 if *round == PALW_FRAUD_FILER_TERMINAL_ROUND_V2 { return !own_court_open; }
                 // Lane G14-L: a queued lane stays until it lands in this bond's session or its unit is answered.
@@ -3073,6 +3746,9 @@ impl PalwPanelService {
                     book.answers.contains_key(&(claim, *unit))
                 }) {
                     step
+                } else if case.constraint_preflight_pending_v1() || case.prefix_stage_pending {
+                    // An arithmetic DA session would block the selector's required public rows.
+                    PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait)
                 } else if legacy {
                     let owned = case.clone();
                     let view = view.clone();
@@ -3481,6 +4157,1887 @@ impl PalwPanelService {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn fraud_filer_public_context_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        owner: PalwBondKeyV2,
+    ) -> Result<(), String> {
+        let Some(progress) = session.palw_staged_owned_progress_v1((claim, owner))? else { return Ok(()) };
+        let Some(bundle) = &progress.bundle else { return Ok(()) };
+        let bytes = bundle
+            .plan
+            .terms
+            .plan
+            .resident_ram_bytes
+            .checked_mul(8)
+            .and_then(|n| n.checked_add(16_384))
+            .ok_or("original public context memory overflow")?;
+        let ticket = crate::palw_memory_ledger::host_ledger_v1()
+            .reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: "public-original-binding-context",
+                    class_id: Hash64::default(),
+                    job: claim,
+                },
+                bytes,
+            )
+            .map_err(|e| e.to_string())?;
+        let Some((binding, job)) = session.palw_staged_resolved_public_context_v1(claim)? else {
+            return Err("original public context has no qualified Legacy hydration".into());
+        };
+        let expected = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context);
+        let case = book.cases.get_mut(&claim).ok_or("public context pursuit disappeared")?;
+        let descriptor = input::PalwFraudFilerFpDescriptorV1::from_disclosure(&case.candidate, expected, &binding, &job)?;
+        if case.fp_expected_pin != Some(expected)
+            || (progress.claim, progress.reserver) != (claim, owner)
+            || binding.step_leaf_count > self.class_step_ladder(job.class_id)
+        {
+            return Err("original public context substitutes target/owner/job or registered ladder".into());
+        }
+        case.bisect = PalwLegacyBisectV1::new(binding.step_leaf_count);
+        case.step_tree = PalwAuthTreeV1::new(binding.step_leaf_count, binding.step_merkle_root);
+        case.binding = Some(binding);
+        case.fp_descriptor = Some(Arc::new(descriptor));
+        case._public_context_reservation = Some(Arc::new(ticket));
+        case.fp_job_pending = true;
+        case.staged_bundle_pending = true;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_constraint_stage_v1(
+        &self,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        binding: &PalwStepBindingV2,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        selected_events: Option<Vec<kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1>>,
+        flat: Option<(constraint_scheduler::StreamedPinV1, Hash64, PalwBondKeyV2)>,
+        flat_original: Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
+        original_seed: Option<kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1>,
+        progress: kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        maximum: u64,
+        file_by: Option<u64>,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(Option<PalwConvictionFilingV1>, bool), String> {
+        use constraint_scheduler::{ConstraintScheduleV1, ConstraintSchedulerV1};
+        use kaspa_consensus_core::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_CONTEXT_V1;
+        let case = book.cases.get_mut(&claim).ok_or("constraint pursuit disappeared")?;
+        case.constraint_stage_pending = true;
+        let worker = case.staged_constraint.get_or_insert_with(|| Arc::new(std::sync::Mutex::new(None))).clone();
+        let plan = case.constraint_plan;
+        let public_events = selected_events.as_ref().map(|events| events.iter().collect()).or_else(|| {
+            plan.and_then(|p| p.legacy_units_v1()).and_then(|units| {
+                units
+                    .into_iter()
+                    .map(|unit| match book.answers.get(&(claim, unit)) {
+                        Some(PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event))) => Some(event),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>()
+            })
+        });
+        let copy_bytes = (borsh::object_length(&(binding, job, &original_seed, &public_events, &flat_original))
+            .map_err(|e| e.to_string())? as u64)
+            .checked_mul(8)
+            .and_then(|n| n.checked_add(147_456))
+            .ok_or("constraint worker copy bound overflow")?;
+        let copies = crate::palw_memory_ledger::host_ledger_v1()
+            .reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: "public-constraint-worker-copies",
+                    class_id: target.class_id,
+                    job: claim,
+                },
+                copy_bytes,
+            )
+            .map_err(|e| e.to_string())?;
+        let public_events = public_events.map(|events| events.into_iter().cloned().collect::<Vec<_>>());
+        let table_root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job)
+            .ok_or("constraint job has no immutable table root")?;
+        let table = crate::palw_public_token_table::public_table_v1(&table_root, &job.tokenizer_id)
+            .ok_or("constraint exact public table holding is unavailable")?;
+        let binding = binding.clone();
+        let job = job.clone();
+        let target = target.clone();
+        let maximum_leaves = self.class_step_ladder(target.class_id);
+        let executor = target.executor_bond;
+        let now = progress.now_daa;
+        let worker_progress = progress.clone();
+        let decision = tokio::task::spawn_blocking(move || {
+            let _copies = copies;
+            let mut worker = worker.lock().map_err(|_| "constraint worker lock poisoned")?;
+            let build = || {
+                if let Some(seed) = &original_seed {
+                    ConstraintSchedulerV1::reopen_with_flat_v1(
+                        &target,
+                        &job,
+                        &binding,
+                        seed,
+                        flat.as_ref().map(|(pin, _, _)| pin),
+                        flat_original.as_ref(),
+                        table.clone(),
+                        &worker_progress,
+                        maximum_leaves,
+                        &crate::palw_memory_ledger::host_ledger_v1(),
+                    )
+                } else if let Some((pin, source_id, answerer)) = &flat {
+                    ConstraintSchedulerV1::open_from_flat_v1(
+                        &target,
+                        &job,
+                        &binding,
+                        pin,
+                        *source_id,
+                        *answerer,
+                        plan.ok_or("Flat authenticated nomination is unavailable")?.witness,
+                        flat_original.as_ref().ok_or("Flat semantic opening lost native original commitment")?,
+                        table.clone(),
+                        &worker_progress,
+                        &crate::palw_memory_ledger::host_ledger_v1(),
+                    )
+                } else {
+                    ConstraintSchedulerV1::open(
+                        &target,
+                        &job,
+                        plan.ok_or("authenticated constraint nominee is unavailable")?,
+                        public_events.as_deref().ok_or("original selected public tile acquisition is incomplete")?,
+                        table.clone(),
+                        &worker_progress,
+                        maximum_leaves,
+                        &crate::palw_memory_ledger::host_ledger_v1(),
+                    )
+                }
+            };
+            if worker.is_none() {
+                *worker = Some(build()?);
+            }
+            match worker.as_mut().expect("built").poll(&worker_progress) {
+                Ok(decision) => Ok(decision),
+                Err(why) if why.contains("cursor") || why.contains("branch") => {
+                    *worker = None;
+                    *worker = Some(build()?);
+                    worker.as_mut().expect("rebuilt").poll(&worker_progress)
+                }
+                Err(why) => Err(why),
+            }
+        })
+        .await
+        .map_err(|e| format!("constraint worker did not finish: {e}"))??;
+        let object = match decision {
+            ConstraintScheduleV1::Finished(reference) => {
+                court_pending
+                    .retain(|(c, round, responder, _)| (*c, *round, *responder) != (claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false));
+                let case = book.cases.get_mut(&claim).ok_or("constraint pursuit disappeared")?;
+                case.staged_tokenizer_sent = None;
+                case.constraint_stage_pending = false;
+                case.constraint_done = true;
+                let Some(reference) = reference else {
+                    return Ok((None, true));
+                };
+                let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
+                    claim,
+                    executor,
+                    kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::StagedCourt { reference },
+                    None,
+                    maximum,
+                )
+                .map_err(|e| e.to_string())?;
+                let filing = PalwConvictionFilingV1::of_offence(built.object, claim, file_by, PalwFilingOriginV1::Replay)
+                    .filter(|f| (f.offence_key, f.evidence_id) == (built.offence_id, built.evidence_id))
+                    .ok_or("constraint staged reporter key mismatch")?;
+                return Ok((Some(filing), false));
+            }
+            ConstraintScheduleV1::Seed(mut seed) => {
+                seed.signature =
+                    self.sign(&seed.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no constraint owner signing key")?;
+                seed.check(90_000)?;
+                PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed: Box::new(seed) }
+            }
+            ConstraintScheduleV1::NativeSeed(mut seed) => {
+                seed.signature =
+                    self.sign(&seed.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no constraint owner signing key")?;
+                seed.check(90_000)?;
+                PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed: Box::new(seed) }
+            }
+            ConstraintScheduleV1::Leaf(mut leaf) => {
+                leaf.signature =
+                    self.sign(&leaf.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no constraint owner signing key")?;
+                leaf.check()?;
+                PalwConsensusObjectV2::PublicCourtStreamLeafV1 { leaf: Box::new(leaf) }
+            }
+            ConstraintScheduleV1::Move(mut movement) => {
+                movement.signature = self
+                    .sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1)
+                    .ok_or("no constraint owner signing key")?;
+                movement.check()?;
+                PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) }
+            }
+        };
+        Self::fraud_filer_stage_queue_v1(book, claim, object, &progress, now, court_pending, court_due)?;
+        Ok((None, false))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_flat_stage_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        binding: &PalwStepBindingV2,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        progress: &kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<
+        Option<(
+            kaspa_consensus_core::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1,
+            Hash64,
+            PalwBondKeyV2,
+            crate::palw_memory_ledger::PalwMemoryReservationV1,
+        )>,
+        String,
+    > {
+        use crate::palw_flat_public_source::FlatSourceScheduleV1;
+        use kaspa_consensus_core::{
+            palw_constraint_stream_carriage_v1::{
+                PALW_CONSTRAINT_STREAM_CONTEXT_V1, PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1,
+            },
+            palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
+            palw_selected_event_source_v1::PalwSelectedEventBindingV1,
+        };
+        let bundle = progress.bundle.as_ref().ok_or("Flat source has no prepaid bundle")?;
+        let bytes = bundle.plan.terms.plan.resident_ram_bytes.checked_mul(2).ok_or("Flat snapshot memory overflow")?;
+        let guard = crate::palw_memory_ledger::host_ledger_v1()
+            .reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: "public-flat-source-read",
+                    class_id: target.class_id,
+                    job: claim,
+                },
+                bytes,
+            )
+            .map_err(|e| e.to_string())?;
+        let flat = session.palw_staged_flat_source_v1((claim, progress.reserver))?;
+        let mut due = progress.terms.open_until_daa.saturating_sub(1);
+        let action = if let Some(flat) = flat {
+            // A separate native read may land on a newer accepted tip (blocks arrive between the
+            // two reads). That is tolerated: the literal identity and immutable clocks below are
+            // what must match, and every decision uses this read's own clock. An older read is not.
+            if flat.now_daa < progress.now_daa
+                || (flat.session.claim, flat.session.owner, flat.session.reserved_daa, flat.session.bundle_id)
+                    != (claim, progress.reserver, progress.reserved_daa, bundle.bundle_id)
+                || flat.context.binding.as_ref() != binding
+                || flat.context.job.as_ref() != job
+                || (flat.session.respond_until_daa, flat.session.collect_until_daa)
+                    != (
+                        bundle.plan.preseed_source_until_v1(
+                            kaspa_consensus_core::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint,
+                            kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+                        )?,
+                        progress.terms.collect_until_daa,
+                    )
+            {
+                return Err("Flat source changes original binding/job/owner/paid window or snapshot".into());
+            }
+            let decision = crate::palw_flat_public_source::request_v1(&flat.session, flat.now_daa)?;
+            if matches!(decision, FlatSourceScheduleV1::Nominate { .. } | FlatSourceScheduleV1::Ready { .. }) {
+                let ids = flat.session.authenticated_generated_ids_v1()?;
+                let case = book.cases.get(&claim).ok_or("Flat pursuit disappeared")?;
+                let own = match &case.verdict {
+                    PalwFraudFilerVerdictV1::Mismatch(run) => run.own_output_ids.as_slice(),
+                    _ => &[],
+                };
+                let replayed =
+                    case.arithmetic_matched || matches!(&case.verdict, PalwFraudFilerVerdictV1::Mismatch(run) if run.fp_job.is_some());
+                let root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job)
+                    .ok_or("Flat Constraint loses immutable table root")?;
+                let table = crate::palw_public_token_table::public_table_v1(&root, &job.tokenizer_id)
+                    .ok_or("Flat exact public table is unavailable")?;
+                // Streaming mask: bounded parts of the original table, never a resident vocabulary.
+                let nominee = constraint_scheduler::nominate_authenticated_ids_v1(
+                    target,
+                    job,
+                    binding,
+                    ids,
+                    own,
+                    table,
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                )?;
+                let nominee = match nominee {
+                    Some(plan) => plan,
+                    None if replayed => {
+                        constraint::TiledPlanV1 { position: ids.len() as u32, committed: 0, witness: None, beat_lane: None }
+                    }
+                    _ => return Ok(None),
+                };
+                if flat.session.nomination_v1().is_some_and(|n| n != (nominee.position, nominee.beat_lane)) {
+                    return Err("Flat local selector differs from immutable accepted nomination".into());
+                }
+                book.cases.get_mut(&claim).ok_or("Flat pursuit disappeared")?.constraint_plan = Some(nominee);
+            }
+            match decision {
+                FlatSourceScheduleV1::Wait => return Ok(None),
+                FlatSourceScheduleV1::Ready { signer } => {
+                    if !flat.session.collected_v1()
+                        && flat.session.custodians.iter().any(|signer| flat.session.has_response_duty_v1(signer))
+                    {
+                        return Ok(None);
+                    }
+                    let pin = session
+                        .palw_staged_flat_pin_v1((claim, progress.reserver), flat.session.source_id, signer)?
+                        .ok_or("Flat native EOF pin is unavailable")?;
+                    return Ok(Some((pin, flat.session.source_id, signer, guard)));
+                }
+                FlatSourceScheduleV1::Nominate { source_id } => {
+                    due = flat.session.nomination_until_daa.saturating_sub(1);
+                    let plan =
+                        book.cases.get(&claim).and_then(|case| case.constraint_plan).ok_or("Flat owner nomination is unavailable")?;
+                    PalwConstraintStreamActionV1::FlatSourceNominate { source_id, position: plan.position, beat: plan.beat_lane }
+                }
+                FlatSourceScheduleV1::Collect => {
+                    due = flat.session.collect_until_daa.saturating_sub(1);
+                    PalwConstraintStreamActionV1::FlatSourceCollect
+                }
+            }
+        } else {
+            PalwConstraintStreamActionV1::FlatSourceOpen { binding: PalwSelectedEventBindingV1::from_binding_v1(binding)? }
+        };
+        let mut movement = PalwConstraintStreamMoveV1 {
+            version: 1,
+            claim,
+            reserver: progress.reserver,
+            reserved_daa: progress.reserved_daa,
+            seed_id: bundle.bundle_id,
+            phase: PalwConstraintStreamPhaseV1::PrefixCourt,
+            action,
+            signature: Vec::new(),
+        };
+        movement.signature =
+            self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no Flat source owner signing key")?;
+        movement.check()?;
+        Self::fraud_filer_stage_queue_v1(
+            book,
+            claim,
+            PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) },
+            progress,
+            progress.now_daa,
+            court_pending,
+            court_due,
+        )?;
+        // The accepted source's nomination clock is earlier than the child opening clock.
+        court_due.entry((claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false)).and_modify(|held| *held = (*held).min(due));
+        Ok(None)
+    }
+
+    /// **The greedy Float32 source owner** (behind `palw_staged_float_constraint_v1`): opens the
+    /// accepted Float32 source, nominates over the authenticated ids from its own replay (the Flat
+    /// owner's selector — a replay that diverged names the position and the beating lane), collects
+    /// missed custodian clocks, and hands the native authenticated row pin to the Constraint seed.
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_float_stage_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        binding: &PalwStepBindingV2,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        progress: &kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<
+        Option<(
+            kaspa_consensus_core::palw_float_constraint_source_v1::PalwFloatConstraintPinV1,
+            Hash64,
+            PalwBondKeyV2,
+            crate::palw_memory_ledger::PalwMemoryReservationV1,
+        )>,
+        String,
+    > {
+        use crate::palw_flat_public_source::FloatSourceScheduleV1;
+        use kaspa_consensus_core::{
+            palw_constraint_stream_carriage_v1::{
+                PALW_CONSTRAINT_STREAM_CONTEXT_V1, PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1,
+            },
+            palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
+            palw_selected_event_source_v1::PalwSelectedEventBindingV1,
+        };
+        if self.consensus_config.params.palw_staged_float_constraint_v1_fence().is_none() {
+            return Ok(None);
+        }
+        let bundle = progress.bundle.as_ref().ok_or("Float32 source has no prepaid bundle")?;
+        let bytes = bundle.plan.terms.plan.resident_ram_bytes.checked_mul(2).ok_or("Float32 snapshot memory overflow")?;
+        let guard = crate::palw_memory_ledger::host_ledger_v1()
+            .reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: "public-float-source-read",
+                    class_id: target.class_id,
+                    job: claim,
+                },
+                bytes,
+            )
+            .map_err(|e| e.to_string())?;
+        let float = session.palw_staged_float_source_v1((claim, progress.reserver))?;
+        let mut due = progress.terms.open_until_daa.saturating_sub(1);
+        let action = if let Some(float) = float {
+            if float.now_daa < progress.now_daa
+                || (float.session.claim, float.session.owner, float.session.reserved_daa, float.session.bundle_id)
+                    != (claim, progress.reserver, progress.reserved_daa, bundle.bundle_id)
+                || float.context.binding.as_ref() != binding
+                || float.context.job.as_ref() != job
+                || (float.session.respond_until_daa, float.session.collect_until_daa)
+                    != (
+                        bundle.plan.preseed_source_until_v1(
+                            kaspa_consensus_core::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint,
+                            kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+                        )?,
+                        progress.terms.collect_until_daa,
+                    )
+            {
+                return Err("Float32 source changes original binding/job/owner/paid window or snapshot".into());
+            }
+            let decision = crate::palw_flat_public_source::float_request_v1(&float.session, float.now_daa)?;
+            if matches!(decision, FloatSourceScheduleV1::Nominate { .. } | FloatSourceScheduleV1::Ready { .. }) {
+                let ids = float.session.authenticated_generated_ids_v1()?;
+                let case = book.cases.get(&claim).ok_or("Float32 pursuit disappeared")?;
+                let own = match &case.verdict {
+                    PalwFraudFilerVerdictV1::Mismatch(run) => run.own_output_ids.as_slice(),
+                    _ => &[],
+                };
+                let replayed =
+                    case.arithmetic_matched || matches!(&case.verdict, PalwFraudFilerVerdictV1::Mismatch(run) if run.fp_job.is_some());
+                let root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job)
+                    .ok_or("Float32 Constraint loses immutable table root")?;
+                let table = crate::palw_public_token_table::public_table_v1(&root, &job.tokenizer_id)
+                    .ok_or("Float32 exact public table is unavailable")?;
+                let nominee = constraint_scheduler::nominate_authenticated_ids_v1(
+                    target,
+                    job,
+                    binding,
+                    ids,
+                    own,
+                    table,
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                )?;
+                let nominee = match nominee {
+                    Some(plan) => plan,
+                    None if replayed => {
+                        constraint::TiledPlanV1 { position: ids.len() as u32, committed: 0, witness: None, beat_lane: None }
+                    }
+                    _ => return Ok(None),
+                };
+                if float.session.nomination_v1().is_some_and(|n| n != (nominee.position, nominee.beat_lane)) {
+                    return Err("Float32 local selector differs from immutable accepted nomination".into());
+                }
+                book.cases.get_mut(&claim).ok_or("Float32 pursuit disappeared")?.constraint_plan = Some(nominee);
+            }
+            match decision {
+                FloatSourceScheduleV1::Wait => return Ok(None),
+                FloatSourceScheduleV1::Ready { signer } => {
+                    if !float.session.collected_v1()
+                        && float.session.custodians.iter().any(|signer| float.session.has_response_duty_v1(signer))
+                    {
+                        return Ok(None);
+                    }
+                    let pin = session
+                        .palw_staged_float_pin_v1((claim, progress.reserver), float.session.source_id, signer)?
+                        .ok_or("Float32 authenticated row pin is unavailable")?;
+                    return Ok(Some((pin, float.session.source_id, signer, guard)));
+                }
+                FloatSourceScheduleV1::Nominate { source_id } => {
+                    due = float.session.nomination_until_daa.saturating_sub(1);
+                    let plan =
+                        book.cases.get(&claim).and_then(|case| case.constraint_plan).ok_or("Float32 owner nomination is unavailable")?;
+                    PalwConstraintStreamActionV1::FloatSourceNominate { source_id, position: plan.position, beat: plan.beat_lane }
+                }
+                FloatSourceScheduleV1::Collect => {
+                    due = float.session.collect_until_daa.saturating_sub(1);
+                    PalwConstraintStreamActionV1::FloatSourceCollect
+                }
+            }
+        } else {
+            PalwConstraintStreamActionV1::FloatSourceOpen { binding: PalwSelectedEventBindingV1::from_binding_v1(binding)? }
+        };
+        let mut movement = PalwConstraintStreamMoveV1 {
+            version: 1,
+            claim,
+            reserver: progress.reserver,
+            reserved_daa: progress.reserved_daa,
+            seed_id: bundle.bundle_id,
+            phase: PalwConstraintStreamPhaseV1::PrefixCourt,
+            action,
+            signature: Vec::new(),
+        };
+        movement.signature =
+            self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no Float32 source owner signing key")?;
+        movement.check()?;
+        Self::fraud_filer_stage_queue_v1(
+            book,
+            claim,
+            PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) },
+            progress,
+            progress.now_daa,
+            court_pending,
+            court_due,
+        )?;
+        court_due.entry((claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false)).and_modify(|held| *held = (*held).min(due));
+        Ok(None)
+    }
+
+    /// **A TIR claim's Constraint stage** (behind `palw_staged_tir_route_v1`): the native selected
+    /// source (no binding on any carrier) until the nominee's tiles are authenticated against the
+    /// view the fold derives, then the native seed and the constrained-selection moves.
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_tir_constraint_stage_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        tir: &FilerTirContextV1,
+        progress: kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        maximum: u64,
+        file_by: Option<u64>,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(Option<PalwConvictionFilingV1>, bool), String> {
+        use constraint_scheduler::{ConstraintScheduleV1, ConstraintSchedulerV1};
+        use kaspa_consensus_core::{
+            palw_constraint_stream_carriage_v1::{
+                PALW_CONSTRAINT_STREAM_CONTEXT_V1, PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1,
+            },
+            palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
+            palw_selected_event_source_v1::PalwSelectedEventCoordinateV1,
+        };
+        use selected_event_scheduler::SelectedEventScheduleV1;
+        let ladder = self.class_step_ladder(target.class_id);
+        let root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job)
+            .ok_or("TIR Constraint job loses its immutable table root")?;
+        let table = crate::palw_public_token_table::public_table_v1(&root, &job.tokenizer_id)
+            .ok_or("TIR Constraint exact public table is unavailable")?;
+        let mut pin = None;
+        if progress.cursor.is_none() {
+            let selected = session
+                .palw_staged_selected_events_v1((claim, progress.reserver))?
+                .ok_or("TIR native selected source is unavailable")?;
+            let bundle = progress.bundle.as_ref().ok_or("TIR selected source has no prepaid owner bundle")?;
+            if selected.now_daa < progress.now_daa
+                || (selected.session.claim, selected.session.owner, selected.session.reserved_daa, selected.session.bundle_id)
+                    != (claim, progress.reserver, progress.reserved_daa, bundle.bundle_id)
+                || selected.context.is_some()
+                || selected.native.as_ref().is_some_and(|native| *native.header != *tir.header || native.job.as_ref() != job)
+            {
+                return Err("TIR selected source changes original owner/bundle, header, job or snapshot".into());
+            }
+            let bootstrap = PalwSelectedEventCoordinateV1 { row: 0, tile: 0 };
+            if book.cases.get(&claim).and_then(|case| case.constraint_plan).is_none()
+                && let Some(event) = selected.session.requests.get(&bootstrap).and_then(|request| request.event.as_ref())
+            {
+                let case = book.cases.get(&claim).ok_or("TIR pursuit disappeared")?;
+                // The verifier's own TIR replay (the backend's `replay_tir_generated_ids_v1`, RFC-0002
+                // lane) names the beat; without it only an id the constraint forbids is nominated.
+                let own = match &case.verdict {
+                    PalwFraudFilerVerdictV1::Mismatch(run) => run.own_output_ids.as_slice(),
+                    _ => &[],
+                };
+                let nominee = constraint_scheduler::nominate_authenticated_ids_view_v1(
+                    target,
+                    job,
+                    &tir.view,
+                    &event.generated_token_ids,
+                    own,
+                    table.clone(),
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                )?;
+                book.cases.get_mut(&claim).ok_or("TIR pursuit disappeared")?.constraint_plan = nominee;
+            }
+            let plan = book.cases.get(&claim).and_then(|case| case.constraint_plan);
+            let mut coordinates = vec![bootstrap];
+            if let Some(plan) = plan {
+                for (row, tile) in plan.selected_tiles_v1() {
+                    let coordinate = PalwSelectedEventCoordinateV1 { row, tile };
+                    if !coordinates.contains(&coordinate) {
+                        coordinates.push(coordinate);
+                    }
+                }
+            }
+            let action = match selected_event_scheduler::request_v1(&selected.session, &coordinates, selected.now_daa)? {
+                SelectedEventScheduleV1::Wait => return Ok((None, false)),
+                SelectedEventScheduleV1::Ready => {
+                    let Some(plan) = plan else { return Ok((None, false)) };
+                    let events = plan
+                        .selected_tiles_v1()
+                        .into_iter()
+                        .map(|(row, tile)| {
+                            selected
+                                .session
+                                .requests
+                                .get(&PalwSelectedEventCoordinateV1 { row, tile })
+                                .and_then(|request| request.event.clone())
+                                .ok_or("TIR selected source lost authenticated accepted material".to_string())
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    pin = Some((constraint_scheduler::native_pin_v1(target, job, &tir.view, plan, &events, ladder)?, plan.witness));
+                    None
+                }
+                SelectedEventScheduleV1::Demand(demand) => Some(PalwConstraintStreamActionV1::NativeSelectedDemand { demand }),
+                SelectedEventScheduleV1::Collect { coordinate, demand_id } => {
+                    Some(PalwConstraintStreamActionV1::SelectedEventCollect { coordinate, demand_id })
+                }
+            };
+            if let Some(action) = action {
+                let demand_due = matches!(action, PalwConstraintStreamActionV1::NativeSelectedDemand { .. }).then(|| {
+                    selected.session.respond_until_daa.saturating_sub(selected.session.minimum_response_span_daa).saturating_sub(1)
+                });
+                let mut movement = PalwConstraintStreamMoveV1 {
+                    version: 1,
+                    claim,
+                    reserver: progress.reserver,
+                    reserved_daa: progress.reserved_daa,
+                    seed_id: selected.session.bundle_id,
+                    phase: PalwConstraintStreamPhaseV1::PrefixCourt,
+                    action,
+                    signature: Vec::new(),
+                };
+                movement.signature =
+                    self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no TIR owner signing key")?;
+                movement.check()?;
+                Self::fraud_filer_stage_queue_v1(
+                    book,
+                    claim,
+                    PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) },
+                    &progress,
+                    progress.now_daa,
+                    court_pending,
+                    court_due,
+                )?;
+                if let Some(due) = demand_due {
+                    court_due.entry((claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false)).and_modify(|held| *held = (*held).min(due));
+                }
+                return Ok((None, false));
+            }
+        }
+        let accepted = if progress.cursor.is_some() { session.palw_staged_owned_native_seed_v1((claim, progress.reserver))? } else { None };
+        let case = book.cases.get_mut(&claim).ok_or("TIR constraint pursuit disappeared")?;
+        case.constraint_stage_pending = true;
+        let worker = case.staged_constraint.get_or_insert_with(|| Arc::new(std::sync::Mutex::new(None))).clone();
+        let target = target.clone();
+        let job = job.clone();
+        let view = tir.view.clone();
+        let header = tir.header.clone();
+        let executor = target.executor_bond;
+        let now = progress.now_daa;
+        let worker_progress = progress.clone();
+        let decision = tokio::task::spawn_blocking(move || {
+            let mut worker = worker.lock().map_err(|_| "TIR constraint worker lock poisoned")?;
+            let build = || match (&accepted, &pin) {
+                (Some(accepted), _) => ConstraintSchedulerV1::reopen_native_v1(
+                    &target,
+                    &job,
+                    &view,
+                    accepted,
+                    table.clone(),
+                    &worker_progress,
+                    ladder,
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                ),
+                (None, Some((pin, witness))) => ConstraintSchedulerV1::open_native_v1(
+                    &target,
+                    &job,
+                    &view,
+                    &header,
+                    pin.clone(),
+                    *witness,
+                    table.clone(),
+                    &worker_progress,
+                    ladder,
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                ),
+                (None, None) => Err("TIR constraint has neither an accepted native seed nor an authenticated pin".to_string()),
+            };
+            if worker.is_none() {
+                *worker = Some(build()?);
+            }
+            match worker.as_mut().expect("built").poll(&worker_progress) {
+                Ok(decision) => Ok(decision),
+                Err(why) if why.contains("cursor") || why.contains("branch") => {
+                    *worker = None;
+                    *worker = Some(build()?);
+                    worker.as_mut().expect("rebuilt").poll(&worker_progress)
+                }
+                Err(why) => Err(why),
+            }
+        })
+        .await
+        .map_err(|e| format!("TIR constraint worker did not finish: {e}"))??;
+        let object = match decision {
+            ConstraintScheduleV1::Finished(reference) => {
+                court_pending
+                    .retain(|(c, round, responder, _)| (*c, *round, *responder) != (claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false));
+                let case = book.cases.get_mut(&claim).ok_or("TIR constraint pursuit disappeared")?;
+                case.constraint_stage_pending = false;
+                case.constraint_done = true;
+                let Some(reference) = reference else {
+                    return Ok((None, true));
+                };
+                let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
+                    claim,
+                    executor,
+                    kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::StagedCourt { reference },
+                    None,
+                    maximum,
+                )
+                .map_err(|e| e.to_string())?;
+                let filing = PalwConvictionFilingV1::of_offence(built.object, claim, file_by, PalwFilingOriginV1::Replay)
+                    .filter(|f| (f.offence_key, f.evidence_id) == (built.offence_id, built.evidence_id))
+                    .ok_or("TIR constraint staged reporter key mismatch")?;
+                return Ok((Some(filing), false));
+            }
+            ConstraintScheduleV1::NativeSeed(mut seed) => {
+                seed.signature =
+                    self.sign(&seed.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no TIR owner signing key")?;
+                seed.check(90_000)?;
+                PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed: Box::new(seed) }
+            }
+            ConstraintScheduleV1::Leaf(mut leaf) => {
+                leaf.signature =
+                    self.sign(&leaf.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no TIR owner signing key")?;
+                leaf.check()?;
+                PalwConsensusObjectV2::PublicCourtStreamLeafV1 { leaf: Box::new(leaf) }
+            }
+            ConstraintScheduleV1::Move(mut movement) => {
+                movement.signature =
+                    self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no TIR owner signing key")?;
+                movement.check()?;
+                PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) }
+            }
+            ConstraintScheduleV1::Seed(_) => return Err("a TIR scheduler never emits a legacy seed".into()),
+        };
+        Self::fraud_filer_stage_queue_v1(book, claim, object, &progress, now, court_pending, court_due)?;
+        Ok((None, false))
+    }
+
+    /// **A TIR claim's prefix-state stage** (behind `palw_staged_tir_route_v1`): the owner opens
+    /// the stage with a native `PrefixState` seed; the claim's literal custody then owes the
+    /// boundary leaves (the node's TIR prefix responders answer); after the custody clock the
+    /// owner collects; a completed slot that re-derives another state root than the job declared
+    /// is filed as a staged-court conviction.
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_tir_prefix_stage_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        tir: &FilerTirContextV1,
+        progress: kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        maximum: u64,
+        file_by: Option<u64>,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(Option<PalwConvictionFilingV1>, bool), String> {
+        use kaspa_consensus_core::{
+            palw_constraint_stream_carriage_v1::{
+                PALW_CONSTRAINT_STREAM_CONTEXT_V1, PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1,
+                PalwConstraintStreamNativeSeedV1, PalwNativeSeedFamilyV1,
+            },
+            palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
+            palw_staged_court_state_v1::{PalwStagedCertificateRefV1, PalwStagedOwnedCursorV1},
+        };
+        if progress.claim != claim || progress.reserver == target.executor_bond {
+            return Err("snapshot is not this outside verifier's accepted TIR claim/clock".into());
+        }
+        let object = match &progress.cursor {
+            None => {
+                if progress.now_daa >= progress.terms.open_until_daa {
+                    return Err("TIR prefix opening door is closed".into());
+                }
+                let named = kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(job).map_err(|e| e.to_string())?;
+                let mut seed = PalwConstraintStreamNativeSeedV1 {
+                    version: 1,
+                    claim,
+                    reserver: progress.reserver,
+                    reserved_daa: progress.reserved_daa,
+                    view_identity: kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_native_view_identity_v1(&tir.header),
+                    vocab_size: tir.view.vocab_size,
+                    job: None,
+                    family: PalwNativeSeedFamilyV1::PrefixState { prefix_tokens: named.prefix_tokens },
+                    signature: Vec::new(),
+                };
+                seed.signature =
+                    self.sign(&seed.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no TIR prefix owner signing key")?;
+                seed.check(90_000)?;
+                PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed: Box::new(seed) }
+            }
+            Some(PalwStagedOwnedCursorV1::TirPrefix { completed: Some(true), .. }) => {
+                let reference = PalwStagedCertificateRefV1 {
+                    claim,
+                    reserver: progress.reserver,
+                    reserved_daa: progress.reserved_daa,
+                    seed_id: progress.seed_id.ok_or("TIR prefix fault lost its accepted seed")?,
+                };
+                let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
+                    claim,
+                    target.executor_bond,
+                    kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::StagedCourt { reference },
+                    None,
+                    maximum,
+                )
+                .map_err(|e| e.to_string())?;
+                let filing = PalwConvictionFilingV1::of_offence(built.object, claim, file_by, PalwFilingOriginV1::Replay)
+                    .filter(|f| (f.offence_key, f.evidence_id) == (built.offence_id, built.evidence_id))
+                    .ok_or("TIR prefix staged reporter key mismatch")?;
+                return Ok((Some(filing), false));
+            }
+            Some(PalwStagedOwnedCursorV1::TirPrefix { completed: Some(false), .. }) => return Ok((None, true)),
+            Some(PalwStagedOwnedCursorV1::TirPrefix { collected: false, .. })
+                if progress.now_daa >= progress.terms.stream_until_daa && progress.now_daa < progress.terms.collect_until_daa =>
+            {
+                let mut movement = PalwConstraintStreamMoveV1 {
+                    version: 1,
+                    claim,
+                    reserver: progress.reserver,
+                    reserved_daa: progress.reserved_daa,
+                    seed_id: progress.seed_id.ok_or("TIR prefix collection lost its accepted seed")?,
+                    phase: PalwConstraintStreamPhaseV1::PrefixCourt,
+                    action: PalwConstraintStreamActionV1::NativeTirPrefixCollect,
+                    signature: Vec::new(),
+                };
+                movement.signature =
+                    self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no TIR prefix owner signing key")?;
+                movement.check()?;
+                PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) }
+            }
+            // The custody is streaming (or was collected without a completed slot): nothing to send.
+            Some(PalwStagedOwnedCursorV1::TirPrefix { .. }) => return Ok((None, false)),
+            Some(_) => return Err("another immutable family owns this TIR prefix stage".into()),
+        };
+        let _ = session;
+        Self::fraud_filer_stage_queue_v1(book, claim, object, &progress, progress.now_daa, court_pending, court_due)?;
+        Ok((None, false))
+    }
+
+    /// **A TIR claim's tokenizer stage** (behind `palw_staged_tir_route_v1`): the legacy tokenizer
+    /// worker over the natively derived view, signing a native seed.
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_tir_tokenizer_stage_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        tir: &FilerTirContextV1,
+        progress: kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        maximum: u64,
+        file_by: Option<u64>,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(Option<PalwConvictionFilingV1>, bool), String> {
+        use kaspa_consensus_core::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_CONTEXT_V1;
+        use tokenizer_scheduler::{TokenizerScheduleV1, TokenizerSchedulerV1};
+        if progress.claim != claim || progress.reserver == target.executor_bond {
+            return Err("snapshot is not this outside verifier's accepted TIR claim/clock".into());
+        }
+        let current_daa = progress.now_daa;
+        let deadline = if progress.cursor.is_none() { progress.terms.open_until_daa } else { progress.terms.collect_until_daa };
+        if progress.now_daa >= deadline {
+            return Err("prospective owned TIR tokenizer court clock is closed".into());
+        }
+        let worker = book
+            .cases
+            .get_mut(&claim)
+            .ok_or("TIR pursuit disappeared")?
+            .staged_tokenizer
+            .get_or_insert_with(|| Arc::new(std::sync::Mutex::new(None)))
+            .clone();
+        let backends = self.backends();
+        let chain_classes = self.config.chain_classes;
+        let held_session = session.clone();
+        let executor_bond = target.executor_bond;
+        let target = target.clone();
+        let job = job.clone();
+        let view = tir.view.clone();
+        let header = tir.header.clone();
+        let worker_progress = progress.clone();
+        let original_seed = if matches!(
+            progress.cursor,
+            Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedCursorV1::Tokenizer { .. })
+        ) {
+            session.palw_staged_owned_native_seed_v1((claim, progress.reserver))?.map(|context| *context.seed)
+        } else {
+            None
+        };
+        let decision = tokio::task::spawn_blocking(move || -> Result<TokenizerScheduleV1, String> {
+            let mut worker = worker.lock().map_err(|_| "TIR tokenizer worker lock poisoned")?;
+            let build = || -> Result<TokenizerSchedulerV1, String> {
+                let path = backends
+                    .held_tokenizer_path_or_chain_v1(target.class_id, target.artifact_root, |id| {
+                        if chain_classes { held_session.palw_registered_class_carriage_v1(id) } else { None }
+                    })
+                    .ok_or("outside verifier does not hold registered tokenizer")?;
+                let original = tokenizer_scheduler::TokenizerOriginalV1::Tir { view: &view, header: &header };
+                let table = tokenizer_scheduler::registered_table_of_v1(&target, original, &job)?;
+                TokenizerSchedulerV1::open_native_v1(
+                    &path,
+                    &target,
+                    &view,
+                    &header,
+                    &job,
+                    table,
+                    &worker_progress,
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                    original_seed.as_ref(),
+                )
+            };
+            if worker.is_none() {
+                *worker = Some(build()?);
+            }
+            match worker.as_mut().expect("built").poll(&worker_progress) {
+                Ok(decision) => Ok(decision),
+                Err(why) if why.contains("cursor") || why.contains("branch") => {
+                    *worker = None;
+                    *worker = Some(build()?);
+                    worker.as_mut().expect("rebuilt").poll(&worker_progress)
+                }
+                Err(why) => Err(why),
+            }
+        })
+        .await
+        .map_err(|e| format!("TIR tokenizer blocking worker failed: {e}"))??;
+        let object = match decision {
+            TokenizerScheduleV1::Finished(reference) => {
+                court_pending.retain(|(held, round, responder, _)| {
+                    (*held, *round, *responder) != (claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false)
+                });
+                book.cases.get_mut(&claim).expect("pursued").staged_tokenizer_sent = None;
+                let Some(reference) = reference else {
+                    return Ok((None, true));
+                };
+                let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
+                    claim,
+                    executor_bond,
+                    kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::StagedCourt { reference },
+                    None,
+                    maximum,
+                )
+                .map_err(|e| e.to_string())?;
+                let filing = PalwConvictionFilingV1::of_offence(built.object, claim, file_by, PalwFilingOriginV1::Replay)
+                    .filter(|f| (f.offence_key, f.evidence_id) == (built.offence_id, built.evidence_id))
+                    .ok_or("TIR staged reporter key mismatch")?;
+                return Ok((Some(filing), false));
+            }
+            TokenizerScheduleV1::NativeSeed(mut seed) => {
+                seed.signature = self.sign(&seed.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no staged signing key")?;
+                seed.check(90_000)?;
+                PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed: Box::new(seed) }
+            }
+            TokenizerScheduleV1::Move(mut movement) => {
+                movement.signature =
+                    self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no staged signing key")?;
+                movement.check()?;
+                PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) }
+            }
+            TokenizerScheduleV1::Seed(_) => return Err("a TIR tokenizer scheduler never emits a legacy seed".into()),
+        };
+        Self::fraud_filer_stage_queue_v1(book, claim, object, &progress, current_daa, court_pending, court_due)?;
+        Ok((None, false))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_selected_stage_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        binding: &PalwStepBindingV2,
+        progress: &kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<
+        Option<(
+            Vec<kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1>,
+            crate::palw_memory_ledger::PalwMemoryReservationV1,
+        )>,
+        String,
+    > {
+        use kaspa_consensus_core::{
+            palw_constraint_stream_carriage_v1::{
+                PALW_CONSTRAINT_STREAM_CONTEXT_V1, PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1,
+            },
+            palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
+            palw_selected_event_source_v1::{PalwSelectedEventBindingV1, PalwSelectedEventCoordinateV1},
+        };
+        use selected_event_scheduler::SelectedEventScheduleV1;
+        let bytes = progress
+            .bundle
+            .as_ref()
+            .ok_or("selected source has no prepaid owner bundle")?
+            .plan
+            .terms
+            .plan
+            .resident_ram_bytes
+            .checked_mul(2)
+            .ok_or("selected snapshot read memory overflow")?;
+        let guard = crate::palw_memory_ledger::host_ledger_v1()
+            .reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: "public-selected-source-read",
+                    class_id: target.class_id,
+                    job: claim,
+                },
+                bytes,
+            )
+            .map_err(|e| e.to_string())?;
+        let selected = session
+            .palw_staged_selected_events_v1((claim, progress.reserver))?
+            .ok_or("prospective original selected source is unavailable")?;
+        // Same tolerance as the Flat source: newer accepted tip, identical literal identity/clocks.
+        if selected.now_daa < progress.now_daa
+            || (selected.session.claim, selected.session.owner, selected.session.reserved_daa, selected.session.bundle_id)
+                != (claim, progress.reserver, progress.reserved_daa, progress.bundle.as_ref().expect("checked").bundle_id)
+            || (selected.session.respond_until_daa, selected.session.collect_until_daa)
+                != (
+                    progress.bundle.as_ref().expect("checked").plan.preseed_source_until_v1(
+                        kaspa_consensus_core::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint,
+                        kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+                    )?,
+                    progress.terms.collect_until_daa,
+                )
+        {
+            return Err("selected source changes original owner/bundle/child clock or accepted snapshot".into());
+        }
+        if selected.context.as_ref().is_some_and(|context| context.binding.as_ref() != binding) {
+            return Err("selected source context differs from original immutable binding".into());
+        }
+        if selected.session.minimum_response_span_daa
+            != kaspa_consensus_core::palw_selected_event_source_v1::selected_event_response_span_v1(
+                selected.session.custodians.len() as u64,
+                kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+            )?
+        {
+            return Err("selected source changes immutable response preparation/inclusion span".into());
+        }
+        let bootstrap = PalwSelectedEventCoordinateV1 { row: 0, tile: 0 };
+        if book.cases.get(&claim).and_then(|case| case.constraint_plan).is_none()
+            && let Some(event) = selected.session.requests.get(&bootstrap).and_then(|request| request.event.as_ref())
+        {
+            let context = selected.context.as_ref().ok_or("selected bootstrap lost original accepted context")?;
+            let case = book.cases.get(&claim).ok_or("selected pursuit disappeared")?;
+            let own = match &case.verdict {
+                PalwFraudFilerVerdictV1::Mismatch(run) => run.own_output_ids.as_slice(),
+                _ => &[],
+            };
+            let replayed =
+                case.arithmetic_matched || matches!(&case.verdict,PalwFraudFilerVerdictV1::Mismatch(run) if run.fp_job.is_some());
+            let root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(&context.job)
+                .ok_or("selected bootstrap loses immutable Constraint table")?;
+            let table = crate::palw_public_token_table::public_table_v1(&root, &context.job.tokenizer_id)
+                .ok_or("selected exact table unavailable")?;
+            let nominee = constraint_scheduler::nominate_authenticated_ids_v1(
+                target,
+                &context.job,
+                binding,
+                &event.generated_token_ids,
+                own,
+                table,
+                &crate::palw_memory_ledger::host_ledger_v1(),
+            )?
+            .or_else(
+                    || {
+                        (replayed && !event.generated_token_ids.is_empty()).then(|| constraint::TiledPlanV1 {
+                            position: 0,
+                            committed: event.generated_token_ids[0],
+                            witness: None,
+                            beat_lane: None,
+                        })
+                    },
+                );
+            book.cases.get_mut(&claim).ok_or("selected pursuit disappeared")?.constraint_plan = nominee;
+        }
+        let plan = book.cases.get(&claim).and_then(|case| case.constraint_plan);
+        let mut coordinates = vec![bootstrap];
+        if let Some(plan) = plan {
+            for (row, tile) in plan.selected_tiles_v1() {
+                let coordinate = PalwSelectedEventCoordinateV1 { row, tile };
+                if !coordinates.contains(&coordinate) {
+                    coordinates.push(coordinate)
+                }
+            }
+        }
+        let action = match selected_event_scheduler::request_v1(&selected.session, &coordinates, selected.now_daa)? {
+            SelectedEventScheduleV1::Wait => return Ok(None),
+            SelectedEventScheduleV1::Ready => {
+                let Some(plan) = plan else { return Ok(None) };
+                let context = selected.context.as_ref().ok_or("selected ready source has no accepted original context")?;
+                let selected_coordinates = plan
+                    .selected_tiles_v1()
+                    .into_iter()
+                    .map(|(row, tile)| PalwSelectedEventCoordinateV1 { row, tile })
+                    .collect::<Vec<_>>();
+                let events = selected_coordinates
+                    .iter()
+                    .map(|coordinate| {
+                        selected
+                            .session
+                            .requests
+                            .get(coordinate)
+                            .and_then(|request| request.event.clone())
+                            .map(|event| event.into_disclosure_v1(*context.binding.clone()))
+                            .ok_or("selected source lost authenticated accepted material".to_string())
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                return Ok(Some((events, guard)));
+            }
+            SelectedEventScheduleV1::Demand(demand) => PalwConstraintStreamActionV1::SelectedEventDemand {
+                binding: PalwSelectedEventBindingV1::from_binding_v1(binding)?,
+                demand,
+            },
+            SelectedEventScheduleV1::Collect { coordinate, demand_id } => {
+                PalwConstraintStreamActionV1::SelectedEventCollect { coordinate, demand_id }
+            }
+        };
+        let demand_due = matches!(action, PalwConstraintStreamActionV1::SelectedEventDemand { .. })
+            .then(|| selected.session.respond_until_daa.saturating_sub(selected.session.minimum_response_span_daa).saturating_sub(1));
+        let mut movement = PalwConstraintStreamMoveV1 {
+            version: 1,
+            claim,
+            reserver: progress.reserver,
+            reserved_daa: progress.reserved_daa,
+            seed_id: selected.session.bundle_id,
+            phase: PalwConstraintStreamPhaseV1::PrefixCourt,
+            action,
+            signature: Vec::new(),
+        };
+        movement.signature =
+            self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no selected owner signing key")?;
+        movement.check()?;
+        Self::fraud_filer_stage_queue_v1(
+            book,
+            claim,
+            PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) },
+            progress,
+            progress.now_daa,
+            court_pending,
+            court_due,
+        )?;
+        if let Some(due) = demand_due {
+            court_due.entry((claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false)).and_modify(|held| *held = (*held).min(due));
+        }
+        Ok(None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_bundle_stage_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        binding: Option<&PalwStepBindingV2>,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        tir: Option<&FilerTirContextV1>,
+        progress: kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        maximum: u64,
+        file_by: Option<u64>,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(Option<PalwConvictionFilingV1>, bool), String> {
+        use bundle_scheduler::BundleScheduleV1;
+        use kaspa_consensus_core::{
+            palw_constraint_stream_carriage_v1::{
+                PALW_CONSTRAINT_STREAM_CONTEXT_V1, PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1,
+            },
+            palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
+            palw_staged_bundle_v1::PalwStagedFamilyV1,
+        };
+        book.cases.get_mut(&claim).ok_or("bundle pursuit disappeared")?.staged_bundle_pending = true;
+        let path = || {
+            self.backends()
+                .held_tokenizer_path_or_chain_v1(target.class_id, target.artifact_root, |id| {
+                    if self.config.chain_classes { session.palw_registered_class_carriage_v1(id) } else { None }
+                })
+                .ok_or("outside verifier does not hold immutable registered tokenizer operand".to_string())
+        };
+        let quote = if progress.seed_id.is_none() {
+            let required = progress
+                .bundle
+                .as_ref()
+                .ok_or("unopened claim has no required-family contract")?
+                .plan
+                .stages
+                .iter()
+                .any(|stage| stage.family == PalwStagedFamilyV1::Tokenizer);
+            let cap = if required { Some(std::fs::metadata(path()?).map_err(|e| e.to_string())?.len()) } else { None };
+            session.palw_staged_bundle_plan_v1(claim, cap)?
+        } else {
+            None
+        };
+        let decision =
+            bundle_scheduler::request_v1(&progress, quote.as_ref())?.ok_or("claim has no prospective required-family bundle")?;
+        let mut movement = match decision {
+            BundleScheduleV1::Complete => {
+                let case = book.cases.get_mut(&claim).ok_or("bundle pursuit disappeared")?;
+                case.staged_bundle_pending = false;
+                for stage in &progress.bundle.as_ref().ok_or("completed bundle disappeared")?.plan.stages {
+                    match stage.family {
+                        PalwStagedFamilyV1::PublicPrefix => case.prefix_complete = true,
+                        PalwStagedFamilyV1::Tokenizer => case.rendering_done = true,
+                        PalwStagedFamilyV1::Constraint => case.constraint_done = true,
+                    }
+                }
+                return Ok((None, true));
+            }
+            BundleScheduleV1::Fault(reference) => {
+                let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
+                    claim,
+                    target.executor_bond,
+                    kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::StagedCourt { reference },
+                    None,
+                    maximum,
+                )
+                .map_err(|e| e.to_string())?;
+                let filing = PalwConvictionFilingV1::of_offence(built.object, claim, file_by, PalwFilingOriginV1::Replay)
+                    .filter(|f| (f.offence_key, f.evidence_id) == (built.offence_id, built.evidence_id))
+                    .ok_or("bundle inventory reporter key mismatch")?;
+                return Ok((Some(filing), false));
+            }
+            BundleScheduleV1::Family { family, progress: child } => {
+                if let Some(tir) = tir {
+                    let result = match family {
+                        PalwStagedFamilyV1::Constraint => {
+                            self.fraud_filer_tir_constraint_stage_v1(
+                                session,
+                                book,
+                                claim,
+                                target,
+                                job,
+                                tir,
+                                child,
+                                maximum,
+                                file_by,
+                                court_pending,
+                                court_due,
+                            )
+                            .await?
+                        }
+                        PalwStagedFamilyV1::Tokenizer => {
+                            self.fraud_filer_tir_tokenizer_stage_v1(
+                                session,
+                                book,
+                                claim,
+                                target,
+                                job,
+                                tir,
+                                child,
+                                maximum,
+                                file_by,
+                                court_pending,
+                                court_due,
+                            )
+                            .await?
+                        }
+                        PalwStagedFamilyV1::PublicPrefix => {
+                            self.fraud_filer_tir_prefix_stage_v1(session, book, claim, target, job, tir, child, maximum, file_by, court_pending, court_due)
+                                .await?
+                        }
+                    };
+                    return Ok((result.0, false));
+                }
+                let binding = binding.ok_or("a legacy family stage needs its resolved original binding")?;
+                let result = match family {
+                    PalwStagedFamilyV1::PublicPrefix => {
+                        self.fraud_filer_prefix_stage_v1(
+                            session,
+                            book,
+                            claim,
+                            target,
+                            binding,
+                            job,
+                            child,
+                            maximum,
+                            file_by,
+                            court_pending,
+                            court_due,
+                        )
+                        .await?
+                    }
+                    PalwStagedFamilyV1::Tokenizer => {
+                        self.fraud_filer_tokenizer_stage_v1(
+                            session,
+                            book,
+                            claim,
+                            target,
+                            binding,
+                            job,
+                            child,
+                            maximum,
+                            file_by,
+                            progress.now_daa,
+                            court_pending,
+                            court_due,
+                        )
+                        .await?
+                    }
+                    PalwStagedFamilyV1::Constraint => {
+                        // A Float32 class's source is its v2 event tree, whatever its scheme field says
+                        // (greedy only, behind `palw_staged_float_constraint_v1`; the native quote refused the rest).
+                        let float_lane = binding.shape_profile.lane == kaspa_consensus_core::palw_step::PalwStepLaneV1::Float32;
+                        let flat_scheme = !float_lane
+                            && binding.shape_profile.logits_scheme_id
+                                == kaspa_consensus_core::palw_step_refute::flat_logits_scheme_id_v1();
+                        let float = if child.cursor.is_none() && float_lane {
+                            let Some(float) = self
+                                .fraud_filer_float_stage_v1(
+                                    session,
+                                    book,
+                                    claim,
+                                    target,
+                                    binding,
+                                    job,
+                                    &child,
+                                    court_pending,
+                                    court_due,
+                                )
+                                .await?
+                            else {
+                                return Ok((None, false));
+                            };
+                            Some(float)
+                        } else {
+                            None
+                        };
+                        let flat = if child.cursor.is_none() && flat_scheme {
+                            let Some(flat) = self
+                                .fraud_filer_flat_stage_v1(
+                                    session,
+                                    book,
+                                    claim,
+                                    target,
+                                    binding,
+                                    job,
+                                    &child,
+                                    court_pending,
+                                    court_due,
+                                )
+                                .await?
+                            else {
+                                return Ok((None, false));
+                            };
+                            Some(flat)
+                        } else {
+                            None
+                        };
+                        let selected = if child.cursor.is_none() && !flat_scheme && !float_lane {
+                            let Some(selected) = self
+                                .fraud_filer_selected_stage_v1(session, book, claim, target, binding, &child, court_pending, court_due)
+                                .await?
+                            else {
+                                return Ok((None, false));
+                            };
+                            Some(selected)
+                        } else {
+                            None
+                        };
+                        let seed =
+                            if child.cursor.is_some() { session.palw_staged_owned_seed_v1((claim, progress.reserver))? } else { None };
+                        let reopened_flat = match seed.as_ref().and_then(|seed| seed.auxiliary.as_ref()) {
+                            Some(kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FlatConstraint {
+                                source_id, answerer,
+                            }) => Some((
+                                constraint_scheduler::StreamedPinV1::Flat(
+                                    session.palw_staged_flat_pin_v1((claim, progress.reserver), *source_id, *answerer)?
+                                        .ok_or("accepted Flat semantic seed lost its native EOF pin")?,
+                                ),
+                                *source_id, *answerer,
+                            )),
+                            Some(kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FloatConstraint {
+                                source_id, answerer,
+                            }) => Some((
+                                constraint_scheduler::StreamedPinV1::Float(
+                                    session.palw_staged_float_pin_v1((claim, progress.reserver), *source_id, *answerer)?
+                                        .ok_or("accepted Float32 semantic seed lost its authenticated row pin")?,
+                                ),
+                                *source_id, *answerer,
+                            )),
+                            _ => None,
+                        };
+                        let flat_original = if flat_scheme || float_lane {
+                            Some(
+                                session
+                                    .palw_staged_original_commitment_v1(claim)?
+                                    .ok_or("Flat actor lost its native original commitment")?,
+                            )
+                        } else {
+                            None
+                        };
+                        self.fraud_filer_constraint_stage_v1(
+                            book,
+                            claim,
+                            target,
+                            binding,
+                            job,
+                            selected.as_ref().map(|(events, _)| events.clone()),
+                            flat.as_ref()
+                                .map(|(pin, source, signer, _)| (constraint_scheduler::StreamedPinV1::Flat(pin.clone()), *source, *signer))
+                                .or(float.as_ref().map(|(pin, source, signer, _)| {
+                                    (constraint_scheduler::StreamedPinV1::Float(pin.clone()), *source, *signer)
+                                }))
+                                .or(reopened_flat),
+                            flat_original,
+                            seed,
+                            child,
+                            maximum,
+                            file_by,
+                            court_pending,
+                            court_due,
+                        )
+                        .await?
+                    }
+                };
+                // A child's honest result is an activation prerequisite, not bundle completion.
+                return Ok((result.0, false));
+            }
+            BundleScheduleV1::Control(movement) => movement,
+            BundleScheduleV1::Inventory { offset, maximum: cap } => {
+                use std::io::{Read, Seek, SeekFrom};
+                let path = path()?;
+                let reservation = crate::palw_memory_ledger::host_ledger_v1()
+                    .reserve(
+                        crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                            role: "public-bundle-inventory",
+                            class_id: target.class_id,
+                            job: claim,
+                        },
+                        131_072,
+                    )
+                    .map_err(|e| e.to_string())?;
+                let action = tokio::task::spawn_blocking(move || -> Result<PalwConstraintStreamActionV1, String> {
+                    let _reservation = reservation;
+                    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+                    let length = file.metadata().map_err(|e| e.to_string())?.len();
+                    if length > cap || offset > length {
+                        return Err("held tokenizer exceeds immutable actual operand cap/offset".into());
+                    }
+                    if offset == length {
+                        return Ok(PalwConstraintStreamActionV1::InventoryFinish);
+                    }
+                    file.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+                    let mut bytes = vec![0u8; (length - offset).min(65_536) as usize];
+                    file.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+                    Ok(PalwConstraintStreamActionV1::InventoryPart { offset, bytes })
+                })
+                .await
+                .map_err(|e| format!("bundle inventory worker failed: {e}"))??;
+                PalwConstraintStreamMoveV1 {
+                    version: 1,
+                    claim,
+                    reserver: progress.reserver,
+                    reserved_daa: progress.reserved_daa,
+                    seed_id: progress.bundle.as_ref().ok_or("inventory bundle disappeared")?.bundle_id,
+                    phase: PalwConstraintStreamPhaseV1::PrefixCourt,
+                    action,
+                    signature: Vec::new(),
+                }
+            }
+        };
+        movement.signature =
+            self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no bundle owner signing key")?;
+        movement.check()?;
+        Self::fraud_filer_stage_queue_v1(
+            book,
+            claim,
+            PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) },
+            &progress,
+            progress.now_daa,
+            court_pending,
+            court_due,
+        )?;
+        Ok((None, false))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_paid_stage_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        owner: PalwBondKeyV2,
+        target: Option<&kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1>,
+        progress: kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(Option<PalwConvictionFilingV1>, bool), String> {
+        use kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedCursorV1;
+        if !palw_fraud_filer_paid_progress_v1(&progress, claim, owner) {
+            return Err("retained paid authority lacks original accepted owner/seed/clock".into());
+        }
+        let target = target.ok_or("paid semantic target is unavailable")?;
+        // A TIR claim has no legacy binding: its stages run over the natively derived view
+        // (behind `palw_staged_tir_route_v1`; every stage of a TIR claim is bundled).
+        if let Some((view, header)) = session.palw_staged_tir_view_v1(claim, self.class_step_ladder(target.class_id))? {
+            let original =
+                session.palw_staged_original_commitment_v1(claim)?.ok_or("TIR paid stage lost its native original commitment")?;
+            let bundle = progress.bundle.as_ref().ok_or("a TIR claim's stages are bundled")?;
+            let file_by = Some(bundle.plan.terms.collect_until_daa.saturating_sub(2));
+            let maximum = self
+                .config
+                .court
+                .max_close_bytes()
+                .min(kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES);
+            let tir = FilerTirContextV1 { view, header };
+            return self
+                .fraud_filer_bundle_stage_v1(
+                    session,
+                    book,
+                    claim,
+                    target,
+                    None,
+                    &original.job,
+                    Some(&tir),
+                    progress,
+                    maximum,
+                    file_by,
+                    court_pending,
+                    court_due,
+                )
+                .await;
+        }
+        let case = book.cases.get(&claim).ok_or("paid pursuit disappeared")?;
+        let held = case.binding.clone().zip(case.public_fp_job_v1().cloned());
+        let (binding, job) = match held {
+            Some(context) => context,
+            None => session
+                .palw_staged_owned_context_v1((claim, owner))?
+                .ok_or("paid semantic binding/job needs authenticated public seed context")?,
+        };
+        let maximum = self
+            .config
+            .court
+            .max_close_bytes()
+            .min(kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES);
+        let file_by = Some(progress.terms.collect_until_daa.saturating_sub(2));
+        if progress.bundle.is_some() {
+            let file_by = Some(progress.bundle.as_ref().expect("present").plan.terms.collect_until_daa.saturating_sub(2));
+            return self
+                .fraud_filer_bundle_stage_v1(
+                    session,
+                    book,
+                    claim,
+                    target,
+                    Some(&binding),
+                    &job,
+                    None,
+                    progress,
+                    maximum,
+                    file_by,
+                    court_pending,
+                    court_due,
+                )
+                .await;
+        }
+        let now = progress.now_daa;
+        let prefix =
+            matches!(progress.cursor, Some(PalwStagedOwnedCursorV1::PublicPrefix { .. } | PalwStagedOwnedCursorV1::Prefix { .. }));
+        let constraint = matches!(progress.cursor, Some(PalwStagedOwnedCursorV1::Constraint { .. }));
+        let (filing, honest) = match progress.cursor.as_ref().ok_or("paid stage has no accepted cursor")? {
+            // A TIR prefix stage is always bundled and was dispatched through the TIR branch above.
+            PalwStagedOwnedCursorV1::TirPrefix { .. } => return Err("a TIR prefix stage runs only inside its TIR bundle".into()),
+            PalwStagedOwnedCursorV1::PublicPrefix { .. } | PalwStagedOwnedCursorV1::Prefix { .. } => {
+                self.fraud_filer_prefix_stage_v1(
+                    session,
+                    book,
+                    claim,
+                    target,
+                    &binding,
+                    &job,
+                    progress,
+                    maximum,
+                    file_by,
+                    court_pending,
+                    court_due,
+                )
+                .await?
+            }
+            PalwStagedOwnedCursorV1::Tokenizer { .. } => {
+                self.fraud_filer_tokenizer_stage_v1(
+                    session,
+                    book,
+                    claim,
+                    target,
+                    &binding,
+                    &job,
+                    progress,
+                    maximum,
+                    file_by,
+                    now,
+                    court_pending,
+                    court_due,
+                )
+                .await?
+            }
+            PalwStagedOwnedCursorV1::Constraint { .. } => {
+                let seed =
+                    session.palw_staged_owned_seed_v1((claim, owner))?.ok_or("paid constraint original signed seed is unavailable")?;
+                self.fraud_filer_constraint_stage_v1(
+                    book,
+                    claim,
+                    target,
+                    &binding,
+                    &job,
+                    None,
+                    None,
+                    None,
+                    Some(seed),
+                    progress,
+                    maximum,
+                    file_by,
+                    court_pending,
+                    court_due,
+                )
+                .await?
+            }
+        };
+        if honest {
+            // One typed honest result does not erase the sibling DA outcome or establish
+            // completion of every required family in the immutable active plan.
+            debug!("[{PALW_PANEL}] claim {claim}: retained typed court finished honest; other public obligations are unchanged");
+            let case = book.cases.get_mut(&claim).ok_or("paid pursuit disappeared")?;
+            if prefix {
+                case.prefix_complete = true;
+            } else if constraint {
+                case.constraint_done = true;
+            } else {
+                case.rendering_done = true;
+            }
+        }
+        Ok((filing, honest))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_prefix_stage_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        binding: &PalwStepBindingV2,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        progress: kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        maximum: u64,
+        file_by: Option<u64>,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(Option<PalwConvictionFilingV1>, bool), String> {
+        use super::public_prefix::PrefixScheduleV1;
+        use kaspa_consensus_core::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_CONTEXT_V1;
+        use kaspa_consensus_core::palw_prefix_family_court_v1::PalwPrefixFamilyCursorV1;
+        use kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedCursorV1;
+        let maximum_leaves = self.class_step_ladder(target.class_id);
+        let copy_bytes = (borsh::object_length(&(binding, job, &target.registered_semantics)).map_err(|e| e.to_string())? as u64)
+            .checked_mul(8)
+            .and_then(|n| n.checked_add(131_072))
+            .ok_or("public prefix worker copy bound overflow")?;
+        let copies = crate::palw_memory_ledger::host_ledger_v1()
+            .reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: "public-prefix-worker-copies",
+                    class_id: target.class_id,
+                    job: claim,
+                },
+                copy_bytes,
+            )
+            .map_err(|e| e.to_string())?;
+        let needs_parameters = matches!(
+            &progress.cursor,
+            Some(PalwStagedOwnedCursorV1::PublicPrefix { cursor: PalwPrefixFamilyCursorV1::HeadParameters { .. }, .. })
+        );
+        let holding = if needs_parameters {
+            let need = self
+                .backends()
+                .role_memory_need_or_chain_v1(target.class_id, target.artifact_root, super::FULL_SEAT_V1, |id| {
+                    self.chain_carriage_v1(session, id)
+                })
+                .ok_or("public prefix own artifact resource profile unavailable")?;
+            let ticket = self.reserve_replay_v1("public-prefix-own-parameters", &need, target.class_id, claim)?;
+            Some((self.resolve_backend(session, target.class_id, target.artifact_root)?, ticket))
+        } else {
+            None
+        };
+        let executor_bond = target.executor_bond;
+        let current_daa = progress.now_daa;
+        let worker_progress = progress.clone();
+        let page_session = session.clone();
+        let history_flow_context = self.flow_context.clone();
+        let page_directory = self.config.retention_dir.join("public-prefix-owned");
+        let history_directory = page_directory.clone();
+        let target = target.clone();
+        let binding = binding.clone();
+        let job = job.clone();
+        let decision = tokio::task::spawn_blocking(move || {
+            let _copies = copies;
+            let backend = holding.as_ref().map(|(backend, _ticket)| backend.as_ref());
+            super::public_prefix::request_with_pages_v1(
+                &target,
+                &binding,
+                &job,
+                &worker_progress,
+                maximum_leaves,
+                backend,
+                &page_directory,
+                |opening| {
+                    page_session.palw_prefix_page_write_v1(
+                        worker_progress.snapshot_block,
+                        (claim, worker_progress.reserver),
+                        worker_progress.seed_id.ok_or("public prefix page write lacks accepted seed")?,
+                        opening,
+                    )
+                },
+                || {
+                    page_session.with_consensus_api_v1(|consensus| {
+                        super::public_prefix::recover_pages_with_public_pull_v1(
+                            consensus,
+                            &target,
+                            &binding,
+                            &job,
+                            &worker_progress,
+                            maximum_leaves,
+                            &page_directory,
+                            |request| history_flow_context.palw_prefix_history().poll_v1(request),
+                        )
+                    })
+                },
+            )
+        })
+        .await
+        .map_err(|e| format!("public prefix blocking worker failed: {e}"))??;
+        let object = match decision {
+            PrefixScheduleV1::Wait => {
+                // Every local, archived and peer source of a rooted link may be gone. Only then
+                // is the paid native backwards recovery opened; an already opened accepted
+                // session is always continued (restart loses the local hint, not the session).
+                if let (Some(seed), Some(_)) = (progress.seed_id, progress.bundle.as_ref()) {
+                    let native_needed = super::public_prefix::needs_native_recovery_v1(&history_directory, seed);
+                    return self.fraud_filer_history_recovery_v1(
+                        session,
+                        book,
+                        claim,
+                        &progress,
+                        seed,
+                        native_needed,
+                        court_pending,
+                        court_due,
+                    );
+                }
+                return Ok((None, false));
+            }
+            PrefixScheduleV1::Finished(reference) => {
+                court_pending.retain(|(held, round, responder, _)| {
+                    (*held, *round, *responder) != (claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false)
+                });
+                book.cases.get_mut(&claim).ok_or("pursuit disappeared")?.staged_tokenizer_sent = None;
+                let Some(reference) = reference else { return Ok((None, true)) };
+                let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
+                    claim,
+                    executor_bond,
+                    kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::StagedCourt { reference },
+                    None,
+                    maximum,
+                )
+                .map_err(|e| e.to_string())?;
+                let filing = PalwConvictionFilingV1::of_offence(built.object, claim, file_by, PalwFilingOriginV1::Replay)
+                    .filter(|f| (f.offence_key, f.evidence_id) == (built.offence_id, built.evidence_id))
+                    .ok_or("public prefix staged reporter key mismatch")?;
+                return Ok((Some(filing), false));
+            }
+            PrefixScheduleV1::Seed(mut seed) => {
+                seed.signature =
+                    self.sign(&seed.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no staged signing key")?;
+                seed.check(100_000)?;
+                PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed: Box::new(seed) }
+            }
+            PrefixScheduleV1::Move(mut movement) => {
+                movement.signature =
+                    self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no staged signing key")?;
+                movement.check()?;
+                PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) }
+            }
+        };
+        Self::fraud_filer_stage_queue_v1(book, claim, object, &progress, current_daa, court_pending, court_due)?;
+        Ok((None, false))
+    }
+
+    /// The outside owner's half of paid public history recovery: open the native backwards
+    /// traversal only when the rooted page replay found no local, archived or peer copy, then
+    /// follow the accepted session's own Demand/Collect clocks. Recovered records are archived
+    /// natively, so the ordinary page replay reads them on a later poll. A native default is
+    /// the exact once-only DA charge, never a computation conviction.
+    #[allow(clippy::too_many_arguments)]
+    fn fraud_filer_history_recovery_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        progress: &kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        seed: Hash64,
+        native_needed: bool,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(Option<PalwConvictionFilingV1>, bool), String> {
+        use super::history_recovery_actor::{HistoryOwnerDecisionV1, owner_request_v1};
+        use kaspa_consensus_core::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_CONTEXT_V1;
+        let Some(history) = session.palw_staged_history_recovery_v1((claim, progress.reserver), seed)? else {
+            return Ok((None, false));
+        };
+        // A newer accepted tip than the owner's cursor read is fine: the session's own native
+        // clocks decide. An older one is not decided against.
+        if history.now_daa < progress.now_daa {
+            return Ok((None, false));
+        }
+        if history.session.is_none() && !native_needed {
+            return Ok((None, false));
+        }
+        match owner_request_v1(&history)? {
+            HistoryOwnerDecisionV1::Wait | HistoryOwnerDecisionV1::Recovered => Ok((None, false)),
+            HistoryOwnerDecisionV1::Default => {
+                debug!(
+                    "[{PALW_PANEL}] claim {claim}: native public history default is charged once; this stage's semantic \
+                     continuation has no remaining rooted record source"
+                );
+                Ok((None, false))
+            }
+            HistoryOwnerDecisionV1::Move { mut movement, until_daa } => {
+                movement.signature = self
+                    .sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1)
+                    .ok_or("no history recovery owner signing key")?;
+                movement.check()?;
+                Self::fraud_filer_stage_queue_v1(
+                    book,
+                    claim,
+                    PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) },
+                    progress,
+                    progress.now_daa,
+                    court_pending,
+                    court_due,
+                )?;
+                // The accepted demand/collection clock, not the child's later stream horizon.
+                court_due
+                    .entry((claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false))
+                    .and_modify(|held| *held = (*held).min(until_daa.saturating_sub(1)));
+                Ok((None, false))
+            }
+        }
+    }
+
     /// A rooted prospective owner court is progressed using only this verifier's holding.
     /// Its own one guarded move uses the existing signed, charged priority carrier queue.
     #[allow(clippy::too_many_arguments)]
@@ -3539,6 +6096,14 @@ impl PalwPanelService {
         let binding = binding.clone();
         let job = job.clone();
         let worker_progress = progress.clone();
+        let original_seed = if matches!(
+            progress.cursor,
+            Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedCursorV1::Tokenizer { .. })
+        ) {
+            session.palw_staged_owned_seed_v1((claim, progress.reserver))?
+        } else {
+            None
+        };
         let decision = tokio::task::spawn_blocking(move || -> Result<TokenizerScheduleV1, String> {
             let _copies = copies;
             let mut worker = worker.lock().map_err(|_| "tokenizer worker lock poisoned")?;
@@ -3548,9 +6113,8 @@ impl PalwPanelService {
                         if chain_classes { held_session.palw_registered_class_carriage_v1(id) } else { None }
                     })
                     .ok_or("outside verifier does not hold registered tokenizer")?;
-                let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(&job)
-                    .ok_or("outside verifier does not hold registered table")?;
-                TokenizerSchedulerV1::open(
+                let table = tokenizer_scheduler::registered_table_v1(&target, &binding, &job)?;
+                TokenizerSchedulerV1::open_with_original_v1(
                     &path,
                     &target,
                     &binding,
@@ -3558,6 +6122,7 @@ impl PalwPanelService {
                     table,
                     &worker_progress,
                     &crate::palw_memory_ledger::host_ledger_v1(),
+                    original_seed.as_ref(),
                 )
             };
             if worker.is_none() {
@@ -3607,6 +6172,12 @@ impl PalwPanelService {
                         seed.check(100000)?;
                         PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed: Box::new(seed) }
                     }
+                    TokenizerScheduleV1::NativeSeed(mut seed) => {
+                        seed.signature =
+                            self.sign(&seed.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no staged signing key")?;
+                        seed.check(90_000)?;
+                        PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed: Box::new(seed) }
+                    }
                     TokenizerScheduleV1::Move(mut movement) => {
                         movement.signature = self
                             .sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1)
@@ -3616,45 +6187,216 @@ impl PalwPanelService {
                     }
                     _ => unreachable!(),
                 };
-                let encoded = borsh::to_vec(&object).map_err(|e| e.to_string())?;
-                let digest = Hash64::from_bytes(
-                    blake2b_simd::Params::new()
-                        .hash_length(64)
-                        .key(b"PALW/node/staged-queue/v1")
-                        .hash(&encoded)
-                        .as_bytes()
-                        .try_into()
-                        .expect("64"),
-                );
-                let case = book.cases.get_mut(&claim).expect("pursued");
-                // The desired cursor supersedes a stale branch's unsent carrier, never advances
-                // because transport removed the previous queue entry.
-                court_pending.retain(|(held, round, responder, o)| {
-                    (*held, *round, *responder) != (claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false) || *o == object
-                });
-                if court_pending
-                    .iter()
-                    .any(|(held, round, responder, _)| (*held, *round, *responder) == (claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false))
-                {
-                    return Ok((None, false));
-                }
-                let sends = match case.staged_tokenizer_sent {
-                    Some((id, at, sends)) if id == digest => {
-                        if current_daa.saturating_sub(at) < PALW_FRAUD_FILER_RESEND_DAA_V1 {
-                            return Ok((None, false));
-                        }
-                        if sends >= PALW_FRAUD_FILER_SENDS_V1 {
-                            return Err("signed staged move did not land within its bounded retry envelope".into());
-                        }
-                        sends
-                    }
-                    _ => 0,
-                };
-                court_due.insert((claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false), progress.terms.stream_until_daa.saturating_sub(1));
-                court_pending.push((claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false, object));
-                case.staged_tokenizer_sent = Some((digest, current_daa, sends + 1));
+                Self::fraud_filer_stage_queue_v1(book, claim, object, &progress, current_daa, court_pending, court_due)?;
                 Ok((None, false))
             }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fraud_filer_stage_queue_v1(
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        object: PalwConsensusObjectV2,
+        progress: &kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        current_daa: u64,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(), String> {
+        match &object {
+            PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement }
+                if (movement.claim, movement.reserver, movement.reserved_daa) == (claim, progress.reserver, progress.reserved_daa)
+                    && Self::fraud_filer_bundle_control_v1(progress, movement) => {}
+            PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed }
+                if progress.seed_id.is_none()
+                    && progress.cursor.is_none()
+                    && (seed.claim, seed.reserver, seed.reserved_daa) == (claim, progress.reserver, progress.reserved_daa) => {}
+            PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed }
+                if progress.seed_id.is_none()
+                    && progress.cursor.is_none()
+                    && (seed.claim, seed.reserver, seed.reserved_daa) == (claim, progress.reserver, progress.reserved_daa) => {}
+            PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement }
+                if progress.cursor.is_some()
+                    && !matches!(
+                        movement.action,
+                        kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::BundleOpen { .. }
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::ActivateStage { .. }
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::InventoryPart { .. }
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::InventoryFinish
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::SelectedEventDemand {..}
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::SelectedEventAnswer (_)
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::SelectedEventCollect {..}
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::NativeSelectedDemand {..}
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FlatSourceOpen {..}
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FlatSourceAnswer (_)
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FlatSourceNominate {..}
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FlatSourceCollect
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FloatSourceOpen {..}
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FloatSourceAnswer (_)
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FloatSourceNominate {..}
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FloatSourceCollect
+                    )
+                    && progress.seed_id == Some(movement.seed_id)
+                    && (movement.claim, movement.reserver, movement.reserved_daa)
+                        == (claim, progress.reserver, progress.reserved_daa) => {}
+            PalwConsensusObjectV2::PublicCourtStreamLeafV1 { leaf }
+                if matches!(
+                    progress.cursor,
+                    Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedCursorV1::Constraint { .. })
+                ) && progress.seed_id == Some(leaf.seed_id)
+                    && (leaf.claim, leaf.reserver, leaf.reserved_daa) == (claim, progress.reserver, progress.reserved_daa) => {}
+            _ => return Err("staged carrier changes accepted owner/seed or opens a replacement court".into()),
+        }
+        let encoded = borsh::to_vec(&object).map_err(|e| e.to_string())?;
+        let digest = Hash64::from_bytes(
+            blake2b_simd::Params::new()
+                .hash_length(64)
+                .key(b"PALW/node/staged-queue/v1")
+                .hash(&encoded)
+                .as_bytes()
+                .try_into()
+                .expect("64"),
+        );
+        let case = book.cases.get_mut(&claim).ok_or("pursuit disappeared")?;
+        // Accepted cursors supersede stale unsent carriers; removing a queued packet is not progress.
+        court_pending.retain(|(held, round, responder, o)| {
+            (*held, *round, *responder) != (claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false) || *o == object
+        });
+        if court_pending
+            .iter()
+            .any(|(held, round, responder, _)| (*held, *round, *responder) == (claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false))
+        {
+            return Ok(());
+        }
+        let sends = match case.staged_tokenizer_sent {
+            Some((id, at, sends)) if id == digest => {
+                if current_daa.saturating_sub(at) < PALW_FRAUD_FILER_RESEND_DAA_V1 {
+                    return Ok(());
+                }
+                if sends >= PALW_FRAUD_FILER_SENDS_V1 {
+                    return Err("signed staged move did not land within its bounded retry envelope".into());
+                }
+                sends
+            }
+            _ => 0,
+        };
+        let due = match (&object, progress.bundle.as_ref()) {
+            (PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement }, Some(bundle)) => {
+                use kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1;
+                match movement.action {
+                    PalwConstraintStreamActionV1::InventoryPart { .. } | PalwConstraintStreamActionV1::InventoryFinish => bundle
+                        .plan
+                        .terms
+                        .open_until_daa
+                        .checked_add(
+                            bundle
+                                .plan
+                                .inventory
+                                .as_ref()
+                                .ok_or("inventory queue has no frozen quoted intake")?
+                                .envelope
+                                .inclusion_daa,
+                        )
+                        .ok_or("inventory queue original deadline overflow")?
+                        .saturating_sub(1),
+                    PalwConstraintStreamActionV1::ActivateStage { .. } => bundle
+                        .plan
+                        .stages
+                        .get(bundle.active_index.map_or(0, |i| i as usize + 1))
+                        .ok_or("activation queue has no next required family")?
+                        .terms
+                        .open_until_daa
+                        .saturating_sub(1),
+                    PalwConstraintStreamActionV1::SelectedEventDemand { .. }
+                    | PalwConstraintStreamActionV1::NativeSelectedDemand { .. }
+                    | PalwConstraintStreamActionV1::FlatSourceOpen { .. }
+                    | PalwConstraintStreamActionV1::FlatSourceNominate { .. }
+                    | PalwConstraintStreamActionV1::FloatSourceOpen { .. }
+                    | PalwConstraintStreamActionV1::FloatSourceNominate { .. } => bundle
+                        .plan
+                        .preseed_source_until_v1(
+                            kaspa_consensus_core::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint,
+                            kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+                        )?
+                        .saturating_sub(1),
+                    PalwConstraintStreamActionV1::SelectedEventCollect { .. }
+                    | PalwConstraintStreamActionV1::FlatSourceCollect
+                    | PalwConstraintStreamActionV1::FloatSourceCollect
+                    | PalwConstraintStreamActionV1::NativeTirPrefixCollect => {
+                        progress.terms.collect_until_daa.saturating_sub(1)
+                    }
+                    _ => palw_fraud_filer_staged_due_v1(&object, &progress.terms),
+                }
+            }
+            _ => palw_fraud_filer_staged_due_v1(&object, &progress.terms),
+        };
+        court_due.insert((claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false), due);
+        court_pending.push((claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false, object));
+        case.staged_tokenizer_sent = Some((digest, current_daa, sends + 1));
+        Ok(())
+    }
+
+    fn fraud_filer_bundle_control_v1(
+        progress: &kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        movement: &kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamMoveV1,
+    ) -> bool {
+        use kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1;
+        use kaspa_consensus_core::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1;
+        if movement.phase != PalwConstraintStreamPhaseV1::PrefixCourt {
+            return false;
+        }
+        match &movement.action {
+            PalwConstraintStreamActionV1::BundleOpen { plan } => {
+                progress.seed_id.is_none()
+                    && progress.cursor.is_none()
+                    && progress.bundle.is_some()
+                    && movement.seed_id == plan.id_v1(progress.claim)
+                    && plan.check_v1().is_ok()
+                    && (plan.terms.accepted_daa, plan.terms.open_until_daa)
+                        == (progress.terms.accepted_daa, progress.terms.open_until_daa)
+            }
+            PalwConstraintStreamActionV1::ActivateStage { previous_seed, next_seed } => {
+                progress.bundle.as_ref().is_some_and(|bundle| {
+                    bundle.pending_seed == Some(*next_seed)
+                        && Some(*previous_seed) == progress.seed_id
+                        && movement.seed_id == *previous_seed
+                        && (bundle.active_index.is_none() || bundle_scheduler::honest_complete_v1(progress.cursor.as_ref()))
+                })
+            }
+            PalwConstraintStreamActionV1::InventoryPart { offset, .. } => progress.bundle.as_ref().is_some_and(|bundle| {
+                movement.seed_id == bundle.bundle_id
+                    && bundle.active_index.is_none()
+                    && bundle.inventory.is_some_and(|(accepted, _, sealed, _)| accepted == *offset && !sealed)
+            }),
+            PalwConstraintStreamActionV1::InventoryFinish => progress.bundle.as_ref().is_some_and(|bundle| {
+                movement.seed_id == bundle.bundle_id
+                    && bundle.active_index.is_none()
+                    && bundle.inventory.is_some_and(|(_, _, sealed, _)| !sealed)
+            }),
+            // Owner-signed history Demand/Collect: the bundle frame names the paid owner, the
+            // action names the active public stage. Custodian answers are never owner moves.
+            PalwConstraintStreamActionV1::HistoryRecovery { stage_seed, action, .. } => {
+                action.answerer_v1().is_none()
+                    && progress.seed_id == Some(*stage_seed)
+                    && progress.bundle.as_ref().is_some_and(|bundle| movement.seed_id == bundle.bundle_id)
+            }
+            PalwConstraintStreamActionV1::SelectedEventDemand { .. }
+            | PalwConstraintStreamActionV1::SelectedEventCollect { .. }
+            | PalwConstraintStreamActionV1::NativeSelectedDemand { .. }
+            | PalwConstraintStreamActionV1::FlatSourceOpen { .. }
+            | PalwConstraintStreamActionV1::FlatSourceNominate { .. }
+            | PalwConstraintStreamActionV1::FlatSourceCollect
+            | PalwConstraintStreamActionV1::FloatSourceOpen { .. }
+            | PalwConstraintStreamActionV1::FloatSourceNominate { .. }
+            | PalwConstraintStreamActionV1::FloatSourceCollect => progress.bundle.as_ref().is_some_and(|bundle| {
+                movement.seed_id == bundle.bundle_id
+                    && progress.cursor.is_none()
+                    && bundle.plan.stages.get(bundle.active_index.map_or(0, |i| i as usize + 1)).is_some_and(|stage| {
+                        stage.family == kaspa_consensus_core::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint
+                            && stage.terms == progress.terms
+                    })
+            }),
+            _ => false,
         }
     }
 
@@ -3796,6 +6538,7 @@ impl PalwPanelService {
         if case.fp_job_pending {
             return true;
         }
+        let was_pursued = case.pursued();
         let Ok(ticket) = crate::palw_memory_ledger::host_ledger_v1().reserve(
             crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
                 role: "public-fp-job-binding",
@@ -3808,10 +6551,12 @@ impl PalwPanelService {
         };
         case.fp_job_pending = true;
         case._fp_job_reservation = Some(Arc::new(ticket));
-        book.walked_from = None;
-        book.walked_to = None;
-        book.walk = None;
-        book.read_at = None;
+        if !was_pursued {
+            book.walked_from = None;
+            book.walked_to = None;
+            book.walk = None;
+            book.read_at = None;
+        }
         true
     }
 
@@ -3824,49 +6569,129 @@ impl PalwPanelService {
         payload: input::PalwFraudFilerFpDescriptorV1,
         form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> bool {
-        let Some(case) = book.cases.get_mut(&claim) else { return false };
-        if case.fp_bootstrap.is_some() {
-            return true;
-        }
-        // Canonical bootstrap retains only the public job. Its ids are derived under the full
-        // replay ticket or the separate direct-proof ticket, never accumulated here. A producer's
-        // inflated count must not require that many input bytes just to prove the count false.
-        let n = if payload.job().prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL {
-            0
-        } else {
-            u64::from(payload.job().prompt_tokens)
-        };
-        let bytes = n
-            .saturating_mul(16)
-            .saturating_add(n.div_ceil(32).saturating_mul(256))
-            .saturating_add(2 * self.config.court.max_close_bytes());
-        let Ok(ticket) = crate::palw_memory_ledger::host_ledger_v1().reserve(
-            crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
-                role: "public-fp-input",
-                class_id: payload.job().class_id,
-                job: claim,
-            },
-            bytes,
-        ) else {
-            return false;
-        };
-        case.fp_bootstrap = Some(input::PalwFraudFilerFpBootstrapV1 {
-            payload: Arc::new(payload),
-            form,
-            ids: Vec::new(),
-            chunk: 0,
-            _reservation: Some(Arc::new(ticket)),
-        });
-        book.walked_from = None;
-        book.walked_to = None;
-        book.walk = None;
-        book.read_at = None;
-        true
+        book.hold_fp_input_v1(claim, payload, form, &crate::palw_memory_ledger::host_ledger_v1(), self.config.court.max_close_bytes())
     }
 
     /// Start an attempt derived from its header, or an FP job/input authenticated against its accepted commitment and recorded pin.
     /// Run the verifier's own model under the full-seat memory reservation, retaining only its own capture. Missing public history
     /// or input waits without spending a run; a backend that cannot execute the job remains explicitly unjudged.
+    /// **The native TIR entry** (behind `palw_staged_tir_route_v1`): the claim's accepted public FP
+    /// job and its authenticated public input, the verifier's OWN TIR replay
+    /// (`replay_tir_generated_ids_v1`) under the claim's admitted header, then the verdict. Equal
+    /// tiled logits trace roots settle the claim as honest. Different roots make it a mismatch,
+    /// whose own ids are the Constraint nominee. Reservation and the staged bundle follow through
+    /// the engine's prelude and the TIR bundle stages. No legacy binding is read.
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_tir_replay_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        tir: FilerTirContextV1,
+        network_domain: Hash64,
+        current_daa: u64,
+        public_material: &[Vec<u8>],
+        replay_room: bool,
+    ) {
+        let Some(case) = book.cases.get(&claim) else { return };
+        let candidate = case.candidate.clone();
+        let retry = |book: &mut PalwFraudFilerBookV1, why: String| {
+            if let Some(case) = book.cases.get_mut(&claim) {
+                case.input_retry_at = current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
+            }
+            debug!("[{PALW_PANEL}] claim {claim}: the native TIR replay waits: {why}");
+        };
+        if !replay_room || book.running.is_some() {
+            return retry(book, "no replay room on this host".into());
+        }
+        let snapshot = candidate.clone();
+        let payload = match session.clone().spawn_blocking(move |c| palw_fraud_filer_fp_payload_v1(c, &snapshot, network_domain)).await {
+            Ok(payload) => input::PalwFraudFilerFpDescriptorV1::Accepted(payload),
+            Err(why) => return retry(book, format!("the accepted public FP job is unavailable: {why}")),
+        };
+        let job = payload.job().clone();
+        let accepted_pin = match &payload {
+            input::PalwFraudFilerFpDescriptorV1::Accepted(p) => kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&p.commitment),
+            input::PalwFraudFilerFpDescriptorV1::Disclosed { job_identity, .. } => *job_identity,
+        };
+        if job.network_domain != network_domain
+            || job.class_id != tir.view.class_id
+            || kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&tir.view.job_context) != accepted_pin
+        {
+            book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged("the accepted FP job is not the TIR header's job".into()));
+            return;
+        }
+        let Some(artifact_root) = candidate.job.artifact_root else {
+            book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged("its class is gone from the registry".into()));
+            return;
+        };
+        let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> =
+            match self.resolve_backend(session, job.class_id, artifact_root) {
+            Ok(backend) => Arc::from(backend),
+            Err(why) => {
+                book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(format!("its TIR class does not resolve on this host ({why})")));
+                return;
+            }
+        };
+        let prompt_form = self.class_prompt_ids_form(job.class_id);
+        let prompt = match input::palw_fraud_filer_fp_descriptor_input_v1(backend.as_ref(), &payload, prompt_form, public_material) {
+            Ok(input) => input.prompt_ids,
+            Err(why) => return retry(book, format!("the authenticated public input is not available yet: {why}")),
+        };
+        let need = match self
+            .backends()
+            .role_memory_need_or_chain_v1(job.class_id, artifact_root, super::FULL_SEAT_V1, |id| self.chain_carriage_v1(session, id))
+        {
+            Some(need) => need,
+            None => return retry(book, "the TIR class's resource profile is unavailable".into()),
+        };
+        let reservation = match self.reserve_replay_v1(PALW_FRAUD_FILER_REPLAY_ROLE_V1, &need, job.class_id, claim) {
+            Ok(reservation) => reservation,
+            Err(why) => return retry(book, why),
+        };
+        let header = tir.header.clone();
+        let replay_job = job.clone();
+        let replay = tokio::task::spawn_blocking(move || {
+            let _reservation = reservation;
+            backend.replay_tir_generated_ids_v1(&header, &replay_job, &prompt)
+        })
+        .await
+        .map_err(|e| format!("the TIR replay worker did not finish: {e}"))
+        .and_then(|r| r);
+        let replay = match replay {
+            Ok(replay) => replay,
+            Err(why) => {
+                book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(format!("no TIR replay on this host: {why}")));
+                return;
+            }
+        };
+        if replay.generated_ids.len() != tir.view.job_context.exact_decode_tokens as usize {
+            book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged("the TIR replay changed the exact decode count".into()));
+            return;
+        }
+        let case = book.cases.get_mut(&claim).expect("selected case");
+        case.tir = Some(Arc::new(tir));
+        case.registered_preflight = true;
+        if replay.full_logits_trace_root == case.tir.as_ref().expect("set").view.full_logits_trace_root {
+            book.settle(&claim, PalwFraudFilerVerdictV1::Honest);
+            return;
+        }
+        let execution_root = case.tir.as_ref().expect("set").view.committed_execution_root;
+        case.verdict = PalwFraudFilerVerdictV1::Mismatch(Arc::new(PalwFraudFilerRunV1 {
+            execution_root,
+            trace_root: replay.full_logits_trace_root,
+            output_root: Hash64::default(),
+            own_range: Box::new(|_, _| Err("a TIR pursuit localizes through its staged bundle, not a legacy leaf range".into())),
+            legacy: None,
+            own: None,
+            fp_job: Some(Box::new(job)),
+            own_output_ids: replay.generated_ids,
+            _job_reservation: None,
+            _reservation: None,
+        }));
+        info!("[{PALW_PANEL}] claim {claim}: the native TIR replay differs from the committed logits trace; pursuing it (G14)");
+    }
+
     async fn fraud_filer_start_replay_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
@@ -3881,14 +6706,35 @@ impl PalwPanelService {
         let candidate = case.candidate.clone();
         let job = candidate.job.clone();
         let producer = candidate.producer;
+        // A TIR required-family claim has no legacy binding: its discovery, replay and verdict are
+        // native (the decode view from native state, the verifier's own TIR replay).
+        if job.free_prompt
+            && let Ok(Some((view, header))) = session.palw_staged_tir_view_v1(claim, self.class_step_ladder(job.class_id))
+        {
+            self.fraud_filer_tir_replay_v1(
+                session,
+                book,
+                claim,
+                FilerTirContextV1 { view, header },
+                network_domain,
+                current_daa,
+                public_material,
+                replay_room,
+            )
+            .await;
+            return;
+        }
         let unjudged = |book: &mut PalwFraudFilerBookV1, why: String| {
             debug!("[{PALW_PANEL}] claim {claim}: the fraud filer does not judge it — {why}");
             if book.cases.get(&claim).is_some_and(|case| case.registered_preflight) {
+                let was_pursued = book.cases[&claim].pursued();
                 book.cases.get_mut(&claim).expect("selected case").preserve_semantic_refusal();
-                book.walked_from = None;
-                book.walked_to = None;
-                book.walk = None;
-                book.read_at = None;
+                if !was_pursued {
+                    book.walked_from = None;
+                    book.walked_to = None;
+                    book.walk = None;
+                    book.read_at = None;
+                }
             } else {
                 book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(why));
             }
@@ -4319,6 +7165,15 @@ pub(super) mod tests {
         job.version = PALW_FP_CONSTRAINT_VERSION;
         job.decode = None;
         job.tail = Some(PalwFpJobTailV1::Constraint(PalwFpConstraintTailV1 { constraint: constraint.to_bytes(), table_root: root }));
+        let mut selection = PalwFraudFilerCaseV1::new(candidate(1, 100, false));
+        let mut descriptor = input::tests::payload();
+        descriptor.commitment.job = job.clone();
+        selection.fp_descriptor = Some(Arc::new(input::PalwFraudFilerFpDescriptorV1::Accepted(descriptor)));
+        assert!(!selection.constraint_preflight_pending_v1(), "binding bootstrap must remain reachable");
+        selection.binding = Some(material_budget_binding());
+        assert!(selection.constraint_preflight_pending_v1(), "no generic arithmetic session may preempt selection");
+        selection.constraint_done = true;
+        assert!(!selection.constraint_preflight_pending_v1(), "verified selection yields to arithmetic localization");
         let prompt: Vec<_> = ids.iter().map(|id| *id as usize).collect();
         assert!(backend.execute_free_prompt(&job, &prompt).is_err(), "a constrained run requires its host scope");
         let expected = palw_fp_with_constraint_scope_v1(
@@ -4631,6 +7486,527 @@ pub(super) mod tests {
         // Successful cache rotations do not consume the bounded host-failure retry allowance.
         assert!(matches!(book.judge(first, Err("transient host error".into())), Some(PalwFraudFilerVerdictV1::Pending)));
         assert!(matches!(book.judge(first, Err("second host error".into())), Some(PalwFraudFilerVerdictV1::Unjudged(_))));
+    }
+
+    #[test]
+    fn missing_job_reprobes_preserve_localization_until_authenticated_job_arrives() {
+        let mut book = PalwFraudFilerBookV1::default();
+        let first = candidate(1, 100, false);
+        let second = candidate(2, 101, false);
+        let mut missing = candidate(3, 102, false);
+        missing.job.free_prompt = true;
+        book.refresh(vec![first.clone(), second.clone(), missing.clone()], 200);
+        for claim in [&first, &second] {
+            book.started_replay(claim.claim_id);
+            book.judge(claim.claim_id, Ok(run(Hash64::default(), Hash64::default())));
+        }
+        book.cases.get_mut(&missing.claim_id).unwrap().fp_job_pending = true;
+        let held = match &book.cases[&first.claim_id].verdict {
+            PalwFraudFilerVerdictV1::Mismatch(run) => Arc::downgrade(run),
+            _ => unreachable!(),
+        };
+        for daa in 200..232 {
+            book.make_replay_room(daa, true);
+            assert_eq!(book.held_runs(), PALW_FRAUD_FILER_HELD_RUNS_V1);
+            assert!(held.upgrade().is_some());
+            assert_eq!(book.next_probe_at(daa, true), Some(missing.claim_id));
+            assert!(book.pursued().contains(&missing.claim_id), "binding DA remains reachable without a job");
+        }
+        book.cases.get_mut(&missing.claim_id).unwrap().fp_descriptor =
+            Some(Arc::new(input::PalwFraudFilerFpDescriptorV1::Accepted(input::tests::payload())));
+        book.make_replay_room(232, true);
+        assert!(held.upgrade().is_none());
+        assert_eq!(book.held_runs(), PALW_FRAUD_FILER_HELD_RUNS_V1 - 1);
+        assert_eq!(book.next_probe_at(232, true), Some(missing.claim_id));
+        assert!(book.pursued().contains(&first.claim_id), "rotation preserves the earlier public court");
+    }
+
+    #[test]
+    fn rotating_a_pursued_replica_does_not_restart_a_paginated_public_history_walk() {
+        let mut book = PalwFraudFilerBookV1::default();
+        let claim = candidate(1, 100, false);
+        book.refresh(vec![claim.clone()], 200);
+        book.judge(claim.claim_id, Ok(run(Hash64::default(), Hash64::default())));
+        assert!(book.evict_oldest_capture());
+        let walk = PalwFraudFilerWalkV1 {
+            anchor: Hash64::from_u64_word(200),
+            anchor_daa: 200,
+            floor: 100,
+            next: Some(Hash64::from_u64_word(150)),
+            incomplete: false,
+        };
+        book.walk = Some(walk);
+        book.walked_from = Some(100);
+        book.walked_to = Some(140);
+        book.read_at = Some(200);
+        book.judge(claim.claim_id, Ok(run(Hash64::default(), Hash64::default())));
+        assert_eq!(book.walk, Some(walk));
+        assert_eq!((book.walked_from, book.walked_to, book.read_at), (Some(100), Some(140), Some(200)));
+        let newer = candidate(2, 180, false);
+        book.refresh(vec![claim, newer.clone()], 201);
+        book.judge(newer.claim_id, Ok(run(Hash64::default(), Hash64::default())));
+        assert!(book.walk.is_none(), "a newly pursued claim still requires its own backfill");
+    }
+
+    #[test]
+    fn public_branch_rollback_invalidates_semantic_completion_before_honesty_or_release() {
+        use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1, PalwMemoryReservationKeyV1};
+        for releasing in [false, true] {
+            let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(4096), || None);
+            let mut c = candidate(3, 300, false);
+            c.job.free_prompt = true;
+            let mut book = PalwFraudFilerBookV1::default();
+            book.refresh(vec![c.clone()], 400);
+            let case = book.cases.get_mut(&c.claim_id).unwrap();
+            case.registered_preflight = true;
+            case.arithmetic_matched = true;
+            case.prefix_complete = true;
+            case.rendering_done = true;
+            case.prefix_stage_pending = true;
+            case.fp_job_pending = !releasing;
+            case.release_pending = releasing;
+            case.verdict = if releasing { PalwFraudFilerVerdictV1::Honest } else { PalwFraudFilerVerdictV1::SemanticPending };
+            case.prefix_budget = 256;
+            case._prefix_reservation = Some(Arc::new(
+                ledger
+                    .reserve(
+                        PalwMemoryReservationKeyV1 { role: "rollback-prefix-test", class_id: c.job.class_id, job: c.claim_id },
+                        256,
+                    )
+                    .unwrap(),
+            ));
+            assert!(case.pursued());
+            let walk = PalwFraudFilerWalkV1 {
+                anchor: Hash64::from_u64_word(401),
+                anchor_daa: 401,
+                floor: 300,
+                next: Some(Hash64::from_u64_word(350)),
+                incomplete: false,
+            };
+            book.walked(walk, true, vec![]);
+            let case = &book.cases[&c.claim_id];
+            assert!(!case.prefix_complete && !case.rendering_done && !case.arithmetic_matched && !case.prefix_stage_pending);
+            assert!(!case.release_pending, "a rolled-back completed row cannot release an unverified replacement branch");
+            assert!(!case.may_finish_semantics_v1(true), "semantic booleans cannot certify arithmetic absent a fresh own replay");
+            assert!(case.pursued(), "rollback never abandons the live public reservation");
+            assert!(matches!(case.verdict, PalwFraudFilerVerdictV1::Pending));
+            assert_eq!(
+                book.next_replay_at(401),
+                Some(c.claim_id),
+                "matching arithmetic is recomputed instead of stranding SemanticPending"
+            );
+            assert_eq!(ledger.reserved_bytes(), 0);
+            assert_eq!(case.prefix_budget, 0);
+        }
+    }
+
+    #[test]
+    fn rotating_user_input_keeps_its_ticket_and_does_not_restart_public_history() {
+        use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1};
+        use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+        let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(32_768), || None);
+        let mut book = PalwFraudFilerBookV1::default();
+        let claim = candidate(1, 100, false);
+        book.refresh(vec![claim.clone()], 200);
+        let payload = input::tests::payload();
+        let descriptor = input::PalwFraudFilerFpDescriptorV1::Accepted(payload.clone());
+        assert!(book.hold_fp_input_v1(claim.claim_id, descriptor.clone(), PalwPromptIdsFormV1::Flat, &ledger, 4096));
+        assert!(book.walk.is_none(), "first bootstrap backfills answers not collected for a pending claim");
+        book.cases.get_mut(&claim.claim_id).unwrap().fp_bootstrap.as_mut().unwrap().ids = payload.prompt_token_ids.clone();
+        assert!(book.cases[&claim.claim_id].fp_bootstrap.as_ref().unwrap().ready());
+        let reserved = ledger.reserved_bytes();
+        let walk = PalwFraudFilerWalkV1 {
+            anchor: Hash64::from_u64_word(200),
+            anchor_daa: 200,
+            floor: 100,
+            next: Some(Hash64::from_u64_word(150)),
+            incomplete: false,
+        };
+        book.walk = Some(walk);
+        for _ in 0..8 {
+            book.judge(claim.claim_id, Ok(run(Hash64::default(), Hash64::default())));
+            assert!(book.cases[&claim.claim_id].fp_bootstrap.is_none());
+            assert!(book.cases[&claim.claim_id].fp_replay_input.as_ref().unwrap().ready());
+            assert!(book.evict_oldest_capture());
+            assert!(book.hold_fp_input_v1(claim.claim_id, descriptor.clone(), PalwPromptIdsFormV1::Flat, &ledger, 4096));
+            assert!(book.cases[&claim.claim_id].fp_bootstrap.as_ref().unwrap().ready());
+            assert_eq!(book.walk, Some(walk), "already pursued input never restarts the paginated scan");
+            assert_eq!(ledger.reserved_bytes(), reserved, "rotation neither reallocates nor releases authenticated ids");
+        }
+        book.settle(&claim.claim_id, PalwFraudFilerVerdictV1::Settled(PalwFilerPhaseV1::Convicted));
+        assert_eq!(ledger.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn constrained_input_round_cannot_preempt_selector_with_arithmetic_obligations() {
+        use kaspa_consensus_core::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION;
+        let mut payload = input::tests::payload();
+        payload.commitment.job.version = PALW_FP_CONSTRAINT_VERSION;
+        let me = bond(1);
+        let mut case = PalwFraudFilerCaseV1::new(candidate(3, 300, false));
+        let binding = material_budget_binding();
+        case.binding = Some(binding.clone());
+        case.fp_bootstrap = Some(PalwFraudFilerFpBootstrapV1 {
+            payload: Arc::new(input::PalwFraudFilerFpDescriptorV1::Accepted(payload)),
+            form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            ids: vec![],
+            chunk: 0,
+            _reservation: None,
+        });
+        let mut v = view(3, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 300 });
+        let mut record = PalwDisputeClaimV1::default();
+        record.live.insert(me, PalwDisputeReservationRowV1 { reserved_daa: 300, deposit: 1, sessions_opened: 0, lanes_joined: 0 });
+        v.record = Some(record);
+        let step = |case: &PalwFraudFilerCaseV1| {
+            palw_fraud_filer_bootstrap_step_v2(
+                PalwFilerRoleV1::PublicBond,
+                Some(&v),
+                &me,
+                true,
+                case,
+                Some(PalwFraudFilerLanesV1 { now_daa: 300, form: case.fp_bootstrap.as_ref().unwrap().form }),
+                |_| false,
+            )
+        };
+        let PalwFraudFilerStepV1::DemandLanes { round, demand } = step(&case) else { panic!("input is publicly acquirable") };
+        assert!(!round.is_empty());
+        assert!(round.iter().all(|unit| matches!(unit, PalwLegacyHeldUnitV2::PromptIds { .. })));
+        assert!(
+            demand.iter().all(|probe| matches!(probe, PalwLegacyProbeV1::HeldNode { unit: PalwLegacyHeldUnitV2::PromptIds { .. } }))
+        );
+        case.constraint_done = true;
+        let PalwFraudFilerStepV1::DemandLanes { round, .. } = step(&case) else { panic!("ordinary parallel input round") };
+        assert!(
+            round.iter().any(|unit| matches!(unit, PalwLegacyHeldUnitV2::StepNode { .. })),
+            "verified selection permits arithmetic batching"
+        );
+        let mut descriptor = input::tests::payload();
+        descriptor.commitment.job.version = kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION;
+        case.fp_bootstrap.as_mut().unwrap().payload = Arc::new(input::PalwFraudFilerFpDescriptorV1::Accepted(descriptor));
+        let PalwFraudFilerStepV1::DemandLanes { round, .. } = step(&case) else { panic!("public prefix input remains acquirable") };
+        assert!(
+            round.iter().all(|unit| matches!(unit, PalwLegacyHeldUnitV2::PromptIds { .. })),
+            "prefix semantics precede arithmetic obligations too"
+        );
+        case.prefix_complete = true;
+        let PalwFraudFilerStepV1::DemandLanes { round, .. } = step(&case) else { panic!("verified prefix permits arithmetic round") };
+        assert!(round.iter().any(|unit| matches!(unit, PalwLegacyHeldUnitV2::StepNode { .. })));
+    }
+
+    #[test]
+    fn selected_source_queue_preserves_exact_paid_bundle_and_child_collection_clock() {
+        use kaspa_consensus_core::{
+            palw_constraint_stream_carriage_v1::{PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1},
+            palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
+            palw_rendering_resources_v1::{PalwRenderingResourcePlanV1, PalwStagedPublicCourtConfigV1},
+            palw_selected_event_source_v1::PalwSelectedEventCoordinateV1,
+            palw_staged_bundle_v1::{PalwStagedBundlePlanV1, PalwStagedBundleProgressV1, PalwStagedFamilyV1},
+            palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        };
+        let config = PalwStagedPublicCourtConfigV1::network_v1();
+        let resource = PalwRenderingResourcePlanV1::derive(0, 1, config.prices).unwrap();
+        let plan = PalwStagedBundlePlanV1::derive_v1(
+            300,
+            vec![(PalwStagedFamilyV1::Constraint, resource), (PalwStagedFamilyV1::Tokenizer, resource)],
+            config,
+        )
+        .unwrap();
+        let c = candidate(3, 300, false);
+        let mut book = PalwFraudFilerBookV1::default();
+        book.refresh(vec![c.clone()], 300);
+        let progress = PalwStagedOwnedProgressV1 {
+            snapshot_block: kaspa_consensus_core::BlockHash::from_u64_word(300),
+            now_daa: plan.stages[0].terms.open_until_daa,
+            claim: c.claim_id,
+            reserver: bond(1),
+            reserved_daa: 300,
+            terms: plan.stages[0].terms,
+            prefix_custodians: None,
+            prefix_page_root: None,
+            seed_id: None,
+            cursor: None,
+            bundle: Some(PalwStagedBundleProgressV1 {
+                bundle_id: plan.id_v1(c.claim_id),
+                plan: plan.clone(),
+                active_index: None,
+                pending_seed: None,
+                inventory: None,
+            }),
+        };
+        let movement = PalwConstraintStreamMoveV1 {
+            version: 1,
+            claim: c.claim_id,
+            reserver: bond(1),
+            reserved_daa: 300,
+            seed_id: plan.id_v1(c.claim_id),
+            phase: PalwConstraintStreamPhaseV1::PrefixCourt,
+            action: PalwConstraintStreamActionV1::SelectedEventCollect {
+                coordinate: PalwSelectedEventCoordinateV1 { row: 3, tile: 1023 },
+                demand_id: Hash64::from_u64_word(5),
+            },
+            signature: Vec::new(),
+        };
+        let mut pending = Vec::new();
+        let mut due = HashMap::new();
+        PalwPanelService::fraud_filer_stage_queue_v1(
+            &mut book,
+            c.claim_id,
+            PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement.clone()) },
+            &progress,
+            progress.now_daa,
+            &mut pending,
+            &mut due,
+        )
+        .unwrap();
+        assert_eq!(due[&(c.claim_id, PALW_FRAUD_FILER_STAGED_ROUND_V1, false)], progress.terms.collect_until_daa - 1);
+        assert_ne!(progress.terms.collect_until_daa, plan.terms.collect_until_daa);
+        let flat_collect = PalwConstraintStreamMoveV1 { action: PalwConstraintStreamActionV1::FlatSourceCollect, ..movement.clone() };
+        PalwPanelService::fraud_filer_stage_queue_v1(
+            &mut book,
+            c.claim_id,
+            PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(flat_collect.clone()) },
+            &progress,
+            progress.now_daa,
+            &mut pending,
+            &mut due,
+        )
+        .unwrap();
+        assert_eq!(due[&(c.claim_id, PALW_FRAUD_FILER_STAGED_ROUND_V1, false)], progress.terms.collect_until_daa - 1);
+        assert!(!PalwPanelService::fraud_filer_bundle_control_v1(
+            &progress,
+            &PalwConstraintStreamMoveV1 { seed_id: Hash64::from_u64_word(999), ..flat_collect },
+        ));
+        for wrong in [
+            PalwConstraintStreamMoveV1 { seed_id: Hash64::from_u64_word(999), ..movement.clone() },
+            PalwConstraintStreamMoveV1 { reserver: bond(2), ..movement.clone() },
+        ] {
+            assert!(
+                PalwPanelService::fraud_filer_stage_queue_v1(
+                    &mut book,
+                    c.claim_id,
+                    PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(wrong) },
+                    &progress,
+                    progress.now_daa,
+                    &mut pending,
+                    &mut due
+                )
+                .is_err()
+            );
+        }
+        let case = book.cases.get_mut(&c.claim_id).unwrap();
+        case.verdict = PalwFraudFilerVerdictV1::SemanticPending;
+        case.arithmetic_matched = true;
+        case.staged_bundle_pending = true;
+        assert!(!case.may_finish_semantics_v1(true));
+    }
+
+    #[test]
+    fn owner_history_recovery_moves_name_the_bundle_frame_and_the_active_stage_only() {
+        use kaspa_consensus_core::{
+            palw_constraint_stream_carriage_v1::{PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1},
+            palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
+            palw_history_custody_v1::PalwHistoryRecoveryActionV1,
+            palw_rendering_resources_v1::{PalwRenderingResourcePlanV1, PalwStagedPublicCourtConfigV1},
+            palw_staged_bundle_v1::{PalwStagedBundlePlanV1, PalwStagedBundleProgressV1, PalwStagedFamilyV1},
+            palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        };
+        let config = PalwStagedPublicCourtConfigV1::network_v1();
+        let resource = PalwRenderingResourcePlanV1::derive(0, 1, config.prices).unwrap();
+        let plan = PalwStagedBundlePlanV1::derive_v1(300, vec![(PalwStagedFamilyV1::PublicPrefix, resource)], config).unwrap();
+        let c = candidate(4, 300, false);
+        let stage = Hash64::from_u64_word(77);
+        let progress = PalwStagedOwnedProgressV1 {
+            snapshot_block: kaspa_consensus_core::BlockHash::from_u64_word(301),
+            now_daa: plan.stages[0].terms.accepted_daa + 1,
+            claim: c.claim_id,
+            reserver: bond(1),
+            reserved_daa: 300,
+            terms: plan.stages[0].terms,
+            prefix_custodians: None,
+            prefix_page_root: None,
+            seed_id: Some(stage),
+            cursor: None,
+            bundle: Some(PalwStagedBundleProgressV1 {
+                bundle_id: plan.id_v1(c.claim_id),
+                plan: plan.clone(),
+                active_index: Some(0),
+                pending_seed: None,
+                inventory: None,
+            }),
+        };
+        let demand = PalwConstraintStreamMoveV1 {
+            version: 1,
+            claim: c.claim_id,
+            reserver: bond(1),
+            reserved_daa: 300,
+            seed_id: plan.id_v1(c.claim_id),
+            phase: PalwConstraintStreamPhaseV1::PrefixCourt,
+            action: PalwConstraintStreamActionV1::HistoryRecovery {
+                stage_seed: stage,
+                request_head: Hash64::from_u64_word(5),
+                sequence: 3,
+                demand_opened_daa: 0,
+                action: PalwHistoryRecoveryActionV1::Demand,
+            },
+            signature: Vec::new(),
+        };
+        assert!(PalwPanelService::fraud_filer_bundle_control_v1(&progress, &demand));
+        let collect = PalwConstraintStreamMoveV1 {
+            action: PalwConstraintStreamActionV1::HistoryRecovery {
+                stage_seed: stage,
+                request_head: Hash64::from_u64_word(5),
+                sequence: 3,
+                demand_opened_daa: 310,
+                action: PalwHistoryRecoveryActionV1::Collect,
+            },
+            ..demand.clone()
+        };
+        assert!(PalwPanelService::fraud_filer_bundle_control_v1(&progress, &collect));
+        // A custodian's signed answer is never an owner move, another stage is not this cursor,
+        // and the stage seed is not the bundle frame.
+        let answer = PalwConstraintStreamMoveV1 {
+            action: PalwConstraintStreamActionV1::HistoryRecovery {
+                stage_seed: stage,
+                request_head: Hash64::from_u64_word(5),
+                sequence: 3,
+                demand_opened_daa: 310,
+                action: PalwHistoryRecoveryActionV1::Finish { answerer: bond(2) },
+            },
+            ..demand.clone()
+        };
+        assert!(!PalwPanelService::fraud_filer_bundle_control_v1(&progress, &answer));
+        let other_stage = PalwConstraintStreamMoveV1 {
+            action: PalwConstraintStreamActionV1::HistoryRecovery {
+                stage_seed: Hash64::from_u64_word(78),
+                request_head: Hash64::from_u64_word(5),
+                sequence: 3,
+                demand_opened_daa: 0,
+                action: PalwHistoryRecoveryActionV1::Demand,
+            },
+            ..demand.clone()
+        };
+        assert!(!PalwPanelService::fraud_filer_bundle_control_v1(&progress, &other_stage));
+        assert!(!PalwPanelService::fraud_filer_bundle_control_v1(&progress, &PalwConstraintStreamMoveV1 { seed_id: stage, ..demand }));
+    }
+
+    #[test]
+    fn staged_collection_queue_keeps_the_paid_clock_and_requires_accepted_cursor_progress() {
+        use kaspa_consensus_core::{
+            palw_constraint_stream_carriage_v1::{PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1},
+            palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
+            palw_rendering_resources_v1::{PalwRenderingClaimTermsV1, PalwRenderingResourcePlanV1, PalwStagedPublicCourtConfigV1},
+            palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        };
+        let c = candidate(3, 300, false);
+        let mut book = PalwFraudFilerBookV1::default();
+        book.refresh(vec![c.clone()], 300);
+        let prices = PalwStagedPublicCourtConfigV1::network_v1().prices;
+        let plan = PalwRenderingResourcePlanV1::derive(0, 1, prices).unwrap();
+        let terms = PalwRenderingClaimTermsV1::derive(300, plan, 100, 100, 10).unwrap();
+        let progress = PalwStagedOwnedProgressV1 {
+            snapshot_block: kaspa_consensus_core::BlockHash::from_u64_word(300),
+            now_daa: terms.stream_until_daa,
+            claim: c.claim_id,
+            reserver: bond(1),
+            reserved_daa: 300,
+            terms,
+            prefix_custodians: None,
+            prefix_page_root: None,
+            bundle: None,
+            seed_id: Some(Hash64::from_u64_word(9)),
+            cursor: Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedCursorV1::Prefix {
+                moves_used: 1,
+                cursor: kaspa_consensus_core::palw_prefix_family_court_v1::PalwPrefixFamilyCursorV1::Complete,
+                completed: None,
+            }),
+        };
+        let object = |demand| PalwConsensusObjectV2::PublicCourtStreamMoveV1 {
+            movement: Box::new(PalwConstraintStreamMoveV1 {
+                version: 1,
+                claim: c.claim_id,
+                reserver: bond(1),
+                reserved_daa: 300,
+                seed_id: Hash64::from_u64_word(9),
+                phase: PalwConstraintStreamPhaseV1::PrefixCourt,
+                action: PalwConstraintStreamActionV1::PrefixPublicCollect {
+                    cursor_id: Hash64::from_u64_word(10),
+                    demand_id: Hash64::from_u64_word(demand),
+                },
+                signature: Vec::new(),
+            }),
+        };
+        let mut pending = Vec::new();
+        let mut due = HashMap::new();
+        let now = progress.now_daa;
+        let key = (c.claim_id, PALW_FRAUD_FILER_STAGED_ROUND_V1, false);
+        let first = object(11);
+        PalwPanelService::fraud_filer_stage_queue_v1(&mut book, c.claim_id, first.clone(), &progress, now, &mut pending, &mut due)
+            .unwrap();
+        assert_eq!(due[&key], terms.collect_until_daa - 1, "collection is eligible after streaming ends");
+        assert_eq!(pending.len(), 1);
+        PalwPanelService::fraud_filer_stage_queue_v1(&mut book, c.claim_id, first.clone(), &progress, now, &mut pending, &mut due)
+            .unwrap();
+        assert_eq!(pending.len(), 1, "one accepted cursor has one queued carrier");
+        pending.clear();
+        PalwPanelService::fraud_filer_stage_queue_v1(&mut book, c.claim_id, first, &progress, now, &mut pending, &mut due).unwrap();
+        assert!(pending.is_empty(), "transport removal is not accepted progress and does not bypass retry spacing");
+        let next = object(12);
+        PalwPanelService::fraud_filer_stage_queue_v1(&mut book, c.claim_id, next.clone(), &progress, now, &mut pending, &mut due)
+            .unwrap();
+        assert_eq!(pending[0].3, next, "an actual new desired cursor supersedes old retry bookkeeping");
+        let stamp = book.cases[&c.claim_id].staged_tokenizer_sent.unwrap();
+        assert_eq!(stamp.2, 1);
+        let mut wrong = object(13);
+        let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = &mut wrong else { unreachable!() };
+        movement.seed_id = Hash64::from_u64_word(99);
+        assert!(
+            PalwPanelService::fraud_filer_stage_queue_v1(&mut book, c.claim_id, wrong, &progress, now, &mut pending, &mut due)
+                .is_err()
+        );
+        let mut wrong = object(14);
+        let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = &mut wrong else { unreachable!() };
+        movement.reserver = bond(2);
+        assert!(
+            PalwPanelService::fraud_filer_stage_queue_v1(&mut book, c.claim_id, wrong, &progress, now, &mut pending, &mut due)
+                .is_err()
+        );
+        assert_eq!(pending.len(), 1, "rejected owner/seed substitutions do not mutate the paid queue");
+    }
+
+    #[test]
+    fn retained_paid_authority_resumes_after_da_default_without_replay_or_new_legacy_authority() {
+        use kaspa_consensus_core::{
+            palw_rendering_resources_v1::{PalwRenderingClaimTermsV1, PalwRenderingResourcePlanV1, PalwStagedPublicCourtConfigV1},
+            palw_staged_court_state_v1::PalwStagedPaidAuthorityV1,
+        };
+        let c = candidate(3, 300, false);
+        let mut book = PalwFraudFilerBookV1::default();
+        book.refresh(vec![c.clone()], 300);
+        let plan = PalwRenderingResourcePlanV1::derive(0, 1, PalwStagedPublicCourtConfigV1::network_v1().prices).unwrap();
+        let terms = PalwRenderingClaimTermsV1::derive(300, plan, 100, 100, 10).unwrap();
+        let authority = PalwStagedPaidAuthorityV1 { reserved_daa: 300, seed_id: Hash64::from_u64_word(9), terms };
+        let mut closed = view(3, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 300 });
+        closed.da_defaulted = true;
+        closed.record = None;
+        let facts = palw_fraud_filer_facts_v1(Some(&closed), &bond(1), false, false);
+        assert_eq!(facts.outcome, Some(PalwFilerPhaseV1::DaDefault));
+        assert!(!facts.reserved && !facts.reservable);
+        book.observe_paid_authority_v1(c.claim_id, &authority, 301);
+        assert!(book.pursued().contains(&c.claim_id), "a fresh verifier resumes authenticated paid semantic work");
+        assert!(matches!(book.cases[&c.claim_id].verdict, PalwFraudFilerVerdictV1::SemanticPending));
+        assert_eq!(book.next_replay(), None, "no input bootstrap or new replay is prerequisite to the paid cursor");
+        assert_eq!(
+            palw_fraud_filer_facts_v1(Some(&closed), &bond(1), false, false),
+            facts,
+            "paid continuation never manufactures ordinary live reservation"
+        );
+        book.settle(&c.claim_id, PalwFraudFilerVerdictV1::Settled(PalwFilerPhaseV1::DaDefault));
+        book.observe_paid_authority_v1(c.claim_id, &authority, terms.collect_until_daa);
+        assert!(book.pursued().is_empty(), "the original collection horizon is never extended");
+        book.observe_paid_authority_v1(c.claim_id, &authority, 299);
+        assert!(book.pursued().is_empty(), "a future reservation cannot authorize continuation");
+        book.observe_paid_authority_v1(c.claim_id, &authority, 301);
+        assert!(book.pursued().contains(&c.claim_id), "an earlier local DA-default settle does not erase accepted paid authority");
     }
 
     fn material_budget_binding() -> PalwStepBindingV2 {

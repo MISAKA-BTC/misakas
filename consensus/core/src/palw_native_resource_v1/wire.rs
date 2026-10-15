@@ -254,6 +254,12 @@ impl NativeWireScanV1 for misaka_palw_panel::PanelCandidatesV1 {
             .allocation(1, size_of::<Vec<misaka_palw_panel::SeatCandidateV1>>() + size_of::<[usize; 3]>())
     }
 }
+/// G14's shared court continuation: Borsh is exactly `T`; restore allocates one `Arc<T>` (two counters plus the payload).
+impl<T: NativeWireScanV1> NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwSharedCourtV1<T> {
+    fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
+        T::scan_native_wire_v1(reader)?.allocation(1, size_of::<T>() + size_of::<[usize; 2]>())
+    }
+}
 impl NativeWireScanV1 for crate::palw_model_market_v1::PalwModelMarketV1 {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         reader.skip(6 * 8)?;

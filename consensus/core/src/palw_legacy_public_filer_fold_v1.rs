@@ -64,7 +64,10 @@ impl PalwChainStateV2 {
                 .claims
                 .get(claim_id)
                 .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("public FP job without a retained claim".into()))?;
-            if !params.legacy_public_filer_active_at(claim.accepted_daa) {
+            let prospective = self
+                .staged_claim_contract_v1(claim_id)
+                .is_some_and(|c| c.terms.accepted_daa == claim.accepted_daa && c.producer == claim.bond);
+            if !params.legacy_public_filer_active_at(claim.accepted_daa) && !prospective {
                 return Err(PalwStateV2Error::CarriageInconsistent("public FP job below its fence".into()));
             }
             let job = borsh::from_slice::<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>(wire)
@@ -214,8 +217,13 @@ impl TransitionBuilder<'_> {
         claim: &PalwClaimStateV2,
         public_job: Option<&crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
     ) -> Result<Option<Vec<u8>>, PalwStateV2Error> {
-        if !self.params.legacy_public_filer_active_at(claim.accepted_daa) {
+        if !self.params.legacy_public_filer_active_at(claim.accepted_daa) && self.extras.staged_public_court.is_none() {
             return Ok(None);
+        }
+        if self.extras.staged_public_court.is_some() && public_job.is_none() {
+            return Err(PalwStateV2Error::CarriageInconsistent(
+                "prospective public court requires the original accepted FP job".into(),
+            ));
         }
         public_job
             .map(|job| {
@@ -936,7 +944,11 @@ impl PalwChainStateV2 {
             .claims
             .iter()
             .filter(|(claim_id, claim)| {
-                let known = self.legacy_disputes.get(claim_id).is_some_and(|record| record.knows(me));
+                let known = self.legacy_disputes.get(claim_id).is_some_and(|record| record.knows(me))
+                    || self
+                        .staged_owned_row_v1(**claim_id, *me)
+                        .and_then(|row| row.owner_accounting_v1())
+                        .is_some_and(|(_, _, _, until)| now_daa < until);
                 let final_row_open = palw_final_public_dispute_open_v1(self, params, claim_id, claim, now_daa);
                 claim.bond != *me && (known || palw_dispute_phase_reservable_v1(&claim.phase, final_row_open))
             })
@@ -969,6 +981,14 @@ impl PalwChainStateV2 {
         }
         let mut wanted: std::collections::BTreeSet<_> = claims.iter().copied().collect();
         wanted.extend(self.legacy_disputes_of_v1(me));
+        wanted.extend(self.staged_by_owner.range((*me, crate::Hash64::default())..).take_while(|(owner, _)| owner == me).filter_map(
+            |(_, claim)| {
+                self.staged_owned_row_v1(*claim, *me)
+                    .and_then(|row| row.owner_accounting_v1())
+                    .filter(|(_, _, _, until)| now_daa < *until)
+                    .map(|_| *claim)
+            },
+        ));
         let mut out: Vec<_> = wanted
             .into_iter()
             .filter_map(|claim_id| {
@@ -976,7 +996,11 @@ impl PalwChainStateV2 {
                 if claim.bond == *me {
                     return None;
                 }
-                let known = self.legacy_disputes.get(&claim_id).is_some_and(|record| record.knows(me));
+                let known = self.legacy_disputes.get(&claim_id).is_some_and(|record| record.knows(me))
+                    || self
+                        .staged_owned_row_v1(claim_id, *me)
+                        .and_then(|row| row.owner_accounting_v1())
+                        .is_some_and(|(_, _, _, until)| now_daa < until);
                 let final_open = palw_final_public_dispute_open_v1(self, params, &claim_id, claim, now_daa);
                 if !known
                     && (!palw_dispute_phase_reservable_v1(&claim.phase, final_open)

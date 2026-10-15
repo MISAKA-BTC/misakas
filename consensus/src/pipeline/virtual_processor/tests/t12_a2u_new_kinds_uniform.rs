@@ -172,6 +172,22 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 params.palw_staged_public_court_v1 = Some(at);
                 arm_objective_offence_at_or_below(params, at);
             }
+            // The TIR and greedy Float32 staged routes: their forms ride inside the staged court's kinds, so the court (and its
+            // objective-offence ledger) is armed at or below `at` too.
+            PalwLifecycleKindFenceV1::StagedTirRouteV1 => {
+                params.palw_staged_tir_route_v1 = Some(at);
+                if params.palw_staged_public_court_v1.is_none_or(|f| f.daa_score() > at.daa_score()) {
+                    params.palw_staged_public_court_v1 = Some(at);
+                }
+                arm_objective_offence_at_or_below(params, at);
+            }
+            PalwLifecycleKindFenceV1::StagedFloatConstraintV1 => {
+                params.palw_staged_float_constraint_v1 = Some(at);
+                if params.palw_staged_public_court_v1.is_none_or(|f| f.daa_score() > at.daa_score()) {
+                    params.palw_staged_public_court_v1 = Some(at);
+                }
+                arm_objective_offence_at_or_below(params, at);
+            }
             PalwLifecycleKindFenceV1::LegacyHeldDaV2 => params.palw_legacy_held_da_v2 = Some(at),
             // Lane HFX: the `Head` variants inside tag 68 and a generative job; the fence mirrors onto the V2 bundle.
             PalwLifecycleKindFenceV1::TaskHeadsV1 => {
@@ -301,6 +317,8 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_claim_challenge_v2"
             | "palw_panel_lifetime_v2"
             | "palw_monetary_material_v1"
+            | "palw_staged_tir_route_v1"
+            | "palw_staged_float_constraint_v1"
             | "palw_exec_payload_v2"
             | "palw_model_refutation_seal_v1"
             | "palw_funded_execution_v11"

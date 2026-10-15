@@ -37,6 +37,8 @@ mod tests {
             PalwPrefixCustodyContractV1::new(Hash64::from_u64_word(1), Hash64::from_u64_word(2), Hash64::from_u64_word(3), &terms);
         custody.expected_panel = (1..=5).map(bond).collect();
         assert!(!custody.qualified());
+        assert!(custody.current_signed_v1().public_qualified_v1());
+        assert!(custody.current_signed_v1().expected_panel.is_empty());
         let before = custody.clone();
         let mut invalid = receipt(claim, 1);
         invalid.signed_daa = 99;
@@ -52,6 +54,10 @@ mod tests {
         for n in 1..=5 {
             assert!(custody.qualify(claim, &receipt(claim, n), 101));
             assert_eq!(custody.qualified(), n == 5);
+            let signed = custody.current_signed_v1();
+            assert!(signed.qualified());
+            assert_eq!(signed.expected_panel, (1..=n).map(bond).collect());
+            signed.check(&custody.expected_panel).unwrap();
         }
         let original = custody.clone();
         assert!(!custody.qualify(claim, &receipt(claim, 1), 102));
@@ -77,6 +83,13 @@ pub struct PalwPrefixCustodyContractV1 {
     pub credited: BTreeMap<PalwBondKeyV2, PalwPrefixCustodyReceiptV1>,
 }
 impl PalwPrefixCustodyContractV1 {
+    /// The retained digest authenticates the exact signature already credited by
+    /// native V2/V3/V4 receipt validation, without reinterpreting its signing domain.
+    pub fn matches_credited_receipt_v1(&self, claim:Hash64,receipt:&crate::palw_panel_v2::PalwSeatReceiptV2)->bool {
+        let Some(saved)=self.credited.get(&receipt.seat_bond) else {return false};
+        let mut replay=self.clone(); replay.credited.remove(&receipt.seat_bond);
+        replay.qualify(claim,receipt,saved.credited_daa) && replay.credited.get(&receipt.seat_bond)==Some(saved)
+    }
     pub fn new(
         execution_root: Hash64,
         job_identity: Hash64,
@@ -129,6 +142,19 @@ impl PalwPrefixCustodyContractV1 {
     }
     pub fn qualified(&self) -> bool {
         !self.expected_panel.is_empty() && self.expected_panel.iter().all(|seat| self.credited.contains_key(seat))
+    }
+    /// The producer's accepted signature owes its original material even if no
+    /// Panel member has yet opted in with Valid. This never qualifies unsigned seats.
+    pub fn public_qualified_v1(&self) -> bool {
+        self.expected_panel.iter().all(|seat| self.credited.contains_key(seat))
+    }
+    /// Freeze only actual current Valid signers for an independent owner's source court.
+    /// Unsigned/abstaining seats cannot veto producer acquisition or acquire liability.
+    pub fn current_signed_v1(&self) -> Self {
+        let mut result = self.clone();
+        result.expected_panel.retain(|seat| result.credited.contains_key(seat));
+        result.credited.retain(|seat, _| result.expected_panel.contains(seat));
+        result
     }
     pub fn check(&self, held_panel: &BTreeSet<PalwBondKeyV2>) -> Result<(), String> {
         if !self.expected_panel.is_subset(held_panel)

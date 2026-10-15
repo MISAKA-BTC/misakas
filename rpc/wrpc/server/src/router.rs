@@ -124,6 +124,7 @@ impl Router {
                 GetPalwRewardVesting,
                 GetPalwMonetaryMaterial,
                 GetPalwStateCarriage,
+                GetPalwStagedPreclaimQuote,
                 GetPalwKernelClaim,
                 GetPalwKernelRows,
                 GetPalwKernelFinals,

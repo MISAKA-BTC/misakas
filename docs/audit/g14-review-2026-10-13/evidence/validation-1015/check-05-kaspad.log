@@ -1,0 +1,176 @@
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/core)
+    Checking kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/txscript)
+    Checking kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/mining/errors)
+    Checking kaspa-addressmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/components/addressmanager)
+    Checking kaspa-pow v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/pow)
+    Checking kaspa-p2p-lib v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/protocol/p2p)
+    Checking misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/exec)
+    Checking kaspa-eth-rpc v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/eth)
+    Checking misaka-palw v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/core)
+    Checking misaka-endpoints v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/endpoints)
+    Checking kaspa-connectionmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/components/connectionmanager)
+    Checking kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/notify)
+    Checking kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/client)
+    Checking kaspa-evm v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/evm/core)
+    Checking kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/pq/validator-core)
+    Checking misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/base0)
+    Checking kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/notify)
+    Checking kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/indexes/core)
+    Checking kaspa-consensusmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/components/consensusmanager)
+    Checking kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/wasm)
+    Checking misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/lower)
+    Checking kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/core)
+    Checking kaspa-p2p-mining v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/protocol/mining)
+    Checking kaspa-mining v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/mining)
+    Checking kaspa-utxoindex v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/indexes/utxoindex)
+    Checking kaspa-p2p-flows v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/protocol/flows)
+    Checking kaspa-consensus v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus)
+    Checking kaspa-grpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/grpc/core)
+    Checking misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/sdk)
+    Checking kaspa-rpc-service v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/service)
+    Checking kaspa-index-processor v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/indexes/processor)
+    Checking misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/sketch)
+    Checking misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/remote)
+    Checking kaspa-grpc-client v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/grpc/client)
+    Checking kaspa-grpc-server v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/grpc/server)
+    Checking kaspa-wrpc-server v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/wrpc/server)
+    Checking kaspad v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/kaspad)
+warning: unused imports: `PalwTokenTableV1`, `step_opening_from_leaf_source_capped_v1`, `table_eog_leaf_hash_v1`, and `table_leaf_hash_v1`
+   --> kaspad/src/palw_constraint_scheduler.rs:97:41
+    |
+ 97 |         PALW_TOKEN_TABLE_MAX_LEAVES_V1, PalwTokenTableV1, palw_fp_constraint_table_root_v1, table_eog_leaf_hash_v1, table_leaf_hash_v1,
+    |                                         ^^^^^^^^^^^^^^^^                                    ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^
+...
+104 |     palw_step_leg::{PalwStepBindingV2, PalwStepOpeningV1, step_opening_from_leaf_source_capped_v1, step_opening_root_capped_v1},
+    |                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `step_opening_from_leaf_source_capped_v1`, `table_eog_leaf_hash_v1`, and `table_leaf_hash_v1`
+   --> kaspad/src/palw_constraint_scheduler.rs:97:93
+    |
+ 97 |         PALW_TOKEN_TABLE_MAX_LEAVES_V1, PalwTokenTableV1, palw_fp_constraint_table_root_v1, table_eog_leaf_hash_v1, table_leaf_hash_v1,
+    |                                                                                             ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^
+...
+104 |     palw_step_leg::{PalwStepBindingV2, PalwStepOpeningV1, step_opening_from_leaf_source_capped_v1, step_opening_root_capped_v1},
+    |                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0599]: no method named `execute_free_prompt` found for struct `Base0Backend` in the current scope
+    --> kaspad/src/palw_constraint_scheduler.rs:147:27
+     |
+ 147 |         let run = backend.execute_free_prompt(&job, &prompt.iter().map(|id| *id as usize).collect::<Vec<_>>()).unwrap();
+     |                           ^^^^^^^^^^^^^^^^^^^
+     |
+    ::: /Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/core/src/palw_backend.rs:449:8
+     |
+ 449 |     fn execute_free_prompt(
+     |        ------------------- the method is available for `Base0Backend` here
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: there is a method `execute_free_prompt_streaming` with a similar name, but with different arguments
+    --> /Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/core/src/palw_backend.rs:1034:5
+     |
+1034 | /     fn execute_free_prompt_streaming(
+1035 | |         &self,
+1036 | |         job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+1037 | |         prompt_tokens: &[usize],
+1038 | |         on_token: &mut dyn FnMut(u32),
+1039 | |     ) -> Result<PalwFpRunV1, String> {
+     | |____________________________________^
+help: trait `PalwExecutionBackendV1` which provides `execute_free_prompt` is implemented but not in scope; perhaps you want to import it
+     |
+ 122 +     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+     |
+
+error[E0599]: no method named `disclose_trace_event` found for struct `Base0Backend` in the current scope
+   --> kaspad/src/palw_constraint_scheduler.rs:148:35
+    |
+148 |         let mut binding = backend.disclose_trace_event(&run.outcome.material, 0, 0).unwrap().binding().clone();
+    |                                   ^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: /Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/core/src/palw_backend.rs:482:8
+    |
+482 |     fn disclose_trace_event(
+    |        -------------------- the method is available for `Base0Backend` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: there is a method `disclose_selected_event_v1` with a similar name, but with different arguments
+   --> /Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/core/src/palw_backend.rs:514:5
+    |
+514 | /     fn disclose_selected_event_v1(
+515 | |         &self,
+516 | |         _material: &[u8],
+517 | |         _row: u32,
+518 | |         _tile: u32,
+519 | |         _maximum_leaves: u64,
+520 | |     ) -> Result<(crate::palw_step_leg::PalwStepBindingV2, crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1), String>
+    | |__________________________________________________________________________________________________________________________________^
+help: trait `PalwExecutionBackendV1` which provides `disclose_trace_event` is implemented but not in scope; perhaps you want to import it
+    |
+122 +     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    |
+
+warning: field `source_id` is never read
+  --> kaspad/src/palw_flat_public_source.rs:14:15
+   |
+14 |     Collect { source_id: Hash64 },
+   |     -------   ^^^^^^^^^
+   |     |
+   |     field in this variant
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `actual_bytes` is never read
+  --> kaspad/src/palw_artifact_inventory.rs:35:13
+   |
+35 |     Ready { actual_bytes: u64 },
+   |     -----   ^^^^^^^^^^^^
+   |     |
+   |     field in this variant
+
+warning: method `path_v1` is never used
+   --> kaspad/src/palw_artifact_inventory.rs:150:12
+    |
+ 47 | impl ArtifactInventoryActorV1 {
+    | ----------------------------- method in this implementation
+...
+150 |     pub fn path_v1(&self) -> &Path {
+    |            ^^^^^^^
+
+warning: field `until` is never read
+  --> kaspad/src/palw_staged_bundle_scheduler.rs:13:44
+   |
+13 |     Inventory { offset: u64, maximum: u64, until: u64 },
+   |     --------- field in this variant        ^^^^^
+
+warning: associated function `reopen` is never used
+   --> kaspad/src/palw_constraint_scheduler.rs:715:19
+    |
+489 | impl ConstraintSchedulerV1 {
+    | -------------------------- associated function in this implementation
+...
+715 |     pub(super) fn reopen(
+    |                   ^^^^^^
+
+warning: function `response_v1` is never used
+  --> kaspad/src/palw_selected_event_scheduler.rs:57:15
+   |
+57 | pub(super) fn response_v1(
+   |               ^^^^^^^^^^^
+
+warning: associated function `open` is never used
+   --> kaspad/src/palw_tokenizer_scheduler.rs:312:19
+    |
+310 | impl TokenizerSchedulerV1 {
+    | ------------------------- associated function in this implementation
+311 |     #[allow(clippy::too_many_arguments)]
+312 |     pub(crate) fn open(
+    |                   ^^^^
+
+warning: `kaspad` (lib) generated 8 warnings (run `cargo fix --lib -p kaspad` to apply 1 suggestion)
+For more information about this error, try `rustc --explain E0599`.
+warning: `kaspad` (lib test) generated 1 warning
+error: could not compile `kaspad` (lib test) due to 2 previous errors; 1 warning emitted
+exit 101

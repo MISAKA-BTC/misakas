@@ -33,6 +33,44 @@
 use crate::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
 
+/// Immutable retained capture access. Implementations must bound each allocation to `length`;
+/// callers reserve source-reader scratch before opening a backend. This is a responder input,
+/// never a public verifier credential.
+pub trait PalwOriginalCaptureReaderV1: Send + Sync {
+    fn len_v1(&self) -> u64;
+    fn read_v1(&self, offset: u64, length: u32) -> Result<Vec<u8>, String>;
+}
+
+/// Bounded projection of original Flat public bytes. `None` means structural indexing is still
+/// in progress, not an answer or a verdict. Native EOF authentication remains mandatory.
+pub trait PalwFlatPublicSourceReaderV1: Send {
+    fn poll_v1(
+        &mut self,
+        cursor: crate::palw_flat_constraint_stream_v1::PalwFlatConstraintCursorV1,
+    ) -> Result<Option<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintActionV1>, String>;
+}
+
+/// Bounded projection of an original `Float32` class's public v2 event tree (greedy Float32
+/// Constraint source, behind `palw_staged_float_constraint_v1`). `position` is the owner's
+/// accepted nomination (`None` before it). `None` means not ready, never an answer or a verdict;
+/// the chain authenticates every byte against the claim's trace root.
+pub trait PalwFloatPublicSourceReaderV1: Send {
+    fn poll_v1(
+        &mut self,
+        cursor: crate::palw_float_constraint_source_v1::PalwFloatSourceCursorV1,
+        position: Option<u32>,
+    ) -> Result<Option<crate::palw_float_constraint_source_v1::PalwFloatSourceActionV1>, String>;
+}
+
+/// An outside verifier's own TIR replay of a constrained FP job
+/// ([`PalwExecutionBackendV1::replay_tir_generated_ids_v1`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwTirReplayV1 {
+    pub generated_ids: Vec<u32>,
+    /// `tiled_logits_trace_root_v1` over the replay's own `post` logits rows and ids.
+    pub full_logits_trace_root: Hash64,
+}
+
 /// The roots an attempt carries, and the bytes that answer for them.
 ///
 /// Family-agnostic on purpose: a block header commits these four values and does not know which
@@ -469,6 +507,179 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _tile: u8,
     ) -> Result<crate::palw_step_refute::PalwTraceEventDisclosureV1, String> {
         Err("this family has no data-availability responder".to_string())
+    }
+
+    fn open_flat_public_source_v1(
+        &self,
+        _source: std::sync::Arc<dyn PalwOriginalCaptureReaderV1>,
+        _binding: &crate::palw_step_leg::PalwStepBindingV2,
+    ) -> Result<Box<dyn PalwFlatPublicSourceReaderV1>, String> {
+        Err("this family has no bounded original Flat source responder".into())
+    }
+
+    /// Open the original public Float32 rows/ids of a retained capture. No in-node backend retains
+    /// f32 rows today (BASE-0 is `Int32`); a Float32 producer either implements this or writes the
+    /// generic public sidecar ([`crate::palw_float_constraint_source_v1::write_float_public_sidecar_v1`]).
+    fn open_float_public_source_v1(
+        &self,
+        _source: std::sync::Arc<dyn PalwOriginalCaptureReaderV1>,
+        _binding: &crate::palw_step_leg::PalwStepBindingV2,
+    ) -> Result<Box<dyn PalwFloatPublicSourceReaderV1>, String> {
+        Err("this family has no bounded original Float32 source responder".into())
+    }
+
+    /// Project only original public Float32 rows/ids into the generic sidecar while saving an
+    /// already executed capture. `false` means this family retains no f32 rows.
+    fn write_float_public_source_v1(&self, _material: &[u8], _out: &mut dyn std::io::Write) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    /// Project only original public Flat logits/IDs while saving an already executed capture.
+    /// A sidecar is acceleration, never admission authority. `false` means another scheme.
+    fn write_flat_public_source_v1(&self, _material: &[u8], _out: &mut dyn std::io::Write) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    /// Original public commitment metadata only. Implementations must never manufacture a
+    /// legacy binding for another scheme or deserialize the following private capture tensors.
+    fn public_execution_binding_header_v1(
+        &self,
+        _material: &[u8],
+    ) -> Result<crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1, String> {
+        Err("this backend has no original public binding header exporter".into())
+    }
+
+    fn disclose_selected_event_v1(
+        &self,
+        _material: &[u8],
+        _row: u32,
+        _tile: u32,
+        _maximum_leaves: u64,
+    ) -> Result<(crate::palw_step_leg::PalwStepBindingV2, crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1), String>
+    {
+        Err("this family has no prospective full-width selected source responder".into())
+    }
+
+    /// **A TIR claim's selected tiled event** (Constraint source behind `palw_staged_tir_route_v1`).
+    /// Default `Err`: no in-node backend executes TIR FP jobs. RFC-0002's TIR executor implements it.
+    ///
+    /// **Interface contract** (the node's selected responder and the fold rely on every point):
+    /// * `material` is one retained payload of THIS claim, as the node stores it under
+    ///   `fp_retained_payload_paths(claim)`: the producer's own retained capture, or the copy a
+    ///   Panel custodian received. The responder tries every retained path in turn, so the
+    ///   implementor parses only its own capture format and returns `Err` for anything else, never
+    ///   a guess.
+    /// * `header` is the claim's admitted TIR public header, read from native state. The
+    ///   implementor checks that `material` is this header's run: same `job_context`, same
+    ///   `full_logits_trace_root`. Otherwise it returns `Err`.
+    /// * `row` is the decode-call row `r` (`0 <= r < exact_decode_tokens`). Row `r` is the logits
+    ///   row that selected generated id `r`: the last prefill position for `r = 0`, decode step
+    ///   `r - 1` after that. `tile` indexes `PALW_LOGITS_TILE_LANES` (4,096) lane tiles of that row.
+    /// * Rows are the class's committed `i32` logits, the TIR program's `post` node output, one per
+    ///   decode call, with the full registered vocabulary per row. They are tiled under the claim's
+    ///   context hash: `tiled_logits_row_root_v1` / `tiled_logits_tile_leaf_v1`, rows tree over
+    ///   `exact_decode_tokens` rows, outer root `tiled_logits_trace_root_v1` == the header's
+    ///   `full_logits_trace_root`.
+    /// * The result must equal
+    ///   [`crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1::of_public_rows_view_v1`]
+    ///   `(view, rows, generated_ids, (row, tile), maximum_leaves)`, which is the reference
+    ///   construction. It must pass `authenticate_view_v1` against the view derived from `header`
+    ///   and the registered record. `generated_token_ids` are all of the run's ids.
+    /// * Read-only: no execution, no network. An `Err` means "cannot answer", never a verdict.
+    ///   An unanswered duty is collected by the native fold.
+    fn disclose_tir_selected_event_v1(
+        &self,
+        _material: &[u8],
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _row: u32,
+        _tile: u32,
+        _maximum_leaves: u64,
+    ) -> Result<crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1, String> {
+        Err("this family has no TIR capture with committed logits rows".into())
+    }
+
+    /// **An outside verifier's own TIR replay** of a constrained FP job: the beat nominee's source.
+    /// Default `Err`: no in-node backend executes TIR FP jobs. RFC-0002's TIR executor implements it.
+    ///
+    /// **Interface contract:**
+    /// * Run the TIR program the chain registered for `header.job_context.shape_profile_id`, from
+    ///   the verifier's OWN registered artifact (never the producer's material), on
+    ///   `prompt_token_ids`. Check first that those ids are the job's (`prompt_tokens`,
+    ///   `prompt_token_ids_hash` and `max_context_tokens` against `job` and `header.job_context`);
+    ///   otherwise return `Err`.
+    /// * Select exactly `header.job_context.exact_decode_tokens` ids with the job's own decode
+    ///   rule: greedy for a constrained job, masked by the job's constraint, first-index ties.
+    ///   This is the rule the Constraint court applies to the committed logits.
+    /// * Return those ids and the run's own tiled logits trace root:
+    ///   `tiled_logits_trace_root_v1(&header.job_context, own_rows, own_ids)`, where the rows are the
+    ///   `post` node's `i32` logits, one per decode call. TIR is integer and deterministic, so an
+    ///   honest claim reproduces `header.full_logits_trace_root` bit for bit. The fraud filer
+    ///   settles the claim as honest when the roots are equal, and pursues it (reservation, then the
+    ///   staged bundle) when they differ.
+    /// * The ids are only a NOMINEE: the filer compares them with the claim's authenticated ids to
+    ///   pick a position and a beating lane. The court decides from the producer's authenticated
+    ///   logits alone, so a wrong replay can cost the verifier a deposit but can never convict an
+    ///   honest producer.
+    /// * An `Err` means "no replay": the claim stays unjudged by this host.
+    fn replay_tir_generated_ids_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_token_ids: &[u32],
+    ) -> Result<PalwTirReplayV1, String> {
+        Err("this family has no TIR FP execution backend".into())
+    }
+
+    /// **One committed TIR step leaf** (the TIR prefix-state source behind
+    /// `palw_staged_tir_route_v1`). Default `Err`: no in-node backend executes TIR FP jobs.
+    /// RFC-0002's TIR executor implements it.
+    ///
+    /// **Interface contract:**
+    /// * `material` is one retained payload of THIS claim (as for `disclose_tir_selected_event_v1`).
+    ///   Parse only your own capture format; return `Err` for anything else or for a capture that
+    ///   is not `header`'s run (same job context, step Merkle root and leaf count).
+    /// * Return the leaf at step-tree index `leaf_index`: its canonical 4-byte lanes `values_le`
+    ///   (`palw_tir_lanes_le_v1(leaf.dtype, values)`, the bytes the step leg hashed) and its
+    ///   opening against `header.step_merkle_root`
+    ///   (`step_opening_from_leaf_source_capped_v1(step_leaf_count, leaf_index, maximum_leaves, …)`
+    ///   over the run's leaf hashes, `step_tile_leaf_hash_v1(context_hash, class_id, preimage)`).
+    /// * The node asks for the prefix boundary's leaves in order: the consensus reader
+    ///   `palw_staged_tir_prefix_leaf_index_v1` maps a slot's cursor to `leaf_index`. Each answer
+    ///   must authenticate in `PalwTirPrefixStateStreamV1::leaf_v1`.
+    /// * Read-only; `Err` means "cannot answer", never a verdict (the duty is collected).
+    fn disclose_tir_step_leaf_v1(
+        &self,
+        _material: &[u8],
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _leaf_index: u64,
+        _maximum_leaves: u64,
+    ) -> Result<(Vec<u8>, crate::palw_step_leg::PalwStepOpeningV1), String> {
+        Err("this family has no TIR capture with committed step leaves".into())
+    }
+
+    /// **The executor-side declaration of a TIR prefix state** (a version-11 prefix-state job of a
+    /// TIR class). Default `Err`. RFC-0002's TIR executor implements it.
+    ///
+    /// **Interface contract:**
+    /// * Admissible boundaries only: `0 < prefix_tokens < prefill` and `prefix_tokens` a multiple
+    ///   of both the class layout's `checkpoint_interval` and `h_tile`
+    ///   (`PalwTirStepSpaceV1::prefix_state_leaf_count_v1` is `Some`). Otherwise return `Err`: the
+    ///   chain refuses such a claim's quote, and a staged court could not re-derive its state.
+    /// * Return `palw_fp_prefix_state_root_v1(class_id, prefix_tokens, kv_digest)` with
+    ///   `kv_digest = palw_tir_prefix_kv_digest_v1(space, job_context, prefix_tokens, lanes_of)`.
+    ///   `lanes_of(leaf)` is the run's own committed canonical lanes of that boundary leaf (the
+    ///   `Fixed` checkpoint at `prefix_tokens − 1` and the `Hist` chunks `0..prefix_tokens`): the
+    ///   very bytes the step leg commits, so the outside court re-derives this root from the
+    ///   claim's own leaves.
+    /// * The producer must also have published the class layout (tag 169) before claiming. The
+    ///   preclaim quote, the producer's own included, refuses a TIR prefix-state claim without it.
+    fn declare_tir_prefix_state_v1(
+        &self,
+        _material: &[u8],
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _prefix_tokens: u32,
+    ) -> Result<Hash64, String> {
+        Err("this family has no TIR FP execution backend".into())
     }
 
     fn bisect_prefix_state(&self, _material: &[u8], _index: u64) -> Option<Hash64> {

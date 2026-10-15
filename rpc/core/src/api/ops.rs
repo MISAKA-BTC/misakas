@@ -325,6 +325,9 @@ pub enum RpcApiOps {
     /// Read-only: bounded byte pages of the canonical `PalwStateCarriageV2` of the PALW state a pinned header commits (its selected
     /// parent's post-state), for offline `palw-class panel-lifetime-v2 --carriage`. Appended at the tail.
     GetPalwStateCarriage = 243,
+    /// G14: the native required-family preclaim quote an external producer signs its pledge over.
+    /// Read-only; the same planner admission re-runs. Appended at the tail.
+    GetPalwStagedPreclaimQuote = 244,
 }
 
 impl RpcApiOps {

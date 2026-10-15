@@ -116,6 +116,22 @@ impl PalwRenderingResourcePlanV1 {
         self.resident_ram_bytes = self.resident_ram_bytes.max(other.resident_ram_bytes);
         self
     }
+    /// Sequential required predicates consume independent work and retain their
+    /// immutable evidence together. A component-wise maximum does not fund them.
+    pub fn checked_sum_v1(mut self, other: Self) -> Result<Self, String> {
+        self.prefix_tokens = self.prefix_tokens.max(other.prefix_tokens);
+        self.vocab = self.vocab.max(other.vocab);
+        macro_rules! add {
+            ($($field:ident),+ $(,)?) => { $(
+                self.$field = self.$field.checked_add(other.$field)
+                    .ok_or_else(|| format!("required-family sum overflows {}", stringify!($field)))?;
+            )+ };
+        }
+        add!(maximum_stream_bytes, maximum_stream_leaves, maximum_eog_bytes, maximum_moves,
+            maximum_parser_steps, maximum_blake_blocks, inclusion_daa, rent_sompi,
+            deposit_sompi, row_bytes, resident_ram_bytes);
+        Ok(self)
+    }
     /// Exact prospective duration from this accepted claim, with an explicitly retained reorg
     /// envelope. Saturation is a refusal, never a silently shorter lifetime.
     pub fn deadline(&self, accepted_daa: u64) -> Result<u64, String> {

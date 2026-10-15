@@ -54,6 +54,21 @@ impl TransactionValidator {
         self.check_model_sink_binding_in_context(tx, ctx_daa_score)?;
         self.check_activation_sink_outputs_in_context(tx, ctx_daa_score)?;
         self.check_improvement_sink_outputs_in_context(tx, ctx_daa_score)?;
+        // Only FP-specific inner doors see the original payload. Lock time,
+        // outputs, transaction identity, fees and mass remain those of the outer TX.
+        let history_inner = if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
+            && tx.payload.starts_with(kaspa_consensus_core::palw_history_custody_v1::PALW_HISTORY_FP_ENVELOPE_MAGIC_V1)
+        {
+            if !self.palw_staged_public_court_fence.is_some_and(|fence| fence.is_active(ctx_daa_score)) {
+                return Err(TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable));
+            }
+            let envelope = kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(&tx.payload)
+                .map_err(|_| TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable))?;
+            let mut inner = tx.clone();
+            inner.payload = envelope.original_payload;
+            Some(inner)
+        } else { None };
+        let tx = history_inner.as_ref().unwrap_or(tx);
         self.check_palw_fp_work_leaves_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_job_version_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_evaluation_in_context(tx, ctx_daa_score)?;

@@ -5,6 +5,7 @@
 mod kernel_route_locator_v1;
 mod public_filer_targeting_v1;
 mod reward_gate_genesis;
+mod public_prefix_fold_v1;
 mod terminal_carriage_v1;
 use super::*;
 use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
@@ -28276,6 +28277,11 @@ mod evm_market {
     fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
             merged_reds: Default::default(),
+            history_custody_pledges: Default::default(),
+            public_original_bindings: Default::default(),
+            producer_custody_delegations: Default::default(),
+            staged_tir_route_active: false,
+            staged_float_constraint_active: false,
             audit_1004_draw_seed_source: None,
             economic_safety: None,
             work_target: None,
@@ -28541,6 +28547,11 @@ mod evm_market {
         // Below the fence the same actions write nothing.
         let dormant = PalwTransitionExtrasV1 {
             merged_reds: Default::default(),
+            history_custody_pledges: Default::default(),
+            public_original_bindings: Default::default(),
+            producer_custody_delegations: Default::default(),
+            staged_tir_route_active: false,
+            staged_float_constraint_active: false,
             audit_1004_draw_seed_source: None,
             economic_safety: None,
             work_target: None,

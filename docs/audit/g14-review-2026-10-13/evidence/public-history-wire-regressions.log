@@ -1,0 +1,7 @@
+
+running 2 tests
+test core::router::prefix_history_tests::oversized_public_history_fields_are_refused_before_entering_a_flow_queue ... ok
+test core::payload_type::tests::public_prefix_history_messages_round_trip_without_using_private_material_payloads ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+

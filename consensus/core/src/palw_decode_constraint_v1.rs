@@ -1778,6 +1778,108 @@ pub(crate) mod tests {
         )
     }
 
+    /// The constrained public fixture on a `Float32` class, for the greedy Float32 source: lane
+    /// switched, class and job context re-derived for two decode positions, the fixture's integer
+    /// rows as exact f32 rows. The producer commits the admitted `[7` lane at position 0 where the
+    /// admitted `[` outranks it (the greedy violation the Float32 row court exposes). The caller
+    /// commits its own capture's v2 trace root and rebinds the committed execution root.
+    pub(crate) struct FloatConstrainedCaseV1 {
+        pub binding: crate::palw_step_leg::PalwStepBindingV2,
+        pub job: crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        pub eog: crate::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1,
+        pub rows: Vec<Vec<f32>>,
+        pub ids: Vec<u32>,
+        pub position: u32,
+        pub beat: u32,
+    }
+    pub(crate) fn public_float_constrained_case_for_tests_v1() -> FloatConstrainedCaseV1 {
+        let (mut binding, proof) = public_constrained_case_for_tests_v1(false);
+        let mut job = proof.job;
+        binding.shape_profile.lane = crate::palw_step::PalwStepLaneV1::Float32;
+        job.class_id = binding.shape_profile.shape_profile_id();
+        let class = crate::palw_fp_execution_v3::PalwFpClassFactsV3 {
+            model_profile_id: binding.job_context.model_profile_id,
+            runtime_manifest_hash: binding.job_context.runtime_manifest_hash,
+            runtime_class_id: binding.job_context.runtime_class_id,
+            shape_profile_id: job.class_id,
+            cu_ruleset_id: binding.job_context.cu_ruleset_id,
+        };
+        binding.job_context = crate::palw_fp_execution_v3::palw_fp_job_context_v3(
+            &job,
+            &class,
+            &crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job, 2),
+            &binding.job_context.network_id,
+        )
+        .unwrap();
+        // |value| < 2^24: every fixture logit is an exact f32.
+        let rows: Vec<Vec<f32>> = constrained_rows(2).into_iter().map(|row| row.into_iter().map(|v| v as f32).collect()).collect();
+        let ids = vec![BRACKET_SEVEN, proof.pin.generated_token_ids[1]];
+        FloatConstrainedCaseV1 { binding, job, eog: proof.eog, rows, ids, position: 0, beat: b'[' as u32 }
+    }
+
+    /// The constrained public fixture as a **TIR** claim (behind `palw_staged_tir_route_v1`): a
+    /// registered tiled TIR class record and an admitted TIR public header whose execution root is
+    /// recomputed under the TIR domain, the fixture's integer rows as the class's tiled logits, and
+    /// the producer committing the admitted `[7` at position 0 where the admitted `[` outranks it.
+    /// No legacy binding exists for this claim.
+    pub(crate) struct TirConstrainedCaseV1 {
+        pub header: crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        pub record: crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        pub job: crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        pub eog: crate::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1,
+        pub rows: Vec<Vec<i32>>,
+        pub ids: Vec<u32>,
+        pub position: u32,
+        pub beat: u32,
+    }
+    pub(crate) fn public_tir_constrained_case_for_tests_v1() -> TirConstrainedCaseV1 {
+        let (binding, proof) = public_constrained_case_for_tests_v1(false);
+        let mut job = proof.job;
+        let class_id = Hash64::from_u64_word(0x71C0_C1A5);
+        let mut record = crate::palw_tir_admission_v1::PalwTirClassRecordV1::test_row_v1(class_id);
+        record.logits_vocab = VOCAB as u32;
+        record.tokenizer_id = job.tokenizer_id;
+        record.program = std::sync::Arc::new(vec![1, 2, 3]);
+        record.program_bytes = 3;
+        record.graph_ir_root = crate::palw_tir_artifact_v1::palw_tir_graph_ir_root_v1(&record.program);
+        job.class_id = class_id;
+        let class = crate::palw_fp_execution_v3::PalwFpClassFactsV3 {
+            model_profile_id: binding.job_context.model_profile_id,
+            runtime_manifest_hash: binding.job_context.runtime_manifest_hash,
+            runtime_class_id: binding.job_context.runtime_class_id,
+            shape_profile_id: class_id,
+            cu_ruleset_id: binding.job_context.cu_ruleset_id,
+        };
+        let job_context = crate::palw_fp_execution_v3::palw_fp_job_context_v3(
+            &job,
+            &class,
+            &crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job, 2),
+            &binding.job_context.network_id,
+        )
+        .unwrap();
+        let rows = constrained_rows(2);
+        let ids = vec![BRACKET_SEVEN, proof.pin.generated_token_ids[1]];
+        let trace = tiled_logits_trace_root_v1(&job_context, &rows, &ids).unwrap();
+        let (step_leaf_count, step_merkle_root) = (40, Hash64::from_u64_word(0x57E9));
+        let committed_execution_root = crate::palw_tir_step_v1::palw_tir_execution_root_v1(
+            &job_context.context_hash(),
+            &trace,
+            &class_id,
+            step_leaf_count,
+            &step_merkle_root,
+        );
+        let header = crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1 {
+            version: crate::palw_tir_step_v1::PALW_TIR_STEP_BINDING_VERSION_V1,
+            job_context,
+            artifact_root: Hash64::from_u64_word(0xA27),
+            full_logits_trace_root: trace,
+            step_leaf_count,
+            step_merkle_root,
+            committed_execution_root,
+        };
+        TirConstrainedCaseV1 { header, record, job, eog: proof.eog, rows, ids, position: 0, beat: b'[' as u32 }
+    }
+
     /// **The court's third arm, as an accusation**: an honest constrained run clears at every position (the stop included, with
     /// no witness); an id the constraint forbids is convicted from the ids and the opened renderings alone; the stop rule's
     /// "nothing is admitted" is convicted only when the challenger shows a lane that was; and a later position is not

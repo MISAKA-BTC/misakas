@@ -88,6 +88,9 @@ message KaspadMessage {
     // can route it.
     PalwIntervalOpeningRequestMessage palwIntervalOpeningRequest = 78;
     PalwIntervalOpeningMessage palwIntervalOpening = 79;
+    // Bounded public accepted-history pull. Responses are addressed to the asker only.
+    PalwPrefixHistoryRequestMessage palwPrefixHistoryRequest = 80;
+    PalwPrefixHistoryRecordMessage palwPrefixHistoryRecord = 81;
   }
 }
 

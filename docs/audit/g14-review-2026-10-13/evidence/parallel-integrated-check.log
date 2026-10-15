@@ -1,0 +1,162 @@
+    Checking libcrux-secrets v0.0.6
+    Checking libcrux-intrinsics v0.0.8
+    Checking libcrux-platform v0.0.3
+    Checking libcrux-traits v0.0.8
+    Checking libcrux-sha3 v0.0.10
+    Checking libcrux-ml-dsa v0.0.10
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/core)
+    Checking kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/txscript)
+    Checking kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/mining/errors)
+    Checking kaspa-pow v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/pow)
+    Checking kaspa-p2p-lib v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/protocol/p2p)
+    Checking kaspa-addressmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/components/addressmanager)
+    Checking misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/exec)
+    Checking kaspa-connectionmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/components/connectionmanager)
+    Checking misaka-endpoints v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/endpoints)
+    Checking kaspa-eth-rpc v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/eth)
+    Checking kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/notify)
+    Checking kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/client)
+    Checking kaspa-evm v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/evm/core)
+    Checking kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/notify)
+    Checking kaspa-consensusmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/components/consensusmanager)
+    Checking kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/indexes/core)
+    Checking kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/wasm)
+    Checking kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/pq/validator-core)
+    Checking kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/core)
+    Checking kaspa-utxoindex v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/indexes/utxoindex)
+    Checking kaspa-p2p-mining v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/protocol/mining)
+    Checking kaspa-mining v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/mining)
+    Checking misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/base0)
+    Checking kaspa-p2p-flows v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/protocol/flows)
+    Checking misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/lower)
+    Checking kaspa-consensus v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus)
+    Checking kaspa-grpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/grpc/core)
+    Checking kaspa-rpc-service v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/service)
+    Checking kaspa-grpc-client v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/grpc/client)
+    Checking kaspa-index-processor v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/indexes/processor)
+    Checking misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/sketch)
+    Checking misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/sdk)
+    Checking misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/remote)
+    Checking kaspa-wrpc-server v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/wrpc/server)
+    Checking kaspa-grpc-server v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/grpc/server)
+    Checking misaka-palw v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/core)
+    Checking kaspad v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/kaspad)
+error: cannot find macro `debug` in this scope
+   --> kaspad/src/palw_public_prefix.rs:341:21
+    |
+341 |                     debug!("[{PALW_PANEL}] claim {claim}: public prefix source remains unavailable: {why}"); }
+    |                     ^^^^^
+    |
+    = note: `debug` is an attribute that can be used by the derive macros `Debug` and `DebugCustom`, you might be missing a `derive` attribute
+    = note: macro `crate::palw_panel::palw_fraud_filer::input::debug` exists but is inaccessible
+help: consider importing one of these macros
+    |
+  3 + use kaspa_core::debug;
+    |
+  3 + use log::debug;
+    |
+
+error: cannot find macro `debug` in this scope
+     --> kaspad/src/palw_panel.rs:10779:17
+      |
+10779 |                 debug!("[{PALW_PANEL}] public prefix response remains pending: {why}");
+      |                 ^^^^^
+      |
+      = note: `debug` is an attribute that can be used by the derive macros `Debug` and `DebugCustom`, you might be missing a `derive` attribute
+      = note: macro `crate::palw_panel::palw_fraud_filer::input::debug` exists but is inaccessible
+help: consider importing one of these macros
+      |
+   29 + use kaspa_core::debug;
+      |
+   29 + use log::debug;
+      |
+
+error[E0277]: the trait bound `PalwOffenceTargetV1: BorshSerialize` is not satisfied
+    --> kaspad/src/palw_fraud_filer.rs:3657:48
+     |
+3657 |         let copy_bytes = (borsh::object_length(&(target, binding, job)).map_err(|e| e.to_string())? as u64)
+     |                           -------------------- ^^^^^^^^^^^^^^^^^^^^^^^ the trait `BorshSerialize` is not implemented for `PalwOffenceTargetV1`
+     |                           |
+     |                           required by a bound introduced by this call
+     |
+     = help: the following other types implement trait `BorshSerialize`:
+               &T
+               ()
+               (T0, T1)
+               (T0, T1, T2)
+               (T0, T1, T2, T3)
+               (T0, T1, T2, T3, T4)
+               (T0, T1, T2, T3, T4, T5)
+               (T0, T1, T2, T3, T4, T5, T6)
+             and 1427 others
+     = note: required for `&PalwOffenceTargetV1` to implement `BorshSerialize`
+     = note: 1 redundant requirement hidden
+     = note: required for `(&PalwOffenceTargetV1, &PalwStepBindingV2, &PalwFreePromptJobV3)` to implement `BorshSerialize`
+note: required by a bound in `object_length`
+    --> /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/borsh-1.5.1/src/ser/helpers.rs:61:8
+     |
+  59 | pub fn object_length<T>(value: &T) -> Result<usize>
+     |        ------------- required by a bound in this function
+  60 | where
+  61 |     T: BorshSerialize + ?Sized,
+     |        ^^^^^^^^^^^^^^ required by this bound in `object_length`
+     = note: the full name for the type has been written to '/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/target/debug/deps/kaspad_lib-04d8d869ac870bd7.long-type-9393881620776489230.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0599]: no method named `palw_prefix_page_write_v1` found for struct `ConsensusSessionOwned` in the current scope
+    --> kaspad/src/palw_fraud_filer.rs:3707:34
+     |
+3707 |                     page_session.palw_prefix_page_write_v1(
+     |                     -------------^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `ConsensusSessionOwned`
+
+error[E0599]: no method named `palw_prefix_response_duties_v1` found for reference `&ConsensusSessionOwned` in the current scope
+   --> kaspad/src/palw_public_prefix.rs:244:30
+    |
+244 |         let duties = session.palw_prefix_response_duties_v1(signer)?;
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: there is a method `palw_disclosure_duties_v1` with a similar name
+    |
+244 -         let duties = session.palw_prefix_response_duties_v1(signer)?;
+244 +         let duties = session.palw_disclosure_duties_v1(signer)?;
+    |
+
+error[E0308]: mismatched types
+   --> kaspad/src/palw_public_prefix.rs:286:53
+    |
+286 |                 .and_then(|n| (borsh::object_length(pending).ok()? as u64).checked_mul(8).and_then(|m| n.checked_add(m)))
+    |                                -------------------- ^^^^^^^ expected `&_`, found `PalwPrefixPublicProgressV1`
+    |                                |
+    |                                arguments to this function are incorrect
+    |
+    = note: expected reference `&_`
+                  found struct `PalwPrefixPublicProgressV1`
+note: function defined here
+   --> /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/borsh-1.5.1/src/ser/helpers.rs:59:8
+    |
+ 59 | pub fn object_length<T>(value: &T) -> Result<usize>
+    |        ^^^^^^^^^^^^^
+help: consider borrowing here
+    |
+286 |                 .and_then(|n| (borsh::object_length(&pending).ok()? as u64).checked_mul(8).and_then(|m| n.checked_add(m)))
+    |                                                     +
+
+error[E0599]: no method named `reserve` found for reference `&PalwMemoryLedgerV1` in the current scope
+    --> kaspad/src/palw_fraud_filer.rs:1061:33
+     |
+1061 |         let Ok(ticket) = ledger.reserve(
+     |                          -------^^^^^^^
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `reserve`, perhaps you need to implement one of them:
+             candidate #1: `PalwBondBudgetHookV1`
+             candidate #2: `hyper_util::client::legacy::pool::Poolable`
+help: there is a method `can_reserve` with a similar name, but with different arguments
+    --> kaspad/src/palw_memory_ledger.rs:452:5
+     |
+ 452 |     pub fn can_reserve(&self, need_bytes: u64) -> Result<(), PalwMemoryRefusalV1> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Some errors have detailed explanations: E0277, E0308, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `kaspad` (lib) due to 7 previous errors

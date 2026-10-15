@@ -1136,6 +1136,36 @@ mod tests {
         assert!(!filer.note_executor_refuted_v1(true, &kind4, Some(40), 101), "the first proof of a claim is kept");
     }
 
+    #[test]
+    fn retained_paid_staged_certificate_handoff_keeps_exact_proof_and_original_acceptance_clock() {
+        let reference = kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCertificateRefV1 {
+            claim: claim(),
+            reserver: bond(99),
+            reserved_daa: 400,
+            seed_id: Hash64::from_u64_word(0x5EED),
+        };
+        let contradiction = kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::StagedCourt { reference };
+        let object = kaspa_consensus_core::palw_offence_attribution_v1::palw_executor_refuted_object_v1(
+            bond(0),
+            claim(),
+            contradiction.clone(),
+            None,
+        );
+        let mut filer = PalwFalseValidFilerV1::new(10_000, 500, DEPTH);
+        assert!(filer.note_executor_refuted_v1(true, &object, Some(40), 1000));
+        let case = &filer.cases[&claim()];
+        assert_eq!(case.proof.contradiction, contradiction);
+        assert_eq!(case.proof.prompt_ids_opening, None);
+        assert_eq!((case.source, case.not_before_daa), (PalwFalseValidSourceV1::Replay, 40));
+        let source = include_str!("palw_fraud_filer.rs");
+        let paid = source.find(".fraud_filer_paid_stage_v1(session, book").unwrap();
+        let handed = paid + source[paid..].find("match door.file(filing)").unwrap();
+        let noted = paid + source[paid..].find("false_valid.note_executor_refuted_v1(").unwrap();
+        assert!(noted < handed, "all literal Valid signers receive the exact paid proof before producer handoff");
+        assert!(source[noted..handed].contains("candidate.accepted_daa"));
+        assert!(source[noted..handed].contains("|v| v.accepted_daa"));
+    }
+
     /// Bounded: one proof a claim (the first kept), at most `MAX_CASES` (the oldest forgotten), one
     /// scan a tick, and a proof forgotten past its TTL.
     #[test]

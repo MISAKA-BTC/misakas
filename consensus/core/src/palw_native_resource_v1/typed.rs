@@ -134,6 +134,15 @@ impl<T: NativeHeapV1> NativeHeapV1 for Box<T> {
         allocation::<T>(1, path).add::<Self>((**self).native_heap_v1(path), path)
     }
 }
+impl<T: NativeHeapV1> NativeHeapV1 for crate::palw_staged_court_state_v1::PalwSharedCourtV1<T> {
+    fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
+        // An `Arc<T>` newtype (G14): the shared allocation, counted as the Arc it is.
+        let header = size_of::<[usize; 2]>() as u64 + std::mem::align_of::<T>() as u64;
+        allocation::<T>(1, path)
+            .add::<Self>(NativeCoverageV1::Bounded { bytes: header }, path)
+            .add::<Self>(self.as_ref().native_heap_v1(path), path)
+    }
+}
 impl<T: NativeHeapV1> NativeHeapV1 for Arc<T> {
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
         // Counting a shared Arc's payload more than once is conservative. The

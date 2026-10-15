@@ -53,7 +53,7 @@ use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
 use kaspa_consensus_core::tx::{MutableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
-use kaspa_core::{info, trace, warn};
+use kaspa_core::{debug, info, trace, warn};
 use kaspa_hashes::Hash64;
 use kaspa_mining::MAXIMUM_STANDARD_TRANSACTION_MASS;
 use kaspa_mining::mempool::tx::Orphan;
@@ -90,11 +90,64 @@ mod palw_filer_replay;
 #[path = "palw_operator_da.rs"]
 mod palw_operator_da;
 
+#[path = "palw_artifact_inventory.rs"]
+mod artifact_inventory;
+#[path = "palw_flat_source_responder.rs"]
+mod flat_source_responder;
+#[path = "palw_float_source_responder.rs"]
+mod float_source_responder;
+#[path = "palw_tir_prefix_responder.rs"]
+mod tir_prefix_responder;
+/// Paid public history recovery: the literal custodians' answers (producer and granted Valid
+/// seats) and the outside owner's native Demand/Collect when every peer and archive lacks a link.
+#[path = "palw_history_recovery_actor.rs"]
+mod history_recovery_actor;
+
+/// Which literal answer slot one public-source responder pass serves: this seat's own bond, or
+/// an external producer's slot this node accepted as custodian (signed with this node's key,
+/// answered on the producer's slot, the producer alone liable). Delegated passes use their own
+/// court-queue rounds so neither pass's sweep can drop the other's packets.
+#[derive(Clone, Copy)]
+pub(crate) struct PalwAnswerSlotV1<'a> {
+    pub(crate) slot: PalwBondKeyV2,
+    pub(crate) round_offset: u32,
+    pub(crate) only: Option<&'a HashSet<Hash64>>,
+}
+impl<'a> PalwAnswerSlotV1<'a> {
+    pub(crate) fn own(bond: PalwBondKeyV2) -> Self {
+        Self { slot: bond, round_offset: 0, only: None }
+    }
+    pub(crate) fn delegated(producer: PalwBondKeyV2, claims: &'a HashSet<Hash64>) -> Self {
+        Self { slot: producer, round_offset: PALW_DELEGATED_SLOT_ROUND_OFFSET_V1, only: Some(claims) }
+    }
+}
+/// Below every fixed lane round and above the reporter filer's terminal band.
+pub(crate) const PALW_DELEGATED_SLOT_ROUND_OFFSET_V1: u32 = 0x100;
+
+/// The external producers whose answer slots this node accepted, refreshed by bounded native
+/// pages, with each slot's own responder cursors.
+#[derive(Default)]
+struct PalwDelegatedSlotsV1 {
+    after: Option<Hash64>,
+    scanning: HashMap<PalwBondKeyV2, HashSet<Hash64>>,
+    current: HashMap<PalwBondKeyV2, HashSet<Hash64>>,
+    prefix: HashMap<PalwBondKeyV2, Option<(u64, Hash64, PalwBondKeyV2)>>,
+    selected: HashMap<PalwBondKeyV2, Option<(u64, Hash64, PalwBondKeyV2)>>,
+    flat: HashMap<PalwBondKeyV2, flat_source_responder::FlatSourceBookV1>,
+    float: HashMap<PalwBondKeyV2, float_source_responder::FloatSourceBookV1>,
+    tir_prefix: HashMap<PalwBondKeyV2, tir_prefix_responder::TirPrefixBookV1>,
+    history: HashMap<PalwBondKeyV2, history_recovery_actor::HistoryResponderBookV1>,
+}
+const PALW_DELEGATED_SLOTS_PER_TICK_V1: usize = 8;
 /// Lane LG14-A (RFC-0014 §6): the common fraud filer — any carrying bond's pursuit, as a non-seat, of a claim its own replay refutes:
 /// a dispute reservation, then reserved DA demands that localize the first divergent step to a terminal the fold adjudicates (node
 /// policy; a clean no-op below `palw_legacy_public_filer_v1`, which no shipped preset arms).
 #[path = "palw_fraud_filer.rs"]
 mod palw_fraud_filer;
+#[path = "palw_public_prefix.rs"]
+mod public_prefix;
+#[path = "palw_selected_event_responder.rs"]
+mod selected_event_responder;
 
 /// Lane G14-K: the kernel route's public verifier — any funded bond holding a registered kernel model re-executes the route's claims
 /// and pursues a refuted one (seal, file, demand) through `misaka_palw_remote::pursuit` and the court lane (node policy; a clean no-op
@@ -4164,6 +4217,7 @@ enum CaptureSamplesV1 {
 }
 
 pub struct PalwPanelService {
+    worker_running: std::sync::atomic::AtomicBool,
     /// Read-only test observation of real completed replay verdicts; never drives the service.
     #[cfg(test)]
     fraud_filer_honest_replays: std::sync::Mutex<HashSet<Hash64>>,
@@ -4598,6 +4652,7 @@ impl PalwPanelService {
             None
         };
         Self {
+            worker_running: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             fraud_filer_honest_replays: std::sync::Mutex::new(HashSet::new()),
             config,
@@ -7615,6 +7670,24 @@ impl PalwPanelService {
     /// `verify_material` reproduces it whichever family ran it. Returns the funded, signed 0x4a
     /// transaction, the claim id, and the `FPC1` material (question + answer) to retain and
     /// broadcast.
+    fn canonical_class_id_v1(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> Result<Hash64, String> {
+        match self.config.canonical_class.as_deref() {
+            Some(hex) => {
+                let mut out = [0u8; 64];
+                if hex.len() != 128 || faster_hex::hex_decode(hex.as_bytes(), &mut out).is_err() {
+                    return Err("--palw-canonical-class is not 128 hex chars".into());
+                }
+                Ok(Hash64::from_bytes(out))
+            }
+            None => session
+                .palw_v2_class_table()
+                .into_iter()
+                .find(|row| row.is_base_class)
+                .map(|row| row.class_id)
+                .ok_or("the chain names no base class to run canonical claims on".into()),
+        }
+    }
+
     async fn build_canonical_claim(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
@@ -7637,22 +7710,11 @@ impl PalwPanelService {
         // 250000 fees which is under the required amount of 262870", and the lane never opened.
         const CANONICAL_CLAIM_FEE_FLOOR_SOMPI: u64 = 250_000;
 
-        let class_id = match self.config.canonical_class.as_deref() {
-            Some(hex) => {
-                let mut out = [0u8; 64];
-                if hex.len() != 128 || faster_hex::hex_decode(hex.as_bytes(), &mut out).is_err() {
-                    return Err("--palw-canonical-class is not 128 hex chars".to_string());
-                }
-                Hash64::from_bytes(out)
-            }
-            None => session
-                .palw_v2_class_table()
-                .into_iter()
-                .find(|row| row.is_base_class)
-                .map(|row| row.class_id)
-                .ok_or("the chain names no base class to run canonical claims on")?,
-        };
+        let class_id = self.canonical_class_id_v1(session)?;
         let facts = session.palw_producer_facts_v2(class_id, Some(bond)).ok_or("no producer facts for the canonical class")?;
+        if !self.artifact_inventory_ready_v1(session, class_id, facts.artifact_root, PalwBondKeyV2(bond))? {
+            return Err("prospective original claim waits for native tokenizer EOF inventory".into());
+        }
         let bond_facts = facts.bond.as_ref().ok_or("this bond is not registered on the chain")?;
         // **Room first, inference second.** A canonical claim reserves about one canonical job's
         // exposure (eight quanta of an eighth each — `claim_exposure`, the attempt lane's one
@@ -7664,6 +7726,15 @@ impl PalwPanelService {
         let rcore_plus =
             crate::palw_producer::palw_rcore_plus_reads_v1(&self.consensus_config.params, session, class_id, &bond, facts.daa_score);
         crate::palw_producer::palw_canonical_claim_room_v1(bond_facts, rcore_plus)?;
+        let _staged_execution = if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa) {
+            let need = self
+                .backends()
+                .role_memory_need_or_chain_v1(class_id, facts.artifact_root, FULL_SEAT_V1, |id| self.chain_carriage_v1(session, id))
+                .ok_or("prospective producer FullSeat resource profile unavailable")?;
+            Some(self.reserve_replay_v1("canonical-original-public-source", &need, class_id, Hash64::from_u64_word(current_daa))?)
+        } else {
+            None
+        };
         let backend = self.resolve_backend(session, class_id, facts.artifact_root)?;
         // The producer's guard, for the claim this node underwrites here too: no claim of a fused
         // class this build cannot defend at its dissection's turn — past `palw_offence_attribution`, no
@@ -7754,6 +7825,25 @@ impl PalwPanelService {
             kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(&job, &shape.job_context, &run, retention)
                 .map_err(|e| format!("the run does not assemble into a commitment: {e}"))?;
         let claim_id = fp_claim_id_v3(&commitment);
+        let (run, original_header) = if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa) {
+            let directory = self.config.retention_dir.clone();
+            let (_, projected) = offload(_backend, move |backend| {
+                crate::palw_flat_public_source::retain_v1(&directory, claim_id, backend, &run.outcome.material)?;
+                // A Float32 family's public rows (no in-node backend retains them today: `false`).
+                crate::palw_flat_public_source::retain_float_v1(&directory, claim_id, backend, &run.outcome.material)?;
+                let header = backend.public_execution_binding_header_v1(&run.outcome.material)?;
+                Ok::<_, String>((run, Some(header)))
+            })
+            .await?;
+            projected?
+        } else {
+            (run, None)
+        };
+        // Until this carrier is built, the projection is not yet anyone's custody: a refusal
+        // below removes it instead of leaving an orphan no accepted lease will ever retire.
+        let mut unpublished_projection = original_header
+            .as_ref()
+            .map(|_| crate::palw_flat_public_source::UnpublishedProjectionV1::new(&self.config.retention_dir, claim_id));
         let material = palw_fp_capture_encode_v1(&job, &ids, &run.outcome.material);
 
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
@@ -7763,6 +7853,41 @@ impl PalwPanelService {
         };
         let seed = kaspa_pq_validator_core::load_validator_seed(&self.config.key_path)?;
         let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
+        let public_pledge = if let Some(header) = &original_header {
+            match session.palw_staged_preclaim_quote_v1(commitment.clone(), header.clone())? {
+                Some((_snapshot, quote)) => {
+                    use kaspa_consensus_core::palw_history_custody_v1::{PALW_HISTORY_PLEDGE_CONTEXT_V1, PalwHistoryCustodyPledgeV1};
+                    let accept_until_daa = quote.plan.terms.open_until_daa;
+                    if accept_until_daa <= current_daa {
+                        return Err("original public claim quote has expired before publication".into());
+                    }
+                    let mut pledge = PalwHistoryCustodyPledgeV1 {
+                        version: 1,
+                        claim: claim_id,
+                        producer: PalwBondKeyV2(bond),
+                        execution_root: commitment.execution_root,
+                        job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&commitment),
+                        cu_ruleset_id: shape.job_context.cu_ruleset_id,
+                        resource_plan_id: quote.resource_plan_id,
+                        maximum_records: quote.maximum_records,
+                        maximum_custodians: quote.maximum_custodians,
+                        accept_until_daa,
+                        material_until_daa: accept_until_daa
+                            .checked_add(quote.material_span_daa)
+                            .ok_or("original public claim material horizon overflow")?,
+                        signature: Vec::new(),
+                    };
+                    pledge.signature = self
+                        .sign(pledge.pledge_id_v1().as_byte_slice(), PALW_HISTORY_PLEDGE_CONTEXT_V1)
+                        .ok_or("producer cannot sign original public custody pledge")?;
+                    pledge.check_v1()?;
+                    Some(pledge)
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
         // **ADR-0148: the fold's own price, asked of this node's own state**, with the ids the
         // carrier holds (none: a canonical payload carries no prompt). Past the ADR-0145 bundle the
         // ledger prices compute and the leaves rule no longer says whether the claim earns; below
@@ -7797,7 +7922,25 @@ impl PalwPanelService {
         // because the fee is the only field the second build changes and the mass does not move
         // with it.
         let build = |fee: u64| {
-            key.build_fp_commitment_tx(
+            if let Some(pledge) = &public_pledge {
+                return key.build_fp_commitment_tx_original_public_v1(
+                    &self.consensus_config.params,
+                    current_daa,
+                    network_domain,
+                    self.config.prompt_ids_form,
+                    commitment.clone(),
+                    carried.clone(),
+                    price,
+                    pledge,
+                    original_header.as_ref().ok_or("original public pledge lost its immutable header")?,
+                    funding_outpoint,
+                    funding,
+                    fee,
+                );
+            }
+            key.build_fp_commitment_tx_under_params_v1(
+                &self.consensus_config.params,
+                current_daa,
                 network_domain,
                 // The carrier's stateless check is the chain's, which holds no class and reads the
                 // network's genesis form (ADR-0118 Decision 5); a canonical payload carries no ids,
@@ -7822,6 +7965,9 @@ impl PalwPanelService {
         let fee = relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&probe).compute_mass)
             .max(CANONICAL_CLAIM_FEE_FLOOR_SOMPI);
         let tx = build(fee)?;
+        if let Some(projection) = unpublished_projection.as_mut() {
+            projection.keep();
+        }
         Ok((tx, claim_id, material))
     }
 
@@ -8147,20 +8293,111 @@ impl PalwPanelService {
         }
     }
 
-    /// Whether the seat identity loaded (the key file and the bond outpoint) — [`Self::worker`] declines
-    /// otherwise, and the daemon says so in one `PALW duties NOT as planned` line (`crate::palw_duties`).
+    /// Whether the signing seat identity loaded. Keyless local cache retirement is not a seat duty.
     pub fn seat_identity_loaded(&self) -> bool {
         self.bond.is_some() && self.keypair.is_some()
     }
 
+    /// Answer the literal slots of external producers that delegated custody to this node.
+    async fn delegated_slots_tick_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        custodian: PalwBondKeyV2,
+        book: &mut PalwDelegatedSlotsV1,
+        pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        due: &mut HashMap<(Hash64, u32, bool), u64>,
+        moved: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) {
+        match session.palw_staged_custody_delegations_to_v1(custodian, book.after) {
+            Ok((page, next)) => {
+                for (claim, producer) in page {
+                    book.scanning.entry(producer).or_default().insert(claim);
+                }
+                book.after = next;
+                if next.is_none() {
+                    book.current = std::mem::take(&mut book.scanning);
+                    let live: HashSet<PalwBondKeyV2> = book.current.keys().copied().collect();
+                    book.prefix.retain(|p, _| live.contains(p));
+                    book.selected.retain(|p, _| live.contains(p));
+                    book.flat.retain(|p, _| live.contains(p));
+                    book.float.retain(|p, _| live.contains(p));
+                    book.tir_prefix.retain(|p, _| live.contains(p));
+                    book.history.retain(|p, _| live.contains(p));
+                }
+            }
+            Err(why) => debug!("[{PALW_PANEL}] delegated custody page remains pending: {why}"),
+        }
+        let slots: Vec<(PalwBondKeyV2, HashSet<Hash64>)> =
+            book.current.iter().take(PALW_DELEGATED_SLOTS_PER_TICK_V1).map(|(p, c)| (*p, c.clone())).collect();
+        for (producer, claims) in &slots {
+            let slot = PalwAnswerSlotV1::delegated(*producer, claims);
+            let cursor = book.prefix.entry(*producer).or_default();
+            if let Err(why) = self.public_prefix_answer_tick_v1(session, slot, cursor, pending, due, moved).await {
+                debug!("[{PALW_PANEL}] delegated prefix response for {producer:?} remains pending: {why}");
+            }
+            let cursor = book.selected.entry(*producer).or_default();
+            if let Err(why) = self.public_selected_answer_tick_v1(session, slot, cursor, pending, due, moved).await {
+                debug!("[{PALW_PANEL}] delegated selected response for {producer:?} remains pending: {why}");
+            }
+            let flat = book.flat.entry(*producer).or_default();
+            if let Err(why) = self.public_flat_answer_tick_v1(session, slot, flat, pending, due, moved).await {
+                debug!("[{PALW_PANEL}] delegated Flat response for {producer:?} remains pending: {why}");
+            }
+            let float = book.float.entry(*producer).or_default();
+            if let Err(why) = self.public_float_answer_tick_v1(session, slot, float, pending, due, moved).await {
+                debug!("[{PALW_PANEL}] delegated Float32 response for {producer:?} remains pending: {why}");
+            }
+            let tir_prefix = book.tir_prefix.entry(*producer).or_default();
+            if let Err(why) = self.public_tir_prefix_answer_tick_v1(session, slot, tir_prefix, pending, due, moved).await {
+                debug!("[{PALW_PANEL}] delegated TIR prefix response for {producer:?} remains pending: {why}");
+            }
+            let history = book.history.entry(*producer).or_default();
+            if let Err(why) = self.history_recovery_answer_tick_v1(session, slot, history, pending, due, moved).await {
+                debug!("[{PALW_PANEL}] delegated history response for {producer:?} remains pending: {why}");
+            }
+        }
+    }
+
+    async fn public_cache_retirement_worker_v1(&self) {
+        if self.consensus_config.params.palw_staged_public_court_v1.is_none() {
+            return;
+        }
+        let mut gc = public_prefix::PrefixCacheGcV1::default();
+        let mut shared_gc = crate::palw_flat_public_source::SharedClaimCacheGcV1::default();
+        while self.tick(std::time::Duration::from_secs(2)).await {
+            let session = self.consensus_manager.consensus().unguarded_session();
+            if !self.consensus_config.params.palw_staged_public_court_v1_active_at(session.get_virtual_daa_score()) {
+                continue;
+            }
+            if let Err(why) = gc.tick_v1(&session, &self.config.retention_dir.join("public-prefix-owned")).await {
+                debug!("[{PALW_PANEL}] keyless public cache retirement remains pending: {why}");
+            }
+            if let Err(why) = shared_gc.tick_v1(&session, &self.config.retention_dir).await {
+                debug!("[{PALW_PANEL}] keyless shared public material retirement remains pending: {why}");
+            }
+        }
+    }
+
     pub async fn worker(self: &Arc<Self>) {
+        if self.worker_running.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return;
+        }
+        struct WorkerClaim<'a>(&'a std::sync::atomic::AtomicBool);
+        impl Drop for WorkerClaim<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, std::sync::atomic::Ordering::Release);
+            }
+        }
+        let _worker_claim = WorkerClaim(&self.worker_running);
         let (Some(bond), true) = (self.bond, self.keypair.is_some()) else {
-            info!("[{PALW_PANEL}] not running (see the startup warning above)");
+            info!("[{PALW_PANEL}] signing duties disabled; only local public cache retirement may run");
+            self.public_cache_retirement_worker_v1().await;
             return;
         };
         let bond_key = PalwBondKeyV2(bond);
         let Some(mut inbox) = self.flow_context.palw_gossip().take_inbox() else {
             warn!("[{PALW_PANEL}] the gossip inbox was already taken — panel service disabled");
+            self.public_cache_retirement_worker_v1().await;
             return;
         };
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
@@ -8407,6 +8644,16 @@ impl PalwPanelService {
         // was busy carrying a receipt — and the claim had already been marked judged, so the
         // dispute was never rebuilt. Measured: 22 frauds detected, 0 courts opened.
         let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
+        let mut public_prefix_response_cursor = None;
+        let mut public_selected_response_cursor = None;
+        let mut public_flat_response_book = flat_source_responder::FlatSourceBookV1::default();
+        let mut public_float_response_book = float_source_responder::FloatSourceBookV1::default();
+        let mut public_tir_prefix_response_book = tir_prefix_responder::TirPrefixBookV1::default();
+        let mut public_history_response_book = history_recovery_actor::HistoryResponderBookV1::default();
+        let mut delegated_slots = PalwDelegatedSlotsV1::default();
+        let mut artifact_inventory_book = artifact_inventory::ArtifactInventoryBookV1::default();
+        let mut public_prefix_cache_gc = public_prefix::PrefixCacheGcV1::default();
+        let mut public_shared_cache_gc = crate::palw_flat_public_source::SharedClaimCacheGcV1::default();
         // The DAA each queued item is due by, where one is computable — what the priority lane orders
         // by (`palw_court_queue_edf_v1`). Each queue site states its item's; an item without one is
         // carried after every dated item, by age. The reporter filer's items are dated by the filer
@@ -8568,6 +8815,17 @@ impl PalwPanelService {
                 continue;
             }
             let current_daa = session.get_virtual_daa_score();
+            if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa)
+                && let Err(why) =
+                    public_prefix_cache_gc.tick_v1(&session, &self.config.retention_dir.join("public-prefix-owned")).await
+            {
+                debug!("[{PALW_PANEL}] bounded public cache retirement remains pending: {why}");
+            }
+            if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa)
+                && let Err(why) = public_shared_cache_gc.tick_v1(&session, &self.config.retention_dir).await
+            {
+                debug!("[{PALW_PANEL}] bounded shared public material retirement remains pending: {why}");
+            }
             // **RFC-0007: the verification vertex's fence, if it is in force at this tip** — the only thing that makes this node's seat
             // speak in vertices; `None` on every chain that has not armed it, and then every line below the fence is the code that always ran.
             let vertex_fence = self
@@ -10771,7 +11029,121 @@ impl PalwPanelService {
                 }
             }
 
+            if let Err(why) = self
+                .public_prefix_answer_tick_v1(
+                    &session,
+                    PalwAnswerSlotV1::own(bond_key),
+                    &mut public_prefix_response_cursor,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] public prefix response remains pending: {why}");
+            }
             tick_guard.phase("court+da");
+            if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa)
+                && (self.config.canonical_claims || self.config.canonical_class.is_some())
+                && let Ok(class_id) = self.canonical_class_id_v1(&session)
+                && let Some(facts) = session.palw_producer_facts_v2(class_id, Some(bond_key.0))
+                && let Err(why) = self
+                    .artifact_inventory_pump_v1(
+                        &session,
+                        bond_key,
+                        class_id,
+                        facts.artifact_root,
+                        &mut artifact_inventory_book,
+                        &mut court_pending,
+                        &mut court_due,
+                        &mut court_moved,
+                    )
+                    .await
+            {
+                debug!("[{PALW_PANEL}] original tokenizer inventory remains pending: {why}");
+            }
+            if let Err(why) = self
+                .public_selected_answer_tick_v1(
+                    &session,
+                    PalwAnswerSlotV1::own(bond_key),
+                    &mut public_selected_response_cursor,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] selected public response remains pending: {why}");
+            }
+            if let Err(why) = self
+                .public_flat_answer_tick_v1(
+                    &session,
+                    PalwAnswerSlotV1::own(bond_key),
+                    &mut public_flat_response_book,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] Flat public response remains pending: {why}");
+            }
+            if let Err(why) = self
+                .public_float_answer_tick_v1(
+                    &session,
+                    PalwAnswerSlotV1::own(bond_key),
+                    &mut public_float_response_book,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] Float32 public response remains pending: {why}");
+            }
+            if let Err(why) = self
+                .public_tir_prefix_answer_tick_v1(
+                    &session,
+                    PalwAnswerSlotV1::own(bond_key),
+                    &mut public_tir_prefix_response_book,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] TIR prefix public response remains pending: {why}");
+            }
+            if let Err(why) = self
+                .history_recovery_answer_tick_v1(
+                    &session,
+                    PalwAnswerSlotV1::own(bond_key),
+                    &mut public_history_response_book,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] public history custody response remains pending: {why}");
+            }
+            if let Err(why) = self
+                .history_custody_grant_tick_v1(
+                    &session,
+                    bond_key,
+                    &own_receipts,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] public history custody grant remains pending: {why}");
+            }
+            if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa) {
+                self.delegated_slots_tick_v1(&session, bond_key, &mut delegated_slots, &mut court_pending, &mut court_due, &mut court_moved)
+                    .await;
+            }
             // --- the seat's half: answer every duty exactly once ---
             let duties = session.palw_seat_duties_v2(vec![bond_key]);
             // **RFC-0006: a seat of a layer-sharded panel answers for its shard's cells, not for the claim** — its duties leave
@@ -14709,6 +15081,8 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. } => "PublicCourtStreamOpenedV1",
         PalwConsensusObjectV2::PublicCourtStreamLeafV1 { .. } => "PublicCourtStreamLeafV1",
         PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } => "PublicCourtStreamMoveV1",
+        PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { .. } => "PublicCourtStreamOpenedNativeV1",
+        PalwConsensusObjectV2::TirClassLayoutPublishedV1 { .. } => "TirClassLayoutPublishedV1",
         PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         PalwConsensusObjectV2::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         PalwConsensusObjectV2::VerificationVertexV1 { .. } => "VerificationVertexV1",

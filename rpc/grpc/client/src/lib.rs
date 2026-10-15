@@ -326,6 +326,7 @@ impl RpcApi for GrpcClient {
     route!(get_palw_model_certification_call, GetPalwModelCertification);
     route!(get_palw_vesting_call, GetPalwVesting);
     route!(get_palw_reward_vesting_call, GetPalwRewardVesting);
+    route!(get_palw_staged_preclaim_quote_call, GetPalwStagedPreclaimQuote);
     route!(get_palw_activation_pool_call, GetPalwActivationPool);
     route!(get_palw_capacity_shadow_call, GetPalwCapacityShadow);
     route!(get_palw_state_proof_call, GetPalwStateProof);

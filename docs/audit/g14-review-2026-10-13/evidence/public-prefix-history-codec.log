@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_prefix_history_v1::tests::accepted_head_commits_to_wire_signature_branch_clock_and_order_without_reset ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3932 filtered out; finished in 0.01s
+

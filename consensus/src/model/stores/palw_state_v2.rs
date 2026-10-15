@@ -247,6 +247,7 @@ impl DbPalwStateV2Store {
         let mut batch = WriteBatch::default();
         self.deltas.delete_all(BatchDbWriter::new(&mut batch))?;
         self.clear_legacy_answer_history(&mut BatchDbWriter::new(&mut batch), None)?;
+        self.clear_prefix_history_v1(&mut BatchDbWriter::new(&mut batch))?;
         let (first, last) = rocksdb::PrefixRange(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1.as_ref()).into_bounds();
         batch.delete_range(first.expect("native inventory prefix start"), last.expect("native inventory prefix end"));
         let mut next_tip = CachedDbItem::new(self.db.clone(), DatabaseStorePrefixes::PalwStateV2Tip.into());
@@ -638,6 +639,8 @@ impl DbPalwStateV2Store {
 
 #[path = "palw_legacy_answer_history_v2.rs"]
 mod legacy_answer_history_v2;
+#[path = "palw_prefix_history_v1.rs"]
+mod prefix_history_v1;
 
 #[cfg(test)]
 mod tests {

@@ -161,6 +161,12 @@ impl ConsensusSessionOwned {
         Self { _session_guard: None, consensus }
     }
 
+    /// Access the same guarded session from a caller already running in a blocking worker.
+    /// This avoids spawning a nested task for bounded native accepted-history reads.
+    pub fn with_consensus_api_v1<R>(&self, visit: impl FnOnce(&dyn ConsensusApi) -> R) -> R {
+        visit(self.consensus.as_ref())
+    }
+
     /// Uses [`tokio::task::spawn_blocking`] to run the provided consensus closure on a thread where blocking is acceptable.
     /// Note that this function is only available on the *owned* session, and requires cloning the session. In fact this
     /// function is the main motivation for a separate session type.
@@ -257,11 +263,310 @@ impl ConsensusSessionOwned {
         self.consensus.palw_disclosure_duties_v1(mine)
     }
 
+    pub fn palw_staged_paid_authority_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedPaidAuthorityV1>, String> {
+        self.consensus.palw_staged_paid_authority_v1(key)
+    }
+
+    pub fn palw_staged_owned_context_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<
+        Option<(
+            kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        )>,
+        String,
+    > {
+        self.consensus.palw_staged_owned_context_v1(key)
+    }
+
     pub fn palw_staged_owned_progress_v1(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
     ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>, String> {
         self.consensus.palw_staged_owned_progress_v1(key)
+    }
+
+    pub fn palw_staged_owned_seed_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1>, String> {
+        self.consensus.palw_staged_owned_seed_v1(key)
+    }
+
+    pub fn palw_tokenizer_artifact_inventory_v1(
+        &self,
+        class: kaspa_consensus_core::Hash64,
+        opener: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwTokenizerArtifactInventoryProgressV1>, String> {
+        self.consensus.palw_tokenizer_artifact_inventory_v1(class, opener)
+    }
+
+    pub fn palw_staged_flat_source_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedFlatProgressV1>, String> {
+        self.consensus.palw_staged_flat_source_v1(key)
+    }
+
+    pub fn palw_staged_float_source_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedFloatProgressV1>, String> {
+        self.consensus.palw_staged_float_source_v1(key)
+    }
+
+    pub fn palw_staged_float_pin_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        source: kaspa_consensus_core::Hash64,
+        answerer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_float_constraint_source_v1::PalwFloatConstraintPinV1>, String> {
+        self.consensus.palw_staged_float_pin_v1(key, source, answerer)
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn palw_staged_tir_view_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        maximum_leaves: u64,
+    ) -> Result<
+        Option<(
+            kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1,
+            Box<kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1>,
+        )>,
+        String,
+    > {
+        self.consensus.palw_staged_tir_view_v1(claim, maximum_leaves)
+    }
+
+    pub fn palw_staged_owned_native_seed_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_bundle_v1::PalwStagedNativeSeedContextV1>, String> {
+        self.consensus.palw_staged_owned_native_seed_v1(key)
+    }
+
+    pub fn palw_staged_tir_prefix_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedTirPrefixProgressV1>, String> {
+        self.consensus.palw_staged_tir_prefix_v1(key)
+    }
+
+    pub fn palw_staged_tir_prefix_leaf_index_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        ordinal: u64,
+        maximum_leaves: u64,
+    ) -> Result<Option<u64>, String> {
+        self.consensus.palw_staged_tir_prefix_leaf_index_v1(key, ordinal, maximum_leaves)
+    }
+
+    pub fn palw_staged_tir_layout_v1(
+        &self,
+        class_id: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1> {
+        self.consensus.palw_staged_tir_layout_v1(class_id)
+    }
+
+    pub fn palw_staged_flat_pin_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        source: kaspa_consensus_core::Hash64,
+        answerer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1>, String> {
+        self.consensus.palw_staged_flat_pin_v1(key, source, answerer)
+    }
+
+    pub fn palw_staged_resolved_public_context_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<
+        Option<(
+            kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        )>,
+        String,
+    > {
+        self.consensus.palw_staged_resolved_public_context_v1(claim)
+    }
+
+    pub fn palw_staged_original_commitment_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3>, String> {
+        self.consensus.palw_staged_original_commitment_v1(claim)
+    }
+
+    /// The accepted PALW V2 snapshot's own DAA (see `ConsensusApi::palw_v2_accepted_daa_v1`).
+    pub fn palw_v2_daa_score(&self) -> Option<u64> {
+        self.consensus.palw_v2_accepted_daa_v1()
+    }
+
+    pub fn palw_staged_custody_delegations_to_v1(
+        &self,
+        custodian: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<kaspa_consensus_core::Hash64>,
+    ) -> Result<(Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>, Option<kaspa_consensus_core::Hash64>), String> {
+        self.consensus.palw_staged_custody_delegations_to_v1(custodian, after)
+    }
+
+    pub fn palw_staged_history_grant_duty_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        seat: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        receipt: kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwHistoryGrantDutyV1>, String> {
+        self.consensus.palw_staged_history_grant_duty_v1(claim, seat, receipt)
+    }
+
+    pub fn palw_staged_history_recovery_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        seed: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedHistoryRecoveryProgressV1>, String> {
+        self.consensus.palw_staged_history_recovery_v1(key, seed)
+    }
+
+    pub fn palw_history_response_duties_v1(
+        &self,
+        signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<(
+            u64,
+            kaspa_consensus_core::Hash64,
+            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+            kaspa_consensus_core::Hash64,
+        )>,
+    ) -> Result<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedHistoryDutyPageV1, String> {
+        self.consensus.palw_history_response_duties_v1(signer, after)
+    }
+
+    pub fn palw_staged_public_context_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedPublicContextV1>, String> {
+        self.consensus.palw_staged_public_context_v1(claim)
+    }
+
+    pub fn palw_staged_flat_duties_v1(
+        &self,
+        signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<(u64, kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+    ) -> Result<
+        (
+            Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+            Option<(u64, kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+        ),
+        String,
+    > {
+        self.consensus.palw_staged_flat_duties_v1(signer, after)
+    }
+
+    pub fn palw_staged_selected_duties_v1(
+        &self,
+        signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<(u64, kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+    ) -> Result<
+        (
+            Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+            Option<(u64, kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+        ),
+        String,
+    > {
+        self.consensus.palw_staged_selected_duties_v1(signer, after)
+    }
+
+    pub fn palw_staged_selected_events_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedSelectedProgressV1>, String> {
+        self.consensus.palw_staged_selected_events_v1(key)
+    }
+
+    pub fn palw_staged_bundle_plan_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        actual_raw_cap: Option<u64>,
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_bundle_v1::PalwStagedBundlePlanV1>, String> {
+        self.consensus.palw_staged_bundle_plan_v1(claim, actual_raw_cap)
+    }
+
+    pub fn palw_prefix_response_duties_v1(
+        &self,
+        signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<(u64, kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+    ) -> Result<kaspa_consensus_core::palw_staged_court_state_v1::PalwPrefixResponsePageV1, String> {
+        self.consensus.palw_prefix_response_duties_v1(signer, after)
+    }
+
+    pub fn palw_prefix_page_write_v1(
+        &self,
+        snapshot: kaspa_consensus_core::BlockHash,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        seed_id: kaspa_consensus_core::Hash64,
+        opening: kaspa_consensus_core::palw_prefix_gdn_paged_v1::PalwGdnOwnedPageOpeningV1,
+    ) -> Result<Vec<i32>, String> {
+        self.consensus.palw_prefix_page_write_v1(snapshot, key, seed_id, opening)
+    }
+
+    pub fn palw_prefix_history_record_v1(
+        &self,
+        snapshot: kaspa_consensus_core::BlockHash,
+        request: kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRequestV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRecordV1>, String> {
+        self.consensus.palw_prefix_history_record_v1(snapshot, request)
+    }
+
+    pub fn palw_prefix_history_record_current_v1(
+        &self,
+        request: kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRequestV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRecordV1>, String> {
+        self.consensus.palw_prefix_history_record_current_v1(request)
+    }
+
+    pub fn palw_staged_cache_gc_page_v1(
+        &self,
+        after: Option<(u64, kaspa_consensus_core::Hash64)>,
+        limit: usize,
+    ) -> Result<kaspa_consensus_core::palw_prefix_history_v1::PalwStagedCacheGcPageV1, String> {
+        self.consensus.palw_staged_cache_gc_page_v1(after, limit)
+    }
+
+    pub fn palw_staged_cache_gc_ack_v1(
+        &self,
+        lease: kaspa_consensus_core::palw_prefix_history_v1::PalwStagedCacheLeaseV1,
+    ) -> Result<bool, String> {
+        self.consensus.palw_staged_cache_gc_ack_v1(lease)
+    }
+
+    pub fn palw_shared_claim_cache_gc_page_v1(
+        &self,
+        after: Option<(u64, kaspa_consensus_core::Hash64)>,
+        limit: usize,
+    ) -> Result<kaspa_consensus_core::palw_prefix_history_v1::PalwSharedClaimCacheGcPageV1, String> {
+        self.consensus.palw_shared_claim_cache_gc_page_v1(after, limit)
+    }
+
+    pub fn palw_shared_claim_cache_gc_ack_v1(
+        &self,
+        lease: kaspa_consensus_core::palw_prefix_history_v1::PalwSharedClaimCacheLeaseV1,
+    ) -> Result<bool, String> {
+        self.consensus.palw_shared_claim_cache_gc_ack_v1(lease)
+    }
+
+    pub fn palw_staged_preclaim_quote_v1(
+        &self,
+        original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+    ) -> Result<
+        Option<(kaspa_consensus_core::BlockHash, kaspa_consensus_core::palw_staged_preclaim_v1::PalwStagedPreclaimQuoteV1)>,
+        String,
+    > {
+        self.consensus.palw_staged_preclaim_quote_v1(original, header)
     }
 
     /// Read accepted terminal progress under the same owned consensus session as filer work.

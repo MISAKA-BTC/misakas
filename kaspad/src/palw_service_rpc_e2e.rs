@@ -165,8 +165,10 @@ pub(super) async fn verify_socket_evidence(
     eprintln!("[service-network] actual socket gRPC authenticated the pinned claim and signed multipart carriers");
     client.disconnect().await.unwrap();
     server.stop().await.unwrap();
-    core.clone().signal_exit();
-    tokio::time::timeout(Duration::from_secs(10), core_task).await.unwrap().unwrap();
+    // Notifier joins drain upstream collectors before closing their own listeners.
+    _notification_sender.close();
     notify.clone().signal_exit();
+    core.clone().signal_exit();
     tokio::time::timeout(Duration::from_secs(10), notify_task).await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(10), core_task).await.unwrap().unwrap();
 }

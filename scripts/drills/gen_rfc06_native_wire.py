@@ -24,6 +24,7 @@ def qualify(t,item):
     def token(m):
         x=m.group();name=x.split('::')[-1]
         if name=='EVM_ADDRESS_SIZE':return 'crate::evm::EVM_ADDRESS_SIZE'
+        if name=='PalwSharedCourtV1':return 'crate::palw_staged_court_state_v1::PalwSharedCourtV1'
         if x==name and re.fullmatch(r'[A-Z][A-Z0-9_]*',name) and len(PUB_CONSTS.get(name,()))==1:
             path=next(iter(PUB_CONSTS[name]))
             return path if not path.startswith('crate::') or item['path'].startswith('crate::') else path
@@ -39,6 +40,7 @@ def qualify(t,item):
         if x in defs or x in aliases:result=x
         elif len(alias_byname.get(name,[]))==1:result=alias_byname[name][0]
         elif len(byname.get(name,[]))==1:result=byname[name][0]['path']
+        elif '::' not in x and item['path'].rsplit('::',1)[0]+'::'+x in defs:result=item['path'].rsplit('::',1)[0]+'::'+x
         else:result=x
         return result.replace('crate::palw_bond_budget_v1::material::','crate::palw_bond_budget_v1::').replace('crate::palw_bond_budget_v1::consumer::','crate::palw_bond_budget_v1::')
     return re.sub(r'(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*',token,t)

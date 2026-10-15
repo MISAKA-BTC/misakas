@@ -152,6 +152,7 @@ pub enum KaspadPayloadOps {
     GetPalwMonetaryMaterial,
     GetPalwStateCarriage,
     GetPalwRewardVesting,
+    GetPalwStagedPreclaimQuote,
     GetPalwKernelClaim,
     GetPalwKernelRows,
     GetPalwKernelFinals,

@@ -34,6 +34,23 @@ pub enum PalwAuxiliaryPublicCourtSeedV1 {
         prefix_tokens: u32,
         relation: crate::palw_class_semantics_v1::PalwPrefixStateRelationV1,
     },
+    PublicPrefix {
+        maximum_leaves: u64,
+        prefix_tokens: u32,
+        relation: crate::palw_class_semantics_v1::PalwPrefixStateRelationV1,
+        /// Exact producer, qualified current Panel and independent owner slot count.
+        slots: u32,
+    },
+    FlatConstraint {
+        source_id: Hash64,
+        answerer: PalwBondKeyV2,
+    },
+    /// Greedy Float32 Constraint over the accepted Float32 source slot of `answerer`. Appended
+    /// form owned by `palw_staged_float_constraint_v1` (rides unjudged below it, A-2 uniform).
+    FloatConstraint {
+        source_id: Hash64,
+        answerer: PalwBondKeyV2,
+    },
 }
 /// Content-addressed profile already retained by the claim's class certification. The byte
 /// quote prices hydration; it cannot substitute a different graph for that historic class.
@@ -71,6 +88,94 @@ pub struct PalwConstraintStreamSeedV1 {
     pub auxiliary: Option<PalwAuxiliaryPublicCourtSeedV1>,
     pub signature: Vec<u8>,
     pub retained_profile: Option<PalwRetainedCourtProfileV1>,
+}
+/// **What a native (TIR) seed opens** — the same two required families a TIR quote covers.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwNativeSeedFamilyV1 {
+    /// Constrained selection over the claim's tiled TIR logits (the pin authenticates through
+    /// the decode view; no binding).
+    Constraint { pin: PalwTiledDecodePinV1, witness: Option<u32>, eog_count: u32, eog_opening: PalwStepOpeningV1 },
+    /// The raw tokenizer court; its ids are read through the decode view.
+    Tokenizer {
+        id: u32,
+        present: bool,
+        length: u32,
+        opening: PalwStepOpeningV1,
+        raw_tokenizer_bytes: u64,
+        tokenizer_key_events: u64,
+        operand_tokenizer_bytes: u64,
+    },
+    /// The prefix-state family (`crate::palw_tir_prefix_owned_v1`): the boundary is the job's own
+    /// declared prefix state; the class layout is the one published on chain for the class.
+    PrefixState { prefix_tokens: u32 },
+}
+/// **A seed that names no binding** (tag 168, `PublicCourtStreamOpenedNativeV1`, owned by
+/// `palw_staged_tir_route_v1`). It signs the IDENTITY of the claim's admitted TIR public header
+/// (the BLAKE2b of its borsh); the fold reads the header itself from the claim's native contract
+/// and derives the decode view from it and the registered class record.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwConstraintStreamNativeSeedV1 {
+    pub version: u16,
+    pub claim: Hash64,
+    pub reserver: PalwBondKeyV2,
+    pub reserved_daa: u64,
+    pub view_identity: Hash64,
+    /// The view's logits vocabulary, signed so the carrier's fee is computable from the object
+    /// alone; the fold refuses a seed whose value is not the derived view's.
+    pub vocab_size: u32,
+    /// None reads the literal retained claim-rooted job; Some must equal that exact job.
+    pub job: Option<Box<PalwFreePromptJobV3>>,
+    pub family: PalwNativeSeedFamilyV1,
+    pub signature: Vec<u8>,
+}
+/// The identity a native seed signs for an admitted TIR public header.
+pub fn palw_native_view_identity_v1(header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1) -> Hash64 {
+    Hash64::from_bytes(
+        blake2b_simd::Params::new()
+            .hash_length(64)
+            .key(b"misaka-palw/native-view-identity/v1")
+            .hash(&encode(header))
+            .as_bytes()
+            .try_into()
+            .expect("64"),
+    )
+}
+impl PalwConstraintStreamNativeSeedV1 {
+    pub fn signing_message(&self) -> Vec<u8> {
+        message(
+            b"native-seed",
+            &[
+                &encode(&self.version),
+                &encode(&self.claim),
+                &encode(&self.reserver),
+                &encode(&self.reserved_daa),
+                &encode(&self.view_identity),
+                &encode(&self.vocab_size),
+                &encode(&self.job),
+                &encode(&self.family),
+            ],
+        )
+    }
+    pub fn seed_id_v1(&self) -> Hash64 {
+        Hash64::from_bytes(self.signing_message().try_into().expect("seed digest width"))
+    }
+    pub fn check(&self, carrier_maximum: u64) -> Result<(), String> {
+        check_signature_shape(self.version, &self.signature)?;
+        let openings = match &self.family {
+            PalwNativeSeedFamilyV1::Constraint { pin, eog_opening, .. } => {
+                pin.generated_token_ids.len() <= crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS
+                    && eog_opening.siblings.len() <= 23
+                    && [&pin.row_opening, &pin.committed_opening, &pin.beat_opening].iter().all(|o| o.siblings.len() <= 64)
+            }
+            PalwNativeSeedFamilyV1::Tokenizer { opening, .. } => opening.siblings.len() <= 23,
+            PalwNativeSeedFamilyV1::PrefixState { prefix_tokens } => *prefix_tokens > 0,
+        };
+        if !openings {
+            return Err("native seed exceeds its bounded original proof shape".into());
+        }
+        bounded_encoded_len(self, usize::try_from(carrier_maximum).unwrap_or(usize::MAX))?;
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamLeafV1 {
@@ -110,6 +215,81 @@ pub enum PalwConstraintStreamActionV1 {
     /// Flat normal actions only. The inner family enum has no Batch variant, so arbitrary
     /// nested recursive deserialization is impossible. Work remains charged per action.
     PrefixBatch(Vec<crate::palw_prefix_family_court_v1::PalwPrefixCourtActionV1>),
+    /// Owner-selected collection cannot be starved by the bounded maintenance sweep.
+    PrefixPublicCollect {
+        cursor_id: Hash64,
+        demand_id: Hash64,
+    },
+    BundleOpen {
+        plan: crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1,
+    },
+    ActivateStage {
+        previous_seed: Hash64,
+        next_seed: Hash64,
+    },
+    InventoryPart {
+        offset: u64,
+        bytes: Vec<u8>,
+    },
+    InventoryFinish,
+    SelectedEventDemand {
+        binding: crate::palw_selected_event_source_v1::PalwSelectedEventBindingV1,
+        demand: crate::palw_selected_event_source_v1::PalwSelectedEventDemandV1,
+    },
+    SelectedEventAnswer(crate::palw_selected_event_source_v1::PalwSelectedEventAnswerV1),
+    SelectedEventCollect {
+        coordinate: crate::palw_selected_event_source_v1::PalwSelectedEventCoordinateV1,
+        demand_id: Hash64,
+    },
+    ArtifactInventoryOpen {
+        class_id: Hash64,
+        offer: crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryOfferV1,
+    },
+    ArtifactInventoryMove(crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryActionV1),
+    HistoryCustodyGrant {
+        grant: crate::palw_history_custody_v1::PalwHistoryCustodyGrantV1,
+        receipt: crate::palw_panel_v2::PalwSeatReceiptV2,
+    },
+    HistoryRecovery {
+        stage_seed: Hash64,
+        request_head: Hash64,
+        sequence: u64,
+        demand_opened_daa: u64,
+        action: crate::palw_history_custody_v1::PalwHistoryRecoveryActionV1,
+    },
+    FlatSourceOpen {
+        binding: crate::palw_selected_event_source_v1::PalwSelectedEventBindingV1,
+    },
+    FlatSourceAnswer(crate::palw_flat_constraint_stream_v1::PalwFlatConstraintSourceAnswerV1),
+    FlatSourceNominate {
+        source_id: Hash64,
+        position: u32,
+        beat: Option<u32>,
+    },
+    FlatSourceCollect,
+    // Greedy Float32 Constraint source: appended forms owned by `palw_staged_float_constraint_v1`
+    // (`crate::palw_staged_route_forms_v1`); below it they ride unjudged, A-2 uniform.
+    FloatSourceOpen {
+        binding: crate::palw_selected_event_source_v1::PalwSelectedEventBindingV1,
+    },
+    FloatSourceAnswer(crate::palw_float_constraint_source_v1::PalwFloatSourceAnswerV1),
+    FloatSourceNominate {
+        source_id: Hash64,
+        position: u32,
+        beat: Option<u32>,
+    },
+    FloatSourceCollect,
+    // TIR native-context selected source: appended forms owned by `palw_staged_tir_route_v1`
+    // (`crate::palw_staged_route_forms_v1`). Collection reuses `SelectedEventCollect`, which
+    // names no binding.
+    NativeSelectedDemand {
+        demand: crate::palw_selected_event_source_v1::PalwSelectedEventDemandV1,
+    },
+    NativeSelectedAnswer(crate::palw_selected_event_source_v1::PalwSelectedEventNativeAnswerV1),
+    /// A custodian's (or the owner's) next TIR prefix-state boundary leaf.
+    NativeTirPrefixAnswer(crate::palw_tir_prefix_owned_v1::PalwTirPrefixLeafAnswerV1),
+    /// After the custody clock: charge custodians that did not complete their boundary stream.
+    NativeTirPrefixCollect,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamMoveV1 {
@@ -239,6 +419,70 @@ impl PalwConstraintStreamSeedV1 {
         let job = self.job.as_deref().ok_or("unrooted seed cannot resolve its public job reference")?;
         self.court_with_rooted_job(expected_claim_root, ladder, job)
     }
+    /// Local replay helper only. Native admission obtains `pin` from its accepted
+    /// literal source row, never from a caller's serialized pin or checkpoint.
+    pub fn court_from_authenticated_flat_pin_v1(
+        &self,
+        root: Hash64,
+        job: &PalwFreePromptJobV3,
+        binding: &PalwStepBindingV2,
+        pin: &crate::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1,
+    ) -> Result<PalwConstraintStreamCourtV1, String> {
+        self.check(90_000)?;
+        if !matches!(self.auxiliary, Some(PalwAuxiliaryPublicCourtSeedV1::FlatConstraint { .. }))
+            || self.resolved_binding_v1(job.class_id, Some(&binding.shape_profile))? != *binding
+            || self.job.as_deref().is_some_and(|actual| actual != job)
+        {
+            return Err("flat local replay substitutes original signed auxiliary or public context".into());
+        }
+        let seed = Hash64::from_bytes(self.signing_message().try_into().map_err(|_| "flat original seed digest width")?);
+        PalwConstraintStreamCourtV1::new_from_flat_pin_with_seed_context_v1(
+            self.claim,
+            self.reserver,
+            self.reserved_daa,
+            root,
+            binding,
+            job,
+            pin,
+            self.witness,
+            self.eog_count,
+            &self.eog_opening,
+            Some(seed),
+        )
+    }
+    /// Local replay helper only (the Float32 twin of [`Self::court_from_authenticated_flat_pin_v1`]).
+    /// Native admission obtains `pin` from its accepted literal source slot.
+    pub fn court_from_authenticated_float_pin_v1(
+        &self,
+        root: Hash64,
+        original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        binding: &PalwStepBindingV2,
+        pin: &crate::palw_float_constraint_source_v1::PalwFloatConstraintPinV1,
+    ) -> Result<PalwConstraintStreamCourtV1, String> {
+        self.check(90_000)?;
+        let job = &original.job;
+        if !matches!(self.auxiliary, Some(PalwAuxiliaryPublicCourtSeedV1::FloatConstraint { .. }))
+            || self.resolved_binding_v1(job.class_id, Some(&binding.shape_profile))? != *binding
+            || self.job.as_deref().is_some_and(|actual| actual != job)
+        {
+            return Err("Float32 local replay substitutes original signed auxiliary or public context".into());
+        }
+        let seed = Hash64::from_bytes(self.signing_message().try_into().map_err(|_| "Float32 original seed digest width")?);
+        PalwConstraintStreamCourtV1::new_from_float_pin_with_original_stop_context_v1(
+            self.claim,
+            self.reserver,
+            self.reserved_daa,
+            root,
+            binding,
+            job,
+            pin,
+            self.witness,
+            self.eog_count,
+            &self.eog_opening,
+            original,
+            Some(seed),
+        )
+    }
     pub fn court_with_rooted_job(
         &self,
         expected_claim_root: Hash64,
@@ -309,11 +553,39 @@ impl PalwConstraintStreamLeafV1 {
     }
 }
 impl PalwConstraintStreamMoveV1 {
+    /// Bind every signed part to the accepted backwards cursor and demand. A
+    /// previously signed part must not become valid for the next record's slot.
+    pub fn check_history_scope_v1(&self, recovery: &crate::palw_history_custody_v1::PalwHistoryRecoveryV1) -> Result<(), String> {
+        let PalwConstraintStreamActionV1::HistoryRecovery { stage_seed, request_head, sequence, demand_opened_daa, action } =
+            &self.action
+        else {
+            return Err("not a history recovery carriage".into());
+        };
+        let request = recovery.remaining_request_v1().ok_or("history traversal has already reached genesis")?;
+        let opened = if matches!(action, crate::palw_history_custody_v1::PalwHistoryRecoveryActionV1::Demand) {
+            0
+        } else {
+            recovery.demand.as_ref().ok_or("history answer has no accepted literal demand")?.opened_daa
+        };
+        if (self.claim, self.reserver, self.reserved_daa, *stage_seed, *request_head, *sequence, *demand_opened_daa)
+            != (request.claim, request.owner, request.reserved_daa, request.seed_id, request.head, request.sequence, opened)
+        {
+            return Err("signed history carriage substitutes current record head, sequence or original demand clock".into());
+        }
+        Ok(())
+    }
     /// Only this typed Answer changes signature authority. Every historic/owned action
     /// remains owner-signed, including public-source Demand and local prefix continuation.
     pub fn authorization_bond_v1(&self) -> PalwBondKeyV2 {
         match &self.action {
             PalwConstraintStreamActionV1::PrefixPublicAnswer(answer) => answer.answerer,
+            PalwConstraintStreamActionV1::SelectedEventAnswer(answer) => answer.answerer,
+            PalwConstraintStreamActionV1::HistoryCustodyGrant { grant, .. } => grant.seat,
+            PalwConstraintStreamActionV1::HistoryRecovery { action, .. } => action.answerer_v1().unwrap_or(self.reserver),
+            PalwConstraintStreamActionV1::FlatSourceAnswer(answer) => answer.answerer,
+            PalwConstraintStreamActionV1::FloatSourceAnswer(answer) => answer.answerer,
+            PalwConstraintStreamActionV1::NativeSelectedAnswer(answer) => answer.answerer,
+            PalwConstraintStreamActionV1::NativeTirPrefixAnswer(answer) => answer.answerer,
             _ => self.reserver,
         }
     }
@@ -333,6 +605,82 @@ impl PalwConstraintStreamMoveV1 {
     }
     pub fn check(&self) -> Result<(), String> {
         check_signature_shape(self.version, &self.signature)?;
+        if matches!(
+            &self.action,
+            PalwConstraintStreamActionV1::BundleOpen { .. }
+                | PalwConstraintStreamActionV1::ActivateStage { .. }
+                | PalwConstraintStreamActionV1::InventoryPart { .. }
+                | PalwConstraintStreamActionV1::InventoryFinish
+                | PalwConstraintStreamActionV1::SelectedEventDemand { .. }
+                | PalwConstraintStreamActionV1::SelectedEventAnswer(_)
+                | PalwConstraintStreamActionV1::SelectedEventCollect { .. }
+                | PalwConstraintStreamActionV1::ArtifactInventoryOpen { .. }
+                | PalwConstraintStreamActionV1::ArtifactInventoryMove(_)
+                | PalwConstraintStreamActionV1::HistoryCustodyGrant { .. }
+                | PalwConstraintStreamActionV1::HistoryRecovery { .. }
+                | PalwConstraintStreamActionV1::FlatSourceOpen { .. }
+                | PalwConstraintStreamActionV1::FlatSourceAnswer(_)
+                | PalwConstraintStreamActionV1::FlatSourceNominate { .. }
+                | PalwConstraintStreamActionV1::FlatSourceCollect
+                | PalwConstraintStreamActionV1::FloatSourceOpen { .. }
+                | PalwConstraintStreamActionV1::FloatSourceAnswer(_)
+                | PalwConstraintStreamActionV1::FloatSourceNominate { .. }
+                | PalwConstraintStreamActionV1::FloatSourceCollect
+                | PalwConstraintStreamActionV1::NativeSelectedDemand { .. }
+                | PalwConstraintStreamActionV1::NativeSelectedAnswer(_)
+        ) {
+            if self.phase != PalwConstraintStreamPhaseV1::PrefixCourt {
+                return Err("bundle control changes its fixed carrier phase".into());
+            }
+            bounded_encoded_len(self, PALW_PREFIX_BATCH_CARRIER_BYTES_V1)?;
+            if let PalwConstraintStreamActionV1::BundleOpen { plan } = &self.action {
+                plan.check_v1()?;
+            }
+            if let PalwConstraintStreamActionV1::InventoryPart { bytes, .. } = &self.action
+                && (bytes.is_empty() || bytes.len() > 65_536)
+            {
+                return Err("inventory packet exceeds fixed raw-hash chunk".into());
+            }
+        }
+        if let PalwConstraintStreamActionV1::SelectedEventAnswer(answer) = &self.action {
+            answer.check_v1()?;
+        }
+        if let PalwConstraintStreamActionV1::FlatSourceAnswer(answer) = &self.action {
+            answer.action.check_wire_v1()?;
+        }
+        if let PalwConstraintStreamActionV1::FloatSourceAnswer(answer) = &self.action {
+            answer.action.check_wire_v1()?;
+        }
+        if let PalwConstraintStreamActionV1::NativeSelectedAnswer(answer) = &self.action {
+            answer.check_v1()?;
+        }
+        if let PalwConstraintStreamActionV1::NativeTirPrefixAnswer(answer) = &self.action {
+            answer.check_wire_v1()?;
+            bounded_encoded_len(self, PALW_PREFIX_BATCH_CARRIER_BYTES_V1)?;
+        }
+        if matches!(
+            &self.action,
+            PalwConstraintStreamActionV1::NativeTirPrefixAnswer(_) | PalwConstraintStreamActionV1::NativeTirPrefixCollect
+        ) && self.phase != PalwConstraintStreamPhaseV1::PrefixCourt
+        {
+            return Err("TIR prefix moves ride the fixed prefix carrier phase".into());
+        }
+        if let PalwConstraintStreamActionV1::HistoryCustodyGrant { grant, receipt } = &self.action {
+            grant.check_receipt_v1(receipt)?;
+        }
+        if let PalwConstraintStreamActionV1::HistoryRecovery { action, .. } = &self.action {
+            action.check_wire_v1()?;
+        }
+        if let PalwConstraintStreamActionV1::ArtifactInventoryOpen { offer, .. } = &self.action {
+            offer.check_v1()?;
+        }
+        if let PalwConstraintStreamActionV1::ArtifactInventoryMove(
+            crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryActionV1::Part { bytes, .. },
+        ) = &self.action
+            && (bytes.is_empty() || bytes.len() > 65_536)
+        {
+            return Err("artifact inventory part exceeds native bounded carrier".into());
+        }
         if let PalwConstraintStreamActionV1::PrefixPublicAnswer(answer) = &self.action {
             answer.check()?;
             bounded_encoded_len(self, PALW_PREFIX_BATCH_CARRIER_BYTES_V1)?;
@@ -342,6 +690,7 @@ impl PalwConstraintStreamMoveV1 {
             PalwConstraintStreamActionV1::PrefixPublicDemand(_)
                 | PalwConstraintStreamActionV1::PrefixPublicAnswer(_)
                 | PalwConstraintStreamActionV1::PrefixBatch(_)
+                | PalwConstraintStreamActionV1::PrefixPublicCollect { .. }
         ) && self.phase != PalwConstraintStreamPhaseV1::PrefixCourt
         {
             return Err("public prefix acquisition changes typed prefix phase".into());
@@ -396,13 +745,36 @@ impl PalwConstraintStreamMoveV1 {
             | PalwConstraintStreamActionV1::PrefixPublicDemand(_)
             | PalwConstraintStreamActionV1::PrefixPublicAnswer(_)
             | PalwConstraintStreamActionV1::PrefixBatch(_)
+            | PalwConstraintStreamActionV1::PrefixPublicCollect { .. }
             | PalwConstraintStreamActionV1::TokenizerPacket(_)
             | PalwConstraintStreamActionV1::TokenizerSeal
             | PalwConstraintStreamActionV1::TokenizerRenderingPart { .. } => {
                 Err("typed auxiliary move is not a constrained court action".into())
             }
+            PalwConstraintStreamActionV1::BundleOpen { .. }
+            | PalwConstraintStreamActionV1::ActivateStage { .. }
+            | PalwConstraintStreamActionV1::InventoryPart { .. }
+            | PalwConstraintStreamActionV1::InventoryFinish
+            | PalwConstraintStreamActionV1::SelectedEventDemand { .. }
+            | PalwConstraintStreamActionV1::SelectedEventAnswer(_)
+            | PalwConstraintStreamActionV1::SelectedEventCollect { .. }
+            | PalwConstraintStreamActionV1::ArtifactInventoryOpen { .. }
+            | PalwConstraintStreamActionV1::ArtifactInventoryMove(_)
+            | PalwConstraintStreamActionV1::HistoryCustodyGrant { .. }
+            | PalwConstraintStreamActionV1::HistoryRecovery { .. }
+            | PalwConstraintStreamActionV1::FlatSourceOpen { .. }
+            | PalwConstraintStreamActionV1::FlatSourceAnswer(_)
+            | PalwConstraintStreamActionV1::FlatSourceNominate { .. }
+            | PalwConstraintStreamActionV1::FlatSourceCollect => Err("bundle control is not a semantic court action".into()),
         }
     }
+}
+pub fn palw_staged_verify_mldsa87_v1(key: &[u8], message: &[u8], signature: &[u8], context: &[u8]) -> bool {
+    let Ok(key): Result<[u8; crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN], _> = key.try_into() else { return false };
+    let Ok(signature): Result<[u8; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN], _> = signature.try_into() else { return false };
+    let key = libcrux_ml_dsa::ml_dsa_87::MLDSA87VerificationKey::new(key);
+    let signature = libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature::new(signature);
+    libcrux_ml_dsa::ml_dsa_87::portable::verify(&key, message, context, &signature).is_ok()
 }
 #[cfg(test)]
 mod tests {
@@ -419,6 +791,73 @@ mod tests {
             action: PalwConstraintStreamActionV1::RenderingPart { offset: 0, bytes: vec![b'a'] },
             signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         }
+    }
+    #[test]
+    fn signed_history_parts_bind_exact_current_record_and_accepted_demand_before_buffer_mutation() {
+        use crate::palw_history_custody_v1::{PalwHistoryRecoveryActionV1 as Action, PalwHistoryRecoveryV1};
+        let mut carrier = movement();
+        let stage = Hash64::from_u64_word(50);
+        let head = Hash64::from_u64_word(51);
+        let signer = PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(52), 0));
+        let request = crate::palw_prefix_history_v1::PalwPrefixHistoryRequestV1 {
+            claim: carrier.claim,
+            owner: carrier.reserver,
+            reserved_daa: carrier.reserved_daa,
+            seed_id: stage,
+            head,
+            sequence: 2,
+            material_until_daa: 1000,
+        };
+        let mut recovery = PalwHistoryRecoveryV1::new_v1(request, 50, 900, 950, 10, 1, [signer].into_iter().collect()).unwrap();
+        carrier.phase = PalwConstraintStreamPhaseV1::PrefixCourt;
+        carrier.action = PalwConstraintStreamActionV1::HistoryRecovery {
+            stage_seed: stage,
+            request_head: head,
+            sequence: 2,
+            demand_opened_daa: 0,
+            action: Action::Demand,
+        };
+        carrier.check_history_scope_v1(&recovery).unwrap();
+        recovery.apply_v1(&Action::Demand, 50).unwrap();
+        carrier.action = PalwConstraintStreamActionV1::HistoryRecovery {
+            stage_seed: stage,
+            request_head: head,
+            sequence: 2,
+            demand_opened_daa: 50,
+            action: Action::Begin { answerer: signer, total_bytes: 1 },
+        };
+        carrier.check_history_scope_v1(&recovery).unwrap();
+        let original_message = carrier.signing_message();
+        for field in 0..3 {
+            let mut stale = carrier.clone();
+            let PalwConstraintStreamActionV1::HistoryRecovery { request_head, sequence, demand_opened_daa, .. } = &mut stale.action
+            else {
+                unreachable!()
+            };
+            match field {
+                0 => *request_head = Hash64::from_u64_word(99),
+                1 => *sequence -= 1,
+                _ => *demand_opened_daa += 1,
+            }
+            assert_ne!(stale.signing_message(), original_message);
+            assert!(stale.check_history_scope_v1(&recovery).is_err());
+            assert!(recovery.demand.as_ref().unwrap().buffers.is_empty());
+        }
+        let mut next = recovery.clone();
+        next.remaining_sequence = 1;
+        next.remaining_head = Hash64::from_u64_word(53);
+        let next_demand = next.demand.as_mut().unwrap();
+        next_demand.request.sequence = 1;
+        next_demand.request.head = next.remaining_head;
+        assert!(carrier.check_history_scope_v1(&next).is_err(), "old same-offset signed Begin cannot poison the next record slot");
+        let shared: crate::palw_staged_court_state_v1::PalwSharedCourtV1<_> = Box::new(recovery.clone()).into();
+        assert_eq!(borsh::to_vec(&shared).unwrap(), borsh::to_vec(&recovery).unwrap(), "COW is transparent on the rooted wire");
+        let mut branch = shared.clone();
+        assert!(std::ptr::eq(shared.as_ref(), branch.as_ref()));
+        branch.apply_v1(&Action::Begin { answerer: signer, total_bytes: 1 }, 51).unwrap();
+        assert!(!std::ptr::eq(shared.as_ref(), branch.as_ref()));
+        assert!(shared.demand.as_ref().unwrap().buffers.is_empty());
+        assert_eq!(branch.demand.as_ref().unwrap().buffers.len(), 1);
     }
     #[test]
     fn public_prefix_answer_signer_is_typed_and_every_literal_identity_is_signed() {

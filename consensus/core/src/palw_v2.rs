@@ -725,19 +725,25 @@ pub fn logits_event_hash_v2(
         }
         scratch.extend_from_slice(&l.to_le_bytes());
     }
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_V2_DOMAIN_LOGITS_EVENT).to_state();
+    h.update(&logits_event_header_v2(job_context_hash, phase, phase_step, n_vocab));
+    h.update(scratch);
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Ok(Hash64::from_bytes(out))
+}
+
+/// The canonical header bytes [`logits_event_hash_v2`] hashes before the row: one spelling,
+/// shared with the bounded streaming verifier of a single committed row.
+pub fn logits_event_header_v2(job_context_hash: &Hash64, phase: PalwTracePhaseV2, phase_step: u32, n_vocab: u32) -> Vec<u8> {
     let mut w = CanonicalWriter::new();
     w.put_hash64(job_context_hash);
     w.put_u8(phase.wire_byte());
     w.put_u32(phase_step);
     w.put_u32(n_vocab);
     w.put_u8(PalwLogitsDtypeV2::F32Le.wire_byte());
-    w.put_u32(logits.len() as u32);
-    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_V2_DOMAIN_LOGITS_EVENT).to_state();
-    h.update(&w.0);
-    h.update(scratch);
-    let mut out = [0u8; 64];
-    out.copy_from_slice(h.finalize().as_bytes());
-    Ok(Hash64::from_bytes(out))
+    w.put_u32(n_vocab);
+    w.0
 }
 
 /// Domain-separated binary Merkle root over the ordered event hashes.

@@ -197,6 +197,7 @@ pub struct PalwPrefixPublicAcquisitionPlanV1 {
     pub maximum_public_moves: u64,
     pub maximum_public_carrier_bytes: u64,
     pub maximum_response_daa: u64,
+    pub maximum_archive_bytes: u64,
 }
 impl PalwPrefixPublicAcquisitionPlanV1 {
     pub fn derive(
@@ -222,11 +223,14 @@ impl PalwPrefixPublicAcquisitionPlanV1 {
         let moves = u(slots
             .checked_mul(u128::from(rounded_source_moves))
             .and_then(|x| x.checked_add(n))
+            // One targeted terminal default collection, including its journal, fee
+            // validation and inclusion margin, is purchased independently of replies.
+            .and_then(|x| x.checked_add(1))
             .and_then(|x| x.checked_add(u128::from(prices.reorg_replay_moves)))
             .ok_or("public prefix complete moves overflow")?)?;
         let carriers = u(u128::from(moves) * 90_000)?;
         let pending = u((slots * 2 + 4) * leaf + slots * 8_192 + 8_192)?;
-        let checkpoint = u(u128::from(pending) + u128::from(base.envelope.row_bytes))?;
+        let checkpoint = u(u128::from(pending) + u128::from(base.envelope.row_bytes) + 128)?;
         let journal_copy = u(u128::from(moves) * u128::from(checkpoint))?;
         let journals = u(u128::from(journal_copy) * 2)?;
         let validation_bytes = u(u128::from(original_profile_bytes) + 125_000)?;
@@ -237,11 +241,19 @@ impl PalwPrefixPublicAcquisitionPlanV1 {
         let checked_bytes = u(u128::from(pending) + slots * (282 + 64 * 193) + 90_000)?;
         let check_pass = u(u128::from(moves) * u128::from(checked_bytes))?;
         let hash_work = u(u128::from(check_pass) * 4)?;
-        let work = u(u128::from(hash_work) + u128::from(repeated))?;
-        let charged_bytes = u(slots * bytes + u128::from(carriers) + u128::from(journals))?;
+        let history_count = u(u128::from(base.envelope.maximum_moves) + u128::from(moves))?;
+        let archive = u(u128::from(history_count) * crate::palw_prefix_history_v1::PALW_PREFIX_HISTORY_MAX_RECORD_BYTES_V1 as u128)?;
+        // Native expiry rows plus the bounded verifier's authenticated replay index.
+        let archive_indices = u(u128::from(history_count) * (80 + 256))?;
+        // Hash/restore/read replay and expiry-index cleanup are purchased along
+        // with the immutable raw records, not assumed to survive in block bodies.
+        let archive_work = u((u128::from(archive) + u128::from(archive_indices)) * 4)?;
+        let work = u(u128::from(hash_work) + u128::from(repeated) + u128::from(archive_work))?;
+        let charged_bytes =
+            u(slots * bytes + u128::from(carriers) + u128::from(journals) + u128::from(archive) + u128::from(archive_indices))?;
         let byte_rent = u128::from(charged_bytes) * u128::from(prices.rent_per_stream_byte);
         let work_rent = u128::from(work) * u128::from(prices.rent_per_parser_step);
-        let row_rent = u128::from(pending) * u128::from(prices.rent_per_row_byte);
+        let row_rent = (u128::from(pending) + 128 + u128::from(archive_indices)) * u128::from(prices.rent_per_row_byte);
         let extra_rent =
             u(byte_rent.checked_add(work_rent).and_then(|r| r.checked_add(row_rent)).ok_or("public prefix rent overflows u128")?)?;
         let extra_deposit = u(u128::from(moves) * u128::from(prices.deposit_per_move))?;
@@ -258,8 +270,14 @@ impl PalwPrefixPublicAcquisitionPlanV1 {
             u(u128::from(base.envelope.inclusion_daa) + u128::from(moves) * u128::from(prices.inclusion_margin_daa))?;
         envelope.rent_sompi = u(u128::from(envelope.rent_sompi) + u128::from(extra_rent))?;
         envelope.deposit_sompi = u(u128::from(envelope.deposit_sompi) + u128::from(extra_deposit))?;
-        envelope.row_bytes = u(u128::from(envelope.row_bytes) + u128::from(pending))?;
-        envelope.resident_ram_bytes = u(u128::from(envelope.resident_ram_bytes) * 4 + u128::from(pending) * 4 + 90_000)?;
+        envelope.row_bytes = u(u128::from(envelope.row_bytes) + u128::from(pending) + 128)?;
+        // Parent/COW, mutable journals, transactional answer/packet copies and
+        // allocator spare capacity coexist during one physical owned movement.
+        envelope.resident_ram_bytes = u(u128::from(envelope.resident_ram_bytes) * 8
+            + u128::from(pending) * 8
+            + 90_000
+            + u128::from(history_count) * 256
+            + (16 + 2 * 8) * (crate::palw_prefix_history_v1::PALW_PREFIX_HISTORY_MAX_RECORD_BYTES_V1 as u128 + 256))?;
         let response_moves = u(slots * (leaf.div_ceil(chunk) + 2))?;
         let response = u(u128::from(response_moves) * u128::from(prices.inclusion_margin_daa))?;
         Ok(Self {
@@ -268,6 +286,7 @@ impl PalwPrefixPublicAcquisitionPlanV1 {
             maximum_public_moves: moves,
             maximum_public_carrier_bytes: carriers,
             maximum_response_daa: response,
+            maximum_archive_bytes: archive,
         })
     }
 }
@@ -716,6 +735,10 @@ mod tests {
         assert!(plan.envelope.rent_sompi > base.envelope.rent_sompi);
         assert!(plan.envelope.deposit_sompi > base.envelope.deposit_sompi);
         assert!(plan.envelope.row_bytes > base.envelope.row_bytes);
+        assert_eq!(
+            plan.maximum_archive_bytes,
+            plan.envelope.maximum_moves * crate::palw_prefix_history_v1::PALW_PREFIX_HISTORY_MAX_RECORD_BYTES_V1 as u64
+        );
         assert!(plan.envelope.inclusion_daa > base.envelope.inclusion_daa);
         eprintln!(
             "public-prefix complete source_bound={} moves={} bytes={} rent={} deposit={} inclusionDAA={} RAM={}",
@@ -739,4 +762,36 @@ mod tests {
         );
         assert!(PalwPrefixPublicAcquisitionPlanV1::derive(base, 0, prices, profile_bytes).is_err());
     }
+    #[test]
+    fn maximum_active_prefix_positions_have_a_complete_checked_public_acquisition_quote() {
+        let (_, binding, _, _) = crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(true, false);
+        let mut profile = binding.shape_profile.clone();
+        profile.n_ctx = 4096;
+        let prices = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1().prices;
+        let base = crate::palw_prefix_resources_v1::PalwPrefixResourcePlanV1::derive(
+            &profile,
+            crate::palw_class_semantics_v1::PalwPrefixStateRelationV1::Base0Int8KvV1,
+            4095,
+            1 << 32,
+            90_000,
+            prices,
+        )
+        .unwrap();
+        let plan = PalwPrefixPublicAcquisitionPlanV1::derive(base, 7, prices, borsh::object_length(&profile).unwrap() as u64).unwrap();
+        assert_eq!(plan.envelope.prefix_tokens, 4095);
+        assert_eq!(plan.maximum_sources, base.envelope.maximum_stream_leaves);
+        assert!(plan.maximum_public_moves > base.envelope.maximum_stream_leaves);
+        assert_eq!(plan.envelope.maximum_moves, base.envelope.maximum_moves + plan.maximum_public_moves);
+        assert!(plan.envelope.maximum_stream_bytes > base.envelope.maximum_stream_bytes);
+        assert!(plan.envelope.maximum_parser_steps > base.envelope.maximum_parser_steps);
+        assert!(plan.envelope.rent_sompi.checked_add(plan.envelope.deposit_sompi).is_some());
+        let terms = crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1::derive(100, plan.envelope, 100, 100, 20).unwrap();
+        assert!(terms.stream_until_daa < terms.collect_until_daa);
+        assert!(terms.collect_until_daa < terms.material_until_daa);
+        assert!(PalwPrefixPublicAcquisitionPlanV1::derive(base, 7, prices, u64::MAX).is_err());
+    }
 }
+
+// Read-only native allocation inventory; no state/root/codec field is added.
+#[path = "palw_native_resource_v1/private/palw_prefix_public_source_v1.rs"]
+mod native_resource_inventory_v1;

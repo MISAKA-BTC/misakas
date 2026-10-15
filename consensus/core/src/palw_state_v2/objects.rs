@@ -480,6 +480,10 @@ pub(super) fn apply_object(
         PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed } => palw_staged_court_fold_v1::open(builder, ctx, seed)?,
         PalwConsensusObjectV2::PublicCourtStreamLeafV1 { leaf } => palw_staged_court_fold_v1::leaf(builder, ctx, leaf)?,
         PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } => palw_staged_court_fold_v1::movement(builder, ctx, movement)?,
+        PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed } => palw_staged_court_fold_v1::open_native(builder, ctx, seed)?,
+        PalwConsensusObjectV2::TirClassLayoutPublishedV1 { class_id, layout } => {
+            palw_staged_court_fold_v1::publish_tir_layout(builder, ctx, *class_id, layout)?
+        }
         PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration } => {
             palw_terminal_carriage_fold_v1::declare(builder, ctx, declaration)?;
         }
@@ -3403,7 +3407,7 @@ pub(super) fn apply_object(
             };
             let mut claim = claim;
             let public_job_wire = builder.public_fp_job_wire_v1(claim_id, &claim, public_job.as_deref())?;
-            let staged_contract = builder.prepare_staged_claim_with_job_v1(&mut claim, public_job.as_deref())?;
+            let staged_contract = builder.prepare_staged_claim_with_job_v1(*claim_id, &mut claim, public_job.as_deref())?;
             // **Lane BUDGET (ADR-0176 D3): the commitment's reservation** — Q 1, B `quanta` receipt blocks, R `quanta` carves of this
             // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
             builder.state.require_native_monetary_material_scope_v1(builder.params, *claim_id, &claim)?;

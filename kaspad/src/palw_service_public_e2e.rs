@@ -3,6 +3,8 @@
 //! Court windows, collateral and registration rules retain their preset values.
 //! The shipping activation validator still rejects the fixture fence; this is no network activation.
 use super::*;
+#[path = "palw_service_public_prefix_e2e.rs"]
+mod public_prefix;
 #[path = "palw_service_recovery_e2e.rs"]
 mod recovery;
 use kaspa_consensus::consensus::test_consensus::{TestConsensus, TestConsensusFactory};
@@ -185,6 +187,7 @@ pub(super) struct Chain {
     pub(super) time: u64,
     pub(super) nonce: u64,
     pub(super) history: Vec<Block>,
+    wall_deadline: Option<std::time::Instant>,
     _pruned_db: Option<kaspa_database::utils::DbLifetime>,
 }
 impl Drop for Chain {
@@ -209,7 +212,19 @@ impl Chain {
             Some(config.params.genesis.hash),
         );
         let time = config.params.genesis.timestamp;
-        Self { tc, handles, config, bundle, bonds, network_domain, time, nonce: 0, history: vec![], _pruned_db: None }
+        Self {
+            tc,
+            handles,
+            config,
+            bundle,
+            bonds,
+            network_domain,
+            time,
+            nonce: 0,
+            history: vec![],
+            wall_deadline: None,
+            _pruned_db: None,
+        }
     }
     pub(super) fn daa(&self) -> u64 {
         self.tc.get_virtual_daa_score()
@@ -219,6 +234,18 @@ impl Chain {
     }
     pub(super) async fn insert(&mut self, block: MutableBlock) -> Block {
         let block = block.to_immutable();
+        if self.config.params.palw_clock_lead_cap.is_some_and(|fence| fence.is_active(block.header.daa_score)) {
+            while let Err(latest) = kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_lead_admits_v1(
+                block.header.timestamp,
+                kaspa_core::time::unix_now(),
+            ) {
+                assert!(
+                    self.wall_deadline.is_none_or(|deadline| std::time::Instant::now() < deadline),
+                    "the original service wall deadline expired while waiting for the native clock lead cap"
+                );
+                tokio::time::sleep(Duration::from_millis(block.header.timestamp.saturating_sub(latest).min(1_000))).await;
+            }
+        }
         self.tc.validate_and_insert_block(block.clone()).virtual_state_task.await.expect("real pipeline accepts block");
         self.history.push(block.clone());
         block
@@ -676,6 +703,15 @@ async fn fresh_public_bond_service_registered_prefix_inherited_after_pruned_impo
     fresh_public_service(PublicCase::TiledPrefixInherited).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_public_bond_service_native_public_prefix_initial_convicts_all_custodians() {
+    fresh_public_service(PublicCase::TiledPublicPrefixInitial).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_public_bond_service_native_public_prefix_inherited_convicts_all_custodians() {
+    fresh_public_service(PublicCase::TiledPublicPrefixInherited).await;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PublicCase {
     Withholding,
@@ -703,6 +739,8 @@ enum PublicCase {
     TiledConstraintWithheld,
     TiledPrefixInitial,
     TiledPrefixInherited,
+    TiledPublicPrefixInitial,
+    TiledPublicPrefixInherited,
     TiledTokenizerLength,
     TiledTokenizerKeyBound,
 }
@@ -715,7 +753,7 @@ impl PublicCase {
         matches!(self, Self::PrunedForeignFpV3Job | Self::PrunedHonestFpV3Job | Self::PrunedWithheldFpV3Input) || self.unretained_fp()
     }
     fn unretained_fp(self) -> bool {
-        if self.staged_tokenizer() {
+        if self.staged_tokenizer() || self.native_prefix() {
             return false;
         }
         if self.tiled() {
@@ -772,13 +810,16 @@ impl PublicCase {
     }
     fn prefix_fault(self) -> Option<u8> {
         match self {
-            Self::TiledPrefixInitial => Some(5),
-            Self::TiledPrefixInherited => Some(6),
+            Self::TiledPrefixInitial | Self::TiledPublicPrefixInitial => Some(5),
+            Self::TiledPrefixInherited | Self::TiledPublicPrefixInherited => Some(6),
             _ => None,
         }
     }
     fn staged_tokenizer(self) -> bool {
         matches!(self, Self::TiledTokenizerLength | Self::TiledTokenizerKeyBound)
+    }
+    fn native_prefix(self) -> bool {
+        matches!(self, Self::TiledPublicPrefixInitial | Self::TiledPublicPrefixInherited)
     }
     fn constraint(self) -> bool {
         self.staged_tokenizer() || self.large_constraint() || self.constraint_fault().is_some()
@@ -805,9 +846,24 @@ impl PublicCase {
                 | Self::TiledConstraintLargeJob
                 | Self::TiledPrefixInitial
                 | Self::TiledPrefixInherited
+                | Self::TiledPublicPrefixInitial
+                | Self::TiledPublicPrefixInherited
                 | Self::TiledTokenizerLength
                 | Self::TiledTokenizerKeyBound
         )
+    }
+}
+
+#[test]
+fn native_prefix_cases_keep_prospective_job_metadata_and_pruned_import() {
+    for case in [PublicCase::TiledPublicPrefixInitial, PublicCase::TiledPublicPrefixInherited] {
+        assert!(!case.unretained_fp());
+        assert!(!case.pruned_fp());
+        assert!(case.prefix_fault().is_some(), "native prefix still requires actual public pruned-import");
+    }
+    for case in [PublicCase::TiledPrefixInitial, PublicCase::TiledPrefixInherited] {
+        assert!(case.unretained_fp(), "legacy pre-retention acquisition remains covered independently");
+        assert!(case.pruned_fp());
     }
 }
 
@@ -1134,7 +1190,9 @@ async fn carry_fp_commitment(
             return large_constraint_transaction(commitment.clone(), carried.clone(), &floats[0], fee);
         }
         signer
-            .build_fp_commitment_tx(
+            .build_fp_commitment_tx_under_params_v1(
+                &chain.config.params,
+                chain.daa(),
                 chain.network_domain,
                 chain.config.params.palw_prompt_ids_form_v1(),
                 commitment.clone(),
@@ -1202,7 +1260,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info,kaspad_lib::palw_panel::palw_fraud_filer=debug");
     let (mut config, bundle, premine, mut floats) = fixture_config_with(
         case == PublicCase::ForeignFpJob || case.prefix_fault().is_some(),
-        case.pruned_fp() || case == PublicCase::HonestFpV3Job,
+        case.pruned_fp() || case.native_prefix() || case == PublicCase::HonestFpV3Job,
         case.unretained_fp(),
         case.constraint(),
         case.tiled(),
@@ -1212,7 +1270,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         // descriptor contract; public-filer activation remains at its normal test DAA.
         config.params.palw_class_semantics_v1 = Some(ForkActivation::new(0));
     }
-    if case.staged_tokenizer() {
+    if case.staged_tokenizer() || case.native_prefix() {
         config.params.palw_staged_public_court_v1 = Some(ForkActivation::new(0));
         config.params.validate_palw_staged_public_court_v1().unwrap();
     }
@@ -1303,7 +1361,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
     let foreign = (case != PublicCase::Withholding).then(|| {
         if let Some(fixture) = &tiled {
             let (outcome, event, job, events) = fixture.produce_for_card(&chain, 0, case.prefix_fault().or(case.constraint_fault()));
-            if case.prefix_fault().is_some() {
+            if case.prefix_fault().is_some() && !case.native_prefix() {
                 let (commitment, ids) = job.as_ref().unwrap();
                 prefix_answers = fixture.prefix_kernel_answers(&chain, commitment, ids);
             }
@@ -1471,6 +1529,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
     let config = Arc::new(chain.config.clone());
     let tick = Arc::new(TickService::new());
     let (_meta_lifetime, meta_db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let meta_released = Arc::downgrade(&meta_db);
     let (addresses, _) = kaspa_addressmanager::AddressManager::new(config.clone(), meta_db, tick.clone());
     let pool = MiningManagerProxy::new(Arc::new(MiningManager::new_with_extended_config(
         config.target_time_per_block(),
@@ -1501,7 +1560,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         addresses,
         config.clone(),
         pool.clone(),
-        tick,
+        tick.clone(),
         chain.tc.notification_root(),
         hub,
         rules,
@@ -1521,7 +1580,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         palw_token_tables_v1().register(palw_token_table_file_decode_v1(&public_file).unwrap());
     }
     let mut verifier_config = panel_config(&chain, dir.path(), bond, &floats[OUTSIDER]);
-    if recovery_mode.is_some() || case.staged_tokenizer() {
+    if recovery_mode.is_some() || case.staged_tokenizer() || case.native_prefix() {
         verifier_config.public_claims = vec![claim];
     }
     if let Some(fixture) = &tiled {
@@ -1538,11 +1597,29 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
     let cloned = service.clone();
     let task = if recovery_mode == Some(recovery::RecoveryMode::NetworkVerifier) {
         // The sole outsider is launched on the independent socket receiver below.
+        drop(cloned);
         None
     } else {
         Some(tokio::spawn(async move { cloned.start().await.unwrap() }))
     };
     let mut running = ServiceRun { service: service.clone(), task };
+    let mut public_prefix_producer = if case.native_prefix() {
+        Some(
+            public_prefix::Producer::start(
+                &chain,
+                claim,
+                tiled.as_ref().unwrap(),
+                foreign.as_ref().unwrap(),
+                &floats[0],
+                manager.clone(),
+                retained_flow.clone(),
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+    let mut public_prefix_monitor = case.native_prefix().then(public_prefix::Monitor::default);
     let mut recovery = if automatic_recovery {
         Some(
             recovery::RecoveryRun::start(
@@ -1566,6 +1643,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
     }
     let mut tokenizer_monitor = case.staged_tokenizer().then(|| staged_tokenizer::Monitor::new(case, tiled.as_ref().unwrap()));
     let deadline = std::time::Instant::now() + Duration::from_secs(360);
+    chain.wall_deadline = Some(deadline);
     let service_start = chain.history.len();
     let mut next_da_progress = chain.daa() + 100;
     let mut reserved = false;
@@ -1626,6 +1704,9 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                 .await;
         }
         let view = chain.view(claim);
+        if let Some(monitor) = public_prefix_monitor.as_mut() {
+            monitor.observe(&chain, claim, bond);
+        }
         if let Some(monitor) = tokenizer_monitor.as_mut() {
             monitor.observe_and_restart(&chain, claim, bond, &manager, &retained_flow, &mut service, &mut running).await;
         }
@@ -1662,6 +1743,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         reserved |= view.record.as_ref().is_some_and(|r| r.live.contains_key(&bond));
         demanded |= view.sessions.iter().any(|(accuser, _)| *accuser == bond);
         if !automatic_recovery
+            && !case.native_prefix()
             && demanded
             && case != PublicCase::UnretainedWithheldFpV3Binding
             && answer_submitted.is_none()
@@ -1786,6 +1868,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         ) || case.constraint_fault().is_some()
             || case.prefix_fault().is_some())
             && !automatic_recovery
+            && !case.native_prefix()
             && !job_preimage_submitted
             && chain.view(claim).sessions.iter().any(|(who, s)| {
                 *who == bond
@@ -1810,6 +1893,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                         let Some(PalwFpJobTailV1::Constraint(tail)) = job.tail.as_mut() else { unreachable!() };
                         let mut constraint =
                             kaspa_consensus_core::palw_fp_constraint_job_v1::palw_constraint_of_bytes_v1(&tail.constraint).unwrap();
+                        constraint.frames.truncate(1);
                         constraint.frames[0].nodes.truncate(1);
                         tail.constraint = constraint.to_bytes();
                         // A wrong direct preimage does not occupy the session's immutable signed
@@ -1828,15 +1912,13 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                 };
                 let message = palw_legacy_held_answer_message_v2(chain.network_domain.as_byte_slice(), &answer);
                 answer.signature = signed(0, message.as_byte_slice(), PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2);
-                let objects = if !corrupt
-                    && matches!(case, PublicCase::UnretainedMultipartHonestFpV3Job | PublicCase::UnretainedLargeConstraintJob)
-                {
+                let objects = if !corrupt && (case == PublicCase::UnretainedMultipartHonestFpV3Job || case.large_constraint()) {
                     use kaspa_consensus_core::palw_legacy_answer_chunks_v2::*;
                     // Both fixtures use real authenticated history. The old small job forces two
                     // parts; the large constraint genuinely exceeds one carrier. Neither fixture
                     // exercises the producer's automatic splitting worker or every maximum profile.
                     let answer_bytes = borsh::object_length(&answer).unwrap();
-                    let part_bytes = if case == PublicCase::UnretainedLargeConstraintJob {
+                    let part_bytes = if case.large_constraint() {
                         assert!(answer_bytes + 1 > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES);
                         PALW_LEGACY_ANSWER_CHUNK_BYTES_V2
                     } else {
@@ -1904,7 +1986,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
             job_preimage_submitted = true;
             eprintln!("[service-public] wrong job refused, authenticated job preimage acquired through signed public carriers");
         }
-        if case.answers_input() && !automatic_recovery {
+        if case.answers_input() && !automatic_recovery && !case.native_prefix() {
             use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
             use kaspa_consensus_core::palw_legacy_held_da_v2::{
                 PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2, PALW_LEGACY_HELD_VERSION_V2, PalwLegacyHeldAnswerCarriageV2,
@@ -2028,7 +2110,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                 );
             }
         }
-        if case.tiled() {
+        if case.tiled() && !case.native_prefix() {
             use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_answer_object_v1};
             let requested: Vec<_> = chain
                 .view(claim)
@@ -2067,7 +2149,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                 eprintln!("[service-tiled] requested public disclosure {unit:?} mined through ordinary H1/PQ admission");
             }
         }
-        if case.prefix_fault().is_some() {
+        if case.prefix_fault().is_some() && !case.native_prefix() {
             use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
             use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
             let requested: Vec<_> = chain
@@ -2224,12 +2306,14 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                         .filter_map(|t| borsh::from_slice::<PalwLifecycleTxPayloadV2>(&t.payload).ok())
                         .map(|p| p.object)
                         .collect::<Vec<_>>();
-                    assert!(
-                        chain.history[service_start..]
-                            .iter()
-                            .flat_map(|b| b.transactions.iter())
-                            .any(|t| Some(t.id()) == answer_submitted)
-                    );
+                    if !case.native_prefix() {
+                        assert!(
+                            chain.history[service_start..]
+                                .iter()
+                                .flat_map(|b| b.transactions.iter())
+                                .any(|t| Some(t.id()) == answer_submitted)
+                        );
+                    }
                     if let Some(best) = &producer_reward {
                         assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ReporterCommitted { commitment, reporter, .. } if *commitment == best.commitment && *reporter == bond)));
                         assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ReporterRevealed { offence_key, reporter, .. } if *offence_key == offence && *reporter == bond)));
@@ -2250,7 +2334,16 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                         .or_else(|| terminal::included_executor_evidence_v1(&carriers, claim, view.producer))
                         .expect("the verifier's exact proof is included in an actual block");
                     assert_eq!(evidence.claim_id, claim);
-                    if let Some(monitor) = tokenizer_monitor.as_ref() {
+                    if let Some(monitor) = public_prefix_monitor.as_ref() {
+                        assert!(
+                            prefix_answers.is_empty() && prefix_tiles_submitted.is_empty(),
+                            "no manual CKW bypasses native acquisition"
+                        );
+                        assert_eq!(all_seats.len(), 5);
+                        assert!(consumed.amount > 0 && consumed.collected > 0, "native prefix collects producer collateral");
+                        monitor.assert_conviction(&chain, claim, bond, &evidence, &carriers);
+                        public_prefix::assert_no_producer_capture(&service.config.retention_dir, claim);
+                    } else if let Some(monitor) = tokenizer_monitor.as_ref() {
                         assert_eq!(all_seats.len(), 5, "the complete registered class Panel is convicted and collected");
                         assert!(consumed.amount > 0 && consumed.collected > 0, "the staged court collects the producer leg");
                         monitor.assert_conviction(&chain, claim, bond, &evidence, &carriers);
@@ -2456,6 +2549,9 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
     if let Some(recovery) = recovery.as_mut() {
         recovery.finish(&chain, claim, service_start).await;
     }
+    if let Some(producer) = public_prefix_producer.as_mut() {
+        producer.finish().await;
+    }
     running.finish().await;
     let weak = Arc::downgrade(&service);
     let authorizer = service.opening_authorizer(chain.network_domain);
@@ -2471,7 +2567,24 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         signature: &[],
     };
     assert_eq!(authorizer(&request), Err(kaspa_p2p_flows::palw_gossip::PalwServeRefusalV1::NotServing));
+    tick.shutdown();
+    if let Some(recovery) = recovery.as_mut() {
+        recovery.shutdown_network().await;
+    }
+    drop(recovery);
+    drop(public_prefix_producer);
     drop(retained_flow);
+    drop(manager);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while meta_released.strong_count() != 0 {
+            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("all source service and P2P flow owners release the address DB before its strict lifetime guard");
+    assert_eq!(meta_released.strong_count(), 0);
+    drop(_meta_lifetime);
     eprintln!("[service-public] actual service start/exit joined, callback owner released");
 }
 

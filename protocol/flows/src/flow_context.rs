@@ -118,6 +118,7 @@ pub(crate) const PROTOCOL_VERSION_PALW_INTERVAL: u32 = 105;
 pub(crate) const PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS: u32 = 106;
 /// Bounded zlib snapshots with separate wire/canonical caps and nonce/profile binding.
 pub(crate) const PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED: u32 = 107;
+pub(crate) const PROTOCOL_VERSION_PALW_PREFIX_HISTORY: u32 = 107;
 
 /// See `check_orphan_resolution_range`
 const BASELINE_ORPHAN_RESOLUTION_RANGE: u32 = 5;
@@ -685,6 +686,7 @@ pub struct FlowContextInner {
     /// Present on every node (the state is a few KB); active only where the flow feeds it, and the
     /// flow refuses everything on a network with no ConsensusV2 ruleset.
     palw_gossip: crate::palw_gossip::PalwGossipCenter,
+    palw_prefix_history: crate::palw_prefix_history::PalwPrefixHistoryBrokerV1,
 
     /// ADR-0125 §7.3: round blocks by permit — one relayed a permit, and the evidence of two.
     palw_round_relay: crate::palw_round_relay::PalwRoundRelayV1,
@@ -962,6 +964,7 @@ impl FlowContext {
                 node_id: Uuid::new_v4().into(),
                 consensus_manager,
                 palw_gossip: crate::palw_gossip::PalwGossipCenter::default(),
+                palw_prefix_history: crate::palw_prefix_history::PalwPrefixHistoryBrokerV1::default(),
                 palw_round_relay: Default::default(),
                 palw_exec_v2_relay: Default::default(),
                 palw_heartbeat_relay: Default::default(),
@@ -1056,6 +1059,10 @@ impl FlowContext {
 
     pub fn palw_gossip(&self) -> &crate::palw_gossip::PalwGossipCenter {
         &self.palw_gossip
+    }
+
+    pub fn palw_prefix_history(&self) -> &crate::palw_prefix_history::PalwPrefixHistoryBrokerV1 {
+        &self.palw_prefix_history
     }
 
     /// ADR-0125 §7.3: the round lane's relay memory and its equivocation evidence.

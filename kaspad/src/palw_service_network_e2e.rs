@@ -28,6 +28,7 @@ pub(super) struct NetworkRun {
     _flow: Arc<FlowContext>,
     manager: Arc<ConsensusManager>,
     rules: Arc<MiningRuleEngine>,
+    tick: Arc<TickService>,
     primary: Arc<Adaptor>,
     client: Arc<Adaptor>,
     relayed: usize,
@@ -37,6 +38,36 @@ pub(super) struct NetworkRun {
 }
 
 impl NetworkRun {
+    pub(super) async fn shutdown(self) {
+        let Self { receiver, _flow: flow, manager, rules, tick, primary, client, _metadata: metadata, .. } = self;
+        let flow_released = Arc::downgrade(&flow);
+        let addresses_released = Arc::downgrade(&flow.address_manager);
+        // SendPingsFlow keeps its context while waiting on the ordinary 120-second
+        // tick. Process shutdown signals the tick service before waiting for owners.
+        tick.shutdown();
+        client.close().await;
+        primary.close().await;
+        // close() drains peers only. Dropping both adaptors also terminates the listener,
+        // releases connection initializers and closes the asynchronous hub event queues.
+        drop(client);
+        drop(primary);
+        drop(flow);
+        drop(rules);
+        drop(manager);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while flow_released.strong_count() != 0 || addresses_released.strong_count() != 0 {
+                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("socket initializers, RPC workers and flow clones release the address DB before destruction");
+        assert_eq!(addresses_released.strong_count(), 0);
+        drop(metadata); // The strict DbLifetime reference assertion remains enabled.
+        drop(receiver);
+        eprintln!("[service-network] socket adaptors, flow/address owners and metadata DB joined and released");
+    }
+
     pub(super) async fn start(chain: &Chain, premine: &[Funding], primary_flow: Arc<FlowContext>, claim: Hash64) -> Self {
         let mut receiver = Chain::new(chain.config.clone(), chain.bundle.clone(), premine);
         for block in &chain.history {
@@ -100,7 +131,7 @@ impl NetworkRun {
             addresses,
             config,
             pool,
-            tick,
+            tick.clone(),
             receiver.tc.notification_root(),
             hub.clone(),
             rules.clone(),
@@ -111,12 +142,36 @@ impl NetworkRun {
         drop(listener);
         let primary = Adaptor::bidirectional(address.into(), primary_flow.hub().clone(), primary_flow, Default::default()).unwrap();
         let client = Adaptor::client_only(hub, flow.clone(), Default::default());
-        tokio::time::timeout(Duration::from_secs(15), client.connect_peer(address.to_string()))
-            .await
-            .expect("loopback connection has a bounded deadline")
-            .expect("actual P2P handshake accepts the same rules");
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                match client.connect_peer(address.to_string()).await {
+                    Ok(peer) => break Ok(peer),
+                    Err(error) => {
+                        let mut source: &(dyn std::error::Error + 'static) = &error;
+                        let mut refused = false;
+                        loop {
+                            if source
+                                .downcast_ref::<std::io::Error>()
+                                .is_some_and(|e| e.kind() == std::io::ErrorKind::ConnectionRefused)
+                            {
+                                refused = true;
+                            }
+                            let Some(next) = source.source() else { break };
+                            source = next;
+                        }
+                        if !refused {
+                            break Err(error);
+                        }
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("loopback connection has a bounded deadline")
+        .expect("actual P2P handshake accepts the same rules");
         eprintln!("[service-network] actual socket P2P handshake completed at DAA {}", chain.daa());
-        Self { receiver, _metadata: metadata, _flow: flow, manager, rules, primary, client, relayed: chain.history.len() }
+        Self { receiver, _metadata: metadata, _flow: flow, manager, rules, tick, primary, client, relayed: chain.history.len() }
     }
 
     pub(super) async fn verifier_endpoint(&self) -> (Arc<ConsensusManager>, Arc<FlowContext>) {

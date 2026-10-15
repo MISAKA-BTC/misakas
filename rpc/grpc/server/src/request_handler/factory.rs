@@ -136,6 +136,7 @@ impl Factory {
                 GetPalwMonetaryMaterial,
                 GetPalwStateCarriage,
                 GetPalwRewardVesting,
+                GetPalwStagedPreclaimQuote,
                 GetPalwKernelClaim,
                 GetPalwKernelRows,
                 GetPalwKernelFinals,
