@@ -61,6 +61,44 @@ class Oracle(unittest.TestCase):
                                    nativeReadiness=dict(generation=native['generation'], safe=native['safe'], finalized=dict(finalized=None))))
         return row, plan
 
+    def test_actual_probe_rejects_daa_or_identity_changes_even_with_a_fixed_sink(self):
+        base_dag = dict(sink='03' * 64, pruningPointHash='04' * 64, virtualDaaScore=100)
+        base_node = dict(genesisHash='05' * 64, consensusParamsId='06' * 32,
+            importSessionAvailable=True, importSessionEpoch=1, importSessionPoint='',
+            importSessionPhase='idle', pruningImportStable=True)
+        # Exercise both public-view brackets in the real probe consumer, rather
+        # than treating a sink-only comparison as adequate coherence evidence.
+        for stage in (2, 3):
+            for field, value in (('virtualDaaScore', 101), ('genesisHash', '07' * 64),
+                    ('consensusParamsId', '08' * 32), ('importSessionEpoch', 2)):
+                with self.subTest(stage=stage, field=field):
+                    class Rpc:
+                        reads = 0
+                        def call(self, method, *args):
+                            if method == 'getBlockDagInfo':
+                                self.reads += 1
+                                row = dict(base_dag)
+                                if self.reads >= stage and field in row:
+                                    row[field] = value
+                                return row
+                            if method == 'getPalwNodeStatus':
+                                row = dict(base_node)
+                                if self.reads >= stage and field in row:
+                                    row[field] = value
+                                return row
+                            return {'getBlock': dict(block=dict(header={})),
+                                'getDnsConfirmation': dict(available=False),
+                                'getPalwSettlement': {}, 'getConnectedPeerInfo': [],
+                                'getPalwCapacityShadow': {}}[method]
+                        def close(self):
+                            pass
+                    rpc = Rpc()
+                    instance = drill.Drill(dict(nodes={}), Path('/unused-owned-probe'))
+                    instance.rpc = lambda role: rpc
+                    with self.assertRaisesRegex(AssertionError, 'context changed'):
+                        instance.probe('A')
+                    self.assertEqual(instance.observations, [])
+
     def test_missing_retirement_is_blocked_even_with_large_work(self):
         row, plan = self.fixture()
         row['settlement']['dnsRetiredAt'] = None

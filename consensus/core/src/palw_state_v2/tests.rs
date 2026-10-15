@@ -5027,26 +5027,26 @@ mod adr0135 {
             // A new claim of each lane.
             let mut fresh = stray.clone();
             fresh.class_id = kimi_id();
-            b.write_claim(h64(0x4444), Some(fresh.clone()));
+            b.write_claim(h64(0x4444), Some(fresh.clone())).unwrap();
             fresh.source = PalwClaimSourceV2::FreePrompt { quanta: 2, spent: BTreeSet::new() };
-            b.write_claim(h64(0x4445), Some(fresh.clone()));
+            b.write_claim(h64(0x4445), Some(fresh.clone())).unwrap();
             assert_index_is_the_walk(&b, &fold, now, "after two new claims");
             // A claim going terminal, and one dropped.
             let live: Vec<Hash64> = b.state.claims.iter().filter(|(_, c)| !c.phase.is_terminal()).map(|(k, _)| *k).collect();
             let mut voided = b.state.claims[&live[0]].clone();
             voided.phase = PalwClaimPhaseV2::Voided { voided_daa: now, reason: PalwVoidReasonV2::BindTimeout };
-            b.write_claim(live[0], Some(voided));
-            b.write_claim(live[1], None);
+            b.write_claim(live[0], Some(voided)).unwrap();
+            b.write_claim(live[1], None).unwrap();
             assert_index_is_the_walk(&b, &fold, now, "after a void and a drop");
             // 2026-09-24 audit #4: a licence (the replay done) and a court on a licensed claim
             // (the replay owed again), each measured against the walk; then the court closes.
             let mut licensed = fresh.clone();
             licensed.source = PalwClaimSourceV2::Attempt;
-            b.write_claim(h64(0x4447), Some(licensed.clone()));
+            b.write_claim(h64(0x4447), Some(licensed.clone())).unwrap();
             licensed.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: now };
-            b.write_claim(h64(0x4447), Some(licensed.clone()));
+            b.write_claim(h64(0x4447), Some(licensed.clone())).unwrap();
             licensed.source = PalwClaimSourceV2::FreePrompt { quanta: 3, spent: BTreeSet::new() };
-            b.write_claim(h64(0x4448), Some(licensed));
+            b.write_claim(h64(0x4448), Some(licensed)).unwrap();
             assert_index_is_the_walk(&b, &fold, now, "after two licences");
             b.state.open_courts_by_claim.insert(h64(0x4448), 1);
             b.state.open_courts_by_claim.insert(h64(0x4447), 2);
@@ -5061,8 +5061,8 @@ mod adr0135 {
             assert_index_is_the_walk(&b, &fold, now, "after a row change");
             // A restore over writes the index had absorbed.
             let checkpoint = b.checkpoint();
-            b.write_claim(live[2], None);
-            b.write_claim(h64(0x4446), Some(fresh.clone()));
+            b.write_claim(live[2], None).unwrap();
+            b.write_claim(h64(0x4446), Some(fresh.clone())).unwrap();
             let mut active = b.state.model_lifecycles[&kimi_id()].clone();
             active.state = PalwModelLifecycleV1::Active;
             b.write_model_lifecycle(kimi_id(), Some(active));
@@ -5187,7 +5187,7 @@ mod adr0135 {
         let row = s.model_lifecycles[&kimi_id()].clone();
         assert_eq!(b.panel_room_v1(&kimi_id(), &row, &fold, now), owed);
         let checkpoint = b.checkpoint();
-        b.write_claim(key, Some(s1.claims[&key].clone()));
+        b.write_claim(key, Some(s1.claims[&key].clone())).unwrap();
         assert_eq!(b.panel_room_v1(&kimi_id(), &row, &fold, now), freed, "licensed in the builder");
         b.restore(checkpoint);
         assert_eq!(b.panel_room_v1(&kimi_id(), &row, &fold, now), owed, "un-licensed by the rollback: charged again");
@@ -12640,9 +12640,9 @@ fn registered_semantics_are_independently_fenced_rooted_and_stamped_before_job_r
         "prospective first-fill cannot retroactively change a claim's table rule"
     );
     let old_claim = writer.state.claim(&h64(0xFC)).unwrap().clone();
-    writer.write_claim(h64(0xFC), Some(old_claim.clone()));
+    writer.write_claim(h64(0xFC), Some(old_claim.clone())).unwrap();
     assert_eq!(writer.state.claim_semantics_v1(&h64(0xFC)), Some(row));
-    writer.write_claim(h64(0xFD), Some(old_claim));
+    writer.write_claim(h64(0xFD), Some(old_claim)).unwrap();
     assert_eq!(writer.state.claim_semantics_v1(&h64(0xFD)).unwrap().token_table_root, Some(h64(888)));
     let declaration = crate::palw_class_semantics_v1::PalwClassSemanticsDeclarationV1 {
         version: row.version,
@@ -12695,7 +12695,7 @@ fn registered_semantics_are_independently_fenced_rooted_and_stamped_before_job_r
     let (prospective, _) = fold_declaration(&historical, declaration, &on).unwrap();
     assert_eq!(prospective.class_semantics_v1(&h64(1)).unwrap().bound_from_daa, 102);
     assert!(prospective.claim_semantics.is_empty(), "migration cannot stamp already accepted historical claims");
-    writer.write_claim(h64(0xFD), None);
+    writer.write_claim(h64(0xFD), None).unwrap();
     assert!(writer.state.claim_semantics_v1(&h64(0xFD)).is_none());
 }
 
@@ -12784,7 +12784,7 @@ fn public_fp_job_metadata_is_rooted_journaled_and_refuses_tampered_snapshots() {
     job.job.job_nonce[0] ^= 1;
     assert!(fold(&p, &corrupt).is_err(), "inconsistent extracted facts refuse before writing any claim");
     let mut writer = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
-    writer.write_claim(id, None);
+    writer.write_claim(id, None).unwrap();
     assert!(!writer.state.fp_public_jobs.contains_key(&id), "retirement removes the retained metadata");
     let removed = PalwStateDeltaV2 { point: ctx(3, 102, 3), entries: writer.entries };
     assert_eq!(revert_delta_v2(&writer.state, &removed, &p).unwrap(), state, "undo restores claim and metadata together");
@@ -33215,7 +33215,7 @@ mod s4_conviction_funnel {
             0,
             "no vesting row burned (S's stub): no S3"
         );
-        b.mark_liability_convicted(fp, 200, PalwVoidReasonV2::CourtFraud);
+        b.mark_liability_convicted(fp, 200, PalwVoidReasonV2::CourtFraud).unwrap();
         assert_eq!(b.post_final_fp_g_v1(&fp), None, "once per claim: the mark is the marker");
         let delta = PalwStateDeltaV2 { point: at, entries: b.entries.clone() };
         assert_eq!(revert_delta_v2(&b.state, &delta, &p).unwrap(), s, "the revert restores the state");
@@ -34087,6 +34087,14 @@ fn native_fixed_writers_refuse_before_state_or_journal_change() {
     assert!(matches!(builder.write_class_walk(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
     assert!(matches!(builder.write_target(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
     assert!(matches!(builder.write_share(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_fp_certified_class(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_pending_chunks(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_tir_class(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_gen_class(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(
+        builder.write_derived_artifact(crate::palw_derived_v1::PalwDerivedKeyV1 { claim: h64(1), transformer: h64(2) }, None),
+        Err(PalwStateV2Error::NativeResource(_))
+    ));
     assert!(builder.entries.is_empty());
     assert_eq!(builder.state, empty);
     assert_eq!(checker.outstanding(), (0, 0));
@@ -34096,6 +34104,40 @@ fn native_fixed_writers_refuse_before_state_or_journal_change() {
     assert!(matches!(builder.write_share(h64(1), Some(10)), Err(PalwStateV2Error::NativeResource(_))));
     assert!(builder.entries.is_empty());
     assert_eq!(builder.state, empty);
+}
+
+#[test]
+fn native_chunk_assembly_refuses_before_payload_copy_and_decode_preflight_refuses_nested_bomb() {
+    use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let empty = PalwChainStateV2::genesis();
+    let mut builder = TransitionBuilder::new(&empty, &p, false, false, false, false, &extras);
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 });
+    builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+    assert!(matches!(builder.reserve_chunk_assembly_v1(&h64(1), &[1]), Err(PalwStateV2Error::NativeResource(_))));
+    assert_eq!(builder.state, empty);
+    assert!(builder.entries.is_empty());
+    assert_eq!(checker.outstanding(), (0, 0));
+    // BondRegistered (tag0), fixed outpoint68, then a hostile pubkey Vec length.
+    let mut bomb = vec![0; 1 + 68];
+    bomb.extend_from_slice(&u32::MAX.to_le_bytes());
+    assert!(matches!(builder.reserve_chunk_decode_v1(&bomb), Err(PalwStateV2Error::ChunkedObjectUndecodable(_))));
+    assert_eq!(builder.state, empty);
+    assert!(builder.entries.is_empty());
+}
+
+#[test]
+fn native_chunk_preflight_disabled_preserves_legacy_valid_codec() {
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let mut builder = TransitionBuilder::new(&PalwChainStateV2::genesis(), &p, false, false, false, false, &extras);
+    let object = PalwConsensusObjectV2::ObjectChunk { group: h64(3), index: 0, count: 1, bytes: vec![1, 2, 3] };
+    let canonical = borsh::to_vec(&object).unwrap();
+    assert!(!builder.native_reservation.is_tracking_v1());
+    builder.reserve_chunk_decode_v1(&canonical).unwrap();
+    assert_eq!(borsh::to_vec(&borsh::from_slice::<PalwConsensusObjectV2>(&canonical).unwrap()).unwrap(), canonical);
+    assert!(builder.entries.is_empty());
 }
 
 #[test]
@@ -34113,5 +34155,31 @@ fn native_fixed_writer_reservations_survive_mutation_until_owner_drop() {
     assert!(builder.state.class_shares.is_empty());
     assert!(checker.outstanding().0 > 0);
     drop(builder);
+    assert_eq!(checker.outstanding(), (0, 0));
+}
+
+#[test]
+fn native_claim_cascade_refusal_keeps_dependent_rows_and_journal_unchanged() {
+    use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let key = h64(0xF006);
+    let mut parent = PalwChainStateV2::genesis();
+    // Boundary fixture only: the opaque dependent bytes are never decoded or
+    // represented as a valid accepted public job by this writer unit case.
+    parent.fp_public_jobs.insert(key, vec![1, 2, 3]);
+    let mut builder = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 });
+    builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+    assert!(matches!(builder.write_claim(key, None), Err(PalwStateV2Error::NativeResource(_))));
+    assert_eq!(builder.state, parent);
+    assert!(builder.entries.is_empty());
+    assert_eq!(checker.outstanding(), (0, 0));
+    assert!(matches!(builder.write_claim_semantics_v1(key, None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_panel_liability(key, None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_vesting(key, None), Err(PalwStateV2Error::NativeResource(_))));
+    assert_eq!(builder.state, parent);
+    assert!(builder.entries.is_empty());
+    assert!(matches!(builder.reserve_mutation_sequence_v1(0, usize::MAX), Err(PalwStateV2Error::NativeResource(_))));
     assert_eq!(checker.outstanding(), (0, 0));
 }

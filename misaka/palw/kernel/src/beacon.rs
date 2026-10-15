@@ -21,7 +21,8 @@
 //! to publish or withhold, so it can steer the beacon among at most `2^j` candidates; [`grinding_attempts_v1`] turns that into the
 //! `Q` of RFC-0011 §15.4's network bound. Every candidate is still bound to commitments fixed before the window began, so grinding
 //! buys draws, not a chosen vector. The construction is hash-based (no algebraic assumption a quantum adversary breaks beyond the
-//! hash's own); it is **not** a reviewed unbiased beacon, and an interactive multi-round (GKR) transcript would need one per round.
+//! hash's own); it is **not** a reviewed unbiased beacon. Repeated direct checks must account for
+//! their actual randomness and grinding. Computation-validity proofs are prohibited by PRINCIPLES §8.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 

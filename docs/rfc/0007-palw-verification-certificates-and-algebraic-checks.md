@@ -1,4 +1,7 @@
-# RFC-0007: PALW constraint verification — batched Freivalds/GKR Panel checks, evidence-bound receipts, and exact court on dispute
+# RFC-0007: PALW probabilistic detection — direct checks, authenticated receipts, and deterministic court
+> **2026-10-15 恒久改定 — [PRINCIPLES §8](../PRINCIPLES.md#8-モデル計算の暗号学的証明を使用しない2026-10-15ユーザー恒久決定):** MISAKA はモデル計算の正しさの暗号学的証明を使用せず、将来の採用・研究候補にも置かない。ZK/SNARK/STARK/zkVM/zkML、PCS に基づく succinct validity argument、GKR、producer 送信の sum-check validity transcript、再帰・proof aggregation の方向は撤回する。以下の既存 wire 名・過去の測定は履歴であり、禁止方式の採用根拠にならない。
+>
+> 許容するのは認証済み operand を検証者が実際に読む直接 Freivalds・代数的スポットチェック、サンプリング再実行、決定論的再計算、公開証拠の局所化と exact court である。合意 credit は抽選された検証者の承認を使い、正直な割合・重み・相関・実参加・資料取得・期限の前提を明示する。署名・quorum・hash/Merkle は対象と承認者の認証であり、算術真実を証明しない。128-bit 等の条件付き検査誤差を全モデルの暗号学的健全性へ拡大しない。未知の参加率・検出率・市場数値は UNKNOWN、数値は検証後に決める。
 
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
@@ -26,8 +29,7 @@
 
 > **Kernel-only boundary (2026-10-06):** [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)
 > and [Kernel design §§K.0–K.8](../design/palw/versioned-kernels.md) govern Part V. Checkers are approved versioned kernel
-> relations; registration, claims, receipts and transcripts bind descriptor/plan identity. GKR's
-> generality does not authorize arbitrary uploaded programs, guests or universal CPU circuits.
+> relations; registration, claims, receipts and transcripts bind descriptor/plan identity. Direct checks do not authorize arbitrary uploaded guests or universal CPU circuits.
 > Missing relations require a coordinated kernel upgrade and matching bounded court, not a VM
 > fallback. Part V's probabilistic Final policy is unchanged.
 
@@ -35,8 +37,8 @@
 
 **通常のPanel検証は、割り当てられたsegmentを丸ごと再実行する方式から、commitされた計算のconstraintを安く検査する方式へ進める。** この方針をPart Vの中心要件とする。
 
-- 同じweightを使う複数token/cellの行列積をまとめ、batched Freivaldsで検査する。GKR/sum-checkは、対応するconstraint群と境界の整合性をまとめて検査する候補とする。
-- routing/TopK、量子化・丸め、非線形演算、入力・出力、memory/history、segment境界も検査範囲に含める。安いexact checkまたはreview済みのrange/lookup等を使い、未検査の関係を残さない。
+- 同じweightを使う複数token/cellの行列積をまとめ、batched Freivaldsで検査する。それ以外の関係は、対応する決定論的再計算・局所検査で照合する。
+- routing/TopK、量子化・丸め、非線形演算、入力・出力、memory/history、segment境界も検査範囲に含める。安いexact checkまたは登録 kernel の直接検査・決定論的再計算を使い、未検査の関係を残さない。
 - receiptには方式・profile・challenge・検査範囲・証拠を署名でbindする。**区間の検査成功を、claim全体の成功へ無条件に格上げしない。** 部分receiptは被覆条件を満たした範囲にしか数えない。
 - 異常時にだけ、食い違いを局所化して互換性のある既存courtへ渡す。check失敗だけでslashせず、nodeはterminal stepをexactに判定する。
 - 正の証拠、必要な被覆/quorum、DA、challenge window完了が揃えば、RFC11の誤受理確率を許容してFinalにする。nodeは通常時にモデルを実行せず、署名・割当・commitment・期限・被覆を検証する。
@@ -98,7 +100,7 @@
 
 ## Summary
 
-The selected design changes what a Panel receipt means: a seat validates the constraints of its assigned computation with batched Freivalds, compatible GKR/sum-check and bounded exact or lookup checks, rather than replaying the entire segment. Part V specifies the new profile, scope, committed evidence, challenge schedule, tally and escalation obligations. A claim passes probabilistically only when its whole statement is covered under the declared error budget; a few individually sound sampled segments are not enough.
+The selected design changes what a Panel receipt means: a seat validates the constraints of its assigned computation with direct batched Freivalds and bounded exact native checks, rather than replaying the entire segment. Part V specifies the new profile, scope, committed evidence, challenge schedule, tally and escalation obligations. A claim passes probabilistically only when its whole statement is covered under the declared error budget; a few individually sound sampled segments are not enough.
 
 Part I's batched signatures remain a transport building block, and Part II's private-sketch code remains an implementation baseline. Their original carriage/performance estimates do not price the new evidence or prove its speedup. Parts III/IV supply the threat analysis and diagnostic audits. Raw audits remain distinct from licensing coverage. The exact court resolves localized disputes; it does not eliminate undetected fast-path error. Implementation starts with a measured MatMul checker and then integrates typed receipts and complete coverage before reward-bearing acceptance.
 
@@ -152,7 +154,7 @@ convicts.
 - G8. Large classes become feasible with qualified constraint verifiers and bounded DA/court resources; Part IV.2's separate capped experiment never replaces the new route's soundness and coverage gates. (Part V)
 
 **Non-goals.** A probabilistic court: the court stays exact. Weight from cluster agreement ("the largest compatible cluster is
-correct"): refused by the user's decision. Privacy/ZK is not required; public interactive proofs and IOPs are permitted. A BFT ordering layer: GHOSTDAG orders. This document does not change shipped terminal semantics or ceilings. Part II remains optional for legacy claims; a Part V receipt must meet its explicitly assigned suite and scope.
+correct"): refused by the user's decision. Cryptographic computation-validity proofs, public or private, are prohibited by §8. A BFT ordering layer: GHOSTDAG orders. This document does not change shipped terminal semantics or ceilings. Part II remains optional for legacy claims; a Part V receipt must meet its explicitly assigned suite and scope.
 
 ## Part I — Batched verification certificates
 
@@ -330,7 +332,7 @@ How to read it:
 
 ## Part II — Algebraic verification (seat-local)
 
-**Baseline scope:** this section preserves the private-sketch design and historical prototype results. Part V's new default uses committed evidence, profile-bound duties and a reviewed challenge protocol; its normal path need not recompute every non-MatMul node as this baseline does. Part II alone is not evidence that the new public/GKR route is implemented.
+**Baseline scope:** this section preserves the private-sketch design and historical prototype results. Part V's new default uses committed evidence, profile-bound duties and a reviewed challenge protocol; its normal path need not recompute every non-MatMul node as this baseline does. Part II alone is not evidence that the new direct-check and receipt route is implemented.
 
 The prototype is the crate `misaka-palw-tir-sketch`. Its soundness tests are `tests/soundness.rs` (16) and its unit tests 8 (Part IV.1's
 audit tests are `tests/audit.rs`, 3). Its
@@ -775,7 +777,7 @@ For the t12 classes staging gains hours. For a qwen4_exp-sized class it is the d
 
 ### V.1 Scope and the existing implementation boundary
 
-For a claim using the new route, **the Panel MUST be able to discharge its assigned segment by verifying its constraints without replaying that segment end to end**. Batched Freivalds is the first implementation target; GKR/sum-check is an approved direction for compatible aggregate relations, subject to a concrete reviewed suite. Exact small operations may remain local. A full replay is useful for conformance, shadow comparison and small classes, but must not remain a hidden mandatory duty for the largest-model path.
+For a claim using the new route, **the Panel MUST be able to discharge its assigned segment by verifying its constraints without replaying that segment end to end**. Direct batched Freivalds is the first check; other relations retain explicit deterministic reexecution and localization. Exact small operations may remain local. A full replay is useful for conformance, shadow comparison and small classes, but must not remain a hidden mandatory duty for the largest-model path.
 
 Source audit at `7bff920dc`:
 
@@ -784,7 +786,7 @@ Source audit at `7bff920dc`:
 | [`palw_verification_v2.rs`](../../consensus/core/src/palw_verification_v2.rs) | S1 partitions the job and assigns a full-replay seat plus partial seats, with coverage tally. Part V must version both the full-seat duty and coverage rule; changing a Panel command-line flag is insufficient. |
 | [`PalwSeatReceiptV3`](../../consensus/core/src/palw_panel_v2.rs) | This name already means the V2 receipt plus a signed segment mask. Do not redefine it as the new scheme. `Sampled` is explicitly audit-only and does not count toward quorum/coverage. |
 | [`palw_verification_profile_v1.rs`](../../consensus/core/src/palw_verification_profile_v1.rs) | A shadow timing/capacity profile, not a proof-suite registry or a soundness certificate. Keep resource scheduling distinct from the new cryptographic profile. |
-| [`misaka-palw-tir-sketch`](../../misaka/palw/tir/sketch/src/lib.rs), [`Panel sketch integration`](../../kaspad/src/palw_panel/sketch.rs) | Private-sketch checker and integration provide the starting point. Their existence does not establish public transcript binding, GKR, or the new receipt/tally. |
+| [`misaka-palw-tir-sketch`](../../misaka/palw/tir/sketch/src/lib.rs), [`Panel sketch integration`](../../kaspad/src/palw_panel/sketch.rs) | Private-sketch checker and integration provide the starting point. Their existence does not establish authenticated audit-history binding or the new receipt/tally. |
 | [Spec 18](../spec/palw/18-verification-certificates.md) | Existing vertex, witness, audit and capped-mode wire rules. Reuse compatible machinery, reserve new tags/versions, and keep old claim interpretation unchanged. |
 
 The attachment's name “Verification V3” is a conceptual label only; proposed names below are deliberately distinct from the already existing `PalwSeatReceiptV3`. Exact serialized fields/tags require a spec update and tests before activation. This RFC revision changes no Rust code or network parameters.
@@ -820,13 +822,11 @@ This batches verification after rows exist; it does not parallelize autoregressi
 
 Direct checks still read large operands: `O(bk+kn+bn)` work per repetition. Fresh public vectors require fresh projections or authenticated computation of them. A claimed `Wr` returned by a worker is not verified by its signature or a weight Merkle root alone. Charge a verified streaming pass, a reviewed evaluation-opening protocol or another sound check. Keep Part II's secret reusable sketches private and account for their distinct leakage, refresh and adaptive-probing assumptions. Do not obtain an apparent speedup by treating unverified projections as inputs.
 
-### V.4 GKR and encoded-query extension
+### V.4 Direct checking and explicit limits
 
-Where circuit structure permits, a GKR/sum-check suite can verify a larger segment or a whole-claim constraint graph with less verifier work. Bind the wiring, layer relations, input/weight evaluations, state/memory interfaces and output statement. Sum-check rounds contribute error according to degree, field and round count; proof generation, circuit depth and authenticated input access remain costs. [GKR](https://www.microsoft.com/en-us/research/publication/delegating-computation-interactive-proofs-for-muggles/) and [SafetyNets](https://arxiv.org/abs/1706.10268) establish relevant component protocols, not an off-the-shelf verifier for arbitrary TIR/MoE.
+Every checker reads the actual operand values authenticated to the bound model/claim. Direct Freivalds compares matrix-vector products; direct Add/Sub random-point evaluation compares the complete authenticated operands. Neither accepts a producer polynomial validity argument. Mul, ReduceSum, quantization, nonlinear operations, routing, state and pipeline boundaries use the registered deterministic native checker and objective court.
 
-An optional FRI/IOP suite needs an explicit constraint-to-encoding reduction and boundary checks; Reed–Solomon proximity alone does not establish computation. Plain erasure-coded DA and execution soundness have separate acceptance predicates. Select commitments compatible with the network's post-quantum policy. Public non-ZK proofs are allowed; witness generation can be expensive and is included in feasibility measurements.
-
-A partial-segment GKR proof remains partial. A whole-claim aggregate proof covers all of its bound relation set, even if its verifier reads few encoded queries. This distinction must appear in the receipt scope and the coverage report.
+A checker reports its actual reads, operations, retained material and conditional detection error. Sampling a few positions covers those positions only. Full-scope duties may be expensive; no circuit proof or cryptographic argument is an allowed substitute. Where resource limits make a duty infeasible, refuse that profile explicitly and retain its coverage gap instead of claiming whole-model assurance.
 
 ### V.5 Commitments and challenge ordering
 
@@ -834,7 +834,7 @@ Before deriving check positions or coefficients, bind the claim, class/profile/s
 
 Resolve `PostCommitChallengePolicyV1` and derive `sample_seed` exclusively under [Part VI](#post-commit-challenge-protocol), from its future qualifying PALW work and the bound statement. Node validation recomputes its source selection, lock, seed and queries; neither seats nor registrants choose seeds or counts. Panel assignment and generation randomness have separate domains and security contracts and cannot replace this source.
 
-Every interactive prover message precedes **its own** challenge, using the mode pinned by Part VI. A single seed exposing all future sum-check challenges is prohibited. All nodes replay the fixed transcript/source facts, never freshly draw local consensus randomness. Part VI bounds identity changes, aborts, retries, reorgs and Fiat–Shamir queries; a new branch or carrier grants no free fresh draw.
+Every sampled statement and audit-material root is fixed before its paid future challenge. Producer-supplied validity transcripts are prohibited. All nodes replay the fixed transcript/source facts, never freshly draw local consensus randomness. Part VI bounds identity changes, aborts, retries, reorgs and adaptive seed/audit-history queries; a new branch or carrier grants no free fresh draw.
 
 ### V.6 Typed receipts and a coverage-aware tally
 
@@ -850,21 +850,21 @@ evidence_manifest_root, algebraic_check_root, transition_check_root, transcript_
 verdict, seat_bond, signed_daa, signature
 ```
 
-`sample_count` measures the suite's queries, not an arbitrary number of tokens. `scope_root` commits to the full statement attested; `sampled_cells_root` commits to the actual query set, which may be much smaller in an aggregate proof. The plan fixes which fields are meaningful for each suite, with canonical encodings for unused fields. Round/field/security values must match derived policy; metadata is not a substitute for the proof or the honest-seat assumption.
+`sample_count` measures the suite's queries, not an arbitrary number of tokens. `scope_root` commits to the full statement attested; `sampled_cells_root` commits to the actual query set, which may be much smaller for direct algebraic sampling. The plan fixes which fields are meaningful for each suite, with canonical encodings for unused fields. Round/field/security values must match derived policy; metadata is not evidence that a check actually ran and cannot replace the honest-verifier assumption.
 
 Sign all fields with a fresh network-separated ML-DSA domain; Part I-style batching may carry the same signed meaning in a new versioned leaf. The network/version/ruleset must be bound by the message/domain. Do not append fields to existing receipt encodings, repurpose `Sampled` or tally a V1 bare `Valid` as a new scheme's pass. Bind the evidence locator to content hashes; retain material through challenges and ongoing disputes. Root-only carriage is acceptable only with separately specified availability duties, not as evidence that the checker ran.
 
 The fold checks registration and scheme eligibility, signatures, assigned scope, anchor/seed, required counts/policy, caps and deadlines. It deduplicates by claim/seat/duty under the frozen assignment; duplicate or overlapping receipts from one seat never increase coverage. It applies the plan's **per-segment/relation** quorum/independence requirements and boundary coverage as well as any overall Panel quorum. Three receipts for the same small segment cannot license the remainder. A `WholeClaim` receipt counts as full coverage only when that suite actually attests the complete statement. A failed receipt followed by a same-duty pass cannot erase a dispute; tally and appeal follow explicit first-counted/equivocation rules.
 
-The first implementation SHOULD preserve existing segment coverage strength while replacing replay with cheaper constraint verification: the assigned full-scope seat checks the whole statement algebraically, and partial seats check their assigned scopes. This removes its full-**replay** duty without removing its full-**scope** obligation. A later partition-only/GKR assignment can remove that role only after proving equivalent or stronger coverage/independence under a separately pinned policy. Cross-segment state equality must have designated checkers or aggregate coverage; a merely committed but unchecked boundary is insufficient.
+The first implementation SHOULD preserve existing segment coverage strength while replacing replay with cheaper constraint verification: the assigned full-scope seat checks the whole statement algebraically, and partial seats check their assigned scopes. This removes its full-**replay** duty without removing its full-**scope** obligation. A later partition-only assignment requires measured equivalent coverage and explicit honest-verifier/independence assumptions under a separately pinned policy. Cross-segment state equality must have designated checkers or aggregate coverage; a merely committed but unchecked boundary is insufficient.
 
-Nodes perform these deterministic structural and lifecycle checks; Panels run the heavy verification suite off chain. Publicly replayable evidence permits audits but its presence does not mean every node validated its arithmetic. Thus a malicious accepting Panel remains a security event. A node-verified succinct-proof mode would require separately metered consensus proof verification and a new acceptance rule; it is not implicitly provided by this receipt schema.
+Nodes perform these deterministic structural and lifecycle checks; Panels run the heavy verification suite off chain. Publicly replayable evidence permits audits but its presence does not mean every node validated its arithmetic. Thus a malicious accepting Panel remains a security event. Node-verified computation-validity proofs are permanently prohibited by PRINCIPLES §8. Nodes authenticate the selected verifier approvals and exact receipt scope; direct checker reads, repeated arithmetic and objective court work are metered separately and cannot be replaced by a succinct proof.
 
 ### V.7 Error accounting, licence, Final and dispute
 
 For `N` raw segments and `s` distinct uniform samples, a single bad segment is missed with probability `1-s/N`. If selected segments have conditional error `ε_local`, the single-fault miss bound is `1-(s/N)(1-ε_local)`, under the stated selection/check assumptions. Freivalds does not remove this selection term. Therefore an `AuditOnly` receipt cannot become full-security coverage, regardless of its small `ε_local`.
 
-For the new qualifying route, derive the **whole-claim** `ε_check` from every product/aggregate proof, field representation, nonlinear/memory constraints, boundary binding, openings and any selection loss. Use RFC11's proposed conditional target `ε_check ≤ 2^-128`; the attachment's illustrative `2^-80` is not adopted as a silent reduction. Neither target is presently demonstrated. A conservative composition sums error bounds unless a stronger theorem applies. The general `ε ≤ Σ_i ε_i` union bound needs no independence, whereas multiplying repeated-check errors does. Shared public vectors across seats do not create independent repetitions.
+For the new qualifying route, derive the **conditional direct-check** `ε_check` from every checked relation, field representation, nonlinear/memory constraints, boundary binding, openings and any selection loss. Legacy numerical check targets are conditional evaluation parameters, not whole-model cryptographic guarantees. Report the actual detected scope and honest-verifier assumptions; numbers remain subject to consolidated validation and the latest user decision. A conservative composition sums error bounds unless a stronger theorem applies. The general `ε ≤ Σ_i ε_i` union bound needs no independence, whereas multiplying repeated-check errors does. Shared public vectors across seats do not create independent repetitions.
 
 Publish separate compromised-Panel, biased-beacon, unavailable-data/censorship and grinding assumptions. Across `Q` adaptive attempts the conditional check contribution can grow to `Q·ε_check`; add the appropriately modeled bad-assumption probability instead of advertising network-wide 128-bit security. An `f^5` estimate is only valid under the actual independent drawing, duty and timely-challenge assumptions, not merely because the Panel has five seats. Economic audits/PoSP incentives complement this analysis; they do not replace it.
 
@@ -878,7 +878,7 @@ committed evidence → bound challenge → constraint checks → positive scoped
 
 No receipt silence, absent proof round, unchecked relation or missed DA duty counts as positive evidence. Licence is not immediate Final. Open accepted disputes block finalization under the versioned lifecycle. Bind pre-Final weight/escrow exposure to the existing compatible accounting and RFC11/RFC8 requirements; extra checks, batches and receipts mint no extra inference work. Retain evidence until the last relevant dispute/retention deadline, including across reorg/pruning.
 
-A failing checker files no passing receipt. It names the bound failing relation/evidence; a correct claim with a bad served witness is not automatically producer fraud. Localize through authenticated batch partitions, matrix tiles, state steps or approved circuit relations to an exact **TIR/kernel terminal** supported by court, never a VM step. Bound **total** localization work, bytes, moves and concurrency, not just the last operation. Finding a false GKR statement does not itself locate a leaf: each suite needs a tested localization protocol. Unknown/incompatible terminal semantics require a versioned kernel/court extension. No fallback may require complete Kimi-class inference on a seat or node.
+A failing checker files no passing receipt. It names the bound failing relation/evidence; a correct claim with a bad served witness is not automatically producer fraud. Localize through authenticated batch partitions, matrix tiles, state steps or approved circuit relations to an exact **TIR/kernel terminal** supported by court, never a VM step. Bound **total** localization work, bytes, moves and concurrency, not just the last operation. A failing probabilistic check does not itself locate a leaf: each checker needs a tested deterministic localization path. Unknown/incompatible terminal semantics require a versioned kernel/court extension. No fallback may require complete Kimi-class inference on a seat or node.
 
 Anyone with the required bond/material can challenge; exact court conviction, dismissal and DA/timeout outcomes keep their distinct evidence rules. Missing material is handled as availability; slashing requires the corresponding proven violation. Court catches filed disputes, leaving residual undetected error after Final. This proposal adds no automatic post-final rollback.
 
@@ -889,7 +889,7 @@ Anyone with the required bond/material can challenge; exact court conviction, di
 | P0 — one TIR MatMul | Compare independent exact execution, Part II private sketch and fresh committed batched Freivalds. Include batch 1, uneven sizes and multiple-token batches, cold/warm weights and field/range cases. | Same deterministic outputs; single-scalar/alias/substitution faults covered; toy-field experiments agree with the error model. Report CPU/GPU time, preprocessing, bytes, RSS/VRAM and amortization. No claimed 10–100× gain without measurements. |
 | P1 — complete segment | Cover nonlinear, routing, quantization, memory and boundary relations; add authenticated batch/evidence directory and bounded failure localization. | A valid segment passes without routine whole-segment replay. Forged predecessor/input/expert and disconnected-but-locally-correct matrices fail; worst dispute fits budgets. |
 | P2 — receipts and claim coverage | New profile, challenge schedule, receipt/vertex version, scope-aware tally, DA retention, licence/Final and state/RPC reporting. | Partial/duplicate/foreign-scheme receipts cannot license a whole claim; no hidden full replay; old claims retain old meaning; cold IBD, reorg and pruning reproduce decisions. |
-| P3 — GKR/encoded aggregation where needed | Implement a specific circuit/opening/transcript suite with reviewed composition and deterministic integer semantics. | Single sparse fault and boundary faults remain covered; adaptive-message/grinding tests and proof review; real measured prover/verifier costs and bounded exact localization. Freivalds/exact composition may serve compatible classes earlier if it already meets the same whole-claim gate. |
+| P3 — complete direct/exact coverage | Implement the native direct checks, deterministic relations and all boundary checks with explicit resources. | Sparse and boundary faults remain covered; adaptive draw tests, honest-verifier/DA assumptions, actual checker cost and bounded objective localization. No computation validity argument is permitted. |
 | P4 — large models and activation | 9B-8k, validated 2M and source-pinned Kimi K3 cases; shadow comparisons followed by separate rollout decision. | Full task/context, qualified seats, measured cost/DA/court budgets, reviewed error and Panel assumptions, claim through Final. Missing implementation or benchmarks remain explicit blockers. |
 
 Measure prefill and autoregressive decode separately, including MoE batch fragmentation and recurrent state. Report producer execution plus witness/proof generation, seat p50/p95/p99, verification service capacity, network transfer, cold preprocessing and worst-case attack-driven disputes. Compare equivalent security/coverage and the same hardware, not a GPU miner against an unrelated CPU baseline. The new mode must fit a predeclared resource/window budget and demonstrate its claimed advantage on its target workload. Extra witness/proof work can cancel arithmetic savings. Stop promotion for a workload if it does not meet its budget; adjust the scheme or retain its compatible replay path without claiming acceleration.
@@ -1073,29 +1073,13 @@ Uniform field vectors, repetitions and whole-statement composition must match th
 Substreams are computational derivations under their stated assumptions; N watchers of the same seed are not
 N independent repetitions. Raw sampling of a few rows does not prove unchecked semantic/constraint families.
 
-### VI.6 Freivalds versus interactive GKR/sum-check
+### VI.6 Direct probabilistic checks and repeated audit rounds
 
-Freivalds fixes the full matrix statement/oracles before the source window, then derives the specified indexed
-repetition vectors from this seed. Authenticate all sampled/evaluated material and include integer/field equivalence,
-constraint/boundary coverage and any query selection loss. A sampled conformance PASS has an explicit scoped error
-model; it is not full semantic admission, a test of every tensor or a universal whole-model correctness theorem.
+Freivalds fixes the matrix statement before the source window, then derives indexed repetition vectors from the paid seed. Authenticate every read operand and include integer/field equivalence, relation and boundary coverage, repeated attempts and query-selection losses. Add/Sub direct random-point checks likewise read the operands and carry no producer validity messages. Other native relations are recomputed deterministically.
 
-For interactive GKR/sum-check, the active policy pins exactly one reviewed mode:
+Repeated audit rounds may bind the previous signed material/check record and use a separately paid future source. Any retained `TranscriptBoundFiatShamir` legacy name identifies the canonical audit-history/seed transformation only; it cannot authorize a sum-check, polynomial commitment or other computation-validity argument. Its hash authenticates identity/history and derives randomness. It does not prove calculation. Missing rounds or exhausted streams cannot create passing receipts. No source label or review tuple can override the permanent ban.
 
-- **Staged beacon:** commit prover message j and the transcript prefix on the canonical history before collecting
-  a new qualifying future source window for challenge j. Its roots/index are subject-specific bindings of this
-  same protocol. Message j+1 may depend on challenge j, but must be fixed before challenge j+1. Price window latency,
-  source scarcity, retention and total rounds. Reusing the already exposed initial beacon for every round is prohibited.
-- **Transcript-bound Fiat–Shamir:** the approved transform absorbs the immutable statement, policy/source binding,
-  round index and every prior message/challenge, including message j before deriving challenge j. Recompute it from
-  canonical bytes, using the pinned transform and distinct round domain. Require its own random-oracle/QROM,
-  commitment-binding, adaptive grinding/query and post-quantum review; a public beacon does not prove that transform sound.
-
-*(2026-10-15: the initial paid ClaimVerification V2 contract is NonInteractive; both interactive modes are refused until a
-separately versioned compiler exists. See the spec-closure section, R7-RANDOM item 4.)*
-Choose/freeze the mode before execution; it is not a per-prover fallback. Publishing a single seed and all future
-interactive challenges before later messages is never acceptable. Transcript mismatch, missing round or source
-exhaustion is unresolved/failed verification, not a passing receipt. No client RFC specifies its own transform.
+The detection probability is conditional on honest capable selected verifiers performing these checks. Report their assumed fraction and stake/weight, correlated draws, actual participation, material acquisition and submission deadline. Never derive those participation assumptions from field size or a receipt signature. The applicable bond caps bound residual damage.
 
 ### VI.7 Reorg, abort, scarcity and deterministic recovery
 
@@ -1128,7 +1112,7 @@ version/fingerprint release must supply:
    adaptive-grinding analysis. k/D/delay selection and measured completion latency; no inference-cost-only entropy claim.
 3. Candidate/kernel/source substitution, precommit/prefinal/cheap-header exclusion, duplicated root/slice/carrier,
    abort/retry and changed artifact/plan/layout tests; bad sources cannot activate a candidate or settle work.
-4. Fixed-statement Freivalds and per-message GKR transcript/order tests, soundness composition, failed-check-to-bounded
+4. Fixed-statement direct Freivalds and repeated audit/source ordering tests, soundness composition, failed-check-to-bounded
    exact court, DA/default distinction and cold outsider replay without producer-private state.
 5. RFC11's three onboarding stages, RFC13's resumable commitment/evidence records, RFC14/G14 and RFC15's separate gates;
    no semantic admission or Panel=0 inferred from conformance alone.
@@ -1218,8 +1202,8 @@ seat relies on it. That rollout does not activate Part V: its new receipts, duti
 | Weight from cluster agreement ("the largest compatible cluster is correct") | Refused by the user's decision. A vote over executions is a vote on who holds the most seats; 1-of-N with the exact court is the model |
 | Serve `Q·Kᵀ`'s scores | 8 bytes a score against `d` = 128 MACs saved; never pays below ≈ 10 Gbps (measurements §5) |
 | A failed algebraic check as an immediate conviction | A served witness may be wrong even for a correct claim; localize and use exact court. Public vectors are unsafe if known before the claimed result is fixed; Part V defines post-commit public checks separately from Part II's secret reusable sketches |
-| Freivalds/GKR replacing normal segment replay | **Selected in Part V**, with complete constraints, reviewed error composition and evidence-bound receipts; exact court remains the dispute endpoint |
-| zk proofs of the execution | Orders of magnitude above recompute (RFC-0002 Alternatives) |
+| Direct Freivalds and exact native checks | Selected only for their declared operand/relation scope, under explicit honest-verifier assumptions; deterministic court remains mandatory |
+| Cryptographic computation-validity proofs | Permanently prohibited by PRINCIPLES §8, independently of cost |
 | Sample more intervals instead | 90 % catch of a one-point lie costs each seat 37 % of the job (ADR-0098), and grinding makes the uncaught 10 % valuable (ADR-0072) |
 | Mesh audits as the security floor | `m/N` against single-point lies: 64 audits catch one lied tile of a 512-position job with probability ≤ 0.04 % |
 
@@ -1267,13 +1251,13 @@ These were the original draft's questions. Spec 18 §§18.0/18.20 records subseq
 
 ## Decision
 
-**Selected 2026-10-06:** adopt Part V's constraint-based Panel verification as the new large-model direction. Begin with batched Freivalds on a real TIR MatMul, extend to complete segment constraints and scope-bound receipts, then aggregate compatible relations with GKR/IOP where measurements justify it. Preserve exact bounded court on dispute and RFC11's whole-claim security target.
+**Selected 2026-10-06:** adopt Part V's constraint-based Panel verification as the new large-model direction. Begin with batched Freivalds on a real TIR MatMul, extend to complete segment constraints and scope-bound receipts, then complete the remaining native relations and boundary checks by direct checking or deterministic reexecution. Preserve exact bounded court on dispute and RFC11's whole-claim security target.
 
 Before implementation is eligible for activation, settle the exact suite/transcript and opening construction, canonical receipt encoding/tag allocation, assignment/coverage policy, derived parameter limits, total localization bound, evidence retention and measured capacity. §V.8 is the delivery order and §V.9 the migration contract. No deployment, benchmark success, Kimi compatibility or change to existing claim semantics is established by this decision.
 
 ## Mission alignment amendment — 2026-10-07
 
-G7およびPart IV/Vの外部監査主体を、Panelに選ばれたseatから普通のpublic bond全体へ拡張する。private sketches/preprocessingは通常検査の最適化に限り、それを持たない外部verifierにも独立した公開localization/conviction経路を用意する。scope-bound receiptsの集約やquorumは算術真実の根拠ではない。Freivalds/GKRの失敗をそのままslashせず、認証されたbounded terminal proofへ落とす。raw cell samplingと未検出確率は別途扱う。
+G7およびPart IV/Vの外部監査主体を、Panelに選ばれたseatから普通のpublic bond全体へ拡張する。private sketches/preprocessingは通常検査の最適化に限り、それを持たない外部verifierにも独立した公開localization/conviction経路を用意する。scope-bound receiptsの集約やquorumは算術真実の根拠ではない。直接 Freivalds 等の確率的検査の失敗をそのままslashせず、認証されたbounded terminal proofへ落とす。raw cell samplingと未検出確率は別途扱う。
 
 本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。
 
@@ -1425,7 +1409,7 @@ only where an existing record justifies it.
 4. **Interactive modes.** The initial paid V2 contract is **NonInteractive**; `StagedBeacon` and Fiat–Shamir are
    refused at class registration and StageMessage until a separately versioned interactive compiler exists.
    The separately versioned full-material-opening plan (`CompiledClaimProofPlanV3`) fixes target, mode, 1–64 rounds,
-   stream budget and an opening cap ≤ 64 MiB; it is not a compact sum-check compiler. Staged rounds need a producer-
+   stream budget and an opening cap ≤ 64 MiB; it cannot authorize a computation-validity argument. Repeated audit rounds need a producer-
    signed StageMessage, a new source context from its own accepted DAA with a strictly later seal window, and a new
    sponsor reserve; Fiat–Shamir recomputes the transform over the statement, source anchor/output and all earlier
    messages and challenges. The initial seed is never reused as every later challenge (§VI.6 unchanged).
@@ -1452,60 +1436,9 @@ only where an existing record justifies it.
    plan, positions, repetitions and step/stage union; a source policy's M127 field label cannot overstate a CRT result.
 5. Remaining (observations): v1/v2 node evidence exists; v4/v5 courts not reached; compact proof families need
    their own contracts; class-by-class public refutation of routing/history/gather is open.
-6. **Compact proof family contract (2026-10-15).** A compact family (sum-check, GKR-style layered circuit, Freivalds-style
-   encoded query) is a separately versioned contract, never a variant of the full-material-opening plan
-   (`CompiledClaimProofPlanV3`). It MUST bind the family, the exact target, the canonical relation encoding (covering
-   every relation family of the class it is registered for), an independent soundness review identity and the reviewed
-   per-check bits, and finite proof-byte and verifier-work bounds. Each family has its own compiler identity
-   (`compact_proof_family_compiler_v1`), distinct from `full_material_compiler_v3`. Until a compact verifier, its relation
-   coverage map and the review exist, registration MUST refuse every such contract by name — and a plan carrying a compact
-   compiler identity with the same explicit reason — never silently accept it or fall back to the full-material plan.
-   Implementation: `misaka_palw_kernel::claim_interactive_v3::CompactProofFamilyContractV1` (a stub refused by
-   `register`); no fence, wire tag or state changes.
-7. **Compact relation compilers (2026-10-15, round 3; source checkpoint, not compiled, not tested, not reviewed).**
-   Item 6's family-level stub stays refused. Relation-level compilers now exist for the relation classes the shipped
-   descriptors' plans use, each with its own compiler identity (`compact_relation_compiler_id_v1`, domain
-   `MISAKA/PALW/CLAIM-PROOF-COMPILER/COMPACT-RELATION/V1`), distinct from `full_material_compiler_v3` and from item 6's ids:
-
-   | compiler | plan relations | proof per (repetition, modulus) | error of one repetition | one instance |
-   |---|---|---|---|---|
-   | `FreivaldsSeededV1` | `MatMul` under `FreivaldsM127` / `FreivaldsCrtV2` | header only | `1/p` per batch slice | `t·b₀` |
-   | `LinearEvaluationV1` | `Add`, `Sub` (broadcast) | header only | `ν/p` | `t·(b₀ − ⌈log₂ν⌉)` |
-   | `SumCheckHadamardV1` | `Mul` (broadcast) | `ν` rounds × 4 elements | `4ν/p` | `b₀ − ⌈log₂(4ν + 3Q)⌉` |
-   | `SumCheckReduceSumV1` | `ReduceSum{axis}` | `ν_j` rounds × 2 elements | `(ν_o+ν_j)/p` | `b₀ − ⌈log₂(ν_o + ν_j + Q)⌉` |
-
-   `p` is the smallest Mersenne modulus the relation uses and `b₀ = ⌊log₂p⌋` (126, 106 or 88): the moduli are the
-   fewest of `2^127−1, 2^107−1, 2^89−1` whose product exceeds the relation's integer error span (the dense rule of
-   K2-TIR-v2, applied to `|y| + |a| + |b|`, `|y| + |a||b|`, `|y| + J|a|`). `ν` is the zero-padded output's Boolean
-   variable count (`ν_o`, `ν_j` the output and reduced coordinates of a reduction); `t` the repetitions; `Q = 2^q` the
-   contract's declared offline transcript-query budget (`q ∈ [64, 120]`). Freivalds vectors and the first random point
-   come straight from the paid ClaimV2 round seed's streams; sum-check round challenges are transcript-bound
-   Fiat–Shamir keyed by that seed, so their grinding is charged with `Q` and **repetitions are not credited** for those
-   two families. Every instance's bound enters the existing composition (`compact_check_families_v1` →
-   `composed_false_accept_bits_v1`, union over instances and positions, binding term) and the lifetime union
-   (`compact_lifetime_failure_term_v1` → `cumulative_failure_bits_v1`, one term per admission, `Q` not double
-   counted). The precondition is the plan checker's interval admission (no exact primitive can overflow), so an
-   integer identity of the operands is the TIR relation.
-
-   **Kept exact, not compiled:** `Cast`, Structure, QuantRange, Nonlinear, Selection (TopK/Gather routing),
-   RecurrentState and MediaPipeline relations keep their descriptor's exact checker (`ε = 0`); an arithmetic relation
-   whose proof bound is not below its operand bytes, or whose class did not opt in, is kept exact too. **Refused
-   families, listed (`COMPACT_REFUSED_FAMILIES_V1`):** GKR-style layered chains; PCS-backed evaluation; lookup
-   arguments for quantization/nonlinear; permutation/lookup arguments for selection and routing; a compact memory
-   (state-continuity) argument; staged-beacon (one beacon per round) sum-check; typed-spec targets. A (family, checker)
-   pair outside `COMPACT_RELATION_INVENTORY_V1` refuses the whole plan.
-
-   **What it is not.** No polynomial commitment exists: every evaluation claim a sum-check reduces to is discharged by
-   reading the operand through the claim's authenticated commitments. The compact compilers shrink the round message
-   (a Freivalds proof is its header; a 4,096-element `Mul` with i32 operands and two repetitions carries about 1.7 KB instead of 64 KiB of operands) and give
-   each relation an explicit error term; they do **not** reduce the verifier's reads below the operands, and for
-   elementwise relations they add an error term where exact recompute had none. Registration
-   (`register_compact_relation_contract_v1`, consensus gate `palw_compact_relation_registration_v1`) requires the
-   ClaimV2 fence active and an approved review tuple naming the contract's suite; the fence stays `never` and the
-   registry empty, so it refuses today. `CompiledClaimProofPlanV3` refuses a compact relation compiler id by name.
-   Remaining: compilation and tests, external review of the bounds and of the Fiat–Shamir transform, a PCS/GKR suite,
-   wiring into `PaidClaimClassV2` rounds and receipts. Detail:
-   [the ClaimV2 checkpoint, round 3](../design/palw/rfc07-claim-paid-v2-implementation-2026-10-14.md#compact-relation-compilers-2026-10-15-round-3).
+6. **Permanent direct-check boundary (2026-10-15 user decision).** Historical family contract wire IDs are readable only for identification/rejection. No family contract, review or private fence may authorize a cryptographic computation-validity proof. `SumCheckHadamardV1` and `SumCheckReduceSumV1` tags remain frozen but cannot be newly compiled, generated, verified or credited. Their prover/Fiat–Shamir implementation is removed. Their computed detection credit is zero even for a zero-variable historical record.
+7. **Permitted relation execution.** The native V4 contract derives coverage from the accepted class for all targets and binds its exact source/lifetime. `FreivaldsSeededV1` performs direct MatMul checks, `LinearEvaluationV1` performs direct Add/Sub checks, both over authenticated operands. Their frozen record grammar contains only empty producer payloads; it is an audit record, not a correctness proof. Mul, ReduceSum, Cast, Structure, QuantRange, Nonlinear, Selection, RecurrentState and MediaPipeline remain deterministically checked/localized. A forbidden tag or nonempty producer transcript fails admission/round validation before any receipt or Final credit. Old IDs are never reinterpreted as another checker.
+8. **Conditional error accounting.** Whole-target unions include every permitted randomized check, positions/stages/steps, repeated attempts and grinding; hashes contribute an identity-binding assumption only. Exact relations contribute no random-check error when actually executed. The honest selected verifier fraction, correlated/operator-controlled seats, material access, timely challenge and collection conditions remain explicit separate assumptions. No nominal 128-bit number certifies all model computation. External review of allowed checks and actual consumer/node tests remain unperformed gates; forbidden proofs are not a remaining research item.
 
 ### R7-ECON — costs, collection and lazy verification
 

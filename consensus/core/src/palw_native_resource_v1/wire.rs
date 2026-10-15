@@ -33,7 +33,7 @@ impl NativeWireShapeV1 {
     }
 }
 fn overflow() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "native Borsh shape arithmetic overflow")
+    io::Error::new(io::ErrorKind::OutOfMemory, "native Borsh shape arithmetic overflow")
 }
 pub(crate) fn wire_bad(why: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, why)
@@ -60,7 +60,7 @@ impl<R: Read> NativeWireReaderV1<R> {
     pub fn step(&mut self) -> io::Result<()> {
         self.steps = self.steps.checked_add(1).ok_or_else(overflow)?;
         if self.steps > self.step_limit {
-            return Err(wire_bad("native Borsh shape CPU budget exceeded"));
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "native Borsh shape CPU budget exceeded"));
         }
         Ok(())
     }
@@ -169,7 +169,7 @@ impl<T: NativeWireScanV1> NativeWireScanV1 for Vec<T> {
                 .allocation(count.checked_mul(2).ok_or_else(overflow)?, 1);
         }
         if size_of::<T>() == 0 && count != 0 {
-            return Err(wire_bad("Borsh zero-size sequence is unsupported"));
+            return Err(io::Error::new(io::ErrorKind::Unsupported, "Borsh zero-size sequence is unsupported"));
         }
 
         let mut sum = NativeWireShapeV1::default();
@@ -315,7 +315,7 @@ impl NativeWirePreflightV1 {
 /// explicitly size the private native tables its restore rebuilds.
 pub fn preflight_native_carriage_v1(reader: impl Read, bytes: u64) -> io::Result<NativeWirePreflightV1> {
     if cfg!(not(target_pointer_width = "64")) {
-        return Err(wire_bad("native BTree wire layout profile only covers 64-bit targets"));
+        return Err(io::Error::new(io::ErrorKind::Unsupported, "native BTree wire layout profile only covers 64-bit targets"));
     }
     let mut reader = NativeWireReaderV1::new(reader, bytes);
     let (shape, counts) = crate::palw_state_v2::scan_carriage_native_wire_v1(&mut reader)?;
@@ -369,6 +369,17 @@ pub fn preflight_native_snapshot_v1(reader: impl Read, total: u64) -> io::Result
 mod carriage_preflight_tests {
     use super::*;
     use crate::palw_native_resource_v1::NativeHeapV1;
+    #[test]
+    fn scanner_resource_limits_are_distinct_from_malformed_codec() {
+        assert_eq!(NativeWireShapeV1::default().allocation(u64::MAX, 16).unwrap_err().kind(), io::ErrorKind::OutOfMemory);
+        let mut reader = NativeWireReaderV1::new(&[][..], 0);
+        for _ in 0..4096 {
+            reader.step().unwrap();
+        }
+        assert_eq!(reader.step().unwrap_err().kind(), io::ErrorKind::TimedOut);
+        let mut malformed = NativeWireReaderV1::new(&[2u8][..], 1);
+        assert_eq!(bool::scan_native_wire_v1(&mut malformed).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    }
     #[test]
     fn exact_carriage_preflight_bounds_actual_heap_and_rejects_truncated_tagged_data() {
         let state = crate::palw_state_v2::PalwChainStateV2::genesis();
@@ -431,7 +442,7 @@ impl NativeWireValuePreflightV1 {
 }
 pub fn preflight_native_value_v1<T: NativeWireScanV1>(reader: impl Read, bytes: u64) -> io::Result<NativeWireValuePreflightV1> {
     if cfg!(not(target_pointer_width = "64")) {
-        return Err(wire_bad("standalone native tree shape profile requires 64-bit target"));
+        return Err(io::Error::new(io::ErrorKind::Unsupported, "standalone native tree shape profile requires 64-bit target"));
     }
     let mut reader = NativeWireReaderV1::new(reader, bytes);
     let shape = T::scan_native_wire_v1(&mut reader)?;

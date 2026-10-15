@@ -883,7 +883,7 @@ fn bind_v2(
         // A redrawn claim is marked as V2 marks one, so no consumer reads it as a first panel.
         bound.rebound_daa = Some(ctx.daa_score);
     }
-    builder.write_claim(*claim_id, Some(bound));
+    builder.write_claim(*claim_id, Some(bound))?;
     if !retry {
         // ADR-0164 F-K (K4's denominator): a claim that reached its Panel.
         builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound);

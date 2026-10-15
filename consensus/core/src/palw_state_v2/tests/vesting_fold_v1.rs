@@ -62,6 +62,23 @@ fn row(claim_id: Hash64, producer: u64, seats: &[u64], expiry_daa: u64, settled_
     }
 }
 
+#[test]
+fn native_vesting_writer_refuses_index_growth_even_with_spare_journal_capacity() {
+    use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
+    let p = vp();
+    let extras = PalwTransitionExtrasV1::default();
+    let empty = PalwChainStateV2::genesis();
+    let mut builder = TransitionBuilder::new(&empty, &p, false, false, false, false, &extras);
+    builder.entries.reserve_exact(8);
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 });
+    builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+    let incoming = row(h64(0xF006), 1, &[2, 3], 500, 0);
+    assert!(matches!(builder.write_vesting(incoming.claim_id, Some(incoming)), Err(PalwStateV2Error::NativeResource(_))));
+    assert_eq!(builder.state, empty);
+    assert!(builder.entries.is_empty());
+    assert_eq!(checker.outstanding(), (0, 0));
+}
+
 /// `rows` installed through one `Vesting` delta (the delta path builds the indexes), with the
 /// counters' `created` equal to their sum.
 fn seeded(rows: &[PalwVestingRowV1]) -> PalwChainStateV2 {
@@ -841,7 +858,7 @@ fn the_latch_walk_latches_exactly_the_rows_v4_calls_mature() {
                         .map(|r| r.claim_id)
                         .collect();
                     let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
-                    b.latch_matured_vesting_rows(now, raw);
+                    b.latch_matured_vesting_rows(now, raw).unwrap();
                     let mut got = BTreeSet::new();
                     for r in b.state.vesting_iter_by_expiry() {
                         let before = s.vesting_row(&r.claim_id).unwrap();
@@ -875,10 +892,10 @@ fn t44_no_decision_a_term_and_the_latch_survives_a_re_arm() {
     // Latch it without moving it (a market-full budget of 0 is not reachable; use the builder's
     // latch alone), then push its expiry past `now`.
     let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
-    b.latch_matured_vesting_rows(1_000, None);
+    b.latch_matured_vesting_rows(1_000, None).unwrap();
     let latched = b.state.vesting_row(&h64(0xF1)).unwrap().clone();
     assert_eq!(latched.matured_at, Some(1_000));
-    b.write_vesting(h64(0xF1), Some(PalwVestingRowV1 { expiry_daa: 9_000, ..latched }));
+    b.write_vesting(h64(0xF1), Some(PalwVestingRowV1 { expiry_daa: 9_000, ..latched })).unwrap();
     let rekeyed = b.state.clone();
     let rekeyed_row = rekeyed.vesting_row(&h64(0xF1)).unwrap();
     assert!(palw_vesting_row_maturity_v1(&rekeyed, &p, rekeyed_row, 1_001, None).mature_now, "the latch holds");
@@ -1299,7 +1316,7 @@ fn t41_a_block_that_burns_latches_and_moves_reverts_to_its_parent() {
     assert_eq!(back, parent, "the parent, field for field — rows un-latched, the burned row back");
     // The carriage of a state holding latched and unlatched rows round-trips under its root.
     let mut half = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
-    half.latch_matured_vesting_rows(100, None);
+    half.latch_matured_vesting_rows(100, None).unwrap();
     let latched = half.state.clone();
     assert_eq!(latched.vesting_iter_by_expiry().filter(|r| r.matured_at.is_some()).count(), 1);
     let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&latched)).unwrap();

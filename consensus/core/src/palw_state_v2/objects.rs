@@ -1247,7 +1247,7 @@ pub(super) fn apply_object(
                     work: None,
                 },
             )?;
-            builder.write_gen_class(*class_id, Some(record));
+            builder.write_gen_class(*class_id, Some(record))?;
         }
         // **RFC-0002 Phase F (tag 61): an IR class registration**, past `palw_tir_v1` (the lock above
         // refuses it below). Admission v10 ran at acceptance (ADR-0049 Decision H: no graph walk
@@ -1313,7 +1313,7 @@ pub(super) fn apply_object(
                     .ok_or(PalwStateV2Error::ClassCourtWindowMissing(*class_id))?;
                 builder.write_class_court_window(*class_id, Some(window))?;
             }
-            builder.write_tir_class(*class_id, Some(record));
+            builder.write_tir_class(*class_id, Some(record))?;
             // **RFC-0007 Part II**: past `palw_witness_manifest_v1` the class pins its witness profile (infallible).
             palw_mesh_fold_v1::record_witness_profile_v1(builder, ctx, class_id, &program, admission.class.layout.max_context);
         }
@@ -1469,7 +1469,7 @@ pub(super) fn apply_object(
             if held >= PALW_DERIVED_MAX_PER_CLAIM {
                 return Err(PalwStateV2Error::TooManyDerivations { claim: object.claim_id, max: PALW_DERIVED_MAX_PER_CLAIM });
             }
-            builder.write_derived_artifact(key, Some(PalwDerivedRowV1::from_object(object, ctx.daa_score)));
+            builder.write_derived_artifact(key, Some(PalwDerivedRowV1::from_object(object, ctx.daa_score)))?;
         }
         PalwConsensusObjectV2::FamilyCertified { evidence } => {
             let lane = evidence.lane();
@@ -1540,7 +1540,7 @@ pub(super) fn apply_object(
                         builder.write_fp_certified_class(
                             *class_id,
                             Some(PalwClassLaneCertificationV2 { family_digest: covering, certified_daa: ctx.daa_score }),
-                        );
+                        )?;
                     }
                     if builder.extras.fp_derived_work_at(ctx.daa_score) {
                         builder.write_fp_work_profile(*class_id, Some(profile.clone()));
@@ -1584,6 +1584,17 @@ pub(super) fn apply_object(
             if bytes.is_empty() || bytes.len() > PALW_OBJECT_CHUNK_MAX_BYTES {
                 return Err(PalwStateV2Error::ChunkTooLarge { bytes: bytes.len(), max: PALW_OBJECT_CHUNK_MAX_BYTES });
             }
+            // Preserve semantic refusal before the local capacity check, then
+            // reserve the actual group copy/assembly before it allocates.
+            if let Some(pending) = builder.state.pending_chunks.get(group) {
+                if pending.count != *count {
+                    return Err(PalwStateV2Error::ChunkGroupIncoherent { group: *group });
+                }
+                if pending.parts.contains_key(index) {
+                    return Err(PalwStateV2Error::ChunkDuplicate { group: *group, index: *index });
+                }
+            }
+            builder.reserve_chunk_assembly_v1(group, bytes)?;
             let mut pending = match builder.state.pending_chunks.get(group) {
                 Some(pending) => {
                     if pending.count != *count {
@@ -1605,7 +1616,7 @@ pub(super) fn apply_object(
                         .map(|(k, _)| *k)
                         .collect();
                     for key in expired {
-                        builder.write_pending_chunks(key, None);
+                        builder.write_pending_chunks(key, None)?;
                     }
                     if builder.state.pending_chunks.len() >= PALW_OBJECT_CHUNK_MAX_GROUPS {
                         return Err(PalwStateV2Error::TooManyPendingChunkGroups { max: PALW_OBJECT_CHUNK_MAX_GROUPS });
@@ -1615,7 +1626,7 @@ pub(super) fn apply_object(
             };
             pending.parts.insert(*index, bytes.clone());
             if pending.parts.len() < pending.count as usize {
-                builder.write_pending_chunks(*group, Some(pending));
+                builder.write_pending_chunks(*group, Some(pending))?;
             } else {
                 // The group is complete: the object it carried is applied HERE, in this block, by
                 // the same arms every directly-carried object goes through.
@@ -1627,6 +1638,7 @@ pub(super) fn apply_object(
                 if computed != *group {
                     return Err(PalwStateV2Error::ChunkGroupHashMismatch { group: *group, computed });
                 }
+                builder.reserve_chunk_decode_v1(&whole)?;
                 let inner: PalwConsensusObjectV2 =
                     borsh::from_slice(&whole).map_err(|e| PalwStateV2Error::ChunkedObjectUndecodable(e.to_string()))?;
                 // Below `palw_task_heads_v1` a `Head` variant does not decode on the int-12 build: here it is the same error, first.
@@ -1645,7 +1657,7 @@ pub(super) fn apply_object(
                 if !palw_chunked_object_kind_admitted_v1(&inner) {
                     return Err(PalwStateV2Error::ChunkedObjectKindNotAllowed);
                 }
-                builder.write_pending_chunks(*group, None);
+                builder.write_pending_chunks(*group, None)?;
                 apply_object(builder, ctx, &inner)?;
             }
         }
@@ -1770,7 +1782,7 @@ pub(super) fn apply_object(
                 ctx.daa_score,
                 builder.params.receipt_window_for_claim_v1(&builder.state, &class_id, shape, ctx.daa_score),
             );
-            builder.write_claim(*claim_id, Some(bound));
+            builder.write_claim(*claim_id, Some(bound))?;
             // ADR-0164 F-K (K4's denominator): a claim that reached its anchor with a panel.
             builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound);
             builder.disarm_deadline(*claim_id);
@@ -1937,7 +1949,7 @@ pub(super) fn apply_object(
             if model_window.is_some() && deadline_daa > claim.trace_retention_daa {
                 let mut extended_claim = claim.clone();
                 extended_claim.trace_retention_daa = deadline_daa;
-                builder.write_claim(*claim_id, Some(extended_claim));
+                builder.write_claim(*claim_id, Some(extended_claim))?;
             }
             // **The opening rung is clocked like every other rung — because a responder now ships.**
             //
@@ -3067,7 +3079,7 @@ pub(super) fn apply_object(
             let paused = palw_da_paused_daa_v2(&claim.phase, ctx.daa_score);
             debug_assert_eq!(paused, ctx.daa_score.saturating_sub(accused_daa), "the pause is the session's own length");
             let restored = resume_claim_after_da_session_v2(*claim_id, &claim, *resumed, paused)?;
-            builder.write_claim(*claim_id, Some(restored.clone()));
+            builder.write_claim(*claim_id, Some(restored.clone()))?;
             // §4-quater V6 on the ADR-0062 court (below `palw_rcore_plus`), before the re-arm reads `H`.
             builder.credit_verify_pause_v6(*claim_id, ctx.daa_score.saturating_sub(paused), ctx.daa_score);
             // The session's own clock goes with the session — a claim holds at most one deadline,
@@ -3455,7 +3467,7 @@ pub(super) fn apply_object(
                 builder.commit_paid_consumer_v1(*claim_id, contract)?;
             }
             let fp_pwu = claim.pwu;
-            builder.write_claim(*claim_id, Some(claim));
+            builder.write_claim(*claim_id, Some(claim))?;
             builder.stamp_staged_claim_v1(*claim_id, staged_contract);
             if let Some(wire) = public_job_wire {
                 builder.write_public_fp_job_v1(*claim_id, Some(wire));

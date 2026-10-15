@@ -1,6 +1,5 @@
-//! Native V4 contract enrollment and two phase compact proofs. The old V3
-//! message fixes the opening before future entropy; this new binding fixes the
-//! seed-dependent proof only after the source lock, without a hash cycle.
+//! Native V4 direct-check records over authenticated operands. Frozen names and
+//! wire fields remain identifiable; producer validity transcripts are prohibited.
 use super::native_v2::*;
 use super::*;
 use crate::claim_interactive_v3::CompiledClaimProofPlanV3;
@@ -81,7 +80,9 @@ impl NativeCompactProofV4 {
             || self.seed != seed
             || self.proofs.windows(2).any(|p| p[0].instance >= p[1].instance)
             || self.proofs.iter().any(|p| {
-                p.instance.relation != p.proof.relation
+                !p.proof.compiler.permitted_detection()
+                    || p.proof.transcripts.iter().any(|t| !t.is_empty())
+                    || p.instance.relation != p.proof.relation
                     || p.instance.position != p.proof.position
                     || p.instance.occurrence != p.proof.occurrence
             })
@@ -498,4 +499,30 @@ pub fn compact_suite_id_v4(
     adversary: CompactAdversaryBudgetV4,
 ) -> Digest {
     object_id(b"MISAKA/PALW/NATIVE-COMPACT-SUITE/V4", &(contract.suite_id(coverage), adversary))
+}
+
+#[cfg(test)]
+mod permanent_detection_boundary_tests {
+    use super::*;
+    #[test]
+    fn native_records_preserve_old_tags_but_never_accept_validity_payloads() {
+        let instance =
+            CompactInstanceV4 { stage: 0, scoped_seed: [3; 64], plan_root: [4; 64], position: 0, occurrence: 0, relation: 0 };
+        for compiler in CompactRelationCompilerV1::ALL {
+            let mut record = NativeCompactProofV4 {
+                version: 4,
+                plan: [1; 64],
+                seed: [2; 64],
+                proofs: vec![LocatedCompactProofV4 {
+                    instance: instance.clone(),
+                    proof: CompactRelationProofV1 { compiler, relation: 0, position: 0, occurrence: 0, transcripts: vec![vec![]] },
+                }],
+            };
+            let bytes = borsh::to_vec(&record).unwrap();
+            assert_eq!(borsh::from_slice::<NativeCompactProofV4>(&bytes).unwrap(), record);
+            assert_eq!(record.validate_shape([1; 64], [2; 64], 1 << 20).is_ok(), compiler.permitted_detection());
+            record.proofs[0].proof.transcripts[0].push(vec![1, 2]);
+            assert!(record.validate_shape([1; 64], [2; 64], 1 << 20).is_err());
+        }
+    }
 }

@@ -58,6 +58,14 @@ def import_stamp(node):
     return (node['importSessionEpoch'], node['importSessionPoint'], node['importSessionPhase'], node['pruningImportStable'])
 
 
+def probe_context(dag, node):
+    # A fixed sink does not by itself freeze the virtual DAA or local import
+    # generation. Every separately read public view must share this full stamp.
+    return (normalized(dag['sink']), normalized(dag['pruningPointHash']),
+        exact_u64(dag['virtualDaaScore'], 'observed virtual DAA'),
+        normalized(node['genesisHash']), normalized(node['consensusParamsId']), import_stamp(node))
+
+
 def decimal_u128(value):
     # Native work is serialized as decimal text. A float, exponent, sign or
     # coerced boolean cannot serve as exact evidence above JavaScript's 2^53.
@@ -271,8 +279,7 @@ class Drill:
                 old_body_available = old_body_is_available(rpc, old)
             after = rpc.call('getBlockDagInfo')
             after_node = rpc.call('getPalwNodeStatus')
-            assert import_stamp(after_node) == import_stamp(node), 'import session changed during the probe; retry'
-            assert (after['sink'], after['pruningPointHash']) == (dag['sink'], dag['pruningPointHash']), 'context changed; retry'
+            assert probe_context(after, after_node) == probe_context(dag, node), 'context changed during the probe; retry'
         finally:
             rpc.close()
         # Capacity shadow is intentionally a final query on its own connection.
@@ -288,8 +295,7 @@ class Drill:
         try:
             after_shadow = rpc.call('getBlockDagInfo')
             after_shadow_node = rpc.call('getPalwNodeStatus')
-            assert import_stamp(after_shadow_node) == import_stamp(node), 'import session changed during the capacity read; retry'
-            assert (after_shadow['sink'], after_shadow['pruningPointHash']) == (dag['sink'], dag['pruningPointHash']), 'capacity context changed; retry'
+            assert probe_context(after_shadow, after_shadow_node) == probe_context(dag, node), 'capacity context changed; retry'
         finally:
             rpc.close()
         value = {'schemaVersion': 1, 'dag': dag, 'header': block['header'], 'node': node, 'dns': dns,
@@ -365,8 +371,7 @@ class Drill:
             try:
                 after_tags = rpc.call('getBlockDagInfo')
                 after_tags_node = rpc.call('getPalwNodeStatus')
-                assert (after_tags['sink'], after_tags['pruningPointHash']) == (original['dag']['sink'], original['dag']['pruningPointHash']), 'context changed during ETH tag reads; retry'
-                assert import_stamp(after_tags_node) == import_stamp(original['node']), 'import changed during ETH tag reads; retry'
+                assert probe_context(after_tags, after_tags_node) == probe_context(original['dag'], original['node']), 'context changed during ETH tag reads; retry'
             finally:
                 rpc.close()
             eth.append(tags)

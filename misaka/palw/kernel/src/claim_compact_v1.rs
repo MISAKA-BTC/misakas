@@ -1,33 +1,22 @@
-//! **R7-RELATION compact relation proofs** (RFC-0007 2026-10-15 round 3; dormant, ClaimV2 namespace, NOT reviewed).
+//! Direct probabilistic detection over authenticated operands, with exact court.
 //!
-//! The full-material-opening compiler ([`crate::claim_interactive_v3::full_material_compiler_v3`]) re-binds the complete public
-//! material in every round message. The compilers here replace that per-round opening, relation by relation, with a **compact
-//! proof** whose bytes are bounded by the relation's dimensions' logarithm (or a constant header), checked against operands the
-//! verifier reads through the claim's own authenticated commitments (the claim's DA obligation, not the round message's).
+//! Freivalds (MatMul) and direct random-point Add/Sub checks derive coefficients
+//! from the paid post-commit seed. They read the actual authenticated operands;
+//! no producer-supplied computation validity argument is trusted. All other
+//! relation families retain deterministic native reexecution/localization.
 //!
-//! | compiler | relations (plan family / checker) | proof per (repetition, modulus) | one repetition's error |
-//! |---|---|---|---|
-//! | [`CompactRelationCompilerV1::FreivaldsSeededV1`] | `MatMul` (DenseMatrix / `FreivaldsM127`, `FreivaldsCrtV2`) | none (vectors from the paid seed stream) | `1/p` per batch slice |
-//! | [`CompactRelationCompilerV1::LinearEvaluationV1`] | `Add`, `Sub` (ExactArithmetic / `ExactRecompute`, broadcast) | none (one random point) | `ν/p` |
-//! | [`CompactRelationCompilerV1::SumCheckHadamardV1`] | `Mul` (ExactArithmetic, broadcast) | `ν` rounds × 4 field elements | `4ν/p` (+ transcript grinding) |
-//! | [`CompactRelationCompilerV1::SumCheckReduceSumV1`] | `ReduceSum{axis}` (ExactArithmetic) | `ν_j` rounds × 2 field elements | `(ν_o+ν_j)/p` (+ grinding) |
+//! Permanent user decision, 2026-10-15: cryptographic proofs of model/LLM
+//! correctness are prohibited, including sum-check validity protocols, GKR,
+//! polynomial-commitment succinct validity, ZK/SNARK/STARK/zkVM/zkML and recursive
+//! or aggregated validity proofs. Legacy compiler tags 2/3 and their Borsh fields
+//! remain readable only to identify historical bytes. They cannot be compiled,
+//! generated, verified, reviewed for credit, or counted as a sound check.
 //!
-//! `p` is the smallest Mersenne modulus the relation uses (`2^127−1`, or the CRT set of [`crate::field::MODULI_V2`] whose product
-//! exceeds the relation's integer error span, exactly as [`crate::plan::dense_moduli_v2`] derives it); `ν` the Boolean variables of
-//! the zero-padded output. Every other family/checker pair keeps its descriptor's exact checker ([`CompactCoverageV1::ExactRetained`],
-//! `ε = 0`) or is refused ([`COMPACT_REFUSED_FAMILIES_V1`]); an unknown pair refuses the whole plan (fail closed).
-//!
-//! **What this is not.** No polynomial commitment exists in this tree: every evaluation claim a sum-check reduces to is discharged by
-//! reading the operand from authenticated material. V1 therefore does NOT reduce the verifier's reads below the operands' size; it
-//! reduces the round message to a compact proof and gives each relation an explicit error term. A GKR-style chain (intermediate
-//! tensors never read) and a PCS-backed evaluation are refused families. The sum-check challenges are a transcript-bound
-//! Fiat–Shamir keyed by the paid ClaimV2 round seed; their grinding term is charged with the contract's declared offline query
-//! budget and repetitions are NOT credited against it. Admission additionally requires an approved tuple in the review registry,
-//! which ships empty: nothing here is approved, activated or claimed as reviewed.
-//!
-//! Precondition: the plan was accepted by [`crate::check::check_plan_v1`], whose interval admission proves no exact primitive can
-//! overflow (so an integer identity of the operands is the TIR relation, including `MatMul`/`ReduceSum` partial sums).
-
+//! Hashes, Merkle paths and signatures authenticate identity and material; they
+//! do not establish computation correctness. Error bounds describe the direct
+//! check conditional on an honest capable verifier actually running it. Honest
+//! verifier participation, available material and timely court submission are
+//! explicit separate assumptions, never consequences of a nominal bit count.
 use std::collections::BTreeMap;
 
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -42,7 +31,7 @@ use misaka_palw_tir::{DType, Prim, Tensor};
 
 use crate::claim_paid_v2::PaidClaimTargetV2;
 use crate::family::{CheckerIdV1, ConstraintFamilyV1};
-use crate::field::{F89, F107, FieldElemV1, Fp, MODULI_V2, mersenne};
+use crate::field::{F89, F107, FieldElemV1, Fp, MODULI_V2};
 use crate::hash::{Digest, object_id};
 use crate::plan::{PlanRelationV1, VerificationPlanV1, dtype_of_tag, relation_moduli};
 
@@ -71,13 +60,21 @@ pub const COMPACT_FS_MAX_QUERY_BITS_V1: u16 = 120;
 pub enum CompactRelationCompilerV1 {
     FreivaldsSeededV1 = 0,
     LinearEvaluationV1 = 1,
+    /// Retired validity-proof tag; historical decoding only.
     SumCheckHadamardV1 = 2,
+    /// Retired validity-proof tag; historical decoding only.
     SumCheckReduceSumV1 = 3,
 }
 
 impl CompactRelationCompilerV1 {
+    /// All frozen wire identities, including prohibited historical tags.
     pub const ALL: [Self; 4] =
         [Self::FreivaldsSeededV1, Self::LinearEvaluationV1, Self::SumCheckHadamardV1, Self::SumCheckReduceSumV1];
+
+    pub const DETECTION_ONLY: [Self; 2] = [Self::FreivaldsSeededV1, Self::LinearEvaluationV1];
+    pub const fn permitted_detection(self) -> bool {
+        matches!(self, Self::FreivaldsSeededV1 | Self::LinearEvaluationV1)
+    }
 
     pub const fn name(self) -> &'static str {
         match self {
@@ -132,7 +129,7 @@ pub const COMPACT_RELATION_INVENTORY_V1: [CompactInventoryRowV1; 9] = {
     use CompactRelationCompilerV1 as K;
     use ConstraintFamilyV1 as F;
     const FREIVALDS: &[CompactRelationCompilerV1] = &[K::FreivaldsSeededV1];
-    const ARITH: &[CompactRelationCompilerV1] = &[K::LinearEvaluationV1, K::SumCheckHadamardV1, K::SumCheckReduceSumV1];
+    const ARITH: &[CompactRelationCompilerV1] = &[K::LinearEvaluationV1];
     [
         CompactInventoryRowV1 {
             family: F::DenseMatrix,
@@ -150,7 +147,7 @@ pub const COMPACT_RELATION_INVENTORY_V1: [CompactInventoryRowV1; 9] = {
             family: F::ExactArithmetic,
             checker: C::ExactRecompute,
             status: S::Implemented(ARITH),
-            note: "Add/Sub/Mul/ReduceSum when the contract opts in; Cast stays exact",
+            note: "Add/Sub direct checks when opted in; Mul/ReduceSum/Cast stay exact",
         },
         CompactInventoryRowV1 {
             family: F::Structure,
@@ -162,19 +159,19 @@ pub const COMPACT_RELATION_INVENTORY_V1: [CompactInventoryRowV1; 9] = {
             family: F::QuantRange,
             checker: C::ExactRecompute,
             status: S::ExactRetained,
-            note: "rounding/saturation needs a lookup argument",
+            note: "rounding/saturation is deterministically recomputed",
         },
         CompactInventoryRowV1 {
             family: F::Nonlinear,
             checker: C::ExactRecompute,
             status: S::ExactRetained,
-            note: "fixed-iteration transcendentals need a lookup argument",
+            note: "fixed-iteration nonlinear operations are deterministically recomputed",
         },
         CompactInventoryRowV1 {
             family: F::Selection,
             checker: C::ExactRecompute,
             status: S::ExactRetained,
-            note: "TopK/compare/gather routing needs a permutation/lookup argument",
+            note: "TopK/compare/gather routing is deterministically recomputed",
         },
         CompactInventoryRowV1 {
             family: F::RecurrentState,
@@ -193,22 +190,13 @@ pub const COMPACT_RELATION_INVENTORY_V1: [CompactInventoryRowV1; 9] = {
 
 /// **Compact families refused with their reasons** (listed, never silently accepted).
 pub const COMPACT_REFUSED_FAMILIES_V1: [(&str, &str); 7] = [
-    (
-        "gkr-layered-chain",
-        "needs intermediate tensors never read: no polynomial commitment suite exists for the chain's endpoints and the stub contract stays refused",
-    ),
-    (
-        "pcs-evaluation",
-        "a hash-Merkle tensor commitment cannot open a multilinear evaluation; a code-based PCS (Ligero/Brakedown) is not implemented or reviewed",
-    ),
-    ("lookup-quant-nonlinear", "QuantRange/Nonlinear relations need a lookup argument; they stay on exact recompute"),
-    ("permutation-selection-routing", "TopK/Gather/Compare routing needs a permutation/lookup argument; it stays on exact recompute"),
-    ("state-continuity-memory", "Hist/Fixed continuity stays on wiring + exact recompute; no compact memory argument"),
-    (
-        "staged-beacon-sumcheck",
-        "one fresh beacon per sum-check round is not compiled; V1 uses the transcript-bound in-round challenge with its grinding charged",
-    ),
-    ("typed-spec-target", "typed memory/retrieval/composite steps have no VerificationPlanV1 relation map"),
+    ("gkr-layered-chain", "permanently prohibited computation validity proof"),
+    ("pcs-evaluation", "permanently prohibited succinct computation validity proof"),
+    ("lookup-quant-nonlinear", "validity arguments prohibited; use exact native recomputation"),
+    ("permutation-selection-routing", "validity arguments prohibited; use exact native recomputation"),
+    ("compact-memory-state", "validity arguments prohibited; use exact state continuity and court"),
+    ("staged-beacon-sumcheck", "permanently prohibited computation validity proof"),
+    ("typed-spec-target", "the old single-plan helper cannot encode whole typed coverage; use native exact obligations"),
 ];
 
 /// Why a relation or a plan cannot be compiled compactly.
@@ -417,57 +405,23 @@ pub fn compile_relation_v1(
             }
             let nu = ceil_log2(rel.out_elements as u128);
             match prim {
-                Prim::Add | Prim::Sub | Prim::Mul => {
+                Prim::Add | Prim::Sub => {
                     let (Some(a), Some(b)) = (dt(0), dt(1)) else {
                         return Err(malformed("a binary relation without two typed operands"));
                     };
-                    let (exact, bits) = if matches!(prim, Prim::Mul) {
-                        let la = ceil_log2(max_abs(a));
-                        let lb = ceil_log2(max_abs(b));
-                        let e = max_abs(a).checked_mul(max_abs(b)).and_then(|v| v.checked_add(max_abs(out)));
-                        (e, (la + lb).max(ceil_log2(max_abs(out))) + 2)
-                    } else {
-                        let e = max_abs(a).checked_add(max_abs(b)).and_then(|v| v.checked_add(max_abs(out)));
-                        (e, ceil_log2(max_abs(a)).max(ceil_log2(max_abs(b))).max(ceil_log2(max_abs(out))) + 2)
-                    };
+                    let exact = max_abs(a).checked_add(max_abs(b)).and_then(|v| v.checked_add(max_abs(out)));
+                    let bits = ceil_log2(max_abs(a)).max(ceil_log2(max_abs(b))).max(ceil_log2(max_abs(out))) + 2;
                     let moduli = moduli_for_span(exact, bits).ok_or(CompactRefusalV1::SpanBeyondModuli { relation })?;
-                    let compiler = if matches!(prim, Prim::Mul) {
-                        CompactRelationCompilerV1::SumCheckHadamardV1
-                    } else {
-                        CompactRelationCompilerV1::LinearEvaluationV1
-                    };
-                    let mut p = base(compiler, moduli, params.arithmetic_repetitions);
+                    let mut p = base(CompactRelationCompilerV1::LinearEvaluationV1, moduli, params.arithmetic_repetitions);
                     p.point_variables = nu;
-                    if matches!(prim, Prim::Mul) {
-                        p.sumcheck_rounds = nu;
-                        p.degree = 3;
-                    }
-                    // Compact only when compact: a transcript at least as large as the operands keeps the exact checker.
                     if proof_bytes_bound_v1(&p) >= material_bytes_v1(&p) {
                         return retained;
                     }
                     Ok(CompactCoverageV1::Compact(p))
                 }
-                Prim::ReduceSum { axis } => {
-                    let Some(a) = dt(0) else { return Err(malformed("a reduction without its typed operand")) };
-                    let ins = *rel.in_elements.first().ok_or_else(|| malformed("a reduction without its operand"))?;
-                    if ins % rel.out_elements != 0 {
-                        return Err(malformed("a reduction whose operand is not a multiple of its output"));
-                    }
-                    let j = ins / rel.out_elements;
-                    let exact = (j as u128).checked_mul(max_abs(a)).and_then(|v| v.checked_add(max_abs(out)));
-                    let bits = (ceil_log2(j as u128) + ceil_log2(max_abs(a))).max(ceil_log2(max_abs(out))) + 2;
-                    let moduli = moduli_for_span(exact, bits).ok_or(CompactRefusalV1::SpanBeyondModuli { relation })?;
-                    let mut p = base(CompactRelationCompilerV1::SumCheckReduceSumV1, moduli, params.arithmetic_repetitions);
-                    p.axis = *axis as u32;
-                    p.point_variables = nu;
-                    p.sumcheck_rounds = ceil_log2(j as u128);
-                    p.degree = 1;
-                    if proof_bytes_bound_v1(&p) >= material_bytes_v1(&p) {
-                        return retained;
-                    }
-                    Ok(CompactCoverageV1::Compact(p))
-                }
+                // These relations are evaluated exactly. Historical sum-check
+                // tags are never emitted as a cheaper correctness argument.
+                Prim::Mul | Prim::ReduceSum { .. } => retained,
                 Prim::Cast => retained,
                 _ => Err(malformed("an exact-arithmetic relation on a primitive outside the family")),
             }
@@ -517,20 +471,15 @@ pub struct CompactRelationBoundV1 {
     pub instance_bits: Option<u32>,
 }
 
-/// **The bound arithmetic** (integer, every logarithm ceiled, every factor charged):
-///
-/// * Freivalds: `ε_rep ≤ 1/p` → `b₀ = ⌊log2 p⌋`; instance `t·b₀`;
-/// * linear evaluation (`ν ≥ 1`): `ε_rep ≤ ν/p` (Schwartz–Zippel on the multilinear difference) → `b₀ − ⌈log2 ν⌉`; instance `t·(…)`;
-/// * Hadamard sum-check: `ε_rep ≤ ν/p + 3ν/p` → `b₀ − ⌈log2 4ν⌉`; instance `b₀ − ⌈log2 (4ν + 3Q)⌉`;
-/// * reduce-sum sum-check: `ε_rep ≤ ν_o/p + ν_j/p` → `b₀ − ⌈log2 (ν_o+ν_j)⌉`; instance `b₀ − ⌈log2 (ν_o + ν_j + Q)⌉`;
-///
-/// with `p` the SMALLEST modulus the relation uses (a nonzero integer error below the moduli product is nonzero modulo one of them,
-/// and that modulus's check alone bounds the pass probability).
+/// Direct-check conditional error arithmetic. Retired validity-proof tags
+/// always contribute zero bits, including scalar/zero-round historical cases.
 pub fn relation_bound_v1(p: &CompactRelationProgramV1) -> CompactRelationBoundV1 {
+    if !detection_program_v1(p) {
+        return CompactRelationBoundV1 { per_repetition_bits: Some(0), instance_bits: Some(0) };
+    }
     let b0 = p.moduli.iter().copied().min().unwrap_or(0).saturating_sub(1);
     let t = p.repetitions as u32;
-    let q = 1u128 << p.fs_query_bits.min(COMPACT_FS_MAX_QUERY_BITS_V1);
-    let (nu, rounds) = (p.point_variables as u128, p.sumcheck_rounds as u128);
+    let nu = p.point_variables as u128;
     match p.compiler {
         CompactRelationCompilerV1::FreivaldsSeededV1 => {
             CompactRelationBoundV1 { per_repetition_bits: Some(b0), instance_bits: Some(t.saturating_mul(b0)) }
@@ -542,26 +491,18 @@ pub fn relation_bound_v1(p: &CompactRelationProgramV1) -> CompactRelationBoundV1
             let rep = b0.saturating_sub(ceil_log2(nu));
             CompactRelationBoundV1 { per_repetition_bits: Some(rep), instance_bits: Some(t.saturating_mul(rep)) }
         }
-        CompactRelationCompilerV1::SumCheckHadamardV1 if nu == 0 => {
-            CompactRelationBoundV1 { per_repetition_bits: None, instance_bits: None }
+        CompactRelationCompilerV1::SumCheckHadamardV1 | CompactRelationCompilerV1::SumCheckReduceSumV1 => {
+            CompactRelationBoundV1 { per_repetition_bits: Some(0), instance_bits: Some(0) }
         }
-        CompactRelationCompilerV1::SumCheckHadamardV1 => CompactRelationBoundV1 {
-            per_repetition_bits: Some(b0.saturating_sub(ceil_log2(4 * nu))),
-            instance_bits: Some(b0.saturating_sub(ceil_log2(4 * nu + 3 * q))),
-        },
-        CompactRelationCompilerV1::SumCheckReduceSumV1 if nu + rounds == 0 => {
-            CompactRelationBoundV1 { per_repetition_bits: None, instance_bits: None }
-        }
-        CompactRelationCompilerV1::SumCheckReduceSumV1 => CompactRelationBoundV1 {
-            per_repetition_bits: Some(b0.saturating_sub(ceil_log2(nu + rounds))),
-            instance_bits: Some(b0.saturating_sub(ceil_log2(nu + rounds + if rounds == 0 { 0 } else { q }))),
-        },
     }
 }
 
 /// The compact proof bytes one instance may carry (borsh: header, then `t × moduli` transcripts of `rounds` messages of
 /// `degree + 1` canonical field elements).
 pub fn proof_bytes_bound_v1(p: &CompactRelationProgramV1) -> u128 {
+    if !detection_program_v1(p) {
+        return u128::MAX;
+    }
     let msg = 4 + (p.degree as u128 + 1) * 16;
     let transcript = 4 + p.sumcheck_rounds as u128 * msg;
     64 + p.repetitions as u128 * p.moduli.len() as u128 * transcript
@@ -575,16 +516,14 @@ pub fn material_bytes_v1(p: &CompactRelationProgramV1) -> u128 {
 
 /// Verifier field operations for one instance (reads, eq tables, inner products, sum-check rounds).
 pub fn verifier_work_bound_v1(p: &CompactRelationProgramV1) -> u128 {
+    if !detection_program_v1(p) {
+        return u128::MAX;
+    }
     let reads: u128 = p.out_elements as u128 + p.in_elements.iter().map(|e| *e as u128).sum::<u128>();
     let per = match p.compiler {
         CompactRelationCompilerV1::FreivaldsSeededV1 => 2 * reads,
         CompactRelationCompilerV1::LinearEvaluationV1 => (1u128 << p.point_variables) + 3 * p.out_elements as u128,
-        CompactRelationCompilerV1::SumCheckHadamardV1 => {
-            3 * (1u128 << p.point_variables) + 4 * p.out_elements as u128 + 8 * p.sumcheck_rounds as u128
-        }
-        CompactRelationCompilerV1::SumCheckReduceSumV1 => {
-            (1u128 << p.point_variables) + (1u128 << p.sumcheck_rounds) + 3 * reads + 4 * p.sumcheck_rounds as u128
-        }
+        CompactRelationCompilerV1::SumCheckHadamardV1 | CompactRelationCompilerV1::SumCheckReduceSumV1 => return u128::MAX,
     };
     reads.saturating_add((p.repetitions as u128 * p.moduli.len() as u128).saturating_mul(per))
 }
@@ -592,6 +531,21 @@ pub fn verifier_work_bound_v1(p: &CompactRelationProgramV1) -> u128 {
 /// **The coverage's probabilistic families for the composed bound** (`misaka_palw_challenge::composition`): one family per compact
 /// relation with an error term, `t·b` already folded into `per_repetition_bits` (repetitions = 1), instances over the claim's worst
 /// positions.
+pub fn validate_detection_coverage_v1(coverage: &CompactPlanCoverageV1) -> Result<(), String> {
+    if coverage.compact().any(|p| !detection_program_v1(p)) {
+        return Err("computation validity-proof compiler is permanently prohibited; reexecute the relation exactly".into());
+    }
+    Ok(())
+}
+fn detection_program_v1(p: &CompactRelationProgramV1) -> bool {
+    p.compiler.permitted_detection()
+        && p.sumcheck_rounds == 0
+        && match p.compiler {
+            CompactRelationCompilerV1::FreivaldsSeededV1 => p.prim_tag == Prim::MatMul.tag(),
+            CompactRelationCompilerV1::LinearEvaluationV1 => p.prim_tag == Prim::Add.tag() || p.prim_tag == Prim::Sub.tag(),
+            _ => false,
+        }
+}
 pub fn compact_check_families_v1(coverage: &CompactPlanCoverageV1) -> Vec<CheckFamilyV1> {
     coverage
         .compact()
@@ -689,6 +643,7 @@ impl CompactRelationContractV1 {
             return Err("compact relation contract is unversioned, unbound to its coverage or unbounded".into());
         }
         coverage.params.validate().map_err(|e| e.to_string())?;
+        validate_detection_coverage_v1(coverage)?;
         let summary = CompactContractSummaryV1 {
             effective_bits: compact_composed_bound_v1(coverage, self.binding_bits as u32, adversary)
                 .map_err(|e| e.to_string())?
@@ -833,23 +788,6 @@ fn fsub<F: FieldElemV1>(a: F, b: F) -> F {
     a.add(b.mul(F::of_i128(-1)))
 }
 
-fn fpow<F: FieldElemV1>(mut b: F, mut e: u128) -> F {
-    let mut acc = one::<F>();
-    while e > 0 {
-        if e & 1 == 1 {
-            acc = acc.mul(b);
-        }
-        b = b.mul(b);
-        e >>= 1;
-    }
-    acc
-}
-
-/// `a^(p−2)`, the inverse of a nonzero element.
-fn finv<F: FieldElemV1>(a: F) -> F {
-    fpow(a, mersenne(F::EXP) - 2)
-}
-
 /// `eq(ρ, x)` for every `x ∈ {0,1}^ν`, the first variable the most significant index bit.
 fn eq_table<F: FieldElemV1>(point: &[F]) -> Vec<F> {
     let mut t = vec![one::<F>()];
@@ -865,39 +803,9 @@ fn eq_table<F: FieldElemV1>(point: &[F]) -> Vec<F> {
     t
 }
 
-fn eq_eval<F: FieldElemV1>(a: &[F], b: &[F]) -> F {
-    a.iter().zip(b).fold(one::<F>(), |acc, (x, y)| acc.mul(x.mul(*y).add(fsub(one::<F>(), *x).mul(fsub(one::<F>(), *y)))))
-}
-
 /// `Σ_x eq(ρ,x)·v(x)` over the zero-padded vector: the multilinear extension of `v` at `ρ`.
 fn mle_at<F: FieldElemV1>(eq: &[F], v: &[i128]) -> F {
     F::dot_iter(eq.iter().copied(), v.iter().map(|x| F::of_i128(*x)))
-}
-
-/// Bind the first (most significant) variable of a table at `c`.
-fn fold<F: FieldElemV1>(t: &mut Vec<F>, c: F) {
-    let half = t.len() / 2;
-    for i in 0..half {
-        t[i] = t[i].add(c.mul(fsub(t[i + half], t[i])));
-    }
-    t.truncate(half);
-}
-
-/// The degree-`d` polynomial through `(0, v_0), …, (d, v_d)`, evaluated at `c`.
-fn interpolate<F: FieldElemV1>(values: &[F], c: F) -> F {
-    let d = values.len();
-    let mut acc = F::zero();
-    for i in 0..d {
-        let (mut num, mut den) = (one::<F>(), 1i128);
-        for j in 0..d {
-            if j != i {
-                num = num.mul(fsub(c, F::of_i128(j as i128)));
-                den *= i as i128 - j as i128;
-            }
-        }
-        acc = acc.add(values[i].mul(num).mul(finv(F::of_i128(den))));
-    }
-    acc
 }
 
 /// The relation's stream scope: compiler, node and the instance's position/occurrence.
@@ -906,91 +814,6 @@ fn scope_id(p: &CompactRelationProgramV1, position: u32, occurrence: u16) -> Dig
         COMPACT_RELATION_SCOPE_DOMAIN_V1,
         &(compact_relation_compiler_id_v1(p.compiler), p.relation, p.block, p.node, position, occurrence),
     )
-}
-
-/// **Transcript-bound round challenges** keyed by the round seed: each challenge absorbs the scope, the repetition label, the
-/// initial claim and every message so far.
-struct FsRoundsV1<'a> {
-    seed: &'a Digest,
-    relation: u32,
-    label: u32,
-    transcript: Digest,
-}
-
-impl<'a> FsRoundsV1<'a> {
-    fn new<F: FieldElemV1>(seed: &'a Digest, scope: Digest, relation: u32, label: u32, claim: F) -> Self {
-        let transcript = object_id(COMPACT_RELATION_FS_DOMAIN_V1, &(scope, label, claim.raw()));
-        Self { seed, relation, label, transcript }
-    }
-
-    fn challenge<F: FieldElemV1>(&mut self, round: u32, msg: &[F], budget: &mut CompactStreamBudgetV1) -> Result<F, CompactVerdictV1> {
-        let raw: Vec<u128> = msg.iter().map(|f| f.raw()).collect();
-        self.transcript = object_id(COMPACT_RELATION_FS_DOMAIN_V1, &(self.transcript, round, raw));
-        let label = StreamLabelV1 {
-            kind: StreamKindV1::ProofRound,
-            scope_id: self.transcript,
-            relation: self.relation,
-            repetition: self.label,
-        };
-        Ok(draw_vector::<F>(self.seed, &label, 1, budget)?[0])
-    }
-}
-
-/// The sum-check prover over the product of equal-length tables.
-fn sumcheck_prove<F: FieldElemV1>(
-    mut tables: Vec<Vec<F>>,
-    fs: &mut FsRoundsV1<'_>,
-    budget: &mut CompactStreamBudgetV1,
-) -> Result<Vec<Vec<F>>, CompactVerdictV1> {
-    let degree = tables.len();
-    let mut msgs = Vec::new();
-    let mut round = 0u32;
-    while tables[0].len() > 1 {
-        let half = tables[0].len() / 2;
-        let mut evals = vec![F::zero(); degree + 1];
-        for i in 0..half {
-            for (t, e) in evals.iter_mut().enumerate() {
-                let tt = F::of_i128(t as i128);
-                let prod = tables.iter().fold(one::<F>(), |acc, tab| acc.mul(tab[i].add(tt.mul(fsub(tab[i + half], tab[i])))));
-                *e = e.add(prod);
-            }
-        }
-        let c = fs.challenge(round, &evals, budget)?;
-        for tab in tables.iter_mut() {
-            fold(tab, c);
-        }
-        msgs.push(evals);
-        round += 1;
-    }
-    Ok(msgs)
-}
-
-/// The sum-check verifier: checks every round against the running claim and returns the final claim and the challenge point.
-fn sumcheck_verify<F: FieldElemV1>(
-    mut claim: F,
-    msgs: &[Vec<F>],
-    degree: usize,
-    fs: &mut FsRoundsV1<'_>,
-    budget: &mut CompactStreamBudgetV1,
-    (rep, modulus): (u8, u32),
-) -> Result<(F, Vec<F>), CompactVerdictV1> {
-    let mut point = Vec::with_capacity(msgs.len());
-    for (r, msg) in msgs.iter().enumerate() {
-        if msg.len() != degree + 1 {
-            return Err(CompactVerdictV1::Malformed("a round message of another degree".into()));
-        }
-        if msg[0].add(msg[1]) != claim {
-            return Err(CompactVerdictV1::Rejected {
-                repetition: rep,
-                modulus,
-                why: format!("sum-check round {r} does not sum to its claim"),
-            });
-        }
-        let c = fs.challenge(r as u32, msg, budget)?;
-        claim = interpolate(msg, c);
-        point.push(c);
-    }
-    Ok((claim, point))
 }
 
 // ---- operand layout --------------------------------------------------------------------------------------------------------
@@ -1072,22 +895,8 @@ fn instance_variables(p: &CompactRelationProgramV1, inputs: &[Tensor], y: &Tenso
     }
     let nu = ceil_log2(y.data.len() as u128);
     match p.compiler {
-        CompactRelationCompilerV1::SumCheckReduceSumV1 => {
-            let a = &inputs[0];
-            let axis = p.axis as usize;
-            let mut kept = a.shape.clone();
-            if axis >= kept.len() {
-                return bad("a reduction axis outside its operand");
-            }
-            kept[axis] = 1;
-            if kept != y.shape {
-                return bad("a reduction whose output is not its operand with the axis kept at 1");
-            }
-            let nu_j = ceil_log2(a.shape[axis] as u128);
-            if nu > p.point_variables || nu_j > p.sumcheck_rounds {
-                return bad("an instance beyond the compiled worst case");
-            }
-            Ok((nu, nu_j))
+        CompactRelationCompilerV1::SumCheckHadamardV1 | CompactRelationCompilerV1::SumCheckReduceSumV1 => {
+            bad("computation validity-proof tag is permanently prohibited")
         }
         CompactRelationCompilerV1::FreivaldsSeededV1 => Ok((0, 0)),
         _ => {
@@ -1133,15 +942,6 @@ fn freivalds_check<F: FieldElemV1>(x: &Tensor, w: &Tensor, y: &Tensor, r: &[F]) 
     Ok(None)
 }
 
-fn canonical<F: FieldElemV1>(raw: &[u128]) -> Result<Vec<F>, CompactVerdictV1> {
-    let p = mersenne(F::EXP);
-    if raw.iter().any(|v| *v >= p) {
-        return Err(CompactVerdictV1::Malformed("a non-canonical field element".into()));
-    }
-    Ok(raw.iter().map(|v| F::of_raw(*v)).collect())
-}
-
-/// The operands as full-output-shape vectors (broadcast materialized) for the elementwise families.
 fn elementwise_operands(inputs: &[Tensor], y: &Tensor) -> Result<(Vec<i128>, Vec<i128>), CompactVerdictV1> {
     match (broadcast_values(&y.shape, &inputs[0]), broadcast_values(&y.shape, &inputs[1])) {
         (Some(a), Some(b)) => Ok((a, b)),
@@ -1153,14 +953,14 @@ fn labels(p: &CompactRelationProgramV1, scope: Digest, rep: u8, j: usize, kind: 
     StreamLabelV1 { kind, scope_id: scope, relation: p.relation, repetition: rep as u32 * MODULI_V2.len() as u32 + j as u32 }
 }
 
-/// Prove (`Some(proof)` ⇒ write the transcript) or verify one (repetition, modulus) of one instance.
+/// Run one direct probabilistic detection check. Producer transcript payloads are refused.
 #[allow(clippy::too_many_arguments)]
 fn run_one<F: FieldElemV1>(
     p: &CompactRelationProgramV1,
     seed: &Digest,
     scope: Digest,
     (rep, j): (u8, usize),
-    (nu, nu_j): (u32, u32),
+    (nu, _nu_j): (u32, u32),
     inputs: &[Tensor],
     y: &Tensor,
     transcript: Option<&[Vec<u128>]>,
@@ -1168,7 +968,9 @@ fn run_one<F: FieldElemV1>(
 ) -> Result<Vec<Vec<u128>>, CompactVerdictV1> {
     let modulus = F::EXP;
     let reject = |why: String| CompactVerdictV1::Rejected { repetition: rep, modulus, why };
-    let label = labels(p, scope, rep, j, StreamKindV1::Vector).repetition;
+    if transcript.is_some_and(|t| !t.is_empty()) {
+        return Err(CompactVerdictV1::Malformed("producer validity transcripts are prohibited".into()));
+    }
     match p.compiler {
         CompactRelationCompilerV1::FreivaldsSeededV1 => {
             let n = *y.shape.last().ok_or_else(|| CompactVerdictV1::Malformed("a scalar product output".into()))?;
@@ -1189,70 +991,8 @@ fn run_one<F: FieldElemV1>(
             }
             Ok(Vec::new())
         }
-        CompactRelationCompilerV1::SumCheckHadamardV1 => {
-            let (a, b) = elementwise_operands(inputs, y)?;
-            let rho = draw_vector::<F>(seed, &labels(p, scope, rep, j, StreamKindV1::Vector), nu as usize, budget)?;
-            let eq = eq_table(&rho);
-            let claim = mle_at(&eq, &y.data);
-            let mut fs = FsRoundsV1::new(seed, scope, p.relation, label, claim);
-            let msgs: Vec<Vec<F>> = match transcript {
-                None => {
-                    let pad = |v: &[i128]| {
-                        let mut t: Vec<F> = v.iter().map(|x| F::of_i128(*x)).collect();
-                        t.resize(1usize << nu, F::zero());
-                        t
-                    };
-                    sumcheck_prove(vec![eq.clone(), pad(&a), pad(&b)], &mut fs, budget)?
-                }
-                Some(raw) => raw.iter().map(|m| canonical::<F>(m)).collect::<Result<_, _>>()?,
-            };
-            if msgs.len() != nu as usize {
-                return Err(CompactVerdictV1::Malformed("a transcript of another round count".into()));
-            }
-            if transcript.is_some() {
-                let mut fs = FsRoundsV1::new(seed, scope, p.relation, label, claim);
-                let (fin, kappa) = sumcheck_verify(claim, &msgs, 3, &mut fs, budget, (rep, modulus))?;
-                let ek = eq_table(&kappa);
-                if fin != eq_eval(&rho, &kappa).mul(mle_at(&ek, &a)).mul(mle_at(&ek, &b)) {
-                    return Err(reject("the sum-check's final evaluation differs from the operands'".into()));
-                }
-            }
-            Ok(msgs.iter().map(|m| m.iter().map(|f| f.raw()).collect()).collect())
-        }
-        CompactRelationCompilerV1::SumCheckReduceSumV1 => {
-            let (layout, n_out) = reduce_layout(&inputs[0], p.axis as usize, nu_j)
-                .ok_or_else(|| CompactVerdictV1::Malformed("a reduction operand the layout cannot hold".into()))?;
-            if n_out != y.data.len() {
-                return Err(CompactVerdictV1::Malformed("a reduction whose output count disagrees".into()));
-            }
-            let rho = draw_vector::<F>(seed, &labels(p, scope, rep, j, StreamKindV1::Vector), nu as usize, budget)?;
-            let eq = eq_table(&rho);
-            let claim = mle_at(&eq, &y.data);
-            let row = 1usize << nu_j;
-            // g(j) = Ã'(ρ, j): the reduced coordinate's table with the output coordinates bound at ρ.
-            let mut g = vec![F::zero(); row];
-            for (o, e) in eq.iter().enumerate().take(n_out) {
-                for (t, gt) in g.iter_mut().enumerate() {
-                    *gt = gt.add(e.mul(F::of_i128(layout[o * row + t])));
-                }
-            }
-            let mut fs = FsRoundsV1::new(seed, scope, p.relation, label, claim);
-            let msgs: Vec<Vec<F>> = match transcript {
-                None => sumcheck_prove(vec![g.clone()], &mut fs, budget)?,
-                Some(raw) => raw.iter().map(|m| canonical::<F>(m)).collect::<Result<_, _>>()?,
-            };
-            if msgs.len() != nu_j as usize {
-                return Err(CompactVerdictV1::Malformed("a transcript of another round count".into()));
-            }
-            if transcript.is_some() {
-                let mut fs = FsRoundsV1::new(seed, scope, p.relation, label, claim);
-                let (fin, kappa) = sumcheck_verify(claim, &msgs, 1, &mut fs, budget, (rep, modulus))?;
-                let ek = eq_table(&kappa);
-                if fin != F::dot_iter(ek.iter().copied(), g.iter().copied()) {
-                    return Err(reject("the sum-check's final evaluation differs from the operand's".into()));
-                }
-            }
-            Ok(msgs.iter().map(|m| m.iter().map(|f| f.raw()).collect()).collect())
+        CompactRelationCompilerV1::SumCheckHadamardV1 | CompactRelationCompilerV1::SumCheckReduceSumV1 => {
+            Err(CompactVerdictV1::Malformed("computation validity-proof tag is permanently prohibited".into()))
         }
     }
 }
@@ -1278,10 +1018,15 @@ fn dispatch(
 }
 
 fn moduli_valid(p: &CompactRelationProgramV1) -> bool {
-    !p.moduli.is_empty() && p.moduli.len() <= MODULI_V2.len() && p.moduli[..] == MODULI_V2[..p.moduli.len()] && p.repetitions > 0
+    detection_program_v1(p)
+        && !p.moduli.is_empty()
+        && p.moduli.len() <= MODULI_V2.len()
+        && p.moduli[..] == MODULI_V2[..p.moduli.len()]
+        && p.repetitions > 0
 }
 
-/// **The honest prover**: one instance's compact proof from its authenticated operands and the paid round seed.
+/// Run direct detection and produce only the frozen empty-payload check record.
+/// The legacy name/codec is retained; this does not prove computation correctness.
 pub fn prove_relation_v1(
     p: &CompactRelationProgramV1,
     seed: &Digest,
@@ -1569,12 +1314,7 @@ mod tests {
 
     #[test]
     fn arithmetic_families_are_complete_on_honest_values_and_catch_a_tampered_output() {
-        let cases = [
-            arithmetic(Prim::Add, &[3, 5], Some(&[5]), &[3, 5]),
-            arithmetic(Prim::Sub, &[4, 4], Some(&[4, 4]), &[4, 4]),
-            arithmetic(Prim::Mul, &[8, 16, 16], Some(&[1, 16, 1]), &[8, 16, 16]),
-            arithmetic(Prim::ReduceSum { axis: 1 }, &[16, 64, 4], None, &[16, 1, 4]),
-        ];
+        let cases = [arithmetic(Prim::Add, &[3, 5], Some(&[5]), &[3, 5]), arithmetic(Prim::Sub, &[4, 4], Some(&[4, 4]), &[4, 4])];
         let seed = [5u8; 64];
         for (p, ins, y) in cases {
             let proof = prove_relation_v1(&p, &seed, 0, 1, &ins, &y, &mut budget()).unwrap();
@@ -1587,44 +1327,43 @@ mod tests {
                 p.compiler
             );
             assert_eq!(exact_relation_fault_v1(&p, &ins, &bad), Some(1));
-            // Another seed is another proof: the transcript is bound to the round seed.
-            if p.compiler.transcript_bound() {
-                assert!(verify_relation_v1(&p, &[6u8; 64], &ins, &y, &proof, &mut budget()).is_err());
-            }
         }
     }
 
     #[test]
-    fn a_forged_round_message_or_noncanonical_element_is_refused() {
-        let (p, ins, y) = arithmetic(Prim::Mul, &[16, 16], Some(&[16, 16]), &[16, 16]);
-        let seed = [1u8; 64];
-        let proof = prove_relation_v1(&p, &seed, 0, 0, &ins, &y, &mut budget()).unwrap();
-        let mut forged = proof.clone();
-        forged.transcripts[0][1][2] = (forged.transcripts[0][1][2] + 1) % mersenne(127);
-        assert!(verify_relation_v1(&p, &seed, &ins, &y, &forged, &mut budget()).is_err());
-        let mut noncanonical = proof.clone();
-        noncanonical.transcripts[0][0][0] = mersenne(127);
-        assert!(matches!(verify_relation_v1(&p, &seed, &ins, &y, &noncanonical, &mut budget()), Err(CompactVerdictV1::Malformed(_))));
-        let mut short = proof.clone();
-        short.transcripts[1].pop();
-        assert!(matches!(verify_relation_v1(&p, &seed, &ins, &y, &short, &mut budget()), Err(CompactVerdictV1::Malformed(_))));
-        let mut other = proof.clone();
-        other.relation += 1;
-        assert!(matches!(verify_relation_v1(&p, &seed, &ins, &y, &other, &mut budget()), Err(CompactVerdictV1::Malformed(_))));
-        assert!(matches!(
-            verify_relation_v1(&p, &seed, &ins, &y, &proof, &mut CompactStreamBudgetV1 { remaining_words: 3 }),
-            Err(CompactVerdictV1::Unavailable(_))
-        ));
-    }
-
-    #[test]
-    fn the_proof_is_much_smaller_than_the_material_it_replaces() {
-        let (p, ins, y) = arithmetic(Prim::Mul, &[64, 64], Some(&[64, 64]), &[64, 64]);
-        let proof = prove_relation_v1(&p, &[2u8; 64], 0, 0, &ins, &y, &mut budget()).unwrap();
-        assert!((proof.encoded_len() as u128) <= proof_bytes_bound_v1(&p));
-        assert!((proof.encoded_len() as u128) * 20 < material_bytes_v1(&p), "{} vs {}", proof.encoded_len(), material_bytes_v1(&p));
-        let m = matmul_program(CheckerIdV1::FreivaldsM127, DType::I8, DType::I8, DType::I32);
-        assert_eq!(proof_bytes_bound_v1(&m), 64 + 2 * 4, "a Freivalds proof is its header");
+    fn retired_tags_decode_but_cannot_generate_verify_or_earn_detection_bits() {
+        let (base, ins, y) = arithmetic(Prim::Add, &[16, 16], Some(&[16, 16]), &[16, 16]);
+        for tag in [CompactRelationCompilerV1::SumCheckHadamardV1, CompactRelationCompilerV1::SumCheckReduceSumV1] {
+            let wire = borsh::to_vec(&tag).unwrap();
+            assert_eq!(borsh::from_slice::<CompactRelationCompilerV1>(&wire).unwrap(), tag);
+            let mut p = base.clone();
+            p.compiler = tag;
+            assert_eq!(relation_bound_v1(&p).instance_bits, Some(0));
+            assert!(prove_relation_v1(&p, &[1; 64], 0, 0, &ins, &y, &mut budget()).is_err());
+            let record = CompactRelationProofV1 {
+                compiler: tag,
+                relation: p.relation,
+                position: 0,
+                occurrence: 0,
+                transcripts: vec![vec![]; p.repetitions as usize * p.moduli.len()],
+            };
+            assert!(verify_relation_v1(&p, &[1; 64], &ins, &y, &record, &mut budget()).is_err());
+        }
+        for prim in [Prim::Mul, Prim::ReduceSum { axis: 0 }] {
+            let r = rel(
+                &prim,
+                ConstraintFamilyV1::ExactArithmetic,
+                CheckerIdV1::ExactRecompute,
+                &[(DType::I32, 256), (DType::I32, 256)],
+                (DType::I64, 256),
+            );
+            assert!(matches!(compile_relation_v1(0, &prim, &r, &params(true)), Ok(CompactCoverageV1::ExactRetained { .. })));
+        }
+        let record = prove_relation_v1(&base, &[1; 64], 0, 0, &ins, &y, &mut budget()).unwrap();
+        assert!(record.transcripts.iter().all(Vec::is_empty));
+        let mut forged = record;
+        forged.transcripts[0].push(vec![1, 2]);
+        assert!(verify_relation_v1(&base, &[1; 64], &ins, &y, &forged, &mut budget()).is_err());
     }
 
     #[test]
@@ -1639,20 +1378,11 @@ mod tests {
         assert_eq!(relation_bound_v1(&lin), CompactRelationBoundV1 { per_repetition_bits: Some(122), instance_bits: Some(244) });
         lin.point_variables = 0;
         assert_eq!(relation_bound_v1(&lin).instance_bits, None, "a scalar identity is exact");
-        let had = arithmetic(Prim::Mul, &[32, 32], Some(&[32, 32]), &[32, 32]).0;
-        // 4ν = 40 → ⌈log2 40⌉ = 6; 40 + 3·2^64 → ⌈log2⌉ = 66.
-        assert_eq!(relation_bound_v1(&had), CompactRelationBoundV1 { per_repetition_bits: Some(120), instance_bits: Some(60) });
-        let red = arithmetic(Prim::ReduceSum { axis: 1 }, &[3, 16, 2], None, &[3, 1, 2]).0; // ν_o = 3, ν_j = 4
-        assert_eq!((red.point_variables, red.sumcheck_rounds), (3, 4));
-        assert_eq!(relation_bound_v1(&red), CompactRelationBoundV1 { per_repetition_bits: Some(123), instance_bits: Some(61) });
-        let mut more = red.clone();
-        more.fs_query_bits = 100;
-        assert_eq!(relation_bound_v1(&more).instance_bits, Some(25), "a larger declared grinding budget costs bits one for one");
     }
 
     #[test]
     fn the_composed_bound_charges_the_union_and_the_lifetime_term_charges_admissions() {
-        let (p, ..) = arithmetic(Prim::Mul, &[32, 32], Some(&[32, 32]), &[32, 32]);
+        let (p, ..) = arithmetic(Prim::Add, &[32, 32], Some(&[32, 32]), &[32, 32]);
         let m = matmul_program(CheckerIdV1::FreivaldsM127, DType::I8, DType::I8, DType::I32);
         let coverage = CompactPlanCoverageV1 {
             version: 1,
@@ -1673,13 +1403,13 @@ mod tests {
         assert_eq!(fams.len(), 2);
         assert_eq!(fams[0].instances, 2 * 1024, "batch slices × positions");
         let none = compact_composed_bound_v1(&coverage, 256, &AdversaryBudgetV1::NONE).unwrap();
-        // check = min(252, 60) − ⌈log2 (2048 + 1024)⌉ = 60 − 12 = 48; union of {check, binding} costs one more bit.
-        assert_eq!(none.check_bits, Some(48));
-        assert_eq!(none.effective_bits, Some(47));
+        // check = min(252, 244) − ceil(log2(2048 + 1024)) = 232; binding union costs one bit.
+        assert_eq!(none.check_bits, Some(232));
+        assert_eq!(none.effective_bits, Some(231));
         let term = compact_lifetime_failure_term_v1(&coverage, 256, &AdversaryBudgetV1::NONE, 1 << 20).unwrap();
-        assert_eq!(term.per_opportunity, EffectiveBitsV1::Bits(47));
+        assert_eq!(term.per_opportunity, EffectiveBitsV1::Bits(231));
         let lifetime = misaka_palw_challenge::cumulative_failure_bits_v1(&[term]).unwrap();
-        assert_eq!(lifetime, EffectiveBitsV1::Bits(27), "2^20 admissions cost 20 bits");
+        assert_eq!(lifetime, EffectiveBitsV1::Bits(211), "2^20 admissions cost 20 bits");
         let adaptive = AdversaryBudgetV1 { adaptive_statements: 2, ..AdversaryBudgetV1::NONE };
         assert!(compact_lifetime_failure_term_v1(&coverage, 256, &adaptive, 4).is_err(), "Q is charged once");
     }

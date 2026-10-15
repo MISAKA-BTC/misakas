@@ -99,6 +99,8 @@ def observe(drill, role, bootstrap, rpc_read, import_stamp, require_bound=True, 
     assert (before['sink'], before['pruningPointHash'], before['virtualDaaScore']) == \
         (after['sink'], after['pruningPointHash'], after['virtualDaaScore']), 'native observation changed generation'
     assert import_stamp(node) == import_stamp(after_node), 'native observation crossed an import epoch'
+    assert (node['consensusParamsId'], node['genesisHash']) == \
+        (after_node['consensusParamsId'], after_node['genesisHash']), 'native observation changed network identity'
     return result
 
 

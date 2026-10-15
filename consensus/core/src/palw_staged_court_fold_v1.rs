@@ -1067,7 +1067,7 @@ pub(super) fn open(
                 PalwStagedCourtKeyV1::Claim(seed.claim),
                 Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 { terms: extended_terms, ..contract.clone() })),
             );
-            b.write_claim(seed.claim, Some(extended_claim));
+            b.write_claim(seed.claim, Some(extended_claim))?;
             if let Some(mut dispute) = b.state.legacy_disputes.get(&seed.claim).cloned() {
                 dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
                 b.write_legacy_dispute(seed.claim, Some(dispute));
@@ -1079,7 +1079,7 @@ pub(super) fn open(
                 && liability.expiry_daa < until
             {
                 liability.expiry_daa = until;
-                b.write_panel_liability(seed.claim, Some(liability));
+                b.write_panel_liability(seed.claim, Some(liability))?;
             }
             for (lock_key, mut lock) in b.claim_locks_v1(&seed.claim) {
                 if lock.expiry_daa < until {
@@ -1172,7 +1172,7 @@ pub(super) fn open(
                 PalwStagedCourtKeyV1::Claim(seed.claim),
                 Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 { terms: extended_terms, ..contract.clone() })),
             );
-            b.write_claim(seed.claim, Some(extended_claim));
+            b.write_claim(seed.claim, Some(extended_claim))?;
             if let Some(mut dispute) = b.state.legacy_disputes.get(&seed.claim).cloned() {
                 dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
                 b.write_legacy_dispute(seed.claim, Some(dispute));
@@ -1184,7 +1184,7 @@ pub(super) fn open(
                 && liability.expiry_daa < until
             {
                 liability.expiry_daa = until;
-                b.write_panel_liability(seed.claim, Some(liability));
+                b.write_panel_liability(seed.claim, Some(liability))?;
             }
             // The initial prospective holds keep these locks economically attributed even if
             // an older ordinary lock expiry has passed. Extend the actual saved locked rows.
@@ -2778,7 +2778,7 @@ fn bundle_control_v1(
         bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
         b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(Box::new(bundle).into())));
         b.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(movement.claim), Some(PalwStagedCourtRowV1::ClaimBundle(extended)));
-        b.write_claim(movement.claim, Some(claim));
+        b.write_claim(movement.claim, Some(claim))?;
         if let Some(mut dispute) = b.state.legacy_disputes.get(&movement.claim).cloned() {
             dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
             b.write_legacy_dispute(movement.claim, Some(dispute));
@@ -2790,7 +2790,7 @@ fn bundle_control_v1(
             && liability.expiry_daa < until
         {
             liability.expiry_daa = until;
-            b.write_panel_liability(movement.claim, Some(liability));
+            b.write_panel_liability(movement.claim, Some(liability))?;
         }
         for (lock_key, mut lock) in b.claim_locks_v1(&movement.claim) {
             if lock.expiry_daa < until {

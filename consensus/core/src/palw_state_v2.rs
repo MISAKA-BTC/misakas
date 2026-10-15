@@ -13280,6 +13280,7 @@ pub fn palw_panel_room_read_v1(
     }
 }
 
+mod native_mutation;
 mod transition_builder;
 
 // ---------------------------------------------------------------------------------------------
@@ -13636,7 +13637,7 @@ fn apply_vesting_maturity(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
     // The RAW depth (I-8), as every other reader of the second clock takes it: `None` below
     // `palw_audit_2026_09_23`; the escape is computed from it by the pure functions.
     let raw_depth = palw_settled_anchor_depth_v1(builder.extras);
-    builder.latch_matured_vesting_rows(ctx.daa_score, raw_depth);
+    builder.latch_matured_vesting_rows(ctx.daa_score, raw_depth)?;
     // The fold's belt: the non-market rows still waiting after 1b's drain come off the width. Zero
     // under the queue lemma (every step 3d on testnet-12), so the planner is handed the full width;
     // `palw_vesting_next_block_plan_v1` computes the same width off the committed parent.
@@ -13822,7 +13823,7 @@ pub fn palw_v2_pre_object_base_retained_v1(
     sweep_fp_prompt_rows(&mut builder, parent, ctx);
     // 2026-09-24 DoS audit #12 (a): the same boundary drops the panel locks and liability rows
     // past their evidence horizon (past `palw_audit_2026_09_23` only).
-    sweep_panel_obligations(&mut builder, parent, ctx);
+    sweep_panel_obligations(&mut builder, parent, ctx)?;
     // ADR-0152 R-3 (S-7): and the reporter commitments past their TTL, as the fold's step 2 does.
     sweep_reporter_commitments(&mut builder, ctx);
     // RFC-0007: the vertex rounds past their evidence window (a no-op on a chain with no row).
@@ -14404,7 +14405,7 @@ fn apply_palw_transition_v7_inner(
     sweep_fp_prompt_rows(&mut builder, parent, ctx);
     // 2026-09-24 DoS audit #12 (a): the same boundary drops the panel locks and liability rows
     // past their evidence horizon (past `palw_audit_2026_09_23` only).
-    sweep_panel_obligations(&mut builder, parent, ctx);
+    sweep_panel_obligations(&mut builder, parent, ctx)?;
     // ADR-0152 R-3 (S-7, V3S-11): the reporter commitments past their TTL that no open reward can
     // still be won by — before this block's objects, so a reveal here never meets a commitment
     // this block is about to prune. Mirrored in `palw_v2_pre_object_base_v1`. A no-op below
@@ -15114,7 +15115,7 @@ fn rearm_after_challenger_side_close(
         {
             let mut moved = claim.clone();
             moved.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: ctx.daa_score };
-            builder.write_claim(claim_id, Some(moved.clone()));
+            builder.write_claim(claim_id, Some(moved.clone()))?;
             moved
         }
         _ => claim.clone(),
@@ -15268,7 +15269,7 @@ fn close_da_session_refuted_v2(
     let paused = palw_da_paused_daa_v2(&claim.phase, ctx.daa_score);
     debug_assert_eq!(paused, ctx.daa_score.saturating_sub(accused_daa), "the pause is the session's own length");
     let restored = resume_claim_after_da_session_v2(claim_id, claim, resumed, paused)?;
-    builder.write_claim(claim_id, Some(restored.clone()));
+    builder.write_claim(claim_id, Some(restored.clone()))?;
     // §4-quater V6 on the ADR-0062 court (below `palw_rcore_plus`), before the re-arm reads `H`.
     builder.credit_verify_pause_v6(claim_id, ctx.daa_score.saturating_sub(paused), ctx.daa_score);
     builder.disarm_deadline(claim_id);
@@ -17311,18 +17312,22 @@ fn sweep_fp_prompt_rows(builder: &mut TransitionBuilder<'_>, parent: &PalwChainS
 /// `2 × window_court + epoch_length` DAA rather than by the chain's age. Every removal is the
 /// row's own delta entry (`SlashableLock` / `PanelLiability`, carrying the old value), so a reorg
 /// across the boundary restores exactly what it swept.
-fn sweep_panel_obligations(builder: &mut TransitionBuilder<'_>, parent: &PalwChainStateV2, ctx: &PalwBlockContextV2) {
+fn sweep_panel_obligations(
+    builder: &mut TransitionBuilder<'_>,
+    parent: &PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+) -> Result<(), PalwStateV2Error> {
     use crate::palw_panel_var_v1::palw_panel_obligation_prunable_v1;
     if !builder.extras.audit_2026_09_23_active {
-        return;
+        return Ok(());
     }
     if builder.state.panel_liabilities.is_empty() && builder.state.slashable_locks.is_empty() {
-        return;
+        return Ok(());
     }
-    let Some(last) = &parent.last_point else { return };
+    let Some(last) = &parent.last_point else { return Ok(()) };
     let epoch_length = builder.params.epoch_length.max(1);
     if ctx.daa_score / epoch_length <= last.daa_score / epoch_length {
-        return;
+        return Ok(());
     }
     let now = ctx.daa_score;
     let settled_now = builder.state.settled_attempt_finals;
@@ -17357,8 +17362,9 @@ fn sweep_panel_obligations(builder: &mut TransitionBuilder<'_>, parent: &PalwCha
         builder.write_slashable_lock(key, None);
     }
     for claim_id in pruned_liabilities {
-        builder.write_panel_liability(claim_id, None);
+        builder.write_panel_liability(claim_id, None)?;
     }
+    Ok(())
 }
 
 /// **Lane F1 (the 2026-09-25 sweep's V03(1)): is this claim waiting out a `NoCapablePanel` retry?**
@@ -17665,7 +17671,7 @@ fn palw_void_claims_unbound_in_their_anchor_block_v1(
         ) {
             let mut retried = claim.clone();
             retried.rebound_daa = Some(ctx.daa_score);
-            builder.write_claim(claim_id, Some(retried));
+            builder.write_claim(claim_id, Some(retried))?;
             continue;
         }
         // Lane PL part C × G14 (SHARD): a redrawn claim the hold reaches is not ended unbound while an accusation is pending on it
@@ -19224,7 +19230,7 @@ fn apply_receipt_spend(
     let mut updated = claim.clone();
     let PalwClaimSourceV2::FreePrompt { spent: ledger, .. } = &mut updated.source else { unreachable!("matched above") };
     ledger.insert(spend.quantum_index);
-    builder.write_claim(claim_id, Some(updated));
+    builder.write_claim(claim_id, Some(updated))?;
 
     // Receipt-lane production census — what the receipt retarget measures.
     let epoch_index = ctx.daa_score / builder.params.epoch_length;
@@ -20985,7 +20991,7 @@ fn attach_riders_v1(
     builder.release_for_claim(&lead, ctx.daa_score)?;
     builder.reserve_for_claim(&kept)?;
     let kept_escrow = kept.escrowed_reward;
-    builder.write_claim(*lead_id, Some(kept));
+    builder.write_claim(*lead_id, Some(kept))?;
     // **Lane PA, C-F4 (`palw_audit_1004_v1`)**: the lead's audit pay follows the escrow it kept (each rider draws its own at its share).
     if builder.params.audit_1004_active_at(ctx.daa_score) {
         palw_mesh_fold_v1::resnapshot_audit_pay_v1(builder, lead_id, kept_escrow);
@@ -21402,7 +21408,7 @@ fn apply_attempt(
     {
         builder.note_real_accepted(ctx.daa_score, blue);
     }
-    builder.write_claim(claim_id, Some(claim));
+    builder.write_claim(claim_id, Some(claim))?;
     builder.stamp_staged_claim_v1(claim_id, staged_contract);
     if let Some(origin) = exec_origin {
         builder.write_exec_origin(claim_id, Some(origin));

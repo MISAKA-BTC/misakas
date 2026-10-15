@@ -1,562 +1,83 @@
-# RFC07 prospective paid ClaimVerification V2 implementation checkpoint
+# RFC07 implementation checkpoint: direct detection and objective court
 
-## Scope and status
+Updated 2026-10-15 after the permanent user decision in [PRINCIPLES §8](../../PRINCIPLES.md#8-モデル計算の暗号学的証明を使用しない2026-10-15ユーザー恒久決定). This file records source implementation and remaining consumer work. These changes have **not been compiled or executed**. Existing test/node artifacts do not validate this source revision. All implementation precedes the consolidated validation phase.
 
-This checkpoint adds production code for Program, Pipeline, Segmented and typed Spec (memory, retrieval, composite) consumers under a new dormant, explicitly signed contract. It is **not acceptance evidence**, public activation, external full128 approval or measured source economics. The user's implementation-first order postpones compilation/tests to the consolidated phase. Rustfmt parsing and whitespace checks alone have run.
+## Permanent boundary
 
-The initial mathematical contract is NonInteractive. Every statement/step/stage is committed before its paid beacon. Existing interactive proof semantics do not exist in these compiled checkers: choosing StagedBeacon/Fiat–Shamir in a source-policy enum cannot manufacture them. Class registration and StageMessage therefore refuse those choices explicitly. A separately versioned interactive proof compiler/validator plus per-round future-lock/receipt migration remains implementation work; a type or the existing challenge library's generic transcript transform is not its completion.
+MISAKA does not use cryptographic proofs of LLM/model computation correctness. ZK, SNARK, STARK, zkVM, zkML, PCS-based succinct validity arguments, GKR, producer-supplied sum-check validity transcripts, recursive validity proofs and proof aggregation are prohibited in implementation, design and future research plans. Earlier proposals in this checkpoint are withdrawn; their commits are history, not an adoption roadmap. The circuit/R1CS development is removed rather than carried as a remaining implementation task.
 
-## Native authority and compatibility
+Permitted checking consists of direct randomized algebraic checks over authenticated operands, sampled reexecution, deterministic native reexecution, public localization and deterministic court. Hashes, Merkle paths, signatures and beacons authenticate identity/material/approvers and derive randomness. They do not prove the calculation is correct. A court filing supplies concrete authenticated operands for deterministic adjudication; a failed random check or a quorum is not itself a conviction.
 
-Inner64 `PaidClaimV2` carries RegisterClass, EnrollJob, Commit, Fund, Lock, Receipt and evidence/review admission subobjects. New verification class/job/enrollment identities bind the mathematical base class/job, the registrant, actual payer, producer, policy and absolute deadlines. Base V1 class/job/claim codecs, seed domains and canonical payment identity remain unchanged. An actual payer may prospectively enroll an unused base job; old claims cannot be enrolled. Thereafter an ordinary V1 reveal of that job is refused. Old receipt/tally paths cannot cover its new verification identity.
+Consensus credit uses approval by selected verifiers under explicit honest-verifier assumptions. Report the assumed honest fraction, stake/weight, operator correlation, actual participation, available model/material, deadlines and collection conditions. A nominal 128-bit conditional arithmetic bound does not establish whole-model cryptographic soundness or the existence of an honest verifier. Unknown observations remain UNKNOWN; production numbers are decided after validation, not invented by a private fixture.
 
-Aux113–119 and122–124 hold class/job/producer consent, lock/candidate authority, receipts, counters, evidence, reviews and Final projections. Aux120 is RFC08 monetary material; aux121 and inner65/66 are the root agent's signed Panel lifetime contract. The native gate and A2 inventory name the separately dormant fields. Default presets are None, Some-only params identity and mirror additions are handled by root. Public validation keeps activation refused pending independent evidence.
+## Paid ClaimVerification consumers
 
-Producer consent fixes a signed not-before anchor and finite accepted-until interval. Actual inclusion inside that interval never extends checking/challenge/dispute/liability endpoints. The source window is derived from **actual native accepted DAA**, including sparse DAA. The complete source window, native source Final floor, depth and original checking rights must fit the signed checking deadline. OPV prospective enrollment retains at least its old challenge window and changes neither existing OPV claims nor their payment rights.
+The new signed class/job/producer enrollment is prospective. A sponsor cannot retrofit a seed or expiry onto an already existing ordinary claim. Canonical native class/job/work/producer commitments, future paid source locks, actual checker calls, receipts and Final have their own versioned contract. Old V1 wire bytes, seeds, receipts and policy identities are not reinterpreted as the new path.
 
-Class admission is bounded, job consent precedes every reveal, live/total per-job enrollment is bounded, and every native object spends the common block budget. Class resource counts have hard caps. Timely exact fraud/default precedes the closing tick. Court/grace requests must fit signed H. A delayed daemon cannot rebase H. Physical material/payment obligations remain the separately signed RFC08 event-relative covenant, preserving actual P+W and earned cash.
+Native targets are Program, Pipeline, Segmented and Spec. Spec includes memory, retrieval and composite consumers. Compiled scope is derived from the actual accepted native class and plan, including pipeline stages, memory steps and composite components. Class/job/producer authority, finite stream bounds, signed lifetime admission and cumulative counters belong to the enrollment/round lifecycle. Retry, pause, restart and reorg cannot silently reset the declared opportunity budget. Existing source opt-ins cannot be attached retrospectively to the same paid work.
 
-## Seed, money and receipts
+The full-material V3 checker reads and recomputes the native relations. Names containing `proof`, `opening` or `transcript` are retained in frozen historical wire grammar; they do not authorize a computation-validity argument. Repeated audit rounds bind the previous material/check record and a paid future source. The legacy `TranscriptBoundFiatShamir` mode name describes audit-history/seed binding only. No producer polynomial message is accepted as proof of computation.
 
-Eligible source profiles and native checker bond/operator/weight candidates freeze at producer commitment, before future entropy. The checker snapshot is committed by the V2 subject. Native seats are selected from that snapshot with the verified future seed; joining after entropy cannot introduce a candidate. Distinct operators are enforced in native seat selection, and not represented as proof of independent economic control.
+The V4 contract has its own dormant fence and Params identity/mirror, separate from V3. The earlier V3 private profile cannot silently admit a different V4 semantic contract. Public presets remain disabled. A versioned private fixture is mechanics evidence only, never independent review or economic approval.
 
-Fund atomically writes the frozen target/fee/cost/sponsor authority and uses the existing strict native prepaid debit (same checkpoint). Existing paid opt-in62, source R, settlement/refund, restart/cold-row projection and reorg journal remain the common financial path. The consumer's original income R is extended to signed H through the same native income identity with no new credit/reservation. A failed nested debit rolls back every authority/row write.
+## Direct relation inventory and retired tags
 
-`challenge_seed_v1` takes a re-derived verified paid beacon and the full new subject. The seed is passed directly to the compiled checker; it is never inserted into V1's beacon slot for accidental rehashing. The V2 rejection stream has a finite block budget shared across all scopes/stages and fields, distinct stage/scope/instance/repetition labels, and no biased fallback. Exhaustion is unavailable, not success/fraud.
-
-Program and Pipeline use the seeded mathematical verifier, including decode, authenticated material and exact edges. Typed memory/composite use separately labeled seeded checks per committed step/stage; retrieval remains exact. Segmented uses its existing exact full replay and authenticated root comparisons; diagnostic subsets cannot produce complete coverage. A locally verified success has a private type and cannot be deserialized from an asserted receipt. Native signed receipts have a new identity and bind enrollment/class/assignment/source context/seed/evidence/transcript/signer/deadline. Quorum is distinct native checker operators. A receipt is still seat assurance, not a native recomputation of all tensors.
-
-Standing source failure before consumer decision invalidates the pending lock, removes cached complete coverage and causes neutral timeout; it is not producer fraud. Decided income is not erased by this hook. V2 Final projection preserves the one canonical base job settlement. A paid prospective OPV Final is labeled PaidClaimV2 and excluded from the legacy PanelIndependent source pool.
-
-## Approval/evidence admission
-
-LifetimeReviewScopeV3 commits chain/ruleset/start/end, complete historical suite/policy registry, Q/G/beacon caps and independent review/source/economic roots. A chain-wide rooted counter, admitted event identities and historical suite/policy pairs survive cold restart. Changing policy, ruleset or review id cannot reset Q or silently omit historical authorized pairs. Reorg undoes canonical writes; offline fork/grinding choices remain reviewed explicit external bounds, not a fictional local observation.
-
-Before granting a scoped admission, native code compares the review's raw algebraic bound with the actual registered plan/positions/repetitions and typed step/stage union. The source policy's M127 label/repetition declaration cannot overstate a CRT/checker result. Unknown binding/source/coverage assumptions fail existing full composition. Shipped registries stay empty.
-
-EconomicEvidence requires the exact precompiled release observation identity and reviewer, measured interval/root, actual RFC08 native payment observation, exact original source entitlement/material receipt, prepaid fee terms and source operator. It rehashes a canonical native header, reconstructs the committed transaction Merkle root, matches the actual coinbase transaction and exact aggregate queue output script/value, and identifies the source fee's portion through its authenticated entitlement. A fee promise, FeePaid ledger event, cached transaction id, queue, coalesced recipient amount, missing/historical entitlement or opaque report digest alone does not pass. Costs remain external observations authenticated by the configured review scope; code generates none. IndependenceEvidence similarly requires an exact release identity/external measurement and disjoint observed control identities; distinct keys alone are insufficient.
-
-## SDK/CLI and outstanding acceptance
-
-The SDK exposes rooted all-target class/job/derived-commit/fund builders, native role-checked ML-DSA signing, future source readers, portable public material, all-target verification and private-success receipt generation, and a Final reader usable after the checking interval. `palw-class claim-v2 class|job|commit|fund|lock|verify|sign|inspect|final` uses these typed paths. Drafts/signatures are offline; the existing native submit-object carrier performs actual inclusion. Roots/anchors must be authenticated against the client's selected chain. Root's complete-bootstrap generator must invoke these SDK paths for real signed new claims; that actual CLI/node acceptance is not established by merely adding builders.
-
-Consolidated verification must cover V1 fixed vectors/codec/default identity; all four target forms and typed subkinds; OPV prospective rights; delayed inclusion/sparse DAA; source failure/replay/cold restart/reorg; native UTXO debit/refund and same R; source/economic proof substitution and missing provenance; stream exhaustion/CRT/scope/stage separation; full historical review counter exhaustion/no reset; signed CLI through actual node receipt/Final/material history; and resource/cost/100k/P2P acceptance. External full128 review, source independence/censorship measurements and actual profitable source participation remain evidence gates. No code checkpoint or old test executable can substitute for these.
-
-## Interactive full-material opening contract (source checkpoint, not acceptance)
-
-The new unshipped `PaidClaimClassV2` carries an optional, producer-visible
-`CompiledClaimProofPlanV3`. The implemented compiler is explicitly **full-material
-opening**, for Program, Pipeline, Segmented, and TypedSpec, including prospective
-OPV classes. It checks each complete immutable statement using the actual seeded
-math checker (or exact segmented replay). It does not represent a compact sumcheck
-compiler, trained-model provenance, random-oracle proof, or independent review.
-The compiled plan commits target, interactive mode, finite rounds (1–64), stream
-budget and complete opening byte cap (at most 64 MiB). Plan identity, rather than
-only the underlying math checker identity, is required in lifetime review scope.
-
-Each `StageMessage` is signed by the original enrolled producer. It fixes the
-canonical material root, round index and prior completed transcript. The signed
-absolute lifetime remains unchanged. Round zero has no prior transcript; later
-rounds require complete previous quorum. Staged mode derives a new source context
-from this exact message at its native acceptance DAA, opens its seal window
-strictly later, and requires a new sponsor-owned native fee reserve through the
-same strict inner61 funding path. Source terms, native collateral reserve, source
-fees, common ticks/refunds, material holds and journal/reorg use existing V5 source
-machinery; there is no second offchain budget. The before-S input filter now
-includes authenticated ClaimVerification targets, so a mandatory before-S sponsor
-fund can reach that native adapter.
-
-Fiat–Shamir mode requires the initial paid source lock. Every round recomputes the
-existing `FiatShamirTranscriptV1` transform from the plan-bound statement, source
-anchor/output and **all** earlier messages and challenges; the initial source seed
-is not independently reused as every later challenge. Source and query admission
-counts are separately charged to the persistent lifetime counter. Neither mode
-can reset signed H, choose a new checker snapshot after learning entropy, or retry
-by re-enrolling an existing base claim.
-
-Aux123 holds authenticated round rows, lock, transcript and distinct-seat receipt
-vector bounded by the existing committee capacity. SDK root readers rederive the
-actual paid beacon and round challenge. `bind_opening_v3` authenticates canonical
-material against the producer message before any all-target actual verifier can
-produce its private complete-result capability. Native `RoundReceipt` validates
-assignment, signer, seed, context, entire statement, message, transcript, round
-and fixed deadline; partial coverage cannot close a round. Native cold/cache
-ledger projection requires **all** signed rounds complete before tally/Final.
-Pending round locks lose eligibility if source standing Final fails. Already
-terminal monetary rights are not erased. The new Final projection additionally
-binds completed round count and last transcript root.
-
-CLI commands include MESSAGE, ROUND-FUND, ROUND-LOCK and ROUND-VERIFY; the latter
-executes actual math and opens the exact committed public material. Original V1
-wire/codecs remain unchanged; the new, unshipped inner71 (renumbered from 64) sub-enum and class/receipt
-formats are versioned integration work. Public presets and approval registries
-remain disabled. Compact proof compiler families beyond full-material opening
-require separate explicit contracts, implementations and review before they can
-be claimed or admitted.
-
-## Private signed Program work generator
-
-`claim_paid_v2/private_bootstrap.rs` starts from caller-pinned native class/job
-rows after conformance, authenticates every parameter tensor against registered
-commitments, performs real Greedy TIR execution for each generated token and
-exports the final trace/evidence/material and salted commit. Its signed enrollment
-and fresh-reader receipt builders call the same actual SDK path as user consumers.
-The independent kaspad `private_integration/claim_paid_bootstrap.rs` accepts a
-bounded request with separately pinned LR/AR and an explicit private producer
-card, writes fresh 0600 files, and leaves immutable complete-v1 artifacts intact.
-It does not invent inclusion, a paid source lock, quorum, native Final or payment.
-The dedicated feature-gated private fixture binary is integrated by the RFC12
-owner. Actual inclusion, assigned receipts, new Final and source payment acceptance
-remain consolidated verification work after all source changes finish.
-
-No new compiler, SDK or native tests were run for this source checkpoint, following
-the requested implementation-first order. Required acceptance coverage includes
-both modes over all four target forms and prospective OPV; before-S strict native
-funding; zero/late/duplicate/wrong-actor/partial-message refusal; source/fee/material
-substitution; all-round rather than first-round closure; missing/altered openings;
-source failure; absolute-expiry handling; cold restart; and journal/reorg replay.
-
-The private producer preflight uses `producer_resources.rs`, an exhaustive table
-of all 25 current `Prim` variants, before artifact decode or TIR execution. It
-counts retained whole-trace i128 buffers, explicitly cloned operands and Hist
-prior rows, each primitive's broadcast/index/TopK/matmul/concat scratch, sequential
-row/column Merkle levels and copied leaves, commitments, retained encoded artifact,
-opening material and simultaneous serialized buffer capacity. `trace_stage_v1`
-restores Fixed/Hist from already retained node values, with no hidden producer
-state cache. A new primitive forces the exhaustive allocation match to be updated.
-Private workspace/material/execution work hard caps are 256 MiB/32 MiB/100M, and
-actual job positions are used to rederive execution bounds before repeated Greedy
-work. Source-bound numbers are exported as private preflight bounds, never measured
-host consumption, network resource approval or source profitability.
-
-## Authenticated lookups and private factory
-
-New unshipped aux115 has 64-byte context authority keys and 65-byte `0x49` plus
-enrollment-ID / `0x42` plus base-claim-ID index keys. Aux123 has 64-byte round keys
-and 65-byte `0x49` plus staged-context keys. Fixed `PalwPaidClaimIndexV3` rows bind
-version, kind, owner and primary target. Native journal creates pointers atomically;
-restore rejects missing or substituted pointers. These lookups no longer scan all
-retained enrollments/rounds. Cold receipt projection reads only assigned committee
-seat keys, avoiding a full receipt scan per claim. Restore counts admissions once
-in bounded temporary per-job scratch (at most 65,536 fixed entries), and validates
-primary rows against one loaded ledger without cloning that ledger per pointer.
-All new index bytes count toward the native inventory; the typed wire preflight
-must dispatch the new 65-byte key variants before parsing their bodies.
-
-`private_integration/paid_claim_factory.rs` creates a distinct, exact paid-v3
-private configuration from complete-v1, with source/fee/ClaimV2/typed-root/material
-and mandatory native budget/reporter/provider dependencies, mirrored from DAA 0.
-Whole reward-block B-quantum and one-KAS capital units are explicit mechanics-only
-caps, not market parameters or release approval. Every proposal is value checked;
-actual source/court timing and prerequisite gates are retained. Only an ephemeral
-validation copy makes these specifically unreleased activation fields dormant.
-Public startup/presets keep their existing refusal, and the private node compares
-its full consensus fingerprint with this exact factory before serving loopback.
-
-`paid_bootstrap.rs` preserves the old complete-v1 exporter and generates a separate
-base-material subtree. It verifies identical genesis and actual paid-v3 native
-registration scope/signature, re-signs a new fired-policy envelope, derives the
-actual artifact, and commits the new paid ruleset in an explicitly versioned
-conformance statement. Its manifest never promotes old control/receipt evidence
-and reports new native inclusion, conformance, paid work, source lock and Final as
-unobserved. Actual acceptance remains pending consolidated verification.
-
-## Compact relation compilers (2026-10-15, round 3)
-
-**Status: source checkpoint.** Not compiled and not tested, following the
-implementation-first order. Not reviewed, not wired into `PaidClaimClassV2` rounds,
-and not admitted: registration needs the dormant ClaimV2 fence active plus an
-approved review tuple, and the shipped registry is empty. This is no PASS.
-
-**What exists.** `misaka/palw/kernel/src/claim_compact_v1.rs` compiles a checked
-`VerificationPlanV1` relation by relation (`compile_plan_v1`) into a
-`CompactPlanCoverageV1`. Every relation is either compiled to a compact relation
-proof or kept on its descriptor's exact checker. A (family, checker) pair outside
-the inventory refuses the whole plan, and so does a typed-spec target or an
-undeclared grinding budget.
-
-### Relation classes in the shipped plans
-
-K2-TIR-v1…v5 use these (family, checker) pairs:
-
-- DenseMatrix with `FreivaldsM127` / `FreivaldsCrtV2`
-- ExactArithmetic, Structure, QuantRange, Nonlinear and Selection with `ExactRecompute`
-- RecurrentState with `StateContinuity`
-- MediaPipeline with `EdgeRecompute`
-
-A test pins that each of these pairs appears in `COMPACT_RELATION_INVENTORY_V1`.
-
-### Implemented compilers
-
-Each compiler has a distinct identity (`compact_relation_compiler_id_v1`).
-
-**`FreivaldsSeededV1` (`MatMul`)**
-- **Moduli:** the plan's `relation_moduli`, so 2^127−1 alone or the CRT prefix.
-- **Randomness:** one vector `r` per (repetition, modulus), drawn from the paid round seed's `Freivalds` stream. The weight projection is shared across batch slices.
-- **Proof:** a header only.
-- **Bound:** `ε ≤ 1/p` per slice and repetition. Instance bits are `t·b₀`.
-
-**`LinearEvaluationV1` (`Add`, `Sub`, numpy broadcast)**
-- **Check:** at one random point `ρ` from the `Vector` stream, `ỹ(ρ) = ã(ρ) ± b̃(ρ)` over the zero-padded flattened output.
-- **Bound:** `ε ≤ ν/p` by Schwartz–Zippel on the multilinear difference.
-- **Scalar case:** with `ν = 0` the identity is exact.
-
-**`SumCheckHadamardV1` (`Mul`, broadcast)**
-- **Check:** a sum-check of `Σ_x eq(ρ,x)·a(x)·b(x)` with degree 3 and `ν` rounds. The final claim is checked against `eq(ρ,κ)·ã(κ)·b̃(κ)`, which the verifier evaluates from the operands.
-- **Per-repetition bound:** `ε ≤ ν/p + 3ν/p`.
-- **Grinding:** round challenges are Fiat–Shamir over the transcript, keyed by the seed. The instance bound is therefore `b₀ − ⌈log₂(4ν + 3Q)⌉`, and repetitions are not credited.
-
-**`SumCheckReduceSumV1` (`ReduceSum{axis}`)**
-- **Layout:** the operand is laid out as `[output index][j]`, with `j` padded to `2^ν_j`.
-- **Check:** a degree-1 sum-check over `j` of `Ã'(ρ, j)`.
-- **Bound:** `ε ≤ ν_o/p + ν_j/p`. The instance bound is `b₀ − ⌈log₂(ν_o + ν_j + Q)⌉`.
-
-### Common rules
-
-- **Moduli and alias argument:** the moduli are the fewest Mersenne primes whose product exceeds the relation's integer error span. The verifier checks every operand and the output against its dtype range, so a nonzero integer error is nonzero modulo one used modulus. The bounds use the smallest such modulus.
-- **Proof rejection:** a proof is refused if it carries
-  - a non-canonical field element,
-  - a wrong round count,
-  - another relation or repetition count, or
-  - a size above its compiled byte bound.
-- **Stream exhaustion:** this yields `Unavailable`, never success or fraud.
-- **Fault localization:** `exact_relation_fault_v1` localizes a rejected relation to the first wrong output element for the existing exact court.
-- **Commitment binding:**
-  - `verify_relation_committed_v1` authenticates operands against the claim's commitments.
-  - `compact_proof_root_v1` / `bind_compact_round_message_v1` bind the proofs to a signed round message.
-- **No compact proof larger than its material:** an arithmetic relation is compiled only when its proof bound is below its operand bytes. Otherwise it stays exact.
-
-### Accounting
-
-- **Composed bound:** `compact_check_families_v1` gives one `CheckFamilyV1` per compact relation. Each carries its instance bits, with `instances = instances_per_position × max_positions`. `compact_composed_bound_v1` applies the union bound and the binding term.
-- **Lifetime term:** `compact_lifetime_failure_term_v1` turns the per-attempt bound into a `CumulativeFailureTermV1` over lifetime admissions. It refuses a budget that already charges `Q`, so `Q` is not counted twice.
-- **Contract binding:** `CompactRelationContractV1` binds the coverage root, the claimed bits, the binding bits and per-position proof/work bounds. `check` refuses an unbound coverage, a claimed bit count above what is derived, and any exceeded bound. `suite_id` is the identity a review tuple must name.
-
-### Refused, with reasons (`COMPACT_REFUSED_FAMILIES_V1`)
-
-- **GKR-style layered chain and PCS-backed evaluation:** there is no polynomial commitment. A hash-Merkle tensor commitment cannot open a multilinear evaluation.
-- **Lookup arguments (QuantRange, Nonlinear) and permutation/lookup arguments (Selection, routing):** these stay on exact recompute.
-- **Compact memory argument:** state continuity stays on wiring plus exact recompute.
-- **Staged-beacon sum-check:** one beacon per round is not compiled.
-- **Typed-spec targets:** there is no plan relation map.
-
-`CompiledClaimProofPlanV3::validate` refuses a compact relation compiler id by name (`COMPACT_RELATION_NOT_A_V3_PLAN_V1`). It never reads such an id as a full-material plan. The family-level stub contract keeps refusing.
-
-### Honest limits
-
-- **Reads:** verifier reads are not reduced below the operands' size.
-- **Message size:** the gain is the round message, with an explicit per-relation error.
-- **Elementwise error:** for elementwise relations the compact check adds an error term where exact recompute had none. Compiling them is the class's opt-in (`compact_exact_arithmetic`).
-- **Fiat–Shamir review:** the transform's grinding bound is a declared `Q`, which needs external review.
-
-### Required next
-
-1. Compile all the new code.
-2. Run the module tests:
-   - completeness on honest products and arithmetic, including the CRT case and broadcasting;
-   - tampered outputs caught;
-   - forged and non-canonical transcripts refused;
-   - bound arithmetic at fixed points;
-   - the composition and lifetime terms;
-   - refusal of unknown pairs and unimplemented families;
-   - a shipped fixture plan fully covered, with registration refused as unreviewed.
-3. External review of the bounds and the transform.
-4. A PCS/GKR suite.
-5. Wiring into paid rounds and receipts.
-
-
-## All-target private producer/exporter (2026-10-15 integration workspace)
-
-Source only; no build, test or node run has been performed for this checkpoint.
-`claim_paid_v2/all_target_bootstrap.rs` adds real generation for Pipeline,
-Segmented v4 decoder and v5 encoder, and every TypedSpec form (Memory, Retrieval,
-Composite). Program continues through its existing implementation. Artifact
-parameters must match the registered native commitments (v3 tensor commitments
-for segmented classes); tiled prompts are authenticated against the job root;
-retrieval snapshots are rebuilt against the registered item count, dimensions,
-slice size and Merkle root. Memory uses the chain-authenticated current line head
-and actual step StateWrite outputs. Composite uses actual preceding generated
-ids, payloads and last logits to construct later stages. Each result carries the
-same native salted commit, public material, producer-signed enrollment and rooted
-receipt builder as Program. This extends generation and adapters, and does not
-assert that these paths have been accepted by a live node.
-
-Every stage is bounded before its TIR execution. Bounds include retained traces,
-external/random input copies, aggregate composite/memory steps, snapshot sort and
-Merkle data, encoded artifact, public material and serialization. The private
-hard caps remain 256 MiB workspace, 32 MiB material and 100M execution work;
-these are fixture refusal bounds, not measured network policy values. The
-exporter adds the entire restored request/route and file buffer to the workspace
-bound before running a producer. An oversized registered class is refused by this
-finite private generator even when a smaller input might fit.
-
-The feature-only private exporter retains the old Program request codec V3 and
-accepts `PrivatePaidNativeRequestV4` for all targets. V4 has the same independently
-pinned LR/AR, native class/job/enrollment terms and private signing card, plus
-stage-indexed parameters, a tiled prompt and public snapshot items. The existing
-`--request` invocation dispatches by the leading version. The manifest names the
-request version and native commit kind; the work file name stays
-`program-work-v3.borsh` for existing consumers, and its salted commit discriminant
-identifies the actual target. No file is an inclusion, source payment or Final
-receipt. Before Borsh allocates collections, the exact request schema scanner
-checks the header, every ledger/aux row using the native row codec scanner,
-canonical sorted map keys, tensor rank/product/dtype byte width, bounded snapshot
-item/key/payload counts, exact EOF and the combined decode heap. A 64 MiB input
-file bound is checked independently. Program V3 requests retain their layout and
-are normalized to the same bounded all-target input contract.
-
-Deferred acceptance source must cover honest work and an altered opening for
-Program, Pipeline, segmented decoder/encoder, Memory, Retrieval and Composite;
-both interactive modes; actual source funding/lock and assigned receipts; native
-Final/payment; restart and journal/reorg. Pure schema/resource tests added here do
-not substitute for those end-to-end cases. Compact family compilation and its
-native consensus contract remain a separate open implementation boundary; the
-all-target producer does not turn a full-material V3 plan into a compact proof.
-
-
-The native source opt-in adapter now resolves Program, Pipeline, Tiled/Segmented
-and TypedSpec jobs through one `beacon_source_job_profile_v1` function at both
-admission and cold restore. The old two-form lookup rejected otherwise valid
-salted typed/segmented work, despite the shared native claim admission and Final
-adapter already supporting those forms. The resolver grants no eligibility:
-the frozen target, candidate exclusion, OPV eligibility, exact live ordinary seal,
-registered payer, distinct per-target reservation and concurrency/horizon rules
-still apply. No ordinary seal acquires a source deposit implicitly. The added
-unrun typed-retrieval source test exercises real registration/job/retrieval,
-two target reservations against one ordinary seal, duplicate refusal, cold row
-rebuild, actual salted reveal, native Final and post-horizon refunds. Separate
-funded v5 fee collection and native-process acceptance remain required validation.
-
-
-## Registered native compact coverage binding (2026-10-15 integration)
-
-Source only, uncompiled and untested. The prior single-plan compact registration
-API accepted a caller's `coverage_root` without rederiving the entries from the
-actual program/plan. The API now requires both program and plan and recompiles
-before checking the review registry; an omitted relation under a relabeled
-coverage root is refused before review lookup. The dormant core wrapper forwards
-the program/plan explicitly. These arguments must be taken from authenticated
-native class rows; a self-consistent submitted plan is not chain authority.
-
-`claim_compact_v1/native_v2.rs` derives the whole map from the registered kernel
-ledger: Program/Segmented plans, every Pipeline stage, the Memory model plan with
-its native `max_steps` multiplier, every Composite model stage, and explicit exact
-retrieval/snapshot, memory-continuity and pipeline/composite-edge obligations.
-Cold validation recompiles and compares the entire map. The composed bound sums
-all probabilistic component instances (including every memory execution), then
-binding and the declared retry/beacon/grinding/adaptive budget. Its lifetime term
-requires per-attempt `Q = 1` and charges lifetime admissions once. Proof/work limits
-are checked with aggregate position × execution bounds. Unknown families still
-refuse; exact obligations are visible and not counted as compact lookup proofs.
-
-The core rooted reader `palw_native_compact_coverage_v2` and SDK CLI
-`claim-v2 COMPACT-COVERAGE` expose this map from separately pinned native LR/AR.
-The CLI requires explicit arithmetic opt-in, repetitions and transcript query
-budget; it assigns no production values or review status. Added unrun tests cover
-omitted relations, an erased memory-step multiplier and a missing snapshot exact
-obligation against cold rebuilt native rows.
-
-This closes the registered-class relation map and union accounting boundary. It
-does not close compact native block enrollment/round-message/receipt/Final
-migration: V3 full-material verification remains its own contract. GKR/PCS,
-lookup/permutation and compact memory arguments also remain unimplemented; exact
-retained checks are not described as implementations of those arguments. The
-independent 128-bit review registry remains empty, and no new public fence is
-armed. Their completion and consolidated acceptance remain outstanding.
-
-
-## Prospective consent and source dependency exclusion (2026-10-15 integration)
-
-Source only, uncompiled and untested. Paid-job enrollment previously required no
-existing claim, but did not exclude an existing ordinary seal or source opt-in.
-A job payer could therefore impose new checker/lifetime terms after another
-producer had signed its ordinary work/source commitment. Native enrollment and
-its SDK builder now share `paid_job_enrollment_is_prospective_v3`: no claim, no
-live ordinary seal and no pending independent-source contract. An expired,
-unclaimed job can be enrolled only after prior observable work contracts end.
-
-The reverse overlap is excluded too. Both native source opt-in kinds inspect
-canonical paid-job enrollment rows before ledger admission or any debit; a
-checker-dependent paid job cannot enter the Panel-independent entropy pool.
-Paid-claim Commit and SDK drafts independently refuse a pending source contract
-on that job. Cold restore rejects the same incompatible pending-source/paid-job
-combination, using a single bounded borrowed source-job set rather than rescanning
-all historical sources per job. Source fees/deposits already earned under a
-terminated contract are not erased or reclassified. No existing claim, seed,
-codec, earned cash or public activation is changed.
-
-An unrun kernel scenario covers a fresh posted job, refusal to migrate after its
-real ordinary seal/source opt-in, and the later ability to enroll a still
-unclaimed job after those contracts end. Native fold/reorg/cold-state and SDK
-receipt end-to-end verification remain part of the consolidated test phase.
-
-## 2026-10-15 native compact V4 consumer migration (source only)
-
-A new `palw_claim_compact_v4` capability separates the new semantics from all
-previous V3 private profiles; shipped presets remain `None`. It has finite named
-contract/opening/proof/work/stream capacities, with no new production parameter
-approval. The original V3 plan fields, discriminants, serialization and hash
-preimages remain unchanged. A plan with wire version 4 names the registered
-whole-native relation contract, complete native coverage and signed adversary
-budget in its compiler identity. Aux135 key64 holds that registration; key65
-`0x50 || round_id` holds the producer's post-seed binding and canonical proof.
-New operations are appended inside inner71.
-
-The material message is signed before the actual future source lock. After the
-lock, `COMPACT-PROVE` executes the actual checker over Program, Pipeline,
-Segmented and typed Memory/Retrieval/Composite inputs. Only then does the
-producer sign `COMPACT-BIND`. The native object carries the complete proof
-bundle, retained by native aux/carriage/journal, rather than extending an older
-provider's consent to seed-dependent transcript bytes. Registration checks the
-whole proof's located-instance/framing bound against actual native carriage.
-`COMPACT-VERIFY` requires this included binding, authenticates all material with
-the existing native checker, verifies the compact relations, and rejects
-missing, duplicated, replayed or unused proofs. The producer session cannot
-create a success receipt. Receipt transcripts, prior-round FS challenges,
-restore consistency and native Final bind the included proof root. Funding,
-source deposits and refunds retain the existing strict same-R native path.
-
-The segmented adapter currently retains exact roots/decode replay and performs
-an additional streaming proof-operand replay, with a single authenticated prior
-position cache. Its work bound charges these separate contributions; this is
-not a claim of sublinear execution or material acquisition. The implemented
-compact families remain Freivalds, linear Add/Sub, Hadamard sumcheck and
-ReduceSum sumcheck. The nine-family inventory remains exhaustive, but GKR/PCS,
-lookup/permutation and a compact state/memory argument are still unimplemented;
-`ExactRetained` is not counted as completing those arguments. No independent
-128-bit review, source-market economics or source-independence approval is
-fabricated by this migration. Public activation still refuses.
-
-All new source and negative/round-trip test cases are uncompiled and unrun as
-requested by the implementation-first order. Consolidated validation must cover
-new native registration, signed all-target work, source funding/lock, proof
-inclusion, assigned receipts, Final, cold restore and reorg; old V3 bytes and
-private fingerprints require regression checks in that later phase.
-
-### V5 semantic circuit source boundary (2026-10-15; uncompiled)
-
-`claim_circuit_v5` now lowers the twenty-five native TIR primitives into actual
-Boolean gates. Scalar arithmetic checks signed i128 overflow, the three exact
-rounding rules and dtype ranges. The frozen Q24 Exp/Rsqrt/Ln algorithms are
-lowered through integer gates rather than witness-provided function results.
-Tensor indexing reuses public shapes; dynamic Gather, TopK and comparisons use
-selectors. Reductions enforce positive and negative partial-sum extremes.
-HistAppend reuses the supplied prior-row wires, and StateWrite applies the
-native saturation interval. The existing reference type checker is exported
-without changing its rules, so this constructor uses the same accepted dtype
-and shape relations as native TIR (including signed Gather indices).
-
-The native primitive constructor calculates each existing input/prior/output
-tensor commitment from these same wires, including BLAKE2b compression and
-native dual/tiled/hiding leaf and tree preimages. An output digest supplied as
-a public constraint is not substituted for the computation. Explicit input
-Booleanity constraints `b * (1-b) = 0` are included for a later field proof;
-the Boolean evaluator alone would not establish this for a PCS witness.
-
-A counting pass runs the same emitter without allocating gate/witness/tensor
-wire vectors. It computes exact gate/assertion counts, then a retained owner
-reserves the typed graph before allocation. Output wire vectors and bounded
-reference type-check metadata have separate reservations before allocation.
-The evaluator reserves its witness while the graph owner remains live. These
-are deterministic typed allocation bounds, not an approval of process RSS,
-allocator overhead, cryptographic security or native network resource limits.
-
-Source tests cover reference indexing/ranking/reduction, signed Gather indices,
-state/history, altered outputs, altered native inputs, rounding and overflow.
-They have not been compiled or run. This boundary does not yet implement a
-whole-trace/program constructor, a PCS/GKR argument, a V5 native claim or
-activation. Consequently it does not close the missing argument-family rows,
-claim a compact verifier cost, or establish the required independent 128-bit
-review. Old V3/V4 bytes, roots and dormant gates remain separate.
-
-The following source boundary adds `compile_registered_program_trace_v5`.
-It borrows the actual registered single-program class from a ledger, compares
-its decoded program cache to immutable canonical bytes with a streaming writer,
-and binds the program root and the registered parameter map. It unrolls every
-block occurrence and position from zero, with public token/position constants,
-exact carry handles, initial zero Fixed states, position-entry state reads, and
-last-window history handles. All native node roots are constrained, including
-history/state results; the returned public binding names the native evidence
-and output roots. No separately chosen intermediate recurrence is a witness.
-The arena and write/history/reference buffers are admitted from actual instance
-and node counts before allocation. Whole-graph hashing now streams Borsh bytes
-instead of allocating a second serialized graph, and packed input evaluation
-borrows bytes without allocating an input-bit copy.
-
-This constructor consumes the registered ProgramV1 representation. Native
-pipeline/ProgramV2 and typed memory stage composition, claim/job binding of the
-new public circuit binding, PCS/GKR proving and verification, native V5 storage,
-SDK/CLI migration and independent review still remain. The new test source
-checks two positions whose post block must read the entry state (outputs 1 and
-3, rather than 2 and 4), history, altered node commitments, cache substitution
-and refusal before metadata allocation; none has been compiled or executed.
-
-The next algebraic source layer (`claim_circuit_v5::r1cs`) streams actual sparse
-rank-one constraints from the semantic graph. For example XOR becomes
-`(2a) * b = a + b - output`; AND, NOT, constants, input Booleanity and public
-assertions have explicit field equations. Every input also receives an
-independent `b*(b-1)=0` row, so a future decoder cannot omit bit constraints by
-presenting an arbitrary graph. Variable zero is fixed to one. Canonical field
-encodings are required. Exact row, variable, nonzero-term and padded-domain
-counts are checked before lowering; the immutable graph is borrowed rather
-than cloned into three sparse matrices. Matrix multilinear evaluations are
-implemented over those real coefficients with an explicit linear scan and
-field-multiplication bound. This scan is not a compact-verifier cost claim.
-
-This is a concrete relation for the later polynomial IOP. It is not itself a
-polynomial commitment or a GKR/Spartan/Brakedown argument. Reading the primary
-[GKR publication](https://www.microsoft.com/en-us/research/publication/delegating-computation-interactive-proofs-muggles/)
-and [Brakedown paper](https://eprint.iacr.org/2021/1043) does not substitute for
-implementing or reviewing those protocols. No random-code distance, query
-count, repetitions or 128-bit composition budget is approved by this source
-layer. New constraint-corruption and matrix-coefficient test source is unrun.
-
-`pipeline_edges` adds executable lowering for all seven external edge kinds:
-JobScalar, JobTokens, StageRows, StageFinal, StageRowCount, JobTokenCount and
-JobImage. Upstream rows/final values reuse the original symbolic tensor wires.
-Public templates use checked lengths and indexed reads without expanding a
-second token list. Image shape, exact byte length and declared interval are
-checked. Stage trip/token/stream row-start derivation is allocation free.
-Random inputs use the actual native R digest/word/Gaussian implementations,
-with the real seed/item/step and a fixed digest cache; hash-block work is
-bounded before the output wire vector is allocated. Output wire ownership is
-reserved from the resolved typed shape. This public deterministic R work is
-explicit and does not count as a compact verifier optimization.
-
-These edge emitters still need the shared ProgramV2/pipeline constructor to
-supply actual prior-stage outputs and authenticate image/finalized-output job
-facts. They do not independently establish native job authority or a complete
-pipeline proof. New source tests cover all seven edge kinds, padding, signed
-upstream values, native R agreement and a zero-hash-budget refusal; unrun.
-
-### Prospective provider handoff source (2026-10-15; uncompiled)
-
-The new `palw_prospective_kernel_material_v4` boundary uses an authenticated
-native checkpoint and the actual producer bond's key. Its distinct ML-DSA
-purpose signs the exact prospective salted commit, ledger/aux roots, finite
-admission interval, canonical provider roster and material manifest. There is
-no material-consent digest in this intent and no claim row supplied over wire.
-An unsigned SDK rehearsal and the signature-checked provider entry both replay
-the actual kernel admission on a retained local candidate ledger. This preview
-does not debit native escrow, install a claim, emit settlements or grant
-accepted-chain authority. Native admission must still occur afterwards. The
-specialized mutation/workspace owner API is being completed with RFC06 before
-consolidated validation.
-
-`TypedKernelV4` appends codec 3; codec bytes 0–2 keep their meanings. Its exact
-court inventory adds all snapshot slices and every returned retrieval entry to
-memory positions/pre-state and composite model positions. The old position
-bundle omitted these retrieval scopes. The new bounded range visitor,
-membership check and classifier authenticate each unit with the native
-snapshot/entry/position verifier. Canonical ordering and exact cardinality
-reject duplicate or omitted units. Source tests use real snapshot openings and
-exercise missing, duplicate and corrupt units, plus frozen old codec tags;
-uncompiled and unrun.
-
-The owned preview retains the candidate-ledger allocation ticket, the manifest
-and the native producer/provider keys. The provider daemon must durably hold
-actual bytes before signing 240/242, then check actual native adoption. Full
-artifact parameter retention, tiled/row transport, durable intrinsic context
-recovery after pruning, SDK bundle conversion and the final transport consumer
-are still being connected. This court-unit boundary does not claim these
-remaining paths are complete or that a caller-supplied consent is evidence.
+`misaka/palw/kernel/src/claim_compact_v1.rs` now emits only direct detection checks or `ExactRetained` native execution:
+
+| Relation family / operation | Execution |
+| --- | --- |
+| DenseMatrix / MatMul | Direct seeded Freivalds over actual authenticated operands, including native CRT/integer-span constraints |
+| ExactArithmetic / Add, Sub | Direct random-point equality check when explicitly selected; otherwise exact |
+| ExactArithmetic / Mul, ReduceSum, Cast | Deterministic native recomputation |
+| Structure | Exact native index/copy relations |
+| QuantRange | Exact native rounding, saturation and range semantics |
+| Nonlinear | Exact registered fixed-iteration native semantics |
+| Selection | Exact comparison, TopK, gather and routing |
+| RecurrentState | Exact state/history continuity and native court |
+| MediaPipeline | Exact stage edges, external/random inputs and boundary semantics |
+
+`SumCheckHadamardV1 = 2` and `SumCheckReduceSumV1 = 3` remain frozen Borsh identities for historical decoding/rejection. Their prover, Fiat–Shamir round generator and sum-check verifier implementation are deleted. New compilation keeps Mul/ReduceSum exact. A manually injected historical tag is rejected by generation, verification, contract coverage and native V4 record validation; it receives zero conditional detection bits even in scalar/zero-round cases. Native V4 accepts only permitted direct-check tags with empty producer payloads. Neither an old tag nor a review tuple can override the prohibition.
+
+Native target coverage is rederived from the registered class. It includes all component executions and exact boundaries; an exhaustive inventory does not imply every relation is probabilistic or inexpensive. Full operand reads, exact nonlinear/routing work and localization costs remain explicit. The conditional error union counts all direct randomized checks, positions, stages, steps, retries, grinding and lifetime opportunities. Exact checks contribute no random-check error only when actually executed. Source independence, honest participation and data access are distinct assumptions.
+
+## Paid source and economic authority
+
+The funded source path uses native bond collateral and the shared R budget, strict fee debit, distinct reserve/tick/settlement/refund transitions, retained material and reorg journals. The source operator/key roster and canonical target/context are fixed before entropy. One deposit cannot be reused as authority for arbitrarily many attempts. Counters and enrollment identity must survive cold restart and rollback with their dependent native facts.
+
+Distinct native operator IDs enforce a declared native separation rule, not independent beneficial ownership. Independence/censorship evidence admission binds the observed interval, reviewer and actual source workload. Unknown control, cost or market observations cannot be promoted to a safe default. The external source-independence/censorship measurements and actual profitable service remain unverified observations, not facts generated by code.
+
+Actual income evidence requires the authenticated native payment observation, original entitlement, material receipt, queue, paid block/DAA, exact fee portion and full coalesced coinbase queue output. A `FeePaid` event, promised amount, queue row or opaque digest alone is insufficient. Transaction/block/output verification must come from actual own-node authority. Recovery/retention fees and an already funded escrow are not charged twice. External receipts or market data are never synthesized by private mechanics fixtures.
+
+## Complete provider material codec and prospective handoff
+
+`PalwMaterialCodecV1::TypedKernelV4` is a newly appended signed codec; legacy NativeHeldComplete/KernelPositions/SegmentedParts tags and meanings remain unchanged. The new complete codec covers all four native targets. Required unit membership is rederived from actual admitted class/job/body, not from a provider's claimed inventory:
+
+- Ordinary native node positions and actual stage inputs.
+- Memory entry state and subsequent native positions.
+- Every retrieval snapshot slice and each selected returned entry, including composite retrieval stages.
+- Segmented positions' exact native greedy parts, flattened into the new stage 254 ordinal namespace.
+- All immutable artifact parameter instances in canonical program/parameter/layer order, flattened into stage 255. Mutable memory-slot overlays instead use authenticated entry state/write continuity.
+
+Parameter units use their actual native commitment suite: V2 authenticated complete rows or V3 bounded row tiles. These are material-identity openings, not correctness proofs. An oversized V2 row is refused before enrollment/funding; it is never silently retiled under a different root. Segmented parts authenticate the actual segment roots. Full weights are not claimed retained merely because trace positions or snapshot rows exist.
+
+Core `palw_prospective_kernel_material_v4` accepts a producer-signed canonical intent over the pinned checkpoint, actual prior ledger/aux roots, native SaltedCommit, explicit providers, finite commit/expiry window and complete manifest. The material consent is excluded so a future consent hash cannot create a claim/hash cycle. Actual kernel admission derives a local candidate through the dedicated fallible salted replay owner; no arbitrary candidate ClassRow or claim is accepted from a peer. Providers must be Active and have distinct native operator IDs from both each other and the producer. Registered native public keys are captured for transport authentication.
+
+The local checkpoint freshness bound is provider ingress policy, not a consensus Final/lifetime/retention clock. An opaque candidate is preflight material only: it is not native acceptance, a source payment, receipt, settlement or Final. The provider durably publishes the complete bytes before signing the exact funded ordinary-240/recovery-242 contract. The real producer must wait for its own coherent positive native enrollment before sending a dependent claim.
+
+SDK `claim_paid_v2/provider_handoff_v4` converts actual `PaidClaimMaterialWireV2` from all-target producers into those complete units and the exact producer-signed intent. It uses the actual candidate class/claim, authenticates the complete bundle, checks registered signer identity, derives tensor/snapshot construction workspace before allocation, and retains output/workspace/candidate leases through transport. It refuses missing snapshots and mismatched segmented dimensions before allocation/indexing. A library constructor alone is not the actual producer/transport consumer: own Consensus API ingress, authenticated provider exchange, native enrollment wait and subsequent signed claim submission still need an end-to-end connected caller and consolidated validation.
+
+## Durable context and allocation ownership
+
+The first durable intrinsic context retains the exact prior canonical route, producer signed intent/signature, captured native key/collateral and request identity. It has explicit separate local encoded-metadata and heap limits; the provider additionally needs an aggregate metadata RAM/DB cap across all contracts. Native owner reservations precede cloning, decode, serialization and atomic sidecar publication. A per-contract cap is not aggregate closure. Full-route metadata is deliberately conservative; it is not advertised as an efficient large-population final layout.
+
+Cold restore first requires a current positive own-native covenant: exact request-derived nonce (network/request/policy/recovery), root, manifest and consent generation, provider's own stored signatures and registered native key. It then re-hashes prior ledger/aux roots, checks producer signature/request identity, replays the actual native salted admission and verifies the complete held bundle under fresh reservations. The prior checkpoint is intrinsic verification context; permanent ancestry is not required. A missing current claim/row never authorizes release or answers. An unaccepted signed offer can remain retention-only until a positive finalized expiry fact. Terminal native receipts drive a separate positive garbage-collection path.
+
+Native derived-class/layout reservation, inner wire decode, tensor/Merkle authentication, snapshot expansion, persistent candidate growth, output buffers and durable metadata are separate allocation terms. No encoded-byte multiplier or spare salted-replay ticket implicitly covers later work. Local capacity refusal must remain distinct from consensus invalidity. The current source ownership interfaces are still being integrated; no compilation, measured memory closure or real provider reopen acceptance has been performed for this revision.
+
+## Remaining implementation and consolidated validation
+
+Finish actual producer → own native API → provider durable ingress/240+242 signatures → own positive native enrollment → claim/round/checker/receipt/Final. Include Program, Pipeline, Segmented, Memory, Retrieval and Composite, actual parameter retrieval for court, provider restart before enrollment, pruning after claim removal, contract replacement and finalized release. Preserve original work/material ownership across each handoff and never treat upload success as native adoption.
+
+Consolidated validation must cover legacy codecs/default identity, all target/subkind consumers, independent source opt-in collisions and per-attempt funding, same-R reserve/refund, all signed lifetime/counter boundaries, sparse DAA/delayed inclusion, fee/queue/coinbase provenance, crash/reopen, reorg and replay, court material acquisition and resource limits, actual node multiprocess/IBD/pruning operation, and permitted checker costs. Source tests for retired-tag rejection, direct checks and cumulative unions are written but unexecuted. Old test binaries do not contain these changes.
+
+Public activation, external reviews of permitted detection checks, source independence/censorship evidence, real costs/income and model sharing/bond participation remain unverified. Removing prohibited proof mechanisms is compliance with the permanent design decision, not evidence that these operational requirements pass.

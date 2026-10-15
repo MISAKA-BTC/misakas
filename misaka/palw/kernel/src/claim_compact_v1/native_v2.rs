@@ -1,6 +1,6 @@
 //! Registered-class coverage, including all pipeline/typed model components.
-//! This closes the plan-map boundary; it is not an implemented GKR/PCS/lookup
-//! argument or authority to omit the exact retained relations/edge/state checks.
+//! Direct detection and exact native relations only. Cryptographic computation
+//! validity arguments are permanently prohibited, including historical tags.
 use super::*;
 use crate::ledger::KernelLedgerV1;
 use crate::spec::{SpecClassKindV1, composite::ComponentV1};
@@ -48,6 +48,7 @@ impl NativeCompactCoverageV2 {
     pub fn check_families(&self) -> Result<Vec<CheckFamilyV1>, String> {
         let mut families = Vec::new();
         for part in &self.parts {
+            validate_detection_coverage_v1(&part.coverage)?;
             if part.maximum_executions == 0 {
                 return Err("zero compact component execution bound".into());
             }
@@ -89,6 +90,7 @@ impl NativeCompactCoverageV2 {
     pub fn limits(&self) -> Result<(u128, u128), String> {
         let (mut bytes, mut work) = (0u128, self.exact_verifier_work_upper);
         for part in &self.parts {
+            validate_detection_coverage_v1(&part.coverage)?;
             let positions = u128::from(part.coverage.max_positions)
                 .checked_mul(u128::from(part.maximum_executions))
                 .ok_or("compact execution bound overflow")?;
