@@ -3814,13 +3814,30 @@ impl VirtualStateProcessor {
                     }
                     // Only a typed public-prefix Answer has distinct signature authority.
                     // The fold additionally checks its saved literal custody/owner slot.
-                    let signer = state.bond(&movement.authorization_bond_v1()).ok_or("staged answerer has no registered bond")?;
-                    if !Self::verify_mldsa87_with_context_bool(
-                        &signer.pubkey,
-                        &movement.signing_message(),
-                        &movement.signature,
-                        stage::PALW_CONSTRAINT_STREAM_CONTEXT_V1,
-                    ) {
+                    let authority = movement.authorization_bond_v1();
+                    let signer = state.bond(&authority).ok_or("staged answerer has no registered bond")?;
+                    let verify = |key: &[u8]| {
+                        Self::verify_mldsa87_with_context_bool(
+                            key,
+                            &movement.signing_message(),
+                            &movement.signature,
+                            stage::PALW_CONSTRAINT_STREAM_CONTEXT_V1,
+                        )
+                    };
+                    // An external producer's accepted node custodian may sign the producer's literal
+                    // answer slot (never an owner move: the authority must be the claim's producer
+                    // in a typed answer). The slot, its deadlines and its liability stay the producer's.
+                    let delegated = || {
+                        state.staged_bundle_contract_v1(movement.claim).is_some_and(|contract| {
+                            authority == contract.claim.producer
+                                && authority != movement.reserver
+                                && contract.producer_custodian.and_then(|custodian| state.bond(&custodian)).is_some_and(|custodian| {
+                                    matches!(custodian.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active)
+                                        && verify(&custodian.pubkey)
+                                })
+                        })
+                    };
+                    if !verify(&signer.pubkey) && !delegated() {
                         return Err("staged move is not signed by its literal authorized owner/answerer".into());
                     }
                 }

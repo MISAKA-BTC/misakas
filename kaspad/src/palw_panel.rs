@@ -98,6 +98,41 @@ mod flat_source_responder;
 /// seats) and the outside owner's native Demand/Collect when every peer and archive lacks a link.
 #[path = "palw_history_recovery_actor.rs"]
 mod history_recovery_actor;
+
+/// Which literal answer slot one public-source responder pass serves: this seat's own bond, or
+/// an external producer's slot this node accepted as custodian (signed with this node's key,
+/// answered on the producer's slot, the producer alone liable). Delegated passes use their own
+/// court-queue rounds so neither pass's sweep can drop the other's packets.
+#[derive(Clone, Copy)]
+pub(crate) struct PalwAnswerSlotV1<'a> {
+    pub(crate) slot: PalwBondKeyV2,
+    pub(crate) round_offset: u32,
+    pub(crate) only: Option<&'a HashSet<Hash64>>,
+}
+impl<'a> PalwAnswerSlotV1<'a> {
+    pub(crate) fn own(bond: PalwBondKeyV2) -> Self {
+        Self { slot: bond, round_offset: 0, only: None }
+    }
+    pub(crate) fn delegated(producer: PalwBondKeyV2, claims: &'a HashSet<Hash64>) -> Self {
+        Self { slot: producer, round_offset: PALW_DELEGATED_SLOT_ROUND_OFFSET_V1, only: Some(claims) }
+    }
+}
+/// Below every fixed lane round and above the reporter filer's terminal band.
+pub(crate) const PALW_DELEGATED_SLOT_ROUND_OFFSET_V1: u32 = 0x100;
+
+/// The external producers whose answer slots this node accepted, refreshed by bounded native
+/// pages, with each slot's own responder cursors.
+#[derive(Default)]
+struct PalwDelegatedSlotsV1 {
+    after: Option<Hash64>,
+    scanning: HashMap<PalwBondKeyV2, HashSet<Hash64>>,
+    current: HashMap<PalwBondKeyV2, HashSet<Hash64>>,
+    prefix: HashMap<PalwBondKeyV2, Option<(u64, Hash64, PalwBondKeyV2)>>,
+    selected: HashMap<PalwBondKeyV2, Option<(u64, Hash64, PalwBondKeyV2)>>,
+    flat: HashMap<PalwBondKeyV2, flat_source_responder::FlatSourceBookV1>,
+    history: HashMap<PalwBondKeyV2, history_recovery_actor::HistoryResponderBookV1>,
+}
+const PALW_DELEGATED_SLOTS_PER_TICK_V1: usize = 8;
 /// Lane LG14-A (RFC-0014 §6): the common fraud filer — any carrying bond's pursuit, as a non-seat, of a claim its own replay refutes:
 /// a dispute reservation, then reserved DA demands that localize the first divergent step to a terminal the fold adjudicates (node
 /// policy; a clean no-op below `palw_legacy_public_filer_v1`, which no shipped preset arms).
@@ -8255,6 +8290,56 @@ impl PalwPanelService {
         self.bond.is_some() && self.keypair.is_some()
     }
 
+    /// Answer the literal slots of external producers that delegated custody to this node.
+    async fn delegated_slots_tick_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        custodian: PalwBondKeyV2,
+        book: &mut PalwDelegatedSlotsV1,
+        pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        due: &mut HashMap<(Hash64, u32, bool), u64>,
+        moved: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) {
+        match session.palw_staged_custody_delegations_to_v1(custodian, book.after) {
+            Ok((page, next)) => {
+                for (claim, producer) in page {
+                    book.scanning.entry(producer).or_default().insert(claim);
+                }
+                book.after = next;
+                if next.is_none() {
+                    book.current = std::mem::take(&mut book.scanning);
+                    let live: HashSet<PalwBondKeyV2> = book.current.keys().copied().collect();
+                    book.prefix.retain(|p, _| live.contains(p));
+                    book.selected.retain(|p, _| live.contains(p));
+                    book.flat.retain(|p, _| live.contains(p));
+                    book.history.retain(|p, _| live.contains(p));
+                }
+            }
+            Err(why) => debug!("[{PALW_PANEL}] delegated custody page remains pending: {why}"),
+        }
+        let slots: Vec<(PalwBondKeyV2, HashSet<Hash64>)> =
+            book.current.iter().take(PALW_DELEGATED_SLOTS_PER_TICK_V1).map(|(p, c)| (*p, c.clone())).collect();
+        for (producer, claims) in &slots {
+            let slot = PalwAnswerSlotV1::delegated(*producer, claims);
+            let cursor = book.prefix.entry(*producer).or_default();
+            if let Err(why) = self.public_prefix_answer_tick_v1(session, slot, cursor, pending, due, moved).await {
+                debug!("[{PALW_PANEL}] delegated prefix response for {producer:?} remains pending: {why}");
+            }
+            let cursor = book.selected.entry(*producer).or_default();
+            if let Err(why) = self.public_selected_answer_tick_v1(session, slot, cursor, pending, due, moved).await {
+                debug!("[{PALW_PANEL}] delegated selected response for {producer:?} remains pending: {why}");
+            }
+            let flat = book.flat.entry(*producer).or_default();
+            if let Err(why) = self.public_flat_answer_tick_v1(session, slot, flat, pending, due, moved).await {
+                debug!("[{PALW_PANEL}] delegated Flat response for {producer:?} remains pending: {why}");
+            }
+            let history = book.history.entry(*producer).or_default();
+            if let Err(why) = self.history_recovery_answer_tick_v1(session, slot, history, pending, due, moved).await {
+                debug!("[{PALW_PANEL}] delegated history response for {producer:?} remains pending: {why}");
+            }
+        }
+    }
+
     async fn public_cache_retirement_worker_v1(&self) {
         if self.consensus_config.params.palw_staged_public_court_v1.is_none() {
             return;
@@ -8545,6 +8630,7 @@ impl PalwPanelService {
         let mut public_selected_response_cursor = None;
         let mut public_flat_response_book = flat_source_responder::FlatSourceBookV1::default();
         let mut public_history_response_book = history_recovery_actor::HistoryResponderBookV1::default();
+        let mut delegated_slots = PalwDelegatedSlotsV1::default();
         let mut artifact_inventory_book = artifact_inventory::ArtifactInventoryBookV1::default();
         let mut public_prefix_cache_gc = public_prefix::PrefixCacheGcV1::default();
         let mut public_shared_cache_gc = crate::palw_flat_public_source::SharedClaimCacheGcV1::default();
@@ -10926,7 +11012,7 @@ impl PalwPanelService {
             if let Err(why) = self
                 .public_prefix_answer_tick_v1(
                     &session,
-                    bond_key,
+                    PalwAnswerSlotV1::own(bond_key),
                     &mut public_prefix_response_cursor,
                     &mut court_pending,
                     &mut court_due,
@@ -10959,7 +11045,7 @@ impl PalwPanelService {
             if let Err(why) = self
                 .public_selected_answer_tick_v1(
                     &session,
-                    bond_key,
+                    PalwAnswerSlotV1::own(bond_key),
                     &mut public_selected_response_cursor,
                     &mut court_pending,
                     &mut court_due,
@@ -10972,7 +11058,7 @@ impl PalwPanelService {
             if let Err(why) = self
                 .public_flat_answer_tick_v1(
                     &session,
-                    bond_key,
+                    PalwAnswerSlotV1::own(bond_key),
                     &mut public_flat_response_book,
                     &mut court_pending,
                     &mut court_due,
@@ -10985,7 +11071,7 @@ impl PalwPanelService {
             if let Err(why) = self
                 .history_recovery_answer_tick_v1(
                     &session,
-                    bond_key,
+                    PalwAnswerSlotV1::own(bond_key),
                     &mut public_history_response_book,
                     &mut court_pending,
                     &mut court_due,
@@ -11007,6 +11093,10 @@ impl PalwPanelService {
                 .await
             {
                 debug!("[{PALW_PANEL}] public history custody grant remains pending: {why}");
+            }
+            if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa) {
+                self.delegated_slots_tick_v1(&session, bond_key, &mut delegated_slots, &mut court_pending, &mut court_due, &mut court_moved)
+                    .await;
             }
             // --- the seat's half: answer every duty exactly once ---
             let duties = session.palw_seat_duties_v2(vec![bond_key]);

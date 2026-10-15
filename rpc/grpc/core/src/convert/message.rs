@@ -5944,6 +5944,40 @@ mod palw_state_proof_grpc_tests {
     }
 }
 
+from!(item: &kaspa_rpc_core::GetPalwStagedPreclaimQuoteRequest, protowire::GetPalwStagedPreclaimQuoteRequestMessage, {
+    Self { commitment_hex: item.commitment_hex.clone(), binding_hex: item.binding_hex.clone() }
+});
+try_from!(item: &protowire::GetPalwStagedPreclaimQuoteRequestMessage, kaspa_rpc_core::GetPalwStagedPreclaimQuoteRequest, {
+    Self { commitment_hex: item.commitment_hex.clone(), binding_hex: item.binding_hex.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwStagedPreclaimQuoteResponse>, protowire::GetPalwStagedPreclaimQuoteResponseMessage, {
+    Self {
+        available: item.available,
+        quoted: item.quoted,
+        refusal: item.refusal.clone(),
+        snapshot_block: item.snapshot_block.clone(),
+        resource_plan_id: item.resource_plan_id.clone(),
+        maximum_records: item.maximum_records,
+        maximum_custodians: item.maximum_custodians,
+        accept_until_daa: item.accept_until_daa,
+        material_span_daa: item.material_span_daa,
+        error: None,
+    }
+});
+try_from!(item: &protowire::GetPalwStagedPreclaimQuoteResponseMessage, RpcResult<kaspa_rpc_core::GetPalwStagedPreclaimQuoteResponse>, {
+    Self {
+        available: item.available,
+        quoted: item.quoted,
+        refusal: item.refusal.clone(),
+        snapshot_block: item.snapshot_block.clone(),
+        resource_plan_id: item.resource_plan_id.clone(),
+        maximum_records: item.maximum_records,
+        maximum_custodians: item.maximum_custodians,
+        accept_until_daa: item.accept_until_daa,
+        material_span_daa: item.material_span_daa,
+    }
+});
+
 from!(item: &kaspa_rpc_core::GetPalwRewardVestingRequest, protowire::GetPalwRewardVestingRequestMessage, {
     Self {
         bond: item.bond.clone(),

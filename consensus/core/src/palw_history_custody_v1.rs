@@ -14,36 +14,137 @@ pub const PALW_HISTORY_CUSTODY_PART_BYTES_V1: usize = 32_768;
 pub const PALW_HISTORY_PLEDGE_CONTEXT_V1: &[u8] = b"misaka-palw/history-custody/pledge/v1/mldsa87";
 pub const PALW_HISTORY_GRANT_CONTEXT_V1: &[u8] = b"misaka-palw/history-custody/valid-grant/v1/mldsa87";
 pub const PALW_HISTORY_FP_ENVELOPE_MAGIC_V1: &[u8; 4] = b"HFP1";
-pub const PALW_HISTORY_FP_ENVELOPE_MAX_BYTES_V1: usize = crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES + 8192;
+/// Original FP bytes plus the pledge (one signature), the bounded binding header (2 KiB) and,
+/// in version 2 only, a two-signature custody delegation. Ordinary transaction mass still applies.
+pub const PALW_HISTORY_FP_ENVELOPE_MAX_BYTES_V1: usize = crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES + 20_480;
+
+pub const PALW_PRODUCER_CUSTODY_DELEGATION_CONTEXT_V1: &[u8] = b"misaka-palw/producer-custody-delegation/v1/mldsa87";
+
+/// A producer without its own node names one bonded node custodian that answers the
+/// producer's public-source and history demands on the producer's literal slot. Both keys sign
+/// the same standing window: the producer authorizes, the custodian accepts. Liability stays
+/// the producer's: a delegate's silence is the producer's default, and the delegate is never a
+/// covering signer by this record. Admission requires the claim's whole paid horizon inside.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+pub struct PalwProducerCustodyDelegationV1 {
+    pub version: u16,
+    pub producer: PalwBondKeyV2,
+    pub custodian: PalwBondKeyV2,
+    pub valid_from_daa: u64,
+    pub valid_until_daa: u64,
+    pub producer_signature: Vec<u8>,
+    pub custodian_signature: Vec<u8>,
+}
+impl BorshDeserialize for PalwProducerCustodyDelegationV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        Ok(Self {
+            version: BorshDeserialize::deserialize_reader(reader)?,
+            producer: BorshDeserialize::deserialize_reader(reader)?,
+            custodian: BorshDeserialize::deserialize_reader(reader)?,
+            valid_from_daa: BorshDeserialize::deserialize_reader(reader)?,
+            valid_until_daa: BorshDeserialize::deserialize_reader(reader)?,
+            producer_signature: crate::palw_public_binding_v1::read_signature_v1(reader)?,
+            custodian_signature: crate::palw_public_binding_v1::read_signature_v1(reader)?,
+        })
+    }
+}
+impl PalwProducerCustodyDelegationV1 {
+    pub fn signing_message_v1(&self) -> Hash64 {
+        let raw = borsh::to_vec(&(self.version, self.producer, self.custodian, self.valid_from_daa, self.valid_until_daa))
+            .expect("fixed custody delegation serializes");
+        Hash64::from_bytes(
+            blake2b_simd::Params::new()
+                .hash_length(64)
+                .key(b"misaka-palw/producer-custody-delegation/id/v1")
+                .hash(&raw)
+                .as_bytes()
+                .try_into()
+                .expect("64"),
+        )
+    }
+    pub fn check_v1(&self) -> Result<(), String> {
+        if self.version != 1
+            || self.producer == self.custodian
+            || self.valid_from_daa >= self.valid_until_daa
+            || self.producer_signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN
+            || self.custodian_signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN
+        {
+            return Err("producer custody delegation lacks distinct parties, a window or both signatures".into());
+        }
+        Ok(())
+    }
+    /// The claim's acceptance and its whole paid material horizon must lie inside the window.
+    pub fn covers_v1(&self, accepted_daa: u64, material_until_daa: u64) -> bool {
+        self.valid_from_daa <= accepted_daa && material_until_daa <= self.valid_until_daa
+    }
+    pub fn validate_signatures_v1<F>(&self, producer_key: &[u8], custodian_key: &[u8], verify: F) -> Result<(), String>
+    where
+        F: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    {
+        self.check_v1()?;
+        let message = self.signing_message_v1();
+        if !verify(producer_key, message.as_byte_slice(), &self.producer_signature, PALW_PRODUCER_CUSTODY_DELEGATION_CONTEXT_V1)
+            || !verify(custodian_key, message.as_byte_slice(), &self.custodian_signature, PALW_PRODUCER_CUSTODY_DELEGATION_CONTEXT_V1)
+        {
+            return Err("producer custody delegation is not signed by both its producer and its custodian".into());
+        }
+        Ok(())
+    }
+}
 
 /// An explicit outer envelope; no trailing bytes are ignored by a legacy decoder.
 /// The original inner FP claim, PoW message and signature are byte-for-byte intact.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+/// Version 1 has no delegation; version 2 carries exactly one producer custody delegation.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwHistoryFpEnvelopeV1 {
     pub version: u16,
     pub original_payload: Vec<u8>,
     pub pledge: PalwHistoryCustodyPledgeV1,
     pub original_binding: crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+    pub custody_delegation: Option<PalwProducerCustodyDelegationV1>,
+}
+impl BorshSerialize for PalwHistoryFpEnvelopeV1 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.version.serialize(writer)?;
+        self.original_payload.serialize(writer)?;
+        self.pledge.serialize(writer)?;
+        self.original_binding.serialize(writer)?;
+        match (self.version, &self.custody_delegation) {
+            (1, None) => Ok(()),
+            (2, Some(delegation)) => delegation.serialize(writer),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "envelope version and custody delegation disagree")),
+        }
+    }
 }
 impl BorshDeserialize for PalwHistoryFpEnvelopeV1 {
     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        Ok(Self {
-            version: BorshDeserialize::deserialize_reader(reader)?,
-            original_payload: crate::palw_public_binding_v1::read_bounded_bytes_v1(
-                reader,
-                crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES,
-            )?,
-            pledge: BorshDeserialize::deserialize_reader(reader)?,
-            original_binding: BorshDeserialize::deserialize_reader(reader)?,
-        })
+        let version: u16 = BorshDeserialize::deserialize_reader(reader)?;
+        let original_payload =
+            crate::palw_public_binding_v1::read_bounded_bytes_v1(reader, crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES)?;
+        let pledge = BorshDeserialize::deserialize_reader(reader)?;
+        let original_binding = BorshDeserialize::deserialize_reader(reader)?;
+        let custody_delegation = match version {
+            2 => Some(BorshDeserialize::deserialize_reader(reader)?),
+            _ => None,
+        };
+        Ok(Self { version, original_payload, pledge, original_binding, custody_delegation })
     }
 }
 impl PalwHistoryFpEnvelopeV1 {
     pub fn check_v1(&self) -> Result<(), String> {
         self.pledge.check_v1()?;
         self.original_binding.check_wire_v1()?;
-        if self.version != 1
-            || self.original_payload.is_empty()
+        match (self.version, &self.custody_delegation) {
+            (1, None) => {}
+            (2, Some(delegation)) => {
+                delegation.check_v1()?;
+                if delegation.producer != self.pledge.producer || self.pledge.material_until_daa > delegation.valid_until_daa {
+                    return Err("custody delegation names another producer or ends before the pledged material horizon".into());
+                }
+            }
+            _ => return Err("history FP envelope version and custody delegation disagree".into()),
+        }
+        if self.original_payload.is_empty()
             || self.original_payload.len() > crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES
             || self.original_payload.starts_with(PALW_HISTORY_FP_ENVELOPE_MAGIC_V1)
             || self.original_binding.execution_root_v1() != self.pledge.execution_root
@@ -952,7 +1053,8 @@ mod tests {
                 committed_execution_root: pledge.execution_root,
             },
         );
-        let envelope = PalwHistoryFpEnvelopeV1 { version: 1, original_payload: vec![3, 0, 8], pledge, original_binding };
+        let envelope =
+            PalwHistoryFpEnvelopeV1 { version: 1, original_payload: vec![3, 0, 8], pledge, original_binding, custody_delegation: None };
         let encoded = envelope.encode_v1().unwrap();
         assert_eq!(PalwHistoryFpEnvelopeV1::decode_v1(&encoded).unwrap(), envelope);
         assert!(envelope.original_fp_v1().is_err());

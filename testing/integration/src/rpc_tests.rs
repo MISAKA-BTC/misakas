@@ -1205,6 +1205,18 @@ async fn sanity_test() {
                     assert!(!read.available && !read.native.available && read.exec_rows.is_empty());
                 })
             }
+            KaspadPayloadOps::GetPalwStagedPreclaimQuote => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // G14 op 242: malformed hex or an undecodable commitment is an error before any state is
+                    // read; this test network runs no ConsensusV2 bundle, so a decodable pair would answer
+                    // `available: false`.
+                    let odd = GetPalwStagedPreclaimQuoteRequest { commitment_hex: "0".into(), binding_hex: String::new() };
+                    assert!(rpc_client.get_palw_staged_preclaim_quote_call(None, odd).await.is_err());
+                    let garbage = GetPalwStagedPreclaimQuoteRequest { commitment_hex: "00".into(), binding_hex: "00".into() };
+                    assert!(rpc_client.get_palw_staged_preclaim_quote_call(None, garbage).await.is_err());
+                })
+            }
             KaspadPayloadOps::GetPalwExecV2Status => {
                 let rpc_client = client.clone();
                 tst!(op, {

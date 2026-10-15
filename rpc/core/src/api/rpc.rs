@@ -988,6 +988,24 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwRewardVestingResponse::default())
     }
 
+    /// The node's native required-family preclaim quote for one original FP commitment and its
+    /// public binding header (op 242). Read-only and advisory: admission recomputes it with the
+    /// same planner at the accepting block, so a caller pins nothing on this answer's word.
+    async fn get_palw_staged_preclaim_quote(
+        &self,
+        request: GetPalwStagedPreclaimQuoteRequest,
+    ) -> RpcResult<GetPalwStagedPreclaimQuoteResponse> {
+        self.get_palw_staged_preclaim_quote_call(None, request).await
+    }
+    async fn get_palw_staged_preclaim_quote_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwStagedPreclaimQuoteRequest,
+    ) -> RpcResult<GetPalwStagedPreclaimQuoteResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwStagedPreclaimQuoteResponse::default())
+    }
+
     /// **ADR-0152-adjacent: one class's Activation Pool** (op 200; testnet-12) — its budgets, its
     /// payees, the terms and the sink a top-up pays into. A node built before op 200 drops the
     /// WebSocket on it: ask it last on a connection, or reconnect.

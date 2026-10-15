@@ -320,6 +320,9 @@ pub enum RpcApiOps {
     GetPalwExecV2Status = 240,
     /// Complete native / slice / kernel-fee vesting observation (RFC6/8/12).
     GetPalwRewardVesting = 241,
+    /// G14: the native required-family preclaim quote an external producer signs its pledge over.
+    /// Read-only; the same planner admission re-runs. Appended at the tail.
+    GetPalwStagedPreclaimQuote = 242,
 }
 
 impl RpcApiOps {

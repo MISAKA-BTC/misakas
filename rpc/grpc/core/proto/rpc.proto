@@ -3380,6 +3380,24 @@ message GetPalwForkChoiceOpeningResponseMessage {
   RPCError error = 1000;
 }
 
+message GetPalwStagedPreclaimQuoteRequestMessage {
+  string commitmentHex = 1;
+  string bindingHex = 2;
+}
+
+message GetPalwStagedPreclaimQuoteResponseMessage {
+  bool available = 1;
+  bool quoted = 2;
+  string refusal = 3;
+  string snapshotBlock = 4;
+  string resourcePlanId = 5;
+  uint64 maximumRecords = 6;
+  uint64 maximumCustodians = 7;
+  uint64 acceptUntilDaa = 8;
+  uint64 materialSpanDaa = 9;
+  RPCError error = 1000;
+}
+
 message GetPalwRewardVestingRequestMessage {
   string bond = 1;
   string payoutAddress = 2;

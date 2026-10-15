@@ -1092,6 +1092,8 @@ pub(super) struct PalwCarriedObjectV1 {
     /// Original transaction-local companion, never borrowed from another carrier.
     pub(super) history_pledge: Option<kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
     pub(super) original_binding: Option<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>,
+    /// The same carrier's optional producer custody delegation (HFP1 version 2).
+    pub(super) custody_delegation: Option<kaspa_consensus_core::palw_history_custody_v1::PalwProducerCustodyDelegationV1>,
     /// **The 2026-09-23 Position route matrix, P-B1: what this object's carrier is owed if acceptance
     /// refuses it.** `Some` only for a carrier-borne `ModelBuy`/`ModelSeed` past
     /// `palw_audit_2026_09_23`, resolved in `palw_v2_objects_of_block` where the carrier is in hand;
@@ -2360,6 +2362,10 @@ impl VirtualStateProcessor {
                                     carried.history_pledge.as_ref().zip(carried.original_binding.as_ref())
                                         .map(|(pledge, header)| (pledge.claim, header.clone()))
                                 }).collect();
+                                let producer_custody_delegations = objects.iter().filter_map(|carried| {
+                                    carried.history_pledge.as_ref().zip(carried.custody_delegation.as_ref())
+                                        .map(|(pledge, delegation)| (pledge.claim, delegation.clone()))
+                                }).collect();
                                 // Decisions 7/8: every lifecycle object meets its own validator
                                 // before the transition folds it — and an object that FAILS is
                                 // dropped rather than fatal to the block that accepted it.
@@ -2558,6 +2564,7 @@ impl VirtualStateProcessor {
                                         let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);
                                         extras.history_custody_pledges = history_custody_pledges;
                                         extras.public_original_bindings = public_original_bindings;
+                                        extras.producer_custody_delegations = producer_custody_delegations;
                                         if state_params.exec_v2_active_at(point.daa_score) {
                                             if attempt.is_some()
                                                 && let Ok(bytes) = borsh::to_vec(header.as_ref())
@@ -3710,7 +3717,7 @@ impl VirtualStateProcessor {
     ) -> Vec<PalwCarriedObjectV1> {
         objects
             .into_iter()
-            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, history_pledge: None, original_binding: None, refund: None, unrefundable: None })
+            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, history_pledge: None, original_binding: None, custody_delegation: None, refund: None, unrefundable: None })
             .collect()
     }
 

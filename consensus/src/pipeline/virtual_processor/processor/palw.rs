@@ -1142,6 +1142,21 @@ impl VirtualStateProcessor {
         state.last_point().map(|point| point.daa_score)
     }
 
+    pub fn palw_staged_custody_delegations_to_v1_impl(
+        &self,
+        custodian: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<kaspa_consensus_core::Hash64>,
+    ) -> Result<(Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>, Option<kaspa_consensus_core::Hash64>), String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let now = state.last_point().ok_or("custody delegation snapshot has no accepted clock")?.daa_score;
+        if !self.palw_staged_public_court_v1.is_some_and(|f| f.is_active(now)) {
+            return Ok((Vec::new(), None));
+        }
+        kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_custody_delegations_to_v1(&state, custodian, after, 256)
+    }
+
     pub fn palw_staged_history_grant_duty_v1_impl(
         &self,
         claim: kaspa_consensus_core::Hash64,

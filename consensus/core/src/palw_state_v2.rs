@@ -19144,6 +19144,8 @@ pub struct PalwTransitionExtrasV1 {
     /// An ordinary FP claim must never borrow another transaction's pledge.
     pub history_custody_pledges: BTreeMap<Hash64, crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
     pub public_original_bindings: BTreeMap<Hash64, crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>,
+    /// Transaction-local producer custody delegations (HFP1 version 2), keyed by claim.
+    pub producer_custody_delegations: BTreeMap<Hash64, crate::palw_history_custody_v1::PalwProducerCustodyDelegationV1>,
     /// **ADR-0133 §7: `Params::palw_seat_gate_possession`'s HEIGHT.** Past it
     /// `required_ready_seats` is the possession question alone — the panel plus the spare — and a
     /// class heavier than its fleet is admitted RARELY (one claim in flight, the smallest

@@ -260,6 +260,40 @@ pub struct PalwStagedHistoryDutyPageV1 {
     pub keys: Vec<(Hash64, PalwBondKeyV2, Hash64)>,
     pub next: Option<(u64, Hash64, PalwBondKeyV2, Hash64)>,
 }
+/// Live required-family claims whose external producer delegated its answer slot to `custodian`.
+/// One bounded page: at most `visit` claim contracts are scanned, delegated or not, and the
+/// cursor continues after the last scanned claim. Nothing here grants authority; the native
+/// validator alone accepts the custodian's signature for the producer's typed answers.
+pub fn palw_staged_custody_delegations_to_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    custodian: PalwBondKeyV2,
+    after: Option<Hash64>,
+    visit: usize,
+) -> Result<(Vec<(Hash64, PalwBondKeyV2)>, Option<Hash64>), String> {
+    let point = state.last_point().ok_or("custody delegation page has no accepted clock")?;
+    let start = match after {
+        Some(claim) => std::ops::Bound::Excluded(PalwStagedCourtKeyV1::Claim(claim)),
+        None => std::ops::Bound::Unbounded,
+    };
+    let mut out = Vec::new();
+    let mut last = None;
+    let mut visited = 0usize;
+    for (key, row) in state.staged_courts.range((start, std::ops::Bound::Unbounded)) {
+        let PalwStagedCourtKeyV1::Claim(claim) = key else { return Ok((out, None)) };
+        if visited >= visit.clamp(1, 256) {
+            return Ok((out, last));
+        }
+        visited += 1;
+        last = Some(*claim);
+        if let PalwStagedCourtRowV1::ClaimBundle(contract) = row
+            && contract.producer_custodian == Some(custodian)
+            && point.daa_score < contract.claim.terms.material_until_daa
+        {
+            out.push((*claim, contract.claim.producer));
+        }
+    }
+    Ok((out, None))
+}
 /// What a Valid seat needs to sign its own history custody grant for one required-family claim.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwHistoryGrantDutyV1 {

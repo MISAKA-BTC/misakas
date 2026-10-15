@@ -448,7 +448,7 @@ impl super::PalwPanelService {
     pub(super) async fn public_prefix_answer_tick_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
-        signer: PalwBondKeyV2,
+        slot: super::PalwAnswerSlotV1<'_>,
         cursor: &mut Option<(u64, Hash64, PalwBondKeyV2)>,
         court_pending: &mut Vec<(Hash64, u32, bool, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2)>,
         court_due: &mut std::collections::HashMap<(Hash64, u32, bool), u64>,
@@ -457,16 +457,23 @@ impl super::PalwPanelService {
         use super::*;
         // Distinct from the replay filer's demand round (`u32::MAX - 6`), which retains by round.
         const ROUND: u32 = u32::MAX - 20;
+        let signer = slot.slot;
+        let lane_round = ROUND - slot.round_offset;
         let page = session.palw_prefix_response_duties_v1(signer, *cursor)?;
         *cursor = page.next;
         // Remove a stale branch/fulfilled source before spending another fee input.
         court_pending.retain(|(_, round, responder, object)| {
-            if (*round, *responder) != (ROUND, true) {
+            if (*round, *responder) != (lane_round, true) {
                 return true;
             }
             let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = object else {
                 return false;
             };
+            if let PalwConstraintStreamActionV1::PrefixPublicAnswer(a) = &movement.action
+                && a.answerer != signer
+            {
+                return true;
+            }
             // Page omission is not fulfilment. Check each bounded queued carrier against
             // its direct accepted row so pagination cannot discard another page's work.
             match session.palw_staged_owned_progress_v1((movement.claim, movement.reserver)) {
@@ -507,11 +514,14 @@ impl super::PalwPanelService {
             }
         });
         for duty in page.duties {
-            if court_pending.iter().filter(|(_, round, responder, _)| (*round, *responder) == (ROUND, true)).count() >= 64 {
+            if slot.only.is_some_and(|only| !only.contains(&duty.material.claim_id)) {
+                continue;
+            }
+            if court_pending.iter().filter(|(_, round, responder, _)| (*round, *responder) == (lane_round, true)).count() >= 64 {
                 break;
             }
             let Some(seed_id) = duty.progress.seed_id else { continue };
-            let key = (seed_id, ROUND, true);
+            let key = (seed_id, lane_round, true);
             if court_pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
                 || court_moved.get(&key).is_some_and(|at| duty.progress.now_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
             {
@@ -555,7 +565,7 @@ impl super::PalwPanelService {
                     )
                     .map_err(|e| e.to_string())?;
                 let backend: std::sync::Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> =
-                    if material.executor_bond == signer {
+                    if material.executor_bond == signer && slot.only.is_none() {
                         self.executor_backend_v1(session, material.class_id, material.artifact_root)?
                     } else {
                         std::sync::Arc::from(self.resolve_backend(session, material.class_id, material.artifact_root)?)

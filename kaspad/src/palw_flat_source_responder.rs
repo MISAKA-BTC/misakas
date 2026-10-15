@@ -25,7 +25,7 @@ impl PalwPanelService {
     pub(super) async fn public_flat_answer_tick_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
-        signer: PalwBondKeyV2,
+        slot: super::PalwAnswerSlotV1<'_>,
         book: &mut FlatSourceBookV1,
         pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
         due: &mut HashMap<(Hash64, u32, bool), u64>,
@@ -34,6 +34,8 @@ impl PalwPanelService {
         if self.consensus_config.params.palw_staged_public_court_v1.is_none() {
             return Ok(());
         }
+        let signer = slot.slot;
+        let lane_round = ROUND - slot.round_offset;
         let _metadata = crate::palw_memory_ledger::host_ledger_v1()
             .reserve(
                 crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
@@ -56,11 +58,14 @@ impl PalwPanelService {
         }
         // Refresh pending packets directly, independently of the paginated discovery cursor.
         pending.retain(|(_, round, responder, object)| {
-            if (*round, *responder) != (ROUND, true) {
+            if (*round, *responder) != (lane_round, true) {
                 return true;
             }
             let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = object else { return false };
             let PalwConstraintStreamActionV1::FlatSourceAnswer(answer) = &movement.action else { return false };
+            if answer.answerer != signer {
+                return true;
+            }
             let Ok(Some(paid)) = session.palw_staged_paid_authority_v1((movement.claim, movement.reserver)) else { return true };
             let Some(bytes) = paid.terms.plan.resident_ram_bytes.checked_mul(2) else { return true };
             let Ok(_read) = crate::palw_memory_ledger::host_ledger_v1().reserve(
@@ -89,6 +94,9 @@ impl PalwPanelService {
         });
         let mut live = HashSet::new();
         for (claim, owner) in keys {
+            if slot.only.is_some_and(|only| !only.contains(&claim)) {
+                continue;
+            }
             let mut attempt = None;
             let result = async {
                 let Some(paid) = session.palw_staged_paid_authority_v1((claim, owner))? else { return Ok(()) };
@@ -114,8 +122,8 @@ impl PalwPanelService {
                 {
                     return Ok(());
                 }
-                let key = (id, ROUND, true);
-                if pending.iter().filter(|(_, round, responder, _)| (*round, *responder) == (ROUND, true)).count() >= 64 {
+                let key = (id, lane_round, true);
+                if pending.iter().filter(|(_, round, responder, _)| (*round, *responder) == (lane_round, true)).count() >= 64 {
                     return Ok(());
                 }
                 if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == key)

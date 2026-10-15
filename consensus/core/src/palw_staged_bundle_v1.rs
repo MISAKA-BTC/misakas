@@ -268,6 +268,9 @@ pub struct PalwStagedBundleContractV1 {
     pub config: PalwStagedPublicCourtConfigV1,
     pub history_custody: crate::palw_history_custody_v1::PalwHistoryCustodyContractV1,
     pub original_binding: crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+    /// The node custodian an external producer delegated its literal answer slot to, if any.
+    /// It may sign the producer slot's answers; the producer alone stays liable for them.
+    pub producer_custodian: Option<crate::palw_state_v2::PalwBondKeyV2>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

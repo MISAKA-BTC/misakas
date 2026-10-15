@@ -2516,6 +2516,14 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_v2_accepted_daa_v1_impl()
     }
 
+    fn palw_staged_custody_delegations_to_v1(
+        &self,
+        custodian: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<kaspa_consensus_core::Hash64>,
+    ) -> Result<(Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>, Option<kaspa_consensus_core::Hash64>), String> {
+        self.virtual_processor.palw_staged_custody_delegations_to_v1_impl(custodian, after)
+    }
+
     fn palw_staged_history_grant_duty_v1(
         &self,
         claim: kaspa_consensus_core::Hash64,

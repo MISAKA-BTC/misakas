@@ -410,6 +410,104 @@ pub fn build_fp_commitment_tx_with_original_public_v1(
     funding: &UtxoEntry,
     fee: u64,
 ) -> Result<Transaction, String> {
+    build_fp_commitment_tx_with_public_custody_v1(
+        signer,
+        params,
+        current_daa,
+        network_domain,
+        prompt_ids_form,
+        commitment,
+        prompt_token_ids,
+        price,
+        pledge,
+        original_binding,
+        None,
+        funding_outpoint,
+        funding,
+        fee,
+    )
+}
+
+/// An external producer's original public envelope (version 2): the same original FP claim and
+/// pledge, plus the standing custody delegation both the producer and its node custodian signed.
+/// The delegation must name this producer and cover the pledged material horizon; admission
+/// re-verifies both signatures, the window and the custodian's active bond.
+#[allow(clippy::too_many_arguments)]
+pub fn build_fp_commitment_tx_with_delegated_public_v1(
+    signer: &dyn MessageSigner,
+    params: &kaspa_consensus_core::config::params::Params,
+    current_daa: u64,
+    network_domain: Hash64,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    commitment: PalwFreePromptCommitmentV3,
+    prompt_token_ids: Vec<u32>,
+    price: FpCommitmentPriceV1<'_>,
+    pledge: &kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1,
+    original_binding: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+    delegation: &kaspa_consensus_core::palw_history_custody_v1::PalwProducerCustodyDelegationV1,
+    funding_outpoint: TransactionOutpoint,
+    funding: &UtxoEntry,
+    fee: u64,
+) -> Result<Transaction, String> {
+    if !delegation.covers_v1(current_daa, pledge.material_until_daa) {
+        return Err("custody delegation window does not cover this publication and the pledged material horizon".into());
+    }
+    build_fp_commitment_tx_with_public_custody_v1(
+        signer,
+        params,
+        current_daa,
+        network_domain,
+        prompt_ids_form,
+        commitment,
+        prompt_token_ids,
+        price,
+        pledge,
+        original_binding,
+        Some(delegation),
+        funding_outpoint,
+        funding,
+        fee,
+    )
+}
+
+/// One half of a standing producer custody delegation: the producer authorizes, the custodian
+/// (a node operator's bond key) accepts. Each party signs the same window message.
+pub fn sign_producer_custody_delegation_v1(
+    signer: &dyn MessageSigner,
+    delegation: &mut kaspa_consensus_core::palw_history_custody_v1::PalwProducerCustodyDelegationV1,
+    as_custodian: bool,
+) -> Result<(), String> {
+    let signature = signer
+        .sign_message(
+            delegation.signing_message_v1().as_byte_slice(),
+            kaspa_consensus_core::palw_history_custody_v1::PALW_PRODUCER_CUSTODY_DELEGATION_CONTEXT_V1,
+        )
+        .map_err(|e| format!("custody delegation signature: {e}"))?;
+    if as_custodian {
+        delegation.custodian_signature = signature;
+    } else {
+        delegation.producer_signature = signature;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_fp_commitment_tx_with_public_custody_v1(
+    signer: &dyn MessageSigner,
+    params: &kaspa_consensus_core::config::params::Params,
+    current_daa: u64,
+    network_domain: Hash64,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    commitment: PalwFreePromptCommitmentV3,
+    prompt_token_ids: Vec<u32>,
+    price: FpCommitmentPriceV1<'_>,
+    pledge: &kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1,
+    original_binding: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+    delegation: Option<&kaspa_consensus_core::palw_history_custody_v1::PalwProducerCustodyDelegationV1>,
+    funding_outpoint: TransactionOutpoint,
+    funding: &UtxoEntry,
+    fee: u64,
+) -> Result<Transaction, String> {
     if !params.palw_staged_public_court_v1_active_at(current_daa) {
         return Err("original public FP envelope is not active under these chain rules".into());
     }
@@ -439,7 +537,7 @@ pub fn build_fp_commitment_tx_with_original_public_v1(
         funding,
         fee,
         prefix_privacy,
-        Some((pledge, original_binding)),
+        Some((pledge, original_binding, delegation)),
     )
 }
 
@@ -458,6 +556,7 @@ fn build_fp_commitment_tx_with_qualified(
     original_public: Option<(
         &kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1,
         &kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+        Option<&kaspa_consensus_core::palw_history_custody_v1::PalwProducerCustodyDelegationV1>,
     )>,
 ) -> Result<Transaction, String> {
     // Sign the identity first so the payload carries a signature over exactly the bytes the
@@ -546,12 +645,13 @@ fn build_fp_commitment_tx_with_qualified(
             bytes.len()
         ));
     }
-    let bytes = if let Some((pledge, binding)) = original_public {
+    let bytes = if let Some((pledge, binding, delegation)) = original_public {
         let envelope = kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1 {
-            version: 1,
+            version: if delegation.is_some() { 2 } else { 1 },
             original_payload: bytes,
             pledge: pledge.clone(),
             original_binding: binding.clone(),
+            custody_delegation: delegation.cloned(),
         };
         envelope.original_fp_v1()?;
         envelope.encode_v1()?

@@ -540,6 +540,30 @@ impl TransitionBuilder<'_> {
         {
             return Err(stage_refused(claim_id, "original pledge changes native EOF, family SUM, identity, capacity or paid horizon"));
         }
+        // An external producer's node custodian: both keys signed the standing window, it covers
+        // this acceptance and the whole pledged material horizon, and the custodian is an active
+        // distinct bond. An invalid delegation refuses the claim; an absent one leaves the producer
+        // its own custodian.
+        let producer_custodian = match self.extras.producer_custody_delegations.get(&claim_id) {
+            None => None,
+            Some(delegation) => {
+                let custodian = self.state.bond(&delegation.custodian).ok_or(PalwStateV2Error::MissingBond(delegation.custodian))?;
+                if delegation.producer != claim.bond
+                    || !delegation.covers_v1(claim.accepted_daa, pledge.material_until_daa)
+                    || !matches!(custodian.status, crate::palw_state_v2::PalwBondStatusV2::Active)
+                {
+                    return Err(stage_refused(claim_id, "producer custody delegation is foreign, out of window or names an inactive custodian"));
+                }
+                delegation
+                    .validate_signatures_v1(
+                        &producer.pubkey,
+                        &custodian.pubkey,
+                        crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1,
+                    )
+                    .map_err(|e| stage_refused(claim_id, e))?;
+                Some(delegation.custodian)
+            }
+        };
         let terms = quote.plan.terms;
         terms
             .plan
@@ -563,6 +587,7 @@ impl TransitionBuilder<'_> {
             plan: quote.plan,
             config,
             original_binding: header.clone(),
+            producer_custodian,
             history_custody: crate::palw_history_custody_v1::PalwHistoryCustodyContractV1 {
                 custody,
                 producer: claim.bond,

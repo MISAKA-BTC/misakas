@@ -3556,6 +3556,51 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         Ok(rpc_palw_vesting_response(&read, echo, measured))
     }
 
+    async fn get_palw_staged_preclaim_quote_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwStagedPreclaimQuoteRequest,
+    ) -> RpcResult<GetPalwStagedPreclaimQuoteResponse> {
+        // Bounded before any decode: the commitment is at most the original FP payload cap and the
+        // header its fixed 2 KiB envelope (each hex digit is half a byte).
+        let decode = |label: &str, hex: &str, maximum: usize| -> RpcResult<Vec<u8>> {
+            if hex.len() % 2 != 0 || hex.len() / 2 > maximum {
+                return Err(RpcError::General(format!("{label} hex is malformed or exceeds its bound")));
+            }
+            let mut bytes = vec![0u8; hex.len() / 2];
+            faster_hex::hex_decode(hex.as_bytes(), &mut bytes).map_err(|e| RpcError::General(format!("{label} hex: {e}")))?;
+            Ok(bytes)
+        };
+        let commitment_bytes =
+            decode("commitment", &request.commitment_hex, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES)?;
+        let binding_bytes = decode("binding", &request.binding_hex, 2048)?;
+        let commitment: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3 =
+            borsh::from_slice(&commitment_bytes).map_err(|e| RpcError::General(format!("commitment does not decode: {e}")))?;
+        let binding: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1 =
+            borsh::from_slice(&binding_bytes).map_err(|e| RpcError::General(format!("binding header does not decode: {e}")))?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwStagedPreclaimQuoteResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let answer = session.spawn_blocking(move |c| c.palw_staged_preclaim_quote_v1(commitment, binding)).await;
+        Ok(match answer {
+            Ok(Some((snapshot, quote))) => GetPalwStagedPreclaimQuoteResponse {
+                available: true,
+                quoted: true,
+                refusal: String::new(),
+                snapshot_block: snapshot.to_string(),
+                resource_plan_id: quote.resource_plan_id.to_string(),
+                maximum_records: quote.maximum_records,
+                maximum_custodians: quote.maximum_custodians,
+                accept_until_daa: quote.plan.terms.open_until_daa,
+                material_span_daa: quote.material_span_daa,
+            },
+            // Below the fence or a claim with no required family: nothing to pledge.
+            Ok(None) => GetPalwStagedPreclaimQuoteResponse::default(),
+            Err(refusal) => GetPalwStagedPreclaimQuoteResponse { available: true, refusal, ..Default::default() },
+        })
+    }
+
     async fn get_palw_reward_vesting_call(
         &self,
         _connection: Option<&DynRpcConnection>,

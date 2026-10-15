@@ -202,7 +202,7 @@ impl super::PalwPanelService {
     pub(super) async fn history_recovery_answer_tick_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
-        signer: PalwBondKeyV2,
+        slot: super::PalwAnswerSlotV1<'_>,
         book: &mut HistoryResponderBookV1,
         pending: &mut Vec<(Hash64, u32, bool, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2)>,
         due: &mut std::collections::HashMap<(Hash64, u32, bool), u64>,
@@ -223,22 +223,30 @@ impl super::PalwPanelService {
                 1_048_576,
             )
             .map_err(|e| e.to_string())?;
+        let signer = slot.slot;
+        let lane_round = HISTORY_ROUND_V1 - slot.round_offset;
         let page = session.palw_history_response_duties_v1(signer, book.cursor)?;
         book.cursor = page.next;
         pending.retain(|(_, round, responder, object)| {
-            if (*round, *responder) != (HISTORY_ROUND_V1, true) {
+            if (*round, *responder) != (lane_round, true) {
                 return true;
             }
             let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = object else { return false };
-            let PalwConstraintStreamActionV1::HistoryRecovery { stage_seed, .. } = &movement.action else { return false };
+            let PalwConstraintStreamActionV1::HistoryRecovery { stage_seed, action, .. } = &movement.action else { return false };
+            if action.answerer_v1() != Some(signer) {
+                return true;
+            }
             match session.palw_staged_history_recovery_v1((movement.claim, movement.reserver), *stage_seed) {
                 Err(_) => true,
                 Ok(None) => false,
                 Ok(Some(progress)) => queued_response_current_v1(&progress, signer, movement),
             }
         });
-        book.held.retain(|scope, _| pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == (*scope, HISTORY_ROUND_V1, true)));
+        book.held.retain(|scope, _| pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == (*scope, lane_round, true)));
         for (claim, owner, stage) in page.keys {
+            if slot.only.is_some_and(|only| !only.contains(&claim)) {
+                continue;
+            }
             if book.held.len() >= 64 {
                 break;
             }
@@ -248,7 +256,7 @@ impl super::PalwPanelService {
                     return Ok(None);
                 }
                 let scope = queue_scope_v1(&progress, signer);
-                let key = (scope, HISTORY_ROUND_V1, true);
+                let key = (scope, lane_round, true);
                 if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
                     || moved.get(&key).is_some_and(|at| progress.now_daa >= *at && progress.now_daa < at.saturating_add(3))
                 {

@@ -12,7 +12,7 @@ impl PalwPanelService {
     pub(super) async fn public_selected_answer_tick_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
-        signer: PalwBondKeyV2,
+        slot: super::PalwAnswerSlotV1<'_>,
         after: &mut Option<(u64, Hash64, PalwBondKeyV2)>,
         pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
         due: &mut HashMap<(Hash64, u32, bool), u64>,
@@ -21,6 +21,8 @@ impl PalwPanelService {
         if self.consensus_config.params.palw_staged_public_court_v1.is_none() {
             return Ok(());
         }
+        let signer = slot.slot;
+        let lane_round = ROUND - slot.round_offset;
         let _metadata = crate::palw_memory_ledger::host_ledger_v1()
             .reserve(
                 crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
@@ -39,11 +41,15 @@ impl PalwPanelService {
         // Direct accepted reads keep another page's pending source alive while refusing
         // stale fork identities and already fulfilled duties before spending another fee.
         pending.retain(|(_, round, responder, object)| {
-            if (*round, *responder) != (ROUND, true) {
+            if (*round, *responder) != (lane_round, true) {
                 return true;
             }
             let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = object else { return false };
             let PalwConstraintStreamActionV1::SelectedEventAnswer(answer) = &movement.action else { return false };
+            if answer.answerer != signer {
+                // Another literal slot's packet (a delegated producer slot shares the lane).
+                return true;
+            }
             let paid = match session.palw_staged_paid_authority_v1((movement.claim, movement.reserver)) {
                 Err(_) => return true,
                 Ok(None) => return false,
@@ -77,7 +83,10 @@ impl PalwPanelService {
             }
         });
         for (claim, owner) in keys {
-            if pending.iter().filter(|(_, r, b, _)| (*r, *b) == (ROUND, true)).count() >= 64 {
+            if slot.only.is_some_and(|only| !only.contains(&claim)) {
+                continue;
+            }
+            if pending.iter().filter(|(_, r, b, _)| (*r, *b) == (lane_round, true)).count() >= 64 {
                 break;
             }
             let mut attempt = None;
@@ -102,7 +111,7 @@ impl PalwPanelService {
                 if !progress.session.custodians.contains(&signer) || progress.now_daa >= progress.session.respond_until_daa {
                     return Ok(());
                 }
-                let key = (request.demand_id, ROUND, true);
+                let key = (request.demand_id, lane_round, true);
                 if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == key)
                     || moved.get(&key).is_some_and(|at| progress.now_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
                 {
@@ -119,7 +128,7 @@ impl PalwPanelService {
                     .ok_or("selected responder resource profile unavailable")?;
                 let execution = self.reserve_replay_v1("public-selected-answer", &need, class, claim)?;
                 let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> =
-                    if PalwBondKeyV2(context.job.executor_bond) == signer {
+                    if PalwBondKeyV2(context.job.executor_bond) == signer && slot.only.is_none() {
                         self.executor_backend_v1(session, class, facts.artifact_root)?
                     } else {
                         Arc::from(self.resolve_backend(session, class, facts.artifact_root)?)

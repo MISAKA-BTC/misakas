@@ -193,6 +193,10 @@ fn main() {
     let mut retention_dir: Option<PathBuf> = None;
     let mut capture_path: Option<PathBuf> = None;
     let mut dsl_path: Option<PathBuf> = None;
+    // G14: an external producer's original public envelope — the run's public binding header and the
+    // standing custody delegation its node custodian co-signed. Both hex files of borsh bytes.
+    let mut public_binding_path: Option<PathBuf> = None;
+    let mut custody_delegation_path: Option<PathBuf> = None;
     // ADR-0077 SA-1(b). The gateway's own sweep uses the same number; it is spelled once here
     // because the two halves must retire the same artifacts, and a rail with a longer TTL would
     // submit exactly what the gateway retired.
@@ -263,6 +267,8 @@ fn main() {
             "--retention-dir" => retention_dir = Some(PathBuf::from(value("--retention-dir"))),
             "--capture" => capture_path = Some(PathBuf::from(value("--capture"))),
             "--dsl" => dsl_path = Some(PathBuf::from(value("--dsl"))),
+            "--public-binding" => public_binding_path = Some(PathBuf::from(value("--public-binding"))),
+            "--custody-delegation" => custody_delegation_path = Some(PathBuf::from(value("--custody-delegation"))),
             "--anchor-ttl-daa" => anchor_ttl_daa = value("--anchor-ttl-daa").parse().unwrap_or_else(|e| die(format!("{e}"))),
             // The public key a `--bond-key-seed` file yields, so an operator can put the SAME key
             // in the gateway's identity file before any inference runs. Without this the two
@@ -632,7 +638,77 @@ fn main() {
     if let Err(g) = misaka_palw_remote::verify::signing_gate_v1(mode, accept_unverified) {
         die(format!("nothing was signed: {g}"));
     }
+    // **G14: the original public envelope.** A claim whose class requires a staged public family is
+    // refused at admission without the producer's pledge over the node's native quote (op 242), and an
+    // external producer, which runs no node, must name the node custodian that answers its DA demands.
+    let public = public_binding_path.as_ref().and_then(|path| {
+        let header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1 =
+            read_borsh_hex_v1(path, 2048).unwrap_or_else(|e| die(format!("--public-binding {}: {e}", path.display())));
+        let endpoint =
+            rpc_endpoint.as_deref().unwrap_or_else(|| die("--public-binding needs --rpc: the pledge is over the node's native quote".into()));
+        let (quote, daa) = chain_preclaim_quote_v1(&rpc_runtime(), endpoint, &commitment, &header)
+            .unwrap_or_else(|e| die(format!("the node's preclaim quote is unavailable: {e}")));
+        if !quote.refusal.is_empty() {
+            die(format!("the chain would refuse this original public claim: {}", quote.refusal));
+        }
+        if !quote.available || !quote.quoted {
+            // No staged public court here, or the claim requires no family: a plain carrier.
+            return None;
+        }
+        let delegation_path = custody_delegation_path.as_ref().unwrap_or_else(|| {
+            die("this claim requires a staged public family: an external producer must pass --custody-delegation (a node custodian that answers its DA demands, co-signed)".into())
+        });
+        let delegation: kaspa_consensus_core::palw_history_custody_v1::PalwProducerCustodyDelegationV1 =
+            read_borsh_hex_v1(delegation_path, 16_384)
+                .unwrap_or_else(|e| die(format!("--custody-delegation {}: {e}", delegation_path.display())));
+        let accept_until_daa = quote.accept_until_daa;
+        let mut pledge = kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1 {
+            version: 1,
+            claim: kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&commitment),
+            producer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(commitment.job.executor_bond),
+            execution_root: commitment.execution_root,
+            job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&commitment),
+            cu_ruleset_id: header.job_context_v1().cu_ruleset_id,
+            resource_plan_id: quote
+                .resource_plan_id
+                .parse()
+                .unwrap_or_else(|_| die("the node's quote names a malformed resource plan id".into())),
+            maximum_records: quote.maximum_records,
+            maximum_custodians: quote.maximum_custodians,
+            accept_until_daa,
+            material_until_daa: accept_until_daa
+                .checked_add(quote.material_span_daa)
+                .unwrap_or_else(|| die("the quoted material horizon overflows".into())),
+            signature: Vec::new(),
+        };
+        pledge.signature = signer
+            .sign_message(
+                pledge.pledge_id_v1().as_byte_slice(),
+                kaspa_consensus_core::palw_history_custody_v1::PALW_HISTORY_PLEDGE_CONTEXT_V1,
+            )
+            .unwrap_or_else(|e| die(format!("cannot sign the original public custody pledge: {e}")));
+        Some((pledge, header, delegation, daa))
+    });
     let build = |fee: u64| {
+        if let Some((pledge, header, delegation, daa)) = &public {
+            return kaspa_pq_validator_core::build_fp_commitment_tx_with_delegated_public_v1(
+                signer,
+                &DEVNET_PARAMS,
+                *daa,
+                commitment.job.network_domain,
+                prompt_ids_form,
+                commitment.clone(),
+                result.prompt_token_ids.clone(),
+                price,
+                pledge,
+                header,
+                delegation,
+                funding_outpoint,
+                &funding_entry,
+                fee,
+            )
+            .unwrap_or_else(|e| die(format!("cannot build the original public commitment transaction: {e}")));
+        }
         build_fp_commitment_tx_with(
             signer,
             commitment.job.network_domain,
@@ -1509,6 +1585,38 @@ fn chain_class_leaves(endpoint: &str, class_id: Hash64) -> u64 {
 /// (`palw_fp_carried_prompt_ids_v1`: none under PanelDa or a canonical prompt), because those are
 /// the ids the fold reads; the job's full prompt would price a different prefix. `None` when the
 /// node does not answer (or holds no PALW state): the caller keeps the leaves era's rule.
+/// A bounded hex file of borsh bytes (whitespace trimmed), decoded strictly.
+fn read_borsh_hex_v1<T: borsh::BorshDeserialize>(path: &Path, maximum_bytes: usize) -> Result<T, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let hex = text.trim();
+    if hex.len() % 2 != 0 || hex.len() / 2 > maximum_bytes {
+        return Err("hex is malformed or exceeds its bound".into());
+    }
+    let mut bytes = vec![0u8; hex.len() / 2];
+    faster_hex::hex_decode(hex.as_bytes(), &mut bytes).map_err(|e| e.to_string())?;
+    borsh::from_slice(&bytes).map_err(|e| e.to_string())
+}
+
+/// G14 op 242 plus the node's virtual DAA, from the node the rail already names. Advisory: the
+/// accepting block recomputes the same quote; a stale answer only makes admission refuse.
+fn chain_preclaim_quote_v1(
+    runtime: &tokio::runtime::Runtime,
+    endpoint: &str,
+    commitment: &PalwFreePromptCommitmentV3,
+    header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+) -> Result<(kaspa_rpc_core::GetPalwStagedPreclaimQuoteResponse, u64), String> {
+    use kaspa_rpc_core::api::rpc::RpcApi;
+    let client = try_rpc_connect(runtime, endpoint)?;
+    let request = kaspa_rpc_core::GetPalwStagedPreclaimQuoteRequest {
+        commitment_hex: faster_hex::hex_string(&borsh::to_vec(commitment).map_err(|e| e.to_string())?),
+        binding_hex: faster_hex::hex_string(&borsh::to_vec(header).map_err(|e| e.to_string())?),
+    };
+    let quote = runtime.block_on(client.get_palw_staged_preclaim_quote(request)).map_err(|e| e.to_string());
+    let daa = runtime.block_on(client.get_block_dag_info()).map(|info| info.virtual_daa_score).map_err(|e| e.to_string());
+    let _ = runtime.block_on(client.disconnect());
+    Ok((quote?, daa?))
+}
+
 fn chain_fp_price(
     runtime: &tokio::runtime::Runtime,
     endpoint: &str,

@@ -3613,3 +3613,97 @@ impl Deserializer for GetPalwModelCertificationResponse {
         })
     }
 }
+
+/// G14 op 242: one original FP commitment and its public execution binding header, both as the
+/// lowercase hex of their borsh encodings (the exact bytes the HFP1 envelope will carry).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwStagedPreclaimQuoteRequest {
+    pub commitment_hex: String,
+    pub binding_hex: String,
+}
+
+impl Serializer for GetPalwStagedPreclaimQuoteRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.commitment_hex, writer)?;
+        store!(String, &self.binding_hex, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwStagedPreclaimQuoteRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let version = load!(u16, reader)?;
+        if version != 1 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown preclaim quote request version"));
+        }
+        let commitment_hex = load!(String, reader)?;
+        let binding_hex = load!(String, reader)?;
+        Ok(Self { commitment_hex, binding_hex })
+    }
+}
+
+/// The native quote at the node's accepted snapshot. `quoted` false with an empty `refusal` means
+/// the claim needs no required family (a plain carrier); a refusal names why admission would refuse.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwStagedPreclaimQuoteResponse {
+    /// False off ConsensusV2, below the staged fence, or with no accepted PALW snapshot.
+    pub available: bool,
+    pub quoted: bool,
+    pub refusal: String,
+    pub snapshot_block: String,
+    pub resource_plan_id: String,
+    pub maximum_records: u64,
+    pub maximum_custodians: u64,
+    /// The quote's own admission horizon at the snapshot (the pledge's `accept_until_daa`).
+    pub accept_until_daa: u64,
+    /// Clock-free: `material_until_daa = accepted_daa + material_span_daa`.
+    pub material_span_daa: u64,
+}
+
+impl Serializer for GetPalwStagedPreclaimQuoteResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(bool, &self.quoted, writer)?;
+        store!(String, &self.refusal, writer)?;
+        store!(String, &self.snapshot_block, writer)?;
+        store!(String, &self.resource_plan_id, writer)?;
+        store!(u64, &self.maximum_records, writer)?;
+        store!(u64, &self.maximum_custodians, writer)?;
+        store!(u64, &self.accept_until_daa, writer)?;
+        store!(u64, &self.material_span_daa, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwStagedPreclaimQuoteResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let version = load!(u16, reader)?;
+        if version != 1 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown preclaim quote response version"));
+        }
+        let available = load!(bool, reader)?;
+        let quoted = load!(bool, reader)?;
+        let refusal = load!(String, reader)?;
+        let snapshot_block = load!(String, reader)?;
+        let resource_plan_id = load!(String, reader)?;
+        let maximum_records = load!(u64, reader)?;
+        let maximum_custodians = load!(u64, reader)?;
+        let accept_until_daa = load!(u64, reader)?;
+        let material_span_daa = load!(u64, reader)?;
+        Ok(Self {
+            available,
+            quoted,
+            refusal,
+            snapshot_block,
+            resource_plan_id,
+            maximum_records,
+            maximum_custodians,
+            accept_until_daa,
+            material_span_daa,
+        })
+    }
+}

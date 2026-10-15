@@ -1228,6 +1228,14 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    fn palw_staged_custody_delegations_to_v1(
+        &self,
+        _custodian: crate::palw_state_v2::PalwBondKeyV2,
+        _after: Option<crate::Hash64>,
+    ) -> Result<(Vec<(crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>, Option<crate::Hash64>), String> {
+        Err("staged custody delegation reader unavailable".into())
+    }
+
     fn palw_staged_history_grant_duty_v1(
         &self,
         _claim: crate::Hash64,
