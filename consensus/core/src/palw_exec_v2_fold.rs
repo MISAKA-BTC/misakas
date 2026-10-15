@@ -1672,6 +1672,11 @@ pub(super) fn void_prefix_v2(
         PalwWorkPrefixStageV2::ProvenFalse { .. } => PalwVoidReasonV2::WorkSliceProvenFalse,
         _ => PalwVoidReasonV2::WorkSliceDefaulted,
     };
+    // G14 lane closure G-X1: the REAL claim's own licensed piece is proven false — every V2 seat that signed it Valid is charged S4
+    // on its lock (before the void releases anything). A default is withheld material, never a computation the seats vouched for.
+    if matches!(cause, PalwWorkPrefixStageV2::ProvenFalse { .. }) {
+        super::palw_g14_lane_closure_fold_v1::charge_exec_root_signers_on_proven_false_v1(builder, root_id, daa)?;
+    }
     if settled {
         super::palw_exec_v2_rewards_v1::invalidate_final(builder, root_id, dependency, ctx, reason)?;
     } else if let Some(claim) = builder.state.claims.get(&root_id).cloned()

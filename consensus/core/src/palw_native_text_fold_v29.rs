@@ -1497,8 +1497,12 @@ pub(super) fn reveal_paged(
         _ => return Err(refused("text29 paid court unrecognized kind")),
     };
     }
-    let settlement =
-        b.convict(seal.proof_root, seal.actor, seal.operator, f.maximum.producer_reserve, ctx.daa_score).map_err(refused)?;
+    // G14 lane closure G-14: the conviction collects what the producer's bond still holds of the reserve, never refused for less.
+    let collectible = crate::palw_g14_lane_closure_v1::palw_native_producer_collectible_v1(
+        builder.state.bonds.get(&h.producer).map(|v| v.collateral),
+        f.maximum.producer_reserve,
+    );
+    let settlement = b.convict(seal.proof_root, seal.actor, seal.operator, collectible, ctx.daa_score).map_err(refused)?;
     settle(builder, ctx, &p, &mut h, &b, &settlement, Some(signer))?;
     let mut paid = seal.clone();
     paid.spent = true;

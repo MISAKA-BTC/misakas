@@ -837,3 +837,83 @@ fold 水準の試験は署名を合成し、署名検証後の半分(`apply_veri
 7. tag 170/171 の A-2 wire pin を Rust 試験で確定し、native inventory 生成器を再実行して、手で直した 4 行(`PalwTransitionExtrasV1`、`PalwTirPublicSpentV1`)と一致させること。
 8. V1〜V7 と drill D-05 / D-06 / D-07 / D-18 を、出荷 binary で fence をまたいで実行すること(D-05 / D-06 は 1 が前提)。
 9. 能動的に demand を続ける owner による slot 占有の費用と継続時間の評価(G-T1 の残り)。
+
+## 付録 C. lane 閉鎖で変わった行列 cell(2026-10-16、branch `integ/g14-close-lanes` @ `5bdd427fb`)
+
+本文(§0〜§6)は監査時点 `f244ed92d` の記録として残し、書き換えない。この付録は §3.4〜§3.6 の「武装時」列のうち、閉鎖 commit で変わった cell だけを記す。
+DAA 14,000 の P14-min / P14-g14 列(3 lane とも OUT-OF-SCOPE)は変わらない。新しい規則は各 lane 自身の fence(`palw_probabilistic_constraints_v1`、
+`palw_exec_payload_v2`、native funded / Final27 / v39)の下だけで効き、全 preset で `None`・validation が武装を拒否する。`Params` の field は足していない
+(t12 の `palw_t12_flag_day_9000` 9 件と `shipped_presets_have_pinned_fingerprints` が通り、params id / identity は不変)。fence を DAA 0 にしても成り立つ。
+
+| lane | F | 旧(武装時) | 新(武装時) | 変更 | 試験(水準・結果) |
+|---|---|---|---|---|---|
+| Kernel / OPV | F16 | PARTIAL(seat は無傷、G-K1) | **COVERED** | 数えられた passing receipt ごとに署名者責任 lock(kernel aux 143 `0x01`、ADR-0151 の seat lock 関係)。committed に入り責任期限まで退出不可、有罪で 1 回 slash、期限・timeout で解放(`palw_g14_lane_closure_fold_v1.rs`、`palw_kernel_route_fold_v1.rs:1237`・`:2085`・`:2148`) | T-N11 `kernel_route_valid_signers_are_charged_on_conviction`(node、本番 onboarding 経路で attestation hook なし、Final 前・Final 後・正直 claim の解放、replay)PASS |
+| Kernel / OPV | F19 | COVERED | COVERED(seat にも退出保留) | 署名者 lock が V2 committed に入る(`palw_kernel_route_v1.rs:605`) | 同上 |
+| Kernel / OPV | F08(v4) | PARTIAL(v4 の material は block body のみ、pruning 規則なし、G-K4) | PARTIAL(pruning 規則あり、v4 は報酬対象外のまま) | segmented claim に最初に応答した block を記録(aux 143 `0x02`)し、claim が有罪にできる間は pruning point がそれを越えない(`processor/palw.rs:815`) | node 回帰のみ(下記)。専用試験は未作成 |
+| EXEC slice | F16 | GAP(REAL root の V2 署名者を課金しない、G-X1) | **COVERED** | REAL claim 自身の piece(prefix claim)が反証されたら V2 Valid 署名者を S4(covering-signer funnel、1 回)。後続 executor の slice は V2 seat が署名していないので課金せず、その kernel claim と receipt 署名者(G-K1)が負う(`palw_exec_v2_fold.rs:1675`) | T-N12 `exec_real_root_v2_signers_are_charged_when_a_slice_is_proven_false`(fold、EXEC fence 0)PASS。`a_pending_prefix_holds…`(fold)を新規則に更新 PASS |
+| native funded | F22 | GAP(担保不足で裁定拒否、G-14) | PARTIAL | v11 / v16 source / v29 / v39 の裁定・default は担保不足で拒否しない:void・依頼者へ escrow 返金・残る担保だけ徴収、finder は徴収額に比例(`palw_g14_lane_closure_v1.rs` の `palw_native_*`、各 fold の G-14 注記) | T-N13 `native_conviction_is_not_refused_for_short_collateral_v29` / `_v39`(book 水準)PASS。fold / node 水準は native の harness が repository に無く未作成 |
+| native funded | F18 | PARTIAL(finder ≤ 1000‰) | PARTIAL(finder ≤ 490‰) | native policy の finder 取り分を ADR-0032 の 49 % 以下に制限(`palw_flat_execution_v11.rs:1015`)。正直な finder の誘因は G-K3 と同じく未解決 | unit `g14_lane_closure_values_come_from_documented_relations` PASS |
+| native funded | F13 | GAP(4 枠の先取り、G-N1) | PARTIAL | v39:期限切れ owner が枠を返す(`palw_native_protected_fold_v39.rs:250`・`:601`)。v11 / v29 は未解決(下記) | 試験なし(native harness 無し) |
+
+集計(§3.9 の C 行、武装時の参考):Kernel / OPV 11/8/2/2/1 → 12/7/2/2/1、native funded 0/17/4/2/1 → 0/19/2/2/1、EXEC slice 13/5/3/2/1 → 14/5/2/2/1。
+
+**閉じていないもの:** G-N1 の v11 / v29(4 枠は producer が前払いした回答義務の上限でもあり、kernel quota の subject 計数と lifetime catalogue の再設計が要る)、
+G-N2(v39 mining claim の Final 後の公開告発:job quota interval を越える告発の搬送、material 保持、attestor の責任額、veto は RFC-0018 U-6 のユーザー判断)、
+G-K2(EXEC REAL root の seam `exec_v2_test_admit_class_v1` は GAP-81 のまま。kernel の Panel 許可 class は T-N11 が seam なしで通す)、
+G-K3(検証者誘因 P0:readiness matrix の案 A / B の選択はユーザー判断)、native の fold / node 試験。
+
+## 付録 D. 追記 — legacy route を閉じる lane が変えた cell(2026-10-16、branch `integ/g14-close-legacy`)
+
+本文と付録 B は書き換えない。以下は `fdb5d41cf`(code)と `acb7dd346`(node E2E)、base `b52cb2892` で入れた変更と、それが動かす cell だけを記す。
+新しい規則はすべて休眠 fence の下にある(全 preset で `None`、`PALW_G14_ARMING_RECORDS_V1` は空)。testnet-12 の ids は base と同一
+(launch `b8564b88…` / `5de80e64…` / `93da24cc…`、shipped `5ee7fd8e…` / `5de80e64…` / `1678e073…`)。状態は「実装済み・fold と node E2E が通った」で、
+測定と fence をまたぐ drill は未実施(armable ではない)。
+
+### C.1 gap ごとの処置
+
+| gap | 処置(code) | 試験 |
+|---|---|---|
+| LG14-A / LG14-B の武装 | 無条件の拒否を arm-readiness record の gate に置換(`PalwG14GatedFenceV1::LegacyPublicFilerV1` / `LegacyHeldDaV2`、要件 `PALW_LEGACY_FILER_ARMING_REQUIREMENTS_V1` / `PALW_LEGACY_HELD_DA_ARMING_REQUIREMENTS_V1`、測定値を要する)。LG14-B は ConsensusV2 と、同じ高さ以下の LG14-A を要する。`Params::validate_palw_v2_with_arming_records_v1(records)` は pin の列だけを差し替えた全 validation(node は `validate_palw_v2` = pin の列で検査する) | `lg14_arming_needs_a_record_naming_the_network_and_height` |
+| G-06 | reservation の Final hold と `DirectProofFirst` は既存(LG14-A)。追加: live な reservation を持つ非 seat は、先に開いた decoy court の横で自分の held dissection を 1 本開ける(`check_further_held_dissection_v1`、seat の `1 + seat_count` 枠は消費しない。fence 未満では reservation が存在しないので判定は不変)。`DirectProofFirst` は独立 fence にしない: RFC-0014 §7.3 の AND の片側で、hold なしでは時計に、それなしでは decoy court に負ける。option (b) は両方を要するので、分けても G14 でない武装状態と record が増えるだけ | `g06_a_reserver_opens_its_dissection_beside_a_decoy_court_and_holds_final`(fold)、node E2E の Final 保留 |
+| G-07(DA 側) | 既存の予約別予算(予約ごと 34 session、bond ごと live 64 / retained 64、DA-8 の共有予算を読まない)で閉じている。code の追加なし | `g07_a_coalition_cannot_spend_the_outsiders_budget` |
+| G-07(court 上限) | **閉じていない**(C.3) | `g07_residual_the_network_court_cap_is_shared`(残余を固定) |
+| G-13 | LG14-A 以後に受理された claim の Valid lock の寿命を `window_court`(責任期限 `F + window_court` = liability row の期限)にする(`PalwStateParamsV2::valid_lock_life_for_claim_v1`。licence、supplementary、Final の 3 か所と F2-lock の遡及短縮)。依拠された seat の slashable lock を失った kind-3 conviction は拒否(`palw_g13_relied_lock_lost_v1`) | `g13_a_valid_lock_lives_to_the_liability_horizon`、node E2E の seat slash |
+| Free Prompt | TIR frame で回復できる family に残っていた LG14-A への依存は「LG14-A が武装不可」だけ(G-18)。record gate で解消。G-05 の job version は option (b) のまま拒否 | `fp_recoverable_families_have_no_remaining_lg14a_dependency` |
+| G14 from genesis | `palw_g14_genesis_test_params_v1` に LG14-B(DAA 0)を追加。gates lane の genesis 2 試験を更新(V2 Attempt は block 0 から route あり、LG14-B を外すと拒否) | `g14_close_legacy_from_genesis`、`g14_genesis_*`(gates) |
+
+### C.2 動く cell(§3.2 V2 Attempt、LG14-A + LG14-B を武装した場合)
+
+P14 の `2 / 15 / 5 / 0 / 2` → `10 / 11 / 1 / 0 / 2`(C / P / G / O / n/a)。
+
+- GAP → COVERED: F12(Final 保留、直接証明、予約者の dissection)。
+- GAP → PARTIAL: F01、F13、F16(残りは fused leaf の嘘が依る court 上限 = C.3。非 fused の全 seat 共謀は node E2E で conviction・slash まで届く)。
+- PARTIAL → COVERED: F02・F03・F04・F07・F10(binding と局所化を予約の自前予算で得られる)、F08(held unit の沈黙は DA default、node E2E)、F19(G-13 で lock が責任期限まで残る)。
+- 変わらない: F05(2M held class は回答不能のまま)、F14(GAP-B12)、F15(rule E、G-11)、F17(lazy verifier の誘因、trap は経済値を要する)、
+  F18(報奨の先取り、ADR-0032 の残余)、F20(producer の model 保有を chain で審査しない — PRINCIPLES §9 の凍結前提)、F21(証拠が N\* 試験のみ)、
+  F22(bond 式 v2 = G-12、測定値を要する)、F23(gen v1 画像 class の attempt)。
+
+Free Prompt(§3.3)は option (b) により DAA 14,000 以後の新規 claim では OUT-OF-SCOPE のまま(付録 B.3)。frame 付き FP の route に LG14-A 由来の欠けは残らない。
+
+### C.3 閉じていないもの
+
+- **G-07 の court 上限。** `palw_max_concurrent_court_sessions_v1`(testnet-12 で 42)は 1 block 1 court move × rung window の積で、超えると正直な mover が rung を落として default になる。
+  bond ごとの予算や分割は複数 bond の連合を止めず、撤廃は slot 保証を壊す。閉じるには、測定した block あたりの court 予算(上限がそれに比例する)か、slot × 時間の価格(burn)が要る。
+  影響は fused leaf の嘘だけで、その間も reservation が claim を hard deadline まで保留する(Final・報酬・weight なし)。
+- **G-12 / F22**(bond 式 v2 の値)、**F17**(検証者の誘因)、**F14**(GAP-B12)、**F15**(rule E)。
+- **G-13 の capacity。** LG14-A 以後の claim では lock が `F + 1,000` から `F + window_court` に伸びる(2026-09-26 の V02 の短縮はこの claim には適用しない)。Panel の資本効率への影響は record の V5 で測る。
+
+### C.4 実行した試験(2026-10-16、この branch、targeted のみ)
+
+- `cargo test -p kaspa-consensus-core --test g14_close_legacy`: **8 passed**(arming、FP 依存、G-06、G-07、G-07 残余、G-13、genesis、t12 identity)。
+- `--test g14_close_gates`: **12 passed**、`--test lg14a_legacy_dispute_fold`: **9 passed**、`--test t12_aheld_same_leaf_decoy`: **1 passed**。
+- `cargo test -p kaspa-consensus --lib -- lg14a_legacy_filer_e2e::`: **14 passed**(新規 `legacy_v2_attempt_full_collusion_outside_bond_convicts`、
+  `legacy_v2_attempt_held_da_withholding_ends_in_da_default` と既存 12 件)。全 seat 共謀の E2E では 5 seat 全員が liable で slash された。
+- 実行していない: workspace 全体、clippy、kaspad(`palw_legacy_held_e2e` など LG14-B の kaspad 試験)、lib unit test。
+
+### C.5 DAA 14,000 で LG14-A / LG14-B を武装するために要るもの
+
+- record: `LegacyPublicFilerV1`・`LegacyHeldDaV2`(testnet-12 genesis、height 14,000)と option (b) `G14RouteRequiredV1`。各 requirements の evidence digest、review、source commit を、reviewed change で
+  `PALW_G14_ARMING_RECORDS_V1` に pin する。
+- 測定(V5): class ごとの hard-deadline envelope(GAP-07)、descent の round 数・answer bytes・34 session 予算、lock 延長下の Panel capacity、court 上限の競合。
+- drill(出荷 binary で 14,000 をまたぐ): D-02(legacy Attempt の 1 leaf 偽造を、genesis 後 bond の outsider が全 seat 共謀下で conviction・slash)、D-11(held unit の差し控え → DA default)、
+  D-13(Sybil の予約・session・decoy court の先取り)、D-16(制裁前の退出: lock が責任期限まで残る)。14,000 前に受理された claim は旧規則で settle すること。

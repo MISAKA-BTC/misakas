@@ -812,6 +812,11 @@ impl VirtualStateProcessor {
             Err(_) => return false,
         };
         let Ok(header) = self.headers_store.get_header(candidate_point) else { return false };
+        // G14 lane closure G-K4 (dormant: rows exist only past the kernel route's fence): a segmented claim's served parts live only
+        // in block bodies, so pruning never passes the first block that served one while that claim is still convictable.
+        if state.kernel_route().and_then(|route| route.served_material_pruning_ceiling_v1()).is_some_and(|c| header.blue_score > c) {
+            return false;
+        }
         let (frontier, _) = state.safe_frontier();
         // **RFC-0018 §7.7 (Gate C)**: past the fence the frontier moves only on SecurityCertified claims, so pruning must not wait for
         // it — the ceiling is the pruning-progress rule, independent of security credit: below the oldest unresolved claim and the

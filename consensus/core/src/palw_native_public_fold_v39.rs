@@ -397,7 +397,12 @@ fn default(
         b"misaka-palw/native/original-objective-DA-default/v39",
         &(h.id, h.original.root(), v.id, v.unit, v.until, v.root()),
     );
-    let s = book.convict(ctx.daa_score, proof, h.original.reserve, v.operator).map_err(bad)?;
+    // G14 lane closure G-14: the default collects what the producer's bond still holds of the reserve, never refused for less.
+    let collectible = crate::palw_g14_lane_closure_v1::palw_native_producer_collectible_v1(
+        builder.state.bonds.get(&h.original.producer).map(|b| b.collateral),
+        h.original.reserve,
+    );
+    let s = book.convict(ctx.daa_score, proof, collectible, v.operator).map_err(bad)?;
     settle_pending(builder, &h, &mut v, false)?;
     super::credit(builder, ctx, p, &mut h, &book, &s, Some(v.requester))
 }
