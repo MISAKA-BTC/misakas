@@ -95,7 +95,8 @@ pub fn source_protocol_root_v39() -> Digest {
             SOURCE_PART_BYTES_V39 as u64,
             SOURCE_UPLOAD_MAX_BYTES_V39 as u64,
             misaka_palw_kernel::flat_resources39::ordinary_court_id_v39(),
-            b"canonical39;real-PC-only;inputs-separate;original-context;paid-before-parse;owning-material61-64".to_vec(),
+            crate::palw_native_job_v39::final_conditions_id_v39(),
+            b"canonical39;real-PC-only;inputs-separate;original-context;paid-before-parse;owning-material61-64;metadata67-70;master-body-pages93x32768".to_vec(),
         ),
     )
 }

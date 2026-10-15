@@ -171,7 +171,10 @@ impl CheckedNativePagedCarriagePlanV29 {
             .and_then(|n| n.checked_mul(2))
             .ok_or("carriage39 complete producer transport burst overflow")?;
         let answer_packets = (11u32 * 2 * 4).max(commit_packets);
-        let proof_packets = (p.pages as u32).checked_mul(4 * 2).ok_or("carriage39 complete paid proof burst overflow")?;
+        let proof_packets = (p.pages as u32).checked_mul(2)
+            .and_then(|n| n.checked_add(2 + 1)) // two assemblies and one discovery conversion
+            .and_then(|n| n.checked_mul(4))
+            .ok_or("carriage39 complete paid proof burst overflow")?;
         let answer_window = answer_window.min(commit_window);
         let density = density(answer_packets, answer_window, service.period_daa)?
             .checked_add(density(proof_packets, proof_window, service.period_daa)?)

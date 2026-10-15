@@ -73,7 +73,7 @@
 
 ## 1. 不可侵原則
 
-MISAKAの有用計算は、Panelの多数派、単独Panel、producer、または特権的operatorの正直さを、安全性の最終根拠としてはならない。
+不正発覚後の有罪判定は、Panelの多数派、単独Panel、producer、または特権的operatorの主観的判断に委ねない。合意creditの認証では、§8に従い、抽選された検証者の承認と、明示した正直な割合の前提を用いる。この前提と客観的裁定を混同しない。
 
 MISAKAは従来のPoWと異なり、有用計算の実行結果を検証する費用が、その計算自体の実行費用に匹敵し、場合によっては上回るという問題を前提とする。
 
@@ -97,7 +97,7 @@ MISAKAは従来のPoWと異なり、有用計算の実行結果を検証する�
 - 計算区間
 - tensorの一部
 - 状態遷移
-- Freivalds/GKR等によって集約された計算制約
+- Freivalds等の代数的スポットチェックの対象となる計算制約
 
 検証者は、原則として巨大なモデルの全計算を再実行する必要はない。少数の検査で不一致を発見し、発見後に対象を絞り込んで客観的な裁定へ進める。
 
@@ -207,12 +207,22 @@ MISAKAは、次の4つによって、計算費用よりも検証費用が重く�
 - 立証された不正をslashし、残る被害をbond単位の上限で有界化する。
 - モデルを共有してbondを集めた方が、非公開より多くの配分を得る経済構造にする（§0）。
 
-そして、**MISAKAの安全性は、Panelの人数や誰かの正直さではなく、検証の健全性、不正追及の公開性、裁定の客観性、bond単位の被害上限によって定義される。MISAKAの最終Goalは不正の完全排除ではなく、モデルの非公開を経済的に不利にすることである。**
+そして、**MISAKAの安全性は、検証の健全性、不正追及の公開性、裁定の客観性、bond単位の被害上限、合意creditを承認する抽選検証者の正直な割合について明示した前提によって評価する。MISAKAの最終Goalは不正の完全排除ではなく、モデルの非公開を経済的に不利にすることである。**
 
 > **MISAKA不可侵原則 —「確率的に検出し、公開証拠で局所化し、決定論的に裁き、被害をbondで有界化する。モデルの非公開は経済的に不利にする。」**
 > *Probabilistic Detection. Public Localization. Deterministic Adjudication. Bond-Bounded Damage. Closure Is Uneconomic.*
 
 ---
+
+## 8. LLM計算の暗号学的証明を使用しない — 2026-10-15ユーザー決定
+
+**MISAKAはLLM・モデル計算の正しさを暗号学的に証明する仕組みを一切使用せず、今後も使用しない。** この決定は、設計案・RFC・ADR・実装・将来計画・研究項目のすべてに適用する。
+
+- zero-knowledge証明、zk-SNARK / zk-STARK、zkVM・zkML、PCS等に基づくsuccinct argument / validity proof、再帰証明・proof aggregationを採用候補に挙げない。
+- 計算の検証は、サンプリング再実行・決定論的再計算・代数的スポットチェックによる確率的検出、公開証拠による局所化、決定論的裁定、経済的抑止で行う。
+- 合意creditの認証は、抽選された検証者の承認を、正直な割合の明示的な前提の下で用いる。自分の再実行の一致、challenge期間の終了、公開異議の不在、escrowのFinal・償還だけでこの承認を代用しない。
+- ハッシュ・署名・Merkle commitment・VRF/beaconは、データの同一性・認証・乱数のために使ってよい。これらを計算の正しさの証明として扱わない。
+- 局所的な不一致の公開証拠による有罪判定と、計算全体の正しさを保証することは区別する。検査の見逃し、共謀、検証者が参加しない場合の前提と限界を明記する。
 
 ## 付録 — この前提が現在の作業をどう縛るか (Lead, 2026-10-09)
 
@@ -224,7 +234,7 @@ This appendix records where the principle already decides open work. It is a poi
   - its detection probability is stated, including the probability that a capable honest verifier actually checks;
   - its collateral covers the maximum gain divided by that probability.
 
-  Where that is unaffordable, aggregated checks (Freivalds/GKR-style) are required, not a lower assumed detection rate.
+  Where that is unaffordable, algebraic spot checks such as Freivalds may reduce checking cost; they do not prove correctness of the whole computation. Do not substitute a lower assumed detection rate. Section 8 excludes cryptographic computation proofs from every implementation and future plan.
 
   **Amended 2026-10-14 (§0):** the detection-probability bound and the collateral-covers-gain/p condition are no longer gates for earning. They are measured and reported (UNKNOWN when unknown). The gate is the per-bond Block / Reward / Final Weight caps, objective court and slash for any model shared with at least one honest verifier, and the two-stage closure-disadvantage evaluation. `p = 0` for a closed model is a bounded residual risk.
 - **§2's grinding resistance** is why the sealed-source beacon (v3) and the complete-check bootstrap are prerequisites for any sampled approval.

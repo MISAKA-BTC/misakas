@@ -1036,3 +1036,17 @@ impl NativeSingleCreditV39 {
         object_id(b"misaka-palw/native/original-actual-single-credit/v39", self)
     }
 }
+
+/// Owning39 authority identity. Economic detection/expected-profit observations
+/// are reporting metrics, not numerical activation gates. Hash/Merkle paths
+/// authenticate original source/material/trace identity only; local courts
+/// recompute a disclosed disputed relation. A funded escrow Final grants no
+/// block reward or Final weight and cannot replace sampled-validator approval.
+pub fn final_conditions_id_v39() -> Digest {
+    object_id(b"misaka-palw/native/original-Final-authority-rules/v39",&(
+        39u16,
+        misaka_palw_kernel::flat_resources39::ordinary_court_id_v39(),
+        misaka_palw_kernel::flat_public39::public_protocol_id_v39(),
+        b"metrics-report-only;original-paid-coins/shared21/queue30/mass/temporal;independent-finalizer;public-local-reexecution-courts;identity-only-hash-signature-merkle;escrowFinal-zero-B-F-R;sampled-validator-credit-separate;no-cryptographic-LLM-correctness-proof".to_vec(),
+    ))
+}

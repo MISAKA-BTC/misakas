@@ -23,6 +23,10 @@ impl NativeCarrierCandidateV22 {
     /// unit in a block, never many variants against an immutable old counter.
     pub fn key(&self) -> (u8, u8, [u8; 64], u16) {
         let (kind, id, part) = match self.request {
+            NativePaidCarrierRequestV22::ProofPartV39 {seal,index,mode,..}=>(if mode==0 {7} else if mode==1 {8} else {12},seal,index),
+            NativePaidCarrierRequestV22::AnswerPartV39 {pending,index,..}=>(9,pending,index),
+            NativePaidCarrierRequestV22::CommitPartV39 {job,index,..}=>(10,job,index),
+            NativePaidCarrierRequestV22::CommitAssembleV39 {job,..}=>(11,job,0),
             NativePaidCarrierRequestV22::ProducerAnswerPartV29 {pending,index,..}=>(4,pending,index),
             NativePaidCarrierRequestV22::FundedCommitPartV32 {job,index,..}=>(5,job,index),
             NativePaidCarrierRequestV22::FundedCommitAssembleV32 {job,..}=>(6,job,0),

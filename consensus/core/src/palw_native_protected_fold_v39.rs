@@ -102,7 +102,7 @@ impl Owner {
     pub(super) fn root(&self) -> Digest {
         object_id(b"misaka-palw/native/original-paid-discovery-proof/v39", self)
     }
-    fn has(&self, i: u16) -> bool {
+    pub(super) fn has(&self, i: u16) -> bool {
         self.accepted[i as usize / 8] & (1 << (i % 8)) != 0
     }
 }

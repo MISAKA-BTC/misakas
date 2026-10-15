@@ -24,7 +24,7 @@ A remote client can verify the PALW fork choice only if three separate things ho
    the EVM lane, round verdicts, attempt admission); there is no PALW-only replay. **PROPOSED for `VERIFIED_REMOTE`: an attested root
    (a trusted checkpoint, as the user's ruling allows) — a signed statement "block B's post-state commits root R" from issuers the user
    chose, checked against the opening and against B's chain children when they exist.** Full re-execution is the FULL_NODE path (a
-   pruned node from a checkpoint; costs in §4). A succinct proof of the fold is research; the commitment of (1) is its interface.
+   pruned node from a checkpoint; costs in §4). The commitment of (1) authenticates the state opening. The former succinct-proof research option is withdrawn under the user's 2026-10-15 decision (PRINCIPLES §8).
 3. **The same rule, over every candidate the network shows.** The client never computes an order of its own: it evaluates the node's
    own decision functions (`palw_fork_authority_v2`) on the verified inputs, in both directions, with every input it cannot verify
    taken both ways; it chooses only when every in-force variant agrees, and STOPs otherwise. Hidden tips are caught only by a second
@@ -199,7 +199,7 @@ the fold means running the consensus pipeline.
 |---|---|---|---|---|
 | **A. Full re-execution from a checkpoint** (a pruned node: `kaspa-consensus` embedded, blocks fetched from untrusted peers) | the pruning-point state (UTXO set, PALW carriage, the headers proof and DAG window) and every block since | PALW carriage ≈ 57 MB and growing (pruned-IBD record); t12's pruning point stays near genesis (pruning depth 74,920 blue ≈ 25k DAA), so a sync today is the whole chain: ≈ 9k DAA × ~3 blocks; per chain block the fold plus one `state_root()` over the whole state (§6, MEASURED) | sound (independent verification) | **the FULL_NODE path**; labelled `FULL_NODE`, not a light client |
 | **B. Bounded window** (trusted state at C, re-execute C→T) | the same import at C (UTXO + PALW + DAG window), then ≤ W blocks | dominated by the import (≥ 57 MB); the window saves only replay time; and kaspad imports state only at the pruning point, so a recent-C import is new node work | sound given the trusted C | no saving over A; not built |
-| **C. Succinct proof of the fold** (zkVM/STARK per block, aggregated) | a proof per view + the opening | proving a 76k-line fold with ML-DSA-87 verification and full-state BLAKE2b per block: no known prover is near real time | sound | research; the §2 commitment is its interface (a proof of "R is the fold" + the opening = verified keys) |
+| **C. Former succinct-proof research option** | withdrawn | permanently excluded by the 2026-10-15 user decision, PRINCIPLES §8 | no supported mode | not an implementation or research candidate |
 | **D. Attested root** (trusted checkpoint at a bounded lag) | per candidate: one attestation (≈ 4.9 KB, ML-DSA-87) + one opening (356 B) | §6 | sound **relative to the issuers' trust**: the issuer re-executed (it runs a full node); the client verifies the binding, the chain linkage, freshness and the comparator | **RECOMMENDED for `VERIFIED_REMOTE`** |
 | E. Bonded attestation with objective refutation | D, with the issuer's bond slashable for an attested root that disagrees with the chain's own child-header commitment | as D | as D, plus accountability | future (a court object; out of this lane) |
 

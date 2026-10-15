@@ -3623,12 +3623,25 @@ exporter does not yet export a Rule-E V2 leaf; such an active profile must fail
 explicitly. The new39 A6 receipt extractor/verifier still needs its native book
 and complete Master linkage. None of these source changes has been executed.
 
-Other remaining implementation includes the owning39 job fold's shared nonce,
-actual debit, protected source/trace delivery, court, independent Final and
-component credit closure; the cold independent detector/filer; and genuine
-complete-Master39 to ordinary FP eligibility for block production, coinbase and
-Final weight. A privately paid job's escrow Final grants none of those rights by
-itself. Source registration and local qualification flags likewise grant none.
+The next unverified increment adds the shared nonce and actual debit, original
+component invocation hooks, protected delivery/court and single escrow-credit
+closure, concrete disk-backed independent replay/filer and bounded upstream
+output material. Large Master and producer-consent metadata now use explicit
+67–70 upload actions; the retained Master body uses authenticated 32-KiB pages
+(kind93) instead of a row exceeding the audit RPC's bound. A source audit view
+reconstructs the actual registered classes, complete source, public request,
+component order and immutable edges from the fully authenticated aux stream.
+It deliberately carries no Final or mining authority. These paths remain
+uncompiled and unexecuted.
+
+Remaining code includes final transport/collection and readonly native39
+Final/receipt integration, two-window A6/A8 adaptation, source/class retention
+and reuse, and genuine complete-Master39 to ordinary FP eligibility for block
+production, coinbase and Final weight. A privately paid job's escrow Final
+grants none of those rights by itself. Source registration and local
+qualification flags likewise grant none. Consensus credit needs the actual
+randomly selected validator approvals, with their honest-fraction assumption
+stated explicitly; source identity or optimistic closure cannot replace them.
 The frontend39 source writers are connected, while publisher task preprocessing,
 variable image geometry/token expansion and exact original request metadata
 still require explicit implementation and fidelity checks. Every large-model
@@ -3645,6 +3658,15 @@ After all implementation is complete, the consolidated validation must cover
 compilation, relevant regressions and adversarial courts, independently replayed
 native Final/coinbase/redemption, original checkpoint/context measurements, A6/A8
 and all seven initial models. Historical passes below do not validate this source.
+
+The user's 2026-10-15 permanent decision is now recorded in the repository
+AGENTS.md and PRINCIPLES §8. No cryptographic proof of model computation may be
+implemented or proposed. Existing commitment/opening/filing names refer to data
+identity authentication or public local counterexamples. The owning39 Final
+conditions are also being separated from the frozen27 hard detection-rate and
+negative-expected-gain gates, which conflict with PRINCIPLES §0: those metrics
+must be reported, including UNKNOWN, while original bond caps, objective courts,
+paid resources and deadlines remain mandatory. This correction is unfinished.
 
 ## Validation (2026-10-15) — paused 10-15 by user order
 

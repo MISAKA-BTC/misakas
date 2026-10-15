@@ -51,6 +51,9 @@ USAGE:
     palw-class certify   --network <id> --out <path> [--model-id <model-id>] [--family-id <hex>] <artifact-path>
     palw-class drill-leaves --network <id> [--model-id <model-id>] [--decode N] <artifact-path>
     palw-class close-sizes --network <id> [--anchor <hex>] [--json] <artifact-path>
+    palw-class prepare-upstream-material39 --plan <json> --plan-sha256 <hex> --input-root <dir> --out <fresh-dir>
+    palw-class audit-native39 --network <id> --plan <json> --plan-sha256 <hex> --post <file> --post-sha256 <hex> --class-wire <file> --class-wire-sha256 <hex> --input-root <dir> --producer-archive <dir> --cache-disk-bytes N --independent-disk-bytes N --out <fresh-dir> [--demand <borsh>]
+    palw-class produce-native39 --plan <json> --plan-sha256 <hex> --input-root <dir> --out <fresh-dir>
     palw-class compile-runtime-q36-39 --declaration <json> --declaration-sha256 <hex> --original-source-dir <dir> --out <fresh-dir>
     palw-class compile-complete-frontend39 --declaration <json> --declaration-sha256 <hex> --original-source-dir <dir> --out <fresh-dir>
     palw-class compile-complete-frontend28 --declaration <json> --declaration-sha256 <hex> --original-source-dir <dir> --out <fresh-dir>
@@ -648,6 +651,94 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             let report =
                 misaka_palw_sdk::full_component_v28::frontend::compile_complete_frontend_v28(&declaration, sha, &source, &out)?;
+            println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
+            Ok(())
+        }
+        "audit-native39" => {
+            let plan = PathBuf::from(take_flag(&mut args, "--plan").ok_or("--plan required")?);
+            let sha = take_flag(&mut args, "--plan-sha256").ok_or("--plan-sha256 independent plan pin required")?;
+            let sha: [u8; 32] = misaka_palw_tir_lower::frontend_pack::program::unhex(&sha, 32)
+                .map_err(|e| e.to_string())?
+                .try_into()
+                .map_err(|_| "plan SHA extent")?;
+            let root = PathBuf::from(take_flag(&mut args, "--input-root").ok_or("--input-root required")?);
+            let mut file = |name: &str| -> Result<misaka_palw_sdk::native_producer_v39::PinnedProducerFileV39, String> {
+                Ok(misaka_palw_sdk::native_producer_v39::PinnedProducerFileV39 {
+                    path: take_flag(&mut args, name).ok_or_else(|| format!("{name} relative pinned file required"))?,
+                    sha256: take_flag(&mut args, &format!("{name}-sha256"))
+                        .ok_or_else(|| format!("{name}-sha256 independent pin required"))?,
+                })
+            };
+            let post = file("--post")?;
+            let class = file("--class-wire")?;
+            let archive = PathBuf::from(take_flag(&mut args, "--producer-archive").ok_or("--producer-archive required")?);
+            let out = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out fresh directory required")?);
+            let cache = take_flag(&mut args, "--cache-disk-bytes")
+                .ok_or("--cache-disk-bytes explicit cache reservation required")?
+                .parse::<u64>()
+                .map_err(|e| e.to_string())?;
+            let independent = take_flag(&mut args, "--independent-disk-bytes")
+                .ok_or("--independent-disk-bytes explicit replay reservation required")?
+                .parse::<u64>()
+                .map_err(|e| e.to_string())?;
+            let demand = take_flag(&mut args, "--demand")
+                .map(|p| {
+                    misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(
+                        std::path::Path::new(&p),
+                        misaka_palw_kernel::flat_public39::REQUEST_MAX_BYTES_V39,
+                    )
+                })
+                .transpose()?;
+            let mut view = network_view(network.as_deref().ok_or("--network owning ruleset required")?)?;
+            apply_own_native_params_v34(&mut args, &mut view.params)?;
+            if !args.is_empty() {
+                return Err("audit-native39 takes only explicit pinned options".into());
+            }
+            let report = misaka_palw_sdk::native_producer_v39::audit_from_plan_v39(
+                &plan,
+                sha,
+                &root,
+                &post,
+                &class,
+                &view.params,
+                &archive,
+                &out,
+                cache,
+                independent,
+                demand.as_deref(),
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
+            Ok(())
+        }
+        "produce-native39" => {
+            let plan = PathBuf::from(take_flag(&mut args, "--plan").ok_or("--plan required")?);
+            let sha = take_flag(&mut args, "--plan-sha256").ok_or("--plan-sha256 independent pin required")?;
+            let sha: [u8; 32] = misaka_palw_tir_lower::frontend_pack::program::unhex(&sha, 32)
+                .map_err(|e| e.to_string())?
+                .try_into()
+                .map_err(|_| "plan SHA256 extent")?;
+            let root = PathBuf::from(take_flag(&mut args, "--input-root").ok_or("--input-root required")?);
+            let out = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out fresh directory required")?);
+            if !args.is_empty() || network.is_some() {
+                return Err("produce-native39 is offline and requires exact pinned options".into());
+            }
+            let report = misaka_palw_sdk::native_producer_v39::produce_from_plan_v39(&plan, sha, &root, &out)?;
+            println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
+            Ok(())
+        }
+        "prepare-upstream-material39" => {
+            let plan = PathBuf::from(take_flag(&mut args, "--plan").ok_or("--plan required")?);
+            let sha = take_flag(&mut args, "--plan-sha256").ok_or("--plan-sha256 independent pin required")?;
+            let sha: [u8; 32] = misaka_palw_tir_lower::frontend_pack::program::unhex(&sha, 32)
+                .map_err(|e| e.to_string())?
+                .try_into()
+                .map_err(|_| "plan SHA extent")?;
+            let root = PathBuf::from(take_flag(&mut args, "--input-root").ok_or("--input-root required")?);
+            let out = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out fresh directory required")?);
+            if !args.is_empty() || network.is_some() {
+                return Err("prepare-upstream-material39 takes only explicit offline inputs".into());
+            }
+            let report = misaka_palw_sdk::native_upstream_material_v39::prepare_from_plan_v39(&plan, sha, &root, &out)?;
             println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
             Ok(())
         }
@@ -1327,19 +1418,27 @@ fn run(args: &[String]) -> Result<(), String> {
             };
             let bytes = misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(
                 std::path::Path::new(&file),
-                if kind == "source-register39" {
+                if matches!(kind.as_str(), "source-proof39" | "source-own39" | "source-convert39") {
+                    64 << 20
+                } else if kind == "master-register39" {
+                    kaspa_consensus_core::palw_native_master_v39::MASTER_REGISTER_MAX_BYTES_V39
+                } else if kind == "producer-consent39" {
+                    kaspa_consensus_core::palw_native_job_v39::NativeConsentWireV39::MAX_BYTES
+                } else if kind == "source-register39" {
                     kaspa_consensus_core::palw_native_execution_v39::SOURCE_UPLOAD_MAX_BYTES_V39
                 } else {
                     kaspa_consensus_core::palw_native_text_stop_v29::TEXT_STOP_MAX_FILING_BYTES_V29
                 },
             )?;
-            let upload_bond = if kind == "source-register39" {
+            let upload_bond = if matches!(kind.as_str(), "source-register39" | "master-register39" | "producer-consent39") {
                 Some(misaka_palw_sdk::improve_objects::spec::bond(
                     &take_flag(&mut args, "--bond").ok_or("source39 --bond original upload owner required")?,
                 )?)
             } else {
                 None
             };
+            let mut view = network_view(network.as_deref().ok_or("--network owning ruleset required for signing")?)?;
+            apply_own_native_params_v34(&mut args, &mut view.params)?;
             let objects = match kind.as_str() {
                 "source-register39" => {
                     let sequence = take_flag(&mut args, "--sequence")
@@ -1367,6 +1466,116 @@ fn run(args: &[String]) -> Result<(), String> {
                         until,
                     )?
                 }
+                "master-register39" | "producer-consent39" => {
+                    use kaspa_consensus_core::palw_native_master_v39::NativeMetadataTargetV39;
+                    let mut number = |name: &str| -> Result<u64, String> {
+                        take_flag(&mut args, name)
+                            .ok_or_else(|| format!("{name} original metadata upload bound required"))?
+                            .parse::<u64>()
+                            .map_err(|e| e.to_string())
+                    };
+                    let sequence = number("--sequence")?;
+                    let now = number("--now-daa")?;
+                    let deadline = number("--deadline-daa")?;
+                    let until = number("--interval-end-daa")?;
+                    let target = if kind == "master-register39" {
+                        NativeMetadataTargetV39::Master
+                    } else {
+                        NativeMetadataTargetV39::ProducerConsent
+                    };
+                    misaka_palw_sdk::native_payload_v29::prepare_metadata_upload_v39(
+                        &bytes,
+                        target,
+                        upload_bond.ok_or("metadata39 original owner absent")?,
+                        sequence,
+                        now,
+                        deadline,
+                        until,
+                    )?
+                }
+                "material39" => {
+                    use misaka_palw_kernel::flat_source39::{FlatSourceWireV39, SOURCE39_MAX_BYTES};
+                    let source_path =
+                        PathBuf::from(take_flag(&mut args, "--source").ok_or("material39 --source original Source39 required")?);
+                    let source = FlatSourceWireV39::from_bytes(&misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(
+                        &source_path,
+                        SOURCE39_MAX_BYTES,
+                    )?)?
+                    .check()?;
+                    let policies =
+                        &view.params.palw_native_execution_v39.as_ref().ok_or("material39 owning native39 policy absent")?.policies;
+                    let class = kaspa_consensus_core::palw_native_execution_v39::NativeClassWireV39::from_bytes(&bytes)?
+                        .check(&source, policies)?;
+                    let directory =
+                        PathBuf::from(take_flag(&mut args, "--material-directory").ok_or("--material-directory required")?);
+                    let cap = take_flag(&mut args, "--transport-limit-bytes")
+                        .ok_or("--transport-limit-bytes explicit aggregate bound required")?
+                        .parse::<u64>()
+                        .map_err(|e| e.to_string())?;
+                    let upstream_source = take_flag(&mut args, "--upstream-source")
+                        .map(|p| {
+                            misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(std::path::Path::new(&p), SOURCE39_MAX_BYTES)
+                                .and_then(|raw| FlatSourceWireV39::from_bytes(&raw)?.check())
+                        })
+                        .transpose()?;
+                    let upstream_post = take_flag(&mut args, "--upstream-post")
+                        .map(|p| -> Result<_, String> {
+                            let source = upstream_source.as_ref().ok_or("--upstream-post requires original --upstream-source")?;
+                            kaspa_consensus_core::palw_native_job_v39::NativeCommitWireV39::from_bytes(
+                                &misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(std::path::Path::new(&p), 9 << 20)?,
+                                source.original_context_max(),
+                            )
+                        })
+                        .transpose()?;
+                    let upstream = match (upstream_source.as_ref(), upstream_post.as_ref()) {
+                        (Some(s), Some(p)) => Some((s, &p.claim)),
+                        (None, None) => None,
+                        _ => return Err("material39 upstream requires both original source and post".into()),
+                    };
+                    misaka_palw_sdk::native_payload_v29::prepare_material_directory_v39(&class, &directory, upstream, cap)?
+                }
+                "source-request39" => {
+                    let job = digest("--job", &mut args)?;
+                    let owner = take_flag(&mut args, "--owner")
+                        .map(|s| s.parse::<kaspa_hashes::Hash64>().map(|h| h.as_bytes()).map_err(|e| e.to_string()))
+                        .transpose()?
+                        .unwrap_or([0; 64]);
+                    vec![misaka_palw_sdk::native_payload_v29::prepare_public_request_v39(
+                        job,
+                        owner,
+                        &misaka_palw_kernel::flat_public39::FlatDemandV39::from_bytes(&bytes)?,
+                    )?]
+                }
+                "source-reply39" => {
+                    misaka_palw_sdk::native_payload_v29::prepare_public_reply_parts_v39(digest("--pending", &mut args)?, &bytes)?
+                }
+                "source-proof39" => misaka_palw_sdk::native_payload_v29::prepare_protected_parts_v39(
+                    digest("--job", &mut args)?,
+                    digest("--owner", &mut args)?,
+                    &bytes,
+                )?,
+                "source-own39" => {
+                    let root = misaka_palw_sdk::native_payload_v29::owned_file_root_v39(&bytes)?;
+                    vec![misaka_palw_sdk::native_payload_v29::prepare_owner_v39(
+                        digest("--job", &mut args)?,
+                        root,
+                        bytes.len() as u64,
+                        false,
+                    )?]
+                }
+                "source-convert39" => vec![misaka_palw_sdk::native_payload_v29::prepare_owner_conversion_v39(
+                    digest("--job", &mut args)?,
+                    digest("--owner", &mut args)?,
+                    &bytes,
+                )?],
+                "source-discovery39" => {
+                    let p: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+                    if p.as_object().is_none_or(|m| m.len() != 1) {
+                        return Err("discovery39 requires only original maximum_file_bytes field".into());
+                    }
+                    let total = p["maximum_file_bytes"].as_u64().ok_or("discovery39 maximum_file_bytes required")?;
+                    vec![misaka_palw_sdk::native_payload_v29::prepare_owner_v39(digest("--job", &mut args)?, [0; 64], total, true)?]
+                }
                 "text-pages29" => {
                     let (job, seal, owner) =
                         (digest("--job", &mut args)?, digest("--seal", &mut args)?, digest("--owner", &mut args)?);
@@ -1387,8 +1596,6 @@ fn run(args: &[String]) -> Result<(), String> {
                 }
                 _ => return Err("unknown native-parts kind".into()),
             };
-            let mut view = network_view(network.as_deref().ok_or("--network owning ruleset required for signing")?)?;
-            apply_own_native_params_v34(&mut args, &mut view.params)?;
             let key = kaspa_pq_validator_core::load_validator_seed(&take_flag(&mut args, "--key-file").ok_or("--key-file required")?)
                 .map(kaspa_pq_validator_core::ValidatorKey::from_seed)?;
             let bond = if let Some(bond) = upload_bond {

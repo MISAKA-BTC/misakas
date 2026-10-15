@@ -642,3 +642,22 @@ fn certify_upstream(
         _ => Err(bad("native39 original output certificate origin mismatch")),
     }
 }
+
+pub(super) fn authenticate_projections(
+    r: &PalwKernelRouteStateV1,
+    manifest: &MaterialManifestV39,
+    expected: &[(u8, OutputProjectionV39)],
+) -> Result<(), PalwStateV2Error> {
+    for (input, projection) in expected {
+        let binding = manifest.bindings.get(*input as usize).ok_or_else(|| bad("native39 original projected input absent"))?;
+        let InputBindingV39::Material { descriptor, .. } = binding else {
+            return Err(bad("native39 projected input has no original material"));
+        };
+        let h = header(r, descriptor.root())?;
+        let original = h.certificate.as_ref().ok_or_else(|| bad("native39 original upstream output certificate absent"))?;
+        if original.projection != *projection {
+            return Err(bad("native39 upstream certificate changes original pipeline rows_from/drop/padding"));
+        }
+    }
+    Ok(())
+}

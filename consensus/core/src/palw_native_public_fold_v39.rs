@@ -5,27 +5,27 @@ use super::*;
 use misaka_palw_kernel::flat_public39::*;
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub(super) struct Pending {
-    version: u16,
-    id: Digest,
-    job: Digest,
-    funding: Digest,
-    claim: Digest,
-    unit: Digest,
-    requester: PalwBondKeyV2,
-    operator: Digest,
-    owner: Digest,
-    source_plan: Digest,
-    opened: u64,
-    until: u64,
-    bond: u64,
-    settled: bool,
-    delivered: bool,
-    demand: Vec<u8>,
-    attempts: u8,
-    group: Digest,
-    total: u32,
-    count: u16,
-    accepted: u8,
+    pub(super) version: u16,
+    pub(super) id: Digest,
+    pub(super) job: Digest,
+    pub(super) funding: Digest,
+    pub(super) claim: Digest,
+    pub(super) unit: Digest,
+    pub(super) requester: PalwBondKeyV2,
+    pub(super) operator: Digest,
+    pub(super) owner: Digest,
+    pub(super) source_plan: Digest,
+    pub(super) opened: u64,
+    pub(super) until: u64,
+    pub(super) bond: u64,
+    pub(super) settled: bool,
+    pub(super) delivered: bool,
+    pub(super) demand: Vec<u8>,
+    pub(super) attempts: u8,
+    pub(super) group: Digest,
+    pub(super) total: u32,
+    pub(super) count: u16,
+    pub(super) accepted: u8,
 }
 impl Pending {
     fn root(&self) -> Digest {
@@ -315,7 +315,7 @@ fn answer(
         // Exact cached quota restoration follows a fixed original Metadata
         // producer debit. The full answer guarantee is then consumed once for
         // ALL four fragments and assembly before the first byte is copied.
-        debit_cached_answer(builder, ctx, p, &h, &v, total as u64)?;
+        debit_cached_answer(builder, ctx, p, &h, v.source_plan, total as u64)?;
         v.attempts += 1;
         v.group = group;
         v.total = total;
@@ -422,12 +422,12 @@ pub(super) fn apply(
     }
 }
 
-fn debit_cached_answer(
+pub(super) fn debit_cached_answer(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     p: &NativeExecutionPoliciesV39,
     h: &JobHeader,
-    v: &Pending,
+    original_source_plan: Digest,
     bytes: u64,
 ) -> Result<(), PalwStateV2Error> {
     let e = epoch(p, ctx)?;
@@ -448,7 +448,7 @@ fn debit_cached_answer(
         .filter(|raw| raw.len() < 4096)
         .ok_or_else(|| bad("native39 cached original source plan absent"))?;
     let plan: SourcePlanRecordV39 = borsh::from_slice(raw).map_err(|_| bad("native39 fixed source plan grammar"))?;
-    if plan.root() != h.original.source_plan || v.source_plan != plan.root() {
+    if plan.root() != h.original.source_plan || original_source_plan != plan.root() {
         return Err(bad("native39 original pending/source plan mismatch"));
     }
     let raw = r

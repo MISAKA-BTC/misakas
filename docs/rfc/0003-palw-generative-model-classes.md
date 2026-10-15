@@ -2396,7 +2396,7 @@ A new chapter `spec/palw/04c-generative-classes.md`, plus additions to 04b. Appl
 | Multi-resolution classes by padding and masking | Always computes the maximum size, and complicates positions. Deferred; one class per size |
 | Autoregressive image-token models (VQ tokens from an LM, then a VQ decoder stage) | Expressible in PALW-TIR v1 today, needing only the pipeline and output kinds. A cheaper path to on-chain images, but not the targets. A variant of the image profile |
 | Float pipelines with tolerances | ADR-0053 |
-| zkML | Proving cost is orders of magnitude above re-execution |
+| Cryptographic proofs of model computation | Permanently prohibited by the user's 2026-10-15 decision, PRINCIPLES §8; not a future alternative |
 | **Lazy commitment**: commit only carry-outs and required points, and let the responder commit a block's interior on demand during a dispute (multi-level bisection) | Cuts execution-time commitment volume about tenfold, which matters for GPU speed and video. It is a new court protocol, so later work, not v1 |
 | An "execution profile" object inside the class id | §I.2.1: the program already is the profile |
 

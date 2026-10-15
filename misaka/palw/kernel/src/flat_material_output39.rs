@@ -199,10 +199,11 @@ impl CheckedOutputCertificatePlanV39 {
     /// Both original failed seal attempts traverse the canonical certificate,
     /// material whole C_v3 and each row C_v3 (row and column leaf passes).
     pub fn hashing_bytes(&self, material_raw_bytes: u64) -> u128 {
-        self.record.bytes as u128 * 4 + material_raw_bytes as u128 * 8
+        let cells = material_raw_bytes as u128 / self.record.dtype.width() as u128;
+        self.record.bytes as u128 * 4 + material_raw_bytes as u128 * 8 + cells * 8 * ((32 << 10) + 2048)
     }
     pub fn read_calls(&self, material_elements: u64) -> u128 {
-        self.record.bytes as u128 * 2 + material_elements as u128 * 8
+        self.pages() as u128 * 4 + self.record.count as u128 * 12 + material_elements as u128 * 8
     }
     pub fn scratch_bytes(&self) -> u64 {
         1 << 20

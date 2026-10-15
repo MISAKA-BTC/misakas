@@ -137,11 +137,12 @@ fn independent_replay_locates_original_carry_fault_and_self_checks_filing() {
         positions: 2,
         segment_roots: misaka_palw_kernel::seg::segment_roots_of_position_roots_v1(&roots),
     };
-    dishonest.finish(&TraceSummaryV39 { claim: claim.clone(), position_roots: roots, output_roots: vec![cb; 2] }).unwrap();
+    dishonest.finish(&TraceSummaryV39 { claim: claim.clone(), position_roots: roots, output_roots: vec![cb] }).unwrap();
     let mut own = DiskTraceArchiveV39::create(&scratch.0.join("auditor"), &s, 1 << 20).unwrap();
     let replay = execute_independent_replay_v39(&s, &m, &inputs, &Empty, &mut own).unwrap();
     let context = CheckedPointContextV39::check(&s, &m, claim.root(), &claim, &inputs).unwrap();
     let quota = derive_quota_v39(&s, &m, [5; 64], [6; 64], 32, 32).unwrap();
+    let mut dishonest = DiskTraceArchiveV39::open_existing(&scratch.0.join("producer"), &s, &m, &inputs, &claim, 1 << 20).unwrap();
     let FindingV39::Fault { filing, conviction } = detect_first_fault_v39(&context, &quota, &replay, &mut dishonest).unwrap() else {
         panic!("wrong original carry value must produce a real proof")
     };
@@ -173,4 +174,128 @@ fn upstream_derived_actual_does_not_release_original_requested_maximum() {
     assert_eq!(stop.actual_tokens(&[], 16).unwrap(), vec![1, 2]);
     assert!(stop.actual_tokens(&[3], 16).is_err());
     assert!(RequestStopV39::Derived { maximum_positions: 1, tokens: vec![1, 2] }.maximum_positions().is_err());
+}
+
+#[test]
+fn disk_tensor_preserves_odd_merkle_promotion_and_rejects_changed_raw_leaf() {
+    use misaka_palw_sdk::native_tensor_store_v39::DiskTensorV39;
+    let scratch = Scratch::new();
+    let tensor = Tensor::new(DType::I16, vec![16385], (0..16385).map(|n| (n % 101) as i128).collect()).unwrap();
+    let root = misaka_palw_kernel::merkle3::tensor_commitment_v3(&tensor);
+    let store =
+        DiskTensorV39::create(&scratch.0.join("tensor"), tensor.dtype, &tensor.shape, root, 1 << 20, 1 << 20, |offset, count| {
+            Ok(tensor.data[offset as usize..offset as usize + count].to_vec())
+        })
+        .unwrap();
+    assert_eq!(store.subtree(0, 0, 5).unwrap(), store.header().row_root);
+    for tile in 0..5 {
+        assert!(store.leaf(0, 0, tile).unwrap().authenticates(&root));
+    }
+    let reopened = DiskTensorV39::open_existing(&scratch.0.join("tensor"), root, 1 << 20, 1 << 20).unwrap();
+    assert!(reopened.leaf(1, 0, 4).unwrap().authenticates(&root));
+    use std::io::{Seek, Write};
+    let mut file = std::fs::OpenOptions::new().write(true).open(scratch.0.join("tensor/raw39")).unwrap();
+    file.seek(std::io::SeekFrom::Start(16384 * 2)).unwrap();
+    file.write_all(&(-7i16).to_le_bytes()).unwrap();
+    drop(file);
+    assert!(reopened.leaf(0, 0, 4).is_err());
+}
+
+#[test]
+fn upstream_certificate_authenticates_projected_rows_and_zero_padding() {
+    use misaka_palw_kernel::flat_material_output39::*;
+    let base = source();
+    let mut wire = base.wire().clone();
+    let mut program = TirProgramV39::decode_canonical(&wire.program_bytes).unwrap();
+    program.output = OutputDecl::Rows { node: 0 };
+    wire.program_bytes = program.encode();
+    let s = wire.check().unwrap();
+    let m = maximum(&s);
+    let inputs = ActualInputResolverV39::derive(&s, &m, &[], &Empty).unwrap();
+    let scratch = Scratch::new();
+    let mut archive = DiskTraceArchiveV39::create(&scratch.0.join("upstream"), &s, 1 << 20).unwrap();
+    archive.begin(s.root(), m.root(), inputs.root()).unwrap();
+    let summary = trace_streamed_v39(&s, &m, &inputs, &Empty, &mut archive).unwrap();
+    archive.finish(&summary).unwrap();
+    let opening = archive.node_opening(1, 1, 0).unwrap();
+    let body = borsh::to_vec(&opening).unwrap();
+    let mut certificate = 39u16.to_le_bytes().to_vec();
+    certificate.extend_from_slice(&1u32.to_le_bytes());
+    certificate.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    certificate.extend(body);
+    struct Pages {
+        material: Digest,
+        certificate: Digest,
+        raw: Vec<u8>,
+        proof: Vec<u8>,
+    }
+    impl MaterialPageReaderV39 for Pages {
+        fn page(&self, id: Digest, index: u16) -> Result<MaterialPageV39, String> {
+            if id != self.material || index != 0 {
+                return Err("wrong original material page".into());
+            }
+            Ok(MaterialPageV39 { index, body: self.raw.clone(), siblings: vec![] })
+        }
+    }
+    impl OutputCertificatePageReaderV39 for Pages {
+        fn page(&self, id: Digest, index: u16) -> Result<MaterialPageV39, String> {
+            if id != self.certificate || index != 0 {
+                return Err("wrong original output certificate page".into());
+            }
+            Ok(MaterialPageV39 { index, body: self.proof.clone(), siblings: vec![] })
+        }
+    }
+    let run = |padding: i128| {
+        let tensor = Tensor::new(DType::I16, vec![2], vec![5, padding]).unwrap();
+        let tensor_root = misaka_palw_kernel::merkle3::tensor_commitment_v3(&tensor);
+        let mut plan = OutputCertificatePlanV39 {
+            version: 39,
+            source: s.root(),
+            claim: summary.claim.root(),
+            output_declaration: object_id(b"misaka-palw/kernel/original-output-declaration/v39", &(s.root(), &s.program().output)),
+            tensor: tensor_root,
+            dtype: DType::I16,
+            shape: vec![2],
+            projection: OutputProjectionV39::Rows { rows_from: 0, drop: 1, pad_to: Some(2) },
+            count: 1,
+            bytes: certificate.len() as u64,
+            page_root: [0; 64],
+        };
+        plan.page_root = output_certificate_page_leaf_v39(&plan, 0, &certificate);
+        let mut descriptor = MaterialDescriptorV39 {
+            version: 39,
+            source: [24; 64],
+            master: [20; 64],
+            requester: [21; 64],
+            requester_operator: [22; 64],
+            nonce: [23; 64],
+            input: 0,
+            dtype: DType::I16,
+            shape: vec![2],
+            tensor: tensor_root,
+            page_root: [0; 64],
+            origin: MaterialOriginV39::Upstream {
+                master: [20; 64],
+                stage: 0,
+                job: [25; 64],
+                class: [26; 64],
+                source: s.root(),
+                claim: summary.claim.root(),
+                final_book: [27; 64],
+                single_credit: [28; 64],
+                output: plan.root(),
+            },
+        };
+        let raw = [5i16, padding as i16].into_iter().flat_map(i16::to_le_bytes).collect::<Vec<_>>();
+        descriptor.page_root = material_page_leaf_v39(&descriptor, 0, &raw);
+        let checked = CheckedOutputCertificatePlanV39::check(&s, &summary.claim, &descriptor, &plan).unwrap();
+        let pages = Pages { material: descriptor.root(), certificate: plan.root(), raw, proof: certificate.clone() };
+        check_upstream_material_output_v39(&s, summary.claim.root(), &summary.claim, &descriptor, &checked, &pages, &pages)
+    };
+    assert!(run(0).is_ok());
+    assert!(run(3).is_err());
+    // Merkle identity of authentic data authorizes no Final or validator vote.
+    let mut relabeled = summary.claim.clone();
+    relabeled.maximum = [30; 64];
+    assert!(CheckedPointContextV39::check(&s, &m, relabeled.root(), &relabeled, &inputs).is_err());
 }

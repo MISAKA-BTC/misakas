@@ -112,6 +112,7 @@ struct ConsentHeader {
     source_bytes: u32,
     body_bytes: u32,
     body: Digest,
+    wire: Digest,
     producer: PalwBondKeyV2,
     requester: PalwBondKeyV2,
     accepted: u64,
@@ -205,7 +206,15 @@ fn accept(
         return Ok(());
     }
     let w = NativeConsentWireV39::from_bytes(body).map_err(bad)?;
-    let (_, maximum, _, contract) = quote(builder, p, &w)?;
+    let (class, maximum, _, contract) = quote(builder, p, &w)?;
+    let invocation = super::palw_native_master_fold_v39::authenticate_invocation(builder, ctx, signer, p, &class, &maximum, w.reward)?;
+    if let Some(invocation) = &invocation {
+        material::authenticate_projections(
+            builder.state.kernel_route.as_ref().unwrap(),
+            maximum.input_manifest(),
+            invocation.projections(),
+        )?;
+    }
     let producer = builder.state.bonds.get(signer).ok_or_else(|| bad("native39 original producer absent"))?;
     let requester = builder.state.bonds.get(&w.requester).ok_or_else(|| bad("native39 original requester absent"))?;
     if !matches!(producer.status, PalwBondStatusV2::Active)
@@ -261,6 +270,7 @@ fn accept(
         source_bytes: ch.source_bytes,
         body_bytes: raw.len() as u32,
         body: object_id(b"misaka-palw/native/original-consent-body/v39", &raw),
+        wire: c.wire.root(),
         producer: *signer,
         requester: c.wire.requester,
         accepted: c.accepted,
@@ -365,6 +375,16 @@ fn fund(
     let r = builder.state.kernel_route.as_ref().unwrap();
     let c = original_consent(r, &h)?;
     let (class, maximum, quota, contract) = quote(builder, p, &c.wire)?;
+    let invocation =
+        super::palw_native_master_fold_v39::authenticate_invocation(builder, ctx, signer, p, &class, &maximum, c.wire.reward)?;
+    if let Some(invocation) = &invocation {
+        material::authenticate_projections(
+            builder.state.kernel_route.as_ref().unwrap(),
+            maximum.input_manifest(),
+            invocation.projections(),
+        )?;
+    }
+    let r = builder.state.kernel_route.as_ref().unwrap();
     let requester = builder.state.bonds.get(signer).ok_or_else(|| bad("native39 requester absent"))?;
     let producer = builder.state.bonds.get(&c.producer).ok_or_else(|| bad("native39 producer absent"))?;
     if !matches!(requester.status, PalwBondStatusV2::Active)
@@ -407,6 +427,11 @@ fn fund(
     let temporal = &contract.record().temporal;
     let deadline = temporal.deadline(ctx.daa_score, p.execution.quota.interval_daa).map_err(bad)?;
     material::preflight_attach(r, maximum.input_manifest(), deadline)?;
+    if maximum.input_manifest().master != [0; 64]
+        && deadline > super::palw_native_master_fold_v39::record(r, maximum.input_manifest().master)?.deadline
+    {
+        return Err(bad("native39 complete original component opportunity exceeds its original Master horizon"));
+    }
     let receipt = object_id(
         b"misaka-palw/native/original-collected-escrow/v39",
         &(ctx.block.as_bytes(), *signer, c.root(), maximum.root(), reward),
@@ -471,6 +496,9 @@ fn fund(
         SourceShardV39::from_native_rows(&p.execution.quota, &quota, &g, &g.root(), (&a, &a.root()), (s, &s.row_root()), None)
             .map_err(bad)?;
     source.admit(&p.execution.quota, &e, &quota, &sg).map_err(bad)?;
+    for _ in 0..quota.source().preclaim_units {
+        source.admit_valid_unit(&p.execution.quota, &e, &quota, id).map_err(bad)?;
+    }
     let ext = builder.extras.kernel_route.as_ref().unwrap();
     let service = ext.native_carriage_service.as_ref().unwrap();
     let mass = ext.native_carriage_mass.as_ref().unwrap();
@@ -523,6 +551,7 @@ fn fund(
         (b(&(39u8, id, 1u8)), b(quota.source())),
         (b(&(39u8, id, 2u8)), b(quota.paged())),
         (b(&(39u8, id, 3u8)), b(&p.execution.quota)),
+        (b(&(39u8, id, 4u8)), b(&(contract.carriage().record().root(), contract.carriage().record()))),
     ] {
         builder.write_kernel_row(QUOTA, key, Some(raw));
     }
@@ -558,6 +587,9 @@ fn fund(
     builder.write_kernel_row(TABLE, k(18, &c.root()), None);
     builder.write_kernel_row(TABLE, k(26, &c.root()), None);
     builder.write_kernel_row(NONCE, b(&c.wire.requester_operator), Some(b(&next)));
+    if let Some(invocation) = &invocation {
+        super::palw_native_master_fold_v39::record_funded(builder, ctx, invocation, id)?;
+    }
     builder.note_kernel_bond(&c.producer);
     Ok(())
 }
@@ -653,11 +685,22 @@ fn commit(
         return Err(bad("native39 compactCommit body extent"));
     }
     let id = body[2..66].try_into().unwrap();
-    let mut h = header(builder.state.kernel_route.as_ref().unwrap(), id)?;
+    let h = header(builder.state.kernel_route.as_ref().unwrap(), id)?;
     if *signer != h.original.producer || h.terminal != NativeJobTerminalV39::Funded || ctx.daa_score >= h.original.commit_until {
         return Err(bad("native39 compactCommit requires original Funded producer phase"));
     }
     predebit_original(builder, ctx, p, &h, QuotaActionKindV11::Metadata, body)?;
+    commit_after_paid(builder, ctx, signer, p, body, h)
+}
+fn commit_after_paid(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV39,
+    body: &[u8],
+    mut h: JobHeader,
+) -> Result<(), PalwStateV2Error> {
+    let id = h.id;
     // Malformed attempts retain the preceding original paid debit. The object
     // is dropped successfully, so a nested decoder cannot roll back the tariff.
     let Ok(w) = NativeCommitWireV39::from_bytes(body, h.original.maximum_positions) else { return Ok(()) };
@@ -826,6 +869,14 @@ fn credit(
     };
     builder.write_kernel_row(TABLE, k(23, &h.id), Some(b(&(c.root(), &c))));
     builder.bond_budget_close_v1(&super::palw_bond_budget_fold_v1::native_job_budget_id_v39(&h.id), ctx.daa_score);
+    // Keep the original books/posts/credit for Master and independent audit,
+    // but a terminal job no longer occupies an active actor job slot. This
+    // does not return any resource or monetary-window allowance.
+    for (kind, who) in [(21, h.original.requester), (22, h.original.producer)] {
+        let mut ids = list(builder.state.kernel_route.as_ref().unwrap(), kind, &who)?;
+        ids.retain(|id| *id != h.id);
+        builder.write_kernel_row(TABLE, k(kind, &who), Some(b(&ids)));
+    }
     Ok(())
 }
 fn restore_job_for_terminal(
@@ -898,3 +949,202 @@ fn finalize(
 
 #[path = "palw_native_public_fold_v39.rs"]
 mod public;
+fn original_carriage(
+    r: &PalwKernelRouteStateV1,
+    h: &JobHeader,
+    mass: &crate::palw_native_carriage_v22::NativeCarriageMassParamsV22,
+    service: &NativeCarriageServiceV22,
+) -> Option<(crate::palw_native_paged_carriage_v29::NativePagedCarriageRecordV29, Digest)> {
+    if !service.implemented || service.check(mass).is_err() || service.root() != h.original.physical {
+        return None;
+    }
+    let bounded = |key: Vec<u8>, cap: usize| r.aux.get(&(QUOTA, key)).filter(|raw| raw.len() <= cap);
+    let (root, c): (Digest, crate::palw_native_paged_carriage_v29::NativePagedCarriageRecordV29) =
+        borsh::from_slice(bounded(b(&(39u8, h.id, 4u8)), 4096)?).ok()?;
+    let (qroot, q): (Digest, NativeQueueLeaseV30) = borsh::from_slice(bounded(b(&(30u8, h.id, 1u8)), 1024)?).ok()?;
+    let (proot, physical): (Digest, NativeCarriageLeaseV22) = borsh::from_slice(bounded(b(&(22u8, h.id)), 512)?).ok()?;
+    if c.version != 39
+        || root != c.root()
+        || root != h.original.transport
+        || c.class != h.original.class
+        || c.original_job_plan != h.original.shared_plan
+        || c.paid_paged_plan != h.original.paged_plan
+        || c.service != service.root()
+        || qroot != q.root()
+        || q.retired
+        || q.job != h.id
+        || q.original_funding != h.original.root()
+        || q.original_consent != h.original.consent
+        || q.original_plan != h.original.queue
+        || q.original_physical_lease != proot
+        || physical.root() != proot
+        || physical.retired
+        || physical.original_job != h.id
+        || physical.original_consent != h.original.consent
+        || physical.plan != c.root()
+        || physical.density != c.density
+    {
+        return None;
+    }
+    Some((c, proot))
+}
+impl PalwKernelRouteStateV1 {
+    /// Constant bounded native metadata only, before signature/proof allocation.
+    pub fn native_proof_owner_v39(
+        &self,
+        job: Digest,
+        seal: Digest,
+        index: u16,
+        count: u16,
+        total: u32,
+        mode: u8,
+        now: u64,
+    ) -> Option<PalwBondKeyV2> {
+        let h = header(self, job).ok()?;
+        let o = protected::owner(self, seal).ok()?;
+        let s = protected::status(self, &h).ok()?;
+        if h.terminal != NativeJobTerminalV39::Challengeable
+            || o.job != job
+            || o.funding != h.original.root()
+            || !s.owners.contains(&seal)
+            || o.claim != s.claim
+            || o.retired
+            || o.spent
+            || now < o.matures
+            || now >= o.until
+        {
+            return None;
+        }
+        match mode {
+            0 if !o.discovery
+                && o.count == count
+                && o.total == total
+                && index < count
+                && o.attempts[index as usize] < 2
+                && !o.has(index) =>
+            {
+                Some(o.actor)
+            }
+            1 if !o.discovery
+                && o.count == count
+                && o.total == total
+                && index == 0
+                && o.assemblies < 2
+                && (0..count).all(|i| o.has(i)) =>
+            {
+                Some(o.actor)
+            }
+            2 if o.discovery
+                && o.conversion == 0
+                && index == 0
+                && total > 0
+                && total <= o.total
+                && count as u64 == (total as u64).div_ceil(32768) =>
+            {
+                Some(o.actor)
+            }
+            _ => None,
+        }
+    }
+    pub fn native_paid_proof_eligibility_v39(
+        &self,
+        job: Digest,
+        seal: Digest,
+        index: u16,
+        count: u16,
+        total: u32,
+        mode: u8,
+        now: u64,
+        mass: &crate::palw_native_carriage_v22::NativeCarriageMassParamsV22,
+        service: &NativeCarriageServiceV22,
+    ) -> Option<NativePaidCarrierEligibilityV22> {
+        let actor = self.native_proof_owner_v39(job, seal, index, count, total, mode, now)?;
+        let h = header(self, job).ok()?;
+        let o = protected::owner(self, seal).ok()?;
+        let (c, lease) = original_carriage(self, &h, mass, service)?;
+        mass.packet_mass(&c.proof_envelope).ok().filter(|m| *m <= service.slot_mass)?;
+        Some(NativePaidCarrierEligibilityV22 {
+            original_job: job,
+            unit: seal,
+            owner: actor,
+            deadline: o.until,
+            kind: if mode == 0 {
+                7
+            } else if mode == 1 {
+                8
+            } else {
+                12
+            },
+            lease_root: lease,
+            original_service: service.root(),
+            envelope: c.proof_envelope,
+        })
+    }
+    pub fn native_answer_owner_v39(
+        &self,
+        id: Digest,
+        group: Digest,
+        index: u16,
+        count: u16,
+        total: u32,
+        now: u64,
+    ) -> Option<PalwBondKeyV2> {
+        let p = public::pending(self, id).ok()?;
+        let h = header(self, p.job).ok()?;
+        if h.terminal != NativeJobTerminalV39::Challengeable
+            || p.funding != h.original.root()
+            || p.source_plan != h.original.source_plan
+            || p.settled
+            || now > p.until
+            || group == [0; 64]
+            || count == 0
+            || count > 4
+            || index >= count
+            || total == 0
+            || total > 128 << 10
+            || count as u64 != (total as u64).div_ceil(32768)
+            || p.group == [0; 64] && p.attempts >= 2
+            || p.group != [0; 64] && (p.group != group || p.total != total || p.count != count)
+            || p.accepted & (1 << index) != 0
+        {
+            return None;
+        }
+        Some(h.original.producer)
+    }
+    pub fn native_paid_answer_eligibility_v39(
+        &self,
+        id: Digest,
+        group: Digest,
+        index: u16,
+        count: u16,
+        total: u32,
+        now: u64,
+        mass: &crate::palw_native_carriage_v22::NativeCarriageMassParamsV22,
+        service: &NativeCarriageServiceV22,
+    ) -> Option<NativePaidCarrierEligibilityV22> {
+        let actor = self.native_answer_owner_v39(id, group, index, count, total, now)?;
+        let p = public::pending(self, id).ok()?;
+        let h = header(self, p.job).ok()?;
+        let (c, lease) = original_carriage(self, &h, mass, service)?;
+        mass.packet_mass(&c.answer_envelope).ok().filter(|m| *m <= service.slot_mass)?;
+        Some(NativePaidCarrierEligibilityV22 {
+            original_job: h.id,
+            unit: id,
+            owner: actor,
+            deadline: p.until,
+            kind: 9,
+            lease_root: lease,
+            original_service: service.root(),
+            envelope: c.answer_envelope,
+        })
+    }
+}
+
+pub(super) fn accepted_consent_wire(r: &PalwKernelRouteStateV1, producer: &PalwBondKeyV2, wire_root: Digest, now: u64) -> bool {
+    list(r, 19, producer).is_ok_and(|ids| {
+        ids.iter().any(|id| {
+            consent_header(r, *id)
+                .is_ok_and(|h| h.producer == *producer && h.accepted == now && h.wire == wire_root && h.expires >= now)
+        })
+    })
+}
