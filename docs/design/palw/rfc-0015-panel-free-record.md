@@ -1,5 +1,7 @@
 # RFC-0015 Panel=0 (`OptimisticPublicVerification`) on the kernel route — implementation record
 
+> **2026-10-15:** superseded as the current map by [rfc-0015-implementation-status-2026-10-15.md](rfc-0015-implementation-status-2026-10-15.md) (integration branch: lane D wiring, the activation gate record, §13.2 node E2E). This record is kept as the 2026-10-08 kernel-reference history; its PASS words are that lane's, not re-verified.
+
 Branch `rfc15/x15-panel-free` (base `29a4028a4`). Owner: agent X15. Reference level only: `misaka-palw-kernel` (a deterministic ledger
 fold) plus the dormant fence in `consensus/core`. **Nothing here is wired into the node and nothing is armed.** RFC-0015 §13.3
 `ACTIVATION_ALLOWED` is not evidenced; this record states what exists, what a consumer (lane D) must wire, and what is still open. It

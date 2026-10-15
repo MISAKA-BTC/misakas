@@ -13,6 +13,7 @@
 
 
 * **Status:** Revised Draft / deferred implementation design, 2026-10-10後続改定。モデル入手への合意不介入、固定identity、条件付きG14、拘束miner元本によるcoinbase配分と個別bond上限を採用する。旧Seeder/TRDC/FPR gateは撤回。配分式・経済評価・実装・activationは未完了。
+* **Implementation status (2026-10-15):** **implemented, dormant, unverified** — kernel routeのOptimisticPublicVerification lifecycle・court・Final・producer reservation、ADR-0176 budgetとの結合、公開verifier、RPC表示、§13.3のactivation gate record（`consensus/core/src/palw_panel_free_gate_v1.rs`、pin一覧は空）が統合branch `integ/rfc02-rfc06-12-g14`にある。build/test/実node試験は未実施でPASSではない。Panel=0は2026-10-12改定（N5）どおり有効化しない。対応表: [rfc-0015-implementation-status-2026-10-15.md](../design/palw/rfc-0015-implementation-status-2026-10-15.md)。上のStatus行は履歴として保持する。
 * **Source baseline:** MISAKA-BTC/misakas public main `43f0bcb362d37cba79414940f3fdd368d40d3377`（2026-10-07確認）。
 * **Hard prerequisite:** [RFC-0014][R14]のDispute Completenessとpublic non-seat prosecutionが、対象ネットワークで本RFCの全reward-bearing class/profileについて完全に成立していること。RFC14の文書作成・mergeだけでは満たさない。
 * **Activation:** 前提達成後の別の協調upgrade。提案fence名 `palw_panel_free_v1` は設計用の未割当名で、既存Paramsのfieldではない。activation DAA、wire tag、署名domainはここでは割り当てない。
@@ -717,6 +718,8 @@ watcher台数やreceipt件数を、independent ownershipやhonestyの証明と�
 
 上記は実装箇所の設計であり、このRFCの作成でRustコードを変更したことを意味しない。
 
+**2026-10-15追記:** 各行の実装箇所（file:line）、試験、未了項目は[実装状況表](../design/palw/rfc-0015-implementation-status-2026-10-15.md)に記録した。状態はimplemented / dormant / unverifiedであり、表の存在は試験PASSや有効化を意味しない。
+
 ## 13. 必須試験とactivation checklist
 
 ### 13.1 前提gateの否定試験
@@ -876,3 +879,13 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 **状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4と[RFC/ADRレビューの整理（2026-10-12）](../design/palw/rfc-adr-review-resolution-2026-10-12.md) N5。
 
 Panel=0は将来設計として保持するが、当面の実装・release対象から外す。§7のとおり監視市場を作るだけではhonest verifierの存在を保証できず、多数の監視者を登録させるだけでは誰かが必ず正直に検査することの証明にならない。モデル保有Panelを必要とするmode（RFC-0010 2026-10-12改定のPanel=1）を維持し、Panel=0は監視者の離脱、Panelの共謀、検証費用、最大claim負荷、cold model取得時間、不正発覚からcourtまでの時間を測る別の安全性実証の後に判断する。ADR-0176の共通bond予算はPanel=1にも適用し、RFC15の有効化を待たない。§8の共通経済部分にはモデル別claim bond台帳・配分係数（ADR-0177 2026-10-12改定）を置く。
+
+## 実装状況 — 2026-10-15（implemented, dormant, unverified）
+
+**状態:** コードは実装済み・休眠・未検証。build、test、devnet、実node試験は本改定では実施していない（ユーザー規則: 先にコード、検証は後）。いずれもPASSと記載しない。
+
+* Panel=0のclaim lifecycle（`Challengeable`、固定window、hard deadline、未解決disputeによるFinal阻止、DA/default、liability中のconviction）、mode付きclass identity、derived OPV eligibility、producer reservation、公開verifier（`kaspad/src/palw_kernel_verifier.rs`）、RPCのmode/assurance表示はkernel routeに実装済みである。V2 Attempt経路はPanel規則のまま（旧claimは旧規則）。
+* §8.3のclass非依存Q/B/R/F capと共通DAA拘束`d + W`はADR-0176 budget engine（`palw_bond_budget_v1`）を再利用する。OPV claimは`Q = 1`、`R` = job escrow、`B = F = 0`を予約する。activation gate recordが存在するnetworkでは、budgetのないOPV claimを入口で拒否する。
+* §13.3 `ACTIVATION_ALLOWED`をコード化した（`PalwPanelFreeGateRecordV1`）。12 conjunct（§13.3の10項目、PESG、N5解除のユーザー裁定）が全てPASSで、各々に固有のevidence/independent review digestがあり、genesis・height・terms・budget/allocation policyにbindし、kernel route・bond budget・model allocation・court model scope・rule Eのfenceが同時以前に有効で、かつdigestがbinaryにpinされている場合だけ、`palw_panel_free_v1`の検証が通る。pin一覧は空であり、operator flagや設定だけでは有効化できない。
+* 新しいwire tag、object kind、aux table、RPC op、proto field、p2p version、funded actionは割り当てていない。testnet-12のparams/schedule idは変わらない。
+* 未了: §1のG14実証、各budget/資源の実測、経済・監視市場の独立評価、PESG、敵対的実network試験、work-slice/native settlement readerの接続、一部のnode E2E（実装状況表 §4/§6）。値はユーザー決定待ち（[user decisions §RFC15](../design/palw/rfc-0006-0012-user-decisions-2026-10-15.md)）。
