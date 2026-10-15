@@ -151,6 +151,16 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         135 if key_bytes == 73 && prefix == 0x02 => <u64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         135 if key_bytes == 65 && prefix == 0x03 => <crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         135 if key_bytes == 73 && prefix == 0x04 => <(u64, u64, u64) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        // RFC-0018 (2026-10-15): SecurityCertified rows (aux 136, 65-byte keys: prefix ‖ 64-byte id).
+        136 if key_bytes == 65 && prefix == crate::palw_security_certification_v1::CERTIFICATION_CLAIM_PREFIX_V1 => {
+            crate::palw_security_certification_v1::PalwClaimCertificationRowV1::scan_native_wire_v1(frame)?
+        }
+        136 if key_bytes == 65 && prefix == crate::palw_security_certification_v1::CERTIFICATION_CLASS_PREFIX_V1 => {
+            crate::palw_security_certification_v1::PalwCertificationClassRowV1::scan_native_wire_v1(frame)?
+        }
+        136 if key_bytes == 65 && prefix == crate::palw_security_certification_v1::CERTIFICATION_NETWORK_PREFIX_V1 => {
+            crate::palw_security_certification_v1::PalwCertificationNetworkRowV1::scan_native_wire_v1(frame)?
+        }
         121 => match (key_bytes, prefix) {
             (65, 0x41) => crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(frame)?,
             (65, 0x42) => crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2::scan_native_wire_v1(frame)?,
@@ -728,7 +738,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         105 => return Err(wire::wire_bad("unallocated aux table 105 row namespace")),
         106 => return Err(wire::wire_bad("unallocated aux table 106 row namespace")),
         112 => return Err(wire::wire_bad("unallocated aux table 112 row namespace")),
-        115 | 123 | 125 | 126 | 127 | 130 | 131 | 132 | 133 | 134 | 135 => {
+        115 | 123 | 125 | 126 | 127 | 130 | 131 | 132 | 133 | 134 | 135 | 136 => {
             return Err(wire::wire_bad("unallocated aux row namespace"));
         }
         _ => {
