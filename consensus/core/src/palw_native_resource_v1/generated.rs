@@ -94,6 +94,7 @@ native_struct!(crate::palw_class_registration_origin_v1::PalwClassRegistrationOr
 native_struct!(crate::palw_settlement_once_v1::PalwSettlementOnceRowV1; version, obligation, consumer, amount, debit, settled_daa);
 native_struct!(crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1; version, base_claim, enrollment, accuser, convicted_daa, forget_after_daa);
 native_struct!(crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1; version, claim, verifier, slot, poster, fee, release_after_daa);
+native_struct!(crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1; version, enrollment, base_claim, producer, commitment, committed_daa, deposit, forget_after_daa);
 native_struct!(crate::palw_provider_court_v1::ProviderLeaseRowV1; reserved, filed_daa, serve_until_daa, charged);
 native_struct!(crate::palw_provider_court_v1::ProviderChallengeRowV1; challenger, bond, filed_daa, deadline_daa, answered);
 native_struct!(crate::palw_provider_court_v1::ProviderSubjectRowV1; transferred_daa, lapsed_daa, charged, requested);
@@ -244,7 +245,7 @@ native_struct!(misaka_palw_kernel::seg::TiledJobV1; class_binding_id, prompt_len
 native_struct!(misaka_palw_kernel::seg::PromptTileOpeningV1; index, ids, siblings);
 native_enum!(misaka_palw_kernel::spec::SpecObjectV1; RegisterClass { spec }, PostJob { job }, CommitClaim { claim });
 native_struct!(misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTermsV1; source, sponsor, fee_per_source, max_sources);
-native_enum!(misaka_palw_kernel::claim_paid_v2::PaidClaimObjectV2; RegisterClass { class }, EnrollJob { job }, Commit { enrollment, commit, salt }, Fund { enrollment, terms }, Lock { enrollment }, Receipt { receipt }, StageMessage { enrollment, round, prior_transcript, message_root }, FundRound { enrollment, round, terms }, LockRound { enrollment, round }, RoundReceipt { receipt }, ReviewScope { scope }, EconomicEvidence { observation, payment }, IndependenceEvidence { observation }, RegisterCompactContractV4 { registration }, BindCompactProofV4 { enrollment, round, proof });
+native_enum!(misaka_palw_kernel::claim_paid_v2::PaidClaimObjectV2; RegisterClass { class }, EnrollJob { job }, Commit { enrollment, commit, salt }, Fund { enrollment, terms }, Lock { enrollment }, Receipt { receipt }, StageMessage { enrollment, round, prior_transcript, message_root }, FundRound { enrollment, round, terms }, LockRound { enrollment, round }, RoundReceipt { receipt }, ReviewScope { scope }, EconomicEvidence { observation, payment }, IndependenceEvidence { observation }, RegisterCompactContractV4 { registration }, BindCompactProofV4 { enrollment, round, proof }, TrapCommitment { enrollment, commitment });
 native_struct!(misaka_palw_kernel::econ_contracts_v1::ModelVerificationAttestationV1; version, network, verifier, tally, model, epoch, sampled_claim, model_root, verdict);
 native_struct!(misaka_palw_kernel::econ_contracts_v1::HorizonExtensionTermsV1; version, network, claim, root, worker, sponsor, current_liability_until_daa, new_liability_until_daa, hard_deadline_daa, consent_by_daa, price_contract);
 native_struct!(misaka_palw_kernel::econ_contracts_v1::MinimumPriceContractTermsV1; version, network, worker, poster, job, class, policy, funded_minimum_sompi, capital_sompi, accept_by_daa, retention_until_daa);

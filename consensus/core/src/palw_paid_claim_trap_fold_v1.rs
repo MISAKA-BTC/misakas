@@ -1,14 +1,18 @@
-//! **RFC-0007 §4.1 T6 in the fold: paid-claim traps, the receipt signers' liability and held verifier check fees** (dormant
-//! `palw_paid_claim_trap_v1`; kernel route aux 142). A child module of `palw_state_v2`, like the mesh and kernel route folds, so it
-//! reads the builder and writes only through the state's journaled writers. The rows and the pure rules are
+//! **RFC-0007 §4.1 T6 in the fold: paid-claim commitments and traps, the receipt signers' liability and held verifier check fees**
+//! (dormant `palw_paid_claim_trap_v1`; kernel route aux 142). A child module of `palw_state_v2`, like the mesh and kernel route
+//! folds, so it reads the builder and writes only through the state's journaled writers. The rows and the pure rules are
 //! [`crate::palw_paid_claim_trap_v1`]'s. Below the fence every entry point returns before reading or writing anything, so every
-//! historical byte is unchanged (the mesh's own trap rule, the RFC08-2 refusal of check fees).
+//! historical byte is unchanged (the mesh's own trap rule, the paid lock, the RFC08-2 refusal of check fees).
 //!
+//! * **Commitment** ([`apply_paid_trap_commitment_v1`], the paid-claim object family's appended `TrapCommitment`): every
+//!   non-staged paid claim's producer posts exactly one trap-or-null commitment before the claim's beacon seal window (aux 142,
+//!   `0x03 ‖ enrollment`); the paid lock draws no seat without it ([`paid_trap_lock_admits_v1`]). It lives to the claim's own
+//!   reveal-window end and holds the same deposit (if any) whatever it opens to.
 //! * **Reveal** ([`apply_paid_trap_revealed_v1`], reached from the mesh's `TrapRevealed` arm when the reveal names a paid V2 base
-//!   claim): judged by [`PalwChainStateV2::paid_trap_revealed_admissible_v1`]; the commitment's deposit comes back and the
-//!   commitment is spent, as a mesh reveal; the conviction's accuser, when it is a drawn seat of the claim other than the setter,
-//!   is paid the existing trap bounty (once, from the panel reserve); the Clean signers' liability is charged (idempotent — the
-//!   conviction already charged it).
+//!   claim): judged by [`PalwChainStateV2::paid_trap_revealed_admissible_v1`] — it opens the claim's commitment to a fault that
+//!   counts (the beacon seed fixed after the commitment, and the salt) and the court convicted; the commitment is spent and its
+//!   deposit returned; the conviction's accuser, when it is a drawn seat other than the setter, is paid the existing trap bounty
+//!   (once, from the panel reserve); the Clean signers' liability is charged (idempotent — the conviction already charged it).
 //! * **Conviction** ([`on_paid_claim_convictions_v1`], after every kernel settlement batch): a paid V2 base claim's `Convicted`
 //!   event records the conviction once (its accuser) and charges every Clean receipt signer the signer liability on its own
 //!   collateral, once per (claim, seat) — a trap or an ordinary paid claim alike.
@@ -16,7 +20,7 @@
 //!   [`release_held_check_fees_v1`] in the closing tick): a paid V2 claim's verifier check fee is held at its attestation and
 //!   released once the trap reveal window has passed and the claim is terminal — less the forfeiture when the court convicted
 //!   the claim and the verifier signed a Clean receipt — through the once-only registry under the combined liability predicate
-//!   (`PalwLegLiabilityV1::VerifierCheck`).
+//!   (`PalwLegLiabilityV1::VerifierCheck`). The same tick forgets commitments and convictions past their window.
 //!
 //! No credit and no weight (RFC-0018 Gate C stays the only credit path); a trap's fault is the court's own conviction, never a
 //! proof of computation (PRINCIPLES §8).
@@ -25,12 +29,14 @@ use super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1;
 use super::*;
 use crate::palw_claim_challenge_v2::{PAID_CLAIM_LOCKS_V2, PAID_CLAIM_RECEIPTS_V2, PalwPaidClaimLockV2};
 use crate::palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_bond_id_v1};
-use crate::palw_mesh_v1::{PalwMeshErrorV1, PalwTrapRevealedV1};
+use crate::palw_mesh_v1::PalwTrapRevealedV1;
 use crate::palw_paid_claim_trap_v1::{
-    PALW_PAID_CLAIM_TRAP_CONVICTION_PREFIX_V1, PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1, PALW_PAID_CLAIM_TRAP_RELEASES_PER_BLOCK_V1,
-    PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1, PALW_PAID_CLAIM_TRAP_SIGNER_LIABILITY_SOMPI_V1, PALW_PAID_CLAIM_TRAP_TABLE_V1,
-    PalwHeldCheckFeeRowV1, PalwPaidClaimConvictionRowV1, PalwPaidTrapClaimV1, PalwPaidTrapRevealInputV1, palw_paid_trap_conviction_key_v1,
-    palw_paid_trap_forfeit_v1, palw_paid_trap_held_fee_key_v1, palw_paid_trap_reveal_admits_v1, palw_paid_trap_slot_drawn_v1,
+    PALW_PAID_CLAIM_TRAP_COMMIT_DEPOSIT_SOMPI_V1, PALW_PAID_CLAIM_TRAP_COMMITMENT_PREFIX_V1, PALW_PAID_CLAIM_TRAP_CONVICTION_PREFIX_V1,
+    PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1, PALW_PAID_CLAIM_TRAP_RELEASES_PER_BLOCK_V1, PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
+    PALW_PAID_CLAIM_TRAP_SIGNER_LIABILITY_SOMPI_V1, PALW_PAID_CLAIM_TRAP_TABLE_V1, PalwHeldCheckFeeRowV1, PalwPaidClaimConvictionRowV1,
+    PalwPaidTrapClaimV1, PalwPaidTrapCommitInputV1, PalwPaidTrapCommitmentRowV1, PalwPaidTrapRevealInputV1,
+    palw_paid_trap_commit_admits_v1, palw_paid_trap_commitment_key_v1, palw_paid_trap_conviction_key_v1, palw_paid_trap_counts_v1,
+    palw_paid_trap_forfeit_v1, palw_paid_trap_held_fee_key_v1, palw_paid_trap_reveal_admits_v1,
 };
 use crate::palw_settlement_once_v1::{PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1};
 
@@ -44,6 +50,30 @@ const PAID_CLAIM_RECEIPT_DOMAIN_V2: &[u8] = b"MISAKA/PALW/PAID-CLAIM-RECEIPT/V2"
 /// The paid claim's seat lock (aux 116), if it names this enrollment.
 pub(super) fn paid_lock_v1(route: &PalwKernelRouteStateV1, enrollment: &[u8; 64]) -> Option<PalwPaidClaimLockV2> {
     route.aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, enrollment).filter(|lock| lock.enrollment == *enrollment)
+}
+
+/// The paid claim's commitment row (aux 142, `0x03 ‖ enrollment`), if it stands and names this enrollment.
+pub(super) fn paid_commitment_v1(route: &PalwKernelRouteStateV1, enrollment: &[u8; 64]) -> Option<PalwPaidTrapCommitmentRowV1> {
+    route
+        .aux_row::<PalwPaidTrapCommitmentRowV1>(PALW_PAID_CLAIM_TRAP_TABLE_V1, &palw_paid_trap_commitment_key_v1(enrollment))
+        .filter(|row| row.version == PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1 && row.enrollment == *enrollment)
+}
+
+/// **The paid lock's gate** (`palw_claim_challenge_fold_v2::lock`): past the fence no seat is drawn for a paid claim without its
+/// producer's one trap-or-null commitment. `Ok` below the fence (the historical lock, byte for byte).
+pub(super) fn paid_trap_lock_admits_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    enrollment: &[u8; 64],
+    daa: u64,
+) -> Result<(), &'static str> {
+    if !params.paid_claim_trap_active_at(daa) {
+        return Ok(());
+    }
+    if state.kernel_route.as_ref().and_then(|route| paid_commitment_v1(route, enrollment)).is_none() {
+        return Err("paid claim lock needs its producer's trap-or-null commitment (palw_paid_claim_trap_v1)");
+    }
+    Ok(())
 }
 
 /// **Did `signer` (kernel id) sign a Clean receipt on `enrollment`?** Its receipt row (aux 117, under the receipt id of
@@ -69,6 +99,51 @@ pub(super) fn clean_receipt_signers_v1(route: &PalwKernelRouteStateV1, paid: &Pa
         }
     }
     signers
+}
+
+/// **`PaidClaimObjectV2::TrapCommitment`** (the caller resolved the enrollment's authority into `paid` and its seal window start):
+/// judged by [`palw_paid_trap_commit_admits_v1`]; the deposit (if the measured record sets one) is reserved on the producer's bond
+/// and the row written. Refused below the fence (the object is dropped; the block stands).
+pub(super) fn apply_paid_trap_commitment_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    paid: &PalwPaidTrapClaimV1,
+    seal_start: u64,
+    commitment: &[u8; 64],
+) -> Result<(), PalwStateV2Error> {
+    if !builder.params.paid_claim_trap_active_at(ctx.daa_score) {
+        return Err(refused("a paid trap commitment before palw_paid_claim_trap_v1 is in force"));
+    }
+    let route = builder.state.kernel_route.as_ref().ok_or_else(|| refused("paid trap commitment: no kernel route"))?;
+    let free = builder
+        .state
+        .bonds
+        .get(&paid.producer)
+        .map_or(0, |record| super::palw_mesh_fold_v1::free_collateral_v1(&builder.state, &paid.producer, record));
+    palw_paid_trap_commit_admits_v1(&PalwPaidTrapCommitInputV1 {
+        signer: *signer,
+        producer: paid.producer,
+        seal_start,
+        locked: paid_lock_v1(route, &paid.enrollment).is_some(),
+        committed: route.aux.contains_key(&(PALW_PAID_CLAIM_TRAP_TABLE_V1, palw_paid_trap_commitment_key_v1(&paid.enrollment))),
+        free_collateral: free,
+        now: ctx.daa_score,
+    })
+    .map_err(refused)?;
+    let deposit = PALW_PAID_CLAIM_TRAP_COMMIT_DEPOSIT_SOMPI_V1;
+    builder.mesh_reserve(paid.producer, u128::from(deposit))?;
+    let row = PalwPaidTrapCommitmentRowV1 {
+        version: PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
+        enrollment: paid.enrollment,
+        base_claim: paid.base_claim,
+        producer: paid.producer,
+        commitment: *commitment,
+        committed_daa: ctx.daa_score,
+        deposit,
+        forget_after_daa: paid.reveal_end(),
+    };
+    builder.write_kernel_row_encoded_v1(PALW_PAID_CLAIM_TRAP_TABLE_V1, &palw_paid_trap_commitment_key_v1(&paid.enrollment), Some(&row))
 }
 
 impl PalwChainStateV2 {
@@ -107,12 +182,14 @@ impl PalwChainStateV2 {
         daa: u64,
         convicted: bool,
     ) -> PalwPaidTrapRevealInputV1 {
-        // A reveal over another claim than this paid claim's base opens nothing here.
-        let trap = (reveal.claim.as_bytes() == paid.base_claim)
-            .then(|| self.vertex.mesh.traps.get(&reveal.commitment()))
-            .flatten()
-            .map(|row| (row.setter, row.committed_daa, row.revealed_claim.is_some()));
-        let lock_daa = self.kernel_route.as_ref().and_then(|route| paid_lock_v1(route, &paid.enrollment)).map(|lock| lock.locked_daa);
+        let route = self.kernel_route.as_ref();
+        // The claim's commitment, when this reveal opens it (a reveal over another claim than this paid claim's base opens nothing).
+        let trap = route
+            .filter(|_| reveal.claim.as_bytes() == paid.base_claim)
+            .and_then(|route| paid_commitment_v1(route, &paid.enrollment))
+            .filter(|row| row.commitment == reveal.commitment().as_bytes())
+            .map(|row| (row.producer, row.committed_daa));
+        let lock = route.and_then(|route| paid_lock_v1(route, &paid.enrollment));
         PalwPaidTrapRevealInputV1 {
             tiles: reveal.tiles,
             fault_leaf: reveal.fault_leaf,
@@ -120,8 +197,8 @@ impl PalwChainStateV2 {
             setter: reveal.setter_bond,
             producer: paid.producer,
             interactive: paid.interactive,
-            lock_daa,
-            setter_drawn: trap.is_some_and(|(setter, committed_daa, _)| palw_paid_trap_slot_drawn_v1(&setter, committed_daa)),
+            lock_daa: lock.as_ref().map(|lock| lock.locked_daa),
+            counts: lock.as_ref().is_some_and(|lock| palw_paid_trap_counts_v1(&lock.seed, &paid.enrollment, &reveal.salt)),
             checking_until: paid.lifetime.checking_until,
             reveal_end: paid.reveal_end(),
             convicted,
@@ -144,6 +221,17 @@ pub(super) fn trap_bounty_seat_v1(route: &PalwKernelRouteStateV1, paid: &PalwPai
         .filter(|seat| seat != setter)
 }
 
+/// Spend a commitment: the row goes and its deposit (if any) returns to the producer.
+fn spend_commitment_v1(builder: &mut TransitionBuilder<'_>, row: &PalwPaidTrapCommitmentRowV1) -> Result<(), PalwStateV2Error> {
+    builder.write_kernel_row_encoded_v1::<PalwPaidTrapCommitmentRowV1>(
+        PALW_PAID_CLAIM_TRAP_TABLE_V1,
+        &palw_paid_trap_commitment_key_v1(&row.enrollment),
+        None,
+    )?;
+    let _ = local_capacity_or_v1(builder.mesh_release(row.producer, u128::from(row.deposit)))?;
+    Ok(())
+}
+
 /// **`TrapRevealed` over a paid V2 base claim** (module doc). Every refusal is an error: the object is dropped, the block stands.
 pub(super) fn apply_paid_trap_revealed_v1(
     builder: &mut TransitionBuilder<'_>,
@@ -152,13 +240,12 @@ pub(super) fn apply_paid_trap_revealed_v1(
     paid: &PalwPaidTrapClaimV1,
 ) -> Result<(), PalwStateV2Error> {
     builder.state.paid_trap_revealed_admissible_v1(paid, reveal, ctx.daa_score).map_err(refused)?;
-    let commitment = reveal.commitment();
-    let trap = builder.state.vertex.mesh.traps.get(&commitment).cloned().ok_or_else(|| refused(PalwMeshErrorV1::TrapNotCommitted))?;
-    // 1. The deposit comes back, and the commitment is spent (as a mesh reveal).
-    builder.mesh_release(trap.setter, trap.deposit)?;
-    builder.write_mesh_trap(commitment, None)?;
+    let route = builder.state.kernel_route.as_ref().ok_or_else(|| refused("paid trap: no kernel route"))?;
+    let commitment = paid_commitment_v1(route, &paid.enrollment).ok_or_else(|| refused("paid trap: the commitment is gone"))?;
+    let seat = trap_bounty_seat_v1(route, paid, &commitment.producer);
+    // 1. The commitment is spent; its deposit comes back.
+    spend_commitment_v1(builder, &commitment)?;
     // 2. The checker that convicted the planted fault: the existing trap bounty, once per (claim, seat), from the panel reserve.
-    let seat = builder.state.kernel_route.as_ref().and_then(|route| trap_bounty_seat_v1(route, paid, &trap.setter));
     if let Some(seat) = seat {
         builder.mesh_pay_from_reserve(
             ctx.daa_score,
@@ -307,9 +394,10 @@ pub(super) fn release_held_check_fee_v1(
     Ok(())
 }
 
-/// **The closing tick's release** (before the ledger's own tick; a no-op below the fence): held check fees whose reveal window has
-/// passed and whose claim is terminal (convicted or Final) are released, and conviction rows past their window are forgotten — at
-/// most [`PALW_PAID_CLAIM_TRAP_RELEASES_PER_BLOCK_V1`] of each a block, in key order. A held fee of a claim not yet terminal waits.
+/// **The closing tick's sweep** (before the ledger's own tick; a no-op below the fence): held check fees whose reveal window has
+/// passed and whose claim is terminal (convicted or Final) are released; commitments and conviction rows past their window are
+/// forgotten (a commitment's deposit returned) — at most [`PALW_PAID_CLAIM_TRAP_RELEASES_PER_BLOCK_V1`] of each kind a block, in key
+/// order. A held fee of a claim not yet terminal waits.
 pub(super) fn release_held_check_fees_v1(builder: &mut TransitionBuilder<'_>, now: u64) -> Result<(), PalwStateV2Error> {
     if !builder.params.paid_claim_trap_active_at(now) {
         return Ok(());
@@ -340,6 +428,15 @@ pub(super) fn release_held_check_fees_v1(builder: &mut TransitionBuilder<'_>, no
                 .is_some_and(|paid| !paid.interactive && clean_receipt_signer_v1(route, &paid.enrollment, &row.verifier));
         due.push((row, clean));
     }
+    let commitment_range =
+        (table, vec![PALW_PAID_CLAIM_TRAP_COMMITMENT_PREFIX_V1])..(table, vec![PALW_PAID_CLAIM_TRAP_COMMITMENT_PREFIX_V1 + 1]);
+    let expired: Vec<PalwPaidTrapCommitmentRowV1> = route
+        .aux
+        .range(commitment_range)
+        .filter_map(|(_, bytes)| borsh::from_slice::<PalwPaidTrapCommitmentRowV1>(bytes).ok())
+        .filter(|row| row.forget_after_daa < now)
+        .take(PALW_PAID_CLAIM_TRAP_RELEASES_PER_BLOCK_V1)
+        .collect();
     let conviction_range =
         (table, vec![PALW_PAID_CLAIM_TRAP_CONVICTION_PREFIX_V1])..(table, vec![PALW_PAID_CLAIM_TRAP_CONVICTION_PREFIX_V1 + 1]);
     let stale: Vec<Vec<u8>> = route
@@ -353,6 +450,11 @@ pub(super) fn release_held_check_fees_v1(builder: &mut TransitionBuilder<'_>, no
         .collect();
     for (row, clean) in due {
         release_held_check_fee_v1(builder, &row, clean, now)?;
+    }
+    // A commitment past the claim's reveal window: a null one (or an unrevealed trap) simply ends, its deposit returned — the
+    // same for both, so its end says nothing either.
+    for row in expired {
+        spend_commitment_v1(builder, &row)?;
     }
     for key in stale {
         builder.write_kernel_row_encoded_v1::<PalwPaidClaimConvictionRowV1>(table, &key, None)?;

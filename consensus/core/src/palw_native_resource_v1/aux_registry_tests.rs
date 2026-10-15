@@ -370,8 +370,8 @@ fn class_registration_origins_have_their_own_exact_aux_codec() {
 }
 
 /// RFC-0007 §4.1 T6 paid-claim trap rows (aux 142, dormant): a 65-byte `0x01 ‖ claim` key reaches the conviction row's codec, a
-/// 137-byte `0x02 ‖ claim ‖ verifier ‖ le64(slot)` key the held check fee's; any other shape fails closed as malformed; 142 collides
-/// with no other aux table. Source only, not executed.
+/// 137-byte `0x02 ‖ claim ‖ verifier ‖ le64(slot)` key the held check fee's, a 65-byte `0x03 ‖ enrollment` key the commitment's; any
+/// other shape fails closed as malformed; 142 collides with no other aux table. Source only, not executed.
 #[test]
 fn paid_claim_trap_rows_have_their_own_exact_aux_codec() {
     use crate::palw_paid_claim_trap_v1::*;
@@ -416,6 +416,22 @@ fn paid_claim_trap_rows_have_their_own_exact_aux_codec() {
         &mut reader,
     )
     .unwrap();
+    assert_eq!(reader.remaining(), 0);
+    // A paid claim's trap-or-null commitment (`0x03 ‖ enrollment`).
+    let commitment = PalwPaidTrapCommitmentRowV1 {
+        version: PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
+        enrollment: [6; 64],
+        base_claim: [1; 64],
+        producer: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(1), 0)),
+        commitment: [8; 64],
+        committed_daa: 3,
+        deposit: PALW_PAID_CLAIM_TRAP_COMMIT_DEPOSIT_SOMPI_V1,
+        forget_after_daa: 440,
+    };
+    let bytes = borsh::to_vec(&commitment).unwrap();
+    let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+    super::wire_kernel_aux::scan_native_aux_row_v1(PALW_PAID_CLAIM_TRAP_TABLE_V1, &palw_paid_trap_commitment_key_v1(&[6; 64]), &mut reader)
+        .unwrap();
     assert_eq!(reader.remaining(), 0);
     for bad_key in [vec![0xEE; 65], vec![PALW_PAID_CLAIM_TRAP_CONVICTION_PREFIX_V1; 137], vec![0xEE; 64]] {
         let mut empty = NativeWireReaderV1::new(&[][..], 0);

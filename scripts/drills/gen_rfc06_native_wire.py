@@ -266,8 +266,9 @@ AUX_SPEC_ARMS+='115 | 123 | 125 | 126 | 127 | 130 | 131 | 132 | 133 | 134 | 135 
 # RFC-0006 RFC06-8 (2026-10-15): class registration origins (aux 141, keyed by the 64-byte class id; dormant fence).
 AUX_SPEC_ARMS+='141 if key_bytes==64=>crate::palw_class_registration_origin_v1::PalwClassRegistrationOriginRowV1::scan_native_wire_v1(&mut frame)?,\n141=>return Err(wire::wire_bad("unallocated class registration origin row namespace")),\n'
 # RFC-0007 §4.1 T6 (2026-10-16): the paid-claim trap rows (aux 142; dormant fence palw_paid_claim_trap_v1): a paid claim's court
-# conviction under 0x01 ‖ claim (65-byte key) and a held verifier check fee under 0x02 ‖ claim ‖ verifier ‖ le64(slot) (137 bytes).
-AUX_SPEC_ARMS+='142 if key_bytes==65 && prefix==crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_CONVICTION_PREFIX_V1=>crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1::scan_native_wire_v1(&mut frame)?,\n142 if key_bytes==137 && prefix==crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1=>crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1::scan_native_wire_v1(&mut frame)?,\n142=>return Err(wire::wire_bad("unallocated paid-claim trap row namespace")),\n'
+# conviction under 0x01 ‖ claim (65-byte key), a held verifier check fee under 0x02 ‖ claim ‖ verifier ‖ le64(slot) (137 bytes) and
+# a paid claim's one trap-or-null commitment under 0x03 ‖ enrollment (65 bytes).
+AUX_SPEC_ARMS+='142 if key_bytes==65 && prefix==crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_CONVICTION_PREFIX_V1=>crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1::scan_native_wire_v1(&mut frame)?,\n142 if key_bytes==137 && prefix==crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1=>crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1::scan_native_wire_v1(&mut frame)?,\n142 if key_bytes==65 && prefix==crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_COMMITMENT_PREFIX_V1=>crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1::scan_native_wire_v1(&mut frame)?,\n142=>return Err(wire::wire_bad("unallocated paid-claim trap row namespace")),\n'
 AUX_HELPERS='''
 /// The longest aux key any fold writes is far below this; a longer key is malformed, never truncated.
 const NATIVE_AUX_KEY_MAX_BYTES_V1: u64 = 4096;

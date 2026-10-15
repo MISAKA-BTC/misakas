@@ -116,7 +116,8 @@ queue=['crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMate
        # RFC-0008 (2026-10-15): the once-only settlement markers of kernel route aux 140 (dormant fence).
        'crate::palw_settlement_once_v1::PalwSettlementOnceRowV1',
        # RFC-0007 §4.1 T6 (2026-10-16): the paid-claim trap rows of kernel route aux 142 (dormant fence).
-       'crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1','crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1']; visited=set(); generated=[]; unresolved=[]
+       'crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1','crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1',
+       'crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1']; visited=set(); generated=[]; unresolved=[]
 
 # Resolve dependency types; concrete names, aliases/primitive containers are left
 # to Rust's existing type system, so there is no byte-size inference from codec.

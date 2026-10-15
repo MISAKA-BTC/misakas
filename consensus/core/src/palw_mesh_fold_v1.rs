@@ -38,13 +38,13 @@ use crate::palw_audit_1004_v1::PALW_AUDIT_1004_MIN_TRAP_TILES_V1;
 pub const PALW_TRAP_COMMIT_TTL_DAA_V1: u64 = 2 * (PALW_AUDIT_WINDOW_DAA_V1 + PALW_TRAP_REVEAL_WINDOW_DAA_V1);
 
 /// A bond's free collateral for a new reservation: the collateral net of everything the ledger already holds on it.
-fn free_collateral_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2, record: &PalwBondStateV2) -> u128 {
+pub(super) fn free_collateral_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2, record: &PalwBondStateV2) -> u128 {
     (record.collateral as u128).saturating_sub(state.reserved_exposure(bond)).saturating_sub(state.registration_exposure(bond))
 }
 
 impl TransitionBuilder<'_> {
     /// Add `amount` to a bond's `reserved_exposure` (the audit mesh's reservations).
-    fn mesh_reserve(&mut self, bond: PalwBondKeyV2, amount: u128) -> Result<(), PalwStateV2Error> {
+    pub(super) fn mesh_reserve(&mut self, bond: PalwBondKeyV2, amount: u128) -> Result<(), PalwStateV2Error> {
         if amount == 0 {
             return Ok(());
         }
