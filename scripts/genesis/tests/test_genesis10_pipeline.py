@@ -42,6 +42,16 @@ class Registry(unittest.TestCase):
         self.assertIn("mmproj-model-bf16.gguf", [f["path"] for f in six["files"]])
         self.assertNotIn("mmproj-model-bf16.gguf", [f["path"] for f in gp.needed_files(six, None)], "pinned, not converted")
 
+    def test_every_gdn_hybrid_converts_with_the_fix_of_the_9b_fit_refusal(self):
+        # The past refusal of Huihui-Qwen3.5-9B (HF_FIT_OUT_OF_TOLERANCE, KL 0.268) was the GDN core's 16-bit grid; the fix is
+        # `gdn_core_wide` (KL 0.0039 on the full model). The fixtures of the refusals stay; every genesis GDN conversion sets it.
+        gdn = [m for m in self.reg["models"] if m["family"].startswith("qwen35-gdn-hybrid") and m["converter"] in ("tir", "tir-gguf")]
+        self.assertEqual(sorted(m["id"] for m in gdn), [2, 3, 6])
+        for m in gdn:
+            self.assertTrue(m["convert_options"].get("gdn_core_wide"), m["id"])
+        nine = HERE.parents[1] / "misaka/palw/tir/lower/tests/fixtures/vlm-generic/huihui-qwen3.5-9b/fixture.json"
+        self.assertEqual(json.loads(nine.read_text())["revision"], gp.model_by_id(self.reg, 3)["source_revision"])
+
 
 class Cards(unittest.TestCase):
     def setUp(self):
