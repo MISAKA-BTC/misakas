@@ -125,6 +125,16 @@ pub const PALW_ELIG_VERIFIER_MATURITY_DAYS_DESIGN_V1: u64 = 7;
 /// no examiner is paid from new issuance. 100,000 BILI (in sompi) is a PLACEHOLDER so the mechanism has a non-zero value to test.
 pub const PALW_ELIG_ATTEMPT_FEE_DESIGN_V1: u64 = 100_000 * 100_000_000;
 
+/// **U-3 (user decisions 2026-10-15, with the same-day clarification): what an exam pass IS.** The drawn-verifier m-of-k approval is
+/// the certification pillar, under an EXPLICIT premise — the honest share of the drawn verifier stake is at least the threshold. It is
+/// premise-based certification, never an unconditional proof that any computation is correct (no cryptographic computation proof is
+/// used, PRINCIPLES §8). Where the premise fails (`f` ≥ the pass threshold of the drawn stake) the gate stops discriminating; the
+/// simulation driver reports that impact at f = 1/3, 0.6 and the worst case. Every surface that shows a pass (RPC, status reads,
+/// docs) carries this meaning.
+pub const PALW_ELIG_CERTIFICATION_PREMISE_V1: &str = "premise-based certification: m-of-k positive approvals by stake-drawn verifiers, \
+     valid under the explicit premise that the honest share of the drawn verifier stake is at least the threshold; not an \
+     unconditional proof of computation correctness";
+
 // =================================================================================================================================
 // Stage, rights
 // =================================================================================================================================
@@ -860,7 +870,8 @@ pub fn palw_eligibility_examined_claims_v1(seed: &EligDigestV1, claims_count: u3
 }
 
 /// **The verdict at `daa`**: `Passed` as soon as `k` draw positions attested `Reproduced`; at the deadline, `NotPromoted`
-/// otherwise; `None` while open. `Unavailable`, `NotReproducible` and silence all mean "promotion conditions not met"; none of them
+/// otherwise; `None` while open. `Passed` is premise-based certification ([`PALW_ELIG_CERTIFICATION_PREMISE_V1`], U-3), never a proof
+/// that the model's computation is correct. `Unavailable`, `NotReproducible` and silence all mean "promotion conditions not met"; none of them
 /// is a fraud verdict and none slashes (per-claim findings travel separately).
 pub fn palw_eligibility_exam_verdict_v1(
     policy: &PalwModelEligibilityPolicyV1,

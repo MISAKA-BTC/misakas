@@ -171,6 +171,23 @@ fn u1_the_default_exam_is_24_of_47() {
     assert!(palw_eligibility_pass_probability_f64(1.0 / 3.0, 47, 24) < palw_eligibility_pass_probability_f64(1.0 / 3.0, 7, 4));
 }
 
+/// U-3 (user decisions 2026-10-15): a pass is PREMISE-BASED certification, never a proof of computation correctness; the f threat
+/// model (1/3, 0.6, worst case f = 1) shows how far the gate stops discriminating when the premise fails — a report of impact, not a
+/// condition for changing the certification method.
+#[test]
+fn u3_a_pass_is_premise_based_certification_and_the_f_threat_model_is_reported() {
+    assert!(PALW_ELIG_CERTIFICATION_PREMISE_V1.contains("premise"));
+    assert!(PALW_ELIG_CERTIFICATION_PREMISE_V1.contains("not an unconditional proof of computation correctness"));
+    let p = policy();
+    let (m, k) = (p.exam_m as u32, p.exam_k as u32);
+    let third = palw_eligibility_pass_probability_f64(1.0 / 3.0, m, k);
+    let sixty = palw_eligibility_pass_probability_f64(0.6, m, k);
+    let worst = palw_eligibility_pass_probability_f64(1.0, m, k);
+    assert!(third > 0.0085 && third < 0.0095, "f = 1/3, 24-of-47: ≈ 0.90 % per attempt ({third})");
+    assert!(sixty > 0.91 && sixty < 0.925, "f = 0.6: ≈ 91.8 % ({sixty})");
+    assert!((worst - 1.0).abs() < 1e-12, "worst case f = 1: the gate certifies whatever the attacker wants");
+}
+
 #[test]
 fn gate_math_4_of_7_at_three_percent_and_ten_thousand_attempts() {
     let p = palw_eligibility_pass_probability_f64(0.03, 7, 4);

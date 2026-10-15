@@ -249,6 +249,54 @@ def sweep(trials: int, rng: random.Random) -> None:
     print()
 
 
+# --- U-3 (user decisions 2026-10-15): the f threat model — the impact if the certification PREMISE fails ------------------------
+# The drawn-verifier m-of-k approval is the certification pillar under the explicit premise that the honest share of the drawn
+# verifier stake is at least the threshold. It is premise-based certification, never a proof of computation correctness. This
+# section REPORTS the impact at f = 1/3, f = 0.6 and the worst case (f = 1: every drawn position is the attacker's); it is not a
+# condition for changing the certification method (same-day clarification).
+THREAT_F = ((1 / 3, "f = 1/3"), (0.6, "f = 0.6"), (1.0, "worst case: f = 1 (the attacker holds every drawn position)"))
+PREMISE = ("premise-based certification: m-of-k approvals by stake-drawn verifiers, valid only while the honest share of the "
+           "drawn verifier stake is at least the threshold; not an unconditional proof of computation correctness")
+
+
+def threat_model(trials: int, rng: random.Random) -> list:
+    """Per f: the single-exam pass-alone probability at the default 24-of-47 (and the 4-of-7 test-only column), the chance of at
+    least one pass when the attacker uses its share of the network attempt budget for 30 / 90 days, and the §7 driver's impact
+    metrics (scenario 1: everything on one closed model) with the honest verifier stake set to give that f."""
+    rows = []
+    a = float(ATTACKER_BILI)
+    for f, label in THREAT_F:
+        attacker_verifier = a / 2
+        honest_verifier = 0.0 if f >= 1.0 else attacker_verifier * (1 - f) / f
+        s = Scenario(f"U-3 {label}", a / 2, attacker_verifier, 1, honest_capital_bili=10 * a, honest_models=100,
+                     honest_verifier_bili=honest_verifier)
+        pp = p_pass(f)
+        attempts = int(ATTEMPTS_NETWORK_PER_EPOCH * ATTACKER_ATTEMPT_SHARE)
+        row = {"label": label, "f": f, "p_pass_24_of_47": pp, "p_pass_4_of_7_test_only": p_pass(f, TEST_M, TEST_K),
+               "any_pass_30d": 1 - (1 - pp) ** attempts, "any_pass_90d": 1 - (1 - pp) ** (3 * attempts)}
+        for horizon in (30, 90):
+            r = run(s, horizon, trials, rng)
+            row[f"impact_{horizon}d"] = {k: r[k] for k in ("max_reward_outflow", "adopted_block_share", "final_weight_share",
+                                                          "re_review_success")}
+        rows.append(row)
+    return rows
+
+
+def print_threat_model(trials: int, rng: random.Random) -> None:
+    print("U-3 threat model — impact if the certification premise fails (a report, not a verdict; not a proof of correctness)")
+    print(f"  meaning of a pass: {PREMISE}")
+    for row in threat_model(trials, rng):
+        print(f"  {row['label']}: P_pass 24-of-47 = {row['p_pass_24_of_47']:.4e} (4-of-7 test-only {row['p_pass_4_of_7_test_only']:.4f}); "
+              f">=1 pass in 30 d {row['any_pass_30d']:.4f}, 90 d {row['any_pass_90d']:.4f}")
+        for horizon in (30, 90):
+            m = row[f"impact_{horizon}d"]
+            print(f"    {horizon:2d} d: reward outflow {m['max_reward_outflow']:.4f}, block share {m['adopted_block_share']:.4f}, "
+                  f"Final-weight share {m['final_weight_share']:.4f}, re-review success {m['re_review_success']:.4f}")
+    print("  (Probation claims carry no Final weight and no security credit before RFC-0018 Gate C certification; G14 public")
+    print("   prosecution still convicts and voids a refuted claim, certified or not.)")
+    print()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--trials", type=int, default=2_000)
@@ -257,8 +305,9 @@ def main() -> None:
     args = ap.parse_args()
     rng = random.Random(args.seed)
     sweep(args.sweep_trials, rng)
+    print_threat_model(args.trials, rng)
 
-    print("RFC-0017 analytic gate math (illustrative targets, not payouts; not soundness, not conviction probability)")
+    print("RFC-0017 analytic gate math (illustrative targets, not payouts; not soundness, not conviction probability, never a proof)")
     pp = p_pass(0.03)
     print(f"  P_pass(f=3 %, {EXAM_K}-of-{EXAM_M}) = {pp:.6e} per attempt; 1-(1-p)^10000 = {1 - (1 - pp) ** 10_000:.4f}")
     for n in (1, 100, 1000):
