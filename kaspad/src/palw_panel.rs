@@ -94,6 +94,8 @@ mod palw_operator_da;
 mod artifact_inventory;
 #[path = "palw_flat_source_responder.rs"]
 mod flat_source_responder;
+#[path = "palw_float_source_responder.rs"]
+mod float_source_responder;
 /// Paid public history recovery: the literal custodians' answers (producer and granted Valid
 /// seats) and the outside owner's native Demand/Collect when every peer and archive lacks a link.
 #[path = "palw_history_recovery_actor.rs"]
@@ -130,6 +132,7 @@ struct PalwDelegatedSlotsV1 {
     prefix: HashMap<PalwBondKeyV2, Option<(u64, Hash64, PalwBondKeyV2)>>,
     selected: HashMap<PalwBondKeyV2, Option<(u64, Hash64, PalwBondKeyV2)>>,
     flat: HashMap<PalwBondKeyV2, flat_source_responder::FlatSourceBookV1>,
+    float: HashMap<PalwBondKeyV2, float_source_responder::FloatSourceBookV1>,
     history: HashMap<PalwBondKeyV2, history_recovery_actor::HistoryResponderBookV1>,
 }
 const PALW_DELEGATED_SLOTS_PER_TICK_V1: usize = 8;
@@ -7823,6 +7826,8 @@ impl PalwPanelService {
             let directory = self.config.retention_dir.clone();
             let (_, projected) = offload(_backend, move |backend| {
                 crate::palw_flat_public_source::retain_v1(&directory, claim_id, backend, &run.outcome.material)?;
+                // A Float32 family's public rows (no in-node backend retains them today: `false`).
+                crate::palw_flat_public_source::retain_float_v1(&directory, claim_id, backend, &run.outcome.material)?;
                 let header = backend.public_execution_binding_header_v1(&run.outcome.material)?;
                 Ok::<_, String>((run, Some(header)))
             })
@@ -8312,6 +8317,7 @@ impl PalwPanelService {
                     book.prefix.retain(|p, _| live.contains(p));
                     book.selected.retain(|p, _| live.contains(p));
                     book.flat.retain(|p, _| live.contains(p));
+                    book.float.retain(|p, _| live.contains(p));
                     book.history.retain(|p, _| live.contains(p));
                 }
             }
@@ -8332,6 +8338,10 @@ impl PalwPanelService {
             let flat = book.flat.entry(*producer).or_default();
             if let Err(why) = self.public_flat_answer_tick_v1(session, slot, flat, pending, due, moved).await {
                 debug!("[{PALW_PANEL}] delegated Flat response for {producer:?} remains pending: {why}");
+            }
+            let float = book.float.entry(*producer).or_default();
+            if let Err(why) = self.public_float_answer_tick_v1(session, slot, float, pending, due, moved).await {
+                debug!("[{PALW_PANEL}] delegated Float32 response for {producer:?} remains pending: {why}");
             }
             let history = book.history.entry(*producer).or_default();
             if let Err(why) = self.history_recovery_answer_tick_v1(session, slot, history, pending, due, moved).await {
@@ -8629,6 +8639,7 @@ impl PalwPanelService {
         let mut public_prefix_response_cursor = None;
         let mut public_selected_response_cursor = None;
         let mut public_flat_response_book = flat_source_responder::FlatSourceBookV1::default();
+        let mut public_float_response_book = float_source_responder::FloatSourceBookV1::default();
         let mut public_history_response_book = history_recovery_actor::HistoryResponderBookV1::default();
         let mut delegated_slots = PalwDelegatedSlotsV1::default();
         let mut artifact_inventory_book = artifact_inventory::ArtifactInventoryBookV1::default();
@@ -11067,6 +11078,19 @@ impl PalwPanelService {
                 .await
             {
                 debug!("[{PALW_PANEL}] Flat public response remains pending: {why}");
+            }
+            if let Err(why) = self
+                .public_float_answer_tick_v1(
+                    &session,
+                    PalwAnswerSlotV1::own(bond_key),
+                    &mut public_float_response_book,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] Float32 public response remains pending: {why}");
             }
             if let Err(why) = self
                 .history_recovery_answer_tick_v1(

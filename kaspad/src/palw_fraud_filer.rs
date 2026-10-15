@@ -4136,7 +4136,7 @@ impl PalwPanelService {
         binding: &PalwStepBindingV2,
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
         selected_events: Option<Vec<kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1>>,
-        flat: Option<(kaspa_consensus_core::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1, Hash64, PalwBondKeyV2)>,
+        flat: Option<(constraint_scheduler::StreamedPinV1, Hash64, PalwBondKeyV2)>,
         flat_original: Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
         original_seed: Option<kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1>,
         progress: kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
@@ -4449,6 +4449,161 @@ impl PalwPanelService {
         Ok(None)
     }
 
+    /// **The greedy Float32 source owner** (behind `palw_staged_float_constraint_v1`): opens the
+    /// accepted Float32 source, nominates over the authenticated ids from its own replay (the Flat
+    /// owner's selector — a replay that diverged names the position and the beating lane), collects
+    /// missed custodian clocks, and hands the native authenticated row pin to the Constraint seed.
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_float_stage_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        binding: &PalwStepBindingV2,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        progress: &kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<
+        Option<(
+            kaspa_consensus_core::palw_float_constraint_source_v1::PalwFloatConstraintPinV1,
+            Hash64,
+            PalwBondKeyV2,
+            crate::palw_memory_ledger::PalwMemoryReservationV1,
+        )>,
+        String,
+    > {
+        use crate::palw_flat_public_source::FloatSourceScheduleV1;
+        use kaspa_consensus_core::{
+            palw_constraint_stream_carriage_v1::{
+                PALW_CONSTRAINT_STREAM_CONTEXT_V1, PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1,
+            },
+            palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
+            palw_selected_event_source_v1::PalwSelectedEventBindingV1,
+        };
+        if self.consensus_config.params.palw_staged_float_constraint_v1_fence().is_none() {
+            return Ok(None);
+        }
+        let bundle = progress.bundle.as_ref().ok_or("Float32 source has no prepaid bundle")?;
+        let bytes = bundle.plan.terms.plan.resident_ram_bytes.checked_mul(2).ok_or("Float32 snapshot memory overflow")?;
+        let guard = crate::palw_memory_ledger::host_ledger_v1()
+            .reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: "public-float-source-read",
+                    class_id: target.class_id,
+                    job: claim,
+                },
+                bytes,
+            )
+            .map_err(|e| e.to_string())?;
+        let float = session.palw_staged_float_source_v1((claim, progress.reserver))?;
+        let mut due = progress.terms.open_until_daa.saturating_sub(1);
+        let action = if let Some(float) = float {
+            if float.now_daa < progress.now_daa
+                || (float.session.claim, float.session.owner, float.session.reserved_daa, float.session.bundle_id)
+                    != (claim, progress.reserver, progress.reserved_daa, bundle.bundle_id)
+                || float.context.binding.as_ref() != binding
+                || float.context.job.as_ref() != job
+                || (float.session.respond_until_daa, float.session.collect_until_daa)
+                    != (
+                        bundle.plan.preseed_source_until_v1(
+                            kaspa_consensus_core::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint,
+                            kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+                        )?,
+                        progress.terms.collect_until_daa,
+                    )
+            {
+                return Err("Float32 source changes original binding/job/owner/paid window or snapshot".into());
+            }
+            let decision = crate::palw_flat_public_source::float_request_v1(&float.session, float.now_daa)?;
+            if matches!(decision, FloatSourceScheduleV1::Nominate { .. } | FloatSourceScheduleV1::Ready { .. }) {
+                let ids = float.session.authenticated_generated_ids_v1()?;
+                let case = book.cases.get(&claim).ok_or("Float32 pursuit disappeared")?;
+                let own = match &case.verdict {
+                    PalwFraudFilerVerdictV1::Mismatch(run) => run.own_output_ids.as_slice(),
+                    _ => &[],
+                };
+                let replayed =
+                    case.arithmetic_matched || matches!(&case.verdict, PalwFraudFilerVerdictV1::Mismatch(run) if run.fp_job.is_some());
+                let root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job)
+                    .ok_or("Float32 Constraint loses immutable table root")?;
+                let table = crate::palw_public_token_table::public_table_v1(&root, &job.tokenizer_id)
+                    .ok_or("Float32 exact public table is unavailable")?;
+                let nominee = constraint_scheduler::nominate_authenticated_ids_v1(
+                    target,
+                    job,
+                    binding,
+                    ids,
+                    own,
+                    table,
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                )?;
+                let nominee = match nominee {
+                    Some(plan) => plan,
+                    None if replayed => {
+                        constraint::TiledPlanV1 { position: ids.len() as u32, committed: 0, witness: None, beat_lane: None }
+                    }
+                    _ => return Ok(None),
+                };
+                if float.session.nomination_v1().is_some_and(|n| n != (nominee.position, nominee.beat_lane)) {
+                    return Err("Float32 local selector differs from immutable accepted nomination".into());
+                }
+                book.cases.get_mut(&claim).ok_or("Float32 pursuit disappeared")?.constraint_plan = Some(nominee);
+            }
+            match decision {
+                FloatSourceScheduleV1::Wait => return Ok(None),
+                FloatSourceScheduleV1::Ready { signer } => {
+                    if !float.session.collected_v1()
+                        && float.session.custodians.iter().any(|signer| float.session.has_response_duty_v1(signer))
+                    {
+                        return Ok(None);
+                    }
+                    let pin = session
+                        .palw_staged_float_pin_v1((claim, progress.reserver), float.session.source_id, signer)?
+                        .ok_or("Float32 authenticated row pin is unavailable")?;
+                    return Ok(Some((pin, float.session.source_id, signer, guard)));
+                }
+                FloatSourceScheduleV1::Nominate { source_id } => {
+                    due = float.session.nomination_until_daa.saturating_sub(1);
+                    let plan =
+                        book.cases.get(&claim).and_then(|case| case.constraint_plan).ok_or("Float32 owner nomination is unavailable")?;
+                    PalwConstraintStreamActionV1::FloatSourceNominate { source_id, position: plan.position, beat: plan.beat_lane }
+                }
+                FloatSourceScheduleV1::Collect => {
+                    due = float.session.collect_until_daa.saturating_sub(1);
+                    PalwConstraintStreamActionV1::FloatSourceCollect
+                }
+            }
+        } else {
+            PalwConstraintStreamActionV1::FloatSourceOpen { binding: PalwSelectedEventBindingV1::from_binding_v1(binding)? }
+        };
+        let mut movement = PalwConstraintStreamMoveV1 {
+            version: 1,
+            claim,
+            reserver: progress.reserver,
+            reserved_daa: progress.reserved_daa,
+            seed_id: bundle.bundle_id,
+            phase: PalwConstraintStreamPhaseV1::PrefixCourt,
+            action,
+            signature: Vec::new(),
+        };
+        movement.signature =
+            self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no Float32 source owner signing key")?;
+        movement.check()?;
+        Self::fraud_filer_stage_queue_v1(
+            book,
+            claim,
+            PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) },
+            progress,
+            progress.now_daa,
+            court_pending,
+            court_due,
+        )?;
+        court_due.entry((claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false)).and_modify(|held| *held = (*held).min(due));
+        Ok(None)
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn fraud_filer_selected_stage_v1(
         &self,
@@ -4743,8 +4898,33 @@ impl PalwPanelService {
                         .await?
                     }
                     PalwStagedFamilyV1::Constraint => {
-                        let flat_scheme = binding.shape_profile.logits_scheme_id
-                            == kaspa_consensus_core::palw_step_refute::flat_logits_scheme_id_v1();
+                        // A Float32 class's source is its v2 event tree, whatever its scheme field says
+                        // (greedy only, behind `palw_staged_float_constraint_v1`; the native quote refused the rest).
+                        let float_lane = binding.shape_profile.lane == kaspa_consensus_core::palw_step::PalwStepLaneV1::Float32;
+                        let flat_scheme = !float_lane
+                            && binding.shape_profile.logits_scheme_id
+                                == kaspa_consensus_core::palw_step_refute::flat_logits_scheme_id_v1();
+                        let float = if child.cursor.is_none() && float_lane {
+                            let Some(float) = self
+                                .fraud_filer_float_stage_v1(
+                                    session,
+                                    book,
+                                    claim,
+                                    target,
+                                    binding,
+                                    job,
+                                    &child,
+                                    court_pending,
+                                    court_due,
+                                )
+                                .await?
+                            else {
+                                return Ok((None, false));
+                            };
+                            Some(float)
+                        } else {
+                            None
+                        };
                         let flat = if child.cursor.is_none() && flat_scheme {
                             let Some(flat) = self
                                 .fraud_filer_flat_stage_v1(
@@ -4766,7 +4946,7 @@ impl PalwPanelService {
                         } else {
                             None
                         };
-                        let selected = if child.cursor.is_none() && !flat_scheme {
+                        let selected = if child.cursor.is_none() && !flat_scheme && !float_lane {
                             let Some(selected) = self
                                 .fraud_filer_selected_stage_v1(session, book, claim, target, binding, &child, court_pending, court_due)
                                 .await?
@@ -4783,13 +4963,24 @@ impl PalwPanelService {
                             Some(kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FlatConstraint {
                                 source_id, answerer,
                             }) => Some((
-                                session.palw_staged_flat_pin_v1((claim, progress.reserver), *source_id, *answerer)?
-                                    .ok_or("accepted Flat semantic seed lost its native EOF pin")?,
+                                constraint_scheduler::StreamedPinV1::Flat(
+                                    session.palw_staged_flat_pin_v1((claim, progress.reserver), *source_id, *answerer)?
+                                        .ok_or("accepted Flat semantic seed lost its native EOF pin")?,
+                                ),
+                                *source_id, *answerer,
+                            )),
+                            Some(kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FloatConstraint {
+                                source_id, answerer,
+                            }) => Some((
+                                constraint_scheduler::StreamedPinV1::Float(
+                                    session.palw_staged_float_pin_v1((claim, progress.reserver), *source_id, *answerer)?
+                                        .ok_or("accepted Float32 semantic seed lost its authenticated row pin")?,
+                                ),
                                 *source_id, *answerer,
                             )),
                             _ => None,
                         };
-                        let flat_original = if flat_scheme {
+                        let flat_original = if flat_scheme || float_lane {
                             Some(
                                 session
                                     .palw_staged_original_commitment_v1(claim)?
@@ -4805,7 +4996,12 @@ impl PalwPanelService {
                             binding,
                             job,
                             selected.as_ref().map(|(events, _)| events.clone()),
-                            flat.as_ref().map(|(pin, source, signer, _)| (pin.clone(), *source, *signer)).or(reopened_flat),
+                            flat.as_ref()
+                                .map(|(pin, source, signer, _)| (constraint_scheduler::StreamedPinV1::Flat(pin.clone()), *source, *signer))
+                                .or(float.as_ref().map(|(pin, source, signer, _)| {
+                                    (constraint_scheduler::StreamedPinV1::Float(pin.clone()), *source, *signer)
+                                }))
+                                .or(reopened_flat),
                             flat_original,
                             seed,
                             child,
@@ -5400,6 +5596,10 @@ impl PalwPanelService {
                             | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FlatSourceAnswer (_)
                             | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FlatSourceNominate {..}
                             | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FlatSourceCollect
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FloatSourceOpen {..}
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FloatSourceAnswer (_)
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FloatSourceNominate {..}
+                            | kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::FloatSourceCollect
                     )
                     && progress.seed_id == Some(movement.seed_id)
                     && (movement.claim, movement.reserver, movement.reserved_daa)
@@ -5474,14 +5674,18 @@ impl PalwPanelService {
                         .saturating_sub(1),
                     PalwConstraintStreamActionV1::SelectedEventDemand { .. }
                     | PalwConstraintStreamActionV1::FlatSourceOpen { .. }
-                    | PalwConstraintStreamActionV1::FlatSourceNominate { .. } => bundle
+                    | PalwConstraintStreamActionV1::FlatSourceNominate { .. }
+                    | PalwConstraintStreamActionV1::FloatSourceOpen { .. }
+                    | PalwConstraintStreamActionV1::FloatSourceNominate { .. } => bundle
                         .plan
                         .preseed_source_until_v1(
                             kaspa_consensus_core::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint,
                             kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
                         )?
                         .saturating_sub(1),
-                    PalwConstraintStreamActionV1::SelectedEventCollect { .. } | PalwConstraintStreamActionV1::FlatSourceCollect => {
+                    PalwConstraintStreamActionV1::SelectedEventCollect { .. }
+                    | PalwConstraintStreamActionV1::FlatSourceCollect
+                    | PalwConstraintStreamActionV1::FloatSourceCollect => {
                         progress.terms.collect_until_daa.saturating_sub(1)
                     }
                     _ => palw_fraud_filer_staged_due_v1(&object, &progress.terms),
@@ -5543,7 +5747,10 @@ impl PalwPanelService {
             | PalwConstraintStreamActionV1::SelectedEventCollect { .. }
             | PalwConstraintStreamActionV1::FlatSourceOpen { .. }
             | PalwConstraintStreamActionV1::FlatSourceNominate { .. }
-            | PalwConstraintStreamActionV1::FlatSourceCollect => progress.bundle.as_ref().is_some_and(|bundle| {
+            | PalwConstraintStreamActionV1::FlatSourceCollect
+            | PalwConstraintStreamActionV1::FloatSourceOpen { .. }
+            | PalwConstraintStreamActionV1::FloatSourceNominate { .. }
+            | PalwConstraintStreamActionV1::FloatSourceCollect => progress.bundle.as_ref().is_some_and(|bundle| {
                 movement.seed_id == bundle.bundle_id
                     && progress.cursor.is_none()
                     && bundle.plan.stages.get(bundle.active_index.map_or(0, |i| i as usize + 1)).is_some_and(|stage| {

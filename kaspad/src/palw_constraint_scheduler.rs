@@ -2,6 +2,89 @@
 //! Transport does not advance the local cursor; only the accepted snapshot acknowledges it.
 use super::constraint::TiledPlanV1;
 
+/// An authenticated streamed-source pin: an original Flat EOF, or a greedy Float32 source slot
+/// (behind `palw_staged_float_constraint_v1`). Read from native accepted state only.
+#[derive(Clone, Debug)]
+pub(super) enum StreamedPinV1 {
+    Flat(kaspa_consensus_core::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1),
+    Float(kaspa_consensus_core::palw_float_constraint_source_v1::PalwFloatConstraintPinV1),
+}
+impl StreamedPinV1 {
+    pub(super) fn position_v1(&self) -> u32 {
+        match self {
+            Self::Flat(pin) => pin.position_v1(),
+            Self::Float(pin) => pin.position_v1(),
+        }
+    }
+    fn matches_binding_v1(&self, binding: &PalwStepBindingV2) -> bool {
+        match self {
+            Self::Flat(pin) => pin.matches_binding_v1(binding),
+            Self::Float(pin) => pin.matches_binding_v1(binding),
+        }
+    }
+    fn auxiliary_v1(
+        &self,
+        source_id: Hash64,
+        answerer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1 {
+        use kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1 as Aux;
+        match self {
+            Self::Flat(_) => Aux::FlatConstraint { source_id, answerer },
+            Self::Float(_) => Aux::FloatConstraint { source_id, answerer },
+        }
+    }
+    fn speaks_v1(&self, auxiliary: &kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1) -> bool {
+        use kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1 as Aux;
+        matches!((self, auxiliary), (Self::Flat(_), Aux::FlatConstraint { .. }) | (Self::Float(_), Aux::FloatConstraint { .. }))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn court_v1(
+        &self,
+        claim: Hash64,
+        owner: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        reserved_daa: u64,
+        root: Hash64,
+        binding: &PalwStepBindingV2,
+        job: &PalwFreePromptJobV3,
+        witness: Option<u32>,
+        eog_count: u32,
+        eog_opening: &PalwStepOpeningV1,
+        original: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        signed_context: Option<Hash64>,
+    ) -> Result<PalwConstraintStreamCourtV1, String> {
+        match self {
+            Self::Flat(pin) => PalwConstraintStreamCourtV1::new_from_flat_pin_with_original_stop_context_v1(
+                claim,
+                owner,
+                reserved_daa,
+                root,
+                binding,
+                job,
+                pin,
+                witness,
+                eog_count,
+                eog_opening,
+                original,
+                signed_context,
+            ),
+            Self::Float(pin) => PalwConstraintStreamCourtV1::new_from_float_pin_with_original_stop_context_v1(
+                claim,
+                owner,
+                reserved_daa,
+                root,
+                binding,
+                job,
+                pin,
+                witness,
+                eog_count,
+                eog_opening,
+                original,
+                signed_context,
+            ),
+        }
+    }
+}
+
 pub(super) fn nominate_v1(
     target: &PalwOffenceTargetV1,
     job: &PalwFreePromptJobV3,
@@ -606,7 +689,7 @@ impl ConstraintSchedulerV1 {
         target: &PalwOffenceTargetV1,
         job: &PalwFreePromptJobV3,
         binding: &PalwStepBindingV2,
-        pin: &kaspa_consensus_core::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1,
+        pin: &StreamedPinV1,
         source_id: Hash64,
         answerer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
         witness: Option<u32>,
@@ -645,14 +728,13 @@ impl ConstraintSchedulerV1 {
         if eog.is_empty() || eog.windows(2).any(|w| w[0] >= w[1]) || eog.last().is_some_and(|id| *id >= table.vocab_v1()) {
             return Err("flat constraint EOG holding is not a canonical set".into());
         }
-        let court = PalwConstraintStreamCourtV1::new_from_flat_pin_with_original_stop_context_v1(
+        let court = pin.court_v1(
             target.claim_id,
             progress.reserver,
             progress.reserved_daa,
             target.execution_root,
             binding,
             job,
-            pin,
             witness,
             eog.len() as u32,
             &eog_opening,
@@ -681,12 +763,7 @@ impl ConstraintSchedulerV1 {
             witness,
             eog_count: eog.len() as u32,
             eog_opening,
-            auxiliary: Some(
-                kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FlatConstraint {
-                    source_id,
-                    answerer,
-                },
-            ),
+            auxiliary: Some(pin.auxiliary_v1(source_id, answerer)),
             signature: Vec::new(),
             retained_profile: None,
         };
@@ -737,7 +814,7 @@ impl ConstraintSchedulerV1 {
         job: &PalwFreePromptJobV3,
         binding: &PalwStepBindingV2,
         seed: &PalwConstraintStreamSeedV1,
-        flat: Option<&kaspa_consensus_core::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1>,
+        flat: Option<&StreamedPinV1>,
         original: Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
         table: Arc<dyn PalwPublicTokenTableSourceV1>,
         progress: &PalwStagedOwnedProgressV1,
@@ -754,10 +831,7 @@ impl ConstraintSchedulerV1 {
             || progress.now_daa >= progress.terms.collect_until_daa
             || match &seed.auxiliary {
                 None => flat.is_some(),
-                Some(kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FlatConstraint {
-                    ..
-                }) => flat.is_none(),
-                Some(_) => true,
+                Some(auxiliary) => flat.is_none_or(|pin| !pin.speaks_v1(auxiliary)),
             }
             || seed.job.as_deref().is_some_and(|j| j != job)
         {
@@ -792,18 +866,17 @@ impl ConstraintSchedulerV1 {
             return Err("archived EOG count differs from authenticated holding".into());
         }
         let court = if let Some(flat) = flat {
-            PalwConstraintStreamCourtV1::new_from_flat_pin_with_original_stop_context_v1(
+            flat.court_v1(
                 target.claim_id,
                 seed.reserver,
                 seed.reserved_daa,
                 target.execution_root,
                 binding,
                 job,
-                flat,
                 seed.witness,
                 seed.eog_count,
                 &seed.eog_opening,
-                original.ok_or("Flat archive lost its native original commitment")?,
+                original.ok_or("streamed-source archive lost its native original commitment")?,
                 Some(digest),
             )?
         } else {

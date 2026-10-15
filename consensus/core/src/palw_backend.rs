@@ -50,6 +50,18 @@ pub trait PalwFlatPublicSourceReaderV1: Send {
     ) -> Result<Option<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintActionV1>, String>;
 }
 
+/// Bounded projection of an original `Float32` class's public v2 event tree (greedy Float32
+/// Constraint source, behind `palw_staged_float_constraint_v1`). `position` is the owner's
+/// accepted nomination (`None` before it). `None` means not ready, never an answer or a verdict;
+/// the chain authenticates every byte against the claim's trace root.
+pub trait PalwFloatPublicSourceReaderV1: Send {
+    fn poll_v1(
+        &mut self,
+        cursor: crate::palw_float_constraint_source_v1::PalwFloatSourceCursorV1,
+        position: Option<u32>,
+    ) -> Result<Option<crate::palw_float_constraint_source_v1::PalwFloatSourceActionV1>, String>;
+}
+
 /// The roots an attempt carries, and the bytes that answer for them.
 ///
 /// Family-agnostic on purpose: a block header commits these four values and does not know which
@@ -494,6 +506,23 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _binding: &crate::palw_step_leg::PalwStepBindingV2,
     ) -> Result<Box<dyn PalwFlatPublicSourceReaderV1>, String> {
         Err("this family has no bounded original Flat source responder".into())
+    }
+
+    /// Open the original public Float32 rows/ids of a retained capture. No in-node backend retains
+    /// f32 rows today (BASE-0 is `Int32`); a Float32 producer either implements this or writes the
+    /// generic public sidecar ([`crate::palw_float_constraint_source_v1::write_float_public_sidecar_v1`]).
+    fn open_float_public_source_v1(
+        &self,
+        _source: std::sync::Arc<dyn PalwOriginalCaptureReaderV1>,
+        _binding: &crate::palw_step_leg::PalwStepBindingV2,
+    ) -> Result<Box<dyn PalwFloatPublicSourceReaderV1>, String> {
+        Err("this family has no bounded original Float32 source responder".into())
+    }
+
+    /// Project only original public Float32 rows/ids into the generic sidecar while saving an
+    /// already executed capture. `false` means this family retains no f32 rows.
+    fn write_float_public_source_v1(&self, _material: &[u8], _out: &mut dyn std::io::Write) -> Result<bool, String> {
+        Ok(false)
     }
 
     /// Project only original public Flat logits/IDs while saving an already executed capture.

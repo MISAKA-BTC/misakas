@@ -1778,11 +1778,21 @@ pub(crate) mod tests {
         )
     }
 
-    /// The same constrained public fixture on a `Float32` class: lane switched, class and job
-    /// context re-derived, two decode positions. The caller commits its own f32 capture's v2
-    /// trace root and rebinds the committed execution root.
-    pub(crate) fn public_float_constrained_binding_for_tests_v1()
-    -> (crate::palw_step_leg::PalwStepBindingV2, crate::palw_freeprompt_v3::PalwFreePromptJobV3) {
+    /// The constrained public fixture on a `Float32` class, for the greedy Float32 source: lane
+    /// switched, class and job context re-derived for two decode positions, the fixture's integer
+    /// rows as exact f32 rows. The producer commits the admitted `[7` lane at position 0 where the
+    /// admitted `[` outranks it (the greedy violation the Float32 row court exposes). The caller
+    /// commits its own capture's v2 trace root and rebinds the committed execution root.
+    pub(crate) struct FloatConstrainedCaseV1 {
+        pub binding: crate::palw_step_leg::PalwStepBindingV2,
+        pub job: crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        pub eog: crate::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1,
+        pub rows: Vec<Vec<f32>>,
+        pub ids: Vec<u32>,
+        pub position: u32,
+        pub beat: u32,
+    }
+    pub(crate) fn public_float_constrained_case_for_tests_v1() -> FloatConstrainedCaseV1 {
         let (mut binding, proof) = public_constrained_case_for_tests_v1(false);
         let mut job = proof.job;
         binding.shape_profile.lane = crate::palw_step::PalwStepLaneV1::Float32;
@@ -1801,7 +1811,10 @@ pub(crate) mod tests {
             &binding.job_context.network_id,
         )
         .unwrap();
-        (binding, job)
+        // |value| < 2^24: every fixture logit is an exact f32.
+        let rows: Vec<Vec<f32>> = constrained_rows(2).into_iter().map(|row| row.into_iter().map(|v| v as f32).collect()).collect();
+        let ids = vec![BRACKET_SEVEN, proof.pin.generated_token_ids[1]];
+        FloatConstrainedCaseV1 { binding, job, eog: proof.eog, rows, ids, position: 0, beat: b'[' as u32 }
     }
 
     /// **The court's third arm, as an accusation**: an honest constrained run clears at every position (the stop included, with

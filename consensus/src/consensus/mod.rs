@@ -2475,6 +2475,22 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_staged_flat_source_v1_impl(key)
     }
 
+    fn palw_staged_float_source_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedFloatProgressV1>, String> {
+        self.virtual_processor.palw_staged_float_source_v1_impl(key)
+    }
+
+    fn palw_staged_float_pin_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        source: kaspa_consensus_core::Hash64,
+        answerer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_float_constraint_source_v1::PalwFloatConstraintPinV1>, String> {
+        self.virtual_processor.palw_staged_float_pin_v1_impl(key, source, answerer)
+    }
+
     fn palw_staged_flat_pin_v1(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),

@@ -610,7 +610,110 @@ pub fn float_constraint_source_resource_plan_v1(
     })
 }
 
+/// The generic public Float32 sidecar: `MAGIC`, a `u32` header length, the borsh header, then
+/// the f32 rows row-major. Public bytes only (no checkpoint, no step tensor); its path or header
+/// authorizes nothing — the chain authenticates every byte against the claim's trace root.
+pub const PALW_FLOAT_PUBLIC_SIDECAR_MAGIC_V1: &[u8; 8] = b"MSKF32P1";
+const SIDECAR_HEADER_MAX_V1: u32 = 4 << 20;
+/// Lanes per streamed part (64 KiB of f32).
+pub const PALW_FLOAT_SOURCE_PART_LANES_V1: u32 = (PALW_FLOAT_ROW_PART_BYTES_V1 / 4) as u32;
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwFloatPublicSidecarHeaderV1 {
+    pub job_context_hash: Hash64,
+    pub ids: PalwDecodeTokensV1,
+    /// The ordered event hashes (`logits_event_hash_v2` of each row), for openings.
+    pub events: Vec<Hash64>,
+}
+
+/// Writes the sidecar from a producer's own run. `row(i)` is event `i`'s committed f32 row.
+pub fn write_float_public_sidecar_v1(
+    out: &mut dyn std::io::Write,
+    header: &PalwFloatPublicSidecarHeaderV1,
+    mut row: impl FnMut(u32) -> Result<Vec<f32>, String>,
+) -> Result<(), String> {
+    let bytes = borsh::to_vec(header).map_err(|e| e.to_string())?;
+    let length = u32::try_from(bytes.len()).ok().filter(|n| *n <= SIDECAR_HEADER_MAX_V1).ok_or("Float32 sidecar header exceeds its bound")?;
+    let vocab = header.ids.summary.vocab_size as usize;
+    if header.events.len() != header.ids.generated_token_ids.len() {
+        return Err("Float32 sidecar events are not one per generated id".into());
+    }
+    out.write_all(PALW_FLOAT_PUBLIC_SIDECAR_MAGIC_V1).map_err(|e| e.to_string())?;
+    out.write_all(&length.to_le_bytes()).map_err(|e| e.to_string())?;
+    out.write_all(&bytes).map_err(|e| e.to_string())?;
+    for index in 0..header.events.len() as u32 {
+        let values = row(index)?;
+        if values.len() != vocab {
+            return Err("Float32 sidecar row is not the committed vocabulary wide".into());
+        }
+        for value in values {
+            out.write_all(&value.to_le_bytes()).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Bounded reader over the generic sidecar (no vocabulary-sized buffer beyond one part).
+pub struct PalwFloatPublicSidecarReaderV1 {
+    source: std::sync::Arc<dyn crate::palw_backend::PalwOriginalCaptureReaderV1>,
+    header: PalwFloatPublicSidecarHeaderV1,
+    rows_offset: u64,
+}
+impl PalwFloatPublicSidecarReaderV1 {
+    pub fn open_v1(source: std::sync::Arc<dyn crate::palw_backend::PalwOriginalCaptureReaderV1>) -> Result<Self, String> {
+        let prefix = source.read_v1(0, 12)?;
+        if prefix.len() != 12 || &prefix[..8] != PALW_FLOAT_PUBLIC_SIDECAR_MAGIC_V1 {
+            return Err("not a Float32 public sidecar".into());
+        }
+        let length = u32::from_le_bytes(prefix[8..12].try_into().expect("4"));
+        if length > SIDECAR_HEADER_MAX_V1 {
+            return Err("Float32 sidecar header exceeds its bound".into());
+        }
+        let header: PalwFloatPublicSidecarHeaderV1 = borsh::from_slice(&source.read_v1(12, length)?).map_err(|e| e.to_string())?;
+        let decode = header.ids.generated_token_ids.len() as u64;
+        let vocab = u64::from(header.ids.summary.vocab_size);
+        let rows_offset = 12 + u64::from(length);
+        if header.events.len() as u64 != decode
+            || decode == 0
+            || crate::palw_v2::trace_event_merkle_root_v2(&header.events).map_err(|e| e.to_string())?
+                != header.ids.ordered_event_commitment
+            || decode.checked_mul(vocab).and_then(|n| n.checked_mul(4)).and_then(|n| n.checked_add(rows_offset)) != Some(source.len_v1())
+        {
+            return Err("Float32 sidecar is not one committed trace".into());
+        }
+        Ok(Self { source, header, rows_offset })
+    }
+    pub fn header_v1(&self) -> &PalwFloatPublicSidecarHeaderV1 {
+        &self.header
+    }
+}
+impl crate::palw_backend::PalwFloatPublicSourceReaderV1 for PalwFloatPublicSidecarReaderV1 {
+    fn poll_v1(&mut self, cursor: PalwFloatSourceCursorV1, position: Option<u32>) -> Result<Option<PalwFloatSourceActionV1>, String> {
+        let vocab = self.header.ids.summary.vocab_size;
+        Ok(match cursor {
+            PalwFloatSourceCursorV1::Ids => Some(PalwFloatSourceActionV1::Ids(self.header.ids.clone())),
+            PalwFloatSourceCursorV1::RowPart { offset } => {
+                let position = position.ok_or("Float32 row part before the accepted nomination")?;
+                if position as usize >= self.header.events.len() || offset >= vocab {
+                    return Err("Float32 row part outside the committed trace".into());
+                }
+                let lanes = (vocab - offset).min(PALW_FLOAT_SOURCE_PART_LANES_V1);
+                let at = self.rows_offset + (u64::from(position) * u64::from(vocab) + u64::from(offset)) * 4;
+                Some(PalwFloatSourceActionV1::RowPart { offset, bytes: self.source.read_v1(at, lanes * 4)? })
+            }
+            PalwFloatSourceCursorV1::RowFinish => {
+                let position = position.ok_or("Float32 row finish before the accepted nomination")?;
+                Some(PalwFloatSourceActionV1::RowFinish {
+                    opening: crate::palw_v2::trace_event_opening_v2(&self.header.events, position).map_err(|e| e.to_string())?,
+                })
+            }
+            PalwFloatSourceCursorV1::Nominate | PalwFloatSourceCursorV1::Complete => None,
+        })
+    }
+}
+
 #[cfg(test)]
+pub(crate) mod tests {#[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::palw_float_decode_v1::palw_float32_event_phase_v1;
@@ -713,7 +816,7 @@ pub(crate) mod tests {
     #[test]
     fn source_authenticates_ids_then_the_nominated_row_per_isolated_slot() {
         let key = |n| PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(n), 0));
-        let (binding, job, capture) = crate::palw_float_constraint_source_v1::tests::float_binding_case_for_tests_v1();
+        let (binding, job, capture, _) = float_binding_case_for_tests_v1();
         let prices = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1().prices;
         let (producer, panel, owner) = (key(1), key(2), key(9));
         let mut session = PalwFloatConstraintSourceSessionV1::new_v1(
@@ -763,27 +866,152 @@ pub(crate) mod tests {
         assert_eq!(session.collect_v1(session.respond_until_daa).unwrap(), vec![producer]);
     }
 
-    /// A verified Float32 binding over a public capture whose committed token 0 is NOT the
-    /// greedy lane (the producer picked lane 3; lane 1 wins the tie at a lower index).
-    pub(crate) fn float_binding_case_for_tests_v1()
-    -> (PalwStepBindingV2, crate::palw_freeprompt_v3::PalwFreePromptJobV3, FloatCaptureV1) {
-        let (mut binding, job) = crate::palw_float_constraint_source_v1::tests::float_constrained_binding_for_tests_v1();
+    /// A verified Float32 binding over a public capture of the constrained fixture: the
+    /// producer committed the admitted `[7` lane at position 0 where the admitted `[` outranks it.
+    pub(crate) fn float_binding_case_for_tests_v1() -> (
+        PalwStepBindingV2,
+        crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        FloatCaptureV1,
+        crate::palw_decode_constraint_v1::tests::FloatConstrainedCaseV1,
+    ) {
+        let case = crate::palw_decode_constraint_v1::tests::public_float_constrained_case_for_tests_v1();
+        let mut binding = case.binding.clone();
         let context = binding.job_context.context_hash();
-        let vocab = binding.shape_profile.vocab_size as usize;
-        let decode = binding.job_context.exact_decode_tokens as usize;
-        let rows: Vec<Vec<f32>> =
-            (0..decode).map(|r| (0..vocab).map(|l| if l == 1 || l == 3 { 2.0 } else { (r + l) as f32 * -0.25 }).collect()).collect();
-        let mut generated = vec![1u32; decode];
-        generated[0] = 3;
-        let capture = float_capture_v1(context, binding.job_context.declared_prefill_tokens, rows, generated);
+        let capture = float_capture_v1(context, binding.job_context.declared_prefill_tokens, case.rows.clone(), case.ids.clone());
         binding.full_logits_trace_root = capture.root;
         crate::palw_step_refute::tests::rebind_committed_root(&mut binding);
         verify_binding_v1(&binding).unwrap();
-        (binding, job, capture)
+        (binding, case.job.clone(), capture, case)
     }
-    /// The Float32 lane of the existing constrained public fixture (the trace root is re-derived
-    /// by the caller from its own capture; nothing else about the binding changes).
-    pub(crate) fn float_constrained_binding_for_tests_v1() -> (PalwStepBindingV2, crate::palw_freeprompt_v3::PalwFreePromptJobV3) {
-        crate::palw_decode_constraint_v1::tests::public_float_constrained_binding_for_tests_v1()
+
+    /// **G14, greedy Float32 lane, from public material only.** The producer and its entire held
+    /// Panel collude. Either they withhold — every custodian is returned to the native sanction
+    /// fold at the original clock — or one of them answers, and whatever it answers is either
+    /// refused (it does not re-derive the claim's trace root) or is the committed row itself, whose
+    /// authenticated keys show the admitted beating lane outranks the committed one. No step of
+    /// this reads a private capture, a Panel vote or a local model run.
+    #[test]
+    fn colluding_custody_either_is_collected_or_exposes_the_greedy_violation() {
+        let key = |n| PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(n), 0));
+        let (binding, job, capture, case) = float_binding_case_for_tests_v1();
+        let prices = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1().prices;
+        let (producer, panel, owner) = (key(1), key(2), key(9));
+        let open = || {
+            PalwFloatConstraintSourceSessionV1::new_v1(
+                Hash64::from_u64_word(7),
+                owner,
+                10,
+                Hash64::from_u64_word(8),
+                producer,
+                BTreeSet::from([producer, panel]),
+                &binding,
+                &job,
+                1_000_000,
+                1_100_000,
+                prices,
+            )
+            .unwrap()
+        };
+        // (1) Total withholding: both custodians are collected at the ids clock; nothing else moves.
+        let mut withheld = open();
+        assert!(withheld.collect_v1(withheld.nomination_until_daa - 1).is_err());
+        let mut missing = withheld.collect_v1(withheld.nomination_until_daa).unwrap();
+        missing.sort();
+        assert_eq!(missing, vec![producer, panel]);
+        // (2) The colluders answer. A substituted row never authenticates; the committed one does.
+        let mut session = open();
+        let answer = |session: &PalwFloatConstraintSourceSessionV1, signer, action| PalwFloatSourceAnswerV1 {
+            answerer: signer,
+            source_id: session.source_id,
+            cursor: session.slot_cursor_v1(&signer).unwrap(),
+            action,
+        };
+        session.answer_v1(12, &answer(&session, producer, PalwFloatSourceActionV1::Ids(capture.ids.clone()))).unwrap();
+        session.answer_v1(12, &answer(&session, panel, PalwFloatSourceActionV1::Ids(capture.ids.clone()))).unwrap();
+        session.nominate_v1(13, owner, session.source_id, case.position, Some(case.beat)).unwrap();
+        // The panel member streams a row in which the committed lane wins: refused at finish.
+        let mut forged = capture.rows[0].clone();
+        forged[case.ids[0] as usize] = forged[case.beat as usize] + 1.0;
+        let mut panel_session = session.clone();
+        loop {
+            let cursor = panel_session.slot_cursor_v1(&panel).unwrap();
+            let action = match cursor {
+                PalwFloatSourceCursorV1::RowPart { offset } => PalwFloatSourceActionV1::RowPart {
+                    offset,
+                    bytes: forged[offset as usize..forged.len().min(offset as usize + 4096)].iter().flat_map(|v| v.to_le_bytes()).collect(),
+                },
+                _ => float_source_action_v1(&capture, cursor, case.position, 4096).unwrap(),
+            };
+            let result = panel_session.answer_v1(14, &answer(&panel_session, panel, action));
+            if cursor == PalwFloatSourceCursorV1::RowFinish {
+                assert!(result.is_err(), "a substituted row never re-derives the claim's trace root");
+                break;
+            }
+            result.unwrap();
+        }
+        // The producer streams the committed row: authenticated, with both nominated keys.
+        while session.slot_cursor_v1(&producer).unwrap() != PalwFloatSourceCursorV1::Complete {
+            let cursor = session.slot_cursor_v1(&producer).unwrap();
+            let action = float_source_action_v1(&capture, cursor, case.position, 4096).unwrap();
+            session.answer_v1(14, &answer(&session, producer, action)).unwrap();
+        }
+        let pin = session.authenticated_pin_v1(&producer).unwrap();
+        let (committed, beat) = (pin.committed_key_v1().unwrap(), pin.beat_v1().unwrap());
+        assert_eq!(beat.0, case.beat);
+        assert!(beat.1 > committed, "the admitted `[` outranks the committed `[7` in the authenticated row");
+        // The Constraint seed reads only this pin and the native original commitment.
+        let original = crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3 {
+            job: job.clone(),
+            trace_root: binding.full_logits_trace_root,
+            output_root: Hash64::default(),
+            schedule_root: Hash64::default(),
+            execution_root: binding.committed_execution_root,
+            decode_tokens_executed: 2,
+            stop_reason: if job.decode_token_limit == 2 {
+                crate::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached
+            } else {
+                crate::palw_freeprompt_v3::PalwFpStopReasonV3::EndOfGeneration
+            },
+            work_leaves: binding.step_leaf_count,
+            trace_manifest_root: Hash64::default(),
+            trace_chunk_count: 1,
+            trace_retention_daa: 100_000,
+        };
+        let court = crate::palw_constraint_stream_court_v1::PalwConstraintStreamCourtV1::new_from_float_pin_with_original_stop_context_v1(
+            crate::palw_freeprompt_v3::fp_claim_id_v3(&original),
+            owner,
+            10,
+            binding.committed_execution_root,
+            &binding,
+            &job,
+            &pin,
+            None,
+            case.eog.ids.len() as u32,
+            &case.eog.opening,
+            &original,
+            None,
+        )
+        .unwrap();
+        assert_eq!(court.selection_for_tests_v1(), (case.position, Some(case.beat), true));
+        // A seeded job never reaches the court.
+        let mut seeded = job.clone();
+        seeded.sampling_seed = [7; 32];
+        seeded.temperature_q = 3;
+        assert!(
+            PalwFloatConstraintSourceSessionV1::new_v1(
+                Hash64::from_u64_word(7),
+                owner,
+                10,
+                Hash64::from_u64_word(8),
+                producer,
+                BTreeSet::from([producer, panel]),
+                &binding,
+                &seeded,
+                1_000_000,
+                1_100_000,
+                prices,
+            )
+            .is_err()
+        );
     }
 }

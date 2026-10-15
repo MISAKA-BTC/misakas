@@ -1094,6 +1094,41 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_flat_source_v1(&state, key)
     }
 
+    /// The greedy Float32 source, read only where its own fence is in force at the accepted snapshot.
+    pub fn palw_staged_float_source_v1_impl(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedFloatProgressV1>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let now = state.last_point().ok_or("Float32 snapshot has no accepted clock")?.daa_score;
+        if !self.palw_staged_public_court_v1.is_some_and(|f| f.is_active(now))
+            || !self.palw_staged_float_constraint_v1.is_some_and(|f| f.is_active(now))
+        {
+            return Ok(None);
+        }
+        kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_float_source_v1(&state, key)
+    }
+
+    pub fn palw_staged_float_pin_v1_impl(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        source: kaspa_consensus_core::Hash64,
+        answerer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_float_constraint_source_v1::PalwFloatConstraintPinV1>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let now = state.last_point().ok_or("Float32 pin snapshot has no accepted clock")?.daa_score;
+        if !self.palw_staged_public_court_v1.is_some_and(|f| f.is_active(now))
+            || !self.palw_staged_float_constraint_v1.is_some_and(|f| f.is_active(now))
+        {
+            return Ok(None);
+        }
+        kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_float_pin_v1(&state, key, source, answerer)
+    }
+
     pub fn palw_staged_flat_pin_v1_impl(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),

@@ -42,3 +42,48 @@ pub fn palw_staged_route_form_fence_v1(object: &PalwConsensusObjectV2) -> Option
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::params::ForkActivation;
+    use crate::palw_constraint_stream_carriage_v1::{PalwConstraintStreamActionV1 as A, PalwConstraintStreamMoveV1};
+    use crate::palw_lifecycle_objects_v2::PalwLifecycleKindFencesV1;
+
+    fn movement(action: A) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::PublicCourtStreamMoveV1 {
+            movement: Box::new(PalwConstraintStreamMoveV1 {
+                version: 1,
+                claim: crate::Hash64::from_u64_word(1),
+                reserver: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::Hash64::from_u64_word(2), 0)),
+                reserved_daa: 3,
+                seed_id: crate::Hash64::from_u64_word(4),
+                phase: crate::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1::PrefixCourt,
+                action,
+                signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+            }),
+        }
+    }
+
+    /// A-2: where only the staged court is armed, a build that knows the court but not the route
+    /// cannot decode the route's form — so this build reads it the same way until the route's fence.
+    #[test]
+    fn a_route_form_rides_unjudged_until_its_own_fence_even_where_the_staged_court_is_armed() {
+        let plain = movement(A::FlatSourceCollect);
+        let float = movement(A::FloatSourceCollect);
+        assert_eq!(palw_staged_route_form_fence_v1(&plain), None);
+        assert_eq!(palw_staged_route_form_fence_v1(&float), Some(PalwLifecycleKindFenceV1::StagedFloatConstraintV1));
+        let court = PalwLifecycleKindFencesV1::default().with(PalwLifecycleKindFenceV1::StagedPublicCourtV1, Some(ForkActivation::new(10)));
+        assert!(court.kind_in_force_at(&plain, 10));
+        assert!(!court.kind_in_force_at(&float, u64::MAX), "the court's fence never arms a route's form");
+        let armed = court.with(PalwLifecycleKindFenceV1::StagedFloatConstraintV1, Some(ForkActivation::new(20)));
+        assert!(!armed.kind_in_force_at(&float, 19));
+        assert!(armed.kind_in_force_at(&float, 20));
+        // `Params` resolves the route's fence only where the staged court is armed too, at the later height.
+        let mut p = crate::config::params::Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
+        assert_eq!(p.palw_lifecycle_kind_fences_v1().activation(PalwLifecycleKindFenceV1::StagedFloatConstraintV1), None);
+        p.palw_staged_float_constraint_v1 = Some(ForkActivation::new(30));
+        p.palw_staged_public_court_v1 = None;
+        assert_eq!(p.palw_lifecycle_kind_fences_v1().activation(PalwLifecycleKindFenceV1::StagedFloatConstraintV1), None);
+    }
+}

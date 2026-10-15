@@ -65,6 +65,81 @@ pub(crate) fn path_v1(dir: &Path, claim: Hash64) -> PathBuf {
     dir.join(format!("{claim}.flat-public"))
 }
 
+/// The claim's generic public Float32 sidecar (`palw_float_constraint_source_v1`'s format).
+pub(crate) fn float_path_v1(dir: &Path, claim: Hash64) -> PathBuf {
+    dir.join(format!("{claim}.float-public"))
+}
+
+pub(crate) enum FloatSourceScheduleV1 {
+    Wait,
+    Nominate { source_id: Hash64 },
+    Ready { signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2 },
+    Collect,
+}
+
+/// The greedy Float32 owner's next move, from authenticated native session state only (the
+/// Flat schedule's rule: collection first, then a ready slot, then nomination).
+pub(crate) fn float_request_v1(
+    session: &kaspa_consensus_core::palw_float_constraint_source_v1::PalwFloatConstraintSourceSessionV1,
+    now: u64,
+) -> Result<FloatSourceScheduleV1, String> {
+    if now < session.reserved_daa {
+        return Err("Float32 source snapshot precedes original paid reservation".into());
+    }
+    if !session.collected_v1() && now >= session.collection_due_daa_v1() && now < session.collect_until_daa {
+        return Ok(FloatSourceScheduleV1::Collect);
+    }
+    if let Some(signer) = session.ready_signer_v1() {
+        return Ok(FloatSourceScheduleV1::Ready { signer });
+    }
+    if now < session.nomination_until_daa && session.needs_nomination_v1() {
+        return Ok(FloatSourceScheduleV1::Nominate { source_id: session.source_id });
+    }
+    Ok(FloatSourceScheduleV1::Wait)
+}
+
+/// A custodian's next Float32 answer from its own public reader (sidecar or backend projection).
+pub(crate) fn float_answer_v1(
+    session: &kaspa_consensus_core::palw_float_constraint_source_v1::PalwFloatConstraintSourceSessionV1,
+    signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    now: u64,
+    reader: &mut dyn kaspa_consensus_core::palw_backend::PalwFloatPublicSourceReaderV1,
+) -> Result<Option<kaspa_consensus_core::palw_float_constraint_source_v1::PalwFloatSourceAnswerV1>, String> {
+    use kaspa_consensus_core::palw_float_constraint_source_v1::{PalwFloatSourceAnswerV1, PalwFloatSourceCursorV1 as Cursor};
+    if now < session.reserved_daa || session.response_deadline_v1(&signer).is_none_or(|until| now >= until) || session.collected_v1() {
+        return Ok(None);
+    }
+    let cursor = session.slot_cursor_v1(&signer)?;
+    if matches!(cursor, Cursor::Complete | Cursor::Nominate) {
+        return Ok(None);
+    }
+    let Some(action) = reader.poll_v1(cursor, session.nomination_v1().map(|(position, _)| position))? else {
+        return Ok(None);
+    };
+    action.check_wire_v1()?;
+    Ok(Some(PalwFloatSourceAnswerV1 { answerer: signer, source_id: session.source_id, cursor, action }))
+}
+
+/// The Float32 twin of [`retain_v1`]: the backend projects its run's public f32 rows into the
+/// generic sidecar, or answers `false` (it retains none — every in-node backend today).
+pub(crate) fn retain_float_v1(dir: &Path, claim: Hash64, backend: &dyn PalwExecutionBackendV1, capture: &[u8]) -> Result<bool, String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let path = float_path_v1(dir, claim);
+    let partial = path.with_extension("float-public.partial");
+    let mut cleanup = PartialV1(Some(partial.clone()));
+    let file = OpenOptions::new().write(true).create(true).truncate(true).open(&partial).map_err(|e| e.to_string())?;
+    let mut writer = BufWriter::with_capacity(16_384, file);
+    if !backend.write_float_public_source_v1(capture, &mut writer)? {
+        return Ok(false);
+    }
+    let file = writer.into_inner().map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    std::fs::rename(&partial, &path).map_err(|e| e.to_string())?;
+    cleanup.0 = None;
+    File::open(dir).and_then(|dir| dir.sync_all()).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 /// Call off the async runtime under the producer's already-held FullSeat reservation, before
 /// publishing the original claim. The backend projects from that run's capture, never executes.
 pub(crate) fn retain_v1(dir: &Path, claim: Hash64, backend: &dyn PalwExecutionBackendV1, capture: &[u8]) -> Result<bool, String> {
@@ -92,7 +167,8 @@ pub(crate) fn gc_shared_claim_v1(dir: &Path, claim: Hash64, material_until: u64,
         return Ok(false);
     }
     let path = path_v1(dir, claim);
-    for victim in [path.with_extension("flat-public.partial"), path] {
+    let float = float_path_v1(dir, claim);
+    for victim in [path.with_extension("flat-public.partial"), path, float.with_extension("float-public.partial"), float] {
         match std::fs::remove_file(&victim) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -149,10 +225,10 @@ impl SharedClaimCacheGcV1 {
 
 /// A producer's projection written before its carrier is built. Dropped without `keep`, the
 /// files are removed: no accepted claim exists, so no native lease would ever retire them.
-pub(crate) struct UnpublishedProjectionV1(Option<PathBuf>);
+pub(crate) struct UnpublishedProjectionV1(Option<(PathBuf, PathBuf)>);
 impl UnpublishedProjectionV1 {
     pub(crate) fn new(dir: &Path, claim: Hash64) -> Self {
-        Self(Some(path_v1(dir, claim)))
+        Self(Some((path_v1(dir, claim), float_path_v1(dir, claim))))
     }
     pub(crate) fn keep(&mut self) {
         self.0 = None;
@@ -160,9 +236,11 @@ impl UnpublishedProjectionV1 {
 }
 impl Drop for UnpublishedProjectionV1 {
     fn drop(&mut self) {
-        if let Some(path) = self.0.take() {
+        if let Some((path, float)) = self.0.take() {
             let _ = std::fs::remove_file(path.with_extension("flat-public.partial"));
             let _ = std::fs::remove_file(path);
+            let _ = std::fs::remove_file(float.with_extension("float-public.partial"));
+            let _ = std::fs::remove_file(float);
         }
     }
 }

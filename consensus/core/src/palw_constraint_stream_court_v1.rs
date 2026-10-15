@@ -633,6 +633,12 @@ impl PalwConstraintStreamCourtV1 {
             output_fault_position: invalid,
         })
     }
+    /// The authenticated selection the court adjudicates: position, beating lane, and whether the
+    /// beating lane outranks the committed one under the claim's own selection rule.
+    #[cfg(test)]
+    pub(crate) fn selection_for_tests_v1(&self) -> (u32, Option<u32>, bool) {
+        (self.position, self.beat, self.beats)
+    }
     pub fn seed_id(&self) -> Hash64 {
         self.context
     }

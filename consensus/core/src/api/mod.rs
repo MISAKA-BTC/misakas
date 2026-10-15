@@ -1199,6 +1199,22 @@ pub trait ConsensusApi: Send + Sync {
         Err("staged Flat authenticated reader unavailable".into())
     }
 
+    fn palw_staged_float_source_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedFloatProgressV1>, String> {
+        Err("staged Float32 authenticated reader unavailable".into())
+    }
+
+    fn palw_staged_float_pin_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+        _source: crate::Hash64,
+        _answerer: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<crate::palw_float_constraint_source_v1::PalwFloatConstraintPinV1>, String> {
+        Err("staged Float32 authenticated reader unavailable".into())
+    }
+
     fn palw_staged_resolved_public_context_v1(
         &self,
         _claim: crate::Hash64,
