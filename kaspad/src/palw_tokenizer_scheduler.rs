@@ -308,6 +308,8 @@ pub(crate) struct TokenizerSchedulerV1 {
     context: Hash64,
 }
 impl TokenizerSchedulerV1 {
+    /// Test-only entry; the service opens through `open_with_original_v1`.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open(
         path: &Path,

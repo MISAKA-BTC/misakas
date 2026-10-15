@@ -4414,7 +4414,7 @@ impl PalwPanelService {
                         book.cases.get(&claim).and_then(|case| case.constraint_plan).ok_or("Flat owner nomination is unavailable")?;
                     PalwConstraintStreamActionV1::FlatSourceNominate { source_id, position: plan.position, beat: plan.beat_lane }
                 }
-                FlatSourceScheduleV1::Collect { .. } => {
+                FlatSourceScheduleV1::Collect => {
                     due = flat.session.collect_until_daa.saturating_sub(1);
                     PalwConstraintStreamActionV1::FlatSourceCollect
                 }
@@ -4821,7 +4821,7 @@ impl PalwPanelService {
                 return Ok((result.0, false));
             }
             BundleScheduleV1::Control(movement) => movement,
-            BundleScheduleV1::Inventory { offset, maximum: cap, until: _ } => {
+            BundleScheduleV1::Inventory { offset, maximum: cap } => {
                 use std::io::{Read, Seek, SeekFrom};
                 let path = path()?;
                 let reservation = crate::palw_memory_ledger::host_ledger_v1()

@@ -11,7 +11,7 @@ pub(crate) enum FlatSourceScheduleV1 {
     Wait,
     Nominate { source_id: Hash64 },
     Ready { signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2 },
-    Collect { source_id: Hash64 },
+    Collect,
 }
 
 /// Consume only authenticated native session state; network/cache absence is never conviction.
@@ -25,7 +25,7 @@ pub(crate) fn request_v1(
         return Err("Flat source snapshot precedes original paid reservation".into());
     }
     if !session.collected_v1() && now >= session.collection_due_daa_v1() && now < session.collect_until_daa {
-        return Ok(FlatSourceScheduleV1::Collect { source_id: session.source_id });
+        return Ok(FlatSourceScheduleV1::Collect);
     }
     if let Some(signer) = session.ready_signer_v1() {
         return Ok(FlatSourceScheduleV1::Ready { signer });

@@ -16,7 +16,7 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{Read, Seek, SeekFrom},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -32,6 +32,8 @@ pub(super) struct InventorySnapshotV1<'a> {
     pub attempt: Option<&'a PalwTokenizerArtifactInventoryV1>,
 }
 pub(super) enum InventoryDecisionV1 {
+    // Read by the restart regression; the service only needs readiness itself.
+    #[cfg_attr(not(test), allow(dead_code))]
     Ready { actual_bytes: u64 },
     Wait,
     Move { movement: PalwConstraintStreamMoveV1, until_daa: u64 },
@@ -146,9 +148,6 @@ impl ArtifactInventoryActorV1 {
             },
             until_daa,
         })
-    }
-    pub fn path_v1(&self) -> &Path {
-        &self.path
     }
 }
 

@@ -10,7 +10,7 @@ use kaspa_consensus_core::{
 
 pub(super) enum BundleScheduleV1 {
     Control(PalwConstraintStreamMoveV1),
-    Inventory { offset: u64, maximum: u64, until: u64 },
+    Inventory { offset: u64, maximum: u64 },
     Family { family: PalwStagedFamilyV1, progress: PalwStagedOwnedProgressV1 },
     Fault(PalwStagedCertificateRefV1),
     Complete,
@@ -104,7 +104,7 @@ pub(super) fn request_v1(
             if maximum != plan.maximum_bytes || offset > maximum || bundle.active_index.is_some() || progress.now_daa >= until {
                 return Err("inventory continuation changes original maximum, activation or paid clock".into());
             }
-            return Ok(Some(BundleScheduleV1::Inventory { offset, maximum, until }));
+            return Ok(Some(BundleScheduleV1::Inventory { offset, maximum }));
         }
     }
     let next = match bundle.active_index {

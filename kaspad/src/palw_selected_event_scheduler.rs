@@ -5,8 +5,9 @@ use kaspa_consensus_core::{
     palw_selected_event_source_v1::{
         PALW_SELECTED_EVENT_MAX_REQUESTS_V1, PalwSelectedEventCoordinateV1, PalwSelectedEventDemandV1, PalwSelectedEventSessionV1,
     },
-    palw_state_v2::PalwBondKeyV2,
 };
+#[cfg(test)]
+use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum SelectedEventScheduleV1 {
@@ -54,6 +55,8 @@ pub(super) fn request_v1(
     Ok(SelectedEventScheduleV1::Ready)
 }
 
+/// Test-only model of a custodian's next answer; the service responder reads native duties.
+#[cfg(test)]
 pub(super) fn response_v1(
     session: &PalwSelectedEventSessionV1,
     mine: PalwBondKeyV2,

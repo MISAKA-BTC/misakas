@@ -93,15 +93,13 @@ use kaspa_consensus_core::{
     },
     palw_constraint_stream_court_v1::{PalwConstraintStreamCourtV1, PalwConstraintStreamPhaseV1},
     palw_eog_stream_v1::PALW_EOG_STREAM_PART_IDS_V1,
-    palw_fp_constraint_job_v1::{
-        PALW_TOKEN_TABLE_MAX_LEAVES_V1, PalwTokenTableV1, palw_fp_constraint_table_root_v1, table_eog_leaf_hash_v1, table_leaf_hash_v1,
-    },
+    palw_fp_constraint_job_v1::{PALW_TOKEN_TABLE_MAX_LEAVES_V1, palw_fp_constraint_table_root_v1},
     palw_freeprompt_v3::PalwFreePromptJobV3,
     palw_offence_attribution_v1::{PalwOffenceTargetV1, palw_constrained_job_target_v1},
     palw_rendering_resources_v1::PalwRenderingClaimTermsV1,
     palw_rendering_stream_v1::PALW_RENDERING_STREAM_PART_BYTES_V1,
     palw_staged_court_state_v1::{PalwStagedCertificateRefV1, PalwStagedOwnedCursorV1, PalwStagedOwnedProgressV1},
-    palw_step_leg::{PalwStepBindingV2, PalwStepOpeningV1, step_opening_from_leaf_source_capped_v1, step_opening_root_capped_v1},
+    palw_step_leg::{PalwStepBindingV2, PalwStepOpeningV1, step_opening_root_capped_v1},
     palw_step_refute::{
         PALW_LOGITS_TILE_LANES, PalwTiledDecodePinV1, PalwTraceEventDisclosureV1, tiled_row_authenticate_v1,
         tiled_tile_authenticate_v1,
@@ -121,6 +119,8 @@ pub(super) enum ConstraintScheduleV1 {
 mod tests {
     use super::*;
     use crate::palw_memory_ledger::PalwMemoryPoolV1;
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    use kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1;
     use kaspa_consensus_core::{
         palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1,
         palw_decode_constraint_v1::*,
@@ -711,6 +711,8 @@ impl ConstraintSchedulerV1 {
         })
     }
 
+    /// Test-only legacy restart entry; the service reopens through `reopen_with_flat_v1`.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn reopen(
         target: &PalwOffenceTargetV1,
