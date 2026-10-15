@@ -66,6 +66,8 @@ pub fn reserve_native_settlement_row_v1<Row>(
     }
     let (mut claims, mut free, mut voided, mut rewards) = (0usize, 0usize, 0usize, 0usize);
     if let Some(delta) = delta {
+        // A row whose delta yields evidence keeps it boxed (a row without evidence keeps none); charged for every delta row.
+        bound = bound.add::<Row>(slots::<crate::palw_native_settlement_v1::NativeDeltaEvidenceV1>(1, path), path);
         for entry in &delta.entries {
             match entry {
                 PalwDeltaEntryV2::Claim { new: Some(claim), .. } => {

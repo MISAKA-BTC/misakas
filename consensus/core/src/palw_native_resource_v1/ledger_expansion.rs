@@ -631,7 +631,8 @@ mod expansion_completion_tests {
             replay_bytes: borsh::to_vec(&v9.replay).unwrap(),
         };
         for (table, key, bytes) in
-            [(0, r7.id(), borsh::to_vec(&([1; 64], r7)).unwrap()), (19, r9.id(), borsh::to_vec(&([1; 64], r9)).unwrap())]
+            // The row's leading root is a 64-BYTE digest (an untyped `[1; 64]` is `[i32; 64]`, 256 bytes the codec rightly refuses).
+            [(0, r7.id(), borsh::to_vec(&([1u8; 64], r7)).unwrap()), (19, r9.id(), borsh::to_vec(&([1u8; 64], r9)).unwrap())]
         {
             let rows = LedgerRowsV1::from([((table, borsh::to_vec(&key).unwrap()), bytes.clone())]);
             let request = inventory_ledger_expansion_v1(&rows, false).unwrap();

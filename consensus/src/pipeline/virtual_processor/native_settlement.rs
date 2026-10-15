@@ -73,7 +73,8 @@ pub(super) struct NativeChainRow {
     /// The root recorded with the block's own delta (the PALW state AT the block); `None` where no delta is read
     /// (the pruning point, whose contributions are never guessed).
     delta_root: Option<Hash64>,
-    evidence: NativeDeltaEvidenceV1,
+    /// Boxed and `None` for a block without evidence (most blocks): `NativeChainRow::evidence` reads the empty evidence then.
+    evidence: Option<Box<NativeDeltaEvidenceV1>>,
     /// RFC-0009 L2: the part of the delta the fork-choice leaf reads, so the roots chain can rebuild each post-state's leaf backwards
     /// from the sink's and check a header past `palw_fork_choice_commitment_v1` (it commits the leaf with the root). Kept only where that
     /// fence is configured at all (`None` on every shipped network, and with the delta), and boxed so a dormant row stays its size.
@@ -86,6 +87,13 @@ pub(super) struct NativeChainRow {
     // Shared Arc readers retain this reservation after cache replacement.
     // Drop the payload fields before returning the ticket to the checker.
     _resource_lease: Option<NativeDemandLeaseV1>,
+}
+
+impl NativeChainRow {
+    /// The block's evidence; a row without evidence reads the empty evidence (it keeps no allocation for it).
+    fn evidence(&self) -> &NativeDeltaEvidenceV1 {
+        self.evidence.as_deref().unwrap_or(&kaspa_consensus_core::palw_native_settlement_v1::NATIVE_DELTA_EVIDENCE_EMPTY_V1)
+    }
 }
 
 /// **Step 4 of [`VirtualStateProcessor::native_evaluate`], pure: the roots chain.** `rows` is the selected chain newest first (the
@@ -234,7 +242,7 @@ impl VirtualStateProcessor {
         let (delta_root, evidence, fork_choice, resource_lease) =
             if cursor == pruning || header.daa_score < self.evm_activation_daa_score {
                 let lease = self.native_row_reservation_v1(cursor, None, false, false)?;
-                (None, NativeDeltaEvidenceV1::default(), None, lease)
+                (None, None, None, lease)
             } else {
                 // A missing or undecodable delta is a gap in the verified history, not an empty block.
                 let (root, delta) = match self.palw_state_v2_store.read().delta_of_retained_v1(cursor) {
@@ -259,6 +267,7 @@ impl VirtualStateProcessor {
                     }
                 }
                 let fork_choice = self.palw_fork_choice_commitment_v1.is_some().then(|| Box::new(PalwForkChoiceDeltaV1::of(&delta)));
+                let evidence = (!evidence.is_blank()).then(|| Box::new(evidence));
                 (Some(root), evidence, fork_choice, lease)
             };
         let parent =
@@ -494,7 +503,7 @@ impl VirtualStateProcessor {
         #[cfg(not(test))]
         let extra_facts = 0;
         let resource_lease = match reserve_native_settlement_sweep_v1::<NativeWeighed>(
-            rows.iter().map(|row| &row.evidence),
+            rows.iter().map(|row| row.evidence()),
             &state,
             rows.len(),
             extra_facts,
@@ -502,7 +511,7 @@ impl VirtualStateProcessor {
             Ok(lease) => lease,
             Err(_) => return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink))),
         };
-        let voided: BTreeSet<Hash64> = rows.iter().flat_map(|r| r.evidence.voided.iter().copied()).collect();
+        let voided: BTreeSet<Hash64> = rows.iter().flat_map(|r| r.evidence().voided.iter().copied()).collect();
         let open_sessions = native_open_sessions_v1(&state);
         let claims_with_open_disputes: BTreeSet<Hash64> = open_sessions.iter().map(|(claim, _)| *claim).collect();
         let rules = NativeFactRulesV1 {
@@ -515,7 +524,7 @@ impl VirtualStateProcessor {
         let mut facts: Vec<MatureUsefulWorkV1> = Vec::new();
         let mut skipped = SkippedEvidenceV1::default();
         for row in rows.iter().filter(|r| r.hash != pruning) {
-            let (block_facts, block_skipped) = native_facts_and_skips_v1(&rules, &row.evidence, &voided, (row.daa, row.blue));
+            let (block_facts, block_skipped) = native_facts_and_skips_v1(&rules, row.evidence(), &voided, (row.daa, row.blue));
             facts.extend(block_facts);
             skipped.add(&block_skipped);
         }
@@ -806,7 +815,7 @@ mod tests {
                         blue: 6 + n as u64,
                         header_palw_root: palw_committed_state_root_v1(&states[n - 1], form),
                         delta_root: Some(states[n].state_root()),
-                        evidence: NativeDeltaEvidenceV1::default(),
+                        evidence: None,
                         fork_choice: keep.then(|| Box::new(PalwForkChoiceDeltaV1::of(&deltas[n - 1]))),
                         rule_e_committed: None,
                         _resource_lease: None,
@@ -841,7 +850,7 @@ mod tests {
             blue: r.blue,
             header_palw_root: r.header_palw_root,
             delta_root: r.delta_root,
-            evidence: NativeDeltaEvidenceV1::default(),
+            evidence: None,
             fork_choice: r.fork_choice.clone(),
             rule_e_committed: r.rule_e_committed.clone(),
             _resource_lease: None,
