@@ -339,6 +339,24 @@ fn u7_payment_needs_every_gate_and_nothing_is_counted_twice() {
     assert_ne!(PALW_MODEL_ELIGIBILITY_TABLE_V1, crate::palw_econ_contracts_v1::PALW_MODEL_VERIFICATION_TABLE_V1, "separate ledgers");
 }
 
+/// **U-9 (user decision 2026-10-15): user-paid Kernel / Funded jobs stay open for registration and testing; the reward-bearing and
+/// evaluation lanes are gated.**
+#[test]
+fn u9_user_paid_jobs_stay_open_while_the_evaluation_lane_is_gated() {
+    for stage in [PalwEligibilityStageV1::Registered, PalwEligibilityStageV1::Lapsed] {
+        let r = palw_eligibility_rights_of_stage_v1(stage, &policy());
+        assert!(r.job_completion, "{stage:?}: user-paid jobs complete and settle");
+        assert!(!r.subsidy && !r.block_right && !r.final_weight, "{stage:?}: no reward-bearing outcome");
+    }
+    use PalwEligibilityLaneV1::*;
+    for gated in [Attempt, FreePrompt, Evaluation] {
+        assert!(palw_eligibility_lane_gated_v1(gated), "{gated:?}");
+    }
+    for open in [UserPaidKernel, NativeFunded] {
+        assert!(!palw_eligibility_lane_gated_v1(open), "{open:?} stays open to a Registered / Lapsed class");
+    }
+}
+
 #[test]
 fn req_elig_1_a_new_registration_is_a_job_only_model() {
     let m = mirror();

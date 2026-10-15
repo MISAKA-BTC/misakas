@@ -655,6 +655,24 @@ pub fn palw_eligibility_security_credit_needs_certification_v1(
         || palw_eligibility_in_pre_fence_grace_v1(mirror, class, row, daa)
 }
 
+/// **U-9 (user decision 2026-10-15): the lanes RFC-0017's claim gate reads.** Registered / Lapsed classes are refused on the lanes
+/// that create a reward-bearing block (attempt, free prompt) or an improvement-score promotion (the RFC-0004 evaluation lane);
+/// user-paid Kernel / OPV jobs and native funded executions stay OPEN to them — registration and testing run on those (escrow only,
+/// `B = F = 0`, no coinbase leg).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwEligibilityLaneV1 {
+    Attempt,
+    FreePrompt,
+    Evaluation,
+    UserPaidKernel,
+    NativeFunded,
+}
+
+/// **U-9: does RFC-0017's claim gate apply to `lane`?** (`palw_state_v2`'s `check_class_admits_claim` reads this.)
+pub const fn palw_eligibility_lane_gated_v1(lane: PalwEligibilityLaneV1) -> bool {
+    matches!(lane, PalwEligibilityLaneV1::Attempt | PalwEligibilityLaneV1::FreePrompt | PalwEligibilityLaneV1::Evaluation)
+}
+
 /// **U-7 (user decision 2026-10-15): what releases a reward-bearing claim's issuance-funded payment** while RFC-0017 and the ECON
 /// round-2 gate coexist. RFC-0017 is the MODEL's eligibility / renewal gate (read at the claim's acceptance: a Registered / Lapsed
 /// class takes no reward-bearing claim at all); ECON is the per-epoch verification-and-payment gate (`palw_model_verification_gate_v1`);
