@@ -331,7 +331,7 @@ fn req_elig_3_draws_are_stake_proportional_and_sybil_neutral() {
     let split: Vec<PalwEligibilityVerifierV1> =
         (0..10u8).map(|i| PalwEligibilityVerifierV1 { bond: id(10 + i), operator: id(10 + i), stake: 3_000 }).collect();
     let attacker_whole = |d: &[EligDigestV1]| d.iter().filter(|b| **b == id(1)).count();
-    let attacker_split = |d: &[EligDigestV1]| d.iter().filter(|b| (10..20).contains(&b[0])).count();
+    let attacker_split = |d: &[EligDigestV1]| d.iter().filter(|b| (10u8..20).contains(&b[0])).count();
     let (mut a, mut b) = (0usize, 0usize);
     let trials = 4_000u32;
     for t in 0..trials {

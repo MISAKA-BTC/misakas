@@ -148,7 +148,7 @@ pub(super) fn eligibility_probation_preview_v1(
 ) -> Result<Option<PalwEligibilityProbationTicketV1>, PalwStateV2Error> {
     let now = ctx.daa_score;
     let Some(mirror) = builder.params.model_eligibility_v1_at(now).copied() else { return Ok(None) };
-    let Some(view) = eligibility_class_view_v1(builder.state, class_id) else { return Ok(None) };
+    let Some(view) = eligibility_class_view_v1(&builder.state, class_id) else { return Ok(None) };
     let Some(stage) = palw_eligibility_effective_stage_v1(Some(&mirror), &view.facts, view.row.as_ref(), now) else {
         return Ok(None);
     };
@@ -157,8 +157,8 @@ pub(super) fn eligibility_probation_preview_v1(
     }
     let policy = mirror.policy;
     let lineage_key = eligibility_lineage_key_v1(&view.lineage);
-    let mut lineage: PalwEligibilityLineageRowV1 = row_of(builder.state, &lineage_key).unwrap_or_default();
-    let mut network: PalwEligibilityNetworkRowV1 = row_of(builder.state, &eligibility_network_key_v1()).unwrap_or_default();
+    let mut lineage: PalwEligibilityLineageRowV1 = row_of(&builder.state, &lineage_key).unwrap_or_default();
+    let mut network: PalwEligibilityNetworkRowV1 = row_of(&builder.state, &eligibility_network_key_v1()).unwrap_or_default();
     let units = palw_probation_admit_v1(&policy, &lineage, &network, now, request_units).map_err(|(model_left, network_left)| {
         PalwStateV2Error::ClassNotRewardable {
             class: *class_id,
@@ -171,7 +171,7 @@ pub(super) fn eligibility_probation_preview_v1(
     })?;
     let operator = builder.state.bonds.get(claim_bond).map(|record| record.operator_id.as_bytes()).unwrap_or([0u8; 64]);
     let principal_key = eligibility_principal_key_v1(&operator);
-    let mut principal: PalwEligibilityPrincipalRowV1 = row_of(builder.state, &principal_key).unwrap_or_default();
+    let mut principal: PalwEligibilityPrincipalRowV1 = row_of(&builder.state, &principal_key).unwrap_or_default();
     let mut model = view.row.clone().unwrap_or_else(|| {
         palw_eligibility_new_probation_row_v1(class_id.as_bytes(), view.lineage, view.principal, view.facts.registered_daa, now)
     });
@@ -216,7 +216,7 @@ pub(super) fn eligibility_probation_commit_v1(
 /// the pin. Its Final completes the job and settles its escrow; it adds no chain-choice weight. Below the fence there are no pins.
 pub(super) fn eligibility_final_weight_v1(builder: &mut TransitionBuilder<'_>, claim_id: &Hash64, contribution: u128) -> u128 {
     let key = eligibility_probation_claim_key_v1(&claim_id.as_bytes());
-    if row_of::<PalwEligibilityProbationClaimRowV1>(builder.state, &key).is_some() {
+    if row_of::<PalwEligibilityProbationClaimRowV1>(&builder.state, &key).is_some() {
         write_row::<PalwEligibilityProbationClaimRowV1>(builder, key, None);
     }
     contribution
@@ -250,7 +250,7 @@ pub(super) fn apply_commit_eligibility_exam_v1(
         }
     }
     let class_id = Hash64::from_bytes(commit.class_id);
-    let view = eligibility_class_view_v1(builder.state, &class_id).ok_or_else(|| refuse("the exam names no registered class"))?;
+    let view = eligibility_class_view_v1(&builder.state, &class_id).ok_or_else(|| refuse("the exam names no registered class"))?;
     let stage = palw_eligibility_effective_stage_v1(Some(&mirror), &view.facts, view.row.as_ref(), now)
         .ok_or_else(|| refuse("a genesis class takes no eligibility exam"))?;
     let mut model = match view.row.clone() {
@@ -265,14 +265,14 @@ pub(super) fn apply_commit_eligibility_exam_v1(
     model.stage = stage;
     let exam_id = commit.id();
     let exam_key = eligibility_exam_key_v1(&exam_id);
-    if row_of::<PalwEligibilityExamRowV1>(builder.state, &exam_key).is_some() {
+    if row_of::<PalwEligibilityExamRowV1>(&builder.state, &exam_key).is_some() {
         return Err(refuse("this exam was already committed"));
     }
     let lineage_key = eligibility_lineage_key_v1(&view.lineage);
     let principal_key = eligibility_principal_key_v1(&committer_principal);
-    let mut lineage: PalwEligibilityLineageRowV1 = row_of(builder.state, &lineage_key).unwrap_or_default();
-    let mut principal: PalwEligibilityPrincipalRowV1 = row_of(builder.state, &principal_key).unwrap_or_default();
-    let mut network: PalwEligibilityNetworkRowV1 = row_of(builder.state, &eligibility_network_key_v1()).unwrap_or_default();
+    let mut lineage: PalwEligibilityLineageRowV1 = row_of(&builder.state, &lineage_key).unwrap_or_default();
+    let mut principal: PalwEligibilityPrincipalRowV1 = row_of(&builder.state, &principal_key).unwrap_or_default();
+    let mut network: PalwEligibilityNetworkRowV1 = row_of(&builder.state, &eligibility_network_key_v1()).unwrap_or_default();
     palw_eligibility_commit_admits_v1(&policy, commit, &model, stage, &lineage, &principal, &network, now)
         .map_err(|why| refuse(format!("RFC-0017: the exam commit is refused: {why:?}")))?;
     palw_eligibility_count_attempt_v1(&policy, now, &mut lineage, &mut principal, &mut network);
@@ -327,7 +327,7 @@ pub(super) fn apply_attest_eligibility_exam_v1(
         }
     }
     let key = eligibility_exam_key_v1(&attestation.exam);
-    let mut exam: PalwEligibilityExamRowV1 = row_of(builder.state, &key).ok_or_else(|| refuse("no such eligibility exam"))?;
+    let mut exam: PalwEligibilityExamRowV1 = row_of(&builder.state, &key).ok_or_else(|| refuse("no such eligibility exam"))?;
     if exam.outcome.is_some() || exam.anchor.is_none() {
         return Err(refuse("the exam is not drawn yet, or already decided"));
     }
@@ -423,7 +423,7 @@ pub(super) fn sweep_model_eligibility_v1(
                     exam.anchor = Some((a.span, execution_key));
                     exam.drawn_daa = now;
                     exam.deadline_daa = now.saturating_add(policy.exam_attest_window_daa);
-                    let population = population_v1(builder.state, &policy, &exam);
+                    let population = population_v1(&builder.state, &policy, &exam);
                     match palw_eligibility_draw_v1(&seed, &exam_id, &population, policy.exam_m) {
                         Some(draws) => {
                             exam.draws = draws;
