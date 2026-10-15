@@ -70,6 +70,14 @@ impl Params {
         self.palw_staged_public_court_v1_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    pub fn palw_staged_tir_route_v1_active_at(&self, daa_score: u64) -> bool {
+        self.palw_staged_tir_route_v1_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    pub fn palw_staged_float_constraint_v1_active_at(&self, daa_score: u64) -> bool {
+        self.palw_staged_float_constraint_v1_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
     pub fn palw_model_immutable_v1_active_at(&self, daa_score: u64) -> bool {
         self.palw_model_immutable_v1_fence().is_some_and(|f| f.is_active(daa_score))
     }

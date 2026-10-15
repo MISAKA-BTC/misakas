@@ -797,6 +797,8 @@ mod tests {
             "palw_class_semantics_v1" => params.palw_class_semantics_v1 = Some(at),
             "palw_court_commitment_scope_v1" => params.palw_court_commitment_scope_v1 = Some(at),
             "palw_staged_public_court_v1" => params.palw_staged_public_court_v1 = Some(at),
+            "palw_staged_tir_route_v1" => params.palw_staged_tir_route_v1 = Some(at),
+            "palw_staged_float_constraint_v1" => params.palw_staged_float_constraint_v1 = Some(at),
             // codex RFC-8 / RFC-12 final's monetary fences (R6781-F): bare heights, and the paid consumer lifecycle with its
             // unapproved probe terms (its values only ride along).
             "palw_reporter_income_v2" => params.palw_reporter_income_v2 = Some(at),

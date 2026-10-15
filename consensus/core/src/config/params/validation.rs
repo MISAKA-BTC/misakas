@@ -189,6 +189,7 @@ impl Params {
         self.validate_palw_class_semantics_v1()?;
         self.validate_palw_court_commitment_scope_v1()?;
         self.validate_palw_staged_public_court_v1()?;
+        self.validate_palw_staged_route_extensions_v1()?;
         // **RFC-0003 decision 22: the held leaf challenge's refusals** (`crate::palw_held_close_v1`).
         self.validate_palw_held_close_chunks_v1()?;
         // **RFC-0007 Part I: the verification vertex's refusals** (`crate::palw_vertex_v1`).
@@ -2783,6 +2784,25 @@ impl Params {
             && self.palw_court_commitment_scope_v1_fence().is_none()
         {
             return Err(crate::palw_state_v2::PalwStateV2Error::InvalidParams("palw_court_commitment_scope_v1 requires ConsensusV2"));
+        }
+        Ok(())
+    }
+
+    /// The TIR and Float32 staged routes extend the staged public court: each needs ConsensusV2
+    /// and the staged court armed at or below it.
+    pub fn validate_palw_staged_route_extensions_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        use crate::palw_state_v2::PalwStateV2Error::InvalidParams;
+        for (name, fence, armed) in [
+            ("palw_staged_tir_route_v1", self.palw_staged_tir_route_v1, self.palw_staged_tir_route_v1_fence()),
+            ("palw_staged_float_constraint_v1", self.palw_staged_float_constraint_v1, self.palw_staged_float_constraint_v1_fence()),
+        ] {
+            let Some(fence) = fence.filter(|f| *f != ForkActivation::never()) else { continue };
+            if armed.is_none()
+                || !self.palw_staged_public_court_v1_fence().is_some_and(|court| court.daa_score() <= fence.daa_score())
+            {
+                let _ = name;
+                return Err(InvalidParams("a staged route extension requires ConsensusV2 and palw_staged_public_court_v1 at or below it"));
+            }
         }
         Ok(())
     }

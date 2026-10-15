@@ -1788,6 +1788,8 @@ impl VirtualStateProcessor {
                 .palw_staged_public_court_v1
                 .filter(|f| f.is_active(daa_score))
                 .map(|_| kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()),
+            staged_tir_route_active: self.palw_staged_tir_route_v1.is_some_and(|f| f.is_active(daa_score)),
+            staged_float_constraint_active: self.palw_staged_float_constraint_v1.is_some_and(|f| f.is_active(daa_score)),
             history_custody_pledges: Default::default(),
             public_original_bindings: Default::default(),
             producer_custody_delegations: Default::default(),

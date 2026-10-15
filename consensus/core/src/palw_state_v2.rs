@@ -19140,6 +19140,12 @@ pub struct PalwTransitionExtrasV1 {
     pub terminal_evidence_max_bytes: Option<u64>,
     /// None preserves all historic deadlines/holds; Some stamps newly accepted claims only.
     pub staged_public_court: Option<crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1>,
+    /// `palw_staged_tir_route_v1` at this block: TIR required-family claims are admitted to the
+    /// staged route (native-context seeds and answers). False below it: refused, A-2 uniform.
+    pub staged_tir_route_active: bool,
+    /// `palw_staged_float_constraint_v1` at this block: greedy Float32 Constraint claims are
+    /// admitted with the rooted f32 row court. False below it: refused.
+    pub staged_float_constraint_active: bool,
     /// Transaction-local producer pledges extracted from the prospective FP envelope.
     /// An ordinary FP claim must never borrow another transaction's pledge.
     pub history_custody_pledges: BTreeMap<Hash64, crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
