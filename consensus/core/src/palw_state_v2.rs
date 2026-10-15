@@ -207,6 +207,10 @@ mod palw_econ_contracts_fold_v1;
 // N3 (round 3): BootstrapExact source rounds (inner 73, aux 130), past `palw_beacon_bootstrap_v1`.
 #[path = "palw_beacon_bootstrap_fold_v1.rs"]
 mod palw_beacon_bootstrap_fold_v1;
+// RFC-0017: model eligibility (inner 74/75, aux 131) and its claim-gate / probation / Final hooks, past `palw_model_eligibility_v1`.
+#[path = "palw_model_eligibility_fold_v1.rs"]
+mod palw_model_eligibility_fold_v1;
+pub use palw_model_eligibility_fold_v1::palw_eligibility_status_of_v1;
 #[path = "palw_panel_source_fee_fold_v2.rs"]
 mod palw_panel_source_fee_fold_v2;
 #[path = "palw_panel_v3_fold_v1.rs"]

@@ -90,7 +90,11 @@ queue=['crate::palw_material_capacity_v1::PalwHeldMaterialBundleV1',
        'misaka_palw_kernel::panel_lifetime_v2::PanelLifetimeAuthorizationV2','misaka_palw_kernel::panel_lifetime_v2::PanelConsumerLifetimeTermsV2',
        'crate::palw_econ_contracts_v1::PalwModelVerificationTallyV1','crate::palw_econ_contracts_v1::PalwHorizonExtensionRowV1','crate::palw_econ_contracts_v1::PalwMinimumPriceRowV1',
        'crate::palw_econ_contracts_v1::PalwModelVerificationContextV1','crate::palw_econ_contracts_v1::PalwModelVerificationDeferredV1','crate::palw_econ_contracts_v1::PalwModelVerificationDecidedV1',
-       'crate::palw_beacon_bootstrap_v1::PalwBootstrapRoundRowV1']; visited=set(); generated=[]; unresolved=[]
+       'crate::palw_beacon_bootstrap_v1::PalwBootstrapRoundRowV1',
+       # RFC-0017 (2026-10-15): the model eligibility rows of kernel route aux 131.
+       'crate::palw_model_eligibility_v1::PalwEligibilityModelRowV1','crate::palw_model_eligibility_v1::PalwEligibilityLineageRowV1',
+       'crate::palw_model_eligibility_v1::PalwEligibilityPrincipalRowV1','crate::palw_model_eligibility_v1::PalwEligibilityNetworkRowV1',
+       'crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1','crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1']; visited=set(); generated=[]; unresolved=[]
 
 # Resolve dependency types; concrete names, aliases/primitive containers are left
 # to Rust's existing type system, so there is no byte-size inference from codec.

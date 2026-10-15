@@ -124,6 +124,25 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
             crate::palw_econ_contracts_v1::PalwModelVerificationDecidedV1::scan_native_wire_v1(frame)?
         }
         130 if key_bytes == 64 => crate::palw_beacon_bootstrap_v1::PalwBootstrapRoundRowV1::scan_native_wire_v1(frame)?,
+        // RFC-0017 (2026-10-15): the model eligibility rows (aux 131, 65-byte keys: prefix ‖ 64-byte id).
+        131 if key_bytes == 65 && prefix == crate::palw_model_eligibility_v1::ELIGIBILITY_MODEL_PREFIX_V1 => {
+            crate::palw_model_eligibility_v1::PalwEligibilityModelRowV1::scan_native_wire_v1(frame)?
+        }
+        131 if key_bytes == 65 && prefix == crate::palw_model_eligibility_v1::ELIGIBILITY_LINEAGE_PREFIX_V1 => {
+            crate::palw_model_eligibility_v1::PalwEligibilityLineageRowV1::scan_native_wire_v1(frame)?
+        }
+        131 if key_bytes == 65 && prefix == crate::palw_model_eligibility_v1::ELIGIBILITY_PRINCIPAL_PREFIX_V1 => {
+            crate::palw_model_eligibility_v1::PalwEligibilityPrincipalRowV1::scan_native_wire_v1(frame)?
+        }
+        131 if key_bytes == 65 && prefix == crate::palw_model_eligibility_v1::ELIGIBILITY_NETWORK_PREFIX_V1 => {
+            crate::palw_model_eligibility_v1::PalwEligibilityNetworkRowV1::scan_native_wire_v1(frame)?
+        }
+        131 if key_bytes == 65 && prefix == crate::palw_model_eligibility_v1::ELIGIBILITY_EXAM_PREFIX_V1 => {
+            crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1::scan_native_wire_v1(frame)?
+        }
+        131 if key_bytes == 65 && prefix == crate::palw_model_eligibility_v1::ELIGIBILITY_PROBATION_CLAIM_PREFIX_V1 => {
+            crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1::scan_native_wire_v1(frame)?
+        }
         121 => match (key_bytes, prefix) {
             (65, 0x41) => crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(frame)?,
             (65, 0x42) => crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2::scan_native_wire_v1(frame)?,
@@ -701,7 +720,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         105 => return Err(wire::wire_bad("unallocated aux table 105 row namespace")),
         106 => return Err(wire::wire_bad("unallocated aux table 106 row namespace")),
         112 => return Err(wire::wire_bad("unallocated aux table 112 row namespace")),
-        115 | 123 | 125 | 126 | 127 | 130 => return Err(wire::wire_bad("unallocated aux row namespace")),
+        115 | 123 | 125 | 126 | 127 | 130 | 131 => return Err(wire::wire_bad("unallocated aux row namespace")),
         _ => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
