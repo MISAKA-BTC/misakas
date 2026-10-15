@@ -79,7 +79,7 @@ fn rfc18_fences_are_dormant_on_every_preset_and_named_in_the_exhaustive_list() {
 #[test]
 fn rfc18_never_collapses_and_fingerprints_are_some_only() {
     let base = palw_t12_shipped_params();
-    let (params_id, schedule_id) = (base.consensus_params_id(), base.consensus_schedule_id());
+    let params_id = base.consensus_params_id();
     let mut never = base.clone();
     never.palw_dag_sibling_attribution_v1 = Some(ForkActivation::never());
     never.palw_panel_anchor_permissionless_v1 = Some(ForkActivation::never());
@@ -88,7 +88,9 @@ fn rfc18_never_collapses_and_fingerprints_are_some_only() {
     never.palw_dag_width_schedule_v1 = Some(PalwDagWidthScheduleFenceV1::unapproved_probe_at(ForkActivation::never()));
     never.validate_palw_rfc0018_v1().unwrap();
     assert_eq!(never.consensus_params_id(), params_id, "Some(never()) hashes as None");
-    assert_eq!(never.consensus_schedule_id(), schedule_id);
+    // The identity two nodes compare normalizes `Some(never())` to absence; the schedule id is a REPORT, and like every Some-only
+    // fence's (`for_each_fence` visits a present value, `never()` included) it names the never-armed fences.
+    assert_eq!(never.consensus_identity_id(), base.consensus_identity_id(), "Some(never()) is absence to the identity");
     for (i, name) in NAMES.iter().enumerate() {
         let mut armed = base.clone();
         let at = ForkActivation::new(FENCE + i as u64);
@@ -116,6 +118,10 @@ fn rfc18_rule_e_v2_needs_rule_e_at_or_below_it_and_the_mirror_must_agree() {
     assert!(matches!(p.validate_palw_rfc0018_v1(), Err(PalwModeV2Error::Invalid(why)) if why.contains("needs palw_fork_choice_rule_e_v1")));
     let mut q = palw_t12_shipped_params();
     q.palw_independently_work_certified_v1 = Some(ForkActivation::new(FENCE));
+    // Gate C's prerequisites at or below it (RFC-0017's attestation object and the kernel route's aux 136), so the mirror is what
+    // the check reaches.
+    q.palw_model_eligibility_v1 = Some(ForkActivation::new(FENCE));
+    q.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(FENCE));
     // Not synced: the mirror disagrees.
     assert!(matches!(q.validate_palw_rfc0018_v1(), Err(PalwModeV2Error::Invalid(why)) if why.contains("mirror")));
 }

@@ -575,6 +575,14 @@ fn req_elig_3_draws_are_stake_proportional_and_sybil_neutral() {
     assert_eq!(palw_eligibility_draw_v1(&seed, &id(5), &[], 7), None);
 }
 
+/// The 7-draw fixtures below judge under the TEST-ONLY 4-of-7 exam (U-1: the design default is 24-of-47).
+fn small_exam_policy() -> PalwModelEligibilityPolicyV1 {
+    let mut p = policy();
+    (p.exam_m, p.exam_k) = (PALW_ELIG_EXAM_M_TEST_ONLY_V1, PALW_ELIG_EXAM_K_TEST_ONLY_V1);
+    p.validate().expect("4-of-7 is a valid strict majority");
+    p
+}
+
 fn drawn_exam(draws: Vec<EligDigestV1>, deadline: u64) -> PalwEligibilityExamRowV1 {
     PalwEligibilityExamRowV1 {
         commit: commit(20, PalwEligibilityExamPurposeV1::Promotion, 16, 0),
@@ -599,7 +607,7 @@ fn attest(exam: &mut PalwEligibilityExamRowV1, bond: EligDigestV1, verdict: Palw
 
 #[test]
 fn req_elig_3_k_positive_positions_pass_and_anything_else_is_not_promoted_never_slashed() {
-    let p = policy();
+    let p = small_exam_policy();
     let draws: Vec<EligDigestV1> = (1..=7u8).map(id).collect();
     let mut exam = drawn_exam(draws.clone(), FENCE + 100);
     assert_eq!(palw_eligibility_exam_verdict_v1(&p, &exam, FENCE + 50), None, "open");
@@ -628,7 +636,7 @@ fn req_elig_3_k_positive_positions_pass_and_anything_else_is_not_promoted_never_
 fn req_elig_6_a_per_claim_mismatch_never_decides_the_model_verdict() {
     // Verifiers that reproduced the model and found one Miner's claim wrong: the model is promoted on the model-level verdict; the
     // claim goes to its own court (the attestation's mismatch list is the verifier's accusation material, never counted here).
-    let p = policy();
+    let p = small_exam_policy();
     let mut exam = drawn_exam((1..=7u8).map(id).collect(), FENCE + 100);
     for b in 1..=4u8 {
         attest(&mut exam, id(b), PalwEligibilityVerdictV1::Reproduced);

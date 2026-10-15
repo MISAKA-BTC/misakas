@@ -4264,7 +4264,14 @@ pub(crate) mod tests {
                 // A route's form appended inside a NEW kind (the staged court's), ledgered in its own table.
                 let owns_a_staged_form =
                     crate::palw_staged_route_forms_v1::PALW_STAGED_ROUTE_FORMS_V1.iter().any(|(_, f)| *f == fence);
-                assert!(owns_a_tag || owns_a_form || owns_a_staged_form, "{} owns a kind or an appended form", fence.params_field());
+                // RFC08's release-recovery forms appended inside the monetary material kinds, ledgered beside their fence.
+                let owns_a_recovery_form =
+                    crate::palw_material_release_recovery_v2::PALW_MATERIAL_RECOVERY_FORMS_V2.iter().any(|(_, f)| *f == fence);
+                assert!(
+                    owns_a_tag || owns_a_form || owns_a_staged_form || owns_a_recovery_form,
+                    "{} owns a kind or an appended form",
+                    fence.params_field()
+                );
             }
         }
 
