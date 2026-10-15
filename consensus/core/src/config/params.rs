@@ -3182,6 +3182,20 @@ pub struct Params {
     /// fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_cell_coverage_closure_v1`]) until its
     /// rule is verified.
     pub palw_cell_coverage_closure_v1: Option<ForkActivation>,
+    /// **palw_g14_route_required_v1** — the audit's G-01 option (b), adopted by the user 2026-10-16 for the legacy route at the DAA
+    /// 14,000 release ([`crate::palw_g14_gates_v1`]): past it a newly admitted claim of a family with no armed G14 public-conviction
+    /// route (V2 Attempt, Free Prompt, and the TIR v1 / gen v1 / shard families on the same Panel route) is refused at the claim gate,
+    /// so it earns no reward, weight or consensus credit (its carrier pays the ordinary fee), and the G-05 job versions (FP selection,
+    /// constraint, prefix, tokenizer) are refused at admission until their route is armed. Keyed on the claim's acceptance DAA (old
+    /// claims keep their ruleset). `None` on every preset; hashed Some-only; refused when armed until its arm-readiness record is
+    /// pinned (`PALW_G14_ARMING_RECORDS_V1`).
+    pub palw_g14_route_required_v1: Option<ForkActivation>,
+    /// **palw_reward_liability_horizon_v1** — the audit's G-08 / G-15 ([`crate::palw_g14_gates_v1`]): past it a legacy free-prompt
+    /// claim's Final floor reaches its liability horizon (`licence + window_challenge + window_court`) and a Gate C certified reward
+    /// is named only after the claim's liability horizon (`final + window_court`, or its retirement if earlier), so no coinbase leg is paid while a conviction can
+    /// still void the claim. Keyed on the claim's acceptance DAA. `None` on every preset; hashed Some-only; refused when armed until
+    /// its arm-readiness record is pinned.
+    pub palw_reward_liability_horizon_v1: Option<ForkActivation>,
     /// **palw_model_block_rights_v1** — RFC-0016 V+ ([`crate::palw_rfc0016_v1`]): past it a model-class Attempt is admitted only
     /// when it consumes one of its model's pre-issued per-epoch block rights (`⌊P_m · N_exp⌋`, the entrant reserve deducted from
     /// the fixed total; σ-capped mid-epoch reissue). **Dormant, with no activation height**: `None` on every preset and in no
@@ -6133,6 +6147,8 @@ impl Params {
             palw_public_evidence_reward_v1: self.palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1: self.palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1: self.palw_cell_coverage_closure_v1,
+            palw_g14_route_required_v1: self.palw_g14_route_required_v1,
+            palw_reward_liability_horizon_v1: self.palw_reward_liability_horizon_v1,
             palw_model_block_rights_v1: self.palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1: self.palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1: self.palw_model_eligibility_v1,
@@ -7289,6 +7305,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
+    palw_g14_route_required_v1: None,
+    palw_reward_liability_horizon_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
@@ -7641,6 +7659,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
+    palw_g14_route_required_v1: None,
+    palw_reward_liability_horizon_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
@@ -7975,6 +7995,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
+    palw_g14_route_required_v1: None,
+    palw_reward_liability_horizon_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
@@ -13160,6 +13182,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_2026_10_12_ruling_fences_v1();
     // RFC-0006 R6-CELL round 4's coverage closure, likewise.
     params.sync_palw_cell_coverage_closure_v1();
+    // The cross-lane G14 gates' mirrors (option (b) and the reward liability horizon), likewise.
+    params.sync_palw_g14_gates_v1();
     // RFC-0006's memory/routing court consumer v2, likewise.
     params.sync_palw_memory_routing_court_v2();
     // RFC-0006 RFC06-8's registration origins, likewise.
@@ -13498,6 +13522,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
+    palw_g14_route_required_v1: None,
+    palw_reward_liability_horizon_v1: None,
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,

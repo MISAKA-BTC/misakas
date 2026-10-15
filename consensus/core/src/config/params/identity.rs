@@ -648,6 +648,13 @@ impl Params {
         if self.palw_cell_coverage_closure_v1 == Some(ForkActivation::never()) {
             self.palw_cell_coverage_closure_v1 = None;
         }
+        // The cross-lane G14 gates (`crate::palw_g14_gates_v1`), likewise.
+        if self.palw_g14_route_required_v1 == Some(ForkActivation::never()) {
+            self.palw_g14_route_required_v1 = None;
+        }
+        if self.palw_reward_liability_horizon_v1 == Some(ForkActivation::never()) {
+            self.palw_reward_liability_horizon_v1 = None;
+        }
         // RFC-0016's two dormant fences, likewise.
         if self.palw_model_block_rights_v1 == Some(ForkActivation::never()) {
             self.palw_model_block_rights_v1 = None;
@@ -1160,6 +1167,8 @@ impl Params {
             palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
+            palw_g14_route_required_v1,
+            palw_reward_liability_horizon_v1,
             palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
@@ -1492,6 +1501,8 @@ impl Params {
             ("palw_public_evidence_reward_v1", *palw_public_evidence_reward_v1),
             ("palw_claim_hard_deadline_v1", palw_claim_hard_deadline_v1.as_ref().map(|f| f.activation)),
             ("palw_cell_coverage_closure_v1", *palw_cell_coverage_closure_v1),
+            ("palw_g14_route_required_v1", *palw_g14_route_required_v1),
+            ("palw_reward_liability_horizon_v1", *palw_reward_liability_horizon_v1),
             ("palw_model_block_rights_v1", *palw_model_block_rights_v1),
             ("palw_elastic_final_capacity_v1", *palw_elastic_final_capacity_v1),
             ("palw_model_eligibility_v1", *palw_model_eligibility_v1),
@@ -1986,6 +1997,15 @@ impl Params {
         // RFC-0006 R6-CELL round 4's coverage closure, NAMED likewise. Some-only.
         if let Some(at) = self.palw_cell_coverage_closure_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_cell_coverage_closure_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // The cross-lane G14 gates (`crate::palw_g14_gates_v1`), NAMED likewise. Some-only.
+        if let Some(at) = self.palw_g14_route_required_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_g14_route_required_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_reward_liability_horizon_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_reward_liability_horizon_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // RFC-0016's two dormant fences, NAMED likewise. Some-only.
@@ -2772,6 +2792,8 @@ impl Params {
             palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
+            palw_g14_route_required_v1,
+            palw_reward_liability_horizon_v1,
             palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
@@ -3696,6 +3718,13 @@ impl Params {
         if let Some(activation) = palw_cell_coverage_closure_v1.as_mut() {
             fork(activation, visit);
         }
+        // The cross-lane G14 gates. Some-only.
+        if let Some(activation) = palw_g14_route_required_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_reward_liability_horizon_v1.as_mut() {
+            fork(activation, visit);
+        }
         // RFC-0016's two dormant fences. Some-only.
         if let Some(activation) = palw_model_block_rights_v1.as_mut() {
             fork(activation, visit);
@@ -4272,6 +4301,8 @@ impl Params {
             palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
+            palw_g14_route_required_v1,
+            palw_reward_liability_horizon_v1,
             palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
@@ -5310,6 +5341,15 @@ impl Params {
         // RFC-0006 R6-CELL round 4's coverage closure, Some-only for the same reason.
         if let Some(activation) = palw_cell_coverage_closure_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_cell_coverage_closure_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // The cross-lane G14 gates, Some-only for the same reason.
+        if let Some(activation) = palw_g14_route_required_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_g14_route_required_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_reward_liability_horizon_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_reward_liability_horizon_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         // RFC-0016's two dormant fences, Some-only for the same reason.

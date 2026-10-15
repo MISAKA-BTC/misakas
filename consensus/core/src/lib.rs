@@ -644,6 +644,9 @@ pub mod palw_routing;
 pub mod palw_rule_manifest_v1;
 /// The rules of the user's 2026-10-12 rulings (register X3, N4, D2): three dormant fences, refused when armed.
 pub mod palw_ruling_fences_v1;
+/// The cross-lane G14 gates (2026-10-16 audit G-10, G-18, N4 readiness, G-01 option (b), G-08 / G-15): arming records, the
+/// route-required claim gate and the reward liability horizon. Every fence is dormant on every preset.
+pub mod palw_g14_gates_v1;
 /// MISAKA PALW challenge scheduling (ADR-0028): assignment tickets, DAA windows and the
 /// Stage-0 shadow ledger that measures `P_check`, no-show and replay cost. Land-stage,
 /// consensus-inert — computed and logged only; nothing consumes it.

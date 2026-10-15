@@ -141,6 +141,62 @@ impl PalwClaimHardDeadlineFenceV1 {
             },
         }
     }
+
+    /// **G-09: the X3 CANDIDATE derived from the existing horizons** (2026-10-16, cross-lane lane) — an UNARMED PLACEHOLDER: not approved
+    /// by the user, and validation refuses every armed X3 value whatever its policy. Derivation (every term an existing window of the
+    /// bundle the claim is accepted under, read at the activation height):
+    ///
+    /// ```text
+    /// T_prepare = window_bind + window_receipt            acceptance → receipt deadline (DL-1's PanelBound row: bind, then receipt)
+    /// T_observe = window_challenge_at(activation)         receipt deadline → open cutoff (the challenge window a licence opens)
+    /// T_resolve = B_disclose + B_court                    open cutoff → hard: the two B_remaining terms with an existing source
+    ///           = window_challenge + window_court         (palw_da_disclose_window_daa_v1 = the UNSHORTENED window_challenge)
+    /// hard − d0 = bind + receipt + window_challenge_at(activation) + window_challenge + court
+    ///           = 600 + 600 + 120 + 1,200 + 3,000 = 5,520 DAA on testnet-12 at DAA 14,000 (short window in force)
+    /// ```
+    ///
+    /// Properties: (i) a pursuit started at the open cutoff finishes exactly at `hard` while the five unmeasured `B_*` terms are 0
+    /// (REQ-X3-4 holds with equality; each measured term must be ADDED to `T_resolve`); (ii) `hard` exceeds the producer's existing
+    /// retention (`bind + receipt + window_challenge + court`, 5,400 on testnet-12) by `window_challenge_at` (120), the extension
+    /// REQ-X3-6 prices at `c_retain`; (iii) for
+    /// any licence `L <= d0 + bind + receipt`, `hard >= L + challenge + court` — the legacy FP liability floor of
+    /// `palw_reward_liability_horizon_v1` (G-08) — so X3 never Finals a claim before its liability horizon. UNMEASURED and left 0
+    /// ([`palw_x3_unmeasured_terms_v1`]): `B_cold_fetch`, `B_check`, `B_localize`, `B_carrier`, `B_reorg_slack` and `c_retain`.
+    pub fn candidate_from_horizons_v1(activation: ForkActivation, params: &PalwStateParamsV2) -> Self {
+        let challenge = params.window_challenge_at(activation.daa_score());
+        Self {
+            activation,
+            policy: PalwClaimHardDeadlinePolicyV1 {
+                version: PALW_CLAIM_HARD_DEADLINE_POLICY_VERSION_V1,
+                prepare_daa: params.window_bind().saturating_add(params.window_receipt()),
+                observe_daa: challenge,
+                resolve_daa: palw_da_disclose_window_daa_v1(params).saturating_add(params.window_court()),
+                cold_fetch_daa: 0,
+                check_daa: 0,
+                localize_daa: 0,
+                carrier_daa: 0,
+                reorg_slack_daa: 0,
+                retention_cost_per_daa_sompi: 0,
+            },
+        }
+    }
+}
+
+/// **The X3 terms a policy leaves UNMEASURED** (0 is UNKNOWN, never free): the five `B_*` terms with no existing source and `c_retain`.
+/// The candidate ([`PalwClaimHardDeadlineFenceV1::candidate_from_horizons_v1`]) leaves all six; a policy the user approves names none.
+pub fn palw_x3_unmeasured_terms_v1(policy: &PalwClaimHardDeadlinePolicyV1) -> Vec<&'static str> {
+    [
+        ("B_cold_fetch", policy.cold_fetch_daa),
+        ("B_check", policy.check_daa),
+        ("B_localize", policy.localize_daa),
+        ("B_carrier", policy.carrier_daa),
+        ("B_reorg_slack", policy.reorg_slack_daa),
+        ("c_retain", policy.retention_cost_per_daa_sompi),
+    ]
+    .into_iter()
+    .filter(|(_, v)| *v == 0)
+    .map(|(n, _)| n)
+    .collect()
 }
 
 /// **The hard deadline as a function of acceptance alone** (REQ-X3-1): `d0 + T_prepare + T_observe + T_resolve`, saturating. Pure, so

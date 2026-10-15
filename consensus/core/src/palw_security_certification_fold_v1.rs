@@ -318,6 +318,54 @@ fn credit_certified_v1(
     if matches!(claim.source, PalwClaimSourceV2::Attempt) {
         builder.settle_anchor(now, true)?;
     }
+    // **G-15 (`palw_reward_liability_horizon_v1`)**: past the fence the held reward is NOT named at certification — it waits in the row
+    // until the claim's liability horizon (`final + window_court`) has passed and is named by the sweep only if the claim is still
+    // certified then (the deferred release in the sweep, which alone names a governed reward and zeroes it, so it is named once even
+    // when certification lands past the horizon). The weight credit above is unchanged. Below the fence: named now.
+    if crate::palw_g14_gates_v1::palw_certified_reward_held_until_v1(builder.params, claim).is_some() {
+        return Ok(());
+    }
+    name_certified_reward_v1(builder, now, claim_id, claim, row)
+}
+
+/// **G-15: a deferred certified reward at its claim's retirement** — the claim's liability window closes at the EARLIER of
+/// `final + window_court` (the sweep's release) and its retirement (a retired claim can no longer be convicted). Called by the deadline
+/// sweep just before a terminal claim retires: a `Final`, governed, still-certified claim whose held reward has not been named is named
+/// here, once (the row's `held_reward` is zeroed). A no-op below the fence, for a voided claim and for a reward already named.
+pub(super) fn release_deferred_certified_reward_at_retirement_v1(
+    builder: &mut TransitionBuilder<'_>,
+    now: u64,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+) -> Result<(), PalwStateV2Error> {
+    if crate::palw_g14_gates_v1::palw_certified_reward_held_until_v1(builder.params, claim).is_none() {
+        return Ok(());
+    }
+    let key = certification_claim_key_v1(&palw_certification_id_v1(claim_id));
+    let Some(mut row) = row_of::<PalwClaimCertificationRowV1>(&builder.state, &key) else { return Ok(()) };
+    if row.held_reward == 0
+        || !row.outcome.is_some_and(|(outcome, _)| outcome.certifies())
+        || !crate::palw_rfc0018_v1::palw_independently_work_certified_v1(
+            claim_id,
+            claim,
+            &crate::palw_rfc0018_v1::PalwGateCViewV1::of(builder.params, &builder.state),
+        )
+    {
+        return Ok(());
+    }
+    name_certified_reward_v1(builder, now, claim_id, claim, &row)?;
+    row.held_reward = 0;
+    write_row(builder, key, Some(&row))
+}
+
+/// **The held issuance reward named** (the certified claim's coinbase leg): once, through the once-only settlement guard.
+fn name_certified_reward_v1(
+    builder: &mut TransitionBuilder<'_>,
+    now: u64,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    row: &PalwClaimCertificationRowV1,
+) -> Result<(), PalwStateV2Error> {
     // RFC-0008 once-only settlement (dormant): the held issuance reward is named once across every consumer. This guards the
     // PAYMENT only; the weight credit above is Gate C's own (SecurityCertified) and is neither added nor read here.
     let releases = row.held_reward > 0 && {
@@ -391,6 +439,23 @@ pub(super) fn sweep_security_certification_v1(
         let claim = if native { None } else { builder.state.claims.get(&claim_id).cloned() };
         // An owning39 mining claim stands while its native claim row and its complete Master escrow Final stand.
         let native_live = native && super::palw_native_mining_fold_v39::native_mining_claim_live_v39(&builder.state, &claim_id);
+        // **G-15: a certified reward deferred to the liability horizon** is named here, once, the first sweep strictly past it — and
+        // only if the claim still stands certified (a conviction in the window voids it, and the reward is never named: burned).
+        if let (Some((outcome, _)), Some(c)) = (row.outcome, claim.as_ref())
+            && outcome.certifies()
+            && row.held_reward > 0
+            && crate::palw_g14_gates_v1::palw_certified_reward_held_until_v1(builder.params, c).is_some_and(|until| now > until)
+            && crate::palw_rfc0018_v1::palw_independently_work_certified_v1(
+                &claim_id,
+                c,
+                &crate::palw_rfc0018_v1::PalwGateCViewV1::of(builder.params, &builder.state),
+            )
+        {
+            name_certified_reward_v1(builder, now, &claim_id, c, &row)?;
+            row.held_reward = 0;
+            write_row(builder, key.clone(), Some(&row))?;
+            continue;
+        }
         if row.outcome.is_some() {
             // A decided native row is retired by the native fold's own collection (its receipt reads it), never here.
             if claim.is_none() && !native {

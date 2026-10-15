@@ -181,6 +181,8 @@ impl PalwStateParamsV2 {
             court_model_scope_from_daa: None,
             public_evidence_reward_from_daa: None,
             claim_hard_deadline_v1: None,
+            g14_route_required_v1: None,
+            reward_liability_horizon_from_daa: None,
             cell_coverage_closure_from_daa: None,
             memory_routing_court_from_daa: None,
             class_registration_origin_from_daa: None,
@@ -657,6 +659,34 @@ impl PalwStateParamsV2 {
     /// `Params::palw_claim_hard_deadline_v1`'s height and policy, if the network arms it (the mirror; register X3).
     pub fn claim_hard_deadline_v1(&self) -> Option<crate::palw_ruling_fences_v1::PalwClaimHardDeadlineMirrorV1> {
         self.claim_hard_deadline_v1
+    }
+
+    /// **G-01 option (b)'s mirror** (`crate::palw_g14_gates_v1`) — written by `Params::sync_palw_g14_gates_v1` and by nothing else
+    /// (and by fixtures, which is how a test arms it); `None` where the fence is not armed.
+    pub fn with_g14_route_required_v1(mut self, mirror: Option<crate::palw_g14_gates_v1::PalwG14RouteMirrorV1>) -> Self {
+        self.g14_route_required_v1 = mirror;
+        self
+    }
+
+    /// `Params::palw_g14_route_required_v1`'s height with the route fences it reads, if the network arms it.
+    pub fn g14_route_required_v1(&self) -> Option<crate::palw_g14_gates_v1::PalwG14RouteMirrorV1> {
+        self.g14_route_required_v1
+    }
+
+    /// **The reward liability horizon's mirror** (G-08 / G-15, `crate::palw_g14_gates_v1`), written likewise.
+    pub fn with_reward_liability_horizon_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.reward_liability_horizon_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_reward_liability_horizon_v1`'s height, if the network arms it (the mirror).
+    pub fn reward_liability_horizon_from_daa(&self) -> Option<u64> {
+        self.reward_liability_horizon_from_daa
+    }
+
+    /// **Does the reward liability horizon govern a claim accepted at `accepted_daa`?** `false` on every shipped preset.
+    pub fn reward_liability_horizon_governs_v1(&self, accepted_daa: u64) -> bool {
+        self.reward_liability_horizon_from_daa.is_some_and(|from| accepted_daa >= from)
     }
 
     /// **R6-CELL round 4's mirror** (`crate::palw_cell_coverage_closure_v1`) — written by `Params::sync_palw_cell_coverage_closure_v1`

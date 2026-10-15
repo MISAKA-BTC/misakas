@@ -3297,6 +3297,19 @@ fn apply_object_inner(
                     why: why.to_string(),
                 });
             }
+            // **G-01 option (b) / G-05 (`palw_g14_route_required_v1`)**: past the fence a free-prompt claim whose job needs a G14
+            // route that is not armed (selection: the TIR public frame on THIS commitment; constraint / prefix / tokenizer: the staged
+            // court with its legacy filer; never for non-public evidence) is not taken — no reward, weight or credit; its carrier pays
+            // the ordinary fee. The route is read from the fence state, so the job regains reward once its route is armed. `None`
+            // below the fence (every shipped network) and for a claim accepted before it.
+            if let Some((code, why)) = crate::palw_g14_gates_v1::palw_g14_route_fp_refusal_v1(
+                builder.params,
+                ctx.daa_score,
+                public_job.as_deref(),
+                builder.extras.tir_public_originals.contains_key(claim_id),
+            ) {
+                return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why });
+            }
             let class = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
             if let PalwClassStatusV2::Frozen { .. } = class.status {
                 return Err(PalwStateV2Error::FrozenClass(*class_id));

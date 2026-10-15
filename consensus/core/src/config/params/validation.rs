@@ -4,7 +4,8 @@ use super::*;
 
 impl Params {
     /// **The three fences of the 2026-10-12 rulings** (register §3): `palw_court_model_scope_v1` (D2), `palw_public_evidence_reward_v1`
-    /// (N4) and `palw_claim_hard_deadline_v1` (X3). Each is refused when armed at a real height until its rule is built and verified;
+    /// (N4) and `palw_claim_hard_deadline_v1` (X3). D2 and X3 are refused when armed at a real height until their rules are verified (and
+    /// the user approves the X3 policy values); N4 until its arm-readiness record is pinned (`crate::palw_g14_gates_v1`);
     /// `None` and `Some(never())` pass. The rules exist as dormant, unverified source (`crate::palw_ruling_fences_v1`, 2026-10-15);
     /// the refusal stays until they are verified and the user approves the X3 policy values.
     pub fn validate_palw_2026_10_12_ruling_fences_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
@@ -12,10 +13,6 @@ impl Params {
             (
                 self.palw_court_model_scope_v1,
                 "palw_court_model_scope_v1 cannot be armed: its rule (register D2, ruling 2026-10-12) is not built and verified yet",
-            ),
-            (
-                self.palw_public_evidence_reward_v1,
-                "palw_public_evidence_reward_v1 cannot be armed: its rule (register N4, ruling 2026-10-12) is not built and verified yet",
             ),
             (
                 self.palw_claim_hard_deadline_v1.map(|f| f.activation),
@@ -26,6 +23,9 @@ impl Params {
                 return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(why));
             }
         }
+        // N4's rule is built (`crate::palw_ruling_fences_v1`) and its tests exist (T-N9): it is refused when armed until its
+        // arm-readiness record is pinned (`crate::palw_g14_gates_v1`, audit G-02), never by name alone.
+        self.validate_palw_g14_fence_record_v1(crate::palw_g14_gates_v1::PalwG14GatedFenceV1::PublicEvidenceRewardV1)?;
         // D2's first half is LG14-B's StepLeaf rule (a StepLeaf answer owes no model rows; the accuser supplies them), so the scope
         // fence needs `palw_legacy_held_da_v2` in force at or below it. Checked even though arming is refused above, so the ordering
         // is already pinned when the refusal is lifted.
@@ -254,6 +254,9 @@ impl Params {
         self.validate_palw_court_commitment_scope_v1()?;
         self.validate_palw_staged_public_court_v1()?;
         self.validate_palw_staged_route_extensions_v1()?;
+        // **The cross-lane G14 gates** (`crate::palw_g14_gates_v1`): G-18's legacy-filer prerequisite of the staged court, and the
+        // arm-readiness record of every gated fence (G-10, N4, G-01 option (b), the reward liability horizon).
+        self.validate_palw_g14_gates_v1()?;
         // **RFC-0003 decision 22: the held leaf challenge's refusals** (`crate::palw_held_close_v1`).
         self.validate_palw_held_close_chunks_v1()?;
         // **RFC-0007 Part I: the verification vertex's refusals** (`crate::palw_vertex_v1`).

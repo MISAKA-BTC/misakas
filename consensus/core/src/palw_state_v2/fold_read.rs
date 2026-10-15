@@ -938,6 +938,21 @@ impl PalwFoldReadV1<'_> {
         if let crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { code, why } = self.reward_gate_v1(class_id, now_daa) {
             return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why });
         }
+        // **G-01 option (b) (`palw_g14_route_required_v1`)**: past the fence a V2 Attempt — the legacy Panel route, whatever its class
+        // (floor, model, TIR v1, gen v1, shard) — is taken only while that route's G14 public-conviction route (LG14-A + LG14-B) is
+        // armed; otherwise it earns no reward, weight or consensus credit (a refused own attempt is skipped, the block stands, and the
+        // producer's pre-check answers this before an inference). Read from the fence state: the route's arming restores the reward.
+        // `None` below the fence (every shipped network). The free-prompt lane asks its own question with the job in hand
+        // (`palw_g14_route_fp_refusal_v1`, the commitment arm).
+        if incoming == PalwGatedClaimV1::Attempt
+            && let Some(why) = crate::palw_g14_gates_v1::palw_g14_route_attempt_refusal_v1(self.params, now_daa)
+        {
+            return Err(PalwStateV2Error::ClassNotRewardable {
+                class: *class_id,
+                code: crate::palw_g14_gates_v1::PALW_G14_ROUTE_ABSENT_CODE_V1,
+                why,
+            });
+        }
         // **RFC-0006 R6-CELL round 4 (`palw_cell_coverage_closure_v1`, REQ-CELL-1b)**: past the fence, a class whose graph the
         // fold holds and whose cell coverage has a gap takes no claim on any lane — explicitly uncovered and unrewarded.
         // Where the fold does not hold the graph, the court close convicts instead (REQ-CELL-2). Below the fence `None`.

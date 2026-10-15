@@ -139,13 +139,13 @@ fn consumer_v2_covers_the_composed_maps_and_nothing_historical() {
     }
 }
 
-/// Consumer v2's disposition matrix: exactly the two kinds it reaches move to Covered.
+/// Consumer v2's disposition matrix: exactly the two kinds it reaches move to Covered. A Kimi router stays refused (G-16, 2026-10-16:
+/// Kimi is out of scope in both places).
 #[test]
 fn the_v2_disposition_moves_only_the_reached_kinds() {
     assert!(matches!(palw_cell_uncovered_disposition_v2(K::SoloRecurrenceMap), PalwCellDispositionV1::Covered(_)));
     assert!(matches!(palw_cell_uncovered_disposition_v2(K::MultiRouterTable), PalwCellDispositionV1::Covered(_)));
-    assert!(matches!(palw_cell_uncovered_disposition_v2(K::KimiRouter), PalwCellDispositionV1::Covered(_)));
-    for kind in [K::HybridRecurrenceUnenumerated, K::MapSectionNotSpelled, K::MapNotEnumerable, K::TirFamilyUnchecked] {
+    for kind in [K::KimiRouter, K::HybridRecurrenceUnenumerated, K::MapSectionNotSpelled, K::MapNotEnumerable, K::TirFamilyUnchecked] {
         assert_eq!(palw_cell_uncovered_disposition_v2(kind), PalwCellDispositionV1::RefusedAtAdmission, "{kind:?}");
     }
 }

@@ -309,6 +309,11 @@ impl Params {
                  rides R-core+'s data-availability court and the direct proofs are F2's adjudicators",
             ));
         }
+        // G14 from genesis (user decision 2026-10-16, test-only): an isolated G14 test genesis (`crate::palw_g14_gates_v1`) arms the
+        // filer with its prerequisites; it never joins a real network, and no shipped genesis carries its marker.
+        if self.has_isolated_g14_genesis_v1() {
+            return Ok(());
+        }
         Err(PalwModeV2Error::Invalid(
             "palw_legacy_public_filer_v1 cannot be armed yet: the legacy route's public filer changes when a V2 claim may end (RFC-0014 \
              §7) and its height is the full-activation release's to name (lane LG14-A)",
