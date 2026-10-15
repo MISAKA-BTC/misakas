@@ -118,6 +118,43 @@ pub struct PalwRfc0016MeasuredRecordV1 {
 /// **The pinned measured records — EMPTY.** No value is measured; arming either fence is refused.
 pub const PALW_RFC0016_MEASURED_RECORDS_V1: &[PalwRfc0016MeasuredRecordV1] = &[];
 
+/// **Calibration builds only: the values a σ/k measurement run arms** — `MISAKA_RFC0016_CALIBRATION_VALUES` at BUILD time, 18
+/// comma-separated integers in the field order of [`PalwRfc0016ValuesV1`]. Read only on an ISOLATED calibration network
+/// (`Params::has_isolated_native_calibration_v34`); a production binary is built without it, and the measured-value gate still
+/// governs every other network. `None` where unset or malformed.
+pub fn palw_rfc0016_calibration_values_v1() -> Option<PalwRfc0016ValuesV1> {
+    palw_rfc0016_parse_values_v1(option_env!("MISAKA_RFC0016_CALIBRATION_VALUES")?)
+}
+
+/// Parse the 18-integer calibration form (also used by the measurement harness to print what a build arms).
+pub fn palw_rfc0016_parse_values_v1(text: &str) -> Option<PalwRfc0016ValuesV1> {
+    let n: Vec<u64> = text.split(',').map(|t| t.trim().parse::<u64>().ok()).collect::<Option<Vec<u64>>>()?;
+    if n.len() != 18 {
+        return None;
+    }
+    let u = |i: usize| u32::try_from(n[i]).ok();
+    Some(PalwRfc0016ValuesV1 {
+        sigma_permille: u(0)?,
+        tilt_k_permille: u(1)?,
+        reissue_checkpoint_permille: u(2)?,
+        pace_margin_permille: u(3)?,
+        entrant_reserve_permille: u(4)?,
+        entrant_max_per_model_permille: u(5)?,
+        entrant_min_capital_sompi: n[6],
+        entrant_age_daa: n[7],
+        capacity_safety_permille: u(8)?,
+        c7_measured_concurrency: u(9)?,
+        queue_len_per_class: u(10)?,
+        queue_ttl_daa: n[11],
+        quote_margin_h: u(12)?,
+        verifier_share_base_permille: u(13)?,
+        verifier_slope_gamma_permille: u(14)?,
+        verifier_util_target_permille: u(15)?,
+        opv_checks_per_claim_permille: u(16)?,
+        opv_checks_per_verifier_epoch: u(17)?,
+    })
+}
+
 /// **The measured-value gate**: `values` is not a placeholder and exactly matches a pinned record whose evidence and review digests
 /// are both non-zero and distinct.
 pub fn palw_rfc0016_values_measured_v1(values: &PalwRfc0016ValuesV1, records: &[PalwRfc0016MeasuredRecordV1]) -> bool {
@@ -175,10 +212,17 @@ impl Params {
     fn palw_rfc0016_mirror_v1(&self) -> Option<PalwRfc0016MirrorV1> {
         let rights_from_daa = self.palw_model_block_rights_v1_from_daa();
         let capacity_from_daa = self.palw_elastic_final_capacity_v1_from_daa();
+        // An isolated calibration network runs the values its build was made for (the σ/k measurement); every other network runs
+        // the binary's named constants.
+        let values = if self.has_isolated_native_calibration_v34() {
+            palw_rfc0016_calibration_values_v1().unwrap_or(PALW_RFC0016_VALUES_V1)
+        } else {
+            PALW_RFC0016_VALUES_V1
+        };
         (rights_from_daa.is_some() || capacity_from_daa.is_some()).then_some(PalwRfc0016MirrorV1 {
             rights_from_daa,
             capacity_from_daa,
-            values: PALW_RFC0016_VALUES_V1,
+            values,
         })
     }
 
@@ -188,6 +232,20 @@ impl Params {
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             bundle.state = bundle.state.clone().with_rfc0016_v1(mirror);
         }
+    }
+
+    /// **The calibration exception** (the σ/k measurement, RFC-0016 §8.6): on an isolated calibration network a fence may be armed
+    /// once its build carries non-placeholder calibration values; the structural prerequisites above it still hold.
+    fn palw_rfc0016_calibration_allows_v1(&self) -> Option<Result<(), PalwModeV2Error>> {
+        if !self.has_isolated_native_calibration_v34() {
+            return None;
+        }
+        Some(match palw_rfc0016_calibration_values_v1() {
+            Some(values) if !values.is_placeholder() => Ok(()),
+            _ => Err(PalwModeV2Error::Invalid(
+                "an RFC-0016 calibration run needs a build with MISAKA_RFC0016_CALIBRATION_VALUES (18 non-placeholder integers)",
+            )),
+        })
     }
 
     fn palw_rfc0016_below_v1(fence: Option<ForkActivation>, at: u64) -> bool {
@@ -249,6 +307,9 @@ impl Params {
                 "palw_model_block_rights_v1: the allocation epoch must be a whole number of rights epochs (P_m constant within one)",
             ));
         }
+        if let Some(verdict) = self.palw_rfc0016_calibration_allows_v1() {
+            return verdict;
+        }
         if !palw_rfc0016_values_measured_v1(&PALW_RFC0016_VALUES_V1, PALW_RFC0016_MEASURED_RECORDS_V1) {
             return Err(PalwModeV2Error::Invalid(
                 "palw_model_block_rights_v1 cannot be armed: σ, k, φ, the pace margin and the entrant terms have no pinned measured-value record (RFC-0016 §8.6)",
@@ -279,6 +340,9 @@ impl Params {
             return Err(PalwModeV2Error::Invalid(
                 "palw_elastic_final_capacity_v1 requires palw_probabilistic_constraints_v1 (the kernel route whose rows hold its queue) at or below it",
             ));
+        }
+        if let Some(verdict) = self.palw_rfc0016_calibration_allows_v1() {
+            return verdict;
         }
         if !palw_rfc0016_values_measured_v1(&PALW_RFC0016_VALUES_V1, PALW_RFC0016_MEASURED_RECORDS_V1) {
             return Err(PalwModeV2Error::Invalid(
@@ -317,6 +381,14 @@ mod tests {
             opv_checks_per_claim_permille: 500,
             opv_checks_per_verifier_epoch: 10,
         }
+    }
+
+    #[test]
+    fn the_calibration_form_parses_exactly_eighteen_integers() {
+        let v = palw_rfc0016_parse_values_v1("250,1000,500,1200,20,5,1,100,800,0,8,50,2,150,100,700,500,10").unwrap();
+        assert_eq!(v, measured());
+        assert!(palw_rfc0016_parse_values_v1("1,2,3").is_none());
+        assert!(palw_rfc0016_parse_values_v1("x,1000,500,1200,20,5,1,100,800,0,8,50,2,150,100,700,500,10").is_none());
     }
 
     #[test]
