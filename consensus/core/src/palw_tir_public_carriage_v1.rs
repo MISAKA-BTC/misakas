@@ -267,6 +267,11 @@ impl PalwTirPublicConvictionEvidenceV1 {
         evidence.check_shape_v1(usize::MAX)?;
         Ok(evidence)
     }
+    /// Shape of an evidence that may ride a staged witness (G14 R7): as [`Self::check_v1`], but an Output's ID count is bounded by
+    /// the witness ceiling the fold applies, not by the single-control preflight.
+    pub fn check_staged_v1(&self) -> Result<(), String> {
+        self.check_shape_v1(usize::MAX)
+    }
     fn check_shape_v1(&self, maximum_ids: usize) -> Result<(), String> {
         use crate::palw_court_v2::PalwCourtVerdictProofV2 as P;
         match self {

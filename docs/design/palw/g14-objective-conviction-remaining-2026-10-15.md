@@ -229,7 +229,14 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
   `state_dir/palw-tir-public-custodian.v1` に journal（tmp→rename）し、再起動後は再準備なしに Ready を再投稿できる。accepted state を読む
   consensus API `palw_tir_public_read_v1`（fence 未満は `Ok(false)`、`api/mod.rs`・`consensus/mod.rs`・`processor/palw.rs`・`session.rs`）を追加。
   **未**: 1 slice ごとに 1 carrier の往復が要り、固定 preparation 期限内に最大 profile で完走することは未実測。seat が元 capture を保持して
-  いない場合は grant しない（責任を負わない側に倒れる）。owner の demand に prepared capture から応答する responder（Begin/Part/Finish）は未接続。
+  いない場合は grant しない（責任を負わない側に倒れる）。
+  **demand responder を追加（ソースのみ・未検証、2026-10-16）**: `tir_public_responder_tick_v1`（同 module、custodian tick の直後）。accepted
+  duty index `staged_tir_duties_after_v1` が示す自分の未回答 slot（producer と grant 済み seat）ごとに、journal の Ready descriptor で sealed
+  prepared capture を再オープンし（`prepared_descriptor_v1` が Ready と一致することを確認）、原 source で decode・認証してから
+  Begin → 16 KiB Part → Finish を 1 move ずつ court queue（round `u32::MAX − 27`、due = demand の `respond_until − 1`）に載せる。進捗は
+  accepted slot（`accepted_offset`/`finished`）そのもので、再起動後は同じ capture から同じ bytes を再生成して accepted offset から再開する。
+  予算は native の response span・move 数・body 上限（fold が強制）と、同時 4 demand・body ごとの host-ledger 予約。WorkDebit permit は
+  consensus が Begin/Part/Finish に要求しないので使わない。**未**: 応答 clock 内完了の最大 profile 実測（carrier は node 全体で 1 本ずつ）。
 - [ ] whole-job V2に加え、実際に有効なV3/V4等のtyped receipt／grantを、元のsegment／shard署名domainのまま接続する。未対応入口の拒否を「全receipt対応」と数えない。
   — **blocked**: V3 の supplementary credit（`credit_supplementary_receipts_v3`）は `ReceiptLicensed` を要求する一方、frame の grant は licence
   前に要る。licence 前の typed credit door は新しい金銭規則で判断が要る。V4 shard receipt は RFC-0006 の shard record 経由。現状は frame の claim に
@@ -254,8 +261,15 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
   `palw_tir_public_conviction_preflight_v1`、次 DAA で評価し builder は破棄）で受理を確認し、holds・責任者・既に有罪・exit hold 喪失など
   accepted state で分かる拒否には rent を払わない。queue は round `u32::MAX − 26`（claim ごと 1 件、due = `collect_until − 1`、
   `COURT_MOVE_REPLAN_DAA` 後に再送、最大 3 回）。restart journal は `state_dir/palw-tir-public-filer.v1`（最大 16 件、tmp→rename、読めない
-  journal は退避）。**未**: finding の生産者（outside owner の acquisition 駆動 Open→Demand→Collect と、arithmetic scheduler の局所化）が
-  panel loop から未接続。DA の Open は owner 規則上 drawn seat 不可のまま（外部 bond が DA 終局に到達できる）。
+  journal は退避）。
+  **finding の生産者を追加（ソースのみ・未検証、2026-10-16）**: `kaspad/src/palw_tir_public_owner.rs`（panel loop で filer の直前）。frame を
+  accepted index（`staged_tir_frames_after_v1`）で巡回し、liable でも drawn でもない bond が、model を持ち prompt ids が state に残る
+  （`fp_claim_prompt_ids_v1`）frame を独立 replay（`open_tir_own_step_source_v1`）。一致なら何もしない。不一致なら Open（自分の rent+
+  deposit）→ Demand を 1 turn ずつ → 回答は rooted chunk から再構成・再認証（`palw_tir_public_finished_material_v1`）→ step root 不一致は
+  `next_public_from_source_v1`（StepNode frontier）で leaf まで局所化し、public sparse cone builder の Need に応じて StepLeaf/StepRun を
+  demand して primitive を組み、output root 不一致・stop 違反は完全 IDs（`palw_tir_public_output_contradiction_v1`）で判定 → finding を
+  `queue_finding_v1` へ。応答期限を過ぎた未回答は Collect（DA default）。queue は round `u32::MAX − 28`。**未**: steps と output が一致し
+  trace だけ異なる場合（selection）の局所化、prompt ids が state に無い class の replay。DA の Open は owner 規則上 drawn seat 不可のまま。
 - [ ] own-modelで得た不一致と、元claimの認証済みmaterialを結び付け、producerの秘密capture・秘密checkpoint・秘密状態の注入を排除する。
   — **実装（ソースのみ・未検証）**: 証拠は元 root への opening と ID の EOF 認証のみで裁定し、program は state の登録値を native に埋める
   （carried program は拒否）。`adjudicate_original_v1`/`adjudicate_original_output_v1`（`palw_tir_objective_v1.rs:251`/`:103`）。
@@ -303,7 +317,11 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
   `collected`/`defaulted` で同じ default の再 collect を拒否、reorg は journal。liable 以外は課金しない（E2E ソースで検査）。
 - [ ] sourceが出ない場合でも、他のPanelの署名や多数決なしで、1人のpublic bonded verifierが客観的DA終局へ到達できるようにする。
   — **実装（Codex＋E2E ソース、未検証）**: 外部 bond 1 つが Open/Demand/Collect または PreparationCollect で終局（E2E ソース `:1220` で
-  PreparationDefault を外部 1 bond が徴収）。
+  PreparationDefault を外部 1 bond が徴収）。2026-10-16 追加の E2E ソース: `g14_an_honest_custodian_answers_in_time_and_is_not_slashed`
+  （producer が Ready → 外部 owner の Open/Demand に Begin/Part/Finish で期限内に回答 → 期限後の Collect は拒否され担保・claim は無傷。対照
+  として次の demand に沈黙すると Collect で徴収）、`g14_an_outsider_detects_a_fault_and_its_filed_finding_convicts_and_slashes`（偽装 leaf
+  を外部 owner が自分の acquisition で取得し、rooted chunk から再認証した回答と自前 replay の不一致を検出、同じ leaf の cone primitive が
+  filer の dry run を通り filing が有罪・slash まで到達）。
 
 ### R6. 裁定結果をclaim・ブロック生成・報酬へ反映する
 

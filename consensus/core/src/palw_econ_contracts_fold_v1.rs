@@ -507,12 +507,27 @@ pub(super) fn tick_model_verification_gate_v1(
                     use crate::palw_settlement_once_v1::{
                         PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
                     };
-                    let once = builder.settle_once_v1(
+                    // RFC08-2: a reward drawn at the claim's Final and held by the gate — no new R draw; paid at once now.
+                    let claim = Hash64::from_bytes(row.claim);
+                    let final_daa = builder.state.claims.get(&claim).and_then(|c| match c.phase {
+                        PalwClaimPhaseV2::Final { final_daa } => Some(final_daa),
+                        _ => None,
+                    });
+                    let once = builder.settle_once_liable_v1(
                         now,
                         PalwSettlementObligationV1::of(PalwSettlementLegV1::GateDeferredRelease, row.claim),
                         PalwSettlementConsumerV1::VerificationGate,
                         row.amount,
                         PalwSettlementDebitV1::Held { amount: row.amount },
+                        super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::V2Claim {
+                            claim,
+                            final_daa,
+                            horizon: None,
+                            draw: 0,
+                            paid_now: row.amount,
+                            exported_before: None,
+                            vest_until: None,
+                        },
                     )?;
                     if once.pays() {
                         builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.payload, amount: row.amount }))?;
@@ -589,6 +604,8 @@ pub(super) fn consent_horizon_extension_v1(
     let id = terms.id();
     let key = palw_horizon_extension_key_v1(&id);
     let claim_hash = Hash64::from_bytes(terms.claim);
+    // RFC-0006 (RFC06-1): the route rows copy below is admitted first.
+    super::palw_kernel_route_fold_v1::reserve_route_rows_copy_v1(builder)?;
     let (mut row, before, ledger) = {
         let route = builder.state.kernel_route.as_ref().ok_or_else(|| refuse("the kernel route is missing"))?;
         if terms.network != route.header.policy.network_domain {

@@ -324,7 +324,7 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                 if claim.rebound_daa.is_none() {
                     // ADR-0124 Decision 3: the first panel's seats leave duty with their exposure
                     // — the redraw deals different seats, who go on duty when it binds.
-                    builder.cancel_panel_recipients_v1(claim_id);
+                    builder.cancel_panel_recipients_v1(claim_id)?;
                     builder.release_seat_duties(&claim_id)?;
                     let mut revived = claim.clone();
                     revived.phase = PalwClaimPhaseV2::Provisional;

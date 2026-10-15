@@ -169,8 +169,12 @@ pub fn gdn_refutation_from_capture_v2(
         Some(index) => {
             let (leaf, chunks) = checkpoint(index).ok_or_else(|| evidence("the capture lacks the predecessor checkpoint"))?;
             let opening = leg::step_opening_capped_v1(capture.checkpoint_leaf_hashes, u64::from(index), capture.max_leaves)?;
-            let selected =
-                gdn_selected_delta_chunks_v2(profile, start.first_position, layer, if sliced { Some(coord.tile_index) } else { None })?;
+            let selected = gdn_selected_delta_chunks_v2(
+                profile,
+                start.first_position,
+                layer,
+                if sliced { Some(coord.tile_index) } else { None },
+            )?;
             let mut witnesses = Vec::with_capacity(selected.len());
             for flat in selected {
                 witnesses.push(gdn_chunk_witness_v2(profile, start.first_position, &chunks, flat)?);

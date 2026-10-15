@@ -5,7 +5,8 @@
 //! EXEC root split and B/R/F budget draw), a kernel claim's GAP-5 escrow reward (the closing kernel tick, a kernel object arm, the
 //! paid-claim Final projection's settlement batch and the EXEC kernel-fee route all apply the same `PayJobEscrow`/`FinalReward`
 //! pair), a verification-gate deferral release, a SecurityCertified held-reward release, an EXEC leg's maturity, a vesting move,
-//! and the monetary-material funding/fee/default legs. Each consumer has its OWN guard today (a phase, a removed escrow row, a
+//! the monetary-material funding/fee/default legs, a verifier's drawn-slot check fee, and each receipt-spend quantum (free-prompt or
+//! native mining). Each consumer has its OWN guard today (a phase, a removed escrow row, a
 //! `paid` flag, a deleted deferral row) — none of them sees the others.
 //!
 //! This registry makes double settlement impossible by construction: every pay point first asks
@@ -57,6 +58,38 @@ pub enum PalwSettlementLegV1 {
     MaterialProviderFee = 8,
     /// A material provider's default collateral charge. Subject: the material root. Party: the provider (kernel id).
     MaterialProviderDefault = 9,
+    /// A verifier's drawn-slot check fee (M\*-49, `palw_verifier_pay_v1`) paid out of the poster's check-fee escrow — the kernel
+    /// batch's `PayJobEscrow`/`ReleaseJobEscrow`/`FinalReward`/`CheckFeePaid` quad. Subject: the kernel claim. Party: the verifier
+    /// (kernel id). Ordinal: the slot's occurrence among that verifier's slots of the claim (the kernel pays every unpaid slot of one
+    /// verifier in one batch, so the occurrence order IS the slot order; a later batch naming the same `(claim, verifier, 0)` again
+    /// is refused — fail closed, never a second payment). Past the fence this marker, not the kernel's per-slot `paid` flag, is
+    /// the consensus guard.
+    VerifierCheckFee = 10,
+    /// One free-prompt receipt spend: the worker share the coinbase pays the receipt block (and the R/B/F draw that funds it).
+    /// Subject: the claim. Ordinal: the quantum index.
+    ReceiptSpend = 11,
+    /// One native mining receipt block (`PNR9`): the same worker share for a native receipt quantum. Subject: the receipt id.
+    /// Ordinal: the quantum index.
+    NativeReceiptSpend = 12,
+    /// A commit-reveal reporter award closed at its reveal window (the native monetary binding or the legacy reward row,
+    /// whichever path names it). Subject: the offence key.
+    ReporterAward = 13,
+    /// One redeemed tranche of a funded reporter award (the bond budget's exact physical payout rows). Subject: the award id.
+    /// Ordinal: the award's progress (R already redeemed) before this tranche.
+    ReporterAwardTranche = 14,
+    /// An audit answer's pay from the panel reserve (at the answer, or at the row's sweep once it stood). Subject: the audited
+    /// claim. Party: the auditor (kernel id).
+    MeshAuditPay = 15,
+    /// A trap's bounty to an auditor it caught answering honestly, from the panel reserve. Subject: the audited claim. Party: the
+    /// auditor (kernel id).
+    MeshTrapBounty = 16,
+    /// One credit to the improvement earnings ledger. Subject: the source row's digest
+    /// ([`palw_settlement_subject_v1`]: a refunded hold, an evaluation claim, an S1 key or artifact, a grant, a dissolved line).
+    /// Party: the credited bond (kernel id). Ordinal: the role, or a grant tranche's vested target.
+    ImprovementEarning = 17,
+    /// A paid beacon source's once-only fee promise (`PaySourceFeeEscrow`). Subject: the fee context. Party: the promised
+    /// producer (kernel id).
+    SourceFeePromise = 18,
 }
 
 /// Which consumer settled a leg (audit only; never part of the obligation id).
@@ -73,6 +106,16 @@ pub enum PalwSettlementConsumerV1 {
     ExecLegMaturity = 7,
     VestingMaturity = 8,
     MonetaryMaterial = 9,
+    /// A receipt block's own quantum (free-prompt or native mining).
+    ReceiptBlock = 10,
+    /// The reporter reveal sweep (step 2).
+    ReporterReveal = 11,
+    /// The bond budget's clock (step 1f): redeemed reporter tranches.
+    BondBudgetTick = 12,
+    /// The audit mesh (an answer, a trap reveal, the sweep).
+    AuditMesh = 13,
+    /// The improvement pool (refunds, evaluation fees, S1 awards, grant vesting, a dissolution).
+    ImprovementPool = 14,
 }
 
 /// **The real debit a leg is paid from** (the journal's source side). A payment is never larger than its debit.
@@ -109,6 +152,21 @@ pub struct PalwSettlementObligationV1 {
     pub subject: [u8; 64],
     pub party: [u8; 64],
     pub ordinal: u64,
+}
+
+/// **A subject digest for a leg whose source row has a composite key** (data identity only, PRINCIPLES §8): a domain-keyed
+/// BLAKE2b-512 over a tag and its length-prefixed parts, so no two sources' encodings collide.
+pub fn palw_settlement_subject_v1(tag: &[u8], parts: &[&[u8]]) -> [u8; 64] {
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/settlement-once/subject/v1").to_state();
+    state.update(&(tag.len() as u64).to_le_bytes());
+    state.update(tag);
+    for part in parts {
+        state.update(&(part.len() as u64).to_le_bytes());
+        state.update(part);
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    out
 }
 
 impl PalwSettlementObligationV1 {
@@ -174,6 +232,15 @@ impl Params {
         let Some(at) = self.palw_settlement_once_v1.filter(|at| *at != ForkActivation::never()) else { return Ok(()) };
         if !self.palw_probabilistic_constraints_v1.is_some_and(|k| k != ForkActivation::never() && k.daa_score() <= at.daa_score()) {
             return Err(PalwModeV2Error::Invalid("palw_settlement_once_v1 requires the kernel route fence at or below it"));
+        }
+        // RFC08-2: the combined liability predicate reads the ADR-0176 reservation rows and X3's hard deadline of every claim
+        // admitted under it — both fences must be in force no later than this one, or every new claim's terms are unsourced.
+        let at_or_below = |activation: ForkActivation| activation != ForkActivation::never() && activation.daa_score() <= at.daa_score();
+        if !self.palw_bond_budget_v1.as_ref().is_some_and(|f| at_or_below(f.activation)) {
+            return Err(PalwModeV2Error::Invalid("palw_settlement_once_v1 requires the ADR-0176 bond budget fence at or below it"));
+        }
+        if !self.palw_claim_hard_deadline_v1.as_ref().is_some_and(|f| at_or_below(f.activation)) {
+            return Err(PalwModeV2Error::Invalid("palw_settlement_once_v1 requires the X3 hard-deadline fence at or below it"));
         }
         // Cross-consumer settlement, reorg and restore controls are evidence: arming needs a pinned measured-value record and no
         // open blocker (`palw_rfc0608_measured_v1`; records EMPTY: dormant). The fence has no policy, so the record pins its

@@ -383,7 +383,8 @@ fn lapse_if_uncovered(
         && transferred
     {
         let mut ledger = load_ledger(builder, ctx)?;
-        let before = ledger.to_rows();
+        // RFC-0006 (RFC06-1): the loaded rows, admitted (exactly `ledger.to_rows()` straight after the load).
+        let before = super::palw_kernel_route_fold_v1::loaded_rows(builder, &ledger)?;
         // Refused only for a claim that is not provider-liable, which a transferred one always is: nothing to do then.
         if let Ok(events) = ledger.provider_lapse_reserved_v1(&claim.as_bytes()).map_err(PalwStateV2Error::NativeResource)? {
             apply_settlements(builder, &events, false, ctx.daa_score)?;

@@ -265,6 +265,12 @@ pub fn palw_bound_router_slot_v2(profile: &PalwShapeProfileV3, row: &PalwRouterB
     first.checked_add(u32::from(binding.router))
 }
 
+/// **The table-relative index of the router `row` binds to `reader` of the template tagged `table`** — `None` where the row does
+/// not name the reader. The admission re-derivation prices the routing appendix from this router, never from a table-wide guess.
+pub fn palw_bound_router_index_v2(row: &PalwRouterBindingRowV2, table: u8, reader: u16) -> Option<u16> {
+    row.readers.iter().find(|b| b.table == table && b.reader == reader).map(|b| b.router)
+}
+
 /// The aux 139 key of a class's row.
 pub fn palw_router_binding_key_v2(class_id: &Hash64) -> Vec<u8> {
     class_id.as_byte_slice().to_vec()

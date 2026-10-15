@@ -83,8 +83,7 @@ fn transition_fixture(forge: bool) -> PalwGdnTransitionRefutationV2 {
         state_chunk_count: chunks.len() as u32,
         state_chunks_root: leg::state_chunks_root_v1(&hashes).unwrap(),
     };
-    let leaf_hash =
-        leg::checkpoint_leaf_hash_v2(&context_hash, &b.checkpoint_profile.profile_hash(), &b.state_chunk_map_id, &leaf);
+    let leaf_hash = leg::checkpoint_leaf_hash_v2(&context_hash, &b.checkpoint_profile.profile_hash(), &b.state_chunk_map_id, &leaf);
     let opening = step_opening_v1(&[leaf_hash], 0).unwrap();
     b.checkpoint_count = 1;
     b.checkpoint_merkle_root = leg::step_opening_root_capped_v1(1, &opening, MAX).unwrap();
@@ -103,7 +102,13 @@ fn transition_fixture(forge: bool) -> PalwGdnTransitionRefutationV2 {
 }
 
 fn check(r: &PalwGdnTransitionRefutationV2) -> Result<PalwGdnCheckpointVerdictV2, PalwGdnCourtErrorV2> {
-    check_gdn_transition_refutation_v2(r, r.binding.committed_execution_root, r.binding.shape_profile.shape_profile_id(), &PalwNoWeightsV1, MAX)
+    check_gdn_transition_refutation_v2(
+        r,
+        r.binding.committed_execution_root,
+        r.binding.shape_profile.shape_profile_id(),
+        &PalwNoWeightsV1,
+        MAX,
+    )
 }
 
 /// **Honest long-versus-anchored parity at the checkpoint itself**: an honest first checkpoint IS the genesis replay over its window
@@ -170,7 +175,12 @@ fn a_checkpoint_whose_count_is_not_the_layout_is_a_shape_fault() {
     let mut leaf = r.accused.leaf.clone();
     leaf.state_chunk_count += 1;
     let context_hash = r.binding.job_context.context_hash();
-    let leaf_hash = leg::checkpoint_leaf_hash_v2(&context_hash, &r.binding.checkpoint_profile.profile_hash(), &r.binding.state_chunk_map_id, &leaf);
+    let leaf_hash = leg::checkpoint_leaf_hash_v2(
+        &context_hash,
+        &r.binding.checkpoint_profile.profile_hash(),
+        &r.binding.state_chunk_map_id,
+        &leaf,
+    );
     let opening = step_opening_v1(&[leaf_hash], 0).unwrap();
     r.binding.checkpoint_merkle_root = leg::step_opening_root_capped_v1(1, &opening, MAX).unwrap();
     fixtures::rebind_committed_root(&mut r.binding);
@@ -193,7 +203,15 @@ fn the_conv_window_terminal_refuses_a_layer_without_a_q36_convolution() {
         accused: r.accused.clone(),
         inputs: Vec::new(),
     };
-    assert!(check_gdn_conv_window_refutation_v2(&conv, conv.binding.committed_execution_root, conv.binding.shape_profile.shape_profile_id(), MAX).is_err());
+    assert!(
+        check_gdn_conv_window_refutation_v2(
+            &conv,
+            conv.binding.committed_execution_root,
+            conv.binding.shape_profile.shape_profile_id(),
+            MAX
+        )
+        .is_err()
+    );
 }
 
 /// **Flags-off historical bytes**: the v2 count helper answers nothing for every historical map the legacy dispatcher owns, so the
@@ -213,5 +231,48 @@ fn the_v2_checkpoint_count_reads_only_the_maps_consumer_v2_owns() {
     ] {
         p.state_chunk_map_id = map;
         assert_eq!(super::super::gdn_checkpoint_chunk_count_v2(&p, 3), None, "{map}");
+    }
+}
+
+/// **The held route, consensus half**: the demands are exactly the accused witness's chunks, as held-DA `StateChunk` units of the
+/// accused checkpoint; a witness rebuilt from held-DA answers carrying the producer's bytes and paths is the assembled witness, and
+/// the accusation built on it convicts identically. Answers that are short, of another unit, or under two different checkpoint
+/// leaves are refused.
+#[test]
+fn the_held_da_route_rebuilds_the_same_transition_accusation() {
+    use crate::palw_attn_court_v1::{PalwAttnCheckpointAnchorV1, PalwAttnChunkOpeningV1};
+    use crate::palw_held_da_v1::{PalwHeldDisclosureV1, PalwHeldMissingV1};
+    let r = transition_fixture(true);
+    let demands = gdn_transition_demands_v2(&r.binding, GDN_SLOT, 0, 0).expect("the transition's units");
+    assert_eq!(demands.len(), r.accused.chunks.len());
+    for (d, c) in demands.iter().zip(&r.accused.chunks) {
+        assert_eq!(*d, PalwHeldMissingV1::StateChunk { checkpoint: 0, chunk: c.chunk_index });
+    }
+    let anchor = PalwAttnCheckpointAnchorV1 { leaf: r.accused.leaf.clone(), opening: r.accused.opening.clone() };
+    let answers: Vec<PalwHeldDisclosureV1> = r
+        .accused
+        .chunks
+        .iter()
+        .map(|c| PalwHeldDisclosureV1::StateChunk {
+            anchor: anchor.clone(),
+            chunk: PalwAttnChunkOpeningV1 { chunk_index: c.chunk_index, chunk_bytes: c.bytes.clone(), siblings: c.siblings.clone() },
+        })
+        .collect();
+    let rebuilt = gdn_checkpoint_witness_from_disclosures_v2(&demands, &answers).expect("the answers rebuild the witness");
+    assert_eq!(rebuilt, r.accused);
+    let mut via = r.clone();
+    via.accused = rebuilt;
+    assert_eq!(check(&via).expect("convicts").mismatch, check(&r).expect("convicts").mismatch);
+    // Refusals.
+    assert!(gdn_checkpoint_witness_from_disclosures_v2(&demands[..demands.len() - 1], &answers).is_err(), "one answer per unit");
+    let mut other_unit = demands.clone();
+    other_unit[0] = PalwHeldMissingV1::StateChunk { checkpoint: 0, chunk: u32::MAX };
+    assert!(gdn_checkpoint_witness_from_disclosures_v2(&other_unit, &answers).is_err(), "an answer of another unit");
+    if answers.len() > 1 {
+        let mut split = answers.clone();
+        if let PalwHeldDisclosureV1::StateChunk { anchor, .. } = &mut split[1] {
+            anchor.leaf.state_chunk_count += 1;
+        }
+        assert!(gdn_checkpoint_witness_from_disclosures_v2(&demands, &split).is_err(), "answers under two different leaves");
     }
 }

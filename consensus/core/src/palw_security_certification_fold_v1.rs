@@ -324,13 +324,27 @@ fn credit_certified_v1(
         use crate::palw_settlement_once_v1::{
             PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
         };
+        // RFC08-2: the issuance reward drawn at the claim's Final and held for certification — no new R draw; named at once now.
+        let final_daa = match claim.phase {
+            PalwClaimPhaseV2::Final { final_daa } => Some(final_daa),
+            _ => None,
+        };
         builder
-            .settle_once_v1(
+            .settle_once_liable_v1(
                 now,
                 PalwSettlementObligationV1::of(PalwSettlementLegV1::CertificationRelease, claim_id.as_bytes()),
                 PalwSettlementConsumerV1::SecurityCertification,
                 row.held_reward,
                 PalwSettlementDebitV1::Held { amount: row.held_reward },
+                super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::V2Claim {
+                    claim: *claim_id,
+                    final_daa,
+                    horizon: None,
+                    draw: 0,
+                    paid_now: row.held_reward,
+                    exported_before: None,
+                    vest_until: None,
+                },
             )?
             .pays()
     };

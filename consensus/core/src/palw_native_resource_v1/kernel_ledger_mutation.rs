@@ -4,21 +4,44 @@
 //! to the ledger's OWN ticket, which lives exactly as long as the ledger value (the fold drops it after `flush`, whose row writes
 //! are separately admitted by the transition's writers).
 //!
-//! What is NOT derived here (explicit, never implied): `KernelLedgerV1::apply_object`/`tick` have dozens of arms; their new
-//! memberships are bounded by the applied object's own typed membership count plus the structural ceiling
-//! [`PALW_KERNEL_LEDGER_APPLY_MEMBERSHIP_CEILING_V1`], which is NOT an audited per-arm count. It must be replaced by one before
-//! native capacity tracking is armed anywhere (tracking is off on every preset, so no consensus value depends on it).
+//! `KernelLedgerV1::apply_object`/`tick` have dozens of arms. RFC06-1 bounds them without a per-arm table (explicit, never
+//! implied):
+//!
+//! * **events — verified exactly.** The admitted events (the object's own memberships, or every entry the tick visits, times
+//!   [`PALW_KERNEL_LEDGER_EVENTS_PER_ROW_CEILING_V1`]) are compared with the events the call actually returned; a breach is a
+//!   local capacity refusal of the transition (`NativeCoverageV1`), never a skipped event.
+//! * **memberships — a structural ceiling.** One object arm inserts at most one row into each of the ledger's top-level
+//!   collections beyond the object's own nested memberships (33 top-level collections plus the OPV/typed sub-ledgers' maps:
+//!   [`PALW_KERNEL_LEDGER_APPLY_MEMBERSHIP_CEILING_V1`] = 64 covers both); a tick inserts at most one row per entry it visits (a
+//!   forfeited seal per expired seal, a held share or draw per claim, a served-demand bond per demand) plus that ceiling. The
+//!   flush that follows admits its row scratch from the ledger's admitted memory, so a membership breach also surfaces as the
+//!   flush's own admission bound.
+//!
+//! Both are named constants that bind ONLY while native capacity tracking is armed (a local configuration, off on every preset);
+//! no consensus value, root or verdict depends on them.
 use super::*;
 use misaka_palw_kernel::ledger::{BlockBudgetV1, LedgerEventV1};
 use misaka_palw_kernel::route::{AuthV1, KernelRouteObjectV1};
 use std::mem::size_of;
 
-/// **UNKNOWN — structural ceiling, not an audited count.** New ledger memberships one `apply_object` or `tick` may create beyond
-/// the applied object's own nested memberships (one per top-level ledger collection, rounded up). Local capacity only.
+/// **Structural membership ceiling (RFC06-1, local capacity only; binds only while native tracking is armed).** New ledger
+/// memberships one `apply_object` or `tick` may create beyond the applied object's own nested memberships (a tick also adds one per
+/// entry it visits): at least one for every top-level ledger collection (33) and every OPV/typed sub-ledger map, rounded up.
 pub const PALW_KERNEL_LEDGER_APPLY_MEMBERSHIP_CEILING_V1: u64 = 64;
-/// **UNKNOWN — structural ceiling, not an audited count.** Events one `apply_object`/`tick` step emits per live claim or demand it
-/// visits (a Final's escrow triple plus its lifecycle event). Local capacity only.
+/// **Events per visited entry (RFC06-1, local capacity only; verified exactly after the call).** The widest per-entry emission is a
+/// paid drawn slot's quad (`PayJobEscrow`, `ReleaseJobEscrow`, `FinalReward`, `CheckFeePaid`) and a Final's escrow triple plus its
+/// lifecycle event: 4.
 pub const PALW_KERNEL_LEDGER_EVENTS_PER_ROW_CEILING_V1: u64 = 4;
+
+/// RFC06-1: the events a call returned against the events it was admitted for (a breach refuses the transition locally).
+fn check_events_v1(admitted: Option<u64>, returned: usize, path: &str) -> Result<(), NativeCoverageV1> {
+    match admitted {
+        Some(admitted) if returned as u64 > admitted => {
+            Err(NativeCoverageV1::unsupported::<LedgerEventV1>(path, "the call returned more events than it was admitted for"))
+        }
+        _ => Ok(()),
+    }
+}
 
 fn enabled() -> bool {
     native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1()
@@ -165,6 +188,7 @@ impl ReservedKernelLedgerV1 {
         object: &KernelRouteObjectV1,
         auth: &AuthV1,
     ) -> Result<Result<Vec<LedgerEventV1>, misaka_palw_kernel::route::KernelRefusalV1>, NativeCoverageV1> {
+        let mut admitted_events = None;
         if self.tracking_v1() {
             let path = "kernel ledger apply_object";
             let heap = object.native_heap_v1(path).scale::<KernelRouteObjectV1>(2, path);
@@ -173,25 +197,55 @@ impl ReservedKernelLedgerV1 {
                 .native_members_v1()
                 .and_then(|m| m.checked_add(PALW_KERNEL_LEDGER_APPLY_MEMBERSHIP_CEILING_V1))
                 .ok_or_else(|| NativeCoverageV1::overflow::<KernelRouteObjectV1>("apply_object memberships"))?;
+            let events = members.saturating_mul(PALW_KERNEL_LEDGER_EVENTS_PER_ROW_CEILING_V1);
             let mut q = TirNativeRequestsV1::new();
             q.add_v1(heap)?;
             q.add_v1(TirNativeRequestsV1::product_v1(members, widest_member_bytes_v1())?)?;
-            q.vec_v1::<LedgerEventV1>(members.saturating_mul(PALW_KERNEL_LEDGER_EVENTS_PER_ROW_CEILING_V1))?;
+            q.vec_v1::<LedgerEventV1>(events)?;
             self.grow_v1(q.bytes_v1())?;
+            admitted_events = Some(events);
         }
-        Ok(self.ledger.apply_object(object, auth))
+        let out = self.ledger.apply_object(object, auth);
+        if let Ok(events) = &out {
+            check_events_v1(admitted_events, events.len(), "kernel ledger apply_object events")?;
+        }
+        Ok(out)
     }
 
     /// **The closing tick**: events for every live claim and demand it may visit, and the structural membership ceiling.
     pub fn tick_reserved_v1(&mut self) -> Result<Vec<LedgerEventV1>, NativeCoverageV1> {
+        let mut admitted_events = None;
         if self.tracking_v1() {
-            let rows = (self.ledger.claims.len() as u64).saturating_add(self.ledger.demands.len() as u64);
+            // Every entry the tick visits: claims, demands and their demanders, seals, job escrows, verifier-pay rows and every
+            // drawn slot (a paid slot emits its own quad).
+            let l = &self.ledger;
+            let demanders = l.demands.values().fold(0u64, |n, d| n.saturating_add(d.demanders.len() as u64));
+            let slots = l.verifier_pay.values().fold(0u64, |n, row| match row {
+                misaka_palw_kernel::verifier_pay::VerifierPayRowV1::Draw { slots, .. } => n.saturating_add(slots.len() as u64),
+                _ => n,
+            });
+            let rows = [
+                l.claims.len() as u64,
+                l.demands.len() as u64,
+                demanders,
+                l.seals.len() as u64,
+                l.job_escrows.len() as u64,
+                l.verifier_pay.len() as u64,
+                slots,
+            ]
+            .into_iter()
+            .fold(0u64, u64::saturating_add);
+            let events = TirNativeRequestsV1::product_v1(rows, PALW_KERNEL_LEDGER_EVENTS_PER_ROW_CEILING_V1)?;
+            let members = rows.saturating_add(PALW_KERNEL_LEDGER_APPLY_MEMBERSHIP_CEILING_V1);
             let mut q = TirNativeRequestsV1::new();
-            q.vec_v1::<LedgerEventV1>(TirNativeRequestsV1::product_v1(rows, PALW_KERNEL_LEDGER_EVENTS_PER_ROW_CEILING_V1)?)?;
-            q.add_v1(TirNativeRequestsV1::product_v1(PALW_KERNEL_LEDGER_APPLY_MEMBERSHIP_CEILING_V1, widest_member_bytes_v1())?)?;
+            q.vec_v1::<LedgerEventV1>(events)?;
+            q.add_v1(TirNativeRequestsV1::product_v1(members, widest_member_bytes_v1())?)?;
             self.grow_v1(q.bytes_v1())?;
+            admitted_events = Some(events);
         }
-        Ok(self.ledger.tick())
+        let out = self.ledger.tick();
+        check_events_v1(admitted_events, out.len(), "kernel ledger tick events")?;
+        Ok(out)
     }
 
     /// A covered Panel tally: the one job pointer it may insert (`prepare_panel_tally_v1`) and its few events.

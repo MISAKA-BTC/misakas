@@ -736,7 +736,8 @@ pub fn base0_capture_geometry_v1(profile: &PalwShapeProfileV3, positions: u32) -
     // RFC-0006 consumer v2: the solo recurrence maps and the composed hybrid maps — the exact order the court's
     // `memory_v2::gdn_recurrence_section_v2` authenticates (attention half first, then the recurrence's solo enumeration).
     let declared = profile.state_chunk_map_id;
-    let solo = declared == map::gdn_state_chunk_map_id_v1() || declared == map::gdn_state_chunk_map_id_v2();
+    // The court's own solo predicate (gdn v1 / v2 / v3's key-head gather), so the executor and the court serve one set.
+    let solo = kaspa_consensus_core::palw_step_refute::memory_v2::palw_gdn_solo_map_v2(&declared);
     if solo || map::palw_map_is_hybrid_composed_v2(&declared) {
         let attn = if solo {
             map::PalwStateChunkGeometryV1 {

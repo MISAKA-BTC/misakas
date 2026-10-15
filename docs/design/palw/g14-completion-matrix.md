@@ -904,7 +904,7 @@ beside itself). `prepare_original_v1` still refuses a job tail and a flat-logits
 | C9 (OPVB) | Not scored here. |
 | C10 maximum profile / deadline | **Open**: no measured maximum; owner capacity is K_owner = 8 with a derived custodian-load bound (Lead default, pending user review; a colluder can pre-empt the slots); CPU of repeated signature checks not budgeted natively. |
 | Tests | `palw_tir_public_fold_v1.rs` `conviction_e2e_tests` (6 source tests, adding the staged witness and the fresh-node import continuation), `palw_tir_court.rs` selection door under the job's rule, `palw_tir_objective_v1.rs` stop rule, TFP1 history pledge round trip, `kaspad` custodian / filer journals and real ML-DSA signing. **Not run.** |
-| Blockers before arming | the custodians' demand responder (Begin/Part/Finish from the prepared capture — without it a granting seat or the producer can be defaulted), the finding producers for the filer, V3/V4 typed receipts (refused by name, Lead default), K_owner pre-emption (pending user review), flat-scheme and job-tail originals, measured maximum profile and deadlines (R7/R8), V1–V7. |
+| Blockers before arming | (2026-10-16: the custodians' demand responder and the outside owner's findings feed are now connected in source.) V3/V4 typed receipts (refused by name, Lead default), K_owner pre-emption (pending user review), flat-scheme and job-tail originals, selection-only (trace) disagreements not localized by the owner, replay needs the kept prompt ids, measured maximum profile and deadlines (R7/R8), V1–V7. |
 
 ## 3. Family matrices (milestone baseline)
 
@@ -1478,3 +1478,6 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
   own rule (sampling and V4); semantic stages admitted through a ClaimBundle contract installed beside the frame (TFP1 history pledge);
   split carriage of large witnesses (`ConvictionWitness`/`WitnessPart`, rooted `TirWitness` row); fresh-node import continuation test;
   K_owner; A-2 pins for 170/171 derived without a build. Source only; fence still recommended dormant.
+* 2026-10-16 — `integ/g14-remaining` (§2k): the custodians' demand responder (sealed prepared capture → Begin/Part/Finish inside
+  each demand's clock) and the outside owner's findings feed (replay → Open → Demand/Collect → localization → cone/output finding →
+  filer); E2E sources: honest custodian not slashed, outsider finding filed → convicted → slashed. Source only; fence dormant.

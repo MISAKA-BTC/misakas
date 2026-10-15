@@ -331,6 +331,19 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         Ok(Some(a))
     }
 
+    /// **The producer-signed absolute lifetime of a paid V2 claim** (RFC-0008 RFC08-2's hard-deadline source): the enrollment the
+    /// base index names, read structurally from the rows the enrollment fold validated when it wrote them — no ledger rebuild.
+    /// `None` for a claim with no paid V2 enrollment (or an index that does not name it exactly).
+    pub fn paid_claim_signed_lifetime_v2(&self, claim: &Digest) -> Option<misaka_palw_kernel::claim_paid_v2::PaidClaimLifetimeV2> {
+        let key = paid_claim_index_key_v3(PAID_CLAIM_BASE_INDEX_PREFIX_V3, claim);
+        let index = self.aux_row::<PalwPaidClaimIndexV3>(PAID_CLAIM_ENROLLMENTS_V2, &key)?;
+        if index.version != 3 || index.kind != PalwPaidClaimIndexKindV3::BaseClaim || index.owner != *claim {
+            return None;
+        }
+        let a: PalwPaidClaimAuthorityV2 = self.aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(&index.target).ok()?)?;
+        (a.enrollment.base_claim == *claim && a.context.id() == index.target).then_some(a.enrollment.lifetime)
+    }
+
     pub fn paid_claim_check_authority_v2(
         &self,
         context: &Digest,

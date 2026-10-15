@@ -949,12 +949,12 @@ fn close_unclaimed(
     // Fixed original beneficiary and principal only: public Close signers may
     // not redirect this queue or convert a payment attempt into new income.
     builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.requester_payout, amount: refund }))?;
-    builder.cancel_native_recipient_v1(Hash64::from_bytes(id), h.producer, 14);
-    builder.cancel_native_recipient_v1(Hash64::from_bytes(id), h.producer, 19);
+    builder.cancel_native_recipient_v1(Hash64::from_bytes(id), h.producer, 14)?;
+    builder.cancel_native_recipient_v1(Hash64::from_bytes(id), h.producer, 19)?;
     builder.bond_budget_close_v1(
         &Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"misaka-palw/native/stage-original-fixed-budget/v20", &id)),
         ctx.daa_score,
-    );
+    )?;
     let credit = NativeStagePrincipalRefundV14 {
         version: 14,
         job: id,

@@ -246,6 +246,9 @@ mod palw_security_certification_fold_v1;
 // checks and writes its exact obligation's marker in the same transition before any value moves.
 #[path = "palw_settlement_once_fold_v1.rs"]
 mod palw_settlement_once_fold_v1;
+/// RFC-0008 RFC08-2: the combined liability predicate wired into settlement and admission (dormant).
+#[path = "palw_settlement_liability_fold_v1.rs"]
+mod palw_settlement_liability_fold_v1;
 // RFC-0006 consumer v2 (object tag 244, kernel-route aux 139): the router binding declaration and the checkpoint / routed
 // accusations, past `palw_memory_routing_court_v2`.
 #[path = "palw_memory_routing_fold_v2.rs"]
@@ -12946,6 +12949,10 @@ struct TransitionBuilder<'a> {
     /// **RFC-0010: the certified epoch outputs this block's objects carried**, in acceptance order. Not state: the fold's V3 stage
     /// verifies each against the branch and drops those that do not verify (the block stands).
     panel_v3_beacons: Vec<misaka_palw_panel::BeaconProofV1>,
+    /// **RFC-0008 RFC08-2: the producer-signed lifetime of the paid V2 enrollment whose kernel commit is being applied** —
+    /// `(base claim, signed liability_until)`, set by the paid commit fold around its inner kernel commit only (the authority row
+    /// that carries it is written after that commit). Never state; `None` outside that one call.
+    paid_lifetime_admission_v1: Option<([u8; 64], u64)>,
 }
 
 /// **What the class gate counts as a class's claims in flight** (2026-09-24 DoS audit #11 and its
@@ -17957,6 +17964,28 @@ fn sweep_reward_reveals(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
                         why: "an award under the key is still waiting for step 3d",
                     });
                 }
+                // **RFC-0008 once-only settlement (RFC08-1; dormant `palw_settlement_once_v1`)**: the offence's award is named once
+                // across both its paths (the native monetary binding and the legacy reward row) and every consumer; a repeat names
+                // nothing and counts nothing. A reporter's slash-funded award stands behind no claim: the combined liability
+                // predicate does not bind it (by name). `Dormant` below the fence.
+                let once = {
+                    use crate::palw_settlement_once_v1::{
+                        PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+                    };
+                    builder.settle_once_liable_v1(
+                        ctx.daa_score,
+                        PalwSettlementObligationV1::of(PalwSettlementLegV1::ReporterAward, offence_key.as_bytes()),
+                        PalwSettlementConsumerV1::ReporterReveal,
+                        pending.amount,
+                        PalwSettlementDebitV1::Held { amount: pending.amount },
+                        palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim(
+                            "a reporter's slash-funded award stands behind no claim",
+                        ),
+                    )?
+                };
+                if !once.pays() {
+                    continue;
+                }
                 if !builder.award_native_reporter_v1(ctx.daa_score, offence_key, winner, pending.amount)? {
                     builder.write_reporter_reward(offence_key, Some(PalwPayoutV2 { payload: winner.payload, amount: pending.amount }))?;
                 }
@@ -19316,6 +19345,53 @@ fn apply_receipt_spend(
     }
     if spent.contains(&spend.quantum_index) {
         return Err(PalwStateV2Error::QuantumAlreadySpent { claim: claim_id, index: spend.quantum_index });
+    }
+    // **RFC-0008 once-only settlement (RFC08-1; dormant `palw_settlement_once_v1`)**: the quantum's worker share — the coinbase pays
+    // it whole for this block, out of this block's carve, and the budget draws its R/B/F below — settles once across every consumer,
+    // whatever the claim's own `spent` set says. The marker is checked and written here, before the draw; a repeat is refused (the
+    // spend is invalid, exactly as an already-spent quantum). `Dormant` below the fence: nothing is read or written.
+    {
+        use crate::palw_settlement_once_v1::{
+            PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+        };
+        let carve = builder.params.worker_carve_at(ctx.subsidy, builder.extras.escrow_carve);
+        let obligation = PalwSettlementObligationV1::with_party(
+            PalwSettlementLegV1::ReceiptSpend,
+            claim_id.as_bytes(),
+            [0; 64],
+            u64::from(spend.quantum_index),
+        );
+        // RFC08-2: the spend draws one carve of the commitment's R and exports it at once (the coinbase), within the PESG cap
+        // over what the commitment already exported (its consumed R).
+        let final_daa = match claim.phase {
+            PalwClaimPhaseV2::Final { final_daa } => Some(final_daa),
+            _ => None,
+        };
+        let once = builder.settle_once_liable_v1(
+            ctx.daa_score,
+            obligation,
+            PalwSettlementConsumerV1::ReceiptBlock,
+            carve,
+            PalwSettlementDebitV1::Issuance { carve },
+            palw_settlement_liability_fold_v1::PalwLegLiabilityV1::V2Claim {
+                claim: claim_id,
+                final_daa,
+                horizon: None,
+                draw: carve,
+                paid_now: carve,
+                exported_before: None,
+                vest_until: None,
+            },
+        )?;
+        match once {
+            palw_settlement_once_fold_v1::PalwSettleOnceV1::AlreadySettled(_) => {
+                return Err(PalwStateV2Error::QuantumAlreadySpent { claim: claim_id, index: spend.quantum_index });
+            }
+            palw_settlement_once_fold_v1::PalwSettleOnceV1::Refused(why) => {
+                return Err(palw_settlement_liability_fold_v1::liability_refused_v1(why));
+            }
+            _ => {}
+        }
     }
     // ADR-0148: a compute-era claim weighs one network quantum a spend and counts in the lane's
     // pooled census; a leaves-era claim weighs `pwu / quanta` and counts in its class's, as ever.

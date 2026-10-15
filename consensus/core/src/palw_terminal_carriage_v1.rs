@@ -287,6 +287,35 @@ pub fn palw_terminal_adjudicate_v1(
     sessions: crate::palw_offence_attribution_v1::PalwSessionRuleV1,
     sig: Option<crate::palw_offence_attribution_v1::PalwFalseValidSigCheckV1<'_>>,
 ) -> Result<Hash64, String> {
+    palw_terminal_adjudicate_v2(
+        state,
+        d,
+        evidence,
+        court_maximum,
+        fp_decode_rules,
+        rules,
+        sessions,
+        sig,
+        crate::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1::default(),
+    )
+}
+
+/// **RFC06-4: [`palw_terminal_adjudicate_v1`] on the blame path's one closure rule.** `mirrors` are the block's two heights
+/// (`PalwClosureMirrorsV1::of`). The terminal carriage never applied round 4's closure, so below `palw_memory_routing_court_v2`
+/// this is the V1 function byte for byte; past it kinds 3 and 4 filed through the carriage are judged under the same
+/// `MemoryRoutingV2` mode, with the claim's router binding, as the direct carrier, the fold, the claim gate and the court.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_terminal_adjudicate_v2(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    d: &PalwTerminalDeclarationV1,
+    evidence: &[u8],
+    court_maximum: u64,
+    fp_decode_rules: bool,
+    rules: crate::palw_offence_attribution_v1::PalwIdentityRulesV1,
+    sessions: crate::palw_offence_attribution_v1::PalwSessionRuleV1,
+    sig: Option<crate::palw_offence_attribution_v1::PalwFalseValidSigCheckV1<'_>>,
+    mirrors: crate::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1,
+) -> Result<Hash64, String> {
     use crate::palw_offence_attribution_v1 as a;
     d.check(court_maximum)?;
     if evidence.len() as u64 != d.total_bytes || crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != d.evidence_id {
@@ -302,7 +331,7 @@ pub fn palw_terminal_adjudicate_v1(
 
     let (claim, offence) = match d.kind {
         PalwOffenceKindV1::ExecutorRefuted => {
-            let f = a::palw_check_executor_refuted_at_v1_with_budget_v1(
+            let f = a::palw_check_executor_refuted_blame_v2(
                 state,
                 &d.accused,
                 evidence,
@@ -311,12 +340,14 @@ pub fn palw_terminal_adjudicate_v1(
                 rules,
                 sessions,
                 budget,
+                mirrors,
             )
             .map_err(|e| e.to_string())?;
             (f.target.claim_id, a::palw_executor_refuted_offence_id_v1(&d.accused.0, &f.target.claim_id))
         }
         PalwOffenceKindV1::PanelFalseValidV2 => {
-            let f = a::palw_check_panel_false_valid_at_v2_with_budget_v1(
+            // `round4 = false`: the carriage never applied round 4, so below consumer v2 this stays `Off`.
+            let f = a::palw_check_panel_false_valid_blame_v2(
                 state,
                 &d.accused,
                 evidence,
@@ -326,6 +357,8 @@ pub fn palw_terminal_adjudicate_v1(
                 sig,
                 sessions,
                 budget,
+                mirrors,
+                false,
             )
             .map_err(|e| e.to_string())?;
             (f.target.claim_id, a::palw_false_valid_offence_id_v2(&d.accused.0, &f.target.claim_id))

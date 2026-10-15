@@ -83,7 +83,7 @@ impl TransitionBuilder<'_> {
         id: Hash64,
         row: PalwPaidConsumerContractV1,
     ) -> Result<(), PalwStateV2Error> {
-        self.bond_budget_op(|budget, _, j| budget.put_consumer_contract_v1(id, Some(row), j))
+        self.bond_budget_op(super::PalwBudgetGrowthV1::point(), |budget, _, j| budget.put_consumer_contract_v1(id, Some(row), j))?
             .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("paid consumer engine missing".into()))?
             .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))
     }
@@ -100,7 +100,7 @@ impl TransitionBuilder<'_> {
         if self.state.paid_consumer_contract_v1(&id).is_none() {
             return Ok(());
         }
-        self.bond_budget_op(|budget, _, j| budget.put_consumer_contract_v1(id, None, j))
+        self.bond_budget_op(super::PalwBudgetGrowthV1::point(), |budget, _, j| budget.put_consumer_contract_v1(id, None, j))?
             .expect("contract has engine")
             .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))
     }
