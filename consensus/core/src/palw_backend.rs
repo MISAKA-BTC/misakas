@@ -41,6 +41,31 @@ pub trait PalwOriginalCaptureReaderV1: Send + Sync {
     fn read_v1(&self, offset: u64, length: u32) -> Result<Vec<u8>, String>;
 }
 
+/// Operational preparation reservation, not a native eligibility/fee quote.
+/// Includes the worst-case folded capture replay spool, even for a dense input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirPublicCaptureNeedV1 {
+    pub resident_ram_bytes: u64,
+    pub disk_bytes: u64,
+    pub maximum_prepare_io_bytes: u64,
+    pub maximum_replay_leaves: u64,
+    pub maximum_replay_positions: u64,
+    /// Prefix copying in the latest-state continuation (not a linear-time claim).
+    pub maximum_replay_id_words: u64,
+    /// Worst one-unit read-at work, separate from once-only preparation.
+    pub maximum_response_io_bytes: u64,
+    pub maximum_response_tree_hashes: u64,
+}
+
+pub trait PalwTirPublicCaptureReaderV1: Send {
+    /// None is bounded preparation in progress, never a DA or semantic verdict.
+    /// Caller additionally holds this exact request's native unit memory permit.
+    fn poll_v1(
+        &mut self,
+        request: &crate::palw_tir_public_source_v1::PalwTirPublicRequestV1,
+    ) -> Result<Option<crate::palw_tir_public_source_v1::PalwTirPublicResponseV1>, String>;
+}
+
 /// Bounded projection of original Flat public bytes. `None` means structural indexing is still
 /// in progress, not an answer or a verdict. Native EOF authentication remains mandatory.
 pub trait PalwFlatPublicSourceReaderV1: Send {
@@ -69,6 +94,68 @@ pub struct PalwTirReplayV1 {
     pub generated_ids: Vec<u32>,
     /// `tiled_logits_trace_root_v1` over the replay's own `post` logits rows and ids.
     pub full_logits_trace_root: Hash64,
+    /// Composite over this replay's own job, step tree and logits, never copied from the claim.
+    pub execution_root: Hash64,
+    /// Output commitment derived from this replay's generated IDs and job context.
+    pub output_root: Hash64,
+}
+
+/// Operational resources for one independent original-job TIR replay. The caller
+/// reserves RAM and disk BEFORE open; these are not a native admission certificate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirOwnStepSourceNeedV1 {
+    pub resident_ram_bytes: u64,
+    pub disk_bytes: u64,
+    pub leaf_count: u64,
+}
+
+/// The first unavailable credential read by the canonical cone evaluator.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwTirPublicConeNeedV1 {
+    StepPreimage { index: u64 },
+    StepOpening { index: u64 },
+    StepRange { first: u64, count: u64 },
+    Prompt { tile: Option<u32> },
+    DecodePin,
+    RegisteredArtifact,
+}
+
+#[derive(Clone, Debug)]
+pub enum PalwTirPublicConeProbeV1 {
+    Need(PalwTirPublicConeNeedV1),
+    Ready {
+        proof: crate::palw_court_v2::PalwCourtVerdictProofV2,
+        meter: crate::palw_tir_court_v1::PalwTirBuilderMeterV1,
+    },
+    /// A construction refusal, not an acquittal or a completed prosecution.
+    Refused {
+        reason: String,
+    },
+}
+
+/// Roots actually computed by the independent replay, never copied from the
+/// accused commitment. Header identity/context remain those of the original job.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwTirOwnStepSourceInfoV1 {
+    pub header: crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    pub generated_ids: Vec<u32>,
+    pub output_root: Hash64,
+    /// Only the original tiled scheme has a row-root Merkle tree.
+    pub rows_root: Option<Hash64>,
+}
+
+/// Disposable own computation used for search, not an authentication credential
+/// for accused inputs. Level zero nodes include the native indexed-leaf wrapper;
+/// leaf_hashes returns raw original leaf hashes. Every disk read is checked under
+/// this source's computed root. No method reads a producer capture.
+pub trait PalwTirOwnStepSourceV1: Send + Sync {
+    fn info_v1(&self) -> &PalwTirOwnStepSourceInfoV1;
+    fn node_v1(&self, level: u8, index: u64) -> Result<Hash64, String>;
+    /// Descend min(level,10) levels, at most 1024 entries, preserving odd promotion.
+    fn frontier_v1(&self, level: u8, index: u64) -> Result<Vec<Hash64>, String>;
+    fn leaf_hashes_v1(&self, first: u64, count: u32) -> Result<Vec<Hash64>, String>;
+    fn row_node_v1(&self, level: u8, index: u64) -> Result<Hash64, String>;
+    fn row_frontier_v1(&self, level: u8, index: u64) -> Result<Vec<Hash64>, String>;
 }
 
 /// The roots an attempt carries, and the bytes that answer for them.
@@ -517,6 +604,25 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this family has no bounded original Flat source responder".into())
     }
 
+    fn tir_public_capture_need_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _source_length: u64,
+    ) -> Result<PalwTirPublicCaptureNeedV1, String> {
+        Err("this family has no bounded original TIR capture reader".into())
+    }
+
+    /// Input must be the exact raw original capture range (FPC1 job scope checked
+    /// by the caller), never a remade answer or an unscoped producer state.
+    fn open_tir_public_capture_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _source: std::sync::Arc<dyn PalwOriginalCaptureReaderV1>,
+        _cache_directory: &std::path::Path,
+    ) -> Result<Box<dyn PalwTirPublicCaptureReaderV1>, String> {
+        Err("this family has no bounded original TIR capture reader".into())
+    }
+
     /// Open the original public Float32 rows/ids of a retained capture. No in-node backend retains
     /// f32 rows today (BASE-0 is `Int32`); a Float32 producer either implements this or writes the
     /// generic public sidecar ([`crate::palw_float_constraint_source_v1::write_float_public_sidecar_v1`]).
@@ -628,6 +734,89 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _prompt_token_ids: &[u32],
     ) -> Result<PalwTirReplayV1, String> {
         Err("this family has no TIR FP execution backend".into())
+    }
+
+    fn tir_own_step_source_need_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_token_ids: &[u32],
+    ) -> Result<PalwTirOwnStepSourceNeedV1, String> {
+        Err("this family has no independent TIR step source".into())
+    }
+
+    /// One full original-job replay, with bounded working RAM and a disposable
+    /// disk tree. Restart reruns the public computation, never trusts a disk cursor.
+    fn open_tir_own_step_source_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_token_ids: &[u32],
+        _cache_directory: &std::path::Path,
+    ) -> Result<std::sync::Arc<dyn PalwTirOwnStepSourceV1>, String> {
+        Err("this family has no independent TIR step source".into())
+    }
+
+    fn tir_logits_step_leaf_index_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _row: u32,
+        _lane: u64,
+    ) -> Result<u64, String> {
+        Err("this family has no original TIR logits step coordinate".into())
+    }
+
+    /// Build the existing objective TIR kernel's proof from authenticated PUBLIC
+    /// committed ranges and registered parameters. No producer capture/own-root
+    /// substitution. Missing operands remain unavailable, never an honest verdict.
+    fn build_tir_public_cone_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _prompt_token_ids: &[u32],
+        _trace: Option<&crate::palw_step_refute::PalwTiledDecodeTokensV1>,
+        _runs: &[crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        _leaf_index: u64,
+        _rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
+    ) -> Result<crate::palw_court_v2::PalwCourtVerdictProofV2, String> {
+        Err("this family has no public sparse TIR arithmetic builder".into())
+    }
+
+    /// The caller debits the ENTIRE allocation before EVERY probe, including
+    /// Need/Refused/error waves: the evaluator exposes a meter only on success.
+    /// Allocations must be cumulative under the original paid work/window.
+    /// copy_budget_bytes is the caller's held before-copy allocation, separate
+    /// from work. Copy/scratch refusal is Refused, never a new DA obligation.
+    /// Ready is a built proof, not the native verifier's verdict.
+    fn probe_tir_public_cone_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _prompt_token_ids: &[u32],
+        _trace: Option<&crate::palw_step_refute::PalwTiledDecodeTokensV1>,
+        _runs: &[crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        _leaf_index: u64,
+        _rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
+        _limits: crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+        _copy_budget_bytes: u64,
+    ) -> Result<PalwTirPublicConeProbeV1, String> {
+        Err("this family has no public sparse TIR dependency probe".into())
+    }
+
+    fn build_tir_public_cone_bounded_v1(
+        &self,
+        header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        prompt_token_ids: &[u32],
+        trace: Option<&crate::palw_step_refute::PalwTiledDecodeTokensV1>,
+        runs: &[crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        leaf_index: u64,
+        rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
+        limits: crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+        copy_budget_bytes: u64,
+    ) -> Result<(crate::palw_court_v2::PalwCourtVerdictProofV2, crate::palw_tir_court_v1::PalwTirBuilderMeterV1), String> {
+        match self.probe_tir_public_cone_v1(header, prompt_token_ids, trace, runs, leaf_index, rules, limits, copy_budget_bytes)? {
+            PalwTirPublicConeProbeV1::Ready { proof, meter } => Ok((proof, meter)),
+            PalwTirPublicConeProbeV1::Need(need) => Err(format!("public TIR dependency unavailable: {need:?}")),
+            PalwTirPublicConeProbeV1::Refused { reason } => Err(reason),
+        }
     }
 
     /// **One committed TIR step leaf** (the TIR prefix-state source behind

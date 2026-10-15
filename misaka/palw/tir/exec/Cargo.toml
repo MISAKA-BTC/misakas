@@ -29,6 +29,7 @@ libc = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
 # The node-side bisection prefix state is a keyed BLAKE2b-512 (as the legacy families' is).
 blake2b_simd = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
 # Only for `tir-exec-bench --legacy/--mirror`: the legacy A16 engine at the same geometry, the
 # comparison the Phase F plan names (F9).
 misaka-palw-base0 = { workspace = true, optional = true }
@@ -36,7 +37,7 @@ misaka-palw-base0 = { workspace = true, optional = true }
 [features]
 # The fused unit-row kernels on the GPU (macOS): bit-identical to the CPU kernels, behind a node flag.
 metal = []
-node = ["dep:kaspa-consensus-core", "dep:misaka-palw-tir-artifact", "dep:libc", "dep:borsh", "dep:blake2b_simd"]
+node = ["dep:kaspa-consensus-core", "dep:misaka-palw-tir-artifact", "dep:libc", "dep:borsh", "dep:blake2b_simd", "dep:tempfile"]
 legacy-bench = ["node", "dep:misaka-palw-base0"]
 
 # The Metal bridge is compiled by the build script on macOS (feature `metal`); a build script cannot be feature-gated, so the compiler

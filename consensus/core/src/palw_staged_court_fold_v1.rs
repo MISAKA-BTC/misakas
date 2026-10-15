@@ -942,7 +942,11 @@ pub(super) fn open(
         if bundle.is_none() {
             b.check_accuser_room(seed.reserver, u128::from(plan.deposit_sompi), "staged prefix court", ctx.daa_score)?;
         }
-        let funded = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or(PalwStateV2Error::Overflow("staged prefix funding"))?;
+        let funding_plan = if bundle.is_some() { extended_terms.plan } else { plan };
+        let funded = funding_plan
+            .rent_sompi
+            .checked_add(funding_plan.deposit_sompi)
+            .ok_or(PalwStateV2Error::Overflow("staged prefix funding"))?;
         let exits = vec![extended_terms.bond_exit_after_daa; contract.panel.len()];
         let encoded = borsh::to_vec(seed).map_err(|e| stage_refused(seed.claim, e.to_string()))?;
         let message = seed.signing_message();
@@ -969,21 +973,17 @@ pub(super) fn open(
         .map_err(|e| stage_refused(seed.claim, e))?;
         let row = if let Some(acquisition) = acquisition {
             let custody = public_custody.expect("checked above");
-            PalwStagedCourtRowV1::PublicPrefix(
-                Box::new(
-                    crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1::admit(
-                        row,
-                        contract.producer,
-                        custody,
-                        acquisition,
-                        extended_terms,
-                        ladder,
-                        funded,
-                    )
-                    .map_err(|e| stage_refused(seed.claim, e))?,
+            let row = if bundle.is_some() {
+                crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1::admit_with_allocation_v1(
+                    row, contract.producer, custody, acquisition, extended_terms, ladder, funded,
                 )
-                .into(),
-            )
+            } else {
+                crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1::admit(
+                    row, contract.producer, custody, acquisition, extended_terms, ladder, funded,
+                )
+            }
+            .map_err(|e| stage_refused(seed.claim, e))?;
+            PalwStagedCourtRowV1::PublicPrefix(Box::new(row).into())
         } else {
             PalwStagedCourtRowV1::Prefix(Box::new(row).into())
         };
@@ -2830,6 +2830,11 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::ArtifactInventoryOpen(c) => (c.until_daa, vec![(c.offer.opener, c.until_daa, key)]),
         PalwStagedCourtRowV1::ArtifactInventory(_) | PalwStagedCourtRowV1::TirLayout(_) => (u64::MAX, Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
+        // Dormant storage only: dedicated paid retention/holds/exposure must be
+        // integrated before these sidecars can be admitted or lifecycle-swept.
+        PalwStagedCourtRowV1::TirAcquisition(_)
+        | PalwStagedCourtRowV1::TirRawChunk(_)
+        | PalwStagedCourtRowV1::TirAcceptedBody(_) => (u64::MAX, Vec::new()),
     }
 }
 pub(super) fn update_indices(
@@ -3031,10 +3036,11 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
         let row_key = (row.claim, row.reserver);
         let closed =
             b.state.claim(&row.claim).is_some_and(|c| c.phase.is_terminal() && !matches!(c.phase, PalwClaimPhaseV2::Final { .. }));
-        let default = if closed { None } else { row.joint_default_v1(ctx.daa_score).map_err(|e| stage_refused(row.claim, e))? };
         if closed {
             row.mark_claim_closed_v1().map_err(|e| stage_refused(row.claim, e))?;
-        } else if let Some(default) = &default {
+        }
+        let default = row.joint_default_v1(ctx.daa_score).map_err(|e| stage_refused(row.claim, e))?;
+        if let Some(default) = &default {
             row.mark_default_collected_v1(ctx.daa_score).map_err(|e| stage_refused(row.claim, e))?;
             collect_prefix_default(b, ctx, default)?;
         } else {
@@ -3057,19 +3063,9 @@ fn collect_prefix_default(
     default: &crate::palw_prefix_public_owned_v1::PalwPrefixJointDefaultV1,
 ) -> Result<(), PalwStateV2Error> {
     let claim = b.state.claim(&default.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(default.claim))?;
-    let stage = match claim.phase {
-        PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } => crate::palw_da_rcore_v1::PalwDaStageV1::Live,
-        PalwClaimPhaseV2::ReceiptLicensed { .. } => crate::palw_da_rcore_v1::PalwDaStageV1::Licensed,
-        PalwClaimPhaseV2::Final { .. } => crate::palw_da_rcore_v1::PalwDaStageV1::FinalRow,
-        _ => return Err(stage_refused(default.claim, "public collection has no live economic claim")),
-    };
-    let charge = PalwDaDefaultChargeV1 {
-        claim_id: default.claim,
-        producer: default.producer,
-        stage,
-        g: b.claim_g_v1(&default.claim).map(|g| g.g()).unwrap_or(0),
-        covering: default.panel.iter().copied().collect(),
-        winner: default.owner,
-    };
-    b.da_default_charge_v1(ctx, &claim, &charge)
+    // The expired pending source proves these exact frozen signers, not a new
+    // Panel draw. A sibling close cannot discharge an unconsumed Valid signer;
+    // the existing economic helper skips an already charged producer and S4 key.
+    let unpaid = default.panel.iter().copied().chain(std::iter::once(default.producer)).collect();
+    b.staged_selected_default_charge_v1(ctx, default.claim, &claim, default.producer, &unpaid, default.owner)
 }

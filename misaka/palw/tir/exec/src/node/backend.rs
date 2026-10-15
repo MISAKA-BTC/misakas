@@ -34,7 +34,9 @@ use kaspa_consensus_core::palw_backend::{
 use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
 use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_match_v1};
 use kaspa_consensus_core::palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1, step_merkle_root_capped_v1, step_tile_leaf_hash_v1};
-use kaspa_consensus_core::palw_step_refute::{PalwDecodeTokenPinV1, PalwTiledDecodePinV1, tiled_logits_scheme_id_v1};
+use kaspa_consensus_core::palw_step_refute::{
+    PalwDecodeTokenPinV1, PalwTiledDecodePinV1, PalwTiledDecodeTokensV1, tiled_logits_scheme_id_v1,
+};
 use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_job_for_anchor_of_v1};
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1;
 use kaspa_consensus_core::palw_tir_court_v1::{
@@ -268,6 +270,114 @@ pub struct TirBackendV1 {
 }
 
 impl TirBackendV1 {
+    fn check_tir_own_original_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt: &[u32],
+    ) -> Result<(), String> {
+        let ctx = &header.job_context;
+        self.tir_view_v1(header)?;
+        if ctx.shape_profile_id != self.class_id
+            || job.class_id != self.class_id
+            || header.artifact_root != self.artifact_root
+            || kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job) != ctx.job_id
+            || job.tokenizer_id != ctx.tokenizer_id
+            || job.prompt_token_ids_hash != ctx.prompt_token_ids_hash
+            || job.prompt_tokens != ctx.declared_prefill_tokens
+            || job.max_context_tokens != ctx.max_context_tokens
+            || ctx.exact_decode_tokens == 0
+            || ctx.exact_decode_tokens > job.decode_token_limit
+            || prompt.len() as u64 != u64::from(job.prompt_tokens)
+            || !prompt_token_ids_match_v1(self.prompt_ids_form, prompt, &ctx.prompt_token_ids_hash)
+        {
+            return Err("the own TIR source changes the exact original public job, class or prompt".into());
+        }
+        Ok(())
+    }
+
+    /// Shared by both own replay APIs: constraint, V4 pipeline and sampled V3
+    /// selection use the original job, never the attempt runner's default greedy.
+    fn tir_original_selector_v1(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    ) -> Result<super::run::TirDecodeSelectorV1, String> {
+        let mask = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(
+            job,
+            self.token_table_for_job_v1(job),
+        )?;
+        let sampling = job.sampling_v2();
+        let pipeline = job.decode.as_ref().filter(|_| job.decodes_under_v4_rules()).cloned();
+        Ok(Arc::new(move |before: &[u32], row: &[i32], index: u32| {
+            if let Some(mask) = mask.as_ref() {
+                return mask.select(mask.state_after(before).as_ref(), row, index, &sampling).0;
+            }
+            if let Some(config) = pipeline.as_ref() {
+                if let Some(lane) =
+                    kaspa_consensus_core::palw_decode_pipeline_v4::decode_select_v4(config, &sampling, before, row, &|_| true)
+                {
+                    return lane as u32;
+                }
+            }
+            kaspa_consensus_core::palw_decode_select_v2::decode_token_select_v2(row, &sampling.seed, index, sampling.temperature_q)
+                as u32
+        }))
+    }
+
+    fn tir_original_selector_need_v1(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    ) -> Result<u64, String> {
+        let mut bytes = 0u64;
+        if let Some(constraint) = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_tail_v1(job) {
+            let table = self.token_table_for_job_v1(job).ok_or("own TIR constraint table is not publicly registered on this host")?;
+            // table.root() simultaneously holds raw and indexed hashes and a
+            // folding level; include capacity growth, EOG sorting and the lane
+            // admission mask. The table's resident renderings are held by the
+            // separately admitted backend/table role, not cloned by the selector.
+            bytes = (table.entries.len() as u64).checked_add(1).and_then(|n| n.checked_mul(256))
+                .and_then(|n| n.checked_add((table.eog_token_ids.len() as u64).checked_mul(16)?))
+                // Borsh automaton nodes/edges plus canonical reserialization and
+                // bounded stack clones are conservatively covered per raw byte.
+                .and_then(|n| n.checked_add((constraint.len() as u64).checked_mul(64)?))
+                .and_then(|n| n.checked_add(16_384))
+                .ok_or("own TIR constraint selector quote overflow")?;
+        }
+        if let Some(config) = job.decode.as_ref().filter(|_| job.decodes_under_v4_rules()) {
+            // The selector owns its config clone and one penalty-window count
+            // vector. No full logits-row copy is made by decode_select_v4.
+            let stops = config
+                .stop_sequences
+                .iter()
+                .try_fold(0u64, |n, sequence| n.checked_add(24)?.checked_add((sequence.len() as u64).checked_mul(4)?))
+                .ok_or("own TIR stop sequence quote overflow")?;
+            bytes = bytes
+                .checked_add(stops)
+                .and_then(|n| n.checked_add((config.logit_bias.len() as u64).checked_mul(8)?))
+                .and_then(|n| n.checked_add(u64::from(config.penalty_window).checked_mul(24)?))
+                .ok_or("own TIR decode selector quote overflow")?;
+        }
+        Ok(bytes)
+    }
+
+    fn tir_public_capture_context_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    ) -> Result<(PalwTirStepBindingV1, kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicSourceV1), String> {
+        let (registered, _) = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_class_record_v1(&self.class, &self.artifact_root)
+            .map_err(|e| e.to_string())?;
+        let public = kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_v1(
+            &registered,
+            &self.class.layout,
+            header,
+            header.committed_execution_root,
+            header.full_logits_trace_root,
+            self.ladder,
+        )?;
+        let binding =
+            header.resolve_registered_layout_v1(&registered, &self.class.layout, header.committed_execution_root, self.ladder)?;
+        Ok((binding, public))
+    }
     /// Serve the class `artifact` declares under `artifact_root` (the inventory root the chain
     /// registered — derived from the artifact by the caller, never read from a sidecar here), at the
     /// canonical job `canonical` (its `shape_profile_id` must be the class id).
@@ -1221,6 +1331,38 @@ impl TirBackendV1 {
 }
 
 impl PalwExecutionBackendV1 for TirBackendV1 {
+    fn tir_public_capture_need_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        source_length: u64,
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwTirPublicCaptureNeedV1, String> {
+        let (binding, public) = self.tir_public_capture_context_v1(header)?;
+        let replay_ram = super::memory::tir_executor_storage_need_v1(&self.space, self.artifact.plan(), &header.job_context)?;
+        super::public_source::need_v1(&binding, &public, source_length, replay_ram)
+    }
+
+    fn open_tir_public_capture_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        source: Arc<dyn kaspa_consensus_core::palw_backend::PalwOriginalCaptureReaderV1>,
+        directory: &std::path::Path,
+    ) -> Result<Box<dyn kaspa_consensus_core::palw_backend::PalwTirPublicCaptureReaderV1>, String> {
+        self.tir_public_capture_need_v1(header, source.len_v1())?;
+        let (binding, public) = self.tir_public_capture_context_v1(header)?;
+        Ok(Box::new(super::public_source::CaptureReader::open_v1(
+            source,
+            binding,
+            public,
+            self.prompt_ids_form,
+            directory,
+            Some(super::public_source::FoldReplayV1 {
+                artifact: self.artifact.clone(),
+                space: PalwTirStepSpaceV1::new(&self.class).map_err(|e| e.to_string())?,
+                fused: self.fused,
+                cap: self.ladder,
+            }),
+        )?))
+    }
     fn model_id(&self) -> &str {
         &self.model_id
     }
@@ -1484,43 +1626,9 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
         prompt_token_ids: &[u32],
     ) -> Result<kaspa_consensus_core::palw_backend::PalwTirReplayV1, String> {
+        self.check_tir_own_original_v1(header, job, prompt_token_ids)?;
         let ctx = &header.job_context;
-        if ctx.shape_profile_id != self.class_id
-            || job.class_id != self.class_id
-            || header.artifact_root != self.artifact_root
-            || job.tokenizer_id != ctx.tokenizer_id
-            || job.prompt_token_ids_hash != ctx.prompt_token_ids_hash
-            || job.prompt_tokens != ctx.declared_prefill_tokens
-            || job.max_context_tokens != ctx.max_context_tokens
-            || prompt_token_ids.len() as u64 != u64::from(job.prompt_tokens)
-            || !prompt_token_ids_match_v1(self.prompt_ids_form, prompt_token_ids, &ctx.prompt_token_ids_hash)
-        {
-            return Err("the prompt ids are not this TIR class's job and context".into());
-        }
-        let mask = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(
-            job,
-            self.token_table_for_job_v1(job),
-        )?;
-        let sampling = job.sampling_v2();
-        let pipeline = job.decode.as_ref().filter(|_| job.decodes_under_v4_rules()).cloned();
-        let select: super::run::TirDecodeSelectorV1 = Arc::new(move |before: &[u32], row: &[i32], index: u32| -> u32 {
-            if let Some(mask) = mask.as_ref() {
-                return mask.select(mask.state_after(before).as_ref(), row, index, &sampling).0;
-            }
-            if let Some(config) = pipeline.as_ref() {
-                return match kaspa_consensus_core::palw_decode_pipeline_v4::decode_select_v4(config, &sampling, before, row, &|_| true)
-                {
-                    Some(lane) => lane as u32,
-                    None => kaspa_consensus_core::palw_decode_select_v2::decode_token_select_v2(
-                        row,
-                        &sampling.seed,
-                        index,
-                        sampling.temperature_q,
-                    ) as u32,
-                };
-            }
-            kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32
-        });
+        let select = self.tir_original_selector_v1(job)?;
         let run = self.runner().with_selector(select).run(ctx, prompt_token_ids, self.ladder, false, &mut |_| {})?;
         if run.generated.len() as u64 != u64::from(ctx.exact_decode_tokens) {
             return Err("the TIR replay selected another number of ids than the header's exact decode count".into());
@@ -1528,7 +1636,141 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
         Ok(kaspa_consensus_core::palw_backend::PalwTirReplayV1 {
             generated_ids: run.generated,
             full_logits_trace_root: run.trace_root,
+            execution_root: run.execution_root,
+            output_root: run.output_root,
         })
+    }
+
+    fn tir_own_step_source_need_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_token_ids: &[u32],
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwTirOwnStepSourceNeedV1, String> {
+        self.check_tir_own_original_v1(header, job, prompt_token_ids)?;
+        let ctx = &header.job_context;
+        let leaf_count = self.space.leaf_count_capped(ctx, self.ladder).map_err(|e| e.to_string())?;
+        let mut disk_bytes = super::own_source::tree_disk_bytes_v1(leaf_count)?;
+        if Hash64::from_bytes(self.space.program.logits_scheme_id) == tiled_logits_scheme_id_v1() {
+            disk_bytes = disk_bytes
+                .checked_add(super::own_source::tree_disk_bytes_v1(u64::from(ctx.exact_decode_tokens))?)
+                .ok_or("own TIR disk quote overflow")?;
+        }
+        let selector_bytes = self.tir_original_selector_need_v1(job)?;
+        let resident_ram_bytes = super::memory::tir_executor_storage_need_v1(&self.space, self.artifact.plan(), ctx)?
+            // Includes generated-vector capacity plus state_after's temporary
+            // borrowed-rendering vector across the longest decode prefix.
+            .checked_add(u64::from(ctx.exact_decode_tokens).checked_mul(64).ok_or("own TIR ID quote overflow")?)
+            .and_then(|n| n.checked_add(selector_bytes))
+            .and_then(|n| n.checked_add(1_048_576))
+            .ok_or("own TIR RAM quote overflow")?;
+        Ok(kaspa_consensus_core::palw_backend::PalwTirOwnStepSourceNeedV1 { resident_ram_bytes, disk_bytes, leaf_count })
+    }
+
+    fn open_tir_own_step_source_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_token_ids: &[u32],
+        cache_directory: &std::path::Path,
+    ) -> Result<Arc<dyn kaspa_consensus_core::palw_backend::PalwTirOwnStepSourceV1>, String> {
+        let need = self.tir_own_step_source_need_v1(header, job, prompt_token_ids)?;
+        let runner = self.runner().with_selector(self.tir_original_selector_v1(job)?);
+        super::own_source::OwnStepSource::build(cache_directory, header, &runner, need.leaf_count, self.ladder, prompt_token_ids)
+            .map(|source| Arc::new(source) as Arc<dyn kaspa_consensus_core::palw_backend::PalwTirOwnStepSourceV1>)
+    }
+
+    fn tir_logits_step_leaf_index_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        row: u32,
+        lane: u64,
+    ) -> Result<u64, String> {
+        self.tir_view_v1(header)?;
+        self.logits_leaf_holding(&header.job_context, row, lane)
+            .ok_or("TIR logits coordinate is outside the original public step space".into())
+    }
+
+    fn build_tir_public_cone_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        prompt_token_ids: &[u32],
+        trace: Option<&PalwTiledDecodeTokensV1>,
+        runs: &[kaspa_consensus_core::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        leaf_index: u64,
+        rules: &PalwTirCourtRulesV1,
+    ) -> Result<PalwCourtVerdictProofV2, String> {
+        self.build_tir_public_cone_bounded_v1(
+            header,
+            prompt_token_ids,
+            trace,
+            runs,
+            leaf_index,
+            rules,
+            tir_court_builder_limits_v1(rules),
+            super::copies::DEFAULT_COPY_LIMIT_V1,
+        )
+        .map(|(proof, _)| proof)
+    }
+
+    fn probe_tir_public_cone_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        prompt_token_ids: &[u32],
+        trace: Option<&PalwTiledDecodeTokensV1>,
+        runs: &[kaspa_consensus_core::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        leaf_index: u64,
+        rules: &PalwTirCourtRulesV1,
+        limits: kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+        copy_budget_bytes: u64,
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwTirPublicConeProbeV1, String> {
+        let (registered, _) = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_class_record_v1(&self.class, &self.artifact_root)
+            .map_err(|e| e.to_string())?;
+        let binding =
+            header.resolve_registered_layout_v1(&registered, &self.class.layout, header.committed_execution_root, self.ladder)?;
+        if rules.max_step_leaf_count != self.ladder
+            || rules.prompt_form != self.prompt_ids_form
+            || leaf_index >= binding.step_leaf_count
+        {
+            return Err("public TIR builder changes native class ladder, prompt form or original leaf".into());
+        }
+        let mut compact = binding.clone();
+        kaspa_consensus_core::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut compact);
+        let mut inputs = super::cell::TirRunInputsV1::default();
+        for run in runs {
+            if run.binding != compact
+                || run.range.leaf_hashes.is_empty()
+                || run.range.leaf_hashes.len() > kaspa_consensus_core::palw_tir_court_v1::PALW_TIR_STEP_RUN_MAX_LEAVES_V1 as usize
+            {
+                return Err("public TIR operand range changes original header/layout or bounded unit".into());
+            }
+            inputs.add_run(
+                binding.step_leaf_count,
+                &binding.step_merkle_root,
+                &run.range,
+                &run.preimages,
+                &binding.job_context,
+                &self.class_id,
+                self.ladder,
+            )?;
+        }
+        let trace = match trace {
+            Some(pin) => TirTraceV1::Summary { rows_root: pin.rows_root, generated: &pin.generated_token_ids, pins: &[] },
+            None => TirTraceV1::Absent,
+        };
+        let runner = self.runner();
+        let store = TirEvidenceV1::public_runs_v1(
+            &runner,
+            &binding,
+            prompt_token_ids,
+            trace,
+            &inputs,
+            self.artifact.as_ref(),
+            self.prompt_ids_form,
+            self.ladder,
+        )?;
+        let store = store.with_carried_copy_limits_v1(copy_budget_bytes, copy_budget_bytes);
+        Ok(store.probe_cone_v1(leaf_index, rules, limits))
     }
 
     /// G14: step leaf `leaf_index` of a TIR claim — its canonical lanes and its capped opening against the header's step root,

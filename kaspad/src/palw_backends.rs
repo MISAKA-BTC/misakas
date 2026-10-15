@@ -3527,10 +3527,24 @@ mod tests {
         for manifest in ["consensus/Cargo.toml", "consensus/core/Cargo.toml", "consensus/pow/Cargo.toml"] {
             let path = root.join(manifest);
             let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            // Only what the built crate links counts: a `[dev-dependencies]` table (plain or per target) is compiled into the
+            // crate's own tests, never into the node's block processing. Every other table — `[dependencies]`, a target's
+            // dependencies, `[features]` naming the crate — still fails.
+            let mut section = String::new();
+            let linked: Vec<&str> = text
+                .lines()
+                .filter(|line| {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with('[') {
+                        section = trimmed.to_string();
+                    }
+                    !section.ends_with("dev-dependencies]") && !trimmed.starts_with('#') && trimmed.contains("misaka-palw-sdk")
+                })
+                .collect();
             assert!(
-                !text.contains("misaka-palw-sdk"),
+                linked.is_empty(),
                 "{manifest} depends on the class SDK — resolving a chain-registered class would then be reachable \
-                 from block processing, and one hostile profile could stall every validator (ADR-0067 SA-2)"
+                 from block processing, and one hostile profile could stall every validator (ADR-0067 SA-2): {linked:?}"
             );
         }
     }

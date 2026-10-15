@@ -86,14 +86,7 @@ impl PalwOwnedPrefixCourtV1 {
             prices,
         )?;
         let plan = resources.envelope;
-        if plan.maximum_moves > claim_terms.plan.maximum_moves
-            || plan.maximum_stream_bytes > claim_terms.plan.maximum_stream_bytes
-            || plan.inclusion_daa > claim_terms.plan.inclusion_daa
-            || plan.maximum_parser_steps > claim_terms.plan.maximum_parser_steps
-            || plan.maximum_blake_blocks > claim_terms.plan.maximum_blake_blocks
-            || plan.row_bytes > claim_terms.plan.row_bytes
-            || plan.resident_ram_bytes > claim_terms.plan.resident_ram_bytes
-        {
+        if !claim_terms.plan.covers_v1(plan) {
             return Err("prefix seed exceeds immutable prospective claim work envelope".into());
         }
         claim_terms.check_holds(material_until, producer_exit_after, panel_exit_after)?;

@@ -79,7 +79,10 @@ impl TirCarriedCopiesV1 {
     }
 
     pub(crate) fn scratch(&self, class: Hash64, ctx: &PalwJobContextV2, need: u64) -> Option<Option<TirMemoryLeaseV1>> {
-        if need > DEFAULT_COPY_LIMIT_V1 {
+        // Scratch is transient, not a retained-copy lifetime debit. It still
+        // obeys the caller's explicit allocation; caller holds both allocations
+        // when retained copies and this temporary lease coexist.
+        if need > self.per_move_limit || need > self.lifetime_limit {
             return None;
         }
         if need == 0 {
@@ -142,6 +145,19 @@ mod tests {
             max_context_tokens: 2,
         };
         let class = Hash64::from_bytes([42; 64]);
+        copies.set_limits(2 * GROWTH_V1, 2 * GROWTH_V1);
+        assert!(copies.scratch(class, &ctx, 2 * GROWTH_V1 + 1).is_none());
+        assert_eq!(held.load(Ordering::SeqCst), 0, "oversized scratch is refused before reservation");
+        let scratch = copies.scratch(class, &ctx, 2 * GROWTH_V1).unwrap();
+        assert_eq!(held.load(Ordering::SeqCst), 2 * GROWTH_V1);
+        assert_eq!(copies.lifetime_used(), 0, "temporary scratch does not consume retained lifetime");
+        drop(scratch);
+        assert_eq!(held.load(Ordering::SeqCst), 0);
+        copies.set_limits(0, 2 * GROWTH_V1);
+        assert!(copies.scratch(class, &ctx, 1).is_none());
+        assert!(copies.scratch(class, &ctx, 0).unwrap().is_none());
+        copies.set_limits(2 * GROWTH_V1, 0);
+        assert!(copies.scratch(class, &ctx, 1).is_none());
         copies.set_limits(2 * GROWTH_V1, 2 * GROWTH_V1);
         assert!(copies.admit(class, &ctx, GROWTH_V1).is_some());
         assert_eq!(held.load(Ordering::SeqCst), GROWTH_V1);

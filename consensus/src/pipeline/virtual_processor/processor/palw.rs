@@ -1609,22 +1609,12 @@ impl VirtualStateProcessor {
     ) -> Result<Option<kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalProgressV1>, String> {
         let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
         let (_, state) = self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 tip unavailable")?;
-        let now = self.virtual_stores.read().state.get().map_err(|e| e.to_string())?.daa_score;
+        let now = state.last_point().ok_or("terminal progress snapshot has no accepted clock")?.daa_score;
         if !self.palw_legacy_public_filer_at(now) {
             return Ok(None);
         }
         let court = self.palw_court_params_v2.as_ref().ok_or("terminal evidence needs V2 court parameters")?;
-        let Some(reservation) = state.legacy_dispute_reservation_v1(&key.0, &key.1) else { return Ok(None) };
-        let record = state.legacy_dispute_v1(&key.0).ok_or("reservation has no dispute record")?;
-        let row = state.terminal_pending_v1(key);
-        Ok(Some(kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalProgressV1 {
-            now_daa: now,
-            court_maximum: court.max_close_bytes(),
-            reserved_daa: reservation.reserved_daa,
-            hard_deadline_daa: record.hard_deadline_daa,
-            declaration: row.map(|r| r.declaration.clone()),
-            accepted_parts: row.map_or(0, |r| r.parts.keys().fold(0u32, |bits, i| bits | (1u32 << *i))),
-        }))
+        kaspa_consensus_core::palw_terminal_carriage_v1::palw_terminal_progress_v1(&state, key, court.max_close_bytes())
     }
 
     pub fn palw_legacy_answer_progress_v2_impl(

@@ -115,7 +115,10 @@ pub(super) fn validate_private_paid_claim_relations_v3(params: &Params) -> Resul
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
         return Err("private paid probe has no V2 bundle".into());
     };
-    if bundle.state.panel_lifetime_v2_at(0).map(|m| (m.from_daa, m.policy)) != Some((0, lifetime.policy))
+    // Since 63b23dc0f the Panel lifetime mirrors only where a Panel engine is mirrored (it governs Panel consumers only); this
+    // profile arms no Panel engine, so its fence must leave no lifetime mirror — and one beside an engine must be the fence's own.
+    let lifetime_mirror = bundle.state.panel_v3().map(|_| (0, lifetime.policy));
+    if bundle.state.panel_lifetime_v2_at(0).map(|m| (m.from_daa, m.policy)) != lifetime_mirror
         || bundle.state.paid_consumer_lifecycle().map(|m| (m.from_daa, m.policy)) != Some((0, consumer.policy))
         || !bundle.state.paid_consumer_lifecycle_active_at(0)
     {

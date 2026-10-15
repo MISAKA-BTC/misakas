@@ -3478,7 +3478,7 @@ mod p6_tests {
         let daemon = include_str!("daemon.rs");
         assert!(daemon.contains("anchor_duty_after_slots: match args.palw_drill_anchor_duty_after_slots {"));
         assert!(
-            daemon.contains("Some(slots) if !config.palw_drill_genesis_salt.is_some() || !palw_private_drill =>"),
+            daemon.contains("Some(slots) if config.palw_drill_genesis_salt.is_none() || !palw_private_drill =>"),
             "the wait is the release's everywhere but a salted private drill"
         );
         let fire = src.find("} else if floor_duty {").expect("the duty branch");
@@ -3517,7 +3517,7 @@ mod p6_tests {
         let daemon = include_str!("daemon.rs");
         assert!(daemon.contains("drill_floor_ignore_policy: match args.palw_drill_floor_ignore_policy {"));
         assert!(
-            daemon.contains("true if !config.palw_drill_genesis_salt.is_some() || !palw_private_drill =>"),
+            daemon.contains("true if config.palw_drill_genesis_salt.is_none() || !palw_private_drill =>"),
             "refused off a salted private drill"
         );
     }

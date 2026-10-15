@@ -196,7 +196,7 @@ impl PalwFoldReadV1<'_> {
             }
         } else if let Some(row) = reserved {
             if !lane && row.sessions_opened >= crate::palw_legacy_public_filer_v1::PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1 {
-                return exhausted("a dispute reservation opens at most sixteen sessions on its claim");
+                return exhausted("the dispute reservation exhausted its own session budget on this claim");
             }
         } else if lane {
             return exhausted("a lane joins only a reserved session of a non-seat bond");
