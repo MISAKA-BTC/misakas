@@ -442,3 +442,34 @@ fn the_v3_policy_pins_the_users_spans() {
     assert!(v2_with.validate().is_err(), "a V2 policy carries no hold");
     assert_ne!(good.digest(), PalwBondBudgetPolicyV1 { hold: None, ..good.clone() }.digest());
 }
+
+#[test]
+fn after_a_halt_and_heartbeat_only_spans_the_budget_releases_and_real_resumes() {
+    // Guidance item 7/9 (restart/reorg/halt recovery; heartbeat-only → REAL): a bond fills its Panel=1 day, the chain then runs
+    // heartbeat-only (no REAL acceptance) and halts; the first block after resumption — whatever DAA jump it carries — releases
+    // every reservation whose clock passed BEFORE its admissions, and a REAL claim is admitted again. The floor state machine,
+    // Idle through the heartbeat-only span, moves to Normal on the first BLUE REAL acceptance (no cooldown).
+    use kaspa_consensus_core::palw_real_share_v1::{PalwFloorModeV1, PalwFloorStateV1, PalwRealAcceptedV1, palw_floor_step_v1};
+    let p = policy(1);
+    let capital = 1_000 * KAS;
+    let mut w = World::new(p);
+    w.tick(10);
+    w.try_claim(1, capital, 10, PalwHoldModeV1::PanelOne, 0).unwrap();
+    w.try_claim(1, capital, 10, PalwHoldModeV1::PanelOne, 0).unwrap();
+    w.tick(90);
+    w.try_claim(1, capital, 90, PalwHoldModeV1::PanelOne, 0).unwrap();
+    assert!(w.try_claim(1, capital, 91, PalwHoldModeV1::PanelOne, 0).is_err(), "the day is full");
+    // Heartbeat-only, then a halt: the next block arrives at DAA 10 + 9 days (a sparse jump).
+    let mut floor = PalwFloorStateV1::default();
+    for daa in (100..9 * DAY).step_by(50) {
+        floor = palw_floor_step_v1(floor, daa, None);
+    }
+    assert_eq!(floor.mode, PalwFloorModeV1::Idle, "heartbeat-only spans leave the floor Idle");
+    let resume = 10 + 9 * DAY;
+    w.tick(resume);
+    assert_eq!(w.s.bond_row(&bond(1)).map(|r| r.window.claims).unwrap_or(0), 0, "every clock that passed during the halt released");
+    w.try_claim(1, capital, resume, PalwHoldModeV1::PanelOne, 0).expect("REAL is admitted again at once");
+    floor = palw_floor_step_v1(floor, resume, Some(PalwRealAcceptedV1 { blue: true }));
+    assert!(matches!(floor.mode, PalwFloorModeV1::Normal { last_blue } if last_blue == resume), "REAL resumes the Normal state");
+    w.s.check_consistency().expect("consistent");
+}

@@ -221,3 +221,11 @@ DAA emission budgetは総発行制約の参考であり、`S_m`/`f(S_m)`の実�
 - **集計対象:** 2026-10-10の改定はminer bondのみを集計した。本提案はPanelのclaim bondも合算する（ただしproducerのQ/B/R/F上限の元本としては二重に扱わない）。新しいpolicy/versionと移行規則を要する。
 - **範囲:** 2026-10-10の改定は「変更するのはモデル別coinbase配分だけ。block発行数・Final weight・fork-choiceへは掛けない」とした。本提案はブロック生成機会の配分への接続を含むが、物理block頻度・DAA・fork choice・Final weightの変更は決定しておらず、Final weightへ係数を自動乗算しない。ブロック機会への接続はRFC-0008/0010/0012で別review・versioned activationを要する。
 - **評価:** 閉鎖攻撃者が同額の実資本を拘束できれば同じ係数を得る。倍率だけで全Panel共謀や`p=0`の計算省略益を排除できるとはしない（2026-10-10改定の「p=0の分離」を維持）。
+
+## モデル配分の確定 — 2026-10-14（ユーザー決定、`pre` 18987a94b）と休眠実装 — 2026-10-15
+
+**決定（RFC-0015 §8.5.5、`pre` 18987a94bで記録）:** `S_m = C_miner_claim(m) + C_verifier_claim(m)`（資金単位で重複なし）、`S̄_m`は30日相当DAAの平均、`P_m = S̄_m^1.5 / Σ_j S̄_j^1.5`（分母0なら0）。`P_m`をモデル別のブロック生成機会とcoinbase予算の共通目標とし、1 block当たりの報酬に再び掛けない。network全体のblock頻度・DAA・難易度・fork-choice・Final weightは変えない。共通拘束期間`W`は7日相当DAA（Panel=1は1日、ADR-0176 2026-10-15改定）。各bondのQ/B/R/F capはモデル配分で増えない。マイナー報酬はモデル登録者へ直接分配せず、登録者・ownerのcoinbase legは置かない（登録者の収入はModelPositionの売買手数料、`palw_model_leg_v2`以後5 %）。`S_m · μ(S_m)`（1.3〜2倍）は比較試験用に保持する。
+
+**休眠実装（未build・未検証、`palw_model_bond_allocation_v1`は全presetで`None`、有効化は拒否）:** V3 allocation policy（`PalwAllocationAverageV1`: 30日、verifier元本、block機会。validationで`α = 1.5`と30日を固定）。`roll_epoch_v3`がepochごとにminerの成熟した割当とPanel seatが生存claimに拘束した額（`seat_exposure`）をbondごとに合算・元本でpro-rata clipして`S_m(k)`を記録し、30日分の平均`S̄_m`から`A_m = ⌊S̄_m^1.5⌋`を書く。`model_blocks_available_v1`は1 DAA = 1 block機会として`⌊accrued · A_m / ΣA⌋ − reserved_m`を返し、claimのplanが不足を拒否（clipしない）、commitが予約する（riderは先頭blockで計上済み）。待機bond・登録料・AMM/Position・未払報酬は数えない。所在: `consensus/core/src/palw_bond_budget_v1/allocation_v3.rs`、`palw_bond_budget_fold_v1.rs`（epoch roll、plan/commit）、試験source `consensus/core/tests/adr0177_allocation_v3.rs`。
+
+**未了:** coinbase側のR clip（`palw_model_available_v1`）は別laneがescrow clip修正を入れる箇所であり今回は変更しない — V3では`P_m`を一度だけ適用するよう、merge後にblock機会とR clipの二重適用を解消する必要がある。新規モデルが`α = 1.5`で採掘機会を失いすぎないことの評価、verifierの参加手順・責任・拘束期間・報酬条件（預けるだけで検査しない対策を含む）の定義は有効化前の必須事項（ユーザー）。
