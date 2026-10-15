@@ -490,3 +490,23 @@ SDK/CLI migration and independent review still remain. The new test source
 checks two positions whose post block must read the entry state (outputs 1 and
 3, rather than 2 and 4), history, altered node commitments, cache substitution
 and refusal before metadata allocation; none has been compiled or executed.
+
+The next algebraic source layer (`claim_circuit_v5::r1cs`) streams actual sparse
+rank-one constraints from the semantic graph. For example XOR becomes
+`(2a) * b = a + b - output`; AND, NOT, constants, input Booleanity and public
+assertions have explicit field equations. Every input also receives an
+independent `b*(b-1)=0` row, so a future decoder cannot omit bit constraints by
+presenting an arbitrary graph. Variable zero is fixed to one. Canonical field
+encodings are required. Exact row, variable, nonzero-term and padded-domain
+counts are checked before lowering; the immutable graph is borrowed rather
+than cloned into three sparse matrices. Matrix multilinear evaluations are
+implemented over those real coefficients with an explicit linear scan and
+field-multiplication bound. This scan is not a compact-verifier cost claim.
+
+This is a concrete relation for the later polynomial IOP. It is not itself a
+polynomial commitment or a GKR/Spartan/Brakedown argument. Reading the primary
+[GKR publication](https://www.microsoft.com/en-us/research/publication/delegating-computation-interactive-proofs-muggles/)
+and [Brakedown paper](https://eprint.iacr.org/2021/1043) does not substitute for
+implementing or reviewing those protocols. No random-code distance, query
+count, repetitions or 128-bit composition budget is approved by this source
+layer. New constraint-corruption and matrix-coefficient test source is unrun.
