@@ -183,3 +183,54 @@ This is unexecuted source, not a passed original-carrier admission or node test.
   cannot supply do not create another DA obligation. The helper is not activated
   in the runtime: native paid state must bind/restore those counters and clocks,
   account for polling/restart and carry the actual terminal before that is safe.
+
+### Original Capture and Owned Acquisition Batch (Unverified)
+
+- A new producer/custodian reader handles original dense and fold TIR captures
+  without materializing the whole capture, all step hashes or all selecting rows
+  in RAM. It checks the raw/FPC1 original range, spools bounded native leaves and
+  tile/row trees to anonymous disk, and verifies original trace, step and
+  execution roots before answering. Fold reconstruction advances one native
+  position per poll, retaining only the current resume state. Original IDs are
+  authenticated arithmetic inputs, not proof of correct token selection. The
+  operational quote includes temporary indexes, replay, ID-copy work and response
+  I/O; native paid maximum-profile/restart qualification remains open.
+- The new dormant owned-acquisition kernel derives a conservative full-source
+  envelope from actual original geometry, independent literal custodians and all
+  multipart turns. It preserves original funding and clocks and compares all 13
+  allocated resource dimensions. A native-config comparison entry point rejects
+  substituted wire prices; its caller must still supply real chain parameters
+  and authenticated grants. Overflow remains a missing coverage case, not an
+  excuse to narrow active profiles or silently declare the whole goal covered.
+- Each response has canonical 16KiB parts. Mutable rows/checkpoints keep only
+  incremental hashing, offsets and immutable chunk heads, rather than copying
+  the accumulated body on every part. The returned chunk records MUST be rooted
+  atomically with metadata by the future native fold; local CAS is not authority.
+  Finish checks the exact chain, signer, body hash and original source before
+  recording an accepted reference. IDs finish only after all canonical chunks
+  reproduce the outer trace root. Original deadlines, independent producer/Valid
+  duties, once-only collection targets and history-membership/nonce-bound
+  reacquisition have source regressions, not executed economic collection tests.
+- The filer driver plans Demand, Reacquire, Begin, Part, Finish and Collect from
+  one borrowed accepted-state snapshot. Recovery checks each immutable record,
+  current accepted slot or current history membership and original demand scope
+  before source authentication. A prepared response holds its operational memory
+  ticket, and one ID chunk cannot acknowledge the complete owned ID obligation.
+  This is not yet a native snapshot getter, signing/submission actor or ACK path.
+- A shared native predicate bridge preserves the existing four live TIR court
+  predicates and applies original class, artifact, execution, trace and job pins
+  for public arithmetic findings. Output checking accepts only authenticated
+  original IDs/Flat EOF pins and separates claim-only output mismatch from an
+  impossible vocabulary ID. Unknown/unretained output commitments refuse an
+  output comparison, rather than convict an honest claim. Findings are private
+  non-deserializable values, not rooted offence certificates. A nominated leaf
+  alone cannot establish partial-receipt coverage of canonical dependencies.
+
+No build or test was run for this batch. Native versioned claim/owner/chunk rows,
+atomic fold/apply/revert, original preclaim SUM and capital, authenticated custody
+grants, indexed duties and once-only economics, RPC/runtime recovery and retained
+terminal admission still need integration. Independent own replay, sparse proof
+or dissection, whole-map population amplification, non-preemptible inclusion and
+all-family maximum-size/network terminals are not bought or proven by the new
+acquisition envelope. PredicateHolds, OutputHolds and acquisition EOF are never
+global honesty, objective conviction or full G14 completion.

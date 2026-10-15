@@ -904,6 +904,7 @@ pub mod palw_staged_route_forms_v1;
 pub mod palw_tir_prefix_state_v1;
 pub mod palw_tir_prefix_owned_v1;
 pub mod palw_tir_public_source_v1;
+pub mod palw_tir_public_owned_v1;
 pub mod palw_decode_view_v1;
 
 pub mod palw_tokenizer_table_stream_v1;
@@ -964,3 +965,5 @@ pub mod palw_monetary_material_rpc_v1;
 pub mod palw_state_carriage_rpc_v1;
 
 pub mod palw_attempt_material_v3;
+
+pub mod palw_tir_objective_v1;

@@ -18,6 +18,7 @@ pub mod inventory;
 pub mod mapped;
 pub mod memory;
 mod own_source;
+mod public_source;
 pub mod residency;
 pub mod run;
 pub mod shardrows;

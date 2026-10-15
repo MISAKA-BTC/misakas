@@ -67,8 +67,9 @@ pub(crate) fn tree_disk_bytes_v1(count: u64) -> Result<u64, String> {
     Ok(bytes)
 }
 
-struct DiskTree {
+pub(crate) struct DiskTree {
     file: File,
+    base: u64,
     widths: Vec<u64>,
     offsets: Vec<u64>,
     emitted: u64,
@@ -91,13 +92,22 @@ impl DiskTree {
         }
         Ok((widths, offsets, bytes))
     }
-    fn new(directory: &Path, count: u64) -> Result<Self, String> {
+    pub(crate) fn new(directory: &Path, count: u64) -> Result<Self, String> {
         let (widths, offsets, bytes) = Self::geometry(count)?;
         std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
         // No named cache survives process death or can become a restart credential.
         let file = tempfile::tempfile_in(directory).map_err(|e| e.to_string())?;
         file.set_len(bytes).map_err(|e| e.to_string())?;
-        Ok(Self { file, widths, offsets, emitted: 0, root: None })
+        Ok(Self { file, base: 0, widths, offsets, emitted: 0, root: None })
+    }
+    /// Disjoint fixed slice of one anonymous forest file; never truncates it.
+    /// All slices of a forest must be used serially: cloned fds share seek state.
+    pub(crate) fn slice(file: &File, base: u64, count: u64, root: Option<Hash64>) -> Result<Self, String> {
+        let (widths, offsets, bytes) = Self::geometry(count)?;
+        if base.checked_add(bytes).is_none_or(|end| file.metadata().map_or(true, |m| end > m.len())) {
+            return Err("disk tree slice exceeds reserved forest".into());
+        }
+        Ok(Self { file: file.try_clone().map_err(|e| e.to_string())?, base, widths, offsets, emitted: 0, root })
     }
     fn location(&self, level: usize, index: u64) -> Result<u64, String> {
         if self.widths.get(level).is_none_or(|width| index >= *width) {
@@ -105,6 +115,7 @@ impl DiskTree {
         }
         self.offsets[level]
             .checked_add(index.checked_mul(64).ok_or("own tree offset overflow")?)
+            .and_then(|n| n.checked_add(self.base))
             .ok_or("own tree offset overflow".into())
     }
     fn write(&mut self, level: usize, index: u64, hash: Hash64) -> Result<(), String> {
@@ -121,7 +132,7 @@ impl DiskTree {
         let raw = self.raw(level, index)?;
         Ok(if level == 0 { step_merkle_leaf_v1(index, &raw) } else { raw })
     }
-    fn push(&mut self, raw: Hash64) -> Result<(), String> {
+    pub(crate) fn push(&mut self, raw: Hash64) -> Result<(), String> {
         let mut index = self.emitted;
         self.write(0, index, raw)?;
         self.emitted += 1;
@@ -136,7 +147,7 @@ impl DiskTree {
         }
         Ok(())
     }
-    fn finish(&mut self) -> Result<Hash64, String> {
+    pub(crate) fn finish(&mut self) -> Result<Hash64, String> {
         if self.emitted != self.widths[0] {
             return Err("own streamed tree is incomplete".into());
         }
@@ -153,7 +164,7 @@ impl DiskTree {
         self.root = Some(root);
         Ok(root)
     }
-    fn checked(&mut self, level: usize, index: u64) -> Result<(Hash64, Hash64), String> {
+    pub(crate) fn checked(&mut self, level: usize, index: u64) -> Result<(Hash64, Hash64), String> {
         let raw = self.raw(level, index)?;
         let original = if level == 0 { step_merkle_leaf_v1(index, &raw) } else { raw };
         let (mut hash, mut at, mut depth) = (original, index, level);
@@ -170,7 +181,7 @@ impl DiskTree {
         }
         Ok((original, raw))
     }
-    fn frontier(&mut self, level: u8, index: u64) -> Result<Vec<Hash64>, String> {
+    pub(crate) fn frontier(&mut self, level: u8, index: u64) -> Result<Vec<Hash64>, String> {
         self.checked(level as usize, index)?;
         let descend = level.min(10);
         let child_level = level - descend;
@@ -178,16 +189,59 @@ impl DiskTree {
         let end = first.checked_add(1 << descend).ok_or("own frontier end overflow")?.min(self.widths[child_level as usize]);
         (first..end).map(|at| self.checked(child_level as usize, at).map(|(hash, _)| hash)).collect()
     }
+
+    pub(crate) fn siblings(&mut self, level: u8, index: u64) -> Result<Vec<Hash64>, String> {
+        self.checked(level as usize, index)?;
+        let (mut depth, mut at, mut out) = (level as usize, index, Vec::new());
+        while depth + 1 < self.widths.len() {
+            if (at ^ 1) < self.widths[depth] {
+                out.push(self.checked(depth, at ^ 1)?.0);
+            }
+            depth += 1;
+            at /= 2;
+        }
+        Ok(out)
+    }
+
+    pub(crate) fn opening(&mut self, index: u64) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepOpeningV1, String> {
+        let leaf_hash = self.checked(0, index)?.1;
+        let siblings = self.siblings(0, index)?;
+        Ok(kaspa_consensus_core::palw_step_leg::PalwStepOpeningV1 { leaf_index: index, leaf_hash, siblings })
+    }
+
+    pub(crate) fn range(
+        &mut self,
+        first: u64,
+        count: u32,
+    ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepRangeOpeningV1, String> {
+        if count == 0 || count > 256 || first.checked_add(u64::from(count)).is_none_or(|end| end > self.widths[0]) {
+            return Err("disk tree raw range is outside bounded original geometry".into());
+        }
+        let leaf_hashes =
+            (first..first + u64::from(count)).map(|at| self.checked(0, at).map(|(_, raw)| raw)).collect::<Result<_, _>>()?;
+        let (mut lo, mut hi, mut siblings) = (first, first + u64::from(count), Vec::new());
+        for depth in 0..self.widths.len() - 1 {
+            if lo & 1 == 1 {
+                siblings.push(self.checked(depth, lo - 1)?.0);
+            }
+            if hi & 1 == 1 && hi < self.widths[depth] {
+                siblings.push(self.checked(depth, hi)?.0);
+            }
+            lo /= 2;
+            hi = hi.div_ceil(2);
+        }
+        Ok(kaspa_consensus_core::palw_step_leg::PalwStepRangeOpeningV1 { first_leaf_index: first, leaf_hashes, siblings })
+    }
 }
 
-struct Trace {
+pub(crate) struct Trace {
     context: PalwJobContextV2,
     flat: Option<blake2b_simd::State>,
     tiled_rows: Option<DiskTree>,
     rows: u32,
 }
 impl Trace {
-    fn new(directory: &Path, ctx: &PalwJobContextV2, scheme: Hash64) -> Result<Self, String> {
+    pub(crate) fn new(directory: &Path, ctx: &PalwJobContextV2, scheme: Hash64) -> Result<Self, String> {
         let (flat, tiled_rows) = if scheme == tiled_logits_scheme_id_v1() {
             (None, Some(DiskTree::new(directory, u64::from(ctx.exact_decode_tokens))?))
         } else if scheme == flat_logits_scheme_id_v1() {
@@ -202,7 +256,7 @@ impl Trace {
         };
         Ok(Self { context: ctx.clone(), flat, tiled_rows, rows: 0 })
     }
-    fn row(&mut self, index: u32, values: &[i32]) -> Result<(), String> {
+    pub(crate) fn row(&mut self, index: u32, values: &[i32]) -> Result<(), String> {
         if index != self.rows || values.is_empty() || index >= self.context.exact_decode_tokens {
             return Err("own trace row changed original order/geometry".into());
         }
@@ -221,7 +275,7 @@ impl Trace {
         self.rows += 1;
         Ok(())
     }
-    fn finish(&mut self, ids: &[u32]) -> Result<(Hash64, Option<Hash64>), String> {
+    pub(crate) fn finish(&mut self, ids: &[u32]) -> Result<(Hash64, Option<Hash64>), String> {
         if self.rows != self.context.exact_decode_tokens || ids.len() != self.rows as usize {
             return Err("own trace did not reach exact original EOF".into());
         }
@@ -338,6 +392,18 @@ impl PalwTirOwnStepSourceV1 for OwnStepSource {
 mod tests {
     use super::*;
     use kaspa_consensus_core::palw_step_leg::step_merkle_root_capped_v1;
+    struct OriginalBytes(Vec<u8>);
+    impl kaspa_consensus_core::palw_backend::PalwOriginalCaptureReaderV1 for OriginalBytes {
+        fn len_v1(&self) -> u64 {
+            self.0.len() as u64
+        }
+        fn read_v1(&self, at: u64, count: u32) -> Result<Vec<u8>, String> {
+            if count > 16_384 {
+                return Err("unbounded original test read".into());
+            }
+            self.0.get(at as usize..at as usize + count as usize).map(|v| v.to_vec()).ok_or("short original".into())
+        }
+    }
 
     #[test]
     fn streamed_frontier_and_disk_tree_match_native_promote_odd_at_every_shape() {
@@ -360,10 +426,43 @@ mod tests {
             assert!(children.len() <= READ_FRONTIER as usize);
             for (index, leaf) in leaves.iter().enumerate() {
                 assert_eq!(disk.checked(0, index as u64).unwrap().1, *leaf);
+                let opening = disk.opening(index as u64).unwrap();
+                assert_eq!(kaspa_consensus_core::palw_step_leg::step_opening_root_capped_v1(count, &opening, 130).unwrap(), expected);
+            }
+            for first in [0, count / 2, count - 1] {
+                let range = disk.range(first, (count - first).min(13) as u32).unwrap();
+                assert_eq!(
+                    kaspa_consensus_core::palw_step_leg::step_range_opening_root_capped_v1(count, &range, 130).unwrap(),
+                    expected
+                );
             }
         }
         assert!(tree_disk_bytes_v1(0).is_err());
         assert!(tree_disk_bytes_v1(u64::MAX).is_err());
+    }
+    #[test]
+    fn shared_forest_slices_preserve_other_rows_and_authenticate_each_native_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = tempfile::tempfile_in(directory.path()).unwrap();
+        let stride = tree_disk_bytes_v1(5).unwrap();
+        file.set_len(stride * 2).unwrap();
+        let mut roots = Vec::new();
+        for row in 0..2 {
+            let mut tree = DiskTree::slice(&file, row * stride, 5, None).unwrap();
+            for index in 0..5 {
+                tree.push(Hash64::from_u64_word(row * 10 + index + 1)).unwrap();
+            }
+            roots.push(tree.finish().unwrap());
+        }
+        for row in 0..2 {
+            let mut tree = DiskTree::slice(&file, row * stride, 5, Some(roots[row as usize])).unwrap();
+            assert_eq!(tree.checked(0, 4).unwrap().1, Hash64::from_u64_word(row * 10 + 5));
+            assert_eq!(tree.checked(3, 0).unwrap().0, roots[row as usize]);
+            assert_eq!(file.metadata().unwrap().len(), stride * 2);
+        }
+        let mut wrong = DiskTree::slice(&file, 0, 5, Some(roots[1])).unwrap();
+        assert!(wrong.checked(0, 0).is_err());
+        assert!(DiskTree::slice(&file, stride * 2, 5, None).is_err());
     }
     #[test]
     fn anonymous_tree_authenticates_each_read_and_drops_without_restart_artifacts() {
@@ -461,6 +560,32 @@ mod tests {
                     .unwrap()
                     .with_selector(std::sync::Arc::new(|_, row, index| index % row.len() as u32));
                 let run = runner.run(&context, &prompt, u64::MAX, false, &mut |_| {}).unwrap();
+                let mut last = None;
+                let (mut resumed_hashes, mut resumed_rows) = (Vec::new(), Vec::new());
+                for position in 0..space.job_shape(&context).unwrap().positions {
+                    let next = runner
+                        .replay_streamed_position_v1(
+                            &context,
+                            &prompt,
+                            u64::MAX,
+                            last.as_ref(),
+                            &mut |leaf| {
+                                assert_eq!(leaf.index, resumed_hashes.len() as u64);
+                                resumed_hashes.push(leaf.hash);
+                            },
+                            &mut |row, lanes| {
+                                assert_eq!(row as usize, resumed_rows.len());
+                                resumed_rows.push(lanes.to_vec());
+                                Ok(())
+                            },
+                        )
+                        .unwrap();
+                    assert_eq!(next.position, position);
+                    last = Some(next);
+                }
+                assert_eq!(resumed_hashes, run.leaf_hashes);
+                assert_eq!(resumed_rows, run.logits_rows);
+                assert_eq!(last.unwrap().generated, run.generated);
                 let original = PalwPublicTirBindingHeaderV1 {
                     version: 1,
                     job_context: context,
@@ -603,6 +728,43 @@ mod tests {
             };
             let capture = super::super::backend::TirCaptureV1::decode(&produced.material).unwrap();
             let header = PalwPublicTirBindingHeaderV1::of_binding_v1(&capture.binding);
+            // A folded ORIGINAL contains only public prompt/trace/IDs. The
+            // responder reconstructs once across position polls and serves raw
+            // bytes only after all original roots match. A false fold refuses.
+            let mut folded = capture.clone();
+            folded.leaves.clear();
+            let original = std::sync::Arc::new(OriginalBytes(folded.encode()));
+            let need = backend.tir_public_capture_need_v1(&header, original.0.len() as u64).unwrap();
+            assert_eq!(need.maximum_replay_leaves, header.step_leaf_count);
+            let mut reader = backend.open_tir_public_capture_v1(&header, original, directory.path()).unwrap();
+            let request = kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: 3 };
+            let mut answered = None;
+            for _ in 0..100_000 {
+                match reader.poll_v1(&request) {
+                    Ok(None) => continue,
+                    result => {
+                        answered = Some(result);
+                        break;
+                    }
+                }
+            }
+            let answer = answered.expect("fold must reach response or explicit original-root refusal");
+            if fault {
+                assert!(answer.is_err());
+            } else {
+                let (registered, _) = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_class_record_v1(&class, &root).unwrap();
+                let public = kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_v1(
+                    &registered,
+                    &class.layout,
+                    &header,
+                    header.committed_execution_root,
+                    header.full_logits_trace_root,
+                    1 << 26,
+                )
+                .unwrap();
+                public.authenticate_v1(&request, &answer.unwrap().unwrap(), None).unwrap();
+            }
+            drop(reader);
             let trace = PalwTiledDecodeTokensV1 {
                 rows_root: tiled_logits_rows_root_v1(&job, &capture.logits_rows).unwrap(),
                 generated_token_ids: capture.generated.clone(),

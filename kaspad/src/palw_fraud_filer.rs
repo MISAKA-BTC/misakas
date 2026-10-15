@@ -59,6 +59,8 @@ pub(super) mod input;
 mod prefix;
 #[path = "palw_selected_event_scheduler.rs"]
 mod selected_event_scheduler;
+#[path = "palw_tir_acquisition_driver.rs"]
+mod tir_acquisition_driver;
 #[path = "palw_filer_tokenizer.rs"]
 mod tokenizer;
 #[path = "palw_tokenizer_scheduler.rs"]

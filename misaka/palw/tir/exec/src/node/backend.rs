@@ -359,6 +359,25 @@ impl TirBackendV1 {
         }
         Ok(bytes)
     }
+
+    fn tir_public_capture_context_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    ) -> Result<(PalwTirStepBindingV1, kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicSourceV1), String> {
+        let (registered, _) = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_class_record_v1(&self.class, &self.artifact_root)
+            .map_err(|e| e.to_string())?;
+        let public = kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_v1(
+            &registered,
+            &self.class.layout,
+            header,
+            header.committed_execution_root,
+            header.full_logits_trace_root,
+            self.ladder,
+        )?;
+        let binding =
+            header.resolve_registered_layout_v1(&registered, &self.class.layout, header.committed_execution_root, self.ladder)?;
+        Ok((binding, public))
+    }
     /// Serve the class `artifact` declares under `artifact_root` (the inventory root the chain
     /// registered — derived from the artifact by the caller, never read from a sidecar here), at the
     /// canonical job `canonical` (its `shape_profile_id` must be the class id).
@@ -1312,6 +1331,38 @@ impl TirBackendV1 {
 }
 
 impl PalwExecutionBackendV1 for TirBackendV1 {
+    fn tir_public_capture_need_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        source_length: u64,
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwTirPublicCaptureNeedV1, String> {
+        let (binding, public) = self.tir_public_capture_context_v1(header)?;
+        let replay_ram = super::memory::tir_executor_storage_need_v1(&self.space, self.artifact.plan(), &header.job_context)?;
+        super::public_source::need_v1(&binding, &public, source_length, replay_ram)
+    }
+
+    fn open_tir_public_capture_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        source: Arc<dyn kaspa_consensus_core::palw_backend::PalwOriginalCaptureReaderV1>,
+        directory: &std::path::Path,
+    ) -> Result<Box<dyn kaspa_consensus_core::palw_backend::PalwTirPublicCaptureReaderV1>, String> {
+        self.tir_public_capture_need_v1(header, source.len_v1())?;
+        let (binding, public) = self.tir_public_capture_context_v1(header)?;
+        Ok(Box::new(super::public_source::CaptureReader::open_v1(
+            source,
+            binding,
+            public,
+            self.prompt_ids_form,
+            directory,
+            Some(super::public_source::FoldReplayV1 {
+                artifact: self.artifact.clone(),
+                space: PalwTirStepSpaceV1::new(&self.class).map_err(|e| e.to_string())?,
+                fused: self.fused,
+                cap: self.ladder,
+            }),
+        )?))
+    }
     fn model_id(&self) -> &str {
         &self.model_id
     }
@@ -1606,7 +1657,7 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
                 .ok_or("own TIR disk quote overflow")?;
         }
         let selector_bytes = self.tir_original_selector_need_v1(job)?;
-        let resident_ram_bytes = super::memory::tir_executor_storage_need_v1(&self.space, &self.plan, ctx)?
+        let resident_ram_bytes = super::memory::tir_executor_storage_need_v1(&self.space, self.artifact.plan(), ctx)?
             // Includes generated-vector capacity plus state_after's temporary
             // borrowed-rendering vector across the longest decode prefix.
             .checked_add(u64::from(ctx.exact_decode_tokens).checked_mul(64).ok_or("own TIR ID quote overflow")?)

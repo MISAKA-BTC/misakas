@@ -41,6 +41,31 @@ pub trait PalwOriginalCaptureReaderV1: Send + Sync {
     fn read_v1(&self, offset: u64, length: u32) -> Result<Vec<u8>, String>;
 }
 
+/// Operational preparation reservation, not a native eligibility/fee quote.
+/// Includes the worst-case folded capture replay spool, even for a dense input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirPublicCaptureNeedV1 {
+    pub resident_ram_bytes: u64,
+    pub disk_bytes: u64,
+    pub maximum_prepare_io_bytes: u64,
+    pub maximum_replay_leaves: u64,
+    pub maximum_replay_positions: u64,
+    /// Prefix copying in the latest-state continuation (not a linear-time claim).
+    pub maximum_replay_id_words: u64,
+    /// Worst one-unit read-at work, separate from once-only preparation.
+    pub maximum_response_io_bytes: u64,
+    pub maximum_response_tree_hashes: u64,
+}
+
+pub trait PalwTirPublicCaptureReaderV1: Send {
+    /// None is bounded preparation in progress, never a DA or semantic verdict.
+    /// Caller additionally holds this exact request's native unit memory permit.
+    fn poll_v1(
+        &mut self,
+        request: &crate::palw_tir_public_source_v1::PalwTirPublicRequestV1,
+    ) -> Result<Option<crate::palw_tir_public_source_v1::PalwTirPublicResponseV1>, String>;
+}
+
 /// Bounded projection of original Flat public bytes. `None` means structural indexing is still
 /// in progress, not an answer or a verdict. Native EOF authentication remains mandatory.
 pub trait PalwFlatPublicSourceReaderV1: Send {
@@ -577,6 +602,25 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _binding: &crate::palw_step_leg::PalwStepBindingV2,
     ) -> Result<Box<dyn PalwFlatPublicSourceReaderV1>, String> {
         Err("this family has no bounded original Flat source responder".into())
+    }
+
+    fn tir_public_capture_need_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _source_length: u64,
+    ) -> Result<PalwTirPublicCaptureNeedV1, String> {
+        Err("this family has no bounded original TIR capture reader".into())
+    }
+
+    /// Input must be the exact raw original capture range (FPC1 job scope checked
+    /// by the caller), never a remade answer or an unscoped producer state.
+    fn open_tir_public_capture_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _source: std::sync::Arc<dyn PalwOriginalCaptureReaderV1>,
+        _cache_directory: &std::path::Path,
+    ) -> Result<Box<dyn PalwTirPublicCaptureReaderV1>, String> {
+        Err("this family has no bounded original TIR capture reader".into())
     }
 
     /// Open the original public Float32 rows/ids of a retained capture. No in-node backend retains

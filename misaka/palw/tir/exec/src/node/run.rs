@@ -187,7 +187,7 @@ impl<'a> TirClassRunnerV1<'a> {
         verify: bool,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<TirJobRunV1, String> {
-        let d = self.drive(ctx, prompt, cap, verify, None, None, None, on_leaf, None)?;
+        let d = self.drive(ctx, prompt, cap, verify, None, None, None, on_leaf, None, None)?;
         self.commit(ctx, cap, d)
     }
 
@@ -200,7 +200,7 @@ impl<'a> TirClassRunnerV1<'a> {
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<(TirJobRunV1, Vec<TirResumePointV1>), String> {
         let mut points = Vec::new();
-        let d = self.drive(ctx, prompt, cap, false, None, None, Some(&mut points), on_leaf, None)?;
+        let d = self.drive(ctx, prompt, cap, false, None, None, Some(&mut points), on_leaf, None, None)?;
         Ok((self.commit(ctx, cap, d)?, points))
     }
 
@@ -254,7 +254,7 @@ impl<'a> TirClassRunnerV1<'a> {
         until: Option<u32>,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<TirRangeRunV1, String> {
-        let d = self.drive(ctx, prompt, cap, false, from, until, None, on_leaf, None)?;
+        let d = self.drive(ctx, prompt, cap, false, from, until, None, on_leaf, None, None)?;
         Ok(TirRangeRunV1 { first_index: d.first_index, leaf_hashes: d.hashes, logits_rows: d.rows, generated: d.generated })
     }
 
@@ -270,9 +270,32 @@ impl<'a> TirClassRunnerV1<'a> {
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
         on_row: &mut dyn FnMut(u32, &[i32]) -> Result<(), String>,
     ) -> Result<Vec<u32>, String> {
-        let d = self.drive(ctx, prompt, cap, false, None, None, None, on_leaf, Some(on_row))?;
+        let d = self.drive(ctx, prompt, cap, false, None, None, None, on_leaf, Some(on_row), None)?;
         debug_assert!(d.hashes.is_empty() && d.rows.is_empty());
         Ok(d.generated)
+    }
+
+    /// One original position, retaining only its latest Fixed/Hist/ID state.
+    /// No N hashes, selecting-row history or checkpoint list is constructed.
+    /// One position is bounded by the registered program, not constant CPU work.
+    pub(crate) fn replay_streamed_position_v1(
+        &self,
+        ctx: &PalwJobContextV2,
+        prompt: &[u32],
+        cap: u64,
+        from: Option<&TirResumePointV1>,
+        on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
+        on_row: &mut dyn FnMut(u32, &[i32]) -> Result<(), String>,
+    ) -> Result<TirResumePointV1, String> {
+        let next = match from {
+            Some(point) => point.position.checked_add(1).ok_or("TIR replay position overflow")?,
+            None => 0,
+        };
+        let until = next.checked_add(1).ok_or("TIR replay position overflow")?;
+        let mut last = None;
+        let driven = self.drive(ctx, prompt, cap, false, from, Some(until), None, on_leaf, Some(on_row), Some(&mut last))?;
+        debug_assert!(driven.hashes.is_empty() && driven.rows.is_empty());
+        last.ok_or("TIR streamed position produced no continuation state".into())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -287,6 +310,7 @@ impl<'a> TirClassRunnerV1<'a> {
         mut record: Option<&mut Vec<TirResumePointV1>>,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
         mut stream_rows: Option<&mut dyn FnMut(u32, &[i32]) -> Result<(), String>>,
+        last_resume: Option<&mut Option<TirResumePointV1>>,
     ) -> Result<Driven, String> {
         let space = self.space;
         if ctx.shape_profile_id != self.class_id {
@@ -463,6 +487,9 @@ impl<'a> TirClassRunnerV1<'a> {
         }
         if end == job.positions && emit.first_index + emit.emitted != total {
             return Err(format!("{} leaves produced, the step space counts {total}", emit.first_index + emit.emitted));
+        }
+        if let Some(last) = last_resume {
+            *last = Some(self.capture(&exec, end.checked_sub(1).ok_or("empty TIR continuation")?, &generated)?);
         }
         Ok(Driven { first_index, hashes: emit.hashes, rows, generated, tiled, _memory: memory })
     }

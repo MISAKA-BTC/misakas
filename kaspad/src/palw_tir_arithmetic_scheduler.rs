@@ -429,6 +429,61 @@ pub(super) enum ArithmeticStepV1 {
     StepAgreement,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum PublicArithmeticStepV1 {
+    Acquire(PalwTirPublicRequestV1),
+    Leaf { index: u64 },
+    StepAgreement,
+}
+
+fn public_step_v1(step: ArithmeticStepV1) -> Result<PublicArithmeticStepV1, String> {
+    Ok(match step {
+        ArithmeticStepV1::Need(PalwDaUnitV1::TirStepNode { level, index }) => {
+            PublicArithmeticStepV1::Acquire(PalwTirPublicRequestV1::StepNode { level, index })
+        }
+        ArithmeticStepV1::Leaf { index } => PublicArithmeticStepV1::Leaf { index },
+        ArithmeticStepV1::StepAgreement => PublicArithmeticStepV1::StepAgreement,
+        _ => return Err("TIR public arithmetic localization selected a legacy acquisition unit".into()),
+    })
+}
+
+/// Prospective paid-source entry. Authentication markers are produced only by
+/// the original native source; an unsigned packet or an old DA answered bit is
+/// not a frontier. This returns a request, never a legacy DA accusation object.
+pub(super) fn next_public_from_source_v1(
+    source: &PalwTirPublicSourceV1,
+    own: &dyn PalwTirOwnStepSourceV1,
+    mut unit: impl FnMut(PalwTirPublicRequestV1) -> Option<Arc<PalwTirPublicAuthenticatedUnitV1>>,
+) -> Result<PublicArithmeticStepV1, String> {
+    let original = source.header_v1();
+    let info = own.info_v1();
+    if info.header.version != original.version
+        || info.header.job_context != original.job_context
+        || info.header.artifact_root != original.artifact_root
+        || info.generated_ids.len() as u64 != u64::from(original.job_context.exact_decode_tokens)
+        || own.node_v1(palw_tir_step_tree_height_v1(info.header.step_leaf_count), 0)? != info.header.step_merkle_root
+    {
+        return Err("independent TIR source is not the original registered job's rooted replay".into());
+    }
+    public_step_v1(next_tree_v1(
+        source.leaf_count_v1(),
+        original.step_merkle_root,
+        info.header.step_leaf_count,
+        |level, index| own.node_v1(level, index),
+        |level, index| {
+            let request = PalwTirPublicRequestV1::StepNode { level, index };
+            let Some(unit) = unit(request) else { return Ok(None) };
+            if unit.source_id_v1() != source.source_id_v1() || unit.request_v1() != request {
+                return Err("TIR arithmetic frontier marker belongs to another source or request".into());
+            }
+            match unit.response_v1() {
+                PalwTirPublicResponseV1::StepNode { frontier, .. } => Ok(Some(frontier.clone())),
+                _ => Err("TIR arithmetic frontier marker has another response kind".into()),
+            }
+        },
+    )?)
+}
+
 fn first_difference_v1(
     count: u64,
     level: u8,
@@ -743,6 +798,16 @@ mod tests {
         .unwrap();
         assert_eq!(step, ArithmeticStepV1::Leaf { index: target });
         assert_eq!(requests, vec![(40, 0), (30, 1023), (20, (1 << 20) - 1), (10, (1 << 30) - 1)]);
+    }
+
+    #[test]
+    fn public_descent_uses_new_request_domain_and_does_not_accept_legacy_units() {
+        assert_eq!(
+            public_step_v1(ArithmeticStepV1::Need(PalwDaUnitV1::TirStepNode { level: 40, index: 0 })).unwrap(),
+            PublicArithmeticStepV1::Acquire(PalwTirPublicRequestV1::StepNode { level: 40, index: 0 })
+        );
+        assert_eq!(public_step_v1(ArithmeticStepV1::StepAgreement).unwrap(), PublicArithmeticStepV1::StepAgreement);
+        assert!(public_step_v1(ArithmeticStepV1::Need(PalwDaUnitV1::Event { row: 0, tile: 0 })).is_err());
     }
 
     #[test]
