@@ -112,3 +112,8 @@ required-features = ["native-rpc"]
 [[bin]]
 name = "palw-native-snapshot39"
 path = "src/bin/palw-native-snapshot39.rs"
+
+[[bin]]
+name = "palw-native-receipt-live39"
+path = "src/bin/palw-native-receipt-live39.rs"
+required-features = ["native-rpc"]

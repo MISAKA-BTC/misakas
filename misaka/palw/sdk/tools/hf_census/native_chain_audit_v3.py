@@ -305,6 +305,7 @@ def main() -> int:
     ap.add_argument("--receipt-audit-sha256")
     ap.add_argument("--receipt-collect")
     ap.add_argument("--receipt-collect-sha256")
+    ap.add_argument("--receipt-live-collected")
     # Isolated calibration34 owning snapshot (all three) or none: the shipped preset.
     for name in ("own-params-snapshot34", "own-params-snapshot-root", "own-params-sha256"):
         ap.add_argument(f"--{name}")

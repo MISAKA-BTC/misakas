@@ -3200,6 +3200,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             .transpose()?;
         if audit_job.is_none()
             && !page39
+            && collection.as_bytes() != kaspa_consensus_core::palw_native_state_anchor_v39::NATIVE_ANCHOR_LABEL_V39
             && !matches!(collection.as_str(), "bonds" | "classes" | "claims" | "kernel-aux-v32" | "pending-payouts-v32")
         {
             return Err(RpcError::General(format!("collection '{}' is not one of bonds, classes, claims", request.collection)));

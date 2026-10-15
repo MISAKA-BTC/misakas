@@ -24,10 +24,10 @@ mod discovery;
 mod final27;
 #[path = "palw_flat_execution_gc_fold_v24.rs"]
 mod gc;
-#[path = "palw_flat_execution_source_fold_v16.rs"]
-pub(super) mod source;
 #[path = "palw_native_paged_fold_v29.rs"]
 mod paged;
+#[path = "palw_flat_execution_source_fold_v16.rs"]
+pub(super) mod source;
 /// Text29 (original-maximum EOS text jobs) inside the funded namespace,
 /// actions 27..=40; dormant below the funded and Final27 fences.
 #[path = "palw_native_text_fold_v29.rs"]
@@ -1122,6 +1122,7 @@ impl PalwChainStateV2 {
             .fold(0u128, |sum, h| sum.saturating_add(h.producer_reserved as u128))
             // Text29 keeps its own namespaced producer catalogue and headers.
             .saturating_add(text29::reserved(r, bond))
+            .saturating_add(super::palw_native_job_fold_v39::reserved(r, bond))
     }
 }
 

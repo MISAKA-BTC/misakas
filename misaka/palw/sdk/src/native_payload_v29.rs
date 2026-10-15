@@ -555,6 +555,9 @@ pub fn decode_native_payload_v29(
     request: Option<&NativeTextRequestV29>,
     positions: Option<u32>,
 ) -> Result<PreparedNativePayloadV29, String> {
+    if matches!(kind, "source-class39" | "source-consent39" | "source-fund39" | "source-commit39" | "source-collect39") {
+        return decode_native_payload_v39(kind, raw, positions);
+    }
     use std::io::Cursor;
     fn read<T: BorshDeserialize>(r: &mut Cursor<&[u8]>) -> Result<T, String> {
         T::deserialize_reader(r).map_err(|e| e.to_string())
@@ -902,4 +905,153 @@ mod initial_tests {
             assert!(prepare_initial_transport_v31(&payload, &owner, 0, 1, 10, 9).is_err());
         }
     }
+}
+
+/// Owning39 upload uses its own paid source journal, u16 pages and canonical
+/// Source39 extent. It never routes a multi-MiB source through direct action41
+/// or the frozen object-chunks contract. Native consensus charges every step.
+pub fn prepare_source_upload_v39(
+    raw: &[u8],
+    owner: PalwBondKeyV2,
+    sequence: u64,
+    now: u64,
+    deadline: u64,
+    interval_end: u64,
+) -> Result<Vec<PreparedNativePayloadV29>, String> {
+    use kaspa_consensus_core::palw_native_execution_v39::*;
+    let source = misaka_palw_kernel::flat_source39::FlatSourceWireV39::from_bytes(raw)?.check()?;
+    if raw.len() > SOURCE_UPLOAD_MAX_BYTES_V39 {
+        return Err("source39 complete original body exceeds its selected upload contract".into());
+    }
+    let count = raw.len().div_ceil(SOURCE_PART_BYTES_V39);
+    let start = NativeSourceUploadStartV39 {
+        version: 39,
+        source: source.root(),
+        bytes: u32::try_from(raw.len()).map_err(|_| "source39 upload length")?,
+        count: u16::try_from(count).map_err(|_| "source39 upload page count")?,
+        sequence,
+        deadline,
+        body: misaka_palw_kernel::hash::object_id(b"misaka-palw/native/source-body/v39", &raw.to_vec()),
+    };
+    start.check(now, interval_end)?;
+    let id = start.id(owner);
+    let mut objects = Vec::with_capacity(count + 2);
+    objects.push(stage39_raw(SOURCE_START_ACTION_V39, borsh::to_vec(&start).map_err(|e| e.to_string())?)?);
+    for (index, page) in raw.chunks(SOURCE_PART_BYTES_V39).enumerate() {
+        let mut body = Vec::with_capacity(72 + page.len());
+        body.extend_from_slice(&39u16.to_le_bytes());
+        body.extend_from_slice(&id);
+        body.extend_from_slice(&(index as u16).to_le_bytes());
+        body.extend_from_slice(&(page.len() as u32).to_le_bytes());
+        body.extend_from_slice(page);
+        borrowed_source_upload_part_v39(&body).ok_or("source39 upload exact page grammar")?;
+        objects.push(stage39_raw(SOURCE_PART_ACTION_V39, body)?);
+    }
+    objects.push(stage39_raw(SOURCE_ASSEMBLE_ACTION_V39, id.to_vec())?);
+    Ok(objects)
+}
+fn stage39_raw(action: u8, body: Vec<u8>) -> Result<PreparedNativePayloadV29, String> {
+    if !(41..=66).contains(&action) {
+        return Err("native39 action outside owning namespace".into());
+    }
+    let object = K::StageExecutionV14 { action, body };
+    if object.encoded_len() > object.max_encoded_bytes() {
+        return Err("native39 complete object exceeds explicit carrier; select its paid paged contract".into());
+    }
+    K::decode(&object.encode()).map_err(|e| e.to_string())?;
+    Ok(PreparedNativePayloadV29 { object })
+}
+/// These are bounded transport readers; checked native maximum/Fund/private
+/// Final capabilities are exclusively produced by the genuine consensus fold.
+pub fn decode_native_payload_v39(kind: &str, raw: &[u8], maximum: Option<u32>) -> Result<PreparedNativePayloadV29, String> {
+    use kaspa_consensus_core::{palw_native_execution_v39::*, palw_native_job_v39::*};
+    match kind {
+        "source-class39" => {
+            let w = NativeClassWireV39::from_bytes(raw)?;
+            stage39_raw(42, borsh::to_vec(&w).map_err(|e| e.to_string())?)
+        }
+        "source-consent39" => {
+            let w = NativeConsentWireV39::from_bytes(raw)?;
+            stage39_raw(43, borsh::to_vec(&w).map_err(|e| e.to_string())?)
+        }
+        "source-fund39" => {
+            let w = NativeFundWireV39::from_bytes(raw)?;
+            stage39_raw(44, borsh::to_vec(&w).map_err(|e| e.to_string())?)
+        }
+        "source-commit39" => {
+            let w = NativeCommitWireV39::from_bytes(raw, maximum.ok_or("native39 commit requires original before-Fund maximum")?)?;
+            stage39_raw(45, borsh::to_vec(&w).map_err(|e| e.to_string())?)
+        }
+        "source-collect39" => {
+            let id: Digest = raw.try_into().map_err(|_| "source39 collect original fixed id width")?;
+            stage39_raw(60, id.to_vec())
+        }
+        _ => Err("unknown owning39 native transport kind".into()),
+    }
+}
+/// SDK-side semantic class preparation derives the full original39 scope and
+/// resource vector. No stored class ID or opaque quoted vector is accepted.
+pub fn prepare_source_class_v39(
+    source: &misaka_palw_kernel::flat_source39::CheckedSourceV39,
+    policy: &kaspa_consensus_core::palw_native_execution_v39::NativeExecutionPoliciesV39,
+    maximum: u32,
+) -> Result<PreparedNativePayloadV29, String> {
+    let w = kaspa_consensus_core::palw_native_execution_v39::NativeClassWireV39::derive(source, policy, maximum)?;
+    w.check(source, policy)?;
+    stage39_raw(42, borsh::to_vec(&w).map_err(|e| e.to_string())?)
+}
+
+pub fn prepare_source_consent_v39(
+    record: &kaspa_consensus_core::palw_native_job_v39::NativeConsentWireV39,
+    maximum: &misaka_palw_kernel::flat_job39::CheckedJobMaximumV39,
+    native: &kaspa_consensus_core::palw_native_job_v39::CheckedNativeMaximumV39,
+) -> Result<PreparedNativePayloadV29, String> {
+    let request = maximum.request();
+    let expected = native.record();
+    if record.version != 39
+        || record.class != expected.class
+        || record.maximum_contract != expected.root()
+        || expected.maximum != maximum.root()
+        || expected.source != request.source
+        || expected.input_manifest != maximum.input_manifest().root()
+        || kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&record.requester) != request.requester
+        || record.maximum != request.to_bytes()
+        || record.material != maximum.input_manifest().to_bytes()
+        || [record.requester_operator, record.producer_operator].contains(&[0; 64])
+        || record.requester_operator == record.producer_operator
+    {
+        return Err("native39 producer consent changes original checked maximum/source/input/actors".into());
+    }
+    let raw = borsh::to_vec(record).map_err(|e| e.to_string())?;
+    kaspa_consensus_core::palw_native_job_v39::NativeConsentWireV39::from_bytes(&raw)?;
+    stage39_raw(43, raw)
+}
+pub fn prepare_source_funding_v39(
+    record: &kaspa_consensus_core::palw_native_job_v39::NativeFundWireV39,
+    accepted: &kaspa_consensus_core::palw_native_job_v39::NativeConsentV39,
+) -> Result<PreparedNativePayloadV29, String> {
+    if record.version != 39 || record.consent != accepted.root() {
+        return Err("native39 Fund changes originally accepted producer consent".into());
+    }
+    stage39_raw(44, borsh::to_vec(record).map_err(|e| e.to_string())?)
+}
+/// The original native job is checked again by consensus. This SDK method
+/// constructs only a commitment; private native Final authority is not returned.
+pub fn prepare_source_post_v39<'a>(
+    record: &'a kaspa_consensus_core::palw_native_job_v39::NativeCommitWireV39,
+    source: &'a misaka_palw_kernel::flat_source39::CheckedSourceV39,
+    maximum: &misaka_palw_kernel::flat_job39::CheckedJobMaximumV39,
+    inputs: &'a misaka_palw_kernel::flat_job39::ActualInputResolverV39<'a>,
+    book: &kaspa_consensus_core::palw_native_job_v39::NativeJobBookV39,
+) -> Result<PreparedNativePayloadV29, String> {
+    if record.version != 39
+        || record.job != book.id()
+        || book.original().source != source.root()
+        || book.original().maximum != maximum.root()
+        || record.generated != inputs.generated()
+    {
+        return Err("native39 Commit changes original funded job/source/max/firstEOS".into());
+    }
+    misaka_palw_kernel::flat_point39::CheckedPointContextV39::check(source, maximum, record.claim.root(), &record.claim, inputs)?;
+    stage39_raw(45, borsh::to_vec(record).map_err(|e| e.to_string())?)
 }

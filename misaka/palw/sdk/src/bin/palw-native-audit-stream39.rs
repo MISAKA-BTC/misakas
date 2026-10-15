@@ -72,19 +72,30 @@ fn run() -> Result<(), String> {
     let maximum = get("--maximum-evidence-bytes")?.parse::<u64>().map_err(|e| e.to_string())?;
     let timeout = get("--timeout-seconds")?.parse::<u64>().map_err(|e| e.to_string())?;
     drop(get);
+    let shared_objects = a.remove("--objects-dir");
     let original_snapshot = a.remove("--own-params-snapshot34");
+    let original_snapshot39 = a.remove("--own-params-snapshot39");
     let pin = a.remove("--own-params-snapshot-root");
     let sha = a.remove("--own-params-sha256");
     let base: Params = network.parse::<NetworkId>().map_err(|e| e.to_string())?.into();
-    let own = match (original_snapshot, pin, sha) {
-        (None, None, None) => misaka_palw_sdk::native_params_v34::OwnedNativeParametersV34::shipped_preset(base),
-        (Some(f), Some(p), Some(s)) => misaka_palw_sdk::native_params_v34::load_own_native_parameters_v34(
+    let own = match (original_snapshot, original_snapshot39, pin, sha) {
+        (None, None, None, None) => misaka_palw_sdk::native_params_v39::OwnedNativeParametersV39::shipped_preset(base),
+        (Some(f), None, Some(p), Some(s)) => {
+            let own = misaka_palw_sdk::native_params_v34::load_own_native_parameters_v34(
+                &base,
+                Path::new(&f),
+                p.parse::<Hash64>().map_err(|e| e.to_string())?.as_bytes(),
+                misaka_palw_sdk::native_params_v34::parse_sha256_hex_v34(&s)?,
+            )?;
+            misaka_palw_sdk::native_params_v39::OwnedNativeParametersV39::shipped_preset(own.into_parameters())
+        }
+        (None, Some(f), Some(p), Some(s)) => misaka_palw_sdk::native_params_v39::load_own_native_parameters_v39(
             &base,
             Path::new(&f),
             p.parse::<Hash64>().map_err(|e| e.to_string())?.as_bytes(),
             misaka_palw_sdk::native_params_v34::parse_sha256_hex_v34(&s)?,
         )?,
-        _ => return Err("audit39 all owning snapshot pins required".into()),
+        _ => return Err("audit39 exactly one owning snapshot version and all root/SHA pins required".into()),
     };
     if !a.is_empty()
         || own.parameters().genesis.hash.to_string() != genesis
@@ -104,15 +115,28 @@ fn run() -> Result<(), String> {
     let final_out = parent_dir.join(name);
     let partial = parent_dir.join(format!(".{name}.partial"));
     std::fs::create_dir(&partial).map_err(|e| e.to_string())?;
-    std::fs::create_dir(partial.join("objects")).map_err(|e| e.to_string())?;
-    let mut output = Output { root: partial.join("objects"), bytes: 0, maximum };
-    let objects = final_out
-        .join("objects")
-        .strip_prefix(&root)
-        .map_err(|e| e.to_string())?
-        .to_str()
-        .ok_or("audit39 pool UTF8 path")?
-        .to_string();
+    let (object_pool, objects) = if let Some(relative) = shared_objects {
+        let rel = Path::new(&relative);
+        if rel.is_absolute() || rel.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+            return Err("audit39 shared CAS must be an existing normal relative directory".into());
+        }
+        let pool = root.join(rel).canonicalize().map_err(|e| e.to_string())?;
+        if !pool.starts_with(&root) || !pool.is_dir() {
+            return Err("audit39 shared CAS escapes original evidence root".into());
+        }
+        (pool, relative)
+    } else {
+        std::fs::create_dir(partial.join("objects")).map_err(|e| e.to_string())?;
+        let logical = final_out
+            .join("objects")
+            .strip_prefix(&root)
+            .map_err(|e| e.to_string())?
+            .to_str()
+            .ok_or("audit39 pool UTF8 path")?
+            .to_string();
+        (partial.join("objects"), logical)
+    };
+    let mut output = Output { root: object_pool, bytes: 0, maximum };
     let mut index = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -148,6 +172,41 @@ fn run() -> Result<(), String> {
     }
     output.write(&partial.join("child-header.json"), &serde_json::to_vec(&header).map_err(|e| e.to_string())?)?;
     output.write(&partial.join("selected-parent-header.json"), &serde_json::to_vec(&ph).map_err(|e| e.to_string())?)?;
+    // Own39 anchor opens the exact envelope selected by our independently
+    // reconstructed Params. An active Rule-E grammar never falls back to V1.
+    let anchor = runtime.block_on(async {
+        tokio::time::timeout(
+            Duration::from_secs(60),
+            client.get_palw_state_proof(kaspa_rpc_core::GetPalwStateProofRequest {
+                block_hash: child.to_string(),
+                collection: "kernel-anchor-v39".into(),
+            }),
+        )
+        .await
+        .map_err(|_| "audit39 anchor RPC timeout")?
+        .map_err(|e| e.to_string())
+    })?;
+    if !anchor.available
+        || anchor.block_hash != child.to_string()
+        || anchor.collection != "kernel-anchor-v39"
+        || anchor.state_preimage.len() > 4 << 20
+        || anchor.rows.len() != 1
+        || !anchor.rows[0].key.is_empty()
+    {
+        return Err("audit39 pinned own39 state-envelope opening unavailable".into());
+    }
+    let envelope = kaspa_consensus_core::palw_native_state_anchor_v39::NativeStateEnvelopeV39::from_bytes(&anchor.rows[0].value)?;
+    kaspa_consensus_core::palw_native_state_anchor_v39::check_native_state_anchor_v39(
+        &header,
+        child,
+        &ph,
+        parent,
+        own.parameters(),
+        &kaspa_consensus_core::palw_state_proof_v1::PalwStateOpeningV1 { preimage: anchor.state_preimage.clone() },
+        &envelope,
+    )?;
+    output.write(&partial.join("envelope39.bin"), &anchor.rows[0].value)?;
+    let anchor_state = anchor.state_preimage;
     let (mut cursor, mut total, mut count, mut original_state) = ("-".to_string(), None, 0usize, None::<Vec<u8>>);
     let started = Instant::now();
     loop {
@@ -168,6 +227,9 @@ fn run() -> Result<(), String> {
         })?;
         if !page.available || page.block_hash != child.to_string() || page.state_preimage.len() > 4 << 20 || page.rows.len() > 1024 {
             return Err("audit39 original bounded page unavailable".into());
+        }
+        if page.state_preimage != anchor_state {
+            return Err("audit39 paged state differs from original pinned own39 envelope".into());
         }
         let fields: Vec<_> = page.collection.split('/').collect();
         if fields.len() != 4 || fields[0] != "kernel-aux-page-v39" || !matches!(fields[2], "0" | "1") {

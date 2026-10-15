@@ -1016,7 +1016,7 @@ pub fn compile_runtime_q36_v40(
         || original.components[0].name != "decoder"
         || original.components[0].stages != vec![0]
         || original.source_files.is_empty()
-        || original.source_files.len() > 4096
+        || original.source_files.len() > misaka_palw_kernel::flat_component_source39::MAX_SOURCE_FILES_V39
         || original.repository.is_empty()
         || original.advertised_task.is_empty()
         || declaration.maximum_output_bytes == 0
@@ -1111,11 +1111,16 @@ pub fn compile_runtime_q36_v40(
     if super::hash(declaration_path, 16 << 20)? != declaration_sha {
         return Err("Q36_MIRROR40_DECLARATION_CHANGED_DURING_CONVERSION".into());
     }
+    let bundle = super::source39::single_source_complete_bundle_v39(original, &checked)?;
+    let complete = bundle.check()?;
     let hex = crate::runtime_pack::commit::hex;
-    let report = serde_json::json!({"schema":"misaka.palw.runtime-q36-source-conversion.v40","original":original,"declaration_sha256":hex(&declaration_sha),"program_root":hex(&checked.program_root()),"source":hex(&checked.root()),"source_profile":hex(&checked.profile_root()),"real_parameter":hex(&checked.parameters().root()),"inventory":hex(&checked.inventory_root()),"tokenizer":hex(&tokenizer),"maximum_scope":hex(&resources.scope().root()),"maximum_resources":hex(&resources.root()),"original_context":shape.max_position,"lowered_context":shape.max_position,"source_tensors":mirror.source_tensor_inventory,"parameter_mapping":mirror.mappings,"source_fidelity":"NOT_RUN","native_final":"NOT_RUN","A6_or_A8_credit":false});
+    let report = serde_json::json!({"schema":"misaka.palw.runtime-q36-source-conversion.v40","complete_source_root":hex(&complete.root()),"component_manifest_root":hex(&complete.manifest().root()),"pipeline_root":hex(&complete.pipeline().root()),"source_restore_bytes":complete.restore_bytes(),"original":original,"declaration_sha256":hex(&declaration_sha),"program_root":hex(&checked.program_root()),"source":hex(&checked.root()),"source_profile":hex(&checked.profile_root()),"real_parameter":hex(&checked.parameters().root()),"inventory":hex(&checked.inventory_root()),"tokenizer":hex(&tokenizer),"maximum_scope":hex(&resources.scope().root()),"maximum_resources":hex(&resources.root()),"original_context":shape.max_position,"lowered_context":shape.max_position,"source_tensors":mirror.source_tensor_inventory,"parameter_mapping":mirror.mappings,"source_fidelity":"NOT_RUN","native_final":"NOT_RUN","A6_or_A8_credit":false});
     for (name, data) in [
         ("program.tir39", wire.program_bytes.clone()),
         ("source.borsh", wire.to_bytes()),
+        ("complete-source39.borsh", bundle.to_bytes().map_err(|e| e.to_string())?),
+        ("component-manifest39.borsh", bundle.manifest.clone()),
+        ("pipeline39.borsh", bundle.pipeline.clone()),
         ("maximum-scope.borsh", borsh::to_vec(resources.scope()).map_err(|e| e.to_string())?),
         ("maximum-resources.borsh", borsh::to_vec(resources.vector()).map_err(|e| e.to_string())?),
         ("original-inventory.borsh", borsh::to_vec(&records).map_err(|e| e.to_string())?),
@@ -1237,6 +1242,29 @@ impl<'a> SourceDirectoryV39<'a> {
         workspace: u64,
         max_read_elements: usize,
     ) -> Result<Self, String> {
+        Self::open_named(source, directory, workspace, max_read_elements, &|index, layer| match layer {
+            None => format!("{index:05}.tensor"),
+            Some(l) => format!("{index:05}-layer-{l:05}.tensor"),
+        })
+    }
+    pub fn open_stage(
+        source: &'a misaka_palw_kernel::flat_source39::CheckedSourceV39,
+        directory: &std::path::Path,
+        stage: u16,
+        workspace: u64,
+        max_read_elements: usize,
+    ) -> Result<Self, String> {
+        Self::open_named(source, directory, workspace, max_read_elements, &|index, layer| {
+            super::frontend::tensor_name(stage, index, layer)
+        })
+    }
+    fn open_named(
+        source: &'a misaka_palw_kernel::flat_source39::CheckedSourceV39,
+        directory: &std::path::Path,
+        workspace: u64,
+        max_read_elements: usize,
+        name: &dyn Fn(u16, Option<u16>) -> String,
+    ) -> Result<Self, String> {
         if max_read_elements == 0
             || max_read_elements as u64 > source.profile().max_value_elements
             || workspace == 0
@@ -1247,10 +1275,7 @@ impl<'a> SourceDirectoryV39<'a> {
         let mut files = BTreeMap::new();
         for (&(index, layer), expected) in &source.parameters().by_instance {
             let p = &source.program().params[index as usize];
-            let name = match layer {
-                None => format!("{index:05}.tensor"),
-                Some(l) => format!("{index:05}-layer-{l:05}.tensor"),
-            };
+            let name = name(index, layer);
             let path = directory.join(name);
             if std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?.file_type().is_symlink() {
                 return Err("SOURCE39_REFERENCE_SYMLINK".into());

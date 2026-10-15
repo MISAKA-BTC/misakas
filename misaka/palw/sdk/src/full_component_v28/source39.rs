@@ -1,6 +1,7 @@
 //! Source-backed complete Program39 compiler. Original and candidate parameter
 //! streams are separate passes. The first pass retains at most one tensor;
 //! every candidate C_v3 must match before a complete-source marker is written.
+pub mod request41;
 use super::{
     decoder38::DecoderFrontendV38,
     frontend::{OriginalSource, PipelineDescription, TripDescription, bytes, decode, relative, tensor_name},
@@ -54,6 +55,10 @@ pub enum FrontendCompilerV39 {
     },
     Processor {
         profile: lower::pixtral_processor41::ProcessorProfileV41,
+    },
+    ImageJoin {
+        upstream_stages: Vec<u16>,
+        output_scale_q: u8,
     },
     Decoder {
         profile: DecoderFrontendV38,
@@ -615,7 +620,7 @@ pub fn compile_complete_frontend_v39(
         };
         let mut public_configuration = None;
         let (checkpoint, acquired): (Box<dyn TensorSource>, Vec<PathBuf>) =
-            if matches!(stage.compiler, FrontendCompilerV39::Processor { .. }) {
+            if matches!(stage.compiler, FrontendCompilerV39::Processor { .. } | FrontendCompilerV39::ImageJoin { .. }) {
                 if !stage.checkpoint.is_empty() || !stage.tensor_names.is_empty() {
                     return Err("SOURCE39_PROCESSOR_HAS_NO_MODEL_WEIGHT_IMPORTS".into());
                 }
@@ -693,6 +698,29 @@ pub fn compile_complete_frontend_v39(
                 let compiled = pack.compile(&config, &subset, plan.block_bytes).map_err(|e| e.to_string())?;
                 let p = compiled.program().clone();
                 public_compiled = Some(compiled);
+                (p, None)
+            }
+            FrontendCompilerV39::ImageJoin { upstream_stages, output_scale_q } => {
+                if *output_scale_q > 62
+                    || upstream_stages.is_empty()
+                    || upstream_stages.len() > 16
+                    || upstream_stages.windows(2).any(|w| w[0] >= w[1])
+                    || upstream_stages.iter().any(|s| *s as usize >= i)
+                    || !stage.config_file.is_empty()
+                {
+                    return Err("SOURCE39_IMAGE_JOIN_ORIGINAL_ORDER_OR_PROFILE".into());
+                }
+                let bindings = &plan.pipeline.stages[i].bind;
+                if bindings.len() != upstream_stages.len()
+                    || bindings
+                        .iter()
+                        .zip(upstream_stages)
+                        .any(|(b, s)| !matches!(b,super::frontend::BindingDescription::StageFinal{stage}if stage==s))
+                {
+                    return Err("SOURCE39_IMAGE_JOIN_ORIGINAL_EDGES_DIFFER".into());
+                }
+                let upstream = upstream_stages.iter().map(|s| &programs[*s as usize]).collect::<Vec<_>>();
+                let p = lower::source39::join_image_rows_v39(&upstream, SourceProfileV39::full_source()).map_err(|e| e.to_string())?;
                 (p, None)
             }
             FrontendCompilerV39::Processor { profile } => {
@@ -857,6 +885,18 @@ pub fn compile_complete_frontend_v39(
                 plan.commitment_workspace_bytes,
             )?;
             (records, report)
+        } else if let FrontendCompilerV39::ImageJoin { upstream_stages, output_scale_q } = &plan.stages[i].compiler {
+            let scale = 2f64.powi(-(*output_scale_q as i32));
+            if upstream_stages
+                .iter()
+                .any(|s| materialisation.get(*s as usize).and_then(|v: &serde_json::Value| v["output_scale"].as_f64()) != Some(scale))
+            {
+                return Err("SOURCE39_IMAGE_JOIN_INTEGER_UNITS_DIFFER".into());
+            }
+            (
+                Vec::new(),
+                serde_json::json!({"schema":"misaka.palw.original-image-projector-join.v39","output_scale":scale,"upstream_stages":upstream_stages,"source_fidelity":"NOT_RUN"}),
+            )
         } else if let Some(geometry) = &geometries[i] {
             (
                 Vec::new(),
@@ -917,7 +957,7 @@ pub fn compile_complete_frontend_v39(
                 false,
                 plan.commitment_workspace_bytes,
             )?;
-        } else if geometries[i].is_some() {
+        } else if geometries[i].is_some() || matches!(plan.stages[i].compiler, FrontendCompilerV39::ImageJoin { .. }) {
             // The processor has no model parameters; its exact resize tables
             // are canonical Program39 constants, already part of original P.
         } else if let Some(compiled) = &public_frontends[i] {
@@ -1022,6 +1062,7 @@ pub fn compile_complete_frontend_v39(
         sources: sources.iter().map(|s| s.wire().to_bytes()).collect(),
     };
     let complete = bundle.check()?;
+    let image_contract = request41::build_contract_v41(&plan, &geometries, &complete, tokenizer)?;
     // Final pins are checked after BOTH independent passes, before emitting the
     // immutable completion marker. Source mutation leaves only diagnostics.
     for f in &complete.manifest().manifest().source_files {
@@ -1038,13 +1079,92 @@ pub fn compile_complete_frontend_v39(
     if hash(declaration, 16 << 20)? != pin {
         return Err("SOURCE39_DECLARATION_CHANGED".into());
     }
+    if let Some(contract) = &image_contract {
+        std::fs::write(output.join("image-contract41.json"), serde_json::to_vec_pretty(contract).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    }
     std::fs::write(output.join("complete-source39.borsh"), bundle.to_bytes().map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     std::fs::write(output.join("component-manifest39.borsh"), &bundle.manifest).map_err(|e| e.to_string())?;
     std::fs::write(output.join("pipeline39.borsh"), &bundle.pipeline).map_err(|e| e.to_string())?;
     let hex = crate::runtime_pack::commit::hex;
-    let report = serde_json::json!({"schema":"misaka.palw.fresh-complete-source-conversion.v39","declaration_sha256":hex(&pin),"repository":plan.original.repository,"revision":plan.original.revision,"complete_source_root":hex(&complete.root()),"pipeline_root":hex(&complete.pipeline().root()),"component_manifest_root":hex(&complete.manifest().root()),"source_restore_bytes":complete.restore_bytes(),"source_roots":sources.iter().map(|s|hex(&s.root())).collect::<Vec<_>>(),"maximum_scopes":scopes.iter().map(|r|hex(r)).collect::<Vec<_>>(),"maximum_resources":vectors.iter().map(|r|hex(r)).collect::<Vec<_>>(),"original_contexts":plan.original.original_contexts,"tokenizer_root":hex(&tokenizer),"actual_parameter_bytes":candidate_total,"materialisation":materialisation,"processor_geometry":geometries,"source_fidelity":"NOT_RUN","native_final":"NOT_RUN","a6_eligible":false,"a8_eligible":false});
+    let report = serde_json::json!({"schema":"misaka.palw.fresh-complete-source-conversion.v39","declaration_sha256":hex(&pin),"repository":plan.original.repository,"revision":plan.original.revision,"complete_source_root":hex(&complete.root()),"pipeline_root":hex(&complete.pipeline().root()),"component_manifest_root":hex(&complete.manifest().root()),"source_restore_bytes":complete.restore_bytes(),"source_roots":sources.iter().map(|s|hex(&s.root())).collect::<Vec<_>>(),"maximum_scopes":scopes.iter().map(|r|hex(r)).collect::<Vec<_>>(),"maximum_resources":vectors.iter().map(|r|hex(r)).collect::<Vec<_>>(),"original_contexts":plan.original.original_contexts,"tokenizer_root":hex(&tokenizer),"actual_parameter_bytes":candidate_total,"materialisation":materialisation,"processor_geometry":geometries,"image_contract":image_contract.as_ref().map(|c|crate::runtime_pack::commit::hex(&c.root())),"source_fidelity":"NOT_RUN","native_final":"NOT_RUN","a6_eligible":false,"a8_eligible":false});
     std::fs::write(output.join("conversion.json"), serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     Ok(report)
+}
+
+/// Exact complete bundle for a source-backed standalone text program (including
+/// the original PALWQ361 runtime). This is the same manifest/pipeline39 admission
+/// used by multi-component conversion; old artifacts are never lifted here.
+pub fn single_source_complete_bundle_v39(
+    original: &OriginalSource,
+    source: &misaka_palw_kernel::flat_source39::CheckedSourceV39,
+) -> Result<CompleteSourceBundleV39, String> {
+    if original.components.len() != 1
+        || original.components[0].stages != vec![0]
+        || original.original_contexts != vec![source.original_context_max()]
+        || !source.program().inputs.is_empty()
+        || !matches!(source.program().output, misaka_palw_tir::program_v2::OutputDecl::Logits { .. })
+    {
+        return Err("SOURCE39_COMPLETE_STANDALONE_TEXT_SCOPE".into());
+    }
+    let mut files = original
+        .source_files
+        .iter()
+        .map(|f| Ok(OriginalFilePinV39 { path: f.path.clone(), bytes: f.bytes, sha256: decode::<32>(&f.sha256)? }))
+        .collect::<Result<Vec<_>, String>>()?;
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    let source_files = original.components[0]
+        .source_files
+        .iter()
+        .map(|name| {
+            files.iter().position(|f| &f.path == name).map(|i| i as u16).ok_or("SOURCE39_COMPLETE_STANDALONE_SOURCE_FILE".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let pipeline = PipelineV39 {
+        version: 39,
+        stages: vec![StageDecl {
+            name: "complete-original-decoder39".into(),
+            program: 0,
+            trip: TripRule::TextStream,
+            max_trip: source.original_context_max(),
+            tokens: None,
+            bind: vec![],
+        }],
+        output_stage: 0,
+    };
+    let checked_pipeline = pipeline.check(&[source.program().clone()]).map_err(|e| e.to_string())?;
+    let mut source_files = source_files;
+    source_files.sort();
+    let manifest = CompleteComponentManifestV39 {
+        version: 39,
+        repository: original.repository.clone(),
+        revision: decode::<20>(&original.revision)?,
+        original_task_metadata: source.original_task_metadata(),
+        original_pipeline: checked_pipeline.root(),
+        original_required_components: vec![original.components[0].name.clone()],
+        source_files: files,
+        components: vec![SourceComponentV39 { name: original.components[0].name.clone(), source_files, stages: vec![0] }],
+        stages: vec![ComponentStageV39 {
+            original_source: source.root(),
+            original_profile: source.profile_root(),
+            original_parameter: source.parameters().root(),
+            original_program: stage_program_root_v39(source.program()),
+            original_inventory: source.inventory_root(),
+            input_declarations: stage_input_declarations_root_v39(source.program()),
+            output_declaration: stage_output_declaration_root_v39(source.program()),
+            original_context_max: source.original_context_max(),
+            lowered_context_max: source.original_context_max(),
+        }],
+        inputs: vec![],
+    };
+    let bundle = CompleteSourceBundleV39 {
+        version: 39,
+        manifest: manifest.to_bytes().map_err(|e| e.to_string())?,
+        pipeline: pipeline.to_bytes().map_err(|e| e.to_string())?,
+        sources: vec![source.wire().to_bytes()],
+    };
+    bundle.check()?;
+    Ok(bundle)
 }

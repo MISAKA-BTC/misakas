@@ -971,3 +971,7 @@ pub mod palw_native_job_v39;
 pub mod palw_native_audit_page_v39;
 pub mod palw_native_audit_proof_v39;
 pub mod palw_native_calibration_v39;
+
+pub mod palw_native_state_anchor_v39;
+
+pub mod palw_native_master_v39;

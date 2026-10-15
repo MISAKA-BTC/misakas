@@ -18,6 +18,18 @@ pub trait TraceSinkV39 {
     /// A producer may stream typed bytes/leaf files; observers must not promote
     /// this position's provisional output until position_finished succeeds.
     fn node(&mut self, position: u32, occurrence: u16, node: u16, value: &Tensor, commitment: Digest) -> Result<(), String>;
+    fn node_with_trees(
+        &mut self,
+        position: u32,
+        occurrence: u16,
+        node: u16,
+        value: &Tensor,
+        commitment: Digest,
+        _row: Digest,
+        _col: Digest,
+    ) -> Result<(), String> {
+        self.node(position, occurrence, node, value, commitment)
+    }
     fn position_finished(&mut self, position: u32, root: Digest, output: &Tensor) -> Result<(), String>;
 }
 pub struct IgnoreTraceV39;
@@ -114,6 +126,11 @@ fn trace_impl_v39(
     let actual = u32::try_from(inputs.tokens().len()).map_err(|_| "trace39 actual input length")?;
     let prepared = PreparedV39::new(source, actual)?;
     let evaluator = InterpreterV39::new(source.program()).map_err(|e| e.to_string())?;
+    let occurrence_index =
+        prepared.occurrences().iter().copied().enumerate().map(|(i, key)| (key, i)).collect::<std::collections::BTreeMap<_, _>>();
+    if occurrence_index.len() != prepared.occurrences().len() {
+        return Err("trace39 repeated occurrence identity".into());
+    }
     let mut state = RunState::default();
     let mut positions = Vec::with_capacity(actual as usize);
     let mut outputs = Vec::new();
@@ -122,7 +139,7 @@ fn trace_impl_v39(
         let mut next = 0u64;
         let output = evaluator
             .step_with_trace_observer(params, inputs, &mut state, token, &mut |point| {
-                let occurrence = prepared.occurrences().iter().position(|x| *x == (point.block, point.layer)).ok_or_else(|| {
+                let occurrence = occurrence_index.get(&(point.block, point.layer)).copied().ok_or_else(|| {
                     misaka_palw_tir::TirError::new(misaka_palw_tir::TirErrorKind::Operand, "trace39 original occurrence absent")
                 })?;
                 let index = prepared
@@ -135,17 +152,26 @@ fn trace_impl_v39(
                     ));
                 }
                 next += 1;
-                let commitment =
-                    crate::flat_material39::tensor_commitment_streamed_v39(point.value.dtype, &point.value.shape, |offset, count| {
+                let (row_root, col_root) =
+                    crate::flat_material39::tensor_tree_roots_streamed_v39(point.value.dtype, &point.value.shape, |offset, count| {
                         let first = usize::try_from(offset).map_err(|_| "trace39 tensor range offset")?;
                         let end = first.checked_add(count).ok_or("trace39 tensor range overflow")?;
                         point.value.data.get(first..end).map(|x| x.to_vec()).ok_or("trace39 exact tensor range".into())
                     })
                     .map_err(|e| misaka_palw_tir::TirError::new(misaka_palw_tir::TirErrorKind::Operand, e))?;
+                let header = crate::flat_public39::ValueHeaderV39 {
+                    node: None,
+                    dtype: point.value.dtype.tag(),
+                    shape: point.value.shape.iter().map(|d| *d as u64).collect(),
+                    row_root,
+                    col_root,
+                };
+                let commitment =
+                    header.commitment().map_err(|e| misaka_palw_tir::TirError::new(misaka_palw_tir::TirErrorKind::Operand, e))?;
                 frontier
                     .push(crate::seg::node_leaf_v1(occurrence as u16, point.node, &commitment))
                     .map_err(|e| misaka_palw_tir::TirError::new(misaka_palw_tir::TirErrorKind::Operand, e))?;
-                sink.node(p as u32, occurrence as u16, point.node, point.value, commitment)
+                sink.node_with_trees(p as u32, occurrence as u16, point.node, point.value, commitment, row_root, col_root)
                     .map_err(|e| misaka_palw_tir::TirError::new(misaka_palw_tir::TirErrorKind::Operand, e))
             })
             .map_err(|e| e.to_string())?;

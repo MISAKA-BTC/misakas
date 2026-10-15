@@ -6111,7 +6111,7 @@ impl VirtualStateProcessor {
             misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 => Some(match bytes.get(2).copied() {
                 Some(0..=18) => self.palw_kernel_inner_fence_at(PalwKernelInnerFenceV1::StageExecutionV14, daa),
                 Some(19..=40) => self.palw_stage_execution_v28.as_ref().is_some_and(|f| active(f.activation)) && final27(),
-                Some(41..=66) => self.palw_native_execution_v39.as_ref().is_some_and(|f| active(f.activation)) && final27(),
+                Some(41..=70) => self.palw_native_execution_v39.as_ref().is_some_and(|f| active(f.activation)) && final27(),
                 _ => false,
             }),
             _ => None,
@@ -6146,7 +6146,7 @@ impl VirtualStateProcessor {
                         .as_ref()
                         .is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa))
             }
-            Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) if matches!(bytes.get(2), Some(41..=66)) => {
+            Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) if matches!(bytes.get(2), Some(41..=70)) => {
                 !final27
                     || !self
                         .palw_native_execution_v39

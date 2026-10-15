@@ -17,6 +17,7 @@ pub struct SourcePlanRecordV39 {
     pub maximum: Digest,
     pub quota: Digest,
     pub parameter: Digest,
+    pub protocol: Digest,
     pub inventory: Digest,
     pub requests_per_owner: u32,
     pub lifetime_owners: u8,
@@ -51,6 +52,7 @@ pub struct PagedProofPlanRecordV39 {
     pub part: QuotaQuantitiesV11,
     pub assembly: QuotaQuantitiesV11,
     pub court: QuotaQuantitiesV11,
+    pub conversion: QuotaQuantitiesV11,
     pub guarantee: QuotaQuantitiesV11,
 }
 impl PagedProofPlanRecordV39 {
@@ -110,6 +112,42 @@ impl CheckedQuotaV39 {
 fn checked_sum(a: u64, b: u64) -> Result<u64, String> {
     a.checked_add(b).ok_or("quota39 original extent overflow".into())
 }
+// Complete dynamic input-PC acquisition for one public action. Whole sealed
+// material borrows its already authenticated C; row/random bindings derive a
+// fresh original C and must not be priced as merely a128KiB reply. The current
+// random-access page reader may reauthenticate a full32KiB page for each column
+// cell, so its worst case is included until a different checked backend exists.
+fn public_input_restore_v39(source: &CheckedSourceV39, job: &CheckedJobMaximumV39) -> Result<QuotaQuantitiesV11, String> {
+    use crate::flat_job39::{InputBindingV39, MaterialSelectionV39};
+    let mut out = QuotaQuantitiesV11::default();
+    for (d, b) in source.program().inputs.iter().zip(&job.input_manifest().bindings) {
+        if matches!(b, InputBindingV39::Material { selection: MaterialSelectionV39::Whole, .. }) {
+            continue;
+        }
+        let cells = d.shape.iter().try_fold(1u128, |n, d| n.checked_mul(*d as u128)).ok_or("quota39 public input cells")?;
+        let raw = cells.checked_mul(d.dtype.width() as u128).ok_or("quota39 public input raw")?;
+        let material = matches!(b, InputBindingV39::Material { .. });
+        let reads = if material { cells.checked_mul(2).ok_or("quota39 public input calls")? } else { 0 };
+        let reread = reads.checked_mul((32 << 10) + 2048).ok_or("quota39 public input authenticated page IO")?;
+        let mut q = QuotaQuantitiesV11::default();
+        for (a, v) in [
+            (ResourceAxisV10::ScalarSteps, cells.checked_mul(if material { 128 } else { 16384 }).ok_or("quota39 input work")?),
+            (ResourceAxisV10::IndexSteps, cells.checked_mul(8192).ok_or("quota39 input index")?),
+            (ResourceAxisV10::ValidatedElements, cells * 2),
+            (ResourceAxisV10::CopiedReferenceBytes, raw * 4 + reread * 3),
+            (ResourceAxisV10::ParameterHashBytes, raw * 2 + reread),
+            (ResourceAxisV10::ParameterCalls, reads + cells * 2),
+            (ResourceAxisV10::RawStorageBytes, reread),
+            (ResourceAxisV10::MetadataWork, cells * 16384 + reread * 64),
+            (ResourceAxisV10::ParameterTreeScratch, 512 << 10),
+            (ResourceAxisV10::OwnedPeakBytes, 1 << 20),
+        ] {
+            q.set(a, v);
+        }
+        out = out.checked_add(&q)?;
+    }
+    Ok(out)
+}
 /// Class/source/root and original requested maximum have already been checked
 /// by their owning39 factories. No maximum vector is accepted from a carrier.
 pub fn derive_quota_v39(
@@ -163,6 +201,11 @@ pub fn derive_quota_v39(
         full,
         restore_bytes,
     ];
+    let input_restore = public_input_restore_v39(source, job)?;
+    // One genuine verdict closes every original pending request, owner index
+    // and refund/fee journal (at most11). Small graphs still own this fixed
+    // terminal work before Fund; it cannot depend on fresh ordinary capacity.
+    let terminal_cleanup = action_envelope(64u128 * (1 << 20), 1 << 20, None)?;
     let mut actions = [
         QuotaQuantitiesV11::default(),
         QuotaQuantitiesV11::default(),
@@ -174,6 +217,14 @@ pub fn derive_quota_v39(
     for (i, a) in actions.iter_mut().enumerate() {
         *a = action_envelope(restore_work as u128, sizes[i], if i == 3 || i == 4 { Some((work, filing, scratch)) } else { None })?;
         include_native_post_io_v11(a, post)?;
+        // Request and answer context checks can both authenticate original
+        // actual input C; courts also share this exact paid context boundary.
+        if matches!(i, 1 | 2 | 3 | 4) {
+            *a = a.checked_add(&input_restore)?;
+        }
+        if matches!(i, 3 | 4 | 5) {
+            *a = a.checked_add(&terminal_cleanup)?;
+        }
     }
     let plan = CheckedJobQuotaPlanV11 {
         program_root: source.program_root(),
@@ -200,6 +251,18 @@ pub fn derive_quota_v39(
         let l = crate::merkle3::LayoutV3::try_of(&sh).ok_or("quota39 real-PC geometry")?;
         pc_depth = pc_depth.max(log(l.leaves(0).max(l.leaves(1))));
     }
+    for d in &source.program().inputs {
+        let shape = d.shape.iter().map(|d| *d as usize).collect::<Vec<_>>();
+        let layout = crate::merkle3::LayoutV3::try_of(&shape).ok_or("quota39 public input tree geometry")?;
+        pc_depth = pc_depth.max(log(layout.leaves(0).max(layout.leaves(1))));
+    }
+    for (s, (block, _)) in pr.occurrences().iter().enumerate() {
+        for n in 0..source.program().blocks[*block as usize].nodes.len() {
+            let shape = pr.shapes(job.maximum_positions() - 1, s as u16, n as u16)?.out;
+            let layout = crate::merkle3::LayoutV3::try_of(&shape).ok_or("quota39 public trace tree geometry")?;
+            pc_depth = pc_depth.max(log(layout.leaves(0).max(layout.leaves(1))));
+        }
+    }
     // Locate a divergent segment/position/node, then a leaf and one complete
     // scalar/selection/state relation. Both real-PC header bisection and trace
     // directory headers are charged for every operand; no fixed128 shortcut.
@@ -223,8 +286,10 @@ pub fn derive_quota_v39(
         .and_then(|n| n.checked_add(preclaim_units))
         .ok_or("quota39 producer lifetime source obligation overflow")?;
     let fragment = action_envelope(65536, (32 << 10) + 4096, None)?;
-    let answer =
-        action_envelope(restore_work as u128, checked_sum(restore_bytes, 128 << 10)?, None)?.checked_add(&fragment.checked_mul(4)?)?;
+    let answer = action_envelope(restore_work as u128, checked_sum(restore_bytes, 128 << 10)?, None)?
+        .checked_add(&fragment.checked_mul(4)?)?
+        .checked_add(&input_restore)?
+        .checked_add(&terminal_cleanup)?;
     let total = answer.checked_mul(requests.checked_mul(2).ok_or("quota39 producer answer attempts overflow")?)?;
     let source_plan = SourcePlanRecordV39 {
         version: 39,
@@ -233,6 +298,7 @@ pub fn derive_quota_v39(
         maximum: job.root(),
         quota: plan.record().root(),
         parameter: source.parameters().root(),
+        protocol: crate::flat_public39::public_protocol_id_v39(),
         inventory: source.inventory_root(),
         requests_per_owner,
         lifetime_owners: 4,
@@ -246,12 +312,28 @@ pub fn derive_quota_v39(
         answer,
         total,
     };
-    let part = action_envelope(65536, 32 << 10, None)?;
+    // Every attempted part restores and writes original progress, owner,
+    // shared21 counters, fixed book/plan and pending journal before payload IO.
+    let fixed_rows = 32u64 << 10;
+    let fixed_work = fixed_rows.checked_mul(64).ok_or("quota39 fixed row restore work")?;
+    let part = action_envelope(fixed_work as u128, checked_sum(32 << 10, fixed_rows)?, None)?;
     let maximum_bytes = checked_sum(filing, 68)?;
     let pages = u16::try_from(maximum_bytes.div_ceil(32 << 10)).map_err(|_| "quota39 original proof part count")?;
-    let assembly = action_envelope(restore_work as u128, checked_sum(restore_bytes, maximum_bytes)?, None)?;
-    let court = action_envelope(restore_work as u128, checked_sum(restore_bytes, maximum_bytes)?, Some((work, filing, scratch)))?;
-    let guarantee = part.checked_mul(pages as u32 * 2)?.checked_add(&assembly.checked_mul(2)?)?.checked_add(&court.checked_mul(2)?)?;
+    if maximum_bytes > 64 << 20 || pages == 0 || pages > 2048 {
+        return Err("quota39 total sealed proof exceeds original64MiB/2048parts including all wrappers".into());
+    }
+    let restored = checked_sum(restore_bytes, fixed_rows)?;
+    let restored_work = checked_sum(restore_work, fixed_work)?;
+    let assembly = action_envelope(restored_work as u128, checked_sum(restored, maximum_bytes)?, None)?;
+    let court = action_envelope(restored_work as u128, checked_sum(restored, maximum_bytes)?, Some((work, filing, scratch)))?
+        .checked_add(&input_restore)?
+        .checked_add(&terminal_cleanup)?;
+    let conversion = action_envelope(restored_work as u128, restored, None)?;
+    let guarantee = part
+        .checked_mul(pages as u32 * 2)?
+        .checked_add(&assembly.checked_mul(2)?)?
+        .checked_add(&court.checked_mul(2)?)?
+        .checked_add(&conversion)?;
     let paged = PagedProofPlanRecordV39 {
         version: 39,
         class,
@@ -267,6 +349,7 @@ pub fn derive_quota_v39(
         part,
         assembly,
         court,
+        conversion,
         guarantee,
     };
     Ok(CheckedQuotaV39 {

@@ -1,0 +1,900 @@
+//! Native39 original maximum/actual-EOS journal. All expensive restoration is
+//! preceded by a current ordinary or original producer reservation debit.
+use super::*;
+use crate::{
+    palw_flat_execution_capacity_v22::*,
+    palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_bond_id_v1},
+    palw_native_execution_v39::*,
+    palw_native_job_v39::*,
+    palw_native_queue_v30::*,
+};
+use borsh::{BorshDeserialize, BorshSerialize};
+use misaka_palw_kernel::{
+    flat_job39::*,
+    flat_material39::*,
+    flat_quota11::{
+        owning39::{source::*, *},
+        *,
+    },
+    flat_resources10::{ResourceAxisV10 as A, ResourceQuantitiesV10},
+    hash::{Digest, object_id},
+};
+const TABLE: u8 = 112;
+const QUOTA: u8 = 92;
+const NONCE: u8 = 89;
+fn bad(s: impl Into<String>) -> PalwStateV2Error {
+    PalwStateV2Error::KernelRouteRefused(s.into())
+}
+fn b<T: BorshSerialize>(v: &T) -> Vec<u8> {
+    borsh::to_vec(v).expect("native39 bounded canonical row")
+}
+fn k<T: BorshSerialize>(kind: u8, id: &T) -> Vec<u8> {
+    b(&(39u8, kind, id))
+}
+fn read<T: BorshDeserialize>(
+    r: &PalwKernelRouteStateV1,
+    kind: u8,
+    id: &impl BorshSerialize,
+    cap: usize,
+) -> Result<T, PalwStateV2Error> {
+    let raw =
+        r.aux.get(&(TABLE, k(kind, id))).filter(|raw| raw.len() <= cap).ok_or_else(|| bad("native39 original bounded row absent"))?;
+    borsh::from_slice(raw).map_err(|_| bad("native39 original row grammar"))
+}
+fn list(r: &PalwKernelRouteStateV1, kind: u8, id: &PalwBondKeyV2) -> Result<Vec<Digest>, PalwStateV2Error> {
+    match r.aux.get(&(TABLE, k(kind, id))) {
+        None => Ok(vec![]),
+        Some(raw) => {
+            if raw.len() > 4 + 8 * 64 {
+                return Err(bad("native39 catalog extent"));
+            }
+            let ids: Vec<Digest> = borsh::from_slice(raw).map_err(|_| bad("native39 catalog grammar"))?;
+            if ids.len() > 8 || ids.iter().enumerate().any(|(i, x)| *x == [0; 64] || ids[..i].contains(x)) {
+                return Err(bad("native39 catalog membership"));
+            }
+            Ok(ids)
+        }
+    }
+}
+fn epoch(p: &NativeExecutionPoliciesV39, ctx: &PalwBlockContextV2) -> Result<TrustedEpochV11, PalwStateV2Error> {
+    TrustedEpochV11::from_chain(&p.execution.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(bad)
+}
+fn nonce(requester: Digest, row: &crate::palw_flat_execution_v11::NativeRequesterNonceRowV11) -> NativeRequesterNonceWitnessV11 {
+    NativeRequesterNonceWitnessV11 {
+        requester,
+        requester_operator_id: row.operator,
+        counter_root: row.root(),
+        next_nonce: row.next_nonce,
+    }
+}
+fn prepay(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV39,
+    restore: u64,
+    body: usize,
+    held: u64,
+) -> Result<bool, PalwStateV2Error> {
+    let bytes = restore.checked_add(body as u64).ok_or_else(|| bad("native39 original restore extent overflow"))?;
+    if bytes > 128 << 20 || held > 64 << 20 {
+        return Err(bad("native39 original metadata envelope exceeded"));
+    }
+    let work = bytes.checked_mul(8192).and_then(|n| n.checked_add(65536)).ok_or_else(|| bad("native39 restore work overflow"))?;
+    let Some(fee) = super::palw_flat_model_vector_fold_v3::charge(builder, ctx, signer, work, false)? else { return Ok(false) };
+    builder.slash_bond(*signer, fee)?;
+    let mut q = ResourceQuantitiesV10::default();
+    for (a, v) in [
+        (A::MetadataWork, work as u128),
+        (A::ScalarSteps, work as u128),
+        (A::IndexSteps, bytes as u128 * 64),
+        (A::ValidatedElements, bytes as u128),
+        (A::CopiedReferenceBytes, bytes as u128 * 8),
+        (A::OwnedPeakBytes, bytes as u128 * 12 + held as u128 + 65536),
+        (A::CourtScratchBytes, bytes as u128 * 12 + 65536),
+        (A::StoredEvidenceBytes, held as u128),
+        (A::ContainerAllocatorAllowance, bytes as u128 * 4 + 65536),
+        (A::Attempts, 1),
+    ] {
+        q.set(a, v);
+    }
+    let e = epoch(p, ctx)?;
+    let mut s = super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &e, palw_kernel_bond_id_v1(signer), [0; 64])?;
+    s.debit_ordinary(&p.execution.quota, &e, &DerivedOrdinaryMetadataV11::from_native_envelope(q)).map_err(bad)?;
+    super::palw_flat_execution_fold_v11::write_shard(builder, &s, [0; 64]);
+    Ok(true)
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+struct ConsentHeader {
+    version: u16,
+    id: Digest,
+    class: Digest,
+    source_bytes: u32,
+    body_bytes: u32,
+    body: Digest,
+    producer: PalwBondKeyV2,
+    requester: PalwBondKeyV2,
+    accepted: u64,
+    expires: u64,
+}
+impl ConsentHeader {
+    fn root(&self) -> Digest {
+        object_id(b"misaka-palw/native/producer-consent-header/v39", self)
+    }
+}
+fn consent_header(r: &PalwKernelRouteStateV1, id: Digest) -> Result<ConsentHeader, PalwStateV2Error> {
+    let (root, h): (Digest, ConsentHeader) = read(r, 18, &id, 1024)?;
+    if h.version != 39
+        || h.id != id
+        || h.root() != root
+        || h.body_bytes as usize > NativeConsentWireV39::MAX_BYTES + 16384
+        || h.body_bytes == 0
+    {
+        return Err(bad("native39 original consent fixed header differs"));
+    }
+    Ok(h)
+}
+fn original_consent(r: &PalwKernelRouteStateV1, h: &ConsentHeader) -> Result<NativeConsentV39, PalwStateV2Error> {
+    let raw: Vec<u8> = read(r, 26, &h.id, NativeConsentWireV39::MAX_BYTES + 16388)?;
+    if raw.len() != h.body_bytes as usize || object_id(b"misaka-palw/native/original-consent-body/v39", &raw) != h.body {
+        return Err(bad("native39 original consent body differs"));
+    }
+    let c: NativeConsentV39 = borsh::from_slice(&raw).map_err(|_| bad("native39 original consent grammar"))?;
+    if c.root() != h.id
+        || c.producer != h.producer
+        || c.wire.requester != h.requester
+        || c.wire.class != h.class
+        || c.wire.expires != h.expires
+    {
+        return Err(bad("native39 original consent header relation differs"));
+    }
+    Ok(c)
+}
+fn quote(
+    builder: &TransitionBuilder<'_>,
+    p: &NativeExecutionPoliciesV39,
+    w: &NativeConsentWireV39,
+) -> Result<(CheckedNativeClassV39, CheckedJobMaximumV39, CheckedQuotaV39, CheckedNativeMaximumV39), PalwStateV2Error> {
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let class = super::palw_native_source_fold_v39::restore_class(r, p, w.class)?;
+    let maximum = JobMaximumV39::from_bytes(&w.maximum).map_err(bad)?;
+    let material = MaterialManifestV39::from_bytes(&w.material).map_err(bad)?;
+    let maximum = CheckedJobMaximumV39::check(class.source(), &maximum, &material).map_err(bad)?;
+    if maximum.request().requester != palw_kernel_bond_id_v1(&w.requester)
+        || w.reward == 0
+        || w.reward > p.execution.execution.reward_cap
+    {
+        return Err(bad("native39 original requester/max/reward differs"));
+    }
+    let quota = derive_quota_v39(class.source(), &maximum, class.root(), p.root(), class.wire().max_positions, 32).map_err(bad)?;
+    let e = builder.extras.kernel_route.as_ref().unwrap();
+    let max = CheckedNativeMaximumV39::derive(
+        &class,
+        &maximum,
+        &quota,
+        p,
+        &e.native_final.as_ref().unwrap().policy,
+        &r.header.policy,
+        e.native_carriage_mass.as_ref().ok_or_else(|| bad("native39 original mass absent"))?,
+        e.native_carriage_service.as_ref().ok_or_else(|| bad("native39 original service absent"))?,
+    )
+    .map_err(bad)?;
+    if max.record().root() != w.maximum_contract {
+        return Err(bad("native39 producer did not sign complete original resource/temporal/economic/queue contract"));
+    }
+    Ok((class, maximum, quota, max))
+}
+fn accept(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV39,
+    body: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    if body.len() < 66 || body.len() > NativeConsentWireV39::MAX_BYTES {
+        return Err(bad("native39 original Accept extent"));
+    }
+    let class_id: Digest = body[2..66].try_into().unwrap();
+    let ch = super::palw_native_source_fold_v39::class_header(builder.state.kernel_route.as_ref().unwrap(), class_id)?;
+    let mut ids = list(builder.state.kernel_route.as_ref().unwrap(), 19, signer)?;
+    ids.retain(|id| consent_header(builder.state.kernel_route.as_ref().unwrap(), *id).is_ok_and(|h| h.expires >= ctx.daa_score));
+    if ids.len() >= p.catalog_cap.min(8) as usize {
+        return Err(bad("native39 producer-owned consent catalog full"));
+    }
+    if !prepay(builder, ctx, signer, p, ch.source_bytes as u64, body.len(), body.len() as u64 + 16384)? {
+        return Ok(());
+    }
+    let w = NativeConsentWireV39::from_bytes(body).map_err(bad)?;
+    let (_, maximum, _, contract) = quote(builder, p, &w)?;
+    let producer = builder.state.bonds.get(signer).ok_or_else(|| bad("native39 original producer absent"))?;
+    let requester = builder.state.bonds.get(&w.requester).ok_or_else(|| bad("native39 original requester absent"))?;
+    if !matches!(producer.status, PalwBondStatusV2::Active)
+        || !matches!(requester.status, PalwBondStatusV2::Active)
+        || maximum.request().producer != palw_kernel_bond_id_v1(signer)
+        || w.producer_operator != producer.operator_id.as_bytes()
+        || w.requester_operator != requester.operator_id.as_bytes()
+        || w.producer_operator == w.requester_operator
+        || w.expires < ctx.daa_score
+        || w.expires
+            > ctx
+                .daa_score
+                .checked_add(contract.record().temporal.commit_window)
+                .ok_or_else(|| bad("native39 consent clock overflow"))?
+        || w.expires / p.execution.quota.interval_daa != ctx.daa_score / p.execution.quota.interval_daa
+    {
+        return Err(bad("native39 producer-only consent changes original operators/epoch/max source"));
+    }
+    builder
+        .state
+        .kernel_route
+        .as_ref()
+        .unwrap()
+        .execution_nonce_counter_v11(&w.requester_operator)
+        .map_err(bad)?
+        .advance(&maximum.request().nonce)
+        .map_err(bad)?;
+    authenticate_material(
+        builder.state.kernel_route.as_ref().unwrap(),
+        maximum.input_manifest(),
+        &w.requester,
+        w.requester_operator,
+        maximum.request().nonce,
+        ctx.daa_score,
+    )?;
+    let c = NativeConsentV39 {
+        wire: w,
+        producer: *signer,
+        accepted: ctx.daa_score,
+        interval: ctx.daa_score / p.execution.quota.interval_daa,
+        checked_maximum: contract.record().clone(),
+    };
+    let id = c.root();
+    if ids.contains(&id) {
+        return Err(bad("native39 consent replay"));
+    }
+    ids.push(id);
+    let raw = b(&c);
+    let h = ConsentHeader {
+        version: 39,
+        id,
+        class: class_id,
+        source_bytes: ch.source_bytes,
+        body_bytes: raw.len() as u32,
+        body: object_id(b"misaka-palw/native/original-consent-body/v39", &raw),
+        producer: *signer,
+        requester: c.wire.requester,
+        accepted: c.accepted,
+        expires: c.wire.expires,
+    };
+    builder.write_kernel_row(TABLE, k(18, &id), Some(b(&(h.root(), h))));
+    builder.write_kernel_row(TABLE, k(26, &id), Some(b(&raw)));
+    builder.write_kernel_row(TABLE, k(19, signer), Some(b(&ids)));
+    Ok(())
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub(super) struct JobHeader {
+    pub(super) version: u16,
+    pub(super) id: Digest,
+    pub(super) original: NativeJobOriginalV39,
+    pub(super) book: Digest,
+    pub(super) book_bytes: u32,
+    pub(super) consent_bytes: u32,
+    pub(super) class_bytes: u32,
+    pub(super) source_bytes: u32,
+    pub(super) post_bytes: u32,
+    pub(super) plan: QuotaPlanRecordV11,
+    pub(super) plan_root: Digest,
+    pub(super) terminal: NativeJobTerminalV39,
+    pub(super) requester_payout: Hash64,
+    pub(super) producer_payout: Hash64,
+}
+impl JobHeader {
+    fn root(&self) -> Digest {
+        object_id(b"misaka-palw/native/original-funded-job-header/v39", self)
+    }
+}
+pub(super) fn header(r: &PalwKernelRouteStateV1, id: Digest) -> Result<JobHeader, PalwStateV2Error> {
+    let (root, h): (Digest, JobHeader) = read(r, 16, &id, 16384)?;
+    if h.version != 39
+        || h.id != id
+        || h.original.job() != id
+        || h.root() != root
+        || h.book_bytes > 16384
+        || h.plan.root() != h.plan_root
+        || h.plan_root != h.original.shared_plan
+    {
+        return Err(bad("native39 original funded fixed header differs"));
+    }
+    Ok(h)
+}
+pub(super) fn book(r: &PalwKernelRouteStateV1, h: &JobHeader) -> Result<NativeJobBookV39, PalwStateV2Error> {
+    let raw = r
+        .aux
+        .get(&(TABLE, k(17, &h.id)))
+        .filter(|raw| raw.len() == h.book_bytes as usize)
+        .ok_or_else(|| bad("native39 original book extent absent"))?;
+    let book: NativeJobBookV39 = borsh::from_slice(raw).map_err(|_| bad("native39 original book grammar"))?;
+    if book.root() != h.book || book.id() != h.id || book.original() != &h.original || book.terminal() != h.terminal {
+        return Err(bad("native39 original book relation differs"));
+    }
+    Ok(book)
+}
+fn write_book(builder: &mut TransitionBuilder<'_>, h: &mut JobHeader, book: &NativeJobBookV39) {
+    let raw = b(book);
+    h.book = book.root();
+    h.book_bytes = raw.len() as u32;
+    h.terminal = book.terminal();
+    builder.write_kernel_row(TABLE, k(17, &h.id), Some(raw));
+    builder.write_kernel_row(TABLE, k(16, &h.id), Some(b(&(h.root(), h))));
+}
+pub(super) fn reserved(r: &PalwKernelRouteStateV1, bond: &PalwBondKeyV2) -> u128 {
+    list(r, 22, bond)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|id| header(r, *id).ok())
+        .filter(|h| {
+            h.original.producer == *bond && matches!(h.terminal, NativeJobTerminalV39::Funded | NativeJobTerminalV39::Challengeable)
+        })
+        .fold(0u128, |n, h| n.saturating_add(h.original.reserve as u128))
+        .saturating_add(public::reserved(r, bond))
+}
+fn write_source(builder: &mut TransitionBuilder<'_>, s: &SourceShardV39, id: Digest) {
+    let g = s.global_row();
+    let a = s.producer_row();
+    builder.write_kernel_row(QUOTA, vec![0], Some(b(&(g.root(), g))));
+    builder.write_kernel_row(QUOTA, b(&(1u8, a.actor)), Some(b(&(a.root(), a))));
+    if let Some(r) = s.source_row() {
+        builder.write_kernel_row(QUOTA, b(&(39u8, 0u8, id)), Some(b(&(r.root(), r))));
+    }
+}
+fn fund(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV39,
+    body: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    let f = NativeFundWireV39::from_bytes(body).map_err(bad)?;
+    let h = consent_header(builder.state.kernel_route.as_ref().unwrap(), f.consent)?;
+    if h.requester != *signer || ctx.daa_score < h.accepted || ctx.daa_score > h.expires {
+        return Err(bad("native39 original signed requester/consent clock differs"));
+    }
+    if !prepay(builder, ctx, signer, p, h.source_bytes as u64 + h.body_bytes as u64, body.len(), 32768)? {
+        return Ok(());
+    }
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let c = original_consent(r, &h)?;
+    let (class, maximum, quota, contract) = quote(builder, p, &c.wire)?;
+    let requester = builder.state.bonds.get(signer).ok_or_else(|| bad("native39 requester absent"))?;
+    let producer = builder.state.bonds.get(&c.producer).ok_or_else(|| bad("native39 producer absent"))?;
+    if !matches!(requester.status, PalwBondStatusV2::Active)
+        || !matches!(producer.status, PalwBondStatusV2::Active)
+        || c.interval != ctx.daa_score / p.execution.quota.interval_daa
+        || c.wire.requester_operator != requester.operator_id.as_bytes()
+        || c.wire.producer_operator != producer.operator_id.as_bytes()
+        || c.checked_maximum != *contract.record()
+        || c.root() != f.consent
+        || r.aux.contains_key(&(TABLE, k(20, &f.consent)))
+    {
+        return Err(bad("native39 Fund changes original producer consent/principal/operator/contract or replays consent"));
+    }
+    authenticate_material(
+        r,
+        maximum.input_manifest(),
+        signer,
+        requester.operator_id.as_bytes(),
+        maximum.request().nonce,
+        ctx.daa_score,
+    )?;
+    let next =
+        r.execution_nonce_counter_v11(&c.wire.requester_operator).map_err(bad)?.advance(&maximum.request().nonce).map_err(bad)?;
+    let reward = c.wire.reward;
+    let reserve = p.execution.execution.required_producer_reserve;
+    if (requester.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < reward as u128
+        || (producer.collateral as u128).saturating_sub(builder.committed_at(&c.producer, ctx.daa_score)) < reserve as u128
+    {
+        return Err(bad("native39 actual escrow or collectible original producer reserve unavailable"));
+    }
+    let mut requesters = list(r, 21, signer)?;
+    let mut producers = list(r, 22, &c.producer)?;
+    let mut consents = list(r, 19, &c.producer)?;
+    if requesters.len() >= p.catalog_cap.min(8) as usize
+        || producers.len() >= p.catalog_cap.min(8) as usize
+        || !consents.contains(&f.consent)
+    {
+        return Err(bad("native39 original finite funded slots or consent membership unavailable"));
+    }
+    let temporal = &contract.record().temporal;
+    let deadline = temporal.deadline(ctx.daa_score, p.execution.quota.interval_daa).map_err(bad)?;
+    material::preflight_attach(r, maximum.input_manifest(), deadline)?;
+    let receipt = object_id(
+        b"misaka-palw/native/original-collected-escrow/v39",
+        &(ctx.block.as_bytes(), *signer, c.root(), maximum.root(), reward),
+    );
+    let original = NativeJobOriginalV39 {
+        version: 39,
+        class: class.root(),
+        source: class.source().root(),
+        policy: p.root(),
+        maximum: maximum.root(),
+        class_scope: class.scope().root(),
+        class_resources: class.resources().root(),
+        maximum_scope: maximum.resources().scope().root(),
+        maximum_resources: maximum.resources().root(),
+        maximum_positions: maximum.maximum_positions(),
+        input_manifest: maximum.input_manifest().root(),
+        quota: quota.root(),
+        shared_plan: quota.plan().record().root(),
+        source_plan: quota.source().root(),
+        paged_plan: quota.paged().root(),
+        consent: c.root(),
+        maximum_contract: contract.record().root(),
+        transport: contract.record().transport,
+        queue: contract.record().queue,
+        physical: p.physical_service,
+        final_policy: p.final_policy,
+        final_basis: contract.conditions().basis_root(),
+        requester: *signer,
+        producer: c.producer,
+        requester_operator: c.wire.requester_operator,
+        producer_operator: c.wire.producer_operator,
+        nonce: maximum.request().nonce,
+        reward,
+        reserve,
+        finder: u64::try_from(reserve as u128 * p.execution.execution.finder_permille as u128 / 1000)
+            .map_err(|_| bad("native39 finder range"))?,
+        actual_debit: reward,
+        debit_receipt: receipt,
+        admitted_block: ctx.block.as_bytes(),
+        admitted: ctx.daa_score,
+        interval: ctx.daa_score / p.execution.quota.interval_daa,
+        commit_until: ctx.daa_score.checked_add(temporal.commit_window).ok_or_else(|| bad("native39 commit clock overflow"))?,
+        challenge_window: temporal.challenge_window,
+        final_tail: temporal.final_tail,
+        deadline,
+    };
+    let id = original.job();
+    if r.aux.contains_key(&(TABLE, k(16, &id))) || r.aux.contains_key(&(TABLE, k(24, &id))) {
+        return Err(bad("native39 original job replay"));
+    }
+    let e = epoch(p, ctx)?;
+    let witness = nonce(palw_kernel_bond_id_v1(signer), &next);
+    let grant = check_quota_admission_v39(&quota, &original.funding_anchor(), &p.execution.quota, &witness, &e).map_err(bad)?;
+    let mut baseline =
+        super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &e, palw_kernel_bond_id_v1(&c.producer), id)?;
+    baseline.admit_baseline(&p.execution.quota, &e, &grant, quota.plan()).map_err(bad)?;
+    let sg = check_source_admission_v39(&quota, &original.funding_anchor(), &p.execution.quota, &witness, &e).map_err(bad)?;
+    let g = baseline.global_row();
+    let a = baseline.actor_row();
+    let s = baseline.subject_row().unwrap();
+    let mut source =
+        SourceShardV39::from_native_rows(&p.execution.quota, &quota, &g, &g.root(), (&a, &a.root()), (s, &s.row_root()), None)
+            .map_err(bad)?;
+    source.admit(&p.execution.quota, &e, &quota, &sg).map_err(bad)?;
+    let ext = builder.extras.kernel_route.as_ref().unwrap();
+    let service = ext.native_carriage_service.as_ref().unwrap();
+    let mass = ext.native_carriage_mass.as_ref().unwrap();
+    let queue_policy = &ext.native_final.as_ref().unwrap().policy.queue_policy;
+    let mut physical = match r.aux_row::<(Digest, NativeCarriageGlobalV22)>(QUOTA, &b(&(22u8, 0u8))) {
+        None => NativeCarriageGlobalV22::empty(service),
+        Some((root, g)) if root == g.root() => g,
+        _ => return Err(bad("native39 physical global original root differs")),
+    };
+    let mut queue = match r.aux.get(&(QUOTA, b(&(30u8, 0u8)))) {
+        None => NativeQueueGlobalV30::empty(queue_policy, service).map_err(bad)?,
+        Some(raw) => {
+            if raw.len() > NATIVE_QUEUE_ROW_LIMIT_V30 {
+                return Err(bad("native39 queue global extent"));
+            }
+            let (root, g): (Digest, NativeQueueGlobalV30) =
+                borsh::from_slice(raw).map_err(|_| bad("native39 queue global grammar"))?;
+            if root != g.root() {
+                return Err(bad("native39 queue global original root differs"));
+            }
+            g
+        }
+    };
+    let (ql, pl) = queue
+        .admit(&mut physical, queue_policy, service, mass, contract.queue(), id, original.root(), c.root(), ctx.daa_score, deadline)
+        .map_err(bad)?;
+    let token =
+        CheckedNativeFundingV39::from_current_native(original.clone(), &class, &maximum, &quota, p, &witness, &e).map_err(bad)?;
+    let budget = builder.plan_native_job_budget_v39(ctx, c.producer, &class, &maximum, &quota, &token)?;
+    let requester_payout = requester.payout_payload;
+    let producer_payout = producer.payout_payload;
+    builder.hold_native_recipient_v1(Hash64::from_bytes(id), c.producer, 11, ctx.daa_score, deadline, reward, &[])?;
+    if let Some(plan) = budget {
+        builder.commit_bond_budget_v1(ctx, super::palw_bond_budget_fold_v1::native_job_budget_id_v39(&id), plan)?;
+    }
+    if builder.slash_bond(*signer, reward as u128)? != reward {
+        return Err(bad("native39 original escrow changed after all preflights"));
+    }
+    material::attach(builder, maximum.input_manifest(), id, deadline)?;
+    let book = NativeJobBookV39::fund(token);
+    let ch = super::palw_native_source_fold_v39::class_header(builder.state.kernel_route.as_ref().unwrap(), class.root())?;
+    super::palw_flat_execution_fold_v11::write_shard(builder, &baseline, id);
+    write_source(builder, &source, id);
+    for (key, raw) in [
+        (b(&(30u8, 0u8)), b(&(queue.root(), queue))),
+        (b(&(22u8, 0u8)), b(&(physical.root(), physical))),
+        (b(&(30u8, id, 1u8)), b(&(ql.root(), ql))),
+        (b(&(22u8, id)), b(&(pl.root(), pl))),
+        (b(&(39u8, id, 0u8)), b(contract.record())),
+        (b(&(39u8, id, 1u8)), b(quota.source())),
+        (b(&(39u8, id, 2u8)), b(quota.paged())),
+        (b(&(39u8, id, 3u8)), b(&p.execution.quota)),
+    ] {
+        builder.write_kernel_row(QUOTA, key, Some(raw));
+    }
+    let mut jh = JobHeader {
+        version: 39,
+        id,
+        original,
+        book: book.root(),
+        book_bytes: 0,
+        consent_bytes: h.body_bytes,
+        class_bytes: ch.class_bytes,
+        source_bytes: ch.source_bytes,
+        post_bytes: 0,
+        plan: quota.plan().record(),
+        plan_root: quota.plan().record().root(),
+        terminal: NativeJobTerminalV39::Funded,
+        requester_payout,
+        producer_payout,
+    };
+    write_book(builder, &mut jh, &book);
+    protected::initialize(builder, &jh);
+    requesters.push(id);
+    producers.push(id);
+    consents.retain(|x| *x != c.root());
+    builder.write_kernel_row(TABLE, k(21, signer), Some(b(&requesters)));
+    builder.write_kernel_row(TABLE, k(22, &c.producer), Some(b(&producers)));
+    builder.write_kernel_row(TABLE, k(19, &c.producer), Some(b(&consents)));
+    builder.write_kernel_row(TABLE, k(20, &c.root()), Some(b(&(id, book.funding(), c.root()))));
+    builder.write_kernel_row(TABLE, k(25, &id), Some(b(&(next.root(), receipt, ctx.block.as_bytes(), ctx.daa_score))));
+    // Preserve the ORIGINAL producer wire and contract for all later replay,
+    // audit and GC. The consumed tombstone prevents a second Fund forever.
+    builder.write_kernel_row(TABLE, k(27, &id), Some(b(&c)));
+    builder.write_kernel_row(TABLE, k(18, &c.root()), None);
+    builder.write_kernel_row(TABLE, k(26, &c.root()), None);
+    builder.write_kernel_row(NONCE, b(&c.wire.requester_operator), Some(b(&next)));
+    builder.note_kernel_bond(&c.producer);
+    Ok(())
+}
+fn original_binding(h: &JobHeader, plan: &CheckedJobQuotaPlanV11) -> SubjectBindingV11 {
+    SubjectBindingV11 {
+        version: 11,
+        policy_root: [0; 64],
+        class_id: h.original.class,
+        class_scope9_root: h.original.class_scope,
+        program_root: plan.record().program_root,
+        parameter_root: plan.record().parameter_root,
+        job_id: h.id,
+        job_input_root: h.original.maximum,
+        resource10_root: h.original.maximum_resources,
+        quota_plan_root: h.plan_root,
+        actual_positions: h.original.maximum_positions,
+        requester: palw_kernel_bond_id_v1(&h.original.requester),
+        producer: palw_kernel_bond_id_v1(&h.original.producer),
+        admitted_interval: h.original.interval,
+        deadline_daa: h.original.deadline,
+    }
+}
+fn predebit_original(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    p: &NativeExecutionPoliciesV39,
+    h: &JobHeader,
+    kind: QuotaActionKindV11,
+    body: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    let plan = CheckedJobQuotaPlanV11::restore(&h.plan, &h.plan_root).map_err(bad)?;
+    let mut binding = original_binding(h, &plan);
+    binding.policy_root = p.execution.quota.root();
+    let e = epoch(p, ctx)?;
+    let mut s = super::palw_flat_execution_fold_v11::quota_shard(
+        builder,
+        &p.execution,
+        &e,
+        palw_kernel_bond_id_v1(&h.original.producer),
+        h.id,
+    )?;
+    let action = plan.action(kind, body).map_err(bad)?;
+    s.debit_reserved(&p.execution.quota, &e, &binding, &plan, &action).map_err(bad)?;
+    super::palw_flat_execution_fold_v11::write_shard(builder, &s, h.id);
+    Ok(())
+}
+fn restore_job(
+    builder: &TransitionBuilder<'_>,
+    p: &NativeExecutionPoliciesV39,
+    h: &JobHeader,
+) -> Result<
+    (NativeJobBookV39, NativeConsentV39, CheckedNativeClassV39, CheckedJobMaximumV39, CheckedQuotaV39, CheckedNativeMaximumV39),
+    PalwStateV2Error,
+> {
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let c: NativeConsentV39 = read(r, 27, &h.id, NativeConsentWireV39::MAX_BYTES + 16384)?;
+    let (class, max, quota, contract) = quote(builder, p, &c.wire)?;
+    let book = book(r, h)?;
+    book.check(&class, &max, &quota, p).map_err(bad)?;
+    if c.root() != h.original.consent
+        || c.producer != h.original.producer
+        || c.wire.requester != h.original.requester
+        || c.checked_maximum != *contract.record()
+        || contract.record().root() != h.original.maximum_contract
+        || quota.root() != h.original.quota
+        || h.class_bytes != super::palw_native_source_fold_v39::class_header(r, h.original.class)?.class_bytes
+        || h.source_bytes != super::palw_native_source_fold_v39::class_header(r, h.original.class)?.source_bytes
+    {
+        return Err(bad("native39 current original source/class/consent/max contract differs"));
+    }
+    let c0 = r.aux.get(&(TABLE, k(20, &c.root()))).ok_or_else(|| bad("native39 once consumed consent tombstone absent"))?;
+    if c0 != &b(&(h.id, book.funding(), c.root())) {
+        return Err(bad("native39 consumed original consent relation differs"));
+    }
+    let counter = r.execution_nonce_counter_v11(&h.original.requester_operator).map_err(bad)?;
+    let used = misaka_palw_kernel::flat_execution11::canonical_nonce_v11(&h.original.nonce)
+        .map_err(bad)?
+        .checked_add(1)
+        .ok_or_else(|| bad("native39 spent nonce overflow"))?;
+    if counter.next_nonce < used {
+        return Err(bad("native39 original requester spent nonce absent"));
+    }
+    Ok((book, c, class, max, quota, contract))
+}
+fn commit(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV39,
+    body: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    if body.len() < 66 || body.len() > NativeCommitWireV39::MAX_BYTES {
+        return Err(bad("native39 compactCommit body extent"));
+    }
+    let id = body[2..66].try_into().unwrap();
+    let mut h = header(builder.state.kernel_route.as_ref().unwrap(), id)?;
+    if *signer != h.original.producer || h.terminal != NativeJobTerminalV39::Funded || ctx.daa_score >= h.original.commit_until {
+        return Err(bad("native39 compactCommit requires original Funded producer phase"));
+    }
+    predebit_original(builder, ctx, p, &h, QuotaActionKindV11::Metadata, body)?;
+    // Malformed attempts retain the preceding original paid debit. The object
+    // is dropped successfully, so a nested decoder cannot roll back the tariff.
+    let Ok(w) = NativeCommitWireV39::from_bytes(body, h.original.maximum_positions) else { return Ok(()) };
+    let (mut book, _, class, max, quota, _) = restore_job(builder, p, &h)?;
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let reader = NativeMaterialReader { route: r };
+    let inputs = match ActualInputResolverV39::derive(class.source(), &max, &w.generated, &reader) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    if book.commit(&class, &max, &quota, p, signer, ctx.daa_score, &w.claim, &w.generated, &inputs, h.original.reserve).is_err() {
+        return Ok(());
+    }
+    let raw = b(&w);
+    h.post_bytes = raw.len() as u32;
+    builder.write_kernel_row(TABLE, k(28, &id), Some(raw));
+    write_book(builder, &mut h, &book);
+    protected::set_claim(builder, &h, w.claim.root())?;
+    Ok(())
+}
+#[path = "palw_native_material_fold_v39.rs"]
+mod material;
+use material::{NativeMaterialReader, authenticate_material};
+pub(super) fn apply(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    action: u8,
+    body: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    if matches!(action, 41 | 42 | 57..=60) {
+        return super::palw_native_source_fold_v39::apply(builder, ctx, signer, action, body);
+    }
+    let p = super::palw_native_source_fold_v39::policy(builder, ctx)?;
+    match action {
+        43 => accept(builder, ctx, signer, &p, body),
+        44 => fund(builder, ctx, signer, &p, body),
+        45 => commit(builder, ctx, signer, &p, body),
+        47..=49 => public::apply(builder, ctx, signer, &p, action, body),
+        46 | 50 | 52 | 56 => protected::apply(builder, ctx, signer, &p, action, body),
+        51 => finalize(builder, ctx, signer, &p, body),
+        65..=70 => super::palw_native_master_fold_v39::apply(builder, ctx, signer, action, body),
+        61..=64 => material::apply(builder, ctx, signer, &p, action, body),
+        _ => Err(bad("native39 action has no implemented current native transition")),
+    }
+}
+
+#[path = "palw_native_protected_fold_v39.rs"]
+mod protected;
+fn credit(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    p: &NativeExecutionPoliciesV39,
+    h: &mut JobHeader,
+    book: &NativeJobBookV39,
+    s: &NativeSettlementV39,
+    finder: Option<PalwBondKeyV2>,
+) -> Result<(), PalwStateV2Error> {
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    if r.aux.contains_key(&(TABLE, k(23, &h.id)))
+        || book.settlement() != Some(s)
+        || s.original_funding != h.original.root()
+        || s.job != h.id
+        || s.original_escrow != h.original.reward
+        || s.producer_credit.checked_add(s.requester_credit) != Some(h.original.reward)
+    {
+        return Err(bad("native39 original escrow/once-credit settlement differs"));
+    }
+    let recipient = if s.producer_credit != 0 { h.original.producer } else { h.original.requester };
+    let payout = if s.producer_credit != 0 { h.producer_payout } else { h.requester_payout };
+    let amount = s.producer_credit.checked_add(s.requester_credit).ok_or_else(|| bad("native39 actual queue overflow"))?;
+    let queue = Hash64::from_bytes(object_id(
+        b"misaka-palw/native/original-single-credit-queue/v39",
+        &(h.id, h.original.root(), s.root(), recipient, payout),
+    ));
+    if builder.state.pending_payouts.contains_key(&queue) {
+        return Err(bad("native39 original job-specific actual queue already exists"));
+    }
+    let finder_payout = match finder {
+        Some(f) => {
+            let bond = builder.state.bonds.get(&f).ok_or_else(|| bad("native39 actual finder absent"))?;
+            if bond.operator_id.as_bytes() == h.original.producer_operator || s.finder_credit == 0 {
+                return Err(bad("native39 actual independent finder differs"));
+            }
+            Some((f, bond.payout_payload))
+        }
+        None => {
+            if s.finder_credit != 0 {
+                return Err(bad("native39 actual finder credit has no independent owner"));
+            }
+            None
+        }
+    };
+    if s.actual_slash != 0 && builder.state.bonds.get(&h.original.producer).is_none_or(|b| b.collateral < s.actual_slash) {
+        return Err(bad("native39 original producer reserve no longer collectible"));
+    }
+    if s.actual_slash != 0 && builder.slash_bond(h.original.producer, s.actual_slash as u128)? != s.actual_slash {
+        return Err(bad("native39 original actual collected producer reserve changed"));
+    }
+    if s.producer_credit != 0 {
+        builder.pay_native_recipient_v1(Hash64::from_bytes(h.id), h.original.producer, 11, ctx.daa_score, amount, queue, true)?;
+    } else {
+        builder.cancel_native_recipient_v1(Hash64::from_bytes(h.id), h.original.producer, 11);
+    }
+    builder.write_payout(queue, Some(PalwPayoutV2 { payload: payout, amount }));
+    if let Some((f, payout)) = finder_payout {
+        if builder.params.reporter_income_active_at(ctx.daa_score) {
+            let award = Hash64::from_bytes(object_id(
+                b"misaka-palw/native/original-actual-collected-finder/v39",
+                &(h.id, h.original.root(), s.proof, f),
+            ));
+            builder.stage_reporter_recipient_v1(award, f, ctx.daa_score, s.finder_credit, Hash64::from_bytes(h.id))?;
+        } else {
+            builder.add_kernel_payout(payout, s.finder_credit)?;
+        }
+    }
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let raw =
+        r.aux.get(&(QUOTA, b(&(2u8, h.id)))).filter(|raw| raw.len() < 8192).ok_or_else(|| bad("native39 original subject absent"))?;
+    let (root, mut subject): (Digest, QuotaSubjectSummaryV11) = borsh::from_slice(raw).map_err(|_| bad("native39 subject grammar"))?;
+    if root != subject.row_root() || subject.binding.job_id != h.id || subject.closed {
+        return Err(bad("native39 original live subject terminal differs"));
+    }
+    let counter = r.execution_nonce_counter_v11(&h.original.requester_operator).map_err(bad)?;
+    let e = epoch(p, ctx)?;
+    let terminal = NativeTerminalAnchorV39 {
+        job: h.id,
+        funding: book.funding(),
+        terminal_book: book.root(),
+        established: s.established,
+        producer_credit: s.producer_credit,
+        requester_credit: s.requester_credit,
+        actual_slash: s.actual_slash,
+        finder_credit: s.finder_credit,
+        escrow_closed: book.escrow() == 0,
+        proof: s.proof,
+    };
+    // This private checked token authenticates actual monetary conservation and
+    // the original spent nonce; it grants no caller-supplied Final authority.
+    let (_, _, _, _, q, _) = restore_job_for_terminal(builder, p, h, book)?;
+    check_terminal_v39(
+        &q,
+        &h.original.funding_anchor(),
+        &p.execution.quota,
+        &nonce(palw_kernel_bond_id_v1(&h.original.requester), &counter),
+        &terminal,
+        &e,
+    )
+    .map_err(bad)?;
+    public::cancel_remaining(builder, h)?;
+    subject.closed = true;
+    builder.write_kernel_row(QUOTA, b(&(2u8, h.id)), Some(b(&(subject.row_root(), subject))));
+    write_book(builder, h, book);
+    let c = NativeSingleCreditV39 {
+        version: 39,
+        job: h.id,
+        funding: book.funding(),
+        terminal: book.root(),
+        settlement: s.root(),
+        claim: s.claim,
+        recipient,
+        payout,
+        queue,
+        amount,
+        established: s.established,
+    };
+    builder.write_kernel_row(TABLE, k(23, &h.id), Some(b(&(c.root(), &c))));
+    builder.bond_budget_close_v1(&super::palw_bond_budget_fold_v1::native_job_budget_id_v39(&h.id), ctx.daa_score);
+    Ok(())
+}
+fn restore_job_for_terminal(
+    builder: &TransitionBuilder<'_>,
+    p: &NativeExecutionPoliciesV39,
+    h: &JobHeader,
+    terminal: &NativeJobBookV39,
+) -> Result<
+    (NativeJobBookV39, NativeConsentV39, CheckedNativeClassV39, CheckedJobMaximumV39, CheckedQuotaV39, CheckedNativeMaximumV39),
+    PalwStateV2Error,
+> {
+    let (old, c, class, max, q, contract) = restore_job(builder, p, h)?;
+    if old.funding() != terminal.funding() || old.id() != terminal.id() {
+        return Err(bad("native39 original terminal replaced another book"));
+    }
+    terminal.check(&class, &max, &q, p).map_err(bad)?;
+    Ok((old, c, class, max, q, contract))
+}
+fn finalize(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV39,
+    raw: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    if raw.len() != 67 || raw[..2] != 39u16.to_le_bytes() || raw[2] > 1 {
+        return Err(bad("native39 Final/refund exact grammar"));
+    }
+    let mode = raw[2];
+    let id = raw[3..67].try_into().unwrap();
+    let mut h = header(builder.state.kernel_route.as_ref().unwrap(), id)?;
+    let actor = builder.state.bonds.get(signer).ok_or_else(|| bad("native39 independent finalizer absent"))?;
+    if mode == 0 && (*signer == h.original.producer || actor.operator_id.as_bytes() == h.original.producer_operator) {
+        return Err(bad("native39 Final must be independently submitted"));
+    }
+    if !prepay(builder, ctx, signer, p, h.source_bytes as u64 + h.consent_bytes as u64 + h.post_bytes as u64, raw.len(), 16384)? {
+        return Ok(());
+    }
+    let (mut book, _, _, _, _, max) = restore_job(builder, p, &h)?;
+    let s = if mode == 1 {
+        book.refund_unclaimed(ctx.daa_score).map_err(bad)?
+    } else {
+        let status = protected::status(builder.state.kernel_route.as_ref().unwrap(), &h)?;
+        let claim = book.claim().ok_or_else(|| bad("native39 actual original claim absent"))?;
+        if !status.pending.is_empty() || status.owners.iter().any(|id| *id != [0; 64]) || ctx.daa_score <= status.latest {
+            return Err(bad("native39 Final still has original paid streams or unanswered units"));
+        }
+        let closure = NativeFinalClosureV39 {
+            job: id,
+            funding: book.funding(),
+            claim: claim.claim,
+            maximum: h.original.maximum_contract,
+            source: h.original.source_plan,
+            physical: h.original.physical,
+            queue: h.original.queue,
+            now: ctx.daa_score,
+            pending: 0,
+            owners: 0,
+            source_obligations: 0,
+            trace_obligations: 0,
+            original_closure: object_id(
+                b"misaka-palw/native/original-complete-public-closure/v39",
+                &(status.root(), h.book, h.original.source_plan, h.original.queue),
+            ),
+        };
+        book.finalize(max.conditions(), &closure).map_err(bad)?
+    };
+    credit(builder, ctx, p, &mut h, &book, &s, None)
+}
+
+#[path = "palw_native_public_fold_v39.rs"]
+mod public;

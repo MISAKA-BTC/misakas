@@ -3603,6 +3603,26 @@ receipt windows only after both finish is not implemented by this single-state
 collector. Contemporaneous collection or a separately bounded archival mechanism
 and the owning39 receipt/window audit integration remain required code.
 
+A further source checkpoint connects native39 Fund to original principal nonce,
+actual escrow debit, common Q/T and recipient R holds, source/proof guarantees
+and the physical queue. Typed DA/proof actions and independent native settlement
+are being connected; this is not an end-to-end execution result. Master39 now has
+its own registered source/class-set identity, exact requested component binding,
+genuine upstream Final checks, and aggregate immutable component credit roots.
+Its large registration transport and remaining job/GC/readonly audit adapters
+are unfinished. Distinct state kinds keep its rows separate from protected proof
+owners and material certificates.
+
+Contemporaneous collectors now include explicit own-sink starts, pre-window
+readiness, selected-chain catch-up bounds, shared CAS, and partial-run rejection.
+The run-plan orchestrator starts both independent collectors before producer work;
+the old32 audit trims only the outside-window boundaries and verifies every
+interior state. The owning39 anchor factory authenticates raw/V1/Rule-E-V2 root
+forms according to the auditor's own ruleset. The node's current V1 envelope
+exporter does not yet export a Rule-E V2 leaf; such an active profile must fail
+explicitly. The new39 A6 receipt extractor/verifier still needs its native book
+and complete Master linkage. None of these source changes has been executed.
+
 Other remaining implementation includes the owning39 job fold's shared nonce,
 actual debit, protected source/trace delivery, court, independent Final and
 component credit closure; the cold independent detector/filer; and genuine

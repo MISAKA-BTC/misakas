@@ -168,10 +168,16 @@ mod palw_flat_model_vector_fold_v7;
 mod palw_flat_model_vector_fold_v9;
 #[path = "palw_flat_stage_fold_v14.rs"]
 mod palw_flat_stage_fold_v14;
-#[path = "palw_native_initial_fold_v31.rs"]
-mod palw_native_initial_fold_v31;
 #[path = "palw_model_refutation_seal_fold_v4.rs"]
 mod palw_model_refutation_seal_fold_v4;
+#[path = "palw_native_initial_fold_v31.rs"]
+mod palw_native_initial_fold_v31;
+#[path = "palw_native_job_fold_v39.rs"]
+mod palw_native_job_fold_v39;
+#[path = "palw_native_master_fold_v39.rs"]
+mod palw_native_master_fold_v39;
+#[path = "palw_native_source_fold_v39.rs"]
+mod palw_native_source_fold_v39;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
 #[path = "palw_monetary_material_fold_v1.rs"]
 mod palw_monetary_material_fold_v1;
@@ -21007,8 +21013,7 @@ fn apply_attempt(
     // absence must not halt floor liveness). Below the monetary fence both calls below are no-ops for every class, so skipping
     // them for the floor is byte-identical there.
     let floor_exempt = claim.class_id == builder.params.base_class_id();
-    let monetary_ready =
-        if floor_exempt { None } else { palw_monetary_material_fold_v1::plan_native_ready(builder, ctx, claim_id)? };
+    let monetary_ready = if floor_exempt { None } else { palw_monetary_material_fold_v1::plan_native_ready(builder, ctx, claim_id)? };
     if monetary_ready.is_none() && !floor_exempt {
         builder.state.require_native_monetary_material_scope_v1(builder.params, claim_id, &claim)?;
     }

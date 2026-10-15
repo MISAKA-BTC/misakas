@@ -136,7 +136,7 @@ impl CheckedMaterialPlanV39 {
             }
             MaterialOriginV39::Upstream { master, job, class, source, claim, final_book, single_credit, output, .. } => {
                 if *master != d.master
-                    || *output != d.tensor
+                    || *output == [0; 64]
                     || [*job, *class, *source, *claim, *final_book, *single_credit].contains(&[0; 64])
                 {
                     return Err("material39 original upstream Final/output provenance absent".into());
@@ -162,7 +162,9 @@ impl CheckedMaterialPlanV39 {
             seal_attempts: 2,
             stored_bytes: raw,
             delivery_bytes: raw.checked_mul(2).ok_or("material39 delivery extent")?,
-            hashing_bytes: raw as u128 * 6,
+            // Both original seal attempts may authenticate a full32KiB
+            // original page/path for every strided column scalar read.
+            hashing_bytes: raw as u128 * 6 + (cells as u128 * 4 + pages as u128 * 4) * ((32 << 10) + 2048),
             read_calls: cells as u128 * 4 + pages as u128 * 4,
             scratch_bytes: 512 << 10,
             owned_bytes: raw
@@ -339,8 +341,18 @@ impl Frontier {
 pub fn tensor_commitment_streamed_v39(
     dtype: DType,
     shape: &[usize],
-    mut read_values: impl FnMut(u64, usize) -> Result<Vec<i128>, String>,
+    read_values: impl FnMut(u64, usize) -> Result<Vec<i128>, String>,
 ) -> Result<Digest, String> {
+    let (row, col) = tensor_tree_roots_streamed_v39(dtype, shape, read_values)?;
+    Ok(commit_v3(dtype, shape, &row, &col))
+}
+/// Same original C_v3 passes, exposing the two tree roots for a streamed
+/// producer archive without hashing every tensor a second time.
+pub fn tensor_tree_roots_streamed_v39(
+    dtype: DType,
+    shape: &[usize],
+    mut read_values: impl FnMut(u64, usize) -> Result<Vec<i128>, String>,
+) -> Result<(Digest, Digest), String> {
     let layout = LayoutV3::try_of(shape).ok_or("material39 original tensor layout")?;
     if shape.len() > 4 || layout.len == 0 {
         return Err("material39 empty/rank tensor".into());
@@ -375,7 +387,7 @@ pub fn tensor_commitment_streamed_v39(
         }
         roots.push(tree.finish()?);
     }
-    Ok(commit_v3(dtype, shape, &roots[0], &roots[1]))
+    Ok((roots[0], roots[1]))
 }
 pub struct CheckedMaterialImageV39 {
     plan: Digest,
@@ -567,4 +579,19 @@ impl MaterialProgressV39 {
         }
         Ok(value)
     }
+}
+
+/// Owning39 producer helper. The bounded original page count is checked before
+/// cloning hashes; this does not change any legacy Merkle API or admission.
+pub fn material_page_tree_root_v39(leaves: &[Digest]) -> Result<Digest, String> {
+    if leaves.is_empty() || leaves.len() > MATERIAL_MAX_PAGES_V39 as usize {
+        return Err("material39 original page tree count".into());
+    }
+    Ok(crate::merkle3::tree_root(leaves.to_vec(), material_page_node_v39, b"misaka-palw/kernel/material-page-empty/v39"))
+}
+pub fn material_page_path_v39(leaves: &[Digest], index: u16) -> Result<Vec<Digest>, String> {
+    if leaves.is_empty() || leaves.len() > MATERIAL_MAX_PAGES_V39 as usize || index as usize >= leaves.len() {
+        return Err("material39 original page tree index/count".into());
+    }
+    Ok(crate::merkle3::tree_path(leaves.to_vec(), index as usize, material_page_node_v39))
 }

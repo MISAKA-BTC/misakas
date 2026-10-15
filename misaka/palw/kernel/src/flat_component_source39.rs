@@ -148,6 +148,7 @@ fn check_manifest_claims_v39(
     for (c, required) in manifest.components.iter().zip(original_required_components) {
         if &c.name != required
             || c.source_files.is_empty()
+            || c.stages.is_empty()
             || !ordered(&c.source_files)
             || !ordered(&c.stages)
             || c.source_files.len() > MAX_SOURCE_FILES_V39
