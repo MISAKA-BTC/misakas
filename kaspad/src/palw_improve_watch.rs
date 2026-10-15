@@ -476,6 +476,7 @@ mod tests {
             inflight_now: 0,
             share_permille: None,
             no_capable_panel_voids: 0,
+            eligibility: Default::default(),
             reason: String::new(),
         };
         let read = |active: bool, tip: u64, work_target: Option<PalwWorkTargetReadV1>| PalwModelRegistryReadV1 {

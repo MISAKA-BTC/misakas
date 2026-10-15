@@ -1866,12 +1866,24 @@ pub struct RpcPalwModelLifecycle {
     /// sponsor is told pays the class's preparers in full. Nothing enforces it; 0 where the pool is
     /// not armed, for the floor (which takes no top-up), and from a node that serves version 1.
     pub recommended_pool_sompi: u64,
+    /// **RFC-0017 (wire version 3): the class's eligibility stage** — `not-governed` (below `palw_model_eligibility_v1`, every
+    /// shipped network, a genesis class, and from a node serving version 1 or 2), `registered`, `probation`, `eligible`, `lapsed`.
+    pub eligibility_stage: String,
+    /// The DAA the class's eligibility lapses at without a passed renewal (grace not included); 0 = none.
+    pub eligibility_next_renewal_daa: u64,
+    /// The stage's three rights, separately (RFC-0017 §6): subsidy, reward-bearing block right, Final weight.
+    pub eligibility_subsidy: bool,
+    pub eligibility_block_right: bool,
+    pub eligibility_final_weight: bool,
+    pub eligibility_exams_passed: u32,
+    /// Exam attempts consumed by the class's lineage (all registrations of the same weights).
+    pub eligibility_lineage_attempts: u32,
 }
 
 impl Serializer for RpcPalwModelLifecycle {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        // Version 2 appends `recommended_pool_sompi` (the Activation Pool's P4, 2026-09-25).
-        store!(u16, &2, writer)?;
+        // Version 2 appends `recommended_pool_sompi` (the Activation Pool's P4, 2026-09-25); version 3 the RFC-0017 eligibility fields.
+        store!(u16, &3, writer)?;
         store!(String, &self.class_id, writer)?;
         store!(String, &self.artifact_root, writer)?;
         store!(bool, &self.is_base_class, writer)?;
@@ -1909,6 +1921,13 @@ impl Serializer for RpcPalwModelLifecycle {
         store!(u16, &self.final_work_share_10_permille, writer)?;
         store!(u16, &self.final_work_share_100_permille, writer)?;
         store!(u64, &self.recommended_pool_sompi, writer)?;
+        store!(String, &self.eligibility_stage, writer)?;
+        store!(u64, &self.eligibility_next_renewal_daa, writer)?;
+        store!(bool, &self.eligibility_subsidy, writer)?;
+        store!(bool, &self.eligibility_block_right, writer)?;
+        store!(bool, &self.eligibility_final_weight, writer)?;
+        store!(u32, &self.eligibility_exams_passed, writer)?;
+        store!(u32, &self.eligibility_lineage_attempts, writer)?;
         Ok(())
     }
 }
@@ -1955,6 +1974,14 @@ impl Deserializer for RpcPalwModelLifecycle {
             final_work_share_100_permille: load!(u16, reader)?,
             // Version 1 (a node before the Activation Pool's P4) has no recommendation: 0.
             recommended_pool_sompi: if version >= 2 { load!(u64, reader)? } else { 0 },
+            // Versions 1–2 (a node before RFC-0017) are ungoverned: the old rule's rights.
+            eligibility_stage: if version >= 3 { load!(String, reader)? } else { "not-governed".to_string() },
+            eligibility_next_renewal_daa: if version >= 3 { load!(u64, reader)? } else { 0 },
+            eligibility_subsidy: if version >= 3 { load!(bool, reader)? } else { true },
+            eligibility_block_right: if version >= 3 { load!(bool, reader)? } else { true },
+            eligibility_final_weight: if version >= 3 { load!(bool, reader)? } else { true },
+            eligibility_exams_passed: if version >= 3 { load!(u32, reader)? } else { 0 },
+            eligibility_lineage_attempts: if version >= 3 { load!(u32, reader)? } else { 0 },
         })
     }
 }

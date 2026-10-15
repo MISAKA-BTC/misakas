@@ -2227,6 +2227,17 @@ message RpcPalwModelLifecycle {
   // NON-BINDING recommended Activation Pool (2026-09-25): 16 · A_MAX / α of the terms in force; 0
   // where the pool is not armed and for the floor.
   uint64 recommendedPoolSompi = 38;
+  // RFC-0017 (dormant `palw_model_eligibility_v1`): the class's eligibility stage ("not-governed" below the fence, a genesis
+  // class; "registered", "probation", "eligible", "lapsed"), the DAA its eligibility lapses at without a passed renewal (0 =
+  // none), its three rights separately (subsidy, reward-bearing block right, Final weight), exams passed, and the exam
+  // attempts its lineage (artifact root) has consumed. Field numbers are local to this message.
+  string eligibilityStage = 39;
+  uint64 eligibilityNextRenewalDaa = 40;
+  bool eligibilitySubsidy = 41;
+  bool eligibilityBlockRight = 42;
+  bool eligibilityFinalWeight = 43;
+  uint32 eligibilityExamsPassed = 44;
+  uint32 eligibilityLineageAttempts = 45;
 }
 
 message RpcPalwSeatReadiness {
