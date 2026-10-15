@@ -1407,6 +1407,18 @@ pub trait ConsensusApi: Send + Sync {
         Err("TIR public accepted-state reader unavailable".into())
     }
 
+    /// **G14 R4: the filer scheduler's preflight** — whether the fold would accept `filer`'s public conviction of `claim` with
+    /// `evidence` at the next DAA on the accepted snapshot (a discarded dry run of the native path). `Ok(None)` below
+    /// `palw_tir_public_conviction_v1`; `Ok(Some(Err(reason)))` for a filing the fold would refuse. Never a verdict.
+    fn palw_tir_public_conviction_preflight_v1(
+        &self,
+        _filer: crate::palw_state_v2::PalwBondKeyV2,
+        _claim: crate::Hash64,
+        _evidence: crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
+    ) -> Result<Option<Result<(), String>>, String> {
+        Err("TIR public conviction preflight unavailable".into())
+    }
+
     /// G14 R1/R2: the producer's pre-signing quote of an ORIGINAL TIR frame on the accepted snapshot — `(snapshot DAA, plan)`;
     /// `None` below `palw_tir_public_conviction_v1` or for an original the frame route does not admit.
     fn palw_tir_public_original_quote_v1(

@@ -193,6 +193,29 @@ pub fn palw_tir_public_original_quote_v1(
     Ok(plan.semantic.is_none().then_some(plan))
 }
 
+/// **G14 R4: would the fold accept this public conviction filing at `next_daa`?** A dry run of the SAME native path
+/// ([`apply_conviction_v1`]: window, filer, once-only, the native adjudication of the evidence, the liable bonds' exit holds and
+/// every funnel) on a throw-away builder over the accepted snapshot — nothing is committed. The node's filer scheduler asks it
+/// before it signs, so it never pays a conviction rent the fold would refuse for a reason the accepted state already shows. It is
+/// never a verdict: a later block can still change the answer, and only the accepted fold convicts.
+pub fn palw_tir_public_conviction_preflight_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    next_daa: u64,
+    filer: PalwBondKeyV2,
+    claim: Hash64,
+    evidence: &crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
+) -> Result<(), PalwStateV2Error> {
+    evidence.check_v1().map_err(refused)?;
+    let mut builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
+    rules(&builder)?;
+    let frame = palw_tir_public_claim_v1(base, claim).cloned().ok_or_else(|| refused("TIR conviction preflight: no ORIGINAL frame"))?;
+    frame.check_structure_v1(&frame.key_v1()).map_err(refused)?;
+    let ctx = PalwBlockContextV2 { block: Default::default(), daa_score: next_daa, blue_score: 0, subsidy: 0 };
+    apply_conviction_v1(&mut builder, &ctx, &frame, filer, evidence)
+}
+
 /// All inputs are transaction-local original material or resolved native state.
 /// The ordinary FP signature/price/admission path must also accept that SAME
 /// original object. No row is written by this preparation step.

@@ -8768,6 +8768,9 @@ impl PalwPanelService {
         ));
         // Lane LG14-A: the common fraud filer's book — a cache of the chain and this node's replays; nothing persists (§6.3).
         let mut fraud_filer = palw_fraud_filer::PalwFraudFilerBookV1::default();
+        // G14 R4: pending public convictions against ORIGINAL TIR frames — persisted, so a restart still files inside the door.
+        let mut tir_public_filer =
+            palw_fraud_filer::tir_public_filer_scheduler::PalwTirPublicFilerBookV1::load(&self.config.state_dir);
         // Lane G14-K: the kernel route's public verifier's book — a cache of the chain and this process's replays; nothing persists.
         let mut kernel_verifier = palw_kernel_verifier::PalwKernelVerifierBookV1::default();
         // ADR-0160 F-Q (stage 2): the audit duty's book; armed by identity (a bond in a credited claim's pool).
@@ -13603,6 +13606,21 @@ impl PalwPanelService {
                 bond_key,
                 seat_replays.has_room(false),
                 &materials,
+                &mut court_pending,
+                &mut court_due,
+                &mut court_moved,
+            )
+            .await;
+            // --- G14 R4: public convictions against ORIGINAL TIR frames (`tir_public_filer_scheduler`) ---
+            //
+            // Files each pending finding at once inside the frame's fixed d0 door, after the fold's own dry run accepts it; one per
+            // claim on its own lane, persisted across restarts. A clean no-op below `palw_tir_public_conviction_v1`.
+            self.tir_public_filer_tick_v1(
+                &session,
+                bond_key,
+                network_domain,
+                current_daa,
+                &mut tir_public_filer,
                 &mut court_pending,
                 &mut court_due,
                 &mut court_moved,

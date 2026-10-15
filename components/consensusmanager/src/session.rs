@@ -366,6 +366,16 @@ impl ConsensusSessionOwned {
         self.consensus.palw_tir_public_original_quote_v1(original, header)
     }
 
+    /// G14 R4: the filer scheduler's preflight of a public conviction (`Ok(None)` below `palw_tir_public_conviction_v1`).
+    pub fn palw_tir_public_conviction_preflight_v1(
+        &self,
+        filer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        claim: kaspa_consensus_core::Hash64,
+        evidence: kaspa_consensus_core::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
+    ) -> Result<Option<Result<(), String>>, String> {
+        self.consensus.palw_tir_public_conviction_preflight_v1(filer, claim, evidence)
+    }
+
     /// G14 R3/R4: a node worker's read of the accepted native snapshot (`Ok(false)` below `palw_tir_public_conviction_v1`).
     pub fn palw_tir_public_read_v1(
         &self,

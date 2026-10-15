@@ -242,8 +242,14 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
   — **実装（ソースのみ・未検証）**: tag 170 に `Conviction`/`Convict` を追加（`palw_tir_public_carriage_v1.rs:65`/`:73`）。filer は liable 以外の
   Active・floor 以上の任意 bond（`conviction_filer_v1` `palw_tir_public_fold_v1.rs:526`）で、Panel 席でも外部でも同じ object・同じ裁定
   （E2E ソース `:1096` で両者の結果一致を検査）。node 側は reader API `palw_tir_public_frame_v1` と署名済み object の builder
-  （`kaspad/src/palw_tir_public_filer.rs`）。**未**: いつ filing するかの scheduler・queue・restart journal。DA の Open は owner 規則上 drawn
-  seat 不可のまま（外部 bond が DA 終局に到達できる）。
+  （`kaspad/src/palw_tir_public_filer.rs`）。**filer scheduler を追加（ソースのみ・未検証）**: `kaspad/src/palw_tir_public_filer_scheduler.rs`
+  （panel loop の fraud filer の直後で毎 tick）。finding は `queue_finding_v1` で受け、d0 の door 内で即 filing（door は延びず、claim は door
+  閉鎖まで Final にならない）。署名前に fold と同じ経路の dry run（consensus-core `palw_tir_public_conviction_preflight_v1`、API
+  `palw_tir_public_conviction_preflight_v1`、次 DAA で評価し builder は破棄）で受理を確認し、holds・責任者・既に有罪・exit hold 喪失など
+  accepted state で分かる拒否には rent を払わない。queue は round `u32::MAX − 26`（claim ごと 1 件、due = `collect_until − 1`、
+  `COURT_MOVE_REPLAN_DAA` 後に再送、最大 3 回）。restart journal は `state_dir/palw-tir-public-filer.v1`（最大 16 件、tmp→rename、読めない
+  journal は退避）。**未**: finding の生産者（outside owner の acquisition 駆動 Open→Demand→Collect と、arithmetic scheduler の局所化）が
+  panel loop から未接続。DA の Open は owner 規則上 drawn seat 不可のまま（外部 bond が DA 終局に到達できる）。
 - [ ] own-modelで得た不一致と、元claimの認証済みmaterialを結び付け、producerの秘密capture・秘密checkpoint・秘密状態の注入を排除する。
   — **実装（ソースのみ・未検証）**: 証拠は元 root への opening と ID の EOF 認証のみで裁定し、program は state の登録値を native に埋める
   （carried program は拒否）。`adjudicate_original_v1`/`adjudicate_original_output_v1`（`palw_tir_objective_v1.rs:251`/`:103`）。
