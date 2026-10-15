@@ -16,6 +16,12 @@
 //!
 //! What "covered" means is stated, not proved, here: the verifier named is the one the code routes that boundary to. The argument
 //! that those verifiers jointly cover a claim (and its open parts) is RFC-0006 §R6-CELL round 3.
+//!
+//! **Round 4 (2026-10-15): every gap is classified** ([`PalwCellUncoveredKindV1`]), and past the dormant fence
+//! `palw_cell_coverage_closure_v1` ([`crate::palw_cell_coverage_closure_v1`]) the legacy checker is consensus-read: a class whose
+//! legacy coverage has ANY gap is refused at registration, its claims are refused at the claim gate where the fold holds its graph,
+//! and the step court convicts where it does not — so every legacy class past the fence is either covered boundary by boundary or
+//! explicitly uncovered and unrewarded. Below the fence nothing calls it.
 
 use misaka_palw_kernel::descriptor::KernelDescriptorV1;
 use misaka_palw_kernel::family::{CheckerIdV1, ConstraintFamilyV1, family_of_prim};
@@ -117,9 +123,41 @@ pub enum PalwCellVerifierV1 {
     LegacyLongForm,
 }
 
+/// **Which kind of uncovered boundary a gap is** (round 4). Each kind is REFUSED AT ADMISSION past `palw_cell_coverage_closure_v1`
+/// (none is covered by a new court path in this round: each would need a verifier the court does not have — see the variants).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PalwCellUncoveredKindV1 {
+    /// A TIR node whose constraint family the class descriptor has no checker for.
+    TirFamilyUnchecked,
+    /// A TIR carry-out that is not a commit point (the next cell's verifier does not read it).
+    TirCarryNotCommitted,
+    /// A TIR state the class descriptor does not check for continuity.
+    TirStateUnchecked,
+    /// **A hybrid v1/v2 composition's recurrence half**: the map names a `gdn=` half `palw_state_chunk_count_at_v1` does not
+    /// enumerate, so a checkpoint's recurrence chunks are not decidable by the court. Covering it needs the recurrence geometry in
+    /// the consensus crate and an anchored GDN arm reading it — the v3/v4/v5 compositions are that coverage, so a class wanting
+    /// it registers one of them.
+    HybridRecurrenceUnenumerated,
+    /// **A standalone (solo) recurrence map** (`gdn_state_chunk_map_id_v1/v2/v3`): its geometry is the executor crate's
+    /// (`base0_gdn_state_geometry_v*`), so the court cannot count, open or anchor it at all.
+    SoloRecurrenceMap,
+    /// A known map that does not name a memory section the profile needs (an attention-only map under GDN layers, or the
+    /// reverse).
+    MapSectionNotSpelled,
+    /// A known map whose count the code does not derive at a checkpoint of this profile.
+    MapNotEnumerable,
+    /// **More than one q36 router in a layer table**: the router slot is not unique (`qwen36_router_topk_slot` answers `None`), so a
+    /// routed product's selection is unadjudicable — a court choosing between routers would be choosing the evidence.
+    MultiRouterTable,
+    /// **A Kimi router** (`KDESC_KIMI_ROUTER_TOPK`, a fenced kernel): its own row recomputes (`kimi_row`), but the routed
+    /// gather/combine downstream resolves its routing only through the q36 router slot, so a routed product under it is
+    /// unadjudicable.
+    KimiRouter,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwCellCoverageGapV1 {
-    Uncovered { boundary: PalwCellBoundaryV1, why: &'static str },
+    Uncovered { boundary: PalwCellBoundaryV1, kind: PalwCellUncoveredKindV1, why: &'static str },
     UnknownProfileKind { why: String },
 }
 
@@ -147,7 +185,11 @@ pub fn palw_tir_cell_coverage_v1(
             let family = family_of_prim(&node.prim);
             let boundary = PalwCellBoundaryV1::TirRelation { block: bi, node: ni, family };
             let Some(support) = descriptor.support(family) else {
-                gaps.push(PalwCellCoverageGapV1::Uncovered { boundary, why: "the class descriptor has no checker for this family" });
+                gaps.push(PalwCellCoverageGapV1::Uncovered {
+                    boundary,
+                    kind: PalwCellUncoveredKindV1::TirFamilyUnchecked,
+                    why: "the class descriptor has no checker for this family",
+                });
                 continue;
             };
             covered.push((boundary, PalwCellVerifierV1::KernelChecker(support.checker)));
@@ -174,6 +216,7 @@ pub fn palw_tir_cell_coverage_v1(
                 // The cell verifier reads committed carry-out tiles: an uncommitted carry is not read, so not covered.
                 Some(n) if !n.commit => gaps.push(PalwCellCoverageGapV1::Uncovered {
                     boundary,
+                    kind: PalwCellUncoveredKindV1::TirCarryNotCommitted,
                     why: "a carry-out that is not a commit point is not read by the next cell's verifier",
                 }),
                 Some(_) => covered.push((boundary, PalwCellVerifierV1::TirCellRecompute)),
@@ -190,7 +233,11 @@ pub fn palw_tir_cell_coverage_v1(
         if state_support == Some(CheckerIdV1::StateContinuity) {
             covered.push((boundary, PalwCellVerifierV1::TirStateLeaves));
         } else {
-            gaps.push(PalwCellCoverageGapV1::Uncovered { boundary, why: "the class descriptor does not check state continuity" });
+            gaps.push(PalwCellCoverageGapV1::Uncovered {
+                boundary,
+                kind: PalwCellUncoveredKindV1::TirStateUnchecked,
+                why: "the class descriptor does not check state continuity",
+            });
         }
     }
     if let Some((s_l, s_p)) = shard_plan {
@@ -208,6 +255,16 @@ pub fn palw_tir_cell_coverage_v1(
     }
     covered.push((PalwCellBoundaryV1::TirDecodeDoor, PalwCellVerifierV1::TirLogitsDoor));
     finish(covered, gaps)
+}
+
+/// The hybrid compositions whose `gdn=` half the court does not enumerate (v1, v2).
+fn map_is_partial_hybrid_v1(map: &Hash64) -> bool {
+    [maps::hybrid_state_chunk_map_id_v1(), maps::hybrid_state_chunk_map_id_v2()].contains(map)
+}
+
+/// The standalone recurrence maps (their geometry is the executor crate's).
+fn map_is_solo_recurrence_v1(map: &Hash64) -> bool {
+    [maps::gdn_state_chunk_map_id_v1(), maps::gdn_state_chunk_map_id_v2(), maps::gdn_state_chunk_map_id_v3()].contains(map)
 }
 
 /// Which memory sections a known map makes enumerable (`None`: unknown map — fail closed). The default (no map) is the long form.
@@ -261,7 +318,8 @@ pub fn palw_legacy_cell_coverage_v1(profile: &PalwShapeProfileV3) -> Result<Palw
         if table.iter().any(|n| n.kernel_semantics_id == kimi_router) {
             gaps.push(PalwCellCoverageGapV1::Uncovered {
                 boundary: boundary.clone(),
-                why: "a fenced Kimi router has no shipped adjudicating arm",
+                kind: PalwCellUncoveredKindV1::KimiRouter,
+                why: "a fenced Kimi router: its routed products resolve no router slot, so they are unadjudicable",
             });
         }
         match routers {
@@ -269,6 +327,7 @@ pub fn palw_legacy_cell_coverage_v1(profile: &PalwShapeProfileV3) -> Result<Palw
             1 => covered.push((boundary, PalwCellVerifierV1::LegacyRouterTopk)),
             _ => gaps.push(PalwCellCoverageGapV1::Uncovered {
                 boundary,
+                kind: PalwCellUncoveredKindV1::MultiRouterTable,
                 why: "more than one router in a table: the router slot is not unique, so routed products are unadjudicable",
             }),
         }
@@ -295,8 +354,19 @@ pub fn palw_legacy_cell_coverage_v1(profile: &PalwShapeProfileV3) -> Result<Palw
             if spelled && enumerable {
                 covered.push((boundary, PalwCellVerifierV1::LegacyStateMapEnumerated));
             } else {
+                // The kind names WHY, most specific first: the two named recurrence defects, then the generic ones.
+                let kind = if map_is_solo_recurrence_v1(&map) {
+                    PalwCellUncoveredKindV1::SoloRecurrenceMap
+                } else if map_is_partial_hybrid_v1(&map) && section == PalwCellMemorySectionV1::RecurrenceState {
+                    PalwCellUncoveredKindV1::HybridRecurrenceUnenumerated
+                } else if !spelled {
+                    PalwCellUncoveredKindV1::MapSectionNotSpelled
+                } else {
+                    PalwCellUncoveredKindV1::MapNotEnumerable
+                };
                 gaps.push(PalwCellCoverageGapV1::Uncovered {
                     boundary,
+                    kind,
                     why: "the registered map does not let the court enumerate this memory section (the long form is refused for a mapped class)",
                 });
             }

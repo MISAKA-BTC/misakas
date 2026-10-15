@@ -3119,6 +3119,15 @@ pub struct Params {
     /// The value carries X3's policy (`T_prepare`, `T_observe`, `T_resolve` and the `B_*` start-budget terms with no existing
     /// source — [`crate::palw_ruling_fences_v1`]), hashed Some-only by its id beside the height; no value is approved.
     pub palw_claim_hard_deadline_v1: Option<crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1>,
+    /// **palw_cell_coverage_closure_v1** — RFC-0006 R6-CELL round 4 ([`crate::palw_cell_coverage_closure_v1`]): past it a legacy class
+    /// whose cell coverage has a gap (an unknown state chunk map id — the step court's fail-open — or an uncovered kind: the hybrid
+    /// v1/v2 recurrence half, a solo recurrence map, a multi-router table, a Kimi router) is refused at registration (keyed on the
+    /// class's registration DAA), its claims are refused at the claim gate where the fold holds its graph, and a court close of a
+    /// claim accepted past it convicts where the fold does not (keyed on the claim's acceptance DAA). Pays and weights nothing.
+    /// **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only in both
+    /// fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_cell_coverage_closure_v1`]) until its
+    /// rule is verified.
+    pub palw_cell_coverage_closure_v1: Option<ForkActivation>,
 
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
@@ -5948,6 +5957,7 @@ impl Params {
             palw_court_model_scope_v1: self.palw_court_model_scope_v1,
             palw_public_evidence_reward_v1: self.palw_public_evidence_reward_v1,
             palw_claim_hard_deadline_v1: self.palw_claim_hard_deadline_v1,
+            palw_cell_coverage_closure_v1: self.palw_cell_coverage_closure_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -7077,6 +7087,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
+    palw_cell_coverage_closure_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -7402,6 +7413,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
+    palw_cell_coverage_closure_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -7709,6 +7721,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
+    palw_cell_coverage_closure_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -12875,6 +12888,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_legacy_public_filer_v1();
     // The 2026-10-12 rulings' fences (X3, N4, D2), likewise.
     params.sync_palw_2026_10_12_ruling_fences_v1();
+    // RFC-0006 R6-CELL round 4's coverage closure, likewise.
+    params.sync_palw_cell_coverage_closure_v1();
     // RFC-0001 §2.10's adapter class listing, likewise.
     params.sync_palw_adapter_class_v1();
     // ADR-0096's decode constraint, likewise.
@@ -13180,6 +13195,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_claim_hard_deadline_v1: None,
+    palw_cell_coverage_closure_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,

@@ -1326,7 +1326,41 @@ pub fn palw_decode_close_verdict_v1(
 /// is judged in (ADR-0119 Decision 4): under it a fused site's rows are opened at the claim's own
 /// ladder ([`palw_attn_opening_cap_v1`]) rather than the structural `2^22`. Decided by the caller at
 /// the BLOCK's DAA, as `step_ladder` is.
+///
+/// [`adjudicate_court_close_v4`] with no coverage closure (`palw_cell_coverage_closure_v1` unarmed): byte for byte the court it was.
+#[allow(clippy::too_many_arguments)]
 pub fn adjudicate_court_close_v3(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    proof: &PalwCourtVerdictProofV2,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    step_ladder: u64,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    held_regime: bool,
+    decode_close_convicts_only: bool,
+    fp_decode_rules_from_daa: Option<u64>,
+) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
+    adjudicate_court_close_v4(
+        state,
+        session_id,
+        proof,
+        court,
+        step_ladder,
+        prompt_ids_form,
+        held_regime,
+        decode_close_convicts_only,
+        fp_decode_rules_from_daa,
+        None,
+    )
+}
+
+/// [`adjudicate_court_close_v3`] under RFC-0006 R6-CELL round 4's coverage closure (`crate::palw_cell_coverage_closure_v1`,
+/// REQ-CELL-2): `cell_closure_from_daa` is the closure's mirror (`PalwStateParamsV2::cell_coverage_closure_from_daa`), `None` on
+/// every shipped network. For a claim accepted at or past it, a legacy close whose binding — pinned to the registered class and to
+/// the claim's committed execution root — is a profile the cell coverage checker does not cover adjudicates `ExecutorGuilty`,
+/// objectively, from the binding alone: the court never reads an unenumerable map as no fault for a new claim.
+#[allow(clippy::too_many_arguments)]
+pub fn adjudicate_court_close_v4(
     state: &PalwChainStateV2,
     session_id: &Hash64,
     proof: &PalwCourtVerdictProofV2,
@@ -1359,6 +1393,8 @@ pub fn adjudicate_court_close_v3(
     // RFC-0001 §A: `Params::palw_fp_decode_rules`'s height — a decode-token close does not try a
     // free-prompt claim accepted at or past it ([`palw_decode_close_admits_claim_v1`]).
     fp_decode_rules_from_daa: Option<u64>,
+    // RFC-0006 R6-CELL round 4: `palw_cell_coverage_closure_v1`'s mirror — see this function's docs.
+    cell_closure_from_daa: Option<u64>,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     // The cost gate runs before ANY state is read, which is the cheapest-first ordering a cost
     // bound has to have: an oversized object must be refusable without a lookup, a decode or a
@@ -1388,6 +1424,23 @@ pub fn adjudicate_court_close_v3(
     // ladder is `Terminal` and only an arithmetic close can finish the job" — so this makes the
     // code agree with the sentence the ladder was built for.
     let narrowed = session.ladder.terminal_index().ok_or(PalwCourtV2Error::LadderNotTerminal)?;
+    // **R6-CELL round 4 (REQ-CELL-2)**: a move in this session (the ladder is terminal), on a claim accepted past the closure, whose
+    // binding is the claim's own execution of its registered class, convicts when that class is uncoverable — whatever leaf it opens,
+    // because the fault is the class's shape, not a step's value. Below the fence (`None`) nothing here runs.
+    if cell_closure_from_daa.is_some_and(|from| claim.accepted_daa >= from)
+        && let Some(binding) = binding_of(proof)
+    {
+        check_close_profile_is_the_registered_class(claim.class_id, binding)?;
+        check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
+        crate::palw_step_leg::verify_binding_v1(binding).map_err(|e| PalwCourtV2Error::DoesNotAdjudicate(e.to_string()))?;
+        if crate::palw_cell_coverage_closure_v1::palw_cell_closure_court_convicts_v1(
+            cell_closure_from_daa,
+            claim.accepted_daa,
+            &binding.shape_profile,
+        ) {
+            return Ok(PalwCourtVerdictV2::ExecutorGuilty);
+        }
+    }
     match proof {
         PalwCourtVerdictProofV2::Arithmetic { refutation, .. } | PalwCourtVerdictProofV2::ArithmeticOpened { refutation, .. } => {
             let opened = refutation.output_opening.leaf_index;

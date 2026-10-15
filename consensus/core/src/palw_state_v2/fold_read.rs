@@ -938,6 +938,20 @@ impl PalwFoldReadV1<'_> {
         if let crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { code, why } = self.reward_gate_v1(class_id, now_daa) {
             return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why });
         }
+        // **RFC-0006 R6-CELL round 4 (`palw_cell_coverage_closure_v1`, REQ-CELL-1b)**: a claim accepted past the fence of a class whose
+        // graph the fold holds and whose cell coverage has a gap takes no claim on any lane — explicitly uncovered and unrewarded.
+        // Where the fold does not hold the graph, the court close convicts instead (REQ-CELL-2). Below the fence `None`.
+        if let Some(refusal) = crate::palw_cell_coverage_closure_v1::palw_cell_closure_claim_refusal_v1(
+            self.params,
+            now_daa,
+            self.state.fp_work_profile_of(class_id),
+        ) {
+            return Err(PalwStateV2Error::ClassNotRewardable {
+                class: *class_id,
+                code: crate::palw_cell_coverage_closure_v1::PALW_CELL_UNCOVERABLE_CODE_V1,
+                why: refusal.why().to_string(),
+            });
+        }
         let Some(fold) = self.extras.model_registry.as_ref() else { return Ok(()) };
         let whole = incoming.whole_claims(self.params.fp_quanta_per_canonical_job as u64);
         if let Some(state) = self.class_lifecycle_refusal(class_id) {

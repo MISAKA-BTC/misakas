@@ -900,8 +900,12 @@ pub mod palw_claim_challenge_v2;
 pub mod palw_claim_interactive_v3;
 /// R7-RELATION round 3 (2026-10-15): the dormant ClaimV2 gate of compact relation contracts (refused: empty review registry).
 pub mod palw_claim_compact_v1;
-/// R6-CELL round 3 (2026-10-15): pure boundary/routing/memory coverage checker over accepted cell profiles. Not called by consensus.
+/// R6-CELL round 3 (2026-10-15): pure boundary/routing/memory coverage checker over accepted cell profiles. Below
+/// `palw_cell_coverage_closure_v1` not called by consensus; past it the closure's one predicate.
 pub mod palw_cell_coverage_v1;
+/// R6-CELL round 4 (2026-10-15): the dormant `palw_cell_coverage_closure_v1` — an uncoverable legacy class (unknown map, hybrid
+/// v1/v2 recurrence, solo recurrence map, multi-router, Kimi router) refused at registration / the claim gate, convicted in court.
+pub mod palw_cell_coverage_closure_v1;
 
 pub mod palw_material_capacity_v1;
 

@@ -1884,6 +1884,11 @@ pub struct PalwStateParamsV2 {
     public_evidence_reward_from_daa: Option<u64>,
     #[borsh(skip)]
     claim_hard_deadline_v1: Option<crate::palw_ruling_fences_v1::PalwClaimHardDeadlineMirrorV1>,
+    /// **RFC-0006 R6-CELL round 4: `Params::palw_cell_coverage_closure_v1`'s height**, mirrored by
+    /// `Params::sync_palw_cell_coverage_closure_v1` (`crate::palw_cell_coverage_closure_v1`: the registration refusal, the claim gate
+    /// and the court close read it). `None` on every shipped preset, and validation refuses every armed one.
+    #[borsh(skip)]
+    cell_coverage_closure_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -9881,6 +9886,10 @@ pub enum PalwStateV2Error {
     /// onboarding/G14 path, so it earns no reward and no consensus work weight — no claim of it is admitted on any lane.
     #[error("class {class} earns no reward or consensus work weight: {code} ({why})")]
     ClassNotRewardable { class: Hash64, code: &'static str, why: String },
+    /// **R6-CELL round 4** (`palw_cell_coverage_closure_v1`, REQ-CELL-1): past the fence a class whose legacy cell coverage has a
+    /// gap (an unknown state chunk map, or an uncovered kind) is refused at registration — explicitly uncovered and unrewarded.
+    #[error("class {class} is refused at registration: {code} ({why})")]
+    CellCoverageRefused { class: Hash64, code: &'static str, why: &'static str },
     /// **A second IR class registration in one block** ([`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]).
     /// The acceptance walk drops it by name with the block standing; this is the fold's second lock.
     #[error("IR class {class} is one IR class registration more than a block may carry ({max})")]
@@ -18174,6 +18183,21 @@ fn object_preconditions_v1(
         return Err(PalwStateV2Error::TirRegistrationRefused(
             "a legacy-family class registration past palw_tir_only_v1: a new class is an IR program or an IR pipeline (RFC-0002 Phase H)",
         ));
+    }
+    // **RFC-0006 R6-CELL round 4 (`palw_cell_coverage_closure_v1`, REQ-CELL-1)**: past the fence a legacy registration whose carried
+    // profile the cell coverage checker does not cover end to end — an unknown state chunk map id (the step court's fail-open), the
+    // hybrid v1/v2 recurrence half, a solo recurrence map, a multi-router table, a Kimi router — is refused, keyed on the block's
+    // DAA (the class's registration DAA). A carriage-less registration is the card's own (genesis); the court answers for it.
+    // Below the fence `None`, and nothing here runs.
+    if let PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(carriage), .. } = object
+        && let Some(refusal) =
+            crate::palw_cell_coverage_closure_v1::palw_cell_closure_registration_refusal_v1(params, ctx.daa_score, &carriage.profile)
+    {
+        return Err(PalwStateV2Error::CellCoverageRefused {
+            class: *class_id,
+            code: crate::palw_cell_coverage_closure_v1::PALW_CELL_UNCOVERABLE_CODE_V1,
+            why: refusal.why(),
+        });
     }
     // **RFC-0004 A6: below `palw_improvement_v1` an evaluation court move is refused by name** — the acceptance walk
     // drops it first (an older build cannot decode it and skips it); this is the second lock.

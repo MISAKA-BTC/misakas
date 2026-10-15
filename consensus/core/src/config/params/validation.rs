@@ -196,6 +196,8 @@ impl Params {
         self.validate_palw_legacy_public_filer_v1()?;
         // **The three fences of the 2026-10-12 rulings** (register §3): refused when armed until their rules are built.
         self.validate_palw_2026_10_12_ruling_fences_v1()?;
+        // **RFC-0006 R6-CELL round 4's coverage closure** (`crate::palw_cell_coverage_closure_v1`): refused when armed.
+        self.validate_palw_cell_coverage_closure_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
         // **A-2 uniformity** (`crate::palw_lifecycle_objects_v2`): every lifecycle kind's owning fence needs the audit fence declared.
         self.validate_palw_lifecycle_kind_fences_v1()?;

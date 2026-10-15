@@ -330,6 +330,13 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                     Some(kaspa_consensus_core::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(at));
                 params.sync_palw_2026_10_12_ruling_fences_v1();
             }
+            // RFC-0006 R6-CELL round 4's coverage closure: a bare height, mirrored onto the V2 bundle the fold and the court read.
+            // Its registration refusal keys on the block's DAA and its claim gate / court close on a claim's acceptance DAA, so far
+            // above the chain it judges nothing here.
+            "palw_cell_coverage_closure_v1" => {
+                params.palw_cell_coverage_closure_v1 = Some(at);
+                params.sync_palw_cell_coverage_closure_v1();
+            }
             // ADR-0175 needs model lines at or below it (`validate_palw_model_immutable_v1`); artifact root ownership is t12's.
             // testnet-12 runs model lines from genesis: never move them (a later height would disarm the live registry below it).
             "palw_model_immutable_v1" => {

@@ -876,7 +876,7 @@ impl VirtualStateProcessor {
         let daa_score = self.virtual_stores.read().state.get().ok()?.daa_score;
         let step_ladder = self.palw_court_step_ladder_at(daa_score, court);
         let form = self.palw_prompt_ids_form_at(daa_score);
-        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v3(
+        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v4(
             &state,
             session_id,
             proof,
@@ -890,6 +890,8 @@ impl VirtualStateProcessor {
             self.palw_fp_decode_rules
                 .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never())
                 .map(|f| f.daa_score()),
+            // RFC-0006 R6-CELL round 4: the coverage closure's mirror (None on every shipped network).
+            state_params.cell_coverage_closure_from_daa(),
         )
         .ok()
     }

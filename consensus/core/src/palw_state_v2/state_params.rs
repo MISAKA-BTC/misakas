@@ -176,6 +176,7 @@ impl PalwStateParamsV2 {
             court_model_scope_from_daa: None,
             public_evidence_reward_from_daa: None,
             claim_hard_deadline_v1: None,
+            cell_coverage_closure_from_daa: None,
         })
     }
 
@@ -645,6 +646,18 @@ impl PalwStateParamsV2 {
     /// `Params::palw_claim_hard_deadline_v1`'s height and policy, if the network arms it (the mirror; register X3).
     pub fn claim_hard_deadline_v1(&self) -> Option<crate::palw_ruling_fences_v1::PalwClaimHardDeadlineMirrorV1> {
         self.claim_hard_deadline_v1
+    }
+
+    /// **R6-CELL round 4's mirror** (`crate::palw_cell_coverage_closure_v1`) — written by `Params::sync_palw_cell_coverage_closure_v1`
+    /// and by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_cell_coverage_closure_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.cell_coverage_closure_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_cell_coverage_closure_v1`'s height, if the network arms it (the mirror).
+    pub fn cell_coverage_closure_from_daa(&self) -> Option<u64> {
+        self.cell_coverage_closure_from_daa
     }
 
     /// **RFC-0010: the permissionless Panel's mirror** — written by `Params::sync_palw_permissionless_panel_v1` and by nothing else
