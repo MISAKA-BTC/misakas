@@ -27,7 +27,7 @@ pub(super) fn palw_lifecycle_carrier_rent_v2(
 /// A standard carrier's largest relay fee plus this object's rent and a positive change output.
 /// Keep the legacy float floor for ordinary moves; do not make cheap moves reserve a heavy proof's
 /// rent. The caller rechecks the actual signed carrier's price before it spends.
-pub(super) fn palw_lifecycle_funding_minimum_v2(
+pub(crate) fn palw_lifecycle_funding_minimum_v2(
     params: &kaspa_consensus_core::config::params::Params,
     object: &PalwConsensusObjectV2,
     daa: u64,
@@ -41,7 +41,7 @@ pub(super) fn palw_lifecycle_funding_minimum_v2(
 /// Shared production signer. Factored from the panel service so its real signed fee/change and
 /// signature can be checked without injecting a consensus service or a running mempool.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn build_lifecycle_carrier_v2(
+pub(crate) fn build_lifecycle_carrier_v2(
     config: &Config,
     kp: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair,
     object: &PalwConsensusObjectV2,

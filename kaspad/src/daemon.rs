@@ -1412,6 +1412,9 @@ Do you confirm? (y/n)";
     let palw_native_exchange = native_custody.and_then(|hook| {
         hook(crate::palw_native_custody_v3::PalwNativeCustodyContextV3 {
             consensus_manager: consensus_manager.clone(),
+            flow_context: flow_context.clone(),
+            tick_service: tick_service.clone(),
+            recovery_provider_roster_v4: Vec::new(),
             config: config.clone(),
             data_dir: app_dir.join(network.to_prefixed()),
             class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),

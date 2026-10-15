@@ -57,6 +57,9 @@ pub enum HistoryGapV1 {
     ChainOpenEnded,
     /// A pruning import has durably replaced a sidecar but has not completed all ledgers.
     PruningImportIncomplete,
+    /// The node could not reserve the actual native cache/evaluation workspace.
+    /// This is a local capacity stop, never evidence for advancing a head.
+    NativeCapacityUnavailable,
 }
 
 /// The phase an unresolved claim is in. `Voided` is never open; it exists so the mapping is total.

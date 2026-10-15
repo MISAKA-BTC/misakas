@@ -96,6 +96,11 @@ impl std::fmt::Debug for PalwNativeExchangeHandleV3 {
 /// What the daemon hands a native-custody wiring hook once the consensus manager exists.
 pub struct PalwNativeCustodyContextV3 {
     pub consensus_manager: Arc<kaspa_consensusmanager::ConsensusManager>,
+    /// Used only by an explicitly configured private recovery fee adapter.
+    pub flow_context: Arc<kaspa_p2p_flows::flow_context::FlowContext>,
+    pub tick_service: Arc<kaspa_core::task::tick::TickService>,
+    /// Explicit private-v4 prospective roster; empty in the original V3 hook.
+    pub recovery_provider_roster_v4: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
     pub config: Arc<kaspa_consensus_core::config::Config>,
     /// The node's per-network data directory (`<appdir>/<network>`).
     pub data_dir: std::path::PathBuf,

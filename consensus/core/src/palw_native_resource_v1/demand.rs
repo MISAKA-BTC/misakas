@@ -16,6 +16,20 @@ pub struct NativeDemandLeaseV1 {
     memory: u64,
     database: u64,
 }
+impl NativeDemandLeaseV1 {
+    /// Extend an existing owner before its next allocation. Reuse the same
+    /// ticket so tracking an unbounded walk does not itself allocate a second
+    /// collection whose ownership would need another reservation.
+    pub fn grow_memory_v1(&mut self, additional: u64) -> Result<(), NativeCoverageV1> {
+        let total = self.memory.checked_add(additional).ok_or_else(|| NativeCoverageV1::overflow::<Self>("growing native owner"))?;
+        let mut extra = self.checker.reserve_requests_v1(additional, 0)?;
+        self.memory = total;
+        // The reservation is now owned by self. Dropping the temporary must
+        // not return the transferred demand to the shared checker.
+        extra.memory = 0;
+        Ok(())
+    }
+}
 impl NativeDemandCheckerV1 {
     pub fn new(limits: NativeSnapshotResourceLimitsV1) -> Arc<Self> {
         Arc::new(Self { limits, state: Mutex::new(OutstandingV1::default()) })
@@ -128,6 +142,14 @@ pub fn reserve_native_install_in_database_v1(
             Ok(())
         }
     }
+    // from_state deep-copies the primary tables before the counting writer can
+    // determine their canonical length. Reserve that actual typed copy first;
+    // the later installation inventory cannot retroactively cover allocation.
+    let copy_bound = state.native_heap_v1("native installation carriage copy").add::<crate::palw_state_v2::PalwStateCarriageV2>(
+        NativeCoverageV1::Bounded { bytes: std::mem::size_of::<crate::palw_state_v2::PalwStateCarriageV2>() as u64 },
+        "native installation carriage owner",
+    );
+    let _source_copy_lease = reserve_native_requests_v1(copy_bound.bytes().ok_or(copy_bound)?)?;
     let carriage = crate::palw_state_v2::PalwStateCarriageV2::from_state(state);
     let mut count = Count(0);
     borsh::to_writer(&mut count, &carriage).map_err(|_| NativeCoverageV1::overflow::<Count>("canonical installation byte count"))?;
@@ -191,6 +213,22 @@ pub fn admit_native_receive_v1(point: BlockHash) -> Result<(), NativeCoverageV1>
 mod tests {
     use super::*;
     #[test]
+    fn growing_owner_is_atomic_and_returns_the_complete_ticket() {
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 64, database_bytes: 0 });
+        let mut owner = checker.reserve_requests_v1(16, 0).unwrap();
+        owner.grow_memory_v1(32).unwrap();
+        assert_eq!(checker.outstanding(), (48, 0));
+        assert!(owner.grow_memory_v1(17).is_err());
+        assert_eq!(checker.outstanding(), (48, 0), "failed growth leaves the old reservation live");
+        let sibling = checker.reserve_requests_v1(16, 0).unwrap();
+        assert!(owner.grow_memory_v1(1).is_err());
+        drop(sibling);
+        owner.grow_memory_v1(16).unwrap();
+        assert_eq!(checker.outstanding(), (64, 0));
+        drop(owner);
+        assert_eq!(checker.outstanding(), (0, 0));
+    }
+    #[test]
     fn outstanding_sibling_reservations_release_and_install_unknown_is_refused() {
         let state = crate::palw_state_v2::PalwChainStateV2::genesis();
         let point = BlockHash::from_u64_word(1);
@@ -246,7 +284,10 @@ pub fn reserve_native_wire_v1(
 
 /// Logical request reservation for owner-audited native consumers. The caller
 /// must derive requests from actual typed objects or an actual codec preflight.
-pub(crate) fn reserve_native_requests_v1(memory: u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
+/// Allocation request admission for owner-audited typed callers. A caller must
+/// establish its actual schema bound before construction and retain the lease
+/// through every owning cache/consumer; raw encoded lengths are not that bound.
+pub fn reserve_native_requests_v1(memory: u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
     if !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {
         return Ok(None);
     }

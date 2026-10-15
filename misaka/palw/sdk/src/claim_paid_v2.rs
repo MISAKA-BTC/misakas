@@ -384,6 +384,8 @@ pub fn sign_paid_claim_object_v2(
     };
     let actor = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&bond);
     let named = match inner {
+        PaidClaimObjectV2::RegisterCompactContractV4 { registration } => Some(registration.registrant),
+        PaidClaimObjectV2::BindCompactProofV4 { .. } => None, // exact enrolled producer checked by native admission.
         PaidClaimObjectV2::RegisterClass { class } => Some(class.registrant),
         PaidClaimObjectV2::EnrollJob { job } => Some(job.payer),
         PaidClaimObjectV2::Commit { enrollment, commit, .. } => {
@@ -676,3 +678,5 @@ pub fn paid_claim_round_sources_from_kernel_rows_v3(
     }
     Ok(VerifiedPaidClaimSourcesV2 { route, authority, check, lock, round: Some(row) })
 }
+
+pub mod compact_v4;

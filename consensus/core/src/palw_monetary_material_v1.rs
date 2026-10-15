@@ -227,6 +227,8 @@ pub enum PalwMonetaryMaterialActionV1 {
         consent: Hash64,
         tail_block: Hash64,
     },
+    /// Appended version, independently fenced. Existing variant bytes do not change.
+    RecoveryV2(Box<crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2>),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwMonetaryMaterialProviderV1 {
@@ -339,6 +341,7 @@ impl PalwChainStateV2 {
             .ok_or_else(|| {
                 crate::palw_state_v2::PalwStateV2Error::ExecV2Refused("native material has no signed capacity manifest".into())
             })?;
+        self.require_material_recovery_v2(params, row.terms.root, claim.accepted_daa)?;
         let manifest = row.native_binding.as_ref().map(|b| &b.manifest).or(row.terms.material_manifest.as_ref());
         let scope = manifest.and_then(|m| m.scope(root)).ok_or_else(|| {
             crate::palw_state_v2::PalwStateV2Error::ExecV2Refused(
@@ -405,6 +408,7 @@ impl PalwChainStateV2 {
         accepted_daa: u64,
         dependencies: Option<&[Hash64]>,
     ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        self.require_material_recovery_v2(params, root, accepted_daa)?;
         let Some(policy) = params.monetary_material_at_v1(accepted_daa) else { return Ok(()) };
         if self.claim(&root).is_some_and(|c| params.monetary_material_from_v1().is_some_and(|from| c.accepted_daa < from))
             || self

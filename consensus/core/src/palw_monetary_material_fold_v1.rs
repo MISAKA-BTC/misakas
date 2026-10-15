@@ -228,6 +228,9 @@ pub(super) fn enroll(
     ctx: &PalwBlockContextV2,
     e: &PalwMonetaryMaterialEnrollmentV1,
 ) -> Result<(), PalwStateV2Error> {
+    if builder.state.material_recovery_row_v2(e.terms.root).is_some() {
+        return Err(refused("root still has a reserved recovery receipt"));
+    }
     if builder.state.monetary_material_row_v1(e.terms.root).is_some() {
         return Err(refused("root is already enrolled; use signed replacement"));
     }
@@ -263,6 +266,16 @@ pub(super) fn replace(
     ctx: &PalwBlockContextV2,
     r: &PalwMonetaryMaterialReplacementV1,
 ) -> Result<(), PalwStateV2Error> {
+    if builder.state.material_recovery_row_v2(r.root).is_some() {
+        return Err(refused("recovery contract requires a newly signed RecoveryV2 replacement"));
+    }
+    replace_with_recovery_v2(builder, ctx, r)
+}
+pub(super) fn replace_with_recovery_v2(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    r: &PalwMonetaryMaterialReplacementV1,
+) -> Result<(), PalwStateV2Error> {
     let mut old = builder.state.monetary_material_row_v1(r.root).ok_or_else(|| refused("replacement has no enrolled root"))?;
     if r.root != r.enrollment.terms.root || r.previous != old.consent || old.sequence.checked_add(1) != Some(r.sequence) {
         return Err(refused("replacement replay or wrong consent generation"));
@@ -285,8 +298,12 @@ pub(super) fn action(
     a: &PalwMonetaryMaterialActionV1,
     signer: &PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
+    if let PalwMonetaryMaterialActionV1::RecoveryV2(recovery) = a {
+        return super::palw_material_release_recovery_fold_v2::action(builder, ctx, recovery, signer);
+    }
     let p = policy(builder, ctx.daa_score)?;
     let root = match a {
+        PalwMonetaryMaterialActionV1::RecoveryV2(_) => unreachable!("dispatched above"),
         PalwMonetaryMaterialActionV1::SegmentedChallenge { root, .. }
         | PalwMonetaryMaterialActionV1::SegmentedAnswer { root, .. }
         | PalwMonetaryMaterialActionV1::HeldChallenge { root, .. }
@@ -297,6 +314,7 @@ pub(super) fn action(
     };
     let mut row = builder.state.monetary_material_row_v1(root).ok_or_else(|| refused("no enrolled monetary material root"))?;
     match a {
+        PalwMonetaryMaterialActionV1::RecoveryV2(_) => unreachable!("dispatched above"),
         PalwMonetaryMaterialActionV1::SegmentedChallenge { provider, dependency, position, part, valid_until_daa, .. } => {
             let challenger = active(builder, signer)?;
             let source = active(builder, provider)?;
@@ -568,6 +586,7 @@ pub(super) fn action(
             {
                 return Err(refused("material covenant has unspent rights or a substituted tail"));
             }
+            super::palw_material_release_recovery_fold_v2::released(builder, ctx, root, *consent, *tail_block)?;
             write(builder, root, None);
             return Ok(());
         }
@@ -845,6 +864,95 @@ mod tests {
                 .collect(),
         };
         (state, params, e)
+    }
+    /// Fold/storage fixture: native signature and finalized-chain authority are
+    /// tested by the integration consumers, not manufactured by this unit test.
+    #[test]
+    fn recovery_v2_reserves_history_and_streams_before_writes_and_ack_checkpoint_survives_terminal_deletion() {
+        use super::super::palw_material_release_recovery_fold_v2 as recovery;
+        use crate::palw_material_release_recovery_v2::*;
+        let (state, params, e) = fixture();
+        let policy = PalwMaterialReleaseRecoveryPolicyV2 {
+            version: 2,
+            max_reserved_contracts: 1,
+            max_generations_per_contract: 2,
+            max_provider_streams: 4,
+            max_reserved_history_cells: 16,
+            measurement_root: h(77),
+        };
+        let params = params
+            .with_material_release_recovery_v2(Some(PalwMaterialReleaseRecoveryMirrorV2 { from_daa: 1, policy: policy.clone() }));
+        let extras = PalwTransitionExtrasV1 {
+            kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+                network_domain: h(1),
+                ruleset_digest: h(2),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        enroll(&mut b, &ctx(2), &e).unwrap();
+        let terms = PalwMaterialRecoveryTermsV2 {
+            version: 2,
+            root: e.terms.root,
+            initial_consent: e.id(),
+            sponsor: e.terms.sponsor,
+            nonce: h(76),
+            policy: policy.id(),
+            max_generations: 2,
+            all_generation_ack: true,
+        };
+        let action = PalwMaterialRecoveryActionV2::Enroll {
+            terms: terms.clone(),
+            providers: e.offers.iter().map(|o| PalwMaterialRecoverySignatureV2 { provider: o.provider, signature: vec![1] }).collect(),
+        };
+        recovery::action(&mut b, &ctx(2), &action, &bond(1)).unwrap();
+        b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
+        let checkpoint = b.state.material_provider_ack_checkpoint_v2(&bond(2)).unwrap();
+        assert_eq!(checkpoint.reserved_acks, 1);
+        let before = b.state.clone();
+        let entries = b.entries.len();
+        assert!(recovery::action(&mut b, &ctx(3), &action, &bond(1)).is_err());
+        assert_eq!(b.state, before);
+        assert_eq!(b.entries.len(), entries);
+        let replacement =
+            PalwMonetaryMaterialReplacementV1 { root: e.terms.root, previous: e.id(), sequence: 1, enrollment: e.clone() };
+        assert!(replace(&mut b, &ctx(3), &replacement).is_err(), "old replacement cannot silently lose recovery consent");
+        assert_eq!(b.state, before);
+        // Exercise only the journal's Release->Terminal transformation. This
+        // direct helper is NOT a native finality witness or payout simulation.
+        recovery::released(&mut b, &ctx(1000), e.terms.root, e.id(), h(75)).unwrap();
+        write(&mut b, e.terms.root, None);
+        b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
+        let Some(PalwMaterialRecoveryRowV2::Terminal(receipt)) = b.state.material_recovery_row_v2(e.terms.root) else { panic!() };
+        let id = receipt.id();
+        for n in [2, 3] {
+            let c = b.state.material_provider_ack_checkpoint_v2(&bond(n)).unwrap();
+            let ack = PalwMaterialRecoveryActionV2::Acknowledge {
+                root: e.terms.root,
+                receipt: id,
+                stream: c.stream,
+                previous: c.last_receipt,
+                sequence: c.sequence + 1,
+            };
+            let before = b.state.clone();
+            let mut bad = ack.clone();
+            if let PalwMaterialRecoveryActionV2::Acknowledge { sequence, .. } = &mut bad {
+                *sequence += 1;
+            }
+            assert!(recovery::action(&mut b, &ctx(1001), &bad, &bond(n)).is_err());
+            assert_eq!(b.state, before);
+            recovery::action(&mut b, &ctx(1001), &ack, &bond(n)).unwrap();
+            assert!(recovery::action(&mut b, &ctx(1001), &ack, &bond(n)).is_err());
+        }
+        assert!(b.state.material_recovery_row_v2(e.terms.root).is_none());
+        b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
+        let c = b.state.material_provider_ack_checkpoint_v2(&bond(2)).unwrap();
+        assert_eq!((c.sequence, c.last_receipt, c.reserved_acks), (1, id, 0));
+        let retire = PalwMaterialRecoveryActionV2::RetireProviderStream { provider: bond(2), stream: c.stream, sequence: c.sequence };
+        recovery::action(&mut b, &ctx(1002), &retire, &bond(2)).unwrap();
+        assert!(b.state.material_provider_ack_checkpoint_v2(&bond(2)).is_none());
+        assert!(recovery::action(&mut b, &ctx(1003), &retire, &bond(2)).is_err());
     }
     #[test]
     fn monetary_material_consent_preflights_all_funding_and_preserves_earned_cash_on_recovery() {

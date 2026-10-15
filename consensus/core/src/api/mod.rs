@@ -534,6 +534,21 @@ pub trait ConsensusApi: Send + Sync {
         Err("monetary material finality witnesses are unavailable".into())
     }
 
+    /// A terminal receipt present in a coherent native-finalized state. Historical
+    /// Release headers and deltas are deliberately not authority prerequisites.
+    fn palw_material_terminal_receipt_finalized_v2(
+        &self,
+        _root: Hash64,
+        _stored_consent: Hash64,
+    ) -> Result<Option<(BlockHash, crate::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2)>, String> {
+        Err("native finalized terminal receipt reads are unavailable".into())
+    }
+
+    fn palw_material_provider_ack_checkpoint_finalized_v2(&self,_provider:crate::palw_state_v2::PalwBondKeyV2)
+        ->Result<Option<(BlockHash,crate::palw_material_release_recovery_v2::PalwMaterialProviderAckCheckpointV2)>,String> {
+        Err("native finalized provider ACK checkpoints unavailable".into())
+    }
+
     fn palw_monetary_material_unused_offer_finalized_v1(&self, _root: Hash64, _enrollment_until: u64) -> Result<bool, String> {
         Err("monetary material unused-offer witnesses are unavailable".into())
     }
@@ -2028,8 +2043,15 @@ pub trait ConsensusApi: Send + Sync {
     fn pruning_point_palw_state_shared_v1(
         &self,
         point: crate::BlockHash,
-    ) -> Option<std::sync::Arc<crate::palw_state_v2::PalwStateCarriageV2>> {
-        self.pruning_point_palw_state(point).map(std::sync::Arc::new)
+    ) -> Option<std::sync::Arc<crate::palw_native_resource_v1::NativeStateCarriageV1>> {
+        if crate::palw_native_resource_v1::native_logical_admission_enabled_v1()
+            || crate::palw_native_resource_v1::native_resource_admission_enabled_v1()
+        {
+            return None;
+        }
+        self.pruning_point_palw_state(point)
+            .and_then(|v| crate::palw_native_resource_v1::NativeRetainedV1::retain_existing_v1(v).ok())
+            .map(std::sync::Arc::new)
     }
 
     /// Snapshot-bound material, with explicit negotiated complete coverage.

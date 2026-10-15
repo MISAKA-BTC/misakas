@@ -144,7 +144,6 @@ impl KernelLedgerV1 {
         self.admit_beacon_source(producer, job, seal, context, terms_id, out)
     }
 
-    /// Internal shared admission; only the prepaid route may call this for v5.
     /// Exact native source job identity, shared by admission and cold restore.
     /// This adds no alternative seal, claim, deposit or settlement identity.
     pub fn beacon_source_job_profile_v1(&self, job: &Digest) -> Option<Digest> {
@@ -156,6 +155,7 @@ impl KernelLedgerV1 {
             .or_else(|| self.typed.jobs.get(job).map(|j| j.class()))
     }
 
+    /// Internal shared admission; only the prepaid route may call this for v5.
     pub(crate) fn admit_beacon_source(
         &mut self,
         producer: Digest,

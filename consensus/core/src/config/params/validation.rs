@@ -186,7 +186,9 @@ impl Params {
         self.validate_palw_material_income_v3()?;
         self.validate_palw_panel_lifetime_v2()?;
         self.validate_palw_claim_challenge_v2()?;
+        self.validate_palw_claim_compact_v4()?;
         self.validate_palw_monetary_material_v1()?;
+        self.validate_palw_material_release_recovery_v2()?;
         // RFC07/RFC08 signed economic contracts (`crate::palw_econ_contracts_v1`): each refused when armed.
         self.validate_palw_model_verification_gate_v1()?;
         self.validate_palw_horizon_extension_v1()?;

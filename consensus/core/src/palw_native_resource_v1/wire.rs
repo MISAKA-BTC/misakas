@@ -14,6 +14,8 @@ pub struct NativeWireShapeV1 {
     pub outer_entries: u64,
     /// Actual byte-vector elements within this parsed codec, distinct from frame bytes.
     pub byte_entries: u64,
+    /// Actual composite-stage references parsed from versioned spec roots.
+    pub composite_components: u64,
 }
 impl NativeWireShapeV1 {
     pub fn merge(self, rhs: Self) -> io::Result<Self> {
@@ -22,6 +24,7 @@ impl NativeWireShapeV1 {
             collection_entries: self.collection_entries.checked_add(rhs.collection_entries).ok_or_else(overflow)?,
             outer_entries: self.outer_entries.max(rhs.outer_entries),
             byte_entries: self.byte_entries.checked_add(rhs.byte_entries).ok_or_else(overflow)?,
+            composite_components: self.composite_components.checked_add(rhs.composite_components).ok_or_else(overflow)?,
         })
     }
     pub fn allocation(mut self, count: u64, unit: usize) -> io::Result<Self> {
@@ -437,4 +440,47 @@ pub fn preflight_native_value_v1<T: NativeWireScanV1>(reader: impl Read, bytes: 
     }
     let requests = shape.heap.checked_add(size_of::<T>() as u64).ok_or_else(overflow)?;
     Ok(NativeWireValuePreflightV1 { requests, canonical: bytes })
+}
+
+/// LeafOpeningV3 has a handwritten wire codec: values use dtype.width(),
+/// while the owning Rust Vec stores i128. A derived Vec<i128> scan would read
+/// the wrong bytes for every narrow dtype and fail to reserve its expansion.
+fn leaf_opening_shape_v3<R: Read>(reader: &mut NativeWireReaderV1<R>, bounded: bool) -> io::Result<NativeWireShapeV1> {
+    use misaka_palw_tir::{DType, types::MAX_RANK};
+    reader.step()?;
+    let tag = reader.byte()?;
+    let dtype = DType::ALL.into_iter().find(|d| d.tag() == tag).ok_or_else(|| wire_bad("unknown v3 leaf dtype"))?;
+    let rank = reader.word()? as u64;
+    if bounded && rank > MAX_RANK as u64 {
+        return Err(wire_bad("bounded leaf rank exceeds its codec"));
+    }
+    reader.skip(rank.checked_mul(8).ok_or_else(overflow)?)?;
+    // axis, line, tile
+    reader.skip(17)?;
+    let values = reader.word()? as u64;
+    if bounded && values > misaka_palw_kernel::merkle3::TILE_V3 {
+        return Err(wire_bad("bounded leaf value count exceeds its codec"));
+    }
+    reader.skip(values.checked_mul(dtype.width() as u64).ok_or_else(overflow)?)?;
+    let siblings = reader.word()? as u64;
+    if bounded && siblings > 64 {
+        return Err(wire_bad("bounded leaf siblings exceed its codec"));
+    }
+    reader.skip(siblings.checked_mul(64).ok_or_else(overflow)?)?;
+    reader.skip(64)?;
+    let members = rank.checked_add(values).and_then(|n| n.checked_add(siblings)).ok_or_else(overflow)?;
+    NativeWireShapeV1 { collection_entries: members, ..Default::default() }
+        .allocation(rank.checked_mul(2).ok_or_else(overflow)?, size_of::<u64>())?
+        .allocation(values.checked_mul(2).ok_or_else(overflow)?, size_of::<i128>())?
+        .allocation(siblings.checked_mul(2).ok_or_else(overflow)?, size_of::<[u8; 64]>())
+}
+impl NativeWireScanV1 for misaka_palw_kernel::merkle3::LeafOpeningV3 {
+    fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
+        leaf_opening_shape_v3(reader, false)
+    }
+}
+impl NativeWireScanV1 for crate::palw_onboarding_tile_v3::ArtifactTileOpeningV3 {
+    fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
+        leaf_opening_shape_v3(reader, true)
+    }
 }

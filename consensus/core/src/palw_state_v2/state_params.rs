@@ -164,11 +164,13 @@ impl PalwStateParamsV2 {
             panel_v3: None,
             panel_lifetime_v2: None,
             palw_claim_challenge_v2: None,
+            palw_claim_compact_v4: None,
             bond_budget: None,
             bond_formula_v2: None,
             reporter_income_from_daa: None,
             material_income_from_daa: None,
             monetary_material: None,
+            material_release_recovery_v2: None,
             econ_contracts_v1: Default::default(),
             paid_consumer_lifecycle: None,
             audit_1004_from_daa: None,
@@ -1944,6 +1946,11 @@ impl PalwStateParamsV2 {
 }
 
 impl PalwStateParamsV2 {
+    pub fn material_release_recovery_from_v2(&self) -> Option<u64> { self.material_release_recovery_v2.as_ref().map(|m|m.from_daa) }
+    pub fn with_material_release_recovery_v2(mut self, mirror: Option<crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryMirrorV2>) -> Self { self.material_release_recovery_v2 = mirror; self }
+    pub fn material_release_recovery_at_v2(&self, daa: u64) -> Option<&crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryPolicyV2> {
+        self.material_release_recovery_v2.as_ref().filter(|m|daa>=m.from_daa && self.monetary_material_at_v1(daa).is_some()).map(|m|&m.policy)
+    }
     pub fn monetary_material_from_v1(&self) -> Option<u64> {
         self.monetary_material.as_ref().map(|m| m.from_daa)
     }
@@ -1974,5 +1981,20 @@ impl PalwStateParamsV2 {
     pub fn claim_challenge_v2_at(&self, daa: u64) -> Option<crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2> {
         self.palw_claim_challenge_v2
             .filter(|f| f.activation != crate::config::params::ForkActivation::never() && f.activation.is_active(daa))
+    }
+}
+
+impl PalwStateParamsV2 {
+    pub fn with_claim_compact_v4(mut self, fence: Option<crate::palw_claim_compact_v4::PalwClaimCompactFenceV4>) -> Self {
+        self.palw_claim_compact_v4 = fence.filter(|f| f.activation != crate::config::params::ForkActivation::never());
+        self
+    }
+    pub fn claim_compact_v4(&self) -> Option<&crate::palw_claim_compact_v4::PalwClaimCompactFenceV4> {
+        self.palw_claim_compact_v4.as_ref()
+    }
+    pub fn claim_compact_v4_at(&self, daa: u64) -> Option<&crate::palw_claim_compact_v4::PalwClaimCompactPolicyV4> {
+        self.palw_claim_compact_v4.as_ref()
+            .filter(|f| f.activation.is_active(daa) && self.claim_challenge_v2_at(daa).is_some())
+            .map(|f| &f.policy)
     }
 }

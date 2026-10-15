@@ -1094,7 +1094,7 @@ impl Consensus {
     /// The PALW V2 state at the tip, through the shared materialization (audit M-7) — the one
     /// snapshot every `palw_model_*` reader answers from. `None` off ConsensusV2 or before the
     /// first state was written.
-    pub(crate) fn palw_state_v2_tip(&self) -> Option<Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>> {
+    pub(crate) fn palw_state_v2_tip(&self) -> Option<Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>> {
         let state_params = match &self.config.params.palw_consensus_mode {
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => &bundle.state,
             _ => return None,
@@ -1549,6 +1549,24 @@ impl ConsensusApi for Consensus {
             return Err("material GC witness changed snapshot/import generation".into());
         }
         Ok(true)
+    }
+
+    fn palw_material_terminal_receipt_finalized_v2(
+        &self,
+        root: kaspa_hashes::Hash64,
+        stored_consent: kaspa_hashes::Hash64,
+    ) -> Result<Option<(BlockHash, kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2)>, String>
+    {
+        use kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2;
+        let Some((pin,state))=self.palw_finalized_material_recovery_state_v2()? else {return Ok(None)};
+        Ok(match state.material_recovery_row_v2(root) {
+            Some(PalwMaterialRecoveryRowV2::Terminal(receipt)) if receipt.covers(root,stored_consent)=>Some((pin,receipt)),_=>None,
+        })
+    }
+    fn palw_material_provider_ack_checkpoint_finalized_v2(&self,provider:kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)
+        ->Result<Option<(BlockHash,kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialProviderAckCheckpointV2)>,String> {
+        let Some((pin,state))=self.palw_finalized_material_recovery_state_v2()? else {return Ok(None)};
+        Ok(state.material_provider_ack_checkpoint_v2(&provider).map(|checkpoint|(pin,checkpoint)))
     }
 
     fn palw_monetary_material_unused_offer_finalized_v1(
@@ -2765,7 +2783,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_staged_tir_prefix_leaf_index_v1_impl(key, ordinal, maximum_leaves)
     }
 
-    fn palw_staged_tir_layout_v1(&self, class_id: kaspa_consensus_core::Hash64) -> Option<kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1> {
+    fn palw_staged_tir_layout_v1(
+        &self,
+        class_id: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1> {
         self.virtual_processor.palw_staged_tir_layout_v1_impl(class_id)
     }
 
@@ -2814,7 +2835,13 @@ impl ConsensusApi for Consensus {
         &self,
         custodian: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
         after: Option<kaspa_consensus_core::Hash64>,
-    ) -> Result<(Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>, Option<kaspa_consensus_core::Hash64>), String> {
+    ) -> Result<
+        (
+            Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+            Option<kaspa_consensus_core::Hash64>,
+        ),
+        String,
+    > {
         self.virtual_processor.palw_staged_custody_delegations_to_v1_impl(custodian, after)
     }
 
@@ -3356,7 +3383,7 @@ impl ConsensusApi for Consensus {
     fn pruning_point_palw_state_shared_v1(
         &self,
         point: BlockHash,
-    ) -> Option<std::sync::Arc<kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2>> {
+    ) -> Option<std::sync::Arc<kaspa_consensus_core::palw_native_resource_v1::NativeStateCarriageV1>> {
         self.virtual_processor.pruning_point_palw_state_shared_v1_impl(point)
     }
 
@@ -4515,4 +4542,46 @@ pub fn palw_derived_claim_view_v1(
     let executor_pubkey = state.bond(&claim.bond).map(|b| b.pubkey.clone()).unwrap_or_default();
     let rows = state.derived_artifacts_of(claim_id).map(|(key, row)| (*key, row.clone())).collect();
     Some((claim, executor_pubkey, rows))
+}
+
+impl Consensus {
+    fn palw_finalized_material_recovery_state_v2(&self)->Result<Option<(BlockHash,kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1)>,String> {
+        if self.config.params.palw_material_release_recovery_v2.is_none() { return Ok(None); }
+        let before = self.lkg_virtual_state.load();
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || generation.active.is_some() {
+            return Err("terminal receipt import is incomplete".into());
+        }
+        let finality = self.virtual_processor.virtual_finality_point(&before.ghostdag_data, self.pruning_point());
+        if !self.services.reachability_service.has_reachability_data(finality)
+            || !self.services.reachability_service.is_chain_ancestor_of(finality, before.ghostdag_data.selected_parent)
+        {
+            return Err("terminal receipt finalized anchor is unavailable".into());
+        }
+        // This is the state AFTER the selected parent committed by finality's
+        // header, and therefore finalized whenever finality is finalized. It can
+        // be reconstructed near the present pruning point without old Release.
+        let parent = self.ghostdag_store.get_data(finality).map_err(|e| e.to_string())?.selected_parent;
+        let state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(parent)
+            .map_err(|e| format!("terminal receipt finalized parent state unavailable: {e:?}"))?;
+        let header=self.headers_store.get_header(finality).map_err(|e|e.to_string())?;
+        kaspa_consensus_core::palw_state_proof_v1::state_root_of_pinned_header_v1(&header,finality).map_err(|e|e.to_string())?;
+        if self.virtual_processor.palw_committed_root_v1(&state)!=header.palw_state_root {
+            return Err("terminal receipt reconstructed finalized state disagrees with header".into());
+        }
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle)=&self.config.params.palw_consensus_mode else { return Err("terminal receipt requires ConsensusV2".into()); };
+        state.assert_material_release_recovery_consistency_v2(&bundle.state).map_err(|e|e.to_string())?;
+        let after = self.lkg_virtual_state.load();
+        let (generation_after, stable_after) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_after
+            || generation_after.active.is_some()
+            || generation.epoch != generation_after.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+        {
+            return Err("terminal receipt changed finalized snapshot/import generation".into());
+        }
+        Ok(Some((finality,state)))
+    }
 }

@@ -230,9 +230,24 @@ impl PrivateNativeCustodySpecV3 {
     /// The daemon hook: open the provider service (its authenticated listener and its GC janitor), and return the exchange for
     /// this node's producer.
     pub fn into_hook(self) -> PalwNativeCustodyHookV3 {
+        self.into_hook_internal_v3(None)
+    }
+    pub fn into_hook_with_service_v4(
+        self,
+        on_open: Box<dyn FnOnce(Arc<LoopbackNativeProviderV3>, &PalwNativeCustodyContextV3) -> Result<(), String> + Send>,
+    ) -> PalwNativeCustodyHookV3 {
+        self.into_hook_internal_v3(Some(on_open))
+    }
+    fn into_hook_internal_v3(
+        self,
+        on_open: Option<Box<dyn FnOnce(Arc<LoopbackNativeProviderV3>, &PalwNativeCustodyContextV3) -> Result<(), String> + Send>>,
+    ) -> PalwNativeCustodyHookV3 {
         Box::new(move |ctx: PalwNativeCustodyContextV3| -> Result<Option<PalwNativeExchangeHandleV3>, String> {
             let Self { providers, listen, exchange, network } = self;
             let service = if providers.is_empty() { None } else { Some(Arc::new(LoopbackNativeProviderV3::open(&ctx, providers)?)) };
+            if let Some(on_open) = on_open {
+                on_open(Arc::clone(service.as_ref().ok_or("private v4 ACK adapter requires a provider service")?), &ctx)?;
+            }
             if let Some(service) = &service {
                 let service = Arc::clone(service);
                 std::thread::Builder::new()
@@ -295,6 +310,7 @@ struct ServedProviderV3 {
     store: Mutex<DurableMonetaryMaterialProviderV1>,
     authorities: Mutex<AuthorityIndexV3>,
     janitor: Mutex<MonetaryMaterialGcJanitorV1>,
+    recovery_acks: Mutex<misaka_palw_remote::material_recovery_ack_v2::MaterialRecoveryAckOutboxV2>,
 }
 
 /// **The in-node provider service.** Holds no consensus state of its own: every authority is a fresh Consensus API read.
@@ -340,6 +356,9 @@ impl LoopbackNativeProviderV3 {
             )?;
             let operator = *operators.get(&key.bond).ok_or("a native provider bond is not a fixture seat")?;
             let janitor = MonetaryMaterialGcJanitorV1::open(&file)?;
+            let recovery_acks = misaka_palw_remote::material_recovery_ack_v2::MaterialRecoveryAckOutboxV2::open(
+                &file.with_extension("recovery-ack-v2"),
+            )?;
             providers.push(ServedProviderV3 {
                 bond: key.bond,
                 operator,
@@ -347,6 +366,7 @@ impl LoopbackNativeProviderV3 {
                 store: Mutex::new(store),
                 authorities: Mutex::new(authorities),
                 janitor: Mutex::new(janitor),
+                recovery_acks: Mutex::new(recovery_acks),
             });
         }
         let form = params.palw_prompt_ids_form_v1();
@@ -461,7 +481,9 @@ impl LoopbackNativeProviderV3 {
             // infer cleanup authority from a missing bundle alone.
             let receipts: Vec<_> = janitor.completed_receipts().cloned().collect();
             let still_held: BTreeSet<_> = store.held_native_authorities().into_values().flatten().collect();
-            for receipt in receipts {
+            let mut recovery_roots = BTreeMap::new();
+            let mut metadata_clean = true;
+            for receipt in &receipts {
                 let retired: BTreeSet<_> = receipt.native_claims.iter().copied().filter(|claim| !still_held.contains(claim)).collect();
                 let result = provider
                     .authorities
@@ -469,15 +491,170 @@ impl LoopbackNativeProviderV3 {
                     .map_err(|_| "authority metadata lock poisoned".to_string())
                     .and_then(|mut index| index.remove_finalized(&retired));
                 match result {
-                    Ok(()) => {
-                        if let Err(error) = janitor.acknowledge_metadata_cleanup(receipt.intent.stored_consent) {
-                            kaspa_core::warn!("RFC12 PRIVATE: finalized authority metadata ack retained: {error}");
+                    Ok(()) => match oracle.terminal_receipt(receipt.intent.root, receipt.intent.stored_consent) {
+                        Ok(Some((_, terminal))) => {
+                            recovery_roots.insert(terminal.id(), terminal);
+                        }
+                        Ok(None) => {
+                            if let Err(error) = janitor.acknowledge_metadata_cleanup(receipt.intent.stored_consent) {
+                                kaspa_core::warn!("RFC12 PRIVATE: finalized authority metadata ack retained: {error}");
+                            }
+                        }
+                        Err(error) => {
+                            metadata_clean = false;
+                            kaspa_core::warn!("RFC12 PRIVATE: recovery receipt read retained for retry: {error}");
+                        }
+                    },
+                    Err(error) => {
+                        metadata_clean = false;
+                        kaspa_core::warn!("RFC12 PRIVATE: finalized provider metadata retained for retry: {error}");
+                    }
+                }
+            }
+            if metadata_clean {
+                if let Ok(mut outbox) = provider.recovery_acks.lock() {
+                    for terminal in recovery_roots.into_values() {
+                        if terminal.acknowledged.contains(&provider.bond) {
+                            continue;
+                        }
+                        let checkpoint = match self
+                            .consensus_manager
+                            .consensus()
+                            .unguarded_session_blocking()
+                            .palw_material_provider_ack_checkpoint_finalized_v2(provider.bond)
+                        {
+                            Ok(Some((_, checkpoint))) => checkpoint,
+                            Ok(None) => {
+                                kaspa_core::warn!("RFC12 PRIVATE: provider ACK checkpoint not finalized yet");
+                                continue;
+                            }
+                            Err(error) => {
+                                kaspa_core::warn!("RFC12 PRIVATE: provider ACK checkpoint unknown: {error}");
+                                continue;
+                            }
+                        };
+                        if let Err(error) = outbox.enqueue_after_durable_gc(
+                            self.transport.domain,
+                            &terminal,
+                            provider.bond,
+                            &checkpoint,
+                            &receipts,
+                            &store.held_contracts(),
+                            |bond, message, context| {
+                                (*bond == provider.bond).then(|| provider.key.sign_with_context(message, context).to_vec())
+                            },
+                        ) {
+                            kaspa_core::warn!(
+                                "RFC12 PRIVATE: recovery ACK waits for all generation deletions/funding adapter: {error}"
+                            );
                         }
                     }
-                    Err(error) => kaspa_core::warn!("RFC12 PRIVATE: finalized provider metadata retained for retry: {error}"),
                 }
             }
         }
+    }
+
+    /// Pending signed ACKs are read by the explicitly configured private fee
+    /// payer. Submission is recorded before network send and retained to finality.
+    pub fn pending_recovery_acks_v2(
+        &self,
+    ) -> Result<Vec<(PalwBondKeyV2, misaka_palw_remote::material_recovery_ack_v2::MaterialRecoveryAckRowV2)>, String> {
+        let mut rows = Vec::new();
+        for p in &self.providers {
+            for row in p.recovery_acks.lock().map_err(|_| "ACK outbox lock poisoned")?.pending() {
+                rows.push((p.bond, row.clone()));
+            }
+        }
+        Ok(rows)
+    }
+    pub fn record_recovery_ack_submitted_v2(
+        &self,
+        provider: PalwBondKeyV2,
+        receipt: Hash64,
+        tx: &kaspa_consensus_core::tx::Transaction,
+    ) -> Result<(), String> {
+        self.providers
+            .iter()
+            .find(|p| p.bond == provider)
+            .ok_or("unknown ACK provider")?
+            .recovery_acks
+            .lock()
+            .map_err(|_| "ACK outbox lock poisoned")?
+            .record_submitted(receipt, tx)
+    }
+    pub fn record_recovery_ack_accepted_v2(
+        &self,
+        provider: PalwBondKeyV2,
+        receipt: Hash64,
+        block: kaspa_consensus_core::BlockHash,
+    ) -> Result<(), String> {
+        self.providers
+            .iter()
+            .find(|p| p.bond == provider)
+            .ok_or("unknown ACK provider")?
+            .recovery_acks
+            .lock()
+            .map_err(|_| "ACK outbox lock poisoned")?
+            .record_accepted(receipt, block)
+    }
+    /// Current finalized ACK stream presence proves ACTUAL state application,
+    /// including after last-ACK terminal deletion and historical body/delta pruning.
+    pub fn retire_recovery_ack_checkpoint_v2(&self, provider: PalwBondKeyV2, receipt: Hash64) -> Result<bool, String> {
+        let p = self.providers.iter().find(|p| p.bond == provider).ok_or("unknown ACK provider")?;
+        let Some((_, checkpoint)) = self
+            .consensus_manager
+            .consensus()
+            .unguarded_session_blocking()
+            .palw_material_provider_ack_checkpoint_finalized_v2(provider)?
+        else {
+            return Ok(false);
+        };
+        let mut janitor = p.janitor.lock().map_err(|_| "ACK janitor lock poisoned")?;
+        let mut outbox = p.recovery_acks.lock().map_err(|_| "ACK outbox lock poisoned")?;
+        let consents = outbox.pending().find(|r| r.receipt == receipt).ok_or("unknown ACK receipt")?.stored_consents.clone();
+        let mut applied = false;
+        outbox.retire_checkpoint_finalized(receipt, |row| {
+            applied = checkpoint.provider == row.provider
+                && checkpoint.stream == row.stream
+                && checkpoint.sequence == row.sequence
+                && checkpoint.last_receipt == row.receipt;
+            if applied {
+                for consent in &consents {
+                    janitor.acknowledge_metadata_cleanup(*consent)?;
+                }
+            }
+            Ok(applied)
+        })?;
+        Ok(applied)
+    }
+    pub fn retire_recovery_ack_finalized_v2(
+        &self,
+        provider: PalwBondKeyV2,
+        receipt: Hash64,
+        verify: impl FnMut(
+            &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+            &[u8],
+            kaspa_consensus_core::BlockHash,
+        ) -> Result<bool, String>,
+    ) -> Result<(), String> {
+        let p = self.providers.iter().find(|p| p.bond == provider).ok_or("unknown ACK provider")?;
+        let mut janitor = p.janitor.lock().map_err(|_| "ACK janitor lock poisoned")?;
+        let mut outbox = p.recovery_acks.lock().map_err(|_| "ACK outbox lock poisoned")?;
+        // Completion cleanup runs inside the successful native verification,
+        // before outbox retirement. On either fsync failure the signed outbox
+        // stays replayable; cleanup of an already removed completion is idempotent.
+        let consents = outbox.pending().find(|r| r.receipt == receipt).ok_or("unknown ACK receipt")?.stored_consents.clone();
+        let mut verify = verify;
+        outbox.retire_finalized(receipt, |object, tx, block| {
+            if !verify(object, tx, block)? {
+                return Ok(false);
+            }
+            for consent in &consents {
+                janitor.acknowledge_metadata_cleanup(*consent)?;
+            }
+            Ok(true)
+        })?;
+        Ok(())
     }
 
     /// One request, every roster bond this service holds: each signature only after its own durable publication.
@@ -711,6 +888,20 @@ fn handle_authenticated_v3(mut stream: TcpStream, service: &LoopbackNativeProvid
 struct ConsensusGcOracleV3<'a>(&'a kaspa_consensusmanager::ConsensusManager);
 
 impl MonetaryMaterialGcOracleV1 for ConsensusGcOracleV3<'_> {
+    fn terminal_receipt(
+        &mut self,
+        root: Hash64,
+        stored: Hash64,
+    ) -> Result<
+        Option<(
+            kaspa_consensus_core::BlockHash,
+            kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2,
+        )>,
+        String,
+    > {
+        self.0.consensus().unguarded_session_blocking().palw_material_terminal_receipt_finalized_v2(root, stored)
+    }
+
     fn covenant_rows(
         &mut self,
     ) -> Result<
@@ -741,6 +932,9 @@ impl MonetaryMaterialGcOracleV1 for ConsensusGcOracleV3<'_> {
         release_block: kaspa_consensus_core::BlockHash,
     ) -> Result<bool, String> {
         let session = self.0.consensus().unguarded_session_blocking();
+        if let Some((_, receipt)) = session.palw_material_terminal_receipt_finalized_v2(root, consent)? {
+            return Ok(receipt.tail_block == tail);
+        }
         session.palw_monetary_material_release_finalized_v1(root, consent, tail, release_block)
     }
 }

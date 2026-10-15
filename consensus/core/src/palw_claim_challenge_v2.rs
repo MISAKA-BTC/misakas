@@ -481,6 +481,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         use crate::palw_state_v2::PalwStateV2Error;
         let refuse = |s: String| PalwStateV2Error::CarriageInconsistent(format!("paid claim: {s}"));
+        self.assert_paid_compact_consistency_v4(params)?;
         let Some(route) = self.kernel_route() else { return Ok(()) };
         let owned = |t: u8| matches!(t,113..=119|122..=124);
         if !route.aux.keys().any(|(t, _)| owned(*t)) {
@@ -564,6 +565,24 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 PAID_CLAIM_CLASSES_V2 => {
                     let c: PaidClaimClassV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                     c.validate().map_err(&refuse)?;
+                    if let Some(plan) = c.interactive_plan.as_ref().filter(|p| p.version == 4) {
+                        route
+                            .paid_compact_contract_v4(&plan.id())
+                            .map_err(&refuse)?
+                            .registration
+                            .validate_for_class(&c, &l)
+                            .map_err(&refuse)?;
+                        let compact =
+                            params.claim_compact_v4_at(now).ok_or_else(|| refuse("compact class without active own fence".into()))?;
+                        if compact.require_independent_review {
+                            misaka_palw_challenge::approved_v2(
+                                &misaka_palw_challenge::shipped_registry_v2(),
+                                &plan.compiler,
+                                &c.source_policy,
+                            )
+                            .map_err(|e| refuse(e.to_string()))?;
+                        }
+                    }
                     let target = if let Some(base) = l.classes.get(&c.base_class) {
                         if crate::palw_claim_challenge_v2::is_segmented_descriptor_v3(&base.descriptor.digest()) {
                             PaidClaimTargetV2::Segmented
@@ -745,7 +764,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                     let row: crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3 =
                         borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                     let a = route.paid_claim_enrollment_v3(&row.enrollment).map_err(&refuse)?;
-                    row.validate(&a, &l).map_err(&refuse)?;
+                    route.validate_paid_round_v4(&row, &a, &l).map_err(&refuse)?;
                     if a.class.source_policy.interactive_mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
                         let index: PalwPaidClaimIndexV3 = route
                             .aux_row(PAID_CLAIM_ROUNDS_V2, &paid_claim_index_key_v3(PAID_CLAIM_ID_INDEX_PREFIX_V3, &row.context.id()))
@@ -791,7 +810,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                                 .unwrap(),
                             )
                             .ok_or_else(|| refuse("last Final round absent".into()))?;
-                        last.validate(&a, &l).map_err(&refuse)?;
+                        route.validate_paid_round_v4(&last, &a, &l).map_err(&refuse)?;
                         (last.lock.ok_or_else(|| refuse("Final round lock absent".into()))?, plan.rounds, last.transcript_root)
                     } else {
                         (

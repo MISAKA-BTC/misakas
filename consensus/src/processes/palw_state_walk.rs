@@ -33,6 +33,8 @@ pub enum PalwStateWalkError {
     MissingDelta(BlockHash),
     #[error("state error while walking: {0}")]
     State(#[from] PalwStateV2Error),
+    #[error("native allocation refusal while walking: {0}")]
+    Resource(String),
     #[error("store error while walking: {0}")]
     Store(#[from] kaspa_database::prelude::StoreError),
 }
@@ -73,6 +75,29 @@ pub fn walk_chain_path(
     for block in added {
         let delta = load_delta(store, *block)?;
         state = apply_delta_v2(&state, &delta, params)?;
+    }
+    Ok(state)
+}
+
+/// Production walk keeps each cold-state and transition reservation alive.
+pub fn walk_chain_path_retained_v1(
+    store: &DbPalwStateV2Store,
+    params: &PalwStateParamsV2,
+    mut state: kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+    removed: &[BlockHash],
+    added: &[BlockHash],
+) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1, PalwStateWalkError> {
+    for (blocks, revert) in [(removed, true), (added, false)] {
+        for block in blocks {
+            let delta = store
+                .delta_of_retained_v1(*block)
+                .map_err(|e| match e {
+                    kaspa_database::prelude::StoreError::KeyNotFound(_) => PalwStateWalkError::MissingDelta(*block),
+                    e => PalwStateWalkError::Store(e),
+                })?
+                .1;
+            state = state.try_delta_v1(&delta, params, revert).map_err(PalwStateWalkError::Resource)?;
+        }
     }
     Ok(state)
 }

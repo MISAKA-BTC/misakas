@@ -592,6 +592,14 @@ impl PalwMonetaryMaterialProviderStoreV1 {
     /// bytes are authenticated again against the caller's coherent native and
     /// kernel snapshot, before the provider exposes a single answer.
     pub fn recover_verified(
+        encoded:&[u8],max_contract_bytes:u64,total_capacity:u64,
+        ledger:Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,authority:impl FnMut(Hash64)->Option<PalwMaterialNativeAuthorityV1>,
+    )->Result<Self,PalwMaterialCapacityErrorV1> {
+        crate::palw_native_resource_v1::NativeRetainedV1::<Self>::recover_provider_verified_v1(encoded,max_contract_bytes,total_capacity,ledger,authority)
+            .and_then(|owner|owner.into_unreserved_legacy_v1().map_err(|e|e.to_string()))
+            .map_err(PalwMaterialCapacityErrorV1::Authentication)
+    }
+    fn recover_verified_inner_v1(
         encoded: &[u8],
         max_contract_bytes: u64,
         total_capacity: u64,
@@ -835,3 +843,10 @@ mod tests {
         assert!(PalwMonetaryMaterialProviderStoreV1::recover_verified(&persisted, 1000, 1004, None, |_| None).is_err());
     }
 }
+
+// Owner-local exact private provider layout; no codec or visibility change.
+#[path = "palw_native_resource_v1/private/palw_material_capacity_v1.rs"]
+mod native_resource_inventory_v1;
+
+#[path = "palw_material_capacity_owner_v1.rs"]
+mod material_capacity_owner_v1;

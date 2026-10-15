@@ -44,7 +44,9 @@ use std::{
 /// The PALW states one search has materialized, by block — a candidate is compared with several others, and materializing a state
 /// (a delta walk from the stored tip) is the cost.
 #[derive(Default)]
-pub(crate) struct PalwRuleEStatesV1(HashMap<BlockHash, Option<Arc<PalwChainStateV2>>>);
+pub(crate) struct PalwRuleEStatesV1(
+    HashMap<BlockHash, Option<Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>>>,
+);
 
 /// The fork of two tips, as rule E reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,7 +130,11 @@ impl VirtualStateProcessor {
         matches!(self.palw_rule_e_span_at_most_v1(higher, lower, PALW_REORG_SHALLOW_TIE_DAA_V1), Some(true))
     }
 
-    fn palw_rule_e_state_v1(&self, states: &mut PalwRuleEStatesV1, block: BlockHash) -> Option<Arc<PalwChainStateV2>> {
+    fn palw_rule_e_state_v1(
+        &self,
+        states: &mut PalwRuleEStatesV1,
+        block: BlockHash,
+    ) -> Option<Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>> {
         states.0.entry(block).or_insert_with(|| self.palw_candidate_state_v2(block).map(Arc::new)).clone()
     }
 

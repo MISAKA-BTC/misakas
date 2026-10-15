@@ -121,6 +121,22 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
     let bond = PalwBondKeyV2(kaspa_consensus_core::config::drill::palw_t12_drill_premine_outpoint_v1(salt, card.premine_index));
     let producer = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&bond);
     let key = kaspa_pq_validator_core::ValidatorKey::from_seed(card.bond.seed);
+    let paid_class: misaka_palw_kernel::claim_paid_v2::PaidClaimClassV2 = route
+        .aux_row(kaspa_consensus_core::palw_claim_challenge_v2::PAID_CLAIM_CLASSES_V2, &request.paid_class.to_vec())
+        .ok_or("requested paid class is not in the pinned native snapshot")?;
+    let compact = if let Some(plan) = paid_class.interactive_plan.as_ref().filter(|p| p.version == 4) {
+        let fence = config
+            .params
+            .palw_claim_compact_v4
+            .filter(|f| f.activation.is_active(request.not_before_daa))
+            .ok_or("compact exporter requires the explicit private V4 configuration, never a V3 relabel")?;
+        fence.policy.validate()?;
+        let registration = route.paid_compact_contract_v4(&plan.id())?.registration;
+        registration.validate_for_class(&paid_class, &route.ledger()?)?;
+        Some(registration)
+    } else {
+        None
+    };
     let work = produce_native_work_with_resident_v3(&route, request.base_job, producer, request.inputs, resident)
         .map_err(|e| e.to_string())?;
     let enrollment = work
@@ -146,7 +162,7 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
     write_new(&output.join("salted-commit-v1.borsh"), &borsh::to_vec(&work.commit).map_err(|e| e.to_string())?)?;
     write_new(&output.join("public-material-v2.borsh"), &borsh::to_vec(&work.material).map_err(|e| e.to_string())?)?;
     write_new(&output.join("signed-paid-enrollment-v2.borsh"), &borsh::to_vec(&enrollment).map_err(|e| e.to_string())?)?;
-    let manifest = serde_json::json!({"schema":"misaka.private-paid-native-work.v4","requestVersion":request.version,"nativeCommitTag":work.commit.commit_tag(),"baseJob":faster_hex::hex_string(&request.base_job),
+    let mut manifest = serde_json::json!({"schema":"misaka.private-paid-native-work.v4","requestVersion":request.version,"nativeCommitTag":work.commit.commit_tag(),"baseJob":faster_hex::hex_string(&request.base_job),
         "paidClass":faster_hex::hex_string(&request.paid_class),"paidJob":faster_hex::hex_string(&request.paid_job),
         "ledgerRoot":request.ledger_root.to_string(),"auxRoot":request.aux_root.to_string(),
         "producer":faster_hex::hex_string(&producer),"work":"program-work-v3.borsh","material":"public-material-v2.borsh",
@@ -156,6 +172,17 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
         "privateExecutionWorkBound":work.resource_bound.execution_work.to_string(),
         "resourceApproval":false,"nativeEnrollmentIncluded":false,
         "sourceLocked":false,"receiptQuorumIncluded":false,"nativeFinalObserved":false,"releaseApproval":false});
+    if let Some(registration) = compact {
+        manifest["proofPlanVersion"] = serde_json::json!(4);
+        manifest["proofPlan"] = serde_json::json!(faster_hex::hex_string(&registration.plan.id()));
+        manifest["compactContract"] = serde_json::json!(faster_hex::hex_string(&registration.contract.id()));
+        manifest["compactCoverage"] = serde_json::json!(faster_hex::hex_string(&registration.coverage.root()));
+        manifest["compactProofGeneration"] = serde_json::json!(
+            "after signed material message and native source lock; COMPACT-PROVE then producer COMPACT-BIND then assigned COMPACT-VERIFY"
+        );
+        manifest["compactProofIncluded"] = serde_json::json!(false);
+        write_new(&output.join("compact-registration-v4.borsh"), &borsh::to_vec(&registration).map_err(|e| e.to_string())?)?;
+    }
     write_new(&output.join("manifest.json"), &serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?)?;
     std::fs::File::open(output).and_then(|d| d.sync_all()).map_err(|e| format!("paid work directory sync: {e}"))?;
     Ok(manifest)

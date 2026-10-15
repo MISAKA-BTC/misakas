@@ -106,13 +106,143 @@ fn apply_inner(
     let p = current_policy(b, ctx.daa_score)?;
     route_fold::ensure_route_header(b, ctx)?;
     let signer_id = palw_kernel_bond_id_v1(signer);
-    if !route_fold::charge_route_budget_v1(b, ctx, 0, false)? {
+    // New proof/registration data consumes the existing native block work
+    // admission once; old V3 objects preserve their prior accounting.
+    let admission_work =
+        if matches!(o, PaidClaimObjectV2::RegisterCompactContractV4 { .. } | PaidClaimObjectV2::BindCompactProofV4 { .. }) {
+            u64::try_from(borsh::to_vec(o).map_err(|e| refused(e.to_string()))?.len())
+                .map_err(|_| refused("compact native work length overflow"))?
+        } else {
+            0
+        };
+    if !route_fold::charge_route_budget_v1(b, ctx, admission_work, false)? {
         return Err(refused("paid claim block admission capacity exhausted"));
     }
     match o {
+        PaidClaimObjectV2::RegisterCompactContractV4 { registration } => {
+            use crate::palw_claim_compact_v4::*;
+            let fence = b
+                .params
+                .palw_claim_compact_v4
+                .filter(|f| f.activation.is_active(ctx.daa_score))
+                .ok_or_else(|| refused("compact V4 own fence is dormant"))?;
+            fence.policy.validate().map_err(refused)?;
+            let r = b.state.kernel_route.as_ref().unwrap();
+            if registration.registrant != signer_id
+                || r.aux.contains_key(&(PAID_CLAIM_COMPACT_V4, key(&registration.id())))
+                || r.aux.keys().filter(|(t, k)| *t == PAID_CLAIM_COMPACT_V4 && k.len() == 64).count()
+                    >= fence.policy.max_contracts as usize
+            {
+                return Err(refused("compact contract registrant/duplicate/capacity mismatch"));
+            }
+            let l = r.ledger().map_err(refused)?;
+            registration.validate(&l).map_err(refused)?;
+            if registration.plan.maximum_material_bytes > fence.policy.maximum_opening_bytes
+                || registration.contract.maximum_proof_bytes > u128::from(fence.policy.maximum_proof_bytes)
+                || registration.contract.maximum_verifier_work > fence.policy.maximum_verifier_work
+            {
+                return Err(refused("compact contract exceeds native policy capacities"));
+            }
+            let empty = misaka_palw_kernel::claim_compact_v1::native_v4::NativeCompactProofV4 {
+                version: 4,
+                plan: registration.plan.id(),
+                seed: [0; 64],
+                proofs: Vec::new(),
+            };
+            let framing = KernelRouteObjectV1::PaidClaimV2 {
+                object: PaidClaimObjectV2::BindCompactProofV4 { enrollment: [0; 64], round: 0, proof: empty.clone() },
+            }
+            .encode()
+            .len()
+            .checked_sub(borsh::to_vec(&empty).unwrap().len())
+            .ok_or_else(|| refused("proof carrier framing underflow"))?;
+            if registration.contract.maximum_proof_bytes.checked_add(framing as u128).is_none_or(|n| {
+                n > crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 as u128
+                    || n > misaka_palw_kernel::route::max_encoded_bytes_of_tag(misaka_palw_kernel::route::TAG_PAID_CLAIM_V2)
+                        .unwrap_or(0) as u128
+            }) {
+                return Err(refused("whole-native compact proof does not fit actual object carriage"));
+            }
+            put(
+                b,
+                PAID_CLAIM_COMPACT_V4,
+                &registration.id(),
+                &PalwPaidCompactContractV4 { registration: registration.clone(), registered_daa: ctx.daa_score },
+            );
+        }
+        PaidClaimObjectV2::BindCompactProofV4 { enrollment, round, proof } => {
+            use crate::palw_claim_compact_v4::*;
+            let a = authority(b, enrollment)?;
+            if !b.params.palw_claim_compact_v4.is_some_and(|f| f.activation.is_active(ctx.daa_score)) {
+                return Err(refused("compact V4 own fence is dormant"));
+            }
+            let r = b.state.kernel_route.as_ref().unwrap();
+            let plan = a
+                .class
+                .interactive_plan
+                .as_ref()
+                .filter(|p| p.version == 4)
+                .ok_or_else(|| refused("proof binding needs V4 enrolled plan"))?;
+            let row = r.paid_claim_round_v3(enrollment, *round).map_err(refused)?;
+            let lock = row.lock.as_ref().ok_or_else(|| refused("proof binding precedes source lock"))?;
+            let proof_root = proof.root();
+            let registration = r.paid_compact_contract_v4(&plan.id()).map_err(refused)?.registration;
+            let policy = b.params.palw_claim_compact_v4.unwrap().policy;
+            proof.validate_shape(plan.id(), lock.seed, policy.maximum_proof_bytes).map_err(refused)?;
+            if borsh::to_vec(proof).map_err(|e| refused(e.to_string()))?.len() as u128 > registration.contract.maximum_proof_bytes {
+                return Err(refused("proof bytes exceed signed whole-native contract"));
+            }
+            if a.enrollment.producer != signer_id
+                || proof_root == [0; 64]
+                || !row.receipts.is_empty()
+                || ctx.daa_score < lock.locked_daa
+                || !a.enrollment.lifetime.receipt_open(ctx.daa_score)
+                || r.paid_compact_proof_binding_v4(*enrollment, *round).map_err(refused)?.is_some()
+            {
+                return Err(refused("compact producer proof binding signer/order/lifetime/duplicate mismatch"));
+            }
+            let binding = PalwPaidCompactProofBindingV4 {
+                version: 4,
+                enrollment: *enrollment,
+                round: *round,
+                plan: plan.id(),
+                seed: lock.seed,
+                proof_root,
+                proof: proof.clone(),
+                producer: signer_id,
+                bound_daa: ctx.daa_score,
+            };
+            let mut bound = row.clone();
+            bound.transcript_root =
+                misaka_palw_kernel::claim_compact_v1::native_v4::compact_transcript_root_v4(row.transcript_root, proof_root);
+            bound.validate_with_compact_v4(&a, &r.ledger().map_err(refused)?, Some(proof_root)).map_err(refused)?;
+            b.write_kernel_row(
+                PAID_CLAIM_COMPACT_V4,
+                compact_proof_binding_key_v4(*enrollment, *round),
+                Some(borsh::to_vec(&binding).unwrap()),
+            );
+            put(b, PAID_CLAIM_ROUNDS_V2, &bound.id(), &bound);
+        }
         PaidClaimObjectV2::RegisterClass { class } => {
             class.validate().map_err(refused)?;
             let l = route_fold::load_ledger(b, ctx)?;
+            if let Some(plan) = class.interactive_plan.as_ref().filter(|p| p.version == 4) {
+                let fence = b
+                    .params
+                    .palw_claim_compact_v4
+                    .filter(|f| f.activation.is_active(ctx.daa_score))
+                    .ok_or_else(|| refused("compact V4 own fence is dormant"))?;
+                let registration = b.state.kernel_route.as_ref().unwrap().paid_compact_contract_v4(&plan.id()).map_err(refused)?;
+                registration.registration.validate_for_class(class, &l).map_err(refused)?;
+                if fence.policy.require_independent_review {
+                    misaka_palw_challenge::approved_v2(
+                        &misaka_palw_challenge::shipped_registry_v2(),
+                        &registration.registration.plan.compiler,
+                        &class.source_policy,
+                    )
+                    .map_err(|e| refused(e.to_string()))?;
+                }
+            }
             let minimum_liability = l.classes.get(&class.base_class).map_or(l.policy.liability_daa, |c| c.liability_daa);
             let minimum_challenge = if l.mode_of_class(&class.base_class).is_optimistic() {
                 l.opv.policy.map_or(l.policy.challenge_window_daa, |p| p.window_daa())
@@ -471,7 +601,14 @@ fn admit_review(
     arithmetic.grinding_choices_per_beacon = 1;
     arithmetic.beacons_per_attempt = 1;
     let claimed = misaka_palw_challenge::effective_false_accept_bits_v1(&arithmetic).map_err(|e| refused(e.to_string()))?;
-    let actual = paid_claim_actual_algebraic_bound_v2(&*r.ledger().map_err(refused)?, &a.enrollment.base_claim).map_err(refused)?;
+    let actual = if let Some(plan) = a.class.interactive_plan.as_ref().filter(|p| p.version == 4) {
+        let registration = r.paid_compact_contract_v4(&plan.id()).map_err(refused)?.registration;
+        let bits = registration.validate_for_class(&a.class, &r.ledger().map_err(refused)?).map_err(refused)?.effective_bits;
+        let bits = u16::try_from(bits).map_err(|_| refused("compact union bound is nonpositive/unrepresentable"))?;
+        misaka_palw_challenge::EffectiveBitsV1::Bits(bits)
+    } else {
+        paid_claim_actual_algebraic_bound_v2(&*r.ledger().map_err(refused)?, &a.enrollment.base_claim).map_err(refused)?
+    };
     if claimed > actual {
         return Err(refused("review arithmetic overstates the actual registered math plan/repetitions/typed composition"));
     }
@@ -900,7 +1037,7 @@ fn round_message(
         transcript_root: [0; 64],
         receipts: vec![],
     };
-    row.validate(&a, &*r.ledger().map_err(refused)?).map_err(refused)?;
+    r.validate_paid_round_v4(&row, &a, &*r.ledger().map_err(refused)?).map_err(refused)?;
     admit_review(b, ctx, policy, &a, row.id(), u32::from(plan.mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon))?;
     put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
     if plan.mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
@@ -1039,7 +1176,7 @@ fn round_lock(
         quorum,
         source_valid: true,
     });
-    row.validate(&a, &*r.ledger().map_err(refused)?).map_err(refused)?;
+    r.validate_paid_round_v4(&row, &a, &*r.ledger().map_err(refused)?).map_err(refused)?;
     put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
     Ok(())
 }
@@ -1063,7 +1200,7 @@ fn round_receipt(
         return Err(refused("round receipt signer/source/lifetime mismatch"));
     }
     row.receipts.push(receipt.clone());
-    row.validate(&a, &*r.ledger().map_err(refused)?).map_err(refused)?;
+    r.validate_paid_round_v4(&row, &a, &*r.ledger().map_err(refused)?).map_err(refused)?;
     put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
     let mut l = route_fold::load_ledger(b, ctx)?;
     let before = l.to_rows();

@@ -60,9 +60,17 @@ pub trait NativeHeapV1 {
     fn native_entries_v1(&self) -> u64 {
         1
     }
+    /// Actual nested typed memberships, excluding byte-vector elements. This
+    /// cardinality bounds restoration index fan-out; it is not encoded length.
+    fn native_members_v1(&self) -> Option<u64> {
+        Some(0)
+    }
     fn native_components_v1(&self) -> Vec<NativeFieldInventoryV1> {
         Vec::new()
     }
+}
+fn members_v1<'a, T: NativeHeapV1 + 'a>(mut items: impl Iterator<Item = &'a T>) -> Option<u64> {
+    items.try_fold(0u64, |n, item| n.checked_add(item.native_members_v1()?))
 }
 fn allocation<T>(count: usize, component: &str) -> NativeCoverageV1 {
     u64::try_from(count)
@@ -96,17 +104,33 @@ fixed_native!(
     kaspa_math::Uint512
 );
 impl<T: NativeHeapV1, const N: usize> NativeHeapV1 for [T; N] {
+    fn native_members_v1(&self) -> Option<u64> {
+        if std::any::type_name::<T>() == "u8" { Some(0) } else { (N as u64).checked_add(members_v1(self.iter())?) }
+    }
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
+        if std::any::type_name::<T>() == "u8" {
+            return NativeCoverageV1::zero();
+        }
         self.iter().fold(NativeCoverageV1::zero(), |sum, item| sum.add::<Self>(item.native_heap_v1(path), path))
     }
 }
 impl<T: NativeHeapV1> NativeHeapV1 for Vec<T> {
+    fn native_members_v1(&self) -> Option<u64> {
+        if std::any::type_name::<T>() == "u8" {
+            Some(0)
+        } else {
+            u64::try_from(self.len()).ok()?.checked_add(members_v1(self.iter())?)
+        }
+    }
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
         let Some(growth) = self.len().checked_mul(2) else { return NativeCoverageV1::overflow::<Self>(path) };
         // The point retains the current Vec capacity; a serialized cache/restore
         // can additionally use the pinned Borsh geometric growth capacity.
-        self.iter()
-            .fold(allocation::<T>(self.capacity().max(growth), path), |sum, item| sum.add::<Self>(item.native_heap_v1(path), path))
+        let inline = allocation::<T>(self.capacity().max(growth), path);
+        if std::any::type_name::<T>() == "u8" {
+            return inline;
+        }
+        self.iter().fold(inline, |sum, item| sum.add::<Self>(item.native_heap_v1(path), path))
     }
     fn native_entries_v1(&self) -> u64 {
         self.len() as u64
@@ -122,6 +146,9 @@ impl NativeHeapV1 for String {
     }
 }
 impl<T: NativeHeapV1> NativeHeapV1 for Option<T> {
+    fn native_members_v1(&self) -> Option<u64> {
+        self.as_ref().map_or(Some(0), NativeHeapV1::native_members_v1)
+    }
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
         self.as_ref().map_or_else(NativeCoverageV1::zero, |value| value.native_heap_v1(path))
     }
@@ -130,11 +157,17 @@ impl<T: NativeHeapV1> NativeHeapV1 for Option<T> {
     }
 }
 impl<T: NativeHeapV1> NativeHeapV1 for Box<T> {
+    fn native_members_v1(&self) -> Option<u64> {
+        (**self).native_members_v1()
+    }
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
         allocation::<T>(1, path).add::<Self>((**self).native_heap_v1(path), path)
     }
 }
 impl<T: NativeHeapV1> NativeHeapV1 for crate::palw_staged_court_state_v1::PalwSharedCourtV1<T> {
+    fn native_members_v1(&self) -> Option<u64> {
+        self.as_ref().native_members_v1()
+    }
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
         // An `Arc<T>` newtype (G14): the shared allocation, counted as the Arc it is.
         let header = size_of::<[usize; 2]>() as u64 + std::mem::align_of::<T>() as u64;
@@ -144,6 +177,9 @@ impl<T: NativeHeapV1> NativeHeapV1 for crate::palw_staged_court_state_v1::PalwSh
     }
 }
 impl<T: NativeHeapV1> NativeHeapV1 for Arc<T> {
+    fn native_members_v1(&self) -> Option<u64> {
+        (**self).native_members_v1()
+    }
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
         // Counting a shared Arc's payload more than once is conservative. The
         // concrete Arc allocation includes two reference counters and alignment.
@@ -167,6 +203,9 @@ pub(crate) struct BTreeNodeEnvelopeV1<K, V> {
     edges: [usize; 17],
 }
 impl<K: NativeHeapV1, V: NativeHeapV1> NativeHeapV1 for BTreeMap<K, V> {
+    fn native_members_v1(&self) -> Option<u64> {
+        self.iter().try_fold(self.len() as u64, |n, (k, v)| n.checked_add(k.native_members_v1()?)?.checked_add(v.native_members_v1()?))
+    }
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
         if cfg!(not(target_pointer_width = "64")) && !self.is_empty() {
             return NativeCoverageV1::unsupported::<Self>(path, "pinned BTree allocation layout only covers64-bit targets");
@@ -180,6 +219,9 @@ impl<K: NativeHeapV1, V: NativeHeapV1> NativeHeapV1 for BTreeMap<K, V> {
     }
 }
 impl<T: NativeHeapV1> NativeHeapV1 for BTreeSet<T> {
+    fn native_members_v1(&self) -> Option<u64> {
+        (self.len() as u64).checked_add(members_v1(self.iter())?)
+    }
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
         if cfg!(not(target_pointer_width = "64")) && !self.is_empty() {
             return NativeCoverageV1::unsupported::<Self>(path, "pinned BTree allocation layout only covers64-bit targets");
@@ -194,6 +236,9 @@ impl<T: NativeHeapV1> NativeHeapV1 for BTreeSet<T> {
 }
 macro_rules! tuple_native { ($($ty:ident:$idx:tt),+) => {
     impl<$($ty:NativeHeapV1),+> NativeHeapV1 for ($($ty,)+) {
+        fn native_members_v1(&self)->Option<u64> {
+            let mut n=0u64; $(n=n.checked_add(self.$idx.native_members_v1()?)?;)+ Some(n)
+        }
         fn native_heap_v1(&self, path:&str)->NativeCoverageV1 {
             let mut sum=NativeCoverageV1::zero(); $(sum=sum.add::<Self>(self.$idx.native_heap_v1(path),path);)+ sum
         }
@@ -213,6 +258,11 @@ macro_rules! native_struct { ($ty:ty; $($field:ident),* $(,)?) => {
             let mut sum=$crate::palw_native_resource_v1::NativeCoverageV1::zero();
             $(sum=sum.add::<Self>($crate::palw_native_resource_v1::NativeHeapV1::native_heap_v1($field,path),path);)* sum
         }
+        fn native_members_v1(&self)->Option<u64> {
+            let Self { $($field),* } = self;
+            #[allow(unused_mut)] let mut n=0u64;
+            $(n=n.checked_add($crate::palw_native_resource_v1::NativeHeapV1::native_members_v1($field)?)?;)* Some(n)
+        }
         fn native_components_v1(&self)->Vec<$crate::palw_native_resource_v1::NativeFieldInventoryV1> {
             let Self { $($field),* }=self;
             vec![$($crate::palw_native_resource_v1::NativeFieldInventoryV1::of(concat!(stringify!($ty),".",stringify!($field)), $field)),*]
@@ -225,6 +275,11 @@ macro_rules! native_tuple_struct { ($ty:ty; $($field:ident),* $(,)?) => {
             let Self($($field),*) = self;
             let mut sum=$crate::palw_native_resource_v1::NativeCoverageV1::zero();
             $(sum=sum.add::<Self>($crate::palw_native_resource_v1::NativeHeapV1::native_heap_v1($field,path),path);)* sum
+        }
+        fn native_members_v1(&self)->Option<u64> {
+            let Self($($field),*) = self;
+            #[allow(unused_mut)] let mut n=0u64;
+            $(n=n.checked_add($crate::palw_native_resource_v1::NativeHeapV1::native_members_v1($field)?)?;)* Some(n)
         }
     }
 }; }
@@ -240,6 +295,14 @@ macro_rules! native_unit {
 macro_rules! native_enum {
     ($ty:ty; $($variant:ident $( { $($named:ident),* } )? $( ( $($tuple:ident),* ) )?),* $(,)?) => {
         impl NativeHeapV1 for $ty {
+            fn native_members_v1(&self)->Option<u64> {
+                match self { $(Self::$variant $( { $($named),* } )? $( ( $($tuple),* ) )? => {
+                    #[allow(unused_mut)] let mut n=0u64;
+                    $($(n=n.checked_add($named.native_members_v1()?)?;)*)?
+                    $($(n=n.checked_add($tuple.native_members_v1()?)?;)*)?
+                    Some(n)
+                }),* }
+            }
             fn native_heap_v1(&self,path:&str)->NativeCoverageV1 {
                 match self { $(Self::$variant $( { $($named),* } )? $( ( $($tuple),* ) )? => {
                     #[allow(unused_mut)] let mut sum=NativeCoverageV1::zero();
@@ -263,6 +326,9 @@ macro_rules! native_unsupported {
 pub(crate) use {native_enum, native_struct, native_tuple_struct, native_unit, native_unsupported};
 
 impl<T: NativeHeapV1 + ?Sized> NativeHeapV1 for &T {
+    fn native_members_v1(&self) -> Option<u64> {
+        (**self).native_members_v1()
+    }
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
         (**self).native_heap_v1(path)
     }
@@ -280,6 +346,9 @@ impl NativeHeapV1 for misaka_palw_panel::PanelCandidatesV1 {
     }
 }
 impl NativeHeapV1 for misaka_palw_panel::PermissionlessPanelStateV1 {
+    fn native_members_v1(&self) -> Option<u64> {
+        self.native_inventory_parts_v1().native_members_v1()
+    }
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
         self.native_inventory_parts_v1().native_heap_v1(path)
     }
@@ -348,5 +417,13 @@ mod tests {
             assert!(fields.iter().any(|field| field.component.ends_with(expected)), "{expected}");
         }
         assert!(state.native_heap_v1("state").bytes().is_some());
+    }
+}
+
+// The owner returns only borrowed references and exhaustively destructures all
+// private fields; extending that record requires a matching inventory bridge.
+impl NativeHeapV1 for misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26 {
+    fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
+        self.native_inventory_parts_v1().native_heap_v1(path)
     }
 }

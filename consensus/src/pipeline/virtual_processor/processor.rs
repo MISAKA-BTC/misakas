@@ -567,7 +567,7 @@ pub struct VirtualStateProcessor {
     /// LIVE-R1 N3: the PALW state AT the committed virtual sink, for the `palw_*` readers
     /// ([`Self::palw_v2_reader_state`]). Memory only, keyed by the sink it was derived at.
     pub(super) palw_reader_snapshot:
-        parking_lot::Mutex<Option<(BlockHash, Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>)>>,
+        parking_lot::Mutex<Option<(BlockHash, Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>)>>,
     /// LIVE-R1 N2: the consensus half of the partition watchdog — the run of resolves that settled after
     /// refusing a heavier, fully validated candidate on the PALW deep-reorg rule
     /// ([`Self::palw_partition_refusal_v1`]). Memory only; node-local; no verdict reads it.
@@ -1855,7 +1855,7 @@ impl VirtualStateProcessor {
         let mut palw_state = match self.palw_state_params_v2.as_ref() {
             None => None,
             Some(params) => {
-                let loaded = self.palw_state_v2_store.read().load_tip(params).unwrap_or_else(|e| {
+                let loaded = self.palw_state_v2_store.read().load_tip_retained_v1(params).unwrap_or_else(|e| {
                     panic!(
                         "the stored PALW V2 tip does not load under this build ({e}). A state written by another \
                          PALW_STATE_V2_VERSION or ruleset is not migrated in place: this network re-genesises on a \
@@ -1871,7 +1871,9 @@ impl VirtualStateProcessor {
                         let removed: Vec<BlockHash> = path.removed.to_vec();
                         let added: Vec<BlockHash> = path.added.to_vec();
                         let store = self.palw_state_v2_store.read();
-                        match crate::processes::palw_state_walk::walk_chain_path(&store, params, tip_state, &removed, &added) {
+                        match crate::processes::palw_state_walk::walk_chain_path_retained_v1(
+                            &store, params, tip_state, &removed, &added,
+                        ) {
                             Ok(state) => {
                                 warn!(
                                     "PALW V2 state tip stood at {tip_block} while the UTXO walk starts at {from} (an unclean shutdown between the two commits); re-derived the state at {from} over {} reverted and {} applied deltas",
@@ -1900,12 +1902,12 @@ impl VirtualStateProcessor {
                                 // walking forward from there rebuilds the state at `from` without
                                 // the tip. A node whose tip row is unusable recovers instead of
                                 // declaring the network invalid.
-                                match store.load_pruning_snapshot(params) {
+                                match store.load_pruning_snapshot_retained_v1(params) {
                                     Ok(Some((snap_block, snap_state))) => {
                                         let snap_path = self.dag_traversal_manager.calculate_chain_path(snap_block, from, None);
                                         let snap_removed: Vec<BlockHash> = snap_path.removed.to_vec();
                                         let snap_added: Vec<BlockHash> = snap_path.added.to_vec();
-                                        match crate::processes::palw_state_walk::walk_chain_path(
+                                        match crate::processes::palw_state_walk::walk_chain_path_retained_v1(
                                             &store,
                                             params,
                                             snap_state,
@@ -1991,9 +1993,12 @@ impl VirtualStateProcessor {
                 // gap in this node. Stopping returns the last point actually established, which is
                 // what every other unfinished walk in this function returns.
                 let params = self.palw_state_params_v2.as_ref().expect("palw_state is Some only when the params are");
-                let reverted = self.palw_state_v2_store.read().delta_of(current).map_err(|e| e.to_string()).and_then(|(_, delta)| {
-                    kaspa_consensus_core::palw_state_v2::revert_delta_v2(state, &delta, params).map_err(|e| e.to_string())
-                });
+                let reverted = self
+                    .palw_state_v2_store
+                    .read()
+                    .delta_of_retained_v1(current)
+                    .map_err(|e| e.to_string())
+                    .and_then(|(_, delta)| state.try_delta_v1(&delta, params, true));
                 match reverted {
                     Ok(previous) => *state = previous,
                     Err(why) => {
@@ -2078,10 +2083,12 @@ impl VirtualStateProcessor {
                         // every other "this candidate cannot be taken further" answer in this
                         // function; the caller holds virtual where it is and says so.
                         let params = self.palw_state_params_v2.as_ref().expect("palw_state is Some only when the params are");
-                        let applied =
-                            self.palw_state_v2_store.read().delta_of(current).map_err(|e| e.to_string()).and_then(|(_, delta)| {
-                                kaspa_consensus_core::palw_state_v2::apply_delta_v2(state, &delta, params).map_err(|e| e.to_string())
-                            });
+                        let applied = self
+                            .palw_state_v2_store
+                            .read()
+                            .delta_of_retained_v1(current)
+                            .map_err(|e| e.to_string())
+                            .and_then(|(_, delta)| state.try_delta_v1(&delta, params, false));
                         match applied {
                             Ok(next) => *state = next,
                             Err(why) => {
@@ -2118,7 +2125,7 @@ impl VirtualStateProcessor {
                     // covers. A wrong count or root, a malformed trailer or an anchor on a lane block disqualifies the block from the
                     // chain like any commitment fault. A block without a trailer, and every block below the fence, is unchanged.
                     let (mergeset_data, exec_resolved) =
-                        match self.palw_exec_v2_augment(current, &header, palw_state.as_ref(), mergeset_data) {
+                        match self.palw_exec_v2_augment(current, &header, palw_state.as_deref(), mergeset_data) {
                             Ok(pair) => pair,
                             Err(exec_error) => {
                                 info!("Block {} is disqualified from virtual chain (EXEC anchor): {}", current, exec_error);
@@ -2312,7 +2319,7 @@ impl VirtualStateProcessor {
                         &mut ctx,
                         &selected_parent_utxo_view,
                         evm_pipeline.as_ref(),
-                        palw_state.as_ref(),
+                        palw_state.as_deref(),
                     ) {
                         Ok(staged) => staged,
                         Err(evm_error) => {
@@ -2387,16 +2394,31 @@ impl VirtualStateProcessor {
                                     // by the UTXO walk two frames up, where the fee is knowable.
                                     &ctx.palw_v2_accepted_tx_fees,
                                 );
-                                let history_custody_pledges = objects.iter().filter_map(|carried| carried.history_pledge.clone())
-                                    .map(|pledge| (pledge.claim, pledge)).collect();
-                                let public_original_bindings = objects.iter().filter_map(|carried| {
-                                    carried.history_pledge.as_ref().zip(carried.original_binding.as_ref())
-                                        .map(|(pledge, header)| (pledge.claim, header.clone()))
-                                }).collect();
-                                let producer_custody_delegations = objects.iter().filter_map(|carried| {
-                                    carried.history_pledge.as_ref().zip(carried.custody_delegation.as_ref())
-                                        .map(|(pledge, delegation)| (pledge.claim, delegation.clone()))
-                                }).collect();
+                                let history_custody_pledges = objects
+                                    .iter()
+                                    .filter_map(|carried| carried.history_pledge.clone())
+                                    .map(|pledge| (pledge.claim, pledge))
+                                    .collect();
+                                let public_original_bindings = objects
+                                    .iter()
+                                    .filter_map(|carried| {
+                                        carried
+                                            .history_pledge
+                                            .as_ref()
+                                            .zip(carried.original_binding.as_ref())
+                                            .map(|(pledge, header)| (pledge.claim, header.clone()))
+                                    })
+                                    .collect();
+                                let producer_custody_delegations = objects
+                                    .iter()
+                                    .filter_map(|carried| {
+                                        carried
+                                            .history_pledge
+                                            .as_ref()
+                                            .zip(carried.custody_delegation.as_ref())
+                                            .map(|(pledge, delegation)| (pledge.claim, delegation.clone()))
+                                    })
+                                    .collect();
                                 // Decisions 7/8: every lifecycle object meets its own validator
                                 // before the transition folds it — and an object that FAILS is
                                 // dropped rather than fatal to the block that accepted it.
@@ -2596,7 +2618,9 @@ impl VirtualStateProcessor {
                                         extras.history_custody_pledges = history_custody_pledges;
                                         extras.public_original_bindings = public_original_bindings;
                                         extras.producer_custody_delegations = producer_custody_delegations;
-                                        if state_params.exec_v2_active_at(point.daa_score) || state_params.monetary_material_at_v1(point.daa_score).is_some() {
+                                        if state_params.exec_v2_active_at(point.daa_score)
+                                            || state_params.monetary_material_at_v1(point.daa_score).is_some()
+                                        {
                                             if attempt.is_some()
                                                 && let Ok(bytes) = borsh::to_vec(header.as_ref())
                                             {
@@ -2688,7 +2712,15 @@ impl VirtualStateProcessor {
                                                 )
                                             );
                                         }
-                                        *state = next;
+                                        // Retain the resulting payload. The fresh transition's
+                                        // pre-construction workspace remains a separately audited
+                                        // admission seam; this is lifetime ownership, not a proof
+                                        // authorizing those earlier allocations.
+                                        *state =
+                                            kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::retain_existing_v1(next)
+                                                .unwrap_or_else(|e| {
+                                                    panic!("local native capacity refuses accepted state ownership: {e}")
+                                                });
                                         // Launch blockers §8: say it out loud. A voided claim's
                                         // escrow is burned by don't-mint (Decision 10), and a
                                         // network whose panels never bind burns the whole worker
@@ -2775,7 +2807,7 @@ impl VirtualStateProcessor {
         if let Some(state) = palw_state.as_ref() {
             let mut batch = WriteBatch::default();
             let mut store = self.palw_state_v2_store.write();
-            store.set_tip_batch(&mut batch, diff_point, state).unwrap();
+            let _native_tip_write = store.set_tip_batch_tracked_v1(&mut batch, diff_point, state).unwrap();
             drop(store);
             self.db.write(batch).unwrap();
         }
@@ -3159,12 +3191,18 @@ impl VirtualStateProcessor {
         let mut batch = WriteBatch::default();
         // Pruning -> PALW matches pruning/import lock order. A long-running
         // candidate must recheck irreversible ancestry at its actual commit.
-        let public_pruning_guard = palw_v2_staged.as_ref().filter(|staged| {
-            staged.delta.entries.iter().any(|entry| matches!(entry,
-                kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtSeed { .. }
-                | kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtMove { .. }
-            ))
-        }).map(|_| self.pruning_point_store.read());
+        let public_pruning_guard = palw_v2_staged
+            .as_ref()
+            .filter(|staged| {
+                staged.delta.entries.iter().any(|entry| {
+                    matches!(
+                        entry,
+                        kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtSeed { .. }
+                            | kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtMove { .. }
+                    )
+                })
+            })
+            .map(|_| self.pruning_point_store.read());
         // Only a block on the irreversible chain itself archives public material: the pruning
         // point is in its selected chain, or it is one of the pruning point's chain ancestors.
         // A stale fork's block is never archived, whatever its DAA. The pruning clock read
@@ -3183,12 +3221,14 @@ impl VirtualStateProcessor {
         let mut palw_archive_guard = palw_v2_staged.as_ref().map(|_| self.palw_state_v2_store.write());
         // Lock order: pruning -> PALW -> class index (the ordinary and the import commits agree).
         let mut genesis_class_store = None;
+        let mut native_delta_write = None;
+        let mut native_genesis_write = None;
         if let Some(staged) = palw_v2_staged {
             let store = palw_archive_guard.as_mut().expect("PALW accepted archive guard");
-            store.insert_delta_batch(&mut batch, current, staged.root, &staged.delta).unwrap();
+            native_delta_write = Some(store.insert_delta_batch_tracked_v1(&mut batch, current, staged.root, &staged.delta).unwrap());
             if let Some(genesis) = staged.genesis {
                 assert_eq!(current, self.genesis.hash, "only genesis can install the initial PALW tip");
-                store.set_tip_batch(&mut batch, current, &genesis).unwrap();
+                native_genesis_write = Some(store.set_tip_batch_tracked_v1(&mut batch, current, &genesis).unwrap());
             }
             if !staged.genesis_carriages.is_empty() {
                 assert_eq!(current, self.genesis.hash, "only genesis declarations use this initial commit");
@@ -3199,21 +3239,33 @@ impl VirtualStateProcessor {
                 genesis_class_store = Some(class_store);
             }
             let delta = &staged.delta;
-            if archive_public_material && delta.entries.iter().any(|entry| match entry {
-                kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtMove { old, .. } => old.public_prefix_checkpoint_v1().is_some(),
-                _ => false,
-            }) {
+            if archive_public_material
+                && delta.entries.iter().any(|entry| match entry {
+                    kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtMove { old, .. } => {
+                        old.public_prefix_checkpoint_v1().is_some()
+                    }
+                    _ => false,
+                })
+            {
                 let mut movements = Vec::new();
                 for row in acceptance_data.iter() {
                     let transactions = self.block_transactions_store.get(row.block_hash).unwrap();
                     for accepted in &row.accepted_transactions {
-                        let transaction = transactions.get(accepted.index_within_block as usize)
-                            .filter(|tx| tx.id() == accepted.transaction_id).expect("accepted native transaction identity");
-                        if transaction.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE { continue; }
-                        if let Ok(payload) = borsh::from_slice::<kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2>(
-                            &transaction.payload)
-                            && let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = payload.object
-                        { movements.push(*movement); }
+                        let transaction = transactions
+                            .get(accepted.index_within_block as usize)
+                            .filter(|tx| tx.id() == accepted.transaction_id)
+                            .expect("accepted native transaction identity");
+                        if transaction.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+                            continue;
+                        }
+                        if let Ok(payload) = borsh::from_slice::<
+                            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2,
+                        >(&transaction.payload)
+                            && let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } =
+                                payload.object
+                        {
+                            movements.push(*movement);
+                        }
                     }
                 }
                 // Same commit batch as the rooted successful transitions. Public wire
@@ -3341,6 +3393,8 @@ impl VirtualStateProcessor {
         self.pruning_samples_store.insert_batch(&mut batch, current, pruning_sample_from_pov).idempotent().unwrap();
         let write_guard = self.statuses_store.set_batch(&mut batch, current, StatusUTXOValid).unwrap();
         self.db.write(batch).unwrap();
+        drop(native_delta_write);
+        drop(native_genesis_write);
         drop(genesis_class_store);
         if let Some(ticket) = rewarded_commit {
             ticket.committed();
@@ -3404,7 +3458,7 @@ impl VirtualStateProcessor {
         let exec_state = if self.palw_exec_v2_active_at(virtual_daa_window.daa_score) {
             self.palw_state_params_v2
                 .as_ref()
-                .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
+                .and_then(|params| self.palw_state_v2_store.read().load_tip_retained_v1(params).ok().flatten())
                 .filter(|(block, _)| *block == virtual_ghostdag_data.selected_parent)
                 .map(|(_, state)| state)
         } else {
@@ -3431,7 +3485,7 @@ impl VirtualStateProcessor {
         let virtual_palw_state = self
             .palw_state_params_v2
             .as_ref()
-            .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
+            .and_then(|params| self.palw_state_v2_store.read().load_tip_retained_v1(params).ok().flatten())
             .filter(|(block, _)| *block == virtual_ghostdag_data.selected_parent);
         ctx.palw_v2_locked_bonds = virtual_palw_state
             .as_ref()
@@ -3785,7 +3839,15 @@ impl VirtualStateProcessor {
     ) -> Vec<PalwCarriedObjectV1> {
         objects
             .into_iter()
-            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, history_pledge: None, original_binding: None, custody_delegation: None, refund: None, unrefundable: None })
+            .map(|object| PalwCarriedObjectV1 {
+                object,
+                carrier_fee: PALW_RENT_UNPRICED,
+                history_pledge: None,
+                original_binding: None,
+                custody_delegation: None,
+                refund: None,
+                unrefundable: None,
+            })
             .collect()
     }
 
@@ -6484,7 +6546,8 @@ impl VirtualStateProcessor {
         for (id, row) in declaration_rows {
             class_store.insert_batch(&mut batch, id, row).expect("staging a verified snapshot declaration cannot fail");
         }
-        store.set_tip_batch(&mut batch, pruning_point, &state).expect("writing the verified PALW tip cannot fail");
+        let _native_tip_write =
+            store.set_tip_batch_tracked_v1(&mut batch, pruning_point, &state).expect("writing the verified PALW tip cannot fail");
         // Live claim/owner holds come from the verified state itself, written in the same batch
         // as its tip. Holds already below this imported irreversible clock are not recreated.
         let imported_irreversible_daa = self
@@ -6493,14 +6556,15 @@ impl VirtualStateProcessor {
             .ok()
             .or_else(|| state.last_point().map(|point| point.daa_score))
             .unwrap_or(0);
-        store.archive_staged_cache_leases_state_batch_v1(&mut batch, &state, imported_irreversible_daa)
+        store
+            .archive_staged_cache_leases_state_batch_v1(&mut batch, &state, imported_irreversible_daa)
             .expect("restoring verified PALW material leases cannot fail");
         // The same state, also as this node's servable snapshot. Without it a node that just
         // joined by a pruned sync holds the pruning-point state but cannot HAND it on until
         // its own pruning point next advances — so the fix would not propagate past the first
         // hop, and a young network would have exactly one node able to serve.
-        store
-            .set_pruning_snapshot_batch(&mut batch, pruning_point, &state)
+        let _native_snapshot_write = store
+            .set_pruning_snapshot_batch_tracked_v1(&mut batch, pruning_point, &state)
             .expect("writing the verified PALW pruning snapshot cannot fail");
         // The PALW sidecar is installed before IBD replaces the UTXO set. An OS
         // crash between those steps must leave a durable incomplete-import flag.
@@ -6536,7 +6600,7 @@ impl VirtualStateProcessor {
         // peer past the handshake, no operator opt-in, on the blocking pool block processing
         // shares. The store now holds the check and the memo; the answer is the same bytes.
         let carriage = self.palw_state_v2_store.read().load_pruning_snapshot_carriage_cached(params, pruning_point).ok().flatten()?;
-        Some(carriage.as_ref().clone())
+        carriage.try_clone_v1().ok()?.into_unreserved_legacy_v1().ok()
     }
 
     /// **The child of `pruning_point` whose header is allowed to witness the pruning point's own
@@ -6806,7 +6870,7 @@ impl VirtualStateProcessor {
             return;
         };
         let store = self.palw_state_v2_store.read();
-        let loaded = match store.load_tip(params) {
+        let loaded = match store.load_tip_retained_v1(params) {
             Ok(Some(loaded)) => loaded,
             Ok(None) => {
                 warn!("PALW: no V2 state tip to capture a pruning-point snapshot from; peers cannot be served a pruned sync yet");
@@ -6824,7 +6888,7 @@ impl VirtualStateProcessor {
             let path = self.dag_traversal_manager.calculate_chain_path(tip_block, pruning_point, None);
             let removed: Vec<BlockHash> = path.removed.to_vec();
             let added: Vec<BlockHash> = path.added.to_vec();
-            match crate::processes::palw_state_walk::walk_chain_path(&store, params, tip_state, &removed, &added) {
+            match crate::processes::palw_state_walk::walk_chain_path_retained_v1(&store, params, tip_state, &removed, &added) {
                 Ok(state) => state,
                 Err(e) => {
                     warn!(
@@ -6837,10 +6901,13 @@ impl VirtualStateProcessor {
         drop(store);
         let mut batch = WriteBatch::default();
         let mut store = self.palw_state_v2_store.write();
-        if let Err(e) = store.set_pruning_snapshot_batch(&mut batch, pruning_point, &state) {
-            warn!("PALW: the pruning-point snapshot did not stage ({e})");
-            return;
-        }
+        let _native_snapshot_write = match store.set_pruning_snapshot_batch_tracked_v1(&mut batch, pruning_point, &state) {
+            Ok(ticket) => ticket,
+            Err(e) => {
+                warn!("PALW: the pruning-point snapshot did not stage ({e})");
+                return;
+            }
+        };
         drop(store);
         self.db.write(batch).unwrap();
         info!("PALW: captured the V2 state at pruning point {pruning_point} — peers can now sync from it");

@@ -369,7 +369,12 @@ impl VirtualStateProcessor {
     pub(super) fn palw_sweep_snapshot_v1(
         &self,
         txs: &[Arc<Transaction>],
-    ) -> Option<(u64, kaspa_consensus_core::BlockHash, Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>, Vec<bool>)> {
+    ) -> Option<(
+        u64,
+        kaspa_consensus_core::BlockHash,
+        Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
+        Vec<bool>,
+    )> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let virtual_read = self.virtual_stores.read();
         let virtual_state = virtual_read.state.get().ok()?;
@@ -557,7 +562,7 @@ impl VirtualStateProcessor {
         let path = self.dag_traversal_manager.calculate_chain_path(ancestor, candidate, None);
         let store = self.palw_state_v2_store.read();
         for block in path.added.iter() {
-            let Ok((_, delta)) = store.delta_of(*block) else {
+            let Ok((_, delta)) = store.delta_of_retained_v1(*block) else {
                 drop(store);
                 warn!("PALW frontier provenance abstains: delta for {block} is unavailable");
                 return DnsReorgOutcome::GateInactive;
@@ -590,7 +595,7 @@ impl VirtualStateProcessor {
     pub(crate) fn palw_candidate_state_v2(
         &self,
         candidate: BlockHash,
-    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwChainStateV2> {
+    ) -> Option<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1> {
         self.palw_candidate_state_v2_checked(candidate).ok()
     }
 
@@ -607,10 +612,10 @@ impl VirtualStateProcessor {
     pub(crate) fn palw_candidate_state_v2_checked(
         &self,
         candidate: BlockHash,
-    ) -> Result<kaspa_consensus_core::palw_state_v2::PalwChainStateV2, PalwWeighFaultV2> {
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1, PalwWeighFaultV2> {
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Err(PalwWeighFaultV2::NoOpinion) };
         let store = self.palw_state_v2_store.read();
-        let (tip_block, tip_state) = match store.load_tip(state_params) {
+        let (tip_block, tip_state) = match store.load_tip_retained_v1(state_params) {
             Ok(Some(loaded)) => loaded,
             Ok(None) => return Err(PalwWeighFaultV2::NoOpinion),
             Err(e) => {
@@ -655,16 +660,18 @@ impl VirtualStateProcessor {
         // reads back perfectly and whose delta rows are corrupt. A pruned or absent delta really
         // is an absence and still abstains; anything the STORE refused, and any delta of this
         // node's own that will not compose with this node's own state, is a fault.
-        crate::processes::palw_state_walk::walk_chain_path(&store, state_params, tip_state, &removed, &added).map_err(|e| {
-            use crate::processes::palw_state_walk::PalwStateWalkError as W;
-            match e {
-                W::MissingDelta(_) | W::NoAnchor => PalwWeighFaultV2::NoOpinion,
-                W::Store(_) | W::State(_) => {
-                    warn!("PALW state fault: this node's own V2 delta rows would not walk ({e}); it can weigh no candidate");
-                    PalwWeighFaultV2::StoreUnreadable
+        crate::processes::palw_state_walk::walk_chain_path_retained_v1(&store, state_params, tip_state, &removed, &added).map_err(
+            |e| {
+                use crate::processes::palw_state_walk::PalwStateWalkError as W;
+                match e {
+                    W::MissingDelta(_) | W::NoAnchor => PalwWeighFaultV2::NoOpinion,
+                    W::Store(_) | W::State(_) | W::Resource(_) => {
+                        warn!("PALW state fault: this node's own V2 delta rows would not walk ({e}); it can weigh no candidate");
+                        PalwWeighFaultV2::StoreUnreadable
+                    }
                 }
-            }
-        })
+            },
+        )
     }
 
     /// **The block whose PALW standing represents this consensus** — its virtual sink, normally.
@@ -700,7 +707,7 @@ impl VirtualStateProcessor {
         // recorded root, which is what `load_tip` does. Reading just the row would hand a chain
         // whose state this node cannot reproduce back as its own standing — a state fault
         // promoted to the only opinion this consensus has.
-        let tip = match self.palw_state_v2_store.read().load_tip(state_params) {
+        let tip = match self.palw_state_v2_store.read().load_tip_retained_v1(state_params) {
             Ok(Some((block, _))) => block,
             Ok(None) => return None,
             Err(e) => {
@@ -728,7 +735,7 @@ impl VirtualStateProcessor {
         // for this shape, and records it: the gate failed open on exactly the candidate it could not
         // weigh. `Ok(None)` is different and stays open — a V2 chain before its first tip has no
         // frontier to respect, and refusing there would mean a fresh node could never prune.
-        let state = match store.load_tip(state_params) {
+        let state = match store.load_tip_retained_v1(state_params) {
             Ok(Some((_, state))) => state,
             Ok(None) => return true,
             Err(_) => return false,
@@ -1269,7 +1276,13 @@ impl VirtualStateProcessor {
         &self,
         custodian: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
         after: Option<kaspa_consensus_core::Hash64>,
-    ) -> Result<(Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>, Option<kaspa_consensus_core::Hash64>), String> {
+    ) -> Result<
+        (
+            Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+            Option<kaspa_consensus_core::Hash64>,
+        ),
+        String,
+    > {
         let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
         let (_, state) =
             self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
@@ -2174,8 +2187,10 @@ impl VirtualStateProcessor {
     /// the next block folds. `None` with no tip state.
     pub(super) fn palw_false_valid_tip_v1(
         &self,
-    ) -> Option<(Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>, kaspa_consensus_core::palw_state_v2::PalwBlockContextV2)>
-    {
+    ) -> Option<(
+        Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
+        kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    )> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (tip_block, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
         let virtual_state = self.lkg_virtual_state.load();
@@ -2615,7 +2630,7 @@ impl VirtualStateProcessor {
     pub fn pruning_point_palw_state_shared_v1_impl(
         &self,
         point: BlockHash,
-    ) -> Option<std::sync::Arc<kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2>> {
+    ) -> Option<std::sync::Arc<kaspa_consensus_core::palw_native_resource_v1::NativeStateCarriageV1>> {
         let params = self.palw_state_params_v2.as_ref()?;
         self.palw_state_v2_store.read().load_pruning_snapshot_carriage_cached(params, point).ok().flatten()
     }
@@ -2948,7 +2963,7 @@ impl VirtualStateProcessor {
             let notes = self
                 .palw_state_v2_store
                 .read()
-                .delta_of(hash)
+                .delta_of_retained_v1(hash)
                 .ok()
                 .map(|(_, delta)| {
                     delta
@@ -3715,7 +3730,9 @@ impl VirtualStateProcessor {
     pub(crate) fn palw_v2_reader_state(
         &self,
         params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
-    ) -> kaspa_database::prelude::StoreResult<Option<(BlockHash, Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>)>> {
+    ) -> kaspa_database::prelude::StoreResult<
+        Option<(BlockHash, Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>)>,
+    > {
         let sink = self.lkg_virtual_state.load().ghostdag_data.selected_parent;
         if let Some((at, state)) = self.palw_reader_snapshot.lock().as_ref()
             && *at == sink
@@ -3734,7 +3751,13 @@ impl VirtualStateProcessor {
         }
         let path = self.dag_traversal_manager.calculate_chain_path(tip_block, sink, None);
         let (removed, added): (Vec<BlockHash>, Vec<BlockHash>) = (path.removed.to_vec(), path.added.to_vec());
-        match crate::processes::palw_state_walk::walk_chain_path(&store, params, (*tip_state).clone(), &removed, &added) {
+        match crate::processes::palw_state_walk::walk_chain_path_retained_v1(
+            &store,
+            params,
+            tip_state.try_clone_v1().map_err(|e| kaspa_database::prelude::StoreError::DataInconsistency(e.to_string()))?,
+            &removed,
+            &added,
+        ) {
             Ok(state) => {
                 let state = Arc::new(state);
                 *self.palw_reader_snapshot.lock() = Some((sink, Arc::clone(&state)));
@@ -3765,7 +3788,7 @@ impl VirtualStateProcessor {
     pub(super) fn palw_v2_state_at(
         &self,
         at: BlockHash,
-    ) -> Option<(BlockHash, Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>)> {
+    ) -> Option<(BlockHash, Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>)> {
         let params = self.palw_state_params_v2.as_ref()?;
         let store = self.palw_state_v2_store.read();
         let (tip_block, tip_state) = store.load_tip_cached(params).ok().flatten()?;
@@ -3775,7 +3798,13 @@ impl VirtualStateProcessor {
         let path = self.dag_traversal_manager.calculate_chain_path(tip_block, at, None);
         let removed: Vec<BlockHash> = path.removed.to_vec();
         let added: Vec<BlockHash> = path.added.to_vec();
-        match crate::processes::palw_state_walk::walk_chain_path(&store, params, (*tip_state).clone(), &removed, &added) {
+        match crate::processes::palw_state_walk::walk_chain_path_retained_v1(
+            &store,
+            params,
+            tip_state.try_clone_v1().ok()?,
+            &removed,
+            &added,
+        ) {
             Ok(state) => {
                 warn!(
                     "PALW V2 state tip stood at {tip_block} while the template selected parent is {at}; re-derived the parent state over {} reverted and {} applied deltas so the committed root matches the validating walk",
@@ -3784,12 +3813,18 @@ impl VirtualStateProcessor {
                 );
                 Some((at, Arc::new(state)))
             }
-            Err(e) => match store.load_pruning_snapshot(params) {
+            Err(e) => match store.load_pruning_snapshot_retained_v1(params) {
                 Ok(Some((snap_block, snap_state))) => {
                     let snap_path = self.dag_traversal_manager.calculate_chain_path(snap_block, at, None);
                     let snap_removed: Vec<BlockHash> = snap_path.removed.to_vec();
                     let snap_added: Vec<BlockHash> = snap_path.added.to_vec();
-                    match crate::processes::palw_state_walk::walk_chain_path(&store, params, snap_state, &snap_removed, &snap_added) {
+                    match crate::processes::palw_state_walk::walk_chain_path_retained_v1(
+                        &store,
+                        params,
+                        snap_state,
+                        &snap_removed,
+                        &snap_added,
+                    ) {
                         Ok(state) => {
                             warn!(
                                 "PALW V2 state tip stands at {tip_block}, template selected parent is {at}, and the path between them cannot be walked ({e}); rebuilt the parent state from the pruning snapshot at {snap_block}"
@@ -10430,7 +10465,7 @@ impl VirtualStateProcessor {
         tail: Hash64,
         block: BlockHash,
     ) -> Result<bool, String> {
-        let (_, delta) = self.palw_state_v2_store.read().delta_of(block).map_err(|e| e.to_string())?;
+        let (_, delta) = self.palw_state_v2_store.read().delta_of_retained_v1(block).map_err(|e| e.to_string())?;
         if delta.point.block != block {
             return Err("material release delta substitutes its carrying block".into());
         }

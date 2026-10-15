@@ -1379,3 +1379,73 @@ fn native_compact_coverage_binds_typed_memory_steps_and_exact_snapshot_boundarie
     empty.exact_boundaries.clear();
     assert!(empty.validate_against(&w.l).is_err());
 }
+
+#[test]
+fn native_compact_v4_registration_binds_budget_and_retains_canonical_proof_carriage() {
+    use misaka_palw_challenge::InteractiveModeV1;
+    use misaka_palw_kernel::claim_compact_v1::{
+        CompactCompileParamsV1, CompactRelationCompilerV1, CompactRelationProofV1,
+        native_v2::{NativeCompactContractV2, compile_native_class_v2},
+        native_v4::{
+            CompactAdversaryBudgetV4, CompactClaimRegistrationV4, CompactInstanceV4, CompactRelationConsumerV4,
+            CompactVerificationSessionV4, LocatedCompactProofV4, NativeCompactProofV4, native_proof_bytes_bound_v4,
+        },
+    };
+    let data = SnapshotDataV1::new(corpus(8, 2), 2, 2, 4).unwrap();
+    let (spec, _) = retrieval_spec(&data, 2);
+    let mut w = W::new(true);
+    let (base, _) = w.register(spec, Some(data.snapshot.root()));
+    let coverage = compile_native_class_v2(
+        &w.l,
+        base,
+        CompactCompileParamsV1 { compact_exact_arithmetic: false, arithmetic_repetitions: 1, fs_query_bits: 64 },
+    )
+    .unwrap();
+    let adversary =
+        CompactAdversaryBudgetV4 { retry_limit: 0, grinding_bits_per_beacon: 0, beacons_per_attempt: 1, adaptive_statements: 1 };
+    let contract = NativeCompactContractV2 {
+        version: 2,
+        base_class: base,
+        coverage_root: coverage.root(),
+        binding_bits: 256,
+        claimed_soundness_bits: 1,
+        maximum_proof_bytes: native_proof_bytes_bound_v4(&coverage).unwrap(),
+        maximum_verifier_work: coverage.limits().unwrap().1,
+    };
+    let plan = misaka_palw_kernel::claim_interactive_v3::compact_plan_v4(
+        &contract,
+        &coverage,
+        adversary,
+        InteractiveModeV1::StagedBeacon,
+        1,
+        4096,
+        100,
+    )
+    .unwrap();
+    let registration = CompactClaimRegistrationV4 { version: 4, registrant: P1, contract, coverage, plan, adversary };
+    registration.validate(&w.rebuilt()).unwrap();
+    let mut changed = registration.clone();
+    changed.adversary.grinding_bits_per_beacon = 1;
+    assert!(changed.validate(&w.l).is_err(), "a changed grinding scope needs a new signed compiler/plan");
+    let prover = CompactVerificationSessionV4::prover(&registration, [9; 64], 1000, 4096).unwrap();
+    let proof = prover.finish().unwrap();
+    assert!(prover.complete().is_err(), "producer alone cannot issue a verified receipt");
+    let bytes = borsh::to_vec(&proof).unwrap();
+    assert_eq!(NativeCompactProofV4::decode_bounded(&bytes, 4096, 4096).unwrap(), proof);
+    let mut bomb = bytes.clone();
+    bomb[130..134].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(NativeCompactProofV4::decode_bounded(&bomb, 4096, 4096).is_err(), "short frame cannot allocate a huge proof map");
+    let mut extra = proof.clone();
+    extra.proofs.push(LocatedCompactProofV4 {
+        instance: CompactInstanceV4 { stage: 0, scoped_seed: [1; 64], plan_root: [2; 64], position: 0, occurrence: 0, relation: 0 },
+        proof: CompactRelationProofV1 {
+            compiler: CompactRelationCompilerV1::FreivaldsSeededV1,
+            relation: 0,
+            position: 0,
+            occurrence: 0,
+            transcripts: Vec::new(),
+        },
+    });
+    let verifier = CompactVerificationSessionV4::verifier(&registration, [9; 64], 1000, 4096, &extra).unwrap();
+    assert!(verifier.finish().is_err(), "surplus proof is not native complete coverage");
+}

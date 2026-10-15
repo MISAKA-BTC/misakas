@@ -175,6 +175,8 @@ mod palw_model_refutation_seal_fold_v4;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
 #[path = "palw_monetary_material_fold_v1.rs"]
 mod palw_monetary_material_fold_v1;
+#[path = "palw_material_release_recovery_fold_v2.rs"]
+mod palw_material_release_recovery_fold_v2;
 #[path = "palw_provider_court_fold_v1.rs"]
 mod palw_provider_court_fold_v1;
 // Lane LG14-A: the legacy route's dispute reservations (tags 154–155), their lapse, release and burn, and the reserved DA budget.
@@ -1851,6 +1853,9 @@ pub struct PalwStateParamsV2 {
     panel_lifetime_v2: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeMirrorV2>,
     #[borsh(skip)]
     pub(crate) palw_claim_challenge_v2: Option<crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2>,
+    /// Runtime mirror only: adding compact v4 never changes legacy StateParams Borsh bytes.
+    #[borsh(skip)]
+    palw_claim_compact_v4: Option<crate::palw_claim_compact_v4::PalwClaimCompactFenceV4>,
     /// **Lane BUDGET (ADR-0176 / ADR-0177): `Params::palw_bond_budget_v1` and `palw_model_bond_allocation_v1`, mirrored by
     /// `Params::sync_palw_bond_budget_v1`** — the fences' heights and policies (the fold's budget hooks read it). `None` on every shipped
     /// preset, and validation refuses both armed.
@@ -1867,6 +1872,8 @@ pub struct PalwStateParamsV2 {
     material_income_from_daa: Option<u64>,
     #[borsh(skip)]
     monetary_material: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1>,
+    #[borsh(skip)]
+    material_release_recovery_v2: Option<crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryMirrorV2>,
     /// RFC07/RFC08 economic contracts (`crate::palw_econ_contracts_v1`): the three dormant fences' mirror, synchronized with Params.
     #[borsh(skip)]
     pub(crate) econ_contracts_v1: crate::palw_econ_contracts_v1::PalwEconContractsMirrorV1,
@@ -18266,6 +18273,7 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         K::Fence(F::StagedPublicCourtV1) => builder.extras.staged_public_court.is_some(),
         // RFC08: the mirror of `palw_monetary_material_v1` (merged 2026-10-15; this arm was missing on both parents).
         K::Fence(F::MonetaryMaterialV1) => builder.params.monetary_material_at_v1(ctx.daa_score).is_some(),
+        K::Fence(F::MaterialReleaseRecoveryV2) => builder.params.material_release_recovery_at_v2(ctx.daa_score).is_some(),
         // G14: the TIR / greedy Float32 staged routes ride inside the staged court's kinds, in force where both fences are.
         K::Fence(F::StagedTirRouteV1) => builder.extras.staged_public_court.is_some() && builder.extras.staged_tir_route_active,
         K::Fence(F::StagedFloatConstraintV1) => {
@@ -25074,4 +25082,7 @@ mod native_resource_inventory_v1;
 
 #[path = "palw_native_resource_v1/private/wire_carriage.rs"]
 mod native_wire_carriage_v1;
-pub(crate) use native_wire_carriage_v1::{restore_index_native_shape_v1, scan_carriage_native_wire_v1};
+pub(crate) use native_wire_carriage_v1::{
+    restore_index_native_shape_v1, scan_carriage_native_wire_v1, transition_node_unit_v1, transition_existing_index_shape_v1,
+    scan_vertex_delta_row_v1, scan_improvement_delta_row_v1, scan_exec_delta_row_v1, scan_budget_delta_row_v1,
+};

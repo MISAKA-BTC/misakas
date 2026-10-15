@@ -389,3 +389,46 @@ An unrun kernel scenario covers a fresh posted job, refusal to migrate after its
 real ordinary seal/source opt-in, and the later ability to enroll a still
 unclaimed job after those contracts end. Native fold/reorg/cold-state and SDK
 receipt end-to-end verification remain part of the consolidated test phase.
+
+## 2026-10-15 native compact V4 consumer migration (source only)
+
+A new `palw_claim_compact_v4` capability separates the new semantics from all
+previous V3 private profiles; shipped presets remain `None`. It has finite named
+contract/opening/proof/work/stream capacities, with no new production parameter
+approval. The original V3 plan fields, discriminants, serialization and hash
+preimages remain unchanged. A plan with wire version 4 names the registered
+whole-native relation contract, complete native coverage and signed adversary
+budget in its compiler identity. Aux135 key64 holds that registration; key65
+`0x50 || round_id` holds the producer's post-seed binding and canonical proof.
+New operations are appended inside inner71.
+
+The material message is signed before the actual future source lock. After the
+lock, `COMPACT-PROVE` executes the actual checker over Program, Pipeline,
+Segmented and typed Memory/Retrieval/Composite inputs. Only then does the
+producer sign `COMPACT-BIND`. The native object carries the complete proof
+bundle, retained by native aux/carriage/journal, rather than extending an older
+provider's consent to seed-dependent transcript bytes. Registration checks the
+whole proof's located-instance/framing bound against actual native carriage.
+`COMPACT-VERIFY` requires this included binding, authenticates all material with
+the existing native checker, verifies the compact relations, and rejects
+missing, duplicated, replayed or unused proofs. The producer session cannot
+create a success receipt. Receipt transcripts, prior-round FS challenges,
+restore consistency and native Final bind the included proof root. Funding,
+source deposits and refunds retain the existing strict same-R native path.
+
+The segmented adapter currently retains exact roots/decode replay and performs
+an additional streaming proof-operand replay, with a single authenticated prior
+position cache. Its work bound charges these separate contributions; this is
+not a claim of sublinear execution or material acquisition. The implemented
+compact families remain Freivalds, linear Add/Sub, Hadamard sumcheck and
+ReduceSum sumcheck. The nine-family inventory remains exhaustive, but GKR/PCS,
+lookup/permutation and a compact state/memory argument are still unimplemented;
+`ExactRetained` is not counted as completing those arguments. No independent
+128-bit review, source-market economics or source-independence approval is
+fabricated by this migration. Public activation still refuses.
+
+All new source and negative/round-trip test cases are uncompiled and unrun as
+requested by the implementation-first order. Consolidated validation must cover
+new native registration, signed all-target work, source funding/lock, proof
+inclusion, assigned receipts, Final, cold restore and reorg; old V3 bytes and
+private fingerprints require regression checks in that later phase.

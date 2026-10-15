@@ -11,6 +11,7 @@ extern crate self as consensus_core;
 pub mod palw_mergeset_v1;
 pub mod palw_native_readiness_v1;
 pub mod palw_native_settlement_v1;
+pub mod palw_native_settlement_resources_v1;
 pub mod palw_panel_beacon_v1;
 pub mod palw_panel_source_snapshot_v1;
 pub mod palw_permissionless_panel_v1;
@@ -948,6 +949,7 @@ pub mod palw_stage_execution_v28;
 pub mod palw_tokenizer_owned_court_v1;
 
 pub mod palw_monetary_material_v1;
+pub mod palw_material_release_recovery_v2;
 /// RFC07 R7-ECON / RFC08 R8-WINDOW / R8-ECON signed economic contracts (inner 67–69, aux 125–127; 2026-10-15). Dormant.
 pub mod palw_econ_contracts_v1;
 
@@ -955,6 +957,7 @@ pub mod palw_claim_challenge_v2;
 pub mod palw_claim_interactive_v3;
 /// R7-RELATION round 3 (2026-10-15): the dormant ClaimV2 gate of compact relation contracts (refused: empty review registry).
 pub mod palw_claim_compact_v1;
+pub mod palw_claim_compact_v4;
 /// R6-CELL round 3 (2026-10-15): pure boundary/routing/memory coverage checker over accepted cell profiles. Below
 /// `palw_cell_coverage_closure_v1` not called by consensus; past it the closure's one predicate.
 pub mod palw_cell_coverage_v1;

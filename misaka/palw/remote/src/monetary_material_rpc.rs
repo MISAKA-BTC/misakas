@@ -1,11 +1,35 @@
 //! Remote monetary consumers accept a flat aux proof only after every bounded
 //! page has authenticated. Intermediate pages never authorize signing or GC.
+use kaspa_consensus_core::palw_material_release_recovery_v2::{
+    PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, PalwMaterialProviderAckCheckpointV2, PalwMaterialRecoveryRowV2,
+    material_provider_stream_key_v2,
+};
 use kaspa_consensus_core::{
     Hash64,
     config::params::ForkActivation,
     palw_monetary_material_rpc_v1::*,
     palw_monetary_material_v1::{PALW_MONETARY_MATERIAL_TABLE_V1, PalwMonetaryMaterialRowV1},
 };
+
+/// Constructible only after a complete, pinned op242 aux commitment verifies.
+/// This proof authenticates presence; finality still comes from the configured
+/// native finality authority, never from a server's availability flag.
+pub struct ProvenMonetarySnapshotV2 {
+    rows: Vec<PalwMonetaryMaterialRowV1>,
+    recoveries: Vec<PalwMaterialRecoveryRowV2>,
+    checkpoints: Vec<PalwMaterialProviderAckCheckpointV2>,
+}
+impl ProvenMonetarySnapshotV2 {
+    pub fn rows(&self) -> &[PalwMonetaryMaterialRowV1] {
+        &self.rows
+    }
+    pub fn checkpoints(&self) -> &[PalwMaterialProviderAckCheckpointV2] {
+        &self.checkpoints
+    }
+    pub fn recoveries(&self) -> &[PalwMaterialRecoveryRowV2] {
+        &self.recoveries
+    }
+}
 
 pub struct MonetaryMaterialProofPagerV1 {
     pinned: Hash64,
@@ -19,7 +43,7 @@ pub struct MonetaryMaterialProofPagerV1 {
     previous: Option<(u8, Vec<u8>)>,
     hash: blake2b_simd::State,
     monetary_bytes: Vec<u8>,
-    retained: Vec<(Vec<u8>, Vec<u8>)>,
+    retained: Vec<(u8, Vec<u8>, Vec<u8>)>,
     retained_bytes: usize,
     max_row_bytes: usize,
     max_total_bytes: usize,
@@ -160,10 +184,13 @@ impl MonetaryMaterialProofPagerV1 {
                 return Err("monetary proof changes a row mid-fragment or makes no progress".into());
             }
             self.hash.update(&fragment.bytes);
-            if fragment.table == PALW_MONETARY_MATERIAL_TABLE_V1 {
-                if fragment.key.len() != 64
+            if matches!(fragment.table, PALW_MONETARY_MATERIAL_TABLE_V1 | PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2) {
+                if (fragment.key.len() != 64
+                    && !(fragment.table == PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2
+                        && fragment.key.len() == 69
+                        && fragment.key[0] == 0xA1))
                     || fragment.row_bytes > self.max_row_bytes as u64
-                    || self.retained.len() >= self.max_contracts
+                    || self.retained.len() >= self.max_contracts.saturating_mul(2).saturating_add(32768)
                     || self.retained_bytes.checked_add(fragment.bytes.len()).is_none_or(|n| n > self.max_total_bytes)
                 {
                     return Err("monetary contract proof exceeds the client's declared retained capacity".into());
@@ -173,8 +200,8 @@ impl MonetaryMaterialProofPagerV1 {
             }
             self.offset += fragment.bytes.len() as u64;
             if self.offset == fragment.row_bytes {
-                if fragment.table == PALW_MONETARY_MATERIAL_TABLE_V1 {
-                    self.retained.push((fragment.key.clone(), std::mem::take(&mut self.monetary_bytes)));
+                if matches!(fragment.table, PALW_MONETARY_MATERIAL_TABLE_V1 | PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2) {
+                    self.retained.push((fragment.table, fragment.key.clone(), std::mem::take(&mut self.monetary_bytes)));
                 }
                 self.previous = Some((fragment.table, fragment.key.clone()));
                 self.current = None;
@@ -188,6 +215,9 @@ impl MonetaryMaterialProofPagerV1 {
         Ok(())
     }
     pub fn finish(self) -> Result<Vec<PalwMonetaryMaterialRowV1>, String> {
+        Ok(self.finish_with_recovery_v2()?.rows)
+    }
+    pub fn finish_with_recovery_v2(self) -> Result<ProvenMonetarySnapshotV2, String> {
         if self.row != self.total_rows || self.offset != 0 || self.current.is_some() {
             return Err("monetary auxiliary proof is incomplete; no contract/absence is authenticated".into());
         }
@@ -198,37 +228,65 @@ impl MonetaryMaterialProofPagerV1 {
         let mut requested = self
             .retained
             .capacity()
-            .checked_mul(std::mem::size_of::<(Vec<u8>, Vec<u8>)>())
+            .checked_mul(std::mem::size_of::<(u8, Vec<u8>, Vec<u8>)>())
             .ok_or("monetary proof heap arithmetic overflow")? as u64;
         requested = requested.checked_add(self.state_preimage.capacity() as u64).ok_or("monetary proof heap arithmetic overflow")?;
-        for (key, bytes) in &self.retained {
+        for (table, key, bytes) in &self.retained {
             let mut scanner = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
-            let shape = PalwMonetaryMaterialRowV1::scan_native_wire_v1(&mut scanner)
-                .map_err(|e| format!("monetary typed preflight refused: {e}"))?;
+            let shape = if *table == PALW_MONETARY_MATERIAL_TABLE_V1 {
+                PalwMonetaryMaterialRowV1::scan_native_wire_v1(&mut scanner)
+            } else if key.len() == 64 {
+                PalwMaterialRecoveryRowV2::scan_native_wire_v1(&mut scanner)
+            } else {
+                PalwMaterialProviderAckCheckpointV2::scan_native_wire_v1(&mut scanner)
+            }
+            .map_err(|e| format!("monetary typed preflight refused: {e}"))?;
             if scanner.remaining() != 0 {
                 return Err("monetary row has trailing bytes".into());
             }
             requested = requested
                 .checked_add(shape.heap)
                 .and_then(|n| {
-                    n.checked_add((key.capacity() + bytes.capacity() + std::mem::size_of::<PalwMonetaryMaterialRowV1>()) as u64)
+                    n.checked_add(
+                        (key.capacity()
+                            + bytes.capacity()
+                            + std::mem::size_of::<PalwMonetaryMaterialRowV1>().max(std::mem::size_of::<PalwMaterialRecoveryRowV2>()))
+                            as u64,
+                    )
                 })
                 .ok_or("monetary typed heap arithmetic overflow")?;
         }
         if requested > self.max_total_bytes as u64 {
             return Err("raw proof plus typed monetary heap exceeds the client's declared logical capacity".into());
         }
-        self.retained
-            .into_iter()
-            .map(|(key, bytes)| {
+        let mut rows = Vec::new();
+        let mut recoveries = Vec::new();
+        let mut checkpoints = Vec::new();
+        for (table, key, bytes) in self.retained {
+            if table == PALW_MONETARY_MATERIAL_TABLE_V1 {
                 let row: PalwMonetaryMaterialRowV1 =
                     borsh::from_slice(&bytes).map_err(|e| format!("authenticated monetary row is undecodable: {e}"))?;
                 if row.terms.root.as_byte_slice() != key.as_slice() {
-                    return Err("authenticated monetary row substitutes its root key".into());
+                    return Err("authenticated monetary root differs".into());
                 }
-                Ok(row)
-            })
-            .collect()
+                rows.push(row);
+            } else if key.len() != 64 {
+                let row: PalwMaterialProviderAckCheckpointV2 =
+                    borsh::from_slice(&bytes).map_err(|e| format!("authenticated provider checkpoint is undecodable: {e}"))?;
+                if key != material_provider_stream_key_v2(&row.provider) {
+                    return Err("authenticated provider stream key differs".into());
+                }
+                checkpoints.push(row);
+            } else {
+                let row: PalwMaterialRecoveryRowV2 =
+                    borsh::from_slice(&bytes).map_err(|e| format!("authenticated recovery row is undecodable: {e}"))?;
+                if row.contract().terms.root.as_byte_slice() != key.as_slice() {
+                    return Err("authenticated recovery root differs".into());
+                }
+                recoveries.push(row);
+            }
+        }
+        Ok(ProvenMonetarySnapshotV2 { rows, recoveries, checkpoints })
     }
 }
 
@@ -241,6 +299,17 @@ pub async fn fetch_monetary_material_contracts_v1(
     max_total_bytes: usize,
     max_contracts: usize,
 ) -> Result<Vec<PalwMonetaryMaterialRowV1>, String> {
+    Ok(fetch_monetary_material_snapshot_v2(client, pinned, fork_fence, max_row_bytes, max_total_bytes, max_contracts).await?.rows)
+}
+#[cfg(feature = "rpc")]
+pub async fn fetch_monetary_material_snapshot_v2(
+    client: &kaspa_wrpc_client::KaspaRpcClient,
+    pinned: Hash64,
+    fork_fence: Option<ForkActivation>,
+    max_row_bytes: usize,
+    max_total_bytes: usize,
+    max_contracts: usize,
+) -> Result<ProvenMonetarySnapshotV2, String> {
     use kaspa_rpc_core::{GetPalwMonetaryMaterialRequest, api::rpc::RpcApi};
     let mut pager: Option<MonetaryMaterialProofPagerV1> = None;
     loop {
@@ -298,7 +367,7 @@ pub async fn fetch_monetary_material_contracts_v1(
         let state = pager.as_mut().ok_or("monetary pager state missing")?;
         state.push(&page)?;
         if state.cursor() == (page.total_rows, 0) {
-            return pager.ok_or("monetary pager disappeared")?.finish();
+            return pager.ok_or("monetary pager disappeared")?.finish_with_recovery_v2();
         }
     }
 }

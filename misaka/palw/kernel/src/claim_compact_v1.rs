@@ -47,6 +47,7 @@ use crate::hash::{Digest, object_id};
 use crate::plan::{PlanRelationV1, VerificationPlanV1, dtype_of_tag, relation_moduli};
 
 pub mod native_v2;
+pub mod native_v4;
 
 pub const COMPACT_RELATION_COMPILER_DOMAIN_V1: &[u8] = b"MISAKA/PALW/CLAIM-PROOF-COMPILER/COMPACT-RELATION/V1";
 pub const COMPACT_RELATION_SCOPE_DOMAIN_V1: &[u8] = b"MISAKA/PALW/COMPACT-RELATION/SCOPE/V1";

@@ -2645,6 +2645,7 @@ impl VirtualStateProcessor {
         // is deliberately vacuous and the real one runs at admission with the same prior view.
         ready.verify_prior(&state, anchor, header.daa_score, |_, _, _, _| true)?;
         let row = state.monetary_material_row_v1(ready.ready.session).ok_or("provider session absent")?;
+        state.require_material_recovery_v2(params,ready.ready.session,header.daa_score).map_err(|e|e.to_string())?;
         let provider_keys = ready
             .ready
             .providers

@@ -6,11 +6,18 @@ pub(crate) mod typed;
 pub use typed::{NativeCoverageV1, NativeFieldInventoryV1, NativeHeapV1};
 pub(crate) use typed::{native_enum, native_struct, native_tuple_struct, native_unit, native_unsupported};
 mod demand;
+mod retained;
+pub use retained::{
+    NativeRetainedV1, native_delta_replay_requests_v1, retain_native_carriage_decode_v1, retain_native_value_decode_v1,
+};
+pub type NativeStateDeltaV1 = NativeRetainedV1<crate::palw_state_v2::PalwStateDeltaV2>;
+pub type NativeChainStateV1 = NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2>;
+pub type NativeStateCarriageV1 = NativeRetainedV1<crate::palw_state_v2::PalwStateCarriageV2>;
 mod generated;
 mod inventory;
 mod kernel_ledger;
 mod ledger_expansion;
-pub(crate) use demand::reserve_native_requests_v1;
+pub use demand::reserve_native_requests_v1;
 pub use ledger_expansion::{ReservedKernelLedgerV1, inventory_ledger_expansion_v1, preflight_kernel_served_row_v1};
 pub(crate) use ledger_expansion::{ledger_cache_clone_v1, reserve_ledger_expansion_v1};
 #[cfg(test)]
@@ -18,7 +25,10 @@ mod aux_registry_tests;
 pub(crate) mod wire;
 mod wire_budget;
 mod wire_generated;
+mod wire_jobs;
 mod wire_kernel_aux;
+#[cfg(test)]
+mod wire_manual_tests;
 pub use demand::{
     NativeDemandCheckerV1, NativeDemandLeaseV1, admit_native_receive_v1, arm_native_logical_limits_v1,
     native_logical_admission_enabled_v1, reserve_native_install_in_database_v1, reserve_native_install_v1, reserve_native_snapshot_v1,

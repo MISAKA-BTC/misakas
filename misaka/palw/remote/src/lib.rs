@@ -69,6 +69,7 @@ pub mod monetary_material;
 pub mod monetary_material_gc;
 
 pub mod monetary_material_rpc;
+pub mod material_recovery_ack_v2;
 
 pub mod native_ready_v3;
 

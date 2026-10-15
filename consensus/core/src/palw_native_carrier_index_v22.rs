@@ -124,13 +124,13 @@ pub struct NativeCarriageSnapshotV22 {
     pub mass: NativeCarriageMassParamsV22,
     pub service: NativeCarriageServiceV22,
     pub queue_policy: Option<crate::palw_native_queue_v30::NativeQueuePolicyV30>,
-    state: Arc<PalwChainStateV2>,
+    state: Arc<crate::palw_native_resource_v1::NativeChainStateV1>,
 }
 impl NativeCarriageSnapshotV22 {
     pub fn from_consumer_state(
         now: u64,
         selected_parent_daa: u64,
-        state: Arc<PalwChainStateV2>,
+        state: Arc<crate::palw_native_resource_v1::NativeChainStateV1>,
         mass: NativeCarriageMassParamsV22,
         service: NativeCarriageServiceV22,
     ) -> Result<Self, String> {

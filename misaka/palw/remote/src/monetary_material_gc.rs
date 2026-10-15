@@ -49,6 +49,17 @@ pub trait MonetaryMaterialGcOracleV1 {
     fn chain_after(&mut self, low: BlockHash, limit: usize) -> Result<Vec<BlockHash>, String>;
     /// The physical-GC witness (`ConsensusApi::palw_monetary_material_release_finalized_v1` semantics).
     fn release_finalized(&mut self, root: Hash64, consent: Hash64, tail: Hash64, release_block: BlockHash) -> Result<bool, String>;
+    /// V2 authority is receipt PRESENCE in current native-finalized state,
+    /// including the complete signed generation history. Legacy implementations
+    /// return no authority, preserving their original witness semantics.
+    fn terminal_receipt(
+        &mut self,
+        _root: Hash64,
+        _stored_consent: Hash64,
+    ) -> Result<Option<(BlockHash, kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2)>, String>
+    {
+        Ok(None)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -369,10 +380,7 @@ impl MonetaryMaterialGcJanitorV1 {
         if native_claims.len() > 64 || native_claims.windows(2).any(|v| v[0] >= v[1]) {
             return Err("provider GC intent native claims differ".into());
         }
-        if !native_claims.is_empty()
-            && self.completed.len() >= MONETARY_GC_MAX_WATCHES_V2
-            && !self.completed.contains_key(&intent.stored_consent)
-        {
+        if self.completed.len() >= MONETARY_GC_MAX_WATCHES_V2 && !self.completed.contains_key(&intent.stored_consent) {
             return Err("provider GC metadata receipt capacity requires acknowledgement".into());
         }
         let receipt = MonetaryGcCompletedV2 { version: 2, intent: intent.clone(), native_claims };
@@ -391,10 +399,8 @@ impl MonetaryMaterialGcJanitorV1 {
         }
         let gone = !store.held_contracts().iter().any(|(consent, _)| *consent == intent.stored_consent);
         if gone {
-            if !receipt.native_claims.is_empty() {
-                self.completed.insert(intent.stored_consent, receipt);
-                self.persist()?;
-            }
+            self.completed.insert(intent.stored_consent, receipt);
+            self.persist()?;
             remove_durably(&self.intent)?;
         }
         Ok(gone)
@@ -484,6 +490,7 @@ impl MonetaryMaterialGcJanitorV1 {
             }
         };
         let mut budget = self.witness_budget;
+        let mut recovery_budget = self.witness_budget;
         let mut consents: Vec<Hash64> = self.watches.keys().copied().collect();
         if let Some(next) = self.next_contract {
             let start = consents.partition_point(|key| *key < next);
@@ -505,6 +512,50 @@ impl MonetaryMaterialGcJanitorV1 {
                 .next()
                 .map(|(id, _)| *id)
                 .or_else(|| self.watches.keys().next().copied());
+            let root = self.watches[&consent].root;
+            let recovery = if recovery_budget > 0 {
+                recovery_budget -= 1;
+                oracle.terminal_receipt(root, consent)
+            } else {
+                Ok(None)
+            };
+            match recovery {
+                Ok(Some((pin, receipt))) if receipt.covers(root, consent) => {
+                    let intent = MonetaryGcIntentV1 {
+                        version: 1,
+                        stored_consent: consent,
+                        root,
+                        release_consent: consent,
+                        tail: receipt.tail_block,
+                        release_block: pin,
+                    };
+                    let claims =
+                        store.held_native_authorities().get(&consent).map(|s| s.iter().copied().collect()).unwrap_or_default();
+                    match self.delete(store, oracle, &intent, claims) {
+                        Ok(true) => {
+                            self.watches.remove(&consent);
+                            self.scan_anchors.remove(&consent);
+                            report.deleted.push(consent);
+                        }
+                        Ok(false) => {
+                            self.watches.get_mut(&consent).unwrap().pinned = Some("terminal receipt changed before deletion".into());
+                        }
+                        Err(e) => {
+                            self.watches.get_mut(&consent).unwrap().pinned = Some(format!("terminal receipt deletion failed: {e}"));
+                        }
+                    }
+                    continue;
+                }
+                Ok(Some(_)) => {
+                    self.watches.get_mut(&consent).unwrap().pinned = Some("terminal receipt substituted stored generation".into());
+                    continue;
+                }
+                Err(e) => {
+                    self.watches.get_mut(&consent).unwrap().pinned = Some(format!("terminal receipt read failed: {e}"));
+                    continue;
+                }
+                Ok(None) => {}
+            }
             let watch = self.watches.get_mut(&consent).expect("listed");
             if let Some(row) = rows.iter().find(|row| row.terms.root == watch.root) {
                 if let Some(tail) = row.tail_block {
@@ -671,6 +722,43 @@ impl<A: RemoteFinalityAuthorityV1, F: FnMut(BlockHash) -> Result<Vec<PalwMonetar
             return Ok(false);
         }
         Ok(!(self.proven_rows)(pin)?.iter().any(|row| row.terms.root == root))
+    }
+}
+
+/// V2 remote oracle. The native-finality authority supplies a current finalized
+/// pin and op242 authenticates its entire parent-state. Historical Release and
+/// payment-tail headers may be long pruned; receipt presence replaces them.
+pub struct RemoteProofGcOracleV2<A, F> {
+    pub authority: A,
+    pub proven_snapshot: F,
+}
+impl<A: RemoteFinalityAuthorityV1, F: FnMut(BlockHash) -> Result<crate::monetary_material_rpc::ProvenMonetarySnapshotV2, String>>
+    MonetaryMaterialGcOracleV1 for RemoteProofGcOracleV2<A, F>
+{
+    fn covenant_rows(&mut self) -> Result<(BlockHash, Vec<PalwMonetaryMaterialRowV1>), String> {
+        let pin = self.authority.finalized_pin()?;
+        let parent = self.authority.selected_parent(pin)?;
+        Ok((parent, (self.proven_snapshot)(pin)?.rows().to_vec()))
+    }
+    fn chain_after(&mut self, low: BlockHash, limit: usize) -> Result<Vec<BlockHash>, String> {
+        self.authority.chain_after(low, limit)
+    }
+    fn terminal_receipt(
+        &mut self,
+        root: Hash64,
+        stored: Hash64,
+    ) -> Result<Option<(BlockHash, kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2)>, String>
+    {
+        use kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2;
+        let pin = self.authority.finalized_pin()?;
+        let snapshot = (self.proven_snapshot)(pin)?;
+        Ok(snapshot.recoveries().iter().find_map(|row| match row {
+            PalwMaterialRecoveryRowV2::Terminal(r) if r.covers(root, stored) => Some((pin, r.clone())),
+            _ => None,
+        }))
+    }
+    fn release_finalized(&mut self, root: Hash64, consent: Hash64, tail: Hash64, _release: BlockHash) -> Result<bool, String> {
+        Ok(self.terminal_receipt(root, consent)?.is_some_and(|(_, r)| r.tail_block == tail))
     }
 }
 

@@ -423,3 +423,11 @@ pub fn check_text_source_owner_v29(
     if own.root()!=plan.root()||n.original_caller_plan!=plan.root()||n.original_plan!=text.root()||n.job!=anchor.job||n.funding!=anchor.funding||n.consent!=anchor.consent||n.claim==[0;64]||n.claim!=n.original_claim||n.actor==anchor.producer||n.actor_operator==n.producer_operator||n.actor_operator==[0;64]||n.producer_operator!=anchor.producer_operator||n.original_paid==[0;64]||n.seal==[0;64]||n.actual_debit==0||n.actual_receipt==[0;64]||n.paid_at!=epoch.block_daa||n.horizon>anchor.deadline||n.paid_at.checked_add(plan.required_horizon()).is_none_or(|x|x>n.horizon){return Err("text29 caller lacks exact original funding/source/claim/independent paid operator/epoch/full horizon".into());}
     Ok(CheckedStageSourceOwnerV26{binding,seal:n.seal,actor:n.actor,operator:n.actor_operator,original:n.original_paid,quote:plan.root(),epoch:epoch.clone(),horizon:n.horizon})
 }
+
+// Generated source26 native inventory bridge; private fields remain private.
+impl StageSourcePlanRecordV26 {
+ pub fn native_inventory_parts_v1(&self)->((&u16,&Digest,&Digest,&Digest,&Digest,&Digest,),(&Digest,&Digest,&Digest,&Digest,&Digest,&u32,),(&u32,&u64,&QuotaQuantitiesV11,&QuotaQuantitiesV11,&QuotaQuantitiesV11,),) {
+ let Self { version,class,source,real_parameters,inventory,admission,stage_quota,producer_source,trace_restore,quota_policy,execution_policy,requests,attempts,required_horizon,request,admission_cost,guarantee }=self;
+ ((version,class,source,real_parameters,inventory,admission,),(stage_quota,producer_source,trace_restore,quota_policy,execution_policy,requests,),(attempts,required_horizon,request,admission_cost,guarantee,),)
+ }
+}

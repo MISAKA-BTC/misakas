@@ -143,6 +143,28 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         131 if key_bytes == 65 && prefix == crate::palw_model_eligibility_v1::ELIGIBILITY_PROBATION_CLAIM_PREFIX_V1 => {
             crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1::scan_native_wire_v1(frame)?
         }
+        134 if key_bytes == 64 => {
+            let shape = crate::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2::scan_native_wire_v1(frame)?;
+            let count =
+                shape.collection_entries.checked_add(1).ok_or_else(|| wire::wire_bad("recovery restore membership overflow"))?;
+            shape.allocation(
+                count,
+                size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::palw_state_v2::PalwBondKeyV2, u64>>()
+                    + size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::palw_state_v2::PalwBondKeyV2, ()>>(),
+            )?
+        }
+        134 if key_bytes == 69 && prefix == 0xA1 => {
+            crate::palw_material_release_recovery_v2::PalwMaterialProviderAckCheckpointV2::scan_native_wire_v1(frame)?.allocation(
+                1,
+                size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::palw_state_v2::PalwBondKeyV2, u64>>(),
+            )?
+        }
+        134 => return Err(wire::wire_bad("unallocated material recovery row namespace")),
+        135 if key_bytes == 64 => crate::palw_claim_compact_v4::PalwPaidCompactContractV4::scan_native_wire_v1(frame)?,
+        135 if key_bytes == 65 && prefix == 0x50 => {
+            crate::palw_claim_compact_v4::PalwPaidCompactProofBindingV4::scan_native_wire_v1(frame)?
+        }
+        135 => return Err(wire::wire_bad("unallocated compact V4 row namespace")),
         121 => match (key_bytes, prefix) {
             (65, 0x41) => crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(frame)?,
             (65, 0x42) => crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2::scan_native_wire_v1(frame)?,
