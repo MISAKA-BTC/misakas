@@ -19284,6 +19284,32 @@ fn apply_receipt_spend(
     if spent.contains(&spend.quantum_index) {
         return Err(PalwStateV2Error::QuantumAlreadySpent { claim: claim_id, index: spend.quantum_index });
     }
+    // **RFC-0008 once-only settlement (RFC08-1; dormant `palw_settlement_once_v1`)**: the quantum's worker share — the coinbase pays
+    // it whole for this block, out of this block's carve, and the budget draws its R/B/F below — settles once across every consumer,
+    // whatever the claim's own `spent` set says. The marker is checked and written here, before the draw; a repeat is refused (the
+    // spend is invalid, exactly as an already-spent quantum). `Dormant` below the fence: nothing is read or written.
+    {
+        use crate::palw_settlement_once_v1::{
+            PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+        };
+        let carve = builder.params.worker_carve_at(ctx.subsidy, builder.extras.escrow_carve);
+        let obligation = PalwSettlementObligationV1::with_party(
+            PalwSettlementLegV1::ReceiptSpend,
+            claim_id.as_bytes(),
+            [0; 64],
+            u64::from(spend.quantum_index),
+        );
+        let once = builder.settle_once_v1(
+            ctx.daa_score,
+            obligation,
+            PalwSettlementConsumerV1::ReceiptBlock,
+            carve,
+            PalwSettlementDebitV1::Issuance { carve },
+        )?;
+        if !once.pays() {
+            return Err(PalwStateV2Error::QuantumAlreadySpent { claim: claim_id, index: spend.quantum_index });
+        }
+    }
     // ADR-0148: a compute-era claim weighs one network quantum a spend and counts in the lane's
     // pooled census; a leaves-era claim weighs `pwu / quanta` and counts in its class's, as ever.
     let pricing = builder.fp_pricing();

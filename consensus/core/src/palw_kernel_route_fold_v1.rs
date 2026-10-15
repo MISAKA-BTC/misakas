@@ -797,16 +797,46 @@ fn apply_settlements_to_exec_vesting(
     // RFC-0008 once-only settlement (dormant `palw_settlement_once_v1`): the event indices of a producer reward triple whose
     // escrow reward another consumer already settled — its release and reward are skipped with its debit.
     let mut already_settled: std::collections::BTreeSet<usize> = Default::default();
+    // RFC-0008 (RFC08-1): the next slot ordinal of each `(claim, verifier)` check fee in this batch (the kernel pays every unpaid slot
+    // of one verifier in one batch, so the occurrence order is the slot order).
+    let mut check_fee_slots: std::collections::BTreeMap<([u8; 64], [u8; 64]), u64> = Default::default();
     for (ordinal, event) in events.iter().enumerate() {
         let LedgerEventV1::Settlement(s) = event else { continue };
         if already_settled.contains(&ordinal) {
             continue;
         }
+        // **One check fee per drawn slot, across every consumer** (RFC08-1): past `palw_settlement_once_v1` the marker of
+        // `VerifierCheckFee(claim, verifier, slot)` — not the kernel's per-slot `paid` flag — is what stops a second payment. It is
+        // checked and written at the poster's debit, before the reward it funds; a repeat is refused (strict) or skipped whole
+        // (lenient: the debit, the release and the reward). `Dormant` below the fence.
+        if s.kind == SettlementKindV1::PayJobEscrow
+            && let Some((claim, poster, verifier, fee)) = super::palw_settlement_once_fold_v1::kernel_check_fee_at_v1(events, ordinal)
+        {
+            use crate::palw_settlement_once_v1::{
+                PalwSettlementConsumerV1 as C, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+            };
+            let consumer = match (exec_root.is_some(), strict) {
+                (true, _) => C::ExecKernelFee,
+                (false, true) => C::KernelObject,
+                (false, false) => C::KernelTick,
+            };
+            let slot = check_fee_slots.entry((claim, verifier)).or_insert(0);
+            let obligation = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, claim, verifier, *slot);
+            *slot = slot.checked_add(1).ok_or(PalwStateV2Error::Overflow("check fee slot ordinal"))?;
+            let once = builder.settle_once_v1(now, obligation, consumer, fee, PalwSettlementDebitV1::Escrow { poster, amount: fee })?;
+            if !once.pays() {
+                if strict {
+                    return Err(refused("the verifier's check fee for this slot was already settled by another consumer"));
+                }
+                already_settled.extend([ordinal + 1, ordinal + 2]);
+                continue;
+            }
+        }
         // **One escrow reward per kernel claim, across every consumer** (the kernel tick, a kernel object arm, the paid-claim Final
         // batch, the EXEC kernel-fee route): the marker of `EscrowFinalReward(claim)` is checked and written at the poster's debit,
         // before the slash and the payout it funds. A second settlement of the same claim moves nothing: a strict object arm is
         // refused (dropped), a lenient tick skips the whole triple. `Dormant` below the fence. A verifier check fee (the same triple
-        // followed by `CheckFeePaid`) is the kernel's per-slot obligation and is not this leg.
+        // followed by `CheckFeePaid`) is its own per-slot leg (`VerifierCheckFee`, above) and is not this one.
         if s.kind == SettlementKindV1::PayJobEscrow
             && let Some((claim, poster, _producer, paid)) =
                 super::palw_settlement_once_fold_v1::kernel_producer_reward_at_v1(events, ordinal)

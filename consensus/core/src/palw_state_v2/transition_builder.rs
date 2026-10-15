@@ -8837,6 +8837,8 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn disarm_deadline(&mut self, claim: Hash64) {
+        // RFC-0006: removal only — the index is never in the delta (no journal slot) and a `BTreeSet::remove` frees and allocates
+        // nothing, so there is nothing to admit. It moves no value and settles no obligation (RFC-0008: not a settlement leg).
         // A claim holds at most one deadline; the scan is over a set that shrinks as claims
         // resolve. (An index keyed the other way would dodge the scan but double the index
         // surface; measured need decides later, behavior cannot change.)

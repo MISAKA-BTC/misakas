@@ -629,6 +629,30 @@ pub(super) fn apply_native_receipt_block_v39(
     if !crate::palw_rfc0018_v1::palw_native_independently_work_certified_v39(builder.params, &builder.state, &c.claim_hash(), c.admitted_daa) {
         return Err(bad("mining39 receipt block's mining claim is not SecurityCertified (Gate C)"));
     }
+    // RFC-0008 once-only settlement (RFC08-1; dormant `palw_settlement_once_v1`): the quantum's worker share settles once across
+    // every consumer, whatever the receipt's own bitmap says — checked and written before the budget draw; a repeat is refused.
+    {
+        use crate::palw_settlement_once_v1::{
+            PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+        };
+        let carve = builder.params.worker_carve_at(ctx.subsidy, builder.extras.escrow_carve);
+        let obligation = PalwSettlementObligationV1::with_party(
+            PalwSettlementLegV1::NativeReceiptSpend,
+            receipt_id.as_bytes(),
+            [0; 64],
+            u64::from(spend.quantum_index),
+        );
+        let once = builder.settle_once_v1(
+            ctx.daa_score,
+            obligation,
+            PalwSettlementConsumerV1::ReceiptBlock,
+            carve,
+            PalwSettlementDebitV1::Issuance { carve },
+        )?;
+        if !once.pays() {
+            return Err(bad("mining39 receipt quantum already settled by another consumer"));
+        }
+    }
     let last = rc.spent_quanta + 1 >= rc.price.quanta;
     let granted =
         builder.bond_budget_native_receipt_spend_v39(ctx, &native_mining_budget_id_v39(&c.id), rc.producer, policy.weight_per_quantum, last)?;
