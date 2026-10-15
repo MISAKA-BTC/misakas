@@ -305,8 +305,8 @@ pub struct PalwTirPublicFrameViewV1 {
     pub conviction_rent_sompi: u64,
     /// The prepaid terminal witness ceiling a carried primitive must fit.
     pub maximum_witness_bytes: u64,
-    /// The original selection rule is plain greedy (the only one the frame's selection door judges).
-    pub greedy_selection: bool,
+    /// The ORIGINAL job's selection rule, which the frame's selection and stop doors judge (`None`: no frame selection door).
+    pub selection: Option<crate::palw_tir_court_v1::PalwTirSelectionRuleV1>,
     /// Outside owners already opened on the frame, and the custodian load bound (K_owner).
     pub owners_opened: u64,
     pub custodian_load: PalwTirPublicCustodianLoadV1,
@@ -328,7 +328,7 @@ impl PalwTirPublicClaimV1 {
             material_until_daa: terms.material_until_daa,
             conviction_rent_sompi: self.conviction_rent_v1(),
             maximum_witness_bytes: self.plan.terminal.maximum_witness_bytes,
-            greedy_selection: self.original.job.decode.is_none() && self.original.job.tail.is_none(),
+            selection: crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&self.original.job),
             owners_opened,
             custodian_load: self.custodian_load_bound_v1(),
             header: self.header.clone(),

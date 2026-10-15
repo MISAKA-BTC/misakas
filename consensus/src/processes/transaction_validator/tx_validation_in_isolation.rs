@@ -1615,6 +1615,7 @@ mod pq_output_class_enforcement_tests {
                 header,
                 pledge,
                 declared_rent_sompi: 1,
+                history_pledge: None,
             };
             let mut outer = tx.clone();
             outer.payload = envelope.encode_v1().unwrap();

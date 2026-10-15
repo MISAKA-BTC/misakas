@@ -7911,7 +7911,37 @@ impl PalwPanelService {
                             )
                             .ok_or("producer cannot sign the original TIR source pledge")?;
                         pledge.check_v1()?;
-                        Some((header.clone(), pledge, plan.terms.plan.rent_sompi))
+                        // G14 R4: a registered semantic stage rides the frame too — the producer signs the history pledge over
+                        // the frame's semantic component, on the frame pledge's own acceptance door and material horizon.
+                        let history = match (&plan.semantic, plan.semantic_resource_plan_id) {
+                            (Some(_), Some(resource_plan_id)) => {
+                                use kaspa_consensus_core::palw_history_custody_v1::{
+                                    PALW_HISTORY_PLEDGE_CONTEXT_V1, PalwHistoryCustodyPledgeV1,
+                                };
+                                let mut history = PalwHistoryCustodyPledgeV1 {
+                                    version: 1,
+                                    claim: claim_id,
+                                    producer: PalwBondKeyV2(bond),
+                                    execution_root: commitment.execution_root,
+                                    job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&commitment),
+                                    cu_ruleset_id: header.job_context.cu_ruleset_id,
+                                    resource_plan_id,
+                                    maximum_records: plan.maximum_semantic_history_records,
+                                    maximum_custodians: plan.acquisition.maximum_custodians,
+                                    accept_until_daa: pledge.accept_until_daa,
+                                    material_until_daa: pledge.material_until_daa,
+                                    signature: Vec::new(),
+                                };
+                                history.signature = self
+                                    .sign(history.pledge_id_v1().as_byte_slice(), PALW_HISTORY_PLEDGE_CONTEXT_V1)
+                                    .ok_or("producer cannot sign the frame's semantic history pledge")?;
+                                history.check_v1()?;
+                                Some(history)
+                            }
+                            (None, _) => None,
+                            (Some(_), None) => return Err("the frame quote's semantic component has no resource identity".into()),
+                        };
+                        Some((header.clone(), pledge, history, plan.terms.plan.rent_sompi))
                     }
                     None => None,
                 }
@@ -7952,7 +7982,7 @@ impl PalwPanelService {
         // because the fee is the only field the second build changes and the mass does not move
         // with it.
         let build = |fee: u64| {
-            if let Some((header, pledge, rent)) = &tir_original {
+            if let Some((header, pledge, history, rent)) = &tir_original {
                 // The rent rides on top of relay: consensus burns exactly the declaration from this carrier's fee.
                 return kaspa_pq_validator_core::build_fp_commitment_tx_with_tir_public_original_v1(
                     &key,
@@ -7963,6 +7993,7 @@ impl PalwPanelService {
                     price,
                     header,
                     pledge,
+                    history.as_ref(),
                     *rent,
                     funding_outpoint,
                     funding,

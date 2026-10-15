@@ -2211,6 +2211,10 @@ impl VirtualStateProcessor {
             if originals.len() != 1 { return Err("one FP carrier cannot fund multiple original TIR allocations".into()); }
             let mut extras = self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object));
             extras.tir_public_originals = originals.clone();
+            // G14 R4: a frame with a semantic stage is quoted with its own TFP1-carried history pledge (the fold checks it the same way).
+            if let Some(history) = &envelope.history_pledge {
+                extras.history_custody_pledges.insert(history.claim, history.clone());
+            }
             let plan = kaspa_consensus_core::palw_state_v2::palw_tir_public_preclaim_quote_v1(
                 state, params, point, &extras, object, envelope,
             ).map_err(|e| e.to_string())?;
@@ -2290,6 +2294,11 @@ impl VirtualStateProcessor {
                             // Decoder view only: do not recalculate or replace the
                             // accepted outer transaction's ID, mass or actual fee.
                             view.payload = envelope.original_payload.clone();
+                            // G14 R4: a frame with a semantic stage carries its producer's history pledge; it is authenticated
+                            // against the original object and deduplicated by claim exactly as an HFP1 pledge is (below).
+                            if let Some(history) = &envelope.history_pledge {
+                                history_carriers.insert(tx.id(), history.clone());
+                            }
                             tir_public_carriers.insert(tx.id(), envelope);
                             history_views.push(view);
                         }

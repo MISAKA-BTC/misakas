@@ -94,8 +94,9 @@ pub enum PalwTirPublicConvictionEvidenceV1 {
     /// The complete original generated-ID sequence, EOF-authenticated natively against the committed
     /// logits trace root by `rows_root` (the canonical 1024-ID chunks are re-derived by the fold).
     Output { rows_root: Hash64, ids: Vec<u32> },
-    /// The decode-SELECTION primitive (`TirDecodeTokenTiled`) of a GREEDY original job: the committed token at one position
-    /// against its own authenticated logits row. Refused for any job whose original selection rule is not greedy.
+    /// The decode-SELECTION primitive (`TirDecodeTokenTiled`): the committed token at one position against its own authenticated
+    /// logits row, judged under the ORIGINAL job's own selection rule (greedy, seeded Decision 11 sampling, or the V4 pipeline
+    /// over the authenticated committed prefix). Refused for a constrained job or a job with a tail.
     DecodeToken { proof: Box<crate::palw_court_v2::PalwCourtVerdictProofV2> },
 }
 impl BorshSerialize for PalwTirPublicConvictionEvidenceV1 {

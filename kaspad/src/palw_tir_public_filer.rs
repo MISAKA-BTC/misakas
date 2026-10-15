@@ -49,13 +49,14 @@ pub(crate) fn palw_tir_public_output_evidence_v1(ids: &PalwTirPublicAuthenticate
     Ok(evidence)
 }
 
-/// A greedy original's tiled decode-token primitive. Refused locally for a non-greedy original (the fold would refuse it).
+/// A tiled decode-token primitive, judged by the fold under the ORIGINAL job's own selection rule. Refused locally when the frame
+/// has no selection door (a constrained job or a tail; the fold would refuse it).
 pub(crate) fn palw_tir_public_selection_evidence_v1(
     view: &PalwTirPublicFrameViewV1,
     mut proof: PalwCourtVerdictProofV2,
 ) -> Result<PalwTirPublicConvictionEvidenceV1, String> {
-    if !view.greedy_selection {
-        return Err("the original selection rule is not plain greedy; no frame court judges it".into());
+    if view.selection.is_none() {
+        return Err("the original's selection is a constraint mask or a tail; no frame selection door judges it".into());
     }
     proof.tir_strip_program_v1();
     let evidence = PalwTirPublicConvictionEvidenceV1::DecodeToken { proof: Box::new(proof) };
@@ -195,7 +196,9 @@ mod tests {
             material_until_daa: 300,
             conviction_rent_sompi: 777,
             maximum_witness_bytes: 1 << 20,
-            greedy_selection: true,
+            selection: Some(kaspa_consensus_core::palw_tir_court_v1::PalwTirSelectionRuleV1::Keyed {
+                sampling: kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY,
+            }),
             owners_opened: 0,
             custodian_load: kaspa_consensus_core::palw_tir_public_claim_v1::PalwTirPublicCustodianLoadV1 {
                 owners: 8,

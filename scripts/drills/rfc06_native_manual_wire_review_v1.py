@@ -46,7 +46,7 @@ PINNED = {
 'crate::palw_tir_public_custody_v1::PalwTirPublicCustodyGrantV1': ('reviewed-field-layout','2ca7a248a7694cb8b1b6efff219412ac3b93cfe7c35e64c37791e7016dd098df'),
 'crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1': ('reviewed-field-layout','14b4b9db923bd2424e65a22f6f81665f7d0f96cfc28fc0110bc6be3f15044c44'),
 'crate::palw_tir_public_custody_v1::PalwTirPublicOriginalCustodyV1': ('reviewed-field-layout','40f7811c50a945484bf1e06ef0b5fae8099ad6d3d12fa49dd89f0cea519e0a9c'),
-'crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1': ('reviewed-field-layout','ab8b9172bfb20b31f9b8a708c55adad353b3b1f610b1539bc32a1b0d3226d46c'),
+'crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1': ('reviewed-field-layout','27800a9840ef4792cccbe7e22cf06f59c0cdda094f23ed517c074b5d068374dd'),
 'crate::palw_tir_public_owned_v1::PalwTirPublicChunkRecordV1': ('reviewed-field-layout','394604fa55e5ec254a05265c967a3604f9584f90505e54083bcd28b91b626d92'),
 'crate::palw_tir_public_owned_v1::PalwTirPublicContractV1': ('reviewed-field-layout','a37709c03faa51fcc923e9055aa29a280ab0b09ef3cfa086ef66997762cf745f'),
 'crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1': ('reviewed-field-layout','3466d969363509459096937bf38dc0ccc8c2c61ef4c3e28bef83585417e726cf'),

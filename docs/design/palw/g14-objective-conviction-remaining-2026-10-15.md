@@ -80,8 +80,9 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
    持つ original を拒否する（`prepare_original_v1`）。nested job-tail の割当前上限の全数監査は未。producer は TFP1 を quote → pledge 署名 →
    envelope の順で作る（`palw_tir_public_original_quote_v1` は admission と同じ `original_plan_v1` を使うので quote と受理が食い違わない）。
 5. context再導出helperのD=0拒否と、既存native routeが許す元FP形式・job種別・decode countの範囲を照合する。新carrierが合法な元形式を黙って落とす場合、対象を狭めて完成扱いせず対応を足す。
-   — **未（狭めた範囲を明記）**: frame の対象は「semantic stage 無し・greedy・tail 無しの FP V3 TIR job」に限定した。semantic（constraint /
-   tokenizer / prefix state）と sampling の original は frame 経路では拒否され、旧 ClaimBundle 経路のまま。
+   — **一部（ソースのみ・未検証、2026-10-16）**: frame は sampling（seeded Decision 11）・V4 pipeline（penalty/bias/stop）・semantic stage
+   （constraint / tokenizer / prefix state）を持つ original も受理する（下の R4 注記）。まだ拒否するのは job tail（eval/gen）と flat logits scheme の
+   class（selection pin が行全体を運ぶため bounded control に入らない、R7 の分割搬送待ち）で、それらは旧 ClaimBundle 経路のまま。
 6. V3/V4のtyped grant、共通filerからnative terminal、小さいrooted裁定参照／大witness搬送、実slash、生成資格と受信block拒否、全報酬consumerを完成させる。
    — **共通 filer → native terminal → 実 slash → 生成／報酬の拒否はソースで接続**（R4〜R6 の注記）。V3/V4 typed grant と大 witness 分割搬送は未。
 7. native worker／queue／inclusion、実CPU予約・反復上限、最大profile、GC、IBD／pruned import、再編で孤立した物理workのjournalを閉じる。
@@ -149,8 +150,8 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
 
 - [ ] generic arithmetic-only TIRも含め、元のpublic FP commitment、登録class/layout、binding、source、FullSUM、絶対期限を同じ受理文脈で固定する。
   — **実装（ソースのみ・未検証）**: `palw_tir_public_fold_v1.rs:71`（`prepare_paired_original_v1`）、`:124`（`prepare_original_v1`）、`:217`
-  （`install_original_v1`）、`objects.rs:3496`/`:3582`。X3 の hard deadline が frame の collect door より前なら拒否（`:241`）。semantic stage と
-  非 greedy の original は拒否（`:170`、範囲の限定）。
+  （`install_original_v1`）、`objects.rs:3496`/`:3582`。X3 の hard deadline が frame の collect door より前なら拒否。job tail と flat logits scheme の
+  original は拒否（範囲の限定）。semantic stage は ClaimBundle 契約を frame と同じ d0 に設置して受理（R4 の注記）。
 - [ ] resource identityと、受理DAAを含むallocation identityを区別し、元署名・元job・元input/output/state・artifactの差し替えを拒否する。
   — **実装（Codex、ソースのみ・未検証）**: `resource_plan_id`（pledge が署名）と `allocation_id`（受理 DAA を含む）を分離
   （`palw_tir_public_allocation_v1.rs:140`/`:142`）、差し替え拒否は `PalwTirPublicClaimV1::check_structure_v1` と
@@ -254,12 +255,24 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
   — **実装（ソースのみ・未検証）**: 証拠は元 root への opening と ID の EOF 認証のみで裁定し、program は state の登録値を native に埋める
   （carried program は拒否）。`adjudicate_original_v1`/`adjudicate_original_output_v1`（`palw_tir_objective_v1.rs:251`/`:103`）。
 - [ ] 計算、job、input、output、stateの各違反を既存の決定論的courtへ接続する。局所findingを、そのままportableな有罪certificateと扱わない。
-  — **一部**: 計算（cone/logits）、greedy selection（decode-token、`adjudicate_original_greedy_decode_v1` `:271`）、output identity、DA を frame の
-  native door で裁定（`apply_conviction_v1` `palw_tir_public_fold_v1.rs:589`）。finding は fold 内で再裁定してから funnel へ渡す。**未**: semantic
-  stage（constraint/tokenizer/prefix state）と sampling の court は frame に未接続 → それらを持つ original は受理しない（`:170`）。
+  — **一部→接続（ソースのみ・未検証、2026-10-16）**: 計算（cone/logits）、output identity、DA に加え、**selection と stop を original job 自身の規則で**
+  裁定する: `PalwTirSelectionRuleV1::of_job_v1`（`palw_tir_court_v1.rs`、`decoder_v1` と同じ選択: V3 は Decision 11 key、V4 は penalty/bias/ban
+  付き pipeline）と新 door `check_tir_decode_token_tiled_rule_v1`（認証は live greedy door と同一、比較は認証済み prefix 上の job の key。banned
+  lane の commit はそれ自体が fault。live の greedy door は不変）、`adjudicate_original_decode_v1`（`palw_tir_objective_v1.rs`）。stop 規則は Output
+  door で完全認証済み ID に `original_stop_rule_fault_v1`（V4 は `decode_answer_stop_v4`、V3 は budget 長）を適用し、output が一致しても stop
+  違反なら有罪（execution-proving）。**semantic stage**: frame は自身の allocation が既に価格付け・rebase した semantic component から
+  ClaimBundle 契約（staged semantic court が依拠するもの）を同じ d0 に設置する（`frame_semantic_bundle_v1`、prepare で検査し install で書く）。
+  producer の history pledge は TFP1 の新しい optional field `history_pledge` で運び（carrier walk が HFP1 と同じく元 object に対して認証し
+  claim で重複排除）、admission が署名と全 field（claim/producer/execution/job/cu_ruleset/`semantic_resource_plan_id`/history 容量/
+  acquisition custodian 上限/受理期限/material horizon）を再計算値と照合する。rent/deposit は frame の FullSUM が既に semantic を含むので二重に
+  払わない。semantic court が有罪にした claim の Valid custodian は ClaimBundle 経路と同じく `CourtFraud` void に基づく kind 3 で課金され、
+  frame の exit hold が collateral を残す。producer 側（kaspad の TFP1 経路）は semantic plan のとき history pledge を frame pledge と同じ受理期限・
+  horizon で署名して載せる。**未**: job tail と flat scheme（上記）。semantic court 側の G14 完全性（Panel 外 1 人で終局できるか）は ClaimBundle
+  経路の既存実装に依拠し、frame 経由での E2E は未。
 - [ ] claim、class、artifact、position、selector、sample／top-k等の意味、依存cone、元inputの完全なbindingを確認する。
-  — **一部**: claim/class/artifact/execution/trace/job は target で固定、依存 cone は cone 裁定が要求、greedy selection は decode-token。
-  sample/top-k 等は未接続のため対象外に限定（上記）。
+  — **一部（ソースのみ・未検証）**: claim/class/artifact/execution/trace/job は target で固定、依存 cone は cone 裁定が要求、selection は job 自身の
+  規則（seed・temperature・V4 penalty/bias/ban は original job から取り、filer は選べない）を認証済み prefix 上で、stop は完全認証済み ID 上で裁定。
+  V4 の選択は lane ごとの key の argmax で top-k/top-p は無いので、1 本の beating lane で反証できる。constraint mask は staged Constraint court。
 - [ ] 部分receiptや単一leafだけで、本来必要な依存閉包の認証・再計算を済ませたことにしない。
   — **実装（ソースのみ・未検証）**: cone 裁定は operand の opening を全て要求し、output 裁定は全 ID の EOF 認証が無ければ拒否
   （`authenticated_original_ids_v1` `:541`）。
@@ -337,7 +350,8 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
 - [ ] 大きなwitnessを既存の小さいterminal上限へ黙って切り詰めない。明示的に資金化した分割搬送、またはnative incremental courtから小さいrooted certificateを作る経路を完成する。
   — **未**: conviction は prepaid terminal witness 上限と control 90,000 B を超える primitive を拒否する（切り詰めない）。分割搬送・incremental court は未。
 - [ ] `Incomplete`、overflow、サイズ拒否を「そのfamilyは完成」に数えず、元の対象範囲を満たす経路を実装する。
-  — **未（範囲を明記）**: `Incomplete` と semantic/非 greedy は frame 受理を拒否する。対象 family の拡張は未。
+  — **一部（範囲を明記）**: `Incomplete`、job tail、flat logits scheme は frame 受理を拒否する（sampling / V4 / semantic は受理に拡張済み、
+  ソースのみ・未検証）。flat scheme は分割搬送（本節の上の項）待ち。
 
 ### R8. 再開・pruning・reorgと通常node運用を閉じる
 
