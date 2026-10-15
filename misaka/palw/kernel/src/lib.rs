@@ -217,9 +217,12 @@ pub mod flat_prepared39;
 
 pub mod flat_resources39;
 
+pub mod flat_detect39;
 pub mod flat_point39;
+pub mod flat_public39;
 
 pub mod flat_material39;
+pub mod flat_material_output39;
 
 pub mod flat_job39;
 
@@ -230,3 +233,5 @@ pub mod flat_pipeline39;
 pub mod flat_component_source39;
 
 pub mod flat_trace39;
+
+pub mod flat_invocation39;

@@ -212,7 +212,11 @@ pub fn derive_flat_resources_v39(source: &CheckedSourceV39, positions: u32) -> R
                 };
                 let amount = if contiguous { r.div_ceil(4096) + 1 } else { (*r).min(layout.leaves(0)) };
                 leaves = add(leaves, amount as u128)?;
-                let leaf = add(1024, mul(4096, sh.in_dtypes[i].width() as u128)?)?;
+                // Original large parameter trees can exceed sixteen levels;
+                // bind the exact largest row/column path before Fund.
+                let path = crate::merkle::depth(layout.leaves(0).max(layout.leaves(1))) as u128;
+                let framing = add(add(128, mul(shape.len() as u128, 8)?)?, mul(path, 64)?)?;
+                let leaf = add(framing, mul(4096, sh.in_dtypes[i].width() as u128)?)?;
                 bytes = add(bytes, mul(amount as u128, leaf)?)?;
                 work = add(work, mul(*r as u128, 1024)?)?;
                 scratch = add(scratch, add(mul(*r as u128, 64)?, mul(mul(amount as u128, 4096)?, 128)?)?)?;
@@ -300,7 +304,10 @@ pub fn derive_flat_resources_v39(source: &CheckedSourceV39, positions: u32) -> R
         maximum_leaves: court_leaves as u64,
         maximum_work: court_work as u64,
         maximum_scratch: court_scratch as u64,
-        parts: u16::try_from((court_bytes as u64).div_ceil(32 << 10)).map_err(|_| "resource39 court page count")?,
+        parts: u16::try_from(
+            (court_bytes as u64).checked_add(75).ok_or("resource39 whole filing wrapper overflow")?.div_ceil(32 << 10),
+        )
+        .map_err(|_| "resource39 court page count")?,
     };
     let vector = FlatResourceVectorV39 {
         version: 39,

@@ -137,6 +137,8 @@ def validate_plan(cohort: dict, plan: dict, cohort_sha: str) -> None:
         validate_contract(plan["receipt_window_contract"])
         from native_node_provenance_v1 import validate_specs
         validate_specs(plan["receipt_window_command"]["independent_audits"])
+        from native_receipt_live_acquisition_v2 import validate_live_collectors
+        validate_live_collectors(plan["receipt_window_command"]["independent_audits"])
         for audit in plan["receipt_window_command"]["independent_audits"]:
             validate_receipt_verifier(audit.get("receipt_proof_verifier"), plan["network"])
     for entry in members:
@@ -350,7 +352,8 @@ def execute_audit_pair(specs: list, context: dict, folder: Path, stage: str, out
             raise ValueError("producer pre-created independent auditor output")
         ctx = {**context, "audit_result": str(path.resolve()), "node_database": spec["node_database"],
                "operator_id": spec["operator_id"], "genesis": spec["genesis"], "network": spec["network"],
-               "audit_work_dir": str((folder / f"{stage}-independent-audit-{index}-work").resolve())}
+               "audit_work_dir": str((folder / f"{stage}-independent-audit-{index}-work").resolve()),
+               "live_collected": str((folder / f"receipt-live-{index}" / "collected").resolve())}
         code, seconds, error = run_command(spec, ctx, folder / f"{stage}-independent-audit-{index}.log")
         elapsed += seconds
         if code or error or not path.is_file() or path.stat().st_size > MAX_JSON:
@@ -387,7 +390,7 @@ def command_inputs_ok(spec: dict, argv: list[str]) -> bool:
     return True
 
 
-def run_command(spec: dict, context: dict[str, str], log: Path) -> tuple[int, float, str | None]:
+def run_command(spec: dict, context: dict[str, str], log: Path, cancel_event=None) -> tuple[int, float, str | None]:
     argv = []
     for value in spec["argv"]:
         # Expand whole-token placeholders only. Model text is never executable syntax.
@@ -410,6 +413,8 @@ def run_command(spec: dict, context: dict[str, str], log: Path) -> tuple[int, fl
         written = 0
         pipe_open = True
         while p.poll() is None or pipe_open:
+            if cancel_event is not None and cancel_event.is_set():
+                reason = "COMMAND_CANCELLED"
             if time.monotonic() - start > spec["timeout_seconds"]:
                 reason = "COMMAND_TIMEOUT"
             if pipe_open:
@@ -591,7 +596,11 @@ def run(cohort_path: Path, plan_path: Path, committed_plan_sha: str, out: Path) 
             ctx = {"evidence_root": str(out.resolve()), "result": str(candidate.resolve()),
                    "run_plan_sha256": run_sha, "cohort": str(cohort_path.resolve()),
                    "receipt_window_contract": str(contract_path.resolve())}
-            code, _, error = run_command(spec, ctx, out / "receipt-windows.log")
+            from native_receipt_live_acquisition_v2 import LiveReceiptCollectors
+            with LiveReceiptCollectors(spec["independent_audits"], contract, ctx, out):
+                code, _, error = run_command(spec, ctx, out / "receipt-windows.log")
+                if code or error:
+                    raise ValueError(error or "original receipt producer failed; cancel independent live acquisition")
             pointers = read_json(candidate) if candidate.is_file() else {}
             if (code or error or pointers.get("schema") != "misaka.rfc02.native-receipt-window-pointers.v1"
                     or pointers.get("stage") != "receipt-windows" or pointers.get("run_plan_sha256") != run_sha

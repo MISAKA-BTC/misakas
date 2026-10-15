@@ -74,17 +74,39 @@ fn catalog(r: &PalwKernelRouteStateV1, owner: &PalwBondKeyV2) -> Result<CatalogV
     let Some(raw) = r.aux.get(&(TABLE, key(5, owner))) else {
         return Ok(CatalogV39 { version: 39, ..Default::default() });
     };
-    if raw.len() > 4096 {
+    // Owning39 has separate paid catalog extents for complete models. A
+    // Mistral tower/projector/decoder can exceed eight components, while only
+    // eight uploads may be retained concurrently. Frozen old catalogs differ.
+    if raw.len() > 2 + 12 + 8 + (64 + 64 + 8) * 64 {
         return Err(refused("source39 catalog byte bound"));
     }
-    let c: CatalogV39 = borsh::from_slice(raw).map_err(|_| refused("source39 catalog grammar"))?;
-    if c.version != 39
-        || [&c.sources, &c.classes, &c.uploads]
-            .iter()
-            .any(|v| v.len() > 8 || v.iter().enumerate().any(|(i, id)| *id == [0; 64] || v[..i].contains(id)))
-    {
-        return Err(refused("source39 original bounded catalog differs"));
+    use std::io::Cursor;
+    let mut reader = Cursor::new(raw.as_slice());
+    let version = u16::deserialize_reader(&mut reader).map_err(|_| refused("source39 catalog version"))?;
+    let mut read_ids = |cap: usize| -> Result<Vec<Digest>, PalwStateV2Error> {
+        let count = u32::deserialize_reader(&mut reader).map_err(|_| refused("source39 catalog count"))? as usize;
+        if count > cap || count > raw.len().saturating_sub(reader.position() as usize) / 64 {
+            return Err(refused("source39 catalog original bounded prefix"));
+        }
+        let mut ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            let id = Digest::deserialize_reader(&mut reader).map_err(|_| refused("source39 catalog id"))?;
+            if id == [0; 64] || ids.contains(&id) {
+                return Err(refused("source39 duplicate/zero catalog identity"));
+            }
+            ids.push(id);
+        }
+        Ok(ids)
+    };
+    let sources = read_ids(64)?;
+    let classes = read_ids(64)?;
+    let uploads = read_ids(8)?;
+    drop(read_ids);
+    let next_upload = u64::deserialize_reader(&mut reader).map_err(|_| refused("source39 catalog original sequence"))?;
+    if version != 39 || reader.position() as usize != raw.len() {
+        return Err(refused("source39 catalog canonical extent/version"));
     }
+    let c = CatalogV39 { version, sources, classes, uploads, next_upload };
     Ok(c)
 }
 pub(super) fn source_header(r: &PalwKernelRouteStateV1, id: Digest) -> Result<SourceHeaderV39, PalwStateV2Error> {
@@ -370,7 +392,7 @@ fn upload_start(
     }
     let operator = bond.operator_id.as_bytes();
     let mut c = catalog(builder.state.kernel_route.as_ref().unwrap(), signer)?;
-    if c.next_upload != start.sequence || c.uploads.len() >= p.catalog_cap as usize || c.sources.len() >= p.catalog_cap as usize {
+    if c.next_upload != start.sequence || c.uploads.len() >= 8 || c.sources.len() >= p.catalog_cap as usize {
         return Err(refused("source39 original upload sequence/catalog exhausted"));
     }
     let next = c.next_upload.checked_add(1).ok_or_else(|| refused("source39 permanent upload sequence overflow"))?;

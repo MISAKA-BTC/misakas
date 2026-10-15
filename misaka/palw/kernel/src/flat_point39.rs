@@ -39,6 +39,18 @@ pub struct CheckedPointContextV39<'a> {
     inputs: &'a crate::flat_job39::ActualInputResolverV39<'a>,
 }
 impl<'a> CheckedPointContextV39<'a> {
+    pub fn prepared(&self) -> &PreparedV39<'a> {
+        &self.prepared
+    }
+    pub fn claim(&self) -> &FlatClaimV39 {
+        self.claim
+    }
+    pub fn inputs(&self) -> &crate::flat_job39::ActualInputResolverV39<'a> {
+        self.inputs
+    }
+    pub fn resources(&self) -> &CheckedFlatResourcesV39 {
+        &self.scope
+    }
     pub fn check(
         source: &'a CheckedSourceV39,
         maximum: &crate::flat_job39::CheckedJobMaximumV39,
@@ -98,7 +110,7 @@ fn bounded_count(r: &mut Cursor<&[u8]>, cap: usize) -> Result<usize, String> {
     }
     Ok(n as usize)
 }
-fn read_leaf39(r: &mut Cursor<&[u8]>, values: &mut usize, filing_bytes: usize) -> Result<LeafOpeningV3, String> {
+pub(crate) fn read_leaf39(r: &mut Cursor<&[u8]>, values: &mut usize, filing_bytes: usize) -> Result<LeafOpeningV3, String> {
     let tag = read::<u8>(r)?;
     let dtype = misaka_palw_tir::DType::ALL.into_iter().find(|d| d.tag() == tag).ok_or("point39 unknown leaf dtype")?;
     let rank = bounded_count(r, 4)?;

@@ -2471,10 +2471,11 @@ impl VirtualStateProcessor {
     ) -> Result<(kaspa_consensus_core::header::Header, kaspa_consensus_core::palw_state_proof_v1::PalwFactProofV1), String> {
         use kaspa_consensus_core::palw_state_proof_v1 as proof;
         let page39 = collection.starts_with(kaspa_consensus_core::palw_native_audit_page_v39::AUX_PAGE_PREFIX_V39.as_bytes());
+        let anchor39 = collection == kaspa_consensus_core::palw_native_state_anchor_v39::NATIVE_ANCHOR_LABEL_V39;
         if page39 {
             kaspa_consensus_core::palw_native_audit_page_v39::parse_aux_cursor_v39(collection)?;
         }
-        let import_before = if page39 {
+        let import_before = if page39 || anchor39 {
             let (generation, stable) = self.pruning_import_status().map_err(|e| e.to_string())?;
             if !stable || generation.active.is_some() {
                 return Err("audit39 original import generation is incomplete".into());
@@ -2483,6 +2484,11 @@ impl VirtualStateProcessor {
         } else {
             None
         };
+        if (page39 || anchor39)
+            && self.statuses_store.read().get(block).ok() != Some(kaspa_consensus_core::blockstatus::BlockStatus::StatusUTXOValid)
+        {
+            return Err("audit39 requires an immutable fully UTXO-validated original child".into());
+        }
         if self.palw_state_params_v2.is_none() {
             return Err("this network has no PALW V2 state".to_string());
         }
@@ -2506,7 +2512,8 @@ impl VirtualStateProcessor {
             .ok_or_else(|| format!("this node cannot establish the PALW state as-of {parent}, the selected parent of {block}"))?;
         if (collection == kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_AUX_LABEL_V32
             || collection == kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32
-            || page39)
+            || page39
+            || anchor39)
             && at != parent
         {
             return Err("native audit32 requires the exact selected-parent anchor, not a store-tip fallback".into());
@@ -2518,6 +2525,38 @@ impl VirtualStateProcessor {
                 "the state this node holds as-of {parent} commits {}, and the header of {block} commits {}: nothing is served",
                 self.palw_committed_root_v1(&state),
                 header.palw_state_root
+            ));
+        }
+        if anchor39 {
+            let active = kaspa_consensus_core::palw_fork_choice_commitment_v1::palw_fork_choice_committed_at_v1(
+                self.palw_fork_choice_commitment_v1,
+                state.last_point().map(|p| p.daa_score),
+            );
+            let leaf = if active {
+                kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceLeafV1::of(&state)
+                    .ok_or("anchor39 original post-state point absent")?
+                    .encode()
+            } else {
+                vec![]
+            };
+            let capsule = kaspa_consensus_core::palw_native_state_anchor_v39::NativeStateEnvelopeV39 { version: 39, leaf };
+            let opening = proof::PalwStateOpeningV1::of(&state);
+            if opening.preimage.len() > 4 << 20 {
+                return Err("anchor39 original state preimage profile exceeded".into());
+            }
+            let (after, stable) = self.pruning_import_status().map_err(|e| e.to_string())?;
+            if !stable || after.active.is_some() || import_before.as_ref().is_none_or(|before| before.epoch != after.epoch) {
+                return Err("anchor39 original import generation changed".into());
+            }
+            return Ok((
+                (*header).clone(),
+                proof::PalwFactProofV1 {
+                    state: opening,
+                    collection: proof::PalwCollectionOpeningV1 {
+                        label: collection.to_vec(),
+                        rows: vec![(vec![], borsh::to_vec(&capsule).map_err(|e| e.to_string())?)],
+                    },
+                },
             ));
         }
         if page39 {

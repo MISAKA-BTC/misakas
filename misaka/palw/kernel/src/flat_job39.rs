@@ -9,8 +9,21 @@ use crate::{
 use borsh::{BorshDeserialize, BorshSerialize};
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum RequestStopV39 {
-    Fixed { positions: u32, tokens: Vec<u32> },
-    Decode { prompt: Vec<u32>, requested_new_tokens: u32, eos: Vec<u32> },
+    Fixed {
+        positions: u32,
+        tokens: Vec<u32>,
+    },
+    Decode {
+        prompt: Vec<u32>,
+        requested_new_tokens: u32,
+        eos: Vec<u32>,
+    },
+    /// Upstream actual IDs are already Final, while the original Master
+    /// requested maximum remains reserved without an EOS-dependent release.
+    Derived {
+        maximum_positions: u32,
+        tokens: Vec<u32>,
+    },
 }
 impl RequestStopV39 {
     pub fn maximum_positions(&self) -> Result<u32, String> {
@@ -20,6 +33,12 @@ impl RequestStopV39 {
                     return Err("job39 original fixed position/token contract".into());
                 }
                 Ok(*positions)
+            }
+            Self::Derived { maximum_positions, tokens } => {
+                if tokens.is_empty() || tokens.len() > *maximum_positions as usize {
+                    return Err("job39 derived actual tokens exceed original Master maximum".into());
+                }
+                Ok(*maximum_positions)
             }
             Self::Decode { prompt, requested_new_tokens, eos } => {
                 if prompt.is_empty()
@@ -40,7 +59,7 @@ impl RequestStopV39 {
     }
     pub fn actual_tokens(&self, generated: &[u32], bound: u32) -> Result<Vec<u32>, String> {
         let tokens = match self {
-            Self::Fixed { tokens, .. } => {
+            Self::Fixed { tokens, .. } | Self::Derived { tokens, .. } => {
                 if !generated.is_empty() {
                     return Err("job39 fixed stage cannot supply future decoder IDs".into());
                 }
@@ -133,7 +152,7 @@ impl CheckedJobMaximumV39 {
                     return Err("job39 source output/decode token contract".into());
                 }
             }
-            RequestStopV39::Fixed { tokens, .. } => {
+            RequestStopV39::Fixed { tokens, .. } | RequestStopV39::Derived { tokens, .. } => {
                 if tokens.iter().any(|t| *t >= p.token_bound) {
                     return Err("job39 original fixed token range".into());
                 }
@@ -144,7 +163,13 @@ impl CheckedJobMaximumV39 {
                 (InputBindingV39::Material { descriptor, selection }, misaka_palw_tir::program_v2::InputSource::External { .. }) => {
                     let expected = match selection {
                         MaterialSelectionV39::Whole => d.shape.clone(),
-                        MaterialSelectionV39::RowAtPosition => std::iter::once(positions).chain(d.shape.iter().copied()).collect(),
+                        MaterialSelectionV39::RowAtPosition => {
+                            let material_positions = match &r.stop {
+                                RequestStopV39::Derived { tokens, .. } => tokens.len() as u32,
+                                _ => positions,
+                            };
+                            std::iter::once(material_positions).chain(d.shape.iter().copied()).collect()
+                        }
                     };
                     if descriptor.input as usize != input
                         || descriptor.source != source.root()
@@ -323,73 +348,145 @@ impl<'a> ActualInputResolverV39<'a> {
     }
 }
 
+/// Online production reads original maximum-bound inputs, never fabricated
+/// future generated IDs. This provider is not an actual claim/root authority;
+/// after generation ActualInputResolver39 must independently derive all actual
+/// IDs/roots before trace/court/native Commit.
+pub struct GenerationInputProviderV39<'a> {
+    source: &'a CheckedSourceV39,
+    maximum: &'a CheckedJobMaximumV39,
+    reader: &'a dyn crate::flat_material39::MaterialPageReaderV39,
+}
+impl<'a> GenerationInputProviderV39<'a> {
+    pub fn derive(
+        source: &'a CheckedSourceV39,
+        maximum: &'a CheckedJobMaximumV39,
+        reader: &'a dyn crate::flat_material39::MaterialPageReaderV39,
+    ) -> Result<Self, String> {
+        if maximum.request().source != source.root()
+            || maximum.input_manifest().source != source.root()
+            || maximum.request().input_manifest != maximum.input_manifest().root()
+            || derive_flat_resources_v39(source, maximum.maximum_positions())?.root() != maximum.resources().root()
+        {
+            return Err("generation39 original source/maximum/material scope differs".into());
+        }
+        Ok(Self { source, maximum, reader })
+    }
+    pub fn read_input_range(&self, position: u32, input: u8, offset: u64, count: usize) -> Result<Vec<i128>, String> {
+        original_input_range_v39(
+            self.source,
+            self.maximum,
+            self.reader,
+            self.maximum.maximum_positions(),
+            position,
+            input,
+            offset,
+            count,
+        )
+    }
+    pub fn input_tensor(&self, position: u32, input: u8) -> Result<misaka_palw_tir::Tensor, String> {
+        original_input_tensor_v39(self.source, position, input, |p, i, o, n| self.read_input_range(p, i, o, n))
+    }
+}
+fn original_input_range_v39(
+    source: &CheckedSourceV39,
+    maximum: &CheckedJobMaximumV39,
+    reader: &dyn crate::flat_material39::MaterialPageReaderV39,
+    positions: u32,
+    position: u32,
+    input: u8,
+    offset: u64,
+    count: usize,
+) -> Result<Vec<i128>, String> {
+    if position >= positions || count > 4096 {
+        return Err("input39 original bounded position/range".into());
+    }
+    let d = source.program().inputs.get(input as usize).ok_or("input39 declaration absent")?;
+    let cells = d.shape.iter().try_fold(1u64, |n, d| n.checked_mul(*d as u64)).ok_or("input39 cell product")?;
+    if offset.checked_add(count as u64).is_none_or(|end| end > cells) {
+        return Err("input39 exact original element range".into());
+    }
+    let b = &maximum.input_manifest().bindings[input as usize];
+    let values = match b {
+        InputBindingV39::Material { descriptor, selection } => {
+            let base = match selection {
+                MaterialSelectionV39::Whole => 0,
+                MaterialSelectionV39::RowAtPosition => (position as u64).checked_mul(cells).ok_or("input39 row range overflow")?,
+            };
+            let width = d.dtype.width();
+            let at = base.checked_add(offset).and_then(|n| n.checked_mul(width as u64)).ok_or("input39 byte offset overflow")?;
+            let raw = crate::flat_material39::read_material_range_v39(
+                descriptor,
+                reader,
+                at,
+                count.checked_mul(width).ok_or("input39 byte range overflow")?,
+            )?;
+            raw.chunks_exact(width).map(|b| d.dtype.decode_le(b)).collect::<Vec<_>>()
+        }
+        InputBindingV39::Random { seed, domain, per_step } => {
+            let misaka_palw_tir::program_v2::InputSource::Random { dist, .. } = d.source else {
+                return Err("input39 source random origin mismatch".into());
+            };
+            let mut values = Vec::with_capacity(count);
+            for lane in offset..offset + count as u64 {
+                let word = misaka_palw_gen::rand_word_v1(*domain, seed, if *per_step { position } else { 0 }, 0, lane)
+                    .map_err(|e| e.to_string())?;
+                values.push(match dist {
+                    misaka_palw_tir::program_v2::RandomDist::Uniform { .. } => word as i128,
+                    misaka_palw_tir::program_v2::RandomDist::Normal => misaka_palw_gen::gauss_q24_v1(word as u16) as i128,
+                });
+            }
+            values
+        }
+    };
+    let (lo, hi) = d.interval();
+    if values.len() != count || values.iter().any(|v| *v < lo || *v > hi) {
+        return Err("input39 actual original source interval violated".into());
+    }
+    Ok(values)
+}
+fn original_input_tensor_v39(
+    source: &CheckedSourceV39,
+    position: u32,
+    input: u8,
+    mut range: impl FnMut(u32, u8, u64, usize) -> Result<Vec<i128>, String>,
+) -> Result<misaka_palw_tir::Tensor, String> {
+    let d = source.program().inputs.get(input as usize).ok_or("input39 original tensor declaration absent")?;
+    let cells = d.shape.iter().try_fold(1u64, |n, d| n.checked_mul(*d as u64)).ok_or("input39 tensor product")?;
+    if cells.checked_mul(16).is_none_or(|n| n > source.profile().max_input_expanded_bytes) {
+        return Err("input39 tensor exceeds original expanded profile before allocation".into());
+    }
+    let count = usize::try_from(cells).map_err(|_| "input39 tensor platform extent")?;
+    let mut data = Vec::new();
+    data.try_reserve_exact(count).map_err(|_| "input39 bounded tensor reservation")?;
+    let mut at = 0;
+    while at < count {
+        let n = (count - at).min(4096);
+        let values = range(position, input, at as u64, n)?;
+        if values.len() != n {
+            return Err("input39 exact range extent".into());
+        }
+        data.extend(values);
+        at += n;
+    }
+    misaka_palw_tir::Tensor::new(d.dtype, d.shape.iter().map(|d| *d as usize).collect(), data).map_err(|e| e.to_string())
+}
 impl ActualInputResolverV39<'_> {
     pub fn read_input_range(&self, position: u32, input: u8, offset: u64, count: usize) -> Result<Vec<i128>, String> {
-        if position as usize >= self.tokens.len() || count > 4096 {
-            return Err("input39 original bounded position/range".into());
-        }
-        let d = self.source.program().inputs.get(input as usize).ok_or("input39 declaration absent")?;
-        let cells = d.shape.iter().try_fold(1u64, |n, d| n.checked_mul(*d as u64)).ok_or("input39 cell product")?;
-        if offset.checked_add(count as u64).is_none_or(|end| end > cells) {
-            return Err("input39 exact original element range".into());
-        }
-        let b = &self.maximum.input_manifest().bindings[input as usize];
-        let values = match b {
-            InputBindingV39::Material { descriptor, selection } => {
-                let base = match selection {
-                    MaterialSelectionV39::Whole => 0,
-                    MaterialSelectionV39::RowAtPosition => (position as u64).checked_mul(cells).ok_or("input39 row range overflow")?,
-                };
-                let width = d.dtype.width();
-                let at = base.checked_add(offset).and_then(|n| n.checked_mul(width as u64)).ok_or("input39 byte offset overflow")?;
-                let raw = crate::flat_material39::read_material_range_v39(
-                    descriptor,
-                    self.reader,
-                    at,
-                    count.checked_mul(width).ok_or("input39 byte range overflow")?,
-                )?;
-                raw.chunks_exact(width).map(|b| d.dtype.decode_le(b)).collect::<Vec<_>>()
-            }
-            InputBindingV39::Random { seed, domain, per_step } => {
-                let misaka_palw_tir::program_v2::InputSource::Random { dist, .. } = d.source else {
-                    return Err("input39 source random origin mismatch".into());
-                };
-                let mut values = Vec::with_capacity(count);
-                for lane in offset..offset + count as u64 {
-                    let word = misaka_palw_gen::rand_word_v1(*domain, seed, if *per_step { position } else { 0 }, 0, lane)
-                        .map_err(|e| e.to_string())?;
-                    values.push(match dist {
-                        misaka_palw_tir::program_v2::RandomDist::Uniform { .. } => word as i128,
-                        misaka_palw_tir::program_v2::RandomDist::Normal => misaka_palw_gen::gauss_q24_v1(word as u16) as i128,
-                    });
-                }
-                values
-            }
-        };
-        let (lo, hi) = d.interval();
-        if values.len() != count || values.iter().any(|v| *v < lo || *v > hi) {
-            return Err("input39 actual original source interval violated".into());
-        }
-        Ok(values)
+        original_input_range_v39(self.source, self.maximum, self.reader, self.tokens.len() as u32, position, input, offset, count)
+    }
+    pub fn input_tensor(&self, position: u32, input: u8) -> Result<misaka_palw_tir::Tensor, String> {
+        original_input_tensor_v39(self.source, position, input, |p, i, o, n| self.read_input_range(p, i, o, n))
     }
 }
 impl misaka_palw_tir::interp_v2::InputProvider for ActualInputResolverV39<'_> {
     fn input(&self, k: u16, pos: u32) -> Option<misaka_palw_tir::Tensor> {
-        let input = u8::try_from(k).ok()?;
-        let d = self.source.program().inputs.get(k as usize)?;
-        let cells = d.shape.iter().try_fold(1u64, |n, d| n.checked_mul(*d as u64))?;
-        if cells.checked_mul(16)? > self.source.profile().max_input_expanded_bytes {
-            return None;
-        }
-        let count = usize::try_from(cells).ok()?;
-        let mut data = Vec::with_capacity(count);
-        let mut at = 0usize;
-        while at < count {
-            let n = (count - at).min(4096);
-            data.extend(self.read_input_range(pos, input, at as u64, n).ok()?);
-            at += n;
-        }
-        misaka_palw_tir::Tensor::new(d.dtype, d.shape.iter().map(|d| *d as usize).collect(), data).ok()
+        self.input_tensor(pos, u8::try_from(k).ok()?).ok()
+    }
+}
+impl misaka_palw_tir::interp_v2::InputProvider for GenerationInputProviderV39<'_> {
+    fn input(&self, k: u16, pos: u32) -> Option<misaka_palw_tir::Tensor> {
+        self.input_tensor(pos, u8::try_from(k).ok()?).ok()
     }
 }
 
@@ -410,6 +507,7 @@ impl JobMaximumV39 {
         let stop = match r.get::<u8>()? {
             0 => RequestStopV39::Fixed { positions: r.get()?, tokens: r.words(1 << 21)? },
             1 => RequestStopV39::Decode { prompt: r.words(1 << 21)?, requested_new_tokens: r.get()?, eos: r.words(256)? },
+            2 => RequestStopV39::Derived { maximum_positions: r.get()?, tokens: r.words(1 << 21)? },
             _ => return Err("job39 unknown original stop contract".into()),
         };
         let input_manifest = r.get()?;

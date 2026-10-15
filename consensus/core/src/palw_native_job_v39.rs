@@ -975,3 +975,64 @@ impl CheckedNativeFundingV39 {
         &self.original
     }
 }
+#[derive(Clone, Copy, Debug)]
+pub struct BorrowedNativeProofPartV39<'a> {
+    pub mode: u8,
+    pub job: Digest,
+    pub seal: Digest,
+    pub index: u16,
+    pub count: u16,
+    pub total: u32,
+    pub body: &'a [u8],
+}
+pub fn borrowed_native_proof_part_v39(raw: &[u8]) -> Option<BorrowedNativeProofPartV39<'_>> {
+    if raw.len() < 143 || raw.len() > 143 + (32 << 10) || raw[..2] != 39u16.to_le_bytes() {
+        return None;
+    }
+    let mode = raw[2];
+    let index = u16::from_le_bytes(raw[131..133].try_into().ok()?);
+    let count = u16::from_le_bytes(raw[133..135].try_into().ok()?);
+    let total = u32::from_le_bytes(raw[135..139].try_into().ok()?);
+    let n = u32::from_le_bytes(raw[139..143].try_into().ok()?) as usize;
+    if mode > 1
+        || count == 0
+        || count > 2048
+        || total == 0
+        || total > 64 << 20
+        || count as u64 != (total as u64).div_ceil(32 << 10)
+        || mode == 0 && (index >= count || n != raw.len() - 143)
+        || mode == 1 && (index != 0 || n != 0 || raw.len() != 143)
+    {
+        return None;
+    }
+    Some(BorrowedNativeProofPartV39 {
+        mode,
+        job: raw[3..67].try_into().ok()?,
+        seal: raw[67..131].try_into().ok()?,
+        index,
+        count,
+        total,
+        body: &raw[143..],
+    })
+}
+/// Permanent original single-credit anchor. It identifies one job-specific
+/// actual payout queue, surviving queue drain and job metadata collection.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeSingleCreditV39 {
+    pub version: u16,
+    pub job: Digest,
+    pub funding: Digest,
+    pub terminal: Digest,
+    pub settlement: Digest,
+    pub claim: Option<Digest>,
+    pub recipient: PalwBondKeyV2,
+    pub payout: kaspa_hashes::Hash64,
+    pub queue: kaspa_hashes::Hash64,
+    pub amount: u64,
+    pub established: u64,
+}
+impl NativeSingleCreditV39 {
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/native/original-actual-single-credit/v39", self)
+    }
+}

@@ -252,3 +252,88 @@ impl SourceShardV39 {
         Ok(())
     }
 }
+/// Fixed native-cache answer path. Expected plan/root/subject membership comes
+/// from the original Fund header, never this answer carrier. It consumes only an
+/// ALREADY admitted39 obligation; it cannot create any grant or reservation.
+pub fn debit_native_cached_answer_v39(
+    policy: &QuotaPolicyV11,
+    epoch: &TrustedEpochV11,
+    record: &SourcePlanRecordV39,
+    expected_plan: &Digest,
+    global: &QuotaGlobalRowV11,
+    global_root: &Digest,
+    producer: (&QuotaActorRowV11, &Digest),
+    subject: (&QuotaSubjectSummaryV11, &Digest),
+    obligation: (&SourceObligationV39, &Digest),
+    carrier_bytes: u64,
+) -> Result<SourceShardV39, String> {
+    policy.check()?;
+    epoch.check(policy)?;
+    let selected = CheckedQuotaShardV11::from_native_rows(
+        policy,
+        global,
+        global_root,
+        producer.0.actor,
+        subject.0.binding.job_id,
+        None,
+        Some(producer),
+        Some(subject),
+        None,
+    )?;
+    let s = selected.subject_row().ok_or("cached source39 original subject absent")?.clone();
+    let mut a = selected.actor_row();
+    let mut g = global.clone();
+    let mut row = obligation.0.clone();
+    let stored = record.answer.checked_mul(row.attempts)?;
+    if record.version != 39
+        || record.root() != *expected_plan
+        || record.quota != s.binding.quota_plan_root
+        || record.class != s.binding.class_id
+        || record.maximum != s.binding.job_input_root
+        || record.parameter != s.binding.parameter_root
+        || record.requests == 0
+        || record.answer_attempts != 2
+        || record.answer_parts != 4
+        || record.answer_bytes != 128 << 10
+        || row.root() != *obligation.1
+        || row.version != 39
+        || row.job != s.binding.job_id
+        || row.subject != s.binding.root()
+        || row.plan != *expected_plan
+        || row.producer != a.actor
+        || row.producer != s.binding.producer
+        || row.consent == [0; 64]
+        || row.producer_operator == [0; 64]
+        || row.interval != s.binding.admitted_interval
+        || row.deadline != s.binding.deadline_daa
+        || row.interval != epoch.network_interval
+        || g.epoch.network_interval != epoch.network_interval
+        || a.network_interval != epoch.network_interval
+        || !a.active
+        || s.closed
+        || row.retired
+        || epoch.block_daa > row.deadline
+        || epoch.block_daa < g.epoch.block_daa
+        || epoch.block_hash == g.epoch.block_hash && *epoch != g.epoch
+        || carrier_bytes > record.answer_bytes as u64
+        || row.units > record.requests
+        || row.attempts >= row.units.checked_mul(2).ok_or("cached source39 attempts overflow")?
+        || row.remaining != record.total.checked_sub(&stored)?
+        || row.consumed.checked_add(&row.remaining)? != row.committed
+    {
+        return Err("cached source39 lacks original admitted native plan/producer/unit/conservation".into());
+    }
+    row.remaining.checked_add(&s.guarantee_remaining)?.within(&a.interval.reserved)?;
+    row.remaining.checked_add(&s.guarantee_remaining)?.within(&g.network.reserved)?;
+    if g.epoch.block_hash != epoch.block_hash {
+        g.block.consumed = QuotaQuantitiesV11::default();
+    }
+    g.block = g.block.consume(&record.answer, &policy.block)?;
+    g.network = g.network.consume(&record.answer, &policy.network)?;
+    a.interval = a.interval.consume(&record.answer, &policy.actor)?;
+    g.epoch = epoch.clone();
+    row.attempts += 1;
+    row.consumed = row.consumed.checked_add(&record.answer)?;
+    row.remaining = row.remaining.checked_sub(&record.answer)?;
+    Ok(SourceShardV39 { global: g, producer: a, subject: s, row: Some(row) })
+}

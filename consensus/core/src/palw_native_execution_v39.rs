@@ -9,7 +9,7 @@ use misaka_palw_kernel::{
 };
 
 pub const NATIVE_ACTION_FIRST_V39: u8 = 41;
-pub const NATIVE_ACTION_LAST_V39: u8 = 66;
+pub const NATIVE_ACTION_LAST_V39: u8 = 70;
 pub const REGISTER_SOURCE_ACTION_V39: u8 = 41;
 pub const REGISTER_CLASS_ACTION_V39: u8 = 42;
 pub const SOURCE_START_ACTION_V39: u8 = 57;
@@ -88,6 +88,10 @@ pub fn source_protocol_root_v39() -> Digest {
             58u8,
             59u8,
             60u8,
+            NATIVE_ACTION_LAST_V39,
+            crate::palw_native_master_v39::MASTER_REGISTER_MAX_BYTES_V39 as u64,
+            64u16,
+            8u8,
             SOURCE_PART_BYTES_V39 as u64,
             SOURCE_UPLOAD_MAX_BYTES_V39 as u64,
             misaka_palw_kernel::flat_resources39::ordinary_court_id_v39(),
@@ -121,7 +125,7 @@ impl NativeExecutionPoliciesV39 {
             || self.maximum_horizon == 0
             || self.maximum_horizon >= self.execution.quota.interval_daa
             || self.catalog_cap == 0
-            || self.catalog_cap > 8
+            || self.catalog_cap > 64
         {
             return Err(
                 "native39 requires original network/shared quota/Final/physical/source authority and bounded catalog/horizon".into()

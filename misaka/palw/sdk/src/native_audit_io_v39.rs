@@ -149,3 +149,70 @@ pub fn read_native_aux_stream_v39(
     });
     verify_native_aux_stream_v39(&state, pinned_inner, h.total_rows, rows, reader.clone())
 }
+
+/// Complete39 root authority: a streamed original aux image AND its exact
+/// pinned child/selected-parent state envelope under the auditor's own Params.
+/// This is not a native execution, payout, chain-selection or A6 authority.
+pub struct AnchoredNativeAuxStreamV39 {
+    anchor: kaspa_consensus_core::palw_native_state_anchor_v39::CheckedNativeStateAnchorV39,
+    auxiliary: VerifiedNativeAuxRowsV39<NativeCasAuxReaderV39>,
+}
+impl AnchoredNativeAuxStreamV39 {
+    pub fn anchor(&self) -> &kaspa_consensus_core::palw_native_state_anchor_v39::CheckedNativeStateAnchorV39 {
+        &self.anchor
+    }
+    pub fn auxiliary(&self) -> &VerifiedNativeAuxRowsV39<NativeCasAuxReaderV39> {
+        &self.auxiliary
+    }
+}
+pub fn read_native_aux_stream_anchored_v39(
+    evidence_root: &Path,
+    index_path: &Path,
+    child_header_path: &Path,
+    parent_header_path: &Path,
+    envelope_path: &Path,
+    pinned_child: Hash64,
+    pinned_parent: Hash64,
+    parameters: &kaspa_consensus_core::config::params::Params,
+) -> Result<AnchoredNativeAuxStreamV39, String> {
+    let root = evidence_root.canonicalize().map_err(|e| e.to_string())?;
+    let bounded = |path: &Path, cap: usize| -> Result<Vec<u8>, String> {
+        let real = path.canonicalize().map_err(|e| e.to_string())?;
+        if !real.starts_with(&root) {
+            return Err("audit39 original anchor path escapes evidence root".into());
+        }
+        crate::native_audit_io_v32::read_bounded_file_v32(&real, cap)
+    };
+    let child: kaspa_consensus_core::header::Header =
+        serde_json::from_slice(&bounded(child_header_path, 4 << 20)?).map_err(|e| e.to_string())?;
+    let parent: kaspa_consensus_core::header::Header =
+        serde_json::from_slice(&bounded(parent_header_path, 4 << 20)?).map_err(|e| e.to_string())?;
+    let envelope =
+        kaspa_consensus_core::palw_native_state_anchor_v39::NativeStateEnvelopeV39::from_bytes(&bounded(envelope_path, 1030)?)?;
+    let index = index_path.canonicalize().map_err(|e| e.to_string())?;
+    if !index.starts_with(&root) {
+        return Err("audit39 original anchor index escapes evidence root".into());
+    }
+    let mut file = BufReader::new(std::fs::File::open(&index).map_err(|e| e.to_string())?);
+    let first = line(&mut file, 4096)?.ok_or("audit39 original state index missing")?;
+    let header: AuxStreamHeaderV39 = serde_json::from_slice(&first).map_err(|e| e.to_string())?;
+    if header.schema != "misaka.palw.native-aux-stream.v39" {
+        return Err("audit39 original owning index schema".into());
+    }
+    let pool = relative(&root, &header.objects)?;
+    let state = PalwStateOpeningV1 { preimage: object(&pool, &header.state, 4 << 20)? };
+    let anchor = kaspa_consensus_core::palw_native_state_anchor_v39::check_native_state_anchor_v39(
+        &child,
+        pinned_child,
+        &parent,
+        pinned_parent,
+        parameters,
+        &state,
+        &envelope,
+    )?;
+    let auxiliary = read_native_aux_stream_v39(&root, &index, anchor.inner())?;
+    if auxiliary.state_root() != anchor.inner() {
+        return Err("audit39 original envelope and full aux anchors differ".into());
+    }
+    Ok(AnchoredNativeAuxStreamV39 { anchor, auxiliary })
+}

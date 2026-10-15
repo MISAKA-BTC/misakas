@@ -13,7 +13,7 @@ fn run()->Result<(),String>{
     let base:Params=network.parse::<NetworkId>().map_err(|e|e.to_string())?.into();
     let own=match(file,pin,sha){(None,None,None)=>misaka_palw_sdk::native_params_v34::OwnedNativeParametersV34::shipped_preset(base),
         (Some(f),Some(p),Some(s))=>misaka_palw_sdk::native_params_v34::load_own_native_parameters_v34(&base,Path::new(&f),p.parse::<Hash64>().map_err(|e|e.to_string())?.as_bytes(),misaka_palw_sdk::native_params_v34::parse_sha256_hex_v34(&s)?)?,_=>return Err("all owning pins required".into())};
-    if !a.is_empty()||maximum==0||maximum>43200||out.exists()||!own.rfc02_qualified(){return Err("fresh qualified bounded native clock observer required".into());}
+    if !a.is_empty()||maximum==0||maximum>604800||out.exists()||!own.rfc02_qualified(){return Err("fresh qualified bounded native clock observer required".into());}
     let contract:misaka_palw_sdk::native_receipt_windows_v1::ReceiptWindowContractV1=serde_json::from_slice(&misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(&contract,4<<20)?).map_err(|e|e.to_string())?;contract.check()?;
     let start=contract.windows[0].start_daa;let end=contract.windows.iter().map(|w|w.end_daa+w.maximum_final_lag_daa).max().unwrap();
     let rt=tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().map_err(|e|e.to_string())?;

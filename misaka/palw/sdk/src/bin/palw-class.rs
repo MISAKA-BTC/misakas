@@ -651,6 +651,85 @@ fn run(args: &[String]) -> Result<(), String> {
             println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
             Ok(())
         }
+        "prepare-material39" => {
+            let seed = PathBuf::from(take_flag(&mut args, "--seed-borsh").ok_or("--seed-borsh required")?);
+            let raw = PathBuf::from(take_flag(&mut args, "--raw").ok_or("--raw actual typed tensor required")?);
+            let sha = take_flag(&mut args, "--raw-sha256").ok_or("--raw-sha256 independent original pin required")?;
+            let sha: [u8; 32] = misaka_palw_tir_lower::frontend_pack::program::unhex(&sha, 32)
+                .map_err(|e| e.to_string())?
+                .try_into()
+                .map_err(|_| "raw SHA length")?;
+            let start =
+                take_flag(&mut args, "--start-daa").ok_or("--start-daa required")?.parse::<u64>().map_err(|e| e.to_string())?;
+            let deadline =
+                take_flag(&mut args, "--deadline-daa").ok_or("--deadline-daa required")?.parse::<u64>().map_err(|e| e.to_string())?;
+            let workspace = take_flag(&mut args, "--workspace-bytes")
+                .ok_or("--workspace-bytes explicit commitment budget required")?
+                .parse::<u64>()
+                .map_err(|e| e.to_string())?;
+            let out = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out fresh directory required")?);
+            if !args.is_empty() || network.is_some() {
+                return Err("prepare-material39 is offline and requires exact options".into());
+            }
+            let seed = misaka_palw_sdk::native_material_v39::MaterialSeedV39::from_bytes(
+                &misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(&seed, 2048)?,
+            )?;
+            let file =
+                misaka_palw_sdk::native_material_v39::CheckedMaterialFileV39::open(&raw, sha, &seed, start, deadline, workspace)?;
+            file.write_plan(&out)?;
+            println!(
+                "{}",
+                serde_json::json!({"schema":"misaka.palw.material39-prepared","plan":misaka_palw_sdk::runtime_pack::commit::hex(&file.plan().root()),"native_sealed":"NOT_RUN","native_final":"NOT_RUN"})
+            );
+            Ok(())
+        }
+        "bind-mistral-request39" => {
+            let mut input = |name: &str| -> Result<(PathBuf, [u8; 32]), String> {
+                let path = PathBuf::from(take_flag(&mut args, name).ok_or_else(|| format!("{name} required"))?);
+                let flag = format!("{name}-sha256");
+                let sha = take_flag(&mut args, &flag).ok_or_else(|| format!("{flag} independently pinned input required"))?;
+                let sha = misaka_palw_tir_lower::frontend_pack::program::unhex(&sha, 32)
+                    .map_err(|e| e.to_string())?
+                    .try_into()
+                    .map_err(|_| "input SHA length")?;
+                Ok((path, sha))
+            };
+            let (bundle_path, bundle_sha) = input("--complete-source")?;
+            let (contract_path, contract_sha) = input("--image-contract")?;
+            let (request_path, request_sha) = input("--original-request")?;
+            let directory =
+                PathBuf::from(take_flag(&mut args, "--request-directory").ok_or("--request-directory source raw images required")?);
+            let out = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out fresh directory required")?);
+            if !args.is_empty() || network.is_some() || out.exists() {
+                return Err("bind-mistral-request39 requires exact offline inputs and fresh output".into());
+            }
+            use sha2::Digest as _;
+            let raw = misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(
+                &bundle_path,
+                misaka_palw_kernel::flat_component_source39::MAX_COMPLETE_SOURCE_BYTES_V39,
+            )?;
+            if <[u8; 32]>::from(sha2::Sha256::digest(&raw)) != bundle_sha {
+                return Err("complete source39 independent SHA differs".into());
+            }
+            let bundle = misaka_palw_kernel::flat_component_source39::CompleteSourceBundleV39::from_bytes(&raw)?.check()?;
+            let checked = misaka_palw_sdk::full_component_v28::source39::request41::bind_original_mistral_request_v41(
+                &bundle,
+                &contract_path,
+                contract_sha,
+                &request_path,
+                request_sha,
+                &directory,
+            )?;
+            std::fs::create_dir(&out).map_err(|e| e.to_string())?;
+            std::fs::write(out.join("decoder-stop39.borsh"), borsh::to_vec(checked.stop()).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+            let hex = misaka_palw_sdk::runtime_pack::commit::hex;
+            let report = serde_json::json!({"schema":"misaka.palw.bound-original-multimodal-request.v41","complete_source":hex(&checked.complete_source()),"image_contract":hex(&checked.contract()),"request_sha256":hex(&checked.request_sha256()),"decoder_source":hex(&checked.decoder_source()),"images":checked.images().iter().map(|i|serde_json::json!({"image":i.image,"processor_source":hex(&i.processor_source),"raw_path":i.raw_path,"raw_sha256":hex(&i.raw_sha256),"shape":i.shape})).collect::<Vec<_>>(),"native_final":"NOT_RUN","a6_eligible":false,"a8_eligible":false});
+            std::fs::write(out.join("bound-request41.json"), serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+            println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
+            Ok(())
+        }
         "compile-complete-frontend39" => {
             let declaration =
                 PathBuf::from(take_flag(&mut args, "--declaration").ok_or("--declaration original source-backed JSON required")?);
@@ -1248,9 +1327,46 @@ fn run(args: &[String]) -> Result<(), String> {
             };
             let bytes = misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(
                 std::path::Path::new(&file),
-                kaspa_consensus_core::palw_native_text_stop_v29::TEXT_STOP_MAX_FILING_BYTES_V29,
+                if kind == "source-register39" {
+                    kaspa_consensus_core::palw_native_execution_v39::SOURCE_UPLOAD_MAX_BYTES_V39
+                } else {
+                    kaspa_consensus_core::palw_native_text_stop_v29::TEXT_STOP_MAX_FILING_BYTES_V29
+                },
             )?;
+            let upload_bond = if kind == "source-register39" {
+                Some(misaka_palw_sdk::improve_objects::spec::bond(
+                    &take_flag(&mut args, "--bond").ok_or("source39 --bond original upload owner required")?,
+                )?)
+            } else {
+                None
+            };
             let objects = match kind.as_str() {
+                "source-register39" => {
+                    let sequence = take_flag(&mut args, "--sequence")
+                        .ok_or("source39 --sequence original owner upload sequence required")?
+                        .parse::<u64>()
+                        .map_err(|e| e.to_string())?;
+                    let now = take_flag(&mut args, "--now-daa")
+                        .ok_or("source39 --now-daa required")?
+                        .parse::<u64>()
+                        .map_err(|e| e.to_string())?;
+                    let deadline = take_flag(&mut args, "--deadline-daa")
+                        .ok_or("source39 --deadline-daa required")?
+                        .parse::<u64>()
+                        .map_err(|e| e.to_string())?;
+                    let until = take_flag(&mut args, "--interval-end-daa")
+                        .ok_or("source39 --interval-end-daa owning quota interval required")?
+                        .parse::<u64>()
+                        .map_err(|e| e.to_string())?;
+                    misaka_palw_sdk::native_payload_v29::prepare_source_upload_v39(
+                        &bytes,
+                        upload_bond.ok_or("source39 original owner missing")?,
+                        sequence,
+                        now,
+                        deadline,
+                        until,
+                    )?
+                }
                 "text-pages29" => {
                     let (job, seal, owner) =
                         (digest("--job", &mut args)?, digest("--seal", &mut args)?, digest("--owner", &mut args)?);
@@ -1275,7 +1391,11 @@ fn run(args: &[String]) -> Result<(), String> {
             apply_own_native_params_v34(&mut args, &mut view.params)?;
             let key = kaspa_pq_validator_core::load_validator_seed(&take_flag(&mut args, "--key-file").ok_or("--key-file required")?)
                 .map(kaspa_pq_validator_core::ValidatorKey::from_seed)?;
-            let bond = misaka_palw_sdk::improve_objects::spec::bond(&take_flag(&mut args, "--bond").ok_or("--bond required")?)?;
+            let bond = if let Some(bond) = upload_bond {
+                bond
+            } else {
+                misaka_palw_sdk::improve_objects::spec::bond(&take_flag(&mut args, "--bond").ok_or("--bond required")?)?
+            };
             if !args.is_empty() || out.exists() {
                 return Err("native-parts requires a fresh output and recognized explicit options".into());
             }

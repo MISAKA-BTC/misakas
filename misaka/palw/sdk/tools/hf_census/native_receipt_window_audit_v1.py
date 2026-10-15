@@ -81,27 +81,47 @@ def audit(a, result: dict, work: Path, out: Path) -> int:
     maximum = result.get("maximum_evidence_bytes")
     if type(maximum) is not int or not 1 <= maximum <= 1 << 40:
         raise ValueError("frozen complete transcript evidence reservation required")
-    boundary = work / "collected"
-    common.run([collector, "--rpc", a.rpc, "--network", a.network, "--genesis", a.genesis,
-        "--operator-id", a.operator_id, "--node-database-id", a.node_database, *own_sha_fetch, *own,
-        "--start-child", start, "--end-child", end, "--end-selected-parent", parent,
-        "--evidence-root", str(evidence), "--maximum-evidence-bytes", str(maximum),
-        "--timeout-seconds", str(min(a.timeout_seconds, 43200)), "--out", str(boundary)],
-        work / "collect.log", a.timeout_seconds)
+    live = getattr(a, "receipt_live_collected", None)
+    if live:
+        boundary = Path(live).resolve()
+        if not boundary.is_relative_to(evidence) or not boundary.is_dir():
+            raise ValueError("independent live collection must remain inside original evidence root")
+    else:
+        boundary = work / "collected"
+        common.run([collector, "--rpc", a.rpc, "--network", a.network, "--genesis", a.genesis,
+            "--operator-id", a.operator_id, "--node-database-id", a.node_database, *own_sha_fetch, *own,
+            "--start-child", start, "--end-child", end, "--end-selected-parent", parent,
+            "--evidence-root", str(evidence), "--maximum-evidence-bytes", str(maximum),
+            "--timeout-seconds", str(min(a.timeout_seconds, 43200)), "--out", str(boundary)],
+            work / "collect.log", a.timeout_seconds)
     collection = runner.read_json(boundary / "collection.json")
     expected = {"schema": "misaka.rfc02.native-receipt-cas-collection.v1", "network": a.network,
-        "genesis": a.genesis, "operator_id": a.operator_id, "node_database": a.node_database,
-        "start_child": start, "end_child": end, "end_selected_parent": parent}
+        "genesis": a.genesis, "operator_id": a.operator_id, "node_database": a.node_database}
+    if live:
+        expected["acquisition_mode"] = "live-forward-v2"
+        expected["stop_daa"] = max(w["end_daa"] + w["maximum_final_lag_daa"] for w in contract["windows"])
+    else:
+        expected.update(start_child=start, end_child=end, end_selected_parent=parent)
     if any(collection.get(k) != v for k, v in expected.items()):
         raise ValueError("own collector original transcript identity changed")
     # Transport metadata is not authority. Every CAS object and every consecutive
-    # state is authenticated again by the pinned offline checker below.
+    # state in the canonical full-window interval is independently authenticated.
     transcript = work / "points.jsonl"
-    count = reverse_pointer_stream(boundary / "reverse-index.jsonl", transcript)
-    if count != collection.get("states") or count < 3:
+    if live:
+        from native_receipt_live_acquisition_v2 import canonical_window_stream
+        index = boundary / "points-stream-v2.jsonl"
+        count = canonical_window_stream(index, transcript, evidence, contract)
+        if type(collection.get("states")) is not int or count > collection["states"]:
+            raise ValueError("independent canonical window interval exceeds full live transcript")
+    else:
+        index = boundary / "reverse-index.jsonl"
+        count = reverse_pointer_stream(index, transcript)
+        if count != collection.get("states"):
+            raise ValueError("own original transcript was truncated")
+    if count < 3:
         raise ValueError("own original transcript was truncated")
     objects = [{"path": str(p.resolve().relative_to(evidence)), "sha256": ac.digest(p)} for p in
-        (boundary / "collection.json", boundary / "evidence-index.jsonl", boundary / "reverse-index.jsonl")]
+        (boundary / "collection.json", boundary / "evidence-index.jsonl", index)]
     witness_args = []
     witness_evidence = result.get("master_witnesses")
     if any(w.get("masters") for w in contract["windows"]):
