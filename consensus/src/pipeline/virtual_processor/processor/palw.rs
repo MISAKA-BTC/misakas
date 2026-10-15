@@ -6636,13 +6636,24 @@ impl VirtualStateProcessor {
         // The latest chain block recorded at or past the slot that anchors it — the earliest on the
         // chain once the walk is done — with, past lane A, the seed's source.
         let mut candidate: Option<(BlockHash, u64, Option<(u64, BlockHash)>)> = None;
+        // RFC-0018 §5: the permissionless anchor's seed where the recorded candidate is one (`None` below its fence).
+        let mut permissionless_seed: Option<(u64, kaspa_consensus_core::Hash64)> = None;
         for block in self.reachability_service.default_backward_chain_iterator(from) {
             let header = self.headers_store.get_header(block).ok()?;
             let daa = header.daa_score;
             if daa >= slot {
                 match self.palw_chain_block_as_anchor_v1(block, &header)? {
+                    // RFC-0018 §5: a permissionless anchor anchors the slot only where its contributions at or past the slot reach
+                    // the distinct-bond minimum; its seed is their aggregate, resolved at the earliest of them.
+                    Some(anchor) if anchor.reach >= slot && anchor.permissionless.is_some() => {
+                        if let Some(seed) = self.palw_permissionless_seed_source_v1(&anchor, slot) {
+                            candidate = Some((block, daa, None));
+                            permissionless_seed = Some(seed);
+                        }
+                    }
                     Some(anchor) if anchor.reach >= slot => {
                         candidate = Some((block, daa, self.palw_operator_seed_source_v1(&anchor, slot)?));
+                        permissionless_seed = None;
                     }
                     _ => {}
                 }
@@ -6651,10 +6662,96 @@ impl VirtualStateProcessor {
             // The first block BELOW the slot is the witness; the last one recorded at or above it
             // is the anchor.
             let (anchor_block, anchor_daa, seed_source) = candidate?;
+            if let Some((draw_daa, aggregate)) = permissionless_seed {
+                return Some(self.palw_permissionless_anchor_fact_v1(anchor_block, draw_daa, anchor_daa, daa, aggregate));
+            }
             return self.palw_v2_anchor_fact_with_seed_v1(anchor_block, anchor_daa, daa, seed_source);
         }
         let (anchor_block, anchor_daa, seed_source) = candidate?;
+        if let Some((draw_daa, aggregate)) = permissionless_seed {
+            return Some(self.palw_permissionless_anchor_fact_v1(anchor_block, draw_daa, anchor_daa, 0, aggregate));
+        }
         self.palw_v2_anchor_fact_with_seed_v1(anchor_block, anchor_daa, 0, seed_source)
+    }
+
+    /// **RFC-0018 §5: the permissionless anchor's fact.** The seed (`anchor_execution`) is the aggregate of the per-bond contributions
+    /// at or past the slot; the draw's DAA-keyed inputs resolve at the earliest of them (never after the anchor block's own DAA), as
+    /// lane A resolves them at its seed attempt. `anchor_block` stays the block that binds (SW-8).
+    fn palw_permissionless_anchor_fact_v1(
+        &self,
+        anchor_block: BlockHash,
+        draw_daa: u64,
+        anchor_daa: u64,
+        predecessor_daa: u64,
+        aggregate: kaspa_consensus_core::Hash64,
+    ) -> kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 {
+        kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 {
+            anchor_block,
+            anchor_daa: draw_daa.min(anchor_daa),
+            predecessor_daa,
+            anchor_execution: Some(aggregate),
+        }
+    }
+
+    /// **RFC-0018 §5: the permissionless seed source** for a claim whose slot is `slot` — `(draw DAA, aggregate)`, or `None` where
+    /// fewer than the minimum distinct bonds contribute at or past the slot. The producer's own bond is not excluded here (the walk
+    /// does not carry the claim's bond: GAP-A2); the two-distinct-bond minimum keeps at least one other bond's unpredictable
+    /// execution inside the hash.
+    fn palw_permissionless_seed_source_v1(&self, anchor: &PalwChainAnchorV1, slot: u64) -> Option<(u64, kaspa_consensus_core::Hash64)> {
+        let contributions = anchor.permissionless.as_ref()?;
+        kaspa_consensus_core::palw_rfc0018_v1::palw_permissionless_anchor_seed_v1(
+            contributions,
+            slot,
+            None,
+            &kaspa_consensus_core::palw_rfc0018_v1::PalwPermissionlessAnchorPolicyV1::design_unapproved_v1(),
+        )
+    }
+
+    /// **RFC-0018 §5: the contributions chain block `block` is or merges** — every attempt header (the block itself and its blue and
+    /// genuine red mergeset, not its selected parent) whose envelope decodes and whose executor bond the registry at the block's
+    /// selected parent holds under the very key the envelope carries (the header stage verified the signature over that key), each
+    /// with the bond's maturity at the attempt's DAA. `admitted` is the header-and-registry approximation of admission (GAP-A1: the
+    /// fold's own acceptance of a merged attempt is decided in this same block's transition, so reading it here would be circular).
+    /// Reads only chain data every node holds. `None` where a store cannot serve what it reads.
+    fn palw_permissionless_contributions_of_chain_block_v1(
+        &self,
+        block: BlockHash,
+        header: &Header,
+    ) -> Option<Vec<kaspa_consensus_core::palw_rfc0018_v1::PalwAnchorContributionV1>> {
+        let data = self.ghostdag_store.get_data(block).ok()?;
+        let registry = self.palw_candidate_state_v2(data.selected_parent)?;
+        let window = self.palw_bond_maturity_window_at(&registry, header.daa_score);
+        let contribution = |hash: BlockHash, merged_header: &Header| {
+            if !kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(merged_header.pow_algo_id) {
+                return None;
+            }
+            let envelope =
+                kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&merged_header.palw_commitment).ok()?;
+            let bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(envelope.attempt.executor_bond);
+            let record = registry.bond(&bond)?;
+            if record.pubkey != envelope.attempt.executor_pubkey {
+                return None;
+            }
+            let execution =
+                kaspa_consensus_core::palw_panel_v2::palw_panel_anchor_execution_v1(self.palw_network_domain_v2(), merged_header)?;
+            let bond_matured = window.is_none_or(|w| record.registered_daa.saturating_add(w) <= merged_header.daa_score);
+            Some(kaspa_consensus_core::palw_rfc0018_v1::PalwAnchorContributionV1 {
+                daa_score: merged_header.daa_score,
+                block: hash,
+                bond,
+                execution,
+                admitted: true,
+                bond_matured,
+            })
+        };
+        let mut contributions = Vec::new();
+        contributions.extend(contribution(block, header));
+        let classified = data.classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member));
+        for merged in classified.blues().iter().chain(classified.genuine_reds()).filter(|hash| **hash != data.selected_parent) {
+            let merged_header = self.headers_store.get_header(*merged).ok()?;
+            contributions.extend(contribution(*merged, &merged_header));
+        }
+        Some(contributions)
     }
 
     /// **How chain block `block` stands as a panel anchor — the one answer the anchor walk
@@ -6682,15 +6779,32 @@ impl VirtualStateProcessor {
     ///   attempt's execution commitment.
     pub(super) fn palw_chain_block_as_anchor_v1(&self, block: BlockHash, header: &Header) -> Option<Option<PalwChainAnchorV1>> {
         let daa = header.daa_score;
+        // **RFC-0018 §5: past `palw_panel_anchor_permissionless_v1` (at the block's own DAA, as lane A) the anchor is permissionless** —
+        // it takes precedence over lane A's operator list, which it replaces. A block anchors the slots up to its latest eligible
+        // contribution (capped at its own DAA) once at least two distinct bonds contribute; the seed is their aggregate
+        // (`palw_permissionless_seed_source_v1`). Below the fence (every shipped network) this branch is never taken.
+        if self.palw_panel_anchor_permissionless_at(daa) {
+            let contributions = self.palw_permissionless_contributions_of_chain_block_v1(block, header)?;
+            let reach = kaspa_consensus_core::palw_rfc0018_v1::palw_permissionless_anchor_reach_v1(&contributions, daa);
+            return Some(reach.map(|reach| PalwChainAnchorV1 {
+                reach,
+                operator_attempts: Some(contributions.iter().map(|c| (c.daa_score, c.block)).collect()),
+                permissionless: Some(contributions),
+            }));
+        }
         match self.palw_operator_anchor.as_ref().filter(|rule| rule.active_at(daa)) {
             Some(rule) => {
                 let attempts = self.palw_operator_attempts_of_chain_block_v1(rule, block, header)?;
                 let latest = attempts.iter().map(|(attempt_daa, _)| *attempt_daa).max();
-                Some(latest.map(|latest| PalwChainAnchorV1 { reach: latest.min(daa), operator_attempts: Some(attempts) }))
+                Some(latest.map(|latest| PalwChainAnchorV1 {
+                    reach: latest.min(daa),
+                    operator_attempts: Some(attempts),
+                    permissionless: None,
+                }))
             }
             None => Some(
                 self.palw_block_may_anchor_a_panel_v1(header, daa)
-                    .then_some(PalwChainAnchorV1 { reach: daa, operator_attempts: None }),
+                    .then_some(PalwChainAnchorV1 { reach: daa, operator_attempts: None, permissionless: None }),
             ),
         }
     }
@@ -8465,6 +8579,15 @@ impl VirtualStateProcessor {
     /// shipped preset (the fence is dormant until armed at a post-launch height).
     pub(in crate::pipeline::virtual_processor) fn palw_panel_seed_execution_at(&self, anchor_daa: u64) -> bool {
         self.palw_panel_seed_execution.is_some_and(|fence| fence.is_active(anchor_daa))
+    }
+
+    /// **RFC-0018 §5 (`palw_panel_anchor_permissionless_v1`), at a candidate anchor's own DAA** — the V2 state params' mirror.
+    /// `false` on every shipped preset.
+    pub(in crate::pipeline::virtual_processor) fn palw_panel_anchor_permissionless_at(&self, anchor_daa: u64) -> bool {
+        self.palw_state_params_v2
+            .as_ref()
+            .and_then(|params| params.rfc0018_v1())
+            .is_some_and(|mirror| mirror.panel_anchor_permissionless_at(anchor_daa))
     }
 
     /// **Lane A (the operator anchor, post-launch), at a candidate anchor's own DAA.** `false` on every

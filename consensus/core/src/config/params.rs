@@ -3182,6 +3182,33 @@ pub struct Params {
     /// until its rule is built and verified and its values approved; needs `palw_probabilistic_constraints_v1` (the kernel route holding
     /// its rows) and `palw_bond_budget_v1` (the per-principal common cap it takes the minimum with) at or below it.
     pub palw_model_eligibility_v1: Option<ForkActivation>,
+    /// **palw_dag_sibling_attribution_v1** — RFC-0018 §4 ([`crate::palw_rfc0018_v1`]): past it (the ACCEPTING block's DAA) the merged
+    /// attempts of one chain block are admitted in a canonical order — a round robin over model classes, each class by
+    /// `H(domain ‖ execution key)` — independent of GHOSTDAG colour and merge order, so which concurrent sibling wins a contended
+    /// per-block cap, and which admitted attempt is the ADR-0170 seed anchor, is a function of the mergeset set. **Dormant**: `None`
+    /// on every preset, in no flag-day list, Some-only in both fingerprints, collapsed from `Some(never())`, refused when armed
+    /// ([`Self::validate_palw_rfc0018_v1`]).
+    pub palw_dag_sibling_attribution_v1: Option<ForkActivation>,
+    /// **palw_panel_anchor_permissionless_v1** — RFC-0018 §5: past it (the ANCHOR block's DAA, as lane A) a claim's Panel anchor is
+    /// no longer an operator's attempt: any admitted attempt of a matured bond the anchor is or merges (blue or red) contributes, one
+    /// per bond, the producer's own excluded, and the seed is their aggregate. Replaces lane A's privilege; claims anchored below
+    /// keep lane A. **Dormant** exactly like [`Self::palw_dag_sibling_attribution_v1`].
+    pub palw_panel_anchor_permissionless_v1: Option<ForkActivation>,
+    /// **palw_rule_e_participation_v2** — RFC-0018 §6: past it (the INCUMBENT's DAA, as rule E) rule E's participation is the
+    /// capital, in the common past, of the distinct bonds with a non-voided, Gate-C-certified attempt in a side's exclusive past
+    /// (split-neutral, bounded by the bond's collateral), and the even split is a third of the common capital. Needs
+    /// `palw_fork_choice_rule_e_v1` at or below it; rule E v1's own semantics are unchanged. **Dormant** as above.
+    pub palw_rule_e_participation_v2: Option<ForkActivation>,
+    /// **palw_independently_work_certified_v1** — RFC-0018 §7, Gate C: past it (the CLAIM's acceptance DAA) a claim that
+    /// [`crate::palw_rfc0018_v1::palw_independently_work_certified_v1`] does not certify contributes nothing to participation,
+    /// provisional weight, final weight, safe-frontier advance, settled-anchor credit or coinbase. The predicate's definition is a
+    /// USER decision (PRINCIPLES §0 / ADR-0173/0176/0177/0178 amendment pending); until then it is fail-closed and the fence is refused
+    /// when armed. **Dormant** as above.
+    pub palw_independently_work_certified_v1: Option<ForkActivation>,
+    /// **palw_dag_width_schedule_v1** — RFC-0018 §8: a named (GHOSTDAG k, block time, parents, mergeset) step. SPEC AND STUB: nothing
+    /// reads it; validation refuses it armed. Values are a user decision. **Dormant** as above (the schedule's id is hashed beside
+    /// the height).
+    pub palw_dag_width_schedule_v1: Option<crate::palw_rfc0018_v1::PalwDagWidthScheduleFenceV1>,
 
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
@@ -6040,6 +6067,11 @@ impl Params {
             palw_model_block_rights_v1: self.palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1: self.palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1: self.palw_model_eligibility_v1,
+            palw_dag_sibling_attribution_v1: self.palw_dag_sibling_attribution_v1,
+            palw_panel_anchor_permissionless_v1: self.palw_panel_anchor_permissionless_v1,
+            palw_rule_e_participation_v2: self.palw_rule_e_participation_v2,
+            palw_independently_work_certified_v1: self.palw_independently_work_certified_v1,
+            palw_dag_width_schedule_v1: self.palw_dag_width_schedule_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -7184,6 +7216,11 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_dag_sibling_attribution_v1: None,
+    palw_panel_anchor_permissionless_v1: None,
+    palw_rule_e_participation_v2: None,
+    palw_independently_work_certified_v1: None,
+    palw_dag_width_schedule_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -7524,6 +7561,11 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_dag_sibling_attribution_v1: None,
+    palw_panel_anchor_permissionless_v1: None,
+    palw_rule_e_participation_v2: None,
+    palw_independently_work_certified_v1: None,
+    palw_dag_width_schedule_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -7846,6 +7888,11 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_dag_sibling_attribution_v1: None,
+    palw_panel_anchor_permissionless_v1: None,
+    palw_rule_e_participation_v2: None,
+    palw_independently_work_certified_v1: None,
+    palw_dag_width_schedule_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -13026,6 +13073,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_rfc0016_v1();
     // RFC-0017's model eligibility, likewise.
     params.sync_palw_model_eligibility_v1();
+    // RFC-0018's mirror (sibling attribution, permissionless anchor, rule E v2, Gate C), likewise.
+    params.sync_palw_rfc0018_v1();
     // RFC-0001 §2.10's adapter class listing, likewise.
     params.sync_palw_adapter_class_v1();
     // ADR-0096's decode constraint, likewise.
@@ -13346,6 +13395,11 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_dag_sibling_attribution_v1: None,
+    palw_panel_anchor_permissionless_v1: None,
+    palw_rule_e_participation_v2: None,
+    palw_independently_work_certified_v1: None,
+    palw_dag_width_schedule_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,

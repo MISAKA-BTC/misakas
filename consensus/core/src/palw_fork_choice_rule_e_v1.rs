@@ -171,6 +171,10 @@ pub struct PalwRuleESideV1 {
     pub live_total: u128,
     /// How many exclusive claims the side holds (the report; saturating).
     pub exclusive_claims: u32,
+    /// **RFC-0018 §6 (`palw_rule_e_participation_v2`)**: the capital, in the common past, of the distinct common bonds with a
+    /// non-voided, Gate-C-certified attempt in the exclusive past. Computed on every path that knows the common capital (the relay
+    /// path's `F`, the IBD path's two registries); 0 where it does not (a leaf-v2 client: GAP-R4). Read only past the v2 fence.
+    pub participation_capital_v2: u128,
 }
 
 impl PalwRuleESideV1 {
@@ -268,6 +272,8 @@ impl PalwRuleEBondBudgetV1 for PalwRuleENoBondBudgetV1 {
 #[derive(Clone, Copy, Debug)]
 pub struct PalwRuleEBudgetEngineV1<'a> {
     mirror: Option<&'a crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1>,
+    /// RFC-0018: the state params, for Gate C's provisional site (the identity on every shipped network).
+    params: &'a PalwStateParamsV2,
 }
 
 impl PalwRuleEBondBudgetV1 for PalwRuleEBudgetEngineV1<'_> {
@@ -286,7 +292,9 @@ impl PalwRuleEBondBudgetV1 for PalwRuleEBudgetEngineV1<'_> {
                 final_weight_ceiling: crate::palw_bond_budget_v1::palw_bond_budget_caps_v1(&mirror.policy, capital).final_weight,
             },
             final_weight: row.consumed.final_weight,
-            provisional_weight: claim.immature_contribution.min(row.reserved.final_weight),
+            // RFC-0018 Gate C's provisional site (the identity below its fence).
+            provisional_weight: crate::palw_rfc0018_v1::palw_claim_provisional_weight_v1(self.params, claim)
+                .min(row.reserved.final_weight),
         })
     }
 }
@@ -295,7 +303,7 @@ impl PalwRuleEBondBudgetV1 for PalwRuleEBudgetEngineV1<'_> {
 /// window) asks this. BUDGET's engine ([`PalwRuleEBudgetEngineV1`]) answers where `palw_bond_budget_v1` is mirrored; on every shipped
 /// preset it is not, and every claim reads as before.
 pub fn palw_rule_e_bond_budget_v1(params: &PalwStateParamsV2) -> PalwRuleEBudgetEngineV1<'_> {
-    PalwRuleEBudgetEngineV1 { mirror: params.bond_budget() }
+    PalwRuleEBudgetEngineV1 { mirror: params.bond_budget(), params }
 }
 
 /// **One claim, reduced to what rule E reads** — priced at the state it is read from, exactly as the fold prices it there. The
@@ -340,17 +348,38 @@ impl PalwChainStateV2 {
         claim_id: Hash64,
         claim: &PalwClaimStateV2,
     ) -> Result<PalwRuleEClaimRecordV1, PalwRuleEErrorV1> {
-        let record = |status, safe_weight, live_weight, capped, bond_collateral, budget| PalwRuleEClaimRecordV1 {
-            claim_id,
-            accepted_blue_score: claim.accepted_blue_score,
-            bond: claim.bond,
-            attempt: matches!(claim.source, PalwClaimSourceV2::Attempt),
-            status,
-            safe_weight,
-            live_weight,
-            capped,
-            bond_collateral,
-            budget,
+        // **RFC-0018 Gate C** (`palw_independently_work_certified_v1`, keyed on the claim's acceptance DAA; `true` below its fence and
+        // on every shipped network): an uncertified claim contributes nothing. It is no attempt for participation (v1 and v2); a
+        // `Final` one reads as resolved-without-credit (the `Voided` record: it holds no prefix back and advances no frontier); a live
+        // one stays `Live` (it still holds the resolved prefix). Live weights are gated at their source expressions below
+        // (`palw_claim_provisional_weight_v1`, F-W's staged weight, the budget engine's provisional), "as at acceptance", so they
+        // equal the state's own `bounded_immature` terms.
+        let certified = crate::palw_rfc0018_v1::palw_independently_work_certified_v1(
+            claim,
+            &crate::palw_rfc0018_v1::PalwGateCViewV1::with_chain(params, self),
+        );
+        let record = |status: PalwRuleEClaimStatusV1,
+                      safe_weight: u128,
+                      live_weight: u128,
+                      capped: bool,
+                      bond_collateral: Option<u64>,
+                      budget: Option<PalwRuleEBudgetTermsV1>| {
+            let (status, safe_weight) = match (certified, status) {
+                (false, PalwRuleEClaimStatusV1::Final) => (PalwRuleEClaimStatusV1::Voided, 0),
+                _ => (status, safe_weight),
+            };
+            PalwRuleEClaimRecordV1 {
+                claim_id,
+                accepted_blue_score: claim.accepted_blue_score,
+                bond: claim.bond,
+                attempt: certified && matches!(claim.source, PalwClaimSourceV2::Attempt),
+                status,
+                safe_weight,
+                live_weight,
+                capped,
+                bond_collateral,
+                budget,
+            }
         };
         if let Some(allocation) = budget.allocation(self, &claim_id, claim) {
             let (status, safe, live) = match &claim.phase {
@@ -380,7 +409,8 @@ impl PalwChainStateV2 {
             _ if palw_weight_cap_applies_v1(params, claim) => {
                 (PalwRuleEClaimStatusV1::Live, 0, palw_staged_weight_v1(params, claim), true)
             }
-            _ => (PalwRuleEClaimStatusV1::Live, 0, claim.immature_contribution, false),
+            // RFC-0018 Gate C's provisional site (the identity below its fence).
+            _ => (PalwRuleEClaimStatusV1::Live, 0, crate::palw_rfc0018_v1::palw_claim_provisional_weight_v1(params, claim), false),
         };
         let collateral = if capped { self.bond(&claim.bond).map(|record| record.collateral) } else { None };
         Ok(record(status, safe_weight, live_weight, capped, collateral, None))
@@ -428,8 +458,25 @@ impl PalwChainStateV2 {
         uncertified_weightless: bool,
         canonical_work_daa: Option<u64>,
         budget: &dyn PalwRuleEBondBudgetV1,
-        mut exclusive: impl FnMut(&Hash64, &PalwClaimStateV2) -> bool,
+        exclusive: impl FnMut(&Hash64, &PalwClaimStateV2) -> bool,
         common_bond: impl Fn(&PalwBondKeyV2) -> bool,
+    ) -> Result<PalwRuleESideV1, PalwRuleEErrorV1> {
+        self.palw_rule_e_side_with_capital_v2(params, uncertified_weightless, canonical_work_daa, budget, exclusive, |k| {
+            common_bond(k).then_some(0)
+        })
+    }
+
+    /// **RFC-0018 §6: [`Self::palw_rule_e_side_v1`] with each common bond's capital** (`None`: not a common bond). The v1 keys are
+    /// computed exactly as before (`common_capital(k).is_some()` is v1's `common_bond`); the side also carries
+    /// `participation_capital_v2`.
+    pub fn palw_rule_e_side_with_capital_v2(
+        &self,
+        params: &PalwStateParamsV2,
+        uncertified_weightless: bool,
+        canonical_work_daa: Option<u64>,
+        budget: &dyn PalwRuleEBondBudgetV1,
+        mut exclusive: impl FnMut(&Hash64, &PalwClaimStateV2) -> bool,
+        common_capital: impl Fn(&PalwBondKeyV2) -> Option<u64>,
     ) -> Result<PalwRuleESideV1, PalwRuleEErrorV1> {
         let shares: BTreeMap<Hash64, u16> = self.class_shares_iter().map(|(k, v)| (*k, *v)).collect();
         let mut side = PalwRuleESideAccV1::default();
@@ -437,7 +484,7 @@ impl PalwChainStateV2 {
             if exclusive(id, claim) {
                 let record =
                     self.palw_rule_e_record_v1(params, uncertified_weightless, canonical_work_daa, &shares, budget, *id, claim)?;
-                side.push(&record, common_bond(&record.bond))?;
+                side.push(&record, common_capital(&record.bond))?;
             }
         }
         side.finish()
@@ -457,14 +504,19 @@ struct PalwRuleESideAccV1 {
     oldest_live: Option<u64>,
     finals: BTreeSet<u64>,
     count: u64,
+    /// RFC-0018 §6: the v2 participation (capital of common bonds with a counted attempt).
+    capital_v2: crate::palw_rfc0018_v1::PalwRuleEParticipationV2Acc,
 }
 
 impl PalwRuleESideAccV1 {
-    fn push(&mut self, record: &PalwRuleEClaimRecordV1, common_bond: bool) -> Result<(), PalwRuleEErrorV1> {
+    /// `common_capital`: `Some(capital in the common past)` for a common bond, `None` otherwise (v1 reads only `is_some`).
+    fn push(&mut self, record: &PalwRuleEClaimRecordV1, common_capital: Option<u64>) -> Result<(), PalwRuleEErrorV1> {
         self.count = self.count.saturating_add(1);
-        if record.attempt && common_bond {
+        if record.attempt && common_capital.is_some() {
             self.bonds.insert(record.bond);
         }
+        // RFC-0018 §6 (v2): a voided — or Gate-C-uncertified, which the record maps to `Voided` — attempt does not count.
+        self.capital_v2.push(record.bond, record.attempt, record.status != PalwRuleEClaimStatusV1::Voided, common_capital);
         match record.status {
             PalwRuleEClaimStatusV1::Final => {
                 self.finals.insert(record.accepted_blue_score);
@@ -514,6 +566,7 @@ impl PalwRuleESideAccV1 {
             safe_weight: safe,
             live_total: safe.checked_add(immature).ok_or(PalwRuleEErrorV1::Overflow)?,
             exclusive_claims: u32::try_from(self.count).unwrap_or(u32::MAX),
+            participation_capital_v2: self.capital_v2.capital(),
         })
     }
 }
@@ -532,7 +585,19 @@ pub fn palw_rule_e_side_from_records_v1<'a>(
 ) -> Result<PalwRuleESideV1, PalwRuleEErrorV1> {
     let mut side = PalwRuleESideAccV1::default();
     for record in records {
-        side.push(record, common_bond(&record.bond))?;
+        side.push(record, common_bond(&record.bond).then_some(0))?;
+    }
+    side.finish()
+}
+
+/// [`palw_rule_e_side_from_records_v1`] with each common bond's capital (RFC-0018 §6) — the same accumulator.
+pub fn palw_rule_e_side_from_records_with_capital_v2<'a>(
+    records: impl IntoIterator<Item = &'a PalwRuleEClaimRecordV1>,
+    common_capital: impl Fn(&PalwBondKeyV2) -> Option<u64>,
+) -> Result<PalwRuleESideV1, PalwRuleEErrorV1> {
+    let mut side = PalwRuleESideAccV1::default();
+    for record in records {
+        side.push(record, common_capital(&record.bond))?;
     }
     side.finish()
 }
@@ -565,6 +630,8 @@ pub struct PalwRuleEPairV1 {
     pub a: PalwRuleESideV1,
     pub b: PalwRuleESideV1,
     pub even_split_min: u32,
+    /// RFC-0018 §6: the v2 even split — a third of the common capital (1 where the path knows no capital).
+    pub even_split_min_capital_v2: u128,
 }
 
 /// **Both sides of rule E for two states**, each restricted to the claims its predicate admits AND the other state does not hold
@@ -581,30 +648,67 @@ pub fn palw_rule_e_sides_v1(
     uncertified_weightless_a: bool,
     uncertified_weightless_b: bool,
     canonical_work_daa: Option<u64>,
-    mut a_exclusive: impl FnMut(&Hash64, &PalwClaimStateV2) -> bool,
-    mut b_exclusive: impl FnMut(&Hash64, &PalwClaimStateV2) -> bool,
+    a_exclusive: impl FnMut(&Hash64, &PalwClaimStateV2) -> bool,
+    b_exclusive: impl FnMut(&Hash64, &PalwClaimStateV2) -> bool,
     common_bond: impl Fn(&PalwBondKeyV2) -> bool,
     common_bonds: usize,
 ) -> Result<PalwRuleEPairV1, PalwRuleEErrorV1> {
+    palw_rule_e_sides_with_capital_v2(
+        a,
+        b,
+        params,
+        uncertified_weightless_a,
+        uncertified_weightless_b,
+        canonical_work_daa,
+        a_exclusive,
+        b_exclusive,
+        |k| common_bond(k).then_some(0),
+        common_bonds,
+        0,
+    )
+}
+
+/// **RFC-0018 §6: [`palw_rule_e_sides_v1`] with the common past's capital** — `common_capital(k)` is `Some(collateral in the
+/// common past)` for a common bond, `common_capital_total` the sum over every common bond (the v2 even split's base). Every v1 key and
+/// the v1 even split are exactly as before.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_rule_e_sides_with_capital_v2(
+    a: &PalwChainStateV2,
+    b: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    uncertified_weightless_a: bool,
+    uncertified_weightless_b: bool,
+    canonical_work_daa: Option<u64>,
+    mut a_exclusive: impl FnMut(&Hash64, &PalwClaimStateV2) -> bool,
+    mut b_exclusive: impl FnMut(&Hash64, &PalwClaimStateV2) -> bool,
+    common_capital: impl Fn(&PalwBondKeyV2) -> Option<u64>,
+    common_bonds: usize,
+    common_capital_total: u128,
+) -> Result<PalwRuleEPairV1, PalwRuleEErrorV1> {
     let engine = palw_rule_e_bond_budget_v1(params);
     let budget: &dyn PalwRuleEBondBudgetV1 = &engine;
-    let side_a = a.palw_rule_e_side_v1(
+    let side_a = a.palw_rule_e_side_with_capital_v2(
         params,
         uncertified_weightless_a,
         canonical_work_daa,
         budget,
         |id, claim| a_exclusive(id, claim) && b.claim(id).is_none(),
-        &common_bond,
+        &common_capital,
     )?;
-    let side_b = b.palw_rule_e_side_v1(
+    let side_b = b.palw_rule_e_side_with_capital_v2(
         params,
         uncertified_weightless_b,
         canonical_work_daa,
         budget,
         |id, claim| b_exclusive(id, claim) && a.claim(id).is_none(),
-        &common_bond,
+        &common_capital,
     )?;
-    Ok(PalwRuleEPairV1 { a: side_a, b: side_b, even_split_min: palw_rule_e_even_split_min_v1(common_bonds) })
+    Ok(PalwRuleEPairV1 {
+        a: side_a,
+        b: side_b,
+        even_split_min: palw_rule_e_even_split_min_v1(common_bonds),
+        even_split_min_capital_v2: crate::palw_rfc0018_v1::palw_rule_e_even_split_min_capital_v2(common_capital_total),
+    })
 }
 
 /// **The relay path's pair**: `a` and `b` with their common selected-chain ancestor's state `fork` (its registry is the common
@@ -621,7 +725,10 @@ pub fn palw_rule_e_sides_above_fork_v1(
     canonical_work_daa: Option<u64>,
 ) -> Result<PalwRuleEPairV1, PalwRuleEErrorV1> {
     let above = |_: &Hash64, claim: &PalwClaimStateV2| claim.accepted_blue_score > fork_blue_score;
-    palw_rule_e_sides_v1(
+    // RFC-0018 §6: a common bond's capital is its collateral in `F` — the common past's value, never a post-fork deposit. Only where
+    // the network declares `palw_rule_e_participation_v2` (A-2: otherwise every side carries 0, byte-identical to a leaf-v2 client's).
+    let v2 = palw_rule_e_v2_declared(params);
+    palw_rule_e_sides_with_capital_v2(
         a,
         b,
         params,
@@ -630,9 +737,15 @@ pub fn palw_rule_e_sides_above_fork_v1(
         canonical_work_daa,
         above,
         above,
-        |k| fork.bond(k).is_some(),
+        |k| fork.bond(k).map(|record| if v2 { record.collateral } else { 0 }),
         fork.bonds_iter().count(),
+        if v2 { crate::palw_rfc0018_v1::palw_rule_e_common_capital_of_v2(fork) } else { 0 },
     )
+}
+
+/// Whether the network declares RFC-0018's v2 participation at any height (the mirror) — the node then carries the capital.
+fn palw_rule_e_v2_declared(params: &PalwStateParamsV2) -> bool {
+    params.rfc0018_v1().is_some_and(|m| m.rule_e_participation_v2_from_daa.is_some())
 }
 
 /// **Rule E's history-free order** between two sides: participation first where it counts, then the economic keys.
@@ -666,6 +779,52 @@ pub fn palw_rule_e_decide_v1(
     }
 }
 
+/// **RFC-0018 §6 — rule E's order with v2 participation.** `capital_v2 = false` is [`palw_rule_e_order_v1`] exactly; `true` (past
+/// `palw_rule_e_participation_v2` at the incumbent's DAA) ranks by `participation_capital_v2` where participation counts.
+pub fn palw_rule_e_order_v2(a: &PalwRuleESideV1, b: &PalwRuleESideV1, participation_counts: bool, capital_v2: bool) -> Ordering {
+    if !capital_v2 {
+        return palw_rule_e_order_v1(a, b, participation_counts);
+    }
+    let economic = a.economic().cmp(&b.economic());
+    if participation_counts { a.participation_capital_v2.cmp(&b.participation_capital_v2).then(economic) } else { economic }
+}
+
+/// **RFC-0018 §6 — rule E's deep-reorg decision with v2 participation.** `capital_v2 = false` is [`palw_rule_e_decide_v1`] exactly;
+/// `true` uses [`palw_rule_e_order_v2`] and the capital even split (each side at least a third of the common capital).
+pub fn palw_rule_e_decide_v2(
+    incumbent: &PalwRuleESideV1,
+    challenger: &PalwRuleESideV1,
+    participation_counts: bool,
+    pair: &PalwRuleEPairV1,
+    capital_v2: bool,
+    ghostdag_heavier: impl FnOnce() -> bool,
+    shallow_ghostdag_win: impl FnOnce() -> bool,
+) -> PalwDeepReorgV2 {
+    if !capital_v2 {
+        return palw_rule_e_decide_v1(
+            incumbent,
+            challenger,
+            participation_counts,
+            pair.even_split_min,
+            ghostdag_heavier,
+            shallow_ghostdag_win,
+        );
+    }
+    let allow = |yes: bool| if yes { PalwDeepReorgV2::Allow } else { PalwDeepReorgV2::Refuse };
+    match palw_rule_e_order_v2(challenger, incumbent, participation_counts, true) {
+        Ordering::Greater => PalwDeepReorgV2::Allow,
+        Ordering::Less => PalwDeepReorgV2::Refuse,
+        Ordering::Equal
+            if participation_counts
+                && incumbent.participation_capital_v2 >= pair.even_split_min_capital_v2
+                && challenger.participation_capital_v2 >= pair.even_split_min_capital_v2 =>
+        {
+            allow(ghostdag_heavier())
+        }
+        Ordering::Equal => allow(shallow_ghostdag_win()),
+    }
+}
+
 /// **Both sides from two states that share no DAG** (the IBD flow's staged chain against the local one). A claim of one state is
 /// exclusive iff the other holds no claim of its id AND the other could not have retired it. A state at DAA `D` still holds every
 /// claim it accepted with `terminal + claim_retirement_daa > D`, and `terminal ≥` its own acceptance `≥` this state's acceptance
@@ -689,8 +848,15 @@ pub fn palw_rule_e_sides_by_claim_set_v1(
                 || claim.accepted_daa.saturating_add(retirement) > other_daa.saturating_add(PALW_RULE_E_IBD_RETENTION_MARGIN_DAA_V1)
         }
     };
-    let common = palw_rule_e_common_bonds_v1(a, b);
-    palw_rule_e_sides_v1(
+    // RFC-0018 §6: no fork block is known here — each common bond at the smaller of its two collaterals (0 where the network does
+    // not declare v2 participation: A-2).
+    let v2 = palw_rule_e_v2_declared(params);
+    let common: BTreeMap<PalwBondKeyV2, u64> = crate::palw_rfc0018_v1::palw_rule_e_common_capital_by_claim_set_v2(a, b)
+        .into_iter()
+        .map(|(k, c)| (k, if v2 { c } else { 0 }))
+        .collect();
+    let total: u128 = common.values().map(|c| *c as u128).sum();
+    palw_rule_e_sides_with_capital_v2(
         a,
         b,
         params,
@@ -699,8 +865,9 @@ pub fn palw_rule_e_sides_by_claim_set_v1(
         canonical_work_daa,
         retained_by(b_daa),
         retained_by(a_daa),
-        |k| common.contains(k),
+        |k| common.get(k).copied(),
         common.len(),
+        total,
     )
 }
 
@@ -735,7 +902,9 @@ pub fn palw_rule_e_ibd_commit_v1(
         weightless(incumbent.daa_score),
         params.palw_canonical_work_daa(),
     )?;
-    let decision = palw_rule_e_decide_v1(&pair.b, &pair.a, true, pair.even_split_min, || false, || false);
+    // RFC-0018 §6: v2 participation past its fence at the incumbent's DAA (rule E v1's own reading below it).
+    let capital_v2 = params.palw_rule_e_participation_v2_active_at(incumbent.daa_score);
+    let decision = palw_rule_e_decide_v2(&pair.b, &pair.a, true, &pair, capital_v2, || false, || false);
     let commit = match decision {
         PalwDeepReorgV2::Allow => PalwIbdCommitV2::Commit,
         PalwDeepReorgV2::Refuse => PalwIbdCommitV2::KeepIncumbent,
@@ -895,7 +1064,14 @@ mod tests {
     }
 
     fn side(participation: u32, frontier: u64, safe: u128, live: u128) -> PalwRuleESideV1 {
-        PalwRuleESideV1 { participation, safe_frontier_blue_score: frontier, safe_weight: safe, live_total: live, exclusive_claims: 0 }
+        PalwRuleESideV1 {
+            participation,
+            safe_frontier_blue_score: frontier,
+            safe_weight: safe,
+            live_total: live,
+            exclusive_claims: 0,
+            participation_capital_v2: 0,
+        }
     }
 
     #[test]

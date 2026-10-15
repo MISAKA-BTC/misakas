@@ -942,6 +942,14 @@ mod tests {
             "palw_elastic_final_capacity_v1" => params.palw_elastic_final_capacity_v1 = Some(at),
             // RFC-0017's model eligibility: a bare height, refused when armed by `validate_palw_v2`.
             "palw_model_eligibility_v1" => params.palw_model_eligibility_v1 = Some(at),
+            // RFC-0018's five dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_dag_sibling_attribution_v1" => params.palw_dag_sibling_attribution_v1 = Some(at),
+            "palw_panel_anchor_permissionless_v1" => params.palw_panel_anchor_permissionless_v1 = Some(at),
+            "palw_rule_e_participation_v2" => params.palw_rule_e_participation_v2 = Some(at),
+            "palw_independently_work_certified_v1" => params.palw_independently_work_certified_v1 = Some(at),
+            "palw_dag_width_schedule_v1" => {
+                params.palw_dag_width_schedule_v1 = Some(crate::palw_rfc0018_v1::PalwDagWidthScheduleFenceV1::unapproved_probe_at(at))
+            }
             // RFC-0012's coordinated retirement: the height, with a complete settlement policy beside it (its values only ride
             // along; the probe asks the hashers and the schedule, never `validate_palw_v2`).
             "palw_dns_retirement_v1" => {

@@ -27,7 +27,7 @@ use kaspa_consensus_core::{
     palw_fork_authority_v2::{PALW_REORG_SHALLOW_TIE_DAA_V1, PalwDeepReorgV2},
     palw_fork_choice_rule_e_v1::{
         PALW_RULE_E_FORK_WALK_V1, PALW_RULE_E_MAX_EXTRA_CANDIDATES_V1, PALW_RULE_E_MAX_SCORED_V1, PALW_RULE_E_SCORE_WALK_V1,
-        PalwRuleEPairV1, palw_rule_e_decide_v1, palw_rule_e_order_v1, palw_rule_e_participation_counts_v1,
+        PalwRuleEPairV1, palw_rule_e_decide_v2, palw_rule_e_order_v2, palw_rule_e_participation_counts_v1,
         palw_rule_e_sides_above_fork_v1,
     },
     palw_state_v2::{PalwBondKeyV2, PalwChainStateV2},
@@ -77,6 +77,15 @@ impl VirtualStateProcessor {
     /// Whether rule E (ADR-0178) is in force at `daa_score` — the incumbent's DAA at every reader.
     pub(crate) fn palw_rule_e_active_at(&self, daa_score: u64) -> bool {
         self.palw_fork_choice_rule_e.is_some_and(|f| f != ForkActivation::never() && f.is_active(daa_score))
+    }
+
+    /// **RFC-0018 §6**: whether rule E ranks by v2 participation (capital, voided/uncertified excluded) at `daa_score` — the
+    /// incumbent's DAA, as rule E itself is read. The V2 state params' mirror; `false` on every shipped network.
+    pub(crate) fn palw_rule_e_participation_v2_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2
+            .as_ref()
+            .and_then(|params| params.rfc0018_v1())
+            .is_some_and(|mirror| mirror.rule_e_participation_v2_at(daa_score))
     }
 
     /// **Does `from` stand at most `window` DAA above its common chain ancestor with `other`?** Walks `from`'s selected chain down
@@ -208,7 +217,9 @@ impl VirtualStateProcessor {
             (Ok(c), Ok(p)) => SortableBlock::new(candidate, c) > SortableBlock::new(prev_sink, p),
             _ => false,
         };
-        let decision = palw_rule_e_decide_v1(&pair.b, &pair.a, counts, pair.even_split_min, heavier, || {
+        // RFC-0018 §6: v2 participation past its fence at the incumbent's DAA; below it `palw_rule_e_decide_v1` exactly.
+        let capital_v2 = self.palw_rule_e_participation_v2_at(incumbent_daa);
+        let decision = palw_rule_e_decide_v2(&pair.b, &pair.a, counts, &pair, capital_v2, heavier, || {
             self.palw_reorg_shallow_ghostdag_win_v1(candidate, prev_sink, incumbent_daa)
         });
         debug!(
@@ -229,13 +240,22 @@ impl VirtualStateProcessor {
     ) -> Result<bool, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         use std::cmp::Ordering;
         let Some((pair, counts)) = self.palw_rule_e_pair_checked_v1(states, challenger, best)? else { return Ok(false) };
-        Ok(match palw_rule_e_order_v1(&pair.a, &pair.b, counts) {
+        // RFC-0018 §6: read at `best`'s DAA (the search's standing incumbent); below the fence the v1 order and split exactly.
+        let capital_v2 = self.headers_store.get_daa_score(best).is_ok_and(|daa| self.palw_rule_e_participation_v2_at(daa));
+        let even = |side: &kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleESideV1| {
+            if capital_v2 {
+                side.participation_capital_v2 >= pair.even_split_min_capital_v2
+            } else {
+                side.participation >= pair.even_split_min
+            }
+        };
+        Ok(match palw_rule_e_order_v2(&pair.a, &pair.b, counts, capital_v2) {
             Ordering::Greater => true,
             Ordering::Less => false,
             Ordering::Equal => {
                 counts
-                    && pair.a.participation >= pair.even_split_min
-                    && pair.b.participation >= pair.even_split_min
+                    && even(&pair.a)
+                    && even(&pair.b)
                     && match (self.ghostdag_store.get_blue_work(challenger), self.ghostdag_store.get_blue_work(best)) {
                         (Ok(c), Ok(b)) => SortableBlock::new(challenger, c) > SortableBlock::new(best, b),
                         _ => false,

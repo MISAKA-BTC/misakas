@@ -641,6 +641,22 @@ impl Params {
         if self.palw_model_eligibility_v1 == Some(ForkActivation::never()) {
             self.palw_model_eligibility_v1 = None;
         }
+        // RFC-0018's five dormant fences, likewise.
+        if self.palw_dag_sibling_attribution_v1 == Some(ForkActivation::never()) {
+            self.palw_dag_sibling_attribution_v1 = None;
+        }
+        if self.palw_panel_anchor_permissionless_v1 == Some(ForkActivation::never()) {
+            self.palw_panel_anchor_permissionless_v1 = None;
+        }
+        if self.palw_rule_e_participation_v2 == Some(ForkActivation::never()) {
+            self.palw_rule_e_participation_v2 = None;
+        }
+        if self.palw_independently_work_certified_v1 == Some(ForkActivation::never()) {
+            self.palw_independently_work_certified_v1 = None;
+        }
+        if self.palw_dag_width_schedule_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_dag_width_schedule_v1 = None;
+        }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
         }
@@ -1110,6 +1126,11 @@ impl Params {
             palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
+            palw_dag_sibling_attribution_v1,
+            palw_panel_anchor_permissionless_v1,
+            palw_rule_e_participation_v2,
+            palw_independently_work_certified_v1,
+            palw_dag_width_schedule_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -1430,6 +1451,11 @@ impl Params {
             ("palw_model_block_rights_v1", *palw_model_block_rights_v1),
             ("palw_elastic_final_capacity_v1", *palw_elastic_final_capacity_v1),
             ("palw_model_eligibility_v1", *palw_model_eligibility_v1),
+            ("palw_dag_sibling_attribution_v1", *palw_dag_sibling_attribution_v1),
+            ("palw_panel_anchor_permissionless_v1", *palw_panel_anchor_permissionless_v1),
+            ("palw_rule_e_participation_v2", *palw_rule_e_participation_v2),
+            ("palw_independently_work_certified_v1", *palw_independently_work_certified_v1),
+            ("palw_dag_width_schedule_v1", palw_dag_width_schedule_v1.as_ref().map(|f| f.activation)),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -1905,6 +1931,28 @@ impl Params {
         if let Some(at) = self.palw_model_eligibility_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_model_eligibility_v1");
             h.write(at.daa_score().to_le_bytes());
+        }
+        // RFC-0018's five fences, NAMED likewise. Some-only (the schedule's id beside its height).
+        if let Some(at) = self.palw_dag_sibling_attribution_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_dag_sibling_attribution_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_panel_anchor_permissionless_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_panel_anchor_permissionless_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_rule_e_participation_v2.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_rule_e_participation_v2");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_independently_work_certified_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_independently_work_certified_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(f) = self.palw_dag_width_schedule_v1.filter(|f| f.activation != ForkActivation::never()) {
+            h.write(b"palw_dag_width_schedule_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.schedule.id().as_bytes());
         }
         // palw_fp_prefix_inherit, NAMED likewise.
         if let Some(at) = self.palw_fp_prefix_inherit {
@@ -2643,6 +2691,11 @@ impl Params {
             palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
+            palw_dag_sibling_attribution_v1,
+            palw_panel_anchor_permissionless_v1,
+            palw_rule_e_participation_v2,
+            palw_independently_work_certified_v1,
+            palw_dag_width_schedule_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -3551,6 +3604,22 @@ impl Params {
         if let Some(activation) = palw_model_eligibility_v1.as_mut() {
             fork(activation, visit);
         }
+        // RFC-0018's five fences. Some-only.
+        if let Some(activation) = palw_dag_sibling_attribution_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_panel_anchor_permissionless_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_rule_e_participation_v2.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_independently_work_certified_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(f) = palw_dag_width_schedule_v1.as_mut() {
+            fork(&mut f.activation, visit);
+        }
         // palw_fp_prefix_inherit. Some-only.
         if let Some(activation) = palw_fp_prefix_inherit.as_mut() {
             fork(activation, visit);
@@ -4089,6 +4158,11 @@ impl Params {
             palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1,
+            palw_dag_sibling_attribution_v1,
+            palw_panel_anchor_permissionless_v1,
+            palw_rule_e_participation_v2,
+            palw_independently_work_certified_v1,
+            palw_dag_width_schedule_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -5108,6 +5182,28 @@ impl Params {
         if let Some(activation) = palw_model_eligibility_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_model_eligibility_v1");
             h.write(activation.daa_score().to_le_bytes());
+        }
+        // RFC-0018's five fences, Some-only for the same reason.
+        if let Some(activation) = palw_dag_sibling_attribution_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_dag_sibling_attribution_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_panel_anchor_permissionless_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_panel_anchor_permissionless_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_rule_e_participation_v2.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_rule_e_participation_v2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_independently_work_certified_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_independently_work_certified_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(f) = palw_dag_width_schedule_v1.filter(|f| f.activation != ForkActivation::never()) {
+            h.write(b"palw_dag_width_schedule_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.schedule.id().as_bytes());
         }
         // palw_fp_prefix_inherit, Some-only for the same reason.
         if let Some(activation) = palw_fp_prefix_inherit {

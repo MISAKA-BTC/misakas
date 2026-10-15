@@ -182,6 +182,7 @@ impl PalwStateParamsV2 {
             cell_coverage_closure_from_daa: None,
             rfc0016_v1: None,
             model_eligibility_v1: None,
+            rfc0018_v1: None,
         })
     }
 
@@ -683,6 +684,18 @@ impl PalwStateParamsV2 {
     /// The mirror if it governs `daa` (A-2: `None` below the fence and on every shipped network).
     pub fn model_eligibility_v1_at(&self, daa: u64) -> Option<&crate::palw_model_eligibility_v1::PalwModelEligibilityMirrorV1> {
         self.model_eligibility_v1.as_ref().filter(|m| m.governs(daa))
+    }
+
+    /// **RFC-0018's mirror** (`crate::palw_rfc0018_v1`) — written by `Params::sync_palw_rfc0018_v1` and by nothing else (and by
+    /// fixtures); `None` where none of its four state-level fences is armed.
+    pub fn with_rfc0018_v1(mut self, mirror: Option<crate::palw_rfc0018_v1::PalwRfc0018MirrorV1>) -> Self {
+        self.rfc0018_v1 = mirror;
+        self
+    }
+
+    /// RFC-0018's fences, if the network arms any (the mirror). Every reader asks the mirror's own `*_at` for its key.
+    pub fn rfc0018_v1(&self) -> Option<&crate::palw_rfc0018_v1::PalwRfc0018MirrorV1> {
+        self.rfc0018_v1.as_ref()
     }
 
     /// **RFC-0010: the permissionless Panel's mirror** — written by `Params::sync_palw_permissionless_panel_v1` and by nothing else

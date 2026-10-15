@@ -533,6 +533,9 @@ pub mod palw_model_eligibility_v1;
 pub mod palw_panel_free_v1;
 pub mod palw_panel_lifetime_v2;
 pub mod palw_panel_source_fee_v2;
+/// **RFC-0018 — DAG parallel multi-model consensus** (dormant): sibling attribution, the permissionless Panel anchor, rule E
+/// participation v2, Gate C (`palw_independently_work_certified_v1`) and the DAG width schedule stub.
+pub mod palw_rfc0018_v1;
 pub mod palw_panel_v2;
 /// ADR-0144 §9: slashable panel VAR that cannot be counted twice. Pure functions of consensus
 /// facts; the fold in `palw_state_v2` is the writer, behind the same fence.
