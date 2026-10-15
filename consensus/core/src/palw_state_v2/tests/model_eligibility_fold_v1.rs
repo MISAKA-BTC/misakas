@@ -270,6 +270,55 @@ fn commit_then_draw_on_the_real_anchor_promotes_on_k_of_m() {
     }
 }
 
+/// **U-8 (user decision 2026-10-15): the deterministic eligibility snapshot** — the rows `roll_epoch` reads through the allocation's
+/// eligible-capital hook (stages, exams, lineage / principal / network counters, pins) are a function of the chain alone: the same
+/// after a reorg (the block's delta reverts to its parent, another branch differs, re-applying it comes back), an IBD (a second node
+/// replaying the same blocks from genesis) and a restart (the carriage round-trip, aux 131 included).
+#[test]
+fn u8_the_eligibility_snapshot_is_the_same_after_reorg_ibd_and_restart() {
+    let p = armed();
+    let c = commit(ENTRANT, EligibilityExamPurposeV1::Promotion, 16, 0, 1);
+    let objects = [route(1, KernelRouteObjectV1::CommitEligibilityExamV1 { commit: c })];
+    let run = || {
+        let s0 = anchored(world(&p), 7);
+        let (s1, d1) = apply_palw_transition_v2_with_extras(
+            &s0,
+            &p,
+            &ctx(PROMOTE, PROMOTE, PROMOTE),
+            &objects,
+            None,
+            false,
+            false,
+            false,
+            false,
+            &extras(),
+        )
+        .expect("the commit lands");
+        (s0, s1, d1)
+    };
+    let (s0, s1, d1) = run();
+    // IBD: another node replaying the same chain from genesis.
+    let (_, ibd, _) = run();
+    assert_eq!(ibd.state_root(), s1.state_root(), "IBD: the same root");
+    assert_eq!(model(&ibd, ENTRANT), model(&s1, ENTRANT), "IBD: the same eligibility row");
+    // Reorg: revert to the parent, take the other branch, come back.
+    assert_eq!(revert_delta_v2(&s1, &d1, &p).unwrap().state_root(), s0.state_root(), "the delta reverts exactly");
+    let other = step(&s0, &p, PROMOTE, &[]).expect("the other branch");
+    assert_ne!(other.state_root(), s1.state_root(), "the branches differ");
+    assert_eq!(apply_delta_v2(&s0, &d1, &p).unwrap().state_root(), s1.state_root(), "back on the first branch");
+    // Restart: the carriage round-trips aux 131.
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s1)).unwrap();
+    let back = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&p, Some(s1.state_root())).expect("a restart");
+    assert_eq!(back.state_root(), s1.state_root(), "restart: the same root");
+    assert_eq!(model(&back, ENTRANT), model(&s1, ENTRANT));
+    // The stage the allocation's roll reads agrees everywhere it is probed.
+    for daa in [PROMOTE, PROMOTE + DAY, PROMOTE + 40 * DAY] {
+        let read = palw_eligibility_status_of_v1(&s1, &p, &h64(ENTRANT), daa);
+        assert_eq!(palw_eligibility_status_of_v1(&back, &p, &h64(ENTRANT), daa), read, "restart at {daa}");
+        assert_eq!(palw_eligibility_status_of_v1(&ibd, &p, &h64(ENTRANT), daa), read, "IBD at {daa}");
+    }
+}
+
 /// **U-4 (user decision 2026-10-15): the attempt cost is split** — (a) the burn fee is destroyed at the commit, (b) the inspection
 /// escrow (fee per position × m) is taken from the applicant at the commit and, once the exam decides, paid from the payout queue to
 /// the drawn positions that attested (the rest returned): `Σ legs = escrow`, a transfer, never new issuance.
