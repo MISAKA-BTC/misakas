@@ -5,7 +5,7 @@ use misaka_palw_kernel::{ledger::KernelLedgerV1, rows::LedgerRowsV1};
 use std::{
     io::{self, Read},
     mem::size_of,
-    ops::{Deref, DerefMut},
+    ops::Deref,
 };
 
 /// The lease travels with the consumer and, when cached, with its shared Arc.
@@ -21,11 +21,9 @@ impl Deref for ReservedKernelLedgerV1 {
         &self.ledger
     }
 }
-impl DerefMut for ReservedKernelLedgerV1 {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.ledger
-    }
-}
+// RFC-0006: there is deliberately NO `DerefMut`. A consensus fold mutates the ledger only through the typed, admitted methods
+// (`kernel_ledger_mutation.rs`, and the fixed-membership `try_*` methods here); off-chain previews and tests say so explicitly with
+// `preview_mut_v1`.
 impl std::fmt::Debug for ReservedKernelLedgerV1 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt(&self.ledger, f)
@@ -52,6 +50,62 @@ impl ReservedKernelLedgerV1 {
     pub fn try_clone_v1(&self) -> Result<Self, NativeCoverageV1> {
         let lease = reserve_native_requests_v1(ledger_clone_requests_v1(&self.ledger)?)?;
         Ok(Self { ledger: self.ledger.clone(), lease, projection_lease: None })
+    }
+    /// Reserve before an audited fixed-membership mutation. Keep every growth
+    /// request in the same owner ticket; no detached temporary lease can expire
+    /// while the new BTree membership is still retained by this ledger.
+    pub(super) fn reserve_membership_v1<K, V>(&mut self, absent: bool) -> Result<(), NativeCoverageV1> {
+        if !absent {
+            return Ok(());
+        }
+        let bytes = size_of::<typed::BTreeNodeEnvelopeV1<K, V>>() as u64;
+        if let Some(lease) = self.lease.as_mut() {
+            lease.grow_memory_v1(bytes)
+        } else {
+            self.lease = reserve_native_requests_v1(bytes)?;
+            Ok(())
+        }
+    }
+    /// Kernel sync_bond only inserts one fixed BondRow; it never changes any
+    /// other membership. A refusal leaves collateral and the map untouched.
+    pub fn try_sync_bond_v1(&mut self, bond: [u8; 64], collateral: u64) -> Result<(), NativeCoverageV1> {
+        self.reserve_membership_v1::<[u8; 64], misaka_palw_kernel::ledger::BondRowV1>(!self.ledger.bonds.contains_key(&bond))?;
+        self.ledger.sync_bond(bond, collateral);
+        Ok(())
+    }
+    pub fn try_attest_artifact_v1(&mut self, artifact: [u8; 64]) -> Result<(), NativeCoverageV1> {
+        self.reserve_membership_v1::<[u8; 64], ()>(!self.ledger.attested_artifacts.contains(&artifact))?;
+        self.ledger.attest_artifact(artifact);
+        Ok(())
+    }
+    pub fn try_admit_optimistic_class_v1(&mut self, class: [u8; 64]) -> Result<(), String> {
+        self.try_admit_optimistic_class_checked_v1(class).map_err(|why| why.to_string())
+    }
+    pub fn try_admit_optimistic_class_checked_v1(&mut self, class: [u8; 64]) -> Result<(), NativeDecodeErrorV1<String>> {
+        // Match the kernel's refusal before reserving an insertion it cannot
+        // perform. Its policy check and single admitted-set insert are audited.
+        if self.ledger.opv.policy.is_none() {
+            return self.ledger.admit_optimistic_class(class).map_err(|e| NativeDecodeErrorV1::Decode(e.to_string()));
+        }
+        self.reserve_membership_v1::<[u8; 64], ()>(!self.ledger.opv.admitted.contains(&class))
+            .map_err(NativeDecodeErrorV1::Resource)?;
+        self.ledger.admit_optimistic_class(class).map_err(|e| NativeDecodeErrorV1::Decode(e.to_string()))
+    }
+    /// Both tally implementations can insert only this existing claim's job
+    /// pointer. Reserve it before the kernel mutates lifecycle/consumer state.
+    /// Semantic refusals may retain an unused request conservatively.
+    pub fn prepare_panel_tally_v1(&mut self, claim: &[u8; 64]) -> Result<(), NativeCoverageV1> {
+        if let Some(job) = self.ledger.claims.get(claim).map(|row| row.job_id) {
+            self.reserve_membership_v1::<[u8; 64], [u8; 64]>(!self.ledger.job_claims.contains_key(&job))?;
+        }
+        Ok(())
+    }
+    pub fn try_apply_paid_claim_tally_v2(&mut self, claim: &[u8; 64]) -> Result<(), String> {
+        self.try_apply_paid_claim_tally_checked_v2(claim).map_err(|why| why.to_string())
+    }
+    pub fn try_apply_paid_claim_tally_checked_v2(&mut self, claim: &[u8; 64]) -> Result<(), NativeDecodeErrorV1<String>> {
+        self.prepare_panel_tally_v1(claim).map_err(NativeDecodeErrorV1::Resource)?;
+        self.ledger.apply_paid_claim_tally_v2(claim).map_err(NativeDecodeErrorV1::Decode)
     }
     pub fn as_rebuilt_from_v1(self, rows: &LedgerRowsV1) -> Self {
         // The ticket remains alive while the derived indexes are reconstructed.
@@ -107,7 +161,6 @@ pub fn inventory_ledger_expansion_v1(rows: &LedgerRowsV1, projection_v9: bool) -
         ));
     }
     let mut sum = NativeWireShapeV1::default();
-    let mut derived = false;
     for ((table, key), bytes) in rows {
         if projection_v9 && *table == misaka_palw_kernel::rows::TABLE_FLAT_CONFORMANCE_CLASSES_V9 {
             // No program or scope decode on the authenticated native projection;
@@ -132,14 +185,21 @@ pub fn inventory_ledger_expansion_v1(rows: &LedgerRowsV1, projection_v9: bool) -
             ));
         }
         sum = sum.merge(shape).map_err(shape_error)?;
-        derived |= matches!(*table, 0 | 19 | 22);
     }
-    if derived {
-        return Err(NativeCoverageV1::unsupported::<KernelLedgerV1>(
-            "program-derived ledger workspace",
-            "nested codecs scanned; flat-candidate/typed-spec derived scratch still needs its audited typed expansion closure",
-        ));
-    }
+    // A composite can reference the same class at each of its actual stages.
+    // Kernel forbids composite nesting and memory components, so one copy of
+    // the complete primary decoded pool per stage conservatively covers every
+    // permitted Model/Retrieval component, independent of peer-declared bytes.
+    // Read the pre-composite pool once: repeated references never recursively
+    // multiply other composites' already-expanded component caches.
+    let primary_pool = sum.heap;
+    sum = sum
+        .allocation(
+            sum.composite_components,
+            usize::try_from(primary_pool)
+                .map_err(|_| NativeCoverageV1::overflow::<KernelLedgerV1>("composite primary pool address width"))?,
+        )
+        .map_err(shape_error)?;
     // Kernel from_rows also rebuilds OPV live indexes, verifier-pay books and
     // conformance reverse indexes. Each is keyed by fixed ledger IDs; bounded
     // by the actual count of primary rows, with one node per referenced row.
@@ -210,15 +270,18 @@ impl NativeWireScanV1 for misaka_palw_kernel::flat_candidate7::FlatCandidateReco
     fn scan_native_wire_v1<R: Read>(r: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         <[u8; 64]>::scan_native_wire_v1(r)?;
         let sum = misaka_palw_kernel::flat_candidate7::FlatCandidatePlanV7::scan_native_wire_v1(r)?;
-        sum.merge(program_blob::<misaka_palw_tir::program::TirProgramV1, _>(r, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)?)?
-            .merge(misaka_palw_kernel::trace::ParamCommitmentsV1::scan_native_wire_v1(r)?)
+        sum.merge(flat_program_blob_v1::<misaka_palw_tir::program::TirProgramV1, _>(
+            r,
+            misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64,
+        )?)?
+        .merge(misaka_palw_kernel::trace::ParamCommitmentsV1::scan_native_wire_v1(r)?)
     }
 }
 impl NativeWireScanV1 for misaka_palw_kernel::flat_candidate9::FlatCandidateRecordV9 {
     fn scan_native_wire_v1<R: Read>(r: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         <[u8; 64]>::scan_native_wire_v1(r)?;
         let mut sum = misaka_palw_kernel::flat_candidate9::FlatCandidatePlanV9::scan_native_wire_v1(r)?;
-        sum = sum.merge(program_blob::<misaka_palw_tir::program::TirProgramV1, _>(
+        sum = sum.merge(flat_program_blob_v1::<misaka_palw_tir::program::TirProgramV1, _>(
             r,
             misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64,
         )?)?;
@@ -253,7 +316,9 @@ fn template_requests_v1() -> Option<u64> {
     let fields = descriptor_vectors.checked_add(family_vectors)?.checked_add(schedule)?;
     fields.checked_mul(4)?.checked_add(size_of::<KernelLedgerV1>() as u64)
 }
-fn inventory_ledger_aux_inputs_v1(route: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1) -> Result<u64, NativeCoverageV1> {
+pub(crate) fn inventory_ledger_aux_inputs_v1(
+    route: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1,
+) -> Result<u64, NativeCoverageV1> {
     let mut shape = NativeWireShapeV1::default();
     for ((table, key), bytes) in &route.aux {
         let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
@@ -272,7 +337,17 @@ fn inventory_ledger_aux_inputs_v1(route: &crate::palw_kernel_route_v1::PalwKerne
             .map_err(shape_error)?;
     }
     // Current row plus authenticated class/job/round/lock dependency projection.
-    shape.heap.checked_mul(2).ok_or_else(|| NativeCoverageV1::overflow::<KernelLedgerV1>("coexisting aux projections"))
+    let projections =
+        shape.heap.checked_mul(2).ok_or_else(|| NativeCoverageV1::overflow::<KernelLedgerV1>("coexisting aux projections"))?;
+    // Restore's independent-source pending set borrows one Digest per actual
+    // persisted source row (table30). It is a distinct simultaneous workspace.
+    let sources = route.rows.iter().filter(|((table, _), _)| *table == 30).count() as u64;
+    let pending = sources
+        .checked_mul(size_of::<typed::BTreeNodeEnvelopeV1<&[u8; 64], ()>>() as u64)
+        .ok_or_else(|| NativeCoverageV1::overflow::<KernelLedgerV1>("pending independent source restore set"))?;
+    projections
+        .checked_add(pending)
+        .ok_or_else(|| NativeCoverageV1::overflow::<KernelLedgerV1>("coexisting aux and pending-source projections"))
 }
 
 /// Called by the optional cache only; reservation refusal must skip caching.
@@ -296,7 +371,18 @@ fn program_blob<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1<R>, cap
         types::{Dim, MAX_RANK, TensorType},
         validate::BlockInfo,
     };
+    let before = r.remaining();
     let mut shape = nested_blob::<T, R>(r, cap)?;
+    let encoded = before
+        .checked_sub(r.remaining())
+        .and_then(|n| n.checked_sub(4))
+        .ok_or_else(|| wire::wire_bad("program canonical frame accounting"))?;
+    // decode_canonical re-encodes for exact equality. Pinned Borsh 1.x to_vec
+    // starts with DEFAULT_SERIALIZER_CAPACITY=1024, then grows geometrically.
+    shape = shape.allocation(
+        encoded.max(1024).checked_mul(2).ok_or_else(|| wire::wire_bad("canonical program re-encoding capacity overflow"))?,
+        1,
+    )?;
     let n = shape.collection_entries.checked_add(1).ok_or_else(|| wire::wire_bad("program workspace count overflow"))?;
     let twice = n.checked_mul(2).ok_or_else(|| wire::wire_bad("program Vec growth overflow"))?;
     let occurrences = (MAX_LAYERS as u64).checked_add(2).ok_or_else(|| wire::wire_bad("program schedule overflow"))?;
@@ -346,6 +432,27 @@ fn program_blob<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1<R>, cap
     // retain up to four typed codec/analysis passes plus their parsed program.
     shape.heap = shape.heap.checked_mul(4).ok_or_else(|| wire::wire_bad("coexisting program analysis overflow"))?;
     Ok(shape)
+}
+
+/// Borrowed standalone adapter to the same audited program codec/analysis walk
+/// used by ledger restoration. The stack prefix supplies only Borsh framing;
+/// the actual program bytes are scanned directly without a concatenated Vec.
+pub(crate) fn standalone_tir_program_requests_v1(bytes: &[u8]) -> io::Result<u64> {
+    standalone_program_requests_v1::<misaka_palw_tir::TirProgramV1>(bytes, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)
+}
+pub(crate) fn standalone_program_requests_v1<T: NativeWireScanV1>(bytes: &[u8], cap: u64) -> io::Result<u64> {
+    let len = u32::try_from(bytes.len()).map_err(|_| wire::wire_bad("TIR program frame exceeds u32"))?;
+    let prefix = len.to_le_bytes();
+    let source = std::io::Cursor::new(prefix).chain(bytes);
+    let mut reader = NativeWireReaderV1::new(source, u64::from(len) + 4);
+    let shape = program_blob::<T, _>(&mut reader, cap)?;
+    if reader.remaining() != 0 {
+        return Err(wire::wire_bad("standalone TIR program trailing bytes"));
+    }
+    shape
+        .heap
+        .checked_add(size_of::<NativeRetainedV1<T>>() as u64)
+        .ok_or_else(|| wire::wire_bad("standalone TIR owner framing overflow"))
 }
 
 fn class_record_copies_v1(mut shape: NativeWireShapeV1) -> io::Result<NativeWireShapeV1> {
@@ -414,4 +521,190 @@ pub fn preflight_kernel_served_row_v1(table: u8, key: &[u8], bytes: &[u8]) -> io
         return Err(wire::wire_bad("served kernel row has trailing codec bytes"));
     }
     Ok(shape)
+}
+
+/// Flat7/9 class reconstruction builds metadata, never artifact/trace tensors.
+/// Both scope derivations visit the validated unrolled nodes; v9 additionally
+/// tries up to 23 grammar boundary positions sequentially. Retained relation
+/// rows are one per node/occurrence, with at most MAX_NODE_INPUTS leaf counters.
+/// Scalar work/scratch QUOTES are not allocations of the quoted tensors.
+fn flat_program_blob_v1<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1<R>, cap: u64) -> io::Result<NativeWireShapeV1> {
+    use misaka_palw_kernel::{
+        flat_resources10::PrimitiveResourcesV10, flat_scope7::FlatRelationScopeV7, flat_scope9::FlatOccurrenceScopeV9,
+    };
+    use misaka_palw_tir::program::{MAX_LAYERS, MAX_NODE_INPUTS};
+    let mut shape = program_blob::<T, R>(r, cap)?;
+    let nodes = shape.collection_entries.checked_add(1).ok_or_else(|| wire::wire_bad("flat metadata nodes overflow"))?;
+    let occurrences = (MAX_LAYERS as u64).checked_add(2).ok_or_else(|| wire::wire_bad("flat occurrences overflow"))?;
+    let rows = nodes.checked_mul(occurrences).ok_or_else(|| wire::wire_bad("flat metadata rows overflow"))?;
+    let relation = size_of::<FlatRelationScopeV7>().max(size_of::<FlatOccurrenceScopeV9>());
+    let operands = 2 * MAX_NODE_INPUTS * size_of::<u64>();
+    // Scope Vec growth, its canonical comparison/hash byte Vecs, resources10
+    // primitive rows, and independently validated prepared wiring coexist.
+    let unit = relation
+        + operands
+        + size_of::<PrimitiveResourcesV10>()
+        + 2 * size_of::<typed::BTreeNodeEnvelopeV1<(u16, Option<u16>), (u16, u16)>>
+        > () + size_of::<typed::BTreeNodeEnvelopeV1<u32, ()>>();
+    shape = shape.allocation(rows.checked_mul(8).ok_or_else(|| wire::wire_bad("flat concurrent metadata overflow"))?, unit)?;
+    Ok(shape)
+}
+
+impl NativeWireScanV1 for misaka_palw_kernel::spec::WeightsRootV1 {
+    fn scan_native_wire_v1<R: Read>(r: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
+        // The four fields have the same exact wire schema as ClassRecordV1,
+        // including its independently parsed TIR body and derived gate requests.
+        misaka_palw_kernel::state::ClassRecordV1::scan_native_wire_v1(r)
+    }
+}
+impl NativeWireScanV1 for misaka_palw_kernel::spec::composite::CompositeRootV1 {
+    fn scan_native_wire_v1<R: Read>(r: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
+        use misaka_palw_kernel::spec::composite::{ComponentV1, CompositeStageV1, MAX_COMPOSITE_STAGES_V1};
+        <[u8; 64]>::scan_native_wire_v1(r)?;
+        let count = r.word()? as u64;
+        if count > MAX_COMPOSITE_STAGES_V1 as u64 {
+            return Err(wire::wire_bad("composite stage count exceeds canonical grammar"));
+        }
+        let mut shape = NativeWireShapeV1::default();
+        for _ in 0..count {
+            shape = shape.merge(CompositeStageV1::scan_native_wire_v1(r)?)?;
+        }
+        shape = shape.allocation(
+            count.checked_mul(4).ok_or_else(|| wire::wire_bad("composite stage allocation overflow"))?,
+            size_of::<CompositeStageV1>() + size_of::<ComponentV1>(),
+        )?;
+        shape.composite_components =
+            shape.composite_components.checked_add(count).ok_or_else(|| wire::wire_bad("composite component inventory overflow"))?;
+        Ok(shape)
+    }
+}
+
+#[cfg(test)]
+mod expansion_completion_tests {
+    use super::*;
+    use misaka_palw_tir::{DType, Ref, TensorType, builder::ProgramBuilder, program::HISTORY_BOUND_V1_HELD};
+    fn program() -> misaka_palw_tir::program::TirProgramV1 {
+        let mut b = ProgramBuilder::new(256, HISTORY_BOUND_V1_HELD);
+        let scores = b.param("scores", DType::I32, &[16], false);
+        let mut pre = b.block("topk", vec![]);
+        let x = pre.topk(scores, 0, 2);
+        let x = pre.cast(x, DType::I32);
+        let pre = pre.finish(&[x]);
+        let mut post = b.block("post", vec![TensorType::fixed(DType::I32, &[2])]);
+        let y = post.cast(Ref::CarryIn(0), DType::I32);
+        post.commit(y);
+        let post = post.finish(&[]);
+        b.finish(pre, vec![], post, 0)
+    }
+    #[test]
+    fn flat_seven_and_nine_use_actual_nested_program_and_metadata_inventories() {
+        use misaka_palw_kernel::{
+            descriptor::k2_tir_v4_descriptor, flat_candidate7::*, flat_candidate9::*, trace::ParamCommitmentsV1,
+        };
+        let p = program();
+        let encoded = p.encode();
+        let params = ParamCommitmentsV1 { by_instance: [((0, None), [8; 64])].into() };
+        let descriptor = k2_tir_v4_descriptor().digest();
+        let v7 = derive_flat_candidate_v7(&descriptor, &encoded, &params, 32).unwrap();
+        let v9 = derive_flat_candidate_v9(&descriptor, &encoded, &params, 32).unwrap();
+        let r7 = FlatCandidateRecordV7 {
+            binding: [9; 64],
+            plan: v7.plan,
+            program_bytes: encoded.clone(),
+            param_commitments: params.clone(),
+        };
+        let r9 = FlatCandidateRecordV9 {
+            binding: [9; 64],
+            plan: v9.plan,
+            program_bytes: encoded,
+            param_commitments: params,
+            scope_bytes: borsh::to_vec(&v9.scope).unwrap(),
+            replay_bytes: borsh::to_vec(&v9.replay).unwrap(),
+        };
+        for (table, key, bytes) in
+            [(0, r7.id(), borsh::to_vec(&([1; 64], r7)).unwrap()), (19, r9.id(), borsh::to_vec(&([1; 64], r9)).unwrap())]
+        {
+            let rows = LedgerRowsV1::from([((table, borsh::to_vec(&key).unwrap()), bytes.clone())]);
+            let request = inventory_ledger_expansion_v1(&rows, false).unwrap();
+            assert!(request > bytes.len() as u64, "native construction is explicitly included");
+            let mut truncated = rows;
+            truncated.values_mut().next().unwrap().pop();
+            assert!(inventory_ledger_expansion_v1(&truncated, false).is_err());
+        }
+    }
+    fn fixed_owner(limit: u64) -> (std::sync::Arc<NativeDemandCheckerV1>, ReservedKernelLedgerV1) {
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: limit, database_bytes: 0 });
+        let policy = crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(crate::Hash64::default(), crate::Hash64::default());
+        let ledger = crate::palw_kernel_route_v1::palw_kernel_route_template_v1(policy);
+        // An injected ticket tests growth/refusal without changing process-wide
+        // OnceLock admission settings or relying on test execution order.
+        let lease = Some(checker.reserve_requests_v1(0, 0).unwrap());
+        (checker, ReservedKernelLedgerV1::from_preflight_v1(ledger, lease))
+    }
+    #[test]
+    fn fixed_bond_insertion_reserves_before_mutation_and_reuses_its_owner() {
+        let node = size_of::<typed::BTreeNodeEnvelopeV1<[u8; 64], misaka_palw_kernel::ledger::BondRowV1>>() as u64;
+        let (checker, mut owner) = fixed_owner(node);
+        owner.try_sync_bond_v1([1; 64], 7).unwrap();
+        assert_eq!(checker.outstanding(), (node, 0));
+        owner.try_sync_bond_v1([1; 64], 9).unwrap();
+        assert_eq!(checker.outstanding(), (node, 0));
+        assert_eq!(owner.bonds[&[1; 64]].collateral, 9);
+        let before = owner.bonds.clone();
+        assert!(owner.try_sync_bond_v1([2; 64], 11).is_err());
+        assert_eq!(owner.bonds, before, "capacity refusal precedes insertion/collateral mutation");
+        assert_eq!(checker.outstanding(), (node, 0));
+        drop(owner);
+        assert_eq!(checker.outstanding(), (0, 0));
+    }
+    #[test]
+    fn fixed_attestation_is_idempotent_and_failed_growth_preserves_membership() {
+        let node = size_of::<typed::BTreeNodeEnvelopeV1<[u8; 64], ()>>() as u64;
+        let (checker, mut owner) = fixed_owner(node);
+        owner.try_attest_artifact_v1([1; 64]).unwrap();
+        owner.try_attest_artifact_v1([1; 64]).unwrap();
+        assert_eq!(checker.outstanding(), (node, 0));
+        assert!(owner.try_attest_artifact_v1([2; 64]).is_err());
+        assert_eq!(owner.attested_artifacts.iter().copied().collect::<Vec<_>>(), vec![[1; 64]]);
+        assert!(owner.try_admit_optimistic_class_v1([3; 64]).is_err());
+        assert!(owner.opv.admitted.is_empty());
+        assert_eq!(checker.outstanding(), (node, 0), "semantic refusal allocates no new membership");
+    }
+
+    #[test]
+    fn fixed_membership_refusal_keeps_capacity_distinct_from_missing_authority() {
+        let (checker, mut owner) = fixed_owner(0);
+        assert!(matches!(owner.try_admit_optimistic_class_checked_v1([3; 64]), Err(NativeDecodeErrorV1::Decode(_))));
+        // Exercise the existing policy-enabled membership mutation only; this
+        // test does not establish model eligibility or selected approval.
+        owner.ledger.opv.policy =
+            Some(crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(crate::config::params::ForkActivation::new(7)).opv_policy());
+        assert!(matches!(owner.try_admit_optimistic_class_checked_v1([3; 64]), Err(NativeDecodeErrorV1::Resource(_))));
+        assert!(owner.opv.admitted.is_empty(), "a failed reservation cannot add execution membership");
+        assert!(matches!(owner.try_apply_paid_claim_tally_checked_v2(&[4; 64]), Err(NativeDecodeErrorV1::Decode(_))));
+        assert!(owner.job_claims.is_empty(), "missing paid authority cannot create a payment right");
+        assert_eq!(checker.outstanding(), (0, 0));
+    }
+    #[test]
+    fn actual_composite_stages_are_counted_and_shape_arithmetic_is_checked() {
+        use misaka_palw_kernel::spec::composite::*;
+        let root = CompositeRootV1 {
+            extension: [5; 64],
+            stages: vec![
+                CompositeStageV1 { component: [6; 64], input: StageInputV1::Query(QuerySourceV1::JobQuery) },
+                CompositeStageV1 { component: [7; 64], input: StageInputV1::Query(QuerySourceV1::JobQuery) },
+            ],
+        };
+        let bytes = borsh::to_vec(&root).unwrap();
+        let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+        let shape = CompositeRootV1::scan_native_wire_v1(&mut reader).unwrap();
+        assert_eq!(shape.composite_components, 2);
+        assert_eq!(reader.remaining(), 0);
+        let saturated = NativeWireShapeV1 { composite_components: u64::MAX, ..Default::default() };
+        assert!(saturated.merge(shape).is_err());
+        let too_many = CompositeRootV1 { stages: vec![root.stages[0].clone(); MAX_COMPOSITE_STAGES_V1 + 1], ..root };
+        let bytes = borsh::to_vec(&too_many).unwrap();
+        let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+        assert!(CompositeRootV1::scan_native_wire_v1(&mut reader).is_err());
+    }
 }

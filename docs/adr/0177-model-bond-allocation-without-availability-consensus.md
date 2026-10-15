@@ -252,3 +252,30 @@ DAA emission budgetは総発行制約の参考であり、`S_m`/`f(S_m)`の実�
 **休眠実装（未build・未検証、`palw_model_bond_allocation_v1`は全presetで`None`、有効化は拒否）:** V3 allocation policy（`PalwAllocationAverageV1`: 30日、verifier元本、block機会。validationで`α = 1.5`と30日を固定）。`roll_epoch_v3`がepochごとにminerの成熟した割当とPanel seatが生存claimに拘束した額（`seat_exposure`）をbondごとに合算・元本でpro-rata clipして`S_m(k)`を記録し、30日分の平均`S̄_m`から`A_m = ⌊S̄_m^1.5⌋`を書く。`model_blocks_available_v1`は1 DAA = 1 block機会として`⌊accrued · A_m / ΣA⌋ − reserved_m`を返し、claimのplanが不足を拒否（clipしない）、commitが予約する（riderは先頭blockで計上済み）。待機bond・登録料・AMM/Position・未払報酬は数えない。所在: `consensus/core/src/palw_bond_budget_v1/allocation_v3.rs`、`palw_bond_budget_fold_v1.rs`（epoch roll、plan/commit）、試験source `consensus/core/tests/adr0177_allocation_v3.rs`。
 
 **未了:** 利用者escrowをmodel予算で削らない修正（RFC-0016 P4、`eee1710ce`）はmerge済み。coinbase由来のclaimについて、V3のmodel別報酬対象block権利とcoinbase側のR clip（`palw_model_available_v1`）が`P_m`を二重に適用しないよう解消する必要がある（ユーザー判断待ち）。実装したblock機会は報酬対象ブロック権利の層（claimが拒否されても物理blockは残る）であり、RFC-0016 D-Q1の物理層（V+、Draft）は未実装。新規モデルが`α = 1.5`で採掘機会を失いすぎないことの評価、verifierの参加手順・責任・拘束期間・報酬条件（預けるだけで検査しない対策を含む）の定義は有効化前の必須事項（ユーザー）。
+
+## ユーザー方針 2026-10-15 による改定 — 入手不能と合意creditの関係を変更
+
+* **明示的な変更:** 本ADRは「モデルの入手不能だけでは報酬もweightも止めない」とした。**合意creditについてこれを変更する。** モデルを入手できない抽選検証者は再実行できないので、そのモデルのclaimは`SecurityCertified`にならず、**合意credit(weightを含む)を持たない**。
+* **変わらない点:** すでに認証されたworkの報酬は、入手不能を理由に取り消さない(取り消すのはG14での反証だけ)。入手不能を理由にslashしない。chainはモデルの配布・取得を管理しない(入手不介入は維持)。
+
+**ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
+
+* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
+* **認証は前提に基づく。** claim固定後の乱数でglobal poolから抽選した検証者のm-of-k肯定承認と、G14公開告発windowの異議なし経過で成立する。「抽選されたverifier stakeのうち正直な割合が閾値以上」を明示的な前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない(PRINCIPLES §8)。認証済みでもG14で反証されたclaimはvoidされ、合意creditは取り消される。
+* **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
+* **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
+* 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。
+
+## ユーザー方針 2026-10-15 第4回 — 配分の重みに階層係数 `c_m`
+
+> **統治する前提:** [PRINCIPLES §9](../PRINCIPLES.md)(凍結前提)。規則は [ADR-0179](0179-model-tiers-genesis-annual-1-0-registered-0-3.md) が定める。
+
+* 配分の重みを `A_m = c_m · S̄_m^1.5` とする。`c_m` の値は次のとおり。
+  * `ApprovedModels(h)`(genesis と年次フォークの指定): 1.0。
+  * 後から登録したモデル: 登録時点から固定の 0.3。
+* `S̄_m` は従来どおり、Miner + Verifier の 30 日平均の適格 bond であり、`α = 1.5` は変えない。
+* `c_m` はこの重みに**一度だけ**掛ける。その `P_m` を物理ブロック機会(RFC-0016 V+)と coinbase 配分の両方が使う。受理ブロックの報酬には重ねて掛けない。
+* 登録 tier 全体に発行上限 `κ` を設ける。
+  * 登録 tier の重みの合計が `ΣA` の `κ` を超えると、各重みを同じ割合で縮める。header の `ΣA` は縮める前の値を保つ。
+  * 縮めた分は発行せず、1.0 の階層へも再配分しない。
+* 実装(休眠): `PalwBondBudgetStateV1::roll_epoch_v3_tiered`(`consensus/core/src/palw_bond_budget_v1/allocation_v3.rs`)。fold は fence `palw_model_tier_v1` 以後でこれを使う。fence 未満では、従来の `roll_epoch_v3` と byte 単位で同じである。

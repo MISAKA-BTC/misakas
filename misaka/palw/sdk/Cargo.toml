@@ -89,3 +89,47 @@ rayon.workspace = true
 name = "palw-native-audit-fetch"
 path = "src/bin/palw-native-audit-fetch.rs"
 required-features = ["native-rpc"]
+
+[[bin]]
+name = "palw-native-receipt-audit"
+path = "src/bin/palw-native-receipt-audit.rs"
+
+[[bin]]
+name = "palw-native-receipt-anchors"
+path = "src/bin/palw-native-receipt-anchors.rs"
+required-features = ["native-rpc"]
+
+[[bin]]
+name = "palw-native-receipt-collect"
+path = "src/bin/palw-native-receipt-collect.rs"
+required-features = ["native-rpc"]
+
+[[bin]]
+name = "palw-native-audit-stream39"
+path = "src/bin/palw-native-audit-stream39.rs"
+required-features = ["native-rpc"]
+
+[[bin]]
+name = "palw-native-snapshot39"
+path = "src/bin/palw-native-snapshot39.rs"
+
+[[bin]]
+name = "palw-native-final-audit39"
+path = "src/bin/palw-native-final-audit39.rs"
+
+[[bin]]
+name = "palw-q36-differential40"
+path = "src/bin/palw-q36-differential40.rs"
+
+[[bin]]
+name = "palw-native-receipt-audit39"
+path = "src/bin/palw-native-receipt-audit39.rs"
+
+[[bin]]
+name = "palw-native-redemption39"
+path = "src/bin/palw-native-redemption39.rs"
+
+[[bin]]
+name = "palw-native-receipt-live39"
+path = "src/bin/palw-native-receipt-live39.rs"
+required-features = ["native-rpc"]

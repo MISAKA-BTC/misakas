@@ -24,10 +24,10 @@ mod discovery;
 mod final27;
 #[path = "palw_flat_execution_gc_fold_v24.rs"]
 mod gc;
-#[path = "palw_flat_execution_source_fold_v16.rs"]
-pub(super) mod source;
 #[path = "palw_native_paged_fold_v29.rs"]
 mod paged;
+#[path = "palw_flat_execution_source_fold_v16.rs"]
+pub(super) mod source;
 /// Text29 (original-maximum EOS text jobs) inside the funded namespace,
 /// actions 27..=40; dormant below the funded and Final27 fences.
 #[path = "palw_native_text_fold_v29.rs"]
@@ -61,7 +61,7 @@ fn policies(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Re
         return Err(refused("funded execution immutable policy changed"));
     }
     if stored.is_none() {
-        builder.write_kernel_row(EXECUTION_POLICY_TABLE_V11, Vec::new(), Some(bytes));
+        builder.write_kernel_row(EXECUTION_POLICY_TABLE_V11, Vec::new(), Some(bytes))?;
     }
     Ok(p)
 }
@@ -206,17 +206,18 @@ pub(super) fn quota_shard_seal(
     )
     .map_err(refused)
 }
-pub(super) fn write_shard(builder: &mut TransitionBuilder<'_>, shard: &CheckedQuotaShardV11, job: Digest) {
+pub(super) fn write_shard(builder: &mut TransitionBuilder<'_>, shard: &CheckedQuotaShardV11, job: Digest) -> Result<(), PalwStateV2Error> {
     let g = shard.global_row();
     let a = shard.actor_row();
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))));
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))))?;
     if let Some(s) = shard.subject_row() {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(2, &job), Some(key(&(s.row_root(), s))));
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(2, &job), Some(key(&(s.row_root(), s))))?;
     }
     if let Some(s) = shard.seal_row() {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(3, &s.key.root()), Some(key(&(s.row_root(), s))));
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(3, &s.key.root()), Some(key(&(s.row_root(), s))))?;
     }
+    Ok(())
 }
 fn trace_row_key(role: u8, entitlement: Digest) -> Vec<u8> {
     key(&(17u8, role, entitlement))
@@ -269,16 +270,17 @@ pub(super) fn trace_shard(
     )
     .map_err(refused)
 }
-pub(super) fn write_trace(builder: &mut TransitionBuilder<'_>, shard: &TraceShardV17, role: u8, entitlement: Digest) {
+pub(super) fn write_trace(builder: &mut TransitionBuilder<'_>, shard: &TraceShardV17, role: u8, entitlement: Digest) -> Result<(), PalwStateV2Error> {
     let g = shard.global_row();
     let a = shard.actor_row();
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))));
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))))?;
     builder.write_kernel_row(
         EXECUTION_QUOTA_TABLE_V11,
         trace_row_key(role, entitlement),
         shard.trace_row().map(|r| key(&(r.root(), r))),
-    );
+    )?;
+    Ok(())
 }
 pub(super) fn source_shard_from_rows(
     p: &NativeExecutionPoliciesV11,
@@ -290,12 +292,13 @@ pub(super) fn source_shard_from_rows(
 ) -> Result<SourceShardV16, PalwStateV2Error> {
     SourceShardV16::from_native_rows(&p.quota, plan, g, &g.root(), (a, &a.root()), (s, &s.row_root()), row).map_err(refused)
 }
-pub(super) fn write_source_shard(builder: &mut TransitionBuilder<'_>, shard: &SourceShardV16, job: Digest) {
+pub(super) fn write_source_shard(builder: &mut TransitionBuilder<'_>, shard: &SourceShardV16, job: Digest) -> Result<(), PalwStateV2Error> {
     let g = shard.global_row();
     let a = shard.producer_row();
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))));
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))));
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(16u8, job)), shard.source_row().map(|r| key(&(r.root(), r))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(16u8, job)), shard.source_row().map(|r| key(&(r.root(), r))))?;
+    Ok(())
 }
 fn debit_trace_request(
     builder: &mut TransitionBuilder<'_>,
@@ -314,7 +317,7 @@ fn debit_trace_request(
     } else {
         shard.debit_reserved(&p.quota, &epoch, &plan, &entitlement, lane).map_err(refused)?;
     }
-    write_trace(builder, &shard, lane, entitlement);
+    write_trace(builder, &shard, lane, entitlement)?;
     Ok(())
 }
 fn bounded_ids(route: &PalwKernelRouteStateV1, table: u8, owner: &PalwBondKeyV2, max: usize) -> Result<Vec<Digest>, PalwStateV2Error> {
@@ -377,9 +380,9 @@ fn register(
         },
     };
     owners.push(c.id());
-    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, key(&c.id()), Some(key(&row)));
-    builder.write_kernel_row(EXECUTION_CLASS_OWNER_TABLE_V11, key(signer), Some(key(&owners)));
-    builder.note_kernel_bond(signer);
+    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, key(&c.id()), Some(key(&row)))?;
+    builder.write_kernel_row(EXECUTION_CLASS_OWNER_TABLE_V11, key(signer), Some(key(&owners)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 fn request_class(bytes: &[u8]) -> Result<Digest, PalwStateV2Error> {
@@ -439,9 +442,9 @@ fn prepare(
         return Err(refused("native preparation already present"));
     }
     owners.push(prep);
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&prep), Some(key(&row)));
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(signer), Some(key(&owners)));
-    builder.note_kernel_bond(signer);
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&prep), Some(key(&row)))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(signer), Some(key(&owners)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 fn nonce_witness(requester: Digest, next: &NativeRequesterNonceRowV11) -> NativeRequesterNonceWitnessV11 {
@@ -717,21 +720,21 @@ fn fund(
     if debit != request.reward {
         return Err(refused("native escrow debit differs from original authorized coins"));
     }
-    write_shard(builder, &shard, job_id);
-    write_trace(builder, &trace, 0, job_id);
-    write_source_shard(builder, &source, job_id);
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(16u8, job_id, 1u8)), Some(key(&source_plan.record())));
+    write_shard(builder, &shard, job_id)?;
+    write_trace(builder, &trace, 0, job_id)?;
+    write_source_shard(builder, &source, job_id)?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(16u8, job_id, 1u8)), Some(key(&source_plan.record())))?;
     if let Some(c) = final_admission {
-        final27::write_fund(builder, job_id, c);
+        final27::write_fund(builder, job_id, c)?;
     }
     owners.push(job_id);
     producer_jobs.push(job_id);
-    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, key(&(1u8, producer)), Some(key(&producer_jobs)));
-    builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, key(&requester_operator), Some(key(&next)));
-    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&job_id), Some(key(&row)));
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, key(&(1u8, producer)), Some(key(&producer_jobs)))?;
+    builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, key(&requester_operator), Some(key(&next)))?;
+    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&job_id), Some(key(&row)))?;
     if let Some(admission) = capacity {
-        capacity::write(builder, admission, job_id);
-        builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(23u8, request.preparation)), None);
+        capacity::write(builder, admission, job_id)?;
+        builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(23u8, request.preparation)), None)?;
     }
     builder.write_kernel_row(
         EXECUTION_CREDIT_TABLE_V11,
@@ -744,14 +747,14 @@ fn fund(
             plan: fees,
             earned: 0,
         })),
-    );
-    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, key(signer), Some(key(&owners)));
-    builder.write_kernel_row(EXECUTION_JOB_COUNT_TABLE_V11, vec![], Some(key(&(count + 1))));
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&request.preparation), None);
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, consent_key, None);
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(18u8, request.preparation)), None);
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(13u8, producer)), Some(key(&consents)));
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(signer), Some(key(&preparations)));
+    )?;
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, key(signer), Some(key(&owners)))?;
+    builder.write_kernel_row(EXECUTION_JOB_COUNT_TABLE_V11, vec![], Some(key(&(count + 1))))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&request.preparation), None)?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, consent_key, None)?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(18u8, request.preparation)), None)?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(13u8, producer)), Some(key(&consents)))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(signer), Some(key(&preparations)))?;
     Ok(())
 }
 pub(super) fn apply(
@@ -860,7 +863,7 @@ fn commit(
     let mut shard = quota_shard(builder, p, &epoch, binding.producer, id)?;
     let action = plan.action(QuotaActionKindV11::Metadata, bytes).map_err(refused)?;
     shard.debit_reserved(&p.quota, &epoch, &binding, &plan, &action).map_err(refused)?;
-    write_shard(builder, &shard, id); // invalid expensive post retains its attempt
+    write_shard(builder, &shard, id)?; // invalid expensive post retains its attempt
     let class = checked_class(builder, ctx, p, header.class_id, false)?;
     let post = decode_flat_execution_post_v11(bytes).map_err(|e| refused(e.to_string()))?;
     checked_flat_execution_post_v11(builder.state.kernel_route.as_ref().unwrap(), &class, &book, &post).map_err(refused)?;
@@ -898,10 +901,10 @@ fn commit(
             super::palw_bond_budget_fold_v1::native_income_id_v1(Hash64::from_bytes(id), signer, 19),
         )?;
     }
-    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&id), Some(key(&row)));
-    builder.write_kernel_row(EXECUTION_PROTECTED_TABLE_V11, key(&id), Some(bytes.to_vec()));
-    builder.write_kernel_row(EXECUTION_VECTOR_JOB_TABLE_V11, key(&trace.vector), Some(key(&id)));
-    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)));
+    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&id), Some(key(&row)))?;
+    builder.write_kernel_row(EXECUTION_PROTECTED_TABLE_V11, key(&id), Some(bytes.to_vec()))?;
+    builder.write_kernel_row(EXECUTION_VECTOR_JOB_TABLE_V11, key(&trace.vector), Some(key(&id)))?;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)))?;
     Ok(())
 }
 fn credit(
@@ -962,7 +965,7 @@ fn credit(
         }
         builder.pay_native_recipient_v1(original, row.header.producer, 11, ctx.daa_score, s.producer_credit, queue, true)?;
         if unique27 {
-            builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.header.producer_payout, amount: s.producer_credit }));
+            builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.header.producer_payout, amount: s.producer_credit }))?;
         } else {
             builder.add_kernel_payout(row.header.producer_payout, s.producer_credit)?;
         }
@@ -981,7 +984,7 @@ fn credit(
         if builder.state.pending_payouts.contains_key(&queue) {
             return Err(refused("native original principal queue already occupied"));
         }
-        builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.header.requester_payout, amount: s.requester_refund }));
+        builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.header.requester_payout, amount: s.requester_refund }))?;
     }
     if s.finder_credit != 0 {
         let finder = s.finder.ok_or_else(|| refused("native finder credit lacks original finder"))?;
@@ -1003,8 +1006,8 @@ fn credit(
             builder.add_kernel_payout(payout, s.finder_credit)?;
         }
     }
-    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&row.header.job_id), Some(key(row)));
-    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, key(&row.header.job_id), Some(key(&credit)));
+    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&row.header.job_id), Some(key(row)))?;
+    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, key(&row.header.job_id), Some(key(&credit)))?;
     Ok(())
 }
 fn close_adjudicated_quota(
@@ -1052,7 +1055,7 @@ fn close_adjudicated_quota(
         let paid = shard.debit_expired_terminal(&p.quota, &epoch, &binding, plan).map_err(refused)?;
         shard.mark_expired_terminal_closed(&p.quota, &epoch, &binding, class, book, &paid).map_err(refused)?;
     }
-    write_shard(builder, &shard, id);
+    write_shard(builder, &shard, id)?;
     Ok(())
 }
 fn close(
@@ -1087,7 +1090,7 @@ fn close(
     let binding = book.job().quota_subject(class.record()).map_err(refused)?;
     let mut shard = quota_shard(builder, p, &epoch, binding.producer, id)?;
     let paid = shard.debit_terminal(&p.quota, &epoch, &binding, &plan, bytes).map_err(refused)?;
-    write_shard(builder, &shard, id);
+    write_shard(builder, &shard, id)?;
     let s = book.cancel_unclaimed(class.record(), ctx.daa_score).map_err(refused)?;
     let next =
         builder.state.kernel_route.as_ref().unwrap().execution_nonce_counter_v11(&header.requester_operator).map_err(refused)?;
@@ -1105,7 +1108,7 @@ fn close(
     .map_err(refused)?;
     shard.mark_terminal_closed(&p.quota, &epoch, &terminal, &paid).map_err(refused)?;
     credit(builder, ctx, &mut row, &book, &s)?;
-    write_shard(builder, &shard, id);
+    write_shard(builder, &shard, id)?;
     Ok(())
 }
 impl PalwChainStateV2 {
@@ -1122,6 +1125,7 @@ impl PalwChainStateV2 {
             .fold(0u128, |sum, h| sum.saturating_add(h.producer_reserved as u128))
             // Text29 keeps its own namespaced producer catalogue and headers.
             .saturating_add(text29::reserved(r, bond))
+            .saturating_add(super::palw_native_job_fold_v39::reserved(r, bond))
     }
 }
 
@@ -1235,7 +1239,7 @@ fn apply_chunk_inner(
     let paid = shard
         .debit_protected_fragment(&p.quota, &epoch, &plan, chunk.index as u32, chunk.count as u32, chunk.bytes.len() as u64, 512)
         .map_err(refused)?;
-    write_shard(builder, &shard, id); // retained even if subsequent body fails
+    write_shard(builder, &shard, id)?; // retained even if subsequent body fails
     let r = builder.state.kernel_route.as_ref().unwrap();
     let group_key = key(&(12u8, seal));
     let part_key = key(&(15u8, seal, chunk.index));
@@ -1265,14 +1269,14 @@ fn apply_chunk_inner(
     // Only the final prepaid assembly establishes the whole original group hash.
     shard.accept_protected_fragment(&p.quota, &epoch, &plan, &paid).map_err(refused)?;
     let complete = shard.seal_row().is_some_and(|s| s.fragments.complete());
-    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, group_key.clone(), Some(key(&header)));
-    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, part_key, Some(chunk.bytes.clone()));
-    write_shard(builder, &shard, id);
+    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, group_key.clone(), Some(key(&header)))?;
+    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, part_key, Some(chunk.bytes.clone()))?;
+    write_shard(builder, &shard, id)?;
     if !complete {
         return Ok(());
     }
     shard.debit_protected(&p.quota, &epoch, &plan, ProtectedActionKindV11::WholeChunk, &[]).map_err(refused)?;
-    write_shard(builder, &shard, id);
+    write_shard(builder, &shard, id)?;
     let cap = derive_protected_seal_plan_v11(&plan).map_err(refused)?.assembly_cap as usize;
     let r = builder.state.kernel_route.as_ref().unwrap();
     let mut total = 0usize;
@@ -1299,9 +1303,9 @@ fn apply_chunk_inner(
     {
         return Err(refused("native assembled own proof actor/target differs"));
     }
-    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, group_key, None);
+    builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, group_key, None)?;
     for i in 0..header.count {
-        builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&(15u8, seal, i)), None);
+        builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&(15u8, seal, i)), None)?;
     }
     // All original parts are signed by this same actual native bond. Its actor
     // is not taken from an alleged balance, proof metadata or inner signature.
@@ -1408,10 +1412,10 @@ fn accept(
             )?
             .root(),
         };
-        builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(18u8, id)), Some(key(&(extra.root(), extra))));
+        builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(18u8, id)), Some(key(&(extra.root(), extra))))?;
     }
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(13u8, id)), Some(key(&(consent.root(), consent))));
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(13u8, *signer)), Some(key(&ids)));
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(13u8, id)), Some(key(&(consent.root(), consent))))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(13u8, *signer)), Some(key(&ids)))?;
     Ok(())
 }
 fn availability_terms(consent: &NativeExecutionConsentV13, source: Digest, trace: Digest, horizons: &ExecutionHorizonsV11) -> Digest {
@@ -1507,6 +1511,6 @@ fn pay_delivery_fee(
     }
     // Original requester coins above the signed producer cap are burned.
     // Valid original data is accepted when the remaining fee cap is zero.
-    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, key(&(19u8, id)), Some(key(&row)));
+    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, key(&(19u8, id)), Some(key(&row)))?;
     Ok(())
 }

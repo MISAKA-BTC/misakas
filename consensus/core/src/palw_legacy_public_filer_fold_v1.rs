@@ -234,7 +234,8 @@ impl TransitionBuilder<'_> {
     }
 
     /// The original accepted commitment, journaled for the claim's entire retained lifetime (delta 201).
-    pub(super) fn write_public_fp_job_v1(&mut self, key: Hash64, new: Option<Vec<u8>>) {
+    pub(super) fn write_public_fp_job_v1(&mut self, key: Hash64, new: Option<Vec<u8>>) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_row_v1(&key, &new, |s| &s.fp_public_jobs, false, "native fp_public_jobs writer")?;
         let old = match &new {
             Some(wire) => self.state.fp_public_jobs.insert(key, wire.clone()),
             None => self.state.fp_public_jobs.remove(&key),
@@ -242,16 +243,20 @@ impl TransitionBuilder<'_> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::PublicFpJob { key, old, new });
         }
+        Ok(())
     }
 
     /// **The one writer of `legacy_disputes`** (delta 200): the record, its two indexes, journaled.
-    pub(super) fn write_legacy_dispute(&mut self, claim_id: Hash64, new: Option<PalwDisputeClaimV1>) {
+    pub(super) fn write_legacy_dispute(&mut self, claim_id: Hash64, new: Option<PalwDisputeClaimV1>) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_row_v1(&claim_id, &new, |s| &s.legacy_disputes, false, "native legacy_disputes writer")?;
+        self.reserve_index_members_v1::<(u64, Hash64), ()>(u64::from(new.is_some()), "native legacy_dispute_deadlines index")?;
+        self.reserve_index_members_v1::<(PalwBondKeyV2, Hash64), ()>(new.as_ref().map_or(0, |record| (record.live.len() + record.closed.len()) as u64), "native legacy_disputes_by_reserver index")?;
         let old = match &new {
             Some(record) => self.state.legacy_disputes.insert(claim_id, record.clone()),
             None => self.state.legacy_disputes.remove(&claim_id),
         };
         if old == new {
-            return;
+            return Ok(());
         }
         if let Some(previous) = &old {
             self.state.legacy_dispute_deadlines.remove(&(previous.hard_deadline_daa, claim_id));
@@ -268,6 +273,7 @@ impl TransitionBuilder<'_> {
             }
         }
         self.entries.push(PalwDeltaEntryV2::LegacyDispute { key: claim_id, old, new });
+        Ok(())
     }
 
     /// **The deposit a reservation of `claim_id` holds at `now`**: DA-6's session exposure at the claim's stage —
@@ -293,20 +299,22 @@ impl TransitionBuilder<'_> {
     }
 
     /// **A reserved DA session opened** (`open_da_session_rcore_v1`): counted on its reservation's own budget.
-    pub(super) fn legacy_dispute_count_session_v1(&mut self, claim_id: Hash64, bond: PalwBondKeyV2) {
-        let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return };
-        let Some(row) = record.live.get_mut(&bond) else { return };
+    pub(super) fn legacy_dispute_count_session_v1(&mut self, claim_id: Hash64, bond: PalwBondKeyV2) -> Result<(), PalwStateV2Error> {
+        let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return Ok(()) };
+        let Some(row) = record.live.get_mut(&bond) else { return Ok(()) };
         row.sessions_opened = row.sessions_opened.saturating_add(1);
-        self.write_legacy_dispute(claim_id, Some(record));
+        self.write_legacy_dispute(claim_id, Some(record))?;
+        Ok(())
     }
 
     /// **Lane G14-L: a lane joined a reserved session** (`join_da_session_lane_legacy_held_v1`): counted on its reservation's own lane
     /// budget (the join check refused a lane past it).
-    pub(super) fn legacy_dispute_count_lane_v1(&mut self, claim_id: Hash64, bond: PalwBondKeyV2) {
-        let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return };
-        let Some(row) = record.live.get_mut(&bond) else { return };
+    pub(super) fn legacy_dispute_count_lane_v1(&mut self, claim_id: Hash64, bond: PalwBondKeyV2) -> Result<(), PalwStateV2Error> {
+        let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return Ok(()) };
+        let Some(row) = record.live.get_mut(&bond) else { return Ok(()) };
         row.lanes_joined = row.lanes_joined.saturating_add(1);
-        self.write_legacy_dispute(claim_id, Some(record));
+        self.write_legacy_dispute(claim_id, Some(record))?;
+        Ok(())
     }
 
     /// **The hold ended** (the last live reservation closed): DL-1 re-derives the claim's deadline from its own anchors — no time
@@ -329,7 +337,7 @@ impl TransitionBuilder<'_> {
                 record.dismissed_held.push((*bond, row.deposit));
             }
         }
-        self.write_legacy_dispute(claim_id, Some(record));
+        self.write_legacy_dispute(claim_id, Some(record))?;
         if held {
             self.legacy_dispute_hold_ended_v1(claim_id, now_daa)?;
         }
@@ -355,7 +363,7 @@ impl TransitionBuilder<'_> {
             record.dismissed_held.clear();
         }
         let keep = !record.dismissed_held.is_empty();
-        self.write_legacy_dispute(claim_id, keep.then_some(record));
+        self.write_legacy_dispute(claim_id, keep.then_some(record))?;
         if held {
             self.legacy_dispute_hold_ended_v1(claim_id, now_daa)?;
         }
@@ -377,7 +385,7 @@ impl TransitionBuilder<'_> {
                 self.slash_seat(*bond, *amount, self.params.min_collateral_sompi())?;
             }
         }
-        self.write_legacy_dispute(claim_id, None);
+        self.write_legacy_dispute(claim_id, None)?;
         Ok(())
     }
 }
@@ -479,7 +487,7 @@ pub(super) fn apply_dispute_reserved_v1(
     let until = hard.saturating_add(builder.params.window_challenge_at(now));
     super::palw_exec_v2_rewards_v1::require_native_session_window(&builder.state, builder.params, &claim_id, until)?;
     record.live.insert(reserver, PalwDisputeReservationRowV1 { reserved_daa: now, deposit, sessions_opened: 0, lanes_joined: 0 });
-    builder.write_legacy_dispute(claim_id, Some(record));
+    builder.write_legacy_dispute(claim_id, Some(record))?;
     // The hold: DL-1 gives the claim no deadline while the record holds it (`palw_rcore_deadline_v1`, `arm_deadline`).
     if !held_before {
         builder.disarm_deadline(claim_id);
@@ -535,6 +543,21 @@ pub(super) fn apply_dispute_reacquired_v1(
     let session_binding = match (&request.unit, &request.binding) {
         (U::Event { .. }, None) => None,
         (U::Held(_), Some(binding)) => Some(binding),
+        (U::TirStepLeaf { .. } | U::TirStepNode { .. } | U::TirStepRun { .. } | U::TirRowNode { .. }, None) => {
+            if !builder.params.tir_fence2_active_at(now) {
+                return Err(PalwStateV2Error::TirFence2Refused("a move before palw_tir_fence2 is in force"));
+            }
+            if request.unit.is_tir_shard_v1() && !builder.params.tir_shard_active_at(now) {
+                return Err(PalwStateV2Error::TirShardDormant);
+            }
+            if !builder.state.tir_classes.contains_key(&claim.class_id) {
+                return Err(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "the claim's class is not an IR program" });
+            }
+            let ladder = builder.tir_da_ladder_v1(&claim.class_id, now);
+            crate::palw_da_rcore_v1::palw_tir_step_unit_is_admissible_v1(&request.unit, ladder)
+                .map_err(PalwStateV2Error::TirFence2Refused)?;
+            None
+        }
         (U::LegacyHeldV2(unit), Some(binding)) => {
             if !builder.extras.legacy_held_da_v2_active || builder.state.tir_classes.contains_key(&claim.class_id) {
                 return Err(refused("this claim has no legacy held reacquisition route"));
@@ -571,7 +594,7 @@ pub(super) fn apply_dispute_reacquired_v1(
     open_da_session_rcore_mode_v1(builder, ctx, claim_id, request.reserver, request.unit, session_binding, true)?;
     let mut record = builder.state.legacy_disputes.get(&claim_id).cloned().expect("the session counted its live reservation");
     record.reacquiring.insert(request.reserver, request.unit);
-    builder.write_legacy_dispute(claim_id, Some(record));
+    builder.write_legacy_dispute(claim_id, Some(record))?;
     Ok(())
 }
 
@@ -740,7 +763,7 @@ pub fn palw_legacy_dispute_reservation_check_v1(
     reservation: &PalwDisputeReservationV1,
     now_daa: u64,
 ) -> Result<u128, PalwStateV2Error> {
-    let mut builder = TransitionBuilder::new(state, params, false, false, false, true, extras);
+    let mut builder = TransitionBuilder::try_new(state, params, false, false, false, true, extras)?;
     let ctx = PalwBlockContextV2 { block: Hash64::default(), daa_score: now_daa, blue_score: 0, subsidy: 0 };
     apply_dispute_reserved_v1(&mut builder, &ctx, reservation)?;
     Ok(builder.state.legacy_dispute_reservation_v1(&reservation.claim, &reservation.reserver).map(|row| row.deposit).unwrap_or(0))

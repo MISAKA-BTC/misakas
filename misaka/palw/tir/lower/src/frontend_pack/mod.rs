@@ -5,6 +5,8 @@
 mod descriptor;
 pub mod program;
 mod source;
+pub mod source39;
+pub mod stage28;
 mod stream;
 pub use source::{FrontendSource, checkpoint_inputs, checkpoint_path, is_gguf_checkpoint, source_dir};
 pub use stream::{BuildRecord, Conversion, DescriptorRecord, SourceRecord};
@@ -95,6 +97,7 @@ pub fn compiler_digest() -> String {
         include_str!("descriptor.rs"),
         include_str!("source.rs"),
         include_str!("source/gguf_set.rs"),
+        include_str!("source/palwq36.rs"),
         include_str!("../gguf.rs"),
         include_str!("../artifact.rs"),
         include_str!("../quantfmt/mod.rs"),
@@ -253,6 +256,9 @@ impl FrontendPack {
     pub fn id(&self) -> &str {
         &self.definition.id
     }
+    pub fn scope(&self) -> &Scope {
+        &self.definition.scope
+    }
 
     /// Source headers and bounded role metadata are read here. All binding headers and TIR
     /// admission precede metadata acquisition; weight values are read by the streamed writer.
@@ -268,6 +274,17 @@ impl FrontendPack {
         source: &dyn TensorSource,
         inputs: &TirAdmitInputsV1,
         block_bytes: usize,
+    ) -> Result<Compiled> {
+        self.compile_inner(config, source, inputs, block_bytes, None)
+    }
+
+    fn compile_inner(
+        &self,
+        config: &Value,
+        source: &dyn TensorSource,
+        inputs: &TirAdmitInputsV1,
+        block_bytes: usize,
+        stage: Option<&stage28::StageSemanticsV28>,
     ) -> Result<Compiled> {
         if !(8..=stream::MAX_BLOCK_BYTES).contains(&block_bytes) {
             return Err(bad("FRONTEND_STREAM_LIMIT: block bytes must be 8..=16MiB"));
@@ -295,9 +312,15 @@ impl FrontendPack {
         env.force_globals(&d.vars.keys().cloned().collect::<Vec<_>>())?;
         let program: program::Program = serde_json::from_value(env.eval(&d.program)?)
             .map_err(|e| LowerError::not_lowerable(format!("FRONTEND_ENCODING_OR_KERNEL_EXTENSION_REQUIRED: {e}")))?;
-        let program = program.compile()?;
-        let admission =
-            tir_admit_program_v1(&program, inputs).map_err(|e| LowerError::not_lowerable(format!("TIR_ADMISSION: {e}")))?;
+        let (program, admission, stage_program) = if let Some(stage) = stage {
+            let p = stage.compile(program)?;
+            (misaka_palw_tir_artifact::v2::param_view_v2(&p), None, Some(p))
+        } else {
+            let program = program.compile()?;
+            let admission =
+                tir_admit_program_v1(&program, inputs).map_err(|e| LowerError::not_lowerable(format!("TIR_ADMISSION: {e}")))?;
+            (program, Some(admission), None)
+        };
         let bindings: Vec<Binding> =
             serde_json::from_value(env.eval(&d.bindings)?).map_err(|e| bad(format!("FRONTEND_BINDING: {e}")))?;
         cfg.finish()?;
@@ -378,6 +401,7 @@ impl FrontendPack {
         Ok(Compiled {
             program,
             admission,
+            stage_program,
             bindings: resolved,
             pack_hash: self.hash.clone(),
             pack_id: d.id.clone(),
@@ -413,7 +437,8 @@ struct Resolved {
 
 pub struct Compiled {
     program: TirProgramV1,
-    admission: TirAdmissionV1,
+    admission: Option<TirAdmissionV1>,
+    stage_program: Option<misaka_palw_tir::program_v2::TirProgramV2>,
     bindings: BTreeMap<(u16, Option<u16>), Resolved>,
     pack_hash: String,
     pack_id: String,
@@ -428,6 +453,6 @@ impl Compiled {
         &self.program
     }
     pub fn admission(&self) -> &TirAdmissionV1 {
-        &self.admission
+        self.admission.as_ref().expect("V1 compilation owns V1 admission; V2 is exposed through CompiledStageV28")
     }
 }

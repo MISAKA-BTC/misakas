@@ -515,7 +515,7 @@ impl VirtualStateProcessor {
                                 .palw_court_params_v2
                                 .as_ref()
                                 .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                            let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v4(
+                            let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v5(
                                 state,
                                 session_id,
                                 proof,
@@ -533,6 +533,8 @@ impl VirtualStateProcessor {
                                     .map(|f| f.daa_score()),
                                 // RFC-0006 R6-CELL round 4: the coverage closure's mirror (None on every shipped network).
                                 self.palw_state_params_v2.as_ref().and_then(|p| p.cell_coverage_closure_from_daa()),
+                                // RFC-0006 consumer v2's mirror (None on every shipped network).
+                                self.palw_state_params_v2.as_ref().and_then(|p| p.memory_routing_court_from_daa()),
                             )
                             .map_err(|e| e.to_string())?;
                             if derived != *verdict {
@@ -869,7 +871,7 @@ impl VirtualStateProcessor {
                         .palw_court_params_v2
                         .as_ref()
                         .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v4(
+                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v5(
                         state,
                         session_id,
                         proof,
@@ -886,6 +888,8 @@ impl VirtualStateProcessor {
                             .map(|f| f.daa_score()),
                         // RFC-0006 R6-CELL round 4: the coverage closure's mirror (None on every shipped network).
                         self.palw_state_params_v2.as_ref().and_then(|p| p.cell_coverage_closure_from_daa()),
+                        // RFC-0006 consumer v2's mirror (None on every shipped network).
+                        self.palw_state_params_v2.as_ref().and_then(|p| p.memory_routing_court_from_daa()),
                     )
                     .map_err(|e| e.to_string())?;
                     if derived != *verdict {
@@ -2458,6 +2462,106 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| format!("claim {claim_id}: {e}"))?;
                 }
+                Obj::GdnStepAccusedV2 { accusation } => {
+                    if !self.palw_memory_routing_court_v2_at(point.daa_score) {
+                        return Err("GDN version-2 court is dormant on this network".into());
+                    }
+                    let court = self.palw_court_params_v2.as_ref().ok_or("GDN accusation without V2 court parameters")?;
+                    let claim = state.claim(&accusation.claim).ok_or("GDN accusation names an absent native claim")?;
+                    let ladder = state.class_step_ladder_v1(&claim.class_id, self.palw_court_step_ladder_at(point.daa_score, court));
+                    accusation.validate_shape(ladder)?;
+                    if accusation.encoded_bytes()? > court.max_close_bytes() {
+                        return Err("GDN accusation exceeds the current close-byte ceiling".into());
+                    }
+                    if claim.bond != accusation.executor_bond
+                        || claim.execution_root != accusation.execution_root
+                        || claim.trace_root != accusation.trace_root
+                    {
+                        return Err("GDN accusation executor/roots are not the actual native claim's".into());
+                    }
+                    state.class(&claim.class_id).ok_or("GDN accusation class is absent")?;
+                    let signer = state.bond(&accusation.accuser_bond).ok_or("GDN accuser bond is absent")?;
+                    let network = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    let message = kaspa_consensus_core::palw_gdn_court_v2::palw_gdn_court_session_id_v2(network, accusation);
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &signer.pubkey,
+                        message.as_byte_slice(),
+                        &accusation.signature,
+                        kaspa_consensus_core::palw_gdn_court_v2::PALW_GDN_COURT_MLDSA87_CONTEXT_V2,
+                    ) {
+                        return Err("GDN accusation is not signed by its registered accuser".into());
+                    }
+                    // Full deterministic adjudication runs in the typed fold.
+                    // This String-only walk must not turn a local workspace
+                    // refusal into a skipped invalid peer object.
+                }
+                // RFC-0006 consumer v2 (tag 244): the fence, the close ceiling and the signer — the class registrant for a router
+                // binding (like `ClassSemanticsDeclaredV1`), the accuser for an accusation (like tag 243). Adjudication and the
+                // binding's graph checks run in the typed fold.
+                Obj::MemoryRoutingV2 { object } => {
+                    use kaspa_consensus_core::palw_memory_routing_v2 as mr;
+                    if !self.palw_memory_routing_court_v2_at(point.daa_score) {
+                        return Err("the memory/routing consumer v2 is dormant on this network".into());
+                    }
+                    let court = self.palw_court_params_v2.as_ref().ok_or("memory/routing object without V2 court parameters")?;
+                    object.may_ride(court.max_close_bytes())?;
+                    let network = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    match object.as_ref() {
+                        mr::PalwMemoryRoutingObjectV2::RouterBindingDeclared { declaration, signature } => {
+                            use kaspa_consensus_core::palw_router_binding_v2 as rb;
+                            let class = state.class(&declaration.class_id).ok_or("router binding names an unknown class")?;
+                            if class.artifact_root != declaration.artifact_root {
+                                return Err("router binding names another artifact".into());
+                            }
+                            let registrant = class
+                                .registrant_bond
+                                .as_ref()
+                                .ok_or("a sentinel registration has no signing registrant for a router binding")?;
+                            let bond = state.bond(registrant).ok_or("the signing registrant is not a public bond")?;
+                            if !matches!(bond.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                                return Err("the signing registrant is not Active".into());
+                            }
+                            let message = rb::palw_router_binding_message_v2(network, declaration);
+                            if !Self::verify_mldsa87_with_context_bool(
+                                &bond.pubkey,
+                                message.as_byte_slice(),
+                                signature,
+                                rb::PALW_ROUTER_BINDING_SIGNATURE_CONTEXT_V2,
+                            ) {
+                                return Err("the class registrant did not sign this router binding".into());
+                            }
+                        }
+                        mr::PalwMemoryRoutingObjectV2::Accused { accusation } => {
+                            let claim = state.claim(&accusation.claim).ok_or("memory/routing accusation names an absent native claim")?;
+                            let ladder =
+                                state.class_step_ladder_v1(&claim.class_id, self.palw_court_step_ladder_at(point.daa_score, court));
+                            accusation.validate_shape(ladder)?;
+                            if claim.bond != accusation.executor_bond
+                                || claim.execution_root != accusation.execution_root
+                                || claim.trace_root != accusation.trace_root
+                            {
+                                return Err("memory/routing accusation executor/roots are not the actual native claim's".into());
+                            }
+                            state.class(&claim.class_id).ok_or("memory/routing accusation class is absent")?;
+                            let signer = state.bond(&accusation.accuser_bond).ok_or("memory/routing accuser bond is absent")?;
+                            let message = mr::palw_memory_routing_session_id_v2(network, accusation);
+                            if !Self::verify_mldsa87_with_context_bool(
+                                &signer.pubkey,
+                                message.as_byte_slice(),
+                                &accusation.signature,
+                                mr::PALW_MEMORY_ROUTING_MLDSA87_CONTEXT_V2,
+                            ) {
+                                return Err("memory/routing accusation is not signed by its registered accuser".into());
+                            }
+                        }
+                    }
+                }
                 Obj::ShardCourtAccused { accusation } => {
                     let claim_id = accusation.claim;
                     if !self.palw_shard_court_at(point.daa_score) {
@@ -3579,6 +3683,34 @@ impl VirtualStateProcessor {
                             return Err("monetary material tail is not finalized on the carrying block's selected chain".into());
                         }
                     } else {
+                        if let kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::RecoveryV2(recovery) = action.as_ref() {
+                            if state_params.material_release_recovery_at_v2(point.daa_score).is_none() {
+                                return Err("release recovery own V2 gate is dormant".into());
+                            }
+                            let payload = recovery.payload();
+                            for provider in recovery.provider_signatures() {
+                                self.palw_provider_court_signature_ok(
+                                    state,
+                                    point.daa_score,
+                                    242,
+                                    &provider.provider,
+                                    &payload,
+                                    &provider.signature,
+                                )?;
+                            }
+                            if let kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2::FundedEnroll {monetary,sponsor_signature,..}=recovery.as_ref() {
+                                let payload=monetary.payload();self.palw_provider_court_signature_ok(state,point.daa_score,240,&monetary.terms.sponsor,&payload,sponsor_signature)?;
+                                for offer in &monetary.offers {self.palw_provider_court_signature_ok(state,point.daa_score,240,&offer.provider,&payload,&offer.signature)?;}
+                            }
+                            if let kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2::Replace {replacement,sponsor_signature,..}
+                                | kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2::ReplaceBeforeV4 {replacement,sponsor_signature,..} = recovery.as_ref() {
+                                let payload=replacement.payload();
+                                self.palw_provider_court_signature_ok(state, point.daa_score, 241, &replacement.enrollment.terms.sponsor, &payload, sponsor_signature)?;
+                                for offer in &replacement.enrollment.offers {
+                                    self.palw_provider_court_signature_ok(state, point.daa_score, 241, &offer.provider, &payload, &offer.signature)?;
+                                }
+                            }
+                        }
                         let payload = borsh::to_vec(action.as_ref()).map_err(|e| e.to_string())?;
                         self.palw_provider_court_signature_ok(state, point.daa_score, 242, signer, &payload, signature)?;
                     }
@@ -3748,6 +3880,22 @@ impl VirtualStateProcessor {
                     ) {
                         return Err("staged move is not signed by its literal reserver".into());
                     }
+                }
+                Obj::TirPublicControlV1 { control } => {
+                    if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
+                        continue;
+                    }
+                    // Admission and paid allocation checks remain the fold's.
+                    // A valid signature alone grants no original or owner standing.
+                    control.validate_native_signature_v1(self.palw_network_domain_v2(), state)?;
+                }
+                Obj::TirPublicGrantReadyV1 { grant } => {
+                    if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
+                        continue;
+                    }
+                    // The fold additionally authenticates the exact Valid receipt,
+                    // raw grant, native S4 lock and prepared descriptor atomically.
+                    grant.validate_native_signature_v1(self.palw_network_domain_v2(), state)?;
                 }
                 Obj::TirClassLayoutPublishedV1 { layout, .. } => {
                     // A-2: below its owning fence (`palw_staged_tir_route_v1`) the kind rides unjudged.

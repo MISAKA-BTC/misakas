@@ -101,7 +101,7 @@ question, not a detection gap: the relation `R = H(seed, item)` is checked exact
 | Which positions are checked | route A: **S** (the verifier's choice of `m` of `P`); route B: **C** (re-execute every position, compare the roots) | O/W | `seg_detect::check_claim_by_reexecution_v1` |
 | Decode at a selecting position | **C** at the checked positions (route A); every position (route B) | O | `element.rs:1021` |
 | Cross-segment continuity | **C** (by wiring: position `p` reads `p − 1`'s committed values; no separate boundary statement) | O | K2S §1.3 |
-| Sublinear-read aggregate check (Freivalds/GKR over a polynomial commitment) | **none exists** (DESIGN_GAP, K2S §11.4) | — | — |
+| PCS-backed succinct model-computation argument | **permanently excluded** (2026-10-15 user decision, PRINCIPLES §8); not a design gap or research target | — | — |
 | Generation length | **C** — exact required length (F-B1 fixed) | chain at inclusion | `seg_ledger.rs` |
 
 ### 2.4 K2-TIR-v5 encoders and heads

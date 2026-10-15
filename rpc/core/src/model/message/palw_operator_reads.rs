@@ -120,11 +120,18 @@ pub struct RpcPalwClaimRow {
     /// `capacityRecoveryDaa`). Empty for a claim accepted below `palw_bond_formula_v2` and from a version-4 peer.
     #[serde(default)]
     pub reservation_split: String,
+    /// **Version 6 — RFC-0018 Gate C**: the claim's certification state (`pending`, `certified`, `not-certified`, …). Empty for a claim
+    /// accepted below the fence (every shipped network) and from a version-5 peer. A certified claim's consensus credit is
+    /// premise-based (see `GetPalwSettlementResponse::security_certification_premise`).
+    #[serde(default)]
+    pub security_certification: String,
 }
 
 impl Serializer for RpcPalwClaimRow {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &5, writer)?;
+        // RFC-0018: version 6 only where the row carries a Gate C state (never on a shipped network), so older readers are unaffected.
+        let version: u16 = if self.security_certification.is_empty() { 5 } else { 6 };
+        store!(u16, &version, writer)?;
         store!(String, &self.claim_id, writer)?;
         store!(bool, &self.is_free_prompt, writer)?;
         store!(String, &self.class_id, writer)?;
@@ -168,6 +175,9 @@ impl Serializer for RpcPalwClaimRow {
         store!(String, &self.committed_sompi, writer)?;
         // Version 5: the reservation's decomposition (ADR-0176 amendment).
         store!(String, &self.reservation_split, writer)?;
+        if version >= 6 {
+            store!(String, &self.security_certification, writer)?;
+        }
         Ok(())
     }
 }
@@ -223,6 +233,9 @@ impl Deserializer for RpcPalwClaimRow {
         }
         if version >= 5 {
             row.reservation_split = load!(String, reader)?;
+        }
+        if version >= 6 {
+            row.security_certification = load!(String, reader)?;
         }
         Ok(row)
     }
@@ -1099,11 +1112,23 @@ pub struct GetPalwSettlementResponse {
     pub depth_is_lower_bound: bool,
     pub safe_frontier_blue_score: u64,
     pub safe_frontier_daa: u64,
+    /// **RFC-0018 §7.8**: attempt claims at or after `daa_score` that are `Final` but not SecurityCertified (no consensus or settlement
+    /// credit). Past Gate C a chain holding only such claims reports `settled = false`, `depth = 0`. Wire version 4, written only when
+    /// non-zero (0 on every shipped network, so older readers are unaffected); not carried over gRPC (RFC-0018 GAP-R6).
+    #[serde(default)]
+    pub uncertified_final_anchors: u64,
+    /// **RFC-0018 §7.2 — the premise, stated**: present wherever Gate C is in force at the answer's sink. PALW settlement finality there
+    /// rests on SecurityCertified claims, whose certification is PREMISE-BASED (drawn verifiers' signed approvals, sound only while the
+    /// honest fraction of drawn verifier stake is at least the threshold), not an unconditional mathematical proof. Wire version 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security_certification_premise: Option<String>,
 }
 
 impl Serializer for GetPalwSettlementResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        let version: u16 = if self.native_readiness.is_some() {
+        let version: u16 = if self.uncertified_final_anchors > 0 || self.security_certification_premise.is_some() {
+            4
+        } else if self.native_readiness.is_some() {
             3
         } else if self.dns_retired_at.is_some() || self.native_settlement.is_some() {
             2
@@ -1129,6 +1154,10 @@ impl Serializer for GetPalwSettlementResponse {
             let json = self.native_readiness.as_ref().map(serde_json::to_string).transpose().map_err(std::io::Error::other)?;
             store!(Option<String>, &json, writer)?;
         }
+        if version >= 4 {
+            store!(u64, &self.uncertified_final_anchors, writer)?;
+            store!(Option<String>, &self.security_certification_premise, writer)?;
+        }
         Ok(())
     }
 }
@@ -1136,7 +1165,7 @@ impl Serializer for GetPalwSettlementResponse {
 impl Deserializer for GetPalwSettlementResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let version = load!(u16, reader)?;
-        if !(1..=3).contains(&version) {
+        if !(1..=4).contains(&version) {
             return Err(std::io::Error::other("unknown PALW settlement response version"));
         }
         Ok(Self {
@@ -1160,6 +1189,8 @@ impl Deserializer for GetPalwSettlementResponse {
             } else {
                 None
             },
+            uncertified_final_anchors: if version >= 4 { load!(u64, reader)? } else { 0 },
+            security_certification_premise: if version >= 4 { load!(Option<String>, reader)? } else { None },
         })
     }
 }
@@ -1885,15 +1916,24 @@ pub struct RpcPalwModelLifecycle {
     pub eligibility_subsidy: bool,
     pub eligibility_block_right: bool,
     pub eligibility_final_weight: bool,
+    /// Exams passed: each a PREMISE-BASED certification (m-of-k approval by stake-drawn verifiers, valid under the explicit premise
+    /// that the honest share of the drawn verifier stake is at least the threshold — RFC-0017 U-3), never a proof of computation
+    /// correctness.
     pub eligibility_exams_passed: u32,
     /// Exam attempts consumed by the class's lineage (all registrations of the same weights).
     pub eligibility_lineage_attempts: u32,
+    /// **ADR-0179 (wire version 4): the model's tier** — `not-governed` below `palw_model_tier_v1` (every shipped network), `approved`
+    /// (genesis or an annual fork listing: 1.0) or `registered` (fixed 0.3 from registration; no review ever raises it).
+    pub model_tier: String,
+    /// The tier's allocation coefficient `c_m`, permille (1000 below the fence and for `approved`).
+    pub model_tier_permille: u32,
 }
 
 impl Serializer for RpcPalwModelLifecycle {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        // Version 2 appends `recommended_pool_sompi` (the Activation Pool's P4, 2026-09-25); version 3 the RFC-0017 eligibility fields.
-        store!(u16, &3, writer)?;
+        // Version 2 appends `recommended_pool_sompi` (the Activation Pool's P4, 2026-09-25); version 3 the RFC-0017 eligibility fields;
+        // version 4 ADR-0179's model tier.
+        store!(u16, &4, writer)?;
         store!(String, &self.class_id, writer)?;
         store!(String, &self.artifact_root, writer)?;
         store!(bool, &self.is_base_class, writer)?;
@@ -1938,6 +1978,8 @@ impl Serializer for RpcPalwModelLifecycle {
         store!(bool, &self.eligibility_final_weight, writer)?;
         store!(u32, &self.eligibility_exams_passed, writer)?;
         store!(u32, &self.eligibility_lineage_attempts, writer)?;
+        store!(String, &self.model_tier, writer)?;
+        store!(u32, &self.model_tier_permille, writer)?;
         Ok(())
     }
 }
@@ -1992,6 +2034,9 @@ impl Deserializer for RpcPalwModelLifecycle {
             eligibility_final_weight: if version >= 3 { load!(bool, reader)? } else { true },
             eligibility_exams_passed: if version >= 3 { load!(u32, reader)? } else { 0 },
             eligibility_lineage_attempts: if version >= 3 { load!(u32, reader)? } else { 0 },
+            // Versions 1–3 (a node before ADR-0179) are untiered: every model weighs 1.0.
+            model_tier: if version >= 4 { load!(String, reader)? } else { "not-governed".to_string() },
+            model_tier_permille: if version >= 4 { load!(u32, reader)? } else { 1_000 },
         })
     }
 }
@@ -2139,6 +2184,109 @@ impl Deserializer for RpcPalwClassSeating {
     }
 }
 
+/// **RFC-0019: one annual catalog edition this node's binary carries** (wire version 4 of the registry response).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwAnnualCatalogEdition {
+    pub edition: u32,
+    pub activation_daa: u64,
+    pub previous_root: String,
+    pub root: String,
+    /// Models this edition ADDS (the catalog is add-only; `ApprovedModels(h)` is the union of editions 0..=active).
+    pub models: u32,
+    /// `SCHEDULED` (carried, below its height) or `ACTIVE` — all a node can derive. The release-process lifecycle (PROPOSED …
+    /// LOCKED_IN, ABORTED) lives in the signed release manifest, never in a node read.
+    pub state: String,
+}
+
+impl Serializer for RpcPalwAnnualCatalogEdition {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u32, &self.edition, writer)?;
+        store!(u64, &self.activation_daa, writer)?;
+        store!(String, &self.previous_root, writer)?;
+        store!(String, &self.root, writer)?;
+        store!(u32, &self.models, writer)?;
+        store!(String, &self.state, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwAnnualCatalogEdition {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            edition: load!(u32, reader)?,
+            activation_daa: load!(u64, reader)?,
+            previous_root: load!(String, reader)?,
+            root: load!(String, reader)?,
+            models: load!(u32, reader)?,
+            state: load!(String, reader)?,
+        })
+    }
+}
+
+/// **RFC-0019: the annual model catalog as this node reads it at its tip** — the editions its binary carries, the edition and root
+/// in force, and the next activation. `scheduled` is false (and everything empty / zero) wherever `palw_model_tier_v1` is not
+/// scheduled — every shipped network. `readiness` is always `off-chain`: readiness is measured by operators' tooling and is never a
+/// consensus input, and no field here is a vote (RFC-0019 §9).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwAnnualCatalogStatus {
+    pub scheduled: bool,
+    pub fence_daa: u64,
+    pub active: bool,
+    pub current_edition: u32,
+    pub current_root: String,
+    pub has_next: bool,
+    pub next_edition: u32,
+    pub next_activation_daa: u64,
+    pub next_root: String,
+    pub editions: Vec<RpcPalwAnnualCatalogEdition>,
+    /// The highest kernel version this binary implements for a catalog entry.
+    pub kernel_version_max: u32,
+    pub readiness: String,
+}
+
+impl Serializer for RpcPalwAnnualCatalogStatus {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.scheduled, writer)?;
+        store!(u64, &self.fence_daa, writer)?;
+        store!(bool, &self.active, writer)?;
+        store!(u32, &self.current_edition, writer)?;
+        store!(String, &self.current_root, writer)?;
+        store!(bool, &self.has_next, writer)?;
+        store!(u32, &self.next_edition, writer)?;
+        store!(u64, &self.next_activation_daa, writer)?;
+        store!(String, &self.next_root, writer)?;
+        serialize!(Vec<RpcPalwAnnualCatalogEdition>, &self.editions, writer)?;
+        store!(u32, &self.kernel_version_max, writer)?;
+        store!(String, &self.readiness, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwAnnualCatalogStatus {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            scheduled: load!(bool, reader)?,
+            fence_daa: load!(u64, reader)?,
+            active: load!(bool, reader)?,
+            current_edition: load!(u32, reader)?,
+            current_root: load!(String, reader)?,
+            has_next: load!(bool, reader)?,
+            next_edition: load!(u32, reader)?,
+            next_activation_daa: load!(u64, reader)?,
+            next_root: load!(String, reader)?,
+            editions: deserialize!(Vec<RpcPalwAnnualCatalogEdition>, reader)?,
+            kernel_version_max: load!(u32, reader)?,
+            readiness: load!(String, reader)?,
+        })
+    }
+}
+
 /// `fence_daa` is 0 where no registry is scheduled (`scheduled` false); `active` is whether the
 /// fence is in force at the tip; the reference constants are the globals every class is derived
 /// against.
@@ -2203,12 +2351,17 @@ pub struct GetPalwModelRegistryResponse {
     /// Appended after `blocking`: a reader of version 2 stops before it. Empty on a node of version 2 and below the fence.
     #[serde(default)]
     pub seating: Vec<RpcPalwClassSeating>,
+    /// **Version 4** (RFC-0019): the annual model catalog — editions carried, the root in force, the next activation. Appended after
+    /// `seating`: a reader of version 3 stops before it. Default (not scheduled) from a node of version 3.
+    #[serde(default)]
+    pub annual_catalog: RpcPalwAnnualCatalogStatus,
 }
 
 impl Serializer for GetPalwModelRegistryResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        // Version 2 appends `blocking` (the class's stage and what is missing); version 3 appends `seating`.
-        store!(u16, &3, writer)?;
+        // Version 2 appends `blocking` (the class's stage and what is missing); version 3 appends `seating`; version 4 the RFC-0019
+        // annual catalog.
+        store!(u16, &4, writer)?;
         store!(bool, &self.available, writer)?;
         store!(u64, &self.tip_daa, writer)?;
         store!(bool, &self.scheduled, writer)?;
@@ -2249,6 +2402,7 @@ impl Serializer for GetPalwModelRegistryResponse {
         store!(u64, &self.final_work_epochs, writer)?;
         serialize!(Vec<RpcPalwClassBlocking>, &self.blocking, writer)?;
         serialize!(Vec<RpcPalwClassSeating>, &self.seating, writer)?;
+        serialize!(RpcPalwAnnualCatalogStatus, &self.annual_catalog, writer)?;
         Ok(())
     }
 }
@@ -2299,6 +2453,12 @@ impl Deserializer for GetPalwModelRegistryResponse {
             blocking: if version >= 2 { deserialize!(Vec<RpcPalwClassBlocking>, reader)? } else { Vec::new() },
             // Versions 1 and 2 serve no seating.
             seating: if version >= 3 { deserialize!(Vec<RpcPalwClassSeating>, reader)? } else { Vec::new() },
+            // Versions 1–3 (a node before RFC-0019) serve no annual catalog: read as not scheduled.
+            annual_catalog: if version >= 4 {
+                deserialize!(RpcPalwAnnualCatalogStatus, reader)?
+            } else {
+                RpcPalwAnnualCatalogStatus::default()
+            },
         })
     }
 }

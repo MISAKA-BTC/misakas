@@ -117,6 +117,15 @@ pub fn paid_claim_sources_from_kernel_rows_v2(
 ) -> Result<VerifiedPaidClaimSourcesV2, Refusal> {
     let route = PalwKernelRouteStateV1::from_served_rows_v1(header, rows, ledger_root, aux_root)
         .map_err(|e| Refusal::new("ROWS_NOT_THE_CHAIN", e))?;
+    paid_claim_sources_from_route_v2(route, context)
+}
+
+/// As with the round reader, authentication of this route's selected-chain
+/// origin belongs to the caller. No raw projection installs native authority.
+pub fn paid_claim_sources_from_route_v2(
+    route: PalwKernelRouteStateV1,
+    context: &Digest,
+) -> Result<VerifiedPaidClaimSourcesV2, Refusal> {
     let authority = route.paid_claim_authority_v2(context).map_err(|e| Refusal::new("CLAIM_AUTHORITY_INVALID", e))?;
     let now = route.ledger().map_err(|e| Refusal::new("CLAIM_LEDGER_INVALID", e))?.daa;
     let check = route.paid_claim_check_authority_v2(context, now).map_err(|e| Refusal::new("CLAIM_SOURCE_INVALID", e))?;
@@ -158,6 +167,7 @@ pub fn paid_claim_commit_object_v2(
         || j.base_job != base_job
         || commit_daa > j.last_commit_daa
         || l.claims.contains_key(&base_claim)
+        || l.beacon_sources.values().any(|source| source.job == base_job && source.outcome.is_none())
         || material_consent == [0; 64]
     {
         return Err(Refusal::new("CLAIM_ENROLLMENT_INVALID", "prospective class/job/material consent or commit deadline mismatch"));
@@ -309,11 +319,15 @@ pub fn paid_claim_job_object_v2(
         .or_else(|| l.typed.jobs.get(&base_job).map(|j| j.class()));
     if l.job_poster(&base_job) != Some(payer)
         || baseclass != Some(c.base_class)
-        || l.claims.values().any(|c| c.job_id == base_job)
+        || !misaka_palw_kernel::claim_paid_v2::paid_job_enrollment_is_prospective_v3(&l, &base_job, l.daa)
+        || route.paid_claim_job_is_enrolled_v3(&base_job).map_err(|e| Refusal::new("CLAIM_JOB_AUTHORITY", e))?
         || maximum_consumers == 0
         || last_commit_daa <= l.daa
     {
-        return Err(Refusal::new("CLAIM_PAYER_CONSENT_INVALID", "actual payer must enroll the job before any claim"));
+        return Err(Refusal::new(
+            "CLAIM_PAYER_CONSENT_INVALID",
+            "actual payer must enroll the job before any live seal, source contract or claim",
+        ));
     }
     Ok(KernelRouteObjectV1::PaidClaimV2 {
         object: PaidClaimObjectV2::EnrollJob {
@@ -341,12 +355,26 @@ pub fn paid_claim_commit_object_derived_v2(
         misaka_palw_kernel::route::SaltedCommitV1::Spec { claim } => claim.id(),
     };
     let mut l = route.ledger().map_err(|e| Refusal::new("CLAIM_LEDGER_INVALID", e))?;
-    l.begin_block(commit_daa).map_err(|e| Refusal::new("CLAIM_ADMISSION_INVALID", e.to_string()))?;
-    let inner = KernelRouteObjectV1::CommitClaimSalted { commit: commit.clone(), salt };
-    l.apply_object(&inner, &misaka_palw_kernel::ledger::AuthV1 { signer_bond: commit.producer() })
-        .map_err(|e| Refusal::new("CLAIM_ADMISSION_INVALID", e.to_string()))?;
+    if l.beacon_sources.values().any(|source| {
+        source.job
+            == match &commit {
+                misaka_palw_kernel::route::SaltedCommitV1::Claim { claim, .. }
+                | misaka_palw_kernel::route::SaltedCommitV1::Segmented { claim, .. } => claim.job_id,
+                misaka_palw_kernel::route::SaltedCommitV1::Pipeline { claim, .. } => claim.job_id,
+                misaka_palw_kernel::route::SaltedCommitV1::Spec { claim } => claim.job_id(),
+            }
+            && source.outcome.is_none()
+    }) {
+        return Err(Refusal::new(
+            "CLAIM_SOURCE_DEPENDENCY",
+            "a paid checker-dependent claim cannot consume an independent source opt-in",
+        ));
+    }
+    l.try_replay_salted_claim_v4(&commit, &salt, commit.producer(), commit_daa)
+        .map_err(|e| Refusal::new("CLAIM_ADMISSION_INVALID", e))?;
     let subject = l
-        .claim_challenge_subject(&base_claim)
+        .try_claim_challenge_subject_v4(&base_claim)
+        .map_err(|e| Refusal::new("CLAIM_ADMISSION_CAPACITY", e.to_string()))?
         .ok_or_else(|| Refusal::new("CLAIM_SUBJECT_MISSING", "all-target base statement was not admitted"))?;
     paid_claim_commit_object_v2(route, class, job, commit, salt, subject.commitment_root, material_consent, commit_daa)
 }
@@ -364,6 +392,10 @@ pub fn sign_paid_claim_object_v2(
     };
     let actor = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&bond);
     let named = match inner {
+        // PRINCIPLES §8: the SDK never signs a retired compact V4 contract or proof binding.
+        PaidClaimObjectV2::RegisterCompactContractV4 { .. } | PaidClaimObjectV2::BindCompactProofV4 { .. } => {
+            return Err(misaka_palw_kernel::claim_paid_v2::COMPACT_V4_RETIRED_REASON.into());
+        }
         PaidClaimObjectV2::RegisterClass { class } => Some(class.registrant),
         PaidClaimObjectV2::EnrollJob { job } => Some(job.payer),
         PaidClaimObjectV2::Commit { enrollment, commit, .. } => {
@@ -400,9 +432,17 @@ pub fn sign_paid_claim_object_v2(
     Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::KernelRouteV1 { bytes, signer: bond, signature })
 }
 
+pub mod all_target_bootstrap;
 pub mod cli;
 pub mod private_bootstrap;
 pub mod producer_resources;
+pub mod provider_handoff_v4;
+/// RFC-0007: the explicit drawn-verifier assumption report of one paid claim (reporting only; never a credit path).
+pub mod assumptions_v1;
+/// RFC-0006: every registered class's derived worst-case bounds, with time/cost left UNKNOWN until measured.
+pub mod model_bounds_v1;
+pub mod provider_reader_v4;
+pub mod provider_actions_v4;
 
 /// Portable public material for the all-target CLI verifier. Every value is
 /// authenticated by the mathematical verifier against the anchored commitments.
@@ -644,6 +684,18 @@ pub fn paid_claim_round_sources_from_kernel_rows_v3(
 ) -> Result<VerifiedPaidClaimSourcesV2, Refusal> {
     let route = PalwKernelRouteStateV1::from_served_rows_v1(header, rows, ledger_root, aux_root)
         .map_err(|e| Refusal::new("ROWS_NOT_THE_CHAIN", e))?;
+    paid_claim_round_sources_from_route_v3(route, enrollment, round)
+}
+
+/// Consume an already pinned route projection without exporting/duplicating all
+/// rows. The caller authenticates its own selected-chain snapshot; this pure
+/// constructor validates signed enrollment, future lock and assignment only.
+/// It does not turn an arbitrary caller-supplied route into chain authority.
+pub fn paid_claim_round_sources_from_route_v3(
+    route: PalwKernelRouteStateV1,
+    enrollment: Digest,
+    round: u32,
+) -> Result<VerifiedPaidClaimSourcesV2, Refusal> {
     let authority = route.paid_claim_enrollment_v3(&enrollment).map_err(|e| Refusal::new("CLAIM_ENROLLMENT", e))?;
     let row = route.paid_claim_round_v3(&enrollment, round).map_err(|e| Refusal::new("CLAIM_ROUND", e))?;
     let check = route
@@ -655,3 +707,5 @@ pub fn paid_claim_round_sources_from_kernel_rows_v3(
     }
     Ok(VerifiedPaidClaimSourcesV2 { route, authority, check, lock, round: Some(row) })
 }
+
+pub mod compact_v4;

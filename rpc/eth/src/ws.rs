@@ -56,6 +56,13 @@ const OUTBOUND_QUEUE: usize = 2048;
 /// WebSocket keepalive ping period. Long-lived WS connections have no blanket
 /// `CONN_TIMEOUT`; periodic pings (plus the peer's TCP state) detect dead links.
 const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+/// Close a WebSocket whose peer has sent NOTHING for this long (audit #8b). The pinger
+/// only detects TCP-dead links — a silent-but-TCP-alive peer would otherwise hold a
+/// `MAX_CONNECTIONS` permit forever, so 512 of them exhaust the accept budget. The server
+/// pings every `PING_INTERVAL`, so any compliant client produces an inbound pong well
+/// within this window; kept at 3x the ping period so a quiet healthy subscriber is never
+/// killed by a single missed/late pong.
+const READ_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 /// Max concurrent subscriptions per connection (design §9.4) — bounds the
 /// forwarding tasks a single connection can spawn (a DoS guard); excess
 /// `eth_subscribe`s are refused until the client unsubscribes.
@@ -72,17 +79,33 @@ pub fn upgrade_key(head: &str) -> Option<String> {
         return None;
     }
     let mut has_upgrade = false;
+    let mut has_connection_upgrade = false;
+    let mut version_13 = false;
     let mut key: Option<String> = None;
     for line in lines {
         let Some((k, v)) = line.split_once(':') else { continue };
         let k = k.trim();
         if k.eq_ignore_ascii_case("upgrade") && v.to_ascii_lowercase().contains("websocket") {
             has_upgrade = true;
+        } else if k.eq_ignore_ascii_case("connection") && v.to_ascii_lowercase().contains("upgrade") {
+            has_connection_upgrade = true;
+        } else if k.eq_ignore_ascii_case("sec-websocket-version") && v.trim() == "13" {
+            version_13 = true;
         } else if k.eq_ignore_ascii_case("sec-websocket-key") {
             key = Some(v.trim().to_string());
         }
     }
-    if has_upgrade { key } else { None }
+    // RFC 6455 §4.1 (audit #8a): a valid handshake needs Upgrade: websocket AND
+    // Connection: Upgrade AND Sec-WebSocket-Version: 13 AND a Sec-WebSocket-Key that
+    // base64-decodes to exactly 16 bytes. Missing/garbage handshakes are rejected.
+    if !(has_upgrade && has_connection_upgrade && version_13) {
+        return None;
+    }
+    let key = key?;
+    if base64::engine::general_purpose::STANDARD.decode(key.as_bytes()).map(|b| b.len()) != Ok(16) {
+        return None;
+    }
+    Some(key)
 }
 
 /// RFC 6455 §4.2.2: `base64(SHA1(key ‖ GUID))`.
@@ -285,10 +308,14 @@ where
     let mut assembling: Option<(u8, Vec<u8>)> = None;
 
     let result = loop {
-        let frame = match reader.next().await {
-            Ok(Some(f)) => f,
-            Ok(None) => break Ok(()), // clean EOF
-            Err(e) => break Err(e),   // protocol / I/O fault
+        // Read-idle timeout (audit #8b): any inbound frame (incl. the pong to our own
+        // periodic ping) resets the window, so a live client never trips it; a silent
+        // peer is dropped instead of holding its connection permit indefinitely.
+        let frame = match tokio::time::timeout(READ_IDLE_TIMEOUT, reader.next()).await {
+            Ok(Ok(Some(f))) => f,
+            Ok(Ok(None)) => break Ok(()), // clean EOF
+            Ok(Err(e)) => break Err(e),   // protocol / I/O fault
+            Err(_) => break Ok(()),       // idle past READ_IDLE_TIMEOUT → close
         };
         match frame.opcode {
             OP_PING => {
@@ -296,7 +323,7 @@ where
                     break Ok(()); // slow/closed consumer → done
                 }
             }
-            OP_PONG => {} // keepalive acknowledgement — ignore
+            OP_PONG => {} // keepalive acknowledgement — receiving it reset the idle timer
             OP_CLOSE => {
                 let _ = out_tx.try_send(WsOut::Close);
                 break Ok(());
@@ -586,14 +613,26 @@ mod tests {
 
     #[test]
     fn upgrade_key_detection() {
-        let ws = "GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+        // The RFC 6455 §1.3 nonce decodes to exactly 16 bytes ("the sample nonce").
+        let ws = "GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
         assert_eq!(upgrade_key(ws).as_deref(), Some("dGhlIHNhbXBsZSBub25jZQ=="));
         // A POST (the HTTP JSON-RPC path) is never an upgrade.
-        let post = "POST / HTTP/1.1\r\nUpgrade: websocket\r\nSec-WebSocket-Key: abc\r\n\r\n";
+        let post = "POST / HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
         assert_eq!(upgrade_key(post), None);
         // A GET without the Upgrade header is not an upgrade.
-        let plain = "GET / HTTP/1.1\r\nSec-WebSocket-Key: abc\r\n\r\n";
+        let plain = "GET / HTTP/1.1\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
         assert_eq!(upgrade_key(plain), None);
+        // Audit #8a: missing Connection: Upgrade / Version: 13 / a 16-byte key are all rejected.
+        let no_conn =
+            "GET / HTTP/1.1\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+        assert_eq!(upgrade_key(no_conn), None);
+        let no_ver =
+            "GET / HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+        assert_eq!(upgrade_key(no_ver), None);
+        let bad_ver = "GET / HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 8\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+        assert_eq!(upgrade_key(bad_ver), None);
+        let bad_key = "GET / HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: abc\r\n\r\n";
+        assert_eq!(upgrade_key(bad_key), None);
     }
 
     /// Encode a client→server frame (masked, per RFC 6455 §5.1) for tests.

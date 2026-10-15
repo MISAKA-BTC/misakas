@@ -4,7 +4,7 @@ use crate::{model::stores::U64Key, pipeline::ProcessingCounters};
 use itertools::Itertools;
 use kaspa_consensus_core::{api::ConsensusApi, config::Config, mining_rules::MiningRules};
 use kaspa_consensus_notify::root::ConsensusNotificationRoot;
-use kaspa_consensusmanager::{ConsensusFactory, ConsensusInstance, DynConsensusCtl, SessionLock};
+use kaspa_consensusmanager::{ConsensusCreationResult, ConsensusFactory, ConsensusInstance, DynConsensusCtl, SessionLock};
 use kaspa_core::{debug, time::unix_now, warn};
 use kaspa_database::{
     prelude::{
@@ -326,7 +326,7 @@ impl Factory {
 }
 
 impl ConsensusFactory for Factory {
-    fn new_active_consensus(&self) -> (ConsensusInstance, DynConsensusCtl) {
+    fn new_active_consensus(&self) -> ConsensusCreationResult<(ConsensusInstance, DynConsensusCtl)> {
         assert!(!self.notification_root.is_closed());
 
         let mut config = self.config.clone();
@@ -365,7 +365,7 @@ impl ConsensusFactory for Factory {
             self.tx_script_cache_counters.clone(),
             entry.creation_timestamp,
             self.mining_rules.clone(),
-        ));
+        )?);
 
         // We write the new active entry only once the instance was created successfully.
         // This way we can safely avoid processing genesis in future process runs
@@ -375,10 +375,10 @@ impl ConsensusFactory for Factory {
             self.management_store.write().save_new_active_consensus(entry).unwrap();
         }
 
-        (ConsensusInstance::new(session_lock, consensus.clone()), Arc::new(Ctl::new(self.management_store.clone(), db, consensus)))
+        Ok((ConsensusInstance::new(session_lock, consensus.clone()), Arc::new(Ctl::new(self.management_store.clone(), db, consensus))))
     }
 
-    fn new_staging_consensus(&self) -> (ConsensusInstance, DynConsensusCtl) {
+    fn new_staging_consensus(&self) -> ConsensusCreationResult<(ConsensusInstance, DynConsensusCtl)> {
         assert!(!self.notification_root.is_closed());
 
         let entry = self.management_store.write().new_staging_consensus_entry().unwrap();
@@ -394,7 +394,7 @@ impl ConsensusFactory for Factory {
             .unwrap();
 
         let session_lock = SessionLock::new();
-        let consensus = Arc::new(Consensus::new(
+        let consensus = match Consensus::new(
             db.clone(),
             Arc::new(self.config.to_builder().skip_adding_genesis().build()),
             session_lock.clone(),
@@ -403,13 +403,23 @@ impl ConsensusFactory for Factory {
             self.tx_script_cache_counters.clone(),
             entry.creation_timestamp,
             self.mining_rules.clone(),
-        ));
+        ) {
+            Ok(consensus) => Arc::new(consensus),
+            Err(unavailable) => {
+                // No staging instance or worker was published. Release its DB
+                // handle before the existing cancellation path removes precisely
+                // the newly registered staging entry; active consensus is intact.
+                drop(db);
+                self.delete_staging_entry();
+                return Err(unavailable);
+            }
+        };
 
         // The default for the body_missing_anticone_set is an empty vector, which corresponds precisely to the state before a consensus commit
         // But The default value for the pruning_utxoset_stable_flag is true, but a staging consensus does not have a utxo and hence the flag is dropped explicitly
         consensus.set_pruning_utxoset_stable_flag(false).unwrap();
 
-        (ConsensusInstance::new(session_lock, consensus.clone()), Arc::new(Ctl::new(self.management_store.clone(), db, consensus)))
+        Ok((ConsensusInstance::new(session_lock, consensus.clone()), Arc::new(Ctl::new(self.management_store.clone(), db, consensus))))
     }
 
     fn close(&self) {

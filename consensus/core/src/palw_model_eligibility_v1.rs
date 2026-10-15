@@ -76,10 +76,15 @@ pub const PALW_ELIGIBILITY_ATTESTATION_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw
 // Design values (RFC-0017 §11) — illustrative, unapproved; validation refuses every activation.
 // =================================================================================================================================
 
-/// `m`: stake-proportional draws per exam (RFC-0017 §5 uses 4-of-7 as its worked example).
-pub const PALW_ELIG_EXAM_M_DESIGN_V1: u16 = 7;
-/// `k`: positive attestations an exam needs. Must be a strict majority of `m` (validation).
-pub const PALW_ELIG_EXAM_K_DESIGN_V1: u16 = 4;
+/// `m`: stake-proportional draws per exam. **U-1 (user decision 2026-10-15): the calibration candidate is 47** — consistent with the
+/// ECON round-2 gate's 24-of-47 (readiness §3f) — replacing 7 as the default; NOT approved for production.
+pub const PALW_ELIG_EXAM_M_DESIGN_V1: u16 = 47;
+/// `k`: positive attestations an exam needs. Must be a strict majority of `m` (validation). **U-1: the calibration candidate is 24.**
+pub const PALW_ELIG_EXAM_K_DESIGN_V1: u16 = 24;
+/// **U-1: the former 4-of-7 worked example — TEST-ONLY** (small fixtures and the §5.1 comparison column); never a default.
+pub const PALW_ELIG_EXAM_M_TEST_ONLY_V1: u16 = 7;
+/// **U-1: TEST-ONLY** `k` of [`PALW_ELIG_EXAM_M_TEST_ONLY_V1`].
+pub const PALW_ELIG_EXAM_K_TEST_ONLY_V1: u16 = 4;
 /// Claims of the committed set each drawn verifier re-executes.
 pub const PALW_ELIG_EXAM_CLAIMS_DESIGN_V1: u16 = 4;
 /// Spans between the commit's span and the earliest seed anchor that may fix its draw (strictly later: at least 1).
@@ -114,11 +119,59 @@ pub const PALW_ELIG_RENEWAL_WINDOW_DAYS_DESIGN_V1: u64 = 7;
 pub const PALW_ELIG_LAPSE_GRACE_DAYS_DESIGN_V1: u64 = 2;
 /// Days a bond must have been registered before an exam's commit to be in its verifier population.
 pub const PALW_ELIG_VERIFIER_MATURITY_DAYS_DESIGN_V1: u64 = 7;
-/// **The non-refundable exam-attempt fee** (RFC-0017 §5, GAP-E3; the VALUE is user decision U-4): burned from the committing bond's
-/// free collateral at the commit — whatever the draw, the outcome or a later withdrawal — so filling the network's attempt budget
-/// costs `attempts_network_per_epoch × fee` per attempt epoch ([`palw_eligibility_griefing_cost_v1`]). Burned, never paid out:
-/// no examiner is paid from new issuance. 100,000 BILI (in sompi) is a PLACEHOLDER so the mechanism has a non-zero value to test.
-pub const PALW_ELIG_ATTEMPT_FEE_DESIGN_V1: u64 = 100_000 * 100_000_000;
+/// **U-4 (a) (user decision 2026-10-15): the non-refundable spam-burn fee** (RFC-0017 §5, GAP-E3): burned from the committing bond's
+/// free collateral at the commit — whatever the draw, the outcome, a cancellation or a later withdrawal — so filling the network's
+/// attempt budget costs `attempts_network_per_epoch × fee` per attempt epoch ([`palw_eligibility_griefing_cost_v1`]). A PROBE (1 BILI
+/// in sompi), UNAPPROVED: the value is derived from the measured inspection cost; 100,000 BILI is NOT a default (it exceeds testnet-
+/// 12's 13,000 BILI minimum producer bond, bars small honest entrants, and does not stop a 300M attacker).
+pub const PALW_ELIG_ATTEMPT_BURN_FEE_PROBE_V1: u64 = 100_000_000;
+/// The burn fee's former name (= [`PALW_ELIG_ATTEMPT_BURN_FEE_PROBE_V1`]; no longer 100,000 BILI).
+pub const PALW_ELIG_ATTEMPT_FEE_DESIGN_V1: u64 = PALW_ELIG_ATTEMPT_BURN_FEE_PROBE_V1;
+/// **U-4 (b): the inspection fee per drawn position** — escrowed from the applicant's free collateral at the commit and paid to the
+/// drawn positions that attest by the deadline; the unattested positions' part is returned to the applicant. A transfer from the
+/// applicant, never new issuance. A PROBE (1 BILI), UNAPPROVED: derived from the measured inspection cost.
+pub const PALW_ELIG_INSPECTION_FEE_PER_POSITION_PROBE_V1: u64 = 100_000_000;
+/// **U-4: the fair queue** — permille of the network's epoch attempt budget a lineage's REPEAT attempt (its second or later in the
+/// attempt epoch) may fill; the rest stays open to lineages' first attempts, so a spender cannot crowd honest new models out.
+/// Design value, unapproved.
+pub const PALW_ELIG_REPEAT_ATTEMPTS_NETWORK_SHARE_DESIGN_V1: u16 = 500;
+
+/// **U-4: a measured-fee record** — the burn and inspection fees the measured inspection cost derived, with the digests of the
+/// evidence and of its independent review. Pinned only by a reviewed change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwEligibilityFeeRecordV1 {
+    pub burn_fee_sompi: u64,
+    pub inspection_fee_per_position_sompi: u64,
+    pub evidence_digest: [u8; 32],
+    pub review_digest: [u8; 32],
+}
+
+/// **U-4: the pinned measured-fee records — EMPTY.** No fee is measured; an armed fence is refused naming this gate.
+pub const PALW_ELIG_MEASURED_FEE_RECORDS_V1: &[PalwEligibilityFeeRecordV1] = &[];
+
+/// **U-4: the measured-fee gate** — the policy's two fees exactly match a pinned record with real, distinct digests, and both are
+/// positive (a free attempt makes the budget free to grief; a free inspection pays verifiers nothing).
+pub fn palw_eligibility_fees_measured_v1(policy: &PalwModelEligibilityPolicyV1, records: &[PalwEligibilityFeeRecordV1]) -> bool {
+    policy.attempt_fee_sompi > 0
+        && policy.inspection_fee_per_position_sompi > 0
+        && records.iter().any(|r| {
+            r.burn_fee_sompi == policy.attempt_fee_sompi
+                && r.inspection_fee_per_position_sompi == policy.inspection_fee_per_position_sompi
+                && r.evidence_digest != [0u8; 32]
+                && r.review_digest != [0u8; 32]
+                && r.evidence_digest != r.review_digest
+        })
+}
+
+/// **U-3 (user decisions 2026-10-15, with the same-day clarification): what an exam pass IS.** The drawn-verifier m-of-k approval is
+/// the certification pillar, under an EXPLICIT premise — the honest share of the drawn verifier stake is at least the threshold. It is
+/// premise-based certification, never an unconditional proof that any computation is correct (no cryptographic computation proof is
+/// used, PRINCIPLES §8). Where the premise fails (`f` ≥ the pass threshold of the drawn stake) the gate stops discriminating; the
+/// simulation driver reports that impact at f = 1/3, 0.6 and the worst case. Every surface that shows a pass (RPC, status reads,
+/// docs) carries this meaning.
+pub const PALW_ELIG_CERTIFICATION_PREMISE_V1: &str = "premise-based certification: m-of-k positive approvals by stake-drawn verifiers, \
+     valid under the explicit premise that the honest share of the drawn verifier stake is at least the threshold; not an \
+     unconditional proof of computation correctness";
 
 // =================================================================================================================================
 // Stage, rights
@@ -231,8 +284,13 @@ pub struct PalwModelEligibilityPolicyV1 {
     pub attempts_network_per_epoch: u32,
     pub attempt_epoch_daa: u64,
     pub attempt_cooldown_daa: u64,
-    /// The non-refundable attempt fee, burned at commit (sompi; U-4).
+    /// U-4 (a): the non-refundable spam-burn fee, burned at commit (sompi).
     pub attempt_fee_sompi: u64,
+    /// U-4 (b): the inspection fee per drawn position, escrowed at commit from the applicant and paid to the attesting positions
+    /// (the unattested part returned); never new issuance. 0 = no inspection escrow (refused by the measured-fee gate).
+    pub inspection_fee_per_position_sompi: u64,
+    /// U-4: the fair queue — permille of `attempts_network_per_epoch` a lineage's repeat attempt in the epoch may fill.
+    pub repeat_attempts_network_share_permille: u16,
     // ---- D. renewal ----------------------------------------------------------------------------------------------------------
     pub renewal_epoch_daa: u64,
     pub renewal_window_daa: u64,
@@ -264,7 +322,9 @@ impl PalwModelEligibilityPolicyV1 {
             attempts_network_per_epoch: PALW_ELIG_ATTEMPTS_NETWORK_EPOCH_DESIGN_V1,
             attempt_epoch_daa: PALW_ELIG_ATTEMPT_EPOCH_DAYS_DESIGN_V1 * day_daa,
             attempt_cooldown_daa: PALW_ELIG_ATTEMPT_COOLDOWN_DAYS_DESIGN_V1 * day_daa,
-            attempt_fee_sompi: PALW_ELIG_ATTEMPT_FEE_DESIGN_V1,
+            attempt_fee_sompi: PALW_ELIG_ATTEMPT_BURN_FEE_PROBE_V1,
+            inspection_fee_per_position_sompi: PALW_ELIG_INSPECTION_FEE_PER_POSITION_PROBE_V1,
+            repeat_attempts_network_share_permille: PALW_ELIG_REPEAT_ATTEMPTS_NETWORK_SHARE_DESIGN_V1,
             renewal_epoch_daa: PALW_ELIG_RENEWAL_EPOCH_DAYS_DESIGN_V1 * day_daa,
             renewal_window_daa: PALW_ELIG_RENEWAL_WINDOW_DAYS_DESIGN_V1 * day_daa,
             lapse_grace_daa: PALW_ELIG_LAPSE_GRACE_DAYS_DESIGN_V1 * day_daa,
@@ -309,6 +369,12 @@ impl PalwModelEligibilityPolicyV1 {
         }
         if self.renewal_window_daa == 0 || self.renewal_window_daa > self.renewal_epoch_daa {
             return Err("the renewal window must be positive and inside the renewal epoch".into());
+        }
+        if self.repeat_attempts_network_share_permille > 1_000 {
+            return Err("the fair queue's repeat-attempt share is at most 1000 permille of the network budget".into());
+        }
+        if self.inspection_fee_per_position_sompi.checked_mul(self.exam_m as u64).is_none() {
+            return Err("the inspection escrow (fee per position × m) must fit a u64".into());
         }
         Ok(())
     }
@@ -437,6 +503,10 @@ pub struct PalwEligibilityExamRowV1 {
     pub deadline_daa: u64,
     pub attestations: Vec<PalwEligibilityAttestationRowV1>,
     pub outcome: Option<(PalwEligibilityExamOutcomeV1, u64)>,
+    /// U-4 (b): the inspection fee escrowed from the applicant at the commit (paid out at the decision, never new issuance).
+    pub inspection_escrow_sompi: u64,
+    /// U-4 (b): whether the escrow was paid to the attesting positions (and the rest returned).
+    pub inspection_settled: bool,
 }
 
 impl PalwEligibilityExamRowV1 {
@@ -505,12 +575,16 @@ pub struct PalwEligibilityClassFactsV1 {
     pub registered_daa: u64,
     /// The ADR-0135 registry lifecycle admits claims for the class ([`palw_eligibility_registry_admits_v1`]).
     pub registry_admits: bool,
+    /// **U-6 (user decision 2026-10-15): the class is the network's BASE-0 liveness floor** (`base_class_id`) — the one dedicated,
+    /// non-reward exception; every other genesis class goes through the pre-fence migration and renewal.
+    pub base_floor: bool,
 }
 
 /// **The stage in force for a class at `daa`**:
 ///
 /// * no mirror, or `daa` below the fence → `None` (the old rule: the caller grants what it granted before);
-/// * a genesis class → `None` (outside RFC-0017; user decision U-6 in the RFC);
+/// * the BASE-0 liveness floor (genesis, non-reward) → `None` (U-6, user decision 2026-10-15: its dedicated exception; no other
+///   genesis class is permanently exempt — a rewarded genesis class is a pre-fence class: grace, then renewal, below);
 /// * a row → the row's stage, with an `Eligible` row past `next_renewal_daa + lapse_grace_daa` read as `Lapsed` (the sweep writes it;
 ///   the read never waits for the sweep);
 /// * no row and registered below the fence → grandfathered `Eligible` until `from_daa + renewal_epoch_daa + lapse_grace_daa`, then
@@ -524,7 +598,8 @@ pub fn palw_eligibility_effective_stage_v1(
     daa: u64,
 ) -> Option<PalwEligibilityStageV1> {
     let mirror = mirror.filter(|m| m.governs(daa))?;
-    if class.genesis {
+    // U-6: only the non-reward BASE-0 liveness floor keeps a permanent exception.
+    if class.genesis && class.base_floor {
         return None;
     }
     let p = &mirror.policy;
@@ -545,6 +620,92 @@ pub fn palw_eligibility_effective_stage_v1(
         None if class.registry_admits => PalwEligibilityStageV1::Probation,
         None => PalwEligibilityStageV1::Registered,
     })
+}
+
+/// **U-5 (user decision 2026-10-15): is the class in its pre-fence grace at `daa`?** — registered below the fence (a rewarded genesis
+/// class included, U-6; never the BASE-0 floor), no renewal passed yet, and `daa` inside ONE renewal period (+ the lapse grace) from
+/// the fence. Its existing claims keep their rights and liabilities, and its claims keep the Eligible rights through the grace; the
+/// grace is NOT an exemption that issues uncertified security credit: every claim accepted at or past the fence is governed by
+/// RFC-0018 Gate C (validation arms it at or below this fence), so it earns no Final weight, frontier, settled-anchor or rule-E
+/// credit before certification ([`palw_eligibility_security_credit_needs_certification_v1`]). Without a passed renewal: `Lapsed`.
+pub fn palw_eligibility_in_pre_fence_grace_v1(
+    mirror: Option<&PalwModelEligibilityMirrorV1>,
+    class: &PalwEligibilityClassFactsV1,
+    row: Option<&PalwEligibilityModelRowV1>,
+    daa: u64,
+) -> bool {
+    let Some(m) = mirror.filter(|m| m.governs(daa)) else { return false };
+    if class.base_floor || class.registered_daa >= m.from_daa {
+        return false;
+    }
+    let untested = row.is_none_or(|r| r.exams_passed == 0 && r.stage == PalwEligibilityStageV1::Eligible);
+    untested && daa <= m.from_daa.saturating_add(m.policy.renewal_epoch_daa).saturating_add(m.policy.lapse_grace_daa)
+}
+
+/// **U-2 / U-5: does a claim of this class at `daa` need certification before ANY security credit** (Final weight, safe frontier,
+/// settled-anchor depth, rule-E participation)? `Probation` (whose Final weight is 0 anyway) and the pre-fence grace. Below the fence,
+/// for the BASE-0 floor and for a class that passed its own exam: `false` (the general rules — Gate C included — decide).
+pub fn palw_eligibility_security_credit_needs_certification_v1(
+    mirror: Option<&PalwModelEligibilityMirrorV1>,
+    class: &PalwEligibilityClassFactsV1,
+    row: Option<&PalwEligibilityModelRowV1>,
+    daa: u64,
+) -> bool {
+    matches!(palw_eligibility_effective_stage_v1(mirror, class, row, daa), Some(PalwEligibilityStageV1::Probation))
+        || palw_eligibility_in_pre_fence_grace_v1(mirror, class, row, daa)
+}
+
+/// **U-9 (user decision 2026-10-15): the lanes RFC-0017's claim gate reads.** Registered / Lapsed classes are refused on the lanes
+/// that create a reward-bearing block (attempt, free prompt) or an improvement-score promotion (the RFC-0004 evaluation lane);
+/// user-paid Kernel / OPV jobs and native funded executions stay OPEN to them — registration and testing run on those (escrow only,
+/// `B = F = 0`, no coinbase leg).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwEligibilityLaneV1 {
+    Attempt,
+    FreePrompt,
+    Evaluation,
+    UserPaidKernel,
+    NativeFunded,
+}
+
+/// **U-9: does RFC-0017's claim gate apply to `lane`?** (`palw_state_v2`'s `check_class_admits_claim` reads this.)
+pub const fn palw_eligibility_lane_gated_v1(lane: PalwEligibilityLaneV1) -> bool {
+    matches!(lane, PalwEligibilityLaneV1::Attempt | PalwEligibilityLaneV1::FreePrompt | PalwEligibilityLaneV1::Evaluation)
+}
+
+/// **U-7 (user decision 2026-10-15): what releases a reward-bearing claim's issuance-funded payment** while RFC-0017 and the ECON
+/// round-2 gate coexist. RFC-0017 is the MODEL's eligibility / renewal gate (read at the claim's acceptance: a Registered / Lapsed
+/// class takes no reward-bearing claim at all); ECON is the per-epoch verification-and-payment gate (`palw_model_verification_gate_v1`);
+/// U-2 / U-5 add certification (RFC-0018 Gate C) where a class's claims need it. The payment is released only when EVERY required
+/// gate holds; one undecided gate defers it; one failed gate withholds it (never minted). Neither gate re-counts or re-bills the
+/// other's check: an RFC-0017 exam is paid from the applicant's inspection escrow (U-4) and is never an ECON tally; an ECON tally is
+/// never charged to an applicant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwPaymentReleaseV1 {
+    Release,
+    Defer,
+    Withhold,
+}
+
+/// **U-7: the release decision** — `subsidy_at_acceptance`: RFC-0017's subsidy right at the claim's acceptance (`true` where
+/// ungoverned); `econ`: the ECON gate's model-epoch outcome (`None` where that gate is not in force); `certified`: `None` where no
+/// certification is required, else `Some(None)` undecided / `Some(Some(certified))`.
+pub fn palw_eligibility_payment_release_v1(
+    subsidy_at_acceptance: bool,
+    econ: Option<crate::palw_econ_contracts_v1::PalwModelVerificationOutcomeV1>,
+    certified: Option<Option<bool>>,
+) -> PalwPaymentReleaseV1 {
+    use crate::palw_econ_contracts_v1::PalwModelVerificationOutcomeV1 as E;
+    if !subsidy_at_acceptance {
+        return PalwPaymentReleaseV1::Withhold;
+    }
+    if matches!(econ, Some(E::Unattested)) || matches!(certified, Some(Some(false))) {
+        return PalwPaymentReleaseV1::Withhold;
+    }
+    if matches!(econ, Some(E::Pending)) || matches!(certified, Some(None)) {
+        return PalwPaymentReleaseV1::Defer;
+    }
+    PalwPaymentReleaseV1::Release
 }
 
 /// **The one gate every path reads** (RFC-0017 §6): the rights of the class for a claim accepted at `accepted_daa`. Keyed on the
@@ -666,6 +827,8 @@ pub enum PalwEligibilityCommitRefusalV1 {
     NetworkAttemptsExhausted,
     Cooldown,
     OutsideRenewalWindow,
+    /// U-4: the fair queue — a lineage's repeat attempt this epoch while the network budget's repeat share is used.
+    FairQueueRepeatAttempt,
 }
 
 /// **REQ-ELIG-4: may this commit consume an attempt now?** Pure; the fold calls it and then [`palw_eligibility_count_attempt_v1`].
@@ -725,7 +888,53 @@ pub fn palw_eligibility_commit_admits_v1(
     if network_in_epoch >= policy.attempts_network_per_epoch {
         return Err(R::NetworkAttemptsExhausted);
     }
+    // U-4 (user decision 2026-10-15): the fair queue — a lineage that already committed this attempt epoch takes only the repeat
+    // share of the network budget; the rest stays open to lineages' first attempts.
+    let repeat = lineage.attempts_total > 0 && lineage.last_commit_daa / policy.attempt_epoch_daa.max(1) == epoch;
+    let repeat_cap = (policy.attempts_network_per_epoch as u64) * (policy.repeat_attempts_network_share_permille as u64) / 1_000;
+    if repeat && network_in_epoch as u64 >= repeat_cap {
+        return Err(R::FairQueueRepeatAttempt);
+    }
     Ok(())
+}
+
+/// **U-4 (b): the inspection escrow one exam takes from its applicant** — `fee per position × m`.
+pub fn palw_eligibility_inspection_escrow_v1(policy: &PalwModelEligibilityPolicyV1) -> u64 {
+    policy.inspection_fee_per_position_sompi.saturating_mul(policy.exam_m as u64)
+}
+
+/// **U-4: may `free` collateral pay the whole attempt cost** — the burn fee and the inspection escrow, due together.
+pub fn palw_eligibility_attempt_cost_affordable_v1(free_collateral: u128, policy: &PalwModelEligibilityPolicyV1) -> bool {
+    free_collateral >= policy.attempt_fee_sompi as u128 + palw_eligibility_inspection_escrow_v1(policy) as u128
+}
+
+/// **U-4 (b): how a decided exam's inspection escrow is settled** — `fee per position` to each drawn position whose bond attested by
+/// the deadline (any verdict: an `Unavailable` or a `NotReproducible` is inspection work too), aggregated per verifier in first-draw
+/// order; the unattested positions' part returned to the applicant. `Σ paid + refund = escrow`: a transfer, never new issuance.
+pub fn palw_eligibility_inspection_settlement_v1(exam: &PalwEligibilityExamRowV1) -> (Vec<(EligDigestV1, u64)>, u64) {
+    let positions = exam.draws.len() as u64;
+    if positions == 0 || exam.inspection_escrow_sompi == 0 {
+        return (Vec::new(), exam.inspection_escrow_sompi);
+    }
+    let per = exam.inspection_escrow_sompi / positions;
+    let mut paid: Vec<(EligDigestV1, u64)> = Vec::new();
+    let mut total = 0u64;
+    for bond in &exam.draws {
+        if !exam.attestations.iter().any(|a| a.verifier == *bond && a.attested_daa <= exam.deadline_daa) {
+            continue;
+        }
+        match paid.iter_mut().find(|(v, _)| v == bond) {
+            Some((_, amount)) => *amount = amount.saturating_add(per),
+            None => paid.push((*bond, per)),
+        }
+        total = total.saturating_add(per);
+    }
+    (paid, exam.inspection_escrow_sompi.saturating_sub(total))
+}
+
+/// The payout-queue key of an inspection settlement leg (`recipient` = a verifier's or the applicant's kernel bond id).
+pub fn palw_eligibility_inspection_payout_key_v1(exam: &EligDigestV1, recipient: &EligDigestV1) -> EligDigestV1 {
+    hash64(PALW_ELIGIBILITY_EXAM_ID_DOMAIN_V1, &[b"inspection-payout", exam, recipient])
 }
 
 /// **GAP-E3: may `free` collateral pay the attempt fee?** The fee is due whole; a bond that cannot pay it commits nothing.
@@ -855,7 +1064,8 @@ pub fn palw_eligibility_examined_claims_v1(seed: &EligDigestV1, claims_count: u3
 }
 
 /// **The verdict at `daa`**: `Passed` as soon as `k` draw positions attested `Reproduced`; at the deadline, `NotPromoted`
-/// otherwise; `None` while open. `Unavailable`, `NotReproducible` and silence all mean "promotion conditions not met"; none of them
+/// otherwise; `None` while open. `Passed` is premise-based certification ([`PALW_ELIG_CERTIFICATION_PREMISE_V1`], U-3), never a proof
+/// that the model's computation is correct. `Unavailable`, `NotReproducible` and silence all mean "promotion conditions not met"; none of them
 /// is a fraud verdict and none slashes (per-claim findings travel separately).
 pub fn palw_eligibility_exam_verdict_v1(
     policy: &PalwModelEligibilityPolicyV1,
@@ -1011,6 +1221,11 @@ pub struct PalwEligibilityStatusReadV1 {
     pub exams_passed: u32,
     /// Exam attempts the class's lineage (artifact root) has consumed, all registrations of the same weights together.
     pub lineage_attempts: u32,
+    /// **ADR-0179: the model's tier** — `not-governed` below `palw_model_tier_v1` (every shipped network), `approved` (genesis or an
+    /// annual fork listing, 1.0) or `registered` (fixed 0.3 from registration).
+    pub model_tier: String,
+    /// **ADR-0179: the tier's allocation coefficient `c_m`**, permille (1000 below the fence and for the approved tier).
+    pub model_tier_permille: u32,
 }
 
 impl Default for PalwEligibilityStatusReadV1 {
@@ -1023,6 +1238,8 @@ impl Default for PalwEligibilityStatusReadV1 {
             final_weight: true,
             exams_passed: 0,
             lineage_attempts: 0,
+            model_tier: "not-governed".to_string(),
+            model_tier_permille: crate::palw_model_tier_v1::PALW_MODEL_TIER_APPROVED_PERMILLE_V1,
         }
     }
 }
@@ -1120,7 +1337,27 @@ impl Params {
     /// **Refused when armed at a real height** until RFC-0017's rule is built, verified and its values approved; `None` and
     /// `Some(never())` pass. The mirror must agree with the fence.
     pub fn validate_palw_model_eligibility_v1(&self) -> Result<(), PalwModeV2Error> {
-        if self.palw_model_eligibility_v1_from_daa().is_some() {
+        if let Some(at) = self.palw_model_eligibility_v1_from_daa() {
+            // Round 5 (user decision 2026-10-15): model-level review is abolished; this fence is only ever armed with ADR-0179's
+            // `palw_model_tier_v1` at or below it, which retires the review (it stays the A-2 gate of inner 74/75 that RFC-0018's
+            // certification attestations ride).
+            let tier_below = self.palw_model_tier_v1_from_daa().is_some_and(|tier| tier <= at);
+            // RFC-0018 Gate C (`palw_independently_work_certified_v1`) at or below: per-claim certification is the one safety gate for
+            // every model (round 5; RFC-0018 requires this fence at or below Gate C — the two arm at one height).
+            let gate_c_below = self
+                .palw_independently_work_certified_v1
+                .filter(|f| *f != ForkActivation::never())
+                .is_some_and(|f| f.daa_score() <= at);
+            if !gate_c_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_model_eligibility_v1 needs palw_independently_work_certified_v1 (RFC-0018 Gate C) at or below it: per-claim certification is the one safety gate for every model (round 5)",
+                ));
+            }
+            if !tier_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_model_eligibility_v1 cannot be armed without palw_model_tier_v1 at or below it: model-level review is abolished (user decision 2026-10-15, round 5)",
+                ));
+            }
             return Err(PalwModeV2Error::Invalid(
                 "palw_model_eligibility_v1 cannot be armed: RFC-0017's rule is not built and verified and its values are not approved",
             ));

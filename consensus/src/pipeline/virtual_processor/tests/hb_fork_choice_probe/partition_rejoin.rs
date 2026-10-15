@@ -251,4 +251,13 @@ async fn live_r1_a_minority_holding_a_licence_refuses_the_heavier_majority_after
     let readers = vp.palw_claim_readers_v2_impl(p.claim_id);
     let expected = state.claim_readers_v2(&p.claim_id);
     assert_eq!(readers, expected, "{tag}: an RPC reader answers from the sink's state");
+
+    // A cold reader with a missing branch delta cannot reconstruct the sink.
+    // Returning the refused branch's perfectly valid state would falsely say
+    // this sink has no licence. The already retained correct snapshot above
+    // remains valid, but a fresh read must report the storage gap.
+    *vp.palw_reader_snapshot.lock() = None;
+    vp.palw_state_v2_store.write().delete_delta_for_tests(refused_tip).unwrap();
+    assert!(vp.palw_v2_reader_state(&params).is_err(), "{tag}: a failed sink walk never returns another branch's state");
+    assert_eq!(d.victim.sink(), sink, "{tag}: a reader failure does not move virtual");
 }

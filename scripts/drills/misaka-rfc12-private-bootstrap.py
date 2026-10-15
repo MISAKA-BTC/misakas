@@ -19,6 +19,7 @@ import time
 
 from rfc12_owned_resources import OwnedResourceSampler, check_completed_limits, read_limits
 import rfc12_complete_bootstrap as complete
+import rfc12_native_recovery_observation as recovery
 
 SPEC = importlib.util.spec_from_file_location('rfc12_construction_smoke',
     Path(__file__).with_name('misaka-rfc12-private-smoke.py'))
@@ -37,17 +38,37 @@ class FiniteBootstrapDrill(smoke.ResourceDrill):
 
 
 def validate_factory_manifest(bootstrap, profile):
-    if profile not in ('complete-v1', 'paid-v3'):
+    if profile not in ('complete-v1', 'paid-v3', 'paid-v4'):
         raise ValueError('unallocated private bootstrap profile')
     if bootstrap.get('skipProofOfWork') is not False or bootstrap.get('releaseApproval') is not False:
         raise ValueError('the private factory must retain real PoW and no release approval')
-    if profile == 'paid-v3':
-        if bootstrap.get('schema') != 'misaka.private-paid-bootstrap.v3':
-            raise ValueError('paid-v3 requires its own authenticated bootstrap manifest')
+    if profile in ('paid-v3', 'paid-v4'):
+        version = profile.removeprefix('paid-')
+        if bootstrap.get('schema') != 'misaka.private-paid-bootstrap.' + version:
+            raise ValueError(profile + ' requires its own authenticated bootstrap manifest')
         if bootstrap.get('baseArtifactsAreControlReceipts') is not False:
             raise ValueError('old base artifacts cannot supply paid-v3 control receipts')
         if bootstrap.get('paidClaimIncluded') is not False or bootstrap.get('nativeFinalObserved') is not False:
             raise ValueError('offline paid-v3 bootstrap cannot assert native claim or Final')
+        if profile == 'paid-v4':
+            nested = bootstrap.get('privateProbeProfile')
+            if not isinstance(nested, dict) or nested.get('privatePaidProfileVersion') != 4:
+                raise ValueError('paid-v4 requires its separate compact/recovery factory identity')
+            for field in ('genesis', 'consensusParamsId'):
+                if not bootstrap.get(field) or nested.get(field) != bootstrap[field]:
+                    raise ValueError('paid-v4 nested factory identity differs: ' + field)
+            if nested.get('skipProofOfWork') is not False or nested.get('releaseApproval') is not False:
+                raise ValueError('paid-v4 nested factory must retain real PoW and no approval')
+            # PRINCIPLES §8 (2026-10-15): the paid-v4 profile never arms compact V4. Its manifest
+            # names the retirement; any other compact policy shape (an armed id) is refused.
+            compact = nested.get('compactClaimPolicy')
+            if not isinstance(compact, dict) or set(compact) != {'retired', 'reason'} or compact['retired'] is not True:
+                raise ValueError('paid-v4 must report compact V4 as retired (PRINCIPLES §8), never as an armed policy')
+            policy = nested.get('releaseRecoveryPolicy')
+            if not isinstance(policy, dict) or policy.get('approved') is not False or not policy.get('id'):
+                raise ValueError('paid-v4 requires its explicit unapproved policy: releaseRecoveryPolicy')
+            if any(bootstrap.get(field) is not False for field in ('compactContractIncluded', 'recoveryEnrollmentIncluded')):
+                raise ValueError('offline paid-v4 bootstrap cannot assert compact or recovery admission')
     elif bootstrap.get('kind') != 'rfc12-private-complete-bootstrap-file-fixture':
         raise ValueError('complete-v1 requires its exact original bootstrap manifest')
 
@@ -88,6 +109,46 @@ def native_provider_config(fixture, bootstrap, listen):
         unverifiedSource=True, nativeCustodyMeasured=False, releaseApproval=False)
 
 
+def native_provider_config_v4(fixture, bootstrap, listen, maximum_fee):
+    """Use one dedicated, explicitly funded payer for every provider carrier.
+
+    Seat 3 is neither a node producer's seat nor the workflow CLI funding key.
+    All keys are fixture keys; this establishes no operator independence.
+    """
+    if type(maximum_fee) is not int or not 0 < maximum_fee < 2**64:
+        raise ValueError('paid-v4 hosted providers need an explicit positive u64 carrier fee cap')
+    provider = native_provider_config(fixture, bootstrap, listen)
+    seats = bootstrap['seats']
+    if len(seats) < 4:
+        raise ValueError('paid-v4 hosted providers need a fourth dedicated carrier payer seat')
+    payer = seats[3]
+    def outpoint(value):
+        parts = value.split(':')
+        if (len(parts) != 2 or len(parts[0]) != 128 or
+                any(c not in '0123456789abcdef' for c in parts[0]) or
+                not parts[1].isascii() or not parts[1].isdecimal() or
+                str(int(parts[1])) != parts[1] or int(parts[1]) >= 2**32):
+            raise ValueError('paid-v4 provider/payer outpoints must be canonical Hash64:u32')
+        return bytes.fromhex(parts[0]), int(parts[1])
+    bonds = sorted(provider['providerBonds'], key=outpoint)
+    payer_key = str(fixture / payer['keyFile'])
+    if not Path(payer_key).is_absolute() or any(c in payer_key for c in ',@'):
+        raise ValueError('paid-v4 carrier payer key must be an unambiguous absolute fixture path')
+    if payer['keyFile'] in {seats[n]['keyFile'] for n in (0, 1, 2)} or payer['keyFile'] == bootstrap.get('fundingKeyFile'):
+        raise ValueError('paid-v4 carrier payer key must be dedicated')
+    outpoint(payer['feeOutpoint'])
+    if payer['feeOutpoint'] in {seats[n]['feeOutpoint'] for n in (0, 1, 2)}:
+        raise ValueError('paid-v4 carrier payer funding must be dedicated')
+    provider['hostArgv'].extend(['--private-probe-recovery-ack-key=' + payer_key,
+        '--private-probe-recovery-ack-funding=' + payer['feeOutpoint'],
+        '--private-probe-recovery-ack-fee-cap=' + str(maximum_fee)])
+    provider['clientArgv'].append('--private-probe-native-recovery-providers=' + ','.join(bonds))
+    provider.update(kind='rfc08-pav4-loopback-native-provider-v1', providerBonds=bonds,
+        carrierPayerSeat=3, maximumCarrierFeeSompi=maximum_fee,
+        appliesTo='paid-v4 non-floor classes with atomic FundedEnroll and current finalized recovery checkpoints')
+    return provider
+
+
 NATIVE_SESSION_KIND = 'rfc08-pav3-prospective-native-session-v1'
 # Enrollment and admission span from the observed DAA; capped by the factory's maxEnrollmentDaa.
 NATIVE_SESSION_SPAN_DAA = 2000
@@ -113,20 +174,30 @@ def native_session_spec(bootstrap, daa, span=NATIVE_SESSION_SPAN_DAA):
         raise ValueError('a native session is for a non-floor class; the BASE floor is exempt from PAV3 custody')
     if any('operatorId' not in seats[index] for index in (NATIVE_EXECUTOR_SEAT,) + NATIVE_PROVIDER_SEATS):
         raise ValueError('the bootstrap seats do not name their card operators')
-    if not isinstance(daa, int) or daa < 0 or span <= 0:
-        raise ValueError('an observed DAA and a positive span are required')
-    until = daa + min(span, int(policy['maxEnrollmentDaa']))
+    def exact(value, name, minimum=0, maximum=2**64 - 1):
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise ValueError(name + ' must be an exact bounded unsigned integer')
+        return value
+    exact(daa, 'observed DAA')
+    exact(span, 'session span', 1)
+    maximum_enrollment = exact(policy['maxEnrollmentDaa'], 'maximum enrollment DAA', 1)
+    window = exact(policy['windowDaa'], 'material window', 1)
+    maximum_bytes = exact(policy['maxBytesPerContract'], 'maximum material bytes', 1)
+    maximum_units = exact(policy['nativeSessionMaxUnits'], 'maximum native session units', 1, 2**32 - 1)
+    collateral = exact(policy['minimumCollateralSompi'], 'provider collateral')
+    prepaid_fee = exact(policy['minimumFeeSompi'], 'provider prepaid fee')
+    until = exact(daa + min(span, maximum_enrollment), 'session end DAA')
     executor = seats[NATIVE_EXECUTOR_SEAT]
     if len({seats[index]['operatorId'] for index in (NATIVE_EXECUTOR_SEAT,) + NATIVE_PROVIDER_SEATS}) != 3:
         raise ValueError('the executor and both providers need three distinct card operators')
     return dict(networkDomain=bootstrap['networkDomain'], sponsor=executor['bond'], policyId=policy['id'],
-        windowDaa=int(policy['windowDaa']), maxMaterialBytes=int(policy['maxBytesPerContract']),
+        windowDaa=window, maxMaterialBytes=maximum_bytes,
         enrollmentUntilDaa=until,
         nativeSession=dict(classId=bootstrap['class'], artifactRoot=bootstrap['artifactRoot'], executor=executor['bond'],
-            operator=executor['operatorId'], maxUnits=int(policy['nativeSessionMaxUnits']), admitFromDaa=daa,
+            operator=executor['operatorId'], maxUnits=maximum_units, admitFromDaa=daa,
             admitUntilDaa=until),
-        offers=[dict(provider=seats[index]['bond'], collateralSompi=int(policy['minimumCollateralSompi']),
-            prepaidFeeSompi=int(policy['minimumFeeSompi'])) for index in NATIVE_PROVIDER_SEATS])
+        offers=[dict(provider=seats[index]['bond'], collateralSompi=collateral,
+            prepaidFeeSompi=prepaid_fee) for index in NATIVE_PROVIDER_SEATS])
 
 
 def material_session_commands(prefix, fixture, bootstrap, folder):
@@ -221,7 +292,7 @@ def enroll_native_session(drill, sampler, cli, salt, fixture, bootstrap, budget)
         filed=filed, rowObservedEverywhere=True, rowObservationAuthenticated=False, releaseApproval=False)
 
 
-def exercise_native_custody(drill, bootstrap):
+def exercise_native_custody(drill, bootstrap, recovery_v4=False):
     """Restart A's producer on the enrolled non-floor class (same DB, same exchange) and wait for B's provider service to
     durably publish a bundle. Observing the store is evidence the PAV3 exchange ran end to end on this fixture; it is not a
     Final, a court outcome or a GC observation."""
@@ -237,14 +308,38 @@ def exercise_native_custody(drill, bootstrap):
         drill.join_link(role, 'A')
     stores = drill.wait(lambda: custody_store_observed(drill.root / NATIVE_PROVIDER_HOST) or None,
         'a provider bundle durably published by B for A\'s PAV3 attempt')
-    return dict(producerClass=bootstrap['class'], providerStores=stores, custodyStoreObserved=True,
+    evidence = dict(producerClass=bootstrap['class'], providerStores=stores, custodyStoreObserved=True,
         finalObserved=False, gcObserved=False, releaseApproval=False)
+    if recovery_v4:
+        def observed_binding():
+            return recovery.agreement(drill, bootstrap, rpc_read, transport.import_stamp)
+        rows = drill.wait(observed_binding, 'actual atomic recovery enrollment and bound native claim on all three nodes')
+        evidence['nativeRecovery'] = dict(kind='rfc08-pav4-runtime-atomic-enrollment-observed-v1',
+            root=rows['A']['row']['root'], consent=rows['A']['row']['consent'], recovery=rows['A']['row']['recovery'],
+            boundClaim=rows['A']['row']['boundClaim'], observations=rows, rowObservedEverywhere=True,
+            rowObservedRoles=['A', 'B', 'JOIN'], releaseApproval=False, publicCertificate=False)
+    return evidence
 
 
-def plan_for(binary, salt, fixture, bootstrap, timeout, profile='complete-v1', native_provider=False):
+def stop_private_heartbeat_clock(drill, bootstrap):
+    """Stop only the extra owned fixture clock before the later frozen reopen."""
+    role = 'B'
+    flag = '--palw-heartbeat-miner-address=' + bootstrap['seats'][1]['payAddress']
+    argv = drill.plan['nodes'][role]['argv']
+    if argv.count(flag) != 1 or '--palw-produce' in argv:
+        raise AssertionError('the exact owned private heartbeat clock is not running')
+    drill.kill(role)
+    argv.remove(flag)
+    drill.start(role)
+    drill.wait(lambda: ready(drill, role, bootstrap), 'B reopened without the additional private heartbeat clock')
+    drill.join_link(role, 'A')
+    return dict(role=role, stopped=True, ownedChildRestarted=True, consensusClockInjected=False)
+
+
+def plan_for(binary, salt, fixture, bootstrap, timeout, profile='complete-v1', native_provider=False, maximum_carrier_fee=None):
     validate_factory_manifest(bootstrap, profile)
-    if native_provider and profile != 'paid-v3':
-        raise ValueError('the PAV3 loopback native provider is a paid-v3 profile option only')
+    if native_provider and profile not in ('paid-v3', 'paid-v4'):
+        raise ValueError('the PAV3 loopback native provider is a paid-v3 profile option only or an explicit paid-v4 profile option')
     reservations, endpoints = [], []
     try:
         for _ in range(16 if native_provider else 15):
@@ -272,9 +367,12 @@ def plan_for(binary, salt, fixture, bootstrap, timeout, profile='complete-v1', n
         plan = dict(schemaVersion=1, kind='rfc12-private-registration-binding-only', nodes=nodes, privateProfile=profile,
             scenario_timeout_s=timeout, probe_timeout_s=15, command_timeout_s=60,
             fullRfc12SecurityApproval=False, release100kMeasured=False)
-        if profile == 'paid-v3':
+        if profile in ('paid-v3', 'paid-v4'):
             # Named for every paid-v3 plan; None unless explicitly requested, so the default paid-v3 run is unchanged.
-            provider = native_provider_config(fixture, bootstrap, endpoints[15]) if native_provider else None
+            provider = None
+            if native_provider:
+                provider = (native_provider_config_v4(fixture, bootstrap, endpoints[15], maximum_carrier_fee)
+                    if profile == 'paid-v4' else native_provider_config(fixture, bootstrap, endpoints[15]))
             if provider:
                 nodes[provider['host']]['argv'].extend(provider['hostArgv'])
                 nodes[provider['exchangeClient']]['argv'].extend(provider['clientArgv'])
@@ -388,10 +486,16 @@ def activate_complete_clock(drill, bootstrap):
     return dict(role=role, minerAddress=address, consensusClockInjected=False, agreement=rows)
 
 
+def validate_workflow_options(profile, native_session, complete_check):
+    if native_session and profile == 'paid-v4' and not complete_check:
+        raise ValueError('paid-v4 --native-session requires --complete-check and its explicit bond-cost caps before node launch')
+    if native_session and profile != 'paid-v4' and complete_check:
+        raise ValueError('the legacy native session step requires a separate --complete-check workflow')
+
+
 def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee, complete_check=False,
         maximum_binding=None, maximum_check=None, progress=None, native_session=False):
-    if native_session and complete_check:
-        raise ValueError('the native session step replaces the floor producer; run it without --complete-check')
+    validate_workflow_options(drill.plan.get('privateProfile'), native_session, complete_check)
     for role in ('A', 'B', 'JOIN'):
         drill.start(role)
         drill.wait(lambda role=role: ready(drill, role, bootstrap), role + ' exact private process identity')
@@ -404,44 +508,70 @@ def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee, complete_che
         str(fixture / bootstrap['signedRegistration']), str(fixture / bootstrap['artifactBinding'])]
     window = registration_window(bootstrap, rpc_read(drill, 'A', 'getBlockDagInfo')['virtualDaaScore'])
     preview = command(drill, sampler, 'CARRIER_PREVIEW', argv, 60)
-    assert preview['dry_run'] is True and preview['total_fee_sompi'] <= maximum_fee
+    assert preview['dry_run'] is True and type(preview['total_fee_sompi']) is int and 0 <= preview['total_fee_sompi'] <= maximum_fee
     # Queue the factory-priced registration before enabling the producer's
     # first peer, so no earlier floor production can retarget the live price.
     registration_window(bootstrap, rpc_read(drill, 'A', 'getBlockDagInfo')['virtualDaaScore'])
-    sent = command(drill, sampler, 'CARRIER_SUBMIT', argv + ['--yes'], 60)
-    assert sent['ok'] is True and sent['submitted'] is True and len(sent['carriers']) == 2
-    budget = dict(maximum=maximum_fee, spent=0)
-    complete.cap_and_charge(sent, budget)
+    budget = dict(maximum=maximum_fee, spent=0, unresolved=0, submissionOutstanding=False, submittedFeesKnown=True)
+    evidence = dict(registrationWindow=window, preview=preview, submission=None, included=None,
+        cumulativeCarrierFeeSompi=0, carrierBudget=budget, completeCheck=None)
+    if progress:
+        progress(evidence, False)
+    sent = complete.submit_with_reserved_budget(drill, sampler, 'CARRIER_SUBMIT', argv + ['--yes'], 60, budget, command)
+    assert len(sent['carriers']) == 2
+    evidence['submission'] = sent
     for role in ('B', 'JOIN'):
         drill.join_link(role, 'A')
     included = drill.wait(lambda: agreement(drill, bootstrap), 'actual native registration/binding across ordinary P2P')
-    evidence = dict(registrationWindow=window, preview=preview, submission=sent, included=included,
-        cumulativeCarrierFeeSompi=budget['spent'], carrierBudget=budget, completeCheck=None)
+    evidence.update(included=included, cumulativeCarrierFeeSompi=budget['spent'])
     # Retain completed observations even if a later maturity/check/reopen fails.
     # The live budget records deductions made by later batches before a refusal;
     # neither this checkpoint nor carrier inclusion is a complete-check PASS.
     if progress:
         progress(evidence, False)
-    if native_session:
-        evidence['nativeSession'] = enroll_native_session(drill, sampler, cli, salt, fixture, bootstrap, budget)
-        evidence['cumulativeCarrierFeeSompi'] = budget['spent']
-        if progress:
-            progress(evidence, False)
-        evidence['nativeCustody'] = exercise_native_custody(drill, bootstrap)
-        if progress:
-            progress(evidence, False)
     complete_evidence = None
     if complete_check:
         evidence['recoveryClock'] = activate_complete_clock(drill, bootstrap)
         complete_evidence = complete.run(drill, sampler, cli, salt, fixture, bootstrap, budget,
             maximum_binding, maximum_check, agreement, rpc_read, command)
         evidence['completeCheck'] = complete_evidence
+        if progress:
+            progress(evidence, False)
+    if native_session:
+        if drill.plan.get('privateProfile') == 'paid-v4':
+            # A holds before drawing until FundedEnroll is actually accepted.
+            # B must supply a real PoW clock while A waits; no state or DAA is
+            # injected. Ordinary V3/240 enrollment is never substituted here.
+            evidence['nativeRecoveryClock'] = evidence['recoveryClock']
+            evidence['nativeRecoveryConformanceBeforeExecution'] = True
+            evidence['nativeCustody'] = exercise_native_custody(drill, bootstrap, recovery_v4=True)
+            evidence['nativeSession'] = evidence['nativeCustody']['nativeRecovery']
+            if progress:
+                progress(evidence, False)
+            evidence['providerCarrierFeesIncludedInWorkflowBudget'] = False
+            evidence['providerCarrierFeesMeasured'] = False
+        else:
+            evidence['nativeSession'] = enroll_native_session(drill, sampler, cli, salt, fixture, bootstrap, budget)
+            evidence['cumulativeCarrierFeeSompi'] = budget['spent']
+            if progress:
+                progress(evidence, False)
+            evidence['nativeCustody'] = exercise_native_custody(drill, bootstrap)
+        if progress:
+            progress(evidence, False)
+    if complete_check:
+        evidence['recoveryClockStop'] = stop_private_heartbeat_clock(drill, bootstrap)
     # Freeze production by terminating only our actual producer child; reopen
     # its same DB as an observer with the identical consensus factory.
     drill.kill('A')
     drill.plan['nodes']['A']['argv'].remove('--palw-produce')
     drill.start('A')
     reopened = drill.wait(lambda: agreement(drill, bootstrap), 'actual cold reopen native registration/binding agreement')
+    if native_session and drill.plan.get('privateProfile') == 'paid-v4':
+        root = evidence['nativeSession']['root']
+        evidence['nativeSession']['cold'] = drill.wait(
+            lambda: recovery.agreement(drill, bootstrap, rpc_read, transport.import_stamp, expected_root=root,
+                expected_claim=evidence['nativeSession']['boundClaim']),
+            'the exact accepted recovery contract/native binding after cold reopen')
     if complete_check:
         complete_evidence['cold'] = complete.verify_after_cold_reopen(drill, sampler, cli, salt, fixture,
             bootstrap, agreement, rpc_read, command)
@@ -462,7 +592,7 @@ def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee, complete_che
 
 
 def record_observed_progress(result, evidence, cold_reopened):
-    result.update(nativeRegistrationBindingMeasured=True, coldReopenMeasured=cold_reopened, evidence=evidence,
+    result.update(nativeRegistrationBindingMeasured=bool(evidence.get('included')), coldReopenMeasured=cold_reopened, evidence=evidence,
         nativeSessionRowObserved=bool(evidence.get('nativeSession')),
         nativeCustodyStoreObserved=bool((evidence.get('nativeCustody') or {}).get('custodyStoreObserved')))
 
@@ -472,7 +602,7 @@ def main():
     parser.add_argument('--binary', required=True)
     parser.add_argument('--cli', required=True)
     parser.add_argument('--salt', required=True)
-    parser.add_argument('--private-profile', choices=('complete-v1', 'paid-v3'), default='complete-v1',
+    parser.add_argument('--private-profile', choices=('complete-v1', 'paid-v3', 'paid-v4'), default='complete-v1',
         help='exact private policy; paid-v3 prepares new scope and never promotes old fixture receipts')
     parser.add_argument('--maximum-carrier-fee-sompi', required=True, type=int)
     parser.add_argument('--resource-limits', required=True)
@@ -480,10 +610,11 @@ def main():
     parser.add_argument('--timeout', type=int, default=240)
     parser.add_argument('--factory-timeout', type=int, default=60)
     parser.add_argument('--native-loopback-provider', action='store_true',
-        help='paid-v3 only: host the RFC-0008 PAV3 loopback provider (seats 1,2) on B for A\'s producer; unverified source')
+        help='paid-v3/v4: host the RFC-0008 loopback providers (seats 1,2) on B; v4 carriers use dedicated payer seat 3')
     parser.add_argument('--native-session', action='store_true',
         help='with --native-loopback-provider: enroll a prospective native session for the registered non-floor class '
-        '(sponsor seat 0, providers seats 1,2), then switch A to that class and wait for a provider bundle; unverified source')
+        '(sponsor seat 0, providers seats 1,2), then switch A to that class and wait for a provider bundle; '
+        'paid-v4 requires --complete-check first; unverified source')
     parser.add_argument('--complete-check', action='store_true', help='also wait actual binding maturity and carry/verify the exhaustive code-fixture check')
     parser.add_argument('--maximum-binding-reservation-sompi', type=int, help='required with --complete-check; fixed before node launch')
     parser.add_argument('--maximum-complete-check-fee-sompi', type=int, help='required with --complete-check; fixed before node launch')
@@ -504,10 +635,12 @@ def main():
         completeCheckRequested=args.complete_check, maximumBindingReservationSompi=args.maximum_binding_reservation_sompi,
         maximumCompleteCheckFeeSompi=args.maximum_complete_check_fee_sompi, totalWorkflowTimeoutSeconds=args.timeout,
         completeCheckMeasured=False, matureUsefulWorkMeasured=False, prunedIbdMeasured=False,
-        marketFillsMeasured=False, release100kMeasured=False, fullRfc12SecurityApproval=False)
+        marketFillsMeasured=False, nativeCarrierFeePaymentsMeasured=False,
+        carrierFeeObservationScope='cli-submission-fee-exposure', release100kMeasured=False, fullRfc12SecurityApproval=False)
     try:
-        if args.native_session and not (args.native_loopback_provider and args.private_profile == 'paid-v3'):
-            raise ValueError('--native-session needs --native-loopback-provider on the paid-v3 profile')
+        validate_workflow_options(args.private_profile, args.native_session, args.complete_check)
+        if args.native_session and not (args.native_loopback_provider and args.private_profile in ('paid-v3', 'paid-v4')):
+            raise ValueError('--native-session needs --native-loopback-provider on a paid-v3 or paid-v4 profile')
         fixture = root / 'signed-public-fixture'
         factory = [str(binary), '--private-probe-profile=' + args.private_profile, '--private-probe-salt=' + args.salt,
             '--testnet', '--netsuffix=12', '--private-probe-export-bootstrap=' + str(fixture)]
@@ -521,7 +654,7 @@ def main():
         elif args.maximum_binding_reservation_sompi is not None or args.maximum_complete_check_fee_sompi is not None:
             raise ValueError('separate complete-check bond caps require --complete-check')
         plan = plan_for(binary, args.salt, fixture, bootstrap, args.timeout, args.private_profile,
-            args.native_loopback_provider)
+            args.native_loopback_provider, args.maximum_carrier_fee_sompi)
         (root / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n')
         drill = FiniteBootstrapDrill(plan, root, sampler, {})
         drill.workflow_deadline = time.monotonic() + args.timeout
@@ -543,7 +676,10 @@ def main():
                     result['lastNodeStatuses'][role] = {'error': str(status_error)}
     finally:
         if 'evidence' in result:
-            result['evidence']['cumulativeCarrierFeeSompi'] = result['evidence']['carrierBudget']['spent']
+            fee_budget = result['evidence']['carrierBudget']
+            result['evidence']['cumulativeCarrierFeeSompi'] = fee_budget['spent']
+            result['submittedCarrierFeeTotalKnown'] = fee_budget.get('submittedFeesKnown', False) is True and not fee_budget.get('submissionOutstanding', False)
+            result['unresolvedCarrierFeeUpperSompi'] = fee_budget.get('unresolved', 0)
         result['sampledOwnedResources'] = sampler.stop()
         if drill:
             drill.close()

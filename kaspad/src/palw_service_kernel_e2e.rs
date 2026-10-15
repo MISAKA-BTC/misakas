@@ -579,7 +579,7 @@ fn start_kernel_service(
     model: &std::path::Path,
     keep: &mut Vec<kaspa_database::utils::DbLifetime>,
 ) -> KNode {
-    let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))));
+    let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))).unwrap());
     let config = Arc::new(chain.config.clone());
     let tick = Arc::new(TickService::new());
     let (meta_lifetime, meta_db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));

@@ -65,12 +65,13 @@ fn claim_row(builder: &TransitionBuilder<'_>, claim: &Hash64) -> Result<ClaimRow
     route_of(builder)?.kernel_claim_row_v1(claim).ok_or_else(|| refused("no such kernel claim"))
 }
 
-fn write_subject(builder: &mut TransitionBuilder<'_>, subject: &ProviderSubjectV1, row: &ProviderSubjectRowV1) {
+fn write_subject(builder: &mut TransitionBuilder<'_>, subject: &ProviderSubjectV1, row: &ProviderSubjectRowV1) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(
         PALW_PROVIDER_COURT_TABLE_SUBJECTS_V1,
         subject.key(),
         Some(borsh::to_vec(row).expect("a subject row serializes")),
-    );
+    )?;
+    Ok(())
 }
 
 fn write_lease(
@@ -78,12 +79,13 @@ fn write_lease(
     subject: &ProviderSubjectV1,
     provider: &PalwBondKeyV2,
     row: Option<&ProviderLeaseRowV1>,
-) {
+) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(
         PALW_PROVIDER_COURT_TABLE_LEASES_V1,
         palw_provider_lease_key_v1(subject, provider),
         row.map(|r| borsh::to_vec(r).expect("a lease row serializes")),
-    );
+    )?;
+    Ok(())
 }
 
 fn write_challenge(
@@ -92,12 +94,13 @@ fn write_challenge(
     provider: &PalwBondKeyV2,
     unit: &PublicUnitV1,
     row: Option<&ProviderChallengeRowV1>,
-) {
+) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(
         PALW_PROVIDER_COURT_TABLE_CHALLENGES_V1,
         palw_provider_challenge_key_v1(subject, provider, unit),
         row.map(|r| borsh::to_vec(r).expect("a challenge row serializes")),
-    );
+    )?;
+    Ok(())
 }
 
 /// **Tag 150: a lease.** See [`crate::palw_provider_court_v1`].
@@ -140,7 +143,7 @@ pub(super) fn apply_provider_lease_v1(
     if free_collateral(builder, provider, now) < reserved as u128 {
         return Err(refused("the provider's free collateral does not cover the lease's reservation"));
     }
-    write_lease(builder, subject, provider, Some(&ProviderLeaseRowV1 { reserved, filed_daa: now, serve_until_daa, charged: false }));
+    write_lease(builder, subject, provider, Some(&ProviderLeaseRowV1 { reserved, filed_daa: now, serve_until_daa, charged: false }))?;
     Ok(())
 }
 
@@ -211,7 +214,7 @@ pub(super) fn apply_provider_challenge_v1(
         deadline_daa: deadline,
         answered: false,
     };
-    write_challenge(builder, subject, provider, unit, Some(&row));
+    write_challenge(builder, subject, provider, unit, Some(&row))?;
     Ok(())
 }
 
@@ -245,9 +248,11 @@ pub(super) fn apply_provider_answer_v1(
     let (PublicUnitV1::ClaimPosition { stage, position }, PublicUnitAnswerV1::ClaimPosition { bytes }) = (unit, answer) else {
         return Err(refused("a claim's unit is answered by its position's response"));
     };
-    let ledger = route_of(builder)?.ledger_native_projection_v9().map_err(refused)?;
+    let ledger = route_of(builder)?
+        .ledger_native_projection_checked_v9()
+        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     ledger.classify_served_position_v1(&claim.as_bytes(), *stage, *position, bytes).map_err(refused)?;
-    write_challenge(builder, subject, provider, unit, Some(&ProviderChallengeRowV1 { bond: 0, answered: true, ..row }));
+    write_challenge(builder, subject, provider, unit, Some(&ProviderChallengeRowV1 { bond: 0, answered: true, ..row }))?;
     // A challenge the provider answered was not free court work: its fee is burned out of the challenger's (now released) bond.
     builder.slash_bond(row.challenger, PALW_PROVIDER_CHALLENGE_FEE_SOMPI_V1 as u128)?;
     Ok(())
@@ -265,7 +270,9 @@ pub(super) fn apply_da_transfer_v1(
     let now = ctx.daa_score;
     let operator = active_operator(builder, producer)?;
     let route = route_of(builder)?;
-    let ledger = route.ledger_native_projection_v9().map_err(refused)?;
+    let ledger = route
+        .ledger_native_projection_checked_v9()
+        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     let row = ledger.claims.get(&claim.as_bytes()).ok_or_else(|| refused("no such kernel claim"))?;
     if route.bond_key_of(&row.producer) != Some(*producer) {
         return Err(refused("only the claim's producer moves its DA responsibility"));
@@ -296,7 +303,7 @@ pub(super) fn apply_da_transfer_v1(
     if availability.reserved < row.reserved {
         return Err(refused("the leases reserve less than the claim: moving the liability must never make withholding cheaper"));
     }
-    write_subject(builder, &subject, &ProviderSubjectRowV1 { transferred_daa: Some(now), ..prior });
+    write_subject(builder, &subject, &ProviderSubjectRowV1 { transferred_daa: Some(now), ..prior })?;
     Ok(())
 }
 
@@ -320,7 +327,7 @@ fn charge_lease(
         .filter(|(s, p, _, _)| s == subject && p == provider)
         .map(|(_, _, u, _)| u)
         .collect();
-    write_lease(builder, subject, provider, Some(&ProviderLeaseRowV1 { reserved: 0, charged: true, ..lease }));
+    write_lease(builder, subject, provider, Some(&ProviderLeaseRowV1 { reserved: 0, charged: true, ..lease }))?;
     let slashed = if lease.reserved > 0 && builder.state.bonds.contains_key(provider) {
         builder.slash_bond(*provider, lease.reserved as u128)?
     } else {
@@ -329,9 +336,9 @@ fn charge_lease(
     if let Err(at) = row.charged.binary_search(provider) {
         row.charged.insert(at, *provider);
     }
-    write_subject(builder, subject, &row);
+    write_subject(builder, subject, &row)?;
     for unit in moot {
-        write_challenge(builder, subject, provider, &unit, None);
+        write_challenge(builder, subject, provider, &unit, None)?;
     }
     Ok(slashed)
 }
@@ -371,16 +378,16 @@ fn lapse_if_uncovered(
     }
     let row = route.provider_subject_v1(subject).unwrap_or_default();
     let transferred = row.transferred_daa.is_some();
-    write_subject(builder, subject, &ProviderSubjectRowV1 { lapsed_daa: Some(now), ..row });
+    write_subject(builder, subject, &ProviderSubjectRowV1 { lapsed_daa: Some(now), ..row })?;
     if let ProviderSubjectV1::KernelClaim { claim } = subject
         && transferred
     {
         let mut ledger = load_ledger(builder, ctx)?;
         let before = ledger.to_rows();
         // Refused only for a claim that is not provider-liable, which a transferred one always is: nothing to do then.
-        if let Ok(events) = ledger.provider_lapse(&claim.as_bytes()) {
+        if let Ok(events) = ledger.provider_lapse_reserved_v1(&claim.as_bytes()).map_err(PalwStateV2Error::NativeResource)? {
             apply_settlements(builder, &events, false, ctx.daa_score)?;
-            flush(builder, &ledger, &before);
+            flush(builder, &ledger, &before)?;
         }
     }
     Ok(())
@@ -403,7 +410,7 @@ pub(super) fn tick_provider_court_v1(builder: &mut TransitionBuilder<'_>, ctx: &
         if route_of(builder)?.provider_challenge_v1(&subject, &provider, &unit).is_none() {
             continue;
         }
-        write_challenge(builder, &subject, &provider, &unit, None);
+        write_challenge(builder, &subject, &provider, &unit, None)?;
         if row.answered || !subject_answerable(builder, &subject) {
             continue;
         }
@@ -424,7 +431,7 @@ pub(super) fn tick_provider_court_v1(builder: &mut TransitionBuilder<'_>, ctx: &
         .map(|(subject, provider, _)| (subject, provider))
         .collect();
     for (subject, provider) in expired {
-        write_lease(builder, &subject, &provider, None);
+        write_lease(builder, &subject, &provider, None)?;
         // Lease expiry is lawful, but a transferred claim still inside its material
         // obligation cannot remain eligible with no provider left. Do not charge a
         // provider for serving its complete signed term, or lapse a fully spent Final.
@@ -505,6 +512,7 @@ pub(super) fn court_scope_admit_demand_v1(
 }
 
 /// Write the court scope's tally (the claim's subject row) once the kernel accepted the demand it admitted.
-pub(super) fn write_court_scope_row_v1(builder: &mut TransitionBuilder<'_>, subject: &ProviderSubjectV1, row: &ProviderSubjectRowV1) {
-    write_subject(builder, subject, row);
+pub(super) fn write_court_scope_row_v1(builder: &mut TransitionBuilder<'_>, subject: &ProviderSubjectV1, row: &ProviderSubjectRowV1) -> Result<(), PalwStateV2Error> {
+    write_subject(builder, subject, row)?;
+    Ok(())
 }

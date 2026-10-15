@@ -27,6 +27,14 @@ impl PalwPaidClaimRoundV3 {
         round_id_v3(self.enrollment, self.round)
     }
     pub fn validate(&self, a: &PalwPaidClaimAuthorityV2, l: &misaka_palw_kernel::ledger::KernelLedgerV1) -> Result<(), String> {
+        self.validate_with_compact_v4(a, l, None)
+    }
+    pub fn validate_with_compact_v4(
+        &self,
+        a: &PalwPaidClaimAuthorityV2,
+        l: &misaka_palw_kernel::ledger::KernelLedgerV1,
+        compact_proof: Option<Digest>,
+    ) -> Result<(), String> {
         let plan = a.class.interactive_plan.as_ref().ok_or("round has no signed compiled plan")?;
         a.validate(l)?;
         if self.enrollment != a.enrollment.id()
@@ -63,8 +71,8 @@ impl PalwPaidClaimRoundV3 {
                 || lock.seats.len() < lock.quorum as usize
                 || lock.locked_daa < self.accepted_daa
                 || !a.enrollment.lifetime.receipt_open(lock.locked_daa)
-                || self.transcript_root
-                    != transcript_root_v3(
+                || self.transcript_root != {
+                    let base = transcript_root_v3(
                         plan,
                         self.enrollment,
                         self.round,
@@ -72,9 +80,22 @@ impl PalwPaidClaimRoundV3 {
                         self.message_root,
                         lock.context,
                         lock.seed,
-                    )
+                    );
+                    if plan.version == 4 {
+                        compact_proof
+                            .map_or(base, |p| misaka_palw_kernel::claim_compact_v1::native_v4::compact_transcript_root_v4(base, p))
+                    } else {
+                        if compact_proof.is_some() {
+                            return Err("V3 cannot bind a compact proof".into());
+                        }
+                        base
+                    }
+                }
             {
                 return Err("round lock/transcript/lifetime mismatch".into());
+            }
+            if plan.version == 4 && compact_proof.is_none() && !self.receipts.is_empty() {
+                return Err("V4 receipt needs a post-seed producer proof binding".into());
             }
             let mut unique = std::collections::BTreeSet::new();
             for receipt in &self.receipts {
@@ -103,7 +124,9 @@ impl PalwPaidClaimRoundV3 {
         Ok(())
     }
     pub fn complete(&self) -> bool {
-        self.lock.as_ref().is_some_and(|l| l.source_valid && self.receipts.len() >= l.quorum as usize)
+        self.lock.as_ref().is_some_and(|l| {
+            l.source_valid && l.quorum > 0 && l.seats.len() >= l.quorum as usize && self.receipts.len() >= l.quorum as usize
+        })
     }
 }
 /// Common authenticated source adapter for initial and staged contexts. Never
@@ -125,7 +148,7 @@ impl PalwKernelRouteStateV1 {
             return Err("paid round key/identity mismatch".into());
         }
         let a = self.paid_claim_enrollment_v3(enrollment)?;
-        row.validate(&a, &*self.ledger()?)?;
+        self.validate_paid_round_v4(&row, &a, &*self.ledger()?)?;
         Ok(row)
     }
     pub fn paid_claim_enrollment_v3(&self, enrollment: &Digest) -> Result<PalwPaidClaimAuthorityV2, String> {
@@ -171,7 +194,7 @@ impl PalwKernelRouteStateV1 {
         let row: PalwPaidClaimRoundV3 =
             self.aux_row(PAID_CLAIM_ROUNDS_V2, &borsh::to_vec(&index.target).unwrap()).ok_or("staged source index target missing")?;
         let a = self.paid_claim_enrollment_v3(&row.enrollment)?;
-        row.validate(&a, &*self.ledger()?)?;
+        self.validate_paid_round_v4(&row, &a, &*self.ledger()?)?;
         if row.id() != index.target || row.context.id() != *context || self.beacon_source_target_v4(context)? != row.target {
             return Err("staged source index substitutes its round/context/target".into());
         }
@@ -209,6 +232,10 @@ impl PalwKernelRouteStateV1 {
                 prior_rounds.push((p.message_root, lock.seed));
             }
         }
+        // PRINCIPLES §8: a retired V4 compact plan never yields a check authority (no compact receipt or credit path).
+        if a.class.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
+            return Err(crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACT_RETIRED_REASON_V1.into());
+        }
         PaidClaimCheckAuthorityV2::for_interactive_round_v3(
             &a.class,
             &a.enrollment,
@@ -242,7 +269,10 @@ impl PalwKernelRouteStateV1 {
             if row.enrollment != a.enrollment.id() || row.round != round {
                 return Err("paid round projection key/identity mismatch".into());
             }
-            row.validate(a, l)?;
+            self.validate_paid_round_v4(&row, a, l)?;
+            if plan.version == 4 && self.paid_compact_proof_binding_v4(row.enrollment, row.round)?.is_none() {
+                return Ok(false);
+            }
             if row.prior_transcript != prior || !row.complete() {
                 return Ok(false);
             }

@@ -85,7 +85,7 @@ pub fn staged_preclaim_quote_with_gates_v1(
     legacy_preclaim_quote_v1(geometry, original, header, profile, semantics, inventory, maximum_custodians, maximum_leaves, config, gates)
 }
 
-fn check_preclaim_identity_v1(
+pub(crate) fn check_preclaim_identity_v1(
     geometry: &PalwStagedClaimGeometryV1,
     original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
     header: &crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
@@ -183,15 +183,15 @@ fn legacy_preclaim_quote_v1(
 
 /// What the Constraint source quote reads of a claim's class, legacy or TIR.
 #[derive(Clone, Copy, Debug)]
-struct PalwPreclaimSourceGeometryV1 {
-    vocab: u32,
-    logits_scheme_id: Hash64,
+pub(crate) struct PalwPreclaimSourceGeometryV1 {
+    pub(crate) vocab: u32,
+    pub(crate) logits_scheme_id: Hash64,
     /// The class's registered lane: a `Float32` class's source is its v2 event tree, whatever
     /// its logits scheme field says.
-    lane: crate::palw_step::PalwStepLaneV1,
+    pub(crate) lane: crate::palw_step::PalwStepLaneV1,
     /// Bytes a source session retains to resolve the class (a legacy profile, a TIR program).
-    profile_bytes: u64,
-    step_leaf_count: u64,
+    pub(crate) profile_bytes: u64,
+    pub(crate) step_leaf_count: u64,
 }
 
 /// **The TIR preclaim quote**: the same planner over a TIR claim's decode view, derived from the
@@ -268,7 +268,7 @@ pub fn staged_preclaim_tir_quote_v1(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn finish_preclaim_quote_v1(
+pub(crate) fn finish_preclaim_quote_v1(
     geometry: &PalwStagedClaimGeometryV1,
     original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
     semantics: &crate::palw_class_semantics_v1::PalwClassSemanticsV1,

@@ -20,6 +20,8 @@ use kaspa_consensus_core::{
 use std::{collections::VecDeque, thread::JoinHandle};
 
 mod palw_mergeset_view;
+// RFC-0018 §10 T-1/T-2: three models × three miners from the same parents; arrival-order independence (unbuilt source).
+mod rfc0018_dag_siblings;
 
 struct OnetimeTxSelector {
     txs: Option<Vec<Transaction>>,
@@ -13775,7 +13777,7 @@ async fn an_exhausted_sink_search_holds_at_the_previous_sink() {
 
     // No tips at all: the heap is empty before the first pop, which is the exhaustion path.
     let (sink, candidates) =
-        vp.sink_search_algorithm(&virtual_read, &mut diff, &mut bond_view, prev_sink, vec![], finality_point, pruning_point);
+        vp.sink_search_algorithm(&virtual_read, &mut diff, &mut bond_view, prev_sink, vec![], finality_point, pruning_point).unwrap();
 
     assert_eq!(sink, prev_sink, "an exhausted search must hold virtual where it was");
     assert!(candidates.is_empty(), "and merge nothing while it holds");
@@ -15141,7 +15143,9 @@ fn every_held_court_acceptance_arm_reads_the_claims_class_ladder() {
     assert!(!source.contains("adjudicate_court_close_v2("), "every close is judged by v4, which knows the held regime");
     // RFC-0006 R6-CELL round 4: the three sites moved to v4, which is v3 with `palw_cell_coverage_closure_v1`'s mirror.
     assert!(!source.contains("adjudicate_court_close_v3("), "every close also knows the coverage closure");
-    assert_eq!(source.matches("adjudicate_court_close_v4(").count(), 3, "the node's verdict, a close chunk and a close");
+    // RFC-0006 consumer v2: the three sites moved to v5, which is v4 with `palw_memory_routing_court_v2`'s mirror.
+    assert!(!source.contains("adjudicate_court_close_v4("), "every close also knows the memory/routing consumer v2");
+    assert_eq!(source.matches("adjudicate_court_close_v5(").count(), 3, "the node's verdict, a close chunk and a close");
     assert!(source.contains("palw_fp_objects_from_accepted_txs_by_class_v1("), "the walk bounds each commitment by its class");
 }
 
@@ -17023,6 +17027,9 @@ mod rfc12_zero_dns_matrix;
 // RFC-0012 wave 2 (C1 a real claim to `Final` with the lane on, C2 a pruned join with EVM state): `evm` feature only, like the matrix.
 #[cfg(feature = "evm")]
 mod rfc12_c_items;
+// RFC-0012 R12-AUTHORITY item 4 (port of codex/rfc12-remove-dns-bft, 2026-10-15): every DNS authority read in the consensus crate is
+// inventoried and asks the retirement — a source scan, no feature needed.
+mod rfc12_dns_reader_inventory;
 
 /// **MSK-26A (2026-09 pre-freeze security review): a slash applied on unchecked evidence**, end to
 /// end through `validate_and_insert_block`: a forged slashing evidence rides in a side block `M`
@@ -17673,3 +17680,6 @@ async fn rfc12_utxo_import_target_and_completion_are_generation_bound() {
     assert_eq!(vp.pruning_meta_stores.read().utxoset_position().unwrap(), original_position);
     assert_eq!(vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect::<Vec<_>>(), before_utxos);
 }
+
+// Local native capacity is retryable, never a branch preference or invalidity.
+mod rfc12_native_capacity_selection;

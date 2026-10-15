@@ -729,16 +729,16 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     let staged_contract = builder.prepare_staged_claim_v1(&mut claim)?;
     let public_job_wire = builder.public_fp_job_wire_v1(c.claim_id, &claim, c.public_job)?;
     builder.reserve_for_claim(&claim)?;
-    builder.write_claim(*c.claim_id, Some(claim));
-    builder.stamp_staged_claim_v1(*c.claim_id, staged_contract);
+    builder.write_claim(*c.claim_id, Some(claim))?;
+    builder.stamp_staged_claim_v1(*c.claim_id, staged_contract)?;
     if let Some(wire) = public_job_wire {
-        builder.write_public_fp_job_v1(*c.claim_id, Some(wire));
+        builder.write_public_fp_job_v1(*c.claim_id, Some(wire))?;
     }
-    builder.write_improvement_eval_job(key, Some(row));
+    builder.write_improvement_eval_job(key, Some(row))?;
     let deadline = daa.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
     // RFC-0010: a claim accepted under the permissionless Panel's rule is clocked by its engine, not by V2's bind window.
     if !builder.params.panel_v3_rule_at(daa) {
-        builder.arm_deadline(deadline, *c.claim_id);
+        builder.arm_deadline(deadline, *c.claim_id)?;
     }
     Ok(())
 }
@@ -748,14 +748,22 @@ pub(super) fn apply_improvement_eval_commitment_v1(
 impl TransitionBuilder<'_> {
     /// **RFC-0004 A6: the one writer of `improvement_eval_jobs`** (`ImprovementRow`, table 13), keeping
     /// the claim index in step.
-    pub(crate) fn write_improvement_eval_job(&mut self, key: PalwEvalJobKeyV1, new: Option<PalwEvalJobStateV1>) {
-        let old = self.write_improvement_row(PALW_IMPROVE_TABLE_EVAL_JOBS_V1, key, new.clone(), |s| &mut s.improvement_eval_jobs);
+    pub(crate) fn write_improvement_eval_job(&mut self, key: PalwEvalJobKeyV1, new: Option<PalwEvalJobStateV1>) -> Result<(), PalwStateV2Error> {
+        // RFC-0006: the caller-side clone handed to the row writer and the claim index node, from the actual row.
+        if self.native_writers_tracking_v1() {
+            let mut q = super::native_writers::NativeWriteQuoteV1::new("native improvement eval job clone and claim index");
+            q.copy(&new)?;
+            q.member_if::<Hash64, PalwEvalJobKeyV1>(new.as_ref().is_some_and(|row| row.claim.is_some()))?;
+            self.admit_native_write_v1(q)?;
+        }
+        let old = self.write_improvement_row(PALW_IMPROVE_TABLE_EVAL_JOBS_V1, key, new.clone(), |s| &mut s.improvement_eval_jobs)?;
         if let Some(claim) = old.and_then(|row| row.claim) {
             self.state.improvement_eval_claims.remove(&claim.claim_id);
         }
         if let Some(claim) = new.and_then(|row| row.claim) {
             self.state.improvement_eval_claims.insert(claim.claim_id, key);
         }
+        Ok(())
     }
 
     /// Does the epoch take scores now (spec 17 §17.8.3), for this item and subject?
@@ -834,7 +842,7 @@ impl TransitionBuilder<'_> {
         let Some(mut taken) = row.claim.filter(|c| c.claim_id == *claim_id && c.final_daa.is_none()) else { return Ok(()) };
         taken.final_daa = Some(final_daa);
         row.claim = Some(taken);
-        self.write_improvement_eval_job(key, Some(row));
+        self.write_improvement_eval_job(key, Some(row))?;
         let (line_id, epoch, item, subject, kind, _part) = key;
         let scoring = self.improvement_eval_takes_score_v1(&line_id, epoch, item, &subject, kind);
         if !scoring {
@@ -877,7 +885,7 @@ impl TransitionBuilder<'_> {
         let mut row = row.clone();
         let (line_id, epoch, item, subject, kind, _part) = key;
         row.claim = None;
-        self.write_improvement_eval_job(key, Some(row));
+        self.write_improvement_eval_job(key, Some(row))?;
         self.retract_improvement_score_v1(&line_id, epoch, item, subject, kind)?;
         // A judge reads FINAL generations (spec 17 §17.8.5): a convicted generation takes the judged scores that read it
         // out too — the subject's Judge and Pairwise, and for the parent's generation every Pairwise score of the item.
@@ -939,7 +947,18 @@ impl TransitionBuilder<'_> {
 
     /// The bounded retirement of a decided epoch's job rows (spec 17 §17.5.4, beside the core's detail
     /// rows): at most `budget` rows; returns how many it deleted and whether any remain.
-    pub(super) fn retire_improvement_eval_jobs_v1(&mut self, line_id: &Hash64, epoch: u64, budget: usize) -> (usize, bool) {
+    pub(super) fn retire_improvement_eval_jobs_v1(
+        &mut self,
+        line_id: &Hash64,
+        epoch: u64,
+        budget: usize,
+    ) -> Result<(usize, bool), PalwStateV2Error> {
+        // RFC-0006: the walk Vec of at most `budget` keys, admitted before it is collected.
+        if self.native_writers_tracking_v1() {
+            let mut q = super::native_writers::NativeWriteQuoteV1::new("native improvement eval job retirement walk");
+            q.grown::<PalwEvalJobKeyV1>(budget as u64)?;
+            self.admit_native_write_v1(q)?;
+        }
         let keys: Vec<PalwEvalJobKeyV1> = self
             .state
             .improvement_eval_jobs
@@ -948,10 +967,10 @@ impl TransitionBuilder<'_> {
             .take(budget)
             .collect();
         for key in &keys {
-            self.write_improvement_eval_job(*key, None);
+            self.write_improvement_eval_job(*key, None)?;
         }
         let remaining = self.state.improvement_eval_jobs.range(palw_improve_eval_epoch_range_v1(line_id, epoch)).next().is_some();
-        (keys.len(), remaining)
+        Ok((keys.len(), remaining))
     }
 }
 
@@ -2148,7 +2167,7 @@ mod tests {
         // Licensed, then Final: the funnel runs as the sweep runs it.
         let licensed = PalwClaimStateV2 { phase: PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1_620 }, ..live.clone() };
         let (s2, _) = at(&s1, &p, 1_700, |b| {
-            b.write_claim(id, Some(licensed.clone()));
+            b.write_claim(id, Some(licensed.clone())).unwrap();
             b.finalize_claim(id, &licensed, 1_700).expect("the claim finalizes");
         });
         assert!(matches!(s2.claims.get(&id).unwrap().phase, PalwClaimPhaseV2::Final { final_daa: 1_700 }));
@@ -2664,7 +2683,7 @@ mod tests {
             let licensed =
                 PalwClaimStateV2 { phase: PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: daa - 1 }, ..s.claims[&id].clone() };
             at(s, &p, daa, |b| {
-                b.write_claim(id, Some(licensed.clone()));
+                b.write_claim(id, Some(licensed.clone())).unwrap();
                 b.finalize_claim(id, &licensed, daa).expect("the claim finalizes");
             })
             .0
@@ -2717,7 +2736,7 @@ mod tests {
             apply_object(b, &ctx(1_600), &honest).unwrap();
             // The claim's panel: three seats drawn; two of them answered.
             let seats = [(bond(ALICE), 1_610u64), (bond(BOB), 1_611), (bond(DAVE), 0)].into_iter().collect();
-            b.write_panel_duties(h(0xA7), Some(PalwPanelDutyRowV1 { seats, seat_exposure: 0 }));
+            b.write_panel_duties(h(0xA7), Some(PalwPanelDutyRowV1 { seats, seat_exposure: 0 })).unwrap();
         });
         let before = |who: u8| s1.improvement_earnings(&bond(who));
         let escrow_before = s1.improvement_candidate(&h(LINE), 1, &h(CAND_A)).unwrap().1.escrow_spent;
@@ -3192,7 +3211,7 @@ mod tests {
         let retaken = s3.claims[&h(0xB8)].clone();
         let licensed = PalwClaimStateV2 { phase: PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1_710 }, ..retaken };
         let (s4, _) = at(&s3, &p, 1_720, |b| {
-            b.write_claim(h(0xB8), Some(licensed.clone()));
+            b.write_claim(h(0xB8), Some(licensed.clone())).unwrap();
             b.finalize_claim(h(0xB8), &licensed, 1_720).expect("the honest claim finalizes");
         });
         let recorded = s4
@@ -3333,7 +3352,7 @@ mod tests {
         let (s1, _) = at(&s, &p, 1_600, |b| apply_object(b, &ctx(1_600), &run.object).expect("an honest claim"));
         let licensed = PalwClaimStateV2 { phase: PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1_620 }, ..s1.claims[&id].clone() };
         let (s2, _) = at(&s1, &p, 1_700, |b| {
-            b.write_claim(id, Some(licensed.clone()));
+            b.write_claim(id, Some(licensed.clone())).unwrap();
             b.finalize_claim(id, &licensed, 1_700).expect("the claim finalizes");
         });
         let scored = |s: &PalwChainStateV2| {

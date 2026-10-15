@@ -48,10 +48,16 @@ use kaspa_consensus_core::{
     },
     palw_state_v2::{PalwChainStateV2, PalwClaimPhaseV2},
 };
+use kaspa_consensus_core::{
+    palw_native_resource_v1::NativeDemandLeaseV1,
+    palw_native_settlement_resources_v1::{
+        NativeSettlementWalkLeaseV1, reserve_native_settlement_row_v1, reserve_native_settlement_sweep_v1,
+    },
+};
 use kaspa_core::error;
 use kaspa_database::prelude::StoreError;
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
 
@@ -72,6 +78,13 @@ pub(super) struct NativeChainRow {
     /// from the sink's and check a header past `palw_fork_choice_commitment_v1` (it commits the leaf with the root). Kept only where that
     /// fence is configured at all (`None` on every shipped network, and with the delta), and boxed so a dormant row stays its size.
     fork_choice: Option<Box<PalwForkChoiceDeltaV1>>,
+    /// **RFC-0018 GAP-R4**: where rule E is in force at this block's own point, the root its chain child must commit for this block's
+    /// post-state (`palw_committed_state_root_v2`: the rule-E leaf v2/v3 envelope), computed once from the post-state — a rule-E leaf
+    /// (window and registry roots) cannot be rebuilt backwards from deltas. `None` below rule E: the v1 rebuild above applies.
+    rule_e_committed: Option<Hash64>,
+    // Shared Arc readers retain this reservation after cache replacement.
+    // Drop the payload fields before returning the ticket to the checker.
+    _resource_lease: Option<NativeDemandLeaseV1>,
 }
 
 /// **Step 4 of [`VirtualStateProcessor::native_evaluate`], pure: the roots chain.** `rows` is the selected chain newest first (the
@@ -101,9 +114,11 @@ fn native_roots_chain_v1(
         let holds = if i == 0 {
             root == sink_state.state_root()
         } else {
-            let committed = match leaf.as_ref() {
-                Some(leaf) => palw_committed_root_of_parts_v1(leaf, &root, fence),
-                None => root,
+            // RFC-0018 GAP-R4: past rule E the row carries the committed root of its post-state (rule-E leaf envelope).
+            let committed = match (row.rule_e_committed, leaf.as_ref()) {
+                (Some(committed), _) => committed,
+                (None, Some(leaf)) => palw_committed_root_of_parts_v1(leaf, &root, fence),
+                (None, None) => root,
             };
             committed == rows[i - 1].header_palw_root
         };
@@ -118,7 +133,7 @@ fn native_roots_chain_v1(
 /// a root-verified EVM result and their required delta, are stored. Checkpoint-only rows are excluded.
 #[derive(Default)]
 pub(super) struct NativeRowCache {
-    rows: HashMap<BlockHash, Arc<NativeChainRow>>,
+    rows: BTreeMap<BlockHash, Arc<NativeChainRow>>,
 }
 
 impl NativeRowCache {
@@ -147,7 +162,9 @@ pub(super) enum NativeDetail {
 pub(super) struct NativeWeighed {
     sink_daa: u64,
     sink_blue: u64,
-    state: PalwChainStateV2,
+    // The source's checked reservation follows this state into the readiness
+    // memo. Dropping a store cache cannot release memory still held here.
+    state: kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
     /// Executed effects, oldest first.
     chain: Vec<(Hash64, NativeEffectV1)>,
     prefix: NativePrefixV1,
@@ -155,6 +172,7 @@ pub(super) struct NativeWeighed {
     frontier_blue: u64,
     frontier_on_branch: bool,
     skipped: SkippedEvidenceV1,
+    _resource_lease: Option<NativeDemandLeaseV1>,
 }
 
 pub(super) struct NativeEvaluation {
@@ -165,6 +183,24 @@ pub(super) struct NativeEvaluation {
 }
 
 impl VirtualStateProcessor {
+    fn native_row_reservation_v1(
+        &self,
+        cursor: BlockHash,
+        delta: Option<&kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2>,
+        fork_projection: bool,
+    ) -> Result<Option<NativeDemandLeaseV1>, WalkFault> {
+        let reserve = || reserve_native_settlement_row_v1::<NativeChainRow>(delta, fork_projection);
+        match reserve() {
+            Ok(lease) => Ok(lease),
+            Err(_) => {
+                // Rebuildable rows from an abandoned branch must not consume
+                // the replacement's capacity forever. Live Arc readers retain
+                // their payload AND ticket when cache ownership is cleared.
+                self.native_rows.lock().rows.clear();
+                reserve().map_err(|_| WalkFault(HistoryGapV1::NativeCapacityUnavailable, Some(cursor)))
+            }
+        }
+    }
     /// Read (or load and remember) the row of `cursor` if it is executed with a root-verified EVM result.
     /// `Ok(None)`: not executed (yet). `Err`: an unreadable row, or a result that disagrees with the header.
     fn native_row(&self, cursor: BlockHash, pruning: BlockHash) -> Result<Result<Arc<NativeChainRow>, (u64, BlockHash)>, WalkFault> {
@@ -193,26 +229,46 @@ impl VirtualStateProcessor {
             }
             Err(_) => return Err(WalkFault(HistoryGapV1::ExecutionRowUnreadable, Some(cursor))),
         }
-        let (delta_root, evidence, fork_choice) = if cursor == pruning || header.daa_score < self.evm_activation_daa_score {
-            (None, NativeDeltaEvidenceV1::default(), None)
-        } else {
-            // A missing or undecodable delta is a gap in the verified history, not an empty block.
-            let Ok((root, delta)) = self.palw_state_v2_store.read().delta_of(cursor) else {
-                return Err(WalkFault(HistoryGapV1::DeltaNotRetained, Some(cursor)));
-            };
-            #[allow(unused_mut)]
-            let mut evidence = native_delta_evidence_v1(&delta);
-            #[cfg(test)]
-            if let Some(real) = *self.native_relabel_class.lock() {
-                for (_, claim) in evidence.finalized_attempts.iter_mut() {
-                    claim.class_id = real;
+        let (delta_root, evidence, fork_choice, resource_lease) =
+            if cursor == pruning || header.daa_score < self.evm_activation_daa_score {
+                let lease = self.native_row_reservation_v1(cursor, None, false)?;
+                (None, NativeDeltaEvidenceV1::default(), None, lease)
+            } else {
+                // A missing or undecodable delta is a gap in the verified history, not an empty block.
+                let (root, delta) = match self.palw_state_v2_store.read().delta_of_retained_v1(cursor) {
+                    Ok(row) => row,
+                    Err(StoreError::LocalResourceUnavailable(_)) => {
+                        return Err(WalkFault(HistoryGapV1::NativeCapacityUnavailable, Some(cursor)));
+                    }
+                    Err(_) => return Err(WalkFault(HistoryGapV1::DeltaNotRetained, Some(cursor))),
+                };
+                let lease = self.native_row_reservation_v1(cursor, Some(&delta), self.palw_fork_choice_commitment_v1.is_some())?;
+                #[allow(unused_mut)]
+                let mut evidence = native_delta_evidence_v1(&delta);
+                #[cfg(test)]
+                if let Some(real) = *self.native_relabel_class.lock() {
+                    for (_, claim) in evidence.finalized_attempts.iter_mut() {
+                        claim.class_id = real;
+                    }
                 }
-            }
-            let fork_choice = self.palw_fork_choice_commitment_v1.is_some().then(|| Box::new(PalwForkChoiceDeltaV1::of(&delta)));
-            (Some(root), evidence, fork_choice)
-        };
+                let fork_choice = self.palw_fork_choice_commitment_v1.is_some().then(|| Box::new(PalwForkChoiceDeltaV1::of(&delta)));
+                (Some(root), evidence, fork_choice, lease)
+            };
         let parent =
             self.ghostdag_store.get_selected_parent(cursor).map_err(|_| WalkFault(HistoryGapV1::ParentUnreadable, Some(cursor)))?;
+        // RFC-0018 GAP-R4: past rule E the committed root of this block's post-state, from the post-state itself.
+        let rule_e_committed = match delta_root {
+            Some(_) if self.native_redemption_params_v33.palw_fork_choice_rule_e_active_at(header.daa_score) => {
+                let Some(state) = self.palw_candidate_state_v2(cursor) else {
+                    return Err(WalkFault(HistoryGapV1::DeltaNotRetained, Some(cursor)));
+                };
+                Some(kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::palw_committed_state_root_v2(
+                    &state,
+                    &self.native_redemption_params_v33,
+                ))
+            }
+            _ => None,
+        };
         let row = Arc::new(NativeChainRow {
             hash: cursor,
             parent,
@@ -222,6 +278,8 @@ impl VirtualStateProcessor {
             delta_root,
             evidence,
             fork_choice,
+            rule_e_committed,
+            _resource_lease: resource_lease,
         });
         if cursor != pruning {
             self.native_rows.lock().rows.insert(cursor, row.clone());
@@ -326,6 +384,7 @@ impl VirtualStateProcessor {
         };
 
         // 1. The selected chain, newest first: executed rows only, an execution gap inside them is a stop.
+        let mut walk_lease = NativeSettlementWalkLeaseV1::default();
         let mut rows: Vec<Arc<NativeChainRow>> = Vec::new();
         let genesis = self.genesis.hash;
         let walked = (|| -> Result<(), WalkFault> {
@@ -337,6 +396,9 @@ impl VirtualStateProcessor {
                             result.latest = Some(row.hash);
                         }
                         let (parent, daa) = (row.parent, row.daa);
+                        walk_lease
+                            .before_push_v1::<NativeChainRow>()
+                            .map_err(|_| WalkFault(HistoryGapV1::NativeCapacityUnavailable, Some(cursor)))?;
                         rows.push(row);
                         if cursor == pruning || cursor == genesis || daa < self.evm_activation_daa_score {
                             return Ok(());
@@ -392,8 +454,12 @@ impl VirtualStateProcessor {
         }
 
         // 3. The PALW state the fork choice weighs, and its frontier.
-        let Some(state) = self.palw_candidate_state_v2(sink) else {
-            return stopped(result, gap(HistoryGapV1::StateUnavailable, Some(sink)));
+        let state = match self.palw_candidate_state_v2_checked(sink) {
+            Ok(state) => state,
+            Err(super::processor::PalwWeighFaultV2::NativeCapacityUnavailable) => {
+                return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink)));
+            }
+            Err(_) => return stopped(result, gap(HistoryGapV1::StateUnavailable, Some(sink))),
         };
         let Some(params) = self.palw_state_params_v2.as_ref() else {
             return stopped(result, gap(HistoryGapV1::ParamsAbsent, None));
@@ -410,6 +476,25 @@ impl VirtualStateProcessor {
         }
 
         // 5. Facts: oldest first is not needed, only the set. The pruning point's own delta is never read.
+        #[cfg(test)]
+        let injected_facts = self.native_fact_override.lock();
+        #[cfg(test)]
+        let extra_facts =
+            match rows.iter().try_fold(0usize, |count, row| count.checked_add(injected_facts.get(&row.hash).map_or(0, Vec::len))) {
+                Some(n) => n,
+                None => return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink))),
+            };
+        #[cfg(not(test))]
+        let extra_facts = 0;
+        let resource_lease = match reserve_native_settlement_sweep_v1::<NativeWeighed>(
+            rows.iter().map(|row| &row.evidence),
+            &state,
+            rows.len(),
+            extra_facts,
+        ) {
+            Ok(lease) => lease,
+            Err(_) => return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink))),
+        };
         let voided: BTreeSet<Hash64> = rows.iter().flat_map(|r| r.evidence.voided.iter().copied()).collect();
         let open_sessions = native_open_sessions_v1(&state);
         let claims_with_open_disputes: BTreeSet<Hash64> = open_sessions.iter().map(|(claim, _)| *claim).collect();
@@ -429,9 +514,8 @@ impl VirtualStateProcessor {
         }
         #[cfg(test)]
         {
-            let injected = self.native_fact_override.lock();
             for row in rows.iter().filter(|r| r.hash != pruning) {
-                facts.extend(injected.get(&row.hash).into_iter().flatten().copied());
+                facts.extend(injected_facts.get(&row.hash).into_iter().flatten().copied());
             }
         }
 
@@ -494,6 +578,7 @@ impl VirtualStateProcessor {
                 frontier_blue,
                 frontier_on_branch,
                 skipped,
+                _resource_lease: resource_lease,
             })),
         }
     }
@@ -716,6 +801,8 @@ mod tests {
                         delta_root: Some(states[n].state_root()),
                         evidence: NativeDeltaEvidenceV1::default(),
                         fork_choice: keep.then(|| Box::new(PalwForkChoiceDeltaV1::of(&deltas[n - 1]))),
+                        rule_e_committed: None,
+                        _resource_lease: None,
                     })
                 })
                 .collect()
@@ -749,6 +836,8 @@ mod tests {
             delta_root: r.delta_root,
             evidence: NativeDeltaEvidenceV1::default(),
             fork_choice: r.fork_choice.clone(),
+            rule_e_committed: r.rule_e_committed,
+            _resource_lease: None,
         }
     }
 }

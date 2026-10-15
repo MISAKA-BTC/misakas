@@ -4,11 +4,16 @@
 
 mod kernel_route_locator_v1;
 mod public_filer_targeting_v1;
-mod reward_gate_genesis;
 // RFC-0017: model eligibility through the actual fold (claim gate, commit-then-draw, fee, promotion, lapse, renewal).
 mod model_eligibility_fold_v1;
 mod public_prefix_fold_v1;
+mod reward_gate_genesis;
 mod terminal_carriage_v1;
+mod gdn_court_v2;
+// RFC-0006: remaining shared writer admission (payout/exposure/court/index/encoded/kernel rows) and the lenient-consumer guard.
+mod native_writers_v1;
+// RFC-0008: once-only settlement across consumers (dormant fence; kernel route aux 140).
+mod settlement_once_v1;
 use super::*;
 use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
 use crate::palw_fork_choice::compare_palw_candidates_v1;
@@ -3238,7 +3243,7 @@ mod adr0135 {
             // One bond fails three times, in span 14.
             let mut b = TransitionBuilder::new(&s10, &p, false, false, false, false, &armed_extras);
             for _ in 0..3 {
-                b.note_model_probe(&failing(3), false, 145);
+                b.note_model_probe(&failing(3), false, 145).unwrap();
             }
             let one = b.state.clone();
             assert_eq!(one.model_lifecycle(&kimi_id()).unwrap().probes_failed_this_span, 3, "every fault still counted");
@@ -3258,7 +3263,7 @@ mod adr0135 {
             }
             // A second, distinct bond fails (span 15): the probation resets and forgets both.
             let mut b = TransitionBuilder::new(&after_one, &p, false, false, false, false, &armed_extras);
-            b.note_model_probe(&failing(4), false, 155);
+            b.note_model_probe(&failing(4), false, 155).unwrap();
             let two = b.state.clone();
             let mut both = vec![bond_key(4), bond_key(3)];
             both.sort();
@@ -3270,7 +3275,7 @@ mod adr0135 {
             // A failure on a class out of probation names nobody.
             let base_claim = PalwClaimStateV2 { class_id: h64(1), ..failing(5) };
             let mut b = TransitionBuilder::new(&after_two, &p, false, false, false, false, &armed_extras);
-            b.note_model_probe(&base_claim, false, 165);
+            b.note_model_probe(&base_claim, false, 165).unwrap();
             assert!(b.state.probation_memory_of_v1(&h64(1)).is_none(), "the ACTIVE base class keeps no memory");
         }
     }
@@ -3338,7 +3343,7 @@ mod adr0135 {
             let (s10, _, _) = kimi_in_probation(p, 4);
             let kimi_claim = s10.claims.values().find(|c| c.class_id == kimi_id()).expect("Kimi's Final").clone();
             let mut b = TransitionBuilder::new(&s10, p, false, false, false, false, &armed_extras);
-            b.note_model_probe(&PalwClaimStateV2 { bond: bond_key(3), ..kimi_claim }, false, 145);
+            b.note_model_probe(&PalwClaimStateV2 { bond: bond_key(3), ..kimi_claim }, false, 145).unwrap();
             let noted = b.state.clone();
             let (stepped, _) = step(&noted, p, &ctx(11, 150, 11), &[], None, Some(f.clone())).unwrap();
             (noted, stepped)
@@ -5027,26 +5032,26 @@ mod adr0135 {
             // A new claim of each lane.
             let mut fresh = stray.clone();
             fresh.class_id = kimi_id();
-            b.write_claim(h64(0x4444), Some(fresh.clone()));
+            b.write_claim(h64(0x4444), Some(fresh.clone())).unwrap();
             fresh.source = PalwClaimSourceV2::FreePrompt { quanta: 2, spent: BTreeSet::new() };
-            b.write_claim(h64(0x4445), Some(fresh.clone()));
+            b.write_claim(h64(0x4445), Some(fresh.clone())).unwrap();
             assert_index_is_the_walk(&b, &fold, now, "after two new claims");
             // A claim going terminal, and one dropped.
             let live: Vec<Hash64> = b.state.claims.iter().filter(|(_, c)| !c.phase.is_terminal()).map(|(k, _)| *k).collect();
             let mut voided = b.state.claims[&live[0]].clone();
             voided.phase = PalwClaimPhaseV2::Voided { voided_daa: now, reason: PalwVoidReasonV2::BindTimeout };
-            b.write_claim(live[0], Some(voided));
-            b.write_claim(live[1], None);
+            b.write_claim(live[0], Some(voided)).unwrap();
+            b.write_claim(live[1], None).unwrap();
             assert_index_is_the_walk(&b, &fold, now, "after a void and a drop");
             // 2026-09-24 audit #4: a licence (the replay done) and a court on a licensed claim
             // (the replay owed again), each measured against the walk; then the court closes.
             let mut licensed = fresh.clone();
             licensed.source = PalwClaimSourceV2::Attempt;
-            b.write_claim(h64(0x4447), Some(licensed.clone()));
+            b.write_claim(h64(0x4447), Some(licensed.clone())).unwrap();
             licensed.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: now };
-            b.write_claim(h64(0x4447), Some(licensed.clone()));
+            b.write_claim(h64(0x4447), Some(licensed.clone())).unwrap();
             licensed.source = PalwClaimSourceV2::FreePrompt { quanta: 3, spent: BTreeSet::new() };
-            b.write_claim(h64(0x4448), Some(licensed));
+            b.write_claim(h64(0x4448), Some(licensed)).unwrap();
             assert_index_is_the_walk(&b, &fold, now, "after two licences");
             b.state.open_courts_by_claim.insert(h64(0x4448), 1);
             b.state.open_courts_by_claim.insert(h64(0x4447), 2);
@@ -5057,15 +5062,15 @@ mod adr0135 {
             // A row that moves the horizon.
             let mut held = b.state.model_lifecycles[&kimi_id()].clone();
             held.state = PalwModelLifecycleV1::Held;
-            b.write_model_lifecycle(kimi_id(), Some(held));
+            b.write_model_lifecycle(kimi_id(), Some(held)).unwrap();
             assert_index_is_the_walk(&b, &fold, now, "after a row change");
             // A restore over writes the index had absorbed.
             let checkpoint = b.checkpoint();
-            b.write_claim(live[2], None);
-            b.write_claim(h64(0x4446), Some(fresh.clone()));
+            b.write_claim(live[2], None).unwrap();
+            b.write_claim(h64(0x4446), Some(fresh.clone())).unwrap();
             let mut active = b.state.model_lifecycles[&kimi_id()].clone();
             active.state = PalwModelLifecycleV1::Active;
-            b.write_model_lifecycle(kimi_id(), Some(active));
+            b.write_model_lifecycle(kimi_id(), Some(active)).unwrap();
             assert_index_is_the_walk(&b, &fold, now, "before the restore");
             b.restore(checkpoint);
             assert_index_is_the_walk(&b, &fold, now, "after the restore");
@@ -5187,7 +5192,7 @@ mod adr0135 {
         let row = s.model_lifecycles[&kimi_id()].clone();
         assert_eq!(b.panel_room_v1(&kimi_id(), &row, &fold, now), owed);
         let checkpoint = b.checkpoint();
-        b.write_claim(key, Some(s1.claims[&key].clone()));
+        b.write_claim(key, Some(s1.claims[&key].clone())).unwrap();
         assert_eq!(b.panel_room_v1(&kimi_id(), &row, &fold, now), freed, "licensed in the builder");
         b.restore(checkpoint);
         assert_eq!(b.panel_room_v1(&kimi_id(), &row, &fold, now), owed, "un-licensed by the rollback: charged again");
@@ -12633,16 +12638,16 @@ fn registered_semantics_are_independently_fenced_rooted_and_stamped_before_job_r
     let mut writer = TransitionBuilder::new(&state, &p, false, false, false, false, &on);
     let mut descriptor = row.clone();
     descriptor.token_table_root = Some(h64(888));
-    writer.write_class_semantics_v1(h64(1), Some(descriptor));
+    writer.write_class_semantics_v1(h64(1), Some(descriptor)).unwrap();
     assert_eq!(
         writer.state.claim_semantics_v1(&h64(0xFC)).unwrap().token_table_root,
         None,
         "prospective first-fill cannot retroactively change a claim's table rule"
     );
     let old_claim = writer.state.claim(&h64(0xFC)).unwrap().clone();
-    writer.write_claim(h64(0xFC), Some(old_claim.clone()));
+    writer.write_claim(h64(0xFC), Some(old_claim.clone())).unwrap();
     assert_eq!(writer.state.claim_semantics_v1(&h64(0xFC)), Some(row));
-    writer.write_claim(h64(0xFD), Some(old_claim));
+    writer.write_claim(h64(0xFD), Some(old_claim)).unwrap();
     assert_eq!(writer.state.claim_semantics_v1(&h64(0xFD)).unwrap().token_table_root, Some(h64(888)));
     let declaration = crate::palw_class_semantics_v1::PalwClassSemanticsDeclarationV1 {
         version: row.version,
@@ -12695,7 +12700,7 @@ fn registered_semantics_are_independently_fenced_rooted_and_stamped_before_job_r
     let (prospective, _) = fold_declaration(&historical, declaration, &on).unwrap();
     assert_eq!(prospective.class_semantics_v1(&h64(1)).unwrap().bound_from_daa, 102);
     assert!(prospective.claim_semantics.is_empty(), "migration cannot stamp already accepted historical claims");
-    writer.write_claim(h64(0xFD), None);
+    writer.write_claim(h64(0xFD), None).unwrap();
     assert!(writer.state.claim_semantics_v1(&h64(0xFD)).is_none());
 }
 
@@ -12784,7 +12789,7 @@ fn public_fp_job_metadata_is_rooted_journaled_and_refuses_tampered_snapshots() {
     job.job.job_nonce[0] ^= 1;
     assert!(fold(&p, &corrupt).is_err(), "inconsistent extracted facts refuse before writing any claim");
     let mut writer = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
-    writer.write_claim(id, None);
+    writer.write_claim(id, None).unwrap();
     assert!(!writer.state.fp_public_jobs.contains_key(&id), "retirement removes the retained metadata");
     let removed = PalwStateDeltaV2 { point: ctx(3, 102, 3), entries: writer.entries };
     assert_eq!(revert_delta_v2(&writer.state, &removed, &p).unwrap(), state, "undo restores claim and metadata together");
@@ -27703,34 +27708,34 @@ mod model_lines {
         let mut builder = TransitionBuilder::new(&loaded, &p, false, false, false, false, &extras);
         for i in 1..=65u8 {
             let key = vec![i; 4];
-            assert_eq!(builder.registered_pubkey_v1(&key), builder.state.bonds.values().any(|record| record.pubkey == key));
+            assert_eq!(builder.registered_pubkey_v1(&key).unwrap(), builder.state.bonds.values().any(|record| record.pubkey == key));
         }
         for i in 0..3 {
             let op = palw_operator_id_v2(&op_key(i));
             assert_eq!(
-                builder.registered_operator_v1(op),
+                builder.registered_operator_v1(op).unwrap(),
                 builder.state.bonds.iter().find(|(_, r)| r.operator_id == op).map(|(key, _)| *key)
             );
         }
         // A deliberately colliding transient bucket cannot manufacture a duplicate key.
         let absent = vec![99; 4];
         builder.registration_index.as_mut().unwrap().keys.entry(registration_key_bucket_v1(&absent)).or_default().insert(bond_key(1));
-        assert!(!builder.registered_pubkey_v1(&absent));
+        assert!(!builder.registered_pubkey_v1(&absent).unwrap());
         let checkpoint = builder.checkpoint();
         let original = builder.state.bonds[&bond_key(1)].clone();
-        builder.write_bond(bond_key(1), None);
-        assert!(!builder.registered_pubkey_v1(&original.pubkey));
+        builder.write_bond(bond_key(1), None).unwrap();
+        assert!(!builder.registered_pubkey_v1(&original.pubkey).unwrap());
         let mut changed = original.clone();
         changed.pubkey = absent.clone();
         changed.operator_id = palw_operator_id_v2(&op_key(99));
-        builder.write_bond(bond_key(1), Some(changed.clone()));
-        assert!(builder.registered_pubkey_v1(&absent));
-        assert_eq!(builder.registered_operator_v1(changed.operator_id), Some(bond_key(1)));
+        builder.write_bond(bond_key(1), Some(changed.clone())).unwrap();
+        assert!(builder.registered_pubkey_v1(&absent).unwrap());
+        assert_eq!(builder.registered_operator_v1(changed.operator_id).unwrap(), Some(bond_key(1)));
         builder.restore(checkpoint);
         assert!(builder.registration_index.is_none(), "restore must invalidate both transient lookups");
         assert_eq!(builder.state, state);
-        assert!(builder.registered_pubkey_v1(&original.pubkey));
-        assert!(!builder.registered_pubkey_v1(&absent));
+        assert!(builder.registered_pubkey_v1(&original.pubkey).unwrap());
+        assert!(!builder.registered_pubkey_v1(&absent).unwrap());
         let duplicate = bond_registration_with_collateral(65, 1, 99, 1_000_000);
         let refusal =
             apply_palw_transition_v2_with_extras(&state, &p, &ctx(2, 101, 2), &[duplicate], None, false, false, false, false, &extras)
@@ -29973,7 +29978,8 @@ mod rcore_s7_reporter {
                 collected,
                 claim_id: Hash64::default(),
             }),
-        );
+        )
+        .unwrap();
         let opened = b.open_reporter_reward(daa, key, extracted, basis);
         b.entries.push(PalwDeltaEntryV2::LastPoint { old: s.last_point, new: Some(point) });
         b.state.last_point = Some(point);
@@ -30903,9 +30909,9 @@ mod capacity_liability_v1 {
         b.aggregate_on_conviction_v1(170, h64(4), kind, &[(producer, O::Equivocation)]).unwrap();
         assert_eq!(b.state.bond_freezes[&producer].since_daa, 170);
         let wc = p.window_court();
-        sweep_bond_freezes_v1(&mut b, &ctx(10, 170 + wc - 1, 10));
+        sweep_bond_freezes_v1(&mut b, &ctx(10, 170 + wc - 1, 10)).unwrap();
         assert!(palw_bond_is_frozen_v1(&b.state, &producer), "still frozen at the lift minus one");
-        sweep_bond_freezes_v1(&mut b, &ctx(11, 170 + wc, 11));
+        sweep_bond_freezes_v1(&mut b, &ctx(11, 170 + wc, 11)).unwrap();
         assert!(!palw_bond_is_frozen_v1(&b.state, &producer), "lifted at since + window_court");
     }
 }
@@ -32122,10 +32128,10 @@ mod rcore_s1_api {
         let parent = PalwChainStateV2::genesis();
         let extras = PalwTransitionExtrasV1::default();
         let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
-        b.write_reporter_commit(h64(0x71), Some(PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 10 }));
-        b.write_reporter_commit(h64(0x72), Some(PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 12 }));
-        b.write_reporter_commit(h64(0x73), Some(PalwReporterCommitV1 { reporter: bond_key(2), committed_daa: 11 }));
-        b.write_reporter_commit(h64(0x72), None);
+        b.write_reporter_commit(h64(0x71), Some(PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 10 })).unwrap();
+        b.write_reporter_commit(h64(0x72), Some(PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 12 })).unwrap();
+        b.write_reporter_commit(h64(0x73), Some(PalwReporterCommitV1 { reporter: bond_key(2), committed_daa: 11 })).unwrap();
+        b.write_reporter_commit(h64(0x72), None).unwrap();
         assert_eq!(b.state.reporter_open_commitments(&bond_key(1)), 1);
         assert_eq!(b.state.reporter_open_commitments(&bond_key(2)), 1);
         assert_eq!(b.state.commitments_by_daa.iter().copied().collect::<Vec<_>>(), vec![(10, h64(0x71)), (11, h64(0x73))]);
@@ -33215,7 +33221,7 @@ mod s4_conviction_funnel {
             0,
             "no vesting row burned (S's stub): no S3"
         );
-        b.mark_liability_convicted(fp, 200, PalwVoidReasonV2::CourtFraud);
+        b.mark_liability_convicted(fp, 200, PalwVoidReasonV2::CourtFraud).unwrap();
         assert_eq!(b.post_final_fp_g_v1(&fp), None, "once per claim: the mark is the marker");
         let delta = PalwStateDeltaV2 { point: at, entries: b.entries.clone() };
         assert_eq!(revert_delta_v2(&b.state, &delta, &p).unwrap(), s, "the revert restores the state");
@@ -33963,7 +33969,7 @@ mod class_verify_deadline {
             let p = t12_like(armed);
             let s = state(d, PalwClaimPhaseV2::PanelBound { bound_daa: b }, b);
             let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
-            builder.lock_valid_seat_rcore(bond_key(2), id, 5, crate::palw_verification_v2::PalwSegmentMaskV2::full(5), 5, l);
+            builder.lock_valid_seat_rcore(bond_key(2), id, 5, crate::palw_verification_v2::PalwSegmentMaskV2::full(5), 5, l).unwrap();
             assert_eq!(builder.state.slashable_locks[&(bond_key(2), id)].expiry_daa, anchor + 3_000, "D {d}, armed {armed}");
         }
     }
@@ -34044,4 +34050,142 @@ mod class_verify_deadline {
             assert!(body(site).contains("palw_rcore_deadline_v1("), "{site} arms from DL-1");
         }
     }
+}
+
+#[test]
+fn rfc06_retained_transition_and_rehearsal_preserve_default_off_canonical_bytes() {
+    let parent = PalwChainStateV2::genesis();
+    let params = params();
+    let point = ctx(1, 100, 1);
+    let objects = register_class_and_bond();
+    // Small existing fold fixture: byte compatibility, not native acceptance
+    // or authenticated full-model resource evidence.
+    let (legacy, legacy_delta) = apply_palw_transition_v2(&parent, &params, &point, &objects, None).unwrap();
+    let (retained, retained_delta) = apply_palw_transition_retained_v2(&parent, &params, &point, &objects, None).unwrap();
+    assert_eq!(
+        borsh::to_vec(&PalwStateCarriageV2::from_state(&legacy)).unwrap(),
+        borsh::to_vec(&PalwStateCarriageV2::from_state(&retained)).unwrap()
+    );
+    assert_eq!(borsh::to_vec(&legacy_delta).unwrap(), borsh::to_vec(&retained_delta).unwrap());
+    let next = ctx(2, 101, 2);
+    let extras = PalwTransitionExtrasV1::default();
+    let legacy_base = palw_v2_pre_object_base_v1(&legacy, &params, &next, false, false, false, false, &extras).unwrap();
+    let retained_base = palw_v2_pre_object_base_retained_v1(&retained, &params, &next, false, false, false, false, &extras).unwrap();
+    assert_eq!(
+        borsh::to_vec(&PalwStateCarriageV2::from_state(&legacy_base)).unwrap(),
+        borsh::to_vec(&PalwStateCarriageV2::from_state(&retained_base)).unwrap()
+    );
+}
+
+/// Admission failure is local and precedes both primary membership and journal
+/// writes. These are source regression cases, not an executed capacity result.
+#[test]
+fn native_fixed_writers_refuse_before_state_or_journal_change() {
+    use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let empty = PalwChainStateV2::genesis();
+    let mut builder = TransitionBuilder::new(&empty, &p, false, false, false, false, &extras);
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 });
+    builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+    assert!(matches!(builder.write_class(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_capability(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_class_walk(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_target(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_share(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_fp_certified_class(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_pending_chunks(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_tir_class(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_gen_class(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(
+        builder.write_derived_artifact(crate::palw_derived_v1::PalwDerivedKeyV1 { claim: h64(1), transformer: h64(2) }, None),
+        Err(PalwStateV2Error::NativeResource(_))
+    ));
+    assert!(builder.entries.is_empty());
+    assert_eq!(builder.state, empty);
+    assert_eq!(checker.outstanding(), (0, 0));
+    // Even with journal capacity already available, an absent primary map row
+    // must be admitted before insertion.
+    builder.entries.reserve_exact(4);
+    assert!(matches!(builder.write_share(h64(1), Some(10)), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(builder.entries.is_empty());
+    assert_eq!(builder.state, empty);
+}
+
+#[test]
+fn native_chunk_assembly_refuses_before_payload_copy_and_decode_preflight_refuses_nested_bomb() {
+    use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let empty = PalwChainStateV2::genesis();
+    let mut builder = TransitionBuilder::new(&empty, &p, false, false, false, false, &extras);
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 });
+    builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+    assert!(matches!(builder.reserve_chunk_assembly_v1(&h64(1), &[1]), Err(PalwStateV2Error::NativeResource(_))));
+    assert_eq!(builder.state, empty);
+    assert!(builder.entries.is_empty());
+    assert_eq!(checker.outstanding(), (0, 0));
+    // BondRegistered (tag0), fixed outpoint68, then a hostile pubkey Vec length.
+    let mut bomb = vec![0; 1 + 68];
+    bomb.extend_from_slice(&u32::MAX.to_le_bytes());
+    assert!(matches!(builder.reserve_chunk_decode_v1(&bomb), Err(PalwStateV2Error::ChunkedObjectUndecodable(_))));
+    assert_eq!(builder.state, empty);
+    assert!(builder.entries.is_empty());
+}
+
+#[test]
+fn native_chunk_preflight_disabled_preserves_legacy_valid_codec() {
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let mut builder = TransitionBuilder::new(&PalwChainStateV2::genesis(), &p, false, false, false, false, &extras);
+    let object = PalwConsensusObjectV2::ObjectChunk { group: h64(3), index: 0, count: 1, bytes: vec![1, 2, 3] };
+    let canonical = borsh::to_vec(&object).unwrap();
+    assert!(!builder.native_reservation.is_tracking_v1());
+    builder.reserve_chunk_decode_v1(&canonical).unwrap();
+    assert_eq!(borsh::to_vec(&borsh::from_slice::<PalwConsensusObjectV2>(&canonical).unwrap()).unwrap(), canonical);
+    assert!(builder.entries.is_empty());
+}
+
+#[test]
+fn native_fixed_writer_reservations_survive_mutation_until_owner_drop() {
+    use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let mut builder = TransitionBuilder::new(&PalwChainStateV2::genesis(), &p, false, false, false, false, &extras);
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: u64::MAX, database_bytes: 0 });
+    builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+    builder.write_share(h64(1), Some(10)).unwrap();
+    builder.write_share(h64(1), Some(20)).unwrap();
+    builder.write_share(h64(1), None).unwrap();
+    assert_eq!(builder.entries.len(), 3);
+    assert!(builder.state.class_shares.is_empty());
+    assert!(checker.outstanding().0 > 0);
+    drop(builder);
+    assert_eq!(checker.outstanding(), (0, 0));
+}
+
+#[test]
+fn native_claim_cascade_refusal_keeps_dependent_rows_and_journal_unchanged() {
+    use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let key = h64(0xF006);
+    let mut parent = PalwChainStateV2::genesis();
+    // Boundary fixture only: the opaque dependent bytes are never decoded or
+    // represented as a valid accepted public job by this writer unit case.
+    parent.fp_public_jobs.insert(key, vec![1, 2, 3]);
+    let mut builder = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 });
+    builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+    assert!(matches!(builder.write_claim(key, None), Err(PalwStateV2Error::NativeResource(_))));
+    assert_eq!(builder.state, parent);
+    assert!(builder.entries.is_empty());
+    assert_eq!(checker.outstanding(), (0, 0));
+    assert!(matches!(builder.write_claim_semantics_v1(key, None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_panel_liability(key, None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_vesting(key, None), Err(PalwStateV2Error::NativeResource(_))));
+    assert_eq!(builder.state, parent);
+    assert!(builder.entries.is_empty());
+    assert!(matches!(builder.reserve_mutation_sequence_v1(0, usize::MAX), Err(PalwStateV2Error::NativeResource(_))));
+    assert_eq!(checker.outstanding(), (0, 0));
 }

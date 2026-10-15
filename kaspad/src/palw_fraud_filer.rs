@@ -59,10 +59,25 @@ pub(super) mod input;
 mod prefix;
 #[path = "palw_selected_event_scheduler.rs"]
 mod selected_event_scheduler;
+#[path = "palw_tir_acquisition_driver.rs"]
+mod tir_acquisition_driver;
 #[path = "palw_filer_tokenizer.rs"]
 mod tokenizer;
 #[path = "palw_tokenizer_scheduler.rs"]
 mod tokenizer_scheduler;
+#[path = "palw_tir_arithmetic_scheduler.rs"]
+mod tir_arithmetic_scheduler;
+/// G14 R4: the common public-conviction filing of an ORIGINAL TIR frame (build + sign; node policy, dormant below its fence).
+#[path = "palw_tir_public_filer.rs"]
+pub(super) mod tir_public_filer;
+/// G14 R3: an ORIGINAL TIR frame's custodian preparation (the producer and a drawn Valid seat), the prepared capture and Ready
+/// (node policy, dormant below its fence).
+#[path = "palw_tir_public_custodian.rs"]
+pub(super) mod tir_public_custodian;
+/// G14 R4: when to file a public conviction against an ORIGINAL TIR frame, its queue lane and its restart journal (node policy,
+/// dormant below its fence).
+#[path = "palw_tir_public_filer_scheduler.rs"]
+pub(super) mod tir_public_filer_scheduler;
 #[cfg(test)] // the in-process e2e tests read the fp input the filer builds
 pub(super) use input::palw_fraud_filer_fp_input_v1;
 pub(super) use input::{palw_fraud_filer_fp_metadata_v1, palw_fraud_filer_fp_payload_v1};
@@ -201,6 +216,29 @@ pub(super) struct PalwFraudFilerRunV1 {
 struct PalwFraudFilerDeferredPublicV1 {
     job: Box<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>,
     _reservation: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
+}
+struct PalwTirSelectionIdsV1 {
+    ids: Vec<u32>,
+    _reservation: crate::palw_memory_ledger::PalwMemoryReservationV1,
+}
+
+fn palw_fraud_filer_tir_retention_v1(
+    ledger: &Arc<crate::palw_memory_ledger::PalwMemoryLedgerV1>,
+    claim: Hash64,
+    job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    decode: u32,
+) -> Result<(crate::palw_memory_ledger::PalwMemoryReservationV1, crate::palw_memory_ledger::PalwMemoryReservationV1), String> {
+    let job_bytes = (borsh::object_length(job).map_err(|e| e.to_string())? as u64)
+        .checked_mul(8)
+        .and_then(|n| n.checked_add(16_384))
+        .ok_or("TIR public descriptor retention overflow")?;
+    let ids_bytes = u64::from(decode).checked_mul(32).and_then(|n| n.checked_add(16_384)).ok_or("TIR own-ID retention overflow")?;
+    let reserve = |role, bytes| {
+        ledger
+            .reserve(crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role, class_id: job.class_id, job: claim }, bytes)
+            .map_err(|e| e.to_string())
+    };
+    Ok((reserve("public-tir-descriptor", job_bytes)?, reserve("public-tir-own-ids", ids_bytes)?))
 }
 
 /// **Lane G14-V: the verifier's own run, as the localizers past the binding read it** — its backend, its capture and the job's
@@ -580,6 +618,7 @@ pub(super) struct PalwFraudFilerCaseV1 {
     pub(super) runs: u8,
     registered_preflight: bool,
     arithmetic_matched: bool,
+    tir_selection_ids: Option<Arc<PalwTirSelectionIdsV1>>,
     replay_failures: u8,
     replay_turn: u64,
     deferred_public: Option<Arc<PalwFraudFilerDeferredPublicV1>>,
@@ -639,6 +678,7 @@ impl PalwFraudFilerCaseV1 {
             runs: 0,
             registered_preflight: false,
             arithmetic_matched: false,
+            tir_selection_ids: None,
             replay_failures: 0,
             replay_turn: 0,
             deferred_public: None,
@@ -881,6 +921,64 @@ impl PalwFraudFilerCaseV1 {
             && !self.constraint_stage_pending
             && !self.staged_bundle_pending
             && matches!(self.verdict, PalwFraudFilerVerdictV1::SemanticPending)
+    }
+
+    /// A neutral stage still requires a completed own selection replay. Missing material
+    /// or a refused replay must not freeze this owner's only Constraint stage as honest.
+    fn neutral_constraint_plan_v1(&self, authenticated_ids: &[u32]) -> Option<constraint::TiledPlanV1> {
+        let selection_replayed =
+            self.arithmetic_matched || matches!(&self.verdict,PalwFraudFilerVerdictV1::Mismatch(run) if run.fp_job.is_some());
+        selection_replayed.then(|| authenticated_ids.first().copied()).flatten().map(|committed| constraint::TiledPlanV1 {
+            position: 0,
+            committed,
+            witness: None,
+            beat_lane: None,
+        })
+    }
+
+    /// Only all three independently replayed roots establish arithmetic agreement.
+    /// Required public semantics still run, with the original own IDs available for nomination.
+    fn retain_tir_selection_replay_v1(
+        &mut self,
+        job: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        replay: kaspa_consensus_core::palw_backend::PalwTirReplayV1,
+        job_ticket: crate::palw_memory_ledger::PalwMemoryReservationV1,
+        ids_ticket: crate::palw_memory_ledger::PalwMemoryReservationV1,
+    ) {
+        self.registered_preflight = true;
+        self.release_pending = false;
+        self.staged_bundle_pending = true;
+        self.arithmetic_matched = (replay.execution_root, replay.full_logits_trace_root, replay.output_root)
+            == (self.candidate.job.execution_root, self.candidate.job.trace_root, self.candidate.job.output_root);
+        if self.arithmetic_matched {
+            self.deferred_public =
+                Some(Arc::new(PalwFraudFilerDeferredPublicV1 { job: Box::new(job), _reservation: Some(job_ticket) }));
+            self.tir_selection_ids = Some(Arc::new(PalwTirSelectionIdsV1 { ids: replay.generated_ids, _reservation: ids_ticket }));
+            self.verdict = PalwFraudFilerVerdictV1::SemanticPending;
+            return;
+        }
+        self.tir_selection_ids = None;
+        self.verdict = PalwFraudFilerVerdictV1::Mismatch(Arc::new(PalwFraudFilerRunV1 {
+            execution_root: replay.execution_root,
+            trace_root: replay.full_logits_trace_root,
+            output_root: replay.output_root,
+            own_range: Box::new(|_, _| Err("a TIR selection replay does not authenticate a legacy step range".into())),
+            legacy: None,
+            own: None,
+            fp_job: Some(Box::new(job)),
+            own_output_ids: replay.generated_ids,
+            _job_reservation: Some(job_ticket),
+            _reservation: Some(ids_ticket),
+        }));
+    }
+
+    fn finish_tir_semantics_v1(&mut self) -> bool {
+        if self.tir.is_none() || !self.may_finish_semantics_v1(true) {
+            return false;
+        }
+        self.verdict = PalwFraudFilerVerdictV1::Honest;
+        self.release_pending = true;
+        true
     }
 
     /// Apply the authenticated worker result, including the input accumulator and its shared memory ticket.
@@ -1502,6 +1600,7 @@ impl PalwFraudFilerBookV1 {
                     case.release_pending = false;
                 }
                 case.arithmetic_matched = false;
+                case.tir_selection_ids = None;
                 case.prefix_plan = None;
                 case.prefix_complete = false;
                 case.prefix_stage_pending = false;
@@ -1588,6 +1687,7 @@ impl PalwFraudFilerBookV1 {
             case.release_pending = false;
             case.fp_bootstrap = None;
             case.fp_replay_input = None;
+            case.tir_selection_ids = None;
             case.fp_descriptor = None;
             case.fp_job_pending = false;
             case._fp_job_reservation = None;
@@ -2811,6 +2911,13 @@ impl PalwPanelService {
                 debug!("[{PALW_PANEL}] claim {claim}: paid semantic authority snapshot unavailable: {why}");
                 continue;
             }
+            let tir_release = book.cases.get(&claim).is_some_and(|case| {
+                case.tir.is_some() && case.release_pending && matches!(case.verdict, PalwFraudFilerVerdictV1::Honest)
+            });
+            if tir_release && !facts.reserved && !facts.session_open {
+                book.settle(&claim, PalwFraudFilerVerdictV1::Honest);
+                continue;
+            }
             if staged_authority.get(&claim).is_some_and(|p| {
                 matches!(p, Ok(Some(p))
                 if p.terms.accepted_daa <= p.reserved_daa && p.reserved_daa <= current_daa && current_daa < p.terms.collect_until_daa)
@@ -2821,6 +2928,7 @@ impl PalwPanelService {
                     !case.prefix_complete && !case.rendering_done && (case.binding.is_none() || case.public_fp_job_v1().is_none())
                 }))
                 && facts.outcome != Some(PalwFilerPhaseV1::Convicted)
+                && !(tir_release && facts.reserved && !facts.ended && facts.outcome.is_none())
             {
                 court_pending.retain(|(held, round, responder, _)| {
                     *held != claim
@@ -2907,9 +3015,14 @@ impl PalwPanelService {
                             }
                         }
                     }
-                    Ok((None, true)) if facts.reserved && !facts.ended && facts.outcome.is_none() => {
+                    Ok((None, true)) => {
                         let case = book.cases.get_mut(&claim).expect("paid pursuit retained");
-                        if !case.arithmetic_matched {
+                        if !case.finish_tir_semantics_v1()
+                            && facts.reserved
+                            && !facts.ended
+                            && facts.outcome.is_none()
+                            && !case.arithmetic_matched
+                        {
                             case.verdict = PalwFraudFilerVerdictV1::Pending;
                         }
                     }
@@ -3049,6 +3162,9 @@ impl PalwPanelService {
                                     }
                                     continue;
                                 }
+                                Ok((None, true)) => {
+                                    book.cases.get_mut(&claim).expect("pursued").finish_tir_semantics_v1();
+                                }
                                 Ok(_) => {}
                                 Err(why) => debug!("[{PALW_PANEL}] claim {claim}: original-header bundle remains pending: {why}"),
                             }
@@ -3066,9 +3182,14 @@ impl PalwPanelService {
             // reservation; everything after the reservation is the staged bundle's, dispatched above. It never
             // enters the legacy binding read, probes or descent.
             if book.cases.get(&claim).is_some_and(|case| case.tir.is_some()) {
+                if book.cases[&claim].release_pending {
+                    continue;
+                }
                 let mismatch = matches!(
                     book.cases[&claim].verdict,
-                    PalwFraudFilerVerdictV1::Mismatch(_) | PalwFraudFilerVerdictV1::DeferredMismatch
+                    PalwFraudFilerVerdictV1::Mismatch(_)
+                        | PalwFraudFilerVerdictV1::DeferredMismatch
+                        | PalwFraudFilerVerdictV1::SemanticPending
                 );
                 match kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_next_v1(
                     role,
@@ -4745,7 +4866,7 @@ impl PalwPanelService {
                 // lane) names the beat; without it only an id the constraint forbids is nominated.
                 let own = match &case.verdict {
                     PalwFraudFilerVerdictV1::Mismatch(run) => run.own_output_ids.as_slice(),
-                    _ => &[],
+                    _ => case.tir_selection_ids.as_ref().map(|holding| holding.ids.as_slice()).unwrap_or_default(),
                 };
                 let nominee = constraint_scheduler::nominate_authenticated_ids_view_v1(
                     target,
@@ -4755,7 +4876,8 @@ impl PalwPanelService {
                     own,
                     table.clone(),
                     &crate::palw_memory_ledger::host_ledger_v1(),
-                )?;
+                )?
+                .or_else(|| case.neutral_constraint_plan_v1(&event.generated_token_ids));
                 book.cases.get_mut(&claim).ok_or("TIR pursuit disappeared")?.constraint_plan = nominee;
             }
             let plan = book.cases.get(&claim).and_then(|case| case.constraint_plan);
@@ -6578,8 +6700,8 @@ impl PalwPanelService {
     /// **The native TIR entry** (behind `palw_staged_tir_route_v1`): the claim's accepted public FP
     /// job and its authenticated public input, the verifier's OWN TIR replay
     /// (`replay_tir_generated_ids_v1`) under the claim's admitted header, then the verdict. Equal
-    /// tiled logits trace roots settle the claim as honest. Different roots make it a mismatch,
-    /// whose own ids are the Constraint nominee. Reservation and the staged bundle follow through
+    /// tiled logits trace roots do not establish full execution or public-family correctness.
+    /// Both results retain their own ids for Constraint nomination. Reservation and the staged bundle follow through
     /// the engine's prelude and the TIR bundle stages. No legacy binding is read.
     #[allow(clippy::too_many_arguments)]
     async fn fraud_filer_tir_replay_v1(
@@ -6649,6 +6771,17 @@ impl PalwPanelService {
             Ok(reservation) => reservation,
             Err(why) => return retry(book, why),
         };
+        // These smaller tickets are acquired before execution and follow the retained
+        // descriptor/IDs after the FullSeat reservation leaves the blocking worker.
+        let (job_ticket, ids_ticket) = match palw_fraud_filer_tir_retention_v1(
+            &crate::palw_memory_ledger::host_ledger_v1(),
+            claim,
+            &job,
+            tir.view.job_context.exact_decode_tokens,
+        ) {
+            Ok(tickets) => tickets,
+            Err(why) => return retry(book, why),
+        };
         let header = tir.header.clone();
         let replay_job = job.clone();
         let replay = tokio::task::spawn_blocking(move || {
@@ -6671,25 +6804,11 @@ impl PalwPanelService {
         }
         let case = book.cases.get_mut(&claim).expect("selected case");
         case.tir = Some(Arc::new(tir));
-        case.registered_preflight = true;
-        if replay.full_logits_trace_root == case.tir.as_ref().expect("set").view.full_logits_trace_root {
-            book.settle(&claim, PalwFraudFilerVerdictV1::Honest);
-            return;
-        }
-        let execution_root = case.tir.as_ref().expect("set").view.committed_execution_root;
-        case.verdict = PalwFraudFilerVerdictV1::Mismatch(Arc::new(PalwFraudFilerRunV1 {
-            execution_root,
-            trace_root: replay.full_logits_trace_root,
-            output_root: Hash64::default(),
-            own_range: Box::new(|_, _| Err("a TIR pursuit localizes through its staged bundle, not a legacy leaf range".into())),
-            legacy: None,
-            own: None,
-            fp_job: Some(Box::new(job)),
-            own_output_ids: replay.generated_ids,
-            _job_reservation: None,
-            _reservation: None,
-        }));
-        info!("[{PALW_PANEL}] claim {claim}: the native TIR replay differs from the committed logits trace; pursuing it (G14)");
+        let selection_matches = replay.full_logits_trace_root == case.tir.as_ref().expect("set").view.full_logits_trace_root;
+        case.retain_tir_selection_replay_v1(job, replay, job_ticket, ids_ticket);
+        info!(
+            "[{PALW_PANEL}] claim {claim}: native TIR replay finished (matching logits: {selection_matches}); required public families remain pending (G14)"
+        );
     }
 
     async fn fraud_filer_start_replay_v1(
@@ -7342,6 +7461,123 @@ pub(super) mod tests {
         assert!(case.fp_bootstrap.is_none(), "a refusal keeps only the public descriptor rather than accumulated input ids");
         assert_eq!(case.public_fp_job_v1(), Some(&job));
         assert_eq!(book.next_replay_at(300), None, "a backend refusal pursues its public court without an infinite host retry");
+    }
+
+    #[test]
+    fn matching_tir_logits_with_another_execution_or_output_root_remain_mismatched() {
+        use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1};
+        let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(1_048_576), || None);
+        for (execution_matches, output_matches) in [(false, true), (true, false), (false, false)] {
+            let mut case = PalwFraudFilerCaseV1::new(candidate(0xC01A, 300, false));
+            let job = input::tests::payload().commitment.job;
+            let ids = vec![1, 2];
+            let execution_root = if execution_matches { case.candidate.job.execution_root } else { Hash64::from_u64_word(900) };
+            let output_root = if output_matches { case.candidate.job.output_root } else { Hash64::from_u64_word(901) };
+            let (job_ticket, ids_ticket) = palw_fraud_filer_tir_retention_v1(&ledger, case.candidate.claim_id, &job, 2).unwrap();
+            case.retain_tir_selection_replay_v1(
+                job.clone(),
+                kaspa_consensus_core::palw_backend::PalwTirReplayV1 {
+                    generated_ids: ids.clone(),
+                    full_logits_trace_root: case.candidate.job.trace_root,
+                    execution_root,
+                    output_root,
+                },
+                job_ticket,
+                ids_ticket,
+            );
+            assert!(case.pursued(), "matching logits cannot bypass the registered public stages");
+            assert!(!case.release_pending);
+            assert!(case.staged_bundle_pending);
+            assert!(!case.prefix_complete && !case.constraint_done && !case.rendering_done);
+            assert!(!case.arithmetic_matched);
+            assert!(!case.may_finish_semantics_v1(true));
+            let PalwFraudFilerVerdictV1::Mismatch(run) = &case.verdict else { panic!("real mismatched roots retained") };
+            assert_eq!(run.own_output_ids, ids);
+            assert_eq!(run.fp_job.as_deref(), Some(&job));
+            assert_eq!(run.execution_root, execution_root);
+            assert_eq!(run.output_root, output_root);
+            assert_eq!(
+                case.neutral_constraint_plan_v1(&ids),
+                Some(constraint::TiledPlanV1 { position: 0, committed: 1, witness: None, beat_lane: None })
+            );
+            assert!(ledger.reserved_bytes() > 0);
+            drop(case);
+            assert_eq!(ledger.reserved_bytes(), 0);
+        }
+    }
+
+    #[test]
+    fn matching_all_tir_roots_keep_budgeted_ids_and_require_public_bundle_completion() {
+        use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1};
+        let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(1_048_576), || None);
+        let mut case = PalwFraudFilerCaseV1::new(candidate(0xC01A, 300, false));
+        // A local policy fixture only; no synthetic header is submitted as a native credential.
+        let binding = material_budget_binding();
+        case.tir = Some(Arc::new(FilerTirContextV1 {
+            view: kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1::of_verified_binding_v1(&binding),
+            header: Box::new(kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1 {
+                version: 1,
+                job_context: binding.job_context.clone(),
+                artifact_root: Hash64::default(),
+                full_logits_trace_root: binding.full_logits_trace_root,
+                step_leaf_count: binding.step_leaf_count,
+                step_merkle_root: binding.step_merkle_root,
+                committed_execution_root: binding.committed_execution_root,
+            }),
+        }));
+        let job = input::tests::payload().commitment.job;
+        let ids = vec![1, 2];
+        let (job_ticket, ids_ticket) = palw_fraud_filer_tir_retention_v1(&ledger, case.candidate.claim_id, &job, 2).unwrap();
+        case.retain_tir_selection_replay_v1(
+            job.clone(),
+            kaspa_consensus_core::palw_backend::PalwTirReplayV1 {
+                generated_ids: ids.clone(),
+                full_logits_trace_root: case.candidate.job.trace_root,
+                execution_root: case.candidate.job.execution_root,
+                output_root: case.candidate.job.output_root,
+            },
+            job_ticket,
+            ids_ticket,
+        );
+        assert!(matches!(case.verdict, PalwFraudFilerVerdictV1::SemanticPending));
+        assert!(case.arithmetic_matched);
+        assert!(case.pursued());
+        assert!(!case.release_pending);
+        assert!(case.staged_bundle_pending);
+        assert!(!case.prefix_complete && !case.constraint_done && !case.rendering_done);
+        assert!(!case.may_finish_semantics_v1(true));
+        assert!(!case.finish_tir_semantics_v1());
+        assert_eq!(case.tir_selection_ids.as_ref().unwrap().ids, ids);
+        assert_eq!(case.public_fp_job_v1(), Some(&job));
+        assert!(case.neutral_constraint_plan_v1(&ids).is_some());
+        case.staged_bundle_pending = false;
+        case.constraint_stage_pending = true;
+        assert!(!case.finish_tir_semantics_v1());
+        case.constraint_stage_pending = false;
+        assert!(case.finish_tir_semantics_v1());
+        assert!(case.release_pending);
+        assert!(matches!(case.verdict, PalwFraudFilerVerdictV1::Honest));
+        let cloned = case.clone();
+        let retained = ledger.reserved_bytes();
+        assert!(retained > 0);
+        drop(case);
+        assert_eq!(ledger.reserved_bytes(), retained, "case clones retain the original descriptor/ID tickets");
+        drop(cloned);
+        assert_eq!(ledger.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn missing_or_refused_selection_cannot_freeze_a_neutral_constraint_stage() {
+        let mut case = PalwFraudFilerCaseV1::new(candidate(0xC01B, 300, false));
+        let ids = [1, 2];
+        assert!(case.neutral_constraint_plan_v1(&ids).is_none());
+        case.verdict = PalwFraudFilerVerdictV1::SemanticPending;
+        assert!(case.neutral_constraint_plan_v1(&ids).is_none());
+        case.verdict = PalwFraudFilerVerdictV1::Mismatch(Arc::new(run(Hash64::default(), Hash64::default())));
+        assert!(case.neutral_constraint_plan_v1(&ids).is_none(), "a non-FP replay supplies no completed selection");
+        case.verdict = PalwFraudFilerVerdictV1::SemanticPending;
+        case.arithmetic_matched = true;
+        assert!(case.neutral_constraint_plan_v1(&ids).is_some());
     }
 
     #[test]

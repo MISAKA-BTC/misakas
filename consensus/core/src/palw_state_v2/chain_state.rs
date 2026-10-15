@@ -148,6 +148,11 @@ impl PalwChainStateV2 {
             staged_due: BTreeSet::new(),
             staged_by_owner: BTreeSet::new(),
             staged_inventory_by_owner: BTreeSet::new(),
+            staged_tir_by_owner: BTreeSet::new(),
+            staged_tir_by_claim: BTreeMap::new(),
+            staged_tir_claims_by_producer: BTreeSet::new(),
+            staged_tir_responders: BTreeSet::new(),
+            staged_tir_preparers: BTreeSet::new(),
             staged_prefix_responders: BTreeSet::new(),
             staged_selected_responders: BTreeSet::new(),
             staged_flat_responders: BTreeSet::new(),
@@ -1450,6 +1455,8 @@ impl PalwChainStateV2 {
             || self.da_claims.get(claim_id).is_some_and(|record| record.open_sessions() > 0)
             || self.open_courts_by_claim.get(claim_id).is_some_and(|open| *open > 0)
             || matches!(self.claims.get(claim_id).map(|claim| &claim.phase), Some(PalwClaimPhaseV2::DefaultDisputed { .. }))
+            // G14 R5/R6: an outside owner's open demand on an ORIGINAL TIR frame (empty below `palw_tir_public_conviction_v1`).
+            || self.staged_tir_public_demand_open_v1(claim_id)
     }
 
     /// **A V3 claim's S2 licence held by a pending accusation** (DL-1's G14 row): the engine bound it (its record exists, released
@@ -2356,6 +2363,73 @@ impl PalwChainStateV2 {
         self.staged_courts.get(key)
     }
 
+    /// Derived lifecycle consistency only, not proof of a new paid acquisition
+    /// or raw-source grant. Admission remains disabled until the full native
+    /// allocation and distinct custody pledge/grants are wired.
+    pub(super) fn assert_tir_acquisition_indices_v1(&self) -> Result<(), PalwStateV2Error> {
+        use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+        let mut owners = BTreeSet::new();
+        let mut claims = BTreeMap::<Hash64, BTreeSet<(u64, Key)>>::new();
+        let mut responders = BTreeSet::new();
+        let mut preparers = BTreeSet::new();
+        let mut producers = BTreeSet::new();
+        let mut due = BTreeSet::new();
+        let mut holds = BTreeSet::new();
+        let now = self.last_point().map(|p| p.daa_score).unwrap_or(0);
+        for (key, row) in &self.staged_courts {
+            if matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..) | Key::TirClaim(_) | Key::TirWitness(..)) {
+                let (at, row_holds) = palw_staged_court_fold_v1::index_rows(*key, row);
+                due.insert((at, *key));
+                holds.extend(row_holds);
+            }
+            if let Some((owner, claim, allocation, _)) = palw_staged_court_fold_v1::tir_index_metadata_v1(*key, row) {
+                owners.insert((owner, claim, allocation));
+                responders.extend(palw_staged_court_fold_v1::tir_response_index_rows_v1(*key, row));
+            }
+            preparers.extend(palw_staged_court_fold_v1::tir_preparation_index_rows_v1(*key, row));
+            producers.extend(palw_staged_court_fold_v1::tir_claim_producer_index_v1(*key, row));
+            if let Some((claim, until)) = palw_staged_court_fold_v1::tir_source_index_metadata_v1(*key, row) {
+                claims.entry(claim).or_default().insert((until, *key));
+                let retained_until = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(self, claim)
+                    .map(|frame| frame.plan_v1().terms.material_until_daa)
+                    .or_else(|| self.staged_claim_contract_v1(&claim).map(|contract| contract.terms.material_until_daa));
+                if now < until && retained_until.is_none_or(|retained_until| retained_until < until) {
+                    return Err(PalwStateV2Error::CarriageInconsistent(
+                        "live TIR acquisition lost its original claim/public-source retention hold".into(),
+                    ));
+                }
+            }
+            let material = match row {
+                Row::TirRawChunk(row) => Some((row.acquisition, row.source_id, row.material_until_daa)),
+                Row::TirAcceptedBody(row) => Some((row.acquisition, row.source_id, row.material_until_daa)),
+                _ => None,
+            };
+            if let Some((acquisition, source, until)) = material.filter(|(_, _, until)| now < *until) {
+                let Some(Row::TirAcquisition(owner)) = self.staged_courts.get(&acquisition) else {
+                    return Err(PalwStateV2Error::CarriageInconsistent("live TIR public material lost its acquisition scope".into()));
+                };
+                let c = owner.owned.contract_v1();
+                if c.source_id != source || c.terms.material_until_daa != until {
+                    return Err(PalwStateV2Error::CarriageInconsistent("TIR public material changed original source/TTL".into()));
+                }
+            }
+        }
+        let actual_due: BTreeSet<_> = self.staged_due.iter().filter(|(_, key)| {
+            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..) | Key::TirClaim(_) | Key::TirWitness(..))
+        }).copied().collect();
+        let actual_holds: BTreeSet<_> = self.staged_holds.iter().filter(|(_, _, key)| {
+            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..) | Key::TirClaim(_) | Key::TirWitness(..))
+        }).copied().collect();
+        if owners != self.staged_tir_by_owner || claims != self.staged_tir_by_claim || responders != self.staged_tir_responders
+            || preparers != self.staged_tir_preparers
+            || producers != self.staged_tir_claims_by_producer
+            || due != actual_due || holds != actual_holds
+        {
+            return Err(PalwStateV2Error::CarriageInconsistent("TIR acquisition lifecycle indexes differ from rooted rows".into()));
+        }
+        Ok(())
+    }
+
     /// **RFC-0002 F7: a court session's IR history dissection**, if its root claim was admitted.
     pub fn tir_dissection_v1(&self, session_id: &Hash64) -> Option<&crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1> {
         self.tir_dissections.get(session_id).map(|phase| phase.as_ref())
@@ -2486,6 +2560,53 @@ impl PalwChainStateV2 {
 
     pub fn safe_frontier(&self) -> (u64, BlockHash) {
         (self.safe_frontier_blue_score, self.safe_frontier)
+    }
+
+    /// **RFC-0018, tests only**: set the state's point (the fold's last chain block), as a committed post-state carries it.
+    #[cfg(test)]
+    pub(crate) fn set_last_point_for_tests(&mut self, point: Option<PalwBlockContextV2>) {
+        self.last_point = point;
+    }
+
+    /// **RFC-0018, tests only**: set or remove one bond row (the attack acceptance fixtures' registries).
+    #[cfg(test)]
+    pub(crate) fn set_bond_for_tests(&mut self, key: PalwBondKeyV2, bond: Option<PalwBondStateV2>) {
+        match bond {
+            Some(bond) => self.bonds.insert(key, bond),
+            None => self.bonds.remove(&key),
+        };
+    }
+
+    /// **RFC-0018, tests only**: write one kernel-route aux row (creating an interim-policy route when there is none).
+    #[cfg(test)]
+    pub(crate) fn set_kernel_aux_row_for_tests(&mut self, table: u8, key: Vec<u8>, bytes: Option<Vec<u8>>) {
+        let route = self.kernel_route.get_or_insert_with(|| {
+            crate::palw_kernel_route_v1::PalwKernelRouteStateV1::new_typed(
+                crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default()),
+                None,
+                None,
+                misaka_palw_kernel::rows::LedgerScalarsV1 { daa: 0, burned: 0 },
+            )
+        });
+        match bytes {
+            Some(bytes) => {
+                route.aux.insert((table, key), bytes);
+            }
+            None => {
+                route.aux.remove(&(table, key));
+            }
+        }
+    }
+
+    /// **RFC-0018**: the kernel route, for the security certification's aux-table reads (`crate::palw_security_certification_v1`).
+    pub fn kernel_route_state_v1(&self) -> Option<&crate::palw_kernel_route_v1::PalwKernelRouteStateV1> {
+        self.kernel_route.as_ref()
+    }
+
+    /// **RFC-0018 §7.7**: the accepted blue score of the oldest unresolved claim (`None`: nothing unresolved) — the pruning-progress
+    /// rule's first bound.
+    pub fn unresolved_first_blue_score_v1(&self) -> Option<u64> {
+        self.unresolved.iter().next().map(|(blue_score, _)| *blue_score)
     }
 
     pub fn last_point(&self) -> Option<&PalwBlockContextV2> {
@@ -3112,6 +3233,7 @@ impl PalwChainStateV2 {
         self.assert_vertex_consistency_v1()?;
         self.assert_exec_v2_consistency_v1(params)?;
         self.assert_monetary_material_consistency_v1(params)?;
+        self.assert_material_release_recovery_consistency_v2(params)?;
         self.assert_mesh_consistency_v1()?;
         // RFC-0010: the permissionless Panel's engine is internally consistent and agrees with the claims, panels and duty rows.
         self.assert_panel_v3_consistency_v1(params)?;
@@ -3273,6 +3395,8 @@ impl PalwChainStateV2 {
                         let final_safe = |c: u128| crate::palw_weight_cap_v1::palw_weight_final_safe_v1(params, claim, c);
                         // Lane BUDGET: a budgeted claim weighs what its Final was granted, in both sums.
                         let credited = self.bond_budget_weight_or(id, final_safe(contribution));
+                        // RFC-0018 Gate C's final-weight site, re-derived through the same predicate (identity below its fence).
+                        let credited = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(params, self, id, claim, credited);
                         let ceiling = self.bond_budget_weight_or(id, final_safe(canonical.unwrap_or(claim.pwu as u128)));
                         safe = safe.checked_add(credited).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
                         safe_ceiling = safe_ceiling.checked_add(ceiling).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
@@ -3287,6 +3411,8 @@ impl PalwChainStateV2 {
                             .ok_or(PalwStateV2Error::Overflow("consistency spent weight"))?;
                         // Lane BUDGET: a budgeted claim's spends added what they were granted.
                         let spent_weight = self.bond_budget_weight_or(id, spent_weight);
+                        // RFC-0018 Gate C's receipt-spend site, re-derived (identity below its fence).
+                        let spent_weight = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(params, self, id, claim, spent_weight);
                         // **The free-prompt lane is NOT priced by Decision 7** — see the open
                         // question recorded at `apply_receipt_spend`. It contributes identically to
                         // both sums, so the bound below neither tightens nor loosens around it.
@@ -3316,9 +3442,10 @@ impl PalwChainStateV2 {
                 }
                 _ => {
                     // ADR-0160 F-W: a new-rule claim weighs through its bond's capped term, summed below.
+                    // RFC-0018 Gate C's provisional site, re-derived (identity below its fence).
                     if !crate::palw_weight_cap_v1::palw_weight_cap_applies_v1(params, claim) {
                         immature = immature
-                            .checked_add(claim.immature_contribution)
+                            .checked_add(crate::palw_rfc0018_v1::palw_claim_provisional_weight_v1(params, claim))
                             .ok_or(PalwStateV2Error::Overflow("consistency immature"))?;
                     }
                     let entry = exposure.entry(claim.bond).or_insert(0);
@@ -3718,6 +3845,7 @@ impl PalwChainStateV2 {
         if inventory != self.staged_inventory_by_owner {
             return Err(PalwStateV2Error::CarriageInconsistent("artifact inventory owner index differs from paid attempts".into()));
         }
+        self.assert_tir_acquisition_indices_v1()?;
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;
         self.assert_held_forfeits_consistency_v1()?;

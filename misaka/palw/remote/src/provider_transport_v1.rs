@@ -45,6 +45,17 @@ const MLDSA87_PUBKEY_LEN: usize = kaspa_consensus_core::mldsa87_primitives::MLDS
 pub enum ProviderTransportPurposeV1 {
     /// Body: borsh `PalwNativeReadyRequestV3` (request) / `PalwNativeReadyResponseV3` (response).
     NativeReadyV3,
+    /// Independent V4 canonical prospective enrollment, never reinterprets Ready V3.
+    RecoveryEnrollmentV4,
+    /// Producer-signed actual kernel work and full typed material, followed by
+    /// atomic 240/242 FundedEnroll. Old native Ready/enrollment are unchanged.
+    KernelMaterialIngressV4,
+    /// Read one already-retained complete kernel unit; no new credit or liability.
+    KernelMaterialQueryV4,
+    /// Sponsor-signed bounded replacement of a kernel root's provider roster (variant 4): the original producer work and
+    /// context are replayed by every new provider, which persists material and the new signed generation before
+    /// answering 241/242. A queued replacement is not native acceptance.
+    KernelMaterialReplacementV4,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -378,6 +389,20 @@ mod tests {
     }
 
     #[test]
+    fn appended_kernel_query_preserves_previous_purpose_bytes() {
+        for (value, tag) in [
+            (ProviderTransportPurposeV1::NativeReadyV3, 0u8),
+            (ProviderTransportPurposeV1::RecoveryEnrollmentV4, 1),
+            (ProviderTransportPurposeV1::KernelMaterialIngressV4, 2),
+            (ProviderTransportPurposeV1::KernelMaterialQueryV4, 3),
+            (ProviderTransportPurposeV1::KernelMaterialReplacementV4, 4),
+        ] {
+            assert_eq!(borsh::to_vec(&value).unwrap(), [tag]);
+            assert_eq!(borsh::from_slice::<ProviderTransportPurposeV1>(&[tag]).unwrap(), value);
+        }
+        assert!(borsh::from_slice::<ProviderTransportPurposeV1>(&[5]).is_err());
+    }
+    #[test]
     fn a_signed_request_verifies_once_and_every_tamper_or_replay_is_refused() {
         let executor = key(1);
         let policy = ProviderTransportPolicyV1::new(Hash64::from_u64_word(1), 1 << 20);
@@ -443,3 +468,29 @@ mod tests {
         assert!(provider_transport_response_v1(&req.header, NOW, vec![], vec![(bond(6), sa)]).is_err(), "not a recipient");
     }
 }
+
+// The transport's owner supplies its exact external codec to the native
+// allocation scanner; semantic authentication still follows this preflight.
+impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for ProviderTransportPurposeV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(
+        r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
+    ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
+        r.step()?;
+        match r.byte()? {
+            0..=4 => Ok(Default::default()),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown provider transport purpose")),
+        }
+    }
+}
+macro_rules! transport_wire_v1 {($ty:ty;$($field:ty),+)=>{
+    impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for $ty {
+        fn scan_native_wire_v1<R:std::io::Read>(r:&mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>)->std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1>{
+            use kaspa_consensus_core::palw_native_resource_v1::{NativeWireShapeV1,NativeWireScanV1};
+            r.step()?;let shape=NativeWireShapeV1::default();$(let shape=shape.merge(<$field>::scan_native_wire_v1(r)?)?;)+Ok(shape)
+        }
+    }
+};}
+transport_wire_v1!(ProviderTransportRequestHeaderV1;u16,ProviderTransportPurposeV1,Hash64,PalwBondKeyV2,Vec<u8>,Vec<PalwBondKeyV2>,[u8;32],u64,u64,u64,Hash64);
+transport_wire_v1!(ProviderTransportRequestV1;ProviderTransportRequestHeaderV1,Vec<u8>,Vec<u8>);
+transport_wire_v1!(ProviderTransportResponseHeaderV1;u16,ProviderTransportPurposeV1,Hash64,Hash64,Vec<PalwBondKeyV2>,u64,u64,Hash64);
+transport_wire_v1!(ProviderTransportResponseV1;ProviderTransportResponseHeaderV1,Vec<Vec<u8>>,Vec<u8>);

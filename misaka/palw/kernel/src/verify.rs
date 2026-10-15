@@ -848,6 +848,18 @@ fn check_instance(
     if !ctx.well_typed(s, p, n, &output) {
         return Err(fault(FaultKindV1::Malformed));
     }
+    if let CheckerRandomness::Paid(randomness) = seed {
+        if let Some(consumer) = &randomness.compact {
+            let block = ctx.w.occurrences[s as usize].0;
+            if consumer
+                .relation(randomness.stage, randomness.seed, ctx.c.plan.root(), p, s, block, n, &inputs, &output)
+                .map_err(|what| ScopeVerdictV1::Unavailable { what })?
+            {
+                *checks = checks.saturating_add(1);
+                return Ok(());
+            }
+        }
+    }
     match rel.checker {
         CheckerIdV1::FreivaldsM127 | CheckerIdV1::FreivaldsCrtV2 => {
             if !matches!(node.prim, Prim::MatMul) {

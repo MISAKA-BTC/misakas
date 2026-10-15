@@ -91,7 +91,30 @@ impl PalwChainStateV2 {
 impl TransitionBuilder<'_> {
     /// **The one writer of the kernel route's rows**, journaled `KernelRouteRow` (the ledger's tables below 32, the consensus tables
     /// from 32). The route's header must exist.
-    pub(super) fn write_kernel_row(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) {
+    ///
+    /// RFC-0006: admitted before the map clones (`reserve_kernel_row_write_v1`). A legacy caller encoded `key`/`new` before this
+    /// call; their journal-retained lifetime is admitted here too. A capacity refusal is `PalwStateV2Error::NativeResource` (local,
+    /// retryable) and leaves the rows and the journal unchanged.
+    pub(super) fn write_kernel_row(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) -> Result<(), PalwStateV2Error> {
+        self.reserve_kernel_row_write_v1(table, &key, &new, true)?;
+        self.apply_kernel_row_v1(table, key, new);
+        Ok(())
+    }
+
+    /// [`Self::write_kernel_row`] for a key/row whose buffers the caller already admitted before encoding
+    /// ([`Self::write_kernel_row_encoded_v1`]): only the map clones, the absent membership and the journal slot remain.
+    pub(super) fn write_kernel_row_admitted_v1(
+        &mut self,
+        table: u8,
+        key: Vec<u8>,
+        new: Option<Vec<u8>>,
+    ) -> Result<(), PalwStateV2Error> {
+        self.reserve_kernel_row_write_v1(table, &key, &new, false)?;
+        self.apply_kernel_row_v1(table, key, new);
+        Ok(())
+    }
+
+    fn apply_kernel_row_v1(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) {
         let Some(kernel) = self.state.kernel_route.as_mut() else { return };
         let ledger_table = table < PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1;
         if ledger_table {
@@ -109,10 +132,21 @@ impl TransitionBuilder<'_> {
     }
 
     /// **The one writer of the kernel route's header**, journaled `KernelRouteHeader`.
-    fn write_kernel_header(&mut self, new: PalwKernelRouteHeaderV1) {
+    fn write_kernel_header(&mut self, new: PalwKernelRouteHeaderV1) -> Result<(), PalwStateV2Error> {
+        // RFC-0006: the old header copy, the new header's field and journal copies, a first route's empty state, one slot.
+        if self.native_writers_tracking_v1() {
+            let mut q = super::native_writers::NativeWriteQuoteV1::new("native kernel route header writer");
+            if let Some(kernel) = self.state.kernel_route.as_ref() {
+                q.copy(&kernel.header)?;
+            } else {
+                q.exact::<PalwKernelRouteStateV1>(1)?;
+            }
+            q.copy(&new)?.copy(&new)?.slots(1)?;
+            self.admit_native_write_v1(q)?;
+        }
         let old = self.state.kernel_route.as_ref().map(|k| k.header.clone());
         if old.as_ref() == Some(&new) {
-            return;
+            return Ok(());
         }
         match self.state.kernel_route.as_mut() {
             Some(kernel) => {
@@ -122,6 +156,7 @@ impl TransitionBuilder<'_> {
             None => self.state.kernel_route = Some(PalwKernelRouteStateV1::with_header(new.clone())),
         }
         self.entries.push(PalwDeltaEntryV2::KernelRouteHeader { old, new: Some(new) });
+        Ok(())
     }
 
     /// A kernel payee's pay joins its one row in the coinbase queue.
@@ -132,7 +167,7 @@ impl TransitionBuilder<'_> {
         let key = palw_kernel_payout_key_v1(&payload);
         let held = self.state.pending_payouts.get(&key).map(|row| row.amount).unwrap_or(0);
         let total = held.checked_add(amount).ok_or(PalwStateV2Error::Overflow("kernel payout"))?;
-        self.write_payout(key, Some(PalwPayoutV2 { payload, amount: total }));
+        self.write_payout(key, Some(PalwPayoutV2 { payload, amount: total }))?;
         Ok(())
     }
 
@@ -150,14 +185,11 @@ impl TransitionBuilder<'_> {
     }
 
     /// Record that the route has seen `bond` (its kernel digest maps back to it).
-    pub(super) fn note_kernel_bond(&mut self, bond: &PalwBondKeyV2) -> misaka_palw_kernel::hash::Digest {
+    pub(super) fn note_kernel_bond(&mut self, bond: &PalwBondKeyV2) -> Result<misaka_palw_kernel::hash::Digest, PalwStateV2Error> {
         let kid = palw_kernel_bond_id_v1(bond);
-        self.write_kernel_row(
-            PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1,
-            key_bytes(&kid),
-            Some(borsh::to_vec(bond).expect("a bond key serializes")),
-        );
-        kid
+        // A fixed `[u8; 64]` digest's Borsh bytes are the digest itself (`key_bytes`), borrowed here without a scratch Vec.
+        self.write_kernel_row_encoded_v1(PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, &kid[..], Some(bond))?;
+        Ok(kid)
     }
 }
 
@@ -196,7 +228,7 @@ pub(super) fn ensure_route_header(builder: &mut TransitionBuilder<'_>, ctx: &Pal
                 typed_roots,
                 misaka_palw_kernel::rows::LedgerScalarsV1 { daa: ctx.daa_score, burned: 0 },
             );
-            builder.write_kernel_header(created.header);
+            builder.write_kernel_header(created.header)?;
         }
         Some(kernel)
             if kernel.header.policy != policy || kernel.header.opv != opv_policy || kernel.header.typed_roots != typed_roots =>
@@ -263,7 +295,7 @@ fn load_ledger_with_projection_v9(
             return Err(refused("the court-scope activation is not in force"));
         }
         if stored_scope.is_none() {
-            builder.write_kernel_row(scope_table, Vec::new(), Some(borsh::to_vec(&at).expect("an activation serializes")));
+            builder.write_kernel_row(scope_table, Vec::new(), Some(borsh::to_vec(&at).expect("an activation serializes")))?;
         }
     }
     if paid.is_none() {
@@ -284,7 +316,7 @@ fn load_ledger_with_projection_v9(
                 PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1,
                 Vec::new(),
                 Some(borsh::to_vec(&(ctx.blue_score, a, next)).expect("fixed prefix budget")),
-            );
+            )?;
         }
     }
     let extras = builder.extras.kernel_route.as_ref().expect("checked by the header");
@@ -294,34 +326,34 @@ fn load_ledger_with_projection_v9(
     if let Some(route) = builder.state.kernel_route.as_ref() {
         attested.extend(route.onboarding_attested_roots_v1(ctx.daa_score));
     }
-    let mut ledger = builder.state.kernel_route.as_ref().expect("created above").ledger_native_projection_v9().map_err(refused)?;
-    ledger.begin_block(ctx.daa_score).map_err(|r| refused(r.to_string()))?;
+    let mut ledger = builder
+        .state
+        .kernel_route
+        .as_ref()
+        .expect("created above")
+        .ledger_native_projection_checked_v9()
+        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+    // RFC-0006: every injection below goes through the reserved ledger's typed, admitted methods (no `DerefMut`).
+    ledger.begin_block_v1(ctx.daa_score).map_err(|r| refused(r.to_string()))?;
     // The budget bounds the BLOCK: what the block's earlier objects already spent comes back (they were folded one at a time).
     if let Some((blue_score, adjudications, court_work)) =
         builder.state.kernel_route.as_ref().and_then(|k| k.aux_row::<(u64, u32, u64)>(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, &[]))
         && blue_score == ctx.blue_score
     {
-        ledger.restore_budget(misaka_palw_kernel::ledger::BlockBudgetV1 { adjudications, court_work });
+        ledger.restore_budget_v1(misaka_palw_kernel::ledger::BlockBudgetV1 { adjudications, court_work });
     }
     // The attested set IS the derived set (not a growing one): a binding refuted after a root was attested stops attesting it for the
     // next kernel class, and the stale row goes with it.
-    ledger.attested_artifacts = attested.iter().map(|root| root.as_bytes()).collect();
     // G14R round 3: `palw_verifier_pay_v1`'s terms (M*-49, O2), injected at every load like the attested set (not in the root).
-    ledger.verifier_pay_policy = extras.verifier_pay.map(crate::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1);
     // G14-S: the court scope (ADR-0177 D2's cumulative bound, `misaka_palw_kernel::court_scope`) is `palw_provider_court_v1`'s — injected
     // at every load like the verifier pay terms (not in the root; its table 28 is written only past it).
-    ledger.court_scope_policy =
-        extras.provider_court.map(|activation_daa| misaka_palw_kernel::court_scope::CourtScopePolicyV1 { activation_daa });
     // RFC-0002 P0 residual (RFC02-T): the sealed-bounty rule for kernel filings is `palw_model_refutation_seal_v1`'s — injected at every
     // load (not in the root; its table 19 is written only past it). The contest window is the route's seal TTL.
     let seal_ttl_daa = ledger.policy.seal_ttl_daa;
-    ledger.sealed_bounty_policy = extras
-        .model_refutation_seal
-        .map(|activation_daa| misaka_palw_kernel::sealed_bounty::SealedBountyPolicyV1 { activation_daa, contest_daa: seal_ttl_daa });
     // DA16: the claims whose material obligation moved to bonded providers — derived from the court's rooted rows, never a ledger table
     // (and nothing at all below `palw_provider_court_v1`, where no such row can exist).
-    if extras.provider_court.is_some() {
-        ledger.provider_liable = builder
+    let provider_liable = extras.provider_court.is_some().then(|| {
+        builder
             .state
             .kernel_route
             .as_ref()
@@ -329,13 +361,24 @@ fn load_ledger_with_projection_v9(
             .unwrap_or_default()
             .iter()
             .map(|c| c.as_bytes())
-            .collect();
-    }
+            .collect()
+    });
+    ledger
+        .install_consumer_inputs_v1(
+            attested.iter().map(|root| root.as_bytes()).collect(),
+            extras.verifier_pay.map(crate::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1),
+            extras.provider_court.map(|activation_daa| misaka_palw_kernel::court_scope::CourtScopePolicyV1 { activation_daa }),
+            extras
+                .model_refutation_seal
+                .map(|activation_daa| misaka_palw_kernel::sealed_bounty::SealedBountyPolicyV1 { activation_daa, contest_daa: seal_ttl_daa }),
+            provider_liable,
+        )
+        .map_err(PalwStateV2Error::NativeResource)?;
     // Each load reconstructs authenticated open targets. No object supplies this inventory.
     if let Some(fence) = extras.beacon_source.filter(|f| f.activation.is_active(ctx.daa_score)) {
         let inputs =
             builder.state.kernel_route.as_ref().expect("created").beacon_source_inputs_v4(fence, ctx.daa_score).map_err(refused)?;
-        ledger.set_beacon_source_inputs(inputs).map_err(refused)?;
+        ledger.set_beacon_source_inputs_reserved_v1(inputs).map_err(PalwStateV2Error::NativeResource)?.map_err(refused)?;
     }
     if let Some(fence) = extras.beacon_source_fee.filter(|f| f.activation.is_active(ctx.daa_score)) {
         let inputs = builder
@@ -345,13 +388,22 @@ fn load_ledger_with_projection_v9(
             .expect("created")
             .beacon_source_fee_inputs_v1(fence, &ledger.beacon_source_inputs, ctx.daa_score)
             .map_err(refused)?;
-        ledger.set_beacon_source_fee_inputs(inputs).map_err(refused)?;
+        ledger.set_beacon_source_fee_inputs_reserved_v1(inputs).map_err(PalwStateV2Error::NativeResource)?.map_err(refused)?;
     }
-    builder.state.kernel_route.as_ref().expect("created").apply_paid_claim_consumer_inputs_v2(&mut ledger).map_err(refused)?;
-    ledger.consumer_final_reward_caps = builder.kernel_final_reward_caps_v1(&ledger);
+    // The paid-claim consumer projection was admitted with the projection's own aux-input inventory.
+    builder
+        .state
+        .kernel_route
+        .as_ref()
+        .expect("created")
+        .apply_paid_claim_consumer_inputs_v2(ledger.paid_consumer_projection_mut_v1())
+        .map_err(refused)?;
+    let caps = builder.kernel_final_reward_caps_v1(&ledger);
+    ledger.install_final_reward_caps_v1(caps).map_err(PalwStateV2Error::NativeResource)?;
     // RFC08 R8-ECON (`palw_minimum_price_v1`): every governed job's contracted claim carries its signed funded minimum as a payout
     // floor (a Final the escrow cannot fund at it is neutral, never paid less). Empty below the fence.
-    ledger.consumer_minimum_payouts_v1 = super::palw_econ_contracts_fold_v1::minimum_price_payout_floors_v1(builder, ctx, &ledger);
+    let floors = super::palw_econ_contracts_fold_v1::minimum_price_payout_floors_v1(builder, ctx, &ledger);
+    ledger.install_minimum_payouts_v1(floors).map_err(PalwStateV2Error::NativeResource)?;
     // RFC-0015 admission is no longer a list read here: a class is admitted to the mode at its own registration, and only while
     // DERIVED-eligible (`opv_gate_v1`), so the ledger's admitted rows are exactly the classes that were eligible when they registered.
     Ok(ledger)
@@ -498,9 +550,9 @@ fn opv_gate_v1(
 
 /// Write back every ledger row that changed and the scalars; `before` is the rows as `load_ledger` found them. The ledger is then
 /// cached on the route state (GAP 8) as the rows' own ledger, so the next object of the chain loads it without rebuilding it.
-pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1, before: &LedgerRowsV1) {
+pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1, before: &LedgerRowsV1) -> Result<(), PalwStateV2Error> {
     for ((table, key), old_new) in diff_rows(before, &ledger.to_rows()).into_iter().map(|(k, _old, new)| (k, new)) {
-        builder.write_kernel_row(table, key, old_new);
+        builder.write_kernel_row(table, key, old_new)?;
     }
     // Existing admitted v9 records were projected without copying their large
     // bytes. Preserve them exactly, except an authenticated withdrawal removed
@@ -520,19 +572,19 @@ pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1
         })
         .collect();
     for key in removed {
-        builder.write_kernel_row(TABLE_FLAT_CONFORMANCE_CLASSES_V9, key, None);
+        builder.write_kernel_row(TABLE_FLAT_CONFORMANCE_CLASSES_V9, key, None)?;
     }
     let header = builder.state.kernel_route.as_ref().expect("a route that flushes exists").header.clone();
     let scalars = ledger.scalars();
     if header.scalars != scalars {
-        builder.write_kernel_header(PalwKernelRouteHeaderV1 { scalars, ..header });
+        builder.write_kernel_header(PalwKernelRouteHeaderV1 { scalars, ..header })?;
     }
     let kernel = builder.state.kernel_route.as_mut().expect("a route that flushes exists");
     // Cache refill is optional. Reserve its separate deep payload before cloning;
     // failure evicts the cache and leaves the committed rows authoritative.
     let Ok(cached) = crate::palw_native_resource_v1::ledger_cache_clone_v1(ledger) else {
         kernel.ledger_cache.clear();
-        return;
+        return Ok(());
     };
     let cached = cached.as_rebuilt_from_v1(&kernel.rows);
     if kernel.rows.keys().any(|(t, _)| *t == TABLE_FLAT_CONFORMANCE_CLASSES_V9) {
@@ -540,6 +592,7 @@ pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1
     } else {
         kernel.ledger_cache.set(cached);
     }
+    Ok(())
 }
 
 /// Latest permitted root Final plus native evidence window and the complete kernel court path.
@@ -608,15 +661,19 @@ pub(super) fn bind_exec_reward_v1(
 ) -> Result<(), PalwStateV2Error> {
     let route = builder.state.kernel_route.as_ref().expect("EXEC kernel binding");
     let before = route.rows.clone();
-    let mut ledger = route.ledger().map_err(refused)?;
-    ledger.daa = daa;
+    let mut ledger =
+        route.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+    ledger.set_daa_v1(daa);
     let until = exec_liability_floor_v1(expiry, builder.params.window_court(), &ledger.policy)?;
     let row = ledger.claims.get(&claim.as_bytes()).ok_or_else(|| refused("the EXEC reward claim is missing"))?;
     require_exec_provider_horizon_v1(&builder.state, &claim, row, daa, until).map_err(refused)?;
     let bond = route.bond_key_of(&row.producer).ok_or_else(|| refused("EXEC income recipient has no native bond"))?;
-    ledger.bind_exec_reward_until(root.as_bytes(), claim.as_bytes(), expiry, until).map_err(refused)?;
+    ledger
+        .bind_exec_reward_until_reserved_v1(root.as_bytes(), claim.as_bytes(), expiry, until)
+        .map_err(PalwStateV2Error::NativeResource)?
+        .map_err(refused)?;
     builder.transfer_kernel_income_to_exec_v1(root, claim, bond, daa, until)?;
-    flush(builder, &ledger, &before);
+    flush(builder, &ledger, &before)?;
     Ok(())
 }
 
@@ -630,12 +687,13 @@ pub(super) fn finish_exec_rewards_v1(
 ) -> Result<Vec<u64>, PalwStateV2Error> {
     let route = builder.state.kernel_route.as_ref().expect("EXEC kernel binding");
     let before = route.rows.clone();
-    let mut ledger = route.ledger().map_err(refused)?;
-    ledger.daa = daa;
+    let mut ledger =
+        route.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+    ledger.set_daa_v1(daa);
     let ids: Vec<_> = ledger.bonds.keys().copied().collect();
     for id in ids {
         if let Some(key) = builder.state.kernel_route.as_ref().and_then(|r| r.bond_key_of(&id)) {
-            ledger.sync_bond(id, builder.kernel_synced_collateral(&key, daa));
+            ledger.try_sync_bond_v1(id, builder.kernel_synced_collateral(&key, daa)).map_err(PalwStateV2Error::NativeResource)?;
         }
     }
     let mut events = Vec::new();
@@ -643,28 +701,35 @@ pub(super) fn finish_exec_rewards_v1(
     let mut remaining = caps.clone();
     for (claim, bond) in claims {
         let cap = remaining.entry(*bond).or_default();
-        let fee = ledger.finish_exec_reward(root.as_bytes(), claim.as_bytes(), *cap, &mut events).map_err(refused)?;
+        let fee = ledger
+            .finish_exec_reward_reserved_v1(root.as_bytes(), claim.as_bytes(), *cap, &mut events)
+            .map_err(PalwStateV2Error::NativeResource)?
+            .map_err(refused)?;
         *cap -= fee;
         paid.push(fee);
     }
     apply_settlements_to_exec_vesting(builder, &events, true, Some(root), daa)?;
-    flush(builder, &ledger, &before);
+    flush(builder, &ledger, &before)?;
     Ok(paid)
 }
 
 pub(super) fn cancel_exec_rewards_v1(builder: &mut TransitionBuilder<'_>, root: Hash64, daa: u64) -> Result<(), PalwStateV2Error> {
     let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     let before = route.rows.clone();
-    let mut ledger = route.ledger().map_err(refused)?;
-    ledger.daa = daa;
+    let mut ledger =
+        route.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
+    ledger.set_daa_v1(daa);
     let claims: Vec<_> =
         ledger.exec_reward_holds.iter().filter(|(_, hold)| hold.owner_root == root.as_bytes()).map(|(id, _)| *id).collect();
     let mut events = Vec::new();
     for claim in claims {
-        ledger.cancel_exec_reward(root.as_bytes(), claim, &mut events).map_err(refused)?;
+        ledger
+            .cancel_exec_reward_reserved_v1(root.as_bytes(), claim, &mut events)
+            .map_err(PalwStateV2Error::NativeResource)?
+            .map_err(refused)?;
     }
     apply_settlements(builder, &events, true, daa)?;
-    flush(builder, &ledger, &before);
+    flush(builder, &ledger, &before)?;
     Ok(())
 }
 
@@ -698,7 +763,15 @@ fn apply_settlements_to_exec_vesting(
         matches!(e, LedgerEventV1::Settlement(s) if matches!(s.kind,
         SettlementKindV1::FundSourceFeeEscrow | SettlementKindV1::PaySourceFeeEscrow | SettlementKindV1::RefundSourceFeeEscrow))
     }) {
-        Some(builder.state.kernel_route.as_ref().ok_or_else(|| refused("source fee route missing"))?.ledger().map_err(refused)?)
+        Some(
+            builder
+                .state
+                .kernel_route
+                .as_ref()
+                .ok_or_else(|| refused("source fee route missing"))?
+                .ledger_checked_v1()
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
+        )
     } else {
         None
     };
@@ -721,8 +794,46 @@ fn apply_settlements_to_exec_vesting(
     };
     let mut reporter_funded: std::collections::BTreeMap<_, u64> = Default::default();
     let mut fee_paid = std::collections::BTreeSet::new();
+    // RFC-0008 once-only settlement (dormant `palw_settlement_once_v1`): the event indices of a producer reward triple whose
+    // escrow reward another consumer already settled — its release and reward are skipped with its debit.
+    let mut already_settled: std::collections::BTreeSet<usize> = Default::default();
     for (ordinal, event) in events.iter().enumerate() {
         let LedgerEventV1::Settlement(s) = event else { continue };
+        if already_settled.contains(&ordinal) {
+            continue;
+        }
+        // **One escrow reward per kernel claim, across every consumer** (the kernel tick, a kernel object arm, the paid-claim Final
+        // batch, the EXEC kernel-fee route): the marker of `EscrowFinalReward(claim)` is checked and written at the poster's debit,
+        // before the slash and the payout it funds. A second settlement of the same claim moves nothing: a strict object arm is
+        // refused (dropped), a lenient tick skips the whole triple. `Dormant` below the fence. A verifier check fee (the same triple
+        // followed by `CheckFeePaid`) is the kernel's per-slot obligation and is not this leg.
+        if s.kind == SettlementKindV1::PayJobEscrow
+            && let Some((claim, poster, _producer, paid)) =
+                super::palw_settlement_once_fold_v1::kernel_producer_reward_at_v1(events, ordinal)
+        {
+            use crate::palw_settlement_once_v1::{
+                PalwSettlementConsumerV1 as C, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+            };
+            let consumer = match (exec_root.is_some(), strict) {
+                (true, _) => C::ExecKernelFee,
+                (false, true) => C::KernelObject,
+                (false, false) => C::KernelTick,
+            };
+            let once = builder.settle_once_v1(
+                now,
+                PalwSettlementObligationV1::of(PalwSettlementLegV1::EscrowFinalReward, claim),
+                consumer,
+                paid,
+                PalwSettlementDebitV1::Escrow { poster, amount: paid },
+            )?;
+            if !once.pays() {
+                if strict {
+                    return Err(refused("the claim's escrow reward was already settled by another consumer"));
+                }
+                already_settled.extend([ordinal + 1, ordinal + 2]);
+                continue;
+            }
+        }
         let key = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&s.bond));
         match s.kind {
             SettlementKindV1::FundSourceFeeEscrow => {
@@ -773,7 +884,7 @@ fn apply_settlements_to_exec_vesting(
                     }
                     continue;
                 };
-                let debit = match builder.slash_bond(key, s.amount as u128) {
+                let debit = match super::native_writers::local_capacity_or_v1(builder.slash_bond(key, s.amount as u128))? {
                     Ok(debit) => debit,
                     Err(e) if strict => return Err(e),
                     Err(_) => continue,
@@ -857,11 +968,11 @@ fn apply_settlements_to_exec_vesting(
                         builder.state.bonds.get(&bond).ok_or_else(|| refused("a Final fee recipient is missing"))?.payout_payload;
                     builder.consume_kernel_final_reward_v1(&claim, bond, payload, now, amount)?;
                     // RFC-0016 (dormant): the escrow payout telemetry of the claim's model (consensus-derived, never coinbase).
-                    super::palw_rfc0016_fold_v1::rfc0016_note_escrow_payout_v1(builder, now, &claim, amount);
+                    super::palw_rfc0016_fold_v1::rfc0016_note_escrow_payout_v1(builder, now, &claim, amount)?;
                 }
                 let payee = key.and_then(|key| builder.state.bonds.get(&key).map(|b| b.payout_payload));
                 match payee {
-                    Some(payload) => match builder.add_kernel_payout(payload, amount) {
+                    Some(payload) => match super::native_writers::local_capacity_or_v1(builder.add_kernel_payout(payload, amount))? {
                         Ok(()) => {}
                         Err(e) if strict => return Err(e),
                         Err(_) => {}
@@ -955,14 +1066,26 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     // Funded actions 25..=40 below Final27 (native_final absent) are opaque: validation did not check
     // their signature, so they must have ZERO state effect — no bond, budget, row or fee read/write.
     // Mirrors `palw_native_action_unjudged_at_v1` in the processor exactly.
-    if bytes.get(1).copied() == Some(misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11)
-        && builder.extras.kernel_route.as_ref().is_some_and(|e| match bytes.get(2) {
+    if builder.extras.kernel_route.as_ref().is_some_and(|e| match bytes.get(1).copied() {
+        Some(misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11) => match bytes.get(2) {
             Some(25..=40) => e.native_final.is_none(),
             // Typed window class (§II.14.60): its own fence AND Final27.
             Some(45 | 46) => e.native_final.is_none() || e.window_class_v37.is_none_or(|at| ctx.daa_score < at),
             _ => false,
-        })
-    {
+        },
+        Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) if matches!(bytes.get(2), Some(19..=40)) => {
+            e.native_final.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
+                || e.stage_execution_v28.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
+        }
+        Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) if matches!(bytes.get(2), Some(41..=79)) => {
+            e.native_final.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
+                || e.native_execution39.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
+                // Mining actions 73–79: their own dormant fence too (A-2: unjudged below it, no state effect).
+                || matches!(bytes.get(2), Some(73..=79))
+                    && e.native_mining39.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
+        }
+        _ => false,
+    }) {
         return Ok(());
     }
     // A malformed or over-size encoding, or a signer that is no Active bond, is a dropped object.
@@ -980,6 +1103,9 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             return super::palw_flat_execution_fold_v11::apply(builder, ctx, signer, a.action, a.body);
         }
         Ok(Some(a)) if a.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 => {
+            if (41..=79).contains(&a.action) {
+                return super::palw_native_job_fold_v39::apply(builder, ctx, signer, a.action, a.body);
+            }
             return super::palw_flat_stage_fold_v14::apply(builder, ctx, signer, a.action, a.body);
         }
         Err(_) => return Ok(()),
@@ -1043,6 +1169,9 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             return super::palw_flat_execution_fold_v11::apply(builder, ctx, signer, *action, body);
         }
         KernelRouteObjectV1::StageExecutionV14 { action, body } => {
+            if (41..=79).contains(action) {
+                return super::palw_native_job_fold_v39::apply(builder, ctx, signer, *action, body);
+            }
             return super::palw_flat_stage_fold_v14::apply(builder, ctx, signer, *action, body);
         }
         KernelRouteObjectV1::AuthorizePanelLifetimeV2 { authorization } => {
@@ -1073,6 +1202,13 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             return super::palw_model_eligibility_fold_v1::apply_commit_eligibility_exam_v1(builder, ctx, signer, commit);
         }
         KernelRouteObjectV1::AttestEligibilityExamV1 { attestation } => {
+            // RFC-0018 Gate C: an attestation naming a claim's certification id (aux 136) is a drawn verifier's verdict on that claim;
+            // any other is RFC-0017's exam attestation, as before.
+            if let Some(result) =
+                super::palw_security_certification_fold_v1::try_attest_claim_certification_v1(builder, ctx, signer, attestation)
+            {
+                return result;
+            }
             return super::palw_model_eligibility_fold_v1::apply_attest_eligibility_exam_v1(builder, ctx, signer, attestation);
         }
         KernelRouteObjectV1::FundPanelBeaconSourceFeeV2 { epoch, terms } => {
@@ -1250,7 +1386,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     let original_attested = ledger.attested_artifacts.clone();
     if let Some((_, id)) = &scoped {
         let row = builder.state.kernel_route.as_ref().unwrap().model_artifact_binding_header_v2(id).unwrap();
-        ledger.attest_artifact(row.kernel_param_root.as_bytes());
+        ledger.try_attest_artifact_v1(row.kernel_param_root.as_bytes()).map_err(PalwStateV2Error::NativeResource)?;
     }
     let object = scoped.as_ref().map(|(o, _)| o).unwrap_or(&object);
     if let KernelRouteObjectV1::RegisterClassV2 { mode, descriptor, program_bytes, plan, param_commitments } = &object
@@ -1269,7 +1405,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             )
             .is_ok()
         {
-            ledger.attest_artifact(facts.param_root);
+            ledger.try_attest_artifact_v1(facts.param_root).map_err(PalwStateV2Error::NativeResource)?;
         }
     }
     if matches!(object, KernelRouteObjectV1::Withdraw { .. })
@@ -1282,13 +1418,41 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         OpvGateV1::Drop => return Ok(()),
         OpvGateV1::Admit(classes) => {
             for class in classes {
-                ledger.admit_optimistic_class(class).map_err(|r| refused(r.to_string()))?;
+                ledger
+                    .try_admit_optimistic_class_checked_v1(class)
+                    .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
             }
         }
         OpvGateV1::Pass => {}
     }
+    if let KernelRouteObjectV1::OptInBeaconSource { job, .. } | KernelRouteObjectV1::OptInPaidBeaconSource { job, .. } = object {
+        if builder.state.kernel_route.as_ref().is_some_and(|r| r.paid_claim_job_is_enrolled_v3(job).unwrap_or(true)) {
+            return Err(refused("paid checker-enrolled jobs cannot be Panel-independent beacon sources"));
+        }
+    }
+    // RFC-0007 R7-SOURCE acyclicity (inside the dormant palw_beacon_source_fee_v1 path; no preset arms it): the source and
+    // challenge dependency graph must stay acyclic. A paid target's own producer or its own base job never seeds that
+    // target's verification, and two producers never act as each other's live sources (a two-cycle of mutual
+    // certification). A distinct registered operator or key is identity only, not evidence of independence; that stays an
+    // explicit assumption (claim-v2 ASSUMPTIONS).
+    if let KernelRouteObjectV1::OptInPaidBeaconSource { context, producer, job, .. } = &object
+        && let Some(route) = builder.state.kernel_route.as_ref()
+        && let Ok(target) = route.paid_claim_authority_v2(context)
+    {
+        if *producer == target.enrollment.producer || *job == target.job.base_job {
+            return Err(refused("a paid target's own producer or base job cannot seed its own verification"));
+        }
+        let mutual = ledger.beacon_sources.iter().any(|((other_context, source_producer), row)| {
+            *source_producer == target.enrollment.producer
+                && row.outcome.is_none()
+                && route.paid_claim_authority_v2(other_context).is_ok_and(|other| other.enrollment.producer == *producer)
+        });
+        if mutual {
+            return Err(refused("two producers cannot be each other's live beacon sources (mutual certification)"));
+        }
+    }
     let kid = palw_kernel_bond_id_v1(signer);
-    ledger.sync_bond(kid, builder.kernel_synced_collateral(signer, ctx.daa_score));
+    ledger.try_sync_bond_v1(kid, builder.kernel_synced_collateral(signer, ctx.daa_score)).map_err(PalwStateV2Error::NativeResource)?;
     // The other bond a slash can land on is the producer of the claim the object names: its collateral is brought up to date too, so
     // an earlier object of this block (or another lane's slash) can never leave the ledger believing the bond holds more than it does.
     if let KernelRouteObjectV1::FileProof { claim, .. }
@@ -1297,7 +1461,9 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         && let Some(producer) = ledger.claims.get(claim).map(|row| row.producer)
         && let Some(key) = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&producer))
     {
-        ledger.sync_bond(producer, builder.kernel_synced_collateral(&key, ctx.daa_score));
+        ledger
+            .try_sync_bond_v1(producer, builder.kernel_synced_collateral(&key, ctx.daa_score))
+            .map_err(PalwStateV2Error::NativeResource)?;
     }
     // DA16 / ADR-0177 D2: past `palw_provider_court_v1` a demand names a claim-specific unit or nothing, within its requester's tally.
     let scope = match &object {
@@ -1311,11 +1477,11 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         }
         _ => None,
     };
-    let events = match ledger.apply_object(object, &AuthV1 { signer_bond: kid }) {
+    let events = match ledger.apply_object_reserved_v1(object, &AuthV1 { signer_bond: kid }).map_err(PalwStateV2Error::NativeResource)? {
         Ok(events) => events,
         Err(_refusal) => {
             // A refusal that did court work still spent the block's budget (so junk cannot be tried for free); nothing else is kept.
-            persist_budget(builder, ctx, &ledger);
+            persist_budget(builder, ctx, &ledger)?;
             return Ok(());
         }
     };
@@ -1330,7 +1496,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                 || route.rows.keys().filter(|(table, _)| *table == TABLE_FLAT_CONFORMANCE_CLASSES_V9).count()
                     >= FLAT_CANDIDATE_REGISTRY_MAX_V9
             {
-                persist_budget(builder, ctx, &ledger);
+                persist_budget(builder, ctx, &ledger)?;
                 return Ok(());
             }
 
@@ -1341,7 +1507,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                     .is_ok_and(|s| s.worst_court_bytes as usize + 134 <= PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1)
             });
             if !fits {
-                persist_budget(builder, ctx, &ledger);
+                persist_budget(builder, ctx, &ledger)?;
                 return Ok(());
             }
         }
@@ -1352,7 +1518,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                 .and_then(|(_, r)| r.checked().ok())
                 .is_some_and(|v| v.scope.worst_court_bytes as usize + 134 <= PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1);
             if !fits {
-                persist_budget(builder, ctx, &ledger);
+                persist_budget(builder, ctx, &ledger)?;
                 return Ok(());
             }
         }
@@ -1369,7 +1535,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                 .is_ok()
             });
             if !fits {
-                persist_budget(builder, ctx, &ledger);
+                persist_budget(builder, ctx, &ledger)?;
                 return Ok(());
             }
         }
@@ -1384,7 +1550,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         if *producer != kid || promise.accepted_daa != ctx.daa_score {
             return Err(refused("paid source recipient or acceptance position differs"));
         }
-        let checkpoint = builder.checkpoint();
+        let checkpoint = builder.try_checkpoint()?;
         if builder
             .reserve_source_income_v1(
                 ctx,
@@ -1397,7 +1563,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             .is_err()
         {
             builder.restore(checkpoint);
-            persist_budget(builder, ctx, &ledger);
+            persist_budget(builder, ctx, &ledger)?;
             return Ok(());
         }
     }
@@ -1436,8 +1602,16 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                                 == Some(misaka_palw_kernel::mode::VerificationModeV1::OptimisticPublicVerification)
                     })
                     .count() as u64;
-                if super::palw_rfc0016_fold_v1::rfc0016_opv_claim_committed_v1(builder, ctx.daa_score, claim, native, open).is_err() {
-                    persist_budget(builder, ctx, &ledger);
+                if super::native_writers::local_capacity_or_v1(super::palw_rfc0016_fold_v1::rfc0016_opv_claim_committed_v1(
+                    builder,
+                    ctx.daa_score,
+                    claim,
+                    native,
+                    open,
+                ))?
+                .is_err()
+                {
+                    persist_budget(builder, ctx, &ledger)?;
                     return Ok(());
                 }
             }
@@ -1455,7 +1629,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                 // RFC-0015 §8.3: an unbudgeted OPV claim arrives here as `Err` (`unbudgeted_panel_free_v1`) and is refused below.
                 Ok(None) => {}
                 Err(_) => {
-                    persist_budget(builder, ctx, &ledger);
+                    persist_budget(builder, ctx, &ledger)?;
                     return Ok(());
                 }
             }
@@ -1471,12 +1645,12 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                     crate::palw_model_artifact_v2::PALW_MODEL_ARTIFACT_CANDIDATE_TABLE_V2,
                     borsh::to_vec(&Hash64::from_bytes(*class)).unwrap(),
                     Some(borsh::to_vec(binding).unwrap()),
-                );
+                )?;
             }
         }
     }
     // The object stands: the route has now seen its signer.
-    builder.note_kernel_bond(signer);
+    builder.note_kernel_bond(signer)?;
     for event in &events {
         if let LedgerEventV1::ClaimCommitted { claim } = event {
             let deadline = ledger.claims.get(claim).map(|c| c.committed_daa + ledger.policy.check_window_daa).unwrap_or(ctx.daa_score);
@@ -1485,13 +1659,13 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             if panel_licensed && matches!(ledger.claims.get(claim).map(|c| &c.body), Some(ClaimBodyV1::Program { .. })) {
                 let assignment = draw_seats(builder, claim, signer, deadline);
                 for seat in &assignment.seats {
-                    builder.note_kernel_bond(&seat.bond);
+                    builder.note_kernel_bond(&seat.bond)?;
                 }
                 builder.write_kernel_row(
                     PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1,
                     key_bytes(claim),
                     Some(borsh::to_vec(&assignment).expect("an assignment serializes")),
-                );
+                )?;
             }
         }
     }
@@ -1499,27 +1673,28 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     // slash survives; the sync above makes this unreachable.)
     apply_settlements(builder, &events, true, ctx.daa_score)?;
     builder.close_terminal_kernel_budgets_v1(&ledger);
-    persist_budget(builder, ctx, &ledger);
+    persist_budget(builder, ctx, &ledger)?;
     // Only the exact signed candidate used the temporary scope. Persisting this root in
     // TABLE_ATTESTED would let an unrelated program borrow it in the next object.
-    ledger.attested_artifacts = original_attested;
-    flush(builder, &ledger, &before);
+    ledger.restore_attested_v1(original_attested);
+    flush(builder, &ledger, &before)?;
     if let Some((subject, row)) = scope {
-        super::palw_provider_court_fold_v1::write_court_scope_row_v1(builder, &subject, &row);
+        super::palw_provider_court_fold_v1::write_court_scope_row_v1(builder, &subject, &row)?;
     }
     Ok(())
 }
 
 /// **Record what this block's objects have spent of its adjudication budget** (the next object of the same chain block restores it).
-fn persist_budget(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, ledger: &KernelLedgerV1) {
+fn persist_budget(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, ledger: &KernelLedgerV1) -> Result<(), PalwStateV2Error> {
     let spent = ledger.budget_used();
     if spent != misaka_palw_kernel::ledger::BlockBudgetV1::default() {
         builder.write_kernel_row(
             PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1,
             Vec::new(),
             Some(borsh::to_vec(&(ctx.blue_score, spent.adjudications, spent.court_work)).expect("a budget serializes")),
-        );
+        )?;
     }
+    Ok(())
 }
 
 /// **Charge one adjudication (and `court_work`) of THIS block's budget to an onboarding object** (tag 109's judgement): the same
@@ -1553,7 +1728,7 @@ pub(super) fn charge_route_budget_v1(
         PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1,
         Vec::new(),
         Some(borsh::to_vec(&(ctx.blue_score, next.adjudications, next.court_work)).expect("a budget serializes")),
-    );
+    )?;
     Ok(true)
 }
 
@@ -1623,17 +1798,18 @@ pub(super) fn apply_kernel_receipt_v1(
         tally.add(r, evidence);
     }
     if matches!(tally.state(), TallyStateV1::Covered) {
-        let _ = ledger.apply_panel_tally(&claim, true);
-        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key_bytes(&claim), None);
-        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key_bytes(&claim), None);
+        // RFC-0006: the job pointer and its events are admitted before the tally mutates (no `DerefMut`).
+        let _ = ledger.apply_panel_tally_reserved_v1(&claim).map_err(PalwStateV2Error::NativeResource)?;
+        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key_bytes(&claim), None)?;
+        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key_bytes(&claim), None)?;
     } else {
         builder.write_kernel_row(
             PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1,
             key_bytes(&claim),
             Some(borsh::to_vec(&receipts).expect("receipts serialize")),
-        );
+        )?;
     }
-    flush(builder, &ledger, &before);
+    flush(builder, &ledger, &before)?;
     Ok(())
 }
 
@@ -1644,9 +1820,9 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
         return Ok(());
     }
     // The onboarding bindings whose refutation horizon ends release their reservation, whatever the ledger is doing.
-    super::palw_onboarding_fold_v1::tick_onboarding_v1(builder, ctx);
+    super::palw_onboarding_fold_v1::tick_onboarding_v1(builder, ctx)?;
     // The route's chunk groups past their TTL are dropped and their deposits forfeited, whatever the ledger is doing.
-    forfeit_expired_chunk_groups_v1(builder, ctx);
+    forfeit_expired_chunk_groups_v1(builder, ctx)?;
     // DA16: the provider court's deadlines (a provider that did not answer is charged), expired leases, lapses — before the kernel's tick,
     // so a claim whose last provider was charged this block is void before its demands are swept.
     super::palw_provider_court_fold_v1::tick_provider_court_v1(builder, ctx)?;
@@ -1659,6 +1835,9 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // RFC-0017: committed eligibility exams are drawn once a later seed anchor exists, decided at k positives or their deadline;
     // eligible models past their grace lapse; terminal claims' pins retire. A no-op below `palw_model_eligibility_v1`.
     super::palw_model_eligibility_fold_v1::sweep_model_eligibility_v1(builder, ctx)?;
+    // RFC-0018 Gate C: certifications are drawn, decided and — when certified — credited (safe weight, settled anchor, the held
+    // issuance-funded reward). A no-op below `palw_independently_work_certified_v1`.
+    super::palw_security_certification_fold_v1::sweep_security_certification_v1(builder, ctx)?;
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     // Anything the tick moves: claims and demands, and (G14-R4) bonded seals that expire, escrows that return and served demands'
     // bonds — a route whose only rows are a seal or an escrow must still forfeit or return it on time.
@@ -1687,12 +1866,14 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     let held: Vec<misaka_palw_kernel::hash::Digest> = ledger.bonds.keys().copied().collect();
     for kid in held {
         if let Some(key) = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&kid)) {
-            ledger.sync_bond(kid, builder.kernel_synced_collateral(&key, ctx.daa_score));
+            ledger
+                .try_sync_bond_v1(kid, builder.kernel_synced_collateral(&key, ctx.daa_score))
+                .map_err(PalwStateV2Error::NativeResource)?;
         }
     }
     let pending_source_fees: Vec<_> =
         ledger.beacon_source_fee_promises.iter().filter(|(_, promise)| promise.outcome.is_none()).map(|(key, _)| *key).collect();
-    let events = ledger.tick();
+    let events = ledger.tick_reserved_v1().map_err(PalwStateV2Error::NativeResource)?;
     // Consume the same deferred R reservation before paying the separately
     // prepaid escrow. A principal refund cancels the entitlement and earns no
     // income; unchanged pending promises retain their reservation through H.
@@ -1750,10 +1931,10 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
         })
         .unwrap_or_default();
     for claim in stale {
-        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key_bytes(&claim), None);
-        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key_bytes(&claim), None);
+        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key_bytes(&claim), None)?;
+        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key_bytes(&claim), None)?;
     }
-    flush(builder, &ledger, &before);
+    flush(builder, &ledger, &before)?;
     // DA16: a demand on a transferred claim that nobody answered is its providers' failure — charge them (never the producer).
     super::palw_provider_court_fold_v1::settle_provider_liable_defaults_v1(builder, ctx, &events)?;
     super::palw_claim_challenge_fold_v2::tick_paid_claim_final_projection_v2(builder, ctx)?;
@@ -1969,7 +2150,7 @@ pub(super) fn apply_kernel_route_chunk_v1(
             PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1,
             key,
             Some(borsh::to_vec(&group).expect("a group serializes")),
-        );
+        )?;
         return Ok(());
     }
     // Complete: the object it carried is applied HERE, by the arm a directly carried one goes through.
@@ -2004,19 +2185,20 @@ pub(super) fn apply_kernel_route_chunk_v1(
         return Err(refused("conformance evidence other than a Refute rides only a group its class's registrant opened"));
     }
     // The group delivered: its row (and with it the deposit) goes before the object is applied.
-    builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, key, None);
+    builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, key, None)?;
     super::apply_object(builder, ctx, &inner)
 }
 
 /// **The closing step's chunk sweep**: every group past its TTL is dropped and its opener's deposit forfeited (a real slash, burned
 /// at release). Lenient (it runs after the rehearsal): a deposit the bond can no longer pay is taken as far as it goes.
-fn forfeit_expired_chunk_groups_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
-    let Some(route) = builder.state.kernel_route.as_ref() else { return };
+fn forfeit_expired_chunk_groups_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     let expired = route.expired_chunk_headers_v1(ctx.daa_score);
     for (opener, group, deposit) in expired {
-        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, palw_kernel_chunk_group_key_v1(&opener, &group), None);
-        let _ = builder.slash_bond(opener, deposit as u128);
+        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, palw_kernel_chunk_group_key_v1(&opener, &group), None)?;
+        let _ = super::native_writers::local_capacity_or_v1(builder.slash_bond(opener, deposit as u128))?;
     }
+    Ok(())
 }
 
 /// Removing a candidate cannot remove the public program/PC while an admitted
@@ -2063,7 +2245,7 @@ fn candidate_withdraw_held_v9(
             PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1,
             Vec::new(),
             Some(borsh::to_vec(&(ctx.blue_score, a, w)).expect("retention metadata budget")),
-        );
+        )?;
     }
     let route = builder.state.kernel_route.as_ref().unwrap();
     for ((_, key), row) in route.aux.range((FLAT_MODEL_VECTOR_TABLE_V3, Vec::new())..(FLAT_MODEL_VECTOR_TABLE_V3 + 1, Vec::new())) {

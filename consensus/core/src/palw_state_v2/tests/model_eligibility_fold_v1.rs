@@ -22,11 +22,20 @@ const RE_REGISTERED: u64 = 3;
 const BONDS: u64 = 8;
 
 fn test_policy() -> PalwModelEligibilityPolicyV1 {
-    PalwModelEligibilityPolicyV1 { attempt_fee_sompi: FEE, ..PalwModelEligibilityPolicyV1::design_unapproved_v1(DAY) }
+    // U-4: no inspection escrow in the base fixture (the burn fee alone moves collateral); `u4_*` arms one.
+    PalwModelEligibilityPolicyV1 {
+        attempt_fee_sompi: FEE,
+        inspection_fee_per_position_sompi: 0,
+        ..PalwModelEligibilityPolicyV1::design_unapproved_v1(DAY)
+    }
 }
 
 fn armed() -> PalwStateParamsV2 {
-    params().with_model_eligibility_v1(Some(PalwModelEligibilityMirrorV1 { from_daa: FENCE, policy: test_policy() }))
+    armed_with(test_policy())
+}
+
+fn armed_with(policy: PalwModelEligibilityPolicyV1) -> PalwStateParamsV2 {
+    params().with_model_eligibility_v1(Some(PalwModelEligibilityMirrorV1 { from_daa: FENCE, policy }))
 }
 
 fn extras() -> PalwTransitionExtrasV1 {
@@ -129,7 +138,7 @@ fn world(p: &PalwStateParamsV2) -> PalwChainStateV2 {
     ));
     for class in [ENTRANT, RE_REGISTERED] {
         let view =
-            crate::palw_state_v2::palw_model_eligibility_fold_v1::eligibility_class_view_v1(&s, &h64(class)).expect("registered");
+            crate::palw_state_v2::palw_model_eligibility_fold_v1::eligibility_class_view_v1(&s, p, &h64(class)).expect("registered");
         let probation =
             palw_eligibility_new_probation_row_v1(h64(class).as_bytes(), view.lineage, view.principal, FENCE + 10, FENCE + 10);
         s.kernel_route.as_mut().unwrap().aux.insert(
@@ -261,6 +270,135 @@ fn commit_then_draw_on_the_real_anchor_promotes_on_k_of_m() {
     }
 }
 
+/// The dormant review's fixture with ADR-0179's tier fence armed at the same height (round 5: the tier fence retires the review).
+fn tiered() -> PalwStateParamsV2 {
+    armed().with_model_tier_v1(Some(
+        crate::palw_model_tier_v1::PalwModelTierFenceV1::at(crate::config::params::ForkActivation::new(FENCE)).mirror(),
+    ))
+}
+
+/// **Round 5 (user decision 2026-10-15): no model-level review for any model.** Under `palw_model_tier_v1` a class registered past the
+/// fence is admitted on every lane at once (no Registered / Probation stage), reads `not-governed` with the tier `registered` (0.3)
+/// from its registration, takes no exam, and is still `registered` however long after; the genesis floor is `approved` (1.0). The
+/// tier read is the same after a restart (the carriage) and for a second node replaying the chain (IBD).
+#[test]
+fn round5_no_model_review_under_the_tier_fence_and_a_registered_model_stays_0_3() {
+    let p = tiered();
+    let mut s = world(&p);
+    // A bare registration: no eligibility row at all.
+    s.kernel_route
+        .as_mut()
+        .unwrap()
+        .aux
+        .remove(&(PALW_MODEL_ELIGIBILITY_TABLE_V1, eligibility_model_key_v1(&h64(ENTRANT).as_bytes())));
+    let x = extras();
+    let read = PalwFoldReadV1::outside(&s, &p, &x);
+    for lane in [PalwGatedClaimV1::Attempt, PalwGatedClaimV1::FreePrompt { quanta: 1 }, PalwGatedClaimV1::Evaluation] {
+        assert!(read.check_class_admits_claim(&h64(ENTRANT), PROMOTE, lane).is_ok(), "no review gate: {lane:?}");
+    }
+    for daa in [FENCE + 10, PROMOTE, PROMOTE + 10_000 * DAY] {
+        let status = palw_eligibility_status_of_v1(&s, &p, &h64(ENTRANT), daa);
+        assert_eq!(status.stage, "not-governed", "no stage at {daa}");
+        assert_eq!((status.model_tier.as_str(), status.model_tier_permille), ("registered", 300), "0.3 at {daa}");
+    }
+    let floor = palw_eligibility_status_of_v1(&s, &p, &h64(1), PROMOTE);
+    assert_eq!((floor.model_tier.as_str(), floor.model_tier_permille), ("approved", 1_000));
+    // No exam is taken (inner 74 refused) — nothing to promote to.
+    let s2 = anchored(s.clone(), 7);
+    let c = commit(ENTRANT, EligibilityExamPurposeV1::Promotion, 16, 0, 1);
+    assert!(step(&s2, &p, PROMOTE, &[route(1, KernelRouteObjectV1::CommitEligibilityExamV1 { commit: c })]).is_err());
+    // Restart and IBD: the same tier.
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s)).unwrap();
+    let back = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&p, Some(s.state_root())).expect("a restart");
+    let ibd = world(&p);
+    for state in [&back, &ibd] {
+        assert_eq!(
+            crate::palw_model_tier_v1::palw_model_tier_at_v1(state, &p, &h64(ENTRANT), PROMOTE),
+            crate::palw_model_tier_v1::PalwModelTierV1::Registered
+        );
+    }
+}
+
+/// **U-8 (user decision 2026-10-15): the deterministic eligibility snapshot** — the rows `roll_epoch` reads through the allocation's
+/// eligible-capital hook (stages, exams, lineage / principal / network counters, pins) are a function of the chain alone: the same
+/// after a reorg (the block's delta reverts to its parent, another branch differs, re-applying it comes back), an IBD (a second node
+/// replaying the same blocks from genesis) and a restart (the carriage round-trip, aux 131 included).
+#[test]
+fn u8_the_eligibility_snapshot_is_the_same_after_reorg_ibd_and_restart() {
+    let p = armed();
+    let c = commit(ENTRANT, EligibilityExamPurposeV1::Promotion, 16, 0, 1);
+    let objects = [route(1, KernelRouteObjectV1::CommitEligibilityExamV1 { commit: c })];
+    let run = || {
+        let s0 = anchored(world(&p), 7);
+        let (s1, d1) = apply_palw_transition_v2_with_extras(
+            &s0,
+            &p,
+            &ctx(PROMOTE, PROMOTE, PROMOTE),
+            &objects,
+            None,
+            false,
+            false,
+            false,
+            false,
+            &extras(),
+        )
+        .expect("the commit lands");
+        (s0, s1, d1)
+    };
+    let (s0, s1, d1) = run();
+    // IBD: another node replaying the same chain from genesis.
+    let (_, ibd, _) = run();
+    assert_eq!(ibd.state_root(), s1.state_root(), "IBD: the same root");
+    assert_eq!(model(&ibd, ENTRANT), model(&s1, ENTRANT), "IBD: the same eligibility row");
+    // Reorg: revert to the parent, take the other branch, come back.
+    assert_eq!(revert_delta_v2(&s1, &d1, &p).unwrap().state_root(), s0.state_root(), "the delta reverts exactly");
+    let other = step(&s0, &p, PROMOTE, &[]).expect("the other branch");
+    assert_ne!(other.state_root(), s1.state_root(), "the branches differ");
+    assert_eq!(apply_delta_v2(&s0, &d1, &p).unwrap().state_root(), s1.state_root(), "back on the first branch");
+    // Restart: the carriage round-trips aux 131.
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s1)).unwrap();
+    let back = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&p, Some(s1.state_root())).expect("a restart");
+    assert_eq!(back.state_root(), s1.state_root(), "restart: the same root");
+    assert_eq!(model(&back, ENTRANT), model(&s1, ENTRANT));
+    // The stage the allocation's roll reads agrees everywhere it is probed.
+    for daa in [PROMOTE, PROMOTE + DAY, PROMOTE + 40 * DAY] {
+        let read = palw_eligibility_status_of_v1(&s1, &p, &h64(ENTRANT), daa);
+        assert_eq!(palw_eligibility_status_of_v1(&back, &p, &h64(ENTRANT), daa), read, "restart at {daa}");
+        assert_eq!(palw_eligibility_status_of_v1(&ibd, &p, &h64(ENTRANT), daa), read, "IBD at {daa}");
+    }
+}
+
+/// **U-4 (user decision 2026-10-15): the attempt cost is split** — (a) the burn fee is destroyed at the commit, (b) the inspection
+/// escrow (fee per position × m) is taken from the applicant at the commit and, once the exam decides, paid from the payout queue to
+/// the drawn positions that attested (the rest returned): `Σ legs = escrow`, a transfer, never new issuance.
+#[test]
+fn u4_the_inspection_escrow_is_paid_to_the_attesting_positions() {
+    const PER_POSITION: u64 = 1;
+    let policy = PalwModelEligibilityPolicyV1 { inspection_fee_per_position_sompi: PER_POSITION, ..test_policy() };
+    let escrow = PER_POSITION * policy.exam_m as u64;
+    let p = armed_with(policy);
+    let (s, id) = committed_and_drawn(&p);
+    assert_eq!(s.bond(&bond_key(1)).unwrap().collateral, 1_000 - FEE - escrow, "burn fee and escrow both left the applicant");
+    let e = exam(&s, &id);
+    assert_eq!((e.inspection_escrow_sompi, e.inspection_settled), (escrow, false));
+    let mut drawn: Vec<u64> = e.draws.iter().map(bond_of_kid).collect();
+    drawn.sort_unstable();
+    drawn.dedup();
+    let objects: Vec<_> = drawn.iter().map(|b| attest(id, *b, EligibilityVerdictV1::Reproduced)).collect();
+    let before = s.pending_payouts.len();
+    let s = step(&s, &p, PROMOTE + 3, &objects).expect("the attestations land and the exam decides");
+    let s = step(&s, &p, PROMOTE + 4, &[]).expect("the next sweep settles the escrow");
+    let e = exam(&s, &id);
+    assert!(e.inspection_settled);
+    let legs: u64 = drawn
+        .iter()
+        .filter_map(|b| s.pending_payouts.get(&Hash64::from_bytes(palw_eligibility_inspection_payout_key_v1(&id, &kid(*b)))))
+        .map(|payout| payout.amount)
+        .sum();
+    assert_eq!(legs, escrow, "every position attested: the whole escrow is paid to the attesting verifiers, nothing refunded");
+    assert_eq!(s.pending_payouts.len(), before + drawn.len());
+}
+
 /// **§4C / §7-7: attestation absent ⇒ no promotion, and nobody is slashed** — the drawn verifiers stay silent (or report the model
 /// unobtainable); at the deadline the exam is `NotPromoted`, the class stays `Probation`, and the only collateral that moved is the
 /// committer's fee.
@@ -289,7 +427,7 @@ fn re_registering_the_same_weights_keeps_the_attempt_history() {
     let p = armed();
     let (s, _) = committed_and_drawn(&p);
     let same =
-        crate::palw_state_v2::palw_model_eligibility_fold_v1::eligibility_class_view_v1(&s, &h64(RE_REGISTERED)).unwrap().lineage;
+        crate::palw_state_v2::palw_model_eligibility_fold_v1::eligibility_class_view_v1(&s, &p, &h64(RE_REGISTERED)).unwrap().lineage;
     assert_eq!(same, model(&s, ENTRANT).lineage, "one artifact root, one lineage");
     let later = PROMOTE + test_policy().attempt_cooldown_daa + 3;
     let replay = commit(RE_REGISTERED, EligibilityExamPurposeV1::Promotion, 16, 0, 2);

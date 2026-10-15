@@ -76,6 +76,9 @@ impl Compiled {
         block_bytes: usize,
         expected_record: Option<&BuildRecord>,
     ) -> Result<Conversion> {
+        if self.stage_program.is_some() {
+            return Err(bad("FRONTEND_STAGE28_REQUIRES_PIPELINE_WRITER"));
+        }
         if !(8..=MAX_BLOCK_BYTES).contains(&block_bytes) {
             return Err(bad("FRONTEND_STREAM_LIMIT: block bytes must be 8..=16MiB"));
         }
@@ -222,7 +225,7 @@ impl Compiled {
     }
 }
 
-fn integer(dtype: &str, bytes: &[u8]) -> i128 {
+pub(super) fn integer(dtype: &str, bytes: &[u8]) -> i128 {
     let mut raw = [0u8; 8];
     raw[..bytes.len()].copy_from_slice(bytes);
     let u = u64::from_le_bytes(raw);
@@ -302,5 +305,113 @@ mod tests {
         assert!(ieee_integer("F16", &0x7c00u16.to_le_bytes(), 0, Rounding::Floor).is_err());
         assert_eq!(ieee_integer("BF16", &0x3f80u16.to_le_bytes(), 12, Rounding::Floor).unwrap(), 4096);
         assert_eq!(ieee_integer("F16", &0xc100u16.to_le_bytes(), 0, Rounding::HalfAwayFromZero).unwrap(), -3);
+    }
+}
+
+impl Compiled {
+    /// New full-component producer's bounded real-weight stream. Inputs are never parameters.
+    pub(super) fn write_stage_tensor_v28(
+        &self,
+        source: &dyn TensorSource,
+        j: u16,
+        l: Option<u16>,
+        out: &mut dyn std::io::Write,
+        block_bytes: usize,
+    ) -> Result<super::stage28::StageTensorReportV28> {
+        if self.stage_program.is_none() || !(8..=MAX_BLOCK_BYTES).contains(&block_bytes) || !self.bindings.contains_key(&(j, l)) {
+            return Err(bad("FRONTEND_STAGE28_TENSOR_OR_BUDGET"));
+        }
+        source.validate_snapshot()?;
+        let mut records = BTreeMap::<String, SourceRecord>::new();
+        let mut saturated_values = 0u64;
+        let mut tensor_bytes = 0u64;
+        let mut max_read_bytes = self.metadata_max_read_bytes;
+        let mut source_read_bytes = self.metadata_read_bytes;
+        let mut quant_formats = BTreeMap::new();
+        let result = (|| -> std::result::Result<(), String> {
+            let r = &self.bindings[&(j, l)];
+            let dtype = self.program.params[j as usize].dtype;
+            if let Some(decoder) = &r.decoder {
+                let converted =
+                    decoder.write(&r.sources, source, dtype, &r.binding.import, out, block_bytes).map_err(|e| e.to_string())?;
+                max_read_bytes = max_read_bytes.max(converted.peak);
+                source_read_bytes += converted.read_bytes;
+                tensor_bytes += converted.bytes;
+                saturated_values += converted.saturated;
+                if let Import::Descriptor { format, .. } = &r.binding.import {
+                    quant_formats.insert(format.clone(), decoder.format.digest_hex());
+                }
+                for record in converted.records {
+                    if records.get(&record.name).is_some_and(|previous| previous != &record) {
+                        return Err("FRONTEND_BINDING: tied descriptor tensor changed during conversion".into());
+                    }
+                    records.insert(record.name.clone(), record);
+                }
+                return Ok(());
+            }
+            let width = stored_width(&r.meta.dtype).expect("preflight storage type");
+            // Bound both the stored and encoded buffers, even for I8 -> I64 widening.
+            let block = (block_bytes / width.max(dtype.width()) * width) as u64;
+            let mut hash = blake2b_simd::Params::new().hash_length(64).key(b"MISAKA/PALW/TIR/FRONTEND/TENSOR/V1").to_state();
+            hash.update(canonical_json(&serde_json::json!({"dtype":r.meta.dtype,"shape":r.meta.shape})).as_bytes());
+            let mut at = 0u64;
+            while at < r.meta.bytes {
+                let end = at.saturating_add(block).min(r.meta.bytes);
+                let bytes = source.read_slice(&r.binding.source, at..end).map_err(|e| e.to_string())?;
+                if bytes.len() as u64 != end - at {
+                    return Err(format!("FRONTEND_BINDING: short range of {}", r.binding.source));
+                }
+                max_read_bytes = max_read_bytes.max(bytes.len());
+                source_read_bytes += bytes.len() as u64;
+                hash.update(&bytes);
+                let mut encoded = Vec::with_capacity(bytes.len() / width * dtype.width());
+                for chunk in bytes.chunks_exact(width) {
+                    let value = match r.binding.import {
+                        Import::Integer => integer(&r.meta.dtype, chunk),
+                        Import::FixedPoint { shift, round, .. } => {
+                            ieee_integer(&r.meta.dtype, chunk, shift, round.compile()).map_err(|e| e.to_string())?
+                        }
+                        Import::Descriptor { .. } => unreachable!("handled by bounded descriptor writer"),
+                    };
+                    let value = if dtype.contains(value) {
+                        value
+                    } else {
+                        match r.binding.import {
+                            Import::FixedPoint { overflow: Overflow::Saturate, .. } => {
+                                saturated_values += 1;
+                                value.clamp(dtype.min_value(), dtype.max_value())
+                            }
+                            _ => return Err(format!("FRONTEND_QUANT_RANGE: {} value outside {}", r.binding.source, dtype.name())),
+                        }
+                    };
+                    dtype.encode_le(value, &mut encoded);
+                }
+                tensor_bytes += encoded.len() as u64;
+                out.write_all(&encoded).map_err(|e| e.to_string())?;
+                at = end;
+            }
+            let record = SourceRecord {
+                name: r.binding.source.clone(),
+                dtype: r.meta.dtype.clone(),
+                shape: r.meta.shape.clone(),
+                digest: program::hex(hash.finalize().as_bytes()),
+            };
+            if records.get(&record.name).is_some_and(|previous| previous != &record) {
+                return Err("FRONTEND_BINDING: tied tensor changed during conversion".into());
+            }
+            records.insert(record.name.clone(), record);
+            Ok(())
+        })()
+        .map_err(LowerError::weights);
+        result?;
+        source.validate_snapshot()?;
+        Ok(super::stage28::StageTensorReportV28 {
+            tensor_bytes,
+            source_read_bytes,
+            max_read_bytes,
+            saturated_values,
+            source_tensors: records.into_values().collect(),
+            quant_formats,
+        })
     }
 }

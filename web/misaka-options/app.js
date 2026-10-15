@@ -876,13 +876,28 @@ const wallet = {
 async function addEstimatedGas(tx) {
   if (tx.gas != null) return tx;
   if (!wallet.provider || typeof wallet.provider.request !== 'function') throw new Error('The wallet cannot estimate transaction gas.');
-  const estimate = bi(await wallet.provider.request({ method: 'eth_estimateGas', params: [tx] }));
+  let estimate;
+  try { estimate = bi(await wallet.provider.request({ method: 'eth_estimateGas', params: [tx] })); }
+  catch (e) {
+    // MISAKA Wallet moves what a payment is short of from the UTXO lane inside the confirmation, so an
+    // account that is short NOW cannot be estimated now: the node refuses with LackOfFundForMaxFee. Left
+    // to itself the wallet then signs with its 21,000 fallback, which no facade call fits. Name the
+    // ceiling instead (the wallet shows it before signing); any other failure still stops the order.
+    // (feat/misakaoptions-access-first 36902502d, ported in the 2026-10-15 merge sweep.)
+    if (estimateShortOfFunds(e) && wallet.topsUp()) { tx.gas = toHex(FACADE_CALL_GAS_CEILING); return tx; }
+    throw e;
+  }
   if (estimate <= 0n) throw new Error('The node returned an invalid gas estimate.');
   // 25% headroom covers a small state change between estimation and signing;
   // the estimator still supplies the transaction-specific intrinsic cost.
   tx.gas = toHex(estimate + (estimate / 4n) + 1000n);
   return tx;
 }
+
+// The gas a facade call is given when the node cannot estimate it for a topping-up wallet short of funds.
+const FACADE_CALL_GAS_CEILING = 120000n;
+// The node's refusal to estimate for an account whose balance is short of the call's value.
+function estimateShortOfFunds(e) { return /LackOfFund|insufficient funds?/i.test(String((e && (e.message || (e.data && e.data.message))) || e || '')); }
 
 // ============================================================================================
 // 6. local records: price history (sampled), sent transactions

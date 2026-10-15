@@ -85,6 +85,7 @@ impl MisakaWalletExpectationsV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "code")]
 pub enum MisakaPreflightRefusalV1 {
+    InvalidCapabilities { reason: String },
     GenesisMismatch { expected: String, reported: Option<String> },
     ImportStatusMissing,
     ImportIncomplete { phase: String, point: String },
@@ -95,6 +96,7 @@ pub enum MisakaPreflightRefusalV1 {
 impl std::fmt::Display for MisakaPreflightRefusalV1 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidCapabilities { reason } => write!(f, "invalid wallet capability snapshot: {reason}"),
             Self::GenesisMismatch { expected, reported } => {
                 write!(f, "the node runs genesis {reported:?}, not the expected {expected}; nothing is signed for it")
             }
@@ -210,6 +212,23 @@ pub fn evaluate_preflight_v1(
     expectations: &MisakaWalletExpectationsV1,
     subnetworks: &[SubnetworkId],
 ) -> Result<MisakaPreflightOkV1, MisakaPreflightRefusalV1> {
+    // Native callers and JSON/WASM callers must enforce the same version and
+    // facts. The serialized display enum is not a fourth authority read.
+    if capabilities.schema != MISAKA_WALLET_CAPABILITY_SCHEMA_V1 || capabilities.version != MISAKA_WALLET_CAPABILITY_VERSION_V1 {
+        return Err(MisakaPreflightRefusalV1::InvalidCapabilities { reason: "unknown schema/version".into() });
+    }
+    let authority = if capabilities.dns_retired_at.is_some() {
+        MisakaFinalityAuthorityV1::Native
+    } else if capabilities.dns_authority_available {
+        MisakaFinalityAuthorityV1::Dns
+    } else {
+        MisakaFinalityAuthorityV1::Unknown
+    };
+    if capabilities.finality_authority != authority {
+        return Err(MisakaPreflightRefusalV1::InvalidCapabilities {
+            reason: "reported finality authority contradicts the capability facts".into(),
+        });
+    }
     if let Some(expected) = &expectations.expected_genesis_hash
         && capabilities.genesis_hash.as_deref().is_none_or(|reported| !reported.eq_ignore_ascii_case(expected))
     {
@@ -260,9 +279,49 @@ pub async fn preflight(
     expectations: &MisakaWalletExpectationsV1,
     transactions: &[Transaction],
 ) -> Result<MisakaPreflightOkV1, MisakaPreflightRefusalV1> {
-    let capabilities = fetch_capabilities_v1(rpc).await;
+    let before = rpc.get_palw_node_status().await.map_err(|e| e.to_string());
+    let settlement = rpc.get_palw_settlement(0).await.map_err(|e| e.to_string());
+    let dns = rpc.get_dns_confirmation().await.map_err(|e| e.to_string());
+    let after = rpc.get_palw_node_status().await.map_err(|e| e.to_string());
+    check_read_bracket_v1(&before, &after)?;
+    let capabilities = capabilities_from_reads_v1(
+        before.as_ref().map_err(Clone::clone),
+        settlement.as_ref().map_err(Clone::clone),
+        dns.as_ref().map_err(Clone::clone),
+    );
     let subnetworks: Vec<SubnetworkId> = transactions.iter().map(|tx| tx.subnetwork_id.clone()).collect();
     evaluate_preflight_v1(&capabilities, expectations, &subnetworks)
+}
+
+pub(crate) fn check_read_bracket_v1(
+    before: &Result<GetPalwNodeStatusResponse, String>,
+    after: &Result<GetPalwNodeStatusResponse, String>,
+) -> Result<(), MisakaPreflightRefusalV1> {
+    let stable = match (before, after) {
+        (Ok(a), Ok(b)) => {
+            a.genesis_hash == b.genesis_hash
+                && a.drill_salt_id == b.drill_salt_id
+                && a.consensus_params_id == b.consensus_params_id
+                && a.consensus_schedule_id == b.consensus_schedule_id
+                && a.import_session_available == b.import_session_available
+                && a.import_session_epoch == b.import_session_epoch
+                && a.import_session_point == b.import_session_point
+                && a.import_session_phase == b.import_session_phase
+                && a.pruning_import_stable == b.pruning_import_stable
+        }
+        // Preserve the dormant legacy capability rule. The normal evaluator
+        // still rejects missing genesis/import status whenever the caller's
+        // expectations require it; no native import is certified by this arm.
+        (Err(_), Err(_)) => true,
+        _ => false,
+    };
+    if stable {
+        Ok(())
+    } else {
+        Err(MisakaPreflightRefusalV1::InvalidCapabilities {
+            reason: "node identity or durable import epoch changed during the capability reads; retry before signing".into(),
+        })
+    }
 }
 
 /// JSON form for bindings (wasm, FFI): `{"ok":true,...}` or `{"ok":false,"refusal":{"code":...}}`. Malformed input refuses.
@@ -308,6 +367,35 @@ mod tests {
     }
     fn expect(retirement: Option<u64>) -> MisakaWalletExpectationsV1 {
         MisakaWalletExpectationsV1 { expected_genesis_hash: Some("AA".repeat(64)), retirement_daa: retirement }
+    }
+
+    #[test]
+    fn a_completed_import_between_stable_reads_is_not_the_same_signing_view() {
+        let mut before = status("idle", true);
+        before.import_session_epoch = 7;
+        let mut after = before.clone();
+        after.produced_blocks += 1;
+        assert!(check_read_bracket_v1(&Ok(before.clone()), &Ok(after.clone())).is_ok(), "ordinary production can advance");
+        after.import_session_epoch += 1;
+        assert!(check_read_bracket_v1(&Ok(before.clone()), &Ok(after)).is_err(), "stable -> import -> stable is still a new epoch");
+        assert!(check_read_bracket_v1(&Ok(before), &Err("restarted".into())).is_err());
+    }
+
+    #[test]
+    fn a_serialized_authority_cannot_override_failed_reads_or_another_capability_version() {
+        let mut caps = capabilities_from_reads_v1(Ok(&status("idle", true)), Err("down".into()), Err("down".into()));
+        caps.finality_authority = MisakaFinalityAuthorityV1::Dns;
+        assert!(matches!(evaluate_preflight_v1(&caps, &expect(None), &[]), Err(MisakaPreflightRefusalV1::InvalidCapabilities { .. })));
+        let value: serde_json::Value = serde_json::from_str(&evaluate_preflight_json_v1(
+            &serde_json::to_string(&caps).unwrap(),
+            &serde_json::to_string(&expect(None)).unwrap(),
+            "[]",
+        ))
+        .unwrap();
+        assert_eq!(value["refusal"]["code"], "invalidCapabilities");
+        caps.finality_authority = MisakaFinalityAuthorityV1::Unknown;
+        caps.version += 1;
+        assert!(matches!(evaluate_preflight_v1(&caps, &expect(None), &[]), Err(MisakaPreflightRefusalV1::InvalidCapabilities { .. })));
     }
 
     #[test]

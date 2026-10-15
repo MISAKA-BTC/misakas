@@ -72,7 +72,12 @@ pub const VALIDATOR_SEED_LEN: usize = 32;
 /// (`fees 30000 … under the required amount of 232600`), wedging any validator that hit the
 /// fallback. 250 000 sits above that observed minimum yet below every real mass-based fee, so it can
 /// never be the under-fee cause again without over-charging the normal path.
-pub const ATTESTATION_TX_FEE_FLOOR_SOMPI: u64 = 250_000;
+pub const ATTESTATION_TX_FEE_FLOOR_SOMPI: u64 = PALW_TX_FEE_FLOOR_SOMPI;
+
+/// **The same flat fee floor under its role-neutral name** (RFC-0012 §5: extract the shared helpers before the DNS-only service
+/// retires). PALW, wallet and operator transactions use this name; [`ATTESTATION_TX_FEE_FLOOR_SOMPI`] stays the DNS validator's
+/// spelling of the identical value, so nothing a validator or PALW caller pays changes.
+pub const PALW_TX_FEE_FLOOR_SOMPI: u64 = 250_000;
 
 /// Convert a transaction's non-contextual **compute mass** into the node's minimum relay fee
 /// (sompi), matching `minimum_required_transaction_relay_fee` in
@@ -426,6 +431,52 @@ pub fn build_fp_commitment_tx_with_original_public_v1(
         funding,
         fee,
     )
+}
+
+/// **G14 R1/R2: an ORIGINAL TIR frame's carrier (`TFP1`)** — the plain original FP commitment (signed and stateless-checked by
+/// [`build_fp_commitment_tx_with`], byte for byte), wrapped with its TIR binding header, the producer's signed source pledge and the
+/// exact native rent it declares. The declaration is burned from this carrier's fee by consensus, so `fee` must cover relay AND
+/// `declared_rent_sompi`; admission refuses a carrier that pays less or declares another amount than the native plan's rent.
+#[allow(clippy::too_many_arguments)]
+pub fn build_fp_commitment_tx_with_tir_public_original_v1(
+    signer: &dyn MessageSigner,
+    network_domain: Hash64,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    commitment: PalwFreePromptCommitmentV3,
+    prompt_token_ids: Vec<u32>,
+    price: FpCommitmentPriceV1<'_>,
+    header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    pledge: &kaspa_consensus_core::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1,
+    history_pledge: Option<&kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
+    declared_rent_sompi: u64,
+    funding_outpoint: TransactionOutpoint,
+    funding: &UtxoEntry,
+    fee: u64,
+) -> Result<Transaction, String> {
+    if fee <= declared_rent_sompi {
+        return Err(format!("carrier fee {fee} does not cover the original TIR rent {declared_rent_sompi} it declares"));
+    }
+    let plain = build_fp_commitment_tx_with(
+        signer,
+        network_domain,
+        prompt_ids_form,
+        commitment,
+        prompt_token_ids,
+        price,
+        funding_outpoint,
+        funding,
+        fee,
+    )?;
+    let mut envelope = kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::new_v1(
+        plain.payload.clone(),
+        header.clone(),
+        pledge.clone(),
+        declared_rent_sompi,
+    )?;
+    if let Some(history) = history_pledge {
+        envelope = envelope.with_history_pledge_v1(history.clone())?;
+    }
+    build_funded_overlay_tx_with(signer, SUBNETWORK_ID_PALW_FP_COMMITMENT, envelope.encode_v1()?, funding_outpoint, funding, fee, false)
 }
 
 /// An external producer's original public envelope (version 2): the same original FP claim and

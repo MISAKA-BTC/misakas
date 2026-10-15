@@ -1396,6 +1396,39 @@ pub fn adjudicate_court_close_v4(
     // RFC-0006 R6-CELL round 4: `palw_cell_coverage_closure_v1`'s mirror — see this function's docs.
     cell_closure_from_daa: Option<u64>,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
+    adjudicate_court_close_v5(
+        state,
+        session_id,
+        proof,
+        court,
+        step_ladder,
+        prompt_ids_form,
+        held_regime,
+        decode_close_convicts_only,
+        fp_decode_rules_from_daa,
+        cell_closure_from_daa,
+        None,
+    )
+}
+
+/// [`adjudicate_court_close_v4`] knowing RFC-0006's memory/routing consumer v2 (`palw_memory_routing_court_v2`'s mirror,
+/// `PalwStateParamsV2::memory_routing_court_from_daa`, `None` on every shipped network): for a claim accepted past BOTH the coverage
+/// closure and that mirror, REQ-CELL-2's objective conviction reads the consumer-v2 coverage (the solo / composed recurrence maps and,
+/// with the class's covering router binding from aux 139, the routed tables are covered). `None`: byte for byte v4.
+#[allow(clippy::too_many_arguments)]
+pub fn adjudicate_court_close_v5(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    proof: &PalwCourtVerdictProofV2,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    step_ladder: u64,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    held_regime: bool,
+    decode_close_convicts_only: bool,
+    fp_decode_rules_from_daa: Option<u64>,
+    cell_closure_from_daa: Option<u64>,
+    memory_routing_from_daa: Option<u64>,
+) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     // The cost gate runs before ANY state is read, which is the cheapest-first ordering a cost
     // bound has to have: an oversized object must be refusable without a lookup, a decode or a
     // hash. A close for a session that does not exist and also breaks the ceiling therefore reports
@@ -1429,10 +1462,12 @@ pub fn adjudicate_court_close_v4(
     // because the fault is the class's shape, not a step's value. Below the fence (`None`) nothing here runs.
     // A covered class (or a claim accepted before the fence) goes on below exactly as before; the pins run only before a conviction.
     if let Some(binding) = binding_of(proof)
-        && crate::palw_cell_coverage_closure_v1::palw_cell_closure_court_convicts_v1(
+        && crate::palw_cell_coverage_closure_v1::palw_cell_closure_court_convicts_v2(
             cell_closure_from_daa,
+            memory_routing_from_daa,
             claim.accepted_daa,
             &binding.shape_profile,
+            crate::palw_state_v2::palw_router_binding_row_of_v2(state, &claim.class_id).as_ref(),
         )
     {
         check_close_profile_is_the_registered_class(claim.class_id, binding)?;
@@ -1705,7 +1740,6 @@ fn adjudicate_tir_close_proof_v1(
     step_ladder: u64,
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
-    use crate::palw_tir_court_v1 as tir;
     // **The program is the registered class's** (the coordinator's decision of 2026-09-28): an IR
     // close carries its binding with the program empty, and the chain puts back the program its
     // `tir_classes` row holds before anything reads the binding — so every pin below runs on the
@@ -1723,23 +1757,7 @@ fn adjudicate_tir_close_proof_v1(
     let proof = &filled;
     let binding = proof.tir_binding_v1().expect("filled above");
     check_tir_binding_is_the_claims_v1(state, claim, binding)?;
-    let rules = tir::PalwTirCourtRulesV1 {
-        max_step_leaf_count: step_ladder,
-        prompt_form: prompt_ids_form,
-        limits: palw_tir_court_limits_v1(court),
-    };
-    map_refutation_outcome(match proof {
-        PalwCourtVerdictProofV2::TirCone { refutation } => tir::check_tir_cone_refutation_v1(refutation, &rules),
-        PalwCourtVerdictProofV2::TirLogits { accusation } => tir::check_tir_logits_consistency_v1(accusation, &rules),
-        PalwCourtVerdictProofV2::TirDecodeTokenTiled { binding, pin } => tir::check_tir_decode_token_tiled_v1(binding, pin, &rules),
-        PalwCourtVerdictProofV2::TirDecodeToken { binding, pin, position } => {
-            tir::check_tir_decode_token_flat_v1(binding, pin, *position)
-        }
-        // RFC-0002 F7: graded against its phase, in `adjudicate_court_close_v3` — refused here, never
-        // read as "no fault found" (which would acquit).
-        PalwCourtVerdictProofV2::TirDissection { .. } => return Err(PalwCourtV2Error::DissectionCloseNeedsItsSession),
-        _ => return Err(PalwCourtV2Error::DoesNotAdjudicate("not an IR close".into())),
-    })
+    crate::palw_tir_objective_v1::adjudicate_filled_v1(proof, court, step_ladder, prompt_ids_form)
 }
 
 /// **An IR binding as the chain reads it** (the coordinator's decision of 2026-09-28): the carried

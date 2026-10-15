@@ -1,5 +1,9 @@
 # ADR index — what governs, and what was reversed
 
+> **凍結前提(2026-10-15):** genesis・年次フォーク指定モデルは 1.0、後から登録したモデルは登録時点から審査なしで 0.3 固定(1.0 への経路は年次フォーク指定のみ)。モデル単位の検証は不採用([PRINCIPLES §9](../PRINCIPLES.md))。claim 単位の検証は全モデルで維持。
+
+> **恒久決定(2026-10-15):** LLM・モデル計算の正しさを暗号学的に証明する仕組み(ZK、zk-SNARK/STARK、zkVM・zkML、PCS ベースの succinct proof など)は一切使用せず、今後も使用しない([PRINCIPLES §8](../PRINCIPLES.md))。
+
 > **設計前提(ADR・RFC より上位)— [MISAKAの不可侵原則](../PRINCIPLES.md):** 確率的に検出し、公開証拠で局所化し、決定論的に裁き、経済的に不正を抑止する。この索引のすべての文書はこの前提の下にあり、衝突する場合は前提が優先する(2026-10-09)。
 
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
@@ -23,6 +27,7 @@ ADR 以外に残っていた [三つの EVM lane](../misaka-base-3lane-execution
 
 | Decision | Authority and scope |
 | --- | --- |
+| [ADR-0179](0179-model-tiers-genesis-annual-1-0-registered-0-3.md) | Accepted, 2026-10-15 (user decisions rounds 4–5; governing premise PRINCIPLES §9, frozen): model tiers — `ApprovedModels(h)` (genesis + add-only annual fork lists) 1.0, every on-chain registered model fixed 0.3 from registration; model-level review abolished for all models (what to trust in such a review cannot be solved); `c_m` applied once in the allocation weight with a registered-tier aggregate cap; per-claim Gate C / courts / drawn certification for every tier. Implemented dormant (fence `palw_model_tier_v1`), unbuilt; supersedes RFC-0017's review. |
 | [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md) | Accepted direction, 2026-10-10後続改定: abolish MISAKA Torrent/dedicated Seeder rewards; model acquisition outside consensus; distinct miner-capital coinbase allocation; conditional G14; economic superiority/allocation implementation and activation pending. 2026-10-14 decision (α = 1.5, 30-day miner + verifier average, P_m for block opportunity and coinbase, no registrant leg) implemented dormant 2026-10-15 (V3 allocation policy; [status](../design/palw/adr-0162-0178-implementation-status-2026-10-15.md)). |
 | [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md) | Accepted design premise, 2026-10-10: probabilistic verification plus bond/time-limited claim capacity, block/reward/Final-weight budgets, common reuse clock and retained liability. Capacity multiplication preserves total economic/consensus credit. Implementation/activation pending. 2026-10-15: ユーザー方針 (1-day Panel=1 / 7-day Panel=0 hold, per-day equalized caps, burst, measurement plan) and ユーザー判断 (bond式の再設計, fence `palw_bond_formula_v2`) implemented dormant, unbuilt ([status](../design/palw/adr-0162-0178-implementation-status-2026-10-15.md), [decisions](../design/palw/adr-0162-0178-user-decisions-2026-10-15.md)). |
 | [ADR-0175](0175-registered-models-are-permanently-immutable.md) | Permanent identity/new independent registrations and no Position/AMM retarget. Earlier availability amendment withdrawn under ADR177; immutable implementation/fence keeps its historical unarmed scope. |
@@ -40,7 +45,7 @@ ADR 以外に残っていた [三つの EVM lane](../misaka-base-3lane-execution
 
 ## モデル入手への不介入・model-bond配分 — 2026-10-10後続改定
 
-本review文書群ではADR-0177を使用済みとし、次の新規番号はADR-0178とする。以下の旧番号予約表は各時点の履歴である。
+本review文書群ではADR-0177を使用済みとし、次の新規番号はADR-0178とする。(2026-10-15: ADR-0179 まで使用済み。次の新規番号は ADR-0180。)以下の旧番号予約表は各時点の履歴である。
 
 [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を現行設計方針とする。
 **MISAKA Torrentの採用/統合、専用Bonded Seeder、Seeder報酬・固定15%配分を廃止する。**

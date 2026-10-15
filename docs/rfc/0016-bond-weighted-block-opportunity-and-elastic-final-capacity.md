@@ -538,6 +538,24 @@ ACTIVATION_ALLOWED
 確定事項（`α = 1.5`、30日平均、`W_hold` 7日（Panel=0）・1日（Panel=1）、`B = F = 0`、Kernel claimへのcoinbase legなし、escrowのclip禁止）は判断対象ではない。
 個別capを引き上げて配分を使い切らせる選択肢は設けない。
 
+### 14.2 ユーザー判断 2026-10-15（V2〜V11）の実装状況
+
+数値は校正・受入試験の出発点で本番値ではない。休眠・未build・未試験（PASSではない）。行番号は[実装状況](../design/palw/rfc-0016-implementation-status-2026-10-15.md) §8。
+
+| ID | 状態 |
+| --- | --- |
+| V1 | 決定済み（D-V1）→ 実装済み（§16） |
+| V2 | 2026-10-15決定 → 実装: 校正初期値 σ=0.25・φ=0.5・pace 1.2・k=1（`PALW_RFC0016_CALIBRATION_START_V1`）、`A_m`欠損時は再発行なし（`ReissueUnavailable`、先着なし）。本番値は測定待ち |
+| V3 | 2026-10-15決定 → 実装: entrant reserve ≤ 20‰、RFC-0017 Probationと一つのpool（明示的netting）、Probationモデル上限2‰、`S_entry` = 適格な最低producer bond |
+| V4 | 測定待ち |
+| V5 | 2026-10-15決定 → 実装: 1 epoch = 720 DAA、30日窓 = 21,600 DAA（校正）、DAAと実時間のずれをRPCとharnessで報告（「24 h」と表示しない） |
+| V6 | 2026-10-15決定 → 測定・選択toolに実装（不変条件違反0、正直cap利用率≥80 %、V+なし比REAL劣化≤5 %暫定）。測定は未実施 |
+| V7 | 2026-10-15決定 → 実装: bond資本比例のqueue取り分、quoteは権利でない（決定論的な再検査）、TTL超過は中立終了。`L_queue`・`T_queue`・`h`は測定待ち |
+| V8 | 2026-10-15決定 → 実装: 署名対象を固定した容量attestationの型・検査、verifierのモデル間二重計上なし、`sigma_cap` ≤ 1、計算量・メモリ・DA・court負荷の一体評価。attestationのcarriage（object種別）は未割当 |
+| V9 | 2026-10-15決定 → 実装: 10〜30 %・基準20 %、`checked_share`と期限内完了率を別計測。傾き・`N/m`は測定待ち |
+| V10 | 2026-10-15決定 → 実装（構造上そうなっていることを試験sourceで固定）: 留保分は他へ再配分せず未発行、後日追加発行しない |
+| V11 | 2026-10-15決定 → 実装: coinbaseのPanel移行なし（`PALW_RFC0016_COINBASE_PANEL_MIGRATION_V1 = false`と試験） |
+
 ## 16. 実装（休眠、未有効化、未build）
 
 実装は採用・有効化を意味しない。行ごとのfile:lineと試験IDの対応は、[実装状況](../design/palw/rfc-0016-implementation-status-2026-10-15.md)にある。
@@ -548,7 +566,7 @@ ACTIVATION_ALLOWED
 | # | 内容 |
 | --- | --- |
 | L1 | blockへの`P_m`の適用は1回だけで、V+の権利が行う。V+をarmするとき、ADR-0177 V3の`block_opportunity`は必ずoffにする（validationが拒否する）。V+がreleaseのブロック機会の仕組みである。coinbase側の`P_m`は既存のcoinbase配分が1回だけ適用する（ADR laneのC4もこれで解決する）。単一適用のtest sourceがある |
-| L2 | 途中再発行（V2）は`A_m`加重で行う。新しいrooted状態（aux 132）を持ち、reorg・IBDで一貫する。`A_m`が得られないときだけ、先着をfallbackとして残す |
+| L2 | 途中再発行（V2）は`A_m`加重で行う。新しいrooted状態（aux 132）を持ち、reorg・IBDで一貫する。~~`A_m`が得られないときだけ、先着をfallbackとして残す~~ → **ユーザー判断 2026-10-15（V2）で置換: `A_m`が無ければ再発行しない（先着で権利を与えない）** |
 | L3 | RPCはop 255、proto 1330–1331を使う（確定済み） |
 
 ### 16.2 実装の範囲
@@ -613,3 +631,29 @@ ACTIVATION_ALLOWED
   [`palw_bond_budget_fold_v1.rs`](../../consensus/core/src/palw_bond_budget_fold_v1.rs)、[`palw_kernel_route_fold_v1.rs`](../../consensus/core/src/palw_kernel_route_fold_v1.rs)、
   [`ledger.rs`](../../misaka/palw/kernel/src/ledger.rs)、[`palw_verifier_pay_v1.rs`](../../consensus/core/src/palw_verifier_pay_v1.rs)、
   [`palw_producer_v2.rs`](../../consensus/core/src/palw_producer_v2.rs)、[`config/params.rs`](../../consensus/core/src/config/params.rs)
+
+## ユーザー方針 2026-10-15 による改定
+
+* V+のblock権利は生成機会であり合意creditではない。権利を消費したclaimも、`SecurityCertified`になるまで合意creditを持たない。
+* 同じmergesetのsibling間で、権利の消費はmerge順に依存してはならない([RFC-0018](0018-dag-parallel-multi-model-consensus.md) §4のcanonical順と同じ集合関数)。
+
+**ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
+
+* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
+* **認証は前提に基づく。** claim固定後の乱数でglobal poolから抽選した検証者のm-of-k肯定承認と、G14公開告発windowの異議なし経過で成立する。「抽選されたverifier stakeのうち正直な割合が閾値以上」を明示的な前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない(PRINCIPLES §8)。認証済みでもG14で反証されたclaimはvoidされ、合意creditは取り消される。
+* **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
+* **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
+* 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。
+
+## ユーザー方針 2026-10-15 第4回 — `P_m` は階層係数 `c_m` を含み、一度だけ適用する
+
+> **統治する前提:** [PRINCIPLES §9](../PRINCIPLES.md)(凍結前提)。規則は [ADR-0179](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md) が定める。
+
+* V+ が発行に使う `P_m = A_m / ΣA` は、`A_m = c_m · S̄_m^1.5` である。
+  * genesis・年次フォーク指定モデルは `c_m = 1.0`、登録モデルは固定の `0.3`(ADR-0177 の改定)。
+  * 係数は配分の重みで一度だけ適用し、物理ブロック権利と coinbase 配分が同じ `P_m` を使う。
+  * 受理ブロックの報酬に重ねて掛けない。
+* **entrant reserve(V3)と RFC-0017 の Probation 予算は、fence `palw_model_tier_v1` の下では無意味になる。**
+  * モデル単位の審査は全廃した(第 5 回)。審査も昇格もなく、entrant が存在しない。
+  * そのため `ε = 0` とし(`palw_rfc0016_rights_epoch_v1`)、登録 tier 全体の発行上限 `κ`(配分の重みで適用)を tier の唯一の上限とする。
+  * fence 未満の V3 の規則(entrant reserve ≤ 20‰、Probation との明示的 netting)は、休眠のまま残る。

@@ -28,6 +28,11 @@
 
 ---
 
+
+> **恒久決定(2026-10-15):** LLM・モデル計算の正しさを暗号学的に証明する仕組み(ZK、zk-SNARK/STARK、zkVM・zkML、PCS ベースの succinct proof など)は一切使用せず、今後も使用しない。詳細は [§8](#8-モデル計算の暗号学的証明を使用しない2026-10-15ユーザー恒久決定)。
+
+> **凍結前提(2026-10-15):** genesis と年次フォークで指定されたモデルは 1.0。後から登録したモデルは登録時点から審査なしで 0.3 に固定(昇格・更新・失効・試行手数料なし、1.0 への経路は年次フォーク指定のみ)。モデル単位の検証は「何を信頼するか」の問題が解決しないため不採用。claim 単位の検証は全モデルで維持。詳細は [§9](#9-モデルの二階層とモデル単位の検証の不採用--2026-10-15-ユーザー決定凍結前提)。
+
 ## 0. 最終Goal — 2026-10-14改定（ユーザー決定）
 
 > **MISAKAの最終Goalは、モデルを非公開にしておくことが経済的に不利になる仕組みを成立させることである。
@@ -73,7 +78,7 @@
 
 ## 1. 不可侵原則
 
-MISAKAの有用計算は、Panelの多数派、単独Panel、producer、または特権的operatorの正直さを、安全性の最終根拠としてはならない。
+モデル計算の不正裁定は、Panelの多数派、単独Panel、producer、または特権的operatorの主観的判断を最終根拠としてはならない。合意 credit の認証には、抽選された検証者の承認を、正直な割合の明示的な前提の下で用いる（§8）。承認の認証と計算不正の客観的裁定を区別する。
 
 MISAKAは従来のPoWと異なり、有用計算の実行結果を検証する費用が、その計算自体の実行費用に匹敵し、場合によっては上回るという問題を前提とする。
 
@@ -97,7 +102,7 @@ MISAKAは従来のPoWと異なり、有用計算の実行結果を検証する�
 - 計算区間
 - tensorの一部
 - 状態遷移
-- Freivalds/GKR等によって集約された計算制約
+- Freivalds 等による直接の代数的スポットチェック（§8。計算 validity proof は用いない）
 
 検証者は、原則として巨大なモデルの全計算を再実行する必要はない。少数の検査で不一致を発見し、発見後に対象を絞り込んで客観的な裁定へ進める。
 
@@ -207,12 +212,40 @@ MISAKAは、次の4つによって、計算費用よりも検証費用が重く�
 - 立証された不正をslashし、残る被害をbond単位の上限で有界化する。
 - モデルを共有してbondを集めた方が、非公開より多くの配分を得る経済構造にする（§0）。
 
-そして、**MISAKAの安全性は、Panelの人数や誰かの正直さではなく、検証の健全性、不正追及の公開性、裁定の客観性、bond単位の被害上限によって定義される。MISAKAの最終Goalは不正の完全排除ではなく、モデルの非公開を経済的に不利にすることである。**
+そして、**MISAKAの安全性は、検査範囲、不正追及の公開性、裁定の客観性、bond単位の被害上限によって評価する。合意 credit の承認には、抽選された検証者の正直な割合と参加・取得可能性の明示的な前提がある（§8）。MISAKAの最終Goalは不正の完全排除ではなく、モデルの非公開を経済的に不利にすることである。**
 
 > **MISAKA不可侵原則 —「確率的に検出し、公開証拠で局所化し、決定論的に裁き、被害をbondで有界化する。モデルの非公開は経済的に不利にする。」**
 > *Probabilistic Detection. Public Localization. Deterministic Adjudication. Bond-Bounded Damage. Closure Is Uneconomic.*
 
----
+
+## 8. モデル計算の暗号学的証明を使用しない（2026-10-15、ユーザー恒久決定）
+
+**MISAKA は LLM・モデル計算の正しさを暗号学的に証明する仕組みを一切使用せず、今後も使用しない。**
+この節は本書の他の節、既存・将来の ADR・RFC・設計・実装・有効化計画・研究項目に優先する。
+過去の文書に採用・拡張候補と書かれていても、その記述は撤回対象であり、採用を継続する根拠にはならない。
+
+1. **採用禁止。** zero-knowledge 証明、zk-SNARK / zk-STARK、zkVM・zkML、多項式コミットメント（PCS）等に基づく succinct argument / validity proof、再帰証明・proof aggregation を使用しない。GKR や producer が送信する多項式証明 transcript による計算 validity argument へ迂回しない。導入を将来課題や研究候補にも残さない。
+2. **検証方法。** 確率的検出（サンプリング再実行・決定論的再計算・代数的スポットチェック）を行い、不一致を公開証拠で局所化し、決定論的に裁定し、経済的に抑止する。直接の Freivalds 検査などは、その検査器が読んだ入力と検査した関係だけを対象とし、全モデル計算の暗号学的証明とは呼ばない。
+3. **合意 credit の認証。** 抽選された検証者の承認を、正直な割合の明示的な前提の下で用いる。その割合、抽選・重み・相関、取得可能性、期限、検出範囲を報告する。署名や quorum は承認者と対象の認証であり、算術真実の暗号学的証明ではない。異議時の有罪判定は公開証拠と決定論的 court による。 **楽観的な Final または一致した local replay は、抽選された検証者の承認を代替しない。** material の再計算、契約の受入、データの同一性確認だけで consensus credit の承認を得たと扱ってはならない。
+4. **利用できる暗号機構。** ハッシュ・署名・Merkle commitment・VRF/beacon は、データの同一性・認証・乱数に使用できる。Merkle opening は保持データの所属を認証するもので、モデル計算の正当性を証明するものではない。
+5. **実装と互換性。** 禁止した方式を新規生成・受理し、報酬や weight・credit の計算正当性の根拠にしてはならない。旧履歴の読み取りや wire ID の保存が必要な場合も、その目的に限る。旧 ID の意味を別方式へ再解釈せず、必要な移行は明示的な version/fence で行う。
+6. **評価。** 128-bit 等の数字を全計算の暗号学的健全性として保証しない。許容する検査の誤検出・見逃し、反復・grinding、正直な検証者の参加、データ取得、費用と経済条件を、それぞれの前提を明示して評価する。未測定値は UNKNOWN とし、禁止方式の実装を不足解消の条件にはしない。
+
+7. **理由。** ZK などで LLM の計算を実用的に証明することは不可能である(ユーザー判断)。
+8. **既存文書。** ZK・succinct proof・compact proof を「将来」「研究」として挙げている箇所(例: `docs/design/palw/rfc9-l2-fork-choice.md` 案 C、RFC-0015 §10、`docs/design/palw/rfc-0009-remote-record.md`)は本決定により除外する。過去の記述は履歴として残し、除外注記を付ける。
+9. **エージェント(Claude Code、Codex など)へ。** 設計・実装・レビュー・提案で上記の暗号学的計算証明を持ち出さない。既存の記述や実装を見つけたら、除外である旨の注記を付けるか撤回する。リポジトリ直下の `CLAUDE.md`・`AGENTS.md` にも同じ決定を記載している。
+
+(本節は 2026-10-15 に Codex と Claude Code がそれぞれ追記した 2 つの §8 を 1 つに統合したもの。)
+
+## 9. モデルの二階層とモデル単位の検証の不採用 — 2026-10-15 ユーザー決定(凍結前提)
+
+**本節は凍結した前提である。** ADR・RFC・設計・実装・将来計画は本節に従い、本節を再審しない。変更には、ユーザーの明示的な決定による本節自体の改定を要する。
+
+1. **genesis と年次フォークで指定されたモデルは 1.0 である。** 年 1 回程度のソフトフォークまたはハードフォークで、モデル ID と固定 artifact root の組を承認リスト(ApprovedModels)に追加する。追加のみで、既存モデルは上書きしない(ADR-0175)。リストへの指定は政策的決定であり、「公開されている」「独立検証可能である」ことの技術的証明ではない。
+2. **後から登録したモデルは、登録した時点から審査なしで 0.3 に固定する。** 昇格・更新・失効・試行手数料はない。何年経っても、どれだけ使われても 0.3 のままである。**1.0 になる経路は、年次フォークでの指定だけである。**
+3. **モデル単位の検証・審査は行わない(不採用)。** 理由: モデルに対して検証を行うと、その検証において何を信頼するか(誰が・何を根拠に「正しく共有・運用されている」と判断するか)という問題が新たに発生し、それは解決しない。モデルの公開状況・保持者数・取得可能性・共有状況をチェーンが審査することはしない。
+4. **係数は配分の重みに一度だけ掛ける。** `A_m = c_m · S̄_m^1.5`(α=1.5、30 日平均の適格 bond)。この P_m を物理ブロック機会(RFC-0016 V+)と coinbase 配分の両方に使い、受理ブロックの報酬に重ねて掛けない。登録モデル全体に発行上限を設け、多数登録で 0.3 の枠を増やせない。
+5. **claim 単位の検証は、すべてのモデルで維持する。** モデル単位の検証を行わないことは、claim の検証を省くことではない。各 claim は階層に関係なく、確率的検出・公開証拠による局所化・決定論的裁定(court)・claim ごとの抽選検証者による認証(`SecurityCertified`、正直な割合の明示的前提)を受ける。認証されていない claim は、どの階層でも fork choice・決済深度・Rule E 参加・settled anchor・weight を進めない(§0 の 2026-10-15 改定、RFC-0018)。
 
 ## 付録 — この前提が現在の作業をどう縛るか (Lead, 2026-10-09)
 
@@ -224,9 +257,21 @@ This appendix records where the principle already decides open work. It is a poi
   - its detection probability is stated, including the probability that a capable honest verifier actually checks;
   - its collateral covers the maximum gain divided by that probability.
 
-  Where that is unaffordable, aggregated checks (Freivalds/GKR-style) are required, not a lower assumed detection rate.
+  Direct randomized algebraic checks may reduce repeated arithmetic work; their detection scope, actual input-read cost and honest-verifier assumptions must be explicit. A cryptographic computation-validity argument is prohibited by §8, including as a proposed remedy for expensive verification.
 
   **Amended 2026-10-14 (§0):** the detection-probability bound and the collateral-covers-gain/p condition are no longer gates for earning. They are measured and reported (UNKNOWN when unknown). The gate is the per-bond Block / Reward / Final Weight caps, objective court and slash for any model shared with at least one honest verifier, and the two-stage closure-disadvantage evaluation. `p = 0` for a closed model is a bounded residual risk.
 - **§2's grinding resistance** is why the sealed-source beacon (v3) and the complete-check bootstrap are prerequisites for any sampled approval.
 - **§3's "no escape to economic Final"** is enforced by the bounded demand/proof/grace deadlines of the kernel route and OPV.
 - **Condition 7 of §6 (reorg consistency)** is why the fork-choice decision (ADR-0178) is a prerequisite of the full-activation release.
+
+## §0 — ユーザー方針 2026-10-15 による改定
+
+* **閉鎖モデル・`p = 0`の残余リスクは経済的なものに限る。** §0(2026-10-14改定)は、非公開モデルの`p = 0`をbond単位の上限で被害を有界化する残余リスクとした。これに次を加える: その残余リスクは**合意finalityにもsettlement finalityにも決してならない**。残余リスクが許すのは有界な経済的損失だけであり、未認証のclaimは合意creditを持たない。
+
+**ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
+
+* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](rfc/0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
+* **認証は前提に基づく。** claim固定後の乱数でglobal poolから抽選した検証者のm-of-k肯定承認と、G14公開告発windowの異議なし経過で成立する。「抽選されたverifier stakeのうち正直な割合が閾値以上」を明示的な前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない(PRINCIPLES §8)。認証済みでもG14で反証されたclaimはvoidされ、合意creditは取り消される。
+* **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
+* **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
+* 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。

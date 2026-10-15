@@ -196,7 +196,7 @@ impl PalwFoldReadV1<'_> {
             }
         } else if let Some(row) = reserved {
             if !lane && row.sessions_opened >= crate::palw_legacy_public_filer_v1::PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1 {
-                return exhausted("a dispute reservation opens at most sixteen sessions on its claim");
+                return exhausted("the dispute reservation exhausted its own session budget on this claim");
             }
         } else if lane {
             return exhausted("a lane joins only a reserved session of a non-seat bond");
@@ -941,10 +941,14 @@ impl PalwFoldReadV1<'_> {
         // **RFC-0006 R6-CELL round 4 (`palw_cell_coverage_closure_v1`, REQ-CELL-1b)**: past the fence, a class whose graph the
         // fold holds and whose cell coverage has a gap takes no claim on any lane — explicitly uncovered and unrewarded.
         // Where the fold does not hold the graph, the court close convicts instead (REQ-CELL-2). Below the fence `None`.
-        if let Some(refusal) = crate::palw_cell_coverage_closure_v1::palw_cell_closure_claim_refusal_v1(
+        // RFC-0006 consumer v2 (`palw_memory_routing_court_v2`): past its fence the same gate reads what that consumer reaches, with
+        // the class's router binding (aux 139) in hand; below it, the round-4 answer byte for byte.
+        let router_binding = super::palw_router_binding_row_of_v2(self.state, class_id);
+        if let Some(refusal) = crate::palw_cell_coverage_closure_v1::palw_cell_closure_claim_refusal_v2(
             self.params,
             now_daa,
             self.state.fp_work_profile_of(class_id),
+            router_binding.as_ref(),
         ) {
             return Err(PalwStateV2Error::ClassNotRewardable {
                 class: *class_id,
@@ -958,7 +962,13 @@ impl PalwFoldReadV1<'_> {
         // `None`: the rules below, byte for byte. GAP-E4 (2026-10-15): the RFC-0004 evaluation lane is gated alike — it earns no
         // coinbase, block or Final weight, but its executor and credited seats are paid and its score decides a line's promotion, so an
         // unexamined class is not one an evaluation may run on.
-        if matches!(incoming, PalwGatedClaimV1::Attempt | PalwGatedClaimV1::FreePrompt { .. } | PalwGatedClaimV1::Evaluation)
+        // U-9 (user decision 2026-10-15): the gated lanes are RFC-0017's one list; user-paid kernel / funded jobs stay open.
+        let lane = match incoming {
+            PalwGatedClaimV1::Attempt => crate::palw_model_eligibility_v1::PalwEligibilityLaneV1::Attempt,
+            PalwGatedClaimV1::FreePrompt { .. } => crate::palw_model_eligibility_v1::PalwEligibilityLaneV1::FreePrompt,
+            PalwGatedClaimV1::Evaluation => crate::palw_model_eligibility_v1::PalwEligibilityLaneV1::Evaluation,
+        };
+        if crate::palw_model_eligibility_v1::palw_eligibility_lane_gated_v1(lane)
             && let Some((_, why)) =
                 super::palw_model_eligibility_fold_v1::eligibility_claim_refusal_v1(self.state, self.params, class_id, now_daa)
         {

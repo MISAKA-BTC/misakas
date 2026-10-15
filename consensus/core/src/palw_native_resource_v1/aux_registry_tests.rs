@@ -258,3 +258,75 @@ fn ambiguous_and_raw_rows_are_bounded_and_never_under_counted() {
     let mut reader = NativeWireReaderV1::new(odd.as_slice(), odd.len() as u64);
     assert!(super::wire_kernel_aux::scan_native_aux_row_v1(106, &key, &mut reader).is_err());
 }
+
+/// 2026-10-15 renumbering: Codex's material release recovery V2 (134 → 137) and retired compact V4 (135 → 138) no longer share
+/// a table with RFC-0016 (132–135) or RFC-0018 (136). Each renumbered table's own key grammar reaches its own codec arm.
+#[test]
+fn renumbered_codex_aux_tables_never_collide_with_rfc0016_or_rfc0018() {
+    use crate::palw_rfc0016_v1::ledger::{
+        PALW_RFC0016_QUEUE_INDEX_TABLE_V1, PALW_RFC0016_QUEUE_TABLE_V1, PALW_RFC0016_RIGHTS_TABLE_V1, PALW_RFC0016_TELEMETRY_TABLE_V1,
+    };
+    let recovery = crate::palw_material_release_recovery_v2::PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2;
+    let compact = crate::palw_claim_compact_v4::PAID_CLAIM_COMPACT_V4;
+    assert_eq!((recovery, compact), (137, 138));
+    let all = [
+        crate::palw_beacon_bootstrap_v1::PALW_BEACON_BOOTSTRAP_TABLE_V1,
+        crate::palw_model_eligibility_v1::PALW_MODEL_ELIGIBILITY_TABLE_V1,
+        PALW_RFC0016_RIGHTS_TABLE_V1,
+        PALW_RFC0016_QUEUE_TABLE_V1,
+        PALW_RFC0016_QUEUE_INDEX_TABLE_V1,
+        PALW_RFC0016_TELEMETRY_TABLE_V1,
+        crate::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_TABLE_V1,
+        recovery,
+        compact,
+        // RFC-0006 consumer v2: the router binding rows.
+        crate::palw_router_binding_v2::PALW_ROUTER_BINDING_TABLE_V2,
+    ];
+    let mut unique = all.to_vec();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), all.len(), "aux table numbers collide: {all:?}");
+    // An unallocated key shape inside either renumbered table fails closed as malformed (never as Unsupported).
+    for table in [recovery, compact] {
+        let mut empty = NativeWireReaderV1::new(&[][..], 0);
+        let error = super::wire_kernel_aux::scan_native_aux_row_v1(table, &[0xEE; 7], &mut empty).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "table {table}");
+    }
+    // A 64-byte RFC-0016 queue-index key under 134 still reaches RFC-0016's (Hash64, u64) codec, not the recovery codec.
+    let row = borsh::to_vec(&(crate::Hash64::default(), 7u64)).unwrap();
+    let mut reader = NativeWireReaderV1::new(row.as_slice(), row.len() as u64);
+    super::wire_kernel_aux::scan_native_aux_row_v1(PALW_RFC0016_QUEUE_INDEX_TABLE_V1, &[1u8; 64], &mut reader).unwrap();
+    assert_eq!(reader.remaining(), 0);
+}
+
+/// RFC-0008 once-only settlement markers (aux 140, dormant): a 64-byte obligation key reaches the marker's derive codec exactly;
+/// any other key shape in the table fails closed as malformed; 140 collides with no other aux table. Source only, not executed.
+#[test]
+fn settlement_once_markers_have_their_own_exact_aux_codec() {
+    use crate::palw_settlement_once_v1::*;
+    assert_eq!(PALW_SETTLEMENT_ONCE_TABLE_V1, 140);
+    for other in [
+        crate::palw_material_release_recovery_v2::PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2,
+        crate::palw_claim_compact_v4::PAID_CLAIM_COMPACT_V4,
+        crate::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_TABLE_V1,
+        crate::palw_model_eligibility_v1::PALW_MODEL_ELIGIBILITY_TABLE_V1,
+    ] {
+        assert_ne!(other, PALW_SETTLEMENT_ONCE_TABLE_V1);
+    }
+    let obligation = PalwSettlementObligationV1::of(PalwSettlementLegV1::EscrowFinalReward, [5; 64]);
+    let row = PalwSettlementOnceRowV1 {
+        version: PALW_SETTLEMENT_ONCE_ROW_VERSION_V1,
+        obligation,
+        consumer: PalwSettlementConsumerV1::KernelTick,
+        amount: 3,
+        debit: PalwSettlementDebitV1::Escrow { poster: [6; 64], amount: 3 },
+        settled_daa: 9,
+    };
+    let bytes = borsh::to_vec(&row).unwrap();
+    let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+    super::wire_kernel_aux::scan_native_aux_row_v1(PALW_SETTLEMENT_ONCE_TABLE_V1, &obligation.id_v1(), &mut reader).unwrap();
+    assert_eq!(reader.remaining(), 0);
+    let mut empty = NativeWireReaderV1::new(&[][..], 0);
+    let error = super::wire_kernel_aux::scan_native_aux_row_v1(PALW_SETTLEMENT_ONCE_TABLE_V1, &[0xEE; 65], &mut empty).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+}

@@ -1984,6 +1984,58 @@ mod tests {
         assert_eq!(palw_filer_step_v1(entry, &chain(100)), PalwFilerStepV1::File);
     }
 
+    #[test]
+    fn a_small_retained_staged_reference_needs_no_live_terminal_reservation() {
+        use kaspa_consensus_core::{
+            palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES, palw_staged_court_state_v1::PalwStagedCertificateRefV1,
+        };
+
+        let claim = h(81);
+        let reference = PalwStagedCertificateRefV1 { claim, reserver: bond(ME), reserved_daa: 90, seed_id: h(82) };
+        let object = palw_executor_refuted_object_v1(bond(EXECUTOR), claim, PalwPanelContradictionV1::StagedCourt { reference }, None);
+        let PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = &object else { panic!("objective offence") };
+        assert!(evidence.len() as u64 <= PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES);
+        let decoded: kaspa_consensus_core::palw_offence_attribution_v1::PalwExecutorRefutedEvidenceV1 =
+            borsh::from_slice(evidence).unwrap();
+        assert_eq!(decoded.contradiction, PalwPanelContradictionV1::StagedCourt { reference });
+        let filing = PalwConvictionFilingV1::of_offence(object.clone(), claim, Some(150), PalwFilingOriginV1::CaptureArm)
+            .expect("a typed staged reference is an ordinary kind-4 filing");
+        let key = filing.offence_key;
+        // As in the other filer tests, the native gate's verdict is injected. This tests
+        // transport, not whether a caller-supplied reference is a rooted certificate.
+        let released = PalwReporterFilingReadV1 { reporter_may_commit: false, ..chain(100) };
+        let mut book = PalwReporterFilerV1::default();
+        assert_eq!(
+            book.file(filing, bond(ME), &released, &h(DOMAIN), [7; 32], |_, _| panic!("no optional reward commit")),
+            PalwFileOutcomeV1::Queued { committed: false }
+        );
+        let mut queue = Vec::new();
+        let mut moved = HashMap::new();
+        let mut accused = HashSet::new();
+        let mut terminal_calls = 0;
+        let ended = book.tick_with_terminal_v2(
+            &mut queue,
+            &mut moved,
+            &mut accused,
+            |_, gated| {
+                if let Some(gated) = gated {
+                    assert_eq!(gated, &object, "the native ordinary gate sees the original evidence");
+                }
+                Some(released.clone())
+            },
+            |_, _| {
+                terminal_calls += 1;
+                // The native terminal reader returns None once the legacy reservation
+                // has closed, even while the independently paid stage is retained.
+                Ok(None)
+            },
+        );
+        assert!(ended.is_empty());
+        assert_eq!(terminal_calls, 0, "small retained references must not wait on legacy multipart authority");
+        assert_eq!(queue, vec![(key, PALW_FILER_ROUND_EVIDENCE_V1, false, object)]);
+        assert_eq!(book.entry(&key).unwrap().evidence_sends, 1);
+    }
+
     // These fixtures test transport scheduling over opaque bytes. They do not assert the
     // bytes are an admissible court proof; actual preflight/fold tests exercise that separately.
     fn terminal_entry() -> (PalwFilerEntryV1, kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalProgressV1) {

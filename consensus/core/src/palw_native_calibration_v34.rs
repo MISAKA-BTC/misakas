@@ -148,6 +148,7 @@ impl NativeCalibrationSnapshotV34 {
             || base.palw_funded_execution_v11.is_some()
             || base.palw_stage_execution_v14.is_some()
             || base.palw_stage_execution_v28.is_some()
+            || base.palw_native_execution_v39.is_some()
             || base.palw_probabilistic_constraints_v1.is_some()
             || base.palw_panel_free_v1.is_some()
             || base.palw_window_class_v37.is_some()
@@ -226,9 +227,12 @@ pub fn local_validation_snapshot_v34(
     let mut final_policy =
         crate::palw_native_final_v27::PalwNativeFinalFenceV27::unapproved_probe_at(ForkActivation::always(), domain).policy;
     final_policy.purpose = match purpose {
-        LocalNativePurposeV34::Measurement => {
-            NativeFinalPurposeV34::IsolatedCalibration { version: 34, isolation, base_genesis: base.genesis.hash, measurement_manifest }
-        }
+        LocalNativePurposeV34::Measurement => NativeFinalPurposeV34::IsolatedCalibration {
+            version: 34,
+            isolation,
+            base_genesis: base.genesis.hash,
+            measurement_manifest,
+        },
         LocalNativePurposeV34::LocalQualified => NativeFinalPurposeV34::LocalQualifiedValidation {
             version: 34,
             isolation,
@@ -240,7 +244,8 @@ pub fn local_validation_snapshot_v34(
     calibrations.sort_by_key(|c| c.profile);
     final_policy.calibrations = calibrations;
     let stage = with_stage28.then(|| {
-        let mut s = crate::palw_flat_stage_v28::PalwStageExecutionFenceV28::unapproved_probe_at(ForkActivation::always(), domain).policies;
+        let mut s =
+            crate::palw_flat_stage_v28::PalwStageExecutionFenceV28::unapproved_probe_at(ForkActivation::always(), domain).policies;
         s.execution = funded.clone();
         s.final_policy = final_policy.root();
         s.physical_service = physical_service;
@@ -352,6 +357,7 @@ impl Params {
         original.palw_native_final_v27 = base.palw_native_final_v27.clone();
         original.palw_funded_execution_v11 = base.palw_funded_execution_v11.clone();
         original.palw_stage_execution_v28 = base.palw_stage_execution_v28.clone();
+        original.palw_native_execution_v39 = base.palw_native_execution_v39.clone();
         original.palw_panel_free_v1 = base.palw_panel_free_v1.clone();
         original.palw_probabilistic_constraints_v1 = base.palw_probabilistic_constraints_v1;
         original.palw_window_class_v37 = base.palw_window_class_v37;
@@ -407,6 +413,21 @@ impl Params {
                 return Err("native calibration34 stage/funded/Final policies differ".into());
             }
             stage.policies.check(domain)?;
+        }
+        if let Some(owning) = &self.palw_native_execution_v39 {
+            let mass = crate::palw_native_carriage_v22::NativeCarriageMassParamsV22::from_consensus_params(self);
+            let service = crate::palw_flat_execution_capacity_v22::NativeCarriageServiceV22::reserved_scheduler_v30(
+                &mass,
+                &f.policy.queue_policy,
+            )?;
+            if owning.activation != ForkActivation::always()
+                || owning.policies.execution != funded.policies
+                || owning.policies.final_policy != f.policy.root()
+                || owning.policies.physical_service != service.root()
+            {
+                return Err("native39 isolated original shared quota/Final/physical policies differ".into());
+            }
+            owning.policies.check(domain)?;
         }
         Ok(())
     }

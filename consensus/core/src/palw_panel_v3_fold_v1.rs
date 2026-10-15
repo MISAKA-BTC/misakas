@@ -60,7 +60,7 @@ use misaka_palw_panel::{
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum PalwPanelV3BeaconSourceV1 {
     /// **The branch's own settlements** — the only value any processor resolves. Every Final the V2 lattice writes passed through a
-    /// Panel licence (never a source of a Panel draw); the kernel route's OPV Finals are `PanelIndependent`, and its claim seals are
+    /// Panel licence (never a source of a Panel draw); unapproved OPV Finals supply no entropy; the kernel route's claim seals are
     /// the v3 beacon's facts (RFC-0010 × RFC-0015, GAP-B3: the non-circular bootstrap of `opv-beacon-bootstrap.md` §4 — complete-check
     /// classes reach Final without a beacon, and their Finals seed every later draw, the Panel's included).
     #[default]
@@ -150,8 +150,9 @@ impl<'a> ChainPanelBeaconHistoryV1<'a> {
         Self { state, base_class, engine, source, tip_position }
     }
 
-    /// The kernel route's attributed OPV Finals (`PanelIndependent`). A route whose rows do not rebuild contributes nothing: the
-    /// fold refuses such a state on its own path, and a beacon that cannot be derived never locks (non-fraud `BeaconUnavailable`).
+    /// Selected-approval-authorized route events. An optimistic Final alone
+    /// exports none. Invalid route rows cannot derive a beacon and remain a
+    /// non-fraud `BeaconUnavailable` outcome.
     fn route_works(&self) -> Vec<AttributedWorkV1> {
         self.state.kernel_route.as_ref().and_then(|route| route.beacon_events_v1().ok()).unwrap_or_default()
     }
@@ -201,7 +202,7 @@ impl PanelBeaconHistoryV1 for ChainPanelBeaconHistoryV1<'_> {
         }
         route.paid_beacon_material_v5(context)?.ok_or_else(|| "Panel epoch has no authenticated prepaid funding".into())
     }
-    /// The V2 lattice's Finals (all `PanelLicensed`) and the kernel route's OPV Finals (`PanelIndependent`).
+    /// The V2 lattice's selected Panel Finals and any separately authorized route events.
     fn final_events(&self) -> Vec<WorkFinalEventV1> {
         match self.source {
             PalwPanelV3BeaconSourceV1::Chain => {
@@ -750,7 +751,7 @@ fn freeze_source_epochs_v1(
             deadline_daa: deadline,
         };
         snapshot.validate_for(&request, policy).map_err(|e| inconsistent("new source subject", e))?;
-        builder.write_kernel_row(TABLE, key, Some(borsh::to_vec(&snapshot).expect("snapshot serializes")));
+        builder.write_kernel_row(TABLE, key, Some(borsh::to_vec(&snapshot).expect("snapshot serializes")))?;
         retained += count;
     }
     Ok(())
@@ -854,7 +855,7 @@ fn bind_v2(
         // reached `Final`; a lock kept would hold a seat's room for a Panel it no longer sits on — Q-5's redraw rule).
         if strata.is_some() {
             for (key, _) in builder.claim_locks_v1(claim_id) {
-                builder.write_slashable_lock(key, None);
+                builder.write_slashable_lock(key, None)?;
             }
         }
         // The previous round's seats leave duty with their exposure; the redraw deals different ones.
@@ -863,7 +864,7 @@ fn bind_v2(
     builder.write_panel(
         *claim_id,
         Some(PalwPanelStateV2 { anchor: binding.panel_seed_v3, seats: seats.clone(), bound_daa: ctx.daa_score }),
-    );
+    )?;
     builder.reserve_seat_duties_with(*claim_id, &seats, binding.exposure as u128, ctx.daa_score)?;
     if let Some(strata) = strata {
         // RFC-0006's per-shard record: the plan frozen, the outsider flag, each seat's share — the armed machinery runs from here.
@@ -883,10 +884,10 @@ fn bind_v2(
         // A redrawn claim is marked as V2 marks one, so no consumer reads it as a first panel.
         bound.rebound_daa = Some(ctx.daa_score);
     }
-    builder.write_claim(*claim_id, Some(bound));
+    builder.write_claim(*claim_id, Some(bound))?;
     if !retry {
         // ADR-0164 F-K (K4's denominator): a claim that reached its Panel.
-        builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound);
+        builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound)?;
     }
     Ok(())
 }

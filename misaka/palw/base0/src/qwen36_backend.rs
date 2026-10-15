@@ -530,20 +530,22 @@ fn qwen36_push_checkpoint_v1(
     let needs_recurrence = match &geometry {
         crate::legs::Base0CaptureGeometryV1::Hybrid(g) => g.gdn_chunk_count() > 0,
         crate::legs::Base0CaptureGeometryV1::Flat(_) => false,
+        // RFC-0006 consumer v2: a solo / composed map's per-call leaf always carries the recurrence.
+        crate::legs::Base0CaptureGeometryV1::Composed { gdn, .. } => !gdn.is_empty(),
     };
     let gdn_chunks = if needs_recurrence {
         let (layers, states) = crate::fp_recompute::qwen36_recurrence_state_v1(shape, cache);
-        // P0a: v3's window (cut at the key heads) for a class whose map spells them, v2's otherwise.
-        let gdn_geometry = crate::fp_capture::base0_gdn_state_geometry_for_class_v1(
+        // P0a / RFC-0006 consumer v2: the map decides the enumeration — v1's full window, v2's head window, v3's key-head gather.
+        crate::fp_capture::base0_gdn_state_chunks_for_map_v2(
             profile,
             &layers,
+            &states,
             shape.linear_k_heads as u32,
             shape.linear_v_heads as u32,
             shape.linear_head_dim as u32,
             shape.conv_kernel as u32,
         )
-        .map_err(|e| e.to_string())?;
-        crate::fp_capture::base0_gdn_state_chunks_v2(&gdn_geometry, &states).map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?
     } else {
         Vec::new()
     };
@@ -1298,17 +1300,18 @@ fn qwen36_cache_from_checkpoint_chunks_v1(
         let heads = shape.linear_v_heads as u32;
         let dim = shape.linear_head_dim as u32;
         let kernel = shape.conv_kernel as u32;
-        // P0a: the restore scatters under the gather the capture used — the class's.
-        let geometry = crate::fp_capture::base0_gdn_state_geometry_for_class_v1(
+        // P0a / RFC-0006 consumer v2: the restore scatters under the gather the capture used — the MAP's (a gdn v1 map's full
+        // window was read at v2's head layout here before; the dispatch below is the capture's own).
+        let states = crate::fp_capture::base0_gdn_state_from_chunks_for_map_v2(
             profile,
             &layers,
+            gdn_chunks,
             shape.linear_k_heads as u32,
             heads,
             dim,
             kernel,
         )
         .map_err(|e| e.to_string())?;
-        let states = crate::fp_capture::base0_gdn_state_from_chunks_v2(&geometry, gdn_chunks).map_err(|e| e.to_string())?;
         for (i, layer) in layers.iter().enumerate() {
             let li = *layer as usize;
             cache.gdn[li] = states[i].heads.clone();
@@ -1318,6 +1321,17 @@ fn qwen36_cache_from_checkpoint_chunks_v1(
     };
     if declared == map::gdn_state_chunk_map_id_v2() || declared == map::gdn_state_chunk_map_id_v1() {
         apply_gdn(&mut cache, chunks)?;
+        return Ok(cache);
+    }
+    // RFC-0006 consumer v2's composed hybrid maps: the integer-kv v2 cache half, then the recurrence's own enumeration.
+    if map::palw_map_is_hybrid_composed_v2(&declared) {
+        let attn = map::integer_kv_state_geometry_v2(profile, positions).map_err(|e| format!("{e:?}"))?;
+        let attn_n = attn.chunk_count() as usize;
+        if chunks.len() < attn_n {
+            return Err(format!("the composed checkpoint names {attn_n} attention chunks and the opening carried {}", chunks.len()));
+        }
+        apply_attn(&mut cache, &attn, &chunks[..attn_n])?;
+        apply_gdn(&mut cache, &chunks[attn_n..])?;
         return Ok(cache);
     }
     if declared == map::hybrid_state_chunk_map_id_v3() || map::palw_map_is_hybrid_held_for_version_v1(&declared, profile.version) {

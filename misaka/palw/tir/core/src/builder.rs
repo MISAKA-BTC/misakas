@@ -81,7 +81,27 @@ impl ProgramBuilder {
     }
 
     pub fn block(&mut self, name: &str, carry_in: Vec<TensorType>) -> BlockBuilder<'_> {
-        BlockBuilder { pb: self, name: name.to_string(), carry_in, nodes: Vec::new(), window: None }
+        BlockBuilder { pb: self, name: name.to_string(), carry_in, nodes: Vec::new(), window: None, node_limit: MAX_NODES_PER_BLOCK }
+    }
+
+    /// Construction recipes for the independently selected Program39 grammar.
+    /// The old block()/encoder/validator retain their512-node semantics. These
+    /// raw nodes grant no authority until imported and validated as39.
+    pub fn block_for_program_v39(
+        &mut self,
+        name: &str,
+        carry_in: Vec<TensorType>,
+        profile: &crate::program_v39::SourceProfileV39,
+    ) -> Result<BlockBuilder<'_>, String> {
+        profile.check()?;
+        Ok(BlockBuilder {
+            pb: self,
+            name: name.into(),
+            carry_in,
+            nodes: Vec::new(),
+            window: None,
+            node_limit: profile.max_nodes_per_block as usize,
+        })
     }
 
     pub fn finish(self, pre: u8, layers: Vec<u8>, post: u8, logits: u16) -> TirProgramV1 {
@@ -107,6 +127,7 @@ pub struct BlockBuilder<'a> {
     carry_in: Vec<TensorType>,
     nodes: Vec<Node>,
     window: Option<u32>,
+    node_limit: usize,
 }
 
 impl<'a> BlockBuilder<'a> {
@@ -136,7 +157,7 @@ impl<'a> BlockBuilder<'a> {
     }
 
     pub fn push(&mut self, prim: Prim, inputs: Vec<Ref>, out: TensorType) -> Ref {
-        assert!(self.nodes.len() < MAX_NODES_PER_BLOCK, "block {} exceeds {MAX_NODES_PER_BLOCK} nodes", self.name);
+        assert!(self.nodes.len() < self.node_limit, "block {} exceeds {} construction nodes", self.name, self.node_limit);
         self.nodes.push(Node { prim, inputs, out, commit: false });
         Ref::Node((self.nodes.len() - 1) as u16)
     }

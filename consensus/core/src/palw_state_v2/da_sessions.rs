@@ -153,9 +153,9 @@ pub(super) fn open_da_session_v2(
         accuser_exposure: exposure,
         resumed: Box::new(claim.phase.clone()),
     };
-    builder.write_claim(claim_id, Some(disputed));
+    builder.write_claim(claim_id, Some(disputed))?;
     builder.disarm_deadline(claim_id);
-    builder.arm_deadline(deadline_daa, claim_id);
+    builder.arm_deadline(deadline_daa, claim_id)?;
     Ok(())
 }
 
@@ -321,7 +321,7 @@ pub(super) fn open_da_session_rcore_mode_v1(
     // `palw_legacy_public_filer_v1` no reservation exists and the expression is the one it was.
     let reserved = !admission.accuser_is_seat && builder.state.legacy_dispute_reservation_v1(&claim_id, &accuser).is_some();
     let seat_like =
-        admission.accuser_is_seat || reserved || (!claim.phase.is_terminal() && builder.held_forfeit_pauses_v1(claim_id, accuser));
+        admission.accuser_is_seat || reserved || (!claim.phase.is_terminal() && builder.held_forfeit_pauses_v1(claim_id, accuser)?);
     let session = PalwDaSessionV1 {
         opened_daa: ctx.daa_score,
         deadline_daa: admission.deadline_daa,
@@ -330,7 +330,7 @@ pub(super) fn open_da_session_rcore_mode_v1(
         units,
         stage: admission.stage,
     };
-    builder.write_da_session((claim_id, accuser), Some(session));
+    builder.write_da_session((claim_id, accuser), Some(session))?;
     let mut record = builder.state.da_claims.get(&claim_id).cloned().unwrap_or_default();
     let pauses = if seat_like {
         record.open_seat_sessions = record.open_seat_sessions.saturating_add(1);
@@ -339,7 +339,7 @@ pub(super) fn open_da_session_rcore_mode_v1(
             *opened = opened.saturating_add(1);
         } else if reserved {
             // Lane LG14-A: on the reservation's own budget; neither DA-8 count moves.
-            builder.legacy_dispute_count_session_v1(claim_id, accuser);
+            builder.legacy_dispute_count_session_v1(claim_id, accuser)?;
         } else {
             // **The fourth review's HIGH: a record-holder's pause is not a seat's session.** It is
             // counted with the seats' OPEN sessions (`open_seat_sessions`, `paused_since`: all DA-5 and
@@ -361,7 +361,7 @@ pub(super) fn open_da_session_rcore_mode_v1(
     if pauses {
         record.paused_since = Some(ctx.daa_score);
     }
-    builder.write_da_claim(claim_id, Some(record));
+    builder.write_da_claim(claim_id, Some(record))?;
     // DA-5 / DL-1: a seat's first open session pauses a live claim, and any session defers a
     // terminal claim's retirement — either way DL-1 gives it no deadline while the session is open.
     // X3 (REQ-X3-5): on a licensed claim accepted past `palw_claim_hard_deadline_v1` any open session holds its Final (DL-1's X3 row).
@@ -790,7 +790,7 @@ pub(super) fn open_dissection_at_named_leaf_v1(
         if deadline_daa > claim.trace_retention_daa {
             let mut extended_claim = claim.clone();
             extended_claim.trace_retention_daa = deadline_daa;
-            builder.write_claim(claim_id, Some(extended_claim));
+            builder.write_claim(claim_id, Some(extended_claim))?;
         }
     }
     let first_deadline_daa =

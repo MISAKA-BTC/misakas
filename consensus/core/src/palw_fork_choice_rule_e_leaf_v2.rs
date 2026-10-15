@@ -210,7 +210,7 @@ pub enum PalwRuleELeafV2ErrorV1 {
     BadLeaf,
 }
 
-fn keyed(domain: &[u8], parts: &[&[u8]]) -> Hash64 {
+pub(crate) fn keyed(domain: &[u8], parts: &[&[u8]]) -> Hash64 {
     let mut h = blake2b_simd::Params::new().hash_length(64).key(domain).to_state();
     for part in parts {
         h.update(part);
@@ -220,8 +220,22 @@ fn keyed(domain: &[u8], parts: &[&[u8]]) -> Hash64 {
     Hash64::from_bytes(out)
 }
 
-fn record_leaf(record: &PalwRuleEClaimRecordV1) -> Hash64 {
-    keyed(WINDOW_LEAF_DOMAIN, &[&borsh::to_vec(record).expect("a record serializes")])
+/// The leaf-v2 window leaf: the record's encoding WITHOUT RFC-0018's `certification` field, byte-identical to leaf v2 as it was
+/// specified before that field existed (the field is committed by leaf v3 only, `palw_fork_choice_rule_e_leaf_v3`).
+pub(crate) fn record_leaf(record: &PalwRuleEClaimRecordV1) -> Hash64 {
+    let legacy = (
+        record.claim_id,
+        record.accepted_blue_score,
+        record.bond,
+        record.attempt,
+        record.status,
+        record.safe_weight,
+        record.live_weight,
+        record.capped,
+        record.bond_collateral,
+        record.budget,
+    );
+    keyed(WINDOW_LEAF_DOMAIN, &[&borsh::to_vec(&legacy).expect("a record serializes")])
 }
 
 fn bond_leaf(bond: &PalwBondKeyV2) -> Hash64 {
@@ -238,7 +252,7 @@ fn split(n: usize) -> usize {
 }
 
 /// RFC 6962's tree hash over `leaves`.
-fn tree_root(leaves: &[Hash64], node: &[u8], empty: &[u8]) -> Hash64 {
+pub(crate) fn tree_root(leaves: &[Hash64], node: &[u8], empty: &[u8]) -> Hash64 {
     match leaves.len() {
         0 => keyed(empty, &[]),
         1 => leaves[0],
@@ -250,7 +264,7 @@ fn tree_root(leaves: &[Hash64], node: &[u8], empty: &[u8]) -> Hash64 {
 }
 
 /// The roots of the subtrees of `leaves` disjoint from `[lo, hi)`, in the order [`root_from_range`] consumes them.
-fn prove_range(leaves: &[Hash64], lo: usize, hi: usize, node: &[u8], empty: &[u8], out: &mut Vec<Hash64>) {
+pub(crate) fn prove_range(leaves: &[Hash64], lo: usize, hi: usize, node: &[u8], empty: &[u8], out: &mut Vec<Hash64>) {
     let n = leaves.len();
     if hi == 0 || lo >= n {
         out.push(tree_root(leaves, node, empty));
@@ -266,7 +280,7 @@ fn prove_range(leaves: &[Hash64], lo: usize, hi: usize, node: &[u8], empty: &[u8
 
 /// The root of a tree of `n` leaves from the leaves of `[lo, hi)` (`range`, in order) and the disjoint subtrees' roots (`proof`,
 /// consumed in order). `None` when either runs short.
-fn root_from_range(
+pub(crate) fn root_from_range(
     n: usize,
     lo: usize,
     hi: usize,
@@ -360,11 +374,22 @@ pub struct PalwRuleEWindowOpeningV1 {
 
 /// The node's half: open `window` (a state's [`palw_rule_e_window_v1`]) above `fork_blue_score`.
 pub fn palw_rule_e_open_window_above_v1(window: &[PalwRuleEClaimRecordV1], fork_blue_score: u64) -> PalwRuleEWindowOpeningV1 {
+    palw_rule_e_open_window_above_with(window, fork_blue_score, record_leaf, WINDOW_NODE_DOMAIN, WINDOW_EMPTY_DOMAIN)
+}
+
+/// [`palw_rule_e_open_window_above_v1`] with the leaf encoding and tree domains a leaf version uses (v3: RFC-0018).
+pub(crate) fn palw_rule_e_open_window_above_with(
+    window: &[PalwRuleEClaimRecordV1],
+    fork_blue_score: u64,
+    leaf: fn(&PalwRuleEClaimRecordV1) -> Hash64,
+    node: &[u8],
+    empty: &[u8],
+) -> PalwRuleEWindowOpeningV1 {
     let first_above = window.partition_point(|r| r.accepted_blue_score <= fork_blue_score);
     let lo = first_above.saturating_sub(1);
-    let leaves: Vec<Hash64> = window.iter().map(record_leaf).collect();
+    let leaves: Vec<Hash64> = window.iter().map(leaf).collect();
     let mut proof = Vec::new();
-    prove_range(&leaves, lo, window.len(), WINDOW_NODE_DOMAIN, WINDOW_EMPTY_DOMAIN, &mut proof);
+    prove_range(&leaves, lo, window.len(), node, empty, &mut proof);
     PalwRuleEWindowOpeningV1 { lo: lo as u32, records: window[lo..].to_vec(), proof }
 }
 
@@ -374,6 +399,18 @@ pub fn palw_rule_e_verify_window_above_v1(
     ext: &PalwRuleELeafV2Ext,
     fork_blue_score: u64,
     opening: &PalwRuleEWindowOpeningV1,
+) -> Result<Vec<PalwRuleEClaimRecordV1>, PalwRuleELeafV2ErrorV1> {
+    palw_rule_e_verify_window_above_with(ext, fork_blue_score, opening, record_leaf, WINDOW_NODE_DOMAIN, WINDOW_EMPTY_DOMAIN)
+}
+
+/// [`palw_rule_e_verify_window_above_v1`] with the leaf encoding and tree domains a leaf version uses (v3: RFC-0018).
+pub(crate) fn palw_rule_e_verify_window_above_with(
+    ext: &PalwRuleELeafV2Ext,
+    fork_blue_score: u64,
+    opening: &PalwRuleEWindowOpeningV1,
+    leaf: fn(&PalwRuleEClaimRecordV1) -> Hash64,
+    node: &[u8],
+    empty: &[u8],
 ) -> Result<Vec<PalwRuleEClaimRecordV1>, PalwRuleELeafV2ErrorV1> {
     if fork_blue_score < ext.window_floor_blue_score {
         return Err(PalwRuleELeafV2ErrorV1::ForkBelowWindow);
@@ -396,15 +433,7 @@ pub fn palw_rule_e_verify_window_above_v1(
     if opening.records.iter().skip(usize::from(boundary)).any(|r| r.accepted_blue_score <= fork_blue_score) {
         return Err(PalwRuleELeafV2ErrorV1::BadRange);
     }
-    let root = root_from_range(
-        n,
-        lo,
-        n,
-        &mut opening.records.iter().map(record_leaf),
-        &mut opening.proof.iter().copied(),
-        WINDOW_NODE_DOMAIN,
-        WINDOW_EMPTY_DOMAIN,
-    )
+    let root = root_from_range(n, lo, n, &mut opening.records.iter().map(leaf), &mut opening.proof.iter().copied(), node, empty)
     .ok_or(PalwRuleELeafV2ErrorV1::BadRange)?;
     if root != ext.window_root {
         return Err(PalwRuleELeafV2ErrorV1::RootMismatch);
@@ -513,13 +542,68 @@ pub fn palw_rule_e_pair_from_openings_v1(
         a: side(a, &ids_b)?,
         b: side(b, &ids_a)?,
         even_split_min: palw_rule_e_even_split_min_v1(usize::try_from(fork_registry_len).unwrap_or(usize::MAX)),
+        // RFC-0018 GAP-R4: a leaf v2 window commits no bond capital, so a client cannot rank by v2 participation (its sides carry
+        // `participation_capital_v2 = 0`); the commitment's form at v2 is the L2FC follow-up.
+        even_split_min_capital_v2: crate::palw_rfc0018_v1::palw_rule_e_even_split_min_capital_v2(0),
     })
+}
+
+/// **RFC-0018 Gate C, as a header-verified client reads it from an opened leaf-v2 window**: how many records are governed, certified,
+/// `Final` but uncertified (no consensus or settlement credit), and the premise the certified ones rest on — the same facts the node's
+/// settlement RPC reports (`uncertifiedFinalAnchors`, `securityCertificationPremise`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwRuleECertificationSummaryV1 {
+    pub governed: u32,
+    pub certified: u32,
+    pub uncertified_final: u32,
+    /// `Some` where any record is governed by Gate C: certification there is premise-based, not an unconditional proof.
+    pub premise: Option<&'static str>,
+}
+
+/// [`PalwRuleECertificationSummaryV1`] of a window's records.
+pub fn palw_rule_e_certification_summary_v1<'a>(records: impl IntoIterator<Item = &'a PalwRuleEClaimRecordV1>) -> PalwRuleECertificationSummaryV1 {
+    use crate::palw_fork_choice_rule_e_v1::{PalwRuleECertificationV1 as C, PalwRuleEClaimStatusV1 as S};
+    let mut out = PalwRuleECertificationSummaryV1::default();
+    for record in records {
+        match record.certification {
+            C::NotGoverned => continue,
+            C::Certified => out.certified += 1,
+            C::Uncertified if record.status == S::Final && record.attempt => out.uncertified_final += 1,
+            C::Uncertified => {}
+        }
+        out.governed += 1;
+    }
+    if out.governed > 0 {
+        out.premise = Some(crate::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_PREMISE_V1);
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::palw_fork_choice_rule_e_v1::PalwRuleEClaimStatusV1;
+
+    /// RFC-0018: the client reads Gate C from the window — the uncertified `Final` count and the premise, and the same side the node
+    /// computes (an uncertified attempt is no participation and no frontier).
+    #[test]
+    fn rfc18_a_client_reads_gate_c_from_the_window() {
+        use crate::palw_fork_choice_rule_e_v1::PalwRuleECertificationV1 as C;
+        let mut certified = record(1, 10, 1, PalwRuleEClaimStatusV1::Final);
+        certified.certification = C::Certified;
+        let mut uncertified = record(2, 20, 2, PalwRuleEClaimStatusV1::Final);
+        uncertified.certification = C::Uncertified;
+        uncertified.safe_weight = 0;
+        let legacy = record(3, 5, 3, PalwRuleEClaimStatusV1::Final);
+        let window = [legacy, certified, uncertified];
+        let summary = palw_rule_e_certification_summary_v1(&window);
+        assert_eq!((summary.governed, summary.certified, summary.uncertified_final), (2, 1, 1));
+        assert!(summary.premise.is_some_and(|p| p.contains("premise-based")));
+        let side = crate::palw_fork_choice_rule_e_v1::palw_rule_e_side_from_records_v1(&window, |_| true).unwrap();
+        assert_eq!(side.participation, 2, "the legacy and the certified attempt; never the uncertified one");
+        assert_eq!(side.safe_frontier_blue_score, 10, "the uncertified Final at 20 stands as no frontier");
+        assert_eq!(palw_rule_e_certification_summary_v1(&[legacy]).premise, None, "no governed record, no premise");
+    }
     use crate::tx::TransactionOutpoint;
 
     fn bond(i: u32) -> PalwBondKeyV2 {
@@ -538,6 +622,7 @@ mod tests {
             capped: false,
             bond_collateral: None,
             budget: None,
+            certification: crate::palw_fork_choice_rule_e_v1::PalwRuleECertificationV1::NotGoverned,
         }
     }
 

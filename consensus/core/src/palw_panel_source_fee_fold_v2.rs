@@ -105,14 +105,14 @@ pub(super) fn fund_panel_sources_v2(
     };
     let fee_target =
         BeaconSourceFeeTargetV1 { target: target.clone(), sponsor: terms.sponsor, minimum_fee: minimum, max_sources: cap };
-    let checkpoint = builder.checkpoint();
+    let checkpoint = builder.try_checkpoint()?;
     for (table, bytes) in [
         (crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4, borsh::to_vec(&target).unwrap()),
         (crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_FEE_TARGETS_V5, borsh::to_vec(&fee_target).unwrap()),
         (crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_COST_BOUNDS_V5, borsh::to_vec(&cost).unwrap()),
         (PALW_PANEL_SOURCE_FEE_AUTHORITY_TABLE_V2, borsh::to_vec(&authority).unwrap()),
     ] {
-        builder.write_kernel_row(table, key.clone(), Some(bytes));
+        builder.write_kernel_row(table, key.clone(), Some(bytes))?;
     }
     let object = misaka_palw_kernel::route::KernelRouteObjectV1::FundBeaconSourceFee { terms: *terms };
     let result = super::palw_kernel_route_fold_v1::apply_kernel_route_object_v1(builder, ctx, &object.encode(), signer);

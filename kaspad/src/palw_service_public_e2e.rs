@@ -1562,7 +1562,7 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
     let mut producer_reward_seen: Option<kaspa_consensus_core::palw_state_v2::PalwRewardWinnerV1> = None;
     let mut seat_rewards_seen: std::collections::BTreeMap<Hash64, kaspa_consensus_core::palw_state_v2::PalwRewardWinnerV1> =
         Default::default();
-    let manager =Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))));
+    let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))).unwrap());
     let config = Arc::new(chain.config.clone());
     let tick = Arc::new(TickService::new());
     let (_meta_lifetime, meta_db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));

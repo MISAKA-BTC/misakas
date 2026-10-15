@@ -891,8 +891,10 @@ pub fn palw_panel_contradiction_convicts_execution_closure_v1(
     claim_execution_root: Hash64,
     class_artifact_root: Hash64,
     step_ladder: u64,
-    cell_closure: bool,
+    // `bool` is the round-4 closure; RFC-0006 consumer v2's mode reaches the structural check through the same parameter.
+    cell_closure: impl Into<crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1>,
 ) -> Result<(), PalwOffenceVerifyError> {
+    let cell_closure = cell_closure.into();
     match contradiction {
         PalwPanelContradictionV1::ExecutorEquivocation(_)
         | PalwPanelContradictionV1::CourtExecutorGuilty { .. }

@@ -1262,3 +1262,242 @@ fn commitment_scope_memory_serves_no_model_values_and_convicts_from_public_inher
     assert!(m.w.l.bonds[&P1].collateral < before);
     assert_eq!(m.w.l.typed.lines[&m.class].head_source, Some(first_id));
 }
+
+/// New dormant source adapter: real registered retrieval work can opt in using
+/// its existing native job/seal/reveal identity. Each target reserves a separate
+/// deposit even when both targets consume the same computation.
+#[test]
+fn typed_retrieval_sources_reserve_per_target_and_restore_through_final_refund() {
+    use misaka_palw_challenge::{BeaconContextV1, RootV1, SubjectKindV1, sealed_source_policy_v3};
+    use misaka_palw_kernel::beacon_source::{BeaconSourceInputsV1, BeaconSourceTargetV1, BeaconSourceTermsV1};
+    let data = SnapshotDataV1::new(corpus(8, 2), 2, 2, 4).unwrap();
+    let (spec, root) = retrieval_spec(&data, 2);
+    let mut w = W::new(true);
+    let (class, events) = w.register(spec, Some(data.snapshot.root()));
+    assert_eq!(events.last(), Some(&E::ClassRegistered { class }));
+    let j = RetrievalJobV1 { class, query: vec![2, 1], nonce: [0x77; 64] };
+    let job = w.post(SpecJobV1::Retrieval(j.clone()));
+    let claim =
+        SpecClaimV1::Retrieval(RetrievalClaimV1 { job_id: job, producer_bond: P1, result: data.retrieve(&root, &j.query).unwrap() });
+    let id = claim.id();
+    let salt = [0xAB; 64];
+    let seal = misaka_palw_kernel::route::claim_seal_v2(&id, &salt);
+    let targets: Vec<_> = (0..2)
+        .map(|i| {
+            let context = BeaconContextV1 {
+                chain_genesis: w.l.policy.network_domain,
+                ruleset_id: w.l.policy.ruleset_digest,
+                policy: sealed_source_policy_v3(2, 2, 4, 1, 1),
+                subject_kind: SubjectKindV1::ModelConformance,
+                commitment_root: [0xA0 + i; 64],
+                commitment_position: w.l.daa,
+                challenge_epoch: 0,
+                eligible_profiles: [class].into_iter().collect(),
+                excluded_profiles: Default::default(),
+                candidate_profile_id: RootV1::Present([0xEF; 64]),
+            };
+            let terms = BeaconSourceTermsV1 {
+                context: context.id(),
+                seal_start: context.start(),
+                seal_end: context.window_end(),
+                reveal_end: context.window_end() + 4,
+                final_by: 180,
+                hold_until: 400,
+                deposit: 100,
+                max_per_producer: 2,
+                max_total: 2,
+            };
+            BeaconSourceTargetV1 { context, terms }
+        })
+        .collect();
+    w.l.set_beacon_source_inputs(BeaconSourceInputsV1 {
+        activation_daa: Some(0),
+        targets: targets.iter().cloned().map(|t| (t.terms.context, t)).collect(),
+    })
+    .unwrap();
+    w.beat_to(targets[0].terms.seal_start);
+    w.block(vec![obj(P1, O::SealClaim { producer: P1, job, seal })]);
+    let before = w.l.bonds[&P1].reserved;
+    for t in &targets {
+        let events =
+            w.block(vec![obj(P1, O::OptInBeaconSource { producer: P1, job, seal, context: t.terms.context, terms: t.terms.id() })]);
+        assert!(refused(&events).is_none(), "{events:?}");
+    }
+    assert_eq!(w.l.bonds[&P1].reserved, before + 200, "one independently funded deposit per context");
+    let mut restored = w.rebuilt();
+    restored.validate_beacon_sources().unwrap();
+    let duplicate = O::OptInBeaconSource { producer: P1, job, seal, context: targets[0].terms.context, terms: targets[0].terms.id() };
+    let rows = restored.to_rows();
+    assert!(restored.apply_object(&duplicate, &AuthV1 { signer_bond: P1 }).is_err());
+    assert_eq!(rows, restored.to_rows());
+    w.beat_to(targets[0].terms.seal_end - 1);
+    let events =
+        w.block(vec![obj(P1, O::CommitClaimSalted { salt, commit: misaka_palw_kernel::route::SaltedCommitV1::Spec { claim } })]);
+    assert!(events.contains(&E::ClaimCommitted { claim: id }), "{events:?}");
+    assert!(w.l.beacon_sources.values().all(|s| s.revealed == Some((id, w.l.daa))));
+    w.beat_to(401);
+    assert!(
+        w.l.beacon_sources
+            .values()
+            .all(|s| s.held == 0
+                && matches!(s.outcome, Some(misaka_palw_kernel::beacon_source::BeaconSourceOutcomeV1::Refunded { .. })))
+    );
+    w.rebuilt().validate_beacon_sources().unwrap();
+}
+
+#[test]
+fn native_compact_coverage_binds_typed_memory_steps_and_exact_snapshot_boundaries() {
+    use misaka_palw_kernel::claim_compact_v1::{
+        CompactCompileParamsV1,
+        native_v2::{NativeExactBoundaryV2, compile_native_class_v2},
+    };
+    let params = CompactCompileParamsV1 { compact_exact_arithmetic: true, arithmetic_repetitions: 2, fs_query_bits: 64 };
+    let m = Mem::new(memory_v1(3));
+    let coverage = compile_native_class_v2(&m.w.l, m.class, params).unwrap();
+    assert_eq!(coverage.target, misaka_palw_kernel::claim_paid_v2::PaidClaimTargetV2::TypedSpec);
+    assert_eq!(coverage.parts.len(), 1);
+    assert_eq!(coverage.parts[0].maximum_executions, 8, "native memory root max_steps");
+    assert!(coverage.exact_boundaries.iter().any(|b| matches!(b, NativeExactBoundaryV2::Memory { .. })));
+    coverage.validate_against(&m.w.rebuilt()).unwrap();
+    let mut wrong = coverage.clone();
+    wrong.parts[0].maximum_executions = 1;
+    assert!(wrong.validate_against(&m.w.l).is_err(), "cannot erase seven memory executions from whole-class union");
+    let mut omitted = coverage.clone();
+    omitted.parts[0].coverage.entries.pop();
+    assert!(omitted.validate_against(&m.w.l).is_err(), "a relation cannot disappear under an unchanged plan root");
+    let data = SnapshotDataV1::new(corpus(8, 2), 2, 2, 4).unwrap();
+    let (spec, _) = retrieval_spec(&data, 2);
+    let mut w = W::new(true);
+    let (class, ev) = w.register(spec, Some(data.snapshot.root()));
+    assert_eq!(ev.last(), Some(&E::ClassRegistered { class }));
+    let retrieval = compile_native_class_v2(&w.l, class, params).unwrap();
+    assert!(retrieval.parts.is_empty(), "snapshot ranking is exact, not an invented algebraic check");
+    assert!(
+        matches!(&retrieval.exact_boundaries[..],[NativeExactBoundaryV2::Retrieval{snapshot,..}]if *snapshot==data.snapshot.root())
+    );
+    let mut empty = retrieval.clone();
+    empty.exact_boundaries.clear();
+    assert!(empty.validate_against(&w.l).is_err());
+}
+
+/// **RFC-0007 item 1 source control (written, not run here)**: the per-class inventory walks the class exactly as the coverage
+/// compiler does — same boundaries in the same order, the same exact work, one row per plan relation, the memory class's eight
+/// steps — states a single-element miss bound for every direct check, and puts history and gather on routes with a finite bound
+/// and a named measured constant that is still UNKNOWN.
+#[test]
+fn native_check_inventory_matches_the_class_walk_and_states_its_bounds() {
+    use misaka_palw_kernel::claim_compact_v1::{
+        CompactCompileParamsV1, CompactCoverageV1,
+        native_inventory_v2::{NativeRefutationRouteV2 as R, NativeRelationCheckV2, native_class_inventory_v2},
+        native_v2::compile_native_class_v2,
+        relation_bound_v1,
+    };
+    let params = CompactCompileParamsV1 { compact_exact_arithmetic: true, arithmetic_repetitions: 2, fs_query_bits: 64 };
+    let m = Mem::new(memory_v1(3));
+    let coverage = compile_native_class_v2(&m.w.l, m.class, params).unwrap();
+    let inventory = native_class_inventory_v2(&m.w.l, m.class, params).unwrap();
+    assert_eq!(inventory.target, coverage.target);
+    assert_eq!(inventory.boundaries.iter().map(|b| b.boundary.clone()).collect::<Vec<_>>(), coverage.exact_boundaries);
+    assert_eq!(inventory.boundaries.iter().map(|b| b.exact_work).sum::<u128>(), coverage.exact_verifier_work_upper);
+    assert_eq!(inventory.stages.len(), coverage.parts.len());
+    for (stage, part) in inventory.stages.iter().zip(&coverage.parts) {
+        assert_eq!((stage.stage, stage.maximum_executions), (part.stage, part.maximum_executions));
+        assert_eq!(stage.relations.len(), part.coverage.entries.len());
+        for (row, entry) in stage.relations.iter().zip(&part.coverage.entries) {
+            match (&row.check, entry) {
+                (NativeRelationCheckV2::Direct { sparse, .. }, CompactCoverageV1::Compact(p)) => {
+                    assert!(sparse.per_repetition_miss_bits > 0, "a direct check states a bounded single-element miss");
+                    assert_eq!(relation_bound_v1(p).per_repetition_bits, Some(sparse.per_repetition_miss_bits));
+                }
+                (NativeRelationCheckV2::Exact { .. }, _) => {}
+                (other, entry) => panic!("relation {}: {other:?} against {entry:?}", row.relation),
+            }
+        }
+    }
+    assert_eq!(inventory.stages[0].maximum_executions, 8, "every step of the memory stage carries the same inventory");
+    assert!(inventory.gaps().is_empty(), "{:?}", inventory.gaps());
+    let routes = inventory.route_bounds();
+    let history = routes.get(&R::History).expect("memory continuity is on the history route");
+    assert!(history.worst_court_work > 0 && history.measured_us.is_none(), "derived bound, UNKNOWN measured cost");
+
+    let data = SnapshotDataV1::new(corpus(8, 2), 2, 2, 4).unwrap();
+    let (spec, _) = retrieval_spec(&data, 2);
+    let mut w = W::new(true);
+    let (class, _) = w.register(spec, Some(data.snapshot.root()));
+    let retrieval = native_class_inventory_v2(&w.l, class, params).unwrap();
+    assert!(retrieval.stages.is_empty());
+    let gather = retrieval.route_bounds()[&R::Gather];
+    assert_eq!(gather.subjects, 1);
+    assert!(gather.worst_court_work > 0 && gather.measured_us.is_none());
+    assert!(native_class_inventory_v2(&w.l, [0u8; 64], params).is_err(), "no class, no inventory");
+}
+
+#[test]
+fn native_compact_v4_registration_binds_budget_and_retains_canonical_proof_carriage() {
+    use misaka_palw_challenge::InteractiveModeV1;
+    use misaka_palw_kernel::claim_compact_v1::{
+        CompactCompileParamsV1, CompactRelationCompilerV1, CompactRelationProofV1,
+        native_v2::{NativeCompactContractV2, compile_native_class_v2},
+        native_v4::{
+            CompactAdversaryBudgetV4, CompactClaimRegistrationV4, CompactInstanceV4, CompactVerificationSessionV4,
+            LocatedCompactProofV4, NativeCompactProofV4, native_proof_bytes_bound_v4,
+        },
+    };
+    let data = SnapshotDataV1::new(corpus(8, 2), 2, 2, 4).unwrap();
+    let (spec, _) = retrieval_spec(&data, 2);
+    let mut w = W::new(true);
+    let (base, _) = w.register(spec, Some(data.snapshot.root()));
+    let coverage = compile_native_class_v2(
+        &w.l,
+        base,
+        CompactCompileParamsV1 { compact_exact_arithmetic: false, arithmetic_repetitions: 1, fs_query_bits: 64 },
+    )
+    .unwrap();
+    let adversary =
+        CompactAdversaryBudgetV4 { retry_limit: 0, grinding_bits_per_beacon: 0, beacons_per_attempt: 1, adaptive_statements: 1 };
+    let contract = NativeCompactContractV2 {
+        version: 2,
+        base_class: base,
+        coverage_root: coverage.root(),
+        binding_bits: 256,
+        claimed_soundness_bits: 1,
+        maximum_proof_bytes: native_proof_bytes_bound_v4(&coverage).unwrap(),
+        maximum_verifier_work: coverage.limits().unwrap().1,
+    };
+    let plan = misaka_palw_kernel::claim_interactive_v3::compact_plan_v4(
+        &contract,
+        &coverage,
+        adversary,
+        InteractiveModeV1::StagedBeacon,
+        1,
+        4096,
+        100,
+    )
+    .unwrap();
+    let registration = CompactClaimRegistrationV4 { version: 4, registrant: P1, contract, coverage, plan, adversary };
+    registration.validate(&w.rebuilt()).unwrap();
+    let mut changed = registration.clone();
+    changed.adversary.grinding_bits_per_beacon = 1;
+    assert!(changed.validate(&w.l).is_err(), "a changed grinding scope needs a new signed compiler/plan");
+    // PRINCIPLES §8 (2026-10-15): the producer session is removed; the frozen record still decodes (history), and the verifier
+    // session refuses every record, so nothing can complete, bind or credit a V4 round.
+    let proof = NativeCompactProofV4 { version: 4, plan: registration.plan.id(), seed: [9; 64], proofs: Vec::new() };
+    let bytes = borsh::to_vec(&proof).unwrap();
+    assert_eq!(NativeCompactProofV4::decode_bounded(&bytes, 4096, 4096).unwrap(), proof);
+    let mut bomb = bytes.clone();
+    bomb[130..134].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(NativeCompactProofV4::decode_bounded(&bomb, 4096, 4096).is_err(), "short frame cannot allocate a huge proof map");
+    let mut extra = proof.clone();
+    extra.proofs.push(LocatedCompactProofV4 {
+        instance: CompactInstanceV4 { stage: 0, scoped_seed: [1; 64], plan_root: [2; 64], position: 0, occurrence: 0, relation: 0 },
+        proof: CompactRelationProofV1 {
+            compiler: CompactRelationCompilerV1::FreivaldsSeededV1,
+            relation: 0,
+            position: 0,
+            occurrence: 0,
+            transcripts: Vec::new(),
+        },
+    });
+    assert!(CompactVerificationSessionV4::verifier(&registration, [9; 64], 1000, 4096, &proof).is_err(), "retired V4 never verifies");
+    assert!(CompactVerificationSessionV4::verifier(&registration, [9; 64], 1000, 4096, &extra).is_err(), "retired V4 never verifies");
+}

@@ -73,10 +73,15 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             companion(&mut params.palw_attempt_work, name, "work_log2 and the nonce budget", at, |f, at| f.activation = at)?
         }
         "palw_attempt_activation" => params.palw_attempt_activation = Some(at),
+        // RFC-0012 §5 (port of codex/rfc12-remove-dns-bft, 2026-10-15): the DNS BFT gate is retired. A preset that already carries
+        // it keeps it (testnet-12 replays its history under it), but no new ruleset arms or moves it: the overlay leaves through
+        // `palw_dns_retirement_v1`, never by re-scheduling its veto.
         "dns_bft_gate" => {
-            companion(&mut params.dns_bft_gate, name, "t_leak_daa, the re-entry depth and the validator floor", at, |f, at| {
-                f.activation = at
-            })?
+            return Err(
+                "`dns_bft_gate` is retired by RFC-0012: a candidate cannot arm or move the DNS BFT veto (the overlay leaves through \
+                 `palw_dns_retirement_v1`)"
+                    .to_string(),
+            );
         }
         "palw_beacon_fold" => companion(&mut params.palw_beacon_fold, name, "k", at, |f, at| f.activation = at)?,
         "palw_capability_bound" => params.palw_capability_bound = Some(at),
@@ -549,6 +554,15 @@ mod tests {
         let params: Params = NetworkId::with_suffix(NetworkType::Testnet, 11).into();
         for (name, _) in params.palw_fences_v1() {
             let mut arming = params.clone();
+            if name == "dns_bft_gate" {
+                // RFC-0012: retired — refused by name, and the preset's own value (if any) is left as it was.
+                let before = arming.palw_fences_v1().into_iter().find(|(n, _)| *n == name).and_then(|(_, v)| v);
+                let why = set_fence_by_name(&mut arming, name, ForkActivation::new(9_000_000)).expect_err("dns_bft_gate is retired");
+                assert!(why.contains("retired by RFC-0012"), "{why}");
+                let after = arming.palw_fences_v1().into_iter().find(|(n, _)| *n == name).and_then(|(_, v)| v);
+                assert_eq!(before, after, "the refusal leaves the preset's DNS BFT gate as it was");
+                continue;
+            }
             if matches!(name, "palw_inactivity_leak" | "palw_dns_retirement_v1" | "palw_permissionless_panel_v1") {
                 assert!(set_fence_by_name(&mut arming, name, ForkActivation::always()).is_err());
                 let after = arming.palw_fences_v1().into_iter().find(|(n, _)| *n == name).and_then(|(_, v)| v);

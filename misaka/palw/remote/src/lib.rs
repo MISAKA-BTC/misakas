@@ -68,9 +68,20 @@ pub mod monetary_material;
 /// RFC-0008 covenant (2026-10-15 round 3): the provider-side GC janitor over the native finality witness.
 pub mod monetary_material_gc;
 
+pub mod material_recovery_ack_v2;
 pub mod monetary_material_rpc;
 
 pub mod native_ready_v3;
 
 /// RFC-0008 PAV3 (2026-10-15 round 3): the integrity-authenticated producer↔provider envelope between hosts.
 pub mod provider_transport_v1;
+
+// Real typed kernel execution fixtures reused by the provider GC consumer tests.
+// They do not establish a native finality witness or independent remote hosts.
+#[cfg(test)]
+#[path = "../../kernel/tests/common/mod.rs"]
+mod monetary_gc_kernel_fixture;
+
+pub mod native_carrier_queue_v4;
+
+pub mod kernel_material_context_v4;

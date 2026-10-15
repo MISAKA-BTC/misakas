@@ -699,6 +699,8 @@ RFC12のDNS finality撤去・native EVM変更 [C18] は別のupgradeである。
 
 ## 10. 将来のnode-verifiable compact proofとの関係
 
+> **除外(2026-10-15 ユーザー恒久決定、[PRINCIPLES §8](../PRINCIPLES.md)):** 暗号学的な計算証明(ZK、zk-SNARK/STARK、zkVM、PCS ベースの succinct proof など)は使用しない。本節の「将来の compact proof」は暗号学的証明を含まない範囲(決定論的再計算・確率的な代数チェック)に限り、暗号学的証明は採用候補ではない。
+
 producerが全nodeの承認済みkernel checkerで安価に検証できるcompact proofを
 提出する方式も、固定Panelなしで設計できる。
 ただし本RFCの基本modeはoptimistic public verificationであり、
@@ -944,3 +946,19 @@ Panel=0は将来設計として保持するが、当面の実装・release対象
 * 最終段: RFC-0010 V3のbeacon（`ChainPanelBeaconHistoryV1`）が読むOPV Final factも同じsettlement述語から`claim_final`/`da_satisfied`を導く（GAP-B3、追加weight/rewardなし）。EXEC work sliceをOPV claimで検証する結合worldのnode試験sourceを追加した。RFC15のコード段階は完了（未build・未実行・未検証）。
 * 新しいwire tag、object kind、aux table、RPC op、p2p version、funded actionは割り当てていない（`GetPalwKernelClaimResponse`内のproto field 35/36とBorsh wire v2を追加）。testnet-12のparams/schedule idは変わらない。isolated calibrationのparams identityは変わる。
 * 未了: §1のG14実証、各budget/資源の実測、経済・監視市場の独立評価、PESG、敵対的実network試験、work-slice/native settlement readerの接続、一部のnode E2E（実装状況表 §4/§6）。値はユーザー決定待ち（[user decisions §RFC15](../design/palw/rfc-0006-0012-user-decisions-2026-10-15.md)）。
+
+## ユーザー方針 2026-10-15 第4回 — §8.5.5 の配分式に階層係数
+
+> **統治する前提:** [PRINCIPLES §9](../PRINCIPLES.md)(凍結前提)。規則は [ADR-0179](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md) が定める。
+
+§8.5.5 の `P_m(d) = S̄_m(d)^1.5 / Σ_j S̄_j(d)^1.5` を、次のように読む。
+
+~~~text
+P_m(d) = c_m · S̄_m(d)^1.5 / Σ_j c_j · S̄_j(d)^1.5
+c_m    = 1.0  (m ∈ ApprovedModels(h): genesis と年次フォークの指定、追加のみ)
+       = 0.3  (後から登録したモデル、登録時点から固定。モデル単位の審査はない)
+~~~
+
+* 係数は一度だけ掛け、ブロック生成機会と coinbase 配分の両方に使う。
+* 登録 tier 全体の発行上限 `κ` を加える。
+* `α = 1.5`、Miner + Verifier の 30 日平均は変えない。

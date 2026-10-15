@@ -134,7 +134,28 @@ impl Params {
         if let Some(f) = self.palw_claim_challenge_v2 {
             f.policy.validate().map_err(PalwModeV2Error::InvalidOwned)?;
             if f.activation != ForkActivation::never() {
-                return Err(PalwModeV2Error::InvalidOwned("palw_claim_challenge_v2 remains dormant: independent full128/source/economic review and native all-target acceptance must be evidenced".into()));
+                // A public fence carries its review scope and evidence (zero = private mechanics only).
+                if f.policy.lifetime_review_scope == [0; 64]
+                    || f.policy.source_independence_evidence == [0; 64]
+                    || f.policy.economic_evidence == [0; 64]
+                {
+                    return Err(PalwModeV2Error::InvalidOwned(
+                        "palw_claim_challenge_v2 remains dormant: independent full128/source/economic review is not evidenced".into(),
+                    ));
+                }
+                // Checkers fetch every target's material through the signed covenant and its recovery: both armed at or below.
+                let at_or_below = |a: Option<ForkActivation>| {
+                    a.is_some_and(|a| a != ForkActivation::never() && a.daa_score() <= f.activation.daa_score())
+                };
+                if !at_or_below(self.palw_monetary_material_v1.as_ref().map(|m| m.activation))
+                    || !at_or_below(self.palw_material_release_recovery_v2.as_ref().map(|r| r.activation))
+                {
+                    return Err(PalwModeV2Error::InvalidOwned(
+                        "palw_claim_challenge_v2 requires the monetary material covenant and release recovery V2 at or below it".into(),
+                    ));
+                }
+                // Native all-target acceptance and the economics are measured: a pinned record (EMPTY: dormant).
+                self.palw_rfc0608_measured_v1(crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::ClaimChallengeV2, &f.policy)?;
             }
         }
         Ok(())
@@ -271,6 +292,21 @@ pub struct PalwPaidClaimFinalV2 {
     pub transcript_root: Digest,
 }
 impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
+    /// Signed prospective paid jobs cannot also be independent entropy sources.
+    /// Check canonical native rows, rather than guessing from an eventual Final.
+    pub fn paid_claim_job_is_enrolled_v3(&self, base: &Digest) -> Result<bool, String> {
+        for ((_, key), bytes) in self.aux.range((PAID_CLAIM_JOBS_V2, Vec::new())..(PAID_CLAIM_JOBS_V2 + 1, Vec::new())) {
+            let job: PaidClaimJobV2 = borsh::from_slice(bytes).map_err(|e| format!("invalid paid job authority: {e}"))?;
+            if key.as_slice() != job.id().as_slice() || job.version != 2 {
+                return Err("paid job authority key/version mismatch".into());
+            }
+            if job.base_job == *base {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub fn paid_claim_authority_v2(&self, context: &Digest) -> Result<PalwPaidClaimAuthorityV2, String> {
         let a: PalwPaidClaimAuthorityV2 =
             self.aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(context).unwrap()).ok_or("paid claim authority missing")?;
@@ -466,6 +502,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         use crate::palw_state_v2::PalwStateV2Error;
         let refuse = |s: String| PalwStateV2Error::CarriageInconsistent(format!("paid claim: {s}"));
+        self.assert_paid_compact_consistency_v4(params)?;
         let Some(route) = self.kernel_route() else { return Ok(()) };
         let owned = |t: u8| matches!(t,113..=119|122..=124);
         if !route.aux.keys().any(|(t, _)| owned(*t)) {
@@ -479,6 +516,11 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         }
         let l = route.ledger().map_err(&refuse)?;
         let p = fence.policy;
+        // Restore-only borrowed keys: source validation bounds the live set by
+        // MAX_LIVE_BEACON_SOURCE_SLOTS_V1; do not rescan its full retained history
+        // once for every paid job.
+        let independent_source_jobs: std::collections::BTreeSet<&Digest> =
+            l.beacon_sources.values().filter(|source| source.outcome.is_none()).map(|source| &source.job).collect();
         let count = |table: u8| route.aux.keys().filter(|(t, _)| *t == table).count();
         if count(PAID_CLAIM_CLASSES_V2) > p.maximum_classes as usize || count(PAID_CLAIM_JOBS_V2) > p.maximum_jobs as usize {
             return Err(refuse("retained class/job capacity exceeded".into()));
@@ -544,6 +586,10 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 PAID_CLAIM_CLASSES_V2 => {
                     let c: PaidClaimClassV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                     c.validate().map_err(&refuse)?;
+                    // PRINCIPLES §8: the fold refuses a V4 compact plan, so a carried class naming one is inconsistent.
+                    if c.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
+                        return Err(refuse(crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACT_RETIRED_REASON_V1.into()));
+                    }
                     let target = if let Some(base) = l.classes.get(&c.base_class) {
                         if crate::palw_claim_challenge_v2::is_segmented_descriptor_v3(&base.descriptor.digest()) {
                             PaidClaimTargetV2::Segmented
@@ -599,6 +645,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                         || l.job_poster(&j.base_job) != Some(j.payer)
                         || j.maximum_consumers == 0
                         || j.maximum_consumers > p.maximum_enrollments_per_job
+                        || independent_source_jobs.contains(&j.base_job)
                     {
                         return Err(refuse("job key/payer/mathematical class/capacity substituted".into()));
                     }
@@ -724,7 +771,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                     let row: crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3 =
                         borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                     let a = route.paid_claim_enrollment_v3(&row.enrollment).map_err(&refuse)?;
-                    row.validate(&a, &l).map_err(&refuse)?;
+                    route.validate_paid_round_v4(&row, &a, &l).map_err(&refuse)?;
                     if a.class.source_policy.interactive_mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
                         let index: PalwPaidClaimIndexV3 = route
                             .aux_row(PAID_CLAIM_ROUNDS_V2, &paid_claim_index_key_v3(PAID_CLAIM_ID_INDEX_PREFIX_V3, &row.context.id()))
@@ -744,6 +791,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 PAID_CLAIM_FINALS_V2 => {
                     let row: PalwPaidClaimFinalV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                     let a = route.paid_claim_enrollment_v3(&row.enrollment).map_err(&refuse)?;
+                    if !l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
+                        return Err(refuse("stored paid Final lacks assigned verifier approvals".into()));
+                    }
                     let claim = l.claims.get(&a.enrollment.base_claim).ok_or_else(|| refuse("Final base claim missing".into()))?;
                     if id != row.enrollment
                         || row.base_claim != a.enrollment.base_claim
@@ -770,7 +820,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                                 .unwrap(),
                             )
                             .ok_or_else(|| refuse("last Final round absent".into()))?;
-                        last.validate(&a, &l).map_err(&refuse)?;
+                        route.validate_paid_round_v4(&last, &a, &l).map_err(&refuse)?;
                         (last.lock.ok_or_else(|| refuse("Final round lock absent".into()))?, plan.rounds, last.transcript_root)
                     } else {
                         (

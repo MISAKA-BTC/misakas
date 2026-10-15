@@ -703,7 +703,7 @@ pub(crate) async fn market_open(
         let mut sizes: Vec<u64> = candidates.iter().map(|(_, e)| e.amount).collect();
         sizes.sort_unstable_by(|a, b| b.cmp(a));
         let reach: u64 = sizes.iter().take(crate::palw_model::PALW_CARRIER_MAX_INPUTS).sum();
-        let need = amount.saturating_add(kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI);
+        let need = amount.saturating_add(kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI);
         if reach <= need {
             return Err(Halt::Blocked(
                 Finding::error("E-FUNDS-SEED", exit::FUNDS, "The key's outputs cannot carry this seed")

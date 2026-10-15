@@ -8,6 +8,10 @@ G14 prosecution/bounds and X8R/BUDGET integration through `123d8254e`. Original 
 
 Statuses below describe inspected code/evidence, not assumed results from earlier progress reports.
 
+The current detailed backlog, validation order, seven-model status and the user's
+hard-fork/soft-fork policy for unsupported models are tracked in
+[RFC02 remaining work (2026-10-15)](rfc0002-remaining-work-2026-10-15.md).
+
 | Requirement | Existing evidence / current action | Completion evidence still required |
 | --- | --- | --- |
 | Current specification | RFC02 now separates current requirements from historical primitive-count, replay, availability and seating notes; §II.14 incorporates all six review requirements | Keep formal specification and implementation aligned as versioned features land |
@@ -3538,8 +3542,171 @@ courts 3/4 in `reveal_paged` via `window_court` (own v37 filing envelope
 job; decoder ceiling 46; pre-gate/fold unjudged predicate covers 45|46. SDK
 `prepare_window_attach_v37`, `window_filing_v37`, `native-payload --kind window-attach37`.
 Test sources: kernel `tests/flat_window37.rs` (envelope, selection-job determinism, program
-binding refusal); node below-fence test now sends 45 and 46. No code item of RFC02 remains;
-RFC03 patch/audio stays spec + fenced refusing codec.
+binding refusal); node below-fence test now sends 45 and 46. The earlier assertion that no
+RFC02 code remained was incorrect; the source audit below supersedes it. RFC03 patch/audio
+stays spec + fenced refusing codec.
+
+### Source audit of integrated pre `5aa52b886` (2026-10-15)
+
+This is a source-level assessment, not a new compilation or measurement result. The
+five gaps below were found in the integrated `pre` source. Work continues on
+`codex/workspace-rfc02-completion`, based on that exact commit. Code must be completed
+before the consolidated validation phase starts, as requested by the user.
+
+| Gap | Required correction | Current evidence |
+| --- | --- | --- |
+| Complete native components | Master acceptance/funding/commit, Logits, position-specific Random and post-state continuity must use the actual canonical source, maximum reservation and full courts | Implementation in progress; no new build or execution |
+| Length36 token maximum | Original requested maximum and stopped extent must both pass the token axis, including independent Final/receipt extraction | Guards and regression source added; unverified |
+| Window37 program binding | Actual history state/writer operand and selection source, primitive, dtype and shape must match their court | Defensive registration/attachment guards and regression source added; **positive history-selection execution remains open** |
+| A6 receipt windows | Audit consecutive independently pinned states, original jobs and joint queue/physical accounting at the frozen sustained issuance rate across two windows | Proof-derived auditor and runner integration in progress; no measurement |
+| Complete frontend artifacts | Actual source and real weights must produce complete-component Source28 artifacts without a preconstructed tensor callback bundle | Importer/CLI implementation in progress; no conversion run |
+
+The window issue is deeper than a missing dtype comparison. Frozen TIR v1 (and the v1
+view of v2) explicitly refuses `TopK` along symbolic history dimension `H`; its output
+type cannot express `min(H, selection_cap)` either. Thus a same-shaped node is not a
+history-selection implementation. The new guards reject such a class before registration,
+preserve the frozen primitive semantics, and do **not** establish an executable positive
+window path. An explicitly versioned execution/source contract is still required before
+that feature, or all RFC02 code, may be called complete.
+
+The defensive window attachment also checks court work, scratch and original-class
+restoration against the original paid envelope, in addition to filing bytes. It never
+grants additional work from an after-Fund declaration. No shipping fence or preset changes.
+
+**Additional user scope (2026-10-15):** initial simultaneous block/coinbase/Final support
+for 1.5B, 8B, 14B, 24B, 32B and 70B dense tiers plus the Qwen3.6-35B-A3B hybrid MoE.
+The all-required launch target and publisher file/revision metadata are recorded in
+`launch/initial-seven-models-v1.json` and RFC §II.14.61. No runtime variant, model
+conversion, full-task fidelity, Final or eligibility is established by this metadata.
+This requirement adds work; it does not remove the five gaps above or replace A6/A8.
+
+### Completion-branch source checkpoint (2026-10-15; unverified)
+
+The source audit of `pre` remains valid for its recorded commit. The subsequent
+completion branch is **not code-complete**. `f934a787b` saves native invocation
+replay, genuine original Master component records, source-backed Pixtral/decoder
+frontends, bounded integer PALWQ361 reading, consecutive-state receipt auditing
+and CAS evidence collection. These are implementation checkpoints, not new test
+results. No build, conversion, node execution or measurement has run for them.
+
+The next unverified source checkpoint adds compact Commit32 whole/parts/assembly
+with original reservation bindings, owning Program/Source39 with independent
+real-PC/inventory equality, last-use execution and all-node streaming observation,
+and an integer Q36 full-forward source mirror. Source39 includes an explicitly
+versioned history selection primitive and permits its own larger parameter and
+input geometry; it does not reinterpret frozen V1/V2 bytes. The new source/class
+registration actors and paged source upload charge shared21 resources before
+restoration or allocation. An explicit local snapshot39 wraps the unchanged
+snapshot34 and is reconstructed by the node and SDK under the same pins.
+
+Audit39 adds full ordered aux authentication from bounded CAS streams and a
+pinned-state page RPC (1024 rows / 32 MiB per page, exact selected-parent root and
+stable import generation). A page alone is not a proof. The existing node's
+4000-DAA historical reconstruction cap remains in force: collecting two complete
+receipt windows only after both finish is not implemented by this single-state
+collector. Contemporaneous collection or a separately bounded archival mechanism
+and the owning39 receipt/window audit integration remain required code.
+
+A further source checkpoint connects native39 Fund to original principal nonce,
+actual escrow debit, common Q/T and recipient R holds, source/proof guarantees
+and the physical queue. Typed DA/proof actions and independent native settlement
+are being connected; this is not an end-to-end execution result. Master39 now has
+its own registered source/class-set identity, exact requested component binding,
+genuine upstream Final checks, and aggregate immutable component credit roots.
+Its large registration transport and remaining job/GC/readonly audit adapters
+are unfinished. Distinct state kinds keep its rows separate from protected proof
+owners and material certificates.
+
+Contemporaneous collectors now include explicit own-sink starts, pre-window
+readiness, selected-chain catch-up bounds, shared CAS, and partial-run rejection.
+The run-plan orchestrator starts both independent collectors before producer work;
+the old32 audit trims only the outside-window boundaries and verifies every
+interior state. The owning39 anchor factory authenticates raw/V1/Rule-E-V2 root
+forms according to the auditor's own ruleset. The node's current V1 envelope
+exporter does not yet export a Rule-E V2 leaf; such an active profile must fail
+explicitly. The new39 A6 receipt extractor/verifier still needs its native book
+and complete Master linkage. None of these source changes has been executed.
+
+The next unverified increment adds the shared nonce and actual debit, original
+component invocation hooks, protected delivery/court and single escrow-credit
+closure, concrete disk-backed independent replay/filer and bounded upstream
+output material. Large Master and producer-consent metadata now use explicit
+67–70 upload actions; the retained Master body uses authenticated 32-KiB pages
+(kind93) instead of a row exceeding the audit RPC's bound. A source audit view
+reconstructs the actual registered classes, complete source, public request,
+component order and immutable edges from the fully authenticated aux stream.
+It deliberately carries no Final or mining authority. These paths remain
+uncompiled and unexecuted.
+
+Remaining code includes final transport/collection and readonly native39
+Final/receipt integration, two-window A6/A8 adaptation, source/class retention
+and reuse, and genuine complete-Master39 to ordinary FP eligibility for block
+production, coinbase and Final weight. A privately paid job's escrow Final
+grants none of those rights by itself. Source registration and local
+qualification flags likewise grant none. Consensus credit needs the actual
+randomly selected validator approvals, with their honest-fraction assumption
+stated explicitly; source identity or optimistic closure cannot replace them.
+The frontend39 source writers are connected, while publisher task preprocessing,
+variable image geometry/token expansion and exact original request metadata
+still require explicit implementation and fidelity checks. Every large-model
+source, tokenizer, context and runtime variant must be pinned before measuring.
+
+The initial-seven gate separately requires exact precommitted native identity,
+all original component credits, coinbase inclusion and accepted redemption.
+Mistral's token-only Text29 identity cannot substitute for its complete
+vision/projector/decoder Master identity under its owning grammar. All seven remain `NOT_RUN`; the release gate
+does not activate a shipping preset or assign founding bonds. The original
+A6/A8 populations and failure denominators remain unchanged.
+
+After all implementation is complete, the consolidated validation must cover
+compilation, relevant regressions and adversarial courts, independently replayed
+native Final/coinbase/redemption, original checkpoint/context measurements, A6/A8
+and all seven initial models. Historical passes below do not validate this source.
+
+The user's 2026-10-15 permanent decision is now recorded in the repository
+AGENTS.md and PRINCIPLES §8. No cryptographic proof of model computation may be
+implemented or proposed. Existing commitment/opening/filing names refer to data
+identity authentication or public local counterexamples. The owning39 Final
+conditions are also being separated from the frozen27 hard detection-rate and
+negative-expected-gain gates, which conflict with PRINCIPLES §0: those metrics
+must be reported, including UNKNOWN, while original bond caps, objective courts,
+paid resources and deadlines remain mandatory. This correction is unfinished.
+
+## Owning39 remaining rows (2026-10-15, `integ/rfc02-remaining`) — unbuilt source
+
+The fourteen rows of [the remaining-work list](rfc0002-remaining-work-2026-10-15.md) were coded on
+`integ/rfc02-remaining` (branched from `integ/rfc02-rfc06-12-g14`, merged from it periodically). The
+per-row file:line status is in that list. Nothing was compiled, tested, converted or run; nothing is a
+PASS; every new consensus path is dormant behind `palw_native_execution_v39` or the new
+`palw_native_mining_v39` (A-2 uniform: unjudged below its fence, refused armed).
+
+- **Termination and transport:** collection53 (original terminal, credit and retention; queue30 and
+  physical22 retired once; `HOLD_JOB` released; rows 16/17/23/28/84 kept; kind-31 tombstone carries the
+  consent digests), producer commit transport 54/55 in 32-KiB pages, paid-carrier lanes, node signer
+  checks, scanner spec arms for every owning39/mining39 row.
+- **Audit:** an independent Job audit factory and the complete Master Final audit over one anchored
+  stream, a read-only archive for bodies released by collection, the request composer, the Mistral
+  image/frontend-to-Master adapter, the PALWQ361 differential driver, two-window A6/A8 for v39 and the
+  payout/redemption audit that separates settlement, pending, coinbase delivery and UTXO spend.
+- **Mining (73–79, `PNR9`):** canonical work from actual positions, final lengths and every component's
+  compute; ordinary registration with seats and an ADR-0176 stake liability; claim-level drawn approval
+  only, as an RFC-0018 Gate C `'V'` subject; ADR-0176 budget plan/commit with bond formula v2 and the
+  0.51 export cap; one-use receipt quanta spent by an algo-7 `PNR9` header through the existing
+  receipt-spend entitlement and coinbase path. A privately paid job's Final grants none of these rights.
+- **User decisions 2026-10-15 rounds 4–5:** registered models are fixed at tier 0.3 from registration
+  with no model-level exam, probation, renewal or promotion; the tier comes from ADR-0179
+  `palw_model_tier_v1` (on `integ/decisions-1015`, consumed through a one-line swap point until it reaches
+  integ). Model-level drawn approval and private eligibility issuance were therefore not built; RFC-0017
+  table 131 is not consulted.
+- **Activation readiness:** explicit policy with the honest-fraction premise, fork fingerprint and probe,
+  SDK retention release 71 and expired consent-hold collection 72, signed 73–79 frames, operating
+  procedures ([native39-operations.md](launch/native39-operations.md)), and the anchor exporter's Rule-E
+  V2 leaf. Activation stays OFF.
+
+Blocked items: generated scanner arms (the wire generator stops on six missing shape-review pins that
+`integ/rfc06-12-remaining` adds); real checkpoint/tokenizer/context pins and differential measurements
+(conversion and execution are outside this phase); the header-side Rule-E V2 commitment
+(`palw_committed_state_root_v1` is V1-only, lane L2FC). The initial seven models remain `NOT_RUN`.
 
 ## Validation (2026-10-15) — paused 10-15 by user order
 

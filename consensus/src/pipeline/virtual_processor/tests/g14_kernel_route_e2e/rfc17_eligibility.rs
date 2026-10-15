@@ -3,11 +3,13 @@
 //!
 //! * **A-2 at the door:** below `palw_model_eligibility_v1` an exam commit (inner 74) is refused by the processor's inner-kind gate
 //!   — the mempool takes no carrier for it — and the chain runs on with no aux 131 row.
-//! * **Genesis classes are ungoverned past the fence** (user decision U-6): an armed node and an unarmed twin fed the same script of
-//!   heartbeats and attempts admit the same claims with the same phase, reservation, escrow and collateral (not the same state
-//!   roots: the fence is in the armed network's fingerprint, so its block hashes differ), and the registry read reports
-//!   every genesis class `not-governed` with the old rule's three rights.
-//! * **An exam of a genesis class is refused** through the node: no exam, no attempt, no fee.
+//! * **Genesis classes past the fence** (user decision U-6, 2026-10-15: no permanent genesis exemption except the non-reward BASE-0
+//!   liveness floor): an armed node and an unarmed twin fed the same script of heartbeats and attempts admit the same claims with
+//!   the same phase, reservation, escrow and collateral (not the same state roots: the fence is in the armed network's fingerprint,
+//!   so its block hashes differ) — inside the one-renewal-period grace a rewarded genesis class keeps its rights (U-5) — and the
+//!   registry read reports the BASE-0 floor `not-governed` and every other genesis class `eligible` (its pre-fence grace, renewal
+//!   due one period after the fence), both with the three rights.
+//! * **An exam of the BASE-0 floor is refused** through the node: no exam, no attempt, no fee.
 //!
 //! What this file does NOT carry, said here so it is not mistaken for coverage: a non-genesis class registered past the fence through
 //! the node (the registration carriage and seat readiness of `g14_registration_e2e`) and its probation → exam → promotion → lapse walk.
@@ -103,16 +105,25 @@ async fn rfc17_genesis_classes_stay_ungoverned_past_the_fence_byte_for_byte() {
             assert_eq!(
                 (format!("{:?}", ra.phase), ra.reserved, ra.escrowed_reward),
                 (format!("{:?}", rb.phase), rb.reserved, rb.escrowed_reward),
-                "card {card}: the same phase, reservation and escrow (genesis classes are ungoverned)"
+                "card {card}: the same phase, reservation and escrow (a genesis class keeps its rights in its grace)"
             );
         }
         assert_eq!(collateral(&armed), collateral(&twin), "card {card}: the same collateral on every card");
         assert_eq!(eligibility_rows(&armed), 0, "card {card}: no eligibility row");
     }
     let read = armed.chain.ctx.consensus.palw_model_registry_v1();
+    let base = base_class(&armed);
     if let Some(read) = read {
         for class in &read.classes {
-            assert_eq!(class.eligibility.stage, "not-governed", "a genesis class is outside RFC-0017 (U-6)");
+            if class.class_id == base {
+                assert_eq!(class.eligibility.stage, "not-governed", "the BASE-0 floor is the one dedicated exception (U-6)");
+            } else {
+                assert_eq!(
+                    class.eligibility.stage, "eligible",
+                    "a rewarded genesis class is a pre-fence class in its grace (U-5/U-6)"
+                );
+                assert!(class.eligibility.next_renewal_daa > FENCE, "its renewal is due one period after the fence");
+            }
             assert!(class.eligibility.subsidy && class.eligibility.block_right && class.eligibility.final_weight);
         }
     }

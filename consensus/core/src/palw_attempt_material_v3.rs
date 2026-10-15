@@ -193,13 +193,41 @@ impl PalwAttemptMaterialEnvelopeV3 {
         daa: u64,
         verify: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
     ) -> Result<(), String> {
+        self.verify_prior_inner_v4(state, None, anchor, daa, verify)
+    }
+    /// Explicit new recovery fence; legacy V3 verification remains byte-for-byte
+    /// the same rule below it. Filtering occurs BEFORE canonical min selection.
+    pub fn verify_prior_with_recovery_v4(
+        &self,
+        state: &PalwChainStateV2,
+        params: &crate::palw_state_v2::PalwStateParamsV2,
+        anchor: Hash64,
+        daa: u64,
+        verify: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    ) -> Result<(), String> {
+        self.verify_prior_inner_v4(state, Some(params), anchor, daa, verify)
+    }
+    fn verify_prior_inner_v4(
+        &self,
+        state: &PalwChainStateV2,
+        params: Option<&crate::palw_state_v2::PalwStateParamsV2>,
+        anchor: Hash64,
+        daa: u64,
+        verify: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    ) -> Result<(), String> {
         self.validate_shape()?;
         let a = &self.base.attempt;
         // The canonical oldest-key eligible session fixes the roster before work;
         // choosing another funded session cannot buy another draw for that work.
-        let selected = select_native_session_v3(state.monetary_material_rows_v1(), a, daa, |provider| {
-            state.bond(provider).map(|bond| bond.operator_id)
-        })
+        let selected = select_native_session_v3(
+            state
+                .monetary_material_rows_v1()
+                .into_iter()
+                .filter(|row| params.is_none_or(|p| state.require_material_recovery_v2(p, row.terms.root, daa).is_ok())),
+            a,
+            daa,
+            |provider| state.bond(provider).map(|bond| bond.operator_id),
+        )
         .ok_or("no eligible prior signed native session")?;
         if selected.terms.root != self.ready.session
             || selected.consent != self.ready.consent
@@ -248,6 +276,25 @@ pub fn select_native_session_v3(
                 && row.healthy_with(&operator_of)
         })
         .min_by_key(|row| row.terms.root)
+}
+
+/// Current-fence producer selection shares the exact recovery filter used by
+/// native admission. Existing accepted pre-fence work is never re-enrolled.
+pub fn select_native_session_with_recovery_v4(
+    state: &PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    attempt: &PalwAttemptUnsignedV2,
+    daa: u64,
+) -> Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1> {
+    select_native_session_v3(
+        state
+            .monetary_material_rows_v1()
+            .into_iter()
+            .filter(|row| state.require_material_recovery_v2(params, row.terms.root, daa).is_ok()),
+        attempt,
+        daa,
+        |provider| state.bond(provider).map(|b| b.operator_id),
+    )
 }
 
 /// The Ready a producer asks the selected session's providers to sign, derived only from the

@@ -78,7 +78,7 @@ fn original_book(r: &PalwKernelRouteStateV1, h: &JobHeader) -> Result<NativeText
     }
     Ok(b)
 }
-fn write_book(builder: &mut TransitionBuilder<'_>, h: &mut JobHeader, b: &NativeTextBookV29) {
+fn write_book(builder: &mut TransitionBuilder<'_>, h: &mut JobHeader, b: &NativeTextBookV29) -> Result<(), PalwStateV2Error> {
     let raw = key(b);
     h.book = b.root();
     h.book_bytes = raw.len() as u32;
@@ -88,8 +88,9 @@ fn write_book(builder: &mut TransitionBuilder<'_>, h: &mut JobHeader, b: &Native
     } else {
         0
     };
-    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, k(1, &h.job), Some(raw));
-    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, k(0, &h.job), Some(key(h)));
+    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, k(1, &h.job), Some(raw))?;
+    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, k(0, &h.job), Some(key(h)))?;
+    Ok(())
 }
 pub(super) fn reserved(r: &PalwKernelRouteStateV1, bond: &PalwBondKeyV2) -> u128 {
     let Some(ids) = read::<Vec<Digest>>(r, EXECUTION_JOB_OWNER_TABLE_V11, 1, bond, 4 + 8 * 64) else { return 0 };
@@ -154,7 +155,7 @@ fn paid_restore(
     let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     let mut q = quota_shard(builder, p, &epoch, palw_kernel_bond_id_v1(signer), [0; 64])?;
     q.debit_ordinary(&p.quota, &epoch, &cost).map_err(refused)?;
-    write_shard(builder, &q, [0; 64]);
+    write_shard(builder, &q, [0; 64])?;
     Ok(true)
 }
 fn decode_register(raw: &[u8]) -> Result<NativeTextRegisterV29, PalwStateV2Error> {
@@ -217,13 +218,14 @@ fn register(
     }
     ids.push(id);
     let h = ClassHeader { class: record, owner: *signer, wire_bytes: body.len() as u32, registered: ctx.daa_score,original_source:s };
-    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, k(0, &id), Some(key(&h)));
-    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, k(1, &id), Some(body.to_vec()));
-    builder.write_kernel_row(EXECUTION_CLASS_OWNER_TABLE_V11, k(0, signer), Some(key(&ids)));
-    builder.note_kernel_bond(signer);
+    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, k(0, &id), Some(key(&h)))?;
+    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, k(1, &id), Some(body.to_vec()))?;
+    builder.write_kernel_row(EXECUTION_CLASS_OWNER_TABLE_V11, k(0, signer), Some(key(&ids)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 struct Quote {
+    original_history_bound:u32,
     maximum: CheckedNativeTextMaximumV29,
     basis: NativeFinalClassBasisV27,
     quota: CheckedTextQuotaV29,
@@ -474,7 +476,7 @@ fn quote(
         &conditions,
     )
     .map_err(refused)?;
-    Ok(Quote { maximum, basis, quota, source, paged, queue, conditions, caller, complete_path: complete, proof_window })
+    Ok(Quote { original_history_bound:program.history_bound,maximum, basis, quota, source, paged, queue, conditions, caller, complete_path: complete, proof_window })
 }
 fn prepare(
     builder: &mut TransitionBuilder<'_>,
@@ -525,8 +527,8 @@ fn prepare(
         return Err(refused("text29 finite own preparation catalog or exact preparation exists"));
     }
     ids.push(id);
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(1, &id), Some(key(&prepared)));
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(0, signer), Some(key(&ids)));
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(1, &id), Some(key(&prepared)))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(0, signer), Some(key(&ids)))?;
     Ok(())
 }
 fn accept(
@@ -584,8 +586,8 @@ fn accept(
         return Err(refused("text29 producer-only finite consent catalog exhausted"));
     }
     ids.push(a.root());
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(3, &a.root()), Some(key(&a)));
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(2, signer), Some(key(&ids)));
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(3, &a.root()), Some(key(&a)))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(2, signer), Some(key(&ids)))?;
     Ok(())
 }
 fn fund(
@@ -774,8 +776,8 @@ fn fund(
     if builder.slash_bond(*signer, w.reward as u128)? != w.reward {
         return Err(PalwStateV2Error::BondBudgetRefused("text29 original authorized escrow changed after full preflight".into()));
     }
-    write_shard(builder, &baseline, id);
-    write_source_shard(builder, &source, id);
+    write_shard(builder, &baseline, id)?;
+    write_source_shard(builder, &source, id)?;
     for (kk, raw) in [
         (key(&(16u8, id, 1u8)), key(&q.source.record())),
         (key(&(26u8, id, 0u8)), key(q.caller.record())),
@@ -795,7 +797,7 @@ fn fund(
             key(&(slots.root(), slots))
         }),
     ] {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, kk, Some(raw));
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, kk, Some(raw))?;
     }
     let mut h = JobHeader {
         job: id,
@@ -815,20 +817,20 @@ fn fund(
         quota_record: q.quota.plan().record(),
         quota_root: q.quota.plan().record().root(),
     };
-    write_book(builder, &mut h, &book);
+    write_book(builder, &mut h, &book)?;
     requester_ids.push(id);
     producer_ids.push(id);
     consents.retain(|v| *v != consent.root());
     preparations.retain(|v| *v != prep.id());
-    builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, key(&w.requester_operator), Some(key(&next)));
-    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(0, signer), Some(key(&requester_ids)));
-    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(1, &producer_key), Some(key(&producer_ids)));
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(2, &producer_key), Some(key(&consents)));
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(0, signer), Some(key(&preparations)));
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(3, &consent.root()), None);
-    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, k(3, &consent.root()), Some(key(&(id, funded.root(), consent.root()))));
-    builder.write_kernel_row(EXECUTION_POLICY_TABLE_V11, k(0, &id), Some(key(&prep)));
-    builder.note_kernel_bond(&producer_key);
+    builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, key(&w.requester_operator), Some(key(&next)))?;
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(0, signer), Some(key(&requester_ids)))?;
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(1, &producer_key), Some(key(&producer_ids)))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(2, &producer_key), Some(key(&consents)))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(0, signer), Some(key(&preparations)))?;
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, k(3, &consent.root()), None)?;
+    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, k(3, &consent.root()), Some(key(&(id, funded.root(), consent.root()))))?;
+    builder.write_kernel_row(EXECUTION_POLICY_TABLE_V11, k(0, &id), Some(key(&prep)))?;
+    builder.note_kernel_bond(&producer_key)?;
     Ok(())
 }
 fn cached_subject(
@@ -888,7 +890,7 @@ fn commit(
     let mut shard = quota_shard(builder, p, &epoch, palw_kernel_bond_id_v1(signer), id)?;
     let action = plan.action(QuotaActionKindV11::Metadata, body).map_err(refused)?;
     shard.debit_reserved(&p.quota, &epoch, &binding, &plan, &action).map_err(refused)?;
-    write_shard(builder, &shard, id); // BEFORE every body/class/max/actual scope decode and restore.
+    write_shard(builder, &shard, id)?; // BEFORE every body/class/max/actual scope decode and restore.
     let r = builder.state.kernel_route.as_ref().unwrap();
     let mut book = original_book(r, &h)?;
     let prep: Prepared = read(r, EXECUTION_POLICY_TABLE_V11, 0, &id, (1 << 20) + 8192)
@@ -914,6 +916,7 @@ fn commit(
         return Err(refused("text29 stopped post rebinds original producer/nonce/max/source/evidence identity"));
     }
     let actual = q.maximum.check_actual(&program, &registered.real_parameters, &b.request, &post.generated).map_err(refused)?;
+    check_bound_window_lengths(r,&h,program.history_bound,actual.positions())?;
     if actual.scope_root() != post.actual_scope25
         || actual.resource_root() != post.actual_resource29
         || actual.positions() != post.evidence.positions
@@ -939,8 +942,8 @@ fn commit(
     )
     .map_err(refused)?;
     h.post_bytes = body.len() as u32;
-    write_book(builder, &mut h, &book);
-    builder.write_kernel_row(EXECUTION_PROTECTED_TABLE_V11, k(0, &id), Some(body.to_vec()));
+    write_book(builder, &mut h, &book)?;
+    builder.write_kernel_row(EXECUTION_PROTECTED_TABLE_V11, k(0, &id), Some(body.to_vec()))?;
     let claim = book.claim().unwrap();
     let status = NativePagedJobStatusV29 {
         version: 29,
@@ -960,7 +963,7 @@ fn commit(
         deadline: b.deadline,
         challenge_end: claim.challenge_end,
     };
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, id, 0u8)), Some(key(&(status.root(), status))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, id, 0u8)), Some(key(&(status.root(), status))))?;
     Ok(())
 }
 fn h_original_program(w: &NativeTextRegisterV29) -> Digest {
@@ -1003,14 +1006,15 @@ fn paid_status(r: &PalwKernelRouteStateV1, id: Digest) -> Result<NativePagedJobS
 fn write_caller(
     builder: &mut TransitionBuilder<'_>,
     s: &misaka_palw_kernel::flat_quota11::stage14::source26::StageSourceCallerShardV26,
-) {
+) -> Result<(), PalwStateV2Error> {
     let g = s.global_row();
     let a = s.actor_row();
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))));
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))))?;
     if let Some(row) = s.caller_row() {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, row.job, row.owner)), Some(key(&(row.root(), row))));
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, row.job, row.owner)), Some(key(&(row.root(), row))))?;
     }
+    Ok(())
 }
 fn own(
     builder: &mut TransitionBuilder<'_>,
@@ -1239,11 +1243,11 @@ fn own(
     if builder.slash_bond(*signer, fee as u128)? != fee {
         return Err(PalwStateV2Error::BondBudgetRefused("text29 original fee changed after complete preflight".into()));
     }
-    super::paged::write(builder, &projection);
-    write_caller(builder, &caller);
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, id, 2u8)), Some(key(&(slots.root(), slots))));
-    builder.write_kernel_row(EXECUTION_SEAL_ACTOR_TABLE_V11, k(0, &id), Some(key(&owner_ids)));
-    builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, nonce_key, Some(key(&(next + 1))));
+    super::paged::write(builder, &projection)?;
+    write_caller(builder, &caller)?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, id, 2u8)), Some(key(&(slots.root(), slots))))?;
+    builder.write_kernel_row(EXECUTION_SEAL_ACTOR_TABLE_V11, k(0, &id), Some(key(&owner_ids)))?;
+    builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, nonce_key, Some(key(&(next + 1))))?;
     Ok(())
 }
 /// A producer Final credit uses the shared unique original-credit queue identity
@@ -1321,10 +1325,10 @@ fn settle(
     }
     if s.producer > 0 {
         builder.pay_native_recipient_v1(Hash64::from_bytes(h.job), h.producer, 11, ctx.daa_score, s.producer, queue, true)?;
-        builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.producer_payout, amount: s.producer }));
+        builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.producer_payout, amount: s.producer }))?;
     } else {
         builder.cancel_native_recipient_v1(Hash64::from_bytes(h.job), h.producer, 11);
-        builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.requester_payout, amount: s.requester }));
+        builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.requester_payout, amount: s.requester }))?;
     }
     if s.finder_credit > 0 {
         let (f, payout) = paid_finder.unwrap();
@@ -1339,13 +1343,13 @@ fn settle(
         }
     }
     subject.closed = true;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(2, &h.job), Some(key(&(subject.row_root(), subject))));
-    write_book(builder, h, b);
-    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, k(0, &h.job), Some(key(&(s, queue, ctx.daa_score))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(2, &h.job), Some(key(&(subject.row_root(), subject))))?;
+    write_book(builder, h, b)?;
+    builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, k(0, &h.job), Some(key(&(s, queue, ctx.daa_score))))?;
     builder.bond_budget_close_v1(&super::super::palw_bond_budget_fold_v1::native_text_budget_id_v29(&h.job), ctx.daa_score);
     if let Ok(mut status) = paid_status(builder.state.kernel_route.as_ref().unwrap(), h.job) {
         status.active = false;
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, h.job, 0u8)), Some(key(&(status.root(), status))));
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, h.job, 0u8)), Some(key(&(status.root(), status))))?;
     }
     let _ = p;
     Ok(())
@@ -1498,13 +1502,13 @@ pub(super) fn reveal_paged(
     settle(builder, ctx, &p, &mut h, &b, &settlement, Some(signer))?;
     let mut paid = seal.clone();
     paid.spent = true;
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, h.job, paid.id())), Some(key(&(paid.root(), paid))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, h.job, paid.id())), Some(key(&(paid.root(), paid))))?;
     if refutes_source {
         builder.write_kernel_row(
             EXECUTION_SOURCE_FACT_TABLE_V11,
             k(0, &source_relation(&ch.class)),
             Some(key(&(h.job, seal.proof_root, ctx.daa_score))),
-        );
+        )?;
     }
     Ok(())
 }
@@ -1535,6 +1539,7 @@ fn close(
     let q = quote(builder, p, &prep.wire)?;
     let f = b.funding().clone();
     let claim = b.claim().unwrap();
+    check_bound_window_lengths(r,&h,q.original_history_bound,claim.actual_positions)?;
     let status = paid_status(r, id)?;
     let (open, latest) = public::open(r, id)?;
     if q.maximum.record() != &f.maximum
@@ -1695,11 +1700,11 @@ fn expire_owner(
         return Err(refused("text29 original expiry stream root differs"));
     }
     slots.retire_owner(id, ctx.daa_score).map_err(refused)?;
-    super::paged::write(builder, &projection);
-    write_caller(builder, &caller);
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(slots.root(), slots))));
+    super::paged::write(builder, &projection)?;
+    write_caller(builder, &caller)?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(slots.root(), slots))))?;
     for index in 0..own.count {
-        builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&(29u8, job, id, index)), None);
+        builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&(29u8, job, id, index)), None)?;
     }
     Ok(())
 }
@@ -1800,17 +1805,17 @@ fn convert(
     let mut owners: Vec<Digest> = read(r, EXECUTION_SEAL_ACTOR_TABLE_V11, 0, &job, 4 + 4 * 64)
         .ok_or_else(|| refused("text29 original discovery lifetime catalogue absent"))?;
     *owners.iter_mut().find(|v| **v == old).ok_or_else(|| refused("text29 original discovery lifetime member absent"))? = new;
-    builder.write_kernel_row(EXECUTION_SEAL_ACTOR_TABLE_V11, k(0, &job), Some(key(&owners)));
-    super::paged::write(builder, &projection);
-    write_caller(builder, &caller);
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, job, old)), None);
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, job, old)), None);
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(slots.root(), slots))));
+    builder.write_kernel_row(EXECUTION_SEAL_ACTOR_TABLE_V11, k(0, &job), Some(key(&owners)))?;
+    super::paged::write(builder, &projection)?;
+    write_caller(builder, &caller)?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, job, old)), None)?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, job, old)), None)?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(slots.root(), slots))))?;
     builder.write_kernel_row(
         EXECUTION_CREDIT_TABLE_V11,
         k(4, &old),
         Some(key(&(job, new, own.original_paid_receipt, own.original_ticket, own.horizon))),
-    );
+    )?;
     Ok(())
 }
 
@@ -2084,13 +2089,13 @@ fn collect_terminal(
     producer_ids.retain(|v| *v != id);
     // ---- every fallible check is above; journal writes only below ----
     if let Some(src) = &producer_source {
-        write_source_shard(builder, src, id);
+        write_source_shard(builder, src, id)?;
     }
-    write_shard(builder, &shard, id);
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8)), Some(key(&(global.root(), global))));
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, 0u8)), Some(key(&(physical.root(), physical))));
-    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(0, &h.requester), Some(key(&requester_ids)));
-    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(1, &h.producer), Some(key(&producer_ids)));
+    write_shard(builder, &shard, id)?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8)), Some(key(&(global.root(), global))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, 0u8)), Some(key(&(physical.root(), physical))))?;
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(0, &h.requester), Some(key(&requester_ids)))?;
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(1, &h.producer), Some(key(&producer_ids)))?;
     builder.write_kernel_row(
         EXECUTION_CREDIT_TABLE_V11,
         k(4, &id),
@@ -2100,10 +2105,10 @@ fn collect_terminal(
             source_retired,
             ctx.daa_score,
         ))),
-    );
+    )?;
     for owner in &owners {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, id, *owner)), None);
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, id, *owner)), None);
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, id, *owner)), None)?;
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, id, *owner)), None)?;
     }
     for kk in [
         quota_key(2, &id),
@@ -2119,7 +2124,7 @@ fn collect_terminal(
         key(&(22u8, id)),
         key(&(22u8, id, 2u8)),
     ] {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, kk, None);
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, kk, None)?;
     }
     for (table, kk) in [
         (EXECUTION_JOB_TABLE_V11, k(0, &id)),
@@ -2131,10 +2136,10 @@ fn collect_terminal(
         (EXECUTION_SEAL_ACTOR_TABLE_V11, k(0, &id)),
         (EXECUTION_DEMAND_COUNT_TABLE_V11, k(0, &id)),
     ] {
-        builder.write_kernel_row(table, kk, None);
+        builder.write_kernel_row(table, kk, None)?;
     }
-    builder.note_kernel_bond(&h.requester);
-    builder.note_kernel_bond(&h.producer);
+    builder.note_kernel_bond(&h.requester)?;
+    builder.note_kernel_bond(&h.producer)?;
     Ok(())
 }
 /// Independent audit extraction of one genuine Text29 producer Final from
@@ -2177,6 +2182,7 @@ pub(super) fn audit_record_from_rows_v29(
         .map_err(|_| "text29 audit original class grammar")?;
     let f = b.funding();
     let claim = b.claim().ok_or("text29 audit Final lacks claim")?;
+    check_bound_window_lengths_from_rows(rows, &h, &b, None, claim.actual_positions)?;
     let s = b.settlement().ok_or("text29 audit Final lacks settlement")?;
     let credit_key = k(0, &id);
     let (credited, queue, established): (NativeTextSettlementV29, Hash64, u64) =
@@ -2370,6 +2376,7 @@ pub(super) fn register_window37(
     }
     let wire = NativeWindowClassRegisterV37::from_bytes(body).map_err(refused)?;
     let (h, _, program) = class(builder, text_class)?;
+    misaka_palw_kernel::flat_window37::check_window_graph_program_v37(&wire.graph, &program).map_err(refused)?;
     let record = wire.derive(&h.class, program.history_bound).map_err(refused)?;
     let id = record.id();
     let r = builder.state.kernel_route.as_ref().unwrap();
@@ -2384,10 +2391,10 @@ pub(super) fn register_window37(
         return Err(refused("window37 class already registered or finite owner catalogue full"));
     }
     ids.push(id);
-    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, key(&(37u8, 0u8, id)), Some(key(&(record, *signer, ctx.daa_score))));
-    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, key(&(37u8, 1u8, id)), Some(body.to_vec()));
-    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, catalog_key, Some(key(&ids)));
-    builder.note_kernel_bond(signer);
+    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, key(&(37u8, 0u8, id)), Some(key(&(record, *signer, ctx.daa_score))))?;
+    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, key(&(37u8, 1u8, id)), Some(body.to_vec()))?;
+    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, catalog_key, Some(key(&ids)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
 /// Funded action 46 (`palw_window_class_v37`): the job's PRODUCER opts its Funded,
@@ -2436,6 +2443,8 @@ pub(super) fn attach_window37(
         return Err(refused("window37 attach needs the producer's own Funded uncommitted job of the window's Text29 class"));
     }
     misaka_palw_kernel::flat_window37::check_window_graph_program_v37(&wire.graph, &program).map_err(refused)?;
+    wire.check_text_extent(program.history_bound,b.funding().request.maximum_positions().map_err(refused)?)
+        .map_err(refused)?;
     // Both window courts must fit the job's ORIGINAL paid filing bound.
     let prep: Prepared = read(builder.state.kernel_route.as_ref().unwrap(), EXECUTION_POLICY_TABLE_V11, 0, &job, (1 << 20) + 8192)
         .ok_or_else(|| refused("window37 attach original preparation absent"))?;
@@ -2443,14 +2452,70 @@ pub(super) fn attach_window37(
     let cap = q.paged.record().maximum_bytes as u64;
     let gs = wire.graph.scope().map_err(refused)?;
     let ss = wire.graph.selection.scope().map_err(refused)?;
-    if gs.filing_bytes + 7 > cap || ss.filing_bytes + 7 > cap {
-        return Err(refused("window37 courts exceed the job's original paid filing bound"));
+    let paid = q.paged.record();
+    let extra_restore = raw.len() as u64 + 512;
+    let extra_work = extra_restore.checked_mul(extra_restore).and_then(|n| n.checked_mul(64))
+        .ok_or_else(|| refused("window37 court restore work overflow"))?;
+    if gs.filing_bytes + 7 > cap || ss.filing_bytes + 7 > cap
+        || gs.court_work.max(ss.court_work).checked_add(extra_work).is_none_or(|n| n > paid.court_work)
+        || gs.court_scratch_bytes.max(ss.court_scratch_bytes).checked_add(extra_restore)
+            .is_none_or(|n| n > paid.court_scratch)
+    {
+        return Err(refused("window37 full court/restore envelope exceeds the job's original paid maximum"));
     }
     let binding = NativeWindowJobBindingV37 { version: 37, job, window_class: window, graph: wire.graph.root(), attached_daa: ctx.daa_score };
-    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&(37u8, 3u8, job)), Some(key(&binding)));
-    builder.note_kernel_bond(signer);
+    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&(37u8, 3u8, job)), Some(key(&binding)))?;
+    builder.note_kernel_bond(signer)?;
     Ok(())
 }
+/// Re-derive both maximum and actual length commitments from the original
+/// registered window class. The job header/book already commits the request
+/// and stopped positions; no caller-supplied actual length or quote is used.
+fn check_bound_window_lengths(
+    r:&PalwKernelRouteStateV1,h:&JobHeader,program_history_bound:u32,actual_positions:u32,
+)->Result<(),PalwStateV2Error>{
+    if !r.aux.contains_key(&(EXECUTION_JOB_TABLE_V11,key(&(37u8,3u8,h.job)))){return Ok(());}
+    let book=original_book(r,h)?;
+    check_bound_window_lengths_from_rows(&r.aux,h,&book,Some(program_history_bound),actual_positions)
+        .map_err(refused)
+}
+/// Shared with independent Final/receipt extraction. When a window is present,
+/// the history bound comes from the original canonical class, never a report.
+fn check_bound_window_lengths_from_rows(
+    rows:&std::collections::BTreeMap<(u8,Vec<u8>),Vec<u8>>,h:&JobHeader,book:&NativeTextBookV29,
+    program_history_bound:Option<u32>,actual_positions:u32,
+)->Result<(),String>{
+    use crate::palw_window_class_v37::*;
+    let original_key=key(&(37u8,3u8,h.job));
+    let Some(raw_binding)=rows.get(&(EXECUTION_JOB_TABLE_V11,original_key)) else{return Ok(());};
+    if raw_binding.len()>512{return Err("window37 original binding byte cap".into());}
+    let binding:NativeWindowJobBindingV37=borsh::from_slice(raw_binding)
+        .map_err(|_|"window37 original binding grammar")?;
+    let raw=rows.get(&(EXECUTION_CLASS_TABLE_V11,key(&(37u8,1u8,binding.window_class))))
+        .ok_or("window37 original length contract absent")?;
+    let wire=NativeWindowClassRegisterV37::from_bytes(raw)?;
+    if binding.version!=37||binding.job!=h.job||binding.graph!=wire.graph.root()||wire.text_class!=h.class{
+        return Err("window37 original length/graph/job binding differs".into());
+    }
+    let history=match program_history_bound{
+        Some(n)=>n,
+        None=>{
+            let raw=rows.get(&(EXECUTION_CLASS_TABLE_V11,k(1,&h.class)))
+                .ok_or("window37 original canonical text registration absent")?;
+            let original=decode_register(raw).map_err(|e|format!("{e:?}"))?;
+            let program=TirProgramV1::decode_canonical(&original.program_bytes).map_err(|e|e.to_string())?;
+            if misaka_palw_kernel::public::program_root_v1(&program.encode())!=wire.graph.program_root{
+                return Err("window37 original canonical program root differs".into());
+            }
+            misaka_palw_kernel::flat_window37::check_window_graph_program_v37(&wire.graph,&program)?;
+            program.history_bound
+        }
+    };
+    wire.check_text_extent(history,book.funding().request.maximum_positions()?)?;
+    wire.check_text_extent(history,actual_positions)?;
+    Ok(())
+}
+
 /// Window court verification for a paid paged filing of a window-bound job. Returns
 /// Ok(()) only on an objective continuity/append (kind 3) or v8 selection (kind 4) fault.
 fn window_court(
@@ -2495,5 +2560,38 @@ fn window_court(
             verify_history_selection_fault_v8(&c, &fault).map_err(|e| refused(format!("{e:?}")))
         }
         _ => Err(refused("window37 unknown court")),
+    }
+}
+
+// Readonly receipt-window projection. Only audit32-authenticated original rows
+// enter this adapter; no returned observation is a consensus authority.
+impl crate::palw_state_v2::PalwChainStateV2 {
+    pub(crate) fn native_text_receipt_from_rows_v1(
+        rows:&std::collections::BTreeMap<(u8,Vec<u8>),Vec<u8>>,id:Digest,
+    )->Result<crate::palw_native_receipt_windows_v1::NativeReceiptJobV1,String>{
+        use crate::palw_native_audit_proof_v32::NativeLifecycleStageV32;
+        let a=Self::native_text_lifecycle_from_rows_v29(rows,NativeLifecycleStageV32::Seat,id)?;
+        let header=rows.get(&(EXECUTION_JOB_TABLE_V11,k(0,&id))).ok_or("receipt original text header absent")?;
+        if header.len()>8192{return Err("receipt original text header cap".into());}
+        let h:JobHeader=borsh::from_slice(header).map_err(|_|"receipt original text header grammar")?;
+        let raw=rows.get(&(EXECUTION_JOB_TABLE_V11,k(1,&id))).ok_or("receipt original text book absent")?;
+        if raw.len()!=h.book_bytes as usize||raw.len()>TEXT_STOP_BOOK_BYTES_V29{return Err("receipt original text book cap".into());}
+        let b=NativeTextBookV29::restore(raw,h.funding,h.book)?;let f=b.funding();
+        let actual_positions=match b.claim(){Some(c)=>c.actual_positions,None=>f.request.maximum_positions()?};
+        check_bound_window_lengths_from_rows(rows,&h,&b,None,actual_positions)?;
+        if b.terminal()!=h.terminal{return Err("receipt text original terminal mismatch".into());}
+        Ok(crate::palw_native_receipt_windows_v1::NativeReceiptJobV1{
+            namespace:29,complete_model:true,job:id,class:a.class,source:a.source,inventory:f.maximum.inventory,real_parameter:f.maximum.parameter,
+            funding:a.funding,consent:a.consent,maximum_contract:f.maximum.root(),maximum_scope:a.maximum_scope,maximum_resource:a.maximum_resource,
+            queue_plan:f.maximum.queue_plan,queue_policy:f.maximum.queue_policy,source_plan:f.maximum.source_acquisition,
+            physical_plan:f.maximum.physical_lease_plan,carriage_version:29,
+            physical_service:{let raw=rows.get(&(EXECUTION_QUOTA_TABLE_V11,key(&(29u8,id,22u8)))).ok_or("receipt text original physical journal absent")?;
+                if raw.len()>2048{return Err("receipt physical journal cap".into());}
+                let(root,j):(Digest,NativePagedLeaseJournalV29)=borsh::from_slice(raw).map_err(|_|"receipt physical journal grammar")?;
+                if j.root()!=root||j.job!=id||j.funding!=f.root(){return Err("receipt physical journal original differs".into());}j.service},
+            requester_operator:a.requester_operator,producer_operator:a.producer_operator,nonce:f.request.nonce,
+            admitted:f.admitted_daa,commit_deadline:f.commit_deadline,deadline:f.deadline,
+            claim:b.claim().map(|c|c.root()),committed:b.claim().map(|c|c.committed_daa),challenge_end:b.claim().map(|c|c.challenge_end),terminal:a.terminal,
+        })
     }
 }

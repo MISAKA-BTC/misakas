@@ -197,8 +197,8 @@ pub(super) fn capture(
 }
 
 impl TransitionBuilder<'_> {
-    pub(super) fn write_exec_origin(&mut self, id: Hash64, new: Option<PalwExecOriginV1>) {
-        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_ORIGINS_V1, id, new, |s| &mut s.exec_v2_origins);
+    pub(super) fn write_exec_origin(&mut self, id: Hash64, new: Option<PalwExecOriginV1>) -> Result<(), PalwStateV2Error> {
+        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_ORIGINS_V1, id, new, |s| &mut s.exec_v2_origins).map(drop)
     }
 }
 

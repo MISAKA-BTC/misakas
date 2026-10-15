@@ -349,7 +349,9 @@ mod tests {
         use kaspa_consensus_core::palw_permissionless_panel_v1::PalwPanelV3ParamsV1;
         let (funded, context) = funded_rows();
         let authority = funded.panel_source_fee_authority_v2(&context).unwrap();
-        let mut ledger = funded.ledger().unwrap();
+        let mut ledger_owner = funded.ledger().unwrap();
+        // RFC-0006: an off-chain fixture mutates the reserved ledger explicitly (there is no `DerefMut`).
+        let ledger = ledger_owner.preview_mut_v1();
         ledger.beacon_source_fees.clear();
         ledger.sync_bond(palw_kernel_bond_id_v1(&authority.sponsor), 1000);
         let mut route = PalwKernelRouteStateV1::new(funded.header.policy, funded.header.opv, ledger.scalars());

@@ -279,6 +279,12 @@ pub fn fork_id_gate_fences_v1(params: &Params) -> Vec<u64> {
         .map(|fence| fence.daa_score())
         .filter(|&score| score != 0 && score != u64::MAX)
         .collect();
+    // **RFC-0019 §7.3: every annual catalog edition's height gates too.** An edition is a fence an un-upgraded binary does not carry
+    // (it changes the allocation weights from its height), but it lives inside `palw_model_tier_v1`'s value, so `palw_fences_v1`
+    // names only the tier fence's own height. ORed in HERE, as the doc above asks: before the edition a peer lacking it is a warning
+    // (the identity id still matches — the edition left it in normalisation), from its height a refusal, so a node still on the
+    // old binary is cut off by name rather than silently extending the old weights.
+    fences.extend(params.palw_annual_catalog_activations_v1().into_iter().filter(|&score| score != 0 && score != u64::MAX));
     fences.sort_unstable();
     fences.dedup();
     fences
@@ -812,6 +818,7 @@ mod tests {
             "palw_panel_lifetime_v2" => {
                 params.palw_panel_lifetime_v2 = Some(crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2::unapproved_probe_at(at))
             }
+            "palw_material_release_recovery_v2"=> {params.palw_material_release_recovery_v2=Some(crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(at));}
             "palw_monetary_material_v1" => {
                 params.palw_monetary_material_v1 = Some(crate::palw_monetary_material_v1::PalwMonetaryMaterialFenceV1 {
                     activation: at,
@@ -854,6 +861,10 @@ mod tests {
             }
             "palw_reporter_income_v2" => params.palw_reporter_income_v2 = Some(at),
             "palw_material_income_v3" => params.palw_material_income_v3 = Some(at),
+            "palw_settlement_once_v1" => {
+                params.palw_settlement_once_v1 = Some(at);
+                params.sync_palw_settlement_once_v1();
+            }
             "palw_paid_consumer_lifecycle_v1" => {
                 params.palw_paid_consumer_lifecycle_v1 = Some(crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleFenceV1 {
                     activation: at,
@@ -877,6 +888,14 @@ mod tests {
             "palw_stage_execution_v28" => {
                 params.palw_stage_execution_v28 =
                     Some(crate::palw_flat_stage_v28::PalwStageExecutionFenceV28::unapproved_probe_at(at, [0; 64]));
+            }
+            "palw_native_execution_v39" => {
+                params.palw_native_execution_v39 =
+                    Some(crate::palw_native_execution_v39::PalwNativeExecutionFenceV39::unapproved_probe_at(at, [0; 64]));
+            }
+            "palw_native_mining_v39" => {
+                params.palw_native_mining_v39 =
+                    Some(crate::palw_native_mining_v39::PalwNativeMiningFenceV39::unapproved_probe_at(at, [0; 64]));
             }
             "palw_funded_execution_v11" => {
                 params.palw_funded_execution_v11 =
@@ -937,6 +956,18 @@ mod tests {
             "palw_elastic_final_capacity_v1" => params.palw_elastic_final_capacity_v1 = Some(at),
             // RFC-0017's model eligibility: a bare height, refused when armed by `validate_palw_v2`.
             "palw_model_eligibility_v1" => params.palw_model_eligibility_v1 = Some(at),
+            // ADR-0179's model tiers: the design values and empty lists, refused when armed by `validate_palw_v2`.
+            "palw_model_tier_v1" => {
+                params.palw_model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierFenceV1::at(at));
+            }
+            // RFC-0018's five dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_dag_sibling_attribution_v1" => params.palw_dag_sibling_attribution_v1 = Some(at),
+            "palw_panel_anchor_permissionless_v1" => params.palw_panel_anchor_permissionless_v1 = Some(at),
+            "palw_rule_e_participation_v2" => params.palw_rule_e_participation_v2 = Some(at),
+            "palw_independently_work_certified_v1" => params.palw_independently_work_certified_v1 = Some(at),
+            "palw_dag_width_schedule_v1" => {
+                params.palw_dag_width_schedule_v1 = Some(crate::palw_rfc0018_v1::PalwDagWidthScheduleFenceV1::unapproved_probe_at(at))
+            }
             // RFC-0012's coordinated retirement: the height, with a complete settlement policy beside it (its values only ride
             // along; the probe asks the hashers and the schedule, never `validate_palw_v2`).
             "palw_dns_retirement_v1" => {
@@ -1073,6 +1104,8 @@ mod tests {
             "palw_fp_derived_work" => params.palw_fp_derived_work = Some(at),
             "palw_fp_decode_constraint" => params.palw_fp_decode_constraint = Some(at),
             "palw_shard_court" => params.palw_shard_court = Some(at),
+            // RFC-0006 memory/routing court v2: a bare height, refused when armed by `validate_palw_v2` (the probe does not run it).
+            "palw_memory_routing_court_v2" => params.palw_memory_routing_court_v2 = Some(at),
             "palw_shard_licensing" => params.palw_shard_licensing = Some(at),
             "palw_token_lift" => params.palw_token_lift = Some(at),
             // P0a: a bare height; its genesis rule is `validate_palw_v2`'s, which the probe does not run.

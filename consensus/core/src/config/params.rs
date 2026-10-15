@@ -2427,6 +2427,9 @@ pub struct Params {
     /// G14 TIR required-family staged route (native-context seeds/answers over the decode view).
     /// Dormant everywhere; requires `palw_staged_public_court_v1` at or below it.
     pub palw_staged_tir_route_v1: Option<ForkActivation>,
+    /// Original paid TIR public-conviction allocations and signed controls.
+    /// Independent and dormant on every shipped preset; never reprices old claims.
+    pub palw_tir_public_conviction_v1: Option<ForkActivation>,
     /// G14 greedy Float32 Constraint staged route (rooted f32 row court and Float32 sources).
     /// Dormant everywhere; requires `palw_staged_public_court_v1` at or below it.
     pub palw_staged_float_constraint_v1: Option<ForkActivation>,
@@ -2884,6 +2887,8 @@ pub struct Params {
     /// §3 named: a network that wants the court states V3 at genesis through
     /// `palw_signature_contexts_v2`, and no shipped preset does.
     pub palw_shard_court: Option<ForkActivation>,
+    /// RFC06 versioned recurrence/routing court. Dormant on every shipped preset.
+    pub palw_memory_routing_court_v2: Option<ForkActivation>,
 
     /// **ADR-0100 Decision 4's fence: a sharded class is licensed per shard.**
     ///
@@ -2990,6 +2995,11 @@ pub struct Params {
     pub palw_native_final_v27: Option<crate::palw_native_final_v27::PalwNativeFinalFenceV27>,
     /// Original stage28 book/source/court/Final consent, independent of frozen14.
     pub palw_stage_execution_v28: Option<crate::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
+    /// Owning39 source, class, large material and whole native execution. Dormant on all presets.
+    pub palw_native_execution_v39: Option<crate::palw_native_execution_v39::PalwNativeExecutionFenceV39>,
+    /// RFC-0002 §II.14: owning39 ordinary mining (registration, seats, mining claims, receipts; stage actions 73–79 and the
+    /// `PNR9` receipt-block carriage). Dormant on every preset; `validate_palw_native_mining_v39` refuses it armed.
+    pub palw_native_mining_v39: Option<crate::palw_native_mining_v39::PalwNativeMiningFenceV39>,
 
     /// **ADR-0178: rule E, the fork choice that heals a partition on bonded participation** ([`crate::palw_fork_choice_rule_e_v1`]):
     /// past it the sink search weighs every valid tip, the deep-reorg gate and the IBD commit compare the two tips' EXCLUSIVE pasts
@@ -3074,12 +3084,20 @@ pub struct Params {
     /// Root-exact physical monetary payment/material retention, schema v3.
     /// Separate dormant fence; requires budget and reporter schemas at/below it.
     pub palw_material_income_v3: Option<ForkActivation>,
+    /// RFC-0008: the once-only settlement registry (kernel route aux 140). Every settlement consumer (native Final, kernel
+    /// Final, paid claim Final, EXEC root/legs, gate/certification releases, vesting moves, material funding/fees/defaults)
+    /// checks and writes one marker per exact obligation in the same transition. Dormant: `None` on every preset; validation
+    /// refuses arming it; requires the kernel route fence at or below it.
+    pub palw_settlement_once_v1: Option<ForkActivation>,
     /// Prospective producer-signed absolute Panel service lifetime. Dormant.
     pub palw_panel_lifetime_v2: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2>,
     /// Signed Claim V2 seed/checker/lifetime contract; dormant without scoped review.
     pub palw_claim_challenge_v2: Option<crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2>,
+    /// Versioned compact native contract and proof capability; dormant on every public preset.
+    pub palw_claim_compact_v4: Option<crate::palw_claim_compact_v4::PalwClaimCompactFenceV4>,
     /// Explicit signed payment-relative material covenants; dormant without cost approval.
     pub palw_monetary_material_v1: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialFenceV1>,
+    pub palw_material_release_recovery_v2: Option<crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2>,
     /// **RFC07 R7-ECON: the optional verification-attestation gate on the model allocation** ([`crate::palw_econ_contracts_v1`]):
     /// inner 67 / aux 125. Dormant; Some-only; needs `palw_model_bond_allocation_v1` at or below it; refused when armed.
     pub palw_model_verification_gate_v1: Option<crate::palw_econ_contracts_v1::PalwModelVerificationGateFenceV1>,
@@ -3177,6 +3195,39 @@ pub struct Params {
     /// until its rule is built and verified and its values approved; needs `palw_probabilistic_constraints_v1` (the kernel route holding
     /// its rows) and `palw_bond_budget_v1` (the per-principal common cap it takes the minimum with) at or below it.
     pub palw_model_eligibility_v1: Option<ForkActivation>,
+    /// **palw_model_tier_v1** — ADR-0179 ([`crate::palw_model_tier_v1`], user decisions 2026-10-15 rounds 4–5): past it a model in
+    /// `ApprovedModels(h)` (genesis + add-only annual fork lists) weighs 1.0 and every other registered model a fixed 0.3, applied once
+    /// in the ADR-0177 allocation weight, with the registered tier's aggregate cap; model-level review is abolished. **Dormant**: `None`
+    /// on every preset, Some-only in both fingerprints (lists and values beside the height), collapsed from `Some(never())`, refused
+    /// when armed ([`Self::validate_palw_model_tier_v1`]).
+    pub palw_model_tier_v1: Option<crate::palw_model_tier_v1::PalwModelTierFenceV1>,
+    /// **palw_dag_sibling_attribution_v1** — RFC-0018 §4 ([`crate::palw_rfc0018_v1`]): past it (the ACCEPTING block's DAA) the merged
+    /// attempts of one chain block are admitted in a canonical order — a round robin over model classes, each class by
+    /// `H(domain ‖ execution key)` — independent of GHOSTDAG colour and merge order, so which concurrent sibling wins a contended
+    /// per-block cap, and which admitted attempt is the ADR-0170 seed anchor, is a function of the mergeset set. **Dormant**: `None`
+    /// on every preset, in no flag-day list, Some-only in both fingerprints, collapsed from `Some(never())`, refused when armed
+    /// ([`Self::validate_palw_rfc0018_v1`]).
+    pub palw_dag_sibling_attribution_v1: Option<ForkActivation>,
+    /// **palw_panel_anchor_permissionless_v1** — RFC-0018 §5: past it (the ANCHOR block's DAA, as lane A) a claim's Panel anchor is
+    /// no longer an operator's attempt: any admitted attempt of a matured bond the anchor is or merges (blue or red) contributes, one
+    /// per bond, the producer's own excluded, and the seed is their aggregate. Replaces lane A's privilege; claims anchored below
+    /// keep lane A. **Dormant** exactly like [`Self::palw_dag_sibling_attribution_v1`].
+    pub palw_panel_anchor_permissionless_v1: Option<ForkActivation>,
+    /// **palw_rule_e_participation_v2** — RFC-0018 §6: past it (the INCUMBENT's DAA, as rule E) rule E's participation is the
+    /// capital, in the common past, of the distinct bonds with a non-voided, Gate-C-certified attempt in a side's exclusive past
+    /// (split-neutral, bounded by the bond's collateral), and the even split is a third of the common capital. Needs
+    /// `palw_fork_choice_rule_e_v1` at or below it; rule E v1's own semantics are unchanged. **Dormant** as above.
+    pub palw_rule_e_participation_v2: Option<ForkActivation>,
+    /// **palw_independently_work_certified_v1** — RFC-0018 §7, Gate C: past it (the CLAIM's acceptance DAA) a claim that
+    /// [`crate::palw_rfc0018_v1::palw_independently_work_certified_v1`] does not certify contributes nothing to participation,
+    /// provisional weight, final weight, safe-frontier advance, settled-anchor credit or coinbase. The predicate's definition is a
+    /// USER decision (PRINCIPLES §0 / ADR-0173/0176/0177/0178 amendment pending); until then it is fail-closed and the fence is refused
+    /// when armed. **Dormant** as above.
+    pub palw_independently_work_certified_v1: Option<ForkActivation>,
+    /// **palw_dag_width_schedule_v1** — RFC-0018 §8: a named (GHOSTDAG k, block time, parents, mergeset) step. SPEC AND STUB: nothing
+    /// reads it; validation refuses it armed. Values are a user decision. **Dormant** as above (the schedule's id is hashed beside
+    /// the height).
+    pub palw_dag_width_schedule_v1: Option<crate::palw_rfc0018_v1::PalwDagWidthScheduleFenceV1>,
 
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
@@ -4921,6 +4972,42 @@ impl Params {
         }
     }
 
+    /// **G14's original paid TIR public-conviction route** — in force only where every rule its verdicts consume is in force too
+    /// (the later of them): the staged TIR route and public court it extends, the objective-offence funnel it convicts through,
+    /// R-core+ (the conviction tiers, vesting and the exit-lock lattice a collectible debit needs) and ADR-0160's aggregate
+    /// liability (the intent-class forfeiture and freeze that take a convicted producer's block opportunity, so admission and the
+    /// producer's readiness refuse it). `None` on every shipped preset (the field is `None` there).
+    pub fn palw_tir_public_conviction_v1_fence(&self) -> Option<ForkActivation> {
+        let never = ForkActivation::never();
+        match (
+            &self.palw_consensus_mode,
+            self.palw_tir_public_conviction_v1,
+            self.palw_staged_tir_route_v1_fence(),
+            self.palw_staged_public_court_v1_fence(),
+            self.palw_objective_offence.filter(|f| *f != never),
+            self.palw_rcore_plus_fence().filter(|f| *f != never),
+            self.palw_capacity_aggregate_liability.as_ref().map(|liability| liability.activation).filter(|f| *f != never),
+        ) {
+            (
+                crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_),
+                Some(own),
+                Some(tir),
+                Some(staged),
+                Some(offence),
+                Some(rcore),
+                Some(liability),
+            ) if own != never => Some(ForkActivation::new(
+                own.daa_score()
+                    .max(tir.daa_score())
+                    .max(staged.daa_score())
+                    .max(offence.daa_score())
+                    .max(rcore.daa_score())
+                    .max(liability.daa_score()),
+            )),
+            _ => None,
+        }
+    }
+
     pub fn palw_staged_float_constraint_v1_fence(&self) -> Option<ForkActivation> {
         match (&self.palw_consensus_mode, self.palw_staged_float_constraint_v1) {
             (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) if f != ForkActivation::never() => Some(f),
@@ -5952,6 +6039,7 @@ impl Params {
             palw_court_commitment_scope_v1: self.palw_court_commitment_scope_v1,
             palw_staged_public_court_v1: self.palw_staged_public_court_v1,
             palw_staged_tir_route_v1: self.palw_staged_tir_route_v1,
+            palw_tir_public_conviction_v1: self.palw_tir_public_conviction_v1,
             palw_staged_float_constraint_v1: self.palw_staged_float_constraint_v1,
             palw_model_benefits: self.palw_model_benefits,
             palw_model_leg_v2: self.palw_model_leg_v2,
@@ -5984,6 +6072,7 @@ impl Params {
             palw_fp_derived_work: self.palw_fp_derived_work,
             palw_fp_decode_constraint: self.palw_fp_decode_constraint,
             palw_shard_court: self.palw_shard_court,
+            palw_memory_routing_court_v2: self.palw_memory_routing_court_v2,
             palw_shard_licensing: self.palw_shard_licensing,
             palw_token_lift: self.palw_token_lift,
             palw_kimi_k3: self.palw_kimi_k3,
@@ -5997,6 +6086,8 @@ impl Params {
             palw_stage_execution_v14: self.palw_stage_execution_v14.clone(),
             palw_native_final_v27: self.palw_native_final_v27.clone(),
             palw_stage_execution_v28: self.palw_stage_execution_v28.clone(),
+            palw_native_execution_v39: self.palw_native_execution_v39.clone(),
+            palw_native_mining_v39: self.palw_native_mining_v39.clone(),
             palw_fork_choice_rule_e_v1: self.palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1: self.palw_typed_roots_v1,
             palw_fork_choice_commitment_v1: self.palw_fork_choice_commitment_v1,
@@ -6014,9 +6105,12 @@ impl Params {
             palw_bond_formula_v2: self.palw_bond_formula_v2,
             palw_reporter_income_v2: self.palw_reporter_income_v2,
             palw_material_income_v3: self.palw_material_income_v3,
+            palw_settlement_once_v1: self.palw_settlement_once_v1,
             palw_panel_lifetime_v2: self.palw_panel_lifetime_v2,
             palw_claim_challenge_v2: self.palw_claim_challenge_v2,
+            palw_claim_compact_v4: self.palw_claim_compact_v4.clone(),
             palw_monetary_material_v1: self.palw_monetary_material_v1.clone(),
+            palw_material_release_recovery_v2: self.palw_material_release_recovery_v2.clone(),
             palw_model_verification_gate_v1: self.palw_model_verification_gate_v1,
             palw_horizon_extension_v1: self.palw_horizon_extension_v1,
             palw_minimum_price_v1: self.palw_minimum_price_v1.clone(),
@@ -6032,6 +6126,12 @@ impl Params {
             palw_model_block_rights_v1: self.palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1: self.palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1: self.palw_model_eligibility_v1,
+            palw_model_tier_v1: self.palw_model_tier_v1.clone(),
+            palw_dag_sibling_attribution_v1: self.palw_dag_sibling_attribution_v1,
+            palw_panel_anchor_permissionless_v1: self.palw_panel_anchor_permissionless_v1,
+            palw_rule_e_participation_v2: self.palw_rule_e_participation_v2,
+            palw_independently_work_certified_v1: self.palw_independently_work_certified_v1,
+            palw_dag_width_schedule_v1: self.palw_dag_width_schedule_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -7097,6 +7197,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_tir_public_conviction_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7126,6 +7227,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_memory_routing_court_v2: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -7138,6 +7240,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_stage_execution_v14: None,
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
+    palw_native_execution_v39: None,
+    palw_native_mining_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -7155,9 +7259,12 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
+    palw_claim_compact_v4: None,
     palw_monetary_material_v1: None,
+    palw_material_release_recovery_v2: None,
     palw_model_verification_gate_v1: None,
     palw_horizon_extension_v1: None,
     palw_minimum_price_v1: None,
@@ -7173,6 +7280,12 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_model_tier_v1: None,
+    palw_dag_sibling_attribution_v1: None,
+    palw_panel_anchor_permissionless_v1: None,
+    palw_rule_e_participation_v2: None,
+    palw_independently_work_certified_v1: None,
+    palw_dag_width_schedule_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -7434,6 +7547,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_tir_public_conviction_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7463,6 +7577,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_memory_routing_court_v2: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -7475,6 +7590,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_stage_execution_v14: None,
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
+    palw_native_execution_v39: None,
+    palw_native_mining_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -7492,9 +7609,12 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
+    palw_claim_compact_v4: None,
     palw_monetary_material_v1: None,
+    palw_material_release_recovery_v2: None,
     palw_model_verification_gate_v1: None,
     palw_horizon_extension_v1: None,
     palw_minimum_price_v1: None,
@@ -7510,6 +7630,12 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_model_tier_v1: None,
+    palw_dag_sibling_attribution_v1: None,
+    palw_panel_anchor_permissionless_v1: None,
+    palw_rule_e_participation_v2: None,
+    palw_independently_work_certified_v1: None,
+    palw_dag_width_schedule_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -7753,6 +7879,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_tir_public_conviction_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7782,6 +7909,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_memory_routing_court_v2: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -7794,6 +7922,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_stage_execution_v14: None,
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
+    palw_native_execution_v39: None,
+    palw_native_mining_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -7811,9 +7941,12 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
+    palw_claim_compact_v4: None,
     palw_monetary_material_v1: None,
+    palw_material_release_recovery_v2: None,
     palw_model_verification_gate_v1: None,
     palw_horizon_extension_v1: None,
     palw_minimum_price_v1: None,
@@ -7829,6 +7962,12 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_model_tier_v1: None,
+    palw_dag_sibling_attribution_v1: None,
+    palw_panel_anchor_permissionless_v1: None,
+    palw_rule_e_participation_v2: None,
+    palw_independently_work_certified_v1: None,
+    palw_dag_width_schedule_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -8891,15 +9030,23 @@ fn palw_seed_attempt_targets_v1(
     bundle: &mut crate::palw_mode_v2::PalwConsensusParamsV2,
 ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
     use crate::palw_state_v2::{
-        PalwBlockContextV2, PalwChainStateV2, PalwConsensusObjectV2, apply_palw_transition_v2, palw_max_exposure_pwu_of_rule_v1,
+        PalwBlockContextV2, PalwChainStateV2, PalwConsensusObjectV2, apply_palw_transition_retained_v2,
+        palw_max_exposure_pwu_of_rule_v1,
     };
     let invalid = crate::palw_mode_v2::PalwModeV2Error::Invalid;
     // The genesis block's own context. Only the share table is read out of the fold, and no
     // grant's arithmetic depends on the block, its DAA or its subsidy — so these are the genesis
     // values rather than a placeholder that would have to be explained.
     let ctx = PalwBlockContextV2 { block: Default::default(), daa_score: 0, blue_score: 0, subsidy: 0 };
-    let (state, _delta) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &bundle.state, &ctx, &bundle.genesis_objects, None)
-        .map_err(|_| invalid("the genesis registrations do not apply, so no share table can be read from them"))?;
+    let (state, _delta) =
+        apply_palw_transition_retained_v2(&PalwChainStateV2::genesis(), &bundle.state, &ctx, &bundle.genesis_objects, None).map_err(
+            |error| match error {
+                capacity @ crate::palw_state_v2::PalwStateV2Error::NativeResource(_) => {
+                    crate::palw_mode_v2::PalwModeV2Error::State(capacity)
+                }
+                _ => invalid("the genesis registrations do not apply, so no share table can be read from them"),
+            },
+        )?;
 
     let mut rows: Vec<(usize, u16, u64)> = Vec::new();
     for (index, object) in bundle.genesis_objects.iter().enumerate() {
@@ -12997,10 +13144,16 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_2026_10_12_ruling_fences_v1();
     // RFC-0006 R6-CELL round 4's coverage closure, likewise.
     params.sync_palw_cell_coverage_closure_v1();
+    // RFC-0006's memory/routing court consumer v2, likewise.
+    params.sync_palw_memory_routing_court_v2();
     // RFC-0016's two dormant fences (V+ block rights, elastic Final capacity), likewise.
     params.sync_palw_rfc0016_v1();
     // RFC-0017's model eligibility, likewise.
     params.sync_palw_model_eligibility_v1();
+    // ADR-0179's model tiers, likewise.
+    params.sync_palw_model_tier_v1();
+    // RFC-0018's mirror (sibling attribution, permissionless anchor, rule E v2, Gate C), likewise.
+    params.sync_palw_rfc0018_v1();
     // RFC-0001 §2.10's adapter class listing, likewise.
     params.sync_palw_adapter_class_v1();
     // ADR-0096's decode constraint, likewise.
@@ -13224,6 +13377,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_tir_public_conviction_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -13271,6 +13425,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_memory_routing_court_v2: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -13283,6 +13438,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_stage_execution_v14: None,
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
+    palw_native_execution_v39: None,
+    palw_native_mining_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -13300,9 +13457,12 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
+    palw_claim_compact_v4: None,
     palw_monetary_material_v1: None,
+    palw_material_release_recovery_v2: None,
     palw_model_verification_gate_v1: None,
     palw_horizon_extension_v1: None,
     palw_minimum_price_v1: None,
@@ -13318,6 +13478,12 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_model_tier_v1: None,
+    palw_dag_sibling_attribution_v1: None,
+    palw_panel_anchor_permissionless_v1: None,
+    palw_rule_e_participation_v2: None,
+    palw_independently_work_certified_v1: None,
+    palw_dag_width_schedule_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -13703,3 +13869,7 @@ mod post_launch_fence_arming_tests;
 
 #[cfg(test)]
 mod funded_execution_fence_tests;
+
+// Exhaustive read-only native input allocation inventory; no consensus encoding change.
+#[path = "../palw_native_resource_v1/private/config_params.rs"]
+mod native_resource_inventory_v1;

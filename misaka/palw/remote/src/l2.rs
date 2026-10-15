@@ -66,8 +66,9 @@ pub struct ForkChoiceRulesV1 {
     pub dns_retired: Option<ForkActivation>,
     /// **A comparator whose inputs the v1 leaf does not carry** — ADR-0178 rule E (`palw_fork_choice_rule_e_v1`, lane FINX). Where it
     /// may be in force at the fork point or a tip, a conflict cannot be weighed from v1 openings and STOPs; a single chain is unaffected.
-    /// Its leaf (v2) ships under that fence. `None` in [`Self::of`] until that fence is in this tree: the integration that brings it
-    /// sets this field from it.
+    /// Its leaf (v2) ships under that fence. [`Self::of`] reads it from `Params::palw_fork_choice_rule_e_v1` (lane R12, 2026-10-11:
+    /// it was left `None` after the fence entered this tree, so past the DNS retirement — which needs rule E at or below it — a client
+    /// would have weighed a conflict with the pre-rule-E comparator the node no longer runs, instead of stopping).
     pub rule_e: Option<ForkActivation>,
     pub finality_depth: u64,
     pub panel: Option<PalwPanelParamsV2>,
@@ -86,7 +87,7 @@ impl ForkChoiceRulesV1 {
             frontier_provenance: params.palw_frontier_provenance,
             dns_gate: params.dns_params.as_ref().and(params.dns_bft_gate.as_ref()).map(|g| g.activation),
             dns_retired: params.palw_dns_retirement.as_ref().map(|r| r.activation),
-            rule_e: None,
+            rule_e: params.palw_fork_choice_rule_e_v1,
             finality_depth: params.finality_depth(),
             panel,
         }
@@ -302,6 +303,22 @@ impl ForkChoiceAttestationV1 {
 /// hashes to a root the client established.
 pub fn opening_from_wire_v1(leaf: &[u8], inner_root: &str) -> Option<PalwForkChoiceOpeningV1> {
     Some(PalwForkChoiceOpeningV1 { leaf: PalwForkChoiceLeafV1::decode(leaf)?, inner_root: inner_root.parse::<Hash64>().ok()? })
+}
+
+/// **RFC-0018 GAP-R4 — a header's committed opening in ANY form**, checked in the grammar the client's own ruleset (`params`)
+/// selects at `point`: flat, the v1 leaf, the rule-E leaf v2, or the rule-E leaf v3 (rule E v2 capital and Gate C certification
+/// state). The same function the node's v39 anchor verifier calls (`palw_verify_committed_leaf_v2`), so node and client accept exactly
+/// the same openings; past rule E it is what a client reads instead of [`opening_from_wire_v1`], whose v1 leaf a rule-E header does
+/// not commit.
+pub fn verify_committed_opening_v2(
+    params: &Params,
+    committed_root: &Hash64,
+    point: &PalwForkChoicePointV1,
+    leaf: &[u8],
+    inner_root: &Hash64,
+) -> Result<kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::PalwCommittedLeafViewV2, String> {
+    kaspa_consensus_core::palw_fork_choice_rule_e_leaf_v3::palw_verify_committed_leaf_v2(params, committed_root, point, leaf, inner_root)
+        .map_err(|e| format!("the committed opening does not verify in the client's form: {e:?}"))
 }
 
 /// The issuer channel's file limits: at most this many attestations are read per refresh (the newest by `issuedAtDaa`), each file at

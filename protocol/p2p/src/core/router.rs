@@ -34,7 +34,14 @@ static ROUTE_ID: AtomicU32 = AtomicU32::new(BLANK_ROUTE_ID + 1);
 
 impl IncomingRoute {
     pub fn new(rx: MpscReceiver<KaspadMessage>) -> Self {
-        let id = ROUTE_ID.fetch_add(1, Ordering::SeqCst);
+        // After 2^32 allocations ROUTE_ID wraps; skip BLANK_ROUTE_ID (0) on the wrap so a
+        // recycled id never collides with the "blank/unrouted" sentinel. (A full u64 id
+        // would also need the protobuf `request_id`/`response_id` wire field widened from
+        // uint32 — a coordinated version bump — so this is the safe in-place mitigation.)
+        let mut id = ROUTE_ID.fetch_add(1, Ordering::SeqCst);
+        if id == BLANK_ROUTE_ID {
+            id = ROUTE_ID.fetch_add(1, Ordering::SeqCst);
+        }
         Self { rx, id }
     }
 

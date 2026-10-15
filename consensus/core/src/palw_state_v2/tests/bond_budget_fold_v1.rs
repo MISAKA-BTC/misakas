@@ -227,7 +227,7 @@ fn funded_kernel_reporter_settlements_defer_full_r_and_redeem_exact_native_tranc
                 PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1,
                 borsh::to_vec(&palw_kernel_bond_id_v1(&bond)).unwrap(),
                 Some(borsh::to_vec(&bond).unwrap()),
-            );
+            ).unwrap();
         }
         b.reserve_bond_income_v1(&ctx(2, 100, 2), bond_key(1), 50, 50, PalwBudgetOriginV1::MarketFee).unwrap();
         let settlement = |bond, amount, kind| {
@@ -373,7 +373,7 @@ fn named_native_reporter_freezes_funded_payee_and_pays_above_one_cap_in_exact_tr
             collected,
             claim_id: Hash64::default(),
         }),
-    );
+    ).unwrap();
     assert_eq!(
         b.open_reporter_reward(200, offence, 0, PalwConvictionBasisV1::CourtVerdict { challenger: bond_key(1) }).unwrap(),
         Some(125)
@@ -389,7 +389,7 @@ fn named_native_reporter_freezes_funded_payee_and_pays_above_one_cap_in_exact_tr
     // monetary entitlement must still redeem its original authenticated payee.
     let mut changed = b.state.bond(&bond_key(1)).unwrap().clone();
     changed.payout_payload = h64(0xBAD08);
-    b.write_bond(bond_key(1), Some(changed));
+    b.write_bond(bond_key(1), Some(changed)).unwrap();
     let reveal_until = b.state.reward_pending[&offence].reveal_until;
     b.entries.push(PalwDeltaEntryV2::LastPoint { old: registered.last_point, new: Some(point) });
     b.state.last_point = Some(point);
@@ -448,8 +448,8 @@ fn reporter_v2_fence_preserves_v1_and_quarantines_old_exact_cash_with_carriage_r
     let mut b = TransitionBuilder::new(&registered, &p, false, false, false, false, &extras);
     let offence = h64(0xAE08);
     let payout = PalwPayoutV2 { payload: registered.bond(&bond_key(1)).unwrap().payout_payload, amount: 125 };
-    b.write_reporter_reward(offence, Some(payout));
-    b.write_reporter_counters(PalwReporterCountersV1 { awarded_sompi: 125, forgone_sompi: 0 });
+    b.write_reporter_reward(offence, Some(payout)).unwrap();
+    b.write_reporter_counters(PalwReporterCountersV1 { awarded_sompi: 125, forgone_sompi: 0 }).unwrap();
     b.entries.push(PalwDeltaEntryV2::LastPoint { old: registered.last_point, new: Some(point) });
     b.state.last_point = Some(point);
     let before = b.state;
@@ -509,11 +509,11 @@ fn partial_native_fd_fe_funds_use_individual_physical_payment_clocks_with_exact_
         let mut b = TransitionBuilder::new(&registered, &p, false, false, false, false, &extras);
         b.hold_native_recipient_v1(root, bond_key(1), 2, 100, 500, 50, &[]).unwrap();
         b.pay_native_recipient_v1(root, bond_key(1), 2, 501, 10, first, false).unwrap();
-        b.write_payout(first, Some(PalwPayoutV2 { payload, amount: 10 }));
+        b.write_payout(first, Some(PalwPayoutV2 { payload, amount: 10 })).unwrap();
         b.pay_native_recipient_v1(root, bond_key(1), 2, 502, 20, last, true).unwrap();
-        b.write_payout(last, Some(PalwPayoutV2 { payload, amount: 20 }));
+        b.write_payout(last, Some(PalwPayoutV2 { payload, amount: 20 })).unwrap();
         for n in 0..7 {
-            b.write_payout(h64(n), Some(PalwPayoutV2 { payload: h64(0x1234), amount: 1 }));
+            b.write_payout(h64(n), Some(PalwPayoutV2 { payload: h64(0x1234), amount: 1 })).unwrap();
         }
         let queued = b.state.clone();
         let delta = PalwStateDeltaV2 { point: ctx(2, 502, 2), entries: b.entries };
@@ -533,7 +533,7 @@ fn partial_native_fd_fe_funds_use_individual_physical_payment_clocks_with_exact_
         // A second exact backlog keeps FE unpaid beyond FD's physical W.
         let mut b = TransitionBuilder::new(&paid_fd, &p, false, false, false, false, &extras);
         for n in 10..18 {
-            b.write_payout(h64(n), Some(PalwPayoutV2 { payload: h64(0x1234), amount: 1 }));
+            b.write_payout(h64(n), Some(PalwPayoutV2 { payload: h64(0x1234), amount: 1 })).unwrap();
         }
         let backlogged = b.state.clone();
         let delta = PalwStateDeltaV2 { point: ctx(4, 1_000, 4), entries: b.entries };
@@ -581,7 +581,7 @@ fn funded_reward_and_source_fee_hold_r_through_sparse_partial_payment_and_replay
         assert_eq!(late.bond_budget().unwrap().bond_row(&bond_key(1)).unwrap().latest_release_daa, u64::MAX);
         let mut b = TransitionBuilder::new(&late, &p, false, false, false, false, &extras);
         b.pay_native_recipient_v1(root, bond_key(1), role, 1_001, 10, queue, false).unwrap();
-        b.write_payout(queue, Some(PalwPayoutV2 { payload, amount: 10 }));
+        b.write_payout(queue, Some(PalwPayoutV2 { payload, amount: 10 })).unwrap();
         let partial = b.state.clone();
         let delta = PalwStateDeltaV2 { point: ctx(4, 1_001, 4), entries: b.entries };
         assert_replayable(&p, &late, &partial, &delta);
@@ -595,7 +595,7 @@ fn funded_reward_and_source_fee_hold_r_through_sparse_partial_payment_and_replay
         assert_eq!(first_released.bond_budget().unwrap().bond_row(&bond_key(1)).unwrap().latest_release_daa, u64::MAX);
         let mut b = TransitionBuilder::new(&first_released, &p, false, false, false, false, &extras);
         b.pay_native_recipient_v1(root, bond_key(1), role, 3_000, 20, queue, true).unwrap();
-        b.write_payout(queue, Some(PalwPayoutV2 { payload, amount: 20 }));
+        b.write_payout(queue, Some(PalwPayoutV2 { payload, amount: 20 })).unwrap();
         let last_queued = b.state.clone();
         let delta = PalwStateDeltaV2 { point: ctx(7, 3_000, 7), entries: b.entries };
         assert_replayable(&p, &first_released, &last_queued, &delta);
@@ -653,7 +653,7 @@ fn round_draw_handles_overfull_migration_and_duplicate_span_without_partial_tick
         };
         let extras = PalwTransitionExtrasV1::default();
         let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
-        assert!(b.bond_budget_round_draw_v1(&ctx(2, 200, 2), &mut schedule, 1, 100, 10, &BTreeSet::new()));
+        assert!(b.bond_budget_round_draw_v1(&ctx(2, 200, 2), &mut schedule, 1, 100, 10, &BTreeSet::new()).unwrap());
         assert!(schedule.quanta.is_empty(), "unavailable {overfull} draw creates no uncapped permit");
         assert_eq!(b.state, parent, "accepted old income and earlier tickets are unchanged");
         assert!(b.entries.is_empty(), "no partial recipient reservation journal");

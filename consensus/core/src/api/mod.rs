@@ -499,6 +499,16 @@ pub trait ConsensusApi: Send + Sync {
     fn palw_monetary_material_covenants_v1(&self) -> Result<Vec<crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
         Err("monetary material covenant reads are unavailable".into())
     }
+    /// Read-only current/finalized native metadata, retaining allocation ownership
+    /// through private-process observation serialization. No public RPC tag.
+    fn palw_material_recovery_observation_v4(
+        &self,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_material_recovery_observation_v4::NativeRecoveryObservationV4>,
+        String,
+    > {
+        Err("native material recovery observations unavailable".into())
+    }
 
     /// RFC-0008 PAV3 producer read: the canonical prior native session for `attempt` at `daa`
     /// (`palw_attempt_material_v3::select_native_session_v3`, the one rule `verify_prior` re-runs) over the coherent tip
@@ -532,6 +542,134 @@ pub trait ConsensusApi: Send + Sync {
         _release_block: BlockHash,
     ) -> Result<bool, String> {
         Err("monetary material finality witnesses are unavailable".into())
+    }
+
+    /// A terminal receipt present in a coherent native-finalized state. Historical
+    /// Release headers and deltas are deliberately not authority prerequisites.
+    fn palw_material_terminal_receipt_finalized_v2(
+        &self,
+        _root: Hash64,
+        _stored_consent: Hash64,
+    ) -> Result<Option<(BlockHash, crate::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2)>, String> {
+        Err("native finalized terminal receipt reads are unavailable".into())
+    }
+
+    /// Bounded positive terminal rows in the CURRENT native-finalized state.
+    fn palw_material_provider_terminal_receipts_finalized_v4(
+        &self,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<Vec<crate::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2>>,
+        String,
+    > {
+        Err("native finalized provider terminal reads unavailable".into())
+    }
+    fn palw_material_recovery_finalized_daa_v4(&self) -> Result<Option<u64>, String> {
+        Err("native finalized recovery clock unavailable".into())
+    }
+    fn palw_kernel_producer_candidate_v4(
+        &self,
+        _checkpoint: BlockHash,
+        _producer: crate::palw_state_v2::PalwBondKeyV2,
+        _commit: &misaka_palw_kernel::route::SaltedCommitV1,
+        _salt: &[u8; 64],
+        _commit_daa: u64,
+        _expires_daa: u64,
+    ) -> Result<crate::palw_kernel_producer_candidate_v4::PalwKernelProducerCandidateOwnedV4, String> {
+        Err("own-node kernel producer candidate unavailable".into())
+    }
+    fn palw_kernel_material_consent_accepted_v4(&self, _root: Hash64, _consent: Hash64) -> Result<bool, String> {
+        Err("own-node current accepted kernel consent unavailable".into())
+    }
+    fn palw_kernel_material_admission_accepted_v4(
+        &self,
+        _request: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+        _draft: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+    ) -> Result<bool, String> {
+        Err("own-node exact accepted kernel material admission unavailable".into())
+    }
+    fn palw_kernel_material_ingress_v4(
+        &self,
+        _checkpoint: BlockHash,
+        _request: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+    ) -> Result<crate::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4, String> {
+        Err("own-node prospective kernel material authority unavailable".into())
+    }
+    fn palw_kernel_material_context_authority_v4(
+        &self,
+        _context: &crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        _capsule: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+        _pubkey: &[u8],
+    ) -> Result<(), String> {
+        Err("current native kernel material authority unavailable".into())
+    }
+    /// RFC-0006 read-only census of the eligible historical headers the EXEC origin migration needs, from this node's own
+    /// store at its tip (`listed` caps the returned claim lists). Authorizes nothing.
+    fn palw_exec_origin_coverage_v1(&self, _listed: usize) -> Result<crate::palw_work_slice_v2::PalwExecOriginCoverageV1, String> {
+        Err("historical header coverage census unavailable".into())
+    }
+    fn palw_material_generation_authority_v4(
+        &self,
+        _root: Hash64,
+        _consent: Hash64,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+        _scope: &crate::palw_material_capacity_v1::PalwMaterialScopeV1,
+    ) -> Result<(), String> {
+        Err("current native material generation authority unavailable".into())
+    }
+    fn palw_kernel_material_replacement_v4(
+        &self,
+        _context: &crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        _bundle: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        _intent: &crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+    ) -> Result<crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4, String> {
+        Err("own native bounded replacement preparation unavailable".into())
+    }
+    fn palw_kernel_material_capsule_unused_finalized_v4(
+        &self,
+        _capsule: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+    ) -> Result<bool, String> {
+        Err("own native exact generation expiry unavailable".into())
+    }
+    fn palw_kernel_material_query_authority_v4(
+        &self,
+        _query: &crate::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        _requester: crate::palw_state_v2::PalwBondKeyV2,
+        _pubkey: &[u8],
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4>,
+        String,
+    > {
+        Err("own native material query authority unavailable".into())
+    }
+    fn palw_native_recovery_session_quote_v4(
+        &self,
+        _checkpoint: Option<BlockHash>,
+        _daa: u64,
+        _class: Hash64,
+        _executor: crate::palw_state_v2::PalwBondKeyV2,
+        _providers: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4>,
+        String,
+    > {
+        Err("native recovery enrollment quotes unavailable".into())
+    }
+    fn palw_material_recovery_enrollment_finalized_v4(
+        &self,
+        _root: Hash64,
+        _consent: Hash64,
+        _recovery: Hash64,
+    ) -> Result<bool, String> {
+        Err("native finalized recovery enrollment reads unavailable".into())
+    }
+
+    fn palw_material_provider_ack_checkpoint_finalized_v2(
+        &self,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<(BlockHash, crate::palw_material_release_recovery_v2::PalwMaterialProviderAckCheckpointV2)>, String> {
+        Err("native finalized provider ACK checkpoints unavailable".into())
     }
 
     fn palw_monetary_material_unused_offer_finalized_v1(&self, _root: Hash64, _enrollment_until: u64) -> Result<bool, String> {
@@ -1324,6 +1462,49 @@ pub trait ConsensusApi: Send + Sync {
         Err("staged TIR prefix reader unavailable".into())
     }
 
+    /// G14 R4: an ORIGINAL TIR frame as one public verifier reads it to file a conviction (accepted snapshot; `None` below
+    /// `palw_tir_public_conviction_v1` or for a claim with no frame).
+    fn palw_tir_public_frame_v1(
+        &self,
+        _claim: crate::Hash64,
+    ) -> Result<Option<crate::palw_tir_public_claim_v1::PalwTirPublicFrameViewV1>, String> {
+        Err("TIR public frame reader unavailable".into())
+    }
+
+    /// **G14 R3/R4: the node workers' read of the accepted native snapshot of ORIGINAL TIR frames.** Runs `read` once against
+    /// the same accepted state every PALW reader uses, iff `palw_tir_public_conviction_v1` is active there; `Ok(false)` below it
+    /// (the closure is not run). Read-only. The seat preparation worker and the filer scheduler need it because the frame's
+    /// preparation/acquisition snapshots and the work book's debit preparation and permit confirmation
+    /// (`palw_tir_public_state_v1`) all take the accepted state — a work permit is minted only by confirming against it.
+    fn palw_tir_public_read_v1(
+        &self,
+        _read: &mut dyn FnMut(&crate::palw_state_v2::PalwChainStateV2) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        Err("TIR public accepted-state reader unavailable".into())
+    }
+
+    /// **G14 R4: the filer scheduler's preflight** — whether the fold would accept `filer`'s public conviction of `claim` with
+    /// `evidence` at the next DAA on the accepted snapshot (a discarded dry run of the native path). `Ok(None)` below
+    /// `palw_tir_public_conviction_v1`; `Ok(Some(Err(reason)))` for a filing the fold would refuse. Never a verdict.
+    fn palw_tir_public_conviction_preflight_v1(
+        &self,
+        _filer: crate::palw_state_v2::PalwBondKeyV2,
+        _claim: crate::Hash64,
+        _evidence: crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
+    ) -> Result<Option<Result<(), String>>, String> {
+        Err("TIR public conviction preflight unavailable".into())
+    }
+
+    /// G14 R1/R2: the producer's pre-signing quote of an ORIGINAL TIR frame on the accepted snapshot — `(snapshot DAA, plan)`;
+    /// `None` below `palw_tir_public_conviction_v1` or for an original the frame route does not admit.
+    fn palw_tir_public_original_quote_v1(
+        &self,
+        _original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        _header: crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    ) -> Result<Option<(u64, crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1)>, String> {
+        Err("TIR public original quote unavailable".into())
+    }
+
     fn palw_staged_tir_prefix_leaf_index_v1(
         &self,
         _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
@@ -1498,6 +1679,14 @@ pub trait ConsensusApi: Send + Sync {
     /// labelled), with the pre-lottery quote for `class` where asked. `None` off ConsensusV2 or with no PALW tip.
     fn palw_rfc0016_report_v1(&self, _class: Option<crate::Hash64>) -> Result<Option<(u64, bool, String)>, String> {
         Err("RFC-0016 report unavailable".into())
+    }
+
+    /// **RFC-0006 consumer v2 (op 245): a class's immutable per-reader router binding** (kernel-route aux 139) at the virtual tip:
+    /// `(now_daa, armed, Some((bound_from_daa, the row's borsh bytes)))`, `None` for the row where the class declared none. `Ok(None)`
+    /// off ConsensusV2 or with no PALW tip.
+    #[allow(clippy::type_complexity)]
+    fn palw_router_binding_v2(&self, _class: crate::Hash64) -> Result<Option<(u64, bool, Option<(u64, Vec<u8>)>)>, String> {
+        Err("router binding read unavailable".into())
     }
 
     fn palw_staged_preclaim_quote_v1(
@@ -2034,8 +2223,15 @@ pub trait ConsensusApi: Send + Sync {
     fn pruning_point_palw_state_shared_v1(
         &self,
         point: crate::BlockHash,
-    ) -> Option<std::sync::Arc<crate::palw_state_v2::PalwStateCarriageV2>> {
-        self.pruning_point_palw_state(point).map(std::sync::Arc::new)
+    ) -> Option<std::sync::Arc<crate::palw_native_resource_v1::NativeStateCarriageV1>> {
+        if crate::palw_native_resource_v1::native_logical_admission_enabled_v1()
+            || crate::palw_native_resource_v1::native_resource_admission_enabled_v1()
+        {
+            return None;
+        }
+        self.pruning_point_palw_state(point)
+            .and_then(|v| crate::palw_native_resource_v1::NativeRetainedV1::retain_existing_v1(v).ok())
+            .map(std::sync::Arc::new)
     }
 
     /// Snapshot-bound material, with explicit negotiated complete coverage.
@@ -2238,11 +2434,24 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// Native IBD selection keeps local capacity separate from absent standing.
+    fn get_palw_candidate_order_v2_checked(
+        &self,
+    ) -> Result<Option<crate::palw_fork_choice::PalwCandidateOrderV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
+        Ok(self.get_palw_candidate_order_v2())
+    }
+
     /// **ADR-0178 rule E: this consensus's standing for the IBD commit** — the PALW state at the block it is weighed at (its sink; a
     /// staging consensus's imported pruning point, exactly as [`Self::get_palw_candidate_order_v2`] chooses) and that block's DAA
     /// score. `None` off a ConsensusV2 network or where the state cannot be read; the IBD flow fails closed on it.
     fn get_palw_rule_e_weighing_v1(&self) -> Option<crate::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1> {
         None
+    }
+
+    fn get_palw_rule_e_weighing_v1_checked(
+        &self,
+    ) -> Result<Option<crate::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
+        Ok(self.get_palw_rule_e_weighing_v1())
     }
 
     /// Returns the antipast of block `hash` from the POV of `context`, i.e. `antipast(hash) ∩ past(context)`.

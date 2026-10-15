@@ -28,11 +28,64 @@ def complete():
     return dict(paid(), kind='rfc12-private-complete-bootstrap-file-fixture', schema=None)
 
 
+def paid_v4():
+    manifest = paid(seats=4)
+    for n, row in enumerate(manifest['seats']):
+        row.update(bond='%s:%d' % ('ab' * 64, n), feeOutpoint='%s:%d' % ('cd' * 64, n))
+    manifest.update(schema='misaka.private-paid-bootstrap.v4', genesis='11' * 64,
+        consensusParamsId='22' * 64, compactContractIncluded=False, recoveryEnrollmentIncluded=False,
+        fundingKeyFile='base-material/funding.seed')
+    manifest['privateProbeProfile'] = dict(privatePaidProfileVersion=4, genesis=manifest['genesis'],
+        consensusParamsId=manifest['consensusParamsId'], skipProofOfWork=False, releaseApproval=False,
+        compactClaimPolicy=dict(id='33' * 64, approved=False), releaseRecoveryPolicy=dict(id='44' * 64, approved=False))
+    return manifest
+
+
 def flags(argv, name):
     return [arg for arg in argv if arg.startswith(name + '=')]
 
 
 class NativeProviderPlan(unittest.TestCase):
+    def test_v4_requires_separate_identity_and_cannot_promote_offline_receipts(self):
+        original = paid_v4()
+        driver.validate_factory_manifest(original, 'paid-v4')
+        for field in ('compactContractIncluded', 'recoveryEnrollmentIncluded'):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                driver.validate_factory_manifest(dict(original, **{field: True}), 'paid-v4')
+        for field, value in [('consensusParamsId', '55' * 64), ('skipProofOfWork', True),
+                ('releaseRecoveryPolicy', dict(id='44' * 64, approved=True))]:
+            changed = dict(original, privateProbeProfile=dict(original['privateProbeProfile'], **{field: value}))
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                driver.validate_factory_manifest(changed, 'paid-v4')
+        with self.assertRaises(ValueError):
+            driver.validate_factory_manifest(paid(), 'paid-v4')
+
+    def test_v4_carriers_have_a_dedicated_fee_payer_and_explicit_cap(self):
+        manifest = paid_v4()
+        # Rust orders the raw Hash64 bytes, then the u32, rather than the
+        # textual decimal suffix (10 must follow 2).
+        manifest['seats'][1]['bond'] = 'ab' * 64 + ':10'
+        manifest['seats'][2]['bond'] = 'ab' * 64 + ':2'
+        provider = driver.native_provider_config_v4(FIXTURE, manifest, '127.0.0.1:7000', 900)
+        self.assertEqual(provider['carrierPayerSeat'], 3)
+        self.assertEqual(provider['providerBonds'], ['ab' * 64 + ':2', 'ab' * 64 + ':10'])
+        self.assertIn('--private-probe-recovery-ack-key=' + str(FIXTURE / manifest['seats'][3]['keyFile']),
+            provider['hostArgv'])
+        self.assertIn('--private-probe-recovery-ack-funding=' + manifest['seats'][3]['feeOutpoint'], provider['hostArgv'])
+        self.assertIn('--private-probe-recovery-ack-fee-cap=900', provider['hostArgv'])
+        self.assertIn('--private-probe-native-recovery-providers=' + ','.join(provider['providerBonds']), provider['clientArgv'])
+        for cap in (None, 0, -1, True, 2**64, 1.5):
+            with self.subTest(cap=cap), self.assertRaises(ValueError):
+                driver.native_provider_config_v4(FIXTURE, manifest, '127.0.0.1:7000', cap)
+        reused = paid_v4()
+        reused['seats'][3]['feeOutpoint'] = reused['seats'][0]['feeOutpoint']
+        with self.assertRaisesRegex(ValueError, 'dedicated'):
+            driver.native_provider_config_v4(FIXTURE, reused, '127.0.0.1:7000', 900)
+        short_hash = paid_v4()
+        short_hash['seats'][1]['bond'] = 'ab' * 32 + ':1'
+        with self.assertRaisesRegex(ValueError, 'canonical'):
+            driver.native_provider_config_v4(FIXTURE, short_hash, '127.0.0.1:7000', 900)
+
     def test_default_paid_and_complete_plans_carry_no_native_wiring(self):
         plan = driver.plan_for(Path('/owned/node'), '74' * 32, FIXTURE, paid(), 30, 'paid-v3')
         self.assertIn('nativeCustodyProvider', plan)

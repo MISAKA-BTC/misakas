@@ -642,3 +642,7 @@ mod tests {
         assert_eq!(encoded, expected);
     }
 }
+
+// Read-only owner-local CompressedParents shape inventory; header codec unchanged.
+#[path = "palw_native_resource_v1/private/header.rs"]
+mod native_resource_inventory_v1;

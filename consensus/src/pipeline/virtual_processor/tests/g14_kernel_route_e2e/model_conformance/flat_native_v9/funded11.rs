@@ -172,6 +172,18 @@ async fn native_final27_actions_below_their_fence_are_neither_rejected_nor_appli
         // `send` asserts the node's mempool and template carry it, and the block it folds in is valid.
         net.send(vec![(0, object)]).await;
     }
+    // Stage28/Master32 and owning39 actions have their own execution + Final27
+    // fence. Even an invalid signature and oversized nested frame are opaque
+    // before it; neither the paid parser nor an original reservation may run.
+    for action in 19u8..=70 {
+        let mut object = net.route(0, &K::StageExecutionV14 { action, body: vec![action; 300] });
+        if action % 2 == 0 {
+            let Obj::KernelRouteV1 { signature, .. } = &mut object else { unreachable!() };
+            let last = signature.len() - 1;
+            signature[last] ^= 0x01;
+        }
+        net.send(vec![(0, object)]).await;
+    }
     assert_eq!(native(&net), before, "below Final27 the opaque actions change no native row");
     assert_eq!(net.chain.tip_state().1.bond(&net.bond(0)).map(|b| b.collateral), bonds_before, "no fee or predebit");
 }

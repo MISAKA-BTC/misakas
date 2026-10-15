@@ -4,7 +4,7 @@
 use super::*;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-const USAGE: &str = "palw-class claim-v2 CLASS|JOB|COMMIT|FUND|LOCK|VERIFY|MESSAGE|ROUND-FUND|ROUND-LOCK|ROUND-VERIFY|SIGN|INSPECT|FINAL
+const USAGE: &str = "palw-class claim-v2 CLASS|JOB|COMMIT|FUND|LOCK|VERIFY|MESSAGE|ROUND-FUND|ROUND-LOCK|ROUND-VERIFY|SIGN|INSPECT|ASSUMPTIONS|MODEL-BOUNDS|FINAL|COMPACT-COVERAGE|COMPACT-SIGN
 All commands: --snapshot FILE --ledger-root HEX --aux-root HEX --out FILE
 CLASS: --claim-policy POLICY_BORSH --source-policy SOURCE_BORSH --beacon-policy CHALLENGE_BORSH --base-class HEX --actor BOND_HEX [--rounds N --max-material-bytes N]
 JOB: --class HEX --base-job HEX --actor BOND_HEX --nonce HEX --last-commit DAA --max-consumers N
@@ -18,7 +18,14 @@ ROUND-LOCK: --enrollment HEX --round N
 ROUND-VERIFY: --enrollment HEX --round N --material MATERIAL_BORSH --actor HEX --height DAA
 SIGN: --draft KERNEL_OBJECT --network ID [--drill-salt HEX] --bond TXID:INDEX --key-file SEED
 INSPECT: --context HEX
+MODEL-BOUNDS: (no options) JSON of every registered class's derived worst-case bounds; time/cost UNKNOWN until measured
+ASSUMPTIONS: --context HEX (JSON: drawn m/k, population, operators, largest operator share, false-approval tail at
+  f=1/3, 0.6, largest share, 1; honest fraction, participation and acquisition stay UNKNOWN until measured/assumed)
 FINAL: --enrollment HEX
+COMPACT-COVERAGE: --base-class HEX --compact-arithmetic true|false --arithmetic-repetitions N --fs-query-bits N
+COMPACT-SIGN: --draft KERNEL_OBJECT --bond TXID:INDEX --key-file SEED (exact authenticated snapshot domain)
+COMPACT-COVERAGE is a read-only inventory of directly checkable relations. Compact V4 registration, proof generation, proof
+binding and compact verification are retired (PRINCIPLES §8): no compact proof record is generated, bound or credited.
 Snapshot is borsh((header, Vec<(table,key,row)>)); roots must be authenticated from your selected chain.
 SIGN writes an outer native object for misaka palw submit-object; the other commands write unsigned drafts.
 An unapproved mechanics policy, economic estimate or signed seat receipt does not grant public security approval.";
@@ -64,6 +71,19 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let (header, rows): (Vec<u8>, Vec<(u8, Vec<u8>, Vec<u8>)>) = typed(&snapshot, 256 << 20)?;
     let route = PalwKernelRouteStateV1::from_served_rows_v1(&header, rows.clone(), &lr, &ar).map_err(|e| e.to_string())?;
     let object = match command.as_str() {
+        "COMPACT-COVERAGE" => {
+            let class = hash(&mut f, "--base-class")?;
+            let params = misaka_palw_kernel::claim_compact_v1::CompactCompileParamsV1 {
+                compact_exact_arithmetic: number(&mut f, "--compact-arithmetic")?,
+                arithmetic_repetitions: number(&mut f, "--arithmetic-repetitions")?,
+                fs_query_bits: number(&mut f, "--fs-query-bits")?,
+            };
+            let coverage = kaspa_consensus_core::palw_claim_compact_v1::palw_native_compact_coverage_v2(&route, class, params)?;
+            if !f.is_empty() {
+                return Err(format!("unknown options: {:?}", f.keys()));
+            }
+            return write(&out, &borsh::to_vec(&coverage).map_err(|e| e.to_string())?);
+        }
         "CLASS" => {
             let p = typed(&take(&mut f, "--claim-policy")?, 64 << 10)?;
             let s = typed(&take(&mut f, "--source-policy")?, 64 << 10)?;
@@ -162,6 +182,36 @@ pub fn run(args: &[String]) -> Result<(), String> {
             let complete = checked.complete.ok_or_else(|| format!("full proof opening did not pass: {:?}", checked.finding))?;
             verified.receipt(&complete, hash(&mut f, "--actor")?, number(&mut f, "--height")?).map_err(|e| e.to_string())?
         }
+        "COMPACT-SIGN" => {
+            let draft = KernelRouteObjectV1::decode(&read(&take(&mut f, "--draft")?, 64 << 20)?).map_err(|e| e.to_string())?;
+            let KernelRouteObjectV1::PaidClaimV2 { object: inner } = &draft else {
+                return Err("compact signing requires paid claim native object".into());
+            };
+            if !matches!(
+                inner,
+                PaidClaimObjectV2::RegisterClass { .. }
+                    | PaidClaimObjectV2::EnrollJob { .. }
+                    | PaidClaimObjectV2::Commit { .. }
+                    | PaidClaimObjectV2::StageMessage { .. }
+                    | PaidClaimObjectV2::Fund { .. }
+                    | PaidClaimObjectV2::FundRound { .. }
+                    | PaidClaimObjectV2::Lock { .. }
+                    | PaidClaimObjectV2::LockRound { .. }
+                    | PaidClaimObjectV2::RoundReceipt { .. }
+            ) {
+                return Err("not a compact lifecycle signing operation".into());
+            }
+            let bond = crate::improve_objects::spec::bond(&take(&mut f, "--bond")?)?;
+            let seed = kaspa_pq_validator_core::load_validator_seed(&take(&mut f, "--key-file")?)?;
+            let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
+            // Selected-chain LR/AR supplied above authenticate this exact domain,
+            // including a new private V4 genesis. Do not reconstruct old V3 params.
+            let signed = sign_paid_claim_object_v2(&key, Hash64::from_bytes(route.header.policy.network_domain), bond, &draft)?;
+            if !f.is_empty() {
+                return Err(format!("unknown options: {:?}", f.keys()));
+            }
+            return write(&out, &borsh::to_vec(&signed).map_err(|e| e.to_string())?);
+        }
         "SIGN" => {
             let draft = KernelRouteObjectV1::decode(&read(&take(&mut f, "--draft")?, 256 << 20)?).map_err(|e| e.to_string())?;
             let network: kaspa_consensus_core::network::NetworkId =
@@ -196,6 +246,27 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 return Err(format!("unknown options: {:?}", f.keys()));
             }
             return write(&out, &borsh::to_vec(&final_row).map_err(|e| e.to_string())?);
+        }
+        "MODEL-BOUNDS" => {
+            if !f.is_empty() {
+                return Err(format!("unknown options: {:?}", f.keys()));
+            }
+            let ledger = route.ledger().map_err(|e| e.to_string())?;
+            let rows = model_bounds_v1::registered_model_bounds_v1(&ledger);
+            return write(&out, &serde_json::to_vec_pretty(&rows).map_err(|e| e.to_string())?);
+        }
+        "ASSUMPTIONS" => {
+            let context = hash(&mut f, "--context")?;
+            let verified = paid_claim_sources_from_kernel_rows_v2(&header, rows, &lr, &ar, &context).map_err(|e| e.to_string())?;
+            if !f.is_empty() {
+                return Err(format!("unknown options: {:?}", f.keys()));
+            }
+            let ledger = route.ledger().map_err(|e| e.to_string())?;
+            let report = serde_json::json!({
+                "assumptions": verified.assumption_report_v1(),
+                "economics": verified.economics_report_v1(&ledger),
+            });
+            return write(&out, &serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?);
         }
         "INSPECT" => {
             let context = hash(&mut f, "--context")?;

@@ -230,9 +230,24 @@ impl PrivateNativeCustodySpecV3 {
     /// The daemon hook: open the provider service (its authenticated listener and its GC janitor), and return the exchange for
     /// this node's producer.
     pub fn into_hook(self) -> PalwNativeCustodyHookV3 {
+        self.into_hook_internal_v3(None)
+    }
+    pub fn into_hook_with_service_v4(
+        self,
+        on_open: Box<dyn FnOnce(Arc<LoopbackNativeProviderV3>, &PalwNativeCustodyContextV3) -> Result<(), String> + Send>,
+    ) -> PalwNativeCustodyHookV3 {
+        self.into_hook_internal_v3(Some(on_open))
+    }
+    fn into_hook_internal_v3(
+        self,
+        on_open: Option<Box<dyn FnOnce(Arc<LoopbackNativeProviderV3>, &PalwNativeCustodyContextV3) -> Result<(), String> + Send>>,
+    ) -> PalwNativeCustodyHookV3 {
         Box::new(move |ctx: PalwNativeCustodyContextV3| -> Result<Option<PalwNativeExchangeHandleV3>, String> {
             let Self { providers, listen, exchange, network } = self;
             let service = if providers.is_empty() { None } else { Some(Arc::new(LoopbackNativeProviderV3::open(&ctx, providers)?)) };
+            if let Some(on_open) = on_open {
+                on_open(Arc::clone(service.as_ref().ok_or("private v4 ACK adapter requires a provider service")?), &ctx)?;
+            }
             if let Some(service) = &service {
                 let service = Arc::clone(service);
                 std::thread::Builder::new()
@@ -264,12 +279,37 @@ impl PrivateNativeCustodySpecV3 {
                     let bond = ctx.producer_bond.as_deref().ok_or("an authenticated provider exchange needs --palw-producer-bond")?;
                     Some(PalwNativeExchangeHandleV3(Arc::new(AuthenticatedSocketExchangeV3 {
                         addr,
+                        recovery_roster: ctx.recovery_provider_roster_v4.clone(),
                         policy: ProviderTransportPolicyV1::new(
                             transport_domain_v3(&ctx.config.params),
                             PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3,
                         ),
                         sender: PalwBondKeyV2(crate::palw_producer::parse_outpoint(bond)?),
                         key: kaspa_pq_validator_core::ValidatorKey::from_seed(kaspa_pq_validator_core::load_validator_seed(key)?),
+                    })))
+                }
+                (None, Some(service), None) if !ctx.recovery_provider_roster_v4.is_empty() && ctx.producer_key_path.is_some() => {
+                    // Explicit private V4 local service uses the SAME authenticated
+                    // enrollment adapter as remote service; no unsigned local shortcut.
+                    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+                    let addr = listener.local_addr().map_err(|e| e.to_string())?;
+                    std::thread::Builder::new()
+                        .name("palw-local-recovery-v4".into())
+                        .spawn(move || serve_authenticated_v3(listener, service, PrivateNativeNetworkV3::Loopback))
+                        .map_err(|e| e.to_string())?;
+                    Some(PalwNativeExchangeHandleV3(Arc::new(AuthenticatedSocketExchangeV3 {
+                        addr,
+                        recovery_roster: ctx.recovery_provider_roster_v4.clone(),
+                        policy: ProviderTransportPolicyV1::new(
+                            transport_domain_v3(&ctx.config.params),
+                            PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3,
+                        ),
+                        sender: PalwBondKeyV2(crate::palw_producer::parse_outpoint(
+                            ctx.producer_bond.as_deref().ok_or("V4 local recovery producer bond absent")?,
+                        )?),
+                        key: kaspa_pq_validator_core::ValidatorKey::from_seed(kaspa_pq_validator_core::load_validator_seed(
+                            ctx.producer_key_path.as_deref().unwrap(),
+                        )?),
                     })))
                 }
                 (None, Some(service), None) => Some(PalwNativeExchangeHandleV3(service)),
@@ -295,6 +335,7 @@ struct ServedProviderV3 {
     store: Mutex<DurableMonetaryMaterialProviderV1>,
     authorities: Mutex<AuthorityIndexV3>,
     janitor: Mutex<MonetaryMaterialGcJanitorV1>,
+    recovery_acks: Mutex<misaka_palw_remote::material_recovery_ack_v2::MaterialRecoveryAckOutboxV2>,
 }
 
 /// **The in-node provider service.** Holds no consensus state of its own: every authority is a fresh Consensus API read.
@@ -307,6 +348,9 @@ pub struct LoopbackNativeProviderV3 {
     providers: Vec<ServedProviderV3>,
     transport: ProviderTransportPolicyV1,
     replay: Mutex<ProviderTransportReplayGuardV1>,
+    additional_carriers: Mutex<misaka_palw_remote::native_carrier_queue_v4::NativeCarrierQueueV4>,
+    additional_cursor: AtomicUsize,
+    ack_cursor: AtomicUsize,
 }
 
 impl LoopbackNativeProviderV3 {
@@ -328,18 +372,45 @@ impl LoopbackNativeProviderV3 {
             .collect();
         let dir = ctx.data_dir.join("palw-native-provider-v3");
         let mut providers = Vec::new();
+        let metadata_limits = kaspa_consensus_core::palw_native_resource_v1::native_declared_logical_limits_v1()
+            .map(|limits| {
+                let n = keys.len().max(1) as u64;
+                let orphan = kernel_ingress_v4::unhosted_metadata_reservation_v4(&dir, &keys)?;
+                Ok::<_, String>(kaspa_consensus_core::palw_kernel_material_context_v4::PalwKernelMaterialContextLimitsV4 {
+                    max_encoded_bytes: limits
+                        .database_bytes
+                        .checked_sub(orphan)
+                        .ok_or("unhosted provider metadata exhausts explicit DB capacity")?
+                        / n,
+                    max_heap_bytes: limits.memory_bytes / n,
+                })
+            })
+            .transpose()?;
         for key in keys {
             let file = dir.join(format!("{}-{}.store", key.bond.0.transaction_id, key.bond.0.index));
             let authorities = AuthorityIndexV3::open(&file.with_extension("authorities"))?;
-            let store = DurableMonetaryMaterialProviderV1::open(
-                &file,
-                policy.max_bytes_per_contract,
-                policy.max_bytes_per_provider,
-                None,
-                |claim| authorities.get(&claim),
-            )?;
+            let store = if params.palw_material_release_recovery_v2.is_some() && metadata_limits.is_some() {
+                DurableMonetaryMaterialProviderV1::open_with_kernel_contexts_v4(
+                    &file,
+                    policy.max_bytes_per_contract,
+                    policy.max_bytes_per_provider,
+                    |claim| authorities.get(&claim),
+                    metadata_limits.unwrap(),
+                )?
+            } else {
+                DurableMonetaryMaterialProviderV1::open(
+                    &file,
+                    policy.max_bytes_per_contract,
+                    policy.max_bytes_per_provider,
+                    None,
+                    |claim| authorities.get(&claim),
+                )?
+            };
             let operator = *operators.get(&key.bond).ok_or("a native provider bond is not a fixture seat")?;
             let janitor = MonetaryMaterialGcJanitorV1::open(&file)?;
+            let recovery_acks = misaka_palw_remote::material_recovery_ack_v2::MaterialRecoveryAckOutboxV2::open(
+                &file.with_extension("recovery-ack-v2"),
+            )?;
             providers.push(ServedProviderV3 {
                 bond: key.bond,
                 operator,
@@ -347,6 +418,7 @@ impl LoopbackNativeProviderV3 {
                 store: Mutex::new(store),
                 authorities: Mutex::new(authorities),
                 janitor: Mutex::new(janitor),
+                recovery_acks: Mutex::new(recovery_acks),
             });
         }
         let form = params.palw_prompt_ids_form_v1();
@@ -366,6 +438,11 @@ impl LoopbackNativeProviderV3 {
             holdings,
             chain_classes: ctx.chain_classes,
             providers,
+            additional_cursor: AtomicUsize::new(0),
+            ack_cursor: AtomicUsize::new(0),
+            additional_carriers: Mutex::new(misaka_palw_remote::native_carrier_queue_v4::NativeCarrierQueueV4::open(
+                &dir.join("additional-carriers-v4"),
+            )?),
             transport: ProviderTransportPolicyV1::new(transport_domain_v3(params), PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3),
             replay: Mutex::new(ProviderTransportReplayGuardV1::new(
                 PALW_PROVIDER_TRANSPORT_REPLAY_CAPACITY_V1,
@@ -378,7 +455,10 @@ impl LoopbackNativeProviderV3 {
     /// virtual DAA, the sender's signature, replay), then its binding to the body — the sender is the attempt's executor bond and
     /// key and the request is about the header's DAA — and the recipients are this service's bonds on the session roster. The
     /// executor key's registration is the authority read's (`sign_request`: it refuses a key that is not the bond's).
-    fn authenticate(&self, request: &ProviderTransportRequestV1) -> Result<PalwNativeReadyRequestV3, String> {
+    fn authenticate(
+        &self,
+        request: &ProviderTransportRequestV1,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwNativeReadyRequestV3>, String> {
         let local_daa = Some(self.consensus_manager.consensus().unguarded_session().get_virtual_daa_score());
         {
             let mut replay = self.replay.lock().map_err(|_| "replay guard poisoned")?;
@@ -391,7 +471,15 @@ impl LoopbackNativeProviderV3 {
                 &mut replay,
             )?;
         }
-        let native: PalwNativeReadyRequestV3 = borsh::from_slice(&request.body).map_err(|e| e.to_string())?;
+        kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwNativeReadyRequestV3>(
+            &request.body[..],
+            request.body.len() as u64,
+        )
+        .map_err(|e| e.to_string())?;
+        let native = kaspa_consensus_core::palw_native_resource_v1::retain_native_value_decode_v1(&request.body, || {
+            borsh::from_slice::<PalwNativeReadyRequestV3>(&request.body)
+        })
+        .map_err(|e| e.to_string())?;
         let attempt = &native.envelope.base.attempt;
         let header = &request.header;
         if header.sender.0 != attempt.executor_bond
@@ -432,12 +520,19 @@ impl LoopbackNativeProviderV3 {
 
     /// **One janitor round per served bond** over this node's Consensus API (see the module comment). Logged, never fatal.
     pub fn gc_tick(&self) {
+        if let Err(error) = self.answer_and_release_tick_v4() {
+            kaspa_core::warn!("RFC08 V4 provider consumer retained for retry: {error}");
+        }
         for provider in &self.providers {
             let (Ok(mut janitor), Ok(mut store)) = (provider.janitor.lock(), provider.store.lock()) else {
                 kaspa_core::warn!("RFC12 PRIVATE: PAV3 provider GC skipped a poisoned store; everything retained");
                 continue;
             };
             let mut oracle = ConsensusGcOracleV3(&self.consensus_manager);
+            let native = self.consensus_manager.consensus().unguarded_session_blocking();
+            if let Err(error) = store.expire_unused_kernel_offer_tick_v4(&*native) {
+                kaspa_core::warn!("RFC08 kernel unused-offer metadata retained for retry: {error}");
+            }
             match janitor.tick(&mut store, &mut oracle) {
                 Ok(report) => {
                     if !report.deleted.is_empty() {
@@ -453,13 +548,305 @@ impl LoopbackNativeProviderV3 {
                         kaspa_core::warn!("RFC12 PRIVATE: PAV3 provider GC retained everything this round: {reason}");
                     }
                 }
-                Err(error) => kaspa_core::warn!("RFC12 PRIVATE: PAV3 provider GC failed; everything retained: {error}"),
+                Err(error) => kaspa_core::warn!(
+                    "RFC12 PRIVATE: PAV3 provider GC stopped; verified prior deletions may be durable, other material retained: {error}"
+                ),
+            }
+            // Receipts survive store deletion, marker replay and restart. Never
+            // infer cleanup authority from a missing bundle alone.
+            let receipts: Vec<_> = janitor.completed_receipts().cloned().collect();
+            let still_held: BTreeSet<_> = store.held_native_authorities().into_values().flatten().collect();
+            let mut recovery_roots = BTreeMap::new();
+            let mut metadata_clean = true;
+            for receipt in &receipts {
+                let retired: BTreeSet<_> = receipt.native_claims.iter().copied().filter(|claim| !still_held.contains(claim)).collect();
+                let result = provider
+                    .authorities
+                    .lock()
+                    .map_err(|_| "authority metadata lock poisoned".to_string())
+                    .and_then(|mut index| index.remove_finalized(&retired));
+                match result {
+                    Ok(()) => match oracle.terminal_receipt(receipt.intent.root, receipt.intent.stored_consent) {
+                        Ok(Some((_, terminal))) => {
+                            recovery_roots.insert(terminal.id(), terminal);
+                        }
+                        Ok(None) => {
+                            if let Err(error) = janitor.acknowledge_metadata_cleanup(receipt.intent.stored_consent) {
+                                kaspa_core::warn!("RFC12 PRIVATE: finalized authority metadata ack retained: {error}");
+                            }
+                        }
+                        Err(error) => {
+                            metadata_clean = false;
+                            kaspa_core::warn!("RFC12 PRIVATE: recovery receipt read retained for retry: {error}");
+                        }
+                    },
+                    Err(error) => {
+                        metadata_clean = false;
+                        kaspa_core::warn!("RFC12 PRIVATE: finalized provider metadata retained for retry: {error}");
+                    }
+                }
+            }
+            let mut _terminal_receipts_lease = None;
+            if metadata_clean {
+                match self
+                    .consensus_manager
+                    .consensus()
+                    .unguarded_session_blocking()
+                    .palw_material_provider_terminal_receipts_finalized_v4(provider.bond)
+                {
+                    Ok(rows) => {
+                        let (rows, lease) = rows.into_parts_v1();
+                        _terminal_receipts_lease = lease;
+                        for terminal in rows {
+                            if terminal.unused_native_session {
+                                recovery_roots.insert(terminal.id(), terminal);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        kaspa_core::warn!("RFC12 PRIVATE: terminal recovery scan retained: {error}");
+                        continue;
+                    }
+                }
+                if let Ok(mut outbox) = provider.recovery_acks.lock() {
+                    let Ok(additional) = self.additional_carriers.lock() else { continue };
+                    if additional.provider_in_flight(provider.bond) {
+                        continue;
+                    }
+
+                    for terminal in recovery_roots.into_values() {
+                        if terminal.acknowledged.contains(&provider.bond) {
+                            continue;
+                        }
+                        let checkpoint = match self
+                            .consensus_manager
+                            .consensus()
+                            .unguarded_session_blocking()
+                            .palw_material_provider_ack_checkpoint_finalized_v2(provider.bond)
+                        {
+                            Ok(Some((_, checkpoint))) => checkpoint,
+                            Ok(None) => {
+                                kaspa_core::warn!("RFC12 PRIVATE: provider ACK checkpoint not finalized yet");
+                                continue;
+                            }
+                            Err(error) => {
+                                kaspa_core::warn!("RFC12 PRIVATE: provider ACK checkpoint unknown: {error}");
+                                continue;
+                            }
+                        };
+                        if let Err(error) = outbox.enqueue_after_durable_gc(
+                            self.transport.domain,
+                            &terminal,
+                            provider.bond,
+                            &checkpoint,
+                            &receipts,
+                            &store.held_contracts(),
+                            |bond, message, context| {
+                                (*bond == provider.bond).then(|| provider.key.sign_with_context(message, context).to_vec())
+                            },
+                        ) {
+                            kaspa_core::warn!(
+                                "RFC12 PRIVATE: recovery ACK waits for all generation deletions/funding adapter: {error}"
+                            );
+                        }
+                    }
+                }
             }
         }
     }
 
+    pub(crate) fn pending_additional_carrier_v4(
+        &self,
+    ) -> Result<Option<super::recovery_ack_carrier_v4::AdditionalNativeCarrierV4>, String> {
+        let queue = self.additional_carriers.lock().map_err(|_| "additional carrier queue poisoned")?;
+        let count = queue.rows().count();
+        if count == 0 {
+            return Ok(None);
+        }
+        let index = self.additional_cursor.fetch_add(1, Ordering::Relaxed) % count;
+        let (id, row) = queue.rows().nth(index).ok_or("additional carrier cursor changed under lock")?;
+        Ok(Some(super::recovery_ack_carrier_v4::AdditionalNativeCarrierV4 {
+            id: *id,
+            object: row.object_owned()?,
+            submitted_transaction: row.transaction_owned()?,
+        }))
+    }
+    pub(crate) fn record_additional_carrier_submitted_v4(
+        &self,
+        id: Hash64,
+        tx: &kaspa_consensus_core::tx::Transaction,
+    ) -> Result<(), String> {
+        self.additional_carriers.lock().map_err(|_| "additional carrier queue poisoned")?.record_submitted(id, tx)
+    }
+    pub(crate) fn retire_additional_carrier_finalized_v4(&self, id: Hash64) -> Result<bool, String> {
+        use misaka_palw_remote::native_carrier_queue_v4::NativeCarrierPurposeV4;
+        let mut queue = self.additional_carriers.lock().map_err(|_| "additional carrier queue poisoned")?;
+        let Some(row) = queue.get(&id) else { return Ok(true) };
+        let api = self.consensus_manager.consensus().unguarded_session_blocking();
+        let applied = match row.purpose {
+            NativeCarrierPurposeV4::Enrollment { root, consent, recovery, until_daa, .. }
+            | NativeCarrierPurposeV4::KernelEnrollmentV4 { root, consent, recovery, until_daa }
+            | NativeCarrierPurposeV4::KernelReplacementV4 { root, consent, recovery, until_daa } => {
+                api.palw_material_recovery_enrollment_finalized_v4(root, consent, recovery)?
+                    || api.palw_material_recovery_finalized_daa_v4()?.is_some_and(|daa| daa > until_daa)
+            }
+            NativeCarrierPurposeV4::Answer { provider, stream, sequence, event, deadline_daa } => {
+                api.palw_material_provider_ack_checkpoint_finalized_v2(provider)?
+                    .is_some_and(|(_, c)| c.stream == stream && c.sequence == sequence && c.last_receipt == event)
+                    || api.palw_material_recovery_finalized_daa_v4()?.is_some_and(|daa| daa > deadline_daa)
+            }
+            NativeCarrierPurposeV4::Release { root, consent, .. } => {
+                api.palw_material_terminal_receipt_finalized_v2(root, consent)?.is_some()
+            }
+        };
+        // Expiry retires ONLY this immutable, now impossible carrier metadata;
+        // held bytes, covenants, challenges and earned cash remain native-owned.
+        if applied {
+            queue.retire(id)?;
+        }
+        Ok(applied)
+    }
+    /// Pending signed ACKs are read by the explicitly configured private fee
+    /// payer. Submission is recorded before network send and retained to finality.
+    pub fn pending_recovery_ack_v2(
+        &self,
+    ) -> Result<Option<(PalwBondKeyV2, misaka_palw_remote::material_recovery_ack_v2::MaterialRecoveryAckSummaryV2)>, String> {
+        if self.providers.is_empty() {
+            return Ok(None);
+        }
+        let start = self.ack_cursor.fetch_add(1, Ordering::Relaxed) % self.providers.len();
+        for offset in 0..self.providers.len() {
+            let p = &self.providers[(start + offset) % self.providers.len()];
+            let outbox = p.recovery_acks.lock().map_err(|_| "ACK outbox poisoned")?;
+            if let Some(row) = outbox.pending().next() {
+                return Ok(Some((
+                    p.bond,
+                    misaka_palw_remote::material_recovery_ack_v2::MaterialRecoveryAckSummaryV2 { receipt: row.receipt },
+                )));
+            }
+        }
+        Ok(None)
+    }
+    pub fn recovery_ack_object_owned_v2(
+        &self,
+        provider: PalwBondKeyV2,
+        receipt: Hash64,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+        String,
+    > {
+        let p = self.providers.iter().find(|p| p.bond == provider).ok_or("unknown ACK provider")?;
+        let outbox = p.recovery_acks.lock().map_err(|_| "ACK outbox lock poisoned")?;
+        outbox.pending().find(|row| row.receipt == receipt).ok_or("unknown ACK receipt")?.object_owned_v2()
+    }
+    pub fn recovery_ack_transaction_owned_v2(
+        &self,
+        provider: PalwBondKeyV2,
+        receipt: Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>>, String> {
+        let p = self.providers.iter().find(|p| p.bond == provider).ok_or("unknown ACK provider")?;
+        let outbox = p.recovery_acks.lock().map_err(|_| "ACK outbox poisoned")?;
+        outbox.pending().find(|r| r.receipt == receipt).ok_or("unknown ACK receipt")?.transaction_owned_v2()
+    }
+    pub fn record_recovery_ack_submitted_v2(
+        &self,
+        provider: PalwBondKeyV2,
+        receipt: Hash64,
+        tx: &kaspa_consensus_core::tx::Transaction,
+    ) -> Result<(), String> {
+        self.providers
+            .iter()
+            .find(|p| p.bond == provider)
+            .ok_or("unknown ACK provider")?
+            .recovery_acks
+            .lock()
+            .map_err(|_| "ACK outbox lock poisoned")?
+            .record_submitted(receipt, tx)
+    }
+    pub fn record_recovery_ack_accepted_v2(
+        &self,
+        provider: PalwBondKeyV2,
+        receipt: Hash64,
+        block: kaspa_consensus_core::BlockHash,
+    ) -> Result<(), String> {
+        self.providers
+            .iter()
+            .find(|p| p.bond == provider)
+            .ok_or("unknown ACK provider")?
+            .recovery_acks
+            .lock()
+            .map_err(|_| "ACK outbox lock poisoned")?
+            .record_accepted(receipt, block)
+    }
+    /// Current finalized ACK stream presence proves ACTUAL state application,
+    /// including after last-ACK terminal deletion and historical body/delta pruning.
+    pub fn retire_recovery_ack_checkpoint_v2(&self, provider: PalwBondKeyV2, receipt: Hash64) -> Result<bool, String> {
+        let p = self.providers.iter().find(|p| p.bond == provider).ok_or("unknown ACK provider")?;
+        let Some((_, checkpoint)) = self
+            .consensus_manager
+            .consensus()
+            .unguarded_session_blocking()
+            .palw_material_provider_ack_checkpoint_finalized_v2(provider)?
+        else {
+            return Ok(false);
+        };
+        let mut janitor = p.janitor.lock().map_err(|_| "ACK janitor lock poisoned")?;
+        let mut outbox = p.recovery_acks.lock().map_err(|_| "ACK outbox lock poisoned")?;
+        let mut applied = false;
+        outbox.retire_checkpoint_finalized(receipt, |row| {
+            applied = checkpoint.provider == row.provider
+                && checkpoint.stream == row.stream
+                && checkpoint.sequence == row.sequence
+                && checkpoint.last_receipt == row.receipt;
+            if applied {
+                for consent in &row.stored_consents {
+                    janitor.acknowledge_metadata_cleanup(*consent)?;
+                }
+            }
+            Ok(applied)
+        })?;
+        Ok(applied)
+    }
+    pub fn retire_recovery_ack_finalized_v2(
+        &self,
+        provider: PalwBondKeyV2,
+        receipt: Hash64,
+        verify: impl FnMut(
+            &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+            &[u8],
+            kaspa_consensus_core::BlockHash,
+        ) -> Result<bool, String>,
+    ) -> Result<(), String> {
+        let p = self.providers.iter().find(|p| p.bond == provider).ok_or("unknown ACK provider")?;
+        {
+            let outbox = p.recovery_acks.lock().map_err(|_| "ACK outbox poisoned")?;
+            let row = outbox.pending().find(|r| r.receipt == receipt).ok_or("unknown ACK receipt")?;
+            let Some(submission) = &row.submission else { return Ok(()) };
+            let Some(block) = submission.accepted_block else { return Ok(()) };
+            let object = row.object_owned_v2()?;
+            let mut verify = verify;
+            if !verify(&object, &submission.transaction, block)? {
+                return Ok(());
+            }
+        }
+        // Historical inclusion is merely an additional check. Only actual
+        // current native-finalized checkpoint presence authorizes retirement.
+        self.retire_recovery_ack_checkpoint_v2(provider, receipt).map(|_| ())
+    }
+
     /// One request, every roster bond this service holds: each signature only after its own durable publication.
-    pub fn sign_request(&self, request: &PalwNativeReadyRequestV3) -> Result<Vec<(PalwBondKeyV2, Vec<u8>)>, String> {
+    pub fn sign_request(
+        &self,
+        request: &PalwNativeReadyRequestV3,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<(PalwBondKeyV2, Vec<u8>)>>, String> {
+        let requests = (self.providers.len() as u64)
+            .checked_mul(
+                (std::mem::size_of::<(PalwBondKeyV2, Vec<u8>)>() + 6 * kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN)
+                    as u64,
+            )
+            .ok_or("Ready signature workspace overflow")?;
+        let _signature_workspace =
+            kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(requests).map_err(|e| e.to_string())?;
         if request.version != PALW_NATIVE_READY_EXCHANGE_VERSION_V3 {
             return Err("unknown native exchange version".into());
         }
@@ -524,8 +911,12 @@ impl LoopbackNativeProviderV3 {
                 return Err("the chain's registered key for this roster bond is not the key this service holds".into());
             }
             // The reopen index first: a crash after publication must still find the authority to re-verify the bundle.
-            provider.authorities.lock().map_err(|_| "authority index poisoned")?.record(bundle.claim, authority.material)?;
+            // One lock order for sign and GC: store then authority index. Keep
+            // it across authority publication + material publication, otherwise
+            // GC could erase a new authority while its Ready waits on the store.
             let mut store = provider.store.lock().map_err(|_| "provider store poisoned")?;
+            let mut authorities = provider.authorities.lock().map_err(|_| "authority index poisoned")?;
+            authorities.record(bundle.claim, authority.material)?;
             let signature = misaka_palw_remote::native_ready_v3::provider_sign_native_ready_v3(
                 &mut store,
                 provider.bond,
@@ -537,7 +928,16 @@ impl LoopbackNativeProviderV3 {
             )?;
             signatures.push((provider.bond, signature));
         }
-        Ok(signatures)
+        let encoded = borsh::to_vec(&signatures).map_err(|e| e.to_string())?;
+        kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<Vec<(PalwBondKeyV2, Vec<u8>)>>(
+            &encoded[..],
+            encoded.len() as u64,
+        )
+        .map_err(|e| e.to_string())?;
+        kaspa_consensus_core::palw_native_resource_v1::retain_native_value_decode_v1(&encoded, || {
+            borsh::from_slice::<Vec<(PalwBondKeyV2, Vec<u8>)>>(&encoded)
+        })
+        .map_err(|e| e.to_string())
     }
 }
 
@@ -545,8 +945,11 @@ impl NativeReadyExchangeV3 for LoopbackNativeProviderV3 {
     fn describe(&self) -> String {
         format!("in-process loopback provider ({} bond(s))", self.providers.len())
     }
-    fn request_signatures(&self, request: &PalwNativeReadyRequestV3) -> Result<BTreeMap<PalwBondKeyV2, Vec<u8>>, String> {
-        Ok(self.sign_request(request)?.into_iter().collect())
+    fn request_signatures(
+        &self,
+        request: &PalwNativeReadyRequestV3,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<BTreeMap<PalwBondKeyV2, Vec<u8>>>, String> {
+        crate::palw_native_custody_v3::palw_native_signature_map_owned_v3(&self.sign_request(request)?)
     }
 }
 
@@ -557,6 +960,7 @@ pub struct AuthenticatedSocketExchangeV3 {
     policy: ProviderTransportPolicyV1,
     sender: PalwBondKeyV2,
     key: kaspa_pq_validator_core::ValidatorKey,
+    recovery_roster: Vec<PalwBondKeyV2>,
 }
 
 /// A request nonce: unique, not secret (replay protection needs uniqueness per sender only).
@@ -574,17 +978,62 @@ fn request_nonce_v3(body: &[u8]) -> [u8; 32] {
 }
 
 impl NativeReadyExchangeV3 for AuthenticatedSocketExchangeV3 {
+    fn fetch_kernel_material_unit_classified_v4(
+        &self,
+        query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        authority: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>,
+        kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialFetchErrorV4,
+    > {
+        self.fetch_kernel_classified_v4(query, authority)
+    }
+    fn replace_kernel_material_v4(
+        &self,
+        context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+        grant: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
+    ) -> Result<(), String> {
+        self.replace_kernel_v4(context, bundle, intent, grant)
+    }
+    fn fetch_kernel_material_unit_v4(
+        &self,
+        query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        authority: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>, String> {
+        self.fetch_kernel_v4(query, authority)
+    }
+    fn ingest_kernel_material_v4(
+        &self,
+        material: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+        ingress: &kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4,
+    ) -> Result<(), String> {
+        self.ingest_kernel_v4(material, ingress)
+    }
+    fn recovery_provider_roster_v4(&self) -> &[PalwBondKeyV2] {
+        &self.recovery_roster
+    }
+    fn ensure_recovery_session_v4(
+        &self,
+        q: &kaspa_consensus_core::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4,
+    ) -> Result<(), String> {
+        self.enroll_recovery_session_v4(q)
+    }
     fn describe(&self) -> String {
         format!("authenticated provider socket {} (integrity-only, unencrypted)", self.addr)
     }
-    fn request_signatures(&self, _request: &PalwNativeReadyRequestV3) -> Result<BTreeMap<PalwBondKeyV2, Vec<u8>>, String> {
+    fn request_signatures(
+        &self,
+        _request: &PalwNativeReadyRequestV3,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<BTreeMap<PalwBondKeyV2, Vec<u8>>>, String> {
         Err("an authenticated provider socket verifies responses with the roster keys; no unauthenticated path exists".into())
     }
     fn request_signatures_authenticated(
         &self,
         request: &PalwNativeReadyRequestV3,
         roster_keys: &[(PalwBondKeyV2, Vec<u8>)],
-    ) -> Result<BTreeMap<PalwBondKeyV2, Vec<u8>>, String> {
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<BTreeMap<PalwBondKeyV2, Vec<u8>>>, String> {
         let attempt = &request.envelope.base.attempt;
         if attempt.executor_bond != self.sender.0 || attempt.executor_pubkey.as_slice() != self.key.public_key() {
             return Err("this node's producer key/bond is not the attempt's executor".into());
@@ -606,18 +1055,32 @@ impl NativeReadyExchangeV3 for AuthenticatedSocketExchangeV3 {
         stream.set_read_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3)).map_err(|e| e.to_string())?;
         stream.set_write_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3)).map_err(|e| e.to_string())?;
         write_frame_v3(&mut stream, &borsh::to_vec(&signed).map_err(|e| e.to_string())?)?;
-        let response: ProviderTransportResponseV1 =
-            borsh::from_slice(&read_frame_v3(&mut stream)?).map_err(|e| format!("provider transport response: {e}"))?;
+        let frame = read_frame_v3(&mut stream)?;
+        kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<ProviderTransportResponseV1>(
+            &frame[..],
+            frame.len() as u64,
+        )
+        .map_err(|e| e.to_string())?;
+        let response = kaspa_consensus_core::palw_native_resource_v1::retain_native_value_decode_v1(&frame, || {
+            borsh::from_slice::<ProviderTransportResponseV1>(&frame)
+        })
+        .map_err(|e| e.to_string())?;
         let responders = provider_transport_verify_response_v1(&response, &signed.header, roster_keys, &self.policy, now_unix_ms())?;
-        let body: PalwNativeReadyResponseV3 = borsh::from_slice(&response.body).map_err(|e| e.to_string())?;
-        match body {
+        kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwNativeReadyResponseV3>(
+            &response.body[..],
+            response.body.len() as u64,
+        )
+        .map_err(|e| e.to_string())?;
+        let body = kaspa_consensus_core::palw_native_resource_v1::retain_native_value_decode_v1(&response.body, || {
+            borsh::from_slice::<PalwNativeReadyResponseV3>(&response.body)
+        })
+        .map_err(|e| e.to_string())?;
+        match &*body {
             PalwNativeReadyResponseV3::Signed { version: PALW_NATIVE_READY_EXCHANGE_VERSION_V3, signatures } => {
-                let count = signatures.len();
-                let map: BTreeMap<_, _> = signatures.into_iter().collect();
-                if map.len() != count || !map.keys().eq(responders.iter()) {
+                if !signatures.iter().map(|(b, _)| b).eq(responders.iter()) {
                     return Err("the provider service's Ready signatures are not exactly its authenticated responders".into());
                 }
-                Ok(map)
+                crate::palw_native_custody_v3::palw_native_signature_map_owned_v3(signatures)
             }
             PalwNativeReadyResponseV3::Refused { reason, .. } => Err(format!("provider refused (authenticated): {reason}")),
             PalwNativeReadyResponseV3::Signed { .. } => Err("unknown native exchange response version".into()),
@@ -657,7 +1120,35 @@ fn handle_authenticated_v3(mut stream: TcpStream, service: &LoopbackNativeProvid
     let _ = stream.set_read_timeout(Some(PRIVATE_NATIVE_EXCHANGE_IDLE_TIMEOUT_V3));
     let _ = stream.set_write_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3));
     let Ok(bytes) = read_frame_v3(&mut stream) else { return };
-    let Ok(request) = borsh::from_slice::<ProviderTransportRequestV1>(&bytes) else { return };
+    if kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<ProviderTransportRequestV1>(
+        &bytes[..],
+        bytes.len() as u64,
+    )
+    .is_err()
+    {
+        return;
+    }
+    let Ok(request) = kaspa_consensus_core::palw_native_resource_v1::retain_native_value_decode_v1(&bytes, || {
+        borsh::from_slice::<ProviderTransportRequestV1>(&bytes)
+    }) else {
+        return;
+    };
+    if request.header.purpose == ProviderTransportPurposeV1::RecoveryEnrollmentV4 {
+        recovery_runtime_v4::handle_recovery_v4(&mut stream, service, &request);
+        return;
+    }
+    if request.header.purpose == ProviderTransportPurposeV1::KernelMaterialIngressV4 {
+        kernel_ingress_v4::handle_kernel_v4(&mut stream, service, &request);
+        return;
+    }
+    if request.header.purpose == ProviderTransportPurposeV1::KernelMaterialQueryV4 {
+        kernel_query_v4::handle_query_v4(&mut stream, service, &request);
+        return;
+    }
+    if request.header.purpose == ProviderTransportPurposeV1::KernelMaterialReplacementV4 {
+        kernel_replacement_v4::handle_replacement_v4(&mut stream, service, &request);
+        return;
+    }
     let native = match service.authenticate(&request) {
         Ok(native) => native,
         Err(reason) => {
@@ -665,11 +1156,14 @@ fn handle_authenticated_v3(mut stream: TcpStream, service: &LoopbackNativeProvid
             return;
         }
     };
-    let body = match service.sign_request(&native) {
-        Ok(signatures) => PalwNativeReadyResponseV3::Signed { version: PALW_NATIVE_READY_EXCHANGE_VERSION_V3, signatures },
+    let (body, _signature_lease) = match service.sign_request(&native) {
+        Ok(signatures) => {
+            let (signatures, lease) = signatures.into_parts_v1();
+            (PalwNativeReadyResponseV3::Signed { version: PALW_NATIVE_READY_EXCHANGE_VERSION_V3, signatures }, lease)
+        }
         Err(reason) => {
             kaspa_core::warn!("RFC12 PRIVATE: PAV3 native provider refused a request: {reason}");
-            PalwNativeReadyResponseV3::Refused { version: PALW_NATIVE_READY_EXCHANGE_VERSION_V3, reason }
+            (PalwNativeReadyResponseV3::Refused { version: PALW_NATIVE_READY_EXCHANGE_VERSION_V3, reason }, None)
         }
     };
     match service.respond(&request, &body).and_then(|response| borsh::to_vec(&response).map_err(|e| e.to_string())) {
@@ -685,6 +1179,20 @@ fn handle_authenticated_v3(mut stream: TcpStream, service: &LoopbackNativeProvid
 struct ConsensusGcOracleV3<'a>(&'a kaspa_consensusmanager::ConsensusManager);
 
 impl MonetaryMaterialGcOracleV1 for ConsensusGcOracleV3<'_> {
+    fn terminal_receipt(
+        &mut self,
+        root: Hash64,
+        stored: Hash64,
+    ) -> Result<
+        Option<(
+            kaspa_consensus_core::BlockHash,
+            kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2,
+        )>,
+        String,
+    > {
+        self.0.consensus().unguarded_session_blocking().palw_material_terminal_receipt_finalized_v2(root, stored)
+    }
+
     fn covenant_rows(
         &mut self,
     ) -> Result<
@@ -715,6 +1223,9 @@ impl MonetaryMaterialGcOracleV1 for ConsensusGcOracleV3<'_> {
         release_block: kaspa_consensus_core::BlockHash,
     ) -> Result<bool, String> {
         let session = self.0.consensus().unguarded_session_blocking();
+        if let Some((_, receipt)) = session.palw_material_terminal_receipt_finalized_v2(root, consent)? {
+            return Ok(receipt.tail_block == tail);
+        }
         session.palw_monetary_material_release_finalized_v1(root, consent, tail, release_block)
     }
 }
@@ -730,16 +1241,30 @@ fn write_frame_v3(stream: &mut impl Write, bytes: &[u8]) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-fn read_frame_v3(stream: &mut impl Read) -> Result<Vec<u8>, String> {
+struct NativeProviderFrameV3 {
+    bytes: Vec<u8>,
+    _lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+}
+impl std::ops::Deref for NativeProviderFrameV3 {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+fn read_frame_v3(stream: &mut impl Read) -> Result<NativeProviderFrameV3, String> {
+    read_frame_capped_v4(stream, PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3)
+}
+fn read_frame_capped_v4(stream: &mut impl Read, cap: u64) -> Result<NativeProviderFrameV3, String> {
     let mut length = [0u8; 8];
     stream.read_exact(&mut length).map_err(|e| e.to_string())?;
     let length = u64::from_le_bytes(length);
-    if length > PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3 {
+    if length > cap || length > PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3 {
         return Err("native exchange frame exceeds its cap".into());
     }
+    let lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(length).map_err(|e| e.to_string())?;
     let mut bytes = vec![0u8; length as usize];
     stream.read_exact(&mut bytes).map_err(|e| e.to_string())?;
-    Ok(bytes)
+    Ok(NativeProviderFrameV3 { bytes, _lease: lease })
 }
 
 /// The authority each held bundle was admitted under, kept beside the store so a reopen re-verifies every bundle
@@ -747,45 +1272,180 @@ fn read_frame_v3(stream: &mut impl Read) -> Result<Vec<u8>, String> {
 /// bundle is published: an entry without a bundle is harmless, a bundle without its entry would refuse the reopen.
 struct AuthorityIndexV3 {
     file: PathBuf,
-    rows: BTreeMap<Hash64, PalwMaterialNativeAuthorityV1>,
+    rows: BTreeMap<Hash64, AuthorityRecordV4>,
+    _native_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+}
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AuthorityRecordV4(PalwMaterialNativeAuthorityV1);
+impl kaspa_consensus_core::palw_native_resource_v1::NativeHeapV1 for AuthorityRecordV4 {
+    fn native_heap_v1(&self, _: &str) -> kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1 {
+        let PalwMaterialNativeAuthorityV1 { execution_root: _, class_id: _, artifact_root: _, ladder: _, form: _ } = self.0;
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::zero()
+    }
+}
+impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for AuthorityRecordV4 {
+    fn scan_native_wire_v1<R: Read>(
+        r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
+    ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1;
+        r.step()?;
+        let shape = Hash64::scan_native_wire_v1(r)?
+            .merge(Hash64::scan_native_wire_v1(r)?)?
+            .merge(Hash64::scan_native_wire_v1(r)?)?
+            .merge(u64::scan_native_wire_v1(r)?)?;
+        if r.byte()? > 1 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "authority prompt form unknown"));
+        }
+        Ok(shape)
+    }
 }
 
 type AuthorityRowV3 = (Hash64, Hash64, Hash64, Hash64, u64, u8);
+const AUTHORITY_ROW_BYTES_V3: usize = 4 * 64 + 8 + 1;
+const AUTHORITY_MAX_ROWS_V3: usize = kaspa_consensus_core::palw_monetary_material_v1::PALW_MONETARY_MATERIAL_MAX_CONTRACTS_V1 as usize
+    * kaspa_consensus_core::palw_material_capacity_v1::PALW_MATERIAL_MAX_SCOPES_V1;
+const AUTHORITY_MAX_BYTES_V3: u64 = (4 + AUTHORITY_MAX_ROWS_V3 * AUTHORITY_ROW_BYTES_V3) as u64;
 
 impl AuthorityIndexV3 {
+    fn projection_lease_v4(
+        count: usize,
+    ) -> Result<Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>, String> {
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, reserve_native_requests_v1};
+        if count > AUTHORITY_MAX_ROWS_V3 {
+            return Err("authority typed row count exceeds cap".into());
+        }
+        let count32 = u32::try_from(count).map_err(|_| "authority row count overflow")?;
+        let bytes = (count as u64)
+            .checked_mul(AUTHORITY_ROW_BYTES_V3 as u64)
+            .and_then(|n| n.checked_add(4))
+            .ok_or("authority canonical extent overflow")?;
+        let stream = std::io::Cursor::new(count32.to_le_bytes()).chain(std::io::repeat(0).take(bytes - 4));
+        let mut reader = NativeWireReaderV1::new(stream, bytes);
+        let map = BTreeMap::<Hash64, AuthorityRecordV4>::scan_native_wire_v1(&mut reader).map_err(|e| e.to_string())?;
+        if reader.remaining() != 0 {
+            return Err("authority typed map extent differs".into());
+        }
+        let tuple_bytes = (count as u64)
+            .checked_mul(2 * std::mem::size_of::<AuthorityRowV3>() as u64)
+            .ok_or("authority projection ownership overflow")?;
+        let requests = map
+            .heap
+            .checked_add(tuple_bytes)
+            .and_then(|n| bytes.checked_mul(2).and_then(|m| n.checked_add(m)))
+            .and_then(|n| n.checked_add(std::mem::size_of::<BTreeMap<Hash64, AuthorityRecordV4>>() as u64))
+            .ok_or("authority native ownership overflow")?;
+        reserve_native_requests_v1(requests).map_err(|e| e.to_string())
+    }
     fn open(file: &Path) -> Result<Self, String> {
-        let rows = match std::fs::read(file) {
-            Ok(bytes) => borsh::from_slice::<Vec<AuthorityRowV3>>(&bytes)
-                .map_err(|e| format!("native provider authority index: {e}"))?
-                .into_iter()
-                .map(|(claim, execution_root, class_id, artifact_root, ladder, form)| {
+        let (rows, native_lease) = match std::fs::File::open(file) {
+            Ok(source) => {
+                let actual = source.metadata().map_err(|e| e.to_string())?.len();
+                if actual > AUTHORITY_MAX_BYTES_V3 {
+                    return Err("native provider authority index exceeds cap".into());
+                }
+                let _raw = kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(
+                    actual.checked_add(1).and_then(|n| n.checked_mul(2)).ok_or("authority raw ownership overflow")?,
+                )
+                .map_err(|e| e.to_string())?;
+                let mut bytes = Vec::new();
+                source.take(actual + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                if bytes.len() as u64 != actual {
+                    return Err("authority journal extent changed".into());
+                }
+                if bytes.len() as u64 > AUTHORITY_MAX_BYTES_V3 || bytes.len() < 4 {
+                    return Err("native provider authority index byte bound".into());
+                }
+                let count = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+                // Every row is exactly four 64-byte digests + u64 + u8. Reject
+                // a forged Vec count before Borsh allocates any rows.
+                if count > AUTHORITY_MAX_ROWS_V3
+                    || 4usize.checked_add(count.checked_mul(AUTHORITY_ROW_BYTES_V3).ok_or("authority count overflow")?)
+                        != Some(bytes.len())
+                {
+                    return Err("native provider authority index extent/count differs".into());
+                }
+                let lease = Self::projection_lease_v4(count)?;
+                let decoded =
+                    borsh::from_slice::<Vec<AuthorityRowV3>>(&bytes).map_err(|e| format!("native provider authority index: {e}"))?;
+                let mut rows = BTreeMap::new();
+                let mut previous = None;
+                for (claim, execution_root, class_id, artifact_root, ladder, form) in decoded {
+                    if previous.is_some_and(|p| p >= claim)
+                        || claim == Hash64::default()
+                        || execution_root == Hash64::default()
+                        || class_id == Hash64::default()
+                        || artifact_root == Hash64::default()
+                        || ladder == 0
+                    {
+                        return Err("native provider authority index is unordered, duplicated or incomplete".into());
+                    }
+                    previous = Some(claim);
                     let form = match form {
                         0 => PalwPromptIdsFormV1::Flat,
                         1 => PalwPromptIdsFormV1::MerkleV1,
-                        _ => return Err("native provider authority index names an unknown prompt form".to_string()),
+                        _ => return Err("native provider authority index names an unknown prompt form".into()),
                     };
-                    Ok((claim, PalwMaterialNativeAuthorityV1 { execution_root, class_id, artifact_root, ladder, form }))
-                })
-                .collect::<Result<_, _>>()?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
-            Err(error) => return Err(error.to_string()),
+                    rows.insert(
+                        claim,
+                        AuthorityRecordV4(PalwMaterialNativeAuthorityV1 { execution_root, class_id, artifact_root, ladder, form }),
+                    );
+                }
+                (rows, lease)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (BTreeMap::new(), None),
+            Err(e) => return Err(e.to_string()),
         };
-        Ok(Self { file: file.to_path_buf(), rows })
+        Ok(Self { file: file.to_path_buf(), rows, _native_lease: native_lease })
     }
     fn get(&self, claim: &Hash64) -> Option<PalwMaterialNativeAuthorityV1> {
-        self.rows.get(claim).copied()
+        self.rows.get(claim).map(|r| r.0)
     }
     fn record(&mut self, claim: Hash64, authority: PalwMaterialNativeAuthorityV1) -> Result<(), String> {
         match self.rows.get(&claim) {
-            Some(known) if *known == authority => return Ok(()),
+            Some(known) if known.0 == authority => return Ok(()),
             Some(_) => return Err("a claim's native authority changed between two Ready requests".into()),
             None => {}
         }
+        if self.rows.len() >= AUTHORITY_MAX_ROWS_V3 {
+            return Err("native provider authority index capacity exhausted".into());
+        }
+        if claim == Hash64::default()
+            || authority.execution_root == Hash64::default()
+            || authority.class_id == Hash64::default()
+            || authority.artifact_root == Hash64::default()
+            || authority.ladder == 0
+        {
+            return Err("native provider authority identity incomplete".into());
+        }
+        let lease = Self::projection_lease_v4(self.rows.len() + 1)?;
         let mut rows = self.rows.clone();
-        rows.insert(claim, authority);
+        rows.insert(claim, AuthorityRecordV4(authority));
+        self.publish(rows, lease)
+    }
+    /// Called only with claims of exact consents deleted under a true native
+    /// finality witness, after subtracting claims any live store still retains.
+    fn remove_finalized(&mut self, claims: &BTreeSet<Hash64>) -> Result<(), String> {
+        let lease = Self::projection_lease_v4(self.rows.len())?;
+        let mut rows = self.rows.clone();
+        rows.retain(|claim, _| !claims.contains(claim));
+        if rows.len() == self.rows.len() {
+            return Ok(());
+        }
+        self.publish(rows, lease)
+    }
+    fn publish(
+        &mut self,
+        rows: BTreeMap<Hash64, AuthorityRecordV4>,
+        lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+    ) -> Result<(), String> {
+        if rows.len() > AUTHORITY_MAX_ROWS_V3 {
+            return Err("authority publication exceeds cap".into());
+        }
         let encoded: Vec<AuthorityRowV3> = rows
             .iter()
-            .map(|(claim, a)| {
+            .map(|(claim, record)| {
+                let a = &record.0;
                 let form = match a.form {
                     PalwPromptIdsFormV1::Flat => 0,
                     PalwPromptIdsFormV1::MerkleV1 => 1,
@@ -808,6 +1468,7 @@ impl AuthorityIndexV3 {
             return Err(error.to_string());
         }
         self.rows = rows;
+        self._native_lease = lease;
         Ok(())
     }
 }
@@ -860,7 +1521,7 @@ mod tests {
     fn a_frame_round_trips_and_an_oversized_length_is_refused() {
         let mut wire = Vec::new();
         write_frame_v3(&mut wire, b"ready").unwrap();
-        assert_eq!(read_frame_v3(&mut wire.as_slice()).unwrap(), b"ready");
+        assert_eq!(&*read_frame_v3(&mut wire.as_slice()).unwrap(), b"ready");
         let mut huge = (PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3 + 1).to_le_bytes().to_vec();
         huge.extend([0u8; 8]);
         assert!(read_frame_v3(&mut huge.as_slice()).is_err());
@@ -884,4 +1545,39 @@ mod tests {
         reopened.record(claim, a).unwrap();
         assert!(reopened.record(claim, PalwMaterialNativeAuthorityV1 { ladder: 1, ..a }).is_err());
     }
+    #[test]
+    fn authority_index_refuses_length_bombs_duplicates_and_cleans_only_completed_claims() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("gc.authorities");
+        let h = Hash64::from_u64_word;
+        let authority = PalwMaterialNativeAuthorityV1 {
+            execution_root: h(2),
+            class_id: h(3),
+            artifact_root: h(4),
+            ladder: 64,
+            form: PalwPromptIdsFormV1::MerkleV1,
+        };
+        let mut index = AuthorityIndexV3::open(&file).unwrap();
+        index.record(h(10), authority).unwrap();
+        index.record(h(11), authority).unwrap();
+        index.remove_finalized(&std::iter::once(h(10)).collect()).unwrap();
+        let reopened = AuthorityIndexV3::open(&file).unwrap();
+        assert!(reopened.get(&h(10)).is_none());
+        assert_eq!(reopened.get(&h(11)), Some(authority));
+        let row = (h(11), authority.execution_root, authority.class_id, authority.artifact_root, authority.ladder, 1u8);
+        std::fs::write(&file, borsh::to_vec(&vec![row, row]).unwrap()).unwrap();
+        assert!(AuthorityIndexV3::open(&file).is_err());
+        std::fs::write(&file, u32::MAX.to_le_bytes()).unwrap();
+        assert!(AuthorityIndexV3::open(&file).is_err());
+    }
 }
+
+#[path = "native_kernel_material_ingress_v4.rs"]
+mod kernel_ingress_v4;
+#[path = "native_recovery_runtime_v4.rs"]
+mod recovery_runtime_v4;
+
+#[path = "native_kernel_material_query_v4.rs"]
+mod kernel_query_v4;
+#[path = "native_kernel_material_replacement_v4.rs"]
+mod kernel_replacement_v4;

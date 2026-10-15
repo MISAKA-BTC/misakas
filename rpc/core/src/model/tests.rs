@@ -1722,6 +1722,8 @@ mod mockery {
                 depth_is_lower_bound: mock(),
                 safe_frontier_blue_score: mock(),
                 safe_frontier_daa: mock(),
+                uncertified_final_anchors: 0,
+                security_certification_premise: None,
             }
         }
     }
@@ -3335,6 +3337,8 @@ mod mockery {
                 eligibility_final_weight: mock(),
                 eligibility_exams_passed: mock(),
                 eligibility_lineage_attempts: mock(),
+                model_tier: "registered".to_string(),
+                model_tier_permille: mock(),
                 admission_claims_per_span_milli: mock(),
                 probes_passed: mock(),
                 probes_failed: mock(),
@@ -3422,6 +3426,28 @@ mod mockery {
                 final_work_epochs: mock(),
                 blocking: mock(),
                 seating: mock(),
+                // RFC-0019 (wire version 4): a scheduled catalog with one SCHEDULED edition, so the round trip covers every field.
+                annual_catalog: RpcPalwAnnualCatalogStatus {
+                    scheduled: true,
+                    fence_daa: 1_000,
+                    active: true,
+                    current_edition: 0,
+                    current_root: "ab".repeat(64),
+                    has_next: true,
+                    next_edition: 1,
+                    next_activation_daa: 5_000,
+                    next_root: "cd".repeat(64),
+                    editions: vec![RpcPalwAnnualCatalogEdition {
+                        edition: 1,
+                        activation_daa: 5_000,
+                        previous_root: "ab".repeat(64),
+                        root: "cd".repeat(64),
+                        models: 2,
+                        state: "SCHEDULED".to_string(),
+                    }],
+                    kernel_version_max: 1,
+                    readiness: "off-chain".to_string(),
+                },
             }
         }
     }

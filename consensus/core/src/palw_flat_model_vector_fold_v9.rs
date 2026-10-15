@@ -90,9 +90,9 @@ pub(super) fn post_seal(
         reserved: deposit,
     };
     ids.push(id);
-    builder.write_kernel_row(FLAT_SEAL_TABLE_V9, borsh::to_vec(&(id, actor)).unwrap(), Some(borsh::to_vec(&row).unwrap()));
-    builder.write_kernel_row(FLAT_SEAL_ACTOR_TABLE_V9, borsh::to_vec(signer).unwrap(), Some(borsh::to_vec(&ids).unwrap()));
-    builder.write_kernel_row(FLAT_SEAL_COUNT_TABLE_V9, Vec::new(), Some(borsh::to_vec(&(count + 1)).unwrap()));
+    builder.write_kernel_row(FLAT_SEAL_TABLE_V9, borsh::to_vec(&(id, actor)).unwrap(), Some(borsh::to_vec(&row).unwrap()))?;
+    builder.write_kernel_row(FLAT_SEAL_ACTOR_TABLE_V9, borsh::to_vec(signer).unwrap(), Some(borsh::to_vec(&ids).unwrap()))?;
+    builder.write_kernel_row(FLAT_SEAL_COUNT_TABLE_V9, Vec::new(), Some(borsh::to_vec(&(count + 1)).unwrap()))?;
     Ok(())
 }
 pub(super) fn reveal(
@@ -162,8 +162,8 @@ pub(super) fn reveal(
     row.header.reserved = 0;
     seal_row.seal.spent = true;
     seal_row.reserved = 0;
-    builder.write_kernel_row(FLAT_MODEL_VECTOR_TABLE_V3, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&row).unwrap()));
-    builder.write_kernel_row(FLAT_SEAL_TABLE_V9, borsh::to_vec(&(id, actor)).unwrap(), Some(borsh::to_vec(&seal_row).unwrap()));
+    builder.write_kernel_row(FLAT_MODEL_VECTOR_TABLE_V3, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&row).unwrap()))?;
+    builder.write_kernel_row(FLAT_SEAL_TABLE_V9, borsh::to_vec(&(id, actor)).unwrap(), Some(borsh::to_vec(&seal_row).unwrap()))?;
     Ok(())
 }
 pub(super) fn expire(
@@ -196,17 +196,17 @@ pub(super) fn expire(
     if !closed && !row.seal.spent {
         builder.slash_bond(row.bond, row.reserved as u128)?;
     }
-    builder.write_kernel_row(FLAT_SEAL_TABLE_V9, borsh::to_vec(&(id, actor)).unwrap(), None);
+    builder.write_kernel_row(FLAT_SEAL_TABLE_V9, borsh::to_vec(&(id, actor)).unwrap(), None)?;
     builder.write_kernel_row(
         FLAT_SEAL_ACTOR_TABLE_V9,
         borsh::to_vec(&row.bond).unwrap(),
         if ids.is_empty() { None } else { Some(borsh::to_vec(&ids).unwrap()) },
-    );
+    )?;
     builder.write_kernel_row(
         FLAT_SEAL_COUNT_TABLE_V9,
         Vec::new(),
         if count == 0 { None } else { Some(borsh::to_vec(&count).unwrap()) },
-    );
+    )?;
     Ok(())
 }
 
@@ -314,8 +314,8 @@ pub(super) fn post(
         FLAT_MODEL_VECTOR_TABLE_V3,
         borsh::to_vec(&id).unwrap(),
         Some(borsh::to_vec(&FlatModelVectorRowV3 { header: h, post: bytes.to_vec() }).unwrap()),
-    );
-    builder.write_kernel_row(FLAT_MODEL_VECTOR_BOND_TABLE_V3, borsh::to_vec(signer).unwrap(), Some(borsh::to_vec(&ids).unwrap()));
-    builder.write_kernel_row(FLAT_PROTECTED_TABLE_V9, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&true).unwrap()));
+    )?;
+    builder.write_kernel_row(FLAT_MODEL_VECTOR_BOND_TABLE_V3, borsh::to_vec(signer).unwrap(), Some(borsh::to_vec(&ids).unwrap()))?;
+    builder.write_kernel_row(FLAT_PROTECTED_TABLE_V9, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&true).unwrap()))?;
     Ok(())
 }

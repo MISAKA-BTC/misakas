@@ -41,6 +41,9 @@ impl HandleRelayBlockRequests {
         loop {
             let (msg, request_id) = dequeue_with_request_id!(self.incoming_route, Payload::RequestRelayBlocks)?;
             let hashes: Vec<_> = msg.try_into()?;
+            if hashes.len() > crate::ibd::MAX_REQUEST_HASHES {
+                return Err(ProtocolError::Other("RequestRelayBlocks: number of requested hashes exceeds the limit"));
+            }
 
             let session = self.ctx.consensus().unguarded_session();
 

@@ -357,6 +357,41 @@ impl ConsensusSessionOwned {
         self.consensus.palw_staged_tir_prefix_v1(key)
     }
 
+    /// G14 R1/R2: the producer's pre-signing quote of an ORIGINAL TIR frame.
+    pub fn palw_tir_public_original_quote_v1(
+        &self,
+        original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    ) -> Result<Option<(u64, kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1)>, String> {
+        self.consensus.palw_tir_public_original_quote_v1(original, header)
+    }
+
+    /// G14 R4: the filer scheduler's preflight of a public conviction (`Ok(None)` below `palw_tir_public_conviction_v1`).
+    pub fn palw_tir_public_conviction_preflight_v1(
+        &self,
+        filer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        claim: kaspa_consensus_core::Hash64,
+        evidence: kaspa_consensus_core::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
+    ) -> Result<Option<Result<(), String>>, String> {
+        self.consensus.palw_tir_public_conviction_preflight_v1(filer, claim, evidence)
+    }
+
+    /// G14 R3/R4: a node worker's read of the accepted native snapshot (`Ok(false)` below `palw_tir_public_conviction_v1`).
+    pub fn palw_tir_public_read_v1(
+        &self,
+        read: &mut dyn FnMut(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        self.consensus.palw_tir_public_read_v1(read)
+    }
+
+    /// G14 R4: the accepted ORIGINAL TIR frame a public verifier files against.
+    pub fn palw_tir_public_frame_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_tir_public_claim_v1::PalwTirPublicFrameViewV1>, String> {
+        self.consensus.palw_tir_public_frame_v1(claim)
+    }
+
     pub fn palw_staged_tir_prefix_leaf_index_v1(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),

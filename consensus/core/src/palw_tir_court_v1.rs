@@ -2313,6 +2313,118 @@ pub fn check_tir_decode_token_tiled_v1(
     Err(PalwStepRefuteError::NoFaultFound)
 }
 
+/// **G14 R4: the selection rule an ORIGINAL job's committed tokens obey**, mirrored exactly from
+/// [`crate::palw_freeprompt_v3::PalwFreePromptJobV3::decoder_v1`] (the decoder every engine, seat and replay drives). Both
+/// rules are an argmax of a per-lane key — no top-k/top-p reads the whole row — so ONE beating lane refutes a committed token.
+/// A constrained job's selection is its constraint's mask (the semantic court's door, never this one), and a job carrying a
+/// tail (an evaluation or generation job) has another meaning: [`Self::of_job_v1`] answers `None` for both.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwTirSelectionRuleV1 {
+    /// ADR-0082 Decision 11's key over the raw row (the V3 rule). `GREEDY` is the plain argmax, ties to the lower index.
+    Keyed { sampling: crate::palw_decode_select_v2::PalwDecodeSamplingV2 },
+    /// RFC-0001 §A.3: the V4 value corrections over the committed prefix (repeat, frequency/presence, bias, saturation), the
+    /// `logit_bias` bans, then Decision 11's key ([`crate::palw_decode_pipeline_v4::decode_lane_key_v4`]).
+    V4 { config: crate::palw_decode_pipeline_v4::DecodeConfigV4, sampling: crate::palw_decode_select_v2::PalwDecodeSamplingV2 },
+}
+impl PalwTirSelectionRuleV1 {
+    /// The rule of `job`, exactly as `decoder_v1` picks it; `None` for a constrained job or a job with a tail.
+    pub fn of_job_v1(job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3) -> Option<Self> {
+        if job.tail.is_some() || job.is_constraint() {
+            return None;
+        }
+        match (&job.decode, job.is_v4() || job.is_v5() || job.is_eval() || job.is_prefix_state()) {
+            (Some(config), true) => Some(Self::V4 { config: config.clone(), sampling: job.sampling_v2() }),
+            _ => Some(Self::Keyed { sampling: job.sampling_v2() }),
+        }
+    }
+    /// Plain greedy selection (the live attempt court's rule).
+    pub fn is_greedy_v1(&self) -> bool {
+        matches!(self, Self::Keyed { sampling } if sampling.is_greedy())
+    }
+    /// The lane's key at `position = before.len()` after the committed prefix `before`; `None` for a lane the rule bans (it can
+    /// never be committed).
+    fn key_v1(&self, before: &[u32], value: i32, lane: usize) -> Option<i64> {
+        match self {
+            Self::Keyed { sampling } => Some(sampling.lane_key(value, before.len() as u32, lane)),
+            Self::V4 { config, sampling } => {
+                crate::palw_decode_pipeline_v4::decode_lane_key_v4(config, sampling, before, value, u32::try_from(lane).ok()?)
+            }
+        }
+    }
+}
+
+/// **G14 R4: the decode-token door of an ORIGINAL job under its OWN selection rule** (tiled scheme). Authentication is exactly
+/// [`check_tir_decode_token_tiled_v1`]'s — the pin's IDs and challenged row reproduce the claim's own tiled trace root, both
+/// lanes are read from tiles opened against that row — and the comparison is the job's rule ([`PalwTirSelectionRuleV1`]) over the
+/// AUTHENTICATED committed prefix `ids[..position]`: the committed token is refuted when it is outside the vocabulary, when the
+/// rule bans it, or when the beating lane (not banned) has the greater key (ties to the lower index). The live greedy door is
+/// unchanged; under `Keyed { GREEDY }` this door decides exactly what it decides.
+pub fn check_tir_decode_token_tiled_rule_v1(
+    binding: &PalwTirStepBindingV1,
+    pin: &PalwTiledDecodePinV1,
+    rules: &PalwTirCourtRulesV1,
+    rule: &PalwTirSelectionRuleV1,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    let v = match check_binding(binding)? {
+        BindingOutcome::Convicted(verdict) => return Ok(verdict),
+        BindingOutcome::Verified(v) => v,
+    };
+    let (vocab, scheme) = logits_shape(&v.space);
+    if scheme != tiled_logits_scheme_id_v1() {
+        return Err(bad("this class does not commit tiled logits"));
+    }
+    let ctx = &binding.job_context;
+    let decode = ctx.exact_decode_tokens as u64;
+    if pin.generated_token_ids.len() as u64 != decode || pin.position as u64 >= decode {
+        return Err(bad("the ids or the challenged position are not the context's decode count"));
+    }
+    let rows_root = step_opening_root_capped_v1(decode, &pin.row_opening, rules.max_step_leaf_count)
+        .map_err(|_| bad("the row opening does not walk"))?;
+    if pin.row_opening.leaf_index != pin.position as u64 || pin.row_opening.leaf_hash != pin.row_root {
+        return Err(bad("the row opening does not open the challenged row's root"));
+    }
+    if tiled_logits_outer_root_v1(ctx, decode, &rows_root, &pin.generated_token_ids) != binding.full_logits_trace_root {
+        return Err(bad("the carried material does not reproduce the claim's own tiled trace root"));
+    }
+    let fault = PalwStepFaultV1::DecodeTokenMismatch { position: pin.position };
+    let verdict = || convict(&binding.committed_execution_root, PALW_DECODE_TOKEN_EVIDENCE_KIND, pin.position as u64, fault);
+    let committed = pin.generated_token_ids[pin.position as usize] as usize;
+    if committed >= vocab {
+        return Ok(verdict());
+    }
+    let beat = pin.beat_lane as usize;
+    if beat >= vocab {
+        return Err(bad("the beating lane is past the vocabulary"));
+    }
+    let tiles = vocab.div_ceil(PALW_LOGITS_TILE_LANES) as u64;
+    let read = |lanes: &[i32], opening: &PalwStepOpeningV1, lane: usize| -> Result<i32, PalwStepRefuteError> {
+        let tile = (lane / PALW_LOGITS_TILE_LANES) as u64;
+        tiled_tile_authenticate_v1(
+            &v.context_hash,
+            pin.position,
+            vocab,
+            tiles,
+            &pin.row_root,
+            tile,
+            lanes,
+            opening,
+            rules.max_step_leaf_count,
+        )?;
+        Ok(lanes[lane % PALW_LOGITS_TILE_LANES])
+    };
+    let before = &pin.generated_token_ids[..pin.position as usize];
+    let v_committed = read(&pin.committed_tile_lanes, &pin.committed_opening, committed)?;
+    let v_beat = read(&pin.beat_tile_lanes, &pin.beat_opening, beat)?;
+    // A banned lane is never committable: committing one is itself the fault (A(t) is never empty for an admitted job — a
+    // `logit_bias` covering the whole vocabulary is refused before anything runs).
+    let Some(key_committed) = rule.key_v1(before, v_committed, committed) else { return Ok(verdict()) };
+    let Some(key_beat) = rule.key_v1(before, v_beat, beat) else { return Err(PalwStepRefuteError::NoFaultFound) };
+    if crate::palw_decode_select_v2::decode_lane_beats_v2(key_beat, beat, key_committed, committed) {
+        return Ok(verdict());
+    }
+    Err(PalwStepRefuteError::NoFaultFound)
+}
+
 /// **The decode-token door for an IR class, flat scheme**: the whole pin authenticates against the
 /// claim's own trace root, and the token at `position` is refuted unless it is the greedy selection
 /// over its own row.

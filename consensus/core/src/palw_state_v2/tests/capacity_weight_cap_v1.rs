@@ -1046,7 +1046,7 @@ fn w_t8_a_slash_lowers_the_cap_without_underflow() {
     expect(&builder, 0, "a slash of nothing moves nothing (W-I6)");
     let mut restored = builder.state.bonds[&bond].clone();
     restored.collateral = 13_000 * MSK;
-    builder.write_bond(bond, Some(restored));
+    builder.write_bond(bond, Some(restored)).unwrap();
     expect(&builder, 2, "a refund (collateral back) restores the cap");
     // The 26k bond's floor claim was never touched.
     assert_eq!(builder.state.capacity_weight_index.term(&bond_key(0x31), Some(26_000 * MSK)), fcw(1));
