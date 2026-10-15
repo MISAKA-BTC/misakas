@@ -606,7 +606,16 @@ fn apply_conviction_v1(
     if claim.bond != producer || claim.execution_root != frame.original_v1().execution_root {
         return Err(refused("TIR public conviction target changes the original claim's producer or execution"));
     }
-    if b.state.consumed_offences.contains_key(&palw_court_conviction_offence_id_v1(&producer.0, &claim_id)) {
+    if b.state.consumed_offences.contains_key(&palw_court_conviction_offence_id_v1(&producer.0, &claim_id))
+        || matches!(
+            claim.phase,
+            PalwClaimPhaseV2::Voided {
+                reason: PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtHeldVerdict | PalwVoidReasonV2::CourtDefault,
+                ..
+            }
+        )
+    {
+        // Once: the record (past R-core+, which this route's fence requires) or, defensively, the conviction's own void.
         return Err(refused("TIR original claim is already convicted; a conviction is recorded once"));
     }
     let native = rules(b)?;
@@ -962,7 +971,14 @@ mod conviction_e2e_tests {
     /// The accepted world the colluders built: the licensed claim, its drawn Panel, the colluders' native S4 locks, the registered
     /// class and the rooted frame (its indices — producer exposure and the liable signers' exit holds — rebuilt from the rows).
     fn world(fx: &PalwTirPublicFrameFixtureV1, frame: &Frame) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1) {
-        let params = PalwStateParamsV2::new(100, 10, 40, 20, 500, 1000, h(1), 4, 1000, 100, 1000, 0).unwrap();
+        // R-core+ in force from genesis: the route's fence requires it (the conviction tiers, the `CourtConviction` record and the
+        // exit-lock lattice a collectible debit needs).
+        let params = PalwStateParamsV2::new(100, 10, 40, 20, 500, 1000, h(1), 4, 1000, 100, 1000, 600)
+            .unwrap()
+            .with_fp_exposure_ceiling(500)
+            .unwrap()
+            .with_escrow_backed_exposure_from_daa(Some(0))
+            .with_rcore_plus_mirrors(Some(0), 12_900, Vec::new());
         let mut state = PalwChainStateV2::genesis();
         let plan = frame.plan_v1();
         let original = frame.original_v1();
@@ -1109,7 +1125,7 @@ mod conviction_e2e_tests {
         assert!(state.palw_tir_public_prosecution_open_v1(&claim_id, terms.collect_until_daa - 1));
         assert!(!state.palw_tir_public_prosecution_open_v1(&claim_id, terms.collect_until_daa));
         for liable in std::iter::once(producer).chain(colluders()) {
-            assert!(state.staged_bond_exit_held_v1(&liable, terms.collect_until_daa), "every liable bond is exit-held");
+            assert!(state.staged_bond_exit_held_v1(&liable, terms.collect_until_daa - 1), "every liable bond is exit-held");
         }
         assert!(!state.staged_bond_exit_held_v1(&honest_seat(), terms.accepted_daa), "a drawn seat without a Valid is not liable");
 
