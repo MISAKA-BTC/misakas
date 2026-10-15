@@ -539,9 +539,9 @@ impl PalwKernelRouteStateV1 {
         use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
         let commitment_scope = self.commitment_scope_checked_v1()?;
         let scoped = |mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1| -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwKernelLedgerProjectionErrorV1> {
-            ledger.commitment_scope_from_daa = commitment_scope;
+            ledger.set_commitment_scope_from_daa_v1(commitment_scope);
             ledger.reserve_projection_v1(self).map_err(E::Resource)?;
-            self.apply_paid_claim_consumer_inputs_v2(&mut ledger).map_err(E::Decode)?;
+            self.apply_paid_claim_consumer_inputs_v2(ledger.paid_consumer_projection_mut_v1()).map_err(E::Decode)?;
             Ok(ledger)
         };
         if let Some(cached) = self.ledger_cache.get_reserved_v1().map_err(E::Resource)? {

@@ -88,11 +88,6 @@ impl NativeWriteQuoteV1 {
         self.q.vec_v1::<u8>(n.max(1024)).map_err(native_err_v1)?;
         Ok(self)
     }
-    /// Raw bytes already sized by the caller.
-    pub(super) fn bytes(&mut self, n: u64) -> Result<&mut Self, PalwStateV2Error> {
-        self.q.add_v1(n).map_err(native_err_v1)?;
-        Ok(self)
-    }
     pub(super) fn slots(&mut self, n: usize) -> Result<&mut Self, PalwStateV2Error> {
         self.slots = self
             .slots

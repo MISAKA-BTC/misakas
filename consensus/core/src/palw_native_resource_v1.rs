@@ -33,6 +33,9 @@ pub use kernel_material::{
 };
 pub use kernel_segment_assembly::native_kernel_segment_assembly_requests_v4;
 mod ledger_expansion;
+// RFC-0006: the kernel ledger's consensus mutations, admitted from the real typed values (replaces `DerefMut`).
+mod kernel_ledger_mutation;
+pub use kernel_ledger_mutation::{PALW_KERNEL_LEDGER_APPLY_MEMBERSHIP_CEILING_V1, PALW_KERNEL_LEDGER_EVENTS_PER_ROW_CEILING_V1};
 mod tir;
 pub use demand::reserve_native_requests_v1;
 pub use ledger_expansion::{ReservedKernelLedgerV1, inventory_ledger_expansion_v1, preflight_kernel_served_row_v1};

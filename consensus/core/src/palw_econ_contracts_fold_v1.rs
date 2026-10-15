@@ -612,7 +612,7 @@ pub(super) fn consent_horizon_extension_v1(
         let mut ledger = route
             .ledger_checked_v1()
             .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refuse))?;
-        ledger.daa = now;
+        ledger.set_daa_v1(now);
         {
             let claim = ledger.claims.get(&terms.claim).ok_or_else(|| refuse("the extended claim is missing"))?;
             let poster =

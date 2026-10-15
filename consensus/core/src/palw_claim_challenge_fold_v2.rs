@@ -285,13 +285,17 @@ fn apply_inner(
             };
             a.validate(&l).map_err(refused)?;
             let before = l.to_rows();
-            let row = l.claims.get_mut(&e.base_claim).unwrap();
-            row.life.state = misaka_palw_kernel::lifecycle::ClaimStateV1::Checking {
-                anchor_daa: ctx.daa_score,
-                deadline_daa: e.lifetime.checking_until,
-            };
-            row.life.final_hold_until = e.lifetime.dispute_until;
-            row.liability_until = Some(e.lifetime.liability_until);
+            // RFC-0006: the row's fixed-size lifetime fields change in place through the typed setter (no `DerefMut`).
+            let present = l.set_claim_lifetime_v1(
+                &e.base_claim,
+                misaka_palw_kernel::lifecycle::ClaimStateV1::Checking {
+                    anchor_daa: ctx.daa_score,
+                    deadline_daa: e.lifetime.checking_until,
+                },
+                e.lifetime.dispute_until,
+                Some(e.lifetime.liability_until),
+            );
+            assert!(present, "the base claim row was read above");
             extend_signed_kernel_income_v2(b, ctx, e.base_claim, *signer, e.lifetime.liability_until)?;
             put(b, PAID_CLAIM_ENROLLMENTS_V2, &a.context.id(), &a)?;
             for (prefix, kind, owner) in [

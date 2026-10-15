@@ -5,7 +5,7 @@ use misaka_palw_kernel::{ledger::KernelLedgerV1, rows::LedgerRowsV1};
 use std::{
     io::{self, Read},
     mem::size_of,
-    ops::{Deref, DerefMut},
+    ops::Deref,
 };
 
 /// The lease travels with the consumer and, when cached, with its shared Arc.
@@ -21,11 +21,9 @@ impl Deref for ReservedKernelLedgerV1 {
         &self.ledger
     }
 }
-impl DerefMut for ReservedKernelLedgerV1 {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.ledger
-    }
-}
+// RFC-0006: there is deliberately NO `DerefMut`. A consensus fold mutates the ledger only through the typed, admitted methods
+// (`kernel_ledger_mutation.rs`, and the fixed-membership `try_*` methods here); off-chain previews and tests say so explicitly with
+// `preview_mut_v1`.
 impl std::fmt::Debug for ReservedKernelLedgerV1 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt(&self.ledger, f)
@@ -56,7 +54,7 @@ impl ReservedKernelLedgerV1 {
     /// Reserve before an audited fixed-membership mutation. Keep every growth
     /// request in the same owner ticket; no detached temporary lease can expire
     /// while the new BTree membership is still retained by this ledger.
-    fn reserve_membership_v1<K, V>(&mut self, absent: bool) -> Result<(), NativeCoverageV1> {
+    pub(super) fn reserve_membership_v1<K, V>(&mut self, absent: bool) -> Result<(), NativeCoverageV1> {
         if !absent {
             return Ok(());
         }

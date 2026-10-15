@@ -385,7 +385,7 @@ fn lapse_if_uncovered(
         let mut ledger = load_ledger(builder, ctx)?;
         let before = ledger.to_rows();
         // Refused only for a claim that is not provider-liable, which a transferred one always is: nothing to do then.
-        if let Ok(events) = ledger.provider_lapse(&claim.as_bytes()) {
+        if let Ok(events) = ledger.provider_lapse_reserved_v1(&claim.as_bytes()).map_err(PalwStateV2Error::NativeResource)? {
             apply_settlements(builder, &events, false, ctx.daa_score)?;
             flush(builder, &ledger, &before)?;
         }
