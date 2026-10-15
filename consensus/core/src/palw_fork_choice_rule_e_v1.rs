@@ -355,8 +355,9 @@ impl PalwChainStateV2 {
         // (`palw_claim_provisional_weight_v1`, F-W's staged weight, the budget engine's provisional), "as at acceptance", so they
         // equal the state's own `bounded_immature` terms.
         let certified = crate::palw_rfc0018_v1::palw_independently_work_certified_v1(
+            &claim_id,
             claim,
-            &crate::palw_rfc0018_v1::PalwGateCViewV1::with_chain(params, self),
+            &crate::palw_rfc0018_v1::PalwGateCViewV1::of(params, self),
         );
         let record = |status: PalwRuleEClaimStatusV1,
                       safe_weight: u128,
@@ -811,6 +812,14 @@ pub fn palw_rule_e_decide_v2(
         );
     }
     let allow = |yes: bool| if yes { PalwDeepReorgV2::Allow } else { PalwDeepReorgV2::Refuse };
+    // RFC-0018 §6.4: where NEITHER exclusive past holds any certified consensus credit (no certified participation, no frontier, no
+    // weight), no PALW finality is at stake on either side — the DAG's own order decides, so two uncertified partitions converge
+    // instead of each keeping its incumbent. Uncertified history carries no PALW settlement finality (§7.8), so nothing is reversed
+    // that the chain ever reported final.
+    let no_credit = |s: &PalwRuleESideV1| s.participation_capital_v2 == 0 && s.economic() == (0, 0, 0);
+    if no_credit(incumbent) && no_credit(challenger) {
+        return allow(ghostdag_heavier());
+    }
     match palw_rule_e_order_v2(challenger, incumbent, participation_counts, true) {
         Ordering::Greater => PalwDeepReorgV2::Allow,
         Ordering::Less => PalwDeepReorgV2::Refuse,

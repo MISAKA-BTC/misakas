@@ -2488,6 +2488,17 @@ impl PalwChainStateV2 {
         (self.safe_frontier_blue_score, self.safe_frontier)
     }
 
+    /// **RFC-0018**: the kernel route, for the security certification's aux-table reads (`crate::palw_security_certification_v1`).
+    pub fn kernel_route_state_v1(&self) -> Option<&crate::palw_kernel_route_v1::PalwKernelRouteStateV1> {
+        self.kernel_route.as_ref()
+    }
+
+    /// **RFC-0018 §7.7**: the accepted blue score of the oldest unresolved claim (`None`: nothing unresolved) — the pruning-progress
+    /// rule's first bound.
+    pub fn unresolved_first_blue_score_v1(&self) -> Option<u64> {
+        self.unresolved.iter().next().map(|(blue_score, _)| *blue_score)
+    }
+
     pub fn last_point(&self) -> Option<&PalwBlockContextV2> {
         self.last_point.as_ref()
     }
@@ -3274,7 +3285,7 @@ impl PalwChainStateV2 {
                         // Lane BUDGET: a budgeted claim weighs what its Final was granted, in both sums.
                         let credited = self.bond_budget_weight_or(id, final_safe(contribution));
                         // RFC-0018 Gate C's final-weight site, re-derived through the same predicate (identity below its fence).
-                        let credited = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(params, claim, credited);
+                        let credited = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(params, self, id, claim, credited);
                         let ceiling = self.bond_budget_weight_or(id, final_safe(canonical.unwrap_or(claim.pwu as u128)));
                         safe = safe.checked_add(credited).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
                         safe_ceiling = safe_ceiling.checked_add(ceiling).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
@@ -3290,7 +3301,7 @@ impl PalwChainStateV2 {
                         // Lane BUDGET: a budgeted claim's spends added what they were granted.
                         let spent_weight = self.bond_budget_weight_or(id, spent_weight);
                         // RFC-0018 Gate C's receipt-spend site, re-derived (identity below its fence).
-                        let spent_weight = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(params, claim, spent_weight);
+                        let spent_weight = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(params, self, id, claim, spent_weight);
                         // **The free-prompt lane is NOT priced by Decision 7** — see the open
                         // question recorded at `apply_receipt_spend`. It contributes identically to
                         // both sums, so the bound below neither tightens nor loosens around it.

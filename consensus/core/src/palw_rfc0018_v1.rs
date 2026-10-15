@@ -14,12 +14,12 @@
 //! [`Params::sync_palw_rfc0018_v1`] and by nothing else); `None` there is byte-for-byte the released behaviour (A-2: below each fence
 //! every reader answers as before, and a claim accepted below Gate C's fence keeps its old rule forever).
 //!
-//! **Gate C is a hook, not a decision.** [`palw_independently_work_certified_v1`] is the ONE predicate every site that feeds
-//! participation, provisional weight, final weight, the safe frontier, settled anchors and coinbase reads. Below its fence it is `true`
-//! (legacy). Past it the rule is [`PalwGateCRuleV1`]: `Undecided` (the only value a mirror is built with) answers `false` — fail-closed,
-//! nothing counts until the user defines what "independently work-certified" is (RFC-0018 §7, PRINCIPLES §0 / ADR-0173/0176/0177/0178
-//! amendment pending). A definition MUST be a function of facts frozen on the claim record no later than its `Final`, so the fold, every
-//! re-derivation and rule E read one answer.
+//! **Gate C — ADOPTED (ユーザー方針 2026-10-15「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」).**
+//! [`palw_independently_work_certified_v1`] is the ONE predicate every site that feeds participation, provisional weight, final weight,
+//! the safe frontier, settlement depth, settled anchors and the issuance-funded reward reads. Below its fence it is `true` (legacy).
+//! Past it a claim counts only once `SecurityCertified` ([`crate::palw_security_certification_v1`]): `Final` (procedure complete,
+//! user-funded settlement) and `SecurityCertified` (consensus credit) are separate states. No DNS-BFT gate or DNS finality anchor is
+//! relied on anywhere in this RFC (DNS-BFT is abolished by RFC-0012). Activation stays a separate user decision.
 //!
 //! Nothing here is built or tested by this lane (no cargo build/check/test); the test sources are for the validation phase.
 
@@ -56,19 +56,17 @@ fn finish(state: blake2b_simd::State) -> Hash64 {
 // The mirror (fold / processor / RPC read this, never `Params`)
 // -------------------------------------------------------------------------------------------------
 
-/// **Gate C's rule past its fence.** Only `Undecided` is ever built by [`Params::sync_palw_rfc0018_v1`]; the other variants are
-/// CANDIDATES for the user's decision (RFC-0018 §7.4), reachable from fixtures only, and no network may arm the fence.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+/// **Gate C's rule past its fence** — ADOPTED (ユーザー方針 2026-10-15): `SecurityCertifiedV1`, the per-claim independent positive
+/// verification of [`crate::palw_security_certification_v1`]. `FailClosedV1` is a FIXTURE (nothing certifies) for the hook tests.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PalwGateCRuleV1 {
-    /// No definition yet: nothing is certified (fail-closed).
     #[default]
-    Undecided,
-    /// Candidate C-1 (claim-record only): a quorum of a drawn Panel licensed the claim — `ReceiptLicensed` or `Final` (or a DA session
-    /// resumed from one of them). Not an approval of the candidate; it exists so the hook sites can be exercised.
-    CandidateLicensedOrFinalV1,
+    SecurityCertifiedV1,
+    FailClosedV1,
 }
 
-/// **The four state-level fences' heights**, as one mirror on [`PalwStateParamsV2`] (`#[borsh(skip)]`).
+/// **The four state-level fences' heights**, as one mirror on [`PalwStateParamsV2`] (`#[borsh(skip)]`), with Gate C's rule and the
+/// certification policy (unapproved design values).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PalwRfc0018MirrorV1 {
     pub sibling_attribution_from_daa: Option<u64>,
@@ -76,6 +74,7 @@ pub struct PalwRfc0018MirrorV1 {
     pub rule_e_participation_v2_from_daa: Option<u64>,
     pub gate_c_from_daa: Option<u64>,
     pub gate_c_rule: PalwGateCRuleV1,
+    pub certification: crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
 }
 
 impl PalwRfc0018MirrorV1 {
@@ -91,8 +90,13 @@ impl PalwRfc0018MirrorV1 {
     pub fn rule_e_participation_v2_at(&self, incumbent_daa: u64) -> bool {
         Self::at(self.rule_e_participation_v2_from_daa, incumbent_daa)
     }
+    /// Gate C governs a claim accepted at `claim_accepted_daa` (claims accepted below keep their old rule forever: A-2).
     pub fn gate_c_governs(&self, claim_accepted_daa: u64) -> bool {
         Self::at(self.gate_c_from_daa, claim_accepted_daa)
+    }
+    /// Gate C is in force at a block (the certification sweep and the pruning rule read this).
+    pub fn gate_c_at(&self, daa: u64) -> bool {
+        Self::at(self.gate_c_from_daa, daa)
     }
     pub fn is_empty(&self) -> bool {
         self.sibling_attribution_from_daa.is_none()
@@ -107,70 +111,60 @@ pub fn palw_rfc0018_mirror_v1(params: &PalwStateParamsV2) -> Option<&PalwRfc0018
     params.rfc0018_v1()
 }
 
+/// Whether Gate C governs `claim` (its acceptance DAA past the fence).
+pub fn palw_gate_c_governs_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> bool {
+    palw_rfc0018_mirror_v1(params).is_some_and(|mirror| mirror.gate_c_governs(claim.accepted_daa))
+}
+
 // -------------------------------------------------------------------------------------------------
-// Gate C — the IndependentlyWorkCertified hook (RFC-0018 §7)
+// Gate C — SecurityCertified (RFC-0018 §7, adopted 2026-10-15)
 // -------------------------------------------------------------------------------------------------
 
-/// What Gate C reads besides the claim: the state params (the mirror) and, where the site holds one, the chain state.
+/// What Gate C reads besides the claim: the state params (the mirror) and the chain state holding the certification rows.
 #[derive(Clone, Copy)]
 pub struct PalwGateCViewV1<'a> {
     pub params: &'a PalwStateParamsV2,
-    pub chain: Option<&'a PalwChainStateV2>,
+    pub chain: &'a PalwChainStateV2,
 }
 
 impl<'a> PalwGateCViewV1<'a> {
-    pub fn of(params: &'a PalwStateParamsV2) -> Self {
-        Self { params, chain: None }
-    }
-    pub fn with_chain(params: &'a PalwStateParamsV2, chain: &'a PalwChainStateV2) -> Self {
-        Self { params, chain: Some(chain) }
+    pub fn of(params: &'a PalwStateParamsV2, chain: &'a PalwChainStateV2) -> Self {
+        Self { params, chain }
     }
 }
 
-fn phase_is_licensed_or_final(phase: &PalwClaimPhaseV2) -> bool {
-    match phase {
-        PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. } => true,
-        PalwClaimPhaseV2::DefaultDisputed { resumed, .. } => phase_is_licensed_or_final(resumed),
-        _ => false,
-    }
-}
-
-/// **`palw_independently_work_certified_v1(claim, state) -> bool` — Gate C, the one predicate.**
+/// **`palw_independently_work_certified_v1(claim, state) -> bool` — Gate C, the one predicate (`SecurityCertified`).**
 ///
 /// * Below `palw_independently_work_certified_v1` at the claim's ACCEPTANCE DAA (every claim on every shipped network, and every claim
-///   accepted before the fence on any network): `true` — the legacy behaviour, byte for byte.
-/// * Past it: the mirror's [`PalwGateCRuleV1`]. `Undecided` → `false`. A `Voided` claim is never certified.
+///   accepted before the fence on any network): `true` — the released behaviour, byte for byte.
+/// * Past it: a `Voided` claim never; otherwise the claim's certification row in the state has a certifying outcome
+///   ([`crate::palw_security_certification_v1::palw_claim_security_certified_v1`]) — commit at `Final`, global-pool draw on later
+///   randomness, m-of-k positive attestations, no veto, nothing pending, the prosecution window elapsed. A Panel licence, a Panel
+///   majority, the model's own holders or `Final` alone NEVER certify. (`FailClosedV1`: never — a fixture.)
 ///
-/// Read at: rule E's record (participation v2, safe, live), the attempt's provisional snapshot, F-W's staged weight, `finalize_claim`'s
-/// final weight and reward, the receipt spend's weight, the convicted-Final reversal, retirement, the consistency re-derivation, the
-/// safe-frontier advance and the settled-anchor tick (RFC-0018 §7.3 lists each site with its file).
-pub fn palw_independently_work_certified_v1(claim: &PalwClaimStateV2, state: &PalwGateCViewV1<'_>) -> bool {
-    palw_gate_c_in_phase_v1(claim, &claim.phase, state)
-}
-
-/// The predicate's body, with the phase it is asked in made explicit (the provisional site asks "as at acceptance").
-fn palw_gate_c_in_phase_v1(claim: &PalwClaimStateV2, phase: &PalwClaimPhaseV2, state: &PalwGateCViewV1<'_>) -> bool {
+/// The answer is a fact frozen in the state (the row's decided outcome), so the fold's addition at certification, every re-derivation
+/// (consistency, retirement, reversal) and rule E read one answer.
+pub fn palw_independently_work_certified_v1(claim_id: &Hash64, claim: &PalwClaimStateV2, state: &PalwGateCViewV1<'_>) -> bool {
     let Some(mirror) = palw_rfc0018_mirror_v1(state.params) else { return true };
     if !mirror.gate_c_governs(claim.accepted_daa) {
         return true;
     }
-    if matches!(phase, PalwClaimPhaseV2::Voided { .. }) {
+    if matches!(claim.phase, PalwClaimPhaseV2::Voided { .. }) {
         return false;
     }
     match mirror.gate_c_rule {
-        PalwGateCRuleV1::Undecided => false,
-        PalwGateCRuleV1::CandidateLicensedOrFinalV1 => phase_is_licensed_or_final(phase),
+        PalwGateCRuleV1::SecurityCertifiedV1 => {
+            crate::palw_security_certification_v1::palw_claim_security_certified_v1(state.chain, claim_id)
+        }
+        PalwGateCRuleV1::FailClosedV1 => false,
     }
 }
 
-/// **Gate C's provisional-weight site**: `weight` where the claim is certified AS AT ITS ACCEPTANCE (phase `Provisional`), else 0.
-///
-/// Asked in the acceptance phase on purpose: `bounded_immature` is maintained incrementally (reserve at acceptance, release at the
-/// terminal write, the void, the re-derivations), and each of those must read ONE number for a claim over its whole life — a
-/// phase-dependent answer would add 0 and later subtract the stored weight. A claim certified only later earns no provisional weight;
-/// its weight arrives at `Final` through the final-weight sites. Below the fence (every shipped network): `weight`, unchanged.
+/// **Gate C's provisional-weight site** (`bounded_immature` / `live_total`): past the fence 0 — a claim is never `SecurityCertified`
+/// while live (certification commits at `Final`), and `bounded_immature` is maintained incrementally, so it must read ONE number over a
+/// claim's life. Consensus credit arrives at certification, through the final-weight path. Below the fence: `weight`, unchanged.
 pub fn palw_gate_c_provisional_weight_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, weight: u128) -> u128 {
-    if palw_gate_c_in_phase_v1(claim, &PalwClaimPhaseV2::Provisional, &PalwGateCViewV1::of(params)) { weight } else { 0 }
+    if palw_gate_c_governs_v1(params, claim) { 0 } else { weight }
 }
 
 /// `claim.immature_contribution` through [`palw_gate_c_provisional_weight_v1`] — the one spelling every old-rule `bounded_immature`
@@ -179,30 +173,34 @@ pub fn palw_claim_provisional_weight_v1(params: &PalwStateParamsV2, claim: &Palw
     palw_gate_c_provisional_weight_v1(params, claim, claim.immature_contribution)
 }
 
-/// `weight` where Gate C certifies `claim`, else 0 — the form every weight site takes.
-pub fn palw_gate_c_weight_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, weight: u128) -> u128 {
-    if palw_independently_work_certified_v1(claim, &PalwGateCViewV1::of(params)) { weight } else { 0 }
+/// `weight` where Gate C certifies the claim, else 0 — the form every final-weight site takes.
+pub fn palw_gate_c_weight_v1(
+    params: &PalwStateParamsV2,
+    chain: &PalwChainStateV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    weight: u128,
+) -> u128 {
+    if palw_independently_work_certified_v1(claim_id, claim, &PalwGateCViewV1::of(params, chain)) { weight } else { 0 }
 }
 
-/// `reward` where Gate C certifies `claim`, else 0 (never named, never minted — as a voided escrow).
-pub fn palw_gate_c_reward_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, reward: u64) -> u64 {
-    if palw_independently_work_certified_v1(claim, &PalwGateCViewV1::of(params)) { reward } else { 0 }
+/// Whether `claim` may tick the settled-anchor clock at a licence / Final site. Past the fence never there — a governed claim's
+/// settled-anchor credit is ticked once, at its certification (`palw_security_certification_fold_v1`).
+pub fn palw_gate_c_settles_anchor_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> bool {
+    !palw_gate_c_governs_v1(params, claim)
 }
 
-/// Whether `claim` may tick the settled-anchor clock (the second clock) — Gate C's settled-anchor site. `at_licence`: the site is
-/// the licence itself (`license_claim`), whose `claim` is the record BEFORE the licence — asked as licensed, the phase it is entering.
-pub fn palw_gate_c_settles_anchor_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, at_licence: bool) -> bool {
-    let view = PalwGateCViewV1::of(params);
-    if at_licence {
-        palw_gate_c_in_phase_v1(claim, &PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: claim.accepted_daa }, &view)
-    } else {
-        palw_independently_work_certified_v1(claim, &view)
-    }
-}
-
-/// Whether a `Final` claim may stand as the safe frontier — Gate C's frontier site.
-pub fn palw_gate_c_advances_frontier_v1(params: &PalwStateParamsV2, chain: &PalwChainStateV2, claim: &PalwClaimStateV2) -> bool {
-    palw_independently_work_certified_v1(claim, &PalwGateCViewV1::with_chain(params, chain))
+/// Whether a `Final` claim may stand as the safe frontier — Gate C's frontier site, with the ONE consensus-credit rule shared with
+/// settlement depth ([`crate::palw_security_certification_v1::palw_consensus_credit_anchor_v1`]).
+pub fn palw_gate_c_advances_frontier_v1(
+    params: &PalwStateParamsV2,
+    chain: &PalwChainStateV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+) -> bool {
+    let governs = palw_gate_c_governs_v1(params, claim);
+    let certified = governs && palw_independently_work_certified_v1(claim_id, claim, &PalwGateCViewV1::of(params, chain));
+    crate::palw_security_certification_v1::palw_consensus_credit_anchor_v1(governs, certified, &claim.source, &claim.phase)
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -495,7 +493,10 @@ impl Params {
             panel_anchor_permissionless_from_daa: Self::rfc0018_from(self.palw_panel_anchor_permissionless_v1),
             rule_e_participation_v2_from_daa: Self::rfc0018_from(self.palw_rule_e_participation_v2),
             gate_c_from_daa: Self::rfc0018_from(self.palw_independently_work_certified_v1),
-            gate_c_rule: PalwGateCRuleV1::Undecided,
+            gate_c_rule: PalwGateCRuleV1::SecurityCertifiedV1,
+            certification: crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1::design_unapproved_v1(
+                (86_400_000u64 / self.target_time_per_block().max(1)).max(1),
+            ),
         };
         (!mirror.is_empty()).then_some(mirror)
     }
@@ -523,6 +524,21 @@ impl Params {
                 return Err(PalwModeV2Error::Invalid(
                     "palw_rule_e_participation_v2 needs palw_fork_choice_rule_e_v1 armed at or below it (it replaces rule E's first key)",
                 ));
+            }
+        }
+        // Gate C reuses RFC-0017's attestation object (inner 75, dropped by the A-2 gate below `palw_model_eligibility_v1`) and keeps
+        // its rows in the kernel route (aux 136, `palw_probabilistic_constraints_v1`): both at or below it.
+        if let Some(c) = Self::rfc0018_from(self.palw_independently_work_certified_v1) {
+            let below = |f: Option<ForkActivation>| Self::rfc0018_from(f).is_some_and(|at| at <= c);
+            if !below(self.palw_model_eligibility_v1) || !below(self.palw_probabilistic_constraints_v1) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_independently_work_certified_v1 needs palw_model_eligibility_v1 and palw_probabilistic_constraints_v1 at or below it",
+                ));
+            }
+            if let Some(mirror) = self.palw_rfc0018_expected_mirror_v1()
+                && let Err(why) = mirror.certification.validate()
+            {
+                return Err(PalwModeV2Error::Invalid(why));
             }
         }
         if let Some(f) = self.palw_dag_width_schedule_v1.filter(|f| f.activation != ForkActivation::never())

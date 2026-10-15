@@ -735,6 +735,19 @@ impl VirtualStateProcessor {
         };
         let Ok(header) = self.headers_store.get_header(candidate_point) else { return false };
         let (frontier, _) = state.safe_frontier();
+        // **RFC-0018 §7.7 (Gate C)**: past the fence the frontier moves only on SecurityCertified claims, so pruning must not wait for
+        // it — the ceiling is the pruning-progress rule, independent of security credit: below the oldest unresolved claim and the
+        // oldest Final claim whose certification is still undecided (history an open claim, court or certification still reads),
+        // never above. Below the fence (every shipped network) the frontier rule, unchanged.
+        let gate_c = state_params.rfc0018_v1().is_some_and(|mirror| {
+            mirror.gate_c_at(state.last_point().map_or(0, |point| point.daa_score))
+        });
+        if gate_c {
+            return match kaspa_consensus_core::palw_security_certification_v1::palw_pruning_progress_ceiling_v1(&state) {
+                Some(ceiling) => header.blue_score <= ceiling.max(frontier),
+                None => true,
+            };
+        }
         kaspa_consensus_core::palw_fork_authority_v2::pruning_point_allowed_v2(header.blue_score, frontier)
     }
 

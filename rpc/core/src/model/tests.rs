@@ -1722,6 +1722,7 @@ mod mockery {
                 depth_is_lower_bound: mock(),
                 safe_frontier_blue_score: mock(),
                 safe_frontier_daa: mock(),
+                uncertified_final_anchors: 0,
             }
         }
     }

@@ -1073,6 +1073,13 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             return super::palw_model_eligibility_fold_v1::apply_commit_eligibility_exam_v1(builder, ctx, signer, commit);
         }
         KernelRouteObjectV1::AttestEligibilityExamV1 { attestation } => {
+            // RFC-0018 Gate C: an attestation naming a claim's certification id (aux 136) is a drawn verifier's verdict on that claim;
+            // any other is RFC-0017's exam attestation, as before.
+            if let Some(result) =
+                super::palw_security_certification_fold_v1::try_attest_claim_certification_v1(builder, ctx, signer, attestation)
+            {
+                return result;
+            }
             return super::palw_model_eligibility_fold_v1::apply_attest_eligibility_exam_v1(builder, ctx, signer, attestation);
         }
         KernelRouteObjectV1::FundPanelBeaconSourceFeeV2 { epoch, terms } => {
@@ -1659,6 +1666,9 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // RFC-0017: committed eligibility exams are drawn once a later seed anchor exists, decided at k positives or their deadline;
     // eligible models past their grace lapse; terminal claims' pins retire. A no-op below `palw_model_eligibility_v1`.
     super::palw_model_eligibility_fold_v1::sweep_model_eligibility_v1(builder, ctx)?;
+    // RFC-0018 Gate C: certifications are drawn, decided and — when certified — credited (safe weight, settled anchor, the held
+    // issuance-funded reward). A no-op below `palw_independently_work_certified_v1`.
+    super::palw_security_certification_fold_v1::sweep_security_certification_v1(builder, ctx)?;
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     // Anything the tick moves: claims and demands, and (G14-R4) bonded seals that expire, escrows that return and served demands'
     // bonds — a route whose only rows are a seal or an escrow must still forfeit or return it on time.

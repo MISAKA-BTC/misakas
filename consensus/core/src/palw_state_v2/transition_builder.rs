@@ -5057,7 +5057,7 @@ impl<'a> TransitionBuilder<'a> {
         // bond's window.
         let weight = self.state.bond_budget_weight_or(&id, weight);
         // RFC-0018 Gate C: take back exactly what the Final (or the spends) added — nothing where Gate C withheld it.
-        let weight = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(self.params, &claim, weight);
+        let weight = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(self.params, &self.state, &id, &claim, weight);
         self.bond_budget_close_v1(&id, ctx.daa_score);
         self.state.safe_weight = self.state.safe_weight.saturating_sub(weight);
         self.unnote_model_probe_pass(&claim, final_daa, ctx.daa_score);
@@ -7542,7 +7542,7 @@ impl<'a> TransitionBuilder<'a> {
         if old_k < PALW_RCORE_FINAL_BASIS_K_V1 && staged.rcore.basis_k >= PALW_RCORE_FINAL_BASIS_K_V1 {
             staged.rcore.licence_door = Some(palw_rcore_upgraded_door_v1(&self.state, &claim_id));
             // RFC-0018 Gate C's settled-anchor site (the identity below its fence).
-            if matches!(claim.source, PalwClaimSourceV2::Attempt) && crate::palw_rfc0018_v1::palw_gate_c_settles_anchor_v1(self.params, claim, false) {
+            if matches!(claim.source, PalwClaimSourceV2::Attempt) && crate::palw_rfc0018_v1::palw_gate_c_settles_anchor_v1(self.params, claim) {
                 self.settle_anchor(now_daa, true)?;
             }
         }
@@ -7741,7 +7741,7 @@ impl<'a> TransitionBuilder<'a> {
         if old_k < PALW_RCORE_FINAL_BASIS_K_V1 && k >= PALW_RCORE_FINAL_BASIS_K_V1 && staged.rcore.licence_door.is_some() {
             staged.rcore.licence_door = Some(palw_rcore_upgraded_door_v1(&self.state, &claim_id));
             // RFC-0018 Gate C's settled-anchor site (the identity below its fence).
-            if matches!(claim.source, PalwClaimSourceV2::Attempt) && crate::palw_rfc0018_v1::palw_gate_c_settles_anchor_v1(self.params, claim, false) {
+            if matches!(claim.source, PalwClaimSourceV2::Attempt) && crate::palw_rfc0018_v1::palw_gate_c_settles_anchor_v1(self.params, claim) {
                 self.settle_anchor(now, true)?;
             }
         }
@@ -8627,7 +8627,7 @@ impl<'a> TransitionBuilder<'a> {
             self.extras.audit_2026_09_23_active && attempt
         };
         // RFC-0018 Gate C's settled-anchor site: an uncertified licence settles nothing (asked as licensed; identity below its fence).
-        if ticks && crate::palw_rfc0018_v1::palw_gate_c_settles_anchor_v1(self.params, &claim, true) {
+        if ticks && crate::palw_rfc0018_v1::palw_gate_c_settles_anchor_v1(self.params, &claim) {
             self.settle_anchor(daa_score, true)?;
         }
         let before = self.state.claims.get(&claim_id).cloned();
@@ -8890,6 +8890,9 @@ impl<'a> TransitionBuilder<'a> {
             return Err(PalwStateV2Error::ExecV2Refused("Final exceeds immutable paid consumer service".into()));
         }
         self.mark_paid_consumer_terminal_v1(id, final_daa)?;
+        // **RFC-0018 Gate C (adopted 2026-10-15)**: a governed claim's `Final` completes the procedure only; its certification is
+        // committed here (claim, producer and pool cut fixed now; the draw waits for later randomness). A no-op below the fence.
+        super::palw_security_certification_fold_v1::commit_at_final_v1(self, &id, claim, final_daa)?;
         self.note_model_probe(claim, true, final_daa);
         // ADR-0152-adjacent (Activation Pool): (b)'s tracking — before the duty row leaves below.
         self.note_activation_probe_credits_v1(&id, claim);
@@ -8928,7 +8931,7 @@ impl<'a> TransitionBuilder<'a> {
             let contribution = super::palw_model_eligibility_fold_v1::eligibility_final_weight_v1(self, &id, contribution);
             // **RFC-0018 Gate C's final-weight site** (`palw_independently_work_certified_v1`): an uncertified claim's Final adds no
             // weight. The identity below its fence (keyed on the claim's acceptance DAA) and on every shipped network.
-            let contribution = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(self.params, claim, contribution);
+            let contribution = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(self.params, &self.state, &id, claim, contribution);
             self.state.safe_weight =
                 self.state.safe_weight.checked_add(contribution).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
         } else {
@@ -8991,9 +8994,10 @@ impl<'a> TransitionBuilder<'a> {
             // verification** — paid whole when attested (or no Final claim existed to sample), withheld when unattested, deferred while
             // undecided; before every leg below. Unchanged below the fence and for every claim the allocation did not reserve for.
             let escrow = palw_econ_contracts_fold_v1::gate_final_reward_v1(self, &id, claim, escrow, final_daa)?;
-            // **RFC-0018 Gate C's coinbase site**: an uncertified claim's escrow is never named (never minted, as a voided escrow).
-            // The identity below its fence and on every shipped network.
-            let escrow = crate::palw_rfc0018_v1::palw_gate_c_reward_v1(self.params, claim, escrow);
+            // **RFC-0018 Gate C's coinbase site**: past the fence the issuance-funded (subsidy-carved) reward leg represents consensus
+            // credit — it is HELD in the claim's certification row and named only at `SecurityCertified` (burned otherwise). The
+            // identity below its fence and on every shipped network.
+            let escrow = super::palw_security_certification_fold_v1::hold_issuance_reward_at_final_v1(self, &id, claim, escrow)?;
             // **Lane BUDGET, PESG §6: the external export cap.** What leaves the chain's books at Final — a leg written straight into the
             // payout queue (no vesting), or a buyback slice in a market reserve a holder can sell out of — is at most 0.51 of the
             // collateral the claim's liability still holds; a vesting leg is not an export (it moves once the lock has ended). The rest
@@ -9187,7 +9191,7 @@ impl<'a> TransitionBuilder<'a> {
         // RFC-0018 Gate C's settled-anchor site (the identity below its fence).
         if matches!(claim.source, PalwClaimSourceV2::Attempt)
             && !self.extras.audit_2026_09_23_active
-            && crate::palw_rfc0018_v1::palw_gate_c_settles_anchor_v1(self.params, claim, false)
+            && crate::palw_rfc0018_v1::palw_gate_c_settles_anchor_v1(self.params, claim)
         {
             self.settle_anchor(final_daa, false)?;
         }
@@ -9449,7 +9453,7 @@ impl<'a> TransitionBuilder<'a> {
         // Lane BUDGET: a budgeted claim retires the weight its Final (or its spends) was granted — the number `safe_weight` received.
         let retiring = retiring.map(|amount| self.state.bond_budget_weight_or(&id, amount));
         // RFC-0018 Gate C: retire exactly what `safe_weight` received — nothing where Gate C withheld it (identity below its fence).
-        let retiring = retiring.map(|amount| crate::palw_rfc0018_v1::palw_gate_c_weight_v1(self.params, claim, amount));
+        let retiring = retiring.map(|amount| crate::palw_rfc0018_v1::palw_gate_c_weight_v1(self.params, &self.state, &id, claim, amount));
         if let Some(amount) = retiring {
             let old = self.state.retired_safe_weight;
             let new = old.checked_add(amount).ok_or(PalwStateV2Error::Overflow("retired_safe_weight"))?;

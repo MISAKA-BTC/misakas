@@ -2121,6 +2121,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             depth_is_lower_bound: dns_retired_at.is_some() || settlement.depth_is_lower_bound,
             safe_frontier_blue_score: settlement.safe_frontier_blue_score,
             safe_frontier_daa: settlement.safe_frontier_daa,
+            uncertified_final_anchors: settlement.uncertified_final,
         })
     }
 
