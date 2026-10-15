@@ -212,61 +212,6 @@ impl DurableMonetaryMaterialProviderV1 {
         }
         Err(last)
     }
-    /// RFC08 checker read path: one bounded page of the TypedKernelV4 material of `request.root`. Answered only when this
-    /// provider's OWN current native state shows that the reader is a drawn seat of the claim's current lock AND this provider
-    /// holds a currently enrolled generation whose intrinsic context replays against the current signed covenant. Every
-    /// retained generation is tried after the preferred one (an ineligible first candidate never hides a later valid one).
-    /// Read-only: no consensus object, liability, GC or ACK permission follows from serving a page.
-    pub fn read_kernel_material_page_v4(
-        &self,
-        request: &crate::kernel_material_read_v4::KernelMaterialReadRequestV4,
-        provider: PalwBondKeyV2,
-        pubkey: &[u8],
-        reader_pubkey: &[u8],
-        native: &dyn kaspa_consensus_core::api::ConsensusApi,
-    ) -> Result<crate::kernel_material_read_v4::KernelMaterialReadPageV4, String> {
-        use kaspa_consensus_core::{
-            palw_attempt_material_v3::verify_ready_signature_v3, palw_kernel_material_context_v4::restore_kernel_material_context_v4,
-            palw_material_capacity_v1::PalwMaterialCodecV1, palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
-        };
-        request.validate()?;
-        if !native.palw_kernel_material_reader_authorized_v4(request.root, request.reader, reader_pubkey)? {
-            return Err("reader is not a drawn seat of this claim's current native lock".into());
-        }
-        let archive = self.contexts.as_ref().ok_or("kernel reads need explicit durable context capacities")?;
-        let mut last = String::from("no current eligible retained kernel generation");
-        for (consent, scope) in self.store.material_generation_scopes_v4(request.preferred_consent, request.root, request.root) {
-            let result = (|| {
-                if scope.codec != PalwMaterialCodecV1::TypedKernelV4 {
-                    return Err("retained generation is not the complete typed kernel codec".to_string());
-                }
-                native.palw_material_generation_authority_v4(request.root, consent, provider, scope)?;
-                let record = archive.get(consent)?.ok_or("kernel intrinsic context absent")?;
-                if record.context.intent.manifest.scope(request.root) != Some(scope) {
-                    return Err("kernel stored generation scope differs from context".into());
-                }
-                let bundle = self.store.provider_kernel_bundle_owned_v4(consent, request.root)?;
-                // Retain the replayed candidate and the decoded bundle while the page is cut from it.
-                let _candidate = restore_kernel_material_context_v4(
-                    &record.context,
-                    &bundle,
-                    archive.limits(),
-                    self.max_contract_bytes,
-                    |context| native.palw_kernel_material_context_authority_v4(context, &record.capsule, provider, pubkey),
-                    verify_ready_signature_v3,
-                )?;
-                let PalwProspectiveKernelBundleV4::TypedKernelV4(typed) = &*bundle else {
-                    return Err("stored kernel bundle is not the typed complete codec".into());
-                };
-                crate::kernel_material_read_v4::kernel_material_page_v4(typed, consent, request)
-            })();
-            match result {
-                Ok(page) => return Ok(page),
-                Err(reason) => last = reason,
-            }
-        }
-        Err(last)
-    }
     pub fn open(
         file: &Path,
         max_contract_bytes: u64,

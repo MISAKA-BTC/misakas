@@ -168,7 +168,7 @@ impl BorshSerialize for BorrowedPosition<'_> {
         Ok(())
     }
 }
-pub(crate) fn retrieval<'a>(
+fn retrieval<'a>(
     ledger: &'a KernelLedgerV1,
     row: &'a ClaimRowV1,
     component: u8,

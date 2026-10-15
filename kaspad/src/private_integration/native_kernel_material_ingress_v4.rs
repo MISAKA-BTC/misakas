@@ -79,7 +79,7 @@ impl LoopbackNativeProviderV3 {
         &self,
         request: &ProviderTransportRequestV1,
     ) -> Result<(Response, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>), String> {
-        preflight_native_value_v1::<Request>(&request.body[..], request.body.len() as u64).map_err(|e| e.to_string())?;
+        preflight_native_value_v1::<Request>(&request.body, request.body.len() as u64).map_err(|e| e.to_string())?;
         let r =
             retain_native_value_decode_v1(&request.body, || borsh::from_slice::<Request>(&request.body)).map_err(|e| e.to_string())?;
         let api = self.consensus_manager.consensus().unguarded_session_blocking();
@@ -237,14 +237,14 @@ impl AuthenticatedSocketExchangeV3 {
         socket.set_write_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3)).map_err(|e| e.to_string())?;
         write_frame_v3(&mut socket, &borsh::to_vec(&signed).map_err(|e| e.to_string())?)?;
         let frame = read_frame_capped_v4(&mut socket, RESPONSE_CAP)?;
-        preflight_native_value_v1::<ProviderTransportResponseV1>(&frame[..], frame.len() as u64).map_err(|e| e.to_string())?;
+        preflight_native_value_v1::<ProviderTransportResponseV1>(&frame, frame.len() as u64).map_err(|e| e.to_string())?;
         let response = retain_native_value_decode_v1(&frame, || borsh::from_slice::<ProviderTransportResponseV1>(&frame))
             .map_err(|e| e.to_string())?;
         let responders = provider_transport_verify_response_v1(&response, &signed.header, &keys, &self.policy, now_unix_ms())?;
         if responders.iter().ne(material.intent.providers.iter()) {
             return Err("kernel ingress partial authenticated roster".into());
         }
-        preflight_native_value_v1::<Response>(&response.body[..], response.body.len() as u64).map_err(|e| e.to_string())?;
+        preflight_native_value_v1::<Response>(&response.body, response.body.len() as u64).map_err(|e| e.to_string())?;
         retain_native_value_decode_v1(&response.body, || borsh::from_slice::<Response>(&response.body)).map_err(|e| e.to_string())
     }
     pub(super) fn ingest_kernel_v4(&self, material: &Material, ingress: &Ingress) -> Result<(), String> {
@@ -396,172 +396,4 @@ pub(super) fn unhosted_metadata_reservation_v4(dir: &Path, keys: &[PrivateNative
             .ok_or("unhosted metadata total overflow")?;
     }
     Ok(reserved)
-}
-
-// ---- RFC08 checker read path (TypedKernelV4 pages) -------------------------------------------------------------------
-use misaka_palw_remote::kernel_material_read_v4::{
-    KERNEL_MATERIAL_READ_PAGE_BYTES_V4, KERNEL_MATERIAL_READ_PAGE_UNITS_V4, KernelMaterialPageAssemblerV4, KernelMaterialReadRequestV4,
-    KernelMaterialReadResponseV4,
-};
-impl LoopbackNativeProviderV3 {
-    /// One authenticated page for a drawn checker. Authority is the provider's OWN current native state (reader seat,
-    /// enrolled generation, context replay) inside `read_kernel_material_page_v4`; the transport only identifies the reader.
-    #[allow(clippy::type_complexity)]
-    fn kernel_read_v4(
-        &self,
-        request: &ProviderTransportRequestV1,
-    ) -> Result<(KernelMaterialReadResponseV4, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>), String>
-    {
-        preflight_native_value_v1::<KernelMaterialReadRequestV4>(&request.body[..], request.body.len() as u64)
-            .map_err(|e| e.to_string())?;
-        let read = retain_native_value_decode_v1(&request.body, || borsh::from_slice::<KernelMaterialReadRequestV4>(&request.body))
-            .map_err(|e| e.to_string())?;
-        read.validate()?;
-        if request.header.sender != read.reader || request.header.recipients.len() != 1 {
-            return Err("kernel read must come from the reader itself and name exactly one provider".into());
-        }
-        let provider = self
-            .providers
-            .iter()
-            .find(|p| p.bond == request.header.recipients[0])
-            .ok_or("kernel read names a provider this endpoint does not host")?;
-        // The page, its encoded response and the transport frame coexist.
-        let lease = reserve_native_requests_v1(RESPONSE_CAP * 3).map_err(|e| e.to_string())?;
-        let api = self.consensus_manager.consensus().unguarded_session_blocking();
-        let page = provider.store.lock().map_err(|_| "kernel provider store poisoned")?.read_kernel_material_page_v4(
-            &read,
-            provider.bond,
-            provider.key.public_key(),
-            &request.header.sender_pubkey,
-            &*api,
-        )?;
-        Ok((KernelMaterialReadResponseV4::Page(page), lease))
-    }
-}
-pub(super) fn handle_kernel_read_v4(stream: &mut TcpStream, service: &LoopbackNativeProviderV3, request: &ProviderTransportRequestV1) {
-    let local = service.consensus_manager.consensus().unguarded_session().get_virtual_daa_score();
-    let Ok(mut replay) = service.replay.lock() else { return };
-    if provider_transport_verify_request_v1(
-        request,
-        ProviderTransportPurposeV1::KernelMaterialReadV4,
-        &service.transport,
-        now_unix_ms(),
-        Some(local),
-        &mut replay,
-    )
-    .is_err()
-    {
-        return;
-    }
-    drop(replay);
-    let (body, _lease) = match service.kernel_read_v4(request) {
-        Ok(value) => value,
-        Err(reason) => {
-            let Ok(lease) = reserve_native_requests_v1(RESPONSE_CAP * 4) else { return };
-            if reason.len() as u64 > RESPONSE_CAP / 2 {
-                return;
-            }
-            (KernelMaterialReadResponseV4::Refused(reason), lease)
-        }
-    };
-    let Some(provider) = service.providers.iter().find(|p| request.header.recipients.first() == Some(&p.bond)) else { return };
-    let sign = move |m: &[u8], c: &[u8]| -> Result<Vec<u8>, String> { Ok(provider.key.sign_with_context(m, c).to_vec()) };
-    let responders: Vec<(PalwBondKeyV2, ProviderTransportSignerV1<'_>)> = vec![(provider.bond, &sign as ProviderTransportSignerV1<'_>)];
-    if let Ok(response) = borsh::to_vec(&body)
-        .map_err(|e| e.to_string())
-        .and_then(|body| provider_transport_response_v1(&request.header, now_unix_ms(), body, responders))
-        .and_then(|r| borsh::to_vec(&r).map_err(|e| e.to_string()))
-    {
-        if response.len() as u64 <= RESPONSE_CAP {
-            let _ = write_frame_v3(stream, &response);
-        }
-    }
-}
-impl AuthenticatedSocketExchangeV3 {
-    /// Checker side: page the complete TypedKernelV4 material of `root` from one provider, authenticating every response
-    /// against that provider's NATIVE bond key (`provider_pubkey`, read by the caller from its own state). The returned
-    /// bundle is still unauthenticated material until `PalwTypedKernelMaterialBundleV4::verify` (done by the SDK
-    /// reconstruction consumer) checks every unit against the claim's commitments.
-    #[allow(clippy::type_complexity)]
-    pub(super) fn read_kernel_material_v4(
-        &self,
-        root: Hash64,
-        preferred_consent: Hash64,
-        provider: PalwBondKeyV2,
-        provider_pubkey: &[u8],
-        local_daa: u64,
-        max_bytes: u64,
-    ) -> Result<
-        (
-            kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwTypedKernelMaterialBundleV4,
-            Hash64,
-            Vec<Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>>,
-        ),
-        String,
-    > {
-        let mut assembler = KernelMaterialPageAssemblerV4::new(root, max_bytes)?;
-        let keys = vec![(provider, provider_pubkey.to_vec())];
-        // A bounded number of round trips: every page carries at least one unit, and the inventory is capped.
-        for _ in 0..=kaspa_consensus_core::palw_material_capacity_v1::PALW_MATERIAL_MAX_UNITS_V1 {
-            if assembler.complete() {
-                return assembler.finish();
-            }
-            let read = KernelMaterialReadRequestV4 {
-                version: 4,
-                root,
-                preferred_consent: assembler.consent().unwrap_or(preferred_consent),
-                reader: self.sender,
-                first_unit: assembler.next_unit(),
-                max_units: KERNEL_MATERIAL_READ_PAGE_UNITS_V4,
-                max_bytes: KERNEL_MATERIAL_READ_PAGE_BYTES_V4,
-            };
-            let body = borsh::to_vec(&read).map_err(|e| e.to_string())?;
-            let _frames = reserve_native_requests_v1(RESPONSE_CAP * 3).map_err(|e| e.to_string())?;
-            let signed = provider_transport_request_v1(
-                ProviderTransportPurposeV1::KernelMaterialReadV4,
-                self.policy.domain,
-                self.sender,
-                self.key.public_key().to_vec(),
-                vec![provider],
-                request_nonce_v3(&body),
-                now_unix_ms(),
-                local_daa,
-                body,
-                |m, c| Ok(self.key.sign_with_context(m, c).to_vec()),
-            )?;
-            let mut socket = TcpStream::connect_timeout(&self.addr, Duration::from_secs(10)).map_err(|e| e.to_string())?;
-            socket.set_read_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3)).map_err(|e| e.to_string())?;
-            socket.set_write_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3)).map_err(|e| e.to_string())?;
-            write_frame_v3(&mut socket, &borsh::to_vec(&signed).map_err(|e| e.to_string())?)?;
-            let frame = read_frame_capped_v4(&mut socket, RESPONSE_CAP)?;
-            preflight_native_value_v1::<ProviderTransportResponseV1>(&frame[..], frame.len() as u64).map_err(|e| e.to_string())?;
-            let response = retain_native_value_decode_v1(&frame, || borsh::from_slice::<ProviderTransportResponseV1>(&frame))
-                .map_err(|e| e.to_string())?;
-            let responders = provider_transport_verify_response_v1(&response, &signed.header, &keys, &self.policy, now_unix_ms())?;
-            if responders.as_slice() != [provider] {
-                return Err("kernel read response is not signed by the named provider".into());
-            }
-            preflight_native_value_v1::<KernelMaterialReadResponseV4>(&response.body[..], response.body.len() as u64)
-                .map_err(|e| e.to_string())?;
-            let decoded = retain_native_value_decode_v1(&response.body, || {
-                borsh::from_slice::<KernelMaterialReadResponseV4>(&response.body)
-            })
-            .map_err(|e| e.to_string())?;
-            let (decoded, _decoded_lease) = decoded.into_parts_v1();
-            match decoded {
-                KernelMaterialReadResponseV4::Page(page) => {
-                    let finished = page.units.is_empty() && page.first_unit == page.total_units;
-                    if page.units.is_empty() && !finished {
-                        return Err("kernel read page made no progress".into());
-                    }
-                    assembler.push(page)?;
-                    if finished && !assembler.complete() {
-                        return Err("kernel read ended before the inventory was complete".into());
-                    }
-                }
-                KernelMaterialReadResponseV4::Refused(reason) => return Err(format!("provider refused kernel read: {reason}")),
-            }
-        }
-        Err("kernel read exceeded its bounded page count".into())
-    }
 }

@@ -1670,7 +1670,7 @@ impl ConsensusApi for Consensus {
         }
         Ok(prepared)
     }
-    fn palw_kernel_material_consent_accepted_v4(&self,root:kaspa_hashes::Hash64,consent:kaspa_hashes::Hash64)->Result<bool,String>{
+    fn palw_kernel_material_consent_accepted_v4(&self,root:Hash64,consent:Hash64)->Result<bool,String>{
         use kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2;
         let before=self.lkg_virtual_state.load();let now=self.get_virtual_daa_score();
         let(epoch,stable)=self.virtual_processor.pruning_import_status().map_err(|e|e.to_string())?;
@@ -1698,7 +1698,7 @@ impl ConsensusApi for Consensus {
         if monetary.terms.root!=request.intent.manifest.root || monetary.terms.material_manifest.as_ref()!=Some(&request.intent.manifest)
             || monetary.terms.sponsor!=request.intent.producer || terms.initial_consent!=monetary.id(){return Err("kernel admission draft/request mismatch".into())}
         if now>monetary.terms.enrollment_until_daa{return Err("kernel funded enrollment expired before claim admission".into())}
-        let rid=kaspa_hashes::Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/RELEASE-RECOVERY-CONSENT/V2",terms));
+        let rid=Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/RELEASE-RECOVERY-CONSENT/V2",terms));
         let matches=|state:&kaspa_consensus_core::palw_state_v2::PalwChainStateV2|{
             state.monetary_material_row_v1(monetary.terms.root).is_some_and(|row|row.consent==monetary.id()&&row.terms==monetary.terms)
             && matches!(state.material_recovery_row_v2(monetary.terms.root),Some(PalwMaterialRecoveryRowV2::Active(ref c)) if c.id()==rid&&c.generations.iter().any(|g|g.consent==monetary.id()))
@@ -1781,42 +1781,6 @@ impl ConsensusApi for Consensus {
         let after=self.lkg_virtual_state.load();let(end,stable)=self.virtual_processor.pruning_import_status().map_err(|e|e.to_string())?;
         if !stable||end.active.is_some()||end.epoch!=generation.epoch||before.ghostdag_data.selected_parent!=after.ghostdag_data.selected_parent{return Err("material generation native point/import changed".into())}
         Ok(())
-    }
-    fn palw_kernel_material_reader_authorized_v4(
-        &self,
-        root: kaspa_hashes::Hash64,
-        reader: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-        reader_pubkey: &[u8],
-    ) -> Result<bool, String> {
-        let before = self.lkg_virtual_state.load();
-        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
-        if !stable || generation.active.is_some() {
-            return Err("kernel reader authority import incomplete".into());
-        }
-        let state = self
-            .virtual_processor
-            .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
-            .map_err(|e| format!("kernel reader native state unavailable: {e:?}"))?;
-        let authorized =
-            kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_reader_authorized_v4(&state, root, &reader, reader_pubkey)?;
-        let after = self.lkg_virtual_state.load();
-        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
-        if !stable
-            || end.active.is_some()
-            || end.epoch != generation.epoch
-            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
-        {
-            return Err("kernel reader native point/import changed".into());
-        }
-        Ok(authorized)
-    }
-    fn palw_bond_pubkey_v4(&self, bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2) -> Result<Option<Vec<u8>>, String> {
-        let before = self.lkg_virtual_state.load();
-        let state = self
-            .virtual_processor
-            .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
-            .map_err(|e| format!("bond key native state unavailable: {e:?}"))?;
-        Ok(state.bond(&bond).map(|row| row.pubkey.clone()))
     }
     fn palw_native_recovery_session_quote_v4(
         &self,

@@ -429,8 +429,6 @@ pub mod cli;
 pub mod private_bootstrap;
 pub mod producer_resources;
 pub mod provider_handoff_v4;
-/// RFC08 checker consumer: authenticate and reconstruct TypedKernelV4 material for the deterministic checker.
-pub mod typed_material_v4;
 
 /// Portable public material for the all-target CLI verifier. Every value is
 /// authenticated by the mathematical verifier against the anchored commitments.
