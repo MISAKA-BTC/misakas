@@ -7,6 +7,9 @@
 //!     subsidy-derived worker base of an attempt-lane carrier is withheld; the claim's escrow (its R reservation) is the only subsidy
 //!     ever paid for it, the rest is never minted, and a budget-refused (skipped) attempt is paid no subsidy at all. Transaction fees
 //!     are user-paid, so their worker shares stay outside R (separate accounting).
+//! C2  the exit (withdrawal) hold stays 7-day-equivalent DAA for every bond, a Panel=1-only bond included; Panel=1's ISSUANCE
+//!     capacity recovers after 1 day, but exit, re-registration or a mode switch never resets a long liability or capacity: the long
+//!     view (every reservation, 7 days), the liability view (terminal + H_L) and the liability hold only ever extend
 //! ```
 //!
 //! Nothing in this module is built or run by the lane that wrote it (a separate validation agent compiles). No line is a PASS.
@@ -40,12 +43,33 @@ pub fn palw_r_cap_paid_subsidy_v1(covers: bool, escrowed: u64, worker_base: u64)
     (escrowed.min(worker_base), withheld.saturating_sub(escrowed))
 }
 
+/// **C2 (user decision 2026-10-15): the exit hold, in days** — the 7-day-equivalent common hold, for EVERY bond (a Panel=1-only bond
+/// too: shortening it to Panel=1's day would let exit → re-registration → Panel=0 use up to six more days of rate). It is the long
+/// view's span ([`PALW_BOND_HOLD_PANEL_ZERO_DAYS_V1`]); the withdrawal gate is [`PalwBondBudgetStateV1::withdrawal_holds`].
+pub const PALW_BOND_EXIT_HOLD_DAYS_V1: u32 = PALW_BOND_HOLD_PANEL_ZERO_DAYS_V1;
+
+/// **C2: the exit hold in DAA under `hold`** — `panel_zero_days · daa_per_day` whatever modes the bond used (never the day view).
+pub fn palw_bond_exit_hold_daa_v1(hold: &PalwBondHoldPolicyV1) -> u64 {
+    hold.window_daa(PalwHoldModeV1::PanelZero)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn mirror(policy: PalwBondBudgetPolicyV1) -> PalwBondBudgetMirrorV1 {
         PalwBondBudgetMirrorV1 { from_daa: 100, policy, allocation: None }
+    }
+
+    #[test]
+    fn c2_the_exit_hold_is_seven_days_for_every_mode() {
+        let hold = PalwBondHoldPolicyV1::baseline_unapproved_v1();
+        assert_eq!(PALW_BOND_EXIT_HOLD_DAYS_V1, 7);
+        assert_eq!(palw_bond_exit_hold_daa_v1(&hold), 7 * PALW_BOND_HOLD_DAA_PER_DAY_V1);
+        assert_eq!(palw_bond_exit_hold_daa_v1(&hold), hold.window_daa(PalwHoldModeV1::PanelZero));
+        assert!(palw_bond_exit_hold_daa_v1(&hold) > hold.window_daa(PalwHoldModeV1::PanelOne), "never the 1-day view");
+        // The V3 policy's long window IS the exit hold.
+        assert_eq!(PalwBondBudgetPolicyV1::hold_baseline_unapproved_v1().window_daa, palw_bond_exit_hold_daa_v1(&hold));
     }
 
     #[test]
