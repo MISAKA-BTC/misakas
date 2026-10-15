@@ -1,5 +1,7 @@
 # ADR index — what governs, and what was reversed
 
+> **恒久決定(2026-10-15):** LLM・モデル計算の正しさを暗号学的に証明する仕組み(ZK、zk-SNARK/STARK、zkVM・zkML、PCS ベースの succinct proof など)は一切使用せず、今後も使用しない([PRINCIPLES §8](../PRINCIPLES.md))。
+
 > **設計前提(ADR・RFC より上位)— [MISAKAの不可侵原則](../PRINCIPLES.md):** 確率的に検出し、公開証拠で局所化し、決定論的に裁き、経済的に不正を抑止する。この索引のすべての文書はこの前提の下にあり、衝突する場合は前提が優先する(2026-10-09)。
 
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
