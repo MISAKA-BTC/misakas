@@ -607,7 +607,7 @@ pub(crate) fn estimate_fee(key: &ValidatorKey, p: &Params, n_inputs: usize, cons
             (TransactionOutpoint::new(kaspa_consensus_core::Hash64::from_bytes(id), 0), UtxoEntry::new(per, spk.clone(), 0, false))
         })
         .collect();
-    let floor = kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI;
+    let floor = kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI;
     let built = if consolidate {
         key.build_funded_consolidate_tx(&dummies, floor, p.storage_mass_parameter)
     } else {

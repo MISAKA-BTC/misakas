@@ -17023,6 +17023,9 @@ mod rfc12_zero_dns_matrix;
 // RFC-0012 wave 2 (C1 a real claim to `Final` with the lane on, C2 a pruned join with EVM state): `evm` feature only, like the matrix.
 #[cfg(feature = "evm")]
 mod rfc12_c_items;
+// RFC-0012 R12-AUTHORITY item 4 (port of codex/rfc12-remove-dns-bft, 2026-10-15): every DNS authority read in the consensus crate is
+// inventoried and asks the retirement — a source scan, no feature needed.
+mod rfc12_dns_reader_inventory;
 
 /// **MSK-26A (2026-09 pre-freeze security review): a slash applied on unchecked evidence**, end to
 /// end through `validate_and_insert_block`: a forged slashing evidence rides in a side block `M`

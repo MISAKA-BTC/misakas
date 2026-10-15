@@ -723,7 +723,7 @@ mod tests {
             params.mass_per_sig_op,
             params.storage_mass_parameter,
         );
-        let floor = kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI;
+        let floor = kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI;
         let shipped_probe = owner.build_palw_lifecycle_tx(&probe, outpoint, &entry, floor).unwrap();
         let shipped_mass = calc.calc_non_contextual_masses(&shipped_probe).compute_mass;
         assert_eq!(mass, shipped_mass, "a placeholder script of the real length weighs what the real one does");
