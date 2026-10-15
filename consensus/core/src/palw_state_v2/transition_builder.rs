@@ -4570,10 +4570,13 @@ impl<'a> TransitionBuilder<'a> {
                 convicted_execution_root = execution_root;
                 convicted_claim = Some(payload.claim_id);
                 // R6-CELL round 4: the coverage closure governs a claim accepted at or past its fence (None on shipped networks).
-                let cell_closure =
-                    self.state.claims.get(&payload.claim_id).is_some_and(|c| {
-                        crate::palw_cell_coverage_closure_v1::palw_cell_closure_governs_v1(self.params, c.accepted_daa)
-                    });
+                // RFC-0006 consumer v2: the closure's mode for this claim also knows `palw_memory_routing_court_v2`'s mirror.
+                let cell_closure = self
+                    .state
+                    .claims
+                    .get(&payload.claim_id)
+                    .map(|c| crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1::for_claim(self.params, c.accepted_daa))
+                    .unwrap_or(crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1::Off);
                 crate::palw_offence_v1::palw_panel_contradiction_convicts_execution_closure_v1(
                     &payload.contradiction,
                     execution_root,

@@ -4,7 +4,7 @@
 use super::*;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-const USAGE: &str = "palw-class claim-v2 CLASS|JOB|COMMIT|FUND|LOCK|VERIFY|MESSAGE|ROUND-FUND|ROUND-LOCK|ROUND-VERIFY|SIGN|INSPECT|FINAL|COMPACT-COVERAGE|COMPACT-SIGN
+const USAGE: &str = "palw-class claim-v2 CLASS|JOB|COMMIT|FUND|LOCK|VERIFY|MESSAGE|ROUND-FUND|ROUND-LOCK|ROUND-VERIFY|SIGN|INSPECT|ASSUMPTIONS|MODEL-BOUNDS|FINAL|COMPACT-COVERAGE|COMPACT-SIGN
 All commands: --snapshot FILE --ledger-root HEX --aux-root HEX --out FILE
 CLASS: --claim-policy POLICY_BORSH --source-policy SOURCE_BORSH --beacon-policy CHALLENGE_BORSH --base-class HEX --actor BOND_HEX [--rounds N --max-material-bytes N]
 JOB: --class HEX --base-job HEX --actor BOND_HEX --nonce HEX --last-commit DAA --max-consumers N
@@ -18,6 +18,9 @@ ROUND-LOCK: --enrollment HEX --round N
 ROUND-VERIFY: --enrollment HEX --round N --material MATERIAL_BORSH --actor HEX --height DAA
 SIGN: --draft KERNEL_OBJECT --network ID [--drill-salt HEX] --bond TXID:INDEX --key-file SEED
 INSPECT: --context HEX
+MODEL-BOUNDS: (no options) JSON of every registered class's derived worst-case bounds; time/cost UNKNOWN until measured
+ASSUMPTIONS: --context HEX (JSON: drawn m/k, population, operators, largest operator share, false-approval tail at
+  f=1/3, 0.6, largest share, 1; honest fraction, participation and acquisition stay UNKNOWN until measured/assumed)
 FINAL: --enrollment HEX
 COMPACT-COVERAGE: --base-class HEX --compact-arithmetic true|false --arithmetic-repetitions N --fs-query-bits N
 COMPACT-SIGN: --draft KERNEL_OBJECT --bond TXID:INDEX --key-file SEED (exact authenticated snapshot domain)
@@ -243,6 +246,27 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 return Err(format!("unknown options: {:?}", f.keys()));
             }
             return write(&out, &borsh::to_vec(&final_row).map_err(|e| e.to_string())?);
+        }
+        "MODEL-BOUNDS" => {
+            if !f.is_empty() {
+                return Err(format!("unknown options: {:?}", f.keys()));
+            }
+            let ledger = route.ledger().map_err(|e| e.to_string())?;
+            let rows = model_bounds_v1::registered_model_bounds_v1(&ledger);
+            return write(&out, &serde_json::to_vec_pretty(&rows).map_err(|e| e.to_string())?);
+        }
+        "ASSUMPTIONS" => {
+            let context = hash(&mut f, "--context")?;
+            let verified = paid_claim_sources_from_kernel_rows_v2(&header, rows, &lr, &ar, &context).map_err(|e| e.to_string())?;
+            if !f.is_empty() {
+                return Err(format!("unknown options: {:?}", f.keys()));
+            }
+            let ledger = route.ledger().map_err(|e| e.to_string())?;
+            let report = serde_json::json!({
+                "assumptions": verified.assumption_report_v1(),
+                "economics": verified.economics_report_v1(&ledger),
+            });
+            return write(&out, &serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?);
         }
         "INSPECT" => {
             let context = hash(&mut f, "--context")?;

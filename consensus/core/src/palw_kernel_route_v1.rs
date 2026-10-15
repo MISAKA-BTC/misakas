@@ -192,6 +192,9 @@ pub struct PalwKernelRouteExtrasV1 {
     /// New stage book and full-source/temporal/court contract, independent of14.
     pub stage_execution_v28: Option<crate::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
     pub native_execution39: Option<crate::palw_native_execution_v39::PalwNativeExecutionFenceV39>,
+    /// Owning39 mining (stage actions 73–79), where `Params::palw_native_mining_v39` is in force at the block (with native39 and
+    /// Final27). `None` on every preset: below it actions 73–79 ride unjudged and fold nothing.
+    pub native_mining39: Option<crate::palw_native_mining_v39::PalwNativeMiningFenceV39>,
     /// Actual physical mass constants, resolved from Params only where a new
     /// native namespace is active. They do not assert reserved-lane readiness.
     pub native_carriage_mass: Option<crate::palw_native_carriage_v22::NativeCarriageMassParamsV22>,
@@ -440,7 +443,7 @@ impl KernelLedgerCacheV1 {
         self.0.as_ref().map(|ledger| ledger.try_clone_v1()).transpose()
     }
     pub(crate) fn set_native_projection(&mut self, mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1) {
-        ledger.flat_conformance_classes_v9.clear();
+        ledger.clear_flat_conformance_classes_v9();
         self.0 = Some(std::sync::Arc::new(ledger));
         self.1 = true;
     }
@@ -1475,9 +1478,10 @@ impl PalwKernelRouteStateV1 {
             );
             PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut cached = cached;
-            cached.commitment_scope_from_daa = commitment_scope;
+            // RFC-0006: the reserved ledger is mutated only through its typed methods (no `DerefMut`).
+            cached.set_commitment_scope_from_daa_v1(commitment_scope);
             cached.reserve_projection_v1(self).map_err(E::Resource)?;
-            self.apply_paid_claim_consumer_inputs_v2(&mut cached).map_err(E::Decode)?;
+            self.apply_paid_claim_consumer_inputs_v2(cached.paid_consumer_projection_mut_v1()).map_err(E::Decode)?;
             return Ok(cached);
         }
         let lease = crate::palw_native_resource_v1::reserve_ledger_expansion_v1(self, true).map_err(E::Resource)?;

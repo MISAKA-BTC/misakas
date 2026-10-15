@@ -72,6 +72,11 @@ impl ReservedKernelLedgerV1 {
         self.ledger.restore_budget(used);
     }
 
+    /// Drop the v9 conformance-class records a native projection carries before caching (frees; allocates nothing).
+    pub fn clear_flat_conformance_classes_v9(&mut self) {
+        self.ledger.flat_conformance_classes_v9.clear();
+    }
+
     /// The consensus derived commitment-scope clock. A fixed-size scalar.
     pub fn set_commitment_scope_from_daa_v1(&mut self, from: Option<u64>) {
         self.ledger.commitment_scope_from_daa = from;

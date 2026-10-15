@@ -63,13 +63,16 @@ pub enum NativeCarrierPurposeV4 {
         until_daa: u64,
     },
 }
+/// Queue identity of a root's bounded provider replacement carrier: distinct from its initial enrollment (keyed by the
+/// root itself), so a replacement never overwrites or retires the original FundedEnroll carrier.
+pub fn kernel_replacement_carrier_id_v4(root: Hash64) -> Hash64 {
+    Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/KERNEL-REPLACEMENT-CARRIER/V4", &root))
+}
 impl NativeCarrierPurposeV4 {
     fn id(&self) -> Hash64 {
         match self {
             Self::Enrollment { root, .. } | Self::KernelEnrollmentV4 { root, .. } => *root,
-            Self::KernelReplacementV4 { root, .. } => {
-                Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/KERNEL-REPLACEMENT-CARRIER/V4", root))
-            }
+            Self::KernelReplacementV4 { root, .. } => kernel_replacement_carrier_id_v4(*root),
             Self::Answer { event, .. } => *event,
             Self::Release { root, .. } => {
                 Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/RELEASE-CARRIER/V4", root))

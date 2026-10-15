@@ -62,6 +62,11 @@ pub const CERTIFICATION_CLASS_PREFIX_V1: u8 = 0x43;
 pub const CERTIFICATION_NETWORK_PREFIX_V1: u8 = 0x4E;
 /// `'F' ‖ [0; 64]` → [`PalwCertifiedFrontierFloorV1`] (the frontier no conviction can reach any more).
 pub const CERTIFICATION_FRONTIER_FLOOR_PREFIX_V1: u8 = 0x46;
+/// `'V' ‖ native certification id` → [`PalwClaimCertificationRowV1`] of an owning39 MINING claim (RFC-0002 §II.14): the SAME
+/// commit-then-draw, global-pool, m-of-k rule, policy, seed anchor, inner-75 attestation and verdict as a chain claim's — one
+/// drawn-verifier mechanism, two subject kinds. Its `claim` is the native mining claim id, `class_id` the native model id, and
+/// `final_daa` the complete Master's escrow-Final DAA. Certification credits nothing here: the native fold issues the receipt.
+pub const CERTIFICATION_NATIVE_MINING_PREFIX_V39: u8 = 0x56;
 
 pub const PALW_CERTIFICATION_ID_DOMAIN_V1: &[u8] = b"misaka-palw/security-certification/id/v1";
 pub const PALW_CERTIFICATION_SEED_DOMAIN_V1: &[u8] = b"misaka-palw/security-certification/seed/v1";
@@ -258,6 +263,24 @@ fn hash64(domain: &[u8], parts: &[&[u8]]) -> EligDigestV1 {
 /// The certification id of a claim — what the attestation's `exam` field names.
 pub fn palw_certification_id_v1(claim_id: &Hash64) -> EligDigestV1 {
     hash64(PALW_CERTIFICATION_ID_DOMAIN_V1, &[claim_id.as_byte_slice()])
+}
+
+/// The certification id of an owning39 mining claim (domain-separated from every chain claim's).
+pub fn palw_native_certification_id_v39(mining_claim: &Hash64) -> EligDigestV1 {
+    hash64(PALW_CERTIFICATION_ID_DOMAIN_V1, &[b"native39-mining", mining_claim.as_byte_slice()])
+}
+pub fn certification_native_key_v39(id: &EligDigestV1) -> Vec<u8> {
+    prefixed(CERTIFICATION_NATIVE_MINING_PREFIX_V39, id)
+}
+/// The decided row of an owning39 mining claim, if any.
+pub fn palw_native_mining_certification_row_v39(state: &PalwChainStateV2, mining_claim: &Hash64) -> Option<PalwClaimCertificationRowV1> {
+    let key = certification_native_key_v39(&palw_native_certification_id_v39(mining_claim));
+    state.kernel_route_state_v1().and_then(|route| route.aux_row::<PalwClaimCertificationRowV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key))
+}
+/// **The native subject's certified read** (the `'V'` row's outcome certifies). Gate C reaches it through
+/// `crate::palw_rfc0018_v1::palw_native_independently_work_certified_v39`, never directly.
+pub fn palw_native_mining_security_certified_v39(state: &PalwChainStateV2, mining_claim: &Hash64) -> bool {
+    palw_native_mining_certification_row_v39(state, mining_claim).and_then(|row| row.outcome).is_some_and(|(o, _)| o.certifies())
 }
 
 /// The draw seed: `H(domain ‖ certification id ‖ anchor span ‖ anchor execution key)`.

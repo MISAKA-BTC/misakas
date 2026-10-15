@@ -1046,6 +1046,20 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwStagedPreclaimQuoteResponse::default())
     }
 
+    /// **RFC-0006 consumer v2 (op 245): a class's immutable per-reader router binding.** A node built before op 245 answers the
+    /// default (nothing found).
+    async fn get_palw_router_binding_v2(&self, request: GetPalwRouterBindingV2Request) -> RpcResult<GetPalwRouterBindingV2Response> {
+        self.get_palw_router_binding_v2_call(None, request).await
+    }
+    async fn get_palw_router_binding_v2_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwRouterBindingV2Request,
+    ) -> RpcResult<GetPalwRouterBindingV2Response> {
+        let _ = (connection, request);
+        Ok(GetPalwRouterBindingV2Response::default())
+    }
+
     /// **ADR-0152-adjacent: one class's Activation Pool** (op 200; testnet-12) — its budgets, its
     /// payees, the terms and the sink a top-up pays into. A node built before op 200 drops the
     /// WebSocket on it: ask it last on a connection, or reconnect.

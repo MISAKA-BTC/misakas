@@ -2061,6 +2061,8 @@ from!(item: &kaspa_rpc_core::RpcPalwModelLifecycle, protowire::RpcPalwModelLifec
         eligibility_final_weight: item.eligibility_final_weight,
         eligibility_exams_passed: item.eligibility_exams_passed,
         eligibility_lineage_attempts: item.eligibility_lineage_attempts,
+        model_tier: item.model_tier.clone(),
+        model_tier_permille: item.model_tier_permille,
         admission_claims_per_span_milli: item.admission_claims_per_span_milli,
         probes_passed: item.probes_passed,
         probes_failed: item.probes_failed,
@@ -4566,6 +4568,9 @@ try_from!(item: &protowire::RpcPalwModelLifecycle, kaspa_rpc_core::RpcPalwModelL
         eligibility_final_weight: item.eligibility_final_weight || item.eligibility_stage.is_empty(),
         eligibility_exams_passed: item.eligibility_exams_passed,
         eligibility_lineage_attempts: item.eligibility_lineage_attempts,
+        // ADR-0179: a peer that sends no tier (an older node) is untiered — every model 1.0.
+        model_tier: if item.model_tier.is_empty() { "not-governed".to_string() } else { item.model_tier.clone() },
+        model_tier_permille: if item.model_tier.is_empty() { 1_000 } else { item.model_tier_permille },
         admission_claims_per_span_milli: item.admission_claims_per_span_milli,
         probes_passed: item.probes_passed,
         probes_failed: item.probes_failed,
@@ -6000,6 +6005,34 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwRfc0016ReportResponse>, protowire:
 });
 try_from!(item: &protowire::GetPalwRfc0016ReportResponseMessage, RpcResult<kaspa_rpc_core::GetPalwRfc0016ReportResponse>, {
     Self { available: item.available, armed: item.armed, now_daa: item.now_daa, report_json: item.report_json.clone() }
+});
+
+from!(item: &kaspa_rpc_core::GetPalwRouterBindingV2Request, protowire::GetPalwRouterBindingV2RequestMessage, {
+    Self { class_hex: item.class_hex.clone() }
+});
+try_from!(item: &protowire::GetPalwRouterBindingV2RequestMessage, kaspa_rpc_core::GetPalwRouterBindingV2Request, {
+    Self { class_hex: item.class_hex.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwRouterBindingV2Response>, protowire::GetPalwRouterBindingV2ResponseMessage, {
+    Self {
+        available: item.available,
+        armed: item.armed,
+        now_daa: item.now_daa,
+        found: item.found,
+        bound_from_daa: item.bound_from_daa,
+        row_hex: item.row_hex.clone(),
+        error: None,
+    }
+});
+try_from!(item: &protowire::GetPalwRouterBindingV2ResponseMessage, RpcResult<kaspa_rpc_core::GetPalwRouterBindingV2Response>, {
+    Self {
+        available: item.available,
+        armed: item.armed,
+        now_daa: item.now_daa,
+        found: item.found,
+        bound_from_daa: item.bound_from_daa,
+        row_hex: item.row_hex.clone(),
+    }
 });
 
 from!(item: &kaspa_rpc_core::GetPalwStagedPreclaimQuoteRequest, protowire::GetPalwStagedPreclaimQuoteRequestMessage, {

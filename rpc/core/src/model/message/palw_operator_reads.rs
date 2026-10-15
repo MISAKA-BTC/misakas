@@ -1922,12 +1922,18 @@ pub struct RpcPalwModelLifecycle {
     pub eligibility_exams_passed: u32,
     /// Exam attempts consumed by the class's lineage (all registrations of the same weights).
     pub eligibility_lineage_attempts: u32,
+    /// **ADR-0179 (wire version 4): the model's tier** — `not-governed` below `palw_model_tier_v1` (every shipped network), `approved`
+    /// (genesis or an annual fork listing: 1.0) or `registered` (fixed 0.3 from registration; no review ever raises it).
+    pub model_tier: String,
+    /// The tier's allocation coefficient `c_m`, permille (1000 below the fence and for `approved`).
+    pub model_tier_permille: u32,
 }
 
 impl Serializer for RpcPalwModelLifecycle {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        // Version 2 appends `recommended_pool_sompi` (the Activation Pool's P4, 2026-09-25); version 3 the RFC-0017 eligibility fields.
-        store!(u16, &3, writer)?;
+        // Version 2 appends `recommended_pool_sompi` (the Activation Pool's P4, 2026-09-25); version 3 the RFC-0017 eligibility fields;
+        // version 4 ADR-0179's model tier.
+        store!(u16, &4, writer)?;
         store!(String, &self.class_id, writer)?;
         store!(String, &self.artifact_root, writer)?;
         store!(bool, &self.is_base_class, writer)?;
@@ -1972,6 +1978,8 @@ impl Serializer for RpcPalwModelLifecycle {
         store!(bool, &self.eligibility_final_weight, writer)?;
         store!(u32, &self.eligibility_exams_passed, writer)?;
         store!(u32, &self.eligibility_lineage_attempts, writer)?;
+        store!(String, &self.model_tier, writer)?;
+        store!(u32, &self.model_tier_permille, writer)?;
         Ok(())
     }
 }
@@ -2026,6 +2034,9 @@ impl Deserializer for RpcPalwModelLifecycle {
             eligibility_final_weight: if version >= 3 { load!(bool, reader)? } else { true },
             eligibility_exams_passed: if version >= 3 { load!(u32, reader)? } else { 0 },
             eligibility_lineage_attempts: if version >= 3 { load!(u32, reader)? } else { 0 },
+            // Versions 1–3 (a node before ADR-0179) are untiered: every model weighs 1.0.
+            model_tier: if version >= 4 { load!(String, reader)? } else { "not-governed".to_string() },
+            model_tier_permille: if version >= 4 { load!(u32, reader)? } else { 1_000 },
         })
     }
 }

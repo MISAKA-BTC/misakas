@@ -135,6 +135,12 @@ pub fn palw_rfc0016_rights_epoch_v1(
     // ADR-0177 C5: verifier capital only with a defined liability).
     let mut values = *values;
     values.entrant_min_capital_sompi = values.entrant_min_capital_sompi.max(params.min_collateral_sompi());
+    // ADR-0179 / round 5 (user decisions 2026-10-15): past `palw_model_tier_v1` there is no model review — no Probation and no
+    // promotion, hence no entrant — so the entrant reserve is MOOT and is not deducted (ε = 0): the registered tier's aggregate cap κ in
+    // the allocation weights is the one tier-level bound.
+    if params.model_tier_v1().is_some_and(|mirror| mirror.active_at(start)) {
+        values.entrant_reserve_permille = 0;
+    }
     palw_rights_issue_v1(epoch_index, start, length, n_exp, &values, weights.as_ref(), &entrants, |m| {
         eligibility.block_rights_eligible_v1(m, start)
     })

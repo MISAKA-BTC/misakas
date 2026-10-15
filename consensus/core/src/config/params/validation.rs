@@ -159,6 +159,7 @@ impl Params {
         self.validate_palw_native_final_v27()?;
         self.validate_palw_stage_execution_v28()?;
         self.validate_palw_native_execution_v39()?;
+        self.validate_palw_native_mining_v39()?;
         // **RFC-0004 Part II's dormant fence** (`crate::palw_typed_roots_v1`): refused when armed.
         self.validate_palw_typed_roots_v1()?;
         // **RFC-0009 L2's dormant fence** (`crate::palw_fork_choice_commitment_v1`): refused when armed.
@@ -215,6 +216,8 @@ impl Params {
         self.validate_palw_memory_routing_court_v2()?;
         // **RFC-0017's model eligibility** (`crate::palw_model_eligibility_v1`): refused when armed.
         self.validate_palw_model_eligibility_v1()?;
+        // **ADR-0179's model tiers** (`crate::palw_model_tier_v1`): refused when armed; add-only lists; the mirror must agree.
+        self.validate_palw_model_tier_v1()?;
         // **RFC-0018's five fences** (`crate::palw_rfc0018_v1`): refused when armed; the mirror must agree.
         self.validate_palw_rfc0018_v1()?;
         self.validate_palw_permissionless_panel_v1()?;

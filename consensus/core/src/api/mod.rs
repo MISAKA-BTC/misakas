@@ -604,6 +604,11 @@ pub trait ConsensusApi: Send + Sync {
     ) -> Result<(), String> {
         Err("current native kernel material authority unavailable".into())
     }
+    /// RFC-0006 read-only census of the eligible historical headers the EXEC origin migration needs, from this node's own
+    /// store at its tip (`listed` caps the returned claim lists). Authorizes nothing.
+    fn palw_exec_origin_coverage_v1(&self, _listed: usize) -> Result<crate::palw_work_slice_v2::PalwExecOriginCoverageV1, String> {
+        Err("historical header coverage census unavailable".into())
+    }
     fn palw_material_generation_authority_v4(
         &self,
         _root: Hash64,
@@ -1631,6 +1636,14 @@ pub trait ConsensusApi: Send + Sync {
     /// labelled), with the pre-lottery quote for `class` where asked. `None` off ConsensusV2 or with no PALW tip.
     fn palw_rfc0016_report_v1(&self, _class: Option<crate::Hash64>) -> Result<Option<(u64, bool, String)>, String> {
         Err("RFC-0016 report unavailable".into())
+    }
+
+    /// **RFC-0006 consumer v2 (op 245): a class's immutable per-reader router binding** (kernel-route aux 139) at the virtual tip:
+    /// `(now_daa, armed, Some((bound_from_daa, the row's borsh bytes)))`, `None` for the row where the class declared none. `Ok(None)`
+    /// off ConsensusV2 or with no PALW tip.
+    #[allow(clippy::type_complexity)]
+    fn palw_router_binding_v2(&self, _class: crate::Hash64) -> Result<Option<(u64, bool, Option<(u64, Vec<u8>)>)>, String> {
+        Err("router binding read unavailable".into())
     }
 
     fn palw_staged_preclaim_quote_v1(

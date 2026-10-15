@@ -106,12 +106,21 @@ impl PalwBeaconSourceFeeFenceV1 {
 }
 impl Params {
     pub fn validate_palw_beacon_source_fee_v1(&self) -> Result<(), PalwModeV2Error> {
-        if self.palw_beacon_source_fee_v1.is_some_and(|f| f.activation != ForkActivation::never()) {
+        let Some(f) = self.palw_beacon_source_fee_v1.filter(|f| f.activation != ForkActivation::never()) else {
+            return Ok(());
+        };
+        // Fees are charged on opt-in sources and on paid-claim targets: both armed at or below.
+        let at_or_below = |a: Option<ForkActivation>| a.is_some_and(|a| a != ForkActivation::never() && a.daa_score() <= f.activation.daa_score());
+        if !at_or_below(self.palw_beacon_source_opt_in_v1.map(|o| o.activation))
+            || !at_or_below(self.palw_claim_challenge_v2.map(|c| c.activation))
+        {
             return Err(PalwModeV2Error::Invalid(
-                "palw_beacon_source_fee_v1 cannot be armed: mandatory funded source policy, measured economic floors and public security/resource approval are incomplete",
+                "palw_beacon_source_fee_v1 requires the opt-in source and the paid claim challenge fences at or below it",
             ));
         }
-        Ok(())
+        // The economic floors (d_src, N_max) and public security/resource approval are measured and reviewed: a pinned record
+        // for this exact policy (EMPTY: dormant). testnet-12 DAA 14,000 release plan.
+        self.palw_rfc0608_measured_v1(crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::BeaconSourceFeeV1, &f.policy)
     }
 }
 impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {

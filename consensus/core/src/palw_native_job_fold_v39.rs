@@ -765,11 +765,20 @@ pub(super) fn apply(
         47..=49 => public::apply(builder, ctx, signer, &p, action, body),
         46 | 50 | 52 | 56 => protected::apply(builder, ctx, signer, &p, action, body),
         51 => finalize(builder, ctx, signer, &p, body),
+        NATIVE_COLLECT_ACTION_V39 => collect::collect(builder, ctx, signer, &p, body),
+        NATIVE_COMMIT_PART_ACTION_V39 => collect::commit_part(builder, ctx, signer, &p, body),
+        NATIVE_COMMIT_ASSEMBLE_ACTION_V39 => collect::commit_assemble(builder, ctx, signer, &p, body),
         65..=70 => super::palw_native_master_fold_v39::apply(builder, ctx, signer, action, body),
         61..=64 => material::apply(builder, ctx, signer, &p, action, body),
+        73..=79 => super::palw_native_mining_fold_v39::apply(builder, ctx, signer, &p, action, body),
         _ => Err(bad("native39 action has no implemented current native transition")),
     }
 }
+#[path = "palw_native_collect_fold_v39.rs"]
+pub(super) mod collect;
+#[path = "palw_native_job_audit_fold_v39.rs"]
+mod audit;
+pub(super) use audit::audit_policies_v39;
 
 #[path = "palw_native_protected_fold_v39.rs"]
 mod protected;

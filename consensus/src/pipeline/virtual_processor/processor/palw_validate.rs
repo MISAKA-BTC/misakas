@@ -515,7 +515,7 @@ impl VirtualStateProcessor {
                                 .palw_court_params_v2
                                 .as_ref()
                                 .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                            let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v4(
+                            let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v5(
                                 state,
                                 session_id,
                                 proof,
@@ -533,6 +533,8 @@ impl VirtualStateProcessor {
                                     .map(|f| f.daa_score()),
                                 // RFC-0006 R6-CELL round 4: the coverage closure's mirror (None on every shipped network).
                                 self.palw_state_params_v2.as_ref().and_then(|p| p.cell_coverage_closure_from_daa()),
+                                // RFC-0006 consumer v2's mirror (None on every shipped network).
+                                self.palw_state_params_v2.as_ref().and_then(|p| p.memory_routing_court_from_daa()),
                             )
                             .map_err(|e| e.to_string())?;
                             if derived != *verdict {
@@ -869,7 +871,7 @@ impl VirtualStateProcessor {
                         .palw_court_params_v2
                         .as_ref()
                         .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v4(
+                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v5(
                         state,
                         session_id,
                         proof,
@@ -886,6 +888,8 @@ impl VirtualStateProcessor {
                             .map(|f| f.daa_score()),
                         // RFC-0006 R6-CELL round 4: the coverage closure's mirror (None on every shipped network).
                         self.palw_state_params_v2.as_ref().and_then(|p| p.cell_coverage_closure_from_daa()),
+                        // RFC-0006 consumer v2's mirror (None on every shipped network).
+                        self.palw_state_params_v2.as_ref().and_then(|p| p.memory_routing_court_from_daa()),
                     )
                     .map_err(|e| e.to_string())?;
                     if derived != *verdict {
@@ -2493,6 +2497,70 @@ impl VirtualStateProcessor {
                     // Full deterministic adjudication runs in the typed fold.
                     // This String-only walk must not turn a local workspace
                     // refusal into a skipped invalid peer object.
+                }
+                // RFC-0006 consumer v2 (tag 170): the fence, the close ceiling and the signer — the class registrant for a router
+                // binding (like `ClassSemanticsDeclaredV1`), the accuser for an accusation (like tag 243). Adjudication and the
+                // binding's graph checks run in the typed fold.
+                Obj::MemoryRoutingV2 { object } => {
+                    use kaspa_consensus_core::palw_memory_routing_v2 as mr;
+                    if !self.palw_memory_routing_court_v2_at(point.daa_score) {
+                        return Err("the memory/routing consumer v2 is dormant on this network".into());
+                    }
+                    let court = self.palw_court_params_v2.as_ref().ok_or("memory/routing object without V2 court parameters")?;
+                    object.may_ride(court.max_close_bytes())?;
+                    let network = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    match object.as_ref() {
+                        mr::PalwMemoryRoutingObjectV2::RouterBindingDeclared { declaration, signature } => {
+                            use kaspa_consensus_core::palw_router_binding_v2 as rb;
+                            let class = state.class(&declaration.class_id).ok_or("router binding names an unknown class")?;
+                            if class.artifact_root != declaration.artifact_root {
+                                return Err("router binding names another artifact".into());
+                            }
+                            let registrant = class
+                                .registrant_bond
+                                .as_ref()
+                                .ok_or("a sentinel registration has no signing registrant for a router binding")?;
+                            let bond = state.bond(registrant).ok_or("the signing registrant is not a public bond")?;
+                            if !matches!(bond.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                                return Err("the signing registrant is not Active".into());
+                            }
+                            let message = rb::palw_router_binding_message_v2(network, declaration);
+                            if !Self::verify_mldsa87_with_context_bool(
+                                &bond.pubkey,
+                                message.as_byte_slice(),
+                                signature,
+                                rb::PALW_ROUTER_BINDING_SIGNATURE_CONTEXT_V2,
+                            ) {
+                                return Err("the class registrant did not sign this router binding".into());
+                            }
+                        }
+                        mr::PalwMemoryRoutingObjectV2::Accused { accusation } => {
+                            let claim = state.claim(&accusation.claim).ok_or("memory/routing accusation names an absent native claim")?;
+                            let ladder =
+                                state.class_step_ladder_v1(&claim.class_id, self.palw_court_step_ladder_at(point.daa_score, court));
+                            accusation.validate_shape(ladder)?;
+                            if claim.bond != accusation.executor_bond
+                                || claim.execution_root != accusation.execution_root
+                                || claim.trace_root != accusation.trace_root
+                            {
+                                return Err("memory/routing accusation executor/roots are not the actual native claim's".into());
+                            }
+                            state.class(&claim.class_id).ok_or("memory/routing accusation class is absent")?;
+                            let signer = state.bond(&accusation.accuser_bond).ok_or("memory/routing accuser bond is absent")?;
+                            let message = mr::palw_memory_routing_session_id_v2(network, accusation);
+                            if !Self::verify_mldsa87_with_context_bool(
+                                &signer.pubkey,
+                                message.as_byte_slice(),
+                                &accusation.signature,
+                                mr::PALW_MEMORY_ROUTING_MLDSA87_CONTEXT_V2,
+                            ) {
+                                return Err("memory/routing accusation is not signed by its registered accuser".into());
+                            }
+                        }
+                    }
                 }
                 Obj::ShardCourtAccused { accusation } => {
                     let claim_id = accusation.claim;

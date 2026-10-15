@@ -1080,6 +1080,9 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) if matches!(bytes.get(2), Some(41..=79)) => {
             e.native_final.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
                 || e.native_execution39.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
+                // Mining actions 73–79: their own dormant fence too (A-2: unjudged below it, no state effect).
+                || matches!(bytes.get(2), Some(73..=79))
+                    && e.native_mining39.as_ref().is_none_or(|f| !f.activation.is_active(ctx.daa_score))
         }
         _ => false,
     }) {
@@ -1425,6 +1428,27 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     if let KernelRouteObjectV1::OptInBeaconSource { job, .. } | KernelRouteObjectV1::OptInPaidBeaconSource { job, .. } = object {
         if builder.state.kernel_route.as_ref().is_some_and(|r| r.paid_claim_job_is_enrolled_v3(job).unwrap_or(true)) {
             return Err(refused("paid checker-enrolled jobs cannot be Panel-independent beacon sources"));
+        }
+    }
+    // RFC-0007 R7-SOURCE acyclicity (inside the dormant palw_beacon_source_fee_v1 path; no preset arms it): the source and
+    // challenge dependency graph must stay acyclic. A paid target's own producer or its own base job never seeds that
+    // target's verification, and two producers never act as each other's live sources (a two-cycle of mutual
+    // certification). A distinct registered operator or key is identity only, not evidence of independence; that stays an
+    // explicit assumption (claim-v2 ASSUMPTIONS).
+    if let KernelRouteObjectV1::OptInPaidBeaconSource { context, producer, job, .. } = &object
+        && let Some(route) = builder.state.kernel_route.as_ref()
+        && let Ok(target) = route.paid_claim_authority_v2(context)
+    {
+        if *producer == target.enrollment.producer || *job == target.job.base_job {
+            return Err(refused("a paid target's own producer or base job cannot seed its own verification"));
+        }
+        let mutual = ledger.beacon_sources.iter().any(|((other_context, source_producer), row)| {
+            *source_producer == target.enrollment.producer
+                && row.outcome.is_none()
+                && route.paid_claim_authority_v2(other_context).is_ok_and(|other| other.enrollment.producer == *producer)
+        });
+        if mutual {
+            return Err(refused("two producers cannot be each other's live beacon sources (mutual certification)"));
         }
     }
     let kid = palw_kernel_bond_id_v1(signer);

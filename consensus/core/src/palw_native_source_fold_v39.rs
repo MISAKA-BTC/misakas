@@ -453,6 +453,18 @@ impl ClassHold {
         object_id(b"misaka-palw/native/original-class-retention/v39", self)
     }
 }
+/// **Row 14 (expiry collection): an authenticated table-112 kind-94 row read as an expired-consent candidate.** `key`/`value` are
+/// one row of a [`crate::palw_native_audit_proof_v39::VerifiedNativeAuxRowsV39`]-authenticated stream; `Some((hold id, until))` only for a canonical v39 producer
+/// consent hold whose key, id and root agree. The caller compares `until` with the DAA it will be accepted at; action 72 itself
+/// re-reads the row and refuses any hold that is not actually expired then, so this reader grants nothing.
+pub fn native_consent_hold_expiry_v39(key_bytes: &[u8], value: &[u8]) -> Option<(Digest, u64)> {
+    if key_bytes.len() != 66 || key_bytes[0] != 39 || key_bytes[1] != 94 || value.len() > 256 {
+        return None;
+    }
+    let id: Digest = key_bytes[2..].try_into().ok()?;
+    let (root, hold): (Digest, ClassHold) = borsh::from_slice(value).ok()?;
+    (hold.version == 39 && hold.kind == HOLD_CONSENT && hold.id() == id && hold.root() == root).then_some((id, hold.until))
+}
 pub(super) fn class_hold_id(kind: u8, object: Digest) -> Digest {
     object_id(b"misaka-palw/native/original-class-holder/v39", &(kind, object))
 }

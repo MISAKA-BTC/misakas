@@ -65,3 +65,12 @@ cryptographic proofs of correctness of LLM or model computation.
 
 See [docs/PRINCIPLES.md](docs/PRINCIPLES.md), especially section 8. Do not
 reinterpret legacy terminology as permission to violate this decision.
+
+## 凍結前提: モデルの二階層、モデル単位の検証は不採用 — 2026-10-15 ユーザー決定
+
+- genesis と年次フォーク(年 1 回程度のソフト/ハードフォーク)で指定されたモデルは **1.0**。
+- 後から登録したモデルは、**登録した時点から審査なしで 0.3 に固定**。昇格・更新・失効・試行手数料はない。**1.0 になる経路は年次フォークでの指定だけ**。
+- **モデル単位の検証・審査は不採用。** モデルに対して検証を行うと、その検証において何を信頼するかの問題が発生し、解決しないため。モデルの公開状況・保持者数・取得可能性をチェーンで審査する仕組みを提案・実装しない。
+- 係数は配分重みに一度だけ(`A_m = c_m · S̄_m^1.5`)。登録モデル全体の発行上限で多数登録の迂回を防ぐ。
+- **claim 単位の検証(court、Gate C / `SecurityCertified`、claim ごとの抽選検証者認証)は全モデルで維持する。** 未認証 claim はどの階層でも fork choice・決済を進めない。
+- 詳細は `docs/PRINCIPLES.md` §9。これは凍結した前提で、エージェントは再審・代替案の提案をしない。

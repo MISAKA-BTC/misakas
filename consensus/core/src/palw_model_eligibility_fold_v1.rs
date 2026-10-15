@@ -31,6 +31,16 @@ pub const PALW_ELIGIBILITY_NOT_ELIGIBLE_CODE_V1: &str = "ELIG_NOT_ELIGIBLE";
 /// The code a probation claim over its budget is refused with.
 pub const PALW_ELIGIBILITY_PROBATION_BUDGET_CODE_V1: &str = "ELIG_PROBATION_BUDGET";
 
+/// **Round 5 (user decision 2026-10-15): model-level review is ABOLISHED for every model.** Past `palw_model_tier_v1` (ADR-0179) this
+/// whole review — the stages Registered → Probation → Eligible → Lapsed, the exam (inner 74/75), the draws, the attempt fee, the attempt
+/// caps and the fair queue, renewal and lapse, the probation grant and pin — is unreachable: every read answers "not governed" (the
+/// old rule), exam objects are refused and the sweep does nothing. A registered model is the tier system's fixed 0.3 from its
+/// registration; per-claim safety is RFC-0018 Gate C's alone. (Validation arms `palw_model_eligibility_v1` only with the tier fence at
+/// or below it, so the review never runs on any valid network; below the tier fence the code stays the dormant RFC-0017 rule.)
+pub(super) fn eligibility_review_retired_v1(params: &PalwStateParamsV2, daa: u64) -> bool {
+    params.model_tier_v1().is_some_and(|mirror| mirror.active_at(daa))
+}
+
 /// How long a decided exam row is kept before it retires (its counters live on in the lineage / principal / network rows).
 fn exam_retention_daa(policy: &PalwModelEligibilityPolicyV1) -> u64 {
     policy.attempt_epoch_daa
@@ -93,6 +103,9 @@ pub(super) fn eligibility_of_v1(
     class_id: &Hash64,
     daa: u64,
 ) -> Option<(PalwEligibilityStageV1, PalwEligibilityRightsV1)> {
+    if eligibility_review_retired_v1(params, daa) {
+        return None;
+    }
     let mirror = params.model_eligibility_v1_at(daa)?;
     let view = eligibility_class_view_v1(state, params, class_id)?;
     let stage = palw_eligibility_effective_stage_v1(Some(mirror), &view.facts, view.row.as_ref(), daa)?;
@@ -154,6 +167,9 @@ pub(super) fn eligibility_probation_preview_v1(
     request_units: u64,
 ) -> Result<Option<PalwEligibilityProbationTicketV1>, PalwStateV2Error> {
     let now = ctx.daa_score;
+    if eligibility_review_retired_v1(builder.params, now) {
+        return Ok(None);
+    }
     let Some(mirror) = builder.params.model_eligibility_v1_at(now).copied() else { return Ok(None) };
     let Some(view) = eligibility_class_view_v1(&builder.state, builder.params, class_id) else { return Ok(None) };
     let Some(stage) = palw_eligibility_effective_stage_v1(Some(&mirror), &view.facts, view.row.as_ref(), now) else {
@@ -252,80 +268,11 @@ pub(super) fn eligibility_probation_commit_v1(
 /// `retire_claim`, the consistency check) reads back — so this returns `contribution` unchanged (which is that 0). Its Final completes
 /// the job and settles its escrow; it adds no chain-choice weight. Below the fence there are no pins.
 ///
-/// **U-2 (user decision 2026-10-15): the pin OUTLIVES the Final** — it retires only when the claim leaves the state or is voided
-/// ([`sweep_model_eligibility_v1`]) — so [`palw_probation_security_credit_v1`] can still say, of a `Final` claim the safe frontier,
-/// the settled-anchor depth or rule E reads, that it was a Probation claim with no credit until certified.
+/// The pin outlives the Final (retired when the claim leaves the state or is voided — [`sweep_model_eligibility_v1`]). Round 5 (user
+/// decision 2026-10-15): with model review abolished no pin is ever written past `palw_model_tier_v1`.
 pub(super) fn eligibility_final_weight_v1(_builder: &mut TransitionBuilder<'_>, _claim_id: &Hash64, contribution: u128) -> u128 {
     // The contribution is the budget's F = 0 grant already (every re-derivation reads the same number); nothing is written here.
     contribution
-}
-
-/// **U-2 (P0, user decision 2026-10-15) — does RFC-0017 BAR this claim from `SecurityCertified` credit outright?** `true` for a claim
-/// accepted under `Probation` (it holds a probation pin, which outlives its `Final` and retires only when the claim leaves the state or
-/// is voided — so the answer is frozen over the claim's life, as every Gate C re-derivation needs). Registered / Lapsed classes are
-/// refused at the claim gate (`ELIG_NOT_ELIGIBLE`), so no such claim exists to bar. Never asks Gate C (no recursion): RFC-0018's
-/// single predicate `palw_independently_work_certified_v1` asks THIS, so every Gate C read site — safe frontier, settlement depth,
-/// rule-E participation, settled anchors, provisional/final weight, the coinbase credit leg — inherits the bar. `false` below the
-/// fence (no pins exist).
-pub fn palw_eligibility_bars_security_credit_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> bool {
-    row_of::<PalwEligibilityProbationClaimRowV1>(state, &eligibility_probation_claim_key_v1(&claim_id.as_bytes())).is_some()
-}
-
-/// **U-2 / U-5 (user decisions 2026-10-15): may `claim` contribute security credit, given its class's eligibility at the claim's
-/// acceptance?** `false` for a claim of a `Probation` class or of a pre-fence class in its grace
-/// ([`palw_eligibility_security_credit_needs_certification_v1`]) unless RFC-0018 Gate C governs AND certifies it; `true` otherwise
-/// (RFC-0017 adds nothing). The grace keeps the class's rights; it never issues uncertified security credit.
-pub fn palw_eligibility_security_credit_v1(
-    state: &PalwChainStateV2,
-    params: &PalwStateParamsV2,
-    claim_id: &Hash64,
-    claim: &PalwClaimStateV2,
-) -> bool {
-    if !palw_probation_security_credit_v1(state, params, claim_id, claim) {
-        return false;
-    }
-    let needs = eligibility_class_view_v1(state, params, &claim.class_id).is_some_and(|view| {
-        palw_eligibility_security_credit_needs_certification_v1(
-            params.model_eligibility_v1(),
-            &view.facts,
-            view.row.as_ref(),
-            claim.accepted_daa,
-        )
-    });
-    !needs
-        || (crate::palw_rfc0018_v1::palw_gate_c_governs_v1(params, claim)
-            && crate::palw_rfc0018_v1::palw_independently_work_certified_v1(
-                claim_id,
-                claim,
-                &crate::palw_rfc0018_v1::PalwGateCViewV1::of(params, state),
-            ))
-}
-
-/// **U-2 (user decision 2026-10-15): may `claim` contribute SECURITY credit** — the safe frontier, the settled-anchor depth, rule E's
-/// participation? (A Probation claim's safe weight and bounded-immature weight are 0 whatever this says: `F = 0`, immature 0.) A
-/// claim RFC-0017 pinned as a weightless Probation claim only once
-/// RFC-0018 Gate C both governs it and certifies it ([`crate::palw_rfc0018_v1::palw_independently_work_certified_v1`] — the
-/// drawn-verifier m-of-k approval, premise-based certification, never a computation proof); below Gate C's fence it has NO such credit
-/// (the legacy `true` of that predicate never reaches a Probation claim). Every other claim: `true` (RFC-0017 adds nothing). The
-/// sites that read safe frontier / settlement depth / rule E are RFC-0018's: with this fence they are reached through Gate C itself
-/// (validation arms Gate C at or below this fence), and this predicate is the narrow interface they may AND in.
-pub fn palw_probation_security_credit_v1(
-    state: &PalwChainStateV2,
-    params: &PalwStateParamsV2,
-    claim_id: &Hash64,
-    claim: &PalwClaimStateV2,
-) -> bool {
-    let key = eligibility_probation_claim_key_v1(&claim_id.as_bytes());
-    let weightless_probation = row_of::<PalwEligibilityProbationClaimRowV1>(state, &key).is_some_and(|pin| !pin.final_weight);
-    if !weightless_probation {
-        return true;
-    }
-    crate::palw_rfc0018_v1::palw_gate_c_governs_v1(params, claim)
-        && crate::palw_rfc0018_v1::palw_independently_work_certified_v1(
-            claim_id,
-            claim,
-            &crate::palw_rfc0018_v1::PalwGateCViewV1::of(params, state),
-        )
 }
 
 /// **Inner 74**: commit an exam. The committer is any Active bond; the attempt is counted against the class's lineage, the
@@ -337,6 +284,11 @@ pub(super) fn apply_commit_eligibility_exam_v1(
     commit: &PalwEligibilityExamCommitV1,
 ) -> Result<(), PalwStateV2Error> {
     let now = ctx.daa_score;
+    if eligibility_review_retired_v1(builder.params, now) {
+        return Err(refuse(
+            "model-level review is abolished (palw_model_tier_v1, user decision 2026-10-15 round 5): no exam is taken",
+        ));
+    }
     let mirror = *builder.params.model_eligibility_v1_at(now).ok_or_else(|| refuse("palw_model_eligibility_v1 is not in force"))?;
     let policy = mirror.policy;
     policy.validate().map_err(refuse)?;
@@ -441,6 +393,9 @@ pub(super) fn apply_attest_eligibility_exam_v1(
     attestation: &PalwEligibilityAttestationV1,
 ) -> Result<(), PalwStateV2Error> {
     let now = ctx.daa_score;
+    if eligibility_review_retired_v1(builder.params, now) {
+        return Err(refuse("model-level review is abolished (palw_model_tier_v1): no exam attestation is taken"));
+    }
     builder.params.model_eligibility_v1_at(now).ok_or_else(|| refuse("palw_model_eligibility_v1 is not in force"))?;
     attestation.validate().map_err(refuse)?;
     if attestation.verifier != palw_kernel_bond_id_v1(signer) {
@@ -522,6 +477,9 @@ pub(super) fn sweep_model_eligibility_v1(
     ctx: &PalwBlockContextV2,
 ) -> Result<(), PalwStateV2Error> {
     let now = ctx.daa_score;
+    if eligibility_review_retired_v1(builder.params, now) {
+        return Ok(());
+    }
     let Some(mirror) = builder.params.model_eligibility_v1_at(now).copied() else { return Ok(()) };
     let policy = mirror.policy;
     let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
@@ -637,7 +595,7 @@ pub(super) fn sweep_model_eligibility_v1(
             Some(ELIGIBILITY_PROBATION_CLAIM_PREFIX_V1) if key.len() == 65 => {
                 // A pin whose claim is gone (retired from the state) or voided retires; its units stay charged (consumption is
                 // history). U-2: a `Final` claim KEEPS its pin while it is in the state (it still carries no security credit until
-                // certified — `palw_probation_security_credit_v1`).
+                // certified — RFC-0018 Gate C; round 5: no pin is written past `palw_model_tier_v1`).
                 let mut id = [0u8; 64];
                 id.copy_from_slice(&key[1..]);
                 let kept = builder
@@ -685,6 +643,19 @@ pub fn palw_eligibility_status_of_v1(
     daa: u64,
 ) -> PalwEligibilityStatusReadV1 {
     let Some(view) = eligibility_class_view_v1(state, params, class_id) else { return PalwEligibilityStatusReadV1::default() };
+    // ADR-0179: the model's tier and its allocation coefficient (`not-governed` / 1000 below `palw_model_tier_v1`).
+    let tier_mirror = params.model_tier_v1();
+    let tier = crate::palw_model_tier_v1::palw_model_tier_at_v1(state, params, class_id, daa);
+    let model_tier = if tier_mirror.is_some_and(|m| m.active_at(daa)) { tier.name() } else { "not-governed" };
+    let model_tier_permille = crate::palw_model_tier_v1::palw_model_tier_coefficient_permille_v1(tier_mirror, tier, daa);
+    // Round 5: past the tier fence there is no model review — the stage reads `not-governed` with the old rule's rights.
+    if eligibility_review_retired_v1(params, daa) {
+        return PalwEligibilityStatusReadV1 {
+            model_tier: model_tier.to_string(),
+            model_tier_permille,
+            ..PalwEligibilityStatusReadV1::default()
+        };
+    }
     let mirror = params.model_eligibility_v1();
     let (stage, next_renewal_daa, subsidy, block_right, final_weight) =
         palw_eligibility_status_v1(mirror, &view.facts, view.row.as_ref(), daa);
@@ -697,5 +668,7 @@ pub fn palw_eligibility_status_of_v1(
         final_weight,
         exams_passed: view.row.map(|r| r.exams_passed).unwrap_or(0),
         lineage_attempts: lineage.attempts_total,
+        model_tier: model_tier.to_string(),
+        model_tier_permille,
     }
 }

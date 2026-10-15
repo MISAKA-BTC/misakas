@@ -887,6 +887,10 @@ mod tests {
                 params.palw_native_execution_v39 =
                     Some(crate::palw_native_execution_v39::PalwNativeExecutionFenceV39::unapproved_probe_at(at, [0; 64]));
             }
+            "palw_native_mining_v39" => {
+                params.palw_native_mining_v39 =
+                    Some(crate::palw_native_mining_v39::PalwNativeMiningFenceV39::unapproved_probe_at(at, [0; 64]));
+            }
             "palw_funded_execution_v11" => {
                 params.palw_funded_execution_v11 =
                     Some(crate::palw_funded_execution_v11::PalwFundedExecutionFenceV11::unapproved_probe_at(at, [0; 64]));
@@ -946,6 +950,10 @@ mod tests {
             "palw_elastic_final_capacity_v1" => params.palw_elastic_final_capacity_v1 = Some(at),
             // RFC-0017's model eligibility: a bare height, refused when armed by `validate_palw_v2`.
             "palw_model_eligibility_v1" => params.palw_model_eligibility_v1 = Some(at),
+            // ADR-0179's model tiers: the design values and empty lists, refused when armed by `validate_palw_v2`.
+            "palw_model_tier_v1" => {
+                params.palw_model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierFenceV1::at(at));
+            }
             // RFC-0018's five dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_dag_sibling_attribution_v1" => params.palw_dag_sibling_attribution_v1 = Some(at),
             "palw_panel_anchor_permissionless_v1" => params.palw_panel_anchor_permissionless_v1 = Some(at),
@@ -1090,6 +1098,8 @@ mod tests {
             "palw_fp_derived_work" => params.palw_fp_derived_work = Some(at),
             "palw_fp_decode_constraint" => params.palw_fp_decode_constraint = Some(at),
             "palw_shard_court" => params.palw_shard_court = Some(at),
+            // RFC-0006 memory/routing court v2: a bare height, refused when armed by `validate_palw_v2` (the probe does not run it).
+            "palw_memory_routing_court_v2" => params.palw_memory_routing_court_v2 = Some(at),
             "palw_shard_licensing" => params.palw_shard_licensing = Some(at),
             "palw_token_lift" => params.palw_token_lift = Some(at),
             // P0a: a bare height; its genesis rule is `validate_palw_v2`'s, which the probe does not run.

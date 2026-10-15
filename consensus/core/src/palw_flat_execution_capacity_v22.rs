@@ -557,6 +557,12 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             NativePaidCarrierRequestV22::AnswerPartV39 { pending, group, index, count, total } => {
                 return self.native_paid_answer_eligibility_v39(*pending, *group, *index, *count, *total, now, mass, service);
             }
+            NativePaidCarrierRequestV22::CommitPartV39 { job, group, index, count, total } => {
+                return self.native_paid_commit_eligibility_v39(*job, *group, Some((*index, *count, *total)), now, mass, service);
+            }
+            NativePaidCarrierRequestV22::CommitAssembleV39 { job, group } => {
+                return self.native_paid_commit_eligibility_v39(*job, *group, None, now, mass, service);
+            }
             _ => {}
         }
         if let NativePaidCarrierRequestV22::ProducerAnswerPartV29 { pending, group, index, count, total } = request {

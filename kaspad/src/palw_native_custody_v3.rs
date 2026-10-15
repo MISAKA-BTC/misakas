@@ -87,6 +87,18 @@ pub trait NativeReadyExchangeV3: Send + Sync {
     ) -> Result<(), String> {
         Err("explicit V4 kernel material ingress unavailable".into())
     }
+    /// RFC08 bounded provider replacement: every new provider replays the original work under its own native state,
+    /// persists material and the new signed generation, then the sponsor's atomic ReplaceBeforeV4 carrier is queued.
+    /// The caller still waits for its own positive native admission; a queued carrier is not acceptance.
+    fn replace_kernel_material_v4(
+        &self,
+        _context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        _bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        _intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+        _grant: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
+    ) -> Result<(), String> {
+        Err("explicit V4 kernel material replacement unavailable".into())
+    }
     /// Read permission/data identity only. The caller obtains the opaque native
     /// authority with its own explicitly configured registered checker key.
     fn fetch_kernel_material_unit_v4(

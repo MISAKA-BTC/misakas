@@ -580,6 +580,10 @@ pub(super) fn apply_object(
                 }
             }
         }
+        // RFC-0006 consumer v2 (tag 170): the router binding and the checkpoint / routed accusations.
+        PalwConsensusObjectV2::MemoryRoutingV2 { object } => {
+            super::palw_memory_routing_fold_v2::apply_memory_routing_v2(builder, ctx, object)?;
+        }
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {
                 return Err(PalwStateV2Error::ShardCourtDormant);

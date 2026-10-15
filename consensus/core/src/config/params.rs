@@ -2994,6 +2994,9 @@ pub struct Params {
     pub palw_stage_execution_v28: Option<crate::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
     /// Owning39 source, class, large material and whole native execution. Dormant on all presets.
     pub palw_native_execution_v39: Option<crate::palw_native_execution_v39::PalwNativeExecutionFenceV39>,
+    /// RFC-0002 §II.14: owning39 ordinary mining (registration, seats, mining claims, receipts; stage actions 73–79 and the
+    /// `PNR9` receipt-block carriage). Dormant on every preset; `validate_palw_native_mining_v39` refuses it armed.
+    pub palw_native_mining_v39: Option<crate::palw_native_mining_v39::PalwNativeMiningFenceV39>,
 
     /// **ADR-0178: rule E, the fork choice that heals a partition on bonded participation** ([`crate::palw_fork_choice_rule_e_v1`]):
     /// past it the sink search weighs every valid tip, the deep-reorg gate and the IBD commit compare the two tips' EXCLUSIVE pasts
@@ -3189,6 +3192,12 @@ pub struct Params {
     /// until its rule is built and verified and its values approved; needs `palw_probabilistic_constraints_v1` (the kernel route holding
     /// its rows) and `palw_bond_budget_v1` (the per-principal common cap it takes the minimum with) at or below it.
     pub palw_model_eligibility_v1: Option<ForkActivation>,
+    /// **palw_model_tier_v1** — ADR-0179 ([`crate::palw_model_tier_v1`], user decisions 2026-10-15 rounds 4–5): past it a model in
+    /// `ApprovedModels(h)` (genesis + add-only annual fork lists) weighs 1.0 and every other registered model a fixed 0.3, applied once
+    /// in the ADR-0177 allocation weight, with the registered tier's aggregate cap; model-level review is abolished. **Dormant**: `None`
+    /// on every preset, Some-only in both fingerprints (lists and values beside the height), collapsed from `Some(never())`, refused
+    /// when armed ([`Self::validate_palw_model_tier_v1`]).
+    pub palw_model_tier_v1: Option<crate::palw_model_tier_v1::PalwModelTierFenceV1>,
     /// **palw_dag_sibling_attribution_v1** — RFC-0018 §4 ([`crate::palw_rfc0018_v1`]): past it (the ACCEPTING block's DAA) the merged
     /// attempts of one chain block are admitted in a canonical order — a round robin over model classes, each class by
     /// `H(domain ‖ execution key)` — independent of GHOSTDAG colour and merge order, so which concurrent sibling wins a contended
@@ -6038,6 +6047,7 @@ impl Params {
             palw_native_final_v27: self.palw_native_final_v27.clone(),
             palw_stage_execution_v28: self.palw_stage_execution_v28.clone(),
             palw_native_execution_v39: self.palw_native_execution_v39.clone(),
+            palw_native_mining_v39: self.palw_native_mining_v39.clone(),
             palw_fork_choice_rule_e_v1: self.palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1: self.palw_typed_roots_v1,
             palw_fork_choice_commitment_v1: self.palw_fork_choice_commitment_v1,
@@ -6076,6 +6086,7 @@ impl Params {
             palw_model_block_rights_v1: self.palw_model_block_rights_v1,
             palw_elastic_final_capacity_v1: self.palw_elastic_final_capacity_v1,
             palw_model_eligibility_v1: self.palw_model_eligibility_v1,
+            palw_model_tier_v1: self.palw_model_tier_v1.clone(),
             palw_dag_sibling_attribution_v1: self.palw_dag_sibling_attribution_v1,
             palw_panel_anchor_permissionless_v1: self.palw_panel_anchor_permissionless_v1,
             palw_rule_e_participation_v2: self.palw_rule_e_participation_v2,
@@ -7189,6 +7200,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
     palw_native_execution_v39: None,
+    palw_native_mining_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -7227,6 +7239,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_model_tier_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,
@@ -7536,6 +7549,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
     palw_native_execution_v39: None,
+    palw_native_mining_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -7574,6 +7588,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_model_tier_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,
@@ -7865,6 +7880,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
     palw_native_execution_v39: None,
+    palw_native_mining_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -7903,6 +7919,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_model_tier_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,
@@ -13084,10 +13101,14 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_2026_10_12_ruling_fences_v1();
     // RFC-0006 R6-CELL round 4's coverage closure, likewise.
     params.sync_palw_cell_coverage_closure_v1();
+    // RFC-0006's memory/routing court consumer v2, likewise.
+    params.sync_palw_memory_routing_court_v2();
     // RFC-0016's two dormant fences (V+ block rights, elastic Final capacity), likewise.
     params.sync_palw_rfc0016_v1();
     // RFC-0017's model eligibility, likewise.
     params.sync_palw_model_eligibility_v1();
+    // ADR-0179's model tiers, likewise.
+    params.sync_palw_model_tier_v1();
     // RFC-0018's mirror (sibling attribution, permissionless anchor, rule E v2, Gate C), likewise.
     params.sync_palw_rfc0018_v1();
     // RFC-0001 §2.10's adapter class listing, likewise.
@@ -13374,6 +13395,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_native_final_v27: None,
     palw_stage_execution_v28: None,
     palw_native_execution_v39: None,
+    palw_native_mining_v39: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -13412,6 +13434,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_model_block_rights_v1: None,
     palw_elastic_final_capacity_v1: None,
     palw_model_eligibility_v1: None,
+    palw_model_tier_v1: None,
     palw_dag_sibling_attribution_v1: None,
     palw_panel_anchor_permissionless_v1: None,
     palw_rule_e_participation_v2: None,

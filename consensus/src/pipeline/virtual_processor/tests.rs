@@ -15143,7 +15143,9 @@ fn every_held_court_acceptance_arm_reads_the_claims_class_ladder() {
     assert!(!source.contains("adjudicate_court_close_v2("), "every close is judged by v4, which knows the held regime");
     // RFC-0006 R6-CELL round 4: the three sites moved to v4, which is v3 with `palw_cell_coverage_closure_v1`'s mirror.
     assert!(!source.contains("adjudicate_court_close_v3("), "every close also knows the coverage closure");
-    assert_eq!(source.matches("adjudicate_court_close_v4(").count(), 3, "the node's verdict, a close chunk and a close");
+    // RFC-0006 consumer v2: the three sites moved to v5, which is v4 with `palw_memory_routing_court_v2`'s mirror.
+    assert!(!source.contains("adjudicate_court_close_v4("), "every close also knows the memory/routing consumer v2");
+    assert_eq!(source.matches("adjudicate_court_close_v5(").count(), 3, "the node's verdict, a close chunk and a close");
     assert!(source.contains("palw_fp_objects_from_accepted_txs_by_class_v1("), "the walk bounds each commitment by its class");
 }
 

@@ -87,6 +87,63 @@ pub(super) fn commit_at_final_v1(
     Ok(())
 }
 
+/// **The commit of an owning39 MINING claim** (RFC-0002 §II.14): the same row, pool cut, anchor floor and counters as a chain
+/// claim's, under the `'V'` prefix. Refused (not skipped) where Gate C does not govern: a native mining claim has no uncertified
+/// path to consensus credit, so committing it outside the fence would only create a claim that can never decide.
+pub(super) fn commit_native_mining_v39(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    mining_claim: &Hash64,
+    model: &Hash64,
+    producer: &PalwBondKeyV2,
+    final_daa: u64,
+) -> Result<(), PalwStateV2Error> {
+    let mirror = builder.params.rfc0018_v1().copied().ok_or_else(|| refuse("native39 mining requires RFC-0018 Gate C in force"))?;
+    if !mirror.gate_c_governs(ctx.daa_score) {
+        return Err(refuse("native39 mining requires RFC-0018 Gate C to govern its acceptance"));
+    }
+    let id = palw_native_certification_id_v39(mining_claim);
+    let key = certification_native_key_v39(&id);
+    if row_of::<PalwClaimCertificationRowV1>(&builder.state, &key).is_some() {
+        return Err(refuse("native39 mining claim already committed for certification"));
+    }
+    super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
+    let bond = builder.state.bonds.get(producer).ok_or(PalwStateV2Error::MissingBond(*producer))?;
+    let row = PalwClaimCertificationRowV1 {
+        claim: mining_claim.as_bytes(),
+        class_id: model.as_bytes(),
+        producer_bond: palw_kernel_bond_id_v1(producer),
+        producer_principal: bond.operator_id.as_bytes(),
+        attempt: false,
+        final_daa,
+        committed_daa: ctx.daa_score,
+        committed_span: builder.state.round_seed_anchor.as_ref().map(|anchor| anchor.span).unwrap_or(0),
+        anchor: None,
+        draws: Vec::new(),
+        drawn_daa: 0,
+        deadline_daa: 0,
+        attestations: Vec::new(),
+        held_reward: 0,
+        payout_payload: bond.payout_payload.as_bytes(),
+        outcome: None,
+    };
+    write_row(builder, key, Some(&row))?;
+    let class_key = certification_class_key_v1(&row.class_id);
+    let mut counters = row_of::<PalwCertificationClassRowV1>(&builder.state, &class_key).unwrap_or_default();
+    counters.committed = counters.committed.saturating_add(1);
+    write_row(builder, class_key, Some(&counters))?;
+    Ok(())
+}
+
+/// The native fold's collection of a decided mining claim retires its `'V'` row (its receipt no longer reads it).
+pub(super) fn retire_native_mining_v39(builder: &mut TransitionBuilder<'_>, mining_claim: &Hash64) -> Result<(), PalwStateV2Error> {
+    let key = certification_native_key_v39(&palw_native_certification_id_v39(mining_claim));
+    if row_of::<PalwClaimCertificationRowV1>(&builder.state, &key).is_some_and(|row| row.outcome.is_some()) {
+        write_row::<PalwClaimCertificationRowV1>(builder, key, None)?;
+    }
+    Ok(())
+}
+
 /// **The coinbase site at `Final`**: past the fence the issuance-funded reward leg (the attempt escrow carved from block subsidy)
 /// represents consensus credit — it is held in the claim's row and `0` is returned (nothing is named now). Below the fence `escrow`.
 pub(super) fn hold_issuance_reward_at_final_v1(
@@ -119,7 +176,10 @@ pub(super) fn try_attest_claim_certification_v1(
     if !mirror.gate_c_at(ctx.daa_score) {
         return None;
     }
-    let key = certification_claim_key_v1(&attestation.exam);
+    // A chain claim's row, else an owning39 mining claim's (`'V'`): one attestation object, one rule.
+    let key = Some(certification_claim_key_v1(&attestation.exam))
+        .filter(|k| row_of::<PalwClaimCertificationRowV1>(&builder.state, k).is_some())
+        .unwrap_or_else(|| certification_native_key_v39(&attestation.exam));
     let mut row: PalwClaimCertificationRowV1 = row_of(&builder.state, &key)?;
     Some((|| {
         let now = ctx.daa_score;
@@ -308,30 +368,32 @@ pub(super) fn sweep_security_certification_v1(
     }
     let network_before = network.clone();
     for (key, bytes) in rows {
-        if key.first().copied() != Some(CERTIFICATION_CLAIM_PREFIX_V1) || key.len() != 65 {
+        let native = key.first().copied() == Some(CERTIFICATION_NATIVE_MINING_PREFIX_V39);
+        if !(key.first().copied() == Some(CERTIFICATION_CLAIM_PREFIX_V1) || native) || key.len() != 65 {
             continue;
         }
         let mut row: PalwClaimCertificationRowV1 = borsh::from_slice(&bytes).map_err(|e| refuse(e.to_string()))?;
         let claim_id = Hash64::from_bytes(row.claim);
-        let claim = builder.state.claims.get(&claim_id).cloned();
+        let claim = if native { None } else { builder.state.claims.get(&claim_id).cloned() };
+        // An owning39 mining claim stands while its native claim row and its complete Master escrow Final stand.
+        let native_live = native && super::palw_native_mining_fold_v39::native_mining_claim_live_v39(&builder.state, &claim_id);
         if row.outcome.is_some() {
-            if claim.is_none() {
+            // A decided native row is retired by the native fold's own collection (its receipt reads it), never here.
+            if claim.is_none() && !native {
                 write_row::<PalwClaimCertificationRowV1>(builder, key, None)?;
             }
             continue;
         }
         let mut changed = false;
-        // U-2 (P0): a claim RFC-0017 accepted under Probation can never be SecurityCertified — no verifier is drawn for it (it expires
-        // at `certify_by`, counted as a failed attempt), and the predicate refuses it whatever its row says.
-        let barred = crate::palw_state_v2::palw_eligibility_bars_security_credit_v1(&builder.state, &claim_id);
+        // (Round 5, user decision 2026-10-15: U-2's Probation bar has no subject — model review is abolished — and is removed; every
+        // tier's claim is drawn and certified alike.)
         if row.anchor.is_none()
-            && !barred
             && !palw_certification_public_check_v1(&row.class_id)
             && network.draws < policy.draws_per_epoch
             && let Some(a) = anchor.as_ref()
             && a.span >= row.committed_span.saturating_add(policy.anchor_delay_spans.max(1))
         {
-            let id = palw_certification_id_v1(&claim_id);
+            let id = if native { palw_native_certification_id_v39(&claim_id) } else { palw_certification_id_v1(&claim_id) };
             let execution_key = a.execution_key.as_bytes();
             let seed = palw_certification_seed_v1(&id, a.span, &execution_key);
             row.anchor = Some((a.span, execution_key));
@@ -345,9 +407,15 @@ pub(super) fn sweep_security_certification_v1(
             changed = true;
         }
         if row.outcome.is_none() {
-            let facts = PalwCertificationClaimFactsV1 {
-                still_final: claim.as_ref().is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::Final { .. })),
-                accusation_pending: builder.state.palw_accusation_pending_v1(&claim_id),
+            let facts = if native {
+                // Native courts settle inside the component jobs before their escrow Final; the Master Final row's presence is
+                // the standing fact, and no chain accusation can name a native mining claim.
+                PalwCertificationClaimFactsV1 { still_final: native_live, accusation_pending: false }
+            } else {
+                PalwCertificationClaimFactsV1 {
+                    still_final: claim.as_ref().is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::Final { .. })),
+                    accusation_pending: builder.state.palw_accusation_pending_v1(&claim_id),
+                }
             };
             if let Some(outcome) = palw_certification_verdict_v1(&policy, &row, facts, now) {
                 row.outcome = Some((outcome, now));

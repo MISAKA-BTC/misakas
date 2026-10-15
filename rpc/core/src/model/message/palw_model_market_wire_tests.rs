@@ -66,11 +66,19 @@ fn a_version_1_registry_row_reads_as_no_recommended_pool() {
         eligibility_subsidy: true,
         eligibility_block_right: true,
         eligibility_final_weight: true,
+        // What a version-1, -2 or -3 row decodes ADR-0179's tier as.
+        model_tier: "not-governed".to_string(),
+        model_tier_permille: 1_000,
         ..Default::default()
     };
     let mut bytes = Vec::new();
     Serializer::serialize(&row, &mut bytes).unwrap();
-    assert_eq!(&bytes[..2], &3u16.to_le_bytes());
+    assert_eq!(&bytes[..2], &4u16.to_le_bytes());
+    // Version 4's suffix: the tier (u32 length + 12 bytes) and its permille — 20 bytes; a version-3 peer's row reads as untiered.
+    bytes.truncate(bytes.len() - (4 + "not-governed".len() + 4));
+    bytes[..2].copy_from_slice(&3u16.to_le_bytes());
+    let v3 = <RpcPalwModelLifecycle as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+    assert_eq!(format!("{v3:?}"), format!("{row:?}"), "a version-3 row reads as untiered");
     // Version 3's suffix: the stage (borsh: u32 length + 12 bytes), the renewal DAA, three bools, two u32s — 35 bytes.
     let suffix = 4 + "not-governed".len() + 8 + 3 + 4 + 4;
     bytes.truncate(bytes.len() - suffix);
@@ -102,6 +110,22 @@ fn a_version_3_registry_row_carries_the_eligibility_stage() {
     };
     let mut bytes = Vec::new();
     Serializer::serialize(&row, &mut bytes).unwrap();
+    let back = <RpcPalwModelLifecycle as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+    assert_eq!(format!("{back:?}"), format!("{row:?}"));
+}
+
+/// **ADR-0179 on the registry's wire (version 4)**: the model tier and its allocation coefficient survive the round trip.
+#[test]
+fn a_version_4_registry_row_carries_the_model_tier() {
+    let row = RpcPalwModelLifecycle {
+        class_id: "ef".repeat(64),
+        model_tier: "registered".to_string(),
+        model_tier_permille: 300,
+        ..Default::default()
+    };
+    let mut bytes = Vec::new();
+    Serializer::serialize(&row, &mut bytes).unwrap();
+    assert_eq!(&bytes[..2], &4u16.to_le_bytes());
     let back = <RpcPalwModelLifecycle as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
     assert_eq!(format!("{back:?}"), format!("{row:?}"));
 }

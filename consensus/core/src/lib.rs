@@ -533,6 +533,9 @@ pub mod palw_panel_free_gate_v1;
 /// RFC-0017: model eligibility — registration free, rights examined (commit-then-draw), bounded in probation and renewed; dormant
 /// fence `palw_model_eligibility_v1` (kernel inner 74/75, aux 131).
 pub mod palw_model_eligibility_v1;
+/// **ADR-0179 — model tiers** (user decision 2026-10-15, round 4; dormant fence `palw_model_tier_v1`): `ApprovedModels(h)` (genesis +
+/// annual fork lists, add-only) at 1.0, every other registered model permanently 0.3, applied once in the allocation weight.
+pub mod palw_model_tier_v1;
 /// RFC-0015: the Panel=0 (`OptimisticPublicVerification`) fence `palw_panel_free_v1` — dormant, no height, refused when armed.
 pub mod palw_panel_free_v1;
 pub mod palw_panel_lifetime_v2;
@@ -681,6 +684,10 @@ pub mod palw_step_leg;
 pub mod palw_step_refute;
 pub mod palw_gdn_state_map_v2;
 pub mod palw_gdn_court_v2;
+/// RFC-0006 consumer v2 (dormant, `palw_memory_routing_court_v2`): the immutable per-reader router binding (kernel-route aux 139)
+/// and object tag 170 — the binding declaration and the checkpoint-transition / convolution-window / routed-reader accusations.
+pub mod palw_memory_routing_v2;
+pub mod palw_router_binding_v2;
 pub mod palw_task_heads_v1;
 pub mod palw_terminal;
 pub mod palw_terminal_carriage_v1;
@@ -982,6 +989,9 @@ pub mod palw_cell_coverage_closure_v1;
 /// capacity, the pre-lottery admission quote and the outcome-first model report — behind the dormant fences
 /// `palw_model_block_rights_v1` and `palw_elastic_final_capacity_v1` (refused when armed until measured values are pinned).
 pub mod palw_rfc0016_v1;
+/// testnet-12 DAA 14,000 release plan (2026-10-15): the measured-value gate of the RFC-0006/0007/0008 fences (monetary material,
+/// release recovery V2, paid claim challenge, beacon source opt-in/fee, memory routing court V2). Pinned records EMPTY: dormant.
+pub mod palw_rfc0608_measured_v1;
 /// R6-CELL round 3 (2026-10-15): pure boundary/routing/memory coverage checker over accepted cell profiles. Below
 /// `palw_cell_coverage_closure_v1` not called by consensus; past it the closure's one predicate.
 pub mod palw_cell_coverage_v1;
@@ -1017,6 +1027,8 @@ pub mod palw_tir_public_custody_v1;
 pub mod palw_native_state_anchor_v39;
 
 pub mod palw_native_master_v39;
+pub mod palw_native_mining_v39;
+pub mod palw_native_receipt_v39;
 
 pub mod palw_prospective_kernel_material_v4;
 

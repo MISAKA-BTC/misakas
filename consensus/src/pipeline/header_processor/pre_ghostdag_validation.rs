@@ -294,6 +294,52 @@ impl HeaderProcessor {
                 reason: "a PAV3 native custody carriage below palw_monetary_material_v1".into(),
             });
         }
+        // RFC-0002 §II.14: a `PNR9` native receipt carriage — the by-name second lock below `palw_native_mining_v39` (the shape gate
+        // already refused it as a `PFS3` decode there), and past it the challenge (header position) and the producer's ML-DSA-87
+        // signature on the relay path. Whether the key is the receipt producer bond's is the chain walk's stateful question.
+        if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3
+            && kaspa_consensus_core::palw_native_receipt_v39::palw_native_receipt_carriage_is_v39(&header.palw_commitment)
+        {
+            if !self
+                .palw_header_forms
+                .in_force_at(kaspa_consensus_core::pow_layer0::PalwHeaderFormFenceV1::NativeReceiptV39, header.daa_score)
+            {
+                return Err(RuleError::BadPalwCarriageAdmission {
+                    algo_id: header.pow_algo_id,
+                    reason: "a PNR9 native receipt carriage below palw_native_mining_v39".into(),
+                });
+            }
+            use kaspa_consensus_core::palw_native_receipt_v39::*;
+            let envelope = PalwNativeReceiptSpendEnvelopeV39::decode(&header.palw_commitment)
+                .map_err(|reason| RuleError::BadPalwCarriageAdmission { algo_id: header.pow_algo_id, reason })?;
+            let s = &envelope.spend;
+            let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+            if s.network_domain != network_domain
+                || s.challenge
+                    != native_receipt_spend_challenge_v39(
+                        network_domain,
+                        pre_pow_hash,
+                        header.timestamp,
+                        header.nonce,
+                        s.receipt,
+                        s.quantum_index,
+                        &s.producer_bond,
+                    )
+                || !kaspa_txscript::verify_mldsa87_with_context(
+                    &s.producer_pubkey,
+                    native_receipt_spend_id_v39(s).as_byte_slice(),
+                    &envelope.signature,
+                    PALW_NATIVE_RECEIPT_MLDSA87_CONTEXT_V39,
+                )
+                .unwrap_or(false)
+            {
+                return Err(RuleError::BadPalwCarriageAdmission {
+                    algo_id: header.pow_algo_id,
+                    reason: "a PNR9 native receipt carriage with another network, header position or signature".into(),
+                });
+            }
+            return Ok(());
+        }
         palw_carriage_stateless_v2(
             header,
             attempt_lane,
