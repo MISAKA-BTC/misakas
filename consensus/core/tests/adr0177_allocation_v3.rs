@@ -87,7 +87,7 @@ fn the_average_spans_thirty_epochs_and_a_new_model_ramps_in() {
             s.assign(&p, bond(1), &[(model(0xA), 900 * KAS), (model(0xB), 900 * KAS)], 2, 2_000 * KAS, epoch, |_| true, &mut j)
                 .unwrap();
         }
-        s.roll_epoch_v3(&p, epoch, epoch * p.epoch_daa, |_| (2_000 * KAS, true), &empty, &mut j);
+        s.roll_epoch_v3(&p, epoch, epoch * p.epoch_daa, |_| (2_000 * KAS, true), &empty, |_, c| c, &mut j);
         let a = s.model_row(&model(0xA)).map(|r| r.capital).unwrap_or(0);
         let b = s.model_row(&model(0xB)).map(|r| r.capital).unwrap_or(0);
         assert!(a <= (900 * KAS) as u128 && b <= a, "epoch {epoch}: averages never exceed the capital, the newcomer ramps");
@@ -111,7 +111,7 @@ fn block_opportunity_follows_p_m_and_is_never_returned_early() {
     // Models A and B with equal averages: each half the blocks of the epoch so far.
     s.assign(&p, bond(1), &[(model(0xA), 500 * KAS), (model(0xB), 500 * KAS)], 1, 1_000 * KAS, 0, |_| true, &mut j).unwrap();
     for epoch in 0..3u64 {
-        s.roll_epoch_v3(&p, epoch, epoch * p.epoch_daa, |_| (1_000 * KAS, true), &empty, &mut j);
+        s.roll_epoch_v3(&p, epoch, epoch * p.epoch_daa, |_| (1_000 * KAS, true), &empty, |_, c| c, &mut j);
     }
     let start = 2 * p.epoch_daa;
     let now = start + 99; // 100 DAA of the epoch → 100 blocks accrued
@@ -123,4 +123,35 @@ fn block_opportunity_follows_p_m_and_is_never_returned_early() {
     assert_eq!(s.model_blocks_available_v1(&model(0xA), now), 0, "used up until more DAA accrue");
     assert_eq!(s.model_blocks_available_v1(&model(0xB), now), b, "the other model is untouched");
     assert_eq!(s.model_blocks_available_v1(&model(0xC), now), 0, "a model with no capital gets no block opportunity");
+}
+
+#[test]
+fn rfc0017_gap_e1_a_registered_or_lapsed_model_leaves_the_allocation() {
+    // RFC-0017 GAP-E1: the roll passes each model's capital through `palw_eligibility_allocation_capital_v1`. Model B is Lapsed from
+    // epoch 5 (its stage maps its capital to 0): it is neither in the denominator nor given block opportunity, and A takes all of
+    // both; with no eligibility mirror (the identity hook) both stay — the rule below the fence is unchanged.
+    use kaspa_consensus_core::palw_model_eligibility_v1::{PalwEligibilityStageV1, palw_eligibility_allocation_capital_v1};
+    let p = policy();
+    let empty = BTreeMap::new();
+    let run = |lapse_b: bool| {
+        let mut s = state();
+        let mut j = Vec::new();
+        s.assign(&p, bond(1), &[(model(0xA), 500 * KAS), (model(0xB), 500 * KAS)], 1, 1_000 * KAS, 0, |_| true, &mut j).unwrap();
+        for epoch in 0..8u64 {
+            let eligible = |m: &Hash64, c: u128| {
+                let stage = (lapse_b && *m == model(0xB) && epoch >= 5).then_some(PalwEligibilityStageV1::Lapsed);
+                palw_eligibility_allocation_capital_v1(stage, c)
+            };
+            s.roll_epoch_v3(&p, epoch, epoch * p.epoch_daa, |_| (1_000 * KAS, true), &empty, eligible, &mut j);
+        }
+        s
+    };
+    let gated = run(true);
+    let now = 7 * PALW_BOND_HOLD_DAA_PER_DAY_V1 + 99;
+    assert!(gated.model_row(&model(0xB)).is_none(), "a lapsed model has no live allocation row");
+    assert_eq!(gated.model_blocks_available_v1(&model(0xB), now), 0, "and no block opportunity");
+    assert_eq!(gated.model_blocks_available_v1(&model(0xA), now), 100 * PALW_BUDGET_BLOCK_UNIT_V1, "A holds the whole denominator");
+    let ungated = run(false);
+    assert!(ungated.model_row(&model(0xB)).is_some(), "below the fence nothing changes");
+    assert!(ungated.model_blocks_available_v1(&model(0xA), now) < 100 * PALW_BUDGET_BLOCK_UNIT_V1);
 }

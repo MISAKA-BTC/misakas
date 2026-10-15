@@ -170,6 +170,12 @@ impl PalwBondBudgetStateV1 {
     /// **Open allocation epoch `index` under a V3 policy** (the 2026-10-14 decision): promote seasoned assignments, take the
     /// deduplicated miner + verifier snapshot `S_m(index)`, record it, drop history older than the averaging span and last epochs'
     /// block reservations, then write every model's live row from the average `S̄_m` and `A_m = ⌊S̄_m^α⌋`.
+    ///
+    /// `eligible_capital(model, capital)` is RFC-0017's hook (GAP-E1, `palw_eligibility_allocation_capital_v1`): the capital a model's
+    /// eligibility stage admits — 0 for a Registered / Lapsed model past `palw_model_eligibility_v1`, the capital unchanged below it.
+    /// It is applied to each epoch's snapshot (parked capital is never recorded) and to the average (a model that lapsed now leaves
+    /// the denominator now), so such a model has no live row: no coinbase share, no block opportunity, and no dilution of others.
+    #[allow(clippy::too_many_arguments)]
     pub fn roll_epoch_v3(
         &mut self,
         policy: &PalwModelAllocationPolicyV1,
@@ -177,6 +183,7 @@ impl PalwBondBudgetStateV1 {
         start_daa: u64,
         capital_of: impl Fn(&PalwBondKeyV2) -> (u64, bool),
         verifier: &BTreeMap<PalwBondKeyV2, BTreeMap<Hash64, u64>>,
+        eligible_capital: impl Fn(&Hash64, u128) -> u128,
         j: &mut Vec<PalwBudgetWriteV1>,
     ) {
         let n = policy.average_epochs().unwrap_or(1);
@@ -203,9 +210,13 @@ impl PalwBondBudgetStateV1 {
         // 2. This epoch's snapshot, recorded.
         let snapshot = palw_allocation_snapshot_v3(&miner, verifier, &capital_of);
         for (model, capital) in &snapshot {
+            let capital = eligible_capital(model, *capital);
+            if capital == 0 {
+                continue;
+            }
             let row = PalwModelBudgetRowV1 {
                 epoch: index,
-                capital: *capital,
+                capital,
                 weight: model_as_weight(model),
                 reserved_sompi: PALW_ALLOCATION_HISTORY_MARKER_V1,
             };
@@ -230,8 +241,14 @@ impl PalwBondBudgetStateV1 {
         for row in self.models.values().filter(|row| row.reserved_sompi == PALW_ALLOCATION_HISTORY_MARKER_V1) {
             *sums.entry(weight_as_model(&row.weight)).or_default() += row.capital;
         }
-        let averages: BTreeMap<Hash64, u128> =
-            sums.into_iter().map(|(m, total)| (m, total / n as u128)).filter(|(_, avg)| *avg > 0).collect();
+        let averages: BTreeMap<Hash64, u128> = sums
+            .into_iter()
+            .map(|(m, total)| {
+                let average = eligible_capital(&m, total / n as u128);
+                (m, average)
+            })
+            .filter(|(_, avg)| *avg > 0)
+            .collect();
         // 5. Live rows: drop the models that left, write the rest.
         let stale: Vec<Hash64> = self
             .models

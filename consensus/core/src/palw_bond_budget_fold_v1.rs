@@ -2087,13 +2087,23 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
             } else {
                 BTreeMap::new()
             };
+            // RFC-0017 GAP-E1: a Registered / Lapsed model's capital counts 0 in the allocation (denominator, numerator and block
+            // opportunity) past `palw_model_eligibility_v1`; below it (no mirror) every model counts as before.
+            let params = builder.params;
             builder.bond_budget_op(|budget, state, j| {
                 let capital_of = |bond: &PalwBondKeyV2| match state.bonds.get(bond) {
                     Some(record) => (record.collateral, matches!(record.status, PalwBondStatusV2::Active)),
                     None => (0, false),
                 };
+                let eligible_capital = |model: &Hash64, capital: u128| {
+                    let class = if state.class(model).is_some() { Some(*model) } else { state.model_line(model).map(|line| line.class_id) };
+                    let stage = class.and_then(|class| {
+                        super::palw_model_eligibility_fold_v1::eligibility_of_v1(state, params, &class, now).map(|(stage, _)| stage)
+                    });
+                    crate::palw_model_eligibility_v1::palw_eligibility_allocation_capital_v1(stage, capital)
+                };
                 if policy.average.is_some() {
-                    budget.roll_epoch_v3(&policy, epoch, now, capital_of, &verifier, j)
+                    budget.roll_epoch_v3(&policy, epoch, now, capital_of, &verifier, eligible_capital, j)
                 } else {
                     budget.roll_epoch(&policy, epoch, now, capital_of, j)
                 }
