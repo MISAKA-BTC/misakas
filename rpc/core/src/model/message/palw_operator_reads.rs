@@ -120,11 +120,18 @@ pub struct RpcPalwClaimRow {
     /// `capacityRecoveryDaa`). Empty for a claim accepted below `palw_bond_formula_v2` and from a version-4 peer.
     #[serde(default)]
     pub reservation_split: String,
+    /// **Version 6 — RFC-0018 Gate C**: the claim's certification state (`pending`, `certified`, `not-certified`, …). Empty for a claim
+    /// accepted below the fence (every shipped network) and from a version-5 peer. A certified claim's consensus credit is
+    /// premise-based (see `GetPalwSettlementResponse::security_certification_premise`).
+    #[serde(default)]
+    pub security_certification: String,
 }
 
 impl Serializer for RpcPalwClaimRow {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &5, writer)?;
+        // RFC-0018: version 6 only where the row carries a Gate C state (never on a shipped network), so older readers are unaffected.
+        let version: u16 = if self.security_certification.is_empty() { 5 } else { 6 };
+        store!(u16, &version, writer)?;
         store!(String, &self.claim_id, writer)?;
         store!(bool, &self.is_free_prompt, writer)?;
         store!(String, &self.class_id, writer)?;
@@ -168,6 +175,9 @@ impl Serializer for RpcPalwClaimRow {
         store!(String, &self.committed_sompi, writer)?;
         // Version 5: the reservation's decomposition (ADR-0176 amendment).
         store!(String, &self.reservation_split, writer)?;
+        if version >= 6 {
+            store!(String, &self.security_certification, writer)?;
+        }
         Ok(())
     }
 }
@@ -223,6 +233,9 @@ impl Deserializer for RpcPalwClaimRow {
         }
         if version >= 5 {
             row.reservation_split = load!(String, reader)?;
+        }
+        if version >= 6 {
+            row.security_certification = load!(String, reader)?;
         }
         Ok(row)
     }

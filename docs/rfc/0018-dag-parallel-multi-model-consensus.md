@@ -101,7 +101,8 @@ DAG(GHOSTDAG、複数親、REDの取引受理)は作り直さない。現状は 
 * **I-S2(独立記録):** 各claimは自分のbond・class・carrying blockで記録される(`attempt_id_v2`、`execution_key`、`accepted_block`)。Panelは`claim_id`で鍵付けされ、seedはclaim idを含む(`palw_panel_draw_seed_v1`)。siblingのPanel・escrow・報酬を混同しない(MUST)。
 * **I-S3(順序非依存):** 一つのaccepting blockが採用するmerged attemptの集合は、mergesetの**集合**の関数でなければならない(MUST)。色・blue work・merge順・到着順に依存しない。
 * **I-S4(モデル間公平):** 共有上限で競合したとき、各モデルのsiblingが1件ずつ採用されてから、どのモデルの2件目も採用される(round robin)。
-* **I-S5(seed anchor):** ADR-0170のseed anchorはcanonical順の最後の採用attempt(集合の関数)。
+* **I-S5(seed anchor):** ADR-0170のseed anchorは、同じspanで採用されたattempt(自身・merged、BLUE/RED)のうち`H(domain ‖ execution key)`が最小のもの。last-write-winsではない(`record_round_seed_anchor_of`、`transition_builder.rs`)。
+* **I-S6(selected parentのsibling):** siblingのうちGHOSTDAGがselected parentに選んだものは、自分のblockの遷移で先に採用される(merger のmergesetに入らない)。どれが選ばれるかはGHOSTDAGの決定的な規則(blue work、次にblock hash)で決まり、到着順にもmerge順にも依存しない。block hashを動かすには勝ちticket(推論1回)がもう一度要る。共有上限で負けるのは、このselected parentを除いたmergeset内のsiblingで、それはcanonical順で決まる。
 
 ### 4.2 規則(fence以後、accepting blockのDAAで判定)
 
@@ -118,7 +119,7 @@ step 4bの前に、mergesetのattempt workだけを並べ替える。非attempt 
 | ID | 試験 | 合格条件(記録する値) | 実装 |
 | --- | --- | --- | --- |
 | T-1a | 3モデル・3 miner・別Panel、同じ親からsibling(in-process、k = 1) | 3 blockともmergerの過去にある(selected parent/BLUE/RED)。3 claimとも自分のbond・class・carrying blockで記録 | `consensus/src/pipeline/virtual_processor/tests/rfc0018_dag_siblings.rs` |
-| T-1b | 同じblock群を逆順で別nodeへ | sink、selected parent、blues、reds、PALW state root、safe frontierが一致 | 同上 |
+| T-1b | 同じblock群を別nodeへ、3 siblingの到着順を全6通り | sink、selected parent、blues、reds、PALW state root(採用claim・消費した上限・escrow)、safe frontier、ADR-0170 seed anchorが一致 | 同上 |
 | T-1c | sibling fence armで同じ2試験 | 同上 | 同上 |
 | T-1d | canonical順は集合の関数、round robin、非attempt slot不変 | 回転・逆順で同じ列。3モデルの先頭3件は3モデル | `palw_rfc0018_v1/tests.rs` |
 | T-1e | 実process: 3 producer nodeを分離して同じbaseから3モデルを同時採掘、再接続 | 各siblingの色、claim記録、帰属、Panelがclaimごとに別 | `scripts/drills/rfc0018_dag_drill.py siblings` |
@@ -137,9 +138,9 @@ step 4bの前に、mergesetのattempt workだけを並べ替える。非attempt 
 
 ### 5.2 規則(fence以後、anchor blockのDAAで判定。lane Aより優先)
 
-* **貢献:** anchor blockが自身またはmergeset(BLUE/RED、selected parentを除く)として含むattempt headerで、envelopeがdecodeでき、executor bondがanchorのselected parentの状態に**同じ公開鍵で登録**され、attemptのDAAで**成熟**しているもの(`processor/palw.rs:6571`)。
+* **貢献(確定したfold出力):** anchor block Xのselected parentの状態にある**attempt claim**(foldが採用したもの)で、Xより下のchain blockが受理したもの。carrying blockはBLUEでもREDでもよい。phaseに依らない(採用されたものは後でvoidされても採用された)。認識は採用の1 chain block後になる(`palw_permissionless_contributions_from_state_v1`、`palw_rfc0018_v1.rs`)。headerだけのoperator判定(F-6)はなくなる。
 * **bondごとに1件:** 各bondの最早`(DAA, block)`の貢献だけを使う。同じbondの後の勝ちは再抽選にもweightにもならない。
-* **集約seed:** slot以降の貢献をbond順に並べ、`H(domain ‖ slot ‖ Σ(bond, execution))`(`palw_permissionless_anchor_seed_v1`、`palw_rfc0018_v1.rs:363`)。異なるbondが`min_distinct_bonds`(設計値2)未満ならそのblockはslotをanchorしない。claimのproducer bondは知っている呼出元では除外する。
+* **集約seedとproducer除外:** slot以降の、**claimのproducer以外のbond**の貢献をbond順に並べ、`H(domain ‖ slot ‖ Σ(bond, execution))`(`palw_permissionless_anchor_seed_v1`)。そのようなbondが1つもなければ、Xはそのclaimをanchorしない(`palw_permissionless_anchors_claim_v1`)。この述語を、processorのwalk(`palw_v2_anchor_fact_of_candidate_for_v1`)、binding導出、foldのstep 4c(`palw_void_claims_unbound_in_their_anchor_block_v1`)の三者が同じ確定集合に対して問う。anchorされないclaimはXでbindもvoidもされず、自分のanchorを待つ。
 * **到達範囲:** 最新の貢献のDAA(anchor自身のDAAで上限)。draw時刻は最早の貢献のDAA(lane Aと同じ扱い)。
 * **旧claim:** anchor blockのDAAがfence未満なら従来(lane AまたはF1)。
 
@@ -149,8 +150,7 @@ step 4bの前に、mergesetのattempt workだけを並べ替える。非attempt 
 
 ### 5.4 未解決
 
-* **GAP-A1:** 「採用された」はheader+registryで近似する(同じblockのfoldで判定するため循環する)。採用されなかった署名済み・bond済みheaderも貢献し得る。費用は勝ちticket1件。
-* **GAP-A2:** anchor walkはclaimのbondを持たないので、producer除外は2 bond最小で代替している。
+* GAP-A1(header近似)とGAP-A2(2 bond最小での代替)は2026-10-15に解消した(確定fold出力からの貢献、claimごとのproducer除外)。残るのは、認識が採用より1 chain block遅れることだけである。
 
 ## 6. 設計変更3: DNS廃止後の収束 — rule E v2(`palw_rule_e_participation_v2`)
 
@@ -239,6 +239,14 @@ DNS退役後の収束は**Gate Cとrule E v2の組**で行う。fork choiceの�
 
 fence以後、frontierとsettlement depthの両方で、合意creditを生むのは**認証済みattemptの`Final`だけ**とする(`palw_consensus_credit_anchor_v1`、`palw_security_certification_v1.rs:367`)。free-promptの合意creditは認証後のspendのweightだけで、frontierもsettlement depthも動かさない。「free-promptの`Final`だけが存在する」場合は、frontierなし・depth 0(F-5の解消、T-0c)。fence未満は従来(frontierは任意source、settlementはattempt)。
 
+### 7.5a frontierの巻き戻し(conviction後の再計算)
+
+fence以後、safe frontierは毎block**再計算**する: 解決済みprefix内の、frontier資格のある`Final`の最深claim(認証済みattempt。fence未満で受理されたclaimは従来規則)、ただし**floor**を下回らない(`palw_gate_c_frontier_v1`)。
+
+* **floor:** fenceが効いた最初のblockで、そのときのfrontierで初期化する(有効化でfrontierが戻らない)。資格のある`Final`のclaimが**退役**したとき、その位置まで上げる。退役したclaimはもうconvictされない(`reverse_convicted_final`は退役済みを扱わない)。kernel-route aux 136の`'F'` row(`note_retirement_frontier_floor_v1`、`ensure_frontier_floor_v1`)。
+* **巻き戻し:** 認証済みclaimが後でconvict(void)されると、そのclaimはfrontierでなくなり、frontierは残る資格claimの最深、またはfloorへ戻る。deltaの`Frontier`エントリが任意の移動を記録するので、reorgは正確に戻し、IBDはcarriageでfloor rowを受け取る。
+* **pruning:** pruning上限は、進行の上限(§7.7)と**巻き戻し上限**(convictionで再びfrontierになり得る最も浅い位置 = stateに残る資格`Final`の最小受理blue score、`palw_frontier_rollback_bound_v1`)の小さい方を超えない。再びfrontierになり得る点をpruneすることはない。資格claimは退役で必ずstateから消えるので、上限は有界に進む。
+
 ### 7.6 寿命
 
 認証rowはclaimの退役まで残り、退役後にsweepで消える。`claim_retirement_daa ≥ lifetime_daa()`(`certify_by + attest window`と告発windowの大きい方)でなければならない(MUST、activation checklist)。満たさないと`Final`のclaimが未認証のまま退役する(creditなしで整合はするが、正直なclaimも認証されない)。
@@ -249,7 +257,9 @@ fence以後、frontierは認証済みclaimでしか動かないので、pruning�
 
 ### 7.8 settlementの意味とRPC
 
-DNS-BFTがないので、settlementの`safe`/`settled`はPALWの認証済みcreditだけを意味する。未認証claimだけのchainは**PALW settlement finalityなし**(`settled = false`、`depth = 0`)と報告し、`uncertifiedFinalAnchors`(認証されていない`Final` attemptの数)と`securityCertificationPremise`(前提の文言)を返す(`GetPalwSettlementResponse`、wire version 4、gRPCには未搭載 GAP-R6)。RFC-0012のnative settlementも、fence以後は`Final`遷移ではなく認証遷移を成熟workの証拠とする(`palw_native_settlement_v1.rs:161`、`:338`、`:404`)。
+DNS-BFTがないので、settlementの`safe`/`settled`はPALWの認証済みcreditだけを意味する。未認証claimだけのchainは**PALW settlement finalityなし**(`settled = false`、`depth = 0`)と報告し、`uncertifiedFinalAnchors`(認証されていない`Final` attemptの数)と`securityCertificationPremise`(前提の文言)を返す(`GetPalwSettlementResponse`、wire version 4、gRPC field 13/14)。claimごとの認証状態は`GetPalwClaims`のrow(`securityCertification`、wire version 6、gRPC field 39)で返す。
+
+**leaf-v2 client経路:** rule Eのrecord(`PalwRuleEClaimRecordV1`)は真のphaseと**認証状態**(`certification`: NotGoverned / Certified / Uncertified)を持ち、leaf-v2 windowにcommitされる。Gate Cの適用(未認証はparticipationなし・frontierなし、FPの`Final`はfrontierなし)はnodeとclientが共有するaccumulatorで行う。clientは`palw_rule_e_certification_summary_v1`で、未認証`Final`の数と前提の文言を得る(`palw_fork_choice_rule_e_leaf_v2.rs`)。資本(rule E v2のparticipation)はまだleafに載らない(GAP-R4)。RFC-0012のnative settlementも、fence以後は`Final`遷移ではなく認証遷移を成熟workの証拠とする(`palw_native_settlement_v1.rs:161`、`:338`、`:404`)。
 
 ### 7.9 ADR-0177の変更(明示)
 
@@ -314,7 +324,7 @@ GHOSTDAGの`k`、parentsの上限、mergesetの上限は、GHOSTDAG managerとhe
 
 ## 10. 受入試験の一覧
 
-T-0(§7.11、必須の最上位)、T-1(§4.4)、T-2: permissionless anchor(seedは2 bond以上を要し、未採用・未成熟を無視し、bondごとの最初の貢献の関数で、順序に依存しない — `palw_rfc0018_v1/tests.rs`。T-2b: grinding上界`Π(1+q_i)`の実測報告 — 未作成)、T-3(§6.5)、T-4: DAG幅推定の単調性とschedule構造検査、T-5: DNS退役calibration devnet(`retired`)。
+T-0(§7.11、必須の最上位)、T-1(§4.4)、T-2: permissionless anchor(seedはclaimのproducer以外のbondを要し、未採用を無視し、貢献は確定fold出力(REDのcarrierを含む)で、bondごとの最初の貢献の関数で、順序に依存しない — `palw_rfc0018_v1/tests.rs`。T-2b: grinding上界`Π(1+q_i)`の実測報告 — 未作成)、T-3(§6.5)、T-4: DAG幅推定の単調性とschedule構造検査、T-5: DNS退役calibration devnet(`retired`)。
 
 ## 11. 本RFCで決めない値
 
@@ -352,7 +362,7 @@ T-0(§7.11、必須の最上位)、T-1(§4.4)、T-2: permissionless anchor(seed�
 | fence | `palw_dag_sibling_attribution_v1`、`palw_panel_anchor_permissionless_v1`、`palw_rule_e_participation_v2`、`palw_independently_work_certified_v1`(`Option<ForkActivation>`)、`palw_dag_width_schedule_v1`(`Option<PalwDagWidthScheduleFenceV1>`)— `config/params.rs:3186-3206` | 全preset `None`(4 preset literal)、`identity.rs`: collapse・pin list・fingerprint 2箇所Some-only・visit・destructure 3箇所、`fork_id_v1.rs`のprobe、`validation.rs`、mirror `PalwStateParamsV2::rfc0018_v1`(`#[borsh(skip)]`、`state_params.rs:689-697`)、sync `Params::sync_palw_rfc0018_v1` |
 | kernel-route aux table | **136**(65-byte key: `'S'`認証row、`'C'`class計数、`'N'`network epoch) | 使用中〜135をgrep。scanner armは`gen_rfc06_native_wire.py`と`gen_rfc06_native_inventory.py`へ追加し、生成器を再実行してrustfmt(`wire_kernel_aux.rs`、`wire_generated.rs`、`generated.rs`) |
 | kernel inner kind | 新規なし。RFC-0017のinner 75を、certification idを名指す承認として再利用 | — |
-| RPC | 新opなし。`GetPalwSettlementResponse`にwire version 4(`uncertifiedFinalAnchors`、`securityCertificationPremise`) | ops ≤ 244/255、proto ≤ 1307は不変(gRPCは未搭載) |
+| RPC | 新opなし。`GetPalwSettlementResponse` wire version 4(`uncertifiedFinalAnchors`、`securityCertificationPremise`)、`RpcPalwClaimRow` wire version 6(`securityCertification`)。gRPCはmessage内のfield番号(settlement 13/14、claim row 39)を追加 | RPC op番号 ≤ 244/255、RpcRequest/Response oneofの番号 ≤ 1307は不変 |
 | object tag / p2p / funded action | 割り当てなし | — |
 
 ### 13.2 module

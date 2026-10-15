@@ -473,22 +473,101 @@ fn contribution(daa: u64, block: u64, b: u32, exec: u64) -> PalwAnchorContributi
 }
 
 #[test]
-fn rfc18_anchor_seed_needs_two_distinct_bonds_and_ignores_unadmitted_and_immature() {
+fn rfc18_anchor_seed_excludes_the_producer_and_ignores_unadmitted_contributions() {
     let policy = PalwPermissionlessAnchorPolicyV1::design_unapproved_v1();
-    let one = [contribution(100, 1, 1, 11), contribution(101, 2, 1, 12)];
-    assert_eq!(palw_permissionless_anchor_seed_v1(&one, 100, None, &policy), None, "one bond cannot seed alone");
+    assert_eq!(policy.min_distinct_bonds, 1, "one bond other than the producer");
+    let own = [contribution(100, 1, 1, 11), contribution(101, 2, 1, 12)];
+    // The producer's own contributions never seed its own Panel, however many.
+    assert_eq!(palw_permissionless_anchor_seed_v1(&own, 100, Some(&bond(1)), &policy), None);
+    assert!(!palw_permissionless_anchors_claim_v1(&own, 100, &bond(1)));
+    // Another bond's single contribution does.
+    assert!(palw_permissionless_anchors_claim_v1(&own, 100, &bond(9)));
     let mut junk = contribution(100, 3, 2, 21);
     junk.admitted = false;
-    let mut young = contribution(100, 4, 3, 31);
-    young.bond_matured = false;
-    assert_eq!(palw_permissionless_anchor_seed_v1(&[one[0], junk, young], 100, None, &policy), None);
-    let two = [one[0], contribution(102, 5, 4, 41)];
-    let (draw_daa, _) = palw_permissionless_anchor_seed_v1(&two, 100, None, &policy).expect("two bonds seed");
-    assert_eq!(draw_daa, 100, "the draw resolves at the earliest contribution");
-    // The producer's own bond is excluded where the caller knows it.
-    assert_eq!(palw_permissionless_anchor_seed_v1(&two, 100, Some(&bond(4)), &policy), None);
+    assert_eq!(palw_permissionless_anchor_seed_v1(&[own[0], junk], 100, Some(&bond(1)), &policy), None, "an unadmitted header is nothing");
+    let two = [own[0], contribution(102, 5, 4, 41)];
+    let (draw_daa, _) = palw_permissionless_anchor_seed_v1(&two, 100, Some(&bond(1)), &policy).expect("another bond seeds");
+    assert_eq!(draw_daa, 102, "the draw resolves at the earliest contribution of another bond");
     // Below the slot nothing counts.
-    assert_eq!(palw_permissionless_anchor_seed_v1(&two, 101, None, &policy), None);
+    assert_eq!(palw_permissionless_anchor_seed_v1(&two, 103, Some(&bond(1)), &policy), None);
+    // Reach is claim-independent: any one contribution.
+    assert_eq!(palw_permissionless_anchor_reach_v1(&own, 500), Some(101));
+}
+
+/// Contributions are COMMITTED fold output: attempt claims accepted below the anchor block (blue or red carriers alike), phase-
+/// independent, never a free-prompt claim, never a claim the anchor block itself accepted.
+#[test]
+fn rfc18_anchor_contributions_are_committed_fold_output() {
+    use crate::palw_state_v2::PalwClaimSourceV2;
+    let mut state = PalwChainStateV2::genesis();
+    let mut red = claim_at(FENCE, PalwClaimPhaseV2::Provisional);
+    red.accepted_blue_score = 40;
+    red.accepted_block = Hash64::from_u64_word(0x8ED);
+    red.bond = bond(2);
+    let mut voided = claim_at(FENCE, PalwClaimPhaseV2::Voided { voided_daa: FENCE + 1, reason: PalwVoidReasonV2::BindTimeout });
+    voided.accepted_blue_score = 41;
+    voided.bond = bond(3);
+    let mut fp = claim_at(FENCE, PalwClaimPhaseV2::Final { final_daa: FENCE + 9 });
+    fp.source = PalwClaimSourceV2::FreePrompt { quanta: 8, spent: Default::default() };
+    fp.accepted_blue_score = 42;
+    let mut same_block = claim_at(FENCE, PalwClaimPhaseV2::Provisional);
+    same_block.accepted_blue_score = 50;
+    for (n, c) in [(1u64, red), (2, voided), (3, fp), (4, same_block)] {
+        state.set_false_valid_rows_for_tests(claim_id(n), Some(c), None, None, 0);
+    }
+    let contributions = palw_permissionless_contributions_from_state_v1(&state, 50);
+    let blocks: BTreeSet<Hash64> = contributions.iter().map(|c| c.block).collect();
+    assert_eq!(contributions.len(), 2, "the red carrier and the later-voided attempt; not the FP claim, not the anchor block's own");
+    assert!(blocks.contains(&Hash64::from_u64_word(0x8ED)), "a RED carrier is recognized");
+    assert!(contributions.iter().all(|c| c.admitted));
+}
+
+// =================================================================================================================================
+// Frontier rollback (RFC-0018 §7.5a)
+// =================================================================================================================================
+
+fn final_attempt(blue: u64) -> PalwClaimStateV2 {
+    let mut c = claim_at(FENCE, PalwClaimPhaseV2::Final { final_daa: FENCE + 60 });
+    c.accepted_blue_score = blue;
+    c.accepted_block = Hash64::from_u64_word(0xB10C_0000 + blue);
+    c
+}
+
+/// A certified claim later convicted (voided) stops standing as the frontier; the frontier falls back to the deepest remaining
+/// certified claim, never below the floor; a retirement never moves it (the floor takes it); pruning stays at or below the
+/// shallowest claim a conviction could still make the frontier.
+#[test]
+fn rfc18_frontier_rolls_back_on_conviction_and_pruning_never_passes_a_rollback_target() {
+    let p = with_mirror(PalwGateCRuleV1::SecurityCertifiedV1);
+    let mut state = PalwChainStateV2::genesis();
+    for (n, blue) in [(10u64, 10u64), (20, 20), (30, 30)] {
+        state.set_false_valid_rows_for_tests(claim_id(n), Some(final_attempt(blue)), None, None, 0);
+        certify(&mut state, &claim_id(n), Some(PalwCertificationOutcomeV1::Certified));
+    }
+    // An uncertified Final above them is no frontier.
+    state.set_false_valid_rows_for_tests(claim_id(40), Some(final_attempt(40)), None, None, 0);
+    certify(&mut state, &claim_id(40), None);
+    assert_eq!(palw_gate_c_frontier_v1(&state, &p, u64::MAX).0, 30);
+    assert_eq!(palw_frontier_rollback_bound_v1(&state, &p), Some(10), "the shallowest rollback target");
+    // The unresolved bound still applies.
+    assert_eq!(palw_gate_c_frontier_v1(&state, &p, 25).0, 20);
+    // Conviction of the frontier claim: it is voided, and the frontier falls back to 20.
+    let mut convicted = final_attempt(30);
+    convicted.phase = PalwClaimPhaseV2::Voided { voided_daa: FENCE + 90, reason: PalwVoidReasonV2::BindTimeout };
+    state.set_false_valid_rows_for_tests(claim_id(30), Some(convicted), None, None, 0);
+    assert_eq!(palw_gate_c_frontier_v1(&state, &p, u64::MAX).0, 20);
+    // The claim at 10 retires: the floor takes it; the frontier is unchanged; the rollback bound moves up to 20.
+    let floor = PalwCertifiedFrontierFloorV1 { blue_score: 10, block: Hash64::from_u64_word(0xB10C_0000 + 10).as_bytes() };
+    state.set_kernel_aux_row_for_tests(PALW_SECURITY_CERTIFICATION_TABLE_V1, certification_frontier_floor_key_v1(), Some(borsh::to_vec(&floor).unwrap()));
+    state.set_false_valid_rows_for_tests(claim_id(10), None, None, None, 0);
+    assert_eq!(palw_gate_c_frontier_v1(&state, &p, u64::MAX).0, 20);
+    assert_eq!(palw_frontier_rollback_bound_v1(&state, &p), Some(20));
+    // Convicting the last certified claim leaves the floor.
+    let mut convicted = final_attempt(20);
+    convicted.phase = PalwClaimPhaseV2::Voided { voided_daa: FENCE + 95, reason: PalwVoidReasonV2::BindTimeout };
+    state.set_false_valid_rows_for_tests(claim_id(20), Some(convicted), None, None, 0);
+    assert_eq!(palw_gate_c_frontier_v1(&state, &p, u64::MAX).0, 10, "never below the floor");
+    assert_eq!(palw_frontier_rollback_bound_v1(&state, &p), None, "no convictable target left: the floor never moves back");
 }
 
 /// Order- and colour-independent; a bond's later attempts neither re-roll nor add.
