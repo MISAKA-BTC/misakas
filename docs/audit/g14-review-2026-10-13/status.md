@@ -617,3 +617,16 @@ Not started: g14_kernel_route_e2e, service E2E, affected suites, clippy.
 - The other GAP rows of the matrix (GAP-00..82) belong to other lanes (kernel
   route, pipelines, typed roots, EXEC slices, legacy Panel decision) and were not
   touched here.
+
+### Validation-phase item: "constraint accepted seed changed" (static diagnosis, 2026-10-15)
+
+`generic_constraint_streams_large_rendering_to_exact_rooted_fault_and_restarts`
+failed (before the decode-view refactor) with "constraint accepted seed changed".
+Static cause: the node scheduler took the seed id to be the signed carrier digest,
+but the native row's seed id is its court's identity, which is that digest only
+when the seed retains its profile and otherwise the court's canonical context. A
+non-retained seed therefore never matched the accepted cursor, and the locally
+streamed EOG/rendering context would have differed from native too. The scheduler
+now rebuilds its court through `court_with_resolved_binding_v1` exactly as native
+admission does and uses that court's id (open and archived reopen). Source fix
+only; the test must be rerun in the consolidated validation phase.

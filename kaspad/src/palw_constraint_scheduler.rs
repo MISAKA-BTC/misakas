@@ -551,7 +551,7 @@ impl ConstraintSchedulerV1 {
             claim: target.claim_id,
             reserver: progress.reserver,
             reserved_daa: progress.reserved_daa,
-            binding,
+            binding: binding.clone(),
             job: None,
             pin,
             witness: plan.witness,
@@ -577,7 +577,11 @@ impl ConstraintSchedulerV1 {
         {
             return Err("authenticated constraint seed exceeds its fixed carrier envelope".into());
         }
-        let seed_id = Hash64::from_bytes(seed.signing_message().try_into().map_err(|_| "constraint seed identity width")?);
+        // The native row's seed id is its court's identity: the signed carrier digest only when the
+        // profile is retained, otherwise the court's canonical context. Rebuild the local court the
+        // way native admission does so both the id and every streamed context agree with it.
+        let court = seed.court_with_resolved_binding_v1(target.execution_root, maximum_leaves, job, &binding)?;
+        let seed_id = court.seed_id();
         if progress.seed_id.is_some_and(|id| id != seed_id) {
             return Err("accepted constraint seed differs; replacement is forbidden".into());
         }
@@ -740,8 +744,8 @@ impl ConstraintSchedulerV1 {
         maximum_leaves: u64,
         ledger: &Arc<PalwMemoryLedgerV1>,
     ) -> Result<Self, String> {
-        let seed_id = Hash64::from_bytes(seed.signing_message().try_into().map_err(|_| "constraint seed identity width")?);
-        if progress.seed_id != Some(seed_id)
+        let digest = Hash64::from_bytes(seed.signing_message().try_into().map_err(|_| "constraint seed identity width")?);
+        if progress.seed_id.is_none()
             || !matches!(progress.cursor, Some(PalwStagedOwnedCursorV1::Constraint { .. }))
             || (seed.claim, seed.reserver, seed.reserved_daa) != (progress.claim, progress.reserver, progress.reserved_daa)
             || target.claim_id != progress.claim
@@ -800,23 +804,16 @@ impl ConstraintSchedulerV1 {
                 seed.eog_count,
                 &seed.eog_opening,
                 original.ok_or("Flat archive lost its native original commitment")?,
-                Some(seed_id),
+                Some(digest),
             )?
         } else {
-            PalwConstraintStreamCourtV1::new(
-                target.claim_id,
-                seed.reserver,
-                seed.reserved_daa,
-                target.execution_root,
-                binding,
-                job,
-                &seed.pin,
-                seed.witness,
-                seed.eog_count,
-                &seed.eog_opening,
-                maximum_leaves,
-            )?
+            seed.court_with_resolved_binding_v1(target.execution_root, maximum_leaves, job, binding)?
         };
+        // Same identity rule as native admission (see `open`).
+        let seed_id = court.seed_id();
+        if progress.seed_id != Some(seed_id) {
+            return Err("public constraint archive changes admitted seed identity".into());
+        }
         Ok(Self {
             seed: seed.clone(),
             seed_id,
