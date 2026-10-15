@@ -1,498 +1,489 @@
-# RFC-0016 — bond加重のブロック生成機会と弾力的Final容量: 物理ブロックと報酬対象ブロック権利を分けて設計する
+# RFC-0016 — bond加重のブロック生成機会と弾力的Final容量: 物理ブロック機会をbondへ接続する
 
-> **設計前提:** [PRINCIPLES](../PRINCIPLES.md) §0（2026-10-14、モデルの非公開を経済的に不利にする。不正は排除でなく有界化）を最上位とする。
-> [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)（bond単位のQ/B/R/F上限と共通拘束`d + W_hold`）、
-> [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)（モデル入手への合意不介入、モデル別配分）、
-> [RFC-0015 §8.3–8.5](0015-panel-free-permissionless-verification.md)（2026-10-14確定: `α = 1.5`、30日平均、Miner＋Verifier元本、ブロック機会にも適用、`W_hold` = 7日相当DAA）を前提とし、変更しない。
-> 本RFCは、2026-10-14決定の「モデル間のブロック生成機会を`P_m`で配る」を
-> [ADR-0137](../adr/0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md)の共通work target抽選とどう接続できるかを分析する。
-> あわせて、人気モデルが検証容量の不足でFinal待ちになる問題を扱う。
+> **設計前提:** [PRINCIPLES](../PRINCIPLES.md) §0（2026-10-14、モデルの非公開を経済的に不利にする。不正は排除ではなく有界化）を最上位とする。
+> [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)（bond単位のQ/B/R/F上限と共通拘束）、
+> [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)（モデル入手への合意不介入とモデル別配分）、
+> [RFC-0015 §8.3–8.5](0015-panel-free-permissionless-verification.md)（2026-10-14確定: `α = 1.5`、30日平均、Miner＋Verifier元本、ブロック機会にも適用）を前提とし、変更しない。
+> 本RFCは、bondの多いモデルが**物理的に**多くのブロック生成機会を得る設計と、人気モデルが検証容量の不足でFinal待ちにならない設計を扱う。
 
 **トークンの表示名は Misaka、ticker は BILI。** 既存のprotocol/CLI/API識別子は維持する（[ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)）。
 
-* **Status:** Draft, 2026-10-15（同日のユーザーreviewで改定）。**設計検討中の文書であり、採用された設計はない。**
-  §6の案B+は検討を続ける作業仮説であり、採用されていない。また、案B+は元の目標（§0.1）を物理ブロックについて達成しない（§5）。
-* **Implementation status:** not implemented。§1の検証は既存コードの読み取り記録であり、build・test・実node試験は行っていない。
-* **Source baseline:** `origin/pre` `4fb381a87`と、統合branch `integ/rfc02-rfc06-12-g14` HEAD `7dd86f2a0`
-  （RFC02＋RFC06/07/08/12＋G14公開conviction＋RFC-0015休眠実装に`4fb381a87`をmerge）。
+* **Status:** Draft, 2026-10-15。同日のユーザーreview 2回で改定した。
+  下の2つの「ユーザー判断」表は**設計上の決定**である。本番値の承認でも、有効化の承認でもない。
+  §8の先行候補は採用されていない。
+* **Implementation status:**
+  * P4のcode修正だけを`eee1710ce`で休眠codeに入れた。build・test・実node試験は未実施で、PASSではない。
+  * それ以外の設計（物理層、権利、容量）は未実装である。
+* **Source baseline:** `origin/pre` `4fb381a87`と、統合branch `integ/rfc02-rfc06-12-g14` HEAD `7dd86f2a0`。
 * **Activation:** なし。設計用の未割当fence名として`palw_model_block_rights_v1`と`palw_elastic_final_capacity_v1`を使う。既存Paramsのfieldではない。
   高さ・wire tag・RPC op・署名domainは割り当てない。
-* **Not activated by:** 本RFCやその休眠実装のmerge、test PASS、配分値の承認だけ。
-* **Normative language:** MUST / MUST NOTは、将来その規則を採る場合の要件として書く。採用を意味しない。型名・関数名・fence名は設計用である。
+* **Not activated by:** 本RFCやcodeのmerge、test PASS、本表の設計判断。
+* **Normative language:** MUST / MUST NOTは、その設計を採る場合の要件である。採用を意味しない。
 
-## ユーザー判断 2026-10-15（本RFCのreview、拘束）
+## ユーザー判断 2026-10-15（第1回: review、拘束）
 
-| # | 判断 | 本文への反映 |
+| # | 判断 |
+| --- | --- |
+| R1 | RFC-0016はDraftのまま設計を続ける。B+を採用済みとも、元の目標を達成する設計とも書かない |
+| R2 | 「物理ブロック生成機会」（共通W抽選の当選と、実際に生成されたblock）と「報酬対象ブロック権利」を分ける。経済的誘導による収束を主張するなら、条件と反例を書く |
+| R3 | `α = 1.5`、30日平均、共通拘束（7日相当）は確定。280–436 DAAと400 DAAは選択肢ではなく、直すべきcodeのずれである。個別capを、配分を使い切らせるために引き上げない。使い切れない配分は報告する |
+| R4 | Panel=0の前提（claimとblockの対応、B/R/Fの予約、coinbaseとescrowの区別）を先に確定する |
+| R5 | 試験を追加する（entrant reserveの予算控除、モデル分割、容量0、容量の二重計上、queue中の予約、quote後の競合、無効claimによる希釈） |
+| R6 | 目標`P_m`、物理block、報酬権利、Final、実際の支払、既存miner個人の収入を別々に報告する。目標シェアの増加だけで改善を報告しない。受入は物理・支払の列で測る |
+
+## ユーザー判断 2026-10-15（第2回: 設計決定、本番値・有効化の承認ではない）
+
+| # | 決定 | 本文 |
 | --- | --- | --- |
-| R1 | RFC-0016はDraftのまま、案B+の設計を続ける。B+を採用済みとも、元の目標を達成する設計とも書かない。「推奨＝採用」と読める表現を除く | Status、§6冒頭、§12。「推奨」を「作業仮説」に置き換えた |
-| R2 | **最優先:** 「物理ブロック生成機会」（共通W抽選の当選と、実際に生成されたblock）と「報酬対象ブロック権利」（台帳上の権利）を分ける。B+は物理抽選を変えないので、bondを増やしてもそのモデルの物理blockは直接には増えない。経済的誘導による収束を主張するなら、収束条件と反例を書く。物理抽選を変えずに元の目標を満たせるか、満たすには物理層で何が要るかを分析する（決定ではない） | §0.1、§5（全体） |
-| R3 | 確定事項は再検討しない: `α = 1.5`、30日平均、共通拘束7日相当。280–436 DAAと400 DAAは**7日相当へ直すべきcodeのずれ**であって選択肢ではない。個別capを、モデルが配分を使い切るためだけに引き上げてはならない。使い切れない配分は報告し、cap引き上げで解決しない | §1.2 X3、§6.6、§12（旧U6・U15を削除） |
-| R4 | Panel=0について、他の議論より先に、(a) Kernel claimとそれを運ぶblockの対応、(b) B/R/Fを誰がいつ予約するか、(c) coinbase subsidyと利用者払い（escrow）報酬の区別を確定して書く。RFC-0015のlead default（`B = F = 0`）は保留中のdefaultで決定ではない。維持・変更それぞれの帰結を示す | §2（前提節） |
-| R5 | 試験表に7項目を合格基準付きで追加する | §9.3 |
-| R6 | 計測は、配分目標`P_m`、物理block数、付与された報酬権利、Final数、実際の支払、既存minerごとの個人収入を**別々に**報告する。目標シェアの増加だけを根拠に、実際のblock生成や収入の改善を報告してはならない。受入試験は物理・支払の列で測る | §8、§9 |
+| D-P3 | **Kernel claimにcoinbase subsidy legを作らない。** 利用者払いescrowの報酬は残し、既存のV2 coinbase経路とは分ける | §2.3 |
+| D-P1/P2 | **`B = 0`、`F = 0`を維持する。** 通常のKernel claimはtransactionで運ばれ、それだけでは独立の報酬対象ブロック権利もFinal weightも作らない。Q、R、責任担保、carrierの資源上限は残す | §2.2 |
+| D-P4 | **clipを禁止する。** coinbase由来のモデル予算が利用者escrowを削る経路（§2.4）を直す。producerの共通R capは適用する。最大報酬予約が足りない場合は**受理前に拒否**し、受理後にclipしない | §2.4、code `eee1710ce` |
+| D-P5 | 今回の変更では既存のV2 Panel検証経路を残す。Panel=1への移行には、検証・rotation・責任・Final条件の別途確認が要る。**Kernel経路のPanel=0が、coinbaseを受け取る採掘経路をPanel-freeにすると書いてはならない** | §2.5 |
+| D-Q1 | **bondに基づく物理ブロック生成機会を優先する。** 全モデルで1計算あたりの当選確率と報酬が完全に等しいこと（ADR-0137）は絶対条件ではない。物理抽選または事前発行権への接続を設計目標とする。B+だけで物理目標を達成したと扱わない。総発行予算、個別cap、検証条件、時計・heartbeatの保護は維持する | §7・§8 |
+| D-H | **拘束期間: Panel=0は7日相当DAA、Panel=1は1日相当DAA。** modeを切り替えても発行能力を再取得できないこと（予算のreset・二重取得の禁止）は必須。件数・予約額・burstは、正直な最小構成の連続REAL生産と、高速偽造側の上限を同時に測って決める | §3 |
 
 ## 0. 要約
 
-### 0.1 二つの「ブロック生成機会」
-
-| 用語 | 定義 | 決めるもの | 現行コード |
-| --- | --- | --- | --- |
-| **物理ブロック生成機会** | 共通`W_work`抽選に当選し、実際にDAGへ入るモデルblock | cadence、DAA、fork choice、Final weightへの寄与 | ADR-0137の抽選。1 forwardの当選確率は`min(1, CCU_m / W_work)`で、bondは入力にない |
-| **報酬対象ブロック権利** | 台帳上で報酬（coinbase）の対象として数えるblock 1本分の権利 | そのblockのclaimに払う報酬 | 未実装。休眠中の配分engineはモデル予算の不足時に報酬額だけを削る |
-
-元の目標「bondが多く集まるモデルほど多くのブロック生成機会と報酬を獲得し、人気モデルがFinal待ちで不利にならない」は、この二つを区別していない。
-本RFCではこう読む。
-
-* **報酬について:** `P_m`で配る報酬対象ブロック権利とcoinbaseの**目標**は、bondに対して単調に増やせる（§6）。
-  ただし実際の支払は、そのモデルで実際に生成されFinalになったclaimがなければ発生しない。
-* **物理ブロックについて:** 案B+は物理抽選を変えない。したがって**bondを増やしても、そのモデルの物理blockは直接には増えない**。
-  物理blockが`P_m`に近づくのは、§5の条件が全部揃い、minerが計算を移したときだけである。反例は§5.3にある。
-  物理抽選を変えずに、物理blockについて元の目標を保証する方法はない（§5.4）。
-
-### 0.2 現状の結論（§1）
-
-* 現行・統合のどちらでも、物理blockの本数は計算量だけで決まる。
-* `P_m`は文書上は確定している。コードは休眠のminer-only・epoch snapshot版で、報酬額を削るだけである。
-* Panel=0のkernel claimには抽選も物理モデルblockもない。報酬は利用者払いのescrowで、coinbaseは使わない（§2）。
-  このため`P_m`の「ブロック機会」と「coinbase」は、Panel=0の経路にはそのままでは適用先がない。
-* 検証容量はPanel経路ではready seatに比例する。ただしclass間の干渉、C7の静的上限、事前確認の競合という穴がある。
+1. **二つの「ブロック生成機会」**
+   * 物理ブロック生成機会: 共通`W_work`抽選の当選と、実際に生成されたモデルblock。cadence・DAA・fork choiceに効く。
+   * 報酬対象ブロック権利: 台帳上の権利。報酬だけに効く。
+   * 現行コードでは、物理blockは計算量だけで決まり、bondは入力にない（§1）。
+2. **D-Q1により、物理層をbondへ接続することが設計目標になった。**
+   §7で物理層の手段（ticketの傾き、採掘前の抑制、モデル別sub-target、beacon slot、事前発行権）を比較した。
+   **先行候補は「事前発行のモデル別ブロック権利（σ上限付きの途中再発行つき）を、抽選前のquoteとadmissionで要求する」案V+である**（§8、Draft、未採用）。
+   これにより、bondの多いモデルは物理blockの**上限**を事前に保証される。実際に物理blockを生むには、そのモデルを掘る計算が要る。
+   **計算のないモデルに物理blockを生ませる規則はない**（反例E1）。
+3. **B+（報酬権利だけ）** は比較用に残す。物理目標は達成しない（§9）。
+4. **Panel=0のKernel claim**
+   * 抽選も物理モデルblockもなく、報酬は利用者払いescrowだけである。
+   * `B = F = 0`とcoinbase legなしは決定済みである。
+   * `P_m`がKernel claimに配るものはない。
+   * coinbaseを受け取る採掘経路は、V2のPanel検証のままである（§2）。
+5. **拘束期間**はPanel=0が7日、Panel=1が1日である。調整の対象は、bond・期間あたりQ/B/R/F・予約額・burstの組合せで、1日あたりの発行をそろえる。mode切替で発行能力を取り戻せない（§3）。
 
 ## 1. レビュー主張の検証
 
-`pre` = `4fb381a87`、`HEAD` = `7dd86f2a0`。行番号はその時点のfileのもの。
+`pre` = `4fb381a87`、`HEAD` = `7dd86f2a0`。
 
-### 1.1 判定表
-
-| # | 主張 | 判定 | 根拠（pre / HEAD） | HEADでの差分・補足 |
+| # | 主張 | 判定 | 根拠（pre / HEAD） | 補足 |
 | --- | --- | --- | --- | --- |
-| (a) | ADR-0137は単価型difficultyを共通`W`に置き換えた。`p_m = min(1, CCU_m / W)`で、モデル別claim数は入力にない | **CONFIRMED** | `consensus/core/src/palw_admission_v2.rs` pre L1130–1146 / HEAD L1134–1150 `palw_effective_class_target_v1`。`palw_work_target_v1.rs` L116–125 `palw_work_ticket_target_v1`。floorはpre L1106 / HEAD L1110 | HEAD L1095–1103に`native_material_ticket_v3`分岐を追加。同じ関数を読むので規則は同じ。claim数はticketの入力ではないが、容量admissionの入力ではある |
-| (b) | `W`はepochごとに`max(W₀, W·実blocks/目標blocks)`で、変化率に上限がある。全モデル共通。t12 shipped presetはDAA 0から有効 | **CONFIRMED** | `palw_work_target_v1.rs` L94–114（`clamp(W/4, W·4)`、L34）。`config/params.rs` pre L10377–10401 / HEAD L10499–10523 `palw_t12_shipped_params`、HEAD L12303 | 行番号の移動のみ。RC preset（t11系）は7,101と7,780（HEAD L12022・L12038） |
-| (c) | Panel容量とinflight上限が新claimを拒否する。8kは窓3・同時約5、2Mは2,799・最大1。人気モデルのFinal処理量は検証資源で決まる | **PARTLY** | `palw_state_v2/fold_read.rs` `check_class_admits_claim` pre L901 / HEAD L901–1063。`ClassInflightCapped` pre L1002・L1046 / HEAD L1016・L1060。`PanelRoomExhausted` pre L1019・L1034 / HEAD L1033・L1048。`palw_work_target_v1.rs` L205–245 | 次の4点で不正確。(1) 8k行はaudit fence後、上限5ではなくrate roomだけで判定される（L222–229）。(2) roomはそのclassのready seat数に比例する（HEAD L1209–1217・L1266）。(3) 他の全classの未払replayを自classの供給から引く（`palw_state_v2.rs` HEAD L13130–13146）。(4) HEADのOPV経路には検証容量のadmissionがなく、担保だけを見る（`misaka/palw/kernel/src/ledger.rs` L2116–2129） |
-| (d) | RFC-0015は30日平均の`P_m = S̄^1.5/ΣS̄^1.5`をブロック機会とcoinbaseに適用する。engineは休眠で、既存設計は報酬額だけを制限する。α = 1.5のブロック配分は実際のブロック選択に接続されていない | **CONFIRMED**（追加あり） | RFC-0015 §8.5.5 pre L626 / HEAD L627–674。`palw_bond_budget_v1.rs` L1–15。Rだけのclip: pre L2634 / HEAD L2680。arm時は拒否: pre L684 / HEAD L711–734。設計書`bond-budget-and-model-allocation.md` §3.5 L296–308、§3.6 L310–315 | コードの`S_m`はminer資本だけ（tag 140）で、epoch snapshotとseasoningを使う（L10、L520–531）。30日平均とverifier元本は未実装。kernel経路での誤適用は§2.4 |
-| (e) | 人気モデルのbacklog、bond配分と共通W抽選の衝突、個別capで大きい`P_m`を使えない | **CONFIRMED**（将来リスクとして） | (c)・(d)とX1・X4 | 衝突の詳細な分析は§5 |
+| (a) | 共通`W`、`p_m = min(1, CCU_m/W)`、claim数は入力にない | **CONFIRMED** | `palw_admission_v2.rs` pre L1130–1146 / HEAD L1134–1150。`palw_work_target_v1.rs` L116–125。floorはpre L1106 / HEAD L1110 | HEAD L1095–1103の`native_material_ticket_v3`も同じ関数を読む。claim数は容量admissionの入力である |
+| (b) | epochごとの`W`のstep、共通、t12はDAA 0から | **CONFIRMED** | `palw_work_target_v1.rs` L94–114・L34。`params.rs` pre L10377–10401 / HEAD L10499–10523、HEAD L12303 | RC presetは7,101と7,780（HEAD L12022・L12038） |
+| (c) | 容量とinflight上限が拒否する。人気モデルは検証資源で律速される | **PARTLY** | `fold_read.rs` pre L901 / HEAD L901–1063。`ClassInflightCapped` HEAD L1016・L1060。`PanelRoomExhausted` HEAD L1033・L1048。`palw_work_target_v1.rs` L205–245 | 8kはrate roomだけで判定される（L222–229）。roomはready seatに比例する（HEAD L1209–1217・L1266）。class間で差し引きがある（`palw_state_v2.rs` HEAD L13130–13146）。OPVは担保だけを見る（`ledger.rs` L2116–2129） |
+| (d) | `P_m`は確定、engineは休眠、Rだけを削る | **CONFIRMED**（追加あり） | RFC-0015 §8.5.5 HEAD L627–674。`palw_bond_budget_v1.rs` L1–15、HEAD L2680、L711–734。設計書§3.5–3.6 | codeの`S_m`はminer-onlyのepoch snapshot（L10、L520–531） |
+| (e) | backlog、配分と抽選の衝突、capによる制約 | **CONFIRMED**（将来リスク） | 上記とX1・X4 | 分析は§6 |
 
-### 1.2 レビューが扱っていない事項
-
-| # | 事項 | 根拠 | 扱い |
-| --- | --- | --- | --- |
-| X1 | kernel claimは`B = F = 0`を予約する（RFC-0015のlead default、ユーザーreview待ち）。報酬はjob escrowで、coinbaseではない | `palw_bond_budget_fold_v1.rs` L1501–1545、`misaka/palw/kernel/src/ledger.rs` L147–151 | §2で前提として確定させる |
-| X2 | RFC08 R8-BUDGET: fee-only Roundは`B_max`外の独立`ExecutionCap`、v1 market feeは`R_max`外 | `docs/rfc/0008-palw-claim-backed-consensus-blocks.md` L292–301 | 権利層の対象外（§6.8） |
-| X3 | **codeのずれ:** 共通拘束`W_hold`は7日相当DAAで確定している（RFC-0015 HEAD L588・L647）。一方コードの許容範囲は280–436 DAA（`palw_bond_budget_v1.rs` L32–37）、RFC08の`W_budget`は400 DAA（drill暫定）である | 同左。`activation-readiness-matrix.md` L318–320 | **選択肢ではない。** 280–436と400は7日相当へ直すべきずれとして記録する（§11.2のC1）。ADR-0137の`W_work`（MAC-eq）とRFC-12の`W_pwu`は別の量で、ずれではない。記号を分けて書く |
-| X4 | ADR-0176の個別capは資本に線形、`P_m`はα = 1.5で超線形。上位モデルの配分はcapで使い切れないことがある | `palw_bond_budget_v1.rs` L796–813・L876–912。ECONの集中比1.4–1.8倍（`activation-readiness-matrix.md` §3g） | **capは引き上げない**（R3）。使い切れない分は報告する（§6.6） |
-| X5 | ADR-0177 D4（使い切れない枠をcapを超えて再配分しない）、D5（coinbase配分の変更だけで物理block頻度・ticket・DAA・難易度・fork choiceを変えない） | ADR-0177 L89–122・L238–250 | §5.4・§6.7 |
-| X6 | M\*-49 verifier pay（休眠）は検査数`N = 1`、slot `m = 4`の固定定数で、請求率に比例しない | `palw_verifier_pay_v1.rs` L1–35 | §7.6 |
-| X7 | attestation gate（2026-10-14維持）は、承認されないmodel-epochにモデル配分を払わない。claim・Final・weight・slashには触れない | `PRINCIPLES.md` §0-1、readiness §3f・§3k | §6.7 |
-| X8 | F-R（`palw_capacity_verify_room`）ではclass roomの各bondの取り分がstake比例。出荷presetでは休眠 | `palw_verify_capacity_v1.rs` L21–30、`params.rs` HEAD L10769–10790 | §7 |
-| X9 | block検証はadmission（HEAD L1083–1084）の後に抽選（L1095–1103）を見る。producerの事前確認はあるが予約ではない | `palw_state_v2.rs` HEAD L12217、`palw_producer_v2.rs` L246–259 | §7.4・§7.5 |
-| X10 | ADR-0137 D5は「an allocation is a share」としてモデル別配分を否定した | ADR-0137 L303–325 | 本RFCは物理層でADR-0137を保ったまま、配分を権利層に限ることを検討する |
-| X11 | `408f2171e`のcommit message（「Block issuance is not scaled by bond, there is no 30-day average」）は、17分後の`18987a94b`で上書きされた | `git show 408f2171e`、`18987a94b` | 確定事項は`18987a94b`（R3） |
-
-## 2. 前提: Panel=0のclaim・block・予約・資金の対応（R4）
-
-以下は統合HEADの休眠実装から読み取った事実と、その帰結である。値と選択はユーザー判断として§12に残す。
-
-### 2.1 (a) Kernel claimとそれを運ぶblock
-
-1. **運搬:** kernel経路のobjectは「one object, one transaction」で運ばれる。claimを提出する`CommitClaim`も、1つのtransactionとしてblockに入る
-   （`palw_kernel_route_fold_v1.rs` L6–12）。そのobjectを適用するのは、それを受理するchain blockのfoldである。`ClaimCommitted`はそこで発生する（L1395–1420）。
-   reorgでは受理blockが変わり、予約もそれに従って作り直される。
-2. **抽選がない:** kernel claimはATTEMPTのticketを持たず、共通`W_work`抽選に参加しない。claimは利用者が投稿したjobに対して、seal → revealの順で提出される。
-   1つのjobに1つのclaimで、`canonical_work_id`で一意である（`rfc-0015-implementation-status-2026-10-15.md` L73）。
-3. **物理モデルblockを作らない:** claimを運ぶtransactionはどのblockにも入れる。そのblockはモデルblockではなく、claimのためのblockは生成されない
-   （`palw_bond_budget_fold_v1.rs` L1501「Kernel carriers create no reward block or consensus weight」）。
-4. **EXEC_SLICE:** RFC-0008のwork-slice blockはkernel claimを参照し、検証を受けることができる。weightとDAAへの寄与は0で、sliceごとのcoinbase subsidyはない（RFC-0008 L134）。
-5. **V2 Attempt laneはPanelのまま:** 実装済みのPanel=0は、V2 Attempt route（共通`W_work`抽選、coinbase subsidyの経路）にPanel-freeの経路を与えていない
-   （status doc L15–18）。抽選と物理モデルblockは、Panel=0でも**Panel検証のV2側にだけ存在する**。
-
-**帰結:** Panel=0の経路には「物理ブロック生成機会」という量がない。claimの数は利用者のjob投稿数とproducerの能力で決まり、bondも抽選も決めない。
-
-### 2.2 (b) B/R/Fを誰がいつ予約するか
-
-| 予約主体 | 時点 | 内容 | 根拠 |
-| --- | --- | --- | --- |
-| jobの**投稿者のbond** | `PostJob`時 | `claim_reward`をescrowとして予約し、`job_fee`をburnする。M\*-49の検査料escrowも同時に積む | `ledger.rs` L1584–1617 |
-| claimの**producerのbond**（ADR-0176台帳） | `ClaimCommitted`時（受理chain block） | Q = 1、**B = 0**、**R = job escrowの額**、**F = 0**。共通拘束`d + W_hold`はここから始まる。責任担保はkernel自身のreservation（OPV admissionの必要額）で、income holdは`liability_until`まで | `palw_kernel_route_fold_v1.rs` L1395–1413、`palw_bond_budget_fold_v1.rs` L1503–1545・L1395 |
-| **モデル台帳** | 同上（配分fenceがある場合だけ） | kernel bindingで認証された唯一のnative classのモデルを`model`として渡し、`preview_claim_v1`がRを`model_available`でclipする | `palw_bond_budget_fold_v1.rs` L1514–1536、`palw_bond_budget_v1.rs` HEAD L2680 |
-| verifier | — | claim単位の予約なし。検査料はjob escrowから払う（M\*-49、休眠） | `palw_verifier_pay_v1.rs` L1–12 |
-
-### 2.3 (c) coinbase subsidyと利用者払い報酬の区別
-
-* **kernel claimの報酬は利用者払い（escrow）だけである。** Final時にjobのescrowから一度だけ払い、新規発行はしない
-  （`ledger.rs` L147–151「out of the job's escrow, never issued」、GAP-5のユーザー判断option A。fold側は`palw_kernel_route_fold_v1.rs` L22–27「Σ kernel payouts ≤ Σ kernel debits, with no coinbase rule involved」）。
-* **coinbase subsidy（`R_PALW`）は、chain blockのworker carveとして積み上がる**（設計書§3.4、`palw_bond_budget_v1.rs` L11）。
-  支払先はV2のAttempt/rider claimで、これはPanel経路である。
-* RFC-0015 §8.5.5の`R_m = R_PALW · P_m`は**coinbase subsidyの配分**である。Panel=0のkernel claimには、現在これを受け取るlegがない。
-
-### 2.4 発見: 配分fenceがkernel claimの利用者払い報酬をclipしてしまう
-
-休眠コードでは、配分fenceがある場合、kernel claimのR（job escrowの額）が`model_available`でclipされる（§2.2の3行目）。
-`model_available`はcoinbase carveから積んだモデル予算である。
-つまり、**coinbaseの配分予算が利用者払いのescrowを削る**ことになり、資金の種類が混ざっている。
-削られた分のescrowの扱い（producerへの未払いが投稿者へ戻るのか、burnか）も定義されていない。
-このままarmしてはならない。§12のP4で判断を求める。
-
-### 2.5 lead default `B = F = 0`の帰結（決定ではない）
-
-| 選択 | Panel=0 claimへの`P_m`の効果 | その他の帰結 |
+| # | レビューが扱っていない事項 | 根拠 |
 | --- | --- | --- |
-| **維持**（`B = F = 0`） | 物理blockもブロック権利もない。`P_m`が触れられるのはRだけで、そのRは利用者払いなので、§2.4のとおり触れるべきでない。**結果として、Panel=0の経路では`P_m`は何も配らない**（新しいsubsidy legを作る場合を除く） | ADR-0176のB capはkernel claimを数えない。kernel claimのFinalはfork choiceに寄与せず、規則E・RFC-0014 §16.10への影響はない |
-| **Bだけ>0**（会計単位、weightなし） | 権利台帳がkernel claimを数えられる。ただしsubsidy legがなければ、権利に払う資金がない | bond B capを消費する。各経路の予約・消費・undoを合わせる必要がある |
-| **F>0** | — | OPV FinalがconsensusのFinal weightを持つ。fork choiceの変更で、規則EとRFC-0014 §16.10の再検証が要る |
-| **kernel claimへのcoinbase subsidy legを新設** | `P_m`でsubsidyを配れる | 財源（どのchain blockのcarveか）、Final前の無払い、責任hold、escrowとの二重払い防止の設計が要る。総発行は増やさない |
+| X1 | Kernel claimは`B = F = 0`で、報酬はjob escrow | `palw_bond_budget_fold_v1.rs` L1501–1545、`ledger.rs` L147–151 |
+| X2 | R8-BUDGET: fee-only Roundは独立の`ExecutionCap`、v1 market feeは`R_max`外 | RFC-0008 L292–301 |
+| X3 | codeの拘束期間（280–436 DAA）とRFC08の400 DAAが、決定（Panel=0は7日、Panel=1は1日）とずれている | `palw_bond_budget_v1.rs` L32–37。§13のC1 |
+| X4 | capは資本に線形、`P_m`は超線形 | `palw_bond_budget_v1.rs` L796–813。§9.6 |
+| X5 | ADR-0177 D4・D5 | ADR-0177 L89–122・L238–250 |
+| X6 | M\*-49の検査数は固定定数 | `palw_verifier_pay_v1.rs` L1–35 |
+| X7 | attestation gate | PRINCIPLES §0-1、readiness §3f・§3k |
+| X8 | F-Rはstake比例で、出荷では休眠 | `palw_verify_capacity_v1.rs` L21–30、`params.rs` HEAD L10769–10790 |
+| X9 | 事前確認はあるが予約ではない | `palw_state_v2.rs` HEAD L12217、`palw_producer_v2.rs` L246–259 |
+| X10 | ADR-0137 D5はモデル別配分を否定した。D-Q1でこの絶対性は解除される | ADR-0137 L303–325 |
 
-本RFCの後続の議論（§5–§7）は、主にPanel経路のV2 Attempt laneを対象とする。Panel=0への適用は§2.5の判断（P1–P5）が出るまで保留する。
+## 2. Panel=0の前提（決定済み）
 
-## 3. 用語と記号
+### 2.1 Kernel claimとそれを運ぶblock（事実）
+
+* Kernel経路のobjectは「one object, one transaction」で運ばれる（`palw_kernel_route_fold_v1.rs` L6–12）。
+  `ClaimCommitted`は、そのtransactionを受理するchain blockのfoldで発生する（L1395–1420）。reorgでは受理blockと予約が作り直される。
+* claimは抽選ticketを持たない。利用者が投稿したjobに対してseal → revealで提出され、1つのjobに1つのclaimである（status doc L73）。
+* claimのためのblockは生成されない（`palw_bond_budget_fold_v1.rs` L1501）。
+* EXEC_SLICEはweightもDAAも0で、sliceごとのsubsidyはない（RFC-0008 L134）。
+* 共通`W_work`抽選と物理モデルblockは、V2 Attempt lane（Panel検証）にだけ存在する（status doc L15–18）。
+
+### 2.2 B/R/Fの予約（D-P1/P2で決定）
+
+| 主体 | 時点 | 内容 |
+| --- | --- | --- |
+| jobの投稿者のbond | `PostJob` | escrow（`claim_reward`）を予約し、`job_fee`をburnする。検査料escrowも積む（`ledger.rs` L1584–1617） |
+| producerのbond（ADR-0176台帳） | `ClaimCommitted`（受理chain block） | **Q = 1、B = 0、R = escrowの全額、F = 0**。責任担保と`liability_until`までのincome hold。共通拘束はここから数える |
+| モデル台帳 | なし | D-P4により、Kernel claimはモデル予算から取らず、記録もしない |
+
+Kernel claimは、それ自体では報酬対象ブロック権利もFinal weightも作らない。Q・R・責任担保・carrierの資源上限は残る。
+
+### 2.3 資金の区別（D-P3で決定）
+
+* Kernel claimの報酬は利用者払いescrowだけで、新規発行しない（`ledger.rs` L147–151、`palw_kernel_route_fold_v1.rs` L22–27）。
+* coinbase subsidy（worker carve）はV2 Attempt/rider claimの経路だけに流れる。両者を混ぜない（MUST NOT）。
+* `P_m`の配分（RFC-0015 §8.5.5）はcoinbase subsidyの配分なので、Kernel claimには適用しない。
+
+### 2.4 clipの禁止（D-P4で決定、code `eee1710ce`、休眠・未build）
+
+* 修正前: 配分fenceがあると、Kernel claimのR（escrow）が、coinbase由来の`model_available`でclipされていた。
+* 修正: `palw_budget_origin_is_user_escrow_v1`（KernelRoute）と`PalwBondBudgetStateV1::preview_claim_for_origin_v1`を追加した。
+  * 利用者払いのoriginはモデル予算を無視する。
+  * escrowの全額を予約しなければならない。claimごとの上限を下回る場合は`EscrowNotReservable`、共通R capが足りない場合は`Exhausted { Reward }`。どちらも受理前に拒否する。
+  * `reserve_claim_v1`とfoldの`plan_bond_budget_v1`はこの関数を使う。escrow claimはモデルを記録しない。
+* test source（未実行）:
+  * `rfc0016_p4_user_escrow_is_never_clipped_by_the_model_budget`
+  * `rfc0016_p4_insufficient_r_refuses_an_escrow_claim_before_acceptance`
+  * `rfc0016_a_mode_switch_never_reacquires_issuance_capacity`
+
+### 2.5 coinbase採掘経路とPanel（D-P5で決定）
+
+* 今回の変更では、V2 Attempt lane（coinbase）の既存Panel検証経路を残す。
+* **Kernel経路のPanel=0は、coinbaseを受け取る採掘経路をPanel-freeにしない**（MUST NOTで、そう記述しない）。
+* coinbase経路の検証modeを変える（Panel=1へ移すことを含む）には、検証・rotation・責任・Final条件を別途確認する必要がある。
+
+## 3. 拘束期間・発行能力の調整とmode切替（D-H、ADR-0176と整合）
+
+実装はADR-0176側（branch `integ/adr-0162-0178`の別agent）が担当する。本RFCは設計上の要件を書くだけで、code作業を重複させない。
+
+### 3.1 調整の対象
+
+調整するのは拘束日数だけではない。次の**組合せ**全体である。
+
+* bond額
+* 期間あたりのQ/B/R/F
+* 1 claimあたりの予約額
+* 短期のburst・rate上限
+
+**主条件（MUST）:**
+
+1. 同じbond・同じmode・同じ期間なら、高速偽造は正直な計算より多くのQ/B/R/Fを得ない。
+2. 基準となる正直なminerがcapに実際に到達できる。
+   基準miner: Qwen2.5-1.5B A16の固定profile、基準機材、producer最小bond。
+3. 需要・機材・検証がそろっているのに、capが低すぎてREAL生産が止まることはない。
+4. heartbeatを0にしない。時計・fallbackの規則（ADR-0066/0140/0142/0165）を弱めない。
+
+### 3.2 Panel=0とPanel=1の比較
+
+* 最初の比較では、**1日あたりの最大発行**をそろえる。
+  * Panel=1: 1日あたり`q, b, r, f`。
+  * Panel=0: 7日あたり`7q, 7b, 7r, 7f`。
+* 同じ件数で7倍速く回復させる形にしてはならない（MUST NOT）。
+* `W_hold(Panel=0)` = 7日相当DAA、`W_hold(Panel=1)` = 1日相当DAA。どちらも**通常時の最早の再利用時刻**である。
+
+### 3.3 能力の回復と担保の解放は別
+
+* 発行能力の回復（`accepted_daa + W_hold(mode)`）と、担保の解放は別の条件である。
+* 未解決のdispute・court・DA・責任期間がある限り、担保は保持する（MUST）。
+* 共謀した早期のValid・早期のFinalで、Panel=1の1日を短くできない（MUST NOT）。
+* 同時に必要な担保はおおよそ`λ · a · H`である。`λ`はclaimの率、`a`は1 claimあたりの責任担保、`H`は責任期間である。
+
+### 3.4 短期のburst上限
+
+* 週の総量の上限だけでは足りない。短い期間のburst・rate上限を追加する（MUST）。
+* 消費した能力を早く戻してはならない。二重に発行してはならない（MUST NOT）。
+
+### 3.5 mode切替
+
+* reservationの最早回復時刻は受理時のmodeの`W_hold`で固定し、modeを切り替えても短縮しない（MUST）。
+* mode切替では、消費履歴・hold・残存責任をすべて引き継ぐ（MUST）。window・履歴をresetしてはならない。mode別にwindowを新設して二重取得してはならない（MUST NOT）。
+* 1つのbondのwindowは全modeで共有し、capは全modeの予約の合計に適用する。
+* test source `rfc0016_a_mode_switch_never_reacquires_issuance_capacity`（`eee1710ce`、未実行）は、現行の単一`W`の下でこの性質を固定する。mode別`W`の実装（ADR-0176側）でもこの性質を保つ。
+
+### 3.6 値の決め方（3段階）
+
+値はここで決めない。次の3段階で導出する。
+
+1. **正直な最小構成の能力を測る。**
+   * 基準miner（§3.1）と、各profile・各modeの最小構成で、連続REAL生産を測る。
+   * 測る量: claim率、Final率、検証待ち、費用、`W_hold`期間の累積のp50/p99、短窓（1 span、10 span）のburstのp99。cold・warmの両条件で測る。
+   * 同じrelease・同じparams・同じ網条件で、高速偽造側（計算省略、carrier・seal遅延・cap・担保・admissionだけが上限）の最大率とburstを、解析と実測の両方で同時に測る。
+2. **capと予約額をsweepする。**
+   * bond額 × 期間あたりのQ/B/R/F × 1 claimの予約額 × burst上限の組合せを掃引する。
+   * 主条件（§3.1）、1日あたりの発行の同等性（§3.2）、`λ · a · H`の担保、を満たす範囲を求める。
+3. **敵対的・境界試験を行う。** 選んだ点で、偽造・mode切替・早期Valid共謀・burst・期間境界・reorg/restartの試験を行う。
+
+**制約が両立しない場合は、その衝突を報告する。数値を作り出して合わせてはならない（MUST NOT）。**
+測定のcommit、params、機材、網条件、生データ、導出式をevidenceとして残す。UNKNOWNはPASSにしない。
+
+## 4. 用語と記号
 
 | 記号 | 意味 |
 | --- | --- |
-| `W_work` | ADR-0137のwork target（MAC-eq）。共通抽選の値 |
-| `W_hold` | ADR-0176の共通拘束期間。**7日相当DAA（確定）** |
-| `W_pwu` | RFC-12のwork（pwu）。別の量 |
-| `N_30` | 30日相当のDAA数（確定） |
-| `S_m(k)`, `S̄_m(d)`, `P_m(d)` | RFC-0015 §8.5.5の定義（確定）。`P_m = S̄_m^1.5 / Σ_j S̄_j^1.5` |
-| `c_m` | モデル`m`の物理blockシェア（実測） |
-| `e`, `E_alloc` | 配分epochとその長さ |
-| `U` | ブロック権利1本の固定小数単位 |
-| `Pool(e)`, `Base_m(e)`, `Demand_m(e)`, `ψ_m(e)` | §6.2–6.3 |
-| `σ`, `κ`, `K`, `ε` | spill上限、carry上限、carry保持epoch数、entrant reserve（§6.4–6.5） |
+| `W_work` | ADR-0137のwork target（MAC-eq） |
+| `W_hold(mode)` | 拘束期間。Panel=0は7日相当DAA、Panel=1は1日相当DAA（確定） |
+| `N_30`、`S̄_m`、`P_m` | RFC-0015 §8.5.5（確定）。`P_m = S̄_m^1.5 / Σ S̄_j^1.5` |
+| `c_m` | モデルの物理blockシェア（実測） |
+| `N_exp(e)` | epoch `e`の期待モデルblock数（`closed_expected_blocks`、DAA数） |
+| `Rt_m(e)` | §8の事前発行権 |
+| `σ`、`κ`、`ε`、`τ_m`、`k` | spill上限、carry上限、entrant reserve、ticketの傾きとその上限 |
 
-## 4. 目標性質の分解
+## 5. 目標と保持する制約
 
-| ID | 性質 | 層 | 案B+での状態 |
-| --- | --- | --- | --- |
-| G1t | `S̄_m`を増やすと、`P_m`（ブロック権利とcoinbaseの**目標**）が単調に増える | 権利 | 成立する（定義による） |
-| G1p | `S̄_m`を増やすと、そのモデルの**物理block**が増える | 物理 | **保証しない**（§5） |
-| G1r | `S̄_m`を増やすと、そのモデルの**実際の支払**が増える | 支払 | 条件付き（§5.2の条件が揃うとき） |
-| G2 | 1 forwardの当選確率がモデルによらない（ADR-0137） | 物理 | 保つ |
-| G4 | Final処理量がそのモデルの検証者容量に比例して伸び、不足は報告される | 容量 | §7 |
-| G5 | cadence・DAA・難易度・fork choice・Final weight・総発行を変えない | 全体 | 保つ |
-| G6 | 個別Q/B/R/Fと`d + W_hold`を超えない | bond | 保つ |
-| G7 | 新規モデルが機会を失いすぎない | 権利 | §6.5 |
-| G8 | 資本の付け替え・Sybil・分割・容量の占拠・自己取引で配分を増やせない | 全体 | §9.2・§9.3 |
-
-## 5. 物理ブロックと報酬権利の分析（R2、最優先）
-
-### 5.1 モデル
-
-* minerは、1単位の計算あたりの期待報酬が最大のモデルを掘ると仮定する。B+の下で、モデル`m`の1単位計算あたりの期待報酬は`ψ_m · E / W_work`である
-  （`CCU_m ≤ W_work`のとき、1当選に平均`W_work`の計算が要り、1当選の報酬上限は`E`）。
-* `ψ_m < 1`のモデルから`ψ_m = 1`のモデルへ計算が移れば、物理シェア`c_m`は権利予算に近づく。これが「経済的誘導」の全部であり、規則で強制するものではない。
-* 物理抽選は`W_work`だけで決まるので、**どのモデルのbondも当選確率を変えない**。物理blockを増やせるのは、そのモデルを掘る計算の増加だけである。
-
-### 5.2 収束の条件
-
-次の**全部**が成り立つとき、飽和領域で`c_m`は`P_m`（`σ`による幅を含む）へ近づく。
-
-| ID | 条件 | 破れる例 |
+| ID | 内容 | 扱い |
 | --- | --- | --- |
-| C1 | 飽和: `W_work > W₀`で、期待cadenceを基準にする予算が拘束している | `W_work = W₀`の領域では予算が余り、全モデルで`ψ = 1`。誘導がない |
-| C2 | 移動できる計算がある: minerの機材が移動先モデルを実行できる（VRAM/RAM、2M contextなど）。重みの取得（cold fetch、数十GB）、prefetch、class seating（`palw_class_seated_admits_v1`、`palw_state_v2.rs` HEAD L12233）、warm-upの費用が、期待利益差×期間を下回る | 機材がモデル専用、RAMが足りない、取得に時間がかかる |
-| C3 | 情報: `ψ`の見積りを、計算の前にquoteで知ることができる（§7.4） | quoteがなければ、低い`ψ`を後から知ることになる |
-| C4 | 移動先に検証容量がある | 移動先の容量が0か満杯なら、queue待ちか拒否になる |
-| C5 | 移動先が報酬gate（onboarding/G14、lifecycle ACTIVE、attestation gate）を通っている | gateで拒否されたmodel-epochには払われない |
-| C6 | 時間: `P_m`は30日平均でゆっくり動く。予算はepochごとに固定。収束には移動時間とepoch観測の両方が要る | 移動より速い変化（急増）には追いつかない |
-| C7 | `σ`が小さい: `σ`が大きいほど`ψ`の差が小さく、誘導が弱い。`σ = ∞`では誘導がない（権利シェア = 物理シェア） | 大きい`σ` |
+| G1p | `S̄_m`が増えると、そのモデルの**物理ブロック生成機会**が増える | **主目標**（D-Q1） |
+| G1t | 目標（`P_m`）が単調 | 定義で成立 |
+| G1r | 実際の支払が増える | 物理blockとFinalに依存する |
+| G2 | 1計算あたりの当選確率と報酬がモデル間で等しい（ADR-0137） | **絶対条件ではない**（D-Q1）。崩す場合はその幅を有界にし、報告する |
+| G4 | 人気モデルのFinalが検証者容量に比例し、不足は報告される | §10 |
+| K1 | 総発行予算（per-DAA subsidy）を増やさない | 保持（MUST） |
+| K2 | 個別Q/B/R/Fと`W_hold`（引き上げない） | 保持（MUST） |
+| K3 | 検証条件（Final前に払わない、court、gate） | 保持（MUST） |
+| K4 | 時計とheartbeatの保護 | 保持（MUST）。§8.4 |
 
-### 5.3 反例
+ユーザー指示の「ADR-0172 heartbeat/fallback」は、このrepoでは次の規則を指すものと読む。
+ADR-0066/0140（独立したheartbeat lane。ADR-0140 C1–C5: 難易度を締めない、他の何かが時計を進めている間は時計を進めない、fork-choice weightを取らない、稼がない・生産を奪わない、非常時に確実に始動する）、
+ADR-0142（時計はcursorで、heartbeatがslotを消費する）、ADR-0165 rev5（BASE-0はidle時だけのbonded floor、REAL attemptがslot tickを運べる。FALLBACK-V1統合は撤回）。
+現在のADR-0172はversioned kernelのADRである。
 
-| ID | 状況 | 物理block | 報酬権利・支払 | 元の目標 |
-| --- | --- | --- | --- | --- |
-| E1 | **minerがモデルを移れない**（機材・モデル専用設定、モデルサイズとRAM、cold fetch、seating）。Aはbondが多いが、Aを実行できる機材が少ない | Aの物理シェアはAを実行できる計算のシェアのまま。bondを増やしても変わらない | Aは`ψ_A = 1`で予算が余る。余りはcarry → σ上限付きspill → 留保。**ネットワーク全体の実支払が減る** | 物理・支払とも満たさない |
-| E2 | **需要の急増**: Bの利用が急増し、計算がBへ集まる。Bのbondは少ない | Bの物理blockは抽選で急増する。共通`W_work`も上がり、**他モデルの1計算あたりの物理blockが減る** | `P_B`は30日平均で遅れて動く。`ψ_B`は下がり、Bのminerの1計算あたりの報酬が落ちる。利用者がBへbondを入れても、`S̄`へは30日かけてしか反映されない | Bは「人気なのに不利」になる。bondの多いAの物理blockも減る |
-| E3 | **資本が多く計算が少ない**（Aがbond 80 %、計算20 %） | Aの物理シェアは20 %のまま | α = 1.5で`P_A`は80 %より大きい。使われない約60 %以上がcarry・spill（`σ`上限）・留保に流れる。Aのbond保有者が得るのは20 %分だけで、残りの多くは誰にも払われない | 目標（予算）は上がるが、物理・支払は上がらない |
-| E4 | **計算が多く資本が少ない**（Bがbond 20 %、計算80 %） | Bの物理シェアは80 %。Bの当選で`W_work`が上がり、Aの1計算あたりの物理blockが減る | `ψ_B ≈ (Base_B + spill_B) / Demand_B`で、Bのminerは安く払われる。Aは`ψ_A = 1`でも、物理blockは増えない | Aのbondは物理blockを増やさない |
-| E5 | **無報酬の当選で`W_work`を吊り上げる**（griefing） | 安いモデルで当選を積むと`W_work`が上がり、bondの多いモデルの物理blockが減る | 期待cadence基準の`Pool`は増えない。攻撃者は計算費用を払うだけ | bondの多いモデルの物理機会を、計算で削れる |
-| E6 | **`W₀`領域**（計算供給が少ない） | 物理blockは計算どおり | 予算が余り、全モデルで`ψ = 1`。`P_m`は支払にも物理にも効かない | 目標シェアだけが動き、実体は変わらない |
+## 6. 物理ブロックと報酬権利の分析（背景）
 
-### 5.4 物理抽選を変えずに元の目標を満たせるか
+### 6.1 経済的誘導による収束の条件（物理層を変えない場合）
 
-* **物理blockについては満たせない。** 物理blockは当選したforwardからしか生まれず、当選確率はbondを読まない。
-  B+ができるのは報酬の目標を`P_m`で決めることと、計算の移動を誘うことだけである。E1–E6のとおり、誘導は保証にならない。
-* **報酬について**は、§5.2の条件が全部揃えば支払は`P_m`へ近づく。揃わなければ、目標だけが上がって実支払は上がらない（E1・E3・E6）。
-* **どの規則を採っても、計算のないモデルに物理blockを生ませることはできない。** 物理層で取り得る手段は、計算があることを前提にした次のものに限られる（分析であり、決定ではない）。
+次の全部が成り立つ場合に限り、報酬側の差によって物理シェア`c_m`が`P_m`へ近づく。
 
-| 物理層の手段 | 効果 | 代償 |
+* C1: networkが飽和している。
+* C2: 計算が移動できる（機材、RAM、cold fetch、seatingの費用が、期待利益差を下回る）。
+* C3: 計算の前にquoteで見積りが分かる。
+* C4: 移動先に検証容量がある。
+* C5: 移動先がgateを通っている。
+* C6: 30日平均と移動に要する時間がある。
+* C7: spill上限`σ`が小さい。
+
+### 6.2 反例
+
+| ID | 状況 | 物理層を変えない場合の結果 |
 | --- | --- | --- |
-| P-i モデル別ticketの傾き（案D、`τ_m ∈ [1/k, k]`を`P_m`と`c_m`の比から決める） | bondが多いモデルは1計算あたりの当選が増え、他のモデルは減る | G2（計算単位の公平性）を最大`k²`倍まで崩す。ADR-0137 §3.4の人気ペナルティが有界に戻る |
-| P-ii `P_m`を超えたモデルのadmissionを抽選の前に絞る（quoteで拒否） | 超過モデルの物理blockが減り、`W_work`が下がる。残りのモデルの1計算あたりの当選が増える（bondの多いモデルにも間接的に効く） | 計算の多いモデル（急増中の人気モデルを含む）を直接罰する（E2の悪化）。cadenceに空きができ、floorが埋める |
-| P-iii モデル別のsub-target（案A） | 物理シェアを`P_m`へ直接制御する | cold start trap（`P = 0`の新規モデル）、30日平均の遅れによる振動、class DAA状態の復活、fork choiceに触れるupgrade |
-| P-iv beaconによるslot割当（案C） | slotの割合を`P_m`にする | minerのいないslotが空く。beaconのgrinding、block validityの変更 |
+| E1 | minerがモデルを移れない（機材、モデル専用設定、RAM、cold fetch、seating） | bondの多いモデルの物理blockは変わらない。予算は余り、総支払が減る |
+| E2 | 低bondモデルの需要が急増する | そのモデルの物理blockが急増し、`W_work`が上がって他モデルの物理blockが減る。30日平均は遅れて動く |
+| E3 | 資本が多く計算が少ない | 物理blockは計算どおり。予算は大半が使われない |
+| E4 | 計算が多く資本が少ない | 低bondモデルの当選が`W_work`を上げ、bondの多いモデルの物理blockを薄める |
+| E5 | 無報酬の当選で`W_work`を吊り上げる | bondの多いモデルの物理blockが減る |
+| E6 | `W₀`の領域（計算供給が少ない） | 予算が拘束せず、何も変わらない |
 
-いずれも、**元の目標の後半（人気モデルが不利にならない）と、計算単位の公平性（ADR-0137）の少なくとも一方を犠牲にする**。
-物理blockの目標と人気モデルの非劣化は、計算とbondが一致しない状況（E2–E4）では同時に満たせない。どちらを優先するかはユーザーの判断である（§12のQ1）。
+**結論:** 物理層を変えなければG1pは保証されない。これがD-Q1の理由である。
 
-## 6. 案B+（作業仮説、未採用）: 共通W抽選＋モデル別報酬権利台帳
+## 7. 物理層の設計空間（D-Q1の主設計）
 
-**この節は検討を続ける作業仮説であり、採用されていない。B+は物理抽選を変えないので、物理blockについて元の目標を達成しない（§5.4）。**
+### 7.1 手段
 
-### 6.1 二層
+| ID | 手段 | 仕組み |
+| --- | --- | --- |
+| P-i | モデル別ticketの有界な傾き | `T_m = MAX · min(1, CCU_m · τ_m / W_work)`。`τ_m ∈ [1/k, k]`を`P_m / c_m`から決め、計算加重平均1に正規化する |
+| P-ii | 採掘前の抑制 | 物理シェアが`(1+σ)P_m`を超えたモデルに、quoteとadmissionで新しい当選を受理しない |
+| P-iii | モデル別sub-target | モデルごとの`W_m`を、`P_m · N_exp`へ向けてepochごとに調整する |
+| P-iv | beacon slot割当 | 各slotのモデルを`P_m`で抽選し、slot内は共通`W_work`で決める |
+| P-v | 事前発行権 | epoch開始前に、モデル別のブロック権利`Rt_m = ⌊P_m · N_exp⌋`を発行する。モデルblockは、そのモデルの権利を1本消費する場合だけ受理する。quoteは残りの権利を示し、権利のないモデルには計算をさせない |
 
-1. 物理層は変えない（`palw_effective_class_target_v1`、`palw_work_target_step_v1`、cadence、DAA、fork choice、Final weight）。
-2. モデル`m`のclaimが受け取る報酬は、`ψ_m(e) × claim自身のcarve`である。1 claimあたりの報酬はモデルによらず等しい（ADR-0137 D4）。
-   したがって権利シェアとcoinbaseシェアは、同じ`P_m`から一度だけ決まる。`P_m`を二度掛けしない。
-3. 権利台帳は、ADR-0176のbond単位のB次元とは別のモデル単位の台帳である。`ψ ≤ 1`なので個別capを超えない。
+### 7.2 保持する制約に対する評価
 
-### 6.2 予算の基準量`Pool(e)`
+| 手段 | K1 総発行 | K2 個別cap | K3 検証 | K4 時計・heartbeat | G2の崩れ |
+| --- | --- | --- | --- | --- | --- |
+| P-i | 飽和時は保つ。`W₀`領域では正規化が要る（ないと計算あたりの発行率が上がる） | 保つ | 保つ | 保つ（slotの供給量は不変、tickの担い手だけが変わる） | 最大`k²`倍、有界 |
+| P-ii | 保つ（余ったcadenceはfloor・heartbeatが埋める） | 保つ | 保つ | floorとheartbeatの始動（ADR-0140 C5）の試験が要る | 超過モデルは0（不連続） |
+| P-iii | 保つ | 保つ | 保つ | class DAA状態の復活。floorのhardening（ADR-0137 §3.5）の再発リスク | 無制限 |
+| P-iv | 保つ | 保つ | 保つ | slotの空き、beaconのgrinding、block validityの変更 | slot外は0 |
+| P-v | 保つ（権利 ≤ `N_exp`、未使用分は発行しない） | 保つ（権利の消費はproducer bondのBの予約の中） | 保つ | 未使用の権利の分をfloor・heartbeatが埋める。ADR-0140 C1–C5の試験が要る | 権利を持つモデル間では等しい。使い切ったモデルは0 |
 
-* **R1:** 期待cadence（`closed_expected_blocks`、DAA数）× `U`。epoch開始時に決まり、grief耐性がある。`W₀`領域では拘束しない（§5.3 E6）。
-* **R2:** 前epochの実現量 × `U`。常に拘束するが、希少性がないときも報酬を留保する。
+### 7.3 反例に対する評価
 
-どちらでも、支払はclaim自身のcarveの`ψ`倍以下であり、新しいmintはない（§12のQ2）。
+| 手段 | E1 移れない | E2 急増 | E3 資本≫計算 | E4 計算≫資本 | E5 吊り上げ | E6 `W₀` |
+| --- | --- | --- | --- | --- | --- | --- |
+| P-i | 解けない（計算なし） | 罰は`k`倍まで | 1計算あたりの当選が最大`k`倍 | 低bondモデルの当選が最大`1/k`倍。bondの多いモデルの物理blockは増える | 低bondモデルでの吊り上げを弱める | 正規化があれば中立 |
+| P-ii | 解けない | 最悪（急増した人気モデルを止める） | 間接的（`W_work`が下がる） | bondの多いモデルの物理blockが増える | 止まる | 飽和時だけ効かせる |
+| P-iii | 解けない（cold start trapもある） | 遅れて罰する | 効く | 効く | 効く | 振動する |
+| P-iv | slotが空く | 罰する | slotが空く | 効く | 効く | slotが空く |
+| P-v | 解けない。権利は余り、floorが埋める（発行しない） | 権利で頭打ち。σ再発行で緩和 | 権利で物理blockの**上限**を保証。計算があれば到達する | `W_work`が下がり、bondの多いモデルが権利まで到達する | 権利を超えられない | 権利が需要を上回り、制約しない |
 
-### 6.3 epoch予算とclose時の比例消費
+**どの手段もE1を解けない。** 計算のないモデルは物理blockを生めない。
+物理層でできるのは、bondの多いモデルが**計算を持っているときに**、その計算が当選しやすくなるか、他のモデルの当選を抑えることだけである。
 
-~~~text
-Base_m(e)    = floor((Pool(e) - Entrant(e)) * A_m / sum_j A_j)    A_m = floor(S̄_m^1.5)
-Budget_m(e)  = Base_m(e) + Carry_m(e) + Entrant_m(e)
-Demand_m(e)  = U * (epoch e に受理され、close時点で有効な m の claim 数)   （無効化・有罪のclaimは数えない）
-psi_m(e)     = min(1, (min(Budget_m, Demand_m) + SpillIn_m) / Demand_m)
-~~~
+## 8. 先行候補 V+: 事前発行権 ＋ σ上限付きの途中再発行 ＋ 抽選前のquote（Draft、未採用）
 
-* epoch内の先着順は使わない。同じepochの同じモデルのclaimは同じ`ψ`を受け取る。
-* 支払は`max(Final, epoch close)`まで保持する。close後に無効・有罪となったclaimの分は、再配分せずに留保する。
-* `ψ`の計算時に無効・有罪のclaimを`Demand`から除き、正直なclaimの`ψ`を薄めない。close後に判明したものは留保に回すので、正直なclaimの支払は減らない（§9.3のN7）。
+### 8.1 規則案
 
-### 6.4 未使用予算: carry、上限付きspill、留保
+1. **発行:** epoch `e`の開始ブロックのfoldで、各モデルに`Rt_m(e) = ⌊(N_exp(e) − Ent(e)) · A_m / ΣA_j⌋`を発行する（MUST）。
+   `A_m = ⌊S̄_m^1.5⌋`。`Ent(e) = ε · N_exp(e)`はentrant reserveで、固定総額から先に差し引く。新規発行ではない。
+   `Σ Rt ≤ N_exp`（K1）。発行はDAA数で決め、時計を読まない。
+2. **消費:** モデル`m`の当選（V2 Attempt）は、admission時に`m`の残り権利を1本消費する場合だけ、モデルblockとして受理する（MUST）。
+   消費はproducer bondのB/R予約（ADR-0176）の中で行い、個別capを超えない（K2）。
+   権利がないモデルの当選は受理しない。quoteで事前に知らせるので、計算を使わせない。
+3. **抽選:** 権利を持つモデルの間では、共通`W_work`抽選のまま（G2は権利を持つモデル間で保たれる）。
+4. **途中再発行（σ）:** epochの途中の決定的なcheckpoint（割合`φ`）で、消費の見込みが残りを下回るモデルの未使用権利をpoolへ戻す。
+   poolは需要の超過したモデルへ、`A_m`の重みと`(1+σ) · Rt_m`の上限で再発行する。
+   残りは失効し、そのcadenceはfloor（BASE-0）とheartbeatが埋める。発行はしない。
+   `σ`はE2（急増）の罰とcadenceの損失を緩める調整値である（`σ = ∞`ならADR-0137に近く、`σ = 0`なら厳密な`P_m`）。
+5. **新規モデル:** entrant reserveの権利を線形・上限付きで配る（登録から`N_30`未満、報酬gateを通過、`S_m ≥ S_entry`）。
+6. **Final・支払:** 権利付きのモデルblockのclaimは、既存の検証条件（K3）でFinalになり、claim自身のcarveの全額を受け取る（`ψ`は不要）。
+   有罪・voidの場合は払わず、権利は戻らない（`W_hold`と同じ扱い）。
+7. **容量との結合:** quoteは、残りの権利と検証容量（§10）の両方を見て`Admit`を返す。
 
-* spillを計算比例で全部配ると、権利シェアが物理シェアに一致し、`P_m`は効かなくなる（飽和時は`ΣUnused = ΣExcess`）。そのためspillには上限`σ`が要る。
-* carryは`min(Unused_m, κ · Base_m)`を同じモデルが`K` epoch以内に使える。期限切れの分はspillへ回る。
-* spillは`Excess_m > 0`のモデルへ、`A_m`の重みで、各`σ · Base_m`を上限に、model id順のwater-fillingで配る。
-* 残りは留保し、発行しない（ADR-0177 D4）。
+### 8.2 G1pの達成範囲
 
-### 6.5 新規モデル
+* bondの多いモデルは、物理blockの上限（`Rt_m`、再発行を含む）を事前に保証される。そのモデルの計算が上限まで当選できる限り、物理シェアは`P_m`に到達する（E3・E4で効く）。
+* 計算が足りない場合（E1）、権利は失効し、目標は達成されない。この不足を`unused_rights_m`として報告する（§11）。
 
-* 30日平均の欠損日は0として数える（確定した30日平均に従う。近道は作らない）。
-* entrant reserveは`ε · Pool`を**固定総額の中から先に差し引く**。新規発行ではない（MUST）。
-  配分は線形で、上限付き、適格なentrantだけに行う（登録から`N_30`未満、報酬gateを通過、attestation gateで拒否されていない、`S_m ≥ S_entry`）。
-  使われなかった分はspillへ回る。
-* reserveが増やすのは**報酬権利の目標**だけで、新規モデルの物理blockは計算でしか増えない（§5）。
+### 8.3 主なリスク
 
-### 6.6 個別capと使い切れない配分（R3）
+* 権利の失効が多いと、モデルblockの総数が`N_exp`を下回り、`W_work`は`W₀`へ下がる。floorとheartbeatが埋めるcadenceが増える。
+* 権利の最後の1本をめぐる競合（並行block）。quoteの余裕幅`h`とqueue（§10）で吸収し、浪費を報告する。
+* epoch内では早い当選が権利を取る。抽選の速さで決まるので、先着の殺到は抽選のrateで制限される。
+* 権利はfork-choice weightではない。権利の残数を時計・DAA・bitsの入力にしない（MUST NOT）。
 
-* 個別Q/B/R/Fと`d + W_hold`は変えない。**モデルが配分を使い切れるようにするために、個別capを引き上げたり、cap policyを選び直したりしてはならない**（MUST NOT）。
-* モデルのbondがcapに当たってclaimを出せない分は`Unused`となり、carry・spill・留保へ流れる。
-  その量を`stranded_by_bond_caps_m`として**報告する。capの引き上げで解決はしない。**
-* α > 1と線形capの組合せ（X4）や、verifier元本の多いモデルでは、使い切れない配分が構造的に生じ得る。これは報告対象であり、修正対象ではない。
+### 8.4 時計とheartbeatの保護（K4）
 
-### 6.7 既存決定との整合
+* heartbeat lane（ADR-0066/0140）は権利を消費せず、権利の影響を受けない（MUST）。ADR-0140 C1–C5を保つ。
+  * 難易度を締めない。
+  * 他の何かが時計を進めている間は時計を進めない。
+  * fork-choice weightを取らない。
+  * 稼がない。
+  * 全モデルの権利が尽きても非常時に始動する。
+* 時計のcursor（ADR-0142）: slotの供給と消費の規則は変えない。権利はslot tickを増やさない（ADR-0165 B: REAL attemptが運ぶtickの規則も変えない）。
+* floor（ADR-0165 A″）: 権利が尽きたモデルの空いたcadenceでfloorがidleになり、BASE-0が採掘できる。floorは無報酬の残余のままである（ADR-0137 D3）。
+* DAAと`bits`: 権利はDAA・`bits`・難易度・`W_work`の調整式（`palw_work_target_step_v1`）を変えない。`W_work`の入力（実現したモデルblock数）は既存のとおり。
+* 必須試験: 全モデルの権利を0にしたnetworkで、heartbeatとfloorが目標cadenceを維持し、DAAが崩れない（§12.4のH1–H4）。
 
-| 決定 | 整合 |
+### 8.5 その他の手段の位置付け
+
+* P-iは、V+の権利の下で残る計算偏り（同じ権利数のモデル間の当選速度）を調整する補助として、`k`の上限付きで後から足せる。既定は使わない。
+* P-ii、P-iii、P-ivは、§7の評価から先行候補にしない。
+
+## 9. B+（報酬権利だけ、比較用）
+
+* B+は物理抽選を変えず、`P_m`で報酬権利と支払を配る（epoch closeの`ψ`、carry、σ上限付きspill、entrant reserve）。
+* **B+だけでは物理目標を達成しない**（D-Q1）。V+との比較基準として残す。
+* 規則案: `Base_m = ⌊(Pool − Ent) · A_m / ΣA⌋`、`ψ_m = min(1, (min(Budget, Demand) + SpillIn) / Demand)`。
+  無効・有罪のclaimは`Demand`から除き、正直な`ψ`を薄めない。
+* 個別capは引き上げない。使い切れない配分（`stranded_by_bond_caps_m`）は報告する（R3、MUST NOT）。
+* attestation gateで拒否されたmodel-epochは、どこからも受け取らない。
+
+## 10. 弾力的Final容量（Panel経路）
+
+* **検証者単位の容量:** `Cap_m = Σ_v c_v · x_{v,m}`。1人の検証者の配分の合計は`c_v`以下で、二重計上しない。Hall条件を満たす配分だけを容量として数える。
+* **C7の導出上限:** `cap_m = max(1, ⌊sigma_cap · Cap_m · window_m / claim_replay_m⌋)`。`Cap_m = 0`なら0とし、受理しない。
+* **quote:** `admit / queue / refuse`、残りの権利（V+）、bondの残り、容量、余裕幅`h`を返す。side blockの需要も数える。
+* **queue:** 上限付き。bondの取り分は資本比例。窓はqueueを出た時点から数え、queue中はFinalにならない。予約は1 claim分まで。`T_queue`を過ぎたらslashなしでvoidとする。
+* **OPV:** 容量待ちはない。検査数を請求率から導出し、`checked_share_m`を報告する。
+* **検証者の誘因:** 取り分を10–30 %の範囲内で傾ける。
+* **不足の報告:** `capacity_short_m`と不足量を返す。黙ってFinalを遅らせない（MUST NOT）。
+
+## 11. 計測と報告
+
+| 列 | 内容 |
 | --- | --- |
-| ADR-0137 | 物理層は変えない。D7（shareは読み手の数字）を改めるのは権利層だけ |
-| ADR-0176 | bond単位の予約、cap、`d + W_hold`、残存責任は変えない |
-| ADR-0177 D1・D4・D5 | 入手性を読まない。未使用分を発行しない。spillはcap以下。物理block頻度・ticket・DAA・fork choiceを変えない |
-| RFC-0015 §8.5.5 | `P_m`を権利とcoinbaseへ一度だけ適用する（物理blockへの適用は§5.4のとおり未達）。登録者legは置かない |
-| PRINCIPLES §0 | attestation gateで拒否されたmodel-epochは、`Base`・carry・spill・entrantのどれからも受け取らない |
+| (1) 目標 | `S̄_m`、`P_m`、発行した権利`Rt_m` |
+| (2) 物理block | 当選し受理されたモデルblock数、物理シェア`c_m`、権利不足で受理されなかった当選、`unused_rights_m` |
+| (3) 報酬権利 | 消費した権利、再発行の入出、失効、`stranded_by_bond_caps_m` |
+| (4) Final | Final数、void、有罪、`checked_share_m` |
+| (5) 支払 | モデル別の支払。coinbase subsidyと利用者escrowを分ける |
+| (6) 個人収入 | 既存minerごとのepochあたり支払と、計算あたり支払 |
+| (7) 容量 | `Cap_m`、検証者数、queue、`capacity_short_m`と不足量 |
+| (8) 時計 | heartbeat・floorが埋めたslot数、DAAの偏差 |
 
-### 6.8 対象外
+* 目標（列1）の増加だけで、物理（列2）や収入（列5・6）の改善を報告してはならない（MUST NOT）。
+* 受入は列2・列5・列6で判定する（MUST）。UNKNOWNはPASSにしない。
 
-fee-only Round（`ExecutionCap`）、v1 market fee、取引fee、ModelPosition手数料、floor class、Panel=0のkernel claim（§2.5の判断まで）は対象外とする。
+## 12. 受入試験
 
-## 7. 弾力的Final容量（Panel経路）
+すべての試験で§11の全列を記録する。
 
-### 7.1 現状
-
-* class容量 = readyなseat × replay速度 − 他の全classの未払replay。
-* C7（2M行）は静的上限1。F-Rとρ clampは休眠。
-* producerの事前確認はあるが予約ではなく、競合が起きる。
-* OPV経路には容量待ちがなく、検査数は固定定数で決まる。
-
-### 7.2 検証者単位の容量会計
-
-* 各ready検証者`v`は予算`c_v`とready集合`M_v`を持つ。`Cap_m = Σ_v c_v · x_{v,m}`とし、`x`は需要比例の決定的なwater-fillingで求める。
-* **1人の検証者の容量は、全モデルで合計して`c_v`以下である（MUST）。** 複数モデル・複数classで二重に数えない（§9.3のN4）。
-* 検証者集合が交わらないモデルは、互いの容量を減らさない。
-* 任意の検証者部分集合について`Σ load ≤ Σ c_v`（Hall条件）を満たすときだけ、容量として数える。
-
-### 7.3 C7上限の導出
-
-`cap_m = max(1, floor(sigma_cap · Cap_m · window_m / claim_replay_m))`。ただし`Cap_m = 0`なら0とし、新claimを受理しない（§9.3のN3）。
-
-### 7.4 抽選前のadmission quote
-
-読み取り専用。`admit / queue / refuse`、`ψ`の見積り、bondの残り、容量、余裕幅`h`を返す。
-`Admit`はqueueの空きが`h`以上のときだけ返す。自nodeのside blockのattemptも需要に数える。
-
-### 7.5 上限付きの公平なpending queue
-
-* classごとに長さ`L_queue`。bondごとの取り分は資本比例。
-* 検証窓とdeadlineはqueueを出た時点から数える。queue中はFinalにならず、報酬・Final weightもない。
-* 受理時に予約するQ・責任担保・escrowは**1 claim分の最大値だけ**で、queue中に予約が増えることはない。
-  権利台帳の`Demand`には、queueを出て受理が確定した時点で数える（§9.3のN5）。
-* `T_queue`を過ぎたclaimはslashなしでvoidとし、Qの消費は戻さない。
-* 予算超過のclaimは容量に空きがあれば受け入れるが、権利のあるclaimを押し出さない。
-
-### 7.6 OPV経路
-
-容量待ちはない。検査数`N`と`m`を請求率から導出し、`checked_share_m`を報告する。Panel=0への適用は§2.5の判断の後に行う。
-
-### 7.7 検証者の誘因
-
-* verifier元本は`S̄_m`に入る。
-* 検証者取り分を、利用率に応じてADR-0132 Cの10–30 %の範囲内で傾ける。
-* 総額は変えない。
-
-### 7.8 不足の報告
-
-`capacity_short_m`と不足量をRPCで返す。不足を黙ってFinal遅延にしてはならない（MUST NOT）。
-
-## 8. 計測と報告（R6）
-
-### 8.1 別々に報告する列
-
-| 列 | 意味 | 出所 |
-| --- | --- | --- |
-| (1) 配分目標 | `S̄_m`、`P_m`（= ブロック権利目標 = coinbase目標） | 合意状態 |
-| (2) 物理block | 抽選を通ったモデルblock数（skipされたown attemptは別列）、物理シェア`c_m` | block履歴 |
-| (3) 報酬権利 | 付与した権利単位、`ψ_m`、spill入出、carry、留保、`stranded_by_bond_caps_m`、entrant付与 | 権利台帳 |
-| (4) Final | Final数、queue期限切れvoid、有罪、`checked_share_m` | 合意状態 |
-| (5) 実際の支払 | モデル別の支払額（sompi）と、資金別の内訳（coinbase subsidy / 利用者escrow） | 合意状態 |
-| (6) 個人収入 | 既存minerごと（bondごと）の、epochあたり支払額と計算あたり支払額 | 合意状態＋reader |
-| (7) 容量 | `Cap_m`、ready検証者数、owed、queue長と待ち時間、`capacity_short_m`と不足量、容量拒否の理由別件数 | 合意状態＋reader |
-
-### 8.2 規範
-
-* 目標シェア（列1）の増加だけを根拠に、実際のblock生成（列2）や収入（列5・列6）が改善したと報告してはならない（MUST NOT）。
-* 受入試験の合否は、物理（列2）と支払（列5・列6）の列で判定する（MUST）。目標の列は参考値として併記する。
-* 不明な値はUNKNOWNとし、PASSとして扱わない。
-
-## 9. 受入試験
-
-各試験は§8.1の全列を記録する。合否は物理・支払の列で判定する。
-
-### 9.1 ユーザー指定の試験
+### 12.1 ユーザー指定
 
 | ID | ケース | 合格基準 |
 | --- | --- | --- |
-| T1 | 同じCCUの2モデル。AのminerとCPUがBの3倍 | Aの物理block数（列2）が上がることを測る。Aの支払（列5）と、既存Aminerの計算あたり収入（列6）を報告する。権利シェアの上昇は`σ`で決まる量として記録する |
-| T2 | Aのbondだけを増やす | 目標（列1）が上がる。**物理（列2）と支払（列5・6）の変化を測り、変化がなければ「目標のみ上昇」と報告する**（B+では物理が変わらないのが期待結果） |
-| T3 | 全モデルでclaimが急増 | `W_work`が上がる。モデル別のhardeningはない（ticket比 = CCU比）。全列を記録する |
-| T4 | Aだけが急増 | AのFinal数（列4）が`Cap_A`まで伸びる。超えた分はqueueに入り、`capacity_short_A`と不足量が出る。他モデルの物理block（列2）の減少（`W_work`経由、E2）を測って報告する |
-| T5 | Aの検証者を追加 | `Cap_A`が増え、queue長と待ち時間が減り、Final数（列4）が増える |
-| T6 | 既存bondがcap | どのbondもcapを超えない。配分の余りは`stranded_by_bond_caps`として報告され、cap引き上げは起きない |
-| T7 | 新規モデルの参入 | 参入後`N_30`の間の、新規モデルの権利付与（列3）と支払（列5）が下限（Q6）以上。物理block（列2）は別途報告する |
+| T1 | 同じCCU、Aの計算がBの3倍 | 物理（列2）・支払（列5・6）を測る。V+では、Aの物理blockは`Rt_A`（再発行を含む）を上限に増える |
+| T2 | Aのbondだけを増やす（Aに十分な計算がある場合と、ない場合の両方） | V+: 計算がある場合、Aの物理block（列2）が増える。ない場合は`unused_rights_A`として報告する。B+: 物理は不変と報告する |
+| T3 | 全モデルで急増 | `W_work`が上がる。権利は`P_m`のまま。モデル別のhardeningはない |
+| T4 | Aだけが急増 | V+: Aは権利と再発行の上限まで。不足は報告する。容量不足はqueueに入り、報告される |
+| T5 | 検証者を追加 | `Cap`が増え、queueが減り、Final数が増える |
+| T6 | 既存bondがcap | capを超えない。使い切れない分は報告し、capは引き上げない |
+| T7 | 新規モデルの参入 | entrantの権利付与と、物理block・支払を測る。下限（判断V6）以上 |
 
-### 9.2 敵対的試験
-
-| ID | 攻撃 | 合格基準 |
-| --- | --- | --- |
-| A1 | epoch境界や30日平均を狙った資本の付け替え | 静的に置いた場合より配分の合計が増えない |
-| A2 | 短期借入 | `S̄`への寄与は「日数/30」以下 |
-| A3 | Sybil検証者 | claimに拘束された責任元本だけを数える。分割しても`S_m`は不変 |
-| A5 | 容量の占拠 | bondの取り分は資本比例。権利のあるclaimを押し出さない |
-| A6 | 自己取引 | 同じ元本を二重に数えない。自己検証はgateに数えない |
-| A7 | `W_work`の吊り上げ（E5） | `Pool`は増えない。bondの多いモデルの物理blockの減少を測って報告する |
-| A8 | reorg / restart / IBD | 権利・carry・spill・`ψ`・queue・容量を決定的に復元する。二重支払がない |
-| A9 | attestation gateで拒否 | 権利をどこからも受け取らない |
-| A11 | 検査しないverifier | 責任のある元本だけを数える。残余は報告する |
-
-### 9.3 追加試験（R5）
+### 12.2 R5の追加試験
 
 | ID | 試験 | 合格基準 |
 | --- | --- | --- |
-| N1 | entrant reserveの予算控除 | すべてのepochで`Σ_m Base_m + Σ Entrant_m ≤ Pool(e)`。reserveは固定総額から引かれ、総支払が追加されない（reserveの有無で総支払の上限が同じ） |
-| N2 | モデル分割（ほぼ同一のモデルを複数登録）でcap回避・α利得・entrant reserve取得を狙う | 分割後の`P`合計は分割前以下（α ≥ 1の超加法性）。entrant reserveの総額は登録数によらず一定。bond単位のcap合計は分割しても不変。分割後の支払合計（列5）が分割前を超えない |
-| N3 | 容量0での受理 | ready検証者が0（`Cap_m = 0`）のモデルでは、新claimを受理しないか、queueに入れずに`capacity_short`を明示的に返す。quoteは`Refuse`を返す |
-| N4 | 検証者容量の二重計上（モデル・class間） | 各検証者の容量配分の合計が`c_v`以下。複数モデルにreadyな検証者を全モデルに満額で数えない。Hall条件の違反は容量として数えない |
-| N5 | queue中の最大権利予約 | queue中のclaimは1 claim分を超えて予約しない。queueの全claimを合わせても、モデル予算とbond capを超える権利を予約しない。queue中のclaimは`Demand`に入らない |
-| N6 | quote後の競合 | quoteが`Admit`を返した後、並行するblockやclaimが容量を消費した場合、余裕幅`h`の範囲内ではqueueが吸収する。`h`を超えた分の拒否は`skipped_own_attempts`として報告される。計算の浪費率を記録する |
-| N7 | 無効・有罪claimによるepoch報酬の希釈 | close前に無効・有罪となったclaimは`Demand`から除かれ、正直なclaimの`ψ`が下がらない。close後に判明した分は留保され、正直なclaimの支払は変わらない。無効claimを大量に出しても正直なclaimの`ψ`は不変 |
+| N1 | entrant reserveの予算控除 | `Σ Rt + Σ Ent ≤ N_exp`。reserveの有無で総発行の上限が同じ |
+| N2 | ほぼ同一のモデルを複数登録する分割 | `P`の合計は分割前以下。entrantの総額は一定。capの合計は不変。支払と物理blockの合計が分割前を超えない |
+| N3 | 容量0での受理 | `Cap = 0`のモデルは受理しないか`capacity_short`を返す。quoteは`Refuse` |
+| N4 | 検証者容量の二重計上 | 検証者ごとの配分の合計が`c_v`以下 |
+| N5 | queue中の最大予約 | 1 claim分を超えない。queueの合計がモデル予算・cap・権利を超えない |
+| N6 | quote後の競合 | `h`の範囲内ではqueueが吸収する。超えた分は報告し、浪費率を記録する |
+| N7 | 無効・有罪claimによる希釈 | 正直なclaimの支払（V+）と`ψ`（B+）が下がらない |
 
-### 9.4 不変条件
+### 12.3 第2回の決定に対応する試験
 
-* 保存: `Σ 付与 + Σ 留保 + Σ carry残 = Σ Budget`。新規mintはない。
-* `ψ ≤ 1`、全bondでQ/B/R/F ≤ cap。
-* 物理層の関数の出力は、fenceの前後でbit単位で同じ。
-* `σ = ∞`、`κ = 0`、`ε = 0`なら、権利シェアは物理シェアに一致する。
+| ID | 試験 | 合格基準 | 状態 |
+| --- | --- | --- | --- |
+| P4a | escrowをclipしない | モデル予算が不足しても、Kernel claimのRはescrowの全額。モデルを記録せず、モデル予算は不変 | test source `rfc0016_p4_user_escrow_is_never_clipped_by_the_model_budget`（未実行） |
+| P4b | Rの不足は受理前に拒否 | 共通R capの不足は`Exhausted { Reward }`、claimごとの上限の不足は`EscrowNotReservable`。何も書かない | test source `rfc0016_p4_insufficient_r_refuses_an_escrow_claim_before_acceptance`（未実行） |
+| M1 | Panel=0とPanel=1の切替で発行能力を再取得しない | 両方向で、先のreservationが`d + W`まで共有windowに残り、早期Finalでも戻らない | test source `rfc0016_a_mode_switch_never_reacquires_issuance_capacity`（未実行。mode別`W`の実装後に拡張する） |
+| M2 | mode別の`W_hold` | Panel=0のreservationは7日相当、Panel=1は1日相当で、受理時のmodeで固定される | 未実装（§13のC1） |
+| M3 | 1日あたりの発行の同等性 | 同じbondで、Panel=0の7日の上限（`7q, 7b, 7r, 7f`）とPanel=1の1日の上限（`q, b, r, f`）の比が、1日あたりで同じになる | ADR-0176側 |
+| M4 | 能力の回復と担保の解放 | 共謀した早期のValid・Finalでも、Panel=1の1日（Panel=0の7日）より前に能力が戻らない。未解決のdisputeがあれば担保を保持する | ADR-0176側 |
+| M5 | 短期のburst上限 | 週の総量の範囲内でも、短窓の上限を超えない。消費した能力が早く戻らず、二重発行がない | ADR-0176側 |
+| M6 | 基準minerがcapに到達 | Qwen2.5-1.5B A16の固定profile・基準機材・producer最小bondで、連続REAL生産がcapまで到達し、需要・機材・検証があるのに停止しない。heartbeatは0にならない | 測定（§3.6） |
+| M7 | 偽造は正直より多くを得ない | 同じbond・mode・期間で、高速偽造のQ/B/R/Fが正直な計算以下 | 測定・敵対試験（§3.6） |
+| K1a | Kernel claimにcoinbaseが流れない | どの経路でもKernel claimへのcoinbase支払が0 | 未作成 |
 
-## 10. 実装対応表（B+を採る場合の候補、未実装）
+### 12.4 時計・heartbeat（V+）
 
-| 対象 | 変更候補 |
-| --- | --- |
-| `palw_bond_budget_v1.rs` | モデルrowに権利予算・carry・spill・`ψ`を追加。epoch close。30日平均。verifier元本。entrant reserve。L2680のRだけのclipを置き換える。kernel claimのescrowをclipしない（§2.4、P4次第） |
-| `palw_bond_budget_fold_v1.rs` | epoch closeのdeltaとundo。`plan_kernel_claim_budget_v1`のモデルclip（L1514–1536）の扱い（P4） |
-| `palw_admission_v2.rs`、`palw_work_target_v1.rs`の`palw_work_target_step_v1` | 変更しない（§5.4のP-iを選ぶ場合を除く） |
-| `palw_work_target_v1.rs` | 検証者単位の容量、C7の導出上限 |
-| `fold_read.rs`、`palw_state_v2.rs` | queue、容量の置き換え、quote |
-| `palw_producer_v2.rs` | quoteの項目、side blockの需要 |
-| `palw_verifier_pay_v1.rs` | `N`・`m`の導出 |
-| Params | 休眠fence（全presetで`None`、Some-onlyでhash、arm時は拒否）。新objectはA-2に従う（自分のfenceまでは判定せず通す） |
+| ID | 試験 | 合格基準 |
+| --- | --- | --- |
+| H1 | 全モデルの権利が0 | heartbeatとfloorが目標cadenceを維持し、DAAが崩れない（ADR-0140 C5） |
+| H2 | 権利の失効が多い | heartbeatが難易度を締めず、weightを取らず、稼がない（ADR-0140 C1・C3・C4） |
+| H3 | 権利とslot tick | 権利の消費がslot tickを増やさない。cursorの規則が不変（ADR-0142、ADR-0165 B） |
+| H4 | reorg・restart | 権利の発行・消費・再発行を決定的に復元する |
 
-## 11. 有効化gateとcodeの是正
+### 12.5 敵対的試験
 
-### 11.1 gate
+資本の付け替え（A1）、短期借入（A2）、Sybil検証者（A3）、容量の占拠（A5）、自己取引（A6）、`W_work`の吊り上げ（A7）、reorg（A8）、attestation gate（A9）、検査しないverifier（A11）。
+合格基準は第1回版と同じで、物理・支払の列で判定する。
+
+## 13. codeは決定に従う（選択肢ではない）
+
+| ID | 是正 | 状態 |
+| --- | --- | --- |
+| C1 | 拘束期間の定数をmode別にする: Panel=0は7日相当DAA、Panel=1は1日相当DAA。1日あたりの発行を同等にする（§3.2）。`PALW_BOND_BUDGET_W_MIN/MAX_DAA_V1`（280–436）とRFC08の`W_budget = 400`を合わせる。mode切替で履歴・hold・責任を引き継ぎ、windowを共有する（§3.5）。短期burst上限（§3.4） | ADR-0176側の実装（`integ/adr-0162-0178`）が担当。本branchでは重複しない |
+| C2 | `S_m`を、30日平均のMiner＋claimに拘束されたVerifier元本にする | 未実施 |
+| C3 | α = 1.5を確定値にする（`alpha_halves = 3`。interimの表記を直す） | 未実施 |
+| C4 | escrowをclipしない（D-P4） | `eee1710ce`（休眠、未build） |
+| C5 | Rの不足を受理前に拒否する（D-P4） | `eee1710ce`（休眠、未build） |
+
+## 14. 有効化gate
 
 ~~~text
 ACTIVATION_ALLOWED
-    = §2.5 の判断（P1–P5）が出ている
-      AND §5.4 の判断（Q1: 物理層を変えるか）が出ている
-      AND B+ または別案がユーザーに採用されている
-      AND §12 の値が決まっている
-      AND §11.2 のcode是正が完了している
-      AND §9 の全試験が、物理・支払の列で独立review付きPASS
-      AND 実node E2EとADR-0177の二段評価の再計算
+    = §8 の先行候補（または別案）がユーザーに採用されている
+      AND §14.1 の値が §3.6 の3段階導出に基づいて決まっている
+      AND §13 の C1–C5 が完了している
+      AND §12 の全試験が物理・支払の列で独立review付きPASS
+      AND 実node E2E（V2 Panel経路、Kernel経路、mode切替、reorg/restart/IBD）PASS
+      AND ADR-0177 の二段評価を再計算
       AND 全RFCを一度に有効化する協調upgradeに入っている
 ~~~
 
-### 11.2 codeは決定に従う（選択肢ではない）
+### 14.1 本RFCで決めない値と判断
 
-| ID | 是正 |
+| ID | 値・判断 |
 | --- | --- |
-| C1 | `W_hold`を7日相当DAAへ直す。`PALW_BOND_BUDGET_W_MIN/MAX_DAA_V1`（280–436）と、RFC08の`W_budget = 400`のdrill暫定値は、確定した7日相当に合わせる |
-| C2 | `S_m`を、30日平均（`N_30`）のMiner＋claimに拘束されたVerifier元本へ直す。現行はminer-onlyのepoch snapshotとseasoning |
-| C3 | 配分曲線はα = 1.5で固定する（コードの`alpha_halves = 3`。interimの表記を確定値へ直す） |
+| V1 | 先行候補V+を採るか（P-iを補助に足すか、`k`の値） |
+| V2 | `σ`、再発行checkpointの`φ`、再発行の重み |
+| V3 | `ε`、`S_entry`、1モデル上限 |
+| V4 | bond額 × 期間あたりQ/B/R/F × 1 claimの予約額 × burst・rate上限の組合せ（§3.6の3段階で導出） |
+| V5 | epochの長さ（`N_30`と`W_hold`は確定済み） |
+| V6 | 受入閾値（新規モデルの下限、T4の劣化許容幅） |
+| V7 | queue（`L_queue`、取り分、`T_queue`）、quoteの`h` |
+| V8 | 容量attestationの形式、`sigma_cap`、計算量の上限 |
+| V9 | 検証者取り分の傾き、verifier payの`N`・`m`の導出、`checked_share`の目標 |
+| V10 | attestation gateで留保した分の行き先（B+） |
+| V11 | coinbase経路をPanel=1へ移すか（D-P5: 別途確認） |
 
-## 12. 本RFCで決めない値と判断
+確定事項（`α = 1.5`、30日平均、`W_hold` 7日（Panel=0）・1日（Panel=1）、`B = F = 0`、Kernel claimへのcoinbase legなし、escrowのclip禁止）は判断対象ではない。
+個別capを引き上げて配分を使い切らせる選択肢は設けない。
 
-### 12.1 Panel=0前提（§2）
-
-| ID | 判断 |
-| --- | --- |
-| P1 | kernel claimの`B`: 0のまま / 会計単位として>0 |
-| P2 | kernel claimの`F`: 0のまま / >0（fork choiceの変更） |
-| P3 | kernel claimへのcoinbase subsidy legを作るか。作るなら財源と保持規則 |
-| P4 | 配分fenceがkernel claimの利用者払いescrowをclipしてよいか（§2.4）。作業仮説: clipしない |
-| P5 | Panel=0でも、coinbaseを受け取るV2 Attempt laneをPanel経路のまま残すか |
-
-### 12.2 物理層（§5）
-
-| ID | 判断 |
-| --- | --- |
-| Q1 | 物理blockの目標と人気モデルの非劣化のどちらを優先するか。物理層の手段（P-i〜P-iv）を採るか、採らないか |
-
-### 12.3 B+の値（採用時のみ）
-
-| ID | 値 |
-| --- | --- |
-| Q2 | `Pool`の基準（R1 / R2） |
-| Q3 | `σ`、spillの重み、`κ`、`K` |
-| Q4 | `ε`、`S_entry`、1モデル上限 |
-| Q5 | `E_alloc`（`N_30`・`W_hold`は確定済み） |
-| Q6 | 受入閾値: 新規モデルの最低権利・支払、T4の劣化許容幅 |
-| Q7 | 予算超過claimの受理とqueueの優先度 |
-| Q8 | queueの`L_queue`、取り分、`T_queue` |
-| Q9 | 容量attestationの形式、`sigma_cap`、計算量の上限 |
-| Q10 | 検証者取り分の傾き`γ`、`u*` |
-| Q11 | verifier payの`N`・`m`の導出、`checked_share`の目標 |
-| Q12 | quoteの余裕幅`h` |
-| Q13 | attestation gateで留保した予算の行き先 |
-| Q14 | 支払を`max(Final, epoch close)`まで保持してよいか |
-
-確定事項（`α = 1.5`、30日平均、`W_hold` = 7日相当）は判断対象ではない。個別capの引き上げで使い切れない配分を解消する選択肢は設けない。
-
-## 13. 参照
+## 15. 参照
 
 * [PRINCIPLES](../PRINCIPLES.md) §0
-* [ADR-0137](../adr/0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md)
-* [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)
-* [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)
-* [RFC-0008](0008-palw-claim-backed-consensus-blocks.md) R8-BUDGET、L134
-* [RFC-0015](0015-panel-free-permissionless-verification.md) §8.3–8.5.5
-* [Bond budget / model allocation設計](../design/palw/bond-budget-and-model-allocation.md) §3.4–3.6
-* [RFC-0015 implementation status](../design/palw/rfc-0015-implementation-status-2026-10-15.md) L15–18・§1b
-* [Activation readiness matrix](../design/palw/activation-readiness-matrix.md) §3f・§3g・§3k
-* コード: [`palw_admission_v2.rs`](../../consensus/core/src/palw_admission_v2.rs)、[`palw_work_target_v1.rs`](../../consensus/core/src/palw_work_target_v1.rs)、
+* ADR: [0066](../adr/0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md)、[0137](../adr/0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md)、
+  [0140](../adr/0140-the-heartbeat-is-the-emergency-generator.md)、[0142](../adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md)、
+  [0165](../adr/0165-the-floor-is-a-reserve-and-the-work-carries-the-clock.md)、[0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)、
+  [0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)
+* RFC: [0008](0008-palw-claim-backed-consensus-blocks.md) R8-BUDGET・L134、[0015](0015-panel-free-permissionless-verification.md) §8.3–8.5.5
+* 設計: [bond-budget-and-model-allocation](../design/palw/bond-budget-and-model-allocation.md) §3.4–3.6、
+  [rfc-0015-implementation-status-2026-10-15](../design/palw/rfc-0015-implementation-status-2026-10-15.md)、
+  [activation-readiness-matrix](../design/palw/activation-readiness-matrix.md) §3f・§3g・§3k
+* code: [`palw_admission_v2.rs`](../../consensus/core/src/palw_admission_v2.rs)、[`palw_work_target_v1.rs`](../../consensus/core/src/palw_work_target_v1.rs)、
   [`fold_read.rs`](../../consensus/core/src/palw_state_v2/fold_read.rs)、[`palw_bond_budget_v1.rs`](../../consensus/core/src/palw_bond_budget_v1.rs)、
   [`palw_bond_budget_fold_v1.rs`](../../consensus/core/src/palw_bond_budget_fold_v1.rs)、[`palw_kernel_route_fold_v1.rs`](../../consensus/core/src/palw_kernel_route_fold_v1.rs)、
   [`ledger.rs`](../../misaka/palw/kernel/src/ledger.rs)、[`palw_verifier_pay_v1.rs`](../../consensus/core/src/palw_verifier_pay_v1.rs)、
