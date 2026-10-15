@@ -289,7 +289,7 @@ fn apply_inner(
                 checker_candidates,
             };
             a.validate(&l).map_err(refused)?;
-            let before = l.to_rows();
+            let before = route_fold::loaded_rows(b, &l)?;
             // RFC-0006: the row's fixed-size lifetime fields change in place through the typed setter (no `DerefMut`).
             let present = l.set_claim_lifetime_v1(
                 &e.base_claim,
@@ -624,7 +624,7 @@ fn receipt_fold(
     }
     put(b, PAID_CLAIM_RECEIPTS_V2, &id, receipt)?;
     let mut l = route_fold::load_ledger(b, ctx)?;
-    let before = l.to_rows();
+    let before = route_fold::loaded_rows(b, &l)?;
     if l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
         l.try_apply_paid_claim_tally_checked_v2(&a.enrollment.base_claim)
             .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
@@ -791,7 +791,7 @@ fn extend_signed_kernel_income_v2(
     let income = super::palw_bond_budget_fold_v1::native_income_id_v1(Hash64::from_bytes(claim), &producer, 3);
     let Some(row) = b.state.bond_budget.as_ref().and_then(|book| book.claim_row(&income)).copied() else { return Ok(()) };
     let capital = b.state.bonds.get(&producer).map_or(0, |v| v.collateral);
-    b.bond_budget_op(|book, _, journal| {
+    b.bond_budget_op(super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |book, _, journal| {
         book.hold_native_income_v1(
             &mirror.policy,
             capital,
@@ -804,7 +804,7 @@ fn extend_signed_kernel_income_v2(
             false,
             journal,
         )
-    })
+    })?
     .ok_or_else(|| refused("paid kernel native income budget missing"))?
     .map_err(|e| refused(e.to_string()))?;
     Ok(())
@@ -1137,7 +1137,7 @@ fn round_receipt(
     .map_err(refused)?;
     put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row)?;
     let mut l = route_fold::load_ledger(b, ctx)?;
-    let before = l.to_rows();
+    let before = route_fold::loaded_rows(b, &l)?;
     if l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
         l.try_apply_paid_claim_tally_checked_v2(&a.enrollment.base_claim)
             .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;

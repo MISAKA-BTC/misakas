@@ -211,7 +211,7 @@ fn fund(
         builder.reserve_source_income_v1(ctx, e.id(), e.terms.root, offer.provider, ctx.daa_score, offer.prepaid_fee_sompi)?;
         let id = super::palw_bond_budget_fold_v1::source_income_id_v1(e.id(), e.terms.root, &offer.provider);
         builder
-            .bond_budget_op(|b, _, j| b.bind_material_income_v1(e.terms.root, id, j))
+            .bond_budget_op(super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |b, _, j| b.bind_material_income_v1(e.terms.root, id, j))?
             .ok_or_else(|| refused("material fee provenance engine is missing"))?
             .map_err(|e| refused(e.to_string()))?;
     }
@@ -1210,7 +1210,7 @@ mod tests {
             builder.write_payout(queue, None).unwrap();
             observe_payment(&mut builder, &ctx(1_000), income, queue).unwrap();
             builder
-                .bond_budget_op(|b, _, j| b.confirm_native_income_payment_v1(&params.bond_budget().unwrap().policy, &income, 1_000, j))
+                .bond_budget_op(super::super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |b, _, j| b.confirm_native_income_payment_v1(&params.bond_budget().unwrap().policy, &income, 1_000, j)).unwrap()
                 .unwrap()
                 .unwrap();
         }
@@ -1219,7 +1219,7 @@ mod tests {
         assert_eq!(observed.entitlement, Some(super::super::palw_bond_budget_fold_v1::source_income_id_v1(e.id(), h(9), &bond(3))));
         tick(&mut builder, &ctx(1_435)).unwrap();
         assert_eq!(builder.state.monetary_material_release_anchor_v1(h(9)), None);
-        builder.bond_budget_op(|b, _, j| b.release_material_income_v1(1_436, j));
+        builder.bond_budget_op(super::super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |b, _, j| b.release_material_income_v1(1_436, j)).unwrap();
         tick(&mut builder, &ctx(1_436)).unwrap();
         let row = builder.state.monetary_material_row_v1(h(9)).unwrap();
         assert_eq!(row.tail_block, Some(ctx(1_436).block));

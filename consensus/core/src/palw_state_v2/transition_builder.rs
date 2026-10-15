@@ -2734,7 +2734,7 @@ impl<'a> TransitionBuilder<'a> {
         for (key, _) in self.claim_locks_v1(&claim_id) {
             self.write_slashable_lock(key, None)?;
         }
-        self.cancel_panel_recipients_v1(claim_id);
+        self.cancel_panel_recipients_v1(claim_id)?;
         self.release_seat_duties(&claim_id)?;
         let mut revived = claim.clone();
         revived.phase = PalwClaimPhaseV2::Provisional;
@@ -5609,7 +5609,7 @@ impl<'a> TransitionBuilder<'a> {
         let weight = self.state.bond_budget_weight_or(&id, weight);
         // RFC-0018 Gate C: take back exactly what the Final (or the spends) added — nothing where Gate C withheld it.
         let weight = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(self.params, &self.state, &id, &claim, weight);
-        self.bond_budget_close_v1(&id, ctx.daa_score);
+        self.bond_budget_close_v1(&id, ctx.daa_score)?;
         self.state.safe_weight = self.state.safe_weight.saturating_sub(weight);
         self.unnote_model_probe_pass(&claim, final_daa, ctx.daa_score)?;
         self.unnote_activation_probe_credits_v1(&id, &claim)?;
@@ -9607,7 +9607,7 @@ impl<'a> TransitionBuilder<'a> {
             let contribution = crate::palw_weight_cap_v1::palw_weight_final_safe_v1(self.params, claim, contribution);
             // **Lane BUDGET (ADR-0176 D3): the Final weight under the budget** — the grant, never beyond the claim's reserved F (the same
             // number every re-derivation reads back). Unchanged for an unbudgeted claim.
-            let contribution = self.bond_budget_final_weight_v1(&id, contribution);
+            let contribution = self.bond_budget_final_weight_v1(&id, contribution)?;
             // **RFC-0017 (REQ-ELIG-2): a probation claim's Final is job completion, not consensus credit** — its F was reserved 0, so
             // the grant above is already 0. U-2 (2026-10-15): its pin outlives the Final (retired when the claim leaves the state or
             // is voided), and Gate C below certifies before any credit. Unchanged for every other claim and below the fence.
@@ -9674,7 +9674,7 @@ impl<'a> TransitionBuilder<'a> {
             // leg derives from it; the rest is never named — never minted. Unchanged for an unbudgeted claim.
             // RFC08-2: a leg the combined liability predicate refused draws nothing and names nothing.
             let escrow = if liability_withheld { 0 } else { escrow };
-            let escrow = self.bond_budget_final_reward_v1(&id, escrow);
+            let escrow = self.bond_budget_final_reward_v1(&id, escrow)?;
             // **RFC07 R7-ECON (`palw_model_verification_gate_v1`, round 3): the allocation payout reads its model-epoch's
             // verification** — paid whole when attested (or no Final claim existed to sample), withheld when unattested, deferred while
             // undecided; before every leg below. Unchanged below the fence and for every claim the allocation did not reserve for.
@@ -9831,7 +9831,7 @@ impl<'a> TransitionBuilder<'a> {
         }
         // Lane BUDGET: an attempt's Final is terminal for its budget (a free-prompt claim's spends come after its Final).
         if matches!(claim.source, PalwClaimSourceV2::Attempt) {
-            self.bond_budget_close_v1(&id, final_daa);
+            self.bond_budget_close_v1(&id, final_daa)?;
         }
         if let Some(duties) = self.state.panel_duties.get(&id).map(|row| row.seats.clone()) {
             for (seat, _) in duties {
@@ -9839,7 +9839,7 @@ impl<'a> TransitionBuilder<'a> {
                     .as_ref()
                     .is_some_and(|reward| reward.seats.iter().any(|(payee, payout)| *payee == seat && payout.amount > 0));
                 if !future {
-                    self.cancel_native_recipient_v1(id, seat, 1);
+                    self.cancel_native_recipient_v1(id, seat, 1)?;
                 }
             }
         }
@@ -9909,7 +9909,7 @@ impl<'a> TransitionBuilder<'a> {
             _ => {}
         }
         // Lane BUDGET (ADR-0176 D4): a void is terminal for the claim's budget — and returns nothing to the window before `d + W`.
-        self.bond_budget_close_v1(&id, voided_daa);
+        self.bond_budget_close_v1(&id, voided_daa)?;
         // **ADR-0152 §4-ter C3: a void by any route closes every court session on the claim
         // NEUTRALLY**, past `palw_offence_attribution`: the session is removed (its challenger's
         // reservation released by `write_court`), nobody is slashed and no court time is charged —
@@ -9963,8 +9963,8 @@ impl<'a> TransitionBuilder<'a> {
         // ADR-0124 Decision 3: every seat on duty leaves it with its exposure, whatever voided the
         // claim — before the phase write drops the row this reads. A seat's fault is the court's
         // and the quorum's business, charged where it is proven, never here.
-        self.cancel_panel_recipients_v1(id);
-        self.cancel_native_recipient_v1(id, claim.bond, 0);
+        self.cancel_panel_recipients_v1(id)?;
+        self.cancel_native_recipient_v1(id, claim.bond, 0)?;
         self.release_seat_duties(&id)?;
         // RFC-0008 v2: a work session on the claim goes void with it and its extra executors' exposure returns (a no-op for a claim
         // with no root, which is every claim below the fence).
@@ -10170,7 +10170,7 @@ impl<'a> TransitionBuilder<'a> {
         palw_exec_v2_fold::on_claim_retired_v2(self, &id)?;
         self.write_claim(id, None)?;
         // Lane BUDGET: the claim left the state; its budget row leaves once it is out of its window too.
-        self.bond_budget_forget_v1(&id);
+        self.bond_budget_forget_v1(&id)?;
         // ADR-0160 F-Q: the claim's audit receipts retire with it.
         if self.state.audit_status_of_v1(&id).is_some() {
             self.write_audit_receipts_v1(id, None)?;
@@ -10340,9 +10340,9 @@ impl<'a> TransitionBuilder<'a> {
             return Ok(None);
         };
         for (bond, _) in &row.seats {
-            self.cancel_native_recipient_v1(claim_id, *bond, 1);
+            self.cancel_native_recipient_v1(claim_id, *bond, 1)?;
         }
-        self.cancel_native_recipient_v1(claim_id, row.producer_bond, 0);
+        self.cancel_native_recipient_v1(claim_id, row.producer_bond, 0)?;
         let mut counters = self.state.vesting_counters;
         counters.burned = counters.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("vesting burned"))?;
         self.write_vesting(claim_id, None)?;

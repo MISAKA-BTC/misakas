@@ -604,6 +604,8 @@ pub(super) fn consent_horizon_extension_v1(
     let id = terms.id();
     let key = palw_horizon_extension_key_v1(&id);
     let claim_hash = Hash64::from_bytes(terms.claim);
+    // RFC-0006 (RFC06-1): the route rows copy below is admitted first.
+    super::palw_kernel_route_fold_v1::reserve_route_rows_copy_v1(builder)?;
     let (mut row, before, ledger) = {
         let route = builder.state.kernel_route.as_ref().ok_or_else(|| refuse("the kernel route is missing"))?;
         if terms.network != route.header.policy.network_domain {

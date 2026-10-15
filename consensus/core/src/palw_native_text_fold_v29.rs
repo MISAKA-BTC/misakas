@@ -1327,7 +1327,7 @@ fn settle(
         builder.pay_native_recipient_v1(Hash64::from_bytes(h.job), h.producer, 11, ctx.daa_score, s.producer, queue, true)?;
         builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.producer_payout, amount: s.producer }))?;
     } else {
-        builder.cancel_native_recipient_v1(Hash64::from_bytes(h.job), h.producer, 11);
+        builder.cancel_native_recipient_v1(Hash64::from_bytes(h.job), h.producer, 11)?;
         builder.write_payout(queue, Some(PalwPayoutV2 { payload: h.requester_payout, amount: s.requester }))?;
     }
     if s.finder_credit > 0 {
@@ -1346,7 +1346,7 @@ fn settle(
     builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(2, &h.job), Some(key(&(subject.row_root(), subject))))?;
     write_book(builder, h, b)?;
     builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, k(0, &h.job), Some(key(&(s, queue, ctx.daa_score))))?;
-    builder.bond_budget_close_v1(&super::super::palw_bond_budget_fold_v1::native_text_budget_id_v29(&h.job), ctx.daa_score);
+    builder.bond_budget_close_v1(&super::super::palw_bond_budget_fold_v1::native_text_budget_id_v29(&h.job), ctx.daa_score)?;
     if let Ok(mut status) = paid_status(builder.state.kernel_route.as_ref().unwrap(), h.job) {
         status.active = false;
         builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, h.job, 0u8)), Some(key(&(status.root(), status))))?;

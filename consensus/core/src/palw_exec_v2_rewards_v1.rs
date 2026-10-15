@@ -280,7 +280,7 @@ fn burn_actor(
         .as_ref()
         .and_then(|b| b.claim_row(&super::palw_bond_budget_fold_v1::native_income_id_v1(root, &bond, 0)))
         .is_some();
-    builder.cancel_native_recipient_v1(root, bond, if issuer { 0 } else { 2 });
+    builder.cancel_native_recipient_v1(root, bond, if issuer { 0 } else { 2 })?;
     let own: Vec<_> = row.legs.iter().filter(|((payee, _), _)| *payee == bond).map(|(who, leg)| (*who, *leg)).collect();
     let mut taken = 0u64;
     let mut c = builder.state.vesting_counters;
@@ -400,7 +400,7 @@ pub(super) fn burn(builder: &mut TransitionBuilder<'_>, root: Hash64) -> Result<
             .as_ref()
             .and_then(|b| b.claim_row(&super::palw_bond_budget_fold_v1::native_income_id_v1(root, bond, 0)))
             .is_some();
-        builder.cancel_native_recipient_v1(root, *bond, if issuer { 0 } else { 2 });
+        builder.cancel_native_recipient_v1(root, *bond, if issuer { 0 } else { 2 })?;
     }
 
     let mut c = builder.state.vesting_counters;
@@ -580,9 +580,9 @@ pub(super) fn invalidate_final(
     builder.forfeit_minted_round_rights_of_claim(&root)?;
     if let Some(row) = builder.state.vesting.get(&root).cloned() {
         for (bond, _) in &row.seats {
-            builder.cancel_native_recipient_v1(root, *bond, 1);
+            builder.cancel_native_recipient_v1(root, *bond, 1)?;
         }
-        builder.cancel_native_recipient_v1(root, row.producer_bond, 0);
+        builder.cancel_native_recipient_v1(root, row.producer_bond, 0)?;
         let mut c = builder.state.vesting_counters;
         c.burned = c.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("EXEC native vesting burned"))?;
         builder.write_vesting(root, None)?;

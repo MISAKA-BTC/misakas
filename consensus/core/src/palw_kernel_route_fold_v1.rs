@@ -412,8 +412,19 @@ fn load_ledger_with_projection_v9(
 /// **The rows `load_ledger`'s ledger has, without serializing it** (GAP 8): the state's ledger rows with the two consumer-derived
 /// tables the load sets (the attested artifacts and the admitted OPV classes) replaced by the ledger's own — exactly
 /// `ledger.to_rows()` straight after `load_ledger`.
-fn loaded_rows(builder: &TransitionBuilder<'_>, ledger: &KernelLedgerV1) -> LedgerRowsV1 {
+pub(super) fn loaded_rows(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1) -> Result<LedgerRowsV1, PalwStateV2Error> {
     use misaka_palw_kernel::rows::{TABLE_ATTESTED_V1, TABLE_FLAT_CONFORMANCE_CLASSES_V9, TABLE_OPV_ADMITTED_V1};
+    // RFC-0006 (RFC06-1): the copy is admitted before it exists — exact clones of the kept route rows, and one encoded key a
+    // consumer-derived row.
+    if builder.native_writers_tracking_v1() {
+        let kept = builder.state.kernel_route.as_ref().map_or((0, 0, 0), |k| {
+            rows_shape_v1(k.rows.iter().filter(|((table, _), _)| {
+                !matches!(*table, TABLE_ATTESTED_V1 | TABLE_OPV_ADMITTED_V1 | TABLE_FLAT_CONFORMANCE_CLASSES_V9)
+            }))
+        });
+        let derived = (ledger.attested_artifacts.len() as u64).saturating_add(ledger.opv.admitted.len() as u64);
+        reserve_rows_copy_v1(builder, kept, derived)?;
+    }
     let mut rows: LedgerRowsV1 = builder
         .state
         .kernel_route
@@ -435,7 +446,84 @@ fn loaded_rows(builder: &TransitionBuilder<'_>, ledger: &KernelLedgerV1) -> Ledg
         rows.insert((TABLE_OPV_ADMITTED_V1, key_bytes(class)), Vec::new());
     }
     debug_assert!(rows == ledger.to_rows(), "the loaded rows are the loaded ledger's");
-    rows
+    Ok(rows)
+}
+
+/// RFC-0006 (RFC06-1): the audited longest ledger row key (`inventory_ledger_expansion_v1` refuses any longer key).
+const PALW_KERNEL_ROW_KEY_MAX_BYTES_V1: u64 = 137;
+
+fn rows_envelope_v1() -> u64 {
+    std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u8, Vec<u8>), Vec<u8>>>() as u64
+}
+
+/// `(rows, key bytes, row bytes)` of a row iterator.
+fn rows_shape_v1<'a>(rows: impl Iterator<Item = (&'a (u8, Vec<u8>), &'a Vec<u8>)>) -> (u64, u64, u64) {
+    rows.fold((0u64, 0u64, 0u64), |(n, k, v), ((_, key), row)| {
+        (n.saturating_add(1), k.saturating_add(key.len() as u64), v.saturating_add(row.len() as u64))
+    })
+}
+
+/// RFC-0006 (RFC06-1): admit a row-map copy — `shape` cloned rows (one node envelope each; a clone keeps exact capacity) and
+/// `encoded` rows whose key is freshly encoded (pinned Borsh: a 1,024-byte serializer capacity) with an empty row.
+fn reserve_rows_copy_v1(builder: &mut TransitionBuilder<'_>, shape: (u64, u64, u64), encoded: u64) -> Result<(), PalwStateV2Error> {
+    let (n, keys, rows) = shape;
+    let env = rows_envelope_v1();
+    let mut q = super::native_writers::NativeWriteQuoteV1::new("kernel ledger rows copy");
+    q.exact::<u8>(n.saturating_mul(env).saturating_add(keys).saturating_add(rows))?
+        .exact::<u8>(encoded.saturating_mul(env.saturating_add(1024)))?;
+    builder.admit_native_write_v1(q)
+}
+
+/// RFC-0006 (RFC06-1): admit a copy of the route's whole row map (the `before` of an EXEC reward hook). A no-op with tracking off.
+pub(super) fn reserve_route_rows_copy_v1(builder: &mut TransitionBuilder<'_>) -> Result<(), PalwStateV2Error> {
+    if !builder.native_writers_tracking_v1() {
+        return Ok(());
+    }
+    let shape = builder.state.kernel_route.as_ref().map_or((0, 0, 0), |k| rows_shape_v1(k.rows.iter()));
+    reserve_rows_copy_v1(builder, shape, 0)
+}
+
+/// **RFC-0006 (RFC06-1): admit a flush's scratch before it exists** — `ledger.to_rows()` (every row one map node, a freshly encoded
+/// key and a freshly encoded row: pinned Borsh, at least 1,024 bytes and at most twice the row) and `diff_rows` (one change per row
+/// on either side, each holding exact clones of its key and rows), plus the removed v9 keys.
+///
+/// The rows after the action are bounded by the rows before plus what the ledger's own tickets admitted: every ledger row was
+/// admitted as at least one map-node envelope of the smallest ledger membership (`[u8; 64]` keys), and every row's encoding is no
+/// longer than the typed value the tickets admitted (Borsh never encodes a value longer than its inline size plus its heap). So
+/// `rows_after ≤ rows_before + admitted / envelope` and `row_bytes_after ≤ row_bytes_before + admitted` — an over-count (the
+/// tickets also hold the rows already counted before), never an under-count. A no-op with tracking off.
+fn reserve_flush_scratch_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ledger: &crate::palw_native_resource_v1::ReservedKernelLedgerV1,
+    before: &LedgerRowsV1,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1;
+    use misaka_palw_kernel::rows::TABLE_FLAT_CONFORMANCE_CLASSES_V9;
+    if !builder.native_writers_tracking_v1() {
+        return Ok(());
+    }
+    let (n, keys, rows) = rows_shape_v1(before.iter());
+    let admitted = ledger.admitted_memory_v1();
+    let smallest = (std::mem::size_of::<BTreeNodeEnvelopeV1<[u8; 64], ()>>() as u64).max(1);
+    let rows_after = n.saturating_add(admitted / smallest);
+    let bytes_after = rows.saturating_add(admitted);
+    let env = rows_envelope_v1();
+    let (v9, v9_keys, _) = builder.state.kernel_route.as_ref().map_or((0, 0, 0), |k| {
+        rows_shape_v1(k.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new())))
+    });
+    let mut q = super::native_writers::NativeWriteQuoteV1::new("kernel ledger flush scratch");
+    // to_rows
+    q.exact::<u8>(rows_after.saturating_mul(env.saturating_add(2048)))?.exact::<u8>(bytes_after.saturating_mul(2))?;
+    // diff_rows
+    q.grown::<misaka_palw_kernel::rows::RowChangeV1>(rows_after.saturating_add(n))?
+        .exact::<u8>(
+            keys.saturating_add(rows_after.saturating_mul(PALW_KERNEL_ROW_KEY_MAX_BYTES_V1))
+                .saturating_add(rows)
+                .saturating_add(bytes_after),
+        )?;
+    // removed v9 keys
+    q.grown::<Vec<u8>>(v9)?.exact::<u8>(v9_keys)?;
+    builder.admit_native_write_v1(q)
 }
 
 /// What the derived-eligibility gate decides for one kernel object.
@@ -550,7 +638,14 @@ fn opv_gate_v1(
 
 /// Write back every ledger row that changed and the scalars; `before` is the rows as `load_ledger` found them. The ledger is then
 /// cached on the route state (GAP 8) as the rows' own ledger, so the next object of the chain loads it without rebuilding it.
-pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1, before: &LedgerRowsV1) -> Result<(), PalwStateV2Error> {
+pub(super) fn flush(
+    builder: &mut TransitionBuilder<'_>,
+    ledger: &crate::palw_native_resource_v1::ReservedKernelLedgerV1,
+    before: &LedgerRowsV1,
+) -> Result<(), PalwStateV2Error> {
+    // RFC-0006 (RFC06-1): the to_rows map, the diff and the removed v9 keys are admitted before any of them exists.
+    reserve_flush_scratch_v1(builder, ledger, before)?;
+    let ledger: &KernelLedgerV1 = ledger;
     for ((table, key), old_new) in diff_rows(before, &ledger.to_rows()).into_iter().map(|(k, _old, new)| (k, new)) {
         builder.write_kernel_row(table, key, old_new)?;
     }
@@ -659,6 +754,7 @@ pub(super) fn bind_exec_reward_v1(
     expiry: u64,
     daa: u64,
 ) -> Result<(), PalwStateV2Error> {
+    reserve_route_rows_copy_v1(builder)?;
     let route = builder.state.kernel_route.as_ref().expect("EXEC kernel binding");
     let before = route.rows.clone();
     let mut ledger =
@@ -685,6 +781,7 @@ pub(super) fn finish_exec_rewards_v1(
     caps: &std::collections::BTreeMap<PalwBondKeyV2, u64>,
     daa: u64,
 ) -> Result<Vec<u64>, PalwStateV2Error> {
+    reserve_route_rows_copy_v1(builder)?;
     let route = builder.state.kernel_route.as_ref().expect("EXEC kernel binding");
     let before = route.rows.clone();
     let mut ledger =
@@ -714,6 +811,7 @@ pub(super) fn finish_exec_rewards_v1(
 }
 
 pub(super) fn cancel_exec_rewards_v1(builder: &mut TransitionBuilder<'_>, root: Hash64, daa: u64) -> Result<(), PalwStateV2Error> {
+    reserve_route_rows_copy_v1(builder)?;
     let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     let before = route.rows.clone();
     let mut ledger =
@@ -1482,7 +1580,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     {
         return Ok(());
     }
-    let before = loaded_rows(builder, &ledger);
+    let before = loaded_rows(builder, &ledger)?;
     match opv_gate_v1(builder, ctx, &ledger, object) {
         OpvGateV1::Drop => return Ok(()),
         OpvGateV1::Admit(classes) => {
@@ -1753,7 +1851,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     // (A settlement the real bonds cannot honour fails the object — the walk's rehearsal drops it with its builder, so no half-applied
     // slash survives; the sync above makes this unreachable.)
     apply_settlements(builder, &events, true, ctx.daa_score)?;
-    builder.close_terminal_kernel_budgets_v1(&ledger);
+    builder.close_terminal_kernel_budgets_v1(&ledger)?;
     persist_budget(builder, ctx, &ledger)?;
     // Only the exact signed candidate used the temporary scope. Persisting this root in
     // TABLE_ATTESTED would let an unrelated program borrow it in the next object.
@@ -1849,7 +1947,7 @@ pub(super) fn apply_kernel_receipt_v1(
         return Ok(());
     }
     let mut ledger = load_ledger(builder, ctx)?;
-    let before = loaded_rows(builder, &ledger);
+    let before = loaded_rows(builder, &ledger)?;
     let Some(row) = ledger.claims.get(&claim) else { return Ok(()) };
     let ClaimBodyV1::Program { evidence, .. } = &row.body else { return Ok(()) };
     let Some(class) = ledger.classes.get(&row.class_binding_id) else { return Ok(()) };
@@ -1942,7 +2040,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
         return Ok(());
     }
     let mut ledger = load_ledger(builder, ctx)?;
-    let before = loaded_rows(builder, &ledger);
+    let before = loaded_rows(builder, &ledger)?;
     // Every bond the ledger holds is re-synced from the real chain before it is settled against.
     let held: Vec<misaka_palw_kernel::hash::Digest> = ledger.bonds.keys().copied().collect();
     for kid in held {
@@ -1996,7 +2094,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
         }
     }
     apply_settlements(builder, &events, false, ctx.daa_score)?;
-    builder.close_terminal_kernel_budgets_v1(&ledger);
+    builder.close_terminal_kernel_budgets_v1(&ledger)?;
     // Assignments and counted receipts of claims that can no longer be covered are dropped.
     let stale: Vec<misaka_palw_kernel::hash::Digest> = builder
         .state

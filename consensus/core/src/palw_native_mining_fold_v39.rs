@@ -344,7 +344,7 @@ fn seat_or_retire(
             if !prepay(builder, ctx, signer, p, 0, body.len())? {
                 return Ok(());
             }
-            builder.bond_budget_close_v1(&Hash64::from_bytes(s.budget_id()), ctx.daa_score);
+            builder.bond_budget_close_v1(&Hash64::from_bytes(s.budget_id()), ctx.daa_score)?;
             let mut seats = seats;
             seats.retain(|b| b != signer);
             m.seats = m.seats.saturating_sub(1);
@@ -553,7 +553,7 @@ fn issue(
     } else {
         // Not certified (or not certifiable): no receipt, no weight, no coinbase; the reservation closes (nothing returns).
         c.closed = Some((ctx.daa_score, false));
-        builder.bond_budget_close_v1(&native_mining_budget_id_v39(&c.id), ctx.daa_score);
+        builder.bond_budget_close_v1(&native_mining_budget_id_v39(&c.id), ctx.daa_score)?;
     }
     write_claim(builder, &c)?;
     write_model(builder, &m)?;
@@ -597,7 +597,7 @@ fn collect(
     let mut m = model(r, &c.model)?;
     if let Some(rc) = &receipt {
         m.live_receipts = m.live_receipts.saturating_sub(1);
-        builder.bond_budget_close_v1(&native_mining_budget_id_v39(&c.id), ctx.daa_score);
+        builder.bond_budget_close_v1(&native_mining_budget_id_v39(&c.id), ctx.daa_score)?;
         builder.write_kernel_row(TABLE, k(MINING_RECEIPT_KIND_V39, &rc.id), None)?;
     }
     // A permanent tombstone keeps the claim id (and its used Master stages) from ever being re-credited.
