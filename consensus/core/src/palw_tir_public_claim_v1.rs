@@ -272,6 +272,42 @@ pub(crate) fn palw_tir_public_claim_fixture_v1() -> PalwTirPublicClaimV1 {
 }
 
 #[cfg(test)]
+impl PalwTirPublicClaimV1 {
+    /// Test-only: replace the original custody with one carrying a frozen Panel and exact credited Valid custody whose
+    /// signatures are SYNTHETIC. The frame's structural check still runs; native receipt/grant/Ready admission is not exercised.
+    pub(crate) fn with_custody_for_tests_v1(mut self, custody: PalwTirPublicOriginalCustodyV1) -> Result<Self, String> {
+        self.custody = custody;
+        self.check_structure_v1(&self.key_v1())?;
+        Ok(self)
+    }
+    /// Test-only: a producer whose signed ORIGINAL commitment names `output_root` (structure is unchanged: the output root is
+    /// not one of the roots the frame's geometry cross-checks — the output court is what judges it).
+    pub(crate) fn with_original_output_root_for_tests_v1(mut self, output_root: Hash64) -> Self {
+        self.original.output_root = output_root;
+        self
+    }
+}
+
+/// **G14 E2E test support: an ORIGINAL frame over the tiny TIR execution, honest or with leaf `forge.0` lane `forge.1` moved by
+/// one, at the network's FP job context** — the execution is run IN the FP-derived context, so the step tree, trace and execution
+/// roots the frame commits are the ones its own evidence store (`TinyExecution`) opens. `maximum_custodians` sizes the native upper
+/// (producer + drawn seats). Synthetic producer signature (injected verifier); no native admission, payment or credit.
+#[cfg(test)]
+pub(crate) struct PalwTirPublicFrameFixtureV1 {
+    pub frame: PalwTirPublicClaimV1,
+    pub record: crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    pub layout: crate::palw_tir_class_v1::PalwTirLayoutV1,
+    pub execution: crate::palw_tir_court_v1::test_support::TinyExecution,
+    pub rules: PalwTirPublicAllocationRulesV1,
+    pub object: crate::palw_state_v2::PalwConsensusObjectV2,
+}
+
+#[cfg(test)]
+pub(crate) fn palw_tir_public_frame_fixture_v1(forge: Option<(usize, usize)>, maximum_custodians: u64) -> PalwTirPublicFrameFixtureV1 {
+    tests::fixture_in(forge, maximum_custodians)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     struct Fixture {
@@ -281,6 +317,146 @@ mod tests {
     }
     pub(super) fn fixture_frame() -> PalwTirPublicClaimV1 {
         fixture().frame
+    }
+    /// [`super::palw_tir_public_frame_fixture_v1`]: the context is derived first (from an honest run's class, prompt and counts,
+    /// which a one-lane forge does not change), then the execution is run in it.
+    pub(super) fn fixture_in(forge: Option<(usize, usize)>, maximum_custodians: u64) -> super::PalwTirPublicFrameFixtureV1 {
+        use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
+        use crate::palw_freeprompt_v3::*;
+        use crate::palw_tir_public_allocation_v1::*;
+        let honest = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let class_id = honest.binding.class.class_id(&honest.binding.artifact_root);
+        let (_, _, mut job, _) = crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false, false);
+        job.version = PALW_FP_V3_VERSION;
+        job.decode = None;
+        job.tail = None;
+        job.class_id = class_id;
+        job.tokenizer_id = honest.binding.class.tokenizer_id;
+        job.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&honest.prompt);
+        job.prompt_tokens = honest.prompt.len() as u32;
+        job.decode_token_limit = honest.generated.len() as u32;
+        job.max_context_tokens = 64;
+        let class = PalwFpClassFactsV3 {
+            model_profile_id: Hash64::default(),
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: Hash64::default(),
+            shape_profile_id: class_id,
+            cu_ruleset_id: Hash64::default(),
+        };
+        let facts = PalwFpRunFactsV3 {
+            decode_tokens_executed: job.decode_token_limit,
+            stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
+            full_logits_trace_root: Hash64::default(),
+            activation_leg_root: Hash64::default(),
+            checkpoint_leg_root: Hash64::default(),
+            step_leg_root: Hash64::default(),
+            step_leaf_count: honest.hashes.len() as u64,
+        };
+        let context = crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job, &class, &facts, b"testnet-12").unwrap();
+        let x = crate::palw_tir_court_v1::test_support::tiny_execution_in(|_, _, _| context.clone(), forge);
+        let binding = x.binding.clone();
+        let original = PalwFreePromptCommitmentV3 {
+            job,
+            trace_root: binding.full_logits_trace_root,
+            output_root: crate::palw_attempt_rules_v1::palw_attempt_output_root_v1(&binding.job_context, &x.generated),
+            schedule_root: Hash64::default(),
+            execution_root: binding.committed_execution_root,
+            decode_tokens_executed: x.generated.len() as u32,
+            stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
+            work_leaves: binding.step_leaf_count,
+            trace_manifest_root: Hash64::default(),
+            trace_chunk_count: 1,
+            trace_retention_daa: 100,
+        };
+        let geometry = crate::palw_staged_preclaim_v1::PalwStagedClaimGeometryV1 {
+            class_id,
+            producer: PalwBondKeyV2(original.job.executor_bond),
+            execution_root: original.execution_root,
+            job_identity: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(&original),
+            accepted_daa: 100,
+        };
+        let header = PalwPublicTirBindingHeaderV1::of_binding_v1(&binding);
+        let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&binding.class, &binding.artifact_root).unwrap();
+        let layout = binding.class.layout.clone();
+        let rules = PalwTirPublicAllocationRulesV1 {
+            maximum_leaves: 1 << 40,
+            maximum_custodians,
+            court: crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 40, 45, 2).unwrap(),
+            dissection: true,
+            prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            config: crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1(),
+        };
+        let PalwTirPublicAllocationQuoteV1::Complete(plan) =
+            derive_tir_public_allocation_v1(&geometry, &original, &header, &record, &layout, None, None, rules).unwrap()
+        else {
+            panic!("fixture requires a real native generic arithmetic quote")
+        };
+        let pledge = crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1 {
+            version: 1,
+            claim: plan.original_claim,
+            producer: geometry.producer,
+            execution_root: original.execution_root,
+            job_identity: geometry.job_identity,
+            source_id: plan.source_id,
+            resource_plan_id: plan.resource_plan_id,
+            maximum_custodians,
+            accept_until_daa: 101,
+            material_until_daa: plan.terms.material_until_daa,
+            signature: vec![2; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        };
+        let key = vec![1; crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN];
+        // Injected verifier: geometry/scope only, never MLDSA, payment, credit or admission coverage.
+        let verify = |_: &[u8], _: &[u8], _: &[u8], domain: &[u8]| {
+            domain == crate::palw_tir_public_custody_v1::PALW_TIR_SOURCE_PLEDGE_CONTEXT_V1
+        };
+        let custody = PalwTirPublicCustodyContractV1::new_v1(
+            pledge,
+            plan.terms,
+            BTreeSet::new(),
+            plan.source_id,
+            plan.resource_plan_id,
+            maximum_custodians,
+            &key,
+            verify,
+        )
+        .unwrap();
+        let object = crate::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted {
+            claim: plan.original_claim,
+            class_id,
+            bond: geometry.producer,
+            executor_pubkey: key,
+            work_leaves: original.work_leaves,
+            prompt_token_ids_hash: original.job.prompt_token_ids_hash,
+            prompt_tokens: original.job.prompt_tokens,
+            prompt_token_ids: x.prompt.clone(),
+            decode_tokens_executed: original.decode_tokens_executed,
+            trace_root: original.trace_root,
+            output_root: original.output_root,
+            execution_root: original.execution_root,
+            trace_chunk_count: original.trace_chunk_count,
+            trace_retention_daa: original.trace_retention_daa,
+            consumed_prefix_state: PalwFpPrefixStateV1::genesis(class_id),
+            job_pin: geometry.job_identity,
+            public_job: None,
+            eval: None,
+        };
+        let frame = PalwTirPublicClaimV1::prepare_native_v1(
+            original,
+            header,
+            *plan,
+            custody,
+            &geometry,
+            &record,
+            &layout,
+            None,
+            None,
+            rules,
+            &BTreeSet::new(),
+            &object,
+            verify,
+        )
+        .unwrap();
+        super::PalwTirPublicFrameFixtureV1 { frame, record, layout, execution: x, rules, object }
     }
     fn fixture() -> Fixture {
         use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};

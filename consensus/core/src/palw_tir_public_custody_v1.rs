@@ -671,6 +671,26 @@ impl PalwTirPublicOriginalCustodyV1 {
 }
 
 #[cfg(test)]
+impl PalwTirPublicOriginalCustodyV1 {
+    /// Test-only: a frozen native Panel and exact credited Valid custody records with SYNTHETIC signatures (no verifier runs).
+    /// The structural check still runs (`check_v1`), so every record must be the exact shape native qualification writes.
+    pub(crate) fn with_credits_for_tests_v1(
+        mut self,
+        panel: PalwTirPublicOriginalPanelV1,
+        credited: Vec<(u64, PalwTirPublicCustodyGrantV1, PalwTirPublicOriginalCreditV1)>,
+    ) -> Result<Self, String> {
+        self.contract.drawn_panel = panel.seats.clone();
+        self.panel = Some(panel);
+        for (credited_daa, grant, credit) in credited {
+            self.credits.insert(grant.seat, credit);
+            self.contract.grants.insert(grant.seat, (credited_daa, grant));
+        }
+        self.check_v1()?;
+        Ok(self)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     fn h(n: u64) -> Hash64 {
