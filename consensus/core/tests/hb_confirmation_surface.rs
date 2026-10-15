@@ -359,7 +359,13 @@ fn the_wallet_framework_never_reads_a_palw_anchor() {
                 stack.push(path);
             } else if path.extension().is_some_and(|e| e == "rs") {
                 let text = std::fs::read_to_string(&path).expect("a source file");
-                if text.contains("palw_settlement") || text.contains("get_palw_settlement") || text.contains("PalwSettlement") {
+                // RFC-0012 R12-OPS external-wallet preflight (2026-10-15) reads `getPalwSettlement(0)` for the node's finality
+                // AUTHORITY (DNS retirement, native availability) before signing — a refusal surface, not a balance or a
+                // confirmation count. Those two files are the deliberate exception; every other wallet file stays anchor-free.
+                let preflight = path.file_name().is_some_and(|f| f == "misaka_preflight.rs");
+                if !preflight
+                    && (text.contains("palw_settlement") || text.contains("get_palw_settlement") || text.contains("PalwSettlement"))
+                {
                     hits.push(path);
                 }
             }

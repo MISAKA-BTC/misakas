@@ -3105,9 +3105,11 @@ mod tests {
         let tick = source.find(TICK).expect("the tick, with every seam it prunes");
         let submitter = source.find("// --- the collector + submitter's half ---").expect("the submitter");
         assert!(fault < tick && tick < submitter);
-        assert!(
-            body("pub(super) fn reporter_filer_tick_v1(").contains("filer.tick(court_pending, court_moved, accused, |entry, gated| {")
-        );
+        // The tick also advances terminal filings since the terminal carriage (`tick_with_terminal_v2`); the same seams are pruned.
+        assert!(body("pub(super) fn reporter_filer_tick_v1(").contains(
+            "filer.tick_with_terminal_v2(\n            court_pending,\n            court_moved,\n            accused,\n            |entry, gated| \
+             session.palw_reporter_filing_read_v1("
+        ));
         // (d)
         let hooks: Vec<usize> = source.match_indices("self.j1_auto_probe_v1(").map(|(at, _)| at).collect();
         assert_eq!(hooks.len(), 2, "two hooks");

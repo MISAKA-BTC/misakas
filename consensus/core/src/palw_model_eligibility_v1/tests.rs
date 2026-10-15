@@ -258,7 +258,11 @@ fn req_elig_4_attempts_are_counted_at_commit_and_bounded_per_lineage_principal_a
     let mut principal = PalwEligibilityPrincipalRowV1::default();
     let mut network = PalwEligibilityNetworkRowV1::default();
     let c = commit(20, PalwEligibilityExamPurposeV1::Promotion, p.probation_min_claims, 0);
-    let admit = |l: &PalwEligibilityLineageRowV1, pr: &PalwEligibilityPrincipalRowV1, n: &PalwEligibilityNetworkRowV1, c, daa| {
+    let admit = |l: &PalwEligibilityLineageRowV1,
+                 pr: &PalwEligibilityPrincipalRowV1,
+                 n: &PalwEligibilityNetworkRowV1,
+                 c: &PalwEligibilityExamCommitV1,
+                 daa| {
         palw_eligibility_commit_admits_v1(&p, c, &model, PalwEligibilityStageV1::Probation, l, pr, n, daa)
     };
     use PalwEligibilityCommitRefusalV1 as R;
@@ -515,7 +519,8 @@ fn s7_5_closed_after_promotion_lapses_at_the_next_renewal() {
     }
     let outcome = palw_eligibility_exam_verdict_v1(&p, &renewal, model.next_renewal_daa + 1).unwrap();
     assert_eq!(outcome, PalwEligibilityExamOutcomeV1::NotPromoted);
-    palw_eligibility_apply_outcome_v1(&p, &mut model, PalwEligibilityExamPurposeV1::Renewal, outcome, model.next_renewal_daa + 1);
+    let closed_at = model.next_renewal_daa + 1;
+    palw_eligibility_apply_outcome_v1(&p, &mut model, PalwEligibilityExamPurposeV1::Renewal, outcome, closed_at);
     let window_end = model.next_renewal_daa + p.lapse_grace_daa;
     assert!(palw_eligibility_lapse_v1(&p, &mut model, window_end + 1));
     assert_eq!(window_end - promoted, p.renewal_epoch_daa + p.lapse_grace_daa, "the post-promotion exposure window");

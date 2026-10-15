@@ -120,11 +120,18 @@ pub struct RpcPalwClaimRow {
     /// `capacityRecoveryDaa`). Empty for a claim accepted below `palw_bond_formula_v2` and from a version-4 peer.
     #[serde(default)]
     pub reservation_split: String,
+    /// **Version 6 — RFC-0018 Gate C**: the claim's certification state (`pending`, `certified`, `not-certified`, …). Empty for a claim
+    /// accepted below the fence (every shipped network) and from a version-5 peer. A certified claim's consensus credit is
+    /// premise-based (see `GetPalwSettlementResponse::security_certification_premise`).
+    #[serde(default)]
+    pub security_certification: String,
 }
 
 impl Serializer for RpcPalwClaimRow {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &5, writer)?;
+        // RFC-0018: version 6 only where the row carries a Gate C state (never on a shipped network), so older readers are unaffected.
+        let version: u16 = if self.security_certification.is_empty() { 5 } else { 6 };
+        store!(u16, &version, writer)?;
         store!(String, &self.claim_id, writer)?;
         store!(bool, &self.is_free_prompt, writer)?;
         store!(String, &self.class_id, writer)?;
@@ -168,6 +175,9 @@ impl Serializer for RpcPalwClaimRow {
         store!(String, &self.committed_sompi, writer)?;
         // Version 5: the reservation's decomposition (ADR-0176 amendment).
         store!(String, &self.reservation_split, writer)?;
+        if version >= 6 {
+            store!(String, &self.security_certification, writer)?;
+        }
         Ok(())
     }
 }
@@ -223,6 +233,9 @@ impl Deserializer for RpcPalwClaimRow {
         }
         if version >= 5 {
             row.reservation_split = load!(String, reader)?;
+        }
+        if version >= 6 {
+            row.security_certification = load!(String, reader)?;
         }
         Ok(row)
     }
@@ -1099,11 +1112,23 @@ pub struct GetPalwSettlementResponse {
     pub depth_is_lower_bound: bool,
     pub safe_frontier_blue_score: u64,
     pub safe_frontier_daa: u64,
+    /// **RFC-0018 §7.8**: attempt claims at or after `daa_score` that are `Final` but not SecurityCertified (no consensus or settlement
+    /// credit). Past Gate C a chain holding only such claims reports `settled = false`, `depth = 0`. Wire version 4, written only when
+    /// non-zero (0 on every shipped network, so older readers are unaffected); not carried over gRPC (RFC-0018 GAP-R6).
+    #[serde(default)]
+    pub uncertified_final_anchors: u64,
+    /// **RFC-0018 §7.2 — the premise, stated**: present wherever Gate C is in force at the answer's sink. PALW settlement finality there
+    /// rests on SecurityCertified claims, whose certification is PREMISE-BASED (drawn verifiers' signed approvals, sound only while the
+    /// honest fraction of drawn verifier stake is at least the threshold), not an unconditional mathematical proof. Wire version 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security_certification_premise: Option<String>,
 }
 
 impl Serializer for GetPalwSettlementResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        let version: u16 = if self.native_readiness.is_some() {
+        let version: u16 = if self.uncertified_final_anchors > 0 || self.security_certification_premise.is_some() {
+            4
+        } else if self.native_readiness.is_some() {
             3
         } else if self.dns_retired_at.is_some() || self.native_settlement.is_some() {
             2
@@ -1129,6 +1154,10 @@ impl Serializer for GetPalwSettlementResponse {
             let json = self.native_readiness.as_ref().map(serde_json::to_string).transpose().map_err(std::io::Error::other)?;
             store!(Option<String>, &json, writer)?;
         }
+        if version >= 4 {
+            store!(u64, &self.uncertified_final_anchors, writer)?;
+            store!(Option<String>, &self.security_certification_premise, writer)?;
+        }
         Ok(())
     }
 }
@@ -1136,7 +1165,7 @@ impl Serializer for GetPalwSettlementResponse {
 impl Deserializer for GetPalwSettlementResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let version = load!(u16, reader)?;
-        if !(1..=3).contains(&version) {
+        if !(1..=4).contains(&version) {
             return Err(std::io::Error::other("unknown PALW settlement response version"));
         }
         Ok(Self {
@@ -1160,6 +1189,8 @@ impl Deserializer for GetPalwSettlementResponse {
             } else {
                 None
             },
+            uncertified_final_anchors: if version >= 4 { load!(u64, reader)? } else { 0 },
+            security_certification_premise: if version >= 4 { load!(Option<String>, reader)? } else { None },
         })
     }
 }

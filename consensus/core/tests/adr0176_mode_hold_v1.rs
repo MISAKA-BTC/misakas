@@ -33,7 +33,7 @@ const KAS: u64 = 100_000_000;
 const DAY: u64 = PALW_BOND_HOLD_DAA_PER_DAY_V1;
 
 fn bond(n: u8) -> PalwBondKeyV2 {
-    PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::Hash::from_bytes([n; 32]), 0))
+    PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::Hash64::from_bytes([n; 64]), 0))
 }
 
 fn id(bond: u8, n: u64) -> Hash64 {

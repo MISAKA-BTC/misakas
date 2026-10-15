@@ -223,6 +223,9 @@ struct PalwChainAnchorV1 {
     /// where the anchor block keys the seed itself. The seed's source among them is
     /// [`VirtualStateProcessor::palw_operator_seed_source_v1`]'s.
     operator_attempts: Option<Vec<(u64, BlockHash)>>,
+    /// **RFC-0018 §5 (`palw_panel_anchor_permissionless_v1`)**: past it, every bonded, matured attempt the block is or merges (blue or
+    /// red) — the permissionless anchor's contributions; `None` below it.
+    permissionless: Option<Vec<kaspa_consensus_core::palw_rfc0018_v1::PalwAnchorContributionV1>>,
 }
 
 /// **G14 lane D, TEST ONLY: the artifact attestations a kernel route E2E supplies.** There is no on-chain artifact availability or
@@ -3745,7 +3748,9 @@ impl VirtualStateProcessor {
                 if rule_e {
                     let mut states = super::palw_rule_e::PalwRuleEStatesV1::default();
                     let (pair, counts) = self.palw_rule_e_pair_v1(&mut states, refused, sink)?;
-                    return (kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_order_v1(&pair.a, &pair.b, counts)
+                    // RFC-0018 §6: the v2 order past its fence at the sink's DAA (the v1 order exactly below it).
+                    let capital_v2 = self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.palw_rule_e_participation_v2_at(daa));
+                    return (kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_order_v2(&pair.a, &pair.b, counts, capital_v2)
                         != std::cmp::Ordering::Greater)
                         .then_some(refused);
                 }

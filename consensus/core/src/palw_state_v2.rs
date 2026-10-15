@@ -219,6 +219,10 @@ mod palw_beacon_bootstrap_fold_v1;
 #[path = "palw_model_eligibility_fold_v1.rs"]
 mod palw_model_eligibility_fold_v1;
 pub use palw_model_eligibility_fold_v1::palw_eligibility_status_of_v1;
+// RFC-0018 §7 (Gate C, adopted 2026-10-15): SecurityCertified — kernel-route aux 136, attestations on inner 75, past
+// `palw_independently_work_certified_v1`.
+#[path = "palw_security_certification_fold_v1.rs"]
+mod palw_security_certification_fold_v1;
 #[path = "palw_panel_source_fee_fold_v2.rs"]
 mod palw_panel_source_fee_fold_v2;
 #[path = "palw_panel_v3_fold_v1.rs"]
@@ -1920,6 +1924,10 @@ pub struct PalwStateParamsV2 {
     /// weight pin, the exam fold and the registry RPC read it). `None` on every shipped preset, and validation refuses every armed one.
     #[borsh(skip)]
     model_eligibility_v1: Option<crate::palw_model_eligibility_v1::PalwModelEligibilityMirrorV1>,
+    /// **RFC-0018's mirror** (`crate::palw_rfc0018_v1`): the four state-level fences' heights and Gate C's rule, written by
+    /// `Params::sync_palw_rfc0018_v1`. `None` on every shipped preset, and validation refuses every armed one.
+    #[borsh(skip)]
+    rfc0018_v1: Option<crate::palw_rfc0018_v1::PalwRfc0018MirrorV1>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -14465,7 +14473,27 @@ fn apply_palw_transition_v7_inner(
     //     the last slot. A refusal SKIPS (checkpoint, try, restore): the accepting block did not
     //     author its anticone, so nothing about a merged blue may disqualify it. The skip list is
     //     returned, never folded — logs are not state.
-    for merged in merged_work {
+    // **RFC-0018 §4 (`palw_dag_sibling_attribution_v1`, at THIS accepting block's DAA): the canonical sibling order.** Past the fence
+    // the attempts of the mergeset are admitted in a round robin over model classes, each class by `H(domain ‖ execution key)` —
+    // a function of the mergeset SET, not of GHOSTDAG colour or merge order — so concurrent siblings of different models share any
+    // contended per-block cap round by round and the ADR-0170 "last admitted" anchor is canonical. Non-attempt works keep their
+    // slots. Below the fence (every shipped network) the identity permutation: the consensus order, byte for byte.
+    let sibling_order: Vec<usize> =
+        if builder.params.rfc0018_v1().is_some_and(|mirror| mirror.sibling_attribution_at(ctx.daa_score)) {
+            let keys: Vec<crate::palw_rfc0018_v1::PalwSiblingKeyV1> = merged_work
+                .iter()
+                .map(|merged| match merged.work {
+                    PalwBlockWorkV3::Attempt(envelope) => {
+                        crate::palw_rfc0018_v1::palw_sibling_key_of_attempt_v1(envelope.attempt.class_id, merged.execution_key)
+                    }
+                    _ => crate::palw_rfc0018_v1::PalwSiblingKeyV1 { class_id: None, execution_key: merged.execution_key },
+                })
+                .collect();
+            crate::palw_rfc0018_v1::palw_sibling_canonical_order_v1(&keys)
+        } else {
+            (0..merged_work.len()).collect()
+        };
+    for merged in sibling_order.iter().map(|&index| &merged_work[index]) {
         let refusal: Option<String> = match merged.work {
             PalwBlockWorkV3::None => None,
             PalwBlockWorkV3::Attempt(envelope) => match admission {
@@ -14665,11 +14693,20 @@ fn apply_palw_transition_v7_inner(
         // pruning there would delete history a live claim still needs.
         Some((oldest_open, _)) => oldest_open.saturating_sub(1),
     };
+    // **RFC-0018 Gate C's frontier site** (adopted 2026-10-15): past the fence the frontier is the deepest SecurityCertified ATTEMPT in
+    // the resolved prefix — the one consensus-credit rule settlement depth shares (`palw_consensus_credit_anchor_v1`). A `Final`
+    // claim not (yet) certified is resolved (it holds no prefix back) but matures nothing; a Free-Prompt `Final` never stands as the
+    // frontier. The identity below its fence (keyed on each claim's acceptance DAA) and on every shipped network.
     if let Some(claim) = builder
         .state
         .claims
-        .values()
-        .filter(|c| matches!(c.phase, PalwClaimPhaseV2::Final { .. }) && c.accepted_blue_score <= resolved_through)
+        .iter()
+        .filter(|(id, c)| {
+            matches!(c.phase, PalwClaimPhaseV2::Final { .. })
+                && c.accepted_blue_score <= resolved_through
+                && crate::palw_rfc0018_v1::palw_gate_c_advances_frontier_v1(builder.params, &builder.state, id, c)
+        })
+        .map(|(_, c)| c)
         .max_by_key(|c| c.accepted_blue_score)
         && claim.accepted_blue_score > old_frontier.0
     {
@@ -14684,8 +14721,23 @@ fn apply_palw_transition_v7_inner(
         // the carrying block is what the job anchor is derived from, so it is load-bearing here.
         builder.state.safe_frontier = claim.accepted_block;
     }
+    // **RFC-0018 §7.5a (Gate C in force at this block): the frontier is RECOMPUTED** — the deepest frontier-eligible Final in the
+    // resolved prefix, never below the floor (seeded with the frontier above at the first such block, raised by retirements). So a
+    // certified claim later convicted stops standing as the frontier and the frontier falls back to the deepest remaining eligible
+    // claim; the delta's `Frontier` entry carries any move, so a reorg reverts it exactly. Below the fence the incremental rule above.
+    if builder.params.rfc0018_v1().is_some_and(|mirror| mirror.gate_c_at(ctx.daa_score)) {
+        let seeded = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
+        palw_security_certification_fold_v1::ensure_frontier_floor_v1(&mut builder, ctx, seeded)?;
+        let (blue_score, block) =
+            crate::palw_security_certification_v1::palw_gate_c_frontier_v1(&builder.state, builder.params, resolved_through);
+        builder.state.safe_frontier_blue_score = blue_score;
+        builder.state.safe_frontier = block;
+    }
     let new_frontier = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
-    debug_assert!(new_frontier.0 >= old_frontier.0, "the frontier never retreats");
+    debug_assert!(
+        new_frontier.0 >= old_frontier.0 || builder.params.rfc0018_v1().is_some_and(|mirror| mirror.gate_c_at(ctx.daa_score)),
+        "the frontier never retreats (except past Gate C, where a conviction moves it back)"
+    );
 
     // 7. ADR-0125: the round permits this block accepted. After everything else, because nothing
     //    else in the fold reads them, and at a fixed place because fixed IS the requirement.
@@ -17351,8 +17403,26 @@ fn palw_void_claims_unbound_in_their_anchor_block_v1(
     ncp_at_draw: &BTreeSet<Hash64>,
     thin_at_draw: &BTreeSet<Hash64>,
 ) -> Result<(), PalwStateV2Error> {
+    // **RFC-0018 §5.2 (`palw_panel_anchor_permissionless_v1`, at this block's DAA)**: a block anchors only the claims a contribution of
+    // ANOTHER bond reaches (committed fold output: attempts accepted below this block — this block's own and merged claims excluded
+    // by the blue-score bound); a claim it does not anchor is neither bound nor voided here — it waits for its anchor. Below the
+    // fence `None`, and every claim at or below the reach is this block's, as before.
+    let permissionless = builder
+        .params
+        .rfc0018_v1()
+        .is_some_and(|mirror| mirror.panel_anchor_permissionless_at(ctx.daa_score))
+        .then(|| crate::palw_rfc0018_v1::palw_permissionless_contributions_from_state_v1(&builder.state, ctx.blue_score));
     for claim_id in palw_claims_provisional_past_their_anchor_slot_v1(&builder.state, reach, anchor_delay) {
         let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+        if let Some(contributions) = permissionless.as_ref()
+            && !crate::palw_rfc0018_v1::palw_permissionless_anchors_claim_v1(
+                contributions,
+                claim.bind_base_daa().saturating_add(anchor_delay),
+                &claim.bond,
+            )
+        {
+            continue;
+        }
         // **Lane F1 (the 2026-09-25 sweep's V03(1)): a claim no capable panel could take retries at its
         // next anchor slot** (past the registry-resilience fence): re-based on this block, its deadline
         // left at `accepted_daa + window_bind` — [`palw_ncp_retry_is_due_v1`] says when, why it cannot
@@ -18932,6 +19002,9 @@ fn apply_receipt_spend(
     // `safe_weight` takes the grant. The receipt census below still counts the work done (it measures production, never reward).
     let last_quantum = spent.len() as u64 + 1 >= *quanta as u64;
     let credited = builder.bond_budget_receipt_spend_v1(ctx, &claim_id, per_quantum, last_quantum)?;
+    // **RFC-0018 Gate C's receipt-spend site**: a spend of an uncertified free-prompt claim weighs nothing (the identity below its
+    // fence, keyed on the claim's acceptance DAA, and on every shipped network). The block still spends its quantum.
+    let credited = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(builder.params, &builder.state, &claim_id, &claim, credited);
     builder.state.safe_weight = builder.state.safe_weight.checked_add(credited).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
     let mut updated = claim.clone();
     let PalwClaimSourceV2::FreePrompt { spent: ledger, .. } = &mut updated.source else { unreachable!("matched above") };

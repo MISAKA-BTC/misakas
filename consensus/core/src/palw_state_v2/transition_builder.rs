@@ -5056,6 +5056,8 @@ impl<'a> TransitionBuilder<'a> {
         // Lane BUDGET: a budgeted claim's reversal takes back exactly what its Final (or its spends) was granted; nothing returns to its
         // bond's window.
         let weight = self.state.bond_budget_weight_or(&id, weight);
+        // RFC-0018 Gate C: take back exactly what the Final (or the spends) added — nothing where Gate C withheld it.
+        let weight = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(self.params, &self.state, &id, &claim, weight);
         self.bond_budget_close_v1(&id, ctx.daa_score);
         self.state.safe_weight = self.state.safe_weight.saturating_sub(weight);
         self.unnote_model_probe_pass(&claim, final_daa, ctx.daa_score);
@@ -7201,6 +7203,17 @@ impl<'a> TransitionBuilder<'a> {
         execution_key: Hash64,
     ) {
         let span = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, span_daa);
+        // **RFC-0018 §4.2 (`palw_dag_sibling_attribution_v1`, at the folding block's DAA): no last-write-wins.** Within a span the
+        // anchor is the admitted attempt of least `H(domain ‖ execution key)` — own or merged, blue or red, whichever block folded it
+        // first — so neither the merge order nor which sibling GHOSTDAG selected decides it. Below the fence: the last write, as before.
+        if self.params.rfc0018_v1().is_some_and(|mirror| mirror.sibling_attribution_at(ctx.daa_score))
+            && let Some(held) = self.state.round_seed_anchor
+            && held.span == span
+            && crate::palw_rfc0018_v1::palw_sibling_priority_v1(&held.execution_key)
+                <= crate::palw_rfc0018_v1::palw_sibling_priority_v1(&execution_key)
+        {
+            return;
+        }
         self.write_round_seed_anchor(Some(crate::palw_execution_lane_v1::PalwExecSeedAnchorV1 { span, block, execution_key }));
     }
 
@@ -7539,7 +7552,8 @@ impl<'a> TransitionBuilder<'a> {
         staged.rcore.basis_k = basis_k.max(old_k);
         if old_k < PALW_RCORE_FINAL_BASIS_K_V1 && staged.rcore.basis_k >= PALW_RCORE_FINAL_BASIS_K_V1 {
             staged.rcore.licence_door = Some(palw_rcore_upgraded_door_v1(&self.state, &claim_id));
-            if matches!(claim.source, PalwClaimSourceV2::Attempt) {
+            // RFC-0018 Gate C's settled-anchor site (the identity below its fence).
+            if matches!(claim.source, PalwClaimSourceV2::Attempt) && crate::palw_rfc0018_v1::palw_gate_c_settles_anchor_v1(self.params, claim) {
                 self.settle_anchor(now_daa, true)?;
             }
         }
@@ -7737,7 +7751,8 @@ impl<'a> TransitionBuilder<'a> {
         staged.rcore.basis_k = k;
         if old_k < PALW_RCORE_FINAL_BASIS_K_V1 && k >= PALW_RCORE_FINAL_BASIS_K_V1 && staged.rcore.licence_door.is_some() {
             staged.rcore.licence_door = Some(palw_rcore_upgraded_door_v1(&self.state, &claim_id));
-            if matches!(claim.source, PalwClaimSourceV2::Attempt) {
+            // RFC-0018 Gate C's settled-anchor site (the identity below its fence).
+            if matches!(claim.source, PalwClaimSourceV2::Attempt) && crate::palw_rfc0018_v1::palw_gate_c_settles_anchor_v1(self.params, claim) {
                 self.settle_anchor(now, true)?;
             }
         }
@@ -8274,11 +8289,12 @@ impl<'a> TransitionBuilder<'a> {
             .ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
         self.write_exposure(claim.bond, Some(next));
         // ADR-0160 F-W: a new-rule claim's weight enters through its bond's capped term (`write_claim`).
+        // RFC-0018 Gate C's provisional site: the claim's weight "as at acceptance" (the identity below its fence).
         if !crate::palw_weight_cap_v1::palw_weight_cap_applies_v1(self.params, claim) {
             self.state.bounded_immature = self
                 .state
                 .bounded_immature
-                .checked_add(claim.immature_contribution)
+                .checked_add(crate::palw_rfc0018_v1::palw_claim_provisional_weight_v1(self.params, claim))
                 .ok_or(PalwStateV2Error::Overflow("bounded_immature"))?;
         }
         Ok(())
@@ -8298,11 +8314,12 @@ impl<'a> TransitionBuilder<'a> {
         let next = current.checked_sub(held).ok_or(PalwStateV2Error::Overflow("reserved_exposure underflow"))?;
         self.write_exposure(claim.bond, if next == 0 { None } else { Some(next) });
         // ADR-0160 F-W: a new-rule claim's weight leaves through its bond's capped term (`write_claim`).
+        // RFC-0018 Gate C's provisional site: exactly what `reserve_for_claim` added (the identity below its fence).
         if !crate::palw_weight_cap_v1::palw_weight_cap_applies_v1(self.params, claim) {
             self.state.bounded_immature = self
                 .state
                 .bounded_immature
-                .checked_sub(claim.immature_contribution)
+                .checked_sub(crate::palw_rfc0018_v1::palw_claim_provisional_weight_v1(self.params, claim))
                 .ok_or(PalwStateV2Error::Overflow("bounded_immature underflow"))?;
         }
         Ok(())
@@ -8620,7 +8637,8 @@ impl<'a> TransitionBuilder<'a> {
         } else {
             self.extras.audit_2026_09_23_active && attempt
         };
-        if ticks {
+        // RFC-0018 Gate C's settled-anchor site: an uncertified licence settles nothing (asked as licensed; identity below its fence).
+        if ticks && crate::palw_rfc0018_v1::palw_gate_c_settles_anchor_v1(self.params, &claim) {
             self.settle_anchor(daa_score, true)?;
         }
         let before = self.state.claims.get(&claim_id).cloned();
@@ -8883,6 +8901,9 @@ impl<'a> TransitionBuilder<'a> {
             return Err(PalwStateV2Error::ExecV2Refused("Final exceeds immutable paid consumer service".into()));
         }
         self.mark_paid_consumer_terminal_v1(id, final_daa)?;
+        // **RFC-0018 Gate C (adopted 2026-10-15)**: a governed claim's `Final` completes the procedure only; its certification is
+        // committed here (claim, producer and pool cut fixed now; the draw waits for later randomness). A no-op below the fence.
+        super::palw_security_certification_fold_v1::commit_at_final_v1(self, &id, claim, final_daa)?;
         self.note_model_probe(claim, true, final_daa);
         // ADR-0152-adjacent (Activation Pool): (b)'s tracking — before the duty row leaves below.
         self.note_activation_probe_credits_v1(&id, claim);
@@ -8919,6 +8940,9 @@ impl<'a> TransitionBuilder<'a> {
             // **RFC-0017 (REQ-ELIG-2): a probation claim's Final is job completion, not consensus credit** — its F was reserved 0, so
             // the grant above is already 0; the hook retires its pin. Unchanged for every other claim and below the fence.
             let contribution = super::palw_model_eligibility_fold_v1::eligibility_final_weight_v1(self, &id, contribution);
+            // **RFC-0018 Gate C's final-weight site** (`palw_independently_work_certified_v1`): an uncertified claim's Final adds no
+            // weight. The identity below its fence (keyed on the claim's acceptance DAA) and on every shipped network.
+            let contribution = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(self.params, &self.state, &id, claim, contribution);
             self.state.safe_weight =
                 self.state.safe_weight.checked_add(contribution).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
         } else {
@@ -8981,6 +9005,10 @@ impl<'a> TransitionBuilder<'a> {
             // verification** — paid whole when attested (or no Final claim existed to sample), withheld when unattested, deferred while
             // undecided; before every leg below. Unchanged below the fence and for every claim the allocation did not reserve for.
             let escrow = palw_econ_contracts_fold_v1::gate_final_reward_v1(self, &id, claim, escrow, final_daa)?;
+            // **RFC-0018 Gate C's coinbase site**: past the fence the issuance-funded (subsidy-carved) reward leg represents consensus
+            // credit — it is HELD in the claim's certification row and named only at `SecurityCertified` (burned otherwise). The
+            // identity below its fence and on every shipped network.
+            let escrow = super::palw_security_certification_fold_v1::hold_issuance_reward_at_final_v1(self, &id, claim, escrow)?;
             // **Lane BUDGET, PESG §6: the external export cap.** What leaves the chain's books at Final — a leg written straight into the
             // payout queue (no vesting), or a buyback slice in a market reserve a holder can sell out of — is at most 0.51 of the
             // collateral the claim's liability still holds; a vesting leg is not an export (it moves once the lock has ended). The rest
@@ -9171,7 +9199,11 @@ impl<'a> TransitionBuilder<'a> {
         // every network (a fact about the chain) and read by no rule there. Past the fence it
         // ticks at the licence instead (`license_claim`): a `Final` is reached by the DAA sweep
         // alone and must not settle anything on history nobody signed.
-        if matches!(claim.source, PalwClaimSourceV2::Attempt) && !self.extras.audit_2026_09_23_active {
+        // RFC-0018 Gate C's settled-anchor site (the identity below its fence).
+        if matches!(claim.source, PalwClaimSourceV2::Attempt)
+            && !self.extras.audit_2026_09_23_active
+            && crate::palw_rfc0018_v1::palw_gate_c_settles_anchor_v1(self.params, claim)
+        {
             self.settle_anchor(final_daa, false)?;
         }
         self.disarm_deadline(id);
@@ -9282,11 +9314,12 @@ impl<'a> TransitionBuilder<'a> {
         let obligation_release = crate::palw_escrow_funding_v2::palw_claim_obligation_release_at_v1(&voided, self.params);
         if palw_claim_is_on_abandon_hold_v2(&voided, self.params, voided_daa) || obligation_release.is_some() {
             // ADR-0160 F-W: a new-rule claim's weight leaves through `write_claim` below.
+            // RFC-0018 Gate C's provisional site: exactly what `reserve_for_claim` added (the identity below its fence).
             if !crate::palw_weight_cap_v1::palw_weight_cap_applies_v1(self.params, claim) {
                 self.state.bounded_immature = self
                     .state
                     .bounded_immature
-                    .checked_sub(claim.immature_contribution)
+                    .checked_sub(crate::palw_rfc0018_v1::palw_claim_provisional_weight_v1(self.params, claim))
                     .ok_or(PalwStateV2Error::Overflow("bounded_immature underflow"))?;
             }
             self.write_claim(id, Some(voided));
@@ -9429,7 +9462,11 @@ impl<'a> TransitionBuilder<'a> {
             _ => None,
         };
         // Lane BUDGET: a budgeted claim retires the weight its Final (or its spends) was granted — the number `safe_weight` received.
+        // RFC-0018 §7.5a: a retiring frontier-eligible Final raises the Gate C frontier floor (no-op below the fence).
+        super::palw_security_certification_fold_v1::note_retirement_frontier_floor_v1(self, &id, claim)?;
         let retiring = retiring.map(|amount| self.state.bond_budget_weight_or(&id, amount));
+        // RFC-0018 Gate C: retire exactly what `safe_weight` received — nothing where Gate C withheld it (identity below its fence).
+        let retiring = retiring.map(|amount| crate::palw_rfc0018_v1::palw_gate_c_weight_v1(self.params, &self.state, &id, claim, amount));
         if let Some(amount) = retiring {
             let old = self.state.retired_safe_weight;
             let new = old.checked_add(amount).ok_or(PalwStateV2Error::Overflow("retired_safe_weight"))?;

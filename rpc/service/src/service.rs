@@ -1730,6 +1730,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     committed_sompi: row.committed.map(|c| c.to_string()).unwrap_or_default(),
                     // ADR-0176 amendment (ユーザー判断 2026-10-15 item 3): the decomposition, not only the total.
                     reservation_split: row.reservation_split.map(|split| split.audit_json()).unwrap_or_default(),
+                    // RFC-0018 Gate C: empty below the fence (the row's version stays 5).
+                    security_certification: match row.security_certification {
+                        "not-governed" => String::new(),
+                        other => other.to_string(),
+                    },
                     escrow_sompi: row.escrowed_reward,
                     payout_pending_sompi: row.payout_pending,
                     quanta: row.quanta,
@@ -2121,6 +2126,10 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             depth_is_lower_bound: dns_retired_at.is_some() || settlement.depth_is_lower_bound,
             safe_frontier_blue_score: settlement.safe_frontier_blue_score,
             safe_frontier_daa: settlement.safe_frontier_daa,
+            uncertified_final_anchors: settlement.uncertified_final,
+            security_certification_premise: settlement
+                .gate_c_in_force
+                .then(|| kaspa_consensus_core::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_PREMISE_V1.to_string()),
         })
     }
 
@@ -3687,7 +3696,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         }
     }
 
-    async fn get_palw_rfc0016_report_call(
+    async fn get_palw_rfc_0016_report_call(
         &self,
         _connection: Option<&DynRpcConnection>,
         request: GetPalwRfc0016ReportRequest,

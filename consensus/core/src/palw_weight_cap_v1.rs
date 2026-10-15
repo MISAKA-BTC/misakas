@@ -241,10 +241,13 @@ pub fn palw_staged_weight_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV
         return 0;
     }
     let full = palw_weight_full_v1(params, claim);
-    match palw_weight_stage_of_claim_v1(claim) {
+    let staged = match palw_weight_stage_of_claim_v1(claim) {
         PalwWeightStageV1::Licensed { permille: 1000 } => full,
         stage => full.saturating_mul(u128::from(stage.permille())) / 1000,
-    }
+    };
+    // RFC-0018 Gate C's provisional site for a new-rule claim ("as at acceptance": one answer over the claim's life, so the bond
+    // index's before/after terms stay exact). The identity below its fence and on every shipped network.
+    crate::palw_rfc0018_v1::palw_gate_c_provisional_weight_v1(params, claim, staged)
 }
 
 /// **W_cap(b)** — the most provisional weight a bond of `collateral_sompi` can put into fork choice:
@@ -496,7 +499,8 @@ pub fn palw_bounded_immature_v2(state: &PalwChainStateV2, params: &PalwStatePara
     let old_rule: u128 = state
         .claims_iter()
         .filter(|(_, claim)| !claim.phase.is_terminal() && !palw_weight_cap_applies_v1(params, claim))
-        .map(|(_, claim)| claim.immature_contribution)
+        // RFC-0018 Gate C's provisional site (the identity below its fence).
+        .map(|(_, claim)| crate::palw_rfc0018_v1::palw_claim_provisional_weight_v1(params, claim))
         .fold(0u128, u128::saturating_add);
     let index = PalwBondWeightIndexV1::of(params, state.claims_iter().map(|(_, claim)| claim));
     old_rule.saturating_add(index.capped_total(state))

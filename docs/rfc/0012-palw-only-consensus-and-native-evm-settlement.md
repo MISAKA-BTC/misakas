@@ -587,3 +587,16 @@ after undo/replay.
 RFC6's 2026-10-15 section holds the shared ALL-MODEL rules. For this RFC: no settlement, head or fork-choice rule
 reads model availability; immutable model identity binds claims; the 2026-10-12 proposal to connect model-bond
 allocation to block opportunities does not change D, W, fork choice or Final weight.
+
+## ユーザー方針 2026-10-15 による改定
+
+* DNS退役後のsettlementの`safe`/`settled`は、**認証済み(`SecurityCertified`)のPALW creditだけ**を意味する。native settlementはfence以後、`Final`遷移ではなく認証遷移を成熟workの証拠とする。未認証claimだけのchainはPALW settlement finalityなしと報告する(RPCは`uncertifiedFinalAnchors`と前提の文言を返す)。
+* DNS-BFTの物理除去は別作業(`integ/rfc12-dns-removal`)であり、本改定はそれに依存しない。
+
+**ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
+
+* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
+* **認証は前提に基づく。** claim固定後の乱数でglobal poolから抽選した検証者のm-of-k肯定承認と、G14公開告発windowの異議なし経過で成立する。「抽選されたverifier stakeのうち正直な割合が閾値以上」を明示的な前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない(PRINCIPLES §8)。認証済みでもG14で反証されたclaimはvoidされ、合意creditは取り消される。
+* **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
+* **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
+* 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。

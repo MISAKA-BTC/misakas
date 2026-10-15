@@ -687,9 +687,34 @@ fn repro4_d_kaspad_never_constructs_default_accused() {
     let mut held = Vec::new();
     let mut patterns = Vec::new();
     for dir in ["kaspad/src"] {
+        // Files that are whole test modules (`#[cfg(test)]` over `#[path = "x.rs"] mod …;` or `mod x;`) are not shipped either: the
+        // node's service E2E suites live in such files and build the object to observe it.
+        let mut test_only = std::collections::BTreeSet::new();
+        for entry in std::fs::read_dir(root.join(dir)).unwrap() {
+            let text = std::fs::read_to_string(entry.unwrap().path()).unwrap_or_default();
+            let mut gated = false;
+            for line in text.lines().map(str::trim) {
+                if line == "#[cfg(test)]" {
+                    gated = true;
+                } else if gated && let Some(file) = line.strip_prefix("#[path = \"").and_then(|r| r.strip_suffix("\"]")) {
+                    test_only.insert(file.to_string());
+                } else if gated && line.starts_with("mod ") && line.ends_with(';') {
+                    test_only.insert(format!("{}.rs", line.trim_start_matches("mod ").trim_end_matches(';')));
+                    gated = false;
+                } else if !line.starts_with("#[") {
+                    gated = false;
+                }
+            }
+        }
         for entry in std::fs::read_dir(root.join(dir)).unwrap() {
             let path = entry.unwrap().path();
             if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            // `*_e2e.rs` files are test modules too, some reached only through another test module's `#[path]` (no `#[cfg(test)]`
+            // of their own): `palw_legacy_held_e2e.rs` from `palw_filer_held_e2e.rs`, the service suites from `palw_service_public_e2e.rs`.
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if test_only.contains(&name) || name.ends_with("_e2e.rs") {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
