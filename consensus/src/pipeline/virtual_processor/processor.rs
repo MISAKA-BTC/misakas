@@ -6648,16 +6648,27 @@ impl VirtualStateProcessor {
         // checked for consistency, and the committed form of the decoded state is compared with the witness — the same helper the
         // chain walk uses, so an import and a validation cannot disagree about one state.
         let flat_check = if self.palw_fork_choice_commitment_v1.is_none() { Some(expected_root) } else { None };
-        let state = carriage
-            // ADR-0069 Decision 7: the consistency check has to know the rule the snapshot was
-            // built under, or it refuses a state for having obeyed it.
-            .into_state_v3(params, flat_check, self.palw_uncertified_weightless_at(witness_daa), self.palw_canonical_work_daa)
-            .map_err(|e| match e {
-                kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why) => PruningImportError::PruningImportRuleError(
+        // Direct callers may supply a typed carriage without the protocol-107
+        // receiver's decode lease. Reserve canonical intake and actual schema
+        // reconstruction before into_state, then retain its owner to commit.
+        let state = kaspa_consensus_core::palw_native_resource_v1::restore_native_carriage_v1(
+            pruning_point,
+            carriage,
+            params,
+            flat_check,
+            self.palw_uncertified_weightless_at(witness_daa),
+            self.palw_canonical_work_daa,
+        )
+        .map_err(|e| match e {
+            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => {
+                PruningImportError::PruningImportRuleError(
                     kaspa_consensus_core::errors::block::RuleError::LocalNativeCapacityUnavailable(why),
-                ),
-                other => PruningImportError::ImportedPalwStateInvalid(pruning_point, expected_root, other.to_string()),
-            })?;
+                )
+            }
+            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(other) => {
+                PruningImportError::ImportedPalwStateInvalid(pruning_point, expected_root, other.to_string())
+            }
+        })?;
         if flat_check.is_none() {
             let got = self.palw_committed_root_v1(&state);
             if got != expected_root {

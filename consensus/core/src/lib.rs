@@ -1009,3 +1009,6 @@ pub mod palw_native_state_anchor_v39;
 pub mod palw_native_master_v39;
 
 pub mod palw_prospective_kernel_material_v4;
+
+pub mod palw_kernel_parameter_material_v4;
+pub mod palw_kernel_material_context_v4;

@@ -176,8 +176,11 @@ receipts” is not a security proof. Test private maturation, concentrated stake
 seats, withheld evidence, partitions and adaptive corruption without relying on DNS to stop them.
 
 Execution-check error, Panel compromise, randomness grinding, DA failure and chain reorganization
-are separate failure events. A Freivalds/GKR error bound is **not** a bound on total chain-finality
-risk. Publish assumptions and composed risk accounting before choosing the policy parameters.
+are separate failure events. A direct randomized checker's conditional miss rate does not
+bound total chain-finality risk. Consensus credit authenticates selected verifier approvals
+under an explicit honest-fraction assumption (PRINCIPLES §8); cryptographic model-computation
+proofs are prohibited. Publish checking scope, participation, availability, randomness and
+reorganization assumptions before choosing the policy parameters.
 
 ### 3.1 Publication history is separate from the current certificate
 

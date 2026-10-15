@@ -99,6 +99,11 @@ static LOGICAL: OnceLock<Option<Arc<NativeDemandCheckerV1>>> = OnceLock::new();
 pub fn arm_native_logical_limits_v1(limits: Option<NativeSnapshotResourceLimitsV1>) {
     let _ = LOGICAL.set(limits.map(NativeDemandCheckerV1::new));
 }
+/// Explicit local configuration only. This is not an observed free-memory or
+/// filesystem quota and does not authenticate a caller's resource estimate.
+pub fn native_declared_logical_limits_v1() -> Option<NativeSnapshotResourceLimitsV1> {
+    LOGICAL.get().and_then(Option::as_ref).map(|checker| checker.limits)
+}
 pub fn native_logical_admission_enabled_v1() -> bool {
     LOGICAL.get().is_some_and(Option::is_some)
 }

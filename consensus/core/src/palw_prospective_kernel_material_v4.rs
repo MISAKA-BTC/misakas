@@ -3,6 +3,11 @@
 //! installed into native state, paid, or represented as an accepted claim.
 use crate::{
     Hash64,
+    palw_kernel_parameter_material_v4::{
+        PALW_KERNEL_MATERIAL_UNIT_BYTES_V4, PALW_KERNEL_PARAMETER_STAGE_V4, PALW_KERNEL_SEGMENTED_PART_STAGE_V4,
+        PalwKernelParameterRowV4, PalwKernelSegmentedPartV4, classify_kernel_parameter_v4, classify_kernel_segmented_v4,
+        kernel_parameter_unit_count_v4, kernel_segmented_unit_count_v4,
+    },
     palw_kernel_route_v1::palw_kernel_bond_id_v1,
     palw_material_capacity_v1::{
         PALW_MATERIAL_MAX_UNITS_V1, PalwKernelMaterialBundleV1, PalwMaterialCapacityErrorV1, PalwMaterialCodecV1,
@@ -26,7 +31,7 @@ use misaka_palw_kernel::{
 /// Final, consumer lifetime, material hold or monetary release clock.
 pub const PALW_KERNEL_INGRESS_CHECKPOINT_WINDOW_V4: u64 = 600;
 pub const PALW_PROSPECTIVE_KERNEL_MATERIAL_CONTEXT_V4: &[u8] = b"misaka-palw/prospective-kernel-material/v4";
-fn object_hash<T: BorshSerialize>(domain: &[u8], value: &T) -> Hash64 {
+pub(crate) fn object_hash<T: BorshSerialize>(domain: &[u8], value: &T) -> Hash64 {
     struct Writer(blake2b_simd::State);
     impl std::io::Write for Writer {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -45,11 +50,7 @@ fn object_hash<T: BorshSerialize>(domain: &[u8], value: &T) -> Hash64 {
     Hash64::from_bytes(misaka_palw_kernel::hash::finish(writer.0))
 }
 fn typed_row<'a>(ledger: &'a KernelLedgerV1, claim: &Digest) -> Result<&'a ClaimRowV1, String> {
-    let row = ledger.claims.get(claim).ok_or("typed material claim absent")?;
-    if !matches!(row.body, ClaimBodyV1::Spec(_)) {
-        return Err("typed codec requires a typed claim".into());
-    }
-    Ok(row)
+    ledger.claims.get(claim).ok_or("complete kernel material claim absent".into())
 }
 fn retrieval_scope<'a>(
     ledger: &'a KernelLedgerV1,
@@ -80,8 +81,6 @@ pub fn typed_kernel_unit_ranges_v4(
     mut range: impl FnMut(u8, u32) -> Result<(), String>,
 ) -> Result<u64, String> {
     let row = typed_row(ledger, claim)?;
-    let ClaimBodyV1::Spec(body) = &row.body else { unreachable!() };
-    let class = ledger.typed.classes.get(&row.class_binding_id).ok_or("typed material class absent")?;
     let mut total = 0u64;
     let mut add = |stage: u8, count: u64| -> Result<(), String> {
         total = total.checked_add(count).ok_or("typed material unit count overflow")?;
@@ -93,48 +92,71 @@ pub fn typed_kernel_unit_ranges_v4(
         }
         Ok(())
     };
-    match (&class.kind, &body.claim) {
-        (SpecClassKindV1::Memory { .. }, SpecClaimV1::Memory(claim)) => {
-            let positions = claim
-                .steps
-                .iter()
-                .try_fold(0u64, |n, step| n.checked_add(step.commitments.len() as u64))
-                .ok_or("memory position count overflow")?;
-            add(0, positions)?;
-            add(misaka_palw_kernel::spec::MEMORY_PRE_STATE_STAGE_V1, 1)?;
-        }
-        (SpecClassKindV1::Retrieval { root }, SpecClaimV1::Retrieval(claim)) => {
-            add(misaka_palw_kernel::spec::SNAPSHOT_STAGE_BASE_V1, root.snapshot.slices())?;
-            add(misaka_palw_kernel::spec::RETRIEVAL_ENTRY_STAGE_BASE_V1, claim.result.len() as u64)?;
-        }
-        (SpecClassKindV1::Composite { components, .. }, SpecClaimV1::Composite(claim)) => {
-            if components.len() != claim.stages.len() {
-                return Err("typed composite stage count mismatch".into());
-            }
-            for (index, (component, stage)) in components.iter().zip(&claim.stages).enumerate() {
-                let index = u8::try_from(index).map_err(|_| "typed component index overflow")?;
-                match (component, stage) {
-                    (ComponentV1::Model(_), StageClaimV1::Model { commitments, .. }) => add(index, commitments.len() as u64)?,
-                    (ComponentV1::Retrieval(root), StageClaimV1::Retrieval { result, .. }) => {
-                        add(
-                            misaka_palw_kernel::spec::SNAPSHOT_STAGE_BASE_V1
-                                .checked_add(index)
-                                .ok_or("snapshot namespace overflow")?,
-                            root.snapshot.slices(),
-                        )?;
-                        add(
-                            misaka_palw_kernel::spec::RETRIEVAL_ENTRY_STAGE_BASE_V1
-                                .checked_add(index)
-                                .ok_or("entry namespace overflow")?,
-                            result.len() as u64,
-                        )?;
-                    }
-                    _ => return Err("typed component kind substituted".into()),
+    match &row.body {
+        ClaimBodyV1::Program { commitments, .. } => add(0, commitments.len() as u64)?,
+        ClaimBodyV1::Pipeline { stages, .. } => {
+            for (stage, body) in stages.iter().enumerate() {
+                let stage = u8::try_from(stage).map_err(|_| "pipeline stage namespace overflow")?;
+                if stage >= misaka_palw_kernel::spec::MEMORY_PRE_STATE_STAGE_V1 {
+                    return Err("pipeline stage collides with reserved complete-unit namespaces".into());
                 }
+                add(stage, body.commitments.len() as u64)?;
             }
         }
-        _ => return Err("typed material class/body mismatch".into()),
+        ClaimBodyV1::Segmented { .. } => add(
+            PALW_KERNEL_SEGMENTED_PART_STAGE_V4,
+            kernel_segmented_unit_count_v4(ledger, claim, PALW_MATERIAL_MAX_UNITS_V1 as u64)?,
+        )?,
+        ClaimBodyV1::Spec(body) => {
+            let class = ledger.typed.classes.get(&row.class_binding_id).ok_or("typed material class absent")?;
+            match (&class.kind, &body.claim) {
+                (SpecClassKindV1::Memory { .. }, SpecClaimV1::Memory(claim)) => {
+                    let positions = claim
+                        .steps
+                        .iter()
+                        .try_fold(0u64, |n, step| n.checked_add(step.commitments.len() as u64))
+                        .ok_or("memory position count overflow")?;
+                    add(0, positions)?;
+                    add(misaka_palw_kernel::spec::MEMORY_PRE_STATE_STAGE_V1, 1)?;
+                }
+                (SpecClassKindV1::Retrieval { root }, SpecClaimV1::Retrieval(claim)) => {
+                    add(misaka_palw_kernel::spec::SNAPSHOT_STAGE_BASE_V1, root.snapshot.slices())?;
+                    add(misaka_palw_kernel::spec::RETRIEVAL_ENTRY_STAGE_BASE_V1, claim.result.len() as u64)?;
+                }
+                (SpecClassKindV1::Composite { components, .. }, SpecClaimV1::Composite(claim)) => {
+                    if components.len() != claim.stages.len() {
+                        return Err("typed composite stage count mismatch".into());
+                    }
+                    for (index, (component, stage)) in components.iter().zip(&claim.stages).enumerate() {
+                        let index = u8::try_from(index).map_err(|_| "typed component index overflow")?;
+                        match (component, stage) {
+                            (ComponentV1::Model(_), StageClaimV1::Model { commitments, .. }) => add(index, commitments.len() as u64)?,
+                            (ComponentV1::Retrieval(root), StageClaimV1::Retrieval { result, .. }) => {
+                                add(
+                                    misaka_palw_kernel::spec::SNAPSHOT_STAGE_BASE_V1
+                                        .checked_add(index)
+                                        .ok_or("snapshot namespace overflow")?,
+                                    root.snapshot.slices(),
+                                )?;
+                                add(
+                                    misaka_palw_kernel::spec::RETRIEVAL_ENTRY_STAGE_BASE_V1
+                                        .checked_add(index)
+                                        .ok_or("entry namespace overflow")?,
+                                    result.len() as u64,
+                                )?;
+                            }
+                            _ => return Err("typed component kind substituted".into()),
+                        }
+                    }
+                }
+                _ => return Err("typed material class/body mismatch".into()),
+            }
+        }
     }
+    add(
+        PALW_KERNEL_PARAMETER_STAGE_V4,
+        kernel_parameter_unit_count_v4(ledger, claim, PALW_MATERIAL_MAX_UNITS_V1 as u64, PALW_KERNEL_MATERIAL_UNIT_BYTES_V4)?,
+    )?;
     Ok(total)
 }
 pub fn typed_kernel_required_unit_v4(ledger: &KernelLedgerV1, claim: &Digest, stage: u8, position: u32) -> Result<bool, String> {
@@ -158,6 +180,17 @@ pub fn typed_kernel_classify_unit_v4(
         return Err("unit is outside the exact typed inventory".into());
     }
     let row = typed_row(ledger, claim)?;
+    if bytes.len() as u64 > PALW_KERNEL_MATERIAL_UNIT_BYTES_V4 {
+        return Err("complete kernel unit exceeds the versioned carrier cap".into());
+    }
+    if stage == PALW_KERNEL_PARAMETER_STAGE_V4 {
+        let unit: PalwKernelParameterRowV4 = borsh::from_slice(bytes).map_err(|e| e.to_string())?;
+        return classify_kernel_parameter_v4(ledger, claim, position, &unit);
+    }
+    if stage == PALW_KERNEL_SEGMENTED_PART_STAGE_V4 {
+        let unit: PalwKernelSegmentedPartV4 = borsh::from_slice(bytes).map_err(|e| e.to_string())?;
+        return classify_kernel_segmented_v4(ledger, claim, position, &unit);
+    }
     let bound = ledger.bounds_of(&row.class_binding_id).ok_or("typed response bound absent")?;
     if bytes.len() as u128 > bound.max_response_bytes {
         return Err("typed response exceeds registered court bound".into());
@@ -415,7 +448,7 @@ pub fn prospective_kernel_material_v4(
         return Err("prospective bundle/manifest root substituted".into());
     }
     intent.manifest.validate(max_bytes).map_err(|e| e.to_string())?;
-    let candidate = prepare_unsigned_kernel_candidate_v4(
+    let mut candidate = prepare_unsigned_kernel_candidate_v4(
         state,
         params,
         &intent.producer,
@@ -424,21 +457,23 @@ pub fn prospective_kernel_material_v4(
         intent.commit_daa,
         raw_depth,
     )?;
-    let row = candidate.claims.get(&root).ok_or("prospective admitted row absent")?;
-    if !matches!(
-        (&row.body, &request.bundle),
-        (ClaimBodyV1::Program { .. } | ClaimBodyV1::Pipeline { .. }, PalwProspectiveKernelBundleV4::KernelPositions(_))
-            | (ClaimBodyV1::Segmented { .. }, PalwProspectiveKernelBundleV4::SegmentedParts(_))
-            | (ClaimBodyV1::Spec(_), PalwProspectiveKernelBundleV4::TypedKernelV4(_))
-    ) {
-        return Err("prospective codec does not cover the actual native claim kind".into());
+    if !matches!(&request.bundle, PalwProspectiveKernelBundleV4::TypedKernelV4(_)) {
+        return Err("prospective enrollment requires the complete v4 codec, including immutable artifacts".into());
     }
+    let coverage = crate::palw_material_capacity_v1::prospective_kernel_bundle_requests_v4(&request.bundle)?;
+    let _bundle_decode_lease =
+        crate::palw_native_resource_v1::reserve_native_requests_v1(coverage.bytes().ok_or_else(|| coverage.to_string())?)
+            .map_err(|e| e.to_string())?;
+    candidate.try_reserve_kernel_material_v4(&root).map_err(|e| e.to_string())?;
     let scope = request.bundle.verify(&candidate, max_bytes).map_err(|e| e.to_string())?;
     if intent.manifest.scopes.first() != Some(&scope) {
         return Err("prospective held bytes differ from producer-signed manifest".into());
     }
+    let subject = candidate
+        .try_claim_challenge_subject_v4(&root)
+        .map_err(|e| e.to_string())?
+        .ok_or("prospective actual claim subject absent")?;
     let row = candidate.claims.get(&root).ok_or("prospective admitted row absent")?;
-    let subject = candidate.claim_challenge_subject(&root).ok_or("prospective actual claim subject absent")?;
     let authority = PalwProspectiveKernelMaterialAuthorityV4 {
         root: Hash64::from_bytes(root),
         class: Hash64::from_bytes(row.class_binding_id),

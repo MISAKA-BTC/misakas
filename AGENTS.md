@@ -12,3 +12,19 @@ ZK などで LLM の計算を証明することは不可能である(ユーザ�
 - **使ってよい暗号:** ハッシュ、デジタル署名(ML-DSA 等)、Merkle などの commitment と opening、VRF・beacon などの乱数。これらはデータの同一性・作成者の認証・乱数のためであり、計算の正しさの証明ではない。
 - **既存文書:** ZK・succinct proof・compact proof を「将来」「研究」として挙げている箇所(例: `docs/design/palw/rfc9-l2-fork-choice.md` 案 C、RFC-0015 §10、`docs/design/palw/rfc-0009-remote-record.md`)は本決定により除外する。過去の記述は履歴として残す。
 - **エージェント(Claude Code、Codex など)へ:** 設計・実装・レビュー・提案で上記の暗号学的計算証明を持ち出さない。既存の記述を見つけたら、除外である旨の注記を付ける。
+
+## MISAKA の作業規約(Codex 317033a56 の版、統合時に併記)
+
+### 恒久決定（2026-10-15、ユーザー）
+
+MISAKA は LLM・モデル計算の正しさを暗号学的に証明する仕組みを一切使用せず、今後も使用しない。
+この決定は設計案・RFC・ADR・実装・将来計画・研究項目のすべてに適用する。
+
+- zero-knowledge 証明、zk-SNARK / zk-STARK、zkVM・zkML、多項式コミットメント（PCS）等に基づく succinct argument / validity proof、再帰証明・proof aggregation を採用候補に挙げない。
+- 検証は確率的検出（サンプリング再実行・決定論的再計算・代数的スポットチェック）、公開証拠での局所化、決定論的裁定、経済的抑止で行う。
+- 合意 credit の認証には、抽選された検証者の承認を、正直な割合の明示的な前提の下で用いる。検出率・参加率・取得可能性を仮定なしに保証したと扱わない。
+- ハッシュ・署名・Merkle commitment・VRF/beacon はデータの同一性・認証・乱数に使用できる。計算の正しさの証明として使用しない。
+- GKR や producer の証明 transcript を使う計算 validity argument へ迂回しない。代数的スポットチェックは直接の確率的検査として扱い、その検出範囲・費用・前提を明示する。
+- 旧 wire tag や履歴の読み取り互換性を保存する場合も、禁止した方式を新規生成・受理して計算 credit の根拠にしない。既存 ID の意味を新しい方式へ黙って変更しない。
+
+詳細と優先順位は [docs/PRINCIPLES.md §8](docs/PRINCIPLES.md#8-モデル計算の暗号学的証明を使用しない2026-10-15ユーザー恒久決定) に従う。
