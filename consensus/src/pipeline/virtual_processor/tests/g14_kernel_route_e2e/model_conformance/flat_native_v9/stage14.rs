@@ -9,6 +9,17 @@ use misaka_palw_kernel::{
 };
 use misaka_palw_tir::program_v2::{InputSource, OutputDecl, TirProgramV2};
 
+/// **Everything paid or owed to card `card`'s payee**: its unspent coinbase outputs plus EVERY pending payout naming its payload. The
+/// stage principal refund rides its own fixed queue (`stage-original-principal-refund/v14`, so a public Close signer cannot redirect
+/// it), not the payee's kernel payout key that [`minted_and_owed`] reads; and when a queue is minted between two reads only the split
+/// moves. The sum is the money.
+fn paid_to(net: &Net, card: usize) -> u64 {
+    let (minted, _) = minted_and_owed(net, &net.chain, card);
+    let state = net.chain.tip_state().1;
+    let payee = state.bond(&net.bond(card)).expect("the bond").payout_payload;
+    minted + state.pending_payouts_iter().filter(|(_, p)| p.payload == payee).map(|(_, p)| p.amount).sum::<u64>()
+}
+
 struct StageFixture {
     source: FlatStageSourceWireV14,
     template: misaka_palw_kernel::flat_inputs12::FlatInputTemplateV12,
@@ -192,8 +203,7 @@ async fn stage14_native_consent18_prevents_victim_reservation_and_original_refun
     net.beat_to(book.deadline_daa() + 1).await;
     action(&mut net, 3, STAGE_ACTION_CLOSE_V14, id.to_vec()).await;
     assert_eq!(net.api().unwrap().stage_job_header_v14(&id).unwrap().terminal, StageTerminalV14::Refunded);
-    let paid = minted_and_owed(&net, &net.chain, 2);
-    assert_eq!(paid.0 + paid.1, 20);
+    assert_eq!(paid_to(&net, 2), 20);
     action(&mut net, 3, STAGE_ACTION_CLOSE_V14, id.to_vec()).await;
     action(&mut net, 3, STAGE_ACTION_COLLECT_V14, id.to_vec()).await;
     assert!(net.api().unwrap().stage_job_header_v14(&id).is_some(), "old guarantee cannot be collected within its original interval");
@@ -211,8 +221,7 @@ async fn stage14_native_consent18_prevents_victim_reservation_and_original_refun
     assert_eq!(net.api().unwrap().execution_nonce_counter_v11(&operator).unwrap().next_nonce, 2);
     let replay = net.replay().await;
     net.assert_same(&replay, "typed original18 consent, shared nonce, principal refund once");
-    let paid = minted_and_owed(&net, &net.chain, 2);
-    assert_eq!(paid.0 + paid.1, 20);
+    assert_eq!(paid_to(&net, 2), 20);
 }
 
 fn stage_claim(f: &StageFixture, class: &CheckedStageClassV14, book: &StageJobBookV14) -> StageTraceV14 {
@@ -337,11 +346,9 @@ async fn stage14_original_real_pc_delivery_then_default_collects_original_coins_
     let settled = net.api().unwrap().stage_job_header_v14(&id).unwrap();
     assert_eq!(settled.terminal, StageTerminalV14::Convicted);
     assert_eq!(net.chain.tip_state().1.bond(&net.bond(0)).unwrap().collateral, before - 130);
-    let principal = minted_and_owed(&net, &net.chain, 2);
-    assert_eq!(principal.0 + principal.1, 20);
+    assert_eq!(paid_to(&net, 2), 20, "the principal refund, once");
     let outcome: StageSettlementV14 = net.api().unwrap().aux_row(STAGE_TABLE_V14, &stage_key_v14(13, &id)).unwrap();
-    let finder = minted_and_owed(&net, &net.chain, 3);
-    assert_eq!(finder.0 + finder.1, outcome.finder_credit);
+    assert_eq!(paid_to(&net, 3), outcome.finder_credit);
     let (_, subject): (Digest, misaka_palw_kernel::flat_quota11::QuotaSubjectSummaryV11) =
         net.api().unwrap().aux_row(EXECUTION_QUOTA_TABLE_V11, &borsh::to_vec(&(2u8, id)).unwrap()).unwrap();
     assert!(subject.closed);
@@ -403,9 +410,9 @@ async fn stage14_original_paid_header_court_and_public_proof_retirement_replay_o
     assert_eq!(net.api().unwrap().stage_job_header_v14(&id).unwrap().terminal, StageTerminalV14::Convicted);
     assert_eq!(net.collateral(0), producer - 130);
     assert!(net.api().unwrap().stage_source_refuted_relation_v14(&class.source().relation_root()));
-    let expected = minted_and_owed(&net, &net.chain, 3);
+    let expected = paid_to(&net, 3);
     action(&mut net, 3, 17, reveal).await;
-    assert_eq!(minted_and_owed(&net, &net.chain, 3), expected);
+    assert_eq!(paid_to(&net, 3), expected, "a replayed reveal pays nothing more (only the minted/owed split may move)");
     net.beat_to(1001).await;
     action(&mut net, 1, 18, seal.to_vec()).await;
     assert!(net.api().unwrap().stage_seal_v14(&seal).is_none());

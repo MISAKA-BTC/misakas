@@ -133,7 +133,10 @@ async fn rfc15_e2e_an_unbudgeted_opv_claim_is_refused() {
     let job = w.job().await;
     let refused = w.claim_with(0, &job, false, Delivery::Direct).await;
     assert!(!w.net.ledger().claims.contains_key(&refused.id), "no budget engine: the OPV claim is refused at the door");
-    assert_eq!(w.net.kernel_reserved(0), 0, "and reserves nothing");
+    // The seal was admitted one block earlier (a seal names no class, so it cannot see the mode) and stays bonded until it expires;
+    // the refused reveal adds nothing to it — no claim collateral, no budget row.
+    let seal_deposit = u128::from(w.net.ledger().policy.seal_deposit);
+    assert_eq!(w.net.kernel_reserved(0), seal_deposit, "and reserves nothing beyond its unrevealed seal's own deposit");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
 }
@@ -161,8 +164,15 @@ async fn rfc15_e2e_a_panel_licensed_claim_admitted_below_the_fence_finishes_unde
         plan: w.fx.plan.clone(),
         param_commitments: w.fx.pc.clone(),
     };
+    // The pool (and the template) refuse what the acceptance gate drops (G14 GAP 10), naming the fence; the carrier is never mined,
+    // so card 1's funding chain is restored for its next carrier.
     let o = w.net.route(1, &opv_register);
-    w.net.send(vec![(1, o)]).await;
+    let funding = w.net.funding[1].clone();
+    let tx = w.net.carrier(1, &o);
+    let why = w.net.mempool(&tx).expect_err("below the fence the pool refuses an OPV registration");
+    assert!(why.to_string().contains("palw_panel_free_v1 is not in force"), "refused by the fence's name: {why}");
+    w.net.funding[1] = funding;
+    w.net.beat_to(w.net.daa() + 2).await;
     assert!(w.net.ledger().opv.classes.is_empty(), "no OPV class below the fence");
 
     w.cover(&old.id).await;
@@ -302,9 +312,16 @@ async fn rfc15_e2e_collateral_exit_and_re_registration_wait_for_d_plus_w_and_the
         let state = w.net.chain.tip_state().1;
         state.bond_budget().and_then(|b| b.bond_row(&w.net.bond(0)).map(|r| r.liability_hold_until)).unwrap_or(0)
     };
-    let free_at = row.reuse_not_before.max(liability.saturating_add(1)).max(hold.saturating_add(1));
+    // Each clock's own bound: the kernel liability holds THROUGH `liability_until` (released at `daa > until`); the issuance window
+    // (`latest_release_daa > now`) and the budget's liability hold (`liability_hold_until > now`, released AT that DAA) are exclusive.
+    let free_at = row.reuse_not_before.max(liability.saturating_add(1)).max(hold);
     w.net.beat_to(free_at - 1).await;
-    assert!(bond_held(&w, 0), "one DAA before the last clock the capital is still held (no early exit, no fresh window)");
+    assert!(
+        bond_held(&w, 0),
+        "one DAA before the last clock the capital is still held (no early exit, no fresh window): d + W {}, liability {liability}, \
+         H_L {hold}",
+        row.reuse_not_before
+    );
     w.net.beat_to(free_at + 1).await;
     assert!(!bond_held(&w, 0), "past every clock the capital may leave");
     assert!(kernel_budget_rows(&w, 0).iter().all(|r| !r.in_window), "and its consumption left the window at d + W, not earlier");
