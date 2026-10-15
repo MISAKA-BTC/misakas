@@ -2427,6 +2427,9 @@ pub struct Params {
     /// G14 TIR required-family staged route (native-context seeds/answers over the decode view).
     /// Dormant everywhere; requires `palw_staged_public_court_v1` at or below it.
     pub palw_staged_tir_route_v1: Option<ForkActivation>,
+    /// Original paid TIR public-conviction allocations and signed controls.
+    /// Independent and dormant on every shipped preset; never reprices old claims.
+    pub palw_tir_public_conviction_v1: Option<ForkActivation>,
     /// G14 greedy Float32 Constraint staged route (rooted f32 row court and Float32 sources).
     /// Dormant everywhere; requires `palw_staged_public_court_v1` at or below it.
     pub palw_staged_float_constraint_v1: Option<ForkActivation>,
@@ -4892,6 +4895,23 @@ impl Params {
         }
     }
 
+    pub fn palw_tir_public_conviction_v1_fence(&self) -> Option<ForkActivation> {
+        match (
+            &self.palw_consensus_mode,
+            self.palw_tir_public_conviction_v1,
+            self.palw_staged_tir_route_v1_fence(),
+            self.palw_staged_public_court_v1_fence(),
+            self.palw_objective_offence.filter(|f| *f != ForkActivation::never()),
+        ) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(own), Some(tir), Some(staged), Some(offence))
+                if own != ForkActivation::never() =>
+            {
+                Some(ForkActivation::new(own.daa_score().max(tir.daa_score()).max(staged.daa_score()).max(offence.daa_score())))
+            }
+            _ => None,
+        }
+    }
+
     pub fn palw_staged_float_constraint_v1_fence(&self) -> Option<ForkActivation> {
         match (&self.palw_consensus_mode, self.palw_staged_float_constraint_v1) {
             (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) if f != ForkActivation::never() => Some(f),
@@ -5923,6 +5943,7 @@ impl Params {
             palw_court_commitment_scope_v1: self.palw_court_commitment_scope_v1,
             palw_staged_public_court_v1: self.palw_staged_public_court_v1,
             palw_staged_tir_route_v1: self.palw_staged_tir_route_v1,
+            palw_tir_public_conviction_v1: self.palw_tir_public_conviction_v1,
             palw_staged_float_constraint_v1: self.palw_staged_float_constraint_v1,
             palw_model_benefits: self.palw_model_benefits,
             palw_model_leg_v2: self.palw_model_leg_v2,
@@ -7064,6 +7085,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_tir_public_conviction_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7397,6 +7419,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_tir_public_conviction_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -7712,6 +7735,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_tir_public_conviction_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
@@ -13175,6 +13199,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_tir_public_conviction_v1: None,
     palw_staged_float_constraint_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,

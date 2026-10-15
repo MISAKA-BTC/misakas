@@ -1803,7 +1803,7 @@ impl VirtualStateProcessor {
             }
             _ => None,
         };
-        kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+        let mut extras = kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
             // ADR-0165: the reds of the accepting block's mergeset belong to the chain walk's own fold (a block's GHOSTDAG
             // data, set where it is folded — `extras.merged_reds`); every other reading of the fences (a rehearsal, the
             // pre-object base) merges no work, so nothing in it is red.
@@ -1817,6 +1817,10 @@ impl VirtualStateProcessor {
                 .filter(|f| f.is_active(daa_score))
                 .map(|_| kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()),
             staged_tir_route_active: self.palw_staged_tir_route_v1.is_some_and(|f| f.is_active(daa_score)),
+            // Filled below only after every native dependency (including Panel and shard inputs)
+            // has been resolved at this block. Neither field is a carrier-provided limit/domain.
+            tir_public_allocation_rules_v1: None,
+            tir_public_network_domain_v1: None,
             staged_float_constraint_active: self.palw_staged_float_constraint_v1.is_some_and(|f| f.is_active(daa_score)),
             history_custody_pledges: Default::default(),
             public_original_bindings: Default::default(),
@@ -2019,7 +2023,51 @@ impl VirtualStateProcessor {
             // G14 lane D: the kernel route, where its (never armable) fence is in force. Explicit, like every fence above: a default
             // here would fold nothing at a block that must.
             kernel_route: self.palw_kernel_route_extras_at(daa_score),
+        };
+        if let Some(rules) = self.palw_tir_public_allocation_rules_at(daa_score, &extras) {
+            extras.tir_public_allocation_rules_v1 = Some(rules);
+            extras.tir_public_network_domain_v1 = Some(self.palw_network_domain_v2());
         }
+        extras
+    }
+
+    /// A class-independent native template, not a quote or an admission receipt. The claim
+    /// adapter must still check the registered class and apply its native class-step uplift.
+    fn palw_tir_public_allocation_rules_at(
+        &self,
+        daa_score: u64,
+        extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+    ) -> Option<kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1> {
+        if !self.palw_tir_public_conviction_v1.is_some_and(|fence| fence.is_active(daa_score))
+            || !extras.staged_tir_route_active
+            || !self.palw_tir_at(daa_score)
+        {
+            return None;
+        }
+        let config = extras.staged_public_court?;
+        let params = self.palw_state_params_v2.as_ref()?;
+        let court = self.palw_court_params_at(daa_score)?.ok()?;
+        // The legacy helper has a conservative u16::MAX fallback for callers without registry
+        // extras. This new route requires the actual native policy instead of that fallback.
+        if !params.panel_v3_rule_at(daa_score) && extras.model_registry.is_none() {
+            return None;
+        }
+        let maximum_custodians = kaspa_consensus_core::palw_state_v2::PalwChainStateV2::staged_registered_tir_maximum_custodians_v1(
+            daa_score, params, extras,
+        )
+        .ok()?;
+        let maximum_leaves = self.palw_court_step_ladder_at(daa_score, &court);
+        if maximum_custodians == 0 || maximum_leaves == 0 {
+            return None;
+        }
+        Some(kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1 {
+            maximum_leaves,
+            maximum_custodians,
+            court,
+            dissection: self.palw_fused_dissectable_at(daa_score),
+            prompt_form: self.palw_prompt_ids_form_at(daa_score),
+            config,
+        })
     }
 
     pub(super) fn palw_transition_extras_for_objects(

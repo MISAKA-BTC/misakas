@@ -1,8 +1,9 @@
 # G14: 客観的裁定・slash・ブロック生成／報酬拒否までの残作業
 
 更新日: 2026-10-15。対象workspace: `codex/integration-followup`。
-確定した保存点は WIP `0909ad5add2c2d696d9a131db297f67f350d85a0`。
-その後の新claim frameは未commitの作業差分であり、完成分には数えない。
+部品実装の基準保存点は WIP `0909ad5add2c2d696d9a131db297f67f350d85a0`。
+その後の新claim frame・native接続も実装途中のWIPであり、保存済みでも完成分には数えない。
+本書と追加ソースの保存点は、このファイルのgit履歴で確認する。
 本書は新経路の本番有効化や`pre`へのpushを許可するものではない。
 正式なnative設定の下で経路が実行可能になることと、shipping presetのfenceを有効化する判断は区別する。
 
@@ -42,12 +43,20 @@
 | FullSUM allocation planner | `Complete`は部品の資源導出だけ。実際の料金徴収・担保確保・native admissionの成立ではない |
 | claim単位の準備期限、Ready、literal defaultのkernel | 署名付きcarrier、native資格、通常nodeキュー、実際の徴収が未接続 |
 | 再開用のprepared capture／索引 | native lease・Ready・GCとの運用接続、最大サイズと再開期限の実測は未完 |
-| 新しい元claim frameの候補実装 | `0909ad5ad`後の作業途中。構造検査や署名検査だけで支払い済みstandingにはしない |
-| 新control／grant carrierの設計案 | 調査時点でDTO実装なし。wire tag・独立fence・受理処理も未実装 |
+| 新しい元claim frame、保持・producer exposure・復元索引の候補実装 | `0909ad5ad`後のWIP。構造検査や署名検査だけで支払い済みstandingにはしない。元FPのtransaction pairingと実料金検査が未接続 |
+| bounded署名付きcontrol／grant carrier、tag 170／171、独立fence・native foldの候補実装 | nativeネットワーク設定・通常入口・料金・enum全体の整合と回帰は未検証。元FP envelopeは未実装で、稼働する受理経路の完成ではない |
 | 追加した回帰テストのソース | 未実行。syntax／差分検査を、コンパイル・試験・実ネットワークの証拠に数えない |
 
 過去の別commit・別branchの試験結果は、この保存点と作業中差分の通し検証ではない。
 登録モデルからの告発試験も、起動しただけ／実行中／局所不一致の発見だけでは完成に数えない。
+
+### 今回のソース接続で採用した境界
+
+- 元FP受理時のmandatory preparerはproducerのみ。実Panelは通常のnative PanelBound時に一度固定し、drawn seatであるだけではcustody義務・slash権限を発生させない。
+- drawn seatは既存の元予算で準備作業を先行できるが、資格は**同じnative objectでのexact Valid receipt、実S4 lock、distinct raw grant、準備済みReadyのatomic受理**で初めて追加する。途中失敗でcreditだけを残してはならない。
+- grantやowner Openで元の準備期限・horizonを延ばさない。ownerの取得・work・元frame再検査は別途料金・depositを必要とし、元producer予算をownerごとに複製しない。
+- 現在のcarrier候補はwhole-job V2 receipt用。V3/V4のsegment／shard署名をV2署名へ読み替えず、新frameから未対応入口を拒否する。これは迂回防止であり、V3/V4対応完了ではない。
+- FullSUMにはframeの成長、old/new rowとjournal、再検査、署名検査回数・state参照数の上限を載せる。ただし、実native処理の反復回数制限・crypto予約・MLDSAのCPU料金／最悪時間は未接続・未実測である。回数を載せただけではCPU期限保証やG14 qualificationにならない。
 
 ## 3. 実装の残作業
 
@@ -68,6 +77,7 @@
 - [ ] bounded codec、正しいbond鍵、domain、transaction pairing、重複・再送・期限・reorgの検査を実装する。
 - [ ] isolation／header検査、mempool、blockからの抽出、native fold、fee検査、import／recoveryを同じ規則で接続する。下位fenceでも旧履歴の判定を変えない。
 - [ ] senderの自己申告上限ではなく、nativeに固定されたbyte／count上限で、割当て前のdecodeを制限する。
+- [ ] 新kindのbounded fixture、wire manifest pin、通常carrier分類、署名検査、fee／massの全consumerを揃える。tagを確保しただけでwire統合完了にしない。
 
 ### R3. Validの資格と担保を、元署名に結び付ける
 
@@ -75,7 +85,8 @@
 - [ ] Panel所属、Sampled、旧history grant、未credit receiptだけでは、新しいraw custody義務・slash権限を発生させない。
 - [ ] grantを認める前に、実際に徴収できる担保と元horizonまでのholdを確保する。既存担保金額の規則を勝手に変えない。
 - [ ] 元claim受理時はproducerの署名しかない点を扱う。後続grantの義務追加を、元期限・元planを変えずに配線する。
-- [ ] late grantに、完了不可能なcold preparation期限を課さない。十分な残り準備期間、または準備済みactorのatomic grant＋Readyなど、採用する規則と資源の出所を確定して実装する。現時点では未決・未接続。
+- [ ] late grantに、完了不可能なcold preparation期限を課さない。採用した先行準備＋atomic grant／Readyを、実nodeの準備worker・carrier・元予算・実担保へ通し、固定期限内に成立させる。候補helperの存在だけでは完了しない。
+- [ ] whole-job V2に加え、実際に有効なV3/V4等のtyped receipt／grantを、元のsegment／shard署名domainのまま接続する。未対応入口の拒否を「全receipt対応」と数えない。
 - [ ] owner Open時のliteral責任集合を確定し、後からのgrantで過去の継続処理を壊したり、過去の責任を増やしたりしない。再編時は現在のnative根拠と照合する。
 - [ ] 既存grantの署名、exact receipt、credit DAAを保持し、単にsigner集合が増えたことだけで不正なcontract置換を認めない。
 
@@ -117,6 +128,7 @@
 - [ ] 実nodeのキュー、backpressure、inclusion容量、bonded verifierの参加枠を配線し、他owner・他claim・悪性送信者の負荷で完走が壊れない条件を定める。
 - [ ] 全体mapのclone／state root／GCの増幅、複数active claimの同時RAM・disk、native sweepの処理量を扱う。1rowや64件pageの上限だけで全体有界とはしない。
 - [ ] 新frame、元public commitment、後続grant、delta／journalの実際のfootprintを13資源次元と照合する。新しいrowを追加した後も、以前のquoteで全量を払えたと仮定しない。
+- [ ] admission／rehearsal／canonical foldで繰り返す署名検査・frame再検査を実際に予算化する。宣言した検査回数の上限をnative処理で守り、CPU料金／最悪処理時間が不明な部分を0扱いせず、期限条件の不足として残す。
 - [ ] 大きなwitnessを既存の小さいterminal上限へ黙って切り詰めない。明示的に資金化した分割搬送、またはnative incremental courtから小さいrooted certificateを作る経路を完成する。
 - [ ] `Incomplete`、overflow、サイズ拒否を「そのfamilyは完成」に数えず、元の対象範囲を満たす経路を実装する。
 
@@ -182,7 +194,7 @@ R7の予算・期限条件はR1の元契約に必要なので、後付けで元h
 - [これまでの実装記録と未検証境界](g14-integration-followup-2026-10-15.md)
 - [activation readiness matrix](activation-readiness-matrix.md): 過去の結果・他laneの状況を含む。新経路の完了証拠として無条件に転用しない。
 - Source／work／Ready: `consensus/core/src/palw_tir_public_{source,owned,state,allocation}_v1.rs`
-- 元claim frame候補: `consensus/core/src/palw_tir_public_claim_v1.rs`（この文書作成時は作業中）
+- 元claim frame／署名搬送／native fold候補: `consensus/core/src/palw_tir_public_{claim,carriage,fold}_v1.rs`（WIP）
 - Custody: `consensus/core/src/palw_tir_public_custody_v1.rs`
 - 局所裁定: `consensus/core/src/palw_tir_objective_v1.rs`
 - Native状態・terminal: `consensus/core/src/palw_state_v2.rs`、`palw_staged_court_fold_v1.rs`、`palw_terminal_carriage_fold_v1.rs`

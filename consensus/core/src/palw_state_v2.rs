@@ -184,6 +184,8 @@ mod palw_legacy_answer_chunks_fold_v2;
 mod palw_legacy_public_filer_fold_v1;
 #[path = "palw_staged_court_fold_v1.rs"]
 mod palw_staged_court_fold_v1;
+#[path = "palw_tir_public_fold_v1.rs"]
+mod palw_tir_public_fold_v1;
 #[path = "palw_terminal_carriage_fold_v1.rs"]
 mod palw_terminal_carriage_fold_v1;
 pub use palw_legacy_public_filer_fold_v1::{
@@ -3092,6 +3094,7 @@ pub fn palw_accuser_exposure_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) 
         .saturating_add(da)
         .saturating_add(state.legacy_dispute_exposure_v1(bond))
         .saturating_add(state.staged_tir_acquisition_exposure_v1(bond))
+        .saturating_add(state.staged_tir_claim_exposure_v1(bond))
         .saturating_add(
             state
                 .staged_by_owner
@@ -7280,6 +7283,14 @@ pub enum PalwConsensusObjectV2 {
         class_id: Hash64,
         layout: Box<crate::palw_tir_class_v1::PalwTirLayoutV1>,
     } = 169,
+    /// Original-allocation scoped signed TIR controls; absent below their own fence.
+    TirPublicControlV1 {
+        control: Box<crate::palw_tir_public_carriage_v1::PalwTirPublicControlV1>,
+    } = 170,
+    /// Exact native Valid receipt, separate raw grant and Ready, one atomic object.
+    TirPublicGrantReadyV1 {
+        grant: Box<crate::palw_tir_public_carriage_v1::PalwTirPublicGrantCarriageV1>,
+    } = 171,
     /// **(tag 159): a non-fused step convicted by its committed leaf hash** — the one-move court's kernel over the committed inputs
     /// and the accuser's own model rows, without the output preimage. A direct objective proof: it lands whatever session or court
     /// is open on the claim. Signed by the accuser's bond. **Tag 159.**
@@ -10745,6 +10756,9 @@ pub struct PalwChainStateV2 {
     staged_inventory_by_owner: BTreeSet<(PalwBondKeyV2, Hash64)>,
     /// Versioned acquisition allocations are independent of the legacy Owner key.
     staged_tir_by_owner: BTreeSet<(PalwBondKeyV2, Hash64, Hash64)>,
+    /// Separately funded original full allocations; qualified seats only add
+    /// exit holds, never another copy of the producer's deposit exposure.
+    staged_tir_claims_by_producer: BTreeSet<(PalwBondKeyV2, Hash64)>,
     /// Source/public-job retention for preparation and owner acquisition allocations.
     staged_tir_by_claim: BTreeMap<Hash64, BTreeSet<(u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>>,
     staged_tir_responders: BTreeSet<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2, Hash64, u64, Hash64)>,
@@ -17649,6 +17663,7 @@ fn apply_receipt_licensed_v2(
     claim_id: &Hash64,
     receipts: &[crate::palw_panel_v2::PalwSeatReceiptV3],
 ) -> Result<(), PalwStateV2Error> {
+    palw_tir_public_fold_v1::require_qualified_typed_receipts_v1(&builder.state, *claim_id)?;
     // ADR-0133 Verification V2: the acceptance layer proved the coverage; the fold licenses
     // exactly as it does for a V1 quorum, over the receipts inside the masks.
     if !builder.extras.verification_v2_active {
@@ -18258,6 +18273,9 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         K::Fence(F::MonetaryMaterialV1) => builder.params.monetary_material_at_v1(ctx.daa_score).is_some(),
         // G14: the TIR / greedy Float32 staged routes ride inside the staged court's kinds, in force where both fences are.
         K::Fence(F::StagedTirRouteV1) => builder.extras.staged_public_court.is_some() && builder.extras.staged_tir_route_active,
+        K::Fence(F::TirPublicConvictionV1) => {
+            builder.extras.tir_public_allocation_rules_v1.is_some() && builder.extras.tir_public_network_domain_v1.is_some()
+        }
         K::Fence(F::StagedFloatConstraintV1) => {
             builder.extras.staged_public_court.is_some() && builder.extras.staged_float_constraint_active
         }
@@ -19342,6 +19360,11 @@ pub struct PalwTransitionExtrasV1 {
     /// `palw_staged_tir_route_v1` at this block: TIR required-family claims are admitted to the
     /// staged route (native-context seeds and answers). False below it: refused, A-2 uniform.
     pub staged_tir_route_active: bool,
+    /// Native-resolved original TIR rules, never limits deserialized from a carrier.
+    /// None keeps the new original-allocation route dormant.
+    pub tir_public_allocation_rules_v1: Option<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1>,
+    /// Native network/genesis domain, never a field supplied by a control carrier.
+    pub tir_public_network_domain_v1: Option<Hash64>,
     /// `palw_staged_float_constraint_v1` at this block: greedy Float32 Constraint claims are
     /// admitted with the rooted f32 row court. False below it: refused.
     pub staged_float_constraint_active: bool,
@@ -23902,6 +23925,7 @@ impl PalwStateCarriageV2 {
             staged_inventory_by_owner: BTreeSet::new(),
             staged_tir_by_owner: BTreeSet::new(),
             staged_tir_by_claim: BTreeMap::new(),
+            staged_tir_claims_by_producer: BTreeSet::new(),
             staged_tir_responders: BTreeSet::new(),
             staged_tir_preparers: BTreeSet::new(),
             staged_prefix_responders: BTreeSet::new(),
@@ -24588,6 +24612,55 @@ mod staged_court_state_tests_v1 {
                 terms: c.terms, producer: c.producer, panel: BTreeSet::new(), prefix_custody: None,
             })),
         }, false).unwrap();
+    }
+
+    #[test]
+    fn tir_original_frame_lifecycle_indexes_hold_only_actual_liable_signers() {
+        // Structural row fixture only: this does not exercise original native
+        // acceptance, transaction rent, paid standing or a valid real signature.
+        let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_fixture_v1();
+        let key = frame.key_v1();
+        let claim = frame.plan_v1().original_claim;
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let terms = frame.plan_v1().terms;
+        let row = PalwStagedCourtRowV1::TirClaim(Box::new(frame.clone()).into());
+        let row = borsh::from_slice::<PalwStagedCourtRowV1>(&borsh::to_vec(&row).unwrap()).unwrap();
+        let entry = PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new: Some(row) };
+        let mut state = PalwChainStateV2::genesis();
+        let before = state.state_root();
+        apply_delta_entry(&mut state, &entry, false).unwrap();
+        let root = state.state_root();
+        assert_eq!(state.staged_tir_claims_by_producer, BTreeSet::from([(producer, claim)]));
+        assert_eq!(state.staged_tir_claim_exposure_v1(&producer), u128::from(terms.plan.deposit_sompi));
+        assert_eq!(state.staged_tir_acquisition_exposure_v1(&producer), 0);
+        assert_eq!(state.staged_tir_source_until_v1(claim), Some(terms.material_until_daa));
+        let expected: BTreeSet<_> = frame.custody_v1().liable_signers_v1().into_iter()
+            .map(|signer| (signer, terms.bond_exit_after_daa, key)).collect();
+        assert_eq!(state.staged_holds, expected, "drawn but unqualified Panel seats acquire no hold");
+        state.assert_tir_acquisition_indices_v1().unwrap();
+        state.staged_tir_claims_by_producer.clear();
+        assert!(state.assert_tir_acquisition_indices_v1().is_err());
+        palw_staged_court_fold_v1::rebuild_indices(&mut state);
+        state.assert_tir_acquisition_indices_v1().unwrap();
+        assert_eq!(state.state_root(), root, "rebuildable indexes are not consensus data");
+        let params = PalwStateParamsV2::new(100, 10, 40, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0).unwrap();
+        let extras = PalwTransitionExtrasV1::default();
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let mut ctx = PalwBlockContextV2 { block: BlockHash::from_u64_word(99600),
+            daa_score: terms.material_until_daa - 1, blue_score: 102, subsidy: 0 };
+        palw_staged_court_fold_v1::sweep(&mut b, &ctx).unwrap();
+        assert!(b.state.staged_courts.contains_key(&key));
+        ctx.daa_score = terms.material_until_daa;
+        palw_staged_court_fold_v1::sweep(&mut b, &ctx).unwrap();
+        assert!(!b.state.staged_courts.contains_key(&key));
+        assert!(b.state.staged_tir_claims_by_producer.is_empty());
+        assert_eq!(b.state.staged_tir_claim_exposure_v1(&producer), 0);
+        for change in b.entries.iter().rev() { apply_delta_entry(&mut b.state, change, true).unwrap(); }
+        assert_eq!(b.state.state_root(), root);
+        assert_eq!(b.state.staged_tir_claims_by_producer, state.staged_tir_claims_by_producer);
+        apply_delta_entry(&mut state, &entry, true).unwrap();
+        assert_eq!(state.state_root(), before);
+        assert!(state.staged_tir_claims_by_producer.is_empty());
     }
 
     #[test]

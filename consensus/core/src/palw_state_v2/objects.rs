@@ -23,7 +23,33 @@ pub(super) fn apply_object(
         PalwConsensusObjectV2::TirShardReceiptLicensed { part } => check_receipt(&part.claim)?,
         _ => {}
     }
+    // Only the prospective original TIR frame adds this requirement. The
+    // ordinary acknowledgement/credit itself occurs atomically with grant and
+    // Ready in its separate handler, never by accepting an unqualified licence.
     match object {
+        PalwConsensusObjectV2::ReceiptLicensed { claim, receipts } => {
+            palw_tir_public_fold_v1::require_qualified_receipts_v1(&builder.state, *claim, receipts)?;
+        }
+        PalwConsensusObjectV2::ReceiptLicensedV2 { claim, .. } | PalwConsensusObjectV2::OptimisticLicensed { claim, .. } => {
+            palw_tir_public_fold_v1::require_qualified_typed_receipts_v1(&builder.state, *claim)?;
+        }
+        PalwConsensusObjectV2::ShardReceiptLicensed { part } => {
+            palw_tir_public_fold_v1::require_qualified_typed_receipts_v1(&builder.state, part.claim)?;
+        }
+        PalwConsensusObjectV2::TirShardReceiptLicensed { part } => {
+            palw_tir_public_fold_v1::require_qualified_typed_receipts_v1(&builder.state, part.claim)?;
+        }
+        _ => {}
+    }
+    match object {
+        PalwConsensusObjectV2::TirPublicControlV1 { control } => {
+            let network = builder.extras.tir_public_network_domain_v1.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
+            palw_tir_public_fold_v1::apply_control_v1(builder, ctx, network, control)?;
+        }
+        PalwConsensusObjectV2::TirPublicGrantReadyV1 { grant } => {
+            let network = builder.extras.tir_public_network_domain_v1.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
+            palw_tir_public_fold_v1::apply_grant_ready_v1(builder, ctx, network, grant)?;
+        }
         // ---- RFC-0010: a certified epoch output (tag 120): queued; the V3 stage verifies it against the branch and drops it if
         // it does not verify, the block standing ----
         PalwConsensusObjectV2::PanelBeaconProofV3 { proof } => {
@@ -1720,6 +1746,7 @@ pub(super) fn apply_object(
             // tells a `NoCapablePanel` retry from a redraw.
             let was_ncp_retry = palw_claim_awaits_ncp_retry_v1(&builder.state, builder.params, claim_id, &claim);
             builder.write_panel(*claim_id, Some(PalwPanelStateV2 { anchor: *anchor, seats: seats.clone(), bound_daa: ctx.daa_score }));
+            palw_tir_public_fold_v1::bind_panel_v1(builder, ctx, *claim_id)?;
             // RFC-0006: a panel drawn per shard writes the claim's per-shard record (the plan frozen, the outsider flag, each
             // seat's share of the work); a flat panel writes nothing. Dormant: no plan exists below `palw_tir_shard_v1`.
             palw_tir_shard_fold_v1::bind_record_v1(builder, ctx, claim_id, &claim, anchor, seats)?;
