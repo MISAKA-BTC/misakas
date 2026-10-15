@@ -1496,7 +1496,7 @@ class AcceptanceRun:
         entitled |= {output['bond'] for block in blocks if block['daa'] < fence
                      for output in block['outputs'] if output['kind'] == R.DNS}
         self.judge(7, 'no-new-dns-share-or-retired-kind-from-the-fence', R.post_fence_dns_share, blocks, scan['bodies'],
-                   fence, dns['legacySettlementWindowDaa'], entitled)
+                   fence, dns['legacySettlementWindowDaa'], entitled, dns['dnsCadence'])
         self.judge(7, 'legacy-bond-exit-paid-once', R.legacy_exit_paid_once, exit_record)
         self.judge(7, 'dns-reserve-balance-reconciled', R.reserve_balance, None)
 

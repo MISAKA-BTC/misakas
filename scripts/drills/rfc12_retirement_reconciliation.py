@@ -23,10 +23,13 @@ Judgement (checkbox 7): before the fence a DNS validator share is present and
 every DNS output pays a bond whose node-reported status at that block's DAA is
 active; from the fence on no block carries a retired kind (stake bond 0x10,
 attestation shard 0x11, precommit 0x19) and no coinbase carries a DNS share,
-except historical liabilities the node settles once at their original epoch
-finalization (deferred quality bonus / reserve drip), which must lie inside the
-plan's explicit legacy settlement window and pay only bonds entitled before the
-fence. A window of 0 is the strict reading. No verdict is PASS.
+except the node's own one-time settlement of historical quality liabilities at
+each pre-retirement epoch's original finalization crossing (lead default
+2026-10-16, pending user review; see `legacy_settlement_window`): only inside the
+span derived from the node rule, only in a chain block that actually crosses a
+pre-retirement epoch, only to bonds entitled before the fence, and at most once
+per bond and crossed epoch. Any other post-fence DNS output is a failure. A window
+of 0 is the strict reading. No verdict is PASS.
 """
 import rfc12_acceptance_judgement as J
 
@@ -183,9 +186,61 @@ def pre_fence_dns_share(blocks, fence, status_at):
     return dict(preFenceBlocks=len(pre), dnsOutputs=paid, perBondSompi=totals)
 
 
-def post_fence_dns_share(blocks, bodies, fence, settlement_window, entitled):
-    """From the fence: no block body at or above it carries a retired kind, and no coinbase carries a DNS share except
-    once-settled legacy liabilities inside the window, paid only to bonds entitled before the fence.
+# ---- the node's own one-time post-retirement settlement (lead default 2026-10-16, pending user review) -----------------
+#
+# Past `palw_dns_retirement_v1` (fence R) a coinbase carries exactly one kind of DNS output: the historical quality bonus,
+# paid once at each epoch's ORIGINAL finalization crossing, and nothing else is accepted.
+#   * consensus/src/pipeline/virtual_processor/utxo_validation.rs:1394-1396: a retired block returns only
+#     `deferred_quality_bonus_outputs` (no participation outputs);
+#   * utxo_validation.rs:1091-1095: from R on, no DNS participation transaction enters a block, so no epoch whose blocks all
+#     lie at or after R has an included set; the last epoch that can is E_last = floor((R-1)/L);
+#   * utxo_validation.rs:1581-1601: L = epoch_length_blocks, fd = reward_uniqueness_window_blocks + max_reorg_horizon_blocks,
+#     and a block at DAA d with selected parent at p pays the epochs `epochs_finalized_at(p, d, L, fd)`;
+#   * consensus/core/src/dns_finality.rs:5510-5528: threshold(E) = (E+1)*L + fd, each crossed by exactly one chain block;
+#   * dns_finality.rs:2778-2797: one output per included validator per crossed epoch.
+# So the span is every chain block d >= R whose selected parent p < threshold(E_last) = R + W, with
+#   W = (floor((R-1)/L) + 1) * L + fd - R,
+# and inside it a bond may receive at most one output per crossed pre-retirement epoch. For testnet-12 (PALW_T12_DNS_PARAMS,
+# consensus/core/src/config/params.rs:6906-6909 = PRODUCTION_DNS_PARAMS.at_two_minute_cadence(): L = 2 and H = 3 at
+# dns_finality.rs:1444-1446, U = 600 inherited from params.rs:6608) and R = 14000: fd = 603, E_last = 6999, W = 603.
+# Not covered by this default: reserve drip outputs (utxo_validation.rs:1172, `reserve_drip_outputs`, not retirement-gated)
+# also pay pre-retirement epochs at their crossing; under the lead's "nothing else" default such an output is a FAIL.
+
+def epochs_finalized_at(parent_daa, daa, epoch_length, finalization_depth):
+    """Port of dns_finality.rs:5510 `epochs_finalized_at`: the inclusive epoch range a chain block newly finalizes, or None."""
+    length = max(epoch_length, 1)
+    if daa < finalization_depth:
+        return None
+    m_max = (daa - finalization_depth) // length
+    if m_max == 0:
+        return None
+    m_min = 1 if parent_daa < finalization_depth else (parent_daa - finalization_depth) // length + 1
+    m_min = max(m_min, 1)
+    if m_min > m_max:
+        return None
+    return m_min - 1, m_max - 1
+
+
+def legacy_settlement_window(fence, cadence):
+    """W and its parts, derived from the node rule above (never a hand-picked number)."""
+    length = max(int(cadence['epochLengthBlocks']), 1)
+    depth = int(cadence['rewardUniquenessWindowBlocks']) + int(cadence['maxReorgHorizonBlocks'])
+    if fence < 1:
+        raise ValueError('the retirement fence must be above genesis')
+    last_epoch = (fence - 1) // length
+    threshold = (last_epoch + 1) * length + depth
+    return dict(epochLength=length, finalizationDepth=depth, lastEpoch=last_epoch, lastThresholdDaa=threshold,
+                windowDaa=threshold - fence)
+
+
+def post_fence_dns_share(blocks, bodies, fence, settlement_window, entitled, cadence=None):
+    """From the fence: no block body at or above it carries a retired kind, and no coinbase carries a DNS share except the
+    node's own one-time settlement of historical quality liabilities (rule above), paid only to bonds entitled before the
+    fence, each at most once per crossed pre-retirement epoch. Any other post-fence DNS output is a failure.
+
+    `settlement_window` 0 is the strict reading (no post-fence DNS output at all). Any other window must equal the one
+    derived from `cadence` and the fence, and every DNS output must sit in a chain block that actually crosses a
+    pre-retirement epoch's threshold, read from the scanned selected chain (the previous chain block is the parent).
 
     `bodies` are every block read (chain blocks and their mergesets), each judged at its OWN header DAA: a pre-fence
     block merged after the fence is history, not a post-fence inclusion."""
@@ -198,21 +253,55 @@ def post_fence_dns_share(blocks, bodies, fence, settlement_window, entitled):
         if body['daa'] >= fence and retired:
             raise J.Violation('block %s at DAA %d carries retired kind(s) %s after the fence'
                               % (body['hash'][:16], body['daa'], ', '.join(RETIRED_KINDS[kind] for kind in retired)))
-    legacy, totals, last = 0, {}, None
-    for block in post:
-        for output in block['outputs']:
-            if output['kind'] != DNS:
-                continue
-            if block['daa'] >= fence + settlement_window:
-                raise J.Violation('a DNS validator share at DAA %d, after the fence and its legacy settlement window'
-                                  % block['daa'])
+    rule = None
+    if settlement_window:
+        if cadence is None:
+            raise J.NotObservable('a non-zero legacy settlement window needs the pinned DNS cadence it is derived from')
+        rule = legacy_settlement_window(fence, cadence)
+        if settlement_window != rule['windowDaa']:
+            raise J.NotObservable('the legacy settlement window %d is not the one the node rule derives (%d)'
+                                  % (settlement_window, rule['windowDaa']))
+    if any(later['daa'] <= earlier['daa'] for earlier, later in zip(blocks, blocks[1:])):
+        raise J.NotObservable('the scanned chain blocks are not in strictly increasing DAA order')
+    legacy, totals, last, crossed_epochs, per_epoch = 0, {}, None, set(), {}
+    for index, block in enumerate(blocks):
+        if block['daa'] < fence:
+            continue
+        dns = [output for output in block['outputs'] if output['kind'] == DNS]
+        if not dns:
+            continue
+        if rule is None:
+            raise J.Violation('a DNS validator share at DAA %d, after the fence (strict reading: no legacy window)' % block['daa'])
+        if index == 0:
+            raise J.NotObservable('the selected parent of the post-fence block at DAA %d was not scanned' % block['daa'])
+        parent = blocks[index - 1]['daa']
+        if parent >= fence + rule['windowDaa']:
+            raise J.Violation('a DNS validator share at DAA %d, after the node\'s one-time settlement span (parent DAA %d >= %d)'
+                              % (block['daa'], parent, fence + rule['windowDaa']))
+        span = epochs_finalized_at(parent, block['daa'], rule['epochLength'], rule['finalizationDepth'])
+        epochs = [] if span is None else list(range(span[0], min(span[1], rule['lastEpoch']) + 1))
+        if not epochs:
+            raise J.Violation('a DNS validator share at DAA %d in a block that finalizes no pre-retirement epoch' % block['daa'])
+        if crossed_epochs & set(epochs):
+            raise J.Violation('epoch(s) %r crossed twice on the scanned chain' % sorted(crossed_epochs & set(epochs)))
+        crossed_epochs |= set(epochs)
+        counts = {}
+        for output in dns:
             if output['bond'] not in entitled:
                 raise J.Violation('a post-fence DNS output pays %s, which held no entitlement before the fence' % output['bond'])
-            legacy += 1
-            last = block['daa']
+            counts[output['bond']] = counts.get(output['bond'], 0) + 1
             totals[output['bond']] = totals.get(output['bond'], 0) + output['value']
+            legacy += 1
+        for bond, count in counts.items():
+            if count > len(epochs):
+                raise J.Violation('bond %s is paid %d times at DAA %d, which settles only %d pre-retirement epoch(s)'
+                                  % (bond, count, block['daa'], len(epochs)))
+            per_epoch[bond] = per_epoch.get(bond, 0) + count
+        last = block['daa']
     return dict(postFenceBlocks=len(post), legacySettlementOutputs=legacy, legacySettlementSompi=totals,
-                lastLegacySettlementDaa=last, settlementWindowDaa=settlement_window)
+                legacyOutputsPerBond=per_epoch, crossedPreRetirementEpochs=sorted(crossed_epochs),
+                lastLegacySettlementDaa=last, settlementWindowDaa=settlement_window,
+                rule=rule)
 
 
 def legacy_exit_paid_once(record):

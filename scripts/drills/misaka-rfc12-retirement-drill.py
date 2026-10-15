@@ -79,7 +79,10 @@ def parse_drill_plan(raw):
     groups = plan['palwPayoutGroups']
     if not isinstance(groups, list) or not groups or len(set(groups)) != len(groups) or any(g not in KEYRING_GROUPS for g in groups):
         raise P.PlanError('palwPayoutGroups must name distinct keyring groups (%s)' % ', '.join(KEYRING_GROUPS))
-    window = P._keys(plan['window'], ('scanFromDaa', 'observeAfterFenceDaa', 'legacySettlementWindowDaa'), 'window')
+    window = P._keys(plan['window'], ('scanFromDaa', 'observeAfterFenceDaa', 'legacySettlementWindowDaa', 'dnsCadence',
+                                       'derivation'), 'window')
+    if not isinstance(window['derivation'], str) or not window['derivation'].strip():
+        raise P.PlanError('window.derivation must cite the node rule the legacy settlement window is derived from')
     scan = P._keys(plan['scan'], ('maximumChainBlocks', 'maximumBlockReads', 'maximumStatusReads', 'bondPageLimit',
                                   'maximumBondPages'), 'scan')
     bounds = P._keys(plan['bounds'], ('workflowTimeoutSeconds', 'probeTimeoutSeconds', 'pollSeconds'), 'bounds')
@@ -94,11 +97,15 @@ def parse_drill_plan(raw):
                window=dict(scanFromDaa=P._int(window['scanFromDaa'], 'window.scanFromDaa'),
                            observeAfterFenceDaa=P._int(window['observeAfterFenceDaa'], 'window.observeAfterFenceDaa', 1),
                            legacySettlementWindowDaa=P._int(window['legacySettlementWindowDaa'],
-                                                            'window.legacySettlementWindowDaa')),
+                                                            'window.legacySettlementWindowDaa'),
+                           dnsCadence=P.dns_cadence(window['dnsCadence'], 'window.dnsCadence'),
+                           derivation=window['derivation']),
                scan={key: P._int(scan[key], 'scan.' + key, 1) for key in scan},
                bounds={key: P._int(bounds[key], 'bounds.' + key, 1) for key in bounds})
     if out['window']['scanFromDaa'] >= identity['retirementActivationDaa']:
         raise P.PlanError('window.scanFromDaa must start below the fence')
+    P.check_legacy_window(identity['retirementActivationDaa'], out['window']['legacySettlementWindowDaa'],
+                          out['window']['observeAfterFenceDaa'], out['window']['dnsCadence'], 'window')
     if out['scan']['bondPageLimit'] > 1000:
         raise P.PlanError('scan.bondPageLimit is at most 1000')
     return out
@@ -245,7 +252,7 @@ class DrillReader:
         entitled = {bond for (bond, daa), value in status.items() if daa == fence - 1 and value == 'active'}
         entitled |= {o['bond'] for block in blocks if block['daa'] < fence for o in block['outputs'] if o['kind'] == R.DNS}
         self.judge('%s: no new DNS share or retired kind from the fence' % name, R.post_fence_dns_share, blocks,
-                   result['bodies'], fence, window['legacySettlementWindowDaa'], entitled)
+                   result['bodies'], fence, window['legacySettlementWindowDaa'], entitled, window['dnsCadence'])
         self.evidence['nodes'][name] = dict(scanToDaa=to_daa, readsUsed=result['readsUsed'], registry=registry,
                                             dnsScripts=dns_scripts, bondsWithoutReadTransaction=unread, blocks=blocks,
                                             statusReads={'%s@%d' % key: value for key, value in status.items()})

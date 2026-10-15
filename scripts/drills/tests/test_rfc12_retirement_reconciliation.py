@@ -109,18 +109,57 @@ class Judgement(unittest.TestCase):
         no_history = self.classified([block(10, [output(0, MINER_SPK)])])
         self.assertEqual(verdict(R.pre_fence_dns_share, no_history, 200, {}), J.BLOCKED)
 
+    # A small cadence for synthetic chains: L = 2, fd = 6 + 2 = 8; fence 200 -> last pre-retirement epoch 99, its threshold
+    # (99 + 1) * 2 + 8 = 208, so the derived window is 8.
+    CADENCE = dict(epochLengthBlocks=2, rewardUniquenessWindowBlocks=6, maxReorgHorizonBlocks=2)
+
+    def chain(self, dns_at, extra=()):
+        """Chain blocks 150, 199, 200, 204, 205, 207, 209, 212 with one DNS output at each DAA in `dns_at` (twice where listed
+        twice) and the miner output everywhere."""
+        rows = []
+        for daa in (150, 199, 200, 204, 205, 207, 209, 212):
+            outputs = [output(0, MINER_SPK)] + [output(1 + i, DNS_SPK) for i in range(list(dns_at).count(daa))]
+            rows.append(block(daa, outputs, ('%04x' % daa) * 32))
+        return self.classified(rows)
+
+    def test_the_window_is_derived_from_the_node_rule(self):
+        rule = R.legacy_settlement_window(200, self.CADENCE)
+        self.assertEqual((rule['lastEpoch'], rule['lastThresholdDaa'], rule['windowDaa']), (99, 208, 8))
+        t12 = R.legacy_settlement_window(14000, dict(epochLengthBlocks=2, rewardUniquenessWindowBlocks=600,
+                                                     maxReorgHorizonBlocks=3))
+        self.assertEqual((t12['lastEpoch'], t12['lastThresholdDaa'], t12['windowDaa']), (6999, 14603, 603))
+        # The port of dns_finality.rs:5510: each threshold is crossed by exactly one chain block.
+        self.assertEqual(R.epochs_finalized_at(207, 209, 2, 8), (99, 99))
+        self.assertEqual(R.epochs_finalized_at(200, 204, 2, 8), (96, 97))
+        self.assertIsNone(R.epochs_finalized_at(204, 205, 2, 8))
+
     def test_post_fence_no_new_share_and_no_retired_kind(self):
-        rows = [block(150, [output(0, DNS_SPK)]), block(205, [output(0, MINER_SPK), output(1, DNS_SPK)])]
-        blocks = self.classified(rows)
         bodies = [dict(source='node-rpc', hash='aa' * 64, daa=150, kinds=[0x11]), dict(source='node-rpc', hash='bb' * 64, daa=205, kinds=[])]
-        facts = R.post_fence_dns_share(blocks, bodies, 200, 10, {BOND})
-        self.assertEqual((facts['legacySettlementOutputs'], facts['lastLegacySettlementDaa']), (1, 205))
-        self.assertEqual(verdict(R.post_fence_dns_share, blocks, bodies, 200, 0, {BOND}), J.FAIL, 'a zero window is strict')
-        self.assertEqual(verdict(R.post_fence_dns_share, blocks, bodies, 200, 10, set()), J.FAIL, 'only entitled bonds')
+        # The node's own settlement: two epochs at 204 (parent 200), the last pre-retirement epoch at 209 (parent 207 < 208).
+        blocks = self.chain([150, 204, 204, 209])
+        facts = R.post_fence_dns_share(blocks, bodies, 200, 8, {BOND}, self.CADENCE)
+        self.assertEqual((facts['legacySettlementOutputs'], facts['lastLegacySettlementDaa']), (3, 209))
+        self.assertEqual(facts['crossedPreRetirementEpochs'], [96, 97, 99])
+        self.assertEqual(verdict(R.post_fence_dns_share, blocks, bodies, 200, 0, {BOND}, self.CADENCE), J.FAIL,
+                         'a zero window is strict')
+        self.assertEqual(verdict(R.post_fence_dns_share, blocks, bodies, 200, 8, set(), self.CADENCE), J.FAIL,
+                         'only entitled bonds')
         late = bodies + [dict(source='node-rpc', hash='cc' * 64, daa=201, kinds=[0x19])]
-        self.assertEqual(verdict(R.post_fence_dns_share, blocks, late, 200, 10, {BOND}), J.FAIL)
-        self.assertEqual(verdict(R.post_fence_dns_share, self.classified([block(150, [])]), bodies, 200, 10, {BOND}),
-                         J.BLOCKED)
+        self.assertEqual(verdict(R.post_fence_dns_share, blocks, late, 200, 8, {BOND}, self.CADENCE), J.FAIL)
+        self.assertEqual(verdict(R.post_fence_dns_share, self.classified([block(150, [])]), bodies, 200, 8, {BOND},
+                                 self.CADENCE), J.BLOCKED)
+
+    def test_only_the_one_time_settlement_is_accepted(self):
+        bodies = []
+        for name, dns_at in [('after the span (parent 209 >= 208)', [212]),
+                             ('a block that crosses no threshold', [205]),
+                             ('one bond paid three times for two epochs', [204, 204, 204])]:
+            with self.subTest(name):
+                self.assertEqual(verdict(R.post_fence_dns_share, self.chain(dns_at), bodies, 200, 8, {BOND}, self.CADENCE),
+                                 J.FAIL)
+        # A hand-picked window, or one without its cadence, is not the node rule: not observable, never inferred.
+        self.assertEqual(verdict(R.post_fence_dns_share, self.chain([209]), bodies, 200, 10, {BOND}, self.CADENCE), J.BLOCKED)
+        self.assertEqual(verdict(R.post_fence_dns_share, self.chain([209]), bodies, 200, 8, {BOND}), J.BLOCKED)
 
     def test_legacy_exit_and_reserve(self):
         self.assertEqual(verdict(R.legacy_exit_paid_once, dict(commands=False)), J.BLOCKED)
