@@ -164,8 +164,13 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
   旧 licence 経路は exact credit を要求（`require_qualified_receipts_v1` `:786`）。
 - [ ] 個々のownerの追加acquisition／workと、元claimのprepaid poolを分離する。複数ownerが同じ支払いを無制限に複製できず、攻撃者の先取りで正直な1人を排除しない料金・容量規則を完成する。
   — **一部**: owner は自分の rent + deposit を別に払い（`open_v1` `:320`、`owner_terms_v1`）、元 pool を使わない。owner ごとの row 上限
-  （`maximum_owned_rows_per_reserver`）はある。**blocked**: claim あたりの owner 数・custodian の応答負荷の上限が無く、rent は burn されて
-  custodian に渡らないため、多数 owner による custodian への default 誘発（grief）を防ぐ容量規則が未決（設計判断が要る）。fence 休眠の理由の一つ。
+  （`maximum_owned_rows_per_reserver`）はある。
+  **実装（ソースのみ・未検証、Lead 既定 (a)・ユーザー確認待ち）**: claim あたりの outside owner 数を `PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1`
+  （K_owner = 8、`palw_tir_public_claim_v1.rs:277`）に制限し、超過 owner は duty・row を作る前に Open で拒否（`open_v1`
+  `palw_tir_public_fold_v1.rs:379`、数は `staged_tir_owner_count_v1` `palw_staged_court_fold_v1.rs:208`）。custodian の応答負荷上限は plan の
+  acquisition 容量から導出（`custodian_load_bound_v1` = K_owner × `maximum_turns` 件、× `maximum_unit_bytes` B、frame view に公開）。
+  **残る穴（ユーザー判断待ち）**: colluder が K 個の owner 枠を自費で先取りすると、正直な owner が Open できない（枠の再利用＝idle owner の
+  枠回収規則が未決）。この穴があるため「攻撃者の先取りで正直な1人を排除しない」は未達で、checkbox は閉じない。
 
 ### R2. 署名付き搬送と全native入口を接続する
 
@@ -213,6 +218,8 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
   — **blocked**: V3 の supplementary credit（`credit_supplementary_receipts_v3`）は `ReceiptLicensed` を要求する一方、frame の grant は licence
   前に要る。licence 前の typed credit door は新しい金銭規則で判断が要る。V4 shard receipt は RFC-0006 の shard record 経由。現状は frame の claim に
   typed licence を名指しで拒否（`require_qualified_typed_receipts_v1` `:799`）。
+  **Lead 既定 (b)（2026-10-15、ユーザー確認待ち）: この release では V3/V4 typed receipt を frame で名指し拒否のまま残し、licence 前の credit door は
+  導入しない。** よって本 checkbox は未完のまま（frame の対象は whole-job V2 Valid のみ）。
 - [ ] owner Open時のliteral責任集合を確定し、後からのgrantで過去の継続処理を壊したり、過去の責任を増やしたりしない。再編時は現在のnative根拠と照合する。
   — **実装（Codex、ソースのみ・未検証）**: owner contract の `custodians` は Open 時の liable 集合、`bind_preparation_v1` で Ready 済み応答者を固定、
   変更は現行 row 比較つきで適用。
