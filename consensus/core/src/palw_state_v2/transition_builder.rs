@@ -600,12 +600,18 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::EpochBudgets { old, new });
     }
 
-    pub(super) fn write_claim_semantics_v1(&mut self, key: Hash64, new: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>) {
+    pub(super) fn write_claim_semantics_v1(
+        &mut self,
+        key: Hash64,
+        new: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+    ) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.claim_semantics.contains_key(&key), "native claim_semantics writer")?;
         let old = match &new {
             Some(record) => self.state.claim_semantics.insert(key, record.clone()),
             None => self.state.claim_semantics.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::ClaimSemantics { key, old, new });
+        Ok(())
     }
 
     pub(super) fn write_class_semantics_v1(
@@ -632,7 +638,11 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    pub(super) fn write_claim(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) {
+    pub(super) fn write_claim(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) -> Result<(), PalwStateV2Error> {
+        let (requests, slots) =
+            if self.native_reservation.is_tracking_v1() { self.claim_cascade_requests_v1(key, &new)? } else { (0, 0) };
+        self.reserve_mutation_sequence_v1(requests, slots)?;
+        self.reserve_map_journal_v1(&key, &new, !self.state.claims.contains_key(&key), "native claims writer")?;
         // **X3 × retention (REQ-X3-6; Lead default 2026-10-15 round 3; `palw_claim_hard_deadline_v1`)**: a claim CREATED past the
         // fence owes its material — trace, DA units, every hold that reads the record — through its hard deadline, fixed at
         // acceptance, so a pursuit X3 admits can start from public material any time before `hard − B_remaining`. Raised once, here,
@@ -654,14 +664,14 @@ impl<'a> TransitionBuilder<'a> {
             && let Some(row) = self.state.class_semantics.get(&claim.class_id).cloned()
             && claim.accepted_daa >= row.bound_from_daa
         {
-            self.write_claim_semantics_v1(key, Some(row));
+            self.write_claim_semantics_v1(key, Some(row))?;
         }
         if new.is_none()
             && !self.state.panel_liabilities.contains_key(&key)
             && !self.state.vesting.contains_key(&key)
             && self.state.claim_semantics.contains_key(&key)
         {
-            self.write_claim_semantics_v1(key, None);
+            self.write_claim_semantics_v1(key, None)?;
         }
         if new.is_none() && self.state.fp_public_jobs.contains_key(&key) {
             self.write_public_fp_job_v1(key, None);
@@ -813,6 +823,7 @@ impl<'a> TransitionBuilder<'a> {
             self.write_exposure(accuser, if back == 0 { None } else { Some(back) });
         }
         self.entries.push(PalwDeltaEntryV2::Claim { key, old, new });
+        Ok(())
     }
 
     pub(super) fn write_payout(&mut self, key: Hash64, new: Option<PalwPayoutV2>) {
@@ -1419,17 +1430,24 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::SlashableLock { key, old, new });
     }
 
-    pub(super) fn write_panel_liability(&mut self, key: Hash64, new: Option<crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>) {
+    pub(super) fn write_panel_liability(
+        &mut self,
+        key: Hash64,
+        new: Option<crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>,
+    ) -> Result<(), PalwStateV2Error> {
+        let requests = if self.native_reservation.is_tracking_v1() { self.panel_liability_copy_requests_v1(&key)? } else { 0 };
+        self.reserve_mutation_sequence_v1(requests, 2)?;
+        self.reserve_map_journal_v1(&key, &new, !self.state.panel_liabilities.contains_key(&key), "native panel_liabilities writer")?;
         if new.is_none()
             && !self.state.claims.contains_key(&key)
             && !self.state.vesting.contains_key(&key)
             && self.state.claim_semantics.contains_key(&key)
         {
-            self.write_claim_semantics_v1(key, None);
+            self.write_claim_semantics_v1(key, None)?;
         }
         let old = self.state.panel_liabilities.get(&key).cloned();
         if old == new {
-            return;
+            return Ok(());
         }
         match &new {
             Some(row) => {
@@ -1440,6 +1458,7 @@ impl<'a> TransitionBuilder<'a> {
             }
         };
         self.entries.push(PalwDeltaEntryV2::PanelLiability { key, old, new });
+        Ok(())
     }
 
     /// **R-3's open commitments** (ADR §6 row 13): the one writer of `reporter_commitments`, keeping
@@ -2306,7 +2325,7 @@ impl<'a> TransitionBuilder<'a> {
             if credit_pause && !crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(self.params, &claim) {
                 let resumed = crate::palw_da_rcore_v1::palw_da_resume_claim_v1(&claim, since, now_daa);
                 if resumed != claim {
-                    self.write_claim(claim_id, Some(resumed));
+                    self.write_claim(claim_id, Some(resumed))?;
                 }
                 // §4-quater V6: a long-D claim's pause moves `H` too — before the re-arm reads it.
                 self.credit_verify_pause_v6(claim_id, since, now_daa);
@@ -2451,7 +2470,7 @@ impl<'a> TransitionBuilder<'a> {
         revived.rebound_daa = Some(now_daa);
         revived.rcore = PalwClaimRcoreV1::default();
         self.move_commitment(claim, &revived, now_daa)?;
-        self.write_claim(claim_id, Some(revived));
+        self.write_claim(claim_id, Some(revived))?;
         self.rearm_claim_deadline_dl1_v1(claim_id, now_daa)
     }
 
@@ -2477,14 +2496,14 @@ impl<'a> TransitionBuilder<'a> {
             self.write_panel_liability(
                 claim_id,
                 Some(crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1 { expiry_daa: until, ..row }),
-            );
+            )?;
         }
         if let Some(row) = self.state.vesting.get(&claim_id).cloned()
             && row.expiry_daa < until
         {
             // Through the one writer of `vesting` (the M3 review's F4): the re-key moves the row in
             // every derived index (remove-old-then-insert-new) and journals the `Vesting` delta.
-            self.write_vesting(claim_id, Some(crate::palw_vesting_v1::PalwVestingRowV1 { expiry_daa: until, ..row }));
+            self.write_vesting(claim_id, Some(crate::palw_vesting_v1::PalwVestingRowV1 { expiry_daa: until, ..row }))?;
         }
         let settled_now = self.state.settled_attempt_finals;
         let depth = self.second_clock_depth(now_daa);
@@ -2782,7 +2801,7 @@ impl<'a> TransitionBuilder<'a> {
                     // `PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1` says. `ProducerWithholding` leaves N9's
                     // `da_confirmed` gate as the ONLY route from a DA default to a signer.
                     self.reverse_convicted_final(ctx, claim_id, PalwVoidReasonV2::ProducerWithholding)?;
-                    self.mark_liability_convicted(claim_id, now, PalwVoidReasonV2::ProducerWithholding);
+                    self.mark_liability_convicted(claim_id, now, PalwVoidReasonV2::ProducerWithholding)?;
                     self.da_release_all_v1(claim_id, true, now)?;
                     self.post_final_producer_leg_v1(
                         &conv,
@@ -3046,7 +3065,7 @@ impl<'a> TransitionBuilder<'a> {
                 self.write_bond_freeze_v1(*bond, Some(freeze));
                 if let Some(lift) = freeze.lifts_at_v1(self.params.window_court) {
                     palw_exec_v2_rewards_v1::freeze_bond(self, *bond, now_daa, lift);
-                    self.rekey_frozen_rows_v1(*bond, lift);
+                    self.rekey_frozen_rows_v1(*bond, lift)?;
                 }
             }
         }
@@ -3151,7 +3170,7 @@ impl<'a> TransitionBuilder<'a> {
         let mut counters = self.state.vesting_counters;
         counters.burned = counters.burned.checked_add(u128::from(sompi)).ok_or(PalwStateV2Error::Overflow("vesting burned"))?;
         let producer = PalwPayoutV2 { amount: 0, ..row.producer };
-        self.write_vesting(claim_id, Some(PalwVestingRowV1 { producer, ..row }));
+        self.write_vesting(claim_id, Some(PalwVestingRowV1 { producer, ..row }))?;
         self.write_vesting_counters(counters);
         self.note_vesting(PalwVestingNoteV1::ProducerLegBurned { claim_id, producer: bond, offence_id, kind, sompi });
         Ok(sompi)
@@ -3176,7 +3195,7 @@ impl<'a> TransitionBuilder<'a> {
         let kept: Vec<(PalwBondKeyV2, PalwPayoutV2)> = row.seats.iter().filter(|(seat, _)| *seat != bond).cloned().collect();
         let mut counters = self.state.vesting_counters;
         counters.burned = counters.burned.checked_add(u128::from(sompi)).ok_or(PalwStateV2Error::Overflow("vesting burned"))?;
-        self.write_vesting(claim_id, Some(PalwVestingRowV1 { seats: kept, ..row }));
+        self.write_vesting(claim_id, Some(PalwVestingRowV1 { seats: kept, ..row }))?;
         self.write_vesting_counters(counters);
         self.note_vesting(PalwVestingNoteV1::ShareBurned { claim_id, seat: bond, offence_id, sompi });
         Ok(sompi)
@@ -3190,7 +3209,7 @@ impl<'a> TransitionBuilder<'a> {
     /// the lift. Its seat legs in other producers' rows are not held (holding them would hold the
     /// honest producer's row): a tier freeze keeps the producer's value, which is what a correlated
     /// fraud found inside the window burns.
-    pub(super) fn rekey_frozen_rows_v1(&mut self, bond: PalwBondKeyV2, lift_daa: u64) {
+    pub(super) fn rekey_frozen_rows_v1(&mut self, bond: PalwBondKeyV2, lift_daa: u64) -> Result<(), PalwStateV2Error> {
         let rows: Vec<Hash64> = self
             .state
             .vesting
@@ -3200,9 +3219,10 @@ impl<'a> TransitionBuilder<'a> {
             .collect();
         for id in rows {
             if let Some(row) = self.state.vesting.get(&id).cloned() {
-                self.write_vesting(id, Some(crate::palw_vesting_v1::PalwVestingRowV1 { expiry_daa: lift_daa, ..row }));
+                self.write_vesting(id, Some(crate::palw_vesting_v1::PalwVestingRowV1 { expiry_daa: lift_daa, ..row }))?;
             }
         }
+        Ok(())
     }
 
     /// **U3 (post-edit 12): `G_fp` for an FP claim this conviction is the FIRST to bind after its
@@ -4122,7 +4142,7 @@ impl<'a> TransitionBuilder<'a> {
                 g_res_sompi: rcore_row.map(|(_, _, g_res)| g_res).unwrap_or(0),
                 escrowed_reward: if rcore_row.is_some() { claim.escrowed_reward } else { 0 },
             }),
-        );
+        )?;
         Ok(())
     }
 
@@ -4877,11 +4897,11 @@ impl<'a> TransitionBuilder<'a> {
                 }
                 PalwClaimPhaseV2::Final { .. } => {
                     self.reverse_convicted_final(ctx, claim_id, reason)?;
-                    self.mark_liability_convicted(claim_id, ctx.daa_score, reason);
+                    self.mark_liability_convicted(claim_id, ctx.daa_score, reason)?;
                 }
-                PalwClaimPhaseV2::Voided { .. } => self.mark_liability_convicted(claim_id, ctx.daa_score, reason),
+                PalwClaimPhaseV2::Voided { .. } => self.mark_liability_convicted(claim_id, ctx.daa_score, reason)?,
             },
-            None => self.mark_liability_convicted(claim_id, ctx.daa_score, reason),
+            None => self.mark_liability_convicted(claim_id, ctx.daa_score, reason)?,
         }
         Ok(0)
     }
@@ -5119,15 +5139,21 @@ impl<'a> TransitionBuilder<'a> {
     /// `reason` is what the conviction PROVED: `CourtFraud` for a proof of the execution; a DA-7
     /// default after `Final` writes `ProducerWithholding` (M3 review F1) — a confirmed silence, which
     /// only N9's `da_confirmed` gate may turn against a signer, never a `CourtFraud` contradiction.
-    pub(super) fn mark_liability_convicted(&mut self, claim_id: Hash64, daa: u64, reason: PalwVoidReasonV2) {
-        let Some(row) = self.state.panel_liabilities.get(&claim_id) else { return };
+    pub(super) fn mark_liability_convicted(
+        &mut self,
+        claim_id: Hash64,
+        daa: u64,
+        reason: PalwVoidReasonV2,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(row) = self.state.panel_liabilities.get(&claim_id) else { return Ok(()) };
         if row.voided_daa.is_some() || row.void_reason.is_some() {
-            return;
+            return Ok(());
         }
         let mut marked = row.clone();
         marked.voided_daa = Some(daa);
         marked.void_reason = Some(reason);
-        self.write_panel_liability(claim_id, Some(marked));
+        self.write_panel_liability(claim_id, Some(marked))?;
+        Ok(())
     }
 
     /// **2026-09-24 DoS audit #7: forfeiture reaches the execution schedule already minted.**
@@ -5309,7 +5335,7 @@ impl<'a> TransitionBuilder<'a> {
         // RFC-0004 A6: an evaluation claim convicted after `Final` takes its score back out of the epoch while the
         // epoch still takes scores, and frees its job (spec 17 §17.8.6).
         self.note_improvement_eval_reversed_v1(&id, &claim)?;
-        self.write_claim(id, Some(voided.clone()));
+        self.write_claim(id, Some(voided.clone()))?;
         palw_exec_v2_fold::on_claim_voided_v2(self, &id, ctx.daa_score)?;
         self.disarm_deadline(id);
         self.arm_retirement(id, &voided)?;
@@ -7792,7 +7818,7 @@ impl<'a> TransitionBuilder<'a> {
         if staged.rcore != claim.rcore {
             let upgraded = palw_rcore_upgrades_v1(claim, &staged);
             self.move_commitment(claim, &staged, now_daa)?;
-            self.write_claim(claim_id, Some(staged));
+            self.write_claim(claim_id, Some(staged))?;
             // Q-5 (M4): the gate is lifted, and the claim finalizes at `max(L + wc(L), U)`.
             if upgraded {
                 self.rearm_claim_deadline_dl1_v1(claim_id, now_daa)?;
@@ -7995,7 +8021,7 @@ impl<'a> TransitionBuilder<'a> {
             // commitment(staged)` in the same write — the escrow term leaves it when the flag flips
             // (nothing else this door stages moves the commitment).
             self.move_commitment(claim, &staged, now)?;
-            self.write_claim(claim_id, Some(staged));
+            self.write_claim(claim_id, Some(staged))?;
             // 7. Q-5 (M4): the first crossing lifts DL-1's gate — the claim now finalizes at
             //    `max(L + window_challenge_at(L), U)` for this block U, re-derived, never remembered.
             if upgraded {
@@ -8888,7 +8914,7 @@ impl<'a> TransitionBuilder<'a> {
         if let Some(before) = &before {
             self.move_commitment(before, &licensed, daa_score)?;
         }
-        self.write_claim(claim_id, Some(licensed.clone()));
+        self.write_claim(claim_id, Some(licensed.clone()))?;
         self.disarm_deadline(claim_id);
         if let Some(deadline) = palw_rcore_deadline_v1(&self.state, self.params, &claim_id, &licensed, Some(daa_score))? {
             self.arm_deadline(deadline, claim_id);
@@ -9411,7 +9437,7 @@ impl<'a> TransitionBuilder<'a> {
         }
         let mut finalized = claim.clone();
         finalized.phase = PalwClaimPhaseV2::Final { final_daa };
-        self.write_claim(id, Some(finalized.clone()));
+        self.write_claim(id, Some(finalized.clone()))?;
         // ADR-0152 DA-5 (M3): a session still open at `Final` (a non-seat one — a seat session holds
         // the claim's deadline) keeps the row and the locks behind its own end.
         let open: Vec<u64> = self.state.da_sessions_of(&id).map(|(_, session)| session.deadline_daa).collect();
@@ -9541,7 +9567,7 @@ impl<'a> TransitionBuilder<'a> {
                     .checked_sub(claim.immature_contribution)
                     .ok_or(PalwStateV2Error::Overflow("bounded_immature underflow"))?;
             }
-            self.write_claim(id, Some(voided));
+            self.write_claim(id, Some(voided))?;
             // The deadline is re-armed rather than disarmed: the sweep's terminal arm releases
             // the hold when it fires. Deriving it from the record (`voided_daa + hold`) is what
             // keeps the index rebuildable, which `assert_deadline_consistency` checks.
@@ -9554,7 +9580,7 @@ impl<'a> TransitionBuilder<'a> {
             return Ok(());
         }
         self.release_for_claim(claim, voided_daa)?;
-        self.write_claim(id, Some(voided.clone()));
+        self.write_claim(id, Some(voided.clone()))?;
         self.disarm_deadline(id);
         self.arm_retirement(id, &voided)?;
         Ok(())
@@ -9709,7 +9735,7 @@ impl<'a> TransitionBuilder<'a> {
         self.legacy_dispute_retire_v1(id)?;
         // RFC-0008 v2: active execution rows retire; finite one-use history survives independently (a no-op with no root).
         palw_exec_v2_fold::on_claim_retired_v2(self, &id);
-        self.write_claim(id, None);
+        self.write_claim(id, None)?;
         // Lane BUDGET: the claim left the state; its budget row leaves once it is out of its window too.
         self.bond_budget_forget_v1(&id);
         // ADR-0160 F-Q: the claim's audit receipts retire with it.
@@ -9755,13 +9781,20 @@ impl<'a> TransitionBuilder<'a> {
     /// the `Vesting` (71) delta entry in one step, so apply, revert and the fold cannot disagree
     /// about the indexes. M3's DA-5 re-key (a session moves its row's `expiry_daa`) writes through
     /// this too — rewriting a row is remove-old-then-insert-new in every index.
-    pub(super) fn write_vesting(&mut self, key: Hash64, new: Option<crate::palw_vesting_v1::PalwVestingRowV1>) {
+    pub(super) fn write_vesting(
+        &mut self,
+        key: Hash64,
+        new: Option<crate::palw_vesting_v1::PalwVestingRowV1>,
+    ) -> Result<(), PalwStateV2Error> {
+        let requests = if self.native_reservation.is_tracking_v1() { Self::vesting_index_requests_v1(&new)? } else { 0 };
+        self.reserve_mutation_sequence_v1(requests, 2)?;
+        self.reserve_map_journal_v1(&key, &new, !self.state.vesting.contains_key(&key), "native vesting writer")?;
         if new.is_none()
             && !self.state.claims.contains_key(&key)
             && !self.state.panel_liabilities.contains_key(&key)
             && self.state.claim_semantics.contains_key(&key)
         {
-            self.write_claim_semantics_v1(key, None);
+            self.write_claim_semantics_v1(key, None)?;
         }
         let old = self.state.vesting.remove(&key);
         if let Some(previous) = &old {
@@ -9774,6 +9807,7 @@ impl<'a> TransitionBuilder<'a> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::Vesting { key, old, new });
         }
+        Ok(())
     }
 
     /// The vesting counters (73), journaled whole as `SettledFinals` is.
@@ -9840,7 +9874,7 @@ impl<'a> TransitionBuilder<'a> {
         let mut counters = self.state.vesting_counters;
         counters.created =
             counters.created.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("vesting created"))?;
-        self.write_vesting(id, Some(row));
+        self.write_vesting(id, Some(row))?;
         self.write_vesting_counters(counters);
         if vested.buyback > 0 {
             self.note_vesting(PalwVestingNoteV1::BuybackAtFinal { claim_id: id, sompi: vested.buyback });
@@ -9874,7 +9908,7 @@ impl<'a> TransitionBuilder<'a> {
         self.cancel_native_recipient_v1(claim_id, row.producer_bond, 0);
         let mut counters = self.state.vesting_counters;
         counters.burned = counters.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("vesting burned"))?;
-        self.write_vesting(claim_id, None);
+        self.write_vesting(claim_id, None)?;
         self.write_vesting_counters(counters);
         palw_exec_v2_rewards_v1::burn(self, claim_id)?;
         let sompi = row.total_sompi();
@@ -9917,14 +9951,14 @@ impl<'a> TransitionBuilder<'a> {
     /// The candidates are then put through `palw_vesting_row_maturity_v1` itself, the one
     /// definition of V-4 (so M3's V-4(c) session check applies here unchanged), and latched in
     /// `(expiry_daa, claim_id)` order.
-    pub(super) fn latch_matured_vesting_rows(&mut self, now_daa: u64, raw_depth: Option<u64>) {
+    pub(super) fn latch_matured_vesting_rows(&mut self, now_daa: u64, raw_depth: Option<u64>) -> Result<(), PalwStateV2Error> {
         use crate::palw_vesting_v1::{PalwVestingNoteV1, PalwVestingRowV1, palw_vesting_row_maturity_v1};
         use std::ops::Bound;
         let window_court = self.params.window_court;
         let escaped = palw_second_clock_depth_v1(raw_depth, &self.state.recent_anchor_daas, now_daa, window_court);
         if raw_depth.is_some() && escaped.is_none() {
             // V-4(b): a licence halt (`palw_chain_vesting_halted_v1`) latches nothing.
-            return;
+            return Ok(());
         }
         let top = Hash64::from_bytes([0xFF; 64]);
         // A depth of zero holds nothing (`palw_second_clock_holds_v1`: no count is below zero), so
@@ -9985,10 +10019,11 @@ impl<'a> TransitionBuilder<'a> {
             let Some(row) = self.state.vesting.get(&claim_id) else { continue };
             if palw_vesting_row_maturity_v1(&self.state, self.params, row, now_daa, raw_depth).mature_now {
                 let latched = PalwVestingRowV1 { matured_at: Some(now_daa), ..row.clone() };
-                self.write_vesting(claim_id, Some(latched));
+                self.write_vesting(claim_id, Some(latched))?;
                 self.note_vesting(PalwVestingNoteV1::Latched { claim_id, matured_at: now_daa });
             }
         }
+        Ok(())
     }
 
     /// **ADR-0152 V-7: move one planned move into the queue.** Each leg through the queue's own
@@ -10105,7 +10140,7 @@ impl<'a> TransitionBuilder<'a> {
                 let mut counters = self.state.vesting_counters;
                 counters.moved =
                     counters.moved.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("vesting moved"))?;
-                self.write_vesting(*claim_id, None);
+                self.write_vesting(*claim_id, None)?;
                 self.write_vesting_counters(counters);
                 self.note_vesting(PalwVestingNoteV1::Moved { source: next.source.clone(), legs: next.legs.clone() });
                 if row.reserve > 0 {

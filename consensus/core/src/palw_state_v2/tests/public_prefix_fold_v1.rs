@@ -552,7 +552,7 @@ fn independently_voided_public_claim_keeps_paid_material_without_a_second_collec
     palw_staged_court_fold_v1::movement(&mut builder, &ctx(2, 101, 101), &movement).unwrap();
     let mut live = builder.state.claim(&claim).unwrap().clone();
     live.phase = PalwClaimPhaseV2::Voided { voided_daa: 102, reason: PalwVoidReasonV2::CourtFraud };
-    builder.write_claim(claim, Some(live));
+    builder.write_claim(claim, Some(live)).unwrap();
     let before = builder.state.clone();
     palw_staged_court_fold_v1::sweep(&mut builder, &ctx(3, deadline, deadline)).unwrap();
     assert_eq!(builder.state.bonds, before.bonds, "another conviction does not collect this owner's default");

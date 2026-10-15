@@ -1777,7 +1777,7 @@ pub(super) fn apply_object(
                 ctx.daa_score,
                 builder.params.receipt_window_for_claim_v1(&builder.state, &class_id, shape, ctx.daa_score),
             );
-            builder.write_claim(*claim_id, Some(bound));
+            builder.write_claim(*claim_id, Some(bound))?;
             // ADR-0164 F-K (K4's denominator): a claim that reached its anchor with a panel.
             builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound);
             builder.disarm_deadline(*claim_id);
@@ -1944,7 +1944,7 @@ pub(super) fn apply_object(
             if model_window.is_some() && deadline_daa > claim.trace_retention_daa {
                 let mut extended_claim = claim.clone();
                 extended_claim.trace_retention_daa = deadline_daa;
-                builder.write_claim(*claim_id, Some(extended_claim));
+                builder.write_claim(*claim_id, Some(extended_claim))?;
             }
             // **The opening rung is clocked like every other rung — because a responder now ships.**
             //
@@ -3074,7 +3074,7 @@ pub(super) fn apply_object(
             let paused = palw_da_paused_daa_v2(&claim.phase, ctx.daa_score);
             debug_assert_eq!(paused, ctx.daa_score.saturating_sub(accused_daa), "the pause is the session's own length");
             let restored = resume_claim_after_da_session_v2(*claim_id, &claim, *resumed, paused)?;
-            builder.write_claim(*claim_id, Some(restored.clone()));
+            builder.write_claim(*claim_id, Some(restored.clone()))?;
             // §4-quater V6 on the ADR-0062 court (below `palw_rcore_plus`), before the re-arm reads `H`.
             builder.credit_verify_pause_v6(*claim_id, ctx.daa_score.saturating_sub(paused), ctx.daa_score);
             // The session's own clock goes with the session — a claim holds at most one deadline,
@@ -3462,7 +3462,7 @@ pub(super) fn apply_object(
                 builder.commit_paid_consumer_v1(*claim_id, contract)?;
             }
             let fp_pwu = claim.pwu;
-            builder.write_claim(*claim_id, Some(claim));
+            builder.write_claim(*claim_id, Some(claim))?;
             builder.stamp_staged_claim_v1(*claim_id, staged_contract);
             if let Some(wire) = public_job_wire {
                 builder.write_public_fp_job_v1(*claim_id, Some(wire));
