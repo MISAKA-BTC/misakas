@@ -462,7 +462,9 @@ impl Params {
         {
             return Err(PalwModeV2Error::Invalid("recovery requires the signed monetary covenant first"));
         }
-        Err(PalwModeV2Error::Invalid("release recovery cannot be armed: cost and bounded provider-ack liveness approval pending"))
+        // Cost and bounded provider-ack liveness are measured values: arming needs a pinned record for this exact policy on this
+        // network (EMPTY: dormant). testnet-12 DAA 14,000 release plan.
+        self.palw_rfc0608_measured_v1(crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::MaterialReleaseRecoveryV2, &f.policy)
     }
 }
 

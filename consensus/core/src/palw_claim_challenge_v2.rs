@@ -134,7 +134,28 @@ impl Params {
         if let Some(f) = self.palw_claim_challenge_v2 {
             f.policy.validate().map_err(PalwModeV2Error::InvalidOwned)?;
             if f.activation != ForkActivation::never() {
-                return Err(PalwModeV2Error::InvalidOwned("palw_claim_challenge_v2 remains dormant: independent full128/source/economic review and native all-target acceptance must be evidenced".into()));
+                // A public fence carries its review scope and evidence (zero = private mechanics only).
+                if f.policy.lifetime_review_scope == [0; 64]
+                    || f.policy.source_independence_evidence == [0; 64]
+                    || f.policy.economic_evidence == [0; 64]
+                {
+                    return Err(PalwModeV2Error::InvalidOwned(
+                        "palw_claim_challenge_v2 remains dormant: independent full128/source/economic review is not evidenced".into(),
+                    ));
+                }
+                // Checkers fetch every target's material through the signed covenant and its recovery: both armed at or below.
+                let at_or_below = |a: Option<ForkActivation>| {
+                    a.is_some_and(|a| a != ForkActivation::never() && a.daa_score() <= f.activation.daa_score())
+                };
+                if !at_or_below(self.palw_monetary_material_v1.as_ref().map(|m| m.activation))
+                    || !at_or_below(self.palw_material_release_recovery_v2.as_ref().map(|r| r.activation))
+                {
+                    return Err(PalwModeV2Error::InvalidOwned(
+                        "palw_claim_challenge_v2 requires the monetary material covenant and release recovery V2 at or below it".into(),
+                    ));
+                }
+                // Native all-target acceptance and the economics are measured: a pinned record (EMPTY: dormant).
+                self.palw_rfc0608_measured_v1(crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::ClaimChallengeV2, &f.policy)?;
             }
         }
         Ok(())

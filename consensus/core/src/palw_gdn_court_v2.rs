@@ -129,10 +129,14 @@ impl crate::config::params::Params {
         Some(crate::config::params::ForkActivation::new(own.daa_score().max(parent.daa_score())))
     }
     pub fn validate_palw_memory_routing_court_v2(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
-        if self.palw_memory_routing_court_v2.is_some_and(|f| f != crate::config::params::ForkActivation::never()) {
-            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
-                "palw_memory_routing_court_v2 cannot be armed: capture/router/resource calibration and consolidated acceptance remain incomplete",
-            ));
+        // Capture/router/resource calibration and consolidated acceptance are measured and reviewed: arming needs a pinned
+        // record (EMPTY: dormant; open blockers listed there). The fence has no policy, so the record pins its activation height.
+        // testnet-12 DAA 14,000 release plan.
+        if let Some(own) = self.palw_memory_routing_court_v2.filter(|f| *f != crate::config::params::ForkActivation::never()) {
+            self.palw_rfc0608_measured_v1(
+                crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::MemoryRoutingCourtV2,
+                &own.daa_score(),
+            )?;
         }
         // The state-params mirror (the registration / claim-gate / binding readers) must agree with the effective fence.
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
