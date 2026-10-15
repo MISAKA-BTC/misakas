@@ -3436,6 +3436,35 @@ message GetPalwRouterBindingV2ResponseMessage {
   RPCError error = 1000;
 }
 
+// RFC-0012 acceptance (op 247): one paid claim at the tip — enrollment, one round's seats/quorum/receipts and Final.
+// Read-only, never an approval. Bond keys are txid:index; ids are lowercase hex of their 64 bytes.
+message GetPalwPaidClaimRequestMessage {
+  string baseClaim = 1;
+  uint32 round = 2;
+}
+
+message GetPalwPaidClaimResponseMessage {
+  bool available = 1;
+  bool found = 2;
+  string sink = 3;
+  uint64 tipDaa = 4;
+  string baseClaim = 5;
+  string enrollment = 6;
+  string classId = 7;
+  string jobId = 8;
+  string producerBond = 9;
+  string materialConsent = 10;
+  string state = 11;
+  uint32 round = 12;
+  bool roundFound = 13;
+  repeated string seats = 14;
+  uint32 quorum = 15;
+  repeated string receipts = 16;
+  bool finalReached = 17;
+  uint64 finalDaa = 18;
+  RPCError error = 1000;
+}
+
 message GetPalwStagedPreclaimQuoteRequestMessage {
   string commitmentHex = 1;
   string bindingHex = 2;

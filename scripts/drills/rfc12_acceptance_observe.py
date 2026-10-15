@@ -24,7 +24,7 @@ NETWORK_DIR = 'misaka-testnet-12'
 KERNEL_OUTBOX = 'kernel-paid-producer-v4'
 CHECKER_OUTBOX = 'kernel-paid-checker-v4'
 PROVIDER_STORE_DIR = 'palw-native-provider-v3'
-# Proposed read-only op 247 (not present in this tree): see paid_claim_read_spec().
+# Read-only op 247 (rpc/service get_palw_paid_claim_call, consensus/core palw_paid_claim_read_v1): see paid_claim_read_spec().
 PAID_CLAIM_METHOD = 'getPalwPaidClaim'
 LOG_PATTERNS = (
     ('enrollment-accepted', re.compile(r'private kernel paid enrollment accepted: ([0-9a-f]{128})')),
@@ -41,13 +41,13 @@ class ContextMoved(AssertionError):
 
 
 def paid_claim_read_spec():
-    """The read this harness needs and the node does not serve yet (reserved op 247, proto 1312/1313)."""
+    """The paid-claim read this harness uses (op 247, proto 1312/1313); a node built before op 247 does not serve it."""
     return dict(method=PAID_CLAIM_METHOD, op=247, protoFields=[1312, 1313], readOnly=True,
                 request=dict(baseClaim='hex128', round='u32'),
                 response=dict(available='bool', found='bool', sink='hex128 (the sink the answer stands at)',
                               tipDaa='u64', baseClaim='hex128', enrollment='hex128 (PaidClaimEnrollment id)',
                               classId='hex128', jobId='hex128', producerBond='txid:index',
-                              materialConsent='hex128', state='text', round='u32',
+                              materialConsent='hex128', state='text', round='u32', roundFound='bool',
                               seats=['txid:index (assigned live seats of the round)'], quorum='u32',
                               receipts=['txid:index (accepted receipt signers of the round)'],
                               final='bool', finalDaa='u64'))
@@ -169,13 +169,13 @@ def counters_value(rpc, finals_limit):
 
 
 def paid_claim_value(rpc, base_claim, round_number):
-    """The proposed paid-claim read; a node without it makes the predicate BLOCKED, never inferred."""
+    """The paid-claim read (op 247); a node built before it makes the predicate BLOCKED, never inferred."""
     try:
         answer = rpc.call(PAID_CLAIM_METHOD, {'baseClaim': base_claim, 'round': round_number})
     except RuntimeError as error:
         text = str(error).lower()
         if 'unknown' in text or 'not found' in text or 'method' in text or 'unsupported' in text:
-            raise NotObservable('the node serves no paid-claim read (%s); proposed read-only op 247' % PAID_CLAIM_METHOD)
+            raise NotObservable('the node serves no paid-claim read (%s); it predates read-only op 247' % PAID_CLAIM_METHOD)
         raise
     if not isinstance(answer, dict):
         raise NotObservable('the paid-claim read returned no object')

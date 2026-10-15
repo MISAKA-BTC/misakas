@@ -60,10 +60,9 @@ SOURCE_OF = {'B': 'A', 'JOIN': 'A'}
 MARKER = 'rfc12-private-probe-v1.json'
 # Reads this harness needs that no node serves in this tree. Each is reported in the evidence;
 # predicates that depend on one are BLOCKED, never inferred.
+# The paid-claim read (op 247, getPalwPaidClaim) is served since 2026-10-15; a node built before it still makes its
+# predicates BLOCKED (rfc12_acceptance_observe.paid_claim_value).
 NODE_GAPS = [
-    dict(read='paid-claim state (enrollment id, assigned seats, quorum, receipts, Final) by base claim',
-         proposed=O.paid_claim_read_spec(),
-         consumers=['checker spec (enrollment, checker_bond)', 'paid-claim acceptance', 'receipts', 'Final']),
     dict(read='per-coinbase DNS validator share after retirement', proposed=None,
          consumers=['DNS reward stop (checkbox 7)']),
     dict(read='a private profile that arms palw_dns_retirement_v1 after some DNS-validator history', proposed=None,

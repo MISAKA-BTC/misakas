@@ -6035,6 +6035,58 @@ try_from!(item: &protowire::GetPalwRouterBindingV2ResponseMessage, RpcResult<kas
     }
 });
 
+from!(item: &kaspa_rpc_core::GetPalwPaidClaimRequest, protowire::GetPalwPaidClaimRequestMessage, {
+    Self { base_claim: item.base_claim.clone(), round: item.round }
+});
+try_from!(item: &protowire::GetPalwPaidClaimRequestMessage, kaspa_rpc_core::GetPalwPaidClaimRequest, {
+    Self { base_claim: item.base_claim.clone(), round: item.round }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwPaidClaimResponse>, protowire::GetPalwPaidClaimResponseMessage, {
+    Self {
+        available: item.available,
+        found: item.found,
+        sink: item.sink.clone(),
+        tip_daa: item.tip_daa,
+        base_claim: item.base_claim.clone(),
+        enrollment: item.enrollment.clone(),
+        class_id: item.class_id.clone(),
+        job_id: item.job_id.clone(),
+        producer_bond: item.producer_bond.clone(),
+        material_consent: item.material_consent.clone(),
+        state: item.state.clone(),
+        round: item.round,
+        round_found: item.round_found,
+        seats: item.seats.clone(),
+        quorum: item.quorum,
+        receipts: item.receipts.clone(),
+        final_reached: item.final_reached,
+        final_daa: item.final_daa,
+        error: None,
+    }
+});
+try_from!(item: &protowire::GetPalwPaidClaimResponseMessage, RpcResult<kaspa_rpc_core::GetPalwPaidClaimResponse>, {
+    Self {
+        available: item.available,
+        found: item.found,
+        sink: item.sink.clone(),
+        tip_daa: item.tip_daa,
+        base_claim: item.base_claim.clone(),
+        enrollment: item.enrollment.clone(),
+        class_id: item.class_id.clone(),
+        job_id: item.job_id.clone(),
+        producer_bond: item.producer_bond.clone(),
+        material_consent: item.material_consent.clone(),
+        state: item.state.clone(),
+        round: item.round,
+        round_found: item.round_found,
+        seats: item.seats.clone(),
+        quorum: item.quorum,
+        receipts: item.receipts.clone(),
+        final_reached: item.final_reached,
+        final_daa: item.final_daa,
+    }
+});
+
 from!(item: &kaspa_rpc_core::GetPalwStagedPreclaimQuoteRequest, protowire::GetPalwStagedPreclaimQuoteRequestMessage, {
     Self { commitment_hex: item.commitment_hex.clone(), binding_hex: item.binding_hex.clone() }
 });

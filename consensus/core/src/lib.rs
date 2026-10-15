@@ -995,6 +995,8 @@ pub mod palw_claim_challenge_v2;
 /// R7-RELATION round 3 (2026-10-15): the dormant ClaimV2 gate of compact relation contracts (refused: empty review registry).
 pub mod palw_claim_compact_v1;
 pub mod palw_claim_interactive_v3;
+/// RFC-0012 acceptance (2026-10-15): the read-only paid-claim view behind RPC op 247 (`getPalwPaidClaim`). No authority.
+pub mod palw_paid_claim_read_v1;
 
 pub mod palw_material_capacity_v1;
 

@@ -126,6 +126,7 @@ impl Router {
                 GetPalwStateCarriage,
                 GetPalwStagedPreclaimQuote,
                 GetPalwRouterBindingV2,
+                GetPalwPaidClaim,
                 GetPalwRfc0016Report,
                 GetPalwKernelClaim,
                 GetPalwKernelRows,

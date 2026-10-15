@@ -1060,6 +1060,20 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwRouterBindingV2Response::default())
     }
 
+    /// **RFC-0012 acceptance (op 247): one paid claim at the tip** — enrollment, the round's seats/quorum/receipts and Final.
+    /// Read-only and never an approval. A node built before op 247 answers the default (`available` false).
+    async fn get_palw_paid_claim(&self, request: GetPalwPaidClaimRequest) -> RpcResult<GetPalwPaidClaimResponse> {
+        self.get_palw_paid_claim_call(None, request).await
+    }
+    async fn get_palw_paid_claim_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwPaidClaimRequest,
+    ) -> RpcResult<GetPalwPaidClaimResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwPaidClaimResponse::default())
+    }
+
     /// **ADR-0152-adjacent: one class's Activation Pool** (op 200; testnet-12) — its budgets, its
     /// payees, the terms and the sink a top-up pays into. A node built before op 200 drops the
     /// WebSocket on it: ask it last on a connection, or reconnect.
