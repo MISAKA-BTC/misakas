@@ -47,7 +47,7 @@ fn charge_removed(
     let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     let mut shard = quota_shard(builder, p, &epoch, palw_kernel_bond_id_v1(signer), job)?;
     shard.debit_ordinary(&p.quota, &epoch, &DerivedOrdinaryMetadataV11::from_native_envelope(q)).map_err(refused)?;
-    write_shard(builder, &shard, job);
+    write_shard(builder, &shard, job)?;
     Ok(true)
 }
 fn terminal_header(builder: &TransitionBuilder<'_>, job: Digest, now: u64) -> Result<NativeExecutionJobHeaderV11, PalwStateV2Error> {
@@ -307,7 +307,7 @@ fn job_step(
         trace_retired: trace_retired.root(),
         collected_daa: ctx.daa_score,
     };
-    write_shard(builder, &shard, job);
+    write_shard(builder, &shard, job)?;
     if let Some((global, queue)) = capacity_release {
         if let Some(q) = queue {
             builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8)), Some(key(&(q.root(), q))))?;
@@ -427,7 +427,7 @@ fn proof_step(
     let retired = retire_expired_trace_v17(&mut caller, &p.quota, &epoch, &plan, &trace, &trace_root, &terminal).map_err(refused)?;
     let physical = capacity::plan_retire_owner(builder, job, id, ctx.daa_score)?;
     retained.retained_seal_keys.retain(|v| *v != id);
-    write_shard(builder, &caller, job);
+    write_shard(builder, &caller, job)?;
     if let Some(owner) = owner {
         builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &owner.actor), Some(key(&(owner.root(), owner))))?;
     }
@@ -446,7 +446,7 @@ fn proof_step(
         Some(key(&(own.original_paid_record_root, retired.root(), ctx.daa_score))),
     )?;
     builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&job), Some(key(&retained)))?;
-    capacity::commit_owner(builder, job, physical);
+    capacity::commit_owner(builder, job, physical)?;
     Ok(())
 }
 fn discovery_step(
@@ -526,7 +526,7 @@ fn discovery_step(
     let retired = retire_expired_trace_v17(&mut merged, &p.quota, &epoch, &tplan, &trace, &troot, &terminal).map_err(refused)?;
     let physical = capacity::plan_retire_owner(builder, job, id, ctx.daa_score)?;
     retained.retained_discovery_keys.retain(|v| *v != id);
-    write_shard(builder, &merged, job);
+    write_shard(builder, &merged, job)?;
     if let Some(owner) = owner {
         builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &owner.actor), Some(key(&(owner.root(), owner))))?;
     }
@@ -540,7 +540,7 @@ fn discovery_step(
         Some(key(&(own.original_paid_root, retired.root(), ctx.daa_score))),
     )?;
     builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&job), Some(key(&retained)))?;
-    capacity::commit_owner(builder, job, physical);
+    capacity::commit_owner(builder, job, physical)?;
     Ok(())
 }
 pub(super) fn apply(

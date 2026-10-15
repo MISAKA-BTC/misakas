@@ -94,11 +94,11 @@ pub(super) fn apply_vertex_v1(
                     // **RFC-0007 Part IV.2: a class-level DA attestation** — a `Held` leaf naming a `Prefetching` class by its id
                     // (the capture of its probe job), from any Active bond, is one vote of the DA certificate capped entry reads.
                     if let PalwClaimRefV1::Full(class_id) = claim {
-                        super::palw_mesh_fold_v1::record_class_held_v1(builder, vertex, class_id, *object, *first, *last, *digest);
+                        super::palw_mesh_fold_v1::record_class_held_v1(builder, vertex, class_id, *object, *first, *last, *digest)?;
                     }
                     continue;
                 };
-                record_held_v1(builder, vertex, &claim_id, *object, *first, *last, *digest);
+                record_held_v1(builder, vertex, &claim_id, *object, *first, *last, *digest)?;
             }
             // **RFC-0007 Part IV.1**: an audit leaf rides a vertex only where `palw_audit_mesh_v1` is in force; it counts when its seat
             // is a drawn auditor of the claim (`palw_mesh_fold_v1`), and is otherwise ignored.
@@ -181,16 +181,16 @@ fn record_held_v1(
     first: u32,
     last: u32,
     digest: Hash64,
-) {
-    let (Some(claim), Some(panel)) = (builder.state.claims.get(claim_id), builder.state.panels.get(claim_id)) else { return };
+) -> Result<(), PalwStateV2Error> {
+    let (Some(claim), Some(panel)) = (builder.state.claims.get(claim_id), builder.state.panels.get(claim_id)) else { return Ok(()) };
     if claim.phase.is_terminal() || !panel.seats.iter().any(|seat| seat.bond == vertex.seat_bond) {
-        return;
+        return Ok(());
     }
     let mut rows = builder.state.vertex.held.get(claim_id).cloned().unwrap_or_default();
     if rows.len() >= PALW_VERTEX_HELD_MAX_PER_CLAIM_V1
         || rows.iter().any(|row| row.seat == vertex.seat_bond && row.object == object && row.first == first && row.last == last)
     {
-        return;
+        return Ok(());
     }
     rows.push(PalwVertexHeldRowV1 {
         seat: vertex.seat_bond,
@@ -201,7 +201,8 @@ fn record_held_v1(
         signed_daa: vertex.signed_daa,
         charged: false,
     });
-    builder.write_vertex_held(*claim_id, Some(rows));
+    builder.write_vertex_held(*claim_id, Some(rows))?;
+    Ok(())
 }
 
 /// **An equivocation** (RFC-0007 §I.6): the bond slashed [`PALW_VERTEX_EQUIVOCATION_PENALTY_PERMILLE_V1`] ‰, every lock it holds on a
@@ -261,9 +262,9 @@ pub(super) fn apply_vertex_equivocation_v1(
 /// [`PALW_VERTEX_SWEEP_PER_BLOCK_V1`] a block. A row is needed while a vertex of its round could still land
 /// ([`crate::palw_vertex_v1::PALW_VERTEX_MAX_CARRY_DAA_V1`]) and while an equivocation of it is still admissible
 /// ([`PALW_VERTEX_EVIDENCE_WINDOW_DAA_V1`]); the second is the longer. A no-op on a chain with no row.
-pub(super) fn sweep_vertex_rounds_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
+pub(super) fn sweep_vertex_rounds_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     if builder.state.vertex.rounds.is_empty() {
-        return;
+        return Ok(());
     }
     let dead = |round: u64| {
         round.saturating_add(1).saturating_mul(PALW_VERTEX_ROUND_DAA_V1).saturating_add(PALW_VERTEX_EVIDENCE_WINDOW_DAA_V1)
@@ -279,8 +280,9 @@ pub(super) fn sweep_vertex_rounds_v1(builder: &mut TransitionBuilder<'_>, ctx: &
         .copied()
         .collect();
     for key in doomed {
-        builder.write_vertex_round(key, None);
+        builder.write_vertex_round(key, None)?;
     }
+    Ok(())
 }
 
 /// **The attesters of a claim not yet charged**, read before a data-availability default voids the claim (the void drops the rows).

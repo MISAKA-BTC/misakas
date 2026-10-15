@@ -46,14 +46,15 @@ pub(super) fn shard(
     )
     .map_err(refused)
 }
-pub(super) fn write(builder: &mut TransitionBuilder<'_>, s: &DiscoveryShardV13, id: Digest, job: Digest) {
+pub(super) fn write(builder: &mut TransitionBuilder<'_>, s: &DiscoveryShardV13, id: Digest, job: Digest) -> Result<(), PalwStateV2Error> {
     let g = s.global_row();
     let a = s.actor_row();
     let j = s.subject_row();
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))));
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))));
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(2, &job), Some(key(&(j.row_root(), j))));
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(4, &id), s.discovery_row().map(|d| key(&(d.root(), d))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(2, &job), Some(key(&(j.row_root(), j))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(4, &id), s.discovery_row().map(|d| key(&(d.root(), d))))?;
+    Ok(())
 }
 pub(super) fn admit(
     builder: &mut TransitionBuilder<'_>,
@@ -167,12 +168,12 @@ pub(super) fn admit(
     };
     state.retained_discovery_keys.push(ticket);
     let physical = capacity::plan_owner(builder, id, ticket, claim.challenge_end)?;
-    write(builder, &shard, ticket, id);
-    write_trace(builder, &trace, 2, ticket);
+    write(builder, &shard, ticket, id)?;
+    write_trace(builder, &trace, 2, ticket)?;
     builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, native_key(&ticket), Some(key(&row)))?;
     builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, counter_key, Some(key(&next)))?;
     builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)))?;
-    capacity::commit_owner(builder, id, physical);
+    capacity::commit_owner(builder, id, physical)?;
     builder.note_kernel_bond(signer)?;
     Ok(())
 }
@@ -194,7 +195,7 @@ pub(super) fn debit_request(
     let mut shard = shard(builder, p, &plan, actor, job, ticket)?;
     let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     shard.debit_request(&p.quota, &epoch, &plan, job_plan, actor, bytes).map_err(refused)?;
-    write(builder, &shard, ticket, job);
+    write(builder, &shard, ticket, job)?;
     Ok(())
 }
 pub(super) fn check_request_owner(
@@ -313,13 +314,13 @@ pub(super) fn convert(
     state.retained_seal_keys.push(seal_key);
     state.required_retained_until = state.required_retained_until.max(horizon);
     let physical = capacity::plan_transfer(builder, id, ticket, seal_key, horizon)?;
-    write(builder, &shard, ticket, id);
-    write_trace(builder, &trace, 1, seal_key);
+    write(builder, &shard, ticket, id)?;
+    write_trace(builder, &trace, 1, seal_key)?;
     builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, trace_row_key(2, ticket), None)?;
     builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(3, &seal_key), Some(key(&(summary.row_root(), summary))))?;
     builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&seal_key), Some(key(&seal)))?;
     builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, native_key(&ticket), Some(key(&original)))?;
     builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)))?;
-    capacity::commit_owner(builder, id, physical);
+    capacity::commit_owner(builder, id, physical)?;
     Ok(())
 }

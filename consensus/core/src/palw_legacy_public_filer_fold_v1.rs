@@ -299,20 +299,22 @@ impl TransitionBuilder<'_> {
     }
 
     /// **A reserved DA session opened** (`open_da_session_rcore_v1`): counted on its reservation's own budget.
-    pub(super) fn legacy_dispute_count_session_v1(&mut self, claim_id: Hash64, bond: PalwBondKeyV2) {
-        let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return };
-        let Some(row) = record.live.get_mut(&bond) else { return };
+    pub(super) fn legacy_dispute_count_session_v1(&mut self, claim_id: Hash64, bond: PalwBondKeyV2) -> Result<(), PalwStateV2Error> {
+        let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return Ok(()) };
+        let Some(row) = record.live.get_mut(&bond) else { return Ok(()) };
         row.sessions_opened = row.sessions_opened.saturating_add(1);
-        self.write_legacy_dispute(claim_id, Some(record));
+        self.write_legacy_dispute(claim_id, Some(record))?;
+        Ok(())
     }
 
     /// **Lane G14-L: a lane joined a reserved session** (`join_da_session_lane_legacy_held_v1`): counted on its reservation's own lane
     /// budget (the join check refused a lane past it).
-    pub(super) fn legacy_dispute_count_lane_v1(&mut self, claim_id: Hash64, bond: PalwBondKeyV2) {
-        let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return };
-        let Some(row) = record.live.get_mut(&bond) else { return };
+    pub(super) fn legacy_dispute_count_lane_v1(&mut self, claim_id: Hash64, bond: PalwBondKeyV2) -> Result<(), PalwStateV2Error> {
+        let Some(mut record) = self.state.legacy_disputes.get(&claim_id).cloned() else { return Ok(()) };
+        let Some(row) = record.live.get_mut(&bond) else { return Ok(()) };
         row.lanes_joined = row.lanes_joined.saturating_add(1);
-        self.write_legacy_dispute(claim_id, Some(record));
+        self.write_legacy_dispute(claim_id, Some(record))?;
+        Ok(())
     }
 
     /// **The hold ended** (the last live reservation closed): DL-1 re-derives the claim's deadline from its own anchors — no time

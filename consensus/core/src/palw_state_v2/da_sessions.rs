@@ -321,7 +321,7 @@ pub(super) fn open_da_session_rcore_mode_v1(
     // `palw_legacy_public_filer_v1` no reservation exists and the expression is the one it was.
     let reserved = !admission.accuser_is_seat && builder.state.legacy_dispute_reservation_v1(&claim_id, &accuser).is_some();
     let seat_like =
-        admission.accuser_is_seat || reserved || (!claim.phase.is_terminal() && builder.held_forfeit_pauses_v1(claim_id, accuser));
+        admission.accuser_is_seat || reserved || (!claim.phase.is_terminal() && builder.held_forfeit_pauses_v1(claim_id, accuser)?);
     let session = PalwDaSessionV1 {
         opened_daa: ctx.daa_score,
         deadline_daa: admission.deadline_daa,
@@ -339,7 +339,7 @@ pub(super) fn open_da_session_rcore_mode_v1(
             *opened = opened.saturating_add(1);
         } else if reserved {
             // Lane LG14-A: on the reservation's own budget; neither DA-8 count moves.
-            builder.legacy_dispute_count_session_v1(claim_id, accuser);
+            builder.legacy_dispute_count_session_v1(claim_id, accuser)?;
         } else {
             // **The fourth review's HIGH: a record-holder's pause is not a seat's session.** It is
             // counted with the seats' OPEN sessions (`open_seat_sessions`, `paused_since`: all DA-5 and

@@ -323,7 +323,7 @@ pub(super) fn apply_part_v1(
     }
     let seat_verdicts = palw_seat_verdicts_of_v2(&receipts_v2);
     builder.slash_dissenting_seats(&claim_id, &claim, &seat_verdicts, true)?;
-    builder.credit_seat_receipts(claim_id, &receipts_v2, now);
+    builder.credit_seat_receipts(claim_id, &receipts_v2, now)?;
     for (bond, mask) in &signers {
         let price = price_of(bond, *mask);
         match builder.state.slashable_locks.get(&(*bond, claim_id)).copied() {

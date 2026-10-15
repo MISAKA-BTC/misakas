@@ -40,12 +40,13 @@ fn row_of<T: borsh::BorshDeserialize>(state: &PalwChainStateV2, key: &[u8]) -> O
     state.kernel_route.as_ref()?.aux_row::<T>(PALW_MODEL_ELIGIBILITY_TABLE_V1, key)
 }
 
-fn write_row<T: borsh::BorshSerialize>(builder: &mut TransitionBuilder<'_>, key: Vec<u8>, row: Option<&T>) {
+fn write_row<T: borsh::BorshSerialize>(builder: &mut TransitionBuilder<'_>, key: Vec<u8>, row: Option<&T>) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(
         PALW_MODEL_ELIGIBILITY_TABLE_V1,
         key,
         row.map(|r| borsh::to_vec(r).expect("an eligibility row serializes")),
-    );
+    )?;
+    Ok(())
 }
 
 /// **What the gates know about a class**: its facts, its lineage (artifact root), its registrant's operator id (all-zero for a
@@ -238,11 +239,11 @@ pub(super) fn eligibility_probation_commit_v1(
     ticket: PalwEligibilityProbationTicketV1,
 ) -> Result<(), PalwStateV2Error> {
     super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
-    write_row(builder, ticket.model_key, Some(&ticket.model));
-    write_row(builder, ticket.lineage_key, Some(&ticket.lineage));
-    write_row(builder, ticket.principal_key, Some(&ticket.principal));
-    write_row(builder, eligibility_network_key_v1(), Some(&ticket.network));
-    write_row(builder, eligibility_probation_claim_key_v1(&claim_id.as_bytes()), Some(&ticket.pin));
+    write_row(builder, ticket.model_key, Some(&ticket.model))?;
+    write_row(builder, ticket.lineage_key, Some(&ticket.lineage))?;
+    write_row(builder, ticket.principal_key, Some(&ticket.principal))?;
+    write_row(builder, eligibility_network_key_v1(), Some(&ticket.network))?;
+    write_row(builder, eligibility_probation_claim_key_v1(&claim_id.as_bytes()), Some(&ticket.pin))?;
     Ok(())
 }
 
@@ -422,11 +423,11 @@ pub(super) fn apply_commit_eligibility_exam_v1(
     if escrow > 0 {
         builder.burn_registration_fee(*signer, escrow)?;
     }
-    write_row(builder, exam_key, Some(&exam));
-    write_row(builder, eligibility_model_key_v1(&commit.class_id), Some(&model));
-    write_row(builder, lineage_key, Some(&lineage));
-    write_row(builder, principal_key, Some(&principal));
-    write_row(builder, eligibility_network_key_v1(), Some(&network));
+    write_row(builder, exam_key, Some(&exam))?;
+    write_row(builder, eligibility_model_key_v1(&commit.class_id), Some(&model))?;
+    write_row(builder, lineage_key, Some(&lineage))?;
+    write_row(builder, principal_key, Some(&principal))?;
+    write_row(builder, eligibility_network_key_v1(), Some(&network))?;
     Ok(())
 }
 
@@ -479,7 +480,7 @@ pub(super) fn apply_attest_eligibility_exam_v1(
         transcript: attestation.transcript,
         attested_daa: now,
     });
-    write_row(builder, key, Some(&exam));
+    write_row(builder, key, Some(&exam))?;
     Ok(())
 }
 
@@ -661,16 +662,16 @@ pub(super) fn sweep_model_eligibility_v1(
         }
     }
     for (key, exam) in exam_writes {
-        write_row(builder, key, exam.as_ref());
+        write_row(builder, key, exam.as_ref())?;
     }
     for (key, model) in model_writes {
-        write_row(builder, key, Some(&model));
+        write_row(builder, key, Some(&model))?;
     }
     for key in pin_retirements {
-        write_row::<PalwEligibilityProbationClaimRowV1>(builder, key, None);
+        write_row::<PalwEligibilityProbationClaimRowV1>(builder, key, None)?;
     }
     for (key, payout) in payout_writes {
-        builder.write_payout(key, Some(payout));
+        builder.write_payout(key, Some(payout))?;
     }
     Ok(())
 }

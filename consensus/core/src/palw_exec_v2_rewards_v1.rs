@@ -253,7 +253,7 @@ pub(super) fn bond_unmatured(
 }
 
 /// Tier-freeze only still-unmatured executor funds. Other executors on this root keep their own clocks.
-pub(super) fn freeze_bond(builder: &mut TransitionBuilder<'_>, bond: PalwBondKeyV2, daa: u64, lift: u64) {
+pub(super) fn freeze_bond(builder: &mut TransitionBuilder<'_>, bond: PalwBondKeyV2, daa: u64, lift: u64) -> Result<(), PalwStateV2Error> {
     let raw = palw_settled_anchor_depth_v1(builder.extras);
     let roots: Vec<_> = builder.state.exec_v2_reward_payees.get(&bond).into_iter().flatten().copied().collect();
     for root in roots {
@@ -261,9 +261,10 @@ pub(super) fn freeze_bond(builder: &mut TransitionBuilder<'_>, bond: PalwBondKey
         let after =
             row.liability_until.saturating_add(1).max(builder.state.exec_v2_reward_holds.get(&(root, bond)).copied().unwrap_or(0));
         if lift > after && actor_unmatured(&builder.state, builder.params, &root, &bond, daa, raw) {
-            builder.write_exec_reward_hold((root, bond), Some(lift));
+            builder.write_exec_reward_hold((root, bond), Some(lift))?;
         }
     }
+    Ok(())
 }
 
 fn burn_actor(
@@ -301,7 +302,7 @@ fn burn_actor(
     builder.write_exec_reward(
         root,
         if row.legs.is_empty() && !builder.state.vesting.contains_key(&root) && !final_in_progress { None } else { Some(row) },
-    );
+    )?;
     builder.write_vesting_counters(c)?;
     Ok(taken)
 }
@@ -326,7 +327,7 @@ pub(super) fn start(builder: &mut TransitionBuilder<'_>, root: Hash64, allocatio
     builder.write_exec_reward(
         root,
         Some(Row { final_daa: daa, liability_until: until, allocation_sompi: allocation, legs: BTreeMap::new() }),
-    );
+    )?;
     Ok(())
 }
 
@@ -355,7 +356,7 @@ pub(super) fn add(
     if row.total_sompi_u128() > u128::from(row.allocation_sompi) {
         return Err(PalwStateV2Error::ExecV2Refused("EXEC vesting exceeds its allocation".into()));
     }
-    builder.write_exec_reward(root, Some(row));
+    builder.write_exec_reward(root, Some(row))?;
     let mut c = builder.state.vesting_counters;
     c.created = c.created.checked_add(u128::from(amount)).ok_or(PalwStateV2Error::Overflow("EXEC vesting created"))?;
     builder.write_vesting_counters(c)?;
@@ -377,16 +378,17 @@ pub(super) fn add(
                 }),
             )?;
         } else if let Some(lift) = freeze.lifts_at_v1(builder.params.window_court()) {
-            freeze_bond(builder, bond, builder.state.exec_v2_rewards[&root].final_daa, lift);
+            freeze_bond(builder, bond, builder.state.exec_v2_rewards[&root].final_daa, lift)?;
         }
     }
     Ok(())
 }
 
-pub(super) fn finish(builder: &mut TransitionBuilder<'_>, root: Hash64) {
+pub(super) fn finish(builder: &mut TransitionBuilder<'_>, root: Hash64) -> Result<(), PalwStateV2Error> {
     if builder.state.exec_v2_rewards.get(&root).is_some_and(|row| row.legs.is_empty()) && !builder.state.vesting.contains_key(&root) {
-        builder.write_exec_reward(root, None);
+        builder.write_exec_reward(root, None)?;
     }
+    Ok(())
 }
 
 pub(super) fn burn(builder: &mut TransitionBuilder<'_>, root: Hash64) -> Result<(), PalwStateV2Error> {
@@ -404,7 +406,7 @@ pub(super) fn burn(builder: &mut TransitionBuilder<'_>, root: Hash64) -> Result<
     let mut c = builder.state.vesting_counters;
     c.burned = c.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("EXEC vesting burned"))?;
     let retained = if builder.state.vesting.contains_key(&root) { Some(Row { legs: BTreeMap::new(), ..row.clone() }) } else { None };
-    builder.write_exec_reward(root, retained);
+    builder.write_exec_reward(root, retained)?;
     builder.write_vesting_counters(c)?;
     for ((bond, fund), payout) in row.legs {
         builder.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::ExecReward {
@@ -474,7 +476,7 @@ pub(super) fn mature(builder: &mut TransitionBuilder<'_>, daa: u64) -> Result<()
         .map(|(id, _)| *id)
         .collect();
     for id in empty {
-        builder.write_exec_reward(id, None);
+        builder.write_exec_reward(id, None)?;
     }
     for (root, who, leg) in release_plan(&builder.state, daa, false).0 {
         match who.1 {
@@ -500,7 +502,7 @@ pub(super) fn mature(builder: &mut TransitionBuilder<'_>, daa: u64) -> Result<()
             key(who.1, &leg.payload),
             finished,
         )?;
-        builder.write_exec_reward(root, if row.legs.is_empty() { None } else { Some(row) });
+        builder.write_exec_reward(root, if row.legs.is_empty() { None } else { Some(row) })?;
         let mut c = builder.state.vesting_counters;
         c.moved = c.moved.checked_add(u128::from(leg.amount)).ok_or(PalwStateV2Error::Overflow("EXEC vesting moved"))?;
         builder.write_vesting_counters(c)?;
@@ -528,7 +530,7 @@ pub(super) fn invalidate_final(
         return Ok(());
     }
     builder.reverse_convicted_final(ctx, root, reason)?;
-    builder.forfeit_minted_round_rights_of_claim(&root);
+    builder.forfeit_minted_round_rights_of_claim(&root)?;
     if let Some(row) = builder.state.vesting.get(&root).cloned() {
         for (bond, _) in &row.seats {
             builder.cancel_native_recipient_v1(root, *bond, 1);

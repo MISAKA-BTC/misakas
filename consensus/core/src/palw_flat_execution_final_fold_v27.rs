@@ -226,9 +226,10 @@ pub(super) fn plan_fund(
     }
     Ok(c)
 }
-pub(super) fn write_fund(builder: &mut TransitionBuilder<'_>, job: Digest, c: NativeFinalConsentV27) {
-    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(27u8, c.preparation)), None);
-    builder.write_kernel_row(EXECUTION_POLICY_TABLE_V11, key(&(27u8, job)), Some(key(&(c.root(), c))));
+pub(super) fn write_fund(builder: &mut TransitionBuilder<'_>, job: Digest, c: NativeFinalConsentV27) -> Result<(), PalwStateV2Error> {
+    builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(27u8, c.preparation)), None)?;
+    builder.write_kernel_row(EXECUTION_POLICY_TABLE_V11, key(&(27u8, job)), Some(key(&(c.root(), c))))?;
+    Ok(())
 }
 pub(super) fn close(
     builder: &mut TransitionBuilder<'_>,

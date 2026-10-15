@@ -206,17 +206,18 @@ pub(super) fn quota_shard_seal(
     )
     .map_err(refused)
 }
-pub(super) fn write_shard(builder: &mut TransitionBuilder<'_>, shard: &CheckedQuotaShardV11, job: Digest) {
+pub(super) fn write_shard(builder: &mut TransitionBuilder<'_>, shard: &CheckedQuotaShardV11, job: Digest) -> Result<(), PalwStateV2Error> {
     let g = shard.global_row();
     let a = shard.actor_row();
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))));
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))))?;
     if let Some(s) = shard.subject_row() {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(2, &job), Some(key(&(s.row_root(), s))));
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(2, &job), Some(key(&(s.row_root(), s))))?;
     }
     if let Some(s) = shard.seal_row() {
-        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(3, &s.key.root()), Some(key(&(s.row_root(), s))));
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(3, &s.key.root()), Some(key(&(s.row_root(), s))))?;
     }
+    Ok(())
 }
 fn trace_row_key(role: u8, entitlement: Digest) -> Vec<u8> {
     key(&(17u8, role, entitlement))
@@ -269,16 +270,17 @@ pub(super) fn trace_shard(
     )
     .map_err(refused)
 }
-pub(super) fn write_trace(builder: &mut TransitionBuilder<'_>, shard: &TraceShardV17, role: u8, entitlement: Digest) {
+pub(super) fn write_trace(builder: &mut TransitionBuilder<'_>, shard: &TraceShardV17, role: u8, entitlement: Digest) -> Result<(), PalwStateV2Error> {
     let g = shard.global_row();
     let a = shard.actor_row();
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))));
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))))?;
     builder.write_kernel_row(
         EXECUTION_QUOTA_TABLE_V11,
         trace_row_key(role, entitlement),
         shard.trace_row().map(|r| key(&(r.root(), r))),
-    );
+    )?;
+    Ok(())
 }
 pub(super) fn source_shard_from_rows(
     p: &NativeExecutionPoliciesV11,
@@ -290,12 +292,13 @@ pub(super) fn source_shard_from_rows(
 ) -> Result<SourceShardV16, PalwStateV2Error> {
     SourceShardV16::from_native_rows(&p.quota, plan, g, &g.root(), (a, &a.root()), (s, &s.row_root()), row).map_err(refused)
 }
-pub(super) fn write_source_shard(builder: &mut TransitionBuilder<'_>, shard: &SourceShardV16, job: Digest) {
+pub(super) fn write_source_shard(builder: &mut TransitionBuilder<'_>, shard: &SourceShardV16, job: Digest) -> Result<(), PalwStateV2Error> {
     let g = shard.global_row();
     let a = shard.producer_row();
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))));
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))));
-    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(16u8, job)), shard.source_row().map(|r| key(&(r.root(), r))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(1, &a.actor), Some(key(&(a.root(), a))))?;
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(16u8, job)), shard.source_row().map(|r| key(&(r.root(), r))))?;
+    Ok(())
 }
 fn debit_trace_request(
     builder: &mut TransitionBuilder<'_>,
@@ -314,7 +317,7 @@ fn debit_trace_request(
     } else {
         shard.debit_reserved(&p.quota, &epoch, &plan, &entitlement, lane).map_err(refused)?;
     }
-    write_trace(builder, &shard, lane, entitlement);
+    write_trace(builder, &shard, lane, entitlement)?;
     Ok(())
 }
 fn bounded_ids(route: &PalwKernelRouteStateV1, table: u8, owner: &PalwBondKeyV2, max: usize) -> Result<Vec<Digest>, PalwStateV2Error> {
@@ -717,12 +720,12 @@ fn fund(
     if debit != request.reward {
         return Err(refused("native escrow debit differs from original authorized coins"));
     }
-    write_shard(builder, &shard, job_id);
-    write_trace(builder, &trace, 0, job_id);
-    write_source_shard(builder, &source, job_id);
+    write_shard(builder, &shard, job_id)?;
+    write_trace(builder, &trace, 0, job_id)?;
+    write_source_shard(builder, &source, job_id)?;
     builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(16u8, job_id, 1u8)), Some(key(&source_plan.record())))?;
     if let Some(c) = final_admission {
-        final27::write_fund(builder, job_id, c);
+        final27::write_fund(builder, job_id, c)?;
     }
     owners.push(job_id);
     producer_jobs.push(job_id);
@@ -730,7 +733,7 @@ fn fund(
     builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, key(&requester_operator), Some(key(&next)))?;
     builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&job_id), Some(key(&row)))?;
     if let Some(admission) = capacity {
-        capacity::write(builder, admission, job_id);
+        capacity::write(builder, admission, job_id)?;
         builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(23u8, request.preparation)), None)?;
     }
     builder.write_kernel_row(
@@ -860,7 +863,7 @@ fn commit(
     let mut shard = quota_shard(builder, p, &epoch, binding.producer, id)?;
     let action = plan.action(QuotaActionKindV11::Metadata, bytes).map_err(refused)?;
     shard.debit_reserved(&p.quota, &epoch, &binding, &plan, &action).map_err(refused)?;
-    write_shard(builder, &shard, id); // invalid expensive post retains its attempt
+    write_shard(builder, &shard, id)?; // invalid expensive post retains its attempt
     let class = checked_class(builder, ctx, p, header.class_id, false)?;
     let post = decode_flat_execution_post_v11(bytes).map_err(|e| refused(e.to_string()))?;
     checked_flat_execution_post_v11(builder.state.kernel_route.as_ref().unwrap(), &class, &book, &post).map_err(refused)?;
@@ -1052,7 +1055,7 @@ fn close_adjudicated_quota(
         let paid = shard.debit_expired_terminal(&p.quota, &epoch, &binding, plan).map_err(refused)?;
         shard.mark_expired_terminal_closed(&p.quota, &epoch, &binding, class, book, &paid).map_err(refused)?;
     }
-    write_shard(builder, &shard, id);
+    write_shard(builder, &shard, id)?;
     Ok(())
 }
 fn close(
@@ -1087,7 +1090,7 @@ fn close(
     let binding = book.job().quota_subject(class.record()).map_err(refused)?;
     let mut shard = quota_shard(builder, p, &epoch, binding.producer, id)?;
     let paid = shard.debit_terminal(&p.quota, &epoch, &binding, &plan, bytes).map_err(refused)?;
-    write_shard(builder, &shard, id);
+    write_shard(builder, &shard, id)?;
     let s = book.cancel_unclaimed(class.record(), ctx.daa_score).map_err(refused)?;
     let next =
         builder.state.kernel_route.as_ref().unwrap().execution_nonce_counter_v11(&header.requester_operator).map_err(refused)?;
@@ -1105,7 +1108,7 @@ fn close(
     .map_err(refused)?;
     shard.mark_terminal_closed(&p.quota, &epoch, &terminal, &paid).map_err(refused)?;
     credit(builder, ctx, &mut row, &book, &s)?;
-    write_shard(builder, &shard, id);
+    write_shard(builder, &shard, id)?;
     Ok(())
 }
 impl PalwChainStateV2 {
@@ -1236,7 +1239,7 @@ fn apply_chunk_inner(
     let paid = shard
         .debit_protected_fragment(&p.quota, &epoch, &plan, chunk.index as u32, chunk.count as u32, chunk.bytes.len() as u64, 512)
         .map_err(refused)?;
-    write_shard(builder, &shard, id); // retained even if subsequent body fails
+    write_shard(builder, &shard, id)?; // retained even if subsequent body fails
     let r = builder.state.kernel_route.as_ref().unwrap();
     let group_key = key(&(12u8, seal));
     let part_key = key(&(15u8, seal, chunk.index));
@@ -1268,12 +1271,12 @@ fn apply_chunk_inner(
     let complete = shard.seal_row().is_some_and(|s| s.fragments.complete());
     builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, group_key.clone(), Some(key(&header)))?;
     builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, part_key, Some(chunk.bytes.clone()))?;
-    write_shard(builder, &shard, id);
+    write_shard(builder, &shard, id)?;
     if !complete {
         return Ok(());
     }
     shard.debit_protected(&p.quota, &epoch, &plan, ProtectedActionKindV11::WholeChunk, &[]).map_err(refused)?;
-    write_shard(builder, &shard, id);
+    write_shard(builder, &shard, id)?;
     let cap = derive_protected_seal_plan_v11(&plan).map_err(refused)?.assembly_cap as usize;
     let r = builder.state.kernel_route.as_ref().unwrap();
     let mut total = 0usize;

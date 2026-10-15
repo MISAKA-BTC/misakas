@@ -39,7 +39,7 @@ pub(super) fn status(r: &PalwKernelRouteStateV1, h: &JobHeader) -> Result<Status
     }
     Ok(s)
 }
-pub(super) fn initialize(builder: &mut TransitionBuilder<'_>, h: &JobHeader) {
+pub(super) fn initialize(builder: &mut TransitionBuilder<'_>, h: &JobHeader) -> Result<(), PalwStateV2Error> {
     let s = Status {
         version: 39,
         job: h.id,
@@ -53,8 +53,9 @@ pub(super) fn initialize(builder: &mut TransitionBuilder<'_>, h: &JobHeader) {
     };
     write_status(builder, &s)
 }
-pub(super) fn write_status(builder: &mut TransitionBuilder<'_>, s: &Status) {
-    builder.write_kernel_row(TABLE, k(36, &s.job), Some(b(&(s.root(), s))));
+pub(super) fn write_status(builder: &mut TransitionBuilder<'_>, s: &Status) -> Result<(), PalwStateV2Error> {
+    builder.write_kernel_row(TABLE, k(36, &s.job), Some(b(&(s.root(), s))))?;
+    Ok(())
 }
 pub(super) fn set_claim(builder: &mut TransitionBuilder<'_>, h: &JobHeader, claim: Digest) -> Result<(), PalwStateV2Error> {
     let mut s: (_, Status) = read(builder.state.kernel_route.as_ref().unwrap(), 36, &h.id, 2048)?;
@@ -62,7 +63,7 @@ pub(super) fn set_claim(builder: &mut TransitionBuilder<'_>, h: &JobHeader, clai
         return Err(bad("native39 public status cannot replace prior claim"));
     }
     s.1.claim = claim;
-    write_status(builder, &s.1);
+    write_status(builder, &s.1)?;
     Ok(())
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -129,8 +130,9 @@ pub(super) fn owner(r: &PalwKernelRouteStateV1, id: Digest) -> Result<Owner, Pal
     }
     Ok(s)
 }
-fn write_owner(builder: &mut TransitionBuilder<'_>, o: &Owner) {
-    builder.write_kernel_row(TABLE, k(37, &o.id), Some(b(&(o.root(), o))));
+fn write_owner(builder: &mut TransitionBuilder<'_>, o: &Owner) -> Result<(), PalwStateV2Error> {
+    builder.write_kernel_row(TABLE, k(37, &o.id), Some(b(&(o.root(), o))))?;
+    Ok(())
 }
 fn plus(
     s: &QuotaIntervalSummaryV11,
@@ -157,10 +159,11 @@ fn consume(
     n.consumed.checked_add(&n.reserved).map_err(bad)?.within(cap).map_err(bad)?;
     Ok(n)
 }
-fn put_rows(builder: &mut TransitionBuilder<'_>, g: &QuotaGlobalRowV11, a: &QuotaActorRowV11, s: &QuotaSubjectSummaryV11) {
-    builder.write_kernel_row(QUOTA, vec![0], Some(b(&(g.root(), g))));
-    builder.write_kernel_row(QUOTA, b(&(1u8, a.actor)), Some(b(&(a.root(), a))));
-    builder.write_kernel_row(QUOTA, b(&(2u8, s.binding.job_id)), Some(b(&(s.row_root(), s))));
+fn put_rows(builder: &mut TransitionBuilder<'_>, g: &QuotaGlobalRowV11, a: &QuotaActorRowV11, s: &QuotaSubjectSummaryV11) -> Result<(), PalwStateV2Error> {
+    builder.write_kernel_row(QUOTA, vec![0], Some(b(&(g.root(), g))))?;
+    builder.write_kernel_row(QUOTA, b(&(1u8, a.actor)), Some(b(&(a.root(), a))))?;
+    builder.write_kernel_row(QUOTA, b(&(2u8, s.binding.job_id)), Some(b(&(s.row_root(), s))))?;
+    Ok(())
 }
 fn context(
     builder: &TransitionBuilder<'_>,
@@ -205,8 +208,8 @@ fn debit(
     a.interval = consume(&a.interval, d, &p.execution.quota.actor)?;
     o.consumed = o.consumed.checked_add(d).map_err(bad)?;
     o.remaining = o.remaining.checked_sub(d).map_err(bad)?;
-    put_rows(builder, &g, &a, &s);
-    write_owner(builder, o);
+    put_rows(builder, &g, &a, &s)?;
+    write_owner(builder, o)?;
     Ok(())
 }
 fn admit(
@@ -343,9 +346,9 @@ fn admit(
     st.owners[slot] = id;
     st.admitted += 1;
     st.latest = st.latest.max(until);
-    put_rows(builder, &g, &a, &s);
-    write_owner(builder, &o);
-    write_status(builder, &st);
+    put_rows(builder, &g, &a, &s)?;
+    write_owner(builder, &o)?;
+    write_status(builder, &st)?;
     Ok(())
 }
 fn plan(r: &PalwKernelRouteStateV1, h: &JobHeader) -> Result<PagedProofPlanRecordV39, PalwStateV2Error> {
@@ -408,7 +411,7 @@ fn proof_part(
         }
         builder.write_kernel_row(TABLE, k(38, &(o.id, i)), Some(part.body.to_vec()))?;
         o.accepted[i as usize / 8] |= 1 << (i % 8);
-        write_owner(builder, &o);
+        write_owner(builder, &o)?;
         return Ok(());
     }
     if o.assemblies >= 2 || (0..o.count).any(|i| !o.has(i)) {
@@ -467,7 +470,7 @@ fn proof_part(
         object_id(b"misaka-palw/native/original-independent-court-verdict/v39", &(h.id, h.original.root(), o.id, o.paid, o.proof));
     let s = book.convict(ctx.daa_score, proof, h.original.reserve, o.operator).map_err(bad)?;
     o.spent = true;
-    write_owner(builder, &o);
+    write_owner(builder, &o)?;
     super::credit(builder, ctx, p, &mut h, &book, &s, Some(*signer))
 }
 fn convert(
@@ -527,7 +530,7 @@ fn convert(
     o.total = total as u32;
     o.count = total.div_ceil(32768) as u16;
     o.matures = ctx.daa_score.checked_add(max.temporal.maturity).ok_or_else(|| bad("native39 proof maturity overflow"))?;
-    write_owner(builder, &o);
+    write_owner(builder, &o)?;
     Ok(())
 }
 fn expire(
@@ -589,8 +592,8 @@ fn expire(
     }
     let slot = st.owners.iter().position(|v| *v == id).unwrap();
     st.owners[slot] = [0; 64];
-    put_rows(builder, &g, &a, &s);
-    write_status(builder, &st);
+    put_rows(builder, &g, &a, &s)?;
+    write_status(builder, &st)?;
     builder.write_kernel_row(TABLE, k(39, &id), Some(b(&(o.root(), o.paid, o.proof, o.job, o.claim, o.funding, o.until))))?;
     builder.write_kernel_row(TABLE, k(37, &id), None)?;
     Ok(())
@@ -633,7 +636,7 @@ pub(super) fn query_debit(
     debit(builder, ctx, p, h, &mut o, action.quantities())?;
     Ok(o)
 }
-pub(super) fn set_owner(builder: &mut TransitionBuilder<'_>, o: &Owner) {
+pub(super) fn set_owner(builder: &mut TransitionBuilder<'_>, o: &Owner) -> Result<(), PalwStateV2Error> {
     write_owner(builder, o)
 }
 pub(super) fn apply(

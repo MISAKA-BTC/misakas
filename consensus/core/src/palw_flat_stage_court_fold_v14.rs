@@ -91,7 +91,7 @@ pub(super) fn seal(
     let restore = derive_stage_restore_metadata_v14(0, 0, h.book_bytes_len, h.input_raw_bytes, 1024).map_err(refused)?;
     let mut metadata = native::quota_shard(builder, &p.execution, &epoch, palw_kernel_bond_id_v1(signer), id)?;
     metadata.debit_ordinary(&p.execution.quota, &epoch, &restore).map_err(refused)?;
-    native::write_shard(builder, &metadata, id);
+    native::write_shard(builder, &metadata, id)?;
     let class = checked_class(builder, ctx, p, h.class, false)?;
     let original = builder
         .state
@@ -234,8 +234,8 @@ pub(super) fn seal(
     *slot = key.root();
     state.retained_seals += 1;
     state.required_until = state.required_until.max(horizon);
-    native::write_shard(builder, &shard, id);
-    native::write_trace(builder, &trace, 1, key.root());
+    native::write_shard(builder, &shard, id)?;
+    native::write_trace(builder, &trace, 1, key.root())?;
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(19, &key.root()), Some(bytes(&row)))?;
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &id), Some(bytes(&state)))?;
     builder.note_kernel_bond(signer)?;
@@ -306,7 +306,7 @@ pub(super) fn apply_chunk(
             512,
         )
         .map_err(refused)?;
-    native::write_shard(builder, &shard, h.id);
+    native::write_shard(builder, &shard, h.id)?;
     let group_key = bytes(&(20u8, seal));
     let part_key = bytes(&(23u8, seal, chunk.index));
     let r = builder.state.kernel_route.as_ref().unwrap();
@@ -344,12 +344,12 @@ pub(super) fn apply_chunk(
     let complete = shard.seal_row().is_some_and(|s| s.fragments.complete());
     builder.write_kernel_row(STAGE_TABLE_V14, group_key.clone(), Some(bytes(&group)))?;
     builder.write_kernel_row(STAGE_TABLE_V14, part_key, Some(chunk.bytes.clone()))?;
-    native::write_shard(builder, &shard, h.id);
+    native::write_shard(builder, &shard, h.id)?;
     if !complete {
         return Ok(());
     }
     shard.debit_protected(&p.execution.quota, &epoch, cached.plan(), ProtectedActionKindV11::WholeChunk, &[]).map_err(refused)?;
-    native::write_shard(builder, &shard, h.id);
+    native::write_shard(builder, &shard, h.id)?;
     let cap = derive_protected_seal_plan_v11(cached.plan()).map_err(refused)?.assembly_cap as usize;
     let r = builder.state.kernel_route.as_ref().unwrap();
     let mut total = 0usize;
@@ -453,11 +453,11 @@ pub(super) fn reveal(
     let epoch = TrustedEpochV11::from_chain(&p.execution.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     let mut trace = native::trace_shard(builder, &p.execution, &trace_plan, own.actor, own.job, 1, seal)?;
     trace.debit_reserved(&p.execution.quota, &epoch, &trace_plan, &seal, 1).map_err(refused)?;
-    native::write_trace(builder, &trace, 1, seal);
+    native::write_trace(builder, &trace, 1, seal)?;
     let mut paid = native::quota_shard_seal(builder, &p.execution, &epoch, own.actor, own.job, Some(seal))?;
     let verdict =
         paid.debit_stage_protected_verdict_v14(&p.execution.quota, &epoch, &cached, &own.paid_root, &body[132..]).map_err(refused)?;
-    native::write_shard(builder, &paid, own.job);
+    native::write_shard(builder, &paid, own.job)?;
     let filing = &body[132..];
     if stage_proof_root_v14(filing) != own.proof_root
         || stage_proof_seal_v14(own.proof_root, salt, own.actor, own.job, own.claim) != own.seal
@@ -671,7 +671,7 @@ pub(super) fn reveal(
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(5, &own.job), Some(bytes(&original)))?;
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(13, &own.job), Some(bytes(&outcome)))?;
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(19, &seal), Some(bytes(&own)))?;
-    native::write_shard(builder, &paid, own.job);
+    native::write_shard(builder, &paid, own.job)?;
     builder.write_kernel_row(
         STAGE_TABLE_V14,
         stage_key_v14(11, &own.job),
@@ -735,7 +735,7 @@ pub(super) fn retire(
     .map_err(refused)?;
     let mut caller = native::quota_shard(builder, &p.execution, &epoch, palw_kernel_bond_id_v1(signer), own.job)?;
     caller.debit_ordinary(&p.execution.quota, &epoch, &restore).map_err(refused)?;
-    native::write_shard(builder, &caller, own.job);
+    native::write_shard(builder, &caller, own.job)?;
     let class = checked_class(builder, ctx, p, h.class, false)?;
     let original = builder
         .state
@@ -848,7 +848,7 @@ pub(super) fn retire(
     state.seal_keys[slot] = [0; 64];
     state.retained_seals =
         state.retained_seals.checked_sub(1).ok_or_else(|| refused("stage proof retirement owner counter underflow"))?;
-    native::write_shard(builder, &caller, own.job);
+    native::write_shard(builder, &caller, own.job)?;
     if let Some(owner) = returned_owner {
         builder.write_kernel_row(
             crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,

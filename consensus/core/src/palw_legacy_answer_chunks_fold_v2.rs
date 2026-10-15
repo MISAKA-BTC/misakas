@@ -121,11 +121,11 @@ pub(super) fn chunk(
         row.parts.insert(c.index, c.bytes.clone());
         b.write_legacy_answer_v2(c.key(), Some(row))?;
     }
-    sweep(b, ctx);
+    sweep(b, ctx)?;
     Ok(())
 }
 
-pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
+pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     let drop: Vec<_> = b
         .state
         .legacy_answers
@@ -134,6 +134,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
         .map(|(key, _)| *key)
         .collect();
     for key in drop {
-        b.write_legacy_answer_v2(key, None);
+        b.write_legacy_answer_v2(key, None)?;
     }
+    Ok(())
 }

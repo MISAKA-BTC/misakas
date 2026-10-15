@@ -72,7 +72,7 @@ pub(super) fn request(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2
     if q.lane==0{let(s,c)=original_extents(builder,h.class)?;if !pay_restore(builder,ctx,signer,p,s,c,h.input_bytes,body.len() as u32)?{return Ok(());}}else{
         let own=builder.state.kernel_route.as_ref().unwrap().native_paged_seal_v29(h.id,q.entitlement).ok_or_else(||refused("stage28 original paid owner absent"))?;
         if own.namespace!=28||own.actor!=actor||own.operator!=operator||own.retired||own.spent||ctx.daa_score<own.matures||q.lane==1&&own.discovery||q.lane==2&&!own.discovery{return Err(refused("stage28 own proof/discovery lane/operator/maturity differs"));}
-        let quote=caller_quote(builder,p,&h)?;let mut shard=caller_shard(builder,p,&epoch,&h,actor,q.entitlement,&quote)?;shard.debit_request(&p.execution.quota,&epoch,&quote,q.entitlement,operator).map_err(refused)?;write_caller(builder,&shard);
+        let quote=caller_quote(builder,p,&h)?;let mut shard=caller_shard(builder,p,&epoch,&h,actor,q.entitlement,&quote)?;shard.debit_request(&p.execution.quota,&epoch,&quote,q.entitlement,operator).map_err(refused)?;write_caller(builder,&shard)?;
     }
     let(class,actual,plan,book,_data)=restore_job(builder,p,&h)?;let maximum=contract(builder,p,&class,&actual,&plan)?;
     if maximum.record()!=&h.contract||operator==book.producer_operator(){return Err(refused("stage28 independently restored source/caller is not original or independent"));}
@@ -87,8 +87,8 @@ pub(super) fn request(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2
     let mut d=NativeStagePendingV28{version:28,id:[0;64],unit:target,request:q.clone(),original:h.original,consent:h.consent,contract:h.contract.root(),source_plan:h.contract.source_plan,caller_plan:h.contract.caller_source,requester:*signer,requester_operator:operator,requester_payout:payer.payout_payload,producer:h.producer,producer_operator:book.producer_operator(),claim,pc,bond,filed:ctx.daa_score,deadline,proof_until,attempts:0,settled:false};d.id=d.original_id();
     let mut streams=slots(builder,&h)?;streams.reserve_request(q.lane,q.entitlement,q.slot,if q.kind<=2{0}else{1},d.id,ctx.daa_score,deadline).map_err(refused)?;
     let quote=source_quote(builder,p,&h)?;let mut producer=producer_shard(builder,p,&epoch,&h,&quote)?;producer.admit_valid_request(&p.execution.quota,&epoch,&quote,&h.id).map_err(refused)?;
-    if q.lane!=0{let quote=caller_quote(builder,p,&h)?;let mut caller=caller_shard(builder,p,&epoch,&h,actor,q.entitlement,&quote)?;caller.admit_request(&quote).map_err(refused)?;write_caller(builder,&caller);}
-    super::super::super::palw_flat_execution_fold_v11::write_source_shard(builder,&producer,h.id);
+    if q.lane!=0{let quote=caller_quote(builder,p,&h)?;let mut caller=caller_shard(builder,p,&epoch,&h,actor,q.entitlement,&quote)?;caller.admit_request(&quote).map_err(refused)?;write_caller(builder,&caller)?;}
+    super::super::super::palw_flat_execution_fold_v11::write_source_shard(builder,&producer,h.id)?;
     builder.write_kernel_row(STAGE_TABLE_V14,key(17,&(h.id,ps.requests)),Some(bytes(&(d.id,d.unit,d.requester,d.request.slot))))?;
     ps.requests=ps.requests.checked_add(1).ok_or_else(||refused("stage28 lifetime request overflow"))?;if q.lane==0{ps.ordinary+=1;}ps.pending+=1;ps.open.iter_mut().find(|id|**id==[0;64]).ok_or_else(||refused("stage28 original open streams exhausted"))?.clone_from(&d.id);ps.required_until=ps.required_until.max(proof_until);
     builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_DEMAND_TABLE_V11,pending_key(d.id),Some(bytes(&d)))?;builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_DEMAND_SLOT_TABLE_V11,slot_key(*signer,q.slot),Some(bytes(&d.id)))?;builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,bytes(&(22u8,h.id,2u8)),Some(bytes(&(streams.root(),streams))))?;builder.write_kernel_row(STAGE_TABLE_V14,key(16,&h.id),Some(bytes(&ps)))?;builder.note_kernel_bond(signer)?;Ok(())
@@ -100,8 +100,9 @@ fn check_original(d:&NativeStagePendingV28,h:&JobHeader)->Result<(),PalwStateV2E
 fn closed_pursuit(builder:&TransitionBuilder<'_>,h:&JobHeader,d:&NativeStagePendingV28)->Result<Pursuit,PalwStateV2Error>{
     let mut row=pursuit(builder,h)?;let slot=row.open.iter_mut().find(|id|**id==d.id).ok_or_else(||refused("stage28 original pending membership absent"))?;*slot=[0;64];row.pending=row.pending.checked_sub(1).ok_or_else(||refused("stage28 original pending count underflow"))?;Ok(row)
 }
-fn write_closed(builder:&mut TransitionBuilder<'_>,h:&JobHeader,d:&mut NativeStagePendingV28,row:&Pursuit){
-    d.settled=true;builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_DEMAND_TABLE_V11,pending_key(d.id),Some(bytes(d)));builder.write_kernel_row(STAGE_TABLE_V14,key(16,&h.id),Some(bytes(row)));builder.note_kernel_bond(&d.requester);
+fn write_closed(builder:&mut TransitionBuilder<'_>,h:&JobHeader,d:&mut NativeStagePendingV28,row:&Pursuit) -> Result<(), PalwStateV2Error> {
+    d.settled=true;builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_DEMAND_TABLE_V11,pending_key(d.id),Some(bytes(d)))?;builder.write_kernel_row(STAGE_TABLE_V14,key(16,&h.id),Some(bytes(row)))?;builder.note_kernel_bond(&d.requester)?;
+    Ok(())
 }
 pub(super) fn reserved(r:&PalwKernelRouteStateV1,bond:&PalwBondKeyV2)->u128 {
     (0..2u8).filter_map(|slot|r.aux_row::<Digest>(crate::palw_flat_execution_v11::EXECUTION_DEMAND_SLOT_TABLE_V11,&slot_key(*bond,slot))).filter_map(|id|pending(r,id).ok()).filter(|d|d.requester==*bond&&!d.settled).map(|d|d.bond as u128).sum()
@@ -114,7 +115,7 @@ pub(super) fn answer(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
     // Debit the actual bounded packet before trusting its nested declaration,
     // allocating the answer, or restoring any class/input/trace data.
     producer.debit_answer(&p.execution.quota,&epoch,&quote,&palw_kernel_bond_id_v1(signer),(body.len()-68) as u64).map_err(refused)?;d.attempts+=1;
-    super::super::super::palw_flat_execution_fold_v11::write_source_shard(builder,&producer,h.id);builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_DEMAND_TABLE_V11,pending_key(id),Some(bytes(&d)))?;
+    super::super::super::palw_flat_execution_fold_v11::write_source_shard(builder,&producer,h.id)?;builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_DEMAND_TABLE_V11,pending_key(id),Some(bytes(&d)))?;
     let n=u32::from_le_bytes(body[64..68].try_into().unwrap()) as usize;if n!=body.len()-68{return Err(refused("stage28 exact original answer length differs"));}
     finish_answer(builder,ctx,p,&h,&mut d,&body[68..])
 }
@@ -125,14 +126,14 @@ fn finish_answer(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,p:&N
     let row=closed_pursuit(builder,h,d)?;if builder.state.bonds.get(&d.requester).is_none_or(|b|b.collateral<d.bond||b.operator_id.as_bytes()!=d.requester_operator){return Err(refused("stage28 original actual requester delivery fee unavailable"));}
     if h.contract.producer_delivery_fee_cap!=0{return Err(refused("stage28 original burn-only delivery terms differ"));}
     if builder.slash_bond(d.requester,d.bond as u128)?!=d.bond{return Err(PalwStateV2Error::BondBudgetRefused("stage28 actual delivery fee collection changed after preflight".into()));}
-    builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_SERVED_TABLE_V11,served_key(d.unit),Some(answer.to_vec()))?;write_closed(builder,h,d,&row);Ok(())
+    builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_SERVED_TABLE_V11,served_key(d.unit),Some(answer.to_vec()))?;write_closed(builder,h,d,&row)?;Ok(())
 }
 pub(super) fn settle(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,p:&NativeStagePoliciesV28,body:&[u8])->Result<(),PalwStateV2Error>{
     let id:Digest=body.try_into().map_err(|_|refused("stage28 default original fixed64-byte unit"))?;let mut d=pending(builder.state.kernel_route.as_ref().unwrap(),id)?;let mut h=original_header(builder,d.request.job)?;check_original(&d,&h)?;
     if d.settled||ctx.daa_score<=d.deadline{return Err(refused("stage28 original answer window remains open or settled"));}
     let(s,c)=original_extents(builder,h.class)?;if !pay_restore(builder,ctx,signer,p,s,c,h.input_bytes,64)?{return Ok(());}
     let row=closed_pursuit(builder,&h,&d)?;
-    if matches!(h.terminal,StageTerminalV28::Refunded|StageTerminalV28::Convicted|StageTerminalV28::Final){write_closed(builder,&h,&mut d,&row);return Ok(());}
+    if matches!(h.terminal,StageTerminalV28::Refunded|StageTerminalV28::Convicted|StageTerminalV28::Final){write_closed(builder,&h,&mut d,&row)?;return Ok(());}
     let(class,actual,plan,mut book,mut data)=restore_job(builder,p,&h)?;
     if book.terminal()!=StageTerminalV28::Challengeable||book.claim()!=Some(d.claim)||book.producer_operator()!=d.producer_operator||builder.state.bonds.get(&d.requester).is_none_or(|b|b.operator_id.as_bytes()!=d.requester_operator)||builder.state.bonds.get(&h.producer).is_none_or(|b|b.operator_id.as_bytes()!=d.producer_operator||b.collateral<book.reserve())||d.requester_operator==d.producer_operator{return Err(refused("stage28 default lacks exact original independent requester and collectible producer promise"));}
     // Re-authenticate the immutable coordinate. External R availability never
@@ -142,7 +143,7 @@ pub(super) fn settle(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
     let established=d.deadline.checked_add(1).ok_or_else(||refused("stage28 original default time overflow"))?;
     let outcome=book.convict(&NativeStageConvictionV28{job:h.id,original:h.original,claim:d.claim,producer_operator:d.producer_operator,finder:palw_kernel_bond_id_v1(&d.requester),finder_operator:d.requester_operator,actual_collected:book.reserve(),proof,established}).map_err(refused)?;
     settle_conviction(builder,ctx,&d.requester,p,&class,&plan,&mut h,&mut data,&book,&outcome,false)?;
-    write_closed(builder,&h,&mut d,&row);Ok(())
+    write_closed(builder,&h,&mut d,&row)?;Ok(())
 }
 
 impl PalwKernelRouteStateV1 {
@@ -211,7 +212,9 @@ fn reply_part_key(id:Digest,attempt:u8,index:u16)->Vec<u8>{bytes(&(28u8,id,attem
 fn reply_progress(r:&PalwKernelRouteStateV1,id:Digest)->Result<Option<crate::palw_native_reply_parts_v29::NativeReplyProgressV29>,PalwStateV2Error>{
     let Some(raw)=r.aux.get(&(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,progress_key(id)))else{return Ok(None);};if raw.len()>1024{return Err(refused("stage28 reply fixed progress cap"));}let(root,p):(Digest,crate::palw_native_reply_parts_v29::NativeReplyProgressV29)=borsh::from_slice(raw).map_err(|_|refused("stage28 reply original fixed grammar"))?;p.check().map_err(refused)?;if p.root()!=root||p.pending!=id{return Err(refused("stage28 reply original progress differs"));}Ok(Some(p))
 }
-fn write_progress(builder:&mut TransitionBuilder<'_>,p:&crate::palw_native_reply_parts_v29::NativeReplyProgressV29){builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,progress_key(p.pending),Some(bytes(&(p.root(),p))));}
+fn write_progress(builder:&mut TransitionBuilder<'_>,p:&crate::palw_native_reply_parts_v29::NativeReplyProgressV29) -> Result<(), PalwStateV2Error> {builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,progress_key(p.pending),Some(bytes(&(p.root(),p))))?;
+    Ok(())
+}
 fn original_reply_contract(r:&PalwKernelRouteStateV1,h:&JobHeader)->Result<(crate::palw_native_paged_carriage_v29::NativePagedCarriageRecordV29,crate::palw_native_paged_proof_v29::NativePagedLeaseJournalV29),PalwStateV2Error>{
     let table=crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11;let raw=r.aux.get(&(table,bytes(&(29u8,h.id,23u8)))).ok_or_else(||refused("stage28 original reply carriage absent"))?;if raw.len()>4096{return Err(refused("stage28 original reply carriage cap"));}let c:crate::palw_native_paged_carriage_v29::NativePagedCarriageRecordV29=borsh::from_slice(raw).map_err(|_|refused("stage28 original reply carriage grammar"))?;
     let raw=r.aux.get(&(table,bytes(&(29u8,h.id,22u8)))).ok_or_else(||refused("stage28 original reply physical lease absent"))?;if raw.len()>2048{return Err(refused("stage28 original reply lease cap"));}let(root,j):(Digest,crate::palw_native_paged_proof_v29::NativePagedLeaseJournalV29)=borsh::from_slice(raw).map_err(|_|refused("stage28 original reply lease grammar"))?;
@@ -226,19 +229,19 @@ pub(super) fn reply_part(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContex
     let start=old.as_ref().is_none_or(|r|r.burned||r.completed);
     let mut progress=if start{
         if part.index!=0||d.attempts>=2{return Err(refused("stage28 original reply whole attempt exhausted or first page missing"));}
-        let epoch=TrustedEpochV11::from_chain(&p.execution.quota,ctx.block.as_bytes(),ctx.daa_score).map_err(refused)?;let quote=source_quote(builder,p,&h)?;let mut producer=producer_shard(builder,p,&epoch,&h,&quote)?;producer.debit_answer(&p.execution.quota,&epoch,&quote,&palw_kernel_bond_id_v1(signer),part.total as u64).map_err(refused)?;d.attempts+=1;super::super::super::palw_flat_execution_fold_v11::write_source_shard(builder,&producer,h.id);builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_DEMAND_TABLE_V11,pending_key(d.id),Some(bytes(&d)))?;
+        let epoch=TrustedEpochV11::from_chain(&p.execution.quota,ctx.block.as_bytes(),ctx.daa_score).map_err(refused)?;let quote=source_quote(builder,p,&h)?;let mut producer=producer_shard(builder,p,&epoch,&h,&quote)?;producer.debit_answer(&p.execution.quota,&epoch,&quote,&palw_kernel_bond_id_v1(signer),part.total as u64).map_err(refused)?;d.attempts+=1;super::super::super::palw_flat_execution_fold_v11::write_source_shard(builder,&producer,h.id)?;builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_DEMAND_TABLE_V11,pending_key(d.id),Some(bytes(&d)))?;
         NativeReplyProgressV29{version:29,pending:d.id,producer:palw_kernel_bond_id_v1(signer),original_claim:d.claim,original_source:d.source_plan,original_lease:lease.lease_root,attempt:d.attempts,group:part.group,count:part.count,total:part.total,accepted:0,burned:false,completed:false}
     }else{old.unwrap()};
     // Full whole-attempt price is already persisted, including all original
     // four page copies and assembly. Any invalid page burns this attempt.
     if progress.original_claim!=d.claim||progress.original_source!=d.source_plan||progress.original_lease!=lease.lease_root||progress.producer!=palw_kernel_bond_id_v1(signer)||progress.attempt!=d.attempts{return Err(refused("stage28 original producer reply progress rebound"));}
     let exact=borrowed_native_reply_part_v29(body);
-    if progress.group!=part.group||progress.count!=part.count||progress.total!=part.total||part.index!=progress.accepted.count_ones() as u16||exact.is_none(){progress.burned=true;write_progress(builder,&progress);return Ok(());}
-    progress.accepted|=1u8<<part.index;write_progress(builder,&progress);builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_SEAL_TABLE_V11,reply_part_key(d.id,progress.attempt,part.index),Some(part.bytes.to_vec()))?;
+    if progress.group!=part.group||progress.count!=part.count||progress.total!=part.total||part.index!=progress.accepted.count_ones() as u16||exact.is_none(){progress.burned=true;write_progress(builder,&progress)?;return Ok(());}
+    progress.accepted|=1u8<<part.index;write_progress(builder,&progress)?;builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_SEAL_TABLE_V11,reply_part_key(d.id,progress.attempt,part.index),Some(part.bytes.to_vec()))?;
     if progress.accepted!=(1u8<<progress.count)-1{return Ok(());}
     let mut answer=Vec::with_capacity(progress.total as usize);for index in 0..progress.count{let raw=builder.state.kernel_route.as_ref().unwrap().aux.get(&(crate::palw_flat_execution_v11::EXECUTION_SEAL_TABLE_V11,reply_part_key(d.id,progress.attempt,index))).ok_or_else(||refused("stage28 original paid reply page absent"))?;if raw.len()>32<<10{return Err(refused("stage28 original reply page extent differs"));}answer.extend_from_slice(raw);}
-    if answer.len()!=progress.total as usize||native_reply_group_v29(d.id,&answer)!=progress.group{progress.burned=true;write_progress(builder,&progress);return Ok(());}
+    if answer.len()!=progress.total as usize||native_reply_group_v29(d.id,&answer)!=progress.group{progress.burned=true;write_progress(builder,&progress)?;return Ok(());}
     let result=finish_answer(builder,ctx,p,&h,&mut d,&answer);
-    match result{Ok(())=>{progress.completed=true;write_progress(builder,&progress);},Err(PalwStateV2Error::KernelRouteRefused(_))=>{progress.burned=true;write_progress(builder,&progress);},Err(e)=>return Err(e)}
+    match result{Ok(())=>{progress.completed=true;write_progress(builder,&progress)?;},Err(PalwStateV2Error::KernelRouteRefused(_))=>{progress.burned=true;write_progress(builder,&progress)?;},Err(e)=>return Err(e)}
     for index in 0..progress.count{builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_SEAL_TABLE_V11,reply_part_key(d.id,progress.attempt,index),None)?;}Ok(())
 }

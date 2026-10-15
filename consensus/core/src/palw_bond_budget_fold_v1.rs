@@ -1990,7 +1990,7 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
     for id in paid {
         if let Some(held) = builder.state.bond_budget.as_ref().and_then(|b| b.claim_row(&id)) {
             if let Some(queue) = drained.iter().find(|queue| native_queued_income_id_v1(**queue, &held.bond) == id) {
-                super::palw_monetary_material_fold_v1::observe_payment(builder, ctx, id, *queue);
+                super::palw_monetary_material_fold_v1::observe_payment(builder, ctx, id, *queue)?;
             }
         }
         builder

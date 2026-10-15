@@ -322,7 +322,7 @@ fn prepay(
     shard
         .debit_ordinary(&p.execution.quota, &epoch, &DerivedOrdinaryMetadataV11::from_native_envelope(quantities))
         .map_err(refused)?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, [0; 64]);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, [0; 64])?;
     Ok(true)
 }
 fn register_source(
@@ -606,8 +606,9 @@ fn upload_header(r: &PalwKernelRouteStateV1, id: Digest) -> Result<UploadHeaderV
     }
     Ok(h)
 }
-fn write_upload(builder: &mut TransitionBuilder<'_>, h: &UploadHeaderV39) {
-    builder.write_kernel_row(TABLE, key(6, &h.id), Some(bytes(&(h.root(), h))));
+fn write_upload(builder: &mut TransitionBuilder<'_>, h: &UploadHeaderV39) -> Result<(), PalwStateV2Error> {
+    builder.write_kernel_row(TABLE, key(6, &h.id), Some(bytes(&(h.root(), h))))?;
+    Ok(())
 }
 fn cleanup_upload(builder: &mut TransitionBuilder<'_>, h: &UploadHeaderV39) -> Result<(), PalwStateV2Error> {
     let mut c = catalog(builder.state.kernel_route.as_ref().unwrap(), &h.owner)?;
@@ -670,7 +671,7 @@ fn upload_start(
     };
     c.next_upload = next;
     c.uploads.push(id);
-    write_upload(builder, &h);
+    write_upload(builder, &h)?;
     builder.write_kernel_row(TABLE, key(5, signer), Some(bytes(&c)))?;
     Ok(())
 }
@@ -723,10 +724,10 @@ fn upload_action(
             return Ok(());
         }
         h.attempts[index] += 1;
-        write_upload(builder, &h); // persistent before copying the page
+        write_upload(builder, &h)?; // persistent before copying the page
         builder.write_kernel_row(TABLE, key(7, &(id, part.index)), Some(bytes(&part.bytes.to_vec())))?;
         h.accepted[index / 8] |= 1 << (index % 8);
-        write_upload(builder, &h);
+        write_upload(builder, &h)?;
         return Ok(());
     }
     if action != SOURCE_ASSEMBLE_ACTION_V39
@@ -739,7 +740,7 @@ fn upload_action(
         return Ok(());
     }
     h.assembly_attempts += 1;
-    write_upload(builder, &h); // failure cannot restore this debit
+    write_upload(builder, &h)?; // failure cannot restore this debit
     let mut raw = Vec::new();
     raw.try_reserve_exact(h.start.bytes as usize).map_err(|_| refused("source39 original assembly allocation refused"))?;
     for i in 0..h.start.count {

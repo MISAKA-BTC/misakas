@@ -119,7 +119,7 @@ pub(super) fn demand(
             let binding = book.job().quota_subject(class.record()).map_err(refused)?;
             let action = plan.action(QuotaActionKindV11::DARequest, bytes).map_err(refused)?;
             shard.debit_public_action(&p.quota, &epoch, &binding, &plan, &action).map_err(refused)?;
-            write_shard(builder, &shard, id);
+            write_shard(builder, &shard, id)?;
         }
         1 => {
             let seal = court::seal_row(builder.state.kernel_route.as_ref().unwrap(), &request.entitlement)?;
@@ -128,7 +128,7 @@ pub(super) fn demand(
             }
             let mut shard = quota_shard_seal(builder, p, &epoch, actor, id, Some(request.entitlement))?;
             shard.debit_protected(&p.quota, &epoch, &plan, ProtectedActionKindV11::DARequest, bytes).map_err(refused)?;
-            write_shard(builder, &shard, id);
+            write_shard(builder, &shard, id)?;
         }
         2 => {
             discovery::debit_request(builder, ctx, p, actor, id, request.entitlement, &plan, bytes)?;
@@ -278,7 +278,7 @@ pub(super) fn answer(
     let producer = palw_kernel_bond_id_v1(signer);
     let mut trace = trace_shard(builder, p, &trace_plan, producer, d.job_id, 0, d.job_id)?;
     trace.debit_reserved(&p.quota, &epoch, &trace_plan, &d.job_id, 0).map_err(refused)?;
-    write_trace(builder, &trace, 0, d.job_id);
+    write_trace(builder, &trace, 0, d.job_id)?;
     if complete23 {
         frame()?;
     }
@@ -291,7 +291,7 @@ pub(super) fn answer(
     let mut shard = quota_shard(builder, p, &epoch, binding.producer, d.job_id)?;
     let action = plan.action(QuotaActionKindV11::DAAnswer, &bytes[68..]).map_err(refused)?;
     shard.debit_reserved(&p.quota, &epoch, &binding, &plan, &action).map_err(refused)?;
-    write_shard(builder, &shard, d.job_id);
+    write_shard(builder, &shard, d.job_id)?;
     let answer = decode_flat_vector_answer_v9(&bytes[68..]).map_err(|e| refused(e.to_string()))?;
     if !answer.authenticates(&d.body) {
         return Err(refused("native answer is not the original typed opening"));

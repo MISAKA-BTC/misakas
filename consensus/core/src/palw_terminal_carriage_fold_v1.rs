@@ -124,7 +124,7 @@ pub(super) fn part(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, p: &
             crate::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1::ReservedTerminal { court_maximum: maximum },
         )?;
         b.write_terminal_v1(key, None)?;
-        sweep(b, ctx);
+        sweep(b, ctx)?;
     } else {
         let bytes = p.bytes.clone();
         b.state.terminal_evidence.get_mut(&key).expect("validated owner").parts.insert(p.index, bytes.clone());
@@ -132,7 +132,7 @@ pub(super) fn part(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, p: &
     }
     Ok(())
 }
-pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
+pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     let expired: Vec<_> = b
         .state
         .terminal_evidence
@@ -144,6 +144,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
         .map(|(k, _)| *k)
         .collect();
     for key in expired {
-        b.write_terminal_v1(key, None);
+        b.write_terminal_v1(key, None)?;
     }
+    Ok(())
 }

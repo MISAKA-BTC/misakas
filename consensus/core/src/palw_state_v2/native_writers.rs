@@ -20,6 +20,20 @@ pub(super) fn native_err_v1(coverage: NativeCoverageV1) -> PalwStateV2Error {
     PalwStateV2Error::NativeResource(coverage)
 }
 
+/// **A lenient consumer may drop a SEMANTIC refusal, never a local capacity refusal.** Several folds (the closing kernel tick,
+/// the mesh sweep, chunk-group forfeits, deadline re-arms) deliberately ignore a writer's refusal (`let _ =`, `Err(_) => {}`,
+/// `.is_err()`). Once those writers admit native capacity, ignoring their `NativeResource` would make a capacity-starved node
+/// compute a DIFFERENT state (a skipped payout, a missing deadline) instead of refusing the transition locally and retrying —
+/// a consensus split. Every such site routes the result through here: a capacity refusal propagates (`?` on the outer
+/// `Result`), any other outcome is handed back unchanged for the site's historical leniency. Flags-off nothing can return
+/// `NativeResource` from these writers, so the historical behavior is byte-identical.
+pub(super) fn local_capacity_or_v1<T>(result: Result<T, PalwStateV2Error>) -> Result<Result<T, PalwStateV2Error>, PalwStateV2Error> {
+    match result {
+        Err(local @ PalwStateV2Error::NativeResource(_)) => Err(local),
+        other => Ok(other),
+    }
+}
+
 /// A typed request builder for one writer (or one fold's scratch), with the journal slots it pushes.
 pub(super) struct NativeWriteQuoteV1 {
     q: TirNativeRequestsV1,

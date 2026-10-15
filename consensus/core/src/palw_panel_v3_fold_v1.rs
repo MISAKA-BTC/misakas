@@ -887,7 +887,7 @@ fn bind_v2(
     builder.write_claim(*claim_id, Some(bound))?;
     if !retry {
         // ADR-0164 F-K (K4's denominator): a claim that reached its Panel.
-        builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound);
+        builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound)?;
     }
     Ok(())
 }

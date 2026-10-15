@@ -126,7 +126,7 @@ fn prepay(
     let actor = palw_kernel_bond_id_v1(signer);
     let mut shard = super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &epoch, actor, [0; 64])?;
     shard.debit_ordinary(&p.execution.quota, &epoch, &DerivedOrdinaryMetadataV11::from_native_envelope(q)).map_err(bad)?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, [0; 64]);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, [0; 64])?;
     Ok(true)
 }
 fn registration_extent(r: &PalwKernelRouteStateV1, raw: &[u8]) -> Result<u64, PalwStateV2Error> {
@@ -834,8 +834,9 @@ fn upload_catalog(r: &PalwKernelRouteStateV1, owner: &PalwBondKeyV2) -> Result<V
     }
     Ok(ids)
 }
-fn write_upload(builder: &mut TransitionBuilder<'_>, h: &MetadataUpload) {
-    builder.write_kernel_row(TABLE, k(88, &h.id), Some(b(&(h.root(), h))));
+fn write_upload(builder: &mut TransitionBuilder<'_>, h: &MetadataUpload) -> Result<(), PalwStateV2Error> {
+    builder.write_kernel_row(TABLE, k(88, &h.id), Some(b(&(h.root(), h))))?;
+    Ok(())
 }
 fn erase_upload(builder: &mut TransitionBuilder<'_>, h: &MetadataUpload) -> Result<(), PalwStateV2Error> {
     let mut ids = upload_catalog(builder.state.kernel_route.as_ref().unwrap(), &h.owner)?;
@@ -909,7 +910,7 @@ fn start_upload(
         assembly: 0,
     };
     ids.push(id);
-    write_upload(builder, &h);
+    write_upload(builder, &h)?;
     builder.write_kernel_row(TABLE, k(91, signer), Some(b(&ids)))?;
     builder.write_kernel_row(
         TABLE,
@@ -963,10 +964,10 @@ fn upload_action(
             return Ok(());
         }
         h.attempts[i] += 1;
-        write_upload(builder, &h);
+        write_upload(builder, &h)?;
         builder.write_kernel_row(TABLE, k(89, &(id, part.index)), Some(part.bytes.to_vec()))?;
         h.accepted[i / 8] |= 1 << (i % 8);
-        write_upload(builder, &h);
+        write_upload(builder, &h)?;
         return Ok(());
     }
     if h.assembly >= 2 || (0..h.start.count as usize).any(|i| !h.has(i)) {
@@ -976,7 +977,7 @@ fn upload_action(
         return Ok(());
     }
     h.assembly += 1;
-    write_upload(builder, &h);
+    write_upload(builder, &h)?;
     let mut body = Vec::new();
     body.try_reserve_exact(h.start.bytes as usize).map_err(|_| bad("metadata39 original assembly allocation"))?;
     for i in 0..h.start.count {

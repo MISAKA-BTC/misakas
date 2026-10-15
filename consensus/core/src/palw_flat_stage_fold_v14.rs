@@ -116,7 +116,7 @@ fn prepay_restore(
     let mut shard =
         super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &epoch, palw_kernel_bond_id_v1(signer), [0; 64])?;
     shard.debit_ordinary(&p.execution.quota, &epoch, &quote).map_err(refused)?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, [0; 64]);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, [0; 64])?;
     Ok(true)
 }
 impl PalwChainStateV2 {
@@ -327,7 +327,7 @@ fn fund(
     let mut input_shard = super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &epoch, requester, prospective_job)?;
     let input_work = derive_stage_input_metadata_v14(&actual).map_err(refused)?;
     input_shard.debit_ordinary(&p.execution.quota, &epoch, &input_work).map_err(refused)?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &input_shard, prospective_job);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &input_shard, prospective_job)?;
     struct Images<'a> {
         program: &'a misaka_palw_tir::program_v2::TirProgramV2,
         bytes: &'a [Vec<u8>],
@@ -538,14 +538,14 @@ fn fund(
     if debit != request.reward {
         return Err(refused("stage actual original coin debit differs"));
     }
-    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, job_id);
-    super::palw_flat_execution_fold_v11::write_source_shard(builder, &source_shard, job_id);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, job_id)?;
+    super::palw_flat_execution_fold_v11::write_source_shard(builder, &source_shard, job_id)?;
     builder.write_kernel_row(
         crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,
         bytes(&(16u8, job_id, 1u8)),
         Some(bytes(&source_plan.record())),
     )?;
-    super::palw_flat_execution_fold_v11::write_trace(builder, &trace_shard, 0, job_id);
+    super::palw_flat_execution_fold_v11::write_trace(builder, &trace_shard, 0, job_id)?;
     owners.push(job_id);
     producer_jobs.push(job_id);
     builder.write_kernel_row(
@@ -732,7 +732,7 @@ fn accept_delivery_v18(
     let mut shard =
         super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &epoch, palw_kernel_bond_id_v1(signer), [0; 64])?;
     shard.debit_ordinary(&p.execution.quota, &epoch, &restore).map_err(refused)?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, [0; 64]);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, [0; 64])?;
     let request = StageAcceptRequestV18::from_bytes(body).map_err(refused)?;
     let preparation = StageAcceptRequestV14::from_bytes(&request.preparation_bytes).map_err(refused)?;
     let job = FlatStageJobV14::from_bytes(&preparation.job_bytes).map_err(refused)?;
@@ -839,7 +839,7 @@ fn commit(
     }
     let action = cached.plan().action(QuotaActionKindV11::Metadata, body).map_err(refused)?;
     shard.debit_reserved(&p.execution.quota, &epoch, &binding, cached.plan(), &action).map_err(refused)?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, id);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, id)?;
     // Source/class/input restoration and claim decoding occur only after the
     // original persisted metadata attempt has been consumed.
     let class = checked_class(builder, ctx, p, h.class, true)?;
@@ -905,7 +905,7 @@ fn close_unclaimed(
     }
     let mut shard = super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &epoch, actor, id)?;
     shard.debit_ordinary(&p.execution.quota, &epoch, &ordinary).map_err(refused)?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, id);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, id)?;
     let class = checked_class(builder, ctx, p, h.class, false)?;
     let mut row = builder
         .state
@@ -928,7 +928,7 @@ fn close_unclaimed(
     }
     let binding = book.quota_subject(&plan, &p.execution.quota).map_err(refused)?;
     let paid = shard.debit_expired_terminal(&p.execution.quota, &epoch, &binding, plan.plan()).map_err(refused)?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, id);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, id)?;
     let refund = book.refund_unclaimed(ctx.daa_score).map_err(refused)?;
     let mut queue = misaka_palw_kernel::hash::object_id(
         b"misaka-palw/native/stage-original-principal-refund/v14",
@@ -969,7 +969,7 @@ fn close_unclaimed(
     };
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(11, &id), Some(bytes(&credit)))?;
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(5, &id), Some(bytes(&row)))?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, id);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, id)?;
     Ok(())
 }
 fn bind(
@@ -1155,7 +1155,7 @@ fn source_fact(
     let actor = palw_kernel_bond_id_v1(signer);
     let mut shard = super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &epoch, actor, [0; 64])?;
     shard.debit_ordinary(&p.execution.quota, &epoch, &quote).map_err(refused)?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, [0; 64]);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, [0; 64])?;
     verify_stage_source_proof_v14(&row, &body[70..]).map_err(refused)?;
     let fact = NativeStageNegativeSourceFactV14 {
         version: 14,
@@ -1232,7 +1232,7 @@ fn collect_terminal(
     let mut restored =
         super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &epoch, palw_kernel_bond_id_v1(signer), id)?;
     restored.debit_ordinary(&p.execution.quota, &epoch, &restore).map_err(refused)?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &restored, id);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &restored, id)?;
     let r = builder.state.kernel_route.as_ref().unwrap();
     let mut collected_source = Vec::with_capacity(pursuit.requests_admitted as usize);
     for request in pursuit.source_requests.iter().take(pursuit.requests_admitted as usize) {
@@ -1355,7 +1355,7 @@ fn collect_terminal(
         trace_retired: trace_retired.root(),
         collected_daa: ctx.daa_score,
     };
-    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, id);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &shard, id)?;
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(17, &id), Some(bytes(&tombstone)))?;
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(6, &h.requester), Some(bytes(&requester)))?;
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(7, &h.producer), Some(bytes(&producer)))?;

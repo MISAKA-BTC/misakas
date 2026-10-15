@@ -536,9 +536,9 @@ fn opv_gate_v1(
 
 /// Write back every ledger row that changed and the scalars; `before` is the rows as `load_ledger` found them. The ledger is then
 /// cached on the route state (GAP 8) as the rows' own ledger, so the next object of the chain loads it without rebuilding it.
-pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1, before: &LedgerRowsV1) {
+pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1, before: &LedgerRowsV1) -> Result<(), PalwStateV2Error> {
     for ((table, key), old_new) in diff_rows(before, &ledger.to_rows()).into_iter().map(|(k, _old, new)| (k, new)) {
-        builder.write_kernel_row(table, key, old_new);
+        builder.write_kernel_row(table, key, old_new)?;
     }
     // Existing admitted v9 records were projected without copying their large
     // bytes. Preserve them exactly, except an authenticated withdrawal removed
@@ -558,19 +558,19 @@ pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1
         })
         .collect();
     for key in removed {
-        builder.write_kernel_row(TABLE_FLAT_CONFORMANCE_CLASSES_V9, key, None);
+        builder.write_kernel_row(TABLE_FLAT_CONFORMANCE_CLASSES_V9, key, None)?;
     }
     let header = builder.state.kernel_route.as_ref().expect("a route that flushes exists").header.clone();
     let scalars = ledger.scalars();
     if header.scalars != scalars {
-        builder.write_kernel_header(PalwKernelRouteHeaderV1 { scalars, ..header });
+        builder.write_kernel_header(PalwKernelRouteHeaderV1 { scalars, ..header })?;
     }
     let kernel = builder.state.kernel_route.as_mut().expect("a route that flushes exists");
     // Cache refill is optional. Reserve its separate deep payload before cloning;
     // failure evicts the cache and leaves the committed rows authoritative.
     let Ok(cached) = crate::palw_native_resource_v1::ledger_cache_clone_v1(ledger) else {
         kernel.ledger_cache.clear();
-        return;
+        return Ok(());
     };
     let cached = cached.as_rebuilt_from_v1(&kernel.rows);
     if kernel.rows.keys().any(|(t, _)| *t == TABLE_FLAT_CONFORMANCE_CLASSES_V9) {
@@ -578,6 +578,7 @@ pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1
     } else {
         kernel.ledger_cache.set(cached);
     }
+    Ok(())
 }
 
 /// Latest permitted root Final plus native evidence window and the complete kernel court path.
@@ -655,7 +656,7 @@ pub(super) fn bind_exec_reward_v1(
     let bond = route.bond_key_of(&row.producer).ok_or_else(|| refused("EXEC income recipient has no native bond"))?;
     ledger.bind_exec_reward_until(root.as_bytes(), claim.as_bytes(), expiry, until).map_err(refused)?;
     builder.transfer_kernel_income_to_exec_v1(root, claim, bond, daa, until)?;
-    flush(builder, &ledger, &before);
+    flush(builder, &ledger, &before)?;
     Ok(())
 }
 
@@ -688,7 +689,7 @@ pub(super) fn finish_exec_rewards_v1(
         paid.push(fee);
     }
     apply_settlements_to_exec_vesting(builder, &events, true, Some(root), daa)?;
-    flush(builder, &ledger, &before);
+    flush(builder, &ledger, &before)?;
     Ok(paid)
 }
 
@@ -705,7 +706,7 @@ pub(super) fn cancel_exec_rewards_v1(builder: &mut TransitionBuilder<'_>, root: 
         ledger.cancel_exec_reward(root.as_bytes(), claim, &mut events).map_err(refused)?;
     }
     apply_settlements(builder, &events, true, daa)?;
-    flush(builder, &ledger, &before);
+    flush(builder, &ledger, &before)?;
     Ok(())
 }
 
@@ -822,7 +823,7 @@ fn apply_settlements_to_exec_vesting(
                     }
                     continue;
                 };
-                let debit = match builder.slash_bond(key, s.amount as u128) {
+                let debit = match super::native_writers::local_capacity_or_v1(builder.slash_bond(key, s.amount as u128))? {
                     Ok(debit) => debit,
                     Err(e) if strict => return Err(e),
                     Err(_) => continue,
@@ -906,11 +907,11 @@ fn apply_settlements_to_exec_vesting(
                         builder.state.bonds.get(&bond).ok_or_else(|| refused("a Final fee recipient is missing"))?.payout_payload;
                     builder.consume_kernel_final_reward_v1(&claim, bond, payload, now, amount)?;
                     // RFC-0016 (dormant): the escrow payout telemetry of the claim's model (consensus-derived, never coinbase).
-                    super::palw_rfc0016_fold_v1::rfc0016_note_escrow_payout_v1(builder, now, &claim, amount);
+                    super::palw_rfc0016_fold_v1::rfc0016_note_escrow_payout_v1(builder, now, &claim, amount)?;
                 }
                 let payee = key.and_then(|key| builder.state.bonds.get(&key).map(|b| b.payout_payload));
                 match payee {
-                    Some(payload) => match builder.add_kernel_payout(payload, amount) {
+                    Some(payload) => match super::native_writers::local_capacity_or_v1(builder.add_kernel_payout(payload, amount))? {
                         Ok(()) => {}
                         Err(e) if strict => return Err(e),
                         Err(_) => {}
@@ -1395,7 +1396,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         Ok(events) => events,
         Err(_refusal) => {
             // A refusal that did court work still spent the block's budget (so junk cannot be tried for free); nothing else is kept.
-            persist_budget(builder, ctx, &ledger);
+            persist_budget(builder, ctx, &ledger)?;
             return Ok(());
         }
     };
@@ -1410,7 +1411,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                 || route.rows.keys().filter(|(table, _)| *table == TABLE_FLAT_CONFORMANCE_CLASSES_V9).count()
                     >= FLAT_CANDIDATE_REGISTRY_MAX_V9
             {
-                persist_budget(builder, ctx, &ledger);
+                persist_budget(builder, ctx, &ledger)?;
                 return Ok(());
             }
 
@@ -1421,7 +1422,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                     .is_ok_and(|s| s.worst_court_bytes as usize + 134 <= PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1)
             });
             if !fits {
-                persist_budget(builder, ctx, &ledger);
+                persist_budget(builder, ctx, &ledger)?;
                 return Ok(());
             }
         }
@@ -1432,7 +1433,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                 .and_then(|(_, r)| r.checked().ok())
                 .is_some_and(|v| v.scope.worst_court_bytes as usize + 134 <= PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1);
             if !fits {
-                persist_budget(builder, ctx, &ledger);
+                persist_budget(builder, ctx, &ledger)?;
                 return Ok(());
             }
         }
@@ -1449,7 +1450,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                 .is_ok()
             });
             if !fits {
-                persist_budget(builder, ctx, &ledger);
+                persist_budget(builder, ctx, &ledger)?;
                 return Ok(());
             }
         }
@@ -1477,7 +1478,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             .is_err()
         {
             builder.restore(checkpoint);
-            persist_budget(builder, ctx, &ledger);
+            persist_budget(builder, ctx, &ledger)?;
             return Ok(());
         }
     }
@@ -1516,8 +1517,16 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                                 == Some(misaka_palw_kernel::mode::VerificationModeV1::OptimisticPublicVerification)
                     })
                     .count() as u64;
-                if super::palw_rfc0016_fold_v1::rfc0016_opv_claim_committed_v1(builder, ctx.daa_score, claim, native, open).is_err() {
-                    persist_budget(builder, ctx, &ledger);
+                if super::native_writers::local_capacity_or_v1(super::palw_rfc0016_fold_v1::rfc0016_opv_claim_committed_v1(
+                    builder,
+                    ctx.daa_score,
+                    claim,
+                    native,
+                    open,
+                ))?
+                .is_err()
+                {
+                    persist_budget(builder, ctx, &ledger)?;
                     return Ok(());
                 }
             }
@@ -1535,7 +1544,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
                 // RFC-0015 §8.3: an unbudgeted OPV claim arrives here as `Err` (`unbudgeted_panel_free_v1`) and is refused below.
                 Ok(None) => {}
                 Err(_) => {
-                    persist_budget(builder, ctx, &ledger);
+                    persist_budget(builder, ctx, &ledger)?;
                     return Ok(());
                 }
             }
@@ -1579,27 +1588,28 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     // slash survives; the sync above makes this unreachable.)
     apply_settlements(builder, &events, true, ctx.daa_score)?;
     builder.close_terminal_kernel_budgets_v1(&ledger);
-    persist_budget(builder, ctx, &ledger);
+    persist_budget(builder, ctx, &ledger)?;
     // Only the exact signed candidate used the temporary scope. Persisting this root in
     // TABLE_ATTESTED would let an unrelated program borrow it in the next object.
     ledger.attested_artifacts = original_attested;
-    flush(builder, &ledger, &before);
+    flush(builder, &ledger, &before)?;
     if let Some((subject, row)) = scope {
-        super::palw_provider_court_fold_v1::write_court_scope_row_v1(builder, &subject, &row);
+        super::palw_provider_court_fold_v1::write_court_scope_row_v1(builder, &subject, &row)?;
     }
     Ok(())
 }
 
 /// **Record what this block's objects have spent of its adjudication budget** (the next object of the same chain block restores it).
-fn persist_budget(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, ledger: &KernelLedgerV1) {
+fn persist_budget(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, ledger: &KernelLedgerV1) -> Result<(), PalwStateV2Error> {
     let spent = ledger.budget_used();
     if spent != misaka_palw_kernel::ledger::BlockBudgetV1::default() {
         builder.write_kernel_row(
             PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1,
             Vec::new(),
             Some(borsh::to_vec(&(ctx.blue_score, spent.adjudications, spent.court_work)).expect("a budget serializes")),
-        );
+        )?;
     }
+    Ok(())
 }
 
 /// **Charge one adjudication (and `court_work`) of THIS block's budget to an onboarding object** (tag 109's judgement): the same
@@ -1714,7 +1724,7 @@ pub(super) fn apply_kernel_receipt_v1(
             Some(borsh::to_vec(&receipts).expect("receipts serialize")),
         )?;
     }
-    flush(builder, &ledger, &before);
+    flush(builder, &ledger, &before)?;
     Ok(())
 }
 
@@ -1725,9 +1735,9 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
         return Ok(());
     }
     // The onboarding bindings whose refutation horizon ends release their reservation, whatever the ledger is doing.
-    super::palw_onboarding_fold_v1::tick_onboarding_v1(builder, ctx);
+    super::palw_onboarding_fold_v1::tick_onboarding_v1(builder, ctx)?;
     // The route's chunk groups past their TTL are dropped and their deposits forfeited, whatever the ledger is doing.
-    forfeit_expired_chunk_groups_v1(builder, ctx);
+    forfeit_expired_chunk_groups_v1(builder, ctx)?;
     // DA16: the provider court's deadlines (a provider that did not answer is charged), expired leases, lapses — before the kernel's tick,
     // so a claim whose last provider was charged this block is void before its demands are swept.
     super::palw_provider_court_fold_v1::tick_provider_court_v1(builder, ctx)?;
@@ -1839,7 +1849,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
         builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key_bytes(&claim), None)?;
         builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key_bytes(&claim), None)?;
     }
-    flush(builder, &ledger, &before);
+    flush(builder, &ledger, &before)?;
     // DA16: a demand on a transferred claim that nobody answered is its providers' failure — charge them (never the producer).
     super::palw_provider_court_fold_v1::settle_provider_liable_defaults_v1(builder, ctx, &events)?;
     super::palw_claim_challenge_fold_v2::tick_paid_claim_final_projection_v2(builder, ctx)?;
@@ -2096,13 +2106,14 @@ pub(super) fn apply_kernel_route_chunk_v1(
 
 /// **The closing step's chunk sweep**: every group past its TTL is dropped and its opener's deposit forfeited (a real slash, burned
 /// at release). Lenient (it runs after the rehearsal): a deposit the bond can no longer pay is taken as far as it goes.
-fn forfeit_expired_chunk_groups_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
-    let Some(route) = builder.state.kernel_route.as_ref() else { return };
+fn forfeit_expired_chunk_groups_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     let expired = route.expired_chunk_headers_v1(ctx.daa_score);
     for (opener, group, deposit) in expired {
-        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, palw_kernel_chunk_group_key_v1(&opener, &group), None);
-        let _ = builder.slash_bond(opener, deposit as u128);
+        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, palw_kernel_chunk_group_key_v1(&opener, &group), None)?;
+        let _ = super::native_writers::local_capacity_or_v1(builder.slash_bond(opener, deposit as u128))?;
     }
+    Ok(())
 }
 
 /// Removing a candidate cannot remove the public program/PC while an admitted

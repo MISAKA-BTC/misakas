@@ -27,12 +27,13 @@ fn row_of<T: borsh::BorshDeserialize>(state: &PalwChainStateV2, key: &[u8]) -> O
     state.kernel_route.as_ref()?.aux_row::<T>(PALW_SECURITY_CERTIFICATION_TABLE_V1, key)
 }
 
-fn write_row<T: borsh::BorshSerialize>(builder: &mut TransitionBuilder<'_>, key: Vec<u8>, row: Option<&T>) {
+fn write_row<T: borsh::BorshSerialize>(builder: &mut TransitionBuilder<'_>, key: Vec<u8>, row: Option<&T>) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(
         PALW_SECURITY_CERTIFICATION_TABLE_V1,
         key,
         row.map(|r| borsh::to_vec(r).expect("a certification row serializes")),
-    );
+    )?;
+    Ok(())
 }
 
 fn policy_governing_claim(builder: &TransitionBuilder<'_>, claim: &PalwClaimStateV2) -> Option<PalwSecurityCertificationPolicyV1> {
@@ -78,11 +79,11 @@ pub(super) fn commit_at_final_v1(
         payout_payload: bond.payout_payload.as_bytes(),
         outcome: None,
     };
-    write_row(builder, key, Some(&row));
+    write_row(builder, key, Some(&row))?;
     let class_key = certification_class_key_v1(&row.class_id);
     let mut counters = row_of::<PalwCertificationClassRowV1>(&builder.state, &class_key).unwrap_or_default();
     counters.committed = counters.committed.saturating_add(1);
-    write_row(builder, class_key, Some(&counters));
+    write_row(builder, class_key, Some(&counters))?;
     Ok(())
 }
 
@@ -101,7 +102,7 @@ pub(super) fn hold_issuance_reward_at_final_v1(
     let mut row: PalwClaimCertificationRowV1 =
         row_of(&builder.state, &key).ok_or_else(|| refuse("a governed Final has no certification row (commit_at_final_v1 runs first)"))?;
     row.held_reward = row.held_reward.checked_add(escrow).ok_or(PalwStateV2Error::Overflow("held certification reward"))?;
-    write_row(builder, key, Some(&row));
+    write_row(builder, key, Some(&row))?;
     Ok(0)
 }
 
@@ -156,7 +157,7 @@ pub(super) fn try_attest_claim_certification_v1(
             transcript: if positive { attestation.transcript } else { [0u8; 64] },
             attested_daa: now,
         });
-        write_row(builder, key.clone(), Some(&row));
+        write_row(builder, key.clone(), Some(&row))?;
         Ok(())
     })())
 }
@@ -206,7 +207,7 @@ pub(super) fn ensure_frontier_floor_v1(
     }
     super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
     let floor = PalwCertifiedFrontierFloorV1 { blue_score: frontier.0, block: frontier.1.as_bytes() };
-    write_row(builder, certification_frontier_floor_key_v1(), Some(&floor));
+    write_row(builder, certification_frontier_floor_key_v1(), Some(&floor))?;
     Ok(())
 }
 
@@ -224,7 +225,7 @@ pub(super) fn note_retirement_frontier_floor_v1(
         return Ok(());
     }
     let raised = PalwCertifiedFrontierFloorV1 { blue_score: claim.accepted_blue_score, block: claim.accepted_block.as_bytes() };
-    write_row(builder, certification_frontier_floor_key_v1(), Some(&raised));
+    write_row(builder, certification_frontier_floor_key_v1(), Some(&raised))?;
     Ok(())
 }
 
@@ -299,7 +300,7 @@ pub(super) fn sweep_security_certification_v1(
         let claim = builder.state.claims.get(&claim_id).cloned();
         if row.outcome.is_some() {
             if claim.is_none() {
-                write_row::<PalwClaimCertificationRowV1>(builder, key, None);
+                write_row::<PalwClaimCertificationRowV1>(builder, key, None)?;
             }
             continue;
         }
@@ -341,7 +342,7 @@ pub(super) fn sweep_security_certification_v1(
             if outcome.certifies() {
                 // Write the decided row FIRST: the credit's own reads (`palw_independently_work_certified_v1` in any re-derivation
                 // this block runs) then see the claim certified.
-                write_row(builder, key.clone(), Some(&row));
+                write_row(builder, key.clone(), Some(&row))?;
                 // Credit only what the ONE predicate certifies (the U-2 bar, a void, the fence — all inside it), so the credit and every
                 // re-derivation read the same answer.
                 if let Some(claim) = claim.as_ref()
@@ -362,14 +363,14 @@ pub(super) fn sweep_security_certification_v1(
                 // The held issuance-funded reward is never named (burned: never minted), as a voided escrow's.
                 counters.failed = counters.failed.saturating_add(1);
             }
-            write_row(builder, class_key, Some(&counters));
+            write_row(builder, class_key, Some(&counters))?;
         }
         if changed {
-            write_row(builder, key, Some(&row));
+            write_row(builder, key, Some(&row))?;
         }
     }
     if network != network_before {
-        write_row(builder, certification_network_key_v1(), Some(&network));
+        write_row(builder, certification_network_key_v1(), Some(&network))?;
     }
     Ok(())
 }

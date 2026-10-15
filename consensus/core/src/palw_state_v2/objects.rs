@@ -37,7 +37,7 @@ pub(super) fn apply_object(
             builder.state.exec_v2_origin_witness_metadata_admissible_v1(builder.params, ctx.daa_score, witness)?;
             builder.exec_origin_budget.charge().map_err(|error| PalwStateV2Error::ExecV2Refused(error.to_string()))?;
             let row = builder.state.exec_v2_origin_witness_admissible_v1(builder.params, ctx.daa_score, witness)?;
-            builder.write_exec_origin(witness.claim, Some(row));
+            builder.write_exec_origin(witness.claim, Some(row))?;
         }
         // ---- RFC-0007 Part I: the verification vertex (tags 100, 101) ----
         PalwConsensusObjectV2::VerificationVertexV1 { vertex } => {
@@ -479,7 +479,7 @@ pub(super) fn apply_object(
         }
         PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } => {
             apply_legacy_held_answer_v2(builder, ctx, answer)?;
-            palw_legacy_answer_chunks_fold_v2::sweep(builder, ctx);
+            palw_legacy_answer_chunks_fold_v2::sweep(builder, ctx)?;
         }
         PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { declaration } => {
             palw_legacy_answer_chunks_fold_v2::declare(builder, ctx, declaration)?;
@@ -1047,7 +1047,7 @@ pub(super) fn apply_object(
                     }
                     builder.slash_dissenting_seats(&claim_id, &claim, &seat_verdicts, true)?;
                     // ADR-0124 Decision 2: a shard's `Valid` seats are credited as the part lands.
-                    builder.credit_seat_receipts(claim_id, &part.receipts, ctx.daa_score);
+                    builder.credit_seat_receipts(claim_id, &part.receipts, ctx.daa_score)?;
                     if builder.extras.audit_2026_09_23_active {
                         builder.lock_valid_receipts(claim_id, &claim, &part.receipts, ctx.daa_score, door)?;
                     }
@@ -1381,7 +1381,7 @@ pub(super) fn apply_object(
             }
             builder.write_tir_class(*class_id, Some(record))?;
             // **RFC-0007 Part II**: past `palw_witness_manifest_v1` the class pins its witness profile (infallible).
-            palw_mesh_fold_v1::record_witness_profile_v1(builder, ctx, class_id, &program, admission.class.layout.max_context);
+            palw_mesh_fold_v1::record_witness_profile_v1(builder, ctx, class_id, &program, admission.class.layout.max_context)?;
         }
         PalwConsensusObjectV2::ClassSemanticsDeclaredV1 { declaration, .. } => {
             if !builder.extras.class_semantics_active {
@@ -1762,7 +1762,7 @@ pub(super) fn apply_object(
             // Its budgets move to the row's own `withheld` — never into `panel_reserve_sompi`, whose
             // number is ADR-0124's withheld escrow (the review's C10) — and nothing is refunded: a
             // top-up is a donation, so there is no race for the exit (A11).
-            builder.purge_activation_readiness_landed(class_id);
+            builder.purge_activation_readiness_landed(class_id)?;
             if let Some(mut pool) = builder.state.activation_pools.get(class_id).cloned()
                 && (pool.prep_sompi > 0 || pool.bonus_sompi > 0)
             {
@@ -1850,7 +1850,7 @@ pub(super) fn apply_object(
             );
             builder.write_claim(*claim_id, Some(bound))?;
             // ADR-0164 F-K (K4's denominator): a claim that reached its anchor with a panel.
-            builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound);
+            builder.note_breaker_v1(ctx.daa_score, crate::palw_capacity_s567_v1::PalwBreakerEventV1::Bound)?;
             builder.disarm_deadline(*claim_id);
             let deadline = ctx.daa_score.checked_add(sweep_window).ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
             builder.arm_deadline(deadline, *claim_id)?;
@@ -1910,7 +1910,7 @@ pub(super) fn apply_object(
                 builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
                 // ADR-0124 Decision 2: the seats whose `Valid` receipts this object carries are
                 // credited — the licensing object is the first carrier of who answered.
-                builder.credit_seat_receipts(*claim_id, receipts, ctx.daa_score);
+                builder.credit_seat_receipts(*claim_id, receipts, ctx.daa_score)?;
                 builder.lock_valid_receipts(*claim_id, &claim, receipts, ctx.daa_score, PalwLicenceDoorV1::Quorum)?;
                 // ADR-0152 S-SPEC §3.4: the set's R-core+ record (a V2 receipt attests the full cut).
                 let carried: Vec<_> = receipts.iter().map(|receipt| (receipt, None)).collect();
@@ -2187,7 +2187,7 @@ pub(super) fn apply_object(
                         session.ladder.terminal_index(),
                         before,
                         proof,
-                    );
+                    )?;
                 }
             }
         }
@@ -2465,7 +2465,7 @@ pub(super) fn apply_object(
             )?;
             builder.slash_dissenting_seats(claim_id, &claim, &verdicts, true)?;
             builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
-            builder.credit_seat_receipts(*claim_id, &inner, ctx.daa_score);
+            builder.credit_seat_receipts(*claim_id, &inner, ctx.daa_score)?;
             builder.lock_valid_receipts(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Optimistic)?;
             // ADR-0152 S-SPEC §3.4: an S2 set records its door and recount (Q-3: 1 for the full seat
             // and one partial), and S2 never releases the escrow (SR-1 cond. 1).
@@ -2586,7 +2586,7 @@ pub(super) fn apply_object(
             // a session's removal, and the `CourtClosed` applied on the next line removes this
             // one — so an honest assembly that stayed in the table would be charged for the row it
             // just filed. This is the single ending that owes nothing.
-            builder.end_close_group_delivered((*session_id, *side));
+            builder.end_close_group_delivered((*session_id, *side))?;
             // **Through the arm, never beside it.** The decoded object is a `CourtClosed` and is
             // applied by re-entering this function, so a split close and a whole close are the same
             // state machine by construction rather than by two authors agreeing: a change to the
@@ -3147,7 +3147,7 @@ pub(super) fn apply_object(
             let restored = resume_claim_after_da_session_v2(*claim_id, &claim, *resumed, paused)?;
             builder.write_claim(*claim_id, Some(restored.clone()))?;
             // §4-quater V6 on the ADR-0062 court (below `palw_rcore_plus`), before the re-arm reads `H`.
-            builder.credit_verify_pause_v6(*claim_id, ctx.daa_score.saturating_sub(paused), ctx.daa_score);
+            builder.credit_verify_pause_v6(*claim_id, ctx.daa_score.saturating_sub(paused), ctx.daa_score)?;
             // The session's own clock goes with the session — a claim holds at most one deadline,
             // and leaving the disclose entry behind would sweep a claim that is no longer disputed.
             builder.disarm_deadline(*claim_id);
@@ -3534,7 +3534,7 @@ pub(super) fn apply_object(
             }
             let fp_pwu = claim.pwu;
             builder.write_claim(*claim_id, Some(claim))?;
-            builder.stamp_staged_claim_v1(*claim_id, staged_contract);
+            builder.stamp_staged_claim_v1(*claim_id, staged_contract)?;
             if let Some(wire) = public_job_wire {
                 builder.write_public_fp_job_v1(*claim_id, Some(wire))?;
             }
@@ -3572,7 +3572,7 @@ pub(super) fn apply_object(
             if let Some(line) = builder.state.model_line_or_founding(class_id)
                 && let Some(current) = builder.state.model_version(class_id, line.current)
             {
-                builder.note_claim_usage(*claim_id, class_id, current.root, fp_pwu, false, ctx.daa_score);
+                builder.note_claim_usage(*claim_id, class_id, current.root, fp_pwu, false, ctx.daa_score)?;
             }
             let deadline = ctx.daa_score.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
             // RFC-0010: a claim accepted under the permissionless Panel's rule is clocked by its engine, not by V2's bind window.

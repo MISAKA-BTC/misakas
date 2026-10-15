@@ -167,7 +167,7 @@ pub(super) fn take_model_verification_outcome_v1(
     };
     let outcome = row.outcome(policy.threshold, ctx.daa_score);
     if outcome != PalwModelVerificationOutcomeV1::Pending {
-        take_decided_v1(builder, &row, outcome, ctx.daa_score);
+        take_decided_v1(builder, &row, outcome, ctx.daa_score)?;
     }
     Ok(Some(outcome))
 }
@@ -178,11 +178,12 @@ fn take_decided_v1(
     row: &PalwModelVerificationTallyV1,
     outcome: PalwModelVerificationOutcomeV1,
     now: u64,
-) {
+) -> Result<(), PalwStateV2Error> {
     let id = palw_model_verification_tally_id_v1(&row.model, row.epoch);
     let decided = PalwModelVerificationDecidedV1 { model: row.model, epoch: row.epoch, outcome, decided_daa: now };
-    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, id.to_vec(), None);
-    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, palw_model_verification_decided_key_v1(&id), Some(encode(&decided)));
+    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, id.to_vec(), None)?;
+    builder.write_kernel_row(PALW_MODEL_VERIFICATION_TABLE_V1, palw_model_verification_decided_key_v1(&id), Some(encode(&decided)))?;
+    Ok(())
 }
 
 // ---- A′. the gate's wiring: OPVB beacon → tally, Final payout → outcome (2026-10-15 round 3) -----------------------------------
@@ -260,7 +261,7 @@ pub(super) fn gate_final_reward_v1(
     {
         let outcome = tally.outcome(policy.threshold, final_daa);
         if outcome != PalwModelVerificationOutcomeV1::Pending {
-            take_decided_v1(builder, &tally, outcome, final_daa);
+            take_decided_v1(builder, &tally, outcome, final_daa)?;
         }
     }
     let gated = palw_model_verification_subsidy_v1(model_epoch_outcome_v1(builder, &policy, &model, epoch, final_daa), escrow);
@@ -677,7 +678,7 @@ pub(super) fn consent_horizon_extension_v1(
             .ok_or_else(|| refuse("the extended claim's worker has no native bond"))?;
         // The hold first (it may refuse, journaling nothing); then the ledger rows.
         builder.extend_exec_income_hold_v1(Hash64::from_bytes(terms.root), bond, now, terms.new_liability_until_daa)?;
-        super::palw_kernel_route_fold_v1::flush(builder, &ledger, &before);
+        super::palw_kernel_route_fold_v1::flush(builder, &ledger, &before)?;
         row.applied_daa = Some(now);
     }
     builder.write_kernel_row(PALW_HORIZON_EXTENSION_TABLE_V1, key, Some(encode(&row)))?;

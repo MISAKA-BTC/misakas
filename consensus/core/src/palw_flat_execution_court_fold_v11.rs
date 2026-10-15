@@ -144,11 +144,11 @@ pub(super) fn seal(
     state.retained_seal_keys.push(protected_key.root());
     state.required_retained_until = state.required_retained_until.max(horizon);
     let physical = capacity::plan_owner(builder, id, protected_key.root(), horizon)?;
-    write_shard(builder, &shard, id);
-    write_trace(builder, &trace, 1, protected_key.root());
+    write_shard(builder, &shard, id)?;
+    write_trace(builder, &trace, 1, protected_key.root())?;
     builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&protected_key.root()), Some(key(&row)))?;
     builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)))?;
-    capacity::commit_owner(builder, id, physical);
+    capacity::commit_owner(builder, id, physical)?;
     builder.note_kernel_bond(signer)?;
     Ok(())
 }
@@ -189,7 +189,7 @@ pub(super) fn reveal(
         return Err(refused("native paid proof/quota original money roots differ"));
     }
     shard.debit_protected(&p.quota, &epoch, &plan, ProtectedActionKindV11::Court, &bytes[132..]).map_err(refused)?;
-    write_shard(builder, &shard, id);
+    write_shard(builder, &shard, id)?;
     seal.check_reveal(&actor, &salt, &bytes[132..], ctx.daa_score).map_err(refused)?;
     let cap = plan.action_carrier_cap(QuotaActionKindV11::Court).map_err(refused)?;
     let (filing_kind, filing_body) = if bytes[132..].starts_with(&16u16.to_le_bytes()) {

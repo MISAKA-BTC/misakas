@@ -162,7 +162,7 @@ pub(super) fn request(
     let restore = derive_stage_restore_metadata_v14(0, 0, h.book_bytes_len, h.input_raw_bytes, 0).map_err(refused)?;
     let mut restored = native::quota_shard(builder, &p.execution, &epoch, palw_kernel_bond_id_v1(signer), req.job)?;
     restored.debit_ordinary(&p.execution.quota, &epoch, &restore).map_err(refused)?;
-    native::write_shard(builder, &restored, req.job);
+    native::write_shard(builder, &restored, req.job)?;
     let class = checked_class(builder, ctx, p, h.class, false)?;
     let row = builder
         .state
@@ -279,7 +279,7 @@ pub(super) fn request(
     state.source_units[state.requests_admitted as usize] = native::source::unit_key(&req);
     state.requests_admitted += 1;
     state.required_until = state.required_until.max(proof_until);
-    native::write_source_shard(builder, &shard, req.job);
+    native::write_source_shard(builder, &shard, req.job)?;
     builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(d.id()), Some(bytes(&d)))?;
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(18, &d.id()), Some(bytes(&authority)))?;
     builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, slot_key(*signer, req.slot), Some(bytes(&d.id())))?;
@@ -333,7 +333,7 @@ pub(super) fn answer(
     let epoch = TrustedEpochV11::from_chain(&p.execution.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     shard.debit_answer(&p.execution.quota, &epoch, &plan, &palw_kernel_bond_id_v1(signer), n as u64).map_err(refused)?;
     d.attempts += 1;
-    native::write_source_shard(builder, &shard, d.request.job);
+    native::write_source_shard(builder, &shard, d.request.job)?;
     builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(id), Some(bytes(&d)))?;
     let answer = decode_answer_v16(&body[68..]).map_err(refused)?;
     let valid = match &answer {
@@ -438,7 +438,7 @@ pub(super) fn settle(
     let epoch = TrustedEpochV11::from_chain(&p.execution.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     let mut paid = native::quota_shard(builder, &p.execution, &epoch, palw_kernel_bond_id_v1(signer), d.request.job)?;
     paid.debit_ordinary(&p.execution.quota, &epoch, &restore).map_err(refused)?;
-    native::write_shard(builder, &paid, d.request.job);
+    native::write_shard(builder, &paid, d.request.job)?;
     let class = checked_class(builder, ctx, p, h.class, false)?;
     let mut row = builder
         .state
@@ -451,7 +451,7 @@ pub(super) fn settle(
     let actual = class.check_job(book.job()).map_err(refused)?;
     let plan = derive_stage_quota_v14(&class, &actual).map_err(refused)?;
     let verdict_debit = paid.debit_stage_verdict_v14(&p.execution.quota, &epoch, &class, &book, &plan).map_err(refused)?;
-    native::write_shard(builder, &paid, d.request.job);
+    native::write_shard(builder, &paid, d.request.job)?;
     let layer = if d.request.layer_code == 0 { None } else { Some((d.request.layer_code - 1) as u16) };
     if class.source().parameters().by_instance.get(&(d.request.param, layer)) != Some(&d.pc)
         || d.producer_payout != h.producer_payout
@@ -592,7 +592,7 @@ pub(super) fn settle(
         established_daa: established,
     };
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(11, &d.request.job), Some(bytes(&credit)))?;
-    native::write_shard(builder, &paid, d.request.job);
+    native::write_shard(builder, &paid, d.request.job)?;
     let mut settled = d;
     settled.settled = true;
     builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(settled.id()), Some(bytes(&settled)))?;

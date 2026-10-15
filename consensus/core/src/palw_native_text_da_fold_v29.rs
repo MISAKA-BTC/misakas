@@ -151,7 +151,7 @@ pub(super) fn request(
         let shard = quota_shard(builder, p, &epoch, own.actor, job)?;
         let mut caller = caller(r, p, &plan, &own, &shard.global_row(), &shard.actor_row())?;
         caller.debit_request(&p.quota, &epoch, &plan, owner, own.operator).map_err(refused)?;
-        write_caller(builder, &caller);
+        write_caller(builder, &caller)?;
         Some((plan, caller))
     } else {
         if !paid_restore(builder, ctx, signer, p, Some(h.class), raw.len() + h.book_bytes as usize)? {
@@ -357,9 +357,9 @@ pub(super) fn request(
         return Err(PalwStateV2Error::BondBudgetRefused("text29 original request fee changed after preflight".into()));
     }
     if let Some((_, caller)) = &paid_caller {
-        write_caller(builder, caller);
+        write_caller(builder, caller)?;
     }
-    write_source_shard(builder, &source_shard, job);
+    write_source_shard(builder, &source_shard, job)?;
     c.open += 1;
     if owner == [0; 64] {
         c.open_ordinary += 1;
@@ -505,12 +505,13 @@ impl PalwKernelRouteStateV1 {
         })
     }
 }
-fn burn_progress(builder: &mut TransitionBuilder<'_>, p: &mut NativeReplyProgressV29) {
+fn burn_progress(builder: &mut TransitionBuilder<'_>, p: &mut NativeReplyProgressV29) -> Result<(), PalwStateV2Error> {
     p.burned = true;
-    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(3, &p.pending), Some(key(&(p.root(), &*p))));
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(3, &p.pending), Some(key(&(p.root(), &*p))))?;
     for index in 0..p.count {
-        builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, k(3, &(p.pending, p.attempt, index)), None);
+        builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, k(3, &(p.pending, p.attempt, index)), None)?;
     }
+    Ok(())
 }
 fn close(builder: &mut TransitionBuilder<'_>, mut d: Demand) -> Result<(), PalwStateV2Error> {
     let r = builder.state.kernel_route.as_ref().unwrap();
@@ -565,14 +566,14 @@ pub(super) fn answer(
                 completed: false,
             };
             a.check().map_err(refused)?;
-            write_source_shard(builder, &shard, d.request.job);
+            write_source_shard(builder, &shard, d.request.job)?;
             builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(0, &d.id), Some(key(&d)))?;
             builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, k(3, &d.id), Some(key(&(a.root(), &a))))?;
             a
         }
     }; // Full4-fragment+assembly price persisted BEFORE ANY nested body decode/allocation.
     let Some(part) = borrowed_native_reply_part_v29(raw) else {
-        burn_progress(builder, &mut a);
+        burn_progress(builder, &mut a)?;
         return Ok(());
     };
     a.accepted |= 1 << part.index;
@@ -586,18 +587,18 @@ pub(super) fn answer(
         let Some(part) =
             builder.state.kernel_route.as_ref().unwrap().aux.get(&(EXECUTION_SERVED_TABLE_V11, k(3, &(d.id, a.attempt, index))))
         else {
-            burn_progress(builder, &mut a);
+            burn_progress(builder, &mut a)?;
             return Ok(());
         };
         let expected = if index + 1 == a.count { a.total as usize - index as usize * (32 << 10) } else { 32 << 10 };
         if part.len() != expected {
-            burn_progress(builder, &mut a);
+            burn_progress(builder, &mut a)?;
             return Ok(());
         }
         bytes.extend_from_slice(part);
     }
     if bytes.len() != a.total as usize || native_reply_group_v29(d.id, &bytes) != a.group {
-        burn_progress(builder, &mut a);
+        burn_progress(builder, &mut a)?;
         return Ok(());
     }
     let valid = match &d.request.unit {
@@ -620,7 +621,7 @@ pub(super) fn answer(
         },
     };
     if !valid {
-        burn_progress(builder, &mut a);
+        burn_progress(builder, &mut a)?;
         return Ok(());
     } // malformed proof retains original full answer expenditure.
     // No unsolicited producer income: exact initial29 consent burns delivery

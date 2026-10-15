@@ -10,6 +10,8 @@ mod public_prefix_fold_v1;
 mod reward_gate_genesis;
 mod terminal_carriage_v1;
 mod gdn_court_v2;
+// RFC-0006: remaining shared writer admission (payout/exposure/court/index/encoded/kernel rows) and the lenient-consumer guard.
+mod native_writers_v1;
 use super::*;
 use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
 use crate::palw_fork_choice::compare_palw_candidates_v1;
@@ -3239,7 +3241,7 @@ mod adr0135 {
             // One bond fails three times, in span 14.
             let mut b = TransitionBuilder::new(&s10, &p, false, false, false, false, &armed_extras);
             for _ in 0..3 {
-                b.note_model_probe(&failing(3), false, 145);
+                b.note_model_probe(&failing(3), false, 145).unwrap();
             }
             let one = b.state.clone();
             assert_eq!(one.model_lifecycle(&kimi_id()).unwrap().probes_failed_this_span, 3, "every fault still counted");
@@ -3259,7 +3261,7 @@ mod adr0135 {
             }
             // A second, distinct bond fails (span 15): the probation resets and forgets both.
             let mut b = TransitionBuilder::new(&after_one, &p, false, false, false, false, &armed_extras);
-            b.note_model_probe(&failing(4), false, 155);
+            b.note_model_probe(&failing(4), false, 155).unwrap();
             let two = b.state.clone();
             let mut both = vec![bond_key(4), bond_key(3)];
             both.sort();
@@ -3271,7 +3273,7 @@ mod adr0135 {
             // A failure on a class out of probation names nobody.
             let base_claim = PalwClaimStateV2 { class_id: h64(1), ..failing(5) };
             let mut b = TransitionBuilder::new(&after_two, &p, false, false, false, false, &armed_extras);
-            b.note_model_probe(&base_claim, false, 165);
+            b.note_model_probe(&base_claim, false, 165).unwrap();
             assert!(b.state.probation_memory_of_v1(&h64(1)).is_none(), "the ACTIVE base class keeps no memory");
         }
     }
@@ -3339,7 +3341,7 @@ mod adr0135 {
             let (s10, _, _) = kimi_in_probation(p, 4);
             let kimi_claim = s10.claims.values().find(|c| c.class_id == kimi_id()).expect("Kimi's Final").clone();
             let mut b = TransitionBuilder::new(&s10, p, false, false, false, false, &armed_extras);
-            b.note_model_probe(&PalwClaimStateV2 { bond: bond_key(3), ..kimi_claim }, false, 145);
+            b.note_model_probe(&PalwClaimStateV2 { bond: bond_key(3), ..kimi_claim }, false, 145).unwrap();
             let noted = b.state.clone();
             let (stepped, _) = step(&noted, p, &ctx(11, 150, 11), &[], None, Some(f.clone())).unwrap();
             (noted, stepped)
@@ -29974,7 +29976,8 @@ mod rcore_s7_reporter {
                 collected,
                 claim_id: Hash64::default(),
             }),
-        );
+        )
+        .unwrap();
         let opened = b.open_reporter_reward(daa, key, extracted, basis);
         b.entries.push(PalwDeltaEntryV2::LastPoint { old: s.last_point, new: Some(point) });
         b.state.last_point = Some(point);
@@ -30904,9 +30907,9 @@ mod capacity_liability_v1 {
         b.aggregate_on_conviction_v1(170, h64(4), kind, &[(producer, O::Equivocation)]).unwrap();
         assert_eq!(b.state.bond_freezes[&producer].since_daa, 170);
         let wc = p.window_court();
-        sweep_bond_freezes_v1(&mut b, &ctx(10, 170 + wc - 1, 10));
+        sweep_bond_freezes_v1(&mut b, &ctx(10, 170 + wc - 1, 10)).unwrap();
         assert!(palw_bond_is_frozen_v1(&b.state, &producer), "still frozen at the lift minus one");
-        sweep_bond_freezes_v1(&mut b, &ctx(11, 170 + wc, 11));
+        sweep_bond_freezes_v1(&mut b, &ctx(11, 170 + wc, 11)).unwrap();
         assert!(!palw_bond_is_frozen_v1(&b.state, &producer), "lifted at since + window_court");
     }
 }
@@ -33964,7 +33967,7 @@ mod class_verify_deadline {
             let p = t12_like(armed);
             let s = state(d, PalwClaimPhaseV2::PanelBound { bound_daa: b }, b);
             let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
-            builder.lock_valid_seat_rcore(bond_key(2), id, 5, crate::palw_verification_v2::PalwSegmentMaskV2::full(5), 5, l);
+            builder.lock_valid_seat_rcore(bond_key(2), id, 5, crate::palw_verification_v2::PalwSegmentMaskV2::full(5), 5, l).unwrap();
             assert_eq!(builder.state.slashable_locks[&(bond_key(2), id)].expiry_daa, anchor + 3_000, "D {d}, armed {armed}");
         }
     }

@@ -768,12 +768,50 @@ impl TransitionBuilder<'_> {
         }
         Ok(())
     }
-    pub(super) fn stamp_staged_claim_v1(&mut self, claim: Hash64, contract: Option<PalwStagedCourtRowV1>) {
-        if let Some(c) = contract {
-            self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(c));
+    /// RFC-0006: what `update_indices` allocates for this write, bounded from the ACTUAL old and new rows without calling the
+    /// Vec-returning index helpers. Every derived index row (responder/prefix/selected/flat/history/TIR/preparer/hold) is a
+    /// projection of one nested typed membership of the row, so `native_members_v1() + 1` bounds each family's output; the
+    /// helpers' scratch Vecs (old and new) and the new index nodes (sized by the largest index tuple) are admitted together.
+    fn reserve_staged_indices_v1(
+        &mut self,
+        key: &PalwStagedCourtKeyV1,
+        new: &Option<PalwStagedCourtRowV1>,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_native_resource_v1::{NativeCoverageV1, NativeHeapV1};
+        if !self.native_writers_tracking_v1() {
+            return Ok(());
         }
+        let members = |row: Option<&PalwStagedCourtRowV1>| -> Result<u64, PalwStateV2Error> {
+            row.map_or(Some(0), NativeHeapV1::native_members_v1).and_then(|m| m.checked_add(1)).ok_or_else(|| {
+                PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwStagedCourtRowV1>("staged index membership count"))
+            })
+        };
+        let old_m = members(self.state.staged_courts.get(key))?;
+        let new_m = members(new.as_ref())?;
+        // The widest index tuple (`staged_tir_responders`) bounds every family's element and node size.
+        type Widest = (PalwBondKeyV2, u64, Hash64, PalwBondKeyV2, Hash64, u64, Hash64);
+        const FAMILIES: u64 = 9;
+        let mut q = super::native_writers::NativeWriteQuoteV1::new("native staged court index scratch and nodes");
+        for m in [old_m, new_m] {
+            for _ in 0..FAMILIES {
+                q.grown::<Widest>(m)?;
+            }
+        }
+        let nodes = new_m.checked_mul(FAMILIES).ok_or_else(|| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwStagedCourtRowV1>("staged index node count"))
+        })?;
+        q.member::<Widest, ()>(nodes)?;
+        // `staged_tir_by_claim` may add an outer bucket for a new claim.
+        q.member::<Hash64, BTreeSet<(u64, PalwStagedCourtKeyV1)>>(u64::from(new.is_some()))?;
+        self.admit_native_write_v1(q)
     }
-    fn replace_staged_contract_v1(&mut self, claim: Hash64, contract: PalwStagedClaimContractV1) {
+    pub(super) fn stamp_staged_claim_v1(&mut self, claim: Hash64, contract: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
+        if let Some(c) = contract {
+            self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(c))?;
+        }
+        Ok(())
+    }
+    fn replace_staged_contract_v1(&mut self, claim: Hash64, contract: PalwStagedClaimContractV1) -> Result<(), PalwStateV2Error> {
         let row = match self.state.staged_courts.get(&PalwStagedCourtKeyV1::Claim(claim)) {
             Some(PalwStagedCourtRowV1::ClaimBundle(bundle)) => {
                 let mut bundle = bundle.clone();
@@ -782,23 +820,25 @@ impl TransitionBuilder<'_> {
             }
             _ => PalwStagedCourtRowV1::Claim(contract),
         };
-        self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(row));
+        self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(row))?;
+        Ok(())
     }
-    pub(super) fn record_staged_panel_v1(&mut self, claim: Hash64, panel: &PalwPanelStateV2) {
+    pub(super) fn record_staged_panel_v1(&mut self, claim: Hash64, panel: &PalwPanelStateV2) -> Result<(), PalwStateV2Error> {
         if let Some(mut contract) = self.state.staged_claim_contract_v1(&claim).cloned() {
             contract.panel.extend(panel.seats.iter().map(|seat| seat.bond));
             if let Some(custody) = &mut contract.prefix_custody {
                 custody.expected_panel = panel.seats.iter().map(|seat| seat.bond).collect();
             }
-            self.replace_staged_contract_v1(claim, contract);
+            self.replace_staged_contract_v1(claim, contract)?;
             if let Some(PalwStagedCourtRowV1::ClaimBundle(mut bundle)) =
                 self.state.staged_courts.get(&PalwStagedCourtKeyV1::Claim(claim)).cloned()
             {
                 bundle.history_custody.custody.expected_panel =
                     panel.seats.iter().map(|seat| seat.bond).filter(|bond| *bond != bundle.history_custody.producer).collect();
-                self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(PalwStagedCourtRowV1::ClaimBundle(bundle)));
+                self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(PalwStagedCourtRowV1::ClaimBundle(bundle)))?;
             }
         }
+        Ok(())
     }
     /// Called only on actual signed Valid credit edges; ordinary membership/Sampled pay is
     /// insufficient. Qualification remains claim-rooted after duty/receipt pruning.
@@ -808,15 +848,15 @@ impl TransitionBuilder<'_> {
         receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2],
         credited: &[PalwBondKeyV2],
         now: u64,
-    ) {
+    ) -> Result<(), PalwStateV2Error> {
         if self.extras.staged_public_court.is_none() {
-            return;
+            return Ok(());
         }
         let Some(mut contract) = self.state.staged_claim_contract_v1(&claim).cloned() else {
-            return;
+            return Ok(());
         };
         let Some(custody) = &mut contract.prefix_custody else {
-            return;
+            return Ok(());
         };
         let mut changed = false;
         for receipt in receipts.iter().filter(|r| {
@@ -826,8 +866,9 @@ impl TransitionBuilder<'_> {
             changed |= custody.qualify(claim, receipt, now);
         }
         if changed {
-            self.replace_staged_contract_v1(claim, contract);
+            self.replace_staged_contract_v1(claim, contract)?;
         }
+        Ok(())
     }
 }
 

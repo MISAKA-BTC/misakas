@@ -340,7 +340,7 @@ pub(super) fn fund_invocation(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockC
     let lease: (Digest,crate::palw_native_paged_proof_v29::NativePagedLeaseJournalV29)=borsh::from_slice(builder.state.kernel_route.as_ref().unwrap().aux.get(&(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,bytes(&(29u8,id,22u8)))).ok_or_else(||refused("invocation32 original physical journal absent"))?).map_err(|_|refused("invocation32 physical journal grammar"))?;
     if lease.0!=lease.1.root()||lease.1.job!=id||lease.1.funding!=original||lease.1.lease.retired{return Err(refused("invocation32 producer transport has no live original lease"));}
     let journal=InvocationCommitJournalV32{version:32,job:id,funding:original,consent:c.root(),producer:request.producer,terms:transport,until:ctx.daa_score.checked_add(h.contract.temporal.commit_window).ok_or_else(||refused("invocation32 original producer transport deadline overflow"))?,lease:lease.1.lease_root,attempt:0,group:[0;64],count:0,total:0,next:0,charged:0,burned:false,assembled:false};
-    write_commit_journal(builder,&journal);
+    write_commit_journal(builder,&journal)?;
     e.body.clear();builder.write_kernel_row(STAGE_TABLE_V14,binding_key(id),Some(bytes(&b)))?;builder.write_kernel_row(STAGE_TABLE_V14,master_key(4,&id),Some(bytes(&bytes(&e))))?;Ok(())
 }
 pub(super) fn actual_positions(r:&PalwKernelRouteStateV1,job:Digest,fallback:u32)->Result<u32,PalwStateV2Error>{Ok(binding(r,job)?.map(|b|if b.actual_positions==0{fallback}else{b.actual_positions}).unwrap_or(fallback))}
@@ -379,7 +379,7 @@ fn commit_actual(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,sign
     let cached=cached_plan(&h,p)?; // Same canonical cached full vector; mode is rederived below.
     let binding_=original_binding(builder,p,&h,&cached)?;
     let mut shard=super::super::super::palw_flat_execution_fold_v11::quota_shard(builder,&p.execution,&epoch,palw_kernel_bond_id_v1(signer),id)?;
-    let charge=cached.plan().action(misaka_palw_kernel::flat_quota11::QuotaActionKindV11::Metadata,trace_raw).map_err(refused)?;shard.debit_reserved(&p.execution.quota,&epoch,&binding_,cached.plan(),&charge).map_err(refused)?;super::super::super::palw_flat_execution_fold_v11::write_shard(builder,&shard,id);
+    let charge=cached.plan().action(misaka_palw_kernel::flat_quota11::QuotaActionKindV11::Metadata,trace_raw).map_err(refused)?;shard.debit_reserved(&p.execution.quota,&epoch,&binding_,cached.plan(),&charge).map_err(refused)?;super::super::super::palw_flat_execution_fold_v11::write_shard(builder,&shard,id)?;
     let(class,maximum_job,plan,mut book,mut data)=restore_job(builder,p,&h)?;let(master,classes,_)=restore_master(builder,p,b.master)?;let original=material(builder.state.kernel_route.as_ref().unwrap(),&b)?;
     let finals=prior_finals(builder,p,&master,&classes,&original)?;let maximum=misaka_palw_kernel::flat_inputs12::composition32::derive_maximum_invocation_v32(&master,&class,book.job(),&original.generated,&finals).map_err(refused)?;
     if maximum.root()!=b.maximum_invocation||maximum.scope().root()!=b.maximum_court||contract(builder,p,&class,&maximum_job,&plan)?.record()!=&h.contract||cached.root()!=plan.root(){return Err(refused("invocation32 original maximum resource/court contract changed"));}
@@ -389,7 +389,7 @@ fn commit_actual(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,sign
     b.invocation=invocation.invocation_root();b.input_binding=invocation.input_binding_root();b.actual_positions=invocation.positions();
     let actual=InvocationActualV32{version:32,maximum:b.maximum_invocation,invocation:b.invocation,inputs:b.input_binding,job:invocation.job().job().clone(),generated:generated.to_vec(),claim:book.claim().unwrap(),committed:ctx.daa_score};
     builder.write_kernel_row(STAGE_TABLE_V14,binding_key(id),Some(bytes(&b)))?;builder.write_kernel_row(STAGE_TABLE_V14,master_key(5,&id),Some(bytes(&actual)))?;
-    data.book=bytes(&book);data.trace=trace_raw.to_vec();write_job(builder,&mut h,&mut data,&book);
+    data.book=bytes(&book);data.trace=trace_raw.to_vec();write_job(builder,&mut h,&mut data,&book)?;
     let status=crate::palw_native_paged_proof_v29::NativePagedJobStatusV29{version:29,namespace:28,job:id,funding:h.original,claim:book.claim().unwrap(),maximum:h.contract.root(),paid_plan:h.contract.paged_plan,parameter:class.source().parameters().root(),inventory:class.source().inventory_root(),active:true,admitted_interval:book.admitted_interval(),deadline:book.deadline(),challenge_end:book.challenge_end().unwrap(),paid_owners:[[0;64];4],owners_admitted:0,latest_paid_horizon:0};builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,bytes(&(29u8,id,0u8)),Some(bytes(&(status.root(),status))))?;close_commit_transport(builder,id)?;Ok(())
 }
 
@@ -466,10 +466,11 @@ pub(super) fn collect_commit_fragments(builder:&mut TransitionBuilder<'_>,job:Di
     if binding(builder.state.kernel_route.as_ref().unwrap(),job)?.is_none(){return Ok(());}
     let(mut j,h,_)=commit_journal(builder.state.kernel_route.as_ref().unwrap(),job)?;
     if !matches!(h.terminal,StageTerminalV28::Final|StageTerminalV28::Refunded|StageTerminalV28::Convicted)||now<=j.until{return Err(refused("invocation32 producer fragments still own their original phase"));}
-    erase_commit_parts(builder,job,j.attempt,j.count);j.burned=true;write_commit_journal(builder,&j);Ok(())
+    erase_commit_parts(builder,job,j.attempt,j.count)?;j.burned=true;write_commit_journal(builder,&j)?;Ok(())
 }
-pub(super) fn collect_material(builder:&mut TransitionBuilder<'_>,job:Digest){
-    for kind in [4,5,8]{builder.write_kernel_row(STAGE_TABLE_V14,master_key(kind,&job),None);}
+pub(super) fn collect_material(builder:&mut TransitionBuilder<'_>,job:Digest) -> Result<(), PalwStateV2Error> {
+    for kind in [4,5,8]{builder.write_kernel_row(STAGE_TABLE_V14,master_key(kind,&job),None)?;}
+    Ok(())
 }
 
 pub(super) fn note_abort(builder:&mut TransitionBuilder<'_>,h:&JobHeader,book:&StageJobBookV28)->Result<(),PalwStateV2Error>{
@@ -536,7 +537,9 @@ struct InvocationCommitJournalV32 {
     attempt:u8,group:Digest,count:u16,total:u32,next:u16,charged:u32,burned:bool,assembled:bool,
 }
 impl InvocationCommitJournalV32 {fn root(&self)->Digest{object_id(b"misaka-palw/native/original-producer-commit-progress/v32",self)}}
-fn write_commit_journal(builder:&mut TransitionBuilder<'_>,j:&InvocationCommitJournalV32){builder.write_kernel_row(STAGE_TABLE_V14,master_key(8,&j.job),Some(bytes(&(j.root(),j))));}
+fn write_commit_journal(builder:&mut TransitionBuilder<'_>,j:&InvocationCommitJournalV32) -> Result<(), PalwStateV2Error> {builder.write_kernel_row(STAGE_TABLE_V14,master_key(8,&j.job),Some(bytes(&(j.root(),j))))?;
+    Ok(())
+}
 fn commit_part_key(job:Digest,attempt:u8,index:u16)->Vec<u8>{bytes(&(32u8,9u8,job,attempt,index))}
 fn commit_journal(r:&PalwKernelRouteStateV1,job:Digest)->Result<(InvocationCommitJournalV32,JobHeader,crate::palw_native_paged_carriage_v29::NativePagedCarriageRecordV29),PalwStateV2Error>{
     let h:JobHeader=read(r,5,&job,8192).ok_or_else(||refused("invocation32 original producer job absent"))?;
@@ -585,10 +588,12 @@ impl PalwKernelRouteStateV1 {
         Some(crate::palw_flat_execution_capacity_v22::NativePaidCarrierEligibilityV22{original_job:job,unit:job,owner,deadline:j.until,kind,lease_root:j.lease,original_service:service.root(),envelope:c.answer_envelope})
     }
 }
-fn erase_commit_parts(builder:&mut TransitionBuilder<'_>,job:Digest,attempt:u8,count:u16){for i in 0..count{builder.write_kernel_row(STAGE_TABLE_V14,commit_part_key(job,attempt,i),None);}}
+fn erase_commit_parts(builder:&mut TransitionBuilder<'_>,job:Digest,attempt:u8,count:u16) -> Result<(), PalwStateV2Error> {for i in 0..count{builder.write_kernel_row(STAGE_TABLE_V14,commit_part_key(job,attempt,i),None)?;}
+    Ok(())
+}
 fn close_commit_transport(builder:&mut TransitionBuilder<'_>,job:Digest)->Result<(),PalwStateV2Error>{
     let(mut j,_,_)=commit_journal(builder.state.kernel_route.as_ref().unwrap(),job)?;
-    erase_commit_parts(builder,job,j.attempt,j.count);j.assembled=true;write_commit_journal(builder,&j);Ok(())
+    erase_commit_parts(builder,job,j.attempt,j.count)?;j.assembled=true;write_commit_journal(builder,&j)?;Ok(())
 }
 pub(super) fn commit_part(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,p:&NativeStagePoliciesV28,body:&[u8])->Result<(),PalwStateV2Error>{
     let part=borrowed_invocation_commit_metadata_v32(body).ok_or_else(||refused("invocation32 fixed producer part metadata"))?;
@@ -602,11 +607,11 @@ pub(super) fn commit_part(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockConte
     // Source16's full native restore/post/128-KiB answer envelope conservatively
     // prepays whole compact assembly as well; no decoder/allocation precedes it.
     producer.debit_answer(&p.execution.quota,&epoch,&quote,&palw_kernel_bond_id_v1(signer),part.bytes.len() as u64).map_err(refused)?;
-    super::super::super::palw_flat_execution_fold_v11::write_source_shard(builder,&producer,part.job);
-    if j.attempt==0||j.burned {erase_commit_parts(builder,part.job,j.attempt,j.count);j.attempt+=1;j.group=part.group;j.count=part.count;j.total=part.total;j.next=0;j.burned=false;}
+    super::super::super::palw_flat_execution_fold_v11::write_source_shard(builder,&producer,part.job)?;
+    if j.attempt==0||j.burned {erase_commit_parts(builder,part.job,j.attempt,j.count)?;j.attempt+=1;j.group=part.group;j.count=part.count;j.total=part.total;j.next=0;j.burned=false;}
     j.charged+=1;
-    if borrowed_invocation_commit_part_v32(body).is_none(){j.burned=true;write_commit_journal(builder,&j);return Ok(());}
-    builder.write_kernel_row(STAGE_TABLE_V14,commit_part_key(part.job,j.attempt,part.index),Some(part.bytes.to_vec()))?;j.next+=1;write_commit_journal(builder,&j);Ok(())
+    if borrowed_invocation_commit_part_v32(body).is_none(){j.burned=true;write_commit_journal(builder,&j)?;return Ok(());}
+    builder.write_kernel_row(STAGE_TABLE_V14,commit_part_key(part.job,j.attempt,part.index),Some(part.bytes.to_vec()))?;j.next+=1;write_commit_journal(builder,&j)?;Ok(())
 }
 pub(super) fn assemble_commit(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,p:&NativeStagePoliciesV28,body:&[u8])->Result<(),PalwStateV2Error>{
     if body.len()!=130||body[..2]!=32u16.to_le_bytes(){return Err(refused("invocation32 exact original assembly job/group"));}
@@ -616,13 +621,13 @@ pub(super) fn assemble_commit(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockC
     builder.state.kernel_route.as_ref().unwrap().native_paid_invocation_assemble_eligibility_v32(job,group,ctx.daa_score,extras.native_carriage_mass.as_ref().unwrap(),extras.native_carriage_service.as_ref().unwrap()).ok_or_else(||refused("invocation32 assembly original paid physical/queue lease unavailable"))?;
     let epoch=TrustedEpochV11::from_chain(&p.execution.quota,ctx.block.as_bytes(),ctx.daa_score).map_err(refused)?;let quote=source28::source_quote(builder,p,&h)?;let mut producer=source28::producer_shard(builder,p,&epoch,&h,&quote)?;
     producer.debit_answer(&p.execution.quota,&epoch,&quote,&palw_kernel_bond_id_v1(signer),body.len() as u64).map_err(refused)?;
-    super::super::super::palw_flat_execution_fold_v11::write_source_shard(builder,&producer,job);j.charged+=1;
+    super::super::super::palw_flat_execution_fold_v11::write_source_shard(builder,&producer,job)?;j.charged+=1;
     // Mark one-time assembly consumed BEFORE allocation or nested decoding.
-    j.burned=true;write_commit_journal(builder,&j);
+    j.burned=true;write_commit_journal(builder,&j)?;
     let mut all=Vec::with_capacity(j.total as usize);
     for index in 0..j.count{let raw=builder.state.kernel_route.as_ref().unwrap().aux.get(&(STAGE_TABLE_V14,commit_part_key(job,j.attempt,index))).ok_or_else(||refused("invocation32 original paid fragment absent"))?;if raw.len()>32<<10{return Err(refused("invocation32 original paid fragment extent"));}all.extend_from_slice(raw);}
     let result=(||{if all.len()!=j.total as usize||invocation_commit_group_v32(job,&all)!=j.group{return Err(refused("invocation32 original producer whole post hash differs"));}let c=NativeInvocationCompactCommitV32::from_bytes(&all,h.positions).map_err(refused)?;if c.job!=job||c.trace.get(..2)!=Some(&32u16.to_le_bytes()[..]){return Err(refused("invocation32 assembled original compact post targets another job/grammar"));}commit_actual(builder,ctx,signer,p,job,&c.generated,&c.trace)})();
-    erase_commit_parts(builder,job,j.attempt,j.count);
+    erase_commit_parts(builder,job,j.attempt,j.count)?;
     match result{Ok(())=>Ok(()),Err(PalwStateV2Error::KernelRouteRefused(_))=>Ok(()),Err(e)=>Err(e)}
 }
 
