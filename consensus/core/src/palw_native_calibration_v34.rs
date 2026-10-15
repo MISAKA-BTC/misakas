@@ -170,6 +170,12 @@ impl NativeCalibrationSnapshotV34 {
             policies: policies.clone(),
         });
         out.palw_window_class_v37 = self.window_class_v37.then(ForkActivation::always);
+        // Every owning lifecycle fence armed above needs the A-2 audit declaration
+        // (`validate_palw_lifecycle_kind_fences_v1`): on this isolated genesis new kinds
+        // are tolerated from the first block, exactly as the audit-declaring presets do.
+        if out.palw_audit_2026_09_11.is_none() {
+            out.palw_audit_2026_09_11 = Some(ForkActivation::always());
+        }
         out.validate_isolated_native_calibration_v34()?;
         out.validate_palw_v2().map_err(|e| format!("native calibration34 ordinary owning ruleset invalid: {e:?}"))?;
         Ok(out)
@@ -339,6 +345,7 @@ impl Params {
         original.palw_panel_free_v1 = base.palw_panel_free_v1.clone();
         original.palw_probabilistic_constraints_v1 = base.palw_probabilistic_constraints_v1;
         original.palw_window_class_v37 = base.palw_window_class_v37;
+        original.palw_audit_2026_09_11 = base.palw_audit_2026_09_11;
         if *version != 34
             || *isolation == [0; 64]
             || *measurement_manifest == [0; 64]
@@ -355,6 +362,7 @@ impl Params {
             || self.palw_probabilistic_constraints_v1 != Some(ForkActivation::always())
             || self.palw_stage_execution_v14.is_some()
             || self.palw_window_class_v37.is_some_and(|w| w != ForkActivation::always())
+            || (base.palw_audit_2026_09_11.is_none() && self.palw_audit_2026_09_11 != Some(ForkActivation::always()))
         {
             return Err("native calibration34 must be the distinct pinned devnet genesis and dedicated new-contract purpose".into());
         }
