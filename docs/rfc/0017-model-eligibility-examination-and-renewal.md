@@ -247,12 +247,12 @@ subsidyだけを止めるのは不十分である（G-3）。三つを別々にg
 | `transition_builder.rs` `finalize_claim` | `eligibility_final_weight_v1` | pin退役（weightは予約F = 0で既に0） |
 | `palw_kernel_route_fold_v1.rs` dispatch / closing tick | inner 74/75、`sweep_model_eligibility_v1` | — |
 | processor `palw.rs` A-2 gate | `PalwKernelInnerFenceV1::ModelEligibilityV1` | fence未満は落とす |
-| モデル配分（ADR-0177 V3: `palw_allocation_snapshot_v3` / `roll_epoch_v3`、`palw_bond_budget_fold_v1.rs:2096`） | `palw_eligibility_allocation_capital_v1`を提供 | **未接続（GAP-E1）**: 当該fileは別laneが改定中のため編集しない |
+| モデル配分（ADR-0177 V3: `roll_epoch_v3`の`eligible_capital` hook、`palw_bond_budget_fold_v1.rs`） | `palw_eligibility_allocation_capital_v1` | Registered/Lapsedは0（GAP-E1、ADR lane `308980b0a`が接続） |
 | RPC `GetPalwModelRegistry` | `palw_eligibility_status_of_v1` → row fields | stage、次回更新DAA、三権利、合格数、lineage試行数 |
 
 ## 9. 未解決のgap
 
-* **GAP-E1（coinbase配分の分母）:** Registered/Lapsedの資本を配分の分母・分子から外す呼出を未接続。2026-10-15に合流したADR-0177 V3配分では、モデル別`S_m(k)`は`palw_allocation_snapshot_v3`（`consensus/core/src/palw_bond_budget_v1/allocation_v3.rs:135`）、epoch rollは`roll_epoch_v3`（同 :173）、呼出は`palw_bond_budget_fold_v1.rs:2096`。これらはADR-0176/0177 lane（`integ/adr-0162-0178`）の改定対象のため編集せず、snapshotの各モデル値を`palw_eligibility_allocation_capital_v1`に通す接続を同laneへ依頼する。未接続の間、駐車資本による他モデルの希釈と、`P_m`によるblock機会の割当が残る（報酬付きclaimそのものはclaim gateで止まる）。
+* **GAP-E1（coinbase配分の分母）— 2026-10-15にADR-0176/0177 laneが接続（`308980b0a`、休眠）:** `roll_epoch_v3`（`palw_bond_budget_v1/allocation_v3.rs`）が`eligible_capital` hookを受け、`palw_bond_budget_fold_v1.rs`の呼出がモデルのclass段階（`eligibility_of_v1`）を`palw_eligibility_allocation_capital_v1`へ通す。各epochのsnapshotと30日平均の両方に適用され、fence以後Registered/Lapsedのモデルはcoinbase配分の分母・分子とblock機会から外れる（駐車資本による希釈なし）。fence未満は従来どおり。
 * **GAP-E2（Panel=0とkernel route）:** OPV/kernel claimはB = F = 0なので対象外とした。将来kernel claimに報酬legが付くなら同じhookが要る。
 * **GAP-E3（試行手数料）— 2026-10-15に実装（休眠）:** §5の返還しない手数料。値はU-4。手数料は検査者へ払わず焼却する（新規発行なし）。
 * **GAP-E4（evaluation lane）— 2026-10-15に実装（休眠）:** RFC-0004のevaluation claimはcoinbase・block権利・Final weightを生まない（escrow 0、quanta 0、手数料は参加者bondの借方）が、executorと承認seatに支払い、scoreがimprovement lineの昇格を決めるので、Registered/Lapsedのclassでは拒否する。他のclaim経路を再走査した結果、weightの加算はAttempt FinalとFree Promptのreceipt spendの2箇所だけで（どちらもgate済み）、generative claim・kernel/OPV・native fundedは利用者払いでB = F = 0。
@@ -264,7 +264,7 @@ subsidyだけを止めるのは不十分である（G-3）。三つを別々にg
 ~~~text
 ACTIVATION_ALLOWED
     = 本RFCの値（§11）のユーザー承認
-      AND GAP-E1 接続（配分の入力が資格を読む）
+      AND GAP-E1 の接続（`308980b0a`）の試験 PASS
       AND 単体試験 PASS（palw_model_eligibility_v1/tests.rs、kernel wire、RPC wire v3）
       AND fold試験 PASS（palw_state_v2/tests/model_eligibility_fold_v1.rs）と node E2E PASS（g14_kernel_route_e2e/rfc17_eligibility.rs）
       AND 非genesis classのprobation→昇格→失効の node E2E（未作成）
