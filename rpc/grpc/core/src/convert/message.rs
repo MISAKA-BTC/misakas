@@ -6002,6 +6002,34 @@ try_from!(item: &protowire::GetPalwRfc0016ReportResponseMessage, RpcResult<kaspa
     Self { available: item.available, armed: item.armed, now_daa: item.now_daa, report_json: item.report_json.clone() }
 });
 
+from!(item: &kaspa_rpc_core::GetPalwRouterBindingV2Request, protowire::GetPalwRouterBindingV2RequestMessage, {
+    Self { class_hex: item.class_hex.clone() }
+});
+try_from!(item: &protowire::GetPalwRouterBindingV2RequestMessage, kaspa_rpc_core::GetPalwRouterBindingV2Request, {
+    Self { class_hex: item.class_hex.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwRouterBindingV2Response>, protowire::GetPalwRouterBindingV2ResponseMessage, {
+    Self {
+        available: item.available,
+        armed: item.armed,
+        now_daa: item.now_daa,
+        found: item.found,
+        bound_from_daa: item.bound_from_daa,
+        row_hex: item.row_hex.clone(),
+        error: None,
+    }
+});
+try_from!(item: &protowire::GetPalwRouterBindingV2ResponseMessage, RpcResult<kaspa_rpc_core::GetPalwRouterBindingV2Response>, {
+    Self {
+        available: item.available,
+        armed: item.armed,
+        now_daa: item.now_daa,
+        found: item.found,
+        bound_from_daa: item.bound_from_daa,
+        row_hex: item.row_hex.clone(),
+    }
+});
+
 from!(item: &kaspa_rpc_core::GetPalwStagedPreclaimQuoteRequest, protowire::GetPalwStagedPreclaimQuoteRequestMessage, {
     Self { commitment_hex: item.commitment_hex.clone(), binding_hex: item.binding_hex.clone() }
 });

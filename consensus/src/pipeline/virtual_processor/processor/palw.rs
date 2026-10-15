@@ -1686,6 +1686,24 @@ impl VirtualStateProcessor {
     }
 
     /// **RFC-0016 op 255**: the per-model report (and the quote for `class`) at the virtual tip, rendered as JSON.
+    /// **RFC-0006 consumer v2 (op 245): a class's router binding row at the virtual tip** (read-only; aux 139 of the reader
+    /// state). `armed` is `palw_memory_routing_court_v2`'s mirror (false on every shipped preset).
+    #[allow(clippy::type_complexity)]
+    pub fn palw_router_binding_v2_impl(
+        &self,
+        class: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<(u64, bool, Option<(u64, Vec<u8>)>)>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let Some((_, state)) = self.palw_v2_reader_state(params).map_err(|e| e.to_string())? else { return Ok(None) };
+        let now = self.virtual_stores.read().state.get().map_err(|e| e.to_string())?.daa_score;
+        let armed = params.memory_routing_court_from_daa().is_some();
+        let row = match kaspa_consensus_core::palw_state_v2::palw_router_binding_row_of_v2(&state, &class) {
+            Some(row) => Some((row.bound_from_daa, borsh::to_vec(&row).map_err(|e| e.to_string())?)),
+            None => None,
+        };
+        Ok(Some((now, armed, row)))
+    }
+
     pub fn palw_rfc0016_report_v1_impl(
         &self,
         class: Option<kaspa_consensus_core::Hash64>,

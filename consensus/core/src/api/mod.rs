@@ -1633,6 +1633,14 @@ pub trait ConsensusApi: Send + Sync {
         Err("RFC-0016 report unavailable".into())
     }
 
+    /// **RFC-0006 consumer v2 (op 245): a class's immutable per-reader router binding** (kernel-route aux 139) at the virtual tip:
+    /// `(now_daa, armed, Some((bound_from_daa, the row's borsh bytes)))`, `None` for the row where the class declared none. `Ok(None)`
+    /// off ConsensusV2 or with no PALW tip.
+    #[allow(clippy::type_complexity)]
+    fn palw_router_binding_v2(&self, _class: crate::Hash64) -> Result<Option<(u64, bool, Option<(u64, Vec<u8>)>)>, String> {
+        Err("router binding read unavailable".into())
+    }
+
     fn palw_staged_preclaim_quote_v1(
         &self,
         _original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,

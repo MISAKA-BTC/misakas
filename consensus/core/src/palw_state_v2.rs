@@ -238,7 +238,7 @@ mod palw_security_certification_fold_v1;
 // accusations, past `palw_memory_routing_court_v2`.
 #[path = "palw_memory_routing_fold_v2.rs"]
 mod palw_memory_routing_fold_v2;
-pub(crate) use palw_memory_routing_fold_v2::palw_router_binding_row_of_v2;
+pub use palw_memory_routing_fold_v2::palw_router_binding_row_of_v2;
 #[path = "palw_panel_source_fee_fold_v2.rs"]
 mod palw_panel_source_fee_fold_v2;
 #[path = "palw_panel_v3_fold_v1.rs"]

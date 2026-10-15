@@ -13,7 +13,7 @@ use crate::palw_router_binding_v2::{
 
 /// **The class's router binding row, if the chain holds one** (aux 139). `None` where the kernel-route store is not open or the
 /// class declared none.
-pub(crate) fn palw_router_binding_row_of_v2(state: &PalwChainStateV2, class_id: &Hash64) -> Option<PalwRouterBindingRowV2> {
+pub fn palw_router_binding_row_of_v2(state: &PalwChainStateV2, class_id: &Hash64) -> Option<PalwRouterBindingRowV2> {
     state.kernel_route.as_ref()?.aux_row::<PalwRouterBindingRowV2>(PALW_ROUTER_BINDING_TABLE_V2, &palw_router_binding_key_v2(class_id))
 }
 

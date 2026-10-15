@@ -1312,12 +1312,18 @@ pub fn gdn_state_terms_for_map_v1(profile: &PalwShapeProfileV3) -> Option<(u64, 
     // anchor charged at ZERO — the direction that admits a class whose disputes nobody can carry.
     // Dormant until ADR-0082 Decision 4 made the v3 composition the map a graph-v5 hybrid
     // registers, which is what turned a documented gap into a live one.
+    // RFC-0006 consumer v2's composed hybrid maps price at their `gdn=` half's opening (v2's head window, v1's full window): a new
+    // id, so no historical class's price moves; pricing it at zero would admit a class whose disputes nobody can carry.
     if declared == gdn_state_chunk_map_id_v2()
         || declared == hybrid_state_chunk_map_id_v2()
         || declared == hybrid_state_chunk_map_id_v3()
+        || declared == hybrid_composed_state_chunk_map_id_v2()
     {
         Some((delta, gdn_conv_head_slice_bytes_v2(profile)?))
-    } else if declared == gdn_state_chunk_map_id_v1() || declared == hybrid_state_chunk_map_id_v1() {
+    } else if declared == gdn_state_chunk_map_id_v1()
+        || declared == hybrid_state_chunk_map_id_v1()
+        || declared == hybrid_composed_state_chunk_map_id_v1()
+    {
         Some((delta, gdn_conv_window_bytes_v1(profile)?))
     } else {
         None
