@@ -76,10 +76,15 @@ pub const PALW_ELIGIBILITY_ATTESTATION_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw
 // Design values (RFC-0017 §11) — illustrative, unapproved; validation refuses every activation.
 // =================================================================================================================================
 
-/// `m`: stake-proportional draws per exam (RFC-0017 §5 uses 4-of-7 as its worked example).
-pub const PALW_ELIG_EXAM_M_DESIGN_V1: u16 = 7;
-/// `k`: positive attestations an exam needs. Must be a strict majority of `m` (validation).
-pub const PALW_ELIG_EXAM_K_DESIGN_V1: u16 = 4;
+/// `m`: stake-proportional draws per exam. **U-1 (user decision 2026-10-15): the calibration candidate is 47** — consistent with the
+/// ECON round-2 gate's 24-of-47 (readiness §3f) — replacing 7 as the default; NOT approved for production.
+pub const PALW_ELIG_EXAM_M_DESIGN_V1: u16 = 47;
+/// `k`: positive attestations an exam needs. Must be a strict majority of `m` (validation). **U-1: the calibration candidate is 24.**
+pub const PALW_ELIG_EXAM_K_DESIGN_V1: u16 = 24;
+/// **U-1: the former 4-of-7 worked example — TEST-ONLY** (small fixtures and the §5.1 comparison column); never a default.
+pub const PALW_ELIG_EXAM_M_TEST_ONLY_V1: u16 = 7;
+/// **U-1: TEST-ONLY** `k` of [`PALW_ELIG_EXAM_M_TEST_ONLY_V1`].
+pub const PALW_ELIG_EXAM_K_TEST_ONLY_V1: u16 = 4;
 /// Claims of the committed set each drawn verifier re-executes.
 pub const PALW_ELIG_EXAM_CLAIMS_DESIGN_V1: u16 = 4;
 /// Spans between the commit's span and the earliest seed anchor that may fix its draw (strictly later: at least 1).

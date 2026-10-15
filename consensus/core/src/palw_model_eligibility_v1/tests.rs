@@ -95,8 +95,8 @@ fn the_design_policy_is_structurally_valid_and_its_guards_refuse_bad_shapes() {
         edit(&mut p);
         p.validate().is_err()
     };
-    assert!(bad(|p| p.exam_k = 3), "k must be a strict majority of m (3 of 7 is not)");
-    assert!(bad(|p| p.exam_k = 8), "k <= m");
+    assert!(bad(|p| p.exam_k = 23), "k must be a strict majority of m (23 of 47 is not)");
+    assert!(bad(|p| p.exam_k = 48), "k <= m");
     assert!(bad(|p| p.exam_anchor_delay_spans = 0), "the anchor must be strictly later than the commit");
     assert!(bad(|p| p.probation_model_permille = p.probation_network_permille + 1), "model cap within the network budget");
     assert!(bad(|p| p.attempts_network_per_epoch = 0));
@@ -107,6 +107,16 @@ fn the_design_policy_is_structurally_valid_and_its_guards_refuse_bad_shapes() {
 // =================================================================================================================================
 // §5 gate math and §2 α amplification (analysis helpers)
 // =================================================================================================================================
+
+/// U-1 (user decision 2026-10-15): the default candidate is ECON's 24-of-47; 4-of-7 survives only as a TEST-ONLY constant.
+#[test]
+fn u1_the_default_exam_is_24_of_47() {
+    let p = policy();
+    assert_eq!((p.exam_m, p.exam_k), (47, 24));
+    assert_eq!((PALW_ELIG_EXAM_M_TEST_ONLY_V1, PALW_ELIG_EXAM_K_TEST_ONLY_V1), (7, 4));
+    // Same f, much smaller single-attempt pass-alone probability below f = 1/2 — never a proof of correct computation (U-3).
+    assert!(palw_eligibility_pass_probability_f64(1.0 / 3.0, 47, 24) < palw_eligibility_pass_probability_f64(1.0 / 3.0, 7, 4));
+}
 
 #[test]
 fn gate_math_4_of_7_at_three_percent_and_ten_thousand_attempts() {

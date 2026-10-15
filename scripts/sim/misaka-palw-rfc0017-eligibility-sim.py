@@ -49,8 +49,11 @@ ATTACKER_BILI = 300_000_000
 ALPHA = 1.5
 
 # --- RFC-0017 §11 design values (UNAPPROVED; mirror palw_model_eligibility_v1.rs *_DESIGN_V1) ----------------------------------
-EXAM_M = 7
-EXAM_K = 4
+# U-1 (user decision 2026-10-15): ECON's 24-of-47 is the calibration candidate and the driver's default; 4-of-7 is a test-only
+# comparison column (TEST_M / TEST_K), never the default.
+EXAM_M = 47
+EXAM_K = 24
+TEST_M, TEST_K = 7, 4
 PROBATION_MIN_DAYS = 7
 PROBATION_MODEL_PERMILLE = 2
 PROBATION_NETWORK_PERMILLE = 20
@@ -216,7 +219,7 @@ def scenarios() -> list:
 # The attacker's share f of the DRAWN verifier stake — not of total supply — decides P_pass. These are the points the RFC tabulates;
 # 1/3 and 0.6 are the two §7 driver cases (150M attacker verifier stake vs 300M and vs 100M honest verifier stake).
 SWEEP_F = (0.03, 0.05, 0.10, 0.20, 0.25, 1 / 3, 0.40, 0.50, 0.60, 0.75)
-ECON_M, ECON_K = 47, 24                  # the ECON round-2 gate's unapproved interim (readiness §3f), for comparison only
+ECON_M, ECON_K = 47, 24                  # the ECON round-2 gate's unapproved interim (readiness §3f) — the default since U-1
 ATTEMPT_FEE_BILI = 100_000               # PALW_ELIG_ATTEMPT_FEE_DESIGN_V1 in BILI (placeholder; user decision U-4)
 
 
@@ -232,13 +235,14 @@ def single_exam_mc(f: float, trials: int, rng: random.Random, m: int = EXAM_M, k
 def sweep(trials: int, rng: random.Random) -> None:
     per_epoch = ATTEMPTS_NETWORK_PER_EPOCH
     print("Pass-alone probability vs the attacker's share f of the DRAWN verifier stake (closed model; honest verifiers cannot attest)")
-    print(f"  {'f':>6} {'P_pass 4-of-7':>14} {'MC (n=' + str(trials) + ')':>14} {'any of 64':>10} {'any of 192':>11} {'P_pass 24-of-47':>16}")
+    print(f"  {'f':>6} {'P_pass 24-of-47':>16} {'MC (n=' + str(trials) + ')':>14} {'any of 64':>10} {'any of 192':>11} "
+          f"{'4-of-7 (test-only)':>19}")
     for f in SWEEP_F:
         pp = p_pass(f)
         mc = single_exam_mc(f, trials, rng)
         print(
-            f"  {f:6.3f} {pp:14.6f} {mc:14.6f} {1 - (1 - pp) ** per_epoch:10.6f} {1 - (1 - pp) ** (3 * per_epoch):11.6f} "
-            f"{p_pass(f, ECON_M, ECON_K):16.3e}"
+            f"  {f:6.3f} {pp:16.3e} {mc:14.6f} {1 - (1 - pp) ** per_epoch:10.6f} {1 - (1 - pp) ** (3 * per_epoch):11.6f} "
+            f"{p_pass(f, TEST_M, TEST_K):19.6f}"
         )
     print(f"  (64 = one 30-day epoch of the network attempt budget; 192 = 90 days. Griefing price of filling it: "
           f"{ATTEMPTS_NETWORK_PER_EPOCH * ATTEMPT_FEE_BILI:,} BILI burned per epoch at the placeholder fee.)")
