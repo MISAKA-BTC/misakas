@@ -30,8 +30,9 @@
 //!
 //! **Every uncovered kind is REFUSED AT ADMISSION, none covered by a new court path in this round** — each needs a verifier the court
 //! does not have (see each [`PalwCellUncoveredKindV1`] variant): a class that wants the recurrence covered registers the v3/v4/v5
-//! hybrid composition (which the court enumerates); a multi-router or Kimi-routed table has no unique router slot for a routed product.
-//! TIR classes are outside this fence: their coverage is per descriptor (`palw_tir_cell_coverage_v1`), and no shipped fixture has a gap.
+//! hybrid composition (which the court enumerates); a multi-router or Kimi-routed table has no unique router slot for a routed
+//! product. TIR classes are outside this fence: their coverage is per descriptor (`palw_tir_cell_coverage_v1`), and no shipped
+//! fixture has a gap.
 
 use crate::config::params::{ForkActivation, Params};
 use crate::palw_cell_coverage_v1::{PalwCellCoverageGapV1, PalwCellUncoveredKindV1, palw_legacy_cell_coverage_v1};
@@ -63,7 +64,9 @@ impl PalwCellClosureRefusalV1 {
             }
             Self::Uncovered(K::SoloRecurrenceMap) => "a standalone recurrence map: its geometry is the executor's, not the court's",
             Self::Uncovered(K::MapSectionNotSpelled) => "the registered map does not name a memory section this profile needs",
-            Self::Uncovered(K::MapNotEnumerable) => "the registered map's chunk count is not derivable at a checkpoint of this profile",
+            Self::Uncovered(K::MapNotEnumerable) => {
+                "the registered map's chunk count is not derivable at a checkpoint of this profile"
+            }
             Self::Uncovered(K::MultiRouterTable) => "more than one router in a layer table: routed products are unadjudicable",
             Self::Uncovered(K::KimiRouter) => "a Kimi router: its routed products resolve no router slot and are unadjudicable",
             Self::Uncovered(K::TirFamilyUnchecked | K::TirCarryNotCommitted | K::TirStateUnchecked) => {

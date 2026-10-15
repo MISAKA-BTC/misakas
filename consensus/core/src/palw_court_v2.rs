@@ -1427,19 +1427,18 @@ pub fn adjudicate_court_close_v4(
     // **R6-CELL round 4 (REQ-CELL-2)**: a move in this session (the ladder is terminal), on a claim accepted past the closure, whose
     // binding is the claim's own execution of its registered class, convicts when that class is uncoverable — whatever leaf it opens,
     // because the fault is the class's shape, not a step's value. Below the fence (`None`) nothing here runs.
-    if cell_closure_from_daa.is_some_and(|from| claim.accepted_daa >= from)
-        && let Some(binding) = binding_of(proof)
+    // A covered class (or a claim accepted before the fence) goes on below exactly as before; the pins run only before a conviction.
+    if let Some(binding) = binding_of(proof)
+        && crate::palw_cell_coverage_closure_v1::palw_cell_closure_court_convicts_v1(
+            cell_closure_from_daa,
+            claim.accepted_daa,
+            &binding.shape_profile,
+        )
     {
         check_close_profile_is_the_registered_class(claim.class_id, binding)?;
         check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
         crate::palw_step_leg::verify_binding_v1(binding).map_err(|e| PalwCourtV2Error::DoesNotAdjudicate(e.to_string()))?;
-        if crate::palw_cell_coverage_closure_v1::palw_cell_closure_court_convicts_v1(
-            cell_closure_from_daa,
-            claim.accepted_daa,
-            &binding.shape_profile,
-        ) {
-            return Ok(PalwCourtVerdictV2::ExecutorGuilty);
-        }
+        return Ok(PalwCourtVerdictV2::ExecutorGuilty);
     }
     match proof {
         PalwCourtVerdictProofV2::Arithmetic { refutation, .. } | PalwCourtVerdictProofV2::ArithmeticOpened { refutation, .. } => {

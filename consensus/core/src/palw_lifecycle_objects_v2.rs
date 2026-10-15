@@ -2607,10 +2607,11 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(
         PalwA2SlotV1::Int12FoldPastFence {
             tags: &[3, 8, 12],
-            what: "past the fence: a ClassRegistered (3) carrying an uncoverable legacy profile (unknown state chunk map, hybrid v1/v2 \
-                   recurrence half, solo recurrence map, multi-router table, Kimi router) refused at registration; a claim accepted \
-                   past it of such a class whose graph the fold holds refused at the claim gate (12, and the attempt lane); a \
-                   CourtClosed (8) of a claim accepted past it whose pinned binding is uncoverable adjudicates ExecutorGuilty",
+            what: "past the fence: a ClassRegistered (3) carrying an uncoverable legacy profile (unknown state chunk map, \
+                   hybrid v1/v2 recurrence half, solo recurrence map, multi-router table, Kimi router) refused at registration; a \
+                   claim accepted past it of such a class whose graph the fold holds refused at the claim gate (12, and the \
+                   attempt lane); a CourtClosed (8) of a claim accepted past it whose pinned binding is uncoverable adjudicates \
+                   ExecutorGuilty",
         },
         "palw_cell_coverage_closure_v1",
         "RFC-0006 R6-CELL round 4 coverage closure",

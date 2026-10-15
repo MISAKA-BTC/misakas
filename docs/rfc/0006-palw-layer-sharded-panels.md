@@ -1151,6 +1151,95 @@ windowed, wide128) under K2-TIR-v2 and v4.
 - extend the enumeration to every registered class row of a live network, once a catalog of registered TIR
   classes exists.
 
+#### R6-CELL round 4 — the coverage closure fence (2026-10-15)
+
+**Status:** dormant source. Not compiled, not tested, not reviewed, and no PASS. The fence is `None` on every preset,
+and `validate_palw_cell_coverage_closure_v1` refuses every real activation. Nothing is armed.
+
+**Fence.** `Params::palw_cell_coverage_closure_v1: Option<ForkActivation>`. It is hashed Some-only into both
+fingerprints, listed in `palw_fences_v1`, and collapsed from `Some(never())`. It has a `fork_id_v1` probe arm and is
+mirrored to `PalwStateParamsV2::cell_coverage_closure_from_daa` by `Params::sync_palw_cell_coverage_closure_v1`. It
+has an A-2 central-table row (`Int12FoldPastFence`, tags 3 / 8 / 12) and an arm in the A-2 harness. It pays and
+weights nothing, so it is **not** in `PALW_N3_GATED_REWARD_FENCES_V1`. The rule is in
+`consensus/core/src/palw_cell_coverage_closure_v1.rs`.
+
+**One predicate.** `palw_cell_closure_legacy_refusal_v1(profile)` returns `None` exactly when
+`palw_legacy_cell_coverage_v1` covers every boundary. Otherwise it returns the refusal:
+
+- an unknown kind first, failing closed by name;
+- else the first uncovered kind.
+
+The checker now tags every gap with a `PalwCellUncoveredKindV1`.
+
+**Rule past the fence.** Below the fence, every hook answers "old rule".
+
+| REQ | Where | Keyed on | Past the fence |
+|---|---|---|---|
+| REQ-CELL-1 | `object_preconditions_v1` (fold second lock), `ClassRegistered` with a carried profile | the registration block's DAA | an uncoverable profile is refused: `CellCoverageRefused`, code `CELL_UNCOVERABLE` |
+| REQ-CELL-1b | `check_class_admits_claim` (attempt, free-prompt, evaluation lanes) | the claim's acceptance DAA | a class whose graph the fold holds (`fp_work_profile_of`) and that is uncoverable takes no claim: `ClassNotRewardable`, code `CELL_UNCOVERABLE` |
+| REQ-CELL-2 | `adjudicate_court_close_v4` (all three processor sites), plus the pure `check_step_refutation_closure_capped_v1` | the claim's acceptance DAA | see the paragraph below |
+| REQ-CELL-3 | everywhere | — | below the fence (every shipped network: the mirror is `None`), verdicts, writes and roots are byte-identical. A claim accepted before the fence keeps its old ruleset. `adjudicate_court_close_v3` is v4 with `None` |
+
+**REQ-CELL-2 in detail.** This applies where admission cannot see the graph: a class registered before the fence, or
+a genesis class whose graph the fold does not hold. A close of a claim accepted past the fence is handled in this
+order:
+
+1. **The class is uncoverable.** The legacy binding is first pinned to the registered class and to the claim's
+   execution root, and `verify_binding_v1` is run on it. The close then adjudicates `ExecutorGuilty`, objectively,
+   from the binding alone. This is never `ChallengerDefeated`.
+2. **The pure checker's closure form.** The shape pass answers `ShapeProfileNotCanonical` (kind 0, leaf 0). A mapped
+   checkpoint count the court cannot derive is `CheckpointIndexNotCanonical`, not "no fault".
+3. **No map.** The long form keeps its `None`.
+
+**The fail-open is closed.** `palw_step_leg::checkpoint_fault` read an unenumerable map as "no fault", and V1/V2
+profiles accepted any map id. Past the fence, neither path can reach a producer win:
+
+- a new class with such a map is refused at registration;
+- a new claim on such a class is refused at the claim gate, or convicted in court.
+
+Old claims keep the old rule, because the fence is not retroactive.
+
+**Coverage matrix, round 4.** `palw_cell_uncovered_disposition_v1` is exhaustive. In round 4 every uncovered kind is
+**refused at admission**, and no kind is newly covered. Each covered case is named by its existing verifier.
+
+| Case (legacy `PalwShapeProfileV3`) | Round 4 | Why |
+|---|---|---|
+| no map (long form), one q36 router per table | covered | `LegacyLongForm`, `LegacyRouterTopk` |
+| attention-only maps (integer KV v1/v2, tiled v3/v4) on attention-only layers, enumerable | covered | `LegacyStateMapEnumerated` |
+| hybrid v3 / held v4 / P0a v5 (v5 under a version-3 profile), enumerable | covered | `LegacyStateMapEnumerated` (both sections) |
+| unknown map id | refused at admission (`UnknownProfileKind`) | the court cannot enumerate it, so the old step court failed open |
+| hybrid v1/v2 map with GDN layers | refused (`HybridRecurrenceUnenumerated`) | covering it needs the recurrence geometry in the consensus crate plus an anchored GDN arm. v3/v4/v5 *are* that coverage, so register one of them |
+| solo recurrence map (`gdn_state_chunk_map_id_v1`–`v3`) | refused (`SoloRecurrenceMap`) | its geometry belongs to the executor crate (`base0_gdn_state_geometry_v*`) |
+| a known map missing a needed section (e.g. attention-only map under GDN layers) | refused (`MapSectionNotSpelled`) | the section has no anchor |
+| a known map not enumerable at a checkpoint of this profile (e.g. v5 under a non-v3 profile) | refused (`MapNotEnumerable`) | the count is not decidable |
+| more than one q36 router in a table | refused (`MultiRouterTable`) | `qwen36_router_topk_slot` answers `None`, so a routed product is unadjudicable |
+| a fenced Kimi router | refused (`KimiRouter`) | its own row recomputes (`kimi_row`), but routed gather/combine resolve routing only through the q36 slot |
+| TIR classes | outside this fence | coverage is per descriptor (`palw_tir_cell_coverage_v1`). No shipped fixture has a gap. The TIR kinds' disposition is "refused" if ever wired |
+
+**Tests (source only, not run):**
+
+- `palw_cell_coverage_closure_v1/tests.rs`:
+  - `req_cell_the_fence_is_dormant_everywhere_and_refused_when_armed`;
+  - `req_cell_1_an_unknown_map_is_refused_at_registration_past_the_fence`;
+  - `req_cell_1_every_uncovered_kind_is_refused_at_admission`;
+  - `req_cell_1b_the_claim_gate_refuses_an_uncoverable_held_class`;
+  - `req_cell_2_the_court_never_acquits_an_unknown_map_past_the_fence`;
+  - `req_cell_3_below_the_fence_every_predicate_is_the_old_rule`.
+- `palw_step_leg.rs`: `req_cell_2_an_unknown_map_is_never_no_fault_under_the_closure`. This uses the honest fixture,
+  whose map is unknown, and checks two things:
+  - below the fence it is `NoFaultFound`, identical to the live checker;
+  - under the closure it is `ShapeProfileNotCanonical`.
+- `palw_cell_coverage_v1.rs`: `round4_every_uncovered_kind_is_enumerated_with_its_disposition`.
+
+**Remaining:**
+
+- compile, run and review the round-4 sources;
+- a court-level fixture test of `adjudicate_court_close_v4` on a live-shaped session;
+- whether the Panel false-valid structural routes (`palw_offence_v1` / `palw_offence_attribution_v1`, which call
+  `check_step_refutation_capped_v1`) should pass the closure flag. They convict Panel signers, not the producer;
+  past the fence an uncoverable class takes no new claim, or is convicted by the court;
+- the arming decision (USER DECISION REQUIRED).
+
 ### R6-DRAW — the V3 per-shard draw
 
 In addition to the 2026-10-11 restore contract above:

@@ -2304,6 +2304,24 @@ pub fn check_step_refutation_capped_v1(
     refutation: &PalwStepRefutationV1,
     max_step_leaf_count: u64,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepLegError> {
+    check_step_refutation_closure_capped_v1(refutation, max_step_leaf_count, false)
+}
+
+/// **[`check_step_refutation_capped_v1`] under RFC-0006 R6-CELL round 4's coverage closure** (`palw_cell_coverage_closure_v1`,
+/// REQ-CELL-2). `cell_closure` is the caller's: the closure is in force and the claim was accepted at or past it. With it:
+///
+/// * the shape pass convicts a binding whose (already valid) profile the cell coverage checker does not cover end to end — an
+///   unknown state chunk map id or an uncovered kind — as `ShapeProfileNotCanonical`: under the closure's ruleset such a profile is
+///   not a canonical class, and the verdict is decided from the binding alone, so it is never `NoFaultFound`;
+/// * a checkpoint whose mapped count the code cannot derive is a fault (`CheckpointIndexNotCanonical`), never the "court's own
+///   missing arithmetic" acquittal (unreachable past the shape pass, kept as the second lock). No map (the long form) stays as it was.
+///
+/// Without it (`false`): byte for byte [`check_step_refutation_capped_v1`].
+pub fn check_step_refutation_closure_capped_v1(
+    refutation: &PalwStepRefutationV1,
+    max_step_leaf_count: u64,
+    cell_closure: bool,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepLegError> {
     let binding = &refutation.binding;
     let (context_hash, profile_hash, checkpoint_profile_hash) = verify_binding(binding)?;
     let committed = &binding.committed_execution_root;
@@ -2315,6 +2333,11 @@ pub fn check_step_refutation_capped_v1(
             return Some(PalwStepFaultV1::ShapeProfileNotCanonical);
         }
         if binding.checkpoint_profile.validate_shape().is_err() {
+            return Some(PalwStepFaultV1::ShapeProfileNotCanonical);
+        }
+        // R6-CELL round 4 (REQ-CELL-2): past the closure an uncoverable profile is not a canonical class.
+        if cell_closure && crate::palw_cell_coverage_closure_v1::palw_cell_closure_legacy_refusal_v1(&binding.shape_profile).is_some()
+        {
             return Some(PalwStepFaultV1::ShapeProfileNotCanonical);
         }
         // The class-context bound, in the enumeration's own form — AFTER the profile's own
@@ -2427,7 +2450,7 @@ pub fn check_step_refutation_capped_v1(
         }
         PalwStepEvidenceV1::Checkpoint { opening, preimage } => {
             open_checkpoint(binding, &context_hash, &checkpoint_profile_hash, opening, preimage, max_step_leaf_count)?;
-            let fault = checkpoint_fault(binding, &context_hash, opening, preimage);
+            let fault = checkpoint_fault(binding, &context_hash, opening, preimage, cell_closure);
             match fault {
                 Some(fault) => {
                     Ok(PalwStepRefutationVerdictV1 { fault, evidence_id: evidence_id(committed, 3, opening.leaf_index, fault) })
@@ -2612,6 +2635,8 @@ fn checkpoint_fault(
     context_hash: &Hash64,
     opening: &PalwStepOpeningV1,
     preimage: &PalwCheckpointLeafV2,
+    // R6-CELL round 4: the coverage closure governs this claim (see `check_step_refutation_closure_capped_v1`).
+    cell_closure: bool,
 ) -> Option<PalwStepFaultV1> {
     if preimage.version != PALW_STEP_LEG_OBJECT_VERSION_V1 {
         return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
@@ -2664,6 +2689,12 @@ fn checkpoint_fault(
         // A held map is one this crate enumerates, so "not derivable" is a leg it cannot have
         // committed honestly — not the court's missing arithmetic.
         None if held => return Some(PalwStepFaultV1::CheckpointIndexNotCanonical),
+        // **R6-CELL round 4 (`palw_cell_coverage_closure_v1`)**: past the closure a mapped class the court cannot count is not a
+        // class at all (it is refused at registration and convicted by the shape pass), so `None` is never read as no fault. The
+        // unmapped long form keeps its `None`.
+        None if cell_closure && binding.state_chunk_map_id != Hash64::default() => {
+            return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
+        }
         _ => {}
     }
     None
@@ -3794,6 +3825,41 @@ mod tests {
             ),
             "the fix is a wiring change, not a new bound: the capped walker admits the same row"
         );
+    }
+
+    /// **REQ-CELL-2 / REQ-CELL-3 (RFC-0006 R6-CELL round 4, `palw_cell_coverage_closure_v1`)**: the honest fixture registers a map no
+    /// court knows (`h64(0x44)`). Below the closure the shape and checkpoint arms acquit it exactly as `check_step_refutation_v1`
+    /// does (the old fail-open, kept for old claims); under the closure the same refutations convict from the binding alone —
+    /// never `NoFaultFound`. Unverified source (2026-10-15): written, not run.
+    #[test]
+    fn req_cell_2_an_unknown_map_is_never_no_fault_under_the_closure() {
+        let (binding, _material, ckpt_hashes, ckpt_leaves) = honest();
+        assert!(
+            crate::palw_cell_coverage_closure_v1::palw_cell_closure_legacy_refusal_v1(&binding.shape_profile).is_some(),
+            "the fixture's map is outside every known map"
+        );
+        let shape = PalwStepRefutationV1 { binding: binding.clone(), evidence: PalwStepEvidenceV1::Shape };
+        let checkpoint = PalwStepRefutationV1 {
+            binding,
+            evidence: PalwStepEvidenceV1::Checkpoint {
+                opening: step_opening_v1(&ckpt_hashes, 0).unwrap(),
+                preimage: ckpt_leaves[0].clone(),
+            },
+        };
+        for r in [&shape, &checkpoint] {
+            // REQ-CELL-3: below the fence, byte for byte the live court.
+            assert_eq!(check_step_refutation_closure_capped_v1(r, PALW_STEP_LEG_MAX_LEAVES, false), check_step_refutation_v1(r));
+            assert_eq!(check_step_refutation_v1(r), Err(PalwStepLegError::NoFaultFound));
+            // REQ-CELL-2: past it, decisive and objective.
+            let verdict = check_step_refutation_closure_capped_v1(r, PALW_STEP_LEG_MAX_LEAVES, true)
+                .expect("an uncoverable class is convicted, never acquitted");
+            assert_eq!(verdict.fault, PalwStepFaultV1::ShapeProfileNotCanonical);
+            assert_eq!(
+                verdict.evidence_id,
+                step_refutation_evidence_id(&r.binding.committed_execution_root, 0, 0, PalwStepFaultV1::ShapeProfileNotCanonical),
+                "the shape pass answered (kind 0, leaf 0)"
+            );
+        }
     }
 }
 

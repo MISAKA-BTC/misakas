@@ -163,6 +163,35 @@ pub enum PalwCellCoverageGapV1 {
 
 pub type PalwCellCoverageV1 = Vec<(PalwCellBoundaryV1, PalwCellVerifierV1)>;
 
+/// **What round 4 does with an uncovered kind** (RFC-0006 R6-CELL round 4 matrix).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwCellDispositionV1 {
+    /// Covered by a court path through an existing one-move verifier (none in round 4; a later round that builds one moves its
+    /// kind here and out of the closure's refusal).
+    Covered(PalwCellVerifierV1),
+    /// Refused at admission past `palw_cell_coverage_closure_v1` — registration (REQ-CELL-1), the claim gate (REQ-CELL-1b) — and
+    /// convicted by the court where admission cannot see the graph (REQ-CELL-2): explicitly uncovered and unrewarded.
+    RefusedAtAdmission,
+}
+
+/// **Round 4's disposition of every uncovered kind.** Exhaustive, so a new kind cannot compile until it is placed. Every kind is
+/// refused at admission: the hybrid v1/v2 recurrence half needs the recurrence geometry in this crate and an anchored GDN arm
+/// reading it (the v3/v4/v5 compositions are that coverage); a solo map's geometry is the executor's; a multi-router or Kimi-routed
+/// table resolves no unique router slot for a routed product; the IR kinds are their descriptor's (outside the legacy closure).
+pub fn palw_cell_uncovered_disposition_v1(kind: PalwCellUncoveredKindV1) -> PalwCellDispositionV1 {
+    match kind {
+        PalwCellUncoveredKindV1::HybridRecurrenceUnenumerated
+        | PalwCellUncoveredKindV1::SoloRecurrenceMap
+        | PalwCellUncoveredKindV1::MapSectionNotSpelled
+        | PalwCellUncoveredKindV1::MapNotEnumerable
+        | PalwCellUncoveredKindV1::MultiRouterTable
+        | PalwCellUncoveredKindV1::KimiRouter
+        | PalwCellUncoveredKindV1::TirFamilyUnchecked
+        | PalwCellUncoveredKindV1::TirCarryNotCommitted
+        | PalwCellUncoveredKindV1::TirStateUnchecked => PalwCellDispositionV1::RefusedAtAdmission,
+    }
+}
+
 fn finish(covered: PalwCellCoverageV1, gaps: Vec<PalwCellCoverageGapV1>) -> Result<PalwCellCoverageV1, Vec<PalwCellCoverageGapV1>> {
     if gaps.is_empty() { Ok(covered) } else { Err(gaps) }
 }
@@ -529,5 +558,100 @@ mod tests {
                 .iter()
                 .any(|g| matches!(g, PalwCellCoverageGapV1::Uncovered { boundary: PalwCellBoundaryV1::LegacyMemory { .. }, .. }))
         );
+    }
+
+    /// **Round 4: the coverage matrix, enumerated** — every map id the code knows, an unknown one, and the router kinds, on a shipped
+    /// hybrid. Each case is COVERED (`Ok`) or names its uncovered kind, and every uncovered kind's disposition is refused at
+    /// admission (`palw_cell_coverage_closure_v1`). Unverified source (2026-10-15): written, not run.
+    #[test]
+    fn round4_every_uncovered_kind_is_enumerated_with_its_disposition() {
+        use crate::palw_step_refute::{KDESC_KIMI_ROUTER_TOPK, KDESC_Q36_ROUTER_TOPK};
+        use PalwCellUncoveredKindV1 as K;
+        let (_, mut base) = palw_shipped_legacy_profiles_v1()
+            .into_iter()
+            .find(|(_, p)| {
+                (0..p.layer_count).any(|l| p.layer_kind(l) == PalwLayerKindV1::Attention)
+                    && (0..p.layer_count).any(|l| p.layer_kind(l) == PalwLayerKindV1::GatedDeltaNet)
+            })
+            .expect("a shipped hybrid ladder family constructs");
+        base.state_chunk_map_id = Hash64::default();
+        // COVERED: no map — the long form replays both sections; one router per table.
+        assert!(palw_legacy_cell_coverage_v1(&base).is_ok(), "a hybrid on no map is covered end to end");
+        let kinds_of = |p: &PalwShapeProfileV3| -> Vec<K> {
+            match palw_legacy_cell_coverage_v1(p) {
+                Ok(_) => Vec::new(),
+                Err(gaps) => gaps
+                    .iter()
+                    .filter_map(|g| match g {
+                        PalwCellCoverageGapV1::Uncovered { kind, .. } => Some(*kind),
+                        PalwCellCoverageGapV1::UnknownProfileKind { .. } => None,
+                    })
+                    .collect(),
+            }
+        };
+        let unknown = |p: &PalwShapeProfileV3| {
+            palw_legacy_cell_coverage_v1(p)
+                .is_err_and(|gaps| gaps.iter().any(|g| matches!(g, PalwCellCoverageGapV1::UnknownProfileKind { .. })))
+        };
+        let on = |map: Hash64| {
+            let mut p = base.clone();
+            p.state_chunk_map_id = map;
+            p
+        };
+        // Every known map is KNOWN (never an unknown kind); each refused one names its kind.
+        let known = [
+            maps::integer_kv_state_chunk_map_id_v1(),
+            maps::integer_kv_state_chunk_map_id_v2(),
+            maps::tiled_kv_state_chunk_map_id_v3(),
+            maps::tiled_kv_state_chunk_map_id_v4(),
+            maps::hybrid_state_chunk_map_id_v1(),
+            maps::hybrid_state_chunk_map_id_v2(),
+            maps::hybrid_state_chunk_map_id_v3(),
+            maps::hybrid_state_chunk_map_id_v4(),
+            maps::hybrid_state_chunk_map_id_v5(),
+            maps::gdn_state_chunk_map_id_v1(),
+            maps::gdn_state_chunk_map_id_v2(),
+            maps::gdn_state_chunk_map_id_v3(),
+        ];
+        for map in known {
+            assert!(!unknown(&on(map)), "a known map is never an unknown kind");
+        }
+        for map in [maps::hybrid_state_chunk_map_id_v1(), maps::hybrid_state_chunk_map_id_v2()] {
+            assert!(kinds_of(&on(map)).contains(&K::HybridRecurrenceUnenumerated), "the v1/v2 hybrid's recurrence half");
+        }
+        for map in [maps::gdn_state_chunk_map_id_v1(), maps::gdn_state_chunk_map_id_v2(), maps::gdn_state_chunk_map_id_v3()] {
+            assert!(kinds_of(&on(map)).iter().all(|k| *k == K::SoloRecurrenceMap), "a solo recurrence map, every needed section");
+            assert!(!kinds_of(&on(map)).is_empty());
+        }
+        for map in [maps::integer_kv_state_chunk_map_id_v1(), maps::tiled_kv_state_chunk_map_id_v3()] {
+            assert!(kinds_of(&on(map)).contains(&K::MapSectionNotSpelled), "an attention-only map under GDN layers");
+        }
+        assert!(unknown(&on(kernel_semantics_id_v1("not/a/state/chunk/map"))), "an unknown map: fail closed");
+        // Routers: two q36 routers in one table, and a Kimi router.
+        let with = |kernel: &str, extra: usize| {
+            let mut p = base.clone();
+            for _ in 0..extra {
+                let mut node = p.attn_nodes[0].clone();
+                node.kernel_semantics_id = kernel_semantics_id_v1(kernel);
+                p.attn_nodes.push(node);
+            }
+            p
+        };
+        assert!(kinds_of(&with(KDESC_Q36_ROUTER_TOPK, 2)).contains(&K::MultiRouterTable));
+        assert!(kinds_of(&with(KDESC_KIMI_ROUTER_TOPK, 1)).contains(&K::KimiRouter));
+        // Every kind's disposition: refused at admission (none newly covered in round 4).
+        for kind in [
+            K::HybridRecurrenceUnenumerated,
+            K::SoloRecurrenceMap,
+            K::MapSectionNotSpelled,
+            K::MapNotEnumerable,
+            K::MultiRouterTable,
+            K::KimiRouter,
+            K::TirFamilyUnchecked,
+            K::TirCarryNotCommitted,
+            K::TirStateUnchecked,
+        ] {
+            assert_eq!(palw_cell_uncovered_disposition_v1(kind), PalwCellDispositionV1::RefusedAtAdmission, "{kind:?}");
+        }
     }
 }
