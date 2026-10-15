@@ -1044,7 +1044,19 @@ pub(crate) fn transition_node_unit_v1() -> u64 {
     n = n.max(std::mem::size_of::<
         crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
             (crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, crate::Hash64),
+            (),
+        >,
+    >() as u64);
+    n = n.max(std::mem::size_of::<
+        crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
+            (crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, crate::Hash64),
             crate::palw_model_registry_v1::PalwSeatReadinessRowV1,
+        >,
+    >() as u64);
+    n = n.max(std::mem::size_of::<
+        crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
+            (crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::Hash64),
+            (),
         >,
     >() as u64);
     n = n.max(std::mem::size_of::<
@@ -1056,6 +1068,20 @@ pub(crate) fn transition_node_unit_v1() -> u64 {
     n = n.max(std::mem::size_of::<
         crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
             (crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64),
+            (),
+        >,
+    >() as u64);
+    n = n.max(std::mem::size_of::<
+        crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
+            (
+                crate::palw_state_v2::PalwBondKeyV2,
+                u64,
+                crate::Hash64,
+                crate::palw_state_v2::PalwBondKeyV2,
+                crate::Hash64,
+                u64,
+                crate::Hash64,
+            ),
             (),
         >,
     >() as u64);
@@ -1097,6 +1123,12 @@ pub(crate) fn transition_node_unit_v1() -> u64 {
     n = n.max(std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, ()>>() as u64);
     n = n.max(std::mem::size_of::<
         crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, u64>>,
+    >() as u64);
+    n = n.max(std::mem::size_of::<
+        crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
+            crate::Hash64,
+            BTreeSet<(u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>,
+        >,
     >() as u64);
     n = n.max(
         std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, BTreeSet<crate::Hash64>>>()

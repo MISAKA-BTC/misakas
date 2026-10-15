@@ -245,7 +245,7 @@ impl PalwTirPublicAcquisitionRowV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwTirPublicChunkRowV1 {
-    pub acquisition: Key,
+    pub acquisition: crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
     pub source_id: Hash64,
     pub material_until_daa: u64,
     pub record: PalwTirPublicChunkRecordV1,
@@ -269,7 +269,7 @@ impl PalwTirPublicChunkRowV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwTirPublicAcceptedRowV1 {
-    pub acquisition: Key,
+    pub acquisition: crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
     pub source_id: Hash64,
     pub material_until_daa: u64,
     pub history_index: u64,

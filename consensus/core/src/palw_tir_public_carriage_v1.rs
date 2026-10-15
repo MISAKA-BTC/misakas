@@ -67,8 +67,8 @@ pub enum PalwTirPublicControlTargetV1 {
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwTirPublicControlActionV1 {
     Open,
-    Acquisition(OwnedAction),
-    Preparation(OwnedAction),
+    Acquisition(crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1),
+    Preparation(crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1),
     /// Appended with [`PalwTirPublicControlTargetV1::Conviction`]; never carries rent.
     Convict(PalwTirPublicConvictionEvidenceV1),
 }
