@@ -10,6 +10,13 @@ pub(crate) struct NativeTransitionReservationV1 {
     requests: u64,
 }
 impl NativeTransitionReservationV1 {
+    #[cfg(test)]
+    pub(crate) fn for_checker_v1(checker: &std::sync::Arc<NativeDemandCheckerV1>) -> Self {
+        Self { lease: Some(checker.reserve_requests_v1(0, 0).unwrap()), requests: 0 }
+    }
+    pub(crate) fn is_tracking_v1(&self) -> bool {
+        self.lease.is_some() || native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1()
+    }
     pub(crate) fn copy_parent_v1(parent: &PalwChainStateV2) -> Result<(PalwChainStateV2, Self), NativeCoverageV1> {
         let requests = value_requests_v1(parent)?;
         let owner = NativeRetainedV1::try_from_clone_v1(parent)?;

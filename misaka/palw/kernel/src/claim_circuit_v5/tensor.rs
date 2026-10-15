@@ -142,6 +142,24 @@ impl<'a> CircuitTensorV5<'a> {
         }
         Ok(Self { dtype, shape, storage: TensorStorageV5::Words(values), written: 0, _lease: Some(lease) })
     }
+    /// Allocate only after the resolved typed shape is admitted. Each element
+    /// comes from existing wires or a public constant, never an opaque result.
+    pub(crate) fn from_word_stream(
+        builder: &mut CircuitBuilderV5,
+        dtype: DType,
+        shape: &[usize],
+        memory: &CircuitMemoryBudgetV5,
+        mut element: impl FnMut(&mut CircuitBuilderV5, usize) -> Result<IntV5, String>,
+    ) -> Result<Self, String> {
+        let shape = CircuitShapeV5::new(shape)?;
+        let mut output = Self::output(builder, dtype, shape, memory)?;
+        for index in 0..shape.elements {
+            let value = element(builder, index)?;
+            builder.assert_fit(&value, dtype)?;
+            output.push(value)?;
+        }
+        output.complete()
+    }
     pub fn at(&self, index: usize) -> Result<IntV5, String> {
         if index >= self.shape.elements || index >= self.written {
             return Err("circuit tensor element index or forward reference".into());

@@ -1674,7 +1674,14 @@ impl PalwProducerService {
                     roster.to_vec(),
                 )?;
                 if quote.active_session.is_none() {
-                    exchange.0.ensure_recovery_session_v4(&quote)?;
+                    let pending_exchange = exchange.clone();
+                    palw_until_exit_v1(
+                        &self.shutdown.listener,
+                        tokio::task::spawn_blocking(move || pending_exchange.0.ensure_recovery_session_v4(&quote)),
+                    )
+                    .await
+                    .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: V4 enrollment exchange abandoned"))?
+                    .map_err(|e| format!("V4 enrollment task failed: {e}"))??;
                     return Err(format!(
                         "{PALW_PRODUCER_NATIVE_CUSTODY_HOLD}: V4 atomic recovery enrollment queued; awaiting accepted native prior-state for class {} before execution",
                         self.config.class_id

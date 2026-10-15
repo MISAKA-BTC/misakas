@@ -567,4 +567,61 @@ mod tests {
         assert!(preflight(&bomb).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn unused_native_receipt_can_ack_without_a_bundle_but_cannot_ignore_held_bytes() {
+        // Storage authority seam only: the real service obtains this positive
+        // unused-session fact from a current native-finalized terminal row.
+        use kaspa_consensus_core::palw_material_release_recovery_v2::*;
+        let provider = bond(2);
+        let consent = h(2);
+        let receipt = PalwMaterialTerminalReceiptV2 {
+            contract: PalwMaterialRecoveryContractV2 {
+                terms: PalwMaterialRecoveryTermsV2 {
+                    version: 2,
+                    root: h(1),
+                    initial_consent: consent,
+                    sponsor: bond(1),
+                    nonce: h(3),
+                    policy: h(4),
+                    max_generations: 1,
+                    all_generation_ack: true,
+                },
+                enrolled_daa: 1,
+                generations: vec![PalwMaterialRecoveryGenerationV2 { consent, providers: vec![provider, bond(3)] }],
+            },
+            final_consent: consent,
+            tail_block: h(5),
+            release_block: h(6),
+            unused_native_session: true,
+            acknowledged: BTreeSet::new(),
+        };
+        let checkpoint = PalwMaterialProviderAckCheckpointV2 {
+            version: 2,
+            provider,
+            stream: h(7),
+            created_daa: 1,
+            sequence: 0,
+            reserved_acks: 1,
+            reserved_answer_events: 0,
+            last_receipt: Hash64::default(),
+        };
+        let dir = std::env::temp_dir().join(format!(
+            "misaka-unused-ack-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir(&dir).unwrap();
+        let mut outbox = MaterialRecoveryAckOutboxV2::open(&dir.join("ack")).unwrap();
+        assert!(
+            outbox
+                .enqueue_after_durable_gc(h(9), &receipt, provider, &checkpoint, &[], &[(consent, h(1))], |_, _, _| panic!(
+                    "held material must refuse before signing"
+                ))
+                .is_err()
+        );
+        outbox.enqueue_after_durable_gc(h(9), &receipt, provider, &checkpoint, &[], &[], |_, _, _| Some(vec![1])).unwrap();
+        assert_eq!(outbox.pending().count(), 1);
+        drop(outbox);
+        fs::remove_dir_all(dir).unwrap();
+    }
 }

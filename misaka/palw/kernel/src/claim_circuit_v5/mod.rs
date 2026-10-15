@@ -7,6 +7,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub mod bits;
 pub mod blake2b;
 pub mod native_commitment;
+pub mod pipeline_edges;
 pub mod r1cs;
 pub mod scalar;
 pub mod tensor;

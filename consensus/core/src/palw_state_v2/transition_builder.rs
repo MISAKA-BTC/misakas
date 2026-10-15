@@ -332,24 +332,84 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::RegistrationExposure { key, old, new });
     }
 
+    /// Reserve this writer's actual row copy, absent membership and journal
+    /// replacement before either collection changes. This accounts requested
+    /// typed allocation; a separate physical allocator quota remains necessary.
+    fn reserve_map_journal_v1<K: crate::palw_native_resource_v1::NativeHeapV1, V: crate::palw_native_resource_v1::NativeHeapV1>(
+        &mut self,
+        key: &K,
+        new: &Option<V>,
+        absent: bool,
+        path: &'static str,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_native_resource_v1::{NativeCoverageV1, NativeHeapV1, typed::BTreeNodeEnvelopeV1};
+        // Preserve the historical flags-off path, including its allocation
+        // strategy. An injected test owner also makes tracking active.
+        if !self.native_reservation.is_tracking_v1() {
+            return Ok(());
+        }
+        let mut bound = new.native_heap_v1(path).scale::<V>(2, path).add::<K>(key.native_heap_v1(path).scale::<K>(2, path), path);
+        let mut journal_capacity = None;
+        if absent && new.is_some() {
+            if cfg!(not(target_pointer_width = "64")) {
+                return Err(PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<BTreeMap<K, V>>(
+                    path,
+                    "pinned BTree allocation layout only covers 64-bit targets",
+                )));
+            }
+            bound = bound.add::<V>(NativeCoverageV1::Bounded { bytes: std::mem::size_of::<BTreeNodeEnvelopeV1<K, V>>() as u64 }, path);
+        }
+        if self.entries.len() == self.entries.capacity() {
+            // The existing allocation and its replacement may coexist during
+            // realloc. The old frame remains held by the construction owner.
+            let count = self
+                .entries
+                .capacity()
+                .max(2)
+                .checked_mul(2)
+                .ok_or_else(|| PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwDeltaEntryV2>(path)))?;
+            let bytes = (count as u64)
+                .checked_mul(std::mem::size_of::<PalwDeltaEntryV2>() as u64)
+                .ok_or_else(|| PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwDeltaEntryV2>(path)))?;
+            bound = bound.add::<PalwDeltaEntryV2>(NativeCoverageV1::Bounded { bytes }, path);
+            journal_capacity = Some(count);
+        }
+        self.native_reservation
+            .grow_v1(bound.bytes().ok_or_else(|| PalwStateV2Error::NativeResource(bound))?)
+            .map_err(PalwStateV2Error::NativeResource)?;
+        if let Some(count) = journal_capacity {
+            self.entries.try_reserve_exact(count - self.entries.len()).map_err(|_| {
+                PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<PalwDeltaEntryV2>(
+                    path,
+                    "allocator refused the pre-admitted journal request",
+                ))
+            })?;
+        }
+        Ok(())
+    }
+
     /// ADR-0071 SA-3: record that a bond produced on a class. The `capabilities` collection has
     /// been rooted, carried and delta-tracked since PR-03 with no writer; this is the writer its
     /// record shape (`class_id`, `bond`, `issued_daa`) was evidently reserved for, so SA-3 adds no
     /// collection to `state_root` and moves no golden root while the fence is off.
-    pub(super) fn write_capability(&mut self, key: Hash64, new: Option<PalwCapabilityStateV2>) {
+    pub(super) fn write_capability(&mut self, key: Hash64, new: Option<PalwCapabilityStateV2>) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.capabilities.contains_key(&key), "native capability writer")?;
         let old = match &new {
             Some(record) => self.state.capabilities.insert(key, record.clone()),
             None => self.state.capabilities.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::Capability { key, old, new });
+        Ok(())
     }
 
-    pub(super) fn write_class_walk(&mut self, key: Hash64, new: Option<PalwClassWalkV2>) {
+    pub(super) fn write_class_walk(&mut self, key: Hash64, new: Option<PalwClassWalkV2>) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.class_walks.contains_key(&key), "native class_walk writer")?;
         let old = match new {
             Some(value) => self.state.class_walks.insert(key, value),
             None => self.state.class_walks.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::ClassWalk { key, old, new });
+        Ok(())
     }
 
     /// **ADR-0056 Decision 3: take the registry's price, or give it back.** One function for both
@@ -370,28 +430,34 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    pub(super) fn write_class(&mut self, key: Hash64, new: Option<PalwClassStateV2>) {
+    pub(super) fn write_class(&mut self, key: Hash64, new: Option<PalwClassStateV2>) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.classes.contains_key(&key), "native class writer")?;
         let old = match &new {
             Some(record) => self.state.classes.insert(key, record.clone()),
             None => self.state.classes.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::Class { key, old, new });
+        Ok(())
     }
 
-    pub(super) fn write_target(&mut self, key: Hash64, new: Option<PalwClassTargetV2>) {
+    pub(super) fn write_target(&mut self, key: Hash64, new: Option<PalwClassTargetV2>) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.class_targets.contains_key(&key), "native target writer")?;
         let old = match &new {
             Some(record) => self.state.class_targets.insert(key, record.clone()),
             None => self.state.class_targets.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::Target { key, old, new });
+        Ok(())
     }
 
-    pub(super) fn write_share(&mut self, key: Hash64, new: Option<u16>) {
+    pub(super) fn write_share(&mut self, key: Hash64, new: Option<u16>) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.class_shares.contains_key(&key), "native share writer")?;
         let old = match new {
             Some(value) => self.state.class_shares.insert(key, value),
             None => self.state.class_shares.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::Share { key, old, new });
+        Ok(())
     }
 
     pub(super) fn write_certified_family(&mut self, lane: PalwCertifiedLaneV1, key: Hash64, new: Option<PalwCertifiedFamilyStateV2>) {
@@ -475,20 +541,28 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::ClaimSemantics { key, old, new });
     }
 
-    pub(super) fn write_class_semantics_v1(&mut self, key: Hash64, new: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>) {
+    pub(super) fn write_class_semantics_v1(
+        &mut self,
+        key: Hash64,
+        new: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+    ) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.class_semantics.contains_key(&key), "native class_semantics_v1 writer")?;
         let old = match &new {
             Some(row) => self.state.class_semantics.insert(key, row.clone()),
             None => self.state.class_semantics.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::ClassSemantics { key, old, new });
+        Ok(())
     }
 
-    pub(super) fn write_receipt_target(&mut self, key: Hash64, new: Option<PalwClassTargetV2>) {
+    pub(super) fn write_receipt_target(&mut self, key: Hash64, new: Option<PalwClassTargetV2>) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.receipt_targets.contains_key(&key), "native receipt_target writer")?;
         let old = match &new {
             Some(record) => self.state.receipt_targets.insert(key, record.clone()),
             None => self.state.receipt_targets.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::ReceiptTarget { key, old, new });
+        Ok(())
     }
 
     pub(super) fn write_claim(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) {
@@ -834,7 +908,12 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
-    pub(super) fn write_class_shard_plan(&mut self, key: Hash64, new: Option<crate::palw_shard_licensing_v1::PalwClassShardPlanV1>) {
+    pub(super) fn write_class_shard_plan(
+        &mut self,
+        key: Hash64,
+        new: Option<crate::palw_shard_licensing_v1::PalwClassShardPlanV1>,
+    ) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.class_shard_plans.contains_key(&key), "native class_shard_plan writer")?;
         let old = match new {
             Some(row) => self.state.class_shard_plans.insert(key, row),
             None => self.state.class_shard_plans.remove(&key),
@@ -842,9 +921,11 @@ impl<'a> TransitionBuilder<'a> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::ClassShardPlan { key, old, new });
         }
+        Ok(())
     }
 
-    pub(super) fn write_bond_shards(&mut self, key: (PalwBondKeyV2, Hash64), new: Option<Vec<u32>>) {
+    pub(super) fn write_bond_shards(&mut self, key: (PalwBondKeyV2, Hash64), new: Option<Vec<u32>>) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.bond_shards.contains_key(&key), "native bond_shards writer")?;
         let old = match &new {
             Some(row) => self.state.bond_shards.insert(key, row.clone()),
             None => self.state.bond_shards.remove(&key),
@@ -852,6 +933,7 @@ impl<'a> TransitionBuilder<'a> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::BondShards { key, old, new });
         }
+        Ok(())
     }
 
     pub(super) fn write_shard_licensing(
@@ -878,7 +960,8 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
-    pub(super) fn write_class_step_ladder(&mut self, key: Hash64, new: Option<u64>) {
+    pub(super) fn write_class_step_ladder(&mut self, key: Hash64, new: Option<u64>) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.class_step_ladders.contains_key(&key), "native class_step_ladder writer")?;
         let old = match new {
             Some(ladder) => self.state.class_step_ladders.insert(key, ladder),
             None => self.state.class_step_ladders.remove(&key),
@@ -886,6 +969,7 @@ impl<'a> TransitionBuilder<'a> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::ClassStepLadder { key, old, new });
         }
+        Ok(())
     }
 
     /// **ADR-0165: write the floor state** (canonical: the default is `None`), one delta entry per change.
@@ -918,7 +1002,13 @@ impl<'a> TransitionBuilder<'a> {
         self.write_floor_state(next.canonical());
     }
 
-    pub(super) fn write_class_court_window(&mut self, key: Hash64, new: Option<u64>) {
+    pub(super) fn write_class_court_window(&mut self, key: Hash64, new: Option<u64>) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(
+            &key,
+            &new,
+            !self.state.class_court_windows.contains_key(&key),
+            "native class_court_window writer",
+        )?;
         let old = match new {
             Some(window) => self.state.class_court_windows.insert(key, window),
             None => self.state.class_court_windows.remove(&key),
@@ -926,6 +1016,7 @@ impl<'a> TransitionBuilder<'a> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::ClassCourtWindow { key, old, new });
         }
+        Ok(())
     }
 
     /// **RFC-0007: the one journaled writer of every vertex table** (`VertexRow`, 101): `table` names the table, and the key and
@@ -994,7 +1085,12 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     /// **RFC-0006: the one writer of `tir_shard_plans`**, journaled `TirShardPlan`.
-    pub(super) fn write_tir_shard_plan(&mut self, key: Hash64, new: Option<crate::palw_tir_shard_v1::PalwTirShardPlanV1>) {
+    pub(super) fn write_tir_shard_plan(
+        &mut self,
+        key: Hash64,
+        new: Option<crate::palw_tir_shard_v1::PalwTirShardPlanV1>,
+    ) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.tir_shard_plans.contains_key(&key), "native tir_shard_plan writer")?;
         let old = match &new {
             Some(row) => self.state.tir_shard_plans.insert(key, row.clone()),
             None => self.state.tir_shard_plans.remove(&key),
@@ -1002,6 +1098,7 @@ impl<'a> TransitionBuilder<'a> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::TirShardPlan { key, old, new });
         }
+        Ok(())
     }
 
     /// **RFC-0006: the one writer of `tir_shard_claims`**, journaled `TirShardClaim`.
@@ -5387,10 +5484,10 @@ impl<'a> TransitionBuilder<'a> {
     /// the network quantum IS one floor quantum's share of the floor's job), clamped to the price
     /// ceiling ([`crate::palw_freeprompt_v3::fp_pooled_target_ceiling_v1`]) where the chain holds
     /// a work target. After this only the retarget moves it.
-    pub(super) fn seed_fp_pooled_receipt_target(&mut self) {
+    pub(super) fn seed_fp_pooled_receipt_target(&mut self) -> Result<(), PalwStateV2Error> {
         let key = crate::palw_freeprompt_v3::fp_pooled_receipt_key_v1();
         if self.state.receipt_targets.contains_key(&key) {
-            return;
+            return Ok(());
         }
         let pricing = self.fp_pricing();
         let floor =
@@ -5401,7 +5498,8 @@ impl<'a> TransitionBuilder<'a> {
             }
             None => floor,
         };
-        self.write_receipt_target(key, Some(PalwClassTargetV2 { target: seed.max(1) }));
+        self.write_receipt_target(key, Some(PalwClassTargetV2 { target: seed.max(1) }))?;
+        Ok(())
     }
 
     /// **What one draw of a class really costs, for the exposure and work-price paths** — `None`
@@ -6488,12 +6586,12 @@ impl<'a> TransitionBuilder<'a> {
     /// stepped, the profile is re-derived from the class's live target, and the shares of every
     /// rowed class are written from admission — the base class holding what is left, never below
     /// its floor, and a class registered before the fence without a row keeping the share it has.
-    pub(super) fn step_model_registry(&mut self, ctx: &PalwBlockContextV2, span_now: u64) {
+    pub(super) fn step_model_registry(&mut self, ctx: &PalwBlockContextV2, span_now: u64) -> Result<(), PalwStateV2Error> {
         use crate::palw_model_registry_v1::{
             PalwLifecycleObservationV1, PalwManifestVerdictV1Flag, PalwModelLifecycleRowV1, PalwModelLifecycleV1,
             palw_lifecycle_profile_v1, palw_lifecycle_step_v1,
         };
-        let Some(fold) = self.model_registry_fold().cloned() else { return };
+        let Some(fold) = self.model_registry_fold().cloned() else { return Ok(()) };
         let base = self.params.base_class_id();
         let governs = fold.governs_at(ctx.daa_score);
         // **Lane F1 (V03(2)/V05): the span this step judges is the PARENT's** — every probe counted
@@ -6622,7 +6720,7 @@ impl<'a> TransitionBuilder<'a> {
         // The activation grace: rows are open and proofs are taken, but nothing is stepped and no
         // share moves until the fence is one readiness age old — the seats' time to prove.
         if !governs {
-            return;
+            return Ok(());
         }
         let mut admissions: Vec<(Hash64, u64)> = Vec::new();
         let rowed: Vec<Hash64> = self.state.model_lifecycles.keys().copied().collect();
@@ -6829,10 +6927,10 @@ impl<'a> TransitionBuilder<'a> {
         // ADR-0137: past the work target the registry moves no share, refreshes no budget and
         // seats no price — a share is a result, not an input.
         if self.extras.work_target_active {
-            return;
+            return Ok(());
         }
         if !self.state.class_shares.contains_key(&base) {
-            return;
+            return Ok(());
         }
         let legacy_sum: u32 = self
             .state
@@ -6856,7 +6954,7 @@ impl<'a> TransitionBuilder<'a> {
         writes.push((base, (1_000u32.saturating_sub(legacy_sum).saturating_sub(given)).max(floor) as u16));
         for (id, share) in writes {
             if self.state.class_shares.get(&id).copied() != Some(share) {
-                self.write_share(id, Some(share));
+                self.write_share(id, Some(share))?;
             }
         }
         // **A share the registry moves is a budget the epoch must follow** (found by the devnet
@@ -6911,12 +7009,13 @@ impl<'a> TransitionBuilder<'a> {
             let pwu = self.class_seed_pwu(&id, ctx.daa_score);
             let priced = crate::palw_class_daa::attempt_target_seed_v1(share, pwu);
             if self.state.class_targets.get(&id).map(|t| t.target) != Some(priced) {
-                self.write_target(id, Some(PalwClassTargetV2 { target: priced }));
+                self.write_target(id, Some(PalwClassTargetV2 { target: priced }))?;
             }
             let mut row = self.state.model_lifecycles.get(&id).cloned().expect("listed from the map");
             row.priced_share_permille = share;
             self.write_model_lifecycle(id, Some(row));
         }
+        Ok(())
     }
 
     // ---- ADR-0125: the execution lane ----
@@ -6993,7 +7092,7 @@ impl<'a> TransitionBuilder<'a> {
         let opens_span = self.state.last_point.is_none_or(|last| palw_execution_span_v1(last.daa_score, span_daa) < span_now);
         if opens_span {
             // ADR-0135: the registry steps every class at the boundary, before the lane's own rotation.
-            self.step_model_registry(ctx, span_now);
+            self.step_model_registry(ctx, span_now)?;
             // **Past ADR-0151's bundle a matured snapshot waits for a span that can seed it** (the
             // route-matrix audit's #2). Below it a due snapshot is dropped when the span before had no
             // attempt-carrying chain block to anchor its seed, or when a merge of two blue blocks
@@ -8336,7 +8435,7 @@ impl<'a> TransitionBuilder<'a> {
                 self.write_capability(
                     key,
                     Some(PalwCapabilityStateV2 { class_id: claim.class_id, bond: claim.bond, issued_daa: claim.accepted_daa }),
-                );
+                )?;
             }
         }
         let current = self.state.reserved_exposure.get(&claim.bond).copied().unwrap_or(0);

@@ -1177,10 +1177,13 @@ impl std::ops::Deref for NativeProviderFrameV3 {
     }
 }
 fn read_frame_v3(stream: &mut impl Read) -> Result<NativeProviderFrameV3, String> {
+    read_frame_capped_v4(stream, PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3)
+}
+fn read_frame_capped_v4(stream: &mut impl Read, cap: u64) -> Result<NativeProviderFrameV3, String> {
     let mut length = [0u8; 8];
     stream.read_exact(&mut length).map_err(|e| e.to_string())?;
     let length = u64::from_le_bytes(length);
-    if length > PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3 {
+    if length > cap || length > PRIVATE_NATIVE_EXCHANGE_MAX_FRAME_V3 {
         return Err("native exchange frame exceeds its cap".into());
     }
     let lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(length).map_err(|e| e.to_string())?;
@@ -1194,7 +1197,33 @@ fn read_frame_v3(stream: &mut impl Read) -> Result<NativeProviderFrameV3, String
 /// bundle is published: an entry without a bundle is harmless, a bundle without its entry would refuse the reopen.
 struct AuthorityIndexV3 {
     file: PathBuf,
-    rows: BTreeMap<Hash64, PalwMaterialNativeAuthorityV1>,
+    rows: BTreeMap<Hash64, AuthorityRecordV4>,
+    _native_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+}
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AuthorityRecordV4(PalwMaterialNativeAuthorityV1);
+impl kaspa_consensus_core::palw_native_resource_v1::NativeHeapV1 for AuthorityRecordV4 {
+    fn native_heap_v1(&self, _: &str) -> kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1 {
+        let PalwMaterialNativeAuthorityV1 { execution_root: _, class_id: _, artifact_root: _, ladder: _, form: _ } = self.0;
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::zero()
+    }
+}
+impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for AuthorityRecordV4 {
+    fn scan_native_wire_v1<R: Read>(
+        r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
+    ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1;
+        r.step()?;
+        let shape = Hash64::scan_native_wire_v1(r)?
+            .merge(Hash64::scan_native_wire_v1(r)?)?
+            .merge(Hash64::scan_native_wire_v1(r)?)?
+            .merge(u64::scan_native_wire_v1(r)?)?;
+        if r.byte()? > 1 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "authority prompt form unknown"));
+        }
+        Ok(shape)
+    }
 }
 
 type AuthorityRowV3 = (Hash64, Hash64, Hash64, Hash64, u64, u8);
@@ -1204,14 +1233,51 @@ const AUTHORITY_MAX_ROWS_V3: usize = kaspa_consensus_core::palw_monetary_materia
 const AUTHORITY_MAX_BYTES_V3: u64 = (4 + AUTHORITY_MAX_ROWS_V3 * AUTHORITY_ROW_BYTES_V3) as u64;
 
 impl AuthorityIndexV3 {
+    fn projection_lease_v4(
+        count: usize,
+    ) -> Result<Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>, String> {
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, reserve_native_requests_v1};
+        if count > AUTHORITY_MAX_ROWS_V3 {
+            return Err("authority typed row count exceeds cap".into());
+        }
+        let count32 = u32::try_from(count).map_err(|_| "authority row count overflow")?;
+        let bytes = (count as u64)
+            .checked_mul(AUTHORITY_ROW_BYTES_V3 as u64)
+            .and_then(|n| n.checked_add(4))
+            .ok_or("authority canonical extent overflow")?;
+        let stream = std::io::Cursor::new(count32.to_le_bytes()).chain(std::io::repeat(0).take(bytes - 4));
+        let mut reader = NativeWireReaderV1::new(stream, bytes);
+        let map = BTreeMap::<Hash64, AuthorityRecordV4>::scan_native_wire_v1(&mut reader).map_err(|e| e.to_string())?;
+        if reader.remaining() != 0 {
+            return Err("authority typed map extent differs".into());
+        }
+        let tuple_bytes = (count as u64)
+            .checked_mul(2 * std::mem::size_of::<AuthorityRowV3>() as u64)
+            .ok_or("authority projection ownership overflow")?;
+        let requests = map
+            .heap
+            .checked_add(tuple_bytes)
+            .and_then(|n| bytes.checked_mul(2).and_then(|m| n.checked_add(m)))
+            .and_then(|n| n.checked_add(std::mem::size_of::<BTreeMap<Hash64, AuthorityRecordV4>>() as u64))
+            .ok_or("authority native ownership overflow")?;
+        reserve_native_requests_v1(requests).map_err(|e| e.to_string())
+    }
     fn open(file: &Path) -> Result<Self, String> {
-        let rows = match std::fs::File::open(file) {
+        let (rows, native_lease) = match std::fs::File::open(file) {
             Ok(source) => {
-                if source.metadata().map_err(|e| e.to_string())?.len() > AUTHORITY_MAX_BYTES_V3 {
+                let actual = source.metadata().map_err(|e| e.to_string())?.len();
+                if actual > AUTHORITY_MAX_BYTES_V3 {
                     return Err("native provider authority index exceeds cap".into());
                 }
+                let _raw = kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(
+                    actual.checked_add(1).and_then(|n| n.checked_mul(2)).ok_or("authority raw ownership overflow")?,
+                )
+                .map_err(|e| e.to_string())?;
                 let mut bytes = Vec::new();
-                source.take(AUTHORITY_MAX_BYTES_V3 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                source.take(actual + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                if bytes.len() as u64 != actual {
+                    return Err("authority journal extent changed".into());
+                }
                 if bytes.len() as u64 > AUTHORITY_MAX_BYTES_V3 || bytes.len() < 4 {
                     return Err("native provider authority index byte bound".into());
                 }
@@ -1224,6 +1290,7 @@ impl AuthorityIndexV3 {
                 {
                     return Err("native provider authority index extent/count differs".into());
                 }
+                let lease = Self::projection_lease_v4(count)?;
                 let decoded =
                     borsh::from_slice::<Vec<AuthorityRowV3>>(&bytes).map_err(|e| format!("native provider authority index: {e}"))?;
                 let mut rows = BTreeMap::new();
@@ -1244,21 +1311,24 @@ impl AuthorityIndexV3 {
                         1 => PalwPromptIdsFormV1::MerkleV1,
                         _ => return Err("native provider authority index names an unknown prompt form".into()),
                     };
-                    rows.insert(claim, PalwMaterialNativeAuthorityV1 { execution_root, class_id, artifact_root, ladder, form });
+                    rows.insert(
+                        claim,
+                        AuthorityRecordV4(PalwMaterialNativeAuthorityV1 { execution_root, class_id, artifact_root, ladder, form }),
+                    );
                 }
-                rows
+                (rows, lease)
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (BTreeMap::new(), None),
             Err(e) => return Err(e.to_string()),
         };
-        Ok(Self { file: file.to_path_buf(), rows })
+        Ok(Self { file: file.to_path_buf(), rows, _native_lease: native_lease })
     }
     fn get(&self, claim: &Hash64) -> Option<PalwMaterialNativeAuthorityV1> {
-        self.rows.get(claim).copied()
+        self.rows.get(claim).map(|r| r.0)
     }
     fn record(&mut self, claim: Hash64, authority: PalwMaterialNativeAuthorityV1) -> Result<(), String> {
         match self.rows.get(&claim) {
-            Some(known) if *known == authority => return Ok(()),
+            Some(known) if known.0 == authority => return Ok(()),
             Some(_) => return Err("a claim's native authority changed between two Ready requests".into()),
             None => {}
         }
@@ -1273,27 +1343,34 @@ impl AuthorityIndexV3 {
         {
             return Err("native provider authority identity incomplete".into());
         }
+        let lease = Self::projection_lease_v4(self.rows.len() + 1)?;
         let mut rows = self.rows.clone();
-        rows.insert(claim, authority);
-        self.publish(rows)
+        rows.insert(claim, AuthorityRecordV4(authority));
+        self.publish(rows, lease)
     }
     /// Called only with claims of exact consents deleted under a true native
     /// finality witness, after subtracting claims any live store still retains.
     fn remove_finalized(&mut self, claims: &BTreeSet<Hash64>) -> Result<(), String> {
+        let lease = Self::projection_lease_v4(self.rows.len())?;
         let mut rows = self.rows.clone();
         rows.retain(|claim, _| !claims.contains(claim));
         if rows.len() == self.rows.len() {
             return Ok(());
         }
-        self.publish(rows)
+        self.publish(rows, lease)
     }
-    fn publish(&mut self, rows: BTreeMap<Hash64, PalwMaterialNativeAuthorityV1>) -> Result<(), String> {
+    fn publish(
+        &mut self,
+        rows: BTreeMap<Hash64, AuthorityRecordV4>,
+        lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+    ) -> Result<(), String> {
         if rows.len() > AUTHORITY_MAX_ROWS_V3 {
             return Err("authority publication exceeds cap".into());
         }
         let encoded: Vec<AuthorityRowV3> = rows
             .iter()
-            .map(|(claim, a)| {
+            .map(|(claim, record)| {
+                let a = &record.0;
                 let form = match a.form {
                     PalwPromptIdsFormV1::Flat => 0,
                     PalwPromptIdsFormV1::MerkleV1 => 1,
@@ -1316,6 +1393,7 @@ impl AuthorityIndexV3 {
             return Err(error.to_string());
         }
         self.rows = rows;
+        self._native_lease = lease;
         Ok(())
     }
 }

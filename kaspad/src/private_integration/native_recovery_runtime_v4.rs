@@ -8,7 +8,7 @@ use kaspa_consensus_core::{
     palw_material_release_recovery_v2::{PalwMaterialRecoveryActionV2 as Recovery, material_recovery_object_v2},
     palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4 as Quote,
     palw_native_resource_v1::{
-        NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1, preflight_native_value_v1, reserve_native_requests_v1,
+        NativeHeapV1, NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1, preflight_native_value_v1, reserve_native_requests_v1,
         retain_native_value_decode_v1,
     },
     palw_provider_court_v1::{PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1 as CONTEXT, palw_provider_court_message_v1 as message},
@@ -53,8 +53,72 @@ fn ordinary_payload(q: &Quote) -> Result<Vec<u8>, String> {
         _ => Err("V4 quote has no fresh funded proposal".into()),
     }
 }
+struct ServerResponseOwnerV4 {
+    body: Response,
+    _lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+}
+fn checked_sum(values: &[u64]) -> Result<u64, String> {
+    values.iter().try_fold(0u64, |s, n| s.checked_add(*n)).ok_or("native enrollment workspace sum overflow".into())
+}
+fn sizes_v4(q: &Quote) -> Result<(u64, u64, u64), String> {
+    let Some(Recovery::FundedEnroll { monetary, terms, .. }) = q.proposal.as_ref() else {
+        return Err("V4 quote lacks funded terms".into());
+    };
+    let n = q.provider_keys.len() as u64;
+    if !(2..=8).contains(&n) {
+        return Err("V4 enrollment provider count outside signed roster bound".into());
+    }
+    let ordinary = checked_sum(&[
+        borsh::object_length(&monetary.terms).map_err(|e| e.to_string())? as u64,
+        4,
+        n.checked_mul(68 + 8 + 8).ok_or("offer wire overflow")?,
+    ])?;
+    let recovery = checked_sum(&[
+        4,
+        b"material-recovery-funded-enroll/v2".len() as u64,
+        4,
+        ordinary,
+        borsh::object_length(terms).map_err(|e| e.to_string())? as u64,
+        4,
+        n.checked_mul(68).ok_or("provider list overflow")?,
+    ])?;
+    let signatures = (n * 2 + 2)
+        .checked_mul(kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64)
+        .ok_or("signed enrollment wire overflow")?;
+    let signed_object =
+        checked_sum(&[borsh::object_length(q.proposal.as_ref().unwrap()).map_err(|e| e.to_string())? as u64, signatures, 2, 68, 4])?;
+    if signed_object > ENROLLMENT_FRAME_MAX {
+        return Err("V4 signed enrollment exceeds canonical carrier cap".into());
+    }
+    Ok((ordinary, recovery, signed_object))
+}
+fn server_workspace_v4(q: &Quote) -> Result<Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>, String> {
+    let n = q.provider_keys.len() as u64;
+    let (ordinary, recovery, _) = sizes_v4(q)?;
+    let ml = kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64;
+    let body = 5 + n * (68 + 8 + 2 * ml); // Signed Vec of two actual ML-DSA signatures per provider.
+    let header = 2 + 1 + 64 + 64 + 4 + n * 68 + 8 + 8 + 64;
+    let outer = checked_sum(&[header, 4, n * (4 + ml), 4, body])?;
+    let typed = n
+        * (std::mem::size_of::<(PalwBondKeyV2, Vec<u8>, Vec<u8>)>()
+            + std::mem::size_of::<&ServedProviderV3>()
+            + std::mem::size_of::<(PalwBondKeyV2, usize)>()
+            + std::mem::size_of::<(PalwBondKeyV2, ProviderTransportSignerV1<'_>)>()
+            + 2 * std::mem::size_of::<PalwBondKeyV2>()
+            + std::mem::size_of::<Vec<u8>>()) as u64;
+    let requests = checked_sum(&[
+        typed,
+        3 * n * ml,
+        body,
+        outer,
+        2 * ordinary,
+        2 * recovery,
+        n * (std::mem::size_of::<(PalwBondKeyV2, u64, u64)>() + std::mem::size_of::<PalwBondKeyV2>()) as u64,
+    ])?;
+    reserve_native_requests_v1(requests).map_err(|e| e.to_string())
+}
 impl LoopbackNativeProviderV3 {
-    fn recovery_request_v4(&self, request: &ProviderTransportRequestV1) -> Result<Response, String> {
+    fn recovery_request_v4(&self, request: &ProviderTransportRequestV1) -> Result<ServerResponseOwnerV4, String> {
         if request.body.len() as u64 > ENROLLMENT_FRAME_MAX {
             return Err("V4 enrollment body exceeds exact local cap".into());
         }
@@ -80,6 +144,7 @@ impl LoopbackNativeProviderV3 {
         {
             return Err("V4 enrollment substitutes native quote/executor/roster/prior-state".into());
         }
+        let workspace = server_workspace_v4(q)?;
         let action = q.proposal.as_ref().ok_or("native quote already has an active session")?;
         let Recovery::FundedEnroll { monetary, terms, .. } = action else {
             return Err("V4 request is not atomic FundedEnroll".into());
@@ -127,7 +192,7 @@ impl LoopbackNativeProviderV3 {
             let root = monetary.terms.root;
             let mut queue = self.additional_carriers.lock().map_err(|_| "additional queue poisoned")?;
             if let Some(id) = queue.pending_enrollment(q.class, q.executor) {
-                return Ok(Response::Queued(id));
+                return Ok(ServerResponseOwnerV4 { body: Response::Queued(id), _lease: workspace });
             }
             queue.insert(
                 root,
@@ -142,7 +207,7 @@ impl LoopbackNativeProviderV3 {
                 object,
             )?;
             kaspa_core::info!("RFC08 V4 atomic enrollment durably queued: class {} root {} consent {}", q.class, root, monetary.id());
-            Ok(Response::Queued(root))
+            Ok(ServerResponseOwnerV4 { body: Response::Queued(root), _lease: workspace })
         } else {
             let ordinary = ordinary_payload(q)?;
             let recovery = action.payload();
@@ -158,7 +223,7 @@ impl LoopbackNativeProviderV3 {
                     )
                 })
                 .collect();
-            Ok(Response::Signed(signatures))
+            Ok(ServerResponseOwnerV4 { body: Response::Signed(signatures), _lease: workspace })
         }
     }
 }
@@ -171,6 +236,22 @@ impl AuthenticatedSocketExchangeV3 {
         if q.executor != self.sender || q.executor_pubkey.as_slice() != self.key.public_key() {
             return Err("local producer key/bond differs from recovery sponsor".into());
         }
+        let frame_length = borsh::object_length(&(q, &object)).map_err(|e| e.to_string())? as u64;
+        if frame_length > ENROLLMENT_FRAME_MAX {
+            return Err("canonical enrollment request exceeds V4 cap before allocation".into());
+        }
+        let quote_heap = q.native_heap_v1("V4 transport quote copy").bytes().ok_or("V4 quote heap unsupported")?;
+        let transport_fixed = 2 * (self.key.public_key().len() as u64)
+            + q.provider_keys.len() as u64 * (2 * std::mem::size_of::<PalwBondKeyV2>()) as u64
+            + 2 * kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64;
+        let _request_workspace = reserve_native_requests_v1(checked_sum(&[
+            quote_heap,
+            4 * frame_length,
+            transport_fixed,
+            std::mem::size_of::<Request>() as u64,
+            std::mem::size_of::<ProviderTransportRequestV1>() as u64,
+        ])?)
+        .map_err(|e| e.to_string())?;
         let request = Request { quote: q.clone(), object };
         let body = borsh::to_vec(&request).map_err(|e| e.to_string())?;
         if body.len() as u64 > ENROLLMENT_FRAME_MAX {
@@ -192,7 +273,7 @@ impl AuthenticatedSocketExchangeV3 {
         socket.set_read_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3)).map_err(|e| e.to_string())?;
         socket.set_write_timeout(Some(PRIVATE_NATIVE_EXCHANGE_TIMEOUT_V3)).map_err(|e| e.to_string())?;
         write_frame_v3(&mut socket, &borsh::to_vec(&signed).map_err(|e| e.to_string())?)?;
-        let frame = read_frame_v3(&mut socket)?;
+        let frame = read_frame_capped_v4(&mut socket, ENROLLMENT_FRAME_MAX)?;
         preflight_native_value_v1::<ProviderTransportResponseV1>(&frame, frame.len() as u64).map_err(|e| e.to_string())?;
         let response = retain_native_value_decode_v1(&frame, || borsh::from_slice::<ProviderTransportResponseV1>(&frame))
             .map_err(|e| e.to_string())?;
@@ -210,13 +291,26 @@ impl AuthenticatedSocketExchangeV3 {
         }
         // Exact encoded proposal and all signature buffers coexist with the
         // retained provider response until the completed carrier is durable.
-        let encoded = borsh::object_length(q).map_err(|e| e.to_string())? as u64;
-        let signature_bytes = (q.provider_keys.len() as u64 + 1)
-            .checked_mul(6 * kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64)
-            .ok_or("signature workspace overflow")?;
-        let _workspace = reserve_native_requests_v1(
-            encoded.checked_mul(8).and_then(|n| n.checked_add(signature_bytes)).ok_or("enrollment workspace overflow")?,
-        )
+        let (ordinary_size, recovery_size, signed_wire) = sizes_v4(q)?;
+        let proposal = q.proposal.as_ref().ok_or("missing funded proposal")?;
+        let draft_heap =
+            proposal.native_heap_v1("signed V4 enrollment clone").bytes().ok_or("signed V4 enrollment heap unsupported")?;
+        let n = q.provider_keys.len() as u64;
+        let signature_bytes = (2 * n + 2)
+            .checked_mul(kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64)
+            .ok_or("signature construction overflow")?;
+        let fixed = std::mem::size_of::<Object>()
+            + std::mem::size_of::<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1>()
+            + std::mem::size_of::<Recovery>();
+        let _workspace = reserve_native_requests_v1(checked_sum(&[
+            draft_heap,
+            signature_bytes,
+            3 * signed_wire,
+            2 * ordinary_size,
+            2 * recovery_size,
+            n * (std::mem::size_of::<(PalwBondKeyV2, u64, u64)>() + std::mem::size_of::<PalwBondKeyV2>()) as u64,
+            fixed as u64,
+        ])?)
         .map_err(|e| e.to_string())?;
         let response = self.recovery_roundtrip_v4(q, None)?;
         let Response::Signed(signatures) = &*response else { return Err("provider did not sign prospective enrollment".into()) };
@@ -277,9 +371,14 @@ pub(super) fn handle_recovery_v4(stream: &mut TcpStream, service: &LoopbackNativ
     let result = service.recovery_request_v4(request);
     // Errors after authentication may still be signed only by the exact
     // configured recipients. No absent provider is synthesized.
-    let body = match result {
-        Ok(b) => b,
-        Err(reason) => Response::Refused(reason),
+    let (body, _response_lease) = match result {
+        Ok(owner) => (owner.body, owner._lease),
+        Err(reason) => {
+            let lease =
+                reserve_native_requests_v1((reason.len() as u64).checked_add(5).and_then(|n| n.checked_mul(4)).unwrap_or(u64::MAX));
+            let Ok(lease) = lease else { return };
+            (Response::Refused(reason), lease)
+        }
     };
     let signers: Vec<_> = service
         .providers
@@ -413,5 +512,63 @@ impl LoopbackNativeProviderV3 {
             )?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// Cryptographic payload boundary only: neither these signatures nor the
+    /// synthetic answer demonstrate native payment, a court verdict or finality.
+    #[test]
+    fn provider_event_signature_binds_immutable_deadline_and_stream() {
+        use kaspa_consensus_core::{
+            palw_material_release_recovery_v2::PalwMaterialRecoveryAnswerV4,
+            palw_monetary_material_v1::PalwMonetaryMaterialActionV1 as M, tx::TransactionOutpoint,
+        };
+        let h = Hash64::from_u64_word;
+        let provider = PalwBondKeyV2(TransactionOutpoint::new(h(1), 0));
+        let key = kaspa_pq_validator_core::ValidatorKey::from_seed([7; 32]);
+        let action = Recovery::AnswerAndCheckpoint {
+            answer: Box::new(PalwMaterialRecoveryAnswerV4::Kernel {
+                root: h(2),
+                provider,
+                dependency: h(3),
+                stage: 0,
+                position: 1,
+                bytes: vec![4],
+            }),
+            stream: h(5),
+            previous: h(6),
+            sequence: 7,
+            challenge_deadline_daa: 100,
+        };
+        let object =
+            material_recovery_object_v2(h(9), action, provider, |_, m, c| Some(key.sign_with_context(m, c).to_vec())).unwrap();
+        let Object::MonetaryMaterialActionV1 { action, signature, .. } = object else { panic!() };
+        let payload = borsh::to_vec(&action).unwrap();
+        assert!(verify(key.public_key(), message(h(9), 242, &provider, &payload).as_byte_slice(), &signature, CONTEXT));
+        let mut changed = action.as_ref().clone();
+        let M::RecoveryV2(inner) = &mut changed else { panic!() };
+        let Recovery::AnswerAndCheckpoint { challenge_deadline_daa, .. } = &mut **inner else { panic!() };
+        *challenge_deadline_daa += 1;
+        assert!(!verify(
+            key.public_key(),
+            message(h(9), 242, &provider, &borsh::to_vec(&changed).unwrap()).as_byte_slice(),
+            &signature,
+            CONTEXT
+        ));
+        assert_eq!(borsh::to_vec(&ProviderTransportPurposeV1::NativeReadyV3).unwrap(), vec![0]);
+        assert_eq!(borsh::to_vec(&ProviderTransportPurposeV1::RecoveryEnrollmentV4).unwrap(), vec![1]);
+    }
+    #[test]
+    fn enrollment_request_and_response_nested_bombs_are_rejected_before_decode() {
+        let mut request = 4u16.to_le_bytes().to_vec();
+        request.extend([0u8; 64 + 8 + 64 + 64 + 68]);
+        request.extend(u32::MAX.to_le_bytes());
+        assert!(preflight_native_value_v1::<Request>(&request, request.len() as u64).is_err());
+        let mut response = vec![0];
+        response.extend(u32::MAX.to_le_bytes());
+        assert!(preflight_native_value_v1::<Response>(&response, response.len() as u64).is_err());
     }
 }

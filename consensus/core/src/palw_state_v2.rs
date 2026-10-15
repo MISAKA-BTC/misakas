@@ -13788,7 +13788,7 @@ pub fn palw_v2_pre_object_base_retained_v1(
     palw_mesh_fold_v1::sweep_mesh_v1(&mut builder, ctx);
     apply_work_target_shadow(&mut builder, parent, ctx);
     apply_work_target(&mut builder, parent, ctx);
-    apply_class_share_growth(&mut builder, parent, ctx);
+    apply_class_share_growth(&mut builder, parent, ctx)?;
     apply_class_reclamation(&mut builder, parent, ctx)?;
     // RFC-0004 (spec 17 §17.5.2): the improvement sweep, as the fold's step 2e does, then the material
     // lane's.
@@ -14385,7 +14385,7 @@ fn apply_palw_transition_v7_inner(
     //     reads the same census, and before the objects and `ensure_epoch_budgets`, so the new
     //     epoch's budgets are derived from the table this leaves behind rather than from the one
     //     the closed epoch had. Off entirely when `class_growth_permille` is zero.
-    apply_class_share_growth(&mut builder, parent, ctx);
+    apply_class_share_growth(&mut builder, parent, ctx)?;
     // 2d. Reclamation (this line's ADR Decision 5), at the same boundary and off the same census.
     //     AFTER the growth step, because a class the growth rule just decayed to nothing and a
     //     class that has been silent for `reclaim_epochs` are different facts, and only the second
@@ -16233,7 +16233,7 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
                 let record = builder.state.classes.get(&class_id).expect("just listed").clone();
                 let mut dormant = record.clone();
                 dormant.status = PalwClassStatusV2::Dormant { since_daa: ctx.daa_score };
-                builder.write_class(class_id, Some(dormant));
+                builder.write_class(class_id, Some(dormant))?;
                 if let Some(bond) = record.registrant_bond {
                     builder.move_registration_exposure(bond, false)?;
                 }
@@ -16242,12 +16242,12 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         };
         for (id, granted) in table {
             if builder.state.class_shares.get(&id).copied() != Some(granted) {
-                builder.write_share(id, Some(granted));
+                builder.write_share(id, Some(granted))?;
             }
         }
         let mut record = builder.state.classes.get(&class_id).expect("just listed").clone();
         record.status = PalwClassStatusV2::Active;
-        builder.write_class(class_id, Some(record));
+        builder.write_class(class_id, Some(record))?;
         // Onboarding P0: a gated class that activated is ACTIVE_REWARDABLE in its conformance record (a no-op for any other class).
         palw_onboarding_fold_v1::note_class_activated_v1(builder, &class_id);
     }
@@ -16606,25 +16606,29 @@ fn apply_work_target(builder: &mut TransitionBuilder<'_>, parent: &PalwChainStat
     }));
 }
 
-fn apply_class_share_growth(builder: &mut TransitionBuilder<'_>, parent: &PalwChainStateV2, ctx: &PalwBlockContextV2) {
+fn apply_class_share_growth(
+    builder: &mut TransitionBuilder<'_>,
+    parent: &PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+) -> Result<(), PalwStateV2Error> {
     // ADR-0137: past the work target no share grows or decays.
     if builder.extras.work_target_active {
-        return;
+        return Ok(());
     }
     if builder.params.class_growth_permille() == 0 {
-        return;
+        return Ok(());
     }
-    let Some(last) = &parent.last_point else { return };
+    let Some(last) = &parent.last_point else { return Ok(()) };
     let epoch_length = builder.params.epoch_length;
     let closed_epoch = last.daa_score / epoch_length;
     if ctx.daa_score / epoch_length <= closed_epoch {
-        return;
+        return Ok(());
     }
     // The closed epoch's budget table, or nothing: a table stamped with another epoch caps a
     // different span, and comparing production against it would invent a verdict.
     let budgets = match builder.state.epoch_budgets.as_ref() {
         Some(budgets) if budgets.epoch_index == closed_epoch => budgets.budget_blocks.clone(),
-        _ => return,
+        _ => return Ok(()),
     };
     // **ADR-0107: the closed epoch's VERIFIED work, per class** — attempt claims whose `Final`
     // happened inside the span, read off the claim records (they outlive the span: arming the
@@ -16669,7 +16673,7 @@ fn apply_class_share_growth(builder: &mut TransitionBuilder<'_>, parent: &PalwCh
         // A span nobody produced in measures nothing. Without this, every class in the table would
         // decay on a gap epoch and the floor would collect the whole table for an outage that was
         // never any class's fault.
-        return;
+        return Ok(());
     }
     let frozen: BTreeSet<Hash64> = builder
         .state
@@ -16689,9 +16693,10 @@ fn apply_class_share_growth(builder: &mut TransitionBuilder<'_>, parent: &PalwCh
     );
     for (class_id, share) in moved.shares {
         if builder.state.class_shares.get(&class_id).copied() != Some(share) {
-            builder.write_share(class_id, Some(share));
+            builder.write_share(class_id, Some(share))?;
         }
     }
+    Ok(())
 }
 
 /// **Reclamation: a class that has stopped producing gives its seat back** (this line's ADR
@@ -16760,7 +16765,7 @@ fn apply_class_reclamation(
             if let Some(walk) = builder.state.class_walks.get(id).copied()
                 && walk.idle_streak != 0
             {
-                builder.write_class_walk(*id, Some(PalwClassWalkV2 { last_epoch: closed_epoch, ..Default::default() }));
+                builder.write_class_walk(*id, Some(PalwClassWalkV2 { last_epoch: closed_epoch, ..Default::default() }))?;
             }
             continue;
         }
@@ -16783,7 +16788,7 @@ fn apply_class_reclamation(
         // that silence would reclaim a class for the boundary's own arithmetic.
         if budget == 0 {
             walk.last_epoch = closed_epoch;
-            builder.write_class_walk(*id, Some(walk));
+            builder.write_class_walk(*id, Some(walk))?;
             continue;
         }
         walk.idle_streak = if produced == 0 { walk.idle_streak + 1 } else { 0 };
@@ -16792,7 +16797,7 @@ fn apply_class_reclamation(
             reclaims.push(*id);
             walk = PalwClassWalkV2 { last_epoch: closed_epoch, ..Default::default() };
         }
-        builder.write_class_walk(*id, Some(walk));
+        builder.write_class_walk(*id, Some(walk))?;
     }
 
     for id in &reclaims {
@@ -16811,10 +16816,10 @@ fn apply_class_reclamation(
         let returned = builder.state.class_shares.get(id).copied().unwrap_or(0);
         // The row leaves the table whatever it held: a Dormant class with a zero entry is the one
         // shape `assert_internal_consistency` refuses (a share must name a live class).
-        builder.write_share(*id, None);
+        builder.write_share(*id, None)?;
         let mut dormant = record.clone();
         dormant.status = PalwClassStatusV2::Dormant { since_daa: ctx.daa_score };
-        builder.write_class(*id, Some(dormant));
+        builder.write_class(*id, Some(dormant))?;
         if let Some(bond) = record.registrant_bond {
             builder.move_registration_exposure(bond, false)?;
         }
@@ -16887,7 +16892,7 @@ fn redistribute_permille_v1(
             continue;
         }
         let held = builder.state.class_shares.get(id).copied().unwrap_or(0);
-        builder.write_share(*id, Some(held.saturating_add(extra as u16)));
+        builder.write_share(*id, Some(held.saturating_add(extra as u16)))?;
     }
     Ok(())
 }
@@ -17014,7 +17019,7 @@ fn apply_class_retargets(
         };
         let next = walked.min(ceiling).max(1);
         if next != current {
-            builder.write_receipt_target(pooled_key, Some(PalwClassTargetV2 { target: next }));
+            builder.write_receipt_target(pooled_key, Some(PalwClassTargetV2 { target: next }))?;
         }
     }
     for (lane_permille, counters_are_receipts) in [(split, false), (1000 - split, true)] {
@@ -17110,9 +17115,9 @@ fn apply_class_retargets(
                     crate::palw_class_daa::converge_idle_target_v1(current, floor_price, builder.params.class_daa_max_factor()).max(1);
                 if next != current {
                     if counters_are_receipts {
-                        builder.write_receipt_target(class_id, Some(PalwClassTargetV2 { target: next }));
+                        builder.write_receipt_target(class_id, Some(PalwClassTargetV2 { target: next }))?;
                     } else {
-                        builder.write_target(class_id, Some(PalwClassTargetV2 { target: next }));
+                        builder.write_target(class_id, Some(PalwClassTargetV2 { target: next }))?;
                     }
                 }
                 continue;
@@ -17145,9 +17150,9 @@ fn apply_class_retargets(
                 .max(1);
             if next != current {
                 if counters_are_receipts {
-                    builder.write_receipt_target(class_id, Some(PalwClassTargetV2 { target: next }));
+                    builder.write_receipt_target(class_id, Some(PalwClassTargetV2 { target: next }))?;
                 } else {
-                    builder.write_target(class_id, Some(PalwClassTargetV2 { target: next }));
+                    builder.write_target(class_id, Some(PalwClassTargetV2 { target: next }))?;
                 }
             }
         }
@@ -17945,7 +17950,7 @@ fn seat_attempt_lane_class_v1(
     }
     for (id, share) in table {
         if builder.state.class_shares.get(&id).copied() != Some(share) {
-            builder.write_share(id, Some(share));
+            builder.write_share(id, Some(share))?;
         }
     }
     // **A class being seated is a class being PRICED** (ADR-0076).
@@ -17962,7 +17967,7 @@ fn seat_attempt_lane_class_v1(
     // share the table just wrote and the class's own counted work.
     let seated = builder.state.class_shares.get(class_id).copied().unwrap_or(0);
     let pwu = builder.class_seed_pwu(class_id, ctx.daa_score);
-    builder.write_target(*class_id, Some(PalwClassTargetV2 { target: crate::palw_class_daa::attempt_target_seed_v1(seated, pwu) }));
+    builder.write_target(*class_id, Some(PalwClassTargetV2 { target: crate::palw_class_daa::attempt_target_seed_v1(seated, pwu) }))?;
     Ok(())
 }
 
@@ -18290,7 +18295,7 @@ fn apply_class_registration_v1(
         // moves.
         for (id, share) in table {
             if builder.state.class_shares.get(&id).copied() != Some(share) {
-                builder.write_share(id, Some(share));
+                builder.write_share(id, Some(share))?;
             }
         }
     }
@@ -18342,7 +18347,7 @@ fn apply_class_registration_v1(
             // genesis differently.
             fused_attention,
         }),
-    );
+    )?;
     // The canonical registration is signed, but pruning previously discarded its semantic
     // identities. Persist one immutable row at the independent semantic fence; no local model
     // or tokenizer file participates in the fold. Dormant re-registration cannot relabel it.
@@ -18367,7 +18372,7 @@ fn apply_class_registration_v1(
                 return Err(PalwStateV2Error::ImmutableModelUpdate("class canonical semantic identities changed"));
             }
         } else {
-            builder.write_class_semantics_v1(*class_id, Some(next));
+            builder.write_class_semantics_v1(*class_id, Some(next))?;
         }
     }
     // **ADR-0119 Decision 2: a class under the held map records its ladder, now.** The
@@ -18376,7 +18381,7 @@ fn apply_class_registration_v1(
     // the gate admits only past `Params::palw_held_context` — so a network that registers
     // none roots exactly as before.
     if held {
-        builder.write_class_step_ladder(*class_id, Some(crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1));
+        builder.write_class_step_ladder(*class_id, Some(crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1))?;
     }
     // **Decision 3: the registry's price, taken now and held while the class lives.** A
     // re-registration of a Dormant class takes it again — the previous reservation was
@@ -18399,8 +18404,8 @@ fn apply_class_registration_v1(
     }
     // A returning class starts its walk over: the counters are about the CURRENT
     // registration's production and nothing before it.
-    builder.write_class_walk(*class_id, None);
-    builder.write_target(*class_id, Some(PalwClassTargetV2 { target: *initial_target }));
+    builder.write_class_walk(*class_id, None)?;
+    builder.write_target(*class_id, Some(PalwClassTargetV2 { target: *initial_target }))?;
     // The receipt lane seeds at the uniform 2^-1, NOT from the class's `initial_target`.
     // It used to (ADR-0044: "one registration field, two slots"), and that was right while
     // every genesis target was 2^-1. The attempt lane's seed is now tuned per class to the
@@ -18411,7 +18416,7 @@ fn apply_class_registration_v1(
     // one free-prompt-certified class's lane at one win per 16,384 quanta for the ~7
     // epochs the receipt retarget needs to crawl back. The two retargets separate the
     // lanes from here, against their own censuses.
-    builder.write_receipt_target(*class_id, Some(PalwClassTargetV2 { target: PALW_RECEIPT_TARGET_SEED_V1 }));
+    builder.write_receipt_target(*class_id, Some(PalwClassTargetV2 { target: PALW_RECEIPT_TARGET_SEED_V1 }))?;
     // ADR-0135: a class registered with its carriage gets its lifecycle row from the graph.
     if builder.extras.model_registry.is_some()
         && let Some(work) = work

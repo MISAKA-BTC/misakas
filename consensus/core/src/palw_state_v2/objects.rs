@@ -867,7 +867,7 @@ pub(super) fn apply_object(
             builder.write_class_shard_plan(
                 *class_id,
                 Some(crate::palw_shard_licensing_v1::PalwClassShardPlanV1 { shard_count: *shard_count, declared_daa: ctx.daa_score }),
-            );
+            )?;
         }
         // **ADR-0100 Decision 4: a bond's shards of a class.** Only of a class it declared — the
         // exposure, the bound and the production proof all ride the class entry — only an Active
@@ -889,7 +889,15 @@ pub(super) fn apply_object(
             }
             crate::palw_shard_licensing_v1::palw_bond_shards_shape_v1(*shard_count, shards)
                 .map_err(PalwStateV2Error::BondShardsMalformed)?;
-            builder.write_bond_shards((*bond, *class_id), (!shards.is_empty()).then(|| shards.clone()));
+            {
+                use crate::palw_native_resource_v1::NativeHeapV1;
+                let bound = shards.native_heap_v1("bond shards incoming copy");
+                builder
+                    .native_reservation
+                    .grow_v1(bound.bytes().ok_or_else(|| PalwStateV2Error::NativeResource(bound))?)
+                    .map_err(PalwStateV2Error::NativeResource)?;
+            }
+            builder.write_bond_shards((*bond, *class_id), (!shards.is_empty()).then(|| shards.clone()))?;
         }
         // **ADR-0100 Decision 4: one shard's part.** The receipts' signatures are the acceptance
         // layer's; here: the fence, a `PanelBound` claim that licenses by parts, the plan's count,
@@ -1303,7 +1311,7 @@ pub(super) fn apply_object(
                     .copied()
                     .filter(|window| *window >= builder.params.window_court())
                     .ok_or(PalwStateV2Error::ClassCourtWindowMissing(*class_id))?;
-                builder.write_class_court_window(*class_id, Some(window));
+                builder.write_class_court_window(*class_id, Some(window))?;
             }
             builder.write_tir_class(*class_id, Some(record));
             // **RFC-0007 Part II**: past `palw_witness_manifest_v1` the class pins its witness profile (infallible).
@@ -1358,7 +1366,7 @@ pub(super) fn apply_object(
                     ));
                 }
             }
-            builder.write_class_semantics_v1(declaration.class_id, Some(next));
+            builder.write_class_semantics_v1(declaration.class_id, Some(next))?;
         }
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
@@ -1418,7 +1426,7 @@ pub(super) fn apply_object(
                     .copied()
                     .filter(|window| *window >= builder.params.window_court())
                     .ok_or(PalwStateV2Error::ClassCourtWindowMissing(*class_id))?;
-                builder.write_class_court_window(*class_id, Some(window));
+                builder.write_class_court_window(*class_id, Some(window))?;
             }
         }
         // **ADR-0078 Decision 4: a derivation is committed beside its claim; the thing never
@@ -1671,7 +1679,7 @@ pub(super) fn apply_object(
             }
             let mut frozen = record;
             frozen.status = PalwClassStatusV2::Frozen { since_daa: ctx.daa_score };
-            builder.write_class(*class_id, Some(frozen));
+            builder.write_class(*class_id, Some(frozen))?;
             // **ADR-0152-adjacent (Activation Pool): a proven-bad class stops attracting preparers.**
             // Its budgets move to the row's own `withheld` — never into `panel_reserve_sompi`, whose
             // number is ADR-0124's withheld escrow (the review's C10) — and nothing is refunded: a
@@ -3462,7 +3470,7 @@ pub(super) fn apply_object(
             if derived.is_some() {
                 // ADR-0148: the first compute-priced commitment opens the lane's one target.
                 if in_compute {
-                    builder.seed_fp_pooled_receipt_target();
+                    builder.seed_fp_pooled_receipt_target()?;
                 }
                 builder.write_fp_claim_prompt(
                     (*class_id, *bond, *claim_id),

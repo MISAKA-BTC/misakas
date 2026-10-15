@@ -82,7 +82,8 @@ pub(super) fn apply_plan_declared_v1(
     let (_, cell_permille) =
         rules::palw_tir_shard_cell_permille_v1(&program, max_context, s_l, s_p, builder.params.tir_fence2_active_at(ctx.daa_score))
             .map_err(|e| refused(e.to_string()))?;
-    builder.write_tir_shard_plan(*class_id, Some(rules::PalwTirShardPlanV1 { s_l, s_p, declared_daa: ctx.daa_score, cell_permille }));
+    builder
+        .write_tir_shard_plan(*class_id, Some(rules::PalwTirShardPlanV1 { s_l, s_p, declared_daa: ctx.daa_score, cell_permille }))?;
     Ok(())
 }
 

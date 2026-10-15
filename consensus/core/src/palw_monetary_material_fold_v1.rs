@@ -946,6 +946,13 @@ mod tests {
         b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
         let checkpoint = b.state.material_provider_ack_checkpoint_v2(&bond(2)).unwrap();
         assert_eq!(checkpoint.reserved_acks, 1);
+        // Reservation seam: a court admission must reserve its eventual event
+        // increment before committing the challenge. No verdict is fabricated.
+        recovery::reserve_answer_event_v4(&mut b, e.terms.root, &bond(2)).unwrap();
+        assert_eq!(b.state.material_provider_ack_checkpoint_v2(&bond(2)).unwrap().reserved_answer_events, 1);
+        recovery::release_answer_event_v4(&mut b, e.terms.root, &bond(2)).unwrap();
+        assert_eq!(b.state.material_provider_ack_checkpoint_v2(&bond(2)).unwrap().reserved_answer_events, 0);
+        b.state.assert_material_release_recovery_consistency_v2(&params).unwrap();
         let before = b.state.clone();
         let entries = b.entries.len();
         assert!(recovery::action(&mut b, &ctx(3), &action, &bond(1)).is_err());

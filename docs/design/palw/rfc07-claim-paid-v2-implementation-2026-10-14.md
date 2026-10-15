@@ -510,3 +510,21 @@ and [Brakedown paper](https://eprint.iacr.org/2021/1043) does not substitute for
 implementing or reviewing those protocols. No random-code distance, query
 count, repetitions or 128-bit composition budget is approved by this source
 layer. New constraint-corruption and matrix-coefficient test source is unrun.
+
+`pipeline_edges` adds executable lowering for all seven external edge kinds:
+JobScalar, JobTokens, StageRows, StageFinal, StageRowCount, JobTokenCount and
+JobImage. Upstream rows/final values reuse the original symbolic tensor wires.
+Public templates use checked lengths and indexed reads without expanding a
+second token list. Image shape, exact byte length and declared interval are
+checked. Stage trip/token/stream row-start derivation is allocation free.
+Random inputs use the actual native R digest/word/Gaussian implementations,
+with the real seed/item/step and a fixed digest cache; hash-block work is
+bounded before the output wire vector is allocated. Output wire ownership is
+reserved from the resolved typed shape. This public deterministic R work is
+explicit and does not count as a compact verifier optimization.
+
+These edge emitters still need the shared ProgramV2/pipeline constructor to
+supply actual prior-stage outputs and authenticate image/finalized-output job
+facts. They do not independently establish native job authority or a complete
+pipeline proof. New source tests cover all seven edge kinds, padding, signed
+upstream values, native R agreement and a zero-hash-budget refusal; unrun.

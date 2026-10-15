@@ -12631,7 +12631,7 @@ fn registered_semantics_are_independently_fenced_rooted_and_stamped_before_job_r
     let mut writer = TransitionBuilder::new(&state, &p, false, false, false, false, &on);
     let mut descriptor = row.clone();
     descriptor.token_table_root = Some(h64(888));
-    writer.write_class_semantics_v1(h64(1), Some(descriptor));
+    writer.write_class_semantics_v1(h64(1), Some(descriptor)).unwrap();
     assert_eq!(
         writer.state.claim_semantics_v1(&h64(0xFC)).unwrap().token_table_root,
         None,
@@ -34067,4 +34067,49 @@ fn rfc06_retained_transition_and_rehearsal_preserve_default_off_canonical_bytes(
         borsh::to_vec(&PalwStateCarriageV2::from_state(&legacy_base)).unwrap(),
         borsh::to_vec(&PalwStateCarriageV2::from_state(&retained_base)).unwrap()
     );
+}
+
+/// Admission failure is local and precedes both primary membership and journal
+/// writes. These are source regression cases, not an executed capacity result.
+#[test]
+fn native_fixed_writers_refuse_before_state_or_journal_change() {
+    use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let empty = PalwChainStateV2::genesis();
+    let mut builder = TransitionBuilder::new(&empty, &p, false, false, false, false, &extras);
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 });
+    builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+    assert!(matches!(builder.write_class(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_capability(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_class_walk(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_target(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_share(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(builder.entries.is_empty());
+    assert_eq!(builder.state, empty);
+    assert_eq!(checker.outstanding(), (0, 0));
+    // Even with journal capacity already available, an absent primary map row
+    // must be admitted before insertion.
+    builder.entries.reserve_exact(4);
+    assert!(matches!(builder.write_share(h64(1), Some(10)), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(builder.entries.is_empty());
+    assert_eq!(builder.state, empty);
+}
+
+#[test]
+fn native_fixed_writer_reservations_survive_mutation_until_owner_drop() {
+    use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let mut builder = TransitionBuilder::new(&PalwChainStateV2::genesis(), &p, false, false, false, false, &extras);
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: u64::MAX, database_bytes: 0 });
+    builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+    builder.write_share(h64(1), Some(10)).unwrap();
+    builder.write_share(h64(1), Some(20)).unwrap();
+    builder.write_share(h64(1), None).unwrap();
+    assert_eq!(builder.entries.len(), 3);
+    assert!(builder.state.class_shares.is_empty());
+    assert!(checker.outstanding().0 > 0);
+    drop(builder);
+    assert_eq!(checker.outstanding(), (0, 0));
 }
