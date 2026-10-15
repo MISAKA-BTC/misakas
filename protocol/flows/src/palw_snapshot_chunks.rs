@@ -30,7 +30,16 @@ impl From<io::Error> for NativeSnapshotDecodeErrorV1 {
     fn from(error: io::Error) -> Self {
         // Nested File -> BufReader -> zlib -> Borsh errors retain their OS
         // cause. Format/CRC/count failures use synthetic InvalidData/EOF.
-        if error.raw_os_error().is_some() { Self::LocalStorage(error) } else { Self::Encoding(error) }
+        if error.raw_os_error().is_some() {
+            Self::LocalStorage(error)
+        } else if matches!(error.kind(), io::ErrorKind::Unsupported | io::ErrorKind::TimedOut | io::ErrorKind::OutOfMemory) {
+            Self::Capacity(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<PalwStateCarriageV2>(
+                "native snapshot local processing",
+                &error.to_string(),
+            ))
+        } else {
+            Self::Encoding(error)
+        }
     }
 }
 
@@ -577,8 +586,10 @@ impl SnapshotReceiver {
         hash: Hash64,
         bytes: &[u8],
     ) -> Result<(), NativeSnapshotDecodeErrorV1> {
-        if self.spill.expired()
-            || point != self.point
+        if self.spill.expired() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "snapshot receive lease expired").into());
+        }
+        if point != self.point
             || root != self.root
             || total != self.total
             || count != self.count
@@ -753,7 +764,7 @@ impl<R: Read> Read for DecodedLimitReader<R> {
         }
         if self.checked_at == 0 || self.read.saturating_sub(self.checked_at) >= COMPRESSION_INPUT_BYTES as u64 {
             if self.created.elapsed() >= SESSION_TTL {
-                return Err(invalid("snapshot decode lease expired"));
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "snapshot decode lease expired"));
             }
             self.checked_at = self.read.max(1);
         }
@@ -956,6 +967,27 @@ mod tests {
             let profile = SnapshotCompressionV1 { nonce: [1; 32], decoded: raw.len() as u64 };
             assert!(receive_compressed_raw(&budget, &zlib(&raw), profile).decode_snapshot().is_err());
             assert_eq!(budget.available_permits(), 1);
+        }
+    }
+
+    #[test]
+    fn expired_authenticated_decode_is_a_local_resource_refusal_and_releases_spill() {
+        let budget = Arc::new(Semaphore::new(1));
+        let carriage = native_carriage();
+        let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &[] }).unwrap();
+        let profile = SnapshotCompressionV1 { nonce: [9; 32], decoded: raw.len() as u64 };
+        let mut receiver = receive_compressed_raw(&budget, &zlib(&raw), profile);
+        receiver.spill.created = Instant::now() - SESSION_TTL - Duration::from_secs(1);
+        let result = receiver.decode_snapshot_with_admission_v1(true, |_, _| {
+            panic!("expired local decoder must not reach native reconstruction admission")
+        });
+        assert!(matches!(result, Err(NativeSnapshotDecodeErrorV1::Capacity(_))));
+        assert_eq!(budget.available_permits(), 1);
+        for kind in [io::ErrorKind::Unsupported, io::ErrorKind::OutOfMemory] {
+            assert!(matches!(
+                NativeSnapshotDecodeErrorV1::from(io::Error::new(kind, "local scanner resource")),
+                NativeSnapshotDecodeErrorV1::Capacity(_)
+            ));
         }
     }
 

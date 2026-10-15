@@ -34085,6 +34085,14 @@ fn native_fixed_writers_refuse_before_state_or_journal_change() {
     assert!(matches!(builder.write_class_walk(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
     assert!(matches!(builder.write_target(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
     assert!(matches!(builder.write_share(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_fp_certified_class(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_pending_chunks(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_tir_class(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.write_gen_class(h64(1), None), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(
+        builder.write_derived_artifact(crate::palw_derived_v1::PalwDerivedKeyV1 { claim: h64(1), transformer: h64(2) }, None),
+        Err(PalwStateV2Error::NativeResource(_))
+    ));
     assert!(builder.entries.is_empty());
     assert_eq!(builder.state, empty);
     assert_eq!(checker.outstanding(), (0, 0));
@@ -34094,6 +34102,40 @@ fn native_fixed_writers_refuse_before_state_or_journal_change() {
     assert!(matches!(builder.write_share(h64(1), Some(10)), Err(PalwStateV2Error::NativeResource(_))));
     assert!(builder.entries.is_empty());
     assert_eq!(builder.state, empty);
+}
+
+#[test]
+fn native_chunk_assembly_refuses_before_payload_copy_and_decode_preflight_refuses_nested_bomb() {
+    use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let empty = PalwChainStateV2::genesis();
+    let mut builder = TransitionBuilder::new(&empty, &p, false, false, false, false, &extras);
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 });
+    builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+    assert!(matches!(builder.reserve_chunk_assembly_v1(&h64(1), &[1]), Err(PalwStateV2Error::NativeResource(_))));
+    assert_eq!(builder.state, empty);
+    assert!(builder.entries.is_empty());
+    assert_eq!(checker.outstanding(), (0, 0));
+    // BondRegistered (tag0), fixed outpoint68, then a hostile pubkey Vec length.
+    let mut bomb = vec![0; 1 + 68];
+    bomb.extend_from_slice(&u32::MAX.to_le_bytes());
+    assert!(matches!(builder.reserve_chunk_decode_v1(&bomb), Err(PalwStateV2Error::ChunkedObjectUndecodable(_))));
+    assert_eq!(builder.state, empty);
+    assert!(builder.entries.is_empty());
+}
+
+#[test]
+fn native_chunk_preflight_disabled_preserves_legacy_valid_codec() {
+    let p = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let mut builder = TransitionBuilder::new(&PalwChainStateV2::genesis(), &p, false, false, false, false, &extras);
+    let object = PalwConsensusObjectV2::ObjectChunk { group: h64(3), index: 0, count: 1, bytes: vec![1, 2, 3] };
+    let canonical = borsh::to_vec(&object).unwrap();
+    assert!(!builder.native_reservation.is_tracking_v1());
+    builder.reserve_chunk_decode_v1(&canonical).unwrap();
+    assert_eq!(borsh::to_vec(&borsh::from_slice::<PalwConsensusObjectV2>(&canonical).unwrap()).unwrap(), canonical);
+    assert!(builder.entries.is_empty());
 }
 
 #[test]

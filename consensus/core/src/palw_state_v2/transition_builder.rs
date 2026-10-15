@@ -388,6 +388,58 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
+    /// Chunk assembly owns a copy of the existing group, the incoming part,
+    /// its new membership, an eviction-key projection and the explicit whole
+    /// byte buffer. Reserve those concrete allocations before any Clone/Vec.
+    pub(super) fn reserve_chunk_assembly_v1(&mut self, group: &Hash64, bytes: &[u8]) -> Result<(), PalwStateV2Error> {
+        use crate::palw_native_resource_v1::{NativeCoverageV1, NativeHeapV1, TirNativeRequestsV1, typed::BTreeNodeEnvelopeV1};
+        if !self.native_reservation.is_tracking_v1() {
+            return Ok(());
+        }
+        if cfg!(not(target_pointer_width = "64")) {
+            return Err(PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<PalwPendingChunksV2>(
+                "chunk assembly membership",
+                "pinned tree profile requires 64-bit",
+            )));
+        }
+        let mut q = TirNativeRequestsV1::new();
+        let mut total = bytes.len() as u64;
+        if let Some(pending) = self.state.pending_chunks.get(group) {
+            let heap = pending.native_heap_v1("chunk assembly existing group clone");
+            q.add_v1(heap.bytes().ok_or_else(|| PalwStateV2Error::NativeResource(heap))?).map_err(PalwStateV2Error::NativeResource)?;
+            for part in pending.parts.values() {
+                total = total.checked_add(part.len() as u64).ok_or_else(|| {
+                    PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwPendingChunksV2>("chunk assembly bytes"))
+                })?;
+            }
+        }
+        q.vec_v1::<u8>(bytes.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
+        q.exact_v1::<BTreeNodeEnvelopeV1<u8, Vec<u8>>>(1).map_err(PalwStateV2Error::NativeResource)?;
+        q.vec_v1::<Hash64>(self.state.pending_chunks.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
+        q.exact_v1::<u8>(total).map_err(PalwStateV2Error::NativeResource)?;
+        self.native_reservation.grow_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)
+    }
+
+    /// With native admission enabled, nested structural preflight precedes
+    /// decoding and its requests remain under the transition owner. Disabled
+    /// admission preserves the historical Borsh decode/semantic path.
+    pub(super) fn reserve_chunk_decode_v1(&mut self, whole: &[u8]) -> Result<(), PalwStateV2Error> {
+        if !self.native_reservation.is_tracking_v1() {
+            return Ok(());
+        }
+        let shape = crate::palw_native_resource_v1::preflight_native_value_v1::<PalwConsensusObjectV2>(whole, whole.len() as u64)
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::Unsupported | std::io::ErrorKind::TimedOut | std::io::ErrorKind::OutOfMemory => {
+                    PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                        PalwConsensusObjectV2,
+                    >("chunk inner native preflight", &e.to_string()))
+                }
+                _ => PalwStateV2Error::ChunkedObjectUndecodable(e.to_string()),
+            })?;
+        self.native_reservation.grow_v1(shape.logical_requests_v1()).map_err(PalwStateV2Error::NativeResource)?;
+        Ok(())
+    }
+
     /// ADR-0071 SA-3: record that a bond produced on a class. The `capabilities` collection has
     /// been rooted, carried and delta-tracked since PR-03 with no writer; this is the writer its
     /// record shape (`class_id`, `bond`, `issued_daa`) was evidently reserved for, so SA-3 adds no
@@ -472,20 +524,33 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::CertifiedFamily { lane, key, old, new });
     }
 
-    pub(super) fn write_fp_certified_class(&mut self, key: Hash64, new: Option<PalwClassLaneCertificationV2>) {
+    pub(super) fn write_fp_certified_class(
+        &mut self,
+        key: Hash64,
+        new: Option<PalwClassLaneCertificationV2>,
+    ) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(
+            &key,
+            &new,
+            !self.state.fp_certified_classes.contains_key(&key),
+            "native fp_certified_classes writer",
+        )?;
         let old = match &new {
             Some(record) => self.state.fp_certified_classes.insert(key, record.clone()),
             None => self.state.fp_certified_classes.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::FpCertifiedClass { key, old, new });
+        Ok(())
     }
 
-    pub(super) fn write_pending_chunks(&mut self, key: Hash64, new: Option<PalwPendingChunksV2>) {
+    pub(super) fn write_pending_chunks(&mut self, key: Hash64, new: Option<PalwPendingChunksV2>) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.pending_chunks.contains_key(&key), "native pending_chunks writer")?;
         let old = match &new {
             Some(record) => self.state.pending_chunks.insert(key, record.clone()),
             None => self.state.pending_chunks.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::PendingChunks { key, old, new });
+        Ok(())
     }
 
     pub(super) fn write_court_close_group(&mut self, key: (Hash64, PalwCourtSideV1), new: Option<PalwCourtCloseGroupV2>) {
@@ -519,12 +584,14 @@ impl<'a> TransitionBuilder<'a> {
         &mut self,
         key: crate::palw_derived_v1::PalwDerivedKeyV1,
         new: Option<crate::palw_derived_v1::PalwDerivedRowV1>,
-    ) {
+    ) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.derived_artifacts.contains_key(&key), "native derived_artifacts writer")?;
         let old = match &new {
             Some(record) => self.state.derived_artifacts.insert(key, record.clone()),
             None => self.state.derived_artifacts.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::DerivedArtifact { key, old, new });
+        Ok(())
     }
 
     #[allow(dead_code)] // ADR-0045 Decision 2's boundary derivation is the writer; it lands next.
@@ -1554,7 +1621,12 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     /// **RFC-0002 Phase F: the one writer of `tir_classes`**, journaled `TirClass` (88).
-    pub(super) fn write_tir_class(&mut self, key: Hash64, new: Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1>) {
+    pub(super) fn write_tir_class(
+        &mut self,
+        key: Hash64,
+        new: Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1>,
+    ) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.tir_classes.contains_key(&key), "native tir_classes writer")?;
         let old = match new.clone() {
             Some(record) => self.state.tir_classes.insert(key, record),
             None => self.state.tir_classes.remove(&key),
@@ -1562,10 +1634,16 @@ impl<'a> TransitionBuilder<'a> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::TirClass { key, old, new });
         }
+        Ok(())
     }
 
     /// **RFC-0003: the one writer of `gen_classes`**, journaled `GenClass` (90).
-    pub(super) fn write_gen_class(&mut self, key: Hash64, new: Option<crate::palw_gen_class_v1::PalwGenClassRecordV1>) {
+    pub(super) fn write_gen_class(
+        &mut self,
+        key: Hash64,
+        new: Option<crate::palw_gen_class_v1::PalwGenClassRecordV1>,
+    ) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_journal_v1(&key, &new, !self.state.gen_classes.contains_key(&key), "native gen_classes writer")?;
         let old = match new.clone() {
             Some(record) => self.state.gen_classes.insert(key, record),
             None => self.state.gen_classes.remove(&key),
@@ -1573,6 +1651,7 @@ impl<'a> TransitionBuilder<'a> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::GenClass { key, old, new });
         }
+        Ok(())
     }
 
     /// **RFC-0004: the one writer of `improvement_lines`**, journaled `ImprovementLine` (91). Keeps the
@@ -9650,7 +9729,7 @@ impl<'a> TransitionBuilder<'a> {
             .map(|(key, _)| *key)
             .collect();
         for key in derived {
-            self.write_derived_artifact(key, None);
+            self.write_derived_artifact(key, None)?;
         }
         Ok(())
     }
