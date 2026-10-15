@@ -933,6 +933,34 @@ def hook_fetch_shard(a: argparse.Namespace) -> int:
     return 0
 
 
+def write_catalog(a: argparse.Namespace, reg: dict) -> int:
+    """Edition 0 of the next network from the PALWART3 roots in the results and the declared class ids. Refuses a model with
+    either missing (the Rust twin, `palw_genesis8_edition0_v1`, refuses the same)."""
+    tpl = json.loads((ROOT / "docs/design/palw/genesis8/catalog-edition0-template.json").read_text())
+    results = json.loads((Path(a.work).expanduser() / "genesis10_results.json").read_text())
+    roots = {r["id"]: r.get("root") for r in results.get("models", [])}
+    classes = {int(k): v for k, v in json.loads(Path(a.classes).read_text()).items()}
+    hexok = lambda h: isinstance(h, str) and len(h) == 128 and all(c in "0123456789abcdef" for c in h) and h != "0" * 128  # noqa: E731
+    models, missing = [], []
+    for m in tpl["editions"][0]["models"]:
+        if m["tentative"] and not a.include_tentative:
+            continue
+        gid = m["genesis_id"]
+        cid, root = classes.get(gid), roots.get(gid)
+        if not hexok(cid) or not hexok(root):
+            missing.append(gid)
+            continue
+        models.append({"class_id": cid, "artifact_root": root, "kernel_version": m["kernel_version"],
+                       "verification_plan_id": m["verification_plan_id"]})
+    if missing:
+        print(f"catalog: no class id or PALWART3 root yet for {missing}", file=sys.stderr)
+        return 2
+    out = {"fence_daa": a.fence_daa, "editions": [{"activation_daa": 0, "models": models}]}
+    Path(a.out).write_text(json.dumps(out, indent=1) + "\n")
+    log(f"edition 0 with {len(models)} models -> {a.out} (root it with scripts/release/misaka-release-manifest.py)")
+    return 0
+
+
 # ---------------------------------------------------------------------------------------------- CLI
 
 def main(argv=None) -> int:
@@ -992,6 +1020,13 @@ def main(argv=None) -> int:
     s = sub.add_parser("status")
     common(s)
 
+    cg = sub.add_parser("catalog", help="fill the RFC-0019 edition-0 template from the recorded roots and the declared class ids")
+    common(cg)
+    cg.add_argument("--classes", required=True, help="JSON {genesis id: class id (128 hex)} from the class declarations")
+    cg.add_argument("--fence-daa", type=int, required=True, help="the tier fence of the next network")
+    cg.add_argument("--include-tentative", action="store_true", help="list #3 (awaiting the user's decision)")
+    cg.add_argument("--out", required=True, help="input for scripts/release/misaka-release-manifest.py write")
+
     a = ap.parse_args(argv)
     reg = load_registry()
     if a.cmd == "plan":
@@ -1013,6 +1048,8 @@ def main(argv=None) -> int:
         return hook_upload_segment(a)
     if a.cmd == "fetch-shard":
         return hook_fetch_shard(a)
+    if a.cmd == "catalog":
+        return write_catalog(a, reg)
     if a.cmd == "status":
         work = Path(a.work).expanduser()
         for m in reg["models"]:
