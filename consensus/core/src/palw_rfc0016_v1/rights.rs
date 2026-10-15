@@ -103,8 +103,8 @@ impl PalwRightsWeightsSourceV1 for PalwBondBudgetStateV1 {
 }
 
 /// **The narrow interface to RFC-0017's model eligibility** (Registered / Probation / Eligible / Lapsed, added by the RFC-0017 lane at
-/// admission, block-right issuance, coinbase allocation and Final-weight sites). Until that lane's module lands, [`PalwAllEligibleV1`]
-/// stands in (every model eligible, no entrant clock), which issues no entrant grant.
+/// admission, block-right issuance, coinbase allocation and Final-weight sites). The fold reads RFC-0017's merged gates through
+/// `palw_state_v2::PalwRfc0017EligibilityV1`; [`PalwAllEligibleV1`] remains for the pure tests (every model eligible, no entrant).
 pub trait PalwModelEligibilitySourceV1 {
     /// May `model` be issued block rights at `daa`? An ineligible model's `P_m` share is not issued and not redistributed (it expires).
     fn block_rights_eligible_v1(&self, model: &Hash64, daa: u64) -> bool;

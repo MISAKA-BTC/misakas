@@ -10,7 +10,7 @@
 
 * **Status:** Accepted design (V+), values pending measurement — 2026-10-15。物理層の設計としてV+を採用した（第3回のユーザー判断）。
   値（`σ`、`k`ほか）は測定で決める。**有効化は§14のgateで止めたまま**であり、下の3つの「ユーザー判断」表は本番値の承認でも有効化の承認でもない。
-* **Implementation status:** **implemented dormant, not activated, unbuilt**（branch `integ/rfc0016-impl`）。
+* **Implementation status:** **implemented dormant, not activated, unbuilt**（branch `integ/rfc0016-impl`、§16。ADR-0176/0177とRFC-0017のbranchをmerge済み）。
   * P4: `eee1710ce`。
   * V+・弾力的Final容量・quote・report・test source・simulation: §16と
     [rfc-0016-implementation-status-2026-10-15.md](../design/palw/rfc-0016-implementation-status-2026-10-15.md)（行 → file:line）。
@@ -540,27 +540,62 @@ ACTIVATION_ALLOWED
 
 ## 16. 実装（休眠、未有効化、未build）
 
-実装は採用・有効化を意味しない。行ごとのfile:lineは[実装状況](../design/palw/rfc-0016-implementation-status-2026-10-15.md)にある。
+実装は採用・有効化を意味しない。行ごとのfile:lineと試験IDの対応は、[実装状況](../design/palw/rfc-0016-implementation-status-2026-10-15.md)にある。
+すべての行は、実装済み、test source作成済み、evidence-onlyのどれかである。
+
+### 16.1 lead decision（2026-10-15、ユーザーreview待ち）
+
+| # | 内容 |
+| --- | --- |
+| L1 | blockへの`P_m`の適用は1回だけで、V+の権利が行う。V+をarmするとき、ADR-0177 V3の`block_opportunity`は必ずoffにする（validationが拒否する）。V+がreleaseのブロック機会の仕組みである。coinbase側の`P_m`は既存のcoinbase配分が1回だけ適用する（ADR laneのC4もこれで解決する）。単一適用のtest sourceがある |
+| L2 | 途中再発行（V2）は`A_m`加重で行う。新しいrooted状態（aux 132）を持ち、reorg・IBDで一貫する。`A_m`が得られないときだけ、先着をfallbackとして残す |
+| L3 | RPCはop 255、proto 1330–1331を使う（確定済み） |
+
+### 16.2 実装の範囲
 
 * **fence:** `palw_model_block_rights_v1`と`palw_elastic_final_capacity_v1`（Params、identity、validation、fork-id probe、V2 mirror）。
-* **V+:** `consensus/core/src/palw_rfc0016_v1/rights.rs`。
-  * 発行: entrant reserveを固定総額から先に差し引く。
-  * admission: 自分の権利か、`φ`後のσ上限付きの再発行。
-  * quote、tilt（`k`、抽選へは未組込み）、B+の`ψ`。
-  * ADR-0177とRFC-0017への細いtrait境界。
-* **fold:** `consensus/core/src/palw_rfc0016_fold_v1.rs`（`palw_state_v2`の子module）。
-  * 消費は、既存の状態のepochごとの生産カウンタ（`epoch_counters`）そのものである。新しい状態、delta、aux table、objectはない。
-  * V+の検査は`check_class_admits_claim`で行う。このためproducerの事前確認（`palw_class_admits_claim_v1`）が、forwardの前に答える。
-* **弾力的容量:** `consensus/core/src/palw_rfc0016_v1/capacity.rs`と、fold側の`rfc0016_elastic_room_v1`。
-  * 検証者単位のwater-filling、容量0の拒否、C7上限の導出。
-  * queue: 純粋なデータ構造とその規則だけ。claimのlifecycleには未組込みで、quoteのqueue長は0として読む。
-  * OPVの検査予算、検証者取り分の傾き。
-* **報告:** `consensus/core/src/palw_rfc0016_v1/report.rs`、`palw_rfc0016_model_report_v1`、`scripts/sim/palw-rfc0016-report.py`。
-  * 目標の増加だけでは、改善と報告しない。
-* **RPC:** opは未割当。読み取り関数（`palw_rfc0016_quote_v1`、`palw_rfc0016_model_report_v1`）はある。
-  op 245–254はほかのlaneの予約がある（`137410315`の記録）ため、割当は調整後に行う。
-* **test source:** `consensus/core/tests/rfc0016_v1.rs`と各moduleのunit test（未実行）。
-* **simulation:** `scripts/sim/palw-rfc0016-vplus-sim.py`（C1–C7、E1–E6、`σ`/`k`の掃引）。
+  * どちらもkernel route（`palw_probabilistic_constraints_v1`）が同じ高さ以下にあることを要求する。
+  * 孤立calibration networkだけは、buildに入れた`MISAKA_RFC0016_CALIBRATION_VALUES`でarmできる（σ/k測定用）。
+* **aux table 132–135**（131はRFC-0017が使う）: 再発行snapshot、pending queue、queue membership、telemetry。
+  native scannerのarmは、generatorと生成fileの両方にある。
+* **V+:**
+  * 発行は`⌊(N_exp − Ent) · A_m / ΣA⌋`で、entrant reserveは固定総額から先に差し引く。
+  * 消費は、既存の`epoch_counters`をそのまま使う。
+  * admissionは、自分の権利か、`φ`後の`A_m`加重snapshotか（ない場合は先着σのfallback）で決まる。epoch総額は超えない。
+  * quoteは、権利・容量・実際のqueue長を示す。
+  * RFC-0017のeligibilityをmerge済みで、次のように読む。
+    * 発行は、probation外のblock rightを持つモデルだけに行う。
+    * Probationのclassは、RFC-0017のprobation grantを権利とするので、V+の検査を通す。
+    * Registered/Lapsedは、RFC-0017自身のgateが拒否する。
+* **弾力的容量:**
+  * 検証者単位のwater-fillingで、容量0の場合は受理しない。
+  * C7上限は、容量から導出する。
+  * **queueはclaimのlifecycleに組み込み済み**:
+    * 待機中はbind期限がない。
+    * 待機中は`PanelBound`が効かない。
+    * FIFOでdequeueし、そのとき`rebound_daa = now`とする。これでbind窓とanchor slotが、queueを出た時点から始まる。
+    * TTLを過ぎるとBindTimeoutでvoidとする。producerへの課金はない。
+    * 1 claimが予約する権利は1本だけである。
+    * bondごとの取り分は資本比例で、受理前に拒否する。
+  * OPV経路の検査容量gate。
+  * M\*-49の検証者取り分の傾き（10–30 %の範囲内）。
+* **計測:**
+  * consensus-derived: 目標、物理block、権利、Final、coinbase支払、既存minerの個人収入、escrow支払、queue待ち、REAL gap、heartbeat依存DAA。
+  * node-local（そう表示する）: 拒否件数。
+* **RPC op 255 `GetPalwRfc0016Report`**（proto 1330/1331）: JSONで返す。目標と結果を分け、node-localの観測を区別する。
+* **ツール:**
+  * `scripts/sim/palw-rfc0016-vplus-sim.py`: モデルであり、測定ではない。
+  * `scripts/drills/rfc0016_sigma_k_measure.py`: 実node測定のharness。
+  * `scripts/sim/palw-rfc0016-report.py`: 目標の増加だけでは改善と表示しない。
+* **test source（未実行）:**
+  * `consensus/core/tests/rfc0016_v1.rs`
+  * `consensus/src/pipeline/virtual_processor/tests/rfc0016_e2e.rs`（H1–H4、A8）
+  * 各moduleのunit test
+* **evidence-only:**
+  * σ/kの測定値と測定値記録。
+  * V+のcalibration測定。ADR laneの配分fenceがcalibrationでarm可能になることが前提である。
+  * A11（検査しないverifier）。
+  * M6/M7の実測。
 
 ## 15. 参照
 
