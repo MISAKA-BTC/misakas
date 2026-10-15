@@ -641,4 +641,5 @@ pub mod native_material_v39;
 
 pub mod native_producer_v39;
 pub mod native_public_data_v39;
+pub mod native_request_composer_v39;
 pub mod native_upstream_material_v39;
