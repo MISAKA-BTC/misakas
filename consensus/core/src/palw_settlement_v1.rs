@@ -45,6 +45,9 @@ pub struct PalwSettlementV1 {
     /// below the fence. A chain whose claims are all uncertified reports `settled == false` and `depth == 0` however many `Final`
     /// claims it holds: no PALW settlement finality (there is no DNS finality to fall back on — DNS-BFT is abolished, RFC-0012).
     pub uncertified_final: u64,
+    /// **RFC-0018 §7.2**: Gate C is in force at the sink — every `depth`/`settled` above rests on SecurityCertified claims, a
+    /// PREMISE-BASED certification (the honest fraction of drawn verifier stake is at least the threshold), not an unconditional proof.
+    pub gate_c_in_force: bool,
 }
 
 /// **The settlement read** (ADR-0127 Decision 3) — `state` is the sink's, `params` the rules it was
@@ -121,6 +124,7 @@ pub fn palw_settlement_v1(
         safe_frontier_blue_score,
         safe_frontier_daa,
         uncertified_final,
+        gate_c_in_force: params.rfc0018_v1().is_some_and(|mirror| mirror.gate_c_at(sink_daa)),
     })
 }
 

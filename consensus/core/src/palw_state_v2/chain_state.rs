@@ -2488,6 +2488,36 @@ impl PalwChainStateV2 {
         (self.safe_frontier_blue_score, self.safe_frontier)
     }
 
+    /// **RFC-0018, tests only**: set or remove one bond row (the attack acceptance fixtures' registries).
+    #[cfg(test)]
+    pub(crate) fn set_bond_for_tests(&mut self, key: PalwBondKeyV2, bond: Option<PalwBondStateV2>) {
+        match bond {
+            Some(bond) => self.bonds.insert(key, bond),
+            None => self.bonds.remove(&key),
+        };
+    }
+
+    /// **RFC-0018, tests only**: write one kernel-route aux row (creating an interim-policy route when there is none).
+    #[cfg(test)]
+    pub(crate) fn set_kernel_aux_row_for_tests(&mut self, table: u8, key: Vec<u8>, bytes: Option<Vec<u8>>) {
+        let route = self.kernel_route.get_or_insert_with(|| {
+            crate::palw_kernel_route_v1::PalwKernelRouteStateV1::new_typed(
+                crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default()),
+                None,
+                None,
+                misaka_palw_kernel::rows::LedgerScalarsV1 { daa: 0, burned: 0 },
+            )
+        });
+        match bytes {
+            Some(bytes) => {
+                route.aux.insert((table, key), bytes);
+            }
+            None => {
+                route.aux.remove(&(table, key));
+            }
+        }
+    }
+
     /// **RFC-0018**: the kernel route, for the security certification's aux-table reads (`crate::palw_security_certification_v1`).
     pub fn kernel_route_state_v1(&self) -> Option<&crate::palw_kernel_route_v1::PalwKernelRouteStateV1> {
         self.kernel_route.as_ref()

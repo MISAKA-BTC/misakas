@@ -3446,6 +3446,7 @@ try_from!(item: &protowire::GetPalwSettlementResponseMessage, RpcResult<kaspa_rp
         safe_frontier_daa: item.safe_frontier_daa,
         // RFC-0018 GAP-R6: not on the gRPC wire.
         uncertified_final_anchors: 0,
+        security_certification_premise: None,
     }
 });
 try_from!(item: &protowire::GetPrecommitDutyRequestMessage, kaspa_rpc_core::GetPrecommitDutyRequest, {

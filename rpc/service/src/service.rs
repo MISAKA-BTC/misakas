@@ -2122,6 +2122,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             safe_frontier_blue_score: settlement.safe_frontier_blue_score,
             safe_frontier_daa: settlement.safe_frontier_daa,
             uncertified_final_anchors: settlement.uncertified_final,
+            security_certification_premise: settlement
+                .gate_c_in_force
+                .then(|| kaspa_consensus_core::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_PREMISE_V1.to_string()),
         })
     }
 

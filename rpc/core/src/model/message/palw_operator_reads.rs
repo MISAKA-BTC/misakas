@@ -1104,11 +1104,16 @@ pub struct GetPalwSettlementResponse {
     /// non-zero (0 on every shipped network, so older readers are unaffected); not carried over gRPC (RFC-0018 GAP-R6).
     #[serde(default)]
     pub uncertified_final_anchors: u64,
+    /// **RFC-0018 §7.2 — the premise, stated**: present wherever Gate C is in force at the answer's sink. PALW settlement finality there
+    /// rests on SecurityCertified claims, whose certification is PREMISE-BASED (drawn verifiers' signed approvals, sound only while the
+    /// honest fraction of drawn verifier stake is at least the threshold), not an unconditional mathematical proof. Wire version 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security_certification_premise: Option<String>,
 }
 
 impl Serializer for GetPalwSettlementResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        let version: u16 = if self.uncertified_final_anchors > 0 {
+        let version: u16 = if self.uncertified_final_anchors > 0 || self.security_certification_premise.is_some() {
             4
         } else if self.native_readiness.is_some() {
             3
@@ -1138,6 +1143,7 @@ impl Serializer for GetPalwSettlementResponse {
         }
         if version >= 4 {
             store!(u64, &self.uncertified_final_anchors, writer)?;
+            store!(Option<String>, &self.security_certification_premise, writer)?;
         }
         Ok(())
     }
@@ -1171,6 +1177,7 @@ impl Deserializer for GetPalwSettlementResponse {
                 None
             },
             uncertified_final_anchors: if version >= 4 { load!(u64, reader)? } else { 0 },
+            security_certification_premise: if version >= 4 { load!(Option<String>, reader)? } else { None },
         })
     }
 }

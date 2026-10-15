@@ -582,3 +582,5 @@ pub fn palw_claim_is_attempt_v1(claim: &PalwClaimStateV2) -> bool {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod attack_tests;

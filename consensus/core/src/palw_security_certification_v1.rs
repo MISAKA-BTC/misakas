@@ -27,6 +27,13 @@
 //! material): [`PALW_SECURITY_PUBLIC_CHECK_CLASSES_PINNED_V1`] is EMPTY in this binary, so the path certifies nothing until a class is
 //! pinned with its measurement record.
 //!
+//! **PREMISE-BASED, not an unconditional proof (user decision 2026-10-15).** The pillar is the drawn verifiers' signed approval, under
+//! the explicit premise that **the honest fraction of drawn verifier stake is at least the threshold** (`k/m`). No cryptographic
+//! computation proof is a required condition. The f = 1/3, f = 0.6 and worst-case figures the RFC reports are the impact if the premise
+//! fails — not conditions that change the rule. A certified claim later convicted by G14 public prosecution is voided (its record
+//! leaves `Final`), and every reader of Gate C then reads it uncertified: its safe weight is taken back (`reverse_convicted_final`),
+//! its participation and settlement depth vanish.
+//!
 //! **Residual assumption (stated, not removed):** the honest fraction of drawn verifier STAKE. A closed (p = 0) model is never
 //! reproduced by an honest drawn verifier, so it certifies only if the adversary holds ≥ k positions and fewer than `veto` honest
 //! negatives arrive — probability [`palw_certification_false_pass_f64`] per claim at adversarial drawn-stake fraction `f`. Signatures
@@ -38,6 +45,12 @@ use crate::Hash64;
 use crate::palw_model_eligibility_v1::{EligDigestV1, PalwEligibilityAttestationRowV1, PalwEligibilityVerdictV1, PalwEligibilityVerifierV1};
 use crate::palw_state_v2::{PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2};
 use borsh::{BorshDeserialize, BorshSerialize};
+
+/// **The premise, as the RPC states it** (user decision 2026-10-15): certification is premise-based, not an unconditional proof.
+pub const PALW_SECURITY_CERTIFICATION_PREMISE_V1: &str = "SecurityCertified is premise-based: m-of-k positive attestations by verifiers \
+     drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge \
+     or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not \
+     recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.";
 
 /// **Kernel-route aux table 136** — the certification rows (65-byte keys: prefix ‖ 64-byte id). Grepped free (≤ 135 in use).
 pub const PALW_SECURITY_CERTIFICATION_TABLE_V1: u8 = 136;
@@ -54,9 +67,14 @@ pub const PALW_CERTIFICATION_PAYOUT_DOMAIN_V1: &[u8] = b"misaka-palw/security-ce
 
 // ---- named, unapproved design values (RFC-0018 §11) ------------------------------------------------------------------------------
 
-pub const PALW_CERT_M_DESIGN_V1: u16 = 7;
-pub const PALW_CERT_K_DESIGN_V1: u16 = 5;
-pub const PALW_CERT_VETO_DESIGN_V1: u16 = 2;
+/// `m` drawn positions and `k` positives (UNAPPROVED). Chosen so the premise-failure tail stays negligible at the claim volumes of the
+/// 300M case: per-claim P(adversary ≥ k of m) at f = 1/3 is 1.19e-6 (47/32) versus 4.53e-2 (7/5) — over 23,076 claims ≈ 0.03 versus
+/// ≈ 1,045 expected certified claims (RFC-0018 §7.3). The cost is `m` re-executions per certified claim (U-5).
+pub const PALW_CERT_M_DESIGN_V1: u16 = 47;
+pub const PALW_CERT_K_DESIGN_V1: u16 = 32;
+/// `0`: no veto — the instructed rule is m-of-k positives alone. A veto (`v > 0`: `v` negative positions refuse) is a LEAD PROPOSAL
+/// awaiting the user's decision (RFC-0018 U-6), evaluated in the RFC's table; it is not part of the adopted design.
+pub const PALW_CERT_VETO_DESIGN_V1: u16 = 0;
 pub const PALW_CERT_ANCHOR_DELAY_SPANS_DESIGN_V1: u64 = 1;
 pub const PALW_CERT_ATTEST_WINDOW_DAYS_DESIGN_V1: u64 = 2;
 pub const PALW_CERT_PROSECUTION_WINDOW_DAYS_DESIGN_V1: u64 = 7;
@@ -74,7 +92,7 @@ pub const PALW_SECURITY_PUBLIC_CHECK_CLASSES_PINNED_V1: &[[u8; 64]] = &[];
 pub struct PalwSecurityCertificationPolicyV1 {
     pub m: u16,
     pub k: u16,
-    /// Negative positions at which a claim is vetoed (`0` disables the veto — never a design value).
+    /// Negative positions at which a claim is vetoed; `0` disables the veto (the adopted m-of-k rule; a veto is proposal U-6).
     pub veto: u16,
     pub anchor_delay_spans: u64,
     pub attest_window_daa: u64,
@@ -112,8 +130,8 @@ impl PalwSecurityCertificationPolicyV1 {
         if self.k <= self.m / 2 {
             return Err("certification needs a strict majority of positions (k > m/2)");
         }
-        if self.veto == 0 || self.veto > self.m.saturating_sub(self.k).saturating_add(1) {
-            return Err("the veto must be positive and reachable while k positives remain possible");
+        if self.veto > self.m.saturating_sub(self.k).saturating_add(1) {
+            return Err("a veto must be reachable while k positives remain possible");
         }
         if self.attest_window_daa == 0 || self.certify_by_daa == 0 || self.epoch_daa == 0 || self.draws_per_epoch == 0 {
             return Err("certification windows, epoch and capacity must be positive");
@@ -319,7 +337,7 @@ pub fn palw_certification_verdict_v1(
     if row.anchor.is_none() {
         return (now > row.committed_daa.saturating_add(policy.certify_by_daa)).then_some(O::Expired);
     }
-    if row.negative_positions() >= policy.veto.max(1) as u32 {
+    if policy.veto > 0 && row.negative_positions() >= policy.veto as u32 {
         return Some(O::Vetoed);
     }
     if row.positive_positions() >= policy.k as u32 {
@@ -394,15 +412,15 @@ fn binomial_tail(m: u32, p: f64, at_least: u32) -> f64 {
 /// `k` positions and the honest positions (who cannot reproduce it and attest negative) must stay below `veto`. Every honest drawn
 /// verifier is assumed to attest (a silent honest verifier only helps the adversary: report `f` with the silent share added).
 pub fn palw_certification_false_pass_f64(f: f64, m: u32, k: u32, veto: u32) -> f64 {
-    // X = adversarial positions ~ Bin(m, f); honest = m − X; pass iff X ≥ k and m − X < veto.
-    let lower = k.max(m.saturating_sub(veto.saturating_sub(1)));
+    // X = adversarial positions ~ Bin(m, f); honest = m − X; pass iff X ≥ k and (no veto, or m − X < veto).
+    let lower = if veto == 0 { k } else { k.max(m.saturating_sub(veto.saturating_sub(1))) };
     binomial_tail(m, f, lower)
 }
 
 /// **An honest open model's per-claim refusal probability** under adversarial vetoes (griefing, a liveness cost — never a credit):
 /// the adversary holds at least `veto` positions, or fewer than `k` honest positions remain.
 pub fn palw_certification_grief_f64(f: f64, m: u32, k: u32, veto: u32) -> f64 {
-    let veto_or_short = |x: u32| x >= veto || m - x < k;
+    let veto_or_short = |x: u32| (veto > 0 && x >= veto) || m - x < k;
     let mut total = 0.0;
     for x in 0..=m {
         if veto_or_short(x) {
