@@ -53,10 +53,24 @@ def normalized(value):
 def import_stamp(node):
     if node.get('importSessionAvailable') is not True:
         raise Blocked('this node predates durable import-session diagnostics')
+    if type(node.get('importSessionEpoch')) is not int or not 0 <= node['importSessionEpoch'] < 2 ** 64:
+        raise AssertionError('durable import epoch is not an exact unsigned counter')
     return (node['importSessionEpoch'], node['importSessionPoint'], node['importSessionPhase'], node['pruningImportStable'])
 
 
-def coherent(observation, plan, require_work=True):
+def decimal_u128(value):
+    # Native work is serialized as decimal text. A float, exponent, sign or
+    # coerced boolean cannot serve as exact evidence above JavaScript's 2^53.
+    if not isinstance(value, str) or not value or any(c < '0' or c > '9' for c in value) \
+            or (len(value) > 1 and value[0] == '0') or len(value) > 39:
+        raise AssertionError('native useful work must be canonical u128 decimal text')
+    number = int(value)
+    if number >= 2 ** 128:
+        raise AssertionError('native useful work exceeds u128')
+    return number
+
+
+def coherent(observation, plan, require_work=True, require_finalized=False):
     settlement = observation.get('settlement') or {}
     native = settlement.get('nativeSettlement')
     if settlement.get('dnsRetiredAt') is None or native is None:
@@ -75,8 +89,14 @@ def coherent(observation, plan, require_work=True):
     assert readiness['safe'] == native['safe'] and readiness['finalized']['finalized'] == native['finalized']
     if require_work:
         assert native['safe'] is not None, 'no genuine useful-work covered Safe prefix'
-        assert int(native['uniqueWork']) >= int(plan['minimum_work']), 'unique mature work below the predeclared bound'
+        assert decimal_u128(native['uniqueWork']) >= int(plan['minimum_work']), 'unique mature work below the predeclared bound'
+        assert type(native['depth']) is int and 0 <= native['depth'] < 2 ** 64, 'native anchor depth is not an exact u64'
         assert native['depth'] >= plan['minimum_depth'], 'Final anchor depth below the predeclared bound'
+    if require_finalized:
+        assert native['finalized'] is not None, 'pruned join/restart has no native Finalized head'
+        pruning = normalized(observation['dag']['pruningPointHash'])
+        assert pruning != normalized(observation['node']['genesisHash']), 'pruned finality still names genesis'
+        assert normalized(native['finalized']) == pruning, 'native Finalized does not authenticate the actual pruning checkpoint'
     return native
 
 
@@ -302,9 +322,9 @@ class Drill:
             rpc.close()
         return link
 
-    def convergence(self, roles, expected):
+    def convergence(self, roles, expected, require_finalized=False):
         observed = [self.probe(role) for role in roles]
-        natives = [coherent(row, self.plan) for row in observed]
+        natives = [coherent(row, self.plan, require_finalized=require_finalized) for row in observed]
         assert all(row['dag']['sink'] == expected for row in observed), 'fork selection disagrees with the predeclared winner'
         keys = [(row['header'], native) for row, native in zip(observed, natives)]
         assert all(key == keys[0] for key in keys), 'UTXO/PALW/EVM commitment roots or native heads disagree'
@@ -367,22 +387,25 @@ class Drill:
             row = self.probe('A', old)
             return row if row['oldBodyAvailable'] is False else None
         source = self.wait(pruned_source, 'actual old-body garbage collection')
+        coherent(source, self.plan, require_finalized=True)
         assert source['dag']['pruningPointHash'] != source['node']['genesisHash'], 'pruning point never moved'
         assert source['oldBodyAvailable'] is False, 'source did not actually GC the old block body'
         winner = source['dag']['sink']
         self.start('JOIN')  # fresh DB, never copied from a source
         self.wait(lambda: self.probe('JOIN'), 'fresh join startup')
         self.join_link('JOIN', 'A')
-        self.wait(lambda: self.convergence(('A', 'JOIN'), winner), 'actual fresh pruned P2P join')
+        self.wait(lambda: self.convergence(('A', 'JOIN'), winner, require_finalized=True), 'actual fresh pruned P2P join')
         joined = self.probe('JOIN', old)
+        coherent(joined, self.plan, require_finalized=True)
         assert joined['oldBodyAvailable'] is False, 'join secretly retained full old history'
         joined_epoch = import_stamp(joined['node'])[0]
         assert joined_epoch > 0, 'fresh pruned join did not complete a durable import session'
         self.kill('JOIN')
         self.start('JOIN')  # the same owned DB after a forced process crash
         self.join_link('JOIN', 'A')
-        self.wait(lambda: self.convergence(('A', 'JOIN'), winner), 'cold process restart agreement')
+        self.wait(lambda: self.convergence(('A', 'JOIN'), winner, require_finalized=True), 'cold process restart agreement')
         row = self.probe('JOIN')
+        coherent(row, self.plan, require_finalized=True)
         assert import_stamp(row['node'])[0] == joined_epoch, 'completed import epoch did not survive cold restart'
         count = (row.get('shadow') or {}).get('claimsTotal', 0)
         assert count >= self.plan['minimum_claims'], '100k-scale fixture was not reached'

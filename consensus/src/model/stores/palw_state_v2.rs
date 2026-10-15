@@ -212,6 +212,18 @@ fn reject_untracked_writer_v1() -> StoreResult<()> {
     Ok(())
 }
 
+const NATIVE_IDENTITY_SUFFIX_V1: u8 = 0x49;
+fn native_identity_key_v1(pruning: bool) -> [u8; 2] {
+    [
+        u8::from(if pruning { DatabaseStorePrefixes::PalwPruningPointState } else { DatabaseStorePrefixes::PalwStateV2Tip }),
+        NATIVE_IDENTITY_SUFFIX_V1,
+    ]
+}
+fn stage_native_identity_v1(batch: &mut WriteBatch, pruning: bool, block: BlockHash, root: Hash64) -> StoreResult<()> {
+    batch.put(native_identity_key_v1(pruning), bincode::serialize(&(1u16, block, root))?);
+    Ok(())
+}
+
 impl DbPalwStateV2Store {
     pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
         Self {
@@ -283,6 +295,8 @@ impl DbPalwStateV2Store {
         }
         let mut batch = WriteBatch::default();
         self.deltas.delete_all(BatchDbWriter::new(&mut batch))?;
+        batch.delete(native_identity_key_v1(false));
+        batch.delete(native_identity_key_v1(true));
         self.clear_legacy_answer_history(&mut BatchDbWriter::new(&mut batch), None)?;
         self.clear_prefix_history_v1(&mut BatchDbWriter::new(&mut batch))?;
         let (first, last) =
@@ -483,6 +497,7 @@ impl DbPalwStateV2Store {
         let record = PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh };
         let prefix: Vec<u8> = DatabaseStorePrefixes::PalwStateV2Tip.into();
         batch.put(prefix, bincode::serialize(&record)?);
+        stage_native_identity_v1(batch, false, block, record.state_root)?;
         self.tip.invalidate_cache();
         Ok(NativeStoreWriteTicketV1 { _lease: lease })
     }
@@ -493,19 +508,41 @@ impl DbPalwStateV2Store {
     /// does not hash to.
     #[cfg(test)]
     pub fn set_tip_record_batch(&mut self, batch: &mut WriteBatch, record: PalwStateTipRecordV2) -> StoreResult<()> {
-        self.tip.write(BatchDbWriter::new(batch), &record)
+        stage_native_identity_v1(batch, false, record.block, record.state_root)?;
+        let prefix: Vec<u8> = DatabaseStorePrefixes::PalwStateV2Tip.into();
+        batch.put(prefix, bincode::serialize(&record)?);
+        self.tip.invalidate_cache();
+        Ok(())
     }
 
     /// **The tip row's IDENTITY — block and root — WITHOUT copying the carriage** (mainnet audit
     /// H-1). `tip_record()` clones the whole record, carriage bytes and all; a caller that only
     /// needs to know which row it is looking at must not pay a memcpy of the state to find out.
     pub(crate) fn tip_key(&self) -> StoreResult<Option<(BlockHash, Hash64)>> {
-        self.with_pinned_tip_v1(false, |r| Ok((r.block, r.state_root)))
+        self.native_identity_v1(false)
     }
 
     /// Same durable identity projection, before any native allocation.
     fn pruning_snapshot_key(&self) -> StoreResult<Option<(BlockHash, Hash64)>> {
-        self.with_pinned_tip_v1(true, |r| Ok((r.block, r.state_root)))
+        self.native_identity_v1(true)
+    }
+
+    /// Small durable identity, atomically committed with the exact payload.
+    /// No positive cache is published at batch enqueue. Old databases retain
+    /// the pinned-view fallback until their next authenticated snapshot write.
+    fn native_identity_v1(&self, pruning: bool) -> StoreResult<Option<(BlockHash, Hash64)>> {
+        let Some(bytes) = self.db.get_pinned(native_identity_key_v1(pruning))? else {
+            return self.with_pinned_tip_v1(pruning, |r| Ok((r.block, r.state_root)));
+        };
+        if bytes.len() > 256 {
+            return Err(StoreError::DataInconsistency("native identity metadata exceeds its fixed codec".into()));
+        }
+        let (version, block, root): (u16, BlockHash, Hash64) =
+            bincode::DefaultOptions::new().with_fixint_encoding().with_limit(256).reject_trailing_bytes().deserialize(&bytes)?;
+        if version != 1 {
+            return Err(StoreError::DataInconsistency("unsupported native identity metadata version".into()));
+        }
+        Ok(Some((block, root)))
     }
 
     /// The tip row undecoded (which block, which root), without rebuilding the state.
@@ -530,10 +567,8 @@ impl DbPalwStateV2Store {
     /// production writes the tip exactly where the UTXO walk ended.
     #[cfg(test)]
     pub fn set_tip_for_tests(&mut self, block: BlockHash, state: &PalwChainStateV2) -> StoreResult<()> {
-        use kaspa_database::prelude::DirectDbWriter;
-        let carriage = PalwStateCarriageV2::from_state(state);
-        let carriage_borsh = borsh::to_vec(&carriage).expect("PalwStateCarriageV2 is borsh-serializable");
-        self.tip.write(DirectDbWriter::new(&self.db), &PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh })
+        let carriage_borsh = borsh::to_vec(&PalwStateCarriageV2::from_state(state)).unwrap();
+        self.set_tip_record_for_tests(PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh })
     }
 
     /// Stage a tip row VERBATIM through this store's own db handle — the direct-write twin of
@@ -542,8 +577,10 @@ impl DbPalwStateV2Store {
     /// Test-only for the same reason: production computes the root from the state it stores.
     #[cfg(test)]
     pub fn set_tip_record_for_tests(&mut self, record: PalwStateTipRecordV2) -> StoreResult<()> {
-        use kaspa_database::prelude::DirectDbWriter;
-        self.tip.write(DirectDbWriter::new(&self.db), &record)
+        let mut batch = WriteBatch::default();
+        self.set_tip_record_batch(&mut batch, record)?;
+        self.db.write(batch)?;
+        Ok(())
     }
 
     /// Remove the tip row, reproducing the state a pruned join (or a `reindex_if_stale` after a
@@ -552,8 +589,11 @@ impl DbPalwStateV2Store {
     /// in `Consensus::new` refuses to run in it.
     #[cfg(test)]
     pub fn delete_tip_for_tests(&mut self) -> StoreResult<()> {
-        use kaspa_database::prelude::DirectDbWriter;
-        self.tip.remove(DirectDbWriter::new(&self.db))
+        let mut batch = WriteBatch::default();
+        batch.delete(native_identity_key_v1(false));
+        self.tip.remove(BatchDbWriter::new(&mut batch))?;
+        self.db.write(batch)?;
+        Ok(())
     }
 
     /// Plant a pruning-point snapshot through this store's own db handle — the direct-write twin
@@ -561,11 +601,15 @@ impl DbPalwStateV2Store {
     /// from without running a prune. Test-only: production writes it from the prune's own batch.
     #[cfg(test)]
     pub fn set_pruning_snapshot_for_tests(&mut self, block: BlockHash, state: &PalwChainStateV2) -> StoreResult<()> {
-        use kaspa_database::prelude::DirectDbWriter;
-        let carriage = PalwStateCarriageV2::from_state(state);
-        let carriage_borsh = borsh::to_vec(&carriage).expect("PalwStateCarriageV2 is borsh-serializable");
-        self.pruning_snapshot
-            .write(DirectDbWriter::new(&self.db), &PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh })
+        let carriage_borsh = borsh::to_vec(&PalwStateCarriageV2::from_state(state)).unwrap();
+        let record = PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh };
+        let mut batch = WriteBatch::default();
+        stage_native_identity_v1(&mut batch, true, block, record.state_root)?;
+        let prefix: Vec<u8> = DatabaseStorePrefixes::PalwPruningPointState.into();
+        batch.put(prefix, bincode::serialize(&record)?);
+        self.pruning_snapshot.invalidate_cache();
+        self.db.write(batch)?;
+        Ok(())
     }
 
     /// Load and REBUILD the tip state, demanding the recorded root — index rebuild, internal
@@ -612,6 +656,7 @@ impl DbPalwStateV2Store {
         batch.put([u8::from(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1)], metadata);
         let prefix: Vec<u8> = DatabaseStorePrefixes::PalwPruningPointState.into();
         batch.put(prefix, bincode::serialize(&PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh })?);
+        stage_native_identity_v1(batch, true, block, state.state_root())?;
         self.pruning_snapshot.invalidate_cache();
         Ok(NativeStoreWriteTicketV1 { _lease: lease })
     }
@@ -864,6 +909,50 @@ mod tests {
         let end = empty.len();
         empty[end - 8..].copy_from_slice(&u64::MAX.to_le_bytes());
         assert!(bincode::deserialize::<PalwDeltaRecordViewV1<'_>>(&empty).is_err());
+    }
+
+    #[test]
+    fn compact_identity_is_durable_only_with_its_payload_batch() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(8));
+        store.reindex_if_stale().unwrap();
+        let state = PalwChainStateV2::genesis();
+        let block = BlockHash::from_u64_word(77);
+        let mut abandoned = WriteBatch::default();
+        let ticket = store.set_tip_batch_tracked_v1(&mut abandoned, block, &state).unwrap();
+        let sibling = store.clone_with_new_cache(CachePolicy::Count(8));
+        assert!(store.tip_key().unwrap().is_none());
+        assert!(sibling.tip_key().unwrap().is_none());
+        drop(abandoned);
+        drop(ticket);
+        assert!(store.tip_key().unwrap().is_none());
+        let mut committed = WriteBatch::default();
+        let ticket = store.set_tip_batch_tracked_v1(&mut committed, block, &state).unwrap();
+        db.write(committed).unwrap();
+        drop(ticket);
+        assert_eq!(sibling.tip_key().unwrap(), Some((block, state.state_root())));
+        let payload = db.get_pinned(DatabaseStorePrefixes::PalwStateV2Tip.as_ref()).unwrap().unwrap();
+        let view: PalwTipRecordViewV1<'_> = bincode::deserialize(&payload).unwrap();
+        assert_eq!((view.block, view.state_root), sibling.tip_key().unwrap().unwrap());
+        store.delete_tip_for_tests().unwrap();
+        assert!(sibling.tip_key().unwrap().is_none());
+    }
+    #[test]
+    fn old_identity_fallback_and_unknown_sidecar_version_are_explicit() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(8));
+        let block = BlockHash::from_u64_word(88);
+        let root = Hash64::from_u64_word(99);
+        // Existing pre-sidecar record: borrow its exact bincode view without a
+        // full native Borsh decode. Metadata alone never validates a payload.
+        db.put(
+            DatabaseStorePrefixes::PalwStateV2Tip.as_ref(),
+            bincode::serialize(&PalwStateTipRecordV2 { block, state_root: root, carriage_borsh: vec![1; 8] }).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(store.tip_key().unwrap(), Some((block, root)));
+        db.put(native_identity_key_v1(false), bincode::serialize(&(2u16, block, root)).unwrap()).unwrap();
+        assert!(store.tip_key().is_err());
     }
 
     fn params() -> PalwStateParamsV2 {
