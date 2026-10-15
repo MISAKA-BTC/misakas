@@ -349,7 +349,7 @@ mod tests {
         };
         std::fs::write(&path, palw_token_table_file_encode_v1(&table)).unwrap();
         let (root, vocab) = register_file_table_v1(&path).unwrap();
-        assert_eq!((root, vocab), (table.root(), 2));
+        assert_eq!((root, vocab), (table.root(), 3), "vocabulary is the entry count, EOG id inside it");
         let held = public_table_v1(&root, &table.tokenizer_id).expect("registered file-backed holding");
         assert_eq!(held.root_v1(), table.root());
         assert_eq!(held.rendering_digest_v1(1).unwrap(), table.rendering_digest_v1(1).unwrap());

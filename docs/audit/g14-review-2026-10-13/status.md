@@ -562,3 +562,41 @@ Also added: a fold-level regression source for the new default-charging roles
 charged; the winner can never be in its own unpaid set). Removed the two uncalled
 helpers (`palw_fp_objects_from_accepted_txs_by_class_and_history_v1`,
 `recover_pages_v1`). Delegation envelope/signature test sources added. None run.
+
+## Validation 2026-10-15 (paused)
+
+Paused 10-15 by user order; partial results apply only to the recorded source
+commits and will be rerun in the consolidated phase. Raw logs:
+`evidence/validation-1015/`.
+
+Check ladder (`cargo check --lib --tests --locked -j 4`, own `./target`):
+
+- kaspa-consensus-core: first run 9 errors (private field, borrow, a test using a
+  nonexistent `StreamLeafOpened` action, test extras initializers); fixed in
+  `7f055eee0`; rerun exit 0.
+- kaspa-consensus: exit 0 (one pre-existing dead-code warning in
+  `native_settlement.rs`, untouched).
+- consensusmanager, rpc-core, grpc core/client/server, wrpc client/server,
+  rpc-service, p2p-flows: exit 0.
+- kaspad: 2 test-only errors and 7 dead-code/unused warnings; fixed; rerun exit 0,
+  no warnings.
+- misaka-palw-sdk, -gateway, -base0, kaspa-pq-validator-core (lib, bins, tests):
+  exit 0 (pre-existing gateway warnings in untouched files).
+- kaspa-testing-integration (tests): exit 0.
+
+Focused tests (partial; not the final pass):
+
+- kaspa-consensus-core, 14 module filters: first run 65 pass / 2 FAIL. Fixed a
+  production defect (pledge refused a zero CU ruleset, which the BASE0/RC canonical
+  context commits) and a regression with a wrong move order; rerun **PASS 67/67**
+  (`test-02-consensus-core-focused.log`), on source commit after `7f055eee0`.
+- kaspa-consensus store `prefix_history_v1::tests` (archive, lease freeze, shared
+  GC, verified-state restore, recovered history): **PASS 9/9**
+  (`test-04-consensus-store.log`).
+- kaspad focused unit filters: 84 ok / 2 FAILED before the run was stopped (exit 143;
+  it had reached a long service E2E). Failures: a new token-table test expected the
+  wrong vocabulary count (fixed in source, not rerun); the generic Constraint
+  scheduler regression fails with "constraint accepted seed changed" (not yet
+  diagnosed). Not PASS.
+
+Not started: g14_kernel_route_e2e, service E2E, affected suites, clippy.
