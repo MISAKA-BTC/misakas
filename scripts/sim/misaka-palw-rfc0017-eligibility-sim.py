@@ -220,7 +220,12 @@ def scenarios() -> list:
 # 1/3 and 0.6 are the two §7 driver cases (150M attacker verifier stake vs 300M and vs 100M honest verifier stake).
 SWEEP_F = (0.03, 0.05, 0.10, 0.20, 0.25, 1 / 3, 0.40, 0.50, 0.60, 0.75)
 ECON_M, ECON_K = 47, 24                  # the ECON round-2 gate's unapproved interim (readiness §3f) — the default since U-1
-ATTEMPT_FEE_BILI = 100_000               # PALW_ELIG_ATTEMPT_FEE_DESIGN_V1 in BILI (placeholder; user decision U-4)
+# U-4 (user decision 2026-10-15): the attempt cost is split — (a) a non-refundable spam-burn fee and (b) an applicant-funded
+# inspection escrow per drawn position, paid to the attesting verifiers (never new issuance). Both are PROBES mirroring
+# PALW_ELIG_ATTEMPT_BURN_FEE_PROBE_V1 / PALW_ELIG_INSPECTION_FEE_PER_POSITION_PROBE_V1; 100,000 BILI is NOT a default.
+ATTEMPT_BURN_FEE_BILI = 1
+INSPECTION_FEE_PER_POSITION_BILI = 1
+ATTEMPT_FEE_BILI = ATTEMPT_BURN_FEE_BILI      # the griefing price counts the non-refundable burn only
 
 
 def single_exam_mc(f: float, trials: int, rng: random.Random, m: int = EXAM_M, k: int = EXAM_K) -> float:
@@ -245,7 +250,10 @@ def sweep(trials: int, rng: random.Random) -> None:
             f"{p_pass(f, TEST_M, TEST_K):19.6f}"
         )
     print(f"  (64 = one 30-day epoch of the network attempt budget; 192 = 90 days. Griefing price of filling it: "
-          f"{ATTEMPTS_NETWORK_PER_EPOCH * ATTEMPT_FEE_BILI:,} BILI burned per epoch at the placeholder fee.)")
+          f"{ATTEMPTS_NETWORK_PER_EPOCH * ATTEMPT_FEE_BILI:,} BILI burned per epoch at the PROBE burn fee, plus "
+          f"{INSPECTION_FEE_PER_POSITION_BILI * EXAM_M:,} BILI escrowed per attempt for the drawn verifiers (paid to those who "
+          f"attest, the rest returned; never new issuance). Both values are unapproved probes: U-4 derives them from the measured "
+          f"inspection cost.)")
     print()
 
 

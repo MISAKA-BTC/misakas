@@ -336,14 +336,18 @@ pub(super) fn apply_commit_eligibility_exam_v1(
     let mut network: PalwEligibilityNetworkRowV1 = row_of(&builder.state, &eligibility_network_key_v1()).unwrap_or_default();
     palw_eligibility_commit_admits_v1(&policy, commit, &model, stage, &lineage, &principal, &network, now)
         .map_err(|why| refuse(format!("RFC-0017: the exam commit is refused: {why:?}")))?;
-    // GAP-E3: the attempt fee, from the committer's FREE collateral (what its claims, courts and accusations do not hold), burned
-    // whole at the commit — the same write as a registration burn (`collateral` falls, `slashed` rises, the release destroys it).
+    // GAP-E3 / U-4 (user decision 2026-10-15): the attempt cost, from the committer's FREE collateral (what its claims, courts and
+    // accusations do not hold), in two parts: (a) the spam-burn fee, burned whole at the commit — the same write as a registration
+    // burn (`collateral` falls, `slashed` rises, the release destroys it) — and (b) the inspection escrow (fee per position × m),
+    // taken the same way and paid out from the payout queue to the attesting positions at the decision (the rest returned): a
+    // transfer from the applicant, never new issuance.
     let fee = policy.attempt_fee_sompi;
+    let escrow = palw_eligibility_inspection_escrow_v1(&policy);
     let free = (collateral as u128)
         .saturating_sub(builder.committed_at(signer, now))
         .saturating_sub(builder.read().accuser_ledger_v1(signer, now));
-    if !palw_eligibility_fee_affordable_v1(free, fee) {
-        return Err(refuse("RFC-0017: the committing bond's free collateral does not cover the exam-attempt fee"));
+    if !palw_eligibility_attempt_cost_affordable_v1(free, &policy) {
+        return Err(refuse("RFC-0017: the committing bond's free collateral does not cover the burn fee and the inspection escrow"));
     }
     palw_eligibility_count_attempt_v1(&policy, now, &mut lineage, &mut principal, &mut network);
     palw_eligibility_record_fee_v1(fee, &mut lineage, &mut principal, &mut network);
@@ -362,8 +366,13 @@ pub(super) fn apply_commit_eligibility_exam_v1(
         deadline_daa: 0,
         attestations: Vec::new(),
         outcome: None,
+        inspection_escrow_sompi: escrow,
+        inspection_settled: escrow == 0,
     };
     builder.burn_registration_fee(*signer, fee)?;
+    if escrow > 0 {
+        builder.burn_registration_fee(*signer, escrow)?;
+    }
     write_row(builder, exam_key, Some(&exam));
     write_row(builder, eligibility_model_key_v1(&commit.class_id), Some(&model));
     write_row(builder, lineage_key, Some(&lineage));
@@ -469,6 +478,11 @@ pub(super) fn sweep_model_eligibility_v1(
     let anchor = builder.state.round_seed_anchor;
     let mut exam_writes: Vec<(Vec<u8>, Option<PalwEligibilityExamRowV1>)> = Vec::new();
     let mut model_writes: Vec<(Vec<u8>, PalwEligibilityModelRowV1)> = Vec::new();
+    // U-4 (b): the inspection settlements this sweep writes (payout key, payout).
+    let mut payout_writes: Vec<(Hash64, PalwPayoutV2)> = Vec::new();
+    let payload_of = |kernel_id: &EligDigestV1| {
+        builder.state.bonds.iter().find(|(key, _)| palw_kernel_bond_id_v1(key) == *kernel_id).map(|(_, record)| record.payout_payload)
+    };
     let mut pin_retirements: Vec<Vec<u8>> = Vec::new();
     let table = PALW_MODEL_ELIGIBILITY_TABLE_V1;
     let rows: Vec<(Vec<u8>, Vec<u8>)> =
@@ -478,6 +492,45 @@ pub(super) fn sweep_model_eligibility_v1(
             Some(ELIGIBILITY_EXAM_PREFIX_V1) => {
                 let mut exam: PalwEligibilityExamRowV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                 if let Some((_, decided)) = exam.outcome {
+                    // U-4 (b): settle a decided exam's inspection escrow before anything retires it (retried while the payout queue
+                    // lacks room; the row is kept until it is settled).
+                    if !exam.inspection_settled {
+                        let (paid, refund) = palw_eligibility_inspection_settlement_v1(&exam);
+                        let exam_id = exam.commit.id();
+                        let mut legs: Vec<(Hash64, PalwPayoutV2)> = Vec::new();
+                        let mut returned = refund;
+                        for (verifier, amount) in paid {
+                            match payload_of(&verifier) {
+                                Some(payload) => legs.push((
+                                    Hash64::from_bytes(palw_eligibility_inspection_payout_key_v1(&exam_id, &verifier)),
+                                    PalwPayoutV2 { payload, amount },
+                                )),
+                                // A verifier bond gone since it attested: its part returns to the applicant.
+                                None => returned = returned.saturating_add(amount),
+                            }
+                        }
+                        if returned > 0
+                            && let Some(payload) = payload_of(&exam.commit.committer)
+                        {
+                            legs.push((
+                                Hash64::from_bytes(palw_eligibility_inspection_payout_key_v1(&exam_id, &exam.commit.committer)),
+                                PalwPayoutV2 { payload, amount: returned },
+                            ));
+                        }
+                        // (An applicant bond gone too: its part stays destroyed with its collateral — never minted.)
+                        let room = PALW_V2_MAX_PENDING_PAYOUTS
+                            .saturating_sub(builder.state.pending_payouts.len())
+                            .saturating_sub(payout_writes.len());
+                        let fresh = legs.iter().all(|(k, _)| {
+                            !builder.state.pending_payouts.contains_key(k) && !payout_writes.iter().any(|(w, _)| w == k)
+                        });
+                        if legs.len() <= room && fresh {
+                            payout_writes.extend(legs);
+                            exam.inspection_settled = true;
+                            exam_writes.push((key.clone(), Some(exam)));
+                        }
+                        continue;
+                    }
                     if now > decided.saturating_add(exam_retention_daa(&policy)) {
                         exam_writes.push((key.clone(), None));
                     }
@@ -566,6 +619,9 @@ pub(super) fn sweep_model_eligibility_v1(
     }
     for key in pin_retirements {
         write_row::<PalwEligibilityProbationClaimRowV1>(builder, key, None);
+    }
+    for (key, payout) in payout_writes {
+        builder.write_payout(key, Some(payout));
     }
     Ok(())
 }

@@ -119,11 +119,49 @@ pub const PALW_ELIG_RENEWAL_WINDOW_DAYS_DESIGN_V1: u64 = 7;
 pub const PALW_ELIG_LAPSE_GRACE_DAYS_DESIGN_V1: u64 = 2;
 /// Days a bond must have been registered before an exam's commit to be in its verifier population.
 pub const PALW_ELIG_VERIFIER_MATURITY_DAYS_DESIGN_V1: u64 = 7;
-/// **The non-refundable exam-attempt fee** (RFC-0017 §5, GAP-E3; the VALUE is user decision U-4): burned from the committing bond's
-/// free collateral at the commit — whatever the draw, the outcome or a later withdrawal — so filling the network's attempt budget
-/// costs `attempts_network_per_epoch × fee` per attempt epoch ([`palw_eligibility_griefing_cost_v1`]). Burned, never paid out:
-/// no examiner is paid from new issuance. 100,000 BILI (in sompi) is a PLACEHOLDER so the mechanism has a non-zero value to test.
-pub const PALW_ELIG_ATTEMPT_FEE_DESIGN_V1: u64 = 100_000 * 100_000_000;
+/// **U-4 (a) (user decision 2026-10-15): the non-refundable spam-burn fee** (RFC-0017 §5, GAP-E3): burned from the committing bond's
+/// free collateral at the commit — whatever the draw, the outcome, a cancellation or a later withdrawal — so filling the network's
+/// attempt budget costs `attempts_network_per_epoch × fee` per attempt epoch ([`palw_eligibility_griefing_cost_v1`]). A PROBE (1 BILI
+/// in sompi), UNAPPROVED: the value is derived from the measured inspection cost; 100,000 BILI is NOT a default (it exceeds testnet-
+/// 12's 13,000 BILI minimum producer bond, bars small honest entrants, and does not stop a 300M attacker).
+pub const PALW_ELIG_ATTEMPT_BURN_FEE_PROBE_V1: u64 = 100_000_000;
+/// The burn fee's former name (= [`PALW_ELIG_ATTEMPT_BURN_FEE_PROBE_V1`]; no longer 100,000 BILI).
+pub const PALW_ELIG_ATTEMPT_FEE_DESIGN_V1: u64 = PALW_ELIG_ATTEMPT_BURN_FEE_PROBE_V1;
+/// **U-4 (b): the inspection fee per drawn position** — escrowed from the applicant's free collateral at the commit and paid to the
+/// drawn positions that attest by the deadline; the unattested positions' part is returned to the applicant. A transfer from the
+/// applicant, never new issuance. A PROBE (1 BILI), UNAPPROVED: derived from the measured inspection cost.
+pub const PALW_ELIG_INSPECTION_FEE_PER_POSITION_PROBE_V1: u64 = 100_000_000;
+/// **U-4: the fair queue** — permille of the network's epoch attempt budget a lineage's REPEAT attempt (its second or later in the
+/// attempt epoch) may fill; the rest stays open to lineages' first attempts, so a spender cannot crowd honest new models out.
+/// Design value, unapproved.
+pub const PALW_ELIG_REPEAT_ATTEMPTS_NETWORK_SHARE_DESIGN_V1: u16 = 500;
+
+/// **U-4: a measured-fee record** — the burn and inspection fees the measured inspection cost derived, with the digests of the
+/// evidence and of its independent review. Pinned only by a reviewed change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwEligibilityFeeRecordV1 {
+    pub burn_fee_sompi: u64,
+    pub inspection_fee_per_position_sompi: u64,
+    pub evidence_digest: [u8; 32],
+    pub review_digest: [u8; 32],
+}
+
+/// **U-4: the pinned measured-fee records — EMPTY.** No fee is measured; an armed fence is refused naming this gate.
+pub const PALW_ELIG_MEASURED_FEE_RECORDS_V1: &[PalwEligibilityFeeRecordV1] = &[];
+
+/// **U-4: the measured-fee gate** — the policy's two fees exactly match a pinned record with real, distinct digests, and both are
+/// positive (a free attempt makes the budget free to grief; a free inspection pays verifiers nothing).
+pub fn palw_eligibility_fees_measured_v1(policy: &PalwModelEligibilityPolicyV1, records: &[PalwEligibilityFeeRecordV1]) -> bool {
+    policy.attempt_fee_sompi > 0
+        && policy.inspection_fee_per_position_sompi > 0
+        && records.iter().any(|r| {
+            r.burn_fee_sompi == policy.attempt_fee_sompi
+                && r.inspection_fee_per_position_sompi == policy.inspection_fee_per_position_sompi
+                && r.evidence_digest != [0u8; 32]
+                && r.review_digest != [0u8; 32]
+                && r.evidence_digest != r.review_digest
+        })
+}
 
 /// **U-3 (user decisions 2026-10-15, with the same-day clarification): what an exam pass IS.** The drawn-verifier m-of-k approval is
 /// the certification pillar, under an EXPLICIT premise — the honest share of the drawn verifier stake is at least the threshold. It is
@@ -246,8 +284,13 @@ pub struct PalwModelEligibilityPolicyV1 {
     pub attempts_network_per_epoch: u32,
     pub attempt_epoch_daa: u64,
     pub attempt_cooldown_daa: u64,
-    /// The non-refundable attempt fee, burned at commit (sompi; U-4).
+    /// U-4 (a): the non-refundable spam-burn fee, burned at commit (sompi).
     pub attempt_fee_sompi: u64,
+    /// U-4 (b): the inspection fee per drawn position, escrowed at commit from the applicant and paid to the attesting positions
+    /// (the unattested part returned); never new issuance. 0 = no inspection escrow (refused by the measured-fee gate).
+    pub inspection_fee_per_position_sompi: u64,
+    /// U-4: the fair queue — permille of `attempts_network_per_epoch` a lineage's repeat attempt in the epoch may fill.
+    pub repeat_attempts_network_share_permille: u16,
     // ---- D. renewal ----------------------------------------------------------------------------------------------------------
     pub renewal_epoch_daa: u64,
     pub renewal_window_daa: u64,
@@ -279,7 +322,9 @@ impl PalwModelEligibilityPolicyV1 {
             attempts_network_per_epoch: PALW_ELIG_ATTEMPTS_NETWORK_EPOCH_DESIGN_V1,
             attempt_epoch_daa: PALW_ELIG_ATTEMPT_EPOCH_DAYS_DESIGN_V1 * day_daa,
             attempt_cooldown_daa: PALW_ELIG_ATTEMPT_COOLDOWN_DAYS_DESIGN_V1 * day_daa,
-            attempt_fee_sompi: PALW_ELIG_ATTEMPT_FEE_DESIGN_V1,
+            attempt_fee_sompi: PALW_ELIG_ATTEMPT_BURN_FEE_PROBE_V1,
+            inspection_fee_per_position_sompi: PALW_ELIG_INSPECTION_FEE_PER_POSITION_PROBE_V1,
+            repeat_attempts_network_share_permille: PALW_ELIG_REPEAT_ATTEMPTS_NETWORK_SHARE_DESIGN_V1,
             renewal_epoch_daa: PALW_ELIG_RENEWAL_EPOCH_DAYS_DESIGN_V1 * day_daa,
             renewal_window_daa: PALW_ELIG_RENEWAL_WINDOW_DAYS_DESIGN_V1 * day_daa,
             lapse_grace_daa: PALW_ELIG_LAPSE_GRACE_DAYS_DESIGN_V1 * day_daa,
@@ -324,6 +369,12 @@ impl PalwModelEligibilityPolicyV1 {
         }
         if self.renewal_window_daa == 0 || self.renewal_window_daa > self.renewal_epoch_daa {
             return Err("the renewal window must be positive and inside the renewal epoch".into());
+        }
+        if self.repeat_attempts_network_share_permille > 1_000 {
+            return Err("the fair queue's repeat-attempt share is at most 1000 permille of the network budget".into());
+        }
+        if self.inspection_fee_per_position_sompi.checked_mul(self.exam_m as u64).is_none() {
+            return Err("the inspection escrow (fee per position × m) must fit a u64".into());
         }
         Ok(())
     }
@@ -452,6 +503,10 @@ pub struct PalwEligibilityExamRowV1 {
     pub deadline_daa: u64,
     pub attestations: Vec<PalwEligibilityAttestationRowV1>,
     pub outcome: Option<(PalwEligibilityExamOutcomeV1, u64)>,
+    /// U-4 (b): the inspection fee escrowed from the applicant at the commit (paid out at the decision, never new issuance).
+    pub inspection_escrow_sompi: u64,
+    /// U-4 (b): whether the escrow was paid to the attesting positions (and the rest returned).
+    pub inspection_settled: bool,
 }
 
 impl PalwEligibilityExamRowV1 {
@@ -681,6 +736,8 @@ pub enum PalwEligibilityCommitRefusalV1 {
     NetworkAttemptsExhausted,
     Cooldown,
     OutsideRenewalWindow,
+    /// U-4: the fair queue — a lineage's repeat attempt this epoch while the network budget's repeat share is used.
+    FairQueueRepeatAttempt,
 }
 
 /// **REQ-ELIG-4: may this commit consume an attempt now?** Pure; the fold calls it and then [`palw_eligibility_count_attempt_v1`].
@@ -740,7 +797,53 @@ pub fn palw_eligibility_commit_admits_v1(
     if network_in_epoch >= policy.attempts_network_per_epoch {
         return Err(R::NetworkAttemptsExhausted);
     }
+    // U-4 (user decision 2026-10-15): the fair queue — a lineage that already committed this attempt epoch takes only the repeat
+    // share of the network budget; the rest stays open to lineages' first attempts.
+    let repeat = lineage.attempts_total > 0 && lineage.last_commit_daa / policy.attempt_epoch_daa.max(1) == epoch;
+    let repeat_cap = (policy.attempts_network_per_epoch as u64) * (policy.repeat_attempts_network_share_permille as u64) / 1_000;
+    if repeat && network_in_epoch as u64 >= repeat_cap {
+        return Err(R::FairQueueRepeatAttempt);
+    }
     Ok(())
+}
+
+/// **U-4 (b): the inspection escrow one exam takes from its applicant** — `fee per position × m`.
+pub fn palw_eligibility_inspection_escrow_v1(policy: &PalwModelEligibilityPolicyV1) -> u64 {
+    policy.inspection_fee_per_position_sompi.saturating_mul(policy.exam_m as u64)
+}
+
+/// **U-4: may `free` collateral pay the whole attempt cost** — the burn fee and the inspection escrow, due together.
+pub fn palw_eligibility_attempt_cost_affordable_v1(free_collateral: u128, policy: &PalwModelEligibilityPolicyV1) -> bool {
+    free_collateral >= policy.attempt_fee_sompi as u128 + palw_eligibility_inspection_escrow_v1(policy) as u128
+}
+
+/// **U-4 (b): how a decided exam's inspection escrow is settled** — `fee per position` to each drawn position whose bond attested by
+/// the deadline (any verdict: an `Unavailable` or a `NotReproducible` is inspection work too), aggregated per verifier in first-draw
+/// order; the unattested positions' part returned to the applicant. `Σ paid + refund = escrow`: a transfer, never new issuance.
+pub fn palw_eligibility_inspection_settlement_v1(exam: &PalwEligibilityExamRowV1) -> (Vec<(EligDigestV1, u64)>, u64) {
+    let positions = exam.draws.len() as u64;
+    if positions == 0 || exam.inspection_escrow_sompi == 0 {
+        return (Vec::new(), exam.inspection_escrow_sompi);
+    }
+    let per = exam.inspection_escrow_sompi / positions;
+    let mut paid: Vec<(EligDigestV1, u64)> = Vec::new();
+    let mut total = 0u64;
+    for bond in &exam.draws {
+        if !exam.attestations.iter().any(|a| a.verifier == *bond && a.attested_daa <= exam.deadline_daa) {
+            continue;
+        }
+        match paid.iter_mut().find(|(v, _)| v == bond) {
+            Some((_, amount)) => *amount = amount.saturating_add(per),
+            None => paid.push((*bond, per)),
+        }
+        total = total.saturating_add(per);
+    }
+    (paid, exam.inspection_escrow_sompi.saturating_sub(total))
+}
+
+/// The payout-queue key of an inspection settlement leg (`recipient` = a verifier's or the applicant's kernel bond id).
+pub fn palw_eligibility_inspection_payout_key_v1(exam: &EligDigestV1, recipient: &EligDigestV1) -> EligDigestV1 {
+    hash64(PALW_ELIGIBILITY_EXAM_ID_DOMAIN_V1, &[b"inspection-payout", exam, recipient])
 }
 
 /// **GAP-E3: may `free` collateral pay the attempt fee?** The fee is due whole; a bond that cannot pay it commits nothing.
@@ -1148,6 +1251,13 @@ impl Params {
             if !gate_c_below {
                 return Err(PalwModeV2Error::Invalid(
                     "palw_model_eligibility_v1 needs palw_independently_work_certified_v1 (RFC-0018 Gate C) at or below it: Probation claims must never advance the safe frontier, settled-anchor depth or rule-E participation uncertified (U-2)",
+                ));
+            }
+            // U-4 (user decision 2026-10-15): the burn and inspection fees come from the measured inspection cost.
+            let policy = PalwModelEligibilityPolicyV1::design_unapproved_v1(self.palw_model_eligibility_day_daa_v1());
+            if !palw_eligibility_fees_measured_v1(&policy, PALW_ELIG_MEASURED_FEE_RECORDS_V1) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_model_eligibility_v1 cannot be armed: the attempt burn fee and the inspection fee have no measured-value record (U-4)",
                 ));
             }
             return Err(PalwModeV2Error::Invalid(

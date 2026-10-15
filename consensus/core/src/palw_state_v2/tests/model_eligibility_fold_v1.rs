@@ -22,11 +22,20 @@ const RE_REGISTERED: u64 = 3;
 const BONDS: u64 = 8;
 
 fn test_policy() -> PalwModelEligibilityPolicyV1 {
-    PalwModelEligibilityPolicyV1 { attempt_fee_sompi: FEE, ..PalwModelEligibilityPolicyV1::design_unapproved_v1(DAY) }
+    // U-4: no inspection escrow in the base fixture (the burn fee alone moves collateral); `u4_*` arms one.
+    PalwModelEligibilityPolicyV1 {
+        attempt_fee_sompi: FEE,
+        inspection_fee_per_position_sompi: 0,
+        ..PalwModelEligibilityPolicyV1::design_unapproved_v1(DAY)
+    }
 }
 
 fn armed() -> PalwStateParamsV2 {
-    params().with_model_eligibility_v1(Some(PalwModelEligibilityMirrorV1 { from_daa: FENCE, policy: test_policy() }))
+    armed_with(test_policy())
+}
+
+fn armed_with(policy: PalwModelEligibilityPolicyV1) -> PalwStateParamsV2 {
+    params().with_model_eligibility_v1(Some(PalwModelEligibilityMirrorV1 { from_daa: FENCE, policy }))
 }
 
 fn extras() -> PalwTransitionExtrasV1 {
@@ -259,6 +268,37 @@ fn commit_then_draw_on_the_real_anchor_promotes_on_k_of_m() {
     if let Some(b) = undrawn {
         assert!(step(&s, &p, PROMOTE + 4, &[attest(id, b, EligibilityVerdictV1::Reproduced)]).is_err());
     }
+}
+
+/// **U-4 (user decision 2026-10-15): the attempt cost is split** — (a) the burn fee is destroyed at the commit, (b) the inspection
+/// escrow (fee per position × m) is taken from the applicant at the commit and, once the exam decides, paid from the payout queue to
+/// the drawn positions that attested (the rest returned): `Σ legs = escrow`, a transfer, never new issuance.
+#[test]
+fn u4_the_inspection_escrow_is_paid_to_the_attesting_positions() {
+    const PER_POSITION: u64 = 1;
+    let policy = PalwModelEligibilityPolicyV1 { inspection_fee_per_position_sompi: PER_POSITION, ..test_policy() };
+    let escrow = PER_POSITION * policy.exam_m as u64;
+    let p = armed_with(policy);
+    let (s, id) = committed_and_drawn(&p);
+    assert_eq!(s.bond(&bond_key(1)).unwrap().collateral, 1_000 - FEE - escrow, "burn fee and escrow both left the applicant");
+    let e = exam(&s, &id);
+    assert_eq!((e.inspection_escrow_sompi, e.inspection_settled), (escrow, false));
+    let mut drawn: Vec<u64> = e.draws.iter().map(bond_of_kid).collect();
+    drawn.sort_unstable();
+    drawn.dedup();
+    let objects: Vec<_> = drawn.iter().map(|b| attest(id, *b, EligibilityVerdictV1::Reproduced)).collect();
+    let before = s.pending_payouts.len();
+    let s = step(&s, &p, PROMOTE + 3, &objects).expect("the attestations land and the exam decides");
+    let s = step(&s, &p, PROMOTE + 4, &[]).expect("the next sweep settles the escrow");
+    let e = exam(&s, &id);
+    assert!(e.inspection_settled);
+    let legs: u64 = drawn
+        .iter()
+        .filter_map(|b| s.pending_payouts.get(&Hash64::from_bytes(palw_eligibility_inspection_payout_key_v1(&id, &kid(*b)))))
+        .map(|payout| payout.amount)
+        .sum();
+    assert_eq!(legs, escrow, "every position attested: the whole escrow is paid to the attesting verifiers, nothing refunded");
+    assert_eq!(s.pending_payouts.len(), before + drawn.len());
 }
 
 /// **§4C / §7-7: attestation absent ⇒ no promotion, and nobody is slashed** — the drawn verifiers stay silent (or report the model

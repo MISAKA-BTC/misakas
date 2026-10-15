@@ -188,6 +188,60 @@ fn u3_a_pass_is_premise_based_certification_and_the_f_threat_model_is_reported()
     assert!((worst - 1.0).abs() < 1e-12, "worst case f = 1: the gate certifies whatever the attacker wants");
 }
 
+/// U-4 (user decision 2026-10-15): the attempt cost is split into a non-refundable burn and an applicant-funded inspection escrow;
+/// both are named, unapproved PROBES (100,000 BILI is not a default); the measured-fee gate refuses them unpinned; the escrow's
+/// settlement pays the attesting positions and returns the rest (a transfer, never new issuance); the fair queue keeps part of the
+/// network budget for lineages' first attempts.
+#[test]
+fn u4_the_attempt_cost_is_split_measured_and_fairly_queued() {
+    let p = policy();
+    assert_ne!(p.attempt_fee_sompi, 100_000 * 100_000_000, "100,000 BILI is not a default");
+    assert_eq!(p.attempt_fee_sompi, PALW_ELIG_ATTEMPT_BURN_FEE_PROBE_V1);
+    assert_eq!(p.inspection_fee_per_position_sompi, PALW_ELIG_INSPECTION_FEE_PER_POSITION_PROBE_V1);
+    assert_eq!(palw_eligibility_inspection_escrow_v1(&p), PALW_ELIG_INSPECTION_FEE_PER_POSITION_PROBE_V1 * p.exam_m as u64);
+    assert!(!palw_eligibility_fees_measured_v1(&p, PALW_ELIG_MEASURED_FEE_RECORDS_V1), "no measured record is pinned");
+    let rec = PalwEligibilityFeeRecordV1 {
+        burn_fee_sompi: p.attempt_fee_sompi,
+        inspection_fee_per_position_sompi: p.inspection_fee_per_position_sompi,
+        evidence_digest: [1; 32],
+        review_digest: [2; 32],
+    };
+    assert!(palw_eligibility_fees_measured_v1(&p, &[rec]));
+    assert!(!palw_eligibility_fees_measured_v1(&p, &[PalwEligibilityFeeRecordV1 { review_digest: [1; 32], ..rec }]));
+    let total = p.attempt_fee_sompi as u128 + palw_eligibility_inspection_escrow_v1(&p) as u128;
+    assert!(palw_eligibility_attempt_cost_affordable_v1(total, &p));
+    assert!(!palw_eligibility_attempt_cost_affordable_v1(total - 1, &p));
+    // Settlement: 3 of 4 positions (bond 7 twice) attested; one silent position's part returns to the applicant.
+    let mut e = drawn_exam(vec![id(7), id(8), id(7), id(9)], 1_000);
+    e.inspection_escrow_sompi = 400;
+    for v in [7u8, 8] {
+        e.attestations.push(PalwEligibilityAttestationRowV1 {
+            verifier: id(v),
+            verdict: PalwEligibilityVerdictV1::Unavailable,
+            transcript: id(0),
+            attested_daa: 900,
+        });
+    }
+    let (paid, refund) = palw_eligibility_inspection_settlement_v1(&e);
+    assert_eq!(paid, vec![(id(7), 200), (id(8), 100)], "an Unavailable attestation is inspection work too");
+    assert_eq!(refund, 100);
+    assert_eq!(paid.iter().map(|(_, a)| a).sum::<u64>() + refund, e.inspection_escrow_sompi, "a transfer: nothing created");
+    // Fair queue: a lineage's repeat attempt in the epoch is refused once the repeat share of the network budget is used.
+    let half = (p.attempts_network_per_epoch as u64 * p.repeat_attempts_network_share_permille as u64 / 1_000) as u32;
+    let now = FENCE + 1 + p.probation_min_daa.max(p.attempt_cooldown_daa) + p.attempt_cooldown_daa;
+    let epoch = now / p.attempt_epoch_daa;
+    let model = probation_row(41, 41, FENCE + 1);
+    let lineage = PalwEligibilityLineageRowV1 { attempts_total: 1, last_commit_daa: epoch * p.attempt_epoch_daa, ..Default::default() };
+    let busy = PalwEligibilityNetworkRowV1 { attempt_epoch: epoch, attempts_in_epoch: half, ..Default::default() };
+    let c = commit(41, PalwEligibilityExamPurposeV1::Promotion, p.probation_min_claims, 1);
+    let principal = PalwEligibilityPrincipalRowV1::default();
+    let verdict = palw_eligibility_commit_admits_v1(&p, &c, &model, PalwEligibilityStageV1::Probation, &lineage, &principal, &busy, now);
+    assert!(
+        matches!(verdict, Err(PalwEligibilityCommitRefusalV1::FairQueueRepeatAttempt) | Err(PalwEligibilityCommitRefusalV1::Cooldown)),
+        "{verdict:?}"
+    );
+}
+
 #[test]
 fn gate_math_4_of_7_at_three_percent_and_ten_thousand_attempts() {
     let p = palw_eligibility_pass_probability_f64(0.03, 7, 4);
@@ -452,6 +506,8 @@ fn drawn_exam(draws: Vec<EligDigestV1>, deadline: u64) -> PalwEligibilityExamRow
         deadline_daa: deadline,
         attestations: Vec::new(),
         outcome: None,
+        inspection_escrow_sompi: 0,
+        inspection_settled: true,
     }
 }
 
