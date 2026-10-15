@@ -200,6 +200,142 @@ pub fn palw_queue_bond_share_cap_v1(capital: u128, active_capital: u128, values:
     (len.saturating_mul(capital).div_ceil(active_capital)).clamp(1, u32::MAX as u128) as u32
 }
 
+// =================================================================================================================================
+// V8 (user decision 2026-10-15): the capacity attestation
+// =================================================================================================================================
+
+/// The attestation message's domain (a keyed BLAKE2b-512 over the borsh of every field below; the verifier's bond key signs it).
+pub const PALW_RFC0016_CAPACITY_ATTESTATION_DOMAIN_V1: &[u8] = b"misaka-palw/rfc0016/capacity-attestation/v1";
+
+/// **V8: `sigma_cap`'s calibration ceiling** — at most 1 (1000 ‰): no capacity amplification without a measurement behind it.
+pub const PALW_RFC0016_SIGMA_CAP_MAX_PERMILLE_V1: u32 = 1_000;
+
+/// **V8: what one verifier can do per span, every resource together** — compute, memory, data availability and court load are
+/// evaluated jointly (a verifier rich in compute but short of DA or court time is bounded by the scarcer resource).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwCapacityResourcesV1 {
+    /// Replay compute per span (the economic CCU unit the demand terms use).
+    pub compute_ccu_per_span: u128,
+    /// Memory available to hold one claim's working set (a fit gate, not a rate).
+    pub memory_bytes: u64,
+    /// Data-availability bytes it can fetch and retain per span.
+    pub da_bytes_per_span: u64,
+    /// Court sessions (bisection rungs answered) it can carry per span, in permille of a session.
+    pub court_permille_per_span: u64,
+}
+
+/// **V8: one claim's load on a verifier** (the model's measured profile), in the same units.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwClaimLoadV1 {
+    pub compute_ccu: u128,
+    pub memory_bytes: u64,
+    pub da_bytes: u64,
+    pub court_permille: u64,
+}
+
+/// **V8: a capacity attestation** — signed by the verifier's bond over the model, the verifier, the capability, the measurement
+/// window, the expiry and the evidence root (the measurement's raw data). The chain reads only these fields and the signature; the
+/// evidence root names what an independent reviewer re-runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwCapacityAttestationV1 {
+    pub model: Hash64,
+    pub verifier: PalwBondKeyV2,
+    pub capability: PalwCapacityResourcesV1,
+    /// The measurement window the capability was measured over, `[from, to)` in DAA.
+    pub window_from_daa: u64,
+    pub window_to_daa: u64,
+    /// The DAA after which the attestation counts nothing.
+    pub expires_daa: u64,
+    /// The measurement evidence's root (never zero).
+    pub evidence_root: Hash64,
+}
+
+/// **V8: the message the verifier signs** — every field, domain-separated; changing any field changes the message.
+pub fn palw_capacity_attestation_message_v1(attestation: &PalwCapacityAttestationV1) -> Hash64 {
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_RFC0016_CAPACITY_ATTESTATION_DOMAIN_V1).to_state();
+    state.update(&borsh::to_vec(attestation).expect("an attestation serializes"));
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// Why an attestation counts nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwCapacityAttestationRefusalV1 {
+    EmptyWindow,
+    /// The measurement window ends in the future, or the expiry is not after it.
+    WindowNotClosed,
+    Expired,
+    NoEvidence,
+    ZeroCapability,
+}
+
+/// **V8: the attestation's own checks at `now_daa`** (the signature is the carrier's, checked against
+/// [`palw_capacity_attestation_message_v1`]): a closed, non-empty measurement window, an expiry after it and not passed, a non-zero
+/// evidence root and a non-zero capability.
+pub fn palw_capacity_attestation_check_v1(
+    attestation: &PalwCapacityAttestationV1,
+    now_daa: u64,
+) -> Result<(), PalwCapacityAttestationRefusalV1> {
+    if attestation.window_to_daa <= attestation.window_from_daa {
+        return Err(PalwCapacityAttestationRefusalV1::EmptyWindow);
+    }
+    if attestation.window_to_daa > now_daa || attestation.expires_daa <= attestation.window_to_daa {
+        return Err(PalwCapacityAttestationRefusalV1::WindowNotClosed);
+    }
+    if now_daa >= attestation.expires_daa {
+        return Err(PalwCapacityAttestationRefusalV1::Expired);
+    }
+    if attestation.evidence_root == Hash64::default() {
+        return Err(PalwCapacityAttestationRefusalV1::NoEvidence);
+    }
+    if attestation.capability.compute_ccu_per_span == 0 {
+        return Err(PalwCapacityAttestationRefusalV1::ZeroCapability);
+    }
+    Ok(())
+}
+
+/// **V8: claims per span one verifier's resources carry for a model's load** — the minimum over compute, DA and court (each a rate),
+/// zero when the claim's working set does not fit its memory. Never an amplification: no resource is multiplied.
+pub fn palw_capacity_claims_per_span_v1(capability: &PalwCapacityResourcesV1, load: &PalwClaimLoadV1) -> u128 {
+    if load.memory_bytes > capability.memory_bytes || load.compute_ccu == 0 {
+        return 0;
+    }
+    let mut claims = capability.compute_ccu_per_span / load.compute_ccu;
+    if load.da_bytes > 0 {
+        claims = claims.min((capability.da_bytes_per_span / load.da_bytes) as u128);
+    }
+    if load.court_permille > 0 {
+        claims = claims.min((capability.court_permille_per_span / load.court_permille) as u128);
+    }
+    claims
+}
+
+/// **V8: the verifier supply the water-filling reads, from attestations** — ONE budget per verifier however many models it attests
+/// for (its largest valid compute, never the sum: the same hardware attested to N models is still one machine), its classes the
+/// models whose load fits its resources jointly. Expired, unproven or non-fitting attestations count nothing. The water-filling then
+/// splits that one budget across the models ([`palw_waterfill_capacity_v1`]) — no verifier counted twice.
+pub fn palw_capacity_supply_from_attestations_v1(
+    attestations: &[PalwCapacityAttestationV1],
+    now_daa: u64,
+    load_of: impl Fn(&Hash64) -> Option<PalwClaimLoadV1>,
+) -> Vec<PalwVerifierSupplyV1> {
+    let mut by_verifier: BTreeMap<PalwBondKeyV2, (u128, BTreeSet<Hash64>)> = BTreeMap::new();
+    for a in attestations {
+        if palw_capacity_attestation_check_v1(a, now_daa).is_err() {
+            continue;
+        }
+        let Some(load) = load_of(&a.model) else { continue };
+        if palw_capacity_claims_per_span_v1(&a.capability, &load) == 0 {
+            continue;
+        }
+        let entry = by_verifier.entry(a.verifier).or_default();
+        entry.0 = entry.0.max(a.capability.compute_ccu_per_span);
+        entry.1.insert(a.model);
+    }
+    by_verifier.into_values().map(|(per_span, classes)| PalwVerifierSupplyV1 { per_span, classes }).collect()
+}
+
 /// The verdict of the pre-lottery quote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwQuoteVerdictV1 {
@@ -294,6 +430,76 @@ pub fn palw_opv_capacity_admits_v1(open_claims: u64, checks_available: u64, valu
 mod tests {
     use super::*;
     use crate::tx::TransactionOutpoint;
+
+    fn attestation(model: u64, verifier: u32, compute: u128) -> PalwCapacityAttestationV1 {
+        PalwCapacityAttestationV1 {
+            model: h(model),
+            verifier: bond(verifier),
+            capability: PalwCapacityResourcesV1 {
+                compute_ccu_per_span: compute,
+                memory_bytes: 1 << 30,
+                da_bytes_per_span: 1 << 20,
+                court_permille_per_span: 10_000,
+            },
+            window_from_daa: 100,
+            window_to_daa: 200,
+            expires_daa: 1_000,
+            evidence_root: h(77),
+        }
+    }
+
+    /// V8 (user decision 2026-10-15): the signed message fixes every field; the checks refuse open windows, expiry and no evidence.
+    #[test]
+    fn v8_the_attestation_is_signed_over_every_field_and_checked() {
+        let a = attestation(1, 1, 100);
+        let m = palw_capacity_attestation_message_v1(&a);
+        for changed in [
+            PalwCapacityAttestationV1 { model: h(2), ..a },
+            PalwCapacityAttestationV1 { verifier: bond(2), ..a },
+            PalwCapacityAttestationV1 { window_to_daa: 201, ..a },
+            PalwCapacityAttestationV1 { expires_daa: 999, ..a },
+            PalwCapacityAttestationV1 { evidence_root: h(78), ..a },
+            PalwCapacityAttestationV1 { capability: PalwCapacityResourcesV1 { memory_bytes: 1, ..a.capability }, ..a },
+        ] {
+            assert_ne!(palw_capacity_attestation_message_v1(&changed), m);
+        }
+        assert_eq!(palw_capacity_attestation_check_v1(&a, 500), Ok(()));
+        assert_eq!(palw_capacity_attestation_check_v1(&a, 150), Err(PalwCapacityAttestationRefusalV1::WindowNotClosed));
+        assert_eq!(palw_capacity_attestation_check_v1(&a, 1_000), Err(PalwCapacityAttestationRefusalV1::Expired));
+        let no_evidence = PalwCapacityAttestationV1 { evidence_root: Hash64::default(), ..a };
+        assert_eq!(palw_capacity_attestation_check_v1(&no_evidence, 500), Err(PalwCapacityAttestationRefusalV1::NoEvidence));
+    }
+
+    /// V8: compute, memory, DA and court load are evaluated together (the scarcest binds; memory is a fit gate).
+    #[test]
+    fn v8_resources_are_evaluated_jointly() {
+        let cap = PalwCapacityResourcesV1 {
+            compute_ccu_per_span: 1_000,
+            memory_bytes: 100,
+            da_bytes_per_span: 50,
+            court_permille_per_span: 3_000,
+        };
+        let load = PalwClaimLoadV1 { compute_ccu: 10, memory_bytes: 100, da_bytes: 10, court_permille: 1_000 };
+        assert_eq!(palw_capacity_claims_per_span_v1(&cap, &load), 3, "court binds: min(100, 5, 3)");
+        assert_eq!(palw_capacity_claims_per_span_v1(&cap, &PalwClaimLoadV1 { memory_bytes: 101, ..load }), 0, "does not fit");
+        assert_eq!(PALW_RFC0016_SIGMA_CAP_MAX_PERMILLE_V1, 1_000);
+    }
+
+    /// V8: one verifier attesting the same hardware to several models is ONE budget, split by the water-filling — never summed.
+    #[test]
+    fn v8_a_verifier_is_never_double_counted_across_models() {
+        let atts = [attestation(1, 1, 100), attestation(2, 1, 100), attestation(3, 1, 100), attestation(1, 2, 40)];
+        let load = PalwClaimLoadV1 { compute_ccu: 1, memory_bytes: 1, da_bytes: 1, court_permille: 1 };
+        let supply = palw_capacity_supply_from_attestations_v1(&atts, 500, |_| Some(load));
+        assert_eq!(supply.len(), 2, "two verifiers");
+        let total_budget: u128 = supply.iter().map(|s| s.per_span).sum();
+        assert_eq!(total_budget, 140, "100 once (not 300) + 40");
+        let demand: BTreeMap<Hash64, u128> = [(h(1), 10), (h(2), 10), (h(3), 10)].into_iter().collect();
+        let capacity = palw_waterfill_capacity_v1(&supply, &demand);
+        assert!(capacity.values().sum::<u128>() <= total_budget);
+        // An expired attestation counts nothing.
+        assert!(palw_capacity_supply_from_attestations_v1(&atts, 1_000, |_| Some(load)).is_empty());
+    }
 
     /// V7 (user decision 2026-10-15): the queue's fair share follows bond capital (3:1 capital → 3:1 share of `L`).
     #[test]
