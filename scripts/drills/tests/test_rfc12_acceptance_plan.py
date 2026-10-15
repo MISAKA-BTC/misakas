@@ -72,7 +72,8 @@ def valid_plan():
                        'exit': {'unbondCommands': [], 'withdrawCommands': [], 'destinationAddress': None,
                                 'maximumFeeSompi': 0},
                        'legacySettlementWindowDaa': 0, 'observeAfterFenceDaa': 10, 'scanFromDaa': 0,
-                       'dnsCadence': {'epochLengthBlocks': 2, 'rewardUniquenessWindowBlocks': 600, 'maxReorgHorizonBlocks': 3},
+                       'dnsCadence': {'epochLengthBlocks': 2, 'rewardUniquenessWindowBlocks': 600, 'maxReorgHorizonBlocks': 3,
+                   'attestationEpochLengthBlueScore': 2, 'attestationLagBlueScore': 2},
                        'maximumBlockReads': 100000, 'maximumStatusReads': 1000, 'palwPayoutSource': 'factory-seats'},
     }
 

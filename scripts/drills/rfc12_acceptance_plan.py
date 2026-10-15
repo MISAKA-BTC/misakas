@@ -533,10 +533,14 @@ def _owned_template(value, name, allowed):
 
 def dns_cadence(value, name):
     """The node's DnsParams the legacy settlement window is derived from (rfc12_retirement_reconciliation, rule note)."""
-    _keys(value, ('epochLengthBlocks', 'rewardUniquenessWindowBlocks', 'maxReorgHorizonBlocks'), name)
+    _keys(value, ('epochLengthBlocks', 'rewardUniquenessWindowBlocks', 'maxReorgHorizonBlocks',
+                  'attestationEpochLengthBlueScore', 'attestationLagBlueScore'), name)
     return dict(epochLengthBlocks=_int(value['epochLengthBlocks'], name + '.epochLengthBlocks', 1),
                 rewardUniquenessWindowBlocks=_int(value['rewardUniquenessWindowBlocks'], name + '.rewardUniquenessWindowBlocks'),
-                maxReorgHorizonBlocks=_int(value['maxReorgHorizonBlocks'], name + '.maxReorgHorizonBlocks'))
+                maxReorgHorizonBlocks=_int(value['maxReorgHorizonBlocks'], name + '.maxReorgHorizonBlocks'),
+                attestationEpochLengthBlueScore=_int(value['attestationEpochLengthBlueScore'],
+                                                     name + '.attestationEpochLengthBlueScore', 1),
+                attestationLagBlueScore=_int(value['attestationLagBlueScore'], name + '.attestationLagBlueScore'))
 
 
 def check_legacy_window(fence, window, observe, cadence, name):

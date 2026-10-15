@@ -111,7 +111,8 @@ class Judgement(unittest.TestCase):
 
     # A small cadence for synthetic chains: L = 2, fd = 6 + 2 = 8; fence 200 -> last pre-retirement epoch 99, its threshold
     # (99 + 1) * 2 + 8 = 208, so the derived window is 8.
-    CADENCE = dict(epochLengthBlocks=2, rewardUniquenessWindowBlocks=6, maxReorgHorizonBlocks=2)
+    CADENCE = dict(epochLengthBlocks=2, rewardUniquenessWindowBlocks=6, maxReorgHorizonBlocks=2,
+                   attestationEpochLengthBlueScore=2, attestationLagBlueScore=2)
 
     def chain(self, dns_at, extra=()):
         """Chain blocks 150, 199, 200, 204, 205, 207, 209, 212 with one DNS output at each DAA in `dns_at` (twice where listed
@@ -132,6 +133,13 @@ class Judgement(unittest.TestCase):
         self.assertEqual(R.epochs_finalized_at(207, 209, 2, 8), (99, 99))
         self.assertEqual(R.epochs_finalized_at(200, 204, 2, 8), (96, 97))
         self.assertIsNone(R.epochs_finalized_at(204, 205, 2, 8))
+        # The blue-score attestation clock can only widen the payable horizon: a last pre-fence blue score of 220 makes
+        # attestation epoch 108 ready ((220 - 2 + 1) // 2 - 1, dns_finality.rs:1375), so epochs up to 108 stay payable until
+        # parent DAA (108 + 1) * 2 + 8 = 226.
+        wide = R.legacy_settlement_window(200, self.CADENCE, 220)
+        self.assertEqual((wide['windowDaa'], wide['lastPayableEpoch'], wide['horizonParentBelowDaa']), (8, 108, 226))
+        self.assertEqual(R.legacy_settlement_window(200, self.CADENCE, 150)['horizonParentBelowDaa'], 208)
+        self.assertEqual(R.ready_epoch_from_tip_blue_score(220, 2, 2), 108)
 
     def test_post_fence_no_new_share_and_no_retired_kind(self):
         bodies = [dict(source='node-rpc', hash='aa' * 64, daa=150, kinds=[0x11]), dict(source='node-rpc', hash='bb' * 64, daa=205, kinds=[])]
@@ -153,10 +161,13 @@ class Judgement(unittest.TestCase):
         bodies = []
         for name, dns_at in [('after the span (parent 209 >= 208)', [212]),
                              ('a block that crosses no threshold', [205]),
-                             ('one bond paid three times for two epochs', [204, 204, 204])]:
+                             ('one bond paid five times for two epochs (at most a bonus and a drip each)', [204] * 5)]:
             with self.subTest(name):
                 self.assertEqual(verdict(R.post_fence_dns_share, self.chain(dns_at), bodies, 200, 8, {BOND}, self.CADENCE),
                                  J.FAIL)
+        # A bonus and a drip for each of the two epochs crossed at 204 are the node's own once-only payouts.
+        self.assertEqual(verdict(R.post_fence_dns_share, self.chain([204] * 4), bodies, 200, 8, {BOND}, self.CADENCE),
+                         J.OBSERVED)
         # A hand-picked window, or one without its cadence, is not the node rule: not observable, never inferred.
         self.assertEqual(verdict(R.post_fence_dns_share, self.chain([209]), bodies, 200, 10, {BOND}, self.CADENCE), J.BLOCKED)
         self.assertEqual(verdict(R.post_fence_dns_share, self.chain([209]), bodies, 200, 8, {BOND}), J.BLOCKED)

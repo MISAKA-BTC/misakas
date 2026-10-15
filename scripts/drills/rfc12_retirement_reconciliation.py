@@ -203,8 +203,22 @@ def pre_fence_dns_share(blocks, fence, status_at):
 # and inside it a bond may receive at most one output per crossed pre-retirement epoch. For testnet-12 (PALW_T12_DNS_PARAMS,
 # consensus/core/src/config/params.rs:6906-6909 = PRODUCTION_DNS_PARAMS.at_two_minute_cadence(): L = 2 and H = 3 at
 # dns_finality.rs:1444-1446, U = 600 inherited from params.rs:6608) and R = 14000: fd = 603, E_last = 6999, W = 603.
-# Not covered by this default: reserve drip outputs (utxo_validation.rs:1172, `reserve_drip_outputs`, not retirement-gated)
-# also pay pre-retirement epochs at their crossing; under the lead's "nothing else" default such an output is a FAIL.
+# The reserve drip (lead default 2026-10-16, pending user review: allowed, because withdrawal after observation does not erase
+# an economic obligation). utxo_validation.rs:1164-1180 appends `reserve_drip_outputs` (:875-918) to every block, retired or
+# not, and the drip uses the SAME crossing rule (:886-891) over the SAME tallies, paying each crossed epoch's included
+# validators from the selected parent's committed reserve balance, capped per block (dns_finality.rs:2727-2765; the cap is
+# `reserve_drip_per_epoch_cap_sompi`, config/params.rs:6665 = 1000 MSK, and at most PALW_V2_MAX_RESERVE_DRIP_PAYOUTS = 16
+# outputs, palw_state_v2.rs:545, past `palw_validator_payout_bounds`). It mints nothing beyond the reserve (`remaining`).
+# It cannot pay a post-retirement epoch: an epoch's included set comes only from the rewarded keys blocks store, a retired
+# block stores none (utxo_validation.rs:1394-1396) and no participation enters past the fence (:1091-1095); and past the
+# fence the validator pool is 0 (processor.rs:4030-4040), so nothing new accrues. So the drip pays exactly the same span as
+# the bonus, at most once per (bond, epoch) each: a crossing block may pay a bond twice per crossed epoch (bonus + drip).
+#
+# The included epochs are the attestations' BLUE-score epochs (processor.rs:4753-4770, `ready_epoch_from_tip_blue_score`,
+# dns_finality.rs:1375-1380), which the tally then thresholds on the DAA clock. So the last payable epoch is the larger of
+# the DAA bound above and the last epoch ready at the last pre-retirement chain block's blue score (lag = 2, length = 2 on
+# testnet-12, dns_finality.rs:1451-1452). The pinned W is the DAA bound; a run whose blue score runs ahead of its DAA gets
+# the wider horizon reported (`rule.horizonParentBelowDaa`), never a hand-picked one.
 
 def epochs_finalized_at(parent_daa, daa, epoch_length, finalization_depth):
     """Port of dns_finality.rs:5510 `epochs_finalized_at`: the inclusive epoch range a chain block newly finalizes, or None."""
@@ -221,16 +235,33 @@ def epochs_finalized_at(parent_daa, daa, epoch_length, finalization_depth):
     return m_min - 1, m_max - 1
 
 
-def legacy_settlement_window(fence, cadence):
-    """W and its parts, derived from the node rule above (never a hand-picked number)."""
+def ready_epoch_from_tip_blue_score(tip_blue, epoch_length, lag):
+    """Port of dns_finality.rs:1375 `ready_epoch_from_tip_blue_score`."""
+    length = max(epoch_length, 1)
+    if tip_blue < lag:
+        return None
+    completed = (tip_blue - lag + 1) // length
+    return None if completed == 0 else completed - 1
+
+
+def legacy_settlement_window(fence, cadence, last_pre_fence_blue=None):
+    """W and its parts, derived from the node rule above (never a hand-picked number). With the last pre-retirement chain
+    block's blue score, the payable horizon also covers the last blue-score attestation epoch ready there."""
     length = max(int(cadence['epochLengthBlocks']), 1)
     depth = int(cadence['rewardUniquenessWindowBlocks']) + int(cadence['maxReorgHorizonBlocks'])
     if fence < 1:
         raise ValueError('the retirement fence must be above genesis')
     last_epoch = (fence - 1) // length
     threshold = (last_epoch + 1) * length + depth
+    payable = last_epoch
+    if last_pre_fence_blue is not None and 'attestationEpochLengthBlueScore' in cadence:
+        ready = ready_epoch_from_tip_blue_score(last_pre_fence_blue, int(cadence['attestationEpochLengthBlueScore']),
+                                                int(cadence['attestationLagBlueScore']))
+        if ready is not None:
+            payable = max(payable, ready)
     return dict(epochLength=length, finalizationDepth=depth, lastEpoch=last_epoch, lastThresholdDaa=threshold,
-                windowDaa=threshold - fence)
+                windowDaa=threshold - fence, lastPayableEpoch=payable,
+                horizonParentBelowDaa=(payable + 1) * length + depth)
 
 
 def post_fence_dns_share(blocks, bodies, fence, settlement_window, entitled, cadence=None):
@@ -257,7 +288,8 @@ def post_fence_dns_share(blocks, bodies, fence, settlement_window, entitled, cad
     if settlement_window:
         if cadence is None:
             raise J.NotObservable('a non-zero legacy settlement window needs the pinned DNS cadence it is derived from')
-        rule = legacy_settlement_window(fence, cadence)
+        pre = [block for block in blocks if block['daa'] < fence]
+        rule = legacy_settlement_window(fence, cadence, pre[-1].get('blueScore') if pre else None)
         if settlement_window != rule['windowDaa']:
             raise J.NotObservable('the legacy settlement window %d is not the one the node rule derives (%d)'
                                   % (settlement_window, rule['windowDaa']))
@@ -275,13 +307,14 @@ def post_fence_dns_share(blocks, bodies, fence, settlement_window, entitled, cad
         if index == 0:
             raise J.NotObservable('the selected parent of the post-fence block at DAA %d was not scanned' % block['daa'])
         parent = blocks[index - 1]['daa']
-        if parent >= fence + rule['windowDaa']:
+        if parent >= rule['horizonParentBelowDaa']:
             raise J.Violation('a DNS validator share at DAA %d, after the node\'s one-time settlement span (parent DAA %d >= %d)'
-                              % (block['daa'], parent, fence + rule['windowDaa']))
+                              % (block['daa'], parent, rule['horizonParentBelowDaa']))
         span = epochs_finalized_at(parent, block['daa'], rule['epochLength'], rule['finalizationDepth'])
-        epochs = [] if span is None else list(range(span[0], min(span[1], rule['lastEpoch']) + 1))
+        epochs = [] if span is None else list(range(span[0], min(span[1], rule['lastPayableEpoch']) + 1))
         if not epochs:
-            raise J.Violation('a DNS validator share at DAA %d in a block that finalizes no pre-retirement epoch' % block['daa'])
+            raise J.Violation('a DNS validator share at DAA %d in a block that finalizes no pre-retirement epoch (an accrual '
+                              'for a post-retirement epoch, or no crossing at all)' % block['daa'])
         if crossed_epochs & set(epochs):
             raise J.Violation('epoch(s) %r crossed twice on the scanned chain' % sorted(crossed_epochs & set(epochs)))
         crossed_epochs |= set(epochs)
@@ -293,9 +326,10 @@ def post_fence_dns_share(blocks, bodies, fence, settlement_window, entitled, cad
             totals[output['bond']] = totals.get(output['bond'], 0) + output['value']
             legacy += 1
         for bond, count in counts.items():
-            if count > len(epochs):
-                raise J.Violation('bond %s is paid %d times at DAA %d, which settles only %d pre-retirement epoch(s)'
-                                  % (bond, count, block['daa'], len(epochs)))
+            # One deferred quality bonus and one reserve drip per (bond, crossed pre-retirement epoch), each at most once.
+            if count > 2 * len(epochs):
+                raise J.Violation('bond %s is paid %d times at DAA %d, which settles only %d pre-retirement epoch(s) '
+                                  '(at most one bonus and one drip each)' % (bond, count, block['daa'], len(epochs)))
             per_epoch[bond] = per_epoch.get(bond, 0) + count
         last = block['daa']
     return dict(postFenceBlocks=len(post), legacySettlementOutputs=legacy, legacySettlementSompi=totals,
@@ -408,7 +442,8 @@ def scan_window(rpc, genesis, from_daa, to_daa, maximum_chain, budget):
         outputs = [dict(index=index, value=output['value'], spk=spk_hex(output['scriptPublicKey']),
                         address=(output.get('verboseData') or {}).get('scriptPublicKeyAddress'))
                    for index, output in enumerate(coinbase['outputs'])]
-        blocks.append(dict(source='node-rpc', hash=block_hash, daa=daa, coinbaseOutputs=outputs))
+        blocks.append(dict(source='node-rpc', hash=block_hash, daa=daa, blueScore=block['header'].get('blueScore'),
+                           coinbaseOutputs=outputs))
     return dict(blocks=blocks, bodies=list(bodies.values()), bondTxs=bond_txs, minerScripts=sorted(miners),
                 readsUsed=budget.used, chainBlocks=len(hashes))
 

@@ -2752,6 +2752,30 @@ fn tally_of(n: u8, stake: u64, pool: u128) -> EpochTally {
     }
 }
 
+/// **RFC-0012 §4.4 (lead default 2026-10-16, pending user review): past `palw_dns_retirement_v1` the drip and the
+/// deferred bonus pay only pre-retirement entitlements.** A retired block stores no rewarded keys
+/// (`utxo_validation.rs:1394-1396`) and no participation enters past the fence (`:1091-1095`), so an epoch whose blocks
+/// all lie past the fence reaches these loops with an EMPTY included set (and, the validator pool being 0 past the fence,
+/// `processor.rs:4030-4040`, no quality pool either). Both loops then pay nothing for it and the reserve is untouched, while a
+/// pre-retirement epoch crossed in the same block is still paid from the existing reserve only. Source only, not executed.
+#[test]
+fn a_post_retirement_epoch_without_an_included_set_is_paid_nothing_by_the_drip_or_the_bonus() {
+    let cap = 1_000u64;
+    let reserve = 1_000_000u64;
+    let post_retirement = EpochTally { expected_stake: 100, included: Vec::new(), quality_pool_accrued: 0, finalized: true };
+    let only_post = vec![(7_000u64, post_retirement.clone())];
+    for bounds in [None, Some(PALW_V2_MAX_RESERVE_DRIP_PAYOUTS)] {
+        let (outputs, total) = reserve_drip_outputs_for_block(reserve, cap, bounds, &only_post);
+        assert!(outputs.is_empty() && total == 0, "no included set, no drip, no reserve movement ({bounds:?})");
+        assert!(deferred_quality_bonus_outputs_for_block(0, bounds, &only_post).is_empty());
+    }
+    // Mixed crossing: the pre-retirement epoch is paid once per included validator, from the reserve, within the cap.
+    let mixed = vec![(6_999u64, tally_of(2, 50, 0)), (7_000u64, post_retirement)];
+    let (outputs, total) = reserve_drip_outputs_for_block(reserve, cap, Some(PALW_V2_MAX_RESERVE_DRIP_PAYOUTS), &mixed);
+    assert_eq!(outputs.len(), 2, "one drip per included validator of the pre-retirement epoch only");
+    assert!(total <= cap && total <= reserve, "paid from the existing reserve, within the per-block cap");
+}
+
 /// **The reserve drip's rate limit is spent per BLOCK, not per crossing** (mainnet audit,
 /// 2026-09-06, M-1).
 ///
