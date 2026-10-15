@@ -138,7 +138,7 @@ pub struct PalwD2ReplacementRouteV1 {
 }
 
 /// **The four routes**, one per restricted unit, in [`crate::palw_ruling_fences_v1::PALW_D2_RESTRICTED_UNITS_V1`]'s order.
-pub const PALW_D2_REPLACEMENT_ROUTES_V1: [PalwD2ReplacementRouteV1; 4] = {
+pub static PALW_D2_REPLACEMENT_ROUTES_V1: [PalwD2ReplacementRouteV1; 4] = {
     use PalwD2ReplacementUnitV1 as U;
     [
         PalwD2ReplacementRouteV1 {
@@ -276,9 +276,7 @@ pub fn palw_d2_named_leaf_operands_admit_v1(
         },
         PalwD2OpeningOperandsV1::GenParams(openings) => {
             let root = gen_root.ok_or(PalwD2RouteErrorV1::Relay("a pipeline accusation on a claim whose class is no pipeline"))?;
-            PalwProvenOperandsV1::from_openings_v1(openings, root)
-                .map(|_| ())
-                .map_err(|e| PalwD2RouteErrorV1::Operands(e.to_string()))
+            PalwProvenOperandsV1::from_openings_v1(openings, root).map(|_| ()).map_err(|e| PalwD2RouteErrorV1::Operands(e.to_string()))
         }
         PalwD2OpeningOperandsV1::CarriedUnchecked => Ok(()),
     }

@@ -3067,6 +3067,10 @@ pub struct Params {
     pub palw_horizon_extension_v1: Option<crate::palw_econ_contracts_v1::PalwHorizonExtensionFenceV1>,
     /// **RFC08 R8-ECON: the worker/poster minimum-price contract**: inner 69 / aux 127. Dormant; Some-only; refused when armed.
     pub palw_minimum_price_v1: Option<crate::palw_econ_contracts_v1::PalwMinimumPriceFenceV1>,
+    /// **N3 (round 3): the Work Beacon's independent bootstrap — BootstrapExact source rounds** ([`crate::palw_beacon_bootstrap_v1`]):
+    /// inner 73 / aux 130. Dormant; Some-only; needs `palw_probabilistic_constraints_v1` at or below it; refused when armed (no
+    /// approved profile). A source-only record: no reward, block right or Final weight.
+    pub palw_beacon_bootstrap_v1: Option<crate::palw_beacon_bootstrap_v1::PalwBeaconBootstrapFenceV1>,
     /// Immutable paid native consumer service/backstop/material contract. Dormant.
     pub palw_paid_consumer_lifecycle_v1: Option<crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleFenceV1>,
     /// **ADR-0177 D3–D5: the model-bond allocation** ([`crate::palw_bond_budget_v1`]): past this height a bond's signed capital
@@ -5936,6 +5940,7 @@ impl Params {
             palw_model_verification_gate_v1: self.palw_model_verification_gate_v1,
             palw_horizon_extension_v1: self.palw_horizon_extension_v1,
             palw_minimum_price_v1: self.palw_minimum_price_v1.clone(),
+            palw_beacon_bootstrap_v1: self.palw_beacon_bootstrap_v1,
             palw_paid_consumer_lifecycle_v1: self.palw_paid_consumer_lifecycle_v1.clone(),
             palw_model_bond_allocation_v1: self.palw_model_bond_allocation_v1.clone(),
             palw_reporter_share_v2: self.palw_reporter_share_v2,
@@ -7064,6 +7069,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_model_verification_gate_v1: None,
     palw_horizon_extension_v1: None,
     palw_minimum_price_v1: None,
+    palw_beacon_bootstrap_v1: None,
     palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
@@ -7388,6 +7394,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_model_verification_gate_v1: None,
     palw_horizon_extension_v1: None,
     palw_minimum_price_v1: None,
+    palw_beacon_bootstrap_v1: None,
     palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
@@ -7694,6 +7701,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_model_verification_gate_v1: None,
     palw_horizon_extension_v1: None,
     palw_minimum_price_v1: None,
+    palw_beacon_bootstrap_v1: None,
     palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
@@ -13164,6 +13172,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_model_verification_gate_v1: None,
     palw_horizon_extension_v1: None,
     palw_minimum_price_v1: None,
+    palw_beacon_bootstrap_v1: None,
     palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,

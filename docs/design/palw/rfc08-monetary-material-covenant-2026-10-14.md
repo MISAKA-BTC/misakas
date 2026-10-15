@@ -133,3 +133,89 @@ Remaining: a non-loopback, authenticated provider transport; native session enro
 in the drill (the bootstrap's floor producer is exempt, so `--native-loopback-provider`
 measures nothing about custody by itself); provider GC wiring; compile, unit and drill
 execution of all of the above.
+
+## 2026-10-15 note (round 3): authenticated provider transport, provider GC janitor, drill session enrollment (unverified source)
+
+Lead default, pending user review. Nothing below has been compiled, tested by cargo or run
+on a node. It is source only, and no PASS is claimed. Public presets, fences and release
+heights are unchanged. Ordinary kaspad Args select none of it.
+
+- **Authenticated provider transport** (`misaka/palw/remote/src/provider_transport_v1.rs`,
+  wired in `kaspad/src/private_integration/native_provider.rs`).
+  - **Requests.** Each request is signed under its own ML-DSA-87 context by the
+    executor's bond key. The signature covers: the chain/network domain
+    (`palw_network_domain_v2_for(net, genesis)`), the purpose, the sender bond and key,
+    the sorted recipient provider bonds, a 32-byte nonce, the wall-clock issue time, the
+    request's DAA score, and the body length and digest.
+  - **Provider checks before any work.** The provider verifies the request first: domain,
+    ±120 s clock window, ±600 DAA against its own virtual DAA (an unknown DAA refuses),
+    signature, and then a bounded `(sender, nonce)` replay guard that refuses when full
+    and never evicts a live entry. It then binds the sender to the body: the bond and key
+    must be the attempt's `executor_bond` / `executor_pubkey`. The Consensus API authority
+    read refuses a key that is not the bond's registered key.
+  - **Responses.** Every answering provider bond signs the response, which binds the
+    request id, the responders, the time and the body digest. The producer verifies each
+    signature with the roster keys from its own authority read, never with a key named in
+    the response. The trait method that carries those keys is
+    `NativeReadyExchangeV3::request_signatures_authenticated`.
+  - **Failures.** An unauthenticated request gets no answer. An authenticated refusal is
+    signed.
+  - **Limits.** Frames use the existing bounded length-prefixed codec. Timeouts are 10 s
+    connect, 60 s per read on the provider, and a 600 s exchange. The service runs at most
+    4 concurrent connections.
+  - **No encryption.** The transport is TLS-free on purpose. The material is public, so
+    the guarantees are integrity and authentication, not confidentiality.
+  - **Loopback and remote.** The loopback socket is one instance of this transport.
+    `--private-probe-native-network=remote` admits separate hosts and remains
+    private-integration only.
+- **Provider GC janitor** (`misaka/palw/remote/src/monetary_material_gc.rs`; one thread
+  per provider service, 60 s period).
+  - **Observing rows.** While a covenant row is present in a coherent read (sink
+    unchanged across `palw_monetary_material_covenants_v1`), the janitor records the
+    `(consent, tail_block)` pairs and the point at which it saw them.
+  - **Finding the release.** Once the row is absent, it walks the selected-chain blocks
+    after that point (`get_virtual_chain_from_block`), at most 256 witness calls per
+    tick. For each candidate it asks `palw_monetary_material_release_finalized_v1`
+    (accepted release delta of exactly `(root, consent, tail)`, with tail and release
+    block both finalized on the current selected chain). It deletes only through
+    `DurableMonetaryMaterialProviderV1::gc_finalized`, which asks the same witness again.
+  - **Retention.** The janitor pins and keeps the material when a contract was never
+    observed accepted, when there is no observed tail, and when any read fails.
+  - **Crash safety.** A write-ahead intent marker (write, fsync, rename, directory fsync)
+    names the exact witness tuple. On restart the marker replays the same witnessed
+    deletion, and the replay is idempotent. The journal is rewritten atomically.
+  - **Remote providers.** `RemoteProofGcOracleV1` uses op-242 rows authenticated by
+    `MonetaryMaterialProofPagerV1` together with an operator-configured finality
+    authority. It is weaker than the local delta witness and says so. With no authority,
+    it deletes nothing.
+- **Drill session enrollment.**
+  - **CLI.** `misaka palw material-session draft|sign|seal` builds
+    `MonetaryMaterialEnrolledV1` with `native_session` for a non-floor class. Each party
+    signs offline under the tag-240 provider-court message, and the result is filed with
+    `palw submit-object`.
+  - **Bootstrap manifest.** The paid-v3 bootstrap manifest now carries the factory's
+    unapproved `monetaryMaterialPolicy` terms and each seat's `operatorId`.
+  - **Drill flag.** The `--native-session` drill flag requires
+    `--native-loopback-provider` and paid-v3, and excludes `--complete-check`. With it,
+    the drill:
+    1. Enrolls the session for `class`: executor and sponsor seat 0, providers seats 1
+       and 2.
+    2. Waits until every node observes the row through op-242 pages. This is an
+       observation, not an authenticated proof.
+    3. Switches A's producer to that class.
+    4. Waits for a non-empty provider store on B.
+  - **Scope of the evidence.** A non-empty store is evidence that the exchange ran. It is
+    not a Final, a court outcome or a GC observation. Python control tests are in
+    `scripts/drills/tests/test_rfc12_native_session_plan.py`.
+
+Remaining:
+- Compile and run the unit tests of all of the above.
+- Run the drill itself. Whether the producer will produce the registered non-floor class
+  before binding maturity is unobserved. If it does not, the drill's custody wait times out
+  and the run fails with that reason.
+- A GC deletion of real typed material: only the empty-store and refusal paths have
+  prepared tests.
+- An op-243/delta proof that would make the remote GC witness equal to the local one.
+- A multi-host private drill: the private probe still pins P2P to loopback.
+- Unused-offer GC wiring (`discard_expired_offer` needs the original enrollment, which the
+  janitor does not keep).

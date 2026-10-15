@@ -44,6 +44,10 @@ impl CompiledClaimProofPlanV3 {
         if is_compact_proof_family_compiler_v1(&self.compiler) {
             return Err(COMPACT_PROOF_FAMILY_REFUSAL_V1.into());
         }
+        // Round 3: an implemented compact relation compiler has its own contract; this full-material plan never carries it.
+        if crate::claim_compact_v1::is_compact_relation_compiler_v1(&self.compiler) {
+            return Err(crate::claim_compact_v1::COMPACT_RELATION_NOT_A_V3_PLAN_V1.into());
+        }
         if self.version != 3
             || self.compiler != full_material_compiler_v3()
             || self.target != target
@@ -109,9 +113,9 @@ pub struct CompactProofFamilyContractV1 {
 }
 
 /// Why registration refuses every compact family contract today.
-pub const COMPACT_PROOF_FAMILY_REFUSAL_V1: &str = "compact proof family contracts are refused: no versioned compact verifier, relation \
-     coverage map or independent soundness review exists (RFC-0007 2026-10-15 R7-RELATION); only the full-material-opening compiler \
-     v3 is admitted";
+pub const COMPACT_PROOF_FAMILY_REFUSAL_V1: &str = "family-level compact proof contracts are refused: they carry no relation coverage \
+     map, and no GKR/PCS verifier or independent soundness review exists (RFC-0007 2026-10-15 R7-RELATION); relation-level compact \
+     compilers use their own contract (claim_compact_v1, round 3, unreviewed)";
 
 /// The compiler identity of a compact family (distinct per family; never [`full_material_compiler_v3`]).
 pub fn compact_proof_family_compiler_v1(family: CompactProofFamilyV1) -> Digest {

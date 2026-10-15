@@ -130,6 +130,9 @@ pub const TAG_ATTEST_DRAWN_CHECK_V1: u8 = 39;
 pub const TAG_ATTEST_MODEL_VERIFICATION_V1: u8 = 67;
 pub const TAG_CONSENT_HORIZON_EXTENSION_V1: u8 = 68;
 pub const TAG_SIGN_MINIMUM_PRICE_CONTRACT_V1: u8 = 69;
+// 73: N3's BootstrapExact source contribution (2026-10-15 round 3; the top of the RFC07 reservation 64–73, consumer-owned past
+// `palw_beacon_bootstrap_v1`). 70–72 stay unallocated.
+pub const TAG_BOOTSTRAP_EXACT_V1: u8 = 73;
 /// version, tag, verifier, claim.
 pub const MAX_ATTEST_DRAWN_CHECK_BYTES_V1: usize = 1 + 1 + 64 + 64;
 pub const MAX_FUND_PANEL_BEACON_SOURCE_FEE_BYTES_V2: usize = 288;
@@ -638,6 +641,10 @@ pub enum KernelRouteObjectV1 {
     SignMinimumPriceContractV1 {
         contract: crate::econ_contracts_v1::MinimumPriceContractTermsV1,
     } = 69,
+    /// N3 (`palw_beacon_bootstrap_v1`): one contributor's seal or reveal in a BootstrapExact source round (consumer-owned).
+    BootstrapExactV1 {
+        contribution: crate::beacon_bootstrap_v1::BootstrapExactContributionV1,
+    } = 73,
 }
 
 /// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.
@@ -791,6 +798,7 @@ impl KernelRouteObjectV1 {
             Self::AttestModelVerificationV1 { .. } => TAG_ATTEST_MODEL_VERIFICATION_V1,
             Self::ConsentHorizonExtensionV1 { .. } => TAG_CONSENT_HORIZON_EXTENSION_V1,
             Self::SignMinimumPriceContractV1 { .. } => TAG_SIGN_MINIMUM_PRICE_CONTRACT_V1,
+            Self::BootstrapExactV1 { .. } => TAG_BOOTSTRAP_EXACT_V1,
             Self::OptInPaidBeaconSource { .. } => TAG_OPT_IN_PAID_BEACON_SOURCE_V1,
             Self::CommitSegmentedClaim { .. } => TAG_COMMIT_SEGMENTED_CLAIM_V1,
             Self::PostTiledJob { .. } => TAG_POST_TILED_JOB_V1,
@@ -1047,6 +1055,7 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_ATTEST_MODEL_VERIFICATION_V1 => "AttestModelVerificationV1",
         TAG_CONSENT_HORIZON_EXTENSION_V1 => "ConsentHorizonExtensionV1",
         TAG_SIGN_MINIMUM_PRICE_CONTRACT_V1 => "SignMinimumPriceContractV1",
+        TAG_BOOTSTRAP_EXACT_V1 => "BootstrapExactV1",
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => "OptInPaidBeaconSource",
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => "CommitSegmentedClaim",
         TAG_POST_TILED_JOB_V1 => "PostTiledJob",
@@ -1117,6 +1126,7 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_ATTEST_MODEL_VERIFICATION_V1 | TAG_CONSENT_HORIZON_EXTENSION_V1 | TAG_SIGN_MINIMUM_PRICE_CONTRACT_V1 => {
             crate::econ_contracts_v1::MAX_ECON_CONTRACT_OBJECT_BYTES_V1
         }
+        TAG_BOOTSTRAP_EXACT_V1 => crate::beacon_bootstrap_v1::MAX_BOOTSTRAP_EXACT_OBJECT_BYTES_V1,
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1,
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1,
         TAG_POST_TILED_JOB_V1 => MAX_POST_TILED_JOB_BYTES_V1,
@@ -1246,9 +1256,10 @@ mod tests {
         assert!(max_encoded_bytes_of_tag(0).is_none());
         assert!(max_encoded_bytes_of_tag(38).is_none(), "38 stays reserved for G14R, not allocated");
         // 39: G14R's M*-49 drawn-check attestation (2026-10-15). 61–66: prepaid sources, native Panel authority and prospective V2
-        // claim/Panel consent. 67–69: RFC07/RFC08 signed economic contracts (2026-10-15). 70–73 are unallocated.
-        assert!((70..=73).all(|t| max_encoded_bytes_of_tag(t).is_none()), "70–73 are not allocated");
-        for tag in (22..=37).chain(39..=69) {
+        // claim/Panel consent. 67–69: RFC07/RFC08 signed economic contracts (2026-10-15). 73: N3's BootstrapExact contribution
+        // (2026-10-15 round 3). 70–72 are unallocated.
+        assert!((70..=72).all(|t| max_encoded_bytes_of_tag(t).is_none()), "70–72 are not allocated");
+        for tag in (22..=37).chain(39..=69).chain(73..=73) {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
         for o in [
@@ -1266,6 +1277,15 @@ mod tests {
                     hard_deadline_daa: 200,
                     consent_by_daa: 90,
                     price_contract: [0; 64],
+                },
+            },
+            KernelRouteObjectV1::BootstrapExactV1 {
+                contribution: crate::beacon_bootstrap_v1::BootstrapExactContributionV1 {
+                    version: 1,
+                    network: [1; 64],
+                    round: crate::beacon_bootstrap_v1::BootstrapExactRoundV1 { profile: [2; 64], target: [3; 64], slot: 1 },
+                    contributor: [4; 64],
+                    action: crate::beacon_bootstrap_v1::BootstrapExactActionV1::Reveal { preimage: [5; 64] },
                 },
             },
         ] {

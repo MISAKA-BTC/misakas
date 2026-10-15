@@ -355,7 +355,7 @@ mod tests {
         libcrux_ml_dsa::ml_dsa_87::generate_key_pair([seed; 32])
     }
     fn signer(k: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair) -> impl Fn(&[u8], &[u8]) -> Result<Vec<u8>, String> + '_ {
-        move |m, c| {
+        move |m: &[u8], c: &[u8]| {
             libcrux_ml_dsa::ml_dsa_87::sign(&k.signing_key, m, c, [7u8; 32]).map(|s| s.as_ref().to_vec()).map_err(|e| format!("{e:?}"))
         }
     }

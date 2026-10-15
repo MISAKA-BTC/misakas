@@ -73,7 +73,8 @@ pub enum CompactRelationCompilerV1 {
 }
 
 impl CompactRelationCompilerV1 {
-    pub const ALL: [Self; 4] = [Self::FreivaldsSeededV1, Self::LinearEvaluationV1, Self::SumCheckHadamardV1, Self::SumCheckReduceSumV1];
+    pub const ALL: [Self; 4] =
+        [Self::FreivaldsSeededV1, Self::LinearEvaluationV1, Self::SumCheckHadamardV1, Self::SumCheckReduceSumV1];
 
     pub const fn name(self) -> &'static str {
         match self {
@@ -130,31 +131,80 @@ pub const COMPACT_RELATION_INVENTORY_V1: [CompactInventoryRowV1; 9] = {
     const FREIVALDS: &[CompactRelationCompilerV1] = &[K::FreivaldsSeededV1];
     const ARITH: &[CompactRelationCompilerV1] = &[K::LinearEvaluationV1, K::SumCheckHadamardV1, K::SumCheckReduceSumV1];
     [
-        CompactInventoryRowV1 { family: F::DenseMatrix, checker: C::FreivaldsM127, status: S::Implemented(FREIVALDS), note: "MatMul, modulus 2^127-1" },
-        CompactInventoryRowV1 { family: F::DenseMatrix, checker: C::FreivaldsCrtV2, status: S::Implemented(FREIVALDS), note: "MatMul, CRT moduli" },
+        CompactInventoryRowV1 {
+            family: F::DenseMatrix,
+            checker: C::FreivaldsM127,
+            status: S::Implemented(FREIVALDS),
+            note: "MatMul, modulus 2^127-1",
+        },
+        CompactInventoryRowV1 {
+            family: F::DenseMatrix,
+            checker: C::FreivaldsCrtV2,
+            status: S::Implemented(FREIVALDS),
+            note: "MatMul, CRT moduli",
+        },
         CompactInventoryRowV1 {
             family: F::ExactArithmetic,
             checker: C::ExactRecompute,
             status: S::Implemented(ARITH),
             note: "Add/Sub/Mul/ReduceSum when the contract opts in; Cast stays exact",
         },
-        CompactInventoryRowV1 { family: F::Structure, checker: C::ExactRecompute, status: S::ExactRetained, note: "index maps: exact copy, no error term" },
-        CompactInventoryRowV1 { family: F::QuantRange, checker: C::ExactRecompute, status: S::ExactRetained, note: "rounding/saturation needs a lookup argument" },
-        CompactInventoryRowV1 { family: F::Nonlinear, checker: C::ExactRecompute, status: S::ExactRetained, note: "fixed-iteration transcendentals need a lookup argument" },
-        CompactInventoryRowV1 { family: F::Selection, checker: C::ExactRecompute, status: S::ExactRetained, note: "TopK/compare/gather routing needs a permutation/lookup argument" },
-        CompactInventoryRowV1 { family: F::RecurrentState, checker: C::StateContinuity, status: S::ExactRetained, note: "state continuity by wiring" },
-        CompactInventoryRowV1 { family: F::MediaPipeline, checker: C::EdgeRecompute, status: S::ExactRetained, note: "pipeline edges recomputed exactly" },
+        CompactInventoryRowV1 {
+            family: F::Structure,
+            checker: C::ExactRecompute,
+            status: S::ExactRetained,
+            note: "index maps: exact copy, no error term",
+        },
+        CompactInventoryRowV1 {
+            family: F::QuantRange,
+            checker: C::ExactRecompute,
+            status: S::ExactRetained,
+            note: "rounding/saturation needs a lookup argument",
+        },
+        CompactInventoryRowV1 {
+            family: F::Nonlinear,
+            checker: C::ExactRecompute,
+            status: S::ExactRetained,
+            note: "fixed-iteration transcendentals need a lookup argument",
+        },
+        CompactInventoryRowV1 {
+            family: F::Selection,
+            checker: C::ExactRecompute,
+            status: S::ExactRetained,
+            note: "TopK/compare/gather routing needs a permutation/lookup argument",
+        },
+        CompactInventoryRowV1 {
+            family: F::RecurrentState,
+            checker: C::StateContinuity,
+            status: S::ExactRetained,
+            note: "state continuity by wiring",
+        },
+        CompactInventoryRowV1 {
+            family: F::MediaPipeline,
+            checker: C::EdgeRecompute,
+            status: S::ExactRetained,
+            note: "pipeline edges recomputed exactly",
+        },
     ]
 };
 
 /// **Compact families refused with their reasons** (listed, never silently accepted).
 pub const COMPACT_REFUSED_FAMILIES_V1: [(&str, &str); 7] = [
-    ("gkr-layered-chain", "needs intermediate tensors never read: no polynomial commitment suite exists for the chain's endpoints and the stub contract stays refused"),
-    ("pcs-evaluation", "a hash-Merkle tensor commitment cannot open a multilinear evaluation; a code-based PCS (Ligero/Brakedown) is not implemented or reviewed"),
+    (
+        "gkr-layered-chain",
+        "needs intermediate tensors never read: no polynomial commitment suite exists for the chain's endpoints and the stub contract stays refused",
+    ),
+    (
+        "pcs-evaluation",
+        "a hash-Merkle tensor commitment cannot open a multilinear evaluation; a code-based PCS (Ligero/Brakedown) is not implemented or reviewed",
+    ),
     ("lookup-quant-nonlinear", "QuantRange/Nonlinear relations need a lookup argument; they stay on exact recompute"),
     ("permutation-selection-routing", "TopK/Gather/Compare routing needs a permutation/lookup argument; it stays on exact recompute"),
     ("state-continuity-memory", "Hist/Fixed continuity stays on wiring + exact recompute; no compact memory argument"),
-    ("staged-beacon-sumcheck", "one fresh beacon per sum-check round is not compiled; V1 uses the transcript-bound in-round challenge with its grinding charged"),
+    (
+        "staged-beacon-sumcheck",
+        "one fresh beacon per sum-check round is not compiled; V1 uses the transcript-bound in-round challenge with its grinding charged",
+    ),
     ("typed-spec-target", "typed memory/retrieval/composite steps have no VerificationPlanV1 relation map"),
 ];
 
@@ -233,7 +283,11 @@ pub struct CompactRelationProgramV1 {
 pub enum CompactCoverageV1 {
     Compact(CompactRelationProgramV1),
     /// The descriptor's exact checker stays (`ε = 0`); the verifier reads the relation's operands from authenticated material.
-    ExactRetained { relation: u32, family: ConstraintFamilyV1, checker: CheckerIdV1 },
+    ExactRetained {
+        relation: u32,
+        family: ConstraintFamilyV1,
+        checker: CheckerIdV1,
+    },
 }
 
 /// **A plan's compact coverage**: every relation of the plan, in plan order, compiled or exactly retained. Its root is what a
@@ -361,7 +415,9 @@ pub fn compile_relation_v1(
             let nu = ceil_log2(rel.out_elements as u128);
             match prim {
                 Prim::Add | Prim::Sub | Prim::Mul => {
-                    let (Some(a), Some(b)) = (dt(0), dt(1)) else { return Err(malformed("a binary relation without two typed operands")) };
+                    let (Some(a), Some(b)) = (dt(0), dt(1)) else {
+                        return Err(malformed("a binary relation without two typed operands"));
+                    };
                     let (exact, bits) = if matches!(prim, Prim::Mul) {
                         let la = ceil_log2(max_abs(a));
                         let lb = ceil_log2(max_abs(b));
@@ -383,6 +439,10 @@ pub fn compile_relation_v1(
                         p.sumcheck_rounds = nu;
                         p.degree = 3;
                     }
+                    // Compact only when compact: a transcript at least as large as the operands keeps the exact checker.
+                    if proof_bytes_bound_v1(&p) >= material_bytes_v1(&p) {
+                        return retained;
+                    }
                     Ok(CompactCoverageV1::Compact(p))
                 }
                 Prim::ReduceSum { axis } => {
@@ -400,6 +460,9 @@ pub fn compile_relation_v1(
                     p.point_variables = nu;
                     p.sumcheck_rounds = ceil_log2(j as u128);
                     p.degree = 1;
+                    if proof_bytes_bound_v1(&p) >= material_bytes_v1(&p) {
+                        return retained;
+                    }
                     Ok(CompactCoverageV1::Compact(p))
                 }
                 Prim::Cast => retained,
@@ -469,12 +532,16 @@ pub fn relation_bound_v1(p: &CompactRelationProgramV1) -> CompactRelationBoundV1
         CompactRelationCompilerV1::FreivaldsSeededV1 => {
             CompactRelationBoundV1 { per_repetition_bits: Some(b0), instance_bits: Some(t.saturating_mul(b0)) }
         }
-        CompactRelationCompilerV1::LinearEvaluationV1 if nu == 0 => CompactRelationBoundV1 { per_repetition_bits: None, instance_bits: None },
+        CompactRelationCompilerV1::LinearEvaluationV1 if nu == 0 => {
+            CompactRelationBoundV1 { per_repetition_bits: None, instance_bits: None }
+        }
         CompactRelationCompilerV1::LinearEvaluationV1 => {
             let rep = b0.saturating_sub(ceil_log2(nu));
             CompactRelationBoundV1 { per_repetition_bits: Some(rep), instance_bits: Some(t.saturating_mul(rep)) }
         }
-        CompactRelationCompilerV1::SumCheckHadamardV1 if nu == 0 => CompactRelationBoundV1 { per_repetition_bits: None, instance_bits: None },
+        CompactRelationCompilerV1::SumCheckHadamardV1 if nu == 0 => {
+            CompactRelationBoundV1 { per_repetition_bits: None, instance_bits: None }
+        }
         CompactRelationCompilerV1::SumCheckHadamardV1 => CompactRelationBoundV1 {
             per_repetition_bits: Some(b0.saturating_sub(ceil_log2(4 * nu))),
             instance_bits: Some(b0.saturating_sub(ceil_log2(4 * nu + 3 * q))),
@@ -850,7 +917,12 @@ impl<'a> FsRoundsV1<'a> {
     fn challenge<F: FieldElemV1>(&mut self, round: u32, msg: &[F], budget: &mut CompactStreamBudgetV1) -> Result<F, CompactVerdictV1> {
         let raw: Vec<u128> = msg.iter().map(|f| f.raw()).collect();
         self.transcript = object_id(COMPACT_RELATION_FS_DOMAIN_V1, &(self.transcript, round, raw));
-        let label = StreamLabelV1 { kind: StreamKindV1::ProofRound, scope_id: self.transcript, relation: self.relation, repetition: self.label };
+        let label = StreamLabelV1 {
+            kind: StreamKindV1::ProofRound,
+            scope_id: self.transcript,
+            relation: self.relation,
+            repetition: self.label,
+        };
         Ok(draw_vector::<F>(self.seed, &label, 1, budget)?[0])
     }
 }
@@ -899,7 +971,11 @@ fn sumcheck_verify<F: FieldElemV1>(
             return Err(CompactVerdictV1::Malformed("a round message of another degree".into()));
         }
         if msg[0].add(msg[1]) != claim {
-            return Err(CompactVerdictV1::Rejected { repetition: rep, modulus, why: format!("sum-check round {r} does not sum to its claim") });
+            return Err(CompactVerdictV1::Rejected {
+                repetition: rep,
+                modulus,
+                why: format!("sum-check round {r} does not sum to its claim"),
+            });
         }
         let c = fs.challenge(r as u32, msg, budget)?;
         claim = interpolate(msg, c);
@@ -931,7 +1007,11 @@ fn broadcast_index_map(out_shape: &[usize], in_shape: &[usize]) -> Option<Vec<us
     let n: usize = out_shape.iter().product();
     Some(
         (0..n)
-            .map(|i| (0..in_shape.len()).map(|k| if in_shape[k] == 1 { 0 } else { ((i / ost[off + k]) % out_shape[off + k]) * ist[k] }).sum())
+            .map(|i| {
+                (0..in_shape.len())
+                    .map(|k| if in_shape[k] == 1 { 0 } else { ((i / ost[off + k]) % out_shape[off + k]) * ist[k] })
+                    .sum()
+            })
             .collect(),
     )
 }
@@ -1014,16 +1094,16 @@ fn instance_variables(p: &CompactRelationProgramV1, inputs: &[Tensor], y: &Tenso
 
 /// Freivalds over one modulus: `Y_b·r = X_b·(W_b·r)` for every output batch slice `b`, one `r` per repetition shared by the slices.
 fn freivalds_check<F: FieldElemV1>(x: &Tensor, w: &Tensor, y: &Tensor, r: &[F]) -> Result<Option<usize>, CompactVerdictV1> {
-    let (xr, wr, yr) = (x.shape.len(), w.shape.len(), y.shape.len());
-    if xr < 2 || wr < 2 || yr < 2 {
+    let (xr, wk, yr) = (x.shape.len(), w.shape.len(), y.shape.len());
+    if xr < 2 || wk < 2 || yr < 2 {
         return Err(CompactVerdictV1::Malformed("a product operand of rank below 2".into()));
     }
-    let (m, k, n) = (x.shape[xr - 2], x.shape[xr - 1], w.shape[wr - 1]);
-    if w.shape[wr - 2] != k || y.shape[yr - 2] != m || y.shape[yr - 1] != n || r.len() != n {
+    let (m, k, n) = (x.shape[xr - 2], x.shape[xr - 1], w.shape[wk - 1]);
+    if w.shape[wk - 2] != k || y.shape[yr - 2] != m || y.shape[yr - 1] != n || r.len() != n {
         return Err(CompactVerdictV1::Malformed("product dimensions disagree".into()));
     }
     let batch = &y.shape[..yr - 2];
-    let (Some(xb), Some(wb)) = (broadcast_index_map(batch, &x.shape[..xr - 2]), broadcast_index_map(batch, &w.shape[..wr - 2])) else {
+    let (Some(xb), Some(wb)) = (broadcast_index_map(batch, &x.shape[..xr - 2]), broadcast_index_map(batch, &w.shape[..wk - 2])) else {
         return Err(CompactVerdictV1::Malformed("product batch dimensions do not broadcast".into()));
     };
     let mut projections: BTreeMap<usize, Vec<F>> = BTreeMap::new();
@@ -1168,6 +1248,7 @@ fn run_one<F: FieldElemV1>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dispatch(
     p: &CompactRelationProgramV1,
     seed: &Digest,
@@ -1179,7 +1260,7 @@ fn dispatch(
     transcript: Option<&[Vec<u128>]>,
     budget: &mut CompactStreamBudgetV1,
 ) -> Result<Vec<Vec<u128>>, CompactVerdictV1> {
-    match p.moduli.get(j) {
+    match p.moduli.get(j).copied() {
         Some(127) => run_one::<Fp>(p, seed, scope, (rep, j), vars, inputs, y, transcript, budget),
         Some(107) => run_one::<F107>(p, seed, scope, (rep, j), vars, inputs, y, transcript, budget),
         Some(89) => run_one::<F89>(p, seed, scope, (rep, j), vars, inputs, y, transcript, budget),
@@ -1228,7 +1309,9 @@ pub fn verify_relation_v1(
     if !moduli_valid(p) {
         return Err(CompactVerdictV1::Malformed("a compiled relation without its moduli or repetitions".into()));
     }
-    if proof.compiler != p.compiler || proof.relation != p.relation || proof.transcripts.len() != p.repetitions as usize * p.moduli.len()
+    if proof.compiler != p.compiler
+        || proof.relation != p.relation
+        || proof.transcripts.len() != p.repetitions as usize * p.moduli.len()
     {
         return Err(CompactVerdictV1::Malformed("the proof names another relation or another repetition count".into()));
     }
@@ -1277,8 +1360,11 @@ pub fn verify_relation_committed_v1(
 pub fn exact_relation_fault_v1(p: &CompactRelationProgramV1, inputs: &[Tensor], y: &Tensor) -> Option<usize> {
     let expect: Vec<Option<i128>> = match p.compiler {
         CompactRelationCompilerV1::FreivaldsSeededV1 => {
-            let (x, w) = (&inputs[0], &inputs[1]);
+            let (x, w) = (inputs.first()?, inputs.get(1)?);
             let (xr, wr, yr) = (x.shape.len(), w.shape.len(), y.shape.len());
+            if xr < 2 || wr < 2 || yr < 2 || w.shape[wr - 2] != x.shape[xr - 1] {
+                return Some(0);
+            }
             let (m, k, n) = (x.shape[xr - 2], x.shape[xr - 1], w.shape[wr - 1]);
             let batch = &y.shape[..yr - 2];
             let (xb, wb) = (broadcast_index_map(batch, &x.shape[..xr - 2])?, broadcast_index_map(batch, &w.shape[..wr - 2])?);
@@ -1295,8 +1381,8 @@ pub fn exact_relation_fault_v1(p: &CompactRelationProgramV1, inputs: &[Tensor], 
             out
         }
         CompactRelationCompilerV1::LinearEvaluationV1 | CompactRelationCompilerV1::SumCheckHadamardV1 => {
-            let a = broadcast_values(&y.shape, &inputs[0])?;
-            let b = broadcast_values(&y.shape, &inputs[1])?;
+            let a = broadcast_values(&y.shape, inputs.first()?)?;
+            let b = broadcast_values(&y.shape, inputs.get(1)?)?;
             a.iter()
                 .zip(&b)
                 .map(|(a, b)| match p.prim_tag {
@@ -1307,7 +1393,8 @@ pub fn exact_relation_fault_v1(p: &CompactRelationProgramV1, inputs: &[Tensor], 
                 .collect()
         }
         CompactRelationCompilerV1::SumCheckReduceSumV1 => {
-            let (layout, n_out) = reduce_layout(&inputs[0], p.axis as usize, ceil_log2(inputs[0].shape[p.axis as usize] as u128))?;
+            let a = inputs.first()?;
+            let (layout, n_out) = reduce_layout(a, p.axis as usize, ceil_log2(*a.shape.get(p.axis as usize)? as u128))?;
             let row = layout.len() / n_out.max(1);
             (0..n_out).map(|o| layout[o * row..(o + 1) * row].iter().try_fold(0i128, |acc, v| acc.checked_add(*v))).collect()
         }
@@ -1409,13 +1496,21 @@ mod tests {
             assert_eq!(verify_relation_v1(&p, &seed, &ins, &y, &proof, &mut budget()), Ok(()));
             let mut bad = y.clone();
             bad.data[17] += 1;
-            assert!(matches!(verify_relation_v1(&p, &seed, &ins, &bad, &proof, &mut budget()), Err(CompactVerdictV1::Rejected { .. })));
+            assert!(matches!(
+                verify_relation_v1(&p, &seed, &ins, &bad, &proof, &mut budget()),
+                Err(CompactVerdictV1::Rejected { .. })
+            ));
             assert_eq!(exact_relation_fault_v1(&p, &ins, &bad), Some(17));
             assert_eq!(exact_relation_fault_v1(&p, &ins, &y), None);
         }
     }
 
-    fn arithmetic(prim: Prim, a_shape: &[usize], b_shape: Option<&[usize]>, out_shape: &[usize]) -> (CompactRelationProgramV1, Vec<Tensor>, Tensor) {
+    fn arithmetic(
+        prim: Prim,
+        a_shape: &[usize],
+        b_shape: Option<&[usize]>,
+        out_shape: &[usize],
+    ) -> (CompactRelationProgramV1, Vec<Tensor>, Tensor) {
         let n = |s: &[usize]| s.iter().product::<usize>();
         let a = tensor(DType::I32, a_shape, data(n(a_shape), 3, -1000, 1000));
         let mut ins = vec![a.clone()];
@@ -1463,8 +1558,8 @@ mod tests {
         let cases = [
             arithmetic(Prim::Add, &[3, 5], Some(&[5]), &[3, 5]),
             arithmetic(Prim::Sub, &[4, 4], Some(&[4, 4]), &[4, 4]),
-            arithmetic(Prim::Mul, &[2, 3, 5], Some(&[1, 3, 1]), &[2, 3, 5]),
-            arithmetic(Prim::ReduceSum { axis: 1 }, &[3, 7, 2], None, &[3, 1, 2]),
+            arithmetic(Prim::Mul, &[8, 16, 16], Some(&[1, 16, 1]), &[8, 16, 16]),
+            arithmetic(Prim::ReduceSum { axis: 1 }, &[16, 64, 4], None, &[16, 1, 4]),
         ];
         let seed = [5u8; 64];
         for (p, ins, y) in cases {
@@ -1487,7 +1582,7 @@ mod tests {
 
     #[test]
     fn a_forged_round_message_or_noncanonical_element_is_refused() {
-        let (p, ins, y) = arithmetic(Prim::Mul, &[4, 8], Some(&[4, 8]), &[4, 8]);
+        let (p, ins, y) = arithmetic(Prim::Mul, &[16, 16], Some(&[16, 16]), &[16, 16]);
         let seed = [1u8; 64];
         let proof = prove_relation_v1(&p, &seed, 0, 0, &ins, &y, &mut budget()).unwrap();
         let mut forged = proof.clone();
@@ -1533,7 +1628,7 @@ mod tests {
         let had = arithmetic(Prim::Mul, &[32, 32], Some(&[32, 32]), &[32, 32]).0;
         // 4ν = 40 → ⌈log2 40⌉ = 6; 40 + 3·2^64 → ⌈log2⌉ = 66.
         assert_eq!(relation_bound_v1(&had), CompactRelationBoundV1 { per_repetition_bits: Some(120), instance_bits: Some(60) });
-        let red = arithmetic(Prim::ReduceSum { axis: 1 }, &[3, 9, 2], None, &[3, 1, 2]).0; // ν_o = 3, ν_j = 4
+        let red = arithmetic(Prim::ReduceSum { axis: 1 }, &[3, 16, 2], None, &[3, 1, 2]).0; // ν_o = 3, ν_j = 4
         assert_eq!((red.point_variables, red.sumcheck_rounds), (3, 4));
         assert_eq!(relation_bound_v1(&red), CompactRelationBoundV1 { per_repetition_bits: Some(123), instance_bits: Some(61) });
         let mut more = red.clone();
@@ -1579,10 +1674,22 @@ mod tests {
     fn unknown_pairs_and_unimplemented_families_are_refused_or_kept_exact_never_silently_compiled() {
         let p = params(true);
         // A dense family with an exact checker is not in the inventory: the whole plan is refused.
-        let r = rel(&Prim::MatMul, ConstraintFamilyV1::DenseMatrix, CheckerIdV1::ExactRecompute, &[(DType::I8, 4), (DType::I8, 4)], (DType::I32, 4));
+        let r = rel(
+            &Prim::MatMul,
+            ConstraintFamilyV1::DenseMatrix,
+            CheckerIdV1::ExactRecompute,
+            &[(DType::I8, 4), (DType::I8, 4)],
+            (DType::I32, 4),
+        );
         assert!(matches!(compile_relation_v1(0, &Prim::MatMul, &r, &p), Err(CompactRefusalV1::UnknownFamilyChecker { .. })));
         // A plan tag that is not the node's primitive is refused.
-        let r = rel(&Prim::Add, ConstraintFamilyV1::ExactArithmetic, CheckerIdV1::ExactRecompute, &[(DType::I8, 4), (DType::I8, 4)], (DType::I32, 4));
+        let r = rel(
+            &Prim::Add,
+            ConstraintFamilyV1::ExactArithmetic,
+            CheckerIdV1::ExactRecompute,
+            &[(DType::I8, 4), (DType::I8, 4)],
+            (DType::I32, 4),
+        );
         assert!(matches!(compile_relation_v1(0, &Prim::Mul, &r, &p), Err(CompactRefusalV1::Malformed { .. })));
         // Every non-implemented family of the inventory is kept exact, never compiled.
         for row in COMPACT_RELATION_INVENTORY_V1 {
@@ -1603,7 +1710,13 @@ mod tests {
         // Cast stays exact even when arithmetic is compiled; arithmetic stays exact when not opted in.
         let r = rel(&Prim::Cast, ConstraintFamilyV1::ExactArithmetic, CheckerIdV1::ExactRecompute, &[(DType::I8, 4)], (DType::I32, 4));
         assert!(matches!(compile_relation_v1(0, &Prim::Cast, &r, &p), Ok(CompactCoverageV1::ExactRetained { .. })));
-        let r = rel(&Prim::Mul, ConstraintFamilyV1::ExactArithmetic, CheckerIdV1::ExactRecompute, &[(DType::I8, 4), (DType::I8, 4)], (DType::I32, 4));
+        let r = rel(
+            &Prim::Mul,
+            ConstraintFamilyV1::ExactArithmetic,
+            CheckerIdV1::ExactRecompute,
+            &[(DType::I8, 4), (DType::I8, 4)],
+            (DType::I32, 4),
+        );
         assert!(matches!(compile_relation_v1(0, &Prim::Mul, &r, &params(false)), Ok(CompactCoverageV1::ExactRetained { .. })));
         // Typed spec targets and an undeclared grinding budget are refused.
         let program = misaka_palw_tir_sketch::fixture::dense_moe_v1(7).program;
@@ -1626,7 +1739,13 @@ mod tests {
             assert_eq!(coverage.entries.len(), plan.relations.len(), "every relation is compiled or exactly retained");
             let dense = plan.relations.iter().filter(|r| r.checker.is_probabilistic()).count();
             assert!(dense > 0 && coverage.compact().count() >= dense);
-            assert!(coverage.proof_bytes_per_position() < coverage.material_bytes_per_position());
+            // Compact relations are compiled only where the proof bound is below the operands' bytes.
+            assert!(
+                coverage
+                    .compact()
+                    .all(|p| p.compiler == CompactRelationCompilerV1::FreivaldsSeededV1
+                        || proof_bytes_bound_v1(p) < material_bytes_v1(p))
+            );
             let contract = CompactRelationContractV1 {
                 version: 1,
                 target: PaidClaimTargetV2::Program,
@@ -1637,7 +1756,7 @@ mod tests {
                 maximum_verifier_work_per_position: u128::MAX,
             };
             assert!(contract.check(&coverage, &AdversaryBudgetV1::NONE).is_ok());
-            let policy = misaka_palw_challenge::reference_policy_v1();
+            let policy = misaka_palw_challenge::reference_policy_v1(4, 4, 16, 8, 2);
             let refused = register_compact_relation_contract_v1(
                 &contract,
                 &coverage,
@@ -1655,7 +1774,9 @@ mod tests {
 
     #[test]
     fn compiler_identities_are_distinct_and_the_v3_round_plan_refuses_them_by_name() {
-        use crate::claim_interactive_v3::{CompactProofFamilyV1, CompiledClaimProofPlanV3, compact_proof_family_compiler_v1, full_material_compiler_v3};
+        use crate::claim_interactive_v3::{
+            CompactProofFamilyV1, CompiledClaimProofPlanV3, compact_proof_family_compiler_v1, full_material_compiler_v3,
+        };
         let mut ids = std::collections::BTreeSet::new();
         for c in CompactRelationCompilerV1::ALL {
             assert!(ids.insert(compact_relation_compiler_id_v1(c)));
@@ -1677,5 +1798,25 @@ mod tests {
             plan.validate(PaidClaimTargetV2::Program, misaka_palw_challenge::InteractiveModeV1::StagedBeacon, 2, 100),
             Err(COMPACT_RELATION_NOT_A_V3_PLAN_V1.to_string())
         );
+    }
+
+    #[test]
+    fn every_pair_a_shipped_descriptor_lists_is_in_the_inventory() {
+        use crate::descriptor::{
+            k2_tir_v1_descriptor, k2_tir_v2_descriptor, k2_tir_v3_descriptor, k2_tir_v4_descriptor, k2_tir_v5_descriptor,
+        };
+        for d in
+            [k2_tir_v1_descriptor(), k2_tir_v2_descriptor(), k2_tir_v3_descriptor(), k2_tir_v4_descriptor(), k2_tir_v5_descriptor()]
+        {
+            for f in &d.families {
+                assert!(
+                    COMPACT_RELATION_INVENTORY_V1.iter().any(|row| row.family == f.family && row.checker == f.checker),
+                    "{:?}/{:?} of descriptor v{} is not inventoried",
+                    f.family,
+                    f.checker,
+                    d.version
+                );
+            }
+        }
     }
 }

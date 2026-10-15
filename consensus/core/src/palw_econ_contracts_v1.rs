@@ -754,6 +754,9 @@ pub struct PalwEconContractsMirrorV1 {
     pub model_verification_gate: Option<(u64, PalwModelVerificationGatePolicyV1)>,
     pub horizon_extension: Option<(u64, PalwHorizonExtensionPolicyV1)>,
     pub minimum_price: Option<(u64, PalwMinimumPricePolicyV1)>,
+    /// N3 (round 3): `palw_beacon_bootstrap_v1` — the BootstrapExact source rounds (inner 73, aux 130) ride this mirror too (their fold
+    /// reads only the state params). Not an economic contract; mirrored here to keep one Some-only mirror of the round-3 fences.
+    pub beacon_bootstrap: Option<(u64, crate::palw_beacon_bootstrap_v1::PalwBeaconBootstrapPolicyV1)>,
 }
 
 impl PalwEconContractsMirrorV1 {
@@ -767,6 +770,10 @@ impl PalwEconContractsMirrorV1 {
 
     pub fn minimum_price_at(&self, daa: u64) -> Option<&PalwMinimumPricePolicyV1> {
         self.minimum_price.as_ref().filter(|(from, _)| daa >= *from).map(|(_, p)| p)
+    }
+
+    pub fn beacon_bootstrap_at(&self, daa: u64) -> Option<&crate::palw_beacon_bootstrap_v1::PalwBeaconBootstrapPolicyV1> {
+        self.beacon_bootstrap.as_ref().filter(|(from, _)| daa >= *from).map(|(_, p)| p)
     }
 }
 
@@ -798,13 +805,15 @@ impl Params {
         self.palw_minimum_price_v1.as_ref().and_then(|f| armed(f.activation))
     }
 
-    /// **Mirror the three fences into the V2 bundle** (the fold holds only the state params). `None` where a fence is not armed. Called
-    /// wherever one of them is set on an assembled ruleset (the fork-id probe, the A-2 harness); validation refuses every armed one.
+    /// **Mirror the three fences (and N3's `palw_beacon_bootstrap_v1`) into the V2 bundle** (the fold holds only the state params).
+    /// `None` where a fence is not armed. Called wherever one of them is set on an assembled ruleset (the fork-id probe, the A-2
+    /// harness); validation refuses every armed one.
     pub fn sync_palw_econ_contracts_v1(&mut self) {
         let mirror = PalwEconContractsMirrorV1 {
             model_verification_gate: self.palw_model_verification_gate_v1.and_then(|f| armed(f.activation).map(|at| (at, f.policy))),
             horizon_extension: self.palw_horizon_extension_v1.and_then(|f| armed(f.activation).map(|at| (at, f.policy))),
             minimum_price: self.palw_minimum_price_v1.as_ref().and_then(|f| armed(f.activation).map(|at| (at, f.policy.clone()))),
+            beacon_bootstrap: self.palw_beacon_bootstrap_v1.and_then(|f| armed(f.activation).map(|at| (at, f.policy))),
         };
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             bundle.state = bundle.state.clone().with_econ_contracts_v1(mirror);
@@ -1153,5 +1162,108 @@ mod tests {
         c.policy = zero.id().as_bytes();
         assert!(matches!(palw_minimum_price_admit_v1(&zero, &c, 10_000, 100), Err(PalwMinimumPriceRefusalV1::Unknown(_))));
         assert_eq!(palw_minimum_price_c_upper_v1(&p, &[7; 64], u64::MAX, u64::MAX), Err(PalwMinimumPriceRefusalV1::Unrepresentable));
+    }
+
+    fn empty_ledger() -> misaka_palw_kernel::ledger::KernelLedgerV1 {
+        crate::palw_kernel_route_v1::palw_kernel_route_template_v1(crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(
+            Hash64::from_bytes([1; 64]),
+            Hash64::from_bytes([2; 64]),
+        ))
+    }
+
+    /// **Round 3 (R8-ECON sweep)**: a partial consent lives to its acceptance deadline and is stale after it; a signed contract
+    /// retires past its retention, unused past its acceptance deadline, and settled once its job's escrow is gone. No claim of the
+    /// contracted worker holds the job, so no payout floor is injected.
+    #[test]
+    fn round3_contracts_retire_stale_expired_unused_and_settled() {
+        use PalwMinimumPriceRetirementV1 as R;
+        let p = PalwMinimumPricePolicyV1::unapproved_probe_v1();
+        let terms = contract(&p, 2_200);
+        let mut row = PalwMinimumPriceRowV1 { terms, consented: vec![terms.worker], first_daa: 100, signed_daa: None, policy: p.id() };
+        let mut l = empty_ledger();
+        l.job_escrows.insert(
+            terms.job,
+            misaka_palw_kernel::ledger::JobEscrowRowV1 { poster: terms.poster, amount: 2_200, posted_daa: 90 },
+        );
+        assert_eq!(palw_minimum_price_retirement_v1(&row, &l, 150), None, "a partial consent lives to its acceptance deadline");
+        assert_eq!(palw_minimum_price_retirement_v1(&row, &l, 151), Some(R::StaleConsent));
+        row.signed_daa = Some(120);
+        row.consented = terms.required_parties();
+        assert_eq!(palw_minimum_price_retirement_v1(&row, &l, 140), None);
+        assert_eq!(palw_minimum_price_retirement_v1(&row, &l, 151), Some(R::Unused), "no claim of the worker by the deadline");
+        assert_eq!(palw_minimum_price_retirement_v1(&row, &l, 1_101), Some(R::Expired));
+        assert_eq!(palw_minimum_price_floor_v1(&row, &l), None, "no claim holds the job: no floor");
+        l.job_escrows.clear();
+        assert_eq!(palw_minimum_price_retirement_v1(&row, &l, 140), Some(R::Settled), "the escrow is gone: nothing left to govern");
+    }
+
+    /// **Round 3 (R8-WINDOW sweep)**: an unapplied extension is a stale consent past its window; an applied one retires once its
+    /// consented horizon has passed.
+    #[test]
+    fn round3_extension_rows_retire_after_their_window_or_horizon() {
+        let terms = HorizonExtensionTermsV1 {
+            version: 1,
+            network: [1; 64],
+            claim: [2; 64],
+            root: [3; 64],
+            worker: [4; 64],
+            sponsor: [5; 64],
+            current_liability_until_daa: 100,
+            new_liability_until_daa: 150,
+            hard_deadline_daa: 200,
+            consent_by_daa: 90,
+            price_contract: [0; 64],
+        };
+        let mut row = PalwHorizonExtensionRowV1 {
+            terms,
+            consented: vec![[4; 64]],
+            first_daa: 80,
+            applied_daa: None,
+            policy: PalwHorizonExtensionPolicyV1::unapproved_probe_v1().id(),
+        };
+        assert!(!palw_horizon_extension_retired_v1(&row, 90));
+        assert!(palw_horizon_extension_retired_v1(&row, 91), "a stale consent");
+        row.applied_daa = Some(85);
+        assert!(!palw_horizon_extension_retired_v1(&row, 150));
+        assert!(palw_horizon_extension_retired_v1(&row, 151), "past the consented horizon");
+    }
+
+    /// **Round 3 (R7-ECON wiring rows)**: a frozen context is its model-epoch's ClaimVerification context (the model excluded, never
+    /// eligible); the deferred payout key is never a claim-id key.
+    #[test]
+    fn round3_a_verification_context_is_its_model_epochs_and_deferred_keys_are_distinct() {
+        let gate = PalwModelVerificationGatePolicyV1::unapproved_probe_v1();
+        let (model, epoch) = ([7; 64], 4);
+        let tally = palw_model_verification_tally_id_v1(&model, epoch);
+        let row = PalwModelVerificationContextV1 {
+            model,
+            epoch,
+            model_root: [8; 64],
+            context: misaka_palw_challenge::BeaconContextV1 {
+                chain_genesis: [1; 64],
+                ruleset_id: [2; 64],
+                policy: crate::palw_conformance_evidence_v1::palw_onboarding_sealed_policy_v1(),
+                subject_kind: misaka_palw_challenge::SubjectKindV1::ClaimVerification,
+                commitment_root: tally,
+                commitment_position: 500,
+                challenge_epoch: epoch,
+                eligible_profiles: [[9; 64]].into_iter().collect(),
+                excluded_profiles: [model].into_iter().collect(),
+                candidate_profile_id: misaka_palw_challenge::RootV1::Absent,
+            },
+            frozen_daa: 500,
+            unavailable_daa: None,
+            policy: gate.id(),
+        };
+        row.validate(&gate).unwrap();
+        let mut bad = row.clone();
+        bad.context.eligible_profiles.insert(model);
+        assert!(bad.validate(&gate).is_err(), "the model never seeds its own verification");
+        let mut bad = row.clone();
+        bad.context.commitment_root = [3; 64];
+        assert!(bad.validate(&gate).is_err(), "the context commits to its tally");
+        assert_ne!(palw_model_verification_deferred_payout_key_v1(&[5; 64]), Hash64::from_bytes([5; 64]));
+        assert_eq!(palw_model_verification_context_key_v1(&tally).len(), 65);
+        assert_ne!(palw_model_verification_context_key_v1(&tally), palw_model_verification_decided_key_v1(&tally));
     }
 }

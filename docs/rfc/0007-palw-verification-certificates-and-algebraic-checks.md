@@ -1436,6 +1436,50 @@ only where an existing record justifies it.
    compiler identity with the same explicit reason — never silently accept it or fall back to the full-material plan.
    Implementation: `misaka_palw_kernel::claim_interactive_v3::CompactProofFamilyContractV1` (a stub refused by
    `register`); no fence, wire tag or state changes.
+7. **Compact relation compilers (2026-10-15, round 3; source checkpoint, not compiled, not tested, not reviewed).**
+   Item 6's family-level stub stays refused. Relation-level compilers now exist for the relation classes the shipped
+   descriptors' plans use, each with its own compiler identity (`compact_relation_compiler_id_v1`, domain
+   `MISAKA/PALW/CLAIM-PROOF-COMPILER/COMPACT-RELATION/V1`), distinct from `full_material_compiler_v3` and from item 6's ids:
+
+   | compiler | plan relations | proof per (repetition, modulus) | error of one repetition | one instance |
+   |---|---|---|---|---|
+   | `FreivaldsSeededV1` | `MatMul` under `FreivaldsM127` / `FreivaldsCrtV2` | header only | `1/p` per batch slice | `t·b₀` |
+   | `LinearEvaluationV1` | `Add`, `Sub` (broadcast) | header only | `ν/p` | `t·(b₀ − ⌈log₂ν⌉)` |
+   | `SumCheckHadamardV1` | `Mul` (broadcast) | `ν` rounds × 4 elements | `4ν/p` | `b₀ − ⌈log₂(4ν + 3Q)⌉` |
+   | `SumCheckReduceSumV1` | `ReduceSum{axis}` | `ν_j` rounds × 2 elements | `(ν_o+ν_j)/p` | `b₀ − ⌈log₂(ν_o + ν_j + Q)⌉` |
+
+   `p` is the smallest Mersenne modulus the relation uses and `b₀ = ⌊log₂p⌋` (126, 106 or 88): the moduli are the
+   fewest of `2^127−1, 2^107−1, 2^89−1` whose product exceeds the relation's integer error span (the dense rule of
+   K2-TIR-v2, applied to `|y| + |a| + |b|`, `|y| + |a||b|`, `|y| + J|a|`). `ν` is the zero-padded output's Boolean
+   variable count (`ν_o`, `ν_j` the output and reduced coordinates of a reduction); `t` the repetitions; `Q = 2^q` the
+   contract's declared offline transcript-query budget (`q ∈ [64, 120]`). Freivalds vectors and the first random point
+   come straight from the paid ClaimV2 round seed's streams; sum-check round challenges are transcript-bound
+   Fiat–Shamir keyed by that seed, so their grinding is charged with `Q` and **repetitions are not credited** for those
+   two families. Every instance's bound enters the existing composition (`compact_check_families_v1` →
+   `composed_false_accept_bits_v1`, union over instances and positions, binding term) and the lifetime union
+   (`compact_lifetime_failure_term_v1` → `cumulative_failure_bits_v1`, one term per admission, `Q` not double
+   counted). The precondition is the plan checker's interval admission (no exact primitive can overflow), so an
+   integer identity of the operands is the TIR relation.
+
+   **Kept exact, not compiled:** `Cast`, Structure, QuantRange, Nonlinear, Selection (TopK/Gather routing),
+   RecurrentState and MediaPipeline relations keep their descriptor's exact checker (`ε = 0`); an arithmetic relation
+   whose proof bound is not below its operand bytes, or whose class did not opt in, is kept exact too. **Refused
+   families, listed (`COMPACT_REFUSED_FAMILIES_V1`):** GKR-style layered chains; PCS-backed evaluation; lookup
+   arguments for quantization/nonlinear; permutation/lookup arguments for selection and routing; a compact memory
+   (state-continuity) argument; staged-beacon (one beacon per round) sum-check; typed-spec targets. A (family, checker)
+   pair outside `COMPACT_RELATION_INVENTORY_V1` refuses the whole plan.
+
+   **What it is not.** No polynomial commitment exists: every evaluation claim a sum-check reduces to is discharged by
+   reading the operand through the claim's authenticated commitments. The compact compilers shrink the round message
+   (a Freivalds proof is its header; a 4,096-element `Mul` with i32 operands and two repetitions carries about 1.7 KB instead of 64 KiB of operands) and give
+   each relation an explicit error term; they do **not** reduce the verifier's reads below the operands, and for
+   elementwise relations they add an error term where exact recompute had none. Registration
+   (`register_compact_relation_contract_v1`, consensus gate `palw_compact_relation_registration_v1`) requires the
+   ClaimV2 fence active and an approved review tuple naming the contract's suite; the fence stays `never` and the
+   registry empty, so it refuses today. `CompiledClaimProofPlanV3` refuses a compact relation compiler id by name.
+   Remaining: compilation and tests, external review of the bounds and of the Fiat–Shamir transform, a PCS/GKR suite,
+   wiring into `PaidClaimClassV2` rounds and receipts. Detail:
+   [the ClaimV2 checkpoint, round 3](../design/palw/rfc07-claim-paid-v2-implementation-2026-10-14.md#compact-relation-compilers-2026-10-15-round-3).
 
 ### R7-ECON — costs, collection and lazy verification
 

@@ -141,7 +141,7 @@ fn bond_text(b: &PalwBondKeyV2) -> String {
 }
 fn unhex(field: &str, text: &str) -> Result<Vec<u8>, CliError> {
     let mut out = vec![0u8; text.len() / 2];
-    faster_hex::hex_decode(text.as_bytes(), &mut out).map_err(|e| CliError::generic(format!("{field}: not hex: {e}")))?;
+    faster_hex::hex_decode(text.as_bytes(), &mut out).map_err(|e| CliError::generic(format!("{field}: not hex: {e:?}")))?;
     Ok(out)
 }
 /// A keyed BLAKE2b-512 of the borsh terms: a deterministic, nonzero-with-overwhelming-probability default root/nonce.

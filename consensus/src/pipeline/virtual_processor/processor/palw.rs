@@ -5497,6 +5497,9 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::MinimumPriceV1 => {
                     "a minimum-price contract is refused: palw_minimum_price_v1 is not in force at this block".into()
                 }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconBootstrapV1 => {
+                    "a BootstrapExact contribution is refused: palw_beacon_bootstrap_v1 is not in force at this block".into()
+                }
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => {
                     "a class registration under a verification mode is refused: palw_panel_free_v1 is not in force at this block (RFC-0015)"
                         .to_string()
@@ -5553,6 +5556,10 @@ impl VirtualStateProcessor {
             }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::MinimumPriceV1 => {
                 self.palw_state_params_v2.as_ref().is_some_and(|p| p.econ_contracts_v1().minimum_price_at(daa_score).is_some())
+            }
+            // N3 (inner 73, round 3): the mirrored dormant bootstrap fence.
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconBootstrapV1 => {
+                self.palw_state_params_v2.as_ref().is_some_and(|p| p.econ_contracts_v1().beacon_bootstrap_at(daa_score).is_some())
             }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceFeeV1 => {
                 self.palw_beacon_source_fee_v1.is_some_and(|f| {

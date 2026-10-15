@@ -88,6 +88,8 @@ mod imports;
 #[cfg(feature = "legacy-secp256k1")]
 pub mod message;
 pub mod metrics;
+/// MISAKA RFC-0012 R12-OPS: the versioned capability surface and the one `preflight` external wallets call before signing.
+pub mod misaka_preflight;
 pub mod prelude;
 pub mod result;
 pub mod rpc;

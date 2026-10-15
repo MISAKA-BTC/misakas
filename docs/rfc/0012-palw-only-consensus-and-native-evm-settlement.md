@@ -574,6 +574,13 @@ after undo/replay.
    invented here. A >100,000-block processor latency bound for the release: **USER DECISION REQUIRED**.
 5. Before scheduling, the bond exit procedure, compatibility matrix and fingerprint MUST be published (§8 step 5).
 6. Remaining: third-party wallets/SDKs/EVM tooling migration, pruned P2P, 100k release latency (validation-only).
+7. **External wallet path (2026-10-15, round 3; source only, no PASS).** Items 1–3 are now available to third-party
+   code as one versioned surface: `kaspa-wallet-core::misaka_preflight` (capability schema `misaka.wallet.capability.v1`,
+   a single `preflight` call before signing, WASM `misakaPreflightV1`). It refuses on genesis mismatch, a missing or
+   incomplete import status, an unknown finality authority, and retired kinds once retirement is active or scheduled
+   within 1,000 DAA of the sink. The 1,000 DAA margin is a proposal: **USER REVIEW**. Integrator note:
+   [rfc12-external-wallet-integration-2026-10-15](../design/palw/rfc12-external-wallet-integration-2026-10-15.md).
+   Third-party migration itself remains EXTERNAL.
 
 ### ALL-MODEL
 

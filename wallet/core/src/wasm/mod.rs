@@ -15,6 +15,7 @@ cfg_if! {
         pub mod utxo;
         pub mod encryption;
         pub mod cryptobox;
+        pub mod misaka_preflight;
 
         pub use self::balance::*;
         pub use self::message::*;
@@ -25,6 +26,7 @@ cfg_if! {
         pub use self::utxo::*;
         pub use self::encryption::*;
         pub use self::cryptobox::*;
+        pub use self::misaka_preflight::*;
     }
 }
 

@@ -178,3 +178,16 @@ maps onto this dormant implementation. It changes no code, preset, fingerprint o
 | R12-HEADS | Synchronous WAL barriers; publication history with the UTXO generation; one-batch declaration/tip/marker install; no tag publication from an incomplete copy | Power-loss and every-store atomicity not established; recent barrier/batch sources are uncompiled checkpoints per the completion record |
 | R12-MONEY | 92/8/0 and 100% carrier fees not adopted; invariants (no extra issuance, escrow ≤ withheld base, old entitlements kept); 2026-10-11 ExecutionCap / market-fee rulings | Split and fee schedule are USER DECISION REQUIRED |
 | R12-OPS | Retired kinds 0x10/0x11/0x19; import-status capability; wRPC v1/v2; observation-bounds document and 100k latency bound | Bound values are USER DECISION REQUIRED; third-party tooling migration open |
+
+## R12-OPS closure: external wallet path — 2026-10-15 (round 3)
+
+This section is source only. Nothing was compiled or run, and no PASS is assigned.
+Presets, fences and heights are unchanged.
+
+| R12-OPS item | Surface for third parties | Observation (not verified here) |
+| --- | --- | --- |
+| 1 Retired kinds `0x10/0x11/0x19` | `evaluate_preflight_v1` refuses them once retirement is active (`dnsRetiredAt`) or scheduled within 1,000 DAA of the sink; it uses the consensus predicate `creates_dns_participation` | The margin value is a proposal (USER REVIEW); unbond/exit are not refused |
+| 2 Import status / finality authority | `MisakaNodeCapabilitiesV1` mirrors the CLI's `node_import_verdict` and the validator reader's `native`/`dns`/`unknown` authority; `importStatusMissing`, `importIncomplete` and `finalityAuthorityUnknown` refuse before signing | Not run against a node; unit sources prepared in `wallet/core/src/misaka_preflight.rs` |
+| 3 wRPC v1/v2 | The capability is built from serde JSON of the existing responses; absent optional fields read as unavailable, never as a pass | WASM bindings (`misakaCapabilitiesFromReadsV1`, `misakaPreflightV1`) not built for wasm32 |
+| 6 Third-party migration | Integrator note `docs/design/palw/rfc12-external-wallet-integration-2026-10-15.md`; one `preflight(rpc, expectations, txs)` call | No external wallet, SDK or EVM tool migrated or tested: still EXTERNAL |
+

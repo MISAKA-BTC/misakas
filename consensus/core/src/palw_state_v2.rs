@@ -198,6 +198,9 @@ mod palw_panel_lifetime_fold_v2;
 // RFC07/RFC08 signed economic contracts (inner 67–69, aux 125–127), each past its own dormant fence.
 #[path = "palw_econ_contracts_fold_v1.rs"]
 mod palw_econ_contracts_fold_v1;
+// N3 (round 3): BootstrapExact source rounds (inner 73, aux 130), past `palw_beacon_bootstrap_v1`.
+#[path = "palw_beacon_bootstrap_fold_v1.rs"]
+mod palw_beacon_bootstrap_fold_v1;
 #[path = "palw_panel_source_fee_fold_v2.rs"]
 mod palw_panel_source_fee_fold_v2;
 #[path = "palw_panel_v3_fold_v1.rs"]

@@ -1707,11 +1707,13 @@ pub enum PalwKernelInnerFenceV1 {
     HorizonExtensionV1,
     /// `Params::palw_minimum_price_v1` (R8-ECON): one party's signature on a minimum-price contract (inner 69).
     MinimumPriceV1,
+    /// `Params::palw_beacon_bootstrap_v1` (N3, round 3): one contributor's seal or reveal in a BootstrapExact source round (inner 73).
+    BeaconBootstrapV1,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::PanelFreeV1,
         Self::TypedRootsV1,
         Self::PanelFreeAndTypedRootsV1,
@@ -1724,6 +1726,7 @@ impl PalwKernelInnerFenceV1 {
         Self::ModelVerificationGateV1,
         Self::HorizonExtensionV1,
         Self::MinimumPriceV1,
+        Self::BeaconBootstrapV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1740,6 +1743,7 @@ impl PalwKernelInnerFenceV1 {
             Self::ModelVerificationGateV1 => "palw_model_verification_gate_v1",
             Self::HorizonExtensionV1 => "palw_horizon_extension_v1",
             Self::MinimumPriceV1 => "palw_minimum_price_v1",
+            Self::BeaconBootstrapV1 => "palw_beacon_bootstrap_v1",
         }
     }
 }
@@ -1820,6 +1824,7 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         K::AttestModelVerificationV1 { .. } => Some(PalwKernelInnerFenceV1::ModelVerificationGateV1),
         K::ConsentHorizonExtensionV1 { .. } => Some(PalwKernelInnerFenceV1::HorizonExtensionV1),
         K::SignMinimumPriceContractV1 { .. } => Some(PalwKernelInnerFenceV1::MinimumPriceV1),
+        K::BootstrapExactV1 { .. } => Some(PalwKernelInnerFenceV1::BeaconBootstrapV1),
         K::FundBeaconSourceFee { .. } | K::FundPanelBeaconSourceFeeV2 { .. } | K::OptInPaidBeaconSource { .. } => {
             Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)
         }
@@ -1897,6 +1902,7 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (67, "AttestModelVerificationV1", Some(PalwKernelInnerFenceV1::ModelVerificationGateV1)),
     (68, "ConsentHorizonExtensionV1", Some(PalwKernelInnerFenceV1::HorizonExtensionV1)),
     (69, "SignMinimumPriceContractV1", Some(PalwKernelInnerFenceV1::MinimumPriceV1)),
+    (73, "BootstrapExactV1", Some(PalwKernelInnerFenceV1::BeaconBootstrapV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -2206,6 +2212,13 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         true,
     ),
     a2_row(PalwA2SlotV1::KernelInner { lo: 69, hi: 69 }, "palw_minimum_price_v1", "RFC08 R8-ECON minimum-price contract", true),
+    // 2026-10-15 round 3 (N3): the BootstrapExact source contribution at the top of the RFC07 reservation (70–72 stay unallocated).
+    a2_row(
+        PalwA2SlotV1::KernelInner { lo: 73, hi: 73 },
+        "palw_beacon_bootstrap_v1",
+        "N3 BootstrapExact source contribution (Work Beacon independent bootstrap)",
+        true,
+    ),
     a2_row(
         PalwA2SlotV1::StateEncoding {
             what: "kernel route aux125 model-epoch verification tallies (drawn slots, verdicts, sampled claim)",
@@ -2226,6 +2239,23 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::StateEncoding { what: "kernel route aux127 minimum-price contracts and their job index" },
         "palw_minimum_price_v1",
         "RFC08 R8-ECON minimum-price contract",
+        true,
+    ),
+    // Round 3: the gate's wiring rows share aux 125 (65-byte prefixed keys 0x01 context / 0x02 deferred reward / 0x03 decided
+    // outcome), written only past the gate; the minimum-price settlement floors are consumer-injected, never rows.
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux125 0x01 frozen OPVB verification contexts, 0x02 deferred Final rewards, 0x03 decided outcomes; \
+                   gated model-allocation Final payouts",
+        },
+        "palw_model_verification_gate_v1",
+        "RFC07 R7-ECON beacon-to-tally and payout wiring (round 3)",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel route aux130 BootstrapExact source rounds and their judgements" },
+        "palw_beacon_bootstrap_v1",
+        "N3 BootstrapExact fold stage (IndependentValidityVerified / EntropyEligibilityVerified)",
         true,
     ),
     a2_row(PalwA2SlotV1::StateEncoding { what:"kernel route aux113-119,122-124: paid class/job/producer authority, future locks, receipts, lifetime counter/evidence/review scopes/rounds/Final projections" }, "palw_claim_challenge_v2", "RFC07 all-target paid claim authority", true),

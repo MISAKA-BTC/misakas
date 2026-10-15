@@ -30,8 +30,16 @@
 //!
 //! **No economic parameter values are chosen here.** Every number a judgement compares against (resource bound, settlement depth,
 //! independent contributors, sources required, bias bound, attack budget) is a field of a reviewed [`PalwBootstrapEntropyProfileV1`];
-//! none is approved. No fence, no `Params` field, no tag, no table; the fold reads nothing here. Source-only bootstrap records earn
-//! no PALW reward, block right or Final weight (amendments §6). No hidden fallback to a block hash, heartbeat, BASE-0, signature,
+//! none is approved. Source-only bootstrap records earn no PALW reward, block right or Final weight (amendments §6).
+//!
+//! **Round 3 (2026-10-15): the carried object and its fold stage** (section VI). The dormant fence `palw_beacon_bootstrap_v1`
+//! (Some-only, refused when armed) owns kernel-route inner 73 (`misaka_palw_kernel::beacon_bootstrap_v1::BootstrapExactContributionV1`:
+//! a bond's seal, later its reveal, in one `(profile, target, slot)` round) and kernel-route aux table 130 (the rounds). The fold
+//! admits seals only after the target's commitment and inside the round's derived windows, judges each round once its reveal window
+//! closed and its inputs settled the profile's depth, and stores the judgement; the judgement re-derives every fact itself
+//! ([`palw_bootstrap_judge_round_v1`]) and runs the two predicates above — nothing a contributor asserts is a fact. The restore fence
+//! re-runs every stored judgement. [`palw_bootstrap_holds_in_state_v1`] feeds [`palw_bootstrap_holds_v1`] the re-derived witnesses;
+//! [`approved_bootstrap_entropy_profiles_v1`] stays empty, so it holds nowhere and nothing activates. No hidden fallback to a block hash, heartbeat, BASE-0, signature,
 //! committee seed or local RNG exists: an origin of that kind is refused, and an empty source set leaves the profile dormant.
 
 use crate::Hash64;
@@ -144,7 +152,7 @@ pub fn palw_bootstrap_reachable_v1(rows: &[PalwBootstrapDependencyV1], disabled:
 
 /// Production profiles may open new reward profiles; synthetic ones exist only for unit/integration tests (amendments §6: synthetic
 /// randomness is separated by type and configuration and is never production).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwBootstrapProfileClassV1 {
     Production,
     SyntheticTestOnly,
@@ -152,7 +160,7 @@ pub enum PalwBootstrapProfileClassV1 {
 
 /// What a profile's bias bound rests on. Only an adversarial analysis over a stated attack budget counts (S04: "単なる統計乱数test
 /// で合格にしない").
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwBiasEvidenceKindV1 {
     /// Bias bounded against an adversary with the profile's `attack_budget_trials`, including private candidates, source selection,
     /// withholding and rewrapping.
@@ -164,7 +172,7 @@ pub enum PalwBiasEvidenceKindV1 {
 }
 
 /// What happens to a committed source whose reveal is withheld.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwWithholdingRuleV1 {
     /// The commitment's deposit is forfeited and the round proceeds with a fixed, pre-committed substitute.
     ForfeitAndSubstitute,
@@ -175,7 +183,7 @@ pub enum PalwWithholdingRuleV1 {
 }
 
 /// **A reviewed bootstrap entropy profile.** Every comparison value of the two judgements is a field here; this module chooses none.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwBootstrapEntropyProfileV1 {
     pub id: Hash64,
     pub class: PalwBootstrapProfileClassV1,
@@ -764,5 +772,500 @@ impl crate::config::params::Params {
             }
         }
         Ok(())
+    }
+}
+
+// =================================================================================================================================
+// VI. The carried object and its fold stage (round 3, 2026-10-15): fence `palw_beacon_bootstrap_v1`, inner 73, aux 130
+// =================================================================================================================================
+
+use misaka_palw_kernel::beacon_bootstrap_v1::{
+    BootstrapExactRoundV1, bootstrap_exact_commitment_v1, bootstrap_exact_output_v1, bootstrap_exact_work_id_v1,
+};
+
+/// Kernel route aux table: BootstrapExact source rounds (key: the round id, 64 bytes). Allocated from the top of the free range.
+pub const PALW_BEACON_BOOTSTRAP_TABLE_V1: u8 = 130;
+
+/// **`palw_beacon_bootstrap_v1`'s policy** — every value POLICY, none approved. The `profile` is what the fold JUDGES rounds under;
+/// it is not an approval: [`palw_bootstrap_holds_v1`] and the new-profile gate read only [`approved_bootstrap_entropy_profiles_v1`],
+/// which is empty in this release.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwBeaconBootstrapPolicyV1 {
+    pub version: u16,
+    pub profile: PalwBootstrapEntropyProfileV1,
+    /// Seals land in `(target committed, target committed + seal_window_daa]`.
+    pub seal_window_daa: u64,
+    /// Reveals land in `(seal end, seal end + reveal_window_daa]`.
+    pub reveal_window_daa: u64,
+    pub maximum_contributors_per_round: u32,
+    /// Rounds (slots) per target; at least the profile's `sources_required`.
+    pub maximum_sources_per_target: u32,
+    /// Unjudged rounds held at once.
+    pub maximum_open_rounds: u32,
+    /// A judged round is retired this long after its judgement.
+    pub judged_retention_daa: u64,
+    pub security_review_scope: [u8; 64],
+}
+
+impl PalwBeaconBootstrapPolicyV1 {
+    pub fn id(&self) -> Hash64 {
+        Hash64::from_bytes(misaka_palw_kernel::hash::object_id(b"MISAKA/PALW/BEACON-BOOTSTRAP-POLICY/V1", self))
+    }
+
+    /// Structural invariants only: version 1, finite non-zero windows and capacities, room for the profile's own minimums, a review
+    /// identity. Whether the profile is sound is the profile review's (and its approval is a release change, never this field).
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let windows = self.seal_window_daa.checked_add(self.reveal_window_daa);
+        if self.version != 1
+            || self.seal_window_daa == 0
+            || self.reveal_window_daa == 0
+            || windows.is_none_or(|w| w == u64::MAX)
+            || self.maximum_contributors_per_round < self.profile.min_independent_contributors.max(1)
+            || self.maximum_contributors_per_round > 4096
+            || self.maximum_sources_per_target < self.profile.sources_required.max(1)
+            || self.maximum_open_rounds == 0
+            || self.judged_retention_daa == 0
+            || self.judged_retention_daa == u64::MAX
+            || self.security_review_scope == [0; 64]
+        {
+            return Err("the bootstrap policy needs finite windows, capacities covering its profile's minimums and a review scope");
+        }
+        Ok(())
+    }
+
+    /// **NOT A PROPOSAL**: a SYNTHETIC test profile (never production) and structural fixture windows, for tests and private profiles
+    /// only. Its evaluated withholding rule is the fold's (`AbortRound`), so the fixture can exercise the eligibility path.
+    pub fn unapproved_probe_v1() -> Self {
+        Self {
+            version: 1,
+            profile: PalwBootstrapEntropyProfileV1 {
+                id: Hash64::from_bytes([0x42; 64]),
+                class: PalwBootstrapProfileClassV1::SyntheticTestOnly,
+                max_resource_units: 64,
+                min_settlement_depth: 2,
+                min_independent_contributors: 2,
+                sources_required: 2,
+                bias_evidence: PalwBiasEvidenceKindV1::AdversarialAnalysis,
+                evaluated_withholding_rule: PalwWithholdingRuleV1::AbortRound,
+                attack_budget_trials: 64,
+                bias_bound_millibits: 500,
+            },
+            seal_window_daa: 10,
+            reveal_window_daa: 10,
+            maximum_contributors_per_round: 16,
+            maximum_sources_per_target: 4,
+            maximum_open_rounds: 64,
+            judged_retention_daa: 1_000,
+            security_review_scope: [9; 64],
+        }
+    }
+}
+
+/// `Params::palw_beacon_bootstrap_v1`'s value — Some-only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwBeaconBootstrapFenceV1 {
+    pub activation: crate::config::params::ForkActivation,
+    pub policy: PalwBeaconBootstrapPolicyV1,
+}
+
+impl PalwBeaconBootstrapFenceV1 {
+    pub fn unapproved_probe_at(activation: crate::config::params::ForkActivation) -> Self {
+        Self { activation, policy: PalwBeaconBootstrapPolicyV1::unapproved_probe_v1() }
+    }
+}
+
+/// One contributor's seal in a round (fold-derived fields: `operator` from the bond, `sealed_daa` / `revealed_daa` the blocks').
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwBootstrapSealRowV1 {
+    pub contributor: [u8; 64],
+    pub operator: [u8; 64],
+    pub commitment: [u8; 64],
+    pub sealed_daa: u64,
+    /// `(preimage, revealed_daa)` once revealed.
+    pub reveal: Option<([u8; 64], u64)>,
+}
+
+/// **A round's stored judgement** — what the fold derived and what the two predicates answered. `None` refusal = the witness holds.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwBootstrapJudgementV1 {
+    pub judged_daa: u64,
+    pub work_id: [u8; 64],
+    /// The exact output the fold re-executed; `None` when an input was withheld (the round aborts).
+    pub output: Option<[u8; 64]>,
+    pub independent_contributors: u32,
+    pub depth_daa: u64,
+    /// `None`: `IndependentValidityVerified`; otherwise the refusal code (`WITHHELD` for an aborted round).
+    pub validity_refusal: Option<String>,
+    /// `None`: `EntropyEligibilityVerified`; otherwise the refusal code (`NOT_JUDGED` when validity did not hold).
+    pub eligibility_refusal: Option<String>,
+}
+
+/// **A BootstrapExact source round** (aux 130, key = the round id).
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwBootstrapRoundRowV1 {
+    pub round: BootstrapExactRoundV1,
+    /// The target claim's commitment position, read from the kernel ledger when the round opened (never from a contribution).
+    pub target_committed_daa: u64,
+    /// Canonical: ascending `(sealed_daa, contributor)`, distinct contributors.
+    pub seals: Vec<PalwBootstrapSealRowV1>,
+    pub judgement: Option<PalwBootstrapJudgementV1>,
+    pub policy: Hash64,
+}
+
+impl PalwBootstrapRoundRowV1 {
+    pub fn seal_end(&self, policy: &PalwBeaconBootstrapPolicyV1) -> u64 {
+        self.target_committed_daa.saturating_add(policy.seal_window_daa)
+    }
+
+    pub fn reveal_end(&self, policy: &PalwBeaconBootstrapPolicyV1) -> u64 {
+        self.seal_end(policy).saturating_add(policy.reveal_window_daa)
+    }
+
+    /// The last position any input was fixed or revealed at (the depth is counted from here).
+    pub fn last_input_daa(&self) -> u64 {
+        self.seals.iter().map(|s| s.reveal.map_or(s.sealed_daa, |(_, at)| at.max(s.sealed_daa))).max().unwrap_or(self.target_committed_daa)
+    }
+
+    /// Whether the fold judges the round at `now`: its reveal window closed, and its inputs settled the profile's depth (an aborted
+    /// round is judged at once).
+    pub fn due(&self, policy: &PalwBeaconBootstrapPolicyV1, now: u64) -> bool {
+        self.judgement.is_none()
+            && now > self.reveal_end(policy)
+            && (self.seals.iter().any(|s| s.reveal.is_none())
+                || now.saturating_sub(self.last_input_daa()) >= policy.profile.min_settlement_depth)
+    }
+
+    pub fn validate(&self, policy: &PalwBeaconBootstrapPolicyV1) -> Result<(), &'static str> {
+        let (seal_end, reveal_end) = (self.seal_end(policy), self.reveal_end(policy));
+        let round = self.round.id();
+        if self.policy != policy.id()
+            || self.round.profile != policy.profile.id.as_bytes()
+            || self.round.slot >= policy.maximum_sources_per_target
+            || self.seals.is_empty()
+            || self.seals.len() > policy.maximum_contributors_per_round as usize
+            || self.seals.windows(2).any(|w| (w[0].sealed_daa, w[0].contributor) >= (w[1].sealed_daa, w[1].contributor))
+        {
+            return Err("a bootstrap round differs from its policy or its seals are not canonical");
+        }
+        let mut contributors: Vec<[u8; 64]> = self.seals.iter().map(|s| s.contributor).collect();
+        contributors.sort();
+        contributors.dedup();
+        if contributors.len() != self.seals.len() {
+            return Err("a bootstrap round holds two seals of one contributor");
+        }
+        for s in &self.seals {
+            if s.sealed_daa <= self.target_committed_daa
+                || s.sealed_daa > seal_end
+                || s.reveal.is_some_and(|(preimage, at)| {
+                    at <= seal_end || at > reveal_end || bootstrap_exact_commitment_v1(&round, &s.contributor, &preimage) != s.commitment
+                })
+            {
+                return Err("a bootstrap seal or reveal lies outside its round's windows or opens another commitment");
+            }
+        }
+        if let Some(j) = &self.judgement {
+            let undue = Self { judgement: None, ..self.clone() };
+            if !undue.due(policy, j.judged_daa) {
+                return Err("a bootstrap round was judged before it was due");
+            }
+        }
+        Ok(())
+    }
+}
+
+/// **The round's judgement, every fact derived here** (REQ-N3-2): the content-only work identity over the canonical commitments; the
+/// combiner re-executed exactly over the revealed inputs (a withheld input aborts the round — the fold's withholding rule is
+/// `AbortRound`); the resource units (one per input); the reads (`Genesis`, `KernelActive`: the kernel ledger's target row and the
+/// round's own seals — no Beacon, no Panel, no Panel=0, not the target's conformance); the target's commitment position from the
+/// ledger; the inputs' fixing position (the last seal, every seal strictly after the target); the independent contributors (distinct
+/// operators of the sealing bonds); canonical selection (every seal of the round, in canonical order, under the per-round cap); every
+/// trial an on-chain seal; the depth below `now` of the last input. Then [`palw_bootstrap_independent_validity_v1`] and only if it holds
+/// [`palw_bootstrap_entropy_eligibility_v1`]. Pure: the fold and the restore fence call it with the same `now` (`judged_daa`).
+pub fn palw_bootstrap_judge_round_v1(
+    row: &PalwBootstrapRoundRowV1,
+    profile: &PalwBootstrapEntropyProfileV1,
+    now: u64,
+) -> (PalwBootstrapJudgementV1, Option<EntropyEligibilityVerifiedV1>) {
+    let round_id = row.round.id();
+    let commitments: Vec<[u8; 64]> = row.seals.iter().map(|s| s.commitment).collect();
+    let work_id = bootstrap_exact_work_id_v1(&row.round, &commitments);
+    let mut operators: Vec<[u8; 64]> = row.seals.iter().map(|s| s.operator).collect();
+    operators.sort();
+    operators.dedup();
+    let mut judgement = PalwBootstrapJudgementV1 {
+        judged_daa: now,
+        work_id,
+        output: None,
+        independent_contributors: operators.len() as u32,
+        depth_daa: now.saturating_sub(row.last_input_daa()),
+        validity_refusal: None,
+        eligibility_refusal: None,
+    };
+    let revealed: Option<Vec<([u8; 64], [u8; 64])>> =
+        row.seals.iter().map(|s| s.reveal.map(|(preimage, _)| (s.contributor, preimage))).collect();
+    let Some(revealed) = revealed.filter(|r| !r.is_empty()) else {
+        let code = if row.seals.is_empty() { "NO_INPUT" } else { "WITHHELD" };
+        judgement.validity_refusal = Some(code.to_string());
+        judgement.eligibility_refusal = Some("NOT_JUDGED".to_string());
+        return (judgement, None);
+    };
+    let output = bootstrap_exact_output_v1(&round_id, &revealed);
+    judgement.output = Some(output);
+    let candidate = PalwBootstrapExactCandidateV1 {
+        profile_id: Hash64::from_bytes(row.round.profile),
+        work_id: Hash64::from_bytes(work_id),
+        exact: Ok(Hash64::from_bytes(output)),
+        resource_units: row.seals.len() as u64,
+        reads: vec![N::Genesis, N::KernelActive],
+        reads_its_consumer: false,
+    };
+    let validity = match palw_bootstrap_independent_validity_v1(&candidate, profile) {
+        Ok(validity) => validity,
+        Err(refusal) => {
+            judgement.validity_refusal = Some(refusal.code.to_string());
+            judgement.eligibility_refusal = Some("NOT_JUDGED".to_string());
+            return (judgement, None);
+        }
+    };
+    let facts = PalwBootstrapEntropyFactsV1 {
+        target_committed_position: row.target_committed_daa,
+        inputs_fixed_position: row.seals.iter().map(|s| s.sealed_daa).max().unwrap_or(0),
+        origin: PalwEntropyOriginV1::IndependentCommitReveal,
+        independent_contributors: judgement.independent_contributors,
+        selection: PalwSourceSelectionV1::CanonicalFirstK,
+        trials: PalwTrialAccountingV1::EveryTrialCommittedOnChain,
+        withholding: PalwWithholdingRuleV1::AbortRound,
+        derivation: PalwSourceDerivationV1::SelectedChainAtDepth(judgement.depth_daa),
+        identity: PalwWorkIdentityBindingV1::ContentOnly,
+    };
+    match palw_bootstrap_entropy_eligibility_v1(&validity, &facts, profile) {
+        Ok(eligible) => (judgement, Some(eligible)),
+        Err(refusal) => {
+            judgement.eligibility_refusal = Some(refusal.code.to_string());
+            (judgement, None)
+        }
+    }
+}
+
+/// **The eligible sources the chain holds for `(profile, target)`**, re-derived from the stored rounds under the fence's policy (the
+/// witnesses have private fields: re-running the pure judgement at its `judged_daa` is the only way to build one). Also the target's
+/// commitment position (`None`: no judged round).
+pub fn palw_bootstrap_eligible_in_state_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    profile_id: Hash64,
+    target: &[u8; 64],
+) -> (Option<u64>, Vec<EntropyEligibilityVerifiedV1>) {
+    let mut out = (None, Vec::new());
+    let Some((_, policy)) = params.econ_contracts_v1().beacon_bootstrap.as_ref() else { return out };
+    let Some(route) = state.kernel_route() else { return out };
+    if policy.profile.id != profile_id {
+        return out;
+    }
+    for ((_, _), bytes) in route.aux.range((PALW_BEACON_BOOTSTRAP_TABLE_V1, Vec::new())..(PALW_BEACON_BOOTSTRAP_TABLE_V1 + 1, Vec::new())) {
+        let Ok(row) = borsh::from_slice::<PalwBootstrapRoundRowV1>(bytes) else { continue };
+        let Some(judged) = row.judgement.as_ref().map(|j| j.judged_daa) else { continue };
+        if row.round.target != *target || row.round.profile != profile_id.as_bytes() {
+            continue;
+        }
+        out.0 = Some(row.target_committed_daa);
+        if let (_, Some(eligible)) = palw_bootstrap_judge_round_v1(&row, &policy.profile, judged) {
+            out.1.push(eligible);
+        }
+    }
+    out
+}
+
+/// **[`palw_bootstrap_holds_v1`] over the chain's stored rounds**: the release's approved profiles decide (empty: `NO_APPROVED_PROFILE`
+/// everywhere — nothing activates); a synthetic profile never holds; enough distinct eligible works for the target do.
+pub fn palw_bootstrap_holds_in_state_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    profile_id: Hash64,
+    target: &[u8; 64],
+    approved: &[PalwBootstrapEntropyProfileV1],
+) -> Result<PalwBootstrapHoldsV1, PalwBootstrapRefusalV1> {
+    let (position, eligible) = palw_bootstrap_eligible_in_state_v1(state, params, profile_id, target);
+    palw_bootstrap_holds_v1(&eligible, profile_id, position.unwrap_or(0), approved)
+}
+
+impl crate::config::params::Params {
+    pub fn palw_beacon_bootstrap_activation(&self) -> Option<u64> {
+        self.palw_beacon_bootstrap_v1
+            .filter(|f| f.activation != crate::config::params::ForkActivation::never())
+            .map(|f| f.activation.daa_score())
+    }
+
+    /// **The bootstrap fence's refusal**: its policy, the kernel route at or below it (its rows are the route's), then the blanket
+    /// refusal — no BootstrapExact profile, kernel or entropy assumption is approved.
+    pub fn validate_palw_beacon_bootstrap_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error;
+        let Some(at) = self.palw_beacon_bootstrap_activation() else { return Ok(()) };
+        let fence = self.palw_beacon_bootstrap_v1.expect("armed");
+        fence.policy.validate().map_err(PalwModeV2Error::Invalid)?;
+        let route = self
+            .palw_probabilistic_constraints_v1
+            .filter(|f| *f != crate::config::params::ForkActivation::never())
+            .map(|f| f.daa_score());
+        if route.is_none_or(|r| r > at) {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_beacon_bootstrap_v1 requires palw_probabilistic_constraints_v1 (the kernel route holding its rounds) at or below it",
+            ));
+        }
+        Err(PalwModeV2Error::Invalid(
+            "palw_beacon_bootstrap_v1 cannot be armed: no BootstrapExact kernel, resource bound or entropy profile is approved (N3, \
+             REQ-N3-3); approved_bootstrap_entropy_profiles_v1 is empty",
+        ))
+    }
+}
+
+impl crate::palw_state_v2::PalwChainStateV2 {
+    /// **Semantic restore fence of aux 130.** A round exists only past its fence, under its id, canonical and inside its derived
+    /// windows; every stored judgement is exactly what the pure judgement re-derives at its `judged_daa`; unjudged rounds within
+    /// capacity.
+    pub fn assert_beacon_bootstrap_consistency_v1(
+        &self,
+        params: &crate::palw_state_v2::PalwStateParamsV2,
+    ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        use crate::palw_state_v2::PalwStateV2Error;
+        let refuse = |why: String| PalwStateV2Error::CarriageInconsistent(format!("beacon bootstrap: {why}"));
+        let Some(route) = self.kernel_route() else { return Ok(()) };
+        let mut open = 0u64;
+        for ((_, key), bytes) in route.aux.range((PALW_BEACON_BOOTSTRAP_TABLE_V1, Vec::new())..(PALW_BEACON_BOOTSTRAP_TABLE_V1 + 1, Vec::new())) {
+            let (_, policy) =
+                params.econ_contracts_v1().beacon_bootstrap.as_ref().ok_or_else(|| refuse("a round without its fence".into()))?;
+            let row: PalwBootstrapRoundRowV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+            row.validate(policy).map_err(|e| refuse(e.into()))?;
+            if key.as_slice() != row.round.id().as_slice() {
+                return Err(refuse("a round under another key".into()));
+            }
+            match &row.judgement {
+                Some(judgement) => {
+                    if palw_bootstrap_judge_round_v1(&row, &policy.profile, judgement.judged_daa).0 != *judgement {
+                        return Err(refuse("a stored judgement differs from its re-derivation".into()));
+                    }
+                }
+                None => open += 1,
+            }
+            if open > u64::from(policy.maximum_open_rounds) {
+                return Err(refuse("more unjudged rounds than the policy holds".into()));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod round3_tests {
+    use super::*;
+    use crate::config::params::{ForkActivation, MAINNET_PARAMS, TESTNET_PARAMS};
+
+    fn policy() -> PalwBeaconBootstrapPolicyV1 {
+        PalwBeaconBootstrapPolicyV1::unapproved_probe_v1()
+    }
+
+    fn round(slot: u32) -> BootstrapExactRoundV1 {
+        BootstrapExactRoundV1 { profile: policy().profile.id.as_bytes(), target: [3; 64], slot }
+    }
+
+    /// Target committed at 100; seals at 101/102 (seal end 110); reveals at 112/113 (reveal end 120), `operators[i]` per contributor.
+    fn row(slot: u32, operators: [u8; 2], revealed: [bool; 2]) -> PalwBootstrapRoundRowV1 {
+        let r = round(slot);
+        let seals = (0..2)
+            .map(|i| {
+                let contributor = [10 + i as u8; 64];
+                let preimage = [20 + i as u8; 64];
+                PalwBootstrapSealRowV1 {
+                    contributor,
+                    operator: [operators[i]; 64],
+                    commitment: bootstrap_exact_commitment_v1(&r.id(), &contributor, &preimage),
+                    sealed_daa: 101 + i as u64,
+                    reveal: revealed[i].then_some((preimage, 112 + i as u64)),
+                }
+            })
+            .collect();
+        PalwBootstrapRoundRowV1 { round: r, target_committed_daa: 100, seals, judgement: None, policy: policy().id() }
+    }
+
+    #[test]
+    fn n3_round3_the_fence_is_dormant_everywhere_and_refused_when_armed() {
+        policy().validate().unwrap();
+        for p in [MAINNET_PARAMS, TESTNET_PARAMS] {
+            assert_eq!(p.palw_beacon_bootstrap_v1, None);
+            p.validate_palw_beacon_bootstrap_v1().unwrap();
+            assert!(p.palw_fences_v1().contains(&("palw_beacon_bootstrap_v1", None)));
+        }
+        let mut p = TESTNET_PARAMS;
+        p.palw_beacon_bootstrap_v1 = Some(PalwBeaconBootstrapFenceV1::unapproved_probe_at(ForkActivation::never()));
+        p.validate_palw_beacon_bootstrap_v1().unwrap();
+        p.palw_beacon_bootstrap_v1 = Some(PalwBeaconBootstrapFenceV1::unapproved_probe_at(ForkActivation::new(1_000)));
+        assert!(p.validate_palw_beacon_bootstrap_v1().is_err(), "no approved profile: refused when armed");
+        assert!(!PALW_N3_GATED_REWARD_FENCES_V1.contains(&"palw_beacon_bootstrap_v1"), "the bootstrap is not a reward profile");
+    }
+
+    /// The fold's judgement derives every fact itself and runs the two predicates: a fully revealed round of two independent
+    /// operators is valid AND eligible under the synthetic profile; re-judging at the same DAA is identical (the restore fence).
+    #[test]
+    fn n3_round3_a_settled_independent_round_is_judged_valid_and_eligible_by_derived_facts() {
+        let p = policy();
+        let r = row(0, [1, 2], [true, true]);
+        r.validate(&p).unwrap();
+        assert!(!r.due(&p, 120), "the reveal window is still open");
+        assert!(r.due(&p, 121), "closed, and the last input is 8 deep (≥ 2)");
+        let (judgement, eligible) = palw_bootstrap_judge_round_v1(&r, &p.profile, 121);
+        assert_eq!((judgement.validity_refusal.as_deref(), judgement.eligibility_refusal.as_deref()), (None, None), "{judgement:?}");
+        assert_eq!(judgement.independent_contributors, 2);
+        assert_eq!(judgement.depth_daa, 8);
+        assert!(judgement.output.is_some());
+        let eligible = eligible.expect("eligible");
+        assert_eq!(eligible.target_committed_position(), 100);
+        assert_eq!(palw_bootstrap_judge_round_v1(&r, &p.profile, 121).0, judgement, "deterministic re-derivation");
+        let judged = PalwBootstrapRoundRowV1 { judgement: Some(judgement), ..r.clone() };
+        judged.validate(&p).unwrap();
+        let early = PalwBootstrapRoundRowV1 {
+            judgement: Some(palw_bootstrap_judge_round_v1(&r, &p.profile, 120).0),
+            ..r
+        };
+        assert!(early.validate(&p).is_err(), "never judged before it is due");
+    }
+
+    /// Withholding aborts the round (the fold's rule is `AbortRound`); one operator's two bonds are one contributor; neither is a
+    /// source. A seal at or before the target's commitment, or a reveal of another preimage, is not a round's.
+    #[test]
+    fn n3_round3_withheld_or_single_operator_rounds_are_not_sources() {
+        let p = policy();
+        let withheld = row(0, [1, 2], [true, false]);
+        assert!(withheld.due(&p, 121), "an aborted round is judged once its reveal window closed");
+        let (j, e) = palw_bootstrap_judge_round_v1(&withheld, &p.profile, 121);
+        assert_eq!(j.validity_refusal.as_deref(), Some("WITHHELD"));
+        assert!(j.output.is_none() && e.is_none());
+        let (j, e) = palw_bootstrap_judge_round_v1(&row(0, [1, 1], [true, true]), &p.profile, 121);
+        assert_eq!(j.validity_refusal, None, "valid: the exact output is re-executed");
+        assert_eq!(j.eligibility_refusal.as_deref(), Some("TOO_FEW_CONTRIBUTORS"));
+        assert!(e.is_none());
+        let mut early = row(0, [1, 2], [false, false]);
+        early.seals[0].sealed_daa = 100;
+        assert!(early.validate(&p).is_err(), "inputs are fixed strictly after the target's commitment");
+        let mut forged = row(0, [1, 2], [true, true]);
+        forged.seals[0].reveal = Some(([99; 64], 112));
+        assert!(forged.validate(&p).is_err(), "a reveal opens its own commitment");
+    }
+
+    /// REQ-N3-3 over the stored judgements: two eligible rounds of one target hold only under an approved PRODUCTION profile — the
+    /// release approves none, and the synthetic probe profile never holds.
+    #[test]
+    fn n3_round3_holds_reads_the_judgements_and_the_release_approves_nothing() {
+        let p = policy();
+        let eligible: Vec<_> =
+            [0, 1].iter().map(|slot| palw_bootstrap_judge_round_v1(&row(*slot, [1, 2], [true, true]), &p.profile, 121).1.unwrap()).collect();
+        let release = approved_bootstrap_entropy_profiles_v1();
+        assert_eq!(palw_bootstrap_holds_v1(&eligible, p.profile.id, 100, &release).unwrap_err().code, "NO_APPROVED_PROFILE");
+        assert_eq!(
+            palw_bootstrap_holds_v1(&eligible, p.profile.id, 100, std::slice::from_ref(&p.profile)).unwrap_err().code,
+            "SYNTHETIC_PROFILE"
+        );
+        let production = [PalwBootstrapEntropyProfileV1 { class: PalwBootstrapProfileClassV1::Production, ..p.profile }];
+        assert_eq!(palw_bootstrap_holds_v1(&eligible, p.profile.id, 100, &production).unwrap().sources(), 2, "test-only approval");
+        assert_eq!(palw_bootstrap_holds_v1(&eligible[..1], p.profile.id, 100, &production).unwrap_err().code, "TOO_FEW_SOURCES");
     }
 }

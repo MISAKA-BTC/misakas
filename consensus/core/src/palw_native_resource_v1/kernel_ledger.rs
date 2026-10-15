@@ -8,6 +8,7 @@ impl NativeHeapV1 for misaka_palw_kernel::ledger::KernelLedgerV1 {
         sum = sum.add::<Self>(self.policy.native_heap_v1(path), path);
         sum = sum.add::<Self>(self.schedule.native_heap_v1(path), path);
         sum = sum.add::<Self>(self.consumer_final_reward_caps.native_heap_v1(path), path);
+        sum = sum.add::<Self>(self.consumer_minimum_payouts_v1.native_heap_v1(path), path);
         sum = sum.add::<Self>(self.known.native_heap_v1(path), path);
         sum = sum.add::<Self>(self.daa.native_heap_v1(path), path);
         sum = sum.add::<Self>(self.bonds.native_heap_v1(path), path);

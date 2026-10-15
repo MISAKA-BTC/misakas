@@ -842,6 +842,12 @@ mod tests {
                 params.palw_minimum_price_v1 = Some(crate::palw_econ_contracts_v1::PalwMinimumPriceFenceV1::unapproved_probe_at(at));
                 params.sync_palw_econ_contracts_v1();
             }
+            // N3 (round 3): the BootstrapExact source rounds, an unapproved probe policy (synthetic profile) mirrored likewise.
+            "palw_beacon_bootstrap_v1" => {
+                params.palw_beacon_bootstrap_v1 =
+                    Some(crate::palw_beacon_bootstrap_v1::PalwBeaconBootstrapFenceV1::unapproved_probe_at(at));
+                params.sync_palw_econ_contracts_v1();
+            }
             "palw_reporter_income_v2" => params.palw_reporter_income_v2 = Some(at),
             "palw_material_income_v3" => params.palw_material_income_v3 = Some(at),
             "palw_paid_consumer_lifecycle_v1" => {

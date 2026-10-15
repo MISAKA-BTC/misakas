@@ -71,7 +71,28 @@ pub fn prepare_minimum_price_contract_object_v1(
     Ok(KernelRouteObjectV1::SignMinimumPriceContractV1 { contract })
 }
 
-/// Sign an inner 39 / 67–69 draft with the bond the object names as one of its parties (the key must be that bond's registered key).
+/// Inner 73 (N3, round 3): one contributor's BootstrapExact seal or reveal draft. The round's windows, the target's commitment
+/// position and every judged fact are the node's to derive; drafting only refuses where the compiled bootstrap fence is absent.
+pub fn prepare_bootstrap_exact_object_v1(
+    params: &Params,
+    tip_daa: u64,
+    contribution: misaka_palw_kernel::beacon_bootstrap_v1::BootstrapExactContributionV1,
+) -> Result<KernelRouteObjectV1, Refusal> {
+    let refuse = |why: &str| Refusal::new("ECON_CONTRACT_INVALID", why);
+    let fence = params
+        .palw_beacon_bootstrap_v1
+        .filter(|f| active(f.activation, tip_daa))
+        .ok_or_else(|| refuse("the compiled bootstrap fence is absent"))?;
+    fence.policy.validate().map_err(refuse)?;
+    contribution.validate().map_err(refuse)?;
+    if contribution.round.profile != fence.policy.profile.id.as_bytes() {
+        return Err(refuse("the round names another profile than the compiled fence's"));
+    }
+    Ok(KernelRouteObjectV1::BootstrapExactV1 { contribution })
+}
+
+/// Sign an inner 39 / 67–69 / 73 draft with the bond the object names as one of its parties (the key must be that bond's registered
+/// key).
 pub fn sign_econ_contract_object_v1(
     state: &PalwChainStateV2,
     key: &dyn kaspa_pq_validator_core::MessageSigner,
@@ -95,7 +116,11 @@ pub fn sign_econ_contract_object_v1(
             contract.validate()?;
             contract.required_parties()
         }
-        _ => return Err("the economic contract signer accepts inner 39 and 67–69 only".into()),
+        KernelRouteObjectV1::BootstrapExactV1 { contribution } => {
+            contribution.validate()?;
+            vec![contribution.contributor]
+        }
+        _ => return Err("the economic contract signer accepts inner 39, 67–69 and 73 only".into()),
     };
     let registered = state.bond(&bond).ok_or("signing bond missing from pinned native state")?;
     if !parties.contains(&me)

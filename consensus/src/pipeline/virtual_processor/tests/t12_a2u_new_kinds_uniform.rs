@@ -261,6 +261,11 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 params.palw_minimum_price_v1 =
                     Some(kaspa_consensus_core::palw_econ_contracts_v1::PalwMinimumPriceFenceV1::unapproved_probe_at(at))
             }
+            // N3 (inner 73, round 3): the unapproved probe policy (synthetic profile), mirrored below with the economic contracts.
+            PalwKernelInnerFenceV1::BeaconBootstrapV1 => {
+                params.palw_beacon_bootstrap_v1 =
+                    Some(kaspa_consensus_core::palw_beacon_bootstrap_v1::PalwBeaconBootstrapFenceV1::unapproved_probe_at(at))
+            }
         }
     }
     params.sync_palw_claim_challenge_v2();
@@ -293,7 +298,8 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_staged_public_court_v1"
             | "palw_model_verification_gate_v1"
             | "palw_horizon_extension_v1"
-            | "palw_minimum_price_v1" => {} // armed above, through their enums
+            | "palw_minimum_price_v1"
+            | "palw_beacon_bootstrap_v1" => {} // armed above, through their enums
             // Armed at or below `at` with the monetary material kinds above; never moved later.
             "palw_reporter_income_v2" | "palw_material_income_v3" => {
                 params.palw_reporter_income_v2.get_or_insert(at);

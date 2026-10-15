@@ -108,6 +108,18 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         127 if key_bytes == 65 && prefix == crate::palw_econ_contracts_v1::MINIMUM_PRICE_JOB_PREFIX_V1 => {
             <[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(frame)?
         }
+        // Round 3 (2026-10-15): the verification gate wiring rows (aux 125, 65-byte prefixed keys) and the N3
+        // BootstrapExact rounds (aux 130, keyed by the 64-byte round id).
+        125 if key_bytes == 65 && prefix == crate::palw_econ_contracts_v1::MODEL_VERIFICATION_CONTEXT_PREFIX_V1 => {
+            crate::palw_econ_contracts_v1::PalwModelVerificationContextV1::scan_native_wire_v1(frame)?
+        }
+        125 if key_bytes == 65 && prefix == crate::palw_econ_contracts_v1::MODEL_VERIFICATION_DEFERRED_PREFIX_V1 => {
+            crate::palw_econ_contracts_v1::PalwModelVerificationDeferredV1::scan_native_wire_v1(frame)?
+        }
+        125 if key_bytes == 65 && prefix == crate::palw_econ_contracts_v1::MODEL_VERIFICATION_DECIDED_PREFIX_V1 => {
+            crate::palw_econ_contracts_v1::PalwModelVerificationDecidedV1::scan_native_wire_v1(frame)?
+        }
+        130 if key_bytes == 64 => crate::palw_beacon_bootstrap_v1::PalwBootstrapRoundRowV1::scan_native_wire_v1(frame)?,
         121 => match (key_bytes, prefix) {
             (65, 0x41) => crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(frame)?,
             (65, 0x42) => crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2::scan_native_wire_v1(frame)?,

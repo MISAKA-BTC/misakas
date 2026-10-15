@@ -565,6 +565,9 @@ impl Params {
         if self.palw_minimum_price_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_minimum_price_v1 = None;
         }
+        if self.palw_beacon_bootstrap_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_beacon_bootstrap_v1 = None;
+        }
         if self.palw_material_income_v3 == Some(ForkActivation::never()) {
             self.palw_material_income_v3 = None;
         }
@@ -1038,6 +1041,7 @@ impl Params {
             palw_model_verification_gate_v1,
             palw_horizon_extension_v1,
             palw_minimum_price_v1,
+            palw_beacon_bootstrap_v1,
             palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
@@ -1342,6 +1346,7 @@ impl Params {
             ("palw_model_verification_gate_v1", palw_model_verification_gate_v1.as_ref().map(|f| f.activation)),
             ("palw_horizon_extension_v1", palw_horizon_extension_v1.as_ref().map(|f| f.activation)),
             ("palw_minimum_price_v1", palw_minimum_price_v1.as_ref().map(|f| f.activation)),
+            ("palw_beacon_bootstrap_v1", palw_beacon_bootstrap_v1.as_ref().map(|f| f.activation)),
             ("palw_paid_consumer_lifecycle_v1", palw_paid_consumer_lifecycle_v1.as_ref().map(|f| f.activation)),
             ("palw_model_bond_allocation_v1", palw_model_bond_allocation_v1.as_ref().map(|fence| fence.activation)),
             ("palw_reporter_share_v2", *palw_reporter_share_v2),
@@ -1713,6 +1718,11 @@ impl Params {
         }
         if let Some(f) = &self.palw_minimum_price_v1 {
             h.write(b"palw_minimum_price_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &self.palw_beacon_bootstrap_v1 {
+            h.write(b"palw_beacon_bootstrap_v1");
             h.write(f.activation.daa_score().to_le_bytes());
             h.write(f.policy.id().as_bytes());
         }
@@ -2470,6 +2480,7 @@ impl Params {
             palw_model_verification_gate_v1,
             palw_horizon_extension_v1,
             palw_minimum_price_v1,
+            palw_beacon_bootstrap_v1,
             palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
@@ -3310,6 +3321,9 @@ impl Params {
         if let Some(f) = palw_minimum_price_v1.as_mut() {
             fork(&mut f.activation, visit);
         }
+        if let Some(f) = palw_beacon_bootstrap_v1.as_mut() {
+            fork(&mut f.activation, visit);
+        }
         if let Some(at) = palw_material_income_v3.as_mut() {
             fork(at, visit);
         }
@@ -3852,6 +3866,7 @@ impl Params {
             palw_model_verification_gate_v1,
             palw_horizon_extension_v1,
             palw_minimum_price_v1,
+            palw_beacon_bootstrap_v1,
             palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
@@ -4758,6 +4773,11 @@ impl Params {
         }
         if let Some(f) = &palw_minimum_price_v1 {
             h.write(b"palw_minimum_price_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &palw_beacon_bootstrap_v1 {
+            h.write(b"palw_beacon_bootstrap_v1");
             h.write(f.activation.daa_score().to_le_bytes());
             h.write(f.policy.id().as_bytes());
         }

@@ -40,6 +40,9 @@ wire_struct!(crate::palw_attn_court_v1::PalwAttnChunkOpeningV1; u32, Vec<u8>, Ve
 wire_struct!(crate::palw_attn_court_v1::PalwAttnDissectPhaseV1; crate::Hash64, u8, u32, u16, u16, u16, u32, i32, i64, crate::palw_attn_dissect::PalwAttnRangeClaimV1, u64, u64, u32, crate::palw_bisect::PalwBisectTurnV1, u64, Vec<crate::palw_attn_dissect::PalwAttnRangeClaimV1>);
 wire_struct!(crate::palw_attn_dissect::PalwAttnRangeClaimV1; i32, i64, Vec<i64>);
 wire_struct!(crate::palw_audit_door_v1::PalwAuditStatusV1; Vec<(crate::palw_state_v2::PalwBondKeyV2, u64)>);
+wire_struct!(crate::palw_beacon_bootstrap_v1::PalwBootstrapJudgementV1; u64, [u8; 64], Option<[u8; 64]>, u32, u64, Option<String>, Option<String>);
+wire_struct!(crate::palw_beacon_bootstrap_v1::PalwBootstrapRoundRowV1; misaka_palw_kernel::beacon_bootstrap_v1::BootstrapExactRoundV1, u64, Vec<crate::palw_beacon_bootstrap_v1::PalwBootstrapSealRowV1>, Option<crate::palw_beacon_bootstrap_v1::PalwBootstrapJudgementV1>, crate::Hash64);
+wire_struct!(crate::palw_beacon_bootstrap_v1::PalwBootstrapSealRowV1; [u8; 64], [u8; 64], [u8; 64], u64, Option<([u8; 64], u64)>);
 wire_struct!(crate::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1; u64, u64, u64, u64, u64, u64, u64, u64, [u8; 64]);
 wire_struct!(crate::palw_beacon_source_opt_in_v1::PalwBeaconSourcePolicyV1; u64, u32, u32, u64);
 wire_struct!(crate::palw_bisect::PalwBisectLadderV1; crate::Hash64, u64, u64, u64, u32, crate::palw_bisect::PalwBisectTurnV1, u64, crate::Hash64, crate::Hash64, Vec<(u64, crate::Hash64)>);
@@ -524,6 +527,33 @@ wire_struct!(crate::palw_e2e_adjudicability::PalwE2eCoveringV1; bool, bool, bool
 wire_struct!(crate::palw_e2e_adjudicability::PalwE2eFamilyV1; crate::Hash64, crate::Hash64, BTreeSet<crate::Hash64>, crate::palw_e2e_adjudicability::PalwE2eCoveringV1);
 wire_struct!(crate::palw_econ_contracts_v1::PalwHorizonExtensionRowV1; misaka_palw_kernel::econ_contracts_v1::HorizonExtensionTermsV1, Vec<[u8;64]>, u64, Option<u64>, crate::Hash64);
 wire_struct!(crate::palw_econ_contracts_v1::PalwMinimumPriceRowV1; misaka_palw_kernel::econ_contracts_v1::MinimumPriceContractTermsV1, Vec<[u8;64]>, u64, Option<u64>, crate::Hash64);
+wire_struct!(crate::palw_econ_contracts_v1::PalwModelVerificationContextV1; [u8;64], u64, [u8;64], misaka_palw_challenge::beacon::BeaconContextV1, u64, Option<u64>, crate::Hash64);
+wire_struct!(crate::palw_econ_contracts_v1::PalwModelVerificationDecidedV1; [u8;64], u64, crate::palw_econ_contracts_v1::PalwModelVerificationOutcomeV1, u64);
+wire_struct!(crate::palw_econ_contracts_v1::PalwModelVerificationDeferredV1; [u8;64], u64, [u8;64], crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, u64, u64);
+impl NativeWireScanV1 for crate::palw_econ_contracts_v1::PalwModelVerificationOutcomeV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            3 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
 wire_struct!(crate::palw_econ_contracts_v1::PalwModelVerificationTallyV1; [u8;64], u64, [u8;64], [u8;64], Option<[u8;64]>, Vec<([u8;64], misaka_palw_kernel::econ_contracts_v1::ModelVerificationVerdictV1)>, u64, u64, crate::Hash64);
 wire_struct!(crate::palw_economic_payout_v1::PalwClaimEconomicsV1; u128, u128, u16, u128, u128, u64, u16);
 impl NativeWireScanV1 for crate::palw_economic_safety_v1::PalwLicenceDoorTagV1 {
@@ -2725,6 +2755,7 @@ impl NativeWireScanV1 for misaka_palw_challenge::subject::SubjectKindV1 {
     }
 }
 wire_struct!(misaka_palw_gen::output::OutputSpecV1; u8, Vec<u32>, Vec<u8>);
+wire_struct!(misaka_palw_kernel::beacon_bootstrap_v1::BootstrapExactRoundV1; [u8;64], [u8;64], u32);
 wire_struct!(misaka_palw_kernel::beacon_source::BeaconSourceInputsV1; Option<u64>, BTreeMap<[u8;64], misaka_palw_kernel::beacon_source::BeaconSourceTargetV1>);
 impl NativeWireScanV1 for misaka_palw_kernel::beacon_source::BeaconSourceOutcomeV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
