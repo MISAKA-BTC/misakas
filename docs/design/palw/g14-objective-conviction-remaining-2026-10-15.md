@@ -27,8 +27,11 @@
 以下をソースで追加した。**build・test・node 実行はしていない。PASS と書いた項目は無い。** 各 checkbox の状態は下の注記に書く。
 
 **DAA 14,000 での扱い（推奨）: `palw_tir_public_conviction_v1` は有効化対象から外し、休眠のまま載せる。** 理由（いずれも未完）:
-producer 側の TFP1 envelope 作成（quote 前署名の RPC を含む）、Valid seat の GrantReady 発行 worker、node filer の scheduler／queue／
-restart journal、V3/V4 typed receipt、owner 数の容量規則と custodian 負荷上限（R1 最終項・R7）、最大 profile の期限・資源実測（R7/R8）。
+Valid seat の準備 worker（prepared descriptor の作成）と GrantReady 投稿の scheduler、node filer の scheduler／queue／restart journal、
+V3/V4 typed receipt、owner 数の容量規則と custodian 負荷上限（R1 最終項・R7）、最大 profile の期限・資源実測（R7/R8）、wire pin、V1〜V7。
+（producer 側の TFP1 作成は今回ソースで接続した: quote API `palw_tir_public_original_quote_v1`、`PalwTirPublicCustodyPledgeV1::for_plan_v1`、
+validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の canonical producer。GrantReady の署名 builder は
+`kaspad/src/palw_tir_public_filer.rs` の `palw_tir_public_grant_ready_object_v1`。いずれも未検証。）
 休眠中は A-2 で旧ルールと同一（下の「休眠時の同一性」）。
 
 ### 今回の merge 解消
@@ -74,7 +77,8 @@ restart journal、V3/V4 typed receipt、owner 数の容量規則と custodian �
    分類の既存の不一致（TIR 以外）は範囲外として残す。
 4. 新envelopeは通常FP payloadのstrict decoderであり、Evalの追加tail等の別codecをまだ扱わない。全nested job-tail Vecの割当前上限も未監査である。外側48 KiB上限と一部preflightだけで全nested allocationが安全とはしない。
    — **一部**: eval/gen 形式は TFP1 の対象外のまま（`paired_claim` が `eval: None` を要求）。さらに frame は job tail と非 greedy decode 設定を
-   持つ original を拒否する（`palw_tir_public_fold_v1.rs:170`）。nested job-tail の割当前上限の全数監査は未。
+   持つ original を拒否する（`prepare_original_v1`）。nested job-tail の割当前上限の全数監査は未。producer は TFP1 を quote → pledge 署名 →
+   envelope の順で作る（`palw_tir_public_original_quote_v1` は admission と同じ `original_plan_v1` を使うので quote と受理が食い違わない）。
 5. context再導出helperのD=0拒否と、既存native routeが許す元FP形式・job種別・decode countの範囲を照合する。新carrierが合法な元形式を黙って落とす場合、対象を狭めて完成扱いせず対応を足す。
    — **未（狭めた範囲を明記）**: frame の対象は「semantic stage 無し・greedy・tail 無しの FP V3 TIR job」に限定した。semantic（constraint /
    tokenizer / prefix state）と sampling の original は frame 経路では拒否され、旧 ClaimBundle 経路のまま。
@@ -202,8 +206,9 @@ restart journal、V3/V4 typed receipt、owner 数の容量規則と custodian �
   — **実装（Codex、ソースのみ・未検証）**: `PalwTirPublicOriginalCustodyV1::new_v1` は producer のみ、grant は後から追加、terms/plan は不変
   （`preserves_credited_v1`）。
 - [ ] late grantに、完了不可能なcold preparation期限を課さない。採用した先行準備＋atomic grant／Readyを、実nodeの準備worker・carrier・元予算・実担保へ通し、固定期限内に成立させる。候補helperの存在だけでは完了しない。
-  — **blocked（node 側未実装）**: consensus 側の atomic grant/Ready は Codex 実装済み。Valid seat が先行準備して GrantReady を出す node worker・carrier
-  は無い。固定期限内の成立は未実測。
+  — **一部**: consensus 側の atomic grant/Ready は Codex 実装済み。node 側は 3 署名（V2 Valid・raw grant・outer）を元 domain で作る builder を追加
+  （`kaspad/src/palw_tir_public_filer.rs` `palw_tir_public_grant_ready_object_v1`、frame view に pledge id）。**blocked**: prepared descriptor を作る
+  準備 worker と投稿 scheduler が無く、固定期限内の成立は未実測。
 - [ ] whole-job V2に加え、実際に有効なV3/V4等のtyped receipt／grantを、元のsegment／shard署名domainのまま接続する。未対応入口の拒否を「全receipt対応」と数えない。
   — **blocked**: V3 の supplementary credit（`credit_supplementary_receipts_v3`）は `ReceiptLicensed` を要求する一方、frame の grant は licence
   前に要る。licence 前の typed credit door は新しい金銭規則で判断が要る。V4 shard receipt は RFC-0006 の shard record 経由。現状は frame の claim に
