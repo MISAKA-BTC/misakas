@@ -151,6 +151,7 @@ impl PalwChainStateV2 {
             staged_tir_by_owner: BTreeSet::new(),
             staged_tir_by_claim: BTreeMap::new(),
             staged_tir_responders: BTreeSet::new(),
+            staged_tir_preparers: BTreeSet::new(),
             staged_prefix_responders: BTreeSet::new(),
             staged_selected_responders: BTreeSet::new(),
             staged_flat_responders: BTreeSet::new(),
@@ -2367,19 +2368,23 @@ impl PalwChainStateV2 {
         let mut owners = BTreeSet::new();
         let mut claims = BTreeMap::<Hash64, BTreeSet<(u64, Key)>>::new();
         let mut responders = BTreeSet::new();
+        let mut preparers = BTreeSet::new();
         let mut due = BTreeSet::new();
         let mut holds = BTreeSet::new();
         let now = self.last_point().map(|p| p.daa_score).unwrap_or(0);
         for (key, row) in &self.staged_courts {
-            if matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_)) {
+            if matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..)) {
                 let (at, row_holds) = palw_staged_court_fold_v1::index_rows(*key, row);
                 due.insert((at, *key));
                 holds.extend(row_holds);
             }
-            if let Some((owner, claim, allocation, until)) = palw_staged_court_fold_v1::tir_index_metadata_v1(*key, row) {
+            if let Some((owner, claim, allocation, _)) = palw_staged_court_fold_v1::tir_index_metadata_v1(*key, row) {
                 owners.insert((owner, claim, allocation));
-                claims.entry(claim).or_default().insert((until, *key));
                 responders.extend(palw_staged_court_fold_v1::tir_response_index_rows_v1(*key, row));
+            }
+            preparers.extend(palw_staged_court_fold_v1::tir_preparation_index_rows_v1(*key, row));
+            if let Some((claim, until)) = palw_staged_court_fold_v1::tir_source_index_metadata_v1(*key, row) {
+                claims.entry(claim).or_default().insert((until, *key));
                 if now < until && self.staged_claim_contract_v1(&claim).is_none_or(|contract| contract.terms.material_until_daa < until) {
                     return Err(PalwStateV2Error::CarriageInconsistent(
                         "live TIR acquisition lost its original claim/public-source retention hold".into(),
@@ -2402,12 +2407,13 @@ impl PalwChainStateV2 {
             }
         }
         let actual_due: BTreeSet<_> = self.staged_due.iter().filter(|(_, key)| {
-            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_))
+            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..))
         }).copied().collect();
         let actual_holds: BTreeSet<_> = self.staged_holds.iter().filter(|(_, _, key)| {
-            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_))
+            matches!(key, Key::TirAcquisition(..) | Key::TirRawChunk(_) | Key::TirAcceptedBody(_) | Key::TirPreparation(..))
         }).copied().collect();
         if owners != self.staged_tir_by_owner || claims != self.staged_tir_by_claim || responders != self.staged_tir_responders
+            || preparers != self.staged_tir_preparers
             || due != actual_due || holds != actual_holds
         {
             return Err(PalwStateV2Error::CarriageInconsistent("TIR acquisition lifecycle indexes differ from rooted rows".into()));

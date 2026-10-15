@@ -1363,6 +1363,42 @@ impl PalwExecutionBackendV1 for TirBackendV1 {
             }),
         )?))
     }
+    fn tir_prepared_capture_need_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        source_length: u64,
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwTirPublicPreparedNeedV1, String> {
+        let (binding, public) = self.tir_public_capture_context_v1(header)?;
+        super::public_source::prepared_need_v1(&binding, &public, source_length)
+    }
+    fn reopen_tir_prepared_capture_v1(
+        &self,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        descriptor: &kaspa_consensus_core::palw_backend::PalwTirPublicPreparedDescriptorV1,
+        directory: &std::path::Path,
+        native_material_until_daa: u64,
+        native_now_daa: u64,
+    ) -> Result<Box<dyn kaspa_consensus_core::palw_backend::PalwTirPublicCaptureReaderV1>, String> {
+        let (binding, public) = self.tir_public_capture_context_v1(header)?;
+        Ok(Box::new(super::public_source::reopen_prepared_v1(
+            binding,
+            public,
+            descriptor,
+            directory,
+            native_material_until_daa,
+            native_now_daa,
+            self.prompt_ids_form,
+        )?))
+    }
+    fn retire_tir_prepared_capture_v1(
+        &self,
+        descriptor: &kaspa_consensus_core::palw_backend::PalwTirPublicPreparedDescriptorV1,
+        directory: &std::path::Path,
+        native_material_until_daa: u64,
+        native_irreversible_daa: u64,
+    ) -> Result<(), String> {
+        super::public_source::retire_prepared_v1(descriptor, directory, native_material_until_daa, native_irreversible_daa)
+    }
     fn model_id(&self) -> &str {
         &self.model_id
     }

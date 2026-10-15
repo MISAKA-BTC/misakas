@@ -25,6 +25,88 @@ use std::sync::Arc;
 /// still requires an accepted native pre-debit for the same literal work scope.
 pub(super) type OperationalWorkV1 = PalwTirPublicWorkV1;
 
+pub(super) struct BorrowedPreparationSnapshotV1<'a> {
+    native: &'a kaspa_consensus_core::palw_tir_public_state_v1::PalwTirPublicPreparationSnapshotV1,
+}
+impl<'a> BorrowedPreparationSnapshotV1<'a> {
+    pub(super) fn from_native_v1(
+        native: &'a kaspa_consensus_core::palw_tir_public_state_v1::PalwTirPublicPreparationSnapshotV1,
+    ) -> Self {
+        Self { native }
+    }
+}
+
+/// Preparation-key proposal, never an outside-owner reservation or a DA demand.
+pub(super) struct PreparationActionV1 {
+    pub snapshot_block: BlockHash,
+    pub claim: Hash64,
+    pub allocation_id: Hash64,
+    pub source_id: Hash64,
+    pub signer: PalwBondKeyV2,
+    pub expected_turn: u64,
+    pub until_daa: u64,
+    pub action: PalwTirPublicOwnedActionV1,
+}
+pub(super) fn preparation_ready_action_v1(
+    snapshot: &BorrowedPreparationSnapshotV1<'_>,
+    signer: PalwBondKeyV2,
+    descriptor: kaspa_consensus_core::palw_backend::PalwTirPublicPreparedDescriptorV1,
+) -> Result<PreparationActionV1, String> {
+    let n = snapshot.native;
+    let p = &n.row.preparation;
+    let c = p.contract_v1();
+    if n.now_daa < c.original_accepted_daa
+        || n.now_daa >= c.preparation_until_daa
+        || !c.custodians.contains(&signer)
+        || p.ready_v1(&signer).is_some()
+        || p.defaulted_v1(&signer)
+        || descriptor.source_id != c.source_id
+        || descriptor.material_until_daa != c.material_until_daa
+        || descriptor.manifest_digest == Hash64::default()
+    {
+        return Err("TIR Ready proposal is not a pending original literal preparation duty".into());
+    }
+    Ok(PreparationActionV1 {
+        snapshot_block: n.snapshot_block,
+        claim: c.claim,
+        allocation_id: c.allocation_id,
+        source_id: c.source_id,
+        signer,
+        expected_turn: 0,
+        until_daa: c.preparation_until_daa,
+        action: PalwTirPublicOwnedActionV1::PreparationReady { descriptor },
+    })
+}
+pub(super) fn preparation_collect_action_v1(
+    snapshot: &BorrowedPreparationSnapshotV1<'_>,
+    observer: PalwBondKeyV2,
+    actor: PalwBondKeyV2,
+) -> Result<PreparationActionV1, String> {
+    let n = snapshot.native;
+    let p = &n.row.preparation;
+    let c = p.contract_v1();
+    if observer == c.producer
+        || c.drawn_panel.contains(&observer)
+        || n.now_daa < c.preparation_until_daa
+        || n.now_daa >= c.collect_until_daa
+        || !c.custodians.contains(&actor)
+        || p.ready_v1(&actor).is_some()
+        || p.defaulted_v1(&actor)
+    {
+        return Err("TIR original preparation default is not independently collectible".into());
+    }
+    Ok(PreparationActionV1 {
+        snapshot_block: n.snapshot_block,
+        claim: c.claim,
+        allocation_id: c.allocation_id,
+        source_id: c.source_id,
+        signer: observer,
+        expected_turn: 0,
+        until_daa: c.collect_until_daa,
+        action: PalwTirPublicOwnedActionV1::PreparationCollect { actor },
+    })
+}
+
 pub(super) struct OperationalLedgerV1 {
     source_id: Hash64,
     maximum: OperationalWorkV1,
@@ -33,6 +115,45 @@ pub(super) struct OperationalLedgerV1 {
 }
 
 impl OperationalLedgerV1 {
+    fn require_preparation_v1(
+        &mut self,
+        snapshot: &BorrowedPreparationSnapshotV1<'_>,
+        quote: &kaspa_consensus_core::palw_backend::PalwTirPublicCaptureSliceV1,
+    ) -> Result<(), String> {
+        let n = snapshot.native;
+        let p = &n.row.preparation;
+        let c = p.contract_v1();
+        self.debit_v1(c.source_id, OperationalWorkV1 { attempts: 1, hash_bytes: 8192, parser_steps: 1024, ..Default::default() })?;
+        let permit = self.permit.as_ref().ok_or("TIR preparation requires a fresh accepted claim-wide work permit")?;
+        let s = permit.scope_v1();
+        let receipt = p
+            .work_v1()
+            .actors
+            .get(&s.actor)
+            .and_then(|a| a.last.as_ref())
+            .ok_or("TIR preparation has no literal paid actor receipt")?;
+        if !permit.is_preparation_v1()
+            || s.phase != PalwTirPublicWorkPhaseV1::Capture
+            || s.claim != c.claim
+            || s.bundle_id != c.allocation_id
+            || s.owner != c.producer
+            || s.reserved_daa != c.original_accepted_daa
+            || s.turn != 0
+            || s.source_id != c.source_id
+            || s.input_head != c.source_id
+            || s.cursor_id != quote.cursor_id
+            || s.slice != quote.sequence
+            || quote.source_id != c.source_id
+            || receipt.hash_v1()? != permit.receipt_id_v1()
+            || n.now_daa < c.original_accepted_daa
+            || n.now_daa >= c.preparation_until_daa
+            || p.ready_v1(&s.actor).is_some()
+            || p.defaulted_v1(&s.actor)
+        {
+            return Err("TIR preparation work changes original claim clock/actor/index slice or duty already ended".into());
+        }
+        Ok(())
+    }
     #[cfg(test)]
     fn new_v1(source_id: Hash64, maximum: OperationalWorkV1) -> Self {
         Self { source_id, maximum, spent: OperationalWorkV1::default(), permit: None }
@@ -60,6 +181,9 @@ impl OperationalLedgerV1 {
             OperationalWorkV1 { attempts: 1, hash_bytes: 8192, parser_steps: 1024, ..Default::default() },
         )?;
         let permit = self.permit.as_ref().ok_or("TIR execution requires an accepted fresh native work permit")?;
+        if permit.is_preparation_v1() {
+            return Err("TIR claim preparation permit cannot fund an owner DA turn".into());
+        }
         let scope = permit.scope_v1();
         let c = snapshot.owned.contract_v1();
         if matches!(phase, PalwTirPublicWorkPhaseV1::Capture | PalwTirPublicWorkPhaseV1::Response | PalwTirPublicWorkPhaseV1::Ids) {
@@ -117,6 +241,65 @@ impl OperationalLedgerV1 {
     }
 }
 
+fn preparation_slice_work_v1(
+    q: &kaspa_consensus_core::palw_backend::PalwTirPublicCaptureSliceV1,
+) -> Result<OperationalWorkV1, String> {
+    Ok(OperationalWorkV1 {
+        attempts: 1,
+        io_bytes: q.work.io_bytes,
+        hash_bytes: q.work.hash_bytes,
+        parser_steps: q.work.io_bytes.checked_mul(16).ok_or("TIR preparation slice parser work overflow")?,
+        tree_hashes: q.work.tree_hashes,
+        replay_leaves: q.work.replay_leaves,
+        replay_positions: q.work.replay_positions,
+        replay_id_words: q.work.replay_id_words,
+        id_copy_words: q.work.replay_id_words,
+        arithmetic_work: q.work.arithmetic_work,
+        traffic_bytes: q.work.traffic_bytes,
+        ..Default::default()
+    })
+}
+/// Bounded cold preparation only; a returned source response is discarded, not
+/// a DA acknowledgement or a computational-correctness credential.
+pub(super) fn prepare_claim_capture_slice_v1(
+    snapshot: &BorrowedPreparationSnapshotV1<'_>,
+    reader: &mut dyn PalwTirPublicCaptureReaderV1,
+    quote: &kaspa_consensus_core::palw_backend::PalwTirPublicCaptureSliceV1,
+    ledger: &mut OperationalLedgerV1,
+) -> Result<bool, String> {
+    ledger.require_preparation_v1(snapshot, quote)?;
+    let request = PalwTirPublicRequestV1::StepLeaf { index: 0 };
+    let bound = snapshot.native.source.unit_bound_v1(&request)?;
+    ledger.debit_v1(snapshot.native.source.source_id_v1(), preparation_slice_work_v1(quote)?)?;
+    let _holding = host_ledger_v1()
+        .reserve(
+            PalwMemoryReservationKeyV1 {
+                role: "public-tir-cold-slice",
+                class_id: snapshot.native.source.header_v1().job_context.shape_profile_id,
+                job: snapshot.native.row.preparation.contract_v1().claim,
+            },
+            bound.resident_ram_bytes,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(reader.poll_quoted_v1(&request, quote)?.is_some())
+}
+/// Publication phase has its own request_id=ZERO domain, not a fictional DA
+/// request. Caller holds the additional publication RAM/disk lease BEFORE the
+/// writer factory; its descriptor remains only a signed retention promise.
+pub(super) fn prepare_claim_publication_slice_v1(
+    snapshot: &BorrowedPreparationSnapshotV1<'_>,
+    writer: &mut dyn kaspa_consensus_core::palw_backend::PalwTirPublicPreparedWriterV1,
+    quote: &kaspa_consensus_core::palw_backend::PalwTirPublicCaptureSliceV1,
+    ledger: &mut OperationalLedgerV1,
+) -> Result<Option<kaspa_consensus_core::palw_backend::PalwTirPublicPreparedDescriptorV1>, String> {
+    ledger.require_preparation_v1(snapshot, quote)?;
+    if quote.phase != 12 || quote.request_id != Hash64::default() {
+        return Err("TIR publication work is not the dedicated prepared-index domain".into());
+    }
+    ledger.debit_v1(snapshot.native.source.source_id_v1(), preparation_slice_work_v1(quote)?)?;
+    writer.poll_quoted_v1(quote)
+}
+
 fn metadata_work_v1(source: &PalwTirPublicSourceV1) -> Result<OperationalWorkV1, String> {
     // Includes the existing all-ID body-bound loop and up to 64 history hashes.
     Ok(OperationalWorkV1 {
@@ -147,6 +330,7 @@ pub(super) struct BorrowedPaidSnapshotV1<'a> {
     snapshot_block: BlockHash,
     now_daa: u64,
     owned: &'a PalwTirPublicOwnedV1,
+    preparation: Option<&'a kaspa_consensus_core::palw_tir_public_owned_v1::PalwTirPublicPreparationV1>,
 }
 
 impl<'a> BorrowedPaidSnapshotV1<'a> {
@@ -160,19 +344,23 @@ impl<'a> BorrowedPaidSnapshotV1<'a> {
     pub(super) fn from_native_v1(
         snapshot: &'a kaspa_consensus_core::palw_tir_public_state_v1::PalwTirPublicSnapshotV1,
     ) -> Result<Self, String> {
-        let view = Self::borrowed_v1(snapshot.snapshot_block, snapshot.now_daa, &snapshot.row.owned);
+        let mut view = Self::borrowed_v1(snapshot.snapshot_block, snapshot.now_daa, &snapshot.row.owned);
+        view.preparation = snapshot.preparation.as_ref().map(|p| p.preparation.as_ref());
         view.source_v1(&snapshot.source)?;
         Ok(view)
     }
 
     fn borrowed_v1(snapshot_block: BlockHash, now_daa: u64, owned: &'a PalwTirPublicOwnedV1) -> Self {
-        Self { snapshot_block, now_daa, owned }
+        Self { snapshot_block, now_daa, owned, preparation: None }
     }
 
     fn source_v1(&self, source: &PalwTirPublicSourceV1) -> Result<(), String> {
         let contract = self.owned.contract_v1();
         if contract.source_id != source.source_id_v1() || self.now_daa < contract.reserved_daa {
             return Err("TIR acquisition snapshot changes original source or reservation clock".into());
+        }
+        if self.owned.preparation_v1().is_some() {
+            self.owned.check_preparation_v1(self.preparation.ok_or("TIR view lost current rooted claim-wide Ready state")?)?;
         }
         Ok(())
     }
@@ -200,6 +388,7 @@ fn action_turn_v1(spent_turns: u64, active_turn: Option<u64>, action: &PalwTirPu
     match action {
         PalwTirPublicOwnedActionV1::Demand { .. } | PalwTirPublicOwnedActionV1::Reacquire { .. } => Ok(spent_turns),
         PalwTirPublicOwnedActionV1::WorkDebit(debit) => Ok(debit.scope.turn),
+        PalwTirPublicOwnedActionV1::PreparationReady { .. } | PalwTirPublicOwnedActionV1::PreparationCollect { .. } => Ok(0),
         PalwTirPublicOwnedActionV1::Begin { .. }
         | PalwTirPublicOwnedActionV1::Part { .. }
         | PalwTirPublicOwnedActionV1::Finish { .. }
@@ -273,7 +462,7 @@ fn check_body_reference_v1(
         || reference.total_bytes == 0
         || reference.total_bytes > maximum_bytes
         || reference.chunk_head == Hash64::default()
-        || (reference.answerer != c.owner && !c.custodians.contains(&reference.answerer))
+        || (reference.answerer != c.owner && !snapshot.owned.response_custodians_v1().contains(&reference.answerer))
         || source.demand_id_v1(
             &kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicDemandScopeV1 {
                 claim: c.claim,
@@ -332,11 +521,18 @@ pub(super) fn owner_next_v1(
     let owned = snapshot.owned;
     let c = owned.contract_v1();
     let now = snapshot.now_daa;
+    if owned.response_custodians_v1().is_empty() {
+        return Err("TIR source has no original Ready responder; use preparation defaults, not vacuous acquisition EOF".into());
+    }
     if let Some(p) = owned.active_v1() {
         if p.collected {
             return Ok(OwnerPlanV1::Collected { demand_id: p.demand_id });
         }
-        let outstanding = c.custodians.iter().any(|signer| p.slots.get(signer).is_none_or(|slot| slot.finished.is_none()));
+        let outstanding = snapshot
+            .owned
+            .response_custodians_v1()
+            .iter()
+            .any(|signer| p.slots.get(signer).is_none_or(|slot| slot.finished.is_none()));
         if outstanding {
             if now < p.respond_until_daa {
                 return Ok(OwnerPlanV1::Wait { until_daa: p.respond_until_daa });
@@ -354,7 +550,7 @@ pub(super) fn owner_next_v1(
             )?));
         }
         if intent.is_none() {
-            for signer in &c.custodians {
+            for signer in snapshot.owned.response_custodians_v1() {
                 check_body_reference_v1(
                     snapshot,
                     source,
@@ -703,7 +899,7 @@ pub(super) fn responder_next_v1(
     snapshot.source_v1(source)?;
     let c = snapshot.owned.contract_v1();
     let p = snapshot.owned.active_v1().ok_or("TIR response has no native pending request")?;
-    if signer != c.owner && !c.custodians.contains(&signer) {
+    if signer != c.owner && !snapshot.owned.response_custodians_v1().contains(&signer) {
         return Err("TIR response signer has no literal protected slot".into());
     }
     if body.source_id != c.source_id || body.request != p.request {
@@ -1107,6 +1303,18 @@ pub(super) fn prepare_response_v1(
     let phase = ledger.scope_v1()?.phase;
     if !matches!(phase, PalwTirPublicWorkPhaseV1::Capture | PalwTirPublicWorkPhaseV1::Response) {
         return Err("TIR capture slice has another native work phase".into());
+    }
+    if let Some(preparation) = snapshot.preparation {
+        if phase == PalwTirPublicWorkPhaseV1::Capture {
+            return Err("TIR short DA response cannot perform claim-wide cold preparation".into());
+        }
+        let actor = ledger.scope_v1()?.actor;
+        if actor != snapshot.owned.contract_v1().owner {
+            let ready = preparation.ready_v1(&actor).ok_or("TIR literal responder has no current original Ready promise")?;
+            if reader.prepared_descriptor_v1() != Some(&ready.descriptor) {
+                return Err("TIR response reader is not the literal native Ready descriptor's warm index".into());
+            }
+        }
     }
     ledger.require_current_v1(snapshot, source, phase, request)?;
     let scope = ledger.scope_v1()?;

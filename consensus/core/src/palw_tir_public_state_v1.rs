@@ -22,6 +22,149 @@ fn hash<T: BorshSerialize>(domain: &[u8], value: &T) -> Result<Hash64, String> {
     Ok(Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(domain).hash(&bytes).as_bytes().try_into().expect("64")))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirPublicPreparationRowV1 {
+    pub descriptor: PalwTirPublicSourceDescriptorV1,
+    pub allocation_id: Hash64,
+    pub preparation: PalwSharedCourtV1<crate::palw_tir_public_owned_v1::PalwTirPublicPreparationV1>,
+}
+impl PalwTirPublicPreparationRowV1 {
+    pub fn key_v1(&self) -> Key {
+        Key::TirPreparation(self.preparation.contract_v1().claim, self.allocation_id)
+    }
+    pub fn check_structure_v1(&self, key: &Key) -> Result<(), String> {
+        self.preparation.check_v1()?;
+        let c = self.preparation.contract_v1();
+        if *key != self.key_v1()
+            || self.allocation_id != c.allocation_id
+            || self.descriptor.source_id != c.source_id
+            || self.descriptor.maximum_leaves == 0
+            || self.descriptor.native_custodian_upper != c.plan.maximum_custodians
+            || self.descriptor.work_rules != Some(self.preparation.work_v1().allocation.rules)
+        {
+            return Err("TIR preparation row changes original allocation/source/native rules".into());
+        }
+        Ok(())
+    }
+}
+
+/// Authenticated ORIGINAL context reconstruction only. Native new original-full-
+/// allocation/grant admission remains separate. The retained old ClaimBundle
+/// is a context fallback, never a substitute raw-custody pledge or new payment.
+pub fn palw_tir_public_source_for_preparation_row_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    row: &PalwTirPublicPreparationRowV1,
+    maximum_leaves: u64,
+) -> Result<PalwTirPublicSourceV1, String> {
+    row.check_structure_v1(&row.key_v1())?;
+    let c = row.preparation.contract_v1();
+    let bundle = state.staged_bundle_contract_v1(c.claim).ok_or("TIR preparation original full frame/context is not connected")?;
+    let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header) = &bundle.original_binding else {
+        return Err("TIR preparation cannot reinterpret a legacy original binding".into());
+    };
+    let original = state.staged_original_job_v1(c.claim)?.ok_or("TIR preparation original public commitment is missing")?;
+    let record = state.tir_class_v1(&header.job_context.shape_profile_id).ok_or("TIR preparation registered class is missing")?;
+    let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, record.facts.class_id)
+        .ok_or("TIR preparation registered layout is missing")?;
+    let d = &row.descriptor;
+    if c.original_accepted_daa != bundle.claim.terms.accepted_daa
+        || c.producer != bundle.claim.producer
+        || c.drawn_panel != bundle.claim.panel
+        || c.material_until_daa > bundle.claim.terms.material_until_daa
+        || crate::palw_freeprompt_v3::fp_claim_id_v3(&original) != c.claim
+        || d.class_id != record.facts.class_id
+        || d.layout_digest != record.layout_digest
+        || d.header_digest != hash(b"misaka-palw/tir-source-header/v1", header)?
+        || d.maximum_leaves != maximum_leaves
+        || d.native_config != bundle.config
+        || d.native_custodian_upper != bundle.history_custody.maximum_custodians
+        || d.work_rules.is_none_or(|rules| rules.max_step_leaf_count != maximum_leaves)
+        || crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&header.job_context)
+            != bundle.history_custody.pledge.job_identity
+    {
+        return Err("TIR preparation substitutes original accepted clock/class/header/source context".into());
+    }
+    let source = PalwTirPublicSourceV1::new_v1(record, layout, header, original.execution_root, original.trace_root, maximum_leaves)?;
+    let acquisition =
+        crate::palw_tir_public_owned_v1::PalwTirPublicOwnedPlanV1::derive_v1(&source, d.native_custodian_upper, d.native_config)?;
+    let allocation = crate::palw_tir_public_owned_v1::derive_tir_public_work_allocation_v1(
+        record,
+        layout,
+        header,
+        &source,
+        &acquisition,
+        d.work_rules.ok_or("TIR preparation has no frozen native work rules")?,
+    )?;
+    if source.source_id_v1() != d.source_id || allocation != row.preparation.work_v1().allocation {
+        return Err("TIR preparation work differs from original registered native quote".into());
+    }
+    row.preparation.check_source_v1(&source, &acquisition)?;
+    Ok(source)
+}
+
+pub struct PalwTirPublicPreparationSnapshotV1 {
+    pub snapshot_block: crate::BlockHash,
+    pub now_daa: u64,
+    pub row: PalwSharedCourtV1<PalwTirPublicPreparationRowV1>,
+    pub source: PalwTirPublicSourceV1,
+}
+pub fn palw_tir_public_preparation_snapshot_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: Key,
+    maximum_leaves: u64,
+) -> Result<Option<PalwTirPublicPreparationSnapshotV1>, String> {
+    let point = state.last_point().ok_or("TIR preparation has no accepted original clock")?;
+    let Some(Row::TirPreparation(row)) = state.staged_court_row_v1(&key) else { return Ok(None) };
+    row.check_structure_v1(&key)?;
+    let c = row.preparation.contract_v1();
+    if point.daa_score < c.original_accepted_daa || point.daa_score >= c.material_until_daa {
+        return Err("TIR preparation snapshot is outside original material window".into());
+    }
+    let source = palw_tir_public_source_for_preparation_row_v1(state, row, maximum_leaves)?;
+    Ok(Some(PalwTirPublicPreparationSnapshotV1 { snapshot_block: point.block, now_daa: point.daa_score, row: row.clone(), source }))
+}
+pub fn palw_tir_public_preparation_transition_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: Key,
+    expected_source: Hash64,
+    expected_turn: u64,
+    signer: PalwBondKeyV2,
+    now: u64,
+    action: &PalwTirPublicOwnedActionV1,
+    maximum_leaves: u64,
+) -> Result<PalwTirPublicTransitionV1, String> {
+    let Some(Row::TirPreparation(old)) = state.staged_court_row_v1(&key) else {
+        return Err("TIR preparation has no original funded row".into());
+    };
+    let source = palw_tir_public_source_for_preparation_row_v1(state, old, maximum_leaves)?;
+    if expected_source != source.source_id_v1() || expected_turn != 0 {
+        return Err("TIR preparation changes original source/turn domain".into());
+    }
+    let mut next = old.clone();
+    let effect = match action {
+        PalwTirPublicOwnedActionV1::WorkDebit(debit) => {
+            PalwTirPublicOwnedEffectV1::WorkDebited(next.preparation.capture_debit_v1(&source, signer, now, debit)?)
+        }
+        PalwTirPublicOwnedActionV1::PreparationReady { descriptor } => {
+            next.preparation.mark_ready_v1(&source, signer, now, *descriptor)?;
+            PalwTirPublicOwnedEffectV1::PreparationReady(signer)
+        }
+        PalwTirPublicOwnedActionV1::PreparationCollect { actor } => {
+            PalwTirPublicOwnedEffectV1::PreparationDefault(next.preparation.collect_v1(signer, *actor, now)?)
+        }
+        _ => return Err("TIR preparation root cannot accept owner DA moves".into()),
+    };
+    next.check_structure_v1(&key)?;
+    Ok(PalwTirPublicTransitionV1 {
+        changes: vec![PalwTirPublicRowChangeV1 {
+            key,
+            old: Some(Row::TirPreparation(old.clone())),
+            new: Some(Row::TirPreparation(next)),
+        }],
+        effect,
+    })
+}
+
 /// References to immutable native material, never a deserializable admission
 /// marker. No program, profile, leaf preimage or decoded private unit is copied.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -203,6 +346,7 @@ pub struct PalwTirPublicSnapshotV1 {
     pub now_daa: u64,
     pub row: PalwSharedCourtV1<PalwTirPublicAcquisitionRowV1>,
     pub source: PalwTirPublicSourceV1,
+    pub preparation: Option<PalwSharedCourtV1<PalwTirPublicPreparationRowV1>>,
 }
 pub fn palw_tir_public_snapshot_v1(
     state: &crate::palw_state_v2::PalwChainStateV2,
@@ -216,7 +360,19 @@ pub fn palw_tir_public_snapshot_v1(
     }
     row.check_structure_v1(&key)?;
     let source = palw_tir_public_source_for_row_v1(state, row, maximum_leaves)?;
-    Ok(Some(PalwTirPublicSnapshotV1 { snapshot_block: point.block, now_daa: point.daa_score, row: row.clone(), source }))
+    let preparation = if let Some(reference) = row.owned.preparation_v1() {
+        let Some(Row::TirPreparation(prep)) =
+            state.staged_court_row_v1(&Key::TirPreparation(reference.claim, reference.allocation_id))
+        else {
+            return Err("TIR owner snapshot lost original claim-wide preparation".into());
+        };
+        palw_tir_public_source_for_preparation_row_v1(state, prep, maximum_leaves)?;
+        row.owned.check_preparation_v1(&prep.preparation)?;
+        Some(prep.clone())
+    } else {
+        None
+    };
+    Ok(Some(PalwTirPublicSnapshotV1 { snapshot_block: point.block, now_daa: point.daa_score, row: row.clone(), source, preparation }))
 }
 
 /// Single-process claim book. No Clone/Deserialize implementation: an ordinary
@@ -240,6 +396,80 @@ struct PendingWork {
     actor_spent: crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1,
     actor_grants: u64,
 }
+impl PalwTirPublicWorkBookV1 {
+    fn prepare_preparation_v1(
+        &mut self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        scope: crate::palw_tir_public_owned_v1::PalwTirPublicWorkScopeV1,
+        work: crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1,
+        history: Option<crate::palw_step_leg::PalwStepOpeningV1>,
+        maximum_leaves: u64,
+    ) -> Result<PalwTirPublicOwnedActionV1, String> {
+        if self.pending.is_some() || history.is_some() {
+            return Err("TIR preparation has an outstanding debit or unrelated history input".into());
+        }
+        let snapshot = palw_tir_public_preparation_snapshot_v1(state, self.key, maximum_leaves)?
+            .ok_or("TIR original preparation row disappeared")?;
+        let paid = snapshot.row.preparation.work_v1();
+        let actor = paid.actors.get(&self.actor).cloned().unwrap_or_default();
+        if scope.actor != self.actor || actor.grants < self.baseline_nonce || self.highest_prepared.is_some_and(|n| actor.grants <= n)
+        {
+            return Err("TIR preparation book refuses an old actor nonce after replay/restart".into());
+        }
+        let debit = crate::palw_tir_public_owned_v1::PalwTirPublicWorkDebitV1 {
+            expected_nonce: actor.grants,
+            previous_head: actor.last.as_ref().map(|r| r.hash_v1()).transpose()?.unwrap_or_default(),
+            scope,
+            work,
+            restart: self.restart_required,
+            history: None,
+        };
+        let mut preview = snapshot.row.preparation.as_ref().clone();
+        preview.capture_debit_v1(&snapshot.source, self.actor, snapshot.now_daa, &debit)?;
+        self.highest_prepared = Some(actor.grants);
+        self.pending = Some(PendingWork { debit: debit.clone(), actor_spent: actor.spent, actor_grants: actor.grants });
+        Ok(PalwTirPublicOwnedActionV1::WorkDebit(debit))
+    }
+    fn confirm_preparation_v1(
+        &mut self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        maximum_leaves: u64,
+    ) -> Result<Option<PalwTirPublicWorkPermitV1>, String> {
+        let pending = self.pending.as_ref().ok_or("TIR preparation has no fresh process-local debit intent")?;
+        let snapshot = palw_tir_public_preparation_snapshot_v1(state, self.key, maximum_leaves)?
+            .ok_or("TIR original preparation row disappeared")?;
+        let c = snapshot.row.preparation.contract_v1();
+        if snapshot.now_daa >= c.preparation_until_daa
+            || snapshot.row.preparation.ready_v1(&self.actor).is_some()
+            || snapshot.row.preparation.defaulted_v1(&self.actor)
+        {
+            return Err("TIR preparation permit missed its original Ready deadline or duty already ended".into());
+        }
+        let work = snapshot.row.preparation.work_v1();
+        let Some(actor) = work.actors.get(&self.actor) else { return Ok(None) };
+        if actor.grants <= pending.debit.expected_nonce {
+            return Ok(None);
+        }
+        let receipt = actor.last.as_ref().ok_or("TIR preparation paid lane has no native receipt")?;
+        if receipt.debit != pending.debit
+            || actor.grants != pending.actor_grants.checked_add(1).ok_or("TIR prep actor nonce overflow")?
+            || actor.spent != pending.actor_spent.checked_add_v1(pending.debit.work)?
+            || !work.spent.covers_v1(&receipt.cumulative)
+        {
+            return Err("TIR preparation confirmation changes native actor receipt/spent".into());
+        }
+        let permit = PalwTirPublicWorkPermitV1 {
+            scope: pending.debit.scope,
+            work: pending.debit.work,
+            receipt_id: receipt.hash_v1()?,
+            snapshot_block: snapshot.snapshot_block,
+            preparation: true,
+        };
+        self.pending = None;
+        self.restart_required = false;
+        Ok(Some(permit))
+    }
+}
 
 /// Minted only by confirming this process's fresh debit against current native
 /// state. Receipt/host-ticket/unsigned-DTO deserialization cannot construct it.
@@ -248,8 +478,12 @@ pub struct PalwTirPublicWorkPermitV1 {
     work: crate::palw_tir_public_owned_v1::PalwTirPublicWorkV1,
     receipt_id: Hash64,
     snapshot_block: crate::BlockHash,
+    preparation: bool,
 }
 impl PalwTirPublicWorkPermitV1 {
+    pub fn is_preparation_v1(&self) -> bool {
+        self.preparation
+    }
     pub fn scope_v1(&self) -> &crate::palw_tir_public_owned_v1::PalwTirPublicWorkScopeV1 {
         &self.scope
     }
@@ -270,6 +504,26 @@ pub fn palw_tir_public_work_book_v1(
     actor: PalwBondKeyV2,
     maximum_leaves: u64,
 ) -> Result<PalwTirPublicWorkBookV1, String> {
+    if matches!(key, Key::TirPreparation(..)) {
+        let snapshot =
+            palw_tir_public_preparation_snapshot_v1(state, key, maximum_leaves)?.ok_or("TIR original preparation row is absent")?;
+        let c = snapshot.row.preparation.contract_v1();
+        let work = snapshot.row.preparation.work_v1();
+        if !c.custodians.contains(&actor)
+            || snapshot.row.preparation.ready_v1(&actor).is_some()
+            || snapshot.now_daa >= c.preparation_until_daa
+        {
+            return Err("TIR preparation book has no pending literal original duty".into());
+        }
+        return Ok(PalwTirPublicWorkBookV1 {
+            key,
+            actor,
+            baseline_nonce: work.actors.get(&actor).map_or(0, |a| a.grants),
+            highest_prepared: None,
+            restart_required: work.actors.get(&actor).is_some_and(|a| a.grants != 0),
+            pending: None,
+        });
+    }
     let snapshot = palw_tir_public_snapshot_v1(state, key, maximum_leaves)?.ok_or("TIR work book has no accepted sidecar")?;
     let c = snapshot.row.owned.contract_v1();
     if actor != c.owner && !c.custodians.contains(&actor) {
@@ -298,6 +552,9 @@ impl PalwTirPublicWorkBookV1 {
         history: Option<crate::palw_step_leg::PalwStepOpeningV1>,
         maximum_leaves: u64,
     ) -> Result<PalwTirPublicOwnedActionV1, String> {
+        if matches!(self.key, Key::TirPreparation(..)) {
+            return self.prepare_preparation_v1(state, scope, work, history, maximum_leaves);
+        }
         if self.pending.is_some() {
             return Err("TIR work book already has an unconfirmed debit; retry its exact action".into());
         }
@@ -333,6 +590,9 @@ impl PalwTirPublicWorkBookV1 {
         state: &crate::palw_state_v2::PalwChainStateV2,
         maximum_leaves: u64,
     ) -> Result<Option<PalwTirPublicWorkPermitV1>, String> {
+        if matches!(self.key, Key::TirPreparation(..)) {
+            return self.confirm_preparation_v1(state, maximum_leaves);
+        }
         let pending = self.pending.as_ref().ok_or("TIR work book has no fresh process-local debit intent")?;
         let snapshot = palw_tir_public_snapshot_v1(state, self.key, maximum_leaves)?.ok_or("TIR work sidecar disappeared")?;
         let owned = &snapshot.row.owned;
@@ -357,6 +617,7 @@ impl PalwTirPublicWorkBookV1 {
             work: pending.debit.work,
             receipt_id: receipt.hash_v1()?,
             snapshot_block: snapshot.snapshot_block,
+            preparation: false,
         };
         self.pending = None;
         self.restart_required = false;
@@ -566,6 +827,39 @@ fn transition<'a>(
         return Err("TIR signed action has stale source/turn/original clock".into());
     }
     let key = old.key_v1()?;
+    if let Some(reference) = old.owned.preparation_v1() {
+        let Some(Row::TirPreparation(preparation)) = lookup(&Key::TirPreparation(reference.claim, reference.allocation_id)) else {
+            return Err("TIR owner lost its original rooted claim-wide preparation".into());
+        };
+        preparation.check_structure_v1(&preparation.key_v1())?;
+        old.owned.check_preparation_v1(&preparation.preparation)?;
+        let c = preparation.preparation.contract_v1();
+        if c.source_id != reference.source_id
+            || c.original_accepted_daa != reference.original_accepted_daa
+            || c.preparation_until_daa != reference.preparation_until_daa
+            || c.material_until_daa != reference.material_until_daa
+        {
+            return Err("TIR owner preparation reference changes original native scope/clock".into());
+        }
+        let response_actor = match action {
+            PalwTirPublicOwnedActionV1::Begin { answerer, .. }
+            | PalwTirPublicOwnedActionV1::Part { answerer, .. }
+            | PalwTirPublicOwnedActionV1::Finish { answerer, .. } => Some(*answerer),
+            PalwTirPublicOwnedActionV1::WorkDebit(d)
+                if matches!(
+                    d.scope.phase,
+                    crate::palw_tir_public_owned_v1::PalwTirPublicWorkPhaseV1::Response
+                        | crate::palw_tir_public_owned_v1::PalwTirPublicWorkPhaseV1::Ids
+                ) =>
+            {
+                Some(d.scope.actor)
+            }
+            _ => None,
+        };
+        if response_actor.is_some_and(|a| a != contract.owner && preparation.preparation.ready_v1(&a).is_none()) {
+            return Err("TIR response requires the literal signer's original claim-wide Ready promise".into());
+        }
+    }
     if let PalwTirPublicOwnedActionV1::WorkDebit(debit) = action {
         check_work_input(old, source, debit, &lookup)?;
     }

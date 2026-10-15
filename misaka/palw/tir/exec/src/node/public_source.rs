@@ -27,6 +27,10 @@ const READ: u32 = 16_384;
 const MAX_LEAF: u64 = PALW_STEP_MAX_TILE_LEN as u64 * 4;
 const LEAF_HEAD: u64 = 26;
 
+#[path = "prepared_source.rs"]
+mod prepared;
+pub(crate) use prepared::{prepared_need_v1, reopen_prepared_v1, retire_prepared_v1};
+
 fn hash_scope(domain: &[u8], value: &impl borsh::BorshSerialize) -> Result<Hash64, String> {
     let mut state = blake2b_simd::Params::new().hash_length(64).key(domain).to_state();
     state.update(&borsh::to_vec(value).map_err(|e| e.to_string())?);
@@ -139,6 +143,8 @@ pub(crate) struct CaptureReader {
     metadata_bytes: u64,
     replay_work: Option<kaspa_consensus_core::palw_tir_work_v1::PalwTirWorkShapeV1>,
     progress: PalwTirPublicCaptureProgressV1,
+    prepared_reopen: bool,
+    prepared_descriptor: Option<kaspa_consensus_core::palw_backend::PalwTirPublicPreparedDescriptorV1>,
 }
 
 pub(crate) struct FoldReplayV1 {
@@ -252,6 +258,8 @@ impl CaptureReader {
             metadata_bytes,
             replay_work,
             progress: PalwTirPublicCaptureProgressV1::default(),
+            prepared_reopen: false,
+            prepared_descriptor: None,
         })
     }
 
@@ -426,6 +434,7 @@ impl CaptureReader {
                 self.tile,
                 self.leaf,
                 self.next_replay_position()?,
+                self.prepared_descriptor.as_ref().map(|d| (d.manifest_digest, d.material_until_daa)),
             ),
         )?;
         Ok(PalwTirPublicCaptureSliceV1 {
@@ -603,7 +612,7 @@ impl CaptureReader {
                     if root != self.binding.full_logits_trace_root {
                         return Err("TIR retained rows/IDs do not reach original trace EOF".into());
                     }
-                    self.phase = Phase::LeavesCount;
+                    self.phase = if self.prepared_reopen { Phase::Ready } else { Phase::LeavesCount };
                 }
             }
             Phase::LeavesCount => {
@@ -826,6 +835,20 @@ impl CaptureReader {
     }
 }
 impl PalwTirPublicCaptureReaderV1 for CaptureReader {
+    fn prepared_descriptor_v1(&self) -> Option<&kaspa_consensus_core::palw_backend::PalwTirPublicPreparedDescriptorV1> {
+        self.prepared_descriptor.as_ref()
+    }
+    fn prepared_need_v1(&self) -> Result<kaspa_consensus_core::palw_backend::PalwTirPublicPreparedNeedV1, String> {
+        prepared::reader_need_v1(self)
+    }
+    fn begin_prepared_v1(
+        &self,
+        directory: &Path,
+        native_material_until_daa: u64,
+        native_now_daa: u64,
+    ) -> Result<Box<dyn kaspa_consensus_core::palw_backend::PalwTirPublicPreparedWriterV1>, String> {
+        prepared::begin_v1(self, directory, native_material_until_daa, native_now_daa)
+    }
     fn slice_quote_v1(&self, request: &Request) -> Result<PalwTirPublicCaptureSliceV1, String> {
         self.slice_quote(request)
     }
@@ -942,6 +965,179 @@ mod tests {
             }
         }
         panic!("bounded fixture preparation did not finish");
+    }
+    fn publish(
+        reader: &CaptureReader,
+        directory: &Path,
+        until: u64,
+    ) -> kaspa_consensus_core::palw_backend::PalwTirPublicPreparedDescriptorV1 {
+        let need = reader.prepared_need_v1().unwrap();
+        let mut writer = reader.begin_prepared_v1(directory, until, 10).unwrap();
+        let mut charged = PalwTirPublicCaptureWorkV1::default();
+        for _ in 0..need.maximum_publish_slices {
+            let quote = writer.slice_quote_v1().unwrap();
+            charged = charged.checked_add_v1(quote.work).unwrap();
+            let result = writer.poll_quoted_v1(&quote).unwrap();
+            assert_eq!(writer.progress_v1().charged, charged);
+            if let Some(descriptor) = result {
+                assert!(charged.io_bytes <= need.maximum_publish_io_bytes);
+                assert!(charged.hash_bytes <= need.maximum_publish_hash_bytes);
+                assert!(descriptor.retained_bytes <= need.additional_disk_bytes);
+                return descriptor;
+            }
+        }
+        panic!("fixed source publication exceeded its quoted slices");
+    }
+
+    #[test]
+    fn prepared_public_material_survives_capture_loss_without_cold_step_reindexing() {
+        for tiled in [false, true] {
+            let (binding, public, original) = fixture(tiled);
+            let scratch = tempfile::tempdir().unwrap();
+            let durable = tempfile::tempdir().unwrap();
+            let request = Request::StepLeaf { index: 0 };
+            let mut reader = CaptureReader::open_v1(
+                original.clone(),
+                binding.clone(),
+                public.clone(),
+                PalwPromptIdsFormV1::Flat,
+                scratch.path(),
+                None,
+            )
+            .unwrap();
+            assert!(reader.begin_prepared_v1(durable.path(), 100, 10).is_err(), "cold capture cannot promise prepared retention");
+            ready(&mut reader, &request);
+            assert!(reader.prepared_descriptor_v1().is_none());
+            let descriptor = publish(&reader, durable.path(), 100);
+            assert!(reader.prepared_descriptor_v1().is_none(), "a publish never promotes an unrelated raw reader");
+            drop(reader);
+            drop(original);
+            let mut warm =
+                reopen_prepared_v1(binding.clone(), public.clone(), &descriptor, durable.path(), 100, 11, PalwPromptIdsFormV1::Flat)
+                    .unwrap();
+            assert_eq!(warm.prepared_descriptor_v1(), Some(&descriptor));
+            let original_quote = warm.slice_quote_v1(&request).unwrap();
+            let before = warm.progress_v1();
+            // Isolate local quote substitution. The native Ready descriptor
+            // check remains separately mandatory before this operational API.
+            for changed in [
+                kaspa_consensus_core::palw_backend::PalwTirPublicPreparedDescriptorV1 {
+                    manifest_digest: Hash64::from_u64_word(993),
+                    ..descriptor
+                },
+                kaspa_consensus_core::palw_backend::PalwTirPublicPreparedDescriptorV1 {
+                    material_until_daa: descriptor.material_until_daa + 1,
+                    ..descriptor
+                },
+            ] {
+                warm.prepared_descriptor = Some(changed);
+                let substituted = warm.slice_quote_v1(&request).unwrap();
+                assert_eq!(substituted.source_id, original_quote.source_id);
+                assert_eq!(substituted.work, original_quote.work);
+                assert_ne!(substituted.cursor_id, original_quote.cursor_id);
+                assert!(warm.poll_quoted_v1(&request, &original_quote).is_err());
+                assert_eq!(warm.progress_v1(), before, "a different manifest/horizon cannot reuse this slice");
+            }
+            warm.prepared_descriptor = None;
+            assert_ne!(warm.slice_quote_v1(&request).unwrap().cursor_id, original_quote.cursor_id, "raw and prepared origins differ");
+            assert!(warm.poll_quoted_v1(&request, &original_quote).is_err());
+            warm.prepared_descriptor = Some(descriptor);
+            loop {
+                let quote = warm.slice_quote_v1(&request).unwrap();
+                assert!(matches!(quote.phase, 6 | 10), "warm reopen only reauthenticates IDs, never N original steps");
+                if let Some(response) = warm.poll_quoted_v1(&request, &quote).unwrap() {
+                    public.authenticate_v1(&request, &response, None).unwrap();
+                    break;
+                }
+            }
+            assert!(
+                reopen_prepared_v1(binding.clone(), public.clone(), &descriptor, durable.path(), 100, 100, PalwPromptIdsFormV1::Flat)
+                    .is_err()
+            );
+            assert!(
+                reopen_prepared_v1(binding.clone(), public.clone(), &descriptor, durable.path(), 101, 11, PalwPromptIdsFormV1::Flat)
+                    .is_err()
+            );
+            let mut wrong = descriptor;
+            wrong.source_id = Hash64::from_u64_word(991);
+            assert!(reopen_prepared_v1(binding, public, &wrong, durable.path(), 100, 11, PalwPromptIdsFormV1::Flat).is_err());
+        }
+    }
+
+    #[test]
+    fn prepared_corruption_refuses_and_same_manifest_retry_repairs_without_deleting_other_material() {
+        let (binding, public, original) = fixture(true);
+        let scratch = tempfile::tempdir().unwrap();
+        let durable = tempfile::tempdir().unwrap();
+        let request = Request::StepLeaf { index: 0 };
+        let mut reader =
+            CaptureReader::open_v1(original, binding.clone(), public.clone(), PalwPromptIdsFormV1::Flat, scratch.path(), None)
+                .unwrap();
+        ready(&mut reader, &request);
+        let descriptor = publish(&reader, durable.path(), 100);
+        let sealed = durable.path().join(format!("prepared-{}", descriptor.manifest_digest));
+        let mut warm =
+            reopen_prepared_v1(binding.clone(), public.clone(), &descriptor, durable.path(), 100, 11, PalwPromptIdsFormV1::Flat)
+                .unwrap();
+        ready(&mut warm, &request);
+        let mut at = [0; 8];
+        warm.offsets.seek(SeekFrom::Start(0)).unwrap();
+        warm.offsets.read_exact(&mut at).unwrap();
+        let mut bytes = std::fs::OpenOptions::new().read(true).write(true).open(sealed.join("capture.bin")).unwrap();
+        let at = u64::from_le_bytes(at) + LEAF_HEAD;
+        bytes.seek(SeekFrom::Start(at)).unwrap();
+        let mut changed = [0];
+        bytes.read_exact(&mut changed).unwrap();
+        changed[0] ^= 1;
+        bytes.seek(SeekFrom::Start(at)).unwrap();
+        bytes.write_all(&changed).unwrap();
+        assert!(warm.poll_v1(&request).is_err(), "a local ready manifest never authenticates a changed preimage");
+        drop(warm);
+        assert_eq!(publish(&reader, durable.path(), 100), descriptor, "retry retains the same original manifest and lease");
+        let mut repaired =
+            reopen_prepared_v1(binding.clone(), public.clone(), &descriptor, durable.path(), 100, 12, PalwPromptIdsFormV1::Flat)
+                .unwrap();
+        public.authenticate_v1(&request, &ready(&mut repaired, &request), None).unwrap();
+        drop(repaired);
+        assert!(retire_prepared_v1(&descriptor, durable.path(), 100, 100).is_err());
+        assert!(retire_prepared_v1(&descriptor, durable.path(), 101, 102).is_err());
+        let mut manifest = std::fs::OpenOptions::new().write(true).open(sealed.join("manifest.bin")).unwrap();
+        manifest.write_all(&[0xFF]).unwrap();
+        assert!(reopen_prepared_v1(binding, public, &descriptor, durable.path(), 100, 12, PalwPromptIdsFormV1::Flat).is_err());
+        drop(manifest);
+        retire_prepared_v1(&descriptor, durable.path(), 100, 101).unwrap();
+        assert!(!sealed.exists(), "corrupt local metadata cannot veto exact native irreversible retirement");
+        retire_prepared_v1(&descriptor, durable.path(), 100, 101).unwrap();
+        assert!(durable.path().exists());
+    }
+
+    #[test]
+    fn unpublished_partial_recovery_is_one_bounded_namespace_and_never_removes_a_ready_source() {
+        let (binding, public, original) = fixture(true);
+        let scratch = tempfile::tempdir().unwrap();
+        let durable = tempfile::tempdir().unwrap();
+        let request = Request::StepLeaf { index: 0 };
+        let mut reader =
+            CaptureReader::open_v1(original, binding, public.clone(), PalwPromptIdsFormV1::Flat, scratch.path(), None).unwrap();
+        ready(&mut reader, &request);
+        let descriptor = publish(&reader, durable.path(), 100);
+        let sealed = durable.path().join(format!("prepared-{}", descriptor.manifest_digest));
+        let partial = durable.path().join(format!("preparing-{}-100", public.source_id_v1()));
+        std::fs::create_dir(&partial).unwrap();
+        std::fs::write(partial.join("capture.bin"), [1; 16]).unwrap();
+        let mut writer = reader.begin_prepared_v1(durable.path(), 100, 10).unwrap();
+        assert!(reader.begin_prepared_v1(durable.path(), 100, 10).is_err(), "one cache/source/horizon has only one active publisher");
+        let quote = writer.slice_quote_v1().unwrap();
+        assert!(writer.poll_quoted_v1(&quote).unwrap().is_none());
+        drop(writer);
+        assert!(!partial.exists(), "an abandoned unpublished copy is disposable, not another paid Ready source");
+        assert!(sealed.exists());
+        assert_eq!(publish(&reader, durable.path(), 100), descriptor);
+        std::fs::create_dir(&partial).unwrap();
+        std::fs::write(partial.join("unrelated"), [1]).unwrap();
+        assert!(reader.begin_prepared_v1(durable.path(), 100, 10).is_err());
+        assert!(partial.join("unrelated").exists(), "bounded cleanup must not delete unknown material");
+        assert!(sealed.exists());
     }
     #[test]
     fn bounded_original_capture_projects_raw_units_and_reauthenticates_mutated_bytes() {
