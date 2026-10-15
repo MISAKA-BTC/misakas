@@ -357,6 +357,15 @@ impl ConsensusSessionOwned {
         self.consensus.palw_staged_tir_prefix_v1(key)
     }
 
+    /// G14 R1/R2: the producer's pre-signing quote of an ORIGINAL TIR frame.
+    pub fn palw_tir_public_original_quote_v1(
+        &self,
+        original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    ) -> Result<Option<(u64, kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1)>, String> {
+        self.consensus.palw_tir_public_original_quote_v1(original, header)
+    }
+
     /// G14 R4: the accepted ORIGINAL TIR frame a public verifier files against.
     pub fn palw_tir_public_frame_v1(
         &self,

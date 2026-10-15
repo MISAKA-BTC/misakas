@@ -93,6 +93,37 @@ impl PalwTirPublicCustodyPledgeV1 {
         }
         self.validate_signature_v1(executor_pubkey, verify)
     }
+    /// **The producer's unsigned pledge for a quoted plan** (G14 R1): the plan's source, resource plan and custodian upper, and
+    /// absolute clocks with room for acceptance up to `now_daa + (open door span)`: the pledge's `accept_until_daa` must lie after
+    /// the actual accepting DAA and its `material_until_daa` at or after the actual frame's (same spans from a later acceptance).
+    /// The caller signs [`Self::id_v1`] under [`PALW_TIR_SOURCE_PLEDGE_CONTEXT_V1`] with the producer bond's key.
+    pub fn for_plan_v1(
+        original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        plan: &crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1,
+        now_daa: u64,
+    ) -> Result<Self, String> {
+        let t = plan.terms;
+        let open_span = t.open_until_daa.checked_sub(t.accepted_daa).ok_or("quoted open door precedes its acceptance")?;
+        let material_span = t.material_until_daa.checked_sub(t.accepted_daa).ok_or("quoted material horizon precedes acceptance")?;
+        let accept_until_daa = now_daa.checked_add(open_span.max(1)).ok_or("pledge acceptance door overflows")?;
+        let material_until_daa = accept_until_daa.checked_add(material_span).ok_or("pledge material horizon overflows")?;
+        if crate::palw_freeprompt_v3::fp_claim_id_v3(original) != plan.original_claim {
+            return Err("quoted plan names another original claim".into());
+        }
+        Ok(Self {
+            version: 1,
+            claim: plan.original_claim,
+            producer: PalwBondKeyV2(original.job.executor_bond),
+            execution_root: original.execution_root,
+            job_identity: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original),
+            source_id: plan.source_id,
+            resource_plan_id: plan.resource_plan_id,
+            maximum_custodians: plan.acquisition.maximum_custodians,
+            accept_until_daa,
+            material_until_daa,
+            signature: Vec::new(),
+        })
+    }
     pub fn id_v1(&self) -> Hash64 {
         hash(
             b"misaka-palw/tir-source/pledge-id/v1",

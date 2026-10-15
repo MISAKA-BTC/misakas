@@ -118,17 +118,25 @@ pub fn palw_tir_public_preclaim_quote_v1(
     Ok(frame.plan_v1().clone())
 }
 
-/// All inputs are transaction-local original material or resolved native state.
-/// The ordinary FP signature/price/admission path must also accept that SAME
-/// original object. No row is written by this preparation step.
-pub(super) fn prepare_original_v1(
+/// **The exact native plan an original would be admitted under at `now_daa`** — shared by admission
+/// ([`prepare_original_v1`]) and the producer's pre-signing quote ([`palw_tir_public_original_quote_v1`]) so the two cannot drift.
+/// No pledge and no narrowing: callers decide what they admit or sign. `resource_plan_id` and `source_id` do not depend on
+/// `now_daa`; `allocation_id` and the absolute clocks do (they are fixed again at the actual accepting block).
+#[allow(clippy::type_complexity)]
+fn original_plan_v1(
     b: &TransitionBuilder<'_>,
-    ctx: &PalwBlockContextV2,
-    object: &PalwConsensusObjectV2,
+    now_daa: u64,
     original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
     header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
-    pledge: &crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1,
-) -> Result<Frame, PalwStateV2Error> {
+) -> Result<
+    (
+        crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1,
+        crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1,
+        u64,
+        crate::palw_staged_preclaim_v1::PalwStagedClaimGeometryV1,
+    ),
+    PalwStateV2Error,
+> {
     use crate::palw_tir_public_allocation_v1::{PalwTirPublicAllocationQuoteV1, derive_tir_public_allocation_v1};
     let mut native = rules(b)?;
     native.maximum_leaves = b.state.class_step_ladder_v1(&original.job.class_id, native.maximum_leaves);
@@ -136,7 +144,7 @@ pub(super) fn prepare_original_v1(
     if b.state.claim(&claim).is_some() || b.state.staged_court_row_v1(&Key::TirClaim(claim)).is_some() {
         return Err(refused("TIR original allocation cannot be attached to an existing claim"));
     }
-    let upper = b.state.staged_maximum_custodians_v1(original.job.class_id, ctx.daa_score, b.params, b.extras)?;
+    let upper = b.state.staged_maximum_custodians_v1(original.job.class_id, now_daa, b.params, b.extras)?;
     if native.maximum_custodians != upper {
         return Err(refused("TIR original quote does not use the actual native custodian upper"));
     }
@@ -147,7 +155,7 @@ pub(super) fn prepare_original_v1(
         producer: PalwBondKeyV2(original.job.executor_bond),
         execution_root: original.execution_root,
         job_identity: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original),
-        accepted_daa: ctx.daa_score,
+        accepted_daa: now_daa,
     };
     let record = b.state.tir_class_v1(&geometry.class_id).ok_or_else(|| refused("TIR original class is not registered"))?;
     let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, geometry.class_id)
@@ -162,6 +170,47 @@ pub(super) fn prepare_original_v1(
             return Err(refused(format!("TIR original full allocation remains incomplete: {missing:?}")));
         }
     };
+    Ok((plan, native, upper, geometry))
+}
+
+/// **G14 R1/R2: the producer's pre-signing quote of an ORIGINAL frame** on the accepted snapshot: the exact native plan whose
+/// `resource_plan_id`/`source_id`/custodian upper the producer's pledge signs, and whose terms tell it the clocks and the rent it
+/// must declare and burn. `Ok(None)` for an original the frame route does not admit (a registered semantic stage, a non-greedy
+/// selection rule or a job tail — those still take the ClaimBundle route). Reads state only; buys nothing.
+pub fn palw_tir_public_original_quote_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    now_daa: u64,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+) -> Result<Option<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1>, PalwStateV2Error> {
+    if original.job.decode.is_some() || original.job.tail.is_some() {
+        return Ok(None);
+    }
+    let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
+    let (plan, _, _, _) = original_plan_v1(&builder, now_daa, original, header)?;
+    Ok(plan.semantic.is_none().then_some(plan))
+}
+
+/// All inputs are transaction-local original material or resolved native state.
+/// The ordinary FP signature/price/admission path must also accept that SAME
+/// original object. No row is written by this preparation step.
+pub(super) fn prepare_original_v1(
+    b: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    pledge: &crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1,
+) -> Result<Frame, PalwStateV2Error> {
+    let (plan, native, upper, geometry) = original_plan_v1(b, ctx.daa_score, original, header)?;
+    let claim = crate::palw_freeprompt_v3::fp_claim_id_v3(original);
+    let record = b.state.tir_class_v1(&geometry.class_id).ok_or_else(|| refused("TIR original class is not registered"))?;
+    let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, geometry.class_id)
+        .ok_or_else(|| refused("TIR original layout is not registered"))?;
+    let semantics = b.state.class_semantics.get(&geometry.class_id);
+    let inventory = semantics.and_then(|s| b.state.staged_tokenizer_inventory_v1(s.tokenizer_id));
     // **G14 R4 (narrowing, not completion): every violation class an admitted original covers must have a native conviction
     // door.** The ORIGINAL frame's door judges arithmetic/logits, greedy selection, output identity and DA; the registered
     // semantic stages (constraint, tokenizer, prefix state) still convict only through the old ClaimBundle's staged courts, which a
