@@ -112,6 +112,7 @@ impl ChainParticipationPersistence for ChainParticipationStore {
                 let state = match p.state.as_str() {
                     "ready" => ChainParticipation::Ready,
                     "ibd-running" => ChainParticipation::IbdRunning,
+                    "import-recovery" => ChainParticipation::ImportRecovery,
                     "candidate-review" => ChainParticipation::CandidateReview,
                     "quarantined" => ChainParticipation::Quarantined,
                     unknown => {
