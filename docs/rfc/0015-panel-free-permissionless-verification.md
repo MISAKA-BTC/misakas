@@ -12,7 +12,7 @@
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
 
-* **Status:** Revised Draft / deferred implementation design, 2026-10-10後続改定。モデル入手への合意不介入、固定identity、条件付きG14、拘束miner元本によるcoinbase配分と個別bond上限を採用する。旧Seeder/TRDC/FPR gateは撤回。配分式・経済評価・実装・activationは未完了。
+* **Status:** Revised Draft / deferred implementation design, 2026-10-10後続改定。2026-10-14: モデル配分を`α = 1.5`・Miner＋Verifier元本・30日平均で確定し、ブロック生成機会にも適用、マイナー報酬は登録者へ直接分配しない（§8.5.5）。モデル入手への合意不介入、固定identity、条件付きG14、拘束miner元本によるcoinbase配分と個別bond上限を採用する。旧Seeder/TRDC/FPR gateは撤回。配分式・経済評価・実装・activationは未完了。
 * **Implementation status (2026-10-15):** **implemented, dormant, unverified** — kernel routeのOptimisticPublicVerification lifecycle・court・Final・producer reservation、ADR-0176 budgetとの結合、公開verifier、RPC表示、§13.3のactivation gate record（`consensus/core/src/palw_panel_free_gate_v1.rs`、pin一覧は空）が統合branch `integ/rfc02-rfc06-12-g14`にある。build/test/実node試験は未実施でPASSではない。Panel=0は2026-10-12改定（N5）どおり有効化しない。対応表: [rfc-0015-implementation-status-2026-10-15.md](../design/palw/rfc-0015-implementation-status-2026-10-15.md)。上のStatus行は履歴として保持する。
 * **Source baseline:** MISAKA-BTC/misakas public main `43f0bcb362d37cba79414940f3fdd368d40d3377`（2026-10-07確認）。
 * **Hard prerequisite:** [RFC-0014][R14]のDispute Completenessとpublic non-seat prosecutionが、対象ネットワークで本RFCの全reward-bearing class/profileについて完全に成立していること。RFC14の文書作成・mergeだけでは満たさない。
@@ -585,6 +585,7 @@ claim件数/予約額、rho、root/slice/rider、鍵分割、model複製で同�
 市場seed/AMM/Position/Panel/配布契約担保は自動算入しない。責任控除・slash/退出・model移動、
 snapshot/積分・期間境界を規範化し、短期借入や同時多model割当による二重配分を防ぐ。
 7日は説明例であり、配分epochと共通`W`の対応/具体値は未決である。
+**2026-10-14改定:** 配分の平均期間は30日相当DAA、共通`W`は7日相当DAAとする（§8.5.5）。
 
 総coinbase/subsidy・DAA発行予算を維持し、分母0ならmodel配分0とする。
 整数精度/丸め残余、未配分/未使用枠、model内のproducer/owner等のlegを確定する。
@@ -598,6 +599,7 @@ coinbase、未払escrow、成熟、Final、retired/reversal、reader/undoで同�
 model倍率変動や移動で枠を早く回復せず、過去claimへ無予約の追加権利を遡及付与しない。
 未使用model枠の再配分も個別cap以下とし、同じsubsidyを複数legで二重支払しない。
 coinbase配分からblock頻度/ticket/DAA/難易度を自動変更せず、変更には別の明示的upgradeを要する。
+**2026-10-14改定:** モデル間のブロック生成機会は§8.5.5の`P_m`で配る。network全体のblock頻度・DAA・難易度・fork-choice・Final weightは変えない。
 
 #### 8.5.3 公開対閉鎖の経済評価
 
@@ -612,6 +614,8 @@ coinbase配分からblock頻度/ticket/DAA/難易度を自動変更せず、変�
 **2026-10-10改定（bond集約優位）:** ADR-0177の改定により、評価対象は「公開対閉鎖の優位」から「bond集約による配分優位」へ変わる。
 `A_m = S_m^α`（`α > 1`）を候補とする。個別bond上限・総予算・共通期間は不変である。大口資本の優位は残余リスクとし、`p=0`は独立gateとする。
 
+**2026-10-14改定（最終Goal、[PRINCIPLES §0](../PRINCIPLES.md)）:** 最終Goalは「モデルの非公開を経済的に不利にすること」で、不正の完全排除は目標にしない。`p=0`は独立gateではなく、§8.3のbond単位の上限で有界化する残余リスクとする。モデルが1人にでも共有され正しいPanel（正直な検証者）を建てられれば、claim固有の公開証拠から客観的courtで不正を立証しslashできることを要件とする。評価はADR-0177の二段（モデル全体／所有者個人）で行う。
+
 #### 8.5.4 completion / activation
 
 同一chain/claim/proofでpeer/取得結果を変えても合意結果が変わらない試験、claim固有court scope、
@@ -619,6 +623,55 @@ coinbase配分からblock頻度/ticket/DAA/難易度を自動変更せず、変�
 公開対閉鎖の経済比較、reorg/restart/IBD/移行を独立に検証する（ADR177 §3）。
 現行subsidy carve/rider/emission budgetのPASSは本配分式の実装証拠ではない。
 倍率式・会計/裁定実装・条件付きG14・経済評価と別の協調activationまで新modeを有効化しない。
+
+#### 8.5.5 モデル配分の確定 — 2026-10-14決定（α = 1.5、Miner＋Verifier元本、30日平均、ブロック機会にも適用）
+
+ユーザーの決定により、[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)の配分を次のとおり確定する。
+2026-10-12改定の`S_m · μ(S_m)`（1.3〜2倍）は採用せず、比較試験用に保持する。数値の本番定数化・実装・activationは未了である。
+
+~~~text
+S_m(k)  = C_miner_claim(m, k) + C_verifier_claim(m, k)        [資金単位で重複なし、DAA kの受理済みsnapshot]
+S̄_m(d)  = (1 / N_30) * sum_{k = d - N_30 + 1}^{d} S_m(k)      [N_30 = 30日相当のDAA数]
+P_m(d)  = S̄_m(d)^1.5 / sum_j S̄_j(d)^1.5                        [分母0なら全model P_m = 0]
+
+モデル別ブロック生成機会:  E[PALW block share of m] = P_m(d)
+モデル別coinbase予算:       R_m(d) = R_PALW(d) * P_m(d)
+~~~
+
+* **モデル資本はMiner＋Verifierの実拘束元本。** 2026-10-12改定の「Panel bond」を、Panel=0に合わせて
+  **claimに実際に紐付いて拘束され、検証上の責任を負うpermissionless verifierの元本**へ一般化する。
+  固定Panel seatは要らず、誰でも検証者として参加できる。待機しているだけの検証者bond、登録料、AMM/Position、未払の予定報酬は数えない。
+  同じ元本をMinerとVerifierで二重計上しない。Verifier元本はモデルの`S_m`にだけ加え、Miner個人のQ/B/R/F capの元本にはしない。
+* **同じ比率を一度だけ使う。** `P_m`をブロック生成機会とcoinbase予算の共通目標にし、1 block当たりの報酬に再び掛けない。
+  network全体のblock頻度・DAA・難易度・beacon・fork-choice・Final weightは変えない。
+* **個別Minerの上限は7日相当DAA。** 共通拘束期間`W`を7日相当DAAとし、各bondのQ/B/R/F capはモデル配分が増えても増えない。
+  モデル枠を実際に使うには、それに見合うMinerと計算能力が要る。資本預託だけでは支払わず、有効claim・Final・固有workを要する。
+* **マイナー報酬はモデル登録者へ直接分配しない。** モデル別のcoinbase（`R_m`）とブロック報酬は、claimを生成したMinerと、
+  検証責任を果たしたVerifierにだけ帰属する。登録者・ownerへのcoinbase legは置かない（[ADR-0091](../adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)の
+  「報酬からのowner service feeはNo」を維持）。登録者の収入は**ModelPositionの売買手数料**である。売買ごとのBILI額の5 %がownerへ入り、5 %がburnされる
+  （[ADR-0114](../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)。fence `palw_model_leg_v2`で[ADR-0087](../adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md)の1 %から引き上げ）。
+  モデルが使われてPositionの売買が増えるほど登録者の収入が増える。報酬の5 %によるPosition買い上げ（ADR-0091）はlegもburnもなく、価格を上げるだけで登録者へ払わない。
+  登録者が自らMiner/Verifierとして参加した場合は、その役割の報酬を他の参加者と同じ規則で受ける。
+* **Verifier元本の未決事項。** Panel=0での検証者の参加手順、検証責任の範囲、拘束期間、報酬条件、bondを預けるだけで実際には検査しない問題への対策は、
+  release前に明示的に定義する。Verifier元本の合算は「複数の検証者がいないモデルは無効」という規則を含まない（検証attestation gateは別の決定、readiness §3f）。
+* **必須の受入試験。** `α = 1.5`は資本集中を強める。新規モデルが採掘機会を失いすぎないこと（新規参入時の`P_m`、上位モデルの資本比と配分比、
+  30日平均による立ち上がりの遅れ）を、有効化前の必須評価とする。
+
+組み合わせの全体像:
+
+| 項目 | 決定 |
+|---|---|
+| 配分曲線 | `α = 1.5`（`μ`案は比較試験用に保持） |
+| 平均期間 | 30日相当DAA |
+| モデル資本 | Miner＋claimへ実際に拘束されたVerifier元本 |
+| 固定Panel | 0 |
+| ブロック生成機会 | `P_m`に比例 |
+| coinbase | 同じ`P_m`に比例、二重乗算なし |
+| 個別Minerの上限 | 7日相当DAAのQ/B/R/F |
+| モデル登録者の収入 | ModelPositionの売買手数料（5 %、ADR-0114）のみ。マイナー報酬は直接分配しない |
+| モデルの取得・共有 | オフチェーン |
+| 「不正の期待利益が負」 | 最終Goal・gateにしない（PRINCIPLES §0） |
+| 非公開モデルの残余リスク | 明示的に許容し、bond上限と公開反証で対応 |
 
 ## 9. work weight、PALW blockとsettlement
 
@@ -790,7 +843,7 @@ RFC14 §16.8/ADR177 §3のnon-interference、資本重複排除、model/network/
 旧7/5/15%・監査/lease・FPR全量公開/代替Seeder/公開費gateは撤回する。
 G14 PASSでも自動有効化しない。モデル非公開時の経済優位は未立証であり、旧claimと発行上限を保持する。
 
-**2026-10-10追加（ユーザー指示）:** 本RFCの有効化には、[PALW確率・経済安全性ゲート](../design/palw/probabilistic-economic-security-gate.md)（四条件、T1–T6、A–F、三つの反例、経済的抑止と独立の被害有界化）のPASSを追加で要求する。PASS / FAIL / UNKNOWNのうちUNKNOWNはPASSにしない。
+**2026-10-10追加（ユーザー指示）:** 本RFCの有効化には、[PALW確率・経済安全性ゲート](../design/palw/probabilistic-economic-security-gate.md)（四条件、T1–T6、A–F、三つの反例、経済的抑止と独立の被害有界化）のPASSを追加で要求する。PASS / FAIL / UNKNOWNのうちUNKNOWNはPASSにしない。2026-10-14改定後のPESGでは、検出確率の下限と期待利益が負であることは評価指標であり、有効化gateではない。
 
 ## 14. 本RFCで決めない値と現状
 
