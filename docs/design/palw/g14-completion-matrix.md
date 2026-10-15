@@ -807,6 +807,24 @@ material, per the 10-12 ruling that Miner and Panel hold the registered model).
   binding cannot ride a carrier), the fold's TIR selected/seed admission, (2), (4), (5), (6). The quote
   is gated by `PALW_STAGED_TIR_ROUTE_ADMITTED_V1 = false`, so TIR required-family claims stay refused.
 
+  *Design of the remaining TIR wiring (each item is code, none is evidence):*
+  (a) **Native-context carriage.** Append `SelectedEventDemandNative { demand }`,
+  `SelectedEventAnswerNative { answerer, demand_id, coordinate, event }` and a constraint seed form that names
+  no binding; the fold derives the decode view from the claim's admitted `original_binding` (legacy: resolve
+  against the registered profile; TIR: `from_tir_header_v1` against `tir_classes`). Answer authority is the typed
+  answerer (validator `authorization_bond_v1`), below-fence bytes stay undecodable/unjudged.
+  (b) **Retained context.** `PalwSelectedSourceContextV1` holds a decode-view source (legacy binding or the TIR
+  header identity bytes) instead of a legacy binding only; node readers (`context.binding`) move to the view.
+  (c) **Seed admission.** `PalwOwnedConstraintStreamV1::admit_*` and the fold `open` accept the view seed, calling
+  `PalwConstraintStreamCourtV1::new_from_tiled_view_v1` with the TIR header bytes as seed identity.
+  (d) **Custodian actors.** The selected responder builds `PalwSelectedTiledEventV1` from a TIR capture's logits
+  rows (the TIR executor's `post` logits node) instead of a legacy capture.
+  (e) **Outside owner.** A fraud-filer TIR stage replays the TIR job with the verifier's own registered program
+  (kernel-route executor) to obtain its own ids for the beat nominee, then follows the same bundle stages.
+  (f) **Tokenizer and prefix-state.** The tokenizer court reads generated ids authenticated through the view; a
+  TIR prefix-state relation (TIR `Fixed`/`Hist` state openings from the step Merkle tree) is a new family court.
+  Flip `PALW_STAGED_TIR_ROUTE_ADMITTED_V1` only after (a)–(e) are wired and verified for the Constraint lane.
+
 **Inclusion pressure without a consensus cap (lead default).** No per-block cap on staged moves (it would let a
 coalition fill the cap). Load is bounded by fees (every move is an ordinary fee-paying transaction), by prepaid
 per-owner plans (an owner's moves and bytes come only from its own deposit and rent; a coalition cannot spend or

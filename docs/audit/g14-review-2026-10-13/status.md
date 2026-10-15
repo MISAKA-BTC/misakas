@@ -600,3 +600,20 @@ Focused tests (partial; not the final pass):
   diagnosed). Not PASS.
 
 Not started: g14_kernel_route_e2e, service E2E, affected suites, clippy.
+
+### Code resumed after the validation pause, 2026-10-15 (unverified source only)
+
+- Float32 Constraint adjudicator core (`palw_float_decode_v1`): greedy first-index
+  f32 order key matching the reference worker, bounded streaming authentication of
+  one committed row against its event hash/opening/trace root, decode verdict and
+  constrained beat comparison. Lane stays refused (rooted row court, Float32 source
+  sessions, seed and node actors missing).
+- TIR: decode view (`palw_decode_view_v1`) from the admitted TIR header and
+  registered record; view-based tiled authentication, selected demand/answer core
+  and Constraint court seed constructor; TIR preclaim quote projection
+  (Constraint over tiled logits + raw tokenizer). Admission still refuses TIR
+  required families via `PALW_STAGED_TIR_ROUTE_ADMITTED_V1 = false`; the remaining
+  wiring (a)-(f) is designed in g14-completion-matrix §2i.
+- The other GAP rows of the matrix (GAP-00..82) belong to other lanes (kernel
+  route, pipelines, typed roots, EXEC slices, legacy Panel decision) and were not
+  touched here.
