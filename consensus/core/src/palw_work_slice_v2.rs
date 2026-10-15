@@ -80,6 +80,63 @@ pub struct PalwExecOriginV1 {
 /// One legacy native clock proof fits the existing assembled-object carriage budget, including its tag/key/length.
 pub const PALW_EXEC_ORIGIN_HEADER_MAX_BYTES_V1: usize = crate::palw_state_v2::PALW_OBJECT_CHUNK_SLOT_MASS as usize - 69;
 
+/// **RFC-0006 historical-header coverage census (read-only).** Before the EXEC origin migration may be armed, every
+/// eligible legacy claim (an attempt claim with no recorded original clock) must have its original accepted header either
+/// within the carriage budget above or covered by a separately bounded transport, and every original header must still be
+/// readable somewhere before pruning destroys it. A node reports, from its own store, how its eligible history stands.
+/// `unavailable` (header pruned/absent here) is not proof that no archive holds it; an archive node's census is what
+/// proves coverage. Neither list authorizes anything.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct PalwExecOriginCoverageV1 {
+    pub cap_bytes: u64,
+    pub eligible: u64,
+    pub within_cap: u64,
+    pub max_bytes_seen: u64,
+    /// `(claim, accepted block, encoded header bytes)` above the cap; at most `listed` entries are kept.
+    pub oversized: Vec<(Hash64, Hash64, u64)>,
+    /// `(claim, accepted block)` whose header this node cannot read; at most `listed` entries are kept.
+    pub unavailable: Vec<(Hash64, Hash64)>,
+    pub oversized_total: u64,
+    pub unavailable_total: u64,
+}
+
+/// The census over one native state, with a caller-supplied header reader (`None` = not readable here). Eligible: an
+/// `Attempt`-sourced claim whose original clock is not yet recorded (`exec_v2_origin_v1` absent).
+pub fn palw_exec_origin_coverage_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    listed: usize,
+    mut header_bytes: impl FnMut(Hash64) -> Option<u64>,
+) -> PalwExecOriginCoverageV1 {
+    let cap = PALW_EXEC_ORIGIN_HEADER_MAX_BYTES_V1 as u64;
+    let mut census = PalwExecOriginCoverageV1 { cap_bytes: cap, ..Default::default() };
+    for (id, claim) in state.claims_iter() {
+        if !matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::Attempt) || state.exec_v2_origin_v1(id).is_some() {
+            continue;
+        }
+        census.eligible += 1;
+        match header_bytes(claim.accepted_block) {
+            Some(bytes) => {
+                census.max_bytes_seen = census.max_bytes_seen.max(bytes);
+                if bytes <= cap {
+                    census.within_cap += 1;
+                } else {
+                    census.oversized_total += 1;
+                    if census.oversized.len() < listed {
+                        census.oversized.push((*id, claim.accepted_block, bytes));
+                    }
+                }
+            }
+            None => {
+                census.unavailable_total += 1;
+                if census.unavailable.len() < listed {
+                    census.unavailable.push((*id, claim.accepted_block));
+                }
+            }
+        }
+    }
+    census
+}
+
 /// Self-authenticating provenance, not a new execution authorization: the full header must hash to the claim's carrying block.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, borsh::BorshSerialize)]
 pub struct PalwExecOriginWitnessV1 {

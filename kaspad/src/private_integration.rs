@@ -44,6 +44,7 @@ mod native_provider;
 pub use native_provider::PrivateNativeCustodySpecV3;
 pub(crate) mod recovery_ack_carrier_v4;
 mod recovery_observation_v4;
+mod exec_origin_coverage_v1;
 mod kernel_paid_producer_v4;
 pub use kernel_paid_producer_v4::PrivateKernelPaidWorkSpecV4;
 mod kernel_paid_checker_v4;
@@ -591,6 +592,7 @@ fn create_private_native_custody_v4_inner(
         let checker = kernel_checker.map(|checker| checker.prepare(&ctx)).transpose()?;
         let replacement = kernel_replace.map(|replace| replace.prepare(&ctx)).transpose()?;
         recovery_observation_v4::start(&ctx)?;
+        exec_origin_coverage_v1::start(&ctx)?;
         let exchange = hook(ctx)?;
         if let Some(producer) = producer {
             producer
