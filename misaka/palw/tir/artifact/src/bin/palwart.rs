@@ -1,7 +1,8 @@
 //! `palwart` — the one `PALWART3` artifact container of the genesis models (2026-10-15).
 //!
 //! ```text
-//! palwart pack (--from <legacy file> | --from-url <pinned resolve URL> --from-bytes N --from-sha256 HEX [--from-name P])
+//! palwart pack (--from <legacy file> | --from-url <pinned resolve URL> --from-bytes N --from-sha256 HEX [--from-name P]
+//!               | --from-pipe <FIFO or -> --from-bytes N [--from-sha256 HEX] [--from-name P])
 //!              --out-dir DIR --stem STEM --manifest manifest.json
 //!              [--source-dir CHECKPOINT] [--family qwen2-dense|qwen35-gdn-hybrid|…] [--segment-mib 2048]
 //!              [--license-file P]… [--calibration-file P]… [--provenance P]
@@ -115,6 +116,7 @@ fn pack(a: &Args) -> Result<serde_json::Value, String> {
         "--from-bytes",
         "--from-sha256",
         "--from-name",
+        "--from-pipe",
         "--out-dir",
         "--stem",
         "--manifest",
@@ -129,8 +131,9 @@ fn pack(a: &Args) -> Result<serde_json::Value, String> {
     ])?;
     let legacy = a.one("--from")?.map(PathBuf::from);
     let from_url = a.one("--from-url")?;
-    if legacy.is_some() == from_url.is_some() {
-        return Err("give exactly one of --from <file> and --from-url <pinned resolve URL>".into());
+    let from_pipe = a.one("--from-pipe")?;
+    if [legacy.is_some(), from_url.is_some(), from_pipe.is_some()].iter().filter(|x| **x).count() != 1 {
+        return Err("give exactly one of --from <file>, --from-url <pinned resolve URL> and --from-pipe <FIFO or ->".into());
     }
     let out_dir = PathBuf::from(a.need("--out-dir")?);
     let stem = a.need("--stem")?;
@@ -190,6 +193,21 @@ fn pack(a: &Args) -> Result<serde_json::Value, String> {
     });
     let packed = match (&legacy, &from_url) {
         (Some(legacy), _) => pack_legacy_v3(legacy, &inputs, hook)?,
+        (None, None) => {
+            // A converter writing into a pipe now (`qwen36-convert --measured-in … --out FIFO`): read once, in order, never stored.
+            // The length is the converter's (its measuring pass); a pin is optional (a new artifact has none yet).
+            let pipe = from_pipe.clone().expect("checked above");
+            let len: u64 = a.need("--from-bytes")?.parse().map_err(|e| format!("--from-bytes: {e}"))?;
+            let sha256 = a.one("--from-sha256")?.map(|h| parse_sha256(&h)).transpose()?;
+            let name = a.one("--from-name")?.unwrap_or_else(|| "legacy".to_string());
+            let mut reader: Box<dyn std::io::Read> = if pipe == "-" {
+                Box::new(std::io::stdin().lock())
+            } else {
+                Box::new(std::fs::File::open(&pipe).map_err(|e| format!("{pipe}: {e}"))?)
+            };
+            let mut reader = std::io::BufReader::with_capacity(8 << 20, &mut reader);
+            pack_legacy_stream_v3(LegacyStreamV3 { reader: &mut reader, len, name, sha256 }, &inputs, hook)?
+        }
         (None, Some(url)) => {
             // The legacy file over HTTPS, read once in order and never stored: its SHA-256 must be the pinned LFS id before the index
             // is written. `curl` is the transport (no token is sent: a public file); a dropped connection resumes at the byte it reached.
@@ -197,7 +215,7 @@ fn pack(a: &Args) -> Result<serde_json::Value, String> {
             let sha256 = parse_sha256(&a.need("--from-sha256")?)?;
             let name = a.one("--from-name")?.unwrap_or_else(|| url.rsplit('/').next().unwrap_or("legacy").to_string());
             let mut reader = CurlStream::new(url, len);
-            pack_legacy_stream_v3(LegacyStreamV3 { reader: &mut reader, len, name, sha256 }, &inputs, hook)?
+            pack_legacy_stream_v3(LegacyStreamV3 { reader: &mut reader, len, name, sha256: Some(sha256) }, &inputs, hook)?
         }
         _ => unreachable!("checked above"),
     };

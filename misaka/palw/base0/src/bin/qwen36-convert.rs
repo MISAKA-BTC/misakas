@@ -12,7 +12,25 @@
 //! ```text
 //! qwen36-convert --gguf FILE   --out ARTIFACT [--layers N] [--context N] [--prompt ids]
 //! qwen36-convert --url URL --header FIRST64MB --out ARTIFACT [--layers N] …
+//! qwen36-convert --url URL --url-bytes N --url-sha256 HEX …          # hashed range input (below)
+//!
+//! # streamed both ends (genesis #8, 2026-10-16): measure, then write in order into a pipe
+//! qwen36-convert --url URL --url-bytes N --url-sha256 HEX --context 32768 --reference-only \
+//!                --measured-out M --url-windows-out W --out unused
+//! qwen36-convert --url URL --url-bytes N --context 32768 --url-windows-in W --measured-in M --out FIFO
 //! ```
+//!
+//! **Hashed range input** (`--url-bytes`, `misaka_palw_base0::remote_gguf`): the file is read by HTTPS range in 64 MiB windows
+//! (`--url-window-mib`, `--url-cache-windows`), its whole-file SHA-256 computed in order and compared with `--url-sha256` before
+//! the run ends, and every window's SHA-256 kept so a window read again — here, or in the output pass given
+//! `--url-windows-in` — must have the same bytes.
+//!
+//! **Streamed output** (`--measured-in`): the measured parameters are patched into the header at the end of a run that writes a
+//! file, which a pipe cannot do. So the measuring pass (`--reference-only --measured-out`) records the parameters, the size of
+//! the file and the BLAKE2b of every tensor's codes, and the output pass builds the header with those parameters and writes
+//! header and codes strictly in order (`Qwen36Writer::create_to`). The bytes are the ones the one-pass run leaves in its file:
+//! the output pass refuses a tensor whose codes differ from the measuring pass's, and parameters that differ from the ones in
+//! its header (the conversion is deterministic; this checks it).
 //!
 //! # One pass, three jobs
 //!
@@ -40,9 +58,92 @@ use misaka_palw_base0::gguf::{GgufDirectory, GgufTensor, dequantize, parse_direc
 use misaka_palw_base0::qwen36::{Qwen36LayerKind, Qwen36ShapeV1, Qwen36Writer};
 use misaka_palw_base0::qwen36_calibrate as cal;
 use misaka_palw_base0::qwen36_reference as reference;
+use misaka_palw_base0::remote_gguf::{CurlFetch, HashedRanges, hex32, parse_hex32, window_digests_from_json, window_digests_json};
 use misaka_palw_base0::rope::RopeTableV1;
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
+
+/// What the measuring pass hands the output pass (`--measured-out` / `--measured-in`): the file's length, every measured parameter
+/// row's bytes and every tensor's code digest. Binary (the parameters of a 35B-A3B are ~0.7 GB): `PALWQ36M`, `u64` length, the
+/// parameters and the digests as length-prefixed records, then a BLAKE2b-512 of everything before it.
+struct Measured {
+    file_bytes: u64,
+    params: BTreeMap<String, Vec<u8>>,
+    digests: BTreeMap<String, [u8; 32]>,
+}
+
+const MEASURED_MAGIC: &[u8; 8] = b"PALWQ36M";
+
+fn put_u64(out: &mut Vec<u8>, v: u64) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+
+fn put_bytes(out: &mut Vec<u8>, b: &[u8]) {
+    put_u64(out, b.len() as u64);
+    out.extend_from_slice(b);
+}
+
+impl Measured {
+    fn write(&self, path: &str) {
+        let mut out = Vec::with_capacity(self.params.values().map(|v| v.len() + 64).sum::<usize>() + (1 << 20));
+        out.extend_from_slice(MEASURED_MAGIC);
+        put_u64(&mut out, self.file_bytes);
+        put_u64(&mut out, self.params.len() as u64);
+        for (k, v) in &self.params {
+            put_bytes(&mut out, k.as_bytes());
+            put_bytes(&mut out, v);
+        }
+        put_u64(&mut out, self.digests.len() as u64);
+        for (k, v) in &self.digests {
+            put_bytes(&mut out, k.as_bytes());
+            out.extend_from_slice(v);
+        }
+        let sum = blake2b_simd::Params::new().hash_length(64).hash(&out);
+        out.extend_from_slice(sum.as_bytes());
+        std::fs::write(path, &out).unwrap_or_else(|e| die(format!("{path}: {e}")));
+    }
+
+    fn read(path: &str) -> Measured {
+        let b = std::fs::read(path).unwrap_or_else(|e| die(format!("{path}: {e}")));
+        if b.len() < 8 + 8 + 64 || &b[..8] != MEASURED_MAGIC {
+            die(format!("{path}: not a measuring pass's record"));
+        }
+        let (body, sum) = b.split_at(b.len() - 64);
+        if blake2b_simd::Params::new().hash_length(64).hash(body).as_bytes() != sum {
+            die(format!("{path}: checksum mismatch (a truncated or altered record)"));
+        }
+        let mut at = 8usize;
+        let u64_at = |at: &mut usize| -> u64 {
+            let v = body.get(*at..*at + 8).unwrap_or_else(|| die(format!("{path}: short record")));
+            *at += 8;
+            u64::from_le_bytes(v.try_into().expect("8 bytes"))
+        };
+        let take = |at: &mut usize, n: usize| -> Vec<u8> {
+            let v = body.get(*at..*at + n).unwrap_or_else(|| die(format!("{path}: short record"))).to_vec();
+            *at += n;
+            v
+        };
+        let file_bytes = u64_at(&mut at);
+        let mut params = BTreeMap::new();
+        for _ in 0..u64_at(&mut at) {
+            let kl = u64_at(&mut at) as usize;
+            let k = String::from_utf8(take(&mut at, kl)).unwrap_or_else(|_| die(format!("{path}: a name is not UTF-8")));
+            let vl = u64_at(&mut at) as usize;
+            params.insert(k, take(&mut at, vl));
+        }
+        let mut digests = BTreeMap::new();
+        for _ in 0..u64_at(&mut at) {
+            let kl = u64_at(&mut at) as usize;
+            let k = String::from_utf8(take(&mut at, kl)).unwrap_or_else(|_| die(format!("{path}: a name is not UTF-8")));
+            let d: [u8; 32] = take(&mut at, 32).try_into().expect("32 bytes");
+            digests.insert(k, d);
+        }
+        if at != body.len() {
+            die(format!("{path}: {} trailing bytes", body.len() - at));
+        }
+        Measured { file_bytes, params, digests }
+    }
+}
 
 /// Permute the head-dimension axis of a `[out][in]` projection's ROWS from the checkpoint's
 /// half-split rotary layout into the pinned table's pairwise one — **over the rotary prefix only**.
@@ -93,6 +194,8 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 
 enum Source {
     Local(std::fs::File),
+    /// By HTTPS range, hashed in order and checked window by window (`remote_gguf`).
+    Hashed(Box<HashedRanges<CurlFetch>>),
     /// `curl` by range. A subprocess rather than an HTTP crate: this is an offline tool, the
     /// surface used is one ranged GET, and a workspace that audits its dependencies should not
     /// gain a TLS stack for it.
@@ -102,6 +205,7 @@ enum Source {
 impl Source {
     fn bytes(&mut self, t: &GgufTensor) -> Vec<u8> {
         match self {
+            Self::Hashed(h) => h.read(t.offset, t.bytes).unwrap_or_else(|e| die(format!("{}: {e}", t.name))),
             Self::Local(file) => {
                 let mut buf = vec![0u8; t.bytes];
                 file.seek(SeekFrom::Start(t.offset)).unwrap_or_else(|e| die(format!("seek: {e}")));
@@ -225,7 +329,27 @@ fn main() {
     let layer_cap: Option<usize> = flag(&args, "--layers").and_then(|v| v.parse().ok());
     let max_position: usize = flag(&args, "--context").and_then(|v| v.parse().ok()).unwrap_or(512);
 
+    let measured_in = flag(&args, "--measured-in").map(Measured::read);
+    if measured_in.is_some() && reference_only {
+        die("--measured-in is the output pass; --reference-only the measuring pass".into());
+    }
     let (source, header) = match (flag(&args, "--gguf"), flag(&args, "--url")) {
+        (None, Some(url)) if flag(&args, "--url-bytes").is_some() => {
+            let len: u64 = flag(&args, "--url-bytes").and_then(|v| v.parse().ok()).unwrap_or_else(|| die("--url-bytes N".into()));
+            let pin = flag(&args, "--url-sha256").map(|h| parse_hex32(h).unwrap_or_else(|e| die(format!("--url-sha256: {e}"))));
+            let window = flag(&args, "--url-window-mib").and_then(|v| v.parse::<u64>().ok()).unwrap_or(64) << 20;
+            let cache = flag(&args, "--url-cache-windows").and_then(|v| v.parse::<usize>().ok()).unwrap_or(8);
+            let mut h = HashedRanges::new(CurlFetch { url: url.to_string() }, len, window, cache, pin);
+            if let Some(path) = flag(&args, "--url-windows-in") {
+                let text = std::fs::read_to_string(path).unwrap_or_else(|e| die(format!("{path}: {e}")));
+                h = h
+                    .with_window_digests(window_digests_from_json(&text, window, len).unwrap_or_else(|e| die(format!("{path}: {e}"))));
+            } else if pin.is_none() {
+                die("--url-bytes needs --url-sha256 (the LFS id), or --url-windows-in from the pass that checked it".into());
+            }
+            let head = h.read(0, len.min(64 << 20) as usize).unwrap_or_else(|e| die(format!("header: {e}")));
+            (Source::Hashed(Box::new(h)), head)
+        }
         (Some(path), _) => {
             let mut file = std::fs::File::open(path).unwrap_or_else(|e| die(format!("{path}: {e}")));
             let mut head = vec![0u8; 64 << 20];
@@ -528,8 +652,30 @@ fn main() {
         .collect();
 
     let started = std::time::Instant::now();
-    let mut writer = Qwen36Writer::create(std::path::Path::new(out_path), &shape, &rope, &params, plan)
-        .unwrap_or_else(|e| die(format!("{out_path}: {e}")));
+    // Three writers: the measuring pass writes nothing (it records the codes' digests); the output pass writes header and codes
+    // strictly in order into `--out` (a pipe), its header built with the measured parameters; otherwise the file, patched at the end.
+    let mut writer = if reference_only {
+        Qwen36Writer::create_to(Box::new(std::io::sink()), &shape, &rope, &params, plan)
+    } else if let Some(m) = &measured_in {
+        for (name, bytes) in &m.params {
+            match params.get_mut(name) {
+                Some(v) if v.len() == bytes.len() => v.clone_from(bytes),
+                _ => die(format!("--measured-in: parameter {name} is not one this run's header declares at that width")),
+            }
+        }
+        let file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(out_path);
+        let file = file.unwrap_or_else(|e| die(format!("{out_path}: {e}")));
+        Qwen36Writer::create_to(Box::new(std::io::BufWriter::with_capacity(8 << 20, file)), &shape, &rope, &params, plan)
+            .map(|w| w.with_expected_digests(m.digests.clone()))
+    } else {
+        Qwen36Writer::create(std::path::Path::new(out_path), &shape, &rope, &params, plan)
+    }
+    .unwrap_or_else(|e| die(format!("{out_path}: {e}")));
+    if let Some(m) = &measured_in
+        && m.file_bytes != writer.file_bytes() as u64
+    {
+        die(format!("--measured-in: the measuring pass's file has {} bytes, this run's {}", m.file_bytes, writer.file_bytes()));
+    }
     let mut measured: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut calibration = reference::Qwen36CalibrationV1::default();
     let mut state = reference::Qwen36RefState::new(&shape);
@@ -539,9 +685,7 @@ fn main() {
     // Per row, which is per token: one scale for the whole table is one scale for its outliers,
     // and the ordinary rows a prompt actually uses then start on a fraction of the int8 range.
     let (embed_codes, embed_scales) = quantize_rows(&embed_f, vocab);
-    if !reference_only {
-        writer.push("token_embd.weight", &embed_codes).unwrap_or_else(|e| die(format!("token_embd: {e}")));
-    }
+    writer.push("token_embd.weight", &embed_codes).unwrap_or_else(|e| die(format!("token_embd: {e}")));
     drop(embed_codes);
     let mut h: Vec<Vec<f32>> = prompt.iter().map(|t| embed_f[t * d..(t + 1) * d].to_vec()).collect();
     drop(embed_f);
@@ -565,11 +709,10 @@ fn main() {
             // **`--reference-only` still quantizes.** The row scales are what the calibration
             // derives its triples from, so skipping the quantization would measure a different
             // thing; what it skips is the 33 GiB of writing, which is the whole cost of a run whose
-            // question is only whether the f32 reference behaves like a language model.
-            if !reference_only {
-                writer.push(name, &codes).unwrap_or_else(|e| die(format!("writing {name}: {e}")));
-                writer.push(&format!("{name}.exp"), &exps).unwrap_or_else(|e| die(format!("writing {name}.exp: {e}")));
-            }
+            // question is only whether the f32 reference behaves like a language model. (Its writer is a sink that records each
+            // tensor's code digest, for a streamed output pass to check against.)
+            writer.push(name, &codes).unwrap_or_else(|e| die(format!("writing {name}: {e}")));
+            writer.push(&format!("{name}.exp"), &exps).unwrap_or_else(|e| die(format!("writing {name}.exp: {e}")));
             scales.insert(name.to_string(), s);
         };
 
@@ -587,9 +730,7 @@ fn main() {
                     // Per row: the taps are read as raw codes by `q36_ssm_conv`, which applies no
                     // group exponent.
                     let (codes, sc) = quantize_rows(&conv, width);
-                    if !reference_only {
-                        writer.push(&g("linear_conv.weight"), &codes).unwrap_or_else(|e| die(format!("linear_conv: {e}")));
-                    }
+                    writer.push(&g("linear_conv.weight"), &codes).unwrap_or_else(|e| die(format!("linear_conv: {e}")));
                     scales.insert(g("linear_conv.weight"), sc);
                 }
                 let alpha = reader.get(&g("ssm_alpha.weight"));
@@ -1012,10 +1153,8 @@ fn main() {
     // matrix, so the head IS `token_embd.weight` — same bytes, quantized as a projection here.
     let output = if dir.tensors.contains_key("output.weight") { reader.get("output.weight") } else { reader.get("token_embd.weight") };
     let (codes, out_exps, out_scales) = quantize_rows_grouped(&output, vocab);
-    if !reference_only {
-        writer.push("output.weight", &codes).unwrap_or_else(|e| die(format!("output.weight: {e}")));
-        writer.push("output.weight.exp", &out_exps).unwrap_or_else(|e| die(format!("output.weight.exp: {e}")));
-    }
+    writer.push("output.weight", &codes).unwrap_or_else(|e| die(format!("output.weight: {e}")));
+    writer.push("output.weight.exp", &out_exps).unwrap_or_else(|e| die(format!("output.weight.exp: {e}")));
     drop(codes);
     drop(out_exps);
     reference::reference_head(&shape, &mut calibration, &output_norm, &output, &h, eps);
@@ -1025,10 +1164,43 @@ fn main() {
     measured.insert("final_norm.a16".into(), wire(&cal::norm_params(&output_norm, e_final)));
     measured.insert("output.weight.a16".into(), wire(&cal::projection_params(&out_scales, e_final, e_logits)));
 
+    // The hashed input: hash whatever was never read and compare the whole file with its pin (the measuring pass), or nothing more
+    // to do (the output pass checked every window it read against the measuring pass's digests).
+    if let Source::Hashed(h) = &mut reader.source {
+        match h.finish().unwrap_or_else(|e| die(format!("the GGUF failed its check: {e}"))) {
+            Some(d) => eprintln!("input: whole-file SHA-256 {} equals the pin", hex32(&d)),
+            None => eprintln!("input: every window read matched the measuring pass's digests"),
+        }
+        let (fetched, again) = h.fetched();
+        eprintln!(
+            "input: {:.1} GiB fetched by range, {again} windows fetched again and checked",
+            fetched as f64 / (1u64 << 30) as f64
+        );
+        if let Some(path) = flag(&args, "--url-windows-out") {
+            std::fs::write(path, window_digests_json(h.window_bytes(), h.len(), h.window_digests()))
+                .unwrap_or_else(|e| die(format!("{path}: {e}")));
+        }
+    }
+
     if reference_only {
+        let file_bytes = writer.file_bytes() as u64;
+        if let Some(path) = flag(&args, "--measured-out") {
+            Measured { file_bytes, params: measured.clone(), digests: writer.digests().clone() }.write(path);
+            println!(
+                "measured: {} parameter rows, {} tensor digests, a {file_bytes}-byte artifact, to {path}",
+                measured.len(),
+                writer.digests().len()
+            );
+        }
         drop(writer);
-        let _ = std::fs::remove_file(out_path);
         println!("reference-only: {} sites calibrated in {:?}, nothing written", measured.len(), started.elapsed());
+    } else if let Some(m) = &measured_in {
+        // The header was built with the measuring pass's parameters; this pass measured them again and they must agree.
+        if m.params.len() != measured.len() || measured.iter().any(|(k, v)| m.params.get(k) != Some(v)) {
+            die("the parameters this pass measured differ from the measuring pass's: the conversion is not deterministic across passes".into());
+        }
+        let written = writer.finish().unwrap_or_else(|e| die(format!("closing {out_path}: {e}")));
+        println!("wrote {out_path} (streamed): {:.2} GiB of codes in {:?}", written as f64 / (1u64 << 30) as f64, started.elapsed());
     } else {
         let written = writer.finish_with_params(&measured).unwrap_or_else(|e| die(format!("closing {out_path}: {e}")));
         println!(

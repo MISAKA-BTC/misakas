@@ -421,8 +421,10 @@ pub struct LegacyStreamV3<'r> {
     pub len: u64,
     /// Its name (provenance only).
     pub name: String,
-    /// The LFS id the bytes must have; the index is not written otherwise.
-    pub sha256: [u8; 32],
+    /// The LFS id the bytes must have; the index is not written otherwise. `None` for a file a converter is writing into the
+    /// pipe now (genesis #8: `qwen36-convert --measured-in … --out FIFO`), which has no published id yet — its identity is the
+    /// container root, and the converter checked its own input.
+    pub sha256: Option<[u8; 32]>,
 }
 
 /// **Pack a streamed legacy file** (A16 or PALWQ361; a `PALWTIR1` needs random access and is refused). The weight entry is the
@@ -445,7 +447,7 @@ pub fn pack_legacy_stream_v3(
     let mut w = PalwArtWriterV3::create(&inputs.out_dir, &inputs.stem, inputs.segment_bytes, hook).map_err(s)?;
     let mut whole = std::io::Cursor::new(magic).chain(src.reader);
     let ((program, layout, legacy_meta, weights), sha256) =
-        pack_reader_v3(&mut w, &mut whole, src.len, &src.name, inputs.family, format, Some(src.sha256))?;
+        pack_reader_v3(&mut w, &mut whole, src.len, &src.name, inputs.family, format, src.sha256)?;
     pack_common_v3(&mut w, inputs)?;
     let manifest = manifest_bytes_v3(&inputs.manifest, inputs.family, &weights);
     if v3::manifest_declares_text_scope_v3(&manifest) {

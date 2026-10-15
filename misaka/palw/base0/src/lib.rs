@@ -87,6 +87,7 @@ pub mod qwen36_backend;
 pub mod qwen36_calibrate;
 pub mod qwen36_plan;
 pub mod qwen36_reference;
+pub mod remote_gguf;
 pub mod rc;
 pub mod rope;
 /// ADR-0133 S1, authenticated (SEAT-S4): the V2 segment opening a partial seat replays, tied to
