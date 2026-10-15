@@ -408,7 +408,9 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             | PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { .. } | PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { .. }
             | PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. } | PalwConsensusObjectV2::PublicCourtStreamLeafV1 { .. }
             | PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } | PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { .. }
-            | PalwConsensusObjectV2::TirClassLayoutPublishedV1 { .. } => Ok(()),
+            | PalwConsensusObjectV2::TirClassLayoutPublishedV1 { .. }
+            | PalwConsensusObjectV2::TirPublicControlV1 { .. }
+            | PalwConsensusObjectV2::TirPublicGrantReadyV1 { .. } => Ok(()),
         // LG14-B (tags 157–159): the legacy held DA objects ride at every height, refused nowhere at isolation (A-2 rule 5: the live
         // build cannot decode them); the fence, the signature, the bonds, the claim's roots and the units are the gate's and the fold's.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
@@ -1181,11 +1183,14 @@ pub enum PalwLifecycleKindFenceV1 {
     /// (`crate::palw_staged_route_forms_v1`).
     StagedFloatConstraintV1 = 13,
     MaterialReleaseRecoveryV2 = 14,
+    /// `Params::palw_tir_public_conviction_v1` — G14's original paid public TIR allocations, controls and exact Valid grants.
+    /// The index is the local activation-table slot (not wire): RFC-0008's material-release recovery took 14 first on integ.
+    TirPublicConvictionV1 = 15,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1201,6 +1206,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::StagedTirRouteV1,
         Self::StagedFloatConstraintV1,
         Self::MaterialReleaseRecoveryV2,
+        Self::TirPublicConvictionV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1221,6 +1227,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::MaterialReleaseRecoveryV2 => "palw_material_release_recovery_v2",
             Self::StagedTirRouteV1 => "palw_staged_tir_route_v1",
             Self::StagedFloatConstraintV1 => "palw_staged_float_constraint_v1",
+            Self::TirPublicConvictionV1 => "palw_tir_public_conviction_v1",
         }
     }
 }
@@ -1420,6 +1427,9 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::PublicCourtStreamOpenedNativeV1 { .. } | O::TirClassLayoutPublishedV1 { .. } => {
             PalwLifecycleKindOwnerV1::Fence(F::StagedTirRouteV1)
         }
+        O::TirPublicControlV1 { .. } | O::TirPublicGrantReadyV1 { .. } => {
+            PalwLifecycleKindOwnerV1::Fence(F::TirPublicConvictionV1)
+        }
         // Lane LG14-A: the dispute reservation and its release (154, 155).
         O::DisputeReservedV1 { .. }
         | O::DisputeReleasedV1 { .. }
@@ -1573,6 +1583,8 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (242, "MonetaryMaterialActionV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
     (168, "PublicCourtStreamOpenedNativeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (169, "TirClassLayoutPublishedV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
+    (170, "TirPublicControlV1", PalwLifecycleKindFenceV1::TirPublicConvictionV1),
+    (171, "TirPublicGrantReadyV1", PalwLifecycleKindFenceV1::TirPublicConvictionV1),
     (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
 ];
 
@@ -1666,6 +1678,7 @@ impl crate::config::params::Params {
                     PalwLifecycleKindFenceV1::StagedFloatConstraintV1 => {
                         Self::palw_later_of_v1(self.palw_staged_float_constraint_v1_fence(), self.palw_staged_public_court_v1)
                     }
+                    PalwLifecycleKindFenceV1::TirPublicConvictionV1 => self.palw_tir_public_conviction_v1_fence(),
                 },
             )
         })
@@ -2256,6 +2269,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::ObjectTags { lo: 168, hi: 169 },
         "palw_staged_tir_route_v1",
         "G14 TIR native seed and layout publication",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::ObjectTags { lo: 170, hi: 171 },
+        "palw_tir_public_conviction_v1",
+        "G14 original paid TIR control and atomic Valid grant/Ready",
         true,
     ),
     // ---- kernel-route inner kinds (inside tag 110) ----
@@ -2856,6 +2875,7 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (165, 167, "G14 owned public court stream", &["palw_staged_public_court_v1"]),
     // 168–169: the G14 TIR staged route (native seed opening, TIR class layout publication), merged 2026-10-15.
     (168, 169, "G14 TIR staged route", &["palw_staged_tir_route_v1"]),
+    (170, 171, "G14 original paid TIR conviction", &["palw_tir_public_conviction_v1"]),
     // 230: reserved 2026-10-15 for the D2 replacement route's seat readiness digest (R-D2-READY). Checked free on this branch, the
     // G14 public-conviction branch and the RFC02 branch (all end at 167 / start again at 240); the kind itself is not landed yet.
     (230, 230, "D2 seat readiness digest (reserved)", &["palw_court_model_scope_v1"]),
@@ -3853,9 +3873,17 @@ pub(crate) mod tests {
         /// `None`, every nested enum its first variant). Generic over the enum, so a kind a lane adds is in every sweep the moment its
         /// table row exists; a kind whose zero-filled body does not decode needs a hand-built sample here instead (the panic says so).
         pub(crate) fn zero_filled_kind(tag: u8) -> PalwConsensusObjectV2 {
-            let object: PalwConsensusObjectV2 = minimal_decode(&[tag]).unwrap_or_else(|| {
+            let object: PalwConsensusObjectV2 = match tag {
+                170 => PalwConsensusObjectV2::TirPublicControlV1 {
+                    control: Box::new(crate::palw_tir_public_carriage_v1::palw_tir_public_control_fixture_v1()),
+                },
+                171 => PalwConsensusObjectV2::TirPublicGrantReadyV1 {
+                    grant: Box::new(crate::palw_tir_public_carriage_v1::palw_tir_public_grant_fixture_v1()),
+                },
+                _ => minimal_decode(&[tag]).unwrap_or_else(|| {
                 panic!("kind {tag} decodes from no near-zero body; give it a hand-built sample in the A2U sweeps instead")
-            });
+                }),
+            };
             assert_eq!(borsh::to_vec(&object).unwrap()[0], tag);
             object
         }
@@ -5133,6 +5161,11 @@ pub(crate) mod tests {
             // G14 TIR native seed and class layout, owned by `palw_staged_tir_route_v1`.
             (168, 0x08ee1a77654c016e),
             (169, 0xa24f46d0931b98b5),
+            // G14's original paid TIR control (170, incl. the appended common `Conviction` / `Convict` filing) and the atomic Valid
+            // grant/Ready (171), owned by `palw_tir_public_conviction_v1`. UNPINNED IN SOURCE (no build in the source-only pass): the
+            // validation pass re-pins both from this test's `[a2u-pins]` listing in the same commit that first compiles them.
+            (170, 0x0000000000000000),
+            (171, 0x0000000000000000),
             (131, 0xf970df6a8bdc323c),
         ];
 

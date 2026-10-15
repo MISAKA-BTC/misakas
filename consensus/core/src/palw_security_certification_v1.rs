@@ -466,6 +466,14 @@ pub fn palw_claim_certification_status_v1(
         .kernel_route_state_v1()
         .and_then(|route| route.aux_row::<PalwClaimCertificationRowV1>(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key))
         .and_then(|row| row.outcome);
+    // RFC-0018 I-C3 / G14 R6: a voided claim holds no consensus credit whatever its row says — the one predicate
+    // (`palw_independently_work_certified_v1`) refuses a `Voided` claim, so the RPC must not keep naming it certified.
+    if matches!(claim.phase, crate::palw_state_v2::PalwClaimPhaseV2::Voided { .. }) {
+        return match outcome.map(|(o, _)| o) {
+            Some(o) if o.certifies() => "revoked",
+            _ => "withdrawn",
+        };
+    }
     match outcome.map(|(o, _)| o) {
         None => "pending",
         Some(PalwCertificationOutcomeV1::Certified) => "certified",

@@ -7889,6 +7889,35 @@ impl PalwPanelService {
         } else {
             None
         };
+        // **G14 R1/R2: past `palw_tir_public_conviction_v1` a TIR original is published as an ORIGINAL frame (`TFP1`)** — quoted on
+        // this node's accepted snapshot, the producer's source pledge signed over the quoted resource plan, and the exact native rent
+        // declared and paid on top of the carrier's relay fee. An original the frame route does not admit (semantic stage, non-greedy
+        // selection, tail) quotes `None` and keeps the history-custody route above. Dormant: the quote is `None` below the fence.
+        let tir_original = match &original_header {
+            Some(kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header))
+                if self.consensus_config.params.palw_tir_public_conviction_v1_fence().is_some_and(|f| f.is_active(current_daa)) =>
+            {
+                match session.palw_tir_public_original_quote_v1(commitment.clone(), header.clone())? {
+                    Some((quoted_daa, plan)) => {
+                        let mut pledge = kaspa_consensus_core::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1::for_plan_v1(
+                            &commitment,
+                            &plan,
+                            quoted_daa.max(current_daa),
+                        )?;
+                        pledge.signature = self
+                            .sign(
+                                pledge.id_v1().as_byte_slice(),
+                                kaspa_consensus_core::palw_tir_public_custody_v1::PALW_TIR_SOURCE_PLEDGE_CONTEXT_V1,
+                            )
+                            .ok_or("producer cannot sign the original TIR source pledge")?;
+                        pledge.check_v1()?;
+                        Some((header.clone(), pledge, plan.terms.plan.rent_sompi))
+                    }
+                    None => None,
+                }
+            }
+            _ => None,
+        };
         // **ADR-0148: the fold's own price, asked of this node's own state**, with the ids the
         // carrier holds (none: a canonical payload carries no prompt). Past the ADR-0145 bundle the
         // ledger prices compute and the leaves rule no longer says whether the claim earns; below
@@ -7923,6 +7952,23 @@ impl PalwPanelService {
         // because the fee is the only field the second build changes and the mass does not move
         // with it.
         let build = |fee: u64| {
+            if let Some((header, pledge, rent)) = &tir_original {
+                // The rent rides on top of relay: consensus burns exactly the declaration from this carrier's fee.
+                return kaspa_pq_validator_core::build_fp_commitment_tx_with_tir_public_original_v1(
+                    &key,
+                    network_domain,
+                    self.config.prompt_ids_form,
+                    commitment.clone(),
+                    carried.clone(),
+                    price,
+                    header,
+                    pledge,
+                    *rent,
+                    funding_outpoint,
+                    funding,
+                    fee.saturating_add(*rent),
+                );
+            }
             if let Some(pledge) = &public_pledge {
                 return key.build_fp_commitment_tx_original_public_v1(
                     &self.consensus_config.params,
@@ -15084,6 +15130,8 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } => "PublicCourtStreamMoveV1",
         PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { .. } => "PublicCourtStreamOpenedNativeV1",
         PalwConsensusObjectV2::TirClassLayoutPublishedV1 { .. } => "TirClassLayoutPublishedV1",
+        PalwConsensusObjectV2::TirPublicControlV1 { .. } => "TirPublicControlV1",
+        PalwConsensusObjectV2::TirPublicGrantReadyV1 { .. } => "TirPublicGrantReadyV1",
         PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         PalwConsensusObjectV2::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         PalwConsensusObjectV2::VerificationVertexV1 { .. } => "VerificationVertexV1",

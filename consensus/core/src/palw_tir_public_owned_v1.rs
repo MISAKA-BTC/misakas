@@ -726,7 +726,7 @@ impl PalwTirPublicPreparationV1 {
             || self.work.nonce > self.work.allocation.envelope.maximum_moves
             || self.ready.keys().chain(self.defaulted.iter()).any(|a| !c.custodians.contains(a))
             || self.defaulted.iter().any(|a| self.ready.contains_key(a))
-            || self.work.actors.len() > c.custodians.len()
+            || self.work.actors.len() > c.drawn_panel.len() + 1
             || !self.work.allocation.maximum.covers_v1(&self.work.spent)
         {
             return Err("TIR claim-wide preparation changes fixed contract, duties or cumulative work".into());
@@ -735,7 +735,7 @@ impl PalwTirPublicPreparationV1 {
         let mut grants = 0u64;
         let mut restarts = 0u64;
         for (actor, lane) in &self.work.actors {
-            if !c.custodians.contains(actor)
+            if (*actor != c.producer && !c.drawn_panel.contains(actor))
                 || !self.work.allocation.per_actor.covers_v1(&lane.spent)
                 || lane.grants > c.plan.maximum_slices_per_actor
                 || lane.restarts > c.plan.maximum_restarts
@@ -838,7 +838,7 @@ impl PalwTirPublicPreparationV1 {
         source.check_request_v1(&s.request)?;
         if now < c.original_accepted_daa
             || now >= c.preparation_until_daa
-            || !c.custodians.contains(&signer)
+            || (signer != c.producer && !c.drawn_panel.contains(&signer))
             || self.ready.contains_key(&signer)
             || self.defaulted.contains(&signer)
             || s.phase != PalwTirPublicWorkPhaseV1::Capture
@@ -897,6 +897,42 @@ impl PalwTirPublicPreparationV1 {
             self.work.actors.get(&signer).and_then(|a| a.last.as_ref()).ok_or("TIR Ready has no paid preparation debit")?.hash_v1()?;
         self.ready.insert(signer, PalwTirPublicReadyV1 { descriptor, accepted_daa: now, work_receipt: receipt });
         Ok(())
+    }
+    /// Native atomic RawValidGrant+Ready only. A drawn seat may use its already
+    /// paid preparation lane without becoming a custodian. Only this successful
+    /// transition adds its exact Ready promise and literal liability together.
+    pub(crate) fn qualify_ready_v1(
+        &mut self,
+        source: &PalwTirPublicSourceV1,
+        signer: PalwBondKeyV2,
+        now: u64,
+        descriptor: crate::palw_backend::PalwTirPublicPreparedDescriptorV1,
+    ) -> Result<(), String> {
+        if signer == self.contract.producer
+            || !self.contract.drawn_panel.contains(&signer)
+            || self.contract.custodians.contains(&signer)
+        {
+            return Err("TIR atomic grant+Ready is not a fresh actual drawn seat".into());
+        }
+        let mut next = self.clone();
+        next.contract.custodians.insert(signer);
+        next.mark_ready_v1(source, signer, now, descriptor)?;
+        next.check_v1()?;
+        *self = next;
+        Ok(())
+    }
+    /// Called only by the native, authenticated PanelBound fold. Empty original
+    /// Panels are not an excuse to infer custody; binding grants preparation
+    /// access alone, while the original plan and deadline remain unchanged.
+    pub(crate) fn bind_native_panel_v1(&mut self, panel: &BTreeSet<PalwBondKeyV2>) -> Result<(), String> {
+        if panel.contains(&self.contract.producer)
+            || (panel.len() as u64).checked_add(1).is_none_or(|n| n > self.contract.plan.maximum_custodians)
+            || (!self.contract.drawn_panel.is_empty() && &self.contract.drawn_panel != panel)
+        {
+            return Err("TIR preparation cannot redraw or exceed original native Panel geometry".into());
+        }
+        self.contract.drawn_panel = panel.clone();
+        self.check_v1()
     }
     /// A single outside bonded observer can collect EACH missing signer. No
     /// all-Panel readiness vote or outside-owner preparation promise is needed.
@@ -1310,6 +1346,7 @@ pub struct PalwTirPublicOwnedV1 {
     work: Option<PalwTirPublicWorkStateV1>,
     preparation: Option<PalwTirPublicPreparationReferenceV1>,
     prepared_responders: Option<BTreeSet<PalwBondKeyV2>>,
+    accepted_rows: Option<PalwTirPublicAcceptedRowsV1>,
 }
 /// No raw bytes, growing chunk list, or deserialized authenticated marker.
 /// Only native authenticated journal apply/revert may restore a checkpoint.
@@ -1322,6 +1359,14 @@ pub struct PalwTirPublicOwnedCheckpointV1 {
     work: Option<PalwTirPublicWorkStateV1>,
     preparation: Option<PalwTirPublicPreparationReferenceV1>,
     prepared_responders: Option<BTreeSet<PalwBondKeyV2>>,
+    accepted_rows: Option<PalwTirPublicAcceptedRowsV1>,
+}
+/// Small rooted pointer minted only after the original all-ID EOF sealed. It is
+/// not a wire authentication marker; native readers resolve its accepted row.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub(crate) struct PalwTirPublicAcceptedRowsV1 {
+    pub(crate) body: PalwTirPublicAcceptedBodyRefV1,
+    pub(crate) rows_root: Hash64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwTirPublicPreparationReferenceV1 {
@@ -1422,6 +1467,9 @@ pub enum PalwTirPublicOwnedEffectV1 {
     PreparationDefault(PalwTirPublicPreparationDefaultV1),
 }
 impl PalwTirPublicOwnedV1 {
+    pub(crate) fn accepted_rows_v1(&self) -> Option<&PalwTirPublicAcceptedRowsV1> {
+        self.accepted_rows.as_ref()
+    }
     /// Only original-deadline Ready actors inherit short response duties.
     /// Non-Ready actors have the separate, once-only preparation default.
     pub fn response_custodians_v1(&self) -> &BTreeSet<PalwBondKeyV2> {
@@ -1654,6 +1702,7 @@ impl PalwTirPublicOwnedV1 {
             work: None,
             preparation: None,
             prepared_responders: None,
+            accepted_rows: None,
         })
     }
     pub fn contract_v1(&self) -> &PalwTirPublicContractV1 {
@@ -1683,6 +1732,7 @@ impl PalwTirPublicOwnedV1 {
             work: self.work.clone(),
             preparation: self.preparation,
             prepared_responders: self.prepared_responders.clone(),
+            accepted_rows: self.accepted_rows.clone(),
         })
     }
     pub fn restore_checkpoint_v1(
@@ -1701,6 +1751,7 @@ impl PalwTirPublicOwnedV1 {
             return Err("TIR checkpoint changes immutable work allocation".into());
         }
         candidate.work = cp.work.clone();
+        candidate.accepted_rows = cp.accepted_rows.clone();
         if candidate.preparation != cp.preparation || candidate.prepared_responders != cp.prepared_responders {
             return Err("TIR checkpoint changes original shared preparation reference".into());
         }
@@ -1780,6 +1831,16 @@ impl PalwTirPublicOwnedV1 {
     }
     pub fn check_v1(&self, source: &PalwTirPublicSourceV1) -> Result<(), String> {
         self.contract.check_v1(source)?;
+        if self.accepted_rows.as_ref().is_some_and(|a| {
+            a.body.source_id != self.contract.source_id
+                || a.body.request != (PalwTirPublicRequestV1::Ids { offset: 0 })
+                || a.body.turn >= self.spent.turns
+                || a.body.opened_daa < self.contract.reserved_daa
+                || a.body.respond_until_daa >= self.contract.terms.stream_until_daa
+                || (a.body.answerer != self.contract.owner && !self.response_custodians_v1().contains(&a.body.answerer))
+        }) {
+            return Err("TIR accepted rows pointer changes original all-ID source or paid scope".into());
+        }
         if self.preparation.is_some() != self.prepared_responders.is_some()
             || self.prepared_responders.as_ref().is_some_and(|s| !s.is_subset(&self.contract.custodians))
         {
@@ -2106,6 +2167,18 @@ impl PalwTirPublicOwnedV1 {
         records: &[PalwTirPublicChunkRecordV1],
         ids: Option<&PalwTirPublicAuthenticatedIdsV1>,
     ) -> Result<PalwTirPublicFinishEffectV1, String> {
+        self.finish_with_rows_v1(source, signer, demand, now, records, ids, None)
+    }
+    pub(crate) fn finish_with_rows_v1(
+        &mut self,
+        source: &PalwTirPublicSourceV1,
+        signer: PalwBondKeyV2,
+        demand: Hash64,
+        now: u64,
+        records: &[PalwTirPublicChunkRecordV1],
+        ids: Option<&PalwTirPublicAuthenticatedIdsV1>,
+        native_rows: Option<&crate::palw_tir_public_source_v1::PalwTirPublicRowsAnchorV1>,
+    ) -> Result<PalwTirPublicFinishEffectV1, String> {
         self.source(source)?;
         self.response_clock(signer, demand, now)?;
         let p = self.active_v1().unwrap();
@@ -2155,7 +2228,7 @@ impl PalwTirPublicOwnedV1 {
             PalwTirPublicFinishedV1::Ids(sealed.ok_or("TIR IDs never authenticated exact original EOF")?)
         } else {
             let response = source.decode_response_v1(&p.request, &body)?;
-            PalwTirPublicFinishedV1::Unit(source.authenticate_v1(&p.request, &response, ids)?)
+            PalwTirPublicFinishedV1::Unit(source.authenticate_with_rows_v1(&p.request, &response, ids, native_rows)?)
         };
         let reference = PalwTirPublicAcceptedBodyRefV1 {
             source_id: self.contract.source_id,
@@ -2174,6 +2247,9 @@ impl PalwTirPublicOwnedV1 {
         self.debit()?;
         self.history = history;
         self.pending.as_mut().unwrap().slots.get_mut(&signer).unwrap().finished = Some(reference.clone());
+        if let PalwTirPublicFinishedV1::Ids(ids) = &authenticated {
+            self.accepted_rows = Some(PalwTirPublicAcceptedRowsV1 { body: reference.clone(), rows_root: ids.rows_root_v1() });
+        }
         Ok(PalwTirPublicFinishEffectV1 { authenticated, body: reference, history_index: index })
     }
     pub fn collect_v1(&mut self, signer: PalwBondKeyV2, demand: Hash64, now: u64) -> Result<PalwTirPublicDefaultV1, String> {
@@ -2387,6 +2463,53 @@ mod tests {
         assert!(prep.collect_v1(bond(7), bond(7), deadline).is_err(), "outside owner never owes preparation Ready");
         assert!(prep.collect_v1(bond(7), producer, deadline).is_err());
         prep.check_v1().unwrap();
+    }
+    #[test]
+    fn optional_drawn_preparation_is_not_a_default_obligation_before_atomic_grant_ready() {
+        let (source, mut prep, _) = preparation_fixture();
+        let producer = prep.contract.producer;
+        prep.contract.custodians = BTreeSet::from([producer]);
+        let actor = bond(2);
+        let now = prep.contract.original_accepted_daa + 1;
+        let debit = capture_debit(&prep, actor);
+        prep.capture_debit_v1(&source, actor, now, &debit).unwrap();
+        assert_eq!(prep.pending_signers_v1(), vec![producer]);
+        let descriptor = ready_descriptor(&source, &prep);
+        assert!(prep.mark_ready_v1(&source, actor, now, descriptor).is_err());
+        let mut qualified = prep.clone();
+        qualified.qualify_ready_v1(&source, actor, now, descriptor).unwrap();
+        assert!(qualified.contract.custodians.contains(&actor));
+        assert!(qualified.ready_v1(&actor).is_some());
+        assert_eq!(qualified.pending_signers_v1(), vec![producer]);
+        let deadline = prep.contract.preparation_until_daa;
+        assert!(prep.collect_v1(bond(7), actor, deadline).is_err());
+        prep.collect_v1(bond(7), producer, deadline).unwrap();
+        assert!(prep.pending_signers_v1().is_empty());
+        let before = prep.clone();
+        assert!(prep.qualify_ready_v1(&source, actor, deadline, descriptor).is_err());
+        assert_eq!(prep, before, "late grant must not add a preparation liability before failing Ready");
+        prep.check_v1().unwrap();
+        qualified.check_v1().unwrap();
+    }
+    #[test]
+    fn accepted_rows_metadata_is_a_fixed_small_pointer_not_a_full_id_copy() {
+        let pointer = PalwTirPublicAcceptedRowsV1 {
+            body: PalwTirPublicAcceptedBodyRefV1 {
+                source_id: Hash64::from_u64_word(1),
+                demand_id: Hash64::from_u64_word(2),
+                turn: u64::MAX,
+                request: PalwTirPublicRequestV1::Ids { offset: 0 },
+                answerer: bond(1),
+                body_hash: Hash64::from_u64_word(3),
+                total_bytes: u64::MAX,
+                chunk_head: Hash64::from_u64_word(4),
+                opened_daa: u64::MAX - 1,
+                respond_until_daa: u64::MAX,
+            },
+            rows_root: Hash64::from_u64_word(5),
+        };
+        let bytes = borsh::to_vec(&Some(pointer)).unwrap();
+        assert!(bytes.len() <= 512, "fits the fixed 16KiB owned-row metadata margin, no D-sized vector");
     }
     #[test]
     fn preparation_context_decode_uses_native_bounds_not_self_declared_plan() {
@@ -2891,3 +3014,7 @@ mod tests {
         }
     }
 }
+
+// Exhaustive read-only native input allocation inventory; no consensus encoding change.
+#[path = "palw_native_resource_v1/private/palw_tir_public_owned_v1.rs"]
+mod native_resource_inventory_v1;

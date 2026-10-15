@@ -19,6 +19,11 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 const VERSION: u16 = 1;
 const CARRIER: u64 = 90_000;
+// Up to four validator/extraction/rehearsal/canonical processing passes, each
+// with eight original/wrapper/receipt/raw-grant/pledge signature invocations.
+// Native activation must enforce this allowance in its processing reservation;
+// it is not an instruction/WCET conversion or a budget for anonymous retries.
+const CONTROL_SIGNATURE_CHECKS: u64 = 32;
 fn narrow(n: u128) -> Result<u64, String> {
     u64::try_from(n).map_err(|_| "native TIR allocation exceeds u64 (not covered)".into())
 }
@@ -94,6 +99,17 @@ pub struct PalwTirPublicTerminalPlanV1 {
     pub sizing_work: u64,
     pub envelope: PalwRenderingResourcePlanV1,
 }
+/// Finite native control geometry. Signature-check counts must also enter the
+/// native ordinary cryptographic processing reservation before activation.
+/// They are NOT a fabricated instruction tariff or a WCET/deadline proof.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirPublicControlFootprintV1 {
+    pub maximum_frame_bytes: u64,
+    pub maximum_frame_writes: u64,
+    pub maximum_native_signature_checks: u64,
+    pub maximum_state_references: u64,
+    pub maximum_frame_validation_bytes: u64,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwTirPublicAllocationMissingV1 {
     NativeSemanticStatement,
@@ -135,6 +151,10 @@ pub struct PalwTirPublicAllocationPlanV1 {
     pub executor: PalwTirPublicExecutorPlanV1,
     pub terminal: PalwTirPublicTerminalPlanV1,
     pub controls: PalwRenderingResourcePlanV1,
+    pub control_footprint: PalwTirPublicControlFootprintV1,
+    /// Full-frame checks per bounded owner action, prepaid separately again by
+    /// each outside owner. No authenticated-state scalar shortcut is assumed.
+    pub owner_validation: PalwRenderingResourcePlanV1,
     pub preparation_until_daa: u64,
     pub terms: PalwRenderingClaimTermsV1,
 }
@@ -169,6 +189,97 @@ fn component(
         row_bytes: row,
         resident_ram_bytes: add(ram, mul(row, 8)?)?,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn original_controls(
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    semantic: Option<&crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1>,
+    acquisition: &PalwTirPublicOwnedPlanV1,
+    flat_trace: Option<PalwRenderingResourcePlanV1>,
+    preparation_work: &PalwTirPublicWorkAllocationV1,
+    owner_work: &PalwTirPublicWorkAllocationV1,
+    preparation: &PalwTirPublicPreparationPlanV1,
+    executor: &PalwTirPublicExecutorPlanV1,
+    terminal: &PalwTirPublicTerminalPlanV1,
+    rules: PalwTirPublicAllocationRulesV1,
+) -> Result<(PalwRenderingResourcePlanV1, PalwRenderingResourcePlanV1, PalwTirPublicControlFootprintV1), String> {
+    let fixed_components =
+        borsh::to_vec(&(semantic, acquisition, flat_trace, preparation_work, owner_work, preparation, executor, terminal))
+            .map_err(|e| e.to_string())?
+            .len() as u64;
+    let original_bytes = borsh::to_vec(original).map_err(|e| e.to_string())?.len() as u64;
+    let header_bytes = borsh::to_vec(header).map_err(|e| e.to_string())?.len() as u64;
+    let config_bytes = borsh::to_vec(&rules.config).map_err(|e| e.to_string())?.len() as u64;
+    let work_rules_bytes = borsh::to_vec(&owner_work.rules).map_err(|e| e.to_string())?.len() as u64;
+    let signature = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64;
+    // Exact variable original/header/component encodings above; fixed 8KiB
+    // covers allocation IDs/clocks/controls, source descriptor and pledge
+    // framing. Its signature and all upper-sized custody records are separate.
+    let base = add(
+        add(add(original_bytes, header_bytes)?, fixed_components)?,
+        add(add(config_bytes, work_rules_bytes)?, add(8192, signature)?)?,
+    )?;
+    // Each literal credit retains a raw grant and exact signed Valid receipt
+    // (two fixed MLDSA87 signatures), Ready+work receipt, credit DAA, two Panel
+    // key sets and map keys/framing. No caller-supplied size or host Need.
+    let per_credit = add(mul(signature, 2)?, 2048)?;
+    let frame = add(base, mul(rules.maximum_custodians, per_credit)?)?;
+    let passes = add(rules.config.prices.reorg_replay_moves, 1)?;
+    let writes = mul(add(rules.maximum_custodians, 4)?, passes)?;
+    let signature_checks = mul(writes, CONTROL_SIGNATURE_CHECKS)?;
+    let owner_reads = add(acquisition.envelope.maximum_moves, owner_work.envelope.maximum_moves)?;
+    let preparation_reads = add(preparation_work.envelope.maximum_moves, preparation.envelope.maximum_moves)?;
+    let references = mul(add(writes, add(owner_reads, preparation_reads)?)?, 32)?;
+    // Rooted Arc COW still serializes OLD+NEW full frames in delta210 and
+    // journal/root replay. Charge every upper-sized write, not just the final
+    // map, hence the native O(custodians^2) bound. This does not bound cloning
+    // or hashing unrelated global ledger maps.
+    let journal_bytes = mul(mul(frame, writes)?, 8)?;
+    // Full-frame source checks remain enabled. Cover up to32 full byte/hash
+    // passes per accepting action, including cumulative allocation/receipt
+    // checks. This bounds finite protocol actions, not unlimited RPC spam.
+    let owner_validation_bytes = mul(mul(frame, owner_reads)?, 32)?;
+    let preparation_validation_bytes = mul(mul(frame, preparation_reads)?, 32)?;
+    let key = crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN as u64;
+    let decode = add(mul(signature_checks, add(signature, key)?)?, mul(references, 256)?)?;
+    let mut plan = component(
+        add(journal_bytes, preparation_validation_bytes)?,
+        mul(frame, 16)?,
+        decode,
+        writes,
+        acquisition.envelope.vocab,
+        rules.config,
+    )?;
+    plan.row_bytes = frame;
+    plan.rent_sompi = add(
+        add(
+            mul(plan.maximum_stream_bytes, rules.config.prices.rent_per_stream_byte)?,
+            mul(frame, rules.config.prices.rent_per_row_byte)?,
+        )?,
+        mul(plan.maximum_parser_steps, rules.config.prices.rent_per_parser_step)?,
+    )?;
+    plan.resident_ram_bytes = add(mul(frame, 16)?, mul(add(signature, key)?, 8)?)?;
+    let mut owner_validation = component(owner_validation_bytes, mul(frame, 16)?, 0, 0, acquisition.envelope.vocab, rules.config)?;
+    // Read validation creates no additional move, stored row, deadline or
+    // capital pool. Its byte/parser/hash/RAM rent is nevertheless real.
+    owner_validation.row_bytes = 0;
+    owner_validation.rent_sompi = add(
+        mul(owner_validation.maximum_stream_bytes, rules.config.prices.rent_per_stream_byte)?,
+        mul(owner_validation.maximum_parser_steps, rules.config.prices.rent_per_parser_step)?,
+    )?;
+    Ok((
+        plan,
+        owner_validation,
+        PalwTirPublicControlFootprintV1 {
+            maximum_frame_bytes: frame,
+            maximum_frame_writes: writes,
+            maximum_native_signature_checks: signature_checks,
+            maximum_state_references: references,
+            maximum_frame_validation_bytes: add(owner_validation_bytes, preparation_validation_bytes)?,
+        },
+    ))
 }
 
 fn executor_plan(
@@ -564,13 +675,18 @@ pub fn derive_tir_public_allocation_v1(
     };
     // Original pledge, each distinct signed Valid grant, allocation admission,
     // original public context, immutable leases and final metadata/ref controls.
-    let controls = component(
-        mul(add(rules.maximum_custodians, 4)?, 16_384)?,
-        mul(add(rules.maximum_custodians, 1)?, 262_144)?,
-        mul(add(rules.maximum_custodians, 4)?, 131_072)?,
-        add(rules.maximum_custodians, 4)?,
-        source.vocab_v1(),
-        rules.config,
+    let (controls, owner_validation, control_footprint) = original_controls(
+        original,
+        header,
+        semantic.as_ref().map(|quote| &quote.plan),
+        &acquisition,
+        flat_trace,
+        &preparation_work,
+        &owner_work,
+        &preparation,
+        &executor,
+        &terminal,
+        rules,
     )?;
     let mut sum = acquisition
         .envelope
@@ -579,7 +695,8 @@ pub fn derive_tir_public_allocation_v1(
         .checked_sum_v1(preparation.envelope)?
         .checked_sum_v1(executor.envelope)?
         .checked_sum_v1(terminal.envelope)?
-        .checked_sum_v1(controls)?;
+        .checked_sum_v1(controls)?
+        .checked_sum_v1(owner_validation)?;
     if let Some(flat) = flat_trace {
         sum = sum.checked_sum_v1(flat)?;
     }
@@ -631,6 +748,8 @@ pub fn derive_tir_public_allocation_v1(
         executor,
         terminal,
         controls,
+        control_footprint,
+        owner_validation,
         preparation_until_daa,
         terms,
     };
@@ -659,6 +778,13 @@ fn rebase_new_semantic_plan(plan: &mut crate::palw_staged_bundle_v1::PalwStagedB
 }
 
 impl PalwTirPublicAllocationPlanV1 {
+    /// Every outside owner prepays its own finite acquisition, work and full-
+    /// frame validation. Original absolute doors never move on owner admission.
+    pub fn owner_terms_v1(&self) -> Result<PalwRenderingClaimTermsV1, String> {
+        let mut terms = self.terms;
+        terms.plan = self.acquisition.envelope.checked_sum_v1(self.owner_work.envelope)?.checked_sum_v1(self.owner_validation)?;
+        Ok(terms)
+    }
     fn summed_v1(&self) -> Result<PalwRenderingResourcePlanV1, String> {
         let mut total = self
             .acquisition
@@ -668,7 +794,8 @@ impl PalwTirPublicAllocationPlanV1 {
             .checked_sum_v1(self.preparation.envelope)?
             .checked_sum_v1(self.executor.envelope)?
             .checked_sum_v1(self.terminal.envelope)?
-            .checked_sum_v1(self.controls)?;
+            .checked_sum_v1(self.controls)?
+            .checked_sum_v1(self.owner_validation)?;
         if let Some(flat) = self.flat_trace {
             total = total.checked_sum_v1(flat)?;
         }
@@ -697,6 +824,8 @@ impl PalwTirPublicAllocationPlanV1 {
                 &self.executor,
                 &self.terminal,
                 self.controls,
+                self.control_footprint,
+                self.owner_validation,
             ),
         )
     }
@@ -708,6 +837,9 @@ impl PalwTirPublicAllocationPlanV1 {
     /// Structural checksum only. No deserialized plan proves native payment,
     /// registry provenance, qualified custody or the native accepting clock.
     pub fn check_v1(&self) -> Result<(), String> {
+        let owner_reads = add(self.acquisition.envelope.maximum_moves, self.owner_work.envelope.maximum_moves)?;
+        let preparation_reads = add(self.preparation_work.envelope.maximum_moves, self.preparation.envelope.maximum_moves)?;
+        let frame_bytes = self.control_footprint.maximum_frame_bytes;
         if self.version != VERSION
             || self.terms.plan != self.summed_v1()?
             || self.resource_plan_id != self.resource_id_v1()?
@@ -719,6 +851,23 @@ impl PalwTirPublicAllocationPlanV1 {
             || self.terms.collect_until_daa > self.terms.material_until_daa
             || self.terms.material_until_daa != self.terms.bond_exit_after_daa
             || self.semantic.is_some() != self.semantic_resource_plan_id.is_some()
+            || self.control_footprint.maximum_frame_bytes == 0
+            || self.controls.row_bytes != self.control_footprint.maximum_frame_bytes
+            || self.controls.maximum_moves != self.control_footprint.maximum_frame_writes
+            || self.control_footprint.maximum_native_signature_checks != mul(self.controls.maximum_moves, CONTROL_SIGNATURE_CHECKS)?
+            || self.control_footprint.maximum_state_references
+                != mul(add(self.controls.maximum_moves, add(owner_reads, preparation_reads)?)?, 32)?
+            || self.control_footprint.maximum_frame_validation_bytes
+                != mul(mul(frame_bytes, add(owner_reads, preparation_reads)?)?, 32)?
+            || self.owner_validation.maximum_stream_bytes < mul(mul(frame_bytes, owner_reads)?, 32)?
+            || self.owner_validation.resident_ram_bytes < mul(frame_bytes, 16)?
+            || self.owner_validation.row_bytes != 0
+            || self.owner_validation.maximum_moves != 0
+            || self.owner_validation.inclusion_daa != 0
+            || self.owner_validation.deposit_sompi != 0
+            || self.controls.maximum_stream_bytes
+                < add(mul(mul(self.controls.row_bytes, self.controls.maximum_moves)?, 8)?, mul(self.controls.maximum_moves, CARRIER)?)?
+            || self.controls.resident_ram_bytes < mul(self.controls.row_bytes, 16)?
         {
             return Err("native TIR full allocation changes SUM, components, commitment or original clock".into());
         }
@@ -1039,5 +1188,34 @@ mod tests {
         assert_eq!(tir_public_tree_disk_bytes_v1(3).unwrap(), (3 + 2 + 1) * 64);
         assert_eq!(tir_public_tree_disk_bytes_v1(4).unwrap(), (4 + 2 + 1) * 64);
         assert!(tir_public_tree_disk_bytes_v1(u64::MAX).is_err());
+    }
+    #[test]
+    fn native_frame_controls_price_full_upper_cow_and_carry_signature_counts() {
+        let f = fixture(false, false);
+        let one = complete(&f, false);
+        let mut more = fixture(false, false);
+        more.rules.maximum_custodians = 3;
+        let many = complete(&more, false);
+        let fp = many.control_footprint;
+        assert!(fp.maximum_frame_bytes > one.control_footprint.maximum_frame_bytes);
+        assert!(fp.maximum_frame_writes > one.control_footprint.maximum_frame_writes);
+        assert_eq!(fp.maximum_native_signature_checks, fp.maximum_frame_writes * CONTROL_SIGNATURE_CHECKS);
+        assert!(fp.maximum_state_references > fp.maximum_frame_writes * 32);
+        assert!(fp.maximum_frame_validation_bytes > 0);
+        assert!(many.controls.maximum_stream_bytes >= fp.maximum_frame_bytes * fp.maximum_frame_writes * 8);
+        assert_eq!(many.controls.row_bytes, fp.maximum_frame_bytes);
+        assert!(many.controls.resident_ram_bytes >= fp.maximum_frame_bytes * 16);
+        assert!(many.controls.rent_sompi > one.controls.rent_sompi);
+        assert!(many.controls.deposit_sompi > one.controls.deposit_sompi);
+        let owner = many.owner_terms_v1().unwrap();
+        assert_eq!(owner.accepted_daa, many.terms.accepted_daa);
+        assert_eq!(owner.stream_until_daa, many.terms.stream_until_daa);
+        assert!(owner.plan.covers_v1(many.owner_validation));
+        assert!(many.owner_validation.maximum_stream_bytes > 0);
+        let mut bad = many;
+        bad.control_footprint.maximum_native_signature_checks -= 1;
+        assert!(bad.check_v1().is_err());
+        // This bounds invocations and native byte/row processing. It does not
+        // invent a CPU instruction tariff or certify signature verifier WCET.
     }
 }

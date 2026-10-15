@@ -1296,3 +1296,7 @@ impl NativeCollectedJobV39 {
 pub fn native_consent_body_digest_v39(raw: &[u8]) -> Digest {
     object_id(b"misaka-palw/native/collected-consent-body/v39", &raw)
 }
+
+// Exhaustive read-only native input allocation inventory; no consensus encoding change.
+#[path = "palw_native_resource_v1/private/palw_native_job_v39.rs"]
+mod native_resource_inventory_v1;

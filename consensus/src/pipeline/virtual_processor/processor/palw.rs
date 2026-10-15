@@ -1280,6 +1280,53 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_tir_prefix_v1(&state, key)
     }
 
+    /// G14 R4: the accepted ORIGINAL TIR frame a public verifier files against (`None` below `palw_tir_public_conviction_v1`).
+    pub fn palw_tir_public_frame_v1_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_tir_public_claim_v1::PalwTirPublicFrameViewV1>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let now = state.last_point().ok_or("TIR public frame snapshot has no accepted clock")?.daa_score;
+        if !self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(now)) {
+            return Ok(None);
+        }
+        Ok(kaspa_consensus_core::palw_tir_public_claim_v1::palw_tir_public_frame_view_v1(&state, claim))
+    }
+
+    /// G14 R1/R2: the producer's pre-signing quote of an ORIGINAL TIR frame (`None` below `palw_tir_public_conviction_v1`).
+    pub fn palw_tir_public_original_quote_v1_impl(
+        &self,
+        original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    ) -> Result<Option<(u64, kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1)>, String> {
+        kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header.clone()).check_wire_v1()?;
+        if borsh::object_length(&original).map_err(|e| e.to_string())?
+            > kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES
+        {
+            return Err("TIR original quote exceeds the original bounded FP descriptor".into());
+        }
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let point = state.last_point().ok_or("TIR original quote snapshot has no accepted clock")?;
+        if !self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(point.daa_score)) {
+            return Ok(None);
+        }
+        let extras = self.palw_transition_extras_for(point);
+        let plan = kaspa_consensus_core::palw_state_v2::palw_tir_public_original_quote_v1(
+            &state,
+            params,
+            &extras,
+            point.daa_score,
+            &original,
+            &header,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(plan.map(|plan| (point.daa_score, plan)))
+    }
+
     pub fn palw_staged_tir_prefix_leaf_index_v1_impl(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),

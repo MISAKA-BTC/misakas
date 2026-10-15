@@ -30,4 +30,22 @@ PINNED = {
 'crate::palw_work_slice_v2::PalwExecOriginWitnessV1': ('reviewed-field-layout','5017f37eacd00a129c5d75862110ab97186f3b5d7660507493d98d2a7715f2f7'),
 'misaka_palw_kernel::merkle3::LeafOpeningV3': ('adapter','582e62f4dc91bf880a6b4d7a26844983e16d81e9a146e632492181d4250a70ba'),
 'misaka_palw_panel::PanelCandidatesV1': ('adapter','31fc1462f95406b67fd1c21d5612daf979d83d9508b1794ef419121b3b1c5bcc'),
+# G14 original TIR route (2026-10-15, integ/g14-remaining): each body read by hand against its struct/enum declaration —
+# field order and representation are the derive layout (u8 enum tags in declaration order, u32-prefixed collections,
+# Option as u8 0/1); the decoders only add pre-allocation bounds, canonical-order and duplicate refusals.
+'crate::palw_tir_public_carriage_v1::PalwTirPublicControlV1': ('reviewed-field-layout','ac20f0083098873053009bd778b7fb149bea9f2de21f03cd52e700fb6a9c77cd'),
+'crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1': ('reviewed-field-layout','3ce1e73405110241f03f316b92c5d9da2b1ee26cb51146c1fbb6789605826caf'),
+'crate::palw_tir_public_carriage_v1::PalwTirPublicGrantReadyV1': ('reviewed-field-layout','d5c9aa2a7cea6997fbfc37a6af280e3cf704007009b44aafd2d5cf96ebb7e2dd'),
+'crate::palw_tir_public_custody_v1::PalwTirPublicCustodyContractV1': ('reviewed-field-layout','248d1220c6fbd16bc325312303d7270ed82ec76f0852200fdb3f4a5a2b4b641f'),
+'crate::palw_tir_public_custody_v1::PalwTirPublicCustodyGrantV1': ('reviewed-field-layout','2ca7a248a7694cb8b1b6efff219412ac3b93cfe7c35e64c37791e7016dd098df'),
+'crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1': ('reviewed-field-layout','14b4b9db923bd2424e65a22f6f81665f7d0f96cfc28fc0110bc6be3f15044c44'),
+'crate::palw_tir_public_custody_v1::PalwTirPublicOriginalCustodyV1': ('reviewed-field-layout','40f7811c50a945484bf1e06ef0b5fae8099ad6d3d12fa49dd89f0cea519e0a9c'),
+'crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1': ('reviewed-field-layout','ab8b9172bfb20b31f9b8a708c55adad353b3b1f610b1539bc32a1b0d3226d46c'),
+'crate::palw_tir_public_owned_v1::PalwTirPublicChunkRecordV1': ('reviewed-field-layout','394604fa55e5ec254a05265c967a3604f9584f90505e54083bcd28b91b626d92'),
+'crate::palw_tir_public_owned_v1::PalwTirPublicContractV1': ('reviewed-field-layout','a37709c03faa51fcc923e9055aa29a280ab0b09ef3cfa086ef66997762cf745f'),
+'crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1': ('reviewed-field-layout','3466d969363509459096937bf38dc0ccc8c2c61ef4c3e28bef83585417e726cf'),
+'crate::palw_tir_public_owned_v1::PalwTirPublicPendingV1': ('reviewed-field-layout','1ac3396c3c5a2de5699b5c0164d480eaf099cb0efeca354745932bb865b30342'),
+'crate::palw_tir_public_owned_v1::PalwTirPublicSlotV1': ('reviewed-field-layout','dc905c91c97914082760b784060e472a1593f5142e388d7981d313f582ff4b47'),
+'crate::palw_tir_public_owned_v1::PalwTirPublicWorkDebitV1': ('reviewed-field-layout','ed4276f62badba8b2d69155d2f7fdbb869d1fa2659127130be140e74566a65c3'),
+'crate::palw_tir_public_owned_v1::PalwTirPublicWorkRulesV1': ('reviewed-field-layout','8ad95ed209aa5dfe8d5609986bf48de7cc50399de66c13f18ef568fcae839a0e'),
 }
