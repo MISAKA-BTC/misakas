@@ -39,7 +39,7 @@
 * **anchor:** GAP-A1/A2は解消。認識は採用の1 chain block後になる。
 * **GAP-C3:** 認証前のfree-prompt spendのcoinbase carveは止めていない(weightは止める)。processorのproducer pre-checkまで変える必要がある。
 * **GAP-C4:** 保留した発行由来報酬は認証時にproducerへ1 legで払う。Panel share・buyback・vestingへの分配は未設計(U-2)。
-* **GAP-R4:** leaf v2は資本(rule E v2のparticipation)を運ばない。
+* **GAP-R4:** 2026-10-15に解消(rule-E leaf v3: `palw_fork_choice_rule_e_leaf_v3.rs`、node `palw_committed_root_v1` → `palw_committed_state_root_v2`、v39 anchor・L2 client・carriage RPCの共通検証、native roots chain。試験 `palw_fork_choice_rule_e_leaf_v3/tests.rs`)。
 * **selected parentのsibling:** GHOSTDAGがselected parentに選んだsiblingは自分のblockで先に採用される。決定的(blue work、block hash)で到着順に依存しないが、mergeset内の他siblingと同じ土俵では比べない。
 * **DAG幅のreader:** live経路(header処理、GHOSTDAG、difficulty、pruning)に触れるため実装しない(RFC §8.4)。
 * **DNS-BFTの物理除去:** 別lane(`integ/rfc12-dns-removal`)。本branchには取り込まない。
