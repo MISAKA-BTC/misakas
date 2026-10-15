@@ -64,10 +64,6 @@ pub const PALW_RFC0608_OPEN_BLOCKERS_V1: &[(PalwRfc0608FenceV1, &str)] = &[
          claim/producer)",
     ),
     (
-        PalwRfc0608FenceV1::MemoryRoutingCourtV2,
-        "RFC06-4: one offence-attribution path still uses the older coverage-closure rules",
-    ),
-    (
         PalwRfc0608FenceV1::SettlementOnceV1,
         "RFC08-1: verifier slot fee legs, free-prompt receipt spends and journal_bond_budget slots are not on the once-only \
          registry",

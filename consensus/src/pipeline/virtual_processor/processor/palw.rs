@@ -2070,7 +2070,8 @@ impl VirtualStateProcessor {
             return Err("terminal Windowed court is dormant".into());
         }
         let bond = state.bond(&accused).ok_or("terminal accused has no registered bond")?;
-        t::palw_terminal_adjudicate_v1(
+        // RFC06-4: `_v2` with the block's two closure mirrors (both `None` on every shipped network: the V1 call byte for byte).
+        t::palw_terminal_adjudicate_v2(
             state,
             &d,
             evidence,
@@ -2088,6 +2089,7 @@ impl VirtualStateProcessor {
                 ),
                 verify: &Self::verify_mldsa87_with_context_bool,
             }),
+            kaspa_consensus_core::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1::of(params),
         )?;
         Ok(())
     }

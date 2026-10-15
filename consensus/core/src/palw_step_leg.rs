@@ -2317,12 +2317,12 @@ pub fn check_step_refutation_capped_v1(
 ///   missing arithmetic" acquittal (unreachable past the shape pass, kept as the second lock). No map (the long form) stays as it was.
 ///
 /// Without it (`false`): byte for byte [`check_step_refutation_capped_v1`].
-pub fn check_step_refutation_closure_capped_v1(
+pub fn check_step_refutation_closure_capped_v1<'m>(
     refutation: &PalwStepRefutationV1,
     max_step_leaf_count: u64,
     // `bool` is the round-4 closure (`From<bool>`); RFC-0006 consumer v2's mode re-reads the profile and checkpoint counts
-    // through what that consumer reaches.
-    cell_closure: impl Into<crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1>,
+    // through what that consumer reaches, with the claim's router binding row (RFC06-4: the claim gate's and the court's predicate).
+    cell_closure: impl Into<crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1<'m>>,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepLegError> {
     let cell_closure = cell_closure.into();
     let binding = &refutation.binding;
@@ -2638,7 +2638,7 @@ fn checkpoint_fault(
     opening: &PalwStepOpeningV1,
     preimage: &PalwCheckpointLeafV2,
     // R6-CELL round 4: the coverage closure governs this claim (see `check_step_refutation_closure_capped_v1`).
-    cell_closure: crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1,
+    cell_closure: crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1<'_>,
 ) -> Option<PalwStepFaultV1> {
     if preimage.version != PALW_STEP_LEG_OBJECT_VERSION_V1 {
         return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
@@ -2696,7 +2696,7 @@ fn checkpoint_fault(
         // unmapped long form keeps its `None`.
         // RFC-0006 consumer v2: a solo gdn v1/v2 or composed hybrid checkpoint's count IS derivable past that consumer's fence
         // (`memory_v2::gdn_checkpoint_chunk_count_v2`), so it is checked rather than read as a fault.
-        None if cell_closure == crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1::MemoryRoutingV2
+        None if cell_closure.is_memory_routing_v2()
             && crate::palw_step_refute::memory_v2::gdn_checkpoint_chunk_count_v2(&binding.shape_profile, positions).is_some() =>
         {
             let canonical =

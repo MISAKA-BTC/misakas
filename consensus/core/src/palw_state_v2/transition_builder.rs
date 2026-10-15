@@ -4571,12 +4571,24 @@ impl<'a> TransitionBuilder<'a> {
                 convicted_claim = Some(payload.claim_id);
                 // R6-CELL round 4: the coverage closure governs a claim accepted at or past its fence (None on shipped networks).
                 // RFC-0006 consumer v2: the closure's mode for this claim also knows `palw_memory_routing_court_v2`'s mirror.
-                let cell_closure = self
-                    .state
-                    .claims
-                    .get(&payload.claim_id)
-                    .map(|c| crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1::for_claim(self.params, c.accepted_daa))
-                    .unwrap_or(crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1::Off);
+                // RFC06-4: with the claim's router binding past consumer v2 — the claim gate's and the court's predicate.
+                let closure_mirrors = crate::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1::of(self.params);
+                let closure_inputs = crate::palw_cell_coverage_closure_v1::palw_blame_closure_inputs_v1(
+                    &self.state,
+                    &payload.claim_id,
+                    closure_mirrors,
+                );
+                let cell_closure = closure_inputs.as_ref().map_or(
+                    crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1::Off,
+                    |(accepted, row)| {
+                        crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1::for_blame_path(
+                            closure_mirrors,
+                            *accepted,
+                            row.as_ref(),
+                            true,
+                        )
+                    },
+                );
                 crate::palw_offence_v1::palw_panel_contradiction_convicts_execution_closure_v1(
                     &payload.contradiction,
                     execution_root,
@@ -4788,7 +4800,8 @@ impl<'a> TransitionBuilder<'a> {
             evidence_budget,
         )?;
         // The reporter slot is F7's; until its fence arms it the adjudicator refuses a filled one.
-        let finding = crate::palw_offence_attribution_v1::palw_check_panel_false_valid_at_v2_with_budget_closure_v1(
+        // RFC06-4: both mirrors — past consumer v2 the claim is judged with its router binding, as the processor judges it.
+        let finding = crate::palw_offence_attribution_v1::palw_check_panel_false_valid_blame_v2(
             &self.state,
             &accused,
             evidence,
@@ -4798,7 +4811,8 @@ impl<'a> TransitionBuilder<'a> {
             None,
             self.session_rule_v1(ctx.daa_score),
             evidence_budget,
-            self.params.cell_coverage_closure_from_daa(),
+            crate::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1::of(self.params),
+            true,
         )
         .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
         let claim_id = finding.target.claim_id;
@@ -5231,9 +5245,7 @@ impl<'a> TransitionBuilder<'a> {
         evidence: &[u8],
         evidence_budget: crate::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_offence_attribution_v1::{
-            palw_check_executor_refuted_at_v1_with_budget_v1, palw_executor_refuted_offence_id_v1,
-        };
+        use crate::palw_offence_attribution_v1::palw_executor_refuted_offence_id_v1;
         use crate::palw_offence_v1::{PalwConsumedOffenceV1, PalwOffenceKindV1};
         if crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != evidence_id {
             return Err(PalwStateV2Error::ObjectiveOffenceRefused(
@@ -5249,7 +5261,8 @@ impl<'a> TransitionBuilder<'a> {
             evidence,
             evidence_budget,
         )?;
-        let finding = palw_check_executor_refuted_at_v1_with_budget_v1(
+        // RFC06-4: past consumer v2, kind 3's closure predicate (below it, byte for byte the old call).
+        let finding = crate::palw_offence_attribution_v1::palw_check_executor_refuted_blame_v2(
             &self.state,
             &accused,
             evidence,
@@ -5258,6 +5271,7 @@ impl<'a> TransitionBuilder<'a> {
             self.identity_rules_v1(ctx.daa_score),
             self.session_rule_v1(ctx.daa_score),
             evidence_budget,
+            crate::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1::of(self.params),
         )
         .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
         let claim_id = finding.target.claim_id;
