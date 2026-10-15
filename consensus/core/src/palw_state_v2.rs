@@ -176,8 +176,14 @@ mod palw_native_initial_fold_v31;
 mod palw_native_job_fold_v39;
 #[path = "palw_native_master_fold_v39.rs"]
 mod palw_native_master_fold_v39;
+// RFC-0002 §II.14: owning39 ordinary mining (stage actions 73–79, the PNR9 receipt block), dormant behind
+// `palw_native_mining_v39` (absent on every preset, refused when armed).
+#[path = "palw_native_mining_fold_v39.rs"]
+mod palw_native_mining_fold_v39;
+pub use palw_native_mining_fold_v39::palw_native_mining_model_view_v39;
 #[path = "palw_native_source_fold_v39.rs"]
 mod palw_native_source_fold_v39;
+pub use palw_native_source_fold_v39::native_consent_hold_expiry_v39;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
 #[path = "palw_material_release_recovery_fold_v2.rs"]
 mod palw_material_release_recovery_fold_v2;
@@ -19174,6 +19180,11 @@ fn apply_receipt_spend(
     ctx: &PalwBlockContextV2,
     spend: &PalwReceiptSpendUnsignedV3,
 ) -> Result<(), PalwStateV2Error> {
+    // RFC-0002 §II.14: a `PNR9` native receipt block reaches this shared site as fold-envelope version 39 (the processor admits
+    // it only past `palw_native_mining_v39`); it never reads a free-prompt claim.
+    if spend.version == crate::palw_native_receipt_v39::PALW_NATIVE_RECEIPT_FOLD_VERSION_V39 {
+        return palw_native_mining_fold_v39::apply_native_receipt_block_v39(builder, ctx, spend);
+    }
     let claim_id = spend.claim_id;
     let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
     let PalwClaimSourceV2::FreePrompt { quanta, spent } = &claim.source else {

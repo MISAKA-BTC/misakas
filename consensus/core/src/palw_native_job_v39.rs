@@ -1170,3 +1170,129 @@ impl CheckedNativeFinalConditionsV39 {
         })
     }
 }
+
+// ---- Producer compact-post transport39 (actions 54/55) and collection53 ----
+// Allocation (grepped 2026-10-15): stage actions 53 (collect a settled job),
+// 54 (one 32-KiB page of the producer's original compact Commit wire) and 55
+// (assemble the whole paid group). Table-112 kinds 29 (transport journal),
+// 30 (page) and 31 (collection tombstone) under the owning `(39, kind, ..)`
+// prefix; none was written before this change.
+pub const NATIVE_COLLECT_ACTION_V39: u8 = 53;
+pub const NATIVE_COMMIT_PART_ACTION_V39: u8 = 54;
+pub const NATIVE_COMMIT_ASSEMBLE_ACTION_V39: u8 = 55;
+pub const NATIVE_COMMIT_PAGE_BYTES_V39: usize = 32 << 10;
+pub const NATIVE_COMMIT_PART_PREFIX_V39: usize = 143;
+/// At most `NativeCommitWireV39::MAX_BYTES` / 32 KiB pages per group.
+pub const NATIVE_COMMIT_PARTS_MAX_V39: u16 = NativeCommitWireV39::MAX_BYTES.div_ceil(NATIVE_COMMIT_PAGE_BYTES_V39) as u16;
+
+/// Exact encoded extent of the largest canonical Commit wire a job of
+/// `maximum_positions` can carry. The producer cannot declare a larger group;
+/// the bound is derived from the ORIGINAL maximum, never the actual EOS.
+pub fn native_commit_bytes_bound_v39(maximum_positions: u32) -> Result<u32, String> {
+    if maximum_positions == 0 {
+        return Err("native39 commit transport requires a positive original maximum".into());
+    }
+    let segments = misaka_palw_kernel::seg::segment_count_v1(maximum_positions) as u64;
+    let n = 2u64 + 64 + 4 + 4 * maximum_positions as u64 + 2 + 6 * 64 + 4 + 4 + 64 * segments;
+    if n > NativeCommitWireV39::MAX_BYTES as u64 {
+        return Err("native39 original maximum exceeds the compact Commit transport profile".into());
+    }
+    Ok(n as u32)
+}
+/// Fixed39 producer page prefix: the same byte layout as a proof part with
+/// mode 0 and the group digest in the seal position. Metadata only; the paid
+/// fold re-checks every field against the original job before any copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BorrowedNativeCommitPartV39<'a> {
+    pub job: Digest,
+    pub group: Digest,
+    pub index: u16,
+    pub count: u16,
+    pub total: u32,
+    pub body: &'a [u8],
+}
+pub fn borrowed_native_commit_metadata_v39(raw: &[u8]) -> Option<BorrowedNativeCommitPartV39<'_>> {
+    if raw.len() < NATIVE_COMMIT_PART_PREFIX_V39
+        || raw.len() > NATIVE_COMMIT_PART_PREFIX_V39 + NATIVE_COMMIT_PAGE_BYTES_V39
+        || raw[..2] != 39u16.to_le_bytes()
+        || raw[2] != 0
+    {
+        return None;
+    }
+    let index = u16::from_le_bytes(raw[131..133].try_into().ok()?);
+    let count = u16::from_le_bytes(raw[133..135].try_into().ok()?);
+    let total = u32::from_le_bytes(raw[135..139].try_into().ok()?);
+    if count == 0
+        || count > NATIVE_COMMIT_PARTS_MAX_V39
+        || index >= count
+        || total == 0
+        || total as usize > NativeCommitWireV39::MAX_BYTES
+        || total.div_ceil(NATIVE_COMMIT_PAGE_BYTES_V39 as u32) != count as u32
+    {
+        return None;
+    }
+    Some(BorrowedNativeCommitPartV39 {
+        job: raw[3..67].try_into().ok()?,
+        group: raw[67..131].try_into().ok()?,
+        index,
+        count,
+        total,
+        body: &raw[NATIVE_COMMIT_PART_PREFIX_V39..],
+    })
+}
+/// Exact page extent: every page but the last is a full 32 KiB.
+pub fn borrowed_native_commit_part_v39(raw: &[u8]) -> Option<BorrowedNativeCommitPartV39<'_>> {
+    let p = borrowed_native_commit_metadata_v39(raw)?;
+    let n = u32::from_le_bytes(raw[139..143].try_into().ok()?) as usize;
+    let expected = if p.index + 1 == p.count {
+        p.total as usize - p.index as usize * NATIVE_COMMIT_PAGE_BYTES_V39
+    } else {
+        NATIVE_COMMIT_PAGE_BYTES_V39
+    };
+    (n == expected && p.body.len() == n).then_some(p)
+}
+/// Identity of one complete producer group: the job and every byte in order.
+pub fn native_commit_group_v39(job: Digest, raw: &[u8]) -> Digest {
+    object_id(b"misaka-palw/native/original-producer-commit-pages/v39", &(job, raw))
+}
+/// Assembly body: version, job, group (130 bytes exactly).
+pub fn borrowed_native_commit_assembly_v39(raw: &[u8]) -> Option<(Digest, Digest)> {
+    if raw.len() != 130 || raw[..2] != 39u16.to_le_bytes() {
+        return None;
+    }
+    Some((raw[2..66].try_into().ok()?, raw[66..130].try_into().ok()?))
+}
+
+/// Immutable record left by collection53. The original header, book, single
+/// credit and accepted post survive; the bulky producer consent row that
+/// collection removes is named here by its exact identity and stored body
+/// digest, so a readonly auditor can authenticate an archived copy (never
+/// trust it). A collected job never regains execution, Final or quota rights.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeCollectedJobV39 {
+    pub version: u16,
+    pub job: Digest,
+    pub funding: Digest,
+    pub terminal_book: Digest,
+    pub credit: Digest,
+    /// `NativeConsentV39::root()` of the original producer consent row 27.
+    pub consent: Digest,
+    /// Exact byte length and body digest of consent row 27 as it was stored.
+    pub consent_bytes: u32,
+    pub consent_body: Digest,
+    /// Source/class retention released by this collection (HOLD_JOB).
+    pub class: Digest,
+    /// Original queue30/physical22 leases retired exactly once here.
+    pub queue_lease: Digest,
+    pub physical_lease: Digest,
+    pub source_retired: bool,
+    pub collected: u64,
+}
+impl NativeCollectedJobV39 {
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/native/original-collected-job/v39", self)
+    }
+}
+pub fn native_consent_body_digest_v39(raw: &[u8]) -> Digest {
+    object_id(b"misaka-palw/native/collected-consent-body/v39", &raw)
+}
