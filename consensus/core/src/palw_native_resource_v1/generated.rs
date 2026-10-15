@@ -90,6 +90,7 @@ native_struct!(crate::palw_security_certification_v1::PalwClaimCertificationRowV
 native_struct!(crate::palw_security_certification_v1::PalwCertificationClassRowV1; committed, certified, failed);
 native_struct!(crate::palw_security_certification_v1::PalwCertificationNetworkRowV1; epoch, draws);
 native_struct!(crate::palw_router_binding_v2::PalwRouterBindingRowV2; version, bound_from_daa, readers);
+native_struct!(crate::palw_class_registration_origin_v1::PalwClassRegistrationOriginRowV1; version, class_id, block, daa_score, door, admission_digest);
 native_struct!(crate::palw_settlement_once_v1::PalwSettlementOnceRowV1; version, obligation, consumer, amount, debit, settled_daa);
 native_struct!(crate::palw_provider_court_v1::ProviderLeaseRowV1; reserved, filed_daa, serve_until_daa, charged);
 native_struct!(crate::palw_provider_court_v1::ProviderChallengeRowV1; challenger, bond, filed_daa, deadline_daa, answered);
@@ -565,6 +566,7 @@ native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityAttestationRowV1
 native_enum!(crate::palw_model_eligibility_v1::PalwEligibilityExamOutcomeV1; Passed, NotPromoted, NoPopulation);
 native_enum!(crate::palw_security_certification_v1::PalwCertificationOutcomeV1; Certified, PublicCheckCertified, NotCertified, Vetoed, NoPopulation, Expired, Withdrawn);
 native_struct!(crate::palw_router_binding_v2::PalwRoutedReaderBindingV2; table, reader, router);
+native_enum!(crate::palw_class_registration_origin_v1::PalwClassRegistrationDoorV1; Legacy, Tir, Gen);
 native_struct!(crate::palw_settlement_once_v1::PalwSettlementObligationV1; leg, subject, party, ordinal);
 native_enum!(crate::palw_settlement_once_v1::PalwSettlementConsumerV1; NativeFinal, KernelTick, KernelObject, ExecKernelFee, VerificationGate, SecurityCertification, ExecLegMaturity, VestingMaturity, MonetaryMaterial);
 native_enum!(crate::palw_settlement_once_v1::PalwSettlementDebitV1; Issuance { carve }, Escrow { poster, amount }, Held { amount }, Prepaid { sponsor, amount }, Collateral { bond, amount });

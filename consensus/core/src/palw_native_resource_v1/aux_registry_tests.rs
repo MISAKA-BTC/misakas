@@ -330,3 +330,41 @@ fn settlement_once_markers_have_their_own_exact_aux_codec() {
     let error = super::wire_kernel_aux::scan_native_aux_row_v1(PALW_SETTLEMENT_ONCE_TABLE_V1, &[0xEE; 65], &mut empty).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 }
+
+/// RFC-0006 RFC06-8 class registration origins (aux 141, dormant): a 64-byte class key reaches the row's derive codec exactly; any
+/// other key shape fails closed as malformed; 141 collides with no other aux table. Source only, not executed.
+#[test]
+fn class_registration_origins_have_their_own_exact_aux_codec() {
+    use crate::palw_class_registration_origin_v1::*;
+    assert_eq!(PALW_CLASS_REGISTRATION_ORIGIN_TABLE_V1, 141);
+    for other in [
+        crate::palw_settlement_once_v1::PALW_SETTLEMENT_ONCE_TABLE_V1,
+        crate::palw_router_binding_v2::PALW_ROUTER_BINDING_TABLE_V2,
+        crate::palw_material_release_recovery_v2::PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2,
+        crate::palw_claim_compact_v4::PAID_CLAIM_COMPACT_V4,
+        crate::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_TABLE_V1,
+    ] {
+        assert_ne!(other, PALW_CLASS_REGISTRATION_ORIGIN_TABLE_V1);
+    }
+    let class_id = crate::Hash64::from_bytes([4; 64]);
+    let row = PalwClassRegistrationOriginRowV1 {
+        version: PALW_CLASS_REGISTRATION_ORIGIN_ROW_VERSION_V1,
+        class_id,
+        block: crate::Hash64::from_bytes([5; 64]),
+        daa_score: 9,
+        door: PalwClassRegistrationDoorV1::Legacy,
+        admission_digest: Some(crate::Hash64::from_bytes([6; 64])),
+    };
+    let bytes = borsh::to_vec(&row).unwrap();
+    let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+    super::wire_kernel_aux::scan_native_aux_row_v1(
+        PALW_CLASS_REGISTRATION_ORIGIN_TABLE_V1,
+        &palw_class_registration_origin_key_v1(&class_id),
+        &mut reader,
+    )
+    .unwrap();
+    assert_eq!(reader.remaining(), 0);
+    let mut empty = NativeWireReaderV1::new(&[][..], 0);
+    let error = super::wire_kernel_aux::scan_native_aux_row_v1(PALW_CLASS_REGISTRATION_ORIGIN_TABLE_V1, &[0xEE; 65], &mut empty).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+}
