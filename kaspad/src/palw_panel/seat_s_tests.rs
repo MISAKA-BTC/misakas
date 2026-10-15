@@ -466,7 +466,10 @@ fn m3_a_partial_seat_is_priced_as_the_streamed_fold() {
     const MIB: u64 = 1 << 20;
     let two_m_segment = 3u64 << 32; // a 2M job's leaves to a late segment's end: ~1.3e10
     let eight_k = 1u64 << 21;
-    assert!(palw_partial_seat_streamed_fold_bytes_v1(two_m_segment) < 512 * MIB, "a 2M segment folds in well under a GiB");
+    // Under d3ff09371's structural host bound (eight retained and four block hashes an entry, `palw_fold_capture_bytes_v1`) a 2M
+    // segment's fold is 1.51 GiB — it was 389 MiB under the two-hash estimate — still under 2 GiB against the profile's ~864 GiB.
+    assert_eq!(palw_partial_seat_streamed_fold_bytes_v1(two_m_segment), 1_616_904_192, "a 2M segment folds in 1.51 GiB");
+    assert!(palw_partial_seat_streamed_fold_bytes_v1(two_m_segment) < 2048 * MIB);
     assert!(palw_partial_seat_streamed_fold_bytes_v1(eight_k) < 8 * MIB, "an 8k segment in a few MiB");
     assert!(two_m_segment * 72 > 500 * 1024 * MIB, "the profile's figure: hundreds of GB");
     let profile = |role, capture, leaves: u64| PalwResourceProfileV1 {
