@@ -1244,6 +1244,8 @@ fn arch_keys(arch: &str) -> &'static [&'static str] {
             "ssm.time_step_rank",
             "ssm.inner_size",
             "full_attention_interval",
+            // Checked against full_attention_interval and the tensors where the layer kinds are synthesised.
+            "attention.recurrent_layers",
         ],
         _ => &[],
     }
@@ -1601,6 +1603,32 @@ impl GgufModel {
                         return Err(LowerError::not_lowerable(format!(
                             "GGUF qwen35: layer {i}'s tensors disagree with full_attention_interval {interval}"
                         )));
+                    }
+                }
+                // **`attention.recurrent_layers`** (written by newer llama.cpp converters, e.g. the Qwen3.8 GGUFs of the genesis set):
+                // one bool per BLOCK, the multi-token-prediction blocks included. It restates the layer kinds; it is accepted only
+                // when every decoder layer's flag is the kind `full_attention_interval` and the tensors already gave (a flag that
+                // disagrees is a different model and is refused by name). The trailing MTP blocks' flags describe dropped layers.
+                if let Some(flags) = get("attention.recurrent_layers") {
+                    let a = flags.as_arr().ok_or_else(|| LowerError::bad("GGUF qwen35: attention.recurrent_layers is not an array"))?;
+                    if a.len() != blocks {
+                        return Err(LowerError::bad(format!(
+                            "GGUF qwen35: attention.recurrent_layers has {} entries for {blocks} blocks",
+                            a.len()
+                        )));
+                    }
+                    for (i, t) in types.iter().enumerate() {
+                        let recurrent = match &a[i] {
+                            GValue::Bool(b) => *b,
+                            other => other.as_u64().map(|v| v != 0).ok_or_else(|| {
+                                LowerError::bad(format!("GGUF qwen35: attention.recurrent_layers[{i}] is not a bool"))
+                            })?,
+                        };
+                        if recurrent != (*t == "linear_attention") {
+                            return Err(LowerError::not_lowerable(format!(
+                                "GGUF qwen35: attention.recurrent_layers[{i}] = {recurrent} disagrees with full_attention_interval {interval}"
+                            )));
+                        }
                     }
                 }
                 let sections: Vec<u64> = get("rope.dimension_sections")

@@ -143,6 +143,41 @@ pub struct Opened {
     pub gguf: bool,
 }
 
+/// **Genesis 8:** [`open_model_full`] over a [`crate::weights::lazy::LazyShardCheckpoint`] — the
+/// checkpoint directory holds `config.json`, the shard index and each shard's header stub; shard data
+/// is fetched on first read and evicted after use. A GGUF (one file) is refused here: it has no shards.
+pub fn open_model_full_lazy(
+    path: &std::path::Path,
+    opts: &LowerOpts,
+    reg: &crate::quantfmt::QuantRegistry,
+    read: &crate::hf_schema::ReadOptions,
+    spec: &crate::weights::lazy::LazyShardSpecV1,
+    sizes: &BTreeMap<String, u64>,
+) -> Result<Opened> {
+    if gguf_path(path).is_some() {
+        return Err(LowerError::bad("a lazy shard source reads a sharded safetensors checkpoint, not a GGUF file"));
+    }
+    let level_of = |a: &crate::model::AdapterSource| {
+        if matches!(a, crate::model::AdapterSource::None) { crate::model::Level::A } else { crate::model::Level::B }
+    };
+    let text = std::fs::read_to_string(path.join("config.json")).map_err(|e| LowerError::Io(format!("config.json: {e}")))?;
+    let config: serde_json::Value = serde_json::from_str(&crate::hf_config::sanitize_json(&text))
+        .map_err(|e| LowerError::bad(format!("config.json is not JSON: {e}")))?;
+    let r = crate::hf_schema::read_model_with(&config, None, read, reg).map_err(|f| f.error)?;
+    let spec_digest = crate::model::spec_digest(&r.spec);
+    let prepared = prepare_spec(r.spec.clone(), opts)?;
+    let frontend = Frontend { config, level: level_of(&r.adapter), adapter: r.adapter, assumed_defaults: r.assumed_defaults, spec_digest };
+    let ck = crate::weights::lazy::LazyShardCheckpoint::open(path, sizes, spec.clone())?;
+    let source: Box<dyn crate::weights::TensorSource + Sync> = match prepared.spec.hf.quant.as_ref().filter(|q| q.fmt.is_virtual()) {
+        Some(q) => {
+            let (f, params) = q.fmt.binding().expect("a described format");
+            Box::new(crate::weights::described::DescribedSource::new_with(Box::new(ck), f, params, &q.module_params)?)
+        }
+        None => Box::new(ck),
+    };
+    Ok(Opened { prepared, source, frontend, gguf: false })
+}
+
 /// [`open_model_with`] that also says how the frontend read the model, with the adapter choice of `read`
 /// (a user-supplied adapter file is `AdapterChoice::Text`).
 pub fn open_model_full(

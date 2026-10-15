@@ -1,0 +1,16 @@
+{
+ "schema": "misaka.cov-p1p2.header-fixture.v1",
+ "repo": "huihui-ai/Huihui-gemma-4-12B-it-abliterated",
+ "revision": "060ea173c4d1e30b636819f5281e7791b6e9be2f",
+ "license": "apache-2.0",
+ "weights_read": false,
+ "shards": {
+  "model.safetensors": {
+   "header_sha256": "a5f42a7c51889a88238faa117f4de42c56667840eddf4130c32a1fbbf311ec31",
+   "file_bytes": 23919549376,
+   "lfs_sha256": "2dd13d86762e8b75bd1e0b6f9e655f22914fe03d0f98954884c6307489c7e723"
+  }
+ },
+ "total_file_bytes": 23919549376,
+ "note": "each shard file is its 8-byte length and JSON header only, cut after the header (source::read_safetensors_header is lenient about the data region); fetched by HTTP range from the pinned revision by scripts/genesis/genesis_header_fixtures.py"
+}

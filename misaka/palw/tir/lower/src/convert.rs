@@ -177,6 +177,14 @@ pub struct ConvertRequest {
     pub quant_formats: Vec<std::path::PathBuf>,
     /// A user-supplied adapter file (`misaka.palw.model-adapter.v1`) instead of the built-in choice.
     pub adapter: Option<std::path::PathBuf>,
+    /// **Genesis 8: read the shards lazily** (`weights::lazy`): every shard's header from its stub,
+    /// its data fetched by the spec's program on first read and evicted after use. `shard_sizes`
+    /// gives each shard file's length. `None`: the classic eager checkpoint.
+    pub lazy_shards: Option<crate::weights::lazy::LazyShardSpecV1>,
+    pub shard_sizes: BTreeMap<String, u64>,
+    /// **Genesis 8: write a `PALWART3` artifact** (streamed segments, `palwart_out`) instead of the
+    /// `PALWTIR1` container at `out` (which is then not written).
+    pub palwart: Option<crate::palwart_out::PalwartOutV1>,
 }
 
 impl ConvertRequest {
@@ -206,6 +214,9 @@ impl ConvertRequest {
             math: MathMode::LibmV1,
             quant_formats: Vec::new(),
             adapter: None,
+            lazy_shards: None,
+            shard_sizes: BTreeMap::new(),
+            palwart: None,
         }
     }
 }
@@ -227,6 +238,9 @@ pub struct ConvertOutcome {
     pub tokenizer_file: Option<std::path::PathBuf>,
     pub architecture: String,
     pub seconds: f64,
+    /// The `PALWART3` artifact, when the request asked for one (then `report` describes it: its
+    /// `file_digest` is the container root, `file_bytes` its data bytes).
+    pub palwart: Option<crate::palwart_out::PalwartReportV1>,
 }
 
 /// **Convert a model** — the whole of `palw-tir-convert` as a function: open it (the frontend, with the
@@ -259,7 +273,10 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
     if let Some(pin) = &req.full_court_source_pin {
         pin.verify_files(&req.model)?;
     }
-    let opened = crate::fidelity::open_model_full(&req.model, &opts, &reg, &read)?;
+    let opened = match &req.lazy_shards {
+        Some(spec) => crate::fidelity::open_model_full_lazy(&req.model, &opts, &reg, &read, spec, &req.shard_sizes)?,
+        None => crate::fidelity::open_model_full(&req.model, &opts, &reg, &read)?,
+    };
     let prep = &opened.prepared;
     let ck = opened.source.as_ref();
     let descriptors = crate::fidelity::quant_descriptors_used(&req.model, prep, &reg)?;
@@ -274,7 +291,8 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         log(format!("quant format {n} {d}"));
     }
     // The scope: what the model has that this class does not compute.
-    let tensor_index = if opened.gguf {
+    let tensor_index = if opened.gguf || req.lazy_shards.is_some() {
+        // A lazy checkpoint's shards are absent: its names and shapes come from the stubs.
         crate::hf_schema::TensorIndex::from_source(ck)
     } else {
         crate::hf_schema::TensorIndex::from_checkpoint_path(&req.model)?
@@ -461,17 +479,61 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         math,
     };
     log("converting".into());
-    let report = convert_to_container(prep, &loader, &stats, &policy, &store_dir, &req.out, &copts, &progress("materialise"))?;
-    log(format!(
-        "{}: {} tensors, {:.1} MiB in the tensors, {:.1} MiB file; {} chunks ({} distinct); file digest {}",
-        req.out.display(),
-        report.stream.instances,
-        report.stream.bytes as f64 / (1 << 20) as f64,
-        report.file_bytes as f64 / (1 << 20) as f64,
-        report.chunks,
-        report.distinct_chunks,
-        report.file_digest
-    ));
+    let (report, palwart) = match &req.palwart {
+        // Genesis 8: straight into a PALWART3 artifact, segment by segment (no PALWTIR1, no chunk store).
+        Some(out) => {
+            crate::detmath::set_mode(math);
+            let p = crate::palwart_out::write_palwart_v1(
+                prep,
+                &loader,
+                &stats,
+                &policy,
+                &copts.stream,
+                out,
+                tokenizer_id,
+                &meta,
+                &progress("materialise"),
+            )?;
+            let report = ConvertReport {
+                file_digest: hex(&p.written.root),
+                file_bytes: p.written.header.data_bytes,
+                resid_scale: p.resid_scale,
+                logits_scale: p.logits_scale,
+                quant_inexact: p.quant_inexact,
+                stream: p.stats.clone(),
+                store: ChunkStoreStats::default(),
+                chunks: 0,
+                distinct_chunks: 0,
+                peak_chunk_buffer: 0,
+                math: math.name(),
+            };
+            log(format!(
+                "{}: PALWART3 root {}, {} tensors, {:.1} MiB, {} segments, TIR inventory root {} ({} leaves)",
+                p.written.index_path.display(),
+                report.file_digest,
+                p.stats.instances,
+                p.tensor_bytes as f64 / (1 << 20) as f64,
+                p.written.header.segments.len(),
+                hex(&p.inner_root),
+                p.leaves
+            ));
+            (report, Some(p))
+        }
+        None => {
+            let report = convert_to_container(prep, &loader, &stats, &policy, &store_dir, &req.out, &copts, &progress("materialise"))?;
+            log(format!(
+                "{}: {} tensors, {:.1} MiB in the tensors, {:.1} MiB file; {} chunks ({} distinct); file digest {}",
+                req.out.display(),
+                report.stream.instances,
+                report.stream.bytes as f64 / (1 << 20) as f64,
+                report.file_bytes as f64 / (1 << 20) as f64,
+                report.chunks,
+                report.distinct_chunks,
+                report.file_digest
+            ));
+            (report, None)
+        }
+    };
     if let Some(pin) = &req.full_court_source_pin {
         pin.verify_files(&req.model)?;
     }
@@ -488,6 +550,7 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         tokenizer_file,
         architecture: prep.spec.architecture.clone(),
         seconds: t0.elapsed().as_secs_f64(),
+        palwart,
     })
 }
 

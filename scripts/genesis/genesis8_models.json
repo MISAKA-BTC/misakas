@@ -1,0 +1,1400 @@
+{
+ "schema": "misaka.genesis8.models.v2",
+ "decision": "user-2026-10-15-genesis8-uncensored-variants (#5 BF16 b73ec897, #6 GGUF a0b17c71)",
+ "recorded_from": "anonymous Hub API /api/models/<repo>/revision/<sha>?blobs=true (metadata only; no weights read)",
+ "numbering": "ids keep the user's original 1..10; 7 (Gemma 4 26B-A4B) and 9 (Qwen3-32B) were dropped",
+ "license_notes": {
+  "apache-2.0": "Apache License 2.0 (the full text ships in the artifact: scripts/genesis/licenses/Apache-2.0.txt when the source has no LICENSE file)",
+  "llama3.3": "Llama 3.3 Community License Agreement; Acceptable Use Policy at https://www.llama.com/llama3_3/use-policy"
+ },
+ "models": [
+  {
+   "id": 1,
+   "slug": "dolphin3-qwen25-1p5b",
+   "source_repo": "dphn/Dolphin3.0-Qwen2.5-1.5B",
+   "source_revision": "60c996e28ebee1ea3256fa9d40c06e0b20ceca67",
+   "source_format": "safetensors",
+   "base_model": "Qwen/Qwen2.5-1.5B",
+   "base_author": "Qwen team (Alibaba Cloud)",
+   "derivation": "fine-tune (Dolphin 3.0)",
+   "derivation_author": "Eric Hartford, Ben Gitter, BlouseJury and Cognitive Computations",
+   "derivation_note": "No huihui 1.5B abliterated variant exists; Dolphin 3.0 is the uncensored 1.5B (user decision 2026-10-15). Converted 2026-10-15 with the legacy base0 qwen25-convert --a16 --n-ctx 8192 at release commit 0b1c11b87; the unified container wraps that A16 payload without re-quantising.",
+   "architecture": "Qwen2ForCausalLM",
+   "model_type": "qwen2",
+   "family": "qwen2-dense",
+   "license": "apache-2.0",
+   "target_repo": "Misakachain/Dolphin3.0-Qwen2.5-1.5B-PALW",
+   "stem": "Dolphin3.0-Qwen2.5-1.5B-PALW",
+   "converter": "a16-legacy-wrap",
+   "convert_options": {
+    "n_ctx": 8192
+   },
+   "legacy_artifact": {
+    "repo": "Misakachain/Dolphin3.0-Qwen2.5-1.5B-PALW",
+    "revision": "816208c4f944a403665b94f8d55f4414aacd3ae5",
+    "path": "palw-runtime/dolphin3.0-qwen25-1.5b-a16-8k.palwart",
+    "bytes": 1799359436,
+    "sha256": "894e6914294e0b225a559365914a5e4509ffcd6ac884ca77f7e0f020c4595438",
+    "artifact_digest": "50e8acbe1767a9eb6b0c5b550c60c019a0d9a8824ccc64343bcd0661d55c66bc0b156a696ee200f8881f265e892820f5ae6cdebbc44c09ebcdf8fa80d800c217",
+    "tokenizer_digest": "c41926f508315c992ff1f1547a58e7dbcb4c68466f89da6d7f4891fe019637f96307ce36a2229457f3a477c3089cc04f58e53310bc0638a7629f36d1f07596df",
+    "converter": "qwen25-convert --a16 --n-ctx 8192 @ 0b1c11b87",
+    "faithful": {
+     "top1": "46/57",
+     "top5": "55/57",
+     "rank_corr": 0.8581
+    }
+   },
+   "e2e_adjudicable": true,
+   "tentative": false,
+   "components": [
+    "decoder"
+   ],
+   "gated": false,
+   "card_license": "apache-2.0",
+   "card_base_model": [
+    "Qwen/Qwen2.5-1.5B"
+   ],
+   "weight_bytes": 3087467144,
+   "files": [
+    {
+     "path": "README.md",
+     "bytes": 5521,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "560af483719d3662391792079e64b347f9648a9a"
+    },
+    {
+     "path": "added_tokens.json",
+     "bytes": 605,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "482ced4679301bf287ebb310bdd1790eb4514232"
+    },
+    {
+     "path": "config.json",
+     "bytes": 784,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "6b73745cd72961f00a2853a3273a9f638cd5ed9c"
+    },
+    {
+     "path": "generation_config.json",
+     "bytes": 147,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "cd7a1223cbeaaecb20faa97defcfd693b616696a"
+    },
+    {
+     "path": "model.safetensors",
+     "bytes": 3087467144,
+     "kind": "weight",
+     "lfs_sha256": "f51df42be66597bafbf503e924f72ea932614f49ac878cc0fae5ff1a9c0053ad",
+     "git_blob": "20d7302e0e322b51eee82df751b1b1a6c526e1cd"
+    },
+    {
+     "path": "special_tokens_map.json",
+     "bytes": 759,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "3fb447493db153463a7ada66b3534f5d11be8ff5"
+    },
+    {
+     "path": "tokenizer.json",
+     "bytes": 11421898,
+     "kind": "metadata",
+     "lfs_sha256": "3a1ef3a891ff6b623703ba40c595d1f94b2f13927a147bec84526b64d240c643",
+     "git_blob": "9885e8a481f89a4da4409fff31f6c9f5f199bac6"
+    },
+    {
+     "path": "tokenizer_config.json",
+     "bytes": 7269,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "71ecaac798dd002dea77017edf456b141cf17e8c"
+    },
+    {
+     "path": "vocab.json",
+     "bytes": 2776833,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "4783fe10ac3adce15ac8f358ef5462739852c569"
+    }
+   ],
+   "excluded_files": [
+    "trainer_state.json"
+   ]
+  },
+  {
+   "id": 2,
+   "slug": "huihui-qwen35-2b",
+   "source_repo": "huihui-ai/Huihui-Qwen3.5-2B-abliterated",
+   "source_revision": "b2e291a65f29a9b148981fa5299caea5d35bd4c8",
+   "source_format": "safetensors",
+   "base_model": "Qwen/Qwen3.5-2B",
+   "base_author": "Qwen team (Alibaba Cloud)",
+   "derivation": "abliteration",
+   "derivation_author": "huihui-ai",
+   "architecture": "Qwen3_5ForConditionalGeneration",
+   "model_type": "qwen3_5",
+   "family": "qwen35-gdn-hybrid",
+   "license": "apache-2.0",
+   "target_repo": "Misakachain/Huihui-Qwen3.5-2B-abliterated-PALW",
+   "stem": "Huihui-Qwen3.5-2B-abliterated-PALW",
+   "converter": "tir",
+   "convert_options": {
+    "context": 8192,
+    "gdn_core_wide": true,
+    "calib": {
+     "docs": [
+      "docs/rfc/0002-palw-tensor-ir.md"
+     ],
+     "len": 8192,
+     "chunks": 1
+    }
+   },
+   "e2e_adjudicable": true,
+   "tentative": false,
+   "components": [
+    "decoder"
+   ],
+   "gated": false,
+   "card_license": "apache-2.0",
+   "card_base_model": [
+    "Qwen/Qwen3.5-2B"
+   ],
+   "weight_bytes": 4548221488,
+   "files": [
+    {
+     "path": "LICENSE",
+     "bytes": 11544,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "f938136e3adacfd92be087f6e113b5d6d97f678f"
+    },
+    {
+     "path": "README.md",
+     "bytes": 2472,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "0846faba4a3ecad21fa7bbd30b55eb869d7367e3"
+    },
+    {
+     "path": "chat_template.jinja",
+     "bytes": 7755,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "0ef09f214eaa6d9bca297988afc1454b5827b2c7"
+    },
+    {
+     "path": "config.json",
+     "bytes": 2908,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "d30a15be1bbfd610f58ad80f1fbeb6778f58a80f"
+    },
+    {
+     "path": "merges.txt",
+     "bytes": 3353259,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "a494e019ca1502219fd0128658b979e5f05ae8e8"
+    },
+    {
+     "path": "model.safetensors-00001-of-00001.safetensors",
+     "bytes": 4548221488,
+     "kind": "weight",
+     "lfs_sha256": "568f9529262f887dfab700a2b7de1f9607bbf3d88a797748351ed6480fe3d24c",
+     "git_blob": "bc1d99c80e63b9ab3ec8eb5dcfbab5d4ccfe568e"
+    },
+    {
+     "path": "model.safetensors.index.json",
+     "bytes": 64460,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "69a41758e1138259916d08b99b56fada441fd502"
+    },
+    {
+     "path": "preprocessor_config.json",
+     "bytes": 390,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
+    },
+    {
+     "path": "tokenizer.json",
+     "bytes": 12807982,
+     "kind": "metadata",
+     "lfs_sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+     "git_blob": "a73a846725794819aa6e1c9e97d8dc9671c2006d"
+    },
+    {
+     "path": "tokenizer_config.json",
+     "bytes": 16709,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "fae3ce993e07c092ad024dde45e592379fde91bb"
+    },
+    {
+     "path": "video_preprocessor_config.json",
+     "bytes": 385,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe"
+    },
+    {
+     "path": "vocab.json",
+     "bytes": 6722759,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176"
+    }
+   ],
+   "excluded_files": []
+  },
+  {
+   "id": 3,
+   "slug": "huihui-qwen35-9b",
+   "source_repo": "huihui-ai/Huihui-Qwen3.5-9B-abliterated",
+   "source_revision": "05b9e7c9b978ba29bdb8f50a49c30e4b91183339",
+   "source_format": "safetensors",
+   "base_model": "Qwen/Qwen3.5-9B",
+   "base_author": "Qwen team (Alibaba Cloud)",
+   "derivation": "abliteration",
+   "derivation_author": "huihui-ai",
+   "derivation_note": "Tentative: no official Qwen3.8 9B exists (user decision pending). The past refusal of this exact revision (HF_FIT_OUT_OF_TOLERANCE, KL 0.268) is fixed by gdn_core_wide (KL 0.0039); the fixtures stay.",
+   "architecture": "Qwen3_5ForConditionalGeneration",
+   "model_type": "qwen3_5",
+   "family": "qwen35-gdn-hybrid",
+   "license": "apache-2.0",
+   "target_repo": "Misakachain/Huihui-Qwen3.5-9B-abliterated-PALW",
+   "stem": "Huihui-Qwen3.5-9B-abliterated-PALW",
+   "converter": "tir",
+   "convert_options": {
+    "context": 8192,
+    "gdn_core_wide": true,
+    "calib": {
+     "docs": [
+      "docs/rfc/0002-palw-tensor-ir.md"
+     ],
+     "len": 8192,
+     "chunks": 1
+    }
+   },
+   "e2e_adjudicable": true,
+   "tentative": true,
+   "components": [
+    "decoder"
+   ],
+   "gated": false,
+   "card_license": "apache-2.0",
+   "card_base_model": [
+    "Qwen/Qwen3.5-9B"
+   ],
+   "weight_bytes": 19306310880,
+   "files": [
+    {
+     "path": "LICENSE",
+     "bytes": 11544,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "f938136e3adacfd92be087f6e113b5d6d97f678f"
+    },
+    {
+     "path": "README.md",
+     "bytes": 2473,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "bd4baa2df708dadfc98914de3748dc5e7dd66a49"
+    },
+    {
+     "path": "chat_template.jinja",
+     "bytes": 7756,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "a585dec894e63da457d9440ec6aa7caa16d20860"
+    },
+    {
+     "path": "config.json",
+     "bytes": 3126,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "273ce437e01baf96a07cd9eb3d5f48bac8d7c657"
+    },
+    {
+     "path": "merges.txt",
+     "bytes": 3353259,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "a494e019ca1502219fd0128658b979e5f05ae8e8"
+    },
+    {
+     "path": "model.safetensors-00001-of-00004.safetensors",
+     "bytes": 5276436216,
+     "kind": "weight",
+     "lfs_sha256": "919d422e1522951d441157378518e3a0c61c0b5abc94ce9d1f5ba38d2cdae69d",
+     "git_blob": "0ffb3d9fa62d1abb329ad4153ffbabb3ce80eff1"
+    },
+    {
+     "path": "model.safetensors-00002-of-00004.safetensors",
+     "bytes": 5335161512,
+     "kind": "weight",
+     "lfs_sha256": "fd66bab5b3ed0cb96bf263a64b406934d0cff09dedae0488cd7bb9fa0e7639f8",
+     "git_blob": "7ea94536a80f7bf8c3c090bfbad53fffc01691d4"
+    },
+    {
+     "path": "model.safetensors-00003-of-00004.safetensors",
+     "bytes": 5368717440,
+     "kind": "weight",
+     "lfs_sha256": "582ddb2558d0fe05170073d8646bb5f752fbb731995c42194641fb0610722061",
+     "git_blob": "b44bb1907a8273e7e357666dc394d7d95def45fb"
+    },
+    {
+     "path": "model.safetensors-00004-of-00004.safetensors",
+     "bytes": 3325995712,
+     "kind": "weight",
+     "lfs_sha256": "f95d920ce0073a8aa97827e791e639d44efeac47b7fc5fd99a417bb6838e364f",
+     "git_blob": "1fca9fa168c5da1de2a2b523e987ec1fe18bc882"
+    },
+    {
+     "path": "model.safetensors.index.json",
+     "bytes": 79657,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "e4c1cb7dba5096b43b9d92bc781aba5e3aa8acd8"
+    },
+    {
+     "path": "preprocessor_config.json",
+     "bytes": 390,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
+    },
+    {
+     "path": "tokenizer.json",
+     "bytes": 12807982,
+     "kind": "metadata",
+     "lfs_sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+     "git_blob": "a73a846725794819aa6e1c9e97d8dc9671c2006d"
+    },
+    {
+     "path": "tokenizer_config.json",
+     "bytes": 16710,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "eda48d3e75a8e59a8479ee4ec8b37f76e711d9c1"
+    },
+    {
+     "path": "video_preprocessor_config.json",
+     "bytes": 385,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe"
+    },
+    {
+     "path": "vocab.json",
+     "bytes": 6722759,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176"
+    }
+   ],
+   "excluded_files": []
+  },
+  {
+   "id": 4,
+   "slug": "huihui-gemma4-12b",
+   "source_repo": "huihui-ai/Huihui-gemma-4-12B-it-abliterated",
+   "source_revision": "060ea173c4d1e30b636819f5281e7791b6e9be2f",
+   "source_format": "safetensors",
+   "base_model": "google/gemma-4-12B-it",
+   "base_author": "Google DeepMind",
+   "derivation": "abliteration",
+   "derivation_author": "huihui-ai",
+   "architecture": "Gemma4UnifiedForConditionalGeneration",
+   "model_type": "gemma4_unified",
+   "family": "gemma4-unified-dense",
+   "license": "apache-2.0",
+   "target_repo": "Misakachain/Huihui-gemma-4-12B-it-abliterated-PALW",
+   "stem": "Huihui-gemma-4-12B-it-abliterated-PALW",
+   "converter": "tir",
+   "convert_options": {
+    "context": 8192,
+    "calib": {
+     "docs": [
+      "docs/archival.md",
+      "docs/crescendo-guide.md",
+      "CONTRIBUTING.md",
+      "SECURITY.md"
+     ],
+     "len": 512,
+     "chunks": 1
+    }
+   },
+   "e2e_adjudicable": true,
+   "tentative": false,
+   "components": [
+    "decoder"
+   ],
+   "gated": false,
+   "card_license": "apache-2.0",
+   "card_base_model": [
+    "google/gemma-4-12B-it"
+   ],
+   "weight_bytes": 23919549376,
+   "files": [
+    {
+     "path": "README.md",
+     "bytes": 2822,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "3a181120bfae986af5401536bc99bc0577952adf"
+    },
+    {
+     "path": "chat_template.jinja",
+     "bytes": 17466,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "e61bbfe9a31db79ea1e4e557b046f895ad7899d0"
+    },
+    {
+     "path": "config.json",
+     "bytes": 4423,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "56741bcce862f3e28225969b955971cf4978d7e5"
+    },
+    {
+     "path": "generation_config.json",
+     "bytes": 260,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "d09dccf1b9aee197ef72a6e88a1ceff74b842ff3"
+    },
+    {
+     "path": "model.safetensors",
+     "bytes": 23919549376,
+     "kind": "weight",
+     "lfs_sha256": "2dd13d86762e8b75bd1e0b6f9e655f22914fe03d0f98954884c6307489c7e723",
+     "git_blob": "c5e98dac05c408885ff0cc08cd3568496e7b33d9"
+    },
+    {
+     "path": "processor_config.json",
+     "bytes": 1382,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "b889adcd78015bf5a0139438c5fb0b7067529a61"
+    },
+    {
+     "path": "tokenizer.json",
+     "bytes": 32169626,
+     "kind": "metadata",
+     "lfs_sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+     "git_blob": "1ff9f3e3439a939b971f9919e821bf87e835a503"
+    },
+    {
+     "path": "tokenizer_config.json",
+     "bytes": 2102,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "68354f96c7ddc4e5980539f4682bce599911e7c9"
+    }
+   ],
+   "excluded_files": []
+  },
+  {
+   "id": 5,
+   "slug": "huihui-gpt-oss-20b",
+   "source_repo": "huihui-ai/Huihui-gpt-oss-20b-BF16-abliterated",
+   "source_revision": "b73ec897fe872d5e3fea830d516520537decdde6",
+   "source_format": "safetensors",
+   "base_model": "openai/gpt-oss-20b",
+   "base_author": "OpenAI",
+   "derivation": "abliteration (BF16)",
+   "derivation_author": "huihui-ai",
+   "derivation_note": "The huihui official BF16 (user decision 2026-10-15); its GGUF/ directory is not used.",
+   "architecture": "GptOssForCausalLM",
+   "model_type": "gpt_oss",
+   "family": "gpt-oss-moe",
+   "license": "apache-2.0",
+   "target_repo": "Misakachain/Huihui-gpt-oss-20b-BF16-abliterated-PALW",
+   "stem": "Huihui-gpt-oss-20b-BF16-abliterated-PALW",
+   "converter": "tir",
+   "convert_options": {
+    "context": 8192,
+    "calib": {
+     "docs": [
+      "docs/archival.md",
+      "docs/crescendo-guide.md",
+      "CONTRIBUTING.md",
+      "SECURITY.md"
+     ],
+     "len": 512,
+     "chunks": 1
+    }
+   },
+   "e2e_adjudicable": true,
+   "tentative": false,
+   "components": [
+    "decoder"
+   ],
+   "gated": false,
+   "card_license": "apache-2.0",
+   "card_base_model": [
+    "unsloth/gpt-oss-20b-BF16"
+   ],
+   "weight_bytes": 41829561328,
+   "files": [
+    {
+     "path": "README.md",
+     "bytes": 9233,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "efbec12476e1f8e71ddabe5c14844012bdcae9ea"
+    },
+    {
+     "path": "chat_template.jinja",
+     "bytes": 15392,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "98e55e6c41ddb5eb16867e461bd37fb94747d9c6"
+    },
+    {
+     "path": "config.json",
+     "bytes": 1691,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "65aee9f5c8b062ab16c1fc0e9a8ff75c4b8e79b8"
+    },
+    {
+     "path": "generation_config.json",
+     "bytes": 175,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "07a49087fefb9e073e101f6b6ba98f2dde79d3f0"
+    },
+    {
+     "path": "model-00001-of-00009.safetensors",
+     "bytes": 4504304664,
+     "kind": "weight",
+     "lfs_sha256": "88868ce20327a95a8f2d3ba66c0833c2d6544fe04349ac2a1eb8971853d1dbe8",
+     "git_blob": "c38d34bf25720bdfb910e7cd03c4d3d15be8db94"
+    },
+    {
+     "path": "model-00002-of-00009.safetensors",
+     "bytes": 4939127656,
+     "kind": "weight",
+     "lfs_sha256": "a38d5331c0a5425e7fce1a7b2f03a3858d5f7e27ee1a86db6103f8192331b3d4",
+     "git_blob": "01962e18854ef5754bd8db06f663ae4bcfc43a12"
+    },
+    {
+     "path": "model-00003-of-00009.safetensors",
+     "bytes": 4939127656,
+     "kind": "weight",
+     "lfs_sha256": "e397b49bdf236be257a728243afa19ad96ced9ff0e1e4e49f33991bcd1bd883d",
+     "git_blob": "32d8ab69f2f408a8a98f81e67590b2a8dd573ebc"
+    },
+    {
+     "path": "model-00004-of-00009.safetensors",
+     "bytes": 4939127680,
+     "kind": "weight",
+     "lfs_sha256": "9d42f79dbeee64c434203e45baadcaa8642e4fe2e7ae9192a9da5414803e6543",
+     "git_blob": "3eca569a192d179c8c4b2069b4dea1375960c282"
+    },
+    {
+     "path": "model-00005-of-00009.safetensors",
+     "bytes": 4939127704,
+     "kind": "weight",
+     "lfs_sha256": "3c952d81437079677e0ad5ed816bd69ccfc96ba1f6bcc81eb671b8ad18dddf48",
+     "git_blob": "de550a5e6e360c627caeeed5dde6ef42bbc1f29a"
+    },
+    {
+     "path": "model-00006-of-00009.safetensors",
+     "bytes": 4939127704,
+     "kind": "weight",
+     "lfs_sha256": "761e2dcff304c71d06ae372b83b925ec718a0335a652dacb2f16da07f8ed836b",
+     "git_blob": "77e8ba26f295b98718b9a96a17ab62cb3590cf98"
+    },
+    {
+     "path": "model-00007-of-00009.safetensors",
+     "bytes": 4939127704,
+     "kind": "weight",
+     "lfs_sha256": "34e28f9a595921f46f62d35a7f8bb140b39384922c178316cbcce43172346d34",
+     "git_blob": "e22a903b9063a89e838ec46163e0ba0544334afc"
+    },
+    {
+     "path": "model-00008-of-00009.safetensors",
+     "bytes": 4939127704,
+     "kind": "weight",
+     "lfs_sha256": "c0542dfb0fad73408a87194159bb0715e067f3f1b650d359249acbf317784ba5",
+     "git_blob": "50889124186756c97b4f584ecf6a878fa1a3ce60"
+    },
+    {
+     "path": "model-00009-of-00009.safetensors",
+     "bytes": 2751362856,
+     "kind": "weight",
+     "lfs_sha256": "9eb975c2cceb4aedf26218085ddee293728654c83bbae85b7704b22ed148e5a7",
+     "git_blob": "5bda4a322cef865a5f064610e4f15f1bc356133a"
+    },
+    {
+     "path": "model.safetensors.index.json",
+     "bytes": 34054,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "571186f035a714efc84a64b54827528710300d6c"
+    },
+    {
+     "path": "special_tokens_map.json",
+     "bytes": 463,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "2f1a3490a65ddc2d2d7a5c902fe8bedcd4fb7795"
+    },
+    {
+     "path": "tokenizer.json",
+     "bytes": 27868174,
+     "kind": "metadata",
+     "lfs_sha256": "0614fe83cadab421296e664e1f48f4261fa8fef6e03e63bb75c20f38e37d07d3",
+     "git_blob": "6ec3ef1795cbbda6b7cb7d1f114919cbe3fdd647"
+    },
+    {
+     "path": "tokenizer_config.json",
+     "bytes": 4383,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "f4febdcf331ebfe9ffc7e8da0832545c253e7698"
+    }
+   ],
+   "excluded_files": [
+    "GGUF/ggml-model-Q3_K_M.gguf",
+    "GGUF/ggml-model-Q4_K_M.gguf",
+    "GGUF/ggml-model-f16.gguf",
+    "GGUF/ggml-model-q8_0.gguf"
+   ]
+  },
+  {
+   "id": 6,
+   "slug": "huihui-qwen38-27b-coder390",
+   "source_repo": "huihui-ai/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-GGUF",
+   "source_revision": "a0b17c71d9943529aefe88b83f494bf01c6b4d68",
+   "source_format": "gguf",
+   "base_model": "nerkyor/Qwen3.8-27B-Coder390-EfficientThink-Opus5.5-GPT6Astra-Grok4.7-DSV4Pro-K3-SFT-RLOO-MTP-DFlash2",
+   "base_author": "nerkyor (community SFT of Qwen/Qwen3.8-27B by the Qwen team, Alibaba Cloud)",
+   "derivation": "abliteration of a community SFT, GGUF",
+   "derivation_author": "huihui-ai",
+   "derivation_note": "GGUF only. Choose bf16 (same integer path as safetensors) or one IQ3_S file (exact codebook integers). The vision projector (mmproj) is not converted (text decoder).",
+   "architecture": "Qwen3_5ForCausalLM (GGUF qwen35)",
+   "model_type": "qwen35",
+   "family": "qwen35-gdn-hybrid",
+   "license": "apache-2.0",
+   "target_repo": "Misakachain/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-PALW",
+   "stem": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-PALW",
+   "converter": "tir-gguf",
+   "convert_options": {
+    "context": 8192,
+    "gdn_core_wide": true,
+    "calib": {
+     "docs": [
+      "docs/rfc/0002-palw-tensor-ir.md"
+     ],
+     "len": 8192,
+     "chunks": 1
+    },
+    "gguf_variant": "bf16"
+   },
+   "gguf_variants": {
+    "bf16": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-bf16.gguf",
+    "iq3_s1": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-IQ3_S1.gguf",
+    "iq3_s2": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-IQ3_S2.gguf",
+    "iq3_s3": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-IQ3_S3.gguf"
+   },
+   "tokenizer_source": {
+    "repo": "huihui-ai/Huihui-Qwen3.8-27B-abliterated",
+    "revision": "739e3c5b89849f6c238ce1e5b70008612ae42cdd",
+    "files": [
+     "tokenizer.json",
+     "tokenizer_config.json"
+    ],
+    "why": "the GGUF repo has no tokenizer.json; calibration tokenises with the Qwen3.8 tokenizer, checked token by token against the GGUF's own tokenizer.ggml.tokens before use"
+   },
+   "e2e_adjudicable": true,
+   "tentative": false,
+   "components": [
+    "decoder"
+   ],
+   "gated": false,
+   "card_license": "apache-2.0",
+   "card_base_model": [
+    "nerkyor/Qwen3.8-27B-Coder390-EfficientThink-Opus5.5-GPT6Astra-Grok4.7-DSV4Pro-K3-SFT-RLOO-MTP-DFlash2"
+   ],
+   "weight_bytes": 91088562976,
+   "files": [
+    {
+     "path": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-IQ3_S1.gguf",
+     "bytes": 12143609632,
+     "kind": "weight",
+     "lfs_sha256": "8c5d471ff4b5e26d1fc6c53fffef8fa9f09b441b0fd4425baec42ff9567b0df5",
+     "git_blob": "7bbd2ebfc9fcdf6cc5fffa4e0b73e27598c666b2"
+    },
+    {
+     "path": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-IQ3_S2.gguf",
+     "bytes": 12143609632,
+     "kind": "weight",
+     "lfs_sha256": "326dd7197088142cb0fe620247e8ebdf8bef775ba6cb45443cf30f8ce07208ee",
+     "git_blob": "4ab4f7fed391cec92eccc885c3db8a6fbf437b84"
+    },
+    {
+     "path": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-IQ3_S3.gguf",
+     "bytes": 12143609632,
+     "kind": "weight",
+     "lfs_sha256": "f2254ca70ff3d3a0319a0b8d4121b6a94d7148e4a95ce601641ed787194438a8",
+     "git_blob": "f5b65031df57863c76b04dcbb0a18a2ba564f5ea"
+    },
+    {
+     "path": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-bf16.gguf",
+     "bytes": 54657734080,
+     "kind": "weight",
+     "lfs_sha256": "fcddc1ff6efa4932cf4a7eb18087be39527b740cdca0810bbd3a717312d61d53",
+     "git_blob": "3abff3407c9d43813e8e472e1c3fbbd33614d47c"
+    },
+    {
+     "path": "README.md",
+     "bytes": 7230,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "9217a866276b8f6e2128aa4d3d89d9af855e25c8"
+    }
+   ],
+   "excluded_files": [
+    "abliterated-imatrix1.gguf",
+    "abliterated-imatrix2.gguf",
+    "abliterated-imatrix3.gguf",
+    "calibration1.txt",
+    "calibration2.txt",
+    "calibration3.txt",
+    "mmproj-model-bf16.gguf",
+    "tensor-type-allocation-IQ3_S.txt"
+   ]
+  },
+  {
+   "id": 8,
+   "slug": "huihui-qwen36-35b-a3b",
+   "source_repo": "huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated",
+   "source_revision": "8f0ee727aff5e771ea72466d64d13ecd851d2cc7",
+   "source_format": "safetensors",
+   "base_model": "Qwen/Qwen3.6-35B-A3B",
+   "base_author": "Qwen team (Alibaba Cloud)",
+   "derivation": "abliteration",
+   "derivation_author": "huihui-ai",
+   "derivation_note": "Needs a NEW PALWQ361 integer-runtime conversion from safetensors (the legacy qwen36-convert reads GGUF only); the published Misakachain/Qwen3.6-35B-A3B-PALW-runtime was built from other weights.",
+   "architecture": "Qwen3_5MoeForConditionalGeneration",
+   "model_type": "qwen3_5_moe",
+   "family": "qwen35-gdn-hybrid-moe",
+   "license": "apache-2.0",
+   "target_repo": "Misakachain/Huihui-Qwen3.6-35B-A3B-abliterated-PALW",
+   "stem": "Huihui-Qwen3.6-35B-A3B-abliterated-PALW",
+   "converter": "palwq36",
+   "convert_options": {
+    "context": 8192
+   },
+   "e2e_adjudicable": true,
+   "tentative": false,
+   "components": [
+    "decoder"
+   ],
+   "gated": false,
+   "card_license": "apache-2.0",
+   "card_base_model": [
+    "Qwen/Qwen3.6-35B-A3B"
+   ],
+   "weight_bytes": 71903775952,
+   "files": [
+    {
+     "path": "README.md",
+     "bytes": 2480,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "e92ae0cd96774c2f844138ae665d5c4af1b78275"
+    },
+    {
+     "path": "chat_template.jinja",
+     "bytes": 7764,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "a8755d827c0a7b614c246c4060dfd58ab352a8ff"
+    },
+    {
+     "path": "config.json",
+     "bytes": 3686,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "9c2aacf8e27267fadb4f6bf8209e7f3c26f5dd66"
+    },
+    {
+     "path": "configuration.json",
+     "bytes": 58,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "d24dba949ee1fe70cc810e4c4709a0bddf4e06ba"
+    },
+    {
+     "path": "generation_config.json",
+     "bytes": 202,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "023756cfadf88e5bf69eefeee3e172f38c448d64"
+    },
+    {
+     "path": "merges.txt",
+     "bytes": 3353259,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "a494e019ca1502219fd0128658b979e5f05ae8e8"
+    },
+    {
+     "path": "model-00001-of-00026.safetensors",
+     "bytes": 3996199680,
+     "kind": "weight",
+     "lfs_sha256": "f695aa096b0486269ecbbe321e5452ad38c0057f1f9623fb6309b382b8e9c51f",
+     "git_blob": "246c70772d4b622b2a92d0d8e7fad633320f586a"
+    },
+    {
+     "path": "model-00002-of-00026.safetensors",
+     "bytes": 1284907672,
+     "kind": "weight",
+     "lfs_sha256": "5284617a411ce50c9bc40ce9993d1fd1b6e6f9b2f615d81849143a394dab0e22",
+     "git_blob": "0e04dd3491343e016da8f67c0330b83b1fd6af35"
+    },
+    {
+     "path": "model-00003-of-00026.safetensors",
+     "bytes": 3357898328,
+     "kind": "weight",
+     "lfs_sha256": "73346b838de41c385d7b8e414fbc4953485297e8eb69645ed7a2d64737860c46",
+     "git_blob": "4d4fe628d1553256dd8d85d6b65dbc27f75b1009"
+    },
+    {
+     "path": "model-00004-of-00026.safetensors",
+     "bytes": 3370808680,
+     "kind": "weight",
+     "lfs_sha256": "08976d896f73ed0a859f15900fa2aa09647b217a9a0aed78f0c7efde5ac98fce",
+     "git_blob": "3a880110c5ef777b71f9a41ec4404e9a99eae809"
+    },
+    {
+     "path": "model-00005-of-00026.safetensors",
+     "bytes": 3357898328,
+     "kind": "weight",
+     "lfs_sha256": "5a725f343135f70672af0718bc64eabce6594b6ea8dad1b2f23bd22cf8f16cb6",
+     "git_blob": "98551c2ee823e98a6e15ab5d9376d1d9cd4c5d63"
+    },
+    {
+     "path": "model-00006-of-00026.safetensors",
+     "bytes": 3959424872,
+     "kind": "weight",
+     "lfs_sha256": "7b427e38be10380fe492939478bbcb3aeced58876e5097cd9fc14a24d1565dfd",
+     "git_blob": "04c8077ae782f0ac801d9f85e9baca06c5ad031d"
+    },
+    {
+     "path": "model-00007-of-00026.safetensors",
+     "bytes": 1096788200,
+     "kind": "weight",
+     "lfs_sha256": "f77b33db4a769b344c4262c018154edc0396bb785a36372f899caa9de3e3af14",
+     "git_blob": "d8d93a02573b52cddff92b97a9a0ab128f4a5297"
+    },
+    {
+     "path": "model-00008-of-00026.safetensors",
+     "bytes": 3946841976,
+     "kind": "weight",
+     "lfs_sha256": "ad28a8e8293af7ef617e3abc0775bdb2477a22648e5dadd2886677e1a540f338",
+     "git_blob": "3f6ed621967326e8b275dbfa0c1a2e27bb08404c"
+    },
+    {
+     "path": "model-00009-of-00026.safetensors",
+     "bytes": 1096460816,
+     "kind": "weight",
+     "lfs_sha256": "58f9cfddedfd0536cb8f9dda21a5314b1aaefc01a6210456564919b716ea6f21",
+     "git_blob": "2f1915402b370bc4033e7f54ee2740ef8dd00cbc"
+    },
+    {
+     "path": "model-00010-of-00026.safetensors",
+     "bytes": 3946841960,
+     "kind": "weight",
+     "lfs_sha256": "c84e935e666ab426e944fd70291c8372c55dfa87ba66e1d27d9c92eba9a393dd",
+     "git_blob": "5e86fdeeb57a103c9cc9111b5f55443e57a1b975"
+    },
+    {
+     "path": "model-00011-of-00026.safetensors",
+     "bytes": 1096460720,
+     "kind": "weight",
+     "lfs_sha256": "468e578d049a6e0c8b9d0917b558df7d1f6c114bf5a69cc6d02a000fe5135bb0",
+     "git_blob": "eedc4ca561c7329fbc2fa29a179b6e5bdacae3d2"
+    },
+    {
+     "path": "model-00012-of-00026.safetensors",
+     "bytes": 3409971048,
+     "kind": "weight",
+     "lfs_sha256": "6fca711386805d24c2aaf3d9e8c3744631318e90420f1ac45473e0c0bc06bd08",
+     "git_blob": "dc174300ced13ce528c08393c389f39468500f48"
+    },
+    {
+     "path": "model-00013-of-00026.safetensors",
+     "bytes": 1633331632,
+     "kind": "weight",
+     "lfs_sha256": "179db829a65a481eafca7e2013aabb66fc304b7888341fbc3cc187868448bb71",
+     "git_blob": "7656120f740a9b6c6bfe9d57297fe06ffaeb44c3"
+    },
+    {
+     "path": "model-00014-of-00026.safetensors",
+     "bytes": 3422553840,
+     "kind": "weight",
+     "lfs_sha256": "157465989216d23f2e44016ce40c6934706b4d41177f0cf2e7b939c5bb0ed47f",
+     "git_blob": "c04a6d8095f6c22643d651c760139f6a1176eb6f"
+    },
+    {
+     "path": "model-00015-of-00026.safetensors",
+     "bytes": 1633659192,
+     "kind": "weight",
+     "lfs_sha256": "18b3d1d04fcf0bbd994f18cd02ab013c816df53250b84a91b2fa742be6dffddc",
+     "git_blob": "b5b714a095d5150aa375c2def8bcabcf31f0fa21"
+    },
+    {
+     "path": "model-00016-of-00026.safetensors",
+     "bytes": 3946842104,
+     "kind": "weight",
+     "lfs_sha256": "7942f5b178e1b877a89377a3081f740d02b84f0c3d4c52618c7358f0e45e94fa",
+     "git_blob": "e5673bcd81352cfdda70409b161dd8faa92bb49a"
+    },
+    {
+     "path": "model-00017-of-00026.safetensors",
+     "bytes": 1096460576,
+     "kind": "weight",
+     "lfs_sha256": "aa29d55924c804a0276a2f62cc34ea087f3ce1dee2a93ead4b7d951a94f30d06",
+     "git_blob": "e340c646d58b38817a09b85603e0df65b789166a"
+    },
+    {
+     "path": "model-00018-of-00026.safetensors",
+     "bytes": 3946841960,
+     "kind": "weight",
+     "lfs_sha256": "af7915a79fc2178dbef3d39210495437817bb2f769f0e510b6ce8481f3339d6f",
+     "git_blob": "aaa8ebb32bd70d02a43953dc482138db7e800e74"
+    },
+    {
+     "path": "model-00019-of-00026.safetensors",
+     "bytes": 1096460776,
+     "kind": "weight",
+     "lfs_sha256": "9c9a3a4bac74e02a286dfd2e3488feb0eae99250f71fe58521601a9cff715ce7",
+     "git_blob": "8175922ae44fe6e39e5e6fd8a041c278d7a785dc"
+    },
+    {
+     "path": "model-00020-of-00026.safetensors",
+     "bytes": 3409971040,
+     "kind": "weight",
+     "lfs_sha256": "80d28f308d614bf19be0c43cb2ef09910b50a9eba81fdf4d8b4d6e695aecf7fc",
+     "git_blob": "badf07018a5c7fc88276a5d62e4098be59016506"
+    },
+    {
+     "path": "model-00021-of-00026.safetensors",
+     "bytes": 1633331712,
+     "kind": "weight",
+     "lfs_sha256": "79f317ed6ea3fd1c806988ae65a0c8197e8145bd72adeb0b5f891c9fcc90b61d",
+     "git_blob": "ee475471f88cdcf09778872366bcc490fee55a24"
+    },
+    {
+     "path": "model-00022-of-00026.safetensors",
+     "bytes": 3370808720,
+     "kind": "weight",
+     "lfs_sha256": "122db807b83d9d30ee6097dc8373ba0ce541f528be85f297134f9a0e59329c08",
+     "git_blob": "0c43d980d35b3c08679c4a3a5bc32355ef768eaf"
+    },
+    {
+     "path": "model-00023-of-00026.safetensors",
+     "bytes": 3357898360,
+     "kind": "weight",
+     "lfs_sha256": "63cfa6ed5a5085b3d5f2dea8690ca9590a7692c1d2cf8678eca23771e8e20a82",
+     "git_blob": "44cace70d141cdcabe84d957e90649c857678f45"
+    },
+    {
+     "path": "model-00024-of-00026.safetensors",
+     "bytes": 3370808720,
+     "kind": "weight",
+     "lfs_sha256": "25a0457918f3c48021369a7ed30742cd74f455870ca8c81e446ce7ffe5914e85",
+     "git_blob": "a1ccfd7a89f69cb64d155ef62ce2299f0b3281d6"
+    },
+    {
+     "path": "model-00025-of-00026.safetensors",
+     "bytes": 3832888224,
+     "kind": "weight",
+     "lfs_sha256": "83b4ab70481807b1e212250cbccc4927dd044cae75af7d44dfed303409741184",
+     "git_blob": "511377cc3c3d978df63b9b96f551d4f7bb18b171"
+    },
+    {
+     "path": "model-00026-of-00026.safetensors",
+     "bytes": 2231416816,
+     "kind": "weight",
+     "lfs_sha256": "948d88951eaf34f78115be7396573695a6dddf0cb83e8bdae628eaf66acbd058",
+     "git_blob": "f9e2b9c170e532a45620a7f7024ff00b6ae65377"
+    },
+    {
+     "path": "model.safetensors.index.json",
+     "bytes": 98383,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "bcdd53f055581197d686394d21f43251d800b7ab"
+    },
+    {
+     "path": "preprocessor_config.json",
+     "bytes": 390,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
+    },
+    {
+     "path": "tokenizer.json",
+     "bytes": 12807982,
+     "kind": "metadata",
+     "lfs_sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+     "git_blob": "a73a846725794819aa6e1c9e97d8dc9671c2006d"
+    },
+    {
+     "path": "tokenizer_config.json",
+     "bytes": 16718,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "28d96ff303d1d20350185caf4bf037045916ed35"
+    },
+    {
+     "path": "video_preprocessor_config.json",
+     "bytes": 385,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe"
+    },
+    {
+     "path": "vocab.json",
+     "bytes": 6722759,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176"
+    }
+   ],
+   "excluded_files": []
+  },
+  {
+   "id": 10,
+   "slug": "llama33-70b-abliterated",
+   "source_repo": "huihui-ai/Llama-3.3-70B-Instruct-abliterated",
+   "source_revision": "fa13334669544bab573e0e5313cad629a9c02e2c",
+   "source_format": "safetensors",
+   "base_model": "meta-llama/Llama-3.3-70B-Instruct",
+   "base_author": "Meta Platforms, Inc.",
+   "derivation": "abliteration",
+   "derivation_author": "huihui-ai",
+   "derivation_note": "Not required to be end-to-end adjudicable (user decision 2026-10-15). Llama 3.3 Community License: the name begins with \"Llama\", \"Built with Llama\" is displayed, the license and notice ship with it.",
+   "architecture": "LlamaForCausalLM",
+   "model_type": "llama",
+   "family": "llama-dense",
+   "license": "llama3.3",
+   "target_repo": "Misakachain/Llama-3.3-70B-Instruct-abliterated-PALW",
+   "stem": "Llama-3.3-70B-Instruct-abliterated-PALW",
+   "converter": "tir",
+   "convert_options": {
+    "context": 8192,
+    "calib": {
+     "docs": [
+      "docs/archival.md",
+      "docs/crescendo-guide.md",
+      "CONTRIBUTING.md",
+      "SECURITY.md"
+     ],
+     "len": 512,
+     "chunks": 1
+    }
+   },
+   "e2e_adjudicable": false,
+   "tentative": false,
+   "components": [
+    "decoder"
+   ],
+   "gated": false,
+   "card_license": "llama3.3",
+   "card_base_model": [
+    "meta-llama/Llama-3.3-70B-Instruct"
+   ],
+   "weight_bytes": 141107497872,
+   "files": [
+    {
+     "path": "LICENSE",
+     "bytes": 7909,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "2c97b69e3c309cbaa55bf7e4a4c48b8c18ff8276"
+    },
+    {
+     "path": "README.md",
+     "bytes": 16465,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "2ed8f6e195cc618435b152a7906d7987ac429a3a"
+    },
+    {
+     "path": "USE_POLICY.md",
+     "bytes": 6021,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "2b5602b4faeaee48c52a33951f4036ab86a0406b"
+    },
+    {
+     "path": "config.json",
+     "bytes": 879,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "adf1f490f126443b5f6297e7182d8aa7b2975858"
+    },
+    {
+     "path": "generation_config.json",
+     "bytes": 196,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "f5f7a96d3de00f3c76330971905fbe38fc582683"
+    },
+    {
+     "path": "model-00001-of-00030.safetensors",
+     "bytes": 4584408808,
+     "kind": "weight",
+     "lfs_sha256": "ecc71fd04e8e99e629c76abd2b026736f146d604e30413223a07b8974b9e4186",
+     "git_blob": "2b608634366fc4c07549aa9ea766207022d2e595"
+    },
+    {
+     "path": "model-00002-of-00030.safetensors",
+     "bytes": 4664167376,
+     "kind": "weight",
+     "lfs_sha256": "321bb956ec1436717dd609350f3a30632e275f86c6985bd3dd0f33239e660bd5",
+     "git_blob": "68ab3fbc988e93afe3e34d98da17b763efbea977"
+    },
+    {
+     "path": "model-00003-of-00030.safetensors",
+     "bytes": 4999711704,
+     "kind": "weight",
+     "lfs_sha256": "2c1f77c1ca784d390fffe1eadda2bdaca1378783de870cb4b801ac6d91b668b7",
+     "git_blob": "aeb6c1444ed50395e3391cafe56128d0aa9721ab"
+    },
+    {
+     "path": "model-00004-of-00030.safetensors",
+     "bytes": 4966157032,
+     "kind": "weight",
+     "lfs_sha256": "b820220678f3bbcc1e2a966eaf765517d215f3990d617cdb0fd35fc456ae4a89",
+     "git_blob": "fcd9cdf56338c306b5bff930856188936d1672c3"
+    },
+    {
+     "path": "model-00005-of-00030.safetensors",
+     "bytes": 4664134408,
+     "kind": "weight",
+     "lfs_sha256": "fdec4ceb8cbad5d46625695cb0e6e59f227f777e120b1247fdcfd627d3c8cc68",
+     "git_blob": "2042e4962900244dab710fcbdd24d1c31650e051"
+    },
+    {
+     "path": "model-00006-of-00030.safetensors",
+     "bytes": 4664167408,
+     "kind": "weight",
+     "lfs_sha256": "20efd0e0d9f7c56d0ffca6e77e3135e6818b936c1a908b18bfea660bc3a5a1a3",
+     "git_blob": "5eef6fed04721b912940f6395f5cefa56d559fa9"
+    },
+    {
+     "path": "model-00007-of-00030.safetensors",
+     "bytes": 4664167408,
+     "kind": "weight",
+     "lfs_sha256": "491644afc254d75e65f86123ada15dd37ea8e045d2be4ac50d6ea9188dbf0b8c",
+     "git_blob": "14cd4b54e46528cf2c75c34ec99fc5c1d24876f0"
+    },
+    {
+     "path": "model-00008-of-00030.safetensors",
+     "bytes": 4999711728,
+     "kind": "weight",
+     "lfs_sha256": "4a436fa74873584fb447ce30840a576f6fd1a24208bc23db251f325136f8aa5d",
+     "git_blob": "5bc15d080706298d647d0ff715cff886f1329d59"
+    },
+    {
+     "path": "model-00009-of-00030.safetensors",
+     "bytes": 4966157056,
+     "kind": "weight",
+     "lfs_sha256": "411229ce6f46e81b004e85366a8889a697f46fd83632f52c28be1707f5140725",
+     "git_blob": "c1ef28d4a930835d6715309cc37e6f1efca2871b"
+    },
+    {
+     "path": "model-00010-of-00030.safetensors",
+     "bytes": 4664134408,
+     "kind": "weight",
+     "lfs_sha256": "5891817187eaff2fd941796f788a84d6c28c3c6dd8c696de499bb1a904c3a589",
+     "git_blob": "dec6e940265a16e8ec7feac2017088aa10a8f863"
+    },
+    {
+     "path": "model-00011-of-00030.safetensors",
+     "bytes": 4664167408,
+     "kind": "weight",
+     "lfs_sha256": "c8cd0ee9a74709f97438c01958426add345422416b36cfb79ac8602b7ed03295",
+     "git_blob": "afd5bf4fd382a71161e19fa455859bf856a400e2"
+    },
+    {
+     "path": "model-00012-of-00030.safetensors",
+     "bytes": 4664167408,
+     "kind": "weight",
+     "lfs_sha256": "804f259d6ad605b873d5fc638e461015a27bd9d646583bd3bb23b12266a945e5",
+     "git_blob": "9ddce409ccd76b3516bd9de2235b80231261fb01"
+    },
+    {
+     "path": "model-00013-of-00030.safetensors",
+     "bytes": 4999711728,
+     "kind": "weight",
+     "lfs_sha256": "3529dd19b9fbb7b777d2617d4414a9a2cfad4a7f063ba6958bdcb89a3ec063c4",
+     "git_blob": "7142499894bd8967e966bce7010a9ff3c195dafe"
+    },
+    {
+     "path": "model-00014-of-00030.safetensors",
+     "bytes": 4966157056,
+     "kind": "weight",
+     "lfs_sha256": "192ba98a5f76164c8dd2c221d85f5446e65f440a7f75b0cb97a44fcdaaf088a9",
+     "git_blob": "094da434d546d8f6e2244cc997aee317616b1a97"
+    },
+    {
+     "path": "model-00015-of-00030.safetensors",
+     "bytes": 4664134408,
+     "kind": "weight",
+     "lfs_sha256": "6e72da9adbf1e37bc70b5b2e1c1b08b6d3f01eea695d66024634d980c9a03c82",
+     "git_blob": "63bf63fd92bcea72f68d6c97824a04cf6277ae2c"
+    },
+    {
+     "path": "model-00016-of-00030.safetensors",
+     "bytes": 4664167408,
+     "kind": "weight",
+     "lfs_sha256": "28b6a15b8ffebab95c6bb69a349e4d535d2aaea70d90fb91dcc1ff43b12f6c06",
+     "git_blob": "b619eb7a79893dda58c9770d0109f93bb2ed960f"
+    },
+    {
+     "path": "model-00017-of-00030.safetensors",
+     "bytes": 4664167408,
+     "kind": "weight",
+     "lfs_sha256": "caaf04a6cb917a193b67ffbb9b44593d6a0e65720f6eb8942a12d531c81e5d75",
+     "git_blob": "a58b849e554720955748a7eb6e2cb943ca45a07e"
+    },
+    {
+     "path": "model-00018-of-00030.safetensors",
+     "bytes": 4999711728,
+     "kind": "weight",
+     "lfs_sha256": "25f07149924fb513a1431c9d9a62162e0590d9c149e78659b24f4c229ea9a0dd",
+     "git_blob": "9e8a01f764ae1f27c31c302e69d28e718675d847"
+    },
+    {
+     "path": "model-00019-of-00030.safetensors",
+     "bytes": 4966157056,
+     "kind": "weight",
+     "lfs_sha256": "4aed6fc5d54286e47db905ae4e4685360db4b8c10cbfec3d551f0dbbddee1faf",
+     "git_blob": "bc813a8125090e76705c4cf591041824bd14f16b"
+    },
+    {
+     "path": "model-00020-of-00030.safetensors",
+     "bytes": 4664134408,
+     "kind": "weight",
+     "lfs_sha256": "a5c9da770b36576789562a31e6e88b2b72539142fcf2615a7f54347b1106e78c",
+     "git_blob": "591852e03a8d3ec18681f2b90e21c10dbfa309a9"
+    },
+    {
+     "path": "model-00021-of-00030.safetensors",
+     "bytes": 4664167408,
+     "kind": "weight",
+     "lfs_sha256": "99f169e8fa66010fce7a272558485ee68533e07188d8291e2fb47d026c27de6b",
+     "git_blob": "6e8933a61097ed5fa37e2321642712adbb4281f2"
+    },
+    {
+     "path": "model-00022-of-00030.safetensors",
+     "bytes": 4664167408,
+     "kind": "weight",
+     "lfs_sha256": "8527ba8c7b5aa49ecc89ae8fc34702b3b39006c9e58fd6d4eb9c46465253def5",
+     "git_blob": "04c3b76d06a20bb28901fa8aa18ef644763c4f3f"
+    },
+    {
+     "path": "model-00023-of-00030.safetensors",
+     "bytes": 4999711728,
+     "kind": "weight",
+     "lfs_sha256": "89aba554b78f030886c92a7444e052401a1970460ad202a7386073d46a22167b",
+     "git_blob": "316e47f02177217ec490d7e4bab22d2c279029dc"
+    },
+    {
+     "path": "model-00024-of-00030.safetensors",
+     "bytes": 4966157056,
+     "kind": "weight",
+     "lfs_sha256": "b2ec885cbd00bf740265b6ce539b73767e062b6bec7b1f5e3fee9777a1aa19be",
+     "git_blob": "d4dcb6f6c49323921d0bc68ac42412c0fc25a920"
+    },
+    {
+     "path": "model-00025-of-00030.safetensors",
+     "bytes": 4664134408,
+     "kind": "weight",
+     "lfs_sha256": "00bd277069d4dec332fc8847024656bb9a14110964e8a0c2d21d713740bab643",
+     "git_blob": "3b972b256ceff381088397655503af61c3e0ef9b"
+    },
+    {
+     "path": "model-00026-of-00030.safetensors",
+     "bytes": 4664167408,
+     "kind": "weight",
+     "lfs_sha256": "db6156182e0e7602c763915c9e6f91f86f4e1429eca3f47758b52fc1abb35fc7",
+     "git_blob": "b4fd9a03aed7d1e853c16e1c485126a399c476f3"
+    },
+    {
+     "path": "model-00027-of-00030.safetensors",
+     "bytes": 4664167408,
+     "kind": "weight",
+     "lfs_sha256": "a4bb1b481ad326b9fa7916492df6b1fc66c2df85ea8147f2d201d6c0a0410ddd",
+     "git_blob": "15e7cb48560401234eab4396e9765c6b672f581d"
+    },
+    {
+     "path": "model-00028-of-00030.safetensors",
+     "bytes": 4999711728,
+     "kind": "weight",
+     "lfs_sha256": "181ec0b8fc8542086a73dd42511f62cc17f32f3689ded1ff79d29a8c0147a663",
+     "git_blob": "bd3d5997265ff7c21f208096117e8ce6cd3502ec"
+    },
+    {
+     "path": "model-00029-of-00030.safetensors",
+     "bytes": 4966173536,
+     "kind": "weight",
+     "lfs_sha256": "de4b6e30b5a5d6c02bc1596ebe919e1aab6f8a169e9ce569debf7c4d0c7b421d",
+     "git_blob": "409dccedb1dcf5096c79200b3d8fdf7bc4ea19ba"
+    },
+    {
+     "path": "model-00030-of-00030.safetensors",
+     "bytes": 2101346432,
+     "kind": "weight",
+     "lfs_sha256": "b0436c98c9b4f78e61f6769e588e0853179b970e2a084ae2886e2daebf1ce13d",
+     "git_blob": "9b520f1127f70c766322cee27b72d8f7a9cf1bf1"
+    },
+    {
+     "path": "model.safetensors.index.json",
+     "bytes": 60345,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "6fdd1b8d078df2710153e984078b124bf74d8a75"
+    },
+    {
+     "path": "special_tokens_map.json",
+     "bytes": 477,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "2969fb88d73544b185c3a4a29cfb3e5ef35af5bf"
+    },
+    {
+     "path": "tokenizer.json",
+     "bytes": 17209920,
+     "kind": "metadata",
+     "lfs_sha256": "6b9e4e7fb171f92fd137b777cc2714bf87d11576700a1dcd7a399e7bbe39537b",
+     "git_blob": "1c1d8d5c9024994f1d3b00f9662b8dd89ca13cf2"
+    },
+    {
+     "path": "tokenizer_config.json",
+     "bytes": 57489,
+     "kind": "metadata",
+     "lfs_sha256": null,
+     "git_blob": "f9ebcf6e9429c5b15c0e076637dc5844850690e3"
+    }
+   ],
+   "excluded_files": []
+  }
+ ]
+}

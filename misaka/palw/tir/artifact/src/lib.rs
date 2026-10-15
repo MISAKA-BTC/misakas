@@ -549,3 +549,12 @@ mod tests {
 
 /// Explicit provenance parsing, independent of implicit float feature unification.
 pub mod metadata_v16;
+
+/// **`PALWART3`**: the one versioned PALW artifact container (genesis 8, 2026-10-15) — an index plus
+/// streamed segments, per-architecture weight sections, the program, tokenizer, chat template, license
+/// and a canonical manifest. The formats above stay readable as legacy; none of their ids is reused.
+pub mod palwart_v3;
+
+/// Filling a `PALWART3` artifact: a legacy artifact carried whole (A16, PALWTIR1, PALWQ361), the
+/// tokenizer, template, metadata, license and calibration sections, verification and extraction.
+pub mod palwart_pack;
