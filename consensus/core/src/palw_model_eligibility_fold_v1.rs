@@ -259,6 +259,17 @@ pub(super) fn eligibility_final_weight_v1(_builder: &mut TransitionBuilder<'_>, 
     contribution
 }
 
+/// **U-2 (P0, user decision 2026-10-15) — does RFC-0017 BAR this claim from `SecurityCertified` credit outright?** `true` for a claim
+/// accepted under `Probation` (it holds a probation pin, which outlives its `Final` and retires only when the claim leaves the state or
+/// is voided — so the answer is frozen over the claim's life, as every Gate C re-derivation needs). Registered / Lapsed classes are
+/// refused at the claim gate (`ELIG_NOT_ELIGIBLE`), so no such claim exists to bar. Never asks Gate C (no recursion): RFC-0018's
+/// single predicate `palw_independently_work_certified_v1` asks THIS, so every Gate C read site — safe frontier, settlement depth,
+/// rule-E participation, settled anchors, provisional/final weight, the coinbase credit leg — inherits the bar. `false` below the
+/// fence (no pins exist).
+pub fn palw_eligibility_bars_security_credit_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> bool {
+    row_of::<PalwEligibilityProbationClaimRowV1>(state, &eligibility_probation_claim_key_v1(&claim_id.as_bytes())).is_some()
+}
+
 /// **U-2 / U-5 (user decisions 2026-10-15): may `claim` contribute security credit, given its class's eligibility at the claim's
 /// acceptance?** `false` for a claim of a `Probation` class or of a pre-fence class in its grace
 /// ([`palw_eligibility_security_credit_needs_certification_v1`]) unless RFC-0018 Gate C governs AND certifies it; `true` otherwise
