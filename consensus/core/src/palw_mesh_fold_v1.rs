@@ -65,12 +65,41 @@ impl TransitionBuilder<'_> {
     }
 
     /// Pay `amount` (clamped to the panel reserve) to `bond`'s payout payload; returns what was paid.
-    fn mesh_pay_from_reserve(&mut self, bond: &PalwBondKeyV2, amount: u64) -> Result<u64, PalwStateV2Error> {
+    ///
+    /// **RFC-0008 once-only settlement (RFC08-1; dormant `palw_settlement_once_v1`)**: `leg` names the exact obligation
+    /// (`MeshAuditPay` or `MeshTrapBounty` of `(claim, auditor)`) and `liability` its combined-predicate terms. Past the fence the
+    /// marker is checked and written once the clamped amount and the payee are known and before the payout row: a repeat (or a
+    /// refusal) pays nothing and leaves the reserve untouched. `Dormant` below the fence: the historical payment, byte for byte.
+    pub(super) fn mesh_pay_from_reserve(
+        &mut self,
+        now: u64,
+        bond: &PalwBondKeyV2,
+        amount: u64,
+        leg: crate::palw_settlement_once_v1::PalwSettlementLegV1,
+        claim: &Hash64,
+        liability: super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1,
+    ) -> Result<u64, PalwStateV2Error> {
         let paid = amount.min(self.state.panel_reserve_sompi());
         if paid == 0 {
             return Ok(0);
         }
         let Some(payload) = self.state.bonds.get(bond).map(|record| record.payout_payload) else { return Ok(0) };
+        let once = self.settle_once_liable_v1(
+            now,
+            crate::palw_settlement_once_v1::PalwSettlementObligationV1::with_party(
+                leg,
+                claim.as_bytes(),
+                crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(bond),
+                0,
+            ),
+            crate::palw_settlement_once_v1::PalwSettlementConsumerV1::AuditMesh,
+            paid,
+            crate::palw_settlement_once_v1::PalwSettlementDebitV1::Held { amount: paid },
+            liability,
+        )?;
+        if !once.pays() {
+            return Ok(0);
+        }
         match self.add_panel_payout(payload, paid) {
             Ok(()) => {}
             // RFC-0006: a local capacity refusal is never "paid nothing" — the transition is refused locally and retried.
@@ -442,7 +471,18 @@ pub(super) fn count_audited_leaf_v1(
     let pay = row.pay;
     builder.write_mesh_audit(*claim_id, Some(row))?;
     if !deferred {
-        builder.mesh_pay_from_reserve(seat, pay)?;
+        // RFC08-2: paid at the answer, before the row's trap window could catch it — no liability term for that is sourced, so
+        // past the settlement fence this pay is refused (it stands once `palw_audit_1004_v1` defers it to the sweep).
+        builder.mesh_pay_from_reserve(
+            ctx.daa_score,
+            seat,
+            pay,
+            crate::palw_settlement_once_v1::PalwSettlementLegV1::MeshAuditPay,
+            claim_id,
+            super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
+                "an audit answer paid before its row's trap window (palw_audit_1004_v1 off): no liability horizon is sourced",
+            ),
+        )?;
     }
     Ok(())
 }
@@ -634,7 +674,16 @@ pub(super) fn apply_trap_revealed_v1(
                     assignment.outcome = None;
                 }
             } else {
-                builder.mesh_pay_from_reserve(&assignment.auditor, bounty)?;
+                builder.mesh_pay_from_reserve(
+                    ctx.daa_score,
+                    &assignment.auditor,
+                    bounty,
+                    crate::palw_settlement_once_v1::PalwSettlementLegV1::MeshTrapBounty,
+                    &reveal.claim,
+                    super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim(
+                        "a trap bounty is a court outcome paid from the panel reserve; it stands behind no claim",
+                    ),
+                )?;
             }
         }
         audit.trap_settled = true;
@@ -682,7 +731,16 @@ pub(super) fn sweep_mesh_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlock
             for assignment in &row.assignments {
                 // **C-F4 (`palw_audit_1004_v1`): the audit pay of an answer that stood**, paid once, from the reserve (clamped).
                 if deferred && assignment.outcome.is_some() {
-                    builder.mesh_pay_from_reserve(&assignment.auditor, row.pay)?;
+                    builder.mesh_pay_from_reserve(
+                        ctx.daa_score,
+                        &assignment.auditor,
+                        row.pay,
+                        crate::palw_settlement_once_v1::PalwSettlementLegV1::MeshAuditPay,
+                        &claim,
+                        super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim(
+                            "an audit answer that stood: paid from the panel reserve after its row's trap window",
+                        ),
+                    )?;
                 }
                 let _ = super::native_writers::local_capacity_or_v1(builder.mesh_release(assignment.auditor, assignment.reserved))?;
             }

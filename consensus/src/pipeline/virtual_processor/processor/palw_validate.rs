@@ -1821,8 +1821,10 @@ impl VirtualStateProcessor {
                                     return Err("a Windowed receipt below palw_capacity_batch_licence (ADR-0160 F-B)".to_string());
                                 }
                                 // R6-CELL round 4: the coverage closure's mirrored height (None on every shipped network).
+                                // RFC06-4: and consumer v2's, so past it this path judges the claim with its router binding
+                                // exactly as the claim gate, the court and the fold do.
                                 let finding =
-                                    kaspa_consensus_core::palw_offence_attribution_v1::palw_check_panel_false_valid_at_v2_closure_v1(
+                                    kaspa_consensus_core::palw_offence_attribution_v1::palw_check_panel_false_valid_blame_v2(
                                         state,
                                         accused,
                                         evidence,
@@ -1842,7 +1844,9 @@ impl VirtualStateProcessor {
                                         }),
                                         // Lane LG14-A (RFC-0014 §7.4): the fold's session rule at this block.
                                         self.palw_session_rule_at(point.daa_score),
-                                        state_params.cell_coverage_closure_from_daa(),
+                                        kaspa_consensus_core::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1::DirectCarrier,
+                                        kaspa_consensus_core::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1::of(state_params),
+                                        true,
                                     )
                                     .map_err(|e| e.to_string())?;
                                 let offence_id = kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(
@@ -1868,7 +1872,8 @@ impl VirtualStateProcessor {
                                 if kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != *evidence_id {
                                     return Err(PalwOffenceVerifyError::EvidenceIdMismatch.to_string());
                                 }
-                                let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_executor_refuted_at_v1(
+                                // RFC06-4: past consumer v2, the same closure predicate as kind 3 (below it, unchanged).
+                                let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_executor_refuted_blame_v2(
                                     state,
                                     accused,
                                     evidence,
@@ -1876,6 +1881,8 @@ impl VirtualStateProcessor {
                                     false,
                                     self.palw_identity_rules_v1(point.daa_score),
                                     self.palw_session_rule_at(point.daa_score),
+                                    kaspa_consensus_core::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1::DirectCarrier,
+                                    kaspa_consensus_core::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1::of(state_params),
                                 )
                                 .map_err(|e| e.to_string())?;
                                 let offence_id =
@@ -1942,13 +1949,33 @@ impl VirtualStateProcessor {
                     }
                     // R6-CELL round 4: whether the coverage closure governs the accused claim (a `PanelFalseValid`'s named claim
                     // accepted at or past the closure's mirrored height); `false` on every shipped network and for every other kind.
-                    let cell_closure = matches!(kind, kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid)
-                        && borsh::from_slice::<kaspa_consensus_core::palw_offence_v1::PalwPanelFalseValidEvidenceV1>(evidence)
+                    // RFC06-4: past consumer v2 the mode carries the claim's router binding (the claim gate's and the court's
+                    // predicate); below it this is the round-4 `bool` exactly (`for_blame_path(.., true)`).
+                    let closure_mirrors = kaspa_consensus_core::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1::of(state_params);
+                    let closure_inputs = if matches!(kind, kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid) {
+                        borsh::from_slice::<kaspa_consensus_core::palw_offence_v1::PalwPanelFalseValidEvidenceV1>(evidence)
                             .ok()
-                            .and_then(|p| state.claim(&p.claim_id).map(|c| c.accepted_daa))
-                            .is_some_and(|daa| {
-                                kaspa_consensus_core::palw_cell_coverage_closure_v1::palw_cell_closure_governs_v1(state_params, daa)
-                            });
+                            .and_then(|p| {
+                                kaspa_consensus_core::palw_cell_coverage_closure_v1::palw_blame_closure_inputs_v1(
+                                    state,
+                                    &p.claim_id,
+                                    closure_mirrors,
+                                )
+                            })
+                    } else {
+                        None
+                    };
+                    let cell_closure = closure_inputs.as_ref().map_or(
+                        kaspa_consensus_core::palw_cell_coverage_closure_v1::PalwCellClosureModeV1::Off,
+                        |(accepted, row)| {
+                            kaspa_consensus_core::palw_cell_coverage_closure_v1::PalwCellClosureModeV1::for_blame_path(
+                                closure_mirrors,
+                                *accepted,
+                                row.as_ref(),
+                                true,
+                            )
+                        },
+                    );
                     kaspa_consensus_core::palw_offence_v1::palw_verify_objective_offence_closure_v1(
                         *kind,
                         &accused.0,
@@ -2536,9 +2563,63 @@ impl VirtualStateProcessor {
                             ) {
                                 return Err("the class registrant did not sign this router binding".into());
                             }
+                            // **RFC06-4: the class's admission price re-derived under THIS binding** — each routed reader's
+                            // appendix priced at the row of the router it is bound to (its own width and tile), not the table's
+                            // first q36 router — under the court and ladder in force at this block, against the same ceilings the
+                            // registration gate applied. A binding under which some routed close could not be carried is refused.
+                            // Only here, past the fence; a class with no binding keeps the price it was admitted at.
+                            rb::palw_router_binding_check_v2(declaration)?;
+                            let bundle = self.palw_v2_bundle.as_ref().ok_or("router binding on a network with no V2 bundle")?;
+                            let profile = &declaration.profile;
+                            let kary = match self.palw_kary_court_active_at(point.daa_score) {
+                                false => None,
+                                true => {
+                                    let derived = self
+                                        .palw_court_params_at(point.daa_score)
+                                        .ok_or("router binding on a chain with no V2 ruleset")?
+                                        .map_err(|e| format!("router binding judged under a court with no shape: {e}"))?;
+                                    Some(kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
+                                        dissection_arity: derived.dissection_arity(),
+                                        prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
+                                        window_court_daa:
+                                            kaspa_consensus_core::palw_class_admission_v2::palw_class_court_window_for_shape_v1(
+                                                bundle.state.window_court(),
+                                                self.palw_model_court_window_active_at(point.daa_score),
+                                                self.palw_held_context_at(point.daa_score),
+                                                &derived,
+                                                profile,
+                                            )
+                                            .map_err(|e| format!("router binding: {e}"))?,
+                                    })
+                                }
+                            };
+                            let ladder = self
+                                .palw_context_ladder_at(point.daa_score)
+                                .then(|| {
+                                    kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+                                        profile,
+                                        kary,
+                                        bundle.court.max_step_leaf_count(),
+                                    )
+                                })
+                                .flatten();
+                            let held = kaspa_consensus_core::palw_class_admission_v2::PalwHeldAdmissionV1 {
+                                armed: self.palw_held_context_at(point.daa_score),
+                                panel_da: self.palw_panel_da_at(point.daa_score),
+                            };
+                            let row = rb::PalwRouterBindingRowV2 {
+                                version: rb::PALW_ROUTER_BINDING_VERSION_V2,
+                                bound_from_daa: point.daa_score,
+                                readers: declaration.readers.clone(),
+                            };
+                            kaspa_consensus_core::palw_class_admission_v2::palw_router_binding_admission_v2(
+                                bundle, profile, ladder, kary, held, &row,
+                            )
+                            .map_err(|e| format!("class {} is not admissible under this router binding: {e}", declaration.class_id))?;
                         }
                         mr::PalwMemoryRoutingObjectV2::Accused { accusation } => {
-                            let claim = state.claim(&accusation.claim).ok_or("memory/routing accusation names an absent native claim")?;
+                            let claim =
+                                state.claim(&accusation.claim).ok_or("memory/routing accusation names an absent native claim")?;
                             let ladder =
                                 state.class_step_ladder_v1(&claim.class_id, self.palw_court_step_ladder_at(point.daa_score, court));
                             accusation.validate_shape(ladder)?;
@@ -4227,7 +4308,8 @@ impl VirtualStateProcessor {
                             return Err("terminal Windowed receipt below its batch fence".into());
                         }
                         let accused = state.bond(&d.accused).ok_or("terminal accused has no registered bond")?;
-                        t::palw_terminal_adjudicate_v1(
+                        // RFC06-4: the block's two closure mirrors (both `None` on every shipped network: the V1 call).
+                        t::palw_terminal_adjudicate_v2(
                             state,
                             d,
                             &evidence,
@@ -4245,6 +4327,7 @@ impl VirtualStateProcessor {
                                 ),
                                 verify: &Self::verify_mldsa87_with_context_bool,
                             }),
+                            kaspa_consensus_core::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1::of(state_params),
                         )?;
                     }
                 }

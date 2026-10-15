@@ -104,7 +104,8 @@ pub(super) fn part(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, p: &
         {
             return Err(refusal(p.evidence_id, "constrained terminal proof below its decode-constraint fence"));
         }
-        crate::palw_terminal_carriage_v1::palw_terminal_adjudicate_v1(
+        // RFC06-4: the block's two closure mirrors (both `None` on every shipped network: the V1 call byte for byte).
+        crate::palw_terminal_carriage_v1::palw_terminal_adjudicate_v2(
             &b.state,
             &d,
             &evidence,
@@ -113,6 +114,7 @@ pub(super) fn part(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, p: &
             b.identity_rules_v1(ctx.daa_score),
             b.session_rule_v1(ctx.daa_score),
             None,
+            crate::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1::of(b.params),
         )
         .map_err(|e| refusal(p.evidence_id, e))?;
         b.consume_objective_offence_with_budget_v1(

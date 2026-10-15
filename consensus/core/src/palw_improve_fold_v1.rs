@@ -270,6 +270,101 @@ fn palw_improve_claim_is_evaluation_hook_v1(claim: &PalwClaimStateV2) -> bool {
 // Several of these are the lanes' API (A4–A6: candidates, material, setter sets, scores, fees, S1),
 // called from their arms once those land.
 #[allow(dead_code)]
+/// **RFC-0008 once-only settlement (RFC08-1): the exact obligation one improvement-ledger credit settles** — the source row it
+/// pays out of. Every credit names it, so one source is credited once across every consumer (a hold refunded by its deadline
+/// AND by the material sweep, a grant tranche vested twice, an evaluation fee at two Finals) whatever each path's own guard says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwImproveCreditV1 {
+    /// The refund of a posted improvement bond: `kind` (artifact, dataset, setter set, candidate) of the row `id` of `line`.
+    HoldRefund { line: Hash64, kind: u8, id: [u8; 64] },
+    /// An evaluation claim's fee (the executor's share, role 0; a credited seat's, role 1).
+    EvalFee { claim: Hash64, final_daa: u64, role: u8 },
+    /// An S1 bounty of one key of one task.
+    S1Bounty { line: Hash64, task: Hash64, key: [u8; 64] },
+    /// An S1 setter reward of one artifact.
+    S1Setter { line: Hash64, artifact: Hash64 },
+    /// One vesting tranche of a grant `(line, epoch, index)` up to its vested target.
+    GrantTranche { line: Hash64, epoch: u64, index: u32, target: u64 },
+    /// A dissolved line's balance to its owner.
+    Dissolution { line: Hash64 },
+}
+
+/// The hold kinds of [`PalwImproveCreditV1::HoldRefund`].
+pub(crate) const PALW_IMPROVE_HOLD_ARTIFACT_V1: u8 = 1;
+pub(crate) const PALW_IMPROVE_HOLD_DATASET_V1: u8 = 2;
+pub(crate) const PALW_IMPROVE_HOLD_SETTER_SET_V1: u8 = 3;
+pub(crate) const PALW_IMPROVE_HOLD_CANDIDATE_V1: u8 = 4;
+
+impl PalwImproveCreditV1 {
+    /// The obligation for crediting `bond`, and the combined liability predicate's leg: an evaluation fee is its claim's reward
+    /// (sourced from the claim); a refund of one's own bond, a pool award, a grant tranche and a dissolution stand behind no claim.
+    fn obligation_v1(
+        &self,
+        bond: &PalwBondKeyV2,
+        amount: u64,
+    ) -> (crate::palw_settlement_once_v1::PalwSettlementObligationV1, super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1) {
+        use super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1 as L;
+        use crate::palw_settlement_once_v1::{PalwSettlementLegV1, PalwSettlementObligationV1, palw_settlement_subject_v1};
+        let party = crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(bond);
+        let (subject, ordinal, leg) = match *self {
+            Self::HoldRefund { line, kind, id } => (
+                palw_settlement_subject_v1(b"improve-hold-refund", &[line.as_bytes().as_slice(), &[kind], &id]),
+                0,
+                L::NoLiableClaim("a refund of the payee's own posted improvement bond"),
+            ),
+            Self::EvalFee { claim, final_daa, role } => (
+                palw_settlement_subject_v1(b"improve-eval-fee", &[claim.as_bytes().as_slice()]),
+                u64::from(role),
+                L::V2Claim {
+                    claim,
+                    final_daa: Some(final_daa),
+                    horizon: None,
+                    draw: 0,
+                    paid_now: amount,
+                    exported_before: None,
+                    vest_until: None,
+                },
+            ),
+            Self::S1Bounty { line, task, key } => (
+                palw_settlement_subject_v1(b"improve-s1-bounty", &[line.as_bytes().as_slice(), task.as_bytes().as_slice(), &key]),
+                0,
+                L::NoLiableClaim("an S1 improvement-pool award stands behind no claim"),
+            ),
+            Self::S1Setter { line, artifact } => (
+                palw_settlement_subject_v1(b"improve-s1-setter", &[line.as_bytes().as_slice(), artifact.as_bytes().as_slice()]),
+                0,
+                L::NoLiableClaim("an S1 improvement-pool award stands behind no claim"),
+            ),
+            Self::GrantTranche { line, epoch, index, target } => (
+                palw_settlement_subject_v1(
+                    b"improve-grant",
+                    &[line.as_bytes().as_slice(), &epoch.to_le_bytes(), &index.to_le_bytes()],
+                ),
+                target,
+                L::NoLiableClaim("a vesting improvement grant tranche stands behind no claim"),
+            ),
+            Self::Dissolution { line } => (
+                palw_settlement_subject_v1(b"improve-dissolution", &[line.as_bytes().as_slice()]),
+                0,
+                L::NoLiableClaim("a dissolved line's fee balance returned to its owner"),
+            ),
+        };
+        (PalwSettlementObligationV1::with_party(PalwSettlementLegV1::ImprovementEarning, subject, party, ordinal), leg)
+    }
+}
+
+/// An S1 key's digest (its answer span, as the credit identity carries it). Streamed token by token: no buffer is allocated.
+pub(crate) fn palw_improve_s1_key_digest_v1(key: &[u32]) -> [u8; 64] {
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/settlement-once/improve-s1-key/v1").to_state();
+    state.update(&(key.len() as u64).to_le_bytes());
+    for token in key {
+        state.update(&token.to_le_bytes());
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    out
+}
+
 impl TransitionBuilder<'_> {
     fn improvement_active_v1(&self, daa: u64) -> Result<(), PalwStateV2Error> {
         if self.params.improve_active_at(daa) { Ok(()) } else { Err(refused("palw_improvement_v1 is not in force")) }
@@ -339,8 +434,30 @@ impl TransitionBuilder<'_> {
     }
 
     /// Credit the earnings ledger (§17.11.5): what the flush pays out later.
-    fn credit_improvement_earnings_v1(&mut self, bond: &PalwBondKeyV2, amount: u64) -> Result<(), PalwStateV2Error> {
+    ///
+    /// **RFC-0008 once-only settlement (RFC08-1; dormant `palw_settlement_once_v1`)**: `credit` names the source row; past the
+    /// fence its marker is checked and written before the ledger row, and a repeat (or a refusal by the combined liability
+    /// predicate) credits nothing. `Dormant` below the fence: the historical credit, byte for byte.
+    pub(super) fn credit_improvement_earnings_v1(
+        &mut self,
+        credit: PalwImproveCreditV1,
+        now: u64,
+        bond: &PalwBondKeyV2,
+        amount: u64,
+    ) -> Result<(), PalwStateV2Error> {
         if amount == 0 {
+            return Ok(());
+        }
+        let (obligation, leg) = credit.obligation_v1(bond, amount);
+        let once = self.settle_once_liable_v1(
+            now,
+            obligation,
+            crate::palw_settlement_once_v1::PalwSettlementConsumerV1::ImprovementPool,
+            amount,
+            crate::palw_settlement_once_v1::PalwSettlementDebitV1::Held { amount },
+            leg,
+        )?;
+        if !once.pays() {
             return Ok(());
         }
         let owed = self.state.improvement_earnings.get(bond).copied().unwrap_or(0).saturating_add(amount);
@@ -392,12 +509,15 @@ impl TransitionBuilder<'_> {
         line_id: &Hash64,
         recipient: &PalwBondKeyV2,
         amount: u64,
+        hold: (u8, [u8; 64]),
+        now: u64,
     ) -> Result<(), PalwStateV2Error> {
         let mut pool = self.improvement_pool_of_v1(line_id);
         pool.held = pool.held.checked_sub(amount).ok_or(PalwStateV2Error::Overflow("improvement held underflow"))?;
         pool.refunded += amount as u128;
         self.write_improvement_pool_row_v1(line_id, pool)?;
-        self.credit_improvement_earnings_v1(recipient, amount)?;
+        let credit = PalwImproveCreditV1::HoldRefund { line: *line_id, kind: hold.0, id: hold.1 };
+        self.credit_improvement_earnings_v1(credit, now, recipient, amount)?;
         Ok(())
     }
 
@@ -694,6 +814,7 @@ impl TransitionBuilder<'_> {
     /// back with the rest at the epoch's end (the ordinary rule gives it to the panel reserve, which this
     /// escrow's accounting has no place for), and the executor never takes it. Returns what was paid
     /// (0 once the escrow is spent).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn pay_improvement_eval_fee_v1(
         &mut self,
         line_id: &Hash64,
@@ -701,6 +822,8 @@ impl TransitionBuilder<'_> {
         subject: &PalwEvalSubjectV1,
         executor: &PalwBondKeyV2,
         panel: Option<(usize, &[PalwBondKeyV2])>,
+        claim_id: &Hash64,
+        final_daa: u64,
     ) -> Result<u64, PalwStateV2Error> {
         let policy = self.improvement_policy_of_v1(line_id)?;
         let fee = policy.fees.eval_fee_per_job;
@@ -753,10 +876,11 @@ impl TransitionBuilder<'_> {
             pool.held = pool.held.checked_sub(paid).ok_or(PalwStateV2Error::Overflow("improvement held underflow"))?;
             pool.paid += paid as u128;
             self.write_improvement_pool_row_v1(line_id, pool)?;
-            self.credit_improvement_earnings_v1(executor, split.producer)?;
+            let fee_credit = |role: u8| PalwImproveCreditV1::EvalFee { claim: *claim_id, final_daa, role };
+            self.credit_improvement_earnings_v1(fee_credit(0), final_daa, executor, split.producer)?;
             if let Some((_, credited)) = panel {
                 for seat in credited.iter().take(split.credited as usize) {
-                    self.credit_improvement_earnings_v1(seat, split.per_seat)?;
+                    self.credit_improvement_earnings_v1(fee_credit(1), final_daa, seat, split.per_seat)?;
                 }
             }
         }
@@ -773,6 +897,8 @@ impl TransitionBuilder<'_> {
         line_id: &Hash64,
         recipient: &PalwBondKeyV2,
         stage: PalwRewardStageV1,
+        credit: PalwImproveCreditV1,
+        now: u64,
     ) -> Result<u64, PalwStateV2Error> {
         let policy = self.improvement_policy_of_v1(line_id)?;
         let amount = match stage {
@@ -788,7 +914,7 @@ impl TransitionBuilder<'_> {
         pool.balance -= amount;
         pool.paid += amount as u128;
         self.write_improvement_pool_row_v1(line_id, pool)?;
-        self.credit_improvement_earnings_v1(recipient, amount)?;
+        self.credit_improvement_earnings_v1(credit, now, recipient, amount)?;
         Ok(amount)
     }
 
@@ -1745,7 +1871,11 @@ fn decide_epoch_v1(
             // A loser's bond and unspent escrow come back; its fee stays.
             row.bond + unspent
         };
-        builder.release_improvement_hold_v1(&line_id, &row.submitter, refund)?;
+        let candidate = crate::palw_settlement_once_v1::palw_settlement_subject_v1(
+            b"improve-candidate",
+            &[&epoch.to_le_bytes(), row.class_id.as_bytes().as_slice()],
+        );
+        builder.release_improvement_hold_v1(&line_id, &row.submitter, refund, (PALW_IMPROVE_HOLD_CANDIDATE_V1, candidate), daa)?;
     }
     if let Some(class_id) = winner {
         // S2 (§17.11.3).
@@ -1873,7 +2003,8 @@ fn vest_improvement_grants_v1(builder: &mut TransitionBuilder<'_>, line_id: &Has
         pool.unvested = pool.unvested.saturating_sub(pay);
         pool.paid += pay as u128;
         builder.write_improvement_pool(*line_id, Some(pool))?;
-        builder.credit_improvement_earnings_v1(&grant.recipient, pay)?;
+        let tranche = PalwImproveCreditV1::GrantTranche { line: key.0, epoch: key.1, index: key.2, target };
+        builder.credit_improvement_earnings_v1(tranche, daa, &grant.recipient, pay)?;
         builder.write_improvement_grant(key, Some(grant))?;
     }
     Ok(())
@@ -1943,7 +2074,7 @@ fn dissolve_if_done_v1(
         return Ok(false);
     }
     if let Some(owner) = builder.state.model_line_or_founding(&line_id).and_then(|l| l.owner) {
-        builder.credit_improvement_earnings_v1(&owner, pool.balance)?;
+        builder.credit_improvement_earnings_v1(PalwImproveCreditV1::Dissolution { line: line_id }, daa, &owner, pool.balance)?;
     }
     let epochs: Vec<u64> = builder.state.improvement_epochs.range((line_id, 0)..=(line_id, u64::MAX)).map(|((_, e), _)| *e).collect();
     for epoch in epochs {
@@ -2247,7 +2378,7 @@ mod tests {
                 ] {
                     let score = PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value };
                     b.record_improvement_score_v1(&h(LINE), 1, item, subject, score).unwrap();
-                    assert!(b.pay_improvement_eval_fee_v1(&h(LINE), 1, &subject, &bond(CAROL), None).unwrap() > 0);
+                    assert!(b.pay_improvement_eval_fee_v1(&h(LINE), 1, &subject, &bond(CAROL), None, &h(0xE7), 0).unwrap() > 0);
                 }
             }
             let dup = PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value: 1 };
@@ -2517,7 +2648,7 @@ mod tests {
         let s = at(&s, &p, 2_510, |b| {
             for _ in 0..3 {
                 assert_eq!(
-                    b.pay_improvement_eval_fee_v1(&h(LINE), 2, &PalwEvalSubjectV1::Parent, &bond(CAROL), None).unwrap(),
+                    b.pay_improvement_eval_fee_v1(&h(LINE), 2, &PalwEvalSubjectV1::Parent, &bond(CAROL), None, &h(0xE7), 0).unwrap(),
                     fee_per_job
                 );
             }
@@ -2658,7 +2789,7 @@ mod tests {
         });
         let s = at(&s, &p, 1_510, |b| {
             for _ in 0..3 {
-                assert_eq!(b.pay_improvement_eval_fee_v1(&h(LINE), 1, &PalwEvalSubjectV1::Parent, &bond(CAROL), None).unwrap(), 1);
+                assert_eq!(b.pay_improvement_eval_fee_v1(&h(LINE), 1, &PalwEvalSubjectV1::Parent, &bond(CAROL), None, &h(0xE7), 0).unwrap(), 1);
             }
         });
         assert_eq!(s.improvement_epoch(&h(LINE), 1).unwrap().state, PalwEpochStateV1::Evaluating);
@@ -2802,7 +2933,7 @@ mod tests {
                 ] {
                     let score = PalwEvalScoreV1 { kind: PalwScoringKindV1::ExactMatch, value };
                     b.record_improvement_score_v1(&h(LINE), 1, item, subject, score).unwrap();
-                    b.pay_improvement_eval_fee_v1(&h(LINE), 1, &subject, &bond(CAROL), None).unwrap();
+                    b.pay_improvement_eval_fee_v1(&h(LINE), 1, &subject, &bond(CAROL), None, &h(0xE7), 0).unwrap();
                 }
             }
         });

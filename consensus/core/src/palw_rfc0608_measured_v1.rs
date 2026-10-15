@@ -64,22 +64,13 @@ pub const PALW_RFC0608_OPEN_BLOCKERS_V1: &[(PalwRfc0608FenceV1, &str)] = &[
          claim/producer)",
     ),
     (
-        PalwRfc0608FenceV1::MemoryRoutingCourtV2,
-        "RFC06-4: the routing appendix's admission price is not re-derived when a router binding exists",
-    ),
-    (
-        PalwRfc0608FenceV1::MemoryRoutingCourtV2,
-        "RFC06-4: one offence-attribution path still uses the older coverage-closure rules",
-    ),
-    (
         PalwRfc0608FenceV1::SettlementOnceV1,
-        "RFC08-1: verifier slot fee legs, free-prompt receipt spends and journal_bond_budget slots are not on the once-only \
-         registry",
-    ),
-    (
-        PalwRfc0608FenceV1::SettlementOnceV1,
-        "RFC08-2: the combined liability predicate (palw_settlement_liability_admits_v1) is not wired into admission or \
-         settlement",
+        "RFC08-2 (unsourced terms): past the fence the combined liability predicate refuses, by name, every leg whose terms \
+         have no authenticated source: verifier check fees (RFC07-5: no verifier liability horizon), material provider fees \
+         (event-relative covenant, no finite horizon), native mining receipts and native funded/text/job/mining admissions (no \
+         signed hard deadline), kernel claims outside a paid V2 enrollment (no producer-signed lifetime), beacon source-fee \
+         promise payouts (no claim reservation, X3 deadline or material TTL) and audit answers paid before their trap window \
+         (palw_audit_1004_v1 off)",
     ),
 ];
 

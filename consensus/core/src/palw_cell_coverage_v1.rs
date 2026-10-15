@@ -340,7 +340,10 @@ fn palw_legacy_cell_coverage_parts_v1(profile: &PalwShapeProfileV3) -> (PalwCell
     let mut covered = Vec::new();
     let mut gaps = Vec::new();
     if ![PALW_STEP_OBJECT_VERSION_V1, PALW_STEP_OBJECT_VERSION_V2, PALW_STEP_OBJECT_VERSION_V3].contains(&profile.version) {
-        return (Vec::new(), vec![PalwCellCoverageGapV1::UnknownProfileKind { why: format!("shape profile version {}", profile.version) }]);
+        return (
+            Vec::new(),
+            vec![PalwCellCoverageGapV1::UnknownProfileKind { why: format!("shape profile version {}", profile.version) }],
+        );
     }
     let q36_router = kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_ROUTER_TOPK);
     let kimi_router = kernel_semantics_id_v1(crate::palw_step_refute::KDESC_KIMI_ROUTER_TOPK);
@@ -435,8 +438,9 @@ pub struct PalwCellConsumersV2<'a> {
 
 /// **Does consumer v2's anchored recurrence court reach this profile's recurrence state?** A solo gdn v1/v2 map or a composed
 /// hybrid map (the v3/v4/v5 compositions are already covered by round 4; hybrid v1/v2 roots carry no recurrence and never are; the
-/// solo key-head v3 map has no capture consumer). The geometry must derive, and a composed checkpoint must fit the flat chunk cap at
-/// the class's widest context.
+/// solo key-head v3 map now has its capture and court (`memory_v2::palw_gdn_solo_map_v2`) but no class can register it —
+/// `validate_shape` admits a version-3 profile only on the held v5 composition or no map — so it is not claimed as covered here).
+/// The geometry must derive, and a composed checkpoint must fit the flat chunk cap at the class's widest context.
 pub fn palw_recurrence_reached_v2(profile: &PalwShapeProfileV3) -> bool {
     let map = profile.state_chunk_map_id;
     let solo = map == maps::gdn_state_chunk_map_id_v1() || map == maps::gdn_state_chunk_map_id_v2();

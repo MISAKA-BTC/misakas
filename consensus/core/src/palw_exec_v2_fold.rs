@@ -1276,7 +1276,7 @@ pub(super) fn settle_at_final_v2(
                 .get(claim_id)
                 .is_some_and(|receipt| receipt.legs.iter().any(|((payee, _), payout)| *payee == bond && payout.amount > 0));
         if !paid_later {
-            builder.cancel_native_recipient_v1(*claim_id, bond, 2);
+            builder.cancel_native_recipient_v1(*claim_id, bond, 2)?;
         }
     }
     release_executor_exposure_v2(builder, claim_id, &root)?;
@@ -1310,7 +1310,7 @@ pub(super) fn on_claim_voided_v2(
 ) -> Result<(), PalwStateV2Error> {
     let Some(root) = builder.state.exec_v2.roots.get(claim_id).cloned() else { return Ok(()) };
     for bond in builder.state.exec_v2_participants_v1(claim_id, &root) {
-        builder.cancel_native_recipient_v1(*claim_id, bond, 2);
+        builder.cancel_native_recipient_v1(*claim_id, bond, 2)?;
     }
     super::palw_kernel_route_fold_v1::cancel_exec_rewards_v1(builder, *claim_id, voided_daa)?;
     if matches!(root.phase, PalwWorkRootPhaseV2::Voided { .. }) {

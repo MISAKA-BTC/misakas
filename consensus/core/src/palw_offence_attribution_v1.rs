@@ -832,7 +832,7 @@ enum PalwStructuralPassV1 {
 fn structural_pass(
     refutation: &crate::palw_step_leg::PalwStepRefutationV1,
     step_ladder: u64,
-    cell_closure: bool,
+    cell_closure: crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1<'_>,
 ) -> Result<PalwStructuralPassV1, PalwOffenceVerifyError> {
     let root = &refutation.binding.committed_execution_root;
     match crate::palw_step_leg::check_step_refutation_closure_capped_v1(refutation, step_ladder, cell_closure) {
@@ -906,13 +906,15 @@ pub fn palw_false_valid_fault_site_v1(
 
 /// [`palw_false_valid_fault_site_v1`] under RFC-0006 R6-CELL round 4's coverage closure (`palw_cell_coverage_closure_v1`): with
 /// `cell_closure` (the closure governs the claim) the structural pass uses the closure-aware step checker, so an uncoverable profile
-/// is a whole-claim shape fault rather than "no fault". `false`: byte for byte the V1 function.
-pub fn palw_false_valid_fault_site_closure_v1(
+/// is a whole-claim shape fault rather than "no fault". `false`: byte for byte the V1 function. RFC06-4: a blame-path mode
+/// (`PalwCellClosureModeV1::for_blame_path`) places the site under the same predicate as the claim gate and the court.
+pub fn palw_false_valid_fault_site_closure_v1<'m>(
     contradiction: &PalwPanelContradictionV1,
     step_ladder: u64,
-    cell_closure: bool,
+    cell_closure: impl Into<crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1<'m>>,
 ) -> Result<(PalwFaultSiteV1, u64), PalwOffenceVerifyError> {
     use crate::palw_step_leg::{PalwStepEvidenceV1, PalwStepRefutationV1};
+    let cell_closure = cell_closure.into();
     match contradiction {
         PalwPanelContradictionV1::StepArithmetic { refutation, .. } => {
             // The arithmetic check's own first step, run again for its verdict alone.
@@ -1084,14 +1086,15 @@ pub fn palw_false_valid_convicts_execution_v2(
 
 /// [`palw_false_valid_convicts_execution_v2`] under the R6-CELL coverage closure: `cell_closure` reaches the structural step check
 /// ([`crate::palw_offence_v1::palw_panel_contradiction_convicts_execution_closure_v1`]). `false`: byte for byte the V2 function.
-pub fn palw_false_valid_convicts_execution_closure_v2(
+pub fn palw_false_valid_convicts_execution_closure_v2<'m>(
     contradiction: &PalwPanelContradictionV1,
     prompt_ids_opening: Option<&PalwPromptIdsOpeningV1>,
     claim_execution_root: Hash64,
     class_artifact_root: Hash64,
     step_ladder: u64,
-    cell_closure: bool,
+    cell_closure: impl Into<crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1<'m>>,
 ) -> Result<(), PalwOffenceVerifyError> {
+    let cell_closure = cell_closure.into();
     let Some(opening) = prompt_ids_opening else {
         return crate::palw_offence_v1::palw_panel_contradiction_convicts_execution_closure_v1(
             contradiction,
@@ -1109,7 +1112,10 @@ pub fn palw_false_valid_convicts_execution_closure_v2(
     }
     let operands = crate::palw_artifact::PalwProvenOperandsV1::from_openings_v1(operand_openings, class_artifact_root)
         .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
-    crate::palw_step_refute::check_execution_step_refutation_opened_capped_v1(refutation, &operands, Some(opening), step_ladder)
+    // RFC06-4: under consumer v2 with the claim's binding, the bound router's row (tag 244's); otherwise `None`, which is
+    // `check_execution_step_refutation_opened_capped_v1` byte for byte.
+    let bound_router = cell_closure.bound_router_slot(&refutation.binding.shape_profile, refutation.output_preimage.coord.node_slot);
+    crate::palw_step_refute::check_execution_step_refutation_routed_v2(refutation, &operands, Some(opening), step_ladder, bound_router)
         .map(|_| ())
         .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)
 }
@@ -2076,7 +2082,7 @@ fn adjudicate_against_claim_v1(
     fp_decode_rules_active: bool,
     rules: PalwIdentityRulesV1,
     sessions: PalwSessionRuleV1,
-    cell_closure: bool,
+    cell_closure: crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1<'_>,
 ) -> Result<(PalwForfeitScopeV1, Option<PalwIdentityFaultV1>), PalwOffenceVerifyError> {
     let ladder = state.class_step_ladder_v1(&target.class_id, PALW_FALSE_VALID_NETWORK_LADDER_V1);
     match admission {
@@ -2316,6 +2322,44 @@ pub fn palw_check_panel_false_valid_at_v2_with_budget_closure_v1(
     evidence_budget: PalwObjectiveEvidenceBudgetV1,
     cell_closure_from: Option<u64>,
 ) -> Result<PalwFalseValidFindingV1, PalwOffenceVerifyError> {
+    palw_check_panel_false_valid_blame_v2(
+        state,
+        accused,
+        evidence,
+        fp_decode_rules_active,
+        reporter_armed,
+        rules,
+        sig,
+        sessions,
+        evidence_budget,
+        crate::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1 {
+            cell_closure_from_daa: cell_closure_from,
+            memory_routing_from_daa: None,
+        },
+        true,
+    )
+}
+
+/// **RFC06-4: the Panel false-valid V2 adjudicator on the blame path's one closure rule.** `mirrors` are the block's two heights
+/// (`PalwClosureMirrorsV1::of`); past `palw_memory_routing_court_v2` the claim is judged under
+/// [`crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1::MemoryRoutingV2`] with its router binding row — the claim gate's
+/// and the court's predicate — for the structural pass, the fault site and a routed step's arithmetic alike. `round4` is whether
+/// the CALLER's path applied round 4's closure before (the processor and the fold did: `true`; the terminal carriage did not:
+/// `false`), which only matters below consumer v2, where each path keeps its historical answer.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_check_panel_false_valid_blame_v2(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    evidence: &[u8],
+    fp_decode_rules_active: bool,
+    reporter_armed: bool,
+    rules: PalwIdentityRulesV1,
+    sig: Option<PalwFalseValidSigCheckV1<'_>>,
+    sessions: PalwSessionRuleV1,
+    evidence_budget: PalwObjectiveEvidenceBudgetV1,
+    mirrors: crate::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1,
+    round4: bool,
+) -> Result<PalwFalseValidFindingV1, PalwOffenceVerifyError> {
     if evidence.len() as u64 > evidence_budget.maximum(sessions) {
         return Err(PalwOffenceVerifyError::EvidenceTooLarge);
     }
@@ -2355,8 +2399,12 @@ pub fn palw_check_panel_false_valid_at_v2_with_budget_closure_v1(
     }
     let target = palw_offence_target_v1(state, &payload.claim_id).ok_or(PalwOffenceVerifyError::NoTarget)?;
     // R6-CELL round 4: the coverage closure governs a claim accepted at or past its fence (`None` on every shipped network).
+    // RFC06-4: past consumer v2 the mode carries the claim's router binding, the same predicate on every blame path.
+    let closure_inputs = crate::palw_cell_coverage_closure_v1::palw_blame_closure_inputs_v1(state, &target.claim_id, mirrors);
     let cell_closure =
-        cell_closure_from.is_some_and(|from| state.claim(&target.claim_id).is_some_and(|c| c.accepted_daa >= from));
+        closure_inputs.as_ref().map_or(crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1::Off, |(accepted, row)| {
+            crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1::for_blame_path(mirrors, *accepted, row.as_ref(), round4)
+        });
     if sessions.refuses(state, &target.claim_id) {
         return Err(PalwOffenceVerifyError::ClaimUnderSession);
     }
@@ -2759,6 +2807,35 @@ pub fn palw_check_executor_refuted_at_v1_with_budget_v1(
     sessions: PalwSessionRuleV1,
     evidence_budget: PalwObjectiveEvidenceBudgetV1,
 ) -> Result<PalwExecutorRefutedFindingV1, PalwOffenceVerifyError> {
+    palw_check_executor_refuted_blame_v2(
+        state,
+        accused,
+        evidence,
+        fp_decode_rules_active,
+        reporter_armed,
+        rules,
+        sessions,
+        evidence_budget,
+        crate::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1::default(),
+    )
+}
+
+/// **RFC06-4: `ExecutorRefuted` (kind 4) on the blame path's one closure rule.** Below `palw_memory_routing_court_v2` (and with
+/// default `mirrors`) byte for byte [`palw_check_executor_refuted_at_v1_with_budget_v1`] — this kind never applied round 4's
+/// closure. Past it the claim is judged under the same `MemoryRoutingV2` mode, with its router binding, as kind 3, the claim gate
+/// and the court, so one contradiction convicts or acquits the executor and a `Valid` signer alike.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_check_executor_refuted_blame_v2(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    evidence: &[u8],
+    fp_decode_rules_active: bool,
+    reporter_armed: bool,
+    rules: PalwIdentityRulesV1,
+    sessions: PalwSessionRuleV1,
+    evidence_budget: PalwObjectiveEvidenceBudgetV1,
+    mirrors: crate::palw_cell_coverage_closure_v1::PalwClosureMirrorsV1,
+) -> Result<PalwExecutorRefutedFindingV1, PalwOffenceVerifyError> {
     if evidence.len() as u64 > evidence_budget.maximum(sessions) {
         return Err(PalwOffenceVerifyError::EvidenceTooLarge);
     }
@@ -2785,6 +2862,12 @@ pub fn palw_check_executor_refuted_at_v1_with_budget_v1(
         return Err(PalwOffenceVerifyError::ClaimUnderSession);
     }
     let admission = palw_executor_refuted_admission_v1(&payload.contradiction)?;
+    // Kind 4 never applied round 4 (`round4 = false`): `Off` below consumer v2, `MemoryRoutingV2` past it.
+    let closure_inputs = crate::palw_cell_coverage_closure_v1::palw_blame_closure_inputs_v1(state, &target.claim_id, mirrors);
+    let cell_closure =
+        closure_inputs.as_ref().map_or(crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1::Off, |(accepted, row)| {
+            crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1::for_blame_path(mirrors, *accepted, row.as_ref(), false)
+        });
     let (forfeit, identity_fault) = adjudicate_against_claim_v1(
         state,
         &target,
@@ -2794,7 +2877,7 @@ pub fn palw_check_executor_refuted_at_v1_with_budget_v1(
         fp_decode_rules_active,
         rules,
         sessions,
-        false,
+        cell_closure,
     )?;
     Ok(PalwExecutorRefutedFindingV1 { target, forfeit, identity_fault })
 }

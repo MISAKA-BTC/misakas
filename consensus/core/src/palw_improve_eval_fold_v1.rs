@@ -863,7 +863,15 @@ impl TransitionBuilder<'_> {
             let credited: Vec<PalwBondKeyV2> = row.seats.iter().filter(|(_, at)| **at != 0).map(|(seat, _)| *seat).collect();
             (row.seats.len(), credited)
         });
-        self.pay_improvement_eval_fee_v1(&line_id, epoch, &subject, &claim.bond, panel.as_ref().map(|(n, c)| (*n, c.as_slice())))?;
+        self.pay_improvement_eval_fee_v1(
+            &line_id,
+            epoch,
+            &subject,
+            &claim.bond,
+            panel.as_ref().map(|(n, c)| (*n, c.as_slice())),
+            claim_id,
+            final_daa,
+        )?;
         Ok(())
     }
 
