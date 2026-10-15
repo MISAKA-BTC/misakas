@@ -234,6 +234,11 @@ pub use palw_model_eligibility_fold_v1::{
 // `palw_independently_work_certified_v1`.
 #[path = "palw_security_certification_fold_v1.rs"]
 mod palw_security_certification_fold_v1;
+// RFC-0006 consumer v2 (object tag 170, kernel-route aux 139): the router binding declaration and the checkpoint / routed
+// accusations, past `palw_memory_routing_court_v2`.
+#[path = "palw_memory_routing_fold_v2.rs"]
+mod palw_memory_routing_fold_v2;
+pub(crate) use palw_memory_routing_fold_v2::palw_router_binding_row_of_v2;
 #[path = "palw_panel_source_fee_fold_v2.rs"]
 mod palw_panel_source_fee_fold_v2;
 #[path = "palw_panel_v3_fold_v1.rs"]
@@ -7376,6 +7381,13 @@ pub enum PalwConsensusObjectV2 {
     GdnStepAccusedV2 {
         accusation: Box<crate::palw_gdn_court_v2::PalwGdnCourtAccusationV2>,
     } = 243,
+    /// **RFC-0006 consumer v2's other carriers** (`crate::palw_memory_routing_v2`): the class registrant's immutable per-reader
+    /// router binding, and one-move accusations of a recurrence checkpoint transition, a convolution window or a routed reader
+    /// under its bound router. Tag 170 (the lane's allocation). Dormant behind `palw_memory_routing_court_v2`: below it the live
+    /// build's undecodable payload (A-2).
+    MemoryRoutingV2 {
+        object: Box<crate::palw_memory_routing_v2::PalwMemoryRoutingObjectV2>,
+    } = 170,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below

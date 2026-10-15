@@ -567,6 +567,8 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             }
             accusation.validate_shape(u64::MAX)
         }
+        // RFC-0006 consumer v2 (tag 170): a signed binding declaration, or a signed accusation under the close-byte ceiling.
+        PalwConsensusObjectV2::MemoryRoutingV2 { object } => object.may_ride(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES),
         // **ADR-0100 Decision 4.** The plan and a bond's shard list ride signed — by the class's
         // registrant and by the bond, checked at acceptance against their registered keys — and
         // shaped: a count in range, a list inside it. A part rides unsigned like `ReceiptLicensed`
@@ -1432,7 +1434,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         }
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
         O::ClassSemanticsDeclaredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ClassSemanticsV1),
-        O::GdnStepAccusedV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::MemoryRoutingCourtV2),
+        O::GdnStepAccusedV2 { .. } | O::MemoryRoutingV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::MemoryRoutingCourtV2),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
         O::ExecWorkRootOpenedV2 { .. } | O::ExecOriginRecordedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
         // The TIR and greedy Float32 routes' forms appended inside the staged court's kinds are owned by their own fences
@@ -1603,6 +1605,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (241, "MonetaryMaterialReplacedV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
     (242, "MonetaryMaterialActionV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
     (243, "GdnStepAccusedV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
+    (170, "MemoryRoutingV2", PalwLifecycleKindFenceV1::MemoryRoutingCourtV2),
     (168, "PublicCourtStreamOpenedNativeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (169, "TirClassLayoutPublishedV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
     (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
@@ -2285,6 +2288,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     ),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 243, hi: 243 }, "palw_memory_routing_court_v2", "RFC06 GDN/routing court version2", true),
     a2_row(
+        PalwA2SlotV1::ObjectTags { lo: 170, hi: 170 },
+        "palw_memory_routing_court_v2",
+        "RFC06 router binding and checkpoint/routed accusations (consumer v2)",
+        true,
+    ),
+    a2_row(
         PalwA2SlotV1::ObjectTags { lo: 230, hi: 230 },
         "palw_court_model_scope_v1",
         "D2 seat readiness digest (reserved; not landed)",
@@ -2906,6 +2915,8 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (230, 230, "D2 seat readiness digest (reserved)", &["palw_court_model_scope_v1"]),
     (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1", "palw_material_release_recovery_v2"]),
     (243, 243, "RFC06 versioned recurrence/routing court", &["palw_memory_routing_court_v2"]),
+    // 170: the RFC06 GDN/router lane's allocation (2026-10-15) — the router binding and the checkpoint/routed accusations.
+    (170, 170, "RFC06 router binding and checkpoint/routed accusations", &["palw_memory_routing_court_v2"]),
 ];
 
 #[cfg(test)]
@@ -3925,6 +3936,7 @@ pub(crate) mod tests {
                 (241, zero_filled_kind(241)),
                 (242, zero_filled_kind(242)),
                 (243, zero_filled_kind(243)),
+                (170, zero_filled_kind(170)),
                 (104, O::ArtifactBoundV1 { v2_class: h, kernel_param_root: h, signer: bond(), signature: vec![1] }),
                 (
                     105,
@@ -5179,6 +5191,9 @@ pub(crate) mod tests {
             (242, 0xd29d0349b76c136f),
             // New source declaration pin only; no old kind was re-pinned.
             (243, 0x5b8caf052fb70f7d),
+            // RFC-0006 GDN/router lane (tag 170): source pin from `scripts/drills/gen_rfc06_gdn_wire_pin_v2.py MemoryRoutingV2 170`
+            // (written, not run — the consolidated test prints the authoritative value if this differs).
+            (170, 0xcd39526b2f222e96),
             // G14 TIR native seed and class layout, owned by `palw_staged_tir_route_v1`.
             (168, 0x08ee1a77654c016e),
             (169, 0xa24f46d0931b98b5),

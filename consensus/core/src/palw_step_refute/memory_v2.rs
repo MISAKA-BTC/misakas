@@ -15,8 +15,8 @@ use crate::palw_step_leg as leg;
 mod capture;
 pub use capture::{PalwGdnCaptureV2, gdn_refutation_from_capture_v2};
 // RFC-0006 consumer v2: the checkpoint's own two facts (delta transition, convolution window), the court that keeps an anchored
-// replay sound — see the module's docs.
-mod transition;
+// replay sound — see the module's docs. Public so the generated native scanners can name its wire types by their owner path.
+pub mod transition;
 pub use transition::{
     PALW_GDN_CHECKPOINT_EVIDENCE_VERSION_V2, PALW_GDN_CONV_WINDOW_EVIDENCE_KIND_V2, PALW_GDN_TRANSITION_EVIDENCE_KIND_V2,
     PalwGdnCheckpointVerdictV2, PalwGdnConvWindowRefutationV2, PalwGdnMismatchV2, PalwGdnTransitionRefutationV2,
