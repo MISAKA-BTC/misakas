@@ -727,7 +727,10 @@ mod tests {
     /// void reason, fold hooks and beacon-source types are spelled in `palw_state_v2.rs` and the lexical guard cannot tell the two
     /// beacons apart. These exact identifiers — and only these, only in `palw_state_v2.rs` — are exempt; each must still be spelled
     /// (the test fails on a stale entry), and any other identifier naming a beacon is a violation as before.
-    const PALW_WORK_BEACON_IDENTIFIERS: [&str; 9] = [
+    const PALW_WORK_BEACON_IDENTIFIERS: [&str; 11] = [
+        // N3 (`palw_beacon_bootstrap_v1`): the Work Beacon's own independent bootstrap root, not the overlay's beacon.
+        "palw_beacon_bootstrap_fold_v1",
+        "assert_beacon_bootstrap_consistency_v1",
         "PanelBeaconProofV3",
         "PanelV3Beacon",
         "BeaconProofV1",
