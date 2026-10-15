@@ -66,7 +66,9 @@ pub(super) trait NativeModelTierSourceV39 {
 pub(super) struct PendingModelTierV39;
 impl NativeModelTierSourceV39 for PendingModelTierV39 {
     fn tier_permille(&self, _: &PalwChainStateV2, _: &PalwStateParamsV2, _: &Hash64) -> u16 {
-        // Swap point: `crate::palw_state_v2::palw_model_tier_v1(state, params, model)` once it is on integ.
+        // Swap point (ADR-0179, origin/integ/decisions-1015 `consensus/core/src/palw_model_tier_v1.rs:314`, not yet on
+        // integ/rfc02-rfc06-12-g14): `crate::palw_model_tier_v1::palw_model_tier_v1(state, params, model)` and its permille.
+        // A v39 registration is never the approved 1.0 tier here: only a genesis or annual-fork listing is.
         300
     }
 }

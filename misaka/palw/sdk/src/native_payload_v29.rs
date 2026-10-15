@@ -1041,6 +1041,16 @@ pub fn decode_native_payload_v39(kind: &str, raw: &[u8], maximum: Option<u32>) -
             let id: Digest = raw.try_into().map_err(|_| "source39 collect original fixed id width")?;
             stage39_raw(60, id.to_vec())
         }
+        "source-release39" => {
+            if raw.len() != 65 || raw[0] > 1 {
+                return Err("native39 release exact kind/id frame".into());
+            }
+            prepare_retention_release_v39(raw[0] == 1, raw[1..].try_into().unwrap())
+        }
+        "source-hold-reap39" => {
+            let id: Digest = raw.try_into().map_err(|_| "native39 hold reap original fixed id width")?;
+            prepare_consent_hold_reap_v39(id)
+        }
         "source-collect-job39" => {
             let id: Digest = raw.try_into().map_err(|_| "native39 collection original fixed job width")?;
             prepare_collect_v39(id)
@@ -1560,6 +1570,51 @@ pub fn encode_native_receipt_carriage_v39(
     let bytes = PalwNativeReceiptSpendEnvelopeV39 { spend, signature }.encode();
     PalwNativeReceiptSpendEnvelopeV39::decode(&bytes)?;
     Ok(bytes)
+}
+/// **Retention release71** (RFC-0002 row 14): the retention payer releases one
+/// of ITS active source (`class = false`) or class (`class = true`) slots.
+/// Exact 67-byte body `39u16 ‖ kind ‖ id`; the fold refuses while any live
+/// consent, job, Master, model or class still retains it, and refuses any
+/// signer other than the recorded payer. Freeing a slot never adds Q/B/R/F.
+pub fn prepare_retention_release_v39(class: bool, id: Digest) -> Result<PreparedNativePayloadV29, String> {
+    if id == [0; 64] {
+        return Err("native39 release original identity absent".into());
+    }
+    let mut body = Vec::with_capacity(67);
+    body.extend_from_slice(&39u16.to_le_bytes());
+    body.push(u8::from(class));
+    body.extend_from_slice(&id);
+    stage39_raw(71, body)
+}
+/// **Expired producer-consent hold collection72** (RFC-0002 row 14): the
+/// exact 64-byte hold id. Anyone may pay it; the fold re-reads the hold and
+/// refuses unless it is a canonical consent hold strictly past its `until`.
+pub fn prepare_consent_hold_reap_v39(hold: Digest) -> Result<PreparedNativePayloadV29, String> {
+    if hold == [0; 64] {
+        return Err("native39 hold original identity absent".into());
+    }
+    stage39_raw(72, hold.to_vec())
+}
+/// **Expiry scan for collection72**: every canonical producer-consent hold in
+/// a fully authenticated row stream whose `until` lies strictly below
+/// `accept_daa`, in key order. Candidates only: the fold decides at the DAA
+/// the carrier is actually accepted at.
+pub fn native_expired_consent_holds_v39<R: kaspa_consensus_core::palw_native_audit_proof_v39::NativeAuditRowReaderV39>(
+    rows: &kaspa_consensus_core::palw_native_audit_proof_v39::VerifiedNativeAuxRowsV39<R>,
+    accept_daa: u64,
+) -> Result<Vec<Digest>, String> {
+    let keys: Vec<Vec<u8>> =
+        rows.keys().filter(|(t, k, _)| *t == 112 && k.len() == 66 && k[0] == 39 && k[1] == 94).map(|(_, k, _)| k.to_vec()).collect();
+    let mut out = Vec::new();
+    for k in keys {
+        let Some(v) = rows.row(112, &k, 256)? else { continue };
+        if let Some((id, until)) = kaspa_consensus_core::palw_state_v2::native_consent_hold_expiry_v39(&k, &v) {
+            if accept_daa > until {
+                out.push(id);
+            }
+        }
+    }
+    Ok(out)
 }
 /// Collection53 of a settled job past its complete original retention. The
 /// fold decides eligibility from original rows; this frame asserts nothing.

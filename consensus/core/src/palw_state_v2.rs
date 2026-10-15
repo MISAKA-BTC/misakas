@@ -183,6 +183,7 @@ mod palw_native_mining_fold_v39;
 pub use palw_native_mining_fold_v39::palw_native_mining_model_view_v39;
 #[path = "palw_native_source_fold_v39.rs"]
 mod palw_native_source_fold_v39;
+pub use palw_native_source_fold_v39::native_consent_hold_expiry_v39;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
 #[path = "palw_material_release_recovery_fold_v2.rs"]
 mod palw_material_release_recovery_fold_v2;
