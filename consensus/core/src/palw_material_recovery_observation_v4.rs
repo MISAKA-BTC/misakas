@@ -165,3 +165,46 @@ pub fn native_recovery_observation_v4(
         lease,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        palw_material_release_recovery_v2::{PalwMaterialRecoveryContractV2, PalwMaterialRecoveryGenerationV2},
+        palw_state_v2::PalwBondKeyV2,
+    };
+
+    #[test]
+    fn streamed_observation_identity_matches_the_native_contract_codec() {
+        let h = Hash64::from_u64_word;
+        for max_generations in [1, 4, 64, u16::MAX] {
+            for all_generation_ack in [false, true] {
+                let terms = PalwMaterialRecoveryTermsV2 {
+                    version: 2,
+                    root: h(1),
+                    initial_consent: h(2),
+                    sponsor: PalwBondKeyV2(TransactionOutpoint::new(h(3), u32::MAX)),
+                    nonce: h(4),
+                    policy: h(5),
+                    max_generations,
+                    all_generation_ack,
+                };
+                let contract = PalwMaterialRecoveryContractV2 {
+                    terms,
+                    enrolled_daa: 6,
+                    generations: vec![PalwMaterialRecoveryGenerationV2 {
+                        consent: h(7),
+                        providers: vec![PalwBondKeyV2(TransactionOutpoint::new(h(8), 9))],
+                    }],
+                };
+                assert_eq!(recovery_id(&contract.terms).unwrap(), contract.id());
+                let mut changed = contract.terms.clone();
+                changed.nonce = h(10);
+                assert_ne!(recovery_id(&changed).unwrap(), contract.id(), "nonce substitution cannot preserve the observed contract");
+                changed = contract.terms.clone();
+                changed.initial_consent = h(11);
+                assert_ne!(recovery_id(&changed).unwrap(), contract.id(), "generation history cannot replace original consent");
+            }
+        }
+    }
+}

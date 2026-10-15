@@ -6,6 +6,8 @@ pub(crate) mod typed;
 pub use typed::{NativeCoverageV1, NativeFieldInventoryV1, NativeHeapV1};
 pub(crate) use typed::{native_enum, native_struct, native_tuple_struct, native_unit, native_unsupported};
 mod demand;
+mod restore;
+pub use restore::restore_native_carriage_v1;
 mod retained;
 pub(crate) use retained::value_requests_v1 as native_value_requests_v1;
 mod transition;
