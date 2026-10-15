@@ -127,9 +127,14 @@ async fn rfc15_e2e_an_opv_claim_draws_the_bond_budget_and_its_slot_returns_only_
     let after_final = kernel_budget_rows(&w, 0);
     assert!(after_final.iter().all(|r| r.in_window), "an early Final returns nothing before d + W: {after_final:?}");
 
-    // At d + W, and not before, the slot leaves the window.
+    // At d + W, and not before, the slot leaves the window — and the issuance clock frees no collateral the claim's liability still
+    // holds (§8.3.3: the slot's return and the collateral's release are separate conditions).
     w.net.beat_to(row.reuse_not_before + 1).await;
     assert!(kernel_budget_rows(&w, 0).iter().all(|r| !r.in_window), "released at d + W");
+    let liability_until = w.net.ledger().claims[&honest.id].liability_until;
+    if liability_until.is_some_and(|until| w.net.daa() <= until) {
+        assert!(w.net.kernel_reserved(0) > 0, "d + W releases the slot, never the liability collateral ({liability_until:?})");
+    }
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
 }
@@ -228,6 +233,53 @@ async fn rfc15_e2e_a_direct_proof_lands_over_another_bonds_open_demand() {
     assert_eq!(w.net.collateral(0), before - slashed - policy.economics.admission_fee, "slashed once");
     assert_eq!(w.net.owed(accuser), slashed * u64::from(w.policy().accuser_reward_permille) / 1000, "the accuser's share, once");
     assert_eq!(w.net.slashed(demander), demander_slashed, "the legitimate demander is not punished");
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}
+
+/// **Concurrent OPV claims of one bond never share a collateral** (§8.1): each reserves its own `reservation_per_claim`; a conviction
+/// slashes only the lying claim's reservation, the honest one finalizes with its reservation still held for its liability.
+#[tokio::test]
+async fn rfc15_e2e_concurrent_opv_claims_reserve_separately_and_a_conviction_takes_only_its_own() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::opv().await;
+    let (job_a, job_b) = (w.job().await, w.job().await);
+    let before = w.net.collateral(0);
+    let honest = w.claim(0, &job_a, false).await;
+    let lie = w.claim(0, &job_b, true).await;
+    let (policy, view) = opv_view(&w, &honest.id);
+    let r = policy.economics.reservation_per_claim;
+    assert_eq!(w.net.kernel_reserved(0), 2 * u128::from(r), "two claims, two reservations: no double use of one collateral");
+    let outsider = w.outsiders(&lie, &[], 1)[0];
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x71);
+    w.proof(outsider, &lie.id, proof).await;
+    assert!(w.net.ledger().claims[&lie.id].convicted && !w.net.ledger().claims[&honest.id].convicted);
+    assert_eq!(w.net.collateral(0), before - r - 2 * policy.economics.admission_fee, "only the lie's reservation is slashed");
+    assert_eq!(w.net.kernel_reserved(0), u128::from(r), "the honest claim's reservation is untouched");
+    w.net.beat_to(view.final_floor_daa).await;
+    assert!(matches!(w.net.claim_state(&honest.id), ClaimStateV1::Final { .. }), "{:?}", w.net.claim_state(&honest.id));
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}
+
+/// **A fake fraud bounty loop loses money** (§8.2): a producer that convicts its own lie through another bond it controls gets back
+/// at most the reporter share of the collected slash; together the two bonds end poorer than they started.
+#[tokio::test]
+async fn rfc15_e2e_a_self_prosecuted_lie_costs_the_producer_and_its_sybil_together() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::opv().await;
+    let job = w.job().await;
+    let lie = w.claim(0, &job, true).await;
+    let sybil = w.outsiders(&lie, &[], 1)[0];
+    let together_before = w.net.collateral(0) + w.net.collateral(sybil);
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x72);
+    w.proof(sybil, &lie.id, proof).await;
+    assert!(w.net.ledger().claims[&lie.id].convicted);
+    let together_after = w.net.collateral(0) + w.net.collateral(sybil) + w.net.owed(sybil);
+    assert!(together_after < together_before, "the loop burns the non-reporter share: {together_after} < {together_before}");
+    let (policy, _) = opv_view(&w, &lie.id);
+    let burned = policy.economics.reservation_per_claim - w.net.owed(sybil);
+    assert!(burned > 0 && w.net.owed(sybil) < policy.economics.reservation_per_claim, "the bounty is a share, never the whole slash");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
 }
