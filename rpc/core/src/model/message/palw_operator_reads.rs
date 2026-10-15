@@ -2194,8 +2194,9 @@ pub struct RpcPalwAnnualCatalogEdition {
     pub root: String,
     /// Models this edition ADDS (the catalog is add-only; `ApprovedModels(h)` is the union of editions 0..=active).
     pub models: u32,
-    /// `LOCKED_IN` (carried, not yet active) or `ACTIVE` — the only two states a binary can carry.
-    pub lifecycle: String,
+    /// `SCHEDULED` (carried, below its height) or `ACTIVE` — all a node can derive. The release-process lifecycle (PROPOSED …
+    /// LOCKED_IN, ABORTED) lives in the signed release manifest, never in a node read.
+    pub state: String,
 }
 
 impl Serializer for RpcPalwAnnualCatalogEdition {
@@ -2206,7 +2207,7 @@ impl Serializer for RpcPalwAnnualCatalogEdition {
         store!(String, &self.previous_root, writer)?;
         store!(String, &self.root, writer)?;
         store!(u32, &self.models, writer)?;
-        store!(String, &self.lifecycle, writer)?;
+        store!(String, &self.state, writer)?;
         Ok(())
     }
 }
@@ -2220,7 +2221,7 @@ impl Deserializer for RpcPalwAnnualCatalogEdition {
             previous_root: load!(String, reader)?,
             root: load!(String, reader)?,
             models: load!(u32, reader)?,
-            lifecycle: load!(String, reader)?,
+            state: load!(String, reader)?,
         })
     }
 }

@@ -20,9 +20,10 @@
 //! **What is consensus and what is not** (RFC-0019 §3). Consensus reads three things only: the chain of catalogs a binary carries
 //! (hashed into the identity / schedule / fork id like any fence value), each edition's activation DAA, and the post-ACTIVE rule
 //! (the tier the allocation roll reads). The operational lifecycle `PROPOSED → TESTED → PREPARED → LOCKED_IN → ACTIVE` (or
-//! `ABORTED`), readiness measurements, release manifests and signatures are tooling ([`PalwCatalogLifecycleV1`] names them so RPC
-//! and tooling spell them one way). **No vote, no stake-weighted readiness signal and no version self-report is ever an input of a
-//! rule here.** A binary carries only LOCKED_IN editions; an edition that never reaches LOCKED_IN never enters a binary.
+//! `ABORTED`), readiness measurements, release manifests and signatures are tooling ([`PalwCatalogLifecycleV1`] names them so the
+//! manifest and the tools spell them one way). **No vote, no stake-weighted readiness signal and no version self-report is ever an
+//! input of a rule here.** A binary carries an edition from its stable release (PREPARED) on; a node derives only "scheduled" or
+//! "active" ([`PalwCatalogBinaryStateV1`]).
 //!
 //! **The accepted-DAA boundary rule** (RFC-0019 §6.4). The tier is read ONCE per allocation epoch, at the roll (the first chain block of
 //! the epoch, `tick_bond_budget_v1`), and every block right (RFC-0016 V+) and coinbase share of that epoch comes from that one
@@ -320,9 +321,11 @@ pub fn palw_catalog_tier_reference_daa_v1(accepted_daa: u64, allocation_epoch_ro
     }
 }
 
-/// **The operational lifecycle of a catalog edition** (RFC-0019 §4). Only `LockedIn` and `Active` exist inside a binary; `Active`
-/// is derived from the chain (`activation_daa ≤ tip`), `LockedIn` from "carried, not yet active". The other four are release-process
-/// states that live in the release manifest and the operator's tooling and never reach a consensus rule.
+/// **The operational lifecycle of a catalog edition** (RFC-0019 §4) — release-process states that live in the release manifest and
+/// the operators' tooling and never reach a consensus rule. A binary may carry an edition from `Prepared` on (the stable release
+/// that schedules it); consensus cannot tell `Prepared` from `LockedIn` (the release owner's "no abort release after this point"),
+/// and does not need to: a carried edition applies at its height in every binary that carries it. What a node can derive is only
+/// [`PalwCatalogBinaryStateV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwCatalogLifecycleV1 {
     Proposed,
@@ -359,15 +362,34 @@ impl PalwCatalogLifecycleV1 {
         })
     }
 
-    /// Whether a binary may carry an edition in this state (only LOCKED_IN — ACTIVE is LOCKED_IN seen past its height).
+    /// Whether a binary may carry an edition in this state: from the stable release that schedules it (`Prepared`) on. `Proposed`
+    /// and `Tested` editions exist only in drafts and test networks; an `Aborted` edition is in no release.
     pub fn may_ship_in_a_binary(self) -> bool {
-        matches!(self, Self::LockedIn | Self::Active)
+        matches!(self, Self::Prepared | Self::LockedIn | Self::Active)
     }
 }
 
-/// The lifecycle a carried edition reads at `tip_daa`: `Active` at or past its height, `LockedIn` below it.
-pub fn palw_catalog_lifecycle_in_binary_v1(catalog: &AnnualModelCatalogV1, tip_daa: u64) -> PalwCatalogLifecycleV1 {
-    if catalog.activation_daa <= tip_daa { PalwCatalogLifecycleV1::Active } else { PalwCatalogLifecycleV1::LockedIn }
+/// **What a node can derive about an edition its binary carries** — scheduled (below its height) or active (at or past it). Nothing
+/// else about the release process is visible to consensus, and nothing else is reported as if it were.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwCatalogBinaryStateV1 {
+    Scheduled,
+    Active,
+}
+
+impl PalwCatalogBinaryStateV1 {
+    /// The RPC spelling: `SCHEDULED` / `ACTIVE`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Scheduled => "SCHEDULED",
+            Self::Active => "ACTIVE",
+        }
+    }
+}
+
+/// The state a carried edition reads at `tip_daa`: `Active` at or past its height, `Scheduled` below it.
+pub fn palw_catalog_binary_state_v1(catalog: &AnnualModelCatalogV1, tip_daa: u64) -> PalwCatalogBinaryStateV1 {
+    if catalog.activation_daa <= tip_daa { PalwCatalogBinaryStateV1::Active } else { PalwCatalogBinaryStateV1::Scheduled }
 }
 
 /// One edition as RPC reports it.
@@ -378,7 +400,7 @@ pub struct PalwAnnualCatalogEditionReadV1 {
     pub previous_root: Hash64,
     pub root: Hash64,
     pub models: u32,
-    pub lifecycle: PalwCatalogLifecycleV1,
+    pub state: PalwCatalogBinaryStateV1,
 }
 
 /// **What a node reports about the catalog** (RPC `getPalwModelRegistry` v4 `annualCatalog`, the CLI's registry view): the editions
@@ -440,7 +462,7 @@ pub fn palw_annual_catalog_status_v1(params: &Params, tip_daa: u64) -> PalwAnnua
                 previous_root: c.previous_catalog_root,
                 root: c.root(),
                 models: c.models.len() as u32,
-                lifecycle: palw_catalog_lifecycle_in_binary_v1(c, tip_daa),
+                state: palw_catalog_binary_state_v1(c, tip_daa),
             })
             .collect(),
         kernel_version_max: PALW_ANNUAL_CATALOG_KERNEL_VERSION_MAX_V1,

@@ -2420,7 +2420,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                             previous_root: e.previous_root.to_string(),
                             root: e.root.to_string(),
                             models: e.models,
-                            lifecycle: e.lifecycle.name().to_string(),
+                            state: e.state.name().to_string(),
                         })
                         .collect(),
                     kernel_version_max: s.kernel_version_max as u32,

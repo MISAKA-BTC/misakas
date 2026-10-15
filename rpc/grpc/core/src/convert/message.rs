@@ -2127,7 +2127,7 @@ from!(item: &kaspa_rpc_core::RpcPalwAnnualCatalogEdition, protowire::RpcPalwAnnu
         previous_root: item.previous_root.clone(),
         root: item.root.clone(),
         models: item.models,
-        lifecycle: item.lifecycle.clone(),
+        state: item.state.clone(),
     }
 });
 from!(item: &kaspa_rpc_core::RpcPalwAnnualCatalogStatus, protowire::RpcPalwAnnualCatalogStatus, {
@@ -4717,7 +4717,7 @@ try_from!(item: &protowire::RpcPalwAnnualCatalogEdition, kaspa_rpc_core::RpcPalw
         previous_root: item.previous_root.clone(),
         root: item.root.clone(),
         models: item.models,
-        lifecycle: item.lifecycle.clone(),
+        state: item.state.clone(),
     }
 });
 try_from!(item: &protowire::RpcPalwAnnualCatalogStatus, kaspa_rpc_core::RpcPalwAnnualCatalogStatus, {

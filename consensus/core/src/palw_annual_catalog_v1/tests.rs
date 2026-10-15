@@ -14,7 +14,7 @@
 //! | `splitting_capital_or_registering_more_models_never_raises_rights_and_0_3_applies_once` | C-2 no rights from splitting / no 0.09 |
 //! | `the_catalog_status_is_a_pure_function_of_params_and_tip_across_restart_and_reorg` | D-1 restart / IBD / reorg consistency |
 //! | `a_catalog_naming_absent_models_never_gates_blocks_or_liveness` | D-2 BASE-0 / heartbeat liveness when catalog models are missing |
-//! | `the_lifecycle_names_are_operational_and_only_locked_in_ships` | §4 lifecycle |
+//! | `the_lifecycle_names_are_operational_and_only_a_released_edition_ships` | §4 lifecycle; a node derives only SCHEDULED / ACTIVE |
 //!
 //! Gate C for every catalog edition and tier: `palw_rfc0018_v1/tests.rs`
 //! `rfc18_round5_every_tier_needs_security_certified_and_none_is_exempt` (an edition-0 and an edition-1 listing, RFC-0019 §6.5).
@@ -392,7 +392,7 @@ fn splitting_capital_or_registering_more_models_never_raises_rights_and_0_3_appl
 }
 
 /// Restart / IBD / reorg: the catalog lives in Params (rebuilt identically at every start), the mirror is a clone of it, and every
-/// read is a pure function of the tip DAA — so a reorg back below H reads LOCKED_IN again and a fresh IBD node reads what the others do.
+/// read is a pure function of the tip DAA — so a reorg back below H reads SCHEDULED again and a fresh IBD node reads what the others do.
 #[test]
 fn the_catalog_status_is_a_pure_function_of_params_and_tip_across_restart_and_reorg() {
     let p = armed(new_chain(), 0);
@@ -402,12 +402,12 @@ fn the_catalog_status_is_a_pure_function_of_params_and_tip_across_restart_and_re
     assert_eq!(below.current_edition, 0);
     assert_eq!(below.next_activation_daa, Some(H_EDITION));
     assert_eq!(below.next_root, Some(new_chain().editions[1].root()));
-    assert_eq!(below.editions[1].lifecycle, PalwCatalogLifecycleV1::LockedIn);
+    assert_eq!(below.editions[1].state, PalwCatalogBinaryStateV1::Scheduled);
     let at = palw_annual_catalog_status_v1(&p, H_EDITION);
     assert_eq!(at.current_edition, 1);
     assert_eq!(at.current_root, new_chain().editions[1].root());
     assert_eq!(at.next_activation_daa, None);
-    assert_eq!(at.editions[1].lifecycle, PalwCatalogLifecycleV1::Active);
+    assert_eq!(at.editions[1].state, PalwCatalogBinaryStateV1::Active);
     // A reorg back below H: the same reading as before the switch.
     assert_eq!(palw_annual_catalog_status_v1(&p, H_EDITION - 1), below);
     // A restart or a fresh IBD node: the same reading at every height.
@@ -440,15 +440,17 @@ fn a_catalog_naming_absent_models_never_gates_blocks_or_liveness() {
 }
 
 #[test]
-fn the_lifecycle_names_are_operational_and_only_locked_in_ships() {
+fn the_lifecycle_names_are_operational_and_only_a_released_edition_ships() {
     use PalwCatalogLifecycleV1::*;
     for state in [Proposed, Tested, Prepared, LockedIn, Active, Aborted] {
         assert_eq!(PalwCatalogLifecycleV1::parse(state.name()), Some(state));
-        assert_eq!(state.may_ship_in_a_binary(), matches!(state, LockedIn | Active), "{}", state.name());
+        assert_eq!(state.may_ship_in_a_binary(), matches!(state, Prepared | LockedIn | Active), "{}", state.name());
     }
     assert_eq!(PalwCatalogLifecycleV1::parse("VOTED"), None, "there is no vote state");
+    // What a node derives is only scheduled / active — never the release-process state.
     let chain = new_chain();
-    assert_eq!(palw_catalog_lifecycle_in_binary_v1(&chain.editions[1], H_EDITION - 1), LockedIn);
-    assert_eq!(palw_catalog_lifecycle_in_binary_v1(&chain.editions[1], H_EDITION), Active);
-    assert_eq!(palw_catalog_lifecycle_in_binary_v1(&chain.editions[0], 0), Active, "the genesis catalog is active from genesis");
+    assert_eq!(palw_catalog_binary_state_v1(&chain.editions[1], H_EDITION - 1), PalwCatalogBinaryStateV1::Scheduled);
+    assert_eq!(palw_catalog_binary_state_v1(&chain.editions[1], H_EDITION), PalwCatalogBinaryStateV1::Active);
+    assert_eq!(palw_catalog_binary_state_v1(&chain.editions[0], 0), PalwCatalogBinaryStateV1::Active, "the genesis catalog is active from genesis");
+    assert_eq!(PalwCatalogBinaryStateV1::Scheduled.name(), "SCHEDULED");
 }

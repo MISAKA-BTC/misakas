@@ -3426,7 +3426,7 @@ mod mockery {
                 final_work_epochs: mock(),
                 blocking: mock(),
                 seating: mock(),
-                // RFC-0019 (wire version 4): a scheduled catalog with one LOCKED_IN edition, so the round trip covers every field.
+                // RFC-0019 (wire version 4): a scheduled catalog with one SCHEDULED edition, so the round trip covers every field.
                 annual_catalog: RpcPalwAnnualCatalogStatus {
                     scheduled: true,
                     fence_daa: 1_000,
@@ -3443,7 +3443,7 @@ mod mockery {
                         previous_root: "ab".repeat(64),
                         root: "cd".repeat(64),
                         models: 2,
-                        lifecycle: "LOCKED_IN".to_string(),
+                        state: "SCHEDULED".to_string(),
                     }],
                     kernel_version_max: 1,
                     readiness: "off-chain".to_string(),

@@ -67,7 +67,7 @@ pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
                 "    edition {:>3} · DAA {:>10} · {:>9} · +{} models · root {} · previous {}\n",
                 e.edition,
                 e.activation_daa,
-                e.lifecycle,
+                e.state,
                 e.models,
                 short(&e.root),
                 short(&e.previous_root)
@@ -305,7 +305,7 @@ mod tests {
                 previous_root: "00".repeat(64),
                 root: "ab".repeat(64),
                 models: 0,
-                lifecycle: "ACTIVE".to_string(),
+                state: "ACTIVE".to_string(),
             }],
             kernel_version_max: 1,
             readiness: "off-chain".to_string(),

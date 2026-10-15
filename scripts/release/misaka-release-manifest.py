@@ -19,7 +19,9 @@ What a manifest binds, and what `verify` checks:
   * **the annual catalog** — the chain is recomputed from its models (the same canonical bytes and keyed blake2b-512 as
     `consensus/core/src/palw_annual_catalog_v1.rs`), validated (edition 0 at DAA 0, previous-root chaining, strictly increasing
     heights, add-only over the whole chain, kernel version ≤ `--kernel-version-max`), each edition's root must equal the
-    manifest's, and only LOCKED_IN / ACTIVE editions may ship.
+    manifest's, and only PREPARED / LOCKED_IN / ACTIVE editions may ship (PROPOSED / TESTED live in drafts and test networks;
+    an ABORTED edition is in no release). A node cannot tell PREPARED from LOCKED_IN — both apply at the height in every binary
+    that carries them; LOCKED_IN is the release owner's commitment that no abort release follows (RFC-0019 §4).
   * **add-only across releases** — with `--previous`, the previous manifest's chain must be a prefix of this one (same network,
     same genesis); an edition rewritten, dropped or re-rooted fails.
   * **readiness is NOT verified here** — it is an operational measurement (`misaka-release-readiness.py`), never a consensus rule
@@ -68,7 +70,7 @@ CATALOG_ENCODING_VERSION = 1
 CATALOG_MAX_MODELS = 1024
 CATALOG_MAX_EDITIONS = 64
 LIFECYCLES = ("PROPOSED", "TESTED", "PREPARED", "LOCKED_IN", "ACTIVE", "ABORTED")
-SHIPPABLE = ("LOCKED_IN", "ACTIVE")
+SHIPPABLE = ("PREPARED", "LOCKED_IN", "ACTIVE")
 ZERO64 = "00" * 64
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX128 = re.compile(r"^[0-9a-f]{128}$")
@@ -122,7 +124,7 @@ def validate_catalog_chain(editions, fence_daa, kernel_version_max):
         if e["edition"] != i:
             raise Fail(f"edition {i}: editions are numbered 0, 1, 2, … without gaps (found {e['edition']})")
         if e["lifecycle"] not in SHIPPABLE:
-            raise Fail(f"edition {i}: lifecycle {e['lifecycle']} cannot ship in a binary (only LOCKED_IN / ACTIVE)")
+            raise Fail(f"edition {i}: lifecycle {e['lifecycle']} cannot ship in a binary (only PREPARED / LOCKED_IN / ACTIVE)")
         models = e["models"]
         if len(models) > CATALOG_MAX_MODELS:
             raise Fail(f"edition {i}: more than {CATALOG_MAX_MODELS} models")
@@ -163,7 +165,7 @@ def sort_and_root(editions):
     previous = None
     for i, e in enumerate(editions):
         e["edition"] = i
-        e.setdefault("lifecycle", "LOCKED_IN")
+        e.setdefault("lifecycle", "PREPARED")
         e["models"] = sorted(e.get("models", []), key=lambda m: m["class_id"])
         for m in e["models"]:
             m.setdefault("kernel_version", 0)
@@ -311,7 +313,7 @@ def verify(m, args):
         if len(old) > len(new):
             raise Fail("this release drops an annual catalog edition the previous release carried")
         for a, b in zip(old, new):
-            strip = lambda e: {k: v for k, v in e.items() if k != "lifecycle"}  # noqa: E731 — LOCKED_IN → ACTIVE is not a rewrite
+            strip = lambda e: {k: v for k, v in e.items() if k != "lifecycle"}  # noqa: E731 — PREPARED → LOCKED_IN → ACTIVE is not a rewrite
             if strip(a) != strip(b):
                 raise Fail(f"this release rewrites annual catalog edition {a['edition']}")
     verify_artifacts(m, args.dir, args.min_builders)
@@ -335,10 +337,9 @@ def load(path):
 def write(args):
     info = load(args.release_info)
     catalog = load(args.catalog)
+    for e in catalog["editions"]:
+        e.setdefault("lifecycle", args.lifecycle)
     editions = sort_and_root(catalog["editions"])
-    for e in editions:
-        if args.lifecycle in SHIPPABLE and e.get("lifecycle") not in SHIPPABLE:
-            e["lifecycle"] = "LOCKED_IN"
     validate_catalog_chain(editions, catalog.get("fence_daa"), args.kernel_version_max)
     artifacts = []
     if args.artifacts_dir:

@@ -2286,14 +2286,15 @@ message RpcPalwClassSeating {
   uint32 licensableSharePermille = 7;
 }
 
-// RFC-0019: one annual catalog edition this node's binary carries (lifecycle LOCKED_IN or ACTIVE).
+// RFC-0019: one annual catalog edition this node's binary carries (state SCHEDULED or ACTIVE; the release lifecycle
+// PROPOSED … LOCKED_IN lives in the signed release manifest, never in a node read).
 message RpcPalwAnnualCatalogEdition {
   uint32 edition = 1;
   uint64 activationDaa = 2;
   string previousRoot = 3;
   string root = 4;
   uint32 models = 5;
-  string lifecycle = 6;
+  string state = 6;
 }
 
 // RFC-0019: the annual model catalog at this node's tip. `readiness` is always "off-chain": readiness is
