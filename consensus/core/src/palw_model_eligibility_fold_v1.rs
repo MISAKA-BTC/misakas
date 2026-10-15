@@ -159,6 +159,25 @@ pub(super) fn eligibility_probation_preview_v1(
     let lineage_key = eligibility_lineage_key_v1(&view.lineage);
     let mut lineage: PalwEligibilityLineageRowV1 = row_of(&builder.state, &lineage_key).unwrap_or_default();
     let mut network: PalwEligibilityNetworkRowV1 = row_of(&builder.state, &eligibility_network_key_v1()).unwrap_or_default();
+    // RFC-0016 V3 (user decision 2026-10-15): past V+ the Probation blocks draw on the ONE shared new-model pool (the entrant
+    // reserve, netted against its entrant grants) — refused whole when the pool cannot take the ask.
+    if let Some(pool_left) = super::palw_rfc0016_fold_v1::palw_rfc0016_shared_pool_left_v1(
+        &builder.state,
+        builder.params,
+        builder.extras.artifact_root_ownership_active,
+        now,
+    ) {
+        let blocks = request_units.div_ceil(crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1);
+        if blocks > pool_left {
+            return Err(PalwStateV2Error::ClassNotRewardable {
+                class: *class_id,
+                code: PALW_ELIGIBILITY_PROBATION_BUDGET_CODE_V1,
+                why: format!(
+                    "RFC-0017 / RFC-0016 V3: a probation claim asks {blocks} block(s); the shared new-model pool has {pool_left} left"
+                ),
+            });
+        }
+    }
     let units = palw_probation_admit_v1(&policy, &lineage, &network, now, request_units).map_err(|(model_left, network_left)| {
         PalwStateV2Error::ClassNotRewardable {
             class: *class_id,
@@ -191,6 +210,17 @@ pub(super) fn eligibility_probation_preview_v1(
             final_weight: policy.probation_final_weight,
         },
     }))
+}
+
+/// **RFC-0016 V3: the Probation blocks admitted in the probation epoch of `daa`** (the network row; 0 below the fence). With both
+/// fences armed the probation epoch IS the V+ rights epoch (validation), so this is the pool's Probation draw this epoch.
+pub(super) fn eligibility_probation_used_blocks_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, daa: u64) -> u64 {
+    let Some(mirror) = params.model_eligibility_v1_at(daa) else { return 0 };
+    let network: PalwEligibilityNetworkRowV1 = row_of(state, &eligibility_network_key_v1()).unwrap_or_default();
+    if network.probation_epoch != palw_probation_epoch_v1(&mirror.policy, daa) {
+        return 0;
+    }
+    network.probation_units_used.div_ceil(crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1)
 }
 
 /// **Commit a previewed probation admission** (after the claim is written): the charge on the model, lineage, principal and

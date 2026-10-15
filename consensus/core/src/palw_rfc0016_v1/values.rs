@@ -111,6 +111,12 @@ pub const PALW_RFC0016_PACE_MARGIN_CALIBRATION_PERMILLE_V1: u32 = 1_200;
 /// **V2: k = 1** — the auxiliary ticket tilt stays OFF (it is not wired into the lottery; a calibration build may not arm another k).
 pub const PALW_RFC0016_TILT_K_CALIBRATION_PERMILLE_V1: u32 = 1_000;
 
+/// **V3: the entrant reserve's calibration cap** — 20 ‰ of the network's total block opportunity, as ONE pool shared with RFC-0017's
+/// Probation budget (explicit netting in `palw_rights_shared_pool_left_v1`; never reserved twice).
+pub const PALW_RFC0016_ENTRANT_RESERVE_MAX_PERMILLE_V1: u32 = 20;
+/// **V3: one entrant's (and one Probation model's) calibration cap** — 2 ‰ (RFC-0017's `probation_model_permille` design value).
+pub const PALW_RFC0016_ENTRANT_MAX_PER_MODEL_CALIBRATION_PERMILLE_V1: u32 = 2;
+
 /// **The calibration starting set** (user decisions 2026-10-15). The decided terms are the named constants above (and, as their
 /// decisions land, V3 / V5 / V8 / V9's); the terms the user left to measurement (`L_queue`, `T_queue`, `h`, `γ`, `u*`, the OPV check
 /// supply) are PROBES the harness sweeps — never decided values. An isolated calibration network runs this set unless its build
@@ -120,10 +126,11 @@ pub const PALW_RFC0016_CALIBRATION_START_V1: PalwRfc0016ValuesV1 = PalwRfc0016Va
     tilt_k_permille: PALW_RFC0016_TILT_K_CALIBRATION_PERMILLE_V1,
     reissue_checkpoint_permille: PALW_RFC0016_REISSUE_CHECKPOINT_CALIBRATION_PERMILLE_V1,
     pace_margin_permille: PALW_RFC0016_PACE_MARGIN_CALIBRATION_PERMILLE_V1,
-    // PROBES (measured, not decided):
-    entrant_reserve_permille: 20,
-    entrant_max_per_model_permille: 2,
+    entrant_reserve_permille: PALW_RFC0016_ENTRANT_RESERVE_MAX_PERMILLE_V1,
+    entrant_max_per_model_permille: PALW_RFC0016_ENTRANT_MAX_PER_MODEL_CALIBRATION_PERMILLE_V1,
+    // V3: `S_entry` is the network's eligible minimum producer bond (the fold takes `max(this, min_collateral_sompi)`); 0 adds nothing.
     entrant_min_capital_sompi: 0,
+    // PROBES (measured, not decided):
     entrant_age_daa: 21_600,
     capacity_safety_permille: 1_000,
     c7_measured_concurrency: 0,
@@ -142,6 +149,12 @@ pub const PALW_RFC0016_CALIBRATION_START_V1: PalwRfc0016ValuesV1 = PalwRfc0016Va
 pub fn palw_rfc0016_calibration_conforms_v1(values: &PalwRfc0016ValuesV1) -> Result<(), &'static str> {
     if values.tilt_k_permille != PALW_RFC0016_TILT_K_CALIBRATION_PERMILLE_V1 {
         return Err("RFC-0016 V2: k = 1 (tilt_k_permille = 1000) — the auxiliary tilt is not wired into the lottery");
+    }
+    if values.entrant_reserve_permille > PALW_RFC0016_ENTRANT_RESERVE_MAX_PERMILLE_V1 {
+        return Err("RFC-0016 V3: the entrant reserve (shared with RFC-0017's Probation budget) is at most 20 permille");
+    }
+    if values.entrant_max_per_model_permille > values.entrant_reserve_permille {
+        return Err("RFC-0016 V3: one entrant's cap cannot exceed the shared pool");
     }
     Ok(())
 }
@@ -206,6 +219,7 @@ pub fn palw_rfc0016_parse_values_v1(text: &str) -> Option<PalwRfc0016ValuesV1> {
 /// are both non-zero and distinct.
 pub fn palw_rfc0016_values_measured_v1(values: &PalwRfc0016ValuesV1, records: &[PalwRfc0016MeasuredRecordV1]) -> bool {
     !values.is_placeholder()
+        && palw_rfc0016_calibration_conforms_v1(values).is_ok()
         && records.iter().any(|r| {
             r.values == *values
                 && r.evidence_digest != [0u8; 32]
@@ -351,6 +365,15 @@ impl Params {
             ));
         }
         let rights_epoch = bundle.state.epoch_length().max(1);
+        // V3 (user decision 2026-10-15): the entrant reserve and RFC-0017's Probation budget are ONE pool netted per epoch, so the
+        // two must count the same epoch where both are armed.
+        if let Some(eligibility) = bundle.state.model_eligibility_v1()
+            && eligibility.policy.probation_epoch_daa != rights_epoch
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_model_block_rights_v1: the shared new-model pool (V3) needs RFC-0017's probation epoch equal to the rights epoch",
+            ));
+        }
         if allocation.policy.epoch_daa == 0 || allocation.policy.epoch_daa % rights_epoch != 0 {
             return Err(PalwModeV2Error::Invalid(
                 "palw_model_block_rights_v1: the allocation epoch must be a whole number of rights epochs (P_m constant within one)",

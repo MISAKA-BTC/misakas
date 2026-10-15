@@ -126,9 +126,44 @@ pub fn palw_rfc0016_rights_epoch_v1(
             }
         }
     }
-    palw_rights_issue_v1(epoch_index, start, length, n_exp, values, weights.as_ref(), &entrants, |m| {
+    // V3 (user decision 2026-10-15): `S_entry` is the network's ELIGIBLE minimum producer bond — never below the bond floor — and
+    // an entrant's capital is its allocation capital, which counts only eligible capital (RFC-0017 GAP-E1: Registered / Lapsed 0;
+    // ADR-0177 C5: verifier capital only with a defined liability).
+    let mut values = *values;
+    values.entrant_min_capital_sompi = values.entrant_min_capital_sompi.max(params.min_collateral_sompi());
+    palw_rights_issue_v1(epoch_index, start, length, n_exp, &values, weights.as_ref(), &entrants, |m| {
         eligibility.block_rights_eligible_v1(m, start)
     })
+}
+
+/// **V3 (user decision 2026-10-15): is `class_id` drawing on the shared new-model pool** (RFC-0017 `Probation`) at `daa`? Its blocks
+/// are netted against the entrant reserve, never against the eligible models' issued rights.
+pub fn palw_rfc0016_class_on_shared_pool_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    class_id: &Hash64,
+    daa: u64,
+) -> bool {
+    super::palw_model_eligibility_fold_v1::eligibility_of_v1(state, params, class_id, daa)
+        .is_some_and(|(_, rights)| rights.probation_bounded)
+}
+
+/// **V3: the shared new-model pool's room left at `now_daa`, in blocks** (`None` below V+): the epoch's entrant reserve less its
+/// entrant grants and the Probation blocks RFC-0017 already admitted this epoch. RFC-0017's Probation admission reads it.
+pub fn palw_rfc0016_shared_pool_left_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ownership_active: bool,
+    now_daa: u64,
+) -> Option<u64> {
+    if !params.rfc0016_rights_active_at(now_daa) {
+        return None;
+    }
+    let mirror = params.rfc0016_v1()?;
+    let eligibility = palw_rfc0016_eligibility_v1(state, params, ownership_active);
+    let epoch = palw_rfc0016_rights_epoch_v1(state, params, &eligibility, now_daa, &mirror.values);
+    let probation = super::palw_model_eligibility_fold_v1::eligibility_probation_used_blocks_v1(state, params, now_daa);
+    Some(crate::palw_rfc0016_v1::rights::palw_rights_shared_pool_left_v1(&epoch, probation))
 }
 
 /// **The rights consumed so far in `epoch_index`**: the state's per-class epoch production counters, per model.
@@ -139,9 +174,16 @@ pub fn palw_rfc0016_rights_consumed_now_v1(
     epoch_index: u64,
 ) -> BTreeMap<Hash64, u64> {
     let base = params.base_class_id();
-    palw_rights_consumed_v1(&state.epoch_counters, epoch_index, &base, |class| {
-        palw_rfc0016_model_of_v1(state, ownership_active, class)
-    })
+    // V3 (user decision 2026-10-15): a Probation class's blocks are netted against the shared new-model pool, never against the
+    // eligible models' issued rights (read at the epoch's start; a class promoted since moves its blocks here — the conservative way).
+    let start = epoch_index.saturating_mul(params.epoch_length().max(1));
+    let counters: BTreeMap<Hash64, PalwEpochCounterV2> = state
+        .epoch_counters
+        .iter()
+        .filter(|(class, _)| !palw_rfc0016_class_on_shared_pool_v1(state, params, class, start))
+        .map(|(class, counter)| (*class, counter.clone()))
+        .collect();
+    palw_rights_consumed_v1(&counters, epoch_index, &base, |class| palw_rfc0016_model_of_v1(state, ownership_active, class))
 }
 
 /// The aux rows of `table` whose key starts with `prefix`, in key order.
@@ -672,8 +714,12 @@ pub fn palw_rfc0016_model_report_v1(
     let eligibility = palw_rfc0016_eligibility_v1(state, params, ownership);
     let epoch = palw_rfc0016_rights_epoch_v1(state, params, &eligibility, now_daa, &values);
     let consumed = palw_rfc0016_rights_consumed_now_v1(state, params, ownership, epoch.epoch_index);
+    // Physical blocks count EVERY model-class block (a Probation class's too — V3 nets those against the shared pool, not the rights).
+    let physical = palw_rights_consumed_v1(&state.epoch_counters, epoch.epoch_index, &params.base_class_id(), |class| {
+        palw_rfc0016_model_of_v1(state, ownership, class)
+    });
     let weights = state.bond_budget.as_ref().and_then(|b| b.rights_weights_v1());
-    let mut models: BTreeSet<Hash64> = epoch.issued.keys().chain(consumed.keys()).copied().collect();
+    let mut models: BTreeSet<Hash64> = epoch.issued.keys().chain(physical.keys()).copied().collect();
     if let Some((w, _)) = weights.as_ref() {
         models.extend(w.keys().copied());
     }
@@ -714,6 +760,7 @@ pub fn palw_rfc0016_model_report_v1(
         .map(|model| {
             let issued = epoch.issued_of(&model);
             let used = consumed.get(&model).copied().unwrap_or(0);
+            let blocks = physical.get(&model).copied().unwrap_or(0);
             let target_p_ppm = weights
                 .as_ref()
                 .and_then(|(w, sum)| w.get(&model).map(|a| crate::palw_bond_budget_v1::palw_model_available_v1(1_000_000, a, sum, 0)));
@@ -734,7 +781,7 @@ pub fn palw_rfc0016_model_report_v1(
                 epoch_index: epoch.epoch_index,
                 target_p_ppm,
                 rights_issued: issued,
-                physical_blocks: used,
+                physical_blocks: blocks,
                 rights_consumed: if params.rfc0016_rights_active_at(now_daa) { used } else { 0 },
                 rights_unused: if now_daa >= epoch.end_daa() { issued.saturating_sub(used) } else { 0 },
                 finals: Some(finals.get(&model).copied().unwrap_or(0)),
