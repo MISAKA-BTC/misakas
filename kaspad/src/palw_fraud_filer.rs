@@ -78,6 +78,10 @@ pub(super) mod tir_public_custodian;
 /// dormant below its fence).
 #[path = "palw_tir_public_filer_scheduler.rs"]
 pub(super) mod tir_public_filer_scheduler;
+/// G14 R4: the outside verifier's acquisition driver and localization — the findings feed of the public filer (node policy,
+/// dormant below its fence).
+#[path = "palw_tir_public_owner.rs"]
+pub(super) mod tir_public_owner;
 #[cfg(test)] // the in-process e2e tests read the fp input the filer builds
 pub(super) use input::palw_fraud_filer_fp_input_v1;
 pub(super) use input::{palw_fraud_filer_fp_metadata_v1, palw_fraud_filer_fp_payload_v1};

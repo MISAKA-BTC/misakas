@@ -8802,6 +8802,8 @@ impl PalwPanelService {
         // G14 R4: pending public convictions against ORIGINAL TIR frames — persisted, so a restart still files inside the door.
         let mut tir_public_filer =
             palw_fraud_filer::tir_public_filer_scheduler::PalwTirPublicFilerBookV1::load(&self.config.state_dir);
+        // G14 R4: the ORIGINAL frames this node pursues as an outside owner (process memory; findings go to the filer's journal).
+        let mut tir_public_owner = palw_fraud_filer::tir_public_owner::PalwTirPublicOwnerBookV1::default();
         // Lane G14-K: the kernel route's public verifier's book — a cache of the chain and this process's replays; nothing persists.
         let mut kernel_verifier = palw_kernel_verifier::PalwKernelVerifierBookV1::default();
         // ADR-0160 F-Q (stage 2): the audit duty's book; armed by identity (a bond in a credited claim's pool).
@@ -11241,6 +11243,22 @@ impl PalwPanelService {
             {
                 debug!("[{PALW_PANEL}] TIR frame custodian preparation remains pending: {why}");
             }
+            // G14 R5: the same custodians answer outside owners' demands from their sealed prepared capture, inside each demand's
+            // own response clock. A clean no-op below `palw_tir_public_conviction_v1`.
+            if let Err(why) = self
+                .tir_public_responder_tick_v1(
+                    &session,
+                    bond_key,
+                    network_domain,
+                    &mut tir_public_custodian,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] TIR frame demand answer remains pending: {why}");
+            }
             if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa) {
                 self.delegated_slots_tick_v1(&session, bond_key, &mut delegated_slots, &mut court_pending, &mut court_due, &mut court_moved)
                     .await;
@@ -13637,6 +13655,18 @@ impl PalwPanelService {
                 bond_key,
                 seat_replays.has_room(false),
                 &materials,
+                &mut court_pending,
+                &mut court_due,
+                &mut court_moved,
+            )
+            .await;
+            // --- G14 R4: the outside owner (`tir_public_owner`): replay, acquire, localize, and feed findings to the filer ---
+            self.tir_public_owner_tick_v1(
+                &session,
+                bond_key,
+                network_domain,
+                &mut tir_public_filer,
+                &mut tir_public_owner,
                 &mut court_pending,
                 &mut court_due,
                 &mut court_moved,

@@ -203,6 +203,35 @@ impl PalwChainStateV2 {
             })
         })
     }
+    /// **G14 R4 (node discovery): the ORIGINAL frames after `after`, in key order** — at most `min(limit, 64)` claim ids, read from
+    /// the rooted `TirClaim` rows. Metadata only; an outside verifier's worker pages through it to choose what to check.
+    pub fn staged_tir_frames_after_v1(&self, after: Option<Hash64>, limit: usize) -> Vec<Hash64> {
+        use std::ops::Bound;
+        let lower = match after {
+            Some(claim) => Bound::Excluded(PalwStagedCourtKeyV1::TirClaim(claim)),
+            None => Bound::Included(PalwStagedCourtKeyV1::TirClaim(ZERO_HASH64)),
+        };
+        self.staged_courts
+            .range((lower, Bound::Unbounded))
+            .map_while(|(key, _)| match key {
+                PalwStagedCourtKeyV1::TirClaim(claim) => Some(*claim),
+                _ => None,
+            })
+            .take(limit.min(64))
+            .collect()
+    }
+    /// **G14 R4 (node discovery): the outside owners' acquisition keys on `claim`** — `(owner, allocation)` of every live
+    /// `TirAcquisition` row (at most K_owner). Metadata only: an owner finds its own row after its Open is accepted.
+    pub fn staged_tir_acquisitions_of_v1(&self, claim: &Hash64) -> Vec<(PalwBondKeyV2, Hash64)> {
+        self.staged_tir_by_claim.get(claim).map_or_else(Vec::new, |rows| {
+            rows.iter()
+                .filter_map(|(_, key)| match key {
+                    PalwStagedCourtKeyV1::TirAcquisition(_, owner, allocation) => Some((*owner, *allocation)),
+                    _ => None,
+                })
+                .collect()
+        })
+    }
     /// **G14 R1/R7: outside owner acquisitions opened on `claim`** (every live `TirAcquisition` row; rows leave at the material
     /// horizon). The K_owner cap reads this count before any duty is created.
     pub fn staged_tir_owner_count_v1(&self, claim: &Hash64) -> u64 {

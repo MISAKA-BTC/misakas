@@ -712,6 +712,75 @@ pub fn palw_tir_public_chunk_v1(
     Ok(Some(row))
 }
 
+/// **G14 R4 (node material): an outside owner's ACCEPTED answer, reassembled from its rooted chunk rows and authenticated again
+/// against the original source** — exactly the checks `finish` ran (chunk chain from the accepted head to offset 0, the accepted
+/// body checksum, the original-root authentication; for `Ids { offset: 0 }` the canonical chunks to the outer EOF). `Ok(None)`
+/// while the reference is not (or no longer) a current accepted body. What a filer builds evidence from, never a verdict.
+pub fn palw_tir_public_finished_material_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    reference: &crate::palw_tir_public_owned_v1::PalwTirPublicAcceptedBodyRefV1,
+    maximum_leaves: u64,
+) -> Result<Option<crate::palw_tir_public_owned_v1::PalwTirPublicFinishedV1>, String> {
+    use crate::palw_tir_public_owned_v1::{
+        PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1, PalwTirPublicFinishedV1, palw_tir_public_body_hash_v1,
+    };
+    use crate::palw_tir_public_source_v1::{PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1, PalwTirPublicIdsAssemblerV1, PalwTirPublicRequestV1};
+    let Some(row) = palw_tir_public_accepted_body_v1(state, reference.hash_v1()?, None, maximum_leaves)? else { return Ok(None) };
+    let Some(Row::TirAcquisition(owner)) = state.staged_court_row_v1(&row.acquisition) else {
+        return Err("TIR accepted body lost its acquisition".into());
+    };
+    let source = palw_tir_public_source_for_row_v1(state, owner, maximum_leaves)?;
+    let r = &row.reference;
+    if r.total_bytes > crate::palw_tir_public_owned_v1::request_body_bound_v1(&source, r.request)?.0 {
+        return Err("TIR accepted body exceeds its native bound".into());
+    }
+    let size = usize::try_from(r.total_bytes).map_err(|_| "TIR accepted body exceeds usize")?;
+    let mut body = Vec::new();
+    body.try_reserve_exact(size).map_err(|_| "TIR accepted body allocation failed")?;
+    body.resize(size, 0);
+    let (mut head, mut offset) = (r.chunk_head, r.total_bytes);
+    let mut parts = 0u64;
+    while offset > 0 {
+        parts += 1;
+        if parts > r.total_bytes.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64) {
+            return Err("TIR accepted body has more chunks than its canonical split".into());
+        }
+        let chunk = palw_tir_public_chunk_v1(state, head)?.ok_or("TIR accepted body lost a rooted chunk")?;
+        let record = &chunk.record;
+        if record.demand_id != r.demand_id
+            || record.answerer != r.answerer
+            || record.head_v1()? != head
+            || record.offset.checked_add(record.bytes.len() as u64) != Some(offset)
+        {
+            return Err("TIR rooted chunk substitutes demand/signer/head/offset".into());
+        }
+        body[record.offset as usize..offset as usize].copy_from_slice(&record.bytes);
+        head = record.previous;
+        offset = record.offset;
+    }
+    if head != Hash64::default() || palw_tir_public_body_hash_v1(&body) != r.body_hash {
+        return Err("TIR reassembled body does not reproduce its accepted checksum/head".into());
+    }
+    if let PalwTirPublicRequestV1::Ids { offset: 0 } = r.request {
+        let mut assembler = PalwTirPublicIdsAssemblerV1::default();
+        let (mut at, mut sealed) = (0usize, None);
+        for offset in (0..source.decode_count_v1()).step_by(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize) {
+            let request = PalwTirPublicRequestV1::Ids { offset };
+            let length = source.unit_bound_v1(&request)?.maximum_response_bytes as usize;
+            let end = at.checked_add(length).filter(|end| *end <= body.len()).ok_or("TIR IDs body is truncated")?;
+            let response = source.decode_response_v1(&request, &body[at..end])?;
+            sealed = assembler.push_v1(&source, &request, &response)?;
+            at = end;
+        }
+        if at != body.len() {
+            return Err("TIR IDs body has trailing bytes".into());
+        }
+        return Ok(Some(PalwTirPublicFinishedV1::Ids(sealed.ok_or("TIR IDs never authenticated the original EOF")?)));
+    }
+    let response = source.decode_response_v1(&r.request, &body)?;
+    Ok(Some(PalwTirPublicFinishedV1::Unit(source.authenticate_v1(&r.request, &response, None)?)))
+}
+
 /// Current finished reference, or a historical reference with a CURRENT rooted
 /// history proof. A deserialized accepted-ref row alone is not an authority.
 pub fn palw_tir_public_accepted_body_v1<'a>(
@@ -991,9 +1060,17 @@ fn transition<'a>(
             // Only this native accepted pointer and rooted immutable body row
             // authorize the O(1) anchor. Wire/checkpoint values alone do not.
             Some(crate::palw_tir_public_source_v1::PalwTirPublicRowsAnchorV1::from_native_v1(source, rows.rows_root))
-        } else { None };
+        } else {
+            None
+        };
         PalwTirPublicOwnedEffectV1::Finished(next.owned.finish_with_rows_v1(
-            source, signer, *demand_id, now, &records, ids, rows_anchor.as_ref(),
+            source,
+            signer,
+            *demand_id,
+            now,
+            &records,
+            ids,
+            rows_anchor.as_ref(),
         )?)
     } else {
         next.owned.apply_v1(source, signer, now, action, &records, ids)?
