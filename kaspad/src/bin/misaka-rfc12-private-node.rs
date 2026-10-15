@@ -10,7 +10,7 @@ use kaspad_lib::{
     args::Args,
     daemon::{DESIRED_DAEMON_SOFT_FD_LIMIT, MINIMUM_DAEMON_SOFT_FD_LIMIT, Runtime},
     private_integration::{
-        PrivateKernelPaidCheckSpecV4, PrivateKernelPaidWorkSpecV4, PrivateNativeCustodySpecV3, PrivateRecoveryAckFeeSpecV4,
+        PrivateKernelPaidCheckSpecV4, PrivateKernelPaidReplaceSpecV4, PrivateKernelPaidWorkSpecV4, PrivateNativeCustodySpecV3, PrivateRecoveryAckFeeSpecV4,
         create_private_integration_core_with_kernel_paid_consumers_v4, create_private_integration_core_with_native_custody_v3,
         create_private_integration_core_with_native_custody_v4, create_private_integration_core_with_runtime,
         export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3, export_private_paid_bootstrap_v4,
@@ -41,6 +41,9 @@ paid-v4 hosted providers additionally require an explicit ACK carrier fee payer:
     separate producer carrier payer/funding and input/material/workspace/fee limits; never native acceptance by itself)
   --private-probe-kernel-paid-check=ABSOLUTE_JSON (explicit assigned checker bond/key, provider endpoint,
     acquisition limits and separate receipt payer/funding; checker-only mode needs no producer exchange)
+  --private-probe-kernel-replace=ABSOLUTE_JSON (sponsor's bounded provider replacement for one root: new sorted
+    2..8 roster, signed valid_until_daa and input cap; replays the producer outbox's own request/context, never native
+    acceptance by itself)
 Node mode additionally needs explicit loopback P2P/gRPC/wRPC listeners, absolute owned --appdir,
 --nodnsseed --outpeers=0 --disable-upnp. Ordinary node flags are parsed by the shipped Args parser.
 The manifest exposes exact policy/monetary identity and releaseApproval=false; it does not prove
@@ -90,6 +93,7 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-native-recovery-providers"
                         | "--private-probe-kernel-paid-work"
                         | "--private-probe-kernel-paid-check"
+                        | "--private-probe-kernel-replace"
                 ) {
                     return Err(format!("unknown private option {name}"));
                 }
@@ -160,6 +164,21 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         })
         .transpose()?;
     let kernel_checker_file = flags.values.remove("--private-probe-kernel-paid-check");
+    let kernel_replace_file = flags.values.remove("--private-probe-kernel-replace");
+    if kernel_replace_file.is_some()
+        && (profile != "paid-v4" || native.is_none() || flags.print || bootstrap.is_some() || paid_output.is_some())
+    {
+        return Err("kernel replacement options require an explicit paid-v4 custody sponsor node".into());
+    }
+    let kernel_replace = kernel_replace_file
+        .map(|file| {
+            let path = Path::new(&file);
+            if !path.is_absolute() {
+                return Err("kernel replacement specification path must be absolute".into());
+            }
+            PrivateKernelPaidReplaceSpecV4::read(path)
+        })
+        .transpose()?;
     if kernel_checker_file.is_some() && (profile != "paid-v4" || flags.print || bootstrap.is_some() || paid_output.is_some()) {
         return Err("kernel checker options require explicit paid-v4 node mode".into());
     }
@@ -263,7 +282,7 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         .filter(|n| *n > 0)
         .ok_or("private file descriptor budget exhausted")?;
     let runtime = Runtime::from_args(&args);
-    let (core, rpc) = if kernel_work.is_some() || kernel_checker.is_some() {
+    let (core, rpc) = if kernel_work.is_some() || kernel_checker.is_some() || kernel_replace.is_some() {
         create_private_integration_core_with_kernel_paid_consumers_v4(
             &runtime,
             &args,
@@ -274,6 +293,7 @@ fn run(raw: Vec<String>) -> Result<(), String> {
             recovery_providers,
             kernel_work,
             kernel_checker,
+            kernel_replace,
         )?
     } else {
         match native {
