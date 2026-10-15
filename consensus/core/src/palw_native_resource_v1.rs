@@ -13,6 +13,8 @@ mod ledger_expansion;
 pub(crate) use demand::reserve_native_requests_v1;
 pub use ledger_expansion::{ReservedKernelLedgerV1, inventory_ledger_expansion_v1, preflight_kernel_served_row_v1};
 pub(crate) use ledger_expansion::{ledger_cache_clone_v1, reserve_ledger_expansion_v1};
+#[cfg(test)]
+mod aux_registry_tests;
 pub(crate) mod wire;
 mod wire_budget;
 mod wire_generated;
