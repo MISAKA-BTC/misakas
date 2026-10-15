@@ -1,6 +1,6 @@
 {
  "schema": "misaka.genesis8.catalog-edition0-template.v1",
- "note": "RFC-0019 edition 0 of the NEXT network (not testnet-12). Fill class_id (the declared class) and artifact_root (the PALWART3 root from genesis10_results.json), then feed {\"fence_daa\": N, \"editions\": [edition0]} to scripts/release/misaka-release-manifest.py write. The Rust twin is consensus/core/src/palw_genesis8_catalog_v1.rs::palw_genesis8_edition0_v1. Null roots are deliberate: nothing is armed from a placeholder.",
+ "note": "RFC-0019 edition 0 of the NEXT network (not testnet-12). Fill class_id (the declared class) and artifact_root (the PALWART3 root from genesis10_results.json), then feed {\"fence_daa\": N, \"editions\": [edition0]} to scripts/release/misaka-release-manifest.py write. The Rust twin is consensus/core/src/palw_genesis8_catalog_v1.rs::palw_genesis8_edition0_v1. Null roots are deliberate: nothing is armed from a placeholder. Every model is served at 32,768 tokens (user decision 2026-10-16); #8 is rebuilt at 32K from huihui's abliterated Q8_0 GGUF into a new repository (the 512-position runtime repository is history); #1's root is the 32K A16 re-conversion (the published 8k file is history).",
  "editions": [
   {
    "activation_daa": 0,
@@ -9,13 +9,15 @@
     {
      "genesis_id": 1,
      "artifact_repo": "Misakachain/Dolphin3.0-Qwen2.5-1.5B-PALW",
-     "source": "dphn/Dolphin3.0-Qwen2.5-1.5B@60c996e28ebee1ea3256fa9d40c06e0b20ceca67",
+     "source": "dphn/Dolphin3.0-Qwen2.5-1.5B@60c996e28ebee1ea3256fa9d40c06e0b20ceca67 (qwen25-convert --a16 --n-ctx 32768)",
      "e2e_adjudicable": true,
      "tentative": false,
      "class_id": null,
      "artifact_root": null,
      "kernel_version": 0,
-     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "uncensored": true,
+     "served_context": 32768
     },
     {
      "genesis_id": 2,
@@ -26,7 +28,9 @@
      "class_id": null,
      "artifact_root": null,
      "kernel_version": 0,
-     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "uncensored": true,
+     "served_context": 32768
     },
     {
      "genesis_id": 3,
@@ -37,7 +41,9 @@
      "class_id": null,
      "artifact_root": null,
      "kernel_version": 0,
-     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "uncensored": true,
+     "served_context": 32768
     },
     {
      "genesis_id": 4,
@@ -48,7 +54,9 @@
      "class_id": null,
      "artifact_root": null,
      "kernel_version": 0,
-     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "uncensored": true,
+     "served_context": 32768
     },
     {
      "genesis_id": 5,
@@ -59,7 +67,9 @@
      "class_id": null,
      "artifact_root": null,
      "kernel_version": 0,
-     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "uncensored": true,
+     "served_context": 32768
     },
     {
      "genesis_id": 6,
@@ -70,18 +80,22 @@
      "class_id": null,
      "artifact_root": null,
      "kernel_version": 0,
-     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "uncensored": true,
+     "served_context": 32768
     },
     {
      "genesis_id": 8,
      "artifact_repo": "Misakachain/Huihui-Qwen3.6-35B-A3B-abliterated-PALW",
-     "source": "huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated@8f0ee727aff5e771ea72466d64d13ecd851d2cc7",
+     "source": "huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF@acd5abe0c5ebd064f3863ca7d4bba2d924ec6544:Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-Q8_0.gguf (qwen36-convert --context 32768)",
      "e2e_adjudicable": true,
      "tentative": false,
      "class_id": null,
      "artifact_root": null,
      "kernel_version": 0,
-     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "uncensored": true,
+     "served_context": 32768
     },
     {
      "genesis_id": 10,
@@ -92,9 +106,13 @@
      "class_id": null,
      "artifact_root": null,
      "kernel_version": 0,
-     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+     "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "uncensored": true,
+     "served_context": 32768
     }
    ]
   }
- ]
+ ],
+ "scope": "text-generation: token ids in, next-token logits out; vision towers, projectors (mmproj), image/audio/video embedders and MTP heads are not computed, covered, admitted or rewarded",
+ "served_context": 32768
 }

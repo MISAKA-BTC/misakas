@@ -190,7 +190,8 @@ pub fn open_model_full_lazy(
     let r = crate::hf_schema::read_model_with(&config, None, read, reg).map_err(|f| f.error)?;
     let spec_digest = crate::model::spec_digest(&r.spec);
     let prepared = prepare_spec(r.spec.clone(), opts)?;
-    let frontend = Frontend { config, level: level_of(&r.adapter), adapter: r.adapter, assumed_defaults: r.assumed_defaults, spec_digest };
+    let frontend =
+        Frontend { config, level: level_of(&r.adapter), adapter: r.adapter, assumed_defaults: r.assumed_defaults, spec_digest };
     let ck = crate::weights::lazy::LazyShardCheckpoint::open(path, sizes, spec.clone())?;
     let source: Box<dyn crate::weights::TensorSource + Sync> = match prepared.spec.hf.quant.as_ref().filter(|q| q.fmt.is_virtual()) {
         Some(q) => {
@@ -491,11 +492,21 @@ pub struct Accumulator {
     e: (f64, usize),
     l: (f64, usize),
     late_window: (usize, usize),
+    /// Positions per drift window (0: none), and each window's KL sum, positions and worst KL.
+    window: usize,
+    windows: Vec<(f64, usize, f64)>,
 }
 
 impl Accumulator {
     pub fn new(early: (usize, usize), late: usize) -> Self {
         Self { early, late, late_window: (usize::MAX, 0), ..Default::default() }
+    }
+
+    /// Also keep the mean KL of every window of `size` positions (`[0, size)`, `[size, 2·size)`, …): the drift along a long
+    /// sequence, position by position, without holding any row.
+    pub fn with_windows(mut self, size: usize) -> Self {
+        self.window = size;
+        self
     }
 
     /// Position `p` of a sequence of `len` tokens whose next token is `next`.
@@ -521,6 +532,14 @@ impl Accumulator {
             self.l = (self.l.0 + kl, self.l.1 + 1);
             self.late_window = (self.late_window.0.min(late_from), self.late_window.1.max(len));
         }
+        if self.window > 0 {
+            let w = p / self.window;
+            if self.windows.len() <= w {
+                self.windows.resize(w + 1, (0.0, 0, 0.0));
+            }
+            let slot = &mut self.windows[w];
+            *slot = (slot.0 + kl, slot.1 + 1, slot.2.max(kl));
+        }
     }
 
     pub fn metrics(&self) -> Metrics {
@@ -545,6 +564,19 @@ impl Accumulator {
             kl_early,
             kl_late,
             ratio: if kl_early > 0.0 { kl_late / kl_early } else { f64::NAN },
+            windows: self
+                .windows
+                .iter()
+                .enumerate()
+                .filter(|(_, w)| w.1 > 0)
+                .map(|(i, w)| DriftWindow {
+                    start: i * self.window,
+                    end: (i + 1) * self.window,
+                    positions: w.1,
+                    kl_mean: w.0 / w.1 as f64,
+                    kl_max: w.2,
+                })
+                .collect(),
         }
     }
 }
@@ -595,6 +627,19 @@ pub struct Drift {
     pub kl_early: f64,
     pub kl_late: f64,
     pub ratio: f64,
+    /// The mean (and worst) KL of each window of positions along the sequence ([`Accumulator::with_windows`]; empty
+    /// otherwise): a long-context drift curve.
+    pub windows: Vec<DriftWindow>,
+}
+
+/// One window of a drift curve: positions `[start, end)`.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct DriftWindow {
+    pub start: usize,
+    pub end: usize,
+    pub positions: usize,
+    pub kl_mean: f64,
+    pub kl_max: f64,
 }
 
 pub fn drift(float: &[Vec<Vec<f32>>], int: &[Vec<Vec<f64>>], early: (usize, usize), late: usize) -> Drift {
@@ -618,7 +663,14 @@ pub fn drift(float: &[Vec<Vec<f32>>], int: &[Vec<Vec<f64>>], early: (usize, usiz
         }
     }
     let (kl_early, kl_late) = (e / ne.max(1) as f64, l / nl.max(1) as f64);
-    Drift { early_window: early, late_window, kl_early, kl_late, ratio: if kl_early > 0.0 { kl_late / kl_early } else { f64::NAN } }
+    Drift {
+        early_window: early,
+        late_window,
+        kl_early,
+        kl_late,
+        ratio: if kl_early > 0.0 { kl_late / kl_early } else { f64::NAN },
+        windows: Vec::new(),
+    }
 }
 
 /// The error of one site of one occurrence: every committed node that holds an HL site's value,

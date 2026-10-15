@@ -281,7 +281,9 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         pin.verify_files(&req.model)?;
     }
     let opened = match (&req.gguf_source, &req.lazy_shards) {
-        (Some(src), _) => crate::fidelity::open_model_full_source(&req.model, src.clone(), GGUF_SOURCE_HEADER_CAP, &opts, &reg, &read)?,
+        (Some(src), _) => {
+            crate::fidelity::open_model_full_source(&req.model, src.clone(), GGUF_SOURCE_HEADER_CAP, &opts, &reg, &read)?
+        }
         (None, Some(spec)) => crate::fidelity::open_model_full_lazy(&req.model, &opts, &reg, &read, spec, &req.shard_sizes)?,
         (None, None) => crate::fidelity::open_model_full(&req.model, &opts, &reg, &read)?,
     };
@@ -408,6 +410,7 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
                 calibrated = Some((longest, context));
             }
             log(format!("calibrating on {} sequences, {} positions", seqs.len(), seqs.iter().map(Vec::len).sum::<usize>()));
+            crate::ram_account::stage("calibration");
             let s = crate::fidelity::calibrate(&prep.hl, &loader, &seqs, &progress("calibration"))?;
             (s, c.source.clone())
         }
@@ -491,6 +494,7 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         math,
     };
     log("converting".into());
+    crate::ram_account::stage("conversion");
     let (report, palwart) = match &req.palwart {
         // Genesis 8: straight into a PALWART3 artifact, segment by segment (no PALWTIR1, no chunk store).
         Some(out) => {

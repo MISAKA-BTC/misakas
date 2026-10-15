@@ -1,7 +1,9 @@
 //! `palwart` — the one `PALWART3` artifact container of the genesis models (2026-10-15).
 //!
 //! ```text
-//! palwart pack --from <legacy file> --out-dir DIR --stem STEM --manifest manifest.json
+//! palwart pack (--from <legacy file> | --from-url <pinned resolve URL> --from-bytes N --from-sha256 HEX [--from-name P]
+//!               | --from-pipe <FIFO or -> --from-bytes N [--from-sha256 HEX] [--from-name P])
+//!              --out-dir DIR --stem STEM --manifest manifest.json
 //!              [--source-dir CHECKPOINT] [--family qwen2-dense|qwen35-gdn-hybrid|…] [--segment-mib 2048]
 //!              [--license-file P]… [--calibration-file P]… [--provenance P]
 //!              [--on-segment PROGRAM [--on-segment-arg A]… [--delete-after-hook]] [--json]
@@ -24,9 +26,12 @@
 //! This binary lives in the light `misaka-palw-tir-artifact` crate (no consensus or node crate), so it
 //! builds on its own: `cargo build --release -p misaka-palw-tir-artifact --bin palwart`.
 
-use misaka_palw_tir_artifact::palwart_pack::{PalwArtPackInputsV3, extract_legacy_v3, pack_legacy_v3, summary_json_v3, verify_v3};
+use misaka_palw_tir_artifact::palwart_pack::{
+    LegacyStreamV3, PalwArtPackInputsV3, extract_legacy_v3, pack_legacy_stream_v3, pack_legacy_v3, summary_json_v3, verify_v3,
+};
 use misaka_palw_tir_artifact::palwart_v3::{self as v3, PalwArtSegmentDoneV3, PalwArtV3};
 use std::collections::BTreeMap;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 const USAGE: &str = "usage: palwart pack|inspect|verify|root|sniff|extract-legacy … (see the source header)";
@@ -107,6 +112,11 @@ fn open(a: &Args) -> Result<PalwArtV3, String> {
 fn pack(a: &Args) -> Result<serde_json::Value, String> {
     a.check_known(&[
         "--from",
+        "--from-url",
+        "--from-bytes",
+        "--from-sha256",
+        "--from-name",
+        "--from-pipe",
         "--out-dir",
         "--stem",
         "--manifest",
@@ -119,7 +129,12 @@ fn pack(a: &Args) -> Result<serde_json::Value, String> {
         "--on-segment",
         "--on-segment-arg",
     ])?;
-    let legacy = PathBuf::from(a.need("--from")?);
+    let legacy = a.one("--from")?.map(PathBuf::from);
+    let from_url = a.one("--from-url")?;
+    let from_pipe = a.one("--from-pipe")?;
+    if [legacy.is_some(), from_url.is_some(), from_pipe.is_some()].iter().filter(|x| **x).count() != 1 {
+        return Err("give exactly one of --from <file>, --from-url <pinned resolve URL> and --from-pipe <FIFO or ->".into());
+    }
     let out_dir = PathBuf::from(a.need("--out-dir")?);
     let stem = a.need("--stem")?;
     let manifest = read_json(Path::new(&a.need("--manifest")?))?;
@@ -176,7 +191,34 @@ fn pack(a: &Args) -> Result<serde_json::Value, String> {
         }
         Ok(())
     });
-    let packed = pack_legacy_v3(&legacy, &inputs, hook)?;
+    let packed = match (&legacy, &from_url) {
+        (Some(legacy), _) => pack_legacy_v3(legacy, &inputs, hook)?,
+        (None, None) => {
+            // A converter writing into a pipe now (`qwen36-convert --measured-in … --out FIFO`): read once, in order, never stored.
+            // The length is the converter's (its measuring pass); a pin is optional (a new artifact has none yet).
+            let pipe = from_pipe.clone().expect("checked above");
+            let len: u64 = a.need("--from-bytes")?.parse().map_err(|e| format!("--from-bytes: {e}"))?;
+            let sha256 = a.one("--from-sha256")?.map(|h| parse_sha256(&h)).transpose()?;
+            let name = a.one("--from-name")?.unwrap_or_else(|| "legacy".to_string());
+            let mut reader: Box<dyn std::io::Read> = if pipe == "-" {
+                Box::new(std::io::stdin().lock())
+            } else {
+                Box::new(std::fs::File::open(&pipe).map_err(|e| format!("{pipe}: {e}"))?)
+            };
+            let mut reader = std::io::BufReader::with_capacity(8 << 20, &mut reader);
+            pack_legacy_stream_v3(LegacyStreamV3 { reader: &mut reader, len, name, sha256 }, &inputs, hook)?
+        }
+        (None, Some(url)) => {
+            // The legacy file over HTTPS, read once in order and never stored: its SHA-256 must be the pinned LFS id before the index
+            // is written. `curl` is the transport (no token is sent: a public file); a dropped connection resumes at the byte it reached.
+            let len: u64 = a.need("--from-bytes")?.parse().map_err(|e| format!("--from-bytes: {e}"))?;
+            let sha256 = parse_sha256(&a.need("--from-sha256")?)?;
+            let name = a.one("--from-name")?.unwrap_or_else(|| url.rsplit('/').next().unwrap_or("legacy").to_string());
+            let mut reader = CurlStream::new(url, len);
+            pack_legacy_stream_v3(LegacyStreamV3 { reader: &mut reader, len, name, sha256: Some(sha256) }, &inputs, hook)?
+        }
+        _ => unreachable!("checked above"),
+    };
     let w = &packed.weights;
     Ok(serde_json::json!({
         "root": hex(&packed.written.root),
@@ -203,6 +245,93 @@ fn pack(a: &Args) -> Result<serde_json::Value, String> {
             "tokenizer_id": hex(&packed.written.header.program.tokenizer_id),
         },
     }))
+}
+
+fn parse_sha256(h: &str) -> Result<[u8; 32], String> {
+    if h.len() != 64 || !h.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err("--from-sha256: 64 hex digits".into());
+    }
+    let mut out = [0u8; 32];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = u8::from_str_radix(&h[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
+}
+
+/// **A file read in order over HTTPS** by `curl` (`--location`, resolve → CDN), resumed with a `Range` from the byte reached when a
+/// connection drops (at most a few times). Never sends a token. Ends exactly at the declared length.
+struct CurlStream {
+    url: String,
+    len: u64,
+    pos: u64,
+    child: Option<std::process::Child>,
+    retries_left: u32,
+}
+
+impl CurlStream {
+    fn new(url: &str, len: u64) -> Self {
+        Self { url: url.to_string(), len, pos: 0, child: None, retries_left: 8 }
+    }
+
+    fn spawn(&mut self) -> std::io::Result<()> {
+        let child = std::process::Command::new("curl")
+            .args(["--silent", "--show-error", "--location", "--fail", "--range", &format!("{}-", self.pos), "--", &self.url])
+            .env_remove("HF_TOKEN")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()?;
+        self.child = Some(child);
+        Ok(())
+    }
+
+    fn drop_child(&mut self) {
+        if let Some(mut c) = self.child.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
+impl std::io::Read for CurlStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.pos >= self.len || buf.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if self.child.is_none() {
+                self.spawn()?;
+            }
+            let want = buf.len().min((self.len - self.pos) as usize);
+            let r = self.child.as_mut().and_then(|c| c.stdout.as_mut()).map(|o| o.read(&mut buf[..want]));
+            match r {
+                Some(Ok(n)) if n > 0 => {
+                    self.pos += n as u64;
+                    return Ok(n);
+                }
+                Some(Err(e)) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                other => {
+                    // The stream ended or broke before the declared length: resume from here.
+                    self.drop_child();
+                    if self.retries_left == 0 {
+                        return Err(std::io::Error::other(format!(
+                            "{}: the stream ended at byte {} of {} ({other:?})",
+                            self.url, self.pos, self.len
+                        )));
+                    }
+                    self.retries_left -= 1;
+                    eprintln!("palwart: {} interrupted at byte {}; resuming", self.url, self.pos);
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                }
+            }
+        }
+    }
+}
+
+impl Drop for CurlStream {
+    fn drop(&mut self) {
+        self.drop_child();
+    }
 }
 
 fn sha256_file(p: &Path) -> Result<String, String> {

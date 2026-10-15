@@ -1,8 +1,54 @@
 {
  "schema": "misaka.genesis8.models.v2",
- "decision": "user-2026-10-15-genesis8-uncensored-variants (#5 BF16 b73ec897, #6 GGUF a0b17c71)",
+ "decision": "user-2026-10-15-genesis8 (uncensored variants; #5 BF16 b73ec897; #6 bf16 GGUF a0b17c71; text generation only); user-2026-10-16 every model served at 32K, #8 rebuilt from huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF@acd5abe0 Q8_0 into a new repository",
+ "served_context": 32768,
  "recorded_from": "anonymous Hub API /api/models/<repo>/revision/<sha>?blobs=true (metadata only; no weights read)",
  "numbering": "ids keep the user's original 1..10; 7 (Gemma 4 26B-A4B) and 9 (Qwen3-32B) were dropped",
+ "scope": {
+  "kind": "text-generation",
+  "inputs": "token ids",
+  "outputs": "next-token logits",
+  "out_of_scope": "vision towers and projectors (mmproj), image/audio/video embedders and processors, multi-token-prediction (MTP) heads: not computed, not covered, not admitted as claims, not rewarded; refused by name below the text scope (misaka_palw_tir_artifact::palwart_v3::check_text_scope_v3)"
+ },
+ "calibration_texts": {
+  "git_commit": "d52d6c56ff33991f1caf67db5cd426dd736d2d29",
+  "blobs": {
+   "docs/rfc/0002-palw-tensor-ir.md": "7bb6e09f61b27775a9fa467e83f019aee371948a",
+   "docs/archival.md": "2bb5730da32226843407b3036c40ed001b26804b",
+   "docs/crescendo-guide.md": "9cad9e256809f5e893ce2ec69bde1efae4ae74be",
+   "CONTRIBUTING.md": "9b7e5e85eb2e049679cd7ed1bcc46e9b18849047",
+   "SECURITY.md": "d75fe2b3c7c52f9a1019a7999a472d64c4ce00d2",
+   "README.md": "a3166dc2f915782ccea239f919ddd5aed5c5e7dd",
+   "docs/PRINCIPLES.md": "1ab69ff7f2b0e72bec02d453afb9390dfff3607d"
+  },
+  "evaluation": {
+   "docs": [
+    "README.md",
+    "docs/PRINCIPLES.md"
+   ],
+   "len": 64,
+   "chunks": 1
+  },
+  "long_evaluation": {
+   "docs": [
+    "docs/rfc/0002-palw-tensor-ir.md"
+   ],
+   "len": 32768,
+   "chunks": 2,
+   "skip": 1,
+   "drift_windows": 32
+  },
+  "fit_tolerance": {
+   "kl_mean_max": 0.1,
+   "top1_min": 0.8,
+   "window_kl_mean_max": 0.1,
+   "drift_ratio_max": 1.5,
+   "drift_floor_kl": 0.01,
+   "drift": "every window's mean KL <= window_kl_mean_max; late/early mean KL <= drift_ratio_max unless the late window's mean KL <= drift_floor_kl (corpus-v1 §9's 1.5x criterion, with a floor so noise at tiny KL is not a failure)",
+   "source": "the L2 default tolerance (docs/evidence/hf-onboarding/20261010-huihui-qwen35-9b-fit-diagnosis), measured against the lowering's own float reference"
+  }
+ },
+ "uncensored": "every entry is an uncensored variant (huihui abliterated; Dolphin 3.0 for the 1.5B)",
  "license_notes": {
   "apache-2.0": "Apache License 2.0 (the full text ships in the artifact: scripts/genesis/licenses/Apache-2.0.txt when the source has no LICENSE file)",
   "llama3.3": "Llama 3.3 Community License Agreement; Acceptable Use Policy at https://www.llama.com/llama3_3/use-policy"
@@ -18,18 +64,20 @@
    "base_author": "Qwen team (Alibaba Cloud)",
    "derivation": "fine-tune (Dolphin 3.0)",
    "derivation_author": "Eric Hartford, Ben Gitter, BlouseJury and Cognitive Computations",
-   "derivation_note": "No huihui 1.5B abliterated variant exists; Dolphin 3.0 is the uncensored 1.5B (user decision 2026-10-15). Converted 2026-10-15 with the legacy base0 qwen25-convert --a16 --n-ctx 8192 at release commit 0b1c11b87; the unified container wraps that A16 payload without re-quantising.",
+   "derivation_note": "No huihui 1.5B abliterated variant exists; Dolphin 3.0 is the uncensored 1.5B (user decision 2026-10-15). Served at 32K (user decision 2026-10-16): re-converted with the legacy base0 qwen25-convert --a16 --n-ctx 32768 (the A16 width is part of the artifact digest) and carried in the unified container. The 8k A16 file published 2026-10-15 (history_artifact) stays as history.",
    "architecture": "Qwen2ForCausalLM",
    "model_type": "qwen2",
    "family": "qwen2-dense",
    "license": "apache-2.0",
    "target_repo": "Misakachain/Dolphin3.0-Qwen2.5-1.5B-PALW",
+   "upload_prefix": "palwart/",
    "stem": "Dolphin3.0-Qwen2.5-1.5B-PALW",
-   "converter": "a16-legacy-wrap",
+   "converter": "a16",
    "convert_options": {
-    "n_ctx": 8192
+    "n_ctx": 32768,
+    "a16_file": "dolphin3.0-qwen25-1.5b-a16-32k.palwart"
    },
-   "legacy_artifact": {
+   "history_artifact": {
     "repo": "Misakachain/Dolphin3.0-Qwen2.5-1.5B-PALW",
     "revision": "816208c4f944a403665b94f8d55f4414aacd3ae5",
     "path": "palw-runtime/dolphin3.0-qwen25-1.5b-a16-8k.palwart",
@@ -49,6 +97,9 @@
    "components": [
     "decoder"
    ],
+   "served_context": 32768,
+   "out_of_scope": [],
+   "scope": "text-generation",
    "gated": false,
    "card_license": "apache-2.0",
    "card_base_model": [
@@ -142,13 +193,14 @@
    "stem": "Huihui-Qwen3.5-2B-abliterated-PALW",
    "converter": "tir",
    "convert_options": {
-    "context": 8192,
+    "context": 32768,
     "gdn_core_wide": true,
     "calib": {
+     "kind": "recurrent",
      "docs": [
       "docs/rfc/0002-palw-tensor-ir.md"
      ],
-     "len": 8192,
+     "len": 32768,
      "chunks": 1
     }
    },
@@ -157,6 +209,12 @@
    "components": [
     "decoder"
    ],
+   "served_context": 32768,
+   "out_of_scope": [
+    "vision tower model.visual.* (ignored by the adapter)",
+    "MTP head mtp.* (ignored by the adapter)"
+   ],
+   "scope": "text-generation",
    "gated": false,
    "card_license": "apache-2.0",
    "card_base_model": [
@@ -214,13 +272,6 @@
      "git_blob": "69a41758e1138259916d08b99b56fada441fd502"
     },
     {
-     "path": "preprocessor_config.json",
-     "bytes": 390,
-     "kind": "metadata",
-     "lfs_sha256": null,
-     "git_blob": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
-    },
-    {
      "path": "tokenizer.json",
      "bytes": 12807982,
      "kind": "metadata",
@@ -235,13 +286,6 @@
      "git_blob": "fae3ce993e07c092ad024dde45e592379fde91bb"
     },
     {
-     "path": "video_preprocessor_config.json",
-     "bytes": 385,
-     "kind": "metadata",
-     "lfs_sha256": null,
-     "git_blob": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe"
-    },
-    {
      "path": "vocab.json",
      "bytes": 6722759,
      "kind": "metadata",
@@ -249,7 +293,10 @@
      "git_blob": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176"
     }
    ],
-   "excluded_files": []
+   "excluded_files": [
+    "preprocessor_config.json",
+    "video_preprocessor_config.json"
+   ]
   },
   {
    "id": 3,
@@ -270,13 +317,14 @@
    "stem": "Huihui-Qwen3.5-9B-abliterated-PALW",
    "converter": "tir",
    "convert_options": {
-    "context": 8192,
+    "context": 32768,
     "gdn_core_wide": true,
     "calib": {
+     "kind": "recurrent",
      "docs": [
       "docs/rfc/0002-palw-tensor-ir.md"
      ],
-     "len": 8192,
+     "len": 32768,
      "chunks": 1
     }
    },
@@ -285,6 +333,12 @@
    "components": [
     "decoder"
    ],
+   "served_context": 32768,
+   "out_of_scope": [
+    "vision tower model.visual.* (ignored by the adapter)",
+    "MTP head mtp.* (ignored by the adapter)"
+   ],
+   "scope": "text-generation",
    "gated": false,
    "card_license": "apache-2.0",
    "card_base_model": [
@@ -363,13 +417,6 @@
      "git_blob": "e4c1cb7dba5096b43b9d92bc781aba5e3aa8acd8"
     },
     {
-     "path": "preprocessor_config.json",
-     "bytes": 390,
-     "kind": "metadata",
-     "lfs_sha256": null,
-     "git_blob": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
-    },
-    {
      "path": "tokenizer.json",
      "bytes": 12807982,
      "kind": "metadata",
@@ -384,13 +431,6 @@
      "git_blob": "eda48d3e75a8e59a8479ee4ec8b37f76e711d9c1"
     },
     {
-     "path": "video_preprocessor_config.json",
-     "bytes": 385,
-     "kind": "metadata",
-     "lfs_sha256": null,
-     "git_blob": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe"
-    },
-    {
      "path": "vocab.json",
      "bytes": 6722759,
      "kind": "metadata",
@@ -398,7 +438,10 @@
      "git_blob": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176"
     }
    ],
-   "excluded_files": []
+   "excluded_files": [
+    "preprocessor_config.json",
+    "video_preprocessor_config.json"
+   ]
   },
   {
    "id": 4,
@@ -418,8 +461,9 @@
    "stem": "Huihui-gemma-4-12B-it-abliterated-PALW",
    "converter": "tir",
    "convert_options": {
-    "context": 8192,
+    "context": 32768,
     "calib": {
+     "kind": "dense",
      "docs": [
       "docs/archival.md",
       "docs/crescendo-guide.md",
@@ -435,6 +479,12 @@
    "components": [
     "decoder"
    ],
+   "served_context": 32768,
+   "out_of_scope": [
+    "image embedder model.vision_embedder.* / model.embed_vision.*",
+    "audio embedder model.embed_audio.*"
+   ],
+   "scope": "text-generation",
    "gated": false,
    "card_license": "apache-2.0",
    "card_base_model": [
@@ -478,13 +528,6 @@
      "git_blob": "c5e98dac05c408885ff0cc08cd3568496e7b33d9"
     },
     {
-     "path": "processor_config.json",
-     "bytes": 1382,
-     "kind": "metadata",
-     "lfs_sha256": null,
-     "git_blob": "b889adcd78015bf5a0139438c5fb0b7067529a61"
-    },
-    {
      "path": "tokenizer.json",
      "bytes": 32169626,
      "kind": "metadata",
@@ -499,7 +542,9 @@
      "git_blob": "68354f96c7ddc4e5980539f4682bce599911e7c9"
     }
    ],
-   "excluded_files": []
+   "excluded_files": [
+    "processor_config.json"
+   ]
   },
   {
    "id": 5,
@@ -520,8 +565,9 @@
    "stem": "Huihui-gpt-oss-20b-BF16-abliterated-PALW",
    "converter": "tir",
    "convert_options": {
-    "context": 8192,
+    "context": 32768,
     "calib": {
+     "kind": "dense",
      "docs": [
       "docs/archival.md",
       "docs/crescendo-guide.md",
@@ -537,6 +583,9 @@
    "components": [
     "decoder"
    ],
+   "served_context": 32768,
+   "out_of_scope": [],
+   "scope": "text-generation",
    "gated": false,
    "card_license": "apache-2.0",
    "card_base_model": [
@@ -681,10 +730,11 @@
    "base_author": "nerkyor (community SFT of Qwen/Qwen3.8-27B by the Qwen team, Alibaba Cloud)",
    "derivation": "abliteration of a community SFT, GGUF",
    "derivation_author": "huihui-ai",
-   "derivation_note": "GGUF only. User decision 2026-10-15: converted from the bf16 GGUF, streamed end to end (HTTPS range reads at the pinned revision, whole-file SHA-256 over the streamed bytes). The IQ3_S files stay registered as an alternative. The vision projector (mmproj-model-bf16.gguf) is pinned here but not converted: the genesis class is the text decoder (the image path is a separate prefix stage).",
-   "aux_files": {
-    "mmproj-model-bf16.gguf": "vision-projector (pinned, not converted)"
-   },
+   "derivation_note": "GGUF only. User decision 2026-10-15: converted from the bf16 GGUF, streamed end to end (HTTPS range reads at the pinned revision, whole-file SHA-256 over the streamed bytes). The IQ3_S files stay registered as an alternative. Text generation only: the vision projector is out of scope and not fetched.",
+   "out_of_scope": [
+    "vision projector mmproj-model-bf16.gguf (not fetched)",
+    "MTP block blk.64.nextn.* (dropped by the GGUF reader)"
+   ],
    "architecture": "Qwen3_5ForCausalLM (GGUF qwen35)",
    "model_type": "qwen35",
    "family": "qwen35-gdn-hybrid",
@@ -693,13 +743,14 @@
    "stem": "Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-PALW",
    "converter": "tir-gguf",
    "convert_options": {
-    "context": 8192,
+    "context": 32768,
     "gdn_core_wide": true,
     "calib": {
+     "kind": "recurrent",
      "docs": [
       "docs/rfc/0002-palw-tensor-ir.md"
      ],
-     "len": 8192,
+     "len": 32768,
      "chunks": 1
     },
     "gguf_variant": "bf16"
@@ -724,6 +775,8 @@
    "components": [
     "decoder"
    ],
+   "served_context": 32768,
+   "scope": "text-generation",
    "gated": false,
    "card_license": "apache-2.0",
    "card_base_model": [
@@ -765,13 +818,6 @@
      "kind": "metadata",
      "lfs_sha256": null,
      "git_blob": "9217a866276b8f6e2128aa4d3d89d9af855e25c8"
-    },
-    {
-     "path": "mmproj-model-bf16.gguf",
-     "bytes": 931145920,
-     "kind": "vision-projector (pinned, not converted)",
-     "lfs_sha256": "b29105bb672caed06f098997e644a2d497ee0e4f4a89011868c5e28424fefe99",
-     "git_blob": "877b51460fa3e121779e0839cfdd0600140c7799"
     }
    ],
    "excluded_files": [
@@ -781,310 +827,106 @@
     "calibration1.txt",
     "calibration2.txt",
     "calibration3.txt",
+    "mmproj-model-bf16.gguf",
     "tensor-type-allocation-IQ3_S.txt"
    ]
   },
   {
    "id": 8,
    "slug": "huihui-qwen36-35b-a3b",
-   "source_repo": "huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated",
-   "source_revision": "8f0ee727aff5e771ea72466d64d13ecd851d2cc7",
-   "source_format": "safetensors",
+   "source_repo": "huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF",
+   "source_revision": "acd5abe0c5ebd064f3863ca7d4bba2d924ec6544",
+   "source_format": "gguf",
    "base_model": "Qwen/Qwen3.6-35B-A3B",
    "base_author": "Qwen team (Alibaba Cloud)",
-   "derivation": "abliteration",
+   "derivation": "abliteration, GGUF (Q8_0)",
    "derivation_author": "huihui-ai",
-   "derivation_note": "Needs a NEW PALWQ361 integer-runtime conversion from safetensors (the legacy qwen36-convert reads GGUF only); the published Misakachain/Qwen3.6-35B-A3B-PALW-runtime was built from other weights.",
-   "architecture": "Qwen3_5MoeForConditionalGeneration",
-   "model_type": "qwen3_5_moe",
+   "derivation_note": "User decision 2026-10-16: #8 is rebuilt at 32K from huihui's abliterated GGUF (Q8_0, the lead default; f16 at 71 GB is the alternative) with the legacy PALWQ361 converter, streamed both ends: the GGUF by HTTPS range (whole-file SHA-256 against the LFS id, per-window checks), the artifact in 2 GiB segments uploaded and deleted. The trailing MTP block is dropped, mmproj is not fetched (text generation only). The converter dequantizes the stored Q8_0 blocks and re-quantizes per output channel with power-of-two group exponents: not an integer-exact lowering of Q8_0. The earlier Misakachain/Qwen3.6-35B-A3B-PALW-runtime (512-position PALWQ361) stays as history.",
+   "architecture": "Qwen3_5MoeForConditionalGeneration (GGUF qwen35moe)",
+   "model_type": "qwen35moe",
    "family": "qwen35-gdn-hybrid-moe",
    "license": "apache-2.0",
    "target_repo": "Misakachain/Huihui-Qwen3.6-35B-A3B-abliterated-PALW",
    "stem": "Huihui-Qwen3.6-35B-A3B-abliterated-PALW",
    "converter": "palwq36",
    "convert_options": {
-    "context": 8192
+    "context": 32768,
+    "gguf_variant": "q8_0",
+    "window_mib": 64,
+    "cache_windows": 24
    },
+   "gguf_variants": {
+    "q8_0": "Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-Q8_0.gguf",
+    "f16": "Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-f16.gguf"
+   },
+   "tokenizer_source": {
+    "repo": "Qwen/Qwen3.6-35B-A3B",
+    "revision": "995ad96eacd98c81ed38be0c5b274b04031597b0",
+    "files": [
+     "tokenizer.json",
+     "tokenizer_config.json",
+     "chat_template.jinja",
+     "config.json",
+     "generation_config.json"
+    ],
+    "why": "the GGUF repository has no tokenizer.json; the base model's tokenizer (abliteration leaves it unchanged), checked id by id against the GGUF's tokenizer.ggml.tokens before use"
+   },
+   "history_artifact": {
+    "repo": "Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
+    "revision": "bbc2f6c3dc7940efe12698a4b09a4cd983e21b38",
+    "path": "palw-runtime/qwen36-35b-a3b.palwq36",
+    "bytes": 36492831232,
+    "sha256": "5fe1d15caf0e544b718a4a2398db4f902b9a6722b266dd53824fbc9723578b29",
+    "note": "serves 512 positions (PALWQ361 header max_position 512); its repository profile pins a Claude-4.7-Opus-abliterated Q4_K_M GGUF; left as history"
+   },
+   "out_of_scope": [
+    "vision projector mmproj-model-f16.gguf (not fetched)",
+    "MTP block blk.40.nextn.* (dropped by the converter)"
+   ],
    "e2e_adjudicable": true,
    "tentative": false,
    "components": [
     "decoder"
    ],
+   "served_context": 32768,
+   "scope": "text-generation",
    "gated": false,
    "card_license": "apache-2.0",
    "card_base_model": [
     "Qwen/Qwen3.6-35B-A3B"
    ],
-   "weight_bytes": 71903775952,
+   "weight_bytes": 108867037952,
    "files": [
     {
+     "path": "Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-Q8_0.gguf",
+     "bytes": 37801096416,
+     "kind": "weight",
+     "lfs_sha256": "1891e3eebada749ca13294ec1abb4462c75417628e006b2f479f464afb0f1b13",
+     "git_blob": "13eca320e2858fe95b1963fd9a1524b090854f72"
+    },
+    {
+     "path": "Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-f16.gguf",
+     "bytes": 71065941536,
+     "kind": "weight",
+     "lfs_sha256": "930030d5ca7d6f314d7fc17c5a06be5028905478db34741f8e2bc32530931467",
+     "git_blob": "3ab5e34b0ddea5bb1f6626e64b91ba961a976543"
+    },
+    {
      "path": "README.md",
-     "bytes": 2480,
+     "bytes": 2988,
      "kind": "metadata",
      "lfs_sha256": null,
-     "git_blob": "e92ae0cd96774c2f844138ae665d5c4af1b78275"
-    },
-    {
-     "path": "chat_template.jinja",
-     "bytes": 7764,
-     "kind": "metadata",
-     "lfs_sha256": null,
-     "git_blob": "a8755d827c0a7b614c246c4060dfd58ab352a8ff"
-    },
-    {
-     "path": "config.json",
-     "bytes": 3686,
-     "kind": "metadata",
-     "lfs_sha256": null,
-     "git_blob": "9c2aacf8e27267fadb4f6bf8209e7f3c26f5dd66"
-    },
-    {
-     "path": "configuration.json",
-     "bytes": 58,
-     "kind": "metadata",
-     "lfs_sha256": null,
-     "git_blob": "d24dba949ee1fe70cc810e4c4709a0bddf4e06ba"
-    },
-    {
-     "path": "generation_config.json",
-     "bytes": 202,
-     "kind": "metadata",
-     "lfs_sha256": null,
-     "git_blob": "023756cfadf88e5bf69eefeee3e172f38c448d64"
-    },
-    {
-     "path": "merges.txt",
-     "bytes": 3353259,
-     "kind": "metadata",
-     "lfs_sha256": null,
-     "git_blob": "a494e019ca1502219fd0128658b979e5f05ae8e8"
-    },
-    {
-     "path": "model-00001-of-00026.safetensors",
-     "bytes": 3996199680,
-     "kind": "weight",
-     "lfs_sha256": "f695aa096b0486269ecbbe321e5452ad38c0057f1f9623fb6309b382b8e9c51f",
-     "git_blob": "246c70772d4b622b2a92d0d8e7fad633320f586a"
-    },
-    {
-     "path": "model-00002-of-00026.safetensors",
-     "bytes": 1284907672,
-     "kind": "weight",
-     "lfs_sha256": "5284617a411ce50c9bc40ce9993d1fd1b6e6f9b2f615d81849143a394dab0e22",
-     "git_blob": "0e04dd3491343e016da8f67c0330b83b1fd6af35"
-    },
-    {
-     "path": "model-00003-of-00026.safetensors",
-     "bytes": 3357898328,
-     "kind": "weight",
-     "lfs_sha256": "73346b838de41c385d7b8e414fbc4953485297e8eb69645ed7a2d64737860c46",
-     "git_blob": "4d4fe628d1553256dd8d85d6b65dbc27f75b1009"
-    },
-    {
-     "path": "model-00004-of-00026.safetensors",
-     "bytes": 3370808680,
-     "kind": "weight",
-     "lfs_sha256": "08976d896f73ed0a859f15900fa2aa09647b217a9a0aed78f0c7efde5ac98fce",
-     "git_blob": "3a880110c5ef777b71f9a41ec4404e9a99eae809"
-    },
-    {
-     "path": "model-00005-of-00026.safetensors",
-     "bytes": 3357898328,
-     "kind": "weight",
-     "lfs_sha256": "5a725f343135f70672af0718bc64eabce6594b6ea8dad1b2f23bd22cf8f16cb6",
-     "git_blob": "98551c2ee823e98a6e15ab5d9376d1d9cd4c5d63"
-    },
-    {
-     "path": "model-00006-of-00026.safetensors",
-     "bytes": 3959424872,
-     "kind": "weight",
-     "lfs_sha256": "7b427e38be10380fe492939478bbcb3aeced58876e5097cd9fc14a24d1565dfd",
-     "git_blob": "04c8077ae782f0ac801d9f85e9baca06c5ad031d"
-    },
-    {
-     "path": "model-00007-of-00026.safetensors",
-     "bytes": 1096788200,
-     "kind": "weight",
-     "lfs_sha256": "f77b33db4a769b344c4262c018154edc0396bb785a36372f899caa9de3e3af14",
-     "git_blob": "d8d93a02573b52cddff92b97a9a0ab128f4a5297"
-    },
-    {
-     "path": "model-00008-of-00026.safetensors",
-     "bytes": 3946841976,
-     "kind": "weight",
-     "lfs_sha256": "ad28a8e8293af7ef617e3abc0775bdb2477a22648e5dadd2886677e1a540f338",
-     "git_blob": "3f6ed621967326e8b275dbfa0c1a2e27bb08404c"
-    },
-    {
-     "path": "model-00009-of-00026.safetensors",
-     "bytes": 1096460816,
-     "kind": "weight",
-     "lfs_sha256": "58f9cfddedfd0536cb8f9dda21a5314b1aaefc01a6210456564919b716ea6f21",
-     "git_blob": "2f1915402b370bc4033e7f54ee2740ef8dd00cbc"
-    },
-    {
-     "path": "model-00010-of-00026.safetensors",
-     "bytes": 3946841960,
-     "kind": "weight",
-     "lfs_sha256": "c84e935e666ab426e944fd70291c8372c55dfa87ba66e1d27d9c92eba9a393dd",
-     "git_blob": "5e86fdeeb57a103c9cc9111b5f55443e57a1b975"
-    },
-    {
-     "path": "model-00011-of-00026.safetensors",
-     "bytes": 1096460720,
-     "kind": "weight",
-     "lfs_sha256": "468e578d049a6e0c8b9d0917b558df7d1f6c114bf5a69cc6d02a000fe5135bb0",
-     "git_blob": "eedc4ca561c7329fbc2fa29a179b6e5bdacae3d2"
-    },
-    {
-     "path": "model-00012-of-00026.safetensors",
-     "bytes": 3409971048,
-     "kind": "weight",
-     "lfs_sha256": "6fca711386805d24c2aaf3d9e8c3744631318e90420f1ac45473e0c0bc06bd08",
-     "git_blob": "dc174300ced13ce528c08393c389f39468500f48"
-    },
-    {
-     "path": "model-00013-of-00026.safetensors",
-     "bytes": 1633331632,
-     "kind": "weight",
-     "lfs_sha256": "179db829a65a481eafca7e2013aabb66fc304b7888341fbc3cc187868448bb71",
-     "git_blob": "7656120f740a9b6c6bfe9d57297fe06ffaeb44c3"
-    },
-    {
-     "path": "model-00014-of-00026.safetensors",
-     "bytes": 3422553840,
-     "kind": "weight",
-     "lfs_sha256": "157465989216d23f2e44016ce40c6934706b4d41177f0cf2e7b939c5bb0ed47f",
-     "git_blob": "c04a6d8095f6c22643d651c760139f6a1176eb6f"
-    },
-    {
-     "path": "model-00015-of-00026.safetensors",
-     "bytes": 1633659192,
-     "kind": "weight",
-     "lfs_sha256": "18b3d1d04fcf0bbd994f18cd02ab013c816df53250b84a91b2fa742be6dffddc",
-     "git_blob": "b5b714a095d5150aa375c2def8bcabcf31f0fa21"
-    },
-    {
-     "path": "model-00016-of-00026.safetensors",
-     "bytes": 3946842104,
-     "kind": "weight",
-     "lfs_sha256": "7942f5b178e1b877a89377a3081f740d02b84f0c3d4c52618c7358f0e45e94fa",
-     "git_blob": "e5673bcd81352cfdda70409b161dd8faa92bb49a"
-    },
-    {
-     "path": "model-00017-of-00026.safetensors",
-     "bytes": 1096460576,
-     "kind": "weight",
-     "lfs_sha256": "aa29d55924c804a0276a2f62cc34ea087f3ce1dee2a93ead4b7d951a94f30d06",
-     "git_blob": "e340c646d58b38817a09b85603e0df65b789166a"
-    },
-    {
-     "path": "model-00018-of-00026.safetensors",
-     "bytes": 3946841960,
-     "kind": "weight",
-     "lfs_sha256": "af7915a79fc2178dbef3d39210495437817bb2f769f0e510b6ce8481f3339d6f",
-     "git_blob": "aaa8ebb32bd70d02a43953dc482138db7e800e74"
-    },
-    {
-     "path": "model-00019-of-00026.safetensors",
-     "bytes": 1096460776,
-     "kind": "weight",
-     "lfs_sha256": "9c9a3a4bac74e02a286dfd2e3488feb0eae99250f71fe58521601a9cff715ce7",
-     "git_blob": "8175922ae44fe6e39e5e6fd8a041c278d7a785dc"
-    },
-    {
-     "path": "model-00020-of-00026.safetensors",
-     "bytes": 3409971040,
-     "kind": "weight",
-     "lfs_sha256": "80d28f308d614bf19be0c43cb2ef09910b50a9eba81fdf4d8b4d6e695aecf7fc",
-     "git_blob": "badf07018a5c7fc88276a5d62e4098be59016506"
-    },
-    {
-     "path": "model-00021-of-00026.safetensors",
-     "bytes": 1633331712,
-     "kind": "weight",
-     "lfs_sha256": "79f317ed6ea3fd1c806988ae65a0c8197e8145bd72adeb0b5f891c9fcc90b61d",
-     "git_blob": "ee475471f88cdcf09778872366bcc490fee55a24"
-    },
-    {
-     "path": "model-00022-of-00026.safetensors",
-     "bytes": 3370808720,
-     "kind": "weight",
-     "lfs_sha256": "122db807b83d9d30ee6097dc8373ba0ce541f528be85f297134f9a0e59329c08",
-     "git_blob": "0c43d980d35b3c08679c4a3a5bc32355ef768eaf"
-    },
-    {
-     "path": "model-00023-of-00026.safetensors",
-     "bytes": 3357898360,
-     "kind": "weight",
-     "lfs_sha256": "63cfa6ed5a5085b3d5f2dea8690ca9590a7692c1d2cf8678eca23771e8e20a82",
-     "git_blob": "44cace70d141cdcabe84d957e90649c857678f45"
-    },
-    {
-     "path": "model-00024-of-00026.safetensors",
-     "bytes": 3370808720,
-     "kind": "weight",
-     "lfs_sha256": "25a0457918f3c48021369a7ed30742cd74f455870ca8c81e446ce7ffe5914e85",
-     "git_blob": "a1ccfd7a89f69cb64d155ef62ce2299f0b3281d6"
-    },
-    {
-     "path": "model-00025-of-00026.safetensors",
-     "bytes": 3832888224,
-     "kind": "weight",
-     "lfs_sha256": "83b4ab70481807b1e212250cbccc4927dd044cae75af7d44dfed303409741184",
-     "git_blob": "511377cc3c3d978df63b9b96f551d4f7bb18b171"
-    },
-    {
-     "path": "model-00026-of-00026.safetensors",
-     "bytes": 2231416816,
-     "kind": "weight",
-     "lfs_sha256": "948d88951eaf34f78115be7396573695a6dddf0cb83e8bdae628eaf66acbd058",
-     "git_blob": "f9e2b9c170e532a45620a7f7024ff00b6ae65377"
-    },
-    {
-     "path": "model.safetensors.index.json",
-     "bytes": 98383,
-     "kind": "metadata",
-     "lfs_sha256": null,
-     "git_blob": "bcdd53f055581197d686394d21f43251d800b7ab"
-    },
-    {
-     "path": "preprocessor_config.json",
-     "bytes": 390,
-     "kind": "metadata",
-     "lfs_sha256": null,
-     "git_blob": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
-    },
-    {
-     "path": "tokenizer.json",
-     "bytes": 12807982,
-     "kind": "metadata",
-     "lfs_sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
-     "git_blob": "a73a846725794819aa6e1c9e97d8dc9671c2006d"
-    },
-    {
-     "path": "tokenizer_config.json",
-     "bytes": 16718,
-     "kind": "metadata",
-     "lfs_sha256": null,
-     "git_blob": "28d96ff303d1d20350185caf4bf037045916ed35"
-    },
-    {
-     "path": "video_preprocessor_config.json",
-     "bytes": 385,
-     "kind": "metadata",
-     "lfs_sha256": null,
-     "git_blob": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe"
-    },
-    {
-     "path": "vocab.json",
-     "bytes": 6722759,
-     "kind": "metadata",
-     "lfs_sha256": null,
-     "git_blob": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176"
+     "git_blob": "759f26539e269b411774ef84f106c83373ecae19"
     }
    ],
-   "excluded_files": []
+   "excluded_files": [
+    "Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-Q2_K.gguf",
+    "Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-Q3_K.gguf",
+    "Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-Q4_K.gguf",
+    "Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-Q5_K.gguf",
+    "Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-Q6_K.gguf",
+    "mmproj-model-f16.gguf"
+   ]
   },
   {
    "id": 10,
@@ -1105,8 +947,9 @@
    "stem": "Llama-3.3-70B-Instruct-abliterated-PALW",
    "converter": "tir",
    "convert_options": {
-    "context": 8192,
+    "context": 32768,
     "calib": {
+     "kind": "dense",
      "docs": [
       "docs/archival.md",
       "docs/crescendo-guide.md",
@@ -1122,6 +965,9 @@
    "components": [
     "decoder"
    ],
+   "served_context": 32768,
+   "out_of_scope": [],
+   "scope": "text-generation",
    "gated": false,
    "card_license": "llama3.3",
    "card_base_model": [

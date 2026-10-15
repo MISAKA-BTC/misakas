@@ -50,17 +50,17 @@
 
 ## genesis 8モデル(2026-10-15 ユーザー決定、初期7モデルを置き換え)
 
-初期7モデルは同日にgenesis 8モデルへ置き換えた(下の表は履歴として残す)。対象はhuihui abliterated版(1.5BはDolphin 3.0)で、番号は元の1〜10を維持する(7と9は削除)。全モデルを一つの版付き `PALWART3` `.palwart` 形式で出荷する。状態・アーキテクチャ×層種別の網羅表・未完了項目は [genesis8-status.md](../genesis8-status.md)、変換パイプラインは `scripts/genesis/genesis10_pipeline.py`、genesisリストは `consensus/core/src/palw_genesis8_catalog_v1.rs`(休眠)。
+初期7モデルは同日にgenesis 8モデルへ置き換えた(下の表は履歴として残す)。対象はhuihui abliterated版(1.5BはDolphin 3.0。#8 も 2026-10-16 から huihui の abliterated GGUF を 32K で再変換したもの)で、番号は元の1〜10を維持する(7と9は削除)。**対象はテキスト生成のみ**(token id → 次 token の logits)。**全モデルを 32K(32,768 token)の文脈で提供する**(2026-10-16 ユーザー決定。長文脈のメモリ設計は [RFC-0020](../../../rfc/0020-long-context-calibration-memory.md))。vision tower・mmproj・画像/音声/動画の埋め込み・MTP head は計算・網羅・claim 受理・報酬の対象外で、名前付きで拒否する。画像経路は有効化しない。全モデルを一つの版付き `PALWART3` `.palwart` 形式で出荷する。状態・アーキテクチャ×層種別の網羅表・未完了項目は [genesis8-status.md](../genesis8-status.md)、変換パイプラインは `scripts/genesis/genesis10_pipeline.py`、genesisリストは `consensus/core/src/palw_genesis8_catalog_v1.rs`(休眠)。
 
 | # | 対象 | 経路 | 状態 |
 | --- | --- | --- | --- |
-| 1 | dphn/Dolphin3.0-Qwen2.5-1.5B | A16 | 旧形式 `.palwart` 変換済み(コーディネータ記録)、PALWART3 包装は未実行 |
-| 2 | Huihui-Qwen3.5-2B-abliterated | TIR | 未記録(コーディネータが実行中) |
+| 1 | dphn/Dolphin3.0-Qwen2.5-1.5B | A16 | NOT_RUN(32K で `qwen25-convert --a16 --n-ctx 32768` により再変換し PALWART3 に格納。8k の旧 `.palwart` は履歴として残す) |
+| 2 | Huihui-Qwen3.5-2B-abliterated | TIR | 未記録。実行中の run(旧 pipeline、8k 較正)は較正 token file に機械固有の絶対パスを含み root が再現できないため、現 pipeline(既定 2,048、pin した git blob、正準 token file)で再実行を推奨 |
 | 3 | Huihui-Qwen3.5-9B-abliterated(暫定) | TIR | NOT_RUN |
 | 4 | Huihui-gemma-4-12B-it-abliterated | TIR | NOT_RUN |
 | 5 | Huihui-gpt-oss-20b-BF16-abliterated | TIR | NOT_RUN |
 | 6 | Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated(bf16 GGUF) | TIR | NOT_RUN(HTTPS範囲読みの完全ストリーミングは実装済み・未検証) |
-| 8 | Huihui-Qwen3.6-35B-A3B-abliterated | PALWQ361 | BLOCKED(safetensors→PALWQ361 変換器なし) |
+| 8 | Huihui-Qwen3.6-35B-A3B-abliterated(GGUF Q8_0、@ `acd5abe0`) | PALWQ361 | NOT_RUN(`qwen36-convert --context 32768` を計測パスと出力パスの 2 回で実行し、入力は HTTPS 範囲読み・全体 SHA-256 照合・窓ごとの照合、出力は `palwart pack --from-pipe` で 2 GiB セグメントを upload して削除。新 repo `Misakachain/Huihui-Qwen3.6-35B-A3B-abliterated-PALW`。旧 512 位置の runtime repo は履歴として残す。実装済み・未検証) |
 | 10 | Llama-3.3-70B-Instruct-abliterated | TIR | NOT_RUN(e2e 裁定は不要) |
 
 ### 履歴: 初期7モデル(2026-10-15、同日に置き換え)

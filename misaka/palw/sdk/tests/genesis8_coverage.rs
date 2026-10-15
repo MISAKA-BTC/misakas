@@ -4,8 +4,9 @@
 //! The fixtures are the pinned revisions' `config.json` and safetensors HEADERS only (no weight byte;
 //! `scripts/genesis/genesis_header_fixtures.py`). Each text decoder is lowered shape-only at an 8,192-position context the way the
 //! SDK preflight lowers a repository, then the coverage checker walks every relation, routing, carry, state and the decode door: an
-//! uncovered or unknown boundary is listed by name. #1 (A16) and #8 (PALWQ361) ship on the legacy routes, whose step court is
-//! checked by `palw_legacy_cell_coverage_v{1,2}`; #6 is a GGUF (the same qwen35 hybrid program as #2/#3, read from the GGUF).
+//! uncovered or unknown boundary is listed by name. #1 (A16) and #8 (the existing official-derived PALWQ361 runtime) ship on the
+//! legacy routes, whose step court is checked by `palw_legacy_cell_coverage_v{1,2}`; #6 is a GGUF (the same qwen35 hybrid program as
+//! #2/#3, read from the GGUF). Scope: text generation only — vision towers, projectors and MTP heads are never lowered.
 //!
 //! Written, not run here: the validation lane compiles and runs it.
 
@@ -70,17 +71,19 @@ fn the_gdn_hybrids_recurrence_is_a_checked_state_not_an_uncommitted_carry() {
     for (genesis, rel) in TIR_ROUTE.iter().take(2) {
         let p = program(&fixture(rel), 8192).unwrap_or_else(|e| panic!("{genesis}: {e}"));
         assert!(!p.states.is_empty(), "{genesis}: the Gated-DeltaNet recurrence lowers to a fixed state");
-        palw_tir_cell_coverage_v1(&k2_tir_v4_descriptor(), &p, Some((2, 1))).unwrap_or_else(|g| panic!("{genesis}: sharded S_L=2: {g:?}"));
+        palw_tir_cell_coverage_v1(&k2_tir_v4_descriptor(), &p, Some((2, 1)))
+            .unwrap_or_else(|g| panic!("{genesis}: sharded S_L=2: {g:?}"));
     }
 }
 
-/// #8's architecture on the TIR route (its genesis artifact is the PALWQ361 integer runtime): an informational probe of the
-/// fused-expert checkpoint layout (`mlp.experts.gate_up_proj [E, 2I, D]`); the result is printed, not asserted.
+/// **Text generation only** (user policy 2026-10-15): no genesis text decoder lowers a job input (`input.image_rows`, …) or a vision,
+/// audio, video or multi-token-prediction component; the container's scope check passes on each real program.
 #[test]
-#[ignore]
-fn probe_qwen36_35b_a3b_on_the_tir_route() {
-    match program(&fixture("genesis8/huihui-qwen36-35b-a3b"), 8192) {
-        Ok(p) => eprintln!("#8 TIR route: lowers ({} blocks); coverage {:?}", p.blocks.len(), palw_tir_cell_coverage_v1(&k2_tir_v4_descriptor(), &p, None).map(|c| c.len())),
-        Err(e) => eprintln!("#8 TIR route: {e}"),
+fn no_genesis_text_decoder_lowers_an_image_audio_or_mtp_component() {
+    use misaka_palw_tir_artifact::palwart_v3::{PalwArtProgramV3, check_text_scope_v3, program_kind};
+    for (genesis, rel) in TIR_ROUTE {
+        let p = program(&fixture(rel), 8192).unwrap_or_else(|e| panic!("{genesis}: {e}"));
+        let rec = PalwArtProgramV3 { kind: program_kind::TIR_V1, bytes: p.encode(), ..PalwArtProgramV3::none() };
+        check_text_scope_v3(&rec, &[]).unwrap_or_else(|e| panic!("{genesis}: {e}"));
     }
 }

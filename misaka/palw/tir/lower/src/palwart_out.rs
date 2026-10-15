@@ -22,12 +22,12 @@ use crate::error::{LowerError, Result};
 use crate::lower::{StreamMaterialised, TensorSink};
 use misaka_palw_tir::TirProgramV1;
 use misaka_palw_tir_artifact::palwart_pack::{
-    PalwArtPackInputsV3, PalwArtWeightsV3, TWIN_ROW_PIECE_BYTES_V1, TwinFrontierV1, manifest_bytes_v3, pack_common_v3, twin_graph_ir_root_v1,
-    twin_leaf_v1, twin_row_bytes_v1,
+    PalwArtPackInputsV3, PalwArtWeightsV3, TWIN_ROW_PIECE_BYTES_V1, TwinFrontierV1, manifest_bytes_v3, pack_common_v3,
+    twin_graph_ir_root_v1, twin_leaf_v1, twin_row_bytes_v1,
 };
 use misaka_palw_tir_artifact::palwart_v3::{
-    PalwArtProgramV3, PalwArtWriterV3, PalwArtWrittenV3, PalwArtifactFormatV3, canonical_json_v3, command_segment_hook_v3, dtype, encoding,
-    inner_scheme, program_kind, section_kind,
+    PalwArtProgramV3, PalwArtWriterV3, PalwArtWrittenV3, PalwArtifactFormatV3, canonical_json_v3, command_segment_hook_v3, dtype,
+    encoding, inner_scheme, program_kind, section_kind,
 };
 use misaka_palw_tir_artifact::{param_instances_v1, tensor_bytes_v1};
 use std::collections::BTreeMap;
@@ -114,9 +114,13 @@ impl TensorSink for PalwartSink<'_, '_> {
             return Err(LowerError::eval(format!("internal: `{}`: {bytes} bytes, declared {want}", d.name)));
         }
         if bytes > u32::MAX as u64 {
-            return Err(LowerError::bad(format!("`{}`: an instance of {bytes} bytes (the inventory addresses at most 4 GiB)", d.name)));
+            return Err(LowerError::bad(format!(
+                "`{}`: an instance of {bytes} bytes (the inventory addresses at most 4 GiB)",
+                d.name
+            )));
         }
-        let code = dtype::of_tir(d.dtype).ok_or_else(|| LowerError::eval(format!("`{}`: dtype {:?} is never a param", d.name, d.dtype)))?;
+        let code =
+            dtype::of_tir(d.dtype).ok_or_else(|| LowerError::eval(format!("`{}`: dtype {:?} is never a param", d.name, d.dtype)))?;
         let shape: Vec<u64> = d.shape.iter().map(|x| *x as u64).collect();
         self.w.begin_entry(&d.name, layer.map(u32::from), code, shape, encoding::TIR_INSTANCE_LE, bytes).map_err(w_err)?;
         self.cur = Some(Cur {
@@ -230,6 +234,11 @@ pub fn write_palwart_v1(
         kernel_version: 0,
         tokenizer_id,
     };
+    // The genesis scope (text generation only): a program with a job input (`input.image_rows`, …) or a vision / audio / MTP
+    // component is refused by name before the index — the artifact's identity — exists.
+    if misaka_palw_tir_artifact::palwart_v3::manifest_declares_text_scope_v3(&manifest) {
+        misaka_palw_tir_artifact::palwart_v3::check_text_scope_v3(&record, w.sections()).map_err(LowerError::not_lowerable)?;
+    }
     let legacy_meta = meta(&m).to_string();
     let mut prov = out.inputs.provenance.clone();
     if !prov.is_object() {

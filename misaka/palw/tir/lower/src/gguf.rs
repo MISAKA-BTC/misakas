@@ -623,9 +623,7 @@ impl GgufFile {
             return Err(LowerError::weights(format!("GGUF `{}`: a slice past the tensor", t.name)));
         }
         let mut b = vec![0u8; len as usize];
-        self.data_file()?
-            .read_at(&mut b, t.offset + start)
-            .map_err(|e| LowerError::weights(format!("GGUF `{}`: {e}", t.name)))?;
+        self.data_file()?.read_at(&mut b, t.offset + start).map_err(|e| LowerError::weights(format!("GGUF `{}`: {e}", t.name)))?;
         Ok(b)
     }
 
@@ -637,9 +635,7 @@ impl GgufFile {
             return Err(LowerError::weights(format!("GGUF `{name}`: bytes {range:?} of a tensor of {len}")));
         }
         let mut b = vec![0u8; (range.end - range.start) as usize];
-        self.data_file()?
-            .read_at(&mut b, t.offset + range.start)
-            .map_err(|e| LowerError::weights(format!("GGUF `{name}`: {e}")))?;
+        self.data_file()?.read_at(&mut b, t.offset + range.start).map_err(|e| LowerError::weights(format!("GGUF `{name}`: {e}")))?;
         Ok(b)
     }
 
@@ -1650,7 +1646,8 @@ impl GgufModel {
                 // when every decoder layer's flag is the kind `full_attention_interval` and the tensors already gave (a flag that
                 // disagrees is a different model and is refused by name). The trailing MTP blocks' flags describe dropped layers.
                 if let Some(flags) = get("attention.recurrent_layers") {
-                    let a = flags.as_arr().ok_or_else(|| LowerError::bad("GGUF qwen35: attention.recurrent_layers is not an array"))?;
+                    let a =
+                        flags.as_arr().ok_or_else(|| LowerError::bad("GGUF qwen35: attention.recurrent_layers is not an array"))?;
                     if a.len() != blocks {
                         return Err(LowerError::bad(format!(
                             "GGUF qwen35: attention.recurrent_layers has {} entries for {blocks} blocks",

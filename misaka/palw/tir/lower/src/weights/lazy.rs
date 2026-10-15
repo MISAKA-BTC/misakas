@@ -78,8 +78,8 @@ impl LazyShardCheckpoint {
         }
         let idx = dir.join("model.safetensors.index.json");
         let names: Vec<String> = if idx.exists() {
-            let v: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(&idx).map_err(|e| io(&idx, e))?).map_err(|e| LowerError::weights(format!("index: {e}")))?;
+            let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&idx).map_err(|e| io(&idx, e))?)
+                .map_err(|e| LowerError::weights(format!("index: {e}")))?;
             let wm = v.get("weight_map").and_then(|w| w.as_object()).ok_or_else(|| LowerError::weights("index has no weight_map"))?;
             let mut s: Vec<String> = wm.values().filter_map(|x| x.as_str().map(str::to_string)).collect();
             s.sort();
@@ -201,7 +201,10 @@ fn stub_header_prefix(bytes: &[u8]) -> Result<Vec<u8>> {
         return Err(LowerError::weights("a stub shorter than its length field"));
     }
     let n = u64::from_le_bytes(bytes[..8].try_into().expect("8 bytes"));
-    let end = 8usize.checked_add(n as usize).filter(|e| *e <= bytes.len()).ok_or_else(|| LowerError::weights("a stub cut inside its header"))?;
+    let end = 8usize
+        .checked_add(n as usize)
+        .filter(|e| *e <= bytes.len())
+        .ok_or_else(|| LowerError::weights("a stub cut inside its header"))?;
     Ok(bytes[..end].to_vec())
 }
 

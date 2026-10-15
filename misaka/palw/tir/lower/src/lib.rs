@@ -82,6 +82,7 @@ pub mod ngram;
 pub mod prequant;
 pub mod quant;
 pub mod quantfmt;
+pub mod ram_account;
 pub mod report;
 pub mod rope;
 pub mod spec;

@@ -4596,22 +4596,35 @@ The frozen v1/v2 grammar refuses TopK on symbolic `H` and cannot express the req
 contract is still needed; the v37 declarations above and standalone v8 relation do not
 establish that implementation, native Final or RFC02 completion.
 
-### II.14.61 Genesis model set: eight uncensored models in one `.palwart` format (user decisions, 2026-10-15)
+### II.14.61 Genesis model set: eight text-generation models in one `.palwart` format (user decisions, 2026-10-15)
 
 **This replaces the initial seven-model target below** (kept as history). The user named ten genesis models, dropped #7
 (Gemma 4 26B-A4B, overlapping #8) and #9 (Qwen3-32B, overlapping #6), and chose the uncensored variant of each (huihui
-abliterated; Dolphin where no huihui variant exists). Ids keep the original numbering. These models are the next network's
-genesis (RFC-0019 edition 0, the 1.0 tier); testnet-12, its preset and its DAA 14,000 release scope are unchanged.
+abliterated; Dolphin where no huihui variant exists) — #8 included since 2026-10-16, rebuilt from huihui's abliterated
+Qwen3.6-35B-A3B GGUF. Ids keep the original numbering. These
+models are the next network's genesis (RFC-0019 edition 0, the 1.0 tier); testnet-12, its preset and its DAA 14,000 release scope
+are unchanged. **Every genesis model is served at a 32K context (32,768 tokens; user decision 2026-10-16).** A PALWQ361 artifact
+bakes its context into its header and rotary table, so #8 is rebuilt with `qwen36-convert --context 32768` from
+`huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF` @ `acd5abe0` (Q8_0), streamed both ends (a measuring pass, then an output
+pass into `palwart pack --from-pipe`, bit-identical to the one-pass file), into the new `Misakachain/Huihui-Qwen3.6-35B-A3B-abliterated-PALW`;
+the earlier 512-position `Misakachain/Qwen3.6-35B-A3B-PALW-runtime` stays as history. #1 is re-converted with the A16 converter at
+`--n-ctx 32768` (the published 8k file stays as history).
+
+**Scope: text generation only** (user policy, 2026-10-15). A genesis class maps token ids to next-token logits. Vision towers and
+projectors (mmproj), image/audio/video embedders and processors, and multi-token-prediction (MTP) heads are not computed, not
+covered, not admitted as claims and not rewarded; image paths will not be enabled. The artifact refuses such components by name
+(`check_text_scope_v3`: job inputs, out-of-scope params, tensors and files, program kinds) and so does the genesis claim route
+(`palw_genesis8_admits_input_v1`: anything but token ids).
 
 | # | Source (pinned revision) | Architecture | License | Route |
 | --- | --- | --- | --- | --- |
-| 1 | `dphn/Dolphin3.0-Qwen2.5-1.5B` @ `60c996e2` | Qwen2 dense | Apache-2.0 | BASE-0 A16 |
+| 1 | `dphn/Dolphin3.0-Qwen2.5-1.5B` @ `60c996e2` (re-converted at `--n-ctx 32768`) | Qwen2 dense | Apache-2.0 | BASE-0 A16 |
 | 2 | `huihui-ai/Huihui-Qwen3.5-2B-abliterated` @ `b2e291a6` | Qwen3.5 Gated-DeltaNet hybrid | Apache-2.0 | TIR |
 | 3 | `huihui-ai/Huihui-Qwen3.5-9B-abliterated` @ `05b9e7c9` (tentative: no official Qwen3.8 9B) | Qwen3.5 GDN hybrid | Apache-2.0 | TIR |
 | 4 | `huihui-ai/Huihui-gemma-4-12B-it-abliterated` @ `060ea173` | Gemma-4 Unified (dense, multimodal wrapper) | Apache-2.0 | TIR |
 | 5 | `huihui-ai/Huihui-gpt-oss-20b-BF16-abliterated` @ `b73ec897` | gpt-oss MoE (sinks, sliding window) | Apache-2.0 | TIR |
 | 6 | `huihui-ai/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-GGUF` @ `a0b17c71`, bf16 GGUF | Qwen3.8 GDN hybrid (community SFT) | Apache-2.0 | TIR |
-| 8 | `huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated` @ `8f0ee727` | Qwen3.6 GDN hybrid + MoE | Apache-2.0 | PALWQ361 integer runtime |
+| 8 | `huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF` @ `acd5abe0`, Q8_0 (rebuilt at `--context 32768`) | Qwen3.6 GDN hybrid + MoE | Apache-2.0 | PALWQ361 integer runtime |
 | 10 | `huihui-ai/Llama-3.3-70B-Instruct-abliterated` @ `fa133346` | Llama 3 dense | Llama 3.3 | TIR (not required to be end-to-end adjudicable) |
 
 Every genesis model ships as **one versioned `PALWART3` artifact** (`misaka/palw/tir/artifact/src/palwart_v3.rs`): an index and
@@ -4620,15 +4633,27 @@ per-architecture weight section (A16, PALWQ361 integer, TIR inventory; MXFP4 exa
 source configuration, license texts and calibration inputs. The legacy `.palwart`/`.palwtir`/`.palwq36` formats stay readable under
 their own magics and identities (kept as inner roots, never reinterpreted); the catalog's `artifact_root` is the `PALWART3` root.
 Published artifacts go to `Misakachain/<SourceName>-PALW` (#10's name begins with "Llama", its card says "Built with Llama", and
-the Llama 3.3 license, Acceptable Use Policy and notice ship with it). The genesis list is
+the Llama 3.3 license, Acceptable Use Policy and notice ship with it).
+
+Calibration measures each site's activation range on the float reference (absmax, per-position and per-channel maxima); the
+integer program, and every adjudication over it, is exact and deterministic for any pinned calibration set, so the calibration
+length is a fit choice, not a correctness one. A recurrent (Gated DeltaNet) class is calibrated on one sequence as long as the
+context it serves (freeze-v1 §5.2, enforced by the converter): #2, #3 and #6 calibrate on one 32,768-token sequence. Dense classes
+use four 512-token texts and declare 32,768. The texts are git blobs at one pinned commit; the token file and the measured
+statistics travel in the artifact and the manifest records texts, tokenizer, lengths and policy. The float reference's threaded
+kernels and its node-by-node runs of positions are bit-identical to the one-thread, position-by-position reference, so the
+statistics depend neither on the core count nor on the run length. The memory design for the long context (one full-sequence
+carry, no score matrix, opt-in carry spill, RAM accounting) is [RFC-0020](0020-long-context-calibration-memory.md). A fit guard
+(`palw-tir-fidelity --exec`: held-out short text, and the held-out next 32K tokens with a 32-window drift curve; mean KL <= 0.1,
+top-1 >= 0.8, every window's KL <= 0.1) withholds the index of a class outside the tolerance where it can be measured on the
+conversion host. The genesis list is
 `consensus/core/src/palw_genesis8_catalog_v1.rs` (dormant: edition 0 is built only from supplied roots); the conversion pipeline is
 `scripts/genesis/genesis10_pipeline.py`; per-model status, coverage (architecture × layer kind) and open items are in
 `docs/design/palw/genesis8-status.md`.
 
 Adjudication is unchanged in kind (II.14.62): sampled deterministic re-execution, public localization and the deterministic court;
-genesis listing is economic only, and every claim still needs its own Gate C approval. Open at this writing: the safetensors→PALWQ361
-converter for #8, registration binding of the `PALWART3` root, K2-TIR kernel activation, and the image paths of the multimodal
-sources (the genesis classes are their text decoders).
+genesis listing is economic only, and every claim still needs its own Gate C approval. Open at this writing: registration binding
+of the `PALWART3` root and K2-TIR kernel activation.
 
 #### History: the initial seven-model activation target (user decision, 2026-10-15; superseded the same day)
 
