@@ -469,6 +469,22 @@ fn apply_inner(
         PaidClaimObjectV2::FundRound { enrollment, round, terms } => round_fund(b, ctx, signer, enrollment, *round, terms)?,
         PaidClaimObjectV2::LockRound { enrollment, round } => round_lock(b, ctx, enrollment, *round)?,
         PaidClaimObjectV2::RoundReceipt { receipt } => round_receipt(b, ctx, signer, receipt)?,
+        // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): the producer's one trap-or-null commitment, before the claim's
+        // beacon seal window. A staged claim draws its seats per round and takes none (not covered by the trap).
+        PaidClaimObjectV2::TrapCommitment { enrollment, commitment } => {
+            let a = authority(b, enrollment)?;
+            if a.class.source_policy.interactive_mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
+                return Err(refused("a staged paid claim takes no trap commitment"));
+            }
+            super::palw_paid_claim_trap_fold_v1::apply_paid_trap_commitment_v1(
+                b,
+                ctx,
+                signer,
+                &crate::palw_paid_claim_trap_v1::PalwPaidTrapClaimV1::of(&a),
+                a.source_target.terms.seal_start,
+                commitment,
+            )?
+        }
     }
     b.note_kernel_bond(signer)?;
     Ok(())
@@ -542,6 +558,9 @@ fn lock(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, enrollment: &Di
     if r.aux.contains_key(&(PAID_CLAIM_LOCKS_V2, key(enrollment))) {
         return Err(refused("paid claim lock already consumed"));
     }
+    // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): past the fence no seat is drawn without the producer's one
+    // trap-or-null commitment, so a commitment's presence says nothing about the claim. `Ok` below the fence.
+    super::palw_paid_claim_trap_fold_v1::paid_trap_lock_admits_v1(&b.state, b.params, enrollment, ctx.daa_score).map_err(refused)?;
     let check = r.paid_claim_check_authority_v2(&a.context.id(), ctx.daa_score).map_err(refused)?;
     let (contract, sources, promises) =
         r.paid_beacon_material_v5(&a.context.id()).map_err(refused)?.ok_or_else(|| refused("paid source backing missing"))?;

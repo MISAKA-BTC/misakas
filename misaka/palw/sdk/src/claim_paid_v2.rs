@@ -410,6 +410,8 @@ pub fn sign_paid_claim_object_v2(
         PaidClaimObjectV2::LockRound { .. } => None,
         PaidClaimObjectV2::Lock { .. } => None,
         PaidClaimObjectV2::StageMessage { .. } => None, // Native admission checks the enrolled producer.
+        // RFC-0007 §4.1 T6 (dormant): native admission checks the enrolled producer.
+        PaidClaimObjectV2::TrapCommitment { .. } => None,
         PaidClaimObjectV2::ReviewScope { .. }
         | PaidClaimObjectV2::EconomicEvidence { .. }
         | PaidClaimObjectV2::IndependenceEvidence { .. } => None,

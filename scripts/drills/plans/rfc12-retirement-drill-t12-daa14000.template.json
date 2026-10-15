@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc12-retirement-drill-plan",
+  "commit": "PIN: 40-hex harness commit the reader runs from (clean checkout)",
+  "shippedBinary": {
+    "path": "/PIN/absolute/path/to/the/shipped/kaspad",
+    "sha256": "PIN: sha256 of the exact shipped kaspad the drill nodes run"
+  },
+  "salt": "PIN: the drill's 64-hex genesis salt (never a public value)",
+  "identity": {
+    "genesis": "PIN: 128-hex salted genesis hash the drill nodes report",
+    "consensusParamsId": "PIN: 64-hex consensus params id of the shipped release ruleset",
+    "retirementActivationDaa": 14000,
+    "retirementPolicyId": "PIN: 128-hex settlement policy id the release ruleset commits"
+  },
+  "nodes": [
+    {"name": "seat0-archival", "wrpc": "PIN: 127.0.0.1:port of an ARCHIVAL drill node's wRPC JSON listener", "archival": true},
+    {"name": "seat1-archival", "wrpc": "PIN: 127.0.0.1:port of a second archival drill node", "archival": true},
+    {"name": "seat2", "wrpc": "PIN: 127.0.0.1:port of a pruning drill node", "archival": false}
+  ],
+  "keyringManifest": {
+    "path": "/PIN/absolute/path/to/keyring/manifest.json",
+    "sha256": "PIN: sha256 of the manifest written by kaspad --palw-drill-write-keyring for this salt"
+  },
+  "palwPayoutGroups": ["seats", "bonds", "payout", "heartbeat", "main"],
+  "window": {
+    "scanFromDaa": 0,
+    "observeAfterFenceDaa": "PIN: >= legacySettlementWindowDaa, so every legacy settlement falls inside the scan",
+    "legacySettlementWindowDaa": "PIN: epoch_length_blocks + reward_uniqueness_window_blocks + max_reorg_horizon_blocks of the shipped DnsParams (0 = the strict reading)"
+  },
+  "scan": {
+    "maximumChainBlocks": "PIN: bound on selected-chain blocks from genesis to the scan end",
+    "maximumBlockReads": "PIN: bound on block body reads (chain blocks and their mergesets)",
+    "maximumStatusReads": "PIN: bound on getStakeBonds pages (registry plus one point-of-view read per DAA with a DNS share)",
+    "bondPageLimit": 1000,
+    "maximumBondPages": "PIN: bound on registry pages per read"
+  },
+  "bounds": {
+    "workflowTimeoutSeconds": "PIN: wall-clock bound for the reader, from start until the chain passes the fence span",
+    "probeTimeoutSeconds": "PIN: per-call wRPC timeout",
+    "pollSeconds": "PIN: polling interval while waiting for the fence"
+  }
+}

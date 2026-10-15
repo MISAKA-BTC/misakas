@@ -104,15 +104,14 @@ impl VirtualStateProcessor {
                     .map_err(|e| e.to_string())?;
                 }
                 // **RFC-0007 Part IV.1: a trap's reveal** (tag 94): the fence, the stateful admission (it opens this setter's
-                // commitment about its own audited claim, inside the reveal window), then the setter's signature.
+                // commitment about its own audited claim, inside the reveal window — or, past the dormant `palw_paid_claim_trap_v1`,
+                // a paid V2 base claim's trap: RFC-0007 §4.1 T6), then the setter's signature.
                 Obj::TrapRevealedV1 { reveal } => {
                     if !state_params.audit_mesh_active_at(point.daa_score) {
                         return Err(kaspa_consensus_core::palw_mesh_v1::PalwMeshErrorV1::Dormant("palw_audit_mesh_v1").to_string());
                     }
                     kaspa_consensus_core::palw_mesh_v1::palw_trap_revealed_shape_v1(reveal).map_err(|e| e.to_string())?;
-                    state
-                        .mesh_trap_revealed_admissible_v2(reveal, point.daa_score, state_params.audit_1004_active_at(point.daa_score))
-                        .map_err(|e| e.to_string())?;
+                    state.trap_revealed_admissible_v3(state_params, reveal, point.daa_score)?;
                     kaspa_consensus_core::palw_mesh_v1::palw_trap_revealed_verify_v1(
                         state,
                         kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(

@@ -898,6 +898,9 @@ fn apply_settlements_to_exec_vesting(
     // RFC-0008 (RFC08-1): the next slot ordinal of each `(claim, verifier)` check fee in this batch (the kernel pays every unpaid slot
     // of one verifier in one batch, so the occurrence order is the slot order).
     let mut check_fee_slots: std::collections::BTreeMap<([u8; 64], [u8; 64]), u64> = Default::default();
+    // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): the check fees of paid V2 claims this batch HOLDS, by the ordinal of
+    // their poster debit (the held row records what that debit actually took). Empty below the fence.
+    let mut held_fees: std::collections::BTreeMap<usize, crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1> = Default::default();
     for (ordinal, event) in events.iter().enumerate() {
         let LedgerEventV1::Settlement(s) = event else { continue };
         if already_settled.contains(&ordinal) {
@@ -919,29 +922,56 @@ fn apply_settlements_to_exec_vesting(
                 (false, false) => C::KernelTick,
             };
             let slot = check_fee_slots.entry((claim, verifier)).or_insert(0);
-            let obligation = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, claim, verifier, *slot);
+            let slot_ordinal = *slot;
+            let obligation = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, claim, verifier, slot_ordinal);
             *slot = slot.checked_add(1).ok_or(PalwStateV2Error::Overflow("check fee slot ordinal"))?;
-            // RFC08-2: a drawn verifier stands behind no claim of its own for its attestation (RFC07-5: lazy-verifier deterrence is
-            // unresolved), so its fee has no liability terms to source — refused past the fence, never defaulted.
-            let once = builder.settle_once_liable_v1(
-                now,
-                obligation,
-                consumer,
-                fee,
-                PalwSettlementDebitV1::Escrow { poster, amount: fee },
-                super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
-                    "RFC07-5: a drawn verifier's own liability horizon for its attestation is undefined",
-                ),
-            )?;
-            if !once.pays() {
-                if strict {
-                    return Err(refused(match once {
-                        super::palw_settlement_once_fold_v1::PalwSettleOnceV1::Refused(why) => why.name(),
-                        _ => "the verifier's check fee for this slot was already settled by another consumer",
-                    }));
+            if let Some(release_after_daa) = super::palw_paid_claim_trap_fold_v1::check_fee_hold_until_v1(builder, &claim, now) {
+                // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): a paid V2 claim's check fee is HELD — the poster's escrow is
+                // debited now, the verifier's `FinalReward` is not paid; the fee is released once, after the claim's trap reveal
+                // window (the verifier's liability horizon), less the forfeiture if the court convicts a claim it signed Clean.
+                if !super::palw_paid_claim_trap_fold_v1::check_fee_hold_admits_v1(builder, &obligation)? {
+                    if strict {
+                        return Err(refused("the verifier's check fee for this slot is already held or settled"));
+                    }
+                    already_settled.extend([ordinal + 1, ordinal + 2]);
+                    continue;
                 }
-                already_settled.extend([ordinal + 1, ordinal + 2]);
-                continue;
+                held_fees.insert(
+                    ordinal,
+                    crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1 {
+                        version: crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
+                        claim,
+                        verifier,
+                        slot: slot_ordinal,
+                        poster,
+                        fee,
+                        release_after_daa,
+                    },
+                );
+                already_settled.insert(ordinal + 2);
+            } else {
+                // RFC08-2: outside a paid V2 claim past the trap fence a drawn verifier stands behind no claim of its own for its
+                // attestation, so its fee has no liability terms to source — refused past the fence, never defaulted.
+                let once = builder.settle_once_liable_v1(
+                    now,
+                    obligation,
+                    consumer,
+                    fee,
+                    PalwSettlementDebitV1::Escrow { poster, amount: fee },
+                    super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
+                        "RFC07-5: a drawn verifier's own liability horizon for its attestation is undefined",
+                    ),
+                )?;
+                if !once.pays() {
+                    if strict {
+                        return Err(refused(match once {
+                            super::palw_settlement_once_fold_v1::PalwSettleOnceV1::Refused(why) => why.name(),
+                            _ => "the verifier's check fee for this slot was already settled by another consumer",
+                        }));
+                    }
+                    already_settled.extend([ordinal + 1, ordinal + 2]);
+                    continue;
+                }
             }
         }
         // **One escrow reward per kernel claim, across every consumer** (the kernel tick, a kernel object arm, the paid-claim Final
@@ -1097,8 +1127,14 @@ fn apply_settlements_to_exec_vesting(
                     *funded = funded.checked_add(debit).ok_or(PalwStateV2Error::Overflow("reporter collateral debit"))?;
                 }
                 if s.kind == SettlementKindV1::PayJobEscrow {
-                    let funded = escrow_debited.entry(s.claim).or_default();
-                    *funded = funded.checked_add(debit).ok_or(PalwStateV2Error::Overflow("kernel escrow debit"))?;
+                    if let Some(mut held) = held_fees.remove(&ordinal) {
+                        // RFC-0007 §4.1 T6: a held check fee's debit is the held row, never any Final reward's funding.
+                        held.fee = debit;
+                        super::palw_paid_claim_trap_fold_v1::write_held_check_fee_v1(builder, &held)?;
+                    } else {
+                        let funded = escrow_debited.entry(s.claim).or_default();
+                        *funded = funded.checked_add(debit).ok_or(PalwStateV2Error::Overflow("kernel escrow debit"))?;
+                    }
                 }
             }
             // ADR-0176 HOOK `budget-final` on the node (lane BUDGET): a payout is paid only inside the R / F reservation the claim
@@ -1195,6 +1231,9 @@ fn apply_settlements_to_exec_vesting(
             | SettlementKindV1::Withdraw => {}
         }
     }
+    // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): a paid V2 claim's conviction in this batch is recorded once and its
+    // Clean receipt signers are charged their liability. A no-op below the fence.
+    super::palw_paid_claim_trap_fold_v1::on_paid_claim_convictions_v1(builder, events, now)?;
     Ok(())
 }
 
@@ -1651,6 +1690,34 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             return Err(refused("two producers cannot be each other's live beacon sources (mutual certification)"));
         }
     }
+    // RFC-0007 RFC07-3 (user decision 2026-10-15, design note §4.2): the seal-before-commit order. A producer may seal as a
+    // source only strictly before the commitment of every live paid claim of its own that is a source target, checked whichever
+    // edge comes second, so no source cycle of any length can form (`crate::palw_beacon_source_order_v1`). Both opt-in kinds,
+    // for paid-claim targets (a target with no paid claim has no producer to cycle through). Dormant: these objects exist only
+    // past the opt-in/fee fences, `None` on every preset.
+    if let KernelRouteObjectV1::OptInBeaconSource { producer, job, context, .. }
+    | KernelRouteObjectV1::OptInPaidBeaconSource { producer, job, context, .. } = &object
+        && let Some(route) = builder.state.kernel_route.as_ref()
+        && let Some(target_producer) = paid_source_target_producer_v1(route, context)
+        && let Some(target_commit) = route.beacon_source_target_v4(context).ok().map(|t| t.context.commitment_position)
+        && let Some(seal) = ledger.seals.get(&(*job, *producer))
+    {
+        use crate::palw_beacon_source_order_v1::{PalwSourceEdgeV1, palw_source_order_admits_v1};
+        let new = PalwSourceEdgeV1 {
+            source: *producer,
+            target_producer,
+            sealed_daa: seal.daa,
+            target_commit_daa: target_commit,
+        };
+        // Live = within its signed horizon (failure/refund does not free a slot early, as the kernel's own cap reads it). An edge
+        // whose target cannot be resolved to a paid claim carries no producer and cannot close a cycle.
+        let live = ledger.beacon_sources.iter().filter(|(_, row)| ctx.daa_score <= row.terms.hold_until).filter_map(|((other, source), row)| {
+            let target_producer = paid_source_target_producer_v1(route, other)?;
+            let target_commit_daa = route.beacon_source_target_v4(other).ok()?.context.commitment_position;
+            Some(PalwSourceEdgeV1 { source: *source, target_producer, sealed_daa: row.sealed_daa, target_commit_daa })
+        });
+        palw_source_order_admits_v1(live, &new).map_err(|why| refused(why.reason()))?;
+    }
     let kid = palw_kernel_bond_id_v1(signer);
     ledger.try_sync_bond_v1(kid, builder.kernel_synced_collateral(signer, ctx.daa_score)).map_err(PalwStateV2Error::NativeResource)?;
     // The other bond a slash can land on is the producer of the claim the object names: its collateral is brought up to date too, so
@@ -2050,6 +2117,9 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // RFC-0018 Gate C: certifications are drawn, decided and — when certified — credited (safe weight, settled anchor, the held
     // issuance-funded reward). A no-op below `palw_independently_work_certified_v1`.
     super::palw_security_certification_fold_v1::sweep_security_certification_v1(builder, ctx)?;
+    // RFC-0007 §4.1 T6: held check fees past their trap reveal window (claim terminal) are released once; conviction rows past
+    // their window are forgotten. A no-op below `palw_paid_claim_trap_v1`.
+    super::palw_paid_claim_trap_fold_v1::release_held_check_fees_v1(builder, ctx.daa_score)?;
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     // Anything the tick moves: claims and demands, and (G14-R4) bonded seals that expire, escrows that return and served demands'
     // bonds — a route whose only rows are a seal or an escrow must still forfeit or return it on time.
@@ -2472,4 +2542,43 @@ fn candidate_withdraw_held_v9(
         }
     }
     Ok(false)
+}
+
+/// **RFC07-3: the producer of a paid-claim source target**, initial or staged, read from the authority row's fixed-size
+/// `(version, enrollment)` prefix (the checker snapshot behind it is never decoded). `None` for a context that names no paid claim.
+fn paid_source_target_producer_v1(
+    route: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1,
+    context: &misaka_palw_kernel::hash::Digest,
+) -> Option<misaka_palw_kernel::hash::Digest> {
+    use crate::palw_claim_challenge_v2::{
+        PAID_CLAIM_ENROLLMENTS_V2, PAID_CLAIM_ID_INDEX_PREFIX_V3, PAID_CLAIM_ROUNDS_V2, PalwPaidClaimIndexKindV3, PalwPaidClaimIndexV3,
+        paid_claim_index_key_v3,
+    };
+    use borsh::BorshDeserialize;
+    fn enrollment_prefix(
+        route: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1,
+        primary: &misaka_palw_kernel::hash::Digest,
+    ) -> Option<misaka_palw_kernel::claim_paid_v2::PaidClaimEnrollmentV2> {
+        let raw = route.aux.get(&(PAID_CLAIM_ENROLLMENTS_V2, primary.to_vec()))?;
+        let mut bytes = raw.as_slice();
+        (u16::deserialize(&mut bytes).ok()? == 2).then_some(())?;
+        misaka_palw_kernel::claim_paid_v2::PaidClaimEnrollmentV2::deserialize(&mut bytes).ok()
+    }
+    if let Some(enrollment) = enrollment_prefix(route, context) {
+        return Some(enrollment.producer);
+    }
+    // A staged round's context: its index names the round row, whose first field is the enrollment id.
+    let index: PalwPaidClaimIndexV3 =
+        route.aux_row(PAID_CLAIM_ROUNDS_V2, &paid_claim_index_key_v3(PAID_CLAIM_ID_INDEX_PREFIX_V3, context))?;
+    if index.version != 3 || index.kind != PalwPaidClaimIndexKindV3::StagedContext || index.owner != *context {
+        return None;
+    }
+    let round = route.aux.get(&(PAID_CLAIM_ROUNDS_V2, index.target.to_vec()))?;
+    let enrollment: misaka_palw_kernel::hash::Digest = round.get(..64)?.try_into().ok()?;
+    let by_id: PalwPaidClaimIndexV3 =
+        route.aux_row(PAID_CLAIM_ENROLLMENTS_V2, &paid_claim_index_key_v3(PAID_CLAIM_ID_INDEX_PREFIX_V3, &enrollment))?;
+    if by_id.version != 3 || by_id.kind != PalwPaidClaimIndexKindV3::Enrollment || by_id.owner != enrollment {
+        return None;
+    }
+    enrollment_prefix(route, &by_id.target).map(|e| e.producer)
 }

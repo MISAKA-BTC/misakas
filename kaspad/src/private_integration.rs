@@ -94,14 +94,57 @@ pub fn private_native_settlement_params_v1(
     Ok(params)
 }
 
+/// The smallest later retirement height a private profile accepts: DAA 1 stays the original profile, so a later
+/// height is never a second name for it.
+pub const PRIVATE_LATE_RETIREMENT_MIN_DAA_V1: u64 = 2;
+
+/// **RFC-0012 §4.4 (user decision 2026-10-15, §8): the private-only profile that arms `palw_dns_retirement_v1`
+/// at a later, explicit DAA**, so a local multi-process run accumulates real DNS-validator history (bonds,
+/// attestations, coinbase validator shares, quality liabilities, reserve, exits) before the fence. Applied to
+/// an already built private profile (which armed retirement at DAA 1): only the retirement height moves; the
+/// settlement policy, the legacy evidence horizon, Rule E and its commitment (both DAA 1, so at or below the
+/// fence) are unchanged, and every production value/dependency validator runs again on the result. Reachable
+/// only from the feature-gated private entry point; no preset, `Params` default or public network reads it.
+pub fn private_late_retirement_params_v1(
+    mut params: kaspa_consensus_core::config::params::Params,
+    retirement_daa: u64,
+) -> Result<kaspa_consensus_core::config::params::Params, String> {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    if retirement_daa < PRIVATE_LATE_RETIREMENT_MIN_DAA_V1 || retirement_daa == u64::MAX {
+        return Err(format!(
+            "a later private retirement must be a finite DAA of at least {PRIVATE_LATE_RETIREMENT_MIN_DAA_V1} (DAA 1 is the original profile)"
+        ));
+    }
+    let retirement = params.palw_dns_retirement.as_mut().ok_or("this private profile arms no DNS retirement to move")?;
+    if retirement.activation != ForkActivation::new(1) {
+        return Err("the later retirement applies only to a profile built with its original DAA-1 retirement".into());
+    }
+    retirement.activation = ForkActivation::new(retirement_daa);
+    validate_private_native_relations(&params)?;
+    Ok(params)
+}
+
+/// The exact salted factory policy a running Config must equal, where its only permitted departure is the later
+/// private retirement height ([`private_late_retirement_params_v1`]): every other value still has to match.
+fn private_expected_retirement_v1(
+    expected: kaspa_consensus_core::config::params::Params,
+    config: &Config,
+) -> Result<kaspa_consensus_core::config::params::Params, String> {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    match config.params.palw_dns_retirement.map(|r| r.activation) {
+        Some(activation) if activation != ForkActivation::new(1) => private_late_retirement_params_v1(expected, activation.daa_score()),
+        _ => Ok(expected),
+    }
+}
+
 fn validate_private_native_relations(params: &kaspa_consensus_core::config::params::Params) -> Result<(), String> {
     use kaspa_consensus_core::config::params::ForkActivation;
     params.validate_palw_fork_choice_rule_e_order_v1().map_err(|e| e.to_string())?;
     if params.palw_fork_choice_rule_e_v1 != Some(ForkActivation::new(1))
         || params.palw_fork_choice_commitment_v1 != Some(ForkActivation::new(1))
-        || params.palw_dns_retirement.is_none_or(|r| r.activation != ForkActivation::new(1))
+        || params.palw_dns_retirement.is_none_or(|r| r.activation == ForkActivation::never() || r.activation.daa_score() < 1)
     {
-        return Err("private retirement requires its exact Rule E/commitment/retirement heights".into());
+        return Err("private retirement requires Rule E/commitment at DAA 1 and a finite retirement at or after them".into());
     }
     let mut checked = params.clone();
     checked.palw_probabilistic_constraints_v1 = None;
@@ -310,7 +353,7 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
         if config.private_population.is_some() {
             return Err("the paid-v4 private probe has no population override".into());
         }
-        let expected = private_paid_claim_params_v4(salt)?;
+        let expected = private_expected_retirement_v1(private_paid_claim_params_v4(salt)?, config)?;
         if config.params.consensus_params_id() != expected.consensus_params_id() {
             return Err("private paid-v4 Config differs from its exact salted factory policy".into());
         }
@@ -319,7 +362,7 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
         if config.private_population.is_some() {
             return Err("the paid-v3 private probe has no population override".into());
         }
-        let expected = private_paid_claim_params_v3(salt)?;
+        let expected = private_expected_retirement_v1(private_paid_claim_params_v3(salt)?, config)?;
         if config.params.consensus_params_id() != expected.consensus_params_id() {
             return Err("private paid-claim Config differs from its exact salted factory policy".into());
         }
@@ -328,7 +371,7 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
         if config.private_population.is_some() {
             return Err("the complete-only private bootstrap profile has no population override".into());
         }
-        let expected = private_complete_check_params_v1(salt)?;
+        let expected = private_expected_retirement_v1(private_complete_check_params_v1(salt)?, config)?;
         if config.params.consensus_params_id() != expected.consensus_params_id() {
             return Err("private complete-check Config differs from its exact salted factory policy".into());
         }
@@ -681,6 +724,50 @@ mod tests {
         let mut changed = config.clone();
         changed.params.palw_tir_v1.as_mut().unwrap().activation = kaspa_consensus_core::config::params::ForkActivation::new(2);
         assert!(validate_private_probe(&args, &changed).is_err(), "stale mirror/changed schedule is not an exception");
+    }
+
+    #[test]
+    fn private_late_retirement_moves_only_the_fence_and_keeps_the_daa1_profile() {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        let salt = PalwDrillSaltV1::from_bytes([0x16; 32]).unwrap();
+        let original = private_paid_claim_params_v4(&salt).unwrap();
+        assert_eq!(original.palw_dns_retirement.unwrap().activation, ForkActivation::new(1), "the DAA-1 profile is unchanged");
+        let late = private_late_retirement_params_v1(original.clone(), 200).unwrap();
+        let retirement = late.palw_dns_retirement.unwrap();
+        assert_eq!(retirement.activation, ForkActivation::new(200));
+        assert_eq!(retirement.settlement.id(), original.palw_dns_retirement.unwrap().settlement.id());
+        assert_eq!(retirement.legacy_evidence_horizon_daa, original.palw_dns_retirement.unwrap().legacy_evidence_horizon_daa);
+        assert_eq!(late.palw_fork_choice_rule_e_v1, Some(ForkActivation::new(1)), "Rule E stays at or below the fence");
+        assert_eq!(late.palw_fork_choice_commitment_v1, Some(ForkActivation::new(1)));
+        assert_eq!(late.genesis.hash, original.genesis.hash);
+        assert_ne!(late.consensus_params_id(), original.consensus_params_id(), "the height is part of the identity");
+        for refused in [0, 1, u64::MAX] {
+            assert!(private_late_retirement_params_v1(original.clone(), refused).is_err(), "refused height {refused}");
+        }
+        assert!(private_late_retirement_params_v1(late.clone(), 300).is_err(), "only a DAA-1 profile moves, once");
+        let mut config = Config::new(late.clone());
+        config.palw_drill_genesis_salt = Some(salt);
+        let expected = private_expected_retirement_v1(private_paid_claim_params_v4(&salt).unwrap(), &config).unwrap();
+        assert_eq!(expected.consensus_params_id(), late.consensus_params_id());
+        assert_eq!(private_probe_manifest(&config)["retirement"]["activationDaa"], 200);
+        let complete = private_late_retirement_params_v1(private_complete_check_params_v1(&salt).unwrap(), 200).unwrap();
+        let mut config = Config::new(complete);
+        config.palw_drill_genesis_salt = Some(salt);
+        let args = Args {
+            testnet: true,
+            testnet_suffix: 12,
+            disable_dns_seeding: true,
+            outbound_target: 0,
+            disable_upnp: true,
+            listen: Some("127.0.0.1:53011".parse().unwrap()),
+            rpclisten: Some("127.0.0.1:53012".parse().unwrap()),
+            appdir: Some(std::env::temp_dir().join("unopened-rfc12-late-retirement-probe").display().to_string()),
+            ..Args::default()
+        };
+        validate_private_probe(&args, &config).unwrap();
+        let mut moved = config.clone();
+        moved.params.palw_panel_free_v1.as_mut().unwrap().min_effective_bits = 2;
+        assert!(validate_private_probe(&args, &moved).is_err(), "only the retirement height may depart from the factory");
     }
 
     #[test]
