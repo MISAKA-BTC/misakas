@@ -121,12 +121,106 @@ fn nominate_v1(
     Err("nomination exceeded its finite actual-operand/proof envelope".into())
 }
 
+/// The verifier's authenticated original context: a legacy binding, or a TIR claim's natively
+/// derived decode view and admitted header (behind `palw_staged_tir_route_v1`).
+#[derive(Clone, Copy)]
+pub(crate) enum TokenizerOriginalV1<'a> {
+    Legacy(&'a PalwStepBindingV2),
+    Tir {
+        view: &'a kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1,
+        header: &'a kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    },
+}
+impl<'a> TokenizerOriginalV1<'a> {
+    fn statement<'t>(
+        &self,
+        target: &'t PalwOffenceTargetV1,
+        job: &PalwFreePromptJobV3,
+    ) -> Result<&'t kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1, String> {
+        match self {
+            Self::Legacy(binding) => {
+                kaspa_consensus_core::palw_tokenizer_table_stream_v1::palw_tokenizer_statement_v1(target, binding, job)
+            }
+            Self::Tir { view, .. } => {
+                kaspa_consensus_core::palw_tokenizer_table_stream_v1::palw_tokenizer_statement_view_v1(target, view, job)
+            }
+        }
+    }
+    fn vocab(&self) -> u32 {
+        match self {
+            Self::Legacy(binding) => binding.shape_profile.vocab_size,
+            Self::Tir { view, .. } => view.vocab_size,
+        }
+    }
+    fn job_context(&self) -> &'a kaspa_consensus_core::palw_v2::PalwJobContextV2 {
+        match *self {
+            Self::Legacy(binding) => &binding.job_context,
+            Self::Tir { view, .. } => &view.job_context,
+        }
+    }
+    fn retained_bytes(&self) -> Result<u64, String> {
+        Ok(match self {
+            Self::Legacy(binding) => borsh::object_length(*binding).map_err(|e| e.to_string())? as u64,
+            Self::Tir { header, .. } => borsh::object_length(*header).map_err(|e| e.to_string())? as u64,
+        })
+    }
+}
+
+/// The signed opening: a legacy tokenizer seed, or a TIR claim's native tokenizer seed.
+#[derive(Clone, Debug)]
+pub(crate) enum TokenizerSeedV1 {
+    Legacy(PalwConstraintStreamSeedV1),
+    Native(kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1),
+}
+impl TokenizerSeedV1 {
+    fn key_v1(&self) -> (Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, u64) {
+        match self {
+            Self::Legacy(seed) => (seed.claim, seed.reserver, seed.reserved_daa),
+            Self::Native(seed) => (seed.claim, seed.reserver, seed.reserved_daa),
+        }
+    }
+    fn seed_id_v1(&self) -> Result<Hash64, String> {
+        Ok(match self {
+            Self::Legacy(seed) => Hash64::from_bytes(seed.signing_message().try_into().map_err(|_| "seed digest width")?),
+            Self::Native(seed) => seed.seed_id_v1(),
+        })
+    }
+    /// `(id, present, length, opening, operand_tokenizer_bytes)` of the tokenizer family.
+    fn tokenizer_v1(&self) -> Option<(u32, bool, u32, &PalwStepOpeningV1, u64)> {
+        match self {
+            Self::Legacy(seed) => match seed.auxiliary.as_ref()? {
+                PalwAuxiliaryPublicCourtSeedV1::Tokenizer { id, present, length, opening, operand_tokenizer_bytes, .. } => {
+                    Some((*id, *present, *length, opening, *operand_tokenizer_bytes))
+                }
+                _ => None,
+            },
+            Self::Native(seed) => match &seed.family {
+                kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::Tokenizer {
+                    id,
+                    present,
+                    length,
+                    opening,
+                    operand_tokenizer_bytes,
+                    ..
+                } => Some((*id, *present, *length, opening, *operand_tokenizer_bytes)),
+                _ => None,
+            },
+        }
+    }
+    fn schedule_v1(&self) -> TokenizerScheduleV1 {
+        match self {
+            Self::Legacy(seed) => TokenizerScheduleV1::Seed(seed.clone()),
+            Self::Native(seed) => TokenizerScheduleV1::NativeSeed(seed.clone()),
+        }
+    }
+}
+
 struct Candidate {
     path: PathBuf,
     table: Arc<PalwTokenTableV1>,
     id: u32,
     actual_length: u64,
-    seed: PalwConstraintStreamSeedV1,
+    seed: TokenizerSeedV1,
     _reservation: Arc<PalwMemoryReservationV1>,
 }
 
@@ -137,28 +231,38 @@ pub(super) fn registered_table_v1(
     binding: &PalwStepBindingV2,
     job: &PalwFreePromptJobV3,
 ) -> Result<Arc<PalwTokenTableV1>, String> {
-    let row = kaspa_consensus_core::palw_tokenizer_table_stream_v1::palw_tokenizer_statement_v1(target, binding, job)?;
+    registered_table_of_v1(target, TokenizerOriginalV1::Legacy(binding), job)
+}
+
+/// [`registered_table_v1`] over either original context (a TIR claim's view included).
+pub(super) fn registered_table_of_v1(
+    target: &PalwOffenceTargetV1,
+    original: TokenizerOriginalV1<'_>,
+    job: &PalwFreePromptJobV3,
+) -> Result<Arc<PalwTokenTableV1>, String> {
+    let row = original.statement(target, job)?;
     let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_tables_v1()
         .for_root_and_tokenizer(&row.token_table_root.ok_or("missing qualified registered table root")?, &row.tokenizer_id)
         .ok_or("outside verifier does not hold the exact immutable registered table")?;
-    if table.tokenizer_id != row.tokenizer_id || table.vocab() != binding.shape_profile.vocab_size {
+    if table.tokenizer_id != row.tokenizer_id || table.vocab() != original.vocab() {
         return Err("held registered table has another tokenizer or vocabulary".into());
     }
     Ok(table)
 }
 
 impl Candidate {
+    #[allow(clippy::too_many_arguments)]
     fn select(
         path: &Path,
         target: &PalwOffenceTargetV1,
-        binding: &PalwStepBindingV2,
+        context: TokenizerOriginalV1<'_>,
         job: &PalwFreePromptJobV3,
         table: Arc<PalwTokenTableV1>,
         progress: &PalwStagedOwnedProgressV1,
         ledger: &Arc<PalwMemoryLedgerV1>,
-        original: Option<&PalwConstraintStreamSeedV1>,
+        original: Option<&TokenizerSeedV1>,
     ) -> Result<Self, String> {
-        let row = kaspa_consensus_core::palw_tokenizer_table_stream_v1::palw_tokenizer_statement_v1(target, binding, job)?;
+        let row = context.statement(target, job)?;
         if progress.claim != target.claim_id
             || progress.now_daa < progress.terms.accepted_daa
             || progress.reserved_daa > progress.now_daa
@@ -169,32 +273,48 @@ impl Candidate {
         let bound = row.tokenizer_key_events.ok_or("historical tokenizer lacks signed work")?;
         let root = row.token_table_root.ok_or("missing immutable table root")?;
         if row.rendering_rule.is_none()
-            || !row.matches_context(&binding.job_context)
+            || !row.matches_context(context.job_context())
             || table.tokenizer_id != row.tokenizer_id
             || table.entries.is_empty()
-            || table.entries.len() != binding.shape_profile.vocab_size as usize
+            || table.entries.len() != context.vocab() as usize
         {
             return Err("held table is not the registered rendering/profile statement".into());
         }
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let actual_length = file.metadata().map_err(|e| e.to_string())?.len();
         let id = match original {
-            Some(seed) => {
-                seed.check(90_000)?;
-                if (seed.claim, seed.reserver, seed.reserved_daa) != (progress.claim, progress.reserver, progress.reserved_daa)
-                    || seed.resolved_binding_v1(target.class_id, Some(&binding.shape_profile))? != *binding
-                    || seed.job.as_deref().is_some_and(|literal| literal != job)
-                {
+            Some(original_seed) => {
+                if original_seed.key_v1() != (progress.claim, progress.reserver, progress.reserved_daa) {
                     return Err("retained tokenizer seed changes accepted immutable context".into());
                 }
-                let Some(PalwAuxiliaryPublicCourtSeedV1::Tokenizer { id, operand_tokenizer_bytes, .. }) = seed.auxiliary.as_ref()
-                else {
+                match (original_seed, context) {
+                    (TokenizerSeedV1::Legacy(seed), TokenizerOriginalV1::Legacy(binding)) => {
+                        seed.check(90_000)?;
+                        if seed.resolved_binding_v1(target.class_id, Some(&binding.shape_profile))? != *binding
+                            || seed.job.as_deref().is_some_and(|literal| literal != job)
+                        {
+                            return Err("retained tokenizer seed changes accepted immutable context".into());
+                        }
+                    }
+                    (TokenizerSeedV1::Native(seed), TokenizerOriginalV1::Tir { view, header }) => {
+                        seed.check(90_000)?;
+                        if seed.view_identity
+                            != kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_native_view_identity_v1(header)
+                            || seed.vocab_size != view.vocab_size
+                            || seed.job.as_deref().is_some_and(|literal| literal != job)
+                        {
+                            return Err("retained native tokenizer seed changes the admitted header or job".into());
+                        }
+                    }
+                    _ => return Err("retained tokenizer seed speaks another original context".into()),
+                }
+                let Some((id, _, _, _, operand_tokenizer_bytes)) = original_seed.tokenizer_v1() else {
                     return Err("retained tokenizer seed has another family".into());
                 };
-                if *operand_tokenizer_bytes != actual_length || *id as usize >= table.entries.len() {
+                if operand_tokenizer_bytes != actual_length || id as usize >= table.entries.len() {
                     return Err("retained tokenizer operand or nominee differs from held original material".into());
                 }
-                *id
+                id
             }
             None => nominate_v1(path, row.tokenizer_id, actual_length, bound, &table, target.class_id, target.claim_id, ledger)?,
         };
@@ -214,7 +334,8 @@ impl Candidate {
         let eog_opening = step_opening_from_leaf_source_capped_v1(count, count - 1, PALW_TOKEN_TABLE_MAX_LEAVES_V1, leaf)
             .map_err(|e| e.to_string())?;
         let length = table.entries[id as usize].as_ref().map_or(0, Vec::len);
-        let retained_bytes = (borsh::object_length(binding).map_err(|e| e.to_string())? as u64)
+        let retained_bytes = context
+            .retained_bytes()?
             .checked_mul(8)
             .and_then(|n| n.checked_add(1_048_576))
             .ok_or("retained seed copy bound overflow")?;
@@ -230,6 +351,51 @@ impl Candidate {
                 )
                 .map_err(|e| e.to_string())?,
         );
+        let present = table.entries[id as usize].is_some();
+        let length = u32::try_from(length).map_err(|_| "table rendering length overflow")?;
+        let binding = match context {
+            TokenizerOriginalV1::Legacy(binding) => binding,
+            TokenizerOriginalV1::Tir { view, header } => {
+                // A TIR claim's native tokenizer seed: no binding, the admitted header's identity.
+                let seed = kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1 {
+                    version: 1,
+                    claim: target.claim_id,
+                    reserver: progress.reserver,
+                    reserved_daa: progress.reserved_daa,
+                    view_identity: kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_native_view_identity_v1(header),
+                    vocab_size: view.vocab_size,
+                    job: None,
+                    family: kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::Tokenizer {
+                        id,
+                        present,
+                        length,
+                        opening,
+                        raw_tokenizer_bytes: raw,
+                        tokenizer_key_events: bound,
+                        operand_tokenizer_bytes: actual_length,
+                    },
+                    signature: Vec::new(),
+                };
+                let seed = match original {
+                    Some(TokenizerSeedV1::Native(original)) => {
+                        if original.family != seed.family {
+                            return Err("retained native tokenizer seed changes authenticated table proof or statement".into());
+                        }
+                        original.clone()
+                    }
+                    _ => seed,
+                };
+                let _ = eog_opening;
+                return Ok(Self {
+                    path: path.to_owned(),
+                    table,
+                    id,
+                    actual_length,
+                    seed: TokenizerSeedV1::Native(seed),
+                    _reservation: retained,
+                });
+            }
+        };
         // Selection fields are unused by typed auxiliary admission. Their canonical empty
         // representation makes the seed deterministic without inventing a public row witness.
         let empty = || PalwStepOpeningV1 { leaf_index: 0, leaf_hash: Hash64::default(), siblings: Vec::new() };
@@ -256,8 +422,8 @@ impl Candidate {
             eog_opening,
             auxiliary: Some(PalwAuxiliaryPublicCourtSeedV1::Tokenizer {
                 id,
-                present: table.entries[id as usize].is_some(),
-                length: u32::try_from(length).map_err(|_| "table rendering length overflow")?,
+                present,
+                length,
                 opening,
                 raw_tokenizer_bytes: raw,
                 tokenizer_key_events: bound,
@@ -273,7 +439,7 @@ impl Candidate {
         if signed_bytes > 90000 {
             seed.use_retained_profile_v1()?;
         }
-        if let Some(original) = original {
+        if let Some(TokenizerSeedV1::Legacy(original)) = original {
             if seed.auxiliary != original.auxiliary
                 || seed.eog_count != original.eog_count
                 || seed.eog_opening != original.eog_opening
@@ -284,7 +450,7 @@ impl Candidate {
             }
             seed = original.clone();
         }
-        Ok(Self { path: path.to_owned(), table, id, actual_length, seed, _reservation: retained })
+        Ok(Self { path: path.to_owned(), table, id, actual_length, seed: TokenizerSeedV1::Legacy(seed), _reservation: retained })
     }
 }
 struct Pending {
@@ -295,6 +461,8 @@ struct Pending {
 }
 pub(crate) enum TokenizerScheduleV1 {
     Seed(PalwConstraintStreamSeedV1),
+    /// A TIR claim's native tokenizer seed (tag 168, behind `palw_staged_tir_route_v1`).
+    NativeSeed(kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1),
     Move(kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamMoveV1),
     Finished(Option<PalwStagedCertificateRefV1>),
 }
@@ -334,11 +502,44 @@ impl TokenizerSchedulerV1 {
         ledger: &Arc<PalwMemoryLedgerV1>,
         original: Option<&PalwConstraintStreamSeedV1>,
     ) -> Result<Self, String> {
+        let original = original.cloned().map(TokenizerSeedV1::Legacy);
+        Self::open_inner_v1(path, target, TokenizerOriginalV1::Legacy(binding), job, table, progress, ledger, original.as_ref())
+    }
+
+    /// A TIR claim's tokenizer stage (behind `palw_staged_tir_route_v1`): the statement and
+    /// vocabulary through the natively derived view; the seed names no binding.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_native_v1(
+        path: &Path,
+        target: &PalwOffenceTargetV1,
+        view: &kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        job: &PalwFreePromptJobV3,
+        table: Arc<PalwTokenTableV1>,
+        progress: &PalwStagedOwnedProgressV1,
+        ledger: &Arc<PalwMemoryLedgerV1>,
+        original: Option<&kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1>,
+    ) -> Result<Self, String> {
+        let original = original.cloned().map(TokenizerSeedV1::Native);
+        Self::open_inner_v1(path, target, TokenizerOriginalV1::Tir { view, header }, job, table, progress, ledger, original.as_ref())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn open_inner_v1(
+        path: &Path,
+        target: &PalwOffenceTargetV1,
+        original_context: TokenizerOriginalV1<'_>,
+        job: &PalwFreePromptJobV3,
+        table: Arc<PalwTokenTableV1>,
+        progress: &PalwStagedOwnedProgressV1,
+        ledger: &Arc<PalwMemoryLedgerV1>,
+        original: Option<&TokenizerSeedV1>,
+    ) -> Result<Self, String> {
         if progress.cursor.as_ref().is_some_and(|cursor| !matches!(cursor, PalwStagedOwnedCursorV1::Tokenizer { .. })) {
             return Err("this reservation owns another typed public court; no replacement is permitted".into());
         }
-        let candidate = Candidate::select(path, target, binding, job, table, progress, ledger, original)?;
-        let context = Hash64::from_bytes(candidate.seed.signing_message().try_into().map_err(|_| "seed digest width")?);
+        let candidate = Candidate::select(path, target, original_context, job, table, progress, ledger, original)?;
+        let context = candidate.seed.seed_id_v1()?;
         if progress.seed_id.is_some_and(|id| id != context) {
             return Err("accepted owner court has another immutable seed; no replacement is permitted".into());
         }
@@ -354,27 +555,37 @@ impl TokenizerSchedulerV1 {
             target.claim_id,
             ledger,
         )?;
-        let Some(PalwAuxiliaryPublicCourtSeedV1::Tokenizer { id, present, length, opening, .. }) = &candidate.seed.auxiliary else {
-            unreachable!()
+        let (id, present, length, opening, _) = candidate.seed.tokenizer_v1().ok_or("tokenizer seed has another family")?;
+        let court = match original_context {
+            TokenizerOriginalV1::Legacy(binding) => PalwTokenizerTableStreamV1::new_with_operand_length(
+                context,
+                target,
+                binding,
+                job,
+                id,
+                present,
+                length,
+                opening,
+                candidate.actual_length,
+            )?,
+            TokenizerOriginalV1::Tir { view, .. } => PalwTokenizerTableStreamV1::new_with_operand_length_view_v1(
+                context,
+                target,
+                view,
+                job,
+                id,
+                present,
+                length,
+                opening,
+                candidate.actual_length,
+            )?,
         };
-        let court = PalwTokenizerTableStreamV1::new_with_operand_length(
-            context,
-            target,
-            binding,
-            job,
-            *id,
-            *present,
-            *length,
-            opening,
-            candidate.actual_length,
-        )?;
         Ok(Self { candidate, witness, court, sealed: false, pending: None, moves: 1, context })
     }
     /// Each decision is derived from one authenticated accepted snapshot. Signing/fee
     /// funding use the ordinary service carrier path after this blocking worker returns.
     pub(crate) fn poll(&mut self, progress: &PalwStagedOwnedProgressV1) -> Result<TokenizerScheduleV1, String> {
-        if (progress.claim, progress.reserver, progress.reserved_daa)
-            != (self.candidate.seed.claim, self.candidate.seed.reserver, self.candidate.seed.reserved_daa)
+        if (progress.claim, progress.reserver, progress.reserved_daa) != self.candidate.seed.key_v1()
             || progress.now_daa < progress.terms.accepted_daa
             || progress.terms.accepted_daa > progress.terms.open_until_daa
             || progress.terms.open_until_daa > progress.terms.stream_until_daa
@@ -386,7 +597,7 @@ impl TokenizerSchedulerV1 {
             if progress.seed_id.is_some() || progress.now_daa >= progress.terms.open_until_daa {
                 return Err("prospective tokenizer opening deadline is closed".into());
             }
-            return Ok(TokenizerScheduleV1::Seed(self.candidate.seed.clone()));
+            return Ok(self.candidate.seed.schedule_v1());
         };
         if progress.seed_id != Some(self.context) {
             return Err("snapshot owns a different immutable staged seed".into());
@@ -443,7 +654,10 @@ impl TokenizerSchedulerV1 {
     }
     #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
     pub(crate) fn seed(&self) -> &PalwConstraintStreamSeedV1 {
-        &self.candidate.seed
+        match &self.candidate.seed {
+            TokenizerSeedV1::Legacy(seed) => seed,
+            TokenizerSeedV1::Native(_) => panic!("a native TIR tokenizer scheduler has no legacy seed"),
+        }
     }
     #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
     #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build

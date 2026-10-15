@@ -116,12 +116,40 @@ pub(super) fn nominate_authenticated_ids_v1(
     table: Arc<dyn PalwPublicTokenTableSourceV1>,
     ledger: &Arc<PalwMemoryLedgerV1>,
 ) -> Result<Option<TiledPlanV1>, String> {
-    use kaspa_consensus_core::palw_decode_constraint_v1::constraint_start_state_v1;
     palw_constrained_job_target_v1(target, binding, job).map_err(|e| e.to_string())?;
+    nominate_after_target_v1(target, job, binding.shape_profile.vocab_size, ids, own, table, ledger)
+}
+
+/// [`nominate_authenticated_ids_v1`] over a TIR claim's natively derived decode view.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn nominate_authenticated_ids_view_v1(
+    target: &PalwOffenceTargetV1,
+    job: &PalwFreePromptJobV3,
+    view: &kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1,
+    ids: &[u32],
+    own: &[u32],
+    table: Arc<dyn PalwPublicTokenTableSourceV1>,
+    ledger: &Arc<PalwMemoryLedgerV1>,
+) -> Result<Option<TiledPlanV1>, String> {
+    kaspa_consensus_core::palw_decode_view_v1::palw_constrained_job_target_view_v1(target, view, job)?;
+    nominate_after_target_v1(target, job, view.vocab_size, ids, own, table, ledger)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn nominate_after_target_v1(
+    target: &PalwOffenceTargetV1,
+    job: &PalwFreePromptJobV3,
+    vocab: u32,
+    ids: &[u32],
+    own: &[u32],
+    table: Arc<dyn PalwPublicTokenTableSourceV1>,
+    ledger: &Arc<PalwMemoryLedgerV1>,
+) -> Result<Option<TiledPlanV1>, String> {
+    use kaspa_consensus_core::palw_decode_constraint_v1::constraint_start_state_v1;
     let _scratch = reserve_v1(target, job, &[], (ids.len() as u64 + own.len() as u64) * 4, table.as_ref(), ledger)?;
     if palw_fp_constraint_table_root_v1(job) != Some(table.root_v1())
         || job.tokenizer_id != table.tokenizer_id_v1()
-        || table.vocab_v1() != binding.shape_profile.vocab_size
+        || table.vocab_v1() != vocab
     {
         return Err("streaming Constraint mask changes immutable root/tokenizer/vocabulary".into());
     }
@@ -193,6 +221,8 @@ use std::sync::Arc;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ConstraintScheduleV1 {
     Seed(PalwConstraintStreamSeedV1),
+    /// A TIR claim's native seed (tag 168, behind `palw_staged_tir_route_v1`).
+    NativeSeed(kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1),
     Leaf(PalwConstraintStreamLeafV1),
     Move(PalwConstraintStreamMoveV1),
     Finished(Option<PalwStagedCertificateRefV1>),
@@ -449,8 +479,41 @@ struct Pending {
     decision: ConstraintScheduleV1,
 }
 
+/// The scheduler's signed opening: a legacy seed, or a TIR claim's native seed (no binding).
+#[derive(Clone, Debug)]
+enum SchedulerSeedV1 {
+    Legacy(PalwConstraintStreamSeedV1),
+    Native(kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1),
+}
+impl SchedulerSeedV1 {
+    fn claim_v1(&self) -> Hash64 {
+        match self {
+            Self::Legacy(seed) => seed.claim,
+            Self::Native(seed) => seed.claim,
+        }
+    }
+    fn reserver_v1(&self) -> kaspa_consensus_core::palw_state_v2::PalwBondKeyV2 {
+        match self {
+            Self::Legacy(seed) => seed.reserver,
+            Self::Native(seed) => seed.reserver,
+        }
+    }
+    fn reserved_daa_v1(&self) -> u64 {
+        match self {
+            Self::Legacy(seed) => seed.reserved_daa,
+            Self::Native(seed) => seed.reserved_daa,
+        }
+    }
+    fn schedule_v1(&self) -> ConstraintScheduleV1 {
+        match self {
+            Self::Legacy(seed) => ConstraintScheduleV1::Seed(seed.clone()),
+            Self::Native(seed) => ConstraintScheduleV1::NativeSeed(seed.clone()),
+        }
+    }
+}
+
 pub(super) struct ConstraintSchedulerV1 {
-    seed: PalwConstraintStreamSeedV1,
+    seed: SchedulerSeedV1,
     seed_id: Hash64,
     position: u32,
     terms: PalwRenderingClaimTermsV1,
@@ -565,6 +628,82 @@ fn pin_v1(
     Ok((binding.clone(), pin))
 }
 
+/// [`pin_v1`] over a TIR claim's natively derived view and its native selected events (no
+/// binding): the same row/tile authentication and the same tile selection rule.
+pub(super) fn native_pin_v1(
+    target: &PalwOffenceTargetV1,
+    job: &PalwFreePromptJobV3,
+    view: &kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1,
+    plan: TiledPlanV1,
+    events: &[kaspa_consensus_core::palw_selected_event_source_v1::PalwSelectedTiledEventV1],
+    maximum_leaves: u64,
+) -> Result<PalwTiledDecodePinV1, String> {
+    kaspa_consensus_core::palw_decode_view_v1::palw_constrained_job_target_view_v1(target, view, job)?;
+    let first = events.first().ok_or("selected public row is missing")?;
+    let (context, vocab, tiles) = kaspa_consensus_core::palw_step_refute::tiled_row_authenticate_view_v1(
+        view,
+        &first.generated_token_ids,
+        plan.position,
+        &first.row_root,
+        &first.row_opening,
+        maximum_leaves,
+    )
+    .map_err(|e| e.to_string())?;
+    if first.generated_token_ids.get(plan.position as usize) != Some(&plan.committed) {
+        return Err("selected row changes the nominated committed token".into());
+    }
+    let check_tile = |event: &kaspa_consensus_core::palw_selected_event_source_v1::PalwSelectedTiledEventV1, tile: u64| {
+        if event.generated_token_ids != first.generated_token_ids || event.row_root != first.row_root || event.row_opening != first.row_opening
+        {
+            return Err("selected tiles change the authenticated generated row".to_string());
+        }
+        tiled_tile_authenticate_v1(
+            &context,
+            plan.position,
+            vocab,
+            tiles,
+            &first.row_root,
+            tile,
+            &event.tile_lanes,
+            &event.tile_opening,
+            maximum_leaves,
+        )
+        .map_err(|e| e.to_string())
+    };
+    let committed_tile = u64::from(plan.committed) / PALW_LOGITS_TILE_LANES as u64;
+    let mut pin = PalwTiledDecodePinV1 {
+        position: plan.position,
+        generated_token_ids: first.generated_token_ids.clone(),
+        row_root: first.row_root,
+        row_opening: first.row_opening.clone(),
+        committed_tile_lanes: Vec::new(),
+        committed_opening: first.row_opening.clone(),
+        beat_tile_lanes: Vec::new(),
+        beat_opening: first.row_opening.clone(),
+        beat_lane: plan.beat_lane.unwrap_or(0),
+    };
+    if let Some(beat) = plan.beat_lane {
+        check_tile(first, committed_tile)?;
+        let beat_tile = u64::from(beat) / PALW_LOGITS_TILE_LANES as u64;
+        let count = if beat_tile == committed_tile { 1 } else { 2 };
+        if events.len() != count {
+            return Err("selected beating tiles are incomplete or redundant".into());
+        }
+        let last = events.last().ok_or("beating tile missing")?;
+        check_tile(last, beat_tile)?;
+        pin.committed_tile_lanes = first.tile_lanes.clone();
+        pin.committed_opening = first.tile_opening.clone();
+        pin.beat_tile_lanes = last.tile_lanes.clone();
+        pin.beat_opening = last.tile_opening.clone();
+    } else {
+        if events.len() != 1 {
+            return Err("forbidden/stop proof needs exactly one original selected row".into());
+        }
+        check_tile(first, 0)?;
+    }
+    Ok(pin)
+}
+
 fn opening_v1(table: &dyn PalwPublicTokenTableSourceV1, id: u32) -> Result<PalwStepOpeningV1, String> {
     table.checked_opening_v1(id)
 }
@@ -669,7 +808,7 @@ impl ConstraintSchedulerV1 {
             return Err("accepted constraint seed differs; replacement is forbidden".into());
         }
         Ok(Self {
-            seed,
+            seed: SchedulerSeedV1::Legacy(seed),
             seed_id,
             position: plan.position,
             terms: progress.terms,
@@ -779,9 +918,167 @@ impl ConstraintSchedulerV1 {
         }
         let seed_id = Hash64::from_bytes(seed.signing_message().try_into().map_err(|_| "flat semantic seed digest width")?);
         Ok(Self {
-            seed,
+            seed: SchedulerSeedV1::Legacy(seed),
             seed_id,
             position: pin.position_v1(),
+            terms: progress.terms,
+            table,
+            eog,
+            court,
+            moves: 1,
+            pending: None,
+            _reservation: reservation,
+        })
+    }
+
+    /// **A TIR claim's Constraint opening** (behind `palw_staged_tir_route_v1`): the pin comes
+    /// from the authenticated native selected source and the view from the claim's admitted header
+    /// and registered record (both read from native state); the signed seed names no binding.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn open_native_v1(
+        target: &PalwOffenceTargetV1,
+        job: &PalwFreePromptJobV3,
+        view: &kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        pin: PalwTiledDecodePinV1,
+        witness: Option<u32>,
+        table: Arc<dyn PalwPublicTokenTableSourceV1>,
+        progress: &PalwStagedOwnedProgressV1,
+        maximum_leaves: u64,
+        ledger: &Arc<PalwMemoryLedgerV1>,
+    ) -> Result<Self, String> {
+        if progress.cursor.is_some()
+            || progress.seed_id.is_some()
+            || progress.claim != target.claim_id
+            || progress.reserver == target.executor_bond
+            || progress.terms.accepted_daa > progress.reserved_daa
+            || progress.reserved_daa > progress.now_daa
+            || progress.now_daa >= progress.terms.open_until_daa
+        {
+            return Err("native constraint opening changes paid owner/original clock".into());
+        }
+        let extra = borsh::object_length(&(header, &pin)).map_err(|e| e.to_string())? as u64;
+        let reservation = reserve_v1(target, job, &[], extra, table.as_ref(), ledger)?;
+        kaspa_consensus_core::palw_decode_view_v1::palw_constrained_job_target_view_v1(target, view, job)?;
+        if table.tokenizer_id_v1() != job.tokenizer_id || table.vocab_v1() != view.vocab_size {
+            return Err("native constraint table differs from the registered tokenizer/vocabulary".into());
+        }
+        let root = palw_fp_constraint_table_root_v1(job).ok_or("native constraint job lacks immutable table root")?;
+        let eog_opening = opening_v1(table.as_ref(), table.vocab_v1())?;
+        if step_opening_root_capped_v1(table.vocab_v1() as usize as u64 + 1, &eog_opening, PALW_TOKEN_TABLE_MAX_LEAVES_V1)
+            .map_err(|e| e.to_string())?
+            != root
+        {
+            return Err("native constraint EOG holding differs from original table commitment".into());
+        }
+        let mut eog = table.eog_ids_v1()?;
+        eog.sort_unstable();
+        if eog.is_empty() || eog.windows(2).any(|w| w[0] >= w[1]) || eog.last().is_some_and(|id| *id >= table.vocab_v1()) {
+            return Err("native constraint EOG holding is not a canonical set".into());
+        }
+        let position = pin.position;
+        let seed = kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1 {
+            version: 1,
+            claim: target.claim_id,
+            reserver: progress.reserver,
+            reserved_daa: progress.reserved_daa,
+            view_identity: kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_native_view_identity_v1(header),
+            vocab_size: view.vocab_size,
+            job: None,
+            family: kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::Constraint {
+                pin,
+                witness,
+                eog_count: eog.len() as u32,
+                eog_opening,
+            },
+            signature: Vec::new(),
+        };
+        Self::native_court_v1(target, job, view, header, seed, table, eog, progress, maximum_leaves, reservation, position)
+    }
+
+    /// Restart from the accepted native seed (read from native state, never re-nominated).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn reopen_native_v1(
+        target: &PalwOffenceTargetV1,
+        job: &PalwFreePromptJobV3,
+        view: &kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1,
+        accepted: &kaspa_consensus_core::palw_staged_bundle_v1::PalwStagedNativeSeedContextV1,
+        table: Arc<dyn PalwPublicTokenTableSourceV1>,
+        progress: &PalwStagedOwnedProgressV1,
+        maximum_leaves: u64,
+        ledger: &Arc<PalwMemoryLedgerV1>,
+    ) -> Result<Self, String> {
+        let seed = accepted.seed.as_ref().clone();
+        if progress.seed_id != Some(seed.seed_id_v1())
+            || !matches!(progress.cursor, Some(PalwStagedOwnedCursorV1::Constraint { .. }))
+            || (seed.claim, seed.reserver, seed.reserved_daa) != (progress.claim, progress.reserver, progress.reserved_daa)
+            || target.claim_id != progress.claim
+            || accepted.job.as_ref() != job
+            || seed.job.as_deref().is_some_and(|j| j != job)
+        {
+            return Err("native constraint archive changes admitted seed/owner/job/clock".into());
+        }
+        let kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::Constraint { pin, .. } = &seed.family
+        else {
+            return Err("native archive is not a constraint stage".into());
+        };
+        let position = pin.position;
+        let extra = borsh::object_length(&(accepted.header.as_ref(), &seed)).map_err(|e| e.to_string())? as u64;
+        let reservation = reserve_v1(target, job, &[], extra, table.as_ref(), ledger)?;
+        let mut eog = table.eog_ids_v1()?;
+        eog.sort_unstable();
+        Self::native_court_v1(target, job, view, &accepted.header, seed, table, eog, progress, maximum_leaves, reservation, position)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn native_court_v1(
+        target: &PalwOffenceTargetV1,
+        job: &PalwFreePromptJobV3,
+        view: &kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        seed: kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1,
+        table: Arc<dyn PalwPublicTokenTableSourceV1>,
+        eog: Vec<u32>,
+        progress: &PalwStagedOwnedProgressV1,
+        maximum_leaves: u64,
+        reservation: Arc<PalwMemoryReservationV1>,
+        position: u32,
+    ) -> Result<Self, String> {
+        let kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwNativeSeedFamilyV1::Constraint {
+            pin,
+            witness,
+            eog_count,
+            eog_opening,
+        } = &seed.family
+        else {
+            return Err("native scheduler needs the constraint family".into());
+        };
+        if seed.view_identity != kaspa_consensus_core::palw_constraint_stream_carriage_v1::palw_native_view_identity_v1(header)
+            || eog.len() != *eog_count as usize
+        {
+            return Err("native seed changes the admitted header or authenticated EOG holding".into());
+        }
+        let identity = borsh::to_vec(header).map_err(|e| e.to_string())?;
+        let court = PalwConstraintStreamCourtV1::new_from_tiled_view_v1(
+            target.claim_id,
+            seed.reserver,
+            seed.reserved_daa,
+            target.execution_root,
+            view,
+            &identity,
+            job,
+            pin,
+            *witness,
+            *eog_count,
+            eog_opening,
+            maximum_leaves,
+            Some(seed.seed_id_v1()),
+        )?;
+        let seed_id = court.seed_id();
+        Ok(Self {
+            seed: SchedulerSeedV1::Native(seed),
+            seed_id,
+            position,
             terms: progress.terms,
             table,
             eog,
@@ -888,7 +1185,7 @@ impl ConstraintSchedulerV1 {
             return Err("public constraint archive changes admitted seed identity".into());
         }
         Ok(Self {
-            seed: seed.clone(),
+            seed: SchedulerSeedV1::Legacy(seed.clone()),
             seed_id,
             position: flat.map_or(seed.pin.position, |pin| pin.position_v1()),
             terms: progress.terms,
@@ -964,9 +1261,9 @@ impl ConstraintSchedulerV1 {
                     after: self.cursor(),
                     decision: ConstraintScheduleV1::Leaf(PalwConstraintStreamLeafV1 {
                         version: 1,
-                        claim: self.seed.claim,
-                        reserver: self.seed.reserver,
-                        reserved_daa: self.seed.reserved_daa,
+                        claim: self.seed.claim_v1(),
+                        reserver: self.seed.reserver_v1(),
+                        reserved_daa: self.seed.reserved_daa_v1(),
                         seed_id: self.seed_id,
                         id,
                         present,
@@ -983,9 +1280,9 @@ impl ConstraintSchedulerV1 {
             after: self.cursor(),
             decision: ConstraintScheduleV1::Move(PalwConstraintStreamMoveV1 {
                 version: 1,
-                claim: self.seed.claim,
-                reserver: self.seed.reserver,
-                reserved_daa: self.seed.reserved_daa,
+                claim: self.seed.claim_v1(),
+                reserver: self.seed.reserver_v1(),
+                reserved_daa: self.seed.reserved_daa_v1(),
                 seed_id: self.seed_id,
                 phase,
                 action,
@@ -996,8 +1293,8 @@ impl ConstraintSchedulerV1 {
 
     pub(super) fn poll(&mut self, progress: &PalwStagedOwnedProgressV1) -> Result<ConstraintScheduleV1, String> {
         if (progress.claim, progress.reserver, progress.reserved_daa, progress.terms)
-            != (self.seed.claim, self.seed.reserver, self.seed.reserved_daa, self.terms)
-            || progress.now_daa < self.seed.reserved_daa
+            != (self.seed.claim_v1(), self.seed.reserver_v1(), self.seed.reserved_daa_v1(), self.terms)
+            || progress.now_daa < self.seed.reserved_daa_v1()
             || progress.now_daa >= self.terms.collect_until_daa
         {
             return Err("constraint accepted owner or original immutable clock changed".into());
@@ -1006,7 +1303,7 @@ impl ConstraintSchedulerV1 {
             if progress.seed_id.is_some() || progress.now_daa >= self.terms.open_until_daa {
                 return Err("constraint initial opening door is closed".into());
             }
-            return Ok(ConstraintScheduleV1::Seed(self.seed.clone()));
+            return Ok(self.seed.schedule_v1());
         };
         if progress.seed_id != Some(self.seed_id) {
             return Err("constraint accepted seed changed".into());
@@ -1040,9 +1337,9 @@ impl ConstraintSchedulerV1 {
         }
         if let Some(fault) = accepted.completed {
             return Ok(ConstraintScheduleV1::Finished(fault.then_some(PalwStagedCertificateRefV1 {
-                claim: self.seed.claim,
-                reserver: self.seed.reserver,
-                reserved_daa: self.seed.reserved_daa,
+                claim: self.seed.claim_v1(),
+                reserver: self.seed.reserver_v1(),
+                reserved_daa: self.seed.reserved_daa_v1(),
                 seed_id: self.seed_id,
             })));
         }

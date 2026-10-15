@@ -45,8 +45,12 @@ impl PalwPanelService {
                 return true;
             }
             let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = object else { return false };
-            let PalwConstraintStreamActionV1::SelectedEventAnswer(answer) = &movement.action else { return false };
-            if answer.answerer != signer {
+            let (answerer, coordinate, demand) = match &movement.action {
+                PalwConstraintStreamActionV1::SelectedEventAnswer(answer) => (answer.answerer, answer.coordinate, answer.demand_id),
+                PalwConstraintStreamActionV1::NativeSelectedAnswer(answer) => (answer.answerer, answer.coordinate, answer.demand_id),
+                _ => return false,
+            };
+            if answerer != signer {
                 // Another literal slot's packet (a delegated producer slot shares the lane).
                 return true;
             }
@@ -73,12 +77,12 @@ impl PalwPanelService {
                     p.now_daa < p.session.respond_until_daa
                         && (p.session.claim, p.session.owner, p.session.reserved_daa, p.session.bundle_id)
                             == (movement.claim, movement.reserver, movement.reserved_daa, movement.seed_id)
-                        && answer.answerer == signer
+                        && answerer == signer
                         && p.session.custodians.contains(&signer)
                         && p.session
                             .requests
-                            .get(&answer.coordinate)
-                            .is_some_and(|r| r.demand_id == answer.demand_id && !r.collected && !r.answered.contains(&signer))
+                            .get(&coordinate)
+                            .is_some_and(|r| r.demand_id == demand && !r.collected && !r.answered.contains(&signer))
                 }
             }
         });
@@ -118,6 +122,91 @@ impl PalwPanelService {
                     return Ok(());
                 }
                 attempt = Some((key, progress.now_daa));
+                if let Some(native) = progress.native.as_ref() {
+                    // A TIR claim: no binding exists; the answer authenticates against the native view.
+                    let class = native.job.class_id;
+                    let maximum = self.class_step_ladder(class);
+                    let (view, header) =
+                        session.palw_staged_tir_view_v1(claim, maximum)?.ok_or("TIR selected duty lost its native view")?;
+                    if *header != *native.header {
+                        return Err("TIR selected duty changes the claim's admitted header".into());
+                    }
+                    let facts =
+                        session.palw_producer_facts_v2(class, None).ok_or("TIR selected response has no registered artifact")?;
+                    let need = self
+                        .backends()
+                        .role_memory_need_or_chain_v1(class, facts.artifact_root, FULL_SEAT_V1, |id| self.chain_carriage_v1(session, id))
+                        .ok_or("TIR selected responder resource profile unavailable")?;
+                    let execution = self.reserve_replay_v1("public-tir-selected-answer", &need, class, claim)?;
+                    let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> =
+                        if PalwBondKeyV2(native.job.executor_bond) == signer && slot.only.is_none() {
+                            self.executor_backend_v1(session, class, facts.artifact_root)?
+                        } else {
+                            Arc::from(self.resolve_backend(session, class, facts.artifact_root)?)
+                        };
+                    let coordinate = request.coordinate;
+                    let demand_id = request.demand_id;
+                    let paths = self.fp_retained_payload_paths(&claim);
+                    let keypair = self.keypair.clone();
+                    let clock = progress.now_daa;
+                    let deadline = progress.session.respond_until_daa;
+                    let reserved = progress.session.reserved_daa;
+                    let bundle = progress.session.bundle_id;
+                    let object = tokio::task::spawn_blocking(move || -> Result<PalwConsensusObjectV2, String> {
+                        let _read = read;
+                        let _execution = execution;
+                        let mut found = None;
+                        for path in paths {
+                            let Ok(material) = std::fs::read(&path) else { continue };
+                            if let Ok(event) = backend.disclose_tir_selected_event_v1(&material, &header, coordinate.row, coordinate.tile, maximum)
+                            {
+                                found = Some(event);
+                                break;
+                            }
+                        }
+                        let event = found.ok_or("TIR selected responder has no retained TIR capture for this claim")?;
+                        // Local pre-check only; the fold authenticates again against its own view.
+                        event.authenticate_view_v1(&view, coordinate, maximum)?;
+                        let answer = kaspa_consensus_core::palw_selected_event_source_v1::PalwSelectedEventNativeAnswerV1 {
+                            answerer: signer,
+                            demand_id,
+                            coordinate,
+                            event,
+                        };
+                        answer.check_v1()?;
+                        let mut movement = PalwConstraintStreamMoveV1 {
+                            version: 1,
+                            claim,
+                            reserver: owner,
+                            reserved_daa: reserved,
+                            seed_id: bundle,
+                            phase: PalwConstraintStreamPhaseV1::PrefixCourt,
+                            action: PalwConstraintStreamActionV1::NativeSelectedAnswer(answer),
+                            signature: Vec::new(),
+                        };
+                        movement.signature = keypair
+                            .as_ref()
+                            .and_then(|kp| {
+                                libcrux_ml_dsa::ml_dsa_87::sign(
+                                    &kp.signing_key,
+                                    &movement.signing_message(),
+                                    PALW_CONSTRAINT_STREAM_CONTEXT_V1,
+                                    [0u8; 32],
+                                )
+                                .ok()
+                                .map(|s| s.as_ref().to_vec())
+                            })
+                            .ok_or("TIR selected responder signing key unavailable")?;
+                        movement.check()?;
+                        Ok(PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) })
+                    })
+                    .await
+                    .map_err(|e| format!("TIR selected response worker failed: {e}"))??;
+                    pending.push((key.0, key.1, key.2, object));
+                    due.insert(key, deadline.saturating_sub(1));
+                    moved.insert(key, clock);
+                    return Ok(());
+                }
                 let context = progress.context.as_ref().ok_or("selected duty lacks accepted original binding/job")?;
                 let class = context.job.class_id;
                 let facts =

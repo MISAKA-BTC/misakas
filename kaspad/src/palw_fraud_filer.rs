@@ -101,6 +101,13 @@ pub(super) const PALW_FRAUD_FILER_RELEASE_ROUND_V1: u32 = u32::MAX - 13;
 /// One guarded typed staged move per claim; the accepted cursor, not transport, acknowledges it.
 pub(super) const PALW_FRAUD_FILER_STAGED_ROUND_V1: u32 = u32::MAX - 14;
 
+/// A TIR claim's natively derived original context (behind `palw_staged_tir_route_v1`): the
+/// decode view and the admitted public header, both read from native accepted state.
+pub(super) struct FilerTirContextV1 {
+    pub view: kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1,
+    pub header: Box<kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1>,
+}
+
 fn palw_fraud_filer_paid_progress_v1(
     progress: &kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
     claim: Hash64,
@@ -122,7 +129,9 @@ fn palw_fraud_filer_staged_due_v1(
 ) -> u64 {
     use kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1;
     let until = match object {
-        PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. } => terms.open_until_daa,
+        PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. } | PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { .. } => {
+            terms.open_until_daa
+        }
         PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement }
             if matches!(movement.action, PalwConstraintStreamActionV1::BundleOpen { .. }) =>
         {
@@ -2964,8 +2973,23 @@ impl PalwPanelService {
                         header_bundle_dispatched = true;
                         book.cases.get_mut(&claim).expect("pursued").staged_bundle_pending = true;
                         let context = book.cases.get(&claim).and_then(|case| {
-                            case.binding.as_ref().zip(case.public_fp_job_v1()).map(|(binding, job)| (binding.clone(), job.clone()))
+                            case.binding.as_ref().zip(case.public_fp_job_v1()).map(|(binding, job)| (Some(binding.clone()), job.clone()))
                         });
+                        // A TIR claim has no legacy binding: its context is the natively derived view
+                        // (behind `palw_staged_tir_route_v1`; `None` below that fence or for a legacy claim).
+                        let tir = match (target.as_ref(), context.is_none()) {
+                            (Some(target), true) => session
+                                .palw_staged_tir_view_v1(claim, self.class_step_ladder(target.class_id))
+                                .ok()
+                                .flatten()
+                                .map(|(view, header)| FilerTirContextV1 { view, header }),
+                            _ => None,
+                        };
+                        let context = match (context, &tir) {
+                            (Some(context), _) => Some(context),
+                            (None, Some(_)) => session.palw_staged_original_commitment_v1(claim).ok().flatten().map(|o| (None, o.job)),
+                            (None, None) => None,
+                        };
                         if let (Some(target), Some((binding, job))) = (target.as_ref(), context) {
                             let maximum = self
                                 .config
@@ -2979,8 +3003,9 @@ impl PalwPanelService {
                                     book,
                                     claim,
                                     target,
-                                    &binding,
+                                    binding.as_ref(),
                                     &job,
+                                    tir.as_ref(),
                                     progress,
                                     maximum,
                                     file_by,
@@ -3096,8 +3121,9 @@ impl PalwPanelService {
                             book,
                             claim,
                             target,
-                            initial.binding(),
+                            Some(initial.binding()),
                             job,
+                            None,
                             progress,
                             maximum,
                             file_by,
@@ -4278,6 +4304,12 @@ impl PalwPanelService {
                 seed.check(90_000)?;
                 PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed: Box::new(seed) }
             }
+            ConstraintScheduleV1::NativeSeed(mut seed) => {
+                seed.signature =
+                    self.sign(&seed.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no constraint owner signing key")?;
+                seed.check(90_000)?;
+                PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed: Box::new(seed) }
+            }
             ConstraintScheduleV1::Leaf(mut leaf) => {
                 leaf.signature =
                     self.sign(&leaf.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no constraint owner signing key")?;
@@ -4604,6 +4636,367 @@ impl PalwPanelService {
         Ok(None)
     }
 
+    /// **A TIR claim's Constraint stage** (behind `palw_staged_tir_route_v1`): the native selected
+    /// source (no binding on any carrier) until the nominee's tiles are authenticated against the
+    /// view the fold derives, then the native seed and the constrained-selection moves.
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_tir_constraint_stage_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        tir: &FilerTirContextV1,
+        progress: kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        maximum: u64,
+        file_by: Option<u64>,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(Option<PalwConvictionFilingV1>, bool), String> {
+        use constraint_scheduler::{ConstraintScheduleV1, ConstraintSchedulerV1};
+        use kaspa_consensus_core::{
+            palw_constraint_stream_carriage_v1::{
+                PALW_CONSTRAINT_STREAM_CONTEXT_V1, PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1,
+            },
+            palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
+            palw_selected_event_source_v1::PalwSelectedEventCoordinateV1,
+        };
+        use selected_event_scheduler::SelectedEventScheduleV1;
+        let ladder = self.class_step_ladder(target.class_id);
+        let root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job)
+            .ok_or("TIR Constraint job loses its immutable table root")?;
+        let table = crate::palw_public_token_table::public_table_v1(&root, &job.tokenizer_id)
+            .ok_or("TIR Constraint exact public table is unavailable")?;
+        let mut pin = None;
+        if progress.cursor.is_none() {
+            let selected = session
+                .palw_staged_selected_events_v1((claim, progress.reserver))?
+                .ok_or("TIR native selected source is unavailable")?;
+            let bundle = progress.bundle.as_ref().ok_or("TIR selected source has no prepaid owner bundle")?;
+            if selected.now_daa < progress.now_daa
+                || (selected.session.claim, selected.session.owner, selected.session.reserved_daa, selected.session.bundle_id)
+                    != (claim, progress.reserver, progress.reserved_daa, bundle.bundle_id)
+                || selected.context.is_some()
+                || selected.native.as_ref().is_some_and(|native| *native.header != *tir.header || native.job.as_ref() != job)
+            {
+                return Err("TIR selected source changes original owner/bundle, header, job or snapshot".into());
+            }
+            let bootstrap = PalwSelectedEventCoordinateV1 { row: 0, tile: 0 };
+            if book.cases.get(&claim).and_then(|case| case.constraint_plan).is_none()
+                && let Some(event) = selected.session.requests.get(&bootstrap).and_then(|request| request.event.as_ref())
+            {
+                let case = book.cases.get(&claim).ok_or("TIR pursuit disappeared")?;
+                // The verifier's own TIR replay (the backend's `replay_tir_generated_ids_v1`, RFC-0002
+                // lane) names the beat; without it only an id the constraint forbids is nominated.
+                let own = match &case.verdict {
+                    PalwFraudFilerVerdictV1::Mismatch(run) => run.own_output_ids.as_slice(),
+                    _ => &[],
+                };
+                let nominee = constraint_scheduler::nominate_authenticated_ids_view_v1(
+                    target,
+                    job,
+                    &tir.view,
+                    &event.generated_token_ids,
+                    own,
+                    table.clone(),
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                )?;
+                book.cases.get_mut(&claim).ok_or("TIR pursuit disappeared")?.constraint_plan = nominee;
+            }
+            let plan = book.cases.get(&claim).and_then(|case| case.constraint_plan);
+            let mut coordinates = vec![bootstrap];
+            if let Some(plan) = plan {
+                for (row, tile) in plan.selected_tiles_v1() {
+                    let coordinate = PalwSelectedEventCoordinateV1 { row, tile };
+                    if !coordinates.contains(&coordinate) {
+                        coordinates.push(coordinate);
+                    }
+                }
+            }
+            let action = match selected_event_scheduler::request_v1(&selected.session, &coordinates, selected.now_daa)? {
+                SelectedEventScheduleV1::Wait => return Ok((None, false)),
+                SelectedEventScheduleV1::Ready => {
+                    let Some(plan) = plan else { return Ok((None, false)) };
+                    let events = plan
+                        .selected_tiles_v1()
+                        .into_iter()
+                        .map(|(row, tile)| {
+                            selected
+                                .session
+                                .requests
+                                .get(&PalwSelectedEventCoordinateV1 { row, tile })
+                                .and_then(|request| request.event.clone())
+                                .ok_or("TIR selected source lost authenticated accepted material".to_string())
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    pin = Some((constraint_scheduler::native_pin_v1(target, job, &tir.view, plan, &events, ladder)?, plan.witness));
+                    None
+                }
+                SelectedEventScheduleV1::Demand(demand) => Some(PalwConstraintStreamActionV1::NativeSelectedDemand { demand }),
+                SelectedEventScheduleV1::Collect { coordinate, demand_id } => {
+                    Some(PalwConstraintStreamActionV1::SelectedEventCollect { coordinate, demand_id })
+                }
+            };
+            if let Some(action) = action {
+                let demand_due = matches!(action, PalwConstraintStreamActionV1::NativeSelectedDemand { .. }).then(|| {
+                    selected.session.respond_until_daa.saturating_sub(selected.session.minimum_response_span_daa).saturating_sub(1)
+                });
+                let mut movement = PalwConstraintStreamMoveV1 {
+                    version: 1,
+                    claim,
+                    reserver: progress.reserver,
+                    reserved_daa: progress.reserved_daa,
+                    seed_id: selected.session.bundle_id,
+                    phase: PalwConstraintStreamPhaseV1::PrefixCourt,
+                    action,
+                    signature: Vec::new(),
+                };
+                movement.signature =
+                    self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no TIR owner signing key")?;
+                movement.check()?;
+                Self::fraud_filer_stage_queue_v1(
+                    book,
+                    claim,
+                    PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) },
+                    &progress,
+                    progress.now_daa,
+                    court_pending,
+                    court_due,
+                )?;
+                if let Some(due) = demand_due {
+                    court_due.entry((claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false)).and_modify(|held| *held = (*held).min(due));
+                }
+                return Ok((None, false));
+            }
+        }
+        let accepted = if progress.cursor.is_some() { session.palw_staged_owned_native_seed_v1((claim, progress.reserver))? } else { None };
+        let case = book.cases.get_mut(&claim).ok_or("TIR constraint pursuit disappeared")?;
+        case.constraint_stage_pending = true;
+        let worker = case.staged_constraint.get_or_insert_with(|| Arc::new(std::sync::Mutex::new(None))).clone();
+        let target = target.clone();
+        let job = job.clone();
+        let view = tir.view.clone();
+        let header = tir.header.clone();
+        let executor = target.executor_bond;
+        let now = progress.now_daa;
+        let worker_progress = progress.clone();
+        let decision = tokio::task::spawn_blocking(move || {
+            let mut worker = worker.lock().map_err(|_| "TIR constraint worker lock poisoned")?;
+            let build = || match (&accepted, &pin) {
+                (Some(accepted), _) => ConstraintSchedulerV1::reopen_native_v1(
+                    &target,
+                    &job,
+                    &view,
+                    accepted,
+                    table.clone(),
+                    &worker_progress,
+                    ladder,
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                ),
+                (None, Some((pin, witness))) => ConstraintSchedulerV1::open_native_v1(
+                    &target,
+                    &job,
+                    &view,
+                    &header,
+                    pin.clone(),
+                    *witness,
+                    table.clone(),
+                    &worker_progress,
+                    ladder,
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                ),
+                (None, None) => Err("TIR constraint has neither an accepted native seed nor an authenticated pin".to_string()),
+            };
+            if worker.is_none() {
+                *worker = Some(build()?);
+            }
+            match worker.as_mut().expect("built").poll(&worker_progress) {
+                Ok(decision) => Ok(decision),
+                Err(why) if why.contains("cursor") || why.contains("branch") => {
+                    *worker = None;
+                    *worker = Some(build()?);
+                    worker.as_mut().expect("rebuilt").poll(&worker_progress)
+                }
+                Err(why) => Err(why),
+            }
+        })
+        .await
+        .map_err(|e| format!("TIR constraint worker did not finish: {e}"))??;
+        let object = match decision {
+            ConstraintScheduleV1::Finished(reference) => {
+                court_pending
+                    .retain(|(c, round, responder, _)| (*c, *round, *responder) != (claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false));
+                let case = book.cases.get_mut(&claim).ok_or("TIR constraint pursuit disappeared")?;
+                case.constraint_stage_pending = false;
+                case.constraint_done = true;
+                let Some(reference) = reference else {
+                    return Ok((None, true));
+                };
+                let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
+                    claim,
+                    executor,
+                    kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::StagedCourt { reference },
+                    None,
+                    maximum,
+                )
+                .map_err(|e| e.to_string())?;
+                let filing = PalwConvictionFilingV1::of_offence(built.object, claim, file_by, PalwFilingOriginV1::Replay)
+                    .filter(|f| (f.offence_key, f.evidence_id) == (built.offence_id, built.evidence_id))
+                    .ok_or("TIR constraint staged reporter key mismatch")?;
+                return Ok((Some(filing), false));
+            }
+            ConstraintScheduleV1::NativeSeed(mut seed) => {
+                seed.signature =
+                    self.sign(&seed.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no TIR owner signing key")?;
+                seed.check(90_000)?;
+                PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed: Box::new(seed) }
+            }
+            ConstraintScheduleV1::Leaf(mut leaf) => {
+                leaf.signature =
+                    self.sign(&leaf.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no TIR owner signing key")?;
+                leaf.check()?;
+                PalwConsensusObjectV2::PublicCourtStreamLeafV1 { leaf: Box::new(leaf) }
+            }
+            ConstraintScheduleV1::Move(mut movement) => {
+                movement.signature =
+                    self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no TIR owner signing key")?;
+                movement.check()?;
+                PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) }
+            }
+            ConstraintScheduleV1::Seed(_) => return Err("a TIR scheduler never emits a legacy seed".into()),
+        };
+        Self::fraud_filer_stage_queue_v1(book, claim, object, &progress, now, court_pending, court_due)?;
+        Ok((None, false))
+    }
+
+    /// **A TIR claim's tokenizer stage** (behind `palw_staged_tir_route_v1`): the legacy tokenizer
+    /// worker over the natively derived view, signing a native seed.
+    #[allow(clippy::too_many_arguments)]
+    async fn fraud_filer_tir_tokenizer_stage_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        tir: &FilerTirContextV1,
+        progress: kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        maximum: u64,
+        file_by: Option<u64>,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(Option<PalwConvictionFilingV1>, bool), String> {
+        use kaspa_consensus_core::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_CONTEXT_V1;
+        use tokenizer_scheduler::{TokenizerScheduleV1, TokenizerSchedulerV1};
+        if progress.claim != claim || progress.reserver == target.executor_bond {
+            return Err("snapshot is not this outside verifier's accepted TIR claim/clock".into());
+        }
+        let current_daa = progress.now_daa;
+        let deadline = if progress.cursor.is_none() { progress.terms.open_until_daa } else { progress.terms.collect_until_daa };
+        if progress.now_daa >= deadline {
+            return Err("prospective owned TIR tokenizer court clock is closed".into());
+        }
+        let worker = book
+            .cases
+            .get_mut(&claim)
+            .ok_or("TIR pursuit disappeared")?
+            .staged_tokenizer
+            .get_or_insert_with(|| Arc::new(std::sync::Mutex::new(None)))
+            .clone();
+        let backends = self.backends();
+        let chain_classes = self.config.chain_classes;
+        let held_session = session.clone();
+        let executor_bond = target.executor_bond;
+        let target = target.clone();
+        let job = job.clone();
+        let view = tir.view.clone();
+        let header = tir.header.clone();
+        let worker_progress = progress.clone();
+        let original_seed = if matches!(
+            progress.cursor,
+            Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedCursorV1::Tokenizer { .. })
+        ) {
+            session.palw_staged_owned_native_seed_v1((claim, progress.reserver))?.map(|context| *context.seed)
+        } else {
+            None
+        };
+        let decision = tokio::task::spawn_blocking(move || -> Result<TokenizerScheduleV1, String> {
+            let mut worker = worker.lock().map_err(|_| "TIR tokenizer worker lock poisoned")?;
+            let build = || -> Result<TokenizerSchedulerV1, String> {
+                let path = backends
+                    .held_tokenizer_path_or_chain_v1(target.class_id, target.artifact_root, |id| {
+                        if chain_classes { held_session.palw_registered_class_carriage_v1(id) } else { None }
+                    })
+                    .ok_or("outside verifier does not hold registered tokenizer")?;
+                let original = tokenizer_scheduler::TokenizerOriginalV1::Tir { view: &view, header: &header };
+                let table = tokenizer_scheduler::registered_table_of_v1(&target, original, &job)?;
+                TokenizerSchedulerV1::open_native_v1(
+                    &path,
+                    &target,
+                    &view,
+                    &header,
+                    &job,
+                    table,
+                    &worker_progress,
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                    original_seed.as_ref(),
+                )
+            };
+            if worker.is_none() {
+                *worker = Some(build()?);
+            }
+            match worker.as_mut().expect("built").poll(&worker_progress) {
+                Ok(decision) => Ok(decision),
+                Err(why) if why.contains("cursor") || why.contains("branch") => {
+                    *worker = None;
+                    *worker = Some(build()?);
+                    worker.as_mut().expect("rebuilt").poll(&worker_progress)
+                }
+                Err(why) => Err(why),
+            }
+        })
+        .await
+        .map_err(|e| format!("TIR tokenizer blocking worker failed: {e}"))??;
+        let object = match decision {
+            TokenizerScheduleV1::Finished(reference) => {
+                court_pending.retain(|(held, round, responder, _)| {
+                    (*held, *round, *responder) != (claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false)
+                });
+                book.cases.get_mut(&claim).expect("pursued").staged_tokenizer_sent = None;
+                let Some(reference) = reference else {
+                    return Ok((None, true));
+                };
+                let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
+                    claim,
+                    executor_bond,
+                    kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::StagedCourt { reference },
+                    None,
+                    maximum,
+                )
+                .map_err(|e| e.to_string())?;
+                let filing = PalwConvictionFilingV1::of_offence(built.object, claim, file_by, PalwFilingOriginV1::Replay)
+                    .filter(|f| (f.offence_key, f.evidence_id) == (built.offence_id, built.evidence_id))
+                    .ok_or("TIR staged reporter key mismatch")?;
+                return Ok((Some(filing), false));
+            }
+            TokenizerScheduleV1::NativeSeed(mut seed) => {
+                seed.signature = self.sign(&seed.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no staged signing key")?;
+                seed.check(90_000)?;
+                PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed: Box::new(seed) }
+            }
+            TokenizerScheduleV1::Move(mut movement) => {
+                movement.signature =
+                    self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no staged signing key")?;
+                movement.check()?;
+                PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) }
+            }
+            TokenizerScheduleV1::Seed(_) => return Err("a TIR tokenizer scheduler never emits a legacy seed".into()),
+        };
+        Self::fraud_filer_stage_queue_v1(book, claim, object, &progress, current_daa, court_pending, court_due)?;
+        Ok((None, false))
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn fraud_filer_selected_stage_v1(
         &self,
@@ -4795,8 +5188,9 @@ impl PalwPanelService {
         book: &mut PalwFraudFilerBookV1,
         claim: Hash64,
         target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
-        binding: &PalwStepBindingV2,
+        binding: Option<&PalwStepBindingV2>,
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        tir: Option<&FilerTirContextV1>,
         progress: kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
         maximum: u64,
         file_by: Option<u64>,
@@ -4863,6 +5257,47 @@ impl PalwPanelService {
                 return Ok((Some(filing), false));
             }
             BundleScheduleV1::Family { family, progress: child } => {
+                if let Some(tir) = tir {
+                    let result = match family {
+                        PalwStagedFamilyV1::Constraint => {
+                            self.fraud_filer_tir_constraint_stage_v1(
+                                session,
+                                book,
+                                claim,
+                                target,
+                                job,
+                                tir,
+                                child,
+                                maximum,
+                                file_by,
+                                court_pending,
+                                court_due,
+                            )
+                            .await?
+                        }
+                        PalwStagedFamilyV1::Tokenizer => {
+                            self.fraud_filer_tir_tokenizer_stage_v1(
+                                session,
+                                book,
+                                claim,
+                                target,
+                                job,
+                                tir,
+                                child,
+                                maximum,
+                                file_by,
+                                court_pending,
+                                court_due,
+                            )
+                            .await?
+                        }
+                        PalwStagedFamilyV1::PublicPrefix => {
+                            return Err("a TIR claim has no prefix-state family (refused at its native quote)".into());
+                        }
+                    };
+                    return Ok((result.0, false));
+                }
+                let binding = binding.ok_or("a legacy family stage needs its resolved original binding")?;
                 let result = match family {
                     PalwStagedFamilyV1::PublicPrefix => {
                         self.fraud_filer_prefix_stage_v1(
@@ -5091,6 +5526,36 @@ impl PalwPanelService {
             return Err("retained paid authority lacks original accepted owner/seed/clock".into());
         }
         let target = target.ok_or("paid semantic target is unavailable")?;
+        // A TIR claim has no legacy binding: its stages run over the natively derived view
+        // (behind `palw_staged_tir_route_v1`; every stage of a TIR claim is bundled).
+        if let Some((view, header)) = session.palw_staged_tir_view_v1(claim, self.class_step_ladder(target.class_id))? {
+            let original =
+                session.palw_staged_original_commitment_v1(claim)?.ok_or("TIR paid stage lost its native original commitment")?;
+            let bundle = progress.bundle.as_ref().ok_or("a TIR claim's stages are bundled")?;
+            let file_by = Some(bundle.plan.terms.collect_until_daa.saturating_sub(2));
+            let maximum = self
+                .config
+                .court
+                .max_close_bytes()
+                .min(kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES);
+            let tir = FilerTirContextV1 { view, header };
+            return self
+                .fraud_filer_bundle_stage_v1(
+                    session,
+                    book,
+                    claim,
+                    target,
+                    None,
+                    &original.job,
+                    Some(&tir),
+                    progress,
+                    maximum,
+                    file_by,
+                    court_pending,
+                    court_due,
+                )
+                .await;
+        }
         let case = book.cases.get(&claim).ok_or("paid pursuit disappeared")?;
         let held = case.binding.clone().zip(case.public_fp_job_v1().cloned());
         let (binding, job) = match held {
@@ -5113,8 +5578,9 @@ impl PalwPanelService {
                     book,
                     claim,
                     target,
-                    &binding,
+                    Some(&binding),
                     &job,
+                    None,
                     progress,
                     maximum,
                     file_by,
@@ -5548,6 +6014,12 @@ impl PalwPanelService {
                         seed.check(100000)?;
                         PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed: Box::new(seed) }
                     }
+                    TokenizerScheduleV1::NativeSeed(mut seed) => {
+                        seed.signature =
+                            self.sign(&seed.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1).ok_or("no staged signing key")?;
+                        seed.check(90_000)?;
+                        PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed: Box::new(seed) }
+                    }
                     TokenizerScheduleV1::Move(mut movement) => {
                         movement.signature = self
                             .sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1)
@@ -5578,6 +6050,10 @@ impl PalwPanelService {
                 if (movement.claim, movement.reserver, movement.reserved_daa) == (claim, progress.reserver, progress.reserved_daa)
                     && Self::fraud_filer_bundle_control_v1(progress, movement) => {}
             PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed }
+                if progress.seed_id.is_none()
+                    && progress.cursor.is_none()
+                    && (seed.claim, seed.reserver, seed.reserved_daa) == (claim, progress.reserver, progress.reserved_daa) => {}
+            PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { seed }
                 if progress.seed_id.is_none()
                     && progress.cursor.is_none()
                     && (seed.claim, seed.reserver, seed.reserved_daa) == (claim, progress.reserver, progress.reserved_daa) => {}

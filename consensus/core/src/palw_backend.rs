@@ -551,6 +551,34 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this family has no prospective full-width selected source responder".into())
     }
 
+    /// **A TIR claim's selected tiled event** (Constraint source behind `palw_staged_tir_route_v1`):
+    /// the row/tile of the producer's own retained TIR capture (its executor's committed logits
+    /// rows) under the claim's admitted public header. No binding is produced. Only a backend that
+    /// executes TIR FP jobs and retains their logits rows answers (none in-node today: the TIR FP
+    /// execution backend is the RFC-0002 lane's).
+    fn disclose_tir_selected_event_v1(
+        &self,
+        _material: &[u8],
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _row: u32,
+        _tile: u32,
+        _maximum_leaves: u64,
+    ) -> Result<crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1, String> {
+        Err("this family has no TIR capture with committed logits rows".into())
+    }
+
+    /// **An outside verifier's own TIR replay** of a constrained FP job (the beat nominee's
+    /// source): the generated ids the verifier's own registered program selects under the claim's
+    /// admitted header. Only a backend that executes TIR FP jobs answers (none in-node today).
+    fn replay_tir_generated_ids_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_token_ids: &[u32],
+    ) -> Result<Vec<u32>, String> {
+        Err("this family has no TIR FP execution backend".into())
+    }
+
     fn bisect_prefix_state(&self, _material: &[u8], _index: u64) -> Option<Hash64> {
         None
     }
