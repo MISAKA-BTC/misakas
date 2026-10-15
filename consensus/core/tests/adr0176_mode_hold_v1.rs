@@ -473,3 +473,30 @@ fn after_a_halt_and_heartbeat_only_spans_the_budget_releases_and_real_resumes() 
     assert!(matches!(floor.mode, PalwFloorModeV1::Normal { last_blue } if last_blue == resume), "REAL resumes the Normal state");
     w.s.check_consistency().expect("consistent");
 }
+
+#[test]
+fn exit_and_re_registration_wait_for_the_long_view_and_the_liability() {
+    // RFC-0015 §8.3.4 / ADR-0176 D4: the capital that consumed capacity cannot leave (and come back as a fresh bond with a fresh
+    // ledger) while any reservation sits in its long view — 7 days even for a Panel=1-only bond (decision doc C2, lead default) — nor
+    // while its liability holds it. A slash lowers the caps of the next claims; the old consumption stays counted beside them.
+    let p = policy(1);
+    let mut w = World::new(p.clone());
+    w.tick(10);
+    w.try_claim(1, 2_000 * KAS, 10, PalwHoldModeV1::PanelOne, 100 * KAS).unwrap();
+    w.close_all_open(20);
+    for now in [21, DAY + 10, 6 * DAY] {
+        assert!(w.s.withdrawal_holds(&bond(1), now), "the capital is held at {now}");
+    }
+    assert!(!w.s.window_holds(&bond(1), 10 + 7 * DAY), "the long view ends at d + 7 days");
+    w.tick(10 + 7 * DAY);
+    assert!(!w.s.withdrawal_holds(&bond(1), 10 + 7 * DAY), "and the liability (20 + H_L) ended long before");
+    // A slash: the same bond at half its capital — its daily caps halve, the consumption still in its views stays counted.
+    let mut v = World::new(p);
+    v.tick(1);
+    for _ in 0..2 {
+        v.try_claim(2, 2_000 * KAS, 1, PalwHoldModeV1::PanelOne, 0).unwrap();
+    }
+    v.tick(100);
+    assert!(v.try_claim(2, 1_000 * KAS, 100, PalwHoldModeV1::PanelOne, 0).is_ok(), "3/day after the slash: 2 used + 1");
+    assert!(v.try_claim(2, 1_000 * KAS, 101, PalwHoldModeV1::PanelOne, 0).is_err(), "the old consumption counts against the new cap");
+}
