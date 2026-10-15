@@ -12,8 +12,8 @@
 //! * the **binding check** ([`palw_exec_v2_verification_binding_v1`]): the kernel claim the slice names (`slice.evidence_root`) is a
 //!   program claim of the root class's bound kernel class, by the slice's executor, of the slice's job, whose prompt, run and evidence
 //!   are the slice's predecessor, result, output and DA roots, and that has not failed;
-//! * the **outcome** a kernel claim's row says for its slice ([`palw_exec_v2_claim_outcome_v1`]), and the **leg cap** a verified slice
-//!   takes from it ([`palw_exec_v2_leg_cap_v1`]).
+//! * the lifecycle outcome ([`palw_exec_v2_claim_outcome_v1`]), the separate selected-approval credit gate
+//!   ([`palw_exec_v2_selected_approval_v1`]), and the leg cap ([`palw_exec_v2_leg_cap_v1`]).
 //!
 //! The fold (`palw_exec_v2_fold`) reads the rows (the route's tables, the onboarding binding) and applies the outcome; nothing here
 //! reads state. Integer and hash only.
@@ -281,7 +281,8 @@ pub fn palw_exec_v2_prefix_binding_v1(
 pub enum PalwSliceVerificationV1 {
     /// The claim is live and undecided (committed, checking, challengeable, disputed …).
     Pending,
-    /// The claim is Final: the slice is positively verified.
+    /// The claim's lifecycle is Final. EXEC credit additionally requires the
+    /// native selected-approval gate; optimistic expiry alone is insufficient.
     Verified { final_daa: u64 },
     /// The claim was convicted — before or after its Final: the slice is proven false.
     ProvenFalse,
@@ -298,10 +299,8 @@ pub enum PalwSliceVerificationV1 {
 /// route holds a Final claim's reservation in full — it is released only once the horizon has passed (`daa > liability_until`) — so a
 /// Final row reserving nothing at or before its horizon is exactly that forfeit. Past the horizon a released row is still verified.
 pub fn palw_exec_v2_claim_outcome_v1(row: &ClaimRowV1, daa: u64) -> PalwSliceVerificationV1 {
-    // RFC-0015 §9 (2026-10-15): the slice follows the kernel claim through the ONE settlement predicate every reader of a kernel
-    // `Final` uses (`palw_kernel_settlement_v1`), so an OPV claim's slice verifies at its window-rule `Final`, its leg stays held to the
-    // claim's liability horizon (the EXEC horizon), and a conviction after `Final` proves it false — exactly as a Panel-licensed
-    // claim's. Behaviour-preserving: the predicate is this function's former match (the row carries no OPV forfeit flag here).
+    // This preserves the historical settlement view. The fold must apply the
+    // separate native selected-approval gate before issuing EXEC credit.
     use crate::palw_kernel_settlement_v1::{PalwKernelSettlementV1 as K, palw_kernel_claim_settlement_v1};
     match palw_kernel_claim_settlement_v1(&row.life.state, row.convicted, row.reserved, row.liability_until, false, daa) {
         K::Convicted => PalwSliceVerificationV1::ProvenFalse,
@@ -309,6 +308,58 @@ pub fn palw_exec_v2_claim_outcome_v1(row: &ClaimRowV1, daa: u64) -> PalwSliceVer
         K::FinalRevocable { final_daa, .. } | K::Settled { final_daa, .. } => PalwSliceVerificationV1::Verified { final_daa },
         K::Pending => PalwSliceVerificationV1::Pending,
     }
+}
+
+pub(crate) const PALW_EXEC_APPROVAL_KEY_BYTES_V1: usize = std::mem::size_of::<misaka_palw_kernel::hash::Digest>() + 1;
+
+/// Credit view of an already authenticated native route, never a snapshot
+/// validator. The normal Panel-licensed lifecycle is fed by the native selected
+/// receipt tally. An optimistic lifecycle is not that tally: paid claims must
+/// additionally have their canonical paid Final, whose native acceptance and
+/// restore checks require the assigned positive quorum and bound source/rounds.
+/// This relies on those selection rules and their explicit honest-fraction
+/// assumptions, not on timeout, matching replay, or operator identities.
+pub(crate) fn palw_exec_v2_selected_approval_v1(route: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1, claim: &Hash64) -> bool {
+    use crate::palw_claim_challenge_v2::*;
+    use borsh::BorshDeserialize;
+    use misaka_palw_kernel::{claim_paid_v2::PaidClaimEnrollmentV2, rows::*};
+    let claim_id = claim.as_bytes();
+    let Some(raw_claim) = route.rows.get(&(TABLE_CLAIMS_V1, claim_id.to_vec())) else { return false };
+    // The fixed producer/class prefix is identity only. Full ClaimRow decoding,
+    // history validation and lifecycle adjudication are separate native paths.
+    let Some(class) = raw_claim.get(64..128) else { return false };
+    let mut index_key = [0u8; PALW_EXEC_APPROVAL_KEY_BYTES_V1];
+    index_key[0] = PAID_CLAIM_BASE_INDEX_PREFIX_V3;
+    index_key[1..].copy_from_slice(&claim_id);
+    let Some(raw_index) = route.aux.get(&(PAID_CLAIM_ENROLLMENTS_V2, index_key.to_vec())) else {
+        return !route.rows.contains_key(&(TABLE_OPV_CLASSES_V1, class.to_vec()));
+    };
+    let Ok(index) = borsh::from_slice::<PalwPaidClaimIndexV3>(raw_index) else { return false };
+    if index.version != 3 || index.kind != PalwPaidClaimIndexKindV3::BaseClaim || index.owner != claim_id {
+        return false;
+    }
+    let Some(raw_authority) = route.aux.get(&(PAID_CLAIM_ENROLLMENTS_V2, index.target.to_vec())) else { return false };
+    let mut reader = raw_authority.as_slice();
+    let Ok(2u16) = u16::deserialize(&mut reader) else { return false };
+    let encoded_enrollment = reader;
+    let Ok(enrollment) = PaidClaimEnrollmentV2::deserialize(&mut reader) else { return false };
+    if enrollment.version != 2 || enrollment.base_claim != claim_id {
+        return false;
+    }
+    // Hash the original fixed-schema bytes without allocating another encoded
+    // authority, class, program, or checker-candidate population.
+    let enrollment_id = misaka_palw_kernel::hash::id(
+        b"misaka-palw/kernel/paid-claim-enrollment/v2",
+        &encoded_enrollment[..encoded_enrollment.len() - reader.len()],
+    );
+    let Some(raw_final) = route.aux.get(&(PAID_CLAIM_FINALS_V2, enrollment_id.to_vec())) else { return false };
+    let Ok(final_row) = borsh::from_slice::<PalwPaidClaimFinalV2>(raw_final) else { return false };
+    final_row.enrollment == enrollment_id
+        && final_row.base_claim == claim_id
+        && final_row.verification_class == enrollment.class
+        && final_row.signed_lifetime == enrollment.lifetime
+        && final_row.complete_receipts > 0
+        && final_row.completed_rounds > 0
 }
 
 /// **The most a verified slice's executor may be paid for it at the root's settlement** (spec §10.5, as revised by the X8R round-2

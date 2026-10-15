@@ -1,18 +1,8 @@
-//! **RFC-0015 §9 × RFC-0008 v2 on the real node: an EXEC work slice verified by an OPV kernel claim follows the ONE kernel settlement
-//! predicate** (`kaspa_consensus_core::palw_kernel_settlement_v1`) — the same standing the claim read / RPC (`settlement`), the beacon's
-//! Final facts (`finals_read_v1`, RFC-0010 V3's `ChainPanelBeaconHistoryV1`) and the slice's own stage report:
-//!
-//! ```text
-//! committed (Challengeable)          settlement pending          slice Pending
-//! window closed, Final               settlement final-revocable  slice Verified; no selected-approval beacon fact
-//! past liability_until               settlement settled          slice Verified; safe
-//! conviction (pre-Final)             settlement convicted        slice ProvenFalse; beacon fact withdrawn
-//! demanded, unserved, deadline       settlement defaulted        slice Defaulted
-//! ```
-//!
-//! No extra weight or reward anywhere: kernel claims reserve `B = F = 0` (the slice's leg is the EXEC root's, capped at the claim's
-//! reservation). Test source, 2026-10-15; NOT RUN in the change that wrote it (no cargo invocation was allowed). The harness's seams are
-//! the parent module's (`exec_v2_test_admit_class_v1` for the REAL root's admission).
+//! Historical OPV settlement remains readable, but lifecycle Final supplies no
+//! selected approval for EXEC credit, its root Final, or beacon influence.
+//! Conviction/default still adjudicate the dependency. The inherited fixture
+//! uses a test-only REAL admission seam; it is not an all-route acceptance run.
+//! Source controls only: run during consolidated validation.
 use super::*;
 
 /// The claim read's settlement standing and first settled DAA.
@@ -29,10 +19,9 @@ fn beacon_fact_of(cw: &Cw, claim: &Digest) -> Option<(&'static str, misaka_palw_
     Some((f.settlement, work.event))
 }
 
-/// **pending → final-revocable → settled**: an honest slice's OPV kernel claim, read three ways at each step (claim read, beacon
-/// fact, slice stage), agrees with itself; Final is never shown safe before the claim's liability horizon.
+/// Legacy settlement advances while an unapproved EXEC dependency stays Pending.
 #[tokio::test]
-async fn x8_g14_rfc15_a_slice_follows_its_opv_claims_settlement_from_pending_to_final_revocable_to_settled() {
+async fn x8_g14_opv_settlement_never_substitutes_for_selected_exec_approval() {
     let mut cw = active_world().await;
     let mut s = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), 300).await;
     for index in 0..3 {
@@ -57,12 +46,10 @@ async fn x8_g14_rfc15_a_slice_follows_its_opv_claims_settlement_from_pending_to_
     assert_eq!(label, "final-revocable", "Final within liability is revocable, never safe");
     let liability = cw.net.ledger().claims[&k0].liability_until.expect("a Final claim's horizon");
     assert_eq!(from, Some(liability + 1));
-    assert!(matches!(
-        cw.net.chain.tip_state().1.exec_v2_slice_v1(&root_claim, 0).unwrap().stage,
-        PalwWorkSliceStageV2::Verified { .. }
-    ));
+    assert!(matches!(cw.net.chain.tip_state().1.exec_v2_slice_v1(&root_claim, 0).unwrap().stage, PalwWorkSliceStageV2::Pending));
     assert!(beacon_fact_of(&cw, &k0).is_none(), "optimistic settlement supplies no selected-verifier approval");
 
+    assert!(cw.net.chain.tip_state().1.exec_v2_holds_final_v1(&root_claim), "unapproved work cannot release root Final");
     cw.net.beat_to(liability + 1).await;
     assert_eq!(settlement_of(&cw, &k0), ("settled", Some(liability + 1)), "past the horizon, unconvicted: settled");
     // (The slice's stage past the horizon is the EXEC root's business — the REAL root claim's own Final needs the legacy channel this

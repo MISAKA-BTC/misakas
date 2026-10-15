@@ -102,8 +102,10 @@ impl PrivateKernelPaidCheckSpecV4 {
             return Err("checker and serving provider must have distinct native identities".into());
         }
         let _prepare = reserve_native_requests_v1(
-            (3 * std::mem::size_of::<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>() + 64 * std::mem::size_of::<TransactionOutpoint>())
-                as u64,
+            (std::mem::size_of::<PreparedKernelPaidCheckV4>()
+                + 2 * std::mem::size_of::<kaspa_pq_validator_core::ValidatorKey>()
+                + std::mem::size_of::<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>()
+                + 64 * std::mem::size_of::<TransactionOutpoint>()) as u64,
         )
         .map_err(|e| e.to_string())?;
         let checker_seed = seed(&self.checker_key)?;
@@ -191,8 +193,9 @@ fn receipt_from_saved(object: &PalwConsensusObjectV2, checker: PalwBondKeyV2) ->
     if *signer != checker {
         return Err("checker WAL signer differs".into());
     }
-    preflight_native_value_v1::<KernelRouteObjectV1>(bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
-    let decoded = retain_native_value_decode_v1(bytes, || KernelRouteObjectV1::decode(bytes)).map_err(|e| e.to_string())?;
+    let raw = bytes.get(1..).ok_or("checker route version absent")?;
+    preflight_native_value_v1::<KernelRouteObjectV1>(raw, raw.len() as u64).map_err(|e| e.to_string())?;
+    let decoded = retain_native_value_decode_v1(raw, || KernelRouteObjectV1::decode(bytes)).map_err(|e| e.to_string())?;
     match &*decoded {
         KernelRouteObjectV1::PaidClaimV2 {
             object: PaidClaimObjectV2::Receipt { receipt } | PaidClaimObjectV2::RoundReceipt { receipt },

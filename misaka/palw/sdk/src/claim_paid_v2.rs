@@ -370,12 +370,11 @@ pub fn paid_claim_commit_object_derived_v2(
             "a paid checker-dependent claim cannot consume an independent source opt-in",
         ));
     }
-    l.begin_block(commit_daa).map_err(|e| Refusal::new("CLAIM_ADMISSION_INVALID", e.to_string()))?;
-    let inner = KernelRouteObjectV1::CommitClaimSalted { commit: commit.clone(), salt };
-    l.apply_object(&inner, &misaka_palw_kernel::ledger::AuthV1 { signer_bond: commit.producer() })
-        .map_err(|e| Refusal::new("CLAIM_ADMISSION_INVALID", e.to_string()))?;
+    l.try_replay_salted_claim_v4(&commit, &salt, commit.producer(), commit_daa)
+        .map_err(|e| Refusal::new("CLAIM_ADMISSION_INVALID", e))?;
     let subject = l
-        .claim_challenge_subject(&base_claim)
+        .try_claim_challenge_subject_v4(&base_claim)
+        .map_err(|e| Refusal::new("CLAIM_ADMISSION_CAPACITY", e.to_string()))?
         .ok_or_else(|| Refusal::new("CLAIM_SUBJECT_MISSING", "all-target base statement was not admitted"))?;
     paid_claim_commit_object_v2(route, class, job, commit, salt, subject.commitment_root, material_consent, commit_daa)
 }
