@@ -7,6 +7,12 @@
   partition  (§10 T-3) partition, reconnect and a fresh IBD node, with a different per-link delivery delay on every
              link (so the blocks arrive in a different order at every node): one sink, one GHOSTDAG reading of the
              merged blocks, one adopted-claim set, one PALW economic state and one fork-choice standing everywhere.
+  attack     (§10 T-0, the mandatory top-level acceptance) the "300M closed-model / self-Panel" case on a LOCAL CALIBRATION devnet
+             whose ruleset arms Gate C and rule E v2: an adversary group runs a model nobody else can obtain, staffs its own Panels
+             and splits its capital into minimum bonds; honest groups run open models. PASS CRITERION (recorded, never self-labelled):
+             no illegitimate consensus finality — reported SEPARATELY: safe-frontier movement, safe weight, settlement depth,
+             rule-E participation share, settled anchors, reward outflow to adversary payouts — across a reorg (partition and
+             rejoin), a restart (kill/start on the same app dir), pruning progress and a fresh IBD node.
   retired    (§10 T-5) the same partition/IBD drill on a LOCAL CALIBRATION devnet whose ruleset arms DNS retirement,
              rule E, rule E participation v2 and Gate C (a calibration genesis — never a public preset). Additionally:
              no uncertified claim contributes participation, weight, frontier or settled-anchor credit.
@@ -398,6 +404,104 @@ class Drill:
             report['gateC'] = self.gate_c_checks(roles)
         self.report = report
 
+    def adversary_metrics(self, role, adversary_payouts):
+        """The six reported quantities, each from public RPC, attributable to the adversary's claims."""
+        row = self.probe(role)
+        claims = self.claim_rows(row)
+        adversary = {cid: r for cid, r in claims.items() if norm(field(r, 'payout', 'payoutAddress', 'bondPayout')) in adversary_payouts
+                     or field(r, 'adversary') is True}
+        def total(key):
+            return sum(int(field(r, key, default=0) or 0) for r in adversary.values())
+        settlement = self.call(role, 'getPalwSettlement', {'daaScore': 0})
+        premise = field(settlement, 'securityCertificationPremise')
+        if premise is None:
+            raise Blocked('%s does not state the certification premise: Gate C is not in force on this ruleset' % role)
+        frontier_claim = norm(field(row['node'], 'safeFrontierClaim', default=''))
+        return {
+            'safeFrontierMovedByAdversary': bool(frontier_claim) and frontier_claim in adversary,
+            'adversarySafeWeight': total('finalWeight'),
+            'adversaryProvisionalWeight': total('provisionalWeight'),
+            'settlementDepthFromAdversary': sum(1 for r in adversary.values() if field(r, 'securityCertified') is True),
+            'ruleEParticipationCapitalAdversary': total('participationCapital'),
+            'adversarySettledAnchorCredit': total('settledAnchorCredit'),
+            'adversaryRewardOutflow': self.reward_outflow(role, adversary_payouts),
+            'uncertifiedFinalAnchors': field(settlement, 'uncertifiedFinalAnchors', default=0),
+            'premise': premise,
+        }
+
+    def reward_outflow(self, role, payouts):
+        """Sompi paid to adversary payout scripts by the selected chain's coinbases since genesis (bounded by the plan's window)."""
+        dag = self.call(role, 'getBlockDagInfo')
+        chain = self.call(role, 'getVirtualChainFromBlock', {'startHash': self.plan['attack']['window_start'], 'includeAcceptedTransactionIds': False})
+        paid = 0
+        for block_hash in field(chain, 'addedChainBlockHashes', default=[]) or []:
+            txs = field(self.block(role, block_hash), 'transactions', default=[]) or []
+            if txs:
+                for out in field(txs[0], 'outputs', default=[]) or []:
+                    spk = norm(field(field(out, 'scriptPublicKey', default={}), 'scriptPublicKey', 'script', default=''))
+                    if spk in payouts:
+                        paid += int(field(out, 'value', default=0) or 0)
+        assert dag['sink'], 'a sink'
+        return paid
+
+    def assert_no_illegitimate_finality(self, label, metrics):
+        bad = {k: v for k, v in metrics.items() if k not in ('premise', 'uncertifiedFinalAnchors') and v not in (0, False)}
+        assert not bad, '%s: illegitimate consensus credit from the closed model: %r' % (label, bad)
+
+    def scenario_attack(self):
+        spec = self.plan['attack']
+        groups = self.plan['partition']['groups']
+        roles = [r for g in groups for r in g]
+        payouts = {norm(p) for p in spec['adversary_payouts']}
+        assert spec['adversary_bonds'] >= 23_000, 'the ~23,076 minimum-bond split is part of the case'
+        for role in roles:
+            self.start(role)
+        for role in roles:
+            self.wait(lambda role=role: self.probe(role), role + ' RPC startup')
+        self.ruleset(roles)
+        self.mesh(roles)
+        self.fixture('bootstrap')            # calibration genesis: bonds, the closed model, the adversary's split bonds
+        self.fixture('adversary_mining')     # closed-model attempts through self-staffed Panels, voided attempts, a Free-Prompt Final
+        self.fixture('honest_mining')        # open models with independently drawn verifiers attesting
+        report = {'phases': {}}
+        rows = self.wait(lambda: self.converged(roles), 'steady convergence')
+        report['phases']['steady'] = m = self.adversary_metrics(roles[0], payouts)
+        self.assert_no_illegitimate_finality('steady', m)
+        # Reorg: the adversary group is partitioned off, mines alone, and rejoins.
+        self.cut_between(groups[0], groups[1])
+        self.fixture('adversary_mining')
+        self.fixture('honest_mining')
+        for key in list(self.links):
+            self.links[key].enabled.set()
+        self.mesh(roles)
+        rows = self.wait(lambda: self.converged(roles), 'reorg convergence')
+        report['phases']['reorg'] = m = self.adversary_metrics(roles[0], payouts)
+        self.assert_no_illegitimate_finality('reorg', m)
+        # Restart: kill and restart a node on its own app dir.
+        victim = roles[-1]
+        self.kill(victim)
+        self.start(victim)
+        self.wait(lambda: self.probe(victim), victim + ' restart')
+        rows = self.wait(lambda: self.converged(roles), 'restart convergence')
+        report['phases']['restart'] = m = self.adversary_metrics(victim, payouts)
+        self.assert_no_illegitimate_finality('restart', m)
+        # Pruning: the pruning point must advance (bounded progress) though no adversary claim ever certifies.
+        before = rows[0]['dag']['pruningPointHash']
+        self.fixture('advance_to_pruning')
+        self.wait(lambda: self.probe(roles[0])['dag']['pruningPointHash'] != before, 'pruning progress without adversary credit')
+        report['phases']['pruning'] = m = self.adversary_metrics(roles[0], payouts)
+        self.assert_no_illegitimate_finality('pruning', m)
+        # IBD: a fresh node syncs and reads the same.
+        join = self.plan['partition'].get('join_role')
+        if join:
+            self.start(join)
+            self.wait(lambda: self.probe(join), join + ' RPC startup')
+            self.link(join, roles[0])
+            self.wait(lambda: self.converged(roles + [join]), 'IBD convergence')
+            report['phases']['ibd'] = m = self.adversary_metrics(join, payouts)
+            self.assert_no_illegitimate_finality('ibd', m)
+        self.report = report
+
     def gate_c_checks(self, roles):
         """Retired-only: an uncertified claim contributes nothing (as the node reports each claim)."""
         violations = []
@@ -416,7 +520,7 @@ class Drill:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('scenario', choices=['siblings', 'partition', 'retired'])
+    parser.add_argument('scenario', choices=['siblings', 'partition', 'retired', 'attack'])
     parser.add_argument('--plan', required=True)
     parser.add_argument('--out', required=True)
     args = parser.parse_args()
@@ -424,7 +528,7 @@ def main():
     plan = json.loads(raw)
     ports = [n[k] for n in plan['nodes'].values() for k in ('wrpc', 'p2p')]
     assert all(p.startswith('127.0.0.1:') for p in ports) and len(ports) == len(set(ports)), 'distinct owned loopback ports'
-    if args.scenario == 'retired':
+    if args.scenario in ('retired', 'attack'):
         needed = {'palw_dns_retirement_v1', 'palw_fork_choice_rule_e_v1', 'palw_rule_e_participation_v2',
                   'palw_independently_work_certified_v1'}
         assert needed <= set(plan.get('required_fences', [])), 'the retired scenario pins its four fences'
@@ -435,6 +539,8 @@ def main():
     try:
         if args.scenario == 'siblings':
             drill.scenario_siblings()
+        elif args.scenario == 'attack':
+            drill.scenario_attack()
         else:
             drill.scenario_partition(retired=args.scenario == 'retired')
         result.update(status='OBSERVED_CONSISTENT', report=drill.report)
