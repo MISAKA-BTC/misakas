@@ -141,6 +141,9 @@ pub struct PalwTirPublicWorkRulesV1 {
     pub max_target_requests: u64,
     pub max_source_reads: u64,
     pub maximum_probe_copy_bytes: u64,
+    /// Native full planner's executor restoration/working-set + canonical spool
+    /// I/O bound. It must not come from a host Need or a signed caller ceiling.
+    pub maximum_replay_io_bytes: u64,
 }
 impl BorshSerialize for PalwTirPublicWorkRulesV1 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -154,7 +157,8 @@ impl BorshSerialize for PalwTirPublicWorkRulesV1 {
         self.max_eval_terms.serialize(writer)?;
         self.max_target_requests.serialize(writer)?;
         self.max_source_reads.serialize(writer)?;
-        self.maximum_probe_copy_bytes.serialize(writer)
+        self.maximum_probe_copy_bytes.serialize(writer)?;
+        self.maximum_replay_io_bytes.serialize(writer)
     }
 }
 impl BorshDeserialize for PalwTirPublicWorkRulesV1 {
@@ -173,6 +177,7 @@ impl BorshDeserialize for PalwTirPublicWorkRulesV1 {
             max_target_requests: BorshDeserialize::deserialize_reader(reader)?,
             max_source_reads: BorshDeserialize::deserialize_reader(reader)?,
             maximum_probe_copy_bytes: BorshDeserialize::deserialize_reader(reader)?,
+            maximum_replay_io_bytes: BorshDeserialize::deserialize_reader(reader)?,
         })
     }
 }
@@ -239,7 +244,15 @@ pub fn derive_tir_public_work_allocation_v1(
     )?;
     let arithmetic_work = model.arithmetic_mac_eq().checked_mul(u128::from(preparations)).ok_or("TIR arithmetic work overflow")?;
     let traffic_bytes = model.traffic_bytes().checked_mul(u128::from(preparations)).ok_or("TIR traffic work overflow")?;
-    let io = sum(&[product(plan.envelope.maximum_stream_bytes, passes)?, exact(traffic_bytes)?])?;
+    let io = sum(&[
+        product(plan.envelope.maximum_stream_bytes, passes)?,
+        exact(traffic_bytes)?,
+        product(rules.maximum_replay_io_bytes, passes)?,
+    ])?;
+    // Durable publication/reopen may use 16KiB slices even when a native leaf
+    // or a registered model cell is much larger. Pre-debit and local validation
+    // attempts must cover those slices too, not only logical source responses.
+    let attempts = sum(&[attempts, product(io.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64), product(passes, 4)?)?, 32])?;
     let program_parse = product(probes, record.program.len() as u64)?;
     let copy = sum(&[product(io, 8)?, product(product(probes, rules.maximum_probe_copy_bytes)?, 2)?, product(program_parse, 8)?])?;
     let replay_id_words = product(product(positions, p.checked_add(d).ok_or("TIR replay IDs overflow")?)?, preparations)?;
@@ -403,6 +416,518 @@ pub struct PalwTirPublicActorWorkV1 {
     pub restarts: u64,
     /// Another actor's grant cannot overwrite this actor's unclaimed receipt.
     pub last: Option<PalwTirPublicWorkReceiptV1>,
+}
+
+fn apply_work_debit_v1(
+    state: &mut PalwTirPublicWorkStateV1,
+    signer: PalwBondKeyV2,
+    now: u64,
+    debit: &PalwTirPublicWorkDebitV1,
+) -> Result<PalwTirPublicWorkReceiptV1, String> {
+    let actor = state.actors.get(&signer).cloned().unwrap_or_default();
+    let head = actor.last.as_ref().map(|r| r.hash_v1()).transpose()?.unwrap_or_default();
+    if debit.expected_nonce != actor.grants || debit.previous_head != head || debit.work.attempts == 0 {
+        return Err("TIR work debit repeats or changes its protected actor nonce/head".into());
+    }
+    let cumulative = state.spent.checked_add_v1(debit.work)?;
+    let nonce = state.nonce.checked_add(1).ok_or("TIR work nonce overflow")?;
+    let restarts = state.restarts.checked_add(u64::from(debit.restart)).ok_or("TIR restart overflow")?;
+    let mut actor = PalwTirPublicActorWorkV1 {
+        spent: actor.spent.checked_add_v1(debit.work)?,
+        grants: actor.grants.checked_add(1).ok_or("TIR actor nonce overflow")?,
+        restarts: actor.restarts.checked_add(u64::from(debit.restart)).ok_or("TIR actor restart overflow")?,
+        last: None,
+    };
+    if !state.allocation.maximum.covers_v1(&cumulative)
+        || nonce > state.allocation.envelope.maximum_moves
+        || !state.allocation.per_actor.covers_v1(&actor.spent)
+        || actor.grants > state.allocation.per_actor.attempts
+        || actor.restarts > state.allocation.maximum_restarts
+        || restarts
+            > product(
+                state.allocation.maximum_restarts,
+                state.allocation.maximum_custodians.checked_add(1).ok_or("TIR work slots overflow")?,
+            )?
+    {
+        return Err("TIR original cumulative work/restart allocation is exhausted".into());
+    }
+    let receipt = PalwTirPublicWorkReceiptV1 { debit: debit.clone(), accepted_daa: now, cumulative, ordinal: nonce };
+    let head = receipt.hash_v1()?;
+    actor.last = Some(receipt.clone());
+    state.spent = cumulative;
+    state.nonce = nonce;
+    state.head = head;
+    state.restarts = restarts;
+    state.last = Some(receipt.clone());
+    state.actors.insert(signer, actor);
+    Ok(receipt)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirPublicPreparationPlanV1 {
+    pub source_id: Hash64,
+    pub maximum_custodians: u64,
+    pub maximum_restarts: u64,
+    pub maximum_slices_per_actor: u64,
+    pub maximum_prepared_bytes: u64,
+    pub preparation_daa: u64,
+    /// Ready/default metadata and carriers only. Full admission separately pays
+    /// claim-wide cold work AND outside-owner work; their spent pools differ.
+    pub envelope: PalwRenderingResourcePlanV1,
+}
+pub fn derive_tir_public_preparation_plan_v1(
+    source: &PalwTirPublicSourceV1,
+    work: &PalwTirPublicWorkAllocationV1,
+    acquisition: &PalwTirPublicOwnedPlanV1,
+) -> Result<PalwTirPublicPreparationPlanV1, String> {
+    if work.source_id != source.source_id_v1()
+        || acquisition.source_id != source.source_id_v1()
+        || work.maximum_custodians != acquisition.maximum_custodians
+    {
+        return Err("TIR preparation quote changes original source or native custody upper".into());
+    }
+    let p = u64::from(source.header_v1().job_context.declared_prefill_tokens);
+    let d = u64::from(source.decode_count_v1());
+    let positions = p.checked_add(d).and_then(|n| n.checked_sub(1)).ok_or("TIR preparation position overflow")?;
+    let tiles = u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
+    let one_pass = sum(&[source.leaf_count_v1().max(positions), product(d, tiles)?, p.div_ceil(1024), d.div_ceil(1024), 32])?;
+    let durable_slices = product(work.per_actor.io_bytes.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64), 2)?;
+    let maximum_slices_per_actor =
+        product(sum(&[one_pass, durable_slices])?, work.maximum_restarts.checked_add(1).ok_or("TIR preparation retries overflow")?)?;
+    if product(maximum_slices_per_actor, 2)? > work.per_actor.attempts {
+        return Err("TIR work quote does not cover cold/publication pre-debits and validation slices".into());
+    }
+    let upper = acquisition.maximum_custodians;
+    let prep_moves = product(upper, maximum_slices_per_actor.checked_add(1).ok_or("TIR Ready moves overflow")?)?;
+    let moves = sum(&[prep_moves, upper])?;
+    let row = sum(&[4096, product(upper, 1024)?])?;
+    let bytes = product(moves, sum(&[16_384, product(row, 8)?])?)?;
+    let parser = product(bytes, 32)?;
+    let margin = acquisition.config.prices.inclusion_margin_daa;
+    let preparation_daa = sum(&[acquisition.config.acquisition_daa, work.envelope.inclusion_daa, product(prep_moves, margin)?])?;
+    let envelope = PalwRenderingResourcePlanV1 {
+        prefix_tokens: 0,
+        vocab: source.vocab_v1(),
+        maximum_stream_bytes: bytes,
+        maximum_stream_leaves: moves,
+        maximum_eog_bytes: 0,
+        maximum_moves: moves,
+        maximum_parser_steps: parser,
+        maximum_blake_blocks: parser.div_ceil(128),
+        inclusion_daa: product(moves, margin)?,
+        row_bytes: row,
+        resident_ram_bytes: product(row, 8)?,
+        rent_sompi: sum(&[
+            product(bytes, acquisition.config.prices.rent_per_stream_byte)?,
+            product(row, acquisition.config.prices.rent_per_row_byte)?,
+            product(parser, acquisition.config.prices.rent_per_parser_step)?,
+        ])?,
+        deposit_sompi: product(moves, acquisition.config.prices.deposit_per_move)?,
+    };
+    Ok(PalwTirPublicPreparationPlanV1 {
+        source_id: source.source_id_v1(),
+        maximum_custodians: upper,
+        maximum_restarts: work.maximum_restarts,
+        maximum_slices_per_actor,
+        maximum_prepared_bytes: work.per_actor.io_bytes,
+        preparation_daa,
+        envelope,
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirPublicPreparationContractV1 {
+    pub claim: Hash64,
+    pub allocation_id: Hash64,
+    pub source_id: Hash64,
+    pub original_accepted_daa: u64,
+    pub preparation_until_daa: u64,
+    pub collect_until_daa: u64,
+    pub material_until_daa: u64,
+    pub producer: PalwBondKeyV2,
+    pub custodians: BTreeSet<PalwBondKeyV2>,
+    pub drawn_panel: BTreeSet<PalwBondKeyV2>,
+    pub plan: PalwTirPublicPreparationPlanV1,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirPublicReadyV1 {
+    pub descriptor: crate::palw_backend::PalwTirPublicPreparedDescriptorV1,
+    pub accepted_daa: u64,
+    pub work_receipt: Hash64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirPublicPreparationV1 {
+    contract: PalwTirPublicPreparationContractV1,
+    work: PalwTirPublicWorkStateV1,
+    ready: BTreeMap<PalwBondKeyV2, PalwTirPublicReadyV1>,
+    defaulted: BTreeSet<PalwBondKeyV2>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwTirPublicPreparationDefaultV1 {
+    pub claim: Hash64,
+    pub allocation_id: Hash64,
+    pub source_id: Hash64,
+    pub actor: PalwBondKeyV2,
+    pub original_accepted_daa: u64,
+    pub preparation_until_daa: u64,
+}
+impl PalwTirPublicPreparationV1 {
+    /// Mandatory contextual ingress: cap the carried bytes BEFORE decoding and
+    /// check every collection count against the caller's actual native upper,
+    /// not the self-declared plan. Generic snapshot Deserialize is not this API.
+    pub fn decode_bounded_v1(bytes: &[u8], native_upper: u64, native_row_bytes: u64) -> Result<Self, String> {
+        if bytes.len() as u64 > native_row_bytes {
+            return Err("TIR preparation exceeds native byte cap before decoding".into());
+        }
+        fn set<R: std::io::Read>(r: &mut R, upper: u64) -> Result<BTreeSet<PalwBondKeyV2>, String> {
+            let count = u32::deserialize_reader(r).map_err(|e| e.to_string())?;
+            if u64::from(count) > upper {
+                return Err("TIR preparation signer count exceeds native upper".into());
+            }
+            let mut result = BTreeSet::new();
+            for _ in 0..count {
+                let key = PalwBondKeyV2::deserialize_reader(r).map_err(|e| e.to_string())?;
+                if result.last().is_some_and(|last| *last >= key) {
+                    return Err("TIR preparation signers are not canonical".into());
+                }
+                result.insert(key);
+            }
+            Ok(result)
+        }
+        fn map<R: std::io::Read, V: BorshDeserialize>(r: &mut R, upper: u64) -> Result<BTreeMap<PalwBondKeyV2, V>, String> {
+            let count = u32::deserialize_reader(r).map_err(|e| e.to_string())?;
+            if u64::from(count) > upper {
+                return Err("TIR preparation map exceeds native upper before allocation".into());
+            }
+            let mut result = BTreeMap::new();
+            for _ in 0..count {
+                let key = PalwBondKeyV2::deserialize_reader(r).map_err(|e| e.to_string())?;
+                if result.last_key_value().is_some_and(|(last, _)| *last >= key) {
+                    return Err("TIR preparation map is not canonical".into());
+                }
+                result.insert(key, V::deserialize_reader(r).map_err(|e| e.to_string())?);
+            }
+            Ok(result)
+        }
+        let mut r = bytes;
+        macro_rules! read {
+            () => {
+                BorshDeserialize::deserialize_reader(&mut r).map_err(|e| e.to_string())?
+            };
+        }
+        let contract = PalwTirPublicPreparationContractV1 {
+            claim: read!(),
+            allocation_id: read!(),
+            source_id: read!(),
+            original_accepted_daa: read!(),
+            preparation_until_daa: read!(),
+            collect_until_daa: read!(),
+            material_until_daa: read!(),
+            producer: read!(),
+            custodians: set(&mut r, native_upper)?,
+            drawn_panel: set(&mut r, native_upper)?,
+            plan: read!(),
+        };
+        if contract.plan.maximum_custodians > native_upper {
+            return Err("TIR preparation plan exceeds actual native signer capacity".into());
+        }
+        let allocation: PalwTirPublicWorkAllocationV1 = read!();
+        if allocation.maximum_custodians > native_upper {
+            return Err("TIR preparation work exceeds actual native signer capacity".into());
+        }
+        let work = PalwTirPublicWorkStateV1 {
+            allocation,
+            spent: read!(),
+            nonce: read!(),
+            head: read!(),
+            restarts: read!(),
+            last: read!(),
+            actors: map(&mut r, native_upper)?,
+        };
+        let ready = map(&mut r, native_upper)?;
+        let defaulted = set(&mut r, native_upper)?;
+        if !r.is_empty() {
+            return Err("TIR preparation has trailing native metadata bytes".into());
+        }
+        let value = Self { contract, work, ready, defaulted };
+        value.check_v1()?;
+        Ok(value)
+    }
+    /// Pure structural constructor, NOT custody qualification or native Open.
+    /// Native admission must authenticate the ORIGINAL full allocation and the
+    /// new P/Valid grants before retaining this original-clock contract.
+    pub fn new_v1(
+        contract: PalwTirPublicPreparationContractV1,
+        source: &PalwTirPublicSourceV1,
+        allocation: PalwTirPublicWorkAllocationV1,
+        acquisition: &PalwTirPublicOwnedPlanV1,
+    ) -> Result<Self, String> {
+        if contract.claim == Hash64::default()
+            || contract.allocation_id == Hash64::default()
+            || contract.source_id != source.source_id_v1()
+            || contract.plan != derive_tir_public_preparation_plan_v1(source, &allocation, acquisition)?
+            || contract.original_accepted_daa.checked_add(contract.plan.preparation_daa) != Some(contract.preparation_until_daa)
+            || contract.preparation_until_daa >= contract.collect_until_daa
+            || contract.collect_until_daa > contract.material_until_daa
+            || !contract.custodians.contains(&contract.producer)
+            || contract.custodians.len() as u64 > contract.plan.maximum_custodians
+            || contract.drawn_panel.len() as u64 > contract.plan.maximum_custodians
+            || contract.custodians.iter().any(|actor| *actor != contract.producer && !contract.drawn_panel.contains(actor))
+        {
+            return Err("TIR preparation changes original claim/clock/qualified literal custody/quote".into());
+        }
+        Ok(Self {
+            contract,
+            work: PalwTirPublicWorkStateV1 {
+                allocation,
+                spent: Default::default(),
+                nonce: 0,
+                head: Hash64::default(),
+                restarts: 0,
+                last: None,
+                actors: BTreeMap::new(),
+            },
+            ready: BTreeMap::new(),
+            defaulted: BTreeSet::new(),
+        })
+    }
+    pub fn contract_v1(&self) -> &PalwTirPublicPreparationContractV1 {
+        &self.contract
+    }
+    pub fn pending_signers_v1(&self) -> Vec<PalwBondKeyV2> {
+        self.contract
+            .custodians
+            .iter()
+            .copied()
+            .filter(|actor| !self.ready.contains_key(actor) && !self.defaulted.contains(actor))
+            .collect()
+    }
+    pub fn check_v1(&self) -> Result<(), String> {
+        let c = &self.contract;
+        if c.claim == Hash64::default()
+            || c.allocation_id == Hash64::default()
+            || c.source_id != c.plan.source_id
+            || c.original_accepted_daa.checked_add(c.plan.preparation_daa) != Some(c.preparation_until_daa)
+            || c.preparation_until_daa >= c.collect_until_daa
+            || c.collect_until_daa > c.material_until_daa
+            || c.custodians.len() as u64 > c.plan.maximum_custodians
+            || !c.custodians.contains(&c.producer)
+            || c.drawn_panel.len() as u64 > c.plan.maximum_custodians
+            || c.custodians.iter().any(|a| *a != c.producer && !c.drawn_panel.contains(a))
+            || self.work.allocation.maximum_custodians != c.plan.maximum_custodians
+            || self.work.allocation.maximum_restarts != c.plan.maximum_restarts
+            || self.work.allocation.source_id != c.source_id
+            || self.work.allocation.maximum
+                != self
+                    .work
+                    .allocation
+                    .per_actor
+                    .checked_mul_v1(c.plan.maximum_custodians.checked_add(1).ok_or("TIR preparation work slots overflow")?)?
+            || self.work.nonce > self.work.allocation.envelope.maximum_moves
+            || self.ready.keys().chain(self.defaulted.iter()).any(|a| !c.custodians.contains(a))
+            || self.defaulted.iter().any(|a| self.ready.contains_key(a))
+            || self.work.actors.len() > c.custodians.len()
+            || !self.work.allocation.maximum.covers_v1(&self.work.spent)
+        {
+            return Err("TIR claim-wide preparation changes fixed contract, duties or cumulative work".into());
+        }
+        let mut spent = PalwTirPublicWorkV1::default();
+        let mut grants = 0u64;
+        let mut restarts = 0u64;
+        for (actor, lane) in &self.work.actors {
+            if !c.custodians.contains(actor)
+                || !self.work.allocation.per_actor.covers_v1(&lane.spent)
+                || lane.grants > c.plan.maximum_slices_per_actor
+                || lane.restarts > c.plan.maximum_restarts
+                || lane.last.as_ref().is_none_or(|r| {
+                    r.debit.scope.actor != *actor
+                        || r.debit.scope.phase != PalwTirPublicWorkPhaseV1::Capture
+                        || r.debit.scope.source_id != c.source_id
+                        || r.debit.scope.claim != c.claim
+                        || r.debit.scope.bundle_id != c.allocation_id
+                        || r.debit.scope.owner != c.producer
+                        || r.debit.scope.reserved_daa != c.original_accepted_daa
+                        || r.debit.scope.turn != 0
+                        || r.debit.scope.request != (PalwTirPublicRequestV1::StepLeaf { index: 0 })
+                        || r.debit.scope.input_head != c.source_id
+                        || r.debit.history.is_some()
+                        || r.ordinal == 0
+                        || r.ordinal > self.work.nonce
+                        || !self.work.spent.covers_v1(&r.cumulative)
+                        || r.debit.expected_nonce.checked_add(1) != Some(lane.grants)
+                        || r.accepted_daa < c.original_accepted_daa
+                        || r.accepted_daa >= c.preparation_until_daa
+                })
+            {
+                return Err("TIR preparation work changes literal signer or original preparation phase".into());
+            }
+            spent = spent.checked_add_v1(lane.spent)?;
+            grants = grants.checked_add(lane.grants).ok_or("TIR preparation grants overflow")?;
+            restarts = restarts.checked_add(lane.restarts).ok_or("TIR preparation restarts overflow")?;
+        }
+        if spent != self.work.spent
+            || grants != self.work.nonce
+            || restarts != self.work.restarts
+            || self.work.last.as_ref().map(|r| r.hash_v1()).transpose()?.unwrap_or_default() != self.work.head
+            || self.work.last.as_ref().is_some_and(|r| r.ordinal != self.work.nonce || r.cumulative != self.work.spent)
+            || (self.work.nonce == 0) != self.work.last.is_none()
+        {
+            return Err("TIR preparation work receipt/spent reconstruction mismatch".into());
+        }
+        for (actor, ready) in &self.ready {
+            if ready.accepted_daa < c.original_accepted_daa
+                || ready.accepted_daa >= c.preparation_until_daa
+                || ready.descriptor.source_id != c.source_id
+                || ready.descriptor.material_until_daa != c.material_until_daa
+                || ready.descriptor.version != 1
+                || ready.descriptor.manifest_digest == Hash64::default()
+                || ready.descriptor.step_leaf_count == 0
+                || ready.descriptor.vocab == 0
+                || ready.descriptor.retained_bytes == 0
+                || ready.descriptor.retained_bytes > c.plan.maximum_prepared_bytes
+                || self.work.actors.get(actor).and_then(|a| a.last.as_ref()).map(|r| r.hash_v1()).transpose()?
+                    != Some(ready.work_receipt)
+            {
+                return Err("TIR Ready changes fixed source/retention/debit/original deadline".into());
+            }
+        }
+        Ok(())
+    }
+    pub fn check_source_v1(&self, source: &PalwTirPublicSourceV1, acquisition: &PalwTirPublicOwnedPlanV1) -> Result<(), String> {
+        self.check_v1()?;
+        if self.contract.source_id != source.source_id_v1()
+            || self.contract.plan != derive_tir_public_preparation_plan_v1(source, &self.work.allocation, acquisition)?
+        {
+            return Err("TIR preparation differs from original native source/clock quote".into());
+        }
+        let h = source.header_v1();
+        for ready in self.ready.values() {
+            let d = &ready.descriptor;
+            if d.class_id != h.job_context.shape_profile_id
+                || d.artifact_root != h.artifact_root
+                || d.execution_root != h.committed_execution_root
+                || d.trace_root != h.full_logits_trace_root
+                || d.step_root != h.step_merkle_root
+                || d.step_leaf_count != source.leaf_count_v1()
+                || d.decode_count != source.decode_count_v1()
+                || d.vocab != source.vocab_v1()
+            {
+                return Err("TIR Ready descriptor changes original authenticated roots or index geometry".into());
+            }
+        }
+        Ok(())
+    }
+    pub fn work_v1(&self) -> &PalwTirPublicWorkStateV1 {
+        &self.work
+    }
+    pub fn ready_v1(&self, actor: &PalwBondKeyV2) -> Option<&PalwTirPublicReadyV1> {
+        self.ready.get(actor)
+    }
+    pub fn defaulted_v1(&self, actor: &PalwBondKeyV2) -> bool {
+        self.defaulted.contains(actor)
+    }
+    pub fn capture_debit_v1(
+        &mut self,
+        source: &PalwTirPublicSourceV1,
+        signer: PalwBondKeyV2,
+        now: u64,
+        debit: &PalwTirPublicWorkDebitV1,
+    ) -> Result<PalwTirPublicWorkReceiptV1, String> {
+        let c = &self.contract;
+        let s = &debit.scope;
+        source.check_request_v1(&s.request)?;
+        if now < c.original_accepted_daa
+            || now >= c.preparation_until_daa
+            || !c.custodians.contains(&signer)
+            || self.ready.contains_key(&signer)
+            || self.defaulted.contains(&signer)
+            || s.phase != PalwTirPublicWorkPhaseV1::Capture
+            || s.claim != c.claim
+            || s.bundle_id != c.allocation_id
+            || s.source_id != c.source_id
+            || source.source_id_v1() != c.source_id
+            || s.turn != 0
+            || s.actor != signer
+            || s.owner != c.producer
+            || s.reserved_daa != c.original_accepted_daa
+            || s.input_head != c.source_id
+            || s.request != (PalwTirPublicRequestV1::StepLeaf { index: 0 })
+            || debit.history.is_some()
+            || self.work.actors.get(&signer).map_or(0, |a| a.grants) >= c.plan.maximum_slices_per_actor
+        {
+            return Err("TIR cold preparation is outside its fixed original claim clock/literal source/actor/slice budget".into());
+        }
+        apply_work_debit_v1(&mut self.work, signer, now, debit)
+    }
+    pub fn mark_ready_v1(
+        &mut self,
+        source: &PalwTirPublicSourceV1,
+        signer: PalwBondKeyV2,
+        now: u64,
+        descriptor: crate::palw_backend::PalwTirPublicPreparedDescriptorV1,
+    ) -> Result<(), String> {
+        let c = &self.contract;
+        let h = source.header_v1();
+        if now < c.original_accepted_daa
+            || now >= c.preparation_until_daa
+            || !c.custodians.contains(&signer)
+            || self.ready.contains_key(&signer)
+            || self.defaulted.contains(&signer)
+            || source.source_id_v1() != c.source_id
+            || descriptor.version != 1
+            || descriptor.source_id != c.source_id
+            || descriptor.class_id != h.job_context.shape_profile_id
+            || descriptor.artifact_root != h.artifact_root
+            || descriptor.execution_root != h.committed_execution_root
+            || descriptor.trace_root != h.full_logits_trace_root
+            || descriptor.step_root != h.step_merkle_root
+            || descriptor.step_leaf_count != source.leaf_count_v1()
+            || descriptor.decode_count != source.decode_count_v1()
+            || descriptor.vocab != source.vocab_v1()
+            || descriptor.material_until_daa != c.material_until_daa
+            || descriptor.manifest_digest == Hash64::default()
+            || descriptor.retained_bytes == 0
+            || descriptor.retained_bytes > c.plan.maximum_prepared_bytes
+        {
+            return Err(
+                "TIR Ready changes original source/index geometry/material horizon or misses fixed preparation deadline".into()
+            );
+        }
+        let receipt =
+            self.work.actors.get(&signer).and_then(|a| a.last.as_ref()).ok_or("TIR Ready has no paid preparation debit")?.hash_v1()?;
+        self.ready.insert(signer, PalwTirPublicReadyV1 { descriptor, accepted_daa: now, work_receipt: receipt });
+        Ok(())
+    }
+    /// A single outside bonded observer can collect EACH missing signer. No
+    /// all-Panel readiness vote or outside-owner preparation promise is needed.
+    /// The native caller still authenticates the collector's active bond.
+    pub fn collect_v1(
+        &mut self,
+        collector: PalwBondKeyV2,
+        actor: PalwBondKeyV2,
+        now: u64,
+    ) -> Result<PalwTirPublicPreparationDefaultV1, String> {
+        let c = &self.contract;
+        if collector == c.producer
+            || c.drawn_panel.contains(&collector)
+            || !c.custodians.contains(&actor)
+            || now < c.preparation_until_daa
+            || now >= c.collect_until_daa
+            || self.ready.contains_key(&actor)
+            || self.defaulted.contains(&actor)
+        {
+            return Err("TIR preparation collect is early/late/repeated, self-Panel or names no missing literal duty".into());
+        }
+        self.defaulted.insert(actor);
+        Ok(PalwTirPublicPreparationDefaultV1 {
+            claim: c.claim,
+            allocation_id: c.allocation_id,
+            source_id: c.source_id,
+            actor,
+            original_accepted_daa: c.original_accepted_daa,
+            preparation_until_daa: c.preparation_until_daa,
+        })
+    }
 }
 
 /// Conservative full-source acquisition, NOT a proof of the canonical sparse
@@ -783,6 +1308,8 @@ pub struct PalwTirPublicOwnedV1 {
     spent: PalwTirPublicSpentV1,
     history: History,
     work: Option<PalwTirPublicWorkStateV1>,
+    preparation: Option<PalwTirPublicPreparationReferenceV1>,
+    prepared_responders: Option<BTreeSet<PalwBondKeyV2>>,
 }
 /// No raw bytes, growing chunk list, or deserialized authenticated marker.
 /// Only native authenticated journal apply/revert may restore a checkpoint.
@@ -793,6 +1320,17 @@ pub struct PalwTirPublicOwnedCheckpointV1 {
     spent: PalwTirPublicSpentV1,
     history: History,
     work: Option<PalwTirPublicWorkStateV1>,
+    preparation: Option<PalwTirPublicPreparationReferenceV1>,
+    prepared_responders: Option<BTreeSet<PalwBondKeyV2>>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTirPublicPreparationReferenceV1 {
+    pub claim: Hash64,
+    pub allocation_id: Hash64,
+    pub source_id: Hash64,
+    pub original_accepted_daa: u64,
+    pub preparation_until_daa: u64,
+    pub material_until_daa: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwTirPublicDefaultV1 {
@@ -824,6 +1362,8 @@ pub enum PalwTirPublicOwnedActionV1 {
     Finish { demand_id: Hash64, answerer: PalwBondKeyV2 },
     Collect { demand_id: Hash64 },
     WorkDebit(PalwTirPublicWorkDebitV1),
+    PreparationReady { descriptor: crate::palw_backend::PalwTirPublicPreparedDescriptorV1 },
+    PreparationCollect { actor: PalwBondKeyV2 },
 }
 impl BorshDeserialize for PalwTirPublicOwnedActionV1 {
     fn deserialize_reader<R: std::io::Read>(r: &mut R) -> std::io::Result<Self> {
@@ -865,6 +1405,8 @@ impl BorshDeserialize for PalwTirPublicOwnedActionV1 {
             },
             5 => Self::Collect { demand_id: BorshDeserialize::deserialize_reader(r)? },
             6 => Self::WorkDebit(BorshDeserialize::deserialize_reader(r)?),
+            7 => Self::PreparationReady { descriptor: BorshDeserialize::deserialize_reader(r)? },
+            8 => Self::PreparationCollect { actor: BorshDeserialize::deserialize_reader(r)? },
             _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown TIR acquisition action")),
         })
     }
@@ -876,8 +1418,66 @@ pub enum PalwTirPublicOwnedEffectV1 {
     Finished(PalwTirPublicFinishEffectV1),
     Default(PalwTirPublicDefaultV1),
     WorkDebited(PalwTirPublicWorkReceiptV1),
+    PreparationReady(PalwBondKeyV2),
+    PreparationDefault(PalwTirPublicPreparationDefaultV1),
 }
 impl PalwTirPublicOwnedV1 {
+    /// Only original-deadline Ready actors inherit short response duties.
+    /// Non-Ready actors have the separate, once-only preparation default.
+    pub fn response_custodians_v1(&self) -> &BTreeSet<PalwBondKeyV2> {
+        self.prepared_responders.as_ref().unwrap_or(&self.contract.custodians)
+    }
+    pub fn check_preparation_v1(&self, preparation: &PalwTirPublicPreparationV1) -> Result<(), String> {
+        let c = preparation.contract_v1();
+        let reference = self.preparation.ok_or("TIR owner has no shared preparation reference")?;
+        if reference.claim != c.claim
+            || reference.allocation_id != c.allocation_id
+            || reference.source_id != c.source_id
+            || reference.original_accepted_daa != c.original_accepted_daa
+            || reference.preparation_until_daa != c.preparation_until_daa
+            || reference.material_until_daa != c.material_until_daa
+            || self.prepared_responders.as_ref() != Some(&preparation.ready.keys().copied().collect())
+        {
+            return Err("TIR response duties differ from current original-deadline Ready state".into());
+        }
+        Ok(())
+    }
+    pub fn preparation_v1(&self) -> Option<PalwTirPublicPreparationReferenceV1> {
+        self.preparation
+    }
+    pub fn bind_preparation_v1(
+        &mut self,
+        source: &PalwTirPublicSourceV1,
+        preparation: &PalwTirPublicPreparationV1,
+    ) -> Result<(), String> {
+        self.source(source)?;
+        preparation.check_v1()?;
+        let c = preparation.contract_v1();
+        if self.preparation.is_some()
+            || self.pending.is_some()
+            || self.spent.moves != 1
+            || c.claim != self.contract.claim
+            || c.allocation_id != self.contract.bundle_id
+            || c.source_id != self.contract.source_id
+            || c.original_accepted_daa != self.contract.terms.accepted_daa
+            || c.material_until_daa != self.contract.terms.material_until_daa
+            || self.contract.reserved_daa < c.preparation_until_daa
+            || self.contract.custodians != c.custodians
+            || self.contract.producer != c.producer
+        {
+            return Err("TIR owner cannot reset preparation or substitute original claim-wide readiness scope".into());
+        }
+        self.preparation = Some(PalwTirPublicPreparationReferenceV1 {
+            claim: c.claim,
+            allocation_id: c.allocation_id,
+            source_id: c.source_id,
+            original_accepted_daa: c.original_accepted_daa,
+            preparation_until_daa: c.preparation_until_daa,
+            material_until_daa: c.material_until_daa,
+        });
+        self.prepared_responders = Some(preparation.ready.keys().copied().collect());
+        Ok(())
+    }
     /// A future native full-SUM admission may install this ONCE before any
     /// source movement. This is not a public action or a live admission door.
     /// State-aware readers must rederive it from the retained registered class.
@@ -946,6 +1546,9 @@ impl PalwTirPublicOwnedV1 {
         self.source(source)?;
         self.original_clock(now)?;
         self.work_scope_v1(source, signer, &debit.scope)?;
+        if self.preparation.is_some() && debit.scope.phase == PalwTirPublicWorkPhaseV1::Capture {
+            return Err("TIR owner DA turn cannot reopen claim-wide cold preparation".into());
+        }
         if matches!(
             debit.scope.phase,
             PalwTirPublicWorkPhaseV1::Capture | PalwTirPublicWorkPhaseV1::Response | PalwTirPublicWorkPhaseV1::Ids
@@ -959,6 +1562,7 @@ impl PalwTirPublicOwnedV1 {
             if p.collected || now < p.opened_daa || now >= p.respond_until_daa || p.request != request {
                 return Err("TIR preparation work changes current request or original response deadline".into());
             }
+            self.response_clock(signer, p.demand_id, now)?;
         }
         let turn = self.active_v1().map_or(self.spent.turns, |p| p.turn);
         let state = self.work.as_ref().ok_or("TIR work has no original funded native allocation")?;
@@ -1048,6 +1652,8 @@ impl PalwTirPublicOwnedV1 {
             spent: PalwTirPublicSpentV1 { moves: 1, ..Default::default() },
             history: History { count: 0, peaks: [None; 64] },
             work: None,
+            preparation: None,
+            prepared_responders: None,
         })
     }
     pub fn contract_v1(&self) -> &PalwTirPublicContractV1 {
@@ -1075,6 +1681,8 @@ impl PalwTirPublicOwnedV1 {
             spent: self.spent,
             history: self.history.clone(),
             work: self.work.clone(),
+            preparation: self.preparation,
+            prepared_responders: self.prepared_responders.clone(),
         })
     }
     pub fn restore_checkpoint_v1(
@@ -1093,6 +1701,9 @@ impl PalwTirPublicOwnedV1 {
             return Err("TIR checkpoint changes immutable work allocation".into());
         }
         candidate.work = cp.work.clone();
+        if candidate.preparation != cp.preparation || candidate.prepared_responders != cp.prepared_responders {
+            return Err("TIR checkpoint changes original shared preparation reference".into());
+        }
         candidate.check_v1(source)?;
         *self = candidate;
         Ok(())
@@ -1141,19 +1752,49 @@ impl PalwTirPublicOwnedV1 {
         Ok(())
     }
     pub fn response_span_v1(&self, source: &PalwTirPublicSourceV1, request: PalwTirPublicRequestV1) -> Result<u64, String> {
-        // NOT an activation-ready paid-work deadline: this legacy component
-        // prices source carriers, not the new WorkDebit carriers or N-slice cold
-        // capture preparation. Native Open must first fix a preparation/Ready
-        // phase with its original clock, then price response work and inclusion
-        // in each short DA turn. A global SUM alone does not close that gap.
+        // Bound owner rows inherit the fixed ORIGINAL preparation barrier and
+        // price warm response work below. Unbound legacy rows retain their old
+        // span and cannot be reinterpreted as the new native full-SUM route.
         self.source(source)?;
         let (bytes, _) = request_bound(source, request)?;
-        let slots = (self.contract.custodians.len() as u64).checked_add(1).ok_or("TIR slot count overflow")?;
+        let slots = (self.response_custodians_v1().len() as u64).checked_add(1).ok_or("TIR slot count overflow")?;
         let moves = sum(&[product(slots, bytes.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64) + 2)?, 1])?;
-        sum(&[self.contract.plan.config.acquisition_daa, product(moves, self.contract.plan.config.prices.inclusion_margin_daa)?])
+        let work_moves = if self.preparation.is_some() {
+            // Warm reopen authenticates only the durable manifest/IDs, never N
+            // cold leaves or a model replay. Include one pre-debit per warm
+            // slice, response build/body hash and each Begin/Part/Finish build.
+            let warm = sum(&[u64::from(source.decode_count_v1()).div_ceil(1024), 8])?;
+            let ids = if matches!(request, PalwTirPublicRequestV1::Ids { offset: 0 }) {
+                product(u64::from(source.decode_count_v1()).div_ceil(1024), 2)?
+            } else {
+                0
+            };
+            product(slots, sum(&[warm, ids, bytes.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64), 6])?)?
+        } else {
+            0
+        };
+        sum(&[
+            self.contract.plan.config.acquisition_daa,
+            product(sum(&[moves, work_moves])?, self.contract.plan.config.prices.inclusion_margin_daa)?,
+        ])
     }
     pub fn check_v1(&self, source: &PalwTirPublicSourceV1) -> Result<(), String> {
         self.contract.check_v1(source)?;
+        if self.preparation.is_some() != self.prepared_responders.is_some()
+            || self.prepared_responders.as_ref().is_some_and(|s| !s.is_subset(&self.contract.custodians))
+        {
+            return Err("TIR inherited response set changes original preparation scope".into());
+        }
+        if self.preparation.is_some_and(|p| {
+            p.claim != self.contract.claim
+                || p.allocation_id != self.contract.bundle_id
+                || p.source_id != self.contract.source_id
+                || p.original_accepted_daa != self.contract.terms.accepted_daa
+                || p.material_until_daa != self.contract.terms.material_until_daa
+                || self.contract.reserved_daa < p.preparation_until_daa
+        }) {
+            return Err("TIR owner changes its immutable original claim-wide preparation reference".into());
+        }
         if let Some(work) = &self.work {
             let full = self.contract.plan.envelope.checked_sum_v1(work.allocation.envelope)?;
             if work.allocation.source_id != self.contract.source_id
@@ -1234,7 +1875,7 @@ impl PalwTirPublicOwnedV1 {
                 || p.opened_daa >= p.respond_until_daa
                 || p.opened_daa.checked_add(self.response_span_v1(source, p.request)?) != Some(p.respond_until_daa)
                 || p.respond_until_daa > self.contract.terms.stream_until_daa
-                || p.slots.len() > self.contract.custodians.len() + 1
+                || p.slots.len() > self.response_custodians_v1().len() + 1
             {
                 return Err("TIR pending identity/clock inconsistent".into());
             }
@@ -1254,7 +1895,7 @@ impl PalwTirPublicOwnedV1 {
                 return Err("TIR pending demand hash changes immutable source/owner/turn/clock".into());
             }
             for (signer, slot) in &p.slots {
-                if (*signer != self.contract.owner && !self.contract.custodians.contains(signer))
+                if (*signer != self.contract.owner && !self.response_custodians_v1().contains(signer))
                     || slot.total_bytes == 0
                     || slot.total_bytes > request_bound(source, p.request)?.0
                     || slot.accepted_offset > slot.total_bytes
@@ -1291,9 +1932,15 @@ impl PalwTirPublicOwnedV1 {
     ) -> Result<Hash64, String> {
         self.source(source)?;
         self.original_clock(now)?;
+        if self.preparation.is_some_and(|p| now < p.preparation_until_daa) {
+            return Err("TIR demand precedes the original claim-wide preparation deadline".into());
+        }
+        if self.response_custodians_v1().is_empty() {
+            return Err("TIR source has no original Ready responder; collect literal preparation defaults instead".into());
+        }
         if signer != self.contract.owner
             || self.active_v1().is_some_and(|p| {
-                !p.collected && self.contract.custodians.iter().any(|s| p.slots.get(s).is_none_or(|slot| slot.finished.is_none()))
+                !p.collected && self.response_custodians_v1().iter().any(|s| p.slots.get(s).is_none_or(|slot| slot.finished.is_none()))
             })
         {
             return Err("TIR demand must be the outside owner and cannot erase an unpaid original obligation".into());
@@ -1391,7 +2038,7 @@ impl PalwTirPublicOwnedV1 {
             || p.collected
             || now < p.opened_daa
             || now >= p.respond_until_daa
-            || (signer != self.contract.owner && !self.contract.custodians.contains(&signer))
+            || (signer != self.contract.owner && !self.response_custodians_v1().contains(&signer))
         {
             return Err("TIR answer substitutes signer/demand or expires its original response clock".into());
         }
@@ -1540,8 +2187,7 @@ impl PalwTirPublicOwnedV1 {
             return Err("TIR collect is stale, premature, repeated or outside original collection clock".into());
         }
         let missing = self
-            .contract
-            .custodians
+            .response_custodians_v1()
             .iter()
             .copied()
             .filter(|signer| p.slots.get(signer).is_none_or(|slot| slot.finished.is_none()))
@@ -1598,11 +2244,219 @@ impl PalwTirPublicOwnedV1 {
 }
 
 #[cfg(test)]
+pub(crate) fn palw_tir_public_preparation_fixture_v1()
+-> (PalwTirPublicSourceV1, PalwTirPublicPreparationV1, crate::palw_tir_public_state_v1::PalwTirPublicSourceDescriptorV1) {
+    tests::preparation_fixture()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::palw_step_leg::{step_merkle_root_v1, step_opening_v1};
     fn bond(n: u64) -> PalwBondKeyV2 {
         PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(n), 0))
+    }
+    pub(super) fn preparation_fixture()
+    -> (PalwTirPublicSourceV1, PalwTirPublicPreparationV1, crate::palw_tir_public_state_v1::PalwTirPublicSourceDescriptorV1) {
+        // Structural/source kernel fixture, not a native full-SUM acceptance.
+        let (source, owner, _) = work_fixture();
+        let c = owner.contract_v1();
+        let work = owner.work_v1().unwrap().allocation.clone();
+        let plan = derive_tir_public_preparation_plan_v1(&source, &work, &c.plan).unwrap();
+        let total = c
+            .plan
+            .envelope
+            .checked_sum_v1(work.envelope)
+            .unwrap()
+            .checked_sum_v1(work.envelope)
+            .unwrap()
+            .checked_sum_v1(plan.envelope)
+            .unwrap();
+        let opening = plan.preparation_daa.checked_add(c.plan.config.acquisition_daa).unwrap();
+        let terms = PalwRenderingClaimTermsV1::derive(
+            c.terms.accepted_daa,
+            total,
+            opening,
+            c.plan.config.collection_daa,
+            c.plan.config.reorg_retention_daa,
+        )
+        .unwrap();
+        let contract = PalwTirPublicPreparationContractV1 {
+            claim: c.claim,
+            allocation_id: c.bundle_id,
+            source_id: c.source_id,
+            original_accepted_daa: c.terms.accepted_daa,
+            preparation_until_daa: c.terms.accepted_daa.checked_add(plan.preparation_daa).unwrap(),
+            collect_until_daa: terms.collect_until_daa,
+            material_until_daa: terms.material_until_daa,
+            producer: c.producer,
+            custodians: c.custodians.clone(),
+            drawn_panel: BTreeSet::from([bond(2), bond(3)]),
+            plan,
+        };
+        let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&x.binding.class, &x.binding.artifact_root).unwrap();
+        let descriptor = crate::palw_tir_public_state_v1::PalwTirPublicSourceDescriptorV1 {
+            class_id: record.facts.class_id,
+            layout_digest: record.layout_digest,
+            header_digest: digest(b"misaka-palw/tir-source-header/v1", &borsh::to_vec(source.header_v1()).unwrap()),
+            source_id: c.source_id,
+            maximum_leaves: work.rules.max_step_leaf_count,
+            native_config: c.plan.config,
+            native_custodian_upper: c.plan.maximum_custodians,
+            work_rules: Some(work.rules),
+        };
+        let preparation = PalwTirPublicPreparationV1::new_v1(contract, &source, work, &c.plan).unwrap();
+        (source, preparation, descriptor)
+    }
+    fn capture_debit(prep: &PalwTirPublicPreparationV1, actor: PalwBondKeyV2) -> PalwTirPublicWorkDebitV1 {
+        let c = prep.contract_v1();
+        let lane = prep.work_v1().actors.get(&actor);
+        PalwTirPublicWorkDebitV1 {
+            expected_nonce: lane.map_or(0, |a| a.grants),
+            previous_head: lane.and_then(|a| a.last.as_ref()).map(|r| r.hash_v1().unwrap()).unwrap_or_default(),
+            scope: PalwTirPublicWorkScopeV1 {
+                claim: c.claim,
+                owner: c.producer,
+                reserved_daa: c.original_accepted_daa,
+                bundle_id: c.allocation_id,
+                source_id: c.source_id,
+                turn: 0,
+                request: PalwTirPublicRequestV1::StepLeaf { index: 0 },
+                actor,
+                phase: PalwTirPublicWorkPhaseV1::Capture,
+                input_head: c.source_id,
+                input_offset: 0,
+                slice: 0,
+                cursor_id: Hash64::from_u64_word(9),
+            },
+            work: PalwTirPublicWorkV1 { attempts: 1, parser_steps: 1, ..Default::default() },
+            restart: false,
+            history: None,
+        }
+    }
+    fn ready_descriptor(
+        source: &PalwTirPublicSourceV1,
+        prep: &PalwTirPublicPreparationV1,
+    ) -> crate::palw_backend::PalwTirPublicPreparedDescriptorV1 {
+        let h = source.header_v1();
+        crate::palw_backend::PalwTirPublicPreparedDescriptorV1 {
+            version: 1,
+            source_id: source.source_id_v1(),
+            class_id: h.job_context.shape_profile_id,
+            artifact_root: h.artifact_root,
+            execution_root: h.committed_execution_root,
+            trace_root: h.full_logits_trace_root,
+            step_root: h.step_merkle_root,
+            step_leaf_count: source.leaf_count_v1(),
+            decode_count: source.decode_count_v1(),
+            vocab: source.vocab_v1(),
+            material_until_daa: prep.contract.material_until_daa,
+            manifest_digest: Hash64::from_u64_word(50),
+            retained_bytes: 4096,
+        }
+    }
+    #[test]
+    fn claim_preparation_accepts_capture_before_any_owner_demand_but_never_resets_original_clock() {
+        let (source, mut prep, _) = preparation_fixture();
+        let now = prep.contract.original_accepted_daa + 1;
+        let actor = prep.contract.producer;
+        let debit = capture_debit(&prep, actor);
+        prep.capture_debit_v1(&source, actor, now, &debit).unwrap();
+        let descriptor = ready_descriptor(&source, &prep);
+        prep.mark_ready_v1(&source, actor, now, descriptor).unwrap();
+        assert!(prep.ready_v1(&actor).is_some(), "a signed retention promise, not a computed-correctness finding");
+        let snapshot = prep.clone();
+        let next = capture_debit(&prep, actor);
+        assert!(prep.capture_debit_v1(&source, actor, now, &next).is_err());
+        assert!(prep.mark_ready_v1(&source, actor, prep.contract.preparation_until_daa, descriptor).is_err());
+        assert_eq!(prep, snapshot);
+        prep.check_v1().unwrap();
+    }
+    #[test]
+    fn one_outside_observer_collects_each_missing_preparer_without_panel_vote_or_owner_ready() {
+        let (_, mut prep, _) = preparation_fixture();
+        let deadline = prep.contract.preparation_until_daa;
+        let producer = prep.contract.producer;
+        assert!(prep.collect_v1(bond(7), producer, deadline - 1).is_err());
+        assert!(prep.collect_v1(bond(2), producer, deadline).is_err());
+        let first = prep.collect_v1(bond(7), producer, deadline).unwrap();
+        assert_eq!(first.preparation_until_daa, deadline);
+        prep.collect_v1(bond(7), bond(2), deadline).unwrap();
+        assert!(prep.pending_signers_v1().is_empty());
+        assert!(prep.collect_v1(bond(7), bond(7), deadline).is_err(), "outside owner never owes preparation Ready");
+        assert!(prep.collect_v1(bond(7), producer, deadline).is_err());
+        prep.check_v1().unwrap();
+    }
+    #[test]
+    fn preparation_context_decode_uses_native_bounds_not_self_declared_plan() {
+        let (_, prep, _) = preparation_fixture();
+        let bytes = borsh::to_vec(&prep).unwrap();
+        assert_eq!(PalwTirPublicPreparationV1::decode_bounded_v1(&bytes, 3, bytes.len() as u64).unwrap(), prep);
+        assert!(PalwTirPublicPreparationV1::decode_bounded_v1(&bytes, 1, bytes.len() as u64).is_err());
+        assert!(PalwTirPublicPreparationV1::decode_bounded_v1(&bytes, 3, bytes.len() as u64 - 1).is_err());
+    }
+    #[test]
+    fn missing_ready_has_only_preparation_default_not_repeated_short_da_duties() {
+        let (source, mut prep, _) = preparation_fixture();
+        let actor = bond(2);
+        let now = prep.contract.original_accepted_daa + 1;
+        let debit = capture_debit(&prep, actor);
+        prep.capture_debit_v1(&source, actor, now, &debit).unwrap();
+        let descriptor = ready_descriptor(&source, &prep);
+        prep.mark_ready_v1(&source, actor, now, descriptor).unwrap();
+        let deadline = prep.contract.preparation_until_daa;
+        let producer = prep.contract.producer;
+        prep.collect_v1(bond(7), producer, deadline).unwrap();
+
+        let (_, old, request) = work_fixture();
+        let mut contract = old.contract_v1().clone();
+        let work = old.work_v1().unwrap().allocation.clone();
+        let total = contract
+            .plan
+            .envelope
+            .checked_sum_v1(work.envelope)
+            .unwrap()
+            .checked_sum_v1(work.envelope)
+            .unwrap()
+            .checked_sum_v1(prep.contract.plan.envelope)
+            .unwrap();
+        contract.reserved_daa = deadline;
+        contract.terms = PalwRenderingClaimTermsV1::derive(
+            contract.terms.accepted_daa,
+            total,
+            prep.contract.plan.preparation_daa + contract.plan.config.acquisition_daa,
+            contract.plan.config.collection_daa,
+            contract.plan.config.reorg_retention_daa,
+        )
+        .unwrap();
+        let capital = contract.terms.plan.rent_sompi.checked_add(contract.terms.plan.deposit_sompi).unwrap();
+        let mut owned = PalwTirPublicOwnedV1::admit_v1(contract, &source, &prep.contract.drawn_panel, deadline, capital).unwrap();
+        owned.bind_preparation_v1(&source, &prep).unwrap();
+        assert_eq!(owned.response_custodians_v1(), &BTreeSet::from([actor]));
+        owned.check_preparation_v1(&prep).unwrap();
+        let owner = owned.contract.owner;
+        for _ in 0..2 {
+            let open = owned.active_v1().map_or(deadline, |p| p.respond_until_daa);
+            let demand = owned.demand_v1(&source, owner, open, request).unwrap();
+            assert!(owned.begin_v1(&source, producer, demand, open, 1, Hash64::default()).is_err());
+            let until = owned.active_v1().unwrap().respond_until_daa;
+            let effect = owned.collect_v1(owner, demand, until).unwrap();
+            assert_eq!(effect.missing_custodians, BTreeSet::from([actor]));
+            assert!(!effect.missing_custodians.contains(&producer));
+        }
+        let mut reorg = prep.clone();
+        reorg.ready.clear();
+        assert!(owned.check_preparation_v1(&reorg).is_err(), "a saved Ready set cannot override current rooted history");
+        let mut empty =
+            PalwTirPublicOwnedV1::admit_v1(owned.contract_v1().clone(), &source, &prep.contract.drawn_panel, deadline, capital)
+                .unwrap();
+        empty.bind_preparation_v1(&source, &reorg).unwrap();
+        let before = empty.clone();
+        assert!(empty.demand_v1(&source, owner, deadline, request).is_err());
+        assert_eq!(empty, before, "no empty short-DA defaults or debit when all literal actors lack Ready");
+        assert!(prep.collect_v1(bond(7), producer, deadline).is_err());
+        owned.check_v1(&source).unwrap();
     }
     fn work_fixture() -> (PalwTirPublicSourceV1, PalwTirPublicOwnedV1, PalwTirPublicRequestV1) {
         // Pure preadmitted kernel fixture, not a full native admission test.
@@ -1617,6 +2471,7 @@ mod tests {
             max_target_requests: 64,
             max_source_reads: 1024,
             maximum_probe_copy_bytes: 65_536,
+            maximum_replay_io_bytes: 0,
         };
         let allocation = derive_tir_public_work_allocation_v1(
             &record,

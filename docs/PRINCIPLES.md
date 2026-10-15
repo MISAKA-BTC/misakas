@@ -97,7 +97,7 @@ MISAKAは従来のPoWと異なり、有用計算の実行結果を検証する�
 - 計算区間
 - tensorの一部
 - 状態遷移
-- Freivalds/GKR等によって集約された計算制約
+- Freivalds等の代数的スポットチェックの対象となる計算制約
 
 検証者は、原則として巨大なモデルの全計算を再実行する必要はない。少数の検査で不一致を発見し、発見後に対象を絞り込んで客観的な裁定へ進める。
 
@@ -212,6 +212,25 @@ MISAKAは、次の4つによって、計算費用よりも検証費用が重く�
 > **MISAKA不可侵原則 —「確率的に検出し、公開証拠で局所化し、決定論的に裁き、被害をbondで有界化する。モデルの非公開は経済的に不利にする。」**
 > *Probabilistic Detection. Public Localization. Deterministic Adjudication. Bond-Bounded Damage. Closure Is Uneconomic.*
 
+## 8. 計算正当性の暗号学的証明を使用しない — 2026-10-15（ユーザー恒久決定）
+
+MISAKAは、LLM・モデル計算の正しさを暗号学的に証明する仕組みを一切使用せず、今後も使用しない。
+設計案・RFC・ADR・実装・将来計画・研究項目のいずれでも、次を採用候補に挙げない。
+
+- zero-knowledge証明、zk-SNARK / zk-STARK、zkVM・zkML。
+- 多項式コミットメント（PCS）等に基づくsuccinct argument / validity proof。
+- 再帰証明・proof aggregation。
+
+検証は、確率的検出（サンプリング再実行・決定論的再計算・代数的スポットチェック）、
+公開証拠による局所化、決定論的裁定、経済的抑止によって行う。
+合意creditの認証には、正直な割合を明示した前提の下で、抽選された検証者の承認を用いる。
+承認自体を計算正当性の暗号学的証明とは扱わない。
+
+ハッシュ・署名・Merkle commitment・VRF / beaconは、データの同一性・認証・乱数のために使用できる。
+これらを計算の正しさの証明として扱ってはならない。既存のcourt用`proof` / `witness`という名称も、
+公開materialの同一性認証と局所的な決定論的裁定の入力を指すものであり、禁止方式への例外ではない。
+旧記述や下位文書がこの恒久決定に反する場合、この節を優先する。
+
 ---
 
 ## 付録 — この前提が現在の作業をどう縛るか (Lead, 2026-10-09)
@@ -224,7 +243,7 @@ This appendix records where the principle already decides open work. It is a poi
   - its detection probability is stated, including the probability that a capable honest verifier actually checks;
   - its collateral covers the maximum gain divided by that probability.
 
-  Where that is unaffordable, aggregated checks (Freivalds/GKR-style) are required, not a lower assumed detection rate.
+  Where that is unaffordable, algebraic spot checks (for example Freivalds-style checks) are required, not a lower assumed detection rate. These are not cryptographic validity proofs; section 8 applies.
 
   **Amended 2026-10-14 (§0):** the detection-probability bound and the collateral-covers-gain/p condition are no longer gates for earning. They are measured and reported (UNKNOWN when unknown). The gate is the per-bond Block / Reward / Final Weight caps, objective court and slash for any model shared with at least one honest verifier, and the two-stage closure-disadvantage evaluation. `p = 0` for a closed model is a bounded residual risk.
 - **§2's grinding resistance** is why the sealed-source beacon (v3) and the complete-check bootstrap are prerequisites for any sampled approval.

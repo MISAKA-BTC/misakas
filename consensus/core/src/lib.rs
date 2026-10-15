@@ -905,6 +905,7 @@ pub mod palw_tir_prefix_state_v1;
 pub mod palw_tir_prefix_owned_v1;
 pub mod palw_tir_public_source_v1;
 pub mod palw_tir_public_owned_v1;
+pub mod palw_tir_public_allocation_v1;
 pub mod palw_tir_public_state_v1;
 pub mod palw_decode_view_v1;
 

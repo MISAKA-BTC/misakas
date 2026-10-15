@@ -108,7 +108,60 @@ pub struct PalwTirPublicCaptureProgressV1 {
     pub last_slice: Option<PalwTirPublicCaptureSliceV1>,
 }
 
+/// A bounded custody readiness promise, NEVER an authenticated execution finding.
+/// The native admission path must independently compare all roots, geometry and
+/// the exact original material horizon, and price retention before crediting it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwTirPublicPreparedDescriptorV1 {
+    pub version: u16,
+    pub source_id: Hash64,
+    pub class_id: Hash64,
+    pub artifact_root: Hash64,
+    pub execution_root: Hash64,
+    pub trace_root: Hash64,
+    pub step_root: Hash64,
+    pub step_leaf_count: u64,
+    pub decode_count: u32,
+    pub vocab: u32,
+    pub material_until_daa: u64,
+    pub manifest_digest: Hash64,
+    pub retained_bytes: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirPublicPreparedNeedV1 {
+    /// Held in addition to the existing source reader while publishing.
+    pub additional_ram_bytes: u64,
+    /// New durable bytes; the anonymous preparation ticket remains held too.
+    /// Includes one sealed source and one deterministic partial/retry copy.
+    pub additional_disk_bytes: u64,
+    pub maximum_retained_bytes: u64,
+    pub maximum_file_operations: u64,
+    pub maximum_publish_io_bytes: u64,
+    pub maximum_publish_hash_bytes: u64,
+    pub maximum_publish_slices: u64,
+    /// Reopen holds this RAM while streaming IDs and authenticating each answer.
+    pub reopen_ram_bytes: u64,
+}
+pub trait PalwTirPublicPreparedWriterV1: Send {
+    fn slice_quote_v1(&self) -> Result<PalwTirPublicCaptureSliceV1, String>;
+    fn progress_v1(&self) -> PalwTirPublicCaptureProgressV1;
+    fn poll_quoted_v1(&mut self, quote: &PalwTirPublicCaptureSliceV1) -> Result<Option<PalwTirPublicPreparedDescriptorV1>, String>;
+}
+
 pub trait PalwTirPublicCaptureReaderV1: Send {
+    /// Raw/cold readers return None. A successful publish does not retroactively
+    /// make another reader warm; reopen the exact credited descriptor first.
+    fn prepared_descriptor_v1(&self) -> Option<&PalwTirPublicPreparedDescriptorV1>;
+    /// Only a reader that reached the original committed roots may publish.
+    fn prepared_need_v1(&self) -> Result<PalwTirPublicPreparedNeedV1, String>;
+    /// Native supplies both clocks; local files never extend the retention lease.
+    /// Caller retains the original source ticket plus prepared_need_v1 until done.
+    fn begin_prepared_v1(
+        &self,
+        directory: &std::path::Path,
+        native_material_until_daa: u64,
+        native_now_daa: u64,
+    ) -> Result<Box<dyn PalwTirPublicPreparedWriterV1>, String>;
     fn slice_quote_v1(
         &self,
         request: &crate::palw_tir_public_source_v1::PalwTirPublicRequestV1,
@@ -684,6 +737,42 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _cache_directory: &std::path::Path,
     ) -> Result<Box<dyn PalwTirPublicCaptureReaderV1>, String> {
         Err("this family has no bounded original TIR capture reader".into())
+    }
+
+    fn tir_prepared_capture_need_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _source_length: u64,
+    ) -> Result<PalwTirPublicPreparedNeedV1, String> {
+        Err("this family has no durable original TIR capture reader".into())
+    }
+
+    /// Reopens only the exact native descriptor/horizon. File manifests are not
+    /// evidence: original IDs and every served Merkle opening are reauthenticated.
+    /// Tiled reopen still streams D IDs and their original outer EOF. Avoiding N
+    /// step reindexing is NOT a proof of restart within a short DA response clock.
+    /// Callers check the native window on every later preparation/response tick.
+    fn reopen_tir_prepared_capture_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _descriptor: &PalwTirPublicPreparedDescriptorV1,
+        _cache_directory: &std::path::Path,
+        _native_material_until_daa: u64,
+        _native_now_daa: u64,
+    ) -> Result<Box<dyn PalwTirPublicCaptureReaderV1>, String> {
+        Err("this family has no durable original TIR capture reader".into())
+    }
+
+    /// Only native irreversible pruning strictly beyond the SAME original paid
+    /// horizon authorizes unlink. File clocks and wall time never authorize GC.
+    fn retire_tir_prepared_capture_v1(
+        &self,
+        _descriptor: &PalwTirPublicPreparedDescriptorV1,
+        _cache_directory: &std::path::Path,
+        _native_material_until_daa: u64,
+        _native_irreversible_daa: u64,
+    ) -> Result<(), String> {
+        Err("this family has no durable original TIR capture retirement".into())
     }
 
     /// Open the original public Float32 rows/ids of a retained capture. No in-node backend retains

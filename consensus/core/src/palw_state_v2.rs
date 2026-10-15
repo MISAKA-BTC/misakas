@@ -10745,9 +10745,11 @@ pub struct PalwChainStateV2 {
     staged_inventory_by_owner: BTreeSet<(PalwBondKeyV2, Hash64)>,
     /// Versioned acquisition allocations are independent of the legacy Owner key.
     staged_tir_by_owner: BTreeSet<(PalwBondKeyV2, Hash64, Hash64)>,
-    /// Source/public-job retention for each exact acquisition allocation.
+    /// Source/public-job retention for preparation and owner acquisition allocations.
     staged_tir_by_claim: BTreeMap<Hash64, BTreeSet<(u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>>,
     staged_tir_responders: BTreeSet<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2, Hash64, u64, Hash64)>,
+    /// Claim-wide Ready duties; outside owner Opens never recreate these slots.
+    staged_tir_preparers: BTreeSet<(PalwBondKeyV2, u64, Hash64, Hash64)>,
     /// Rebuildable signer/EDF queue over exact live public-prefix obligations.
     staged_prefix_responders: BTreeSet<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)>,
     staged_selected_responders: BTreeSet<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)>,
@@ -23901,6 +23903,7 @@ impl PalwStateCarriageV2 {
             staged_tir_by_owner: BTreeSet::new(),
             staged_tir_by_claim: BTreeMap::new(),
             staged_tir_responders: BTreeSet::new(),
+            staged_tir_preparers: BTreeSet::new(),
             staged_prefix_responders: BTreeSet::new(),
             staged_selected_responders: BTreeSet::new(),
             staged_flat_responders: BTreeSet::new(),
@@ -24659,6 +24662,121 @@ mod staged_court_state_tests_v1 {
         apply_delta_entry(&mut state, &old_entry, true).unwrap();
         assert_eq!(palw_accuser_exposure_v1(&state, &owner), u128::from(deposit));
         assert_eq!(state.staged_owner_allowance_used_v1(owner, 100), 1);
+    }
+
+    #[test]
+    fn tir_preparation_is_claim_wide_retained_and_rebuilt_without_an_owner() {
+        use crate::palw_tir_public_owned_v1::{
+            PalwTirPublicPreparationContractV1, PalwTirPublicPreparationV1, PalwTirPublicWorkRulesV1,
+            derive_tir_public_preparation_plan_v1, derive_tir_public_work_allocation_v1,
+        };
+        // A structural lifecycle fixture, not full-SUM payment, native grant
+        // authentication or a computation-correctness credential.
+        let owner = PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(99500), 0));
+        let claim = Hash64::from_u64_word(99501);
+        let allocation = Hash64::from_u64_word(99502);
+        let (source, template, _) = tir_lifecycle_fixture(claim, owner);
+        let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&x.binding.class, &x.binding.artifact_root).unwrap();
+        let rules = PalwTirPublicWorkRulesV1 {
+            max_step_leaf_count: template.descriptor.maximum_leaves,
+            prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            max_eval_elements: 1024, max_eval_terms: 1024, max_target_requests: 64,
+            max_source_reads: 1024, maximum_probe_copy_bytes: 65_536,
+            maximum_replay_io_bytes: 0,
+        };
+        let original = template.owned.contract_v1();
+        let work = derive_tir_public_work_allocation_v1(
+            &record, &x.binding.class.layout, source.header_v1(), &source, &original.plan, rules,
+        ).unwrap();
+        let plan = derive_tir_public_preparation_plan_v1(&source, &work, &original.plan).unwrap();
+        let prep_until = original.terms.accepted_daa.checked_add(plan.preparation_daa).unwrap();
+        let collect_until = prep_until.checked_add(original.plan.config.collection_daa).unwrap();
+        let material_until = collect_until.checked_add(original.plan.config.reorg_retention_daa).unwrap();
+        let contract = PalwTirPublicPreparationContractV1 {
+            claim, allocation_id: allocation, source_id: source.source_id_v1(), original_accepted_daa: original.terms.accepted_daa,
+            preparation_until_daa: prep_until, collect_until_daa: collect_until, material_until_daa: material_until,
+            producer: original.producer, custodians: original.custodians.clone(), drawn_panel: BTreeSet::new(), plan,
+        };
+        let preparation = PalwTirPublicPreparationV1::new_v1(contract, &source, work, &original.plan).unwrap();
+        let mut descriptor = template.descriptor.clone();
+        descriptor.work_rules = Some(rules);
+        let row = crate::palw_tir_public_state_v1::PalwTirPublicPreparationRowV1 {
+            descriptor, allocation_id: allocation, preparation: Box::new(preparation).into(),
+        };
+        let key = PalwStagedCourtKeyV1::TirPreparation(claim, allocation);
+        row.check_structure_v1(&key).unwrap();
+        assert_eq!(borsh::to_vec(&key).unwrap()[0], 8, "old key ordinals must not move");
+        let mut state = PalwChainStateV2::genesis();
+        state.last_point = Some(PalwBlockContextV2 { block: BlockHash::from_u64_word(99503), daa_score: 101, blue_score: 101, subsidy: 0 });
+        let mut terms = original.terms;
+        terms.stream_until_daa = prep_until + 1;
+        terms.collect_until_daa = collect_until;
+        terms.material_until_daa = material_until;
+        terms.bond_exit_after_daa = material_until;
+        apply_delta_entry(&mut state, &PalwDeltaEntryV2::StagedCourtSeed {
+            key: PalwStagedCourtKeyV1::Claim(claim), old: None,
+            new: Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {
+                terms, producer: original.producer, panel: BTreeSet::new(), prefix_custody: None,
+            })),
+        }, false).unwrap();
+        let entry = PalwDeltaEntryV2::StagedCourtSeed { key, old: None,
+            new: Some(PalwStagedCourtRowV1::TirPreparation(Box::new(row).into())) };
+        let before = state.state_root();
+        apply_delta_entry(&mut state, &entry, false).unwrap();
+        assert_eq!(state.staged_tir_source_until_v1(claim), Some(material_until));
+        assert!(state.staged_tir_by_owner.is_empty(), "preparation must not occupy an outside owner's lane");
+        assert!(!state.staged_holds.iter().any(|(_, _, k)| *k == key), "plain signer lists do not grant new liability");
+        assert_eq!(state.staged_tir_preparation_duties_after_v1(original.producer, 101, None, 64).unwrap().0, vec![(claim, allocation)]);
+        assert!(state.staged_tir_preparation_duties_after_v1(owner, 101, None, 64).unwrap().0.is_empty());
+        assert!(state.staged_tir_preparation_duties_after_v1(original.producer, 102, None, 64).is_err());
+        let root = state.state_root();
+        let params = PalwStateParamsV2::new(100, 10, 40, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0).unwrap();
+        let restored = borsh::from_slice::<PalwStateCarriageV2>(&borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap())
+            .unwrap().into_state(&params, Some(root)).unwrap();
+        assert_eq!(restored.staged_tir_preparers, state.staged_tir_preparers);
+        assert_eq!(restored.staged_tir_by_claim, state.staged_tir_by_claim);
+        assert_eq!(restored.staged_tir_source_until_v1(claim), Some(material_until));
+        state.staged_tir_preparers.clear();
+        assert!(state.assert_tir_acquisition_indices_v1().is_err());
+        palw_staged_court_fold_v1::rebuild_indices(&mut state);
+        state.assert_tir_acquisition_indices_v1().unwrap();
+        let old = state.staged_courts[&key].clone();
+        let PalwStagedCourtRowV1::TirPreparation(mut collected) = old.clone() else { unreachable!() };
+        collected.preparation.collect_v1(owner, original.producer, prep_until).unwrap();
+        let collect = PalwDeltaEntryV2::StagedCourtSeed { key, old: Some(old),
+            new: Some(PalwStagedCourtRowV1::TirPreparation(collected)) };
+        apply_delta_entry(&mut state, &collect, false).unwrap();
+        assert!(state.staged_tir_preparers.is_empty());
+        assert_eq!(state.staged_tir_source_until_v1(claim), Some(material_until), "default does not erase original material");
+        apply_delta_entry(&mut state, &collect, true).unwrap();
+        assert_eq!(state.state_root(), root);
+        assert_eq!(state.staged_tir_preparers.len(), 1);
+        let extras = PalwTransitionExtrasV1::default();
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let mut ctx = PalwBlockContextV2 {
+            block: BlockHash::from_u64_word(99504), daa_score: prep_until, blue_score: 102, subsidy: 0,
+        };
+        palw_staged_court_fold_v1::sweep(&mut b, &ctx).unwrap();
+        assert!(b.state.staged_courts.contains_key(&key), "missing Ready does not erase original public material");
+        assert_eq!(b.state.state_root(), root);
+        ctx.daa_score = material_until - 1;
+        palw_staged_court_fold_v1::sweep(&mut b, &ctx).unwrap();
+        assert!(b.state.staged_courts.contains_key(&key));
+        ctx.daa_score = material_until;
+        b.state.last_point = Some(ctx);
+        palw_staged_court_fold_v1::sweep(&mut b, &ctx).unwrap();
+        assert!(!b.state.staged_courts.contains_key(&key));
+        assert!(b.state.staged_tir_by_claim.is_empty());
+        assert!(b.state.staged_tir_preparers.is_empty());
+        for change in b.entries.iter().rev() { apply_delta_entry(&mut b.state, change, true).unwrap(); }
+        b.state.last_point = state.last_point;
+        assert_eq!(b.state.state_root(), root);
+        assert_eq!(b.state.staged_tir_preparers, state.staged_tir_preparers);
+        apply_delta_entry(&mut state, &entry, true).unwrap();
+        assert_eq!(state.state_root(), before);
+        assert!(state.staged_tir_preparers.is_empty());
+        assert!(state.staged_tir_by_claim.is_empty());
     }
 
     #[test]
