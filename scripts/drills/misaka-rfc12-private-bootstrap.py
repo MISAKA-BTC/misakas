@@ -170,20 +170,30 @@ def native_session_spec(bootstrap, daa, span=NATIVE_SESSION_SPAN_DAA):
         raise ValueError('a native session is for a non-floor class; the BASE floor is exempt from PAV3 custody')
     if any('operatorId' not in seats[index] for index in (NATIVE_EXECUTOR_SEAT,) + NATIVE_PROVIDER_SEATS):
         raise ValueError('the bootstrap seats do not name their card operators')
-    if not isinstance(daa, int) or daa < 0 or span <= 0:
-        raise ValueError('an observed DAA and a positive span are required')
-    until = daa + min(span, int(policy['maxEnrollmentDaa']))
+    def exact(value, name, minimum=0, maximum=2**64 - 1):
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise ValueError(name + ' must be an exact bounded unsigned integer')
+        return value
+    exact(daa, 'observed DAA')
+    exact(span, 'session span', 1)
+    maximum_enrollment = exact(policy['maxEnrollmentDaa'], 'maximum enrollment DAA', 1)
+    window = exact(policy['windowDaa'], 'material window', 1)
+    maximum_bytes = exact(policy['maxBytesPerContract'], 'maximum material bytes', 1)
+    maximum_units = exact(policy['nativeSessionMaxUnits'], 'maximum native session units', 1, 2**32 - 1)
+    collateral = exact(policy['minimumCollateralSompi'], 'provider collateral')
+    prepaid_fee = exact(policy['minimumFeeSompi'], 'provider prepaid fee')
+    until = exact(daa + min(span, maximum_enrollment), 'session end DAA')
     executor = seats[NATIVE_EXECUTOR_SEAT]
     if len({seats[index]['operatorId'] for index in (NATIVE_EXECUTOR_SEAT,) + NATIVE_PROVIDER_SEATS}) != 3:
         raise ValueError('the executor and both providers need three distinct card operators')
     return dict(networkDomain=bootstrap['networkDomain'], sponsor=executor['bond'], policyId=policy['id'],
-        windowDaa=int(policy['windowDaa']), maxMaterialBytes=int(policy['maxBytesPerContract']),
+        windowDaa=window, maxMaterialBytes=maximum_bytes,
         enrollmentUntilDaa=until,
         nativeSession=dict(classId=bootstrap['class'], artifactRoot=bootstrap['artifactRoot'], executor=executor['bond'],
-            operator=executor['operatorId'], maxUnits=int(policy['nativeSessionMaxUnits']), admitFromDaa=daa,
+            operator=executor['operatorId'], maxUnits=maximum_units, admitFromDaa=daa,
             admitUntilDaa=until),
-        offers=[dict(provider=seats[index]['bond'], collateralSompi=int(policy['minimumCollateralSompi']),
-            prepaidFeeSompi=int(policy['minimumFeeSompi'])) for index in NATIVE_PROVIDER_SEATS])
+        offers=[dict(provider=seats[index]['bond'], collateralSompi=collateral,
+            prepaidFeeSompi=prepaid_fee) for index in NATIVE_PROVIDER_SEATS])
 
 
 def material_session_commands(prefix, fixture, bootstrap, folder):

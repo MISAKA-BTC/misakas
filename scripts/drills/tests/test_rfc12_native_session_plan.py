@@ -64,6 +64,27 @@ class NativeSessionSpec(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'distinct card operators'):
             driver.native_session_spec(shared, 1)
 
+    def test_drafting_never_rounds_money_clock_or_native_capacity_before_signing(self):
+        for field in ('minimumCollateralSompi', 'minimumFeeSompi', 'maxEnrollmentDaa',
+                'windowDaa', 'maxBytesPerContract', 'nativeSessionMaxUnits'):
+            for value in (True, 1.5, '100', -1, 2**64):
+                changed = paid()
+                changed['monetaryMaterialPolicy'][field] = value
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    driver.native_session_spec(changed, 500)
+        for value in (True, 500.0, -1, 2**64):
+            with self.subTest(daa=value), self.assertRaises(ValueError):
+                driver.native_session_spec(paid(), value)
+        for value in (True, 2000.0, 0, 2**64):
+            with self.subTest(span=value), self.assertRaises(ValueError):
+                driver.native_session_spec(paid(), 500, span=value)
+        with self.assertRaises(ValueError):
+            driver.native_session_spec(paid(), 2**64 - 1)
+        changed = paid()
+        changed['monetaryMaterialPolicy']['nativeSessionMaxUnits'] = 2**32
+        with self.assertRaises(ValueError):
+            driver.native_session_spec(changed, 500)
+
     def test_commands_draft_once_sign_per_party_with_its_own_key_and_seal_every_signature(self):
         folder = Path('/owned/run/native-session')
         steps, sealed = driver.material_session_commands(['misaka', '--output=json'], FIXTURE, paid(), folder)
