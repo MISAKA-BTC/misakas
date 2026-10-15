@@ -4,7 +4,8 @@
 //!
 //! * [`PalwFoldReadV1::rfc0016_rights_admit_v1`] — V+: a model-class Attempt is admitted only with a block right of its model (asked by
 //!   `check_class_admits_claim`, so the producer's pre-check `palw_class_admits_claim_v1` answers it BEFORE the forward). Past φ the
-//!   epoch's `A_m`-weighted reissue snapshot (aux 132) decides; the first-come rule is the fallback where `A_m` is unavailable.
+//!   epoch's `A_m`-weighted reissue snapshot (aux 132) decides; where `A_m` is unavailable nothing is reissued (V2, user decision
+//!   2026-10-15: never a first-come grant).
 //! * [`PalwFoldReadV1::rfc0016_elastic_room_v1`] — the per-verifier water-filled room; capacity 0 admits nothing; a claim the
 //!   capacity cannot take now is admitted into the class's bounded pending queue (aux 133/134) while it has room.
 //! * [`on_attempt_accepted_rfc0016_v1`] — the accepted claim is queued when its class's demand exceeds capacity (no bind deadline
@@ -30,6 +31,10 @@ use crate::palw_rfc0016_v1::rights::{
     palw_rights_past_checkpoint_v1, palw_rights_quote_v1, palw_rights_reissue_snapshot_v1,
 };
 use crate::palw_rfc0016_v1::values::{PALW_RFC0016_VALUES_V1, PalwRfc0016ValuesV1};
+
+/// **V7 (user decision 2026-10-15): the void reason of a queue TTL expiry** — `BindTimeout`, the uncharged reason (no slash, no
+/// escrow forfeit, no bond breaker strike): a TTL end is neutral, never a fraud finding.
+pub const PALW_RFC0016_QUEUE_TTL_VOID_REASON_V1: PalwVoidReasonV2 = PalwVoidReasonV2::BindTimeout;
 
 /// Telemetry rows older than this many epochs are dropped (bounded state).
 pub const PALW_RFC0016_TELEMETRY_EPOCHS_KEPT_V1: u64 = 8;
@@ -71,7 +76,7 @@ impl PalwModelEligibilitySourceV1 for PalwRfc0017EligibilityV1<'_> {
     fn eligible_since_daa_v1(&self, model: &Hash64) -> Option<u64> {
         self.classes_of(model)
             .iter()
-            .filter_map(|class| super::palw_model_eligibility_fold_v1::eligibility_class_view_v1(self.state, class)?.row)
+            .filter_map(|class| super::palw_model_eligibility_fold_v1::eligibility_class_view_v1(self.state, self.params, class)?.row)
             .filter(|row| row.stage == crate::palw_model_eligibility_v1::PalwEligibilityStageV1::Eligible)
             .map(|row| row.stage_since_daa)
             .max()
@@ -125,9 +130,44 @@ pub fn palw_rfc0016_rights_epoch_v1(
             }
         }
     }
-    palw_rights_issue_v1(epoch_index, start, length, n_exp, values, weights.as_ref(), &entrants, |m| {
+    // V3 (user decision 2026-10-15): `S_entry` is the network's ELIGIBLE minimum producer bond — never below the bond floor — and
+    // an entrant's capital is its allocation capital, which counts only eligible capital (RFC-0017 GAP-E1: Registered / Lapsed 0;
+    // ADR-0177 C5: verifier capital only with a defined liability).
+    let mut values = *values;
+    values.entrant_min_capital_sompi = values.entrant_min_capital_sompi.max(params.min_collateral_sompi());
+    palw_rights_issue_v1(epoch_index, start, length, n_exp, &values, weights.as_ref(), &entrants, |m| {
         eligibility.block_rights_eligible_v1(m, start)
     })
+}
+
+/// **V3 (user decision 2026-10-15): is `class_id` drawing on the shared new-model pool** (RFC-0017 `Probation`) at `daa`? Its blocks
+/// are netted against the entrant reserve, never against the eligible models' issued rights.
+pub fn palw_rfc0016_class_on_shared_pool_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    class_id: &Hash64,
+    daa: u64,
+) -> bool {
+    super::palw_model_eligibility_fold_v1::eligibility_of_v1(state, params, class_id, daa)
+        .is_some_and(|(_, rights)| rights.probation_bounded)
+}
+
+/// **V3: the shared new-model pool's room left at `now_daa`, in blocks** (`None` below V+): the epoch's entrant reserve less its
+/// entrant grants and the Probation blocks RFC-0017 already admitted this epoch. RFC-0017's Probation admission reads it.
+pub fn palw_rfc0016_shared_pool_left_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ownership_active: bool,
+    now_daa: u64,
+) -> Option<u64> {
+    if !params.rfc0016_rights_active_at(now_daa) {
+        return None;
+    }
+    let mirror = params.rfc0016_v1()?;
+    let eligibility = palw_rfc0016_eligibility_v1(state, params, ownership_active);
+    let epoch = palw_rfc0016_rights_epoch_v1(state, params, &eligibility, now_daa, &mirror.values);
+    let probation = super::palw_model_eligibility_fold_v1::eligibility_probation_used_blocks_v1(state, params, now_daa);
+    Some(crate::palw_rfc0016_v1::rights::palw_rights_shared_pool_left_v1(&epoch, probation))
 }
 
 /// **The rights consumed so far in `epoch_index`**: the state's per-class epoch production counters, per model.
@@ -138,9 +178,16 @@ pub fn palw_rfc0016_rights_consumed_now_v1(
     epoch_index: u64,
 ) -> BTreeMap<Hash64, u64> {
     let base = params.base_class_id();
-    palw_rights_consumed_v1(&state.epoch_counters, epoch_index, &base, |class| {
-        palw_rfc0016_model_of_v1(state, ownership_active, class)
-    })
+    // V3 (user decision 2026-10-15): a Probation class's blocks are netted against the shared new-model pool, never against the
+    // eligible models' issued rights (read at the epoch's start; a class promoted since moves its blocks here — the conservative way).
+    let start = epoch_index.saturating_mul(params.epoch_length().max(1));
+    let counters: BTreeMap<Hash64, PalwEpochCounterV2> = state
+        .epoch_counters
+        .iter()
+        .filter(|(class, _)| !palw_rfc0016_class_on_shared_pool_v1(state, params, class, start))
+        .map(|(class, counter)| (*class, counter.clone()))
+        .collect();
+    palw_rights_consumed_v1(&counters, epoch_index, &base, |class| palw_rfc0016_model_of_v1(state, ownership_active, class))
 }
 
 /// The aux rows of `table` whose key starts with `prefix`, in key order.
@@ -198,8 +245,8 @@ impl PalwChainStateV2 {
 
 impl PalwFoldReadV1<'_> {
     /// **V+ admission** (RFC-0016 §8.1 step 2): past `palw_model_block_rights_v1`, a model-class Attempt finds one of its model's block
-    /// rights — own, or (past φ) within the epoch's `A_m`-weighted reissue snapshot, or the first-come σ rule where no snapshot could
-    /// be taken — never past the epoch total; otherwise it is refused before acceptance (`ModelBlockRightsRefused`, skippable for the
+    /// rights — own, or (past φ) within the epoch's `A_m`-weighted reissue snapshot (none where no snapshot could be taken: V2, user
+    /// decision 2026-10-15, no first-come fallback) — never past the epoch total; otherwise it is refused before acceptance (`ModelBlockRightsRefused`, skippable for the
     /// block's own attempt). `Ok` below the fence and for the floor class (the floor and the heartbeat keep their own rules).
     pub(super) fn rfc0016_rights_admit_v1(&self, class_id: &Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
         if !self.params.rfc0016_rights_active_at(now_daa) || *class_id == self.params.base_class_id() {
@@ -506,7 +553,8 @@ fn rfc0016_queue_tick_v1(
         .filter_map(|(_, v)| borsh::from_slice::<(Hash64, u64)>(v).ok().map(|(class, _)| class))
         .collect();
     for class_id in classes {
-        // TTL voids (no slash: `BindTimeout` is never charged) and rows of claims that left by another route.
+        // TTL voids — V7: a neutral end (`PALW_RFC0016_QUEUE_TTL_VOID_REASON_V1`, never charged, never fraud) — and rows of claims
+        // that left by another route.
         let mut live: Vec<(Hash64, u64, PalwClaimStateV2)> = Vec::new();
         for (claim_id, _bond, queued) in builder.state.rfc0016_queue_v1(&class_id) {
             match builder.state.claims.get(&claim_id).cloned() {
@@ -514,7 +562,7 @@ fn rfc0016_queue_tick_v1(
                     if queued.saturating_add(values.queue_ttl_daa) < now {
                         rfc0016_unqueue_v1(builder, &class_id, queued, &claim_id);
                         builder.disarm_deadline(claim_id);
-                        builder.void_claim(claim_id, &claim, now, PalwVoidReasonV2::BindTimeout)?;
+                        builder.void_claim(claim_id, &claim, now, PALW_RFC0016_QUEUE_TTL_VOID_REASON_V1)?;
                     } else {
                         live.push((claim_id, queued, claim));
                     }
@@ -671,8 +719,12 @@ pub fn palw_rfc0016_model_report_v1(
     let eligibility = palw_rfc0016_eligibility_v1(state, params, ownership);
     let epoch = palw_rfc0016_rights_epoch_v1(state, params, &eligibility, now_daa, &values);
     let consumed = palw_rfc0016_rights_consumed_now_v1(state, params, ownership, epoch.epoch_index);
+    // Physical blocks count EVERY model-class block (a Probation class's too — V3 nets those against the shared pool, not the rights).
+    let physical = palw_rights_consumed_v1(&state.epoch_counters, epoch.epoch_index, &params.base_class_id(), |class| {
+        palw_rfc0016_model_of_v1(state, ownership, class)
+    });
     let weights = state.bond_budget.as_ref().and_then(|b| b.rights_weights_v1());
-    let mut models: BTreeSet<Hash64> = epoch.issued.keys().chain(consumed.keys()).copied().collect();
+    let mut models: BTreeSet<Hash64> = epoch.issued.keys().chain(physical.keys()).copied().collect();
     if let Some((w, _)) = weights.as_ref() {
         models.extend(w.keys().copied());
     }
@@ -682,6 +734,21 @@ pub fn palw_rfc0016_model_report_v1(
         if matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) {
             let slot = finals.entry(palw_rfc0016_model_of_v1(state, ownership, &claim.class_id)).or_insert(0);
             *slot = slot.saturating_add(1);
+        }
+    }
+    // V9 (user decision 2026-10-15): checked share and within-deadline completion, apart, over the claims that ended this epoch.
+    let mut ended: BTreeMap<Hash64, Vec<crate::palw_rfc0016_v1::report::PalwVerificationOutcomeV1>> = BTreeMap::new();
+    for claim in state.claims.values() {
+        let ended_daa = match claim.phase {
+            PalwClaimPhaseV2::Final { final_daa } => final_daa,
+            PalwClaimPhaseV2::Voided { voided_daa, .. } => voided_daa,
+            _ => continue,
+        };
+        if ended_daa < epoch.start_daa {
+            continue;
+        }
+        if let Some(outcome) = crate::palw_rfc0016_v1::report::palw_rfc0016_verification_outcome_v1(&claim.phase) {
+            ended.entry(palw_rfc0016_model_of_v1(state, ownership, &claim.class_id)).or_default().push(outcome);
         }
     }
     let mut classes_of: BTreeMap<Hash64, Vec<Hash64>> = BTreeMap::new();
@@ -713,6 +780,7 @@ pub fn palw_rfc0016_model_report_v1(
         .map(|model| {
             let issued = epoch.issued_of(&model);
             let used = consumed.get(&model).copied().unwrap_or(0);
+            let blocks = physical.get(&model).copied().unwrap_or(0);
             let target_p_ppm = weights
                 .as_ref()
                 .and_then(|(w, sum)| w.get(&model).map(|a| crate::palw_bond_budget_v1::palw_model_available_v1(1_000_000, a, sum, 0)));
@@ -727,13 +795,17 @@ pub fn palw_rfc0016_model_report_v1(
                 &model,
             ));
             let classes = classes_of.get(&model).cloned().unwrap_or_default();
+            let (checked_share_permille, completed_within_deadline_permille) =
+                crate::palw_rfc0016_v1::report::palw_rfc0016_verification_shares_v1(
+                    ended.get(&model).map_or(&[][..], |v| v.as_slice()),
+                );
             let observed = |kind| classes.iter().map(|c| palw_rfc0016_observed_v1(c, kind)).sum::<u64>();
             PalwModelReportRowV1 {
                 model,
                 epoch_index: epoch.epoch_index,
                 target_p_ppm,
                 rights_issued: issued,
-                physical_blocks: used,
+                physical_blocks: blocks,
                 rights_consumed: if params.rfc0016_rights_active_at(now_daa) { used } else { 0 },
                 rights_unused: if now_daa >= epoch.end_daa() { issued.saturating_sub(used) } else { 0 },
                 finals: Some(finals.get(&model).copied().unwrap_or(0)),
@@ -745,6 +817,8 @@ pub fn palw_rfc0016_model_report_v1(
                 queue_wait_max_daa: (armed && dequeued > 0).then_some(wait_max),
                 real_gap_daa: real_gap,
                 heartbeat_dependent_daa: armed.then_some(heartbeat_dependent),
+                checked_share_permille,
+                completed_within_deadline_permille,
                 capacity_per_span: None,
                 capacity_shortfall_per_span: None,
                 queue_len: classes.iter().map(|c| state.rfc0016_queue_v1(c).len() as u64).sum(),

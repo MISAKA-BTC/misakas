@@ -1831,8 +1831,10 @@ impl TransitionBuilder<'_> {
         {
             let budget = self.state.bond_budget.as_ref().expect("created above");
             let bonds = &self.state.bonds;
+            // ADR-0176 C3 (user decision 2026-10-15): the long view, the day view's rate and the burst view (V3 policy; the long view
+            // alone for V2, which is `palw_round_rights_remaining_v1` unchanged).
             let remaining = |bond: &PalwBondKeyV2| {
-                palw_round_rights_remaining_v1(&policy, bonds.get(bond).map(|r| r.collateral).unwrap_or(0), budget.bond_row(bond))
+                budget.round_rights_remaining_rated_v1(&policy, bonds.get(bond).map(|r| r.collateral).unwrap_or(0), bond)
             };
             crate::palw_execution_lane_v1::palw_execution_schedule_assign_quanta_windowed_capped_v1(
                 schedule,
@@ -2171,12 +2173,24 @@ impl TransitionBuilder<'_> {
     /// **ADR-0177 (2026-10-14): claim-bound verifier capital per bond and model** — every live Panel duty's seat exposure, attributed to
     /// the model its claim reserved against (claims without a budget model count nowhere). A waiting bond, a registration, an AMM /
     /// Position or an unpaid reward is never here: only collateral a seat has actually bound to a live claim.
+    ///
+    /// **ADR-0177 C5 (user decision 2026-10-15):** only capital with a defined verification liability, hold period and slashable scope
+    /// counts ([`crate::palw_bond_budget_v1::palw_verifier_capital_counted_v1`]): a seat's exposure while its claim is live (not
+    /// terminal). Capital merely bonded for Panel=0 / OPV has no source here and counts 0 until OPV's verifier-liability accounting
+    /// exists ([`crate::palw_bond_budget_v1::PALW_OPV_VERIFIER_LIABILITY_ACCOUNTING_DEFINED_V1`]).
     pub(super) fn bond_budget_verifier_capital_v1(&self) -> BTreeMap<PalwBondKeyV2, BTreeMap<Hash64, u64>> {
         let mut out: BTreeMap<PalwBondKeyV2, BTreeMap<Hash64, u64>> = BTreeMap::new();
         let Some(budget) = self.state.bond_budget.as_ref() else { return out };
         for (claim_id, duty) in self.state.panel_duties.iter() {
             let Some((model, _)) = budget.claim_row(claim_id).and_then(|row| row.model) else { continue };
-            let amount = u64::try_from(duty.seat_exposure).unwrap_or(u64::MAX);
+            let claim_live = self.state.claims.get(claim_id).is_some_and(|claim| !claim.phase.is_terminal());
+            let counted = crate::palw_bond_budget_v1::palw_verifier_capital_counted_v1(
+                crate::palw_bond_budget_v1::PalwVerifierCapitalSourceV1::PanelSeatExposure { exposure: duty.seat_exposure, claim_live },
+            );
+            if counted == 0 {
+                continue;
+            }
+            let amount = u64::try_from(counted).unwrap_or(u64::MAX);
             for seat in duty.seats.keys() {
                 let entry = out.entry(*seat).or_default().entry(model).or_default();
                 *entry = entry.saturating_add(amount);
