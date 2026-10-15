@@ -279,6 +279,8 @@ pub(super) struct PalwBudgetPlanV1 {
     reservation: PalwBudgetVectorV1,
     /// Block units consumed at once (the claim's own block exists already).
     consume_blocks_now: u64,
+    /// ユーザー方針 2026-10-15: the claim's verification mode (Panel=1 day view / Panel=0), fixed at acceptance.
+    mode: PalwHoldModeV1,
 }
 
 impl PalwBudgetPlanV1 {
@@ -753,6 +755,22 @@ impl TransitionBuilder<'_> {
         origin: PalwBudgetOriginV1,
         consume_blocks_now: u64,
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
+        self.plan_bond_budget_moded_v1(ctx, bond, model, ask, origin, consume_blocks_now, PalwHoldModeV1::for_origin(origin))
+    }
+
+    /// [`Self::plan_bond_budget_v1`] with the claim's verification mode (ユーザー方針 2026-10-15): a Panel=1 claim is also checked
+    /// against its bond's day view; every claim against the burst view and the concurrent-liability cap (V3 policies only).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn plan_bond_budget_moded_v1(
+        &self,
+        ctx: &PalwBlockContextV2,
+        bond: PalwBondKeyV2,
+        model: Option<Hash64>,
+        ask: PalwBudgetAskV1,
+        origin: PalwBudgetOriginV1,
+        consume_blocks_now: u64,
+        mode: PalwHoldModeV1,
+    ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
         let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(None) };
         let capital = self.state.bonds.get(&bond).map(|r| r.collateral).unwrap_or(0);
         let model = model.filter(|_| mirror.allocation_at(ctx.daa_score).is_some());
@@ -766,8 +784,9 @@ impl TransitionBuilder<'_> {
                 &empty
             }
         };
-        let reservation =
-            budget.preview_claim_v1(&mirror.policy, capital, bond, model, ask).map_err(|why| budget_refused(bond, why))?;
+        let reservation = budget
+            .preview_claim_moded_v1(&mirror.policy, capital, bond, model, ask, mode)
+            .map_err(|why| budget_refused(bond, why))?;
         if consume_blocks_now > reservation.block_units {
             return Err(budget_refused(bond, PalwBudgetRefusalV1::Short { dim: PalwBudgetDimV1::BlockUnits }));
         }
@@ -781,6 +800,7 @@ impl TransitionBuilder<'_> {
             origin,
             reservation,
             consume_blocks_now,
+            mode,
         }))
     }
 
@@ -801,7 +821,7 @@ impl TransitionBuilder<'_> {
         let bond = plan.bond;
         let out = self
             .bond_budget_op(|budget, _, j| {
-                let reserved = budget.reserve_claim_v1(
+                let reserved = budget.reserve_claim_moded_v1(
                     &plan.policy,
                     plan.capital,
                     claim_id,
@@ -810,6 +830,7 @@ impl TransitionBuilder<'_> {
                     plan.accepted_daa,
                     plan.ask,
                     plan.origin,
+                    plan.mode,
                     j,
                 )?;
                 debug_assert_eq!(reserved, plan.reservation, "the plan and the commit read one engine state");
@@ -1535,13 +1556,16 @@ impl TransitionBuilder<'_> {
         } else {
             None
         };
-        self.plan_bond_budget_v1(
+        // ユーザー方針 2026-10-15: an OPV claim holds Panel=0's 7-day span; a Panel-licensed kernel claim Panel=1's day.
+        let mode = if kernel_class_is_optimistic { PalwHoldModeV1::PanelZero } else { PalwHoldModeV1::PanelOne };
+        self.plan_bond_budget_moded_v1(
             ctx,
             bond,
             model,
             PalwBudgetAskV1 { block_units: 0, reward_sompi: reward, final_weight: 0, liability_sompi: 0 },
             PalwBudgetOriginV1::KernelRoute,
             0,
+            mode,
         )
     }
 
