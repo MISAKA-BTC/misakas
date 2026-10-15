@@ -6556,8 +6556,17 @@ impl VirtualStateProcessor {
         } else {
             Vec::new()
         };
-        let context_error = |e: StoreError| {
-            PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("PALW pruning-point store: {e}"))
+        let context_error = |e: StoreError| match e {
+            StoreError::LocalResourceUnavailable(reason) => PruningImportError::PruningImportRuleError(
+                kaspa_consensus_core::errors::block::RuleError::LocalNativeCapacityUnavailable(
+                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                        kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+                    >("native pruning snapshot store", &reason),
+                ),
+            ),
+            other => {
+                PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("PALW pruning-point store: {other}"))
+            }
         };
         let require_target = |established: BlockHash| {
             if pruning_point == established {
@@ -6638,7 +6647,12 @@ impl VirtualStateProcessor {
             // ADR-0069 Decision 7: the consistency check has to know the rule the snapshot was
             // built under, or it refuses a state for having obeyed it.
             .into_state_v3(params, flat_check, self.palw_uncertified_weightless_at(witness_daa), self.palw_canonical_work_daa)
-            .map_err(|e| PruningImportError::ImportedPalwStateInvalid(pruning_point, expected_root, e.to_string()))?;
+            .map_err(|e| match e {
+                kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why) => PruningImportError::PruningImportRuleError(
+                    kaspa_consensus_core::errors::block::RuleError::LocalNativeCapacityUnavailable(why),
+                ),
+                other => PruningImportError::ImportedPalwStateInvalid(pruning_point, expected_root, other.to_string()),
+            })?;
         if flat_check.is_none() {
             let got = self.palw_committed_root_v1(&state);
             if got != expected_root {
@@ -6657,7 +6671,11 @@ impl VirtualStateProcessor {
             &state,
             self.db.native_single_directory_quota_path_v1(),
         )
-        .map_err(|why| PruningImportError::PruningPointImportContextUnavailable(pruning_point, why.to_string()))?;
+        .map_err(|why| {
+            PruningImportError::PruningImportRuleError(kaspa_consensus_core::errors::block::RuleError::LocalNativeCapacityUnavailable(
+                why,
+            ))
+        })?;
         // Pin the established target after validation and through the durable batch.
         // Pruning -> PALW -> metadata matches pruning advancement's lock order.
         let pruning_point_read = self.pruning_point_store.read();
@@ -6671,10 +6689,9 @@ impl VirtualStateProcessor {
         let mut store = self.palw_state_v2_store.write();
         let mut class_store = self.palw_class_carriage_store.write();
         for (id, row) in declaration_rows {
-            class_store.insert_batch(&mut batch, id, row).expect("staging a verified snapshot declaration cannot fail");
+            class_store.insert_batch(&mut batch, id, row).map_err(context_error)?;
         }
-        let _native_tip_write =
-            store.set_tip_batch_tracked_v1(&mut batch, pruning_point, &state).expect("writing the verified PALW tip cannot fail");
+        let _native_tip_write = store.set_tip_batch_tracked_v1(&mut batch, pruning_point, &state).map_err(context_error)?;
         // Live claim/owner holds come from the verified state itself, written in the same batch
         // as its tip. Holds already below this imported irreversible clock are not recreated.
         let imported_irreversible_daa = self
@@ -6683,20 +6700,17 @@ impl VirtualStateProcessor {
             .ok()
             .or_else(|| state.last_point().map(|point| point.daa_score))
             .unwrap_or(0);
-        store
-            .archive_staged_cache_leases_state_batch_v1(&mut batch, &state, imported_irreversible_daa)
-            .expect("restoring verified PALW material leases cannot fail");
+        store.archive_staged_cache_leases_state_batch_v1(&mut batch, &state, imported_irreversible_daa).map_err(context_error)?;
         // The same state, also as this node's servable snapshot. Without it a node that just
         // joined by a pruned sync holds the pruning-point state but cannot HAND it on until
         // its own pruning point next advances — so the fix would not propagate past the first
         // hop, and a young network would have exactly one node able to serve.
-        let _native_snapshot_write = store
-            .set_pruning_snapshot_batch_tracked_v1(&mut batch, pruning_point, &state)
-            .expect("writing the verified PALW pruning snapshot cannot fail");
+        let _native_snapshot_write =
+            store.set_pruning_snapshot_batch_tracked_v1(&mut batch, pruning_point, &state).map_err(context_error)?;
         // The PALW sidecar is installed before IBD replaces the UTXO set. An OS
         // crash between those steps must leave a durable incomplete-import flag.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
-        pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
+        pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).map_err(context_error)?;
         self.write_pruning_import_barrier(batch);
         drop(pruning_meta_write);
         drop(class_store);

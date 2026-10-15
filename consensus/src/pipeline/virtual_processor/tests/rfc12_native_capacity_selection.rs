@@ -45,6 +45,9 @@ async fn capacity_selection_worker() {
     let before_status = (ctx.consensus.block_status(sink), ctx.consensus.block_status(ancestor));
     let before_root = vp.palw_state_v2_store.read().state_root_of(sink).unwrap();
     let daa = vp.headers_store.get_daa_score(sink).unwrap();
+    let pruning_point = vp.pruning_point_store.read().pruning_point().unwrap();
+    let pruning_state = vp.palw_candidate_state_v2(pruning_point).unwrap();
+    let pruning_carriage = kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&pruning_state);
     let mut bonds = vp.initial_active_bond_view();
     assert!(vp.palw_candidate_order_v2_checked(sink).unwrap().is_some());
     assert!(vp.dns_reorg_outcome_checked(ancestor, sink, &bonds).is_ok());
@@ -64,7 +67,15 @@ async fn capacity_selection_worker() {
     let mut states = super::super::palw_rule_e::PalwRuleEStatesV1::default();
     assert!(vp.palw_rule_e_prefers_v1(&mut states, ancestor, sink).is_err());
 
-    let pruning_point = vp.pruning_point_store.read().pruning_point().unwrap();
+    assert!(
+        matches!(
+            vp.import_pruning_point_palw_state(pruning_point, pruning_carriage),
+            Err(kaspa_consensus_core::errors::pruning::PruningImportError::PruningImportRuleError(
+                kaspa_consensus_core::errors::block::RuleError::LocalNativeCapacityUnavailable(_)
+            ))
+        ),
+        "authenticated snapshot installation capacity must be retryable before the store batch"
+    );
     let virtual_read = vp.virtual_stores.upgradable_read();
     let previous = virtual_read.state.get().unwrap();
     let finality = vp.virtual_finality_point(&previous.ghostdag_data, pruning_point);
