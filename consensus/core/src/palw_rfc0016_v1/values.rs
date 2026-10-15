@@ -295,7 +295,7 @@ impl Params {
                 "palw_model_block_rights_v1 and the allocation's block_opportunity would apply P_m to blocks twice: arm one",
             ));
         }
-        // The reissue snapshot and the telemetry are kernel-route aux rows (131, 134): the route must exist at or below.
+        // The reissue snapshot and the telemetry are kernel-route aux rows (132, 135): the route must exist at or below.
         if !Self::palw_rfc0016_below_v1(self.palw_probabilistic_constraints_v1, at) {
             return Err(PalwModeV2Error::Invalid(
                 "palw_model_block_rights_v1 requires palw_probabilistic_constraints_v1 (the kernel route whose rows hold its ledger) at or below it",
@@ -335,7 +335,7 @@ impl Params {
                 "palw_elastic_final_capacity_v1 requires palw_model_registry at or below it: it replaces the registry's room",
             ));
         }
-        // The pending queue and its telemetry are kernel-route aux rows (132–134): the route must exist at or below.
+        // The pending queue and its telemetry are kernel-route aux rows (133–135): the route must exist at or below.
         if !Self::palw_rfc0016_below_v1(self.palw_probabilistic_constraints_v1, at) {
             return Err(PalwModeV2Error::Invalid(
                 "palw_elastic_final_capacity_v1 requires palw_probabilistic_constraints_v1 (the kernel route whose rows hold its queue) at or below it",

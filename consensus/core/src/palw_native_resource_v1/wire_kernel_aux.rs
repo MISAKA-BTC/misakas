@@ -124,14 +124,14 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
             crate::palw_econ_contracts_v1::PalwModelVerificationDecidedV1::scan_native_wire_v1(frame)?
         }
         130 if key_bytes == 64 => crate::palw_beacon_bootstrap_v1::PalwBootstrapRoundRowV1::scan_native_wire_v1(frame)?,
-        // RFC-0016 (dormant): the V+ reissue snapshot (131), the pending Final queue (132) and its index (133), telemetry (134).
-        131 if key_bytes == 72 => <(u64, u64) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
-        132 if key_bytes == 136 => <(crate::palw_state_v2::PalwBondKeyV2, u64, u64) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
-        133 if key_bytes == 64 => <(crate::Hash64, u64) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
-        134 if key_bytes == 9 && prefix == 0x01 => <(u64, u64) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
-        134 if key_bytes == 73 && prefix == 0x02 => <u64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
-        134 if key_bytes == 65 && prefix == 0x03 => <crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
-        134 if key_bytes == 73 && prefix == 0x04 => <(u64, u64, u64) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        // RFC-0016 (dormant): the V+ reissue snapshot (132), the pending Final queue (133) and its index (134), telemetry (135).
+        132 if key_bytes == 72 => <(u64, u64) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        133 if key_bytes == 136 => <(crate::palw_state_v2::PalwBondKeyV2, u64, u64) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        134 if key_bytes == 64 => <(crate::Hash64, u64) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        135 if key_bytes == 9 && prefix == 0x01 => <(u64, u64) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        135 if key_bytes == 73 && prefix == 0x02 => <u64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        135 if key_bytes == 65 && prefix == 0x03 => <crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        135 if key_bytes == 73 && prefix == 0x04 => <(u64, u64, u64) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         121 => match (key_bytes, prefix) {
             (65, 0x41) => crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(frame)?,
             (65, 0x42) => crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2::scan_native_wire_v1(frame)?,
@@ -709,7 +709,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         105 => return Err(wire::wire_bad("unallocated aux table 105 row namespace")),
         106 => return Err(wire::wire_bad("unallocated aux table 106 row namespace")),
         112 => return Err(wire::wire_bad("unallocated aux table 112 row namespace")),
-        115 | 123 | 125 | 126 | 127 | 130 | 131 | 132 | 133 | 134 => return Err(wire::wire_bad("unallocated aux row namespace")),
+        115 | 123 | 125 | 126 | 127 | 130 | 132 | 133 | 134 | 135 => return Err(wire::wire_bad("unallocated aux row namespace")),
         _ => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,

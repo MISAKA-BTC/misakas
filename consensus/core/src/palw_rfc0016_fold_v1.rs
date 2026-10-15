@@ -4,13 +4,13 @@
 //!
 //! * [`PalwFoldReadV1::rfc0016_rights_admit_v1`] — V+: a model-class Attempt is admitted only with a block right of its model (asked by
 //!   `check_class_admits_claim`, so the producer's pre-check `palw_class_admits_claim_v1` answers it BEFORE the forward). Past φ the
-//!   epoch's `A_m`-weighted reissue snapshot (aux 131) decides; the first-come rule is the fallback where `A_m` is unavailable.
+//!   epoch's `A_m`-weighted reissue snapshot (aux 132) decides; the first-come rule is the fallback where `A_m` is unavailable.
 //! * [`PalwFoldReadV1::rfc0016_elastic_room_v1`] — the per-verifier water-filled room; capacity 0 admits nothing; a claim the
-//!   capacity cannot take now is admitted into the class's bounded pending queue (aux 132/133) while it has room.
+//!   capacity cannot take now is admitted into the class's bounded pending queue (aux 133/134) while it has room.
 //! * [`on_attempt_accepted_rfc0016_v1`] — the accepted claim is queued when its class's demand exceeds capacity (no bind deadline
 //!   while queued; its window starts when it leaves), and its verifier share takes the M\*-49 slope.
 //! * [`tick_rfc0016_v1`] — per block: the reissue snapshot at φ, the queue's TTL voids and FIFO dequeues as capacity frees, and the
-//!   heartbeat-dependent DAA counter (aux 134).
+//!   heartbeat-dependent DAA counter (aux 135).
 //! * [`palw_rfc0016_quote_v1`] / [`palw_rfc0016_model_report_v1`] — the pre-lottery quote and the report rows.
 //!
 //! Interfaces assumed from other lanes (not edited here): `P_m` through `PalwRightsWeightsSourceV1`, eligibility through
