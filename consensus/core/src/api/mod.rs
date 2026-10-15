@@ -1494,6 +1494,12 @@ pub trait ConsensusApi: Send + Sync {
 
     /// Producer preflight from native authenticated class/inventory state. The
     /// caller cannot choose custody, ladder, admission time or resource ceilings.
+    /// **RFC-0016 (op 255): the per-model report** at the virtual tip, as JSON (targets apart from outcomes, node-local observations
+    /// labelled), with the pre-lottery quote for `class` where asked. `None` off ConsensusV2 or with no PALW tip.
+    fn palw_rfc0016_report_v1(&self, _class: Option<crate::Hash64>) -> Result<Option<(u64, bool, String)>, String> {
+        Err("RFC-0016 report unavailable".into())
+    }
+
     fn palw_staged_preclaim_quote_v1(
         &self,
         _original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,

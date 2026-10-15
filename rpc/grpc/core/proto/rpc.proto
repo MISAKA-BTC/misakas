@@ -3387,6 +3387,19 @@ message GetPalwForkChoiceOpeningResponseMessage {
   RPCError error = 1000;
 }
 
+// RFC-0016 (op 255): the per-model report as JSON; targets apart from outcomes, node-local observations labelled.
+message GetPalwRfc0016ReportRequestMessage {
+  string classHex = 1;
+}
+
+message GetPalwRfc0016ReportResponseMessage {
+  bool available = 1;
+  bool armed = 2;
+  uint64 nowDaa = 3;
+  string reportJson = 4;
+  RPCError error = 1000;
+}
+
 message GetPalwStagedPreclaimQuoteRequestMessage {
   string commitmentHex = 1;
   string bindingHex = 2;

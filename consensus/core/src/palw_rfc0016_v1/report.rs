@@ -94,6 +94,72 @@ pub fn palw_report_outcome_v1(before: &PalwModelReportRowV1, after: &PalwModelRe
     if target != 0 { PalwReportClaimV1::TargetOnly { target_delta_ppm: target } } else { PalwReportClaimV1::Unchanged }
 }
 
+fn json_opt<T: std::fmt::Display>(v: Option<T>) -> String {
+    v.map(|x| format!("\"{x}\"")).unwrap_or_else(|| "null".to_string())
+}
+
+/// **The report as JSON** (RPC op 255's payload): `targets` and `outcomes` in separate objects per model, the node-local observations
+/// under `node_local` (never outcomes), integers as decimal strings (u128-safe). `quote`, where asked, is the pre-lottery quote's
+/// Debug rendering (advisory).
+pub fn palw_rfc0016_report_json_v1(
+    now_daa: u64,
+    armed: bool,
+    rows: &[PalwModelReportRowV1],
+    miners: &[PalwMinerRevenueRowV1],
+    quote: Option<&super::capacity::PalwAdmissionQuoteV1>,
+) -> String {
+    let models: Vec<String> = rows
+        .iter()
+        .map(|r| {
+            format!(
+                concat!(
+                    "{{\"model\":\"{}\",\"epoch\":\"{}\",",
+                    "\"targets\":{{\"pPpm\":{},\"rightsIssued\":\"{}\"}},",
+                    "\"outcomes\":{{\"physicalBlocks\":\"{}\",\"rightsConsumed\":\"{}\",\"rightsUnused\":\"{}\",\"finals\":{},",
+                    "\"payoutCoinbaseSompi\":{},\"payoutEscrowSompi\":{},\"queueLen\":\"{}\",\"queueWaitMeanDaa\":{},",
+                    "\"queueWaitMaxDaa\":{},\"realGapDaa\":{},\"heartbeatDependentDaa\":{}}},",
+                    "\"nodeLocal\":{{\"refusedForCapacity\":{},\"refusedForRights\":{}}}}}"
+                ),
+                r.model,
+                r.epoch_index,
+                json_opt(r.target_p_ppm),
+                r.rights_issued,
+                r.physical_blocks,
+                r.rights_consumed,
+                r.rights_unused,
+                json_opt(r.finals),
+                json_opt(r.payout_coinbase_sompi),
+                json_opt(r.payout_escrow_sompi),
+                r.queue_len,
+                json_opt(r.queue_wait_mean_daa),
+                json_opt(r.queue_wait_max_daa),
+                json_opt(r.real_gap_daa),
+                json_opt(r.heartbeat_dependent_daa),
+                json_opt(r.refused_for_capacity),
+                json_opt(r.refused_for_rights),
+            )
+        })
+        .collect();
+    let miners: Vec<String> = miners
+        .iter()
+        .map(|m| {
+            format!(
+                "{{\"bond\":\"{}:{}\",\"model\":\"{}\",\"payoutCoinbaseSompi\":\"{}\",\"claims\":\"{}\"}}",
+                m.bond.0.transaction_id, m.bond.0.index, m.model, m.payout_coinbase_sompi, m.claims
+            )
+        })
+        .collect();
+    let quote = quote
+        .map(|q| format!("{q:?}").replace('\\', "\\\\").replace('"', "\\\""))
+        .map(|q| format!("\"{q}\""))
+        .unwrap_or_else(|| "null".into());
+    format!(
+        "{{\"nowDaa\":\"{now_daa}\",\"armed\":{armed},\"models\":[{}],\"existingMiners\":[{}],\"quote\":{quote}}}",
+        models.join(","),
+        miners.join(",")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

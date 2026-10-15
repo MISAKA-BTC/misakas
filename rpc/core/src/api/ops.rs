@@ -328,6 +328,9 @@ pub enum RpcApiOps {
     /// G14: the native required-family preclaim quote an external producer signs its pledge over.
     /// Read-only; the same planner admission re-runs. Appended at the tail.
     GetPalwStagedPreclaimQuote = 244,
+    /// RFC-0016: the per-model report (targets apart from outcomes; node-local observations labelled) and the pre-lottery quote.
+    /// Read-only. Op 255 (245–254 are reserved by other lanes).
+    GetPalwRfc0016Report = 255,
 }
 
 impl RpcApiOps {

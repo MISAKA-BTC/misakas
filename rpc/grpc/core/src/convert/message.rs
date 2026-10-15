@@ -5960,6 +5960,25 @@ mod palw_state_proof_grpc_tests {
     }
 }
 
+from!(item: &kaspa_rpc_core::GetPalwRfc0016ReportRequest, protowire::GetPalwRfc0016ReportRequestMessage, {
+    Self { class_hex: item.class_hex.clone() }
+});
+try_from!(item: &protowire::GetPalwRfc0016ReportRequestMessage, kaspa_rpc_core::GetPalwRfc0016ReportRequest, {
+    Self { class_hex: item.class_hex.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwRfc0016ReportResponse>, protowire::GetPalwRfc0016ReportResponseMessage, {
+    Self {
+        available: item.available,
+        armed: item.armed,
+        now_daa: item.now_daa,
+        report_json: item.report_json.clone(),
+        error: None,
+    }
+});
+try_from!(item: &protowire::GetPalwRfc0016ReportResponseMessage, RpcResult<kaspa_rpc_core::GetPalwRfc0016ReportResponse>, {
+    Self { available: item.available, armed: item.armed, now_daa: item.now_daa, report_json: item.report_json.clone() }
+});
+
 from!(item: &kaspa_rpc_core::GetPalwStagedPreclaimQuoteRequest, protowire::GetPalwStagedPreclaimQuoteRequestMessage, {
     Self { commitment_hex: item.commitment_hex.clone(), binding_hex: item.binding_hex.clone() }
 });

@@ -2559,6 +2559,9 @@ pub use palw_model_registry::*;
 mod palw_operator_reads;
 pub use palw_operator_reads::*;
 
+mod palw_rfc0016_report;
+pub use palw_rfc0016_report::*;
+
 mod palw_vesting;
 pub use palw_vesting::*;
 
