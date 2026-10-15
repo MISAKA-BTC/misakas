@@ -861,6 +861,10 @@ mod tests {
             }
             "palw_reporter_income_v2" => params.palw_reporter_income_v2 = Some(at),
             "palw_material_income_v3" => params.palw_material_income_v3 = Some(at),
+            "palw_settlement_once_v1" => {
+                params.palw_settlement_once_v1 = Some(at);
+                params.sync_palw_settlement_once_v1();
+            }
             "palw_paid_consumer_lifecycle_v1" => {
                 params.palw_paid_consumer_lifecycle_v1 = Some(crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleFenceV1 {
                     activation: at,
@@ -1100,6 +1104,8 @@ mod tests {
             "palw_fp_derived_work" => params.palw_fp_derived_work = Some(at),
             "palw_fp_decode_constraint" => params.palw_fp_decode_constraint = Some(at),
             "palw_shard_court" => params.palw_shard_court = Some(at),
+            // RFC-0006 memory/routing court v2: a bare height, refused when armed by `validate_palw_v2` (the probe does not run it).
+            "palw_memory_routing_court_v2" => params.palw_memory_routing_court_v2 = Some(at),
             "palw_shard_licensing" => params.palw_shard_licensing = Some(at),
             "palw_token_lift" => params.palw_token_lift = Some(at),
             // P0a: a bare height; its genesis rule is `validate_palw_v2`'s, which the probe does not run.

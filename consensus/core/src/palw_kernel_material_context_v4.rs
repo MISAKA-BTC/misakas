@@ -116,6 +116,19 @@ pub fn restore_kernel_material_context_v4(
     verify_mldsa: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 ) -> Result<ReservedKernelLedgerV1, String> {
     current_positive(context)?;
+    restore_kernel_material_identity_v4(context, bundle, limits, max_material_bytes, verify_mldsa)
+}
+/// Core-only preparation helper. Callers must first authenticate the exact
+/// current covenant/root/request nonce and original native producer key. Its
+/// result is material identity data, never permission to answer or earn credit.
+/// Public answer restore retains its mandatory current_positive call FIRST.
+pub(crate) fn restore_kernel_material_identity_v4(
+    context: &PalwProspectiveKernelMaterialContextV4,
+    bundle: &PalwProspectiveKernelBundleV4,
+    limits: PalwKernelMaterialContextLimitsV4,
+    max_material_bytes: u64,
+    verify_mldsa: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+) -> Result<ReservedKernelLedgerV1, String> {
     if context.version != 4
         || context.intent.version != 4
         || borsh::object_length(context).map_err(|e| e.to_string())? as u64 > limits.max_encoded_bytes
@@ -154,6 +167,8 @@ pub fn restore_kernel_material_context_v4(
     candidate.try_reserve_kernel_material_v4(&claim).map_err(|e| e.to_string())?;
     let coverage = crate::palw_material_capacity_v1::prospective_kernel_bundle_requests_v4(bundle)?;
     let _inner = reserve_native_requests_v1(coverage.bytes().ok_or_else(|| coverage.to_string())?).map_err(|e| e.to_string())?;
+    let auth = crate::palw_material_capacity_v1::prospective_kernel_bundle_auth_requests_v4(bundle, &candidate)?;
+    let _auth = reserve_native_requests_v1(auth.bytes().ok_or_else(|| auth.to_string())?).map_err(|e| e.to_string())?;
     let scope = bundle.verify(&candidate, max_material_bytes).map_err(|e| e.to_string())?;
     if context.intent.manifest.scopes.len() != 1 || context.intent.manifest.scopes.first() != Some(&scope) {
         return Err("restored material differs from exact enrolled manifest".into());

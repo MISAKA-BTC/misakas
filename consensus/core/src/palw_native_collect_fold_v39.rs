@@ -90,13 +90,15 @@ pub(super) fn commit_journal(r: &PalwKernelRouteStateV1, h: &JobHeader) -> Resul
     }
     Ok(j)
 }
-fn write_journal(builder: &mut TransitionBuilder<'_>, j: &CommitJournalV39) {
-    builder.write_kernel_row(TABLE, k(COMMIT_JOURNAL, &j.job), Some(b(&(j.root(), j))));
+fn write_journal(builder: &mut TransitionBuilder<'_>, j: &CommitJournalV39) -> Result<(), PalwStateV2Error> {
+    builder.write_kernel_row(TABLE, k(COMMIT_JOURNAL, &j.job), Some(b(&(j.root(), j))))?;
+    Ok(())
 }
-fn erase_pages(builder: &mut TransitionBuilder<'_>, job: Digest, attempt: u8, count: u16) {
+fn erase_pages(builder: &mut TransitionBuilder<'_>, job: Digest, attempt: u8, count: u16) -> Result<(), PalwStateV2Error> {
     for i in 0..count {
-        builder.write_kernel_row(TABLE, k(COMMIT_PAGE, &(job, attempt, i)), None);
+        builder.write_kernel_row(TABLE, k(COMMIT_PAGE, &(job, attempt, i)), None)?;
     }
+    Ok(())
 }
 impl PalwKernelRouteStateV1 {
     /// Fixed native rows only: ownership/priority evidence for one page, never
@@ -198,7 +200,7 @@ pub(super) fn commit_part(
         // One full original reserved Metadata envelope per attempt, exactly
         // the debit a direct Commit45 pays; never more than two attempts.
         predebit_original(builder, ctx, p, &h, QuotaActionKindV11::Metadata, body)?;
-        erase_pages(builder, part.job, j.attempt, j.count);
+        erase_pages(builder, part.job, j.attempt, j.count)?;
         j.attempt += 1;
         j.group = part.group;
         j.count = part.count;
@@ -209,19 +211,19 @@ pub(super) fn commit_part(
     // Every page pays its own copy/storage before any byte is stored.
     if !prepay(builder, ctx, signer, p, 0, body.len(), part.body.len() as u64)? {
         if restart {
-            write_journal(builder, &j);
+            write_journal(builder, &j)?;
         }
         return Ok(());
     }
     if borrowed_native_commit_part_v39(body).is_none() {
         // Bad nested extent burns this attempt; its paid debit is retained.
         j.burned = true;
-        write_journal(builder, &j);
+        write_journal(builder, &j)?;
         return Ok(());
     }
-    builder.write_kernel_row(TABLE, k(COMMIT_PAGE, &(part.job, j.attempt, part.index)), Some(part.body.to_vec()));
+    builder.write_kernel_row(TABLE, k(COMMIT_PAGE, &(part.job, j.attempt, part.index)), Some(part.body.to_vec()))?;
     j.next += 1;
-    write_journal(builder, &j);
+    write_journal(builder, &j)?;
     Ok(())
 }
 pub(super) fn commit_assemble(
@@ -243,7 +245,7 @@ pub(super) fn commit_assemble(
     }
     // One-time assembly is consumed BEFORE allocation or nested decoding.
     j.burned = true;
-    write_journal(builder, &j);
+    write_journal(builder, &j)?;
     let mut all = Vec::new();
     all.try_reserve_exact(j.total as usize).map_err(|_| bad("native39 commit assembly bounded allocation"))?;
     for index in 0..j.count {
@@ -258,7 +260,7 @@ pub(super) fn commit_assemble(
             .ok_or_else(|| bad("native39 original paid commit page absent"))?;
         all.extend_from_slice(raw);
     }
-    erase_pages(builder, job, j.attempt, j.count);
+    erase_pages(builder, job, j.attempt, j.count)?;
     if all.len() != j.total as usize || native_commit_group_v39(job, &all) != j.group || all.get(2..66) != Some(job.as_slice()) {
         return Ok(());
     }
@@ -267,7 +269,7 @@ pub(super) fn commit_assemble(
     let r = builder.state.kernel_route.as_ref().unwrap();
     if header(r, job).is_ok_and(|now| now.terminal != before) {
         j.assembled = true;
-        write_journal(builder, &j);
+        write_journal(builder, &j)?;
     }
     Ok(())
 }
@@ -280,7 +282,7 @@ pub(super) fn note_opened(builder: &mut TransitionBuilder<'_>, job: Digest, id: 
         return Err(bad("native39 original public pending index full or replayed"));
     }
     ids.push(id);
-    builder.write_kernel_row(TABLE, k(OPENED, &job), Some(b(&ids)));
+    builder.write_kernel_row(TABLE, k(OPENED, &job), Some(b(&ids)))?;
     Ok(())
 }
 pub(super) fn opened(r: &PalwKernelRouteStateV1, job: Digest) -> Result<Vec<Digest>, PalwStateV2Error> {
@@ -507,13 +509,13 @@ pub(super) fn collect(
         super::super::palw_native_source_fold_v39::HOLD_JOB,
         id,
     )?;
-    super::super::palw_flat_execution_fold_v11::write_shard(builder, &shard, id);
-    builder.write_kernel_row(QUOTA, b(&(30u8, 0u8)), Some(b(&(global.root(), global))));
-    builder.write_kernel_row(QUOTA, b(&(22u8, 0u8)), Some(b(&(physical.root(), physical))));
-    builder.write_kernel_row(QUOTA, b(&(2u8, id)), None);
-    builder.write_kernel_row(QUOTA, b(&(39u8, 0u8, id)), None);
-    builder.write_kernel_row(QUOTA, b(&(30u8, id, 1u8)), None);
-    builder.write_kernel_row(QUOTA, b(&(22u8, id)), None);
+    super::super::palw_flat_execution_fold_v11::write_shard(builder, &shard, id)?;
+    builder.write_kernel_row(QUOTA, b(&(30u8, 0u8)), Some(b(&(global.root(), global))))?;
+    builder.write_kernel_row(QUOTA, b(&(22u8, 0u8)), Some(b(&(physical.root(), physical))))?;
+    builder.write_kernel_row(QUOTA, b(&(2u8, id)), None)?;
+    builder.write_kernel_row(QUOTA, b(&(39u8, 0u8, id)), None)?;
+    builder.write_kernel_row(QUOTA, b(&(30u8, id, 1u8)), None)?;
+    builder.write_kernel_row(QUOTA, b(&(22u8, id)), None)?;
     for pid in &opened_ids {
         let r = builder.state.kernel_route.as_ref().unwrap();
         if let Ok(v) = public::pending(r, *pid) {
@@ -522,27 +524,27 @@ pub(super) fn collect(
             }
             for attempt in 1..=v.attempts {
                 for i in 0..4u16 {
-                    builder.write_kernel_row(TABLE, k(43, &(v.id, attempt, i)), None);
+                    builder.write_kernel_row(TABLE, k(43, &(v.id, attempt, i)), None)?;
                 }
             }
-            builder.write_kernel_row(TABLE, k(41, &v.unit), None);
-            builder.write_kernel_row(TABLE, k(42, &v.unit), None);
+            builder.write_kernel_row(TABLE, k(41, &v.unit), None)?;
+            builder.write_kernel_row(TABLE, k(42, &v.unit), None)?;
         }
-        builder.write_kernel_row(TABLE, k(40, pid), None);
+        builder.write_kernel_row(TABLE, k(40, pid), None)?;
     }
     let r = builder.state.kernel_route.as_ref().unwrap();
     if let Ok(j) = commit_journal(r, &h) {
         if j.attempt != 0 {
-            erase_pages(builder, id, j.attempt, j.count);
+            erase_pages(builder, id, j.attempt, j.count)?;
         }
     }
     for kind in [COMMIT_JOURNAL, OPENED, 36] {
-        builder.write_kernel_row(TABLE, k(kind, &id), None);
+        builder.write_kernel_row(TABLE, k(kind, &id), None)?;
     }
-    builder.write_kernel_row(TABLE, k(27, &id), None);
-    builder.write_kernel_row(TABLE, k(COLLECTED, &id), Some(b(&(collected.root(), &collected))));
-    builder.note_kernel_bond(&h.original.requester);
-    builder.note_kernel_bond(&h.original.producer);
+    builder.write_kernel_row(TABLE, k(27, &id), None)?;
+    builder.write_kernel_row(TABLE, k(COLLECTED, &id), Some(b(&(collected.root(), &collected))))?;
+    builder.note_kernel_bond(&h.original.requester)?;
+    builder.note_kernel_bond(&h.original.producer)?;
     Ok(())
 }
 /// Readonly: the immutable collection record, if this job was collected.

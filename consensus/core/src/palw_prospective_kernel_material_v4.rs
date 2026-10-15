@@ -465,6 +465,9 @@ pub fn prospective_kernel_material_v4(
         crate::palw_native_resource_v1::reserve_native_requests_v1(coverage.bytes().ok_or_else(|| coverage.to_string())?)
             .map_err(|e| e.to_string())?;
     candidate.try_reserve_kernel_material_v4(&root).map_err(|e| e.to_string())?;
+    let auth = crate::palw_material_capacity_v1::prospective_kernel_bundle_auth_requests_v4(&request.bundle, &candidate)?;
+    let _bundle_auth_lease = crate::palw_native_resource_v1::reserve_native_requests_v1(auth.bytes().ok_or_else(|| auth.to_string())?)
+        .map_err(|e| e.to_string())?;
     let scope = request.bundle.verify(&candidate, max_bytes).map_err(|e| e.to_string())?;
     if intent.manifest.scopes.first() != Some(&scope) {
         return Err("prospective held bytes differ from producer-signed manifest".into());

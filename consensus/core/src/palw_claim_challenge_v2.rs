@@ -134,7 +134,28 @@ impl Params {
         if let Some(f) = self.palw_claim_challenge_v2 {
             f.policy.validate().map_err(PalwModeV2Error::InvalidOwned)?;
             if f.activation != ForkActivation::never() {
-                return Err(PalwModeV2Error::InvalidOwned("palw_claim_challenge_v2 remains dormant: independent full128/source/economic review and native all-target acceptance must be evidenced".into()));
+                // A public fence carries its review scope and evidence (zero = private mechanics only).
+                if f.policy.lifetime_review_scope == [0; 64]
+                    || f.policy.source_independence_evidence == [0; 64]
+                    || f.policy.economic_evidence == [0; 64]
+                {
+                    return Err(PalwModeV2Error::InvalidOwned(
+                        "palw_claim_challenge_v2 remains dormant: independent full128/source/economic review is not evidenced".into(),
+                    ));
+                }
+                // Checkers fetch every target's material through the signed covenant and its recovery: both armed at or below.
+                let at_or_below = |a: Option<ForkActivation>| {
+                    a.is_some_and(|a| a != ForkActivation::never() && a.daa_score() <= f.activation.daa_score())
+                };
+                if !at_or_below(self.palw_monetary_material_v1.as_ref().map(|m| m.activation))
+                    || !at_or_below(self.palw_material_release_recovery_v2.as_ref().map(|r| r.activation))
+                {
+                    return Err(PalwModeV2Error::InvalidOwned(
+                        "palw_claim_challenge_v2 requires the monetary material covenant and release recovery V2 at or below it".into(),
+                    ));
+                }
+                // Native all-target acceptance and the economics are measured: a pinned record (EMPTY: dormant).
+                self.palw_rfc0608_measured_v1(crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::ClaimChallengeV2, &f.policy)?;
             }
         }
         Ok(())
@@ -565,23 +586,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 PAID_CLAIM_CLASSES_V2 => {
                     let c: PaidClaimClassV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                     c.validate().map_err(&refuse)?;
-                    if let Some(plan) = c.interactive_plan.as_ref().filter(|p| p.version == 4) {
-                        route
-                            .paid_compact_contract_v4(&plan.id())
-                            .map_err(&refuse)?
-                            .registration
-                            .validate_for_class(&c, &l)
-                            .map_err(&refuse)?;
-                        let compact =
-                            params.claim_compact_v4_at(now).ok_or_else(|| refuse("compact class without active own fence".into()))?;
-                        if compact.require_independent_review {
-                            misaka_palw_challenge::approved_v2(
-                                &misaka_palw_challenge::shipped_registry_v2(),
-                                &plan.compiler,
-                                &c.source_policy,
-                            )
-                            .map_err(|e| refuse(e.to_string()))?;
-                        }
+                    // PRINCIPLES §8: the fold refuses a V4 compact plan, so a carried class naming one is inconsistent.
+                    if c.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
+                        return Err(refuse(crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACT_RETIRED_REASON_V1.into()));
                     }
                     let target = if let Some(base) = l.classes.get(&c.base_class) {
                         if crate::palw_claim_challenge_v2::is_segmented_descriptor_v3(&base.descriptor.digest()) {
@@ -784,6 +791,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 PAID_CLAIM_FINALS_V2 => {
                     let row: PalwPaidClaimFinalV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                     let a = route.paid_claim_enrollment_v3(&row.enrollment).map_err(&refuse)?;
+                    if !l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
+                        return Err(refuse("stored paid Final lacks assigned verifier approvals".into()));
+                    }
                     let claim = l.claims.get(&a.enrollment.base_claim).ok_or_else(|| refuse("Final base claim missing".into()))?;
                     if id != row.enrollment
                         || row.base_claim != a.enrollment.base_claim

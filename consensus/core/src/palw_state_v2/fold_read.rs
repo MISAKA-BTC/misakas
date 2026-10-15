@@ -941,10 +941,14 @@ impl PalwFoldReadV1<'_> {
         // **RFC-0006 R6-CELL round 4 (`palw_cell_coverage_closure_v1`, REQ-CELL-1b)**: past the fence, a class whose graph the
         // fold holds and whose cell coverage has a gap takes no claim on any lane — explicitly uncovered and unrewarded.
         // Where the fold does not hold the graph, the court close convicts instead (REQ-CELL-2). Below the fence `None`.
-        if let Some(refusal) = crate::palw_cell_coverage_closure_v1::palw_cell_closure_claim_refusal_v1(
+        // RFC-0006 consumer v2 (`palw_memory_routing_court_v2`): past its fence the same gate reads what that consumer reaches, with
+        // the class's router binding (aux 139) in hand; below it, the round-4 answer byte for byte.
+        let router_binding = super::palw_router_binding_row_of_v2(self.state, class_id);
+        if let Some(refusal) = crate::palw_cell_coverage_closure_v1::palw_cell_closure_claim_refusal_v2(
             self.params,
             now_daa,
             self.state.fp_work_profile_of(class_id),
+            router_binding.as_ref(),
         ) {
             return Err(PalwStateV2Error::ClassNotRewardable {
                 class: *class_id,

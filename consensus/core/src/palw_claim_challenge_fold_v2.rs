@@ -14,8 +14,9 @@ fn refused(s: impl Into<String>) -> PalwStateV2Error {
 fn key(id: &Digest) -> Vec<u8> {
     borsh::to_vec(id).unwrap()
 }
-fn put<T: borsh::BorshSerialize>(b: &mut TransitionBuilder<'_>, table: u8, id: &Digest, v: &T) {
-    b.write_kernel_row(table, key(id), Some(borsh::to_vec(v).unwrap()));
+fn put<T: borsh::BorshSerialize>(b: &mut TransitionBuilder<'_>, table: u8, id: &Digest, v: &T) -> Result<(), PalwStateV2Error> {
+    b.write_kernel_row(table, key(id), Some(borsh::to_vec(v).unwrap()))?;
+    Ok(())
 }
 fn count(b: &TransitionBuilder<'_>, table: u8) -> usize {
     b.state.kernel_route.as_ref().map_or(0, |r| r.aux.keys().filter(|(t, _)| *t == table).count())
@@ -23,7 +24,10 @@ fn count(b: &TransitionBuilder<'_>, table: u8) -> usize {
 fn authority(b: &TransitionBuilder<'_>, id: &Digest) -> Result<PalwPaidClaimAuthorityV2, PalwStateV2Error> {
     let r = b.state.kernel_route.as_ref().ok_or_else(|| refused("paid claim route missing"))?;
     let a = r.paid_claim_enrollment_v3(id).map_err(refused)?;
-    a.validate(&*r.ledger().map_err(refused)?).map_err(refused)?;
+    a.validate(
+        &*r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
+    )
+    .map_err(refused)?;
     Ok(a)
 }
 
@@ -106,142 +110,24 @@ fn apply_inner(
     let p = current_policy(b, ctx.daa_score)?;
     route_fold::ensure_route_header(b, ctx)?;
     let signer_id = palw_kernel_bond_id_v1(signer);
-    // New proof/registration data consumes the existing native block work
-    // admission once; old V3 objects preserve their prior accounting.
-    let admission_work =
-        if matches!(o, PaidClaimObjectV2::RegisterCompactContractV4 { .. } | PaidClaimObjectV2::BindCompactProofV4 { .. }) {
-            u64::try_from(borsh::to_vec(o).map_err(|e| refused(e.to_string()))?.len())
-                .map_err(|_| refused("compact native work length overflow"))?
-        } else {
-            0
-        };
-    if !route_fold::charge_route_budget_v1(b, ctx, admission_work, false)? {
+    // PRINCIPLES §8 (2026-10-15): the compact V4 contract and proof-binding objects are retired. Their wire identities stay
+    // decodable for history; no block admits either kind, so neither consumes admission capacity nor writes aux 138.
+    if matches!(o, PaidClaimObjectV2::RegisterCompactContractV4 { .. } | PaidClaimObjectV2::BindCompactProofV4 { .. }) {
+        return Err(refused(crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACT_RETIRED_REASON_V1));
+    }
+    if !route_fold::charge_route_budget_v1(b, ctx, 0, false)? {
         return Err(refused("paid claim block admission capacity exhausted"));
     }
     match o {
-        PaidClaimObjectV2::RegisterCompactContractV4 { registration } => {
-            use crate::palw_claim_compact_v4::*;
-            let fence = b
-                .params
-                .palw_claim_compact_v4
-                .filter(|f| f.activation.is_active(ctx.daa_score))
-                .ok_or_else(|| refused("compact V4 own fence is dormant"))?;
-            fence.policy.validate().map_err(refused)?;
-            let r = b.state.kernel_route.as_ref().unwrap();
-            if registration.registrant != signer_id
-                || r.aux.contains_key(&(PAID_CLAIM_COMPACT_V4, key(&registration.id())))
-                || r.aux.keys().filter(|(t, k)| *t == PAID_CLAIM_COMPACT_V4 && k.len() == 64).count()
-                    >= fence.policy.max_contracts as usize
-            {
-                return Err(refused("compact contract registrant/duplicate/capacity mismatch"));
-            }
-            let l = r.ledger().map_err(refused)?;
-            registration.validate(&l).map_err(refused)?;
-            if registration.plan.maximum_material_bytes > fence.policy.maximum_opening_bytes
-                || registration.contract.maximum_proof_bytes > u128::from(fence.policy.maximum_proof_bytes)
-                || registration.contract.maximum_verifier_work > fence.policy.maximum_verifier_work
-            {
-                return Err(refused("compact contract exceeds native policy capacities"));
-            }
-            let empty = misaka_palw_kernel::claim_compact_v1::native_v4::NativeCompactProofV4 {
-                version: 4,
-                plan: registration.plan.id(),
-                seed: [0; 64],
-                proofs: Vec::new(),
-            };
-            let framing = KernelRouteObjectV1::PaidClaimV2 {
-                object: PaidClaimObjectV2::BindCompactProofV4 { enrollment: [0; 64], round: 0, proof: empty.clone() },
-            }
-            .encode()
-            .len()
-            .checked_sub(borsh::to_vec(&empty).unwrap().len())
-            .ok_or_else(|| refused("proof carrier framing underflow"))?;
-            if registration.contract.maximum_proof_bytes.checked_add(framing as u128).is_none_or(|n| {
-                n > crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 as u128
-                    || n > misaka_palw_kernel::route::max_encoded_bytes_of_tag(misaka_palw_kernel::route::TAG_PAID_CLAIM_V2)
-                        .unwrap_or(0) as u128
-            }) {
-                return Err(refused("whole-native compact proof does not fit actual object carriage"));
-            }
-            put(
-                b,
-                PAID_CLAIM_COMPACT_V4,
-                &registration.id(),
-                &PalwPaidCompactContractV4 { registration: registration.clone(), registered_daa: ctx.daa_score },
-            );
-        }
-        PaidClaimObjectV2::BindCompactProofV4 { enrollment, round, proof } => {
-            use crate::palw_claim_compact_v4::*;
-            let a = authority(b, enrollment)?;
-            if !b.params.palw_claim_compact_v4.is_some_and(|f| f.activation.is_active(ctx.daa_score)) {
-                return Err(refused("compact V4 own fence is dormant"));
-            }
-            let r = b.state.kernel_route.as_ref().unwrap();
-            let plan = a
-                .class
-                .interactive_plan
-                .as_ref()
-                .filter(|p| p.version == 4)
-                .ok_or_else(|| refused("proof binding needs V4 enrolled plan"))?;
-            let row = r.paid_claim_round_v3(enrollment, *round).map_err(refused)?;
-            let lock = row.lock.as_ref().ok_or_else(|| refused("proof binding precedes source lock"))?;
-            let proof_root = proof.root();
-            let registration = r.paid_compact_contract_v4(&plan.id()).map_err(refused)?.registration;
-            let policy = b.params.palw_claim_compact_v4.unwrap().policy;
-            proof.validate_shape(plan.id(), lock.seed, policy.maximum_proof_bytes).map_err(refused)?;
-            if borsh::to_vec(proof).map_err(|e| refused(e.to_string()))?.len() as u128 > registration.contract.maximum_proof_bytes {
-                return Err(refused("proof bytes exceed signed whole-native contract"));
-            }
-            if a.enrollment.producer != signer_id
-                || proof_root == [0; 64]
-                || !row.receipts.is_empty()
-                || ctx.daa_score < lock.locked_daa
-                || !a.enrollment.lifetime.receipt_open(ctx.daa_score)
-                || r.paid_compact_proof_binding_v4(*enrollment, *round).map_err(refused)?.is_some()
-            {
-                return Err(refused("compact producer proof binding signer/order/lifetime/duplicate mismatch"));
-            }
-            let binding = PalwPaidCompactProofBindingV4 {
-                version: 4,
-                enrollment: *enrollment,
-                round: *round,
-                plan: plan.id(),
-                seed: lock.seed,
-                proof_root,
-                proof: proof.clone(),
-                producer: signer_id,
-                bound_daa: ctx.daa_score,
-            };
-            let mut bound = row.clone();
-            bound.transcript_root =
-                misaka_palw_kernel::claim_compact_v1::native_v4::compact_transcript_root_v4(row.transcript_root, proof_root);
-            bound.validate_with_compact_v4(&a, &r.ledger().map_err(refused)?, Some(proof_root)).map_err(refused)?;
-            b.write_kernel_row(
-                PAID_CLAIM_COMPACT_V4,
-                compact_proof_binding_key_v4(*enrollment, *round),
-                Some(borsh::to_vec(&binding).unwrap()),
-            );
-            put(b, PAID_CLAIM_ROUNDS_V2, &bound.id(), &bound);
+        PaidClaimObjectV2::RegisterCompactContractV4 { .. } | PaidClaimObjectV2::BindCompactProofV4 { .. } => {
+            return Err(refused(crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACT_RETIRED_REASON_V1));
         }
         PaidClaimObjectV2::RegisterClass { class } => {
             class.validate().map_err(refused)?;
             let l = route_fold::load_ledger(b, ctx)?;
-            if let Some(plan) = class.interactive_plan.as_ref().filter(|p| p.version == 4) {
-                let fence = b
-                    .params
-                    .palw_claim_compact_v4
-                    .filter(|f| f.activation.is_active(ctx.daa_score))
-                    .ok_or_else(|| refused("compact V4 own fence is dormant"))?;
-                let registration = b.state.kernel_route.as_ref().unwrap().paid_compact_contract_v4(&plan.id()).map_err(refused)?;
-                registration.registration.validate_for_class(class, &l).map_err(refused)?;
-                if fence.policy.require_independent_review {
-                    misaka_palw_challenge::approved_v2(
-                        &misaka_palw_challenge::shipped_registry_v2(),
-                        &registration.registration.plan.compiler,
-                        &class.source_policy,
-                    )
-                    .map_err(|e| refused(e.to_string()))?;
-                }
+            // PRINCIPLES §8: a V4 compact interactive plan is retired; no class may select one.
+            if class.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
+                return Err(refused(crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACT_RETIRED_REASON_V1));
             }
             let minimum_liability = l.classes.get(&class.base_class).map_or(l.policy.liability_daa, |c| c.liability_daa);
             let minimum_challenge = if l.mode_of_class(&class.base_class).is_optimistic() {
@@ -274,7 +160,7 @@ fn apply_inner(
             if b.state.kernel_route.as_ref().unwrap().aux.contains_key(&(PAID_CLAIM_CLASSES_V2, key(&class.id()))) {
                 return Err(refused("paid class already enrolled"));
             }
-            put(b, PAID_CLAIM_CLASSES_V2, &class.id(), class);
+            put(b, PAID_CLAIM_CLASSES_V2, &class.id(), class)?;
         }
         PaidClaimObjectV2::EnrollJob { job } => {
             let l = route_fold::load_ledger(b, ctx)?;
@@ -301,7 +187,7 @@ fn apply_inner(
             {
                 return Err(refused("paid job needs its actual payer's prospective consent before any claim"));
             }
-            put(b, PAID_CLAIM_JOBS_V2, &job.id(), job);
+            put(b, PAID_CLAIM_JOBS_V2, &job.id(), job)?;
         }
         PaidClaimObjectV2::Commit { enrollment: e, commit, salt } => {
             let l = route_fold::load_ledger(b, ctx)?;
@@ -399,15 +285,19 @@ fn apply_inner(
             };
             a.validate(&l).map_err(refused)?;
             let before = l.to_rows();
-            let row = l.claims.get_mut(&e.base_claim).unwrap();
-            row.life.state = misaka_palw_kernel::lifecycle::ClaimStateV1::Checking {
-                anchor_daa: ctx.daa_score,
-                deadline_daa: e.lifetime.checking_until,
-            };
-            row.life.final_hold_until = e.lifetime.dispute_until;
-            row.liability_until = Some(e.lifetime.liability_until);
+            // RFC-0006: the row's fixed-size lifetime fields change in place through the typed setter (no `DerefMut`).
+            let present = l.set_claim_lifetime_v1(
+                &e.base_claim,
+                misaka_palw_kernel::lifecycle::ClaimStateV1::Checking {
+                    anchor_daa: ctx.daa_score,
+                    deadline_daa: e.lifetime.checking_until,
+                },
+                e.lifetime.dispute_until,
+                Some(e.lifetime.liability_until),
+            );
+            assert!(present, "the base claim row was read above");
             extend_signed_kernel_income_v2(b, ctx, e.base_claim, *signer, e.lifetime.liability_until)?;
-            put(b, PAID_CLAIM_ENROLLMENTS_V2, &a.context.id(), &a);
+            put(b, PAID_CLAIM_ENROLLMENTS_V2, &a.context.id(), &a)?;
             for (prefix, kind, owner) in [
                 (PAID_CLAIM_ID_INDEX_PREFIX_V3, PalwPaidClaimIndexKindV3::Enrollment, e.id()),
                 (PAID_CLAIM_BASE_INDEX_PREFIX_V3, PalwPaidClaimIndexKindV3::BaseClaim, e.base_claim),
@@ -416,12 +306,12 @@ fn apply_inner(
                     PAID_CLAIM_ENROLLMENTS_V2,
                     paid_claim_index_key_v3(prefix, &owner),
                     Some(borsh::to_vec(&PalwPaidClaimIndexV3 { version: 3, kind, owner, target: a.context.id() }).unwrap()),
-                );
+                )?;
             }
             // Interim V1 receipts cannot cover this new verification identity.
-            b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key(&e.base_claim), None);
-            b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key(&e.base_claim), None);
-            route_fold::flush(b, &l, &before);
+            b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key(&e.base_claim), None)?;
+            b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key(&e.base_claim), None)?;
+            route_fold::flush(b, &l, &before)?;
             admit_review(
                 b,
                 ctx,
@@ -452,8 +342,8 @@ fn apply_inner(
             }
             a.sponsor = Some(*signer);
             let id = a.context.id();
-            put(b, PAID_CLAIM_ENROLLMENTS_V2, &id, &a);
-            put(b, crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4, &id, &a.source_target);
+            put(b, PAID_CLAIM_ENROLLMENTS_V2, &id, &a)?;
+            put(b, crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4, &id, &a.source_target)?;
             put(
                 b,
                 crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_FEE_TARGETS_V5,
@@ -464,16 +354,22 @@ fn apply_inner(
                     minimum_fee: minimum,
                     max_sources: cap,
                 },
-            );
+            )?;
             put(
                 b,
                 crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_COST_BOUNDS_V5,
                 &id,
                 &ff.policy.cost_bounds.ok_or_else(|| refused("paid claim cost scope missing"))?,
-            );
+            )?;
             let inner = KernelRouteObjectV1::FundBeaconSourceFee { terms: *terms };
             route_fold::apply_kernel_route_object_v1(b, ctx, &inner.encode(), signer)?;
-            let l = b.state.kernel_route.as_ref().unwrap().ledger().map_err(refused)?;
+            let l = b
+                .state
+                .kernel_route
+                .as_ref()
+                .unwrap()
+                .ledger_checked_v1()
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
             if !l.beacon_source_fees.get(&id).is_some_and(|f| f.terms == *terms) {
                 return Err(refused("strict native prepaid source debit failed"));
             }
@@ -510,7 +406,7 @@ fn apply_inner(
             if r.aux.contains_key(&(PAID_CLAIM_REVIEW_SCOPES_V2, key(&scope.id()))) {
                 return Err(refused("immutable review scope cannot be replaced/reset"));
             }
-            put(b, PAID_CLAIM_REVIEW_SCOPES_V2, &scope.id(), scope);
+            put(b, PAID_CLAIM_REVIEW_SCOPES_V2, &scope.id(), scope)?;
         }
         PaidClaimObjectV2::IndependenceEvidence { observation } => {
             observation.validate().map_err(refused)?;
@@ -526,7 +422,7 @@ fn apply_inner(
                 PAID_CLAIM_EVIDENCE_V2,
                 &observation.id(),
                 &PalwPaidClaimEvidenceV3::Independence { version: 3, observation: observation.clone() },
-            );
+            )?;
         }
         PaidClaimObjectV2::EconomicEvidence { observation, payment } => {
             observation.net_receipt().map_err(refused)?;
@@ -560,7 +456,7 @@ fn apply_inner(
                 PAID_CLAIM_EVIDENCE_V2,
                 &observation.id(),
                 &PalwPaidClaimEvidenceV3::Economic { version: 3, observation: observation.clone() },
-            );
+            )?;
         }
         PaidClaimObjectV2::StageMessage { enrollment, round, prior_transcript, message_root } => {
             round_message(b, ctx, signer, &p, enrollment, *round, *prior_transcript, *message_root)?
@@ -569,7 +465,7 @@ fn apply_inner(
         PaidClaimObjectV2::LockRound { enrollment, round } => round_lock(b, ctx, enrollment, *round)?,
         PaidClaimObjectV2::RoundReceipt { receipt } => round_receipt(b, ctx, signer, receipt)?,
     }
-    b.note_kernel_bond(signer);
+    b.note_kernel_bond(signer)?;
     Ok(())
 }
 fn r_has_job(b: &TransitionBuilder<'_>, base: &Digest) -> Result<bool, PalwStateV2Error> {
@@ -601,14 +497,15 @@ fn admit_review(
     arithmetic.grinding_choices_per_beacon = 1;
     arithmetic.beacons_per_attempt = 1;
     let claimed = misaka_palw_challenge::effective_false_accept_bits_v1(&arithmetic).map_err(|e| refused(e.to_string()))?;
-    let actual = if let Some(plan) = a.class.interactive_plan.as_ref().filter(|p| p.version == 4) {
-        let registration = r.paid_compact_contract_v4(&plan.id()).map_err(refused)?.registration;
-        let bits = registration.validate_for_class(&a.class, &r.ledger().map_err(refused)?).map_err(refused)?.effective_bits;
-        let bits = u16::try_from(bits).map_err(|_| refused("compact union bound is nonpositive/unrepresentable"))?;
-        misaka_palw_challenge::EffectiveBitsV1::Bits(bits)
-    } else {
-        paid_claim_actual_algebraic_bound_v2(&*r.ledger().map_err(refused)?, &a.enrollment.base_claim).map_err(refused)?
-    };
+    // PRINCIPLES §8: a retired V4 compact plan supplies no bound (and no class can carry one, see RegisterClass).
+    if a.class.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
+        return Err(refused(crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACT_RETIRED_REASON_V1));
+    }
+    let actual = paid_claim_actual_algebraic_bound_v2(
+        &*r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
+        &a.enrollment.base_claim,
+    )
+    .map_err(refused)?;
     if claimed > actual {
         return Err(refused("review arithmetic overstates the actual registered math plan/repetitions/typed composition"));
     }
@@ -628,7 +525,7 @@ fn admit_review(
             beacons,
         )
         .map_err(refused)?;
-    put(b, PAID_CLAIM_REVIEW_COUNTERS_V2, &counter_id, &counter);
+    put(b, PAID_CLAIM_REVIEW_COUNTERS_V2, &counter_id, &counter)?;
     Ok(())
 }
 fn lock(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, enrollment: &Digest) -> Result<(), PalwStateV2Error> {
@@ -681,7 +578,7 @@ fn lock(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, enrollment: &Di
         quorum,
         source_valid: true,
     };
-    put(b, PAID_CLAIM_LOCKS_V2, enrollment, &row);
+    put(b, PAID_CLAIM_LOCKS_V2, enrollment, &row)?;
     Ok(())
 }
 fn receipt_fold(
@@ -720,13 +617,14 @@ fn receipt_fold(
     if r.aux.contains_key(&(PAID_CLAIM_RECEIPTS_V2, key(&id))) {
         return Err(refused("paid receipt signer already counted"));
     }
-    put(b, PAID_CLAIM_RECEIPTS_V2, &id, receipt);
+    put(b, PAID_CLAIM_RECEIPTS_V2, &id, receipt)?;
     let mut l = route_fold::load_ledger(b, ctx)?;
     let before = l.to_rows();
     if l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
-        l.try_apply_paid_claim_tally_v2(&a.enrollment.base_claim).map_err(refused)?;
+        l.try_apply_paid_claim_tally_checked_v2(&a.enrollment.base_claim)
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     }
-    route_fold::flush(b, &l, &before);
+    route_fold::flush(b, &l, &before)?;
     Ok(())
 }
 pub(super) fn tick_paid_claim_final_projection_v2(
@@ -734,7 +632,7 @@ pub(super) fn tick_paid_claim_final_projection_v2(
     ctx: &PalwBlockContextV2,
 ) -> Result<(), PalwStateV2Error> {
     let Some(r) = b.state.kernel_route.as_ref() else { return Ok(()) };
-    let l = r.ledger().map_err(refused)?;
+    let l = r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     let mut projections = Vec::new();
     for ((t, row_key), bytes) in &r.aux {
         if *t != PAID_CLAIM_ENROLLMENTS_V2 || row_key.len() != 64 {
@@ -747,6 +645,9 @@ pub(super) fn tick_paid_claim_final_projection_v2(
         if matches!(row.life.state, misaka_palw_kernel::lifecycle::ClaimStateV1::Final { .. })
             && !r.aux.contains_key(&(PAID_CLAIM_FINALS_V2, key(&a.enrollment.id())))
         {
+            if !l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
+                return Err(refused("paid Final lacks approvals of the randomly selected assigned verifiers"));
+            }
             let (lock, completed_rounds, transcript_root) = if let Some(plan) = &a.class.interactive_plan {
                 if !r.paid_claim_interactive_complete_v3(&a, &l).map_err(refused)? {
                     return Err(refused("interactive Final lacks complete full-material rounds"));
@@ -776,7 +677,7 @@ pub(super) fn tick_paid_claim_final_projection_v2(
         }
     }
     for p in projections {
-        put(b, PAID_CLAIM_FINALS_V2, &p.enrollment, &p);
+        put(b, PAID_CLAIM_FINALS_V2, &p.enrollment, &p)?;
     }
     let _ = ctx;
     Ok(())
@@ -832,7 +733,8 @@ fn verify_source_payment_v3(
     }
     let output = cb.outputs.get(p.coinbase_output as usize).ok_or_else(|| refused("economic payment output index missing"))?;
     let r = b.state.kernel_route.as_ref().unwrap();
-    let ledger = r.ledger().map_err(refused)?;
+    let ledger =
+        r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     let mut bound = false;
     for ((context, producer), promise) in &ledger.beacon_source_fee_promises {
         if promise.terms_id != o.prepaid_fee_terms || promise.fee != o.income_sompi {
@@ -911,7 +813,7 @@ pub(super) fn refresh_pending_paid_source_locks_v2(
     ctx: &PalwBlockContextV2,
 ) -> Result<(), PalwStateV2Error> {
     let Some(r) = b.state.kernel_route.as_ref() else { return Ok(()) };
-    let l = r.ledger().map_err(refused)?;
+    let l = r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     let mut invalid = Vec::new();
     for ((_, key), bytes) in r.aux.range((PAID_CLAIM_LOCKS_V2, Vec::new())..(PAID_CLAIM_LOCKS_V2 + 1, Vec::new())) {
         let mut lock: PalwPaidClaimLockV2 = borsh::from_slice(bytes).map_err(|e| refused(e.to_string()))?;
@@ -959,10 +861,10 @@ pub(super) fn refresh_pending_paid_source_locks_v2(
         }
     }
     for (key, row) in invalid_rounds {
-        b.write_kernel_row(PAID_CLAIM_ROUNDS_V2, key, Some(borsh::to_vec(&row).unwrap()));
+        b.write_kernel_row(PAID_CLAIM_ROUNDS_V2, key, Some(borsh::to_vec(&row).unwrap()))?;
     }
     for (key, row) in invalid {
-        b.write_kernel_row(PAID_CLAIM_LOCKS_V2, key, Some(borsh::to_vec(&row).unwrap()));
+        b.write_kernel_row(PAID_CLAIM_LOCKS_V2, key, Some(borsh::to_vec(&row).unwrap()))?;
     }
     Ok(())
 }
@@ -1005,9 +907,15 @@ fn round_message(
         context.commitment_root = subject.commitment_root;
         context.commitment_position = ctx.daa_score;
         context.challenge_epoch = u64::from(round);
-        let target =
-            claim_source_target_v2(a.source_policy, context.clone(), a.enrollment.lifetime, &r.ledger().map_err(refused)?.policy)
-                .map_err(refused)?;
+        let target = claim_source_target_v2(
+            a.source_policy,
+            context.clone(),
+            a.enrollment.lifetime,
+            &r.ledger_checked_v1()
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
+                .policy,
+        )
+        .map_err(refused)?;
         if target.terms.seal_start <= ctx.daa_score {
             return Err(refused("staged challenge window must open after its signed message"));
         }
@@ -1037,9 +945,14 @@ fn round_message(
         transcript_root: [0; 64],
         receipts: vec![],
     };
-    r.validate_paid_round_v4(&row, &a, &*r.ledger().map_err(refused)?).map_err(refused)?;
+    r.validate_paid_round_v4(
+        &row,
+        &a,
+        &*r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
+    )
+    .map_err(refused)?;
     admit_review(b, ctx, policy, &a, row.id(), u32::from(plan.mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon))?;
-    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
+    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row)?;
     if plan.mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
         b.write_kernel_row(
             PAID_CLAIM_ROUNDS_V2,
@@ -1053,7 +966,7 @@ fn round_message(
                 })
                 .unwrap(),
             ),
-        );
+        )?;
     }
     Ok(())
 }
@@ -1088,8 +1001,8 @@ fn round_fund(
     }
     row.sponsor = Some(*signer);
     let id = row.context.id();
-    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
-    put(b, crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4, &id, &row.target);
+    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row)?;
+    put(b, crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4, &id, &row.target)?;
     put(
         b,
         crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_FEE_TARGETS_V5,
@@ -1100,15 +1013,21 @@ fn round_fund(
             minimum_fee: minimum,
             max_sources: cap,
         },
-    );
+    )?;
     put(
         b,
         crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_COST_BOUNDS_V5,
         &id,
         &ff.policy.cost_bounds.ok_or_else(|| refused("round cost scope missing"))?,
-    );
+    )?;
     route_fold::apply_kernel_route_object_v1(b, ctx, &KernelRouteObjectV1::FundBeaconSourceFee { terms: *terms }.encode(), signer)?;
-    let l = b.state.kernel_route.as_ref().unwrap().ledger().map_err(refused)?;
+    let l = b
+        .state
+        .kernel_route
+        .as_ref()
+        .unwrap()
+        .ledger_checked_v1()
+        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     if !l.beacon_source_fees.get(&id).is_some_and(|f| f.terms == *terms) {
         return Err(refused("strict same-R native round debit failed"));
     }
@@ -1176,8 +1095,13 @@ fn round_lock(
         quorum,
         source_valid: true,
     });
-    r.validate_paid_round_v4(&row, &a, &*r.ledger().map_err(refused)?).map_err(refused)?;
-    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
+    r.validate_paid_round_v4(
+        &row,
+        &a,
+        &*r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
+    )
+    .map_err(refused)?;
+    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row)?;
     Ok(())
 }
 fn round_receipt(
@@ -1200,13 +1124,19 @@ fn round_receipt(
         return Err(refused("round receipt signer/source/lifetime mismatch"));
     }
     row.receipts.push(receipt.clone());
-    r.validate_paid_round_v4(&row, &a, &*r.ledger().map_err(refused)?).map_err(refused)?;
-    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
+    r.validate_paid_round_v4(
+        &row,
+        &a,
+        &*r.ledger_checked_v1().map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?,
+    )
+    .map_err(refused)?;
+    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row)?;
     let mut l = route_fold::load_ledger(b, ctx)?;
     let before = l.to_rows();
     if l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
-        l.try_apply_paid_claim_tally_v2(&a.enrollment.base_claim).map_err(refused)?;
+        l.try_apply_paid_claim_tally_checked_v2(&a.enrollment.base_claim)
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
     }
-    route_fold::flush(b, &l, &before);
+    route_fold::flush(b, &l, &before)?;
     Ok(())
 }

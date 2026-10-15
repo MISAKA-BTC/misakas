@@ -567,6 +567,82 @@ pub trait ConsensusApi: Send + Sync {
     fn palw_material_recovery_finalized_daa_v4(&self) -> Result<Option<u64>, String> {
         Err("native finalized recovery clock unavailable".into())
     }
+    fn palw_kernel_producer_candidate_v4(
+        &self,
+        _checkpoint: BlockHash,
+        _producer: crate::palw_state_v2::PalwBondKeyV2,
+        _commit: &misaka_palw_kernel::route::SaltedCommitV1,
+        _salt: &[u8; 64],
+        _commit_daa: u64,
+        _expires_daa: u64,
+    ) -> Result<crate::palw_kernel_producer_candidate_v4::PalwKernelProducerCandidateOwnedV4, String> {
+        Err("own-node kernel producer candidate unavailable".into())
+    }
+    fn palw_kernel_material_consent_accepted_v4(&self, _root: Hash64, _consent: Hash64) -> Result<bool, String> {
+        Err("own-node current accepted kernel consent unavailable".into())
+    }
+    fn palw_kernel_material_admission_accepted_v4(
+        &self,
+        _request: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+        _draft: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+    ) -> Result<bool, String> {
+        Err("own-node exact accepted kernel material admission unavailable".into())
+    }
+    fn palw_kernel_material_ingress_v4(
+        &self,
+        _checkpoint: BlockHash,
+        _request: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+    ) -> Result<crate::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4, String> {
+        Err("own-node prospective kernel material authority unavailable".into())
+    }
+    fn palw_kernel_material_context_authority_v4(
+        &self,
+        _context: &crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        _capsule: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+        _pubkey: &[u8],
+    ) -> Result<(), String> {
+        Err("current native kernel material authority unavailable".into())
+    }
+    /// RFC-0006 read-only census of the eligible historical headers the EXEC origin migration needs, from this node's own
+    /// store at its tip (`listed` caps the returned claim lists). Authorizes nothing.
+    fn palw_exec_origin_coverage_v1(&self, _listed: usize) -> Result<crate::palw_work_slice_v2::PalwExecOriginCoverageV1, String> {
+        Err("historical header coverage census unavailable".into())
+    }
+    fn palw_material_generation_authority_v4(
+        &self,
+        _root: Hash64,
+        _consent: Hash64,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+        _scope: &crate::palw_material_capacity_v1::PalwMaterialScopeV1,
+    ) -> Result<(), String> {
+        Err("current native material generation authority unavailable".into())
+    }
+    fn palw_kernel_material_replacement_v4(
+        &self,
+        _context: &crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        _bundle: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        _intent: &crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+    ) -> Result<crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4, String> {
+        Err("own native bounded replacement preparation unavailable".into())
+    }
+    fn palw_kernel_material_capsule_unused_finalized_v4(
+        &self,
+        _capsule: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+    ) -> Result<bool, String> {
+        Err("own native exact generation expiry unavailable".into())
+    }
+    fn palw_kernel_material_query_authority_v4(
+        &self,
+        _query: &crate::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        _requester: crate::palw_state_v2::PalwBondKeyV2,
+        _pubkey: &[u8],
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4>,
+        String,
+    > {
+        Err("own native material query authority unavailable".into())
+    }
     fn palw_native_recovery_session_quote_v4(
         &self,
         _checkpoint: Option<BlockHash>,
@@ -1603,6 +1679,14 @@ pub trait ConsensusApi: Send + Sync {
     /// labelled), with the pre-lottery quote for `class` where asked. `None` off ConsensusV2 or with no PALW tip.
     fn palw_rfc0016_report_v1(&self, _class: Option<crate::Hash64>) -> Result<Option<(u64, bool, String)>, String> {
         Err("RFC-0016 report unavailable".into())
+    }
+
+    /// **RFC-0006 consumer v2 (op 245): a class's immutable per-reader router binding** (kernel-route aux 139) at the virtual tip:
+    /// `(now_daa, armed, Some((bound_from_daa, the row's borsh bytes)))`, `None` for the row where the class declared none. `Ok(None)`
+    /// off ConsensusV2 or with no PALW tip.
+    #[allow(clippy::type_complexity)]
+    fn palw_router_binding_v2(&self, _class: crate::Hash64) -> Result<Option<(u64, bool, Option<(u64, Vec<u8>)>)>, String> {
+        Err("router binding read unavailable".into())
     }
 
     fn palw_staged_preclaim_quote_v1(

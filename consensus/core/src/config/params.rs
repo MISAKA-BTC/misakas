@@ -2887,6 +2887,8 @@ pub struct Params {
     /// §3 named: a network that wants the court states V3 at genesis through
     /// `palw_signature_contexts_v2`, and no shipped preset does.
     pub palw_shard_court: Option<ForkActivation>,
+    /// RFC06 versioned recurrence/routing court. Dormant on every shipped preset.
+    pub palw_memory_routing_court_v2: Option<ForkActivation>,
 
     /// **ADR-0100 Decision 4's fence: a sharded class is licensed per shard.**
     ///
@@ -3082,6 +3084,11 @@ pub struct Params {
     /// Root-exact physical monetary payment/material retention, schema v3.
     /// Separate dormant fence; requires budget and reporter schemas at/below it.
     pub palw_material_income_v3: Option<ForkActivation>,
+    /// RFC-0008: the once-only settlement registry (kernel route aux 140). Every settlement consumer (native Final, kernel
+    /// Final, paid claim Final, EXEC root/legs, gate/certification releases, vesting moves, material funding/fees/defaults)
+    /// checks and writes one marker per exact obligation in the same transition. Dormant: `None` on every preset; validation
+    /// refuses arming it; requires the kernel route fence at or below it.
+    pub palw_settlement_once_v1: Option<ForkActivation>,
     /// Prospective producer-signed absolute Panel service lifetime. Dormant.
     pub palw_panel_lifetime_v2: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2>,
     /// Signed Claim V2 seed/checker/lifetime contract; dormant without scoped review.
@@ -6065,6 +6072,7 @@ impl Params {
             palw_fp_derived_work: self.palw_fp_derived_work,
             palw_fp_decode_constraint: self.palw_fp_decode_constraint,
             palw_shard_court: self.palw_shard_court,
+            palw_memory_routing_court_v2: self.palw_memory_routing_court_v2,
             palw_shard_licensing: self.palw_shard_licensing,
             palw_token_lift: self.palw_token_lift,
             palw_kimi_k3: self.palw_kimi_k3,
@@ -6097,6 +6105,7 @@ impl Params {
             palw_bond_formula_v2: self.palw_bond_formula_v2,
             palw_reporter_income_v2: self.palw_reporter_income_v2,
             palw_material_income_v3: self.palw_material_income_v3,
+            palw_settlement_once_v1: self.palw_settlement_once_v1,
             palw_panel_lifetime_v2: self.palw_panel_lifetime_v2,
             palw_claim_challenge_v2: self.palw_claim_challenge_v2,
             palw_claim_compact_v4: self.palw_claim_compact_v4.clone(),
@@ -7218,6 +7227,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_memory_routing_court_v2: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -7249,6 +7259,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,
@@ -7566,6 +7577,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_memory_routing_court_v2: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -7597,6 +7609,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,
@@ -7896,6 +7909,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_memory_routing_court_v2: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -7927,6 +7941,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,
@@ -13129,6 +13144,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_2026_10_12_ruling_fences_v1();
     // RFC-0006 R6-CELL round 4's coverage closure, likewise.
     params.sync_palw_cell_coverage_closure_v1();
+    // RFC-0006's memory/routing court consumer v2, likewise.
+    params.sync_palw_memory_routing_court_v2();
     // RFC-0016's two dormant fences (V+ block rights, elastic Final capacity), likewise.
     params.sync_palw_rfc0016_v1();
     // RFC-0017's model eligibility, likewise.
@@ -13408,6 +13425,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_memory_routing_court_v2: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_tir_v1: None,
@@ -13439,6 +13457,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_bond_formula_v2: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_settlement_once_v1: None,
     palw_panel_lifetime_v2: None,
     palw_claim_challenge_v2: None,
     palw_claim_compact_v4: None,

@@ -399,6 +399,16 @@ impl MonetaryMaterialGcJanitorV1 {
         }
         let gone = !store.held_contracts().iter().any(|(consent, _)| *consent == intent.stored_consent);
         if gone {
+            if !store.complete_metadata_gc_v4(
+                intent.root,
+                intent.stored_consent,
+                intent.release_consent,
+                intent.tail,
+                intent.release_block,
+                |root, consent, tail, block| oracle.release_finalized(root, consent, tail, block),
+            )? {
+                return Ok(false);
+            }
             self.completed.insert(intent.stored_consent, receipt);
             self.persist()?;
             remove_durably(&self.intent)?;

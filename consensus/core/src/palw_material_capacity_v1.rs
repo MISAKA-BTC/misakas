@@ -2,9 +2,9 @@
 //! canonical bytes it actually holds, including repeated checkpoint/opening
 //! bytes. Unsupported layouts never acquire a capacity certificate.
 use crate::{
+    Hash64,
     palw_held_da_v1::{PalwHeldDisclosureV1, PalwHeldMissingV1},
     palw_step_leg::PalwStepBindingV2,
-    Hash64,
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -40,8 +40,16 @@ pub struct PalwMaterialManifestV1 {
 }
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PalwMaterialCapacityErrorV1 {
+    /// The SIGNED per-consent byte/unit/scope cap (a property of the material and its signed terms; not retryable locally).
     #[error("material exceeds its signed byte/unit/scope capacity")]
     Capacity,
+    /// RFC-0008: the provider's LOCAL raw-material store total (`total_capacity`) is full — a local raw-material cap, distinct
+    /// from the signed cap above and from typed RAM, metadata, DB/history and worker capacity (`palw_capacity_classes_v1`).
+    #[error("the provider's local raw material store capacity is exhausted")]
+    LocalRawMaterialCapacity,
+    /// RFC-0008: the provider's LOCAL retained contract/manifest count is full — a local metadata cap.
+    #[error("the provider's local material metadata capacity (retained contracts) is exhausted")]
+    LocalMetadataCapacity,
     #[error("material is missing a required original/continuation/unit")]
     Incomplete,
     #[error("material substituted a signed scope, codec or canonical byte digest")]
@@ -439,6 +447,9 @@ pub enum PalwMonetaryMaterialDemandV1 {
     Segmented { position: u32, part: u32 },
 }
 impl PalwMonetaryMaterialProviderStoreV1 {
+    pub fn holds_material_consent_v4(&self, consent: Hash64) -> bool {
+        self.contracts.contains_key(&consent)
+    }
     /// Recovery of an offer that never obtained an accepted contract. The
     /// original signed preimage is checked locally; native finality must put
     /// every possible enrollment block beyond its admission deadline.
@@ -512,6 +523,38 @@ impl PalwMonetaryMaterialProviderStoreV1 {
         }
         .map_err(|_| PalwMaterialCapacityErrorV1::Capacity)?;
         self.admit_verified(consent, material.manifest(), max_bytes, total_capacity, vec![(scope, bytes)])
+    }
+    fn admit_replacement_kernel_v4(
+        &mut self,
+        consent: Hash64,
+        material: &crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
+        bundle: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        max_bytes: u64,
+        total_capacity: u64,
+    ) -> Result<(), PalwMaterialCapacityErrorV1> {
+        let crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4::TypedKernelV4(bundle) = bundle else {
+            return Err(PalwMaterialCapacityErrorV1::Substitution);
+        };
+        let scope = bundle.verify(material.candidate_ledger(), max_bytes)?;
+        let raw = borsh::to_vec(bundle).map_err(|_| PalwMaterialCapacityErrorV1::Capacity)?;
+        self.admit_verified(consent, material.manifest(), max_bytes, total_capacity, vec![(scope, raw)])
+    }
+    fn discard_expired_kernel_capsule_v4(
+        &mut self,
+        capsule: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+        mut native: impl FnMut(&crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2) -> Result<bool, String>,
+    ) -> Result<bool, PalwMaterialCapacityErrorV1> {
+        let (enrollment, consent, _) = crate::palw_kernel_material_enrollment_v4::kernel_material_capsule_identity_v4(capsule)
+            .map_err(PalwMaterialCapacityErrorV1::Authentication)?;
+        let Some((_, manifest, _)) = self.contracts.get(&consent) else { return Ok(false) };
+        if enrollment.terms.material_manifest.as_ref() != Some(manifest) || enrollment.terms.root != manifest.root {
+            return Err(PalwMaterialCapacityErrorV1::Substitution);
+        }
+        if !native(capsule).map_err(PalwMaterialCapacityErrorV1::Authentication)? {
+            return Ok(false);
+        }
+        self.contracts.remove(&consent);
+        Ok(true)
     }
     pub fn answer_action(
         &self,
@@ -726,23 +769,30 @@ impl PalwMonetaryMaterialProviderStoreV1 {
     }
     /// Reading a retained generation does not authorize using it. The caller
     /// must check current native generation/provider/exact scope before answer.
+    pub fn material_generation_scopes_v4(
+        &self,
+        preferred: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+    ) -> impl Iterator<Item = (Hash64, &PalwMaterialScopeV1)> + '_ {
+        let preferred_row = self.contracts.get(&preferred).and_then(move |(_, manifest, _)| {
+            (manifest.root == root).then(|| manifest.scope(dependency).map(|scope| (preferred, scope))).flatten()
+        });
+        preferred_row.into_iter().chain(self.contracts.iter().filter_map(move |(consent, (_, manifest, _))| {
+            (*consent != preferred && manifest.root == root)
+                .then(|| manifest.scope(dependency).map(|scope| (*consent, scope)))
+                .flatten()
+        }))
+    }
     pub fn material_generation_scope_v4(
         &self,
         preferred: Hash64,
         root: Hash64,
         dependency: Hash64,
     ) -> Option<(Hash64, &PalwMaterialScopeV1)> {
-        if let Some((_, m, _)) = self.contracts.get(&preferred) {
-            if m.root == root {
-                if let Some(s) = m.scope(dependency) {
-                    return Some((preferred, s));
-                }
-            }
-        }
-        self.contracts.iter().find_map(|(consent, (_, manifest, _))| {
-            (manifest.root == root).then(|| manifest.scope(dependency).map(|scope| (*consent, scope))).flatten()
-        })
+        self.material_generation_scopes_v4(preferred, root, dependency).next()
     }
+
     fn admit_verified(
         &mut self,
         consent: Hash64,
@@ -755,7 +805,8 @@ impl PalwMonetaryMaterialProviderStoreV1 {
         if !self.contracts.contains_key(&consent)
             && self.contracts.len() >= crate::palw_monetary_material_v1::PALW_MONETARY_MATERIAL_MAX_CONTRACTS_V1 as usize
         {
-            return Err(E::Capacity);
+            // RFC-0008: the retained-contract count is the store's metadata cap, never the signed material cap.
+            return Err(E::LocalMetadataCapacity);
         }
         let total = manifest.validate(max_bytes)?;
         let mut data = BTreeMap::new();
@@ -776,10 +827,13 @@ impl PalwMonetaryMaterialProviderStoreV1 {
             .contracts
             .iter()
             .filter(|(id, _)| **id != consent)
-            .try_fold(total.checked_add(4).ok_or(E::Capacity)?, |sum, (_, (_, m, _))| sum.checked_add(m.validate(u64::MAX).ok()?))
-            .ok_or(E::Capacity)?;
+            .try_fold(total.checked_add(4).ok_or(E::LocalRawMaterialCapacity)?, |sum, (_, (_, m, _))| {
+                sum.checked_add(m.validate(u64::MAX).ok()?)
+            })
+            .ok_or(E::LocalRawMaterialCapacity)?;
+        // RFC-0008: the provider's local raw byte store total, never the signed per-consent cap (validated above) nor typed RAM.
         if used > total_capacity {
-            return Err(E::Capacity);
+            return Err(E::LocalRawMaterialCapacity);
         }
         if self
             .contracts
@@ -921,12 +975,14 @@ mod tests {
         assert_eq!(store, before);
         assert!(store.release_if_finalized(h(9), h(4), h(6), h(7), h(8), |_, _, _, _| Ok(true)).is_err());
         assert_eq!(store, before);
-        assert!(store
-            .release_if_finalized(h(1), h(4), h(6), h(7), h(8), |root, consent, tail, block| {
-                assert_eq!((root, consent, tail, block), (h(1), h(6), h(7), h(8)));
-                Ok(true)
-            })
-            .unwrap());
+        assert!(
+            store
+                .release_if_finalized(h(1), h(4), h(6), h(7), h(8), |root, consent, tail, block| {
+                    assert_eq!((root, consent, tail, block), (h(1), h(6), h(7), h(8)));
+                    Ok(true)
+                })
+                .unwrap()
+        );
         assert!(store.contracts.is_empty());
     }
     #[test]
@@ -948,3 +1004,5 @@ mod material_capacity_owner_v1;
 
 pub use material_capacity_owner_v1::prospective_kernel_bundle_auth_requests_v4;
 pub use material_capacity_owner_v1::prospective_kernel_bundle_requests_v4;
+
+pub use material_capacity_owner_v1::{kernel_material_unit_auth_requests_v4, kernel_material_unit_requests_v4};

@@ -470,6 +470,9 @@ impl Params {
         if self.palw_shard_court == Some(ForkActivation::never()) {
             self.palw_shard_court = None;
         }
+        if self.palw_memory_routing_court_v2 == Some(ForkActivation::never()) {
+            self.palw_memory_routing_court_v2 = None;
+        }
         // ADR-0100 Decision 4, likewise.
         if self.palw_shard_licensing == Some(ForkActivation::never()) {
             self.palw_shard_licensing = None;
@@ -600,6 +603,9 @@ impl Params {
         }
         if self.palw_material_income_v3 == Some(ForkActivation::never()) {
             self.palw_material_income_v3 = None;
+        }
+        if self.palw_settlement_once_v1 == Some(ForkActivation::never()) {
+            self.palw_settlement_once_v1 = None;
         }
         if self.palw_bond_budget_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_bond_budget_v1 = None;
@@ -1091,6 +1097,7 @@ impl Params {
             palw_fp_derived_work,
             palw_fp_decode_constraint,
             palw_shard_court,
+            palw_memory_routing_court_v2,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -1122,6 +1129,7 @@ impl Params {
             palw_bond_budget_v1,
             palw_reporter_income_v2,
             palw_material_income_v3,
+            palw_settlement_once_v1,
             palw_panel_lifetime_v2,
             palw_claim_challenge_v2,
             palw_claim_compact_v4,
@@ -1418,6 +1426,7 @@ impl Params {
             ("palw_fp_derived_work", *palw_fp_derived_work),
             ("palw_fp_decode_constraint", *palw_fp_decode_constraint),
             ("palw_shard_court", *palw_shard_court),
+            ("palw_memory_routing_court_v2", *palw_memory_routing_court_v2),
             ("palw_shard_licensing", *palw_shard_licensing),
             ("palw_token_lift", *palw_token_lift),
             ("palw_kimi_k3", *palw_kimi_k3),
@@ -1449,6 +1458,7 @@ impl Params {
             ("palw_bond_budget_v1", palw_bond_budget_v1.as_ref().map(|fence| fence.activation)),
             ("palw_reporter_income_v2", *palw_reporter_income_v2),
             ("palw_material_income_v3", *palw_material_income_v3),
+            ("palw_settlement_once_v1", *palw_settlement_once_v1),
             ("palw_panel_lifetime_v2", palw_panel_lifetime_v2.as_ref().map(|f| f.activation)),
             ("palw_claim_challenge_v2", palw_claim_challenge_v2.as_ref().map(|f| f.activation)),
             ("palw_claim_compact_v4", palw_claim_compact_v4.as_ref().map(|f| f.activation)),
@@ -1690,6 +1700,10 @@ impl Params {
             h.write(b"palw_shard_court");
             h.write(court.daa_score().to_le_bytes());
         }
+        if let Some(court) = self.palw_memory_routing_court_v2 {
+            h.write(b"palw_memory_routing_court_v2");
+            h.write(court.daa_score().to_le_bytes());
+        }
         // ADR-0100 Decision 4's fence, NAMED likewise: it changes what licenses a claim.
         if let Some(licensing) = self.palw_shard_licensing {
             h.write(b"palw_shard_licensing");
@@ -1894,6 +1908,10 @@ impl Params {
         }
         if let Some(at) = self.palw_material_income_v3 {
             h.write(b"palw_material_income_v3");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_settlement_once_v1 {
+            h.write(b"palw_settlement_once_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         if let Some(fence) = &self.palw_bond_budget_v1 {
@@ -2673,6 +2691,7 @@ impl Params {
             palw_fp_derived_work,
             palw_fp_decode_constraint,
             palw_shard_court,
+            palw_memory_routing_court_v2,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -2704,6 +2723,7 @@ impl Params {
             palw_bond_budget_v1,
             palw_reporter_income_v2,
             palw_material_income_v3,
+            palw_settlement_once_v1,
             palw_panel_lifetime_v2,
             palw_claim_challenge_v2,
             palw_claim_compact_v4,
@@ -3469,6 +3489,9 @@ impl Params {
         if let Some(activation) = palw_shard_court.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_memory_routing_court_v2.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0100 Decision 4. Some-only, likewise.
         if let Some(activation) = palw_shard_licensing.as_mut() {
             fork(activation, visit);
@@ -3597,6 +3620,9 @@ impl Params {
             fork(&mut f.activation, visit);
         }
         if let Some(at) = palw_material_income_v3.as_mut() {
+            fork(at, visit);
+        }
+        if let Some(at) = palw_settlement_once_v1.as_mut() {
             fork(at, visit);
         }
         if let Some(fence) = palw_bond_budget_v1.as_mut() {
@@ -4153,6 +4179,7 @@ impl Params {
             palw_fp_derived_work,
             palw_fp_decode_constraint,
             palw_shard_court,
+            palw_memory_routing_court_v2,
             palw_shard_licensing,
             palw_token_lift,
             palw_kimi_k3,
@@ -4184,6 +4211,7 @@ impl Params {
             palw_bond_budget_v1,
             palw_reporter_income_v2,
             palw_material_income_v3,
+            palw_settlement_once_v1,
             palw_panel_lifetime_v2,
             palw_claim_challenge_v2,
             palw_claim_compact_v4,
@@ -4985,6 +5013,10 @@ impl Params {
             h.write(b"palw_shard_court");
             h.write(activation.daa_score().to_le_bytes());
         }
+        if let Some(activation) = palw_memory_routing_court_v2 {
+            h.write(b"palw_memory_routing_court_v2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0100 Decision 4, Some-only for the same reason: every shipped preset leaves it
         // `None` and fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_shard_licensing {
@@ -5164,6 +5196,10 @@ impl Params {
         }
         if let Some(at) = palw_material_income_v3 {
             h.write(b"palw_material_income_v3");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = palw_settlement_once_v1 {
+            h.write(b"palw_settlement_once_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         if let Some(fence) = &palw_bond_budget_v1 {

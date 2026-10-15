@@ -5,7 +5,8 @@ use crate::palw_mode_v2::PalwModeV2Error;
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::beacon_source::{BeaconSourceTargetV1, BeaconSourceTermsV1};
 
-/// Unapproved source economics/timing limits. The fence is never armable in this binary.
+/// Unapproved source economics/timing limits. The fence arms only with a pinned measured-value record
+/// ([`crate::palw_rfc0608_measured_v1`], EMPTY: dormant in this binary).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwBeaconSourcePolicyV1 {
     pub deposit_sompi: u64,
@@ -97,11 +98,13 @@ impl Params {
     }
 
     pub fn validate_palw_beacon_source_opt_in_v1(&self) -> Result<(), PalwModeV2Error> {
-        match self.palw_beacon_source_opt_in_activation() {
-            Some(_) => Err(PalwModeV2Error::Invalid(
-                "palw_beacon_source_opt_in_v1 cannot be armed: funded fees, public timing/resource bounds and security approval are incomplete",
-            )),
-            None => Ok(()),
+        // Funded fees, public timing/resource bounds and security approval are measured and reviewed: arming needs a pinned
+        // record for this exact fence (EMPTY: dormant). testnet-12 DAA 14,000 release plan.
+        match (self.palw_beacon_source_opt_in_activation(), self.palw_beacon_source_opt_in_v1) {
+            (Some(_), Some(f)) => {
+                self.palw_rfc0608_measured_v1(crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::BeaconSourceOptInV1, &f.policy)
+            }
+            _ => Ok(()),
         }
     }
 }

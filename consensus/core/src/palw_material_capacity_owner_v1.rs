@@ -4,8 +4,8 @@
 use super::*;
 use crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1;
 use crate::palw_native_resource_v1::{
-    preflight_native_value_v1, reserve_native_requests_v1, NativeCoverageV1 as C, NativeHeapV1, NativeRetainedV1, NativeWireReaderV1,
-    NativeWireScanV1,
+    NativeCoverageV1 as C, NativeHeapV1, NativeRetainedV1, NativeWireReaderV1, NativeWireScanV1, preflight_native_value_v1,
+    reserve_native_requests_v1,
 };
 use std::mem::size_of;
 type Store = PalwMonetaryMaterialProviderStoreV1;
@@ -55,7 +55,7 @@ fn inner_response(codec: PalwMaterialCodecV1, data: &[u8]) -> Result<C, String> 
 }
 fn typed_response(stage: u8, data: &[u8]) -> Result<C, String> {
     use crate::palw_kernel_parameter_material_v4::{
-        PalwKernelParameterRowV4, PalwKernelSegmentedPartV4, PALW_KERNEL_PARAMETER_STAGE_V4, PALW_KERNEL_SEGMENTED_PART_STAGE_V4,
+        PALW_KERNEL_PARAMETER_STAGE_V4, PALW_KERNEL_SEGMENTED_PART_STAGE_V4, PalwKernelParameterRowV4, PalwKernelSegmentedPartV4,
     };
     if stage == PALW_KERNEL_PARAMETER_STAGE_V4 {
         shape::<PalwKernelParameterRowV4>(data)
@@ -77,6 +77,50 @@ fn typed_response(stage: u8, data: &[u8]) -> Result<C, String> {
         shape::<misaka_palw_kernel::public::PositionResponseV1>(data)
     }
 }
+/// Before decoding a checker-fetched codec3 unit. This is allocation coverage,
+/// never an assertion about the correctness of model computation.
+pub fn kernel_material_unit_requests_v4(stage: u8, data: &[u8]) -> Result<C, String> {
+    if data.len() as u64 > crate::palw_kernel_parameter_material_v4::PALW_KERNEL_MATERIAL_UNIT_BYTES_V4 {
+        return Err("kernel material unit exceeds its typed wire bound".into());
+    }
+    typed_response(stage, data)
+}
+/// Authenticator scratch is derived from the actual returned codec and the
+/// caller's authenticated claim/class, separately from the raw decode owner.
+pub fn kernel_material_unit_auth_requests_v4(
+    stage: u8,
+    data: &[u8],
+    ledger: &misaka_palw_kernel::ledger::KernelLedgerV1,
+    claim: &misaka_palw_kernel::hash::Digest,
+) -> Result<C, String> {
+    use crate::{
+        palw_kernel_parameter_material_v4::{
+            PALW_KERNEL_PARAMETER_STAGE_V4, PALW_KERNEL_SEGMENTED_PART_STAGE_V4, PalwKernelParameterRowV4, PalwKernelSegmentedPartV4,
+        },
+        palw_native_resource_v1::{
+            native_kernel_parameter_auth_requests_v4, native_kernel_position_auth_requests_v4, native_kernel_segment_auth_requests_v4,
+        },
+    };
+    kernel_material_unit_requests_v4(stage, data)?;
+    if stage == PALW_KERNEL_PARAMETER_STAGE_V4 {
+        decoded_auth::<PalwKernelParameterRowV4>(data, native_kernel_parameter_auth_requests_v4)
+    } else if stage == PALW_KERNEL_SEGMENTED_PART_STAGE_V4 {
+        let count = shape::<PalwKernelSegmentedPartV4>(data)?.bytes().ok_or("segment wrapper capacity overflow")?;
+        let _codec = reserve_native_requests_v1(count).map_err(|e| e.to_string())?;
+        let unit: PalwKernelSegmentedPartV4 = borsh::from_slice(data).map_err(|e| e.to_string())?;
+        let row = ledger.claims.get(claim).ok_or("unit authentication claim absent")?;
+        let class = ledger.classes.get(&row.class_binding_id).ok_or("unit authentication class absent")?;
+        decoded_auth::<misaka_palw_kernel::seg_da::SegPartResponseV1>(&unit.bytes, |r| {
+            native_kernel_segment_auth_requests_v4(&class.program, unit.position, r)
+        })
+    } else if stage < misaka_palw_kernel::spec::SNAPSHOT_STAGE_BASE_V1 {
+        decoded_auth::<misaka_palw_kernel::public::PositionResponseV1>(data, native_kernel_position_auth_requests_v4)
+    } else {
+        // Slice/Entry i128/output projections were counted by the structural
+        // raw-shape scanner; their borrowed Merkle paths do not build a tree.
+        Ok(C::zero())
+    }
+}
 /// A structural scan counts the exact key/payload lanes before the native
 /// retrieval classifier expands i32/u32 values into i128 tensors and returns
 /// `[key,payload]` TensorWire pairs. Merkle authentication hashes borrowed
@@ -84,7 +128,7 @@ fn typed_response(stage: u8, data: &[u8]) -> Result<C, String> {
 fn retrieval_response_requests_v4(data: &[u8], slice: bool) -> Result<C, String> {
     use misaka_palw_kernel::{
         public::TensorWireV1,
-        spec::retrieval::{EntryResponseV1, SliceResponseV1, MAX_RETRIEVAL_DIM_V1, MAX_RETRIEVAL_PAYLOAD_V1, MAX_SLICE_ITEMS_V1},
+        spec::retrieval::{EntryResponseV1, MAX_RETRIEVAL_DIM_V1, MAX_RETRIEVAL_PAYLOAD_V1, MAX_SLICE_ITEMS_V1, SliceResponseV1},
     };
     let mut requests = if slice { shape::<SliceResponseV1>(data)? } else { shape::<EntryResponseV1>(data)? };
     let mut c = Cursor(data);
@@ -159,11 +203,7 @@ impl<'a> Cursor<'a> {
     }
     fn count(&mut self, cap: usize) -> Result<usize, String> {
         let n = u32::from_le_bytes(self.take(4)?.try_into().unwrap()) as usize;
-        if n > cap {
-            Err("provider nested capacity exceeded".into())
-        } else {
-            Ok(n)
-        }
+        if n > cap { Err("provider nested capacity exceeded".into()) } else { Ok(n) }
     }
 }
 /// Walk embedded bundle and response bytes without first allocating the outer
@@ -286,7 +326,7 @@ pub fn prospective_kernel_bundle_auth_requests_v4(
 ) -> Result<C, String> {
     use crate::{
         palw_kernel_parameter_material_v4::{
-            PalwKernelParameterRowV4, PalwKernelSegmentedPartV4, PALW_KERNEL_PARAMETER_STAGE_V4, PALW_KERNEL_SEGMENTED_PART_STAGE_V4,
+            PALW_KERNEL_PARAMETER_STAGE_V4, PALW_KERNEL_SEGMENTED_PART_STAGE_V4, PalwKernelParameterRowV4, PalwKernelSegmentedPartV4,
         },
         palw_native_resource_v1::{
             native_kernel_parameter_auth_requests_v4, native_kernel_position_auth_requests_v4, native_kernel_segment_auth_requests_v4,
@@ -335,6 +375,32 @@ pub fn prospective_kernel_bundle_auth_requests_v4(
     Ok(total)
 }
 impl NativeRetainedV1<Store> {
+    pub fn provider_kernel_bundle_owned_v4(
+        &self,
+        consent: Hash64,
+        dependency: Hash64,
+    ) -> Result<NativeRetainedV1<crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4>, String> {
+        use crate::palw_prospective_kernel_material_v4::{PalwProspectiveKernelBundleV4 as B, PalwTypedKernelMaterialBundleV4};
+        let (_, manifest, rows) = self.contracts.get(&consent).ok_or("kernel bundle consent absent")?;
+        let scope = manifest.scope(dependency).ok_or("kernel bundle signed scope absent")?;
+        let raw = rows.get(&dependency).ok_or("kernel bundle bytes absent")?;
+        let requests = match scope.codec {
+            PalwMaterialCodecV1::KernelPositions => shape::<PalwKernelMaterialBundleV1>(raw)?,
+            PalwMaterialCodecV1::SegmentedParts => shape::<PalwSegmentedMaterialBundleV1>(raw)?,
+            PalwMaterialCodecV1::TypedKernelV4 => shape::<PalwTypedKernelMaterialBundleV4>(raw)?,
+            PalwMaterialCodecV1::NativeHeldComplete => return Err("held bundle is not kernel material".into()),
+        };
+        let requests = add(requests, fixed(1, size_of::<B>()));
+        let lease =
+            reserve_native_requests_v1(requests.bytes().ok_or("kernel bundle ownership overflow")?).map_err(|e| e.to_string())?;
+        let value = match scope.codec {
+            PalwMaterialCodecV1::KernelPositions => B::KernelPositions(borsh::from_slice(raw).map_err(|e| e.to_string())?),
+            PalwMaterialCodecV1::SegmentedParts => B::SegmentedParts(borsh::from_slice(raw).map_err(|e| e.to_string())?),
+            PalwMaterialCodecV1::TypedKernelV4 => B::TypedKernelV4(borsh::from_slice(raw).map_err(|e| e.to_string())?),
+            PalwMaterialCodecV1::NativeHeldComplete => unreachable!(),
+        };
+        Ok(NativeRetainedV1::from_owner_reserved_v1(value, lease))
+    }
     /// Retention-only recovery for kernel frames. The callback authenticates
     /// saved identity metadata, not claim acceptance or permission to answer.
     pub fn recover_provider_retaining_kernel_v4(
@@ -366,6 +432,33 @@ impl NativeRetainedV1<Store> {
             value.admit_prospective_kernel_v4(consent, material, bundle, max_bytes, total_capacity)
         })
     }
+    pub fn provider_admit_replacement_kernel_v4(
+        &self,
+        material: &crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
+        bundle: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        max_bytes: u64,
+        total_capacity: u64,
+    ) -> Result<Self, String> {
+        let consent = material.proposal.bounded_replacement_consent_v4().ok_or("replacement grant lacks bounded generation")?;
+        let mut requests = growth(material.manifest(), &[], &[], &[], Some(material.candidate_ledger()))?;
+        requests = add(requests, prospective_kernel_bundle_requests_v4(bundle)?);
+        requests = add(requests, prospective_kernel_bundle_auth_requests_v4(bundle, material.candidate_ledger())?);
+        self.try_mutate_owner_v1(requests, |value| {
+            value.admit_replacement_kernel_v4(consent, material, bundle, max_bytes, total_capacity)
+        })
+    }
+    pub fn provider_discard_expired_kernel_capsule_v4(
+        &self,
+        capsule: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+        witness: impl FnMut(&crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2) -> Result<bool, String>,
+    ) -> Result<(Self, bool), String> {
+        let mut expired = false;
+        let next = self.try_mutate_owner_v1(C::zero(), |value| {
+            expired = value.discard_expired_kernel_capsule_v4(capsule, witness)?;
+            Ok::<_, PalwMaterialCapacityErrorV1>(())
+        })?;
+        Ok((next, expired))
+    }
     pub fn recover_provider_verified_v1(
         encoded: &[u8],
         max_bytes: u64,
@@ -395,6 +488,36 @@ impl NativeRetainedV1<Store> {
     ) -> Result<Self, String> {
         self.try_mutate_owner_v1(growth(manifest, held, positions, segmented, ledger)?, |value| {
             value.admit_material(consent, manifest, max_bytes, total_capacity, held, positions, segmented, ledger, authority)
+        })
+    }
+    /// **RFC-0008: [`Self::provider_admit_material_v1`] with the refusing capacity class kept** (`crate::palw_capacity_classes_v1`):
+    /// the owner's typed-RAM reservation is `Local { TypedRam }`; the store's local raw byte total is `Local { RawMaterial }`; its
+    /// retained-contract count is `Local { Metadata }`; the signed per-consent cap, substitution, incompleteness and
+    /// authentication are `Semantic`. No class's refusal is reported as another's, and none is a string to be re-parsed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn provider_admit_material_classified_v1(
+        &self,
+        consent: Hash64,
+        manifest: &PalwMaterialManifestV1,
+        max_bytes: u64,
+        total_capacity: u64,
+        held: &[PalwHeldMaterialBundleV1],
+        positions: &[PalwKernelMaterialBundleV1],
+        segmented: &[PalwSegmentedMaterialBundleV1],
+        ledger: Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,
+        authority: impl FnMut(Hash64) -> Option<PalwMaterialNativeAuthorityV1>,
+    ) -> Result<Self, crate::palw_capacity_classes_v1::PalwCapacityRefusalV1> {
+        use crate::palw_capacity_classes_v1::{PalwCapacityClassV1 as Class, PalwCapacityRefusalV1 as Refusal};
+        use crate::palw_native_resource_v1::NativeOwnerMutationErrorV1 as M;
+        const PATH: &str = "provider material admission";
+        let quote = growth(manifest, held, positions, segmented, ledger).map_err(|why| Refusal::local(Class::TypedRam, PATH, why))?;
+        self.try_mutate_owner_classified_v1(quote, |value| {
+            value.admit_material(consent, manifest, max_bytes, total_capacity, held, positions, segmented, ledger, authority)
+        })
+        .map_err(|error| match error {
+            M::TypedRam(why) => Refusal::local(Class::TypedRam, PATH, why),
+            M::Bound(why) => Refusal::local(Class::TypedRam, PATH, why),
+            M::Rejected(why) => Refusal::of_material_v1(PATH, &why),
         })
     }
     pub fn provider_release_finalized_v1(
@@ -483,10 +606,12 @@ mod tests {
         let mut store = Store::default();
         store.contracts.insert(consent, (manifest.id(), manifest, BTreeMap::from([(claim, malformed)])));
         let encoded = borsh::to_vec(&store).unwrap();
-        assert!(NativeRetainedV1::<Store>::recover_provider_verified_v1(&encoded, 1000, 10000, None, |_| panic!(
-            "native authority must not run before structural preflight"
-        ))
-        .is_err());
+        assert!(
+            NativeRetainedV1::<Store>::recover_provider_verified_v1(&encoded, 1000, 10000, None, |_| panic!(
+                "native authority must not run before structural preflight"
+            ))
+            .is_err()
+        );
         let empty = borsh::to_vec(&Store::default()).unwrap();
         let recovered = NativeRetainedV1::<Store>::recover_provider_verified_v1(&empty, 1000, 10000, None, |_| None).unwrap();
         assert!(recovered.held_contracts_v1().is_empty());

@@ -7,6 +7,7 @@
 //! recovery. These rows must not enter the legacy Owner accounting/sweep path.
 //! Generic delta210 can carry the returned bounded changes; delta211 cannot.
 use crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1;
+// Wire-visible fields name the canonical key type (the RFC06 shape generator resolves no `as` aliases); `Key` stays local.
 use crate::palw_staged_court_state_v1::{PalwSharedCourtV1, PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
 use crate::palw_tir_public_owned_v1::{
     PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1, PalwTirPublicAcceptedBodyRefV1, PalwTirPublicChunkRecordV1, PalwTirPublicContractV1,

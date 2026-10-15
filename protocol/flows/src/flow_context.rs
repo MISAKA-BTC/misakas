@@ -2033,6 +2033,29 @@ impl FlowContext {
     /// cannot vouch for (audit3 H2/H9).
     pub const SIDECAR_SHORTFALL_TOLERANCE: u32 = 3;
 
+    /// Local capacity is not a verdict against the adopted chain. Keep its
+    /// incomplete import durably closed to participation and allow a fresh IBD.
+    /// Do not spend a peer-side sidecar-shortfall count on a local refusal.
+    pub fn finish_ibd_after_local_resource_failure(&self) -> bool {
+        let replaced = self.active_consensus_replaced.swap(false, Ordering::SeqCst);
+        let gate = self.chain_participation();
+        let recovering = gate.state() == kaspa_core::chain_participation::ChainParticipation::ImportRecovery;
+        let lease = self.ibd_lease.write().take();
+        if replaced || recovering {
+            if lease.is_some_and(|lease| gate.hold_for_import_recovery(lease)) {
+                return false;
+            }
+            // No current ownership token: do not guess that it is safe to
+            // release a different attempt's hold.
+            gate.quarantine();
+            return true;
+        }
+        if let Some(lease) = lease {
+            gate.release_after_noop_ibd(lease);
+        }
+        false
+    }
+
     /// Settle the gate after an IBD that failed, saying whether the failure was ONLY a peer being
     /// unable to serve a pruning-point sidecar.
     ///
@@ -2046,19 +2069,22 @@ impl FlowContext {
     /// anybody, repeatedly, is treated as unable to vouch for what it is running.
     pub fn finish_ibd_after_failure_kind(&self, sidecar_shortfall: bool) -> bool {
         let replaced = self.active_consensus_replaced.swap(false, Ordering::SeqCst);
-        if replaced {
+        let recovering = self.chain_participation().state() == kaspa_core::chain_participation::ChainParticipation::ImportRecovery;
+        if replaced || recovering {
             let seen = if sidecar_shortfall { self.sidecar_shortfalls.fetch_add(1, Ordering::SeqCst) + 1 } else { 0 };
             if !post_commit_failure_should_quarantine(sidecar_shortfall, seen) {
                 // Not Ready — the node still holds a chain it cannot advance past the pruning point
                 // without the sidecar, and `is_synced` stays false. It is simply free to try
                 // another peer, which is the whole difference.
-                return false;
+                if self.ibd_lease.write().take().is_some_and(|lease| self.chain_participation().hold_for_import_recovery(lease)) {
+                    return false;
+                }
             }
             self.chain_participation().quarantine();
         } else if let Some(lease) = self.ibd_lease.write().take() {
             self.chain_participation().release_after_noop_ibd(lease);
         }
-        replaced
+        replaced || recovering
     }
 
     /// Declare an outpoint this node's own PALW panel intends to spend, so a wallet asking the
@@ -2131,9 +2157,13 @@ impl FlowContext {
     /// Ready on it.
     pub fn finish_ibd_after_success(&self, min_review: Duration) {
         let replaced = self.active_consensus_replaced.swap(false, Ordering::SeqCst);
+        let lease = self.ibd_lease.write().take();
+        if lease.is_some_and(|lease| self.chain_participation().finish_import_recovery(lease, min_review.as_millis() as u64)) {
+            return;
+        }
         if replaced || !self.chain_participation().ever_ready() {
             self.chain_participation().enter_candidate_review(min_review.as_millis() as u64);
-        } else if let Some(lease) = self.ibd_lease.write().take() {
+        } else if let Some(lease) = lease {
             self.chain_participation().release_after_noop_ibd(lease);
         }
     }
