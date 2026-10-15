@@ -322,8 +322,8 @@ pub(super) fn install_original_v1(
     prep.check_structure_v1(&frame.preparation_key_v1()).map_err(refused)?;
     // The native dispatcher atomically owns the ordinary FP writes and these two
     // rows. Neither a separately submitted quote nor a historical FP can enter.
-    b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(Box::new(prep).into())));
-    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())));
+    b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(Box::new(prep).into())))?;
+    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())))?;
     Ok(())
 }
 
@@ -336,8 +336,8 @@ pub(super) fn bind_panel_v1(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContex
     let mut prep = old.clone();
     prep.preparation.bind_native_panel_v1(frame.custody_v1().drawn_panel_v1()).map_err(refused)?;
     prep.check_structure_v1(&frame.preparation_key_v1()).map_err(refused)?;
-    b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(prep)));
-    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())));
+    b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(prep)))?;
+    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())))?;
     Ok(())
 }
 
@@ -408,7 +408,7 @@ fn open_v1(
     // Ordinary carrier fee validation must burn owner_terms.rent, independently
     // of the producer's original full payment. The indexed row occupies only
     // this owner's additional deposit; it cannot spend the original prep pool.
-    b.write_staged_row_v1(key, Some(Row::TirAcquisition(Box::new(row).into())));
+    b.write_staged_row_v1(key, Some(Row::TirAcquisition(Box::new(row).into())))?;
     Ok(())
 }
 
@@ -553,7 +553,7 @@ fn apply_verified_control_v1(
         }
     }
     for change in transition.changes_v1() {
-        b.write_staged_row_v1(change.key, change.new.clone());
+        b.write_staged_row_v1(change.key, change.new.clone())?;
     }
     if let Some(unpaid) = unpaid {
         let claim = b.state.claim(&control.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(control.claim))?;
@@ -760,7 +760,7 @@ fn apply_conviction_v1(
     b.convict_by_court_verdict_v1(ctx, claim_id, &claim, filer, None)?;
     // 3. An execution-proving fault forfeits by ROOT (siblings sharing the convicted execution).
     if let Some(root) = by_root {
-        b.forfeit_minted_round_rights(&root);
+        b.forfeit_minted_round_rights(&root)?;
     }
     Ok(())
 }
@@ -820,7 +820,7 @@ fn apply_grant_ready_inner_v1(
     // Q4: never reprice the lock. Its original exact raw promise retains the
     // native amount through the original material/collection horizon.
     lock.expiry_daa = lock.expiry_daa.max(frame.plan_v1().terms.bond_exit_after_daa);
-    b.write_slashable_lock(key, Some(lock));
+    b.write_slashable_lock(key, Some(lock))?;
     frame
         .qualify_original_native_v1(
             &b.state,
@@ -833,8 +833,8 @@ fn apply_grant_ready_inner_v1(
         )
         .map_err(refused)?;
     prep.check_structure_v1(&frame.preparation_key_v1()).map_err(refused)?;
-    b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(prep)));
-    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())));
+    b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(prep)))?;
+    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())))?;
     Ok(())
 }
 
